@@ -9,12 +9,13 @@
 //    of every table identical (the reference-NLE oracle rides the cooked fixture in tests/assets/cooker)
 
 #include <crd/assetio/otio.hpp>
+#include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 
 using namespace crd;
@@ -347,9 +348,9 @@ TEST_CASE("otio round trip: export(import(x)) re-imports structurally equal", "[
 
     // the reference-NLE oracle hook (the CRD_3MF_DUMP precedent): CRD_OTIO_DUMP=<path> writes our export so
     // the OFFICIAL OpenTimelineIO library can be run over it out-of-process (recorded in the slice close)
-    if (const char* dump = std::getenv("CRD_OTIO_DUMP"); dump != nullptr)
+    if (crd::containers::String dump; crd::read_environment_text("CRD_OTIO_DUMP", dump))
     {
-        std::FILE* f = std::fopen(dump, "wb");
+        std::FILE* f = std::fopen(dump.c_str(), "wb");
         REQUIRE(f != nullptr);
         REQUIRE(std::fwrite(exported.c_str(), 1, exported.size(), f) == exported.size());
         (void)std::fclose(f);
@@ -374,8 +375,9 @@ TEST_CASE("otio reference-NLE fixture: the OFFICIAL library's own output imports
 {
     // reference_nle.otio was WRITTEN by OpenTimelineIO 0.18.1 (tests/assets/asset-io/data/otio/; generator recorded
     // in the GEO-9 close) — the hermetic half of the oracle: their serializer, our importer.
-    const char* data_dir = std::getenv("CRD_ASSETIO_DATA");
-    REQUIRE(data_dir != nullptr);
+    crd::containers::String data_dir_text;
+    REQUIRE(crd::read_environment_text("CRD_ASSETIO_DATA", data_dir_text));
+    const char* const data_dir = data_dir_text.c_str();
     char path[512];
     std::snprintf(path, sizeof(path), "%s/otio/reference_nle.otio", data_dir);
     std::FILE* f = std::fopen(path, "rb");

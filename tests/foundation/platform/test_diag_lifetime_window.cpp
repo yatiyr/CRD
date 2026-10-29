@@ -10,11 +10,11 @@
 
 #include <crd/core/lifetime_ledger.hpp>
 #include <crd/core/platform.hpp>
+#include <crd/platform/context.hpp>
 #include <crd/platform/platform.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <cstdlib>
 #include <utility>
 
 #if CRD_OS_WINDOWS
@@ -31,12 +31,6 @@ using crd::LifetimeVerdict;
 crd::LifetimeReport since(const crd::LifetimeSnapshot& before)
 {
     return crd::lifetime_report(before, crd::lifetime_ledger().snapshot());
-}
-
-bool headless_requested() noexcept
-{
-    const char* v = std::getenv("CRD_PLATFORM_HEADLESS");
-    return v != nullptr && v[0] == '1';
 }
 
 crd::platform::WindowDesc hidden_desc(const char* title = "crd-diag10c-window")
@@ -66,7 +60,7 @@ bool window_lifetime()
 {
     const crd::LifetimeSnapshot start = crd::lifetime_ledger().snapshot();
     auto                        ctx   = crd::platform::PlatformContext::create();
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         // The runner asked for no window: the context alone holds no OS object.
         CHECK(since(start).verdict == LifetimeVerdict::Balanced);
@@ -145,7 +139,7 @@ TEST_CASE("diag10c: window shutdown cycles leave no OS object behind", "[platfor
     for (crd::u32 cycle = 0U; cycle < 3U; ++cycle)
     {
         auto ctx = crd::platform::PlatformContext::create();
-        if (headless_requested() || !ctx.is_valid())
+        if (crd::platform::headless_requested() || !ctx.is_valid())
         {
             break; // no display: the context itself is the whole cycle
         }

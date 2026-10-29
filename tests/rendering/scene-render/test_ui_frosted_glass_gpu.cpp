@@ -15,6 +15,8 @@
 // NOTHING (command_lowering.hpp + IRasterContext::clear_scope). All three are fixed; this gate's record_ok/build_ok
 // REQUIREs + the uniform-backdrop CHECK pin them.
 
+#include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/gpu/context.hpp>
 #include <crd/gpu/raster_context.hpp>
 #include <crd/gpu/vulkan_context.hpp>
@@ -43,7 +45,6 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>   // std::lround — the oracle's UNORM8 quantization (match the store's round-to-nearest)
-#include <cstdlib> // std::getenv for CRD_ASSETS_DIR (assets are disk-only)
 
 using namespace crd;
 
@@ -56,14 +57,15 @@ memory::TlsfAllocator& galloc()
 }
 
 // The shipped authored asset, read from the ctest-provided CRD_ASSETS_DIR (the gates-run-configs rule). False if the
-// root is unset or the file is missing, so a REQUIRE at the call site fails loudly. (_CRT_SECURE_NO_WARNINGS lets getenv through.)
+// root is unset or the file is missing, so a REQUIRE at the call site fails loudly.
 [[nodiscard]] bool read_shipped_asset(const char* rel, containers::String& out)
 {
-    const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0')
+    crd::containers::String root_text;
+    if (!crd::read_environment_text("CRD_ASSETS_DIR", root_text))
     {
         return false;
     }
+    const char* const root = root_text.c_str();
     containers::String p(&galloc());
     p.append(root);
     p.append("/");

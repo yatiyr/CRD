@@ -72,6 +72,8 @@
 #include <crd/ceir/cook/replay_diag.hpp>
 #include <crd/ceir/cook/replay_record.hpp> // DIAG.9a: the inspected run's record
 #include <crd/ceir/host/host_replay_diag.hpp> // DIAG.9a: the replay commands' host executor (the host provider)
+#include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/draw/overlay_pass.hpp>
 #include <crd/draw/render_buffer.hpp>
 #include <crd/draw/renderer.hpp>
@@ -480,20 +482,6 @@ constexpr bool kSandboxShipping = true;
 #else
 constexpr bool kSandboxShipping = false;
 #endif
-
-// C4996-safe env read (the engine's `mf_getenv` pattern): a FIXED, documented dev knob, not a security
-// surface. The sandbox honours `CRD_ASSETS_DIR` so a shipped `assets/**` tree shadows the embedded pack.
-[[nodiscard]] inline const char* sandbox_getenv(const char* name) noexcept
-{
-#ifdef _MSC_VER
-#pragma warning(push)
-#pragma warning(disable : 4996)
-#endif
-    return std::getenv(name);
-#ifdef _MSC_VER
-#pragma warning(pop)
-#endif
-}
 
 // The sandbox is the engine's dev/smoke harness: `main` is one linear script — CLI parse, device + window bring-up,
 // scene build, then the render/present loop with the smoke accounting. Splitting it would scatter that one readable
@@ -1527,9 +1515,10 @@ int main(int argc, char** argv)
     // An explicit CRD_ASSETS_DIR wins; a developer build launched without it (a terminal, a script, a smoke run) uses
     // its own source tree when that tree is usable, so it renders the scene the debugger and ctest render. A shipping
     // build never reads a source tree: with no variable it installs no root, exactly as before.
-    const crd::sandbox::AssetRootChoice aroot =
-        crd::sandbox::choose_asset_root(sandbox_getenv("CRD_ASSETS_DIR"), CRD_SOURCE_DIR "/assets", kSandboxShipping,
-                                        &crd::sandbox::is_usable_asset_root);
+    crd::containers::String env_assets_dir;
+    (void)crd::read_environment_text("CRD_ASSETS_DIR", env_assets_dir); // empty when unset
+    const crd::sandbox::AssetRootChoice aroot = crd::sandbox::choose_asset_root(
+        env_assets_dir.c_str(), CRD_SOURCE_DIR "/assets", kSandboxShipping, &crd::sandbox::is_usable_asset_root);
     if (aroot.root != nullptr)
     {
         const bool root_ok = scene_renderer.set_asset_root(aroot.root);

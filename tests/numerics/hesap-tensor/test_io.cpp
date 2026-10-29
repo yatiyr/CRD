@@ -6,6 +6,8 @@
 // zero-copy with the spec's deleter contract. Corpus path defaults to
 // tests/numerics/hesap-tensor/io_corpus (override: CRD_IO_CORPUS), out/ files are
 // re-verified by the oracle's check mode.
+#include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/hesap/resources/tensor_artifact.hpp>
 #include <crd/hesap/stats/philox.hpp>
 #include <crd/hesap/tensor/dlpack.hpp>
@@ -17,7 +19,6 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <bit>
-#include <cstdlib>
 #include <cstring>
 
 using crd::hesap::tensor::IoDtype;
@@ -33,29 +34,22 @@ constexpr crd::usize kPool = 1U << 26;
 
 crd::containers::String corpus_path(crd::memory::IAllocator* alloc, const char* sub, const char* file)
 {
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4996) // getenv — corpus-path dev knob only (the dense_lu_kernels precedent)
-#endif
-    const char* root = std::getenv("CRD_IO_CORPUS");
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
-    if (root == nullptr)
+    crd::containers::String root(alloc);
+    if (!crd::read_environment_text("CRD_IO_CORPUS", root))
     {
-        root = "tests/numerics/hesap-tensor/io_corpus";
+        root.append("tests/numerics/hesap-tensor/io_corpus");
     }
     // Ensure <root>/<sub> exists before any write. The `out/` dir is gitignored (a designated output location the
     // python oracle re-reads), so a FRESH checkout — every CI run — has no out/ dir and io_write_file's fopen("wb")
     // fails. mkdir -p makes the write robust; it is a harmless no-op for the committed `ref/` dir.
     crd::containers::String dir(alloc);
-    dir.append(root);
+    dir.append(root.c_str());
     dir.append("/");
     dir.append(sub);
     (void)crd::platform::fs::create_directories(crd::platform::fs::Path{crd::containers::StringView{dir.data(), dir.size()}});
 
     crd::containers::String s(alloc);
-    s.append(root);
+    s.append(root.c_str());
     s.append("/");
     s.append(sub);
     s.append("/");

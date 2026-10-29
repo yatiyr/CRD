@@ -76,6 +76,11 @@ set_tests_properties(crd-diag-seeded-faults crd-diag-coverage PROPERTIES TIMEOUT
 add_test(NAME crd-check-allocation-results
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-allocation-results.py" "${CMAKE_SOURCE_DIR}")
 set_tests_properties(crd-check-allocation-results PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+# Every environment variable is read through crd/core/environment.hpp: no std::getenv, _dupenv_s or
+# GetEnvironmentVariable outside its reader, in any C-family source under the source-routes roots.
+add_test(NAME crd-check-environment-reads
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-environment-reads.py" "${CMAKE_SOURCE_DIR}")
+set_tests_properties(crd-check-environment-reads PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
 # DIAG.11b clause (10): the investigation runbooks (docs/design/diagnostic-runbooks.md) against this tree: every
 # command, flag, diag command, artifact and example exists, and every test a runbook names (on the rows for this host)
 # is one this tree registers (it lists them with ctest --show-only); nothing publishes.

@@ -7,6 +7,7 @@
 // `python -c "json.load(...)"` gate can confirm it is well-formed, right-`ph`-set, numeric-`ts` JSON (assertions run
 // regardless -- never skip-as-pass).
 
+#include <crd/core/environment.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/perf/perf.hpp>
 #include <crd/perf/profiler.hpp>
@@ -20,7 +21,6 @@
 
 #include <chrono>  // the pacing case's hitch
 #include <cstdio>  // std::FILE for the .cprof identity-oracle drop
-#include <cstdlib> // std::getenv
 #include <cstring> // std::strstr
 #include <thread>
 
@@ -131,24 +131,16 @@ TEST_CASE("perfetto export: real capture -> structured trace-events JSON", "[per
     CHECK(stats.dropped_samples == 0U);
 
     // ---- Real Perfetto-compatibility evidence (opt-in file for the external json.load gate) ----
-    // MSVC /WX deprecates std::getenv (C4996); use its blessed _dupenv_s there, plain getenv elsewhere.
-#if defined(_MSC_VER)
-    char*  outpath = nullptr;
-    size_t outlen  = 0U;
-    (void)_dupenv_s(&outpath, &outlen, "CRD_PERFETTO_EXPORT_OUT");
-#else
-    const char* outpath = std::getenv("CRD_PERFETTO_EXPORT_OUT");
-#endif
-    if (outpath != nullptr)
+    if (crd::containers::String outpath{&fx.alloc}; crd::read_environment_text("CRD_PERFETTO_EXPORT_OUT", outpath))
     {
         crd::perf::PerfettoExportStats fstats;
-        CHECK(crd::perf::export_perfetto_json_to_file(view, outpath, fstats, &fx.alloc));
+        CHECK(crd::perf::export_perfetto_json_to_file(view, outpath.c_str(), fstats, &fx.alloc));
         CHECK(fstats.sample_events == stats.sample_events);
         // Drop the EXACT capture bytes next to the json so the (e) CLI can run on the SAME capture: same `buf` ->
         // same captured_at_ns, so `cprof_export <this>.cprof` must produce a byte-identical json (the (e) identity
         // oracle). Deliberately NOT save_capture_to_file again (that would re-snapshot captured_at_ns).
         crd::containers::String cprofpath{&fx.alloc};
-        cprofpath.append(outpath);
+        cprofpath.append(outpath.c_str());
         cprofpath.append(".cprof");
         std::FILE* cf = nullptr;
 #if defined(_MSC_VER)
@@ -162,9 +154,6 @@ TEST_CASE("perfetto export: real capture -> structured trace-events JSON", "[per
             std::fclose(cf);
         }
     }
-#if defined(_MSC_VER)
-    std::free(outpath); // free(nullptr) is a no-op
-#endif
 }
 
 namespace

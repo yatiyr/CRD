@@ -9,8 +9,10 @@
 #include <crd/anim/anim_resources.hpp>
 #include <crd/anim/pose.hpp>
 #include <crd/assetio/gltf.hpp>
+#include <crd/containers/string.hpp>
 #include <crd/cooker/cook_handler.hpp>
 #include <crd/cooker/cook_io.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/math/mat.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
@@ -19,7 +21,6 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <cstdlib>
 #include <cstring>
 
 using namespace crd;
@@ -206,9 +207,9 @@ TEST_CASE("anim: THE FOX GATE -- the real skinned character cooks, loads, and re
 {
     // locate Fox.glb (the ctest env points at assets/source; repo-root cwd falls back)
     containers::String fox_path(&galloc());
-    if (const char* root = std::getenv("CRD_ASSETS_SOURCE"); root != nullptr && root[0] != '\0')
+    if (crd::containers::String root; crd::read_environment_text("CRD_ASSETS_SOURCE", root))
     {
-        fox_path.append(root);
+        fox_path.append(root.c_str());
     }
     else
     {

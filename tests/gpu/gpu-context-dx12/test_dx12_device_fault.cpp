@@ -28,6 +28,7 @@
 #include "dx12_identity_naming.hpp"
 
 #include <crd/core/crash.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/gpu/dx12_context.hpp>
 #include <crd/gpu/identity_registry.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -68,12 +69,11 @@ constexpr DWORD kReclaimPauseMs = 500U; // after the flush: time for the release
 
 [[nodiscard]] std::string_view env_or(const char* name, std::string_view fallback, char (&storage)[256])
 {
-    const DWORD n = GetEnvironmentVariableA(name, storage, static_cast<DWORD>(sizeof(storage)));
-    if (n == 0U || n >= sizeof(storage))
+    if (crd::read_environment(name, storage, sizeof(storage)) != crd::EnvironmentRead::Set)
     {
         return fallback;
     }
-    return {storage, n};
+    return storage;
 }
 
 [[nodiscard]] ComPtr<ID3D12Resource> make_uav_buffer(ID3D12Device* device)

@@ -3,6 +3,8 @@
 // instanced draw through the gpu-context stack → readback proves lit pixels. Camera-away proves culling to zero;
 // the SpatialBVHIndex path proves the crd-geometry broad phase agrees with the plane test.
 
+#include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/gpu/context.hpp>
 #include <crd/gpu/raster_context.hpp>
 #include <crd/gpu/vulkan_context.hpp>
@@ -43,7 +45,7 @@
 #include <crd/math/deterministic.hpp> // REN-41 Stage 4: crd::math sin/cos/floor/ceil/abs (NO std math)
 #include <cstring>
 #include <cstdio>  // REN-38-F15: per-run temp root stamp
-#include <cstdlib> // REN-41: std::getenv for CRD_ASSETS_DIR (assets are disk-only now)
+#include <cstdlib> // std::abs
 #include <ctime>   // REN-38-F15: per-run temp root stamp
 
 using namespace crd;
@@ -59,15 +61,15 @@ memory::TlsfAllocator& galloc()
 
 // ⭐⭐ REN-41: the shipped authored assets are the SINGLE SOURCE — read them from the ctest-provided
 // `CRD_ASSETS_DIR` (there is no in-binary pack any more). Returns false if the root is unset or the file is
-// missing, so a REQUIRE at the call site fails loudly rather than cooking nothing. `_CRT_SECURE_NO_WARNINGS`
-// (set for this target) lets `std::getenv` through on MSVC.
+// missing, so a REQUIRE at the call site fails loudly rather than cooking nothing.
 [[nodiscard]] bool read_shipped_asset(const char* rel, containers::String& out)
 {
-    const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0')
+    crd::containers::String root_text;
+    if (!crd::read_environment_text("CRD_ASSETS_DIR", root_text))
     {
         return false;
     }
+    const char* const root = root_text.c_str();
     containers::String p(&galloc());
     p.append(root);
     p.append("/");
@@ -2845,11 +2847,12 @@ TEST_CASE("REN-38-F15 GATE: an edited disk asset is live and a corrupt one refus
     // ⭐⭐ REN-41: disk is the SINGLE SOURCE — mirror the shipped tree into the temp root so it is COMPLETE
     // (set_asset_root validates the default frame pair, and the scene_tess frame cooks its stages BY NAME from
     // the root), THEN overwrite the one declaration under test below. No embedded pack shadows anything now.
-    const char* canon = std::getenv("CRD_ASSETS_DIR");
-    if (canon == nullptr || canon[0] == '\0')
+    crd::containers::String canon_text;
+    if (!crd::read_environment_text("CRD_ASSETS_DIR", canon_text))
     {
         SKIP("CRD_ASSETS_DIR not set (run through ctest)");
     }
+    const char* const canon = canon_text.c_str();
     copy_tree(platform::fs::Path(canon),
               platform::fs::Path(containers::StringView(root.c_str(), root.size())));
     containers::String vdir(&galloc());
@@ -3061,11 +3064,12 @@ void raf11_run_reload_sequence(scenerender::SceneRenderer& renderer, const conta
 // the edits below must land on THIS copy, never the read-only checkout). Returns false if CRD_ASSETS_DIR is unset.
 [[nodiscard]] bool raf11_mirror_shipped_root(containers::String& root, const char* tag)
 {
-    const char* canon = std::getenv("CRD_ASSETS_DIR");
-    if (canon == nullptr || canon[0] == '\0')
+    crd::containers::String canon_text;
+    if (!crd::read_environment_text("CRD_ASSETS_DIR", canon_text))
     {
         return false;
     }
+    const char* const canon = canon_text.c_str();
     root.append(platform::fs::temp_directory().generic());
     root.append(tag);
     char stamp[32];
@@ -4004,11 +4008,12 @@ TEST_CASE("RAF-9 GATE: a default selected by engine:// id renders a shadowed fra
     {
         SKIP("no graphics-capable Vulkan device with shader objects");
     }
-    const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0')
+    crd::containers::String root_text;
+    if (!crd::read_environment_text("CRD_ASSETS_DIR", root_text))
     {
         SKIP("CRD_ASSETS_DIR not set (run through ctest)");
     }
+    const char* const root = root_text.c_str();
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
 
@@ -4080,11 +4085,12 @@ TEST_CASE("RAF-9 GATE (DX12): a default selected by engine:// id renders a shado
     {
         SKIP("no D3D12 device available");
     }
-    const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0')
+    crd::containers::String root_text;
+    if (!crd::read_environment_text("CRD_ASSETS_DIR", root_text))
     {
         SKIP("CRD_ASSETS_DIR not set (run through ctest)");
     }
+    const char* const root = root_text.c_str();
     auto raster = gpu::create_dx12_raster_context();
     REQUIRE(raster != nullptr);
 

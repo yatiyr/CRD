@@ -12,12 +12,13 @@
 #include <crd/audio/aiff.hpp>
 #include <crd/audio/flac.hpp>
 #include <crd/audio/wav.hpp>
+#include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 
 // the MD5 detail is internal to the codec TU; re-include it here as its own oracle check
@@ -270,11 +271,11 @@ TEST_CASE("flac reference-codec oracle hooks", "[audio][flac][oracle]")
     //   pass 2 (CRD_AUDIO_VERIFY=<ffmpeg-made flac>): OUR decoder reads THEIR stream — bit-exact vs the
     //     regenerated material, MD5 verified.
     const audio::AudioPcm material = make_material(48000, 2, 16, 10240);
-    if (const char* dump_dir = std::getenv("CRD_AUDIO_DUMP"); dump_dir != nullptr)
+    if (crd::containers::String dump_dir; crd::read_environment_text("CRD_AUDIO_DUMP", dump_dir))
     {
         const auto write_file = [&](const char* name, const containers::Array<u8>& bytes) {
             char path[512];
-            std::snprintf(path, sizeof(path), "%s/%s", dump_dir, name);
+            std::snprintf(path, sizeof(path), "%s/%s", dump_dir.c_str(), name);
             std::FILE* f = std::fopen(path, "wb");
             REQUIRE(f != nullptr);
             REQUIRE(std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size());
@@ -283,9 +284,9 @@ TEST_CASE("flac reference-codec oracle hooks", "[audio][flac][oracle]")
         write_file("ours.wav", audio::wav_encode(material, &galloc()));
         write_file("ours.flac", audio::flac_encode(material, &galloc()));
     }
-    if (const char* verify = std::getenv("CRD_AUDIO_VERIFY"); verify != nullptr)
+    if (crd::containers::String verify; crd::read_environment_text("CRD_AUDIO_VERIFY", verify))
     {
-        std::FILE* f = std::fopen(verify, "rb");
+        std::FILE* f = std::fopen(verify.c_str(), "rb");
         REQUIRE(f != nullptr);
         (void)std::fseek(f, 0, SEEK_END);
         const long size = std::ftell(f);

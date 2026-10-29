@@ -31,12 +31,12 @@
 #include <crd/perf/measure.hpp>
 #include <crd/gpu/vulkan_compute_context.hpp>
 #include <crd/gpu/vulkan_context.hpp>
+#include <crd/platform/context.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/test_helpers/gpu_compare.hpp>
 #include <crd/test_helpers/gpu_determinism.hpp>
 
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <random>
 
@@ -44,12 +44,6 @@ namespace fs = crd::platform::fs;
 
 namespace
 {
-
-[[nodiscard]] bool headless_requested() noexcept
-{
-    const char* v = std::getenv("CRD_PLATFORM_HEADLESS");
-    return v != nullptr && v[0] == '1';
-}
 
 using crd::geometry::bvh_gpu::MortonPair;
 using crd::geometry::bvh_gpu::MortonRadixGpuPipeline;
@@ -82,7 +76,7 @@ void fill_random_codes(crd::containers::Array<crd::u32>& out, crd::usize n, Rng&
 TEST_CASE("v9a-b2 GPU radix N=16 calibration: byte-identical to v9a-b1 CPU oracle",
           "[radix][gpu][calibration]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("CRD_PLATFORM_HEADLESS=1, skipping GPU radix calibration");
         return;
@@ -143,7 +137,7 @@ TEST_CASE("v9a-b2 GPU radix N=16 calibration: byte-identical to v9a-b1 CPU oracl
 
 TEST_CASE("v9a-b2 GPU radix empty input yields empty output", "[radix][gpu]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("headless");
         return;
@@ -168,7 +162,7 @@ TEST_CASE("v9a-b2 GPU radix empty input yields empty output", "[radix][gpu]")
 
 TEST_CASE("v9a-b2 GPU radix N=1 yields single pair {code, 0}", "[radix][gpu]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("headless");
         return;
@@ -201,7 +195,7 @@ TEST_CASE("v9a-b2 GPU radix N=1 yields single pair {code, 0}", "[radix][gpu]")
 TEST_CASE("v9a-b2 GPU radix all-equal keys: stable (input index order preserved)",
           "[radix][gpu][stability]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("headless");
         return;
@@ -243,7 +237,7 @@ TEST_CASE("v9a-b2 GPU radix all-equal keys: stable (input index order preserved)
 TEST_CASE("v9a-b2 GPU radix N=10000: byte-identical to v9a-b1 CPU oracle",
           "[radix][gpu][oracle]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("headless");
         return;
@@ -290,7 +284,7 @@ TEST_CASE("v9a-b2 GPU radix N=10000: byte-identical to v9a-b1 CPU oracle",
 TEST_CASE("v9a-b2 GPU radix N=262144 (multi-block): byte-identical to CPU oracle",
           "[radix][gpu][oracle][large]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("headless");
         return;
@@ -341,7 +335,7 @@ TEST_CASE("v9a-b2 GPU radix N=262144 (multi-block): byte-identical to CPU oracle
 TEST_CASE("v9a-b2 GPU radix is deterministic across 3 dispatches (D146)",
           "[radix][gpu][determinism]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("headless");
         return;
@@ -385,7 +379,7 @@ TEST_CASE("v9a-b2 GPU radix is deterministic across 3 dispatches (D146)",
 TEST_CASE("v9a-b2 GPU radix integrates with compute_morton_codes_cpu",
           "[radix][gpu][integration]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("headless");
         return;
@@ -448,7 +442,7 @@ TEST_CASE("v9a-b2 GPU radix integrates with compute_morton_codes_cpu",
 TEST_CASE("v9a-b2 GPU radix perf budget: 1M items end-to-end",
           "[radix][gpu][perf]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("headless");
         return;

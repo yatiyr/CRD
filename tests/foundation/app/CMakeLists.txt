@@ -8,10 +8,6 @@ target_link_libraries(crd-app-tests PRIVATE
     Catch2::Catch2WithMain
 )
 
-if(MSVC)
-    target_compile_definitions(crd-app-tests PRIVATE _CRT_SECURE_NO_WARNINGS)
-endif()
-
 crd_enable_default_pch(crd-app-tests)
 
 crd_discover_tests(crd-app-tests)

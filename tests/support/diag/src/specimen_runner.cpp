@@ -12,6 +12,7 @@
 // scanning the child's stdout) and C stdio/OS syscalls at the process boundary.
 
 #include <crd/core/cpu_features.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/diag/specimen_runner.hpp>
 
 #include <cctype>
@@ -534,17 +535,19 @@ crd::containers::String host_tuple()
 #endif
     // The CPU selection the child makes (ADR-0134 §8): it inherits CRD_CPU_LEVEL as set now, which a caller may have
     // changed after this process made its own selection. The child's C runtime dispatch is its own and not named.
-#if defined(_WIN32)
     char level[32] = {}; // NOLINT(modernize-avoid-c-arrays)
-    const DWORD n = ::GetEnvironmentVariableA("CRD_CPU_LEVEL", level, sizeof(level));
-    const char* asked = n > 0U ? level : nullptr;
-    if (n >= sizeof(level))
+    const char* asked = nullptr;
+    switch (crd::read_environment("CRD_CPU_LEVEL", level, sizeof(level)))
     {
-        asked = "?"; // longer than every level name, so as unknown as the child finds it
+        case crd::EnvironmentRead::Set:
+            asked = level;
+            break;
+        case crd::EnvironmentRead::TooLong:
+            asked = "?"; // longer than every level name, so as unknown as the child finds it
+            break;
+        case crd::EnvironmentRead::Unset:
+            break;
     }
-#else
-    const char* asked = std::getenv("CRD_CPU_LEVEL"); // NOLINT(concurrency-mt-unsafe): read at a spawn, not written
-#endif
     char line[512] = {}; // NOLINT(modernize-avoid-c-arrays)
     (void)crd::format_cpu_selection(crd::apply_cpu_override(crd::cpu_selection(), asked), crd::CpuRuntimeDispatch{},
                                     line, sizeof(line));

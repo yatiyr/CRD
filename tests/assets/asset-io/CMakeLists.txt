@@ -27,7 +27,7 @@ target_link_libraries(crd-asset-io-tests PRIVATE
 )
 
 if(MSVC)
-    # test_threemf.cpp: std::getenv/std::fopen for the CRD_3MF_DUMP conformance hook + the reference fixture
+    # test_threemf.cpp, test_otio.cpp: std::fopen for the dump hooks and the reference fixtures
     target_compile_definitions(crd-asset-io-tests PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 

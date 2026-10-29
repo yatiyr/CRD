@@ -38,10 +38,10 @@
 #include <crd/gpu/vulkan_shader_compile.hpp>
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/gpu/vulkan_validation_capture.hpp>  // RET-7: the gpu-context capture (counters, never eyeballed logs)
+#include <crd/platform/context.hpp>
 #include <crd/test_helpers/gpu_compare.hpp>
 
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 
 namespace
@@ -49,12 +49,6 @@ namespace
 
 using namespace crd::geometry::shader_helpers;
 namespace gold = crd::geometry::shader_helpers::golden;
-
-[[nodiscard]] bool headless_requested() noexcept
-{
-    const char* v = std::getenv("CRD_PLATFORM_HEADLESS");
-    return v != nullptr && v[0] == '1';
-}
 
 // Per-IR tolerance. Mixed test: per-pixel PASSES iff
 //   ulp_distance <= ulp_tolerance  OR  abs_error <= abs_tolerance.
@@ -241,7 +235,7 @@ TEST_CASE("v9e-b GLSL conformance: prelude compiles to SPIR-V (smoke)",
 TEST_CASE("v9e-b ULP conformance: GPU output matches evaluate() within tolerance",
           "[shader_helpers][glsl][gpu][conformance]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("headless");
         return;

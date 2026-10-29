@@ -17,23 +17,17 @@
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/platform/context.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/test_helpers/gpu_compare.hpp>
 
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 
 namespace fs = crd::platform::fs;
 
 namespace
 {
-
-[[nodiscard]] bool headless_requested() noexcept
-{
-    const char* v = std::getenv("CRD_PLATFORM_HEADLESS");
-    return v != nullptr && v[0] == '1';
-}
 
 using crd::geometry::bvh_gpu::compute_morton_codes_cpu_60bit;
 using crd::geometry::bvh_gpu::MortonGpu60BitPipeline;
@@ -44,7 +38,7 @@ using crd::geometry::primitives::AABB3;
 TEST_CASE("v9a-60bit-gpu: graceful-skip when shaderInt64 unavailable",
           "[morton60][gpu][capability]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("CRD_PLATFORM_HEADLESS=1, skipping GPU capability test");
         return;
@@ -75,7 +69,7 @@ TEST_CASE("v9a-60bit-gpu: graceful-skip when shaderInt64 unavailable",
 TEST_CASE("v9a-60bit-gpu: GPU 60-bit Morton matches CPU oracle byte-for-byte",
           "[morton60][gpu][bit-compare]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("CRD_PLATFORM_HEADLESS=1, skipping GPU 60-bit dispatch test");
         return;

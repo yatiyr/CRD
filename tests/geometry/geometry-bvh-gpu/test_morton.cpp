@@ -26,24 +26,18 @@
 #include <crd/perf/measure.hpp>
 #include <crd/gpu/vulkan_compute_context.hpp>
 #include <crd/gpu/vulkan_context.hpp>
+#include <crd/platform/context.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/test_helpers/gpu_compare.hpp>
 #include <crd/test_helpers/gpu_determinism.hpp>
 
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 
 namespace fs = crd::platform::fs;
 
 namespace
 {
-
-[[nodiscard]] bool headless_requested() noexcept
-{
-    const char* v = std::getenv("CRD_PLATFORM_HEADLESS");
-    return v != nullptr && v[0] == '1';
-}
 
 using crd::geometry::bvh_gpu::compute_morton_codes_cpu;
 using crd::geometry::bvh_gpu::MortonGpuPipeline;
@@ -192,7 +186,7 @@ TEST_CASE("union_aabb_of: empty span -> empty AABB; single span -> single AABB",
 TEST_CASE("v9a-a GPU Morton matches CPU oracle byte-for-byte",
           "[morton][gpu][bit-compare]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("CRD_PLATFORM_HEADLESS=1, skipping GPU Morton dispatch test");
         return;
@@ -246,7 +240,7 @@ TEST_CASE("v9a-a GPU Morton matches CPU oracle byte-for-byte",
 TEST_CASE("v9a-a GPU Morton is deterministic across 3 dispatches",
           "[morton][gpu][determinism]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("CRD_PLATFORM_HEADLESS=1, skipping GPU determinism test");
         return;
@@ -294,7 +288,7 @@ TEST_CASE("v9a-a GPU Morton is deterministic across 3 dispatches",
 TEST_CASE("v9a-a-async-compute: async dispatch matches sync dispatch byte-for-byte",
           "[morton][gpu][async]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("CRD_PLATFORM_HEADLESS=1, skipping GPU async-compute test");
         return;
@@ -341,7 +335,7 @@ TEST_CASE("v9a-a-async-compute: async dispatch matches sync dispatch byte-for-by
 TEST_CASE("v9a-a GPU Morton perf budget: 256k AABBs end-to-end",
           "[morton][gpu][perf]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("CRD_PLATFORM_HEADLESS=1, skipping perf test");
         return;

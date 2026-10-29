@@ -4,6 +4,11 @@
 
 namespace crd::platform
 {
+// True when CRD_PLATFORM_HEADLESS holds a value starting with 1: PlatformContext::create() then selects GLFW's null
+// platform (CI runners, display-less WSL), which initialises and polls but creates no real window, so code that needs
+// one asks here first.
+[[nodiscard]] bool headless_requested() noexcept;
+
 // PlatformContext owns the GLFW runtime: glfwInit on construction,
 // glfwTerminate on destruction. The class is move-only and at most one
 // PlatformContext should exist per process.

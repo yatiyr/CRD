@@ -16,10 +16,6 @@ target_link_libraries(crd-anim-tests PRIVATE
     Catch2::Catch2WithMain
 )
 
-if(MSVC)
-    target_compile_definitions(crd-anim-tests PRIVATE _CRT_SECURE_NO_WARNINGS) # std::getenv (the fixture env)
-endif()
-
 crd_enable_default_pch(crd-anim-tests)
 
 # the Fox fixture path (the io_corpus env pattern — ctest working dirs differ from the repo root)

@@ -19,6 +19,8 @@
 // backend slot, embeds NO frame asset as a C++ string, and takes NO privileged engine-only path. Every customisation
 // goes through a public seam. That the compiler accepts this translation unit against the public surface IS the proof.
 
+#include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/gpu/command_model.hpp>            // the custom executor's canonical command model (public)
 #include <crd/gpu/context.hpp>
 #include <crd/gpu/program.hpp>
@@ -46,7 +48,6 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <cstdlib> // std::getenv (asset roots ride ctest ENVIRONMENT)
 #include <cstring>
 
 using namespace crd;
@@ -371,19 +372,19 @@ TEST_CASE("RAF-10 GATE: an application customises the renderer without engine ed
     {
         SKIP("no graphics-capable Vulkan device with shader objects");
     }
-    const char* eroot = std::getenv("CRD_ASSETS_DIR");
-    const char* aroot = std::getenv("CRD_APP_ASSETS_DIR");
-    if (eroot == nullptr || eroot[0] == '\0')
+    crd::containers::String eroot;
+    if (!crd::read_environment_text("CRD_ASSETS_DIR", eroot))
     {
         SKIP("CRD_ASSETS_DIR not set (run through ctest)");
     }
-    if (aroot == nullptr || aroot[0] == '\0') // compiled fallback (see CMakeLists SCAR)
+    crd::containers::String aroot;
+    if (!crd::read_environment_text("CRD_APP_ASSETS_DIR", aroot)) // compiled fallback (see CMakeLists SCAR)
     {
-        aroot = CRD_RAF10_APP_ASSETS_DIR;
+        aroot.append(CRD_RAF10_APP_ASSETS_DIR);
     }
     auto raster = gpu::create_vulkan_raster_context(*vk);
     REQUIRE(raster != nullptr);
-    run_raf10_app(*vk, *raster, eroot, aroot);
+    run_raf10_app(*vk, *raster, eroot.c_str(), aroot.c_str());
 }
 
 #if defined(_WIN32)
@@ -401,16 +402,16 @@ TEST_CASE("RAF-10 GATE (DX12): an application customises the renderer without en
     {
         SKIP("no D3D12 raster context");
     }
-    const char* eroot = std::getenv("CRD_ASSETS_DIR");
-    const char* aroot = std::getenv("CRD_APP_ASSETS_DIR");
-    if (eroot == nullptr || eroot[0] == '\0')
+    crd::containers::String eroot;
+    if (!crd::read_environment_text("CRD_ASSETS_DIR", eroot))
     {
         SKIP("CRD_ASSETS_DIR not set (run through ctest)");
     }
-    if (aroot == nullptr || aroot[0] == '\0') // compiled fallback (see CMakeLists SCAR)
+    crd::containers::String aroot;
+    if (!crd::read_environment_text("CRD_APP_ASSETS_DIR", aroot)) // compiled fallback (see CMakeLists SCAR)
     {
-        aroot = CRD_RAF10_APP_ASSETS_DIR;
+        aroot.append(CRD_RAF10_APP_ASSETS_DIR);
     }
-    run_raf10_app(*gctx, *raster, eroot, aroot);
+    run_raf10_app(*gctx, *raster, eroot.c_str(), aroot.c_str());
 }
 #endif

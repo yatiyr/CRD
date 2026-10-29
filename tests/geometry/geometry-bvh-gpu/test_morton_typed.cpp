@@ -20,24 +20,18 @@
 #include <crd/geometry/bvh_gpu/morton_typed.hpp>
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/platform/context.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/gpu/vulkan_compute_context.hpp>
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/test_helpers/gpu_compare.hpp>
 #include <crd/units/quantity_aliases.hpp>
 
-#include <cstdlib>
 
 namespace fs = crd::platform::fs;
 
 namespace
 {
-
-[[nodiscard]] bool headless_requested() noexcept
-{
-    const char* v = std::getenv("CRD_PLATFORM_HEADLESS");
-    return v != nullptr && v[0] == '1';
-}
 
 using crd::geometry::bvh_gpu::AABB3T;
 using crd::geometry::bvh_gpu::compute_morton_codes_cpu;
@@ -145,7 +139,7 @@ TEST_CASE("v9a-a-typed CPU: union-scene overload matches raw union-scene overloa
 TEST_CASE("v9a-a-typed GPU: typed dispatch matches raw dispatch byte-for-byte",
           "[morton][typed][gpu][round-trip]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("CRD_PLATFORM_HEADLESS=1, skipping GPU typed-dispatch test");
         return;

@@ -5,6 +5,8 @@
 // structural landmarks of the originals intact: the record pull's bit reinterpretation, the VertexIndex-driven
 // expansion, the AA smoothstep, the pristine-grid fwidth. The device pixel gate rides the gpu-context suite.
 
+#include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/draw/draw_assets.hpp>
 #include <crd/kir/ckir_cook.hpp>
 #include <crd/kir/ckir_glsl.hpp>
@@ -18,7 +20,6 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <cstdlib>
 #include <cstring>
 
 namespace
@@ -175,11 +176,12 @@ TEST_CASE("REN-38-F7: the AUTHORED draw suite cooks, honours the varying contrac
 TEST_CASE("REN-38-F7 DRIFT GATE: the shipped draw assets match the embedded pack, canonically",
           "[draw][ren38]")
 {
-    const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0')
+    crd::containers::String root_text;
+    if (!crd::read_environment_text("CRD_ASSETS_DIR", root_text))
     {
         SKIP("CRD_ASSETS_DIR not set (run through ctest)");
     }
+    const char* const root = root_text.c_str();
     crd::memory::TlsfAllocator alloc(32U << 20U);
     namespace vc = crd::vertcook;
     namespace mc = crd::matcook;

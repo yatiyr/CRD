@@ -3,6 +3,8 @@
 // table, structural-vs-incremental sync, and THE partial-re-upload gate — move ONE entity and exactly its chunk
 // run's bytes re-upload, nothing else. Plus the frustum helpers' truth table.
 
+#include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/framecook/frame_asset.hpp>
 #include <crd/gpu/command_model.hpp> // RAF-12.4: ICommandEncoder complete type (StubRaster::create_command_encoder returns unique_ptr<ICommandEncoder>)
 #include <crd/gpu/raster_context.hpp>
@@ -26,7 +28,6 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <cstdlib> // std::getenv - the drift gate reads the ctest-provided asset root
 #include <cstring>
 
 using namespace crd;
@@ -470,11 +471,12 @@ TEST_CASE("scene-render: frustum planes + AABB test -- in front passes, behind c
 // `set_frame_graph` parses + validates only (no GPU). `CRD_ASSETS_DIR` (ctest env) mounts the engine:// root.
 TEST_CASE("RAF-9: an engine default frame loads by canonical engine:// id", "[scene-render][raf9]")
 {
-    const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0')
+    crd::containers::String root_text;
+    if (!crd::read_environment_text("CRD_ASSETS_DIR", root_text))
     {
         SKIP("CRD_ASSETS_DIR not set (run through ctest)");
     }
+    const char* const root = root_text.c_str();
     memory::TlsfAllocator      alloc(16U << 20U, nullptr, "raf9-id-load");
     scenerender::SceneRenderer r(&alloc);
     REQUIRE(r.set_asset_root(root));
@@ -499,11 +501,12 @@ TEST_CASE("RAF-9: an engine default frame loads by canonical engine:// id", "[sc
 // guards the ASSET against future edit drift. The 0h E4 DoD's "set-equality ctest".)
 TEST_CASE("CEIR-34 E4: scene_programs.manifest enumerates exactly the default program set (no drift)", "[scene-render][ceir34]")
 {
-    const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0')
+    crd::containers::String root_text;
+    if (!crd::read_environment_text("CRD_ASSETS_DIR", root_text))
     {
         SKIP("CRD_ASSETS_DIR not set (run through ctest)");
     }
+    const char* const root = root_text.c_str();
     memory::TlsfAllocator alloc(1U << 20U, nullptr, "e4-manifest-drift");
     containers::String    path(&alloc);
     path.append(root);
@@ -664,11 +667,12 @@ TEST_CASE("CEIR-31b-3-a-ii: the ui spec-set cache key is order-independent and v
 TEST_CASE("CEIR-31b-3-a-ii: apply_spec_set patches the committed ui_blur spec-consts all-or-nothing",
           "[scenerender][ceir31b]")
 {
-    const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0')
+    crd::containers::String root_text;
+    if (!crd::read_environment_text("CRD_ASSETS_DIR", root_text))
     {
         SKIP("CRD_ASSETS_DIR not set (run through ctest)");
     }
+    const char* const root = root_text.c_str();
     memory::TlsfAllocator alloc(4U << 20U, nullptr, "ceir31b-aii-specapply");
 
     containers::String text(&alloc);
@@ -756,11 +760,12 @@ TEST_CASE("CEIR-31b-3-a-ii: apply_spec_set patches the committed ui_blur spec-co
 TEST_CASE("CEIR-31b-3-c-ii: the blur H and V passes build DISTINCT spec-sets; the twin H passes collapse",
           "[scenerender][ceir31b]")
 {
-    const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0')
+    crd::containers::String root_text;
+    if (!crd::read_environment_text("CRD_ASSETS_DIR", root_text))
     {
         SKIP("CRD_ASSETS_DIR not set (run through ctest)");
     }
+    const char* const root = root_text.c_str();
     memory::TlsfAllocator alloc(4U << 20U, nullptr, "ceir31b-cii-specseat");
 
     containers::String text(&alloc);
@@ -865,11 +870,12 @@ TEST_CASE("CEIR-31b-3-c-ii: the blur H and V passes build DISTINCT spec-sets; th
 TEST_CASE("CEIR-31b-4-b-iv-g-2: build_pass_spec_set resolves the derived blur step from the read extent (non-square)",
           "[scenerender][ceir31b]")
 {
-    const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0')
+    crd::containers::String root_text;
+    if (!crd::read_environment_text("CRD_ASSETS_DIR", root_text))
     {
         SKIP("CRD_ASSETS_DIR not set (run through ctest)");
     }
+    const char* const root = root_text.c_str();
     memory::TlsfAllocator alloc(4U << 20U, nullptr, "ceir31b-g2-derive");
 
     containers::String text(&alloc);
@@ -960,11 +966,12 @@ TEST_CASE("REN-41/CEIR-15f-2: the live cook is gated by the CEIR semantic verifi
 // gate SKIPS rather than passing on nothing.
 TEST_CASE("REN-41: every shipped authored default asset cooks (parses + validates)", "[scene-render][ren38][ren41]")
 {
-    const char* root = std::getenv("CRD_ASSETS_DIR");
-    if (root == nullptr || root[0] == '\0')
+    crd::containers::String root_text;
+    if (!crd::read_environment_text("CRD_ASSETS_DIR", root_text))
     {
         SKIP("CRD_ASSETS_DIR not set (run through ctest)");
     }
+    const char* const root = root_text.c_str();
     memory::TlsfAllocator alloc(16U << 20U, nullptr, "ren41-cook");
 
     const auto read_shipped = [&](const char* rel, containers::String& out) {

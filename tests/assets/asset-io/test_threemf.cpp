@@ -4,13 +4,14 @@
 // full OPC round-trip: model.xml → our ZIP writer → our ZIP reader → our parser → geometry value-exact.
 
 #include <crd/assetio/threemf.hpp>
+#include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/resources/zip_archive.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 
 namespace
@@ -167,9 +168,9 @@ TEST_CASE("3mf: a REAL reference-producer file imports -- the lib3mf fixture thr
     namespace res = crd::resources;
 
     crd::containers::String path(&alloc);
-    if (const char* root = std::getenv("CRD_ASSETIO_DATA"); root != nullptr && root[0] != '\0')
+    if (crd::containers::String root; crd::read_environment_text("CRD_ASSETIO_DATA", root))
     {
-        path.append(root);
+        path.append(root.c_str());
     }
     else
     {
@@ -237,9 +238,9 @@ TEST_CASE("3mf: a REAL slicer-authored file imports -- PrusaSlicer 2.9.6's own r
     namespace res = crd::resources;
 
     crd::containers::String path(&alloc);
-    if (const char* root = std::getenv("CRD_ASSETIO_DATA"); root != nullptr && root[0] != '\0')
+    if (crd::containers::String root; crd::read_environment_text("CRD_ASSETIO_DATA", root))
     {
-        path.append(root);
+        path.append(root.c_str());
     }
     else
     {
@@ -329,9 +330,9 @@ TEST_CASE("3mf: the WATERTIGHT export gate + the full OPC round-trip through our
 
     // conformance hook: CRD_3MF_DUMP=<path> writes the EXACT product-path archive for reference-implementation
     // validation (lib3mf / a slicer) — the bytes the assertion below round-trips are the bytes the reference sees
-    if (const char* dump = std::getenv("CRD_3MF_DUMP"); dump != nullptr && dump[0] != '\0')
+    if (crd::containers::String dump; crd::read_environment_text("CRD_3MF_DUMP", dump))
     {
-        std::FILE* f = std::fopen(dump, "wb");
+        std::FILE* f = std::fopen(dump.c_str(), "wb");
         REQUIRE(f != nullptr);
         CHECK(std::fwrite(threemf.data(), 1U, threemf.size(), f) == threemf.size());
         (void)std::fclose(f);

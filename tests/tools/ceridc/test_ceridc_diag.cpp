@@ -22,6 +22,8 @@
 #include <crd/ceir/input.hpp>
 #include <crd/ceridc/verbs.hpp>
 #include <crd/containers/array.hpp>
+#include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/perf/bundle.hpp>
@@ -504,8 +506,9 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
 {
     write_bundle(kBinaryBundle);
     write_program(kBinaryProgram);
-    const char* exe = std::getenv("CRD_CERIDC_EXE");
-    REQUIRE(exe != nullptr); // wired by CMake
+    crd::containers::String exe_text;
+    REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe_text)); // wired by CMake
+    const char* const exe = exe_text.c_str();
 
     const crd::perf::DiagAuthoritySet read = crd::perf::authority_bit(DiagAuthority::Read);
     char                              cmd[1024];
@@ -653,8 +656,9 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
 TEST_CASE("diag: the real ceridc binary runs program.inspect only under its execute grant", "[ceridc][diag]")
 {
     write_program(kInspectBinary);
-    const char* exe = std::getenv("CRD_CERIDC_EXE");
-    REQUIRE(exe != nullptr); // wired by CMake
+    crd::containers::String exe_text;
+    REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe_text)); // wired by CMake
+    const char* const exe = exe_text.c_str();
     const crd::u32 call_line = line_of("func.call", 0U);
     const crd::u32 a_line    = line_of("arith.addi", 0U);
     char           breaks[16];
@@ -736,8 +740,9 @@ TEST_CASE("diag: a run record made by one ceridc process reproduces in another a
     // DIAG.9a: the record is written by one process, the program file is edited, and a second process replays the
     // record from the artifact it holds; a third replays the same inputs against the edited file and names the edited
     // constant. Each answer equals this process's native call on a fresh service.
-    const char* exe = std::getenv("CRD_CERIDC_EXE");
-    REQUIRE(exe != nullptr); // wired by CMake
+    crd::containers::String exe_text;
+    REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe_text)); // wired by CMake
+    const char* const exe = exe_text.c_str();
     (void)fs::remove_file(fs::Path(StringView(kReplayRecord)));
 
     String text(&g_alloc);
@@ -863,8 +868,9 @@ TEST_CASE("diag: a seeded random failure recorded by one ceridc process reproduc
     // reads stream 2. Process 2 replays the record with no seed and reproduces the failure from the draws it holds;
     // process 3 replays the same draws against the edited file and names the read the record cannot answer. Each
     // answer equals this process's native call, and so does an MCP stdio process's tool text.
-    const char* exe = std::getenv("CRD_CERIDC_EXE");
-    REQUIRE(exe != nullptr); // wired by CMake
+    crd::containers::String exe_text;
+    REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe_text)); // wired by CMake
+    const char* const exe = exe_text.c_str();
     (void)fs::remove_file(fs::Path(StringView(kRandomRecord)));
     (void)fs::remove_file(fs::Path(StringView(kRandomNative)));
 
@@ -1024,8 +1030,9 @@ TEST_CASE("diag: a host record made by one ceridc process reproduces in another 
     // await that reads the launched value (recorded 25, observed 36); an MCP stdio process replays it on another job
     // split. Each answer equals this process's native call, and the binary's record is the native record, byte for
     // byte.
-    const char* exe = std::getenv("CRD_CERIDC_EXE");
-    REQUIRE(exe != nullptr); // wired by CMake
+    crd::containers::String exe_text;
+    REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe_text)); // wired by CMake
+    const char* const exe = exe_text.c_str();
     (void)fs::remove_file(fs::Path(StringView(kHostRecord)));
     (void)fs::remove_file(fs::Path(StringView(kHostNative)));
 
@@ -1179,8 +1186,9 @@ TEST_CASE("diag: a time-step failure recorded by one ceridc process reproduces i
     // the read the record cannot answer. Process 4 records a steady step, reading the live wall; process 5 reproduces
     // that run, wall-dependent result included, from the reads alone. Each replay answer equals this process's native
     // call, and so does an MCP stdio process's tool text.
-    const char* exe = std::getenv("CRD_CERIDC_EXE");
-    REQUIRE(exe != nullptr); // wired by CMake
+    crd::containers::String exe_text;
+    REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe_text)); // wired by CMake
+    const char* const exe = exe_text.c_str();
     (void)fs::remove_file(fs::Path(StringView(kClockRecord)));
     (void)fs::remove_file(fs::Path(StringView(kClockNative)));
     (void)fs::remove_file(fs::Path(StringView(kClockPass)));
@@ -1354,8 +1362,9 @@ TEST_CASE("diag: an unhandled event recorded by one ceridc process reproduces in
     // failure from the reads it holds; process 3 replays it against the edited file and names the read the record
     // cannot answer. Process 4 records the same run on the host executor and process 5 reproduces that host record.
     // Each replay answer equals this process's native call, and so does an MCP stdio process's tool text.
-    const char* exe = std::getenv("CRD_CERIDC_EXE");
-    REQUIRE(exe != nullptr); // wired by CMake
+    crd::containers::String exe_text;
+    REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe_text)); // wired by CMake
+    const char* const exe = exe_text.c_str();
     (void)fs::remove_file(fs::Path(StringView(kEventRecord)));
     (void)fs::remove_file(fs::Path(StringView(kEventNative)));
     (void)fs::remove_file(fs::Path(StringView(kEventHost)));
@@ -1521,8 +1530,9 @@ TEST_CASE("diag: a device record made by one ceridc process reproduces in anothe
     // reproduces; process 3 replays it against the edited kernel folder and names element 0 of the third buffer at
     // @wave's dispatch line; an MCP stdio process answers the same. Each answer equals this process's native call.
     namespace fx    = crd::ceir_test::device_replay;
-    const char* exe = std::getenv("CRD_CERIDC_EXE");
-    REQUIRE(exe != nullptr); // wired by CMake
+    crd::containers::String exe_text;
+    REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe_text)); // wired by CMake
+    const char* const exe = exe_text.c_str();
     fx::Authored a(&g_alloc);
     fx::author(a, &g_alloc);
     // The root is a folder of the working directory (the binary is given it as a relative --root, so no path with
@@ -1653,8 +1663,9 @@ TEST_CASE("diag: a device record made by one ceridc process reproduces in anothe
 TEST_CASE("diag 11a: the real ceridc binary hosts the diagnostic host from an authored profile",
           "[ceridc][diag][diag11a]")
 {
-    const char* exe = std::getenv("CRD_CERIDC_EXE");
-    REQUIRE(exe != nullptr); // wired by CMake
+    crd::containers::String exe_text;
+    REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe_text)); // wired by CMake
+    const char* const exe = exe_text.c_str();
     const fs::Path captures(StringView("ceridc_host_captures"));
     const fs::Path crashes(StringView("ceridc_host_crashes"));
     (void)fs::remove_all(captures);

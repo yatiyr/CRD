@@ -21,7 +21,6 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <cstdlib> // std::getenv
 #include <cstring> // std::strlen
 
 using crd::usize;
@@ -430,9 +429,8 @@ TEST_CASE("raf11 SceneRenderer.reload re-reads and re-cooks a frame from disk", 
     crd::memory::TlsfAllocator alloc(1U << 24U, nullptr, "raf11-live");
 
     // A private, mutable asset dir under the OS temp — edited between reloads exactly as a file watcher would see.
-    const char*             tmp = std::getenv("TEMP");
     crd::containers::String dir(&alloc);
-    dir.append(tmp != nullptr ? tmp : ".", std::strlen(tmp != nullptr ? tmp : "."));
+    dir.append(crd::platform::fs::temp_directory().generic());
     dir.append("/crd_raf11_reload_gate", 22);
     (void)crd::platform::fs::remove_all(crd::platform::fs::Path(sv(dir))); // clean slate
     crd::containers::String frame_dir(&alloc);

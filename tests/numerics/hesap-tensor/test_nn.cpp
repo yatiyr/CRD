@@ -5,6 +5,8 @@
 // - Q8_0: quantize-on-load byte-exact vs the frozen .q8/.q8s refs; both weight-load
 //   paths bit-exact against each other; run-twice determinism; bounded error vs f32
 // - the {1,2,4,8,16} worker moat (bit-identity) and the allocation-free infer gate
+#include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/hesap/stats/philox.hpp>
 #include <crd/hesap/tensor/io.hpp>
 #include <crd/hesap/tensor/nn.hpp>
@@ -16,7 +18,6 @@
 #include <bit>
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 
 using crd::hesap::tensor::BlockQ8Zero;
@@ -37,20 +38,13 @@ constexpr crd::usize kPool = 1U << 26;
 
 crd::containers::String corpus_path(crd::memory::IAllocator* alloc, const char* file)
 {
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4996) // getenv — corpus-path dev knob only (the dense_lu_kernels precedent)
-#endif
-    const char* root = std::getenv("CRD_NN_CORPUS");
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
-    if (root == nullptr)
+    crd::containers::String root(alloc);
+    if (!crd::read_environment_text("CRD_NN_CORPUS", root))
     {
-        root = "tests/numerics/hesap-tensor/nn_corpus";
+        root.append("tests/numerics/hesap-tensor/nn_corpus");
     }
     crd::containers::String s(alloc);
-    s.append(root);
+    s.append(root.c_str());
     s.append("/");
     s.append(file);
     return s;

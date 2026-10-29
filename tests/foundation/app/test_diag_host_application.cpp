@@ -8,20 +8,14 @@
 #include <crd/core/lifetime_ledger.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/perf/diagnostic_host.hpp>
+#include <crd/platform/context.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <cstdlib>
 
 namespace
 {
 namespace cp = crd::perf;
-
-[[nodiscard]] bool headless_requested() noexcept
-{
-    const char* v = std::getenv("CRD_PLATFORM_HEADLESS");
-    return v != nullptr && v[0] == '1';
-}
 
 class CloseAfter final : public crd::app::Layer
 {
@@ -52,7 +46,7 @@ cp::DiagnosticHostProfile windowed_profile()
 
 TEST_CASE("diag 11a: an Application feeds a started diagnostic host one frame per tick", "[app][diag][diag11a]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SKIP("CRD_PLATFORM_HEADLESS=1: the Application needs a window");
     }
@@ -129,7 +123,7 @@ crd::u64 threads_during_run(cp::DiagnosticHost* host)
 
 TEST_CASE("diag 11a: Application::run gives the pool the host's watchdog window", "[app][diag][diag11a]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SKIP("CRD_PLATFORM_HEADLESS=1: the Application needs a window");
     }
@@ -145,7 +139,7 @@ TEST_CASE("diag 11a: Application::run gives the pool the host's watchdog window"
 
 TEST_CASE("diag 11a: an Application refuses a diagnostic host that is not started", "[app][diag][diag11a]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SKIP("CRD_PLATFORM_HEADLESS=1: the Application needs a window");
     }

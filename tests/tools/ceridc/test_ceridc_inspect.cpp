@@ -23,6 +23,8 @@
 #include <crd/ceir/input.hpp>
 #include <crd/ceridc/verbs.hpp>
 #include <crd/containers/array.hpp>
+#include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
@@ -292,8 +294,9 @@ TEST_CASE("diag 8b: ceridc inspect cancels, bounds its stops and refuses before 
 TEST_CASE("diag 8b: the real ceridc binary inspects from the command line", "[ceridc][inspect][diag]")
 {
     const Lines ln  = scan();
-    const char* exe = std::getenv("CRD_CERIDC_EXE");
-    REQUIRE(exe != nullptr); // wired by CMake
+    crd::containers::String exe_text;
+    REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe_text)); // wired by CMake
+    const char* const exe = exe_text.c_str();
     char cmd[2048];
     (void)std::snprintf(cmd, sizeof(cmd),
                         "\"%s\" inspect --program %s --arg 3 --break %u --watch %u --step into > "
@@ -358,8 +361,9 @@ TEST_CASE("diag 9a: ceridc inspect --record writes the inspected run as a record
     CHECK_FALSE(fs::exists(fs::Path(crd::containers::StringView(kCancelled))));
 
     // The real binary records from its command line, and another process replays both records without a session.
-    const char* exe = std::getenv("CRD_CERIDC_EXE");
-    REQUIRE(exe != nullptr);
+    crd::containers::String exe_text;
+    REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe_text));
+    const char* const exe = exe_text.c_str();
     char cmd[2048];
     (void)std::snprintf(cmd, sizeof(cmd),
                         "\"%s\" inspect --program %s --arg 1 --break %u --step into --step out --record %s > %s", exe,
@@ -466,8 +470,9 @@ TEST_CASE("diag 9a: ceridc inspect --seed reads a seeded host's draws and its re
 
     // The real binary records a seeded run; after the program is edited, another process reproduces it from the
     // record alone (no seed), and a third names the edited draw.
-    const char* exe = std::getenv("CRD_CERIDC_EXE");
-    REQUIRE(exe != nullptr);
+    crd::containers::String exe_text;
+    REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe_text));
+    const char* const exe = exe_text.c_str();
     char cmd[2048];
     (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" inspect --program %s --arg 4 --seed %s --record %s > %s", exe,
                         kSeedProgram, seed_text, kCliSeedRecord, kOut);
@@ -575,8 +580,9 @@ TEST_CASE("diag 9a: ceridc inspect reads the host clock it is given and its reco
     }
 
     // The real binary records the step failure, and a run within budget that reads the live wall.
-    const char* exe = std::getenv("CRD_CERIDC_EXE");
-    REQUIRE(exe != nullptr);
+    crd::containers::String exe_text;
+    REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe_text));
+    const char* const exe = exe_text.c_str();
     char cmd[2048];
     (void)std::snprintf(cmd, sizeof(cmd),
                         "\"%s\" inspect --program %s --arg 7 --sim-time 4000000000 --sim-step 50000000 --record %s "
@@ -704,8 +710,9 @@ TEST_CASE("diag 9a event: ceridc inspect reads the input events it is given and 
 
     // The real binary records the inspected run, and replay.record records the same run unobserved: the same reads,
     // trace and outcome.
-    const char* exe = std::getenv("CRD_CERIDC_EXE");
-    REQUIRE(exe != nullptr);
+    crd::containers::String exe_text;
+    REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe_text));
+    const char* const exe = exe_text.c_str();
     char cmd[2048];
     (void)std::snprintf(cmd, sizeof(cmd),
                         "\"%s\" inspect --program %s --arg 7 --break %u --events key_down:65:3,resize:1280:720 "

@@ -6,7 +6,9 @@
 
 #include <crd/assetio/otio.hpp>
 #include <crd/ceridc/verbs.hpp>
+#include <crd/containers/string.hpp>
 #include <crd/cooker/cook_handler.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/hdr_image.hpp>
@@ -235,8 +237,9 @@ TEST_CASE("the stdio transport: the real binary answers over pipes", "[ceridc][a
                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n"
                "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n"
                "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ping\"}\n");
-    const char* exe = std::getenv("CRD_CERIDC_EXE");
-    REQUIRE(exe != nullptr); // wired by CMake — the test always knows its binary
+    crd::containers::String exe_text;
+    REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe_text)); // wired by CMake: the test knows its binary
+    const char* const exe = exe_text.c_str();
     // the absolute exe path has no spaces ⇒ one level of quotes; cmd opens the redirection files in the CWD
     char cmd[1024];
     std::snprintf(cmd, sizeof(cmd), "\"%s\" mcp < ceridc_mcp_in.jsonl > ceridc_mcp_out.jsonl", exe);

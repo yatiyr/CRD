@@ -1,16 +1,10 @@
 #include <crd/app/app.hpp>
+#include <crd/platform/context.hpp>
 
 #include <catch2/catch_test_macros.hpp>
-#include <cstdlib>
 
 namespace
 {
-[[nodiscard]] bool headless_requested() noexcept
-{
-    const char* v = std::getenv("CRD_PLATFORM_HEADLESS");
-    return v != nullptr && v[0] == '1';
-}
-
 class ClosingLayer final : public crd::app::Layer
 {
 public:
@@ -35,7 +29,7 @@ private:
 
 TEST_CASE("Application creates invisible window and ticks once", "[app][application]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("CRD_PLATFORM_HEADLESS=1, skipping app/window test");
         return;

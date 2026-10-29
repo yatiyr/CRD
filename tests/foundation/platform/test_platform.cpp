@@ -1,7 +1,7 @@
+#include <crd/platform/context.hpp>
 #include <crd/platform/platform.hpp>
 
 #include <catch2/catch_test_macros.hpp>
-#include <cstdlib>
 
 namespace
 {
@@ -9,11 +9,6 @@ namespace
 // Setting CRD_PLATFORM_HEADLESS=1 in the environment forces every test that
 // would touch a real OS window to short-circuit. PlatformContext init is
 // still exercised because GLFW's init path is display-independent on Win32.
-[[nodiscard]] bool headless_requested() noexcept
-{
-    const char* v = std::getenv("CRD_PLATFORM_HEADLESS");
-    return v != nullptr && v[0] == '1';
-}
 } // namespace
 
 TEST_CASE("PlatformContext: create + destroy", "[platform][context]")
@@ -55,7 +50,7 @@ TEST_CASE("Window: default-constructed Extent2D is zero-init", "[platform][windo
 
 TEST_CASE("Window: create + destroy invisible window", "[platform][window]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("CRD_PLATFORM_HEADLESS=1, skipping window-creating test");
         return;
@@ -106,7 +101,7 @@ TEST_CASE("Window: invalid-context create returns invalid window", "[platform][w
 
 TEST_CASE("Window: move semantics keep handle alive", "[platform][window]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("CRD_PLATFORM_HEADLESS=1, skipping window-creating test");
         return;

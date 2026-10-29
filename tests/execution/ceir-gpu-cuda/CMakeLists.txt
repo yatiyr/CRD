@@ -29,9 +29,6 @@ target_link_libraries(crd-ceir-gpu-cuda-tests PRIVATE
 # without this the fallback "." resolves only when CWD==repo root (Windows luck) and fails under WSL ctest (CWD==build dir).
 target_compile_definitions(crd-ceir-gpu-cuda-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_DIR}")
 
-# CEIR-29z: std::getenv (the CRD_CEIR_BENCH gate on the bench case) — the tests/world/anim + ceridc _CRT_SECURE_NO_WARNINGS precedent.
-target_compile_definitions(crd-ceir-gpu-cuda-tests PRIVATE _CRT_SECURE_NO_WARNINGS)
-
 crd_enable_default_pch(crd-ceir-gpu-cuda-tests)
 
 # ⛔ Scar (2026-08-10): under a Linux ASan build on WSL, `cuInit` in the `libcuda.so` GPU-passthrough shim FAILS (the device is

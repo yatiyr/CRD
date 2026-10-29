@@ -36,7 +36,6 @@ crd_enable_default_pch(crd-scene-render-tests)
 # ⛔ This opens the WHOLE src/ tree to the test — the ONLY intended reach is asset_resolver.hpp's ProgramRegistry. Do
 # NOT #include other internal headers (reload.hpp, …) from a test on the back of this; test those through public seams.
 target_include_directories(crd-scene-render-tests PRIVATE ${CMAKE_SOURCE_DIR}/engine/rendering/scene-render/src)
-target_compile_definitions(crd-scene-render-tests PRIVATE _CRT_SECURE_NO_WARNINGS) # std::getenv (the drift gate's ctest env)
 target_link_libraries(crd-scene-render-tests PRIVATE crd-material-cook crd-vertex-cook crd-light-cook) # REN-38: the drift gate parses all five vocabularies
 target_link_libraries(crd-scene-render-tests PRIVATE crd-render-graph crd-render-pass) # RAF-10: the app's custom executor names RecordContext / PassPayload / pass_param_id directly
 target_link_libraries(crd-scene-render-tests PRIVATE crd-perf) # DIAG.9b: the fault injector and flight recorder

@@ -16,10 +16,6 @@ target_link_libraries(crd-geometry-shader-helpers-tests PRIVATE
     Catch2::Catch2WithMain
 )
 
-if(MSVC)
-    target_compile_definitions(crd-geometry-shader-helpers-tests PRIVATE _CRT_SECURE_NO_WARNINGS)
-endif()
-
 crd_enable_default_pch(crd-geometry-shader-helpers-tests)
 
 crd_discover_tests(crd-geometry-shader-helpers-tests PROPERTIES RESOURCE_LOCK crd_gpu_device)

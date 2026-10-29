@@ -27,6 +27,8 @@
 //   --present <mode>     fifo | immediate | mailbox   ·   --no-validation
 
 #include <crd/app/app.hpp>
+#include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/draw/overlay_pass.hpp>
 #include <crd/draw/render_buffer.hpp>
 #include <crd/draw/renderer.hpp>
@@ -84,18 +86,6 @@ constexpr crd::u32 kBackdropMin = 1U;
 #else
     (void)app;
     return nullptr;
-#endif
-}
-
-[[nodiscard]] inline const char* probe_getenv(const char* name) noexcept
-{
-#ifdef _MSC_VER
-#pragma warning(push)
-#pragma warning(disable : 4996)
-#endif
-    return std::getenv(name);
-#ifdef _MSC_VER
-#pragma warning(pop)
 #endif
 }
 
@@ -533,10 +523,10 @@ int main(int argc, char** argv)
     // time), then programs, then the frame BY NAME — identical to the sandbox's contract.
     auto  renderer_ptr = std::make_unique<crd::scenerender::SceneRenderer>(&scene_alloc);
     auto& renderer     = *renderer_ptr;
-    if (const char* aroot = probe_getenv("CRD_ASSETS_DIR"); aroot != nullptr && aroot[0] != 0)
+    if (crd::containers::String aroot; crd::read_environment_text("CRD_ASSETS_DIR", aroot))
     {
-        const bool root_ok = renderer.set_asset_root(aroot);
-        CRD_LOG_INFO(g_log_gizmo, "asset root '{}' -> {}", aroot, root_ok ? "installed" : "REJECTED");
+        const bool root_ok = renderer.set_asset_root(aroot.c_str());
+        CRD_LOG_INFO(g_log_gizmo, "asset root '{}' -> {}", aroot.c_str(), root_ok ? "installed" : "REJECTED");
     }
     else
     {

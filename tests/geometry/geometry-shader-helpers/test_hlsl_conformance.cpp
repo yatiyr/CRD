@@ -35,10 +35,10 @@
 #include <crd/gpu/vulkan_shader_compile.hpp>
 #include <crd/gpu/program.hpp> // D-008 C2-d4: opaque IGpuProgram via create_program
 #include <crd/gpu/vulkan_context.hpp> // D-008 C2-f: create_vulkan_gpu_context (the ONE VkDevice owner rhi adopts)
+#include <crd/platform/context.hpp>
 
 #include <algorithm>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 
 namespace
@@ -46,12 +46,6 @@ namespace
 
 using namespace crd::geometry::shader_helpers;
 namespace gold = crd::geometry::shader_helpers::golden;
-
-[[nodiscard]] bool headless_requested() noexcept
-{
-    const char* v = std::getenv("CRD_PLATFORM_HEADLESS");
-    return v != nullptr && v[0] == '1';
-}
 
 struct ManifestSpec
 {
@@ -219,7 +213,7 @@ TEST_CASE("v9e-c HLSL conformance: dxc compiles every manifest's emitted HLSL",
 TEST_CASE("v9e-c HLSL ULP conformance: dxc-emitted SPIR-V matches evaluate() on GPU",
           "[shader_helpers][hlsl][gpu][conformance]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("headless");
         return;

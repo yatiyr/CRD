@@ -13,25 +13,19 @@ void glfw_error_to_log(int error_code, const char* description) noexcept
 {
     CRD_LOG_ERROR(g_log_platform, "GLFW error {}: {}", error_code, description ? description : "(null)");
 }
+} // namespace
 
-// CRD_PLATFORM_HEADLESS holds a value starting with 1 (a flag: 1).
-[[nodiscard]] bool headless_env_requested() noexcept
+bool headless_requested() noexcept
 {
     const EnvironmentValue<32> value{"CRD_PLATFORM_HEADLESS"};
     return value.c_str() != nullptr && value.c_str()[0] == '1';
 }
-} // namespace
 
 PlatformContext PlatformContext::create() noexcept
 {
     glfwSetErrorCallback(&glfw_error_to_log);
 
-    // CRD_PLATFORM_HEADLESS=1 forces GLFW's null platform so the engine can
-    // initialise on CI runners / display-less WSL where no Wayland or X11
-    // session exists. The null platform supports init / poll / context teardown
-    // but cannot create real windows; tests that need a window must check the
-    // same env var themselves and skip.
-    if (headless_env_requested())
+    if (headless_requested())
     {
         glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_NULL);
     }

@@ -48,6 +48,5 @@ No completed run carries hosted evidence for DIAG.11c or DIAG.12; both stay Need
 
 ## Left
 
-The environment readers of tests and sandbox (`CRD_PLATFORM_HEADLESS` helpers in 15 test files, the dump and corpus
-knobs, the `_CRT_SECURE_NO_WARNINGS` definitions in their CMake files) and a guard that rejects `std::getenv` and
-`_dupenv_s` outside `environment.cpp`; then the iterative Eigen benches.
+Done in [the environment guard note](2026-10-29-simd-dispatch-environment-guard.md) (tests, sandbox and the guard)
+and [the iterative note](2026-10-29-simd-dispatch-iterative-eigen-peer.md).

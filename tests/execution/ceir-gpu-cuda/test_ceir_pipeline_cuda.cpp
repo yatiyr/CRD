@@ -32,6 +32,8 @@
 #include <crd/ceir/semantics.hpp> // CEIR-29c-2: ProviderClass / DeterminismClass (the cuda_graphs provider descriptor)
 #include <crd/ceir/tensor.hpp>
 #include <crd/ceir/type.hpp>
+#include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 
 #include <crd/containers/hash_map.hpp> // CEIR-29c-2: the expand->ml-op lineage passed to plan_tensor_pipeline_partitioned
 
@@ -53,7 +55,6 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>  // CEIR-29z: steady_clock — the CPU submit-path wall-clock (the CUDA-Graphs win the GPU column can't show)
-#include <cstdlib> // CEIR-29z: std::getenv — the CRD_CEIR_BENCH gate (the bench WARN-skips in the default sweep)
 #include <cstring>
 #include <fstream>
 
@@ -2723,7 +2724,7 @@ TEST_CASE("ceir 29z: CUDA-Graphs launch vs the N-dispatch fallback bench (submit
           "[ceir][ml][gpu][cuda][bench]")
 {
     namespace gpu = crd::gpu;
-    if (std::getenv("CRD_CEIR_BENCH") == nullptr)
+    if (!crd::environment_set("CRD_CEIR_BENCH"))
     {
         WARN("CRD_CEIR_BENCH unset; skipping the CEIR-29z CUDA-Graphs launch bench (set CRD_CEIR_BENCH=1 to time)");
         return;
@@ -2848,7 +2849,7 @@ TEST_CASE("ceir 30z: sharded-reduction transfer-cost bench (all-Host vs [Host,Ho
           "[ceir][ml][gpu][cuda][dist][bench]")
 {
     namespace gpu = crd::gpu;
-    if (std::getenv("CRD_CEIR_BENCH") == nullptr)
+    if (!crd::environment_set("CRD_CEIR_BENCH"))
     {
         WARN("CRD_CEIR_BENCH unset; skipping the CEIR-30z sharded-reduction bench (set CRD_CEIR_BENCH=1 to time)");
         return;

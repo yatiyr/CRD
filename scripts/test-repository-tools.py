@@ -124,6 +124,10 @@ allocation_results_spec = importlib.util.spec_from_file_location('check_allocati
                                                                  ROOT / 'scripts/check-allocation-results.py')
 allocation_results = importlib.util.module_from_spec(allocation_results_spec)
 allocation_results_spec.loader.exec_module(allocation_results)
+environment_reads_spec = importlib.util.spec_from_file_location('check_environment_reads',
+                                                                ROOT / 'scripts/check-environment-reads.py')
+environment_reads = importlib.util.module_from_spec(environment_reads_spec)
+environment_reads_spec.loader.exec_module(environment_reads)
 runbooks_spec = importlib.util.spec_from_file_location('check_diag_runbooks', ROOT / 'scripts/check-diag-runbooks.py')
 runbooks = importlib.util.module_from_spec(runbooks_spec)
 runbooks_spec.loader.exec_module(runbooks)
@@ -3784,6 +3788,54 @@ class AllocationResults(unittest.TestCase):
             allocation_results.main(['check', '--help'])
         self.assertEqual(stop.exception.code, 0)
         self.assertIn('repository root', out.getvalue())
+
+
+class EnvironmentReads(unittest.TestCase):
+    """scripts/check-environment-reads.py: environment variables are read only through crd/core/environment.hpp."""
+
+    def test_every_direct_read_is_reported_by_line(self):
+        text = ('const char* a = std::getenv("A");\n'
+                'const char* b = getenv("B");\n'
+                '(void)_dupenv_s(&p, &n, "C");\n'
+                'const DWORD d = ::GetEnvironmentVariableA("D", buf, 32U);\n'
+                'char** e = environ;\n'
+                'const auto ok = crd::read_environment_text("F", text);\n')
+        self.assertEqual([1, 2, 3, 4, 5], environment_reads.raw_reads(text))
+
+    def test_comments_strings_and_other_names_are_not_reads(self):
+        text = ('// std::getenv("A") in a line comment\n'
+                '/* getenv("B") in a block\n   _dupenv_s(&p, &n, "C") */\n'
+                'const char* m = "std::getenv(\\"D\\") in a string";\n'
+                'const char* r = R"x(GetEnvironmentVariableA("E"))x";\n'
+                'bool environment_set(const char* name);\n'
+                'my_getenv_wrapper(name);\n'
+                'config.environ = 1;\n')
+        self.assertEqual([], environment_reads.raw_reads(text))
+
+    def test_the_tree_check_allows_only_the_reader_and_fails_an_empty_one(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            (root / 'scripts').mkdir()
+            (root / 'scripts' / 'source-routes.json').write_text('{"roots": ["engine", "tests"]}', encoding='utf-8')
+            reader = root / environment_reads.READER
+            reader.parent.mkdir(parents=True)
+            reader.write_text('// nothing yet\n', encoding='utf-8')
+            with patch('sys.stdout', new_callable=io.StringIO) as out:
+                self.assertEqual(1, environment_reads.main(['check', str(root)]))
+            self.assertIn('nothing was checked', out.getvalue())
+            reader.write_text('const char* v = std::getenv(name);\n', encoding='utf-8')
+            source = root / 'tests' / 'a' / 'test_a.cpp'
+            source.parent.mkdir(parents=True)
+            source.write_text('#include <x>\nconst char* v = std::getenv("X");\n', encoding='utf-8')
+            in_reader, problems = environment_reads.check(root)
+            self.assertEqual(1, in_reader)
+            self.assertEqual(1, len(problems))
+            self.assertIn('tests/a/test_a.cpp: reads the environment directly at line(s) 2', problems[0])
+            source.write_text('crd::containers::String v;\n(void)crd::read_environment_text("X", v);\n',
+                              encoding='utf-8')
+            with patch('sys.stdout', new_callable=io.StringIO) as out:
+                self.assertEqual(0, environment_reads.main(['check', str(root)]))
+            self.assertIn('every environment read goes through', out.getvalue())
 
 
 class DiagRunbooks(unittest.TestCase):

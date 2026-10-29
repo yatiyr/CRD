@@ -33,6 +33,7 @@
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/perf/measure.hpp>
+#include <crd/platform/context.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/gpu/vulkan_compute_context.hpp>
 #include <crd/gpu/vulkan_context.hpp>
@@ -449,12 +450,6 @@ namespace fs = crd::platform::fs;
 namespace
 {
 
-[[nodiscard]] bool headless_requested() noexcept
-{
-    const char* v = std::getenv("CRD_PLATFORM_HEADLESS");
-    return v != nullptr && v[0] == '1';
-}
-
 // Compare two LbvhTrees: fat-node topology bytes match exactly + bounds match
 // within 1 ULP (D162 contract — the union is commutative, so for finite-non-
 // NaN inputs the GPU's atomic-coordinated walk produces bit-identical bounds).
@@ -500,7 +495,7 @@ void require_trees_match(const LbvhTree& cpu, const LbvhTree& gpu, crd::f32 ulp_
 TEST_CASE("v9a-c GPU calibration: N=4 CPU vs GPU byte-identical topology",
           "[lbvh][gpu][calibration]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("headless");
         return;
@@ -541,7 +536,7 @@ TEST_CASE("v9a-c GPU calibration: N=4 CPU vs GPU byte-identical topology",
 TEST_CASE("v9a-c GPU N=10000 random: CPU vs GPU topology byte-identical + bounds within 1 ULP",
           "[lbvh][gpu][oracle]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("headless");
         return;
@@ -589,7 +584,7 @@ TEST_CASE("v9a-c GPU N=10000 random: CPU vs GPU topology byte-identical + bounds
 TEST_CASE("v9a-c GPU end-to-end: pipeline produces topology byte-identical to CPU pipeline",
           "[lbvh][gpu][integration]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("headless");
         return;
@@ -639,7 +634,7 @@ TEST_CASE("v9a-c GPU end-to-end: pipeline produces topology byte-identical to CP
 TEST_CASE("v9a-c GPU is deterministic across 3 dispatches",
           "[lbvh][gpu][determinism]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("headless");
         return;
@@ -706,7 +701,7 @@ TEST_CASE("v9a-c GPU is deterministic across 3 dispatches",
 TEST_CASE("v9a-c GPU-resident: handle is correct + byte-identical to CPU build",
           "[lbvh][gpu][gpu-resident]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("headless");
         return;
@@ -856,7 +851,7 @@ upload_gpu_inputs(crd::gpu::VulkanComputeContext& compute,
 TEST_CASE("v9a-c-gpu-inputs: GPU-input dispatch produces byte-identical fat-node tree",
           "[lbvh][gpu][gpu-inputs]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("headless");
         return;
@@ -947,7 +942,7 @@ TEST_CASE("v9a-c-gpu-inputs: GPU-input dispatch produces byte-identical fat-node
 TEST_CASE("v9b GPU refit: same topology, new bounds match fresh build",
           "[lbvh][gpu][refit]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("headless");
         return;
@@ -1058,7 +1053,7 @@ TEST_CASE("v9b GPU refit: same topology, new bounds match fresh build",
 TEST_CASE("v9b GPU refit perf: 1M items, target sub-1 ms",
           "[lbvh][gpu][refit][perf]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("headless");
         return;
@@ -1138,7 +1133,7 @@ TEST_CASE("v9b GPU refit perf: 1M items, target sub-1 ms",
 TEST_CASE("v9a-c GPU perf budget: 1M items end-to-end",
           "[lbvh][gpu][perf]")
 {
-    if (headless_requested())
+    if (crd::platform::headless_requested())
     {
         SUCCEED("headless");
         return;

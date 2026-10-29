@@ -44,10 +44,6 @@ target_link_libraries(crd-geometry-bvh-gpu-tests PRIVATE
     Catch2::Catch2WithMain
 )
 
-if(MSVC)
-    target_compile_definitions(crd-geometry-bvh-gpu-tests PRIVATE _CRT_SECURE_NO_WARNINGS)
-endif()
-
 crd_enable_default_pch(crd-geometry-bvh-gpu-tests)
 
 # Shares the crd_gpu_device RESOURCE_LOCK (see tests/gpu/gpu-context-vulkan): GPU-device tests serialize under
