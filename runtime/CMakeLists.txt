@@ -1031,14 +1031,17 @@ endif()
 # warnings as errors at the baseline ISA and call one exported evaluation per array or per integration.
 if(CRD_BUILD_HESAP_VS_BOOST)
     crd_add_bench_peer(crd-bench-boost-peer SOURCES examples/peers/boost_peer_special.cpp
-                       examples/peers/boost_peer_dist.cpp examples/peers/boost_peer_odeint.cpp LIBRARIES boost_headers)
-    foreach(bench IN ITEMS bench_special_vs_refs bench_bessel_vs_refs bench_special_v12d bench_dist_boost)
+                       examples/peers/boost_peer_dist.cpp examples/peers/boost_peer_interp.cpp
+                       examples/peers/boost_peer_odeint.cpp LIBRARIES boost_headers)
+    foreach(bench IN ITEMS bench_special_vs_refs bench_bessel_vs_refs bench_special_v12d bench_dist_boost
+                           bench_interp_boost)
         add_executable(${bench} examples/${bench}.cpp)
         target_include_directories(${bench} PRIVATE examples/peers)
         target_link_libraries(${bench} PRIVATE crd-core crd-memory crd-containers crd-math crd-jobs crd-hesap-special
                                                crd-bench-boost-peer)
     endforeach()
     target_link_libraries(bench_dist_boost PRIVATE crd-hesap-stats)
+    target_link_libraries(bench_interp_boost PRIVATE crd-hesap-interp)
 endif()
 
 # --- The ODE board: Cerid's stiff and nonstiff solvers against SUNDIALS CVODE (dense and KLU) and Boost.Odeint ---

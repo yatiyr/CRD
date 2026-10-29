@@ -93,6 +93,49 @@ enum class Density : std::uint8_t
 // out[i] = the density or distribution function of the distribution at x[i] for i < n.
 CRD_BENCH_PEER_API void eval(Distribution distribution, Parameters parameters, Density density, const double* x,
                              double* out, Index n);
+
+// The timed interpolants under their Boost names (boost/math/interpolators).
+enum class Interpolant : std::uint8_t
+{
+    Pchip,          // pchip(x, y, left_endpoint_derivative, right_endpoint_derivative)
+    Makima,         // makima(x, y, left_endpoint_derivative, right_endpoint_derivative)
+    FloaterHormann, // barycentric_rational(x, y, n, approximation_order)
+    CardinalCubic,  // cardinal_cubic_b_spline(y, n, x[0], x[1] - x[0], left/right endpoint derivative)
+};
+
+// n samples y at the increasing x; an endpoint derivative of NaN takes Boost's own estimate, and order is
+// FloaterHormann's approximation order.
+struct Curve
+{
+    const double* x;
+    const double* y;
+    Index n;
+    double left_derivative;
+    double right_derivative;
+    Index order;
+};
+
+// bilinear_uniform's rows-by-cols row-major field: sample (i, j) sits at (x0 + j dx, y0 + i dy).
+struct Field
+{
+    const double* values;
+    Index rows;
+    Index cols;
+    double dx;
+    double dy;
+    double x0;
+    double y0;
+};
+
+// A built interpolant: it owns copies of its samples, as Boost's containers require.
+struct Interpolator;
+
+CRD_BENCH_PEER_API Interpolator* build(Interpolant kind, const Curve& curve);
+CRD_BENCH_PEER_API Interpolator* build(const Field& field);
+CRD_BENCH_PEER_API void destroy(Interpolator* interpolator) noexcept;
+
+// out[i] = the interpolant at x[i], or a field's at (x[i], y[i]); y is unused for a curve.
+CRD_BENCH_PEER_API void eval(const Interpolator& interpolator, const double* x, const double* y, double* out, Index n);
 } // namespace crd_peer::boost_math
 
 namespace crd_peer::boost_odeint

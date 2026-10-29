@@ -235,9 +235,11 @@
       "paths": [
         "runtime/examples/bench_bessel_vs_refs.cpp",
         "runtime/examples/bench_dist_boost.cpp",
+        "runtime/examples/bench_interp_boost.cpp",
         "runtime/examples/bench_special_v12d.cpp",
         "runtime/examples/bench_special_vs_refs.cpp",
         "runtime/examples/peers/boost_peer_dist.cpp",
+        "runtime/examples/peers/boost_peer_interp.cpp",
         "runtime/examples/peers/boost_peer_odeint.cpp",
         "runtime/examples/peers/boost_peer_special.cpp"
       ],
@@ -262,7 +264,6 @@
         "runtime/examples/bench_batched.cpp",
         "runtime/examples/bench_dsp_sosfilt_vs_liquid.c",
         "runtime/examples/bench_dsp_windows_vs_liquid.c",
-        "runtime/examples/bench_interp_boost.cpp",
         "runtime/examples/bobyqa_difftest.cpp",
         "runtime/examples/cobyla_difftest.cpp",
         "runtime/examples/newuoa_difftest.cpp"

@@ -35,6 +35,17 @@ was cancelled. Its one newly completed failure, linux-gcc-public-checks, is the 
   always needed), and gets `scripts/run_bench_ode_refs.sh`. Its rows keep their agreement measure: each side's error
   against the tight-tolerance reference.
 
+- **The interpolation board** (second commit). bench_interp_boost timed Boost alone; it now builds and evaluates
+  both sides through `build(Interpolant, Curve)`, `build(Field)` and one `eval` per query array
+  (`boost_peer_interp.cpp`, the interpolant owned through `crd_peer::Owned`): PCHIP and makima on 1000 knots, sorted
+  and random queries, Floater-Hormann of order 3 on 30, the 1-D interpolating cubic B-spline and the 100 x 100
+  bilinear blend. Every evaluation row is one definition on both sides, compared against the hesap-interp scipy
+  gates: Boost's own PCHIP and makima end slopes are not the scipy/MATLAB three-point formula, so Boost is handed
+  Cerid's two end slopes, prepared outside the timed passes; Boost's cardinal B-spline with zero end derivatives is
+  the spline of Cerid's mirror-boundary prefilter. Smoke run (win-debug): every row inside its gate (bilinear bit
+  for bit, the others within 3.9e-12 where the value is not near zero). bench_interp stays the retained Cerid-only
+  program of the scipy and MATLAB boards.
+
 ## Checks
 
 - win-debug with the option on: the peer (odeint included) at /W4 /WX and the four Boost benches; each bench ran once
