@@ -41,7 +41,7 @@ The job count stays `factorize`'s parameter.
 ## Tests
 
 `lu_arms` (`test_lu_arms.cpp`), f64, f32, c64 and c32, on a bordered unsymmetric block matrix (32-column blocks
-under a 48-column root) and a 16 x 16 convection-diffusion grid, on a four-worker pool on every host:
+under a 48-column root), a 16 x 16 convection-diffusion grid and a 96-row cyclic matrix, on a four-worker pool:
 
 - the default pick at 4 to 32 jobs, and six multifrontal scheduling arms (serial walk, level walk, every level
   front-parallel, every front on the main thread with every within-front stage parallel, the same without
@@ -50,10 +50,29 @@ under a 48-column root) and a 16 x 16 convection-diffusion grid, on a four-worke
 - blocking arms (foot update all gemm and all inline, diagonal panels 1, 8 and 256; front panels 1, 8, 16 and 256
   with every stage parallel, lookahead on and off): each bit for bit at 8 and 32 jobs against its own one job, and
   the raw factor's solve (`apply_inverse`) within 4 n eps;
-- specials: -0 and subnormal off-diagonals, a NaN off-diagonal, and a weak diagonal whose natural-diagonal attempt
-  falls back to MC64.
+- specials on the bordered matrix and the grid: -0 and subnormal off-diagonals, a NaN off-diagonal and a
+  1e-12-scaled diagonal (perturbed pivots); and a near-zero-diagonal cyclic matrix whose natural-diagonal growth
+  passes the bound mid-walk, so every arm aborts and falls back to MC64, with and without partial pivoting.
 
-The three LU moats now run 1 to 32 workers. win-debug: `lu_arms` 24.5 s, 1,952 assertions.
+The three LU moats now run 1 to 32 workers. win-debug: `lu_arms` 32.7 s, 3,696 assertions.
+
+## Two defects the arms found (`multifrontal_lu.cpp`)
+
+The first version claimed a 1e-6-scaled diagonal made the natural-diagonal attempt fall back to MC64. A temporary
+print of each attempt's growth showed otherwise: the bordered matrix's natural attempt bails before its numeric (its
+fill passes a fifth of dense), the grid's is accepted, and the claimed fallback never ran. Probing it found:
+
+- **The growth ignored NaN.** Its running max (`am > fmax`) skips a NaN entry, so a natural factor holding one read
+  as stable, against the comment's "NaN / Inf / over-threshold ⇒ unstable". `growth_max` makes NaN absorbing (still
+  commutative and associative, so the moat holds); the grid with a NaN now falls back like the comment says.
+- **An early abort with partial pivoting indexed out of bounds.** The level walk's growth abort `break`s out and
+  ran the pivoting finalize, whose `invperm[m_rowperm[c]]` read the entries of fronts never factored: the NaN grid
+  with pivoting on a level-walk arm hit the array bound assertion (stack from cdb). The abort now returns +inf before
+  the finalize, like the pre-numeric bail. Both bails run only when the MC64 re-run follows (`may_abort`): under
+  `CRD_MF_NO_MC64` they had returned an unfinished factor as the result.
+
+The cyclic matrix (the fallback moat's own fixture) now carries the fallback case: its natural growth reads 5.8e12
+to 1.5e15, or NaN, on every arm.
 
 ## Board
 
@@ -64,7 +83,7 @@ miss exits 1. `run_bench_direct_parallel.sh` runs `lu_arms` with the Cholesky ga
 ## Checks
 
 win-debug builds of crd-hesap-direct-tests and the bench; `lu_arms`, the `[lu]` and `[lu-pp-mf]` cases pass;
-strict tidy clean on the ten changed C++ files; clang-format on the added lines; Allman braces; the ctest guards.
+strict tidy clean on the eleven changed C++ files; clang-format on the added lines; Allman braces; the ctest guards.
 No bench ran: the board runs at row close.
 
 ## Left
