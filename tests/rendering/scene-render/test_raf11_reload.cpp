@@ -430,8 +430,7 @@ TEST_CASE("raf11 SceneRenderer.reload re-reads and re-cooks a frame from disk", 
 
     // A private, mutable asset dir under the OS temp — edited between reloads exactly as a file watcher would see.
     crd::containers::String dir(&alloc);
-    dir.append(crd::platform::fs::temp_directory().generic());
-    dir.append("/crd_raf11_reload_gate", 22);
+    dir.append((crd::platform::fs::temp_directory() / crd::containers::StringView("crd_raf11_reload_gate")).generic());
     (void)crd::platform::fs::remove_all(crd::platform::fs::Path(sv(dir))); // clean slate
     crd::containers::String frame_dir(&alloc);
     frame_dir.append(dir.c_str(), dir.size());
