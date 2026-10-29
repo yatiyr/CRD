@@ -10,7 +10,10 @@
 //
 // crd conventions throughout: crd::containers::Array (never std::vector), a named
 // GrowableTlsfAllocator (never malloc / default_allocator); crd::f64/usize/i32
-// (never raw). Raw double only at the Eigen C++ API boundary.
+// (never raw). Eigen runs in its peer library at the host's best ISA
+// (examples/peers/eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>
@@ -18,7 +21,6 @@
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
-#include <Eigen/Sparse>
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -32,7 +34,7 @@ namespace sp = crd::hesap::sparse;
 // Unbounded pooled arena (n = 1,000,000 rows × 16/row = large working set).
 crd::memory::GrowableTlsfAllocator g_alloc;
 
-template <typename Fn> crd::f64 best_ms(Fn&& fn)
+template <typename Fn> crd::f64 best_ms(const Fn& fn)
 {
     fn();
     crd::f64 best = 1e30;
@@ -56,7 +58,8 @@ void run_ell(crd::u32 n, crd::u32 per_row)
     };
     crd::memory::IAllocator* alloc = &g_alloc;
     sp::TripletBuilder<crd::f64> tb(alloc, n, n);
-    crd::containers::Array<Eigen::Triplet<double>> et(alloc);
+    namespace peer = crd_peer::eigen;
+    crd::containers::Array<peer::Entry> et(alloc);
     for (crd::u32 i = 0; i < n; ++i)
     {
         for (crd::u32 t = 0; t < per_row; ++t)
@@ -64,7 +67,7 @@ void run_ell(crd::u32 n, crd::u32 per_row)
             const crd::u32 j = next() % n;
             const crd::f64 v = static_cast<crd::f64>(1 + (next() % 9)) / 5.0;
             tb.add(i, j, v);
-            et.push_back(Eigen::Triplet<double>(static_cast<int>(i), static_cast<int>(j), v));
+            et.push_back(peer::Entry{static_cast<crd::i32>(i), static_cast<crd::i32>(j), v});
         }
     }
     auto csr = tb.compress();
@@ -85,13 +88,11 @@ void run_ell(crd::u32 n, crd::u32 per_row)
         });
     const crd::f64 t_csr = best_ms(
         [&]() { sp::spmv<crd::f64>(1.0, csr, sp::Trans::None, {x.data(), x.size()}, 0.0, {y.data(), y.size()}); });
-    Eigen::SparseMatrix<double, Eigen::RowMajor> ea(static_cast<int>(n), static_cast<int>(n));
-    ea.setFromTriplets(et.data(), et.data() + et.size());
-    ea.makeCompressed();
-    Eigen::Map<const Eigen::VectorXd> ex(x.data(), n);
-    Eigen::VectorXd ey(n);
-    Eigen::setNbThreads(1);
-    const crd::f64 t_eig = best_ms([&]() { ey.noalias() = ea * ex; });
+    const peer::Owned ea{peer::csr_f64(n, n, et.data(), static_cast<peer::Index>(et.size()))};
+    const peer::Owned ex{peer::vec(n, x.data())};
+    const peer::Owned ey{peer::vec(n, static_cast<const crd::f64*>(nullptr))};
+    peer::set_threads(1);
+    const crd::f64 t_eig = best_ms([&]() { peer::spmv(ea.get(), ex.get(), ey.get()); });
     std::printf("  ELL n=%-7u k=%-3u | par=%7.3f  CSR(ours)=%7.3f  Eigen-CSR=%7.3f ms  ELL/Eigen=%.2fx %s  "
                 "ELL/CSR=%.2fx %s\n",
                 n, per_row, t_ell, t_csr, t_eig, t_eig / t_ell, (t_eig >= t_ell ? "WIN" : "loss"), t_csr / t_ell,
@@ -109,7 +110,8 @@ void run_dia(crd::u32 n)
     const crd::i32 offs[] = {-32, -8, -1, 0, 1, 8, 32}; // 7-pt stencil-ish band
     crd::memory::IAllocator* alloc = &g_alloc;
     sp::TripletBuilder<crd::f64> tb(alloc, n, n);
-    crd::containers::Array<Eigen::Triplet<double>> et(alloc);
+    namespace peer = crd_peer::eigen;
+    crd::containers::Array<peer::Entry> et(alloc);
     for (crd::u32 i = 0; i < n; ++i)
     {
         for (crd::i32 k : offs)
@@ -119,7 +121,7 @@ void run_dia(crd::u32 n)
             {
                 const crd::f64 v = static_cast<crd::f64>(1 + (next() % 9)) / 6.0;
                 tb.add(i, static_cast<crd::u32>(j), v);
-                et.push_back(Eigen::Triplet<double>(static_cast<int>(i), j, v));
+                et.push_back(peer::Entry{static_cast<crd::i32>(i), j, v});
             }
         }
     }
@@ -141,13 +143,11 @@ void run_dia(crd::u32 n)
         });
     const crd::f64 t_csr = best_ms(
         [&]() { sp::spmv<crd::f64>(1.0, csr, sp::Trans::None, {x.data(), x.size()}, 0.0, {y.data(), y.size()}); });
-    Eigen::SparseMatrix<double, Eigen::RowMajor> ea(static_cast<int>(n), static_cast<int>(n));
-    ea.setFromTriplets(et.data(), et.data() + et.size());
-    ea.makeCompressed();
-    Eigen::Map<const Eigen::VectorXd> ex(x.data(), n);
-    Eigen::VectorXd ey(n);
-    Eigen::setNbThreads(1);
-    const crd::f64 t_eig = best_ms([&]() { ey.noalias() = ea * ex; });
+    const peer::Owned ea{peer::csr_f64(n, n, et.data(), static_cast<peer::Index>(et.size()))};
+    const peer::Owned ex{peer::vec(n, x.data())};
+    const peer::Owned ey{peer::vec(n, static_cast<const crd::f64*>(nullptr))};
+    peer::set_threads(1);
+    const crd::f64 t_eig = best_ms([&]() { peer::spmv(ea.get(), ex.get(), ey.get()); });
     std::printf("  DIA n=%-7u nd=7  | par=%7.3f  CSR(ours)=%7.3f  Eigen-CSR=%7.3f ms  DIA/Eigen=%.2fx %s  "
                 "DIA/CSR=%.2fx %s\n",
                 n, t_dia, t_csr, t_eig, t_eig / t_dia, (t_eig >= t_dia ? "WIN" : "loss"), t_csr / t_dia,
@@ -158,7 +158,8 @@ void run_dia(crd::u32 n)
 int main()
 {
     crd::jobs::init();
-    std::printf("[bench_hesap_ell_dia] ELL (regular) / DIA (banded) spmv vs Cerid+Eigen scalar CSR (best-of-7).\n");
+    std::printf("[bench_hesap_ell_dia] ELL (regular) / DIA (banded) spmv vs Cerid+Eigen scalar CSR (best-of-7; %s).\n",
+                crd_peer::eigen::isa());
     run_ell(100000, 16);
     run_ell(1000000, 16);
     run_dia(100000);

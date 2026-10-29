@@ -11,7 +11,10 @@
 // crd conventions throughout: crd::containers::Array (never std::vector),
 // crd::platform::fs::read_file_text + manual parse (never std::ifstream/string),
 // a named GrowableTlsfAllocator (never malloc / default_allocator); crd::f64/usize/
-// i32/u32 (never raw). Raw double only at the Eigen C++ API boundary.
+// i32/u32 (never raw). Eigen runs in its peer library at the host's best ISA
+// (examples/peers/eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
@@ -21,7 +24,6 @@
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
-#include <Eigen/Sparse>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -39,11 +41,7 @@ namespace fs = crd::platform::fs;
 
 crd::memory::GrowableTlsfAllocator g_alloc;
 
-struct Trip
-{
-    crd::i32 r, c;
-    crd::f64 v;
-};
+using Trip = crd_peer::eigen::Entry;
 
 struct Mtx
 {
@@ -140,7 +138,7 @@ Mtx read_mtx(const char* path)
     return out;
 }
 
-template <typename Fn> crd::f64 best_ms(Fn&& fn)
+template <typename Fn> crd::f64 best_ms(const Fn& fn)
 {
     fn(); // warmup
     crd::f64 best = 1e30;
@@ -176,7 +174,7 @@ void run(const char* name, const char* group)
     tb.reserve(mtx.trips.size());
     for (const Trip& t : mtx.trips)
     {
-        tb.add(static_cast<crd::u32>(t.r), static_cast<crd::u32>(t.c), t.v);
+        tb.add(static_cast<crd::u32>(t.row), static_cast<crd::u32>(t.col), t.value);
     }
     auto a = tb.compress();
 
@@ -196,27 +194,21 @@ void run(const char* name, const char* group)
             (void)s;
         });
 
-    crd::containers::Array<Eigen::Triplet<double>> et(alloc);
-    et.reserve(mtx.trips.size());
-    for (const Trip& t : mtx.trips)
-    {
-        et.push_back(Eigen::Triplet<double>(t.r, t.c, t.v));
-    }
-    Eigen::SparseMatrix<double, Eigen::RowMajor> ea(n, n);
-    ea.setFromTriplets(et.data(), et.data() + et.size());
-    Eigen::setNbThreads(1);
-    Eigen::SparseMatrix<double, Eigen::RowMajor> ec;
+    namespace peer = crd_peer::eigen;
+    const peer::Owned ea{peer::csr_f64(n, n, mtx.trips.data(), static_cast<peer::Index>(mtx.trips.size()))};
+    peer::set_threads(1);
+    const peer::Owned ec{peer::csr_f64(0, 0, nullptr, 0)};
     const crd::f64 t_eig = best_ms(
         [&]()
         {
-            ec = ea * ea; // natural Eigen idiom (no .pruned() — matches our no-prune behavior)
-            volatile int s = static_cast<int>(ec.nonZeros());
+            peer::spgemm(ea.get(), ea.get(), ec.get()); // natural Eigen idiom (no .pruned(), as Cerid does not prune)
+            volatile peer::Index s = peer::nnz(ec.get());
             (void)s;
         });
 
     const crd::f64 ratio = t_eig / t_par;
     std::printf("  %-12s nnz(A)=%-8lld nnz(C)=%-9lld | Cerid ser=%8.2f par=%8.2f  Eigen=%8.2f ms  par/Eigen=%.2fx %s\n",
-                name, static_cast<long long>(a.nnz()), static_cast<long long>(ec.nonZeros()), t_ser, t_par, t_eig,
+                name, static_cast<long long>(a.nnz()), static_cast<long long>(peer::nnz(ec.get())), t_ser, t_par, t_eig,
                 ratio, (ratio >= 1.0 ? "WIN" : "loss"));
 }
 } // namespace
@@ -224,9 +216,9 @@ void run(const char* name, const char* group)
 int main()
 {
     crd::jobs::init();
-    Eigen::initParallel();
-    std::printf("[bench_hesap_spgemm] C=A*A on SuiteSparse: Cerid serial/parallel vs Eigen-ST (best-of-7). "
-                "Gate: par/Eigen>=1.3x median\n");
+    std::printf("[bench_hesap_spgemm] C=A*A on SuiteSparse: Cerid serial/parallel vs Eigen-ST (best-of-7; %s). "
+                "Gate: par/Eigen>=1.3x median\n",
+                crd_peer::eigen::isa());
     run("bcsstk13", "HB");
     run("bcsstk24", "HB");
     run("bcsstk25", "HB");

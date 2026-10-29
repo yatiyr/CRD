@@ -11,7 +11,10 @@
 // crd conventions throughout: crd::containers::Array (never std::vector),
 // crd::platform::fs::read_file_text + manual parse (never std::ifstream/string),
 // a named GrowableTlsfAllocator (never malloc / default_allocator); crd::f64/usize/
-// i32/u32 (never raw). Raw double only at the Eigen C++ API boundary.
+// i32/u32 (never raw). Eigen runs in its peer library at the host's best ISA
+// (examples/peers/eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
@@ -21,7 +24,6 @@
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
-#include <Eigen/Sparse>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -39,11 +41,7 @@ namespace fs = crd::platform::fs;
 
 crd::memory::GrowableTlsfAllocator g_alloc;
 
-struct Trip
-{
-    crd::i32 r, c;
-    crd::f64 v;
-};
+using Trip = crd_peer::eigen::Entry;
 
 // crd-native Matrix-Market reader (read_file_text + strtol/strtod; handles
 // pattern/symmetric/hermitian banners). DATA → crd::Array<Trip>.
@@ -132,7 +130,7 @@ bool read_mtx(const char* path, crd::i32& n, crd::containers::Array<Trip>& trips
     return dims_read;
 }
 
-template <typename Fn> crd::f64 best_ms(Fn&& fn)
+template <typename Fn> crd::f64 best_ms(const Fn& fn)
 {
     fn();
     crd::f64 best = 1e30;
@@ -168,7 +166,7 @@ void run(const char* name, crd::i32 r)
     tb.reserve(trips.size());
     for (const Trip& t : trips)
     {
-        tb.add(static_cast<crd::u32>(t.r), static_cast<crd::u32>(t.c), t.v);
+        tb.add(static_cast<crd::u32>(t.row), static_cast<crd::u32>(t.col), t.value);
     }
     auto a = tb.compress();
 
@@ -191,22 +189,15 @@ void run(const char* name, crd::i32 r)
             crd::jobs::frame_reset();
         });
 
-    crd::containers::Array<Eigen::Triplet<double>> et(alloc);
-    et.reserve(trips.size());
-    for (const Trip& t : trips)
-    {
-        et.push_back(Eigen::Triplet<double>(t.r, t.c, t.v));
-    }
-    Eigen::SparseMatrix<double, Eigen::RowMajor> ea(n, n);
-    ea.setFromTriplets(et.data(), et.data() + et.size());
-    using RowMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
-    RowMat eb = Eigen::Map<RowMat>(b.data(), n, r);
-    RowMat ec(n, r);
+    namespace peer = crd_peer::eigen;
+    const peer::Owned ea{peer::csr_f64(n, n, trips.data(), static_cast<peer::Index>(trips.size()))};
+    const peer::Owned eb{peer::row_mat(n, r, b.data())};
+    const peer::Owned ec{peer::row_mat(n, r, nullptr)};
 
-    Eigen::setNbThreads(1);
-    const crd::f64 t_eig_st = best_ms([&]() { ec.noalias() = ea * eb; });
-    Eigen::setNbThreads(0);
-    const crd::f64 t_eig_mt = best_ms([&]() { ec.noalias() = ea * eb; });
+    peer::set_threads(1);
+    const crd::f64 t_eig_st = best_ms([&]() { peer::spmm(ea.get(), eb.get(), ec.get()); });
+    peer::set_threads(0);
+    const crd::f64 t_eig_mt = best_ms([&]() { peer::spmm(ea.get(), eb.get(), ec.get()); });
 
     const crd::f64 mt = t_eig_mt / t_par;
     std::printf("  %-10s r=%-4d | Cerid ser=%8.3f par=%8.3f  Eigen ST=%8.3f MT=%8.3f ms  par/Eigen-MT=%.2fx %s\n", name,
@@ -217,9 +208,9 @@ void run(const char* name, crd::i32 r)
 int main()
 {
     crd::jobs::init();
-    Eigen::initParallel();
-    std::printf("[bench_hesap_spmm] C=A*B (sparse x dense, r RHS) on SuiteSparse: Cerid vs Eigen (best-of-7). "
-                "Gate: par/Eigen-MT>=2x on r>=4\n");
+    std::printf("[bench_hesap_spmm] C=A*B (sparse x dense, r RHS) on SuiteSparse: Cerid vs Eigen (best-of-7; %s). "
+                "Gate: par/Eigen-MT>=2x on r>=4\n",
+                crd_peer::eigen::isa());
     for (crd::i32 r : {1, 4, 32, 128})
     {
         run("bcsstk25", r);

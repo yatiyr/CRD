@@ -12,7 +12,10 @@
 // crd conventions throughout: crd::containers::Array (never std::vector), a named
 // GrowableTlsfAllocator (never malloc / default_allocator) — the large block_rows
 // cases exceed a single 4 GB TLSF pool, so the growable arena is the right choice.
-// crd::f64/usize/i32 (never raw); raw double only at the Eigen C++ API boundary.
+// crd::f64/usize/i32 (never raw). Eigen runs in its peer library at the host's best
+// ISA (examples/peers/eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>
@@ -20,7 +23,6 @@
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
-#include <Eigen/Sparse>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -36,7 +38,7 @@ namespace sp = crd::hesap::sparse;
 // working set well past a single 4 GB TLSF pool. Reused across all run() calls.
 crd::memory::GrowableTlsfAllocator g_alloc;
 
-template <typename Fn> crd::f64 best_ms(Fn&& fn)
+template <typename Fn> crd::f64 best_ms(const Fn& fn)
 {
     fn();
     crd::f64 best = 1e30;
@@ -61,7 +63,8 @@ void run(crd::u32 block_rows, crd::u32 block_cols, crd::u32 b, crd::u32 blocks_p
 
     crd::memory::IAllocator* alloc = &g_alloc;
     sp::TripletBuilder<crd::f64> tb(alloc, block_rows * b, block_cols * b);
-    crd::containers::Array<Eigen::Triplet<double>> et(alloc);
+    namespace peer = crd_peer::eigen;
+    crd::containers::Array<peer::Entry> et(alloc);
     for (crd::u32 ib = 0; ib < block_rows; ++ib)
     {
         for (crd::u32 t = 0; t < blocks_per_row; ++t)
@@ -74,7 +77,7 @@ void run(crd::u32 block_rows, crd::u32 block_cols, crd::u32 b, crd::u32 blocks_p
                     const crd::f64 v = static_cast<crd::f64>(1 + (next() % 9)) / 4.0;
                     tb.add(ib * b + rr, jb * b + cc, v);
                     et.push_back(
-                        Eigen::Triplet<double>(static_cast<int>(ib * b + rr), static_cast<int>(jb * b + cc), v));
+                        peer::Entry{static_cast<crd::i32>(ib * b + rr), static_cast<crd::i32>(jb * b + cc), v});
                 }
             }
         }
@@ -104,13 +107,11 @@ void run(crd::u32 block_rows, crd::u32 block_cols, crd::u32 b, crd::u32 blocks_p
     const crd::f64 t_csr_ser = best_ms(
         [&]() { sp::spmv<crd::f64>(1.0, csr, sp::Trans::None, {x.data(), x.size()}, 0.0, {y.data(), y.size()}); });
 
-    Eigen::SparseMatrix<double, Eigen::RowMajor> ea(m, n);
-    ea.setFromTriplets(et.data(), et.data() + et.size());
-    ea.makeCompressed();
-    Eigen::Map<const Eigen::VectorXd> ex(x.data(), n);
-    Eigen::VectorXd ey(m);
-    Eigen::setNbThreads(1);
-    const crd::f64 t_eig = best_ms([&]() { ey.noalias() = ea * ex; });
+    const peer::Owned ea{peer::csr_f64(m, n, et.data(), static_cast<peer::Index>(et.size()))};
+    const peer::Owned ex{peer::vec(n, x.data())};
+    const peer::Owned ey{peer::vec(m, static_cast<const crd::f64*>(nullptr))};
+    peer::set_threads(1);
+    const crd::f64 t_eig = best_ms([&]() { peer::spmv(ea.get(), ex.get(), ey.get()); });
 
     const crd::f64 vs_eig = t_eig / t_bsr_par;
     const crd::f64 vs_csr = t_csr_ser / t_bsr_par;
@@ -125,7 +126,8 @@ int main()
 {
     crd::jobs::init();
     std::printf("[bench_hesap_bsr] block-spmv on native block patterns: Cerid BSR vs Cerid scalar-CSR vs Eigen "
-                "scalar-CSR (best-of-7). Gate: BSR par >= Eigen-CSR AND >= our CSR.\n");
+                "scalar-CSR (best-of-7; %s). Gate: BSR par >= Eigen-CSR AND >= our CSR.\n",
+                crd_peer::eigen::isa());
     // Cache-resident and DRAM-bound sizes, b in {3,6} (FEM-common).
     run(20000, 20000, 3, 8);
     run(20000, 20000, 6, 8);

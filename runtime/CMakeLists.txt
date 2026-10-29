@@ -577,7 +577,8 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     else()
         message(WARNING "[hesap-vs-reference] OpenMP NOT found — Eigen will run SERIAL")
     endif()
-    crd_add_bench_peer(crd-bench-eigen-peer SOURCES examples/peers/eigen_peer_dense.cpp LIBRARIES eigen_headers)
+    crd_add_bench_peer(crd-bench-eigen-peer
+        SOURCES examples/peers/eigen_peer_dense.cpp examples/peers/eigen_peer_sparse.cpp LIBRARIES eigen_headers)
 
     crd_add_hesap_vs_ref_bench(bench_hesap_gemm_vs_reference    USE_JOBS USE_OPENBLAS EIGEN_PEER)
     crd_add_hesap_vs_ref_bench(bench_hesap_blas1_vs_reference   USE_OPENBLAS EIGEN_PEER)
@@ -595,10 +596,10 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     # AND LAPACK dgehrd.
     crd_add_hesap_vs_ref_bench(bench_hesap_eig_nonsym_vs_reference USE_JOBS USE_OPENBLAS EIGEN_PEER)
     # v1a-3: sparse assembly shootout (TripletBuilder::compress vs setFromTriplets).
-    crd_add_hesap_vs_ref_bench(bench_hesap_sparse_assembly_vs_reference)
+    crd_add_hesap_vs_ref_bench(bench_hesap_sparse_assembly_vs_reference EIGEN_PEER)
     target_link_libraries(bench_hesap_sparse_assembly_vs_reference PRIVATE crd-hesap-sparse)
     # v1b-1/v1b-2: spmv CSR baseline + SELL primary (ST + MT) vs Eigen (ST + MT).
-    crd_add_hesap_vs_ref_bench(bench_hesap_spmv_vs_reference USE_JOBS)
+    crd_add_hesap_vs_ref_bench(bench_hesap_spmv_vs_reference USE_JOBS EIGEN_PEER)
     target_link_libraries(bench_hesap_spmv_vs_reference PRIVATE crd-hesap-sparse)
 
     # v1d-2: spgemm C=A*A vs Eigen on REAL SuiteSparse matrices. Fetch a few
@@ -627,25 +628,25 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
             endif()
         endif()
     endforeach()
-    crd_add_hesap_vs_ref_bench(bench_hesap_spgemm_vs_reference USE_JOBS)
+    crd_add_hesap_vs_ref_bench(bench_hesap_spgemm_vs_reference USE_JOBS EIGEN_PEER)
     target_link_libraries(bench_hesap_spgemm_vs_reference PRIVATE crd-hesap-sparse)
     target_compile_definitions(bench_hesap_spgemm_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
     # v1e-1: spmm (sparse x dense, multi-RHS) vs Eigen sparse*dense (ST + MT).
-    crd_add_hesap_vs_ref_bench(bench_hesap_spmm_vs_reference USE_JOBS)
+    crd_add_hesap_vs_ref_bench(bench_hesap_spmm_vs_reference USE_JOBS EIGEN_PEER)
     target_link_libraries(bench_hesap_spmm_vs_reference PRIVATE crd-hesap-sparse)
     target_compile_definitions(bench_hesap_spmm_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
     # v1e-2: SDDMM vs Eigen per-entry dot (same flops) + dense-then-mask illustration.
-    crd_add_hesap_vs_ref_bench(bench_hesap_sddmm_vs_reference USE_JOBS)
+    crd_add_hesap_vs_ref_bench(bench_hesap_sddmm_vs_reference USE_JOBS EIGEN_PEER)
     target_link_libraries(bench_hesap_sddmm_vs_reference PRIVATE crd-hesap-sparse)
     target_compile_definitions(bench_hesap_sddmm_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
     # v1f-1: BSR block-spmv vs Eigen scalar-CSR (synthetic native block patterns).
-    crd_add_hesap_vs_ref_bench(bench_hesap_bsr_vs_reference USE_JOBS)
+    crd_add_hesap_vs_ref_bench(bench_hesap_bsr_vs_reference USE_JOBS EIGEN_PEER)
     target_link_libraries(bench_hesap_bsr_vs_reference PRIVATE crd-hesap-sparse)
     # v1f-2: ELL (regular) + DIA (banded) spmv vs Cerid + Eigen scalar CSR.
-    crd_add_hesap_vs_ref_bench(bench_hesap_ell_dia_vs_reference USE_JOBS)
+    crd_add_hesap_vs_ref_bench(bench_hesap_ell_dia_vs_reference USE_JOBS EIGEN_PEER)
     target_link_libraries(bench_hesap_ell_dia_vs_reference PRIVATE crd-hesap-sparse)
     # v1g-2: adversarial spgemm stress corpus vs Eigen-ST (find any losing/infeasible regime).
-    crd_add_hesap_vs_ref_bench(bench_hesap_spgemm_stress_vs_reference USE_JOBS)
+    crd_add_hesap_vs_ref_bench(bench_hesap_spgemm_stress_vs_reference USE_JOBS EIGEN_PEER)
     target_link_libraries(bench_hesap_spgemm_stress_vs_reference PRIVATE crd-hesap-sparse)
     # v2a: ordering — symbolic-Cholesky port validation + RCM fill/bandwidth + v2b AMD target.
     crd_add_hesap_vs_ref_bench(bench_hesap_ordering_vs_reference)

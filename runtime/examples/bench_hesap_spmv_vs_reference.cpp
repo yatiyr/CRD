@@ -13,8 +13,10 @@
 //
 // crd conventions throughout: crd::containers::Array (never std::vector), a named
 // GrowableTlsfAllocator (never malloc / default_allocator — the 16M-triplet working
-// set exceeds one TLSF pool); crd::f64/u32/u64/i32/usize (never raw). Raw double
-// only at the Eigen C++ API boundary.
+// set exceeds one TLSF pool); crd::f64/u32/u64/i32/usize (never raw). Eigen runs in
+// its peer library at the host's best ISA (examples/peers/eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
@@ -25,7 +27,6 @@
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
-#include <Eigen/Sparse>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -43,7 +44,7 @@ struct Coord
     crd::f64 v;
 };
 
-enum class Pattern
+enum class Pattern : crd::u8
 {
     Uniform,
     Banded,
@@ -105,7 +106,7 @@ crd::containers::Array<Coord> generate(Pattern p, crd::u32 n, crd::u32 nnz_per_r
     return out;
 }
 
-template <typename Fn> crd::f64 best_ms(Fn&& fn)
+template <typename Fn> crd::f64 best_ms(const Fn& fn)
 {
     fn(); // warmup (page-in y, warm caches/threads)
     crd::f64 best = 1e30;
@@ -156,24 +157,35 @@ template <typename T> void run(const char* label, Pattern p, crd::u32 n, crd::u3
                                    }) /
                                inner;
 
-    crd::containers::Array<Eigen::Triplet<T>> trips(alloc);
-    trips.reserve(coords.size());
+    namespace peer = crd_peer::eigen;
+    crd::containers::Array<peer::Entry> entries(alloc);
+    entries.reserve(coords.size());
     for (const Coord& e : coords)
     {
-        trips.push_back(Eigen::Triplet<T>(static_cast<int>(e.r), static_cast<int>(e.c), static_cast<T>(e.v)));
+        entries.push_back(peer::Entry{static_cast<crd::i32>(e.r), static_cast<crd::i32>(e.c), e.v});
     }
-    Eigen::SparseMatrix<T, Eigen::RowMajor> a(static_cast<int>(n), static_cast<int>(n));
-    a.setFromTriplets(trips.data(), trips.data() + trips.size());
-    Eigen::Map<const Eigen::Matrix<T, Eigen::Dynamic, 1>> xv(x.data(), n);
-    Eigen::Matrix<T, Eigen::Dynamic, 1> yv(n);
+    const auto count = static_cast<peer::Index>(entries.size());
+    const auto a = [&]()
+    {
+        if constexpr (sizeof(T) == 8)
+        {
+            return peer::Owned{peer::csr_f64(n, n, entries.data(), count)};
+        }
+        else
+        {
+            return peer::Owned{peer::csr_f32(n, n, entries.data(), count)};
+        }
+    }();
+    const peer::Owned xv{peer::vec(n, x.data())};
+    const peer::Owned yv{peer::vec(n, static_cast<const T*>(nullptr))};
 
-    Eigen::setNbThreads(1);
+    peer::set_threads(1);
     const crd::f64 t_eigen_st = best_ms(
                                     [&]()
                                     {
                                         for (crd::i32 k = 0; k < inner; ++k)
                                         {
-                                            yv.noalias() = a * xv;
+                                            peer::spmv(a.get(), xv.get(), yv.get());
                                         }
                                     }) /
                                 inner;
@@ -193,8 +205,8 @@ template <typename T> void run(const char* label, Pattern p, crd::u32 n, crd::u3
             crd::hesap::sparse::spmv_sell_parallel<T>(T(1), sell, xs, T(0), ys);
             crd::jobs::frame_reset(); // reclaim the parallel_for JobDecl arena between reps
         });
-    Eigen::setNbThreads(0); // 0 => Eigen's default (all hardware threads)
-    const crd::f64 t_eigen_mt = best_ms([&]() { yv.noalias() = a * xv; });
+    peer::set_threads(0); // 0 => Eigen's default (all hardware threads)
+    const crd::f64 t_eigen_mt = best_ms([&]() { peer::spmv(a.get(), xv.get(), yv.get()); });
     const crd::f64 mt = t_eigen_mt / t_sell_mt;
     std::printf(" | MT SELL=%7.3f Eigen=%7.3f =%.2fx %s\n", t_sell_mt, t_eigen_mt, mt, (mt >= 1.0 ? "WIN" : "loss"));
 }
@@ -215,11 +227,10 @@ int main(int argc, char** argv)
     {
         crd::jobs::init();
     }
-    Eigen::initParallel();
     std::printf("[bench_hesap_spmv] y=A*x: Cerid SELL vs Eigen, best-of-15 + warmup, ms, hesap-sparse kernel level %s "
-                "(selected %s). Gate: SELL/Eigen>=1 in every column\n",
+                "(selected %s; %s). Gate: SELL/Eigen>=1 in every column\n",
                 crd::cpu_level_name(crd::hesap::sparse::sparse_kernels().level),
-                crd::cpu_level_name(crd::cpu_selection().selected));
+                crd::cpu_level_name(crd::cpu_selection().selected), crd_peer::eigen::isa());
     for (crd::u32 n : {8000U, 1000000U, 2000000U}) // in L2, x in L3, x spilling to DRAM
     {
         run_patterns<crd::f64>(n, st_only);

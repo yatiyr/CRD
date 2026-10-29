@@ -14,7 +14,10 @@
 //
 // crd conventions throughout: crd::containers::Array (never std::vector), a named
 // GrowableTlsfAllocator (never malloc / default_allocator); crd::f64/u32/u64
-// (never raw). Raw double only at the Eigen C++ API boundary.
+// (never raw). Eigen runs in its peer library at the host's best ISA
+// (examples/peers/eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>
@@ -22,7 +25,6 @@
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
-#include <Eigen/Sparse>
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -36,7 +38,7 @@ namespace sp = crd::hesap::sparse;
 // Unbounded pooled arena (dims up to 3.5M ⇒ working set ≫ one 4 GB TLSF pool).
 crd::memory::GrowableTlsfAllocator g_alloc;
 
-template <typename Fn> crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
+template <typename Fn> crd::f64 best_ms(const Fn& fn, crd::i32 reps = 3)
 {
     fn();
     crd::f64 best = 1e30;
@@ -51,8 +53,8 @@ template <typename Fn> crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
 }
 
 // Build A (n x n) with the given per-row length generator g(i)->len, columns
-// uniform-random. Returns both Cerid CSR and Eigen RowMajor.
-template <typename Gen> void run(const char* name, crd::u32 n, Gen&& g)
+// uniform-random, as a Cerid CSR and an Eigen RowMajor matrix.
+template <typename Gen> void run(const char* name, crd::u32 n, const Gen& g)
 {
     std::uint64_t s = 0xD1CE05 ^ (static_cast<std::uint64_t>(n) << 1);
     auto next = [&]()
@@ -62,7 +64,8 @@ template <typename Gen> void run(const char* name, crd::u32 n, Gen&& g)
     };
     crd::memory::IAllocator* alloc = &g_alloc;
     sp::TripletBuilder<crd::f64> tb(alloc, n, n);
-    crd::containers::Array<Eigen::Triplet<double>> et(alloc);
+    namespace peer = crd_peer::eigen;
+    crd::containers::Array<peer::Entry> et(alloc);
     crd::u64 nnz = 0;
     for (crd::u32 i = 0; i < n; ++i)
     {
@@ -72,7 +75,7 @@ template <typename Gen> void run(const char* name, crd::u32 n, Gen&& g)
             const crd::u32 j = next() % n;
             const crd::f64 v = 0.5 + 0.001 * static_cast<crd::f64>(next() % 1000);
             tb.add(i, j, v);
-            et.push_back(Eigen::Triplet<double>(static_cast<int>(i), static_cast<int>(j), v));
+            et.push_back(peer::Entry{static_cast<crd::i32>(i), static_cast<crd::i32>(j), v});
             ++nnz;
         }
     }
@@ -86,12 +89,11 @@ template <typename Gen> void run(const char* name, crd::u32 n, Gen&& g)
             (void)c;
         });
 
-    Eigen::SparseMatrix<double, Eigen::RowMajor> ea(static_cast<int>(n), static_cast<int>(n));
-    ea.setFromTriplets(et.data(), et.data() + et.size());
-    ea.makeCompressed();
-    Eigen::setNbThreads(1);
-    Eigen::SparseMatrix<double, Eigen::RowMajor> ec;
-    const crd::f64 t_eig = best_ms([&]() { ec = ea * ea; }); // NOT .pruned() (v1d: prune unfairly handicaps Eigen)
+    const peer::Owned ea{peer::csr_f64(n, n, et.data(), static_cast<peer::Index>(et.size()))};
+    peer::set_threads(1);
+    const peer::Owned ec{peer::csr_f64(0, 0, nullptr, 0)};
+    // NOT .pruned() (v1d: prune unfairly handicaps Eigen)
+    const crd::f64 t_eig = best_ms([&]() { peer::spgemm(ea.get(), ea.get(), ec.get()); });
 
     const crd::f64 ratio = t_eig / t_cerid;
     std::printf("  %-22s n=%-8u nnz(A)=%9llu | Cerid=%9.2f  Eigen-ST=%9.2f ms  Eigen/Cerid=%.2fx %s\n", name, n,
@@ -102,8 +104,9 @@ template <typename Gen> void run(const char* name, crd::u32 n, Gen&& g)
 int main()
 {
     crd::jobs::init();
-    std::printf("[bench_hesap_spgemm_stress] adversarial C=A*A vs Eigen-ST (best-of-3). "
-                "Trigger: implement hash accumulator iff Eigen>=1.00x on any in-cap case.\n");
+    std::printf("[bench_hesap_spgemm_stress] adversarial C=A*A vs Eigen-ST (best-of-3; %s). "
+                "Trigger: implement hash accumulator iff Eigen>=1.00x on any in-cap case.\n",
+                crd_peer::eigen::isa());
 
     // (a) near-boundary dimension (in-cap), modest nnz/row.
     run("boundary-3.5M", 3500000U, [](crd::u32, auto&) { return 3U; });

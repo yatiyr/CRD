@@ -19,7 +19,10 @@
 // crd conventions throughout: crd::containers::Array (never std::vector),
 // crd::platform::fs::read_file_text + manual parse (never std::ifstream/string),
 // a named GrowableTlsfAllocator (never malloc / default_allocator); crd::f64/usize/
-// i32/u32 (never raw). Raw double only at the Eigen C++ API boundary.
+// i32/u32 (never raw). Eigen runs in its peer library at the host's best ISA
+// (examples/peers/eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
@@ -29,8 +32,6 @@
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
-#include <Eigen/Dense>
-#include <Eigen/Sparse>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -49,11 +50,7 @@ namespace fs = crd::platform::fs;
 
 crd::memory::GrowableTlsfAllocator g_alloc;
 
-struct Trip
-{
-    crd::i32 r, c;
-    crd::f64 v;
-};
+using Trip = crd_peer::eigen::Entry;
 
 // crd-native Matrix-Market reader (read_file_text + strtol/strtod; pattern/symmetric/hermitian).
 bool read_mtx(const char* path, crd::i32& n, crd::containers::Array<Trip>& trips)
@@ -141,7 +138,7 @@ bool read_mtx(const char* path, crd::i32& n, crd::containers::Array<Trip>& trips
     return dims_read;
 }
 
-template <typename Fn> crd::f64 best_ms(Fn&& fn)
+template <typename Fn> crd::f64 best_ms(const Fn& fn)
 {
     fn();
     crd::f64 best = 1e30;
@@ -177,7 +174,7 @@ void run(const char* name, crd::i32 r)
     tb.reserve(trips.size());
     for (const Trip& t : trips)
     {
-        tb.add(static_cast<crd::u32>(t.r), static_cast<crd::u32>(t.c), t.v);
+        tb.add(static_cast<crd::u32>(t.row), static_cast<crd::u32>(t.col), t.value);
     }
     auto mask = tb.compress(); // mask = the SuiteSparse pattern
     const auto ru = static_cast<crd::u32>(r);
@@ -207,25 +204,14 @@ void run(const char* name, crd::i32 r)
         });
 
     // ---- Eigen baseline (1): same-flops per-entry vectorised dot ----
-    using RowMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
-    Eigen::Map<RowMat> ex(x.data(), n, r);
-    Eigen::Map<RowMat> ey(y.data(), n, r);
+    namespace peer = crd_peer::eigen;
+    const peer::Owned ex{peer::row_mat(n, r, x.data())};
+    const peer::Owned ey{peer::row_mat(n, r, y.data())};
     const crd::u32* outer = mask.pattern().outer_ptr.data();
     const crd::u32* inner = mask.pattern().inner_idx.data();
-    const crd::u32 m = static_cast<crd::u32>(n);
     crd::containers::Array<crd::f64> eout(alloc);
     eout.resize(mask.nnz());
-    const crd::f64 t_eig_dot = best_ms(
-        [&]()
-        {
-            for (crd::u32 i = 0; i < m; ++i)
-            {
-                for (crd::u32 k = outer[i]; k < outer[i + 1]; ++k)
-                {
-                    eout[k] = ex.row(i).dot(ey.row(inner[k]));
-                }
-            }
-        });
+    const crd::f64 t_eig_dot = best_ms([&]() { peer::sampled_dots(ex.get(), ey.get(), n, outer, inner, eout.data()); });
 
     // Correctness: Cerid serial vs Eigen per-entry dot.
     crd::f64 max_diff = 0.0;
@@ -244,15 +230,8 @@ void run(const char* name, crd::i32 r)
         const crd::f64 t_eig_dense = best_ms(
             [&]()
             {
-                RowMat d = ex * ey.transpose(); // O(n^2 r) -- the whole point we avoid
-                volatile double sink = 0.0;
-                for (crd::u32 i = 0; i < m; ++i)
-                {
-                    for (crd::u32 k = outer[i]; k < outer[i + 1]; ++k)
-                    {
-                        sink += d(i, inner[k]);
-                    }
-                }
+                // O(n^2 r) -- the whole point we avoid
+                volatile crd::f64 sink = peer::masked_dense_sum(ex.get(), ey.get(), n, outer, inner);
                 (void)sink;
             });
         std::snprintf(dense_note, sizeof(dense_note), "dense-mask=%9.3f ms (%.0fx our par)", t_eig_dense,
@@ -268,9 +247,10 @@ void run(const char* name, crd::i32 r)
 int main()
 {
     crd::jobs::init();
-    Eigen::initParallel();
+    crd_peer::eigen::set_threads(0); // Eigen's default thread count, for the dense product
     std::printf("[bench_hesap_sddmm] C=sample(X*Y^T, mask) on SuiteSparse: Cerid vs Eigen per-entry dot (same flops, "
-                "best-of-7) + dense-then-mask illustration.\n");
+                "best-of-7) + dense-then-mask illustration; %s.\n",
+                crd_peer::eigen::isa());
     for (crd::i32 r : {8, 16, 32})
     {
         run("bcsstk24", r);

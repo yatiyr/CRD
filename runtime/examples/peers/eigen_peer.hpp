@@ -117,6 +117,48 @@ CRD_BENCH_PEER_API void eig_sym(const MatF64* a, bool vectors, VecF64* values);
 CRD_BENCH_PEER_API void eig_tridiagonal(SymEig* solver, Index n, const double* diag, const double* sub);
 // SelfAdjointEigenSolver<MatrixXcd>(a).eigenvalues()
 CRD_BENCH_PEER_API void eig_herm(const MatC64* a, VecF64* values);
+
+// ---- Sparse -------------------------------------------------------------------------------------------------------
+// One coordinate of a matrix; repeated coordinates are summed (setFromTriplets).
+struct Entry
+{
+    std::int32_t row;
+    std::int32_t col;
+    double value;
+};
+struct SpF32;     // Eigen::SparseMatrix<float, RowMajor>
+struct SpF64;     // Eigen::SparseMatrix<double, RowMajor>
+struct SpColF64;  // Eigen::SparseMatrix<double>, column-major
+struct RowMatF64; // Eigen::Matrix<double, Dynamic, Dynamic, RowMajor>
+
+// rows x cols from `count` entries through Eigen's triplet list and setFromTriplets, compressed (values rounded to
+// float for csr_f32). csc_f64 is the assembly board's timed path: the triplet list is built in the call.
+CRD_BENCH_PEER_API SpF32* csr_f32(Index rows, Index cols, const Entry* entries, Index count);
+CRD_BENCH_PEER_API SpF64* csr_f64(Index rows, Index cols, const Entry* entries, Index count);
+CRD_BENCH_PEER_API SpColF64* csc_f64(Index rows, Index cols, const Entry* entries, Index count);
+// rows x cols row-major values; nullptr zero-fills
+CRD_BENCH_PEER_API RowMatF64* row_mat(Index rows, Index cols, const double* data);
+CRD_BENCH_PEER_API void destroy(SpF32* object) noexcept;
+CRD_BENCH_PEER_API void destroy(SpF64* object) noexcept;
+CRD_BENCH_PEER_API void destroy(SpColF64* object) noexcept;
+CRD_BENCH_PEER_API void destroy(RowMatF64* object) noexcept;
+CRD_BENCH_PEER_API Index nnz(const SpF64* a) noexcept;
+CRD_BENCH_PEER_API Index nnz(const SpColF64* a) noexcept;
+
+// y.noalias() = a * x
+CRD_BENCH_PEER_API void spmv(const SpF32* a, const VecF32* x, VecF32* y);
+CRD_BENCH_PEER_API void spmv(const SpF64* a, const VecF64* x, VecF64* y);
+// c = a * b, not pruned
+CRD_BENCH_PEER_API void spgemm(const SpF64* a, const SpF64* b, SpF64* c);
+// c.noalias() = a * b
+CRD_BENCH_PEER_API void spmm(const SpF64* a, const RowMatF64* b, RowMatF64* c);
+// SDDMM the way an Eigen user writes it (Eigen has none): out[k] = x.row(i).dot(y.row(inner[k])) for each k in
+// [outer[i], outer[i + 1]) of every row i < rows of a CSR pattern.
+CRD_BENCH_PEER_API void sampled_dots(const RowMatF64* x, const RowMatF64* y, Index rows, const std::uint32_t* outer,
+                                     const std::uint32_t* inner, double* out);
+// The dense way: d = x * y^T, then the sum of d over the same pattern.
+CRD_BENCH_PEER_API double masked_dense_sum(const RowMatF64* x, const RowMatF64* y, Index rows,
+                                           const std::uint32_t* outer, const std::uint32_t* inner);
 // HessenbergDecomposition(a), returning the real part of matrixH()(0, 0)
 CRD_BENCH_PEER_API double hessenberg(const MatF64* a);
 CRD_BENCH_PEER_API double hessenberg(const MatC64* a);
