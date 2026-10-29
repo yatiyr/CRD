@@ -79,8 +79,8 @@ double type1_sample_err(const cpx* out, const double* x, const cpx* c, usize m, 
     return maxd / (1.0 + maxr);
 }
 
-double type2_sample_err(const cpx* out, const double* x, const cpx* f, usize m, usize n_modes, int isign,
-                        const usize* sample, usize ns)
+double type2_sample_err(const cpx* out, const double* x, const cpx* f, usize n_modes, int isign, const usize* sample,
+                        usize ns)
 {
     const double s = (isign >= 0) ? 1.0 : -1.0;
     double maxd = 0.0;
@@ -210,9 +210,9 @@ int main()
         const double f2 = time_best_ms(reps, [&] { finufft_execute(plan2, c2out, fkk); });
         finufft_destroy(plan2);
 
-        const double ce2 = type2_sample_err(reinterpret_cast<cpx*>(c_cerid.data()), x.data(), fkk, m, n, isign,
-                                            samp_pts.data(), ns);
-        const double fe2 = type2_sample_err(c2out, x.data(), fkk, m, n, isign, samp_pts.data(), ns);
+        const double ce2 =
+            type2_sample_err(reinterpret_cast<cpx*>(c_cerid.data()), x.data(), fkk, n, isign, samp_pts.data(), ns);
+        const double fe2 = type2_sample_err(c2out, x.data(), fkk, n, isign, samp_pts.data(), ns);
         std::printf("T2 %7zu / %7zu | %14.4f   | %14.4f   | %6.2fx  | %.2e | %.2e\n", n, m, c2, f2, f2 / c2, ce2, fe2);
     }
     return 0;

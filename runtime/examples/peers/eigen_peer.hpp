@@ -13,6 +13,7 @@
 
 namespace crd_peer::eigen
 {
+using crd_peer::Owned;
 using Index = std::int64_t;
 
 struct MatF32; // Eigen::MatrixXf, column-major
@@ -49,20 +50,6 @@ CRD_BENCH_PEER_API const double* data(const MatF64* m) noexcept;
 CRD_BENCH_PEER_API const float* data(const VecF32* v) noexcept;
 CRD_BENCH_PEER_API const double* data(const VecF64* v) noexcept;
 CRD_BENCH_PEER_API Index size(const VecF64* v) noexcept;
-
-// A handle owned by the caller's scope.
-template <typename T> class Owned
-{
-public:
-    explicit Owned(T* object) noexcept : m_object(object) {}
-    Owned(const Owned&) = delete;
-    Owned& operator=(const Owned&) = delete;
-    ~Owned() { destroy(m_object); }
-    [[nodiscard]] T* get() const noexcept { return m_object; }
-
-private:
-    T* m_object;
-};
 
 // ---- Dense BLAS --------------------------------------------------------------------------------------------------
 // c.noalias() = a * b
