@@ -35,7 +35,9 @@
 //   sigkill                 -- (linux) kill(getpid, SIGKILL): uncatchable, no handler runs, NO record written -- used
 //                              to prove a pre-seeded prior record is retained. Windows: falls through to a plain fault.
 //   fpe                     -- (linux) unmask FE_DIVBYZERO, then divide by zero: SIGFPE (FPE_FLTDIV), one record.
-//                              Elsewhere the division does not trap: exit 61.
+//                              An FPU that cannot arm the trap: exit 62. Elsewhere the division does not trap: exit 61.
+//   bus                     -- (linux) read a mapped page past the end of its empty file: SIGBUS (BUS_ADRERR), one
+//                              record. Windows: falls through to a plain fault.
 //   inject_dump_fail        -- (asserts only) force the dump or record write to fail, then fault: 0 dumps or records,
 //                              marker == DumpFailed.
 #include "specimen_common.hpp"
@@ -59,20 +61,21 @@
 #include <intrin.h>  // __fastfail
 #include <windows.h> // RemoveDirectoryA, FAST_FAIL_FATAL_APP_EXIT, CreateFileA/WriteFile
 #elif defined(__linux__)
-#include <fcntl.h>  // open, O_WRONLY/O_CREAT/O_TRUNC (chain.marker, report.marker)
-#include <fenv.h>   // feenableexcept (fpe)
-#include <signal.h> // kill/SIGKILL (sigkill), sigaction/raise/SA_SIGINFO (chain)
-#include <unistd.h> // rmdir (denied), getpid, write, close
+#include <fcntl.h>    // open, O_WRONLY/O_CREAT/O_TRUNC (chain.marker, report.marker)
+#include <fenv.h>     // feenableexcept, fegetexcept (fpe)
+#include <signal.h>   // kill/SIGKILL (sigkill), sigaction/raise/SA_SIGINFO (chain)
+#include <sys/mman.h> // memfd_create, mmap (bus)
+#include <unistd.h>   // rmdir (denied), getpid, write, close
 #endif
 
 #if CRD_DIAG_HAS_TSAN
 // The engine's crash handler under test must receive the fault. ThreadSanitizer otherwise handles SIGSEGV itself,
 // reports "ThreadSanitizer: SEGV" and exits with code 66 before crd::install's handler runs; it also takes the
-// re-executed SIGFPE once crd has recorded it (handle_sigfpe), exiting 66 instead of by the signal. Scoped to this
-// specimen.
+// re-executed SIGFPE and SIGBUS once crd has recorded them (handle_sigfpe, handle_sigbus), exiting 66 instead of by
+// the signal. Scoped to this specimen.
 extern "C" const char* __tsan_default_options()
 {
-    return "handle_segv=0:handle_sigfpe=0";
+    return "handle_segv=0:handle_sigfpe=0:handle_sigbus=0";
 }
 #endif
 
@@ -107,17 +110,41 @@ public:
 };
 
 // `fpe`: a floating-point division by zero with the trap unmasked, so the FPU raises a synchronous SIGFPE. Not an
-// integer division: that is undefined behaviour, which UBSan reports before the instruction can trap.
-void fp_divide_by_zero() noexcept
+// integer division: that is undefined behaviour, which UBSan reports before the instruction can trap. ARMv8 makes
+// the trap enables optional and the hosted ARM64 cores implement none: feenableexcept then reports -1, and the mode
+// says so (false) instead of dividing.
+bool fp_divide_by_zero() noexcept
 {
 #if defined(__linux__)
-    (void)::feenableexcept(FE_DIVBYZERO);
+    if (::feenableexcept(FE_DIVBYZERO) == -1 || (::fegetexcept() & FE_DIVBYZERO) == 0)
+    {
+        return false;
+    }
 #endif
     volatile double one      = 1.0;
     volatile double zero     = 0.0;
     volatile double quotient = one / zero;
     (void)quotient;
+    return true;
 }
+
+#if defined(__linux__)
+// `bus`: a shared mapping of an empty file has no backing page, so the read is a kernel-raised SIGBUS (BUS_ADRERR).
+void read_past_mapped_file() noexcept
+{
+    const int fd = ::memfd_create("crd-bus-specimen", 0U);
+    if (fd < 0)
+    {
+        return;
+    }
+    void* const page = ::mmap(nullptr, 4096U, PROT_READ, MAP_SHARED, fd, 0);
+    if (page != MAP_FAILED)
+    {
+        const volatile unsigned char* byte = static_cast<const volatile unsigned char*>(page);
+        (void)*byte;
+    }
+}
+#endif
 
 #if CRD_DIAG_FIBER_MODES
 // A job body that faults inside a fiber (whichever worker runs it).
@@ -488,8 +515,18 @@ int main(int argc, char** argv)
 #endif
     else if (std::strcmp(mode, "fpe") == 0)
     {
-        fp_divide_by_zero();
-        return 61; // reached only where the division does not trap
+        if (!fp_divide_by_zero())
+        {
+            return 62; // this FPU cannot arm the trap
+        }
+        return 61; // reached only where an armed division does not trap
+    }
+    else if (std::strcmp(mode, "bus") == 0)
+    {
+#if defined(__linux__)
+        read_past_mapped_file();
+#endif
+        null_write(); // Windows fallback, and a Linux host that could not map the file
     }
     else if (std::strcmp(mode, "inject_dump_fail") == 0)
     {

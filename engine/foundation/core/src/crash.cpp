@@ -993,10 +993,12 @@ void capture_module_notes() noexcept
     (void)dl_iterate_phdr(&phdr_cb, nullptr);
 }
 
-struct sigaction s_prev_sigsegv{};
-struct sigaction s_prev_sigabrt{};
-struct sigaction s_prev_sigfpe{};
-struct sigaction s_prev_sigill{};
+// The signals the handler records, and the disposition each had before the first install. SIGBUS is an access with
+// no backing page (a mapped file shorter than the mapping); SIGTRAP is a trap instruction's: __builtin_trap
+// (CRD_DEBUGBREAK) is brk on AArch64, and int3 raises it on x64.
+constexpr int         kFaultSignals[]   = {SIGSEGV, SIGBUS, SIGABRT, SIGFPE, SIGILL, SIGTRAP};
+constexpr std::size_t kFaultSignalCount = sizeof(kFaultSignals) / sizeof(kFaultSignals[0]);
+struct sigaction      s_prev[kFaultSignalCount]{};
 
 std::atomic<crd::crash::CrashReportHandler> s_handler{nullptr};
 std::atomic<void*>                          s_handler_user{nullptr};
@@ -1389,26 +1391,21 @@ void crash_signal_handler(int sig, siginfo_t* info, void* ctx) noexcept
 
     // Chain to the previously-installed handler. A fault the kernel raised (si_code > 0) is left to re-execute: the
     // handler returns, the instruction faults again and the previous handler receives the real siginfo and context,
-    // so a sanitizer reports the fault itself, not the re-raise. A sent signal (abort's SIGABRT, kill) is re-raised.
+    // so a sanitizer reports the fault itself, not the re-raise. A sent signal (abort's SIGABRT, kill) is re-raised,
+    // and so is SIGTRAP: x64's int3 leaves the instruction pointer past it, so returning would resume the program.
     // A default previous disposition terminates with the original signal either way (WTERMSIG keeps the reason).
     // The handler is NOT SA_RESETHAND -- that resets the disposition process-wide on entry, so a concurrent same-signal
-    // fault on another thread would take SIG_DFL and kill the process mid-record. Instead the four fault signals are
+    // fault on another thread would take SIG_DFL and kill the process mid-record. Instead every fault signal is
     // blocked in sa_mask during the handler, so a RECURSIVE fault on this thread is forced to SIG_DFL (bounded, no
     // re-entry); restoring prev here replaces our handler, so the re-fault or re-raise reaches the next link.
-    struct sigaction* prev = nullptr;
-    switch (sig)
+    for (std::size_t i = 0; i < kFaultSignalCount; ++i)
     {
-    case SIGSEGV: prev = &s_prev_sigsegv; break;
-    case SIGABRT: prev = &s_prev_sigabrt; break;
-    case SIGFPE: prev = &s_prev_sigfpe; break;
-    case SIGILL: prev = &s_prev_sigill; break;
-    default: break;
+        if (kFaultSignals[i] == sig)
+        {
+            (void)sigaction(sig, &s_prev[i], nullptr);
+        }
     }
-    if (prev != nullptr)
-    {
-        (void)sigaction(sig, prev, nullptr);
-    }
-    if (si_code <= 0)
+    if (si_code <= 0 || sig == SIGTRAP)
     {
         (void)raise(sig);
     }
@@ -1533,34 +1530,39 @@ InstallResult install(const char* output_dir) noexcept
     sa.sa_sigaction = crash_signal_handler;
     // ONSTACK: run the handler on the alt stack so an exhausted stack is still captured. NOT RESETHAND: it resets the
     // disposition process-wide on entry, so a concurrent same-signal fault on another thread would take SIG_DFL and
-    // kill the process mid-record. Instead block all four fault signals during the handler (below): a recursive fault
+    // kill the process mid-record. Instead block every fault signal during the handler (below): a recursive fault
     // on the handling thread is then forced to SIG_DFL (bounded, no re-entry), while other threads' faults still reach
     // the handler and hit the gate (the mask is per-thread).
     sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
     sigemptyset(&sa.sa_mask);
-    (void)sigaddset(&sa.sa_mask, SIGSEGV);
-    (void)sigaddset(&sa.sa_mask, SIGABRT);
-    (void)sigaddset(&sa.sa_mask, SIGFPE);
-    (void)sigaddset(&sa.sa_mask, SIGILL);
+    for (const int sig : kFaultSignals)
+    {
+        (void)sigaddset(&sa.sa_mask, sig);
+    }
 
     const bool first = !s_have_prev;
-    if (first)
+    for (std::size_t i = 0; i < kFaultSignalCount; ++i)
     {
-        if (sigaction(SIGSEGV, &sa, &s_prev_sigsegv) != 0 || sigaction(SIGABRT, &sa, &s_prev_sigabrt) != 0 ||
-            sigaction(SIGFPE, &sa, &s_prev_sigfpe) != 0 || sigaction(SIGILL, &sa, &s_prev_sigill) != 0)
+        if (sigaction(kFaultSignals[i], &sa, first ? &s_prev[i] : nullptr) != 0)
         {
-            s_output_dir[0] = '\0';
+            // A first install leaves no signal half-installed: the ones already taken get their dispositions back.
+            for (std::size_t j = 0; first && j < i; ++j)
+            {
+                (void)sigaction(kFaultSignals[j], &s_prev[j], nullptr);
+            }
+            if (first)
+            {
+                s_output_dir[0] = '\0';
+            }
             return InstallResult::FilterInstallFailed;
         }
+    }
+    if (first)
+    {
         s_have_prev = true;
         return InstallResult::Ok;
     }
-    // Re-install without clobbering the originally saved previous handlers.
-    if (sigaction(SIGSEGV, &sa, nullptr) != 0 || sigaction(SIGABRT, &sa, nullptr) != 0 ||
-        sigaction(SIGFPE, &sa, nullptr) != 0 || sigaction(SIGILL, &sa, nullptr) != 0)
-    {
-        return InstallResult::FilterInstallFailed;
-    }
+    // A re-install keeps the originally saved previous handlers.
     return InstallResult::OkReinstalled;
 }
 
@@ -1568,10 +1570,10 @@ void uninstall() noexcept
 {
     if (s_have_prev)
     {
-        (void)sigaction(SIGSEGV, &s_prev_sigsegv, nullptr);
-        (void)sigaction(SIGABRT, &s_prev_sigabrt, nullptr);
-        (void)sigaction(SIGFPE, &s_prev_sigfpe, nullptr);
-        (void)sigaction(SIGILL, &s_prev_sigill, nullptr);
+        for (std::size_t i = 0; i < kFaultSignalCount; ++i)
+        {
+            (void)sigaction(kFaultSignals[i], &s_prev[i], nullptr);
+        }
         s_have_prev = false;
     }
     s_output_dir[0]    = '\0';

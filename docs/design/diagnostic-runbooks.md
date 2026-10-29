@@ -116,7 +116,7 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 
 | Field | Value |
 |---|---|
-| Symptom | An access violation (`0xC0000005`), a stack overflow (`0xC00000FD`), a fail-fast (`0xC0000409`), or SIGSEGV, SIGBUS or SIGILL ended the process. |
+| Symptom | An access violation (`0xC0000005`), a stack overflow (`0xC00000FD`), a fail-fast (`0xC0000409`), or SIGSEGV, SIGBUS, SIGFPE, SIGILL or SIGTRAP ended the process. |
 | Command (Windows) | `python scripts/debugger-recipes.py --probe`; `cdb -z <crash dump> -c ".ecxr;kP;q"` |
 | Command (Linux) | `gdb -batch -ex bt <program> <core>` |
 | Artifact | Windows: `crash_<pid>_<tick>_<serial>_<attempt>.dmp`, a minidump in the host profile's `crash_dir`; Linux: `crash_<pid>_<tid>_<ns>_<serial>.log`, its path printed on stderr after `record:`; with a flight recorder also `flight-<n>.cdb`. |

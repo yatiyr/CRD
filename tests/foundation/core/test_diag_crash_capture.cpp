@@ -19,7 +19,8 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
-#include <crd/core/crash.hpp> // WriteResult, for the injected-failure marker assertion
+#include <crd/core/crash.hpp>    // WriteResult, for the injected-failure marker assertion
+#include <crd/core/platform.hpp> // CRD_ARCH_ARM64
 
 #include "minidump_probe.hpp" // Windows-only dump content probe (no-op off Windows)
 
@@ -33,6 +34,9 @@
 #include <fstream>
 #include <iomanip>
 #include <string_view>
+#if defined(__linux__)
+#include <fenv.h> // feenableexcept, fegetexcept, fedisableexcept (the FPU trap probe)
+#endif
 
 namespace cont = crd::containers;
 namespace cd   = crd::diag;
@@ -443,18 +447,33 @@ TEST_CASE("crash capture: an injected MiniDumpWriteDump failure is honest on the
 
 namespace
 {
-constexpr int kExitSegv   = 139; // 128 + SIGSEGV(11): a wild write or a stack fault
-constexpr int kExitIll    = 132; // 128 + SIGILL(4):  __builtin_trap()
-constexpr int kExitAbrt   = 134; // 128 + SIGABRT(6): abort() from the headless assert path
-constexpr int kExitFpe    = 136; // 128 + SIGFPE(8): a trapped floating-point division by zero
-constexpr int kExitReport = 1;   // a sanitizer's exit after its report (no exitcode option is set)
-constexpr int kSigSegv    = 11;
-constexpr int kSigIll     = 4;
-constexpr int kSigAbrt    = 6;
-constexpr int kSigFpe     = 8;
-constexpr int kSegvAccerr = 2;  // si_code SEGV_ACCERR = a guard-page hit (stack overflow); SEGV_MAPERR(1) = unmapped
-constexpr int kFpeFltdiv  = 3;  // si_code FPE_FLTDIV
-constexpr int kSiTkill    = -6; // si_code SI_TKILL: a sent signal (abort raises SIGABRT this way)
+// __builtin_trap is ud2 on x64 (SIGILL, 4) and brk on AArch64 (SIGTRAP, 5).
+constexpr int kSigTrapInstruction = CRD_ARCH_ARM64 ? 5 : 4;
+constexpr int kExitSegv           = 139; // 128 + SIGSEGV(11): a wild write or a stack fault
+constexpr int kExitTrap           = 128 + kSigTrapInstruction; // __builtin_trap()
+constexpr int kExitAbrt           = 134; // 128 + SIGABRT(6): abort() from the headless assert path
+constexpr int kExitBus            = 135; // 128 + SIGBUS(7): a read past the end of a mapped file
+constexpr int kExitFpe            = 136; // 128 + SIGFPE(8): a trapped floating-point division by zero
+constexpr int kExitNoFpTrap       = 62;  // the specimen's exit when the FPU cannot arm the division trap
+constexpr int kExitReport         = 1;   // a sanitizer's exit after its report (no exitcode option is set)
+constexpr int kSigSegv            = 11;
+constexpr int kSigAbrt            = 6;
+constexpr int kSigBus             = 7;
+constexpr int kSigFpe             = 8;
+constexpr int kSegvAccerr         = 2;  // si_code SEGV_ACCERR = a guard-page hit (stack overflow); MAPERR(1) = unmapped
+constexpr int kBusAdrerr          = 2;  // si_code BUS_ADRERR: no backing page at the address
+constexpr int kFpeFltdiv          = 3;  // si_code FPE_FLTDIV
+constexpr int kSiTkill            = -6; // si_code SI_TKILL: a sent signal (abort raises SIGABRT this way)
+
+// Whether this host's FPU can trap a division by zero. ARMv8 makes the trap enables optional and the hosted ARM64
+// cores implement none, which feenableexcept reports. The probe restores the enables it found.
+bool fp_division_traps()
+{
+    const int  found = fegetexcept();
+    const bool armed = feenableexcept(FE_DIVBYZERO) != -1 && (fegetexcept() & FE_DIVBYZERO) != 0;
+    (void)fedisableexcept(FE_DIVBYZERO & ~found);
+    return armed;
+}
 
 struct RecordFields
 {
@@ -814,19 +833,20 @@ TEST_CASE("crash capture (linux): a denied output path fails the write, still te
     fs::remove_all(dir, ec);
 }
 
-TEST_CASE("crash capture (linux): __builtin_trap raises SIGILL and is captured (unlike Windows __fastfail)",
+TEST_CASE("crash capture (linux): __builtin_trap raises its trap signal and is captured (unlike Windows __fastfail)",
           "[core][diag][crash-capture]")
 {
-    // Measured platform difference: Windows __fastfail bypasses SEH (0 dumps); on Linux __builtin_trap raises SIGILL,
-    // which crd's handler installs for, so it is captured. Exit code is 128 + SIGILL.
+    // Measured platform difference: Windows __fastfail bypasses SEH (0 dumps); on Linux __builtin_trap raises SIGILL
+    // (x64's ud2) or SIGTRAP (AArch64's brk), both of which crd's handler installs for, so it is captured. Exit code is
+    // 128 + that signal.
     const fs::path    dir = fresh_dir("fastfail");
     const cd::Outcome o   = run_mode("fastfail", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
 
     CHECK(o.verdict == cd::Verdict::Crashed);
-    CHECK(o.exit_code == kExitIll);
+    CHECK(o.exit_code == kExitTrap);
     CHECK(count_crash_records(dir) == 1U);
-    CHECK(parse_record(first_crash_record(dir)).signal == kSigIll);
+    CHECK(parse_record(first_crash_record(dir)).signal == kSigTrapInstruction);
     std::error_code ec;
     fs::remove_all(dir, ec);
 }
@@ -957,20 +977,55 @@ TEST_CASE("crash capture (linux): a trapped floating-point division raises SIGFP
     const cd::Outcome o   = run_mode("fpe", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
 
+    if (!fp_division_traps())
+    {
+        // No division can trap on this FPU: the specimen reports it and nothing is recorded.
+        CHECK(o.verdict == cd::Verdict::Unexpected);
+        CHECK(o.exit_code == kExitNoFpTrap);
+        CHECK(count_crash_records(dir) == 0U);
+    }
+    else
+    {
+        if (cd::lane_promise().asan)
+        {
+            check_asan_chained(o, dir, "AddressSanitizer: FPE");
+        }
+        else
+        {
+            CHECK(o.verdict == cd::Verdict::Crashed);
+            CHECK(o.exit_code == kExitFpe);
+            CHECK(count_crash_records(dir) == 1U);
+        }
+        const RecordFields rf = parse_record(first_crash_record(dir));
+        CHECK(rf.ok);
+        CHECK(rf.signal == kSigFpe);
+        CHECK(rf.code == kFpeFltdiv);
+    }
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("crash capture (linux): a read past the end of a mapped file raises SIGBUS and is recorded",
+          "[core][diag][crash-capture]")
+{
+    const fs::path    dir = fresh_dir("bus");
+    const cd::Outcome o   = run_mode("bus", dir);
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
+
     if (cd::lane_promise().asan)
     {
-        check_asan_chained(o, dir, "AddressSanitizer: FPE");
+        check_asan_chained(o, dir, "AddressSanitizer: BUS");
     }
     else
     {
         CHECK(o.verdict == cd::Verdict::Crashed);
-        CHECK(o.exit_code == kExitFpe);
+        CHECK(o.exit_code == kExitBus);
         CHECK(count_crash_records(dir) == 1U);
     }
     const RecordFields rf = parse_record(first_crash_record(dir));
     CHECK(rf.ok);
-    CHECK(rf.signal == kSigFpe);
-    CHECK(rf.code == kFpeFltdiv);
+    CHECK(rf.signal == kSigBus);
+    CHECK(rf.code == kBusAdrerr);
     std::error_code ec;
     fs::remove_all(dir, ec);
 }

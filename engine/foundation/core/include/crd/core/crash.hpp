@@ -93,9 +93,9 @@ void set_crash_report_handler(CrashReportHandler handler, void* user) noexcept;
 //          handler dumps the aborting thread through the same path, with code kAbortExceptionCode; abort() then exits
 //          as it would have (exit 3, or a fail-fast when _CALL_REPORTFAULT is kept).
 //
-// Linux:   sigaction(SIGSEGV | SIGABRT | SIGFPE | SIGILL) on the alternate signal stack; writes one crash record,
-//          then restores the previous disposition; a kernel-raised fault re-executes under it and a sent signal is
-//          re-raised, so a default disposition lets the OS write its core.
+// Linux:   sigaction(SIGSEGV | SIGBUS | SIGABRT | SIGFPE | SIGILL | SIGTRAP) on the alternate signal stack; writes one
+//          crash record, then restores the previous disposition; a kernel-raised fault re-executes under it, and a
+//          sent signal or a trap (SIGTRAP) is re-raised, so a default disposition lets the OS write its core.
 //
 // Safe to call multiple times; a re-install preserves the originally saved previous handler so
 // uninstall() restores it rather than restoring our own filter.

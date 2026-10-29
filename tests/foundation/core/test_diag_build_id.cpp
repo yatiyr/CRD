@@ -230,7 +230,8 @@ std::size_t parse_elf_build_id(const char* path, unsigned char* out, std::size_t
 
 TEST_CASE("crash record (linux): carries the exe ELF build-id matching the on-disk binary", "[core][diag][build-id]")
 {
-    // A trap (SIGILL): no sanitizer takes it and UBSan does not stop it first, so every Linux lane writes the record.
+    // A trap (SIGILL on x64, SIGTRAP on AArch64): no sanitizer takes it and UBSan does not stop it first, so every
+    // Linux lane writes the record.
     const fs::path    dir = fresh_dir("bid");
     const cd::Outcome o   = run_mode("fastfail", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
