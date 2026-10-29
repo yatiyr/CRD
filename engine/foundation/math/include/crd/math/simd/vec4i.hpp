@@ -13,6 +13,8 @@ namespace crd::math::simd::inline CRD_MATH_LEVEL_NS
 namespace detail
 {
 // Two's-complement wrap of the scalar fallback, as the vector instructions wrap (signed overflow is undefined in C++).
+// NEON adds and subtracts unsigned lanes too: GCC's arm_neon.h spells vaddq_s32/vsubq_s32 as C++ `+`/`-` on the vector
+// type, which its UndefinedBehaviorSanitizer reports on overflow.
 [[nodiscard]] CRD_FORCEINLINE crd::i32 wrap_add(crd::i32 a, crd::i32 b) noexcept
 {
     return static_cast<crd::i32>(static_cast<crd::u32>(a) + static_cast<crd::u32>(b));
@@ -83,7 +85,7 @@ CRD_FORCEINLINE Vec4i operator+(Vec4i a, Vec4i b) noexcept
 #if CRD_SIMD_HAS_SSE2
     Vec4i r; r.v = _mm_add_epi32(a.v, b.v); return r;
 #elif CRD_SIMD_HAS_NEON
-    Vec4i r; r.v = vaddq_s32(a.v, b.v); return r;
+    Vec4i r; r.v = vreinterpretq_s32_u32(vaddq_u32(vreinterpretq_u32_s32(a.v), vreinterpretq_u32_s32(b.v))); return r;
 #else
     return Vec4i(detail::wrap_add(a.v[0], b.v[0]), detail::wrap_add(a.v[1], b.v[1]), detail::wrap_add(a.v[2], b.v[2]),
                  detail::wrap_add(a.v[3], b.v[3]));
@@ -95,7 +97,7 @@ CRD_FORCEINLINE Vec4i operator-(Vec4i a, Vec4i b) noexcept
 #if CRD_SIMD_HAS_SSE2
     Vec4i r; r.v = _mm_sub_epi32(a.v, b.v); return r;
 #elif CRD_SIMD_HAS_NEON
-    Vec4i r; r.v = vsubq_s32(a.v, b.v); return r;
+    Vec4i r; r.v = vreinterpretq_s32_u32(vsubq_u32(vreinterpretq_u32_s32(a.v), vreinterpretq_u32_s32(b.v))); return r;
 #else
     return Vec4i(detail::wrap_sub(a.v[0], b.v[0]), detail::wrap_sub(a.v[1], b.v[1]), detail::wrap_sub(a.v[2], b.v[2]),
                  detail::wrap_sub(a.v[3], b.v[3]));
