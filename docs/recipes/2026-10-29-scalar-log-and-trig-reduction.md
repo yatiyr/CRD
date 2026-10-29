@@ -14,6 +14,7 @@
 | Cody-Waite bound | \|k\| ≤ 2^20, k = round(x·2/π) | \|x\| ≲ 1.647e6 | k times each 33-bit part of π/2 is exact |
 | `kTwoOverPiBits` | 2/π in 37 32-bit words | 1,184 bits | the largest double reads up to word 36 |
 | Payne–Hanek window | 224 bits of 2/π per exponent | 7 words | dropped bits add < 2^−138; the fraction keeps ≥ 97 bits |
+| `kE`, `kQ`, `kSin`, `kCos` | exp, expm1, sin, cos cores | degree 11, 12, 13 and 14 in r | relative error 0.034, 0.073, 0.034, 0.0005 of 2^−53 ([generator](../../tests/foundation/math/gen_minimax_coeffs.py)) |
 | Accuracy | against mpmath | log, log2, log10 ≤ 0.52 ulp; sin, cos ≤ 1; tan ≤ 2 | identical bits on every compiler and level |
 
 ## Why the obvious reductions fail
@@ -43,6 +44,13 @@ m (53 bits) times the next 224 bits of 2/π gives k mod 4 and the fraction in in
 case over all doubles (0x1.6ac5b262ca1ffp+849, |r| ≈ 2^−61; J.-M. Muller, *Elementary Functions*, 3rd ed., the
 range-reduction chapter) still keeps 97 significant bits. The fraction becomes a double-double and is multiplied by π/2 as one.
 
+**Polynomials.** Each core is the best relative-error polynomial of its exact evaluation form (exp: 1 + r + r²·P;
+expm1: x·Q; sin: r + r³·S(r²); cos: 1 − r²/2 + r⁴·C(r²)) over the domain its reduction reaches, found by the Remez
+exchange (Remez 1934; Cheney, *Introduction to Approximation Theory*, ch. 3). Rounding the coefficients to doubles
+one by one, lowest degree first, and refitting the higher ones after each, recovers most of what a plain rounding
+loses (the idea of Brisebarre & Chevillard, "Efficient polynomial L∞-approximations", ARITH 2007, without their
+lattice step). The relative error is 0/0 at r = 0 for sin and cos, so their fit starts at 2^−40.
+
 ## Assembly
 
 1. log: read e and m, halve m above √2; u, ul, t, tl; s = t²; R(s) by Horner (seven fmas); lo =
@@ -62,6 +70,8 @@ range-reduction chapter) still keeps 97 significant bits. The fraction becomes a
 - The grids must sample the hard inputs: the seams at e = 0, ±1, ±1000, the bands, subnormals, and for trig the
   doubles nearest k·π/2. A uniform log-spaced grid missed a 7 ulp error.
 - Space the grids through mpmath, not numpy's exp, whose last bits differ by platform.
+- A fit that only looks minimax is not: the earlier cores' approximation error alone was 0.43 to 0.59 of 2^−53
+  (measure the rounded polynomial against mpmath; never trust the fit's own level).
 - The SSE2 fma emulation is exact only inside its proven region; outside, a lane calls `libm::fma`, which still rounds
   once. Negate with a sign-bit xor, never `0 − t` (−0).
 

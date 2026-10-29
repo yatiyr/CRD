@@ -18,8 +18,8 @@ job started (0 jobs). Nothing was cancelled. DIAG.11c and DIAG.12 stay Needs CI.
 The exp, expm1, sin and cos coefficients cited generators that were never tracked (`gen_exp_coeffs.py`,
 `gen_expm1.py`, `build/_trig_gen.py`). Measured against mpmath, the committed polynomials were far from minimax:
 their approximation error alone was 0.59 (exp), 0.51 (expm1), 0.48 (sin) and 0.43 (cos) units of
-2^−53, so the ≤1 ulp claims rested on the final rounding's luck. cos's top two terms had the opposite signs of
-the series and a thousandfold magnitude.
+2^−53, so the ≤1 ulp claims rested on the final rounding's luck. cos's r^14 term had the series' magnitude with its
+sign reversed, and its r^16 term was 200 times the series' with the sign reversed too.
 
 ## What landed
 
@@ -27,8 +27,8 @@ the series and a thousandfold magnitude.
   relative error of each evaluation's exact form over the domain its reduction reaches, rounding lowest degree first
   with a refit of the higher terms after each rounding. Errors of the rounded polynomials: exp 0.034, expm1 0.073,
   sin 0.034, cos 0.0005 (units of 2^−53), checked again by an independent evaluation.
-- sin and cos drop one term each (now r^13 and r^14, fdlibm's shape): five terms measured 45 and 0.83, seven gave
-  nothing a double can hold. exp keeps degree 11 and expm1 its eleven Q terms. The SIMD exp twins share the constants,
+- sin and cos drop one term each (now r^13 and r^14, fdlibm's shape): five terms measured 45 and 0.83 of 2^−53, seven
+  0.0008 and 0.000015. exp keeps degree 11 and expm1 its eleven Q terms. The SIMD exp twins share the constants,
   so the forced-level arms still compare bit for bit.
 - The golden checksums move (`0x9179c815fca024a6`, Payne–Hanek range `0x6caf0b0834f6ea14`, from MSVC win-debug,
   stable over two runs); every ulp gate passes unchanged.
@@ -42,7 +42,18 @@ repository validators. This host misexecuted 5 of 6 long Python runs (segfaults 
 on Windows CPython 3.14 and 3.11 and on WSL's 3.12); every complete run printed the same coefficients (four for
 exp and expm1, six for sin and cos).
 
+A [recipe](../recipes/2026-10-29-scalar-log-and-trig-reduction.md) section teaches the fit.
+
 ## Left
 
+- **The jobs frame arena.** About 30 library sites call `jobs::frame_reset()` (hesap-direct's supernodal and
+  multifrontal factorisations, the preconditioners, the parallel sparse operators, tensor reduce and permute), which
+  jobs.hpp:445-447 reserves for a frame boundary: it resets every thread's cursor unsynchronised, so a reset while a
+  `parallel_reduce` waits lets the next allocation overwrite its partials. `FrameArena::alloc` checks exhaustion only
+  by assertion, so a release build returns a pointer past the arena. `run()` copies the JobDecls and never yields,
+  so `parallel_for` can restore its mark right after `run()`; `parallel_reduce`'s partials cross a wait, after which
+  a fiber may resume on another thread (worker_pool.cpp:39), which is also the hazard to check in blas3.cpp's
+  mark/restore around `wait()`. The library resets then go, exhaustion becomes fatal, and a guard keeps resets at
+  frame owners; the permute stage's `frame_try_alloc` belongs there.
 - pow is 2.4 ulp at |y·log2 x| ≈ 1000 (from the log note); its ≤1 ulp needs log2 to ~2^−68 and an exp2 that takes
   a pair.
