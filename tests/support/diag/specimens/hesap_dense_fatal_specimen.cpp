@@ -134,7 +134,7 @@ using crd_diag_fatal::RefusingAllocator;
     else
     {
         dense::detail::syrk_lower_minus<crd::f64, dense::Layout::RowMajor>(a.cview(), c.view(), &scratch,
-                                                                           /*allow_parallel=*/false);
+                                                                           dense::detail::SyrkPick{.workers = 1});
     }
     crd::jobs::shutdown();
     return true;

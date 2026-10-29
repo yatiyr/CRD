@@ -3,6 +3,7 @@
 #include <crd/core/assert.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/blas3.hpp>
+#include <crd/hesap/dense/detail/factor_arms.hpp>
 #include <crd/hesap/dense/real_type.hpp>
 #include <crd/jobs/jobs.hpp>
 
@@ -12,11 +13,6 @@ namespace crd::hesap::dense
 {
 namespace
 {
-// Block size for the right-looking blocked LU. 64 is the LAPACK default
-// for double precision on modern AVX2 hardware; matches our gemm_parallel
-// Mc heuristic for trailing updates of typical matrix sizes.
-constexpr crd::usize kBlockSize = 64;
-
 // Pivot magnitude: |x| as the real type. Complex modulus for complex T (partial
 // pivoting selects the largest-modulus entry); real path bit-identical (if constexpr).
 template <typename T>
@@ -130,17 +126,12 @@ crd::usize panel_factor(T* lu_data, crd::usize n, crd::usize ld, crd::usize k, c
     return 0;
 }
 
-// Inner trsm: solve L11 * U12 = A12, in-place at A[k:k+nb, k+nb:n].
+// Inner trsm: solve L11 * U12 = A12, in-place at A[k:k+nb, j0:j1) (columns of U12 are independent).
 // L11 is the unit-diagonal lower triangular block at A[k:k+nb, k:k+nb].
-template <typename T, Layout L>
-void inner_trsm_lower_unit(T* lu_data, crd::usize ld, crd::usize k, crd::usize nb, crd::usize n)
+template <typename T>
+void trsm_columns(T* lu_data, crd::usize ld, crd::usize k, crd::usize nb, crd::usize j0, crd::usize j1) noexcept
 {
-    if (k + nb >= n)
-    {
-        return;
-    }
-    // Walk each column of U12 independently.
-    for (crd::usize j = k + nb; j < n; ++j)
+    for (crd::usize j = j0; j < j1; ++j)
     {
         // Forward substitution within the L11 block.
         for (crd::usize i = k; i < k + nb; ++i)
@@ -156,12 +147,52 @@ void inner_trsm_lower_unit(T* lu_data, crd::usize ld, crd::usize k, crd::usize n
     }
 }
 
+// U12 = L11^-1 A12 at columns [k + nb, n): on the calling thread, or whole columns across nw jobs from columns nb of
+// trsm_min on (each job solves disjoint columns: the serial solve's bits).
+template <typename T>
+void inner_trsm_lower_unit(T* lu_data, crd::usize ld, crd::usize k, crd::usize nb, crd::usize n, crd::u32 nw,
+                           crd::usize trsm_min)
+{
+    const crd::usize first = k + nb;
+    if (first >= n)
+    {
+        return;
+    }
+    const crd::usize cols = n - first;
+    if (nw <= 1 || cols * nb < trsm_min)
+    {
+        trsm_columns<T>(lu_data, ld, k, nb, first, n);
+        return;
+    }
+    struct State
+    {
+        T* lu_data;
+        crd::usize ld;
+        crd::usize k;
+        crd::usize nb;
+        crd::usize first;
+    };
+    State st{lu_data, ld, k, nb, first};
+    State* sp = &st;
+    auto* counter = crd::jobs::parallel_for(
+        static_cast<crd::u32>(cols), nw, [sp](crd::u32 begin, crd::u32 end)
+        { trsm_columns<T>(sp->lu_data, sp->ld, sp->k, sp->nb, sp->first + begin, sp->first + end); });
+    crd::jobs::wait(counter);
+}
+
 } // namespace
 
 template <typename T, Layout L>
 void factor_lu(LU<T, L>& lu, crd::memory::IAllocator* scratch)
 {
+    detail::factor_lu_arm<T, L>(detail::LuPick{}, lu, scratch);
+}
+
+template <typename T, Layout L>
+void detail::factor_lu_arm(const LuPick& pick, LU<T, L>& lu, crd::memory::IAllocator* scratch)
+{
     static_assert(L == Layout::RowMajor, "factor_lu currently supports RowMajor only");
+    CRD_ASSERT_MSG(pick.block != 0, "factor_lu_arm: the block is at least one column");
 
     Matrix<T, L>& packed = lu.packed();
     Permutation& perm = lu.permutation();
@@ -183,12 +214,12 @@ void factor_lu(LU<T, L>& lu, crd::memory::IAllocator* scratch)
 
     crd::memory::IAllocator* alloc = (scratch != nullptr) ? scratch : lu.allocator();
 
-    // Auto-pick worker count for trailing-update gemm.
-    const crd::u32 num_workers = crd::jobs::num_workers();
+    const crd::u32 num_workers = pick.workers != 0 ? pick.workers : crd::jobs::num_workers();
+    const crd::usize block = pick.block;
 
-    for (crd::usize k = 0; k < n; k += kBlockSize)
+    for (crd::usize k = 0; k < n; k += block)
     {
-        const crd::usize nb = (k + kBlockSize <= n) ? kBlockSize : (n - k);
+        const crd::usize nb = (k + block <= n) ? block : (n - k);
 
         // Step 1: panel factor (unblocked LU + row pivoting; full-row swaps).
         const crd::usize info = panel_factor<T, L>(data, n, ld, k, nb, pivots);
@@ -199,9 +230,9 @@ void factor_lu(LU<T, L>& lu, crd::memory::IAllocator* scratch)
         }
 
         // Step 2: inner trsm L11 \ A12 -> U12 (in-place).
-        inner_trsm_lower_unit<T, L>(data, ld, k, nb, n);
+        inner_trsm_lower_unit<T>(data, ld, k, nb, n, num_workers, pick.trsm_min);
 
-        // Step 3: trailing update A22 -= L21 * U12 via gemm_parallel.
+        // Step 3: trailing update A22 -= L21 * U12 via gemm_parallel (serial below trailing_min).
         if (k + nb < n)
         {
             const crd::usize tr_rows = n - k - nb;
@@ -212,8 +243,8 @@ void factor_lu(LU<T, L>& lu, crd::memory::IAllocator* scratch)
             MatrixView<const T, L> a21{a21_ptr, tr_rows, nb, ld};
             MatrixView<const T, L> u12{u12_ptr, nb, tr_cols, ld};
             MatrixView<T, L> a22{a22_ptr, tr_rows, tr_cols, ld};
-            gemm_parallel<T, L>(num_workers, T{-1}, a21, u12, T{1}, a22, Trans::None, Trans::None,
-                                alloc);
+            const crd::u32 jobs = tr_rows * tr_cols * nb < pick.trailing_min ? 1U : num_workers;
+            gemm_parallel<T, L>(jobs, T{-1}, a21, u12, T{1}, a22, Trans::None, Trans::None, alloc);
         }
     }
 }
@@ -332,6 +363,14 @@ template void factor_lu<double, Layout::RowMajor>(LU<double, Layout::RowMajor>&,
                                                    crd::memory::IAllocator*);
 template void factor_lu<C32, Layout::RowMajor>(LU<C32, Layout::RowMajor>&, crd::memory::IAllocator*);
 template void factor_lu<C64, Layout::RowMajor>(LU<C64, Layout::RowMajor>&, crd::memory::IAllocator*);
+template void detail::factor_lu_arm<float, Layout::RowMajor>(const detail::LuPick&, LU<float, Layout::RowMajor>&,
+                                                             crd::memory::IAllocator*);
+template void detail::factor_lu_arm<double, Layout::RowMajor>(const detail::LuPick&, LU<double, Layout::RowMajor>&,
+                                                              crd::memory::IAllocator*);
+template void detail::factor_lu_arm<C32, Layout::RowMajor>(const detail::LuPick&, LU<C32, Layout::RowMajor>&,
+                                                           crd::memory::IAllocator*);
+template void detail::factor_lu_arm<C64, Layout::RowMajor>(const detail::LuPick&, LU<C64, Layout::RowMajor>&,
+                                                           crd::memory::IAllocator*);
 template void solve_lu<float, Layout::RowMajor>(const LU<float, Layout::RowMajor>&,
                                                  crd::containers::Span<float>);
 template void solve_lu<double, Layout::RowMajor>(const LU<double, Layout::RowMajor>&,

@@ -84,14 +84,21 @@ inline void syrk_packed_inner_lower(const GemmKernels<T>& k, crd::usize ic, crd:
                          .lower = true});
 }
 
-// `allow_parallel` (default true): self-parallelize over col-panels when large. Pass FALSE when calling from a hot
-// per-block loop that already manages its own parallelism (e.g. the supernodal cmod's per-descendant diagonal
-// update — one self-fork per call there would be 1000s of fork/joins). `a` may be RowMajor OR ColMajor: pack_a /
-// pack_b read it through the layout-aware fast paths; the C output is always indexed row-major (ldc, i≥j) so the
-// caller reads it back the same way regardless of a's layout.
+// syrk_lower_minus's crd-jobs levers (the folded HESAP-JOBS-RETUNE): every choice gives the one-job sweep's bits.
+struct SyrkPick
+{
+    crd::usize parallel_mmk = 256ULL * 1024ULL; // the column panels split across the jobs above this m m k
+    crd::u32 workers = 0;                       // the jobs; 0: crd::jobs::num_workers(), 1: the calling thread
+};
+
+// `pick` (default: split over col-panels when large). Pass SyrkPick{.workers = 1} when calling from a hot per-block
+// loop that already manages its own parallelism (e.g. the supernodal cmod's per-descendant diagonal update — one
+// self-fork per call there would be 1000s of fork/joins). `a` may be RowMajor OR ColMajor: pack_a / pack_b read it
+// through the layout-aware fast paths; the C output is always indexed row-major (ldc, i≥j) so the caller reads it
+// back the same way regardless of a's layout.
 template <typename T, Layout L>
 inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c, crd::memory::IAllocator* scratch,
-                             bool allow_parallel = true, bool col_indexed_out = false)
+                             SyrkPick pick = {}, bool col_indexed_out = false)
 {
     const crd::usize m = a.rows();
     const crd::usize k = a.cols();
@@ -119,8 +126,8 @@ inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c, crd::
 
     T* c_data = c.data();
     const crd::usize ldc = c.ld();
-    const crd::u32 nw = crd::jobs::num_workers();
-    const bool parallel = allow_parallel && (nw > 1) && (m * m * k > crd::usize{256} * 1024);
+    const crd::u32 nw = pick.workers != 0 ? pick.workers : crd::jobs::num_workers();
+    const bool parallel = nw > 1 && m * m * k > pick.parallel_mmk;
 
     for (crd::usize jc = 0; jc < m; jc += nc_block)
     {

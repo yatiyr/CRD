@@ -4,6 +4,7 @@
 #include <crd/core/assert.hpp>
 #include <crd/hesap/dense/blas3.hpp>
 #include <crd/hesap/dense/dense_dispatch.hpp>
+#include <crd/hesap/dense/detail/factor_arms.hpp>
 #include <crd/hesap/dense/detail/syrk_microkernel.hpp>
 #include <crd/jobs/jobs.hpp>
 
@@ -14,10 +15,6 @@ namespace crd::hesap::dense
 {
 namespace
 {
-// LAPACK xPOTRF default for double precision on AVX2. Matches the LU
-// block size — both ops have the same trailing-update structure.
-constexpr crd::usize kBlockSize = 64;
-
 // The unblocked left-looking Cholesky of the n by n block at data (row stride ld) on the level's kernel: each column
 // takes its dots with the factored prefix. It beats the blocked path for small n (no fork and join, no thin-depth
 // GEMM). Returns 0, or k + 1 when column k is not positive definite.
@@ -34,9 +31,11 @@ void trsm_rows(T* lu_data, crd::usize ld, crd::usize k, crd::usize nb, crd::usiz
     dense_kernels_of<T>().cholesky_trsm(lu_data, ld, k, nb, first, end);
 }
 
-// In-place trsm: L21 = A21 · L11^{-T}. Rows are independent → parallelizable.
-template <typename T, Layout L>
-void inner_trsm_right(T* lu_data, crd::usize n, crd::usize ld, crd::usize k, crd::usize nb)
+// In-place trsm: L21 = A21 · L11^{-T}. Rows are independent: whole rows across nw jobs from rows nb of trsm_min on
+// (the default 64K: fork/join overhead dominates at small n; measured: regresses N=256, helps N=1024).
+template <typename T>
+void inner_trsm_right(T* lu_data, crd::usize n, crd::usize ld, crd::usize k, crd::usize nb, crd::u32 nw,
+                      crd::usize trsm_min)
 {
     if (k + nb >= n)
     {
@@ -44,10 +43,7 @@ void inner_trsm_right(T* lu_data, crd::usize n, crd::usize ld, crd::usize k, crd
     }
     const crd::usize first = k + nb;
     const crd::usize num_rows = n - first;
-    const crd::u32 nw = crd::jobs::num_workers();
-    // Parallelize only for large trailing blocks — fork/join overhead
-    // dominates at small n (measured: regresses N=256, helps N=1024).
-    if (nw > 1 && num_rows * nb >= crd::usize{64} * 1024)
+    if (nw > 1 && num_rows * nb >= trsm_min)
     {
         struct State
         {
@@ -75,7 +71,14 @@ void inner_trsm_right(T* lu_data, crd::usize n, crd::usize ld, crd::usize k, crd
 template <typename T, Layout L>
 void factor_cholesky(Cholesky<T, L>& chol, crd::memory::IAllocator* scratch)
 {
+    detail::factor_cholesky_arm<T, L>(detail::CholeskyPick{}, chol, scratch);
+}
+
+template <typename T, Layout L>
+void detail::factor_cholesky_arm(const CholeskyPick& pick, Cholesky<T, L>& chol, crd::memory::IAllocator* scratch)
+{
     static_assert(L == Layout::RowMajor, "factor_cholesky currently supports RowMajor only");
+    CRD_ASSERT_MSG(pick.block != 0, "factor_cholesky_arm: the block is at least one column");
 
     Matrix<T, L>& packed = chol.packed();
     const crd::usize n = packed.rows();
@@ -96,7 +99,7 @@ void factor_cholesky(Cholesky<T, L>& chol, crd::memory::IAllocator* scratch)
     // diagonal factor + syrk packing) isn't amortized until the trailing
     // update dominates (n > 256 on the i9-14900K). Measured: unblocked wins
     // ≤256, blocked-syrk wins ≥512.
-    if (n <= 256)
+    if (n <= pick.unblocked_max)
     {
         const crd::usize info = unblocked_cholesky<T>(data, n, ld);
         chol.set_info(info);
@@ -112,9 +115,11 @@ void factor_cholesky(Cholesky<T, L>& chol, crd::memory::IAllocator* scratch)
     //   3. A22 -= L21·L21ᵀ via `syrk_lower_minus` (register-tiled, lower
     //      triangle only = half a gemm's FLOPs; serial at small n, parallel
     //      at large n).
-    for (crd::usize k = 0; k < n; k += kBlockSize)
+    const crd::u32 nw = pick.workers != 0 ? pick.workers : crd::jobs::num_workers();
+    const SyrkPick syrk{.parallel_mmk = pick.syrk_mmk, .workers = nw};
+    for (crd::usize k = 0; k < n; k += pick.block)
     {
-        const crd::usize nb = (k + kBlockSize <= n) ? kBlockSize : (n - k);
+        const crd::usize nb = (k + pick.block <= n) ? pick.block : (n - k);
 
         // Step 1: factor diagonal block L11 via SIMD unblocked Cholesky on
         // the nb×nb sub-block at offset (k, k).
@@ -126,7 +131,7 @@ void factor_cholesky(Cholesky<T, L>& chol, crd::memory::IAllocator* scratch)
         }
 
         // Step 2: solve L21 · L11ᵀ = A21 for the below-diagonal block.
-        inner_trsm_right<T, L>(data, n, ld, k, nb);
+        inner_trsm_right<T>(data, n, ld, k, nb, nw, pick.trsm_min);
 
         // Step 3: syrk trailing update A22 -= L21 · L21ᵀ (lower triangle).
         if (k + nb < n)
@@ -134,7 +139,7 @@ void factor_cholesky(Cholesky<T, L>& chol, crd::memory::IAllocator* scratch)
             const crd::usize tr_dim = n - k - nb;
             MatrixView<const T, L> l21{data + (k + nb) * ld + k, tr_dim, nb, ld};
             MatrixView<T, L> a22{data + (k + nb) * ld + (k + nb), tr_dim, tr_dim, ld};
-            detail::syrk_lower_minus<T, L>(l21, a22, alloc);
+            detail::syrk_lower_minus<T, L>(l21, a22, alloc, syrk);
         }
     }
 }
@@ -222,6 +227,12 @@ template void factor_cholesky<float, Layout::RowMajor>(Cholesky<float, Layout::R
                                                        crd::memory::IAllocator*);
 template void factor_cholesky<double, Layout::RowMajor>(Cholesky<double, Layout::RowMajor>&,
                                                         crd::memory::IAllocator*);
+template void detail::factor_cholesky_arm<float, Layout::RowMajor>(const detail::CholeskyPick&,
+                                                                   Cholesky<float, Layout::RowMajor>&,
+                                                                   crd::memory::IAllocator*);
+template void detail::factor_cholesky_arm<double, Layout::RowMajor>(const detail::CholeskyPick&,
+                                                                    Cholesky<double, Layout::RowMajor>&,
+                                                                    crd::memory::IAllocator*);
 template void solve_cholesky<float, Layout::RowMajor>(const Cholesky<float, Layout::RowMajor>&,
                                                       crd::containers::Span<float>);
 template void solve_cholesky<double, Layout::RowMajor>(const Cholesky<double, Layout::RowMajor>&,

@@ -563,7 +563,8 @@ template <typename T> void check_paths()
             // syrk: C -= A A^T on the lower triangle, group by group.
             c = c0;
             dn::detail::syrk_lower_minus<T, dn::Layout::RowMajor>(
-                RowView(a.data(), m, k, k), dn::MatrixView<T, dn::Layout::RowMajor>(c.data(), m, m, m), &alloc, false);
+                RowView(a.data(), m, k, k), dn::MatrixView<T, dn::Layout::RowMajor>(c.data(), m, m, m), &alloc,
+                dn::detail::SyrkPick{.workers = 1});
             ++runs;
             for (usize i = 0; i < m; ++i)
             {

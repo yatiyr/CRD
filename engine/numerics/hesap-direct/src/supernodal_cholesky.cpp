@@ -1034,8 +1034,8 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
 #endif
                         // scratch=nullptr ⇒ thread-safe default_allocator (tree-parallel workers call this
                         // concurrently — m_alloc is NOT concurrent-safe; matches the cmod gemm's nullptr).
-                        dense::detail::syrk_lower_minus<T, dense::Layout::ColMajor>(am1c, cdg, nullptr,
-                                                                                    /*allow_parallel=*/false);
+                        dense::detail::syrk_lower_minus<T, dense::Layout::ColMajor>(
+                            am1c, cdg, nullptr, dense::detail::SyrkPick{.workers = 1});
 #ifdef CRD_HESAP_CHOL_PROFILE
                         const auto pf_s1 = ProfClock::now();
                         {
@@ -1684,7 +1684,7 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
                             const dense::MatrixView<const T, dense::Layout::ColMajor> avd(a_base, ndiag, obw, nr);
                             const dense::MatrixView<T, dense::Layout::ColMajor> cvd(c_base, ndiag, ndiag, nr);
                             dense::detail::syrk_lower_minus<T, dense::Layout::ColMajor>(
-                                avd, cvd, nullptr, /*allow_parallel=*/false, /*col_indexed_out=*/true);
+                                avd, cvd, nullptr, dense::detail::SyrkPick{.workers = 1}, /*col_indexed_out=*/true);
 #ifdef CRD_HESAP_CHOL_PROFILE
                             g_cholprof.ctrail_syrk_ns += prof_ns(pf_ct1, ProfClock::now());
 #endif

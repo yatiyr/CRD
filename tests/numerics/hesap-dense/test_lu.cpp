@@ -2,14 +2,19 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <crd/containers/array.hpp>
+#include <crd/hesap/complex.hpp>
+#include <crd/hesap/dense/detail/factor_arms.hpp>
 #include <crd/hesap/dense/lu.hpp>
 #include <crd/hesap/dense/matrix.hpp>
+#include <crd/hesap/dense/real_type.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include "hesap_jobs_fixture.hpp"
 
 #include <cmath>
+#include <cstring>
+#include <limits>
 
 using crd::hesap::dense::factor_lu;
 using crd::hesap::dense::Layout;
@@ -392,4 +397,207 @@ TEST_CASE("LU: allocator propagation: TLSF only, no malloc",
     // for v0e-close stretch).
     factor_lu(lu, a);
     REQUIRE(lu.info() == 0U);
+}
+
+namespace
+{
+using crd::hesap::dense::detail::LuPick;
+
+template <typename T> T lu_value(double re, double im)
+{
+    if constexpr (crd::hesap::dense::is_complex_v<T>)
+    {
+        using R = crd::hesap::dense::RealType<T>;
+        return T{static_cast<R>(re), static_cast<R>(im)};
+    }
+    else
+    {
+        (void)im;
+        return static_cast<T>(re);
+    }
+}
+
+template <typename T> double lu_mag(T x)
+{
+    if constexpr (crd::hesap::dense::is_complex_v<T>)
+    {
+        return std::hypot(static_cast<double>(x.re), static_cast<double>(x.im));
+    }
+    else
+    {
+        return std::fabs(static_cast<double>(x));
+    }
+}
+
+template <typename T> double lu_eps()
+{
+    return static_cast<double>(std::numeric_limits<crd::hesap::dense::RealType<T>>::epsilon());
+}
+
+template <typename T> T lu_subnormal()
+{
+    return lu_value<T>(static_cast<double>(std::numeric_limits<crd::hesap::dense::RealType<T>>::min()) / 4.0, 0.0);
+}
+
+// A's copy factored through factor_lu_arm(pick).
+template <typename T>
+void lu_with(const LuPick& pick, const Matrix<T, Layout::RowMajor>& a, LU<T, Layout::RowMajor>& lu,
+             crd::memory::IAllocator* alloc)
+{
+    const crd::usize n = a.rows();
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            lu.packed().at(i, j) = a.at(i, j);
+        }
+    }
+    crd::hesap::dense::detail::factor_lu_arm<T, Layout::RowMajor>(pick, lu, alloc);
+}
+
+template <typename T> bool lu_same(const LU<T, Layout::RowMajor>& x, const LU<T, Layout::RowMajor>& y)
+{
+    const crd::usize n = x.n();
+    if (x.info() != y.info() || std::memcmp(x.packed().data(), y.packed().data(), n * x.packed().ld() * sizeof(T)) != 0)
+    {
+        return false;
+    }
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        if (x.permutation().pivot_at(i) != y.permutation().pivot_at(i))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The backward error of a factor: |PA - LU| <= 4 n eps (|L| |U|) elementwise (Higham 9.3, with room for the check's
+// own sums and the complex product).
+template <typename T>
+bool lu_backward_stable(const LU<T, Layout::RowMajor>& lu, const Matrix<T, Layout::RowMajor>& a,
+                        crd::memory::IAllocator* alloc)
+{
+    const crd::usize n = lu.n();
+    crd::containers::Array<crd::usize> row(alloc);
+    row.resize(n);
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        row[i] = i;
+    }
+    for (crd::usize k = 0; k < n; ++k)
+    {
+        const crd::usize r = lu.permutation().pivot_at(k);
+        const crd::usize t = row[k];
+        row[k] = row[r];
+        row[r] = t;
+    }
+    const double tol = 4.0 * static_cast<double>(n) * lu_eps<T>();
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            T sum{};
+            double bound = 0.0;
+            for (crd::usize p = 0; p <= (i < j ? i : j); ++p)
+            {
+                const T l = p == i ? lu_value<T>(1.0, 0.0) : lu.packed().at(i, p);
+                sum += l * lu.packed().at(p, j);
+                bound += lu_mag(l) * lu_mag(lu.packed().at(p, j));
+            }
+            if (lu_mag(a.at(row[i], j) - sum) > tol * bound + std::numeric_limits<double>::min())
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+template <typename T> void check_lu_levers()
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
+    const LuPick bit_picks[] = {
+        LuPick{},
+        LuPick{.trailing_min = ~crd::usize{0}},
+        LuPick{.trsm_min = 0},
+        LuPick{.trailing_min = 256U * 1024U, .trsm_min = 0},
+    };
+    const crd::u32 jobs[] = {4U, 8U, 16U, 32U};
+    // Shapes: one column, one block less one, one block, past blocks and the n of a 100-wide block; inputs: random,
+    // IEEE specials (NaN, infinity, -0, a subnormal) and a zero column at 70 (info 71 at every pick).
+    const crd::usize sizes[] = {1U, 63U, 64U, 100U, 300U};
+    for (const crd::usize n : sizes)
+    {
+        for (int input = 0; input < 3; ++input)
+        {
+            if ((input == 1 && n < 64) || (input == 2 && n < 100))
+            {
+                continue;
+            }
+            Matrix<T, Layout::RowMajor> a(&alloc, n, n);
+            crd::u32 s = 7U + static_cast<crd::u32>(n);
+            for (crd::usize i = 0; i < n; ++i)
+            {
+                for (crd::usize j = 0; j < n; ++j)
+                {
+                    s = s * 1664525U + 1013904223U;
+                    const double re = static_cast<double>(s >> 8) / 16777216.0 - 0.5;
+                    a.at(i, j) = lu_value<T>(re, 0.25 - re);
+                }
+            }
+            if (input == 1)
+            {
+                a.at(5, 3) = lu_value<T>(std::numeric_limits<double>::quiet_NaN(), 0.0);
+                a.at(40, 50) = lu_value<T>(std::numeric_limits<double>::infinity(), -0.0);
+                a.at(60, 1) = lu_value<T>(-0.0, -0.0);
+                a.at(10, 62) = lu_subnormal<T>();
+            }
+            if (input == 2)
+            {
+                for (crd::usize i = 0; i < n; ++i)
+                {
+                    a.at(i, 70) = lu_value<T>(0.0, 0.0);
+                }
+            }
+            for (const crd::usize block : {crd::usize{64}, crd::usize{16}, crd::usize{100}})
+            {
+                LU<T, Layout::RowMajor> ref(&alloc, n);
+                lu_with(LuPick{.block = block, .workers = 1}, a, ref, &alloc);
+                if (input == 0)
+                {
+                    INFO("n " << n << " block " << block);
+                    CHECK(ref.info() == 0U);
+                    CHECK(lu_backward_stable(ref, a, &alloc));
+                }
+                if (input == 2)
+                {
+                    CHECK(ref.info() == 71U);
+                }
+                for (const LuPick& base : bit_picks)
+                {
+                    for (const crd::u32 w : jobs)
+                    {
+                        LuPick pick = base;
+                        pick.block = block;
+                        pick.workers = w;
+                        LU<T, Layout::RowMajor> lu(&alloc, n);
+                        lu_with(pick, a, lu, &alloc);
+                        INFO("n " << n << " input " << input << " block " << block << " jobs " << w);
+                        CHECK(lu_same(lu, ref));
+                    }
+                }
+            }
+        }
+    }
+}
+} // namespace
+
+TEST_CASE("factor_lu_arm: every jobs lever at 4 to 32 jobs gives the one-job factor's bits",
+          "[hesap][lu][parallel][jobs]")
+{
+    (void)crd_hesap_dense_tests::hesap_jobs_listener();
+    check_lu_levers<float>();
+    check_lu_levers<double>();
+    check_lu_levers<crd::hesap::Complex<double>>();
 }
