@@ -1454,8 +1454,9 @@ forward unchanged.
   inner GCR uses serial `dotc` for the same reason (v4k-b).
 - **D(iter)-2 — operator is size-adaptive + arena-clean.** The spmv goes serial-SELL below a
   sub-cache threshold / parallel-SELL above it (over-parallelizing tiny matrices LOSES to the
-  dispatch overhead), and calls `frame_reset()` after each parallel apply (the per-thread frame
-  arena leaks `JobDecl`s across a Krylov loop otherwise). `feedback_krylov_operator_size_adaptive_and_frame_reset`.
+  dispatch overhead). It no longer calls `frame_reset()` after a parallel apply (amended 2026-10-29): a
+  reset wiped every thread's arena under the caller, and `parallel_for` now reclaims its own `JobDecl`s,
+  so a Krylov loop never grows the arena ([session](../sessions/2026-10-29-jobs-frame-arena-ownership.md)).
 - **D(iter)-3 — GMRES/FGMRES** = fixed restart `m`, Arnoldi + Givens least-squares; happy/lucky
   breakdown handled deterministically (no RNG, no convergence-dependent branch order).
 - **D(iter)-4 — short-recurrence breakdown guards.** BiCGSTAB/QMR/IDR(s) guard ρ/ω near-zero and

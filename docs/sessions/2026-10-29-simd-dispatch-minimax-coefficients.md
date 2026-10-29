@@ -46,14 +46,6 @@ A [recipe](../recipes/2026-10-29-scalar-log-and-trig-reduction.md) section teach
 
 ## Left
 
-- **The jobs frame arena.** About 30 library sites call `jobs::frame_reset()` (hesap-direct's supernodal and
-  multifrontal factorisations, the preconditioners, the parallel sparse operators, tensor reduce and permute), which
-  jobs.hpp:445-447 reserves for a frame boundary: it resets every thread's cursor unsynchronised, so a reset while a
-  `parallel_reduce` waits lets the next allocation overwrite its partials. `FrameArena::alloc` checks exhaustion only
-  by assertion, so a release build returns a pointer past the arena. `run()` copies the JobDecls and never yields,
-  so `parallel_for` can restore its mark right after `run()`; `parallel_reduce`'s partials cross a wait, after which
-  a fiber may resume on another thread (worker_pool.cpp:39), which is also the hazard to check in blas3.cpp's
-  mark/restore around `wait()`. The library resets then go, exhaustion becomes fatal, and a guard keeps resets at
-  frame owners; the permute stage's `frame_try_alloc` belongs there.
+- **The jobs frame arena**: landed, [frame arena ownership](2026-10-29-jobs-frame-arena-ownership.md).
 - pow is 2.4 ulp at |y·log2 x| ≈ 1000 (from the log note); its ≤1 ulp needs log2 to ~2^−68 and an exp2 that takes
   a pair.

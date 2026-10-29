@@ -930,7 +930,7 @@ Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-host-record-comman
   replayed outcomes (the recorded fault now located in the record's own program, `HostReplay::recorded_fault`).
 - The host provider takes its parallel ranges' job arrays from the calling thread's frame arena, so it must run on a
   thread the pool enrolled (the thread that called `jobs::init`, or a worker). ceridc's `diag` and `mcp` verbs own a
-  4-thread pool for their length and the MCP loop resets the arenas after each request; ceridc registers the task and
+  4-thread pool for their length; ceridc registers the task and
   async dialects with the scalar subset. crd-sandbox does not bind the host executor: its diagnostic panel calls the
   service from its own unenrolled worker thread, so its replay commands refuse host records `unavailable`.
 - The committed `assets/ceir/host_replay_demo.ceir` (a pooled launch calling a function, a map_reduce, a state cell
@@ -1259,9 +1259,8 @@ Settled (2026-10-09, [session](../sessions/2026-10-09-diag-9a-sandbox-host-recor
   `FrameThreadCalls` as the device executor, so a host run and a device run never overlap. The panel's worker thread
   has no crd::jobs frame arena, and the host provider's parallel ranges take their job arrays from the calling
   thread's arena, so a host run on the worker is not allowed (a debug build asserts there). The wrapper hands each
-  `record` and `replay` to the frame-loop thread, the thread that initialised the pool. That thread never resets its
-  arena, so the wrapper takes the arena's mark before the inner call and puts it back after: a run's job arrays are
-  dead once it returns, and runs do not accumulate in the arena. A refused call (the frame loop has ended) is
+  `record` and `replay` to the frame-loop thread, the thread that initialised the pool. A parallel range reclaims its
+  job arrays as it submits them, so runs do not accumulate in that thread's arena. A refused call (the frame loop has ended) is
   `failed` with "the frame loop has ended: the host run did not start", and nothing is recorded. Teardown is the
   device executor's: the calls close before the panel joins its worker, and the wrapper dies after the commands and
   before the jobs pool.
