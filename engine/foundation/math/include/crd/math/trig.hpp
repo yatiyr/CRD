@@ -17,16 +17,15 @@ inline constexpr double kPio2Part3 = 2.02226624871116645580e-21; // π/2 part 3 
 inline constexpr double kPio2Part4 = 8.47842766036889956997e-32; // π/2 part 4 (tail)
 inline constexpr double k2OverPi = 6.36619772367581382433e-01;   // 2/π
 
-// sin(r) = r·(1 + Σ kSin_j s^j), s = r²  (minimax on |r|≤π/4 — gen build/_trig_gen.py, ≤1 ulp)
-inline constexpr double kSin1 = -1.66666666666668850e-01, kSin2 = 8.33333333336602061e-03,
-                        kSin3 = -1.98412698635934935e-04, kSin4 = 2.75573273852535577e-06,
-                        kSin5 = -2.50537399183996951e-08, kSin6 = 1.62264344539045369e-10,
-                        kSin7 = -1.45094678459523063e-12;
-// cos(r) = 1 − ½s + s²·(Σ kCos_j s^{j-2}), s = r²  (minimax, ≤1 ulp)
-inline constexpr double kCos2 = 4.16666666666578728e-02, kCos3 = -1.38888888866768741e-03,
-                        kCos4 = 2.48015852908292254e-05, kCos5 = -2.75564380670121137e-07,
-                        kCos6 = 2.06755116900856489e-09, kCos7 = 1.16006688779288041e-11,
-                        kCos8 = -1.04371124949305481e-11;
+// Relative-error minimax on |r| ≤ π/4 (tests/foundation/math/gen_minimax_coeffs.py): sin 0.034·2^-53, cos 0.0005·2^-53.
+// sin(r) = r·(1 + Σ kSin_j s^j), s = r²
+inline constexpr double kSin1 = -1.66666666666666297e-01, kSin2 = 8.33333333332184067e-03,
+                        kSin3 = -1.98412698293585278e-04, kSin4 = 2.75573135385140264e-06,
+                        kSin5 = -2.50507343891704837e-08, kSin6 = 1.58954332802290073e-10;
+// cos(r) = 1 − ½s + Σ kCos_j s^j, s = r²
+inline constexpr double kCos2 = 4.16666666666665950e-02, kCos3 = -1.38888888888733420e-03,
+                        kCos4 = 2.48015872890020962e-05, kCos5 = -2.75573142170505708e-07,
+                        kCos6 = 2.08757053986308588e-09, kCos7 = -1.13587494271171182e-11;
 
 // atan(t) = t·(1 + s·h(s)), h(s) = Σ kAtan_j s^{j-1}, s = t², |t| ≤ tan(π/8)  (Chebyshev, c0=1 exact — ≤2 ulp)
 inline constexpr double kAtan1 = -3.33333333333332760e-01, kAtan2 = 1.99999999999732336e-01,
@@ -48,8 +47,7 @@ namespace trig_detail
 [[nodiscard]] inline double sin_poly(double r, double rt) noexcept
 {
     const double s = r * r;
-    double p = kSin7;
-    p = libm::fma(p, s, kSin6);
+    double p = kSin6;
     p = libm::fma(p, s, kSin5);
     p = libm::fma(p, s, kSin4);
     p = libm::fma(p, s, kSin3);
@@ -62,8 +60,7 @@ namespace trig_detail
 [[nodiscard]] inline double cos_poly(double r, double rt) noexcept
 {
     const double s = r * r;
-    double p = kCos8;
-    p = libm::fma(p, s, kCos7);
+    double p = kCos7;
     p = libm::fma(p, s, kCos6);
     p = libm::fma(p, s, kCos5);
     p = libm::fma(p, s, kCos4);
@@ -136,11 +133,11 @@ inline constexpr crd::u32 kTwoOverPiBits[37] = {
         negative = !negative;
     }
     // |fraction| as a double-double from its first nonzero limb: each limb converts and scales exactly
-    constexpr double kLimbWeight[5] = {0x1p-32, 0x1p-64, 0x1p-96, 0x1p-128, 0x1p-160};
+    constexpr double limb_weight[5] = {0x1p-32, 0x1p-64, 0x1p-96, 0x1p-128, 0x1p-160};
     double d[8] = {};
     for (int t = 0; t < 5; ++t)
     {
-        d[t] = static_cast<double>(f[t]) * kLimbWeight[t];
+        d[t] = static_cast<double>(f[t]) * limb_weight[t];
     }
     int i0 = 0;
     while (i0 < 4 && f[i0] == 0U)

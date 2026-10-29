@@ -29,13 +29,14 @@ inline constexpr double kLog2eHi = 1.44269504088896339e+00, kLog2eLo = 2.0355273
 inline constexpr double kLog10eHi = 4.34294481903251817e-01, kLog10eLo = 1.09831965021676507e-17;
 inline constexpr double kLog10Of2Hi = 3.01029996015131473541e-01;  // log10(2) split (hi has 30 low zero bits ⇒ k·hi
 inline constexpr double kLog10Of2Lo = -3.51150278327520860677e-10; // exact) for the exp10 Cody-Waite reduction
-// expm1 small-x: Q(x) = (e^x−1)/x ≈ 1 + Σ kQ_n·x^n on |x|<0.5 — MINIMAX (gen_expm1.py) ⇒ ≤1 ulp (Taylor was ~180).
-inline constexpr double kQ1 = 5.00000000000000000e-01, kQ2 = 1.66666666666669461e-01;
-inline constexpr double kQ3 = 4.16666666666644092e-02, kQ4 = 8.33333333316670435e-03;
-inline constexpr double kQ5 = 1.38888888891446766e-03, kQ6 = 1.98412701744263634e-04;
-inline constexpr double kQ7 = 2.48015873465096126e-05, kQ8 = 2.75570317237591386e-06;
-inline constexpr double kQ9 = 2.75571220408857460e-07, kQ10 = 2.51638769228966323e-08;
-inline constexpr double kQ11 = 2.09664440778585537e-09;
+// expm1 core: expm1(x) = x·Q(x), Q ≈ 1 + Σ kQ_n·x^n on |x| ≤ ln2/2: relative-error minimax of x·Q
+// (tests/foundation/math/gen_minimax_coeffs.py), 0.073·2^-53.
+inline constexpr double kQ1 = 5.00000000000000111e-01, kQ2 = 1.66666666666666713e-01;
+inline constexpr double kQ3 = 4.16666666666484983e-02, kQ4 = 8.33333333332838232e-03;
+inline constexpr double kQ5 = 1.38888888980675325e-03, kQ6 = 1.98412698660157394e-04;
+inline constexpr double kQ7 = 2.48015683892776966e-05, kQ8 = 2.75572658065231532e-06;
+inline constexpr double kQ9 = 2.75740743827247530e-07, kQ10 = 2.51013627883170904e-08;
+inline constexpr double kQ11 = 1.55781323301372000e-09;
 
 // ───────────────────────── exp family ─────────────────────────
 [[nodiscard]] inline double exp(double x) noexcept { return crd_exp1(x); }

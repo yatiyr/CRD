@@ -8,7 +8,7 @@
 //
 //   log: atanh range reduction x=m·2^e, m∈[√½,√2) ⇒ |t|≤0.172, log(m)=2·atanh(t) with t's rounding carried (the
 //        pair of crd_log_reduce); ln2 split hi/lo, the head summed exactly. Accuracy: log ≤0.52 ulp.
-//   exp: Cody-Waite x=k·ln2+r (|r|≤ln2/2) + degree-12 MINIMAX exp(r) (gen_exp_coeffs.py), ×2^k by a TWO-step exponent
+//   exp: Cody-Waite x=k·ln2+r (|r|≤ln2/2) + degree-11 minimax exp(r) (gen_minimax_coeffs), ×2^k by a TWO-step exponent
 //        injection (one half each) ⇒ correct subnormals (k≲−1022) AND near-overflow (k≈1024). Accuracy: exp ≤1 ulp.
 // All combines use the single-rounded FMA in the SAME order; the build pins -ffp-contract=off (crd-simd-flags) ⇒ the
 // scalar and SIMD kernels emit IDENTICAL bits. That bit-identity is what lets a parallel batch's SIMD body and its

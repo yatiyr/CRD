@@ -91,13 +91,13 @@ inline constexpr double kLn2HiE = 6.93145751953125e-1;                  // ln2 h
 inline constexpr double kLn2LoE = 1.42860682030941723212e-6;            // ln2 low (ln2 = hi + lo)
 inline constexpr double kExpOverflow = 709.782712893383996732;
 inline constexpr double kExpUnderflow = -745.133219101941108420;
-// exp(r) ≈ 1 + r + Σ_{n=2}^{12} kE_n·r^n on |r| ≤ ln2/2 — MINIMAX (gen_exp_coeffs.py, Lawson-reweighted) ⇒ ≤1 ulp,
-// vs the old degree-11 Taylor's ~30 ulp. c0=c1=1 fixed (exp(0)=exp'(0)=1 exact). Determinism: same coeffs scalar↔SIMD.
-inline constexpr double kE2 = 5.00000000000000555e-01, kE3 = 1.66666666666665603e-01;
-inline constexpr double kE4 = 4.16666666665814339e-02, kE5 = 8.33333333346961136e-03;
-inline constexpr double kE6 = 1.38888889278951204e-03, kE7 = 1.98412694900482666e-04;
-inline constexpr double kE8 = 2.48015108506657736e-05, kE9 = 2.75576332857440428e-06;
-inline constexpr double kE10 = 2.76235551234085071e-07, kE11 = 2.49817193679824969e-08;
+// exp(r) ≈ 1 + r + Σ_{n=2}^{11} kE_n·r^n on |r| ≤ ln2/2: relative-error minimax (tests/foundation/math/
+// gen_minimax_coeffs.py), 0.034·2^-53. c0 = c1 = 1 fixed (exp(0) = exp'(0) = 1 exact); the SIMD twins share them.
+inline constexpr double kE2 = 5.00000000000001110e-01, kE3 = 1.66666666666664381e-01;
+inline constexpr double kE4 = 4.16666666665257771e-02, kE5 = 8.33333333347370184e-03;
+inline constexpr double kE6 = 1.38888889448713737e-03, kE7 = 1.98412695607172825e-04;
+inline constexpr double kE8 = 2.48014917293364775e-05, kE9 = 2.75575299956451592e-06;
+inline constexpr double kE10 = 2.76307639280123512e-07, kE11 = 2.50203947940207565e-08;
 
 // Scalar f64 exp — the canonical bit pattern.
 [[nodiscard]] inline double crd_exp1(double x) noexcept

@@ -156,8 +156,8 @@ TEST_CASE("crd::math transcendental cross-platform determinism golden checksum",
     }
 #undef TX_FOLD
     INFO("golden checksum = 0x" << std::hex << h << ", Payne-Hanek range 0x" << large);
-    CHECK(h == 0x96d6c9aeb69256a8ULL); // canonical bits (gcc/-ffp-contract=off); every platform must reproduce
-    CHECK(large == 0xa65cc2f9b1b48d16ULL);
+    CHECK(h == 0x9179c815fca024a6ULL); // canonical bits; every platform and level must reproduce
+    CHECK(large == 0x6caf0b0834f6ea14ULL);
 }
 
 TEST_CASE("crd::math select/round tier -- exactness", "[math][transcendental][tx]")
