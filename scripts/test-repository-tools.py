@@ -4601,9 +4601,19 @@ class IsaIsolation(unittest.TestCase):
         self.assertIsNone(above('zip1', 'v0.4s, v1.4s, v2.4s'))
         self.assertIsNone(above('add', 'x0, x1, #0x10'))
         self.assertIsNone(above('.word', '0x05a0e000'))
+        self.assertEqual('SVE/SME', above('ld1d', '{z1.d}, p7/z, [x0, z2.d, lsl #3]'))
+        self.assertEqual('SVE/SME', above('zero', '{za}'))
+        # A branch target's symbol is no operand, in objdump's annotation or dumpbin's decorated name.
+        self.assertIsNone(above('bl', '11c <(anonymous namespace)::Rng::p3(float)>'))
+        self.assertIsNone(above('b.eq', '1ec <(anonymous namespace)::Rng::p3(float)+0xd0>'))
+        self.assertIsNone(above('bl', '?p3@Rng@?A0x1c2d@@QEAAMM@Z'))
+        self.assertIsNone(above('ldr', 'x0, [x1, #8]  // 1f0 <z1>'))
         dump = ('0000000000000000 <crd::f()>:\n   0:\ta5404000 \tld1w\t{z0.s}, p0/z, [x0]\n'
-                '   4:\t8b020020 \tadd\tx0, x1, x2\n')
-        self.assertEqual([('crd::f()', 'SVE/SME')],
+                '   4:\t8b020020 \tadd\tx0, x1, x2\n'
+                '0000000000000008 <void (anonymous namespace)::g<int>(int)>:\n'
+                '   8:\t04a00000 \tadd\tz0.s, z0.s, z0.s\n')
+        # objdump -C names a function whole: its return type and (anonymous namespace) are part of it.
+        self.assertEqual([('crd::f()', 'SVE/SME'), ('void (anonymous namespace)::g<int>(int)', 'SVE/SME')],
                          [(f, k) for f, _a, k, _l in isa_isolation.scan_arm64(dump, False)])
 
     def test_arm64_msvc_constants_in_text_are_data(self):

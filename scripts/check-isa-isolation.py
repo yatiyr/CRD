@@ -86,8 +86,12 @@ _SEGMENT = frozenset({0x26, 0x2E, 0x36, 0x3E, 0x64, 0x65, 0x67})
 _PREFIX_WORDS = r'(?:(?:lock|rep|repe|repz|repne|repnz|data16|addr32|notrack|bnd|cs|ds|es|ss|fs|gs) +)*'
 _LEGACY = '|'.join(sorted(X64_LEGACY, key=len, reverse=True))
 
-# ARM64 above the v8.0 baseline with NEON: SVE and SME registers, LSE atomics and later-revision instructions.
-ARM64_SVE = re.compile(r'(?<![A-Za-z0-9_.#])(?:z\d{1,2}|p\d{1,2}|za\w*)(?![A-Za-z0-9_])')
+# ARM64 above the v8.0 baseline with NEON: SVE and SME registers, LSE atomics and later-revision instructions. A
+# register is an operand between the operand delimiters, never part of the symbol a disassembler prints for a branch
+# target (objdump's `bl 11c <ns::Rng::p3(float)>`, dumpbin's decorated names); branches and address forms name no
+# vector register at all.
+ARM64_SVE = re.compile(r'(?:^|(?<=[\s{\[,]))(?:z\d{1,2}|p\d{1,2}|za\w*)(?=$|[\s.,/\[\]}])')
+ARM64_TARGET = re.compile(r'^(?:b|bl|b\.\w+|cbn?z|tbn?z|adrp?)$')
 ARM64_ABOVE = re.compile(r'^(?:(?:ld|st)(?:add|clr|eor|set|smax|smin|umax|umin)(?:a|l|al)?(?:b|h)?|swp(?:a|l|al)?'
                          r'(?:b|h)?|casp?(?:a|l|al)?(?:b|h)?|ldapu?r\w*|stlur\w*|[su]dot|usdot|sudot|[su]mmla|usmmla|'
                          r'bf(?:dot|mmla|mlal[bt]|cvtn?2?)|fcadd|fcmla|fjcvtzs|crc32\w*|aes[edm]\w*|aesimc|sha1\w+|'
@@ -160,7 +164,7 @@ def arm64_above(mnemonic, operands):
     """The ARM64 extension an instruction needs beyond v8.0 with NEON, else None."""
     if mnemonic.startswith('.') or mnemonic in ('dcd', 'dcq', 'udf'):
         return None
-    if ARM64_SVE.search(operands):
+    if not ARM64_TARGET.match(mnemonic) and ARM64_SVE.search(operands):
         return 'SVE/SME'
     if ARM64_ABOVE.match(mnemonic):
         return mnemonic
@@ -285,6 +289,12 @@ def _split_files(text, header, paths):
     return parts
 
 
+def _function_name(label, coff):
+    """A dump label's function: dumpbin follows a decorated name with ` (<undecorated>)`; objdump -C prints the
+    demangled name alone, whose ` (anonymous namespace)` or return type is part of it."""
+    return label.split(' (')[0] if coff else label
+
+
 def _labels(text, pattern, layout=None):
     """(functions, data): (offset, function) for each function label of a dump, and the [start, end) text ranges that
     hold data. A $ label (MSVC's $LN) belongs to its function; it starts data when the object's symbol table makes it
@@ -294,7 +304,7 @@ def _labels(text, pattern, layout=None):
     tables, sections = layout or (set(), {})
     section, open_at = None, None
     for match in pattern.finditer(text):
-        name = match.group(1).split(' (')[0]
+        name = _function_name(match.group(1), pattern is _LABEL_COFF)
         if name.startswith(_NOT_LABELS):
             continue
         if not name.startswith('$'):
@@ -382,7 +392,7 @@ def scan_arm64(text, coff):
             continue
         label = (re.match(r'^([^ ].*):$', line) if coff else OBJDUMP_LABEL.match(line))
         if label and not label.group(1).startswith(_NOT_LABELS) and not label.group(1).startswith('$'):
-            name = label.group(1).split(' (')[0]
+            name = _function_name(label.group(1), coff)
             table = coff and name.startswith('__swt')
             function = function if table else name
     settle()

@@ -21,7 +21,16 @@ Run 40826432863 (dd860168) failed three jobs before it finished.
   oracle reported `fids[5]` past the CSF tree's five levels (-Warray-bounds). The oracle now takes its level as a
   template argument, so no instantiation goes past `CsfTree::kLevels`.
 - Both ARM64 debug lanes now build. Each fails four tests: the ISA guard, the ELF build-id record, and the
-  `__builtin_trap` SIGILL and FP-division SIGFPE crash captures. These are the next batch's first job.
+  `__builtin_trap` SIGILL and FP-division SIGFPE crash captures.
+  - The guard read `p3` in objdump's branch annotation `bl 11c <(anonymous namespace)::Rng::p3(float)>` as an SVE
+    predicate register. An SVE or SME register now counts only between operand delimiters, and branch and address
+    forms are not scanned for one.
+  - ELF dump labels keep their whole demangled name. Cutting at " (" had named a templated function `void`.
+  - Both changes have fixture cases in `IsaIsolation`.
+- Left for the next batch:
+  - On AArch64 `__builtin_trap` is `brk`, which raises SIGTRAP (exit 133), and the Linux crash handler does not
+    capture SIGTRAP. This fails the trap and build-id records.
+  - The hosted ARM64 CPU does not trap the unmasked division (specimen exit 61).
 
 ## What landed
 
