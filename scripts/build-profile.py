@@ -360,7 +360,7 @@ def run_profile(args, runner=subprocess.run, host=bench.host_state, which=shutil
                      'slowest_edges': [{'output': o, 'seconds': s} for o, s in
                                        sorted(edges.items(), key=lambda item: -item[1])[:args.top]],
                      'host_before': states, 'host_after': host(), 'contended': reasons, 'build_insights': insights,
-                     'machine': bench.machine(), 'log': str(log_path),
+                     'machine': bench.evidence.machine(), 'log': str(log_path),
                      'finished': datetime.datetime.now(datetime.timezone.utc).isoformat()})
     output.write_text(json.dumps(document, indent=2) + '\n', encoding='utf-8')
     print('profile: %s (build exit %d, %.0f s)' % (output, code, built - configured))

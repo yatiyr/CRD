@@ -879,6 +879,10 @@ class CiEvidence(unittest.TestCase):
         {'name': 'slow', 'properties': [{'name': 'LABELS', 'value': ['gpu']}, {'name': 'RESOURCE_LOCK', 'value': ['crd_gpu_device']}]},
         {'name': 'broken', 'properties': [{'name': 'LABELS', 'value': ['cerid.test.target=broken']}]},
         {'name': 'absent', 'properties': [{'name': 'LABELS', 'value': ['gpu']}]}]}
+    MACHINE = {'cpu': 'AMD EPYC 7763', 'logical_cpus': 4, 'memory_gib': 16.0}
+    HOST_TEST = {'command': ['ctest'], 'exit': 0, 'seconds': 7200.0, 'machine': MACHINE,
+                 'memory': {'samples': 1441, 'baseline_available_gib': 13.1, 'min_available_gib': 9.4,
+                            'baseline_committed_gib': 4.0, 'peak_committed_gib': 9.9, 'pressure_gib': 5.9}}
 
     def fixture(self, temp):
         build = Path(temp) / 'build'
@@ -892,6 +896,7 @@ class CiEvidence(unittest.TestCase):
             'set(CMAKE_CXX_COMPILER_VERSION "19.51.36246.0")\n', encoding='utf-8')
         (build / 'Testing/inventory.json').write_text(json.dumps(self.INVENTORY), encoding='utf-8')
         (build / 'Testing/Temporary/ctest-junit.xml').write_text(self.JUNIT, encoding='utf-8')
+        (build / ci_evidence.HOST_TEST).write_text(json.dumps(self.HOST_TEST), encoding='utf-8')
         adapters = Path(temp) / 'adapters.txt'
         adapters.write_text('Name : Microsoft Basic Render Driver\n\nDriverVersion : 10.0\n', encoding='utf-8')
         return build, adapters
@@ -900,8 +905,10 @@ class CiEvidence(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             build, adapters = self.fixture(temp)
             out = Path(temp) / 'evidence'
-            record = ci_evidence.bundle('win-debug', build, out, adapters=adapters, environ={'GITHUB_RUN_ID': '7'})
+            record = ci_evidence.bundle('win-debug', build, out, adapters=adapters, environ={'GITHUB_RUN_ID': '7'},
+                                        host=lambda: self.MACHINE)
             self.assertEqual(record['status'], 'fail')
+            self.assertEqual(record['host'], {'machine': self.MACHINE, 'test': self.HOST_TEST})
             self.assertEqual(record['missing'], [])
             self.assertEqual(record['run'], {'GITHUB_RUN_ID': '7'})
             self.assertTrue(record['revision'] and record['tree'])
@@ -926,6 +933,8 @@ class CiEvidence(unittest.TestCase):
             self.assertIn('3 executed: 1 passed, 1 failed, 1 skipped', markdown)
             self.assertIn('| Diagnostic modes | ASan |', markdown)
             self.assertIn('| By label | gpu 2 executed: 1 passed, 0 failed, 1 skipped |', markdown)
+            self.assertIn('| Host | AMD EPYC 7763, 4 logical CPUs, 16.0 GiB; tests 7200 s wall, at least 9.4 GiB '
+                          'available (13.1 before), commit peak 9.9 GiB |', markdown)
             passed = ci_evidence.bundle('win-debug', build, out, adapters=adapters, outcome='success', environ={})
             self.assertEqual(passed['status'], 'pass')
             self.assertEqual(ci_evidence.bundle('win-debug', build, out, outcome='failure', environ={})['status'], 'failure')
@@ -934,8 +943,29 @@ class CiEvidence(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             record = ci_evidence.bundle('none', Path(temp) / 'nowhere', Path(temp) / 'out', environ={})
             self.assertEqual(record['status'], 'missing')
-            self.assertEqual(record['missing'], ['CMakeCache.txt', 'adapters', 'inventory', 'junit'])
-            self.assertIn('Missing evidence: CMakeCache.txt, adapters, inventory, junit', ci_evidence.summary_markdown(record))
+            self.assertEqual(record['missing'], ['CMakeCache.txt', 'adapters', 'host-test', 'inventory', 'junit'])
+            self.assertEqual(record['host']['test'], None)
+            self.assertTrue(record['host']['machine']['logical_cpus'])
+            self.assertIn('Missing evidence: CMakeCache.txt, adapters, host-test, inventory, junit',
+                          ci_evidence.summary_markdown(record))
+
+    def test_watch_runs_the_tests_with_the_host_sampled_and_passes_their_exit_code_on(self):
+        with tempfile.TemporaryDirectory() as temp:
+            ticks = iter([10.0, 25.5])
+            code = ci_evidence.watch(temp, ['ctest', '--preset', 'win-asan'], interval=0.01,
+                                     runner=lambda command: 7, clock=lambda: next(ticks), host=lambda: self.MACHINE)
+            self.assertEqual(code, 7)
+            record = json.loads((Path(temp) / ci_evidence.HOST_TEST).read_text(encoding='utf-8'))
+            self.assertEqual((record['command'], record['exit'], record['seconds'], record['machine']),
+                             (['ctest', '--preset', 'win-asan'], 7, 15.5, self.MACHINE))
+            self.assertGreaterEqual(record['memory']['samples'], 2)
+            self.assertGreater(record['memory']['baseline_available_gib'], 0)
+            exit_four = [sys.executable, '-c', 'raise SystemExit(4)']
+            self.assertEqual(ci_evidence.main(['watch', '--build-dir', temp, '--'] + exit_four), 4)
+            self.assertEqual(ci_evidence.main(['watch', '--build-dir', temp] + exit_four), 4)
+            self.assertEqual(json.loads((Path(temp) / ci_evidence.HOST_TEST).read_text(encoding='utf-8'))['command'],
+                             exit_four)
+            self.assertEqual(ci_evidence.main(['watch', '--build-dir', temp]), 2)
 
     def test_compare_takes_tests_that_passed_on_both_above_the_floor(self):
         def lane(root, preset, cases, modes=None):
@@ -1389,9 +1419,9 @@ class BuildPerformance(unittest.TestCase):
             self.assertEqual(build_bench.ninja_row_entries(log, 0, snapshot)[1], False)
             self.assertEqual(build_bench.sccache_summary(self.STATS)['hits'], 6)
             self.assertEqual(build_bench.sccache_summary({'error': 'x'}), {'error': 'x'})
-            total, available, committed = build_bench.memory_status()
+            total, available, committed = ci_evidence.memory_status()
             self.assertGreater(total, 0)
-            self.assertTrue(build_bench.machine()['logical_cpus'])
+            self.assertTrue(ci_evidence.machine()['logical_cpus'])
         record = {'schema': build_bench.SCHEMA, 'label': 'A', 'preset': 'win-debug', 'jobs': 16, 'defines': [],
                   'launcher': '', 'toolchain': {'CRD_ENABLE_PCH': 'ON'}, 'build_tree_gib': 4.2,
                   'rows': [{'row': 'cold', 'exit_code': 0, 'wall_seconds': 100.0,
@@ -1515,7 +1545,7 @@ class BuildPerformance(unittest.TestCase):
         self.assertIn('relink-all', build_bench.ROWS)
 
     def test_boards_record_the_host_and_refuse_a_contended_one(self):
-        gib = int(build_bench.GIB)
+        gib = int(ci_evidence.GIB)
         before = {1: ('ComfyUI', 25 * gib, 100.0), 2: ('opera', gib // 2, 10.0), 3: ('idle', 0, None),
                   4: ('gone', 0, 1.0), 9: ('build-bench', 0, 1.0)}
         after = {1: ('ComfyUI', 25 * gib, 108.0), 2: ('opera', gib // 2, 11.0), 3: ('idle', 0, None),

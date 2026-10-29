@@ -2,21 +2,26 @@
 """Structured exact-revision evidence for one CI lane.
 
 `inventory` records the CTest inventory of a build directory (`ctest --show-only=json-v1`) before anything runs.
-`bundle` collects, after the lane's steps, the revision and tree identity, the toolchain fingerprint from the CMake
-cache, the adapter census, the inventory, the JUnit results and the failing tests' output into
-`<output>/conclusion.json`, copies the raw JUnit and inventory beside it and appends a concise job summary. Neither
-command changes a lane's verdict: the register gate owns the exit code. `compare` reads two lanes' evidence and
-reports one lane's per-test slowdown against the other (a separate-binary mode's cost, DIAG.11b). Contract:
-docs/design/ci-tiers.md.
+`watch` runs the lane's test command with the host's memory sampled and records the machine and the samples. `bundle`
+collects, after the lane's steps, the revision and tree identity, the toolchain fingerprint from the CMake cache, the
+adapter census, the inventory, the JUnit results, the host record and the failing tests' output into
+`<output>/conclusion.json`, copies the raw JUnit and inventory beside it and appends a concise job summary. No command
+changes a lane's verdict (`watch` passes the test command's exit code on): the register gate owns the exit code.
+`compare` reads two lanes' evidence and reports one lane's per-test slowdown against the other (a separate-binary
+mode's cost, DIAG.11b). Contract: docs/design/ci-tiers.md.
 """
 from pathlib import Path
 import argparse
+import ctypes
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
 import sys
+import threading
+import time
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +40,95 @@ OUTPUT_TAIL_LINES = 60
 SLOWEST = 15
 # Tests faster than this on the reference lane are left out of a comparison: their time is process start-up.
 RATIO_FLOOR = 0.05
+GIB = 1024.0 ** 3
+# The Test step's host record, written by `watch` beside the JUnit and read by `bundle`.
+HOST_TEST = 'Testing/Temporary/host-test.json'
+# Seconds between the memory samples taken while a lane's tests run.
+HOST_TEST_INTERVAL = 5.0
+
+
+# ---- machine and memory -------------------------------------------------------------------------------------------
+
+class _MemoryStatus(ctypes.Structure):
+    _fields_ = [('dwLength', ctypes.c_uint32), ('dwMemoryLoad', ctypes.c_uint32), ('ullTotalPhys', ctypes.c_uint64),
+                ('ullAvailPhys', ctypes.c_uint64), ('ullTotalPageFile', ctypes.c_uint64),
+                ('ullAvailPageFile', ctypes.c_uint64), ('ullTotalVirtual', ctypes.c_uint64),
+                ('ullAvailVirtual', ctypes.c_uint64), ('ullAvailExtendedVirtual', ctypes.c_uint64)]
+
+
+def memory_status():
+    """(total physical, available physical, committed) in bytes; committed is the system commit charge."""
+    if platform.system() == 'Windows':
+        status = _MemoryStatus()
+        status.dwLength = ctypes.sizeof(status)
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
+        return status.ullTotalPhys, status.ullAvailPhys, status.ullTotalPageFile - status.ullAvailPageFile
+    values = {}
+    try:
+        for line in Path('/proc/meminfo').read_text(encoding='utf-8').splitlines():
+            key, _, rest = line.partition(':')
+            values[key] = int(rest.split()[0]) * 1024
+    except OSError:
+        return 0, 0, 0
+    return values.get('MemTotal', 0), values.get('MemAvailable', 0), values.get('Committed_AS', 0)
+
+
+def cpu_name():
+    if platform.system() == 'Windows':
+        try:
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'HARDWARE\DESCRIPTION\System\CentralProcessor\0')
+            return winreg.QueryValueEx(key, 'ProcessorNameString')[0].strip()
+        except OSError:
+            return platform.processor()
+    try:
+        for line in Path('/proc/cpuinfo').read_text(encoding='utf-8').splitlines():
+            if line.startswith('model name'):
+                return line.split(':', 1)[1].strip()
+    except OSError:
+        pass
+    return platform.processor()
+
+
+def machine():
+    total, _, _ = memory_status()
+    return {'cpu': cpu_name(), 'logical_cpus': os.cpu_count(), 'memory_gib': round(total / GIB, 1),
+            'os': platform.platform(), 'python': platform.python_version()}
+
+
+class PressureSampler:
+    """Samples available and committed memory on a thread while a board row or a lane's tests run."""
+
+    def __init__(self, interval=1.0):
+        self.interval = interval
+        self.samples = []
+        self._stop = threading.Event()
+        self._thread = None
+
+    def __enter__(self):
+        self.samples = [memory_status()]
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return self
+
+    def _run(self):
+        while not self._stop.wait(self.interval):
+            self.samples.append(memory_status())
+
+    def __exit__(self, *_):
+        self._stop.set()
+        self._thread.join()
+        self.samples.append(memory_status())
+
+    def summary(self):
+        baseline_available, baseline_committed = self.samples[0][1], self.samples[0][2]
+        min_available = min(s[1] for s in self.samples)
+        max_committed = max(s[2] for s in self.samples)
+        return {'samples': len(self.samples), 'baseline_available_gib': round(baseline_available / GIB, 2),
+                'min_available_gib': round(min_available / GIB, 2),
+                'baseline_committed_gib': round(baseline_committed / GIB, 2),
+                'peak_committed_gib': round(max_committed / GIB, 2),
+                'pressure_gib': round((max_committed - baseline_committed) / GIB, 2)}
 
 
 def git(args, repo=ROOT):
@@ -267,7 +361,7 @@ def sccache_summary(path):
 
 
 def bundle(preset, build_dir, output, junit=None, inventory=None, adapters=None, outcome=None, repo=ROOT,
-           environ=None, packages=None, sccache=None):
+           environ=None, packages=None, sccache=None, host=machine):
     """Write conclusion.json and copies of the raw inputs; return the conclusion record."""
     environ = os.environ if environ is None else environ
     build_dir = Path(build_dir)
@@ -290,6 +384,9 @@ def bundle(preset, build_dir, output, junit=None, inventory=None, adapters=None,
         missing.append('adapters')
     record['packages'] = read_lines(packages)
     record['build'] = {'ninja': ninja_log_summary(build_dir / '.ninja_log'), 'sccache': sccache_summary(sccache)}
+    record['host'] = {'machine': host(), 'test': read_json(build_dir / HOST_TEST)}
+    if record['host']['test'] is None:
+        missing.append('host-test')
     record['inventory'] = inventory_summary(inventory)
     if record['inventory'] is None:
         missing.append('inventory')
@@ -310,6 +407,28 @@ def bundle(preset, build_dir, output, junit=None, inventory=None, adapters=None,
     record['missing'] = missing
     (output / 'conclusion.json').write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
     return record
+
+
+def read_json(path):
+    try:
+        return json.loads(Path(path).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+
+
+def host_markdown(host):
+    if not host:
+        return 'not recorded'
+    box = host['machine']
+    text = '%s, %s logical CPUs, %.1f GiB' % (box.get('cpu') or '?', box.get('logical_cpus') or '?',
+                                             box.get('memory_gib') or 0.0)
+    test = host.get('test')
+    if test:
+        memory = test['memory']
+        text += '; tests %.0f s wall, at least %.1f GiB available (%.1f before), commit peak %.1f GiB' % (
+            test['seconds'], memory['min_available_gib'], memory['baseline_available_gib'],
+            memory['peak_committed_gib'])
+    return text
 
 
 def build_markdown(build):
@@ -354,6 +473,7 @@ def summary_markdown(record):
             ('Adapters', '; '.join(record['adapters'][:6]) if record['adapters'] else 'not recorded'),
             ('Packages', '; '.join(record['packages'][:12]) if record.get('packages') else 'not recorded'),
             ('Build', build_markdown(record.get('build'))),
+            ('Host', host_markdown(record.get('host'))),
             ('Inventory', '%d tests, %d labelled, %d resource-locked' % (inventory['tests'], sum(inventory['labels'].values()),
                                                                           sum(inventory['resource_locks'].values()))
              if inventory else 'not recorded'),
@@ -394,6 +514,20 @@ def run_inventory(build_dir, config=None, output=None):
     return 0
 
 
+def watch(build_dir, command, interval=HOST_TEST_INTERVAL, runner=subprocess.call, clock=time.monotonic,
+          host=machine):
+    """Run a lane's test command with the host's memory sampled; write HOST_TEST and return the command's exit code."""
+    start = clock()
+    with PressureSampler(interval) as sampler:
+        code = runner(command)
+    record = {'command': list(command), 'exit': code, 'seconds': round(clock() - start, 1), 'machine': host(),
+              'memory': sampler.summary()}
+    path = Path(build_dir) / HOST_TEST
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
+    return code
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest='command', required=True)
@@ -412,6 +546,9 @@ def main(argv=None):
     bun.add_argument('--sccache-stats', help='sccache --show-stats --stats-format json output of the build step')
     bun.add_argument('--outcome', help='outcome of the step that decides the lane (success, failure, cancelled, skipped)')
     bun.add_argument('--summary', help='GITHUB_STEP_SUMMARY file to append to')
+    wat = sub.add_parser('watch', help="run a lane's tests with the host's memory sampled (exit code passed on)")
+    wat.add_argument('--build-dir', required=True, help='build directory; the record goes to <build-dir>/' + HOST_TEST)
+    wat.add_argument('command_line', nargs=argparse.REMAINDER, metavar='command', help='the test command, after --')
     cmp = sub.add_parser('compare', help="a board row: one lane's per-test slowdown against another's")
     cmp.add_argument('--mode', required=True, help='evidence directory of the lane built with the mode')
     cmp.add_argument('--reference', required=True, help='evidence directory of the lane without it')
@@ -419,6 +556,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.command == 'inventory':
         return run_inventory(args.build_dir, args.config, args.output)
+    if args.command == 'watch':
+        command = args.command_line[1:] if args.command_line[:1] == ['--'] else args.command_line
+        return watch(args.build_dir, command) if command else 2
     if args.command == 'compare':
         print(compare_markdown(args.mode, args.reference, args.floor))
         return 0

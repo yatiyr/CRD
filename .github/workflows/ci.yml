@@ -376,7 +376,8 @@ jobs:
           ctest --preset ${{ matrix.preset }} -R '^crd-dx12-device-info$' --verbose --timeout 30 --no-tests=error
           $probeExit = $LASTEXITCODE
           $junit = "$env:GITHUB_WORKSPACE\build\${{ matrix.preset }}\Testing\Temporary\ctest-junit.xml"
-          ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error --output-junit "$junit"
+          python scripts/ci-evidence.py watch --build-dir build/${{ matrix.preset }} -- ctest --preset ${{ matrix.preset }} `
+            --output-on-failure --no-tests=error --output-junit "$junit"
           $testExit = $LASTEXITCODE
           if ($probeExit -ne 0) { exit $probeExit }
           # Two-sided register gate (docs/third-party-defects.md): the lane is green only when the failing set equals
@@ -712,7 +713,8 @@ jobs:
           ctest --preset ${{ matrix.preset }} -R '^crd-dx12-device-info$' --verbose --timeout 30 --no-tests=error
           $probeExit = $LASTEXITCODE
           $junit = "$env:GITHUB_WORKSPACE\build\${{ matrix.preset }}\Testing\Temporary\ctest-junit.xml"
-          ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error --output-junit "$junit"
+          python scripts/ci-evidence.py watch --build-dir build/${{ matrix.preset }} -- ctest --preset ${{ matrix.preset }} `
+            --output-on-failure --no-tests=error --output-junit "$junit"
           $testExit = $LASTEXITCODE
           if ($probeExit -ne 0) { exit $probeExit }
           python scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit $testExit
@@ -917,7 +919,8 @@ jobs:
         run: |
           junit="$GITHUB_WORKSPACE/build/${{ matrix.preset }}/Testing/Temporary/ctest-junit.xml"
           set +e
-          ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error --output-junit "$junit"
+          python3 scripts/ci-evidence.py watch --build-dir build/${{ matrix.preset }} -- ctest --preset ${{ matrix.preset }} \
+            --output-on-failure --no-tests=error --output-junit "$junit"
           test_exit=$?
           set -e
           python3 scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit "$test_exit"
@@ -1142,7 +1145,8 @@ jobs:
           ctest --preset ${{ matrix.preset }} -R '^crd-dx12-device-info$' --verbose --timeout 30 --no-tests=error
           $probeExit = $LASTEXITCODE
           $junit = "$env:GITHUB_WORKSPACE\build\${{ matrix.preset }}\Testing\Temporary\ctest-junit.xml"
-          ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error --output-junit "$junit"
+          python scripts/ci-evidence.py watch --build-dir build/${{ matrix.preset }} -- ctest --preset ${{ matrix.preset }} `
+            --output-on-failure --no-tests=error --output-junit "$junit"
           $testExit = $LASTEXITCODE
           if ($probeExit -ne 0) { exit $probeExit }
           python scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit $testExit
@@ -1332,7 +1336,8 @@ jobs:
           ctest --preset ${{ matrix.preset }} -R '^crd-dx12-device-info$' --verbose --timeout 30 --no-tests=error
           $probeExit = $LASTEXITCODE
           $junit = "$env:GITHUB_WORKSPACE\build\${{ matrix.preset }}\Testing\Temporary\ctest-junit.xml"
-          ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error --output-junit "$junit"
+          python scripts/ci-evidence.py watch --build-dir build/${{ matrix.preset }} -- ctest --preset ${{ matrix.preset }} `
+            --output-on-failure --no-tests=error --output-junit "$junit"
           $testExit = $LASTEXITCODE
           if ($probeExit -ne 0) { exit $probeExit }
           python scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit $testExit
@@ -1518,7 +1523,8 @@ jobs:
         run: |
           junit="$GITHUB_WORKSPACE/build/${{ matrix.preset }}/Testing/Temporary/ctest-junit.xml"
           set +e
-          ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error --output-junit "$junit"
+          python3 scripts/ci-evidence.py watch --build-dir build/${{ matrix.preset }} -- ctest --preset ${{ matrix.preset }} \
+            --output-on-failure --no-tests=error --output-junit "$junit"
           test_exit=$?
           set -e
           python3 scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit "$test_exit"
@@ -1622,7 +1628,7 @@ jobs:
         shell: pwsh
         run: |
           $junit = "$env:GITHUB_WORKSPACE\build\win-vs-debug\Testing\Temporary\ctest-junit.xml"
-          ctest --preset win-vs-debug -R '^crd-(repository-hygiene|master-plan|ci-tiers|repository-tools|developer-workflow|project-structure-sync|build-profiles|module-selection|project-structure-native|native-build-profiles)$' --output-on-failure --no-tests=error --output-junit "$junit"
+          python scripts/ci-evidence.py watch --build-dir build/win-vs-debug -- ctest --preset win-vs-debug -R '^crd-(repository-hygiene|master-plan|ci-tiers|repository-tools|developer-workflow|project-structure-sync|build-profiles|module-selection|project-structure-native|native-build-profiles)$' --output-on-failure --no-tests=error --output-junit "$junit"
           $testExit = $LASTEXITCODE
           python scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit $testExit
           exit $LASTEXITCODE
@@ -1714,7 +1720,8 @@ jobs:
         run: |
           junit="$GITHUB_WORKSPACE/build/${{ matrix.preset }}/Testing/Temporary/ctest-junit.xml"
           set +e
-          ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error --output-junit "$junit"
+          python3 scripts/ci-evidence.py watch --build-dir build/${{ matrix.preset }} -- ctest --preset ${{ matrix.preset }} \
+            --output-on-failure --no-tests=error --output-junit "$junit"
           test_exit=$?
           set -e
           python3 scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit "$test_exit"
@@ -1795,7 +1802,8 @@ jobs:
         shell: pwsh
         run: |
           $junit = "$env:GITHUB_WORKSPACE\build\${{ matrix.preset }}\Testing\Temporary\ctest-junit.xml"
-          ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error --output-junit "$junit"
+          python scripts/ci-evidence.py watch --build-dir build/${{ matrix.preset }} -- ctest --preset ${{ matrix.preset }} `
+            --output-on-failure --no-tests=error --output-junit "$junit"
           $testExit = $LASTEXITCODE
           python scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit $testExit
           exit $LASTEXITCODE

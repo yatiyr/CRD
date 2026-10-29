@@ -20,7 +20,6 @@ and the board then names the load. `host` prints the same snapshot and exits 3 w
 """
 from pathlib import Path
 import argparse
-import ctypes
 import datetime
 import importlib.util
 import json
@@ -31,7 +30,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,56 +47,6 @@ DEFAULT_SOURCE = 'engine/foundation/log/src/logger.cpp'
 DEFAULT_HEADER = 'engine/foundation/log/include/crd/log/log.hpp'
 DEFAULT_PCH_HEADER = 'engine/foundation/core/include/crd/core/types.hpp'
 DEFAULT_LINK_TARGET = 'crd-ceir-tests'
-GIB = 1024.0 ** 3
-
-
-# ---- machine and memory -------------------------------------------------------------------------------------------
-
-class _MemoryStatus(ctypes.Structure):
-    _fields_ = [('dwLength', ctypes.c_uint32), ('dwMemoryLoad', ctypes.c_uint32), ('ullTotalPhys', ctypes.c_uint64),
-                ('ullAvailPhys', ctypes.c_uint64), ('ullTotalPageFile', ctypes.c_uint64),
-                ('ullAvailPageFile', ctypes.c_uint64), ('ullTotalVirtual', ctypes.c_uint64),
-                ('ullAvailVirtual', ctypes.c_uint64), ('ullAvailExtendedVirtual', ctypes.c_uint64)]
-
-
-def memory_status():
-    """(total physical, available physical, committed) in bytes; committed is the system commit charge."""
-    if platform.system() == 'Windows':
-        status = _MemoryStatus()
-        status.dwLength = ctypes.sizeof(status)
-        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
-        return status.ullTotalPhys, status.ullAvailPhys, status.ullTotalPageFile - status.ullAvailPageFile
-    values = {}
-    try:
-        for line in Path('/proc/meminfo').read_text(encoding='utf-8').splitlines():
-            key, _, rest = line.partition(':')
-            values[key] = int(rest.split()[0]) * 1024
-    except OSError:
-        return 0, 0, 0
-    return values.get('MemTotal', 0), values.get('MemAvailable', 0), values.get('Committed_AS', 0)
-
-
-def cpu_name():
-    if platform.system() == 'Windows':
-        try:
-            import winreg
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'HARDWARE\DESCRIPTION\System\CentralProcessor\0')
-            return winreg.QueryValueEx(key, 'ProcessorNameString')[0].strip()
-        except OSError:
-            return platform.processor()
-    try:
-        for line in Path('/proc/cpuinfo').read_text(encoding='utf-8').splitlines():
-            if line.startswith('model name'):
-                return line.split(':', 1)[1].strip()
-    except OSError:
-        pass
-    return platform.processor()
-
-
-def machine():
-    total, _, _ = memory_status()
-    return {'cpu': cpu_name(), 'logical_cpus': os.cpu_count(), 'memory_gib': round(total / GIB, 1),
-            'os': platform.platform(), 'python': platform.python_version()}
 
 
 # ---- host state: what else runs on the machine ----------------------------------------------------------------------
@@ -131,7 +79,7 @@ def busiest(before, after, seconds, own_pids=()):
         if pid in own_pids or pid not in before or before[pid][0] != name:
             continue
         cores = max(0.0, (cpu - before[pid][2]) / seconds) if cpu is not None and before[pid][2] is not None else 0.0
-        rows.append({'name': name, 'pid': pid, 'cores': round(cores, 2), 'gib': round(rss / GIB, 2)})
+        rows.append({'name': name, 'pid': pid, 'cores': round(cores, 2), 'gib': round(rss / evidence.GIB, 2)})
     by_cpu = sorted(rows, key=lambda r: (-r['cores'], -r['gib']))[:HOST_TOP]
     by_memory = sorted(rows, key=lambda r: (-r['gib'], -r['cores']))[:HOST_TOP]
     return by_cpu, by_memory, round(sum(r['cores'] for r in rows), 2)
@@ -188,8 +136,8 @@ def windows_host_state(powershell, seconds=HOST_SAMPLE_SECONDS, own_pids=()):
 
     by_cpu, by_memory, cores = busiest(snapshot(document.get('before')), snapshot(document.get('after')), seconds,
                                        own_pids)
-    return {'host': 'windows', 'total_gib': round(document['total'] / GIB, 1),
-            'available_gib': round(document['available'] / GIB, 1), 'cores': cores, 'busiest': by_cpu,
+    return {'host': 'windows', 'total_gib': round(document['total'] / evidence.GIB, 1),
+            'available_gib': round(document['available'] / evidence.GIB, 1), 'cores': cores, 'busiest': by_cpu,
             'largest': by_memory}
 
 
@@ -201,10 +149,11 @@ def host_state(seconds=HOST_SAMPLE_SECONDS):
     before = linux_processes()
     time.sleep(seconds)
     after = linux_processes()
-    total, available, _ = memory_status()
+    total, available, _ = evidence.memory_status()
     by_cpu, by_memory, cores = busiest(before, after, seconds, own)
-    state = {'host': 'linux', 'total_gib': round(total / GIB, 1), 'available_gib': round(available / GIB, 1),
-             'cores': cores, 'busiest': by_cpu, 'largest': by_memory}
+    state = {'host': 'linux', 'total_gib': round(total / evidence.GIB, 1),
+             'available_gib': round(available / evidence.GIB, 1), 'cores': cores, 'busiest': by_cpu,
+             'largest': by_memory}
     try:
         state['load'] = [float(v) for v in Path('/proc/loadavg').read_text(encoding='utf-8').split()[:3]]
     except (OSError, ValueError):
@@ -228,41 +177,6 @@ def host_summary(states):
             '%s %.1f cores' % (top['name'], top['cores']) if top else 'none'))
     reasons = [reason for state in states or [] for reason in contention(state)]
     return '; '.join(parts) + ('; CONTENDED: ' + '; '.join(reasons) if reasons else '; idle')
-
-
-class PressureSampler:
-    """Samples available and committed memory once a second on a thread while a row runs."""
-
-    def __init__(self, interval=1.0):
-        self.interval = interval
-        self.samples = []
-        self._stop = threading.Event()
-        self._thread = None
-
-    def __enter__(self):
-        self.samples = [memory_status()]
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-        return self
-
-    def _run(self):
-        while not self._stop.wait(self.interval):
-            self.samples.append(memory_status())
-
-    def __exit__(self, *_):
-        self._stop.set()
-        self._thread.join()
-        self.samples.append(memory_status())
-
-    def summary(self):
-        baseline_available, baseline_committed = self.samples[0][1], self.samples[0][2]
-        min_available = min(s[1] for s in self.samples)
-        max_committed = max(s[2] for s in self.samples)
-        return {'samples': len(self.samples), 'baseline_available_gib': round(baseline_available / GIB, 2),
-                'min_available_gib': round(min_available / GIB, 2),
-                'baseline_committed_gib': round(baseline_committed / GIB, 2),
-                'peak_committed_gib': round(max_committed / GIB, 2),
-                'pressure_gib': round((max_committed - baseline_committed) / GIB, 2)}
 
 
 # ---- ninja log ------------------------------------------------------------------------------------------------------
@@ -471,8 +385,8 @@ class Board:
                        'build_dir': str(self.build_dir).replace('\\', '/'), 'launcher': str(self.sccache or ''),
                        'edits': {'source': source, 'header': header, 'pch_header': pch_header, 'link_target': link_target,
                                  'tooth': list(tooth) if tooth else None}, 'targets': self.targets,
-                       'machine': machine(), 'started': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                       'rows': []}
+                       'machine': evidence.machine(),
+                       'started': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'rows': []}
 
     def run(self, command, cwd=None):
         self.log('  $ ' + ' '.join(command))
@@ -485,7 +399,7 @@ class Board:
         snapshot = ninja_snapshot(log_path)
         if self.sccache:
             sccache_command(self.sccache, '--zero-stats', env=self.env)
-        with PressureSampler() as sampler:
+        with evidence.PressureSampler() as sampler:
             started = time.perf_counter()
             code = action()
             wall = time.perf_counter() - started
@@ -598,7 +512,7 @@ class Board:
             for name in rows:
                 self.row(name, actions[name])
                 if name == 'cold':
-                    self.record['build_tree_gib_after_cold'] = round(tree_bytes(self.build_dir) / GIB, 2)
+                    self.record['build_tree_gib_after_cold'] = round(tree_bytes(self.build_dir) / evidence.GIB, 2)
                 if self.checkpoint:
                     # A board stopped by a deadline keeps the rows it finished.
                     self.checkpoint(self.record)
@@ -608,9 +522,9 @@ class Board:
         self.record['host_after'] = self.host()
         self.log('[%s] host after: %s' % (self.label, host_summary(self.record['host_after'])))
         self.record['toolchain'] = self.toolchain()
-        self.record['build_tree_gib'] = round(tree_bytes(self.build_dir) / GIB, 2)
+        self.record['build_tree_gib'] = round(tree_bytes(self.build_dir) / evidence.GIB, 2)
         if self.sccache:
-            self.record['cache_gib'] = round(tree_bytes(self.env['SCCACHE_DIR']) / GIB, 2)
+            self.record['cache_gib'] = round(tree_bytes(self.env['SCCACHE_DIR']) / evidence.GIB, 2)
         self.record['finished'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         return self.record
 
