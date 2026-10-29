@@ -3,6 +3,9 @@
 #include <crd/core/environment.hpp>
 #include <crd/core/platform.hpp>
 
+#include <charconv>
+#include <system_error>
+
 #if CRD_OS_WINDOWS
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -59,6 +62,24 @@ EnvironmentRead read_environment(const char* name, char* buffer, crd::usize capa
     std::memcpy(buffer, value, n + 1U);
     return EnvironmentRead::Set;
 #endif
+}
+
+bool read_environment_integer(const char* name, crd::i64 low, crd::i64 high, crd::i64& value) noexcept
+{
+    char buffer[24] = {}; // NOLINT(modernize-avoid-c-arrays): a 64-bit integer, its sign and its NUL
+    if (read_environment(name, buffer, sizeof(buffer)) != EnvironmentRead::Set)
+    {
+        return false;
+    }
+    const char* const end = buffer + std::strlen(buffer);
+    crd::i64 n = 0;
+    const std::from_chars_result parsed = std::from_chars(buffer, end, n);
+    if (parsed.ec != std::errc{} || parsed.ptr != end || n < low || n > high)
+    {
+        return false;
+    }
+    value = n;
+    return true;
 }
 
 } // namespace crd

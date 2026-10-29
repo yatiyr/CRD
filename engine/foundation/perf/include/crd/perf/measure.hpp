@@ -39,13 +39,11 @@
 // ---------------------------------------------------------------------------
 
 #include <crd/core/assert.hpp>
-#include <crd/core/platform.hpp>  // CRD_OS_WINDOWS for the env-read split
+#include <crd/core/environment.hpp>
 #include <crd/core/types.hpp>
 #include <crd/time/clocks.hpp>
 
-#include <cstddef>  // std::size_t for _dupenv_s
 #include <cstdio>   // std::fprintf for the soft-mode warning
-#include <cstdlib>  // std::getenv / _dupenv_s + std::free for the soft-mode env check
 #include <utility>
 
 namespace crd::perf
@@ -64,26 +62,6 @@ template <typename F>
     return dur.value * 1000.0;
 }
 
-namespace detail
-{
-// Presence check for an env var. MSVC deprecates std::getenv under /WX (and
-// clang-cl under -Werror=deprecated-declarations) → use _dupenv_s, same pattern
-// as engine/foundation/platform/src/context.cpp.
-[[nodiscard]] inline bool env_present(const char* name) noexcept
-{
-#if CRD_OS_WINDOWS
-    char*         value   = nullptr;
-    std::size_t   len     = 0;
-    const errno_t rc      = _dupenv_s(&value, &len, name);
-    const bool    present = (rc == 0) && (value != nullptr);
-    std::free(value);
-    return present;
-#else
-    return std::getenv(name) != nullptr;
-#endif
-}
-} // namespace detail
-
 // True when perf budgets should be SOFT — log a warning instead of hard-
 // asserting. Enabled by `CRD_PERF_BUDGET_SOFT` (explicit Cerid control, set by
 // the CI workflow) or the standard `CI` env var (so it works out-of-the-box on
@@ -91,7 +69,7 @@ namespace detail
 // the env-read cost is irrelevant for the handful of perf-budget call sites.
 [[nodiscard]] inline bool perf_budgets_are_soft() noexcept
 {
-    return detail::env_present("CRD_PERF_BUDGET_SOFT") || detail::env_present("CI");
+    return crd::environment_set("CRD_PERF_BUDGET_SOFT") || crd::environment_set("CI");
 }
 
 // Emit the soft-mode over-budget warning to stderr (visible under ctest

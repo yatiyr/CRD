@@ -6,13 +6,15 @@
 
 #include <crd/gpu/driver_witness.hpp> // DIAG.10c: shaderc runs under the mode witness
 
+#include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/platform/dynamic_library.hpp>
 #include <crd/platform/filesystem.hpp>
 
 #include <shaderc/shaderc.h>
 
-#include <cstdlib>
 #include <cstring>
+#include <utility>
 
 namespace fs = crd::platform::fs;
 
@@ -59,22 +61,14 @@ struct ShadercApi
 [[nodiscard]] crd::platform::DynamicLibrary try_open_shaderc() noexcept
 {
 #if CRD_OS_WINDOWS
-    char*         sdk = nullptr;
-    std::size_t   len = 0;
-    const errno_t rc  = _dupenv_s(&sdk, &len, "VULKAN_SDK");
-    if (rc == 0 && sdk != nullptr && sdk[0] != '\0')
+    if (crd::containers::String sdk; crd::read_environment_text("VULKAN_SDK", sdk))
     {
-        fs::Path sdk_path = fs::Path(sdk) / "Bin" / "shaderc_shared.dll";
-        free(sdk);
+        const fs::Path sdk_path = fs::Path{std::move(sdk)} / "Bin" / "shaderc_shared.dll";
         auto lib = crd::platform::DynamicLibrary::open(sdk_path, /*log_on_failure=*/false);
         if (lib.is_valid())
         {
             return lib;
         }
-    }
-    else
-    {
-        free(sdk);
     }
     const fs::Path candidates[] = {fs::Path("shaderc_shared.dll")};
 #elif CRD_OS_LINUX

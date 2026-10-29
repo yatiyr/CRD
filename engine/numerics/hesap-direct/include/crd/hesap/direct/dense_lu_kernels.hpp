@@ -1,5 +1,6 @@
 #pragma once
 
+#include <crd/core/environment.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/blas3.hpp>
@@ -9,8 +10,6 @@
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/memory/allocators/linear_allocator.hpp>
-
-#include <cstdlib>
 
 namespace crd::hesap::direct
 {
@@ -86,21 +85,6 @@ void trsm_unit_lower_left(const T* l, crd::u32 ldl, crd::u32 nc, T* x, crd::u32 
     }
 }
 
-// getenv wrapper for the dev-override knobs (`CRD_MF_PANEL` / `CRD_MF_FRONTPAR_K` / `CRD_MF_FORCE_MC64` /
-// `CRD_MF_NO_MC64`). C4996-safe on MSVC: these are fixed, documented dev knobs — not a security surface (no
-// user-controlled paths), so the deprecated-getenv warning is suppressed at this single site.
-[[nodiscard]] inline const char* mf_getenv(const char* name) noexcept
-{
-#ifdef _MSC_VER
-#pragma warning(push)
-#pragma warning(disable : 4996) // getenv — dev override knobs only
-#endif
-    return std::getenv(name);
-#ifdef _MSC_VER
-#pragma warning(pop)
-#endif
-}
-
 // Blocked-LU panel width nb. Env-tunable (CRD_MF_PANEL) for the node-level sweep; a FIXED value is
 // bit-identical across worker counts (both factor_front branches use the same nb; gemm_parallel_auto is
 // bit-exact) ⇒ the {1,2,4,8} moat holds. Wider nb ⇒ the trailing rank-nb GEMM becomes compute-bound (better
@@ -108,19 +92,15 @@ void trsm_unit_lower_left(const T* l, crd::u32 ldl, crd::u32 nc, T* x, crd::u32 
 // TRSM parallelized below).
 [[nodiscard]] inline crd::u32 mf_panel_width() noexcept
 {
-    static const crd::u32 w = []() noexcept -> crd::u32
+    static const crd::u32 kWidth = []() noexcept -> crd::u32
     {
-        if (const char* e = mf_getenv("CRD_MF_PANEL"))
+        if (crd::i64 v = 0; crd::read_environment_integer("CRD_MF_PANEL", 8, 1024, v))
         {
-            const int v = std::atoi(e);
-            if (v >= 8 && v <= 1024)
-            {
-                return static_cast<crd::u32>(v);
-            }
+            return static_cast<crd::u32>(v);
         }
         return 128U; // measured best on the CFD targets: wider nb ⇒ compute-bound trailing GEMM (better scaling)
     }();
-    return w;
+    return kWidth;
 }
 
 // =======================================================================

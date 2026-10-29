@@ -3,6 +3,7 @@
 // same inputs as the scipy/torch peer timings in that script). Protocol:
 // pinned (taskset -c 4), matched 1 thread, best-of-5, checksums printed for
 // cross-validation against the python side.
+#include <crd/core/environment.hpp>
 #include <crd/hesap/tensor/sparse.hpp>
 #include <crd/hesap/tensor/sparse_mttkrp.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -50,17 +51,7 @@ FILE* open_for_reading(const char* path)
 // The home directory into `out` (HOME, as the oracle script writes the corpora there), or false when it is unset.
 bool home_directory(char* out, crd::usize capacity)
 {
-#if defined(_WIN32)
-    char* value = nullptr;
-    crd::usize length = 0;
-    const bool found = _dupenv_s(&value, &length, "HOME") == 0 && value != nullptr;
-    const bool fits = found && std::snprintf(out, capacity, "%s", value) < static_cast<int>(capacity);
-    std::free(value);
-    return fits;
-#else
-    const char* value = std::getenv("HOME");
-    return value != nullptr && std::snprintf(out, capacity, "%s", value) < static_cast<int>(capacity);
-#endif
+    return crd::read_environment("HOME", out, capacity) == crd::EnvironmentRead::Set;
 }
 
 template <typename F> double best_of(const F& fn, int reps = 5)

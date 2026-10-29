@@ -19,6 +19,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/direct/supernodal_cholesky.hpp>
 #include <crd/hesap/ordering/ordering.hpp>
@@ -156,7 +157,7 @@ template <typename Fn> crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
 void run(const char* name)
 {
     // Tuning filter: CRD_BENCH_ONLY=<name> runs just that matrix (fast, low-load threshold sweeps).
-    if (const char* only = std::getenv("CRD_BENCH_ONLY"))
+    if (const crd::EnvironmentValue<256> only_env{"CRD_BENCH_ONLY"}; const char* only = only_env.c_str())
     {
         if (std::strcmp(only, name) != 0)
         {
@@ -518,9 +519,9 @@ int main()
     // (also caps host load — the i9-14900K all-core hazard). 0/unset = hardware_concurrency.
     crd::jobs::Config cfg;
     crd::u32 bench_threads = 0;
-    if (const char* t = std::getenv("CRD_BENCH_THREADS"))
+    if (crd::i64 t = 0; crd::read_environment_integer("CRD_BENCH_THREADS", 0, 0xFFFFFFFF, t))
     {
-        cfg.num_threads = static_cast<crd::u32>(std::strtoul(t, nullptr, 10));
+        cfg.num_threads = static_cast<crd::u32>(t);
         bench_threads = cfg.num_threads;
     }
     // The env (OPENBLAS_NUM_THREADS) is NOT reliably honored — CHOLMOD silently multithreaded large fronts in the

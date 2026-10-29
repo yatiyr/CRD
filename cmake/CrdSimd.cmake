@@ -398,7 +398,8 @@ function(crd_add_isa_isolation_check)
     add_test(NAME crd-check-isa-isolation
         COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-isa-isolation.py"
                 --manifest "${CMAKE_BINARY_DIR}/isa-isolation/$<CONFIG>.manifest" --arch ${arch} --os ${os} ${tools})
-    set_tests_properties(crd-check-isa-isolation PROPERTIES TIMEOUT 1800 ENVIRONMENT "PYTHONUTF8=1")
+    # Its process pool takes every core, so it runs alone rather than starve (and be slowed by) the tests beside it.
+    set_tests_properties(crd-check-isa-isolation PROPERTIES TIMEOUT 1800 RUN_SERIAL TRUE ENVIRONMENT "PYTHONUTF8=1")
 endfunction()
 
 # ---- Determinism: ADR-0063 FP contract -------------------------------------

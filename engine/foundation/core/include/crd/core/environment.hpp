@@ -6,6 +6,8 @@
 
 #include <crd/core/types.hpp>
 
+#include <cstring>
+
 namespace crd
 {
 
@@ -23,6 +25,32 @@ enum class EnvironmentRead : crd::u8
 [[nodiscard]] inline bool environment_set(const char* name) noexcept
 {
     return read_environment(name, nullptr, 0U) != EnvironmentRead::Unset;
+}
+
+// Reads variable `name` as a whole decimal integer into `value` when it lies in [low, high]; false, with `value`
+// untouched, when it is unset, not such an integer or out of range.
+[[nodiscard]] bool read_environment_integer(const char* name, crd::i64 low, crd::i64 high, crd::i64& value) noexcept;
+
+// Reads variable `name`, of any length, into `text`: a growable string whose data() holds size() + 1 bytes
+// (resize, data, size). True when it is set; `text` is empty when not.
+template <typename Text> bool read_environment_text(const char* name, Text& text)
+{
+    text.resize(255U);
+    for (;;)
+    {
+        switch (read_environment(name, text.data(), text.size() + 1U))
+        {
+            case EnvironmentRead::Set:
+                text.resize(std::strlen(text.data()));
+                return true;
+            case EnvironmentRead::Unset:
+                text.resize(0U);
+                return false;
+            case EnvironmentRead::TooLong:
+                text.resize(text.size() * 2U + 1U);
+                break;
+        }
+    }
 }
 
 // One variable's value in N bytes of its own storage.

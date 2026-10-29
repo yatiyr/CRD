@@ -772,13 +772,9 @@ double MultifrontalLU<T>::factor_attempt(const sparse::SparseMatrix<T, sparse::S
         // The threshold ≈ sw/2 (not sw) is measured: routing the k=sw/2..sw-1 levels through front-parallel won
         // wang3 (0.96→1.07–1.11×) and ns3Da (0.95→1.00–1.01×) vs MUMPS @8w. CRD_MF_FRONTPAR_K overrides (dev).
         crd::u32 front_par_thresh = (sw / 2 >= 2) ? sw / 2 : 2;
-        if (const char* e = mf_getenv("CRD_MF_FRONTPAR_K"))
+        if (crd::i64 v = 0; crd::read_environment_integer("CRD_MF_FRONTPAR_K", 2, 0xFFFFFFFF, v))
         {
-            const int v = std::atoi(e);
-            if (v >= 2)
-            {
-                front_par_thresh = static_cast<crd::u32>(v);
-            }
+            front_par_thresh = static_cast<crd::u32>(v);
         }
         for (crd::u32 l = 0; l < nlevels; ++l)
         {
@@ -836,7 +832,7 @@ double MultifrontalLU<T>::factor_attempt(const sparse::SparseMatrix<T, sparse::S
     // %-of-flops in SKINNY fronts (npiv<32) means the FUNDAMENTAL (un-amalgamated) supernodes factor at low
     // GFLOP/s ⇒ relaxed amalgamation is the lever; flops concentrated in a few BIG fronts at ~MUMPS GFLOP/s ⇒
     // the microkernel wall ⇒ parity is the ceiling.
-    if (mf_getenv("CRD_MF_PROFILE") != nullptr)
+    if (crd::environment_set("CRD_MF_PROFILE"))
     {
         double total_fl = 0.0;
         double skinny_fl = 0.0;
@@ -934,8 +930,8 @@ void MultifrontalLU<T>::factorize(const sparse::SparseMatrix<T, sparse::SparseFo
     // growth blows up (genuinely-unsymmetric / circuit). Both paths use STATIC pivoting ⇒ the cross-thread
     // determinism moat holds regardless of which runs. Env overrides: CRD_MF_FORCE_MC64 (always MC64) /
     // CRD_MF_NO_MC64 (natural only, no fallback — dev/experiment).
-    const bool force_mc64 = mf_getenv("CRD_MF_FORCE_MC64") != nullptr;
-    const bool no_fallback = mf_getenv("CRD_MF_NO_MC64") != nullptr;
+    const bool force_mc64 = crd::environment_set("CRD_MF_FORCE_MC64");
+    const bool no_fallback = crd::environment_set("CRD_MF_NO_MC64");
     bool use_mc64 = force_mc64;
     for (int attempt = 0; attempt < 2; ++attempt)
     {

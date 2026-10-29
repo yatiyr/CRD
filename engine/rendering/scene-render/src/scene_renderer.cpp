@@ -34,8 +34,9 @@
 #include <crd/framecook/frame_ceir.hpp>    // CEIR-15e (Fork E): to_ceir_frame / from_ceir_frame
 #include <crd/framecook/frame_runtime.hpp> // REN-37.10: FrameRecorder + IFrameGraphHost
 
-#include <cstdlib> // std::getenv (renderer_getenv: CRD_ASSETS_DIR)
-#include <crd/log/log.hpp>              // REN-37.10: a graph that fails to record must SAY so
+#include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp> // CRD_ASSETS_DIR
+#include <crd/log/log.hpp>             // REN-37.10: a graph that fails to record must SAY so
 #include <crd/platform/filesystem.hpp>  // REN-38-F15: disk-first asset resolution (a file shadows the pack)
 #include <crd/resources/openpbr_material.hpp>
 #include <crd/resources/resource_manager.hpp>
@@ -3581,21 +3582,6 @@ SceneRenderer::SceneRenderer(crd::memory::IAllocator* alloc)
 
 SceneRenderer::~SceneRenderer() = default;
 
-// C4996-safe env read (the engine's `mf_getenv` pattern): the renderer honours `CRD_ASSETS_DIR` only to LOCATE
-// its shipped default assets when the host has not pinned a root — a FIXED, documented dev/quick-start knob over
-// a fixed name, never a user-controlled path fed to a shell, so the deprecated-getenv warning is silenced here.
-[[nodiscard]] static const char* renderer_getenv(const char* name) noexcept
-{
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4996)
-#endif
-    return std::getenv(name);
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
-}
-
 bool SceneRenderer::init(crd::gpu::IRasterContext& raster, crd::resources::ResourceManager& rm)
 {
     m_impl->raster = &raster;
@@ -3607,9 +3593,9 @@ bool SceneRenderer::init(crd::gpu::IRasterContext& raster, crd::resources::Resou
     // `init_programs` then reports the first asset it cannot find rather than failing here.
     if (m_impl->asset_root.size() == 0U)
     {
-        if (const char* aroot = renderer_getenv("CRD_ASSETS_DIR"); aroot != nullptr && aroot[0] != '\0')
+        if (crd::containers::String aroot; crd::read_environment_text("CRD_ASSETS_DIR", aroot))
         {
-            (void)set_asset_root(aroot);
+            (void)set_asset_root(aroot.c_str());
         }
     }
     return raster.valid();

@@ -1,5 +1,6 @@
 #include "filesystem_detail.hpp"
 
+#include <crd/core/environment.hpp>
 #include <crd/core/fault_seam.hpp>
 #include <crd/log/log.hpp>
 #include <crd/platform/filesystem.hpp>
@@ -9,7 +10,6 @@
 #include <thread>
 
 #include <cstdint>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <crd/containers/array.hpp>
@@ -256,36 +256,29 @@ Path executable_dir() noexcept
 
 Path user_config_dir(containers::StringView app_name) noexcept
 {
+    containers::String base;
 #if CRD_OS_WINDOWS
-    char* raw = nullptr;
-    std::size_t len = 0;
-    const errno_t rc = _dupenv_s(&raw, &len, "APPDATA");
-    if (rc != 0 || raw == nullptr)
+    if (!read_environment_text("APPDATA", base))
     {
         return current_working_dir() / app_name;
     }
-    containers::String base(raw);
-    free(raw);
     return Path{std::move(base)} / app_name;
 #elif CRD_OS_MAC
-    const char* home = std::getenv("HOME");
-    if (home == nullptr)
+    if (!read_environment_text("HOME", base))
     {
         return current_working_dir() / app_name;
     }
-    return Path(home) / "Library" / "Application Support" / app_name;
+    return Path{std::move(base)} / "Library" / "Application Support" / app_name;
 #else
-    const char* xdg = std::getenv("XDG_CONFIG_HOME");
-    if (xdg != nullptr && xdg[0] != '\0')
+    if (read_environment_text("XDG_CONFIG_HOME", base))
     {
-        return Path(xdg) / app_name;
+        return Path{std::move(base)} / app_name;
     }
-    const char* home = std::getenv("HOME");
-    if (home == nullptr)
+    if (!read_environment_text("HOME", base))
     {
         return current_working_dir() / app_name;
     }
-    return Path(home) / ".config" / app_name;
+    return Path{std::move(base)} / ".config" / app_name;
 #endif
 }
 

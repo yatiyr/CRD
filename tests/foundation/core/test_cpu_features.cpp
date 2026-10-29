@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <string_view>
 
 #if defined(_WIN32)
@@ -316,6 +317,55 @@ TEST_CASE("cpu features: the environment reader reports a value only when it is 
         CHECK_FALSE(crd::environment_set(name));
     }
     CHECK(crd::EnvironmentValue<8>{name}.read() == crd::EnvironmentRead::Unset);
+}
+
+TEST_CASE("cpu features: the environment reader reads integers in range and values of any length", "[core][cpu]")
+{
+    const char* name = "CRD_ENVIRONMENT_READ_TEST";
+    struct Case
+    {
+        const char* text;
+        bool read;
+        crd::i64 value;
+    };
+    constexpr crd::i64 most_negative = std::numeric_limits<crd::i64>::min();
+    const Case cases[] = {
+        {"42", true, 42},
+        {"-8", true, -8},
+        {"1024", true, 1024},
+        {"-9", false, 0},
+        {"1025", false, 0},
+        {"+42", false, 0},
+        {"42x", false, 0},
+        {" 42", false, 0},
+        {"4 2", false, 0},
+        {"0x10", false, 0},
+        {"-", false, 0},
+        {"", false, 0},
+        {"99999999999999999999", false, 0},
+        {"-9223372036854775808", true, most_negative},
+    };
+    for (const Case& c : cases)
+    {
+        INFO(c.text);
+        const ScopedEnv env{name, c.text};
+        // [-8, 1024], or from the most negative value for its own case.
+        const crd::i64 low = c.value == most_negative ? most_negative : -8;
+        crd::i64 value = 12345;
+        CHECK(crd::read_environment_integer(name, low, 1024, value) == c.read);
+        CHECK(value == (c.read ? c.value : 12345));
+    }
+    {
+        // Past the first 255-byte read, so the value is read again into a grown string.
+        const cont::String long_value(1000U, 'q');
+        const ScopedEnv env{name, long_value.c_str()};
+        cont::String text;
+        REQUIRE(crd::read_environment_text(name, text));
+        CHECK(std::string_view{text} == std::string_view{long_value});
+    }
+    cont::String text{"stale"};
+    CHECK_FALSE(crd::read_environment_text(name, text));
+    CHECK(text.empty());
 }
 
 TEST_CASE("cpu features: each level needs its features and the OS-saved state they use", "[core][cpu]")

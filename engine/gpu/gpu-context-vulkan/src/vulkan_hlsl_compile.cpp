@@ -10,6 +10,8 @@
 
 #if CRD_HAS_DXC
 
+#include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/platform/dynamic_library.hpp>
 #include <crd/platform/filesystem.hpp>
 
@@ -24,7 +26,7 @@
 
 #include <dxc/dxcapi.h>
 
-#include <cstdlib>
+#include <utility>
 
 namespace fs = crd::platform::fs;
 
@@ -36,22 +38,14 @@ namespace
 [[nodiscard]] crd::platform::DynamicLibrary try_open_dxc() noexcept
 {
 #if CRD_OS_WINDOWS
-    char*         sdk = nullptr;
-    std::size_t   len = 0;
-    const errno_t rc  = _dupenv_s(&sdk, &len, "VULKAN_SDK");
-    if (rc == 0 && sdk != nullptr && sdk[0] != '\0')
+    if (crd::containers::String sdk; crd::read_environment_text("VULKAN_SDK", sdk))
     {
-        fs::Path sdk_path = fs::Path(sdk) / "Bin" / "dxcompiler.dll";
-        std::free(sdk);
+        const fs::Path sdk_path = fs::Path{std::move(sdk)} / "Bin" / "dxcompiler.dll";
         auto lib = crd::platform::DynamicLibrary::open(sdk_path, /*log_on_failure=*/false);
         if (lib.is_valid())
         {
             return lib;
         }
-    }
-    else
-    {
-        std::free(sdk);
     }
     const fs::Path candidates[] = {fs::Path("dxcompiler.dll")};
 #elif CRD_OS_LINUX

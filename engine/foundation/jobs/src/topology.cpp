@@ -8,10 +8,9 @@
 
 #include <crd/jobs/jobs.hpp>
 
+#include <crd/core/environment.hpp>
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
-
-#include <cstdlib> // std::getenv, std::atoi
 
 #if CRD_OS_WINDOWS
 #ifndef NOMINMAX
@@ -267,20 +266,6 @@ crd::u32 detect_performance_cpu_ids(crd::u32* out, crd::u32 max) noexcept
 #endif
 }
 
-// getenv wrapper — the override is a single dev/config knob read once; suppress MSVC's C4996 at this one site
-// (mirrors crd-hesap-direct's mf_getenv).
-[[nodiscard]] const char* policy_getenv(const char* name) noexcept
-{
-#if CRD_OS_WINDOWS
-#pragma warning(push)
-#pragma warning(disable : 4996)
-#endif
-    return std::getenv(name); // NOLINT(concurrency-mt-unsafe,cert-env33-c) — read once into a static
-#if CRD_OS_WINDOWS
-#pragma warning(pop)
-#endif
-}
-
 // Cached MemoryBoundElementwise target.
 //
 // IMPORTANT (measured + root-caused 2026-06-22): merely dispatching FEWER jobs than workers does NOT realise the
@@ -294,14 +279,10 @@ crd::u32 membound_target() noexcept
 {
     static const crd::u32 kCached = []() noexcept -> crd::u32
     {
-        const char* const env = policy_getenv("CRD_JOBS_MEMBOUND_WORKERS");
-        if (env != nullptr)
+        crd::i64 count = 0;
+        if (crd::read_environment_integer("CRD_JOBS_MEMBOUND_WORKERS", 1, 0xFFFFFFFF, count))
         {
-            const int v = std::atoi(env); // NOLINT(cert-err34-c) — best-effort config value
-            if (v > 0)
-            {
-                return static_cast<crd::u32>(v);
-            }
+            return static_cast<crd::u32>(count);
         }
         return 0U; // no auto-reduction until worker affinity exists (see note above)
     }();

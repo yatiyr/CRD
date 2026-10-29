@@ -8,10 +8,10 @@
 #include <crd/perf/fault_injection.hpp>
 #include <crd/perf/flight_recorder.hpp>
 
+#include <crd/core/environment.hpp>
 #include <crd/core/fault_seam.hpp>
 
 #include <cstdio>
-#include <cstdlib>
 #include <filesystem>
 #include <initializer_list>
 #include <string_view>
@@ -35,29 +35,6 @@ cont::String host_tuple_string(const BuildIdentity& build)
         t.append(cont::StringView{field->data(), field->size()});
     }
     return t;
-}
-
-// Read an environment variable without tripping the MSVC deprecation of getenv
-// (mirrors crd-platform's context.cpp). Empty when unset.
-cont::String read_env(const char* name)
-{
-    cont::String out;
-#if defined(_WIN32)
-    char*        value = nullptr;
-    std::size_t  len = 0;
-    if (_dupenv_s(&value, &len, name) == 0 && value != nullptr)
-    {
-        out = cont::String{value};
-        std::free(value);
-    }
-#else
-    const char* v = std::getenv(name); // NOLINT(concurrency-mt-unsafe,cert-env33-c) -- diagnostic probe, read once
-    if (v != nullptr)
-    {
-        out = cont::String{v};
-    }
-#endif
-    return out;
 }
 
 // Can a probe file be created in `dir`? False for a missing directory or a file
@@ -171,8 +148,8 @@ DoctorReport run_doctor(cont::StringView output_dir, const DoctorLive& live)
     {
         DiagnosticDependency sym;
         sym.name = cont::StringView{"symbolizer"};
-        const cont::String path = read_env("ASAN_SYMBOLIZER_PATH");
-        if (path.empty())
+        cont::String path;
+        if (!crd::read_environment_text("ASAN_SYMBOLIZER_PATH", path))
         {
             // Unset: rely on the toolchain default; treated as available but noted.
             sym.present = true;

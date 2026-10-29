@@ -20,6 +20,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/direct/multifrontal_qr.hpp>
 #include <crd/hesap/ordering/ordering.hpp>
@@ -157,7 +158,7 @@ template <typename Fn> crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
 
 void run(const char* name, cholmod_common* cc)
 {
-    if (const char* only = std::getenv("CRD_BENCH_ONLY"))
+    if (const crd::EnvironmentValue<256> only_env{"CRD_BENCH_ONLY"}; const char* only = only_env.c_str())
     {
         if (std::strstr(only, name) == nullptr)
         {

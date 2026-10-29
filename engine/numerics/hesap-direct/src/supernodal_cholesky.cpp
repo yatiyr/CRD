@@ -1,4 +1,5 @@
 #include <crd/core/assert.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/hesap/dense/blas3.hpp>
 #include <crd/hesap/dense/dense_dispatch.hpp>
 #include <crd/hesap/dense/detail/parallel_triangular.hpp>
@@ -14,12 +15,6 @@
 #include <cmath>
 #include <cstdio>
 #include <type_traits>
-
-#if defined(CRD_HESAP_CHOL_PROFILE) || defined(CRD_HESAP_CHOL_SCALE_PROFILE)
-#include <chrono>
-#include <cstdio>
-#include <cstdlib>
-#endif
 
 namespace crd::hesap::direct
 {
@@ -722,17 +717,10 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
     const crd::u32 ns = sym.nsuper;
     crd::u32 cdiv_block = kCdivBlock;
 #ifdef CRD_HESAP_CHOL_PROFILE
-#ifdef _MSC_VER
-#pragma warning(push)
-#pragma warning(disable : 4996) // getenv — temp profiling only
-#endif
-    if (const char* cb = std::getenv("CRD_CDIV_BLOCK"))
+    if (crd::i64 cb = 0; crd::read_environment_integer("CRD_CDIV_BLOCK", 1, 0xFFFFFFFF, cb))
     {
-        cdiv_block = static_cast<crd::u32>(std::strtoul(cb, nullptr, 10));
+        cdiv_block = static_cast<crd::u32>(cb);
     }
-#ifdef _MSC_VER
-#pragma warning(pop)
-#endif
 #endif
 
     m_lxp.resize(ns + 1);
