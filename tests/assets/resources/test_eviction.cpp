@@ -141,6 +141,15 @@ static crd::containers::String ev_tmp_path(const char* prefix, const ResourceId&
     return p;
 }
 
+// The blob size of a mounted pack's entry. The lookup may miss, so a missing entry fails the test instead of
+// dereferencing null.
+static crd::u64 ev_blob_size(const ResourceManager& rm, ResourceId id)
+{
+    const MountEntry* entry = rm.find_entry(id);
+    REQUIRE(entry != nullptr);
+    return entry->blob_size;
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 TEST_CASE("Eviction: budget enforced - excess resources evicted from A1in",
@@ -164,7 +173,7 @@ TEST_CASE("Eviction: budget enforced - excess resources evicted from A1in",
         REQUIRE(packs[i].mid.is_valid());
     }
 
-    const crd::u64 blob_sz = rm.find_entry(packs[0].id)->blob_size;
+    const crd::u64 blob_sz = ev_blob_size(rm, packs[0].id);
     rm.set_memory_budget(blob_sz * 2U);
 
     for (crd::usize i = 0; i < n_packs; ++i)
@@ -198,7 +207,7 @@ TEST_CASE("Eviction: pinned entries survive eviction pressure",
         REQUIRE(packs[i].mid.is_valid());
     }
 
-    const crd::u64 blob_sz = rm.find_entry(packs[0].id)->blob_size;
+    const crd::u64 blob_sz = ev_blob_size(rm, packs[0].id);
 
     // Pin resource 0 before loading. Budget = 2 blobs (room for 2, but resource 0 is pinned).
     rm.pin(packs[0].id);
@@ -285,7 +294,7 @@ TEST_CASE("Eviction: 2Q - A1out ghost hit promotes resource to Am over A1in entr
         REQUIRE(packs[i].mid.is_valid());
     }
 
-    const crd::u64 blob_sz = rm.find_entry(packs[0].id)->blob_size;
+    const crd::u64 blob_sz = ev_blob_size(rm, packs[0].id);
     rm.set_memory_budget(blob_sz * 2U);
 
     // Load A (→ A1in). Drop handle.
@@ -371,7 +380,7 @@ TEST_CASE("Eviction diag10c: the budget reading shows an overrun when nothing is
         packs[i].mid = rm.mount_manifest(packs[i].path.generic());
         REQUIRE(packs[i].mid.is_valid());
     }
-    const crd::u64 blob_sz = rm.find_entry(packs[0].id)->blob_size;
+    const crd::u64 blob_sz = ev_blob_size(rm, packs[0].id);
 
     // The default budget has no bound: reported, never judged.
     const crd::BudgetReading open = rm.memory_pressure();
