@@ -199,7 +199,6 @@ void run(const char* name, crd::i32 r)
         [&]()
         {
             auto cc = crd::hesap::sparse::sddmm_parallel<crd::f64>(mask, x.data(), ru, y.data(), ru, ru, 1.0, alloc);
-            crd::jobs::frame_reset();
             (void)cc;
         });
 

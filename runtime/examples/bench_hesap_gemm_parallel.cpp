@@ -98,11 +98,6 @@ template <typename T> RunResult<T> run_workers(crd::usize n, crd::u32 num_worker
     {
         gemm_parallel<T, Layout::RowMajor>(num_workers, T{1}, a, b, T{}, c);
     }
-    // crd::jobs::parallel_for stores JobDecl arrays in the per-thread frame arena
-    // (1 MB default, never reclaimed until frame_reset). gemm_parallel emits 4
-    // parallel_for calls per N=1024 invocation, so ~50 timed iters per size *
-    // 5 sizes = 1000+ JobDecls would otherwise exhaust the arena mid-bench.
-    crd::jobs::frame_reset();
 
     const auto t0 = std::chrono::steady_clock::now();
     int iters = 0;
@@ -117,7 +112,6 @@ template <typename T> RunResult<T> run_workers(crd::usize n, crd::u32 num_worker
             gemm_parallel<T, Layout::RowMajor>(num_workers, T{1}, a, b, T{}, c);
         }
         ++iters;
-        crd::jobs::frame_reset();
         const auto elapsed = std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
         if (elapsed > 0.5 && iters >= 3)
         {

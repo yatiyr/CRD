@@ -203,7 +203,6 @@ template <typename T> void run(const char* label, Pattern p, crd::u32 n, crd::u3
         [&]()
         {
             crd::hesap::sparse::spmv_sell_parallel<T>(T(1), sell, xs, T(0), ys);
-            crd::jobs::frame_reset(); // reclaim the parallel_for JobDecl arena between reps
         });
     peer::set_threads(0); // 0 => Eigen's default (all hardware threads)
     const crd::f64 t_eigen_mt = best_ms([&]() { peer::spmv(a.get(), xv.get(), yv.get()); });

@@ -64,15 +64,9 @@ crd_peer::eigen::MatF64* peer_symmetric(const crd::hesap::dense::Symmetric<crd::
 
 template <typename Op> crd::f64 time_loop(const Op& op, int& iters_out, crd::f64 budget_s = 0.4, int min_iters = 3)
 {
-    // Per memory/feedback_jobs_parallel_for_frame_arena_exhaustion: reset
-    // the per-thread jobs frame arena between iters; otherwise tight loops
-    // exhaust the 1 MB arena.
     op();
-    crd::jobs::frame_reset();
     op();
-    crd::jobs::frame_reset();
     op();
-    crd::jobs::frame_reset();
     crd::f64 best_per_iter = 1e300;
     int best_iters = 0;
     crd::f64 best_elapsed = 0.0;
@@ -83,7 +77,6 @@ template <typename Op> crd::f64 time_loop(const Op& op, int& iters_out, crd::f64
         while (true)
         {
             op();
-            crd::jobs::frame_reset();
             ++iters;
             const auto el = std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
             if (el > budget_s && iters >= min_iters)

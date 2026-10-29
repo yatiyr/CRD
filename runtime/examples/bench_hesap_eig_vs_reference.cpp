@@ -59,9 +59,7 @@ using crd::hesap::dense::Symmetric;
 template <typename Op> crd::f64 time_loop(const Op& op, crd::f64 budget_s = 0.4, int min_iters = 3)
 {
     op();
-    crd::jobs::frame_reset();
     op();
-    crd::jobs::frame_reset();
     crd::f64 best = 1e300;
     for (int trial = 0; trial < 3; ++trial)
     {
@@ -70,7 +68,6 @@ template <typename Op> crd::f64 time_loop(const Op& op, crd::f64 budget_s = 0.4,
         while (true)
         {
             op();
-            crd::jobs::frame_reset();
             ++iters;
             const crd::f64 el = std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
             if (el > budget_s && iters >= min_iters)

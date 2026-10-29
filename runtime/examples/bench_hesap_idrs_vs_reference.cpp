@@ -161,7 +161,6 @@ template <typename Fn> static crd::f64 best_ms(const Fn& fn, crd::i32 reps = 3)
     {
         const auto t0 = Clock::now();
         fn();
-        crd::jobs::frame_reset();
         const auto t1 = Clock::now();
         best = std::min(best, std::chrono::duration<crd::f64, std::milli>(t1 - t0).count());
     }

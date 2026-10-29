@@ -172,7 +172,6 @@ template <typename Fn> static crd::f64 best_ms(const Fn& fn, crd::i32 reps = 3)
     {
         const auto t0 = Clock::now();
         fn();
-        crd::jobs::frame_reset();
         const auto t1 = Clock::now();
         best = std::min(best, std::chrono::duration<crd::f64, std::milli>(t1 - t0).count());
     }
@@ -268,7 +267,6 @@ static crd::f64 true_resid(hs::ParallelSparseLinearOp<crd::f64>& op, const crd::
 {
     hd::Vector<crd::f64> ax(&g_alloc, static_cast<crd::usize>(n));
     (void)op.apply(x.span(), ax.span());
-    crd::jobs::frame_reset();
     crd::f64 nb = 0;
     crd::f64 nr = 0;
     for (crd::i32 k = 0; k < n; ++k)

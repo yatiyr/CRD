@@ -528,7 +528,7 @@ endfunction()
 #
 # crd_add_hesap_vs_ref_bench(<name> [USE_JOBS] [USE_OPENBLAS]): the bench examples/<name>.cpp, which calls Eigen
 # through crd-bench-eigen-peer (examples/peers/eigen_peer.hpp) and builds with the tree's warnings.
-#   USE_JOBS     also link crd-jobs (benches that call jobs::frame_reset).
+#   USE_JOBS     also link crd-jobs (benches that start the job pool).
 #   USE_OPENBLAS also link openblas and its generated-header directories (see the note below).
 # No precompiled header: the default one has not been proven beside OpenBLAS's cblas.h.
 # Eigen's parallel products expand `#pragma omp parallel` in the unit that instantiates them, which is the peer's.

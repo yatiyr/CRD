@@ -84,7 +84,6 @@ void run_ell(crd::u32 n, crd::u32 per_row)
         [&]()
         {
             sp::spmv_ell_parallel<crd::f64>(1.0, ell, {x.data(), x.size()}, 0.0, {y.data(), y.size()});
-            crd::jobs::frame_reset();
         });
     const crd::f64 t_csr = best_ms(
         [&]() { sp::spmv<crd::f64>(1.0, csr, sp::Trans::None, {x.data(), x.size()}, 0.0, {y.data(), y.size()}); });
@@ -139,7 +138,6 @@ void run_dia(crd::u32 n)
         [&]()
         {
             sp::spmv_dia_parallel<crd::f64>(1.0, dia, {x.data(), x.size()}, 0.0, {y.data(), y.size()});
-            crd::jobs::frame_reset();
         });
     const crd::f64 t_csr = best_ms(
         [&]() { sp::spmv<crd::f64>(1.0, csr, sp::Trans::None, {x.data(), x.size()}, 0.0, {y.data(), y.size()}); });

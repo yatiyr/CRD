@@ -186,7 +186,6 @@ void run(const char* name, crd::i32 r)
         [&]()
         {
             crd::hesap::sparse::spmm_parallel<crd::f64>(1.0, a, b.data(), ru, ru, 0.0, c.data(), ru);
-            crd::jobs::frame_reset();
         });
 
     namespace peer = crd_peer::eigen;

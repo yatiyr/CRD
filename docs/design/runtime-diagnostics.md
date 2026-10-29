@@ -2389,7 +2389,11 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-queue-pressure.md
   high water kept beside the acquired count), each fiber tier (its count, acquired, peak and its own refusals), each
   injection queue by priority (capacity, depth and refusals; no high water, which would cost every push a read of the
   consumers' position, so a window over an injection queue is never called Relaxed) and the pinned lanes as one budget
-  (the per-thread capacity, the fullest lane, the highest lane peak, all lanes' refusals). Each pool raises its peak
+  (the per-thread capacity, the fullest lane, the highest lane peak, all lanes' refusals). Since 2026-10-29 the frame
+  arenas are one budget too, in bytes (`frame_alloc_bytes`, the fullest arena, the highest arena peak, all arenas'
+  refusals): `frame_alloc` past an arena is the always-on fatal "frame arena exhausted" where it was an assertion that
+  a release build skipped, and `frame_try_alloc` returns nullptr, counted
+  ([session](../sessions/2026-10-29-jobs-frame-arena-ownership.md)). Each pool raises its peak
   just after the count it bounds, so a reading reports the high water as at least the count it read (2026-10-24: a
   fiber reading showed 9 in use with a high water of 8); the lifetime ledger's snapshot does the same for `live`.
   Since 2026-10-25 ([JOBS-HARD.3](../ROADMAP.md#slice-jobs-hard.3), [ADR-0033](../decisions/0033-jobs-implementation-architecture.md)

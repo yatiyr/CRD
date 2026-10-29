@@ -99,7 +99,6 @@ TEST_CASE("bench BVH build -- serial vs parallel", "[bench][bench-bvh][!benchmar
     };
     BENCHMARK("bvh_build_parallel  100k  (auto jobs)")
     {
-        crd::jobs::frame_reset();
         return bvh_build_parallel(s100k, &alloc);
     };
     BENCHMARK("bvh_build  1M  (serial)")
@@ -108,7 +107,6 @@ TEST_CASE("bench BVH build -- serial vs parallel", "[bench][bench-bvh][!benchmar
     };
     BENCHMARK("bvh_build_parallel  1M  (auto jobs)")
     {
-        crd::jobs::frame_reset();
         return bvh_build_parallel(s1m, &alloc);
     };
     crd::jobs::shutdown();

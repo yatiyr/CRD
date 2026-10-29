@@ -36,8 +36,8 @@ on every host (a Windows pipe had turned its em dash into one cp1254 byte); `--r
 
 - `parallel_for`, `parallel_for_pcores` and `parallel_reduce` take a mark, build the job array, `run()` (which copies
   it and never suspends) and restore before returning or waiting. A loop of them never grows the arena, so every
-  library reset and the three mark/restore pairs are deleted, with the test-side resets and oversized arenas that
-  only hid the leak.
+  library reset and the three mark/restore pairs are deleted, with the test and bench resets and oversized arenas
+  that only hid the leak.
 - `parallel_reduce` takes the caller's `std::span<R>` slots (one per job) instead of `num_jobs`; a job's slots live on
   its own stack and move with it. It has no engine caller (the BVH builder's notes said it did; they now name
   `parallel_for`).
@@ -56,7 +56,8 @@ a caller's bytes intact, nested reductions in sixteen jobs leaving every arena e
 the hesap-sparse `[parallel]` cases (new: 500 operator applies keep a caller's frame bytes), crd-stress-tests
 `[jobs]`, crd-geometry-bvh-tests (now on the default 1 MiB arena), the sandbox host cases (the run now leaves the
 arena where it found it), crd-ceir-host-tests, the Morton and spatial tests, crd-hesap-direct-tests; tooling tests for
-the new guard and the allocation guard; the ctest guards; the repository validators. One guard run died with Python's "internal error in regular expression engine" in `check-isa-isolation.py` (this host's known fault); its rerun passed.
+the new guard and the allocation guard; the ctest guards; the repository validators. One guard run died with Python's "internal error in regular expression engine" in `check-isa-isolation.py` (this host's known fault); its rerun passed. crd-bench builds; the vs-reference benches lost only reset lines and were not compiled here
+(the local win-vs-ref tree names a removed MSVC 14.50.35717 and no longer configures), so hosted CI builds them.
 
 ## Left
 

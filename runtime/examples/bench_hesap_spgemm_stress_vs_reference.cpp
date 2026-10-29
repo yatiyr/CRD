@@ -85,7 +85,6 @@ template <typename Gen> void run(const char* name, crd::u32 n, const Gen& g)
         [&]()
         {
             auto c = sp::spgemm_parallel<crd::f64>(a, a, alloc);
-            crd::jobs::frame_reset();
             (void)c;
         });
 

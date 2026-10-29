@@ -138,7 +138,6 @@ template <typename Op> crd::f64 time_loop(const Op& op, int& iters_out)
         {
             op();
             ++iters;
-            crd::jobs::frame_reset();
             const auto el = std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
             if (el > 0.6 && iters >= 5)
             {

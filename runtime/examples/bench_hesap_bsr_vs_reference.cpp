@@ -102,7 +102,6 @@ void run(crd::u32 block_rows, crd::u32 block_cols, crd::u32 b, crd::u32 blocks_p
         [&]()
         {
             sp::spmv_bsr_parallel<crd::f64>(1.0, bsr, {x.data(), x.size()}, 0.0, {y.data(), y.size()});
-            crd::jobs::frame_reset();
         });
     const crd::f64 t_csr_ser = best_ms(
         [&]() { sp::spmv<crd::f64>(1.0, csr, sp::Trans::None, {x.data(), x.size()}, 0.0, {y.data(), y.size()}); });

@@ -189,7 +189,6 @@ void run(const char* name, const char* group)
         [&]()
         {
             auto c = crd::hesap::sparse::spgemm_parallel(a, a, alloc);
-            crd::jobs::frame_reset();
             volatile crd::usize s = c.nnz();
             (void)s;
         });
