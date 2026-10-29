@@ -10,6 +10,6 @@ python3 runtime/examples/bench_dsp_multirate_refs.py
 echo ""
 echo "--- liquid-dsp rresamp ---"
 if [ -f runtime/examples/bench_dsp_multirate_liquid.c ]; then
-  gcc -O3 -mavx2 -mfma runtime/examples/bench_dsp_multirate_liquid.c -lliquid -lm -o /tmp/bench_liquid_mr 2>/tmp/liquid_mr_err.log \
+  gcc -O3 -march=native runtime/examples/bench_dsp_multirate_liquid.c -lliquid -lm -o /tmp/bench_liquid_mr 2>/tmp/liquid_mr_err.log \
     && /tmp/bench_liquid_mr || { echo "(liquid build failed — see /tmp/liquid_mr_err.log)"; head -5 /tmp/liquid_mr_err.log; }
 fi

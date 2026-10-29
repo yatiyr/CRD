@@ -6,7 +6,10 @@
 // AND Cerid >= OpenBLAS at every measured N, for both f32 and f64.
 //
 // Build only when -DCRD_BUILD_HESAP_VS_REFERENCE=ON is passed at configure.
-// Eigen + OpenBLAS are fetched into build/_deps/ on first configure.
+// Eigen + OpenBLAS are fetched into build/_deps/ on first configure; Eigen runs in
+// its peer library at the host's best ISA (examples/peers/eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/hesap/dense/blas3.hpp>
 #include <crd/hesap/dense/dense_dispatch.hpp>
@@ -15,7 +18,6 @@
 #include <crd/math/simd/backend.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
-#include <Eigen/Dense>
 #include <cblas.h>
 #include <chrono>
 #include <cmath>
@@ -115,7 +117,7 @@ template <typename T> void fill(T* p, crd::usize n, crd::u32 seed)
     }
 }
 
-template <typename Op> crd::f64 time_loop(Op&& op, int& iters_out)
+template <typename Op> crd::f64 time_loop(const Op& op, int& iters_out)
 {
     op(); // warm-up 1
     op(); // warm-up 2 — large-N GEMM benefits from a second warm-up.
@@ -166,7 +168,7 @@ constexpr crd::u32 kWorkerCounts[] = {1U, 8U, 16U, 24U, 32U};
 template <typename T> Bench<T> run_at_n(crd::usize n, crd::u32 num_workers, crd::memory::IAllocator* alloc)
 {
     using namespace crd::hesap::dense;
-    using EigenMat = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+    namespace peer = crd_peer::eigen;
 
     // ---- Cerid -------------------------------------------------------------
     Matrix<T> a(alloc, n, n);
@@ -211,14 +213,15 @@ template <typename T> Bench<T> run_at_n(crd::usize n, crd::u32 num_workers, crd:
     const crd::f64 cerid_elapsed = (2.0 * nd_for_calc * nd_for_calc * nd_for_calc * cerid_iters) / (best_gflops * 1e9);
 
     // ---- Eigen-MT ----------------------------------------------------------
-    EigenMat ea(n, n);
-    EigenMat eb(n, n);
-    EigenMat ec(n, n);
-    std::memcpy(ea.data(), a.data(), n * n * sizeof(T));
-    std::memcpy(eb.data(), b.data(), n * n * sizeof(T));
-    Eigen::setNbThreads(static_cast<int>(num_workers));
+    // Read as column-major, the row-major operands are their transposes, so Eigen computes C^T = B^T * A^T, whose
+    // column-major storage is C row-major: the kernel Eigen's row-major product runs.
+    const auto ni = static_cast<peer::Index>(n);
+    const peer::Owned eat{peer::mat(ni, ni, a.data(), false)};
+    const peer::Owned ebt{peer::mat(ni, ni, b.data(), false)};
+    const peer::Owned ect{peer::mat(ni, ni, static_cast<const T*>(nullptr), false)};
+    peer::set_threads(static_cast<int>(num_workers));
     int eigen_iters = 0;
-    const crd::f64 eigen_elapsed = time_loop([&]() { ec.noalias() = ea * eb; }, eigen_iters);
+    const crd::f64 eigen_elapsed = time_loop([&]() { peer::gemm(ebt.get(), eat.get(), ect.get()); }, eigen_iters);
 
     // ---- OpenBLAS ----------------------------------------------------------
     openblas_set_num_threads(static_cast<int>(num_workers));
@@ -247,7 +250,7 @@ template <typename T> Bench<T> run_at_n(crd::usize n, crd::u32 num_workers, crd:
     // Tolerance accounts for different summation orders across the three
     // implementations. ADR-0063 only guarantees bit-exact within Cerid;
     // Eigen / OpenBLAS use FMA + different reduction trees.
-    const crd::f64 err_eigen = max_rel_err(c_cerid.data(), ec.data(), n * n);
+    const crd::f64 err_eigen = max_rel_err(c_cerid.data(), peer::data(ect.get()), n * n);
     const crd::f64 err_ob = max_rel_err(c_cerid.data(), c_ob.data(), n * n);
 
     const crd::f64 nd = static_cast<crd::f64>(n);
@@ -274,8 +277,8 @@ void shootout(const char* label, crd::f64 peak_per_core, crd::u32 nw, crd::memor
     std::fprintf(stdout, "%s\n",
                  "----------------------------------------------------------------------------"
                  "------------------------------------------------------------");
-    constexpr crd::usize kSizes[] = {64, 256, 512, 1024, 2048, 4096};
-    for (const crd::usize n : kSizes)
+    constexpr crd::usize sizes[] = {64, 256, 512, 1024, 2048, 4096};
+    for (const crd::usize n : sizes)
     {
         if ((g_one_thread && n > 1024) || (!g_one_thread && n == 64))
         {
@@ -358,7 +361,8 @@ void probe_openblas_kernel_shapes(crd::memory::IAllocator* alloc)
         {
             for (crd::usize i = 0; i < l11.rows(); ++i)
             {
-                l11(i, j) = (i == j) ? static_cast<double>(2 * nc) : (i > j ? 0.01 : 0.0);
+                const double lower = i > j ? 0.01 : 0.0;
+                l11(i, j) = i == j ? static_cast<double>(2 * nc) : lower;
             }
         }
         fill(x, 0.4);
@@ -441,7 +445,8 @@ int main(int argc, char** argv)
     // Match jobs worker count to actual usable threads. 16 fibers on 16
     // P-threads avoids the worker-vs-affinity-slot contention.
     crd::jobs::Config jobs_cfg;
-    jobs_cfg.num_threads = g_one_thread ? 1U : (p_cores_only ? 16U : 0U);
+    const crd::u32 shootout_threads = p_cores_only ? 16U : 0U;
+    jobs_cfg.num_threads = g_one_thread ? 1U : shootout_threads;
     crd::jobs::init(jobs_cfg);
     const crd::f64 ghz = measure_clock_ghz();
     const crd::f64 peak_f32 = peak_gflops_per_core(ghz, false);
@@ -450,8 +455,8 @@ int main(int argc, char** argv)
 
     // Use jobs worker count for everyone — that's the actual scheduling budget.
     const crd::u32 effective_threads = crd::jobs::num_workers();
-    Eigen::setNbThreads(static_cast<int>(effective_threads));
-    const int eigen_nb = Eigen::nbThreads();
+    crd_peer::eigen::set_threads(static_cast<int>(effective_threads));
+    const int eigen_nb = crd_peer::eigen::threads();
     openblas_set_num_threads(static_cast<int>(effective_threads));
     const int ob_nb = openblas_get_num_threads();
 
@@ -462,11 +467,13 @@ int main(int argc, char** argv)
                  "  Clock         : %.2f GHz\n"
                  "  Per-core peak : f32 = %.1f GFLOPS, f64 = %.1f GFLOPS\n"
                  "  Cerid jobs    : %u workers (incl. main)\n"
+                 "  Eigen         : %s\n"
                  "  Eigen threads : Eigen::nbThreads() = %d %s\n"
                  "  OpenBLAS thr. : openblas_get_num_threads() = %d %s\n"
                  "  Goal          : Cerid >= Eigen-MT AND Cerid >= OpenBLAS at every N\n",
                  crd::math::simd::backend_name(), crd::cpu_level_name(crd::hesap::dense::dense_kernels().level), ghz,
-                 peak_f32, peak_f64, nw, eigen_nb, (eigen_nb > 1 ? "(MT)" : "(SERIAL — Eigen will not scale!)"), ob_nb,
+                 peak_f32, peak_f64, nw, crd_peer::eigen::isa(), eigen_nb,
+                 (eigen_nb > 1 ? "(MT)" : "(SERIAL — Eigen will not scale!)"), ob_nb,
                  (ob_nb > 1 ? "(MT)" : "(SERIAL — OpenBLAS will not scale!)"));
 
     {

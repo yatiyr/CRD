@@ -296,12 +296,57 @@ function(crd_add_kernel_level_tests executable filter)
     endif()
 endfunction()
 
+# crd_peer_isa_flags(<out>): the measuring host's best ISA for a peer of the vs-reference boards built from source
+# (crd_add_bench_peer, runtime/CMakeLists.txt), never for Cerid code (ADR-0134 §8). A peer runs as its own build would
+# on that host, one number per workload that CRD_CPU_LEVEL never lowers. GCC and Clang take the compiler's host
+# detection. cl has none, so CRD_PEER_CPU_LEVEL caches the level crd::detect_cpus() reports on the configuring host, a
+# configure-time run of cpu_features.cpp (the one detection site); a cross build must set it.
+function(crd_peer_isa_flags out)
+    set(flags "")
+    if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND _crd_arch_x64)
+        set(flags /clang:-march=native)
+    elseif(NOT MSVC AND _crd_arch_x64)
+        set(flags -march=native)
+    elseif(NOT MSVC AND _crd_arch_arm64)
+        set(flags -mcpu=native)
+    elseif(_crd_arch_x64)
+        if(NOT CRD_PEER_CPU_LEVEL)
+            if(CMAKE_CROSSCOMPILING)
+                message(FATAL_ERROR "[crd-simd] a cross build of the board peers needs -DCRD_PEER_CPU_LEVEL=<level>")
+            endif()
+            try_run(run_result compile_result
+                SOURCES "${CMAKE_SOURCE_DIR}/runtime/examples/peers/peer_cpu_level.cpp"
+                        "${CMAKE_SOURCE_DIR}/engine/foundation/core/src/cpu_features.cpp"
+                CMAKE_FLAGS "-DINCLUDE_DIRECTORIES=${CMAKE_SOURCE_DIR}/engine/foundation/core/include"
+                CXX_STANDARD 20
+                COMPILE_OUTPUT_VARIABLE compile_output
+                RUN_OUTPUT_VARIABLE level)
+            string(STRIP "${level}" level)
+            if(NOT compile_result OR NOT run_result EQUAL 0 OR NOT level MATCHES "^(portable|sse2|sse4\\.2|avx2|avx512)$")
+                message(FATAL_ERROR "[crd-simd] the board peers' CPU level probe failed ('${level}'):\n${compile_output}")
+            endif()
+            set(CRD_PEER_CPU_LEVEL "${level}" CACHE STRING "The configuring host's CPU level the board peers build at")
+        endif()
+        if(CRD_PEER_CPU_LEVEL STREQUAL "avx512")
+            set(flags /arch:AVX512)
+        elseif(CRD_PEER_CPU_LEVEL STREQUAL "avx2")
+            set(flags /arch:AVX2)
+        elseif(CRD_PEER_CPU_LEVEL STREQUAL "sse4.2")
+            set(flags /arch:SSE4.2)
+        elseif(NOT CRD_PEER_CPU_LEVEL MATCHES "^(portable|sse2)$")
+            message(FATAL_ERROR "[crd-simd] unknown CRD_PEER_CPU_LEVEL '${CRD_PEER_CPU_LEVEL}'")
+        endif()
+    endif()
+    set(${out} "${flags}" PARENT_SCOPE)
+endfunction()
+
 # crd_add_isa_isolation_check(): once, after every target exists (ADR-0134 §6). Writes
 # <build>/isa-isolation/<config>.manifest, one line per kernel object (its level, feature and archive), general object
 # (its target and the archive or program it builds) and image, and registers crd-check-isa-isolation: no general code
 # above the floor, no kernel object above its level, no symbol shared between the levels and general code
 # (scripts/check-isa-isolation.py). A built archive or program must have every object it lists. Where objects hold
-# link-time IL, the guard judges the linked images, which MSVC links therefore map (/MAP, root CMakeLists.txt).
+# link-time IL, the guard judges the linked images, which MSVC links therefore map (/MAP, root CMakeLists.txt). A
+# target with CRD_ISA_ROLE "peer" (a board's third-party peer, built at the host's ISA) is not Cerid code and is left out.
 function(crd_add_isa_isolation_check)
     if(NOT CRD_BUILD_TESTS OR NOT (_crd_arch_x64 OR _crd_arch_arm64))
         return()
@@ -311,7 +356,9 @@ function(crd_add_isa_isolation_check)
     set(content "")
     foreach(target IN LISTS targets)
         get_target_property(type ${target} TYPE)
-        if(NOT type MATCHES "^(STATIC_LIBRARY|SHARED_LIBRARY|MODULE_LIBRARY|OBJECT_LIBRARY|EXECUTABLE)$")
+        get_target_property(role ${target} CRD_ISA_ROLE)
+        if(NOT type MATCHES "^(STATIC_LIBRARY|SHARED_LIBRARY|MODULE_LIBRARY|OBJECT_LIBRARY|EXECUTABLE)$"
+           OR role STREQUAL "peer")
             continue()
         endif()
         get_target_property(level ${target} CRD_KERNEL_LEVEL_NAME)

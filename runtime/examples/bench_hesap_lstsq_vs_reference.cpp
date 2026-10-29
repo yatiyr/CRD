@@ -11,7 +11,10 @@
 // factorizations (blocked QR / D&C SVD) already beat Eigen + LAPACK, so lstsq
 // inherits the crush; COD is the new kernel measured directly here.
 //
-// Build-gated by CRD_BUILD_HESAP_VS_REFERENCE=ON.
+// Build-gated by CRD_BUILD_HESAP_VS_REFERENCE=ON. Eigen runs in its peer library at the host's best ISA
+// (examples/peers/eigen_peer.hpp).
+#include "eigen_peer.hpp"
+
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/hesap/dense/lstsq.hpp>
@@ -20,12 +23,13 @@
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
-#include <Eigen/Dense>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 
+// LAPACK's Fortran symbols: lower case with a trailing underscore.
+// NOLINTBEGIN(readability-identifier-naming)
 extern "C" void dgels_(const char* trans, const int* m, const int* n, const int* nrhs, double* a, const int* lda,
                        double* b, const int* ldb, double* work, const int* lwork, int* info);
 extern "C" void dgelsy_(const int* m, const int* n, const int* nrhs, double* a, const int* lda, double* b,
@@ -34,9 +38,11 @@ extern "C" void dgelsy_(const int* m, const int* n, const int* nrhs, double* a, 
 extern "C" void dgelsd_(const int* m, const int* n, const int* nrhs, double* a, const int* lda, double* b,
                         const int* ldb, double* s, const double* rcond, int* rank, double* work, const int* lwork,
                         int* iwork, int* info);
+// NOLINTEND(readability-identifier-naming)
 
 namespace
 {
+namespace peer = crd_peer::eigen;
 using crd::hesap::dense::factor_qr;
 using crd::hesap::dense::factor_qr_unblocked;
 using crd::hesap::dense::Layout;
@@ -47,7 +53,7 @@ using crd::hesap::dense::pinv;
 using crd::hesap::dense::QR;
 using crd::hesap::dense::Vector;
 
-template <typename Op> crd::f64 time_loop(Op&& op, crd::f64 budget_s = 0.4, int min_iters = 3)
+template <typename Op> crd::f64 time_loop(const Op& op, crd::f64 budget_s = 0.4, int min_iters = 3)
 {
     op();
     crd::jobs::frame_reset();
@@ -93,8 +99,6 @@ int main()
 
         Matrix<crd::f64> a(&alloc, m, n);
         Vector<crd::f64> b(&alloc, m);
-        Eigen::MatrixXd ea(static_cast<Eigen::Index>(m), static_cast<Eigen::Index>(n));
-        Eigen::VectorXd eb(static_cast<Eigen::Index>(m));
         crd::u32 s = 90113U + static_cast<crd::u32>(n);
         for (crd::usize i = 0; i < m; ++i)
         {
@@ -104,14 +108,17 @@ int main()
                 const crd::f64 v =
                     static_cast<crd::f64>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001 + (i == j ? 4.0 : 0.0);
                 a.at(i, j) = v;
-                ea(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = v;
             }
             s = s * 1664525U + 1013904223U;
             const crd::f64 bv = static_cast<crd::f64>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001;
             b(i) = bv;
-            eb(static_cast<Eigen::Index>(i)) = bv;
         }
 
+        const auto mp = static_cast<peer::Index>(m);
+        const auto np = static_cast<peer::Index>(n);
+        const peer::Owned ea{peer::mat(mp, np, a.data(), true)};
+        const peer::Owned eb{peer::vec(mp, b.data())};
+        const peer::Owned ex{peer::vec(np, static_cast<const crd::f64*>(nullptr))};
         const crd::f64 c_qr = time_loop(
             [&]()
             {
@@ -134,24 +141,11 @@ int main()
                 (void)sink;
             });
 
-        const crd::f64 e_qr = time_loop(
-            [&]()
-            {
-                Eigen::VectorXd x = ea.householderQr().solve(eb);
-                (void)x.sum();
-            });
-        const crd::f64 e_cod = time_loop(
-            [&]()
-            {
-                Eigen::VectorXd x = ea.completeOrthogonalDecomposition().solve(eb);
-                (void)x.sum();
-            });
-        const crd::f64 e_bdc = time_loop(
-            [&]()
-            {
-                Eigen::VectorXd x = ea.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(eb);
-                (void)x.sum();
-            });
+        const crd::f64 e_qr =
+            time_loop([&]() { peer::solve(peer::Solve::HouseholderQr, ea.get(), eb.get(), ex.get()); });
+        const crd::f64 e_cod =
+            time_loop([&]() { peer::solve(peer::Solve::CompleteOrthogonal, ea.get(), eb.get(), ex.get()); });
+        const crd::f64 e_bdc = time_loop([&]() { peer::solve(peer::Solve::BdcSvd, ea.get(), eb.get(), ex.get()); });
 
         std::fprintf(stdout, "%-6zu | %8.5f %8.5f %6.2fx | %8.5f %8.5f %6.2fx | %8.5f %8.5f %6.2fx\n",
                      static_cast<size_t>(n), c_qr * 1e3, e_qr * 1e3, e_qr / c_qr, c_cod * 1e3, e_cod * 1e3,
@@ -322,7 +316,6 @@ int main()
     {
         const crd::usize m = 2 * n;
         Matrix<crd::f64> a(&alloc, m, n);
-        Eigen::MatrixXd ea(static_cast<Eigen::Index>(m), static_cast<Eigen::Index>(n));
         crd::u32 s = 55501U + static_cast<crd::u32>(n);
         for (crd::usize i = 0; i < m; ++i)
         {
@@ -332,9 +325,12 @@ int main()
                 const crd::f64 v =
                     static_cast<crd::f64>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001 + (i == j ? 4.0 : 0.0);
                 a.at(i, j) = v;
-                ea(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = v;
             }
         }
+        const auto mp = static_cast<peer::Index>(m);
+        const auto np = static_cast<peer::Index>(n);
+        const peer::Owned ea{peer::mat(mp, np, a.data(), true)};
+        const peer::Owned ep{peer::mat(np, mp, static_cast<const crd::f64*>(nullptr), false)};
         const crd::f64 c_pinv = time_loop(
             [&]()
             {
@@ -342,12 +338,7 @@ int main()
                 volatile crd::f64 sink = p.at(0, 0);
                 (void)sink;
             });
-        const crd::f64 e_pinv = time_loop(
-            [&]()
-            {
-                Eigen::MatrixXd p = ea.completeOrthogonalDecomposition().pseudoInverse();
-                (void)p.sum();
-            });
+        const crd::f64 e_pinv = time_loop([&]() { peer::pseudo_inverse(ea.get(), ep.get()); });
         std::fprintf(stdout, "%-6zu | %8.5f %8.5f %6.2fx\n", static_cast<size_t>(n), c_pinv * 1e3, e_pinv * 1e3,
                      e_pinv / c_pinv);
     }
@@ -364,7 +355,6 @@ int main()
     {
         const crd::usize m = 2 * n;
         Matrix<crd::f64> a(&alloc, m, n);
-        Eigen::MatrixXd ea(static_cast<Eigen::Index>(m), static_cast<Eigen::Index>(n));
         crd::u32 s = 90011U + static_cast<crd::u32>(n);
         for (crd::usize i = 0; i < m; ++i)
         {
@@ -374,9 +364,11 @@ int main()
                 const crd::f64 v =
                     static_cast<crd::f64>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001 + (i == j ? 4.0 : 0.0);
                 a.at(i, j) = v;
-                ea(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = v;
             }
         }
+        const auto mp = static_cast<peer::Index>(m);
+        const auto np = static_cast<peer::Index>(n);
+        const peer::Owned ea{peer::mat(mp, np, a.data(), true)};
         QR<crd::f64> qr_b(&alloc, m, n);
         QR<crd::f64> qr_u(&alloc, m, n);
         auto copy_in = [&](QR<crd::f64>& q)
@@ -409,8 +401,7 @@ int main()
         const crd::f64 t_eig = time_loop(
             [&]()
             {
-                Eigen::HouseholderQR<Eigen::MatrixXd> h(ea);
-                volatile crd::f64 sink = h.matrixQR()(0, 0);
+                volatile crd::f64 sink = peer::householder_qr(ea.get());
                 (void)sink;
             });
         std::fprintf(stdout, "%-6zu | %8.4f %8.4f %8.4f | %6.2fx %6.2fx %6.2fx\n", static_cast<size_t>(n), t_blk * 1e3,

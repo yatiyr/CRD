@@ -899,15 +899,8 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
         target_link_libraries(eigen_headers INTERFACE OpenMP::OpenMP_CXX)
     endif()
 
-    # OpenBLAS — built from source via FetchContent. Pin to a recent stable tag.
-    # CRITICAL: OpenBLAS auto-detection on MSVC fails (no /proc/cpuinfo, no
-    # assembler) and falls back to CORE_generic = a 2x2 scalar-C kernel that
-    # runs at ~10 GFLOPS — not the asm-tuned reference we need. Force
-    # TARGET=SKYLAKEX which has C-intrinsic AVX-512/AVX2 kernels that build
-    # under MSVC without an external assembler. SKYLAKEX downgrades to AVX2
-    # at runtime if AVX-512 is absent. DYNAMIC_ARCH=ON would build multiple
-    # kernels and runtime-dispatch but takes 30+ min to build; we pin a
-    # single target for bench parity instead.
+    # OpenBLAS — built from source by its own CMake, which targets the build host's CPU (its own detection and
+    # kernel flags, never the tree's ISA); DYNAMIC_ARCH stays off, the one host target is the peer the board measures.
     set(CMAKE_POLICY_VERSION_MINIMUM "3.5")
     # OpenBLAS-on-MSVC is constrained to its CORE_generic 2x2 scalar kernel:
     # upstream prebuild.cmake hardcodes -DFORCE_GENERIC under MSVC, and even
@@ -937,6 +930,9 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     set(_crd_saved_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
     set(BUILD_SHARED_LIBS      OFF CACHE BOOL   "" FORCE)
     crd_add_pinned_package(OpenBLAS)
+    # OpenBLAS's kernels are a peer's code at its own ISA, which the ISA isolation guard leaves out (ADR-0134 §8).
+    _crd_collect_build_targets("${OpenBLAS_SOURCE_DIR}" _crd_openblas_targets)
+    set_target_properties(${_crd_openblas_targets} PROPERTIES CRD_ISA_ROLE peer)
     set(BUILD_SHARED_LIBS ${_crd_saved_BUILD_SHARED_LIBS} CACHE BOOL "" FORCE)
     unset(CMAKE_POLICY_VERSION_MINIMUM)
 endif()

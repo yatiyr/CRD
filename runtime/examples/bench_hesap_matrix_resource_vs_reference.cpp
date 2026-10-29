@@ -52,7 +52,7 @@ static crd::containers::String slurp(const char* path)
     return out;
 }
 
-template <typename Fn> static crd::f64 best_ms(Fn&& fn)
+template <typename Fn> static crd::f64 best_ms(const Fn& fn)
 {
     fn(); // warmup
     crd::f64 best = 1e30;

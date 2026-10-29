@@ -6,8 +6,12 @@
 // measurement. Filed follow-ons for any sub-1× ratio.
 //
 // Build-gated by `CRD_BUILD_HESAP_VS_REFERENCE=ON`. Eigen is fetched via
-// CPM into build/_deps/ — never vendored.
+// CPM into build/_deps/ — never vendored — and runs in its peer library at
+// the host's best ISA (examples/peers/eigen_peer.hpp).
 
+#include "eigen_peer.hpp"
+
+#include <crd/containers/array.hpp>
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/dense/cholesky.hpp>
 #include <crd/hesap/dense/dense_dispatch.hpp>
@@ -19,7 +23,6 @@
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
-#include <Eigen/Dense>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -42,7 +45,24 @@ template <typename T> void fill(T* p, crd::usize n, crd::u32 seed)
     }
 }
 
-template <typename Op> crd::f64 time_loop(Op&& op, int& iters_out, crd::f64 budget_s = 0.4, int min_iters = 3)
+// The full matrix of `a` for the Eigen peer.
+crd_peer::eigen::MatF64* peer_symmetric(const crd::hesap::dense::Symmetric<crd::f64>& a, crd::usize n,
+                                        crd::memory::IAllocator* alloc)
+{
+    crd::containers::Array<crd::f64> eigen_input(alloc);
+    eigen_input.resize(n * n);
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            eigen_input[i * n + j] = a.at(i, j);
+        }
+    }
+    const auto ni = static_cast<crd_peer::eigen::Index>(n);
+    return crd_peer::eigen::mat(ni, ni, eigen_input.data(), true);
+}
+
+template <typename Op> crd::f64 time_loop(const Op& op, int& iters_out, crd::f64 budget_s = 0.4, int min_iters = 3)
 {
     // Per memory/feedback_jobs_parallel_for_frame_arena_exhaustion: reset
     // the per-thread jobs frame arena between iters; otherwise tight loops
@@ -141,24 +161,14 @@ void bench_lu(crd::memory::IAllocator* alloc)
             },
             citers);
 
-        Eigen::MatrixXd ea(n, n);
-        std::memcpy(ea.data(), a.data(), n * n * sizeof(crd::f64));
-        // Eigen is column-major; transpose since we filled in row-major.
-        ea.transposeInPlace();
-        Eigen::VectorXd eb(n);
-        for (crd::usize i = 0; i < n; ++i)
-        {
-            eb(i) = b[i];
-        }
+        namespace peer = crd_peer::eigen;
+        const auto ni = static_cast<peer::Index>(n);
+        const peer::Owned ea{peer::mat(ni, ni, a.data(), true)};
+        const peer::Owned eb{peer::vec(ni, b.data())};
+        const peer::Owned ex{peer::vec(ni, static_cast<const crd::f64*>(nullptr))};
         int eiters = 0;
-        Eigen::VectorXd ex;
-        const crd::f64 ee = time_loop(
-            [&]()
-            {
-                Eigen::PartialPivLU<Eigen::MatrixXd> lu(ea);
-                ex = lu.solve(eb);
-            },
-            eiters);
+        const crd::f64 ee =
+            time_loop([&]() { peer::solve(peer::Solve::PartialPivLu, ea.get(), eb.get(), ex.get()); }, eiters);
 
         // Compute Cerid solution once for error.
         {
@@ -173,7 +183,7 @@ void bench_lu(crd::memory::IAllocator* alloc)
             solve_lu(lu, crd::containers::Span<crd::f64>(x.data(), n));
             for (crd::usize i = 0; i < n; ++i)
             {
-                const crd::f64 d = x[i] - ex(i);
+                const crd::f64 d = x[i] - peer::data(ex.get())[i];
                 const crd::f64 ad = d < 0 ? -d : d;
                 if (ad > max_err)
                 {
@@ -239,28 +249,13 @@ void bench_cholesky(crd::memory::IAllocator* alloc)
             },
             citers);
 
-        Eigen::MatrixXd ea(n, n);
-        for (crd::usize i = 0; i < n; ++i)
-        {
-            for (crd::usize j = 0; j < n; ++j)
-            {
-                ea(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = a_sym.at(i, j);
-            }
-        }
-        Eigen::VectorXd eb(n);
-        for (crd::usize i = 0; i < n; ++i)
-        {
-            eb(i) = b[i];
-        }
+        namespace peer = crd_peer::eigen;
+        const auto ni = static_cast<peer::Index>(n);
+        const peer::Owned ea{peer_symmetric(a_sym, n, alloc)};
+        const peer::Owned eb{peer::vec(ni, b.data())};
+        const peer::Owned ex{peer::vec(ni, static_cast<const crd::f64*>(nullptr))};
         int eiters = 0;
-        Eigen::VectorXd ex;
-        const crd::f64 ee = time_loop(
-            [&]()
-            {
-                Eigen::LLT<Eigen::MatrixXd> llt(ea);
-                ex = llt.solve(eb);
-            },
-            eiters);
+        const crd::f64 ee = time_loop([&]() { peer::solve(peer::Solve::Llt, ea.get(), eb.get(), ex.get()); }, eiters);
 
         // Cholesky FLOPs: (1/3) n^3 factor + 2 n^2 solve.
         const crd::f64 flops =
@@ -283,7 +278,7 @@ void bench_cholesky(crd::memory::IAllocator* alloc)
             solve_cholesky(chol, crd::containers::Span<crd::f64>(x.data(), n));
             for (crd::usize i = 0; i < n; ++i)
             {
-                const crd::f64 d = x[i] - ex(i);
+                const crd::f64 d = x[i] - peer::data(ex.get())[i];
                 const crd::f64 ad = d < 0 ? -d : d;
                 if (ad > max_err)
                 {
@@ -341,28 +336,14 @@ void bench_qr(crd::memory::IAllocator* alloc)
             },
             citers);
 
-        Eigen::MatrixXd ea(n, n);
-        for (crd::usize i = 0; i < n; ++i)
-        {
-            for (crd::usize j = 0; j < n; ++j)
-            {
-                ea(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = a.at(i, j);
-            }
-        }
-        Eigen::VectorXd eb(n);
-        for (crd::usize i = 0; i < n; ++i)
-        {
-            eb(i) = b[i];
-        }
+        namespace peer = crd_peer::eigen;
+        const auto ni = static_cast<peer::Index>(n);
+        const peer::Owned ea{peer::mat(ni, ni, a.data(), true)};
+        const peer::Owned eb{peer::vec(ni, b.data())};
+        const peer::Owned ex{peer::vec(ni, static_cast<const crd::f64*>(nullptr))};
         int eiters = 0;
-        Eigen::VectorXd ex;
-        const crd::f64 ee = time_loop(
-            [&]()
-            {
-                Eigen::HouseholderQR<Eigen::MatrixXd> qr(ea);
-                ex = qr.solve(eb);
-            },
-            eiters);
+        const crd::f64 ee =
+            time_loop([&]() { peer::solve(peer::Solve::HouseholderQr, ea.get(), eb.get(), ex.get()); }, eiters);
 
         // QR FLOPs: ~2 n^3 factor + 2 n^2 solve. (Heuristic; Householder is ~(4/3) n^3.)
         const crd::f64 flops =
@@ -384,7 +365,7 @@ void bench_qr(crd::memory::IAllocator* alloc)
             solve_qr(qr, crd::containers::Span<crd::f64>(bx.data(), n));
             for (crd::usize i = 0; i < n; ++i)
             {
-                const crd::f64 d = bx[i] - ex(i);
+                const crd::f64 d = bx[i] - peer::data(ex.get())[i];
                 const crd::f64 ad = d < 0 ? -d : d;
                 if (ad > max_err)
                 {
@@ -443,28 +424,13 @@ void bench_ldlt(crd::memory::IAllocator* alloc)
             },
             citers);
 
-        Eigen::MatrixXd ea(n, n);
-        for (crd::usize i = 0; i < n; ++i)
-        {
-            for (crd::usize j = 0; j < n; ++j)
-            {
-                ea(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = a_sym.at(i, j);
-            }
-        }
-        Eigen::VectorXd eb(n);
-        for (crd::usize i = 0; i < n; ++i)
-        {
-            eb(i) = b[i];
-        }
+        namespace peer = crd_peer::eigen;
+        const auto ni = static_cast<peer::Index>(n);
+        const peer::Owned ea{peer_symmetric(a_sym, n, alloc)};
+        const peer::Owned eb{peer::vec(ni, b.data())};
+        const peer::Owned ex{peer::vec(ni, static_cast<const crd::f64*>(nullptr))};
         int eiters = 0;
-        Eigen::VectorXd ex;
-        const crd::f64 ee = time_loop(
-            [&]()
-            {
-                Eigen::LDLT<Eigen::MatrixXd> ldlt(ea);
-                ex = ldlt.solve(eb);
-            },
-            eiters);
+        const crd::f64 ee = time_loop([&]() { peer::solve(peer::Solve::Ldlt, ea.get(), eb.get(), ex.get()); }, eiters);
 
         const crd::f64 flops =
             (1.0 / 3.0) * static_cast<crd::f64>(n) * static_cast<crd::f64>(n) * static_cast<crd::f64>(n) +
@@ -485,7 +451,7 @@ void bench_ldlt(crd::memory::IAllocator* alloc)
             solve_ldlt(ldlt, crd::containers::Span<crd::f64>(x.data(), n));
             for (crd::usize i = 0; i < n; ++i)
             {
-                const crd::f64 d = x[i] - ex(i);
+                const crd::f64 d = x[i] - peer::data(ex.get())[i];
                 const crd::f64 ad = d < 0 ? -d : d;
                 if (ad > max_err)
                 {
@@ -507,22 +473,19 @@ int main()
     SetProcessAffinityMask(GetCurrentProcess(), 0xFFFFULL);
 #endif
     crd::jobs::init();
-    // Enable Eigen multi-threading for apples-to-apples comparison vs Cerid's
-    // gemm_parallel. Eigen 3.4's MT requires OpenMP in the caller TU
-    // (`#pragma omp parallel` expanded inline). Without setNbThreads, Eigen
-    // runs serial regardless of the OpenMP linker setup.
-    Eigen::initParallel();
-    Eigen::setNbThreads(16);
+    // Eigen runs multi-threaded (OpenMP in its peer library), apples-to-apples with Cerid's gemm_parallel.
+    crd_peer::eigen::set_threads(16);
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(256ULL * 1024ULL * 1024ULL));
 
     std::fprintf(stdout,
                  "=== hesap dense direct solvers: head-to-head vs Eigen 3.4 ===\n"
                  "Per docs/PRINCIPLES_reference_class_benchmarking.md.\n"
                  "P-core affinity pinned (0xFFFF mask on 14900K).\n"
-                 "Eigen::nbThreads() = %d (after setNbThreads(16))\n"
+                 "%s, Eigen::nbThreads() = %d (after setNbThreads(16))\n"
                  "Best-of-3 measurement with 3 warmup iters.\n"
                  "Dense kernels: %s level (CRD_CPU_LEVEL forces it)\n",
-                 Eigen::nbThreads(), crd::cpu_level_name(crd::hesap::dense::dense_kernels().level));
+                 crd_peer::eigen::isa(), crd_peer::eigen::threads(),
+                 crd::cpu_level_name(crd::hesap::dense::dense_kernels().level));
 
     bench_lu(&alloc);
     bench_cholesky(&alloc);

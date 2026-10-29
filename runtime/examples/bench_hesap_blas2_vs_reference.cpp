@@ -1,6 +1,9 @@
 // bench_hesap_blas2_vs_reference — Reference-class shootout for BLAS L2
 // (gemv / symv / trsv). Applies the policy from
-// docs/PRINCIPLES_reference_class_benchmarking.md to the L2 surface.
+// docs/PRINCIPLES_reference_class_benchmarking.md to the L2 surface. Eigen runs
+// in its peer library at the host's best ISA (examples/peers/eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/core/cpu_features.hpp>
@@ -12,7 +15,6 @@
 #include <crd/math/simd/backend.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
-#include <Eigen/Dense>
 #include <cblas.h>
 #include <chrono>
 #include <cmath>
@@ -49,7 +51,7 @@ template <typename T> void fill(T* p, crd::usize n, crd::u32 seed)
     }
 }
 
-template <typename Op> crd::f64 time_loop_best_of_3(Op&& op, int& iters_out)
+template <typename Op> crd::f64 time_loop_best_of_3(const Op& op, int& iters_out)
 {
     op();
     op();
@@ -121,9 +123,6 @@ template <> struct Peer<crd::f32>
         cblas_strsv(CblasRowMajor, CblasLower, CblasNoTrans, CblasNonUnit, n, a, n, x, 1);
     }
 };
-template <typename T> using EMat = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
-template <typename T> using EVec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
-
 template <typename T> void bench_gemv(crd::memory::IAllocator* alloc)
 {
     std::fprintf(stdout, "\n==== gemv.%s: y = alpha*A*x + beta*y ====\n", Peer<T>::kName);
@@ -153,14 +152,14 @@ template <typename T> void bench_gemv(crd::memory::IAllocator* alloc)
             { crd::hesap::dense::gemv<T, Layout::RowMajor>(alpha, ca.cview(), cx.span(), beta, cy.span()); },
             citers);
 
-        EMat<T> ea(n, n);
-        EVec<T> ex(n);
-        EVec<T> ey(n);
-        std::memcpy(ea.data(), ca.data(), n * n * sizeof(T));
-        std::memcpy(ex.data(), cx.data(), n * sizeof(T));
-        std::memcpy(ey.data(), cy.data(), n * sizeof(T));
+        namespace peer = crd_peer::eigen;
+        const auto ni = static_cast<peer::Index>(n);
+        const peer::Owned ea{peer::mat(ni, ni, ca.data(), false)};
+        const peer::Owned ex{peer::vec(ni, cx.data())};
+        const peer::Owned ey{peer::vec(ni, cy.data())};
         int eiters = 0;
-        const crd::f64 ee = time_loop_best_of_3([&]() { ey.noalias() = alpha * ea * ex + beta * ey; }, eiters);
+        const crd::f64 ee =
+            time_loop_best_of_3([&]() { peer::gemv(alpha, ea.get(), ex.get(), beta, ey.get()); }, eiters);
 
         crd::containers::Array<T> oa(alloc);
         crd::containers::Array<T> ox(alloc);
@@ -222,21 +221,23 @@ template <typename T> void bench_symv(crd::memory::IAllocator* alloc)
             [&]() { crd::hesap::dense::symv<T>(alpha, ca, cx.span(), beta, cy.span()); }, citers);
 
         // Eigen: build dense symmetric matrix, use selfadjointView.
-        EMat<T> ea(n, n);
+        namespace peer = crd_peer::eigen;
+        const auto ni = static_cast<peer::Index>(n);
+        crd::containers::Array<T> eigen_input(alloc);
+        eigen_input.resize(n * n);
         for (crd::usize i = 0; i < n; ++i)
         {
             for (crd::usize j = 0; j < n; ++j)
             {
-                ea(i, j) = ca.at(i, j);
+                eigen_input[i * n + j] = ca.at(i, j);
             }
         }
-        EVec<T> ex(n);
-        EVec<T> ey(n);
-        std::memcpy(ex.data(), cx.data(), n * sizeof(T));
-        std::memcpy(ey.data(), cy.data(), n * sizeof(T));
+        const peer::Owned ea{peer::mat(ni, ni, eigen_input.data(), true)};
+        const peer::Owned ex{peer::vec(ni, cx.data())};
+        const peer::Owned ey{peer::vec(ni, cy.data())};
         int eiters = 0;
-        const crd::f64 ee = time_loop_best_of_3(
-            [&]() { ey.noalias() = alpha * ea.template selfadjointView<Eigen::Lower>() * ex + beta * ey; }, eiters);
+        const crd::f64 ee =
+            time_loop_best_of_3([&]() { peer::symv_lower(alpha, ea.get(), ex.get(), beta, ey.get()); }, eiters);
 
         crd::containers::Array<T> oa(alloc);
         crd::containers::Array<T> ox(alloc);
@@ -309,26 +310,22 @@ template <typename T> void bench_trsv(crd::memory::IAllocator* alloc)
             },
             citers);
 
-        EMat<T> ea(n, n);
-        ea.setZero();
+        namespace peer = crd_peer::eigen;
+        const auto ni = static_cast<peer::Index>(n);
+        crd::containers::Array<T> eigen_input(alloc);
+        eigen_input.resize(n * n, T(0));
         for (crd::usize i = 0; i < n; ++i)
         {
             for (crd::usize j = 0; j <= i; ++j)
             {
-                ea(i, j) = ca.at(i, j);
+                eigen_input[i * n + j] = ca.at(i, j);
             }
         }
-        EVec<T> eb0(n);
-        EVec<T> eb(n);
-        std::memcpy(eb0.data(), cb0.data(), n * sizeof(T));
+        const peer::Owned ea{peer::mat(ni, ni, eigen_input.data(), true)};
+        const peer::Owned eb0{peer::vec(ni, cb0.data())};
+        const peer::Owned eb{peer::vec(ni, static_cast<const T*>(nullptr))};
         int eiters = 0;
-        const crd::f64 ee = time_loop_best_of_3(
-            [&]()
-            {
-                eb = eb0;
-                ea.template triangularView<Eigen::Lower>().solveInPlace(eb);
-            },
-            eiters);
+        const crd::f64 ee = time_loop_best_of_3([&]() { peer::trsv_lower(ea.get(), eb0.get(), eb.get()); }, eiters);
 
         crd::containers::Array<T> oa(alloc);
         oa.resize(n * n, T(0));
@@ -381,7 +378,7 @@ int main(int argc, char** argv)
         SetProcessAffinityMask(GetCurrentProcess(), 0xFFFFULL);
     }
 #endif
-    Eigen::setNbThreads(1);
+    crd_peer::eigen::set_threads(1);
     openblas_set_num_threads(1);
 
     const crd::f64 ghz = measure_clock_ghz();
@@ -389,11 +386,12 @@ int main(int argc, char** argv)
                  "==== bench_hesap_blas2_vs_reference ====\n"
                  "  SIMD backend : %s\n"
                  "  Dense kernels: %s level (CRD_CPU_LEVEL forces it)\n"
+                 "  Eigen        : %s\n"
                  "  Clock        : %.2f GHz (P-cores)\n"
                  "  Threads      : 1 each (BLAS L2 is memory-bandwidth-bound)\n"
                  "  Goal         : Cerid >= Eigen AND Cerid >= OpenBLAS\n",
                  crd::math::simd::backend_name(), crd::cpu_level_name(crd::hesap::dense::dense_kernels().level),
-                 ghz);
+                 crd_peer::eigen::isa(), ghz);
 
     // N = 4096 holds two 128 MiB f64 copies of A at once (Cerid's and OpenBLAS's).
     crd::memory::TlsfAllocator alloc(320ULL * 1024ULL * 1024ULL);

@@ -123,10 +123,16 @@
         "runtime/examples/bench_hesap_spgemm_vs_reference.cpp",
         "runtime/examples/bench_hesap_spmm_vs_reference.cpp",
         "runtime/examples/bench_hesap_spmv_vs_reference.cpp",
-        "runtime/examples/bench_hesap_svd_vs_reference.cpp"
+        "runtime/examples/bench_hesap_svd_vs_reference.cpp",
+        "runtime/examples/peers/eigen_peer_dense.cpp"
       ],
       "built_when": {"option": "CRD_BUILD_HESAP_VS_REFERENCE"},
-      "why": "The shootouts against Eigen and OpenBLAS, fetched at configure time only when the option is on."
+      "why": "The shootouts against Eigen and OpenBLAS, fetched at configure time only when the option is on; Eigen builds as their peer library (crd-bench-eigen-peer)."
+    },
+    {
+      "paths": ["runtime/examples/peers/peer_cpu_level.cpp"],
+      "built_by": "cmake/CrdSimd.cmake",
+      "why": "The configure-time CPU level probe (try_run) that sets the board peers' ISA under cl, which has no host-native flag."
     },
     {
       "paths": ["tests/support/diag-overhead/tracy_peer.cpp"],

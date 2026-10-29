@@ -155,7 +155,15 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    diag-overhead record carries it (`cpu_level`), refused by `diag-overhead.py --cpu-level` when it differs from the
    asked level or between arms. The diag-overhead,
    hesap, geometry and jobs boards are re-measured at each level against their peers, Highway 1.3 included for the
-   dispatch cost.
+   dispatch cost. A peer runs as its own build would on the measuring host: one number per workload, which
+   `CRD_CPU_LEVEL` never lowers, and every Cerid level is measured against it (amended 2026-10-29). A peer compiled
+   from source in a board (Eigen, pocketfft) is a shared library of its own at the host's best ISA
+   (`crd_add_bench_peer`, `crd_peer_isa_flags`: `-march=native`/`-mcpu=native` on GCC and Clang, and on cl the
+   `/arch` of the level `detect_cpus()` reports at configure time), with hidden symbols, no link-time IL and no Cerid
+   library, so no inline body at its ISA reaches the bench units at the baseline; plain data crosses its interface and
+   the bench times both sides with one loop. The ISA isolation guard leaves peers out (`CRD_ISA_ROLE peer`, OpenBLAS's
+   targets too). An applied level's UCRT FMA3 switch is process-wide on MSVC, so a board takes the peer's number from
+   its detected-level arm.
 9. **Ownership.** CPU ISA detection and kernel dispatch is one OWN.1 capability: detection in crd-core, the dispatch
    tables and level-parameterised SIMD types in crd-math, kernels in their owning modules.
 

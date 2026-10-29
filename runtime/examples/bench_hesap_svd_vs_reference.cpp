@@ -11,33 +11,39 @@
 // accuracy oracle; on MSVC it rides OpenBLAS generic kernels (accuracy-faithful,
 // fair *speed* vs LAPACK is a Linux-CI statement). Eigen is the speed gate.
 //
-// Build-gated by CRD_BUILD_HESAP_VS_REFERENCE=ON.
+// Build-gated by CRD_BUILD_HESAP_VS_REFERENCE=ON. Eigen runs in its peer library at the host's best ISA
+// (examples/peers/eigen_peer.hpp).
+#include "eigen_peer.hpp"
+
 #include <crd/containers/array.hpp>
 #include <crd/hesap/dense/matrix.hpp>
 #include <crd/hesap/dense/svd.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
-#include <Eigen/Dense>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 
+// LAPACK's Fortran symbols: lower case with a trailing underscore.
+// NOLINTBEGIN(readability-identifier-naming)
 extern "C" void dgesvd_(const char* jobu, const char* jobvt, const int* m, const int* n, double* a, const int* lda,
                         double* s, double* u, const int* ldu, double* vt, const int* ldvt, double* work,
                         const int* lwork, int* info);
 extern "C" void dgesdd_(const char* jobz, const int* m, const int* n, double* a, const int* lda, double* s, double* u,
                         const int* ldu, double* vt, const int* ldvt, double* work, const int* lwork, int* iwork,
                         int* info);
+// NOLINTEND(readability-identifier-naming)
 
 namespace
 {
+namespace peer = crd_peer::eigen;
 using crd::hesap::dense::Matrix;
 using crd::hesap::dense::svd;
 using crd::hesap::dense::svdvals;
 
-template <typename Op> crd::f64 time_loop(Op&& op, crd::f64 budget_s = 0.4, int min_iters = 3)
+template <typename Op> crd::f64 time_loop(const Op& op, crd::f64 budget_s = 0.4, int min_iters = 3)
 {
     op();
     crd::jobs::frame_reset();
@@ -80,7 +86,6 @@ int main()
     {
         const int ni = static_cast<int>(n);
         Matrix<crd::f64> a(&alloc, n, n);
-        Eigen::MatrixXd ea(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n));
         crd::u32 s = 777013U + static_cast<crd::u32>(n);
         for (crd::usize i = 0; i < n; ++i)
         {
@@ -89,9 +94,10 @@ int main()
                 s = s * 1664525U + 1013904223U;
                 const crd::f64 val = static_cast<crd::f64>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001;
                 a.at(i, j) = val;
-                ea(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = val;
             }
         }
+        const peer::Owned ea{peer::mat(static_cast<peer::Index>(n), static_cast<peer::Index>(n), a.data(), true)};
+        const crd::f64* const ea_cm = peer::data(ea.get()); // column-major, LAPACK's input
 
         // --- Cerid ---
         crd::containers::Array<crd::f64> cs(&alloc);
@@ -127,23 +133,13 @@ int main()
         crd::f64 jt = 0.0;
         if (n <= 256)
         {
-            jt = time_loop(
-                [&]()
-                {
-                    Eigen::JacobiSVD<Eigen::MatrixXd> sv(ea, Eigen::ComputeThinU | Eigen::ComputeThinV);
-                    (void)sv.singularValues();
-                });
+            jt = time_loop([&]() { peer::svd(peer::Svd::Jacobi, ea.get(), true, nullptr); });
         }
         // --- Eigen BDCSVD ---
-        Eigen::VectorXd bvals;
-        const crd::f64 bt = time_loop(
-            [&]()
-            {
-                Eigen::BDCSVD<Eigen::MatrixXd> sv(ea, Eigen::ComputeThinU | Eigen::ComputeThinV);
-                bvals = sv.singularValues();
-            });
+        const peer::Owned bvals{peer::vec(0, static_cast<const crd::f64*>(nullptr))};
+        const crd::f64 bt = time_loop([&]() { peer::svd(peer::Svd::Bdc, ea.get(), true, bvals.get()); });
 
-        // --- LAPACK dgesvd / dgesdd (column-major; ea.data() is col-major) ---
+        // --- LAPACK dgesvd / dgesdd (column-major; the peer's data() is col-major) ---
         crd::containers::Array<crd::f64> la(&alloc);
         crd::containers::Array<crd::f64> ls(&alloc);
         crd::containers::Array<crd::f64> lu(&alloc);
@@ -167,7 +163,7 @@ int main()
                 {
                     for (crd::usize i = 0; i < n * n; ++i)
                     {
-                        la[i] = ea.data()[i];
+                        la[i] = ea_cm[i];
                     }
                     int inf = 0;
                     int lwk = static_cast<int>(work.size());
@@ -192,7 +188,7 @@ int main()
                 {
                     for (crd::usize i = 0; i < n * n; ++i)
                     {
-                        la[i] = ea.data()[i];
+                        la[i] = ea_cm[i];
                     }
                     int inf = 0;
                     int lwk = static_cast<int>(work.size());
@@ -226,7 +222,6 @@ int main()
     {
         const int ni = static_cast<int>(n);
         Matrix<crd::f64> a(&alloc, n, n);
-        Eigen::MatrixXd ea(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n));
         crd::u32 s = 9090909U + static_cast<crd::u32>(n);
         for (crd::usize i = 0; i < n; ++i)
         {
@@ -235,9 +230,10 @@ int main()
                 s = s * 1664525U + 1013904223U;
                 const crd::f64 val = static_cast<crd::f64>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001;
                 a.at(i, j) = val;
-                ea(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = val;
             }
         }
+        const peer::Owned ea{peer::mat(static_cast<peer::Index>(n), static_cast<peer::Index>(n), a.data(), true)};
+        const crd::f64* const ea_cm = peer::data(ea.get()); // column-major, LAPACK's input
 
         crd::containers::Array<crd::f64> cs(&alloc);
         cs.resize(n);
@@ -254,19 +250,9 @@ int main()
         crd::f64 jt = 0.0;
         if (n <= 256)
         {
-            jt = time_loop(
-                [&]()
-                {
-                    Eigen::JacobiSVD<Eigen::MatrixXd> sv(ea);
-                    (void)sv.singularValues();
-                });
+            jt = time_loop([&]() { peer::svd(peer::Svd::Jacobi, ea.get(), false, nullptr); });
         }
-        const crd::f64 bt = time_loop(
-            [&]()
-            {
-                Eigen::BDCSVD<Eigen::MatrixXd> sv(ea);
-                (void)sv.singularValues();
-            });
+        const crd::f64 bt = time_loop([&]() { peer::svd(peer::Svd::Bdc, ea.get(), false, nullptr); });
 
         crd::containers::Array<crd::f64> la(&alloc);
         crd::containers::Array<crd::f64> ls(&alloc);
@@ -286,7 +272,7 @@ int main()
                 {
                     for (crd::usize i = 0; i < n * n; ++i)
                     {
-                        la[i] = ea.data()[i];
+                        la[i] = ea_cm[i];
                     }
                     int inf = 0;
                     int lwk = static_cast<int>(work.size());
@@ -311,7 +297,7 @@ int main()
                 {
                     for (crd::usize i = 0; i < n * n; ++i)
                     {
-                        la[i] = ea.data()[i];
+                        la[i] = ea_cm[i];
                     }
                     int inf = 0;
                     int lwk = static_cast<int>(work.size());

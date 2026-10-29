@@ -11,6 +11,9 @@
 //
 // Build-gated by CRD_BUILD_HESAP_VS_REFERENCE=ON. LAPACK ships inside the
 // gated OpenBLAS build (C_LAPACK); we call dsyev_ directly (column-major).
+// Eigen runs in its peer library at the host's best ISA (examples/peers/eigen_peer.hpp).
+#include "eigen_peer.hpp"
+
 #include <crd/containers/array.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/detail/dqds.hpp>
@@ -20,13 +23,14 @@
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
-#include <Eigen/Dense>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <limits>
 
+// LAPACK's Fortran symbols: lower case with a trailing underscore.
+// NOLINTBEGIN(readability-identifier-naming)
 extern "C" void dsyev_(const char* jobz, const char* uplo, const int* n, double* a, const int* lda, double* w,
                        double* work, const int* lwork, int* info);
 extern "C" void zheev_(const char* jobz, const char* uplo, const int* n, double* a, const int* lda, double* w,
@@ -44,13 +48,15 @@ extern "C" void dstemr_(const char* jobz, const char* range, const int* n, doubl
                         const double* vu, const int* il, const int* iu, int* m, double* w, double* z, const int* ldz,
                         const int* nzc, int* isuppz, int* tryrac, double* work, const int* lwork, int* iwork,
                         const int* liwork, int* info);
+// NOLINTEND(readability-identifier-naming)
 
 namespace
 {
+namespace peer = crd_peer::eigen;
 using crd::hesap::dense::eig_sym;
 using crd::hesap::dense::Symmetric;
 
-template <typename Op> crd::f64 time_loop(Op&& op, crd::f64 budget_s = 0.4, int min_iters = 3)
+template <typename Op> crd::f64 time_loop(const Op& op, crd::f64 budget_s = 0.4, int min_iters = 3)
 {
     op();
     crd::jobs::frame_reset();
@@ -141,7 +147,8 @@ int main()
     {
         // Deterministic random symmetric matrix (shared by all three solvers).
         Symmetric<crd::f64> a(&alloc, n);
-        Eigen::MatrixXd ea(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n));
+        crd::containers::Array<crd::f64> eigen_input(&alloc);
+        eigen_input.resize(n * n);
         crd::u32 s = 1234567U + static_cast<crd::u32>(n);
         for (crd::usize i = 0; i < n; ++i)
         {
@@ -150,8 +157,8 @@ int main()
                 s = s * 1664525U + 1013904223U;
                 const crd::f64 val = static_cast<crd::f64>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001;
                 a.at(i, j) = val;
-                ea(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = val;
-                ea(static_cast<Eigen::Index>(j), static_cast<Eigen::Index>(i)) = val;
+                eigen_input[i * n + j] = val;
+                eigen_input[j * n + i] = val;
             }
         }
 
@@ -188,13 +195,10 @@ int main()
         }
 
         // --- Eigen ---
-        Eigen::VectorXd evals;
-        const crd::f64 et = time_loop(
-            [&]()
-            {
-                Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(ea);
-                evals = es.eigenvalues();
-            });
+        const peer::Owned ea{
+            peer::mat(static_cast<peer::Index>(n), static_cast<peer::Index>(n), eigen_input.data(), true)};
+        const peer::Owned evals{peer::vec(0, static_cast<const crd::f64*>(nullptr))};
+        const crd::f64 et = time_loop([&]() { peer::eig_sym(ea.get(), true, evals.get()); });
 
         // --- LAPACK dsyev (column-major; symmetric so layout-agnostic) ---
         const int ni = static_cast<int>(n);
@@ -217,7 +221,7 @@ int main()
                 {
                     for (crd::usize i = 0; i < n * n; ++i)
                     {
-                        la[i] = ea.data()[i]; // Eigen is column-major; refill each iter
+                        la[i] = eigen_input[i]; // symmetric, so either order; refill each iter
                     }
                     int inf = 0;
                     int lwk = static_cast<int>(work.size());
@@ -229,7 +233,7 @@ int main()
         crd::f64 verr = 0.0;
         for (crd::usize i = 0; i < n; ++i)
         {
-            verr = std::max(verr, std::abs(cvals[i] - evals[static_cast<Eigen::Index>(i)]));
+            verr = std::max(verr, std::abs(cvals[i] - peer::data(evals.get())[i]));
             verr = std::max(verr, std::abs(cvals[i] - lw[i]));
         }
 
@@ -248,7 +252,8 @@ int main()
          {crd::usize{64}, crd::usize{128}, crd::usize{256}, crd::usize{512}, crd::usize{1024}, crd::usize{2048}})
     {
         Symmetric<crd::f64> a(&alloc, n);
-        Eigen::MatrixXd ea(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n));
+        crd::containers::Array<crd::f64> eigen_input(&alloc);
+        eigen_input.resize(n * n);
         crd::u32 s = 424242U + static_cast<crd::u32>(n);
         for (crd::usize i = 0; i < n; ++i)
         {
@@ -257,8 +262,8 @@ int main()
                 s = s * 1664525U + 1013904223U;
                 const crd::f64 val = static_cast<crd::f64>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001;
                 a.at(i, j) = val;
-                ea(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = val;
-                ea(static_cast<Eigen::Index>(j), static_cast<Eigen::Index>(i)) = val;
+                eigen_input[i * n + j] = val;
+                eigen_input[j * n + i] = val;
             }
         }
 
@@ -274,13 +279,10 @@ int main()
                 }
             });
 
-        Eigen::VectorXd evals;
-        const crd::f64 et = time_loop(
-            [&]()
-            {
-                Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(ea, Eigen::EigenvaluesOnly);
-                evals = es.eigenvalues();
-            });
+        const peer::Owned ea{
+            peer::mat(static_cast<peer::Index>(n), static_cast<peer::Index>(n), eigen_input.data(), true)};
+        const peer::Owned evals{peer::vec(0, static_cast<const crd::f64*>(nullptr))};
+        const crd::f64 et = time_loop([&]() { peer::eig_sym(ea.get(), false, evals.get()); });
 
         const int ni = static_cast<int>(n);
         crd::containers::Array<crd::f64> la(&alloc);
@@ -306,7 +308,7 @@ int main()
                 {
                     for (crd::usize i = 0; i < n * n; ++i)
                     {
-                        la[i] = ea.data()[i];
+                        la[i] = eigen_input[i];
                     }
                     int inf = 0;
                     int lwk = static_cast<int>(work.size());
@@ -317,7 +319,7 @@ int main()
         crd::f64 verr = 0.0;
         for (crd::usize i = 0; i < n; ++i)
         {
-            verr = std::max(verr, std::abs(cvals[i] - evals[static_cast<Eigen::Index>(i)]));
+            verr = std::max(verr, std::abs(cvals[i] - peer::data(evals.get())[i]));
             verr = std::max(verr, std::abs(cvals[i] - lw[i]));
         }
         std::fprintf(stdout, "%-6zu | %-11.3f | %-11.3f | %-11.3f | %-9.2f | %-9.2f | %-10.2e\n",
@@ -581,22 +583,9 @@ int main()
         }
 
         // --- Eigen computeFromTridiagonal (values+vectors; implicit-shift QL/QR) ---
-        Eigen::VectorXd ediag(static_cast<Eigen::Index>(n));
-        Eigen::VectorXd esub(static_cast<Eigen::Index>(n - 1));
-        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> ees;
-        const crd::f64 egt = time_loop(
-            [&]()
-            {
-                for (crd::usize i = 0; i < n; ++i)
-                {
-                    ediag(static_cast<Eigen::Index>(i)) = d0[i];
-                }
-                for (crd::usize i = 0; i + 1 < n; ++i)
-                {
-                    esub(static_cast<Eigen::Index>(i)) = e0[i];
-                }
-                ees.computeFromTridiagonal(ediag, esub, Eigen::ComputeEigenvectors);
-            });
+        const peer::Owned ees{peer::sym_eig()};
+        const crd::f64 egt =
+            time_loop([&]() { peer::eig_tridiagonal(ees.get(), static_cast<peer::Index>(n), d0.data(), e0.data()); });
 
         // --- LAPACK dstedc (D&C, compz='I') ---
         crd::containers::Array<crd::f64> dd(&alloc);
@@ -700,7 +689,8 @@ int main()
     for (crd::usize n : {crd::usize{64}, crd::usize{128}, crd::usize{256}, crd::usize{512}, crd::usize{1024}})
     {
         crd::hesap::dense::Hermitian<Cd> h(&alloc, n);
-        Eigen::MatrixXcd eh(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n));
+        crd::containers::Array<crd::f64> eigen_input(&alloc); // re/im pairs, row-major
+        eigen_input.resize(2 * n * n);
         crd::u32 s = 778899U + static_cast<crd::u32>(n);
         auto nd = [&]()
         {
@@ -714,12 +704,15 @@ int main()
                 const crd::f64 re = nd();
                 const crd::f64 im = nd();
                 h.at_lower(i, j) = Cd{re, im};
-                eh(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = {re, im};
-                eh(static_cast<Eigen::Index>(j), static_cast<Eigen::Index>(i)) = {re, -im};
+                eigen_input[2 * (i * n + j)] = re;
+                eigen_input[2 * (i * n + j) + 1] = im;
+                eigen_input[2 * (j * n + i)] = re;
+                eigen_input[2 * (j * n + i) + 1] = -im;
             }
             const crd::f64 dd = nd();
             h.at_lower(i, i) = Cd{dd, 0.0};
-            eh(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(i)) = {dd, 0.0};
+            eigen_input[2 * (i * n + i)] = dd;
+            eigen_input[2 * (i * n + i) + 1] = 0.0;
         }
 
         crd::containers::Array<crd::f64> cvals(&alloc);
@@ -753,13 +746,10 @@ int main()
             }
         }
 
-        Eigen::VectorXd evals;
-        const crd::f64 et = time_loop(
-            [&]()
-            {
-                Eigen::SelfAdjointEigenSolver<Eigen::MatrixXcd> es(eh);
-                evals = es.eigenvalues();
-            });
+        const peer::Owned eh{
+            peer::mat_c64(static_cast<peer::Index>(n), static_cast<peer::Index>(n), eigen_input.data(), true)};
+        const peer::Owned evals{peer::vec(0, static_cast<const crd::f64*>(nullptr))};
+        const crd::f64 et = time_loop([&]() { peer::eig_herm(eh.get(), evals.get()); });
 
         const int ni = static_cast<int>(n);
         crd::containers::Array<crd::f64> lw(&alloc);
@@ -800,7 +790,7 @@ int main()
         crd::f64 verr = 0.0;
         for (crd::usize i = 0; i < n; ++i)
         {
-            verr = std::max(verr, std::abs(cvals[i] - evals[static_cast<Eigen::Index>(i)]));
+            verr = std::max(verr, std::abs(cvals[i] - peer::data(evals.get())[i]));
         }
         std::fprintf(stdout, "%-6zu | %-11.3f | %-11.3f | %-11.3f | %-9.2f | %-9.2f | %-10.2e | %-10.2e\n",
                      static_cast<size_t>(n), ct * 1e3, et * 1e3, lt * 1e3, et / ct, lt / ct, verr, resid);

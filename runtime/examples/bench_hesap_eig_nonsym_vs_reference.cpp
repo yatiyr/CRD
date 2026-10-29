@@ -6,19 +6,23 @@
 // The blocked trailing update routes through the v0d gemm_parallel that already
 // crushes — the lever for beating LAPACK's own BLAS-3 dgehrd. LAPACK rides
 // OpenBLAS-generic on MSVC (fair *speed* is a Linux-CI statement; the accuracy
-// oracle is the recon test). Build-gated by CRD_BUILD_HESAP_VS_REFERENCE=ON.
+// oracle is the recon test). Build-gated by CRD_BUILD_HESAP_VS_REFERENCE=ON. Eigen runs in its peer library at
+// the host's best ISA (examples/peers/eigen_peer.hpp).
+#include "eigen_peer.hpp"
+
 #include <crd/containers/array.hpp>
 #include <crd/hesap/dense/eig_nonsym.hpp>
 #include <crd/hesap/dense/matrix.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
-#include <Eigen/Dense>
 #include <algorithm>
 #include <chrono>
 #include <complex>
 #include <cstdio>
 
+// LAPACK's Fortran symbols: lower case with a trailing underscore.
+// NOLINTBEGIN(readability-identifier-naming)
 extern "C" void dgehrd_(const int* n, const int* ilo, const int* ihi, double* a, const int* lda, double* tau,
                         double* work, const int* lwork, int* info);
 extern "C" void zgehrd_(const int* n, const int* ilo, const int* ihi, std::complex<double>* a, const int* lda,
@@ -35,22 +39,21 @@ extern "C" void dgeev_(const char* jobvl, const char* jobvr, const int* n, doubl
 extern "C" void zgeev_(const char* jobvl, const char* jobvr, const int* n, std::complex<double>* a, const int* lda,
                        std::complex<double>* w, std::complex<double>* vl, const int* ldvl, std::complex<double>* vr,
                        const int* ldvr, std::complex<double>* work, const int* lwork, double* rwork, int* info);
+// NOLINTEND(readability-identifier-naming)
 
 namespace
 {
+namespace peer = crd_peer::eigen;
 using crd::hesap::dense::complex_schur;
 using crd::hesap::dense::complex_schur_aed;
-using crd::hesap::dense::ComplexSchur;
 using crd::hesap::dense::eig;
 using crd::hesap::dense::EigNonsym;
 using crd::hesap::dense::hessenberg;
-using crd::hesap::dense::Layout;
 using crd::hesap::dense::Matrix;
 using crd::hesap::dense::real_schur;
-using crd::hesap::dense::RealSchur;
 using crd::hesap::dense::schur_aed;
 
-template <typename Op> crd::f64 time_loop(Op&& op, crd::f64 budget_s = 0.4, int min_iters = 3)
+template <typename Op> crd::f64 time_loop(const Op& op, crd::f64 budget_s = 0.4, int min_iters = 3)
 {
     op();
     crd::jobs::frame_reset();
@@ -78,7 +81,7 @@ template <typename Op> crd::f64 time_loop(Op&& op, crd::f64 budget_s = 0.4, int 
 // Single warmup + one timed call — for large N where each call is seconds and
 // the 9x time_loop would run for minutes (the un-accelerated references in
 // particular). Low relative noise since per-call time dominates.
-template <typename Op> crd::f64 time_once(Op&& op)
+template <typename Op> crd::f64 time_once(const Op& op)
 {
     op();
     crd::jobs::frame_reset();
@@ -88,9 +91,9 @@ template <typename Op> crd::f64 time_once(Op&& op)
     return std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
 }
 
-template <typename Op> crd::f64 timed(bool once, Op&& op)
+template <typename Op> crd::f64 timed(bool once, const Op& op)
 {
-    return once ? time_once(std::forward<Op>(op)) : time_loop(std::forward<Op>(op));
+    return once ? time_once(op) : time_loop(op);
 }
 } // namespace
 
@@ -111,7 +114,6 @@ int main()
     {
         const int ni = static_cast<int>(n);
         Matrix<crd::f64> a0(&alloc, n, n);
-        Eigen::MatrixXd ea(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n));
         crd::containers::Array<crd::f64> acm0(&alloc); // column-major copy for LAPACK
         acm0.resize(n * n);
         crd::u32 s = 71017U + static_cast<crd::u32>(n);
@@ -122,7 +124,6 @@ int main()
                 s = s * 1664525U + 1013904223U;
                 const crd::f64 v = static_cast<crd::f64>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001;
                 a0.at(i, j) = v;
-                ea(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = v;
                 acm0[j * n + i] = v;
             }
         }
@@ -141,11 +142,12 @@ int main()
             });
 
         // --- Eigen HessenbergDecomposition ---
+        const auto np = static_cast<peer::Index>(n);
+        const peer::Owned ea{peer::mat(np, np, acm0.data(), false)};
         const crd::f64 et = time_loop(
             [&]()
             {
-                Eigen::HessenbergDecomposition<Eigen::MatrixXd> h(ea);
-                volatile double sink = h.matrixH()(0, 0);
+                volatile double sink = peer::hessenberg(ea.get());
                 (void)sink;
             });
 
@@ -203,7 +205,6 @@ int main()
         const int ni = static_cast<int>(n);
         const bool run_refs = (n <= 128);
         Matrix<C> a0(&alloc, n, n);
-        Eigen::MatrixXcd ea(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n));
         crd::containers::Array<std::complex<double>> acm0(&alloc); // column-major for LAPACK
         acm0.resize(n * n);
         crd::u32 s = 81017U + static_cast<crd::u32>(n);
@@ -216,7 +217,6 @@ int main()
                 s = s * 1664525U + 1013904223U;
                 const crd::f64 im = static_cast<crd::f64>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001;
                 a0.at(i, j) = C{re, im};
-                ea(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = std::complex<double>(re, im);
                 acm0[j * n + i] = std::complex<double>(re, im);
             }
         }
@@ -237,11 +237,12 @@ int main()
         crd::f64 lt = 0.0;
         if (run_refs)
         {
+            const auto np = static_cast<peer::Index>(n);
+            const peer::Owned ea{peer::mat_c64(np, np, reinterpret_cast<const double*>(acm0.data()), false)};
             et = time_loop(
                 [&]()
                 {
-                    Eigen::HessenbergDecomposition<Eigen::MatrixXcd> h(ea);
-                    volatile double sink = h.matrixH()(0, 0).real();
+                    volatile double sink = peer::hessenberg(ea.get());
                     (void)sink;
                 });
 
@@ -310,7 +311,6 @@ int main()
         crd::containers::Array<C> tau(&alloc);
         hessenberg<C>(hbuild, 0, n - 1, tau);
         Matrix<C> hmat(&alloc, n, n);
-        Eigen::MatrixXcd eh(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n));
         crd::containers::Array<std::complex<double>> hcm0(&alloc);
         hcm0.resize(n * n);
         for (crd::usize i = 0; i < n; ++i)
@@ -319,7 +319,6 @@ int main()
             {
                 const C v = (j + 1 >= i) ? hbuild.at(i, j) : C{0.0, 0.0};
                 hmat.at(i, j) = v;
-                eh(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = std::complex<double>(v.re, v.im);
                 hcm0[j * n + i] = std::complex<double>(v.re, v.im);
             }
         }
@@ -366,14 +365,12 @@ int main()
         crd::f64 lt = 0.0;
         if (run_refs)
         {
+            const auto np = static_cast<peer::Index>(n);
+            const peer::Owned eh{peer::mat_c64(np, np, reinterpret_cast<const double*>(hcm0.data()), false)};
             et = time_loop(
                 [&]()
                 {
-                    Eigen::ComplexSchur<Eigen::MatrixXcd> cs;
-                    cs.computeFromHessenberg(
-                        eh, Eigen::MatrixXcd::Identity(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n)),
-                        true);
-                    volatile crd::f64 sink = cs.matrixT()(0, 0).real();
+                    volatile crd::f64 sink = peer::schur_from_hessenberg(eh.get());
                     (void)sink;
                 });
             crd::containers::Array<std::complex<double>> hcm(&alloc);
@@ -513,7 +510,6 @@ int main()
         const int ni = static_cast<int>(n);
         // Build a clean upper-Hessenberg H (same matrix for all four).
         Matrix<crd::f64> hbuild(&alloc, n, n);
-        Eigen::MatrixXd eh(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n));
         crd::u32 s = 13577U + static_cast<crd::u32>(n);
         for (crd::usize i = 0; i < n; ++i)
         {
@@ -532,7 +528,6 @@ int main()
             {
                 const crd::f64 v = (j + 1 >= i) ? hbuild.at(i, j) : 0.0;
                 hmat.at(i, j) = v;
-                eh(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = v;
             }
         }
         // column-major copy for LAPACK dhseqr
@@ -600,16 +595,14 @@ int main()
                     (void)sink;
                 });
         }
-        const crd::f64 t_eig = timed(
-            large,
-            [&]()
-            {
-                Eigen::RealSchur<Eigen::MatrixXd> rs;
-                rs.computeFromHessenberg(
-                    eh, Eigen::MatrixXd::Identity(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n)), true);
-                volatile crd::f64 sink = rs.matrixT()(0, 0);
-                (void)sink;
-            });
+        const auto np = static_cast<peer::Index>(n);
+        const peer::Owned eh{peer::mat(np, np, hcm0.data(), false)};
+        const crd::f64 t_eig = timed(large,
+                                     [&]()
+                                     {
+                                         volatile crd::f64 sink = peer::schur_from_hessenberg(eh.get());
+                                         (void)sink;
+                                     });
         const bool run_lapack = (n <= 400);
         crd::f64 t_lp = 0.0;
         if (run_lapack)
@@ -676,7 +669,6 @@ int main()
     {
         const int ni = static_cast<int>(n);
         Matrix<crd::f64> a0(&alloc, n, n);
-        Eigen::MatrixXd ea(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n));
         crd::containers::Array<crd::f64> acm0(&alloc); // column-major for LAPACK
         acm0.resize(n * n);
         crd::u32 s = 90211U + static_cast<crd::u32>(n);
@@ -687,7 +679,6 @@ int main()
                 s = s * 1664525U + 1013904223U;
                 const crd::f64 v = static_cast<crd::f64>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001;
                 a0.at(i, j) = v;
-                ea(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = v;
                 acm0[j * n + i] = v;
             }
         }
@@ -735,11 +726,12 @@ int main()
             }
         }
 
+        const auto np = static_cast<peer::Index>(n);
+        const peer::Owned ea{peer::mat(np, np, acm0.data(), false)};
         const crd::f64 t_eig = time_loop(
             [&]()
             {
-                Eigen::EigenSolver<Eigen::MatrixXd> es(ea, true);
-                volatile crd::f64 sink = es.eigenvalues()(0).real();
+                volatile crd::f64 sink = peer::eig_general(ea.get());
                 (void)sink;
             });
 
@@ -823,7 +815,6 @@ int main()
         const int ni = static_cast<int>(n);
         const bool run_refs = (n <= 128);
         Matrix<C> a0(&alloc, n, n);
-        Eigen::MatrixXcd ea(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n));
         crd::containers::Array<std::complex<double>> acm0(&alloc); // column-major for zgeev
         acm0.resize(n * n);
         crd::u32 s = 60611U + static_cast<crd::u32>(n);
@@ -836,7 +827,6 @@ int main()
                 s = s * 1664525U + 1013904223U;
                 const crd::f64 im = static_cast<crd::f64>(static_cast<crd::i32>(s >> 8) % 2000 - 1000) * 0.001;
                 a0.at(i, j) = C{re, im};
-                ea(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = std::complex<double>(re, im);
                 acm0[j * n + i] = std::complex<double>(re, im);
             }
         }
@@ -876,11 +866,12 @@ int main()
         crd::f64 t_lp = 0.0;
         if (run_refs)
         {
+            const auto np = static_cast<peer::Index>(n);
+            const peer::Owned ea{peer::mat_c64(np, np, reinterpret_cast<const double*>(acm0.data()), false)};
             t_eig = time_loop(
                 [&]()
                 {
-                    Eigen::ComplexEigenSolver<Eigen::MatrixXcd> es(ea, true);
-                    volatile crd::f64 sink = es.eigenvalues()(0).real();
+                    volatile crd::f64 sink = peer::eig_general(ea.get());
                     (void)sink;
                 });
             crd::containers::Array<std::complex<double>> acm(&alloc);

@@ -12,6 +12,8 @@
 // Built only when CRD_BUILD_HESAP_VS_REFERENCE=ON. Raw double only at the Eigen
 // API boundary.
 
+#include "eigen_peer.hpp"
+
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/dense/matrix.hpp>
@@ -19,8 +21,6 @@
 #include <crd/hesap/direct/hss_ulv.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
-#include <Eigen/Cholesky>
-#include <Eigen/Dense>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -122,27 +122,17 @@ void run(crd::usize n, crd::usize leaf, double tol, crd::usize nrhs)
     }
     const double cerid_resid = std::sqrt(rn) / std::sqrt(bn);
 
-    // ---- Eigen dense LLT ----
-    Eigen::MatrixXd ea(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n));
-    for (crd::usize i = 0; i < n; ++i)
-    {
-        for (crd::usize j = 0; j < n; ++j)
-        {
-            ea(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = a.at(i, j);
-        }
-    }
-    Eigen::MatrixXd eb(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(nrhs));
-    for (crd::usize c = 0; c < nrhs; ++c)
-    {
-        for (crd::usize i = 0; i < n; ++i)
-        {
-            eb(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(c)) = rhs[c * n + i];
-        }
-    }
+    // ---- Eigen dense LLT (its peer library, at the host's best ISA) ----
+    namespace peer = crd_peer::eigen;
+    const auto np = static_cast<peer::Index>(n);
+    const auto rp = static_cast<peer::Index>(nrhs);
+    const peer::Owned ea{peer::mat(np, np, a.data(), true)};
+    const peer::Owned eb{peer::mat(np, rp, rhs.data(), false)};
+    const peer::Owned ex{peer::mat(np, rp, static_cast<const crd::f64*>(nullptr), false)};
     auto e0 = Clock::now();
-    Eigen::LLT<Eigen::MatrixXd> llt(ea);
+    const peer::Owned factor{peer::llt(ea.get())};
     auto e1 = Clock::now();
-    Eigen::MatrixXd ex = llt.solve(eb);
+    peer::solve(factor.get(), eb.get(), ex.get());
     auto e2 = Clock::now();
 
     const double cb = seconds(t0, t1);

@@ -2,7 +2,10 @@
 // (axpy / dot / nrm2). Applies the policy from
 // docs/PRINCIPLES_reference_class_benchmarking.md to the L1 surface.
 //
-// Build only when -DCRD_BUILD_HESAP_VS_REFERENCE=ON.
+// Build only when -DCRD_BUILD_HESAP_VS_REFERENCE=ON. Eigen runs in its peer
+// library at the host's best ISA (examples/peers/eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/core/cpu_features.hpp>
@@ -12,7 +15,6 @@
 #include <crd/math/simd/backend.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
-#include <Eigen/Dense>
 #include <cblas.h>
 #include <chrono>
 #include <cmath>
@@ -50,7 +52,7 @@ template <typename T> void fill(T* p, crd::usize n, crd::u32 seed)
     }
 }
 
-template <typename Op> crd::f64 time_loop_best_of_3(Op&& op, int& iters_out)
+template <typename Op> crd::f64 time_loop_best_of_3(const Op& op, int& iters_out)
 {
     // Warm-up x4.
     op();
@@ -113,12 +115,11 @@ void bench_axpy(crd::memory::IAllocator* alloc)
             time_loop_best_of_3([&]() { crd::hesap::dense::axpy<crd::f64>(alpha, cx.span(), cy.span()); }, citers);
 
         // Eigen: y.noalias() += alpha * x
-        Eigen::VectorXd ex(n);
-        Eigen::VectorXd ey(n);
-        std::memcpy(ex.data(), cx.data(), n * sizeof(crd::f64));
-        std::memcpy(ey.data(), cy.data(), n * sizeof(crd::f64));
+        namespace peer = crd_peer::eigen;
+        const peer::Owned ex{peer::vec(static_cast<peer::Index>(n), cx.data())};
+        const peer::Owned ey{peer::vec(static_cast<peer::Index>(n), cy.data())};
         int eiters = 0;
-        const crd::f64 ee = time_loop_best_of_3([&]() { ey.noalias() += alpha * ex; }, eiters);
+        const crd::f64 ee = time_loop_best_of_3([&]() { peer::axpy(alpha, ex.get(), ey.get()); }, eiters);
 
         // OpenBLAS daxpy
         crd::containers::Array<crd::f64> ox(alloc);
@@ -156,8 +157,6 @@ template <> struct Peer<crd::f32>
     static crd::f32 dot(int n, const crd::f32* x, const crd::f32* y) { return cblas_sdot(n, x, 1, y, 1); }
     static crd::f32 nrm2(int n, const crd::f32* x) { return cblas_snrm2(n, x, 1); }
 };
-template <typename T> using EVec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
-
 template <typename T> void bench_dot(crd::memory::IAllocator* alloc)
 {
     std::fprintf(stdout, "\n==== dot.%s: sum_i x[i]*y[i] ====\n", Peer<T>::kName);
@@ -179,12 +178,11 @@ template <typename T> void bench_dot(crd::memory::IAllocator* alloc)
         const crd::f64 ce =
             time_loop_best_of_3([&]() { sink = crd::hesap::dense::dot<T>(cx.span(), cy.span()); }, citers);
 
-        EVec<T> ex(n);
-        EVec<T> ey(n);
-        std::memcpy(ex.data(), cx.data(), n * sizeof(T));
-        std::memcpy(ey.data(), cy.data(), n * sizeof(T));
+        namespace peer = crd_peer::eigen;
+        const peer::Owned ex{peer::vec(static_cast<peer::Index>(n), cx.data())};
+        const peer::Owned ey{peer::vec(static_cast<peer::Index>(n), cy.data())};
         int eiters = 0;
-        const crd::f64 ee = time_loop_best_of_3([&]() { sink = ex.dot(ey); }, eiters);
+        const crd::f64 ee = time_loop_best_of_3([&]() { sink = peer::dot(ex.get(), ey.get()); }, eiters);
 
         crd::containers::Array<T> ox(alloc);
         crd::containers::Array<T> oy(alloc);
@@ -227,10 +225,10 @@ template <typename T> void bench_nrm2(crd::memory::IAllocator* alloc)
         int citers = 0;
         const crd::f64 ce = time_loop_best_of_3([&]() { sink = crd::hesap::dense::nrm2<T>(cx.span()); }, citers);
 
-        EVec<T> ex(n);
-        std::memcpy(ex.data(), cx.data(), n * sizeof(T));
+        namespace peer = crd_peer::eigen;
+        const peer::Owned ex{peer::vec(static_cast<peer::Index>(n), cx.data())};
         int eiters = 0;
-        const crd::f64 ee = time_loop_best_of_3([&]() { sink = ex.norm(); }, eiters);
+        const crd::f64 ee = time_loop_best_of_3([&]() { sink = peer::norm(ex.get()); }, eiters);
 
         crd::containers::Array<T> ox(alloc);
         ox.resize(n);
@@ -271,7 +269,7 @@ int main(int argc, char** argv)
     // Eigen + OpenBLAS run single-threaded for L1 (vector ops scale only at
     // very large N where memory bandwidth dominates). Use 1 thread for fair
     // comparison; Cerid L1 is also serial today.
-    Eigen::setNbThreads(1);
+    crd_peer::eigen::set_threads(1);
     openblas_set_num_threads(1);
 
     const crd::f64 ghz = measure_clock_ghz();
@@ -279,11 +277,12 @@ int main(int argc, char** argv)
                  "==== bench_hesap_blas1_vs_reference ====\n"
                  "  SIMD backend : %s\n"
                  "  Dense kernels: %s level (CRD_CPU_LEVEL forces it)\n"
+                 "  Eigen        : %s\n"
                  "  Clock        : %.2f GHz (P-cores)\n"
                  "  Threads      : 1 each (BLAS L1 is memory-bandwidth-bound)\n"
                  "  Goal         : Cerid >= Eigen-MT AND Cerid >= OpenBLAS\n",
                  crd::math::simd::backend_name(), crd::cpu_level_name(crd::hesap::dense::dense_kernels().level),
-                 ghz);
+                 crd_peer::eigen::isa(), ghz);
 
     crd::memory::TlsfAllocator alloc(64ULL * 1024ULL * 1024ULL);
     bench_axpy(&alloc);
