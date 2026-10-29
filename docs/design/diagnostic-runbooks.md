@@ -415,4 +415,6 @@ directory exists in it, on the rows whose qualifier holds for the tree (its plat
 a link; every DIAG child is an entry's owner or listed above; nothing publishes. The `crd-check-diag-runbooks` CTest
 runs it on every Ninja lane with that lane's tree, so the Windows lanes resolve the Windows rows, the Linux lanes the
 Linux rows, and the shipping and release lanes leave the `(asserts)` and `(profiling)` rows to the lanes that build
-them; `--static` checks everything but the test references. Its cases are in `scripts/test-repository-tools.py` (`DiagRunbooks`).
+them; `--static` checks everything but the test references, and so does a module selection's tree (the ARM64 lanes
+until crd-jobs runs there), which stands in for none of the full presets the commands name. Its cases are in
+`scripts/test-repository-tools.py` (`DiagRunbooks`).

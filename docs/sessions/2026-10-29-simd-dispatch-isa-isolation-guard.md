@@ -61,9 +61,23 @@ run 40761837951 was cancelled before any job started. No run completed, so no Ne
 - `test-repository-tools.py IsaIsolation` (15 cases: encodings, both dump shapes, decode counts, symbols, levels,
   families, jump tables, maps, formats, streaming, decoder failures), `test-dev-workflow.py`.
 
+## First hosted runs
+
+Push run 40784988994 (92db578d) ran the guard first, on the lanes that got past their builds.
+- win-arm64-debug (object route, 16 kernel and 565 general objects, 21 s) failed 779 times on literal data: MSVC
+  keeps a function's constants in ARM64 `.text` (SIZE_MAX/56 `0x0492492492492492`, FNV-1a's offset basis, 1e8,
+  STATUS_INFO_LENGTH_MISMATCH, "TYPE") and its switch tables under a `__swt` label, and dumpbin decodes them as SVE.
+  The words an LDR (literal) loads and the `__swt` tables are now data (fixture cases; no ARM64 compiler on this
+  host, so the next win-arm64 run judges it).
+- linux-gcc-debug-scalar stopped at once: GCC's precompiled header (`cmake_pch.hxx.gch`) is among a target's objects;
+  the manifest now leaves `.gch` and `.pch` out.
+- The same ARM64 run failed `crd-check-diag-runbooks` 44 times: a module selection (the ARM64 lanes leave crd-jobs
+  out) registers part of the tests the runbook commands' full presets do. CMake passes the omitted modules, and such
+  a tree checks everything but the test references (x64's full trees resolve them on every push).
+
 ## Left
 
-The guard's first hosted run on every lane, with its runtime per lane (Clang's `__clang_call_terminate` and the
+The guard's first green hosted run on every lane, with its runtime per lane (Clang's `__clang_call_terminate` and the
 coverage records are reviewed in advance; libgcc's `__cpu_indicator_init` or Tracy's timer may surface on the GCC IPO
 images and are reviewed there if so). The forced levels and MSVC's dispatch landed next
 ([session](2026-10-29-simd-dispatch-forced-levels-crt-dispatch.md)).

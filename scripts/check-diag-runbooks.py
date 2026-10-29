@@ -19,7 +19,8 @@ would notice, so every checkable part of every entry is checked here:
   tree matches at least one test it registers, every `-L <regex>` at least one label of its tests, and every named
   executable's binary directory exists in it. A row's qualifier names a platform (`(Windows)`, `(Linux)`) or a build
   property the configuration must compile in (`(asserts)`, `(profiling)`; read from CMakeCache.txt), or both
-  (`(Windows, profiling)`).
+  (`(Windows, profiling)`). The commands name full presets (build/win-debug), which a module selection does not
+  stand in for (the ARM64 lanes until crd-jobs runs there): given --omitted-modules, a run checks everything else.
 
     python scripts/check-diag-runbooks.py --build build/win-debug        (the crd-check-diag-runbooks CTest)
     python scripts/check-diag-runbooks.py --static                       (no tree: the test references unresolved)
@@ -617,28 +618,36 @@ def main(argv=None):
     mode.add_argument('--build', help='a configured tree whose CTest names resolve the runbooks\' test references')
     mode.add_argument('--static', action='store_true', help='check everything but the test references')
     parser.add_argument('--config', help='the configuration of a multi-configuration tree')
+    parser.add_argument('--omitted-modules', default='',
+                        help='the modules a selection leaves out of the --build tree (comma-separated)')
     parser.add_argument('--runbook', default=str(RUNBOOK))
     args = parser.parse_args(argv)
     runbook = Path(args.runbook)
     if not runbook.is_file() or not DESIGN.is_file():
         print('ERROR: %s or %s is missing' % (runbook, DESIGN))
         return 2
-    tests, labels = None, None
+    tests, labels, build = None, None, None
     if args.build:
         build = Path(os.path.expanduser(args.build))
         if not (build / 'CTestTestfile.cmake').is_file():
             print('ERROR: %s is not a configured tree with tests' % build)
             return 2
+    omitted = [name for name in args.omitted_modules.split(',') if name]
+    if build and not omitted:
         tests, labels = tree_tests(build, args.config)
-    build = Path(os.path.expanduser(args.build)) if args.build else None
-    tree = Tree(tests=tests, build=build, properties=build_properties(build) if build else None, labels=labels)
+    tree = Tree(tests=tests, build=None if omitted else build, properties=build_properties(build) if build else None,
+                labels=labels)
     problems = check(tree, runbook.read_text(encoding='utf-8'), DESIGN.read_text(encoding='utf-8'))
     entries, exempt = parse(runbook.read_text(encoding='utf-8'))
     for problem in problems:
         print('ERROR: ' + problem)
-    scope = ('test references resolved against %d tests of %s (%s rows)'
-             % (len(tests), args.build, ', '.join([tree.platform] + sorted(tree.properties)))
-             if tests is not None else 'test references not resolved (--static)')
+    if tests is not None:
+        scope = ('test references resolved against %d tests of %s (%s rows)'
+                 % (len(tests), args.build, ', '.join([tree.platform] + sorted(tree.properties))))
+    elif omitted:
+        scope = 'test references not resolved (the module selection omits %s)' % ', '.join(omitted)
+    else:
+        scope = 'test references not resolved (--static)'
     print('diagnostic runbooks: %d entries, %d children without an entry; %s; %s'
           % (len(entries), len(exempt), scope, 'PASS' if not problems else 'FAIL: %d findings' % len(problems)))
     return 1 if problems else 0

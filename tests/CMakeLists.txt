@@ -85,6 +85,14 @@ if(_crd_multi_config)
 else()
     set(_crd_runbook_config "")
 endif()
+# A module selection registers part of the tests the runbook commands' full presets do, so it resolves none of them.
+get_property(_crd_runbook_modules GLOBAL PROPERTY CRD_MODULE_NAMES)
+get_property(_crd_runbook_selected GLOBAL PROPERTY CRD_SELECTED_MODULES)
+list(REMOVE_ITEM _crd_runbook_modules ${_crd_runbook_selected})
+if(_crd_runbook_modules)
+    list(JOIN _crd_runbook_modules "," _crd_runbook_omitted)
+    list(APPEND _crd_runbook_config --omitted-modules "${_crd_runbook_omitted}")
+endif()
 add_test(NAME crd-check-diag-runbooks
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-diag-runbooks.py" --build "${CMAKE_BINARY_DIR}"
             ${_crd_runbook_config})

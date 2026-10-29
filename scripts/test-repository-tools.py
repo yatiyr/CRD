@@ -3958,6 +3958,15 @@ class DiagRunbooks(unittest.TestCase):
         with patch('sys.stdout', new_callable=io.StringIO) as out:
             self.assertEqual(runbooks.main(['--static']), 0, out.getvalue())
         self.assertIn('test references not resolved (--static); PASS', out.getvalue())
+        # A module selection's tree registers part of the tests the commands' full presets do: none is resolved.
+        with tempfile.TemporaryDirectory() as temp, patch('sys.stdout', new_callable=io.StringIO) as out:
+            (Path(temp) / 'CTestTestfile.cmake').write_text('', encoding='utf-8')
+            (Path(temp) / 'CMakeCache.txt').write_text('CRD_ENABLE_ASSERTS:BOOL=ON\n', encoding='utf-8')
+            with patch.object(runbooks, 'tree_tests', side_effect=AssertionError('resolved against a selection')):
+                self.assertEqual(runbooks.main(['--build', temp, '--omitted-modules', 'jobs,sandbox']), 0,
+                                 out.getvalue())
+        self.assertIn('test references not resolved (the module selection omits jobs, sandbox); PASS',
+                      out.getvalue())
 
 
 class SourceRoutes(unittest.TestCase):
