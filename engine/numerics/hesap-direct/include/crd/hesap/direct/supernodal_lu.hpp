@@ -4,6 +4,7 @@
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/dense/real_type.hpp>
+#include <crd/hesap/direct/detail/direct_picks.hpp>
 #include <crd/hesap/direct/factorization.hpp>
 #include <crd/hesap/sparse/sparse_format.hpp>
 #include <crd/hesap/sparse/sparse_matrix.hpp>
@@ -110,9 +111,17 @@ template <typename T> class SupernodalLU final : public IFactorization<T>
 public:
     explicit SupernodalLU(crd::memory::IAllocator* alloc) noexcept;
 
-    // Numeric factorization of a general square unsymmetric matrix A (CSR). `num_workers`
-    // is reserved for the v5b-2d tree-parallel numeric (serial in v5b-2c).
-    void factorize(const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a, crd::u32 num_workers = 1);
+    // Numeric factorization of a general square unsymmetric matrix A (CSR). `num_workers` > 1 walks the
+    // supernode etree level by level on that many jobs (needs crd::jobs initialised); every count gives the
+    // same bits.
+    void factorize(const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a, crd::u32 num_workers = 1)
+    {
+        factorize_arm(detail::SupernodalLuPick{}, a, num_workers);
+    }
+
+    // factorize on pick's levers (detail/direct_picks.hpp; the jobs board and the arm tests).
+    void factorize_arm(const detail::SupernodalLuPick& pick,
+                       const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a, crd::u32 num_workers = 1);
 
     [[nodiscard]] bool solve(crd::containers::Span<T> rhs, crd::usize nrhs) const override;
     using IFactorization<T>::solve; // un-hide the single-RHS convenience overload
@@ -153,7 +162,7 @@ private:
 };
 
 // Factor a general square unsymmetric matrix A (CSR) into a deterministic static-pivot LU.
-// info() != 0 ⇒ singular. num_workers reserved for v5b-2d (serial in v5b-2c).
+// info() != 0 ⇒ singular. num_workers as factorize's.
 template <typename T>
 [[nodiscard]] SupernodalLU<T> factor_supernodal_lu(const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a,
                                                    crd::memory::IAllocator* alloc, crd::u32 num_workers = 1);

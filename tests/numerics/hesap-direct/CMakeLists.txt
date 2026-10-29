@@ -6,6 +6,7 @@ add_executable(crd-hesap-direct-tests
     test_gmres_refine.cpp
     test_hss.cpp
     test_hss_ulv.cpp
+    test_lu_arms.cpp
     test_lu_partial_pivot.cpp
     test_mixed_qr_refine.cpp
     test_mixed_refine.cpp

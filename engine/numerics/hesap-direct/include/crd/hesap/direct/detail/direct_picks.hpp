@@ -28,4 +28,33 @@ struct SupernodalPick
     crd::u32 solve_batch_min_nc = 48;      // blocking: the multi-RHS diagonal solve batches from this front width
 };
 
+// SupernodalLU's factorize_arm; the job count stays factorize's parameter.
+struct SupernodalLuPick
+{
+    crd::u64 cmod_gemm_min_flop = 1ULL << 18; // blocking: a contributor's foot update below this is the inline loop
+    crd::u32 diag_block = 48;                 // blocking: the diagonal block's LU panel, its Schur gemm's depth
+};
+
+// factor_front's (dense_lu_kernels.hpp) within-front levers. They act only on a front factored on the main thread
+// (factor_front's gemm_par), never inside a parallel walk over fronts, so no setting nests a parallel_for.
+struct DenseLuPick
+{
+    crd::u32 panel = 128;                   // blocking: the right-looking LU's panel width, the Schur gemm's depth
+    crd::u32 trsm_min = 256;                // scheduling: U12 = L11^-1 A12 splits its columns from this many on
+    crd::u64 schur_min_mnk = 256ULL * 1024; // scheduling: the trailing Schur gemm runs on the jobs from this m n k
+    bool lookahead = true;                  // scheduling: the next panel factors on one job beside that gemm
+    crd::u32 workers = 0;                   // scheduling: 0 is crd::jobs::num_workers(), otherwise the forced jobs
+};
+
+// MultifrontalLU's factorize_arm; the walk's job count stays factorize's parameter, the fronts' is front.workers.
+struct MultifrontalLuPick
+{
+    crd::u64 small_fill = 1ULL << 20;  // scheduling: a factor with less L + U fill walks its fronts serially
+    crd::u32 front_par_min = 0;        // scheduling: a level of this many fronts runs front-parallel, a narrower
+                                       // one front by front on the main thread; 0 is half the pool, at least 2
+    crd::u32 zero_fill_min = 1U << 18; // scheduling: a main-thread front this large clears on the jobs
+    crd::u32 extend_add_min = 256;     // scheduling: a child's contribution this wide scatters on the jobs
+    DenseLuPick front = {};            // the fronts' factor_front
+};
+
 } // namespace crd::hesap::direct::detail

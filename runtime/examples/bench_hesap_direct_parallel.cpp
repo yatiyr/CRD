@@ -8,9 +8,13 @@
 // rounds is reported with its speedup over one job. The scheduling arms are gated bit for bit against the control
 // (the lower trapezoid of every panel, and x); the blocking arms (the cdiv's scalar cut and panels, the solve's
 // batch width) by the normwise backward error of a solve, |b - A x| <= 4 n eps (|A| |x| + |b|), the bound the arm
-// tests declare. A miss exits 1. The matrices are generated: 3D and 2D Laplacians under AMD and a bordered block
-// matrix whose dense border is one fat root front. The level line names the direct and dense kernels' level
-// (CRD_CPU_LEVEL forces it).
+// tests declare. A miss exits 1. Then the two LU factors' numeric factor, one job against factorize_arm on N jobs
+// down each arm of detail::SupernodalLuPick and MultifrontalLuPick: the scheduling arms gated bit for bit (L and
+// U), the blocking arms (the inline foot update, the panel widths) by the same bound on the raw factor's solve
+// (apply_inverse, no refinement); the LU solves run on the calling thread (kept serial), so they are not timed
+// here. The matrices are generated: 3D and 2D Laplacians under AMD and a bordered block matrix whose dense border
+// is one fat root front, and for the LUs unsymmetric convection-diffusion stencils under AMD. The level line names
+// the direct and dense kernels' level (CRD_CPU_LEVEL forces it).
 //   bench_hesap_direct_parallel [--threads N]
 
 #include <crd/containers/array.hpp>
@@ -18,7 +22,9 @@
 #include <crd/hesap/dense/dense_dispatch.hpp>
 #include <crd/hesap/direct/detail/direct_picks.hpp>
 #include <crd/hesap/direct/direct_dispatch.hpp>
+#include <crd/hesap/direct/multifrontal_lu.hpp>
 #include <crd/hesap/direct/supernodal_cholesky.hpp>
+#include <crd/hesap/direct/supernodal_lu.hpp>
 #include <crd/hesap/ordering/amd.hpp>
 #include <crd/hesap/sparse/triplet_builder.hpp>
 #include <crd/jobs/jobs.hpp>
@@ -40,7 +46,11 @@ using crd::f64;
 using crd::u32;
 using crd::u64;
 using crd::usize;
+using crd::hesap::direct::MultifrontalLU;
 using crd::hesap::direct::SupernodalCholesky;
+using crd::hesap::direct::SupernodalLU;
+using crd::hesap::direct::detail::MultifrontalLuPick;
+using crd::hesap::direct::detail::SupernodalLuPick;
 using crd::hesap::direct::detail::SupernodalPick;
 namespace sp = crd::hesap::sparse;
 using Clock = std::chrono::steady_clock;
@@ -94,6 +104,42 @@ const SolveArm kSolveArms[] = {
     {"batch-never", {.solve_batch_min_nc = kNeverWidth}, false, false},
 };
 
+template <typename Pick> struct LuArm
+{
+    const char* name;
+    Pick pick;
+    bool same_bits;
+};
+
+const LuArm<SupernodalLuPick> kSupernodalLuArms[] = {
+    {"production", {}, true},
+    {"foot-gemm-all", {.cmod_gemm_min_flop = 0}, false},
+    {"foot-inline-all", {.cmod_gemm_min_flop = kNeverWork}, false},
+    {"foot-inline-to-4M", {.cmod_gemm_min_flop = 4ULL << 20}, false},
+    {"diag-block-32", {.diag_block = 32}, false},
+    {"diag-block-96", {.diag_block = 96}, false},
+};
+
+const LuArm<MultifrontalLuPick> kMultifrontalLuArms[] = {
+    {"production", {}, true},
+    {"walk-serial", {.small_fill = kNeverWork}, true},
+    {"walk-levels-all", {.small_fill = 0}, true},
+    {"front-parallel-all", {.front_par_min = 1}, true},
+    {"front-parallel-never", {.front_par_min = kNeverWidth}, true},
+    {"front-parallel-from-2", {.front_par_min = 2}, true},
+    {"zero-fill-never", {.zero_fill_min = kNeverWidth}, true},
+    {"extend-add-all", {.extend_add_min = 0}, true},
+    {"extend-add-never", {.extend_add_min = kNeverWidth}, true},
+    {"lookahead-off", {.front = {.lookahead = false}}, true},
+    {"trsm-split-all", {.front = {.trsm_min = 0}}, true},
+    {"trsm-split-never", {.front = {.trsm_min = kNeverWidth}}, true},
+    {"schur-split-all", {.front = {.schur_min_mnk = 0}}, true},
+    {"schur-split-4M", {.front = {.schur_min_mnk = 4ULL << 20}}, true},
+    {"panel-64", {.front = {.panel = 64}}, false},
+    {"panel-192", {.front = {.panel = 192}}, false},
+    {"panel-256", {.front = {.panel = 256}}, false},
+};
+
 f64 median(f64* times, int n)
 {
     std::sort(times, times + n);
@@ -134,6 +180,33 @@ Csr<f64> laplacian(crd::memory::IAllocator* a, u32 nx, u32 ny, u32 nz)
                     tb.add(v, v - nx * ny, -1.0);
                     tb.add(v - nx * ny, v, -1.0);
                 }
+            }
+        }
+    }
+    return tb.compress();
+}
+
+// The 7-point (3D, nz > 1) or 5-point convection-diffusion stencil on an nx x ny x nz grid: each axis' forward
+// neighbour -1.3, its backward one -0.7, the diagonal 2 d + 1 for d dimensions, so it is diagonally dominant and
+// unsymmetric in value on a symmetric pattern.
+Csr<f64> convection(crd::memory::IAllocator* a, u32 nx, u32 ny, u32 nz)
+{
+    const u32 n = nx * ny * nz;
+    sp::TripletBuilder<f64> tb(a, n, n);
+    const u32 strides[] = {1U, nx, nx * ny};
+    const u32 extents[] = {nx, ny, nz};
+    for (u32 v = 0; v < n; ++v)
+    {
+        tb.add(v, v, nz > 1 ? 7.0 : 5.0);
+        u32 rest = v;
+        for (u32 d = 0; d < 3; ++d)
+        {
+            const u32 at = rest % extents[d];
+            rest /= extents[d];
+            if (at + 1 < extents[d])
+            {
+                tb.add(v, v + strides[d], -1.3);
+                tb.add(v + strides[d], v, -0.7);
             }
         }
     }
@@ -476,6 +549,119 @@ void board_solve(const char* label, const char* matrix, const Csr<T>& a, usize n
     }
 }
 
+// info(), the fill, L and U bit for bit.
+template <typename F> bool same_lu(const F& x, const F& y)
+{
+    auto same = [](auto p, auto q)
+    {
+        return p.size() == q.size() && std::memcmp(p.data(), q.data(), p.size() * sizeof(*p.data())) == 0;
+    };
+    return x.info() == y.info() && x.l_nnz() == y.l_nnz() && x.u_nnz() == y.u_nnz() &&
+           same(x.l_values(), y.l_values()) && same(x.u_values(), y.u_values());
+}
+
+// The raw factor's solve of A x = b (apply_inverse: no refinement hides a worse factor) within the bound.
+template <typename F, typename T>
+bool lu_within_bound(const F& f, const Csr<T>& a, const T* b, crd::containers::Array<T>& x,
+                     crd::memory::IAllocator* alloc)
+{
+    const u32 n = a.rows();
+    std::memcpy(x.data(), b, n * sizeof(T));
+    f.apply_inverse({x.data(), n}, 1);
+    return f.info() == 0 && within_bound(a, x.data(), b, 1, alloc);
+}
+
+template <typename T, typename F, typename Pick>
+f64 time_lu(const Pick& pick, const Csr<T>& a, u32 jobs, F& f, int reps)
+{
+    const Clock::time_point t0 = Clock::now();
+    for (int r = 0; r < reps; ++r)
+    {
+        f.factorize_arm(pick, a, jobs);
+    }
+    return seconds(t0);
+}
+
+// One LU factor's arms, as board_factor's: round -1 warms every path and gates it, the median of the rounds after.
+template <typename T, typename F, typename Pick, usize N>
+void board_lu(const char* label, const char* factor, const char* matrix, const Csr<T>& a, const LuArm<Pick> (&arms)[N],
+              u32 workers, crd::memory::IAllocator* alloc)
+{
+    const u32 n = a.rows();
+    crd::containers::Array<T> xtrue(alloc);
+    crd::containers::Array<T> b(alloc);
+    crd::containers::Array<T> x(alloc);
+    xtrue.resize(n);
+    b.resize(n);
+    x.resize(n);
+    for (u32 i = 0; i < n; ++i)
+    {
+        xtrue[i] = static_cast<T>(1.0 + 0.01 * static_cast<f64>(i % 37));
+    }
+    apply(a, xtrue.data(), b.data());
+    F control(alloc);
+    const f64 once = time_lu<T>(Pick{}, a, 1, control, 1);
+    const int reps = static_cast<int>(std::clamp(0.2 / std::max(once, 1e-6), 1.0, 64.0));
+    crd::containers::Array<F> outs(alloc);
+    outs.reserve(N);
+    for (usize i = 0; i < N; ++i)
+    {
+        outs.emplace_back(alloc);
+    }
+    f64 serial_times[kRounds] = {};
+    f64 times[N][kRounds] = {};
+    bool live[N] = {};
+    std::fill(live, live + N, true);
+    for (int round = -1; round < kRounds; ++round)
+    {
+        const f64 s = time_lu<T>(Pick{}, a, 1, control, reps);
+        if (round >= 0)
+        {
+            serial_times[round] = s;
+        }
+        for (usize i = 0; i < N; ++i)
+        {
+            if (!live[i])
+            {
+                continue;
+            }
+            const f64 t = time_lu<T>(arms[i].pick, a, workers, outs[i], reps);
+            if (round >= 0)
+            {
+                times[i][round] = t;
+                continue;
+            }
+            const bool ok =
+                arms[i].same_bits ? same_lu(outs[i], control) : lu_within_bound(outs[i], a, b.data(), x, alloc);
+            if (!ok)
+            {
+                std::fprintf(stderr, "GATE MISS: %s %s %s arm %s: %s\n", label, factor, matrix, arms[i].name,
+                             arms[i].same_bits ? "the factor differs from one job's" : "past the backward-error bound");
+                g_failed = true;
+                live[i] = false;
+            }
+        }
+    }
+    if (!lu_within_bound(control, a, b.data(), x, alloc))
+    {
+        std::fprintf(stderr, "GATE MISS: %s %s %s: one job's factor is past the backward-error bound\n", label, factor,
+                     matrix);
+        g_failed = true;
+    }
+    const f64 serial_s = median(serial_times, kRounds) / reps;
+    std::printf("%s %s %s n %u fill %llu: one-job factor %.3f ms\n", label, factor, matrix, n,
+                static_cast<unsigned long long>(control.factor_nnz()), serial_s * 1e3);
+    for (usize i = 0; i < N; ++i)
+    {
+        if (live[i])
+        {
+            const f64 sec = median(times[i], kRounds) / reps;
+            std::printf("  factor %-22s %10.3f ms  %5.2fx one job\n", arms[i].name, sec * 1e3,
+                        sec > 0.0 ? serial_s / sec : 0.0);
+        }
+    }
+}
+
 template <typename T> void run_type(const char* label, u32 workers)
 {
     struct Matrix
@@ -500,6 +686,25 @@ template <typename T> void run_type(const char* label, u32 workers)
         board_solve<T>(label, m.name, a, 1, workers, &alloc);
         board_solve<T>(label, m.name, a, kManyRhs, workers, &alloc);
     }
+    struct Stencil
+    {
+        const char* name;
+        u32 nx;
+        u32 ny;
+        u32 nz;
+    };
+    const Stencil stencils[] = {
+        {"convection3d-16", 16, 16, 16},
+        {"convection3d-24", 24, 24, 24},
+        {"convection2d-256", 256, 256, 1},
+    };
+    for (const Stencil& m : stencils)
+    {
+        crd::memory::GrowableTlsfAllocator alloc;
+        const Csr<T> a = ordered<T>(convection(&alloc, m.nx, m.ny, m.nz), &alloc);
+        board_lu<T, SupernodalLU<T>>(label, "supernodal-lu", m.name, a, kSupernodalLuArms, workers, &alloc);
+        board_lu<T, MultifrontalLU<T>>(label, "multifrontal-lu", m.name, a, kMultifrontalLuArms, workers, &alloc);
+    }
 }
 } // namespace
 
@@ -522,7 +727,7 @@ int main(int argc, char** argv)
     }
     crd::jobs::init(cfg);
     const u32 jobs = crd::jobs::num_workers();
-    std::printf("[bench_hesap_direct_parallel] the supernodal Cholesky's levers on %u jobs against one job, median of "
+    std::printf("[bench_hesap_direct_parallel] the sparse direct factors' levers on %u jobs against one job, median of "
                 "%d rounds. hesap-direct level %s, hesap-dense level %s (selected %s)\n",
                 jobs, kRounds, crd::cpu_level_name(crd::hesap::direct::direct_kernels().level),
                 crd::cpu_level_name(crd::hesap::dense::dense_kernels().level),

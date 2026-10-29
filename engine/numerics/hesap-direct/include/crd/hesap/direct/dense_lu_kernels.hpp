@@ -1,12 +1,13 @@
 #pragma once
 
-#include <crd/core/environment.hpp>
+#include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/blas3.hpp>
 #include <crd/hesap/dense/layout.hpp>
 #include <crd/hesap/dense/matrix.hpp>
 #include <crd/hesap/dense/real_type.hpp>
+#include <crd/hesap/direct/detail/direct_picks.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/memory/allocators/linear_allocator.hpp>
@@ -85,24 +86,6 @@ void trsm_unit_lower_left(const T* l, crd::u32 ldl, crd::u32 nc, T* x, crd::u32 
     }
 }
 
-// Blocked-LU panel width nb. Env-tunable (CRD_MF_PANEL) for the node-level sweep; a FIXED value is
-// bit-identical across worker counts (both factor_front branches use the same nb; gemm_parallel_auto is
-// bit-exact) ⇒ the {1,2,4,8} moat holds. Wider nb ⇒ the trailing rank-nb GEMM becomes compute-bound (better
-// throughput + parallel scaling) at the cost of more serial panel + TRSM work (panel hidden by lookahead;
-// TRSM parallelized below).
-[[nodiscard]] inline crd::u32 mf_panel_width() noexcept
-{
-    static const crd::u32 kWidth = []() noexcept -> crd::u32
-    {
-        if (crd::i64 v = 0; crd::read_environment_integer("CRD_MF_PANEL", 8, 1024, v))
-        {
-            return static_cast<crd::u32>(v);
-        }
-        return 128U; // measured best on the CFD targets: wider nb ⇒ compute-bound trailing GEMM (better scaling)
-    }();
-    return kWidth;
-}
-
 // =======================================================================
 // v5b-3b-2 — factor_front: blocked partial LU of an m×n COL-MAJOR front (leading dim `ld`).
 //
@@ -121,9 +104,11 @@ void trsm_unit_lower_left(const T* l, crd::u32 ldl, crd::u32 nc, T* x, crd::u32 
 //   d[npiv:m , npiv:n]  S = the Schur complement = the contribution block.
 // Deterministic per call ⇒ bit-identical across workers (the moat holds).
 // `gemm_par` parallelizes the trailing-Schur GEMM (the dominant cost on big near-root fronts) via
-// `gemm_parallel_auto` — BLIS row-slab split, BIT-EXACT vs serial `gemm` (ADR-0063) ⇒ the {1,2,4,8} moat
-// holds. Set it ONLY when factor_front runs on the main thread (the multifrontal's narrow top levels), never
-// inside a parallel_for over fronts (that would nest). Default false (serial GEMM via `scratch`).
+// `gemm_parallel` — BLIS row-slab split, BIT-EXACT vs serial `gemm` (ADR-0063) ⇒ the moat holds. Set it ONLY
+// when factor_front runs on the main thread (the multifrontal's narrow top levels), never inside a parallel_for
+// over fronts (that would nest). Default false (serial GEMM via `scratch`). `pick` holds the panel width (a
+// blocking lever: it regroups the Schur sums) and the within-front scheduling levers, which act only under
+// `gemm_par` and give the same bits at every setting (direct_picks.hpp).
 // v5f-(a): `pivot_threshold > 0` enables THRESHOLD PARTIAL PIVOTING restricted to the fully-summed rows
 // [k, npiv) — pick the largest-magnitude candidate (tie-break by lowest index ⇒ deterministic ⇒ moat-safe),
 // swap the full front rows, and record the swap in `ipiv` (LAPACK getf2 convention: ipiv[k] = the row swapped
@@ -135,11 +120,17 @@ template <typename T>
 void factor_front(T* d, crd::u32 ld, crd::u32 m, crd::u32 n, crd::u32 npiv, dense::RealType<T> tiny,
                   crd::memory::IAllocator* scratch = nullptr, bool gemm_par = false,
                   dense::RealType<T> pivot_threshold = dense::RealType<T>(0), crd::u32* ipiv = nullptr,
-                  crd::memory::LinearAllocator* arena = nullptr) noexcept
+                  crd::memory::LinearAllocator* arena = nullptr, const detail::DenseLuPick& pick = {}) noexcept
 {
     namespace dl = crd::hesap::dense;
-    const crd::u32 panel = mf_panel_width();
-    const bool     do_pivot = pivot_threshold > dense::RealType<T>(0);
+    CRD_ASSERT_MSG(pick.panel >= 1, "factor_front: the panel width must be at least 1");
+    const crd::u32 panel = pick.panel;
+    // Evaluated only under gemm_par, so a serial factor (no jobs::init) never touches the job system.
+    auto front_workers = [&pick]() noexcept
+    {
+        return pick.workers != 0 ? pick.workers : crd::jobs::num_workers();
+    };
+    const bool do_pivot = pivot_threshold > dense::RealType<T>(0);
     if (npiv == 0)
     {
         return;
@@ -228,8 +219,10 @@ void factor_front(T* d, crd::u32 ld, crd::u32 m, crd::u32 n, crd::u32 npiv, dens
         dl::MatrixView<T, dl::Layout::ColMajor> c22(&d[static_cast<crd::usize>(c0) * ld + j1], tr, tc, ld);
         if (par)
         {
-            dl::gemm_parallel_auto<T, dl::Layout::ColMajor>(lu2_from_real<T>(dense::RealType<T>(-1)), l21, u12,
-                                                           lu2_one<T>(), c22, dl::Trans::None, dl::Trans::None, nullptr);
+            const crd::u64 mnk = static_cast<crd::u64>(tr) * tc * nb;
+            const crd::u32 nw = mnk < pick.schur_min_mnk ? 1U : front_workers();
+            dl::gemm_parallel<T, dl::Layout::ColMajor>(nw, lu2_from_real<T>(dense::RealType<T>(-1)), l21, u12,
+                                                       lu2_one<T>(), c22, dl::Trans::None, dl::Trans::None, nullptr);
         }
         else
         {
@@ -244,8 +237,8 @@ void factor_front(T* d, crd::u32 ld, crd::u32 m, crd::u32 n, crd::u32 npiv, dens
 
     // X = L11⁻¹·X for the panel's U block-row [j0:j1, j1:n], split across workers by COLUMN (each trailing
     // column is independent ⇒ bit-identical vs the serial TRSM ⇒ the moat holds). Serial below threshold (the
-    // fork/join exceeds a thin TRSM). Removes the ~20%-serial TRSM from the big-front critical path, and lets
-    // the panel widen (wider nb grows TRSM work linearly) without the serial TRSM dominating.
+    // fork/join exceeds a thin TRSM: pick.trsm_min). Removes the ~20%-serial TRSM from the big-front critical path, and
+    // lets the panel widen (wider nb grows TRSM work linearly) without the serial TRSM dominating.
     auto trsm_stage = [&](crd::u32 j0, crd::u32 j1) noexcept
     {
         const crd::u32 ncol = n - j1;
@@ -256,8 +249,8 @@ void factor_front(T* d, crd::u32 ld, crd::u32 m, crd::u32 n, crd::u32 npiv, dens
         const crd::u32 nc = j1 - j0;
         T* const l11 = &d[static_cast<crd::usize>(j0) * ld + j0];
         T* const xb = &d[static_cast<crd::usize>(j1) * ld + j0];
-        const crd::u32 nw = crd::jobs::num_workers();
-        if (nw <= 1 || ncol < 256)
+        const crd::u32 nw = front_workers();
+        if (nw <= 1 || ncol < pick.trsm_min)
         {
             trsm_unit_lower_left<T>(l11, ld, nc, xb, ld, ncol);
             return;
@@ -309,7 +302,12 @@ void factor_front(T* d, crd::u32 ld, crd::u32 m, crd::u32 n, crd::u32 npiv, dens
         {
             const crd::u32 j2 = (j1 + panel < npiv) ? j1 + panel : npiv;
             schur(j0, j1, j1, j2, false); // update the next panel's columns first (small) so it can be factored
-            if (n - j2 > 0)
+            if (n - j2 > 0 && !pick.lookahead)
+            {
+                schur(j0, j1, j2, n, true); // the same work in the serial path's order: no overlap
+                factor_panel(j1, j2);
+            }
+            else if (n - j2 > 0)
             {
                 // factor next panel [j1,j2) async on one worker, WHILE the rest [j2:n) updates in parallel.
                 crd::jobs::Counter* counter =

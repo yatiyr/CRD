@@ -4,6 +4,7 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/direct/dense_lu_kernels.hpp>
+#include <crd/hesap/direct/detail/direct_picks.hpp>
 #include <crd/hesap/direct/factorization.hpp>
 #include <crd/hesap/direct/lu_symbolic.hpp>
 #include <crd/hesap/direct/supernodal_lu.hpp>
@@ -217,14 +218,15 @@ void mf_extend_add(MfFront<T>& parent, const MfFront<T>& child, crd::memory::IAl
 // same Schur values, same injective (rmap,cmap) scatter ⇒ same parent front (the FIXED-postorder moat holds).
 // PRECONDITION: child.row_index[child_npiv:] ⊆ parent.row_index AND child.col_index[child_npiv:] ⊆
 // parent.col_index, both ascending (the v5b-3a containment theorem for symmetric-pattern fronts).
-// `par` (default false): parallelize the column scatter across workers — each child Schur column `b` writes a
-// DISTINCT parent column (`cmap` injective ⇒ disjoint parent columns) ⇒ race-free + BIT-IDENTICAL to serial,
-// and children stay extend-added in fixed order ⇒ the cross-thread moat holds. Set ONLY on the main thread
-// (the multifrontal narrow path); never inside a parallel_for over fronts (that would nest).
+// `par_jobs` (default 0, serial): parallelize the column scatter across that many jobs when the Schur is at
+// least `par_min_cols` wide — each child Schur column `b` writes a DISTINCT parent column (`cmap` injective ⇒
+// disjoint parent columns) ⇒ race-free + BIT-IDENTICAL to serial, and children stay extend-added in fixed order
+// ⇒ the cross-thread moat holds. Set ONLY on the main thread (the multifrontal narrow path); never inside a
+// parallel_for over fronts (that would nest).
 template <typename T>
 void mf_extend_add_trailing(MfFront<T>& parent, const MfFront<T>& child, crd::u32 child_npiv,
                             crd::containers::Array<crd::u32>& rmap, crd::containers::Array<crd::u32>& cmap,
-                            bool par = false)
+                            crd::u32 par_jobs = 0, crd::u32 par_min_cols = 256)
 {
     const crd::u32 sr = child.nrows - child_npiv; // Schur (contribution-block) dimension
     const crd::u32 sc = child.ncols - child_npiv;
@@ -280,12 +282,12 @@ void mf_extend_add_trailing(MfFront<T>& parent, const MfFront<T>& child, crd::u3
     };
     const EaScatter ctx{parent.data.data(),        child.data.data(), rmap.data(),     cmap.data(),
                         static_cast<crd::usize>(parent.nrows), static_cast<crd::usize>(child.nrows), child_npiv, sr};
-    // `jobs::num_workers()` is evaluated LAST (short-circuit) so the serial path (par == false — e.g. the
-    // one-shot CLI factor with no jobs::init) never touches the job system.
-    if (par && sc >= 256 && crd::jobs::num_workers() > 1)
+    // The serial path (par_jobs <= 1 — e.g. the one-shot CLI factor with no jobs::init) never touches the job
+    // system.
+    if (par_jobs > 1 && sc >= par_min_cols)
     {
-        crd::jobs::Counter* c = crd::jobs::parallel_for(
-            sc, crd::jobs::num_workers(), [&ctx](crd::u32 b0, crd::u32 b1) noexcept { ctx.run(b0, b1); });
+        crd::jobs::Counter* c =
+            crd::jobs::parallel_for(sc, par_jobs, [&ctx](crd::u32 b0, crd::u32 b1) noexcept { ctx.run(b0, b1); });
         crd::jobs::wait(c);
     }
     else
@@ -328,7 +330,16 @@ public:
     // {1,2,4,8} moat hold; an extra global row permutation P (`rowperm()`) is applied in the solve. Default 0 ⇒
     // the byte-unchanged static path.
     void factorize(const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a, crd::u32 num_workers = 1,
-                   crd::hesap::dense::RealType<T> pivot_threshold = crd::hesap::dense::RealType<T>(0));
+                   crd::hesap::dense::RealType<T> pivot_threshold = crd::hesap::dense::RealType<T>(0))
+    {
+        factorize_arm(detail::MultifrontalLuPick{}, a, num_workers, pivot_threshold);
+    }
+
+    // factorize on pick's levers (detail/direct_picks.hpp; the jobs board and the arm tests). More than one job
+    // needs crd::jobs initialised.
+    void factorize_arm(const detail::MultifrontalLuPick& pick,
+                       const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a, crd::u32 num_workers = 1,
+                       crd::hesap::dense::RealType<T> pivot_threshold = crd::hesap::dense::RealType<T>(0));
 
     [[nodiscard]] bool solve(crd::containers::Span<T> rhs, crd::usize nrhs) const override;
     using IFactorization<T>::solve; // un-hide the single-RHS convenience overload
@@ -358,7 +369,8 @@ private:
     // One factorization attempt with a fixed pivoting choice (use_mc64). Writes L/U/scale into the members
     // and RETURNS the element-growth ratio max|stored L,U| / ‖B‖ — the caller (factorize) re-runs with MC64
     // if the natural-diagonal attempt's growth exceeds the stability threshold. Assumes m_n > 0.
-    [[nodiscard]] double factor_attempt(const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a,
+    [[nodiscard]] double factor_attempt(const detail::MultifrontalLuPick& pick,
+                                        const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a,
                                         crd::u32 num_workers, bool use_mc64);
 
     crd::memory::IAllocator* m_alloc = nullptr;
@@ -380,7 +392,8 @@ private:
 };
 
 // Factor a general square unsymmetric matrix A (CSR) into a deterministic static-pivot
-// multifrontal LU. info() != 0 ⇒ singular. num_workers reserved for v5b-3c (serial in v5b-3b).
+// multifrontal LU. info() != 0 ⇒ singular. num_workers > 1 walks the assembly tree level by level on that many
+// jobs (needs crd::jobs initialised); every count gives the same bits.
 template <typename T>
 [[nodiscard]] MultifrontalLU<T> factor_multifrontal_lu(const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a,
                                                        crd::memory::IAllocator* alloc, crd::u32 num_workers = 1);

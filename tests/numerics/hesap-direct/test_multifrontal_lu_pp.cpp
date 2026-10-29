@@ -1,7 +1,7 @@
 // crd-hesap-direct v5f-(a) STEP 2 — within-front partial pivoting through the FULL multifrontal driver.
 //
 // The bar: factor_multifrontal_lu_pp (threshold>0) solves A·x=b to f64 on matrices whose WEAK diagonal forces
-// the front factor to pivot (non-identity global row permutation P = rowperm()), and the {1,2,4,8}-worker
+// the front factor to pivot (non-identity global row permutation P = rowperm()), and the {1..32}-worker
 // solution + P are BIT-IDENTICAL (the moat). The existing static LU tests (threshold 0 default) are the
 // regression net for the byte-unchanged static path; this exercises the new P / invperm / solve-permute path.
 
@@ -79,7 +79,7 @@ Csr64 weak_diag(crd::memory::IAllocator* a, crd::u32 n)
 // A CONNECTED, LARGE weak-diagonal 3D 7-point grid (k³ nodes): diagonal 1, unsymmetric couplings (3 below /
 // −1 above the diagonal) ⇒ within-front pivoting MUST swap AND the deep nested-dissection tree means
 // contribution rows get pivoted in ANCESTOR fronts (the cross-front invperm path the block-diagonal tests
-// cannot exercise). Sized so the fill exceeds the parallel threshold (1M) ⇒ the {1,2,4,8} factor genuinely
+// cannot exercise). Sized so the fill exceeds the parallel threshold (1M) ⇒ the {1..32} factor genuinely
 // runs multi-worker, proving the cross-front remap is bit-identical serial-vs-parallel.
 Csr64 grid3d_weak(crd::memory::IAllocator* a, crd::u32 k)
 {
@@ -184,7 +184,7 @@ TEST_CASE("v5f-a partial-pivoting multifrontal LU solves a weak-diagonal system 
     CHECK(nonident);
 }
 
-TEST_CASE("v5f-a partial-pivoting multifrontal LU determinism moat {1,2,4,8}", "[hesap][lu-pp-mf][v5f][moat]")
+TEST_CASE("v5f-a partial-pivoting multifrontal LU determinism moat, 1 to 32 workers", "[hesap][lu-pp-mf][v5f][moat]")
 {
     crd::jobs::init();
     {
@@ -213,7 +213,7 @@ TEST_CASE("v5f-a partial-pivoting multifrontal LU determinism moat {1,2,4,8}", "
         REQUIRE(ref.solve({x_ref.data(), n}));
         const auto perm_ref = ref.rowperm();
 
-        for (crd::u32 nw : {2U, 4U, 8U})
+        for (crd::u32 nw : {2U, 4U, 8U, 16U, 32U})
         {
             auto fp = factory(nw);
             REQUIRE(fp.info() == 0);
@@ -250,7 +250,7 @@ TEST_CASE("v5f-a partial-pivoting moat on a CONNECTED large grid (cross-front re
 {
     crd::jobs::init();
     {
-        crd::memory::GrowableTlsfAllocator alloc; // large 3D factor across {1,2,4,8} ⇒ unbounded pooled
+        crd::memory::GrowableTlsfAllocator alloc; // large 3D factor across {1..32} ⇒ unbounded pooled
         Csr64 a = grid3d_weak(&alloc, 22);        // n=10648, fill > 1M ⇒ the factor runs MULTI-WORKER at nw>1
         const crd::u32 n = a.pattern().rows;
         crd::containers::Array<crd::f64> xt(&alloc);
@@ -284,7 +284,7 @@ TEST_CASE("v5f-a partial-pivoting moat on a CONNECTED large grid (cross-front re
         }
         REQUIRE(ref.solve({x_ref.data(), n}));
 
-        for (crd::u32 nw : {2U, 4U, 8U})
+        for (crd::u32 nw : {2U, 4U, 8U, 16U, 32U})
         {
             auto fp = factory(nw);
             REQUIRE(fp.info() == 0);

@@ -1,4 +1,5 @@
 #include <crd/core/assert.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/hesap/direct/lu_solve.hpp>
 #include <crd/hesap/direct/multifrontal_lu.hpp>
 #include <crd/hesap/ordering/symbolic.hpp>
@@ -267,7 +268,8 @@ MultifrontalLU<T>::MultifrontalLU(crd::memory::IAllocator* alloc) noexcept
 }
 
 template <typename T>
-double MultifrontalLU<T>::factor_attempt(const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a,
+double MultifrontalLU<T>::factor_attempt(const detail::MultifrontalLuPick& pick,
+                                         const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a,
                                          crd::u32 num_workers, bool use_mc64)
 {
     m_n = a.pattern().rows;
@@ -483,7 +485,7 @@ double MultifrontalLU<T>::factor_attempt(const sparse::SparseMatrix<T, sparse::S
     // Serial fallback for small problems: the fork-join + barrier overhead of the parallel walk exceeds the
     // numeric work below ~1M fill (e.g. circuit/oil matrices) ⇒ parallelism REGRESSES there (measured
     // sherman3 0.49x @ 8w). Bit-identical to the serial reference (the moat) since it IS the serial path.
-    const bool small_problem = (m_lnz + m_unz) < (1ULL << 20);
+    const bool small_problem = (m_lnz + m_unz) < pick.small_fill;
     const crd::u32 sw = (num_workers <= 1 || small_problem) ? 1U : crd::jobs::num_workers();
     crd::u32 max_nr = 1;
     for (crd::u32 f = 0; f < nf; ++f)
@@ -570,18 +572,22 @@ double MultifrontalLU<T>::factor_attempt(const sparse::SparseMatrix<T, sparse::S
             pool.pop_back();
         }
         front.resize(nr, nr);
-        // Parallel zero-fill of the big near-root front buffer (gemm_par = the narrow main-thread path). The
-        // serial memset of nr² (2.4M for nr=1561) was part of the singleton-front assembly cost; bit-identical
-        // (zero is zero), bandwidth-bound ⇒ modest but free. Small fronts + the wide path keep the serial fill.
+        // The jobs of this front's within-front stages (gemm_par = the narrow main-thread path only, so the
+        // serial path — e.g. the one-shot CLI factor with no jobs::init — never touches the job system).
+        crd::u32 front_jobs = 1;
+        if (gemm_par)
+        {
+            front_jobs = pick.front.workers != 0 ? pick.front.workers : crd::jobs::num_workers();
+        }
+        // Parallel zero-fill of the big near-root front buffer. The serial memset of nr² (2.4M for nr=1561) was
+        // part of the singleton-front assembly cost; bit-identical (zero is zero), bandwidth-bound ⇒ modest but
+        // free. Small fronts + the wide path keep the serial fill.
         {
             const crd::usize total = static_cast<crd::usize>(nr) * static_cast<crd::usize>(nr);
-            // `jobs::num_workers()` evaluated LAST (short-circuit) so the serial path (gemm_par == false — e.g.
-            // the one-shot CLI factor with no jobs::init) never touches the job system.
-            if (gemm_par && total >= (crd::usize{1} << 18) && total <= 0xFFFFFFFFULL && crd::jobs::num_workers() > 1)
+            if (front_jobs > 1 && total >= pick.zero_fill_min && total <= 0xFFFFFFFFULL)
             {
                 T* const d = front.data.data();
-                crd::jobs::Counter* zc = crd::jobs::parallel_for(static_cast<crd::u32>(total),
-                                                                 crd::jobs::num_workers(),
+                crd::jobs::Counter* zc = crd::jobs::parallel_for(static_cast<crd::u32>(total), front_jobs,
                                                                  [d](crd::u32 i0, crd::u32 i1) noexcept
                                                                  {
                                                                      for (crd::u32 i = i0; i < i1; ++i)
@@ -633,7 +639,8 @@ double MultifrontalLU<T>::factor_attempt(const sparse::SparseMatrix<T, sparse::S
         for (crd::u32 cc = chld_ptr[f]; cc < chld_ptr[f + 1]; ++cc)
         {
             const crd::u32 g = chld_idx[cc];
-            mf_extend_add_trailing<T>(front, cb[g], cb_npiv[g], ea_rmap[wk], ea_cmap[wk], gemm_par);
+            mf_extend_add_trailing<T>(front, cb[g], cb_npiv[g], ea_rmap[wk], ea_cmap[wk], front_jobs,
+                                      pick.extend_add_min);
             pool.push_back(std::move(cb[g])); // recycle the child's buffer into this worker's pool
         }
 
@@ -642,7 +649,7 @@ double MultifrontalLU<T>::factor_attempt(const sparse::SparseMatrix<T, sparse::S
                                                 gemm_arena_bytes);
         crd::u32* const ipiv = do_pivot ? (ipiv_scr.data() + static_cast<crd::usize>(wk) * max_nr) : nullptr;
         factor_front<T>(front.data.data(), nr, nr, nr, npiv, tiny, &gemm_arena, gemm_par, m_pivot_threshold, ipiv,
-                        &gemm_arena); // arena = the bump scratch ⇒ factor_front rewinds packs per serial schur
+                        &gemm_arena, pick.front); // arena = the bump scratch ⇒ factor_front rewinds serial packs
         if (do_pivot)
         {
             // Apply the getf2 swaps (in order) to the front's row_index so position t holds the PHYSICAL B-row
@@ -767,14 +774,14 @@ double MultifrontalLU<T>::factor_attempt(const sparse::SparseMatrix<T, sparse::S
         // HYBRID parallelism (the Amdahl fix). A level with >= front_par_thresh (≈ sw/2, measured) fronts has
         // enough independent work to SATURATE front-parallel (parallel_for over fronts, each factored serially —
         // all workers busy). A narrower level (1–3 big near-root separators) cannot saturate that way, so its
-        // fronts run on the main thread, parallelized WITHIN each (gemm_parallel_auto + parallel TRSM + parallel
+        // fronts run on the main thread, parallelized WITHIN each (gemm_parallel + parallel TRSM + parallel
         // assembly). Neither path nests a parallel_for in a parallel_for; both are bit-exact ⇒ the moat holds.
         // The threshold ≈ sw/2 (not sw) is measured: routing the k=sw/2..sw-1 levels through front-parallel won
-        // wang3 (0.96→1.07–1.11×) and ns3Da (0.95→1.00–1.01×) vs MUMPS @8w. CRD_MF_FRONTPAR_K overrides (dev).
-        crd::u32 front_par_thresh = (sw / 2 >= 2) ? sw / 2 : 2;
-        if (crd::i64 v = 0; crd::read_environment_integer("CRD_MF_FRONTPAR_K", 2, 0xFFFFFFFF, v))
+        // wang3 (0.96→1.07–1.11×) and ns3Da (0.95→1.00–1.01×) vs MUMPS @8w. pick.front_par_min forces it.
+        crd::u32 front_par_thresh = pick.front_par_min;
+        if (front_par_thresh == 0)
         {
-            front_par_thresh = static_cast<crd::u32>(v);
+            front_par_thresh = sw / 2 >= 2 ? sw / 2 : 2;
         }
         for (crd::u32 l = 0; l < nlevels; ++l)
         {
@@ -902,8 +909,9 @@ double MultifrontalLU<T>::factor_attempt(const sparse::SparseMatrix<T, sparse::S
 }
 
 template <typename T>
-void MultifrontalLU<T>::factorize(const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a, crd::u32 num_workers,
-                                  dense::RealType<T> pivot_threshold)
+void MultifrontalLU<T>::factorize_arm(const detail::MultifrontalLuPick& pick,
+                                      const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a, crd::u32 num_workers,
+                                      dense::RealType<T> pivot_threshold)
 {
     CRD_ASSERT_MSG(a.pattern().rows == a.pattern().cols, "MultifrontalLU requires a square matrix");
     m_n = a.pattern().rows;
@@ -930,7 +938,7 @@ void MultifrontalLU<T>::factorize(const sparse::SparseMatrix<T, sparse::SparseFo
     bool use_mc64 = force_mc64;
     for (int attempt = 0; attempt < 2; ++attempt)
     {
-        const double growth = factor_attempt(a, num_workers, use_mc64);
+        const double growth = factor_attempt(pick, a, num_workers, use_mc64);
         const bool unstable = !(growth <= kMfGrowthThreshold); // NaN / Inf / over-threshold ⇒ unstable
         if (!unstable || use_mc64 || no_fallback)
         {

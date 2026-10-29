@@ -37,11 +37,6 @@ namespace
 #endif
 namespace
 {
-// cmod foot-update crossover (crush lever 1): panels with fewer flops than this use the tight
-// inline rank-update; larger route to dense::gemm (BLAS-3). Sized so the irregular-unsymmetric
-// small supernodes (the common case) skip the gemm machinery's per-call overhead.
-constexpr crd::u64 kCmodGemmInlineFlop = 1ULL << 18; // ~64³
-
 // Sentinel for the relative-index map (global row → compact panel position). 0 is a valid position.
 constexpr crd::u32 kNoRow = 0xFFFFFFFFU;
 
@@ -51,16 +46,15 @@ constexpr crd::u32 kNoRow = 0xFFFFFFFFU;
 // cmod foot GEMM (`dense::gemm`). Element (row r, col c) of a ColMajor block = d[c*ld + r].
 // -----------------------------------------------------------------------
 
-// BLOCKED right-looking no-pivot LU (static + GESP). For nc ≤ diag_block this degenerates to the
-// classic unblocked rank-1 form (bit-identical to the prior code); for wide diagonal blocks (the
-// af23560 nc≈290 supernodes) it routes the trailing Schur update through the BLAS-3 `dl::gemm`
+// BLOCKED right-looking no-pivot LU (static + GESP; diag_block is SupernodalLuPick's). For nc ≤ diag_block
+// this degenerates to the classic unblocked rank-1 form (bit-identical to the prior code); for wide diagonal
+// blocks (the af23560 nc≈290 supernodes) it routes the trailing Schur update through the BLAS-3 `dl::gemm`
 // (~1.7 → ~40 GFLOP/s). Deterministic per call ⇒ bit-identical across workers (the moat holds).
 template <typename T>
-void dense_lu_nopivot(T* d, crd::u32 ld, crd::u32 nc, dense::RealType<T> tiny,
+void dense_lu_nopivot(T* d, crd::u32 ld, crd::u32 nc, dense::RealType<T> tiny, crd::u32 diag_block,
                       crd::memory::IAllocator* scratch = nullptr) noexcept
 {
     namespace dl = crd::hesap::dense;
-    constexpr crd::u32 diag_block = 48;
     for (crd::u32 j0 = 0; j0 < nc; j0 += diag_block)
     {
         const crd::u32 j1 = (j0 + diag_block < nc) ? j0 + diag_block : nc;
@@ -412,11 +406,14 @@ SupernodalLU<T>::SupernodalLU(crd::memory::IAllocator* alloc) noexcept
 }
 
 template <typename T>
-void SupernodalLU<T>::factorize(const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a, crd::u32 num_workers)
+void SupernodalLU<T>::factorize_arm(const detail::SupernodalLuPick& pick,
+                                    const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a, crd::u32 num_workers)
 {
     // num_workers drives the tree-parallel dispatch below (sw / the parallel_for over supernode levels);
-    // num_workers <= 1 takes the serial path. The {1,2,4,8} results are bit-identical (the moat).
+    // num_workers <= 1 takes the serial path. Every count gives the same bits (the moat). pick's two levers
+    // regroup sums (direct_picks.hpp): the inline foot update against gemm's, the diagonal block's panel.
     CRD_ASSERT_MSG(a.pattern().rows == a.pattern().cols, "SupernodalLU requires a square matrix");
+    CRD_ASSERT_MSG(pick.diag_block >= 1, "SupernodalLU: the diagonal block's panel must be at least 1");
     m_n = a.pattern().rows;
     m_info = 0;
 
@@ -796,7 +793,7 @@ void SupernodalLU<T>::factorize(const sparse::SparseMatrix<T, sparse::SparseForm
                 continue;
             }
             const crd::u64 cmod_flop = static_cast<crd::u64>(kfoot) * nc * knc;
-            if (cmod_flop < kCmodGemmInlineFlop)
+            if (cmod_flop < pick.cmod_gemm_min_flop) // the inline loop skips gemm's per-call overhead
             {
                 // INLINE path (small panel): TRSV in place on the contiguous U-segment, then a
                 // write-on-first rank-knc foot update reading it (ld=pnr, cache-resident).
@@ -908,7 +905,7 @@ void SupernodalLU<T>::factorize(const sparse::SparseMatrix<T, sparse::SparseForm
         // Blocked for wide nc (BLAS-3 Schur update) — fresh bump arena over the worker's gemm slice.
         crd::memory::LinearAllocator diag_arena(gemm_scr.data() + static_cast<crd::usize>(w) * gemm_arena_bytes,
                                                 gemm_arena_bytes);
-        dense_lu_nopivot<T>(&wk_w[uoff], pnr, nc, tiny, &diag_arena);
+        dense_lu_nopivot<T>(&wk_w[uoff], pnr, nc, tiny, pick.diag_block, &diag_arena);
 #if CRD_LU_PROFILE
         t_diag += crd_dt(crd_ts2, crd_clk::now());
         auto crd_ts3 = crd_clk::now();

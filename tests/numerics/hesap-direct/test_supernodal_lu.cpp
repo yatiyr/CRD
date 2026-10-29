@@ -553,7 +553,7 @@ TEST_CASE("v5b-2b lu_symbolic: complex superset", "[lu][v5b-2b][complex]")
 // solve → IR → untransform), validated end-to-end against the known solution. MC64 makes B
 // diagonally dominant so the static diagonal pivot is accurate; IR drives the true residual
 // to machine precision (the matched residual the v5b-2e bench compares at). Run-to-run
-// determinism is the v5b-2c claim; the {1,2,4,8}-worker moat is v5b-2d.
+// determinism is the v5b-2c claim; the {1..32}-worker moat is v5b-2d.
 // =====================================================================================
 namespace
 {
@@ -746,10 +746,10 @@ TEST_CASE("v5b-2c SupernodalLU: multi-RHS + run-to-run determinism", "[lu][v5b-2
 // v5b-2d — TREE-PARALLEL factor + the CROSS-THREAD DETERMINISM MOAT. The supernodal numeric is
 // scheduled by etree level (same-level supernodes independent) over crd::jobs; static pivoting +
 // the fixed structure + per-worker scratch make the factor a deterministic pure function ⇒ the L
-// and U values are BIT-IDENTICAL across {1,2,4,8} workers — the moat no gold-standard LU peer
-// (Eigen/UMFPACK/SuperLU) carries. Capped at 8 workers (i9-14900K host).
+// and U values are BIT-IDENTICAL across {1..32} workers — the moat no gold-standard LU peer
+// (Eigen/UMFPACK/SuperLU) carries. Up to 32 jobs (a job count, not the pool's size).
 // =====================================================================================
-TEST_CASE("v5b-2d SupernodalLU: tree-parallel factor bit-identical across {1,2,4,8} workers", "[lu][v5b-2d]")
+TEST_CASE("v5b-2d SupernodalLU: tree-parallel factor bit-identical across 1 to 32 workers", "[lu][v5b-2d]")
 {
     crd::jobs::init();
     {
@@ -773,7 +773,7 @@ TEST_CASE("v5b-2d SupernodalLU: tree-parallel factor bit-identical across {1,2,4
 
         const auto l1 = lu1.l_values();
         const auto u1 = lu1.u_values();
-        for (crd::u32 nw : {2U, 4U, 8U})
+        for (crd::u32 nw : {2U, 4U, 8U, 16U, 32U})
         {
             auto lup = dir::factor_supernodal_lu<crd::f64>(a, &alloc, nw);
             REQUIRE(lup.info() == 0);
@@ -1072,7 +1072,7 @@ TEST_CASE("v5b-3b-2 factor_front: blocked partial-LU reconstructs the dense fron
 // v5b-3b-3 — MultifrontalLU<T> driver: residual on the ORIGINAL A (the end-to-end bar; a wrong
 // CSC L/U store, a misordered U-diagonal, or a broken assembly fails the residual loudly), the
 // fill ≈ the symmetric-pattern fill (vs SupernodalLU's unsymmetric-pattern fill), and run-to-run
-// determinism (the numeric is a pure function of the symbolic ⇒ the v5b-3c {1,2,4,8} moat seed).
+// determinism (the numeric is a pure function of the symbolic ⇒ the v5b-3c {1..32} moat seed).
 // =====================================================================================
 namespace
 {
@@ -1249,7 +1249,7 @@ TEST_CASE("v5b-3b-3 MultifrontalLU: matches SupernodalLU residual + run-to-run d
     CHECK(mf.factor_nnz() <= 4 * sn.factor_nnz());
 
     // Run-to-run determinism: the numeric is a pure function of the (fixed) symbolic ⇒ bit-identical
-    // L,U on a re-factor (the seed of the v5b-3c cross-thread {1,2,4,8} moat).
+    // L,U on a re-factor (the seed of the v5b-3c cross-thread {1..32} moat).
     auto mf2 = dir::factor_multifrontal_lu<crd::f64>(a, &alloc);
     const auto l1 = mf.l_values();
     const auto l2 = mf2.l_values();
@@ -1285,10 +1285,10 @@ TEST_CASE("v5b-3b-3 MultifrontalLU: matches SupernodalLU residual + run-to-run d
 }
 
 // v5b-3c — the determinism MOAT for the tree-parallel multifrontal front walk: L,U bit-identical across
-// {1,2,4,8} workers AND equal to the serial reference. The numeric is a deterministic pure function of the
+// {1..32} workers AND equal to the serial reference. The numeric is a deterministic pure function of the
 // symbolic (per-worker scratch, fixed-postorder child assembly, fixed uoff/m_lp write positions) ⇒ no race
 // + no worker-order dependence. This is what UMFPACK/PARDISO/MUMPS cannot offer.
-TEST_CASE("v5b-3c MultifrontalLU: tree-parallel factor bit-identical across {1,2,4,8} workers", "[lu][v5b-3c]")
+TEST_CASE("v5b-3c MultifrontalLU: tree-parallel factor bit-identical across 1 to 32 workers", "[lu][v5b-3c]")
 {
     crd::jobs::init();
     {
@@ -1311,7 +1311,7 @@ TEST_CASE("v5b-3c MultifrontalLU: tree-parallel factor bit-identical across {1,2
 
         const auto l1 = lu1.l_values();
         const auto u1 = lu1.u_values();
-        for (crd::u32 nw : {2U, 4U, 8U})
+        for (crd::u32 nw : {2U, 4U, 8U, 16U, 32U})
         {
             auto lup = dir::factor_multifrontal_lu<crd::f64>(a, &alloc, nw);
             REQUIRE(lup.info() == 0);
@@ -1360,7 +1360,7 @@ TEST_CASE("v5b-3c MultifrontalLU: tree-parallel factor bit-identical across {1,2
         REQUIRE(d1.front_count() == 1); // one dense front ⇒ exercises the within-front parallel GEMM
         const auto dl1 = d1.l_values();
         const auto du1 = d1.u_values();
-        for (crd::u32 nw : {2U, 4U, 8U})
+        for (crd::u32 nw : {2U, 4U, 8U, 16U, 32U})
         {
             auto dp = dir::factor_multifrontal_lu<crd::f64>(ad, &alloc, nw);
             REQUIRE(dp.info() == 0);
@@ -1381,7 +1381,7 @@ TEST_CASE("v5b-3c MultifrontalLU: tree-parallel factor bit-identical across {1,2
         // FALLBACK moat: a ~zero-diagonal cyclic matrix the NATURAL static pivot cannot factor (tiny diagonals
         // ⇒ element growth blows past the bound) ⇒ the adaptive path FALLS BACK to MC64. The growth/early-abort
         // decision is computed from a bit-identical factor + reduced by an order-independent max ⇒ it must fire
-        // at the SAME point regardless of worker count, so the (MC64) result is L,U bit-identical {1,2,4,8}.
+        // at the SAME point regardless of worker count, so the (MC64) result is L,U bit-identical {1..32}.
         const crd::u32 nfb = 96;
         sp::TripletBuilder<crd::f64> tfb(&alloc, nfb, nfb);
         for (crd::u32 i = 0; i < nfb; ++i)
@@ -1404,7 +1404,7 @@ TEST_CASE("v5b-3c MultifrontalLU: tree-parallel factor bit-identical across {1,2
         csr_matvec<crd::f64>(afb, xtf.data(), bf.data());
         const auto fl1 = fb1.l_values();
         const auto fu1 = fb1.u_values();
-        for (crd::u32 nw : {2U, 4U, 8U})
+        for (crd::u32 nw : {2U, 4U, 8U, 16U, 32U})
         {
             auto fbp = dir::factor_multifrontal_lu<crd::f64>(afb, &alloc, nw);
             REQUIRE(fbp.info() == 0);
