@@ -14,7 +14,7 @@ Before: [the pick arms](2026-10-29-simd-dispatch-sell-pick-arms.md).
   Nothing new. linux-gcc-arm64-asan and win-asan still run; nothing was cancelled.
 - Push run 40869334591 (e496d16c): linux-clang-arm64-asan passed 2476 of 2476 with the forced portable and neon arms
   of crd-math, crd-geometry-primitives and crd-hesap-fft. Of the ARM64 lanes only linux-gcc-arm64-asan is left.
-- The ISA guard passed on six more lanes: 94 s (linux-clang-arm64-asan), 154 s (win-clang-cl), 173 s
+- The ISA guard passed on seven more lanes: 94 s (linux-clang-arm64-asan), 154 s (win-clang-cl), 173 s
   (linux-gcc-debug-scalar), 200 s (win-public-checks), 551 s (win-shipping, whose job failed on the TickClock case
   fixed at d3b0daf1), 567 s (win-clang-cl-shipping) and 929 s (win-relwithdebinfo, the slowest so far, about half
   the 1800 s timeout).
@@ -29,7 +29,10 @@ Before: [the pick arms](2026-10-29-simd-dispatch-sell-pick-arms.md).
   buffer is pages (`VirtualAlloc`), the Linux reads are fixed chunks; the mask bits are counted by a loop, since
   MSVC's `std::popcount` is POPCNT behind a CRT branch, which the ISA guard refuses. This host: 1 MiB (the P-cores'
   2 MiB over two threads, the E-core clusters' 4 MiB over four).
-- **`sparse_job_resident_bytes()`**: that share, the whole L2 where the OS describes none.
+- **`CpuSelection::os_l2_bytes`**: the smallest L2 instance the same reading sees. `sparse_resident_bytes()` takes
+  CPUID's L2, else this, else 2 MiB, so on ARM64 (no CPUID caches) the whole-L2 cut, the Auto index and the
+  operators' threshold use the measured L2 rather than a 2 MiB guess beside a measured share.
+- **`sparse_job_resident_bytes()`**: the L2 share, the whole L2 where the OS describes none.
 - **`SellJobCut { WholeL2, CoreShare }`** and `detail::spmv_sell_parallel(..., cut)`: each job's range picks its
   sweep against the whole L2 (production, unchanged) or its share. `detail::sell_spmv_range` takes the cut as
   `resident_bytes`; `spmv_sell` passes the whole L2.
