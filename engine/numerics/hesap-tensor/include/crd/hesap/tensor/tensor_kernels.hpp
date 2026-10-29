@@ -233,12 +233,43 @@ struct PermuteNext
     crd::u64 nb;
 };
 
+// The permute board's levers (SIMD-DISPATCH; board scaffolding: the board folds the winners into these defaults, which
+// are HEAD's choices, and deletes what picks nothing). hint is the hint of the next-tile prefetches, distance how many
+// tiles ahead they reach (0 none, 1 the next tile, HPTT's macro-tile order), dst_prefetch whether they also reach the
+// next tile's destination rows under regular stores, scalar runs the scalar tile in place of the level's register
+// transposes, and order is the outer odometer's (permute_tiles.hpp permute_outer_order).
+enum class PermuteHint : crd::u8
+{
+    T0,
+    T1,
+    T2,
+    Nta,
+};
+
+enum class PermuteOrder : crd::u8
+{
+    Src,  // ascending |source stride|: each plane step moves the scattered source stream least
+    Hptt, // HPTT's loop cost: a dim's source and destination stride ranks weighted 1 : 1.01
+};
+
+struct PermutePick
+{
+    PermuteHint hint = PermuteHint::T2;
+    crd::u8 distance = 1U;
+    bool dst_prefetch = true;
+    bool scalar = false;
+    PermuteOrder order = PermuteOrder::Src;
+};
+
 // One (a, b) region of a permute of f32 or f64 elements, or (complex) of Complex<T> elements (crd/hesap/complex.hpp)
 // as their (re, im) pairs: dst(ia, ib) = src(ia, ib) (scale: alpha * src(ia, ib), alpha = alpha_re + i alpha_im in
 // Complex<T>'s operator*; alpha_re alone for a real element) over [0, na) x [0, nb), with dst(ia, ib) at element
 // ia*ra + ib of dst and src(ia, ib) at element ia*sa + ib*sb of src, in tile_a x tile_b tiles, a-tiles outer. stream
 // asks for non-temporal stores (the region origin dst 32-byte aligned, ra and tile_b elements a multiple of 32
-// bytes), published before the call returns; a level without them stores normally.
+// bytes), published before the call returns; a level without them stores normally. pick sets the board's levers; a
+// non-null stage (64-byte aligned, tile_a * tile_b elements) runs each tile as a staged strip: its source columns read
+// whole, column group by column group, through the transposes into the stage, then each stage row stored to its
+// destination row in one sweep.
 template <typename T> struct PermuteRegion
 {
     T* dst;
@@ -256,13 +287,16 @@ template <typename T> struct PermuteRegion
     bool scale;
     bool stream;
     PermuteNext next{};
+    PermutePick pick{};
+    T* stage = nullptr;
 };
 
 // A whole serial tiled permute (permute.hpp permute_tiled), one call per transform, of the elements of PermuteRegion:
 // the m collapsed dims in dst order (dst dim d has extent shp[d], src stride s_in[d] and dst stride s_out[d], in
 // elements; m <= kPermuteMaxRank), a the src-fastest dim and m - 1 the dst-fastest. Every (a, m - 1) plane is one
-// region in tile x tile tiles; the planes follow permute_outer_order (permute_tiles.hpp), and each region prefetches
-// the next plane.
+// region in tile x tile tiles; the planes follow permute_outer_order (permute_tiles.hpp) in pick's order, and each
+// region prefetches the next plane. stream as PermuteRegion's (dst 32-byte aligned, the dst-fastest extent a multiple
+// of 32 bytes).
 template <typename T> struct PermuteWalk
 {
     T* dst;
@@ -277,6 +311,8 @@ template <typename T> struct PermuteWalk
     T alpha_im;
     bool complex;
     bool scale;
+    bool stream = false;
+    PermutePick pick{};
 };
 
 // The rows [lo, hi) of a last-dimension softmax over [rows, d] (nn.hpp nn_softmax): max-subtract, exp, sum in index

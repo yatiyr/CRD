@@ -232,6 +232,23 @@ template <typename S> bool scaled(Alpha<S> alpha)
     return !(alpha.re == S(1) && alpha.im == S(0));
 }
 
+// The permute board's levers (PermutePick, a stage or non-temporal stores): HEAD's first, then other hints and
+// distances (none, two tiles ahead), no destination prefetch, the scalar tile, HPTT's outer order, each with and
+// without the region's stage (or, on a walk, the stores' variant).
+struct PickCase
+{
+    tn::PermutePick pick;
+    bool other; // a region: staged; a walk: non-temporal stores
+};
+
+constexpr PickCase kPickCases[] = {
+    {{}, false},
+    {{tn::PermuteHint::T0, 2U, false, false, tn::PermuteOrder::Hptt}, false},
+    {{tn::PermuteHint::Nta, 0U, true, false, tn::PermuteOrder::Hptt}, true},
+    {{tn::PermuteHint::T1, 1U, true, true, tn::PermuteOrder::Src}, true},
+    {{}, true},
+};
+
 struct RegionCase
 {
     u64 na;
@@ -270,6 +287,8 @@ template <typename E> void check_permute_regions()
     const u64 shape_dst[] = {dst_n * E::kParts};
     Tensor<S> want(&alloc, shape_dst);
     Tensor<S> got(&alloc, shape_dst);
+    const u64 shape_stage[] = {512U * 32U * E::kParts}; // the largest tile_a * tile_b of the cases
+    Tensor<S> stage(&alloc, shape_stage);
     // The destination on a 64-byte line and 32 bytes past one (the non-temporal variant's contract is 32-byte rows;
     // a zmm row store must then split).
     for (const u64 lead : {u64{0}, 32U / sizeof(S)})
@@ -326,19 +345,25 @@ template <typename E> void check_permute_regions()
                         for (const bool next : {false, true})
                         {
                             const tn::PermuteNext hint{0, 0, next ? c.na : 0U, next ? c.nb : 0U};
-                            for (u64 i = 0; i < used; ++i)
+                            for (const PickCase& pc : kPickCases)
                             {
-                                got.data()[i] = sentinel<S>();
+                                for (u64 i = 0; i < used; ++i)
+                                {
+                                    got.data()[i] = sentinel<S>();
+                                }
+                                run_region(*level.table, {got.data() + lead, ra, base, c.sa, c.sb, c.na, c.nb, c.tile_a,
+                                                          c.tile_b, alpha.re, alpha.im, E::kParts == 2U, scale, stream,
+                                                          hint, pc.pick, pc.other ? stage.data() : nullptr});
+                                INFO(crd::cpu_level_name(level.level)
+                                     << variant_suffix(level) << " " << elem_name<E>() << " na " << c.na << " nb "
+                                     << c.nb << " sa " << c.sa << " sb " << c.sb << " tiles " << c.tile_a << "x"
+                                     << c.tile_b << " alpha " << alpha.re << "+" << alpha.im << "i stream " << stream
+                                     << " next " << next << " lead " << lead << " hint "
+                                     << static_cast<u32>(pc.pick.hint) << " distance "
+                                     << static_cast<u32>(pc.pick.distance) << " dst prefetch " << pc.pick.dst_prefetch
+                                     << " scalar " << pc.pick.scalar << " staged " << pc.other);
+                                CHECK(count_mismatches<E>(want.data(), got.data(), used, scale) == 0U);
                             }
-                            run_region(*level.table,
-                                       {got.data() + lead, ra, base, c.sa, c.sb, c.na, c.nb, c.tile_a, c.tile_b,
-                                        alpha.re, alpha.im, E::kParts == 2U, scale, stream, hint});
-                            INFO(crd::cpu_level_name(level.level)
-                                 << variant_suffix(level) << " " << elem_name<E>() << " na " << c.na << " nb " << c.nb
-                                 << " sa " << c.sa << " sb " << c.sb << " tiles " << c.tile_a << "x" << c.tile_b
-                                 << " alpha " << alpha.re << "+" << alpha.im << "i stream " << stream << " next "
-                                 << next << " lead " << lead);
-                            CHECK(count_mismatches<E>(want.data(), got.data(), used, scale) == 0U);
                         }
                     }
                 }
@@ -448,23 +473,35 @@ template <typename E> void check_permute_walks()
                     idx[d] = 0;
                 }
             }
+            // Non-temporal stores need the dst-fastest extent and the tile edge in 32-byte multiples.
+            const bool streams =
+                (c.shp[c.m - 1U] * sizeof(S) * E::kParts) % 32U == 0U && (c.tile * sizeof(S) * E::kParts) % 32U == 0U;
             for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
             {
                 if (!kernel_level_runs_here(level))
                 {
                     continue;
                 }
-                for (u64 i = 0; i < used; ++i)
+                for (const PickCase& pc : kPickCases)
                 {
-                    got.data()[i] = sentinel<S>();
+                    if (pc.other && !streams)
+                    {
+                        continue;
+                    }
+                    for (u64 i = 0; i < used; ++i)
+                    {
+                        got.data()[i] = sentinel<S>();
+                    }
+                    run_walk(*level.table, {got.data(), base, c.shp, c.s_in, s_out, c.m, c.a, c.tile, alpha.re,
+                                            alpha.im, E::kParts == 2U, scale, pc.other, pc.pick});
+                    INFO(crd::cpu_level_name(level.level)
+                         << variant_suffix(level) << " " << elem_name<E>() << " rank " << c.m << " extents " << c.shp[0]
+                         << "x" << c.shp[c.m - 1U] << " tile " << c.tile << " alpha " << alpha.re << "+" << alpha.im
+                         << "i stream " << pc.other << " hint " << static_cast<u32>(pc.pick.hint) << " distance "
+                         << static_cast<u32>(pc.pick.distance) << " scalar " << pc.pick.scalar << " order "
+                         << static_cast<u32>(pc.pick.order));
+                    CHECK(count_mismatches<E>(want.data(), got.data(), used, scale) == 0U);
                 }
-                run_walk(*level.table, {got.data(), base, c.shp, c.s_in, s_out, c.m, c.a, c.tile, alpha.re, alpha.im,
-                                        E::kParts == 2U, scale});
-                INFO(crd::cpu_level_name(level.level)
-                     << variant_suffix(level) << " " << elem_name<E>() << " rank " << c.m << " extents " << c.shp[0]
-                     << "x" << c.shp[c.m - 1U] << " tile " << c.tile << " alpha " << alpha.re << "+" << alpha.im
-                     << "i");
-                CHECK(count_mismatches<E>(want.data(), got.data(), used, scale) == 0U);
             }
         }
     }

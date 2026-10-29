@@ -262,6 +262,27 @@ struct RegScale
     Reg im;
 };
 
+// One line prefetched with a PermutePick hint (the hint is an immediate on every compiler, so each one is a case).
+inline void prefetch_line(const void* p, PermuteHint hint) noexcept
+{
+    const char* const line = static_cast<const char*>(p);
+    switch (hint)
+    {
+        case PermuteHint::T0:
+            _mm_prefetch(line, _MM_HINT_T0);
+            break;
+        case PermuteHint::T1:
+            _mm_prefetch(line, _MM_HINT_T1);
+            break;
+        case PermuteHint::T2:
+            _mm_prefetch(line, _MM_HINT_T2);
+            break;
+        case PermuteHint::Nta:
+            _mm_prefetch(line, _MM_HINT_NTA);
+            break;
+    }
+}
+
 // alpha * v per element, the operations of put_element lane by lane: the products in its operand order, then a true
 // subtract on the re lanes and an add on the im lanes (addsub on AVX2, the add with a masked subtract on AVX-512, both
 // and a select on SSE2), so a propagated NaN keeps its sign.
@@ -508,20 +529,21 @@ void transpose_micro(const typename E::Scalar* src, crd::i64 src_stride, typenam
 
 // One tile, strides and extents in elements. With a unit source stride the micro transposes cover the tile's grid in
 // blocks of E::kBlockRows rows of a (ib outer within a block), and the right and bottom strips finish scalar; any
-// other source stride is the scalar tile. Each block step prefetches into L2 (HPTT's T2 hint) the same block step of
-// the next tile (next, inside its extents only): one line of each source column and, unless the stores are
-// non-temporal, the destination rows once per line of them. On the streamed path with near columns (<= 64 KB apart)
-// it also prefetches the next step's source columns into L1: it hides strided-read latency the streamer cannot track
-// in the multithreaded regime (2D f32 46.8 -> 51.2 GB/s); on page-scattered columns those TLB walks cost more than
-// they hide.
+// other source stride, or pick.scalar, is the scalar tile. Each block step prefetches with pick.hint (HPTT's T2 by
+// default) the same block step of the next tile (next, inside its extents only): one line of each source column and,
+// unless the stores are non-temporal or pick.dst_prefetch is off, the destination rows once per line of them. On the
+// streamed path with near columns (<= 64 KB apart) it also prefetches the next step's source columns into L1: it hides
+// strided-read latency the streamer cannot track in the multithreaded regime (2D f32 46.8 -> 51.2 GB/s); on
+// page-scattered columns those TLB walks cost more than they hide.
 template <typename E, bool Scale, bool Stream>
 void permute_tile(typename E::Scalar* dst, crd::i64 ra, const typename E::Scalar* src, crd::i64 sa, crd::i64 sb,
-                  crd::u64 na, crd::u64 nb, typename E::Scalar ar, typename E::Scalar ai, PermuteNext next) noexcept
+                  crd::u64 na, crd::u64 nb, typename E::Scalar ar, typename E::Scalar ai, PermuteNext next,
+                  const PermutePick& pick) noexcept
 {
     using S = typename E::Scalar;
     constexpr crd::i64 step = E::kStep;
     constexpr crd::u64 micro = kRegBytes / E::kBytes;
-    if (sa != 1)
+    if (sa != 1 || pick.scalar)
     {
         scalar_tile<E, Scale>(dst, ra, src, sa, sb, na, nb, ar, ai);
         return;
@@ -542,17 +564,15 @@ void permute_tile(typename E::Scalar* dst, crd::i64 ra, const typename E::Scalar
             {
                 for (crd::u64 c = ib; c < ib + micro && c < next.nb; ++c)
                 {
-                    _mm_prefetch(reinterpret_cast<const char*>(
-                                     next_src + (static_cast<crd::i64>(ia0) + static_cast<crd::i64>(c) * sb) * step),
-                                 _MM_HINT_T2);
+                    prefetch_line(next_src + (static_cast<crd::i64>(ia0) + static_cast<crd::i64>(c) * sb) * step,
+                                  pick.hint);
                 }
-                if (!Stream && ib % E::kBlockRows == 0U && ib < next.nb)
+                if (!Stream && pick.dst_prefetch && ib % E::kBlockRows == 0U && ib < next.nb)
                 {
                     for (crd::u64 i = ia0; i < ia1 && i < next.na; ++i)
                     {
-                        _mm_prefetch(reinterpret_cast<const char*>(
-                                         next_dst + (static_cast<crd::i64>(i) * ra + static_cast<crd::i64>(ib)) * step),
-                                     _MM_HINT_T2);
+                        prefetch_line(next_dst + (static_cast<crd::i64>(i) * ra + static_cast<crd::i64>(ib)) * step,
+                                      pick.hint);
                     }
                 }
             }
@@ -587,22 +607,120 @@ void permute_tile(typename E::Scalar* dst, crd::i64 ra, const typename E::Scalar
 #else
 template <typename E, bool Scale, bool Stream>
 void permute_tile(typename E::Scalar* dst, crd::i64 ra, const typename E::Scalar* src, crd::i64 sa, crd::i64 sb,
-                  crd::u64 na, crd::u64 nb, typename E::Scalar ar, typename E::Scalar ai, PermuteNext /*next*/) noexcept
+                  crd::u64 na, crd::u64 nb, typename E::Scalar ar, typename E::Scalar ai, PermuteNext /*next*/,
+                  const PermutePick& /*pick*/) noexcept
 {
     scalar_tile<E, Scale>(dst, ra, src, sa, sb, na, nb, ar, ai);
 }
 #endif
 
+// One tile as a staged strip (PermuteRegion::stage, tile_a * tile_b elements): the tile into the stage, whose rows are
+// nb elements, then each stage row stored to its destination row in one sweep (non-temporally when Stream; the
+// region's alignment contract makes every full register of a row aligned). With a unit source stride on a level with
+// the register transposes, the micro column groups run outer, so each source column is read whole in one pass (the
+// 1 MB-apart columns of the 3D 512^3 rotation as one sequential run each); prefetches as permute_tile's, of the next
+// tile's source columns only. Otherwise the scalar tile fills the stage.
+template <typename E, bool Scale, bool Stream>
+void permute_tile_staged(typename E::Scalar* dst, crd::i64 ra, const typename E::Scalar* src, crd::i64 sa, crd::i64 sb,
+                         crd::u64 na, crd::u64 nb, typename E::Scalar ar, typename E::Scalar ai, PermuteNext next,
+                         const PermutePick& pick, typename E::Scalar* stage) noexcept
+{
+    using S = typename E::Scalar;
+    constexpr crd::i64 step = E::kStep;
+    const crd::i64 rs = static_cast<crd::i64>(nb); // the stage's row stride
+#if CRD_SIMD_HAS_SSE2
+    constexpr crd::u64 micro = kRegBytes / E::kBytes;
+    if (sa == 1 && !pick.scalar)
+    {
+        const RegScale k{broadcast(ar), broadcast(ai)};
+        const crd::u64 nam = na & ~(micro - 1U);
+        const crd::u64 nbm = nb & ~(micro - 1U);
+        const bool has_next = next.na != 0U && next.nb != 0U;
+        const S* next_src = has_next ? src + next.src * step : src;
+        for (crd::u64 ib = 0; ib < nbm; ib += micro)
+        {
+            for (crd::u64 ia = 0; ia < nam; ia += micro)
+            {
+                if (ia % E::kBlockRows == 0U && ia < next.na)
+                {
+                    for (crd::u64 c = ib; c < ib + micro && c < next.nb; ++c)
+                    {
+                        prefetch_line(next_src + (static_cast<crd::i64>(ia) + static_cast<crd::i64>(c) * sb) * step,
+                                      pick.hint);
+                    }
+                }
+                transpose_micro<E, Scale, false>(
+                    src + (static_cast<crd::i64>(ia) + static_cast<crd::i64>(ib) * sb) * step, sb * step,
+                    stage + (static_cast<crd::i64>(ia) * rs + static_cast<crd::i64>(ib)) * step, rs * step, k);
+            }
+        }
+        if (nbm < nb) // right strip: rows [0, nam), cols [nbm, nb)
+        {
+            scalar_tile<E, Scale>(stage + static_cast<crd::i64>(nbm) * step, rs,
+                                  src + static_cast<crd::i64>(nbm) * sb * step, sa, sb, nam, nb - nbm, ar, ai);
+        }
+        if (nam < na) // bottom strip: rows [nam, na), all cols
+        {
+            scalar_tile<E, Scale>(stage + static_cast<crd::i64>(nam) * rs * step, rs,
+                                  src + static_cast<crd::i64>(nam) * sa * step, sa, sb, na - nam, nb, ar, ai);
+        }
+    }
+    else
+    {
+        scalar_tile<E, Scale>(stage, rs, src, sa, sb, na, nb, ar, ai);
+    }
+    constexpr crd::u64 lanes = kRegBytes / sizeof(S); // scalars per register
+    const crd::u64 row = nb * E::kParts;              // scalars per row
+    const crd::u64 rowm = row & ~(lanes - 1U);
+    for (crd::u64 ia = 0; ia < na; ++ia)
+    {
+        const S* const from = stage + static_cast<crd::i64>(ia) * rs * step;
+        S* const to = dst + static_cast<crd::i64>(ia) * ra * step;
+        for (crd::u64 j = 0; j < rowm; j += lanes)
+        {
+            store_reg<Stream>(to + j, load_reg(from + j));
+        }
+        for (crd::u64 j = rowm; j < row; ++j)
+        {
+            to[j] = from[j];
+        }
+    }
+#else
+    (void)next;
+    (void)pick;
+    scalar_tile<E, Scale>(stage, rs, src, sa, sb, na, nb, ar, ai);
+    const crd::u64 row = nb * E::kParts;
+    for (crd::u64 ia = 0; ia < na; ++ia)
+    {
+        const S* const from = stage + static_cast<crd::i64>(ia) * rs * step;
+        S* const to = dst + static_cast<crd::i64>(ia) * ra * step;
+        for (crd::u64 j = 0; j < row; ++j)
+        {
+            to[j] = from[j];
+        }
+    }
+#endif
+}
+
 template <typename E, bool Scale, bool Stream> void permute_region(const PermuteRegion<typename E::Scalar>& r) noexcept
 {
     detail::permute_region_tiles(
-        r.na, r.nb, r.tile_a, r.tile_b, r.sa, r.sb, r.ra, r.next,
+        r.na, r.nb, r.tile_a, r.tile_b, r.sa, r.sb, r.ra, r.next, r.pick.distance,
         [&r](crd::u64 ta, crd::u64 tb, crd::u64 ha, crd::u64 hb, PermuteNext next)
         {
-            permute_tile<E, Scale, Stream>(
-                r.dst + (static_cast<crd::i64>(ta) * r.ra + static_cast<crd::i64>(tb)) * E::kStep, r.ra,
-                r.src + (static_cast<crd::i64>(ta) * r.sa + static_cast<crd::i64>(tb) * r.sb) * E::kStep, r.sa, r.sb,
-                ha, hb, r.alpha_re, r.alpha_im, next);
+            typename E::Scalar* const d =
+                r.dst + (static_cast<crd::i64>(ta) * r.ra + static_cast<crd::i64>(tb)) * E::kStep;
+            const typename E::Scalar* const s =
+                r.src + (static_cast<crd::i64>(ta) * r.sa + static_cast<crd::i64>(tb) * r.sb) * E::kStep;
+            if (r.stage != nullptr)
+            {
+                permute_tile_staged<E, Scale, Stream>(d, r.ra, s, r.sa, r.sb, ha, hb, r.alpha_re, r.alpha_im, next,
+                                                      r.pick, r.stage);
+            }
+            else
+            {
+                permute_tile<E, Scale, Stream>(d, r.ra, s, r.sa, r.sb, ha, hb, r.alpha_re, r.alpha_im, next, r.pick);
+            }
         });
 #if CRD_SIMD_HAS_SSE2
     if constexpr (Stream)
@@ -663,28 +781,42 @@ void permute_region_f64(const PermuteRegion<crd::f64>& r) noexcept
 }
 
 // The serial walk: every plane one region, which prefetches the next plane.
-template <typename E, bool Scale> void permute_walk(const PermuteWalk<typename E::Scalar>& w) noexcept
+template <typename E, bool Scale, bool Stream> void permute_walk(const PermuteWalk<typename E::Scalar>& w) noexcept
 {
     const crd::u32 b = w.m - 1U;
-    detail::permute_walk_planes(w.shp, w.s_in, w.s_out, w.m, w.a,
+    detail::permute_walk_planes(w.shp, w.s_in, w.s_out, w.m, w.a, w.pick.order,
                                 [&w, b](crd::i64 soff, crd::i64 doff, PermuteNext next)
                                 {
-                                    permute_region<E, Scale, false>({w.dst + doff * E::kStep, w.s_out[w.a],
-                                                                     w.src + soff * E::kStep, w.s_in[w.a], w.s_in[b],
-                                                                     w.shp[w.a], w.shp[b], w.tile, w.tile, w.alpha_re,
-                                                                     w.alpha_im, w.complex, Scale, false, next});
+                                    permute_region<E, Scale, Stream>(
+                                        {w.dst + doff * E::kStep, w.s_out[w.a], w.src + soff * E::kStep, w.s_in[w.a],
+                                         w.s_in[b], w.shp[w.a], w.shp[b], w.tile, w.tile, w.alpha_re, w.alpha_im,
+                                         w.complex, Scale, Stream, next, w.pick});
                                 });
 }
 
 template <typename E> void permute_walk_element(const PermuteWalk<typename E::Scalar>& w) noexcept
 {
+#if CRD_SIMD_HAS_SSE2
+    if (w.stream)
+    {
+        if (w.scale)
+        {
+            permute_walk<E, true, true>(w);
+        }
+        else
+        {
+            permute_walk<E, false, true>(w);
+        }
+        return;
+    }
+#endif
     if (w.scale)
     {
-        permute_walk<E, true>(w);
+        permute_walk<E, true, false>(w);
     }
     else
     {
-        permute_walk<E, false>(w);
+        permute_walk<E, false, false>(w);
     }
 }
 

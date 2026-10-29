@@ -637,3 +637,99 @@ TEST_CASE("v14-d MT: f64 and complex permutes, streamed or not, match serial at 
     check_mt_element<Complex<crd::f32>>(&alloc, Complex<crd::f32>{-2.0F, 0.5F});
     check_mt_element<Complex<crd::f64>>(&alloc, Complex<crd::f64>{0.75, -1.25});
 }
+
+namespace
+{
+
+namespace tn = crd::hesap::tensor;
+
+// The permute board's arms (detail::PermuteArm): the rules, then the kernel levers (hints, distances, no destination
+// prefetch, the scalar tile, HPTT's outer order), both serial tile edges, forced and refused non-temporal stores,
+// multithreaded tiles and super-blocks for every element size, and staged strips (the rules' tall tiles and others).
+constexpr tn::PermutePick kPickA{tn::PermuteHint::T0, 2U, false, false, tn::PermuteOrder::Hptt};
+constexpr tn::PermutePick kPickB{tn::PermuteHint::Nta, 0U, true, false, tn::PermuteOrder::Src};
+constexpr tn::PermutePick kPickC{tn::PermuteHint::T1, 1U, true, true, tn::PermuteOrder::Hptt};
+constexpr tn::detail::PermuteArm kArms[] = {
+    {},
+    {kPickA, 32U, 0U, 0U, 0U, 0U, tn::detail::PermuteStream::Auto, false},
+    {kPickB, 64U, 0U, 0U, 0U, 0U, tn::detail::PermuteStream::On, false},
+    {kPickC, 0U, 64U, 16U, 4U, 4U, tn::detail::PermuteStream::Off, true},
+    {{}, 0U, 512U, 32U, 2U, 8U, tn::detail::PermuteStream::Auto, true},
+    {kPickA, 0U, 32U, 64U, 8U, 2U, tn::detail::PermuteStream::On, true},
+};
+
+// Every arm, serial and at 1, 3, 7, 8 and 16 workers, gives permute_copy's serial bits, unscaled and scaled; an arm
+// that forces non-temporal stores is refused exactly where the dst-fastest extent is no 32-byte multiple (streams).
+template <typename T>
+void check_arms(crd::memory::IAllocator* alloc, crd::containers::ConstSpan<crd::u64> shape,
+                crd::containers::ConstSpan<crd::u32> order, T alpha, bool streams)
+{
+    Tensor<T> src(alloc, shape);
+    fill_pattern(src);
+    Tensor<T> ref(alloc);
+    Tensor<T> ref_scaled(alloc);
+    REQUIRE(permute_copy(TensorView<const T>(src.view()), order, ref) == TensorStatus::Ok);
+    REQUIRE(permute_copy(TensorView<const T>(src.view()), order, ref_scaled, alpha) == TensorStatus::Ok);
+    Tensor<T> out(alloc);
+    for (const crd::u32 nw : {0U, 1U, 3U, 7U, 8U, 16U}) // 0: no pool
+    {
+        if (nw != 0U)
+        {
+            crd::jobs::Config cfg;
+            cfg.num_threads = nw;
+            crd::jobs::init(cfg);
+        }
+        for (const tn::detail::PermuteArm& arm : kArms)
+        {
+            const bool refused = arm.stream == tn::detail::PermuteStream::On && !streams;
+            for (const bool scale : {false, true})
+            {
+                const TensorStatus st =
+                    scale ? tn::detail::permute_copy_arm(arm, TensorView<const T>(src.view()), order, out, alpha)
+                          : tn::detail::permute_copy_arm(arm, TensorView<const T>(src.view()), order, out);
+                INFO("workers " << nw << " element bytes " << sizeof(T) << " arm " << (&arm - kArms) << " scaled "
+                                << scale);
+                REQUIRE(st == (refused ? TensorStatus::Unsupported : TensorStatus::Ok));
+                if (!refused)
+                {
+                    const Tensor<T>& want = scale ? ref_scaled : ref;
+                    REQUIRE(out.size() == want.size());
+                    CHECK(std::memcmp(out.data(), want.data(), want.size() * sizeof(T)) == 0);
+                }
+            }
+        }
+        if (nw != 0U)
+        {
+            crd::jobs::shutdown();
+        }
+    }
+}
+
+// A transpose (near columns), a rotation whose source columns lie 80 KiB or more apart (the 3D 512^3 board row's
+// shape: tall tiles, staged strips) and a reversal whose dst-fastest rows are no 32-byte multiple.
+template <typename T> void check_arms_element(crd::memory::IAllocator* alloc, T alpha)
+{
+    const crd::u64 transpose_shape[] = {1024U, 1536U};
+    const crd::u32 transpose[] = {1U, 0U};
+    check_arms<T>(alloc, transpose_shape, transpose, alpha, true);
+    const crd::u64 rotation_shape[] = {64U, 128U, 160U};
+    const crd::u32 rotation[] = {1U, 2U, 0U};
+    check_arms<T>(alloc, rotation_shape, rotation, alpha, true);
+    constexpr crd::u64 row = 528U / sizeof(T); // 528 bytes: 16 past a 32-byte multiple
+    const crd::u64 reversal_shape[] = {row, 8U, 4096U};
+    const crd::u32 reversal[] = {2U, 1U, 0U};
+    check_arms<T>(alloc, reversal_shape, reversal, alpha, false);
+}
+
+} // namespace
+
+TEST_CASE("permute board arms: every arm gives permute_copy's bits at every worker count, a stream it cannot take "
+          "refused",
+          "[hesap][tensor][permute][moat]")
+{
+    crd::memory::TlsfAllocator alloc(1ULL << 30U);
+    check_arms_element<crd::f32>(&alloc, -0.5F);
+    check_arms_element<crd::f64>(&alloc, -2.0);
+    check_arms_element<Complex<crd::f32>>(&alloc, Complex<crd::f32>{-2.0F, 0.5F});
+    check_arms_element<Complex<crd::f64>>(&alloc, Complex<crd::f64>{0.75, -1.25});
+}

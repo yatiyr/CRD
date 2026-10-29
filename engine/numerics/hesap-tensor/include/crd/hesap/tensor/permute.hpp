@@ -147,6 +147,32 @@ inline constexpr crd::u64 kPermuteTile = 64U;
 // overhead; use the simple strided row loop instead.
 inline constexpr crd::u64 kPermuteTinyDim = 8U;
 
+// The permute board's arms (SIMD-DISPATCH; board scaffolding: the keep-or-drop step folds the winners into the rules
+// below and deletes this): the kernel levers (PermutePick), the serial tile edge, the multithreaded tile and
+// super-block (its edges in tiles), the non-temporal stores, and staged strips for the multithreaded tasks (each task
+// stages through its own thread's frame arena, unstaged when the arena refuses: the same bits). 0 and Auto keep the
+// rule.
+enum class PermuteStream : crd::u8
+{
+    Auto, // the rule: multithreaded on a DRAM-sized dst the stores align to, never serial
+    Off,
+    On, // permute_copy_arm refuses (Unsupported) a dst or tile that cannot take them
+};
+
+struct PermuteArm
+{
+    PermutePick pick{};
+    crd::u64 tile = 0U;
+    crd::u64 tile_a = 0U;
+    crd::u64 tile_b = 0U;
+    crd::u64 sup_a = 0U;
+    crd::u64 sup_b = 0U;
+    PermuteStream stream = PermuteStream::Auto;
+    bool staged = false;
+};
+
+inline constexpr PermuteArm kPermuteRules{};
+
 // One contiguous dst row of `count` elements from a strided source (stride
 // may be negative = flipped, or 0 = broadcast). alpha == 1 (Scale=false) is
 // a bit copy — memcpy when the source row is contiguous.
@@ -181,11 +207,13 @@ static_assert(kPermuteMaxRank == kMaxRank, "the permute kernels walk every rank 
 // at ia*ra + ib, src(ia, ib) at ia*sa + ib*sb; next locates the region after
 // it (the kernels prefetch it). The kernel elements run the per-level tensor
 // kernel (the in-register transposes on SSE2 and AVX2, non-temporal stores
-// when stream is set; one call per region); every other type runs the scalar
-// tiles.
+// when stream is set, pick's levers, staged strips through a non-null stage
+// of tile_a * tile_b elements; one call per region); every other type runs
+// the scalar tiles.
 template <bool Scale, typename T>
 inline void permute_region(T* dst, crd::i64 ra, const T* src, crd::i64 sa, crd::i64 sb, crd::u64 na, crd::u64 nb,
-                           crd::u64 tile_a, crd::u64 tile_b, T alpha, bool stream, PermuteNext next) noexcept
+                           crd::u64 tile_a, crd::u64 tile_b, T alpha, bool stream, PermuteNext next,
+                           const PermutePick& pick, T* stage) noexcept
 {
     if constexpr (kPermuteKernel<T>)
     {
@@ -193,6 +221,8 @@ inline void permute_region(T* dst, crd::i64 ra, const T* src, crd::i64 sa, crd::
         S* const d = permute_scalars(dst);
         const S* const s = permute_scalars(src);
         PermuteRegion<S> r{d, ra, s, sa, sb, na, nb, tile_a, tile_b, S(0), S(0), false, Scale, stream, next};
+        r.pick = pick;
+        r.stage = permute_scalars(stage);
         permute_kernel_alpha(r, alpha);
         if constexpr (std::is_same_v<S, crd::f32>)
         {
@@ -206,6 +236,8 @@ inline void permute_region(T* dst, crd::i64 ra, const T* src, crd::i64 sa, crd::
     else
     {
         (void)stream;
+        (void)pick;
+        (void)stage;
         const auto put = [&](T* d, const T* s)
         {
             if constexpr (Scale)
@@ -217,7 +249,7 @@ inline void permute_region(T* dst, crd::i64 ra, const T* src, crd::i64 sa, crd::
                 *d = *s;
             }
         };
-        permute_region_tiles(na, nb, tile_a, tile_b, sa, sb, ra, next,
+        permute_region_tiles(na, nb, tile_a, tile_b, sa, sb, ra, next, 0U,
                              [&](crd::u64 ta, crd::u64 tb, crd::u64 ha, crd::u64 hb, PermuteNext /*next*/)
                              {
                                  permute_tile_scalar<1U>(
@@ -266,7 +298,7 @@ inline void permute_rows(T* dst, const T* src, const crd::u64* shp, const crd::i
 // scalar tiles.
 template <bool Scale, typename T>
 inline void permute_tiled(T* dst, const T* src, const crd::u64* shp, const crd::i64* s_in, const crd::i64* s_out,
-                          crd::u32 m, crd::u32 a, T alpha) noexcept
+                          crd::u32 m, crd::u32 a, T alpha, bool stream, const PermuteArm& arm) noexcept
 {
     const crd::u32 b = m - 1U;
     const crd::u64 nb = shp[b];
@@ -280,13 +312,16 @@ inline void permute_tiled(T* dst, const T* src, const crd::u64* shp, const crd::
     // boundary overhead to pay, and the src-locality-ordered odometer reuses
     // the same column pages across consecutive planes (measured: 64^4 reversal
     // 0.44 ns/elem at 64 vs 0.51 at 32).
-    const crd::u64 tile =
+    const crd::u64 rule =
         (static_cast<crd::u64>(sb_mag) * sizeof(T) <= 65536U || nb <= kPermuteTile) ? kPermuteTile : 32U;
+    const crd::u64 tile = arm.tile != 0U ? arm.tile : rule;
     if constexpr (kPermuteKernel<T>)
     {
         using S = typename PermuteKernelElem<T>::Scalar;
         PermuteWalk<S> w{
             permute_scalars(dst), permute_scalars(src), shp, s_in, s_out, m, a, tile, S(0), S(0), false, Scale};
+        w.stream = stream;
+        w.pick = arm.pick;
         permute_kernel_alpha(w, alpha);
         if constexpr (std::is_same_v<S, crd::f32>)
         {
@@ -302,11 +337,12 @@ inline void permute_tiled(T* dst, const T* src, const crd::u64* shp, const crd::
         const crd::u64 na = shp[a];
         const crd::i64 sa_in = s_in[a];
         const crd::i64 ra = s_out[a]; // dst stride of a (dst stride of b is 1)
-        permute_walk_planes(shp, s_in, s_out, m, a,
+        (void)stream;                 // set only for the kernel elements
+        permute_walk_planes(shp, s_in, s_out, m, a, arm.pick.order,
                             [&](crd::i64 soff, crd::i64 doff, PermuteNext next)
                             {
                                 permute_region<Scale>(dst + doff, ra, src + soff, sa_in, sb_in, na, nb, tile, tile,
-                                                      alpha, false, next);
+                                                      alpha, false, next, arm.pick, nullptr);
                             });
     }
 }
@@ -325,7 +361,7 @@ inline constexpr crd::u64 kPermuteMtStreamBytes = 8U * 1024U * 1024U;
 
 template <bool Scale, typename T>
 inline void permute_tiled_mt(T* dst, const T* src, const crd::u64* shp, const crd::i64* s_in, const crd::i64* s_out,
-                             crd::u32 m, crd::u32 a, T alpha, bool stream) noexcept
+                             crd::u32 m, crd::u32 a, T alpha, bool stream, const PermuteArm& arm) noexcept
 {
     const crd::u32 b = m - 1U;
     // MT tiles (measured): near columns -> 32x32 (the per-tile read-stream
@@ -336,12 +372,13 @@ inline void permute_tiled_mt(T* dst, const T* src, const crd::u64* shp, const cr
     const crd::i64 sb_mag = s_in[b] < 0 ? -s_in[b] : s_in[b];
     const bool near_cols = static_cast<crd::u64>(sb_mag) * sizeof(T) <= 65536U;
     const crd::u64 tall = shp[a] < 512U ? shp[a] : 512U;
-    const crd::u64 tile_a = near_cols ? 32U : tall;
-    const crd::u64 tile_b = 32U;
+    const crd::u64 rule_a = near_cols ? 32U : tall;
+    const crd::u64 tile_a = arm.tile_a != 0U ? arm.tile_a : rule_a;
+    const crd::u64 tile_b = arm.tile_b != 0U ? arm.tile_b : 32U;
 
     crd::u32 ord[kMaxRank];
     crd::u64 outer = 1;
-    const crd::u32 nout = permute_outer_order(shp, s_in, m, a, ord, outer);
+    const crd::u32 nout = permute_outer_order(shp, s_in, m, a, arm.pick.order, ord, outer);
 
     struct Params
     {
@@ -361,6 +398,7 @@ inline void permute_tiled_mt(T* dst, const T* src, const crd::u64* shp, const cr
         crd::u64 n_sup; // supers per (a,b) plane
         T alpha;
         bool stream;
+        const PermuteArm* arm;
     };
     // Super-block task shape: 8x8 tiles (512^2 at tile 64). Partitioning BOTH
     // transpose dims keeps each task's scattered-stream reads inside a small
@@ -371,12 +409,13 @@ inline void permute_tiled_mt(T* dst, const T* src, const crd::u64* shp, const cr
     // microkernel's NT-write-friendly ia-outer order re-fragments the reads
     // inside each tile; inverting it fragments the NT writes instead. The
     // in-tile loop-order tension is the named lever for the next 3D pass.)
-    const crd::u64 sup_a = tile_a * (near_cols ? 16U : 2U); // 512 elements either way
-    const crd::u64 sup_b = tile_b * 8U;
+    const crd::u64 rule_sup_a = near_cols ? 16U : 2U; // 512 elements either way on the rule's tiles
+    const crd::u64 sup_a = tile_a * (arm.sup_a != 0U ? arm.sup_a : rule_sup_a);
+    const crd::u64 sup_b = tile_b * (arm.sup_b != 0U ? arm.sup_b : 8U);
     const crd::u64 n_ta = (shp[a] + sup_a - 1U) / sup_a;
     const crd::u64 n_tb = (shp[b] + sup_b - 1U) / sup_b;
-    const Params prm{dst, src,    shp,    s_in,  s_out, ord,         nout,  a,
-                     b,   tile_a, tile_b, sup_a, sup_b, n_ta * n_tb, alpha, stream};
+    const Params prm{dst,    src,    shp,   s_in,  s_out,       ord,   nout,   a,   b,
+                     tile_a, tile_b, sup_a, sup_b, n_ta * n_tb, alpha, stream, &arm};
     const crd::u64 tasks = outer * n_ta * n_tb;
 
     crd::jobs::Counter* c = crd::jobs::parallel_for(
@@ -417,6 +456,20 @@ inline void permute_tiled_mt(T* dst, const T* src, const crd::u64* shp, const cr
                 }
                 return k;
             };
+            // A staged arm's stage comes from this thread's frame arena and goes back before the job returns: the job
+            // never waits, so it cannot resume on another thread holding this thread's mark.
+            const bool staged = prm.arm->staged && kPermuteKernel<T>;
+            const crd::usize mark = staged ? crd::jobs::frame_get_mark() : 0U;
+            T* stage = nullptr;
+            if (staged)
+            {
+                const crd::usize bytes = prm.tile_a * prm.tile_b * sizeof(T);
+                void* const p = crd::jobs::frame_try_alloc(bytes, 64U);
+                if (p != nullptr) // refused: the unstaged tiles, the same bits
+                {
+                    stage = static_cast<T*>(p);
+                }
+            }
             Task cur = task(t0);
             for (crd::u32 t = t0; t < t1; ++t)
             {
@@ -426,8 +479,13 @@ inline void permute_tiled_mt(T* dst, const T* src, const crd::u64* shp, const cr
                 permute_region<Scale>(prm.dst + cur.doff, ra, prm.src + cur.soff, sa_in, sb_in, cur.na, cur.nb,
                                       prm.tile_a, prm.tile_b, prm.alpha, prm.stream,
                                       PermuteNext{nxt.soff - cur.soff, nxt.doff - cur.doff, has_next ? nxt.na : 0U,
-                                                  has_next ? nxt.nb : 0U});
+                                                  has_next ? nxt.nb : 0U},
+                                      prm.arm->pick, stage);
                 cur = nxt;
+            }
+            if (staged)
+            {
+                crd::jobs::frame_set_mark(mark);
             }
         });
     crd::jobs::wait(c);
@@ -435,11 +493,14 @@ inline void permute_tiled_mt(T* dst, const T* src, const crd::u64* shp, const cr
 
 // Collapse + dispatch. oshape/istride are the dst-ordered (permuted) source
 // dims: dst dim d has extent oshape[d] and reads the source with stride
-// istride[d]; the dst itself is canonical row-major over oshape.
+// istride[d]; the dst itself is canonical row-major over oshape. Unsupported
+// (nothing written) when arm forces non-temporal stores the path, the dst or
+// the tile cannot take; Ok otherwise.
 template <bool Scale, typename T>
-inline void permute_impl(T* dst, const T* src, const crd::u64* oshape, const crd::i64* istride, crd::u32 r,
-                         T alpha) noexcept
+[[nodiscard]] inline TensorStatus permute_impl(T* dst, const T* src, const crd::u64* oshape, const crd::i64* istride,
+                                               crd::u32 r, T alpha, const PermuteArm& arm) noexcept
 {
+    const bool force_stream = arm.stream == PermuteStream::On;
     // 1. Dimension collapse (the TTC/HPTT lever). The dst side is canonical
     //    row-major, so adjacent dst dims are ALWAYS contiguous there; merging
     //    d-1 (outer) with d (inner) only needs the source to walk contiguously
@@ -468,6 +529,10 @@ inline void permute_impl(T* dst, const T* src, const crd::u64* oshape, const crd
         }
     }
 
+    if (force_stream && m < 2U)
+    {
+        return TensorStatus::Unsupported;
+    }
     if (m == 0U) // every dim has size 1 (or rank 0): a single element
     {
         if constexpr (Scale)
@@ -478,12 +543,12 @@ inline void permute_impl(T* dst, const T* src, const crd::u64* oshape, const crd
         {
             *dst = *src;
         }
-        return;
+        return TensorStatus::Ok;
     }
     if (m == 1U)
     {
         permute_row<Scale>(dst, src, shp[0], s_in[0], alpha);
-        return;
+        return TensorStatus::Ok;
     }
 
     // Canonical row-major dst strides over the collapsed shape.
@@ -510,8 +575,12 @@ inline void permute_impl(T* dst, const T* src, const crd::u64* oshape, const crd
 
     if (a == m - 1U || shp[a] < kPermuteTinyDim || shp[m - 1U] < kPermuteTinyDim)
     {
+        if (force_stream)
+        {
+            return TensorStatus::Unsupported;
+        }
         permute_rows<Scale>(dst, src, shp, s_in, m, alpha);
-        return;
+        return TensorStatus::Ok;
     }
     crd::u64 total = 1;
     for (crd::u32 d = 0; d < m; ++d)
@@ -525,21 +594,38 @@ inline void permute_impl(T* dst, const T* src, const crd::u64* oshape, const crd
     const crd::u64 tasks_min = outer_est * ((shp[a] + kPermuteTile - 1U) / kPermuteTile);
     const bool mt = crd::jobs::num_workers() > 1U && total * sizeof(T) >= kPermuteMtBytes && tasks_min >= 2U &&
                     tasks_min <= 0xFFFFFFFFULL;
+    // Streaming gate: kernel elements + the alignment the NT stores require.
+    // The base is 64B-aligned (Tensor::resize); every region origin and
+    // microkernel row start is 32B-aligned iff the dst-fastest extent is a
+    // multiple of 32 bytes, since every other dst stride is a multiple of it
+    // (the a-stride alone is not enough: an outer dim between a and b steps
+    // the origin by its own stride), and so is each tile row iff the tile's
+    // b edge is (the rules' 64 and 32 always are).
+    const crd::u64 arm_tile_b = mt ? arm.tile_b : arm.tile;
+    const bool aligned = kPermuteKernel<T> && (reinterpret_cast<crd::usize>(dst) & 31U) == 0U &&
+                         ((shp[m - 1U] * sizeof(T)) & 31U) == 0U && ((arm_tile_b * sizeof(T)) & 31U) == 0U;
+    if (force_stream && !aligned)
+    {
+        return TensorStatus::Unsupported;
+    }
     if (!mt)
     {
-        permute_tiled<Scale>(dst, src, shp, s_in, s_out, m, a, alpha);
-        return;
+        permute_tiled<Scale>(dst, src, shp, s_in, s_out, m, a, alpha, force_stream, arm);
+        return TensorStatus::Ok;
     }
-    // Streaming gate: a DRAM-sized dst of kernel elements + the alignment the NT
-    // stores require. The base is 64B-aligned (Tensor::resize); every region
-    // origin and microkernel row start is 32B-aligned iff the dst-fastest
-    // extent is a multiple of 32 bytes, since every other dst stride is a
-    // multiple of it (the a-stride alone is not enough: an outer dim between a
-    // and b steps the origin by its own stride).
-    const bool stream = kPermuteKernel<T> && total * sizeof(T) >= kPermuteMtStreamBytes &&
-                        (reinterpret_cast<crd::usize>(dst) & 31U) == 0U && ((shp[m - 1U] * sizeof(T)) & 31U) == 0U;
-    permute_tiled_mt<Scale>(dst, src, shp, s_in, s_out, m, a, alpha, stream);
+    // The rule: a DRAM-sized dst streams.
+    const bool stream =
+        arm.stream == PermuteStream::Auto ? aligned && total * sizeof(T) >= kPermuteMtStreamBytes : force_stream;
+    permute_tiled_mt<Scale>(dst, src, shp, s_in, s_out, m, a, alpha, stream, arm);
+    return TensorStatus::Ok;
 }
+
+// permute_copy on a board arm (PermuteArm, board scaffolding): permute_copy's
+// statuses, and Unsupported when the arm forces what the case cannot take.
+template <typename T>
+[[nodiscard]] TensorStatus permute_copy_arm(const PermuteArm& arm, TensorView<const T> src,
+                                            crd::containers::ConstSpan<crd::u32> order, Tensor<T>& dst,
+                                            T alpha = T{1}) noexcept;
 
 } // namespace detail
 
@@ -557,6 +643,14 @@ inline void permute_impl(T* dst, const T* src, const crd::u64* oshape, const crd
 template <typename T>
 [[nodiscard]] TensorStatus permute_copy(TensorView<const T> src, crd::containers::ConstSpan<crd::u32> order,
                                         Tensor<T>& dst, T alpha = T{1}) noexcept
+{
+    return detail::permute_copy_arm(detail::kPermuteRules, src, order, dst, alpha);
+}
+
+template <typename T>
+[[nodiscard]] TensorStatus detail::permute_copy_arm(const PermuteArm& arm, TensorView<const T> src,
+                                                    crd::containers::ConstSpan<crd::u32> order, Tensor<T>& dst,
+                                                    T alpha) noexcept
 {
     const crd::u32 r = src.rank();
     if (order.size() != r)
@@ -590,13 +684,9 @@ template <typename T>
 
     if (alpha == T{1})
     {
-        detail::permute_impl<false>(dst.data(), src.data(), oshape, istride, r, alpha);
+        return detail::permute_impl<false>(dst.data(), src.data(), oshape, istride, r, alpha, arm);
     }
-    else
-    {
-        detail::permute_impl<true>(dst.data(), src.data(), oshape, istride, r, alpha);
-    }
-    return TensorStatus::Ok;
+    return detail::permute_impl<true>(dst.data(), src.data(), oshape, istride, r, alpha, arm);
 }
 
 } // namespace crd::hesap::tensor
