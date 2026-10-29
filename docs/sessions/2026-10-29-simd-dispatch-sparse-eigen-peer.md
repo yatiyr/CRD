@@ -33,7 +33,7 @@ follows [the dense part](2026-10-29-simd-dispatch-bench-peers.md).
 
 win-debug (`CRD_BUILD_HESAP_VS_REFERENCE=ON`, sources and corpus already on disk): the peer and the eight benches
 build at /W4 /WX; tidy-files.py is clean on all twelve files. One smoke run of sddmm prints
-`Eigen 3.4.0, AVX2, FMA (/arch:AVX2)`, and its Cerid and Eigen results agree to 8.9e-16. No boards (the fast-row
+`Eigen 3.4.0, AVX2, FMA (/arch:AVX2)`, and its Cerid and Eigen results agree to 1.8e-15 or better. No boards (the fast-row
 order).
 
 ## Left
