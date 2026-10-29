@@ -4534,6 +4534,7 @@ class IsaIsolation(unittest.TestCase):
                 with self.assertRaisesRegex(isa_isolation.GuardError, 'not GNU binutils'):
                     isa_isolation.resolve_tools(SimpleNamespace(gcc_nm=None), False)
         self.assertTrue(any(p.search('__clang_call_terminate') for p in self.exceptions.kernel_symbols))
+        self.assertTrue(any(p.search('DW.ref.__gcc_personality_v0') for p in self.exceptions.kernel_symbols))
         self.assertTrue(any(p.search('__llvm_profile_raw_version') for p in self.exceptions.kernel_symbols))
         self.assertTrue(self.exceptions.allows('VEX', 'ZSTD_decompressSequences_bmi2.cold', '', set()))
 
