@@ -2,7 +2,8 @@
 //
 // 1. The Lanczos lgamma and tgamma batches on one thread at the hesap-special kernel level the process selected
 //    (CRD_CPU_LEVEL forces one): 4 Mi arguments in [0.1, 50] (the bench_special_matlab.m / bench_special_refs.py
-//    input, CRD_MATLAB_1T=1 for MATLAB's single-thread peer row) and 8 Ki in the L2 cache.
+//    input, CRD_MATLAB_1T=1 for MATLAB's single-thread peer row) and 8 Ki in the L2 cache. Each batch must give the
+//    portable level's bits over the 4 Mi arguments (both kernels are bit-exact on every level), or the run exits 1.
 // 2. The parallel Bessel/Airy and gamma batches on the full job pool against MATLAB-MT (auto-multithreaded besselj,
 //    gammaln and gamma over the same arrays), from bench_bessel_matlab.m and bench_special_matlab.m run WITHOUT
 //    maxNumCompThreads(1). The argument 1 stops after the one-thread rows (for a run pinned to one core).
@@ -10,9 +11,11 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/special/special.hpp>
+#include <crd/hesap/special/special_dispatch.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
+#include <bit>
 #include <chrono>
 #include <cstdio>
 
@@ -22,8 +25,7 @@ using crd::usize;
 
 namespace
 {
-template <class F>
-double per_elem(const F& f, usize n, int reps)
+template <class F> double per_elem(const F& f, usize n, int reps)
 {
     f(); // warm
     const auto t0 = std::chrono::steady_clock::now();
@@ -65,21 +67,37 @@ int main(int argc, char** argv)
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(1) << 28);
     crd::containers::Array<f64> in(&alloc);
     crd::containers::Array<f64> out(&alloc);
+    crd::containers::Array<f64> portable_out(&alloc);
     f64 checksum = 0.0;
+    bool ok = true;
 
     // ---- 1. one thread (jobs not initialised: the batches run their serial path) ----
     const usize big = static_cast<usize>(4) << 20;
     const usize l2 = static_cast<usize>(8) << 10;
     fill_uniform(in, big, 0x12345ULL, 0.1, 50.0);
     out.resize(big);
+    portable_out.resize(big);
+    const sf::SpecialKernels& portable = *sf::special_kernel_levels()[0].table;
     const crd::CpuSelection& cpu = crd::cpu_selection();
     std::printf("# Lanczos gamma batches, 1 thread, hesap-special kernel level %s (selected %s), ns/elem\n",
                 crd::cpu_level_name(sf::special_kernels().level), crd::cpu_level_name(cpu.selected));
     std::printf("function     4Mi [0.1,50]   8Ki in L2\n");
-    auto single = [&](const char* name, void (*batch)(f64*, const f64*, usize) noexcept)
+    using Kernel = void (*)(f64*, const f64*, usize) noexcept;
+    auto single = [&](const char* name, Kernel batch, Kernel portable_kernel)
     {
         const double t_big = best_per_elem([&] { batch(out.data(), in.data(), big); }, big, 7);
         checksum += out[0] + out[big / 2U];
+        portable_kernel(portable_out.data(), in.data(), big);
+        usize misses = 0;
+        for (usize i = 0; i < big; ++i)
+        {
+            misses += std::bit_cast<crd::u64>(out[i]) == std::bit_cast<crd::u64>(portable_out[i]) ? 0U : 1U;
+        }
+        if (misses != 0U)
+        {
+            std::printf("!MISMATCH! %s: %zu of the 4Mi values are not the portable level's bits\n", name, misses);
+            ok = false;
+        }
         const double t_l2 = best_per_elem(
             [&]
             {
@@ -92,12 +110,12 @@ int main(int argc, char** argv)
         checksum += out[l2 / 2U];
         std::printf("%-11s  %8.3f       %8.3f\n", name, t_big, t_l2);
     };
-    single("lgamma", &sf::lgamma_batch<f64>);
-    single("tgamma", &sf::gamma_batch<f64>);
+    single("lgamma", &sf::lgamma_batch<f64>, portable.lgamma_lanczos);
+    single("tgamma", &sf::gamma_batch<f64>, portable.tgamma_lanczos);
     if (argc > 1 && argv[1][0] == '1')
     {
         std::printf("# checksum %.6e\n", checksum);
-        return 0; // "1": the one-thread rows only (a pinned run)
+        return ok ? 0 : 1; // "1": the one-thread rows only (a pinned run)
     }
 
     // ---- 2. the full job pool against MATLAB-MT ----
@@ -127,5 +145,5 @@ int main(int argc, char** argv)
     row("tgamma 4Mi", big, [&] { sf::gamma_batch<f64>(out.data(), in.data(), big); }, 1.16);
     crd::jobs::shutdown();
     std::printf("# checksum %.6e\n", checksum);
-    return 0;
+    return ok ? 0 : 1;
 }
