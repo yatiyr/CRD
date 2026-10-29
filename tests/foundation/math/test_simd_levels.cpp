@@ -567,6 +567,8 @@ TEST_CASE("simd types: the x64 Windows fma bodies give the FMA3 instruction's bi
     CHECK(std::bit_cast<crd::u64>(soft::fma_f64(f64_of(0x1CC83BE3C7008851ULL), f64_of(0x9EB4DE71D59ED9C4ULL), 0.0)) ==
           0x8000000000000000ULL);
 
+    // The startup initializer recorded the UCRT's state, so libm::fma calls the UCRT exactly while FMA3 runs.
+    CHECK(crd::detail::ucrt_fma3_active == crd::cpu_runtime_dispatch().ucrt_fma3);
     const int previous = _get_FMA3_enable();
     const bool fused = _set_FMA3_enable(1) != 0;
     INFO("the UCRT runs FMA3: " << fused);
