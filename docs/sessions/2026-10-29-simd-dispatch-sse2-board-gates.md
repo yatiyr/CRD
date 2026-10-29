@@ -12,7 +12,7 @@ Before: [the permute board's HPTT peer](2026-10-29-simd-dispatch-hptt-peer.md).
   dispatched.
 - Push run 40929108987 (1ebe9dc4), still running: linux-gcc-arm64-asan passed 2479 of 2479 in 4,760 s of test time
   (the guard 79.7 s), the first run to complete the lane, after a1901325 stopped GCC's AArch64 use-after-return
-  frames; linux-clang-arm64-asan 2479 of 2479 (6,627 s), win-arm64-debug and both arm64 debug lanes green. Every ARM64
+  frames; linux-clang-arm64-asan 2479 of 2479 (6,627 s, the guard 96.5 s), win-arm64-debug and both arm64 debug lanes green. Every ARM64
   lane has now passed, so that clause leaves the Left list. win-asan, the first run under the three-job bound, is
   still running.
 - Needs CI audit: DIAG.11c and DIAG.12 wait on a green complete-tier run; none has completed.
