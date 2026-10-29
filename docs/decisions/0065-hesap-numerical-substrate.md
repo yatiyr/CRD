@@ -998,9 +998,12 @@ divergences. Companion to v3a-1/v3a-2 (which locked D(dense-eig)-1..8 for the QL
   outer-while cap + `dlasq3`'s `NBIG = 100·(n0−i0+1)` per-block cap + deterministic
   `dlasq4` shift + IEEE NaN/Inf handling (`DISNAN` branch, deterministic given IEEE-754).
 - **Parallel determinism:** the parallel multisection (eigenvalues) and the parallel
-  eigenvector dispatch write **disjoint** outputs per worker over a **fixed** index
-  partition → bit-identical regardless of worker count / scheduling. The work-stealing
-  affects only *which* core runs a task, never the result.
+  eigenvector dispatch write **disjoint** outputs per worker ~~over a **fixed** index
+  partition → bit-identical regardless of worker count / scheduling~~ (false for the
+  multisection until 2026-10-30: its partition followed the worker count and each chunk
+  bisected from its own root; see D(dense-eig)-MRRR-multisection-global-tree). Both are
+  now bit-identical regardless of chunk count, worker count and scheduling. The
+  work-stealing affects only *which* core runs a task, never the result.
 
 **Faithful-port divergences (numbered, advisor-vetted):**
 - **D(dense-eig)-MRRR-Z1base** — the dqds qd-array (`dlasq2/3/4/5/6`) and `dlar1v`/`dlaneg`
@@ -1009,6 +1012,15 @@ divergences. Companion to v3a-1/v3a-2 (which locked D(dense-eig)-1..8 for the QL
   correct-C-port practice; hand-translating to 0-based is the classic dqds failure mode).
 - **D(dense-eig)-MRRR-dqds-ieee-only** — only the `IEEE=.TRUE.` branches of `dlasq5`/`dlasq6`
   are ported (ADR-0063 mandates IEEE-754 — a contract simplification, not a corner-cut).
+- **D(dense-eig)-MRRR-multisection-global-tree** (2026-10-30, [session](../sessions/2026-10-30-simd-dispatch-jobs-eig-picks.md))
+  — `multisection_chunk` roots every chunk at the block's Gershgorin bracket with indices
+  `[0, n)` and prunes the nodes outside its chunk, instead of bisecting a chunk-local root
+  from separators found per chunk. A node's interval depends only on its path, so every
+  chunk and job count gives the one-chunk bits (one chunk was always the whole tree, so the
+  one-job bits are unchanged). Before, the chunk count was the pool size, and eigvals_sym's
+  bits at n >= 512 followed the host's core count (observed: the arm test's six spectra with
+  a finite bracket all differed between 1 chunk and 3 to 64 chunks). A non-finite bracket
+  returns quiet NaNs; a NaN at `d[0]` used to repush one node forever (read from the code).
 - **D(dense-eig)-MRRR-dlarrb-per-eigenvalue** — `dlarrb_refine` uses per-eigenvalue
   bisection (via the `dlaneg` LDLᵀ twisted Sturm count) instead of dlarrb.f's linked-list
   multisection — same converged result, simpler control flow (the sharing is a speed-only
