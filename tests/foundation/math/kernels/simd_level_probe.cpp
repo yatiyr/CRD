@@ -1,7 +1,7 @@
 // The SIMD-type probe, compiled once per CPU level by crd_add_cpu_kernels (../CMakeLists.txt, ADR-0134 §5): every
 // operation of the crd::math::simd types of this level's backend over the probe inputs. The table is this level's
-// (CRD_KERNEL_TABLE); everything else has internal linkage or lives in the level namespace. It also runs the scalar
-// crd::math surface, which kernel units share with general code.
+// (CRD_KERNEL_TABLE); everything else lives in the level namespace, which is how the ISA guard attributes it in a
+// linked image. It also runs the scalar crd::math surface, which kernel units share with general code.
 
 #include "../simd_level_probe.hpp"
 
@@ -23,7 +23,7 @@
 #include <crd/math/simd/vec8f.hpp>
 #include <crd/math/simd/vec8i.hpp>
 
-namespace crd::test::simd_probe
+namespace crd::test::simd_probe::inline CRD_MATH_LEVEL_NS
 {
 namespace
 {
@@ -1215,12 +1215,16 @@ constexpr Ops all_ops() noexcept
 constexpr Ops kOps = all_ops();
 
 } // namespace
+} // namespace crd::test::simd_probe::inline CRD_MATH_LEVEL_NS
+
+namespace crd::test::simd_probe
+{
 
 constinit const Table CRD_KERNEL_TABLE(kSimdProbe) = {
     crd::math::simd::backend_name(),
     crd::math::simd::kNativeLaneWidth,
-    kOps.op,
-    kOpCount,
+    CRD_MATH_LEVEL_NS::kOps.op,
+    CRD_MATH_LEVEL_NS::kOpCount,
 };
 
 } // namespace crd::test::simd_probe
