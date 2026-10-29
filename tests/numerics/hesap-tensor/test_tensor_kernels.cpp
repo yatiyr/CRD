@@ -2122,9 +2122,10 @@ void make_sparse_case(SparseCase& c, u32 rank, const u64* dims, u64 seed)
 // nonzeros; fptr[l][z] is node z's first child.
 struct CsfTree
 {
-    u64 nodes[5];
-    u32 fids[5][256];
-    u32 fptr[5][257];
+    static constexpr u32 kLevels = 5U;
+    u64 nodes[kLevels];
+    u32 fids[kLevels][256];
+    u32 fptr[kLevels][257];
 };
 
 void make_csf_tree(const SparseCase& c, CsfTree& t)
@@ -2312,13 +2313,14 @@ template <typename T> u64 check_sparse_fold(const tn::SparseTensorKernels<T>& ks
     return bad;
 }
 
-// The MTTKRP oracle: a leaf adds fma(val, row, dst); an inner node's children sum into a zeroed acc, which then adds
-// fma(acc, row, dst), its level's factor row.
-template <typename T>
-void mttkrp_oracle(const CsfTree& t, u32 rank, const T* const* fac, const T* val, u64 r, u32 l, u64 z, T* dst)
+// The MTTKRP oracle at level L of the tree: a leaf adds fma(val, row, dst); an inner node's children sum into a zeroed
+// acc, which then adds fma(acc, row, dst), its level's factor row. The level is a template argument, so no recursion
+// reaches past the tree's kLevels (GCC's link-time inlining of a runtime level reported fids[5]).
+template <u32 L, typename T>
+void mttkrp_oracle(const CsfTree& t, u32 rank, const T* const* fac, const T* val, u64 r, u64 z, T* dst)
 {
-    const T* row = fac[l] + static_cast<u64>(t.fids[l][z]) * r;
-    if (l + 1U == rank)
+    const T* row = fac[L] + static_cast<u64>(t.fids[L][z]) * r;
+    if (L + 1U == rank)
     {
         for (u64 q = 0; q < r; ++q)
         {
@@ -2326,18 +2328,21 @@ void mttkrp_oracle(const CsfTree& t, u32 rank, const T* const* fac, const T* val
         }
         return;
     }
-    T acc[16U * 8U + 1U];
-    for (u64 q = 0; q < r; ++q)
+    if constexpr (L + 1U < CsfTree::kLevels)
     {
-        acc[q] = T(0);
-    }
-    for (u64 ch = t.fptr[l][z]; ch < t.fptr[l][z + 1U]; ++ch)
-    {
-        mttkrp_oracle(t, rank, fac, val, r, l + 1U, ch, acc);
-    }
-    for (u64 q = 0; q < r; ++q)
-    {
-        dst[q] = crd::math::fma(acc[q], row[q], dst[q]);
+        T acc[16U * 8U + 1U];
+        for (u64 q = 0; q < r; ++q)
+        {
+            acc[q] = T(0);
+        }
+        for (u64 ch = t.fptr[L][z]; ch < t.fptr[L][z + 1U]; ++ch)
+        {
+            mttkrp_oracle<L + 1U>(t, rank, fac, val, r, ch, acc);
+        }
+        for (u64 q = 0; q < r; ++q)
+        {
+            dst[q] = crd::math::fma(acc[q], row[q], dst[q]);
+        }
     }
 }
 
@@ -2407,7 +2412,7 @@ template <typename T> u64 check_sparse_mttkrp(const tn::SparseTensorKernels<T>& 
                     T* dst = want + static_cast<u64>(tree.fids[0][z0]) * r;
                     for (u64 ch = tree.fptr[0][z0]; ch < tree.fptr[0][z0 + 1U]; ++ch)
                     {
-                        mttkrp_oracle(tree, rank, facp, val, r, 1U, ch, dst);
+                        mttkrp_oracle<1U>(tree, rank, facp, val, r, ch, dst);
                     }
                 }
                 ks.mttkrp_csf(w, range[0], range[1], tmp);
@@ -2436,7 +2441,7 @@ template <typename T> u64 check_sparse_mttkrp(const tn::SparseTensorKernels<T>& 
                 T* dst = want + static_cast<u64>(tree.fids[0][z0]) * r;
                 for (u64 ch = tree.fptr[0][z0]; ch < tree.fptr[0][z0 + 1U]; ++ch)
                 {
-                    mttkrp_oracle(tree, rank, facp, val, r, 1U, ch, dst);
+                    mttkrp_oracle<1U>(tree, rank, facp, val, r, ch, dst);
                 }
             }
             ks.mttkrp_coo(cw, tmp);

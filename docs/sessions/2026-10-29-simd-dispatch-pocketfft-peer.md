@@ -15,6 +15,14 @@ fixed by dd3d54c4; the job was cancelled at GitHub's 6-hour cap with 7,707 of 8,
 Every other job was traced in earlier batches. Push run 40826432863 (dd860168) is running. DIAG.11c and DIAG.12 stay
 Needs CI: no completed run carries their hosted evidence yet.
 
+Run 40826432863 (dd860168) failed three jobs before it finished.
+
+- linux-gcc-release failed at the link of crd-hesap-tensor-tests. GCC's link-time inlining of the recursive MTTKRP
+  oracle reported `fids[5]` past the CSF tree's five levels (-Warray-bounds). The oracle now takes its level as a
+  template argument, so no instantiation goes past `CsfTree::kLevels`.
+- Both ARM64 debug lanes now build. Each fails four tests: the ISA guard, the ELF build-id record, and the
+  `__builtin_trap` SIGILL and FP-division SIGFPE crash captures. These are the next batch's first job.
+
 ## What landed
 
 - **ARM64 level checks** (d75538c5). The CRD_CPU_LEVEL child case returned at once on ARM64. It now starts a child at
