@@ -368,10 +368,11 @@ public:
 private:
     // One factorization attempt with a fixed pivoting choice (use_mc64). Writes L/U/scale into the members
     // and RETURNS the element-growth ratio max|stored L,U| / ‖B‖ — the caller (factorize) re-runs with MC64
-    // if the natural-diagonal attempt's growth exceeds the stability threshold. Assumes m_n > 0.
+    // if the natural-diagonal attempt's growth exceeds the stability threshold. Assumes m_n > 0. `may_abort`
+    // (a re-run follows an unstable result) lets it stop early, returning +inf with the members unfinished.
     [[nodiscard]] double factor_attempt(const detail::MultifrontalLuPick& pick,
                                         const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a,
-                                        crd::u32 num_workers, bool use_mc64);
+                                        crd::u32 num_workers, bool use_mc64, bool may_abort);
 
     crd::memory::IAllocator* m_alloc = nullptr;
     crd::u32 m_n = 0;

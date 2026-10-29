@@ -24,6 +24,13 @@ namespace
 // legitimate growth (≫ the 1/√ε ≈ 6.7e7 half-precision-loss line) and far below the blow-ups.
 constexpr double kMfGrowthThreshold = 1e12;
 
+// The growth's running max with a NaN absorbing: a plain `>` max skips a NaN entry, so a natural-diagonal factor
+// that made one (inf - inf after an overflow) read as stable. Still commutative and associative (the moat).
+template <typename R> [[nodiscard]] R growth_max(R acc, R v) noexcept
+{
+    return !std::isnan(acc) && (std::isnan(v) || v > acc) ? v : acc;
+}
+
 // Is every element of the ascending `sub` array present in the ascending `sup` array?
 // O(sub + sup) two-pointer (the extend_add subset contract — child ids subset parent ids).
 [[nodiscard]] bool ascending_subset(const crd::u32* sub, crd::u32 sn, const crd::u32* sup, crd::u32 supn) noexcept
@@ -270,7 +277,7 @@ MultifrontalLU<T>::MultifrontalLU(crd::memory::IAllocator* alloc) noexcept
 template <typename T>
 double MultifrontalLU<T>::factor_attempt(const detail::MultifrontalLuPick& pick,
                                          const sparse::SparseMatrix<T, sparse::SparseFormat::Csr>& a,
-                                         crd::u32 num_workers, bool use_mc64)
+                                         crd::u32 num_workers, bool use_mc64, bool may_abort)
 {
     m_n = a.pattern().rows;
     m_info = 0;
@@ -376,8 +383,8 @@ double MultifrontalLU<T>::factor_attempt(const detail::MultifrontalLuPick& pick,
     // gemat11, whose natural ordering explodes the chol(B+Bᵀ) fill), skip the expensive structure build +
     // numeric and let factorize() fall back to MC64 immediately. Fraction-of-dense is SCALE-SAFE — large sparse
     // 3D sim targets get sparser by this measure as n grows (fill ~n^4/3 ≪ n²/2), so they never false-trigger.
-    // Only on the optimistic natural attempt; the MC64 fallback always runs.
-    if (!use_mc64)
+    // Only when the MC64 fallback follows (may_abort); otherwise the attempt runs to completion.
+    if (may_abort)
     {
         const double dense_l = 0.5 * static_cast<double>(n) * static_cast<double>(n);
         if (static_cast<double>(m_lnz) > 0.20 * dense_l)
@@ -691,10 +698,7 @@ double MultifrontalLU<T>::factor_attempt(const detail::MultifrontalLuPick& pick,
                 const T lv = front.at(t, jj);
                 m_lx[w++] = lv;
                 const dense::RealType<T> am = lu2_mag<T>(lv);
-                if (am > fmax)
-                {
-                    fmax = am;
-                }
+                fmax = growth_max(fmax, am);
             }
         }
         const crd::u32 ubase = mf.col_ptr[f];
@@ -707,10 +711,7 @@ double MultifrontalLU<T>::factor_attempt(const detail::MultifrontalLuPick& pick,
                 const T uv = front.at(ii, jc);
                 m_ux[w++] = uv;
                 const dense::RealType<T> am = lu2_mag<T>(uv);
-                if (am > fmax)
-                {
-                    fmax = am;
-                }
+                fmax = growth_max(fmax, am);
             }
         }
         wgrowth[wk] = fmax;
@@ -809,21 +810,20 @@ double MultifrontalLU<T>::factor_attempt(const detail::MultifrontalLuPick& pick,
             }
             // Early-abort the optimistic natural-diagonal attempt the instant element growth blows past the
             // stability bound, so a pathological matrix (e.g. gemat11, whose natural fill explodes) doesn't pay
-            // a full doomed factorization before falling back to MC64. Only on the natural attempt (use_mc64
-            // false); the MC64 fallback is the last resort and always runs to completion.
-            if (!use_mc64)
+            // a full doomed factorization before falling back to MC64. Only when that fallback follows
+            // (may_abort); the MC64 attempt is the last resort and always runs to completion.
+            if (may_abort)
             {
                 dense::RealType<T> g = dense::RealType<T>(0);
                 for (crd::u32 w = 0; w < sw; ++w)
                 {
-                    if (wgrowth[w] > g)
-                    {
-                        g = wgrowth[w];
-                    }
+                    g = growth_max(g, wgrowth[w]);
                 }
-                if (g > static_cast<dense::RealType<T>>(kMfGrowthThreshold) * bnorm)
+                if (!(g <= static_cast<dense::RealType<T>>(kMfGrowthThreshold) * bnorm)) // NaN aborts too
                 {
-                    break; // natural growth exceeded the bound → factorize() re-runs with MC64
+                    // Natural growth exceeded the bound → factorize() re-runs with MC64. Return before the
+                    // pivoting finalize: the fronts after this level never wrote their m_rowperm entries.
+                    return std::numeric_limits<double>::infinity();
                 }
             }
         }
@@ -900,10 +900,7 @@ double MultifrontalLU<T>::factor_attempt(const detail::MultifrontalLuPick& pick,
     dense::RealType<T> mg = dense::RealType<T>(0);
     for (crd::u32 w = 0; w < sw; ++w)
     {
-        if (wgrowth[w] > mg)
-        {
-            mg = wgrowth[w];
-        }
+        mg = growth_max(mg, wgrowth[w]);
     }
     return (bnorm > dense::RealType<T>(0)) ? static_cast<double>(mg) / static_cast<double>(bnorm) : 0.0;
 }
@@ -938,7 +935,7 @@ void MultifrontalLU<T>::factorize_arm(const detail::MultifrontalLuPick& pick,
     bool use_mc64 = force_mc64;
     for (int attempt = 0; attempt < 2; ++attempt)
     {
-        const double growth = factor_attempt(pick, a, num_workers, use_mc64);
+        const double growth = factor_attempt(pick, a, num_workers, use_mc64, !use_mc64 && !no_fallback);
         const bool unstable = !(growth <= kMfGrowthThreshold); // NaN / Inf / over-threshold ⇒ unstable
         if (!unstable || use_mc64 || no_fallback)
         {

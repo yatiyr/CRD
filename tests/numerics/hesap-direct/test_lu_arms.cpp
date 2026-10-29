@@ -42,7 +42,14 @@ enum class Special : crd::u8
     None,
     SignedZeroSubnormal, // -0 and the type's smallest subnormal in place of some off-diagonals
     NaN,                 // one off-diagonal NaN: every arm propagates it to the same entries
-    WeakDiagonal,        // the diagonal scaled by 1e-6: the natural-diagonal attempt's growth falls back to MC64
+    TinyPivot,           // the diagonal scaled by 1e-12: the natural-diagonal attempt perturbs its pivots
+};
+
+enum class Shape : crd::u8
+{
+    Bordered,
+    Grid,
+    Cyclic,
 };
 
 template <typename T> T scalar(crd::f64 re, crd::f64 im)
@@ -79,13 +86,24 @@ crd::f64 hashed(crd::u32 i, crd::u32 j) // a deterministic value in [-1, 1)
     return static_cast<crd::f64>(h % 2000U) / 1000.0 - 1.0;
 }
 
-// The unsymmetric pattern's off-diagonals of either fixture, (i, j, v) through add.
-//   bordered: `blocks` dense blocks of `width` coupled to a dense border of `border` rows and columns, so the blocks
+// The unsymmetric pattern's off-diagonals of each fixture, (i, j, v) through add.
+//   Bordered: `blocks` dense blocks of `width` coupled to a dense border of `border` rows and columns, so the blocks
 //   are leaf fronts and the border is one wide root front that every block extend-adds into;
-//   grid: a g x g convection-diffusion stencil, a deep tree of narrow fronts.
-template <typename Add> void off_diagonals(bool bordered, crd::u32 a, crd::u32 b, crd::u32 c, Add add)
+//   Grid: an a x a convection-diffusion stencil, a deep tree of narrow fronts;
+//   Cyclic: a large cyclic off-diagonal and a band of a rows over a near-zero diagonal, whose natural-diagonal
+//   factor's growth passes MultifrontalLU's bound, so its walk aborts early and the factor falls back to MC64.
+template <typename Add> void off_diagonals(Shape shape, crd::u32 a, crd::u32 b, crd::u32 c, Add add)
 {
-    if (bordered)
+    if (shape == Shape::Cyclic)
+    {
+        for (crd::u32 i = 0; i < a; ++i)
+        {
+            add(i, (i + 1) % a, 2.0 + 0.01 * static_cast<crd::f64>(i));
+            add(i, (i + 7) % a, 0.5);
+        }
+        return;
+    }
+    if (shape == Shape::Bordered)
     {
         const crd::u32 blocks = a;
         const crd::u32 width = b;
@@ -150,20 +168,29 @@ template <typename Add> void off_diagonals(bool bordered, crd::u32 a, crd::u32 b
     }
 }
 
-// The fixture in T, diagonally dominant (each diagonal 1.5 times its row's off-diagonal sum plus 1); a complex
-// off-diagonal v is v (1 + i/2) above the diagonal and v (1 - i/3) below, so the matrix is not Hermitian.
+// The fixture in T, diagonally dominant but for Cyclic (each diagonal 1.5 times its row's off-diagonal sum plus 1,
+// Cyclic's 1e-12); a complex off-diagonal v is v (1 + i/2) above the diagonal and v (1 - i/3) below, so the matrix
+// is not Hermitian.
 template <typename T>
-Mat<T> fixture(crd::memory::IAllocator* alloc, bool bordered, crd::u32 a, crd::u32 b, crd::u32 c, Special special)
+Mat<T> fixture(crd::memory::IAllocator* alloc, Shape shape, crd::u32 a, crd::u32 b, crd::u32 c, Special special)
 {
-    const crd::u32 n = bordered ? a * b + c : a * a;
+    crd::u32 n = a;
+    if (shape == Shape::Bordered)
+    {
+        n = a * b + c;
+    }
+    else if (shape == Shape::Grid)
+    {
+        n = a * a;
+    }
     crd::containers::Array<crd::f64> row_sum(alloc);
     row_sum.resize(n);
-    off_diagonals(bordered, a, b, c, [&](crd::u32 i, crd::u32, crd::f64 v) { row_sum[i] += std::abs(v); });
+    off_diagonals(shape, a, b, c, [&](crd::u32 i, crd::u32, crd::f64 v) { row_sum[i] += std::abs(v); });
     const crd::f64 tiny = static_cast<crd::f64>(std::numeric_limits<Real<T>>::denorm_min());
     const crd::u32 nan_row = n / 2;
     bool nan_placed = false;
     sp::TripletBuilder<T> tb(alloc, n, n);
-    off_diagonals(bordered, a, b, c,
+    off_diagonals(shape, a, b, c,
                   [&](crd::u32 i, crd::u32 j, crd::f64 v)
                   {
                       T x = scalar<T>(v, i < j ? 0.5 * v : -v / 3.0);
@@ -180,8 +207,8 @@ Mat<T> fixture(crd::memory::IAllocator* alloc, bool bordered, crd::u32 a, crd::u
                   });
     for (crd::u32 i = 0; i < n; ++i)
     {
-        const crd::f64 d = 1.5 * row_sum[i] + 1.0;
-        tb.add(i, i, scalar<T>(special == Special::WeakDiagonal ? 1e-6 * d : d, 0.0));
+        const crd::f64 d = shape == Shape::Cyclic ? 1e-12 : 1.5 * row_sum[i] + 1.0;
+        tb.add(i, i, scalar<T>(special == Special::TinyPivot ? 1e-12 * d : d, 0.0));
     }
     if (special == Special::NaN)
     {
@@ -384,24 +411,35 @@ template <typename T> void check_multifrontal(const Mat<T>& a, bool pivot, bool 
     }
 }
 
+// MultifrontalLU's natural-diagonal attempt on the bordered fixture stops before its numeric (its fill passes a fifth
+// of dense) and the MC64 attempt factors it; the grid's natural attempt is accepted, but with a NaN, whose growth
+// reads as unstable, or perturbed pivots; the cyclic one's growth passes the bound mid-walk.
 template <typename T> void check_type(crd::memory::IAllocator* alloc)
 {
-    for (const Special special : {Special::None, Special::SignedZeroSubnormal, Special::NaN, Special::WeakDiagonal})
+    for (const Special special : {Special::None, Special::SignedZeroSubnormal, Special::NaN, Special::TinyPivot})
     {
         INFO("special " << static_cast<int>(special));
         const bool bounded = special == Special::None || special == Special::SignedZeroSubnormal;
-        const Mat<T> bordered = fixture<T>(alloc, true, 4, 32, 48, special);
-        check_supernodal<T>(bordered, bounded, alloc);
-        for (const bool pivot : {false, true})
+        for (const Shape shape : {Shape::Bordered, Shape::Grid})
         {
-            INFO("partial pivoting " << pivot);
-            check_multifrontal<T>(bordered, pivot, bounded, alloc);
+            INFO("shape " << static_cast<int>(shape));
+            const Mat<T> m = shape == Shape::Bordered ? fixture<T>(alloc, shape, 4, 32, 48, special)
+                                                      : fixture<T>(alloc, shape, 16, 0, 0, special);
+            check_supernodal<T>(m, bounded, alloc);
+            for (const bool pivot : {false, true})
+            {
+                INFO("partial pivoting " << pivot);
+                check_multifrontal<T>(m, pivot, bounded, alloc);
+            }
         }
     }
-    INFO("grid");
-    const Mat<T> grid = fixture<T>(alloc, false, 16, 0, 0, Special::None);
-    check_supernodal<T>(grid, true, alloc);
-    check_multifrontal<T>(grid, false, true, alloc);
+    INFO("cyclic: the growth abort and the MC64 attempt on every arm");
+    const Mat<T> cyclic = fixture<T>(alloc, Shape::Cyclic, 96, 0, 0, Special::None);
+    for (const bool pivot : {false, true})
+    {
+        INFO("partial pivoting " << pivot);
+        check_multifrontal<T>(cyclic, pivot, false, alloc);
+    }
 }
 
 template <typename F> void on_four_workers(F run)
