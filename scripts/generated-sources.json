@@ -1514,7 +1514,7 @@
         "numpy",
         "mpmath"
       ],
-      "sha256": "05bfc6d70c32267956eb4758753c4cced0c7b4120b310cf9fed6dce300238b5b"
+      "sha256": "ec94a2d6d881a9af7bf7c56e55ecb483b24b0542e24488940595a8f459d613f0"
     },
     {
       "path": "tests/numerics/hesap-dsp/conv_refs.inc",

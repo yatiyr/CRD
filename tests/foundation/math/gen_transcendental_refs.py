@@ -4,11 +4,21 @@ THE family pattern: add a function = add one entry to FUNCS (name, cerid-call, m
 (test_transcendental.cpp) reads these and asserts <=1 ulp. mpmath = arbitrary precision = the gold gate.
 NO std containers in the emitted file (plain `inline const double[]`)."""
 import sys
+from fractions import Fraction
 import numpy as np
 import mpmath as mp
 
 mp.mp.dps = 50  # 50 decimal digits ground truth
 sys.stdout.reconfigure(encoding='utf-8', newline='\n')  # the same bytes through a Windows pipe
+
+
+def f64(v):
+    """The correctly rounded double of an mpf. float() rounds a subnormal twice (to 53 bits, then to the subnormal
+    grid); an exact rational converts once."""
+    if mp.isfinite(v) and v != 0 and abs(v) < mp.mpf(2) ** -1022:
+        sign, man, exp, _ = v._mpf_
+        return float(Fraction(-man if sign else man) * Fraction(2) ** exp)
+    return float(v)
 
 
 def grid(lo, hi, n, *, log=False, extra=None):
@@ -138,7 +148,7 @@ def emit(name, fn, xs):
         if not np.isfinite(x):
             continue
         try:
-            y = float(fn(mp.mpf(float(x))))  # float(x): numpy 2.0 repr() is "np.float64(..)" — breaks mp.mpf
+            y = f64(fn(mp.mpf(float(x))))  # float(x): numpy 2.0 repr() is "np.float64(..)" — breaks mp.mpf
         except (ValueError, ZeroDivisionError, OverflowError):
             continue
         if not np.isfinite(y):  # skip overflow/underflow-to-edge — ulp gate is for the finite range
@@ -174,7 +184,7 @@ print(f"inline const unsigned ref_two_over_pi_bits[] = {{{', '.join(f'0x{w:08X}U
 with mp.workdps(80):
     gx, gp, gy = [], [], []
     for x, y in _pow_pairs:
-        v = float(pow_ref(x, y))
+        v = f64(pow_ref(x, y))
         if not np.isfinite(v):  # overflow: the gate is for the finite range, the cases check +-inf
             continue
         gx.append(x)
