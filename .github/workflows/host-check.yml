@@ -270,7 +270,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        preset: [linux-gcc-arm64-asan, linux-clang-arm64-asan]
+        include:
+          - {preset: linux-gcc-arm64-asan, cxx: g++}
+          - {preset: linux-clang-arm64-asan, cxx: clang++}
 
     steps:
       - name: Checkout
@@ -296,6 +298,28 @@ jobs:
           restore-keys: |
             cpm-${{ runner.os }}-${{ runner.arch }}-${{ matrix.preset }}-
             cpm-${{ runner.os }}-${{ runner.arch }}-
+
+      # No Cerid code: the use-after-return control, timed with the fake stack on and off.
+      - name: Use-after-return control
+        env:
+          CXX_COMPILER: ${{ matrix.cxx }}
+        run: |
+          evidence="$RUNNER_TEMP/host-check/evidence"
+          mkdir -p "$evidence"
+          "$CXX_COMPILER" --version | head -n 1 | tee "$evidence/control.txt"
+          "$CXX_COMPILER" -std=c++20 -O0 -fsanitize=address -fno-omit-frame-pointer scripts/asan_uar_control.cpp \
+            -o "$RUNNER_TEMP/asan_uar_control"
+          for round in 1 2; do
+            for options in detect_stack_use_after_return=1 detect_stack_use_after_return=0; do
+              echo "round $round, $options: $(ASAN_OPTIONS=$options "$RUNNER_TEMP/asan_uar_control" 100000 16)" \
+                | tee -a "$evidence/control.txt"
+            done
+          done
+          {
+            echo "### Use-after-return control ($CXX_COMPILER)"
+            echo
+            sed 's/^/    /' "$evidence/control.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Configure and build both trees
         env:

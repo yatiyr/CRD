@@ -188,6 +188,11 @@
       "why": "The Cerid-free ThreadSanitizer control of the host check is compiled by its driver with clang++, with and without -fsanitize=thread, on the dispatched host-check workflow (JOBS-HARD.3)."
     },
     {
+      "paths": ["scripts/asan_uar_control.cpp"],
+      "built_by": ".github/workflows/host-check.yml",
+      "why": "The Cerid-free AddressSanitizer use-after-return control is compiled by the dispatched host check's ARM64 sanitizer-cost legs with g++ and clang++ and timed with the fake stack on and off (SIMD-DISPATCH)."
+    },
+    {
       "paths": ["tests/support/diag/models/counter_publish_reclaim.c"],
       "built_by": "scripts/check-genmc-models.py",
       "why": "The GenMC model of the jobs counter protocol is compiled by GenMC itself on the DIAG.4b model-checking lane."
