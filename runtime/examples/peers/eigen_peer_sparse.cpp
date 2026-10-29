@@ -1,4 +1,4 @@
-// The Eigen peer's sparse objects and operations (eigen_peer.hpp).
+// The Eigen peer's sparse operations (eigen_peer.hpp).
 
 #include "eigen_peer_objects.hpp"
 
@@ -7,23 +7,6 @@
 
 namespace crd_peer::eigen
 {
-struct SpF32
-{
-    Eigen::SparseMatrix<float, Eigen::RowMajor> a;
-};
-struct SpF64
-{
-    Eigen::SparseMatrix<double, Eigen::RowMajor> a;
-};
-struct SpColF64
-{
-    Eigen::SparseMatrix<double> a;
-};
-struct RowMatF64
-{
-    Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> m;
-};
-
 namespace
 {
 template <typename Sparse> void assemble(Sparse& a, Index rows, Index cols, const Entry* entries, Index count)
@@ -59,6 +42,24 @@ SpColF64* csc_f64(Index rows, Index cols, const Entry* entries, Index count)
 {
     auto* object = new SpColF64;
     assemble(object->a, rows, cols, entries, count);
+    return object;
+}
+
+SpColF64* csc_f64(Index rows, Index cols, const std::uint32_t* outer, const std::uint32_t* inner, const double* values)
+{
+    std::vector<Eigen::Triplet<double>> triplets;
+    triplets.reserve(outer[rows]);
+    for (Index r = 0; r < rows; ++r)
+    {
+        for (std::uint32_t k = outer[r]; k < outer[r + 1]; ++k)
+        {
+            triplets.emplace_back(static_cast<int>(r), static_cast<int>(inner[k]), values[k]);
+        }
+    }
+    auto* object = new SpColF64;
+    object->a.resize(static_cast<Eigen::Index>(rows), static_cast<Eigen::Index>(cols));
+    object->a.setFromTriplets(triplets.begin(), triplets.end());
+    object->a.makeCompressed();
     return object;
 }
 

@@ -14,10 +14,13 @@
 // supernodal + MC64 + threshold LU (parallel, deterministic) is measured against.
 //
 // Built only when CRD_BUILD_HESAP_VS_REFERENCE=ON. crd conventions throughout;
-// raw double only at the Eigen API boundary.
+// Eigen runs in its peer library (eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/direct/sparse_lu.hpp>
 #include <crd/hesap/ordering/ordering.hpp>
@@ -26,8 +29,6 @@
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
-#include <Eigen/SparseCore>
-#include <Eigen/SparseLU>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -45,6 +46,7 @@ namespace sp = crd::hesap::sparse;
 namespace ord = crd::hesap::ordering;
 namespace dir = crd::hesap::direct;
 namespace fs = crd::platform::fs;
+namespace peer = crd_peer::eigen;
 
 crd::memory::GrowableTlsfAllocator g_alloc;
 
@@ -139,7 +141,7 @@ bool read_mtx(const char* path, crd::i32& n, crd::containers::Array<Trip>& trips
     return dims_read;
 }
 
-template <typename Fn> crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
+template <typename Fn> crd::f64 best_ms(const Fn& fn, crd::i32 reps = 3)
 {
     fn();
     crd::f64 best = 1e30;
@@ -155,7 +157,7 @@ template <typename Fn> crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
 
 void run(const char* name)
 {
-    if (const char* only = std::getenv("CRD_BENCH_ONLY"))
+    if (const crd::EnvironmentValue<256> only_env{"CRD_BENCH_ONLY"}; const char* only = only_env.c_str())
     {
         if (std::strstr(only, name) == nullptr)
         {
@@ -238,41 +240,26 @@ void run(const char* name)
     }
 
     // ---- Eigen SparseLU on the SAME permuted matrix, NaturalOrdering (column perm already applied) ----
-    crd::containers::Array<Eigen::Triplet<double>> et(&g_alloc);
-    et.reserve(static_cast<crd::usize>(ap.values().values.size()));
-    for (crd::u32 r = 0; r < un; ++r)
-    {
-        const crd::u32 st = ap.pattern().outer_ptr[r];
-        const crd::u32 cnt = ap.pattern().inner_count(r);
-        for (crd::u32 k = 0; k < cnt; ++k)
-        {
-            et.push_back(Eigen::Triplet<double>(static_cast<int>(r), static_cast<int>(ap.pattern().inner_idx[st + k]),
-                                                ap.values().values[st + k]));
-        }
-    }
-    Eigen::SparseMatrix<double> ea(n, n);
-    ea.setFromTriplets(et.data(), et.data() + et.size());
-    ea.makeCompressed();
-    Eigen::SparseLU<Eigen::SparseMatrix<double>, Eigen::NaturalOrdering<int>> elu;
-    const crd::f64 t_eig_fac = best_ms([&]() { elu.analyzePattern(ea); elu.factorize(ea); });
-    Eigen::VectorXd eb(n);
-    for (crd::u32 i = 0; i < un; ++i)
-    {
-        eb[static_cast<int>(i)] = b[i];
-    }
-    Eigen::VectorXd ex;
-    const crd::f64 t_eig_slv = best_ms([&]() { ex = elu.solve(eb); });
+    const peer::Owned ea{
+        peer::csc_f64(n, n, ap.pattern().outer_ptr.data(), ap.pattern().inner_idx.data(), ap.values().values.data())};
+    const peer::Owned elu{peer::sparse_solver(peer::SparseSolve::LuNatural)};
+    bool eig_ok = false;
+    const crd::f64 t_eig_fac = best_ms([&]() { eig_ok = peer::factorize(elu.get(), ea.get()); });
+    crd::f64 t_eig_slv = 0.0;
     double eig_res = 0.0;
-    if (elu.info() == Eigen::Success)
+    if (eig_ok) // Eigen asserts on a solve after a failed factorization
     {
+        const peer::Owned eb{peer::vec(n, b.data())};
+        const peer::Owned ex{peer::vec(n, static_cast<const crd::f64*>(nullptr))};
+        t_eig_slv = best_ms([&]() { peer::solve(elu.get(), eb.get(), ex.get()); });
+        const crd::f64* exv = peer::data(ex.get());
         for (crd::u32 i = 0; i < un; ++i)
         {
-            eig_res += (ex[static_cast<int>(i)] - 1.0) * (ex[static_cast<int>(i)] - 1.0);
+            eig_res += (exv[i] - 1.0) * (exv[i] - 1.0);
         }
         eig_res = std::sqrt(eig_res / static_cast<double>(un));
     }
-    const crd::u64 eig_fill =
-        elu.info() == Eigen::Success ? static_cast<crd::u64>(elu.nnzL()) + static_cast<crd::u64>(elu.nnzU()) : 0;
+    const crd::u64 eig_fill = eig_ok ? static_cast<crd::u64>(peer::factor_nnz(elu.get())) : 0;
 
     const char* cerid_ok = cf.info() == 0 ? "ok" : "SINGULAR";
     const double fac_ratio = (t_cerid_fac > 0.0) ? t_eig_fac / t_cerid_fac : 0.0; // >1 ⇒ Cerid faster
@@ -289,7 +276,9 @@ void run(const char* name)
 int main()
 {
     std::printf("[bench_hesap_lu_vs_reference] Cerid Gilbert-Peierls LU (SERIAL oracle) vs Eigen SparseLU "
-                "(NaturalOrdering on the same AMD-permuted matrix). Oracle: expect to LOSE on time; gate = residual.\n");
+                "(NaturalOrdering on the same AMD-permuted matrix; %s). Oracle: expect to LOSE on time; "
+                "gate = residual.\n",
+                peer::isa());
     // SMALL corpus ONLY. v5b-1 has NO column reorder (deferred to v5b-2) and is a serial left-looking oracle;
     // an AMD-SYMMETRIC ordering does not bound LU fill the way COLAMD would, so 3D-FEM fill blows up fast —
     // even bcsstk25 (15k) balloons to multi-GB (measured). bcsstk13 (2k) / bcsstk24 (3.5k) stay manageable.

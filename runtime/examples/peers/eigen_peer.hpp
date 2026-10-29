@@ -117,6 +117,15 @@ CRD_BENCH_PEER_API void eig_sym(const MatF64* a, bool vectors, VecF64* values);
 CRD_BENCH_PEER_API void eig_tridiagonal(SymEig* solver, Index n, const double* diag, const double* sub);
 // SelfAdjointEigenSolver<MatrixXcd>(a).eigenvalues()
 CRD_BENCH_PEER_API void eig_herm(const MatC64* a, VecF64* values);
+// HessenbergDecomposition(a), returning the real part of matrixH()(0, 0)
+CRD_BENCH_PEER_API double hessenberg(const MatF64* a);
+CRD_BENCH_PEER_API double hessenberg(const MatC64* a);
+// RealSchur / ComplexSchur computeFromHessenberg(h, Identity, true), returning the real part of matrixT()(0, 0)
+CRD_BENCH_PEER_API double schur_from_hessenberg(const MatF64* h);
+CRD_BENCH_PEER_API double schur_from_hessenberg(const MatC64* h);
+// EigenSolver / ComplexEigenSolver(a, true), returning the real part of eigenvalues()(0)
+CRD_BENCH_PEER_API double eig_general(const MatF64* a);
+CRD_BENCH_PEER_API double eig_general(const MatC64* a);
 
 // ---- Sparse -------------------------------------------------------------------------------------------------------
 // One coordinate of a matrix; repeated coordinates are summed (setFromTriplets).
@@ -136,6 +145,9 @@ struct RowMatF64; // Eigen::Matrix<double, Dynamic, Dynamic, RowMajor>
 CRD_BENCH_PEER_API SpF32* csr_f32(Index rows, Index cols, const Entry* entries, Index count);
 CRD_BENCH_PEER_API SpF64* csr_f64(Index rows, Index cols, const Entry* entries, Index count);
 CRD_BENCH_PEER_API SpColF64* csc_f64(Index rows, Index cols, const Entry* entries, Index count);
+// The same from a compressed row-major matrix: outer holds rows + 1 offsets into inner (columns) and values.
+CRD_BENCH_PEER_API SpColF64* csc_f64(Index rows, Index cols, const std::uint32_t* outer, const std::uint32_t* inner,
+                                     const double* values);
 // rows x cols row-major values; nullptr zero-fills
 CRD_BENCH_PEER_API RowMatF64* row_mat(Index rows, Index cols, const double* data);
 CRD_BENCH_PEER_API void destroy(SpF32* object) noexcept;
@@ -159,13 +171,30 @@ CRD_BENCH_PEER_API void sampled_dots(const RowMatF64* x, const RowMatF64* y, Ind
 // The dense way: d = x * y^T, then the sum of d over the same pattern.
 CRD_BENCH_PEER_API double masked_dense_sum(const RowMatF64* x, const RowMatF64* y, Index rows,
                                            const std::uint32_t* outer, const std::uint32_t* inner);
-// HessenbergDecomposition(a), returning the real part of matrixH()(0, 0)
-CRD_BENCH_PEER_API double hessenberg(const MatF64* a);
-CRD_BENCH_PEER_API double hessenberg(const MatC64* a);
-// RealSchur / ComplexSchur computeFromHessenberg(h, Identity, true), returning the real part of matrixT()(0, 0)
-CRD_BENCH_PEER_API double schur_from_hessenberg(const MatF64* h);
-CRD_BENCH_PEER_API double schur_from_hessenberg(const MatC64* h);
-// EigenSolver / ComplexEigenSolver(a, true), returning the real part of eigenvalues()(0)
-CRD_BENCH_PEER_API double eig_general(const MatF64* a);
-CRD_BENCH_PEER_API double eig_general(const MatC64* a);
+
+// ---- Sparse direct solvers ---------------------------------------------------------------------------------------
+enum class SparseSolve : std::uint8_t
+{
+    LltNatural,  // SimplicialLLT<SparseMatrix<double>, Lower, NaturalOrdering<int>>
+    LltAmd,      // SimplicialLLT<SparseMatrix<double>, Lower, AMDOrdering<int>>
+    LdltNatural, // SimplicialLDLT<SparseMatrix<double>, Lower, NaturalOrdering<int>>
+    LuNatural,   // SparseLU<SparseMatrix<double>, NaturalOrdering<int>>
+    LuColamd,    // SparseLU<SparseMatrix<double>, COLAMDOrdering<int>>, Eigen's default
+    QrNatural,   // SparseQR<SparseMatrix<double>, NaturalOrdering<int>>
+};
+struct SpSolver; // one of SparseSolve's decompositions, kept across calls
+
+CRD_BENCH_PEER_API SpSolver* sparse_solver(SparseSolve method);
+CRD_BENCH_PEER_API void destroy(SpSolver* object) noexcept;
+// solver.analyzePattern(a)
+CRD_BENCH_PEER_API void analyze(SpSolver* solver, const SpColF64* a);
+// solver.analyzePattern(a), then solver.factorize(a); true when info() is Success
+CRD_BENCH_PEER_API bool factorize(SpSolver* solver, const SpColF64* a);
+// x = solver.solve(b)
+CRD_BENCH_PEER_API void solve(const SpSolver* solver, const VecF64* b, VecF64* x);
+CRD_BENCH_PEER_API void solve(const SpSolver* solver, const MatF64* b, MatF64* x);
+// The factor's nonzeros: matrixL() materialised (LLT, LDLT), nnzL() + nnzU() (LU), matrixR().nonZeros() (QR)
+CRD_BENCH_PEER_API Index factor_nnz(const SpSolver* solver);
+// matrixL() materialised in the solver, column-major (cols + 1 outer offsets); false for LU and QR
+CRD_BENCH_PEER_API bool factor_pattern(SpSolver* solver, const std::int32_t** outer, const std::int32_t** inner);
 } // namespace crd_peer::eigen

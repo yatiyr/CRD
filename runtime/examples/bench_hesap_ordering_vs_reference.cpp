@@ -12,7 +12,9 @@
 // crd conventions throughout: crd::containers::Array (never std::vector),
 // crd::platform::fs::read_file_text + manual parse (never std::ifstream/string),
 // a named GrowableTlsfAllocator (never malloc / default_allocator); crd::f64/usize/
-// i32/i64 (never raw). Raw double only at the Eigen C++ API boundary.
+// i32/i64 (never raw). Eigen runs in its peer library (eigen_peer.hpp), at the host's best ISA.
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
@@ -22,9 +24,6 @@
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
-#include <Eigen/OrderingMethods>
-#include <Eigen/SparseCholesky>
-#include <Eigen/SparseCore>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib> // strtol / strtod
@@ -40,15 +39,13 @@ using Clock = std::chrono::high_resolution_clock;
 namespace sp = crd::hesap::sparse;
 namespace ord = crd::hesap::ordering;
 namespace fs = crd::platform::fs;
+namespace peer = crd_peer::eigen;
 
 // Unbounded pooled arena (handles any matrix without a per-size pool guess).
 crd::memory::GrowableTlsfAllocator g_alloc;
 
-struct Trip
-{
-    crd::i32 r, c;
-    crd::f64 v;
-};
+// The peer's coordinate, so the Eigen side reuses the parsed list.
+using Trip = peer::Entry;
 
 // Matrix-Market reader, crd-native: read the file into a crd::String via the platform
 // filesystem, hand-parse with strtol/strtod (no std::ifstream/string/sstream). Handles
@@ -139,7 +136,7 @@ bool read_mtx(const char* path, crd::i32& n, crd::containers::Array<Trip>& trips
     return dims_read;
 }
 
-template <typename Fn> crd::f64 best_ms(Fn&& fn, crd::i32 reps = 5)
+template <typename Fn> crd::f64 best_ms(const Fn& fn, crd::i32 reps = 5)
 {
     fn();
     crd::f64 best = 1e30;
@@ -175,7 +172,7 @@ void run(const char* name)
     tb.reserve(trips.size());
     for (const Trip& t : trips)
     {
-        tb.add(static_cast<crd::u32>(t.r), static_cast<crd::u32>(t.c), t.v);
+        tb.add(static_cast<crd::u32>(t.row), static_cast<crd::u32>(t.col), t.value);
     }
     auto a = tb.compress();
 
@@ -199,33 +196,12 @@ void run(const char* name)
     const crd::f64 t_amd = best_ms([&]() { amdp = ord::amd_order(a.pattern(), alloc); });
     const crd::u64 nnzl_amd = ord::nnz_l(ord::apply_symmetric(a.pattern(), amdp, alloc), alloc);
 
-    // Eigen: build symmetric SparseMatrix (lower triangle drives LLT).
-    crd::containers::Array<Eigen::Triplet<double>> et(alloc);
-    et.reserve(trips.size());
-    for (const Trip& t : trips)
-    {
-        et.push_back(Eigen::Triplet<double>(t.r, t.c, t.v));
-    }
-    Eigen::SparseMatrix<double> ea(n, n);
-    ea.setFromTriplets(et.data(), et.data() + et.size());
-
-    Eigen::SimplicialLLT<Eigen::SparseMatrix<double>, Eigen::Lower, Eigen::NaturalOrdering<int>> llt_nat;
-    llt_nat.compute(ea);
-    long long eig_nat = -1;
-    if (llt_nat.info() == Eigen::Success)
-    {
-        const Eigen::SparseMatrix<double> l_nat = llt_nat.matrixL(); // materialise TriangularView
-        eig_nat = l_nat.nonZeros();
-    }
-
-    Eigen::SimplicialLLT<Eigen::SparseMatrix<double>, Eigen::Lower, Eigen::AMDOrdering<int>> llt_amd;
-    llt_amd.compute(ea);
-    long long eig_amd = -1;
-    if (llt_amd.info() == Eigen::Success)
-    {
-        const Eigen::SparseMatrix<double> l_amd = llt_amd.matrixL();
-        eig_amd = l_amd.nonZeros();
-    }
+    // Eigen: the symmetric matrix (its lower triangle drives LLT).
+    const peer::Owned ea{peer::csc_f64(n, n, trips.data(), static_cast<peer::Index>(trips.size()))};
+    const peer::Owned llt_nat{peer::sparse_solver(peer::SparseSolve::LltNatural)};
+    const long long eig_nat = peer::factorize(llt_nat.get(), ea.get()) ? peer::factor_nnz(llt_nat.get()) : -1;
+    const peer::Owned llt_amd{peer::sparse_solver(peer::SparseSolve::LltAmd)};
+    const long long eig_amd = peer::factorize(llt_amd.get(), ea.get()) ? peer::factor_nnz(llt_amd.get()) : -1;
 
     const bool port_ok = (eig_nat < 0) || (static_cast<long long>(nnzl_nat) == eig_nat);
     const crd::f64 amd_ratio = eig_amd > 0 ? static_cast<crd::f64>(nnzl_amd) / static_cast<crd::f64>(eig_amd) : 0.0;
@@ -243,23 +219,25 @@ void run(const char* name)
 
     crd::f64 t_eig_anal = 0.0;
     {
-        Eigen::SimplicialLLT<Eigen::SparseMatrix<double>, Eigen::Lower, Eigen::NaturalOrdering<int>> llt_a;
-        t_eig_anal = best_ms([&]() { llt_a.analyzePattern(ea); });
+        const peer::Owned llt_a{peer::sparse_solver(peer::SparseSolve::LltNatural)};
+        t_eig_anal = best_ms([&]() { peer::analyze(llt_a.get(), ea.get()); });
     }
 
     // (2) rigorous PATTERN gate: column-by-column row-index diff of our L against
     //     Eigen's numeric L factor (NaturalOrdering -> directly comparable).
-    bool pattern_ok = (eig_nat >= 0) && (static_cast<long long>(sf.nnz()) == eig_nat);
-    if (eig_nat >= 0)
+    const crd::i32* l_outer = nullptr;
+    const crd::i32* l_inner = nullptr;
+    bool pattern_ok = (eig_nat >= 0) && (static_cast<long long>(sf.nnz()) == eig_nat) &&
+                      peer::factor_pattern(llt_nat.get(), &l_outer, &l_inner);
+    if (pattern_ok)
     {
-        const Eigen::SparseMatrix<double> l_nat = llt_nat.matrixL();
         for (int j = 0; j < n && pattern_ok; ++j)
         {
             crd::usize p = sf.lp[static_cast<crd::usize>(j)];
             const crd::usize end = sf.lp[static_cast<crd::usize>(j) + 1];
-            for (Eigen::SparseMatrix<double>::InnerIterator it(l_nat, j); it; ++it)
+            for (crd::i32 k = l_outer[j]; k < l_outer[j + 1]; ++k)
             {
-                if (p >= end || sf.li[p] != static_cast<crd::u32>(it.row()))
+                if (p >= end || sf.li[p] != static_cast<crd::u32>(l_inner[k]))
                 {
                     pattern_ok = false;
                     break;
@@ -324,7 +302,8 @@ void run(const char* name)
 int main()
 {
     std::printf("[bench_hesap_ordering] symbolic-Cholesky port validation + RCM fill/bandwidth + v2b AMD target "
-                "(SuiteSparse SPD).\n");
+                "(SuiteSparse SPD; %s).\n",
+                peer::isa());
     std::printf("  NOTE: the 'analyze' column compares our nnz_l (etree+post+counts) to Eigen analyzePattern\n"
                 "        (etree+counts+Lp). Eigen defers the L row pattern (Li) to factorize, so this is the\n"
                 "        only apples-to-apples symbolic comparator; the v2c deliverable is the FULL\n"

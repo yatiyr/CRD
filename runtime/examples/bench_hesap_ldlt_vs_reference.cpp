@@ -21,10 +21,13 @@
 // Cerid's genuine v5d differentiators: correct on ALL indefinite (incl. persistently-zero pivots), the only
 // cross-thread bit-deterministic LDLᵀ anywhere, and a complete family (real + complex sym/Herm).
 //
-// Built only when CRD_BUILD_HESAP_VS_REFERENCE=ON. crd conventions throughout; raw double only at the Eigen
-// API boundary.
+// Built only when CRD_BUILD_HESAP_VS_REFERENCE=ON. crd conventions throughout; Eigen runs in
+// its peer library (eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/dense/blas3.hpp>                  // dense::gemm + MatrixView (blocked-front lever probe)
 #include <crd/hesap/direct/dense_ldlt_kernels.hpp>    // factor_front_ldlt (the unblocked front kernel)
@@ -33,9 +36,6 @@
 #include <crd/hesap/sparse/sparse.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
-
-#include <Eigen/SparseCholesky>
-#include <Eigen/SparseCore>
 
 #ifdef CRD_HESAP_VS_MUMPS
 #include <dmumps_c.h> // the REAL same-class indefinite gold standard (SYM=2 ⇒ 2×2 Bunch-Kaufman pivoting)
@@ -60,6 +60,7 @@ using Clock = std::chrono::high_resolution_clock;
 namespace sp = crd::hesap::sparse;
 namespace ord = crd::hesap::ordering;
 namespace dir = crd::hesap::direct;
+namespace peer = crd_peer::eigen;
 
 crd::memory::GrowableTlsfAllocator g_alloc;
 
@@ -293,49 +294,49 @@ void front_lever_probe()
     namespace dir = crd::hesap::direct;
     std::printf("\n-- LEVER PROBE: dense SPD front, UNBLOCKED rank-1 vs blocked-1×1 BLAS-3 (validates the "
                 "blocked-front lever vs MUMPS) --\n");
-    for (crd::u32 N : {256U, 512U, 1024U, 1536U})
+    for (crd::u32 dim : {256U, 512U, 1024U, 1536U})
     {
         crd::containers::Array<double> base(&g_alloc);
-        base.resize(static_cast<crd::usize>(N) * N);
-        for (crd::u32 c = 0; c < N; ++c)
+        base.resize(static_cast<crd::usize>(dim) * dim);
+        for (crd::u32 c = 0; c < dim; ++c)
         {
-            for (crd::u32 r = 0; r < N; ++r)
+            for (crd::u32 r = 0; r < dim; ++r)
             {
-                base[static_cast<crd::usize>(c) * N + r] = (r == c) ? static_cast<double>(N + 1) : 1.0; // SPD
+                base[static_cast<crd::usize>(c) * dim + r] = (r == c) ? static_cast<double>(dim + 1) : 1.0; // SPD
             }
         }
-        const double gflop = (static_cast<double>(N) * N * N) / 3.0 / 1e9; // ~LDLᵀ factor flops
+        const double gflop = (static_cast<double>(dim) * dim * dim) / 3.0 / 1e9; // ~LDLᵀ factor flops
 
         crd::containers::Array<double> du(&g_alloc);
         du = base;
         crd::containers::Array<crd::u8> bk(&g_alloc);
-        bk.resize(N);
+        bk.resize(dim);
         crd::containers::Array<crd::u32> pv(&g_alloc);
-        pv.resize(N);
+        pv.resize(dim);
         const auto u0 = Clock::now();
-        const crd::u32 ru = dir::factor_front_ldlt<double, false>(du.data(), N, N, N, bk.data(), pv.data());
+        const crd::u32 ru = dir::factor_front_ldlt<double, false>(du.data(), dim, dim, dim, bk.data(), pv.data());
         const auto u1 = Clock::now();
         const double ums = std::chrono::duration<double, std::milli>(u1 - u0).count();
 
         crd::containers::Array<double> db(&g_alloc);
         db = base;
         const auto b0 = Clock::now();
-        blocked_ldl_1x1(db.data(), N, 64, &g_alloc);
+        blocked_ldl_1x1(db.data(), dim, 64, &g_alloc);
         const auto b1 = Clock::now();
         const double bms = std::chrono::duration<double, std::milli>(b1 - b0).count();
 
         double diff = 0.0;
-        for (crd::u32 c = 0; c < N; ++c)
+        for (crd::u32 c = 0; c < dim; ++c)
         {
-            for (crd::u32 r = c; r < N; ++r)
+            for (crd::u32 r = c; r < dim; ++r)
             {
-                const double e = std::abs(du[static_cast<crd::usize>(c) * N + r] - db[static_cast<crd::usize>(c) * N + r]);
+                const double e = std::abs(du[static_cast<crd::usize>(c) * dim + r] - db[static_cast<crd::usize>(c) * dim + r]);
                 diff = e > diff ? e : diff;
             }
         }
         std::printf("front N=%-5u | unblocked %8.3f ms (%5.1f GF/s)  blocked-1×1 %8.3f ms (%5.1f GF/s)  speedup "
                     "%.1fx | (ru=%u, |L_u-L_b|=%.1e)\n",
-                    N, ums, gflop / (ums / 1e3), bms, gflop / (bms / 1e3), (bms > 0 ? ums / bms : 0.0), ru, diff);
+                    dim, ums, gflop / (ums / 1e3), bms, gflop / (bms / 1e3), (bms > 0 ? ums / bms : 0.0), ru, diff);
     }
 }
 
@@ -519,29 +520,26 @@ void run_case(const char* name, crd::u32 n, const crd::containers::Array<Trip>& 
     double eigen_ms = 0.0;
     const char* eigen_status = "ok";
     {
-        crd::containers::Array<Eigen::Triplet<double>> et(&g_alloc);
-        et.reserve(pt.size());
+        crd::containers::Array<peer::Entry> lower(&g_alloc);
+        lower.reserve(pt.size());
         for (const auto& e : pt)
         {
-            if (e.r >= e.c) // lower triangle
+            if (e.r >= e.c)
             {
-                et.push_back(Eigen::Triplet<double>(static_cast<int>(e.r), static_cast<int>(e.c), e.v));
+                lower.push_back(peer::Entry{static_cast<crd::i32>(e.r), static_cast<crd::i32>(e.c), e.v});
             }
         }
-        Eigen::SparseMatrix<double> ea(static_cast<int>(n), static_cast<int>(n));
-        ea.setFromTriplets(et.begin(), et.end());
-        Eigen::VectorXd eb(static_cast<int>(n));
-        for (crd::u32 i = 0; i < n; ++i)
-        {
-            eb[static_cast<int>(i)] = b[i];
-        }
+        const auto pn = static_cast<peer::Index>(n);
+        const peer::Owned ea{peer::csc_f64(pn, pn, lower.data(), static_cast<peer::Index>(lower.size()))};
+        const peer::Owned eb{peer::vec(pn, b.data())};
+        const peer::Owned ex{peer::vec(pn, static_cast<const crd::f64*>(nullptr))};
         const auto t0 = Clock::now();
-        Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>, Eigen::Lower, Eigen::NaturalOrdering<int>> ldlt;
-        ldlt.compute(ea);
-        Eigen::VectorXd ex = ldlt.solve(eb);
+        const peer::Owned ldlt{peer::sparse_solver(peer::SparseSolve::LdltNatural)};
+        const bool factored = peer::factorize(ldlt.get(), ea.get());
+        peer::solve(ldlt.get(), eb.get(), ex.get());
         const auto t1 = Clock::now();
         eigen_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-        if (ldlt.info() != Eigen::Success)
+        if (!factored)
         {
             eigen_status = "NumericalIssue (pivot-free LDLᵀ cannot factor this)";
         }
@@ -550,9 +548,10 @@ void run_case(const char* name, crd::u32 n, const crd::containers::Array<Trip>& 
             bool finite = true;
             crd::containers::Array<crd::f64> x(&g_alloc);
             x.resize(n);
+            const crd::f64* exv = peer::data(ex.get());
             for (crd::u32 i = 0; i < n; ++i)
             {
-                const double xv = ex[static_cast<int>(i)];
+                const double xv = exv[i];
                 finite = finite && std::isfinite(xv);
                 x[i] = xv;
             }
@@ -609,10 +608,11 @@ void run_case(const char* name, crd::u32 n, const crd::containers::Array<Trip>& 
         // (1/2/3 = the FSCU/UFSC variants) with CNTL(7)=CRD_MUMPS_BLR_EPS (the BLR
         // dropping threshold). Unset ⇒ full (ICNTL(35)=0). Lets one bench binary
         // measure MUMPS-BLR vs MUMPS-full on the SAME corpus.
-        if (const char* blr = std::getenv("CRD_MUMPS_BLR"))
+        if (const crd::EnvironmentValue<256> blr_env{"CRD_MUMPS_BLR"}; const char* blr = blr_env.c_str())
         {
             id.icntl[34] = std::atoi(blr);  // ICNTL(35), 0-based index 34
-            const char* eps = std::getenv("CRD_MUMPS_BLR_EPS");
+            const crd::EnvironmentValue<64> eps_env{"CRD_MUMPS_BLR_EPS"};
+            const char* eps = eps_env.c_str();
             id.cntl[6] = eps ? std::atof(eps) : 1e-8;  // CNTL(7), 0-based index 6
         }
         id.perm_in = mperm.data();
@@ -656,7 +656,8 @@ void run_case(const char* name, crd::u32 n, const crd::containers::Array<Trip>& 
 int main()
 {
     crd::jobs::init();
-    std::printf("=== hesap multifrontal LDLᵀ (Bunch-Kaufman) vs Eigen SimplicialLDLT (pivot-free) ===\n");
+    std::printf("=== hesap multifrontal LDLᵀ (Bunch-Kaufman) vs Eigen SimplicialLDLT (pivot-free; %s) ===\n",
+                peer::isa());
     std::printf("FAIR: AMD-ordered once, BOTH fed the permuted matrix (Eigen NaturalOrdering). Honest peer\n");
     std::printf("note: Eigen SimplicialLDLT is pivot-free ⇒ NOT same-class on indefinite; fair indefinite\n");
     std::printf("peer = MA57/MUMPS-LDLᵀ/PARDISO (deferred to v5z). Eigen Simplicial* is a tuned scalar code;\n");

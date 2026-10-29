@@ -125,6 +125,7 @@
         "runtime/examples/bench_hesap_spmv_vs_reference.cpp",
         "runtime/examples/bench_hesap_svd_vs_reference.cpp",
         "runtime/examples/peers/eigen_peer_dense.cpp",
+        "runtime/examples/peers/eigen_peer_direct.cpp",
         "runtime/examples/peers/eigen_peer_sparse.cpp"
       ],
       "built_when": {"option": "CRD_BUILD_HESAP_VS_REFERENCE"},

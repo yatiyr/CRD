@@ -10,10 +10,13 @@
 // ≥ 1.2x; never regress. (CHOLMOD floor is the WSL oracle, separate.)
 //
 // Built only when CRD_BUILD_HESAP_VS_REFERENCE=ON. crd conventions throughout;
-// raw double only at the Eigen API boundary.
+// Eigen runs in its peer library (eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/direct/supernodal_cholesky.hpp>
 #include <crd/hesap/ordering/ordering.hpp>
@@ -22,14 +25,12 @@
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
-#include <Eigen/Dense>
-#include <Eigen/SparseCholesky>
-#include <Eigen/SparseCore>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 
 #ifndef CRD_SUITESPARSE_DIR
 #define CRD_SUITESPARSE_DIR "."
@@ -42,14 +43,12 @@ namespace sp = crd::hesap::sparse;
 namespace ord = crd::hesap::ordering;
 namespace dir = crd::hesap::direct;
 namespace fs = crd::platform::fs;
+namespace peer = crd_peer::eigen;
 
 crd::memory::GrowableTlsfAllocator g_alloc;
 
-struct Trip
-{
-    crd::i32 r, c;
-    crd::f64 v;
-};
+// The peer's coordinate, so the Eigen side reuses the parsed list.
+using Trip = peer::Entry;
 
 bool read_mtx(const char* path, crd::i32& n, crd::containers::Array<Trip>& trips)
 {
@@ -136,7 +135,7 @@ bool read_mtx(const char* path, crd::i32& n, crd::containers::Array<Trip>& trips
     return dims_read;
 }
 
-template <typename Fn> crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
+template <typename Fn> crd::f64 best_ms(const Fn& fn, crd::i32 reps = 3)
 {
     fn();
     crd::f64 best = 1e30;
@@ -153,7 +152,7 @@ template <typename Fn> crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
 void run(const char* name)
 {
     // CRD_BENCH_ONLY=<substr>[,<substr>...] — run only matching matrices (cheap sweeps).
-    if (const char* only = std::getenv("CRD_BENCH_ONLY"))
+    if (const crd::EnvironmentValue<256> only_env{"CRD_BENCH_ONLY"}; const char* only = only_env.c_str())
     {
         if (std::strstr(only, name) == nullptr)
         {
@@ -162,7 +161,7 @@ void run(const char* name)
     }
     // CRD_NRELAX overrides the amalgamation relaxation (v5a-4 cmod-flop-rate sweep).
     crd::u32 nrelax = dir::kSupernodeRelax;
-    if (const char* nr = std::getenv("CRD_NRELAX"))
+    if (const crd::EnvironmentValue<256> nr_env{"CRD_NRELAX"}; const char* nr = nr_env.c_str())
     {
         nrelax = static_cast<crd::u32>(std::strtoul(nr, nullptr, 10));
     }
@@ -189,17 +188,25 @@ void run(const char* name)
     tb.reserve(trips.size());
     for (const Trip& t : trips)
     {
-        tb.add(static_cast<crd::u32>(t.r), static_cast<crd::u32>(t.c), t.v);
+        tb.add(static_cast<crd::u32>(t.row), static_cast<crd::u32>(t.col), t.value);
     }
     auto a = tb.compress();
     auto perm = ord::amd_order(a.pattern(), &g_alloc);
 
-    sp::TripletBuilder<crd::f64> pb(&g_alloc, un, un);
-    pb.reserve(trips.size());
+    crd::containers::Array<Trip> ptrips(&g_alloc); // the permuted entries, which both factorizations read
+    ptrips.reserve(trips.size());
     for (const Trip& t : trips)
     {
-        pb.add(perm.inv_perm[static_cast<crd::u32>(t.r)], perm.inv_perm[static_cast<crd::u32>(t.c)], t.v);
+        ptrips.push_back(Trip{static_cast<crd::i32>(perm.inv_perm[static_cast<crd::u32>(t.row)]),
+                              static_cast<crd::i32>(perm.inv_perm[static_cast<crd::u32>(t.col)]), t.value});
     }
+    sp::TripletBuilder<crd::f64> pb(&g_alloc, un, un);
+    pb.reserve(ptrips.size());
+    for (const Trip& t : ptrips)
+    {
+        pb.add(static_cast<crd::u32>(t.row), static_cast<crd::u32>(t.col), t.value);
+    }
+    const auto peer_count = static_cast<peer::Index>(ptrips.size());
     auto ap = pb.compress();
     const crd::containers::ConstSpan<crd::f64> apvals{ap.values().values.data(), ap.values().values.size()};
 
@@ -208,13 +215,14 @@ void run(const char* name)
     const crd::f64 t_cerid_fac = best_ms([&]()
                                          { auto f = dir::factor_supernodal_cholesky<crd::f64>(ap.pattern(), apvals, &g_alloc, nrelax, nw); (void)f.info(); });
     auto cf = dir::factor_supernodal_cholesky<crd::f64>(ap.pattern(), apvals, &g_alloc, nrelax, nw);
-    if (std::getenv("CRD_BENCH_SUPERNODE_HIST") != nullptr && cf.info() == 0)
+    if (crd::environment_set("CRD_BENCH_SUPERNODE_HIST") && cf.info() == 0)
     {
         const auto& sym = cf.symbolic();
         const crd::u32 ns = sym.nsuper;
         crd::u32 buckets[6] = {0, 0, 0, 0, 0, 0}; // nc in 1 / 2-4 / 5-8 / 9-16 / 17-32 / 33+
         crd::u64 cols_small = 0;                   // cols in supernodes with nc<=4
-        crd::u64 flop_small = 0, flop_tot = 0;     // solve axpy work ~ nc*below
+        crd::u64 flop_small = 0;                   // solve axpy work ~ nc*below
+        crd::u64 flop_tot = 0;
         crd::u32 maxnc = 0;
         for (crd::u32 s = 0; s < ns; ++s)
         {
@@ -228,7 +236,11 @@ void run(const char* name)
                 cols_small += nc;
                 flop_small += w;
             }
-            const int b = nc == 1 ? 0 : nc <= 4 ? 1 : nc <= 8 ? 2 : nc <= 16 ? 3 : nc <= 32 ? 4 : 5;
+            crd::u32 b = 0; // the bucket: one step past each upper edge nc exceeds
+            for (const crd::u32 edge : {1U, 4U, 8U, 16U, 32U})
+            {
+                b += nc > edge ? 1U : 0U;
+            }
             ++buckets[b];
         }
         std::printf("  %-10s HIST nsuper=%u avg_nc=%.1f maxnc=%u | nc[1|2-4|5-8|9-16|17-32|33+]=%u %u %u %u %u %u | "
@@ -240,19 +252,11 @@ void run(const char* name)
     if (cf.info() != 0)
     {
         // Disambiguate: is the matrix genuinely non-PD, or is this our bug? Ask Eigen.
-        crd::containers::Array<Eigen::Triplet<double>> et2(&g_alloc);
-        et2.reserve(trips.size());
-        for (const Trip& t : trips)
-        {
-            et2.push_back(Eigen::Triplet<double>(static_cast<int>(perm.inv_perm[static_cast<crd::u32>(t.r)]),
-                                                 static_cast<int>(perm.inv_perm[static_cast<crd::u32>(t.c)]), t.v));
-        }
-        Eigen::SparseMatrix<double> ea2(n, n);
-        ea2.setFromTriplets(et2.data(), et2.data() + et2.size());
-        Eigen::SimplicialLLT<Eigen::SparseMatrix<double>, Eigen::Lower, Eigen::NaturalOrdering<int>> llt2;
-        llt2.compute(ea2);
+        const peer::Owned ea2{peer::csc_f64(n, n, ptrips.data(), peer_count)};
+        const peer::Owned llt2{peer::sparse_solver(peer::SparseSolve::LltNatural)};
         std::printf("  %-10s Cerid NOT-SPD (info=%zu); Eigen LLT=%s\n", name, cf.info(),
-                    llt2.info() == Eigen::Success ? "SUCCESS => CERID BUG" : "NumericalIssue => matrix not PD");
+                    peer::factorize(llt2.get(), ea2.get()) ? "SUCCESS => CERID BUG"
+                                                           : "NumericalIssue => matrix not PD");
         return;
     }
     // RHS = A_p * 1; solve; residual.
@@ -292,40 +296,28 @@ void run(const char* name)
     // ---- Eigen SimplicialLLT<Lower, NaturalOrdering> on the SAME permuted matrix ----
     // CRD_BENCH_NO_REF skips the (dominant ~39s) Eigen reference entirely — for cdiv/cmod
     // TUNING sweeps that only read Cerid's CHOLPROF profiler. Default OFF ⇒ full shootout.
-    const bool no_ref = std::getenv("CRD_BENCH_NO_REF") != nullptr;
-    Eigen::SimplicialLLT<Eigen::SparseMatrix<double>, Eigen::Lower, Eigen::NaturalOrdering<int>> llt;
+    const bool no_ref = crd::environment_set("CRD_BENCH_NO_REF");
+    const peer::Owned llt{peer::sparse_solver(peer::SparseSolve::LltNatural)};
+    bool eig_ok = false;
     crd::f64 t_eig_fac = 0.0;
     long long eig_lnz = -1;
     crd::f64 eig_res = -1.0;
     crd::f64 t_eig_slv = 0.0;
     if (!no_ref)
     {
-        crd::containers::Array<Eigen::Triplet<double>> et(&g_alloc);
-        et.reserve(trips.size());
-        for (const Trip& t : trips)
+        const peer::Owned ea{peer::csc_f64(n, n, ptrips.data(), peer_count)};
+        t_eig_fac = best_ms([&]() { eig_ok = peer::factorize(llt.get(), ea.get()); });
+        if (eig_ok)
         {
-            const int rr = static_cast<int>(perm.inv_perm[static_cast<crd::u32>(t.r)]);
-            const int cc = static_cast<int>(perm.inv_perm[static_cast<crd::u32>(t.c)]);
-            et.push_back(Eigen::Triplet<double>(rr, cc, t.v));
-        }
-        Eigen::SparseMatrix<double> ea(n, n);
-        ea.setFromTriplets(et.data(), et.data() + et.size());
-        t_eig_fac = best_ms([&]() { llt.compute(ea); });
-        if (llt.info() == Eigen::Success)
-        {
-            const Eigen::SparseMatrix<double> lmat = llt.matrixL();
-            eig_lnz = lmat.nonZeros();
-            Eigen::VectorXd eb(n);
-            for (crd::u32 i = 0; i < un; ++i)
-            {
-                eb[static_cast<int>(i)] = b[i];
-            }
-            Eigen::VectorXd ex;
-            t_eig_slv = best_ms([&]() { ex = llt.solve(eb); });
+            eig_lnz = peer::factor_nnz(llt.get());
+            const peer::Owned eb{peer::vec(n, b.data())};
+            const peer::Owned ex{peer::vec(n, static_cast<const crd::f64*>(nullptr))};
+            t_eig_slv = best_ms([&]() { peer::solve(llt.get(), eb.get(), ex.get()); });
+            const crd::f64* exv = peer::data(ex.get());
             crd::f64 acc = 0.0;
             for (crd::u32 i = 0; i < un; ++i)
             {
-                acc += (ex[static_cast<int>(i)] - 1.0) * (ex[static_cast<int>(i)] - 1.0);
+                acc += (exv[i] - 1.0) * (exv[i] - 1.0);
             }
             eig_res = std::sqrt(acc / static_cast<crd::f64>(un));
         }
@@ -356,18 +348,12 @@ void run(const char* name)
                 }
                 (void)cf.solve({x16.data(), x16.size()}, nrhs);
             });
-        if (!no_ref && llt.info() == Eigen::Success)
+        if (eig_ok)
         {
-            Eigen::MatrixXd eb16(n, static_cast<int>(nrhs));
-            for (crd::usize c = 0; c < nrhs; ++c)
-            {
-                for (crd::u32 i = 0; i < un; ++i)
-                {
-                    eb16(static_cast<int>(i), static_cast<int>(c)) = b[i];
-                }
-            }
-            Eigen::MatrixXd ex16;
-            t_eig_mrhs = best_ms([&]() { ex16 = llt.solve(eb16); });
+            const auto peer_rhs = static_cast<peer::Index>(nrhs);
+            const peer::Owned eb16{peer::mat(n, peer_rhs, rb16.data(), false)};
+            const peer::Owned ex16{peer::mat(n, peer_rhs, static_cast<const crd::f64*>(nullptr), false)};
+            t_eig_mrhs = best_ms([&]() { peer::solve(llt.get(), eb16.get(), ex16.get()); });
         }
     }
     const crd::f64 mrhs_ratio = t_cerid_mrhs > 0 ? t_eig_mrhs / t_cerid_mrhs : 0.0;
@@ -389,14 +375,14 @@ int main()
     // all-core hazard). N=1 is the per-thread-efficiency profiling regime. 0/unset =
     // hardware_concurrency. Mirrors bench_hesap_cholesky_vs_cholmod.
     crd::jobs::Config cfg;
-    if (const char* t = std::getenv("CRD_BENCH_THREADS"))
+    if (const crd::EnvironmentValue<256> t_env{"CRD_BENCH_THREADS"}; const char* t = t_env.c_str())
     {
         cfg.num_threads = static_cast<crd::u32>(std::strtoul(t, nullptr, 10));
     }
     crd::jobs::init(cfg);
     std::printf("[bench_hesap_cholesky] TREE-PARALLEL supernodal Cholesky factor+solve vs Eigen SimplicialLLT "
-                "(same AMD-permuted matrix; %u workers). Targets: factor >=1.5x, solve >=1.2x.\n",
-                crd::jobs::num_workers());
+                "(same AMD-permuted matrix; %u workers; %s). Targets: factor >=1.5x, solve >=1.2x.\n",
+                crd::jobs::num_workers(), peer::isa());
     run("bcsstk13");
     run("bcsstk24");
     run("bcsstk25");

@@ -14,10 +14,13 @@
 // (the gold standard) is the WSL bench (CRD_BUILD_HESAP_VS_SUITESPARSE).
 //
 // Built only when CRD_BUILD_HESAP_VS_REFERENCE=ON. crd conventions throughout;
-// raw double only at the Eigen API boundary.
+// Eigen runs in its peer library (eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/direct/multifrontal_qr.hpp>
 #include <crd/hesap/ordering/ordering.hpp>
@@ -26,8 +29,6 @@
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
-#include <Eigen/SparseCore>
-#include <Eigen/SparseQR>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -45,6 +46,7 @@ namespace sp = crd::hesap::sparse;
 namespace ord = crd::hesap::ordering;
 namespace dir = crd::hesap::direct;
 namespace fs = crd::platform::fs;
+namespace peer = crd_peer::eigen;
 
 crd::memory::GrowableTlsfAllocator g_alloc;
 
@@ -140,7 +142,7 @@ bool read_mtx(const char* path, crd::i32& mrows, crd::i32& ncols, crd::container
     return dims_read;
 }
 
-template <typename Fn> crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
+template <typename Fn> crd::f64 best_ms(const Fn& fn, crd::i32 reps = 3)
 {
     fn();
     crd::f64 best = 1e30;
@@ -156,7 +158,7 @@ template <typename Fn> crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
 
 void run(const char* name)
 {
-    if (const char* only = std::getenv("CRD_BENCH_ONLY"))
+    if (const crd::EnvironmentValue<256> only_env{"CRD_BENCH_ONLY"}; const char* only = only_env.c_str())
     {
         if (std::strstr(only, name) == nullptr)
         {
@@ -245,45 +247,26 @@ void run(const char* name)
     }
 
     // ---- Eigen SparseQR on the SAME permuted m×n matrix, NaturalOrdering ----
-    crd::containers::Array<Eigen::Triplet<double>> et(&g_alloc);
-    et.reserve(static_cast<crd::usize>(ap.values().values.size()));
-    for (crd::u32 r = 0; r < um; ++r)
-    {
-        const crd::u32 st = ap.pattern().outer_ptr[r];
-        const crd::u32 cnt = ap.pattern().inner_count(r);
-        for (crd::u32 k = 0; k < cnt; ++k)
-        {
-            et.push_back(Eigen::Triplet<double>(static_cast<int>(r), static_cast<int>(ap.pattern().inner_idx[st + k]),
-                                                ap.values().values[st + k]));
-        }
-    }
-    Eigen::SparseMatrix<double> ea(mrows, ncols);
-    ea.setFromTriplets(et.data(), et.data() + et.size());
-    ea.makeCompressed();
-    Eigen::SparseQR<Eigen::SparseMatrix<double>, Eigen::NaturalOrdering<int>> eqr;
-    const crd::f64 t_eig_fac = best_ms(
-        [&]()
-        {
-            eqr.analyzePattern(ea);
-            eqr.factorize(ea);
-        });
-    Eigen::VectorXd eb(mrows);
-    for (crd::u32 i = 0; i < um; ++i)
-    {
-        eb[static_cast<int>(i)] = b[i];
-    }
-    Eigen::VectorXd ex;
-    const crd::f64 t_eig_slv = best_ms([&]() { ex = eqr.solve(eb); });
+    const peer::Owned ea{peer::csc_f64(mrows, ncols, ap.pattern().outer_ptr.data(), ap.pattern().inner_idx.data(),
+                                       ap.values().values.data())};
+    const peer::Owned eqr{peer::sparse_solver(peer::SparseSolve::QrNatural)};
+    bool eig_ok = false;
+    const crd::f64 t_eig_fac = best_ms([&]() { eig_ok = peer::factorize(eqr.get(), ea.get()); });
+    crd::f64 t_eig_slv = 0.0;
     double eig_res = 0.0;
-    if (eqr.info() == Eigen::Success)
+    if (eig_ok) // Eigen asserts on a solve after a failed factorization
     {
+        const peer::Owned eb{peer::vec(mrows, b.data())};
+        const peer::Owned ex{peer::vec(ncols, static_cast<const crd::f64*>(nullptr))};
+        t_eig_slv = best_ms([&]() { peer::solve(eqr.get(), eb.get(), ex.get()); });
+        const crd::f64* exv = peer::data(ex.get());
         for (crd::u32 i = 0; i < un; ++i)
         {
-            eig_res += (ex[static_cast<int>(i)] - 1.0) * (ex[static_cast<int>(i)] - 1.0);
+            eig_res += (exv[i] - 1.0) * (exv[i] - 1.0);
         }
         eig_res = std::sqrt(eig_res / static_cast<double>(un));
     }
-    const crd::u64 eig_fill = eqr.info() == Eigen::Success ? static_cast<crd::u64>(eqr.matrixR().nonZeros()) : 0;
+    const crd::u64 eig_fill = eig_ok ? static_cast<crd::u64>(peer::factor_nnz(eqr.get())) : 0;
 
     const char* cerid_ok = cf.info() == 0 ? "ok" : "RANKDEF";
     const double fac_ratio = (t_cerid_fac > 0.0) ? t_eig_fac / t_cerid_fac : 0.0; // >1 ⇒ Cerid faster
@@ -300,7 +283,8 @@ void run(const char* name)
 int main()
 {
     std::printf("[bench_hesap_qr_vs_reference] Cerid MultifrontalQR vs Eigen SparseQR (NaturalOrdering on the same "
-                "AMD(AᵀA)-column-ordered matrix). v5c-1 = correctness-first baseline; gate = residual.\n");
+                "AMD(AᵀA)-column-ordered matrix; %s). v5c-1 = correctness-first baseline; gate = residual.\n",
+                peer::isa());
     // Small/medium SPD-structural corpus (square, full rank) — these complete fast even with the
     // v5c-1 UNBLOCKED numeric. Larger matrices (bcsstk25 15k+) need the v5c-1d BLOCKED-WY lever +
     // the AᵀA-free implicit symbolic before they are tractable: the unblocked Householder on the

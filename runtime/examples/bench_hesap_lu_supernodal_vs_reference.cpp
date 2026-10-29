@@ -17,8 +17,11 @@
 // Built only when CRD_BUILD_HESAP_VS_REFERENCE=ON. crd conventions throughout; raw double
 // only at the Eigen / UMFPACK API boundary.
 
+#include "eigen_peer.hpp"
+
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/direct/gmres_refine.hpp>    // v5f: factor_gmres_refined_lu (static-pivot divergence fix)
 #include <crd/hesap/direct/lu_symbolic.hpp>
@@ -33,8 +36,6 @@
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
-#include <Eigen/SparseCore>
-#include <Eigen/SparseLU>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -62,6 +63,7 @@ namespace sp = crd::hesap::sparse;
 namespace ord = crd::hesap::ordering;
 namespace dir = crd::hesap::direct;
 namespace fs = crd::platform::fs;
+namespace peer = crd_peer::eigen;
 
 crd::memory::GrowableTlsfAllocator g_alloc;
 
@@ -156,7 +158,17 @@ bool read_mtx(const char* path, crd::i32& n, crd::containers::Array<Trip>& trips
     return dims_read;
 }
 
-template <typename Fn> crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
+// [ok] needs a completed factorization AND an accurate solve: static pivoting can complete yet diverge.
+const char* accuracy_label(bool singular, crd::f64 residual)
+{
+    if (singular)
+    {
+        return "SINGULAR";
+    }
+    return residual < 1e-6 ? "ok" : "INACCURATE";
+}
+
+template <typename Fn> crd::f64 best_ms(const Fn& fn, crd::i32 reps = 3)
 {
     fn();
     crd::f64 best = 1e30;
@@ -264,7 +276,7 @@ void report_symmetrized_fill(const sp::SparseMatrix<crd::f64, sp::SparseFormat::
 
 void run(const char* name)
 {
-    if (const char* only = std::getenv("CRD_BENCH_ONLY"))
+    if (const crd::EnvironmentValue<256> only_env{"CRD_BENCH_ONLY"}; const char* only = only_env.c_str())
     {
         if (std::strstr(only, name) == nullptr)
         {
@@ -306,7 +318,7 @@ void run(const char* name)
     auto ap = pb.compress(); // permuted CSR
 
     // v5b-3a: symmetrized-fill measurement mode — pure symbolic, skips the slow factor/Eigen/UMFPACK.
-    if (std::getenv("CRD_BENCH_SYMFILL") != nullptr)
+    if (crd::environment_set("CRD_BENCH_SYMFILL"))
     {
         report_symmetrized_fill(ap, name);
         return;
@@ -336,7 +348,7 @@ void run(const char* name)
     // parallelism + a compacted per-worker scratch are the characterized next levers). Override with
     // CRD_BENCH_LU_WORKERS to exercise the parallel path.
     crd::u32 nw = 1U;
-    if (const char* wenv = std::getenv("CRD_BENCH_LU_WORKERS"))
+    if (const crd::EnvironmentValue<256> wenv_env{"CRD_BENCH_LU_WORKERS"}; const char* wenv = wenv_env.c_str())
     {
         nw = static_cast<crd::u32>(std::atoi(wenv));
         if (nw == 0U)
@@ -371,56 +383,29 @@ void run(const char* name)
         cer_nsuper = cf.supernode_count();
     }
 
-    // ---- Eigen SparseLU on the SAME permuted matrix (NaturalOrdering; partial pivot) ----
-    crd::containers::Array<Eigen::Triplet<double>> et(&g_alloc);
-    et.reserve(static_cast<crd::usize>(ap.values().values.size()));
-    for (crd::u32 r = 0; r < un; ++r)
-    {
-        const crd::u32 st = ap.pattern().outer_ptr[r];
-        const crd::u32 cnt = ap.pattern().inner_count(r);
-        for (crd::u32 k = 0; k < cnt; ++k)
-        {
-            et.push_back(Eigen::Triplet<double>(static_cast<int>(r), static_cast<int>(ap.pattern().inner_idx[st + k]),
-                                                ap.values().values[st + k]));
-        }
-    }
-    Eigen::SparseMatrix<double> ea(n, n);
-    ea.setFromTriplets(et.data(), et.data() + et.size());
-    ea.makeCompressed();
-    Eigen::SparseLU<Eigen::SparseMatrix<double>, Eigen::COLAMDOrdering<int>> elu; // Eigen's DEFAULT (fair best)
-    const crd::f64 t_eig_fac = best_ms(
-        [&]()
-        {
-            elu.analyzePattern(ea);
-            elu.factorize(ea);
-        });
-    Eigen::VectorXd eb(n);
-    for (crd::u32 i = 0; i < un; ++i)
-    {
-        eb[static_cast<int>(i)] = b[i];
-    }
-    Eigen::VectorXd ex;
+    // ---- Eigen SparseLU on the SAME permuted matrix (its own COLAMD column order; partial pivot) ----
+    const peer::Owned ea{
+        peer::csc_f64(n, n, ap.pattern().outer_ptr.data(), ap.pattern().inner_idx.data(), ap.values().values.data())};
+    const peer::Owned elu{peer::sparse_solver(peer::SparseSolve::LuColamd)}; // Eigen's DEFAULT (fair best)
+    bool eig_ok = false;
+    const crd::f64 t_eig_fac = best_ms([&]() { eig_ok = peer::factorize(elu.get(), ea.get()); });
     crd::f64 t_eig_slv = 0.0;
     crd::f64 eig_res = 1e30;
     crd::u64 eig_fill = 0;
-    if (elu.info() == Eigen::Success)
+    if (eig_ok)
     {
-        t_eig_slv = best_ms([&]() { ex = elu.solve(eb); });
-        crd::containers::Array<crd::f64> exv(&g_alloc);
-        exv.resize(un);
-        for (crd::u32 i = 0; i < un; ++i)
-        {
-            exv[i] = ex[static_cast<int>(i)];
-        }
-        eig_res = true_residual(ap, exv.data(), b.data());
-        eig_fill = static_cast<crd::u64>(elu.nnzL()) + static_cast<crd::u64>(elu.nnzU());
+        const peer::Owned eb{peer::vec(n, b.data())};
+        const peer::Owned ex{peer::vec(n, static_cast<const crd::f64*>(nullptr))};
+        t_eig_slv = best_ms([&]() { peer::solve(elu.get(), eb.get(), ex.get()); });
+        eig_res = true_residual(ap, peer::data(ex.get()), b.data());
+        eig_fill = static_cast<crd::u64>(peer::factor_nnz(elu.get()));
     }
 
     const double cer_fac_ratio = (t_cer_fac > 0.0) ? t_eig_fac / t_cer_fac : 0.0; // >1 ⇒ Cerid faster
     // [ok] requires BOTH a completed factorization AND an accurate solve — the residual gate matters:
     // static pivoting can complete (info==0) yet diverge on saddle-point/indefinite systems (incompressible
     // Navier-Stokes), giving a huge residual. INACCURATE flags that honestly (was silently "ok").
-    const char* cer_ok = (cf.info() != 0) ? "SINGULAR" : (cer_res < 1e-6 ? "ok" : "INACCURATE");
+    const char* cer_ok = accuracy_label(cf.info() != 0, cer_res);
     std::printf("  %-9s n=%-6d | FACTOR cer=%9.2f eig=%9.2f ms (%.2fx vs Eigen) | SOLVE cer=%7.3f eig=%7.3f "
                 "| fill cer=%-9llu eig=%-9llu | nsup=%-6u | resid c=%.1e e=%.1e [%s]",
                 name, n, t_cer_fac, t_eig_fac, cer_fac_ratio, t_cer_slv, t_eig_slv,
@@ -432,7 +417,7 @@ void run(const char* name)
     // UMFPACK-1thr). Prints factor time + speedup vs the Cerid supernodal factor (SN); the MF-vs-UMFPACK
     // ratio is added in the UMFPACK block below. Fill is the symmetric-pattern dense-front nnz — a
     // DIFFERENT padding regime than SupernodalLU's relaxed-supernode fill (do not equate the raw numbers).
-    const bool do_mf = std::getenv("CRD_BENCH_LU_MF") != nullptr;
+    const bool do_mf = crd::environment_set("CRD_BENCH_LU_MF");
     crd::f64 t_mf_fac = 0.0;
     if (do_mf)
     {
@@ -461,7 +446,7 @@ void run(const char* name)
             mf_fill = mff.factor_nnz();
         }
         const double mf_sn_ratio = (t_mf_fac > 0.0) ? t_cer_fac / t_mf_fac : 0.0; // >1 ⇒ MF beats supernodal
-        const char* mf_ok = (mff.info() != 0) ? "SINGULAR" : (mf_res < 1e-6 ? "ok" : "INACCURATE");
+        const char* mf_ok = accuracy_label(mff.info() != 0, mf_res);
         std::printf(" || Cerid-MF fac=%9.2f ms (%.2fx vs SN) solve=%7.3f fill=%-9llu resid=%.1e [%s]", t_mf_fac,
                     mf_sn_ratio, t_mf_slv, static_cast<unsigned long long>(mf_fill), mf_res, mf_ok);
     }
@@ -574,7 +559,7 @@ void run(const char* name)
                 mix_res, mix_converged ? "ok" : "DIVERGED");
     // ---- v5f-(a): Cerid within-front PARTIAL-PIVOTING LU (factor_multifrontal_lu_pp) — the root-cause fix for
     // the static-pivot divergence (garon2/raefsky3). Does the bare partial-pivot factor now reach f64? ----
-    if (std::getenv("CRD_BENCH_LU_PP") != nullptr)
+    if (crd::environment_set("CRD_BENCH_LU_PP"))
     {
         const auto ppt0 = Clock::now();
         auto ppf = dir::factor_multifrontal_lu_pp<crd::f64>(ap, &g_alloc, 1);
@@ -596,18 +581,18 @@ void run(const char* name)
     // ---- v5f GMRES-IR PROBE (CRD_BENCH_LU_GMRESIR): the discriminating diagnostic for the static-pivot
     // divergence. FGMRES preconditioned by the f64 static-pivot factor — does it reach f64 on garon2/raefsky3
     // (where fixed-point IR diverges), and in how many iters? If yes ⇒ build GMRES-IR into the base solve. ----
-    if (std::getenv("CRD_BENCH_LU_GMRESIR") != nullptr)
+    if (crd::environment_set("CRD_BENCH_LU_GMRESIR"))
     {
         dir::GmresRefineOptions gopts;
-        if (const char* re = std::getenv("CRD_GMRESIR_RESTART"))
+        if (const crd::EnvironmentValue<256> re_env{"CRD_GMRESIR_RESTART"}; const char* re = re_env.c_str())
         {
             gopts.restart = static_cast<crd::usize>(std::atoi(re));
         }
-        if (const char* mi = std::getenv("CRD_GMRESIR_MAXIT"))
+        if (const crd::EnvironmentValue<256> mi_env{"CRD_GMRESIR_MAXIT"}; const char* mi = mi_env.c_str())
         {
             gopts.max_iter = static_cast<crd::usize>(std::atoi(mi));
         }
-        const crd::f64 gpp = (std::getenv("CRD_GMRESIR_PP") != nullptr) ? 1.0 : 0.0; // pp preconditioner?
+        const crd::f64 gpp = (crd::environment_set("CRD_GMRESIR_PP")) ? 1.0 : 0.0; // pp preconditioner?
         const auto fct0 = Clock::now();
         auto grefined = dir::factor_gmres_refined_lu(ap, &g_alloc, 1, gopts, gpp); // the shipped API
         const double gfac_ms = std::chrono::duration<crd::f64, std::milli>(Clock::now() - fct0).count();
@@ -628,7 +613,7 @@ void run(const char* name)
 #ifdef CRD_HESAP_VS_MUMPS
     // ---- MUMPS (parallel multifrontal, OpenMP) on the SAME `ap`. The HONEST parallel-peer comparison.
     // Run with OMP_NUM_THREADS=N for MUMPS's parallelism; Cerid-MF uses its own workers (CRD_BENCH_LU_WORKERS).
-    if (do_mf && std::getenv("CRD_BENCH_LU_MUMPS") != nullptr)
+    if (do_mf && crd::environment_set("CRD_BENCH_LU_MUMPS"))
     {
         const crd::u32 mnnz = static_cast<crd::u32>(ap.pattern().inner_idx.size());
         crd::containers::Array<MUMPS_INT> mirn(&g_alloc);
@@ -694,7 +679,7 @@ void run(const char* name)
     // MUMPS does the f32 factor; we wrap it in the SAME f64 IR loop (64·eps backward-error target, fixed-order
     // f64 residual) so BOTH paths reach f64 accuracy. The comparison Cerid-mix vs smumps+IR is mixed-vs-mixed
     // (no dmumps-f64 asterisk); the differentiator is the cross-thread determinism MOAT smumps+IR cannot carry.
-    if (std::getenv("CRD_BENCH_LU_MUMPS") != nullptr)
+    if (crd::environment_set("CRD_BENCH_LU_MUMPS"))
     {
         const crd::u32 snnz = static_cast<crd::u32>(ap.pattern().inner_idx.size());
         crd::containers::Array<MUMPS_INT> sirn(&g_alloc);
@@ -819,17 +804,18 @@ void run(const char* name)
 int main()
 {
     std::printf("[bench_hesap_lu_supernodal_vs_reference] Cerid SupernodalLU (MC64 static-pivot + supernodal BLAS-3 "
-                "+ IR) vs Eigen SparseLU"
+                "+ IR) vs Eigen SparseLU (%s)"
 #ifdef CRD_HESAP_VS_UMFPACK
                 " + UMFPACK"
 #endif
                 " on the SAME AMD-permuted UNSYMMETRIC matrix. Ratios >1 ⇒ Cerid faster; compare at MATCHED true "
-                "residual.\n");
+                "residual.\n",
+                peer::isa());
     crd::jobs::Config cfg;
     cfg.num_threads = 8; // cap the pool (per-worker full-n SPA memory + i9-14900K stability)
     crd::jobs::init(cfg);
     crd::u32 banner_nw = 1U;
-    if (const char* wenv = std::getenv("CRD_BENCH_LU_WORKERS"))
+    if (const crd::EnvironmentValue<256> wenv_env{"CRD_BENCH_LU_WORKERS"}; const char* wenv = wenv_env.c_str())
     {
         banner_nw = static_cast<crd::u32>(std::atoi(wenv));
         if (banner_nw == 0U)

@@ -578,7 +578,8 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
         message(WARNING "[hesap-vs-reference] OpenMP NOT found — Eigen will run SERIAL")
     endif()
     crd_add_bench_peer(crd-bench-eigen-peer
-        SOURCES examples/peers/eigen_peer_dense.cpp examples/peers/eigen_peer_sparse.cpp LIBRARIES eigen_headers)
+        SOURCES examples/peers/eigen_peer_dense.cpp examples/peers/eigen_peer_sparse.cpp
+        examples/peers/eigen_peer_direct.cpp LIBRARIES eigen_headers)
 
     crd_add_hesap_vs_ref_bench(bench_hesap_gemm_vs_reference    USE_JOBS USE_OPENBLAS EIGEN_PEER)
     crd_add_hesap_vs_ref_bench(bench_hesap_blas1_vs_reference   USE_OPENBLAS EIGEN_PEER)
@@ -649,15 +650,15 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     crd_add_hesap_vs_ref_bench(bench_hesap_spgemm_stress_vs_reference USE_JOBS EIGEN_PEER)
     target_link_libraries(bench_hesap_spgemm_stress_vs_reference PRIVATE crd-hesap-sparse)
     # v2a: ordering — symbolic-Cholesky port validation + RCM fill/bandwidth + v2b AMD target.
-    crd_add_hesap_vs_ref_bench(bench_hesap_ordering_vs_reference)
+    crd_add_hesap_vs_ref_bench(bench_hesap_ordering_vs_reference EIGEN_PEER)
     target_link_libraries(bench_hesap_ordering_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering)
     target_compile_definitions(bench_hesap_ordering_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
     # v5a-1b step 6 / v5a-3: TREE-PARALLEL supernodal Cholesky factor+solve vs Eigen SimplicialLLT.
-    crd_add_hesap_vs_ref_bench(bench_hesap_cholesky_vs_reference USE_JOBS)
+    crd_add_hesap_vs_ref_bench(bench_hesap_cholesky_vs_reference USE_JOBS EIGEN_PEER)
     target_link_libraries(bench_hesap_cholesky_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering crd-hesap-direct)
     target_compile_definitions(bench_hesap_cholesky_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
     # v5b-1: Gilbert-Peierls sparse LU (SERIAL correctness oracle) factor+solve vs Eigen SparseLU.
-    crd_add_hesap_vs_ref_bench(bench_hesap_lu_vs_reference)
+    crd_add_hesap_vs_ref_bench(bench_hesap_lu_vs_reference EIGEN_PEER)
     target_link_libraries(bench_hesap_lu_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering crd-hesap-direct)
     target_compile_definitions(bench_hesap_lu_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
     # v5e-1d: HSS ULV (build_hss_from_dense + factor_hss_ulv + solve) vs Eigen dense LLT — the
@@ -668,19 +669,19 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     # v5c-1d: Multifrontal QR factor+solve vs Eigen SparseQR (NaturalOrdering on the same
     # AMD(AᵀA)-column-ordered matrix). v5c-1 correctness-first baseline; the crush lands with
     # the perf levers (blocked-WY + staircase + implicit AᵀA-free symbolic + tree-parallel).
-    crd_add_hesap_vs_ref_bench(bench_hesap_qr_vs_reference)
+    crd_add_hesap_vs_ref_bench(bench_hesap_qr_vs_reference EIGEN_PEER)
     target_link_libraries(bench_hesap_qr_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering crd-hesap-direct)
     target_compile_definitions(bench_hesap_qr_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
 
     # v5d-g: multifrontal LDLᵀ (Bunch-Kaufman) vs Eigen SimplicialLDLT (pivot-free; honest peer note in-file).
-    crd_add_hesap_vs_ref_bench(bench_hesap_ldlt_vs_reference USE_JOBS)
+    crd_add_hesap_vs_ref_bench(bench_hesap_ldlt_vs_reference USE_JOBS EIGEN_PEER)
     target_link_libraries(bench_hesap_ldlt_vs_reference PRIVATE crd-hesap-sparse crd-hesap-direct)
 
     # v5b-2c: SUPERNODAL LU crush — Cerid SupernodalLU vs Eigen SparseLU on the same AMD-permuted
     # UNSYMMETRIC matrices. UMFPACK (the multifrontal gold standard) folds in when
     # CRD_BUILD_HESAP_VS_UMFPACK=ON (WSL/Linux; GPL → dev-only, never shipped) — it links the
     # SuiteSparse umfpack apt-installed by scripts/setup-cholmod-ref.sh.
-    crd_add_hesap_vs_ref_bench(bench_hesap_lu_supernodal_vs_reference USE_JOBS)
+    crd_add_hesap_vs_ref_bench(bench_hesap_lu_supernodal_vs_reference USE_JOBS EIGEN_PEER)
     target_link_libraries(bench_hesap_lu_supernodal_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering crd-hesap-direct crd-hesap-iterative)
     target_compile_definitions(bench_hesap_lu_supernodal_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
     if(CRD_BUILD_HESAP_VS_UMFPACK)

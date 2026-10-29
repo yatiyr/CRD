@@ -5,6 +5,7 @@
 #include "eigen_peer.hpp"
 
 #include <Eigen/Dense>
+#include <Eigen/SparseCore>
 
 // The library is built at the host's best ISA; a vector path Eigen did not take would measure a weaker peer.
 #if defined(__AVX2__) && !(defined(EIGEN_VECTORIZE_AVX2) && defined(EIGEN_VECTORIZE_FMA))
@@ -45,6 +46,22 @@ struct SymEig
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver;
     Eigen::VectorXd diag;
     Eigen::VectorXd sub;
+};
+struct SpF32
+{
+    Eigen::SparseMatrix<float, Eigen::RowMajor> a;
+};
+struct SpF64
+{
+    Eigen::SparseMatrix<double, Eigen::RowMajor> a;
+};
+struct SpColF64
+{
+    Eigen::SparseMatrix<double> a;
+};
+struct RowMatF64
+{
+    Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> m;
 };
 
 } // namespace crd_peer::eigen
