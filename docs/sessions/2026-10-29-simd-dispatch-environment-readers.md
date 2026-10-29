@@ -33,7 +33,7 @@ No completed run carries hosted evidence for DIAG.11c or DIAG.12; both stay Need
   GLSL and HLSL compilers' `VULKAN_SDK`, the renderer's `renderer_getenv`, and `bench_nn`, `bench_sparse_tensor`,
   `bench_hesap_cholesky_vs_cholmod` and `bench_hesap_qr_vs_spqr`. An integer knob now needs the whole value to be
   a number in its range (`atoi` read `12x` as 12); an empty value reads as unset on every platform, as before on
-  Windows.
+  Windows; `CRD_PLATFORM_HEADLESS` is read into 32 bytes, so a value of 32 characters or more no longer counts.
 - `crd-check-isa-isolation` runs alone (`RUN_SERIAL`): its pool takes every core, so beside other tests it starves
   them and its own time is not the one its timeout needs.
 
