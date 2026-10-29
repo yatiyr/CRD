@@ -78,7 +78,21 @@ template <typename T> struct FftPlanState
     Complex<T>* hier_bbuf = nullptr; // transposed intermediate of the hierarchical sub-FFT
     T* hier_twr = nullptr;           // its inner twiddle  cos(2π·n2·k1/n)
     T* hier_twi = nullptr;           // its inner twiddle −sin(2π·n2·k1/n)
+    // The tiled four-step of the f32 1M forward (detail::LargeForward::TiledFourStep in fft.hpp; the codelets are
+    // scripts/gen_fft_batched.py's tiled emitters, which address these extents): the tiled intermediate, W_1024^{q·c}
+    // at [q·32 + c], and W_n^{i2·k1} = base[(k1 >> 4)·1024 + i2] · lane[i2·16 + (k1 & 15)]. Null on every other plan;
+    // the stages of a block sit in `scratch`.
+    T* tf_nt = nullptr;
+    T* tf_twr = nullptr;
+    T* tf_twi = nullptr;
+    T* tf_bsr = nullptr;
+    T* tf_bsi = nullptr;
+    T* tf_lnr = nullptr;
+    T* tf_lni = nullptr;
 };
+
+// The tiled intermediate's floats: 128 tile rows of eight i2, each 64 tiles of 8 by 16 complex and a 64-byte pad.
+inline constexpr crd::usize kTiledFourStepNt = 128 * (64 * 256 + 16);
 
 // The twiddles of the f64 small-N lane-trick codelets (detail/small_n_codelets.hpp, N 8, 16 and 32), each entry the
 // four lanes of a Vec4d. small_n_twiddles() builds them once in general code.

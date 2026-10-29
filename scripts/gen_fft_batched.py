@@ -206,12 +206,14 @@ _PREC = {
 }
 
 
-def _render_node(nd, prec, batch_var, indent="        ", soa_in=False):
-    """One scheduled node: loads (interleaved Complex rows, or AoSoA block rows of `b2` T when soa_in) and arithmetic;
-    no stores."""
+def _render_node(nd, prec, batch_var, indent="        ", soa_in=False, load=None):
+    """One scheduled node: loads (interleaved Complex rows, AoSoA block rows of `b2` T when soa_in, or the lines
+    `load(value, input)` gives) and arithmetic; no stores."""
     tname, zero, cst = prec
     v = f"n{nd.id}"
     if nd.op == "input":
+        if load is not None:
+            return [indent + line for line in load(v, nd.a)]
         if soa_in:
             return [f"{indent}V {v}r, {v}i; simd::load_block(inb + {nd.a} * b2, t, {v}r, {v}i);"]
         return [
@@ -470,6 +472,136 @@ def emit_batched_strided_sc(N, name, prec_key):
     return _kernel(sig, prec_key, "bs", ["const crd::usize b2 = 2 * bs;"], [], body)
 
 
+# ---- the tiled four-step of the f32 1M forward (M18's dataflow on the lanes; SIMD-DISPATCH's board candidate) ----
+# x[i1*1024 + i2] -> X[k1 + 1024*k2], each 1024-point axis 32 x 32 (i = 32j + c, k = q + 32m). P1 takes a block of
+# 128 columns i2 through p1_leaf (the leaf over j, W_1024^{c*q}, a transposed store into rows of 32 q) and p1_corner
+# (the leaf over c into the tiled intermediate NT, tiles of 8 i2 by 16 k1 in AoSoA rows; no twiddle pass between the
+# halves). P2 takes a block of 16 k1 through p2_leaf (NT times W_n^{i2*k1} = base[(k1>>4)*1024 + i2] *
+# lane[i2*16 + (k1&15)], the leaf over i2's high digit, W_1024) and p2_final (the leaf over its low digit into X).
+# A block stays in L2, and the strides of a step's 32 loads or stores are padded off the 4 KiB alias. The extents
+# are FftPlanState's tf_ members (fft_kernels.hpp).
+TF_GROUP = 128 * 64 + 16  # p1's stage: floats from one c to the next (128 rows of 32 complex and 64 bytes)
+TF_TILE_ROW = 64 * 256 + 16  # NT: floats from one tile row (eight i2) to the next (64 tiles and 64 bytes)
+TF_P2_ROW = 33 * 32  # p2's stage: floats from one p to the next (32 rows of 16 complex and one more row)
+
+
+def _plus(base, offset):
+    return f"{base} + {offset}" if offset else base
+
+
+def _tf_scaled(dst, w, src):
+    """`dst` = `src` * `w`: two products and two single-rounded fmas, the stage-1 emitters' form."""
+    return [f"const V {dst}r = simd::fnmadd({w}i, {src}i, {src}r * {w}r);",
+            f"const V {dst}i = simd::fma({w}i, {src}r, {src}i * {w}r);"]
+
+
+def _emit_tiled(sig, bound, invariant, tile_locals, load, store, group_lanes=0):
+    """One tiled four-step leaf: the f32 32-point DAG, `load(value, input)` lines and `store(output or group, outs)`
+    lines, each store as soon as its values are complete (disjoint buffers)."""
+    _, prec = _prec("f32")
+    outs = _build_dag(32, 8107)
+    body = []
+    for item in _interleave_stores(schedule(outs), outs, group_lanes=group_lanes):
+        if isinstance(item, tuple):
+            body += [f"        {line}" for line in store(item[1], outs)]
+        else:
+            body += _render_node(item, prec, None, load=load)
+    return _kernel(sig, "f32", str(bound), invariant, tile_locals, body)
+
+
+def emit_tiled_p1_leaf():
+    """P1's leaf over j at column t = c*128 + (i2 & 127), W_1024^{c*q}, its 32 q transposed into the stage row of t."""
+    def load(v, j):
+        return [f"V {v}r, {v}i; simd::load_complex_deinterleaved("
+                f"reinterpret_cast<const crd::f32*>({_plus('in', j * 32768)} + src), {v}r, {v}i);"]
+
+    def store(g, outs):
+        block = ["{"]
+        for lane in range(8):
+            q = 8 * g + lane
+            if q == 0:  # W^0: the leaf's output as it is
+                block.append(f"    const V x0r = n{outs[0].id}r, x0i = n{outs[0].id}i;")
+                continue
+            block.append(f"    const V w{lane}r = V(twr[{q * 32} + c]), w{lane}i = V(twi[{q * 32} + c]);")
+            block += ["    " + line for line in _tf_scaled(f"x{lane}", f"w{lane}", f"n{outs[q].id}")]
+        for part, offset in (("r", 16 * g), ("i", 16 * g + 8)):
+            args = ", ".join(f"x{lane}{part}" for lane in range(8))
+            block.append(f"    simd::store_transposed({_plus('outb + row', offset)}, 64, {args});")
+        return block + ["}"]
+
+    sig = ["void codelet32_tiled_p1_leaf(const crd::hesap::Complex<crd::f32>* in,",
+           "    crd::f32* outb, crd::usize blk, const crd::f32* twr, const crd::f32* twi) noexcept"]
+    invariant = ["const crd::usize i0 = blk * 128;"]
+    tile_locals = ["const crd::usize c = t >> 7;", "const crd::usize src = i0 + c * 1024 + (t & 127);",
+                   f"const crd::usize row = c * {TF_GROUP} + (t & 127) * 64;"]
+    return _emit_tiled(sig, 4096, invariant, tile_locals, load, store, group_lanes=8)
+
+
+def emit_tiled_p1_corner():
+    """P1's leaf over c at column t = (i2 & 127)*32 + q into NT: k1 = q + 32m, i2's tile row of block blk."""
+    def load(v, c):
+        return [f"V {v}r, {v}i; simd::load_block({_plus('inb', c * TF_GROUP)} + src, q, {v}r, {v}i);"]
+
+    def store(m, outs):
+        n = f"n{outs[m].id}"
+        return [f"simd::store_block({_plus('nt + dst', 512 * m)}, kc, {n}r, {n}i);"]
+
+    sig = ["void codelet32_tiled_p1_corner(const crd::f32* inb,", "    crd::f32* nt, crd::usize blk) noexcept"]
+    invariant = [f"const crd::usize nb = blk * {16 * TF_TILE_ROW};"]
+    tile_locals = ["const crd::usize q = t & 31;", "const crd::usize kc = t & 15;",
+                   "const crd::usize src = (t >> 5) * 64;",
+                   f"const crd::usize dst = nb + (t >> 8) * {TF_TILE_ROW} + ((t >> 4) & 1) * 256 + "
+                   "((t >> 5) & 7) * 32;"]
+    return _emit_tiled(sig, 4096, invariant, tile_locals, load, store)
+
+
+def emit_tiled_p2_leaf():
+    """P2's leaf over i2's high digit j at column t = v*16 + (k1 & 15), i2 = 32j + v: NT times W_n^{i2*k1}, then
+    W_1024^{v*p} into the stage row p*33 + v."""
+    def load(v, j):
+        return [f"V {v}r, {v}i;", "{", "    V yr, yi;",
+                f"    simd::load_block({_plus('nt', j * 4 * TF_TILE_ROW)} + src, kc, yr, yi);",
+                f"    const V br = V(bsr[{_plus('bs', j * 32)}]), bi = V(bsi[{_plus('bs', j * 32)}]);",
+                f"    const V lr = simd::load<V>({_plus('lnr', j * 512)} + ln), "
+                f"li = simd::load<V>({_plus('lni', j * 512)} + ln);",
+                "    const V wr = simd::fnmadd(bi, li, br * lr), wi = simd::fma(bi, lr, br * li);",
+                f"    {v}r = simd::fnmadd(wi, yi, yr * wr);", f"    {v}i = simd::fma(wi, yr, yi * wr);", "}"]
+
+    def store(p, outs):
+        n = f"n{outs[p].id}"
+        if p == 0:  # W^0: the leaf's output as it is
+            return [f"simd::store_block(outb + dst, kc, {n}r, {n}i);"]
+        return ["{", f"    const V wr = V(twr[{p * 32} + v]), wi = V(twi[{p * 32} + v]);",
+                *["    " + line for line in _tf_scaled("x", "w", n)],
+                f"    simd::store_block(outb + {p * TF_P2_ROW} + dst, kc, xr, xi);", "}"]
+
+    sig = ["void codelet32_tiled_p2_leaf(const crd::f32* nt,",
+           "    crd::f32* outb, crd::usize k0, const crd::f32* bsr, const crd::f32* bsi, const crd::f32* lnr,",
+           "    const crd::f32* lni, const crd::f32* twr, const crd::f32* twi) noexcept"]
+    tile_locals = ["const crd::usize kc = t & 15;", "const crd::usize v = t >> 4;",
+                   f"const crd::usize src = (v >> 3) * {TF_TILE_ROW} + (v & 7) * 32 + (k0 >> 4) * 256;",
+                   "const crd::usize bs = (k0 >> 4) * 1024 + v;", "const crd::usize ln = v * 16 + kc;",
+                   "const crd::usize dst = v * 32;"]
+    return _emit_tiled(sig, 512, [], tile_locals, load, store)
+
+
+def emit_tiled_p2_final():
+    """P2's leaf over i2's low digit v at column t = p*16 + (k1 & 15) into X[k1 + 1024*(p + 32m)]."""
+    def load(v, j):
+        return [f"V {v}r, {v}i; simd::load_block({_plus('inb + src', j * 32)}, kc, {v}r, {v}i);"]
+
+    def store(m, outs):
+        n = f"n{outs[m].id}"
+        return [f"simd::store_complex_interleaved(reinterpret_cast<crd::f32*>({_plus('out', m * 32768)} + dst), "
+                f"{n}r, {n}i);"]
+
+    sig = ["void codelet32_tiled_p2_final(const crd::f32* inb,",
+           "    crd::hesap::Complex<crd::f32>* out, crd::usize k0) noexcept"]
+    tile_locals = ["const crd::usize kc = t & 15;", f"const crd::usize src = (t >> 4) * {TF_P2_ROW};",
+                   "const crd::usize dst = (t >> 4) * 1024 + k0 + kc;"]
+    return _emit_tiled(sig, 512, [], tile_locals, load, store)
+
+
 def main(mode="hybrid"):
     global SCHED_VARIANT
     sched_of = {
@@ -533,6 +665,15 @@ def main(mode="hybrid"):
             print(emit_fused_notr_ss(n, f"codelet{n}_fused_notr_ss", prec))
             print(f"// N={n} SPLIT-LAYOUT deep-split S3 (plane in, strided complex out) ({prec}). GENERATED.")
             print(emit_batched_strided_sc(n, f"codelet{n}_batched_strided_sc", prec))
+    SCHED_VARIANT = sched_of["f32"]
+    print("// Tiled four-step P1 leaf: a block of 128 columns of the f32 1M forward into its stage. GENERATED.")
+    print(emit_tiled_p1_leaf())
+    print("// Tiled four-step P1 corner: the block's stage into the tiled intermediate (f32 1M). GENERATED.")
+    print(emit_tiled_p1_corner())
+    print("// Tiled four-step P2 leaf: 16 k1 of the tiled intermediate, twiddled, into its stage (f32 1M). GENERATED.")
+    print(emit_tiled_p2_leaf())
+    print("// Tiled four-step P2 final leaf: the stage into the output's 16 k1 columns (f32 1M). GENERATED.")
+    print(emit_tiled_p2_final())
     print("} // namespace crd::hesap::fft::gen::inline CRD_MATH_LEVEL_NS")
 
 

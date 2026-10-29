@@ -197,4 +197,17 @@ void codelet128_fused_notr_ss(const crd::f32* inb,
 // N=128 SPLIT-LAYOUT deep-split S3 (plane in, strided complex out) (f32). GENERATED.
 void codelet128_batched_strided_sc(const crd::f32* inb,
     crd::hesap::Complex<crd::f32>* out, crd::usize bs, crd::usize os) noexcept;
+// Tiled four-step P1 leaf: a block of 128 columns of the f32 1M forward into its stage. GENERATED.
+void codelet32_tiled_p1_leaf(const crd::hesap::Complex<crd::f32>* in,
+    crd::f32* outb, crd::usize blk, const crd::f32* twr, const crd::f32* twi) noexcept;
+// Tiled four-step P1 corner: the block's stage into the tiled intermediate (f32 1M). GENERATED.
+void codelet32_tiled_p1_corner(const crd::f32* inb,
+    crd::f32* nt, crd::usize blk) noexcept;
+// Tiled four-step P2 leaf: 16 k1 of the tiled intermediate, twiddled, into its stage (f32 1M). GENERATED.
+void codelet32_tiled_p2_leaf(const crd::f32* nt,
+    crd::f32* outb, crd::usize k0, const crd::f32* bsr, const crd::f32* bsi, const crd::f32* lnr,
+    const crd::f32* lni, const crd::f32* twr, const crd::f32* twi) noexcept;
+// Tiled four-step P2 final leaf: the stage into the output's 16 k1 columns (f32 1M). GENERATED.
+void codelet32_tiled_p2_final(const crd::f32* inb,
+    crd::hesap::Complex<crd::f32>* out, crd::usize k0) noexcept;
 } // namespace crd::hesap::fft::gen::inline CRD_MATH_LEVEL_NS

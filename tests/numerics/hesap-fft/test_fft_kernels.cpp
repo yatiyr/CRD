@@ -1,10 +1,10 @@
 // The hesap-fft kernel levels (SIMD-DISPATCH, ADR-0134 §5, §7): every level the host runs transforms one plan per band
 // of the planner (the leaf codelets, the Stockham passes, IP4-AoS, the standalone-hier and deep-split bands, the
-// four-step and six-step) and the batched sub-FFT paths, f64 and f32, both directions, within the ADR-0092 §5
-// tolerance of the radix-2 reference, on aligned data and one word off (the four-step's plain-store branch); every
-// level gives portable's bits (the family is bit-exact) and is bit-identical run to run; the words around the data
-// stay as they were; signed zeros and subnormals are not flushed, and one infinity or NaN makes every output
-// non-finite as in the reference.
+// four-step and six-step, the f32 1M forward's tiled four-step) and the batched sub-FFT paths, f64 and f32, both
+// directions, within the ADR-0092 §5 tolerance of the radix-2 reference, on aligned data and one word off (the
+// four-step's plain-store branch); every level gives portable's bits (the family is bit-exact) and is bit-identical run
+// to run; the words around the data stay as they were; signed zeros and subnormals are not flushed, and one infinity or
+// NaN makes every output non-finite as in the reference.
 // crd-hesap-fft-kernels-at-<level> runs these [kernels] cases under each forced level.
 
 #include "kernel_levels.hpp"
@@ -141,58 +141,64 @@ template <typename T> double tolerance(usize n)
 // Every size up to 2^21: each band the planner has, f64 and f32 (its per-type choices differ within a band).
 constexpr u32 kLog2Max = 21;
 
+// Every level the host runs transforms `plan` in direction `dir` within the reference's tolerance, bit-identical run to
+// run and to portable, the guards kept. The four-step's NT stores take aligned data; one word in, f64 takes its
+// plain-store branch. Negative zeros, whose signs every level must keep as portable does, take the aligned data. An
+// input's reference serves each of its shifts.
+template <typename T>
+void check_plan_every_level(crd::memory::IAllocator* alloc, const fft::FftPlan<T>& plan, FftDirection dir)
+{
+    const usize n = plan.size();
+    for (const bool negative_zeros : {false, true})
+    {
+        Buffer<T> want(alloc, n, 0);
+        fill_input(want.values(), 2 * n, 0x5EEDULL + n, negative_zeros);
+        plan.execute_reference(Span<Complex<T>>(want.data(), n), dir);
+        const usize shifts = negative_zeros ? 1U : 2U;
+        for (usize shift = 0; shift < shifts; ++shift)
+        {
+            Buffer<T> portable(alloc, n, shift);
+            usize ran = 0;
+            for (const KernelLevel<FftKernels>& level : fft::fft_kernel_levels())
+            {
+                if (!kernel_level_runs_here(level))
+                {
+                    continue;
+                }
+                const fft::FftTypeKernels<T>& k = fft::kernels_of<T>(*level.table);
+                Buffer<T> got(alloc, n, shift);
+                Buffer<T> again(alloc, n, shift);
+                fill_input(got.values(), 2 * n, 0x5EEDULL + n, negative_zeros);
+                std::memcpy(again.values(), got.values(), 2 * n * sizeof(T));
+                k.execute(plan.state(), got.data(), dir);
+                k.execute(plan.state(), again.data(), dir);
+                if (ran == 0U) // portable, levels[0]: the bits every other level gives
+                {
+                    std::memcpy(portable.values(), got.values(), 2 * n * sizeof(T));
+                }
+                ++ran;
+                const double rel = rel_error(got.data(), want.data(), n);
+                INFO(crd::cpu_level_name(level.level) << " n=" << n << " dir=" << static_cast<int>(dir) << " shift="
+                                                      << shift << " -0=" << negative_zeros << " rel=" << rel);
+                CHECK(rel < tolerance<T>(n));
+                CHECK(std::memcmp(got.values(), again.values(), 2 * n * sizeof(T)) == 0);
+                CHECK(std::memcmp(got.values(), portable.values(), 2 * n * sizeof(T)) == 0);
+                CHECK(got.guards_kept());
+            }
+            CHECK(ran >= 1U); // portable runs everywhere
+        }
+    }
+}
+
 template <typename T> void check_every_level()
 {
     crd::memory::TlsfAllocator alloc(usize{1} << 30);
     for (u32 lg = 0; lg <= kLog2Max; ++lg)
     {
-        const usize n = usize{1} << lg;
-        const fft::FftPlan<T> plan(&alloc, n);
+        const fft::FftPlan<T> plan(&alloc, usize{1} << lg);
         for (const FftDirection dir : {FftDirection::Forward, FftDirection::Inverse})
         {
-            // The four-step's NT stores take aligned data; one word in, f64 takes its plain-store branch. Negative
-            // zeros, whose signs every level must keep as portable does, take the aligned data. An input's reference
-            // serves each of its shifts.
-            for (const bool negative_zeros : {false, true})
-            {
-                Buffer<T> want(&alloc, n, 0);
-                fill_input(want.values(), 2 * n, 0x5EEDULL + n, negative_zeros);
-                plan.execute_reference(Span<Complex<T>>(want.data(), n), dir);
-                const usize shifts = negative_zeros ? 1U : 2U;
-                for (usize shift = 0; shift < shifts; ++shift)
-                {
-                    Buffer<T> portable(&alloc, n, shift);
-                    usize ran = 0;
-                    for (const KernelLevel<FftKernels>& level : fft::fft_kernel_levels())
-                    {
-                        if (!kernel_level_runs_here(level))
-                        {
-                            continue;
-                        }
-                        const fft::FftTypeKernels<T>& k = fft::kernels_of<T>(*level.table);
-                        Buffer<T> got(&alloc, n, shift);
-                        Buffer<T> again(&alloc, n, shift);
-                        fill_input(got.values(), 2 * n, 0x5EEDULL + n, negative_zeros);
-                        std::memcpy(again.values(), got.values(), 2 * n * sizeof(T));
-                        k.execute(plan.state(), got.data(), dir);
-                        k.execute(plan.state(), again.data(), dir);
-                        if (ran == 0U) // portable, levels[0]: the bits every other level gives
-                        {
-                            std::memcpy(portable.values(), got.values(), 2 * n * sizeof(T));
-                        }
-                        ++ran;
-                        const double rel = rel_error(got.data(), want.data(), n);
-                        INFO(crd::cpu_level_name(level.level)
-                             << " n=" << n << " dir=" << static_cast<int>(dir) << " shift=" << shift
-                             << " -0=" << negative_zeros << " rel=" << rel);
-                        CHECK(rel < tolerance<T>(n));
-                        CHECK(std::memcmp(got.values(), again.values(), 2 * n * sizeof(T)) == 0);
-                        CHECK(std::memcmp(got.values(), portable.values(), 2 * n * sizeof(T)) == 0);
-                        CHECK(got.guards_kept());
-                    }
-                    CHECK(ran >= 1U); // portable runs everywhere
-                }
-            }
+            check_plan_every_level(&alloc, plan, dir);
         }
     }
 }
@@ -307,9 +313,9 @@ template <typename T> void check_batched_every_level()
 // so a level stays near the reference and gives portable's bits, and a flush-to-zero (an error the size of the result)
 // shows. One infinity or one NaN: every output depends on it, so every complex output is non-finite, on a level as in
 // the reference (NaN payloads may differ across levels).
-template <typename T> void check_specials_every_level()
+template <typename T> void check_plan_specials(crd::memory::IAllocator* alloc, const fft::FftPlan<T>& plan)
 {
-    crd::memory::TlsfAllocator alloc(usize{1} << 26);
+    const usize n = plan.size();
     const T inf = std::numeric_limits<T>::infinity();
     const T nan = std::numeric_limits<T>::quiet_NaN();
     const T tiny = std::numeric_limits<T>::denorm_min();
@@ -321,61 +327,66 @@ template <typename T> void check_specials_every_level()
             continue;
         }
         const fft::FftTypeKernels<T>& k = fft::kernels_of<T>(*level.table);
-        for (const usize n : {usize{1024}, usize{4096}, usize{65536}})
         {
-            const fft::FftPlan<T> plan(&alloc, n);
+            Buffer<T> got(alloc, n, 0);
+            Buffer<T> want(alloc, n, 0);
+            for (usize i = 0; i < 2 * n; ++i)
             {
-                Buffer<T> got(&alloc, n, 0);
-                Buffer<T> want(&alloc, n, 0);
-                for (usize i = 0; i < 2 * n; ++i)
-                {
-                    const T pick[] = {T(0), -T(0), tiny, -tiny * T(3)};
-                    got.values()[i] = pick[i % 4U];
-                }
-                std::memcpy(want.values(), got.values(), 2 * n * sizeof(T));
-                Buffer<T> bits(&alloc, n, 0);
-                std::memcpy(bits.values(), got.values(), 2 * n * sizeof(T));
-                k.execute(plan.state(), got.data(), FftDirection::Forward);
-                portable.execute(plan.state(), bits.data(), FftDirection::Forward);
-                plan.execute_reference(Span<Complex<T>>(want.data(), n), FftDirection::Forward);
-                double maxref = 0.0;
-                double maxerr = 0.0;
-                for (usize i = 0; i < 2 * n; ++i)
-                {
-                    const double a = static_cast<double>(got.values()[i]);
-                    const double b = static_cast<double>(want.values()[i]);
-                    maxref = std::max(maxref, std::fabs(b));
-                    maxerr = std::max(maxerr, std::fabs(a - b));
-                }
-                INFO(crd::cpu_level_name(level.level)
-                     << " subnormals n=" << n << " err=" << maxerr << " ref=" << maxref);
-                CHECK(maxref > 0.0);
-                CHECK(maxerr <= 0.25 * maxref);
-                CHECK(std::memcmp(got.values(), bits.values(), 2 * n * sizeof(T)) == 0);
-                CHECK(got.guards_kept());
+                const T pick[] = {T(0), -T(0), tiny, -tiny * T(3)};
+                got.values()[i] = pick[i % 4U];
             }
-            for (const T special : {inf, nan})
+            std::memcpy(want.values(), got.values(), 2 * n * sizeof(T));
+            Buffer<T> bits(alloc, n, 0);
+            std::memcpy(bits.values(), got.values(), 2 * n * sizeof(T));
+            k.execute(plan.state(), got.data(), FftDirection::Forward);
+            portable.execute(plan.state(), bits.data(), FftDirection::Forward);
+            plan.execute_reference(Span<Complex<T>>(want.data(), n), FftDirection::Forward);
+            double maxref = 0.0;
+            double maxerr = 0.0;
+            for (usize i = 0; i < 2 * n; ++i)
             {
-                Buffer<T> got(&alloc, n, 0);
-                Buffer<T> want(&alloc, n, 0);
-                fill_lcg(got.values(), 2 * n, 0x1F1FULL + n);
-                got.values()[2 * (n / 3)] = special;
-                std::memcpy(want.values(), got.values(), 2 * n * sizeof(T));
-                k.execute(plan.state(), got.data(), FftDirection::Forward);
-                plan.execute_reference(Span<Complex<T>>(want.data(), n), FftDirection::Forward);
-                usize finite = 0;
-                for (usize i = 0; i < n; ++i)
-                {
-                    const Complex<T> a = got.data()[i];
-                    const Complex<T> b = want.data()[i];
-                    finite += (std::isfinite(a.re) && std::isfinite(a.im)) ? 1U : 0U;
-                    finite += (std::isfinite(b.re) && std::isfinite(b.im)) ? 1U : 0U;
-                }
-                INFO(crd::cpu_level_name(level.level) << " special n=" << n);
-                CHECK(finite == 0U);
-                CHECK(got.guards_kept());
+                const double a = static_cast<double>(got.values()[i]);
+                const double b = static_cast<double>(want.values()[i]);
+                maxref = std::max(maxref, std::fabs(b));
+                maxerr = std::max(maxerr, std::fabs(a - b));
             }
+            INFO(crd::cpu_level_name(level.level) << " subnormals n=" << n << " err=" << maxerr << " ref=" << maxref);
+            CHECK(maxref > 0.0);
+            CHECK(maxerr <= 0.25 * maxref);
+            CHECK(std::memcmp(got.values(), bits.values(), 2 * n * sizeof(T)) == 0);
+            CHECK(got.guards_kept());
         }
+        for (const T special : {inf, nan})
+        {
+            Buffer<T> got(alloc, n, 0);
+            Buffer<T> want(alloc, n, 0);
+            fill_lcg(got.values(), 2 * n, 0x1F1FULL + n);
+            got.values()[2 * (n / 3)] = special;
+            std::memcpy(want.values(), got.values(), 2 * n * sizeof(T));
+            k.execute(plan.state(), got.data(), FftDirection::Forward);
+            plan.execute_reference(Span<Complex<T>>(want.data(), n), FftDirection::Forward);
+            usize finite = 0;
+            for (usize i = 0; i < n; ++i)
+            {
+                const Complex<T> a = got.data()[i];
+                const Complex<T> b = want.data()[i];
+                finite += (std::isfinite(a.re) && std::isfinite(a.im)) ? 1U : 0U;
+                finite += (std::isfinite(b.re) && std::isfinite(b.im)) ? 1U : 0U;
+            }
+            INFO(crd::cpu_level_name(level.level) << " special n=" << n);
+            CHECK(finite == 0U);
+            CHECK(got.guards_kept());
+        }
+    }
+}
+
+template <typename T> void check_specials_every_level()
+{
+    crd::memory::TlsfAllocator alloc(usize{1} << 26);
+    for (const usize n : {usize{1024}, usize{4096}, usize{65536}})
+    {
+        const fft::FftPlan<T> plan(&alloc, n);
+        check_plan_specials(&alloc, plan);
     }
 }
 
@@ -431,6 +442,21 @@ TEST_CASE("fft kernels: every level keeps the reference's non-finite and subnorm
 {
     check_specials_every_level<crd::f64>();
     check_specials_every_level<crd::f32>();
+}
+
+// The f32 1M forward's other arms of SIMD-DISPATCH's row-close board (fft::detail::LargeForward; the deep-split is the
+// planner's, above): the cases above on the six-step and the tiled four-step.
+TEST_CASE("fft kernels: every level runs the f32 1M forward's six-step and tiled four-step", "[fft][kernels]")
+{
+    crd::memory::TlsfAllocator alloc(usize{1} << 28);
+    for (const fft::detail::LargeForward path :
+         {fft::detail::LargeForward::SixStep, fft::detail::LargeForward::TiledFourStep})
+    {
+        INFO("path=" << static_cast<int>(path));
+        const fft::FftPlan<crd::f32> plan(&alloc, usize{1} << 20, path);
+        check_plan_every_level(&alloc, plan, FftDirection::Forward);
+        check_plan_specials(&alloc, plan);
+    }
 }
 
 TEST_CASE("fft kernels: the process runs the level its CPU selection resolves", "[fft][kernels]")

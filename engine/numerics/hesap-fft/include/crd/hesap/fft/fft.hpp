@@ -46,17 +46,32 @@ namespace detail
 // sub-budget allocator) leaves the plan out of memory, fatal in every build, never a null table written
 // (crd-hesap-fft-fatal-* modes).
 inline constexpr const char* kFftPlanOutOfMemory = "FftPlan: out of memory for its tables";
+
+// The f32 1M forward's algorithm while SIMD-DISPATCH's row-close board measures each against MKL at every level: the
+// 4-stage deep-split (every plan's), the six-step, and the tiled four-step (M18's dataflow on the lanes). Tests and
+// the board build the others; the winner becomes the planner's only path and this choice goes.
+enum class LargeForward : crd::u8
+{
+    DeepSplit,
+    SixStep,
+    TiledFourStep,
+};
 } // namespace detail
 
 template <typename T> class FftPlan
 {
 public:
-    FftPlan(crd::memory::IAllocator* alloc, crd::usize n)
+    FftPlan(crd::memory::IAllocator* alloc, crd::usize n) : FftPlan(alloc, n, detail::LargeForward::DeepSplit) {}
+
+    // `large_forward` other than DeepSplit only for an f32 plan of 2^20.
+    FftPlan(crd::memory::IAllocator* alloc, crd::usize n, detail::LargeForward large_forward)
         : m_alloc(alloc), m_tw_re(alloc), m_tw_im(alloc), m_rev(alloc), m_re0(alloc), m_im0(alloc), m_re1(alloc),
           m_im1(alloc), m_ftw_hi_re(alloc), m_ftw_hi_im(alloc), m_ftw_lo_re(alloc), m_ftw_lo_im(alloc), m_ptw_re(alloc),
           m_ptw_im(alloc)
     {
         CRD_ASSERT(is_pow2(n)); // v10: power-of-2 (Bluestein/Rader make any size O(n log n) at v10-c)
+        CRD_ASSERT(large_forward == detail::LargeForward::DeepSplit ||
+                   (std::is_same_v<T, crd::f32> && n == (crd::usize{1} << 20)));
         m_s.n = n;
         while ((crd::usize{1} << m_s.log2) < n)
         {
@@ -230,6 +245,10 @@ public:
                 {
                     ds = false;
                 }
+            }
+            if (large_forward != detail::LargeForward::DeepSplit)
+            {
+                ds = false; // the board's six-step or tiled four-step arm of the f32 1M forward
             }
             if (sh || ds)
             {
@@ -607,6 +626,10 @@ public:
             }
             m_p1 = sub_plan(m_s.n1);
             m_p2 = sub_plan(n2);
+            if (large_forward == detail::LargeForward::TiledFourStep)
+            {
+                build_tiled_four_step();
+            }
         }
         else // direct radix path: SoA ping-pong scratch + Lever A per-pass combine twiddles
         {
@@ -692,6 +715,16 @@ public:
         if (m_s.hier_twi != nullptr)
         {
             m_alloc->deallocate(m_s.hier_twi);
+        }
+        if (m_s.tf_nt != nullptr)
+        {
+            m_alloc->deallocate(m_s.tf_nt);
+            m_alloc->deallocate(m_s.tf_twr);
+            m_alloc->deallocate(m_s.tf_twi);
+            m_alloc->deallocate(m_s.tf_bsr);
+            m_alloc->deallocate(m_s.tf_bsi);
+            m_alloc->deallocate(m_s.tf_lnr);
+            m_alloc->deallocate(m_s.tf_lni);
         }
     }
     FftPlan(const FftPlan&) = delete;
@@ -836,6 +869,46 @@ private:
     [[nodiscard]] FftPlan* sub_plan(crd::usize n)
     {
         return crd::memory::construct_or_fatal<FftPlan>(*m_alloc, detail::kFftPlanOutOfMemory, m_alloc, n);
+    }
+
+    // The tiled four-step's intermediate and twiddles (FftPlanState::tf_nt and its tables), each entry rounded once
+    // from the angle of its exponent mod its period.
+    void build_tiled_four_step()
+    {
+        constexpr crd::usize n = crd::usize{1} << 20;
+        constexpr crd::usize half = 1024; // n1 = n2
+        m_s.tf_nt = plan_table<T>(kTiledFourStepNt, 64);
+        m_s.tf_twr = plan_table<T>(half, 64);
+        m_s.tf_twi = plan_table<T>(half, 64);
+        m_s.tf_bsr = plan_table<T>(64 * half, 64);
+        m_s.tf_bsi = plan_table<T>(64 * half, 64);
+        m_s.tf_lnr = plan_table<T>(16 * half, 64);
+        m_s.tf_lni = plan_table<T>(16 * half, 64);
+        const auto put = [](T* re, T* im, crd::usize at, crd::usize exponent, crd::usize period) noexcept
+        {
+            constexpr double two_pi = 6.283185307179586476925286766559;
+            const double th = two_pi * static_cast<double>(exponent % period) / static_cast<double>(period);
+            re[at] = static_cast<T>(crd::math::cos(th));
+            im[at] = static_cast<T>(-crd::math::sin(th));
+        };
+        for (crd::usize q = 0; q < 32; ++q)
+        {
+            for (crd::usize c = 0; c < 32; ++c)
+            {
+                put(m_s.tf_twr, m_s.tf_twi, q * 32 + c, q * c, half);
+            }
+        }
+        for (crd::usize i2 = 0; i2 < half; ++i2)
+        {
+            for (crd::usize kh = 0; kh < 64; ++kh)
+            {
+                put(m_s.tf_bsr, m_s.tf_bsi, kh * half + i2, i2 * kh * 16, n);
+            }
+            for (crd::usize kl = 0; kl < 16; ++kl)
+            {
+                put(m_s.tf_lnr, m_s.tf_lni, i2 * 16 + kl, i2 * kl, n);
+            }
+        }
     }
 
     // Points the state at the arrays and at the sub-plans' states once the plan is built.

@@ -390,6 +390,14 @@ template <typename T> struct Engine
                 return;
             }
         }
+        if constexpr (std::is_same_v<T, crd::f32>)
+        {
+            if (dir == FftDirection::Forward && plan.tf_nt != nullptr)
+            {
+                execute_tiled_four_step(data);
+                return;
+            }
+        }
         // SIX-STEP v2 forward (square 1M/4M): SIMD micro-tile in-place transposes (v1's
         // element-scalar swaps were the measured wall: f64 1M 8.8 vs 6.3 ms) + contiguous
         // L1-resident row FFTs. See docs/research/fft-stockham-v2.md.
@@ -1579,6 +1587,25 @@ template <typename T> struct Engine
                     }
                 }
             }
+        }
+    }
+
+    // The tiled four-step of the f32 1M forward (detail::LargeForward::TiledFourStep, gen_fft_batched.py's tiled
+    // emitters): P1 takes each block of 128 columns through its two leaves into the tiled intermediate, P2 each block
+    // of 16 k1 through its two leaves into the output; a block's stage sits in the scratch, in L2.
+    void execute_tiled_four_step(Complex<T>* data) const
+    {
+        T* const stage = reinterpret_cast<T*>(plan.scratch);
+        for (crd::usize blk = 0; blk < 8; ++blk)
+        {
+            gen::codelet32_tiled_p1_leaf(data, stage, blk, plan.tf_twr, plan.tf_twi);
+            gen::codelet32_tiled_p1_corner(stage, plan.tf_nt, blk);
+        }
+        for (crd::usize k0 = 0; k0 < 1024; k0 += 16)
+        {
+            gen::codelet32_tiled_p2_leaf(plan.tf_nt, stage, k0, plan.tf_bsr, plan.tf_bsi, plan.tf_lnr, plan.tf_lni,
+                                         plan.tf_twr, plan.tf_twi);
+            gen::codelet32_tiled_p2_final(stage, data, k0);
         }
     }
 
