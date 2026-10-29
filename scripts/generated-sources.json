@@ -1504,9 +1504,17 @@
     },
     {
       "path": "tests/foundation/math/transcendental_refs.inc",
-      "generator": "gen_transcendental_refs.py",
-      "status": "generator-absent",
-      "sha256": "b5001f6fe9e8ff3873bd72b37ffeb74021eba301a657d2c2e8079af6ae2aa545"
+      "generator": "tests/foundation/math/gen_transcendental_refs.py",
+      "status": "reproducible",
+      "command": [
+        "python3",
+        "tests/foundation/math/gen_transcendental_refs.py"
+      ],
+      "requires": [
+        "numpy",
+        "mpmath"
+      ],
+      "sha256": "63b56f497a76bb966d3a05dba1e376129887ce3c8b7c7e7b498bc067e54bbe4a"
     },
     {
       "path": "tests/numerics/hesap-dsp/conv_refs.inc",

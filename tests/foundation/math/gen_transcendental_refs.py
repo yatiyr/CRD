@@ -8,6 +8,7 @@ import numpy as np
 import mpmath as mp
 
 mp.mp.dps = 50  # 50 decimal digits ground truth
+sys.stdout.reconfigure(encoding='utf-8', newline='\n')  # the same bytes through a Windows pipe
 
 
 def grid(lo, hi, n, *, log=False, extra=None):
