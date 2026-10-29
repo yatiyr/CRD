@@ -5,6 +5,9 @@
 // op wall time + speedup-vs-Cerid for both references. Goal: Cerid >= Eigen-MT
 // AND Cerid >= OpenBLAS at every measured N, for both f32 and f64.
 //
+// --one-thread is the per-level kernel board: every library on one thread at 64 to 1024, then the GEMM board's arms
+// (gemm_arms below). A peer result off Cerid's, or an arm whose bits differ from gemm's, fails the run.
+//
 // Build only when -DCRD_BUILD_HESAP_VS_REFERENCE=ON is passed at configure.
 // Eigen + OpenBLAS are fetched into build/_deps/ on first configure; Eigen runs in
 // its peer library at the host's best ISA (examples/peers/eigen_peer.hpp).
@@ -13,17 +16,22 @@
 
 #include <crd/hesap/dense/blas3.hpp>
 #include <crd/hesap/dense/dense_dispatch.hpp>
+#include <crd/hesap/dense/detail/gemm_arms.hpp>
+#include <crd/hesap/dense/detail/gemm_pack.hpp>
 #include <crd/hesap/dense/matrix.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/math/simd/backend.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
+#include <algorithm>
 #include <cblas.h>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <span>
+#include <type_traits>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -162,6 +170,7 @@ template <typename Op> crd::f64 time_loop(const Op& op, int& iters_out)
 // --one-thread: every library on one thread at 64 to 1024 (the per-level kernel board); the default is the
 // multithreaded shootout at 256 to 4096, where Cerid takes its best worker count.
 bool g_one_thread = false;
+bool g_failed = false; // a peer's result off Cerid's, or an arm's bits off gemm's
 constexpr crd::u32 kWorkerCounts[] = {1U, 8U, 16U, 24U, 32U};
 
 template <typename T> Bench<T> run_at_n(crd::usize n, crd::u32 num_workers, crd::memory::IAllocator* alloc)
@@ -276,21 +285,127 @@ void shootout(const char* label, crd::f64 peak_per_core, crd::u32 nw, crd::memor
     std::fprintf(stdout, "%s\n",
                  "----------------------------------------------------------------------------"
                  "------------------------------------------------------------");
-    constexpr crd::usize sizes[] = {64, 256, 512, 1024, 2048, 4096};
-    for (const crd::usize n : sizes)
+    // One thread: the 200M-element resident threshold falls at about the 594 cube, and 1000 and 1024 put A's rows at
+    // lda = k on the 4 KiB alias.
+    constexpr crd::usize one_thread_sizes[] = {64, 256, 512, 600, 768, 1000, 1024};
+    constexpr crd::usize shootout_sizes[] = {256, 512, 1024, 2048, 4096};
+    for (const crd::usize n :
+         g_one_thread ? std::span<const crd::usize>(one_thread_sizes) : std::span<const crd::usize>(shootout_sizes))
     {
-        if ((g_one_thread && n > 1024) || (!g_one_thread && n == 64))
-        {
-            continue;
-        }
         const auto r = run_at_n<T>(n, nw, alloc);
-        const char* eigen_pass = (r.max_rel_err_eigen < 1e-3) ? "" : " !MISMATCH!";
-        const char* ob_pass = (r.max_rel_err_openblas < 1e-3) ? "" : " !MISMATCH!";
+        const bool eigen_ok = r.max_rel_err_eigen < 1e-3;
+        const bool ob_ok = r.max_rel_err_openblas < 1e-3;
+        g_failed = g_failed || !eigen_ok || !ob_ok;
+        const char* eigen_pass = eigen_ok ? "" : " !MISMATCH!";
+        const char* ob_pass = ob_ok ? "" : " !MISMATCH!";
         std::fprintf(
             stdout, "%-6zu | %8.2f (%4d,nw=%2u) | %8.2f (%4d) | %8.2f (%4d) | %8.2fx | %8.2fx | %9.2e%s | %9.2e%s\n",
             static_cast<std::size_t>(n), r.cerid_gflops, r.cerid_iters, r.cerid_best_nw, r.eigen_gflops, r.eigen_iters,
             r.openblas_gflops, r.openblas_iters, r.cerid_gflops / r.eigen_gflops, r.cerid_gflops / r.openblas_gflops,
             r.max_rel_err_eigen, eigen_pass, r.max_rel_err_openblas, ob_pass);
+        std::fflush(stdout);
+    }
+}
+
+// The one-thread GEMM board's arms (SIMD-DISPATCH): the level's kernels down gemm's Auto, Resident and Packed paths,
+// and at the portable level the 4 by 4 tile's too (detail::gemm_arm, kDenseGemmArmsPortable), timed round by round in
+// turn so they share the host's state; a row's GFLOPS is its best round. Resident runs only where
+// detail::gemm_resident_admits holds (n/a otherwise). Every arm must give the Auto arm's bits: the paths sum alike,
+// and both portable tiles round twice.
+template <typename T> void gemm_arms(const char* label, crd::memory::IAllocator* alloc)
+{
+    using namespace crd::hesap::dense;
+    using detail::GemmPath;
+    const GemmKernels<T>& level_kernels = detail::gemm_kernels_of<T>();
+    const GemmKernels<T>* tile4x4 = []() -> const GemmKernels<T>*
+    {
+        if constexpr (std::is_same_v<T, crd::f64>)
+        {
+            return &kDenseGemmArmsPortable.tile4x4_f64;
+        }
+        else
+        {
+            return &kDenseGemmArmsPortable.tile4x4_f32;
+        }
+    }();
+    struct Arm
+    {
+        const char* name;
+        const GemmKernels<T>* kernels;
+        GemmPath path;
+    };
+    const Arm arms[] = {{"auto", &level_kernels, GemmPath::Auto},      {"resident", &level_kernels, GemmPath::Resident},
+                        {"packed", &level_kernels, GemmPath::Packed},  {"4x4 auto", tile4x4, GemmPath::Auto},
+                        {"4x4 resident", tile4x4, GemmPath::Resident}, {"4x4 packed", tile4x4, GemmPath::Packed}};
+    constexpr crd::usize kArms = sizeof(arms) / sizeof(arms[0]);
+    const crd::usize arm_count = dense_kernels().level == crd::CpuLevel::Portable ? kArms : 3U;
+    std::fprintf(stdout, "\n==== %s arms, one thread, %s level (%zu by %zu tile) ====\n", label,
+                 crd::cpu_level_name(dense_kernels().level), static_cast<std::size_t>(level_kernels.shape.mr),
+                 static_cast<std::size_t>(level_kernels.shape.nr));
+    std::fprintf(stdout, "%-6s | %-12s | %10s | %8s | %s\n", "N", "arm", "GFLOPS", "x auto", "bits");
+    constexpr crd::usize sizes[] = {64, 256, 512, 600, 768, 1000, 1024};
+    constexpr int kRounds = 5;
+    for (const crd::usize n : sizes)
+    {
+        Matrix<T> a(alloc, n, n);
+        Matrix<T> b(alloc, n, n);
+        Matrix<T> c(alloc, n, n);
+        Matrix<T> c_auto(alloc, n, n);
+        fill(a.data(), n * n, 11U);
+        fill(b.data(), n * n, 22U);
+        auto run = [&](const Arm& arm, Matrix<T>& out)
+        {
+            detail::gemm_arm<T, Layout::RowMajor>(*arm.kernels, arm.path, T{1}, a.cview(), b.cview(), T{}, out.view(),
+                                                  Trans::None, Trans::None, alloc);
+        };
+        bool admitted[kArms]{};
+        bool same[kArms]{};
+        crd::f64 best[kArms]{};
+        run(arms[0], c_auto);
+        for (crd::usize i = 0; i < arm_count; ++i)
+        {
+            admitted[i] = arms[i].path != GemmPath::Resident ||
+                          detail::gemm_resident_admits<T, Layout::RowMajor>(*arms[i].kernels, Trans::None, n, n);
+            if (admitted[i])
+            {
+                run(arms[i], c);
+                same[i] = std::memcmp(c.data(), c_auto.data(), n * n * sizeof(T)) == 0;
+                g_failed = g_failed || !same[i];
+            }
+            best[i] = 1e300;
+        }
+        for (int round = 0; round < kRounds; ++round)
+        {
+            for (crd::usize i = 0; i < arm_count; ++i)
+            {
+                if (!admitted[i])
+                {
+                    continue;
+                }
+                const auto t0 = std::chrono::steady_clock::now();
+                int calls = 0;
+                crd::f64 elapsed = 0.0;
+                while (calls < 3 || elapsed < 0.2)
+                {
+                    run(arms[i], c);
+                    ++calls;
+                    elapsed = std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - t0).count();
+                }
+                best[i] = std::min(best[i], elapsed / calls);
+            }
+        }
+        const crd::f64 flops = 2.0 * static_cast<crd::f64>(n) * static_cast<crd::f64>(n) * static_cast<crd::f64>(n);
+        for (crd::usize i = 0; i < arm_count; ++i)
+        {
+            if (!admitted[i])
+            {
+                std::fprintf(stdout, "%-6zu | %-12s | %10s | %8s | n/a\n", static_cast<std::size_t>(n), arms[i].name,
+                             "n/a", "n/a");
+                continue;
+            }
+            std::fprintf(stdout, "%-6zu | %-12s | %10.2f | %7.3fx | %s\n", static_cast<std::size_t>(n), arms[i].name,
+                         flops / best[i] / 1e9, best[0] / best[i], same[i] ? "same" : "!MISMATCH!");
+        }
         std::fflush(stdout);
     }
 }
@@ -483,6 +598,12 @@ int main(int argc, char** argv)
         crd::memory::TlsfAllocator alloc(1024ULL * 1024ULL * 1024ULL);
         shootout<crd::f64>("f64 GEMM", peak_f64, nw, &alloc);
     }
+    if (g_one_thread)
+    {
+        crd::memory::TlsfAllocator alloc(1024ULL * 1024ULL * 1024ULL);
+        gemm_arms<crd::f32>("f32 GEMM", &alloc);
+        gemm_arms<crd::f64>("f64 GEMM", &alloc);
+    }
     {
         // Cerid-vs-OpenBLAS at the ACTUAL cmod/cdiv shapes (v5a-4). NOTE: meaningful only with a
         // NATIVE OpenBLAS (Linux CI / system libopenblas); the Windows CPM `_deps` OpenBLAS is the
@@ -495,7 +616,7 @@ int main(int argc, char** argv)
         }
     }
 
-    std::fprintf(stdout, "\nDone.\n");
+    std::fprintf(stdout, "\n%s\n", g_failed ? "FAILED: a result is off its reference (see !MISMATCH!)" : "Done.");
     crd::jobs::shutdown();
-    return 0;
+    return g_failed ? 1 : 0;
 }
