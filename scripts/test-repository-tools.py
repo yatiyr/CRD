@@ -4591,6 +4591,10 @@ class IsaIsolation(unittest.TestCase):
         self.assertEqual(1, len(judge([('?add@avx2@math@crd@@YA?AUVec8f@123@U4123@0@Z', True)])))
         self.assertEqual(1, len(judge([('crd::math::sse2::exp(double)', False)])))
         self.assertEqual(1, len(judge([('crd::hesap::tensor::kTensorKernelsAvx2', True)])))
+        # MSVC ASan's descriptor of a global is judged as that global: a literal's passes, a level table's fails.
+        self.assertEqual([], judge([('L__asan_global_??_C@_04FNEJMADF@sse2@', False)]))
+        self.assertEqual(1, len(judge([('L__asan_global_?kTensorKernelsAvx2@tensor@hesap@crd@@3UTensorKernels@123@B',
+                                        False)])))
 
     def test_kernel_symbols_stay_in_their_level(self):
         allowed = self.exceptions.kernel_symbols
@@ -4599,8 +4603,12 @@ class IsaIsolation(unittest.TestCase):
                 ('__real@3ff0000000000000', True),
                 ('??$bit_cast@VVec8f@avx2@math@crd@@@std@@YA?AVVec8f@avx2@math@crd@@AEBM@Z', True),
                 ('crd::hesap::tensor::avx2::walk(int)', True), ('local_helper', False),
-                ('___asan_globals_registered', True)]
+                ('___asan_globals_registered', True), ('L__asan_global_??_C@_04FNEJMADF@sse2@', True),
+                ('L__asan_global_?table@avx2@tensor@hesap@crd@@3HB', True),
+                ('L__asan_global_?kTensorKernelsAvx2@tensor@hesap@crd@@3UTensorKernels@123@B', True)]
         self.assertEqual(([], 1), judge('avx2', good, allowed))
+        failures, _ = judge('avx2', [('L__asan_global_?table@@3HB', True)], allowed)
+        self.assertEqual(1, len(failures))
         failures, _ = judge('avx2', [('??$min@H@std@@YAAEBHAEBH0@Z', True)], allowed)
         self.assertEqual(1, len(failures))
         failures, tables = judge('avx2', [('crd::hesap::tensor::kTensorKernelsAvx2AvxVnni', True)], allowed)
@@ -4910,6 +4918,21 @@ class IsaIsolation(unittest.TestCase):
         self.assertEqual(['g first at 0x140001009', 'h first at 0x140001010'],
                          sorted(re.sub(r'^.* in (\w+) \(.*, (first at 0x[0-9a-f]+):.*$', r'\1 \2', failure)
                                 for failure in failures))
+
+    def test_map_judges_an_asan_descriptor_as_its_global(self):
+        # win-asan's cpu_features.obj names its level strings ("sse2") through ASan descriptors of the literals.
+        code = [(0x140001000, 'f', 'a.obj')]
+        entries = [('0002', 0x140002000, 'L__asan_global_??_C@_04FNEJMADF@sse2@', 'a.obj'),
+                   ('0002', 0x140002040, 'L__asan_global_?x@avx2@math@crd@@3HB', 'a.obj')]
+        owners = isa_isolation.Owners({}, {os.path.normpath('/b/t.dir/a.obj'): ('crd-t', '/b/t.exe')})
+        with patch.object(isa_isolation, 'read_map', lambda path: (0x140000000, code, entries)), \
+                patch.object(isa_isolation, 'pe_reader', lambda path: lambda address, size: b''), \
+                patch.object(isa_isolation, '_stream',
+                             lambda command, label: iter(['  0000000140001000: C3                 ret\n'])):
+            failures = isa_isolation.judge_map_image({'dumpbin': 'dumpbin'}, '/b/t.exe', '/b/t.map', owners,
+                                                     self.exceptions)
+        self.assertEqual(['/b/t.exe: per-level symbol L__asan_global_?x@avx2@math@crd@@3HB comes from general object '
+                          'a.obj'], failures)
 
     def test_manifest_and_il_without_images(self):
         with tempfile.TemporaryDirectory() as temp:

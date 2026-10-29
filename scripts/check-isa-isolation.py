@@ -55,6 +55,14 @@ def namespace_pattern(names):
 
 LEVEL_NS = namespace_pattern(_NS)
 TABLE_NAME = re.compile(rf'^k[A-Z]\w*?(?:{"|".join(sorted(SUFFIX.values(), key=len, reverse=True))})$')
+# MSVC AddressSanitizer's descriptor of an instrumented global: `L__asan_global_<global's name>`.
+ASAN_DESCRIPTOR = 'L__asan_global_'
+
+
+def described(name):
+    """The symbol a name stands for: AddressSanitizer's descriptor of a global is judged as the global itself, so a
+    string literal's descriptor passes like the literal and a level table's fails like the table."""
+    return name[len(ASAN_DESCRIPTOR):] if name.startswith(ASAN_DESCRIPTOR) else name
 
 # x86-64 instructions above v1, by the first level that has them (psABI levels); VEX, EVEX, REX2 and XOP come from the
 # encoding. TZCNT is absent: every x86-64 CPU executes its encoding as BSF, which compilers rely on.
@@ -540,27 +548,29 @@ def judge_kernel_symbols(namespace, defined, allowed):
     """Failures of a kernel object's symbols, and the number of tables it defines."""
     own = namespace_pattern(namespace)
     failures, tables = [], 0
-    for name, external in defined:
+    for symbol, external in defined:
+        name = described(symbol)
         if not external or own.search(name):
             continue
         base = unqualified(name)
         if TABLE_NAME.match(base) and base.endswith(SUFFIX[namespace]):
-            tables += 1
+            tables += name == symbol
             continue
         if not any(pattern.search(name) for pattern in allowed):
-            failures.append(f'defines {name} outside namespace {namespace}')
+            failures.append(f'defines {symbol} outside namespace {namespace}')
     return failures, tables
 
 
 def judge_general_symbols(defined):
     failures = []
-    for name, _external in defined:
+    for symbol, _external in defined:
+        name = described(symbol)
         if name.startswith('??_C@'):
             continue
         if LEVEL_NS.search(name):
-            failures.append(f'defines the per-level symbol {name}')
+            failures.append(f'defines the per-level symbol {symbol}')
         elif TABLE_NAME.match(unqualified(name)):
-            failures.append(f'defines the level table {name}')
+            failures.append(f'defines the level table {symbol}')
     return failures
 
 
@@ -781,7 +791,7 @@ def judge_map_image(tools, image, map_path, owners, exceptions):
     base, code, entries = read_map(map_path)
     failures = []
     for _segment, _address, name, column in entries:
-        if name.startswith(('$', '??_C@')) or not LEVEL_NS.search(name):
+        if described(name).startswith(('$', '??_C@')) or not LEVEL_NS.search(name):
             continue
         kind, owner = owners.classify(column, image)
         if kind == 'general':
