@@ -50,6 +50,7 @@ the offline and real-time forms are genuinely different systems (as hair does).
 
 ## Index
 
+- [Argument reduction for crd::math's log and trig](2026-10-29-scalar-log-and-trig-reduction.md) — log's carried quotient and exact head sum (≤0.52 ulp) and Payne–Hanek past Cody-Waite's exact range.
 - [DX12 inner-coverage qualification](2026-09-13-dx12-inner-coverage.md) — exact interior/edge pixels, the native/barycentric route contract, one CPU corner oracle and SDK-only provider isolation.
 - [Pinned WARP provider](2026-09-13-dx12-pinned-warp.md) — hash-verified app-local Microsoft WARP 1.0.20 staged beside test executables; hosted lanes qualify one software tuple.
 - [DX12 validation and command lifetimes](2026-09-12-dx12-validation-and-command-lifetimes.md) — bounded startup-to-teardown capture, checked submission and truthful fence failures.
