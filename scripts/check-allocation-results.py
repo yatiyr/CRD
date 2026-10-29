@@ -44,7 +44,6 @@ ALLOWED = {
     'runtime/examples/smoke_resources_async.cpp': (1, 'm_alloc is a TlsfAllocator, fatal on exhaustion'),
     'runtime/examples/smoke_resources_reload.cpp': (1, 'm_alloc is a TlsfAllocator, fatal on exhaustion'),
     'runtime/examples/smoke_resources_stream.cpp': (1, 'm_alloc is a TlsfAllocator, fatal on exhaustion'),
-    'runtime/examples/bench_fft_f32.cpp': (3, 'alloc is a GrowableTlsfAllocator, fatal on exhaustion'),
     'runtime/examples/smoke_memory.cpp': (4, 'the heap default allocator, a 64 KiB scratch arena asked for 1 KiB and a '
                                              '64-slot pool asked for 2 slots'),
     'runtime/examples/smoke_virtual_memory_allocator.cpp': (3, 'a VirtualMemoryAllocator, fatal on exhaustion'),
