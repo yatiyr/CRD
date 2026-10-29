@@ -83,13 +83,14 @@ CRD_DEFINE_LOG_CHANNEL(g_log_crash_specimen, "CrashSpecimen", crd::log::LogLevel
 
 namespace
 {
-// A wild write through a null pointer -> an access violation. The pointee is volatile so the store is not optimized
-// away, and the pointer itself is volatile so its null value is read at run time: the compiler cannot prove the store
-// faults, so the program's own store reaches the hardware as written (GCC otherwise rewrites the proven-erroneous path
-// into a store of 0 to address 0 and a trap instruction) and the link-time -Wnull-dereference does not report it.
+// A wild write through a null pointer -> an access violation. The pointer is volatile, so its null value is read at
+// run time: the compiler cannot prove the store faults or drop it, so the program's own store reaches the hardware as
+// written (GCC otherwise rewrites the proven-erroneous path into a store of 0 to address 0 and a trap instruction) and
+// the link-time -Wnull-dereference does not report it. The pointee is not volatile: Clang's UBSan checks no volatile
+// access for null, and the UBSan lanes promise its report of this store.
 void null_write() noexcept
 {
-    volatile int* volatile p = nullptr;
+    int* volatile p = nullptr;
     *p = 42;
 }
 

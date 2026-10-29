@@ -226,11 +226,12 @@ void job_race(const cp::DiagnosticHost& host, Shared& s)
     std::printf("CRD_HOST_TALLY %d\n", s.repaired ? s.counted.load() : s.plain);
 }
 
-// crash: the order lookup finds nothing and the defect writes through the null result. Both pointers are volatile, so
-// the store reaches the hardware as written (see crash_capture_specimen's null_write).
+// crash: the order lookup finds nothing and the defect writes through the null result. The pointer is volatile, so the
+// store reaches the hardware as written, and the pointee is not, so UBSan checks it (see crash_capture_specimen's
+// null_write).
 void write_order(bool repaired)
 {
-    volatile crd::u32* volatile order = nullptr;
+    crd::u32* volatile order = nullptr;
     if (!repaired)
     {
         *order = 8U;
