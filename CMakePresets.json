@@ -796,6 +796,7 @@
                 "outputOnFailure": true
             },
             "execution": {
+                "jobs": 3,
                 "timeout": 3600
             }
         },

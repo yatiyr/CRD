@@ -87,4 +87,5 @@ check. Every other check stays on that lane, and `linux-clang-arm64-asan` and `l
 - The next run that completes linux-gcc-arm64-asan: the lane's first green run, the two timed-out cases inside
   their timeouts.
 - win-asan's cap: 1,407 cases did not run. The forced fft arms each run portable and their own level
-  (5fbf494d); the rest is per-case ASan cost on the CPU-rendered GPU cases.
+  (5fbf494d); the rest is per-case ASan cost on the CPU-rendered GPU cases. Bounded at three jobs:
+  [session](2026-10-29-simd-dispatch-win-asan-bound.md).
