@@ -104,6 +104,13 @@
       "why": "the symmetric eigensolvers' crd-jobs levers, included by their board, their tests and mrrr_vectors.hpp; the multisection and MRRR are baseline scalar code, so the header brings no intrinsics header to them"
     },
     {
+      "include": "crd/hesap/direct/detail/direct_picks.hpp",
+      "flags_of": "tests/numerics/hesap-direct/test_supernodal.cpp",
+      "forbid": ["chrono", "format"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
+      "why": "the sparse direct factors' crd-jobs levers, included by supernodal_cholesky.hpp, its board and its tests; the picks are plain data, so the header brings no intrinsics header to them"
+    },
+    {
       "include": "crd/hesap/sparse/sell.hpp",
       "flags_of": "tests/numerics/hesap-sparse/test_sell.cpp",
       "forbid": ["chrono", "format"],

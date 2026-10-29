@@ -3,6 +3,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
+#include <crd/hesap/direct/detail/direct_picks.hpp>
 #include <crd/hesap/direct/factorization.hpp>
 #include <crd/hesap/ordering/symbolic.hpp>
 #include <crd/hesap/sparse/sparse_pattern.hpp>
@@ -130,7 +131,14 @@ public:
     // supernode writes only its own panel, reads already-factored descendants,
     // per-worker scratch) — the determinism moat.
     void factorize(const sparse::SparsePattern& pattern, crd::containers::ConstSpan<T> values,
-                   crd::u32 nrelax = kSupernodeRelax, crd::u32 num_workers = 1, bool reuse_symbolic = false);
+                   crd::u32 nrelax = kSupernodeRelax, crd::u32 num_workers = 1, bool reuse_symbolic = false)
+    {
+        factorize_arm(detail::SupernodalPick{}, pattern, values, nrelax, num_workers, reuse_symbolic);
+    }
+    // factorize on pick's levers (detail/direct_picks.hpp; the jobs board and the arm tests).
+    void factorize_arm(const detail::SupernodalPick& pick, const sparse::SparsePattern& pattern,
+                       crd::containers::ConstSpan<T> values, crd::u32 nrelax = kSupernodeRelax,
+                       crd::u32 num_workers = 1, bool reuse_symbolic = false);
 
     // refactorize — NUMERIC re-factorization reusing the symbolic analysis (m_sym) from a prior factorize() on a
     // STRUCTURALLY-IDENTICAL `pattern` (same nonzero structure; new `values`). Skips the expensive symbolic phase
@@ -143,14 +151,16 @@ public:
         factorize(pattern, values, kSupernodeRelax, num_workers, /*reuse_symbolic=*/true);
     }
 
-    [[nodiscard]] bool solve(crd::containers::Span<T> rhs, crd::usize nrhs) const override;
+    [[nodiscard]] bool solve(crd::containers::Span<T> rhs, crd::usize nrhs) const override
+    {
+        return solve_arm(detail::SupernodalPick{}, rhs, nrhs);
+    }
     using IFactorization<T>::solve; // un-hide the single-RHS convenience overload
-    // Tuning/testing hook: run the multi-RHS solve with a FORCED worker count. nw≤1 → serial (RIGHT-looking
-    // forward + serial backward); nw>1 → level-parallel (LEFT-looking forward + backward). The two forward
-    // variants share the k-ascending accumulation order ⇒ bit-identical x across all nw (the solve
-    // determinism moat — verified by the [v5a-4][moat] serial-vs-parallel bitwise test). solve(rhs,nrhs)
-    // calls this with crd::jobs::num_workers().
-    [[nodiscard]] bool solve_with_workers(crd::containers::Span<T> rhs, crd::usize nrhs, crd::u32 nw) const;
+    // solve on pick's levers; pick.solve_workers forces the job count: 1 → serial (RIGHT-looking forward + serial
+    // backward); more → level-parallel (LEFT-looking forward + backward). The two forward variants share the
+    // k-ascending accumulation order ⇒ bit-identical x at every job count (the solve determinism moat).
+    [[nodiscard]] bool solve_arm(const detail::SupernodalPick& pick, crd::containers::Span<T> rhs,
+                                 crd::usize nrhs) const;
     [[nodiscard]] crd::usize n() const noexcept override { return m_n; }
     [[nodiscard]] crd::u64 factor_nnz() const noexcept override { return m_lnz; }
     [[nodiscard]] crd::usize info() const noexcept override { return m_info; }
@@ -159,6 +169,13 @@ public:
     // row patterns). Lets a consumer introspect the factor shape (supernode count
     // / size distribution) without touching numeric storage.
     [[nodiscard]] const SupernodalSymbolic& symbolic() const noexcept { return m_sym; }
+    // The factor's panels, supernode s's ColMajor |srow_s| x cols_s block at panel_offsets()[s] (ld |srow_s|); the
+    // upper triangle of each diagonal block is scratch, never part of L.
+    [[nodiscard]] crd::containers::ConstSpan<T> panels() const noexcept { return {m_lx.data(), m_lx.size()}; }
+    [[nodiscard]] crd::containers::ConstSpan<crd::u32> panel_offsets() const noexcept
+    {
+        return {m_lxp.data(), m_lxp.size()};
+    }
 
 private:
     crd::memory::IAllocator* m_alloc = nullptr;

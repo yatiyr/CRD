@@ -1,6 +1,8 @@
 // crd-hesap-direct v5a-1b — supernodal symbolic (relaxed amalgamation) tests.
 
 #include <crd/hesap/complex.hpp>
+#include <crd/hesap/dense/real_type.hpp>
+#include <crd/hesap/direct/detail/direct_picks.hpp>
 #include <crd/hesap/direct/direct.hpp>
 #include <crd/hesap/ordering/symbolic.hpp>
 #include <crd/hesap/sparse/triplet_builder.hpp>
@@ -9,7 +11,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
+#include <cstring>
 #include <initializer_list>
+#include <iterator>
+#include <limits>
 
 namespace dir = crd::hesap::direct;
 namespace ord = crd::hesap::ordering;
@@ -600,7 +605,7 @@ TEST_CASE("supernodal Cholesky: fat-front NODE-PARALLEL factor is bit-identical 
         }
         // SOLVE DETERMINISM MOAT (the sacred bar — proven EMPIRICALLY, not just by construction): the SAME
         // factor solved serially (nw=1 → RIGHT-looking forward + serial backward) vs in parallel (nw>1 →
-        // LEFT-looking forward + level-parallel backward) must be BIT-IDENTICAL. solve_with_workers forces
+        // LEFT-looking forward + level-parallel backward) must be BIT-IDENTICAL. solve_arm forces
         // the path — the public solve() reads num_workers() (fixed for the whole test run), so this is the
         // ONLY place the serial and parallel solve paths execute head-to-head on one factor.
         {
@@ -617,8 +622,9 @@ TEST_CASE("supernodal Cholesky: fat-front NODE-PARALLEL factor is bit-identical 
                     xsp[c * n + i] = v;
                 }
             }
-            REQUIRE(f1.solve_with_workers({xss.data(), xss.size()}, nrhs_m, 1));
-            REQUIRE(f1.solve_with_workers({xsp.data(), xsp.size()}, nrhs_m, w > 1U ? w : 2U));
+            REQUIRE(f1.solve_arm(dir::detail::SupernodalPick{.solve_workers = 1}, {xss.data(), xss.size()}, nrhs_m));
+            REQUIRE(f1.solve_arm(dir::detail::SupernodalPick{.solve_workers = w > 1U ? w : 2U},
+                                 {xsp.data(), xsp.size()}, nrhs_m));
             for (crd::usize k = 0; k < xss.size(); ++k)
             {
                 REQUIRE(xss[k] == xsp[k]); // bit-identical: serial RIGHT-looking == parallel LEFT-looking
@@ -742,7 +748,7 @@ TEST_CASE("supernodal Cholesky: single-RHS solve bit-identical across worker cou
     {
         xref[i] = b[i];
     }
-    REQUIRE(f.solve_with_workers({xref.data(), n}, 1, 1));
+    REQUIRE(f.solve_arm(dir::detail::SupernodalPick{.solve_workers = 1}, {xref.data(), n}, 1));
 
     // Parallel single-RHS at several worker counts (incl. intermediate 1<nw<pool) must be BIT-IDENTICAL.
     for (crd::u32 nw : {2U, 3U, w > 3U ? w : 4U})
@@ -753,7 +759,7 @@ TEST_CASE("supernodal Cholesky: single-RHS solve bit-identical across worker cou
         {
             x[i] = b[i];
         }
-        REQUIRE(f.solve_with_workers({x.data(), n}, 1, nw));
+        REQUIRE(f.solve_arm(dir::detail::SupernodalPick{.solve_workers = nw}, {x.data(), n}, 1));
         for (crd::u32 i = 0; i < n; ++i)
         {
             REQUIRE(x[i] == xref[i]); // bit-exact across worker counts — the single-RHS solve moat
@@ -768,7 +774,7 @@ TEST_CASE("supernodal Cholesky: single-RHS solve bit-identical across worker cou
     }
 }
 
-TEST_CASE("supernodal Cholesky: solve_with_workers bit-identical across forced worker counts",
+TEST_CASE("supernodal Cholesky: solve_arm bit-identical across forced worker counts",
           "[hesap][direct][v5a-4][numeric][kernels]")
 {
     // The two-path forward (nw<=1 RIGHT-looking serial, nw>1 LEFT-looking parallel) + the level-parallel
@@ -804,7 +810,7 @@ TEST_CASE("supernodal Cholesky: solve_with_workers bit-identical across forced w
             ref[c * n + i] = b[i] * (1.0 + 0.2 * static_cast<crd::f64>(c));
         }
     }
-    REQUIRE(f.solve_with_workers({ref.data(), ref.size()}, nrhs, 1));
+    REQUIRE(f.solve_arm(dir::detail::SupernodalPick{.solve_workers = 1}, {ref.data(), ref.size()}, nrhs));
     for (crd::u32 nw : {2U, 3U, w > 3U ? w : 4U}) // 2,3 = intermediate 1<nw<pool; last = full pool
     {
         crd::containers::Array<crd::f64> x(&alloc);
@@ -816,7 +822,7 @@ TEST_CASE("supernodal Cholesky: solve_with_workers bit-identical across forced w
                 x[c * n + i] = b[i] * (1.0 + 0.2 * static_cast<crd::f64>(c));
             }
         }
-        REQUIRE(f.solve_with_workers({x.data(), x.size()}, nrhs, nw));
+        REQUIRE(f.solve_arm(dir::detail::SupernodalPick{.solve_workers = nw}, {x.data(), x.size()}, nrhs));
         for (crd::usize k = 0; k < x.size(); ++k)
         {
             REQUIRE(x[k] == ref[k]); // bit-identical across forced worker counts (the solve moat)
@@ -1050,4 +1056,405 @@ TEST_CASE("supernodal Cholesky: complex Hermitian TREE-PARALLEL is bit-identical
     {
         CHECK(crd::hesap::abs(x1[i] - xtrue[i]) < 1e-9);
     }
+}
+
+// ---- detail::SupernodalPick's arms (SIMD-DISPATCH, the folded HESAP-JOBS-RETUNE) ----------------------------------
+namespace
+{
+using dir::detail::SupernodalPick;
+template <typename T> using Mat = sp::SparseMatrix<T, sp::SparseFormat::Csr>;
+template <typename T> using Real = crd::hesap::dense::RealType<T>;
+constexpr crd::u32 kNeverWidth = 0xFFFFFFFFU;
+constexpr crd::u64 kNeverWork = ~crd::u64{0};
+constexpr crd::usize kGuard = 7; // guard words after the solve's right-hand sides
+
+enum class Special : crd::u8
+{
+    None,
+    NegativePivot,       // A(k, k) = -1 at k = n / 2: every arm reports info() k + 1
+    NaN,                 // A(k, j) and A(j, k) NaN at k = n / 2 and j < k: every arm reports info() k + 1
+    SignedZeroSubnormal, // -0 and the type's smallest subnormal in place of some off-diagonals
+};
+
+template <typename T> T scalar(crd::f64 re, crd::f64 im)
+{
+    if constexpr (crd::hesap::dense::is_complex_v<T>)
+    {
+        return T{static_cast<Real<T>>(re), static_cast<Real<T>>(im)};
+    }
+    else
+    {
+        (void)im;
+        return static_cast<T>(re);
+    }
+}
+
+// The symmetric f64 m in T, Hermitian for the complex types: the diagonal doubled, each off-diagonal v as v (1 + i/2)
+// above the diagonal and its conjugate below, so it stays diagonally dominant, hence positive definite.
+template <typename T> Mat<T> in_type(crd::memory::IAllocator* a, const Csr& m, Special special)
+{
+    const crd::u32 n = m.rows();
+    const auto& pat = m.pattern();
+    const auto& vals = m.values().values;
+    const crd::u32 k = n / 2;
+    crd::u32 nan_col = k;
+    for (crd::u32 q = pat.outer_ptr[k]; q < pat.outer_ptr[k + 1]; ++q)
+    {
+        if (pat.inner_idx[q] < k)
+        {
+            nan_col = pat.inner_idx[q]; // the last neighbour before k
+        }
+    }
+    REQUIRE(nan_col < k);
+    const crd::f64 tiny = static_cast<crd::f64>(std::numeric_limits<Real<T>>::denorm_min());
+    sp::TripletBuilder<T> tb(a, n, n);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        for (crd::u32 q = pat.outer_ptr[i]; q < pat.outer_ptr[i + 1]; ++q)
+        {
+            const crd::u32 j = pat.inner_idx[q];
+            const crd::f64 v = vals[q];
+            T x = i == j ? scalar<T>(2.0 * v, 0.0) : scalar<T>(v, i < j ? 0.5 * v : -0.5 * v);
+            if (special == Special::NegativePivot && i == k && j == k)
+            {
+                x = scalar<T>(-1.0, 0.0);
+            }
+            if (special == Special::NaN && ((i == k && j == nan_col) || (i == nan_col && j == k)))
+            {
+                x = scalar<T>(std::numeric_limits<crd::f64>::quiet_NaN(), 0.0);
+            }
+            if (special == Special::SignedZeroSubnormal && i != j && (i + j) % 5 == 0)
+            {
+                x = scalar<T>((i + j) % 10 == 0 ? -0.0 : tiny, 0.0);
+            }
+            tb.add(i, j, x);
+        }
+    }
+    return tb.compress();
+}
+
+// b = A x for the full-storage Hermitian a.
+template <typename T> void apply(const Mat<T>& a, const T* x, T* b)
+{
+    const auto& pat = a.pattern();
+    const auto& vals = a.values().values;
+    for (crd::u32 i = 0; i < a.rows(); ++i)
+    {
+        T acc{};
+        for (crd::u32 q = pat.outer_ptr[i]; q < pat.outer_ptr[i + 1]; ++q)
+        {
+            acc += vals[q] * x[pat.inner_idx[q]];
+        }
+        b[i] = acc;
+    }
+}
+
+template <typename T> crd::f64 magnitude(const T& x)
+{
+    if constexpr (crd::hesap::dense::is_complex_v<T>)
+    {
+        return static_cast<crd::f64>(crd::hesap::abs(x));
+    }
+    else
+    {
+        return std::fabs(static_cast<crd::f64>(x));
+    }
+}
+
+// The normwise backward error of x for A x = b, |b - A x| / (|A| |x| + |b|) in the infinity norm, within the
+// declared bound 4 n eps.
+template <typename T> bool within_bound(const Mat<T>& a, const T* x, const T* b, crd::memory::IAllocator* alloc)
+{
+    const crd::u32 n = a.rows();
+    crd::containers::Array<T> ax(alloc);
+    ax.resize(n);
+    apply(a, x, ax.data());
+    const auto& pat = a.pattern();
+    const auto& vals = a.values().values;
+    crd::f64 r = 0.0;
+    crd::f64 an = 0.0;
+    crd::f64 xn = 0.0;
+    crd::f64 bn = 0.0;
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        crd::f64 row = 0.0;
+        for (crd::u32 q = pat.outer_ptr[i]; q < pat.outer_ptr[i + 1]; ++q)
+        {
+            row += magnitude(vals[q]);
+        }
+        an = row > an ? row : an;
+        const crd::f64 ri = magnitude(b[i] - ax[i]);
+        r = ri > r ? ri : r;
+        xn = magnitude(x[i]) > xn ? magnitude(x[i]) : xn;
+        bn = magnitude(b[i]) > bn ? magnitude(b[i]) : bn;
+    }
+    const crd::f64 eps = static_cast<crd::f64>(std::numeric_limits<Real<T>>::epsilon());
+    return r <= 4.0 * static_cast<crd::f64>(n) * eps * (an * xn + bn);
+}
+
+// info() and the lower trapezoid of every panel (each diagonal block's upper triangle is scratch), bit for bit.
+template <typename T> bool same_factor(const dir::SupernodalCholesky<T>& x, const dir::SupernodalCholesky<T>& y)
+{
+    if (x.info() != y.info() || x.panels().size() != y.panels().size())
+    {
+        return false;
+    }
+    const dir::SupernodalSymbolic& sym = x.symbolic();
+    const auto off = x.panel_offsets();
+    for (crd::u32 s = 0; s < sym.nsuper; ++s)
+    {
+        const crd::u32 nr = sym.srowp[s + 1] - sym.srowp[s];
+        const crd::u32 nc = sym.scol[s + 1] - sym.scol[s];
+        for (crd::u32 c = 0; c < nc; ++c)
+        {
+            const crd::usize at = off[s] + static_cast<crd::usize>(c) * nr + c;
+            if (std::memcmp(x.panels().data() + at, y.panels().data() + at, (nr - c) * sizeof(T)) != 0)
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+template <typename T>
+dir::SupernodalCholesky<T> factor_arm(const SupernodalPick& pick, const Mat<T>& m, crd::u32 jobs,
+                                      crd::memory::IAllocator* alloc)
+{
+    const auto& vals = m.values().values;
+    dir::SupernodalCholesky<T> f(alloc);
+    f.factorize_arm(pick, m.pattern(), {vals.data(), vals.size()}, dir::kSupernodeRelax, jobs);
+    return f;
+}
+
+struct FactorArm
+{
+    SupernodalPick pick;
+    crd::u32 jobs;
+};
+
+// Every lever of factorize_arm on one matrix: the scheduling arms give the one-job factor's bits; each blocking arm
+// gives its own one-job bits on 8 and 32 jobs with every front node-parallel and split, and keeps the bound.
+template <typename T> void check_factor_arms(const Csr& base, Special special, crd::memory::IAllocator* alloc)
+{
+    const Mat<T> m = in_type<T>(alloc, base, special);
+    const crd::u32 n = m.rows();
+    const bool fails = special == Special::NegativePivot || special == Special::NaN;
+    const crd::usize want_info = fails ? n / 2 + 1 : 0;
+    const auto ref = factor_arm<T>(SupernodalPick{}, m, 1, alloc);
+    REQUIRE(ref.info() == want_info);
+    const SupernodalPick node{.node_min_cols = 0};
+    const SupernodalPick split{.node_min_cols = 0, .gemm_min_flop = 0};
+    const FactorArm scheduling[] = {
+        {{}, 4},
+        {{}, 8},
+        {{}, 16},
+        {{}, 32},
+        {node, 8},
+        {split, 4},
+        {split, 8},
+        {split, 16},
+        {split, 32},
+        {{.node_min_cols = 0, .gemm_min_flop = kNeverWork}, 8},
+        {{.node_min_cols = kNeverWidth}, 8},
+        {{.cmod_syrk_min = 0}, 1},
+        {{.cmod_syrk_min = kNeverWidth}, 1},
+        {{.node_min_cols = 0, .gemm_min_flop = 0, .cmod_syrk_min = 0}, 8},
+    };
+    for (crd::usize i = 0; i < std::size(scheduling); ++i)
+    {
+        INFO("scheduling arm " << i << " on " << scheduling[i].jobs << " jobs");
+        CHECK(same_factor(factor_arm<T>(scheduling[i].pick, m, scheduling[i].jobs, alloc), ref));
+    }
+    const SupernodalPick blocking[] = {
+        {.cdiv_scalar_max = 0},
+        {.cdiv_scalar_max = kNeverWidth},
+        {.cdiv_scalar_max = 0, .cdiv_block = 64, .cdiv_inner = 16},
+        {.cdiv_scalar_max = 0, .cdiv_block = 40, .cdiv_inner = 24},
+        {.cdiv_scalar_max = 0, .cdiv_block = 8, .cdiv_inner = 8},
+        {.cdiv_scalar_max = 0, .cdiv_block = 256, .cdiv_inner = 256},
+        {.cdiv_scalar_max = 0, .cdiv_block = 1, .cdiv_inner = 1},
+    };
+    crd::containers::Array<T> xtrue(alloc);
+    crd::containers::Array<T> b(alloc);
+    crd::containers::Array<T> x(alloc);
+    xtrue.resize(n);
+    b.resize(n);
+    x.resize(n);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        xtrue[i] = scalar<T>(1.0 + 0.01 * static_cast<crd::f64>(i % 37), -0.02 * static_cast<crd::f64>(i % 11));
+    }
+    apply(m, xtrue.data(), b.data());
+    auto bounded = [&](const dir::SupernodalCholesky<T>& f)
+    {
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            x[i] = b[i];
+        }
+        return f.solve({x.data(), n}) && within_bound(m, x.data(), b.data(), alloc);
+    };
+    if (!fails)
+    {
+        CHECK(bounded(ref));
+    }
+    for (crd::usize i = 0; i < std::size(blocking); ++i)
+    {
+        INFO("blocking arm " << i);
+        const auto one = factor_arm<T>(blocking[i], m, 1, alloc);
+        CHECK(one.info() == want_info);
+        for (const crd::u32 jobs : {8U, 32U})
+        {
+            SupernodalPick pick = blocking[i];
+            pick.node_min_cols = 0;
+            pick.gemm_min_flop = 0;
+            INFO("on " << jobs << " jobs");
+            CHECK(same_factor(factor_arm<T>(pick, m, jobs, alloc), one));
+        }
+        if (!fails)
+        {
+            CHECK(bounded(one));
+        }
+    }
+}
+
+// Every lever of solve_arm on one factor, one and five right-hand sides: each job count and the gate give the serial
+// solution's bits; each diagonal form (the batch width, a blocking lever) gives its own serial bits on 8 and 32 jobs
+// and keeps the bound; every arm leaves the guard words after the right-hand sides alone, and a failed factor
+// refuses on every arm and leaves the right-hand sides as they were.
+template <typename T> void check_solve_arms(const Csr& base, crd::memory::IAllocator* alloc)
+{
+    const Mat<T> m = in_type<T>(alloc, base, Special::None);
+    const crd::u32 n = m.rows();
+    const auto f = factor_arm<T>(SupernodalPick{}, m, 1, alloc);
+    const auto bad = factor_arm<T>(SupernodalPick{}, in_type<T>(alloc, base, Special::NegativePivot), 1, alloc);
+    REQUIRE(f.info() == 0);
+    REQUIRE(bad.info() != 0);
+    const SupernodalPick scheduling[] = {
+        {.solve_workers = 4},
+        {.solve_workers = 8},
+        {.solve_workers = 16},
+        {.solve_workers = 32},
+        {.solve_min_work = 0, .solve_max_workers = 32},
+    };
+    const T guard = scalar<T>(-7.25, 3.5);
+    for (const crd::usize nrhs : {crd::usize{1}, crd::usize{5}})
+    {
+        const crd::usize len = static_cast<crd::usize>(n) * nrhs;
+        crd::containers::Array<T> xtrue(alloc);
+        crd::containers::Array<T> b(alloc);
+        xtrue.resize(len);
+        b.resize(len);
+        for (crd::usize c = 0; c < nrhs; ++c)
+        {
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                xtrue[c * n + i] = scalar<T>(1.0 + static_cast<crd::f64>(c) + 0.01 * static_cast<crd::f64>(i % 41),
+                                             0.03 * static_cast<crd::f64>(c));
+            }
+            apply(m, xtrue.data() + c * n, b.data() + c * n);
+        }
+        auto solve =
+            [&](const dir::SupernodalCholesky<T>& fac, const SupernodalPick& pick, crd::containers::Array<T>& out)
+        {
+            out.resize(len + kGuard);
+            for (crd::usize i = 0; i < len; ++i)
+            {
+                out[i] = b[i];
+            }
+            for (crd::usize i = len; i < len + kGuard; ++i)
+            {
+                out[i] = guard;
+            }
+            const bool ok = fac.solve_arm(pick, {out.data(), len}, nrhs);
+            for (crd::usize i = len; i < len + kGuard; ++i)
+            {
+                CHECK(std::memcmp(&out[i], &guard, sizeof(T)) == 0);
+            }
+            return ok;
+        };
+        crd::containers::Array<T> ref(alloc);
+        REQUIRE(solve(f, SupernodalPick{.solve_workers = 1}, ref));
+        for (crd::usize c = 0; c < nrhs; ++c)
+        {
+            CHECK(within_bound(m, ref.data() + c * n, b.data() + c * n, alloc));
+        }
+        auto refuses = [&](const SupernodalPick& pick)
+        {
+            crd::containers::Array<T> refused(alloc);
+            CHECK_FALSE(solve(bad, pick, refused));
+            CHECK(std::memcmp(refused.data(), b.data(), len * sizeof(T)) == 0);
+        };
+        for (crd::usize i = 0; i < std::size(scheduling); ++i)
+        {
+            INFO("solve arm " << i << ", " << nrhs << " right-hand sides");
+            crd::containers::Array<T> x(alloc);
+            CHECK(solve(f, scheduling[i], x));
+            CHECK(std::memcmp(x.data(), ref.data(), len * sizeof(T)) == 0);
+            refuses(scheduling[i]);
+        }
+        for (const crd::u32 width : {0U, kNeverWidth})
+        {
+            INFO("batch width " << width << ", " << nrhs << " right-hand sides");
+            crd::containers::Array<T> one(alloc);
+            CHECK(solve(f, SupernodalPick{.solve_workers = 1, .solve_batch_min_nc = width}, one));
+            for (crd::usize c = 0; c < nrhs; ++c)
+            {
+                CHECK(within_bound(m, one.data() + c * n, b.data() + c * n, alloc));
+            }
+            for (const crd::u32 jobs : {8U, 32U})
+            {
+                crd::containers::Array<T> x(alloc);
+                CHECK(solve(f, SupernodalPick{.solve_workers = jobs, .solve_batch_min_nc = width}, x));
+                CHECK(std::memcmp(x.data(), one.data(), len * sizeof(T)) == 0);
+            }
+            refuses(SupernodalPick{.solve_workers = 8, .solve_batch_min_nc = width});
+        }
+    }
+}
+
+template <typename T> void check_all_arms(crd::memory::IAllocator* alloc)
+{
+    // bordered_spd: 40-column block fronts (blocked cdiv, below rows) under a 72-column root that receives every
+    // block's cmod; grid2d: a deep etree of narrow fronts.
+    const Csr bordered = bordered_spd(alloc, 6, 40, 72);
+    const Csr grid = grid2d(alloc, 24, 24);
+    for (const Special special : {Special::None, Special::NegativePivot, Special::NaN, Special::SignedZeroSubnormal})
+    {
+        INFO("bordered, special " << static_cast<int>(special));
+        check_factor_arms<T>(bordered, special, alloc);
+    }
+    {
+        INFO("grid");
+        check_factor_arms<T>(grid, Special::None, alloc);
+    }
+    check_solve_arms<T>(bordered, alloc);
+    check_solve_arms<T>(grid, alloc);
+}
+} // namespace
+
+TEST_CASE("supernodal_cholesky_arm: every lever keeps one job's bits or the backward-error bound",
+          "[hesap][direct][jobs][determinism][kernels]")
+{
+    crd::memory::TlsfAllocator alloc(256 << 20);
+    crd::jobs::Config cfg;
+    cfg.num_threads = 4; // a hosted runner's pool on every host: the 8 to 32 forced jobs outnumber its workers
+    crd::jobs::init(cfg);
+    {
+        INFO("f64");
+        check_all_arms<crd::f64>(&alloc);
+    }
+    {
+        INFO("f32");
+        check_all_arms<crd::f32>(&alloc);
+    }
+    {
+        INFO("c64");
+        check_all_arms<crd::hesap::Complex64>(&alloc);
+    }
+    {
+        INFO("c32");
+        check_all_arms<crd::hesap::Complex32>(&alloc);
+    }
+    crd::jobs::shutdown();
 }
