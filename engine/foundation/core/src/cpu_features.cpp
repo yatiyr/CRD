@@ -33,6 +33,8 @@ extern "C"
 }
 #endif
 #elif CRD_OS_LINUX
+#include <cstdio>
+#include <fcntl.h>
 #include <sched.h>
 #include <unistd.h>
 #if CRD_ARCH_X64
@@ -333,6 +335,163 @@ bool walk_every_cpu(CpuSelection& s) noexcept
     (void)s;
     return false;
 #endif
+}
+
+#if CRD_OS_WINDOWS || CRD_OS_LINUX
+// One cache instance's bytes per sharing CPU folded into `share`, the smallest so far (0: none yet).
+void take_cache_share(crd::u32& share, crd::u64 bytes, crd::u32 sharers) noexcept
+{
+    if (bytes == 0U || sharers == 0U)
+    {
+        return;
+    }
+    const crd::u64 each = bytes / sharers;
+    const crd::u32 clamped = each > 0xFFFFFFFFULL ? 0xFFFFFFFFU : static_cast<crd::u32>(each);
+    share = share == 0U || clamped < share ? clamped : share;
+}
+#endif
+
+#if CRD_OS_LINUX
+// Opens one sysfs attribute of `cpu`'s cache `index`; -1 when absent.
+int open_cache_attribute(int cpu, int index, const char* name) noexcept
+{
+    char path[96] = {}; // NOLINT(modernize-avoid-c-arrays)
+    (void)std::snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/cache/index%d/%s", cpu, index, name);
+    return ::open(path, O_RDONLY | O_CLOEXEC);
+}
+
+// The attribute's first bytes, NUL-terminated; false when it is absent or empty.
+// NOLINTNEXTLINE(modernize-avoid-c-arrays)
+bool read_cache_attribute(int cpu, int index, const char* name, char (&out)[32]) noexcept
+{
+    const int fd = open_cache_attribute(cpu, index, name);
+    if (fd < 0)
+    {
+        return false;
+    }
+    const ssize_t got = ::read(fd, out, sizeof(out) - 1U);
+    (void)::close(fd);
+    out[got > 0 ? got : 0] = '\0';
+    return got > 0;
+}
+
+// The CPUs a shared_cpu_map names (comma-separated hex words), counted as it streams, so no CPU count bounds it.
+crd::u32 count_cache_sharers(int cpu, int index) noexcept
+{
+    const int fd = open_cache_attribute(cpu, index, "shared_cpu_map");
+    if (fd < 0)
+    {
+        return 0U;
+    }
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays): the set bits of each hex digit
+    constexpr crd::u8 kNibbleBits[16] = {0U, 1U, 1U, 2U, 1U, 2U, 2U, 3U, 1U, 2U, 2U, 3U, 2U, 3U, 3U, 4U};
+    crd::u32 sharers = 0U;
+    char chunk[64] = {}; // NOLINT(modernize-avoid-c-arrays)
+    for (ssize_t got = ::read(fd, chunk, sizeof(chunk)); got > 0; got = ::read(fd, chunk, sizeof(chunk)))
+    {
+        for (ssize_t i = 0; i < got; ++i)
+        {
+            const char c = chunk[i];
+            if (c >= '0' && c <= '9')
+            {
+                sharers += kNibbleBits[c - '0'];
+            }
+            else if (c >= 'a' && c <= 'f')
+            {
+                sharers += kNibbleBits[c - 'a' + 10];
+            }
+            else if (c >= 'A' && c <= 'F')
+            {
+                sharers += kNibbleBits[c - 'A' + 10];
+            }
+        }
+    }
+    (void)::close(fd);
+    return sharers;
+}
+#elif CRD_OS_WINDOWS
+crd::u32 count_mask_bits(KAFFINITY mask) noexcept // a plain loop: std::popcount is POPCNT behind a CRT branch
+{
+    crd::u32 n = 0U;
+    for (; mask != 0U; mask &= mask - 1U)
+    {
+        ++n;
+    }
+    return n;
+}
+#endif
+
+// CpuSelection::l2_share_bytes: every L2 instance the OS describes, its bytes over the logical CPUs sharing it.
+crd::u32 read_l2_share_bytes() noexcept
+{
+    crd::u32 share = 0U;
+#if CRD_OS_WINDOWS
+    DWORD len = 0U;
+    (void)::GetLogicalProcessorInformationEx(RelationCache, nullptr, &len);
+    if (len == 0U)
+    {
+        return 0U;
+    }
+    void* const buffer = ::VirtualAlloc(nullptr, len, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE); // pages, no heap
+    if (buffer == nullptr)
+    {
+        return 0U;
+    }
+    const auto* const bytes = static_cast<const unsigned char*>(buffer);
+    if (::GetLogicalProcessorInformationEx(RelationCache, static_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer),
+                                           &len) != 0)
+    {
+        for (DWORD off = 0U; off < len;)
+        {
+            const auto* p = reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(bytes + off);
+            const CACHE_RELATIONSHIP& c = p->Cache;
+            if (p->Relationship == RelationCache && c.Level == 2U && (c.Type == CacheData || c.Type == CacheUnified))
+            {
+                const WORD groups = c.GroupCount == 0U ? WORD{1} : c.GroupCount; // 0: one GroupMask (older OS)
+                const GROUP_AFFINITY* masks = c.GroupMasks;
+                crd::u32 sharers = 0U;
+                for (WORD g = 0U; g < groups; ++g)
+                {
+                    sharers += count_mask_bits(masks[g].Mask);
+                }
+                take_cache_share(share, c.CacheSize, sharers);
+            }
+            off += p->Size;
+        }
+    }
+    (void)::VirtualFree(buffer, 0U, MEM_RELEASE);
+#elif CRD_OS_LINUX
+    const long configured = ::sysconf(_SC_NPROCESSORS_CONF);
+    const int count = configured > 0 ? static_cast<int>(configured < 8192 ? configured : 8192) : 0;
+    for (int cpu = 0; cpu < count; ++cpu)
+    {
+        for (int index = 0;; ++index) // offline CPUs and sandboxes that hide the cache directories end at once
+        {
+            char level[32] = {}; // NOLINT(modernize-avoid-c-arrays)
+            char type[32] = {};  // NOLINT(modernize-avoid-c-arrays)
+            char size[32] = {};  // NOLINT(modernize-avoid-c-arrays)
+            if (!read_cache_attribute(cpu, index, "level", level))
+            {
+                break;
+            }
+            if (level[0] != '2' || (level[1] >= '0' && level[1] <= '9') ||
+                !read_cache_attribute(cpu, index, "type", type) || std::strncmp(type, "Instruction", 11U) == 0 ||
+                !read_cache_attribute(cpu, index, "size", size))
+            {
+                continue;
+            }
+            crd::u64 cache_bytes = 0U;
+            const char* digit = size;
+            for (; *digit >= '0' && *digit <= '9'; ++digit)
+            {
+                cache_bytes = cache_bytes * 10U + static_cast<crd::u64>(*digit - '0');
+            }
+            cache_bytes <<= *digit == 'K' ? 10U : (*digit == 'M' ? 20U : (*digit == 'G' ? 30U : 0U));
+            take_cache_share(share, cache_bytes, count_cache_sharers(cpu, index));
+        }
+    }
+#endif
+    return share;
 }
 
 // CRD_CPU_LEVEL's value copied into `buffer`; nullptr when unset, "?" (an unknown name) when too long for one.
@@ -695,6 +854,7 @@ CpuSelection detect_cpus() noexcept
     {
         s.walk_note = "no CPUID on this architecture; its level is architectural";
     }
+    s.l2_share_bytes = read_l2_share_bytes();
     s.detected = cpu_level_of(s.arch, s.features);
     s.selected = s.detected;
     s.kernel_features = s.features.usable;

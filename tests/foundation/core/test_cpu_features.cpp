@@ -881,6 +881,16 @@ struct OsCaches
 {
     crd::u32 bytes[4] = {}; // NOLINT(modernize-avoid-c-arrays): by level
     crd::u32 line = 0U;
+    crd::u32 l2_share = 0U; // the smallest L2 instance's bytes per logical CPU sharing it (0: none reported)
+    void add_l2_share(crd::u64 size, crd::u32 sharers)
+    {
+        if (size == 0U || sharers == 0U)
+        {
+            return;
+        }
+        const auto each = static_cast<crd::u32>(size / sharers);
+        l2_share = l2_share == 0U || each < l2_share ? each : l2_share;
+    }
     void add(crd::u32 level, crd::u32 size, crd::u32 line_bytes)
     {
         if (level < 1U || level > 3U)
@@ -897,7 +907,8 @@ struct OsCaches
 
 #if !defined(_WIN32)
 // The first line of one sysfs cache attribute of a CPU; false when the file is absent.
-bool read_cache_attribute(long cpu, int index, const char* name, char (&out)[32]) // NOLINT(modernize-avoid-c-arrays)
+template <crd::usize N>
+bool read_cache_attribute(long cpu, int index, const char* name, char (&out)[N]) // NOLINT(modernize-avoid-c-arrays)
 {
     char path[128] = {}; // NOLINT(modernize-avoid-c-arrays)
     (void)std::snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%ld/cache/index%d/%s", cpu, index, name);
@@ -906,9 +917,28 @@ bool read_cache_attribute(long cpu, int index, const char* name, char (&out)[32]
     {
         return false;
     }
-    const bool ok = std::fgets(out, sizeof(out), f) != nullptr;
+    const bool ok = std::fgets(out, static_cast<int>(sizeof(out)), f) != nullptr;
     (void)std::fclose(f);
     return ok;
+}
+
+// The CPUs a shared_cpu_list names ("0-1,8,10-11"): the list form, so the map form the engine reads is checked.
+crd::u32 count_cpu_list(const char* list)
+{
+    crd::u32 n = 0U;
+    for (const char* p = list; *p >= '0' && *p <= '9';)
+    {
+        char* end = nullptr;
+        const unsigned long first = std::strtoul(p, &end, 10);
+        unsigned long last = first;
+        if (*end == '-')
+        {
+            last = std::strtoul(end + 1, &end, 10);
+        }
+        n += static_cast<crd::u32>(last - first + 1UL);
+        p = *end == ',' ? end + 1 : end;
+    }
+    return n;
 }
 #endif
 
@@ -928,6 +958,19 @@ OsCaches read_os_caches()
         if (p->Relationship == RelationCache && (p->Cache.Type == CacheData || p->Cache.Type == CacheUnified))
         {
             os.add(p->Cache.Level, p->Cache.CacheSize, p->Cache.LineSize);
+            crd::u32 sharers = 0U;
+            const GROUP_AFFINITY* masks = p->Cache.GroupMasks;
+            for (WORD g = 0U; g < (p->Cache.GroupCount == 0U ? WORD{1} : p->Cache.GroupCount); ++g)
+            {
+                for (crd::u32 bit = 0U; bit < 64U; ++bit)
+                {
+                    sharers += static_cast<crd::u32>((masks[g].Mask >> bit) & 1U);
+                }
+            }
+            if (p->Cache.Level == 2U)
+            {
+                os.add_l2_share(p->Cache.CacheSize, sharers);
+            }
         }
         off += p->Size;
     }
@@ -956,6 +999,11 @@ OsCaches read_os_caches()
             bytes *= *unit == 'K' ? 1024UL : (*unit == 'M' ? 1024UL * 1024UL : 1UL);
             os.add(static_cast<crd::u32>(std::strtoul(level, nullptr, 10)), static_cast<crd::u32>(bytes),
                    static_cast<crd::u32>(std::strtoul(line, nullptr, 10)));
+            char shared[4096] = {}; // NOLINT(modernize-avoid-c-arrays): a list of 8,192 CPUs fits
+            if (std::strtoul(level, nullptr, 10) == 2UL && read_cache_attribute(cpu, index, "shared_cpu_list", shared))
+            {
+                os.add_l2_share(bytes, count_cpu_list(shared));
+            }
         }
     }
 #endif
@@ -991,6 +1039,18 @@ TEST_CASE("cpu features: the caches are the smallest of each level the OS report
         CHECK((os.bytes[level] == 0U || unread || os.bytes[level] == mine[level]));
     }
     CHECK((os.line == 0U || os.line == c.line_bytes));
+}
+
+TEST_CASE("cpu features: the L2 share is the smallest L2 per logical CPU sharing it, as the OS reports", "[core][cpu]")
+{
+    const crd::CpuSelection& s = crd::cpu_selection();
+    const OsCaches os = read_os_caches();
+    INFO("share " << s.l2_share_bytes << ", OS " << os.l2_share << ", OS L2 " << os.bytes[2]);
+    CHECK(s.l2_share_bytes == os.l2_share); // 0 only where the OS describes no L2 (some sandboxes)
+    CHECK(s.l2_share_bytes <= os.bytes[2]);
+    CHECK((os.bytes[2] == 0U || s.l2_share_bytes != 0U));
+    const crd::u32 l2 = s.features.caches.l2_bytes;
+    CHECK((l2 == 0U || s.l2_share_bytes <= l2)); // CPUID's L2 is the same instance's, where it describes one
 }
 
 TEST_CASE("cpu features: the selection line names the levels, the override, the CRT's level and extra features",

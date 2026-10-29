@@ -153,7 +153,8 @@ enum class CpuCacheSource : crd::u8
 };
 
 // The data caches one CPU sees, or the smallest of each over CPUs, in bytes; 0 where unknown. CPUID's sharing word
-// bounds the addressable IDs, not the CPUs sharing a cache, so no per-CPU share is derived from it.
+// bounds the addressable IDs, not the CPUs sharing a cache, so the per-CPU share comes from the OS
+// (CpuSelection::l2_share_bytes).
 struct CpuCaches
 {
     crd::u32 line_bytes = 0U;
@@ -204,6 +205,10 @@ struct CpuSelection
     bool uniform = true;          // every visited CPU reported the same usable features and AVX10 shape
     crd::u8 core_types_seen = 0U; // kCpuCore* bits of the visited CPUs
     const char* walk_note = "";   // a static string, set when only the current CPU could be read
+    // The smallest L2 instance's bytes per logical CPU sharing it, from the OS's cache topology (Windows RelationCache,
+    // Linux sysfs shared_cpu_map) on every architecture; 0 when the OS describes no L2. The sharers are the
+    // hardware's, not the process's affinity: a sibling thread uses the cache whichever process it runs.
+    crd::u32 l2_share_bytes = 0U;
     CpuLevel detected = CpuLevel::Portable;
     CpuLevel selected = CpuLevel::Portable;
     CpuOverride override_status = CpuOverride::None;
@@ -228,7 +233,8 @@ struct CpuSelection
 // minimum, its core type is recorded, and `uniform` falls when its features differ from the CPUs before it.
 void add_cpu_report(CpuSelection& into, const CpuReport& cpu) noexcept;
 
-// Every logical CPU visited and intersected, with the detected level; selected == detected, no override applied.
+// Every logical CPU visited and intersected, with the detected level and the OS's L2 share; selected == detected, no
+// override applied.
 [[nodiscard]] CpuSelection detect_cpus() noexcept;
 
 // `detected` with `override_text` (CRD_CPU_LEVEL's value, nullptr when unset) applied to its selected level.
