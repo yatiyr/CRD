@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/blas3.hpp>
+#include <crd/hesap/dense/detail/gemm_arms.hpp>
 #include <crd/hesap/dense/matrix.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -10,6 +12,8 @@
 
 #include <cmath>
 #include <cstring>
+#include <limits>
+#include <type_traits>
 
 using crd::hesap::dense::gemm;
 using crd::hesap::dense::gemm_parallel;
@@ -127,7 +131,7 @@ TEST_CASE("gemm_parallel: f32 bit-exact across worker counts at N=64",
     random_general(c_serial, 33U);
     gemm<crd::f32, Layout::RowMajor>(1.0F, a, b, 0.0F, c_serial);
 
-    for (crd::u32 nw : {2U, 4U, 8U, 16U})
+    for (crd::u32 nw : {2U, 4U, 8U, 16U, 32U})
     {
         Matrix<crd::f32> c_par(&alloc, n, n);
         random_general(c_par, 33U);
@@ -152,7 +156,7 @@ TEST_CASE("gemm_parallel: f32 bit-exact across worker counts at N=256",
     random_general(c_serial, 303U);
     gemm<crd::f32, Layout::RowMajor>(0.75F, a, b, 0.25F, c_serial);
 
-    for (crd::u32 nw : {2U, 4U, 8U, 16U})
+    for (crd::u32 nw : {2U, 4U, 8U, 16U, 32U})
     {
         Matrix<crd::f32> c_par(&alloc, n, n);
         random_general(c_par, 303U);
@@ -177,7 +181,7 @@ TEST_CASE("gemm_parallel: f64 bit-exact across worker counts at N=256",
     random_general(c_serial, 19U);
     gemm<crd::f64, Layout::RowMajor>(1.0, a, b, 0.0, c_serial);
 
-    for (crd::u32 nw : {2U, 4U, 8U, 16U})
+    for (crd::u32 nw : {2U, 4U, 8U, 16U, 32U})
     {
         Matrix<crd::f64> c_par(&alloc, n, n);
         random_general(c_par, 19U);
@@ -332,4 +336,159 @@ TEST_CASE("gemm_parallel: repeated runs at same worker count are deterministic",
         CAPTURE(run);
         REQUIRE(matrices_bit_identical(c_first, c_again));
     }
+}
+
+// ---- gemm_parallel's crd-jobs levers (detail::GemmParallelPick, SIMD-DISPATCH's folded jobs retune) ----
+namespace
+{
+using crd::hesap::dense::MatrixView;
+using crd::hesap::dense::detail::GemmMcSplit;
+using crd::hesap::dense::detail::GemmParallelPick;
+using crd::hesap::dense::detail::GemmSplit;
+
+// The real scalar of a value type.
+template <typename T> struct LeverScalar
+{
+    using type = T;
+};
+
+template <typename R> struct LeverScalar<crd::hesap::Complex<R>>
+{
+    using type = R;
+};
+
+template <typename T> [[nodiscard]] T lever_value(crd_hesap_dense_tests::Rng& rng) noexcept
+{
+    if constexpr (std::is_floating_point_v<T>)
+    {
+        return rng.signed_unit<T>();
+    }
+    else
+    {
+        using R = typename LeverScalar<T>::type;
+        const R re = rng.signed_unit<R>();
+        return T{re, rng.signed_unit<R>()};
+    }
+}
+
+template <typename T> [[nodiscard]] T lever_special(crd::usize i) noexcept
+{
+    using S = typename LeverScalar<T>::type;
+    const S values[] = {std::numeric_limits<S>::quiet_NaN(), std::numeric_limits<S>::infinity(),
+                        -std::numeric_limits<S>::infinity(), S{-0.0}, std::numeric_limits<S>::denorm_min() * S{3}};
+    const S v = values[i % 5U];
+    if constexpr (std::is_floating_point_v<T>)
+    {
+        return v;
+    }
+    else
+    {
+        return T{v, S{-0.0}};
+    }
+}
+
+// One product walked through every lever at 1 to 32 jobs, each against serial gemm bit for bit over C and the guard
+// words around it (C is an inner view of a store one row and one column wider on every side).
+struct LeverShape
+{
+    crd::usize m, n, k;
+    Trans ta, tb;
+    bool specials; // NaN, infinities, -0 and subnormals in A
+    bool nan_c;    // C filled with NaN (beta 0 must store, not read)
+};
+
+template <typename T, Layout L> void walk_levers(const LeverShape& sh, T alpha, T beta, crd::u32 seed)
+{
+    crd::memory::TlsfAllocator alloc(64 * 1024 * 1024);
+    const crd::usize a_rows = sh.ta == Trans::None ? sh.m : sh.k;
+    const crd::usize a_cols = sh.ta == Trans::None ? sh.k : sh.m;
+    const crd::usize b_rows = sh.tb == Trans::None ? sh.k : sh.n;
+    const crd::usize b_cols = sh.tb == Trans::None ? sh.n : sh.k;
+    Matrix<T, L> a(&alloc, a_rows, a_cols);
+    Matrix<T, L> b(&alloc, b_rows, b_cols);
+    crd_hesap_dense_tests::Rng rng(seed);
+    for (crd::usize i = 0; i < a_rows; ++i)
+    {
+        for (crd::usize j = 0; j < a_cols; ++j)
+        {
+            a(i, j) = sh.specials && (i * 7U + j) % 31U == 0U ? lever_special<T>(i + j) : lever_value<T>(rng);
+        }
+    }
+    for (crd::usize i = 0; i < b_rows; ++i)
+    {
+        for (crd::usize j = 0; j < b_cols; ++j)
+        {
+            b(i, j) = lever_value<T>(rng);
+        }
+    }
+    Matrix<T, L> start(&alloc, sh.m + 2U, sh.n + 2U);
+    for (crd::usize i = 0; i < sh.m + 2U; ++i)
+    {
+        for (crd::usize j = 0; j < sh.n + 2U; ++j)
+        {
+            start(i, j) = sh.nan_c ? lever_special<T>(0) : lever_value<T>(rng);
+        }
+    }
+    const auto inner = [&](Matrix<T, L>& store)
+    {
+        return MatrixView<T, L>(store.data() + store.ld() + 1U, sh.m, sh.n, store.ld());
+    };
+    const crd::usize bytes = (sh.m + 2U) * (sh.n + 2U) * sizeof(T);
+    Matrix<T, L> serial(&alloc, sh.m + 2U, sh.n + 2U);
+    std::memcpy(serial.data(), start.data(), bytes);
+    crd::hesap::dense::gemm<T, L>(alpha, a.cview(), b.cview(), beta, inner(serial), sh.ta, sh.tb, &alloc);
+    for (crd::usize i = 0; i < sh.m + 2U; ++i)
+    {
+        for (crd::usize j = 0; j < sh.n + 2U; ++j)
+        {
+            if (i == 0 || j == 0 || i == sh.m + 1U || j == sh.n + 1U)
+            {
+                REQUIRE(std::memcmp(&serial(i, j), &start(i, j), sizeof(T)) == 0); // the guard words
+            }
+        }
+    }
+    Matrix<T, L> arm(&alloc, sh.m + 2U, sh.n + 2U);
+    for (const crd::usize resident : {crd::usize{0}, GemmParallelPick{}.resident_mnk})
+    {
+        for (const GemmMcSplit mc : {GemmMcSplit::PerWorker, GemmMcSplit::Block})
+        {
+            for (const GemmSplit pack : {GemmSplit::Serial, GemmSplit::Parallel})
+            {
+                for (const GemmSplit beta_only : {GemmSplit::Serial, GemmSplit::Parallel})
+                {
+                    const GemmParallelPick pick{
+                        .resident_mnk = resident, .mc = mc, .pack_b = pack, .beta_only = beta_only};
+                    for (const crd::u32 nw : {1U, 4U, 8U, 16U, 32U})
+                    {
+                        std::memcpy(arm.data(), start.data(), bytes);
+                        crd::hesap::dense::detail::gemm_parallel_arm<T, L>(pick, nw, alpha, a.cview(), b.cview(), beta,
+                                                                           inner(arm), sh.ta, sh.tb, &alloc);
+                        CAPTURE(resident, static_cast<int>(mc), static_cast<int>(pack), static_cast<int>(beta_only),
+                                nw);
+                        const bool same = std::memcmp(arm.data(), serial.data(), bytes) == 0;
+                        REQUIRE(same);
+                    }
+                }
+            }
+        }
+    }
+}
+} // namespace
+
+TEST_CASE("gemm_parallel_arm: every lever at 1 to 32 jobs gives serial gemm's bits",
+          "[hesap][blas3][parallel][gemm_parallel][determinism]")
+{
+    parallel_jobs_listener();
+    // Resident (m n k below the pick's threshold, op(A) row-major) or packed (resident_mnk 0), past one depth group.
+    walk_levers<crd::f32, Layout::RowMajor>({67, 150, 300, Trans::None, Trans::None, true, false}, 1.25F, -0.5F, 11U);
+    // op(B) transposed: gemm_parallel_auto's m n k (it once multiplied the storage's dimensions, m k k here).
+    walk_levers<crd::f64, Layout::ColMajor>({70, 33, 520, Trans::Transpose, Trans::Transpose, true, false}, -0.75, 1.0,
+                                            12U);
+    walk_levers<crd::f64, Layout::RowMajor>({45, 97, 263, Trans::Transpose, Trans::None, false, true}, 1.0, 0.0, 13U);
+    walk_levers<crd::hesap::Complex32, Layout::ColMajor>(
+        {29, 41, 270, Trans::ConjTranspose, Trans::ConjTranspose, true, false}, crd::hesap::Complex32{0.5F, -1.0F},
+        crd::hesap::Complex32{0.25F, 0.5F}, 14U);
+    // k == 0: C = beta C (serial or row-split), and beta 0 stores zero over a NaN C.
+    walk_levers<crd::f32, Layout::RowMajor>({40, 21, 0, Trans::None, Trans::None, false, false}, 1.0F, 0.75F, 15U);
+    walk_levers<crd::f64, Layout::ColMajor>({40, 21, 0, Trans::None, Trans::Transpose, false, true}, 1.0, 0.0, 16U);
 }

@@ -67,7 +67,9 @@ inline void gemm(T alpha, const Matrix<T, L>& a, const Matrix<T, L>& b, T beta, 
 //
 // Per-worker scratch: one Ac pack buffer per worker (~120 KB for f32 /
 // 240 KB for f64). Bc is packed once per (jc, pc) by the dispatching
-// thread and shared read-only with workers.
+// thread and shared read-only with workers. The levers (Mc split, B pack,
+// resident threshold, beta-only scale) are detail::GemmParallelPick's
+// (detail/gemm_arms.hpp); this is its default.
 template <typename T, Layout L>
 void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b,
                    T beta, MatrixView<T, L> c, Trans trans_a = Trans::None,
@@ -83,8 +85,8 @@ inline void gemm_parallel(crd::u32 num_workers, T alpha, const Matrix<T, L>& a, 
 }
 
 // ---- gemm_parallel_auto: pick num_workers automatically (v0d-parallelism-
-//      auto-dispatch). Heuristic: serial for tiny matrices (mnk < 256K),
-//      else `crd::jobs::num_workers()`. The internal Mc auto-tune + small-
+//      auto-dispatch). Heuristic: serial for tiny products (m n k < 256K, op()
+//      dimensions), else `crd::jobs::num_workers()`. The internal Mc auto-tune + small-
 //      gemm fast-path then handle load-balance + per-size optimization.
 //
 //      Use this when you don't have specific knowledge about the workload

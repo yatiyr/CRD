@@ -76,14 +76,15 @@ template <typename T, Layout L>
     return view_at(a, r, c);
 }
 
-// C = beta C over its m by n elements. beta == 0 STORES zero (does NOT read C), the BLAS contract: when beta is zero,
-// C need not be initialized on input. `0 * c` would propagate a NaN/Inf from uninitialized C (0*NaN=NaN); the
-// store-zero path is bit-identical for finite C (0*finite=±0.0, and ±0.0+alpha·AB = alpha·AB) yet correct for
-// uninitialized scratch, which is why supernodal scratch (ubuf) can be left uninitialized.
-template <typename T, Layout L> void scale_by_beta(MatrixView<T, L> c, crd::usize m, crd::usize n, T beta) noexcept
+// C = beta C over rows [r0, r1) of its n columns. beta == 0 STORES zero (does NOT read C), the BLAS contract: when
+// beta is zero, C need not be initialized on input. `0 * c` would propagate a NaN/Inf from uninitialized C
+// (0*NaN=NaN); the store-zero path is bit-identical for finite C (0*finite=±0.0, and ±0.0+alpha·AB = alpha·AB) yet
+// correct for uninitialized scratch, which is why supernodal scratch (ubuf) can be left uninitialized.
+template <typename T, Layout L>
+void scale_by_beta(MatrixView<T, L> c, crd::usize r0, crd::usize r1, crd::usize n, T beta) noexcept
 {
     const bool zero = beta == T{0};
-    for (crd::usize i = 0; i < m; ++i)
+    for (crd::usize i = r0; i < r1; ++i)
     {
         for (crd::usize j = 0; j < n; ++j)
         {
@@ -134,10 +135,9 @@ template <typename T> [[nodiscard]] T* allocate_packs(crd::memory::IAllocator& a
 // The path is taken below an m n k threshold where detail::gemm_resident_admits holds (every cube the thresholds
 // admit, k n <= 342K, fits its B budget). The parallel one was tuned on the 14900K vs-reference shootout at 16 threads:
 // 200M elements catches the N=512 cube (134M, 0.95x→1.0x+); from N=1024 (1G) the packed path wins (better cache reuse
-// via packed Ac). The serial one keeps that value until the one-thread board (SIMD-DISPATCH) sets it from both paths'
-// rows at each size (detail::gemm_arm).
+// via packed Ac); it is detail::GemmParallelPick's resident_mnk. The serial one keeps that value until the one-thread
+// board (SIMD-DISPATCH) sets it from both paths' rows at each size (detail::gemm_arm).
 // =======================================================================
-constexpr crd::usize kParallelResidentThreshold = 200ULL * 1024ULL * 1024ULL;
 constexpr crd::usize kSerialResidentThreshold = 200ULL * 1024ULL * 1024ULL;
 
 template <typename T, Layout L>
@@ -145,6 +145,45 @@ template <typename T, Layout L>
                                     crd::usize n, crd::usize k) noexcept
 {
     return m * n * k < threshold && detail::gemm_resident_admits<T, L>(kernels, trans_a, n, k);
+}
+
+// op(B)'s columns [jc, jc + nc) over depth [pc, pc + kc) as Bc panels in kKc depth groups, group g at
+// out + g * group_stride (gemm_packed_inner's layout: an nr-column panel at out + col * depth).
+template <typename T, Layout L> struct PackB
+{
+    const GemmKernels<T>* kernels;
+    MatrixView<const T, L> b;
+    T* out;
+    crd::usize pc, kc, jc, nc, group_stride, nr;
+    Trans trans_b;
+};
+
+template <typename T, Layout L> void pack_b_columns(const PackB<T, L>& s, crd::usize p0, crd::usize p1) noexcept
+{
+    const crd::usize c0 = p0 * s.nr;
+    const crd::usize c1 = std::min(p1 * s.nr, s.nc);
+    T* group = s.out;
+    for (crd::usize pc = s.pc; pc < s.pc + s.kc; pc += kKc)
+    {
+        const crd::usize kc = std::min(kKc, s.pc + s.kc - pc);
+        detail::pack_b(*s.kernels, s.b, pc, s.jc + c0, kc, c1 - c0, s.trans_b, group + c0 * kc);
+        group += s.group_stride;
+    }
+}
+
+// Every panel of s, split into num_workers jobs of whole panels (disjoint writes: the serial pack's bits) or serial.
+template <typename T, Layout L> void pack_b_split(const PackB<T, L>& s, detail::GemmSplit split, crd::u32 num_workers)
+{
+    const crd::usize panels = (s.nc + s.nr - 1U) / s.nr;
+    if (split == detail::GemmSplit::Serial || num_workers <= 1 || panels <= 1)
+    {
+        pack_b_columns(s, 0, panels);
+        return;
+    }
+    const PackB<T, L>* sp = &s;
+    auto* counter = crd::jobs::parallel_for(static_cast<crd::u32>(panels), num_workers,
+                                            [sp](crd::u32 begin, crd::u32 end) { pack_b_columns(*sp, begin, end); });
+    crd::jobs::wait(counter);
 }
 
 template <typename T, Layout L> struct SmallGemm
@@ -183,9 +222,9 @@ template <typename T, Layout L> void small_gemm_rows(const SmallGemm<T, L>& s, c
 
 // m, n and k are nonzero; num_workers <= 1 runs on the calling thread without crd::jobs.
 template <typename T, Layout L>
-void small_gemm(const GemmKernels<T>& kernels, crd::u32 num_workers, T alpha, MatrixView<const T, L> a,
-                MatrixView<const T, L> b, T beta, MatrixView<T, L> c, Trans trans_a, Trans trans_b,
-                crd::memory::IAllocator* scratch)
+void small_gemm(const GemmKernels<T>& kernels, crd::u32 num_workers, detail::GemmSplit pack_split, T alpha,
+                MatrixView<const T, L> a, MatrixView<const T, L> b, T beta, MatrixView<T, L> c, Trans trans_a,
+                Trans trans_b, crd::memory::IAllocator* scratch)
 {
     const crd::usize m = c.rows();
     const crd::usize n = c.cols();
@@ -197,10 +236,17 @@ void small_gemm(const GemmKernels<T>& kernels, crd::u32 num_workers, T alpha, Ma
     const crd::usize b_capacity = whole_lines<T>(b_row * k);
     T* b_pack = allocate_packs<T>(alloc, b_capacity + detail::packed_a_size(shape, m - full, k));
     T* a_tail = b_pack + b_capacity;
-    for (crd::usize pc = 0; pc < k; pc += kKc)
-    {
-        detail::pack_b(kernels, b, pc, 0, (pc + kKc < k) ? kKc : (k - pc), n, trans_b, b_pack + pc * b_row);
-    }
+    const PackB<T, L> pack{.kernels = &kernels,
+                           .b = b,
+                           .out = b_pack,
+                           .pc = 0,
+                           .kc = k,
+                           .jc = 0,
+                           .nc = n,
+                           .group_stride = kKc * b_row,
+                           .nr = shape.nr,
+                           .trans_b = trans_b};
+    pack_b_split(pack, pack_split, num_workers);
     if (full < m)
     {
         detail::pack_a(kernels, a, full, 0, m - full, k, trans_a, a_tail);
@@ -271,7 +317,7 @@ void gemm_serial(const GemmKernels<T>& kernels, detail::GemmPath path, T alpha, 
     }
     if (k == 0)
     {
-        scale_by_beta(c, m, n, beta); // no depth group to fold beta into
+        scale_by_beta(c, 0, m, n, beta); // no depth group to fold beta into
         return;
     }
     CRD_ASSERT_MSG((path != detail::GemmPath::Resident || detail::gemm_resident_admits<T, L>(kernels, trans_a, n, k)),
@@ -279,7 +325,7 @@ void gemm_serial(const GemmKernels<T>& kernels, detail::GemmPath path, T alpha, 
     if (path == detail::GemmPath::Resident ||
         (path == detail::GemmPath::Auto && takes_small_gemm<T, L>(kernels, kSerialResidentThreshold, trans_a, m, n, k)))
     {
-        small_gemm<T, L>(kernels, 1U, alpha, a, b, beta, c, trans_a, trans_b, scratch);
+        small_gemm<T, L>(kernels, 1U, detail::GemmSplit::Serial, alpha, a, b, beta, c, trans_a, trans_b, scratch);
         return;
     }
 
@@ -339,12 +385,12 @@ void detail::gemm_arm(const GemmKernels<T>& k, GemmPath path, T alpha, MatrixVie
 }
 
 // =======================================================================
-// gemm_parallel — BLIS-style ic-loop parallelism over crd::jobs workers.
+// gemm_parallel — BLIS-style ic-loop parallelism over crd::jobs workers, on detail::GemmParallelPick's levers.
 // =======================================================================
 template <typename T, Layout L>
-void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b,
-                   T beta, MatrixView<T, L> c, Trans trans_a, Trans trans_b,
-                   crd::memory::IAllocator* scratch)
+void detail::gemm_parallel_arm(const GemmParallelPick& pick, crd::u32 num_workers, T alpha, MatrixView<const T, L> a,
+                               MatrixView<const T, L> b, T beta, MatrixView<T, L> c, Trans trans_a, Trans trans_b,
+                               crd::memory::IAllocator* scratch)
 {
     if (num_workers <= 1)
     {
@@ -362,24 +408,45 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
     {
         return;
     }
-    if (k == 0)
+    if (k == 0) // no depth group to fold beta into
     {
-        scale_by_beta(c, m, n, beta); // no depth group to fold beta into
+        if (pick.beta_only == GemmSplit::Serial)
+        {
+            scale_by_beta(c, 0, m, n, beta);
+            return;
+        }
+        struct BetaRows
+        {
+            MatrixView<T, L> c;
+            crd::usize n;
+            T beta;
+        };
+        const BetaRows rows{.c = c, .n = n, .beta = beta};
+        const BetaRows* rp = &rows;
+        auto* counter =
+            crd::jobs::parallel_for(static_cast<crd::u32>(m), num_workers, [rp](crd::u32 begin, crd::u32 end)
+                                    { scale_by_beta(rp->c, begin, end, rp->n, rp->beta); });
+        crd::jobs::wait(counter);
         return;
     }
     const GemmKernels<T>& kernels = detail::gemm_kernels_of<T>();
-    if (takes_small_gemm<T, L>(kernels, kParallelResidentThreshold, trans_a, m, n, k))
+    if (takes_small_gemm<T, L>(kernels, pick.resident_mnk, trans_a, m, n, k))
     {
-        small_gemm<T, L>(kernels, num_workers, alpha, a, b, beta, c, trans_a, trans_b, scratch);
+        small_gemm<T, L>(kernels, num_workers, pick.pack_b, alpha, a, b, beta, c, trans_a, trans_b, scratch);
         return;
     }
 
-    // Auto-tune Mc (v0d-small-gemm-fastpath): the shape's Mc block gives `num_ic = ceil(m / mc)` chunks per (jc, pc),
-    // which leaves workers idle when m is small. Pick a smaller Mc such that num_ic >= num_workers (capped above by
-    // the block to keep the cache reuse at large m), a multiple of the level's mr so the packed-A layout stays clean.
+    // Auto-tune Mc (v0d-small-gemm-fastpath, GemmMcSplit::PerWorker): the shape's Mc block gives
+    // `num_ic = ceil(m / mc)` chunks per (jc, pc), which leaves workers idle when m is small. Pick a smaller Mc such
+    // that num_ic >= num_workers (capped above by the block to keep the cache reuse at large m), a multiple of the
+    // level's mr so the packed-A layout stays clean.
     const GemmShape shape = kernels.shape;
     const crd::usize nc_block = detail::gemm_nc(shape);
     const crd::usize eff_mc = [&]() {
+        if (pick.mc == GemmMcSplit::Block)
+        {
+            return detail::gemm_mc(shape);
+        }
         const crd::usize ideal = (m + num_workers - 1U) / num_workers;
         const crd::usize rounded = (ideal + shape.mr - 1U) / shape.mr * shape.mr;
         const crd::usize floored = std::max<crd::usize>(shape.mr, rounded);
@@ -436,19 +503,27 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
     state.beta = beta;
     state.trans_a = trans_a;
 
-    // Outer jc + pc loops sequential; ic loop parallelized inside.
-    // pack_b is kept serial: parallel pack_b was measured net-negative due
-    // to cache locality (workers warm cache lines that the inner loop on a
-    // different worker then needs to fetch). The serial pack_b at N=4096
-    // f64 costs ~5ms total across all (jc,pc) iters — <2% of GEMM wall.
+    // Outer jc + pc loops sequential; ic loop parallelized inside. pack_b stays serial by default (GemmSplit): a
+    // parallel pack_b was measured net-negative in v0d for cache locality (workers warm lines that the inner loop on a
+    // different worker then fetches; the serial pack at N=4096 f64 is ~5 ms, <2% of the wall), a claim the
+    // thread-sweep board re-measures from the forced arm.
     for (crd::usize jc = 0; jc < n; jc += nc_block)
     {
         const crd::usize nc = (jc + nc_block < n) ? nc_block : (n - jc);
         for (crd::usize pc = 0; pc < k; pc += kKc)
         {
             const crd::usize kc = (pc + kKc < k) ? kKc : (k - pc);
-
-            detail::pack_b(kernels, b, pc, jc, kc, nc, trans_b, b_pack);
+            const PackB<T, L> pack{.kernels = &kernels,
+                                   .b = b,
+                                   .out = b_pack,
+                                   .pc = pc,
+                                   .kc = kc,
+                                   .jc = jc,
+                                   .nc = nc,
+                                   .group_stride = 0,
+                                   .nr = shape.nr,
+                                   .trans_b = trans_b};
+            pack_b_split(pack, pick.pack_b, num_workers);
 
             const crd::u32 num_ic = static_cast<crd::u32>((m + eff_mc - 1) / eff_mc);
             if (num_ic == 0)
@@ -489,9 +564,17 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
     alloc.deallocate(a_pack_pool);
 }
 
+template <typename T, Layout L>
+void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b, T beta,
+                   MatrixView<T, L> c, Trans trans_a, Trans trans_b, crd::memory::IAllocator* scratch)
+{
+    detail::gemm_parallel_arm<T, L>(detail::GemmParallelPick{}, num_workers, alpha, a, b, beta, c, trans_a, trans_b,
+                                    scratch);
+}
+
 // =======================================================================
 // gemm_parallel_auto — heuristic worker-count picker (v0d-parallelism-auto-
-// dispatch). For tiny matrices (mnk < 256K), parallel_for overhead exceeds
+// dispatch). For tiny products (m n k < 256K), parallel_for overhead exceeds
 // the work → serial. Above that, use all available workers and let the
 // internal Mc auto-tune + small-gemm fast-path pick the right block layout.
 //
@@ -506,9 +589,9 @@ void gemm_parallel_auto(T alpha, MatrixView<const T, L> a, MatrixView<const T, L
                         MatrixView<T, L> c, Trans trans_a, Trans trans_b,
                         crd::memory::IAllocator* scratch)
 {
-    constexpr crd::usize serial_threshold = 256ULL * 1024ULL;
-    const crd::usize mnk = a.rows() * b.cols() * a.cols();
-    const crd::u32 num_workers = (mnk < serial_threshold) ? 1U : crd::jobs::num_workers();
+    constexpr crd::usize serial_mnk = 256ULL * 1024ULL;
+    const crd::usize k = (trans_a == Trans::None) ? a.cols() : a.rows();
+    const crd::u32 num_workers = (c.rows() * c.cols() * k < serial_mnk) ? 1U : crd::jobs::num_workers();
     gemm_parallel<T, L>(num_workers, alpha, a, b, beta, c, trans_a, trans_b, scratch);
 }
 
@@ -963,6 +1046,52 @@ template void gemm_parallel<Complex32, Layout::ColMajor>(crd::u32, Complex32,
 template void gemm_parallel<Complex64, Layout::ColMajor>(crd::u32, Complex64,
     MatrixView<const Complex64, Layout::ColMajor>, MatrixView<const Complex64, Layout::ColMajor>,
     Complex64, MatrixView<Complex64, Layout::ColMajor>, Trans, Trans, crd::memory::IAllocator*);
+
+// detail::gemm_parallel_arm — the same 4 types × 2 layouts
+template void detail::gemm_parallel_arm<crd::f32, Layout::RowMajor>(const detail::GemmParallelPick&, crd::u32, crd::f32,
+                                                                    MatrixView<const crd::f32, Layout::RowMajor>,
+                                                                    MatrixView<const crd::f32, Layout::RowMajor>,
+                                                                    crd::f32, MatrixView<crd::f32, Layout::RowMajor>,
+                                                                    Trans, Trans, crd::memory::IAllocator*);
+template void detail::gemm_parallel_arm<crd::f64, Layout::RowMajor>(const detail::GemmParallelPick&, crd::u32, crd::f64,
+                                                                    MatrixView<const crd::f64, Layout::RowMajor>,
+                                                                    MatrixView<const crd::f64, Layout::RowMajor>,
+                                                                    crd::f64, MatrixView<crd::f64, Layout::RowMajor>,
+                                                                    Trans, Trans, crd::memory::IAllocator*);
+template void detail::gemm_parallel_arm<Complex32, Layout::RowMajor>(const detail::GemmParallelPick&, crd::u32,
+                                                                     Complex32,
+                                                                     MatrixView<const Complex32, Layout::RowMajor>,
+                                                                     MatrixView<const Complex32, Layout::RowMajor>,
+                                                                     Complex32, MatrixView<Complex32, Layout::RowMajor>,
+                                                                     Trans, Trans, crd::memory::IAllocator*);
+template void detail::gemm_parallel_arm<Complex64, Layout::RowMajor>(const detail::GemmParallelPick&, crd::u32,
+                                                                     Complex64,
+                                                                     MatrixView<const Complex64, Layout::RowMajor>,
+                                                                     MatrixView<const Complex64, Layout::RowMajor>,
+                                                                     Complex64, MatrixView<Complex64, Layout::RowMajor>,
+                                                                     Trans, Trans, crd::memory::IAllocator*);
+template void detail::gemm_parallel_arm<crd::f32, Layout::ColMajor>(const detail::GemmParallelPick&, crd::u32, crd::f32,
+                                                                    MatrixView<const crd::f32, Layout::ColMajor>,
+                                                                    MatrixView<const crd::f32, Layout::ColMajor>,
+                                                                    crd::f32, MatrixView<crd::f32, Layout::ColMajor>,
+                                                                    Trans, Trans, crd::memory::IAllocator*);
+template void detail::gemm_parallel_arm<crd::f64, Layout::ColMajor>(const detail::GemmParallelPick&, crd::u32, crd::f64,
+                                                                    MatrixView<const crd::f64, Layout::ColMajor>,
+                                                                    MatrixView<const crd::f64, Layout::ColMajor>,
+                                                                    crd::f64, MatrixView<crd::f64, Layout::ColMajor>,
+                                                                    Trans, Trans, crd::memory::IAllocator*);
+template void detail::gemm_parallel_arm<Complex32, Layout::ColMajor>(const detail::GemmParallelPick&, crd::u32,
+                                                                     Complex32,
+                                                                     MatrixView<const Complex32, Layout::ColMajor>,
+                                                                     MatrixView<const Complex32, Layout::ColMajor>,
+                                                                     Complex32, MatrixView<Complex32, Layout::ColMajor>,
+                                                                     Trans, Trans, crd::memory::IAllocator*);
+template void detail::gemm_parallel_arm<Complex64, Layout::ColMajor>(const detail::GemmParallelPick&, crd::u32,
+                                                                     Complex64,
+                                                                     MatrixView<const Complex64, Layout::ColMajor>,
+                                                                     MatrixView<const Complex64, Layout::ColMajor>,
+                                                                     Complex64, MatrixView<Complex64, Layout::ColMajor>,
+                                                                     Trans, Trans, crd::memory::IAllocator*);
 
 // gemm_parallel_auto — same 4 types × 2 layouts.
 template void gemm_parallel_auto<crd::f32, Layout::RowMajor>(crd::f32,
