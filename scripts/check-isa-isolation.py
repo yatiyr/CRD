@@ -795,18 +795,38 @@ def judge_map_image(tools, image, map_path, owners, exceptions):
         return aliases[starts[index]] if index >= 0 else None
 
     # Functions that read __isa_available, by name with the PDB beside the image and by address without it.
-    guarded, hits, decoded = set(), [], 0
+    guarded, hits, decoded, aligned = set(), [], 0, set()
     reference = re.compile(r'__isa_available' + (rf'|\[0*{isa:X}h\]' if isa is not None else ''))
-    for text in _stream([tools['dumpbin'], '/nologo', '/disasm', image], _LABEL_COFF):
+    start_text = {f'{start:016X}' for start in starts}
+
+    def read(text):
         for match in reference.finditer(text):
             line_start = text.rfind('\n', 0, match.start()) + 1
             address = re.match(r'^  ([0-9A-F]{8,16}):', text[line_start:match.start()])
             names = function_at(int(address.group(1), 16)) if address else None
             guarded.update(name for name, _ in names or [])
-        hits += scan_x64(text, True)
-        decoded += len(INSTRUCTION[('x64', True)].findall(text))
+        found = INSTRUCTION[('x64', True)].findall(text)
+        aligned.update(start_text.intersection(found))
+        return scan_x64(text, True), len(found)
+
+    for text in _stream([tools['dumpbin'], '/nologo', '/disasm', image], _LABEL_COFF):
+        found, count = read(text)
+        hits += found
+        decoded += count
     if not decoded:
         failures.append(f'{image}: dumpbin decoded no instruction')
+    # dumpbin decodes .text in one sweep, so data that ends inside a guessed instruction (a jump table that abuts the
+    # next function) misreads that function's first bytes: a function start that is no instruction start is decoded
+    # again from itself to the next function, and that decode replaces the sweep's.
+    for index, start in enumerate(starts):
+        if f'{start:016X}' in aligned:
+            continue
+        end = starts[index + 1] if index + 1 < len(starts) else None
+        hits = [hit for hit in hits if not (start <= hit[1] and (end is None or hit[1] < end))]
+        bounds = f'{start:#x}' + (f',{end - 1:#x}' if end is not None else '')
+        hits += read(_run([tools['dumpbin'], '/nologo', '/disasm', f'/range:{bounds}', image]))[0]
+        if f'{start:016X}' not in aligned:
+            failures.append(f'{image}: dumpbin decodes no instruction at function start {start:#x}')
     above = []
     for _label, address, kind, line in hits:
         table = bisect.bisect_right(table_starts, address) - 1

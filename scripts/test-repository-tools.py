@@ -4492,7 +4492,8 @@ class IsaIsolation(unittest.TestCase):
         good = [('?kTensorKernelsAvx2@tensor@hesap@crd@@3UTensorKernels@123@B', True),
                 ('__real@3ff0000000000000', True),
                 ('??$bit_cast@VVec8f@avx2@math@crd@@@std@@YA?AVVec8f@avx2@math@crd@@AEBM@Z', True),
-                ('crd::hesap::tensor::avx2::walk(int)', True), ('local_helper', False)]
+                ('crd::hesap::tensor::avx2::walk(int)', True), ('local_helper', False),
+                ('___asan_globals_registered', True)]
         self.assertEqual(([], 1), judge('avx2', good, allowed))
         failures, _ = judge('avx2', [('??$min@H@std@@YAAEBHAEBH0@Z', True)], allowed)
         self.assertEqual(1, len(failures))
@@ -4571,6 +4572,9 @@ class IsaIsolation(unittest.TestCase):
         self.assertFalse(allows('lzcnt', '?count@crd@@YAHI@Z', 'crd-x/lbvh.cpp.obj', set()))
         self.assertTrue(allows('xgetbv', 'crd::(anonymous namespace)::read_xcr0()', '', set()))
         self.assertFalse(allows('xgetbv', 'crd::(anonymous namespace)::detect()', '', set()))
+        self.assertTrue(allows('roundpd', '__sse4_floor2@@16', 'MSVCRT:svml_dfloor2_sse4.obj', set()))
+        self.assertTrue(allows('EVEX', '__avx512_exp8@@64', 'MSVCRT:svml_dexp8_avx512.obj', set()))
+        self.assertFalse(allows('roundpd', '__vdecl_floor2', 'MSVCRT:svml_dfloor2_dispatch.obj', set()))
 
     def test_decoded_instructions_are_counted_and_decoders_checked(self):
         shapes = {('x64', True): '  0000000000000000: C5 F8 77           vzeroupper\n                    00\n',
@@ -4745,6 +4749,37 @@ class IsaIsolation(unittest.TestCase):
         memory = {0x1400010FC: struct.pack('<I', 0x1091), 0x140001130: struct.pack('<I', 0x9999)}
         tables = isa_isolation.jump_tables(base, starts, code, lambda address, size: memory.get(address, b''))
         self.assertEqual([(0x1400010FC, 0x140001120)], tables)
+
+    def test_a_function_start_the_sweep_misread_is_decoded_again(self):
+        # A table's last bytes swallow the start of g (48 8B), so the sweep reads a lone C4 there and misses g's real
+        # vzeroupper; the decode from g's own start finds it. h, which the sweep reads from its start, keeps its hit.
+        sweep = ('  0000000140001000: C3                 ret\n'
+                 '  0000000140001001: 00 00 00 00 00 48  add         byte ptr [rax],al\n'
+                 '                    8B\n'
+                 '  0000000140001008: C4\n'
+                 '  0000000140001009: E2 F8              loop        0000000140001003\n'
+                 '  000000014000100B: 77 C3              ja          00000001400010D0\n'
+                 '  0000000140001010: C5 F8 77           vzeroupper\n')
+        again = ('  0000000140001006: 48 8B C4           mov         rax,rsp\n'
+                 '  0000000140001009: C5 F8 77           vzeroupper\n'
+                 '  000000014000100C: C3                 ret\n')
+        code = [(0x140001000, 'f', 'a.obj'), (0x140001006, 'g', 'a.obj'), (0x140001010, 'h', 'a.obj')]
+        owners = isa_isolation.Owners({}, {os.path.normpath('/b/t.dir/a.obj'): ('crd-t', '/b/t.exe')})
+        ranges = []
+
+        def run(command, empty_ok=False):
+            ranges.append(command[-2])
+            return again
+        with patch.object(isa_isolation, 'read_map', lambda path: (0x140000000, code, [])), \
+                patch.object(isa_isolation, 'pe_reader', lambda path: lambda address, size: b''), \
+                patch.object(isa_isolation, '_stream', lambda command, label: iter([sweep])), \
+                patch.object(isa_isolation, '_run', run):
+            failures = isa_isolation.judge_map_image({'dumpbin': 'dumpbin'}, '/b/t.exe', '/b/t.map', owners,
+                                                     self.exceptions)
+        self.assertEqual(['/range:0x140001006,0x14000100f'], ranges)
+        self.assertEqual(['g first at 0x140001009', 'h first at 0x140001010'],
+                         sorted(re.sub(r'^.* in (\w+) \(.*, (first at 0x[0-9a-f]+):.*$', r'\1 \2', failure)
+                                for failure in failures))
 
     def test_manifest_and_il_without_images(self):
         with tempfile.TemporaryDirectory() as temp:
