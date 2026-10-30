@@ -507,6 +507,19 @@ target_link_libraries(bench_hesap_operator_parallel PRIVATE
 )
 crd_enable_default_pch(bench_hesap_operator_parallel)
 
+add_executable(bench_hesap_autodiff_parallel
+    examples/bench_hesap_autodiff_parallel.cpp
+)
+
+target_link_libraries(bench_hesap_autodiff_parallel PRIVATE
+    crd-core
+    crd-memory
+    crd-containers
+    crd-hesap-autodiff
+    crd-jobs
+)
+crd_enable_default_pch(bench_hesap_autodiff_parallel)
+
 # v5f-c mixed-precision INTERNAL crush gate — f32-factor + f64-IR vs f64-full. No external peer (just Cerid),
 # so it builds in the standard runtime build (run in win-release). The MUMPS-single+IR crush peer is WSL-gated.
 add_executable(bench_hesap_mixed_internal examples/bench_hesap_mixed_internal.cpp)

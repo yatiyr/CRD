@@ -27,6 +27,7 @@ add_executable(crd-hesap-autodiff-tests
     test_implicit_diff.cpp
     test_graph_ad.cpp
     test_determinism_moat.cpp
+    test_batch_gradient_arms.cpp
     test_topopt.cpp
     test_neural_ode.cpp
     test_kan.cpp
@@ -53,13 +54,15 @@ crd_discover_tests(crd-hesap-autodiff-tests)
 # (crd-hesap-autodiff-kernels-at-<level>).
 crd_add_kernel_level_tests(crd-hesap-autodiff-tests "[kernels]")
 
-# The vectorized HVP tape's fatals, one child process per mode (a fatal cannot run in-process): a refused node or
-# scratch array, a scratch pool size that overflows and a node past the capacity are fatal in every build, never a
-# null, short or overrun array written. Source and protocol:
+# The vectorized HVP tape's and batch_gradient's fatals, one child process per mode (a fatal cannot run in-process): a
+# refused node or scratch array, a scratch pool size that overflows, a node past the capacity, more than 32 batch
+# parameters and a short batch span are fatal in every build, never a null, short or overrun array written. Source
+# and protocol:
 # tests/support/diag/specimens/hesap_autodiff_fatal_specimen.cpp.
 include(CrdDiag)
 crd_diag_specimen(crd-hesap-autodiff-fatal-specimen
     SOURCES "${CMAKE_SOURCE_DIR}/tests/support/diag/specimens/hesap_autodiff_fatal_specimen.cpp")
 target_link_libraries(crd-hesap-autodiff-fatal-specimen PRIVATE crd-core crd-memory crd-hesap-autodiff)
 crd_diag_fatal_tests(crd-hesap-autodiff-fatal-specimen PREFIX crd-hesap-autodiff-fatal OWNER crd-hesap-autodiff-tests
-    MODES vtape-nodes-refused vtape-pool-refused vtape-pool-overflow vtape-capacity-exceeded)
+    MODES vtape-nodes-refused vtape-pool-refused vtape-pool-overflow vtape-capacity-exceeded
+          batch-too-many-params batch-short-gbuf batch-short-tapes)
