@@ -13,6 +13,12 @@ No completed run has a failed job. Push run 41021189146 (4ab1cd90) was in progre
 pending; the cancelled runs before them list no jobs. Nothing cancelled or dispatched. Needs CI audit: DIAG.11c and
 DIAG.12 still wait on a green complete-tier run, and SIMD-DISPATCH on a green win-asan run; nothing flips.
 
+After this batch's push, 41021189146's linux-gcc-release and -shipping jobs failed `the sparse LinearOps' picks keep
+the serial kernels' bits` on the block op's `c64`/`c32` specials at every parallel pick: the class batch 10 fixed
+elsewhere (a parallel body's NaN bits, ADR-0134 §7). It reproduced on the lane tree. `test_operator_arms.cpp` now
+compares each written word with `nan_aside.hpp`, refuses a written word still holding the guard, and keeps the
+spmm padding columns and the guard words after each output byte-exact; the case passes there (649,496 assertions).
+
 ## The f32 gap was the board's method
 
 HEAD's `bench_fft_f32` timed `reset()`, the input copy, inside each transform's timing (Cerid's and MKL's);

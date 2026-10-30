@@ -1,7 +1,9 @@
 // The sparse LinearOps' crd-jobs picks (detail/operator_arms.hpp): every cut and forced job count gives the serial
-// kernel's bits (SELL spmv, CSR spmm) for A x, the adjoint and the block apply, IEEE specials included, and leaves
-// every word outside the output alone.
+// kernel's bits (SELL spmv, CSR spmm) for A x, the adjoint and the block apply, IEEE specials included with NaN
+// payloads aside (ADR-0134 §7: a parallel body's operand order may pick another NaN's bits), and leaves every word
+// outside the output alone.
 
+#include "nan_aside.hpp"
 #include "sparse_arm_fixture.hpp"
 #include "sparse_jobs_fixture.hpp"
 
@@ -11,6 +13,7 @@
 #include <crd/hesap/sparse/sparse_linear_op.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <cstring>
@@ -74,6 +77,21 @@ template <typename T> bool guards_hold(const crd::containers::Array<T>& y, crd::
         }
     }
     return true;
+}
+
+// Whether the n written words y[0, n) hold want's values, NaN payloads aside, and none of them still holds the guard.
+template <typename T> bool same_written(const T* want, const T* y, crd::usize n)
+{
+    const T g = guard_value<T>();
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        if (same_bytes(&y[i], &g, 1))
+        {
+            UNSCOPED_INFO("word " << i << " was not written");
+            return false;
+        }
+    }
+    return crd::test::same_values_nan_aside(want, y, n);
 }
 
 template <typename T> crd::containers::Array<T> arm_vector(crd::memory::IAllocator* alloc, crd::usize n, bool specials)
@@ -153,8 +171,8 @@ void check_sell_ops(const sp::SparseMatrix<T, sp::SparseFormat::Csr>& a, bool sp
             auto h = guarded<T>(alloc, n);
             REQUIRE(ls.apply(head(x, n), head(y, m)));
             REQUIRE(ls.apply_adjoint(head(xh, m), head(h, n)));
-            CHECK(same_bytes(want.data(), y.data(), m));
-            CHECK(same_bytes(want_h.data(), h.data(), n));
+            CHECK(same_written(want.data(), y.data(), m));
+            CHECK(same_written(want_h.data(), h.data(), n));
             CHECK(guards_hold(y, m));
             CHECK(guards_hold(h, n));
             if (m == n)
@@ -163,7 +181,7 @@ void check_sell_ops(const sp::SparseMatrix<T, sp::SparseFormat::Csr>& a, bool sp
                 CHECK(op.is_parallel() == (sell.stored_bytes() >= pick.parallel_min_bytes));
                 auto ys = guarded<T>(alloc, m);
                 REQUIRE(op.apply(head(x, n), head(ys, m)));
-                CHECK(same_bytes(want.data(), ys.data(), m));
+                CHECK(same_written(want.data(), ys.data(), m));
                 CHECK(guards_hold(ys, m));
             }
         });
@@ -182,8 +200,8 @@ void check_sell_ops(const sp::SparseMatrix<T, sp::SparseFormat::Csr>& a, bool sp
     }
 }
 
-// The block op's Y = A X (ldx and ldy past s) against serial spmm: every row's s columns, the padding columns and the
-// guard words after Y.
+// The block op's Y = A X (ldx and ldy past s) against serial spmm: every row's s columns, the padding columns (still
+// the guard) and the guard words after Y.
 template <typename T>
 void check_spmm_op(const sp::SparseMatrix<T, sp::SparseFormat::Csr>& a, bool specials, crd::memory::IAllocator* alloc)
 {
@@ -204,7 +222,13 @@ void check_spmm_op(const sp::SparseMatrix<T, sp::SparseFormat::Csr>& a, bool spe
                 CHECK(op.is_parallel() == (a.nnz() * sizeof(T) >= pick.parallel_min_bytes));
                 auto y = guarded<T>(alloc, ny);
                 REQUIRE(op.apply_block(head(x, x.size()), ldx, head(y, ny), ldy, s));
-                CHECK(same_bytes(want.data(), y.data(), y.size())); // the [s, ldy) columns stay the guard
+                for (crd::u32 r = 0; r < n; ++r)
+                {
+                    const crd::usize row = static_cast<crd::usize>(r) * ldy;
+                    INFO("row " << r);
+                    CHECK(same_written(want.data() + row, y.data() + row, s));
+                    CHECK(same_bytes(want.data() + row + s, y.data() + row + s, ldy - s));
+                }
                 CHECK(guards_hold(y, ny));
             });
         const sp::ParallelSpmmLinearOp<T> by_bytes(a, crd::usize{0});
