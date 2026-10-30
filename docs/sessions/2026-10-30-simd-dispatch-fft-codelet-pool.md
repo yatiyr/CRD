@@ -42,7 +42,9 @@ MSVC's figures (2.2 and 4.2 GB). No other kernel unit took more than 5 s.
 `engine/numerics/hesap-fft/CMakeLists.txt`: every fft level (portable, sse2, avx2, avx512) compiles in the Ninja pool
 `crd_fft_codelets`, `(total MiB - 4096) / 4300.8` deep and at least one: the build board's 4 GiB reserve, then one unit
 per measured 4.2 GiB peak. Generated depth: 14 on the 64 GiB Windows host, 6 on the 31 GiB WSL host, two on a 16 GB
-runner. Compile commands are unchanged (the WSL tree reconfigured with no work to do), so cache keys hold.
+runner. Compile commands are unchanged (the WSL tree reconfigured with no work to do), so cache keys hold, and a
+cached job never exercises the pool: the hosted check is the first Linux job whose fft codelets miss the cache (an
+edit to `libm.hpp`, `codelet_lanes.hpp`, `fma_exact.hpp` or a codelet source) completing its Build.
 `docs/design/build-performance.md` records the exception to "the runners run unbounded".
 
 ## CI platform suite under CTest

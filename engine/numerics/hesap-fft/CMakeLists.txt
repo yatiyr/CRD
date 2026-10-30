@@ -64,7 +64,7 @@ crd_add_cpu_kernels(crd-hesap-fft NAME fft LEVELS portable sse2 avx2 avx512 INCL
 # GCC 13 -O2 -g (avx512 1.7, avx2 0.7, portable 0.3) and at 4.2 GiB at avx512 under MSVC /O2 (avx2 2.2), 2026-10-30.
 # Six sse2 units at once starved a 16 GB hosted runner until it was lost (run 41059057789), so a pool runs as many as
 # the host's memory holds beside the rest of the build: the build board's 4 GiB reserve, then one unit per 4.2 GiB
-# (docs/design/build-performance.md#measured-results).
+# (docs/design/build-performance.md#measured-board-and-decisions).
 if(CMAKE_GENERATOR MATCHES "Ninja")
     cmake_host_system_information(RESULT _crd_fft_memory_mib QUERY TOTAL_PHYSICAL_MEMORY)
     math(EXPR _crd_fft_codelet_jobs "(${_crd_fft_memory_mib} - 4096) * 10 / 43008")
