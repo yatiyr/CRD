@@ -193,6 +193,11 @@
       "why": "The Cerid-free AddressSanitizer use-after-return control is compiled by the dispatched host check's ARM64 sanitizer-cost legs with g++ and clang++ and timed with the fake stack on and off (SIMD-DISPATCH)."
     },
     {
+      "paths": ["scripts/asan_stack_align_control.cpp"],
+      "built_by": ".github/workflows/host-check.yml",
+      "why": "The Cerid-free AddressSanitizer stack-alignment control (TP-7) is compiled by the dispatched host check's x64 stack-alignment leg with every compiler of the image, with and without GCC's width caps, and run under Intel SDE (SIMD-DISPATCH)."
+    },
+    {
       "paths": ["tests/support/diag/models/counter_publish_reclaim.c"],
       "built_by": "scripts/check-genmc-models.py",
       "why": "The GenMC model of the jobs counter protocol is compiled by GenMC itself on the DIAG.4b model-checking lane."

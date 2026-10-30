@@ -270,13 +270,16 @@ uploaded, and a leg with an event fails. The arms separate the causes: a hosted 
 control is a jobs defect, an event in the plain control anywhere is that machine's, and clean legs where this host
 faults put the fault on this host.
 
-The `experiment` input picks the legs (`all`, `fuzz`, `tsan`, `arm64-sanitizer-cost`). The ARM64 sanitizer-cost legs
+The `experiment` input picks the legs (`all`, `fuzz`, `tsan`, `arm64-sanitizer-cost`, `x64-asan-stack-alignment`). The ARM64 sanitizer-cost legs
 (SIMD-DISPATCH, [session](../sessions/2026-10-29-simd-dispatch-arm64-asan-cost.md)) ask why linux-gcc-arm64-asan runs
 cases up to a thousand times slower than its debug lane, where linux-clang-arm64-asan and x64 GCC ASan stay within
 tens. One leg per ARM64 ASan preset (`ubuntu-24.04-arm`) builds the preset and a copy without UBSan, then times five
 cases through ctest in two interleaved rounds under the defaults, `detect_stack_use_after_return=0`,
 `malloc_context_size=0`, `quarantine_size_mb=0`, `detect_leaks=0` and ASan alone; the summary and the uploaded table
 give the seconds of every arm, and the leg records one `verbosity=1` start of the runtime.
+The x64 stack-alignment leg runs [TP-7](../third-party-defects.md#tp-7)'s Cerid-free control under the pinned
+Intel SDE with every compiler of the image, with and without GCC's width caps; it fails when a capped build faults
+or the image's default `g++` runs clean without them, the trigger that retires the caps.
 
 ## The sanitizer audit
 

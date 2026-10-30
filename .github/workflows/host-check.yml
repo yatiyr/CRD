@@ -8,14 +8,14 @@ name: Host check
 # to the committed corpora. Each fuzz leg runs its round under the default ASan options and then under the
 # container-overflow control for the same time; a leg fails on any event. The ARM64 sanitizer-cost legs (SIMD-DISPATCH)
 # time the cases linux-gcc-arm64-asan runs far slower than linux-clang-arm64-asan under each sanitizer and runtime
-# option, on both compilers.
+# option, on both compilers. The x64 stack-alignment leg runs TP-7's control under Intel SDE.
 on:
   workflow_dispatch:
     inputs:
       experiment:
         description: 'which experiment to run'
         type: choice
-        options: [all, fuzz, tsan, arm64-sanitizer-cost]
+        options: [all, fuzz, tsan, arm64-sanitizer-cost, x64-asan-stack-alignment]
         default: all
       seconds:
         description: 'libFuzzer seconds per round and arm'
@@ -385,5 +385,80 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: host-check-arm64-sanitizer-cost-${{ matrix.preset }}
+          path: ${{ runner.temp }}/host-check/evidence
+          if-no-files-found: warn
+
+  x64-asan-stack-alignment:
+    # SIMD-DISPATCH, TP-7 (docs/third-party-defects.md#tp-7): GCC's AddressSanitizer use-after-return frames leave an
+    # AVX-512 frame's address-taken array 32 bytes off the 64-byte boundary its zeroing store needs. The leg runs the
+    # Cerid-free control under the pinned Intel SDE with every compiler the image has, with and without the width caps
+    # CMakeLists.txt gives GCC, and fails when a capped build faults or the default g++ runs clean without the caps
+    # (then the caps are retired).
+    name: Host check (x64 ASan stack alignment)
+    if: inputs.experiment == 'all' || inputs.experiment == 'x64-asan-stack-alignment'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Install pinned Intel SDE
+        run: |
+          python3 scripts/install-sde.py --destination "$RUNNER_TEMP/sde" --download-dir "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+          sudo sysctl -w kernel.yama.ptrace_scope=0
+
+      - name: Stack-alignment control
+        run: |
+          evidence="$RUNNER_TEMP/host-check/evidence"
+          mkdir -p "$evidence"
+          status=0
+          for cxx in g++ g++-12 g++-13 g++-14 clang++; do
+            if ! command -v "$cxx" > /dev/null; then
+              echo "$cxx: not on the image" | tee -a "$evidence/control.txt"
+              continue
+            fi
+            for caps in '' '-mstore-max=256 -mmove-max=256'; do
+              if [ -n "$caps" ] && [ "$cxx" = clang++ ]; then
+                continue
+              fi
+              # shellcheck disable=SC2086 # the caps are two separate options
+              "$cxx" -std=c++20 -O0 -march=x86-64-v4 $caps -fsanitize=address -fno-omit-frame-pointer \
+                scripts/asan_stack_align_control.cpp -o "$RUNNER_TEMP/control"
+              if ASAN_OPTIONS=detect_stack_use_after_return=1 "$CRD_SDE" -skx -- "$RUNNER_TEMP/control" \
+                  > "$evidence/last.log" 2>&1; then
+                result=clean
+              else
+                result=faulted
+                cat "$evidence/last.log" >> "$evidence/faults.log"
+              fi
+              echo "$($cxx --version | head -n 1) [${caps:-no caps}]: $result" | tee -a "$evidence/control.txt"
+              if [ -n "$caps" ] && [ "$result" = faulted ]; then
+                status=1
+              fi
+              if [ -z "$caps" ] && [ "$cxx" = g++ ] && [ "$result" = clean ]; then
+                status=1
+              fi
+            done
+          done
+          {
+            echo '### x64 ASan stack-alignment control'
+            echo
+            sed 's/^/    /' "$evidence/control.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Preserve results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: host-check-x64-asan-stack-alignment
           path: ${{ runner.temp }}/host-check/evidence
           if-no-files-found: warn

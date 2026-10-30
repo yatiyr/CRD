@@ -114,6 +114,19 @@ Lane keys are the CI preset names; test names are exact CTest names. The gate re
 | Retirement | When the image's GCC changes, dispatch `host-check.yml` with `experiment=arm64-sanitizer-cost`; once the control's fake-stack arm is within a few percent of Clang's, drop the parameter |
 | Row | [SIMD-DISPATCH](ROADMAP.md#slice-simd-dispatch); evidence [the two ASan lanes at the job cap](sessions/2026-10-29-simd-dispatch-arm64-asan-cost.md) |
 
+<a id="tp-7"></a>
+## TP-7: GCC's use-after-return frames misalign an AVX-512 frame's 64-byte stores
+
+| Field | Value |
+|---|---|
+| Component | GCC 12.4.0 and 13.3.0 (`13.3.0-6ubuntu2~24.04.1`, Ubuntu's default `-fstack-protector-strong`) with AddressSanitizer, x64 |
+| Symptom | In a frame realigned to 64 bytes for a 512-bit value, GCC zeroes or copies an address-taken local with `vmovdqa64`, which needs 64-byte alignment; when ASan moves the frame to its fake stack (`detect_stack_use_after_return=1`, the runtime's default) the local sits 32 bytes off that boundary and the store raises #GP. ASan prints `SEGV on unknown address` with the high-value-address hint |
+| Reproduction outside Cerid | [`asan_stack_align_control.cpp`](../scripts/asan_stack_align_control.cpp) at -O0 for `-march=x86-64-v4` under Intel SDE 10.13.1 `-skx` (WSL2): GCC 12 and 13 fault (exit 132, `unaligned memory reference ... vmovdqa64`), also at -O1 and -O2; with `-fno-stack-protector`, or with `-mstore-max=256 -mmove-max=256`, they run clean; Clang 18 places the local 32-aligned and assumes no more. With the fake stack off GCC runs clean |
+| Affected | `linux-gcc-asan` on a runner with AVX-512 (Zen 4 EPYC 9V74, Xeon 8370C), where the avx512 level runs: `simd types: every level the host executes gives the portable level's bits` and `crd-math-kernels-at-avx512` (`d8_half_stores`, `f64 t[8] = {}`). Runners without AVX-512 skip that level, which is why the lane passed on EPYC 7763 |
+| Engine handling | GCC on x64 under ASan compiles with `-mstore-max=256 -mmove-max=256` (`CMakeLists.txt`): every such store stays within the 32 bytes ASan aligns, use-after-return detection and the stack protector stay on, and below AVX-512 the caps change no instruction (identical objects at `x86-64` to `x86-64-v3`) |
+| Retirement | When the image's GCC changes, dispatch `host-check.yml` with `experiment=x64-asan-stack-alignment`; it fails once the default `g++` runs the control clean without the caps, and then the caps are dropped |
+| Row | [SIMD-DISPATCH](ROADMAP.md#slice-simd-dispatch); evidence [the AVX-512 probe under GCC ASan](sessions/2026-10-30-simd-dispatch-asan-stack-alignment.md) |
+
 ## The registered-failure gate
 
 `scripts/check-registered-failures.py --lane <preset> --junit <ctest --output-junit file> --ctest-exit <code>` reads
