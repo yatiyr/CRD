@@ -5,7 +5,7 @@
 
 <!-- current-slice: SIMD-DISPATCH -->
 **Current work:** [SIMD-DISPATCH](docs/ROADMAP.md#slice-simd-dispatch) (Partial): the ISA guard's first green win-asan run;
-the boards (fft: a re-run, a decision; other families).
+the boards (fft: the avx2/avx512 re-run; other families).
 [DIAG.11b](docs/ROADMAP.md#slice-diag.11b): user re-record (8). [DIAG.11c](docs/ROADMAP.md#slice-diag.11c),
 [DIAG.12](docs/ROADMAP.md#slice-diag.12): final complete-tier run.
 Local routes: cached trees, WSL mirror, mold links, bounded waits ([build performance](docs/design/build-performance.md)).
