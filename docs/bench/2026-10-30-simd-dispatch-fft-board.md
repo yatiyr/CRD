@@ -8,7 +8,8 @@
 > Board 2 ([session](../sessions/2026-10-30-simd-dispatch-fft-board-method.md), [below](#board-2-one-program-on-both-engines))
 > supersedes this board's f32 verdict and its two method claims; board 3
 > ([session](../sessions/2026-10-30-simd-dispatch-fft-level-plans.md), [below](#board-3-the-per-level-plans)) gives
-> each level its plans.
+> each level its f32 plans; board 4 ([session](../sessions/2026-10-30-simd-dispatch-fft-f64-plans.md),
+> [below](#board-4-the-f64-plans-and-the-avx2-re-run)) its f64 plans and re-runs avx2 on the current codelet edition.
 
 - **Machine:** Intel i9-14900K, WSL2 (kernel 6.6.87.2, 32 logical CPUs, 31 GiB, 30 GiB available), Windows 11 host.
   `scripts/build-bench.py host` before and after each board: other processes 0.5 to 1.1 cores (the busiest Studio
@@ -210,3 +211,90 @@ Each level's plan against the canonical plan, both in the level's own run (media
   agree within twice the ADR-0092 §5 class; CrossPlatform keeps the cross-level bits.
 - **Not measured, canonical:** f64 (no forward arms in `bench_fft_vs_refs`), every inverse, avx512 and neon. Board 2
   shows f64 at sse2 and sse4.2 1.6x to 1.9x behind portable at every size it lists, an open fft item of the row.
+
+## Board 4: the f64 plans and the avx2 re-run
+
+`e0c70766` with `bench_fft_vs_refs`'s f64 forward arms (every forward the planner offers at 1K to 4M, the level's own
+first, interleaved every rep and gated against FFTW like the shootout), in the linux-gcc-release mirror tree. Five
+passes, each: pre-row's two programs (`2f2aed72`) on pre-row's engine and on HEAD's (each its compile and link command
+with the source swapped, board 2's method), then HEAD's `bench_fft_vs_refs` at detected (avx2), sse2 (glibc's
+features above it hidden) and portable. CPU 4, peers one thread; 6.6 minutes a pass. Host: others 1.5 to 2.0 cores
+(Studio One 0.7 to 1.0), Windows 11.2 to 13.6 of 63.7 GiB available (the user's applications). Binaries (SHA-256
+prefixes): pre-row `a2f353fe` (f32), `9d3e45f8` (f64); pre-row's programs on HEAD's engine `93e0bd1a`, `72110d8f`;
+HEAD's `bench_fft_vs_refs` `7522a37b`. The arms' times per pass are the data file
+[2026-10-30-simd-dispatch-fft-f64-arms.json](2026-10-30-simd-dispatch-fft-f64-arms.json).
+
+The avx2 level on the current codelet edition (`fa525bfe`: the largest codelets in parts), pre-row's program,
+median [lowest - highest] ms:
+
+| n | f32 pre-row | f32 HEAD | HEAD / pre-row | f64 pre-row | f64 HEAD | HEAD / pre-row |
+|---|---|---|---|---|---|---|
+| 65536 | 0.068 [0.065-0.070] | 0.071 [0.065-0.073] | 1.04 | 0.177 [0.173-0.182] | 0.176 [0.174-0.182] | 0.99 |
+| 131072 | 0.192 [0.185-0.208] | 0.175 [0.166-0.191] | 0.91 | 0.521 [0.504-0.545] | 0.506 [0.501-0.520] | 0.97 |
+| 262144 | 0.446 [0.432-0.514] | 0.425 [0.402-0.454] | 0.95 | 1.206 [1.109-1.232] | 1.232 [1.169-1.330] | 1.02 |
+| 524288 | 1.107 [0.988-1.307] | 1.101 [0.940-1.214] | 0.99 | 2.778 [2.724-2.926] | 3.015 [2.758-3.555] | 1.09 |
+| 1048576 | 3.559 [3.154-3.640] | 2.571 [2.206-2.670] | 0.72 | 6.616 [6.355-7.062] | 6.613 [6.455-7.110] | 1.00 |
+| 2097152 | 6.463 [5.877-6.749] | 6.919 [6.408-7.272] | 1.07 | 14.381 [13.844-15.038] | 15.286 [14.707-16.370] | 1.06 |
+| 4194304 | 14.245 [12.785-14.667] | 13.725 [12.991-14.495] | 0.96 | 29.271 [27.315-30.400] | 29.154 [27.201-29.772] | 1.00 |
+| 8388608 | | | | 64.501 [62.536-67.407] | 65.311 [60.151-65.886] | 1.01 |
+
+From 1K to 32K every median is within one unit of the programs' last decimal (0.86 to 1.07). Every range overlaps its
+pre-row range but f32 1M, faster on the tiled four-step (0.72).
+
+The f64 shootout, HEAD's program (median ms; peers from the detected arm, at the host's ISA):
+
+| n | avx2 | sse2 | portable | FFTW | pocketfft | MKL | MKL / avx2 |
+|---|---|---|---|---|---|---|---|
+| 1024 | 0.001 | 0.016 | 0.010 | 0.001 | 0.003 | 0.001 | 1.00x |
+| 16384 | 0.032 | 0.455 | 0.303 | 0.026 | 0.070 | 0.025 | 0.78x |
+| 131072 | 0.439 | 5.250 | 3.202 | 0.311 | 0.761 | 0.365 | 0.83x |
+| 1048576 | 5.602 | 45.306 | 31.167 | 6.259 | 10.292 | 4.409 | 0.79x |
+| 4194304 | 26.443 | 185.746 | 133.866 | 32.030 | 63.674 | 26.222 | 0.99x |
+| 8388608 | 59.429 | 397.416 | 290.623 | 69.166 | 127.149 | 54.276 | 0.91x |
+
+**Why portable leads sse2 on this host (board 2's open item).** portable keeps the host's glibc (ADR-0134 §8), whose
+`fma` is the FMA instruction here; the sse2 unit computes the fused class's every `fma` exactly with error-free
+transforms (`fma_exact.hpp`), about forty SSE2 operations for two lanes. With glibc's features above sse2 hidden from
+portable too, as on a CPU without FMA, one run of `bench_fft_vs_refs` gave (ms):
+
+| n | sse2 | portable, glibc FMA hidden | portable, host glibc |
+|---|---|---|---|
+| 1024 | 0.017 | 0.054 | 0.011 |
+| 65536 | 2.326 | 11.624 | 1.384 |
+| 1048576 | 46.796 | 209.356 | 29.527 |
+
+On a CPU that runs the sse2 unit for want of FMA, sse2 is 3.2x to 5.0x faster than portable; the gap needs a CPU with
+FMA below avx2 (AMD family 15h), where the sse2 unit's emulation stays and the instruction would not. Pre-row needed
+avx2, so no level regressed; the cost is the fused class's (ADR-0134 §7), recorded, not re-tuned.
+
+Each level's f64 plan against the canonical plan, both in the level's own run (median ms):
+
+| n | portable | sse2 (and sse4.2) | avx2 |
+|---|---|---|---|
+| 1024 | four-step 0.009 (1.22x) | stockham 0.014 (1.14x) | canonical 0.001 |
+| 2048 | four-step 0.021 (1.14x) | four-step 0.034 (1.09x) | standalone-hier 0.003 (1.33x) |
+| 4096 | four-step 0.056 (1.11x) | four-step 0.076 (1.21x) | canonical 0.007 |
+| 8192 | deep-split-4 0.120 (1.12x) | four-step 0.176 (1.16x) | canonical 0.016 |
+| 16384 | deep-split-3 0.278 (1.09x) | four-step 0.393 (1.17x) | canonical 0.032 |
+| 32768 | canonical 0.654 | canonical 0.993 | canonical 0.074 |
+| 65536 | six-step 1.416 (1.04x) | six-step 2.020 (1.09x) | canonical 0.159 |
+| 131072 | four-step 2.952 (1.12x) | four-step 4.116 (1.29x) | canonical 0.598 |
+| 262144 | four-step 6.659 (1.10x) | four-step 9.103 (1.25x) | canonical 1.405 |
+| 524288 | four-step 10.185 (1.62x) | four-step 12.744 (1.92x) | canonical 3.072 |
+| 1048576 | canonical 31.123 | canonical 45.365 | canonical 5.878 |
+| 2097152 | canonical 61.128 | canonical 87.435 | canonical 11.948 |
+| 4194304 | canonical 136.805 | canonical 186.264 | canonical 26.890 |
+
+At avx2 2K the standalone-hier ran 0.003 ms against IP4-AoS's 0.004 in every pass; it is avx2's own f64 2K plan, the
+canonical planner keeps IP4-AoS for CrossPlatform. Each arm met the bound against FFTW (at most 1.2e-15).
+
+## Verdict (board 4)
+
+- **f32 and f64, avx2, on the current edition: accepted.** No size regressed beyond the pass noise against pre-row on
+  one program; f32 1M is 28% faster.
+- **f64, every level:** the default plans are the measured winners, 1.04x to 1.92x faster than the canonical plan at
+  the sizes they differ (portable and sse2 at 1K to 512K but 32K, avx2 at 2K), the canonical plan elsewhere.
+- **f64 sse2 behind portable:** the host's FMA in portable's libm, not a defect; sse2 is 3.2x to 5.0x ahead of
+  portable on a CPU without FMA.
+- **Not measured, canonical:** every inverse; avx512 and neon need a host that has them (QUAL.1-HW): SDE emulates
+  avx512 here and does not time it.

@@ -140,9 +140,10 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    lockstep, golden tests); a scene's eylem configuration names its own mode and does not set the process's. The
    four-step's sub-plans are canonical in both, the composition the board measured. A plan keys on the kernel unit it
    runs (`fft_kernels().level`; fft builds portable, sse2, avx2 and avx512, so an sse4.2 selection runs the sse2 unit
-   and its plans), and the board's logs name that unit. The 2026-10-30 board measured the f32 forwards at portable,
-   sse2 and avx2 (avx2 is the canonical planner at every size); f64, every inverse, avx512 and neon run the canonical
-   plan until a board measures them. The geometry
+   and its plans), and the board's logs name that unit. The 2026-10-30 boards measured the f32 and f64 forwards at
+   portable, sse2 and avx2 (avx2 runs the canonical planner at every size but f64 2K, the standalone-hier); every
+   inverse runs the canonical plan, and so do avx512 and neon until a board on such a host measures them (QUAL.1-HW;
+   this host has neither, and SDE emulates avx512 without its timing). The geometry
    families are bit-exact the same way: two roundings a step, the IEEE min/max ordering and scalar lane decisions; so
    is the eylem-rigid3d body step, with true divisions and square roots. The forward jets are bit-exact too:
    per-lane chains in which only the product rule fuses (one fma), the quotient and scale steps round each operation
