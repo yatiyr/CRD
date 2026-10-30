@@ -138,6 +138,8 @@ bool forward_arms(crd::memory::IAllocator* alloc, const Complex<f64>* base, cons
         winner = best[a] < best[winner] ? a : winner;
     }
     std::printf("n=%zu winner: %s\n", n, fft::fft_algorithm_name(plans[winner]->state().forward));
+    // The canonical planner's forward (CrossPlatform's on every level), which the plan generator compares against.
+    std::printf("n=%zu canonical: %s\n", n, fft::fft_algorithm_name(fft::detail::planned_forward<f64>(n)));
     for (usize a = count; a-- > 0;)
     {
         crd::memory::destroy(*alloc, plans[a]);

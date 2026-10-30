@@ -135,6 +135,9 @@ frame_resets_spec.loader.exec_module(frame_resets)
 peer_headers_spec = importlib.util.spec_from_file_location('check_peer_headers', ROOT / 'scripts/check-peer-headers.py')
 peer_headers = importlib.util.module_from_spec(peer_headers_spec)
 peer_headers_spec.loader.exec_module(peer_headers)
+fft_plans_spec = importlib.util.spec_from_file_location('gen_fft_level_plans', ROOT / 'scripts/gen_fft_level_plans.py')
+fft_plans = importlib.util.module_from_spec(fft_plans_spec)
+fft_plans_spec.loader.exec_module(fft_plans)
 runbooks_spec = importlib.util.spec_from_file_location('check_diag_runbooks', ROOT / 'scripts/check-diag-runbooks.py')
 runbooks = importlib.util.module_from_spec(runbooks_spec)
 runbooks_spec.loader.exec_module(runbooks)
@@ -4012,6 +4015,47 @@ class PeerHeaders(unittest.TestCase):
         in_peers, problems = peer_headers.check(ROOT)
         self.assertEqual([], problems)
         self.assertGreater(in_peers, 0)
+
+
+class FftLevelPlans(unittest.TestCase):
+    """scripts/gen_fft_level_plans.py: a board's logs become a type's data file, and its rows the header's."""
+
+    @staticmethod
+    def write_board(root, planned_2k, canonical_2k):
+        """Two passes of one level: 1K and 2K, the planned arm first, each pass beating it with four-step at 2K."""
+        for p, (ip4, four) in enumerate(((0.010, 0.008), (0.011, 0.009)), start=1):
+            (root / f'pass{p}-level-sse2.txt').write_text('cpu detected=avx2 selected=sse2\n', encoding='utf-8')
+            lines = ['fft kernel level: sse2',
+                     f'1024      | ip4             |     {ip4:.3f} | 4.1e-16', 'n=1024 canonical: ip4',
+                     f'2048      | {planned_2k:<15} |     {ip4:.3f} | 4.0e-16',
+                     f'2048      | four-step       |     {four:.3f} | 8.7e-16',
+                     f'n=2048 canonical: {canonical_2k[p - 1]}']
+            if planned_2k != 'ip4':
+                lines.append('2048      | ip4             |     0.016 | 4.0e-16')
+            (root / f'pass{p}-f64-sse2.log').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+    def test_the_printed_canonical_forward_is_each_row_s_reference(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            self.write_board(root, 'standalone-hier', ('ip4', 'ip4'))
+            data = fft_plans.import_board(root, 'probe', 'f64')
+            self.assertEqual({'1024': 'ip4', '2048': 'ip4'}, data['canonical'])
+            self.assertEqual(('bench_fft_vs_refs', 8), (data['program'], data['element_bytes']))
+            rows = fft_plans.rows_of(root, data)
+            self.assertIn('FftAlgorithm::Ip4}', rows[0][0])
+            self.assertIn('{8, crd::CpuLevel::Sse2, 11, FftAlgorithm::FourStep}', rows[1][0])
+            self.assertTrue(rows[1][1].endswith('; ip4 0.016'), rows[1][1])
+
+    def test_logs_that_disagree_on_the_canonical_forward_are_refused(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            self.write_board(root, 'ip4', ('ip4', 'stockham'))
+            with self.assertRaisesRegex(SystemExit, '2048 canonical stockham, another log ip4'):
+                fft_plans.import_board(root, 'probe', 'f64')
+
+    def test_this_checkout_s_header_matches_its_data_files(self):
+        with patch('sys.argv', ['gen_fft_level_plans.py', '--check']):
+            self.assertEqual(0, fft_plans.main())
 
 
 class DiagRunbooks(unittest.TestCase):

@@ -171,6 +171,8 @@ bool board(crd::memory::IAllocator* alloc, int lg, const Arm* arms, usize arm_co
     {
         std::printf("n=%zu winner: %s at %.2fx MKL\n", n, arms[winner].name, mkl / best[winner]);
     }
+    // The canonical planner's forward (CrossPlatform's on every level), which the plan generator compares against.
+    std::printf("n=%zu canonical: %s\n", n, fft::fft_algorithm_name(fft::detail::planned_forward<f32>(n)));
     if (!ok)
     {
         std::fprintf(stderr, "n=%zu: an error against the f64 truth is above the bound %.1e\n", n, limit);

@@ -6,12 +6,12 @@
 // (bench_fft_vs_refs at e0c70766 with the f64 forward arms;
 // docs/bench/2026-10-30-simd-dispatch-fft-board.md#board-4-the-f64-plans-and-the-avx2-re-run).
 //
-// Each CPU level's forward of a type and size as SIMD-DISPATCH's fft board measured it (ADR-0134 §7): the
-// board's fastest arm (the lowest median of its passes) where its every pass beat every pass of the arm the
-// level ran as planned, the planned arm otherwise (equal medians: the lower mean). Each row's comment is its
-// arm's median ms, then the canonical arm's (the top level's) where the row differs from it. FftPlan runs a
-// row under DeterminismMode::Default; every type, level and size the board did not measure, and every other
-// mode, runs the canonical planner (detail::planned_forward).
+// Each CPU level's forward of a type and size as SIMD-DISPATCH's fft board measured it (ADR-0134
+// §7): the board's fastest arm (the lowest median of its passes) where its every pass beat every pass
+// of the arm the level ran as planned, the planned arm otherwise (equal medians: the lower mean). Each
+// row's comment is its arm's median ms, then the canonical planner's arm's where the row differs
+// from it. FftPlan runs a row under DeterminismMode::Default; every type, level and size the board did
+// not measure, and every other mode, runs the canonical planner (detail::planned_forward).
 
 #pragma once
 

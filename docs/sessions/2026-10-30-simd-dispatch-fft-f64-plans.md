@@ -33,9 +33,12 @@ keeps the emulation's cost. Pre-row needed avx2, so nothing regressed; recorded 
 - `bench_fft_vs_refs` runs every forward `forward_builds<f64>` offers at 1K to 4M after each shootout row, the level's
   own first, interleaved every rep, the input copied in untimed, each gated against FFTW at the program's bound, and
   prints `fft kernel level:`.
-- `gen_fft_level_plans.py` keeps one data file per type (`--import DIR --type f32|f64`), writes both into
-  `level_plans_gen.hpp` and takes each size's canonical arm from the top level's planned one (it had no row during the
-  boards), so a top-level winner becomes a row too.
+- `gen_fft_level_plans.py` keeps one data file per type (`--import DIR --type f32|f64`) and writes both into
+  `level_plans_gen.hpp`. Each row's note compares with the canonical forward, which both programs now print per size
+  (`n=<n> canonical: <arm>`, logs that disagree refused); boards before that line take the top level's planned arms
+  (it had no row then). So a top-level winner becomes a row too, and the next board's avx2 2K row cannot pass for
+  canonical. Three tooling tests hold it (the printed reference, the refusal, this checkout's header), each failing
+  with its logic removed.
 - Board 4 (five passes, 6.6 minutes each): portable and sse2 run their own f64 plans at 1K to 512K but 32K, 1.04x to
   1.92x faster than the canonical plan in the same run (the four-step 1.62x and 1.92x at 512K); avx2 runs the
   canonical planner but at 2K, where the standalone-hier ran 0.003 ms against IP4-AoS's 0.004 in every pass. The
@@ -57,7 +60,7 @@ mode-switch count holds every row, f64 2K at avx2 included.
 
 win-debug: crd-hesap-fft-tests built; the eight table, plan, own-plan and f32 and f64 forced-forward cases passed
 (98 s). linux-gcc-release mirror: `bench_fft_vs_refs` built and the board ran; tidy (LLVM 20.1.0) clean on it there
-(it is in no Windows database) and on the test file on win-debug. The generator's `--check`, check-generated,
+(it is in no Windows database), on `bench_fft_f32` after its canonical line, and on the test file on win-debug. The generator's `--check`, check-generated,
 clang-format on the changed lines, Allman braces, the ctest guards, the repository tooling tests, the plan and
 repository checks.
 
