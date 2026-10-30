@@ -87,7 +87,7 @@
       "flags_of": "tests/numerics/hesap-dense/test_dense_kernels.cpp",
       "forbid": ["chrono", "format"],
       "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
-      "why": "the one-thread GEMM board's forced tiles and paths, included by the board and the dense kernel tests; the tiles are per-level dense kernels (SIMD-DISPATCH), so the header brings no intrinsics header to them"
+      "why": "the one-thread GEMM board's forced tiles and paths and the gemm_parallel and trsm jobs levers, included by the boards and the dense tests; the tiles are per-level dense kernels (SIMD-DISPATCH), so the header brings no intrinsics header to them"
     },
     {
       "include": "crd/hesap/dense/detail/factor_arms.hpp",

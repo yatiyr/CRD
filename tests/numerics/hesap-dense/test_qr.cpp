@@ -2,11 +2,16 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <crd/containers/array.hpp>
+#include <crd/hesap/dense/detail/factor_arms.hpp>
 #include <crd/hesap/dense/matrix.hpp>
 #include <crd/hesap/dense/qr.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
+#include "hesap_jobs_fixture.hpp"
+
 #include <cmath>
+#include <cstring>
+#include <limits>
 
 using crd::hesap::dense::apply_q;
 using crd::hesap::dense::apply_q_transpose;
@@ -376,4 +381,187 @@ TEST_CASE("QR: apply_q * apply_q_transpose is identity",
     {
         CHECK_THAT(x[i], WithinAbs(x_orig[i], 1e-12));
     }
+}
+
+namespace
+{
+using crd::hesap::dense::detail::QrPick;
+
+// A's copy factored through factor_qr_arm(pick).
+template <typename T>
+void qr_with(const QrPick& pick, const Matrix<T, Layout::RowMajor>& a, QR<T, Layout::RowMajor>& qr)
+{
+    for (crd::usize i = 0; i < a.rows(); ++i)
+    {
+        for (crd::usize j = 0; j < a.cols(); ++j)
+        {
+            qr.packed().at(i, j) = a.at(i, j);
+        }
+    }
+    crd::hesap::dense::detail::factor_qr_arm<T, Layout::RowMajor>(pick, qr);
+}
+
+template <typename T> bool qr_same(const QR<T, Layout::RowMajor>& x, const QR<T, Layout::RowMajor>& y)
+{
+    const crd::usize k = x.num_reflectors();
+    return std::memcmp(x.packed().data(), y.packed().data(), x.rows() * x.packed().ld() * sizeof(T)) == 0 &&
+           std::memcmp(x.taus().data(), y.taus().data(), k * sizeof(T)) == 0;
+}
+
+// The backward error of Householder QR (Higham Theorem 19.4): the computed R is the exact R of A + dA with
+// |da_j| <= gamma~(m n) |a_j| column by column; Q R is formed in double from the stored reflectors and c = 1.
+template <typename T>
+bool qr_backward_stable(const QR<T, Layout::RowMajor>& qr, const Matrix<T, Layout::RowMajor>& a,
+                        crd::memory::IAllocator* alloc)
+{
+    const crd::usize m = qr.rows();
+    const crd::usize n = qr.cols();
+    const crd::usize k = qr.num_reflectors();
+    const double tol =
+        static_cast<double>(m) * static_cast<double>(n) * static_cast<double>(std::numeric_limits<T>::epsilon());
+    crd::containers::Array<double> x(alloc);
+    x.resize(m);
+    for (crd::usize j = 0; j < n; ++j)
+    {
+        for (crd::usize i = 0; i < m; ++i)
+        {
+            x[i] = i <= j ? static_cast<double>(qr.packed().at(i, j)) : 0.0;
+        }
+        for (crd::usize r = k; r-- > 0;)
+        {
+            double w = x[r];
+            for (crd::usize i = r + 1; i < m; ++i)
+            {
+                w += static_cast<double>(qr.packed().at(i, r)) * x[i];
+            }
+            w *= static_cast<double>(qr.taus()[r]);
+            x[r] -= w;
+            for (crd::usize i = r + 1; i < m; ++i)
+            {
+                x[i] -= w * static_cast<double>(qr.packed().at(i, r));
+            }
+        }
+        double err = 0.0;
+        double norm = 0.0;
+        for (crd::usize i = 0; i < m; ++i)
+        {
+            const double aij = static_cast<double>(a.at(i, j));
+            err += (aij - x[i]) * (aij - x[i]);
+            norm += aij * aij;
+        }
+        if (!(std::sqrt(err) <= tol * std::sqrt(norm) + std::numeric_limits<double>::min()))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+template <typename T> void check_qr_levers()
+{
+    crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(64U * 1024U * 1024U));
+    // The paths: the default cut and block, always blocked at blocks 8, 32 and 50, and always unblocked (m >= n).
+    const QrPick paths[] = {
+        QrPick{},
+        QrPick{.unblocked_max = 0, .block = 8},
+        QrPick{.unblocked_max = 0},
+        QrPick{.unblocked_max = 0, .block = 50},
+        QrPick{.unblocked_max = ~crd::usize{0}},
+    };
+    const crd::usize never = ~crd::usize{0};
+    const crd::u32 jobs[] = {4U, 8U, 16U, 32U};
+    struct Shape
+    {
+        crd::usize m, n;
+    };
+    // One element, a block's edge, square under the cut, tall past it and wide (always blocked).
+    const Shape shapes[] = {{1, 1}, {33, 32}, {100, 100}, {200, 130}, {120, 190}};
+    for (const Shape& sh : shapes)
+    {
+        // Inputs: random, IEEE specials (NaN, infinity, -0, a subnormal) and a zero column at 40 (its tau 0).
+        for (int input = 0; input < 3; ++input)
+        {
+            if (input != 0 && sh.n < 64)
+            {
+                continue;
+            }
+            Matrix<T, Layout::RowMajor> a(&alloc, sh.m, sh.n);
+            crd::u32 s = 5U + static_cast<crd::u32>(sh.m * 3U + sh.n);
+            for (crd::usize i = 0; i < sh.m; ++i)
+            {
+                for (crd::usize j = 0; j < sh.n; ++j)
+                {
+                    s = s * 1664525U + 1013904223U;
+                    a.at(i, j) = static_cast<T>(static_cast<double>(s >> 8) / 16777216.0 - 0.5);
+                }
+            }
+            if (input == 1)
+            {
+                a.at(5, 3) = std::numeric_limits<T>::quiet_NaN();
+                a.at(40, 50) = std::numeric_limits<T>::infinity();
+                a.at(60, 1) = T{-0.0};
+                a.at(10, 62) = std::numeric_limits<T>::min() / T{4};
+            }
+            if (input == 2)
+            {
+                for (crd::usize i = 0; i < sh.m; ++i)
+                {
+                    a.at(i, 40) = T{0};
+                }
+            }
+            crd::usize seen[5] = {};
+            crd::usize num_seen = 0;
+            for (const QrPick& path : paths)
+            {
+                // A path this shape already took (its block, or 0 for unblocked) runs once.
+                const crd::usize key = sh.m >= sh.n && sh.n <= path.unblocked_max ? 0 : path.block;
+                bool taken = false;
+                for (crd::usize i = 0; i < num_seen; ++i)
+                {
+                    taken = taken || seen[i] == key;
+                }
+                if (taken)
+                {
+                    continue;
+                }
+                seen[num_seen++] = key;
+                QrPick one = path;
+                one.workers = 1;
+                QR<T, Layout::RowMajor> ref(&alloc, sh.m, sh.n);
+                qr_with(one, a, ref);
+                INFO("m " << sh.m << " n " << sh.n << " input " << input << " cut " << path.unblocked_max << " block "
+                          << path.block);
+                if (input != 1)
+                {
+                    CHECK(qr_backward_stable(ref, a, &alloc));
+                }
+                if (key == 0)
+                {
+                    continue; // the unblocked factor runs no jobs
+                }
+                for (const crd::usize trailing : {QrPick{}.trailing_min, crd::usize{0}, never})
+                {
+                    for (const crd::u32 w : jobs)
+                    {
+                        QrPick pick = path;
+                        pick.trailing_min = trailing;
+                        pick.workers = w;
+                        QR<T, Layout::RowMajor> qr(&alloc, sh.m, sh.n);
+                        qr_with(pick, a, qr);
+                        INFO("trailing " << trailing << " jobs " << w);
+                        CHECK(qr_same(qr, ref));
+                    }
+                }
+            }
+        }
+    }
+}
+} // namespace
+
+TEST_CASE("factor_qr_arm: every jobs lever at 4 to 32 jobs gives the one-job factor's bits",
+          "[hesap][qr][parallel][jobs]")
+{
+    (void)crd_hesap_dense_tests::hesap_jobs_listener();
+    check_qr_levers<float>();
+    check_qr_levers<double>();
 }

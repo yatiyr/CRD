@@ -1,6 +1,7 @@
-// The dense factors' crd-jobs levers (SIMD-DISPATCH, the folded HESAP-JOBS-RETUNE): factor_lu and factor_cholesky
-// are factor_lu_arm(LuPick{}) and factor_cholesky_arm(CholeskyPick{}), so production and the arms share one body; the
-// thread-sweep board (bench_hesap_factor_parallel) sets the defaults and a lever that loses goes with its field.
+// The dense factors' crd-jobs levers (SIMD-DISPATCH, the folded HESAP-JOBS-RETUNE): factor_lu, factor_cholesky and
+// factor_qr are factor_lu_arm(LuPick{}), factor_cholesky_arm(CholeskyPick{}) and factor_qr_arm(QrPick{}), so production
+// and the arms share one body; the thread-sweep board (bench_hesap_factor_parallel) sets the defaults and a lever that
+// loses goes with its field.
 //
 // Determinism (ADR-0063): the worker count and the split thresholds decide only which job computes a row or column
 // of the result, never its value, so for one block and unblocked cut every worker count and threshold gives the
@@ -13,6 +14,7 @@
 #include <crd/hesap/dense/cholesky.hpp>
 #include <crd/hesap/dense/layout.hpp>
 #include <crd/hesap/dense/lu.hpp>
+#include <crd/hesap/dense/qr.hpp>
 #include <crd/memory/allocator.hpp>
 
 namespace crd::hesap::dense::detail
@@ -37,11 +39,24 @@ struct CholeskyPick
     crd::u32 workers = 0;                   // the jobs
 };
 
+// QR's jobs are its two trailing gemm_parallel calls per panel (W = V^T A2 and A2 -= V W'); trailing_min compares
+// each call's m n k, its default gemm_parallel_auto's serial cut.
+struct QrPick
+{
+    crd::usize unblocked_max = 128;             // m >= n: the unblocked single-panel factor up to this n
+    crd::usize block = 32;                      // the compact-WY panel width of the blocked factor
+    crd::usize trailing_min = 256ULL * 1024ULL; // each trailing gemm runs on the jobs from this m n k on
+    crd::u32 workers = 0;                       // the jobs
+};
+
 // factor_lu (lu.hpp) on pick's levers, every real and complex type; more than one job needs crd::jobs initialised.
 template <typename T, Layout L> void factor_lu_arm(const LuPick& pick, LU<T, L>& lu, crd::memory::IAllocator* scratch);
 
 // factor_cholesky (cholesky.hpp) on pick's levers, f32 and f64; more than one job needs crd::jobs initialised.
 template <typename T, Layout L>
 void factor_cholesky_arm(const CholeskyPick& pick, Cholesky<T, L>& chol, crd::memory::IAllocator* scratch);
+
+// factor_qr (qr.hpp) on pick's levers, f32 and f64; more than one job needs crd::jobs initialised.
+template <typename T, Layout L> void factor_qr_arm(const QrPick& pick, QR<T, L>& qr);
 
 } // namespace crd::hesap::dense::detail

@@ -492,3 +492,96 @@ TEST_CASE("gemm_parallel_arm: every lever at 1 to 32 jobs gives serial gemm's bi
     walk_levers<crd::f32, Layout::RowMajor>({40, 21, 0, Trans::None, Trans::None, false, false}, 1.0F, 0.75F, 15U);
     walk_levers<crd::f64, Layout::ColMajor>({40, 21, 0, Trans::None, Trans::Transpose, false, true}, 1.0, 0.0, 16U);
 }
+
+// ---- trsm's crd-jobs lever (detail::TrsmPick) ----
+namespace
+{
+using crd::hesap::dense::Triangular;
+using crd::hesap::dense::TriangularDiag;
+using crd::hesap::dense::TriangularSide;
+using crd::hesap::dense::detail::TrsmPick;
+
+// One solve split at every cut and job count against the one-call trsm bit for bit over B and the guard words around
+// it (B is an inner view of a store one row and one column wider on every side, so its ld exceeds its columns).
+template <typename T, TriangularSide Side>
+void walk_trsm(crd::usize n, crd::usize cols, T alpha, T diag_shift, bool specials, crd::u32 seed)
+{
+    crd::memory::TlsfAllocator alloc(16 * 1024 * 1024);
+    crd_hesap_dense_tests::Rng rng(seed);
+    Triangular<T, Side, TriangularDiag::Explicit> a(&alloc, n);
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        for (crd::usize j = 0; j < n; ++j)
+        {
+            if (i == j)
+            {
+                a.at(i, j) = lever_value<T>(rng) + diag_shift;
+            }
+            else if ((Side == TriangularSide::Lower) == (j < i))
+            {
+                a.at(i, j) = lever_value<T>(rng);
+            }
+        }
+    }
+    Matrix<T> start(&alloc, n + 2U, cols + 2U);
+    for (crd::usize i = 0; i < n + 2U; ++i)
+    {
+        for (crd::usize j = 0; j < cols + 2U; ++j)
+        {
+            start(i, j) = specials && (i * 5U + j) % 13U == 0U ? lever_special<T>(i + j) : lever_value<T>(rng);
+        }
+    }
+    const auto inner = [&](Matrix<T>& store)
+    {
+        return MatrixView<T, Layout::RowMajor>(store.data() + store.ld() + 1U, n, cols, store.ld());
+    };
+    const crd::usize bytes = (n + 2U) * (cols + 2U) * sizeof(T);
+    const crd::usize work = n * n * cols;
+    Matrix<T> serial(&alloc, n + 2U, cols + 2U);
+    Matrix<T> arm(&alloc, n + 2U, cols + 2U);
+    for (const Trans trans : {Trans::None, Trans::Transpose, Trans::ConjTranspose})
+    {
+        std::memcpy(serial.data(), start.data(), bytes);
+        crd::hesap::dense::trsm<T, Side, TriangularDiag::Explicit>(alpha, a, inner(serial), trans);
+        for (crd::usize i = 0; i < n + 2U; ++i)
+        {
+            for (crd::usize j = 0; j < cols + 2U; ++j)
+            {
+                if (i == 0 || j == 0 || i == n + 1U || j == cols + 1U)
+                {
+                    REQUIRE(std::memcmp(&serial(i, j), &start(i, j), sizeof(T)) == 0); // the guard words
+                }
+            }
+        }
+        // Split always, from exactly this solve's work on, and never (one past it).
+        for (const crd::usize cut : {crd::usize{0}, work, work + 1U})
+        {
+            for (const crd::u32 nw : {1U, 4U, 8U, 16U, 32U})
+            {
+                std::memcpy(arm.data(), start.data(), bytes);
+                crd::hesap::dense::detail::trsm_arm<T, Side, TriangularDiag::Explicit>(
+                    TrsmPick{.parallel_min = cut, .workers = nw}, alpha, a, inner(arm), trans);
+                CAPTURE(n, cols, static_cast<int>(trans), cut, nw);
+                const bool same = std::memcmp(arm.data(), serial.data(), bytes) == 0;
+                REQUIRE(same);
+            }
+        }
+    }
+}
+} // namespace
+
+TEST_CASE("trsm_arm: every split at 1 to 32 jobs gives the one-call trsm's bits", "[hesap][blas3][parallel][trsm]")
+{
+    parallel_jobs_listener();
+    using crd::hesap::Complex32;
+    using crd::hesap::Complex64;
+    // One element, one column (never split), fewer columns than jobs, and more.
+    walk_trsm<crd::f32, TriangularSide::Lower>(1, 1, 1.25F, 4.0F, false, 21U);
+    walk_trsm<crd::f64, TriangularSide::Upper>(37, 1, -0.5, 4.0, true, 22U);
+    walk_trsm<crd::f32, TriangularSide::Upper>(50, 7, 1.25F, 4.0F, true, 23U);
+    walk_trsm<crd::f64, TriangularSide::Lower>(64, 67, -0.5, 4.0, true, 24U);
+    walk_trsm<Complex32, TriangularSide::Lower>(41, 45, Complex32{0.5F, -1.0F}, Complex32{4.0F, 1.0F}, true, 25U);
+    walk_trsm<Complex32, TriangularSide::Upper>(29, 33, Complex32{1.0F, 0.0F}, Complex32{4.0F, -1.0F}, false, 26U);
+    walk_trsm<Complex64, TriangularSide::Lower>(33, 40, Complex64{-0.75, 0.25}, Complex64{4.0, 1.0}, false, 27U);
+    walk_trsm<Complex64, TriangularSide::Upper>(70, 35, Complex64{0.5, 0.5}, Complex64{4.0, -1.0}, true, 28U);
+}

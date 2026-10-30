@@ -4,6 +4,7 @@
 #include <crd/core/assert.hpp>
 #include <crd/hesap/dense/blas3.hpp>
 #include <crd/hesap/dense/dense_dispatch.hpp>
+#include <crd/hesap/dense/detail/factor_arms.hpp>
 #include <crd/jobs/jobs.hpp>
 
 #include <crd/math/cmath.hpp>
@@ -13,20 +14,6 @@ namespace crd::hesap::dense
 {
 namespace
 {
-// Block size for compact-WY Householder QR (LAPACK xGEQRT default).
-// At nb=32, panel-factor cost is small + the trailing update is the
-// dominant cost, which routes through gemm_parallel for full 16-way
-// parallelism on the i9-14900K.
-constexpr crd::usize kQrBlockSize = 32;
-
-// Crossover (tall/square m≥n): for n at or below this, the unblocked single-panel
-// QR beats the blocked compact-WY path (whose panel-transpose + T-build + gemm
-// setup don't amortize at small/mid n). Calibrated for tall m≈2n via
-// bench_hesap_lstsq_vs_reference (v3c-1c): unblocked wins vs blocked through
-// n≈128 (and beats Eigen at n=64, parity at n=96). Square / very-tall shapes may
-// prefer a different threshold and will be revisited when a consumer hits it.
-constexpr crd::usize kQrUnblockedMax = 128;
-
 template <typename T>
 inline T sign_or_one(T x) noexcept
 {
@@ -148,7 +135,15 @@ void materialize_panel_v(const T* data, crd::usize m, crd::usize ld, crd::usize 
 template <typename T, Layout L>
 void factor_qr(QR<T, L>& qr)
 {
+    detail::factor_qr_arm<T, L>(detail::QrPick{}, qr);
+}
+
+// The defaults: the block is LAPACK xGEQRT's 32 (the trailing update dominates and runs on the jobs); the unblocked
+// cut was calibrated for tall m of about 2 n on bench_hesap_lstsq_vs_reference (unblocked wins through n of 128).
+template <typename T, Layout L> void detail::factor_qr_arm(const QrPick& pick, QR<T, L>& qr)
+{
     static_assert(L == Layout::RowMajor, "factor_qr currently supports RowMajor only");
+    CRD_ASSERT_MSG(pick.block != 0, "factor_qr_arm: the block is at least one column");
 
     Matrix<T, L>& packed = qr.packed();
     const crd::usize m = packed.rows();
@@ -164,33 +159,34 @@ void factor_qr(QR<T, L>& qr)
         return;
     }
 
-    // Below the crossover (tall/square only), the unblocked single-panel QR
-    // wins — dispatch there. Wide (m<n) always uses the blocked path.
-    if (m >= n && n <= kQrUnblockedMax)
+    // Below the cut (tall or square only) the unblocked single-panel QR; wide (m < n) is always blocked.
+    if (m >= n && n <= pick.unblocked_max)
     {
         factor_qr_unblocked<T, L>(qr);
         return;
     }
 
+    const crd::usize block = pick.block;
+    const crd::u32 num_workers = pick.workers != 0 ? pick.workers : crd::jobs::num_workers();
     crd::memory::IAllocator* alloc = packed.allocator();
 
     // Scratch buffers reused across panels.
     crd::containers::Array<T> t_buf(alloc);
-    t_buf.resize(kQrBlockSize * kQrBlockSize);
+    t_buf.resize(block * block);
     crd::containers::Array<T> v_buf(alloc);
-    v_buf.resize(m * kQrBlockSize);
+    v_buf.resize(m * block);
     crd::containers::Array<T> w_buf(alloc);
-    w_buf.resize(kQrBlockSize * n);
+    w_buf.resize(block * n);
     crd::containers::Array<T> w_tmp(alloc);
-    w_tmp.resize(kQrBlockSize * n);
+    w_tmp.resize(block * n);
     crd::containers::Array<T> vtv_buf(alloc);
-    vtv_buf.resize(kQrBlockSize * kQrBlockSize);
+    vtv_buf.resize(block * block);
     crd::containers::Array<T> pt_buf(alloc);  // transposed panel scratch (nb × m)
-    pt_buf.resize(kQrBlockSize * m);
+    pt_buf.resize(block * m);
 
-    for (crd::usize k = 0; k < k_count; k += kQrBlockSize)
+    for (crd::usize k = 0; k < k_count; k += block)
     {
-        const crd::usize nb = (k + kQrBlockSize <= k_count) ? kQrBlockSize : (k_count - k);
+        const crd::usize nb = (k + block <= k_count) ? block : (k_count - k);
         const crd::usize panel_rows = m - k;
 
         // Step 1: transpose the panel into pt (nb × panel_rows), factor with
@@ -223,35 +219,35 @@ void factor_qr(QR<T, L>& qr)
             continue;
         }
         const crd::usize rows = m - k;
+        // Both trailing gemms have m n k = nb trail_cols rows: serial below the cut, the jobs from it on.
+        const crd::u32 jobs = nb * trail_cols * rows < pick.trailing_min ? 1U : num_workers;
 
         // Materialize V (rows × nb) with implicit diagonal made explicit.
-        materialize_panel_v<T>(data, m, ld, k, nb, v_buf.data(), kQrBlockSize);
+        materialize_panel_v<T>(data, m, ld, k, nb, v_buf.data(), block);
 
         // Compute vtv = V^T · V (nb × nb) via gemm — SIMD path replaces the
         // scalar inner-product loops of build_block_T. V is rows × nb,
         // result is nb × nb.
-        MatrixView<const T, L> v_full_for_t{v_buf.data(), rows, nb, kQrBlockSize};
-        MatrixView<T, L> vtv_view{vtv_buf.data(), nb, nb, kQrBlockSize};
+        MatrixView<const T, L> v_full_for_t{v_buf.data(), rows, nb, block};
+        MatrixView<T, L> vtv_view{vtv_buf.data(), nb, nb, block};
         gemm<T, L>(T{1}, v_full_for_t, v_full_for_t, T{0}, vtv_view, Trans::Transpose,
                    Trans::None, alloc);
 
         // Build T from vtv (small nb² in-cache work).
-        build_block_t_from_vtv<T>(vtv_buf.data(), kQrBlockSize, taus.data(), k, nb, t_buf.data(),
-                                   kQrBlockSize);
+        build_block_t_from_vtv<T>(vtv_buf.data(), block, taus.data(), k, nb, t_buf.data(), block);
 
         // W = V^T · A_trail. Use gemm_parallel with TransA=Transpose.
-        // V is rows × nb (RowMajor with ld=kQrBlockSize).
+        // V is rows × nb (RowMajor with ld=block).
         // A_trail is rows × trail_cols (RowMajor with ld=ld, base at data + k*ld + k+nb).
         // W goes to w_buf nb × trail_cols (RowMajor with ld=trail_cols).
-        MatrixView<const T, L> v_view{v_buf.data(), rows, nb, kQrBlockSize};
+        MatrixView<const T, L> v_view{v_buf.data(), rows, nb, block};
         MatrixView<const T, L> a_trail_const{data + k * ld + (k + nb), rows, trail_cols, ld};
         MatrixView<T, L> w_view{w_buf.data(), nb, trail_cols, trail_cols};
-        gemm_parallel_auto<T, L>(T{1}, v_view, a_trail_const, T{0}, w_view, Trans::Transpose,
-                                  Trans::None, alloc);
+        gemm_parallel<T, L>(jobs, T{1}, v_view, a_trail_const, T{0}, w_view, Trans::Transpose, Trans::None, alloc);
 
         // W' = T^T · W via small gemm (T is nb × nb upper-triangular, treated
         // as a square nb × nb for the transpose). Result lands in w_tmp.
-        MatrixView<const T, L> t_view{t_buf.data(), nb, nb, kQrBlockSize};
+        MatrixView<const T, L> t_view{t_buf.data(), nb, nb, block};
         MatrixView<const T, L> w_in{w_buf.data(), nb, trail_cols, trail_cols};
         MatrixView<T, L> w_tmp_view{w_tmp.data(), nb, trail_cols, trail_cols};
         gemm<T, L>(T{1}, t_view, w_in, T{0}, w_tmp_view, Trans::Transpose, Trans::None, alloc);
@@ -259,8 +255,7 @@ void factor_qr(QR<T, L>& qr)
         // A_trail -= V · w_tmp.
         MatrixView<const T, L> w_const{w_tmp.data(), nb, trail_cols, trail_cols};
         MatrixView<T, L> a_trail_mut{data + k * ld + (k + nb), rows, trail_cols, ld};
-        gemm_parallel_auto<T, L>(T{-1}, v_view, w_const, T{1}, a_trail_mut, Trans::None,
-                                  Trans::None, alloc);
+        gemm_parallel<T, L>(jobs, T{-1}, v_view, w_const, T{1}, a_trail_mut, Trans::None, Trans::None, alloc);
     }
 }
 
@@ -405,6 +400,8 @@ void solve_qr(const QR<T, L>& qr, crd::containers::Span<T> b)
 
 template void factor_qr<float, Layout::RowMajor>(QR<float, Layout::RowMajor>&);
 template void factor_qr<double, Layout::RowMajor>(QR<double, Layout::RowMajor>&);
+template void detail::factor_qr_arm<float, Layout::RowMajor>(const detail::QrPick&, QR<float, Layout::RowMajor>&);
+template void detail::factor_qr_arm<double, Layout::RowMajor>(const detail::QrPick&, QR<double, Layout::RowMajor>&);
 template void factor_qr_unblocked<float, Layout::RowMajor>(QR<float, Layout::RowMajor>&);
 template void factor_qr_unblocked<double, Layout::RowMajor>(QR<double, Layout::RowMajor>&);
 template void apply_q_transpose<float, Layout::RowMajor>(const QR<float, Layout::RowMajor>&,

@@ -1,9 +1,9 @@
-// The GEMM boards' arms (SIMD-DISPATCH). gemm_arm: a serial GEMM on given kernels (the level the process runs, or
+// The blas3 boards' arms (SIMD-DISPATCH). gemm_arm: a serial GEMM on given kernels (the level the process runs, or
 // kDenseGemmArmsPortable's 4 by 4 tile, crd/hesap/dense/dense_kernels.hpp) down a forced path, so one binary times
 // both portable tiles and both small-size paths at every size; the board keeps one portable tile and sets blas3's
-// serial resident threshold, and GemmPath goes. gemm_parallel_arm: gemm_parallel's crd-jobs levers (the folded
-// HESAP-JOBS-RETUNE), production's being GemmParallelPick{}; the thread-sweep board sets the defaults and a lever
-// that loses goes with its field.
+// serial resident threshold, and GemmPath goes. gemm_parallel_arm and trsm_arm: gemm_parallel's and trsm's crd-jobs
+// levers (the folded HESAP-JOBS-RETUNE), production's being GemmParallelPick{} and TrsmPick{}; the thread-sweep boards
+// set the defaults and a lever that loses goes with its field.
 
 #pragma once
 
@@ -11,6 +11,7 @@
 #include <crd/hesap/dense/dense_kernels.hpp>
 #include <crd/hesap/dense/layout.hpp>
 #include <crd/hesap/dense/matrix.hpp>
+#include <crd/hesap/dense/matrix_types.hpp>
 #include <crd/memory/allocator.hpp>
 
 namespace crd::hesap::dense::detail
@@ -56,5 +57,18 @@ template <typename T, Layout L>
 void gemm_parallel_arm(const GemmParallelPick& pick, crd::u32 num_workers, T alpha, MatrixView<const T, L> a,
                        MatrixView<const T, L> b, T beta, MatrixView<T, L> c, Trans trans_a, Trans trans_b,
                        crd::memory::IAllocator* scratch);
+
+// trsm (blas3.hpp) splits whole columns of B across the jobs from n n cols of parallel_min on (each job solves disjoint
+// columns: one call's bits); serial by default. workers 0 is crd::jobs::num_workers().
+struct TrsmPick
+{
+    crd::usize parallel_min = ~crd::usize{0};
+    crd::u32 workers = 0;
+};
+
+// trsm (blas3.hpp) on pick's levers, every real and complex type; more than one job needs crd::jobs initialised.
+template <typename T, TriangularSide Side, TriangularDiag Diag>
+void trsm_arm(const TrsmPick& pick, T alpha, const Triangular<T, Side, Diag>& a, MatrixView<T, Layout::RowMajor> b,
+              Trans trans);
 
 } // namespace crd::hesap::dense::detail

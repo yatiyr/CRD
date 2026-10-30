@@ -1,14 +1,16 @@
 #!/bin/bash
-# The dense factors' crd-jobs board (SIMD-DISPATCH, the folded HESAP-JOBS-RETUNE) on the linux-gcc-release lane tree
-# of the WSL source mirror: the lever gates, then bench_hesap_factor_parallel (detail::LuPick's and CholeskyPick's arms
-# against the one-job factor in one binary, gated bit for bit or by the backward-error bound; a miss exits 1) at each
-# CPU level the host runs (run-lane-bench.sh), one process per thread count: 4 and 8 workers (one thread a P-core), 16
-# (both threads of each) and 32 (every logical CPU, E-cores included).
+# The dense factors' and trsm's crd-jobs board (SIMD-DISPATCH, the folded HESAP-JOBS-RETUNE) on the linux-gcc-release
+# lane tree of the WSL source mirror: the lever gates, then bench_hesap_factor_parallel (detail::LuPick's,
+# CholeskyPick's, QrPick's and TrsmPick's arms against the one-job factor or solve in one binary, gated bit for bit or
+# by the backward-error bound; a miss exits 1) at each CPU level the host runs (run-lane-bench.sh), one process per
+# thread count: 4 and 8 workers (one thread a P-core), 16 (both threads of each) and 32 (every logical CPU, E-cores
+# included).
 #   bash scripts/run_bench_factor_parallel.sh     CRD_BENCH_LEVELS as in run-lane-bench.sh
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 bash scripts/wsl-lane.sh build linux-gcc-release crd-hesap-dense-tests
-bash scripts/wsl-lane.sh test linux-gcc-release -R '^(factor_lu_arm|factor_cholesky_arm|syrk_lower_minus)'
+bash scripts/wsl-lane.sh test linux-gcc-release \
+    -R '^(factor_lu_arm|factor_cholesky_arm|factor_qr_arm|trsm_arm|syrk_lower_minus)'
 CRD_BENCH_CPUS=0,2,4,6 bash scripts/run-lane-bench.sh bench_hesap_factor_parallel -- --threads 4
 CRD_BENCH_CPUS=0,2,4,6,8,10,12,14 bash scripts/run-lane-bench.sh bench_hesap_factor_parallel -- --threads 8
 CRD_BENCH_CPUS=0-15 bash scripts/run-lane-bench.sh bench_hesap_factor_parallel -- --threads 16

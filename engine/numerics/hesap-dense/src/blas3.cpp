@@ -810,118 +810,95 @@ void trmm(T alpha, const Triangular<T, Side, Diag>& a, MatrixView<T, Layout::Row
 // =======================================================================
 // trsm — B = alpha * op(A)^-1 * B  (in-place). A triangular.
 // =======================================================================
+namespace
+{
+// Columns [j0, j1) of trsm: each column scaled by alpha, then op(A) x = b solved in place. op(A) is lower for (Lower,
+// None) and (Upper, transposed), a forward solve, otherwise upper, a backward one. The columns are independent, so
+// every split of them gives one call's bits.
+template <typename T, TriangularSide Side, TriangularDiag Diag>
+void trsm_columns(T alpha, const Triangular<T, Side, Diag>& a, MatrixView<T, Layout::RowMajor> b, Trans trans,
+                  crd::usize j0, crd::usize j1)
+{
+    const crd::usize n = a.n();
+    const crd::usize ld = b.ld();
+    T* x = b.data();
+    const bool do_conj = (trans == Trans::ConjTranspose);
+    const bool forward = (Side == TriangularSide::Lower) == (trans == Trans::None);
+    for (crd::usize jc = j0; jc < j1; ++jc)
+    {
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            x[i * ld + jc] = alpha * x[i * ld + jc];
+        }
+        for (crd::usize step = 0; step < n; ++step)
+        {
+            const crd::usize i = forward ? step : n - 1 - step;
+            const crd::usize p0 = forward ? 0 : i + 1;
+            const crd::usize p1 = forward ? i : n;
+            T s = x[i * ld + jc];
+            if (trans == Trans::None)
+            {
+                for (crd::usize p = p0; p < p1; ++p)
+                {
+                    s = s - a.at_value(i, p) * x[p * ld + jc];
+                }
+            }
+            else
+            {
+                for (crd::usize p = p0; p < p1; ++p)
+                {
+                    s = s - maybe_conj<T>(a.at_value(p, i), do_conj) * x[p * ld + jc];
+                }
+            }
+            if constexpr (Diag == TriangularDiag::UnitDiag)
+            {
+                x[i * ld + jc] = s;
+            }
+            else
+            {
+                x[i * ld + jc] = s / maybe_conj<T>(a.at_value(i, i), do_conj);
+            }
+        }
+    }
+}
+} // namespace
+
 template <typename T, TriangularSide Side, TriangularDiag Diag>
 void trsm(T alpha, const Triangular<T, Side, Diag>& a, MatrixView<T, Layout::RowMajor> b, Trans trans)
+{
+    detail::trsm_arm<T, Side, Diag>(detail::TrsmPick{}, alpha, a, b, trans);
+}
+
+template <typename T, TriangularSide Side, TriangularDiag Diag>
+void detail::trsm_arm(const TrsmPick& pick, T alpha, const Triangular<T, Side, Diag>& a,
+                      MatrixView<T, Layout::RowMajor> b, Trans trans)
 {
     const crd::usize n = a.n();
     CRD_ASSERT_MSG(b.rows() == n, "trsm: B must have n rows");
     const crd::usize cols = b.cols();
-    const bool do_conj = (trans == Trans::ConjTranspose);
-
-    // First scale B by alpha.
-    for (crd::usize i = 0; i < n; ++i)
+    crd::u32 nw = 1;
+    if (cols >= 2 && n * n * cols >= pick.parallel_min)
     {
-        for (crd::usize j = 0; j < cols; ++j)
-        {
-            b.data()[i * b.ld() + j] = alpha * b.data()[i * b.ld() + j];
-        }
+        nw = pick.workers != 0 ? pick.workers : crd::jobs::num_workers();
     }
-
-    // Solve op(A) * X = B' (where B' is the scaled B above), column-by-column.
-    if (trans == Trans::None)
+    if (nw <= 1)
     {
-        if constexpr (Side == TriangularSide::Lower)
-        {
-            for (crd::usize jc = 0; jc < cols; ++jc)
-            {
-                for (crd::usize i = 0; i < n; ++i)
-                {
-                    T s = b.data()[i * b.ld() + jc];
-                    for (crd::usize p = 0; p < i; ++p)
-                    {
-                        s = s - a.at_value(i, p) * b.data()[p * b.ld() + jc];
-                    }
-                    if constexpr (Diag == TriangularDiag::UnitDiag)
-                    {
-                        b.data()[i * b.ld() + jc] = s;
-                    }
-                    else
-                    {
-                        b.data()[i * b.ld() + jc] = s / a.at_value(i, i);
-                    }
-                }
-            }
-        }
-        else
-        {
-            for (crd::usize jc = 0; jc < cols; ++jc)
-            {
-                for (crd::usize ii = n; ii-- > 0;)
-                {
-                    T s = b.data()[ii * b.ld() + jc];
-                    for (crd::usize p = ii + 1; p < n; ++p)
-                    {
-                        s = s - a.at_value(ii, p) * b.data()[p * b.ld() + jc];
-                    }
-                    if constexpr (Diag == TriangularDiag::UnitDiag)
-                    {
-                        b.data()[ii * b.ld() + jc] = s;
-                    }
-                    else
-                    {
-                        b.data()[ii * b.ld() + jc] = s / a.at_value(ii, ii);
-                    }
-                }
-            }
-        }
+        trsm_columns<T, Side, Diag>(alpha, a, b, trans, 0, cols);
+        return;
     }
-    else
+    struct State
     {
-        if constexpr (Side == TriangularSide::Lower)
-        {
-            for (crd::usize jc = 0; jc < cols; ++jc)
-            {
-                for (crd::usize ii = n; ii-- > 0;)
-                {
-                    T s = b.data()[ii * b.ld() + jc];
-                    for (crd::usize p = ii + 1; p < n; ++p)
-                    {
-                        s = s - maybe_conj<T>(a.at_value(p, ii), do_conj) * b.data()[p * b.ld() + jc];
-                    }
-                    if constexpr (Diag == TriangularDiag::UnitDiag)
-                    {
-                        b.data()[ii * b.ld() + jc] = s;
-                    }
-                    else
-                    {
-                        b.data()[ii * b.ld() + jc] = s / maybe_conj<T>(a.at_value(ii, ii), do_conj);
-                    }
-                }
-            }
-        }
-        else
-        {
-            for (crd::usize jc = 0; jc < cols; ++jc)
-            {
-                for (crd::usize i = 0; i < n; ++i)
-                {
-                    T s = b.data()[i * b.ld() + jc];
-                    for (crd::usize p = 0; p < i; ++p)
-                    {
-                        s = s - maybe_conj<T>(a.at_value(p, i), do_conj) * b.data()[p * b.ld() + jc];
-                    }
-                    if constexpr (Diag == TriangularDiag::UnitDiag)
-                    {
-                        b.data()[i * b.ld() + jc] = s;
-                    }
-                    else
-                    {
-                        b.data()[i * b.ld() + jc] = s / maybe_conj<T>(a.at_value(i, i), do_conj);
-                    }
-                }
-            }
-        }
-    }
+        T alpha;
+        const Triangular<T, Side, Diag>* a;
+        MatrixView<T, Layout::RowMajor> b;
+        Trans trans;
+    };
+    State st{alpha, &a, b, trans};
+    State* sp = &st;
+    auto* counter =
+        crd::jobs::parallel_for(static_cast<crd::u32>(cols), nw, [sp](crd::u32 begin, crd::u32 end)
+                                { trsm_columns<T, Side, Diag>(sp->alpha, *sp->a, sp->b, sp->trans, begin, end); });
+    crd::jobs::wait(counter);
 }
 
 // =======================================================================
@@ -1188,6 +1165,30 @@ template void trsm<Complex32, TriangularSide::Upper, TriangularDiag::Explicit>(C
     MatrixView<Complex32, Layout::RowMajor>, Trans);
 template void trsm<Complex64, TriangularSide::Upper, TriangularDiag::Explicit>(Complex64,
     const Triangular<Complex64, TriangularSide::Upper, TriangularDiag::Explicit>&,
+    MatrixView<Complex64, Layout::RowMajor>, Trans);
+template void detail::trsm_arm<crd::f32, TriangularSide::Lower, TriangularDiag::Explicit>(
+    const detail::TrsmPick&, crd::f32, const Triangular<crd::f32, TriangularSide::Lower, TriangularDiag::Explicit>&,
+    MatrixView<crd::f32, Layout::RowMajor>, Trans);
+template void detail::trsm_arm<crd::f64, TriangularSide::Lower, TriangularDiag::Explicit>(
+    const detail::TrsmPick&, crd::f64, const Triangular<crd::f64, TriangularSide::Lower, TriangularDiag::Explicit>&,
+    MatrixView<crd::f64, Layout::RowMajor>, Trans);
+template void detail::trsm_arm<Complex32, TriangularSide::Lower, TriangularDiag::Explicit>(
+    const detail::TrsmPick&, Complex32, const Triangular<Complex32, TriangularSide::Lower, TriangularDiag::Explicit>&,
+    MatrixView<Complex32, Layout::RowMajor>, Trans);
+template void detail::trsm_arm<Complex64, TriangularSide::Lower, TriangularDiag::Explicit>(
+    const detail::TrsmPick&, Complex64, const Triangular<Complex64, TriangularSide::Lower, TriangularDiag::Explicit>&,
+    MatrixView<Complex64, Layout::RowMajor>, Trans);
+template void detail::trsm_arm<crd::f32, TriangularSide::Upper, TriangularDiag::Explicit>(
+    const detail::TrsmPick&, crd::f32, const Triangular<crd::f32, TriangularSide::Upper, TriangularDiag::Explicit>&,
+    MatrixView<crd::f32, Layout::RowMajor>, Trans);
+template void detail::trsm_arm<crd::f64, TriangularSide::Upper, TriangularDiag::Explicit>(
+    const detail::TrsmPick&, crd::f64, const Triangular<crd::f64, TriangularSide::Upper, TriangularDiag::Explicit>&,
+    MatrixView<crd::f64, Layout::RowMajor>, Trans);
+template void detail::trsm_arm<Complex32, TriangularSide::Upper, TriangularDiag::Explicit>(
+    const detail::TrsmPick&, Complex32, const Triangular<Complex32, TriangularSide::Upper, TriangularDiag::Explicit>&,
+    MatrixView<Complex32, Layout::RowMajor>, Trans);
+template void detail::trsm_arm<Complex64, TriangularSide::Upper, TriangularDiag::Explicit>(
+    const detail::TrsmPick&, Complex64, const Triangular<Complex64, TriangularSide::Upper, TriangularDiag::Explicit>&,
     MatrixView<Complex64, Layout::RowMajor>, Trans);
 
 // gemm_mixed — f32 in / f64 acc (the HPL-AI canonical instantiation)
