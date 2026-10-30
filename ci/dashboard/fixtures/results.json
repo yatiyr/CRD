@@ -1,0 +1,29 @@
+{
+  "note": "Fixture records for the dashboard generator's tests and sample page; not evidence from any CI run.",
+  "budget": {"cap_usd": 50.0, "spent_usd": 31.4, "month": "2026-10"},
+  "results": [
+    {"schema": "cerid-ci-result/1", "step": "lane-linux-gcc-debug", "device": "gce-linux-x64-intel", "preset": "linux-gcc-debug", "outcome": "pass", "build": "101", "finished": "2026-10-28T03:40:00+00:00", "log": "https://buildkite.com/example/cerid/builds/101#job-1", "minutes": 61.0, "features": ["build", "unit", "cpu-levels", "seeded-faults", "vulkan"]},
+    {"schema": "cerid-ci-result/1", "step": "lane-linux-gcc-debug", "device": "gce-linux-x64-intel", "preset": "linux-gcc-debug", "outcome": "pass", "build": "102", "finished": "2026-10-29T03:41:00+00:00", "log": "https://buildkite.com/example/cerid/builds/102#job-1", "minutes": 59.5, "features": ["build", "unit", "cpu-levels", "seeded-faults", "vulkan"]},
+    {"schema": "cerid-ci-result/1", "step": "lane-linux-gcc-asan", "device": "gce-linux-x64-intel", "preset": "linux-gcc-asan", "outcome": "pass", "build": "102", "finished": "2026-10-29T04:10:00+00:00", "log": "https://buildkite.com/example/cerid/builds/102#job-2", "minutes": 88.0, "features": ["sanitizers"]},
+    {"schema": "cerid-ci-result/1", "step": "lane-linux-gcc-asan", "device": "gce-linux-x64-intel", "preset": "linux-gcc-asan", "outcome": "fail", "build": "103", "finished": "2026-10-30T04:12:00+00:00", "log": "https://buildkite.com/example/cerid/builds/103#job-2", "minutes": 90.2, "features": ["sanitizers"]},
+    {"schema": "cerid-ci-result/1", "step": "lane-win-debug", "device": "gce-windows-x64", "preset": "win-debug", "outcome": "pass", "build": "103", "finished": "2026-10-30T04:30:00+00:00", "log": "https://buildkite.com/example/cerid/builds/103#job-3", "minutes": 95.0, "features": ["build", "unit", "cpu-levels", "seeded-faults", "dx12", "vulkan"]},
+    {"schema": "cerid-ci-result/1", "step": "lane-win-tidy", "device": "gce-windows-x64", "preset": "win-tidy", "outcome": "pass", "build": "103", "finished": "2026-10-30T04:50:00+00:00", "log": "https://buildkite.com/example/cerid/builds/103#job-4", "minutes": 70.0, "features": ["static-analysis"]},
+    {"schema": "cerid-ci-result/1", "step": "lane-linux-gcc-arm64-debug", "device": "gce-linux-arm64-ampere", "preset": "linux-gcc-arm64-debug", "outcome": "pass", "build": "103", "finished": "2026-10-30T04:20:00+00:00", "log": "https://buildkite.com/example/cerid/builds/103#job-5", "minutes": 55.0, "features": ["build", "unit", "cpu-levels"]},
+    {"schema": "cerid-ci-result/1", "step": "repository-linux", "device": "gce-linux-x64-intel", "outcome": "pass", "build": "103", "finished": "2026-10-30T03:10:00+00:00", "log": "https://buildkite.com/example/cerid/builds/103#job-6", "minutes": 9.0, "features": ["repository"]},
+    {"schema": "cerid-ci-result/1", "step": "lane-linux-gcc-release@gce-linux-x64-nvidia-l4", "device": "gce-linux-x64-nvidia-l4", "preset": "linux-gcc-release", "outcome": "pass", "build": "102", "finished": "2026-10-29T05:00:00+00:00", "log": "https://buildkite.com/example/cerid/builds/102#job-7", "minutes": 48.0, "features": ["build", "unit", "vulkan", "cuda"]},
+    {"schema": "cerid-ci-result/1", "step": "console-gce-console-profile-playstation", "device": "gce-console-profile-playstation", "preset": "linux-gcc-shipping", "outcome": "pass", "build": "103", "finished": "2026-10-30T05:30:00+00:00", "log": "https://buildkite.com/example/cerid/builds/103#job-8", "minutes": 101.0, "console": "playstation-5", "features": ["build", "unit", "console-memory-cap", "console-cores", "console-wx", "console-fs"]}
+  ],
+  "plan": {
+    "schema": "cerid-ci-plan/1",
+    "tier": "complete",
+    "budget": {"cap_usd": 50.0, "spent_usd": 31.4, "planned_usd": 14.1, "gcp_stop": false, "month": "2026-10"},
+    "steps": [
+      {"key": "lane-win-release", "device": "gce-windows-x64", "features": ["build", "unit", "cpu-levels", "dx12", "vulkan"], "state": "cached", "reason": "cached: passed in build 102", "cached_from": {"build": "102", "log": "https://buildkite.com/example/cerid/builds/102#job-9"}},
+      {"key": "lane-win-release@gce-windows-x64-nvidia-t4", "device": "gce-windows-x64-nvidia-t4", "features": ["build", "unit", "dx12", "vulkan", "cuda"], "state": "budget", "reason": "budget: 49.10 of 50.00 USD spent this month"}
+    ],
+    "cells": [
+      {"device": "windows-arm64-host", "features": ["build", "unit", "cpu-levels"], "state": "waiting", "reason": "waiting: account windows-arm64-host"},
+      {"device": "mac-arm64-rented", "features": ["shader-compile"], "state": "waiting", "reason": "waiting: account rented-mac"}
+    ]
+  }
+}
