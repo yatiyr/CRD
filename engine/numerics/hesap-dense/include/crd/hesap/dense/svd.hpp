@@ -71,7 +71,9 @@ template <typename T>
 // svdvals (v3b-1b) — singular values ONLY (descending) of a general real
 // matrix A (m x n). Bidiagonalize then feed B's squared qd array to the dqds
 // engine (`detail/dqds.hpp::dlasq2` — its native purpose), with dlasq1-style
-// smax scaling (D(svd)-5). No singular vectors are formed. Real f32/f64.
+// smax scaling (D(svd)-5). No singular vectors are formed. Real f32/f64;
+// complex through the complex driver. A matrix with a NaN or infinite entry
+// gives min(m,n) quiet NaN values.
 // =======================================================================
 template <typename T>
 [[nodiscard]] Vector<RealType<T>> svdvals(crd::memory::IAllocator* alloc, const Matrix<T>& a_in);

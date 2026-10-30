@@ -705,6 +705,17 @@ template <typename T> bool finite_entries(const Matrix<T>& a)
     return true;
 }
 
+// k singular values, every one quiet NaN.
+template <typename R> Vector<R> non_finite_values(crd::memory::IAllocator* alloc, crd::usize k)
+{
+    Vector<R> s(alloc, k);
+    for (crd::usize i = 0; i < k; ++i)
+    {
+        s.data()[i] = std::numeric_limits<R>::quiet_NaN();
+    }
+    return s;
+}
+
 // The thin factors' shapes, every entry quiet NaN.
 template <typename T> SVD<T> non_finite_svd(crd::memory::IAllocator* alloc, crd::usize m, crd::usize n)
 {
@@ -723,7 +734,7 @@ template <typename T> SVD<T> non_finite_svd(crd::memory::IAllocator* alloc, crd:
     SVD<T> out(alloc);
     out.u = Matrix<T>(alloc, m, k);
     out.v = Matrix<T>(alloc, n, k);
-    out.s = Vector<R>(alloc, k);
+    out.s = non_finite_values<R>(alloc, k);
     for (crd::usize i = 0; i < m * k; ++i)
     {
         out.u.data()[i] = nan_t;
@@ -731,10 +742,6 @@ template <typename T> SVD<T> non_finite_svd(crd::memory::IAllocator* alloc, crd:
     for (crd::usize i = 0; i < n * k; ++i)
     {
         out.v.data()[i] = nan_t;
-    }
-    for (crd::usize i = 0; i < k; ++i)
-    {
-        out.s.data()[i] = nan;
     }
     return out;
 }
@@ -990,6 +997,12 @@ SVD<T> svd(crd::memory::IAllocator* alloc, const Matrix<T>& a_in)
 template <typename T>
 Vector<RealType<T>> svdvals(crd::memory::IAllocator* alloc, const Matrix<T>& a_in)
 {
+    // svd's guard: a non-finite entry has no singular values (the complex driver asserted its bidiagonal iteration
+    // converged, and the real dqds path returned values that were not NaN), so min(m, n) quiet NaN come back.
+    if (!finite_entries(a_in))
+    {
+        return non_finite_values<RealType<T>>(alloc, a_in.rows() < a_in.cols() ? a_in.rows() : a_in.cols());
+    }
     if constexpr (is_complex_v<T>)
     {
         // Complex: values via the complex driver (descending). The values-only

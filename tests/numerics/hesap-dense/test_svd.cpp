@@ -1649,12 +1649,19 @@ template <typename T> void check_non_finite_svd(crd::memory::IAllocator* alloc)
             }
             a.at(mn.first / 2, mn.second / 3) = T(bad);
             CHECK(all_nan_svd(crd::hesap::dense::svd<T>(alloc, a), mn.first, mn.second));
+            const auto s = crd::hesap::dense::svdvals<T>(alloc, a);
+            bool nan = s.size() == (mn.first < mn.second ? mn.first : mn.second);
+            for (crd::usize i = 0; nan && i < s.size(); ++i)
+            {
+                nan = std::isnan(s.data()[i]);
+            }
+            CHECK(nan);
         }
     }
 }
 } // namespace
 
-TEST_CASE("svd: a NaN or infinite entry gives quiet NaN factors on every path", "[hesap][svd]")
+TEST_CASE("svd: a NaN or infinite entry gives quiet NaN factors and values on every path", "[hesap][svd]")
 {
     crd::memory::TlsfAllocator alloc(64U << 20);
     check_non_finite_svd<crd::f64>(&alloc);
