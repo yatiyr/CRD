@@ -65,15 +65,20 @@ fs::path fresh_dir(const char* mode)
     return p;
 }
 
-cd::Outcome run_mode(const char* mode, const fs::path& dir)
+cd::Outcome run_mode(const char* mode, const fs::path& dir, const cd::Expectation& e)
 {
     cont::Array<cont::String> args;
     args.push_back(cont::String{dir.string().c_str()});
     args.push_back(cont::String{mode});
+    return cd::run_specimen(specimen_path(), args, e);
+}
+
+cd::Outcome run_mode(const char* mode, const fs::path& dir)
+{
     cd::Expectation e;
     e.want       = cd::Expectation::Want::Crash;
     e.timeout_ms = 15000U; // a cold DbgHelp self-dump is not instant (Linux records are fast; the bound is shared)
-    return cd::run_specimen(specimen_path(), args, e);
+    return run_mode(mode, dir, e);
 }
 
 // Read the specimen's marker file (decimal WriteResult), or -1 if absent. Windows reads it in every configuration;
@@ -101,20 +106,25 @@ int read_marker(const fs::path& dir)
 
 namespace
 {
-// Count and size-check the fatal-path dumps (prefix crash_) the specimen wrote into dir.
-std::size_t count_crash_dumps(const fs::path& dir)
+// Count and size-check the dumps with this file-name prefix (crash_ fatal, live_ capture_dump) in dir.
+std::size_t count_dumps(const fs::path& dir, std::string_view prefix)
 {
     std::size_t     n = 0;
     std::error_code ec;
     for (fs::directory_iterator it{dir, ec}, end; it != end; it.increment(ec))
     {
-        if (it->path().extension() == ".dmp" && it->path().filename().string().starts_with("crash_"))
+        if (it->path().extension() == ".dmp" && it->path().filename().string().starts_with(prefix))
         {
             ++n;
             CHECK(fs::file_size(it->path()) > 0U); // a reported dump is a real, non-empty file
         }
     }
     return n;
+}
+
+std::size_t count_crash_dumps(const fs::path& dir)
+{
+    return count_dumps(dir, "crash_");
 }
 
 constexpr std::uint32_t kAccessViolation = 0xC0000005U;
@@ -285,6 +295,58 @@ TEST_CASE("crash capture: a fault inside a log sink, holding the log and stderr 
         CHECK_FALSE(o.timed_out);                                           // no 30s hang: the fix removed the lock
         CHECK(static_cast<std::uint32_t>(o.exit_code) == kAccessViolation);
         CHECK(count_crash_dumps(dir) == 1U);                               // the dump still completed
+    }
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+// DbgHelp dumps a PSS snapshot of the process (crash.cpp write_dump). On the live process it keeps every other thread
+// suspended through the write, and a thread suspended inside the loader lock or the process heap's lock, both of which
+// DbgHelp takes, deadlocks it: a contender looping on both hung every such dump on this host (2026-10-30).
+TEST_CASE("crash capture: live dumps complete while a thread keeps taking the loader and heap locks",
+          "[core][diag][crash-capture]")
+{
+    const fs::path  dir = fresh_dir("live_churn");
+    cd::Expectation e;
+    e.want       = cd::Expectation::Want::CleanExit;
+    e.timeout_ms = 60000U; // four live dumps of a sanitized process; a deadlocked writer never finishes
+    const cd::Outcome o = run_mode("live_churn", dir, e);
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=0x" << std::hex << static_cast<std::uint32_t>(o.exit_code));
+
+    CHECK(o.verdict == cd::Verdict::Clean);
+    CHECK_FALSE(o.timed_out);
+    CHECK(o.exit_code == 0);
+    CHECK(count_dumps(dir, "live_") == 4U);
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("crash capture: a fault while a thread keeps taking the loader and heap locks still dumps",
+          "[core][diag][crash-capture]")
+{
+    const fs::path    dir = fresh_dir("churn_av");
+    const cd::Outcome o   = run_mode("churn_av", dir);
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=0x" << std::hex << static_cast<std::uint32_t>(o.exit_code));
+
+    if (cd::lane_promise().asan)
+    {
+        CHECK(o.exit_code != 0); // ASan's VEH owns the AV: fatal, no crd dump, and not a hang
+        CHECK_FALSE(o.timed_out);
+        CHECK(count_crash_dumps(dir) == 0U);
+    }
+    else
+    {
+        CHECK(o.verdict == cd::Verdict::Crashed);
+        CHECK_FALSE(o.timed_out); // the fatal dump did not wait out the 30 s HandlerTimeout
+        CHECK(static_cast<std::uint32_t>(o.exit_code) == kAccessViolation);
+        REQUIRE(count_crash_dumps(dir) == 1U);
+        // The snapshot keeps the exception stream and the module list.
+        const fs::path dump = first_crash_dump(dir);
+        CHECK(crd_test_minidump::exception_code(dump) == kAccessViolation);
+        const fs::path want = fs::path{CRD_DIAG_CRASH_CAPTURE_SPECIMEN}.filename();
+        CHECK(crd_test_minidump::find_dump_module(dump, want.c_str()).named);
     }
 
     std::error_code ec;

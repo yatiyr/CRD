@@ -40,6 +40,11 @@
 //                              record. Windows: falls through to a plain fault.
 //   inject_dump_fail        -- (asserts only) force the dump or record write to fail, then fault: 0 dumps or records,
 //                              marker == DumpFailed.
+//   live_churn              -- (windows) four live dumps while a thread keeps loading and freeing a DLL and taking the
+//                              process heap's lock: exit 0 when all four are written, 61 otherwise. A writer that keeps
+//                              the other threads suspended through the write deadlocks here (harness -> Timeout).
+//   churn_av                -- (windows) the same contender, then a wild write: one dump, exit 0xC0000005, where such
+//                              a writer would leave the faulting thread to its 30 s HandlerTimeout.
 #include "specimen_common.hpp"
 
 #include <crd/core/crash.hpp>
@@ -90,6 +95,44 @@ void null_write() noexcept
     int* const p = crd_diag_opaque<int>(nullptr);
     *p = 42;
 }
+
+#if defined(_WIN32)
+// `live_churn` and `churn_av`'s contender: a thread that keeps taking the loader lock (a DLL loaded and freed) and the
+// process heap's lock, the locks DbgHelp itself takes while it writes a dump.
+std::atomic<bool> g_churn_stop{false};
+std::atomic<unsigned> g_churn_rounds{0};
+
+void churn_loader_and_heap() noexcept
+{
+    const HANDLE heap = GetProcessHeap();
+    while (!g_churn_stop.load(std::memory_order_relaxed))
+    {
+        HMODULE m = LoadLibraryExW(L"winhttp.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        if (m != nullptr)
+        {
+            (void)FreeLibrary(m);
+        }
+        if (HeapLock(heap) != FALSE)
+        {
+            void* const block = HeapAlloc(heap, 0, 256U);
+            (void)HeapFree(heap, 0, block);
+            (void)HeapUnlock(heap);
+        }
+        g_churn_rounds.fetch_add(1U, std::memory_order_relaxed);
+    }
+}
+
+// The contender, started and run a few rounds, so a dump begins while it churns.
+std::thread start_churn()
+{
+    std::thread t(&churn_loader_and_heap);
+    while (g_churn_rounds.load(std::memory_order_relaxed) < 16U)
+    {
+        Sleep(1);
+    }
+    return t;
+}
+#endif
 
 // `logger_lock`'s sink: it faults inside the logger's delivery, holding the stdio stream lock too.
 class FaultingSink final : public crd::log::ISink
@@ -526,6 +569,30 @@ int main(int argc, char** argv)
 #endif
         null_write(); // Windows fallback, and a Linux host that could not map the file
     }
+#if defined(_WIN32)
+    else if (std::strcmp(mode, "live_churn") == 0)
+    {
+        constexpr unsigned dump_count = 4U;
+        std::thread churn = start_churn();
+        unsigned ok = 0U;
+        for (unsigned i = 0; i < dump_count; ++i)
+        {
+            ok += crd::crash::capture_dump(nullptr) == crd::crash::WriteResult::Ok ? 1U : 0U;
+        }
+        g_churn_stop.store(true, std::memory_order_relaxed);
+        churn.join();
+        std::printf("live dumps written: %u of %u\n", ok, dump_count);
+        std::fflush(stdout);
+        return ok == dump_count ? 0 : 61;
+    }
+    else if (std::strcmp(mode, "churn_av") == 0)
+    {
+        std::thread churn = start_churn();
+        null_write();
+        g_churn_stop.store(true, std::memory_order_relaxed); // never reached: the process dies in the fault
+        churn.join();
+    }
+#endif
     else if (std::strcmp(mode, "inject_dump_fail") == 0)
     {
 #if CRD_ENABLE_ASSERTS

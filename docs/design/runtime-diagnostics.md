@@ -356,10 +356,15 @@ reserves the last-chance stack guarantee (64 KiB, `SetThreadStackGuarantee`) for
 This is process-wide: each new thread spends that much of its stack reserve. Threads that existed before `install()`
 are not touched (the installing thread is guarded by `install()`; hosts call `guard_current_thread_stack` for others).
 Linux has no equivalent creation hook for raw threads and keeps per-thread alternate-stack registration.
+Every Windows dump (fatal, hang, live) is written from a PSS snapshot of the process (`PssCaptureSnapshot`, then
+`MiniDumpWriteDump` on the snapshot): on the live process DbgHelp keeps every other thread suspended through the
+write and deadlocks when one of them holds the loader lock or a heap lock that DbgHelp takes. The snapshot stops the
+threads only while the kernel clones the address space; a refused snapshot falls back to the live process.
 
-Acceptance: crash while allocating/holding a logger lock, concurrent crashes, handler failure, denied/full output,
-missing symbols and stack exhaustion. A successful report requires a readable correctly identified dump; failed
-MiniDumpWriteDump cannot print success. Parent harness verifies actual termination and retains original fault reason.
+Acceptance: crash while allocating/holding a logger lock, a crash or live dump while another thread keeps taking the
+loader and heap locks, concurrent crashes, handler failure, denied/full output, missing symbols and stack exhaustion.
+A successful report requires a readable correctly identified dump; failed MiniDumpWriteDump cannot print success.
+Parent harness verifies actual termination and retains original fault reason.
 
 <a id="diag-5b"></a>
 ## DIAG.5b — Linux crash and hang capture

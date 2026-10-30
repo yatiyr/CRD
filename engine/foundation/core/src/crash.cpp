@@ -25,8 +25,9 @@ void test_inject_write_failure(WriteResult step) noexcept
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-// DbgHelp must follow windows.h -- its types depend on it.
+// DbgHelp and the process snapshot API must follow windows.h -- their types depend on it.
 #include <DbgHelp.h>
+#include <processsnapshot.h>
 #include <intrin.h> // _ReturnAddress
 
 #include <crd/core/platform.hpp> // CRD_NOINLINE
@@ -221,6 +222,28 @@ void emit_hex(HANDLE h, unsigned long long v, int width) noexcept
     emit(h, out, static_cast<DWORD>(width));
 }
 
+// MiniDumpWriteDump's callback for a snapshot dump: IsProcessSnapshotCallback answers S_FALSE (the handle is a PSS
+// snapshot); every other callback keeps DbgHelp's defaults.
+BOOL CALLBACK snapshot_dump_callback(PVOID /*param*/, PMINIDUMP_CALLBACK_INPUT input,
+                                     PMINIDUMP_CALLBACK_OUTPUT output) noexcept
+{
+    if (input != nullptr && output != nullptr && input->CallbackType == IsProcessSnapshotCallback)
+    {
+        output->Status = S_FALSE;
+    }
+    return TRUE;
+}
+
+// What the snapshot keeps for the dump's streams: the address space as a copy-on-write clone (memory, modules, the
+// unloaded-module trace), the handles with their names, types and traces (MiniDumpWithHandleData), and every thread
+// with its full and extended context (MiniDumpWithThreadInfo). Breakaway from a job is optional, the snapshot's own
+// bookkeeping takes VirtualAlloc memory rather than a heap, and the clone's section is released with the snapshot.
+const PSS_CAPTURE_FLAGS kSnapshotFlags = static_cast<PSS_CAPTURE_FLAGS>(
+    PSS_CAPTURE_VA_CLONE | PSS_CAPTURE_HANDLES | PSS_CAPTURE_HANDLE_NAME_INFORMATION |
+    PSS_CAPTURE_HANDLE_BASIC_INFORMATION | PSS_CAPTURE_HANDLE_TYPE_SPECIFIC_INFORMATION | PSS_CAPTURE_HANDLE_TRACE |
+    PSS_CAPTURE_THREADS | PSS_CAPTURE_THREAD_CONTEXT | PSS_CAPTURE_THREAD_CONTEXT_EXTENDED | PSS_CREATE_BREAKAWAY |
+    PSS_CREATE_BREAKAWAY_OPTIONAL | PSS_CREATE_USE_VM_ALLOCATIONS | PSS_CREATE_RELEASE_SECTION);
+
 // The single writer shared by the fatal filter and the live capture. mei == nullptr => a general (non-exception)
 // dump. On Ok, *out_path (when non-null) points at s_dump_path_utf8. Caller holds s_dump_lock.
 crd::crash::WriteResult write_dump(MINIDUMP_EXCEPTION_INFORMATION* mei, crd::crash::DumpKind kind,
@@ -332,15 +355,30 @@ crd::crash::WriteResult write_dump(MINIDUMP_EXCEPTION_INFORMATION* mei, crd::cra
         usi_ptr             = &usi;
     }
 
-    BOOL  ok       = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file,
-                                      static_cast<MINIDUMP_TYPE>(MiniDumpWithDataSegs | MiniDumpWithHandleData |
-                                                                 MiniDumpWithFullMemoryInfo | MiniDumpWithThreadInfo |
-                                                                 // DIAG.5d(d): carry ntdll's unloaded-module trace so a
-                                                                 // module unloaded before the fault still yields its
-                                                                 // identity (the UnloadedModuleListStream readback).
-                                                                 MiniDumpWithUnloadedModules),
-                                      mei, usi_ptr, nullptr);
+    // DbgHelp reads a PSS snapshot of this process, not the live process. On the live process it suspends every other
+    // thread for the whole write, and a thread suspended while it holds a lock DbgHelp then takes (the process heap,
+    // the loader lock) deadlocks the dump: the in-process hazard its documentation names, which a thread taking either
+    // lock in a loop hits on almost every dump. The snapshot stops the threads only while the kernel clones the
+    // address space and their contexts. A snapshot the system refuses (no commit left for the clone) falls back to
+    // the live process, the only way left to a dump.
+    HPSS snapshot = nullptr;
+    const bool snapped =
+        PssCaptureSnapshot(GetCurrentProcess(), kSnapshotFlags, CONTEXT_ALL, &snapshot) == ERROR_SUCCESS;
+    MINIDUMP_CALLBACK_INFORMATION snapshot_callback{&snapshot_dump_callback, nullptr};
+    BOOL ok = MiniDumpWriteDump(snapped ? reinterpret_cast<HANDLE>(snapshot) : GetCurrentProcess(),
+                                GetCurrentProcessId(), file,
+                                static_cast<MINIDUMP_TYPE>(MiniDumpWithDataSegs | MiniDumpWithHandleData |
+                                                           MiniDumpWithFullMemoryInfo | MiniDumpWithThreadInfo |
+                                                           // DIAG.5d(d): carry ntdll's unloaded-module trace so a
+                                                           // module unloaded before the fault still yields its
+                                                           // identity (the UnloadedModuleListStream readback).
+                                                           MiniDumpWithUnloadedModules),
+                                mei, usi_ptr, snapped ? &snapshot_callback : nullptr);
     DWORD dump_err = GetLastError(); // an HRESULT for MiniDumpWriteDump; stored raw
+    if (snapped)
+    {
+        (void)PssFreeSnapshot(GetCurrentProcess(), snapshot);
+    }
 #if CRD_ENABLE_ASSERTS
     if (s_inject_step.load(std::memory_order_relaxed) == WriteResult::DumpFailed)
     {
