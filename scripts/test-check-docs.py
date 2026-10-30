@@ -196,6 +196,11 @@ class References(TreeCase):
                        'missing preset win-imaginary', 'CRD_NO_SUCH_OPTION', 'crd-check-imaginary'):
             self.assertIn(needle, joined)
 
+    def test_a_tool_in_the_untracked_build_tree_fails(self):
+        errors = self.check('Apply it with `python build/scratch/apply_order.py --check`.\n')
+        self.assertTrue(any('untracked build tree' in error for error in errors), errors)
+        self.assertEqual(self.check('Write `build/my-task/operations.json`, then configure `build/win-debug`.\n'), [])
+
     def test_history_lines_and_placeholders_are_not_held_to_the_tree(self):
         self.assertEqual(self.check(
             'The former `scripts/deleted.py` was removed in 2026.\n'

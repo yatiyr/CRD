@@ -337,6 +337,10 @@ def reference_errors(root, docs):
                 for match in re.finditer(r'(?<![\w/.\-<])([\w-]+\.(?:py|bat|ps1|sh))\b', token):
                     if match[1] not in tools:
                         report(match[1], f'names a missing script {match[1]}')
+                # The build tree is ignored scratch: a tool kept there is not a repository source anyone can run.
+                for match in re.finditer(r'(?<![\w/.\-~])(build/[\w./-]+\.(?:py|bat|ps1|sh))\b', token):
+                    report(match[1], f'runs a tool from the untracked build tree: {match[1]} (commit it under '
+                                     'scripts/ or describe it as a dated, local tool)')
                 for match in re.finditer(r'(?:--preset[ =]|configure-preset\.bat |reconfigure-preset\.bat |'
                                          r'wsl-lane\.sh \w+ |build/)(' + PRESET_NAME.pattern + r')\b', token):
                     if match[1] not in presets:
