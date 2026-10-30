@@ -75,7 +75,7 @@ matrix. Preserve every preset and cluster/release gate; a fast pass cannot close
 
 ## Visual Studio
 
-`python scripts/project-sync.py open --preset win-vs` opens all eight native profiles and starts sync. Save All, wait
+`python scripts/project-sync.py open --preset win-vs` opens every native profile and starts sync. Save All, wait
 for watching/reload; inspect `project-sync.py status`. See
 [configurations](design/visual-studio-configurations.md) and [structure/recovery](design/project-structure-sync.md).
 Native build `--config` and CTest `-C` must match; pass PowerShell arguments explicitly:

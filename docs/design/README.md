@@ -15,7 +15,7 @@ and verification evidence in the linked note; its live status belongs only to th
 | [Runtime diagnostics](runtime-diagnostics.md) | DIAG source owners, allocator/race/crash/trace/replay implementation contracts and detector acceptance |
 | [Diagnostic runbooks](diagnostic-runbooks.md) | From a symptom to its command, artifact and discriminating test; adoption and cost per capability; held to the tree by a guard |
 | [Developer workflow](developer-workflow.md) | Conservative affected-target/CTest planning, scoped frontend and exact content evidence |
-| [Visual Studio configurations](visual-studio-configurations.md) | Full CMake preset selector, eight native MSVC profiles and configuration-aware synchronization gates |
+| [Visual Studio configurations](visual-studio-configurations.md) | Full CMake preset selector, the native MSVC profiles and configuration-aware synchronization gates |
 | [Project structure synchronization](project-structure-sync.md) | Transaction, IDE/CMake round-trip, conflict/recovery and physical path migration contract |
 | [Repository layout](repository-layout.md) | Physical/IDE families, hygiene, preservation and build/CI verification |
 | [DX12 workload repair](dx12-workload-repair.md) | Validation readiness, resource states, descriptor lifetime/exhaustion and actual authored-consumer qualification |

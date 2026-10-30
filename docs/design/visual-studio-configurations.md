@@ -83,7 +83,7 @@ handles flags, per-configuration headers/CRT/symbols and IPO exclusions. [CrdSim
 flags and macros. Core exposes configuration-specific generated includes; source algorithms are unchanged.
 Global native profile behaviour is edited in the canonical mapped presets, not contradictory single cache switches.
 
-[Profile tests](../../scripts/test-native-build-profiles.py) verify the mapping and compile/run all eight native
+[Profile tests](../../scripts/test-native-build-profiles.py) verify the mapping and compile/run all <!-- fact:native-profile-count -->7<!-- /fact --> native
 profiles using the production header, SIMD module and top-level sanitizer/Shipping flags. The probe checks assertion,
 profiling, debug/release, logging, ISA and NDEBUG values, CRT/ISA project properties and retained IPO exclusions.
 [Structure tests](../../scripts/test-project-sync.py) cover partial exclusion rejection; the
