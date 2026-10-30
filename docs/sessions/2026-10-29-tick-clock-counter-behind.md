@@ -5,6 +5,10 @@
 
 Row: [SIMD-DISPATCH](../ROADMAP.md#slice-simd-dispatch) (CI first); the clock is DIAG.11b clause (8)'s.
 
+**Correction (2026-10-30):** the case failed again with this fix in place, so the counter had not run backwards.
+The case's span had ended while the clock was still calibrating
+([the span](2026-10-30-simd-dispatch-tick-clock-span-win-asan-bound-run.md#the-tickclock-case)).
+
 ## CI first
 
 - Push run 40869334591 (e496d16c), win-shipping (job 123441695383): `TickClock: reads stay on MonotonicClock's
