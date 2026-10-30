@@ -36,11 +36,12 @@ CACHE_KEYS = ('CMAKE_GENERATOR', 'CMAKE_BUILD_TYPE', 'CMAKE_CONFIGURATION_TYPES'
               'CRD_COMPILER_LAUNCHER') + tuple(key for key, _ in MODES)
 RUN_KEYS = ('GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_JOB', 'GITHUB_EVENT_NAME', 'GITHUB_REF', 'GITHUB_SHA',
             'RUNNER_OS', 'RUNNER_ARCH', 'ImageOS', 'ImageVersion',
-            # The Cerid CI platform (ADR-0135): the Buildkite build, job and step, and the registry cell it ran on.
-            'BUILDKITE_BUILD_NUMBER', 'BUILDKITE_BUILD_ID', 'BUILDKITE_BUILD_URL', 'BUILDKITE_JOB_ID',
-            'BUILDKITE_STEP_KEY', 'BUILDKITE_RETRY_COUNT', 'BUILDKITE_PIPELINE_SLUG', 'BUILDKITE_BRANCH',
-            'BUILDKITE_COMMIT', 'BUILDKITE_SOURCE', 'BUILDKITE_AGENT_NAME', 'CERID_CI_DEVICE', 'CERID_CI_STEP',
-            'CERID_CI_INPUT_KEY', 'CERID_CI_TIER')
+            # The Cerid CI platform (ADR-0135 §12): the orchestrator's build, job, step and attempt, and the registry
+            # cell it ran on.
+            'CERID_CI_BUILD_NUMBER', 'CERID_CI_BUILD_URL', 'CERID_CI_JOB_ID', 'CERID_CI_JOB_URL', 'CERID_CI_STEP_KEY',
+            'CERID_CI_RETRY_COUNT', 'CERID_CI_REPOSITORY', 'CERID_CI_BRANCH', 'CERID_CI_COMMIT', 'CERID_CI_SOURCE',
+            'CERID_CI_EVENT', 'CERID_CI_AGENT_NAME', 'CERID_CI_DEVICE', 'CERID_CI_STEP', 'CERID_CI_INPUT_KEY',
+            'CERID_CI_TIER')
 OUTPUT_TAIL_LINES = 60
 SLOWEST = 15
 # Tests faster than this on the reference lane are left out of a comparison: their time is process start-up.

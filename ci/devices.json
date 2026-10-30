@@ -75,16 +75,17 @@
     }
   },
   "accounts": {
-    "buildkite-organization": {"kind": "env", "name": "CERID_BUILDKITE_ORG", "recipe": "buildkite-organization-and-agent-token"},
-    "buildkite-agent-token": {"kind": "secret", "name": "buildkite-agent-token", "env_file": "CERID_BUILDKITE_AGENT_TOKEN_FILE", "recipe": "buildkite-organization-and-agent-token"},
-    "buildkite-api-token": {"kind": "secret", "name": "buildkite-api-token", "env_file": "CERID_BUILDKITE_API_TOKEN_FILE", "optional": true, "recipe": "buildkite-organization-and-agent-token"},
+    "coordinator": {"kind": "env", "name": "CERID_CI_URL", "recipe": "the-coordinator-on-the-launcher", "note": "the Cerid orchestrator's coordinator (ci/coordinator), reached through the Cloudflare Tunnel; its repository is CERID_CI_REPOSITORY_URL"},
+    "cloudflare-access": {"kind": "env", "name": "CERID_CI_ACCESS_AUD", "recipe": "cloudflare-tunnel-and-access-for-the-web-ui", "note": "the Access application in front of the web UI and the QUAL page"},
+    "webhook-secret": {"kind": "secret", "name": "cerid-webhook-secret", "optional": true, "recipe": "webhooks-and-commit-status", "note": "without it the coordinator polls the remote"},
+    "commit-status-token": {"kind": "secret", "name": "cerid-status-token", "optional": true, "recipe": "webhooks-and-commit-status"},
     "gcp-project": {"kind": "env", "name": "CERID_CI_GCP_PROJECT", "recipe": "the-cerid-ci-project-and-billing"},
     "gcp-budget-stop": {"kind": "env", "name": "CERID_CI_BUDGET_SUBSCRIPTION", "recipe": "the-50-usd-budget-and-its-automated-stop"},
     "runner-service-account": {"kind": "env", "name": "CERID_CI_RUNNER_SERVICE_ACCOUNT", "recipe": "service-accounts-and-workload-identity"},
     "result-store": {"kind": "env", "name": "CERID_CI_STORE", "recipe": "the-cerid-ci-project-and-billing"},
     "firebase-test-lab": {"kind": "env", "name": "CERID_FTL_PROJECT", "recipe": "firebase-test-lab", "note": "the existing Firebase project named by the FTL_GCP_PROJECT repository variable"},
-    "cloudflare-pages": {"kind": "secret", "name": "cloudflare-pages-token", "env_file": "CERID_CLOUDFLARE_TOKEN_FILE", "recipe": "cloudflare-pages-and-access-for-the-dashboard"},
-    "cloudflare-account": {"kind": "env", "name": "CERID_CLOUDFLARE_ACCOUNT_ID", "recipe": "cloudflare-pages-and-access-for-the-dashboard"},
+    "cloudflare-pages": {"kind": "secret", "name": "cloudflare-pages-token", "env_file": "CERID_CLOUDFLARE_TOKEN_FILE", "optional": true, "recipe": "optional-static-copy-of-the-qual-page", "note": "only for an optional static copy of the QUAL page; the coordinator serves the live page"},
+    "cloudflare-account": {"kind": "env", "name": "CERID_CLOUDFLARE_ACCOUNT_ID", "optional": true, "recipe": "optional-static-copy-of-the-qual-page"},
     "amd-developer-cloud": {"kind": "env", "name": "CERID_SSH_AMD_DEVCLOUD_HOST", "secret": "amd-devcloud-ssh-key", "recipe": "optional-ssh-hosts-amd-mac-windows-arm64-intel"},
     "rented-mac": {"kind": "env", "name": "CERID_SSH_MAC_HOST", "secret": "mac-ssh-key", "recipe": "optional-ssh-hosts-amd-mac-windows-arm64-intel"},
     "windows-arm64-host": {"kind": "env", "name": "CERID_SSH_WINDOWS_ARM64_HOST", "secret": "windows-arm64-ssh-key", "recipe": "optional-ssh-hosts-amd-mac-windows-arm64-intel"},
@@ -113,7 +114,7 @@
       "planned_features": {"exports": "QUAL.2"},
       "features": ["repository", "build", "unit", "sanitizers", "cpu-levels", "seeded-faults", "weak-memory", "vulkan",
                    "exports"],
-      "accounts": ["gcp-project", "buildkite-agent-token", "runner-service-account"],
+      "accounts": ["gcp-project", "coordinator", "runner-service-account"],
       "route": "Replaces the ubuntu-24.04 hosted runner: the Linux GCC, Clang TSan and shipping lanes, Intel SDE avx512 arms and real avx512 hardware."
     },
     {
@@ -131,7 +132,7 @@
       "cost_per_hour_usd": 0.12,
       "lane_presets": ["linux-gcc-release"],
       "features": ["build", "unit", "cpu-levels", "vulkan"],
-      "accounts": ["gcp-project", "buildkite-agent-token", "runner-service-account"],
+      "accounts": ["gcp-project", "coordinator", "runner-service-account"],
       "route": "AMD CPU vendor cell: the dispatched kernel levels on real Zen 4 (avx512 through double-pumped units), complete tier."
     },
     {
@@ -149,7 +150,7 @@
       "cost_per_hour_usd": 0.11,
       "ci_jobs": ["linux-arm64"],
       "features": ["build", "unit", "sanitizers", "cpu-levels"],
-      "accounts": ["gcp-project", "buildkite-agent-token", "runner-service-account"],
+      "accounts": ["gcp-project", "coordinator", "runner-service-account"],
       "route": "Replaces the ubuntu-24.04-arm hosted runner: GCC and Clang, debug and ASan, NEON level probes."
     },
     {
@@ -167,7 +168,7 @@
       "cost_per_hour_usd": 0.14,
       "lane_presets": ["linux-clang-arm64-debug"],
       "features": ["build", "unit", "cpu-levels"],
-      "accounts": ["gcp-project", "buildkite-agent-token", "runner-service-account"],
+      "accounts": ["gcp-project", "coordinator", "runner-service-account"],
       "route": "Second ARM64 core generation (Neoverse V2 with SVE2) for the NEON level and later SVE arms, complete tier."
     },
     {
@@ -189,7 +190,7 @@
       "planned_features": {"exports": "QUAL.2"},
       "features": ["repository", "build", "unit", "sanitizers", "static-analysis", "cpu-levels", "seeded-faults", "dx12", "vulkan",
                    "exports"],
-      "accounts": ["gcp-project", "buildkite-agent-token", "runner-service-account"],
+      "accounts": ["gcp-project", "coordinator", "runner-service-account"],
       "route": "Replaces the windows-2025 and windows-2025-vs2026 hosted runners: MSVC, clang-cl, clang-tidy, the native solution and WARP."
     },
     {
@@ -207,7 +208,7 @@
       "cost_per_hour_usd": 0.2,
       "ci_jobs": ["windows-arm64"],
       "features": ["build", "unit", "cpu-levels"],
-      "accounts": ["windows-arm64-host", "buildkite-agent-token"],
+      "accounts": ["windows-arm64-host", "coordinator"],
       "route": "Replaces the windows-11-arm hosted runner. Google Cloud has no Windows on ARM; an operator-provided host (an Azure Cobalt spot VM or an owned Snapdragon laptop as an owned agent) serves the lane. Without it this cell stays waiting and CI-4 parity stays open."
     },
     {
@@ -225,7 +226,7 @@
       "cost_per_hour_usd": 0.31,
       "lane_presets": ["linux-gcc-release"],
       "features": ["build", "unit", "vulkan", "cuda", "hip"],
-      "accounts": ["gcp-project", "buildkite-agent-token", "runner-service-account"],
+      "accounts": ["gcp-project", "coordinator", "runner-service-account"],
       "route": "Real NVIDIA discrete GPU (Ada): the GPU device suite on a real Vulkan driver; HIP through HIP's NVIDIA platform when ROCM.1 lands."
     },
     {
@@ -243,7 +244,7 @@
       "cost_per_hour_usd": 0.19,
       "lane_presets": ["linux-gcc-release"],
       "features": ["build", "unit", "vulkan", "cuda"],
-      "accounts": ["gcp-project", "buildkite-agent-token", "runner-service-account"],
+      "accounts": ["gcp-project", "coordinator", "runner-service-account"],
       "route": "Older NVIDIA generation (Turing) for the GPU-TIER.0 ladder on a real driver."
     },
     {
@@ -261,7 +262,7 @@
       "cost_per_hour_usd": 0.4,
       "lane_presets": ["win-release"],
       "features": ["build", "unit", "dx12", "vulkan", "cuda"],
-      "accounts": ["gcp-project", "buildkite-agent-token", "runner-service-account"],
+      "accounts": ["gcp-project", "coordinator", "runner-service-account"],
       "route": "Real DX12 and Vulkan on an NVIDIA driver under Windows."
     },
     {
@@ -279,7 +280,7 @@
       "cost_per_hour_usd": 0.12,
       "planned_features": {"hip": "ROCM.1", "shader-compile": "ROCM.1"},
       "features": ["hip", "shader-compile"],
-      "accounts": ["gcp-project", "buildkite-agent-token", "runner-service-account"],
+      "accounts": ["gcp-project", "coordinator", "runner-service-account"],
       "route": "Tier A AMD route: HIP paths compiled for the AMDGPU targets, executed through chipStar on PoCL, and their code objects checked offline with Radeon GPU Analyzer (RDNA and CDNA ISA)."
     },
     {
@@ -297,7 +298,7 @@
       "planned_features": {"hip": "ROCM.2"},
       "lane_presets": ["linux-gcc-release"],
       "features": ["build", "unit", "hip", "vulkan"],
-      "accounts": ["amd-developer-cloud", "buildkite-agent-token"],
+      "accounts": ["amd-developer-cloud", "coordinator"],
       "route": "Tier C AMD route on AMD Developer Cloud credit: real ROCm hardware for ROCM.2 conformance; used only when its secret exists."
     },
     {
@@ -314,7 +315,7 @@
       "cost_per_hour_usd": 0.0,
       "lane_presets": ["linux-gcc-release"],
       "features": ["build", "unit", "vulkan"],
-      "accounts": ["intel-tiber-cloud", "buildkite-agent-token"],
+      "accounts": ["intel-tiber-cloud", "coordinator"],
       "route": "Intel GPU vendor cell until an owned Intel machine exists; QUAL.1-HW."
     },
     {
@@ -333,7 +334,7 @@
       "cost_per_hour_usd": 0.07,
       "planned_features": {"webgpu": "WEB.1", "app-launch": "WEB.3"},
       "features": ["webgpu", "app-launch"],
-      "accounts": ["gcp-project", "buildkite-agent-token", "runner-service-account"],
+      "accounts": ["gcp-project", "coordinator", "runner-service-account"],
       "route": "The Web in Chromium, Firefox and WebKit (Playwright, headless); waits for the WEB.1 wasm build."
     },
     {
@@ -352,7 +353,7 @@
       "cost_per_hour_usd": 0.12,
       "planned_features": {"app-launch": "6.1", "vulkan": "6.1"},
       "features": ["app-launch", "vulkan"],
-      "accounts": ["gcp-project", "buildkite-agent-token", "runner-service-account"],
+      "accounts": ["gcp-project", "coordinator", "runner-service-account"],
       "route": "Android emulator (phone AVD) on a nested-virtualization VM; waits for the 6.1 Android build."
     },
     {
@@ -371,7 +372,7 @@
       "cost_per_hour_usd": 0.12,
       "planned_features": {"app-launch": "6.1", "vulkan": "6.1"},
       "features": ["app-launch", "vulkan"],
-      "accounts": ["gcp-project", "buildkite-agent-token", "runner-service-account"],
+      "accounts": ["gcp-project", "coordinator", "runner-service-account"],
       "route": "Android emulator (tablet AVD); waits for the 6.1 Android build."
     },
     {
@@ -515,7 +516,7 @@
       "planned_features": {"metal": "MAC.1", "app-launch": "MAC.2"},
       "features": ["shader-compile", "metal", "app-launch"],
       "device_commands": {"shader-compile": "python3 ci/pipeline.py probe macos"},
-      "accounts": ["rented-mac", "buildkite-agent-token"],
+      "accounts": ["rented-mac", "coordinator"],
       "route": "The macOS probe (toolchain, Metal device and feature-set census) and xcrun metal compiles of the cooked Metal programs; the Metal provider waits for MAC.1."
     },
     {
@@ -533,7 +534,7 @@
       "cost_per_hour_usd": 1.1,
       "planned_features": {"app-launch": "6.1", "metal": "6.1"},
       "features": ["app-launch", "metal"],
-      "accounts": ["rented-mac", "buildkite-agent-token"],
+      "accounts": ["rented-mac", "coordinator"],
       "route": "iPhone simulator on the rented Mac."
     },
     {
@@ -551,7 +552,7 @@
       "cost_per_hour_usd": 1.1,
       "planned_features": {"app-launch": "6.1", "metal": "6.1"},
       "features": ["app-launch", "metal"],
-      "accounts": ["rented-mac", "buildkite-agent-token"],
+      "accounts": ["rented-mac", "coordinator"],
       "route": "iPad simulator on the rented Mac."
     },
     {
@@ -569,7 +570,7 @@
       "cost_per_hour_usd": 1.1,
       "planned_features": {"webgpu": "WEB.1", "app-launch": "WEB.3"},
       "features": ["webgpu", "app-launch"],
-      "accounts": ["rented-mac", "buildkite-agent-token"],
+      "accounts": ["rented-mac", "coordinator"],
       "route": "Real Safari (WebKit with WebGPU on Metal); waits for the WEB.1 build."
     },
     {
@@ -743,7 +744,7 @@
       "cost_per_hour_usd": 0.95,
       "console_profile": {"profile": "xbox-series-x", "preset": "win-shipping"},
       "features": ["build", "unit", "console-memory-cap", "console-cores", "console-wx", "console-fs", "console-aot", "console-no-dynamic-code", "console-dx12"],
-      "accounts": ["gcp-project", "buildkite-agent-token", "runner-service-account"],
+      "accounts": ["gcp-project", "coordinator", "runner-service-account"],
       "route": "Console-profile lane runnable now: the shipping build tested under a Job Object memory cap (13.5 GiB), affinity to 14 of 16 Zen 2 threads, Arbitrary Code Guard (no writable executable memory) and remote and low-label image-load blocks, and an ACL-restricted filesystem view."
     },
     {
@@ -761,7 +762,7 @@
       "cost_per_hour_usd": 0.2,
       "console_profile": {"profile": "playstation-5", "preset": "linux-gcc-shipping"},
       "features": ["build", "unit", "console-memory-cap", "console-cores", "console-wx", "console-fs", "console-aot", "console-no-dynamic-code"],
-      "accounts": ["gcp-project", "buildkite-agent-token", "runner-service-account"],
+      "accounts": ["gcp-project", "coordinator", "runner-service-account"],
       "route": "Console-profile lane runnable now: the shipping build tested in a transient systemd service with MemoryMax (12.5 GiB), AllowedCPUs 0-13, MemoryDenyWriteExecute, ProtectSystem=strict, ProtectHome and PrivateTmp."
     },
     {

@@ -213,6 +213,13 @@ jobs:
       # ADR-0135: the Cerid CI platform's registry, planner, lanes, executors, dashboard and the CI-4 parity table.
       - name: CI platform contracts
         run: python scripts/test-ci-platform.py
+      # ADR-0135 §12: the Cerid orchestrator's state machines, store, authentication, hosts, scheduler, dispatcher,
+      # agent and service, with fault injection (lost agent, preempted VM, duplicate webhook, restart, CAS races).
+      - name: CI orchestrator contracts
+        run: python scripts/test-ci-orchestrator.py
+      # ADR-0135 §12: the coordinator and a real agent process on this runner, a trivial pipeline end to end.
+      - name: CI orchestrator end to end
+        run: python scripts/test-ci-orchestrator-e2e.py
 
   windows:
     needs: preflight

@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **13** · tools: **26** · workflow actions: **5** · runner images: **5** · unpinned apt packages: **21**
+- packages: **13** · tools: **22** · workflow actions: **5** · runner images: **5** · unpinned apt packages: **21**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -54,10 +54,6 @@
 | ninja-linux | 1.11.1 | Apache-2.0 | github.com | `ninja-linux.zip` |
 | llvm | 20.1.8 | Apache-2.0 WITH LLVM-exception | github.com | `clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz` |
 | genmc | 0.19.0 | Apache-2.0 OR MIT | MPI-SWS/genmc (9f6c4c0772d0) | `genmc-9f6c4c07.tar.gz` |
-| buildkite-agent-linux-amd64 | 4.6.0 | MIT | github.com | `buildkite-agent-linux-amd64-4.6.0.tar.gz` |
-| buildkite-agent-linux-arm64 | 4.6.0 | MIT | github.com | `buildkite-agent-linux-arm64-4.6.0.tar.gz` |
-| buildkite-agent-windows-amd64 | 4.6.0 | MIT | github.com | `buildkite-agent-windows-amd64-4.6.0.zip` |
-| buildkite-agent-darwin-arm64 | 4.6.0 | MIT | github.com | `buildkite-agent-darwin-arm64-4.6.0.tar.gz` |
 | node-linux-x64 | 24.22.0 | MIT | nodejs.org | `node-v24.22.0-linux-x64.tar.xz` |
 
 ## Workflow actions (pinned to a reviewed commit)

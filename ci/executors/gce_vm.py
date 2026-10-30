@@ -1,15 +1,17 @@
-"""gce_vm: one Google Compute Engine spot VM per job, deleted after it (ADR-0135 §4).
+"""gce_vm: one Google Compute Engine spot VM per job, deleted after it (ADR-0135 §4, amended by §12).
 
-The launcher creates the instance through the Compute Engine REST API with its own service-account credentials (the
-metadata server on GCE; `gcloud auth print-access-token` elsewhere). The startup script downloads the pinned
-buildkite-agent, verifies its SHA-256 from cmake/pins.json (passed as metadata at launch; no digest lives in this
-file), runs it with the one-job acquisition token and deletes its own instance. Three independent bounds keep a
-machine from outliving its job: the self-delete, the launcher's reaper and the instance's `maxRunDuration` with the
-DELETE termination action. Images come from per-device image families baked by `ci/ops.py bake`.
+The coordinator creates the instance through the Compute Engine REST API with its own service-account credentials
+(the metadata server on GCE; `gcloud auth print-access-token` elsewhere). The startup script downloads the Cerid
+agent from the coordinator, refuses it unless its SHA-256 matches the digest passed in the instance metadata, runs it
+as an unprivileged user in one-shot mode (the agent proves the VM's Google identity and takes the one job reserved
+for this instance: the machine is given no credential) and deletes its own instance. Three independent bounds keep a
+machine from outliving its job: the self-delete, the coordinator's reaper and the instance's `maxRunDuration` with
+the DELETE termination action. Images come from per-device image families baked by `ci/ops.py bake`.
 """
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import json
 import os
 import re
@@ -18,7 +20,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import agent_pin, agent_tags, os_family
+from . import os_family, tags_text
 
 METADATA = 'http://metadata.google.internal/computeMetadata/v1'
 COMPUTE = 'https://compute.googleapis.com/compute/v1'
@@ -33,27 +35,32 @@ class HttpError(RuntimeError):
 
 
 def http_request(method, url, token=None, scheme='Bearer', body=None, data=None, raw=False, allow=(),
-                 content_type=None, timeout=60):
-    """(status, payload): JSON in and out unless `raw`; a status outside 2xx and `allow` raises HttpError."""
-    headers = {}
+                 content_type=None, timeout=60, headers=None, with_headers=False):
+    """(status, payload): JSON in and out unless `raw`; a status outside 2xx and `allow` raises HttpError. With
+    `with_headers` the response headers (lower-case names) come third: Cloud Storage returns an object's generation
+    there, which the coordinator's compare-and-swap needs."""
+    sent = dict(headers or {})
     if token:
-        headers['Authorization'] = '%s %s' % (scheme, token)
+        sent['Authorization'] = '%s %s' % (scheme, token)
     if body is not None:
         data = json.dumps(body).encode('utf-8')
-        headers['Content-Type'] = 'application/json'
+        sent['Content-Type'] = 'application/json'
     elif content_type:
-        headers['Content-Type'] = content_type
-    request = urllib.request.Request(url, data=data, method=method, headers=headers)
+        sent['Content-Type'] = content_type
+    request = urllib.request.Request(url, data=data, method=method, headers=sent)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             status, payload = response.status, response.read()
+            received = {k.lower(): v for k, v in response.headers.items()}
     except urllib.error.HTTPError as error:
         status, payload = error.code, error.read()
+        received = {k.lower(): v for k, v in (error.headers or {}).items()}
+        error.close()
         if status not in allow:
             raise HttpError(status, payload.decode('utf-8', errors='replace')) from None
-    if raw:
-        return status, payload
-    return status, (json.loads(payload.decode('utf-8')) if payload.strip() else {})
+    if not raw:
+        payload = json.loads(payload.decode('utf-8')) if payload.strip() else {}
+    return (status, payload, received) if with_headers else (status, payload)
 
 
 def access_token(http=None):
@@ -89,45 +96,36 @@ def instance_name(job_id):
 
 
 LINUX_STARTUP = r'''#!/bin/bash
-# Cerid CI one-job runner (ci/executors/gce_vm.py). Values come from instance metadata; the agent digest from pins.
+# Cerid CI one-job runner (ci/executors/gce_vm.py). Values come from instance metadata; the agent's digest from the
+# coordinator that launched this machine. The machine holds no credential: its agent proves the VM's identity.
 set -euo pipefail
 md() { curl -sf -H 'Metadata-Flavor: Google' "http://metadata.google.internal/computeMetadata/v1/instance/$1"; }
 name=$(md name); zone=$(md zone | sed 's#.*/##')
-job=$(md attributes/cerid-job); url=$(md attributes/cerid-agent-url); sha=$(md attributes/cerid-agent-sha256)
-member=$(md attributes/cerid-agent-member); tags=$(md attributes/cerid-agent-tags)
+url=$(md attributes/cerid-agent-url); sha=$(md attributes/cerid-agent-sha256); coordinator=$(md attributes/cerid-coordinator)
 finish() { gcloud compute instances delete "$name" --zone "$zone" --quiet || shutdown -h now; }
 trap finish EXIT
 id cerid >/dev/null 2>&1 || useradd --create-home --shell /bin/bash cerid
 install -d -o cerid -g cerid /var/lib/cerid-ci /home/cerid/builds
-cd /var/lib/cerid-ci
-curl -sSLf -o agent.tar.gz "$url"
-echo "$sha  agent.tar.gz" | sha256sum -c -
-tar -xzf agent.tar.gz "$member"
-install -m 0755 "$member" /usr/local/bin/buildkite-agent
-md attributes/cerid-agent-token > token && chown cerid token && chmod 0400 token
-sudo -u cerid -H env BUILDKITE_AGENT_ACQUIRE_JOB="$job" BUILDKITE_AGENT_TOKEN="file:///var/lib/cerid-ci/token" \
-  BUILDKITE_BUILD_PATH=/home/cerid/builds BUILDKITE_AGENT_TAGS="$tags" BUILDKITE_AGENT_NAME="$name" \
-  /usr/local/bin/buildkite-agent start --reflect-exit-status || true
-rm -f token
+curl -sSLf -o /var/lib/cerid-ci/cerid-agent.py "$url"
+echo "$sha  /var/lib/cerid-ci/cerid-agent.py" | sha256sum -c -
+sudo -u cerid -H python3 /var/lib/cerid-ci/cerid-agent.py start --mode one-shot --identity gce \
+  --coordinator "$coordinator" --build-path /home/cerid/builds --name "$name" || true
 '''
 
-WINDOWS_STARTUP = r'''# Cerid CI one-job runner (ci/executors/gce_vm.py). Values come from instance metadata; the agent digest from pins.
+WINDOWS_STARTUP = r'''# Cerid CI one-job runner (ci/executors/gce_vm.py). Values come from instance metadata; the agent's digest from the
+# coordinator that launched this machine. The machine holds no credential: its agent proves the VM's identity.
 $ErrorActionPreference = 'Stop'
 function Md($path) { Invoke-RestMethod -Headers @{'Metadata-Flavor'='Google'} -Uri "http://metadata.google.internal/computeMetadata/v1/instance/$path" }
 $name = Md 'name'; $zone = (Md 'zone').Split('/')[-1]
 try {
-  $job = Md 'attributes/cerid-job'; $url = Md 'attributes/cerid-agent-url'; $sha = Md 'attributes/cerid-agent-sha256'
-  $member = Md 'attributes/cerid-agent-member'; $tags = Md 'attributes/cerid-agent-tags'
+  $url = Md 'attributes/cerid-agent-url'; $sha = Md 'attributes/cerid-agent-sha256'; $coordinator = Md 'attributes/cerid-coordinator'
   $work = 'C:\cerid-ci'; New-Item -ItemType Directory -Force -Path $work, 'C:\b' | Out-Null
-  Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile "$work\agent.zip"
-  if ((Get-FileHash -Algorithm SHA256 "$work\agent.zip").Hash.ToLower() -ne $sha) { throw 'agent checksum mismatch' }
-  Expand-Archive -Force -Path "$work\agent.zip" -DestinationPath "$work\agent"
-  (Md 'attributes/cerid-agent-token') | Out-File -Encoding ascii -NoNewline "$work\token"
-  $env:BUILDKITE_AGENT_ACQUIRE_JOB = $job; $env:BUILDKITE_AGENT_TOKEN = "file://$work/token"
-  $env:BUILDKITE_BUILD_PATH = 'C:\b'; $env:BUILDKITE_AGENT_TAGS = $tags; $env:BUILDKITE_AGENT_NAME = $name
-  & "$work\agent\$member" start --reflect-exit-status
+  Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile "$work\cerid-agent.py"
+  if ((Get-FileHash -Algorithm SHA256 "$work\cerid-agent.py").Hash.ToLower() -ne $sha) { throw 'agent checksum mismatch' }
+  $py = (Get-Command python -ErrorAction SilentlyContinue).Source
+  if (-not $py) { $py = 'C:\Program Files\Python312\python.exe' }
+  & $py "$work\cerid-agent.py" start --mode one-shot --identity gce --coordinator $coordinator --build-path 'C:\b' --name $name
 } finally {
-  Remove-Item -Force -ErrorAction SilentlyContinue 'C:\cerid-ci\token'
   & gcloud compute instances delete $name --zone $zone --quiet
 }
 '''
@@ -136,11 +134,10 @@ try {
 class GceVm:
     name = 'gce_vm'
 
-    def __init__(self, environ, http=http_request, token=access_token, pins=None):
+    def __init__(self, environ, http=http_request, token=access_token):
         self.environ = environ
         self.http = http
         self.token = token
-        self.pins = pins
 
     @property
     def project(self):
@@ -158,12 +155,13 @@ class GceVm:
         return ('windows-startup-script-ps1', WINDOWS_STARTUP) if family == 'windows' else ('startup-script',
                                                                                            LINUX_STARTUP)
 
-    def body(self, job_id, device, token):
-        """The instances.insert request for one job (pure: tests read it without a cloud)."""
+    def body(self, machine, device, agent):
+        """The instances.insert request for one job (pure: tests read it without a cloud). `agent` carries the
+        coordinator's URL and the agent's URL and SHA-256; it never carries a token for a VM."""
+        if agent.get('token'):
+            raise ValueError('a GCE machine proves its identity; it must never be given a job token')
         config = device['executor_config']
         zone = config.get('zone', self.zone)
-        pin_name, pin = agent_pin(device, self.pins)
-        member = pin['member']
         startup_key, startup = self.startup(device)
         scheduling = {'automaticRestart': False, 'onHostMaintenance': 'TERMINATE',
                       'maxRunDuration': {'seconds': int(config['max_run_hours'] * 3600)},
@@ -171,7 +169,7 @@ class GceVm:
         if config.get('spot', True):
             scheduling['provisioningModel'] = 'SPOT'
         body = {
-            'name': instance_name(job_id),
+            'name': instance_name(machine),
             'machineType': 'zones/%s/machineTypes/%s' % (zone, config['machine_type']),
             'scheduling': scheduling,
             'disks': [{'boot': True, 'autoDelete': True, 'initializeParams': {
@@ -183,13 +181,11 @@ class GceVm:
                                  'scopes': ['https://www.googleapis.com/auth/cloud-platform']}],
             'labels': {'cerid-ci': 'job', 'cerid-device': device['id'][:63]},
             'metadata': {'items': [
-                {'key': 'cerid-job', 'value': job_id},
-                {'key': 'cerid-agent-url', 'value': pin['url']},
-                {'key': 'cerid-agent-sha256', 'value': pin['sha256']},
-                {'key': 'cerid-agent-member', 'value': member},
-                {'key': 'cerid-agent-pin', 'value': pin_name},
-                {'key': 'cerid-agent-tags', 'value': agent_tags(device)},
-                {'key': 'cerid-agent-token', 'value': token},
+                {'key': 'cerid-machine', 'value': instance_name(machine)},
+                {'key': 'cerid-coordinator', 'value': agent['coordinator']},
+                {'key': 'cerid-agent-url', 'value': agent['agent_url']},
+                {'key': 'cerid-agent-sha256', 'value': agent['agent_sha256']},
+                {'key': 'cerid-agent-tags', 'value': tags_text(device)},
                 {'key': startup_key, 'value': startup}]},
         }
         if config.get('min_cpu_platform'):
@@ -207,11 +203,44 @@ class GceVm:
             body['advancedMachineFeatures'] = features
         return zone, body
 
-    def launch(self, job_id, device, token):
-        zone, body = self.body(job_id, device, token)
+    def launch(self, machine, device, agent):
+        zone, body = self.body(machine, device, agent)
         self.http('POST', '%s/projects/%s/zones/%s/instances' % (COMPUTE, self.project, zone), token=self.token(),
                   body=body)
         return {'project': self.project, 'zone': zone, 'instance': body['name']}
+
+    def alive(self, handle):
+        """False once the instance is gone or stopped (a preempted spot VM is deleted by its termination action);
+        True while it exists and runs."""
+        status, payload = self.http('GET', '%s/projects/%s/zones/%s/instances/%s' % (
+            COMPUTE, handle['project'], handle['zone'], handle['instance']), token=self.token(), allow=(404,))
+        if status == 404:
+            return False
+        return payload.get('status') not in ('STOPPING', 'STOPPED', 'TERMINATED', 'SUSPENDING', 'SUSPENDED')
+
+    def machines(self):
+        """Every job machine of the project (label cerid-ci=job), for the orphan sweep."""
+        out = []
+        page = None
+        while True:
+            query = {'filter': 'labels.cerid-ci=job', 'maxResults': 500}
+            if page:
+                query['pageToken'] = page
+            _, listing = self.http('GET', '%s/projects/%s/aggregated/instances?%s' % (
+                COMPUTE, self.project, urllib.parse.urlencode(query)), token=self.token())
+            for zone_path, scoped in (listing.get('items') or {}).items():
+                for item in scoped.get('instances', []):
+                    created = item.get('creationTimestamp', '')
+                    try:
+                        stamp = dt.datetime.fromisoformat(created).timestamp()
+                    except ValueError:
+                        stamp = 0.0
+                    zone = zone_path.rsplit('/', 1)[-1]
+                    out.append({'name': item['name'], 'created': stamp, 'handle': {
+                        'project': self.project, 'zone': zone, 'instance': item['name']}})
+            page = listing.get('nextPageToken')
+            if not page:
+                return out
 
     def teardown(self, handle):
         self.http('DELETE', '%s/projects/%s/zones/%s/instances/%s' % (COMPUTE, handle['project'], handle['zone'],
@@ -259,7 +288,7 @@ PROVISION = {
 set -euxo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
-apt-get install -y ca-certificates curl git python3 python3-venv python3-pip build-essential gcc-14 g++-14 clang \
+apt-get install -y ca-certificates curl git python3 python-is-python3 python3-venv python3-pip build-essential gcc-14 g++-14 clang \
   clang-tools lld llvm ninja-build gdb rsync unzip xz-utils {packages}
 curl -sSLf https://apt.kitware.com/kitware-archive.sh | bash
 apt-get install -y cmake
@@ -274,7 +303,7 @@ shutdown -h now
 ''',
     'windows': r'''# Cerid CI image bake (ci/ops.py bake): the toolchain the hosted windows-2025-vs2026 image provided.
 $ErrorActionPreference = 'Stop'
-winget install --silent --accept-package-agreements --accept-source-agreements --id Python.Python.3.12
+winget install --silent --accept-package-agreements --accept-source-agreements --scope machine --id Python.Python.3.12
 winget install --silent --accept-package-agreements --accept-source-agreements --id Git.Git
 winget install --silent --accept-package-agreements --accept-source-agreements --id Kitware.CMake
 winget install --silent --accept-package-agreements --accept-source-agreements --id Microsoft.VisualStudio.2026.BuildTools `

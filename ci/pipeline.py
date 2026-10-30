@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """The Cerid CI pipeline: registry, affected selection, result cache, budget, lanes and the launcher (ADR-0135).
 
-One program on every machine. On the launcher it plans a build and uploads the Buildkite pipeline (`upload`), runs the
-dispatcher that turns scheduled cloud jobs into one-job machines (`dispatch`) and concludes the required result
+One program on every machine. As a build's first step (on the launcher queue) it plans the build and uploads the steps
+to the Cerid orchestrator's coordinator (`upload`, through the agent); its last step concludes the required result
 (`conclude`). On a runner it executes one lane with the same phases as the hosted GitHub job it replaces (`lane`), or
-the preflight and repository checks (`run`). Coverage stays owned by `.github/ci-tiers.json` through
+the preflight and repository checks (`run`). The coordinator (`ci/coordinator/`) schedules, dispatches one-job
+machines and keeps the logs; the agent (`ci/agent/agent.py`) runs each step. Coverage stays owned by `.github/ci-tiers.json` through
 `scripts/ci-tier.py`; the module graph is the `crd_module()` registry of the root CMakeLists.txt; nothing here
 re-implements a helper the repository already has. Contract: docs/design/ci-platform.md.
 """
@@ -12,6 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import contextlib
 import datetime as dt
 import hashlib
 import importlib.util
@@ -90,9 +92,13 @@ NATIVE_TESTS = ('^crd-(repository-hygiene|master-plan|ci-tiers|repository-tools|
 DX12_PROBE = '^crd-dx12-device-info$'
 # Spot preemption and lost agents are infrastructure loss, not test outcomes: the job is retried on a new machine.
 # A failed test is never retried (no retry-as-proof).
-RETRY = {'automatic': [{'exit_status': -1, 'limit': 2}, {'signal_reason': 'agent_stop', 'limit': 2}]}
+# Spot preemption, a lost VM and a lost agent are retried on a new machine twice; a failed test is never retried.
+RETRY = {'automatic': [{'reason': 'infrastructure', 'limit': 2}], 'manual': {'allowed': True}}
 BUDGET_EXIT = 75
-SKIP_LIMIT = 70  # Buildkite's skip reason length
+PIPELINE_SCHEMA = 'cerid-ci-pipeline/1'
+# One-job cloud machines at once: the recipe's regional quota of 48 vCPUs over 8-vCPU machines. The coordinator holds
+# the group's limit, so a quota refusal never turns into failed launches.
+CLOUD_GROUP = ('cerid-cloud-machines', 6)
 
 
 # --------------------------------------------------------------------------------------------- registry and graph
@@ -444,37 +450,147 @@ def device_fingerprint(device, store=None):
 
 # --------------------------------------------------------------------------------------------- result store
 
+def replace_file(source, target, attempts=100, sleep=time.sleep):
+    """os.replace that rides out Windows sharing violations: a reader, the indexer or an antivirus scan holding the
+    target open makes the rename fail with access denied for a few milliseconds (seen with three processes updating
+    one object), so the rename is retried for up to about two seconds before the error is raised."""
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if os.name != 'nt' or attempt == attempts - 1:
+                raise
+            sleep(min(0.001 * (attempt + 1), 0.05))
+
+
+class Conflict(RuntimeError):
+    """A compare-and-swap write lost its race: the object changed since it was read."""
+
+
 class LocalStore:
-    """The result store on a local or mounted directory (an owned machine, tests)."""
+    """The result store on a local or mounted directory (an owned machine, tests). Every object carries a generation
+    (0 means absent) kept beside it under `.cas/`; `read` and `write_if` give the same compare-and-swap contract as
+    Cloud Storage's object generations, under a per-object lock that the operating system releases if its holder
+    dies, so concurrent processes on one machine never lose an update."""
+
+    CAS = '.cas'
 
     def __init__(self, root):
         self.root = Path(root)
 
     def _path(self, name):
-        path = (self.root / name).resolve()
-        if not path.is_relative_to(self.root.resolve()):
+        base = self.root.resolve()
+        path = (base / name).resolve()
+        if not path.is_relative_to(base) or path == base:
             raise ValueError('store path escapes the store: %s' % name)
+        if path.relative_to(base).parts[0] == self.CAS:
+            raise ValueError('store path names the generation directory: %s' % name)
         return path
+
+    def _side(self, path, suffix):
+        base = self.root.resolve()
+        side = base / self.CAS / (path.relative_to(base).as_posix() + suffix)
+        side.parent.mkdir(parents=True, exist_ok=True)
+        return side
+
+    @contextlib.contextmanager
+    def _locked(self, path):
+        fd = os.open(str(self._side(path, '.lock')), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                while True:
+                    try:
+                        os.lseek(fd, 0, os.SEEK_SET)
+                        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                        break
+                    except OSError:
+                        time.sleep(0.002)
+                try:
+                    yield
+                finally:
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+    def _generation(self, path):
+        side = self._side(path, '.gen')
+        recorded = int(side.read_text(encoding='ascii')) if side.is_file() else 0
+        if not path.is_file():
+            return 0
+        return recorded if recorded > 0 else 1
+
+    def _tombstone(self, path):
+        side = self._side(path, '.gen')
+        return int(side.read_text(encoding='ascii')) if side.is_file() else 0
+
+    def _store(self, path, data):
+        # Generations only grow, across deletes too, so a reader holding an old generation can never match a new
+        # object that happens to reuse its number.
+        generation = max(self._generation(path), self._tombstone(path)) + 1
+        path.parent.mkdir(parents=True, exist_ok=True)
+        partial = path.with_name(path.name + '.partial')
+        partial.write_bytes(data)
+        replace_file(partial, path)
+        side = self._side(path, '.gen')
+        side_partial = side.with_name(side.name + '.partial')
+        side_partial.write_text(str(generation), encoding='ascii')
+        replace_file(side_partial, side)
+        return generation
 
     def get(self, name):
         path = self._path(name)
         return path.read_bytes() if path.is_file() else None
 
+    def read(self, name):
+        """(bytes or None, generation): a consistent snapshot for a later `write_if`."""
+        path = self._path(name)
+        with self._locked(path):
+            return (path.read_bytes() if path.is_file() else None), self._generation(path)
+
+    def write_if(self, name, data, generation):
+        """Write only if the object's generation is still `generation` (0: only if absent). Returns the new
+        generation, or None when another writer got there first."""
+        path = self._path(name)
+        with self._locked(path):
+            if self._generation(path) != generation:
+                return None
+            return self._store(path, data)
+
     def put(self, name, data):
         path = self._path(name)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        partial = path.with_name(path.name + '.partial')
-        partial.write_bytes(data)
-        os.replace(partial, path)
+        with self._locked(path):
+            self._store(path, data)
+
+    def delete(self, name, generation=None):
+        """Remove an object (only at `generation` when given); True when it was removed."""
+        path = self._path(name)
+        with self._locked(path):
+            current = self._generation(path)
+            if current == 0 or (generation is not None and current != generation):
+                return False
+            path.unlink()
+            return True
 
     def list(self, prefix):
-        base = self._path(prefix) if prefix else self.root
+        base = self._path(prefix) if prefix else self.root.resolve()
         if not base.exists():
             return []
         if base.is_file():
             return [prefix]
-        return sorted(p.relative_to(self.root).as_posix() for p in base.rglob('*')
-                      if p.is_file() and not p.name.endswith('.partial'))
+        root = self.root.resolve()
+        cas = root / self.CAS
+        return sorted(p.relative_to(root).as_posix() for p in base.rglob('*')
+                      if p.is_file() and not p.name.endswith('.partial') and not p.is_relative_to(cas))
 
     def get_json(self, name):
         data = self.get(name)
@@ -485,25 +601,54 @@ class LocalStore:
 
 
 class GcsStore(LocalStore):
-    """The result store on a Cloud Storage bucket through the JSON API with the machine's own credentials."""
+    """The result store on a Cloud Storage bucket through the JSON API with the machine's own credentials. Object
+    generations are the compare-and-swap version: `read` takes it from the `x-goog-generation` header of the media
+    GET and `write_if` sends it as `ifGenerationMatch` (0: the object must not exist), a 412 being a lost race."""
 
-    def __init__(self, bucket, prefix='', token=None, http=None):
+    def __init__(self, bucket, prefix='', token=None, http=None, endpoint='https://storage.googleapis.com'):
         from executors import gce_vm
+        self.endpoint = endpoint.rstrip('/')
         self.bucket = bucket
         self.prefix = prefix.strip('/') + '/' if prefix.strip('/') else ''
         self.token = token or gce_vm.access_token
         self.http = http or gce_vm.http_request
 
+    def _object(self, name):
+        return '%s/storage/v1/b/%s/o/%s' % (
+            self.endpoint, self.bucket, urllib.parse.quote(self.prefix + name, safe=''))
+
+    def _upload(self, name, generation=None):
+        url = '%s/upload/storage/v1/b/%s/o?uploadType=media&name=%s' % (
+            self.endpoint, self.bucket, urllib.parse.quote(self.prefix + name, safe=''))
+        return url if generation is None else url + '&ifGenerationMatch=%d' % generation
+
     def get(self, name):
-        url = 'https://storage.googleapis.com/storage/v1/b/%s/o/%s?alt=media' % (
-            self.bucket, urllib.parse.quote(self.prefix + name, safe=''))
-        status, body = self.http('GET', url, token=self.token(), raw=True, allow=(404,))
+        status, body = self.http('GET', self._object(name) + '?alt=media', token=self.token(), raw=True, allow=(404,))
         return None if status == 404 else body
 
+    def read(self, name):
+        status, body, headers = self.http('GET', self._object(name) + '?alt=media', token=self.token(), raw=True,
+                                          allow=(404,), with_headers=True)
+        if status == 404:
+            return None, 0
+        return body, int(headers['x-goog-generation'])
+
+    def write_if(self, name, data, generation):
+        status, payload = self.http('POST', self._upload(name, generation), token=self.token(), data=data,
+                                    content_type='application/octet-stream', allow=(412,))
+        if status == 412:
+            return None
+        return int(payload['generation'])
+
     def put(self, name, data):
-        url = 'https://storage.googleapis.com/upload/storage/v1/b/%s/o?uploadType=media&name=%s' % (
-            self.bucket, urllib.parse.quote(self.prefix + name, safe=''))
-        self.http('POST', url, token=self.token(), data=data, content_type='application/octet-stream')
+        self.http('POST', self._upload(name), token=self.token(), data=data, content_type='application/octet-stream')
+
+    def delete(self, name, generation=None):
+        url = self._object(name)
+        if generation is not None:
+            url += '?ifGenerationMatch=%d' % generation
+        status, _ = self.http('DELETE', url, token=self.token(), allow=(404, 412))
+        return status not in (404, 412)
 
     def list(self, prefix):
         names = []
@@ -512,12 +657,29 @@ class GcsStore(LocalStore):
             query = {'prefix': self.prefix + prefix, 'fields': 'items(name),nextPageToken'}
             if page:
                 query['pageToken'] = page
-            url = 'https://storage.googleapis.com/storage/v1/b/%s/o?%s' % (self.bucket, urllib.parse.urlencode(query))
+            url = '%s/storage/v1/b/%s/o?%s' % (self.endpoint, self.bucket, urllib.parse.urlencode(query))
             _, listing = self.http('GET', url, token=self.token())
             names += [item['name'][len(self.prefix):] for item in listing.get('items', [])]
             page = listing.get('nextPageToken')
             if not page:
                 return sorted(names)
+
+
+def update_json(store, name, change, attempts=50, sleep=time.sleep):
+    """Compare-and-swap loop: read `name`, apply `change(current or None)` and write it back only if nobody wrote in
+    between; on a lost race read again. `change` returns the new value, or None to leave the object as it is. Returns
+    the value now stored. Raises Conflict after `attempts` lost races (a live-lock, never a silent overwrite)."""
+    for attempt in range(attempts):
+        data, generation = store.read(name)
+        current = json.loads(data.decode('utf-8')) if data is not None else None
+        value = change(json.loads(data.decode('utf-8')) if data is not None else None)
+        if value is None:
+            return current
+        encoded = (json.dumps(value, indent=1, sort_keys=True) + '\n').encode('utf-8')
+        if store.write_if(name, encoded, generation) is not None:
+            return value
+        sleep(min(0.002 * (2 ** min(attempt, 6)), 0.25))
+    raise Conflict('%s: %d lost compare-and-swap races' % (name, attempts))
 
 
 def open_store(url=None):
@@ -671,7 +833,7 @@ def make_step(order, key, label, kind, device, command, features, priority, minu
     hit = None if fresh else cached_pass(store, key_hash)
     if hit:
         step['state'] = 'cached'
-        step['reason'] = ('cached: passed in build %s' % hit.get('build', '?'))[:SKIP_LIMIT]
+        step['reason'] = 'cached: passed in build %s' % hit.get('build', '?')
         step['cached_from'] = hit
     return step
 
@@ -804,52 +966,67 @@ def plan(event, base='', head='HEAD', requested=None, paths=None, registry=None,
 RUNNER_SETTINGS = ('CERID_CI_STORE', 'CERID_CI_SCCACHE_BUCKET', 'CERID_CI_GCP_PROJECT')
 
 
-def buildkite_pipeline(planned, queues, environ=None):
-    """The Buildkite pipeline document (JSON, which `buildkite-agent pipeline upload` accepts as YAML). The launcher's
+def orchestrator_pipeline(planned, queues, environ=None):
+    """The build's steps for the Cerid orchestrator (`cerid-ci-pipeline/1`, ci/coordinator/steps.py). The launcher's
     non-secret runner settings (where the result store and the compiler cache live) travel in the document's
-    environment, so a one-job machine records its results where the next plan reads them."""
+    environment, so a one-job machine records its results where the next plan reads them. A cached or budget step is
+    created terminal with its reason; every cloud step shares one concurrency group bounded by the region's quota."""
     environ = os.environ if environ is None else environ
     steps = []
     keys = []
     for step in planned['steps']:
         entry = {'label': step['label'], 'key': step['key'], 'command': step['command'], 'agents': step['agents'],
-                 'timeout_in_minutes': step['timeout'], 'retry': RETRY,
+                 'timeout_in_minutes': step['timeout'], 'retry': RETRY, 'priority': 3 - int(step['priority']),
                  'env': {'CERID_CI_STEP': step['key'], 'CERID_CI_DEVICE': step['device'],
                          'CERID_CI_INPUT_KEY': step['input_key'], 'CERID_CI_TIER': planned['tier'],
                          'CERID_CI_FEATURES': ','.join(step['features'])},
                  'artifact_paths': ['build/*/evidence/**/*', 'build/**/Testing/Temporary/*.log',
                                     'build/**/Testing/Temporary/*.xml']}
+        if step['agents'].get('queue') == queues['cloud']:
+            entry['concurrency_group'], entry['concurrency'] = CLOUD_GROUP
         if step['state'] in ('cached', 'budget'):
-            entry['skip'] = step['reason'][:SKIP_LIMIT]
+            entry['skip'] = {'state': step['state'], 'reason': step['reason']}
         steps.append(entry)
         keys.append(step['key'])
     launcher = {'queue': queues['launcher']}
     steps.append({'label': ':white_check_mark: Required result', 'key': 'required', 'agents': launcher,
-                  'command': 'python ci/pipeline.py conclude --plan ci-plan.json',
-                  'depends_on': [{'step': key, 'allow_failure': True} for key in keys], 'allow_dependency_failure': True})
-    steps.append({'label': ':bar_chart: QUAL dashboard', 'key': 'dashboard', 'agents': launcher,
-                  'command': 'python ci/dashboard/generate.py publish --plan ci-plan.json',
-                  'depends_on': [{'step': 'required', 'allow_failure': True}], 'allow_dependency_failure': True})
+                  'command': 'python ci/pipeline.py conclude --plan ci-plan.json', 'priority': 3,
+                  'depends_on': [{'step': key, 'allow_failure': True} for key in keys]})
+    steps.append({'label': ':bar_chart: QUAL dashboard', 'key': 'dashboard', 'agents': launcher, 'priority': 3,
+                  'command': 'python ci/dashboard/generate.py render --plan ci-plan.json --out build/ci-dashboard',
+                  'artifact_paths': ['build/ci-dashboard/*'],
+                  'depends_on': [{'step': 'required', 'allow_failure': True}]})
     env = {'PYTHONUTF8': '1', 'CRD_PERF_BUDGET_SOFT': '1', 'CRD_PLATFORM_HEADLESS': '1'}
     env.update({name: environ[name] for name in RUNNER_SETTINGS if environ.get(name)})
-    return {'env': env, 'steps': steps}
+    return {'schema': PIPELINE_SCHEMA, 'env': env, 'steps': steps}
 
 
-# --------------------------------------------------------------------------------------------- Buildkite context
+# --------------------------------------------------------------------------------------------- orchestrator context
 
-def buildkite_event(environ):
-    """(event, base, requested tier) of a Buildkite build in ci-tier.py's vocabulary."""
-    source = environ.get('BUILDKITE_SOURCE', '')
+def cerid_event(environ):
+    """(event, base, requested tier) of a Cerid orchestrator build in ci-tier.py's vocabulary, from the identity the
+    agent gives every step (CERID_CI_SOURCE: webhook, poll, manual or schedule; CERID_CI_EVENT: push or
+    pull_request)."""
+    source = environ.get('CERID_CI_SOURCE', '')
     requested = environ.get('CERID_CI_TIER') or None
     if source == 'schedule':
         return 'schedule', '', None
-    if requested and source in ('ui', 'api', 'trigger_job'):
+    if requested and source == 'manual':
         return 'workflow_dispatch', '', requested
-    pull = environ.get('BUILDKITE_PULL_REQUEST', 'false')
-    if pull not in ('', 'false'):
-        base_branch = environ.get('BUILDKITE_PULL_REQUEST_BASE_BRANCH') or 'main'
+    pull = environ.get('CERID_CI_PULL_REQUEST', 'false')
+    if environ.get('CERID_CI_EVENT') == 'pull_request' or pull not in ('', 'false'):
+        base_branch = environ.get('CERID_CI_PULL_REQUEST_BASE_BRANCH') or 'main'
         return 'pull_request', 'origin/' + base_branch, None
     return 'push', environ.get('CERID_CI_BASE', ''), None
+
+
+AGENT = CI / 'agent/agent.py'
+
+
+def agent_tool(*args, environ=None):
+    """argv of an in-job agent tool (`pipeline upload`, `annotate`, `artifact ...`, `step outcome`)."""
+    environ = os.environ if environ is None else environ
+    return [sys.executable, environ.get('CERID_AGENT_SCRIPT') or str(AGENT)] + [str(a) for a in args]
 
 
 def push_base(store, branch):
@@ -985,7 +1162,7 @@ class Lane:
 
     # Phases -----------------------------------------------------------------------------------------------------
     def checkout(self):
-        commit = self.env.get('BUILDKITE_COMMIT')
+        commit = self.env.get('CERID_CI_COMMIT')
         self.run(['git', 'rev-parse', '--verify', 'HEAD'])
         if commit and not self.run.dry:
             head = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], capture_output=True, text=True,
@@ -1243,15 +1420,17 @@ class Lane:
         if self.cached():
             args += ['--sccache-stats', self.temp / 'sccache.json']
         self.run(self.helper('ci-evidence.py', 'bundle', *args), check=False)
-        if self.env.get('BUILDKITE') and (self.run.dry or (self.temp / 'summary.md').is_file()):
-            self.run(['buildkite-agent', 'annotate', '--context', self.preset, '--style',
-                      'success' if self.status == 'success' else 'error', '--append'], check=False)
+        summary = self.temp / 'summary.md'
+        if self.env.get('CERID_CI') and (self.run.dry or summary.is_file()):
+            # The summary is the annotation's body, passed as a file: the runner gives commands no standard input.
+            self.run(agent_tool('annotate', '--context', self.preset, '--style',
+                                'success' if self.status == 'success' else 'error', '--body-file', summary,
+                                environ=self.env), check=False)
 
     def upload(self):
-        if self.env.get('BUILDKITE'):
-            self.run(['buildkite-agent', 'artifact', 'upload',
-                      'build/*/evidence/**/*;build/**/Testing/Temporary/*.log;build/**/Testing/Temporary/*.xml'],
-                     check=False)
+        if self.env.get('CERID_CI'):
+            self.run(agent_tool('artifact', 'upload', 'build/*/evidence/**/*;build/**/Testing/Temporary/*.log;'
+                                'build/**/Testing/Temporary/*.xml', environ=self.env), check=False)
 
     # Per-test cache --------------------------------------------------------------------------------------------
     def test_keys(self):
@@ -1290,7 +1469,7 @@ class Lane:
         keys = self.test_keys()
         passed = sorted(keys[name] for name, outcome in junit_outcomes(junit).items()
                         if outcome == 'pass' and name in keys)
-        build = self.env.get('BUILDKITE_BUILD_NUMBER') or 'local'
+        build = self.env.get('CERID_CI_BUILD_NUMBER') or 'local'
         try:
             self.store.put_json('%s%s.json' % (self.test_cache_prefix(), build.zfill(10)),
                                 {'build': build, 'keys': passed})
@@ -1320,9 +1499,8 @@ class Lane:
     def result(self, outcome, started):
         record = {'schema': RESULT_SCHEMA, 'step': self.env.get('CERID_CI_STEP', 'lane-' + self.preset),
                   'device': self.device['id'], 'preset': self.preset, 'job': self.job, 'outcome': outcome,
-                  'input_key': self.env.get('CERID_CI_INPUT_KEY'), 'build': self.env.get('BUILDKITE_BUILD_NUMBER'),
-                  'commit': self.env.get('BUILDKITE_COMMIT'), 'log': self.env.get('BUILDKITE_BUILD_URL', '') + (
-                      '#' + self.env['BUILDKITE_JOB_ID'] if self.env.get('BUILDKITE_JOB_ID') else ''),
+                  'input_key': self.env.get('CERID_CI_INPUT_KEY'), 'build': self.env.get('CERID_CI_BUILD_NUMBER'),
+                  'commit': self.env.get('CERID_CI_COMMIT'), 'log': self.env.get('CERID_CI_JOB_URL', ''),
                   'minutes': round((time.time() - started) / 60.0, 2), 'console': self.console,
                   'features': (self.env.get('CERID_CI_FEATURES') or '').split(',') if self.env.get(
                       'CERID_CI_FEATURES') else None, 'cached_tests': getattr(self, 'cached_test_count', 0),
@@ -1681,6 +1859,8 @@ REPOSITORY_CHECKS = [
     ('Generated CEIR artifacts', ['tools/ceir_opgen/ceir_opgen.py', '--check'], None),
     ('Capability source references', ['tools/ceir_capability_matrix/gen_matrix.py', '--check'], None),
     ('CI platform contracts', ['scripts/test-ci-platform.py'], None),
+    ('CI orchestrator contracts', ['scripts/test-ci-orchestrator.py'], None),
+    ('CI orchestrator end to end', ['scripts/test-ci-orchestrator-e2e.py'], None),
 ]
 
 
@@ -1742,10 +1922,12 @@ def conclude(planned, outcome_of):
     return ok, rows
 
 
-def buildkite_outcome(key):
-    completed = subprocess.run(['buildkite-agent', 'step', 'get', 'outcome', '--step', key], capture_output=True,
-                               text=True, check=False)
-    return completed.stdout.strip() if completed.returncode == 0 else 'absent'
+def orchestrator_outcome(key):
+    """A step's outcome in ci-tier.py's terms, from the coordinator through the agent's `step outcome` tool: a
+    soft-failed step counts as passed, as its dependents see it."""
+    completed = subprocess.run(agent_tool('step', 'outcome', key), capture_output=True, text=True, check=False)
+    outcome = completed.stdout.strip() if completed.returncode == 0 else 'absent'
+    return 'passed' if outcome == 'soft_failed' else outcome
 
 
 # --------------------------------------------------------------------------------------------- parity (CI-4)
@@ -1831,8 +2013,8 @@ def workflow_steps(text):
 
 
 def parity_rows(text=None, tiers=None):
-    """Every GitHub Actions job and step with the Buildkite step and phase that carries it; problems for any step
-    without one."""
+    """Every GitHub Actions job and step with the Cerid orchestrator step and lane phase that carries it; problems for
+    any step without one."""
     text = text if text is not None else WORKFLOW.read_text(encoding='utf-8')
     tiers = tiers or ci_tier.load_tiers(TIERS)
     rows = []
@@ -1853,7 +2035,7 @@ def parity_rows(text=None, tiers=None):
                 presets = [p for p, e in tiers['presets'].items() if e.get('job') == job]
                 rows.append((job, label, 'lane-<preset> (%s)' % ', '.join(presets), 'Lane.%s' % phase))
             else:
-                problems.append('%s / %s has no Buildkite step' % (job, label))
+                problems.append('%s / %s has no Cerid step' % (job, label))
     return rows, problems
 
 
@@ -1862,7 +2044,7 @@ HOST_CHECK = ROOT / '.github/workflows/host-check.yml'
 
 def experiment_rows(text=None):
     """The dispatch-only host-check experiments: listed so CI-4 cannot forget them; each stays open until a
-    Buildkite experiment step carries it (they run inline shell that must first move into a script)."""
+    Cerid experiment step carries it (they run inline shell that must first move into a script)."""
     text = text if text is not None else (HOST_CHECK.read_text(encoding='utf-8') if HOST_CHECK.is_file() else '')
     rows = []
     for job, steps in workflow_steps(text).items():
@@ -1872,7 +2054,7 @@ def experiment_rows(text=None):
 
 
 def parity_markdown(rows):
-    lines = ['| GitHub job | GitHub step | Buildkite step | Carried by |', '|---|---|---|---|']
+    lines = ['| GitHub job | GitHub step | Cerid step | Carried by |', '|---|---|---|---|']
     for job, label, step, phase in rows:
         lines.append('| `%s` | %s | `%s` | %s |' % (job, label.replace('|', '\\|'), step, phase.replace('|', '\\|')))
     return '\n'.join(lines) + '\n'
@@ -1928,145 +2110,6 @@ def probe_macos(run=None):
     return 0
 
 
-# --------------------------------------------------------------------------------------------- dispatcher
-
-STACKS = 'https://agent.buildkite.com/v3/stacks'
-
-
-class Dispatcher:
-    """The launcher's job loop over Buildkite's Stacks API: list scheduled jobs (also the queue's heartbeat), route
-    each by its `device=` rule to its executor (acquired jobs ignore agent tags, so routing is ours), refuse paid
-    launches past the budget, reserve, issue a one-job acquisition token and launch; reap finished machines."""
-
-    def __init__(self, registry, store, agent_token, http=None, stack='cerid-cloud', environ=None, executors=None,
-                 now=None):
-        import executors as executor_package
-        self.registry = registry
-        self.store = store
-        self.agent_token = agent_token
-        self.http = http or executor_package.gce_vm.http_request
-        self.stack = stack
-        self.queue = registry['queues']['cloud']
-        self.environ = os.environ if environ is None else environ
-        self.devices = devices_by_id(registry)
-        self.executors = executors or executor_package.registry(self.environ)
-        self.now = now or (lambda: dt.datetime.now(dt.timezone.utc))
-
-    def call(self, method, path, body=None):
-        _, payload = self.http(method, STACKS + path, token=self.agent_token, scheme='Token', body=body)
-        return payload
-
-    def register(self):
-        return self.call('POST', '/register', {'key': self.stack, 'type': 'custom', 'queue_key': self.queue,
-                                               'metadata': {'launcher': 'ci/pipeline.py dispatch'}})
-
-    def scheduled(self):
-        jobs = []
-        after = None
-        while True:
-            query = {'queue_key': self.queue, 'limit': 100}
-            if after:
-                query['after'] = after
-            page = self.call('GET', '/%s/scheduled-jobs?%s' % (self.stack, urllib.parse.urlencode(query)))
-            if page.get('cluster_queue', {}).get('dispatch_paused'):
-                return []
-            jobs += page.get('jobs', [])
-            info = page.get('page_info', {})
-            if not info.get('has_next_page'):
-                return jobs
-            after = info.get('end_cursor')
-
-    def route(self, job):
-        for rule in job.get('agent_query_rules', []):
-            name, _, value = rule.partition('=')
-            if name == 'device':
-                return self.devices.get(value)
-        return None
-
-    def finish(self, job, code, detail):
-        self.call('POST', '/%s/jobs/%s/finish' % (self.stack, job['id']), {'exit_status': code, 'detail': detail[:4000]})
-
-    def tick(self):
-        month = month_of(self.now())
-        subscription = self.environ.get('CERID_CI_BUDGET_SUBSCRIPTION')
-        if subscription:
-            pull_budget(self.store, subscription, http=self.http)
-        cap = float(self.registry['budget']['monthly_cap_usd'])
-        stop = gcp_budget_stop(self.store, month)
-        spent = month_spend(self.store, month)
-        launched = []
-        for job in self.scheduled():
-            device = self.route(job)
-            if device is None or device['executor'] not in self.executors:
-                self.finish(job, 1, 'no launchable device for rules %s' % job.get('agent_query_rules'))
-                continue
-            executor = self.executors[device['executor']]
-            hourly = float(device.get('cost_per_hour_usd', 0.0))
-            bound = hourly * float(device.get('executor_config', {}).get('max_run_hours', 6))
-            if hourly > 0 and (stop or spent + bound > cap):
-                detail = 'budget: %.2f of %.2f USD this month%s' % (spent, cap, '; GCP budget stop' if stop else '')
-                self.finish(job, BUDGET_EXIT, detail)
-                # The dashboard shows the cell as budget, never as a failure or a pass.
-                build = str((job.get('build') or {}).get('number') or 'local')
-                step = (job.get('step') or {}).get('key') or job['id']
-                self.store.put_json('results/%s/%s.json' % (build, step), {
-                    'schema': RESULT_SCHEMA, 'step': step, 'device': device['id'], 'outcome': 'budget',
-                    'build': build, 'reason': detail, 'finished': self.now().isoformat(timespec='seconds')})
-                continue
-            reserved = self.call('PUT', '/%s/scheduled-jobs/batch-reserve' % self.stack,
-                                 {'job_uuids': [job['id']], 'reservation_expiry_seconds': 1800})
-            if job['id'] not in reserved.get('reserved', []):
-                continue
-            issued = self.call('POST', '/%s/job-acquisition-tokens' % self.stack,
-                               {'job_uuids': [job['id']], 'token_lifetime_seconds': 1800})
-            tokens = {t['job_uuid']: t['job_acquisition_token'] for t in issued.get('job_acquisition_tokens', [])}
-            if job['id'] not in tokens:
-                continue
-            try:
-                handle = executor.launch(job['id'], device, tokens[job['id']])
-            except Exception as error:  # a launch failure ends the job with its reason, never a silent hang
-                self.finish(job, 1, 'launch failed on %s: %s' % (device['id'], error))
-                continue
-            spent += bound
-            record = {'job': job['id'], 'device': device['id'], 'executor': device['executor'], 'handle': handle,
-                      'started': self.now().isoformat(timespec='seconds'), 'rate': hourly}
-            self.store.put_json('machines/%s.json' % job['id'], record)
-            launched.append(record)
-        self.reap()
-        return launched
-
-    def reap(self):
-        running = [self.store.get_json(n) for n in self.store.list('machines/')]
-        running = [r for r in running if r and not r.get('ended')]
-        if not running:
-            return []
-        states = self.call('POST', '/%s/jobs/get-states' % self.stack,
-                           {'job_uuids': [r['job'] for r in running]}).get('states', {})
-        ended = []
-        for record in running:
-            if states.get(record['job']) in ('finished', 'canceled', 'expired', 'timed_out', 'skipped', 'broken'):
-                executor = self.executors.get(record['executor'])
-                if executor is not None:
-                    executor.teardown(record['handle'])
-                now = self.now()
-                started = dt.datetime.fromisoformat(record['started'])
-                hours = max((now - started).total_seconds(), 60.0) / 3600.0
-                record['ended'] = now.isoformat(timespec='seconds')
-                record['usd'] = round(hours * record['rate'], 4)
-                self.store.put_json('machines/%s.json' % record['job'], record)
-                self.store.put_json('ledger/%s/%s.json' % (month_of(now), record['job']),
-                                    {'device': record['device'], 'hours': round(hours, 4), 'usd': record['usd']})
-                ended.append(record)
-        return ended
-
-
-def read_token(environ, name):
-    path = environ.get(name)
-    if not path or not Path(path).is_file():
-        raise SystemExit('%s must name the file holding the token (never the value itself)' % name)
-    return Path(path).read_text(encoding='utf-8').strip()
-
-
 # --------------------------------------------------------------------------------------------- command line
 
 def main(argv=None):
@@ -2078,8 +2121,8 @@ def main(argv=None):
     p_plan.add_argument('--head', default='HEAD')
     p_plan.add_argument('--tier', default=None)
     p_plan.add_argument('--fresh', action='store_true', help='ignore the result cache')
-    p_plan.add_argument('--buildkite', action='store_true', help='print the Buildkite pipeline instead')
-    p_upload = sub.add_parser('upload', help='plan this Buildkite build and upload its pipeline')
+    p_plan.add_argument('--document', action='store_true', help='print the orchestrator steps document instead')
+    p_upload = sub.add_parser('upload', help='plan this build and upload its steps to the coordinator')
     p_upload.add_argument('--fresh', action='store_true')
     p_lane = sub.add_parser('lane', help='run one lane')
     p_lane.add_argument('--preset', required=True)
@@ -2091,9 +2134,6 @@ def main(argv=None):
     p_run.add_argument('which', choices=('preflight', 'repository'))
     p_con = sub.add_parser('conclude', help='the required result of a build')
     p_con.add_argument('--plan', required=True)
-    p_dis = sub.add_parser('dispatch', help='the launcher loop')
-    p_dis.add_argument('--once', action='store_true')
-    p_dis.add_argument('--interval', type=float, default=15.0)
     p_probe = sub.add_parser('probe', help='a device probe')
     p_probe.add_argument('which', choices=('macos',))
     p_probe.add_argument('--device')
@@ -2109,15 +2149,15 @@ def main(argv=None):
 
     if args.command == 'plan':
         planned = plan(args.event, args.base, args.head, args.tier, fresh=args.fresh)
-        document = buildkite_pipeline(planned, load_registry()['queues']) if args.buildkite else planned
+        document = orchestrator_pipeline(planned, load_registry()['queues']) if args.document else planned
         print(json.dumps(document, indent=1))
         return 0
     if args.command == 'upload':
         if run_checks('preflight') != 0:
             return 1
         store = open_store()
-        event, base, requested = buildkite_event(os.environ)
-        branch = os.environ.get('BUILDKITE_BRANCH', 'main')
+        event, base, requested = cerid_event(os.environ)
+        branch = os.environ.get('CERID_CI_BRANCH', 'main')
         if event == 'push' and not base:
             base = push_base(store, branch)
         if base.startswith('origin/'):
@@ -2129,12 +2169,12 @@ def main(argv=None):
         planned = plan(event, base, 'HEAD', requested, store=store, fresh=args.fresh or bool(
             os.environ.get('CERID_CI_FRESH')))
         Path('ci-plan.json').write_text(json.dumps(planned, indent=1) + '\n', encoding='utf-8')
-        subprocess.run(['buildkite-agent', 'artifact', 'upload', 'ci-plan.json'], check=True)
-        pipeline = json.dumps(buildkite_pipeline(planned, load_registry()['queues']))
-        subprocess.run(['buildkite-agent', 'pipeline', 'upload'], input=pipeline, text=True, check=True)
+        subprocess.run(agent_tool('artifact', 'upload', 'ci-plan.json'), cwd=str(ROOT), check=True)
+        document = json.dumps(orchestrator_pipeline(planned, load_registry()['queues']))
+        subprocess.run(agent_tool('pipeline', 'upload', '-'), input=document, text=True, check=True)
         store.put_json('heads/%s.json' % branch.replace('/', '__'), {'head': subprocess.run(
             ['git', 'rev-parse', 'HEAD'], cwd=str(ROOT), capture_output=True, text=True, check=True).stdout.strip(),
-            'build': os.environ.get('BUILDKITE_BUILD_NUMBER')})
+            'build': os.environ.get('CERID_CI_BUILD_NUMBER')})
         return 0
     if args.command == 'lane':
         registry = load_registry()
@@ -2147,21 +2187,11 @@ def main(argv=None):
         return run_checks(args.which)
     if args.command == 'conclude':
         if not Path(args.plan).is_file():
-            subprocess.run(['buildkite-agent', 'artifact', 'download', args.plan, '.'], check=False)
+            subprocess.run(agent_tool('artifact', 'download', args.plan, args.plan), check=False)
         planned = load_json(args.plan)
-        ok, rows = conclude(planned, buildkite_outcome)
+        ok, rows = conclude(planned, orchestrator_outcome)
         print(ci_tier.conclusion_markdown(ok, rows, planned['tier']))
         return 0 if ok else 1
-    if args.command == 'dispatch':
-        registry = load_registry()
-        dispatcher = Dispatcher(registry, open_store(), read_token(os.environ, 'CERID_BUILDKITE_AGENT_TOKEN_FILE'))
-        dispatcher.register()
-        while True:
-            for record in dispatcher.tick():
-                print('launched %s on %s' % (record['job'], record['device']))
-            if args.once:
-                return 0
-            time.sleep(args.interval)
     if args.command == 'probe':
         return probe_macos()
     if args.command == 'jail':

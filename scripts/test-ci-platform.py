@@ -48,11 +48,11 @@ PRESETS = [p['name'] for p in json.loads((ROOT / 'CMakePresets.json').read_text(
            if not p.get('hidden')]
 ROWS = set(pipeline.roadmap_ids())
 WORKFLOW = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
-ALL_ACCOUNTS = {'CERID_BUILDKITE_ORG': 'org', 'CERID_CI_GCP_PROJECT': 'cerid-ci', 'CERID_CI_BUDGET_SUBSCRIPTION': 's',
+ALL_ACCOUNTS = {'CERID_CI_URL': 'https://ci.example', 'CERID_CI_GCP_PROJECT': 'cerid-ci', 'CERID_CI_BUDGET_SUBSCRIPTION': 's',
                 'CERID_CI_RUNNER_SERVICE_ACCOUNT': 'runner@cerid-ci', 'CERID_CI_STORE': 'x', 'CERID_FTL_PROJECT': 'f',
                 'CERID_CLOUDFLARE_ACCOUNT_ID': 'a', 'CERID_SSH_AMD_DEVCLOUD_HOST': 'h', 'CERID_SSH_MAC_HOST': 'h',
                 'CERID_SSH_WINDOWS_ARM64_HOST': 'h', 'CERID_SSH_INTEL_TIBER_HOST': 'h', 'CERID_CI_OWNED_AGENTS': '1'}
-SECRETS = {'buildkite-agent-token', 'cloudflare-pages-token'}
+SECRETS = {'cloudflare-pages-token'}
 
 
 def fake_entries(extra=()):
@@ -364,47 +364,63 @@ class Plan(unittest.TestCase):
                      if s['key'] == 'lane-win-debug')
         self.assertEqual(fresh['state'], 'run')
 
-    def test_buildkite_document(self):
+    def test_orchestrator_document(self):
+        from coordinator import steps as orchestrator_steps
         store = pipeline.LocalStore(tempfile.mkdtemp(prefix='cerid-plan-'))
         store.put_json('ledger/2026-10/x.json', {'usd': 49.9})
         planned = self.plan(event='schedule', store=store)
-        document = pipeline.buildkite_pipeline(planned, REGISTRY['queues'])
-        json.dumps(document)
-        steps = {s['key']: s for s in document['steps']}
+        document = pipeline.orchestrator_pipeline(planned, REGISTRY['queues'])
+        normalized, _ = orchestrator_steps.normalize(json.loads(json.dumps(document)), existing_keys={'plan'})
+        self.assertEqual(document['schema'], orchestrator_steps.SCHEMA)
+        steps = {s['key']: s for s in normalized}
         required = steps['required']
-        self.assertEqual({d['step'] for d in required['depends_on']},
-                         {s['key'] for s in planned['steps']})
+        self.assertEqual({d['step'] for d in required['depends_on']}, {s['key'] for s in planned['steps']})
+        self.assertTrue(all(d['allow_failure'] for d in required['depends_on']))
+        self.assertEqual(steps['dashboard']['depends_on'], [{'step': 'required', 'allow_failure': True}])
         for step in planned['steps']:
             entry = steps[step['key']]
             self.assertEqual(entry['agents']['device'], step['device'])
             self.assertEqual(entry['retry'], pipeline.RETRY)
+            self.assertEqual(entry['priority'], 3 - step['priority'])
             if step['state'] in ('budget', 'cached'):
-                self.assertLessEqual(len(entry['skip']), 70)
-                self.assertTrue(entry['skip'].startswith(step['state']))
+                self.assertEqual(entry['skip'], {'state': step['state'], 'reason': step['reason']})
             else:
-                self.assertNotIn('skip', entry)
-        owned = [s for s in planned['steps'] if REGISTRY and pipeline.devices_by_id(REGISTRY)[s['device']][
+                self.assertIsNone(entry['skip'])
+            if entry['agents']['queue'] == 'cerid-cloud':
+                self.assertEqual((entry['concurrency_group'], entry['concurrency']), pipeline.CLOUD_GROUP)
+        owned = [s for s in planned['steps'] if pipeline.devices_by_id(REGISTRY)[s['device']][
             'executor'] == 'owned_agent']
         for step in owned:
             self.assertEqual(steps[step['key']]['agents']['queue'], 'cerid-owned')
+            self.assertIsNone(steps[step['key']]['concurrency_group'])
 
     def test_runner_settings_travel_in_the_document_and_secrets_do_not(self):
         planned = self.plan(paths=['docs/ROADMAP.md'])
-        document = pipeline.buildkite_pipeline(planned, REGISTRY['queues'], environ={
+        document = pipeline.orchestrator_pipeline(planned, REGISTRY['queues'], environ={
             'CERID_CI_STORE': 'gs://cerid-ci-results', 'CERID_CI_SCCACHE_BUCKET': 'cerid-ci-sccache',
-            'CERID_CI_GCP_PROJECT': 'cerid-ci', 'CERID_BUILDKITE_AGENT_TOKEN_FILE': '/run/token'})
+            'CERID_CI_GCP_PROJECT': 'cerid-ci', 'CERID_CI_SECRETS_DIR': '/run/secrets'})
         self.assertEqual(document['env']['CERID_CI_STORE'], 'gs://cerid-ci-results')
         self.assertEqual(document['env']['CERID_CI_SCCACHE_BUCKET'], 'cerid-ci-sccache')
-        self.assertNotIn('CERID_BUILDKITE_AGENT_TOKEN_FILE', json.dumps(document))
+        self.assertNotIn('CERID_CI_SECRETS_DIR', json.dumps(document))
 
-    def test_buildkite_events(self):
-        self.assertEqual(pipeline.buildkite_event({'BUILDKITE_SOURCE': 'schedule'})[0], 'schedule')
-        self.assertEqual(pipeline.buildkite_event({'BUILDKITE_SOURCE': 'ui', 'CERID_CI_TIER': 'change'}),
+    def test_orchestrator_events(self):
+        self.assertEqual(pipeline.cerid_event({'CERID_CI_SOURCE': 'schedule'})[0], 'schedule')
+        self.assertEqual(pipeline.cerid_event({'CERID_CI_SOURCE': 'manual', 'CERID_CI_TIER': 'change'}),
                          ('workflow_dispatch', '', 'change'))
-        self.assertEqual(pipeline.buildkite_event({'BUILDKITE_SOURCE': 'webhook', 'BUILDKITE_PULL_REQUEST': '7',
-                                                   'BUILDKITE_PULL_REQUEST_BASE_BRANCH': 'main'}),
+        self.assertEqual(pipeline.cerid_event({'CERID_CI_SOURCE': 'webhook', 'CERID_CI_EVENT': 'pull_request',
+                                               'CERID_CI_PULL_REQUEST': '7',
+                                               'CERID_CI_PULL_REQUEST_BASE_BRANCH': 'main'}),
                          ('pull_request', 'origin/main', None))
-        self.assertEqual(pipeline.buildkite_event({'BUILDKITE_SOURCE': 'webhook'})[0], 'push')
+        self.assertEqual(pipeline.cerid_event({'CERID_CI_SOURCE': 'webhook', 'CERID_CI_PULL_REQUEST': 'false'})[0],
+                         'push')
+        self.assertEqual(pipeline.cerid_event({'CERID_CI_SOURCE': 'poll'})[0], 'push')
+
+    def test_a_soft_failed_step_counts_as_passed_for_the_required_result(self):
+        from unittest import mock
+        done = subprocess.CompletedProcess([], 0, 'soft_failed\n', '')
+        with mock.patch.object(pipeline.subprocess, 'run', return_value=done) as run:
+            self.assertEqual(pipeline.orchestrator_outcome('lane-x'), 'passed')
+        self.assertEqual(run.call_args[0][0][-3:], ['step', 'outcome', 'lane-x'])
 
     def test_conclusion_never_passes_budget_and_accepts_cached(self):
         planned = {'steps': [{'key': 'a', 'state': 'run'}, {'key': 'b', 'state': 'cached'}]}
@@ -477,7 +493,7 @@ class Lanes(unittest.TestCase):
         self.assertFalse(any('check-genmc-models.py' in ' '.join(map(str, c['argv'])) for c in debug))
 
     def test_a_failed_phase_still_bundles_and_uploads(self):
-        run = pipeline.Runner(environ={'PATH': '', 'BUILDKITE': 'true'}, dry=True, log=lambda *_: None)
+        run = pipeline.Runner(environ={'PATH': '', 'CERID_CI': '1'}, dry=True, log=lambda *_: None)
         device = pipeline.devices_by_id(REGISTRY)['gce-linux-x64-intel']
         lane = pipeline.Lane('linux-gcc-release', device, tiers=TIERS, run=run, temp=tempfile.mkdtemp())
 
@@ -489,6 +505,9 @@ class Lanes(unittest.TestCase):
         text = [' '.join(map(str, c['argv'])) for c in run.commands]
         self.assertTrue(any('ci-evidence.py bundle' in t and '--outcome failure' in t for t in text))
         self.assertTrue(any('artifact upload' in t for t in text))
+        # The summary is the annotation's body: a file, because the runner gives commands no standard input.
+        self.assertTrue(any('annotate --context linux-gcc-release --style error --body-file' in t and
+                            t.endswith('summary.md') for t in text))
         self.assertFalse(any('ci-evidence.py inventory' in t for t in text))
 
     def test_per_test_cache_is_one_record_per_run(self):
@@ -512,7 +531,7 @@ class Lanes(unittest.TestCase):
                              '<testcase name="case-299"><failure/></testcase></testsuite>', encoding='utf-8')
             store = CountingStore(Path(scratch) / 'store')
             device = pipeline.devices_by_id(REGISTRY)['gce-linux-x64-intel']
-            run = pipeline.Runner(environ={'BUILDKITE_BUILD_NUMBER': '7'}, dry=False, log=lambda *_: None)
+            run = pipeline.Runner(environ={'CERID_CI_BUILD_NUMBER': '7'}, dry=False, log=lambda *_: None)
             lane = pipeline.Lane('linux-gcc-release', device, tiers=TIERS, run=run, temp=scratch, store=store)
             lane.build_dir = str(build)  # absolute: ROOT / build_dir is the scratch tree
             lane.record_tests(str(junit))
@@ -617,23 +636,23 @@ class Console(unittest.TestCase):
         self.assertTrue(pipeline.wx_allocation_allowed())
 
 
+AGENT_SPEC = {'coordinator': 'http://10.128.0.2:8780', 'external': 'https://ci.example',
+              'agent_url': 'http://10.128.0.2:8780/agent/cerid-agent.py', 'agent_sha256': 'ab' * 32}
+
+
 class Executors(unittest.TestCase):
-    PINS = json.loads((ROOT / 'cmake/pins.json').read_text(encoding='utf-8'))
+    def test_no_buildkite_agent_and_no_digest_lives_in_ci_sources(self):
+        pins = json.loads((ROOT / 'cmake/pins.json').read_text(encoding='utf-8'))['tools']
+        self.assertFalse([name for name in pins if name.startswith('buildkite')])
+        for path in list((ROOT / 'ci').rglob('*.py')) + [ROOT / 'ci/devices.json', ROOT / 'ci/coordinator.json']:
+            text = path.read_text(encoding='utf-8')
+            self.assertIsNone(re.search(r'\b[0-9a-f]{64}\b', text), path)
+            self.assertNotIn('buildkite-agent', text, path)
 
-    def test_agent_pins_exist_and_no_digest_lives_in_ci_sources(self):
-        for name in executors.AGENT_PINS.values():
-            pin = self.PINS['tools'][name]
-            self.assertRegex(pin['sha256'], r'^[0-9a-f]{64}$')
-            self.assertRegex(pin['member_sha256'], r'^[0-9a-f]{64}$')
-            self.assertEqual(pin['version'], '4.6.0')
-        for path in list((ROOT / 'ci').rglob('*.py')) + [ROOT / 'ci/devices.json']:
-            self.assertIsNone(re.search(r'\b[0-9a-f]{64}\b', path.read_text(encoding='utf-8')), path)
-
-    def test_gce_body_is_a_bounded_spot_machine(self):
-        executor = gce_vm.GceVm({'CERID_CI_GCP_PROJECT': 'cerid-ci', 'CERID_CI_RUNNER_SERVICE_ACCOUNT': 'r@x'},
-                                pins=self.PINS)
+    def test_gce_body_is_a_bounded_spot_machine_without_a_credential(self):
+        executor = gce_vm.GceVm({'CERID_CI_GCP_PROJECT': 'cerid-ci', 'CERID_CI_RUNNER_SERVICE_ACCOUNT': 'r@x'})
         device = pipeline.devices_by_id(REGISTRY)['gce-linux-x64-nvidia-l4']
-        zone, body = executor.body('0190ABCD-1234', device, 'acquisition-token')
+        zone, body = executor.body('cerid-ci-0190abcd-a1', device, AGENT_SPEC)
         self.assertEqual(body['scheduling']['provisioningModel'], 'SPOT')
         self.assertEqual(body['scheduling']['instanceTerminationAction'], 'DELETE')
         self.assertEqual(body['scheduling']['maxRunDuration'], {'seconds': 4 * 3600})
@@ -641,32 +660,49 @@ class Executors(unittest.TestCase):
         self.assertIn('acceleratorTypes/nvidia-l4', body['guestAccelerators'][0]['acceleratorType'])
         self.assertRegex(body['name'], r'^[a-z][a-z0-9-]{0,61}$')
         items = {i['key']: i['value'] for i in body['metadata']['items']}
-        pin = self.PINS['tools']['buildkite-agent-linux-amd64']
-        self.assertEqual((items['cerid-agent-url'], items['cerid-agent-sha256']), (pin['url'], pin['sha256']))
-        self.assertIn('BUILDKITE_AGENT_ACQUIRE_JOB', items['startup-script'])
+        self.assertEqual((items['cerid-agent-url'], items['cerid-agent-sha256'], items['cerid-coordinator']),
+                         (AGENT_SPEC['agent_url'], AGENT_SPEC['agent_sha256'], AGENT_SPEC['coordinator']))
+        self.assertIn('--identity gce', items['startup-script'])
         self.assertIn('sha256sum -c', items['startup-script'])
         self.assertIn('device=gce-linux-x64-nvidia-l4', items['cerid-agent-tags'])
+        self.assertFalse([k for k in items if 'token' in k], 'a GCE machine is given no token at all')
         self.assertIn('images/family/cerid-ci-ubuntu-2404-x64-nvidia', body['disks'][0]['initializeParams']['sourceImage'])
+        with self.assertRaises(ValueError):
+            executor.body('m', device, dict(AGENT_SPEC, token='cjt_x'))
 
     def test_gce_console_and_android_machine_features(self):
-        executor = gce_vm.GceVm({}, pins=self.PINS)
-        _, xbox = executor.body('j', pipeline.devices_by_id(REGISTRY)['gce-console-profile-xbox'], 't')
+        executor = gce_vm.GceVm({})
+        _, xbox = executor.body('m', pipeline.devices_by_id(REGISTRY)['gce-console-profile-xbox'], AGENT_SPEC)
         self.assertEqual(xbox['minCpuPlatform'], 'AMD Rome')
         self.assertEqual(xbox['advancedMachineFeatures'], {'threadsPerCore': 2})
-        self.assertIn('windows-startup-script-ps1', {i['key'] for i in xbox['metadata']['items']})
-        _, android = executor.body('j', pipeline.devices_by_id(REGISTRY)['android-emulator-phone-x86_64'], 't')
+        items = {i['key']: i['value'] for i in xbox['metadata']['items']}
+        self.assertIn('Get-FileHash -Algorithm SHA256', items['windows-startup-script-ps1'])
+        _, android = executor.body('m', pipeline.devices_by_id(REGISTRY)['android-emulator-phone-x86_64'], AGENT_SPEC)
         self.assertTrue(android['advancedMachineFeatures']['enableNestedVirtualization'])
 
-    def test_gce_launch_and_teardown_calls(self):
+    def test_gce_launch_probe_list_and_teardown_calls(self):
         calls = []
-        executor = gce_vm.GceVm({'CERID_CI_GCP_PROJECT': 'cerid-ci'}, http=lambda *a, **k: calls.append((a, k)) or (
-            200, {}), token=lambda: 't', pins=self.PINS)
-        handle = executor.launch('job-1', pipeline.devices_by_id(REGISTRY)['gce-linux-x64-intel'], 'tok')
+
+        def http(method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            if method == 'GET' and '/aggregated/' in url:
+                return 200, {'items': {'zones/us-central1-a': {'instances': [
+                    {'name': 'cerid-ci-x', 'creationTimestamp': '2026-10-30T12:00:00.000-07:00'}]}}}
+            if method == 'GET':
+                return (404, {}) if url.endswith('/gone') else (200, {'status': 'RUNNING'})
+            return 200, {}
+        executor = gce_vm.GceVm({'CERID_CI_GCP_PROJECT': 'cerid-ci'}, http=http, token=lambda: 't')
+        handle = executor.launch('cerid-ci-job-1-a1', pipeline.devices_by_id(REGISTRY)['gce-linux-x64-intel'],
+                                 AGENT_SPEC)
+        self.assertTrue(executor.alive(handle))
+        self.assertFalse(executor.alive(dict(handle, instance='gone')))
+        self.assertEqual([m['name'] for m in executor.machines()], ['cerid-ci-x'])
+        self.assertIn('filter=labels.cerid-ci%3Djob', calls[3][1])
         executor.teardown(handle)
-        self.assertEqual(calls[0][0][0], 'POST')
-        self.assertTrue(calls[0][0][1].endswith('/projects/cerid-ci/zones/us-central1-a/instances'))
-        self.assertEqual(calls[1][0][0], 'DELETE')
-        self.assertEqual(calls[1][1]['allow'], (404,))
+        self.assertEqual(calls[0][0], 'POST')
+        self.assertTrue(calls[0][1].endswith('/projects/cerid-ci/zones/us-central1-a/instances'))
+        self.assertEqual(calls[-1][0], 'DELETE')
+        self.assertEqual(calls[-1][2]['allow'], (404,))
 
     def test_bake_provisioning(self):
         device = pipeline.devices_by_id(REGISTRY)['gce-linux-x64-nvidia-l4']
@@ -674,8 +710,11 @@ class Executors(unittest.TestCase):
         self.assertIn('mesa-vulkan-drivers', script)
         self.assertIn('ubuntu-drivers install', script)
         self.assertIn('image-census.txt', script)
+        # Lane commands start with `python`; Ubuntu ships only python3 unless python-is-python3 is installed.
+        self.assertIn('python-is-python3', script)
         windows = gce_vm.provision_script(pipeline.devices_by_id(REGISTRY)['gce-windows-x64'], [])
         self.assertIn('Microsoft.VisualStudio.2026.BuildTools', windows)
+        self.assertIn('--scope machine --id Python.Python.3.12', windows)
         self.assertNotIn('{extra}', windows)
 
     def test_ssh_host_sends_the_token_on_standard_input_only(self):
@@ -687,27 +726,53 @@ class Executors(unittest.TestCase):
 
         environ = {'CERID_SSH_AMD_DEVCLOUD_HOST': 'cerid@amd.example', 'CERID_SSH_AMD_DEVCLOUD_KEY_FILE': 'k',
                    'CERID_SSH_AMD_DEVCLOUD_KNOWN_HOSTS': 'kh'}
-        executor = ssh_host.SshHost(environ, run=run, pins=self.PINS)
+        executor = ssh_host.SshHost(environ, run=run)
         device = pipeline.devices_by_id(REGISTRY)['amd-developer-cloud-mi300x']
         self.assertEqual(executor.missing(device), [])
-        executor.launch('job-9', device, 'SECRET-TOKEN')
+        executor.launch('cerid-ci-j-a1', device, dict(AGENT_SPEC, token='SECRET-TOKEN'))
         self.assertNotIn('SECRET-TOKEN', ' '.join(seen['argv']))
         self.assertIn('StrictHostKeyChecking=yes', seen['argv'])
         lines = seen['input'].split('\n')
         self.assertEqual(lines[:2], ['read -r token', 'SECRET-TOKEN'])
-        self.assertIn(self.PINS['tools']['buildkite-agent-linux-amd64']['sha256'], seen['input'])
-        self.assertEqual(ssh_host.SshHost({}, pins=self.PINS).missing(device),
+        self.assertIn(AGENT_SPEC['agent_sha256'], seen['input'])
+        self.assertIn("'https://ci.example/agent/cerid-agent.py'", seen['input'], 'an SSH host uses the external URL')
+        self.assertIn('--token-file', seen['input'])
+        self.assertEqual(seen['input'].count('SECRET-TOKEN'), 1)
+        with self.assertRaises(RuntimeError):
+            executor.launch('m', device, AGENT_SPEC)
+        self.assertEqual(ssh_host.SshHost({}).missing(device),
                          ['CERID_SSH_AMD_DEVCLOUD_HOST', 'CERID_SSH_AMD_DEVCLOUD_KEY_FILE',
                           'CERID_SSH_AMD_DEVCLOUD_KNOWN_HOSTS'])
 
-    def test_firebase_command_and_quota(self):
-        executor = firebase_test_lab.FirebaseTestLab({'CERID_FTL_PROJECT': 'ftl-project'}, pins=self.PINS)
+    def test_firebase_command_quota_and_launch(self):
+        launched = {}
+
+        class Process:
+            pid = 7
+
+            class stdin:
+                @staticmethod
+                def write(data):
+                    launched['stdin'] = data
+
+                @staticmethod
+                def close():
+                    launched['closed'] = True
+
+        def popen(argv, **kwargs):
+            launched['argv'] = argv
+            return Process()
+        executor = firebase_test_lab.FirebaseTestLab({'CERID_FTL_PROJECT': 'ftl-project'}, popen=popen)
         device = pipeline.devices_by_id(REGISTRY)['ftl-pixel-phone']
         command = executor.test_command(device, 'app.apk')
         self.assertEqual(command[:5], ['gcloud', 'firebase', 'test', 'android', 'run'])
         self.assertIn('model=shiba,version=34,locale=en,orientation=portrait', command)
         ios = executor.test_command(pipeline.devices_by_id(REGISTRY)['ftl-iphone'], 'tests.zip', kind='xctest')
         self.assertEqual(ios[3], 'ios')
+        executor.launch('cerid-ci-f-a1', device, dict(AGENT_SPEC, token='ONE-JOB'))
+        self.assertNotIn('ONE-JOB', ' '.join(launched['argv']))
+        self.assertEqual((launched['stdin'], launched['closed']), (b'ONE-JOB\n', True))
+        self.assertIn('--token-stdin', launched['argv'])
         with tempfile.TemporaryDirectory() as scratch:
             store = pipeline.LocalStore(scratch)
             for i in range(5):
@@ -716,138 +781,42 @@ class Executors(unittest.TestCase):
             self.assertEqual(executor.quota_left(store, device, today='2026-10-30'), 0)
             self.assertEqual(executor.quota_left(store, device, today='2026-10-31'), 5)
 
-    def test_owned_agent_config_names_a_token_file_never_a_token(self):
+    def test_owned_agent_names_a_registration_token_file_never_a_token(self):
         device = pipeline.devices_by_id(REGISTRY)['owned-windows-x64-workstation']
-        agent = owned_agent.OwnedAgent({}, pins=self.PINS)
-        config = agent.config(device)
-        self.assertIn('token="file://C:/cerid-ci/agent-token"', config)
+        agent = owned_agent.OwnedAgent({})
+        config = agent.config(device, 'https://ci.example')
+        self.assertIn('--registration-token-file C:\\cerid-ci\\registration-token', config)
         self.assertIn('device=owned-windows-x64-workstation', config)
-        self.assertIn('queue=cerid-owned', config)
+        self.assertIn('--mode long-running', config)
+        self.assertTrue(any('agent-token create --name owned-windows-x64-workstation' in s
+                            for s in agent.install(device)))
         with self.assertRaises(RuntimeError):
-            agent.launch('j', device, 't')
-
-
-class FakeStacks:
-    """Buildkite's Stacks API as a fake."""
-
-    def __init__(self, jobs, paused=False):
-        self.jobs = jobs
-        self.paused = paused
-        self.calls = []
-        self.finished = {}
-        self.states = {}
-
-    def __call__(self, method, url, token=None, scheme=None, body=None, **_):
-        self.calls.append((method, url, body))
-        path = url.split('/v3/stacks', 1)[1]
-        if path == '/register':
-            return 201, {'key': body['key']}
-        if '/scheduled-jobs?' in path:
-            return 200, {'jobs': self.jobs, 'page_info': {'has_next_page': False},
-                         'cluster_queue': {'dispatch_paused': self.paused}}
-        if path.endswith('/batch-reserve'):
-            return 200, {'reserved': body['job_uuids'], 'not_reserved': []}
-        if path.endswith('/job-acquisition-tokens'):
-            return 201, {'job_acquisition_tokens': [{'job_uuid': j, 'job_acquisition_token': 'acq-' + j}
-                                                    for j in body['job_uuids']], 'not_issued': []}
-        if path.endswith('/finish'):
-            self.finished[path.split('/')[-2]] = body
-            return 200, {}
-        if path.endswith('/get-states'):
-            return 200, {'states': {j: self.states.get(j, 'running') for j in body['job_uuids']}}
-        raise AssertionError(path)
-
-
-class FakeExecutor:
-    def __init__(self, fail=False):
-        self.launched = []
-        self.torn = []
-        self.fail = fail
-
-    def launch(self, job_id, device, token):
-        if self.fail:
-            raise RuntimeError('quota exceeded')
-        self.launched.append((job_id, device['id'], token))
-        return {'instance': job_id}
-
-    def teardown(self, handle):
-        self.torn.append(handle)
+            agent.launch('j', device, AGENT_SPEC)
 
 
 class Dispatch(unittest.TestCase):
-    def make(self, jobs, store, paused=False, fail=False, now=None):
-        http = FakeStacks(jobs, paused)
-        executor = FakeExecutor(fail)
-        dispatcher = pipeline.Dispatcher(REGISTRY, store, 'agent-token', http=http, environ={},
-                                         executors={'gce_vm': executor, 'ssh_host': executor,
-                                                    'firebase_test_lab': executor},
-                                         now=now or (lambda: dt.datetime(2026, 10, 30, 12, tzinfo=dt.timezone.utc)))
-        return dispatcher, http, executor
-
-    def test_jobs_route_by_their_device_rule_and_get_one_job_tokens(self):
-        store = pipeline.LocalStore(tempfile.mkdtemp())
-        jobs = [{'id': 'j1', 'agent_query_rules': ['queue=cerid-cloud', 'device=gce-linux-x64-intel']},
-                {'id': 'j2', 'agent_query_rules': ['queue=cerid-cloud', 'device=no-such-device']}]
-        dispatcher, http, executor = self.make(jobs, store)
-        dispatcher.register()
-        launched = dispatcher.tick()
-        self.assertEqual([r['job'] for r in launched], ['j1'])
-        self.assertEqual(executor.launched, [('j1', 'gce-linux-x64-intel', 'acq-j1')])
-        self.assertEqual(http.finished['j2']['exit_status'], 1)
-        self.assertEqual(store.get_json('machines/j1.json')['device'], 'gce-linux-x64-intel')
-
-    def test_paid_jobs_past_the_cap_end_as_budget(self):
-        store = pipeline.LocalStore(tempfile.mkdtemp())
-        store.put_json('ledger/2026-10/old.json', {'usd': 49.9})
-        jobs = [{'id': 'j1', 'agent_query_rules': ['device=gce-windows-x64']}]
-        dispatcher, http, executor = self.make(jobs, store)
-        dispatcher.tick()
-        self.assertEqual(executor.launched, [])
-        self.assertEqual(http.finished['j1']['exit_status'], pipeline.BUDGET_EXIT)
-        self.assertTrue(http.finished['j1']['detail'].startswith('budget:'))
-        jobs[0].update({'build': {'number': 77}, 'step': {'key': 'lane-win-debug'}})
-        dispatcher.tick()
-        record = store.get_json('results/77/lane-win-debug.json')
-        self.assertEqual(record['outcome'], 'budget')
-        cells, _ = dashboard.matrix(REGISTRY, [record])
-        self.assertEqual(cells[('gce-windows-x64', 'build')]['state'], 'budget')
-
-    def test_gcp_stop_and_dispatch_pause(self):
-        store = pipeline.LocalStore(tempfile.mkdtemp())
-        store.put_json('budget/gcp-2026-10.json', {'costAmount': 50.0, 'budgetAmount': 50.0})
-        jobs = [{'id': 'j1', 'agent_query_rules': ['device=gce-linux-x64-intel']}]
-        dispatcher, http, executor = self.make(jobs, store)
-        dispatcher.tick()
-        self.assertEqual(http.finished['j1']['exit_status'], pipeline.BUDGET_EXIT)
-        dispatcher, http, executor = self.make(jobs, pipeline.LocalStore(tempfile.mkdtemp()), paused=True)
-        self.assertEqual(dispatcher.tick(), [])
-        self.assertEqual(http.finished, {})
-
-    def test_launch_failure_finishes_the_job_with_its_reason(self):
-        store = pipeline.LocalStore(tempfile.mkdtemp())
-        jobs = [{'id': 'j1', 'agent_query_rules': ['device=gce-linux-x64-intel']}]
-        dispatcher, http, _ = self.make(jobs, store, fail=True)
-        dispatcher.tick()
-        self.assertIn('quota exceeded', http.finished['j1']['detail'])
-
-    def test_reaper_tears_down_and_writes_the_ledger(self):
-        store = pipeline.LocalStore(tempfile.mkdtemp())
-        jobs = [{'id': 'j1', 'agent_query_rules': ['device=gce-linux-x64-intel']}]
-        dispatcher, http, executor = self.make(jobs, store)
-        dispatcher.tick()
-        http.jobs = []
-        http.states['j1'] = 'finished'
-        dispatcher.now = lambda: dt.datetime(2026, 10, 30, 14, tzinfo=dt.timezone.utc)
-        ended = dispatcher.reap()
-        self.assertEqual(len(ended), 1)
-        self.assertEqual(executor.torn, [{'instance': 'j1'}])
-        entry = store.get_json('ledger/2026-10/j1.json')
-        self.assertAlmostEqual(entry['usd'], 0.24, places=4)
-        self.assertEqual(dispatcher.reap(), [])
+    def test_a_budget_refusal_is_a_budget_cell_on_the_dashboard(self):
+        from coordinator import dispatch, scheduler
+        with tempfile.TemporaryDirectory() as scratch:
+            store = pipeline.LocalStore(scratch)
+            store.put_json('ledger/%s/old.json' % pipeline.month_of(), {'usd': 49.9})
+            c = scheduler.Coordinator(store, {'repositories': {'cerid': {'url': 'u'}}},
+                                      log=scheduler.JsonLog(io.StringIO()))
+            build, _ = c.create_build('cerid', {'commit': 'a' * 40, 'branch': 'main'}, 'manual',
+                                      document={'steps': [{'key': 'lane-win-debug', 'command': 'x', 'agents': {
+                                          'queue': 'cerid-cloud', 'device': 'gce-windows-x64'}}]})
+            launched = []
+            executor = type('E', (), {'launch': lambda self, *a: launched.append(a) or {}})()
+            dispatch.Dispatcher(c, REGISTRY, {'gce_vm': executor}).tick()
+            self.assertEqual(launched, [])
+            record = store.get_json('results/%d/lane-win-debug.json' % build['number'])
+            self.assertEqual(record['outcome'], 'budget')
+            cells, _ = dashboard.matrix(REGISTRY, [record])
+            self.assertEqual(cells[('gce-windows-x64', 'build')]['state'], 'budget')
 
 
 class Parity(unittest.TestCase):
-    def test_every_hosted_job_and_step_has_a_buildkite_step(self):
+    def test_every_hosted_job_and_step_has_a_cerid_step(self):
         rows, problems = pipeline.parity_rows(WORKFLOW, TIERS)
         self.assertEqual(problems, [])
         jobs = {row[0] for row in rows}
@@ -959,16 +928,19 @@ class Dashboard(unittest.TestCase):
 
 class Ops(unittest.TestCase):
     def test_accounts_report_names_only(self):
-        environ = {'CERID_CI_GCP_PROJECT': 'very-secret-project-value', 'CERID_BUILDKITE_ORG': 'org-value'}
+        environ = {'CERID_CI_GCP_PROJECT': 'very-secret-project-value', 'CERID_CI_URL': 'org-value'}
         rows = ops.accounts_report(REGISTRY, environ, set())
         text = json.dumps(rows)
         self.assertNotIn('very-secret-project-value', text)
         self.assertNotIn('org-value', text)
         states = {row[0]: row[3] for row in rows}
         self.assertEqual(states['gcp-project'], 'configured')
-        self.assertEqual(states['cloudflare-pages'], 'missing')
+        self.assertEqual(states['coordinator'], 'configured')
+        self.assertEqual(states['cloudflare-access'], 'missing')
         self.assertEqual(states['xbox-partner-center'], 'user program')
-        self.assertEqual(states['buildkite-api-token'], 'missing (optional)')
+        self.assertEqual(states['webhook-secret'], 'missing (optional)')
+        self.assertEqual(states['cloudflare-pages'], 'missing (optional)')
+        self.assertFalse([name for name in states if name.startswith('buildkite')])
 
     def test_add_device_appends_and_keeps_the_existing_text(self):
         text = pipeline.DEVICES.read_text(encoding='utf-8')
@@ -999,11 +971,13 @@ class Ops(unittest.TestCase):
 
 
 class RepositoryFixes(unittest.TestCase):
-    def test_evidence_records_buildkite_run_identity(self):
-        environ = {'BUILDKITE_BUILD_NUMBER': '12', 'BUILDKITE_JOB_ID': 'j', 'BUILDKITE_STEP_KEY': 'lane-win-debug',
-                   'BUILDKITE_PIPELINE_SLUG': 'cerid', 'BUILDKITE_COMMIT': 'abc', 'CERID_CI_DEVICE': 'gce-windows-x64'}
+    def test_evidence_records_the_orchestrator_run_identity(self):
+        environ = {'CERID_CI_BUILD_NUMBER': '12', 'CERID_CI_JOB_ID': 'j', 'CERID_CI_STEP_KEY': 'lane-win-debug',
+                   'CERID_CI_RETRY_COUNT': '1', 'CERID_CI_COMMIT': 'abc', 'CERID_CI_DEVICE': 'gce-windows-x64',
+                   'CERID_CI_AGENT_NAME': 'cerid-ci-x-a2'}
         for key in environ:
             self.assertIn(key, evidence.RUN_KEYS)
+        self.assertFalse([key for key in evidence.RUN_KEYS if key.startswith('BUILDKITE')])
 
     def test_root_layout_accepts_a_worktree_git_file_and_the_ci_directory(self):
         with tempfile.TemporaryDirectory() as scratch:

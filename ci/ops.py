@@ -5,14 +5,24 @@
   add-device   add one cell to ci/devices.json, validated with the whole registry; prints an owned agent's setup
   budget       the cap, the month's spend, the GCP budget stop and what a complete run would cost
   accounts     which account-backed lanes are configured, by name only (never a value)
-  parity       the CI-4 table: every GitHub Actions job and step and the Buildkite step that carries it
+  parity       the CI-4 table: every GitHub Actions job and step and the Cerid orchestrator step that carries it
   bake         bake a device's image family (gce_vm) from its base image
+
+The orchestrator (ci/coordinator, ADR-0135 §12), on the same state the running coordinator uses:
+
+  builds       the recent builds                  build        start a build, or show one (build --number N)
+  retry        retry a job                        cancel       cancel a build or one job
+  agents       the agents (agents --stop ID)      queues       every queue's agents and waiting jobs
+  logs         a job's log (logs JOB --follow)    agent-token  create or revoke an owned machine's registration
+  health       store, coordinator tick, stuck jobs, lost agents, machines
+  backup       the state store to a tar.gz        restore      a backup back into the store
 """
 from __future__ import annotations
 
 from pathlib import Path
 import argparse
 import datetime as dt
+import hashlib
 import importlib.util
 import json
 import os
@@ -217,7 +227,7 @@ def cmd_add_device(args, registry, environ):
     if entry['executor'] == 'owned_agent':
         from executors import owned_agent
         agent = owned_agent.OwnedAgent(environ)
-        print('\nOn the machine, buildkite-agent.cfg:\n' + agent.config(entry))
+        print('\nOn the machine, the agent:\n' + agent.config(entry))
         for step in agent.install(entry):
             print('  - ' + step)
     return 0
@@ -261,6 +271,240 @@ def cmd_bake(args, registry, environ):
     return 0
 
 
+# --------------------------------------------------------------------------------------------- orchestrator
+
+def orchestrator(args, environ):
+    """The coordinator library on the state store, configured like the running coordinator. Every command works
+    beside a running coordinator: all writes are compare-and-swap."""
+    if str(ROOT / 'ci') not in sys.path:
+        sys.path.insert(0, str(ROOT / 'ci'))
+    from coordinator import main as coordinator_main, scheduler
+    config, _ = coordinator_main.load_config(args.config, environ)
+    store = pipeline().open_store(args.store)
+    log = scheduler.JsonLog(open(os.devnull, 'w'))
+    return scheduler.Coordinator(store, config, secrets=coordinator_main.secrets_provider(config, environ), log=log)
+
+
+def when(stamp):
+    return time.strftime('%Y-%m-%d %H:%M:%SZ', time.gmtime(stamp)) if stamp else '-'
+
+
+def cmd_builds(args, registry, environ):
+    c = orchestrator(args, environ)
+    for b in c.recent(args.limit):
+        print('#%-6d %-9s %-10s %-24s %s  %s' % (b['number'], b['state'], b['repository'], (b['branch'] or '')[:24],
+                                                 (b['commit'] or '')[:12], (b['message'] or '')[:60]))
+    return 0
+
+
+def cmd_build(args, registry, environ):
+    c = orchestrator(args, environ)
+    if args.number:
+        view = c.build_view(args.number)
+        print('Build #%d %s  %s %s %s' % (view['number'], view['state'], view['repository'], view['branch'],
+                                         view['commit']))
+        for job in view['jobs']:
+            print('  %-40s %-9s attempt %d  %s' % (job['key'][:40], job['state'] + (' (soft)' if job['soft_failed']
+                                                                                   else ''), job['attempt'],
+                                                   job.get('waiting') or job['reason'] or ''))
+        return 0 if view['state'] in ('passed', 'running', 'scheduled') else 1
+    from coordinator import hosts
+    repo = c.repository(args.repository)
+    commit = args.commit or hosts.ls_remote(repo['url'], [args.branch])[args.branch]
+    env = {}
+    if args.tier:
+        env['CERID_CI_TIER'] = args.tier
+    if args.fresh:
+        env['CERID_CI_FRESH'] = '1'
+    build, _ = c.create_build(args.repository, {'event': 'push', 'branch': args.branch, 'commit': commit,
+                                                'message': args.message or 'manual build (ci/ops.py)',
+                                                'trusted': True}, 'manual', env=env, created_by='ops.py')
+    print('build #%d scheduled for %s at %s' % (build['number'], args.branch, commit))
+    return 0
+
+
+def cmd_retry(args, registry, environ):
+    job = orchestrator(args, environ).retry_job(args.job, by='ops.py')
+    print('job %s (%s) is %s, attempt %d' % (job['id'], job['key'], job['state'], job['attempt']))
+    return 0
+
+
+def cmd_cancel(args, registry, environ):
+    c = orchestrator(args, environ)
+    if args.job:
+        c.cancel_job(args.job, reason='canceled by ops.py')
+    else:
+        c.cancel_build(args.build, by='ops.py')
+    print('cancel requested')
+    return 0
+
+
+def cmd_agents(args, registry, environ):
+    c = orchestrator(args, environ)
+    if args.stop:
+        c.stop_agent(args.stop)
+        print('agent %s stopped' % args.stop)
+        return 0
+    for agent in c.agents():
+        print('%-24s %-8s %-14s %-10s %-8s %s  last %s' % (agent['name'][:24], agent['status'], agent['queue'],
+                                                          agent['os'], agent['arch'], ','.join(
+                                                              '%s=%s' % kv for kv in sorted(agent['tags'].items())),
+                                                          when(agent.get('last_seen'))))
+    return 0
+
+
+def cmd_queues(args, registry, environ):
+    for queue in orchestrator(args, environ).queues():
+        print('%-16s agents %-3d scheduled %-3d assigned %-3d running %-3d oldest wait %ds' % (
+            queue['queue'], queue['agents'], queue['scheduled'], queue['assigned'], queue['running'],
+            queue['oldest_wait_s']))
+    return 0
+
+
+def cmd_logs(args, registry, environ):
+    c = orchestrator(args, environ)
+    start = 0
+    while True:
+        data, start, live, job = c.read_log(args.job, args.attempt, start)
+        sys.stdout.buffer.write(data)
+        sys.stdout.flush()
+        if not (args.follow and live):
+            return 0
+        time.sleep(2)
+
+
+def cmd_agent_token(args, registry, environ):
+    c = orchestrator(args, environ)
+    if args.action == 'revoke':
+        print('%d registration tokens revoked for %s' % (c.revoke_registration(args.name), args.name))
+        return 0
+    if not args.out:
+        print('agent-token create needs --out FILE: the token is written there, never printed')
+        return 1
+    out = Path(args.out)
+    if out.exists():
+        print('%s exists; refusing to overwrite a token file' % out)
+        return 1
+    tags = dict(part.split('=', 1) for part in (args.tags or '').split(',') if '=' in part)
+    token = c.create_registration(args.name, args.queue, tags)
+    descriptor = os.open(str(out), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, 'w', encoding='utf-8') as handle:
+        handle.write(token + '\n')
+    print('registration token for %s (queue %s) written to %s; move it to the machine, readable only by the agent '
+          'user' % (args.name, args.queue, out))
+    return 0
+
+
+def health_report(c, now=None):
+    """(ok, lines): the state store answers, the coordinator ticks, no job is stuck, no agent is lost silently."""
+    now = c.clock() if now is None else now
+    lines = []
+    ok = True
+    try:
+        schema = c.get('schema.json')
+        lines.append('state store: reachable, schema %s' % (schema or {}).get('schema', 'not initialised'))
+    except Exception as error:
+        return False, ['state store: UNREACHABLE (%s)' % error]
+    beat = c.get('coordinator/heartbeat.json')
+    age = now - beat['at'] if beat else None
+    if age is None or age > 60:
+        ok = False
+        lines.append('coordinator: NOT TICKING (last tick %s)' % ('never' if age is None else '%d s ago' % age))
+    else:
+        lines.append('coordinator: ticking (%d s ago, version %s)' % (age, beat.get('version')))
+    stuck = []
+    for number in c.active_builds():
+        build = c.get(c.build_name(number))
+        for job in c.jobs_of(build) if build else []:
+            if job['state'] == 'running':
+                heartbeat = c.store.get_json('orchestrator/heartbeats/%s.json' % job['id']) or {}
+                if now - heartbeat.get('at', job.get('started_at') or now) > 2 * c.limits['lost_after_seconds']:
+                    stuck.append('#%d %s' % (number, job['key']))
+    if stuck:
+        ok = False
+        lines.append('jobs: STUCK past the watchdog: %s' % ', '.join(stuck))
+    else:
+        lines.append('jobs: %d active builds, none stuck' % len(c.active_builds()))
+    agents = c.agents()
+    lost = [a['name'] for a in agents if a['status'] == 'lost']
+    lines.append('agents: %d (%d lost%s)' % (len(agents), len(lost), ': ' + ', '.join(lost) if lost else ''))
+    machines = [c.store.get_json(n) for n in c.store.list('machines/')]
+    running = [m for m in machines if m and not m.get('ended')]
+    lines.append('machines running: %d' % len(running))
+    return ok, lines
+
+
+def cmd_health(args, registry, environ):
+    ok, lines = health_report(orchestrator(args, environ))
+    for line in lines:
+        print(line)
+    return 0 if ok else 1
+
+
+BACKUP_SKIP = ('blobs/', 'orchestrator/logs/', 'orchestrator/artifacts/', 'orchestrator/heartbeats/')
+
+
+def backup(store, out, everything=False):
+    """A tar.gz of the store's objects with a SHA-256 manifest; caches, logs and artifacts only with `everything`."""
+    import io
+    import tarfile
+    names = [n for n in store.list('') if everything or not n.startswith(BACKUP_SKIP)]
+    manifest = {}
+    with tarfile.open(out, 'w:gz') as archive:
+        for name in names:
+            data = store.get(name)
+            if data is None:
+                continue
+            manifest[name] = hashlib.sha256(data).hexdigest()
+            info = tarfile.TarInfo('objects/' + name)
+            info.size = len(data)
+            info.mtime = 0
+            archive.addfile(info, io.BytesIO(data))
+        body = json.dumps({'schema': 'cerid-ci-backup/1', 'objects': manifest}, indent=1, sort_keys=True).encode()
+        info = tarfile.TarInfo('manifest.json')
+        info.size = len(body)
+        archive.addfile(info, io.BytesIO(body))
+    return manifest
+
+
+def restore(store, source, overwrite=False):
+    """Write a backup's objects back; every object is checked against the manifest first; an existing object is
+    kept unless `overwrite`. Returns (written, kept)."""
+    import tarfile
+    with tarfile.open(source, 'r:gz') as archive:
+        manifest = json.loads(archive.extractfile('manifest.json').read().decode('utf-8'))['objects']
+        objects = {}
+        for member in archive.getmembers():
+            if member.name.startswith('objects/') and member.isfile():
+                objects[member.name[len('objects/'):]] = archive.extractfile(member).read()
+    for name, digest in manifest.items():
+        if hashlib.sha256(objects.get(name, b'')).hexdigest() != digest:
+            raise ValueError('backup object %s does not match its manifest' % name)
+    written = kept = 0
+    for name in sorted(manifest):
+        if overwrite:
+            store.put(name, objects[name])
+            written += 1
+        elif store.write_if(name, objects[name], 0) is not None:
+            written += 1
+        else:
+            kept += 1
+    return written, kept
+
+
+def cmd_backup(args, registry, environ):
+    manifest = backup(pipeline().open_store(args.store), args.out, args.all)
+    print('%d objects backed up to %s' % (len(manifest), args.out))
+    return 0
+
+
+def cmd_restore(args, registry, environ):
+    written, kept = restore(pipeline().open_store(args.store), args.source, args.overwrite)
+    print('%d objects restored, %d existing objects kept%s' % (written, kept, '' if args.overwrite or not kept else
+                                                                ' (--overwrite replaces them)'))
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--store', help='result store URL (default: CERID_CI_STORE)')
@@ -288,12 +532,53 @@ def main(argv=None):
     add.add_argument('--screen', help='size_in,density_dpi,refresh_hz,hdr')
     add.add_argument('--lane-presets')
     add.add_argument('--dry-run', action='store_true')
+    config = str(ROOT / 'ci/coordinator.json')
+    parser.add_argument('--config', default=config, help='coordinator configuration (default ci/coordinator.json)')
+    builds = sub.add_parser('builds')
+    builds.add_argument('--limit', type=int, default=30)
+    bld = sub.add_parser('build')
+    bld.add_argument('--number', type=int)
+    bld.add_argument('--repository', default='cerid')
+    bld.add_argument('--branch', default='main')
+    bld.add_argument('--commit')
+    bld.add_argument('--message')
+    bld.add_argument('--tier', choices=('change', 'complete'))
+    bld.add_argument('--fresh', action='store_true')
+    retry = sub.add_parser('retry')
+    retry.add_argument('job')
+    cancel = sub.add_parser('cancel')
+    target = cancel.add_mutually_exclusive_group(required=True)
+    target.add_argument('--build', type=int)
+    target.add_argument('--job')
+    agents = sub.add_parser('agents')
+    agents.add_argument('--stop')
+    sub.add_parser('queues')
+    logs = sub.add_parser('logs')
+    logs.add_argument('job')
+    logs.add_argument('--attempt', type=int)
+    logs.add_argument('--follow', action='store_true')
+    token = sub.add_parser('agent-token')
+    token.add_argument('action', choices=('create', 'revoke'))
+    token.add_argument('--name', required=True)
+    token.add_argument('--queue', default='cerid-owned')
+    token.add_argument('--tags', help='k=v,... the agent can never override (device=<cell>)')
+    token.add_argument('--out', help='the file to write the token to (created, mode 0600; never printed)')
+    sub.add_parser('health')
+    bak = sub.add_parser('backup')
+    bak.add_argument('--out', required=True)
+    bak.add_argument('--all', action='store_true', help='include caches, logs and artifacts')
+    res = sub.add_parser('restore')
+    res.add_argument('source')
+    res.add_argument('--overwrite', action='store_true')
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
     registry = pipeline().load_registry()
     handlers = {'status': cmd_status, 'budget': cmd_budget, 'accounts': cmd_accounts, 'parity': cmd_parity,
-                'add-device': cmd_add_device, 'bake': cmd_bake}
+                'add-device': cmd_add_device, 'bake': cmd_bake, 'builds': cmd_builds, 'build': cmd_build,
+                'retry': cmd_retry, 'cancel': cmd_cancel, 'agents': cmd_agents, 'queues': cmd_queues,
+                'logs': cmd_logs, 'agent-token': cmd_agent_token, 'health': cmd_health, 'backup': cmd_backup,
+                'restore': cmd_restore}
     return handlers[args.command](args, registry, os.environ)
 
 
