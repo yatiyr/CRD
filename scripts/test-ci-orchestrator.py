@@ -1507,7 +1507,7 @@ class Service(Base):
             'registration_token': token, 'protocol': 1, 'name': 'w'}).encode())
         session = json.loads(body)['session_token']
         status, body, _ = self.call('POST', '/api/agent/poll', b'{}', {'Authorization': 'Bearer ' + session})
-        self.assertEqual(json.loads(body), {'job': None, 'wait': 5})
+        self.assertEqual(json.loads(body), {'job': None, 'wait': 15})
         self.assertEqual(json.loads(self.call('GET', '/healthz')[1])['ok'], True)
         self.assertEqual(self.call('GET', '/../../etc/passwd')[0], 404)
 
@@ -1615,7 +1615,7 @@ class Quality(Base):
         rerun = record['reruns'][0]
         self.assertEqual(rerun['commit'], commits[2], 'the middle of the three unknown commits')
         job = self.c.jobs_of(self.c.build(rerun['build']))[0]
-        self.assertIn('--tests ^t$', job['command'])
+        self.assertIn('--tests "^(t)$"', job['command'])
         self.assertEqual(job['agents'], {'queue': 'cerid-cloud', 'device': 'gce-linux-x64-intel'})
         self.assertEqual(self.c.build(rerun['build'])['env'], {'CERID_CI_BISECT': record['id']})
         put_run(self.store, LANE, rerun['build'], {'t': ('fail', 'k2')}, commit=commits[2], bisect=record['id'])
@@ -1629,6 +1629,53 @@ class Quality(Base):
         self.assertEqual((record['state'], record['first_bad']), ('found', commits[2]))
         self.assertIn('First bad commit for t', [t for _, t, _ in recorder.sent])
         self.assertEqual(len(quality.tick(self.c, REGISTRY, between)), 0, 're-runs never open new bisections')
+
+    def test_one_regression_breaking_many_tests_opens_one_bisection(self):
+        tests = ['crd-t%02d' % i for i in range(40)]
+        put_run(self.store, LANE, 1, {name: ('pass', 'k') for name in tests}, commit='%040x' % 1)
+        put_run(self.store, LANE, 2, {name: ('fail', 'k2') for name in tests}, commit='%040x' % 4)
+        between = lambda repository, good, bad: ['%040x' % 2, '%040x' % 3]
+        opened = quality.tick(self.c, REGISTRY, between)
+        self.assertEqual(len(opened), 1)
+        record = self.c.get('bisect/%s.json' % opened[0]['id'])
+        self.assertEqual((record['tests'], len(record['reruns'])), (tests, 1))
+        command = self.c.jobs_of(self.c.build(record['reruns'][0]['build']))[0]['command']
+        self.assertIn('--tests "^(crd-t00|crd-t01|', command)
+        self.assertEqual(len(self.store.list('orchestrator/bisect/')), 1)
+        self.assertEqual(len(self.c.recent()), 1, 'one re-run build, not forty')
+
+    def test_at_most_max_bisections_run_and_the_rest_wait(self):
+        other = 'linux-gcc-asan@gce-linux-x64-intel'
+        for lane in (LANE, other):
+            put_run(self.store, lane, 1, {'t': ('pass', 'k1')}, commit='%040x' % 1)
+            put_run(self.store, lane, 2, {'t': ('fail', 'k2')}, commit='%040x' % 4)
+        between = lambda repository, good, bad: ['%040x' % 2, '%040x' % 3]
+        quality.tick(self.c, REGISTRY, between, max_active=1)
+        states = {r['lane']: r['state'] for r in (self.store.get_json(n) for n in
+                                                  self.store.list('orchestrator/bisect/'))}
+        self.assertEqual(sorted(states.values()), ['queued', 'rerunning'])
+        running = next(lane for lane, s in states.items() if s == 'rerunning')
+        record = next(r for r in (self.store.get_json(n) for n in self.store.list('orchestrator/bisect/'))
+                      if r['lane'] == running)
+        self.c.cancel_build(record['reruns'][0]['build'], by='test')
+        self.c.tick()
+        quality.tick(self.c, REGISTRY, between, max_active=1)
+        states = {r['lane']: r['state'] for r in (self.store.get_json(n) for n in
+                                                  self.store.list('orchestrator/bisect/'))}
+        self.assertEqual(states[running], 'stopped')
+        self.assertEqual(states[other if running == LANE else LANE], 'rerunning', 'promoted when a slot freed')
+
+    def test_rerun_commands_pass_through_both_shells_and_refuse_unsafe_names(self):
+        self.assertEqual(quality.rerun_command(LANE, ['a.b', 'c+d']), 'python ci/pipeline.py lane --preset '
+                         'linux-gcc-debug --device gce-linux-x64-intel --tests "^(a\\.b|c\\+d)$"')
+        with self.assertRaises(ValueError):
+            quality.rerun_command(LANE, ['evil"; rm -rf /'])
+        with tempfile.TemporaryDirectory() as scratch:
+            expression = quality.rerun_command(LANE, ['a.b', 'c+d']).split('--tests ', 1)[1]
+            argv = agent_module.script_for('%s -c "import sys; print(sys.argv[1])" %s' % (
+                '"%s"' % sys.executable, expression), scratch)
+            completed = subprocess.run(argv, capture_output=True, text=True)
+            self.assertEqual(completed.stdout.strip(), '^(a\\.b|c\\+d)$', completed.stderr)
 
     def test_bisection_stops_when_a_rerun_cannot_run_the_test(self):
         commits = ['%040x' % n for n in range(20, 24)]

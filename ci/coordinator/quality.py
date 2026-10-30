@@ -12,10 +12,11 @@ key the per-test cache uses). From those records:
   once) with an issue record carrying the evidence and the text of the ROADMAP finding the owner files. A quarantined
   test still runs; its failure is reported (annotation, notification, the Quality page) but does not fail the lane;
   nothing is skipped or hidden, and the quarantine ends by itself.
-- **First bad commit**: a test that passed in the lane's previous run on a branch and fails now opens a bisection:
-  the recorded runs between the two narrow the range for free, then targeted re-runs of that single test on the
-  middle commit (`pipeline.py lane --tests`) narrow it further, a bounded number of times, through the normal
-  dispatcher and budget.
+- **First bad commit**: the tests that passed in the lane's previous run on a branch and fail now open one
+  bisection together (one regression usually breaks many tests): the recorded runs between the two narrow the range
+  for free, then targeted re-runs of those tests alone on the middle commit (`pipeline.py lane --tests`) narrow it
+  further, at most three times, through the normal dispatcher and budget. At most two bisections run at once; the
+  rest wait `queued`. The first bad commit is the first one where any of the tests fails.
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ WINDOW = 30
 QUARANTINE_DAYS = 7
 MAX_ACTIVE = 10
 MAX_RERUNS = 3
+MAX_BISECTIONS = 2
 
 
 def lane_id(preset, device):
@@ -187,42 +189,52 @@ def quarantine_view(junit_outcomes, quarantined):
 # --------------------------------------------------------------------------------------------- first bad commit
 
 def newly_failing(store, lane):
-    """[(test, good run, bad run)] for tests that passed in the lane's previous run on the same branch and fail in
-    its newest run."""
+    """(tests, good run, bad run): the tests that passed in the lane's previous run on the same branch and fail in its
+    newest run (one regression usually breaks many tests at once: they are bisected together), or None."""
     recorded = runs(store, lane, WINDOW)
     if len(recorded) < 2:
-        return []
+        return None
     bad = recorded[-1]
     previous = [r for r in recorded[:-1] if r.get('branch') == bad.get('branch') and not r.get('bisect')]
     if not previous or bad.get('bisect'):
-        return []
+        return None
     good = previous[-1]
-    out = []
-    for test, entry in bad.get('tests', {}).items():
-        if entry['outcome'] == 'fail' and good.get('tests', {}).get(test, {}).get('outcome') == 'pass':
-            out.append((test, good, bad))
-    return out
+    tests = sorted(test for test, entry in bad.get('tests', {}).items()
+                   if entry['outcome'] == 'fail' and good.get('tests', {}).get(test, {}).get('outcome') == 'pass')
+    return (tests, good, bad) if tests else None
 
 
-def open_bisections(coordinator, flaky_tests=None):
-    """Start a bisection for every newly failing, non-flaky test; returns the records opened."""
+ACTIVE_BISECTION = ('narrowing', 'rerunning')
+TEST_NAME = re.compile(r'^[A-Za-z0-9_.:/+-]{1,200}$')
+
+
+def open_bisections(coordinator, flaky_tests=None, max_active=MAX_BISECTIONS):
+    """One bisection per lane and newly failing run, carrying all its newly failing (non-flaky) tests; past
+    `max_active` running bisections a new one waits `queued`. Returns the records opened."""
     c = coordinator
     opened = []
     for lane in lanes(c.store):
+        found = newly_failing(c.store, lane)
+        if not found:
+            continue
+        tests, good, bad = found
         known_flaky = flaky_tests.get(lane, {}) if flaky_tests is not None else flaky(c.store, lane)
-        for test, good, bad in newly_failing(c.store, lane):
-            if test in known_flaky:
-                continue
-            bisect_id = ident(lane, test, str(bad.get('build')))
-            record = {'id': bisect_id, 'lane': lane, 'test': test, 'state': 'narrowing', 'repository':
-                      bad.get('repository', 'cerid'), 'branch': bad.get('branch'),
-                      'good': {'build': good.get('build'), 'commit': good.get('commit')},
-                      'bad': {'build': bad.get('build'), 'commit': bad.get('commit')}, 'reruns': [],
-                      'opened': c.clock(), 'first_bad': None}
-            if c.create('bisect/%s.json' % bisect_id, record):
-                c.audit('bisector', 'bisect-open', '%s %s' % (lane, test), 'good %s bad %s' % (
-                    good.get('build'), bad.get('build')))
-                opened.append(record)
+        tests = [t for t in tests if t not in known_flaky and TEST_NAME.match(t)]
+        if not tests:
+            continue
+        bisect_id = ident(lane, str(bad.get('build')))
+        active = sum(1 for n in c.store.list('orchestrator/bisect/')
+                     if (c.store.get_json(n) or {}).get('state') in ACTIVE_BISECTION)
+        record = {'id': bisect_id, 'lane': lane, 'tests': tests,
+                  'state': 'narrowing' if active < max_active else 'queued',
+                  'repository': bad.get('repository', 'cerid'), 'branch': bad.get('branch'),
+                  'good': {'build': good.get('build'), 'commit': good.get('commit')},
+                  'bad': {'build': bad.get('build'), 'commit': bad.get('commit')}, 'reruns': [],
+                  'opened': c.clock(), 'first_bad': None}
+        if c.create('bisect/%s.json' % bisect_id, record):
+            c.audit('bisector', 'bisect-open', '%s: %d tests' % (lane, len(tests)), 'good %s bad %s%s' % (
+                good.get('build'), bad.get('build'), ', queued' if record['state'] == 'queued' else ''))
+            opened.append(record)
     return opened
 
 
@@ -244,11 +256,17 @@ def narrow(record, candidates, outcome_of):
     return inside[last_pass + 1:end]
 
 
+def describe(record):
+    tests = record['tests']
+    return tests[0] if len(tests) == 1 else '%s and %d more' % (tests[0], len(tests) - 1)
+
+
 def advance(coordinator, record, commits_between, outcome_of, start_rerun):
-    """One step of a bisection: narrow with every known outcome, then either name the first bad commit, start one
-    targeted re-run on the middle commit, or stop when the re-run budget is spent."""
+    """One step of a bisection: narrow with every known outcome, then either name the first bad commit (the first
+    commit where any of its tests fails), start one targeted re-run on the middle commit, or stop when the re-run
+    budget is spent."""
     c = coordinator
-    if record['state'] not in ('narrowing', 'rerunning'):
+    if record['state'] not in ACTIVE_BISECTION:
         return record
     unknown = narrow(record, commits_between(record['good']['commit'], record['bad']['commit']), outcome_of)
     pending = [r for r in record['reruns'] if r.get('outcome') is None]
@@ -257,9 +275,9 @@ def advance(coordinator, record, commits_between, outcome_of, start_rerun):
     if not unknown:
         record['state'] = 'found'
         record['first_bad'] = record['bad']['commit']
-        c.notify('bisect', 'First bad commit for %s' % record['test'],
-                 'Lane %s: %s is the first commit where %s fails (last good %s).' % (
-                     record['lane'], record['first_bad'], record['test'], record['good']['commit']),
+        c.notify('bisect', 'First bad commit for %s' % describe(record),
+                 'Lane %s: %s is the first commit where %s fail (last good %s).' % (
+                     record['lane'], record['first_bad'], ', '.join(record['tests']), record['good']['commit']),
                  key='bisect:%s' % record['id'])
     elif len(record['reruns']) >= MAX_RERUNS:
         record['state'] = 'stopped'
@@ -272,34 +290,61 @@ def advance(coordinator, record, commits_between, outcome_of, start_rerun):
     return record
 
 
-def rerun_command(lane, test):
+def regex_escape(name):
+    return re.sub(r'([.^$*+?{}()|\[\]\\])', r'\\\1', name)
+
+
+def rerun_command(lane, tests):
+    """The lane command re-running only `tests`: one CTest expression, double-quoted, which both the agent's shells
+    (bash and cmd.exe) pass through unchanged for these names (letters, digits and `_.:/+-`)."""
     preset, device = lane.split('@', 1)
-    return 'python ci/pipeline.py lane --preset %s --device %s --tests %s' % (
-        preset, device, '^%s$' % re.escape(test))
+    for test in tests:
+        if not TEST_NAME.match(test):
+            raise ValueError('test name %r cannot be passed through a shell safely' % test)
+    return 'python ci/pipeline.py lane --preset %s --device %s --tests "^(%s)$"' % (
+        preset, device, '|'.join(regex_escape(t) for t in tests))
 
 
-def outcomes_at(store, lane, test, window=200):
-    """{commit: 'pass'|'fail'} of one test from every recorded run of the lane (bisection re-runs included)."""
+def outcomes_at(store, lane, tests, window=200):
+    """{commit: 'pass'|'fail'} of a set of tests from every recorded run of the lane (bisection re-runs included):
+    fail when any of them failed, pass when all of them passed, unknown otherwise."""
     found = {}
     for run in runs(store, lane, window):
-        entry = run.get('tests', {}).get(test)
-        if entry and entry['outcome'] in ('pass', 'fail') and run.get('commit'):
-            found[run['commit']] = entry['outcome']
+        if not run.get('commit'):
+            continue
+        entries = [run.get('tests', {}).get(test) for test in tests]
+        if any(e and e['outcome'] == 'fail' for e in entries):
+            found[run['commit']] = 'fail'
+        elif all(e and e['outcome'] == 'pass' for e in entries):
+            found.setdefault(run['commit'], 'pass')
     return found
 
 
-def tick(coordinator, registry, commits_between):
-    """Drive every open bisection one step: narrow with the recorded runs, settle finished re-runs, start the next.
-    `commits_between(repository, good, bad)` lists the commits strictly between, oldest first."""
+def tick(coordinator, registry, commits_between, max_active=MAX_BISECTIONS):
+    """Drive the bisections one step: open new ones, promote queued ones while fewer than `max_active` run, narrow
+    with the recorded runs, settle finished re-runs, start the next. `commits_between(repository, good, bad)` lists
+    the commits strictly between, oldest first."""
     c = coordinator
-    opened = open_bisections(c)
+    opened = open_bisections(c, max_active=max_active)
     devices = {d['id']: d for d in registry['devices']}
     queues = registry['queues']
-    for name in c.store.list('orchestrator/bisect/'):
-        record = c.store.get_json(name)
-        if not record or record['state'] not in ('narrowing', 'rerunning'):
-            continue
-        known = outcomes_at(c.store, record['lane'], record['test'])
+
+    def start(rec, commit):
+        preset, device_id = rec['lane'].split('@', 1)
+        device = devices.get(device_id, {'executor': 'gce_vm', 'id': device_id})
+        queue = queues['owned'] if device.get('executor') == 'owned_agent' else queues['cloud']
+        build, _ = c.create_build(
+            rec['repository'], {'event': 'push', 'branch': rec['branch'] or 'main', 'commit': commit,
+                                'trusted': True, 'message': 'bisect %s on %s' % (describe(rec), rec['lane'])},
+            'manual', created_by='bisector', env={'CERID_CI_BISECT': rec['id']},
+            document={'steps': [{'key': 'bisect', 'label': 'bisect %s' % describe(rec),
+                                 'command': rerun_command(rec['lane'], rec['tests']),
+                                 'agents': {'queue': queue, 'device': device_id}, 'priority': -1,
+                                 'retry': {'automatic': [{'reason': 'infrastructure', 'limit': 2}]}}]})
+        return build['number']
+
+    def step(name, record):
+        known = outcomes_at(c.store, record['lane'], record['tests'])
         for rerun in record['reruns']:
             if rerun.get('outcome') is None:
                 build = c.get(c.build_name(rerun['build'])) if rerun.get('build') else None
@@ -309,22 +354,22 @@ def tick(coordinator, registry, commits_between):
                     rerun['outcome'] = 'error'
         if any(r.get('outcome') == 'error' for r in record['reruns']):
             record['state'] = 'stopped'
-            record['reason'] = 'a re-run ended without running the test (build or infrastructure failure)'
+            record['reason'] = 'a re-run ended without running the tests (build or infrastructure failure)'
         else:
-            def start(rec, commit):
-                preset, device_id = rec['lane'].split('@', 1)
-                device = devices.get(device_id, {'executor': 'gce_vm', 'id': device_id})
-                queue = queues['owned'] if device.get('executor') == 'owned_agent' else queues['cloud']
-                build, _ = c.create_build(
-                    rec['repository'], {'event': 'push', 'branch': rec['branch'] or 'main', 'commit': commit,
-                                        'trusted': True, 'message': 'bisect %s on %s' % (rec['test'], rec['lane'])},
-                    'manual', created_by='bisector', env={'CERID_CI_BISECT': rec['id']},
-                    document={'steps': [{'key': 'bisect', 'label': 'bisect %s' % rec['test'],
-                                         'command': rerun_command(rec['lane'], rec['test']),
-                                         'agents': {'queue': queue, 'device': device_id}, 'priority': -1,
-                                         'retry': {'automatic': [{'reason': 'infrastructure', 'limit': 2}]}}]})
-                return build['number']
             advance(c, record, lambda good, bad: commits_between(record['repository'], good, bad),
                     lambda commit: known.get(commit), start)
         c.store.put_json(name, record)
+
+    records = {name: c.store.get_json(name) for name in c.store.list('orchestrator/bisect/')}
+    records = {name: record for name, record in records.items() if record}
+    for name, record in records.items():
+        if record['state'] in ACTIVE_BISECTION:
+            step(name, record)
+    # Queued bisections start, oldest first, as running ones end (in this same pass).
+    active = sum(1 for r in records.values() if r['state'] in ACTIVE_BISECTION)
+    for name, record in sorted(records.items(), key=lambda item: item[1].get('opened', 0)):
+        if record['state'] == 'queued' and active < max_active:
+            record['state'] = 'narrowing'
+            active += 1
+            step(name, record)
     return opened

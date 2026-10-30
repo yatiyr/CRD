@@ -205,7 +205,8 @@ def quality_work(coordinator, registry, mirror, config):
         quality.scan(coordinator, days=spec.get('quarantine_days', quality.QUARANTINE_DAYS),
                      max_active=spec.get('max_quarantined', quality.MAX_ACTIVE))
         if spec.get('bisect', True):
-            quality.tick(coordinator, registry, commits_between)
+            quality.tick(coordinator, registry, commits_between,
+                         max_active=spec.get('max_bisections', quality.MAX_BISECTIONS))
     return work
 
 

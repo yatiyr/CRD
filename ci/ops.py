@@ -587,7 +587,7 @@ def cmd_bisect_list(ctx):
     c = orchestrator(ctx)
     records = [r for r in (c.store.get_json(n) for n in c.store.list('orchestrator/bisect/')) if r]
     return 0, records, ctx.out.table(['LANE', 'TEST', 'STATE', 'GOOD', 'BAD', 'FIRST BAD', 'RE-RUNS'], [
-        (r['lane'], r['test'][:40], r['state'], (r['good']['commit'] or '')[:10], (r['bad']['commit'] or '')[:10],
+        (r['lane'], ', '.join(r['tests'])[:40], r['state'], (r['good']['commit'] or '')[:10], (r['bad']['commit'] or '')[:10],
          (r.get('first_bad') or '')[:12], len(r['reruns'])) for r in records]) or ['No bisection.']
 
 
@@ -1030,6 +1030,10 @@ def legacy(argv):
         new = ['agent', 'stop', value('--stop')]
     elif name == 'agent-token' and tail:
         new = ['token'] + tail
+    elif name == 'add-device':
+        # The old `--config <executor_config JSON>` is now --config-json: the global --config names the coordinator's
+        # configuration file.
+        new = ['device', 'add'] + ['--config-json' if a == '--config' else a for a in tail]
     elif name in LEGACY:
         target, verb_name = LEGACY[name]
         new = [target] + ([verb_name] if verb_name else []) + tail

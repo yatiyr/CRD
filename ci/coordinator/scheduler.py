@@ -33,6 +33,7 @@ DEFAULTS = {
     'scheduled_expiry_minutes': 1440,  # a ready job no agent takes for this long expires
     'default_step_minutes': 360,
     'session_hours': 12,
+    'idle_poll_seconds': 15,         # an idle agent asks again after this long: each poll reads the bucket
     'recent_builds': 200,
     'log_chunk_bytes': 256 * 1024,
     'log_chunks': 4096,

@@ -201,9 +201,9 @@ minutes; the test-quality pass (quarantine, bisection) every five. The SLOs and 
 it is then quarantined (at most 10, 7 days, an issue record with the ROADMAP finding text, audited, notified). A
 quarantined test still runs; when every failure of a lane run is a quarantined one, the lane's verdict reads a JUnit
 view without them (`Lane.quarantine_view`), the original JUnit stays the evidence and the held failures are printed
-and annotated. A test that passed in the lane's previous run on the branch and fails now opens a bisection: the
-recorded runs narrow it, then up to three re-runs of that test alone on the middle commit
-(`pipeline.py lane --tests`).
+and annotated. The tests that passed in the lane's previous run on the branch and fail now open one bisection
+together: the recorded runs narrow it, then up to three re-runs of those tests alone on the middle commit
+(`pipeline.py lane --tests`); at most two bisections run at once, the rest wait `queued`.
 
 <a id="the-web-ui"></a>
 ### The web UI

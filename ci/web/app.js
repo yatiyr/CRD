@@ -962,7 +962,7 @@ if (typeof document !== 'undefined') {
           r.expires > q.now ? '<button type="button" data-release="' + esc(JSON.stringify([r.lane, r.test])) + '">Release' +
           '</button>' : '']), 'Nothing is quarantined.') +
       section('First bad commit', ['Lane', 'Test', 'State', 'Good', 'Bad', 'First bad', 'Re-runs'], q.bisections.map((b) =>
-        [esc(b.lane), esc(b.test), esc(b.state), '<span class="mono">' + esc((b.good.commit || '').slice(0, 10)) +
+        [esc(b.lane), esc(b.tests.join(', ')), esc(b.state), '<span class="mono">' + esc((b.good.commit || '').slice(0, 10)) +
           '</span>', '<span class="mono">' + esc((b.bad.commit || '').slice(0, 10)) + '</span>', '<span class="mono">' +
           esc((b.first_bad || '').slice(0, 12)) + '</span>', b.reruns.length]), 'No bisection: no test newly failed.') +
       section('Flaky tests', ['Lane', 'Test', 'Runs', 'Passed', 'Failed'], flaky.map((t) => [esc(t.lane), '<a href="#" ' +

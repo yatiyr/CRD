@@ -122,7 +122,7 @@ class EndToEnd(unittest.TestCase):
             'demo': repo_config,
             'mirrored': dict(repo_config, checkout='mirror', depth=1,
                              pipeline={'command': upload_command('cancel.json'), 'queue': 'e2e'})},
-            'limits': {'lost_after_seconds': 30, 'cancel_grace_seconds': 20}}
+            'limits': {'lost_after_seconds': 30, 'cancel_grace_seconds': 20, 'idle_poll_seconds': 0.2}}
         cls.log = scheduler.JsonLog(open(os.devnull, 'w'))
         mirror = triggers.Mirror(root / 'mirror')
         cls.c = scheduler.Coordinator(cls.store, config, secrets=scheduler.DirectorySecrets(secrets), log=cls.log,

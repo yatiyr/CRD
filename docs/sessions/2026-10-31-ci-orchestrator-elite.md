@@ -69,10 +69,19 @@ Branch `ci-orchestrator-elite`; Python, HTML, CSS, JavaScript and documents only
   turns into U+FFFD (seen in the browser; they now carry JSON).
 - The inline log of the first failed step did not scroll to its first error (offsets were not relative to the log
   box; seen at phone width).
+- From the advisor review: one bisection per newly failing *test* would have fanned a single regression that breaks
+  fifty tests into fifty bisections and up to 150 paid lane builds against the cap. Bisections are now one per lane
+  run for all its newly failing tests, at most two at once with the rest queued
+  (`Quality.test_one_regression_breaking_many_tests_opens_one_bisection`,
+  `Quality.test_at_most_max_bisections_run_and_the_rest_wait`). The re-run's `--tests ^t$` would also have lost its
+  `^` in cmd.exe (cmd's escape character): the expression is now double-quoted and checked through the host's shell
+  (`Quality.test_rerun_commands_pass_through_both_shells_and_refuse_unsafe_names`).
+- Idle agents now poll every 15 s instead of 5 and live pages refresh every 2 s instead of 1: each poll and each
+  refresh reads the active builds from the bucket (the recipe's cost section names this charge).
 
 ## Verification
 
-`python scripts/test-ci-orchestrator.py` (118 tests, about 40 s, including the Node.js checks of the UI's pure
+`python scripts/test-ci-orchestrator.py` (121 tests, about 40 s, including the Node.js checks of the UI's pure
 functions and the WCAG contrast check), `python scripts/test-ci-orchestrator-e2e.py` (3), `python
 scripts/test-ci-platform.py` (76), and the quick validators. In a real browser (the desktop app's browser pane)
 against `ci/coordinator/demo.py serve` on the filesystem backend: desktop and 375 px phone widths, dark and light

@@ -63,7 +63,7 @@ def status_of(error):
 
 class Service:
     def __init__(self, coordinator, ui, config=None, registry=None, identity=None, mirror=None, web=WEB,
-                 agent_file=AGENT, dashboard=None, qual_data=None, stream_seconds=300.0, stream_interval=1.0):
+                 agent_file=AGENT, dashboard=None, qual_data=None, stream_seconds=300.0, stream_interval=2.0):
         self.c = coordinator
         self.ui = ui
         self.config = config or {}
@@ -316,7 +316,8 @@ def make_handler(service, surfaces=SURFACES, ui=None):
                 agent = c.session_agent(self.token())
                 self.json_body()
                 assignment = c.poll(agent)
-                return self.send(200, assignment or {'job': None, 'wait': 5})
+                # An idle agent asks again in 15 s: every poll reads the active builds from the bucket.
+                return self.send(200, assignment or {'job': None, 'wait': c.limits['idle_poll_seconds']})
             if rest == 'acquire' and method == 'POST':
                 if service.identity is None:
                     raise HttpError(503, 'cloud identity is not configured on this coordinator')

@@ -86,9 +86,11 @@ The test still runs; its failure is printed and annotated as a quarantined failu
 
 ## A test newly fails: first bad commit
 
-When a test passed in its lane's previous run on a branch and fails now (and is not flaky), the coordinator opens a
-bisection: it narrows the range with every recorded run of that test, then re-runs only that test
-(`pipeline.py lane --tests`) on the middle commit, at most 3 times, through the normal dispatcher and budget.
+When tests passed in their lane's previous run on a branch and fail now (and are not flaky), the coordinator opens
+one bisection for all of them: it narrows the range with every recorded run, then re-runs only those tests
+(`pipeline.py lane --tests`) on the middle commit, at most 3 times, through the normal dispatcher and budget; at most
+two bisections run at once (`quality.max_bisections`), the rest wait `queued`. The first bad commit is the first one
+where any of the tests fails.
 `python ci/ops.py bisect list` (or the Test quality page) shows the state; `found` names the first bad commit and
 sends a notification; `stopped` means the re-runs were spent or one could not run the test (its build failed).
 

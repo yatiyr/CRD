@@ -38,7 +38,7 @@
     "branches": ["main"],
     "channels": []
   },
-  "quality": {"quarantine_days": 7, "max_quarantined": 10, "bisect": true},
+  "quality": {"quarantine_days": 7, "max_quarantined": 10, "bisect": true, "max_bisections": 2},
   "slo": {
     "queue_seconds": {"cerid-launcher": 120, "cerid-owned": 300, "cerid-cloud": 900, "default": 300},
     "queue_objective": 0.95,

@@ -412,4 +412,8 @@ The coordinator serves the QUAL matrix live. A static copy on Cloudflare Pages i
 `python ci/ops.py cost` prints the month's spend, the forecast, the breakdown by lane, device or build, and the
 price of one complete run before the cache (about 16 USD at the registry's default durations on 2026-10-30; the
 Windows licence dominates). The launcher is free tier; the bucket holds kilobytes of state plus the logs of the
-retention window. The weekly fresh run and the tier C GPU cells are the first to wait when the month nears the cap.
+retention window. The other recurring charge is bucket operations: every idle agent poll (one every 15 s per
+polling agent), every open live page (one read every 2 s per build or log on screen) and every heartbeat reads or
+writes small objects; at Cloud Storage's per-operation prices this is a few USD a month at most with one or two
+agents (check the current price list; `ops.py cost` shows only machine time). The weekly fresh run and the tier C GPU
+cells are the first to wait when the month nears the cap.
