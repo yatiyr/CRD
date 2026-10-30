@@ -4,8 +4,11 @@
 // constructed into (DIAG.3a; the plan was constructed into the refused pointer before). One mode per run (argv[1]);
 // see expected_fatal.hpp for the exit protocol:
 //   cwt-plan-refused  cwt<f64> with the morl wavelet: the first per-job scale plan is refused
-// The allocator refuses exactly a plan object's request shape (refusing_allocator.hpp); the transform's data plan is a
-// local object, so the first refused request is a per-job plan.
+// The allocator refuses exactly a plan object's request shape (refusing_allocator.hpp). The transform's two other
+// plans are local objects, central_frequency's (2^precision points) and the data plan's (256: 128 samples plus the
+// 65 taps of scale 4); a four-step plan would build its sub-plans in that shape, so both stay below 1024 points, where
+// only Stockham builds on every level and in every mode, and the first refused request is a per-job plan. At the
+// default precision of 12 the portable and sse2 levels plan 4096 as a four-step and refused its sub-plan first.
 
 #define CRD_DIAG_SPECIMEN_ROUTE_ABSENT // no sanitizer involved: this is an engine-fatal control
 
@@ -23,7 +26,16 @@
 
 namespace
 {
+namespace fft = crd::hesap::fft;
 namespace wv = crd::hesap::wavelet;
+
+constexpr int kPrecision = 9; // the psi grid of 512 points: central_frequency's plan
+constexpr crd::usize kLargestPlan = crd::usize{1} << kPrecision;
+static_assert(fft::detail::planned_forward<crd::f64>(kLargestPlan) == fft::FftAlgorithm::Stockham &&
+                  fft::detail::planned_inverse<crd::f64>(kLargestPlan) == fft::FftAlgorithm::Stockham &&
+                  !fft::detail::forward_builds<crd::f64>(kLargestPlan, fft::FftAlgorithm::FourStep) &&
+                  !fft::detail::forward_builds<crd::f64>(kLargestPlan, fft::FftAlgorithm::SixStep),
+              "a setup plan with four-step sub-plans would take the refused request first");
 
 // Runs one mode. Returns false for an unknown mode; returning at all for a known mode means the fatal did not fire.
 [[nodiscard]] bool run_mode(const char* mode)
@@ -35,7 +47,7 @@ namespace wv = crd::hesap::wavelet;
     crd_diag_fatal::arm(mode, wv::detail::kCwtPlanOutOfMemory);
     crd::jobs::init(crd::jobs::Config{.num_threads = 2});
     crd_diag_fatal::RefusingAllocator alloc("hesap-wavelet-fatal-refusing");
-    alloc.refuse_shape(sizeof(crd::hesap::fft::FftPlan<crd::f64>), alignof(crd::hesap::fft::FftPlan<crd::f64>));
+    alloc.refuse_shape(sizeof(fft::FftPlan<crd::f64>), alignof(fft::FftPlan<crd::f64>));
     crd::f64 x[128] = {};
     for (crd::usize i = 0; i < 128U; ++i)
     {
@@ -44,7 +56,7 @@ namespace wv = crd::hesap::wavelet;
     const crd::f64 scales[4] = {1.0, 2.0, 3.0, 4.0};
     const wv::ContinuousWavelet w = wv::continuous_wavelet(crd::containers::StringView{"morl", 4U});
     (void)wv::cwt<crd::f64>(&alloc, crd::containers::ConstSpan<crd::f64>{x, 128U},
-                            crd::containers::ConstSpan<crd::f64>{scales, 4U}, w);
+                            crd::containers::ConstSpan<crd::f64>{scales, 4U}, w, 1.0, kPrecision);
     crd::jobs::shutdown();
     return true;
 }
