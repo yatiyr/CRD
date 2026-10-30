@@ -252,6 +252,19 @@ class Facts(TreeCase):
         self.assertEqual(docs.fact_errors(self.root, [name]), [])
 
 
+class RequiredContent(TreeCase):
+    def test_overview_must_keep_its_licence_and_ci_statements(self):
+        complete = ('<!-- fact:copyright -->x<!-- /fact --> [LICENSE](LICENSE) <!-- fact:cpu-levels -->x<!-- /fact -->'
+                    ' [ROADMAP](docs/ROADMAP.md) [BUILDING](docs/BUILDING.md) [ci](.github/workflows/ci.yml)'
+                    ' [ADR](docs/decisions/0135-cerid-ci-platform.md)\n')
+        self.tree.write('README.md', BANNER + complete)
+        self.assertEqual(docs.required_content_errors(self.root), [])
+        self.tree.write('README.md', BANNER + complete.replace('[LICENSE](LICENSE)', ''))
+        errors = docs.required_content_errors(self.root)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn('LICENSE', errors[0])
+
+
 class Indexes(TreeCase):
     def test_unindexed_and_unlinked_documents_fail(self):
         self.tree.write('docs/README.md', BANNER + '[design](design/README.md)\n')

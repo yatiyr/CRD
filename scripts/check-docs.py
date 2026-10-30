@@ -489,6 +489,24 @@ COUNT_CLAIMS = (
 )
 
 
+# What the project overview must always state from its source of truth: the licence, the CPU floor and levels,
+# where work is tracked, how to build and which CI qualifies (a deleted workflow then fails the link checks).
+REQUIRED_CONTENT = {
+    'README.md': ('<!-- fact:copyright -->', '](LICENSE)', '<!-- fact:cpu-levels -->', '](docs/ROADMAP.md',
+                  '](docs/BUILDING.md)', '](.github/workflows/ci.yml)', '](docs/decisions/0135-cerid-ci-platform.md)'),
+}
+
+
+def required_content_errors(root):
+    errors = []
+    for name, needles in REQUIRED_CONTENT.items():
+        path = root / name
+        text = read(path) if path.is_file() else ''
+        errors.extend(f'{name} must state {needle!r} (its licence, CPU, tracking, build and CI facts)'
+                      for needle in needles if needle not in text)
+    return errors
+
+
 def fact_errors(root, docs, refresh=False, master=None):
     values = fact_values(root, master)
     errors = []
@@ -693,6 +711,7 @@ def check(root=ROOT, only=None, refresh=False):
         errors += reference_errors(root, docs)
     if 'facts' in selected:
         errors += fact_errors(root, docs, refresh, master)
+        errors += required_content_errors(root)
     if 'indexes' in selected:
         errors += index_errors(root, [name for name in files if name not in TOOL_FILES])
     if 'adrs' in selected:
