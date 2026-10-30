@@ -50,6 +50,7 @@ the offline and real-time forms are genuinely different systems (as hair does).
 
 ## Index
 
+- [Setting up the Cerid CI platform](ci-platform-setup.md) — the operator's account, billing, budget-stop, identity, launcher, dashboard and device steps for ADR-0135, in order.
 - [Argument reduction for crd::math's log and trig](2026-10-29-scalar-log-and-trig-reduction.md) — log's carried quotient and exact head sum (≤0.52 ulp) and Payne–Hanek past Cody-Waite's exact range.
 - [DX12 inner-coverage qualification](2026-09-13-dx12-inner-coverage.md) — exact interior/edge pixels, the native/barycentric route contract, one CPU corner oracle and SDK-only provider isolation.
 - [Pinned WARP provider](2026-09-13-dx12-pinned-warp.md) — hash-verified app-local Microsoft WARP 1.0.20 staged beside test executables; hosted lanes qualify one software tuple.

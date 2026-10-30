@@ -7,7 +7,9 @@
 
 Purpose: one coverage contract in three tiers, every supported preset owned by a lane, one stable required status
 that cannot be satisfied by a skipped job, cancellation that cannot destroy qualification evidence, and structured
-evidence for the exact revision every lane built.
+evidence for the exact revision every lane built. The mapping and the resolver are the coverage contract of both the
+hosted workflow and the Buildkite-based [CI platform](ci-platform.md) (ADR-0135), which reads them rather than copying
+them.
 
 ## Tiers and the mapping
 
@@ -85,7 +87,7 @@ pull request classifies `git diff --name-only <base> HEAD` with the first matchi
 |---|---|---|
 | register | `docs/third-party-defects.md` (lane verdicts depend on it) | complete |
 | documentation | `docs/**`, any `*.md`, editor, format and ignore files | preflight |
-| build-system | `.github/**`, root `CMakeLists.txt`, `CMakePresets.json`, `cmake/**`, `scripts/**`, `tests/CMakeLists.txt`, `.clang-tidy` | complete |
+| build-system | `.github/**`, `ci/**` (the [CI platform](ci-platform.md), since 2026-10-30), root `CMakeLists.txt`, `CMakePresets.json`, `cmake/**`, `scripts/**`, `tests/CMakeLists.txt`, `.clang-tidy` | complete |
 | source | everything else (engine, tests, tools, assets, module `CMakeLists.txt`) | change |
 
 The highest tier among the changed paths wins. A base that is all zeros (new branch, force push), unreachable, or

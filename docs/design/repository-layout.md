@@ -73,7 +73,9 @@ and [logical project filters](https://learn.microsoft.com/en-us/cpp/build/refere
 Keep authored code/assets, reproducible generators and peer harnesses, documentation and portable shared settings.
 Canonical CEIR/CKIR/CHIR source text uses UTF-8 without BOM and LF on every checkout; Git attributes and the
 repository guard enforce that byte-stable authoring contract. Write scratch experiments, captures and cleanup recovery bundles beneath ignored `build/<task>/`; keep reusable
-scripts in `scripts/` and measurement evidence in `docs/bench/`. Do not delete a harness because its name is old.
+scripts in `scripts/` and measurement evidence in `docs/bench/`. The CI platform (device registry, planner,
+executors, operator command and dashboard; [ADR-0135](../decisions/0135-cerid-ci-platform.md)) lives in `ci/`; its
+contract tests stay with the other tooling tests in `scripts/`. Do not delete a harness because its name is old.
 Local SDKs, licensed reference dependencies, compiler output and IDE/user caches remain ignored. Agent entry files
 are portable project documentation and must remain visible to Git. Do not blanket-ignore source asset formats.
 
