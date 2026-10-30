@@ -527,7 +527,8 @@ void MultifrontalLDLT<T>::factorize(const sparse::SparseMatrix<T, sparse::Sparse
         // mf_extend_add_trailing_sym needs (monotone child→parent map + lower-triangle preservation). Every
         // delayed id < c0 ≤ every CB id [attempt, fnr), so sorting just [r, attempt) sorts the whole trailing.
         // ldlt_swap_sym permutes the eliminated L21 columns' rows too, consistently with row_index ⇒ L stays
-        // correct. For a no-delay front (r == attempt) this loop is empty ⇒ byte-identical to the static path.
+        // correct; a Hermitian trailing conjugates what crosses its diagonal. For a no-delay front (r == attempt)
+        // this loop is empty ⇒ byte-identical to the static path.
         for (crd::u32 i = r; i + 1 < attempt; ++i)
         {
             crd::u32 mn = i;
@@ -540,7 +541,14 @@ void MultifrontalLDLT<T>::factorize(const sparse::SparseMatrix<T, sparse::Sparse
             }
             if (mn != i)
             {
-                ldlt_swap_sym<T>(front.data.data(), fnr, fnr, i, mn);
+                if (m_hermitian)
+                {
+                    ldlt_swap_sym<true, T>(front.data.data(), fnr, fnr, i, mn);
+                }
+                else
+                {
+                    ldlt_swap_sym<false, T>(front.data.data(), fnr, fnr, i, mn);
+                }
                 const crd::u32 tmp = front.row_index[i];
                 front.row_index[i] = front.row_index[mn];
                 front.row_index[mn] = tmp;

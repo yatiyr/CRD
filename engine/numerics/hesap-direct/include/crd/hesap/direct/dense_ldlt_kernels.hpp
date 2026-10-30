@@ -141,8 +141,11 @@ template <typename T> inline void ldlt_axpy_negate(T* dst, const T* src, T s, cr
 // Symmetric row+column swap k1 ↔ k2 over the COL-MAJOR lower triangle (element
 // (i,j) with i ≥ j = d[j*ld + i]). The index pairing is identical to the
 // row-major dense form (it is about which (i,j) cells exchange, not the
-// storage); only the addressing differs. Assumes k1, k2 < m.
-template <typename T> inline void ldlt_swap_sym(T* d, crd::u32 m, crd::u32 ld, crd::u32 k1, crd::u32 k2) noexcept
+// storage); only the addressing differs. Assumes k1, k2 < m. Hermitian: a cell
+// that crosses the diagonal (the band between k1 and k2, and (k2,k1) itself)
+// takes the conjugate of the upper entry it stands for.
+template <bool Hermitian, typename T>
+inline void ldlt_swap_sym(T* d, crd::u32 m, crd::u32 ld, crd::u32 k1, crd::u32 k2) noexcept
 {
     if (k1 == k2)
     {
@@ -171,10 +174,20 @@ template <typename T> inline void ldlt_swap_sym(T* d, crd::u32 m, crd::u32 ld, c
     {
         sw(idx(k1, j), idx(k2, j));
     }
-    // Step 3: between — (j,k1) ↔ (k2,j) for j in (k1,k2)  [j>k1, k2>j].
+    // Step 3: between — (j,k1) ↔ (k2,j) for j in (k1,k2)  [j>k1, k2>j]; each is the mirror of the other's new
+    // place, so Hermitian conjugates both, and (k2,k1) becomes its own mirror.
     for (crd::u32 j = k1 + 1; j < k2; ++j)
     {
         sw(idx(j, k1), idx(k2, j));
+        if constexpr (Hermitian)
+        {
+            d[idx(j, k1)] = ldlt_conjh<true, T>(d[idx(j, k1)]);
+            d[idx(k2, j)] = ldlt_conjh<true, T>(d[idx(k2, j)]);
+        }
+    }
+    if constexpr (Hermitian)
+    {
+        d[idx(k2, k1)] = ldlt_conjh<true, T>(d[idx(k2, k1)]);
     }
     // Step 4: below k2 — (i,k1) ↔ (i,k2) for i in (k2,m).
     for (crd::u32 i = k2 + 1; i < m; ++i)
@@ -283,7 +296,7 @@ template <typename T, bool Hermitian = false>
         {
             if (kp != k)
             {
-                ldlt_swap_sym<T>(d, m, ld, k, kp);
+                ldlt_swap_sym<Hermitian, T>(d, m, ld, k, kp);
             }
             piv[k] = kp;
             block_kinds[k] = 1U;
@@ -328,7 +341,7 @@ template <typename T, bool Hermitian = false>
         {
             if (kp != k + 1)
             {
-                ldlt_swap_sym<T>(d, m, ld, k + 1, kp);
+                ldlt_swap_sym<Hermitian, T>(d, m, ld, k + 1, kp);
             }
             piv[k] = kp;
             piv[k + 1] = kp;
@@ -568,7 +581,7 @@ template <typename T>
             {
                 if (kp != kk)
                 {
-                    ldlt_swap_sym<T>(d, m, ld, kk, kp);
+                    ldlt_swap_sym<false, T>(d, m, ld, kk, kp);
                 }
                 piv[kk] = kp;
                 block_kinds[kk] = 1U;
@@ -595,7 +608,7 @@ template <typename T>
             {
                 if (kp != kk + 1)
                 {
-                    ldlt_swap_sym<T>(d, m, ld, kk + 1, kp);
+                    ldlt_swap_sym<false, T>(d, m, ld, kk + 1, kp);
                 }
                 piv[kk] = kp;
                 piv[kk + 1] = kp;

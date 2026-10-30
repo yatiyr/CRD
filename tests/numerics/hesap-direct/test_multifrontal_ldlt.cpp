@@ -385,7 +385,7 @@ TEST_CASE("v5d-b factor_front_ldlt: col-major symmetric swap_sym", "[hesap][dire
     const crd::containers::Array<double> front =
         front_from_sym<double>(4, {1, 2, 3, 4, 2, 5, 6, 7, 3, 6, 8, 9, 4, 7, 9, 10}, &alloc);
     crd::containers::Array<double> d = front; // copy to mutate
-    dir::ldlt_swap_sym<double>(d.data(), 4, 4, 1, 3);
+    dir::ldlt_swap_sym<false, double>(d.data(), 4, 4, 1, 3);
 
     // Expected lower triangle after swapping rows AND cols {1,3} of the symmetric matrix.
     const double exp[16] = {
@@ -399,6 +399,44 @@ TEST_CASE("v5d-b factor_front_ldlt: col-major symmetric swap_sym", "[hesap][dire
         for (crd::u32 i = j; i < 4; ++i) // lower triangle only (the kernel reads i >= j)
         {
             CHECK(d[static_cast<crd::usize>(j) * 4 + i] == exp[static_cast<crd::usize>(i) * 4 + j]);
+        }
+    }
+}
+
+TEST_CASE("v5d-b factor_front_ldlt: Hermitian swap_sym conjugates what crosses the diagonal",
+          "[hesap][direct][v5d][v5d-b][ldlt]")
+{
+    // A 5x5 Hermitian matrix with distinct complex entries; swapping rows AND cols {1,3} must leave the lower
+    // triangle of P A P, whose band between 1 and 3 and (3,1) itself come from the old upper triangle.
+    using C = crd::hesap::Complex64;
+    constexpr crd::u32 m = 5;
+    C full[m][m] = {};
+    for (crd::u32 i = 0; i < m; ++i)
+    {
+        full[i][i] = C{1.0 + i, 0.0};
+        for (crd::u32 j = 0; j < i; ++j)
+        {
+            full[i][j] = C{static_cast<double>(10 * i + j), static_cast<double>(i + 2 * j + 1)};
+            full[j][i] = crd::hesap::conj(full[i][j]);
+        }
+    }
+    C d[m * m] = {};
+    for (crd::u32 j = 0; j < m; ++j)
+    {
+        for (crd::u32 i = j; i < m; ++i)
+        {
+            d[j * m + i] = full[i][j];
+        }
+    }
+    dir::ldlt_swap_sym<true, C>(d, m, m, 1, 3);
+    const crd::u32 p[m] = {0, 3, 2, 1, 4};
+    for (crd::u32 j = 0; j < m; ++j)
+    {
+        for (crd::u32 i = j; i < m; ++i)
+        {
+            const C want = full[p[i]][p[j]];
+            CHECK(d[j * m + i].re == want.re);
+            CHECK(d[j * m + i].im == want.im);
         }
     }
 }
