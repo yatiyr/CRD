@@ -138,6 +138,20 @@ ROADMAP row, then the single maintainer.
 | `runtime` | [Source](../../runtime/) | [CMake](../../runtime/CMakeLists.txt) |
 | `sandbox` | [Source](../../sandbox/) | [CMake](../../sandbox/CMakeLists.txt) |
 
+## Further system references
+
+Subsystem pages that are not a single module's overview; each is a pointer to its preserved
+reference or a dated design note.
+
+- [Eylem allocator strategy](eylem-allocators.md)
+- [`crd::math::simd` — SIMD + AoSoA storage substrate](math-simd.md)
+- [MeshResource](mesh_resource.md)
+- [RAH-0 — Canonical GPU-model audit (design note)](rah-0-canonical-model-audit.md)
+- [crd-sandbox — System Overview](sandbox.md)
+- [crd-scene — concurrency contracts](scene-concurrency.md)
+- [TextureResource](texture_resource.md)
+- [crd-jobs Windows verification (2026-05-12)](../jobs/WINDOWS_VERIFICATION.md)
+
 ## Planned product modules
 
 `crd-ui`, Canvas, owned font/shaping, vector rendering and reflection are not existing module directories at this

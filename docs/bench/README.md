@@ -7,6 +7,8 @@ Every measured benchmark board lands here as its own file, **at the time it is m
 from memory (SANITY #2/#5). This is the single home for numbers; session logs and system docs LINK here
 instead of restating tables.
 
+Method: [reference-class benchmarking policy](../PRINCIPLES_reference_class_benchmarking.md) and the [kernel mandate](../KERNEL-CRUSH-MANDATE.md).
+
 **Naming:** `YYYY-MM-DD-<slice-or-module>-<subject>.md` (e.g. `2026-07-02-v14a-dtype-converts.md`).
 
 **Each file carries:**
@@ -87,3 +89,58 @@ perf/crush claim (see AGENTS.md § Numerical/perf work).
 - **2026-06-13-v9-ode-dae.md** — v9 ODE/DAE cluster (ERK · BDF · Radau · IMEX · Krylov · sensitivities) vs SUNDIALS/scipy/Boost; determinism moat.
 - **2026-06-20-v10-fft-transforms.md** — v10 FFT cluster (1D FFT · NUFFT · DCT/DST · sparse FFT) vs MKL/FFTW/FINUFFT/PocketFFT; codelet crush vs orchestration gap.
 - **2026-06-22-v11-dsp-wavelet-comms.md** — v11 DSP/wavelet/comms (filters · spectral · wavelets · SDR) vs scipy/MATLAB/liquid/PyWavelets; multi-threaded determinism moat.
+
+## Earlier boards without a summary line
+
+Boards recorded before this index named every file (completed 2026-10-31); each file carries its own machine, harness and verdict.
+
+- [baseline_2026-04.md](baseline_2026-04.md) — Benchmark Baseline — 2026-04
+- [2026-10-30-simd-dispatch-gemm-board.md](2026-10-30-simd-dispatch-gemm-board.md) — 2026-10-30 — SIMD-DISPATCH row-close board: one-thread GEMM against the pre-row engine and its peers, every level
+- [2026-10-24-diag-11b-sanitizer-cost.md](2026-10-24-diag-11b-sanitizer-cost.md) — DIAG.11b — the sanitizer modes' cost, per workload and per lane
+- [2026-10-24-diag-11b-device-validation.md](2026-10-24-diag-11b-device-validation.md) — DIAG.11b — device validation's cost on the authored rendering workload
+- [2026-10-24-diag-11b-checks-recording-probes.md](2026-10-24-diag-11b-checks-recording-probes.md) — DIAG.11b — generation checks, recording and probes, per call
+- [2026-08-03-ren41-velocity-1m-fps.md](2026-08-03-ren41-velocity-1m-fps.md) — REN-41 per-object velocity — 1M fps board + the DX12 upload-batching fix (median-of-5, both backends)
+- [2026-08-02-ren40h-lod-scaling-curve.md](2026-08-02-ren40h-lod-scaling-curve.md) — REN-40-H — LOD scaling curve (median-of-5, both backends)
+- [2026-08-02-gpu-cull-fix-pcss-caster-cull.md](2026-08-02-gpu-cull-fix-pcss-caster-cull.md) — GPU-cull regression fix + PCSS + shadow-caster screen-size cull (median-of-5, both backends)
+- [2026-07-29-ren39-indexed-pull.md](2026-07-29-ren39-indexed-pull.md) — REN-39 — indexed pull vs classic pull (post-transform vertex reuse)
+- [2026-07-25-ren8-sandbox-frame-attribution.md](2026-07-25-ren8-sandbox-frame-attribution.md) — REN-8 — sandbox frame attribution (where the 12 ms goes)
+- [2026-07-25-ren3-1-depth-prepass-cost.md](2026-07-25-ren3-1-depth-prepass-cost.md) — REN-3.1 — depth-only pre-pass cost vs the equivalent colour pass (Vulkan + DX12)
+- [2026-07-23-as4-flash-attention-fusion.md](2026-07-23-as4-flash-attention-fusion.md) — AS-4 — FLASH ATTENTION fusion: the `KOp::Attention` intrinsic crushes the unfused peer (2026-07-23)
+- [2026-07-23-as4-ckir-reduce-autotune.md](2026-07-23-as4-ckir-reduce-autotune.md) — AS-4 — the auto-scheduler TUNES the reduction (op-generality) vs CUB (2026-07-23)
+- [2026-07-22-coopvec-neural-shading-crush.md](2026-07-22-coopvec-neural-shading-crush.md) — Bench — B10 cooperative-vector neural shading vs scalar-FMA (2026-07-22)
+- [2026-07-22-as4-ckir-gemm-vs-cublas.md](2026-07-22-as4-ckir-gemm-vs-cublas.md) — AS-4 board — CKIR auto-tuned GEMM vs cuBLAS Sgemm (f32, matched precision)
+- [2026-07-21-3dgs-1080p-rasterizer.md](2026-07-21-3dgs-1080p-rasterizer.md) — Bench — 3D Gaussian Splatting rasteriser @ 1080p (B19 performance)
+- [2026-07-20-hair-rt-swatch-perf.md](2026-07-20-hair-rt-swatch-perf.md) — 2026-07-20 — B18-f path-traced hair swatch — GPU per-sample cost + real-time analysis
+- [2026-07-15-fft-ocean-batched-ifft.md](2026-07-15-fft-ocean-batched-ifft.md) — B16-a-2 — FFT-ocean batched inverse 2-D FFT vs cuFFT (2026-07-15)
+- [2026-07-13-gpu-fft-cufft-gold.md](2026-07-13-gpu-fft-cufft-gold.md) — GPU FFT — cuFFT gold-standard board (2026-07-13)
+- [2026-07-13-gpu-compute-primitives.md](2026-07-13-gpu-compute-primitives.md) — B-cmp GPU compute primitives — CUB/cuBLAS gold board (2026-07-13)
+- [2026-07-08-v17h-research-crush.md](2026-07-08-v17h-research-crush.md) — 2026-07-08 — v17-h research-grade experiments vs cuBLAS: change the game
+- [2026-07-08-v17g-gemm-nsight-loop.md](2026-07-08-v17g-gemm-nsight-loop.md) — 2026-07-08 — v17-g GEMM optimization: the Nsight profile→diagnose→fix→measure loop
+- [2026-07-07-v17g-tensorcore.md](2026-07-07-v17g-tensorcore.md) — 2026-07-07 — v17-g: TF32 tensor-core GEMM (wmma) vs cuBLAS-TF32 — WORKS + CORRECT, crush OPEN (needs mma.sync)
+- [2026-07-07-v17e-gemm-ladder.md](2026-07-07-v17e-gemm-ladder.md) — 2026-07-07 — v17-e: the GEMM optimization ladder vs cuBLAS (f32) — HONEST, CRUSH NOT YET ACHIEVED
+- [2026-07-07-v17e-gemm-crush-round6.md](2026-07-07-v17e-gemm-crush-round6.md) — 2026-07-07 — v17-e round 5–6: cp.async + bigger tiles + the HONEST corrected scoreboard (min of 6 runs)
+- [2026-07-07-v17e-gemm-crush-round2.md](2026-07-07-v17e-gemm-crush-round2.md) — 2026-07-07 — v17-e round 2–4: warp-tiled GEMM schedule bank vs cuBLAS/cublasLt — FIRST CRUSH CELLS (3-run stable)
+- [2026-07-07-v17c-cuda-vendor-baseline.md](2026-07-07-v17c-cuda-vendor-baseline.md) — 2026-07-07 — v17-c: CUDA backend + the first vendor benchmark (cuBLAS SGEMM) — HONEST BASELINE
+- [2026-07-07-v16z-scoreboard.md](2026-07-07-v16z-scoreboard.md) — 2026-07-07 — v16 reverse-mode AD + differentiable-solvers cluster — FULL CRUSH SCOREBOARD (close)
+- [2026-07-07-v16k-neural-ode.md](2026-07-07-v16k-neural-ode.md) — 2026-07-07 -- v16-k (part 1): neural ODE vs torchdiffeq
+- [2026-07-07-v16k-kan.md](2026-07-07-v16k-kan.md) — 2026-07-07 -- v16-k (part 2): KAN (Kolmogorov-Arnold network) vs efficient-kan
+- [2026-07-07-v16j-topopt.md](2026-07-07-v16j-topopt.md) — 2026-07-07 -- v16-j: adjoint topology optimization (SIMP) vs MATLAB top88
+- [2026-07-07-v16i-determinism-moat.md](2026-07-07-v16i-determinism-moat.md) — 2026-07-07 -- v16-i: the deterministic-training moat
+- [2026-07-07-v16h-graph-codegen.md](2026-07-07-v16h-graph-codegen.md) — 2026-07-07 — v16-h: structural graph AD + tape→C++ codegen
+- [2026-07-07-v16g-implicit-diff.md](2026-07-07-v16g-implicit-diff.md) — 2026-07-07 — v16-g: the implicit-differentiation suite (the open C++ lane)
+- [2026-07-07-v16f-ode-adjoint.md](2026-07-07-v16f-ode-adjoint.md) — 2026-07-07 — v16-f: revolve checkpointing + ODE-adjoint (DTO vs CTO honesty split)
+- [2026-07-06-v16e-hvp.md](2026-07-06-v16e-hvp.md) — 2026-07-06 — v16-e: forward-over-reverse Hessian-vector products + Hessian-free Newton-CG
+- [2026-07-06-v16d-matrix-suite.md](2026-07-06-v16d-matrix-suite.md) — 2026-07-06 — v16-d: matrix-calculus + suite VJPs — JAX value+grad PARITY, factor-reuse speed, value-only robustness
+- [2026-07-06-v16c-nn-vjp.md](2026-07-06-v16c-nn-vjp.md) — 2026-07-06 — v16-c (core): tensor / NN VJPs — the trainable-MLP layer
+- [2026-07-06-v16c-bicolor-sparse.md](2026-07-06-v16c-bicolor-sparse.md) — 2026-07-06 — v16-c: bidirectional coloring (bicoloring) + sparse reverse-mode LA
+- [2026-07-06-v16b-reverse-rules.md](2026-07-06-v16b-reverse-rules.md) — 2026-07-06 — v16-b: the scalar VJP rule library — crush (exact + full coverage)
+- [2026-07-06-v16a-reverse-tape.md](2026-07-06-v16a-reverse-tape.md) — 2026-07-06 — v16-a: the deterministic reverse-mode tape — crush + moat
+- [2026-07-06-v15z-scoreboard.md](2026-07-06-v15z-scoreboard.md) — 2026-07-06 — v15 forward-mode AD cluster — FULL CRUSH SCOREBOARD (close)
+- [2026-07-06-v15h-complex-wirtinger.md](2026-07-06-v15h-complex-wirtinger.md) — 2026-07-06 — v15-h: complex / Wirtinger forward AD — capability crush
+- [2026-07-06-v15g-taylor.md](2026-07-06-v15g-taylor.md) — 2026-07-06 — v15-g: Taylor-mode jets + the Taylor ODE integrator — CRUSH
+- [2026-07-06-v15f-matrix-jvp.md](2026-07-06-v15f-matrix-jvp.md) — 2026-07-06 — v15-f: matrix-calculus + suite forward differentials (JVPs) — crush + honesty
+- [2026-07-06-v15e-sparsity.md](2026-07-06-v15e-sparsity.md) — 2026-07-06 — v15-e: automatic sparsity detection + coloring + compressed recovery (crush)
+- [2026-07-06-v15d-drivers.md](2026-07-06-v15d-drivers.md) — 2026-07-06 — v15-d: forward-mode drivers + runtime-n tiling — crush + determinism
+- [2026-07-06-v15c-hyperdual.md](2026-07-06-v15c-hyperdual.md) — 2026-07-06 — v15-c: exact second-order forward AD (hyper-dual) — crush + correctness
+- [2026-07-06-v15b-jvp-rules.md](2026-07-06-v15b-jvp-rules.md) — 2026-07-06 — v15-b: the cmath JVP rule surface + 3-oracle gate (crush + correctness)
+- [2026-07-06-v15a-forward-carrier.md](2026-07-06-v15a-forward-carrier.md) — 2026-07-06 — v15-a forward-mode carrier vs ALL frontier gold standards (full board)

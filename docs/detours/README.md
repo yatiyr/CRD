@@ -13,6 +13,13 @@ D-007/D-008 grew into the renderer → UI/CR-D007 → notebook → media program
 - [Original D-007 archive](../archive/D-007-gpu-program-system.md): original source material.
 - [Historical detour index](../archive/2026-09-12-superseded-plans.md#detours-index): D-001…006 history and original D-004/D-005 obligations.
 
+Detour records (historical; their slices live in the master table):
+
+- [D-001 — Memory infrastructure for elite-tier allocator coverage](D-001-memory-infrastructure.md)
+- [D-002 — Concurrent containers + stress-hardening of containers, allocators & scene storages](D-002-concurrent-containers-and-stress-hardening.md)
+- [D-007 — CKIR becomes the universal shader IR](D-007-ckir-universal-shader-ir.md)
+- [D-008 — the gpu-context convergence](D-008-gpu-context-convergence.md)
+
 A new detour records purpose, scope and exit criteria in its detail document; its slices go in the
 existing master table. It never creates a second live queue. Old dates, statuses and Next lists in
 source records are historical. Use [context](../../context.md) to locate current work.
