@@ -171,13 +171,15 @@ against 28.36 at portable; it is now the f32 1M plan on every level (one run aft
 
 The user chose both plans (2026-10-30, "C"): each level runs its fastest measured forward under
 `DeterminismMode::Default`, every level the canonical one under the deterministic modes (ADR-0134 §7). Board 2's
-arms first gave the table (`scripts/gen_fft_level_plans.py`); one confirmation pass on that build agreed at avx2,
-sse4.2 and sse2 at every size but not at portable, where Stockham now led at 8K, 32K, 128K, 512K, 1M and 2M:
-`f70b933d` (crd's inlined f32 fma below FMA on GCC) changed portable after board 2. So board 3 re-measured every
-level on the current engine: `47d6c1b2` with the per-level planner (each level's planned arm is its board-2 plan),
-`bench_fft_f32` in the linux-gcc-release mirror tree, CPU 4, five passes of detected, sse4.2, sse2 and portable
-(glibc's features hidden above a forced x64 level), peers one thread; host: others 1.5 to 1.7 cores, Windows 11.2 to
-12.8 of 63.7 GiB available. The arms' times per pass are the data file
+arms first gave the table (`scripts/gen_fft_level_plans.py`); one confirmation pass on that build agreed at avx2 and
+sse2 at every size but not at portable, where Stockham now led at 8K, 32K, 128K, 512K, 1M and 2M: `f70b933d` (crd's
+inlined f32 fma below FMA on GCC) changed portable after board 2. A five-pass re-run on the current engine then showed
+the sse4.2 column was fft's sse2 unit: fft builds portable, sse2, avx2 and avx512 units, an sse4.2 selection runs the
+sse2 one, and `FftPlan` keys its plans on the unit it runs. `bench_fft_f32` now prints that level
+(`fft kernel level:`) and the generator files each log under it. This board: `7cd38660` with that line
+(each level's planned arm is its earlier table row), `bench_fft_f32` in the linux-gcc-release mirror tree, CPU 4, five
+passes of detected (avx2), sse2 (glibc's features above it hidden) and portable, peers one thread; host: others 1.5
+to 1.8 cores, Windows 12.2 to 12.8 of 63.7 GiB available. The arms' times per pass are the data file
 [2026-10-30-simd-dispatch-fft-f32-arms.json](2026-10-30-simd-dispatch-fft-f32-arms.json), from which the generator
 writes `level_plans_gen.hpp`: a level's plan is the fastest median where every pass beat every pass of its planned
 arm. avx2 runs the canonical planner at every size (16K to 64K deep-split-4 3% to 7% ahead in medians, inside the
@@ -185,26 +187,26 @@ noise).
 
 Each level's plan against the canonical plan, both in the level's own run (median ms):
 
-| n | portable | sse2 | sse4.2 |
-|---|---|---|---|
-| 1024 | stockham 0.005 (1.80x) | stockham 0.004 (1.50x) | stockham 0.004 (1.50x) |
-| 2048 | stockham 0.017 (1.35x) | four-step 0.012 (1.42x) | four-step 0.012 (1.42x) |
-| 4096 | stockham 0.028 (1.96x) | stockham 0.022 (1.41x) | stockham 0.022 (1.41x) |
-| 8192 | stockham 0.089 (1.53x) | four-step 0.064 (1.09x) | four-step 0.064 (1.08x) |
-| 16384 | stockham 0.180 (1.55x) | stockham 0.123 (1.67x) | stockham 0.128 (1.68x) |
-| 32768 | stockham 0.460 (1.37x) | stockham 0.305 (1.45x) | stockham 0.316 (1.47x) |
-| 65536 | six-step 0.918 (1.46x) | stockham 0.619 (1.61x) | stockham 0.632 (1.58x) |
-| 131072 | four-step 2.517 (1.12x) | four-step 1.394 (1.19x) | four-step 1.470 (1.18x) |
-| 262144 | six-step 4.277 (1.37x) | four-step 2.759 (1.27x) | four-step 2.903 (1.27x) |
-| 524288 | four-step 10.964 (1.45x) | four-step 6.059 (1.35x) | four-step 6.357 (1.35x) |
-| 1048576 | four-step 24.909 (1.28x) | four-step 13.557 (1.26x) | four-step 14.169 (1.26x) |
-| 2097152 | canonical 49.203 | canonical 29.560 | canonical 28.808 |
-| 4194304 | canonical 113.440 | canonical 63.532 | canonical 59.893 |
+| n | portable | sse2 (and sse4.2) |
+|---|---|---|
+| 1024 | stockham 0.005 (1.80x) | stockham 0.004 (1.50x) |
+| 2048 | stockham 0.017 (1.41x) | four-step 0.012 (1.50x) |
+| 4096 | stockham 0.028 (2.04x) | stockham 0.023 (1.39x) |
+| 8192 | stockham 0.091 (1.54x) | four-step 0.066 (1.08x) |
+| 16384 | stockham 0.184 (1.55x) | stockham 0.133 (1.68x) |
+| 32768 | stockham 0.478 (1.32x) | stockham 0.329 (1.47x) |
+| 65536 | six-step 0.940 (1.46x) | stockham 0.667 (1.60x) |
+| 131072 | four-step 2.612 (1.11x) | four-step 1.523 (1.19x) |
+| 262144 | six-step 4.414 (1.48x) | four-step 3.024 (1.34x) |
+| 524288 | four-step 11.427 (1.55x) | four-step 6.003 (1.36x) |
+| 1048576 | four-step 25.568 (1.31x) | four-step 13.639 (1.24x) |
+| 2097152 | canonical 53.086 | canonical 28.188 |
+| 4194304 | canonical 113.734 | canonical 62.108 |
 
 ## Verdict (board 3)
 
-- **f32, every level:** the default plans are the measured winners: 1.08x to 1.96x faster than the canonical plan at
-  1K to 1M on portable, sse2 and sse4.2, the canonical plan at 2M and 4M and at every avx2 size. Levels now agree
-  within twice the ADR-0092 §5 class; CrossPlatform keeps the cross-level bits.
+- **f32, every level:** the default plans are the measured winners: 1.08x to 2.04x faster than the canonical plan at
+  1K to 1M on portable and sse2 (so on sse4.2), the canonical plan at 2M and 4M and at every avx2 size. Levels now
+  agree within twice the ADR-0092 §5 class; CrossPlatform keeps the cross-level bits.
 - **Not measured, canonical:** f64 (no forward arms in `bench_fft_vs_refs`), every inverse, avx512 and neon. Board 2
   shows f64 at sse2 and sse4.2 1.6x to 1.9x behind portable at every size it lists, an open fft item of the row.

@@ -48,10 +48,14 @@ board and diagnostic process runs Default.
   median where every pass beat every pass of the level's planned arm (equal medians: the lower mean), the planned arm
   otherwise. It is in `generated-sources.json` with its `--check`.
 - Board 2's arms gave the first table. One confirmation pass agreed at avx2, sse4.2 and sse2 at every size; at
-  portable Stockham led at six sizes, because `f70b933d` (inlined f32 fma) changed portable after board 2. Board 3
-  re-ran the five passes on the current engine (5.4 minutes) and the table comes from it: portable, sse2 and sse4.2
-  run their own plans at 1K to 1M, 1.08x to 1.96x faster than the canonical plan in the same run; 2M, 4M and every
-  avx2 size stay canonical.
+  portable Stockham led at six sizes, because `f70b933d` (inlined f32 fma) changed portable after board 2. A five-pass
+  re-run on the current engine (5.4 minutes) showed the defect in the first table: it had sse4.2 rows, but fft builds
+  no sse4.2 unit, so an sse4.2 selection runs the sse2 unit and its rows (`FftPlan` keys on `fft_kernels().level`,
+  right for a build cap too), and the "sse4.2" column was the sse2 unit again. `bench_fft_f32` now prints
+  `fft kernel level:`, the importer files each log under that level (and refuses two logs of one level with different
+  planned arms), and a test refuses a row for a level the archive does not build. Board 3 re-ran detected, sse2 and
+  portable five times (4.2 minutes); portable and sse2 run their own plans at 1K to 1M, 1.08x to 2.04x faster than
+  the canonical plan in the same run; 2M, 4M and every avx2 size stay canonical.
 - Declared tolerance: each plan meets the ADR-0092 §5 class against the radix-2 reference (max |a - b| / (1 + max |b|):
   f64 1e-12, f32 2e-4 and 1e-3 from 512K), so two levels' default plans differ by at most twice it. The board's
   measured errors against an FFTW f64 truth are 1.0e-7 to 3.8e-7 on every arm.
@@ -60,19 +64,21 @@ board and diagnostic process runs Default.
 
 ## Tests
 
-`test_fft_kernels.cpp`: the table (one row per type, level and size, each buildable, avx2 rows the canonical planner,
-the deterministic modes canonical everywhere and Default changing a plan exactly at the table's other rows); a plan
+`test_fft_kernels.cpp`: the table (one row per type, level and size, each buildable and of a level the archive
+builds, avx2 rows the canonical planner, the deterministic modes canonical everywhere and Default changing a plan
+exactly at the table's other rows); a plan
 built with no algorithm takes its level's row under Default and the canonical plan under CrossPlatform and
 BackwardCompat; every level's own f32 plan from 1K to 1M bit-identical run to run, within the class of the reference
 and twice it of portable's own plan, and the canonical plan giving portable's bits on every level. The forced-forward
 cases skip the process's own plan (the band cases run it); the planner's letters are checked under CrossPlatform.
-`test_kernel_dispatch.cpp`: the mode's default and round trip. `bench_fft_f32` lists the level's own plan first.
+`test_kernel_dispatch.cpp`: the mode's default and round trip. `bench_fft_f32` prints its fft kernel level and lists
+the level's own plan first.
 
 ## Checks
 
 win-debug: crd-hesap-fft-tests, crd-math-tests and crd-eylem-tests built; the four planner cases at the detected
 level, sse2 and portable, the f32 forced forwards 1K to 64K and the f32 band case at sse2, the mode and the eylem
-freeze cases passed. linux-gcc-release mirror: `bench_fft_f32` built, the confirmation pass and board 3 ran. The
+freeze cases passed. linux-gcc-release mirror: `bench_fft_f32` built, the confirmation pass, the re-run and board 3 ran. The
 generator's `--check`, check-generated, clang-format on the changed lines, tidy (it flagged twelve lowercase `u`
 literal suffixes in eylem's `types.hpp`, now upper-case; `bench_fft_f32` is in no Windows database and built on GCC),
 Allman braces, the 19 ctest guards, the repository tooling tests (158), the plan and repository checks.
