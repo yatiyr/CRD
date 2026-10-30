@@ -63,7 +63,7 @@ f64 guard_value()
 
 bool same_bits(const f64* a, const f64* b, usize count)
 {
-    return std::memcmp(a, b, count * sizeof(f64)) == 0;
+    return count == 0U || std::memcmp(a, b, count * sizeof(f64)) == 0; // an empty Array's data() is null
 }
 
 // grad[0, n) against the fold, NaN payloads aside, with no guard word left (an unwritten guard is a NaN too).
