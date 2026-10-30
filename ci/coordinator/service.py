@@ -272,6 +272,14 @@ def make_handler(service, surfaces=SURFACES):
 
         def dispatch(self, method):
             path, query, raw_query = self.route()
+            match = re.match(r'^/webhooks/([A-Za-z0-9_.-]+)$', path)
+            agent_path = path.startswith('/api/agent/') or path.startswith('/git/') or path == '/agent/cerid-agent.py'
+            if match and 'webhook' not in surfaces:
+                raise HttpError(404, 'webhooks are not served on this listener')
+            if agent_path and 'agent' not in surfaces:
+                raise HttpError(404, 'the agent API is not served on this listener')
+            if not (agent_path or match) and path != '/healthz' and 'ui' not in surfaces:
+                raise HttpError(404, 'the web UI is not served on this listener')
             if path == '/healthz':
                 beat = c.get('coordinator/heartbeat.json') or {}
                 age = round(c.clock() - beat.get('at', 0), 1) if beat else None
@@ -279,15 +287,6 @@ def make_handler(service, surfaces=SURFACES):
             if path == '/agent/cerid-agent.py':
                 data, digest = service.agent_bytes()
                 return self.send(200, data, 'text/x-python; charset=utf-8', {'X-Cerid-Agent-SHA256': digest})
-            match = re.match(r'^/webhooks/([A-Za-z0-9_.-]+)$', path)
-            if match and 'webhook' not in surfaces:
-                raise HttpError(404, 'webhooks are not served on this listener')
-            if (path.startswith('/api/agent/') or path.startswith('/git/') or path == '/agent/cerid-agent.py') \
-                    and 'agent' not in surfaces:
-                raise HttpError(404, 'the agent API is not served on this listener')
-            if not (path.startswith('/api/agent/') or path.startswith('/git/') or match) and path not in (
-                    '/healthz', '/agent/cerid-agent.py') and 'ui' not in surfaces:
-                raise HttpError(404, 'the web UI is not served on this listener')
             if match and method == 'POST':
                 return self.send(200, service.webhook(match.group(1), dict(self.headers.items()), self.body()))
             if path.startswith('/api/agent/'):

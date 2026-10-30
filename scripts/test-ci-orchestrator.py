@@ -1503,5 +1503,588 @@ class Service(Base):
         self.assertEqual(self.call('GET', '/../../etc/passwd')[0], 404)
 
 
+# --------------------------------------------------------------------------------------------- test quality
+
+from coordinator import notify, quality, reports  # noqa: E402
+ops = load('ci_ops_orchestrator', 'ci/ops.py')
+coordinator_main = load('coordinator.main', 'ci/coordinator/main.py')
+
+
+def put_run(store, lane, build, tests, commit=None, branch='main', bisect=None):
+    """One lane run record as pipeline.Lane.record_tests writes it: {test: (outcome, key)}."""
+    store.put_json('test-runs/%s/%010d.json' % (lane, build), {
+        'build': str(build), 'commit': commit or ('%040x' % build), 'branch': branch, 'repository': 'cerid',
+        'lane': lane, 'bisect': bisect, 'tests': {name: {'outcome': o, 'seconds': 1.0 + build / 10.0, 'key': k}
+                                                  for name, (o, k) in tests.items()}})
+
+
+class Recorder:
+    """Notification channels as a recorder (the senders the Notifier calls)."""
+
+    def __init__(self):
+        self.sent = []
+
+    def __call__(self, channel, secrets, title, body, **kw):
+        self.sent.append((channel['kind'], title, body))
+
+
+def with_notifications(c, recorder, **config):
+    c.notifier = notify.Notifier(dict({'channels': [{'kind': 'ntfy', 'url': 'http://ntfy.local/ci'}]}, **config),
+                                 None, c.create, c.log, senders={'ntfy': recorder, 'email': recorder})
+
+
+LANE = 'linux-gcc-debug@gce-linux-x64-intel'
+
+
+class Quality(Base):
+    def test_flaky_only_on_proof_from_one_key(self):
+        put_run(self.store, LANE, 1, {'a': ('pass', 'k1'), 'b': ('pass', 'k1'), 'c': ('pass', 'k1')})
+        put_run(self.store, LANE, 2, {'a': ('fail', 'k1'), 'b': ('fail', 'k2'), 'c': ('pass', 'k1')})
+        found = quality.flaky(self.store, LANE)
+        self.assertEqual(set(found), {'a'}, 'b failed on a changed key: a regression, never flaky')
+        self.assertEqual((found['a']['passed_in'], found['a']['failed_in']), (['1'], ['2']))
+        rows = {t['test']: t for t in quality.summary(self.store, LANE)}
+        self.assertEqual((rows['a']['runs'], rows['a']['pass'], rows['a']['fail'], rows['a']['flaky']),
+                         (2, 1, 1, True))
+        self.assertEqual(rows['b']['last'], 'fail')
+        self.assertEqual([h['outcome'] for h in quality.history(self.store, LANE, 'a')], ['pass', 'fail'])
+
+    def test_quarantine_has_an_issue_an_audit_a_notification_and_an_end(self):
+        recorder = Recorder()
+        with_notifications(self.c, recorder)
+        put_run(self.store, LANE, 1, {'a': ('pass', 'k1')})
+        put_run(self.store, LANE, 2, {'a': ('fail', 'k1')})
+        quarantined, _ = quality.scan(self.c, days=7)
+        self.assertEqual([r['test'] for r in quarantined], ['a'])
+        record = quarantined[0]
+        issue = self.c.get('issues/%s.json' % record['issue'])
+        self.assertIn('file this as a finding row in docs/ROADMAP.md', issue['text'])
+        self.assertEqual(list(quality.active_quarantine(self.store, LANE, self.clock())), ['a'])
+        self.assertTrue(any(e['action'] == 'quarantine' for e in reports.audit_entries(self.c)))
+        self.assertEqual(quality.scan(self.c)[0], [], 'already quarantined')
+        self.clock.advance(7 * 86400 + 1)
+        _, expired = quality.scan(self.c)
+        self.assertEqual([r['test'] for r in expired], ['a'])
+        self.assertEqual(quality.active_quarantine(self.store, LANE, self.clock()), {})
+        self.assertEqual(quality.scan(self.c)[0], [], 'the same evidence never quarantines twice')
+        self.assertEqual([t for _, t, _ in recorder.sent], ['Flaky test quarantined: a', 'Quarantine expired: a'])
+
+    def test_quarantine_limit_and_release(self):
+        for i in range(3):
+            put_run(self.store, LANE, 1 + 2 * i, {'t%d' % i: ('pass', 'k')})
+            put_run(self.store, LANE, 2 + 2 * i, {'t%d' % i: ('fail', 'k')})
+        quarantined, _ = quality.scan(self.c, max_active=2)
+        self.assertEqual(len(quarantined), 2)
+        released = quality.release(self.c, LANE, quarantined[0]['test'], 'me')
+        self.assertFalse(released['active'])
+        with self.assertRaises(LookupError):
+            quality.release(self.c, LANE, 'nothing', 'me')
+
+    def test_quarantine_view_separates_held_failures(self):
+        self.assertEqual(quality.quarantine_view({'a': 'fail', 'b': 'pass', 'c': 'fail'}, {'a': {}}),
+                         (['a', 'c'], ['a'], ['c']))
+
+    def test_narrowing_names_the_first_bad_commit(self):
+        record = {'good': {'commit': 'G'}, 'bad': {'commit': 'B'}}
+        known = {'c2': 'pass', 'c4': 'fail', 'c5': 'fail'}
+        remaining = quality.narrow(record, ['c1', 'c2', 'c3', 'c4', 'c5'], known.get)
+        self.assertEqual((record['good']['commit'], record['bad']['commit'], remaining), ('c2', 'c4', ['c3']))
+        record = {'good': {'commit': 'G'}, 'bad': {'commit': 'B'}}
+        self.assertEqual(quality.narrow(record, ['c1', 'c2'], {}.get), ['c1', 'c2'])
+
+    def test_bisection_from_recorded_runs_then_targeted_reruns(self):
+        recorder = Recorder()
+        with_notifications(self.c, recorder)
+        commits = ['%040x' % n for n in range(10, 15)]  # good, three between, bad
+        put_run(self.store, LANE, 1, {'t': ('pass', 'k1')}, commit=commits[0])
+        put_run(self.store, LANE, 2, {'t': ('fail', 'k2')}, commit=commits[4])
+        between = lambda repository, good, bad: commits[commits.index(good) + 1:commits.index(bad)]
+        opened = quality.tick(self.c, REGISTRY, between)
+        self.assertEqual(len(opened), 1)
+        record = self.c.get('bisect/%s.json' % opened[0]['id'])
+        self.assertEqual((record['state'], len(record['reruns'])), ('rerunning', 1))
+        rerun = record['reruns'][0]
+        self.assertEqual(rerun['commit'], commits[2], 'the middle of the three unknown commits')
+        job = self.c.jobs_of(self.c.build(rerun['build']))[0]
+        self.assertIn('--tests ^t$', job['command'])
+        self.assertEqual(job['agents'], {'queue': 'cerid-cloud', 'device': 'gce-linux-x64-intel'})
+        self.assertEqual(self.c.build(rerun['build'])['env'], {'CERID_CI_BISECT': record['id']})
+        put_run(self.store, LANE, rerun['build'], {'t': ('fail', 'k2')}, commit=commits[2], bisect=record['id'])
+        quality.tick(self.c, REGISTRY, between)
+        record = self.c.get('bisect/%s.json' % record['id'])
+        self.assertEqual(record['reruns'][-1]['commit'], commits[1])
+        put_run(self.store, LANE, record['reruns'][-1]['build'], {'t': ('pass', 'k1')}, commit=commits[1],
+                bisect=record['id'])
+        quality.tick(self.c, REGISTRY, between)
+        record = self.c.get('bisect/%s.json' % record['id'])
+        self.assertEqual((record['state'], record['first_bad']), ('found', commits[2]))
+        self.assertIn('First bad commit for t', [t for _, t, _ in recorder.sent])
+        self.assertEqual(len(quality.tick(self.c, REGISTRY, between)), 0, 're-runs never open new bisections')
+
+    def test_bisection_stops_when_a_rerun_cannot_run_the_test(self):
+        commits = ['%040x' % n for n in range(20, 24)]
+        put_run(self.store, LANE, 1, {'t': ('pass', 'k1')}, commit=commits[0])
+        put_run(self.store, LANE, 2, {'t': ('fail', 'k2')}, commit=commits[3])
+        between = lambda repository, good, bad: commits[commits.index(good) + 1:commits.index(bad)]
+        record = quality.tick(self.c, REGISTRY, between)[0]
+        record = self.c.get('bisect/%s.json' % record['id'])
+        self.c.cancel_build(record['reruns'][0]['build'], by='test')
+        self.c.tick()
+        quality.tick(self.c, REGISTRY, between)
+        self.assertEqual(self.c.get('bisect/%s.json' % record['id'])['state'], 'stopped')
+
+
+class LaneQuality(unittest.TestCase):
+    def lane(self, scratch, failures, quarantined=(), tests=None):
+        store = pipeline.LocalStore(Path(scratch) / 'store')
+        for name in quarantined:
+            store.put_json('orchestrator/' + quality.quarantine_name(LANE, name), {
+                'lane': LANE, 'test': name, 'active': True, 'expires': time.time() + 3600, 'issue': 'CI-FLAKY-1',
+                'expires_text': 'soon'})
+        build = Path(scratch) / 'build'
+        (build / 'Testing/Temporary').mkdir(parents=True)
+        junit = build / 'Testing/Temporary/ctest-junit.xml'
+        cases = ''.join('<testcase name="%s" time="0.5">%s</testcase>' % (
+            name, '<failure/>' if name in failures else '') for name in ('a', 'b', 'c'))
+        junit.write_text('<testsuite>%s</testsuite>' % cases, encoding='utf-8')
+
+        class Run(pipeline.Runner):
+            def __call__(self, argv, check=True, **kw):
+                self.commands.append({'argv': argv})
+                text = ' '.join(map(str, argv))
+                if 'ci-evidence.py watch' in text:
+                    return 8 if failures else 0
+                if 'check-registered-failures.py' in text:
+                    self.gate = argv
+                return 0
+        run = Run(environ={'CERID_CI_BUILD_NUMBER': '12', 'CERID_CI_COMMIT': 'c' * 40, 'CERID_CI_BRANCH': 'main',
+                           'CERID_CI': '1'}, dry=False, log=lambda *_: None)
+        device = pipeline.devices_by_id(REGISTRY)['gce-linux-x64-intel']
+        lane = pipeline.Lane('linux-gcc-debug', device, tiers=pipeline.ci_tier.load_tiers(pipeline.TIERS), run=run,
+                             temp=scratch, store=store, tests=tests)
+        lane.build_dir = str(build)
+        lane.junit = lambda name='ctest-junit.xml': str(junit)
+        lane.test_keys = lambda: {'a': 'ka', 'b': 'kb', 'c': 'kc'}
+        lane.cached_tests = lambda: None
+        lane.test()
+        return lane, run, store, junit
+
+    def test_runs_are_recorded_with_outcome_duration_and_key(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            _, run, store, _ = self.lane(scratch, failures=())
+            record = store.get_json('test-runs/%s/0000000012.json' % LANE)
+            self.assertEqual(record['tests']['a'], {'outcome': 'pass', 'seconds': 0.5, 'key': 'ka'})
+            self.assertEqual((record['commit'], record['branch']), ('c' * 40, 'main'))
+
+    def test_a_quarantined_flaky_failure_is_reported_and_does_not_fail_the_lane(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            lane, run, store, junit = self.lane(scratch, failures=('b',), quarantined=('b',))
+            gate = ' '.join(map(str, run.gate))
+            self.assertIn('ctest-junit-quarantine-view.xml', gate)
+            self.assertTrue(gate.endswith('--ctest-exit 0'))
+            self.assertIn('<failure', junit.read_text(encoding='utf-8'), 'the original evidence keeps the failure')
+            self.assertEqual(lane.quarantined, ['b'])
+            self.assertTrue(any('annotate --context quarantine-linux-gcc-debug --style warning' in ' '.join(
+                map(str, c['argv'])) for c in run.commands))
+            record = store.get_json('test-runs/%s/0000000012.json' % LANE)
+            self.assertEqual(record['tests']['b']['outcome'], 'fail', 'the history records the failure')
+
+    def test_any_other_failure_keeps_the_full_verdict(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            _, run, _, junit = self.lane(scratch, failures=('b', 'c'), quarantined=('b',))
+            self.assertEqual(run.gate[run.gate.index('--junit') + 1], str(junit))
+            self.assertEqual(run.gate[-1], '8')
+
+    def test_a_bisection_rerun_selects_its_test_and_skips_the_cache(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            _, run, store, _ = self.lane(scratch, failures=(), tests='^b$')
+            watch = next(c['argv'] for c in run.commands if 'ci-evidence.py' in ' '.join(map(str, c['argv'])))
+            self.assertEqual(watch[watch.index('-R') + 1], '^b$')
+            self.assertEqual(store.list('tests-passed/'), [], 'a re-run never feeds the per-test cache')
+
+
+# --------------------------------------------------------------------------------------------- notifications
+
+class Notifications(Base):
+    def test_once_per_key_filtered_and_never_fatal(self):
+        recorder = Recorder()
+        with_notifications(self.c, recorder, branches=['main'], events=['failure', 'budget'])
+        self.assertEqual(self.c.notify('failure', 't', 'b', key='k1', branch='main'), ['ntfy'])
+        self.assertEqual(self.c.notify('failure', 't', 'b', key='k1', branch='main'), [], 'sent once')
+        self.assertEqual(self.c.notify('failure', 't', 'b', key='k2', branch='feature'), [])
+        self.assertEqual(self.c.notify('recovery', 't', 'b', key='k3', branch='main'), [])
+
+        def broken(*a, **kw):
+            raise OSError('ntfy down')
+        self.c.notifier.senders['ntfy'] = broken
+        self.assertEqual(self.c.notify('budget', 't', 'b', key='k4'), [])
+        self.assertTrue(any(r['event'] == 'notify_failed' for r in self.c.log.records))
+
+    def test_failure_then_recovery_on_the_branch(self):
+        recorder = Recorder()
+        with_notifications(self.c, recorder)
+        w = agent(self.c, queue='q', name='w')
+        for commit, code in (('a' * 40, 1), ('b' * 40, 0)):
+            build, _ = self.c.create_build('cerid', {'event': 'push', 'branch': 'main', 'commit': commit,
+                                                     'trusted': True}, 'webhook',
+                                           document={'steps': [{'key': 's', 'command': 'x', 'agents': {
+                                               'queue': 'q'}}]})
+            got = self.c.poll(w)
+            self.c.start(got['job']['id'], got['token'])
+            self.c.finish(got['job']['id'], got['token'], code)
+        titles = [t for _, t, _ in recorder.sent]
+        self.assertEqual(len(titles), 2)
+        self.assertTrue(titles[0].startswith('Build #1 failed'))
+        self.assertTrue(titles[1].startswith('Build #2 recovered'))
+
+    def test_email_and_ntfy_senders(self):
+        class Secrets:
+            def value(self, name):
+                return 'pw-' + name
+        sent = {}
+
+        class Smtp:
+            def __init__(self, host, port, timeout=None, context=None):
+                sent['server'] = (host, port)
+
+            def starttls(self, context=None):
+                sent['tls'] = True
+
+            def login(self, user, password):
+                sent['login'] = (user, password)
+
+            def send_message(self, message):
+                sent['message'] = message
+
+            def quit(self):
+                sent['quit'] = True
+        notify.email({'host': 'smtp.example', 'port': 587, 'from': 'ci@example', 'to': ['me@example'],
+                      'username': 'ci', 'password_secret': 'smtp'}, Secrets(), 'Build failed', 'body', smtp=Smtp)
+        self.assertEqual((sent['server'], sent['tls'], sent['login'], sent['quit']),
+                         (('smtp.example', 587), True, ('ci', 'pw-smtp'), True))
+        self.assertEqual(sent['message']['Subject'], '[Cerid CI] Build failed')
+        requests = []
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b''
+        notify.ntfy({'url': 'http://ntfy.tailnet/ci', 'token_secret': 'ntfy'}, Secrets(), 'T', 'B', priority='high',
+                    opener=lambda request, timeout=None: requests.append(request) or Response())
+        self.assertEqual(requests[0].get_header('Authorization'), 'Bearer pw-ntfy')
+        self.assertEqual(requests[0].data, b'B')
+
+    def test_budget_alerts_once_per_threshold(self):
+        recorder = Recorder()
+        with_notifications(self.c, recorder)
+        self.store.put_json('ledger/%s/m.json' % pipeline.month_of(dt_now(self.clock)), {'usd': 41.0})
+        d = dispatch.Dispatcher(self.c, REGISTRY, {})
+        d.tick()
+        d.tick()
+        self.assertEqual([t for _, t, _ in recorder.sent], ['CI spend at 80 % of the 50 USD cap'])
+
+
+def dt_now(clock):
+    import datetime
+    return datetime.datetime.fromtimestamp(clock(), datetime.timezone.utc)
+
+
+# --------------------------------------------------------------------------------------------- reports
+
+class Reports(Base):
+    def test_costs_by_build_lane_device_with_a_forecast(self):
+        month = pipeline.month_of(dt_now(self.clock))
+        for i, (build, key, device, usd) in enumerate(((1, 'lane-a', 'd1', 1.0), (1, 'lane-b', 'd2', 2.0),
+                                                       (2, 'lane-a', 'd1', 3.0))):
+            self.store.put_json('ledger/%s/m%d.json' % (month, i), {'build': build, 'key': key, 'device': device,
+                                                                   'usd': usd, 'hours': 1.0})
+        data = reports.costs(self.c, REGISTRY, month)
+        self.assertEqual(data['spent_usd'], 6.0)
+        self.assertEqual({r['key']: r['usd'] for r in data['by_lane']}, {'lane-a': 4.0, 'lane-b': 2.0})
+        self.assertEqual(data['by_build'][0], {'build': '1', 'usd': 3.0, 'hours': 2.0, 'machines': 2})
+        self.assertGreaterEqual(data['forecast_usd'], 6.0)
+        self.assertEqual(len(data['months']), 6)
+
+    def test_queue_time_and_availability_slos(self):
+        self.build_one = self.c.create_build('cerid', {'event': 'push', 'branch': 'main', 'commit': COMMIT,
+                                                       'trusted': True}, 'webhook')
+        self.c.tick()
+        self.clock.advance(30)
+        self.c.poll(agent(self.c, name='l'))
+        for minute in range(10):
+            self.clock.advance(60)
+            self.c.tick()
+        data = reports.slo(self.c)
+        queue = data['queues'][0]
+        self.assertEqual((queue['queue'], queue['samples'], queue['p95_s'], queue['met']),
+                         ('cerid-launcher', 1, 30.0, True))
+        self.assertGreater(data['availability'], 0.8)
+        self.clock.advance(3600)
+        self.c.tick()
+        self.assertLess(reports.slo(self.c)['availability'], data['availability'], 'an hour without ticks counts')
+
+    def test_audit_records_manual_actions(self):
+        build, _ = self.c.create_build('cerid', {'event': 'push', 'branch': 'main', 'commit': COMMIT}, 'manual',
+                                       created_by='alice')
+        self.c.cancel_build(build['number'], by='bob')
+        actions = [(e['who'], e['action']) for e in reports.audit_entries(self.c)]
+        self.assertIn(('alice', 'build-create'), actions)
+        self.assertIn(('bob', 'build-cancel'), actions)
+
+
+# --------------------------------------------------------------------------------------------- access
+
+class Access(unittest.TestCase):
+    def test_iap_tunnel_mode_accepts_loopback_and_the_iap_range_only(self):
+        ui = auth.UiAuth('iap-tunnel')
+        self.assertEqual(ui.user({}, ('127.0.0.1', 5)), 'operator (local)')
+        self.assertEqual(ui.user({}, ('35.235.241.7', 5)), 'operator (IAP tunnel)')
+        for peer in (('10.128.0.9', 5), ('8.8.8.8', 5), ('35.235.0.1', 5), ('', 0)):
+            with self.assertRaises(auth.AuthError):
+                ui.user({'Cf-Access-Jwt-Assertion': 'x', 'Tailscale-User-Login': 'me'}, peer)
+
+    def test_tailscale_mode_asks_tailscaled_and_never_trusts_a_header(self):
+        class Whois:
+            def login(self, host, port):
+                return {'100.101.1.2': 'me@example.com', '100.101.1.3': 'other@example.com'}[host]
+        ui = auth.UiAuth('tailscale', allowed=['me@example.com'], whois=Whois())
+        self.assertEqual(ui.user({}, ('100.101.1.2', 4)), 'me@example.com')
+        with self.assertRaises(auth.AuthError):
+            ui.user({'Tailscale-User-Login': 'me@example.com'}, ('100.101.1.3', 4))
+        with self.assertRaises(auth.AuthError):
+            ui.user({'Tailscale-User-Login': 'me@example.com'}, ('10.0.0.2', 4))
+        with self.assertRaises(ValueError):
+            auth.UiAuth('tailscale')
+
+    def test_whois_through_the_tailscale_command(self):
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv)
+            body = {'UserProfile': {'LoginName': 'me@example.com'}, 'Node': {'Tags': None}}
+            if argv[-1].startswith('100.64.0.9'):
+                body['Node']['Tags'] = ['tag:server']
+            return subprocess.CompletedProcess(argv, 0, json.dumps(body), '')
+        whois = auth.TailscaleWhois(run=run, socket_path=str(ROOT / 'no-such-socket'))
+        self.assertEqual(whois.login('100.64.0.8', 51000), 'me@example.com')
+        self.assertEqual(whois.login('100.64.0.8', 51000), 'me@example.com')
+        self.assertEqual(len(calls), 1, 'cached')
+        self.assertEqual(calls[0], ['tailscale', 'whois', '--json', '100.64.0.8:51000'])
+        with self.assertRaises(auth.AuthError):
+            whois.login('100.64.0.9', 1)
+
+    def test_listeners(self):
+        self.assertEqual(coordinator_main.listeners({}, {}), [('127.0.0.1', 8780, ('ui', 'agent'))])
+        self.assertEqual(coordinator_main.listeners({}, {'CERID_CI_LISTEN': '127.0.0.1:8780,10.128.0.2:8780=agent'}),
+                         [('127.0.0.1', 8780, ('ui', 'agent')), ('10.128.0.2', 8780, ('agent',))])
+        with self.assertRaises(SystemExit):
+            coordinator_main.listeners({}, {'CERID_CI_LISTEN': '1.2.3.4:1=everything'})
+        config, problems = coordinator_main.load_config(ROOT / 'ci/coordinator.json', {
+            'CERID_CI_REPOSITORY_URL': 'git@example:o/r.git'})
+        self.assertEqual((problems, config['ui']['mode'], config['repositories']['cerid']['poll']['interval_seconds']),
+                         ([], 'iap-tunnel', 60))
+        self.assertNotIn('webhook_secret', config['repositories']['cerid'], 'webhooks are an optional add-on')
+
+
+class Surfaces(Base):
+    def serve(self, surfaces, ui=None):
+        server = service.serve(service.Service(self.c, ui or auth.UiAuth('local', loopback=True), CONFIG,
+                                               registry=REGISTRY, stream_seconds=5, stream_interval=0.05),
+                               '127.0.0.1', 0, surfaces)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return 'http://127.0.0.1:%d' % server.server_address[1]
+
+    def get(self, url, headers=None):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers or {}), timeout=10) as response:
+                return response.status, response.read()
+        except urllib.error.HTTPError as error:
+            body = error.read()
+            error.close()
+            return error.code, body
+
+    def test_each_listener_serves_only_its_surfaces(self):
+        agent_only = self.serve(('agent',))
+        self.assertEqual(self.get(agent_only + '/api/builds')[0], 404)
+        self.assertEqual(self.get(agent_only + '/')[0], 404)
+        self.assertEqual(self.get(agent_only + '/healthz')[0], 200)
+        self.assertEqual(self.get(agent_only + '/agent/cerid-agent.py')[0], 200)
+        ui_only = self.serve(('ui',))
+        self.assertEqual(self.get(ui_only + '/api/builds')[0], 200)
+        self.assertEqual(self.get(ui_only + '/agent/cerid-agent.py')[0], 404)
+        self.assertEqual(self.get(ui_only + '/webhooks/cerid')[0], 404)
+
+    def test_iap_tunnel_listener_refuses_a_network_peer(self):
+        base = self.serve(('ui', 'agent'), ui=auth.UiAuth('iap-tunnel', networks=('35.235.240.0/20',)))
+        self.assertEqual(self.get(base + '/api/builds')[0], 401, '127.0.0.1 is not in this listener\'s networks')
+
+    def test_server_sent_events_follow_a_build_and_a_log(self):
+        base = self.serve(('ui', 'agent'))
+        build, _ = self.c.create_build('cerid', {'event': 'push', 'branch': 'main', 'commit': COMMIT,
+                                                 'trusted': True}, 'webhook')
+        got = self.c.poll(agent(self.c, name='l'))
+        self.c.start(got['job']['id'], got['token'])
+        self.c.append_log(got['job']['id'], got['token'], 1, 0, b'\x1b[31mred\x1b[0m line\n')
+
+        def finish():
+            time.sleep(0.3)
+            self.c.append_log(got['job']['id'], got['token'], 1, 1, b'second\n')
+            self.c.finish(got['job']['id'], got['token'], 0)
+        threading.Thread(target=finish, daemon=True).start()
+        status, body = self.get(base + '/api/stream?job=%s' % got['job']['id'])
+        text = body.decode('utf-8')
+        self.assertEqual(status, 200)
+        self.assertIn('event: log', text)
+        self.assertIn('red', text)
+        self.assertIn('second', text)
+        self.assertIn('event: end', text)
+        status, body = self.get(base + '/api/stream?build=%d' % build['number'])
+        self.assertIn('event: build', body.decode('utf-8'))
+
+    def test_report_endpoints(self):
+        base = self.serve(('ui',))
+        for path in ('costs', 'slo', 'audit', 'quality'):
+            status, body = self.get(base + '/api/' + path)
+            self.assertEqual(status, 200, path)
+            json.loads(body)
+
+
+# --------------------------------------------------------------------------------------------- reproducibility
+
+class Reproducibility(Base):
+    def test_the_record_leaves_out_tokens_and_secret_values(self):
+        job = {'secrets': {'DEPLOY_KEY': 's3cret'}, 'env': {'CERID_CI_DEVICE': 'gce-linux-x64-intel'}}
+        env = {'PATH': '/bin', 'DEPLOY_KEY': 's3cret', 'CERID_AGENT_JOB_TOKEN': 'cjt_x', 'GIT_CONFIG_VALUE_0': 'B t'}
+        record = agent_module.reproducibility(job, env, {'commit': COMMIT, 'strategy': 'mirror'}, 'vm-1',
+                                              run=lambda argv, **kw: subprocess.CompletedProcess(argv, 0, 'git 2.0\n',
+                                                                                                 ''),
+                                              which=lambda name, path=None: '/bin/' + name if name == 'git' else None)
+        text = json.dumps(record)
+        self.assertNotIn('s3cret', text)
+        self.assertNotIn('cjt_x', text)
+        self.assertEqual(record['env']['DEPLOY_KEY'], '[secret]')
+        self.assertEqual(record['tools'], {'git': 'git 2.0'})
+        self.assertEqual((record['commit'], record['device'], record['checkout']),
+                         (COMMIT, 'gce-linux-x64-intel', 'mirror'))
+        build, _ = self.c.create_build('cerid', {'event': 'push', 'branch': 'main', 'commit': COMMIT}, 'manual')
+        got = self.c.poll(agent(self.c, name='l'))
+        self.c.start(got['job']['id'], got['token'])
+        self.c.record_environment(got['job']['id'], got['token'], record)
+        self.assertEqual(self.c.job(got['job']['id'])['repro']['tools'], {'git': 'git 2.0'})
+
+
+# --------------------------------------------------------------------------------------------- ops CLI
+
+class Cli(Base):
+    def ops(self, *argv, environ=None):
+        out, err = io.StringIO(), io.StringIO()
+        import contextlib
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = ops.main(['--store', self.scratch.name] + list(argv), environ=environ or {})
+        return code, out.getvalue(), err.getvalue()
+
+    def test_every_command_speaks_json(self):
+        build, _ = self.c.create_build('cerid', {'event': 'push', 'branch': 'main', 'commit': COMMIT}, 'manual')
+        for argv in (('build', 'list'), ('build', 'show', str(build['number'])), ('agent', 'list'),
+                     ('queue', 'list'), ('test', 'list'), ('test', 'flaky'), ('quarantine', 'list'),
+                     ('bisect', 'list'), ('audit', 'list'), ('slo',), ('health',), ('device', 'list'),
+                     ('accounts',), ('cost',)):
+            code, out, err = self.ops('--json', *argv)
+            self.assertIn(code, (0, 1), (argv, err))
+            json.loads(out)
+
+    def test_legacy_verbs_still_work(self):
+        self.assertEqual(ops.legacy(['builds']), ['build', 'list'])
+        self.assertEqual(ops.legacy(['--json', 'add-device', '--id', 'x']), ['device', 'add', '--id', 'x', '--json'])
+        self.assertEqual(ops.legacy(['build', '--number', '3']), ['build', 'show', '3'])
+        self.assertEqual(ops.legacy(['cancel', '--job', 'j']), ['job', 'cancel', 'j'])
+        self.assertEqual(ops.legacy(['agent-token', 'create', '--name', 'n']), ['token', 'create', '--name', 'n'])
+        self.assertEqual(ops.legacy(['backup', '--out', 'f']), ['backup', 'create', '--out', 'f'])
+        self.assertEqual(ops.legacy(['--store', 's', 'budget', '--pull']), ['--store', 's', 'cost', '--pull'])
+
+    def test_errors_say_what_to_do_next(self):
+        code, out, err = self.ops('build', 'show', '999')
+        self.assertEqual(code, 2)
+        self.assertIn('error: build 999', err)
+        self.assertIn('next:', err)
+        code, out, err = self.ops('--json', 'build', 'show', '999')
+        self.assertEqual(json.loads(out)['next'].split(':')[0], 'list what exists')
+
+    def test_human_output_is_plain_without_a_terminal(self):
+        self.c.create_build('cerid', {'event': 'push', 'branch': 'main', 'commit': COMMIT}, 'manual')
+        code, out, _ = self.ops('build', 'list')
+        self.assertNotIn('\x1b[', out)
+        self.assertIn('scheduled', out)
+        self.assertIn('\x1b[', ops.Out(True).state('failed'))
+
+    def test_completion_scripts_name_every_command(self):
+        for shell in ('bash', 'zsh', 'powershell'):
+            code, out, _ = self.ops('completion', shell)
+            self.assertEqual(code, 0)
+            for word in ('build', 'quarantine', 'release', '--json', 'ui'):
+                self.assertIn(word, out, shell)
+            self.assertNotIn('add-device', out, 'legacy verbs are not offered')
+
+    def test_ui_opens_the_iap_tunnel_then_the_browser(self):
+        started, opened = [], []
+
+        class Tunnel:
+            stdout = io.StringIO('')
+            polls = [None]
+
+            def poll(self):
+                return None
+
+            def wait(self):
+                return 0
+
+            def terminate(self):
+                started.append('terminated')
+        args = ops.build_parser().parse_args(['ui', '--project', 'cerid-ci', '--zone', 'us-central1-a', '--once',
+                                              '--port', '0'])
+        ctx = type('Ctx', (), {'args': args, 'environ': {}, 'out': ops.Out(False)})()
+        readiness = iter([False, True])
+        original = ops.gcloud_path
+        ops.gcloud_path = lambda: 'gcloud'
+        try:
+            code, data, _ = ops.cmd_ui(ctx, popen=lambda argv, **kw: started.append(argv) or Tunnel(),
+                                       ready=lambda port: next(readiness), browser=opened.append, sleep=lambda s: None)
+        finally:
+            ops.gcloud_path = original
+        self.assertEqual(started[0][:5], ['gcloud', 'compute', 'start-iap-tunnel', 'cerid-ci-launcher', '8780'])
+        self.assertIn('--project', started[0])
+        self.assertEqual(opened, [data['url']])
+        self.assertEqual(started[-1], 'terminated')
+
+    def test_ui_explains_a_refused_tunnel(self):
+        class Dead:
+            stdout = io.StringIO('ERROR: (gcloud.compute.start-iap-tunnel) Error while connecting [4033: not '
+                                 'authorized]')
+
+            def poll(self):
+                return 1
+
+            def terminate(self):
+                pass
+        args = ops.build_parser().parse_args(['ui', '--once', '--port', '0'])
+        ctx = type('Ctx', (), {'args': args, 'environ': {}, 'out': ops.Out(False)})()
+        original = ops.gcloud_path
+        ops.gcloud_path = lambda: 'gcloud'
+        try:
+            with self.assertRaises(ops.OpsError) as raised:
+                ops.cmd_ui(ctx, popen=lambda argv, **kw: Dead(), ready=lambda port: False, sleep=lambda s: None)
+        finally:
+            ops.gcloud_path = original
+        self.assertIn('4033', str(raised.exception))
+        self.assertIn('IAP-secured Tunnel User', raised.exception.hint)
+
+
 if __name__ == '__main__':
     unittest.main()

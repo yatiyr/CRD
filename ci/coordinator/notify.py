@@ -80,7 +80,7 @@ class Notifier:
                     self.senders[channel['kind']](channel, self.secrets, title, body)
                 sent.append(channel['kind'])
             except Exception as error:  # a notification is courtesy: never fail the caller
-                self.log('notify_failed', level='warning', channel=channel.get('kind'), event=event,
+                self.log('notify_failed', level='warning', channel=channel.get('kind'), notification=event,
                          error=str(error)[:300])
-        self.log('notified', event=event, title=title, channels=sent)
+        self.log('notified', notification=event, title=title, channels=sent)
         return sent
