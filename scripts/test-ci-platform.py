@@ -936,7 +936,7 @@ class Ops(unittest.TestCase):
         states = {row[0]: row[3] for row in rows}
         self.assertEqual(states['gcp-project'], 'configured')
         self.assertEqual(states['coordinator'], 'configured')
-        self.assertEqual(states['cloudflare-access'], 'missing')
+        self.assertEqual(states['cloudflare-access'], 'missing (optional)')
         self.assertEqual(states['xbox-partner-center'], 'user program')
         self.assertEqual(states['webhook-secret'], 'missing (optional)')
         self.assertEqual(states['cloudflare-pages'], 'missing (optional)')

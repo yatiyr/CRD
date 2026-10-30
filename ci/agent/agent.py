@@ -475,6 +475,12 @@ class Agent:
                 extra.update({k: v for k, v in self.git_env(assignment['checkout'], token).items()
                               if k.startswith('GIT_CONFIG_')})
             env = clean_environment(job, extra)
+            try:
+                client.call('POST', '/api/agent/jobs/%s/environment' % job['id'],
+                            reproducibility(job, env, assignment['checkout'], self.name, gce=os.environ.get(
+                                'CERID_AGENT_GCE') == '1', opener=self.opener), retry=False)
+            except CoordinatorError as error:  # the record is evidence, never a reason to fail the job
+                log.line('reproducibility record not stored: %s' % error)
             argv = script_for(job['command'], scratch)
             log.line('running %s' % job['key'])
             flags = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' else {
@@ -521,6 +527,50 @@ class Agent:
             if self.mode == 'one-shot':
                 shutil.rmtree(self.workdir(assignment), ignore_errors=True)
         return exit_status
+
+TOOLS = (('git', ['--version']), ('cmake', ['--version']), ('ninja', ['--version']), ('ctest', ['--version']),
+         ('gcc', ['--version']), ('g++', ['--version']), ('clang', ['--version']), ('clang-cl', ['--version']),
+         ('python3', ['--version']), ('python', ['--version']), ('sccache', ['--version']), ('xcrun', ['--version']))
+HIDDEN_ENV = ('CERID_AGENT_JOB_TOKEN', 'GIT_CONFIG_VALUE_0')
+
+
+def tool_versions(env, run=subprocess.run, which=shutil.which):
+    """First line of `<tool> --version` for every tool on the step's PATH (bounded, never fatal)."""
+    out = {}
+    for name, args in TOOLS:
+        path = which(name, path=env.get('PATH') or env.get('Path'))
+        if not path:
+            continue
+        try:
+            completed = run([path] + args, capture_output=True, text=True, timeout=10, check=False, env=env)
+            line = (completed.stdout or completed.stderr).strip().splitlines()
+            out[name] = line[0][:200] if line else ''
+        except (OSError, subprocess.TimeoutExpired):
+            out[name] = 'unavailable'
+    return out
+
+
+def reproducibility(job, env, checkout, name, gce=False, opener=None, run=subprocess.run, which=shutil.which):
+    """What it takes to reproduce this attempt: the commit, the machine and image, the toolchain versions and the
+    step's environment with every secret value and token left out."""
+    secret_names = set(job.get('secrets', {})) | set(HIDDEN_ENV)
+    image = None
+    if gce:
+        try:
+            request = urllib.request.Request(METADATA + 'image', headers={'Metadata-Flavor': 'Google'})
+            with (opener or urllib.request.urlopen)(request, timeout=5) as response:
+                image = response.read().decode('utf-8', 'replace')[:300]
+        except OSError:
+            image = 'unknown'
+    return {'commit': checkout.get('commit'), 'checkout': checkout.get('strategy', 'direct'),
+            'device': job['env'].get('CERID_CI_DEVICE'), 'machine': name, 'image': image,
+            'os': '%s %s' % (platform.system(), platform.release()), 'platform': platform.platform(),
+            'arch': normalized_arch(), 'cpu': platform.processor()[:200], 'cpus': os.cpu_count(),
+            'python': platform.python_version(), 'agent_version': VERSION,
+            'tools': tool_versions(env, run=run, which=which),
+            'env': {k: ('[secret]' if k in secret_names else v[:500]) for k, v in sorted(env.items())
+                    if k not in HIDDEN_ENV}}
+
 
 def upload_artifacts(client, job_id, work, patterns, say):
     """Upload every file matching the `;`-separated globs (relative to the checkout, `**` recursive)."""

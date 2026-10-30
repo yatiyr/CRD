@@ -64,6 +64,7 @@ class Dispatcher:
         cap = float(self.registry['budget']['monthly_cap_usd'])
         stop = p.gcp_budget_stop(store, month)
         spent = p.month_spend(store, month) + self.running_bound()
+        self.budget_alerts(month, spent, cap, stop)
         launched = []
         for build, job in self.c.ready_jobs(self.queue):
             device = self.devices.get(job['agents'].get('device'))
@@ -109,6 +110,18 @@ class Dispatcher:
         self.reap()
         return launched
 
+    def budget_alerts(self, month, spent, cap, stop):
+        """One notification per month and threshold: 80 % and 100 % of the cap (ledger plus running machines' worst
+        case) and the GCP budget stop."""
+        for fraction in (0.8, 1.0):
+            if cap and spent >= fraction * cap:
+                self.c.notify('budget', 'CI spend at %d %% of the %.0f USD cap' % (fraction * 100, cap),
+                              '%s: %.2f USD recorded or committed of %.2f USD. Paid launches past the cap end as '
+                              'budget.' % (month, spent, cap), key='budget:%s:%s' % (month, fraction))
+        if stop:
+            self.c.notify('budget', 'GCP budget stop in force', 'The Cloud Billing budget reports the month at its '
+                          'amount; no paid machine starts until next month.', key='budget:%s:gcp-stop' % month)
+
     def reap(self):
         """End machines whose job no longer needs them; turn a vanished machine under a live job into a retry."""
         store = self.c.store
@@ -151,7 +164,7 @@ class Dispatcher:
             store.put_json(name, record)
             store.put_json('ledger/%s/%s.json' % (self.p.month_of(now), record['machine']),
                            {'device': record['device'], 'hours': round(hours, 4), 'usd': record['usd'],
-                            'job': record['job'], 'build': record.get('build')})
+                            'job': record['job'], 'build': record.get('build'), 'key': record.get('key')})
             self.c.log('machine_ended', machine=record['machine'], usd=record['usd'])
             ended.append(record)
         return ended

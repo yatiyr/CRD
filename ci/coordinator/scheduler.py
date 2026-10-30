@@ -22,7 +22,7 @@ CI = Path(__file__).resolve().parents[1]
 if str(CI) not in sys.path:
     sys.path.insert(0, str(CI))
 
-from coordinator import PROTOCOL, SCHEMA_VERSION, VERSION, auth, hosts, state, steps  # noqa: E402
+from coordinator import PROTOCOL, SCHEMA_VERSION, VERSION, auth, hosts, notify, reports, state, steps  # noqa: E402
 
 PREFIX = 'orchestrator/'
 DEFAULTS = {
@@ -105,6 +105,21 @@ class Coordinator:
         self.limits.update(self.config.get('limits', {}))
         self.repositories = self.config.get('repositories', {})
         self.url = self.config.get('url', '').rstrip('/')
+        self.notifier = notify.Notifier(self.config.get('notifications'), secrets, self.create, self.log)
+
+    # Audit and notifications -----------------------------------------------------------------------------------
+    def audit(self, who, action, target, detail='', via=None):
+        """One record per manual or automatic decision (who, what, on what, when); never rewritten."""
+        now = self.clock()
+        entry = {'at': round(now, 3), 'who': str(who or 'unknown')[:200], 'action': action, 'target': str(target)[:300],
+                 'detail': str(detail)[:1000], 'via': via}
+        name = 'audit/%s/%013d-%s.json' % (reports.day(now), int(now * 1000), os.urandom(4).hex())
+        self.create(name, entry)
+        self.log('audit', **{k: v for k, v in entry.items() if k != 'at'})
+        return entry
+
+    def notify(self, event, title, body, key, branch=None):
+        return self.notifier(event, title, body + ('\n\n%s' % self.url if self.url else ''), key, branch)
 
     # Storage -------------------------------------------------------------------------------------------------
     def get(self, name):
@@ -241,6 +256,10 @@ class Coordinator:
             except Exception as error:  # the agent fails its checkout visibly; the build still exists
                 self.log('mirror_failed', level='error', build=number, error=str(error))
         self.upload(number, document or self.bootstrap(repo))
+        if source == 'manual':
+            self.audit(created_by or 'unknown', 'build-create', 'build %d' % number, '%s %s at %s %s' % (
+                repository, build['branch'], build['commit'][:12], ' '.join(
+                    '%s=%s' % kv for kv in sorted(build['env'].items()))))
         self.log('build_created', build=number, repository=repository, source=source, branch=build['branch'],
                  commit=build['commit'])
         return self.build(number), True
@@ -292,10 +311,12 @@ class Coordinator:
             current['canceled_by'] = by
             current['cancel_reason'] = reason
             return current
+        before = self.build(number)
         build = self.update(self.build_name(number), change)
         for job_id in build['jobs']:
             self.cancel_job(job_id, reason=reason, now=now)
-        self.log('build_cancel', build=number, by=by, reason=reason)
+        if not before['cancel_requested'] and before['state'] not in state.BUILD_TERMINAL:
+            self.audit(by or 'unknown', 'build-cancel', 'build %d' % number, reason)
         return self.build(number)
 
     def cancel_job(self, job_id, reason='canceled', now=None):
@@ -346,7 +367,8 @@ class Coordinator:
                 self.update('jobs/%s.json' % other['id'],
                             lambda j: self._next_attempt(j, 'retry', now, 'dependency retried')
                             if j['state'] == 'canceled' else None)
-        self.log('job_retry', job=job_id, build=job['build'], key=job['key'], by=by)
+        self.audit(by or 'unknown', 'job-retry', 'build %d %s' % (job['build'], job['key']),
+                   'attempt %d' % (job['attempt'] + 1))
         return self.job(job_id)
 
     def _next_attempt(self, job, event, now, reason):
@@ -437,6 +459,11 @@ class Coordinator:
             return None, None
         if token:
             self._record_token(updated, token)
+        if updated.get('ready_at'):
+            try:
+                reports.record_queue(self, updated['agents'].get('queue', 'default'), now - updated['ready_at'], now)
+            except Exception as error:  # a metric never blocks an assignment
+                self.log('metric_failed', level='warning', error=str(error)[:200])
         return updated, token
 
     def _record_token(self, job, token):
@@ -537,7 +564,7 @@ class Coordinator:
                 'checkout': checkout}
 
     # Agents ----------------------------------------------------------------------------------------------------
-    def create_registration(self, name, queue, tags=None):
+    def create_registration(self, name, queue, tags=None, by='operator'):
         """A registration token for an owned machine (returned once; only its hash is stored)."""
         if not steps.NAME.match(name):
             raise ValueError('agent names are letters, digits, - and _')
@@ -545,16 +572,17 @@ class Coordinator:
         self.create('registrations/%s.json' % auth.token_hash(token),
                     {'name': name, 'queue': queue, 'tags': dict(tags or {}), 'created': self.clock(),
                      'revoked': False})
-        self.log('registration_created', name=name, queue=queue)
+        self.audit(by, 'agent-token-create', name, 'queue %s tags %s' % (queue, dict(tags or {})))
         return token
 
-    def revoke_registration(self, name):
+    def revoke_registration(self, name, by='operator'):
         revoked = 0
         for item in self.store.list(PREFIX + 'registrations/'):
             record = self.store.get_json(item)
             if record and record['name'] == name and not record['revoked']:
                 self.p.update_json(self.store, item, lambda r: dict(r, revoked=True, revoked_at=self.clock()))
                 revoked += 1
+        self.audit(by, 'agent-token-revoke', name, '%d revoked' % revoked)
         return revoked
 
     def register(self, registration_token, info):
@@ -591,8 +619,12 @@ class Coordinator:
         self.update('agents/%s.json' % agent['id'], lambda a: dict(a, last_seen=self.clock()))
         return agent
 
-    def stop_agent(self, agent_id):
-        return self.update('agents/%s.json' % agent_id, lambda a: dict(a, stopped=True) if a else None)
+    def stop_agent(self, agent_id, by='operator'):
+        agent = self.update('agents/%s.json' % agent_id, lambda a: dict(a, stopped=True) if a else None)
+        if agent is None:
+            raise NotFound('agent %s' % agent_id)
+        self.audit(by, 'agent-stop', agent.get('name', agent_id), agent_id)
+        return agent
 
     def job_for_token(self, job_id, token, writing=True):
         record = self.get('tokens/%s.json' % auth.token_hash(token or '')) if token else None
@@ -621,6 +653,20 @@ class Coordinator:
         self._build_running(job['build'])
         self.log('job_started', job=job_id, build=job['build'], key=job['key'], agent=job['agent'])
         return job
+
+    def record_environment(self, job_id, token, record):
+        """The agent's reproducibility record of this attempt: machine, image, toolchain versions, environment
+        (secret values never included), commit and device."""
+        job = self.job_for_token(job_id, token)
+        record = {k: record.get(k) for k in ('os', 'platform', 'arch', 'cpu', 'cpus', 'machine', 'image', 'tools',
+                                            'env', 'commit', 'agent_version', 'python', 'device', 'checkout')}
+        text = json.dumps(record)
+        if len(text) > 64 * 1024:
+            raise Refused('the reproducibility record is larger than 64 KiB')
+        attempt = job['attempt']
+        self.update('jobs/%s.json' % job_id, lambda j: dict(j, repro=dict(record, attempt=attempt))
+                    if j['attempt'] == attempt else None)
+        return True
 
     def heartbeat(self, job_id, token):
         job = self.job_for_token(job_id, token)
@@ -826,7 +872,35 @@ class Coordinator:
         self._index_recent(build)
         self.report_status(build)
         self.log('build_finished', build=number, state=build['state'])
+        self.notify_outcome(build)
         return build
+
+    def previous_build(self, build):
+        """The newest earlier finished build of the same repository and branch (from the recent index)."""
+        for item in self.recent(200):
+            if item['number'] < build['number'] and item['repository'] == build['repository'] and \
+                    item['branch'] == build['branch'] and item['state'] in ('passed', 'failed'):
+                return item
+        return None
+
+    def notify_outcome(self, build):
+        if build['state'] not in ('passed', 'failed') or build['source'] == 'manual' and build.get(
+                'created_by') == 'bisector':
+            return None
+        previous = self.previous_build(build)
+        if build['state'] == 'failed':
+            failed = [j['key'] for j in self.jobs_of(build) if j['state'] in ('failed', 'timed_out', 'expired')
+                      and not state.soft_failed(j)]
+            return self.notify('failure', 'Build #%d failed on %s' % (build['number'], build['branch']),
+                               '%s %s at %s: %s failed.' % (build['repository'], build['branch'], build['commit'][:12],
+                                                           ', '.join(failed) or 'a step'),
+                               key='failure:%d' % build['number'], branch=build['branch'])
+        if previous and previous['state'] == 'failed':
+            return self.notify('recovery', 'Build #%d recovered %s' % (build['number'], build['branch']),
+                               '%s %s is green again at %s (build #%d had failed).' % (
+                                   build['repository'], build['branch'], build['commit'][:12], previous['number']),
+                               key='recovery:%d' % build['number'], branch=build['branch'])
+        return None
 
     def report_status(self, build):
         repo = self.repositories.get(build['repository'], {})
@@ -910,6 +984,7 @@ class Coordinator:
             self.settle(number)
         self.store.put_json(PREFIX + 'coordinator/heartbeat.json', {'at': now, 'version': VERSION,
                                                                    'pid': os.getpid()})
+        reports.record_tick(self, now)
 
     # Retention -------------------------------------------------------------------------------------------------
     def sweep(self, limit=200):

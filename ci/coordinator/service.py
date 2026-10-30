@@ -25,7 +25,7 @@ import time
 import traceback
 import urllib.parse
 
-from coordinator import PROTOCOL, VERSION, auth, hosts, state, steps
+from coordinator import PROTOCOL, VERSION, auth, hosts, quality, reports, state, steps
 from coordinator.scheduler import NotFound, Refused, PREFIX
 
 CI = Path(__file__).resolve().parents[1]
@@ -63,7 +63,7 @@ def status_of(error):
 
 class Service:
     def __init__(self, coordinator, ui, config=None, registry=None, identity=None, mirror=None, web=WEB,
-                 agent_file=AGENT, dashboard=None):
+                 agent_file=AGENT, dashboard=None, qual_data=None, stream_seconds=300.0, stream_interval=1.0):
         self.c = coordinator
         self.ui = ui
         self.config = config or {}
@@ -73,7 +73,10 @@ class Service:
         self.web = Path(web)
         self.agent_file = Path(agent_file)
         self.dashboard = dashboard
+        self.qual_data = qual_data
         self.qual_cache = (0.0, b'')
+        self.stream_seconds = stream_seconds
+        self.stream_interval = stream_interval
 
     def agent_bytes(self):
         data = self.agent_file.read_bytes()
@@ -129,6 +132,18 @@ class Service:
                 'by_device': sorted(by_device.values(), key=lambda d: -d['usd']), 'running': running,
                 'running_bound_usd': round(sum(float(r['bound_usd'] or 0) for r in running), 4)}
 
+    def quality(self):
+        out = []
+        for lane in quality.lanes(self.c.store):
+            tests = quality.summary(self.c.store, lane)
+            out.append({'lane': lane, 'tests': tests[:200], 'flaky': [t for t in tests if t['flaky']],
+                        'failing': [t for t in tests if t['last'] == 'fail']})
+        quarantines = [r for r in (self.c.store.get_json(n) for n in self.c.store.list(PREFIX + 'quarantine/')) if r]
+        issues = [r for r in (self.c.store.get_json(n) for n in self.c.store.list(PREFIX + 'issues/')) if r]
+        bisections = [r for r in (self.c.store.get_json(n) for n in self.c.store.list(PREFIX + 'bisect/')) if r]
+        return {'lanes': out, 'quarantine': quarantines, 'issues': issues, 'bisections': bisections,
+                'now': self.c.clock()}
+
     def qual(self):
         stamp, page = self.qual_cache
         if time.time() - stamp < 60 and page:
@@ -141,7 +156,12 @@ class Service:
         return page
 
 
-def make_handler(service):
+SURFACES = ('ui', 'agent', 'webhook')
+
+
+def make_handler(service, surfaces=SURFACES):
+    """The request handler of one listener. `surfaces` says which parts this listener serves: `ui` (the web UI
+    and its API), `agent` (the agent API, the git mirror, the agent program) and `webhook`; /healthz is everywhere."""
     c = service.c
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -214,7 +234,7 @@ def make_handler(service):
             return token
 
         def ui_user(self, changing=False):
-            user = service.ui.user(self.headers)
+            user = service.ui.user(self.headers, self.client_address)
             if changing:
                 if self.headers.get('X-Cerid-Request') != '1':
                     raise HttpError(403, 'state-changing calls need the X-Cerid-Request header')
@@ -260,6 +280,14 @@ def make_handler(service):
                 data, digest = service.agent_bytes()
                 return self.send(200, data, 'text/x-python; charset=utf-8', {'X-Cerid-Agent-SHA256': digest})
             match = re.match(r'^/webhooks/([A-Za-z0-9_.-]+)$', path)
+            if match and 'webhook' not in surfaces:
+                raise HttpError(404, 'webhooks are not served on this listener')
+            if (path.startswith('/api/agent/') or path.startswith('/git/') or path == '/agent/cerid-agent.py') \
+                    and 'agent' not in surfaces:
+                raise HttpError(404, 'the agent API is not served on this listener')
+            if not (path.startswith('/api/agent/') or path.startswith('/git/') or match) and path not in (
+                    '/healthz', '/agent/cerid-agent.py') and 'ui' not in surfaces:
+                raise HttpError(404, 'the web UI is not served on this listener')
             if match and method == 'POST':
                 return self.send(200, service.webhook(match.group(1), dict(self.headers.items()), self.body()))
             if path.startswith('/api/agent/'):
@@ -296,8 +324,8 @@ def make_handler(service):
                 return self.send(200, c.acquire(instance))
             if rest == 'claim' and method == 'POST':
                 return self.send(200, c.claim_with_token(self.token()))
-            match = re.match(r'^jobs/([0-9a-f]{32})/(start|heartbeat|log|finish|pipeline|annotations|artifacts|'
-                             r'meta-data/[^/]+|steps/[^/]+)$', rest)
+            match = re.match(r'^jobs/([0-9a-f]{32})/(start|environment|heartbeat|log|finish|pipeline|annotations|'
+                             r'artifacts|meta-data/[^/]+|steps/[^/]+)$', rest)
             if not match:
                 raise HttpError(404, 'no such agent call')
             job_id, call = match.groups()
@@ -305,6 +333,9 @@ def make_handler(service):
             if call == 'start' and method == 'POST':
                 job = c.start(job_id, token)
                 return self.send(200, {'state': job['state']})
+            if call == 'environment' and method == 'POST':
+                c.record_environment(job_id, token, self.json_body())
+                return self.send(200, {'ok': True})
             if call == 'heartbeat' and method == 'POST':
                 return self.send(200, c.heartbeat(job_id, token))
             if call == 'log' and method == 'PUT':
@@ -392,7 +423,8 @@ def make_handler(service):
                 if action == '/retry' and method == 'POST':
                     return self.send(200, {'state': c.retry_job(job_id, by=user)['state']})
                 if action == '/cancel' and method == 'POST':
-                    c.cancel_job(job_id, reason='canceled by %s' % user)
+                    job = c.cancel_job(job_id, reason='canceled by %s' % user)
+                    c.audit(user, 'job-cancel', 'build %d %s' % (job['build'], job['key']), '')
                     return self.send(200, {'ok': True})
                 if action == '/log':
                     data, nxt, live, job = c.read_log(job_id, query.get('attempt'), int(query.get('from', 0)))
@@ -417,21 +449,92 @@ def make_handler(service):
                     'registered')} for a in c.agents()]})
             match = re.match(r'^agents/([0-9a-f]{24})/stop$', rest)
             if match and method == 'POST':
-                c.stop_agent(match.group(1))
+                c.stop_agent(match.group(1), by=user)
                 return self.send(200, {'ok': True})
             if rest == 'queues':
                 return self.send(200, {'queues': c.queues()})
             if rest == 'spend':
                 return self.send(200, service.spend())
+            if rest == 'costs':
+                month = query.get('month') or c.p.month_of(dt.datetime.fromtimestamp(c.clock(), dt.timezone.utc))
+                return self.send(200, reports.costs(c, service.registry or {'budget': {'monthly_cap_usd': 50.0}},
+                                                    month))
+            if rest == 'slo':
+                return self.send(200, reports.slo(c, config=service.config.get('slo')))
+            if rest == 'audit':
+                return self.send(200, {'entries': reports.audit_entries(c, days=int(query.get('days', 7)))})
+            if rest == 'quality':
+                return self.send(200, service.quality())
+            if rest == 'quality/test':
+                return self.send(200, {'history': quality.history(c.store, query['lane'], query['test'])})
+            if rest == 'quality/release' and method == 'POST':
+                body = self.json_body()
+                return self.send(200, quality.release(c, body['lane'], body['test'], user))
+            if rest == 'qual':
+                if service.qual_data is None:
+                    raise HttpError(404, 'the QUAL matrix is not configured')
+                return self.send(200, service.qual_data())
+            if rest == 'stream':
+                return self.stream(query)
             if rest == 'log':
                 return self.send(200, {'records': c.log.records[-200:]})
             raise HttpError(404, 'no such call')
 
+        def stream(self, query):
+            """Server-Sent Events: `build=N` sends the build view whenever it changes, `job=ID` the new log text and
+            the job's state, otherwise the recent builds. A stream lasts at most `stream_seconds`; the browser's
+            EventSource reconnects by itself."""
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Content-Security-Policy', CSP)
+            self.end_headers()
+            self.close_connection = True
+            deadline = time.time() + service.stream_seconds
+            last = None
+            seq = int(query.get('from', 0))
+            beat = time.time()
+            try:
+                while time.time() < deadline:
+                    events = []
+                    if query.get('job'):
+                        data, seq_next, live, job = c.read_log(query['job'], query.get('attempt'), seq)
+                        if data:
+                            events.append(('log', {'text': data.decode('utf-8', errors='replace'), 'next': seq_next}))
+                            seq = seq_next
+                        status = {'state': job['state'], 'reason': job.get('reason', ''), 'attempt': job['attempt'],
+                                  'live': live}
+                        if status != last:
+                            events.append(('job', status))
+                            last = status
+                        if not live:
+                            events.append(('end', status))
+                    else:
+                        payload = c.build_view(int(query['build'])) if query.get('build') else {
+                            'builds': c.recent(int(query.get('limit', 50)))}
+                        text = json.dumps(payload, sort_keys=True, default=str)
+                        if text != last:
+                            events.append(('build' if query.get('build') else 'builds', payload))
+                            last = text
+                    for name, payload in events:
+                        self.wfile.write(('event: %s\ndata: %s\n\n' % (name, json.dumps(
+                            payload, default=str))).encode('utf-8'))
+                    if not events and time.time() - beat > 15:
+                        self.wfile.write(b': keep-alive\n\n')
+                        beat = time.time()
+                    self.wfile.flush()
+                    if any(name == 'end' for name, _ in events):
+                        return
+                    time.sleep(service.stream_interval)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                return
+
     return Handler
 
 
-def serve(service, host='127.0.0.1', port=8780):
-    server = http.server.ThreadingHTTPServer((host, port), make_handler(service))
+def serve(service, host='127.0.0.1', port=8780, surfaces=SURFACES):
+    server = http.server.ThreadingHTTPServer((host, port), make_handler(service, surfaces))
     server.daemon_threads = True
     return server
 
@@ -440,7 +543,8 @@ class Loop:
     """The coordinator's background work: the watchdog tick, the dispatcher, polling, schedules and retention.
     Every step is independent and logged; one failing never stops the others."""
 
-    def __init__(self, coordinator, dispatcher=None, interval=5.0, poll=None, schedules=None):
+    def __init__(self, coordinator, dispatcher=None, interval=5.0, poll=None, schedules=None, quality=None,
+                 quality_seconds=300.0):
         self.c = coordinator
         self.dispatcher = dispatcher
         self.interval = interval
@@ -449,6 +553,9 @@ class Loop:
         self.stop = threading.Event()
         self.last_sweep = 0.0
         self.last_orphans = 0.0
+        self.quality = quality
+        self.quality_seconds = quality_seconds
+        self.last_quality = 0.0
 
     def once(self):
         for name, work in (('tick', self.c.tick), ('dispatch', self.dispatcher.tick if self.dispatcher else None),
@@ -467,6 +574,13 @@ class Loop:
                 self.c.sweep()
             except Exception as error:
                 self.c.log('sweep_failed', level='error', error=repr(error)[:300])
+        if self.quality is not None and now - self.last_quality > self.quality_seconds:
+            self.last_quality = now
+            try:
+                self.quality()
+            except Exception as error:
+                self.c.log('quality_failed', level='error', error=repr(error)[:300],
+                           trace=traceback.format_exc()[-1500:])
         if self.dispatcher is not None and now - self.last_orphans > 600:
             self.last_orphans = now
             try:

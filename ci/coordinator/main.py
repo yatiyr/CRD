@@ -14,6 +14,7 @@ import ipaddress
 import json
 import os
 import sys
+import threading
 
 CI = Path(__file__).resolve().parents[1]
 if str(CI) not in sys.path:
@@ -74,16 +75,40 @@ def secrets_provider(config, environ):
     return scheduler.SecretManager(project) if project else None
 
 
+def listeners(config, environ, override=None):
+    """[(host, port, surfaces)]: CERID_CI_LISTEN (or --listen) is a comma-separated list of host:port, each
+    optionally followed by `=ui+agent` style surfaces; the configuration's `listen` list otherwise. The default is
+    loopback only."""
+    text = override or environ.get('CERID_CI_LISTEN')
+    items = [x.strip() for x in text.split(',') if x.strip()] if text else config.get('listen', ['127.0.0.1:8780'])
+    if isinstance(items, str):
+        items = [items]
+    out = []
+    for item in items:
+        address, _, surfaces = item.partition('=')
+        host, _, port = address.rpartition(':')
+        chosen = tuple(surfaces.split('+')) if surfaces else ('ui', 'agent')
+        unknown = set(chosen) - set(service.SURFACES)
+        if unknown:
+            raise SystemExit('unknown listener surfaces %s in %s' % (', '.join(sorted(unknown)), item))
+        out.append((host.strip('[]'), int(port), chosen))
+    return out
+
+
 def ui_auth(config, environ, host):
     spec = config.get('ui', {})
-    mode = environ.get('CERID_CI_UI_MODE') or spec.get('mode', 'cloudflare-access')
-    allowed = [a.strip() for a in (spec.get('allowed_emails') or '').split(',') if a.strip()]
+    mode = environ.get('CERID_CI_UI_MODE') or spec.get('mode', 'iap-tunnel')
+
+    def names(value):
+        return [a.strip() for a in (value or '').split(',') if a.strip()] if isinstance(value, str) else list(
+            value or [])
+    allowed = names(spec.get('allowed_emails')) + names(spec.get('allowed_logins'))
     from executors import gce_vm
 
     def fetch(url):
         return gce_vm.http_request('GET', url)[1]
     return auth.UiAuth(mode, audience=spec.get('audience', ''), team=spec.get('team', ''), fetch=fetch,
-                       allowed=allowed, loopback=loopback(host))
+                       allowed=allowed, loopback=loopback(host), networks=spec.get('networks'))
 
 
 def identity_verifier(config, environ):
@@ -128,6 +153,60 @@ def build(config, environ, store=None, log=None):
             'mirror': mirror}
 
 
+def qual_renderer(store, registry):
+    """The device x feature matrix as data, for the web UI's own QUAL page."""
+    p = scheduler.pipeline_module()
+    module = dashboard_module()
+
+    def data():
+        month = p.month_of()
+        budget = {'cap_usd': registry['budget']['monthly_cap_usd'], 'spent_usd': p.month_spend(store, month),
+                  'month': month}
+        _, document = module.render(registry, module.results_from_store(store), None, module.roadmap_rows(), budget)
+        return {'features': {k: {'title': v['title'], 'rows': v.get('rows', []), 'enforced_by': v.get('enforced_by')}
+                             for k, v in registry['features'].items()},
+                'devices': [{'id': d['id'], 'kind': d['kind'], 'tier': d['tier'], 'status': d['status'],
+                             'os': '%s %s' % (d['os']['name'], d['os']['version']), 'arch': d['cpu']['arch'],
+                             'gpu': d['gpu']['model'], 'executor': d['executor'], 'features': d['features']}
+                            for d in registry['devices']],
+                'cells': document['cells'], 'regressions': document['regressions'], 'budget': document['budget']}
+    return data
+
+
+def dashboard_module():
+    import importlib.util
+    module = sys.modules.get('ci_dashboard')
+    if module is None:
+        spec = importlib.util.spec_from_file_location('ci_dashboard', CI / 'dashboard/generate.py')
+        module = importlib.util.module_from_spec(spec)
+        sys.modules['ci_dashboard'] = module
+        spec.loader.exec_module(module)
+    return module
+
+
+def quality_work(coordinator, registry, mirror, config):
+    """The periodic test-quality pass: quarantine proven flaky tests, expire quarantines, drive bisections."""
+    from coordinator import quality
+    spec = config.get('quality', {})
+
+    def commits_between(repository, good, bad):
+        if mirror is not None and coordinator.repositories.get(repository, {}).get('checkout') == 'mirror':
+            return mirror.commits_between(repository, good, bad)
+        built = [b for b in reversed(coordinator.recent(200)) if b['repository'] == repository]
+        commits = [b['commit'] for b in built]
+        if good in commits and bad in commits:
+            inside = commits[commits.index(good) + 1:commits.index(bad)]
+            return list(dict.fromkeys(c for c in inside if c not in (good, bad)))
+        return []
+
+    def work():
+        quality.scan(coordinator, days=spec.get('quarantine_days', quality.QUARANTINE_DAYS),
+                     max_active=spec.get('max_quarantined', quality.MAX_ACTIVE))
+        if spec.get('bisect', True):
+            quality.tick(coordinator, registry, commits_between)
+    return work
+
+
 def dashboard_renderer(store, registry):
     p = scheduler.pipeline_module()
     import importlib.util
@@ -152,7 +231,8 @@ def main(argv=None):
     sub = parser.add_subparsers(dest='command', required=True)
     serve = sub.add_parser('serve', help='run the coordinator')
     serve.add_argument('--config', default=str(CONFIG))
-    serve.add_argument('--listen', default=None, help='host:port (default: the configuration, 127.0.0.1:8780)')
+    serve.add_argument('--listen', default=None, help='host:port[=ui+agent],... (default: CERID_CI_LISTEN, then '
+                       'the configuration, then 127.0.0.1:8780)')
     serve.add_argument('--interval', type=float, default=5.0)
     check = sub.add_parser('check', help='validate the configuration and the environment, print what is missing')
     check.add_argument('--config', default=str(CONFIG))
@@ -169,26 +249,33 @@ def main(argv=None):
         for problem in problems:
             print('CONFIG: ' + problem, file=sys.stderr)
         return 1
-    listen = args.listen or os.environ.get('CERID_CI_LISTEN') or config.get('listen', '127.0.0.1:8780')
-    host, _, port = listen.rpartition(':')
+    bound = listeners(config, os.environ, args.listen)
     parts = build(config, os.environ)
     c = parts['coordinator']
     c.ensure_schema()
-    web = service.Service(c, ui_auth(config, os.environ, host), config, registry=parts['registry'],
+    ui_hosts = [host for host, _, surfaces in bound if 'ui' in surfaces]
+    ui = ui_auth(config, os.environ, ui_hosts[0] if len(ui_hosts) == 1 else '0.0.0.0')
+    web = service.Service(c, ui, config, registry=parts['registry'],
                           identity=identity_verifier(config, os.environ), mirror=parts['mirror'],
-                          dashboard=dashboard_renderer(parts['store'], parts['registry']))
+                          dashboard=dashboard_renderer(parts['store'], parts['registry']),
+                          qual_data=qual_renderer(parts['store'], parts['registry']))
     loop = service.Loop(c, parts['dispatcher'], interval=args.interval, poll=lambda: triggers.poll(c),
-                        schedules=lambda: triggers.schedules(c))
+                        schedules=lambda: triggers.schedules(c),
+                        quality=quality_work(c, parts['registry'], parts['mirror'], config))
     loop.start()
-    server = service.serve(web, host, int(port))
-    c.log('coordinator_started', listen=listen, version=service.VERSION)
+    servers = [service.serve(web, host, port, surfaces) for host, port, surfaces in bound]
+    for server in servers[1:]:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    c.log('coordinator_started', listen=['%s:%d=%s' % (h, p, '+'.join(s)) for h, p, s in bound],
+          version=service.VERSION, ui=ui.mode)
     try:
-        server.serve_forever()
+        servers[0].serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         loop.stop.set()
-        server.server_close()
+        for server in servers:
+            server.server_close()
     return 0
 
 

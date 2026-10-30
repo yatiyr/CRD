@@ -75,8 +75,8 @@
     }
   },
   "accounts": {
-    "coordinator": {"kind": "env", "name": "CERID_CI_URL", "recipe": "the-coordinator-on-the-launcher", "note": "the Cerid orchestrator's coordinator (ci/coordinator), reached through the Cloudflare Tunnel; its repository is CERID_CI_REPOSITORY_URL"},
-    "cloudflare-access": {"kind": "env", "name": "CERID_CI_ACCESS_AUD", "recipe": "cloudflare-tunnel-and-access-for-the-web-ui", "note": "the Access application in front of the web UI and the QUAL page"},
+    "coordinator": {"kind": "env", "name": "CERID_CI_URL", "recipe": "the-coordinator-on-the-launcher", "note": "the Cerid orchestrator's coordinator (ci/coordinator), whose web UI is opened through the IAP tunnel (python ci/ops.py ui); its repository is CERID_CI_REPOSITORY_URL"},
+    "cloudflare-access": {"kind": "env", "name": "CERID_CI_ACCESS_AUD", "optional": true, "recipe": "cloudflare-tunnel-and-access-for-the-web-ui", "note": "only for the documented alternative to the IAP tunnel: a Cloudflare Access application in front of the web UI"},
     "webhook-secret": {"kind": "secret", "name": "cerid-webhook-secret", "optional": true, "recipe": "webhooks-and-commit-status", "note": "without it the coordinator polls the remote"},
     "commit-status-token": {"kind": "secret", "name": "cerid-status-token", "optional": true, "recipe": "webhooks-and-commit-status"},
     "gcp-project": {"kind": "env", "name": "CERID_CI_GCP_PROJECT", "recipe": "the-cerid-ci-project-and-billing"},

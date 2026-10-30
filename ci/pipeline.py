@@ -1111,9 +1111,10 @@ class Lane:
     docs/design/ci-platform.md, held by scripts/test-ci-platform.py)."""
 
     def __init__(self, preset, device, tiers=None, run=None, temp=None, modules=None, console=None, registry=None,
-                 store=None):
+                 store=None, tests=None):
         self.preset = preset
         self.device = device
+        self.tests = tests  # a CTest -R expression: a bisection re-run of one test
         self.tiers = tiers or ci_tier.load_tiers(TIERS)
         self.job = self.tiers['presets'][preset]['job']
         self.run = run or Runner()
@@ -1354,7 +1355,9 @@ class Lane:
                              check=False)
         junit = self.junit()
         selection = ['-R', NATIVE_TESTS] if self.job == 'windows-native' else []
-        excluded = self.cached_tests()
+        if self.tests:
+            selection = ['-R', self.tests]
+        excluded = None if self.tests else self.cached_tests()
         if excluded:
             selection += ['--exclude-from-file', str(excluded)]
         code = self.run(self.helper('ci-evidence.py', 'watch', '--build-dir', self.build_dir, '--',
@@ -1362,9 +1365,46 @@ class Lane:
                                                 '--output-junit', junit)), check=False)
         if probe:
             raise LaneFailure(['dx12 probe'], probe)
-        self.run(self.helper('check-registered-failures.py', '--lane', self.preset, '--junit', junit, '--ctest-exit',
-                             code))
         self.record_tests(junit)
+        gate_junit, gate_code = self.quarantine_view(junit, code)
+        self.run(self.helper('check-registered-failures.py', '--lane', self.preset, '--junit', gate_junit,
+                             '--ctest-exit', gate_code))
+
+    def quarantine_view(self, junit, code):
+        """(JUnit, CTest exit) the lane's verdict reads. When every failed test is a proven-flaky test under an
+        unexpired quarantine (ci/coordinator/quality.py), the verdict reads a copy of the JUnit without those
+        failures and CTest's exit as clean; the original JUnit stays the evidence, the tests did run, and every held
+        failure is printed, annotated and recorded. Any other failure, or any other CTest problem, keeps the full
+        verdict."""
+        if code != 8 or self.store is None or self.run.dry or not Path(junit).is_file():
+            return junit, code
+        from coordinator import quality
+        try:
+            held = quality.active_quarantine(self.store, quality.lane_id(self.preset, self.device['id']), time.time())
+        except Exception as error:
+            self.run.log('result store unavailable, no quarantine applies: %s' % error)
+            return junit, code
+        failed, quarantined, others = quality.quarantine_view(junit_outcomes(junit), held)
+        if not quarantined or others:
+            return junit, code
+        tree = ET.parse(junit)
+        removals = [(parent, case) for parent in tree.getroot().iter() for case in parent
+                    if case.tag == 'testcase' and case.get('name') in quarantined]
+        for parent, case in removals:
+            parent.remove(case)
+        view = Path(junit).with_name('ctest-junit-quarantine-view.xml')
+        tree.write(view, encoding='utf-8', xml_declaration=True)
+        lines = ['QUARANTINED FAILURE (still a failure; the quarantine expires): %s, issue %s, until %s' % (
+            name, held[name]['issue'], held[name]['expires_text']) for name in quarantined]
+        for line in lines:
+            self.run.log(line)
+        (self.temp / 'quarantined.md').write_text('### Quarantined failures on %s\n\n' % self.preset + ''.join(
+            '- %s\n' % line for line in lines), encoding='utf-8')
+        if self.env.get('CERID_CI'):
+            self.run(agent_tool('annotate', '--context', 'quarantine-%s' % self.preset, '--style', 'warning',
+                                '--body-file', self.temp / 'quarantined.md', environ=self.env), check=False)
+        self.quarantined = quarantined
+        return str(view), 0
 
     def test_sse2(self):
         if not self.preset_step('Test at the sse2 level'):
@@ -1467,14 +1507,22 @@ class Lane:
         if self.store is None or self.run.dry or not Path(junit).is_file():
             return
         keys = self.test_keys()
-        passed = sorted(keys[name] for name, outcome in junit_outcomes(junit).items()
-                        if outcome == 'pass' and name in keys)
+        cases = junit_cases(junit)
+        passed = sorted(keys[name] for name, (outcome, _) in cases.items() if outcome == 'pass' and name in keys)
         build = self.env.get('CERID_CI_BUILD_NUMBER') or 'local'
+        run = {'build': build, 'commit': self.env.get('CERID_CI_COMMIT'), 'branch': self.env.get('CERID_CI_BRANCH'),
+               'repository': self.env.get('CERID_CI_REPOSITORY'), 'bisect': self.env.get('CERID_CI_BISECT'),
+               'lane': '%s@%s' % (self.preset, self.device['id']),
+               'finished': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds'),
+               'tests': {name: {'outcome': outcome, 'seconds': seconds, 'key': keys.get(name)}
+                         for name, (outcome, seconds) in cases.items()}}
         try:
-            self.store.put_json('%s%s.json' % (self.test_cache_prefix(), build.zfill(10)),
-                                {'build': build, 'keys': passed})
+            if not self.tests:
+                self.store.put_json('%s%s.json' % (self.test_cache_prefix(), build.zfill(10)),
+                                    {'build': build, 'keys': passed})
+            self.store.put_json('test-runs/%s@%s/%s.json' % (self.preset, self.device['id'], build.zfill(10)), run)
         except Exception as error:
-            self.run.log('result store unavailable, passed tests not recorded: %s' % error)
+            self.run.log('result store unavailable, test results not recorded: %s' % error)
 
     # Console profile --------------------------------------------------------------------------------------------
     def console_wrap(self, command):
@@ -1600,6 +1648,13 @@ def passed_test_keys(store, prefix, runs=5):
     for name in store.list(prefix)[-runs:]:
         keys.update((store.get_json(name) or {}).get('keys', []))
     return keys
+
+
+def junit_cases(path):
+    """{test: (outcome, seconds)} of a CTest JUnit file."""
+    outcomes = junit_outcomes(path)
+    seconds = {case.get('name'): float(case.get('time') or 0.0) for case in ET.parse(path).getroot().iter('testcase')}
+    return {name: (outcome, round(seconds.get(name, 0.0), 3)) for name, outcome in outcomes.items()}
 
 
 def junit_outcomes(path):
@@ -2129,6 +2184,7 @@ def main(argv=None):
     p_lane.add_argument('--device', required=True)
     p_lane.add_argument('--modules', help='affected module selection (CRD_MODULES)')
     p_lane.add_argument('--console', help='console profile to enforce')
+    p_lane.add_argument('--tests', help='CTest -R expression: run only these tests (a bisection re-run)')
     p_lane.add_argument('--dry-run', action='store_true')
     p_run = sub.add_parser('run', help='run the preflight or repository checks')
     p_run.add_argument('which', choices=('preflight', 'repository'))
@@ -2181,7 +2237,7 @@ def main(argv=None):
         device = devices_by_id(registry)[args.device]
         modules = [m for m in (args.modules or '').split(';') if m]
         lane = Lane(args.preset, device, run=Runner(dry=args.dry_run), modules=modules or None, console=args.console,
-                    registry=registry, store=None if args.dry_run else open_store())
+                    registry=registry, store=None if args.dry_run else open_store(), tests=args.tests)
         return lane.execute()
     if args.command == 'run':
         return run_checks(args.which)
