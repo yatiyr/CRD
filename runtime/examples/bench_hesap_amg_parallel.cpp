@@ -181,21 +181,21 @@ template <typename T> bool same_hierarchy(const SaAmg<T>& x, const SaAmg<T>& y)
 
 // ---- the finest level's phases ----
 
-enum Phase : u32
+enum Phase : crd::u8
 {
-    kStrength,
-    kAggregate,
-    kTentative,
-    kPower,
-    kSmoothProduct,
-    kProlongator,
-    kTranspose,
-    kGalerkin,
-    kPhaseCount
+    Strength,
+    Aggregate,
+    Tentative,
+    Power,
+    SmoothProduct,
+    Prolongator,
+    Transpose,
+    Galerkin,
+    PhaseCount
 };
 
-const char* const kPhaseNames[kPhaseCount] = {"strength",    "aggregation", "tentative P", "power iteration",
-                                              "A T product", "smoothed P",  "transpose",   "R (A P) product"};
+const char* const kPhaseNames[PhaseCount] = {"strength",    "aggregation", "tentative P", "power iteration",
+                                             "A T product", "smoothed P",  "transpose",   "R (A P) product"};
 
 template <typename T>
 void phase_board(const char* label, const Problem& pb, const Csr<T>& a, u32 jobs, crd::memory::IAllocator* alloc)
@@ -216,8 +216,8 @@ void phase_board(const char* label, const Problem& pb, const Csr<T>& a, u32 jobs
             }
         }
     }
-    f64 serial[kPhaseCount][kRounds] = {};
-    f64 parallel[kPhaseCount][kRounds] = {};
+    f64 serial[PhaseCount][kRounds] = {};
+    f64 parallel[PhaseCount][kRounds] = {};
     const auto timed = [](f64& slot, auto&& fn)
     {
         const Clock::time_point t0 = Clock::now();
@@ -232,27 +232,27 @@ void phase_board(const char* label, const Problem& pb, const Csr<T>& a, u32 jobs
         Csr<T> tent(alloc);
         Csr<T> p(alloc);
         R rho = R(0);
-        timed(serial[kStrength][round], [&] { s = crd::hesap::amg::strength_matrix<T>(a, opts.theta, alloc); });
-        timed(serial[kAggregate][round], [&] { agg = crd::hesap::amg::aggregate<T>(s, n_agg, alloc); });
-        timed(serial[kTentative][round], [&] { tent = crd::hesap::amg::tentative_prolongator<T>(agg, n_agg, alloc); });
-        timed(serial[kPower][round], [&] { rho = crd::hesap::amg::estimate_drinv_a_radius<T>(a, dinv, alloc); });
-        timed(parallel[kPower][round],
+        timed(serial[Strength][round], [&] { s = crd::hesap::amg::strength_matrix<T>(a, opts.theta, alloc); });
+        timed(serial[Aggregate][round], [&] { agg = crd::hesap::amg::aggregate<T>(s, n_agg, alloc); });
+        timed(serial[Tentative][round], [&] { tent = crd::hesap::amg::tentative_prolongator<T>(agg, n_agg, alloc); });
+        timed(serial[Power][round], [&] { rho = crd::hesap::amg::estimate_drinv_a_radius<T>(a, dinv, alloc); });
+        timed(parallel[Power][round],
               [&] { (void)crd::hesap::amg::estimate_drinv_a_radius<T>(a, dinv, alloc, on_jobs); });
-        timed(serial[kSmoothProduct][round], [&] { (void)crd::hesap::sparse::spgemm<T>(a, tent, alloc); });
-        timed(parallel[kSmoothProduct][round],
+        timed(serial[SmoothProduct][round], [&] { (void)crd::hesap::sparse::spgemm<T>(a, tent, alloc); });
+        timed(parallel[SmoothProduct][round],
               [&] { (void)crd::hesap::sparse::spgemm_arm<T>(on_jobs.spgemm, a, tent, alloc); });
         const R omega = rho > R(0) ? R(static_cast<R>(4.0 / 3.0)) / rho : R(static_cast<R>(2.0 / 3.0));
-        timed(serial[kProlongator][round],
+        timed(serial[Prolongator][round],
               [&] { p = crd::hesap::amg::smoothed_prolongator<T>(a, tent, dinv, omega, alloc); });
         Csr<T> r(alloc);
-        timed(serial[kTranspose][round], [&] { r = crd::hesap::sparse::transpose<T>(p, alloc); });
-        timed(serial[kGalerkin][round],
+        timed(serial[Transpose][round], [&] { r = crd::hesap::sparse::transpose<T>(p, alloc); });
+        timed(serial[Galerkin][round],
               [&]
               {
                   const Csr<T> ap = crd::hesap::sparse::spgemm<T>(a, p, alloc);
                   (void)crd::hesap::sparse::spgemm<T>(r, ap, alloc);
               });
-        timed(parallel[kGalerkin][round],
+        timed(parallel[Galerkin][round],
               [&]
               {
                   const Csr<T> ap = crd::hesap::sparse::spgemm_arm<T>(on_jobs.spgemm, a, p, alloc);
@@ -260,19 +260,19 @@ void phase_board(const char* label, const Problem& pb, const Csr<T>& a, u32 jobs
               });
     }
     f64 total = 0.0;
-    f64 med[kPhaseCount] = {};
-    for (u32 ph = 0; ph < kPhaseCount; ++ph)
+    f64 med[PhaseCount] = {};
+    for (u32 ph = 0; ph < PhaseCount; ++ph)
     {
         med[ph] = median(serial[ph], kRounds);
-        total += ph == kSmoothProduct ? 0.0 : med[ph]; // A T is inside the smoothed prolongator
+        total += ph == SmoothProduct ? 0.0 : med[ph]; // A T is inside the smoothed prolongator
     }
     std::printf("%s %s n %u: the finest level's phases, one job (share of their sum) | %u jobs\n", label, pb.name, n,
                 jobs);
-    for (u32 ph = 0; ph < kPhaseCount; ++ph)
+    for (u32 ph = 0; ph < PhaseCount; ++ph)
     {
         std::printf("  %-18s %10.3f ms (%5.1f%%)", kPhaseNames[ph], med[ph] * 1e3,
-                    ph == kSmoothProduct ? 0.0 : 100.0 * med[ph] / total);
-        if (ph == kPower || ph == kSmoothProduct || ph == kGalerkin)
+                    ph == SmoothProduct ? 0.0 : 100.0 * med[ph] / total);
+        if (ph == Power || ph == SmoothProduct || ph == Galerkin)
         {
             const f64 par = median(parallel[ph], kRounds);
             std::printf(" | %10.3f ms %5.2fx", par * 1e3, par > 0.0 ? med[ph] / par : 0.0);
