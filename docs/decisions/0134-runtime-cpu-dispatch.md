@@ -177,7 +177,10 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    the bench times both sides with one loop; `crd-check-peer-headers` fails any include of such a header library
    outside `runtime/examples/peers/`. The ISA isolation guard leaves peers out (`CRD_ISA_ROLE peer`, OpenBLAS's
    targets too). An applied level's UCRT FMA3 switch is process-wide on MSVC, so a board takes the peer's number from
-   its detected-level arm.
+   its detected-level arm. On Linux a forced x64 arm hides the features above its level from glibc's ifuncs
+   (`glibc.cpu.hwcaps` in `GLIBC_TUNABLES`, `run-lane-bench.sh`, 2026-10-30), so libm's `fma` and the string routines
+   run the bodies a CPU of that level gets; portable keeps the host's glibc (its targets, architectures without x64
+   levels, have the FPU's fma), and the peers dispatch on their own CPUID.
 9. **Ownership.** CPU ISA detection and kernel dispatch is one OWN.1 capability: detection in crd-core, the dispatch
    tables and level-parameterised SIMD types in crd-math, kernels in their owning modules.
 
