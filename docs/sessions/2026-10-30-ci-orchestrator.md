@@ -103,7 +103,10 @@ Python only, by the parallel-work limits: `python scripts/test-ci-orchestrator.p
 `check-allman-braces.py`, `check-pins.py`, `check-generated.py`, `check-ci-tiers.py` and
 `gen_license_manifest.py --check`. The coordinator was also started from `ci/coordinator/main.py serve` with the
 tracked configuration (health, builds, spend, queues, the QUAL page and the UI answered), and the web UI was looked at
-in a browser with one finished and one running build (no console error). The Linux side of the agent (bash scripts,
+in a browser with one finished and one running build (no console error). One whole-suite run of `test-ci-orchestrator.py`, right after a rebase, reported one error whose text was not
+captured; 32 further runs (9 whole-suite, 23 by class groups) passed and it did not reproduce, so it is recorded here
+unexplained rather than called fixed: if it shows again, its traceback in the hosted repository job names it. The
+Linux side of the agent (bash scripts,
 process groups, `fcntl` locks) runs for the first time in the hosted repository job on `ubuntu-24.04`. No cloud call
 was made: Cloud Storage, Compute Engine, Secret Manager and the git hosts are fakes in the tests, and the first live
 build waits on the user actions below.
