@@ -35,12 +35,12 @@ Existing dated decisions are amended explicitly, not silently rewritten as a dif
 | [0015-job-system](0015-job-system.md) | ADR-0015 — Job system shape |
 | [0016-render-path](0016-render-path.md) | ADR-0016 — Render path strategy |
 | [0017-culling-strategy](0017-culling-strategy.md) | ADR-0017 — Culling strategy |
-| [0018-physics-architecture](0018-physics-architecture.md) | ADR-0018 — Physics architecture |
+| [0018-physics-architecture](0018-physics-architecture.md) | ADR-0018 — Physics architecture; superseded by ADR-0062 |
 | [0019-reserved](0019-reserved.md) | ADR-0019 — (reserved) |
-| [0020-scene-ecs-hybrid](0020-scene-ecs-hybrid.md) | ADR-0020 — Scene & ECS hybrid + UI in scene tree |
+| [0020-scene-ecs-hybrid](0020-scene-ecs-hybrid.md) | ADR-0020 — Scene & ECS hybrid + UI in scene tree; UI-in-scene clauses superseded by ADR-0107 D2 |
 | [0021-animation-architecture](0021-animation-architecture.md) | ADR-0021 — Animation architecture |
 | [0022-streaming-pipeline](0022-streaming-pipeline.md) | ADR-0022 — Open-world streaming pipeline |
-| [0023-ui-architecture](0023-ui-architecture.md) | ADR-0023 — UI architecture |
+| [0023-ui-architecture](0023-ui-architecture.md) | ADR-0023 — UI architecture; UI-in-scene clauses superseded by ADR-0107 D2 |
 | [0024-imgui-single-viewport-default](0024-imgui-single-viewport-default.md) | ADR-0024 — ImGui single-viewport default |
 | [0025-shader-mechanism-policy](0025-shader-mechanism-policy.md) | ADR-0025 — Shader mechanism policy |
 | [0026-shader-variant-key](0026-shader-variant-key.md) | ADR-0026 — Shader variant key |
@@ -49,22 +49,22 @@ Existing dated decisions are amended explicitly, not silently rewritten as a dif
 | [0029-shader-hot-reload](0029-shader-hot-reload.md) | ADR-0029 — Shader hot reload |
 | [0030-shader-pso-boundary](0030-shader-pso-boundary.md) | ADR-0030 — Shader / PSO boundary |
 | [0031-shader-frontend-ir-seam](0031-shader-frontend-ir-seam.md) | ADR-0031 — Shader frontend → IR seam |
-| [0032-frame-graph-v1](0032-frame-graph-v1.md) | ADR-0032 — Frame graph v1 |
+| [0032-frame-graph-v1](0032-frame-graph-v1.md) | ADR-0032 — Frame graph v1; runtime-ownership half superseded by ADR-0106 |
 | [0033-jobs-implementation-architecture](0033-jobs-implementation-architecture.md) | ADR-0033 — crd-jobs implementation architecture |
-| [0034-cpp-hotreload-scripting](0034-cpp-hotreload-scripting.md) | ADR-0034 — C++ hot-reload DLL scripting as primary scripting mechanism |
+| [0034-cpp-hotreload-scripting](0034-cpp-hotreload-scripting.md) | ADR-0034 — C++ hot-reload DLL scripting as primary scripting mechanism; superseded by ADR-0081 (C++-only clause later struck by ADR-0108) |
 | [0035-networking-architecture](0035-networking-architecture.md) | ADR-0035 — Networking architecture principles |
-| [0036-resources-module-and-loader-registry](0036-resources-module-and-loader-registry.md) | ADR-0036 — `crd-resources` module placement + loader-registry pattern |
+| [0036-resources-module-and-loader-registry](0036-resources-module-and-loader-registry.md) | ADR-0036 — `crd-resources` module placement + loader-registry pattern; partly superseded by ADR-0105 |
 | [0037-resource-id-uuid-scheme](0037-resource-id-uuid-scheme.md) | ADR-0037 — ResourceId hybrid UUID scheme |
 | [0038-cooked-binary-container-format](0038-cooked-binary-container-format.md) | ADR-0038 — Cooked binary container format |
 | [0039-resource-handle-semantics](0039-resource-handle-semantics.md) | ADR-0039 — `ResourceHandle<T>` semantics |
 | [0040-cooker-cli-cmake-integration](0040-cooker-cli-cmake-integration.md) | ADR-0040 — Cooker CLI + CMake integration |
 | [0041-platform-async-filesystem-io](0041-platform-async-filesystem-io.md) | ADR-0041 — `crd-platform` async filesystem I/O |
-| [0042-texture-resource-cooked-format](0042-texture-resource-cooked-format.md) | ADR-0042 — Texture cooked format + GPU upload strategy |
+| [0042-texture-resource-cooked-format](0042-texture-resource-cooked-format.md) | ADR-0042 — Texture cooked format + GPU upload strategy; partly superseded by ADR-0105 |
 | [0043-mesh-resource-gltf-import](0043-mesh-resource-gltf-import.md) | ADR-0043 — MeshResource vertex layout + glTF import scope |
 | [0044-phase-ordering-material-before-scene](0044-phase-ordering-material-before-scene.md) | ADR-0044 — Phase ordering: material PSO/variant completion precedes scene/ECS |
 | [0045-sandbox-asset-layout-cook-meshgen](0045-sandbox-asset-layout-cook-meshgen.md) | ADR-0045 — Sandbox executable, asset source layout, cook workflow, crd-meshgen |
 | [0046-material-domain-rt-hybrid-strategy](0046-material-domain-rt-hybrid-strategy.md) | ADR-0046 — MaterialDomain enum, node-editor future-proofing, RT hybrid strategy |
-| [0047-font-rendering-system](0047-font-rendering-system.md) | ADR-0047 — Font rendering system |
+| [0047-font-rendering-system](0047-font-rendering-system.md) | ADR-0047 — Font rendering system; library and atlas selections superseded by the owned text stack (U-20) |
 | [0048-material-system-architecture](0048-material-system-architecture.md) | ADR-0048 — Material System Architecture Foundation |
 | [0049-scene-entity-identity-slotmap](0049-scene-entity-identity-slotmap.md) | ADR-0049 — Scene/ECS L1: Entity identity & SlotMap |
 | [0050-scene-storage-backends](0050-scene-storage-backends.md) | ADR-0050 — Scene/ECS L2: Storage backends (Archetype + SparseSet hybrid) |
@@ -74,7 +74,7 @@ Existing dated decisions are amended explicitly, not silently rewritten as a dif
 | [0054-scene-transform-hierarchy-update](0054-scene-transform-hierarchy-update.md) | ADR-0054 — Scene/ECS: Transform hierarchy update model |
 | [0055-scene-serialization-toml-scen-crdr](0055-scene-serialization-toml-scen-crdr.md) | ADR-0055 — Scene serialization: TOML authoring + SCEN CRDR cooked |
 | [0056-scene-reserved-l6-l8-slots](0056-scene-reserved-l6-l8-slots.md) | ADR-0056 — Scene/ECS L6–L8: Reserved API slots (Replication, Scripts, Reflection) |
-| [0057-scene-ui-in-tree-boundary](0057-scene-ui-in-tree-boundary.md) | ADR-0057 — Scene/ECS: UI nodes in scene tree (boundary declaration) |
+| [0057-scene-ui-in-tree-boundary](0057-scene-ui-in-tree-boundary.md) | ADR-0057 — Scene/ECS: UI nodes in scene tree (boundary declaration); UI-in-scene clauses superseded by ADR-0107 D2 |
 | [0058-obek-system](0058-obek-system.md) | ADR-0058 — Öbek System: cooked entity-graph templates with composition, variation, and AAAA-tier future-proofing |
 | [0059-preset-system](0059-preset-system.md) | ADR-0059 — Preset System: typed system-config bags with five-layer resolution and `extends`-chain composability |
 | [0060-profile-system](0060-profile-system.md) | ADR-0060 — Profile System: typed predicate selectors with additive composition for cross-domain runtime configuration |
@@ -92,12 +92,12 @@ Existing dated decisions are amended explicitly, not silently rewritten as a dif
 | [0077-multi-domain-expansion-vision](0077-multi-domain-expansion-vision.md) | ADR-0077: Multi-domain expansion — the "absolute beast" vision |
 | [0078-units-substrate-architecture](0078-units-substrate-architecture.md) | ADR-0078 — `crd-units` substrate architecture |
 | [0079-crd-perf-substrate-architecture](0079-crd-perf-substrate-architecture.md) | ADR-0079 — `crd-perf` profiler substrate + ImGui frontend |
-| [0080-crd-rhi-compute](0080-crd-rhi-compute.md) | ADR-0080 — `crd-rhi-compute` substrate |
-| [0081-agent-native-engine-cli](0081-agent-native-engine-cli.md) | ADR-0081 — Agent-Native Engine: CLI + RPC + MCP Substrate |
+| [0080-crd-rhi-compute](0080-crd-rhi-compute.md) | ADR-0080 — `crd-rhi-compute` substrate; superseded by ADR-0103, ADR-0104 and ADR-0105 |
+| [0081-agent-native-engine-cli](0081-agent-native-engine-cli.md) | ADR-0081 — Agent-Native Engine: CLI + RPC + MCP Substrate; §9 C++-only scripting clause superseded by ADR-0108 |
 | [0082-hesap-microkernel-intrinsics-strategy](0082-hesap-microkernel-intrinsics-strategy.md) | ADR-0082 — Hesap GEMM microkernel: intrinsics-via-Vec8f/Vec16f, ASM deferred |
 | [0083-hesap-dense-rowmajor-storage](0083-hesap-dense-rowmajor-storage.md) | ADR-0083 — hesap-dense row-major storage (with per-factor escape hatch) |
 | [0084-hesap-matrix-as-resource](0084-hesap-matrix-as-resource.md) | ADR-0084 — Sparse matrices as first-class cooked engine resources (`crd-hesap-resources`) |
-| [0085-streaming-allocator-cluster](0085-streaming-allocator-cluster.md) | ADR-0085 — Virtual-memory + streaming allocator cluster |
+| [0085-streaming-allocator-cluster](0085-streaming-allocator-cluster.md) | ADR-0085 — Virtual-memory + streaming allocator cluster; GPU-side half superseded in place by ADR-0105 |
 | [0086-eylem-physics-animation-unification](0086-eylem-physics-animation-unification.md) | ADR-0086 — Eylem unified motion model: physics-animation as one solve, LOD fidelity continuum, crowd-scale deterministic networking |
 | [0087-large-scale-deterministic-simulation](0087-large-scale-deterministic-simulation.md) | ADR-0087 — Large-scale deterministic simulation: environmental fields, surface-integral coupling, moving-frame agents, and player-count-scaled networking |
 | [0088-gemm-runtime-dispatch-asm-microkernels](0088-gemm-runtime-dispatch-asm-microkernels.md) | ADR-0088 — GEMM hand-tuned asm: INVESTIGATED → REVERTED (intrinsics vindicated) |
@@ -111,7 +111,7 @@ Existing dated decisions are amended explicitly, not silently rewritten as a dif
 | [0096-hesap-tensor-cluster](0096-hesap-tensor-cluster.md) | ADR-0096 — crd-hesap-tensor: the N-D tensor substrate — templated compute dtypes over stride views, the two-tier deterministic-reduction contract, deterministic stochastic round… |
 | [0097-hesap-autodiff-cluster](0097-hesap-autodiff-cluster.md) | ADR-0097 — crd-hesap-autodiff: the automatic-differentiation cluster — one module for forward + reverse, the deterministic no-atomics tape, suite-wide differentiability, differe… |
 | [0098-hesap-gpu-cluster](0098-hesap-gpu-cluster.md) | ADR-0098 — crd-kir + crd-hesap-gpu: the Cerid GPU compute compiler — a unified compute+autodiff kernel IR lowering to six backends, vendor-beating kernels, and certified cross-v… |
-| [0099-compute-rendering-separation](0099-compute-rendering-separation.md) | ADR-0099 — `crd-gpu-context`: a backend-agnostic GPU **context manager**; compute and rendering as independent, composable consumers |
+| [0099-compute-rendering-separation](0099-compute-rendering-separation.md) | ADR-0099 — `crd-gpu-context`: a backend-agnostic GPU **context manager**; compute and rendering as independent, composable consumers; §6 superseded by ADR-0103 |
 | [0100-ckir-one-gpu-compute-manager](0100-ckir-one-gpu-compute-manager.md) | ADR-0100 — CKIR is the one GPU compute manager: a *kernel-source-agnostic* dispatch surface serving both compiler-authored and hand-written kernels |
 | [0101-ir-is-source-of-truth-for-all-shaders](0101-ir-is-source-of-truth-for-all-shaders.md) | ADR-0101 — The IR is the single source of truth for every shader (compute AND material); backend languages are outputs only |
 | [0102-render-data-lighting-pass-architecture](0102-render-data-lighting-pass-architecture.md) | ADR-0102 — Render-data, lighting & pass architecture: how the shader IR feeds a frontier renderer |

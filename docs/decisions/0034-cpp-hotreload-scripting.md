@@ -3,7 +3,10 @@
 <!-- doc-role: decision -->
 > Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
-**Status:** Accepted  
+**Status:** Accepted; superseded by [ADR-0081](0081-agent-native-engine-cli.md), which folded this decision in as the
+C++ hot-reload sub-aspect of the agent-native engine (its `Supersedes:` line). Later,
+[ADR-0108](0108-ceir-owned-language-stack-supersedes-cpp-only-scripting.md) struck ADR-0081's "C++ is the only scripting
+path" clause: CHIR/CEIR and native C++ are both first-class. (Supersession note added 2026-10-31; the decision below is unchanged.)  
 **Date:** 2026-05-02  
 **Tags:** arch, scripting, extensibility
 
