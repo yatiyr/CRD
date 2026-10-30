@@ -51,7 +51,7 @@ lockfile metadata. Accounts, billing and credentials stay user actions.
 - `ci/executors/`: `gce_vm`, `owned_agent`, `firebase_test_lab`, `ssh_host`.
 - `ci/ops.py`: `status`, `add-device`, `budget`, `accounts`, `parity`, `bake`.
 - `ci/dashboard/`: the QUAL dashboard generator, its fixture and the locked Cloudflare Pages publisher.
-- `scripts/test-ci-platform.py`: 74 contract tests, a step of the hosted repository job. Its CTest registration
+- `scripts/test-ci-platform.py`: 79 contract tests, a step of the hosted repository job. Its CTest registration
   (`add_test(NAME crd-ci-platform ...)` in `tests/CMakeLists.txt`, beside `crd-ci-tiers`) is left to the serial
   workflow, which owns `tests/` while SIMD-DISPATCH runs.
 - Pins: buildkite-agent 4.6.0 for Linux x64 and ARM64, Windows x64 and macOS ARM64, and Node.js 24.22.0 for the
@@ -77,6 +77,29 @@ are left to the hosted repository job. The Windows Job Object test ran for real 
 under a 256 MiB cap failed, a 32 MiB one passed). No lane, executor or
 dispatcher call reached a cloud: they are tested against fakes and their first live run waits on the user actions in
 the recipe.
+
+## Review findings fixed before the push
+
+An advisor review of the branch found five defects the fakes could not show, each now fixed with a test: runners
+did not learn the result store and compiler-cache bucket (the pipeline document now carries the non-secret runner
+settings); the Linux console wrapper dropped the lane's environment and hid the lane's tools behind the private
+`/tmp` (the test variables now cross explicitly, tokens never do, and a console lane keeps its tools in the build
+tree); the Windows cores probe read a failed affinity query as zero and would have passed unrestricted (typed
+signatures, a failed query raises, and a real Job Object test confirms one CPU); the per-test cache made a store
+request per test (now one record per lane run, at most five reads); a dispatcher budget stop left no result, so the
+cell could not show budget (it now writes a `budget` result and the dashboard maps it).
+
+## Open items and consequences
+
+- The Stacks API's availability on Buildkite's Free plan is not confirmed by Buildkite's pricing page; the recipe
+  checks it at setup and the dispatcher has no fallback without it.
+- Google Cloud has no Windows on ARM: the `windows-arm64` lane needs an operator-provided SSH host or an owned
+  Snapdragon machine before CI-4's parity can close. The host-check experiments are listed open in the parity table.
+- `check-master-plan.py` accepts only a GitHub Actions run URL as Needs CI evidence; CI-4 must widen it.
+- Budget realism: about 16 USD for one uncached complete run at the default durations, so three a month; the cache
+  and the change-tier narrowing carry the rest.
+- Sequence: once SIMD-DISPATCH closes, CI-1 (Blocked on user actions) is the first unfinished row; the table then
+  waits on the recipe's first sections unless the user directs other work.
 
 ## Next
 

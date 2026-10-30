@@ -388,6 +388,15 @@ class Plan(unittest.TestCase):
         for step in owned:
             self.assertEqual(steps[step['key']]['agents']['queue'], 'cerid-owned')
 
+    def test_runner_settings_travel_in_the_document_and_secrets_do_not(self):
+        planned = self.plan(paths=['docs/ROADMAP.md'])
+        document = pipeline.buildkite_pipeline(planned, REGISTRY['queues'], environ={
+            'CERID_CI_STORE': 'gs://cerid-ci-results', 'CERID_CI_SCCACHE_BUCKET': 'cerid-ci-sccache',
+            'CERID_CI_GCP_PROJECT': 'cerid-ci', 'CERID_BUILDKITE_AGENT_TOKEN_FILE': '/run/token'})
+        self.assertEqual(document['env']['CERID_CI_STORE'], 'gs://cerid-ci-results')
+        self.assertEqual(document['env']['CERID_CI_SCCACHE_BUCKET'], 'cerid-ci-sccache')
+        self.assertNotIn('CERID_BUILDKITE_AGENT_TOKEN_FILE', json.dumps(document))
+
     def test_buildkite_events(self):
         self.assertEqual(pipeline.buildkite_event({'BUILDKITE_SOURCE': 'schedule'})[0], 'schedule')
         self.assertEqual(pipeline.buildkite_event({'BUILDKITE_SOURCE': 'ui', 'CERID_CI_TIER': 'change'}),
@@ -482,6 +491,53 @@ class Lanes(unittest.TestCase):
         self.assertTrue(any('artifact upload' in t for t in text))
         self.assertFalse(any('ci-evidence.py inventory' in t for t in text))
 
+    def test_per_test_cache_is_one_record_per_run(self):
+        class CountingStore(pipeline.LocalStore):
+            reads = 0
+
+            def get(self, name):
+                CountingStore.reads += 1
+                return super().get(name)
+
+        with tempfile.TemporaryDirectory() as scratch:
+            build = Path(scratch) / 'build'
+            (build / 'Testing/Temporary').mkdir(parents=True)
+            exe = build / 't.exe'
+            exe.write_bytes(b'binary')
+            inventory = {'tests': [{'name': 'case-%d' % i, 'command': [str(exe), str(i)], 'properties': []}
+                                   for i in range(300)]}
+            (build / 'Testing/inventory.json').write_text(json.dumps(inventory), encoding='utf-8')
+            junit = build / 'Testing/Temporary/ctest-junit.xml'
+            junit.write_text('<testsuite>' + ''.join('<testcase name="case-%d"/>' % i for i in range(299)) +
+                             '<testcase name="case-299"><failure/></testcase></testsuite>', encoding='utf-8')
+            store = CountingStore(Path(scratch) / 'store')
+            device = pipeline.devices_by_id(REGISTRY)['gce-linux-x64-intel']
+            run = pipeline.Runner(environ={'BUILDKITE_BUILD_NUMBER': '7'}, dry=False, log=lambda *_: None)
+            lane = pipeline.Lane('linux-gcc-release', device, tiers=TIERS, run=run, temp=scratch, store=store)
+            lane.build_dir = str(build)  # absolute: ROOT / build_dir is the scratch tree
+            lane.record_tests(str(junit))
+            self.assertEqual(len(store.list(lane.test_cache_prefix())), 1)
+            CountingStore.reads = 0
+            path = lane.cached_tests()
+            self.assertLessEqual(CountingStore.reads, 5)
+            names = path.read_text(encoding='utf-8').split()
+            self.assertEqual(len(names), 299)
+            self.assertNotIn('case-299', names)
+
+    def test_a_store_failure_never_changes_a_lane_verdict(self):
+        class BrokenStore(pipeline.LocalStore):
+            def put(self, name, data):
+                raise OSError('bucket unreachable')
+
+            def get(self, name):
+                raise OSError('bucket unreachable')
+
+        run = pipeline.Runner(environ={'PATH': ''}, dry=True, log=lambda *_: None)
+        device = pipeline.devices_by_id(REGISTRY)['gce-linux-x64-intel']
+        lane = pipeline.Lane('linux-gcc-release', device, tiers=TIERS, run=run, temp=tempfile.mkdtemp(),
+                             store=BrokenStore(tempfile.mkdtemp()))
+        self.assertEqual(lane.execute(), 0)
+
     def test_env_files_merge_like_the_hosted_runner(self):
         with tempfile.TemporaryDirectory() as scratch:
             path = Path(scratch) / 'env'
@@ -495,8 +551,16 @@ class Lanes(unittest.TestCase):
 class Console(unittest.TestCase):
     def test_linux_profile_command(self):
         profile = REGISTRY['console_profiles']['playstation-5']
-        command = pipeline.console_command(['ctest'], profile, False, Path('/b'), Path('/t'))
+        command = pipeline.console_command(['ctest'], profile, False, Path('/b'), Path('/t'), {
+            'PATH': '/usr/bin', 'VULKAN_SDK': '/b/vk', 'VK_LAYER_PATH': '/b/layers', 'LD_LIBRARY_PATH': '/b/lib',
+            'CRD_PLATFORM_HEADLESS': '1', 'BUILDKITE_AGENT_ACCESS_TOKEN': 'secret-job-token',
+            'CERID_BUILDKITE_AGENT_TOKEN_FILE': '/run/t'})
         text = ' '.join(command)
+        for needle in ('--setenv=VULKAN_SDK=/b/vk', '--setenv=VK_LAYER_PATH=/b/layers',
+                       '--setenv=LD_LIBRARY_PATH=/b/lib', '--setenv=CRD_PLATFORM_HEADLESS=1', '--setenv=PATH=/usr/bin'):
+            self.assertIn(needle, command)
+        self.assertNotIn('secret-job-token', text)
+        self.assertNotIn('CERID_BUILDKITE_AGENT_TOKEN_FILE', text)
         for needle in ('systemd-run', 'MemoryMax=%d' % int(12.5 * 1024 ** 3), 'MemorySwapMax=0', 'AllowedCPUs=0-13',
                        'MemoryDenyWriteExecute=yes', 'ProtectSystem=strict', 'ProtectHome=read-only',
                        'PrivateTmp=yes', 'NoNewPrivileges=yes'):
@@ -532,6 +596,22 @@ class Console(unittest.TestCase):
         large = pipeline.jail(cap, 1, [sys.executable, '-c', code % (512 * 1024 ** 2)])
         self.assertEqual(small, 42)
         self.assertNotEqual(large, 42)
+
+    @unittest.skipUnless(os.name == 'nt', 'Job Objects are Windows')
+    def test_cores_probe_reads_the_real_affinity(self):
+        self.assertEqual(pipeline.windows_affinity_count(), os.cpu_count())
+        code = ('import importlib.util, sys; s = importlib.util.spec_from_file_location("p", r"%s"); '
+                'm = importlib.util.module_from_spec(s); sys.modules["p"] = m; s.loader.exec_module(m); '
+                'sys.exit(m.windows_affinity_count())' % (ROOT / 'ci/pipeline.py'))
+        self.assertEqual(pipeline.jail(1024 ** 3, 1, [sys.executable, '-c', code]), 1)
+
+    def test_console_lane_keeps_its_tools_where_the_tests_can_read_them(self):
+        run = pipeline.Runner(environ={'PATH': ''}, dry=True, log=lambda *_: None)
+        device = pipeline.devices_by_id(REGISTRY)['gce-console-profile-playstation']
+        lane = pipeline.Lane('linux-gcc-shipping', device, tiers=TIERS, run=run, temp=tempfile.mkdtemp(),
+                             console='playstation-5', registry=REGISTRY)
+        lane.vulkan_headers()
+        self.assertEqual(lane.env['VULKAN_SDK'], str(lane.temp / 'vulkan-sdk'))
 
     def test_wx_probe_sees_an_unrestricted_host(self):
         self.assertTrue(pipeline.wx_allocation_allowed())
@@ -725,6 +805,12 @@ class Dispatch(unittest.TestCase):
         self.assertEqual(executor.launched, [])
         self.assertEqual(http.finished['j1']['exit_status'], pipeline.BUDGET_EXIT)
         self.assertTrue(http.finished['j1']['detail'].startswith('budget:'))
+        jobs[0].update({'build': {'number': 77}, 'step': {'key': 'lane-win-debug'}})
+        dispatcher.tick()
+        record = store.get_json('results/77/lane-win-debug.json')
+        self.assertEqual(record['outcome'], 'budget')
+        cells, _ = dashboard.matrix(REGISTRY, [record])
+        self.assertEqual(cells[('gce-windows-x64', 'build')]['state'], 'budget')
 
     def test_gcp_stop_and_dispatch_pause(self):
         store = pipeline.LocalStore(tempfile.mkdtemp())

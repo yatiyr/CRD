@@ -189,6 +189,11 @@ Each is used only when all three of its names exist. For a host `X` (`AMD_DEVCLO
 2. On the machine: install the pinned agent (the digest is in the printed steps), write the agent token (a separate
    cluster token named after the machine, never the launcher's) to the printed token file, readable only by the agent
    user, and start the service. Set `CERID_CI_OWNED_AGENTS=1` on the launcher so the planner schedules owned cells.
+3. Give the machine the result store: the pipeline document already carries `CERID_CI_STORE`; the machine needs
+   credentials for that bucket without a key file, through the Workload Identity Federation route of section 4.4
+   (`gcloud auth login --cred-file=...` as the agent user). Without them a lane still passes or fails on its own
+   evidence, but its result, cache entry and duration are not recorded (the lane logs "result store unavailable")
+   and its dashboard cell keeps its previous state.
 
 <a id="console-platform-packs"></a>
 ## 10. Console platform packs

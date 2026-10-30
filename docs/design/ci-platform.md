@@ -96,7 +96,7 @@ complete run.
 |---|---|---|
 | `results/<build>/<step>.json` | each lane | outcome, device, preset, features, log link, minutes, input key |
 | `cache/<input key>.json` | each passing step | the build and log that passed |
-| `tests/<test key>.json` | each lane | passed tests by binary key |
+| `tests-passed/<preset>@<device>/<build>.json` | each lane | the binary keys of the tests that passed in that run; a lane reads its last five |
 | `durations/<step>.json` | each step | the last 20 durations |
 | `machines/<job>.json`, `ledger/<YYYY-MM>/<job>.json` | the dispatcher | launched machines; their real cost |
 | `budget/gcp-<YYYY-MM>.json` | the dispatcher, `ops.py budget --pull` | the newest Cloud Billing notification |

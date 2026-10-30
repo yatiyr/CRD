@@ -65,14 +65,15 @@ def matrix(registry, results, planned=None):
     cells = {}
     history = {}
     for record in sorted(results, key=lambda r: (build_number(r.get('build')), r.get('finished', ''))):
-        outcome = 'pass' if record.get('outcome') == 'pass' else 'fail'
+        outcome = {'pass': 'pass', 'budget': 'budget'}.get(record.get('outcome'), 'fail')
         for feature in record_features(record, registry):
             key = (record['device'], feature)
             previous = cells.get(key)
             cells[key] = {'state': outcome, 'build': record.get('build'), 'log': record.get('log'),
                           'step': record.get('step'), 'previous': previous['state'] if previous else None,
-                          'reason': ''}
-        history.setdefault(record['device'], []).append((build_number(record.get('build')), outcome))
+                          'reason': record.get('reason', '')}
+        if outcome != 'budget':
+            history.setdefault(record['device'], []).append((build_number(record.get('build')), outcome))
     if planned:
         for step in planned.get('steps', []):
             if step['state'] not in ('cached', 'budget'):

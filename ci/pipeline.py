@@ -801,8 +801,14 @@ def plan(event, base='', head='HEAD', requested=None, paths=None, registry=None,
             'steps': steps, 'cells': cells}
 
 
-def buildkite_pipeline(planned, queues):
-    """The Buildkite pipeline document (JSON, which `buildkite-agent pipeline upload` accepts as YAML)."""
+RUNNER_SETTINGS = ('CERID_CI_STORE', 'CERID_CI_SCCACHE_BUCKET', 'CERID_CI_GCP_PROJECT')
+
+
+def buildkite_pipeline(planned, queues, environ=None):
+    """The Buildkite pipeline document (JSON, which `buildkite-agent pipeline upload` accepts as YAML). The launcher's
+    non-secret runner settings (where the result store and the compiler cache live) travel in the document's
+    environment, so a one-job machine records its results where the next plan reads them."""
+    environ = os.environ if environ is None else environ
     steps = []
     keys = []
     for step in planned['steps']:
@@ -824,7 +830,9 @@ def buildkite_pipeline(planned, queues):
     steps.append({'label': ':bar_chart: QUAL dashboard', 'key': 'dashboard', 'agents': launcher,
                   'command': 'python ci/dashboard/generate.py publish --plan ci-plan.json',
                   'depends_on': [{'step': 'required', 'allow_failure': True}], 'allow_dependency_failure': True})
-    return {'env': {'PYTHONUTF8': '1', 'CRD_PERF_BUDGET_SOFT': '1', 'CRD_PLATFORM_HEADLESS': '1'}, 'steps': steps}
+    env = {'PYTHONUTF8': '1', 'CRD_PERF_BUDGET_SOFT': '1', 'CRD_PLATFORM_HEADLESS': '1'}
+    env.update({name: environ[name] for name in RUNNER_SETTINGS if environ.get(name)})
+    return {'env': env, 'steps': steps}
 
 
 # --------------------------------------------------------------------------------------------- Buildkite context
@@ -933,9 +941,14 @@ class Lane:
         self.job = self.tiers['presets'][preset]['job']
         self.run = run or Runner()
         self.env = self.run.environ
-        self.temp = Path(temp or tempfile.mkdtemp(prefix='cerid-lane-'))
         self.modules = modules
         self.console = console
+        if temp is None and console:
+            # The console wrapper gives tests a private /tmp; the lane's own tools must live where the tests can
+            # still read them, inside the build tree.
+            temp = ROOT / 'build' / ('console-%s-tmp' % preset)
+            temp.mkdir(parents=True, exist_ok=True)
+        self.temp = Path(temp or tempfile.mkdtemp(prefix='cerid-lane-'))
         self.registry = registry
         self.store = store
         self.windows = self.job.startswith('windows') or self.job in ('clang-tidy', 'clang-cl')
@@ -1010,12 +1023,21 @@ class Lane:
             ['CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake', 'cmake/CrdPins.cmake', 'cmake/pins.json']))
         self.cpm_key = key
         if self.store is not None and not self.run.dry:
-            restore_tree(self.store, 'blobs/cpm/%s.tar' % key, Path(self.env['CPM_SOURCE_CACHE']))
+            self.guarded(restore_tree, 'blobs/cpm/%s.tar' % key, Path(self.env['CPM_SOURCE_CACHE']))
 
     def cpm_save(self):
         if self.cold() or self.store is None or self.run.dry or not hasattr(self, 'cpm_key'):
             return
-        save_tree(self.store, 'blobs/cpm/%s.tar' % self.cpm_key, Path(self.env['CPM_SOURCE_CACHE']))
+        self.guarded(save_tree, 'blobs/cpm/%s.tar' % self.cpm_key, Path(self.env['CPM_SOURCE_CACHE']))
+
+    def guarded(self, action, name, directory):
+        """A dependency cache is an accelerator: a store failure logs and the lane acquires from the pinned
+        sources, exactly as an empty cache would."""
+        try:
+            return action(self.store, name, directory)
+        except Exception as error:
+            self.run.log('result store unavailable for %s: %s' % (name, error))
+            return False
 
     def vulkan_sdk(self):
         pin = tool_pin('vulkan-sdk-windows')
@@ -1071,9 +1093,10 @@ class Lane:
         self.run(['dpkg-query', '-W', '-f=${Package} ${Version}\\n', *packages], stdout=self.temp / 'packages.txt')
 
     def vulkan_headers(self):
-        self.run(self.helper('install-vulkan-headers.py', '--destination', '/tmp/vulkan-sdk', '--download-dir',
+        target = str(self.temp / 'vulkan-sdk') if self.console else '/tmp/vulkan-sdk'
+        self.run(self.helper('install-vulkan-headers.py', '--destination', target, '--download-dir',
                              self.temp / 'vulkan-headers'))
-        self.env['VULKAN_SDK'] = '/tmp/vulkan-sdk'
+        self.env['VULKAN_SDK'] = target
 
     def vulkan_validation(self):
         target = self.temp / 'cerid-vulkan-validation'
@@ -1201,11 +1224,11 @@ class Lane:
                                                        capture_output=True, text=True, check=False).stdout.strip()
         key = 'genmc-Linux-%s-%s' % (llvm, files_hash(['cmake/pins.json', 'scripts/install-genmc.py']))
         if self.store is not None and not self.run.dry:
-            restore_tree(self.store, 'blobs/genmc/%s.tar' % key, self.temp / 'genmc')
+            self.guarded(restore_tree, 'blobs/genmc/%s.tar' % key, self.temp / 'genmc')
         self.run(self.helper('install-genmc.py', '--destination', self.temp / 'genmc', '--work-dir',
                              self.temp / 'genmc-work'))
         if self.store is not None and not self.run.dry:
-            save_tree(self.store, 'blobs/genmc/%s.tar' % key, self.temp / 'genmc')
+            self.guarded(save_tree, 'blobs/genmc/%s.tar' % key, self.temp / 'genmc')
         evidence = self.build_dir + '/evidence/genmc'
         self.run(self.helper('check-genmc-models.py', '--genmc', self.temp / 'genmc/bin/genmc', '--json',
                              evidence + '/genmc.json', '--log-dir', evidence))
@@ -1240,11 +1263,20 @@ class Lane:
             return {}
         return test_keys(load_json(inventory), self.device, runtime_inputs_key())
 
+    def test_cache_prefix(self):
+        return 'tests-passed/%s@%s/' % (self.preset, self.device['id'])
+
     def cached_tests(self):
+        """Names of tests whose key passed in one of this lane's last five runs: one listing and at most five reads,
+        never a request per test."""
         if self.store is None or self.env.get('CERID_CI_TIER') == 'complete' or self.env.get('CERID_CI_FRESH'):
             return None
-        names = sorted(name for name, key in self.test_keys().items()
-                       if (self.store.get_json('tests/%s.json' % key) or {}).get('outcome') == 'pass')
+        try:
+            passed = passed_test_keys(self.store, self.test_cache_prefix())
+        except Exception as error:
+            self.run.log('result store unavailable, every test runs: %s' % error)
+            return None
+        names = sorted(name for name, key in self.test_keys().items() if key in passed)
         if not names:
             return None
         path = self.temp / 'cached-tests.txt'
@@ -1256,17 +1288,21 @@ class Lane:
         if self.store is None or self.run.dry or not Path(junit).is_file():
             return
         keys = self.test_keys()
-        for name, outcome in junit_outcomes(junit).items():
-            if outcome == 'pass' and name in keys:
-                self.store.put_json('tests/%s.json' % keys[name], {'outcome': 'pass', 'test': name,
-                                                                    'build': self.env.get('BUILDKITE_BUILD_NUMBER')})
+        passed = sorted(keys[name] for name, outcome in junit_outcomes(junit).items()
+                        if outcome == 'pass' and name in keys)
+        build = self.env.get('BUILDKITE_BUILD_NUMBER') or 'local'
+        try:
+            self.store.put_json('%s%s.json' % (self.test_cache_prefix(), build.zfill(10)),
+                                {'build': build, 'keys': passed})
+        except Exception as error:
+            self.run.log('result store unavailable, passed tests not recorded: %s' % error)
 
     # Console profile --------------------------------------------------------------------------------------------
     def console_wrap(self, command):
         if not self.console:
             return command
         profile = self.registry['console_profiles'][self.console]
-        return console_command(command, profile, self.windows, ROOT / self.build_dir, self.temp)
+        return console_command(command, profile, self.windows, ROOT / self.build_dir, self.temp, self.env)
 
     def console_checks(self):
         """Positive controls: the constraints are in force for the test process, or the lane fails."""
@@ -1291,7 +1327,10 @@ class Lane:
                   'features': (self.env.get('CERID_CI_FEATURES') or '').split(',') if self.env.get(
                       'CERID_CI_FEATURES') else None, 'cached_tests': getattr(self, 'cached_test_count', 0),
                   'finished': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')}
-        record_result(self.store, record)
+        try:
+            record_result(self.store, record)
+        except Exception as error:  # the store is bookkeeping: it can never turn a lane's verdict
+            self.run.log('result store unavailable, result not recorded: %s' % error)
         return record
 
     PHASES = {
@@ -1378,6 +1417,13 @@ def test_keys(inventory, device, runtime_key, read=lambda p: Path(p).read_bytes(
     return keys
 
 
+def passed_test_keys(store, prefix, runs=5):
+    keys = set()
+    for name in store.list(prefix)[-runs:]:
+        keys.update((store.get_json(name) or {}).get('keys', []))
+    return keys
+
+
 def junit_outcomes(path):
     outcomes = {}
     for case in ET.parse(path).getroot().iter('testcase'):
@@ -1436,22 +1482,35 @@ def restore_tree(store, name, directory):
 CONSOLE_PROBES = ('memory-cap', 'cores', 'no-wx', 'filesystem')
 
 
-def console_command(command, profile, windows, build_dir, temp):
+CONSOLE_ENV = re.compile(r'^(?:PATH|HOME|LANG|LC_[A-Z]+|PYTHONUTF8|CPM_SOURCE_CACHE|VULKAN_SDK|VK_[A-Z_]+|'
+                         r'LD_LIBRARY_PATH|CRD_[A-Z0-9_]+|SCCACHE_[A-Z_]+|CERID_CI_(?:STEP|DEVICE|TIER|INPUT_KEY|'
+                         r'FEATURES))$')
+
+
+def console_environment(environ):
+    """The lane variables a test needs inside the console wrapper; agent and access tokens never cross it (a
+    transient unit's environment is visible to the system manager)."""
+    return {key: value for key, value in sorted(environ.items()) if CONSOLE_ENV.match(key)}
+
+
+def console_command(command, profile, windows, build_dir, temp, environ=None):
     """Wrap a test command in the console profile's operating-system constraints (ADR-0135 §9). Linux: a transient
-    systemd service; Windows: a named Job Object joined through the `jail` trampoline (memory and affinity), with
-    Arbitrary Code Guard and the filesystem view prepared by console_prepare_windows."""
+    systemd service, which starts from a clean environment, so the lane's test variables are passed explicitly;
+    Windows: a Job Object joined through the `jail` trampoline (memory and affinity), with Arbitrary Code Guard and the
+    filesystem view prepared by console_prepare_windows; the job inherits the lane's environment."""
     usable = profile['logical_cpus'] - profile['reserved_logical_cpus']
     memory = int(profile['memory_cap_gib'] * 1024 ** 3)
     if windows:
         return [sys.executable, str(CI / 'pipeline.py'), 'jail', '--memory-bytes', str(memory), '--cpus', str(usable),
                 '--', *command]
+    environ = os.environ if environ is None else environ
+    settings = ['--setenv=%s=%s' % item for item in console_environment(environ).items()]
     return ['sudo', 'systemd-run', '--quiet', '--wait', '--pipe', '--collect',
             '--uid=%d' % os.getuid() if hasattr(os, 'getuid') else '--uid=0',
             '--working-directory=%s' % ROOT, '-p', 'MemoryMax=%d' % memory, '-p', 'MemorySwapMax=0',
             '-p', 'AllowedCPUs=0-%d' % (usable - 1), '-p', 'MemoryDenyWriteExecute=yes', '-p', 'NoNewPrivileges=yes',
             '-p', 'ProtectSystem=strict', '-p', 'ProtectHome=read-only', '-p', 'PrivateTmp=yes',
-            '-p', 'ReadWritePaths=%s %s' % (build_dir, temp), '--setenv=PATH=%s' % os.environ.get('PATH', ''),
-            *command]
+            '-p', 'ReadWritePaths=%s %s' % (build_dir, temp), *settings, *command]
 
 
 def console_prepare_windows(build_dir, temp):
@@ -1508,11 +1567,19 @@ def console_probe(name, profile, build_dir):
 
 
 def windows_affinity_count():
+    """Logical CPUs this process may run on; a failed query raises instead of reading as zero (which would pass the
+    cores probe on an unrestricted machine)."""
     import ctypes
+    from ctypes import wintypes
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.GetProcessAffinityMask.argtypes = [wintypes.HANDLE, ctypes.POINTER(ctypes.c_size_t),
+                                                ctypes.POINTER(ctypes.c_size_t)]
+    kernel32.GetProcessAffinityMask.restype = wintypes.BOOL
     process = ctypes.c_size_t()
     system = ctypes.c_size_t()
-    kernel32 = ctypes.windll.kernel32
-    kernel32.GetProcessAffinityMask(kernel32.GetCurrentProcess(), ctypes.byref(process), ctypes.byref(system))
+    if not kernel32.GetProcessAffinityMask(kernel32.GetCurrentProcess(), ctypes.byref(process), ctypes.byref(system)):
+        raise OSError(ctypes.get_last_error(), 'GetProcessAffinityMask')
     return bin(process.value).count('1')
 
 
@@ -1937,8 +2004,14 @@ class Dispatcher:
             hourly = float(device.get('cost_per_hour_usd', 0.0))
             bound = hourly * float(device.get('executor_config', {}).get('max_run_hours', 6))
             if hourly > 0 and (stop or spent + bound > cap):
-                self.finish(job, BUDGET_EXIT, 'budget: %.2f of %.2f USD this month%s' % (
-                    spent, cap, '; GCP budget stop' if stop else ''))
+                detail = 'budget: %.2f of %.2f USD this month%s' % (spent, cap, '; GCP budget stop' if stop else '')
+                self.finish(job, BUDGET_EXIT, detail)
+                # The dashboard shows the cell as budget, never as a failure or a pass.
+                build = str((job.get('build') or {}).get('number') or 'local')
+                step = (job.get('step') or {}).get('key') or job['id']
+                self.store.put_json('results/%s/%s.json' % (build, step), {
+                    'schema': RESULT_SCHEMA, 'step': step, 'device': device['id'], 'outcome': 'budget',
+                    'build': build, 'reason': detail, 'finished': self.now().isoformat(timespec='seconds')})
                 continue
             reserved = self.call('PUT', '/%s/scheduled-jobs/batch-reserve' % self.stack,
                                  {'job_uuids': [job['id']], 'reservation_expiry_seconds': 1800})
