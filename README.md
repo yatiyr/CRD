@@ -17,8 +17,8 @@ it is qualified: every row's state, evidence and remaining work is in the [maste
 ## Architecture in brief
 
 - **Modules.** <!-- fact:module-count -->105<!-- /fact --> modules are registered with `crd_module()` in the root
-  [CMakeLists](CMakeLists.txt): <!-- fact:engine-module-count -->98<!-- /fact --> engine modules under `engine/<family>/`
-  (foundation, execution, numerics, geometry, physics, gpu, rendering, assets, media, ui, world) and
+  [CMakeLists](CMakeLists.txt): <!-- fact:engine-module-count -->98<!-- /fact --> engine modules in the families
+  <!-- fact:engine-families -->`assets`, `execution`, `foundation`, `geometry`, `gpu`, `media`, `numerics`, `physics`, `rendering`, `ui` and `world`<!-- /fact --> (`engine/<family>/<module>`), and
   <!-- fact:other-module-count -->7<!-- /fact --> tools and hosts (`tools/`, `runtime/`, `sandbox/`). The
   [systems map](docs/systems/README.md) gives each module's source, CMake contract and overview.
 - **Execution.** CHIR is the high-level authoring language, CEIR the canonical execution IR and CKIR the device-kernel
@@ -53,9 +53,13 @@ by version and SHA-256 in [cmake/pins.json](cmake/pins.json).
 ```
 
 ```bash
+bash scripts/setup-wsl-deps.sh          # once: the hosted Linux lanes' system packages and SPIRV-Reflect
 cmake --preset linux-gcc-debug
-cmake --build build/linux-gcc-debug --target <target>
+cmake --build --preset linux-gcc-debug --target <target>
 ```
+
+The hosted Linux lanes configure and build with the same two preset commands; from Windows, BUILDING's WSL route
+(`scripts/wsl-lane.sh`) runs them in a mirror of the checkout.
 
 [BUILDING](docs/BUILDING.md) gives the scoped local workflow, tidy, Visual Studio profiles and the local-versus-CI
 decision table; [CODING](docs/CODING.md) gives the C++ style contract.
