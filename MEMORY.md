@@ -7,8 +7,9 @@ Portable lessons; [context](context.md) owns current work. Entry: [START_HERE](S
 
 ## Read only what the task needs
 
+- Commits, CI first, downloads, busy-host boards → [AGENTS](AGENTS.md#conduct--mandatory).
 - Earliest unfinished work; explicit user overrides; retain CI waits while continuing → [order](docs/ROADMAP.md#strict-sequential-execution).
-- Scoped local checks, broad CI, human-only publication → [BUILDING](docs/BUILDING.md#fast-local-workflow--one-primary-configuration).
+- Scoped local checks, the CI matrix → [BUILDING](docs/BUILDING.md#fast-local-workflow--one-primary-configuration).
 - Native VS configuration names require matching flags, headers, CRT and ISA; presets own the matrix →
   [configuration contract and evidence](docs/design/visual-studio-configurations.md).
 - Test ownership, sync readiness and decoder outcomes →
@@ -26,12 +27,11 @@ Portable lessons; [context](context.md) owns current work. Entry: [START_HERE](S
 - Older strategic scope and CEIR grant history → [project history](docs/lessons/memory/project-history.md).
 
 Use `python scripts/check-master-plan.py --memory <symptom-or-record-name>` to locate a record without loading
-the corpus. An exact record name prints that one record. The JSON lookup is generated reference metadata, not status.
+the corpus; an exact record name prints that record. The JSON lookup is reference metadata, not status.
 For source details use [systems](docs/systems/README.md); measured boards live in [bench](docs/bench/README.md).
 
 ## Maintenance
 
-Write new durable lessons with the rule, why and how to apply it in the appropriate reference/recipe. Keep this
-index small. Link evidence from the owning ROADMAP row and session. Do not copy a Next list here. Retire stale
+Write durable lessons (rule, why, how to apply) in the appropriate reference/recipe. Keep this index small. Link evidence from the owning ROADMAP row and session. Do not copy a Next list here. Retire stale
 directions explicitly; historical dates or authorizations cannot override current rules or restart the CEIR loop.
 Diagnostic gaps and detector controls: [DIAG](docs/design/runtime-diagnostics.md). Tool memories redirect here.
