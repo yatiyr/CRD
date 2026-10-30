@@ -34,12 +34,16 @@ same layout a base that leaves `t` 32 bytes off: #GP. It needs Ubuntu's default 
 | GCC 12.4.0 | faults | clean | clean | clean |
 | Clang 18 | clean (`t` 32-aligned, assumed 32) | | | |
 
+Hosted, [host check 41075275868](https://github.com/yatiyr/CRD/actions/runs/41075275868) on `ubuntu-24.04` under the
+pinned SDE: GCC 12.4, 13.3 and 14.2 fault without the caps and run clean with them; Clang 18.1.3 runs clean. A newer
+GCC on the image is no way out.
+
 GCC on x64 under ASan now builds with the two caps (`CMakeLists.txt`): use-after-return detection and the stack
 protector stay on. In the avx512 probe unit the caps change one function, `d8_half_stores` (the zeroing becomes two
 32-byte stores); at `x86-64` to `x86-64-v3` the objects are identical. The failing runners had AVX-512 (EPYC 9V74,
 Xeon 8370C); EPYC 7763 runners skip the level, which is why earlier asan jobs passed. Hosted proof comes when the asan
 job draws an AVX-512 runner. The dispatched host check's new `x64-asan-stack-alignment` leg runs the control under the
-pinned SDE with every compiler of the image (GCC 14 included) and retires the caps when the default `g++` runs clean.
+pinned SDE with every compiler of the image and retires the caps when the default `g++` runs clean.
 
 ## linux-clang-tsan lost its runner
 

@@ -1,5 +1,5 @@
 // The AddressSanitizer stack-alignment control (SIMD-DISPATCH; docs/third-party-defects.md#tp-7). No Cerid code: a
-// frame that a 512-bit temporary realigns to 64 bytes and that holds an address-taken 64-byte array. GCC 12 and 13
+// frame that a 512-bit temporary realigns to 64 bytes and that holds an address-taken 64-byte array. GCC 12 to 14
 // (with Ubuntu's default -fstack-protector-strong) zero the array with a store that needs 64-byte alignment, while the
 // frame ASan moves to its fake stack (detect_stack_use_after_return=1, the runtime's default) puts the array 32 bytes
 // off that boundary, so the store faults. Capping GCC's expansion width (-mstore-max=256 -mmove-max=256) keeps it to

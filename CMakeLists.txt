@@ -174,7 +174,7 @@ if(CRD_ENABLE_ASAN OR CRD_NATIVE_PROFILES)
         if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND _crd_arch_arm64)
             add_compile_options(--param=asan-use-after-return=0)
         endif()
-        # GCC 12 and 13 zero or copy an address-taken local in a frame realigned for a 512-bit value with 64-byte
+        # GCC 12 to 14 zero or copy an address-taken local in a frame realigned for a 512-bit value with 64-byte
         # stores, which the use-after-return frame leaves 32 bytes off that boundary (TP-7,
         # scripts/asan_stack_align_control.cpp). Capping the expansion at 256 bits keeps every such store within
         # the 32 bytes ASan aligns; below AVX-512 the caps change no instruction.
