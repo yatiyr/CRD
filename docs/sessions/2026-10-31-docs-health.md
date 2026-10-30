@@ -68,7 +68,7 @@ their dated repository record.
   placeholders are exempt.
 - `facts`: `<!-- fact:NAME -->value<!-- /fact -->` blocks equal their source (CPU levels from `cpu_features.hpp`,
   `cpu_features.cpp` and `CrdSimd.cmake`, which must agree; determinism modes; module, engine-module, tool and
-  test-directory counts from the `crd_module()` registry; native profiles from the presets; entry budgets from the
+  test-directory counts and the engine families from the `crd_module()` registry; native profiles from the presets; entry budgets from the
   validator; the copyright line from LICENSE); `--refresh` rewrites them; a hand-written count of the same thing fails;
   the README must keep its licence, CPU, tracking, build and CI statements.
 - `indexes`: indexed directories name every document; every other document under `docs/` outside the sessions is
@@ -98,6 +98,13 @@ and the CMake-free `test-repository-tools.py` classes MasterPlanSequence, Proven
 CiTiers (33 tests): all pass. The master-plan validator with the drift guard takes about 8 s on this host.
 
 ## Limits and open items
+
+- The drift guard runs hosted through `check-master-plan.py`; its own regression suite runs hosted once the CTest
+  line above lands (or a `python scripts/test-check-docs.py` step beside the repository job's validator step).
+  The validator now walks the documents twice; the `crd-master-plan` budget of 300 s was set for a 57 to 64 s run on
+  a 9p mount and should still cover it.
+- The `refs` check skips a line that narrates history (former, deleted, retired, removed, renamed, no longer), and a
+  fenced block is held to the tree only for the scripts its commands run.
 
 - Facts that exist only on unmerged branches were not written into living documents: ADR-0135 §16 (polling and the
   Google IAP tunnel by default) is on `ci-orchestrator-elite`; the GitLab hosting and the agent workspace overlay have
