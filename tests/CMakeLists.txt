@@ -18,6 +18,9 @@ add_test(NAME crd-build-profiles
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-native-build-profiles.py")
 add_test(NAME crd-module-selection
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-module-selection.py")
+# ADR-0135: the Cerid CI platform's registry, planner, lanes, executors, dashboard and parity table
+add_test(NAME crd-ci-platform
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-ci-platform.py")
 # DIAG.6c: verdict tests of the external sampling, counter-capability and debugger runbooks. They mock wpr, xperf,
 # perf and lldb, so they need neither the tools nor elevation and run on every host.
 add_test(NAME crd-diag-cpu-sampling-runbook
@@ -51,7 +54,7 @@ add_test(NAME crd-license-manifest # REPO.DEV.10: docs/generated/dependency-lice
 # The document validator walks about a thousand documents; on a native disk that is seconds, on a checkout read
 # through a 9p mount (WSL on a Windows drive) it measured 57 to 64 s and the former 60 s budget failed it honestly.
 # The budget is a ceiling against hangs, not a performance contract, so it covers the slowest supported instrument.
-set_tests_properties(crd-repository-hygiene crd-master-plan crd-repository-tools
+set_tests_properties(crd-repository-hygiene crd-master-plan crd-repository-tools crd-ci-platform
     PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONUTF8=1")
 set_tests_properties(crd-project-structure-sync PROPERTIES TIMEOUT 90 ENVIRONMENT "PYTHONUTF8=1")
 set_tests_properties(crd-build-profiles PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
