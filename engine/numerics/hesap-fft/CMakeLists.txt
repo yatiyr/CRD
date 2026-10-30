@@ -60,13 +60,23 @@ crd_add_cpu_kernels(crd-hesap-fft NAME fft LEVELS portable sse2 avx2 avx512 INCL
                         "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fft_hier_codelets_1.cpp"
                         "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fft_twiddle_codelets_0.cpp"
                         "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fft_twiddle_codelets_1.cpp")
-# avx2 and avx512 compile each codelet whole (codelet_lanes.hpp): a batched unit peaked at 2.2 GB (avx2) and 4.2 GB
-# (avx512) under MSVC /O2, 2026-10-30, so at most two of them build at once on a 16 GB hosted runner.
+# The codelet units are the tree's largest compiles on every level: a batched unit peaked at 4.1 GiB at sse2 under
+# GCC 13 -O2 -g (avx512 1.7, avx2 0.7, portable 0.3) and at 4.2 GiB at avx512 under MSVC /O2 (avx2 2.2), 2026-10-30.
+# Six sse2 units at once starved a 16 GB hosted runner until it was lost (run 41059057789), so a pool runs as many as
+# the host's memory holds beside the rest of the build: the build board's 4 GiB reserve, then one unit per 4.2 GiB
+# (docs/design/build-performance.md#measured-results).
 if(CMAKE_GENERATOR MATCHES "Ninja")
-    set_property(GLOBAL APPEND PROPERTY JOB_POOLS crd_fft_whole_codelets=2)
-    foreach(level IN ITEMS avx2 avx512)
+    cmake_host_system_information(RESULT _crd_fft_memory_mib QUERY TOTAL_PHYSICAL_MEMORY)
+    math(EXPR _crd_fft_codelet_jobs "(${_crd_fft_memory_mib} - 4096) * 10 / 43008")
+    if(_crd_fft_codelet_jobs LESS 1)
+        set(_crd_fft_codelet_jobs 1)
+    endif()
+    set_property(GLOBAL APPEND PROPERTY JOB_POOLS crd_fft_codelets=${_crd_fft_codelet_jobs})
+    foreach(level IN ITEMS portable sse2 avx2 avx512)
         if(TARGET crd-hesap-fft-fft-${level})
-            set_property(TARGET crd-hesap-fft-fft-${level} PROPERTY JOB_POOL_COMPILE crd_fft_whole_codelets)
+            set_property(TARGET crd-hesap-fft-fft-${level} PROPERTY JOB_POOL_COMPILE crd_fft_codelets)
         endif()
     endforeach()
+    unset(_crd_fft_codelet_jobs)
+    unset(_crd_fft_memory_mib)
 endif()

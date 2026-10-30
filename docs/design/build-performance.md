@@ -315,6 +315,12 @@ memory, disk, cache size). The decisions it carries:
   scheduling gap), so `CRD_COMPILE_JOBS`/`CRD_LINK_JOBS` stay unset by default; the derived bound for a memory-limited
   host is `compile jobs = (available GiB - 4) / 0.4`, which on a 16 GiB, 4-vCPU hosted runner is far above its CPU
   count, so the runners run unbounded too.
+- **The fft codelet units are the exception (2026-10-30).** One batched codelet unit peaked at 4.1 GiB at sse2
+  under GCC 13 `-O2 -g` (93 s alone) and 4.2 GiB at avx512 under MSVC `/O2`, against 0.2 to 1.3 GiB for the largest
+  LTO links of `linux-gcc-relwithdebinfo` at the runner's four ltrans jobs. Six sse2 units at once starved a hosted
+  runner until it was lost (run 41059057789, after a `libm.hpp` edit missed the cache for every unit). Every fft level
+  compiles in the `crd_fft_codelets` pool, `(total MiB - 4096) / 4300.8` deep (at least one): two on a 16 GB runner,
+  six on a 31 GiB WSL host ([session](../sessions/2026-10-30-simd-dispatch-fft-codelet-pool.md)).
 - **Disk.** A Debug tree is 9.3 to 10.8 GiB; embedded debug information did not grow it; the whole preset caches in
   0.71 GiB (0.99 GiB with edited variants), which set the 2 GiB per-lane `SCCACHE_CACHE_SIZE` of the hosted
   `actions/cache` design that the GitHub Actions backend replaced on 2026-10-18 (see Hosted lanes).
