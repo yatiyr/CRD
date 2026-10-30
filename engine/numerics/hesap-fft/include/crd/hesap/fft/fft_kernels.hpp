@@ -4,9 +4,10 @@
 //
 // FftPlan (crd/hesap/fft/fft.hpp) builds the plan in general code and hands the kernels its FftPlanState: the sizes
 // the planner chose, its tables and its scratch. A kernel runs the transform at its own level, sub-plans included.
-// Determinism (ADR-0134 §7): bit-exact, portable the reference. Every level runs one algorithm per size on SIMD types
-// whose operations give the same bits on every backend (single-rounded fma, two-rounded products elsewhere), so a
-// transform gives the same bits on every level, run and thread; only NaN payloads may differ.
+// Determinism (ADR-0134 §7): bit-exact, portable the reference. A plan's algorithms run on SIMD types whose
+// operations give the same bits on every backend (single-rounded fma, two-rounded products elsewhere), so one plan
+// gives the same bits on every level, run and thread; only NaN payloads may differ. The planner gives each level its
+// measured plan under DeterminismMode::Default and every level the canonical one under the other modes (fft.hpp).
 
 #pragma once
 
@@ -22,8 +23,8 @@ enum class FftDirection : crd::u8
     Inverse = 1,
 };
 
-// The algorithm a plan runs in one direction. FftPlan's planner picks each from the size (fft.hpp); the inverse is
-// always Stockham, Ip4 or FourStep.
+// The algorithm a plan runs in one direction. FftPlan's planner picks each from the size, and the forward also from
+// the level and determinism mode (fft.hpp); the inverse is always Stockham, Ip4 or FourStep.
 enum class FftAlgorithm : crd::u8
 {
     Stockham,       // the leaf codelets and the radix-4 to radix-32 Stockham passes on split buffers

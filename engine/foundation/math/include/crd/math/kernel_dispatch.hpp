@@ -11,6 +11,7 @@
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/core/types.hpp>
+#include <crd/math/determinism_mode.hpp>
 
 #include <span>
 
@@ -23,6 +24,14 @@ template <typename Table> struct KernelLevel
     const Table* table = nullptr;
     crd::CpuFeatureSet features; // a variant's features beyond its level; empty for a level's plain table
 };
+
+// The determinism mode the process's kernel families plan under (ADR-0134 §7), Default until set. Under Default each
+// CPU level runs the plan its family measured fastest there, within the family's declared tolerance across levels;
+// under CrossPlatform and BackwardCompat every level runs the family's one canonical plan, so a bit-exact family gives
+// the same bits on every level (replays, lockstep, golden tests). A plan reads the mode when it is built; code sets it
+// (no environment variable), before it builds the plans whose bits must match.
+[[nodiscard]] DeterminismMode kernel_determinism() noexcept;
+void set_kernel_determinism(DeterminismMode mode) noexcept;
 
 // The highest level this build compiles kernels for: CRD_SIMD_LEVEL scalar gives portable, sse2 gives sse2, avx2
 // gives avx2, auto gives the architecture's top level (per configuration under the native Visual Studio profiles).

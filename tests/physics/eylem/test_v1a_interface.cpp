@@ -199,6 +199,7 @@ TEST_CASE("eylem v1a DeterminismMode enum values are pinned", "[eylem][v1a][free
     STATIC_REQUIRE(static_cast<int>(DeterminismMode::Default)        == 0);
     STATIC_REQUIRE(static_cast<int>(DeterminismMode::CrossPlatform)  == 1);
     STATIC_REQUIRE(static_cast<int>(DeterminismMode::BackwardCompat) == 2);
+    STATIC_REQUIRE(std::is_same_v<DeterminismMode, crd::math::DeterminismMode>); // the engine's one set of modes
 }
 
 TEST_CASE("eylem v1a CCDMode enum values are pinned", "[eylem][v1a][freeze]")

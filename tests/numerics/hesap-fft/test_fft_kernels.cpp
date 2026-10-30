@@ -13,6 +13,8 @@
 #include <crd/containers/span.hpp>
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/fft/fft.hpp>
+#include <crd/math/determinism_mode.hpp>
+#include <crd/math/kernel_dispatch.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <algorithm>
@@ -39,6 +41,24 @@ namespace
 {
 
 using crd::test::kernel_level_runs_here;
+
+// The process's kernel determinism mode for one scope, the earlier one restored after it.
+class DeterminismScope
+{
+public:
+    explicit DeterminismScope(crd::math::DeterminismMode mode) : m_before(crd::math::kernel_determinism())
+    {
+        crd::math::set_kernel_determinism(mode);
+    }
+    ~DeterminismScope() { crd::math::set_kernel_determinism(m_before); }
+    DeterminismScope(const DeterminismScope&) = delete;
+    DeterminismScope& operator=(const DeterminismScope&) = delete;
+    DeterminismScope(DeterminismScope&&) = delete;
+    DeterminismScope& operator=(DeterminismScope&&) = delete;
+
+private:
+    crd::math::DeterminismMode m_before;
+};
 
 // The guard words before and after the data, in T units.
 constexpr usize kGuard = 16;
@@ -95,7 +115,9 @@ template <typename T> struct Buffer
         }
     }
     T* values() { return words.data() + kGuard + shift; }
+    [[nodiscard]] const T* values() const { return words.data() + kGuard + shift; }
     Complex<T>* data() { return reinterpret_cast<Complex<T>*>(values()); }
+    [[nodiscard]] const Complex<T>* data() const { return reinterpret_cast<const Complex<T>*>(values()); }
     [[nodiscard]] bool guards_kept() const
     {
         for (usize i = 0; i < words.size(); ++i)
@@ -449,9 +471,10 @@ TEST_CASE("fft kernels: every level keeps the reference's non-finite and subnorm
     check_specials_every_level<crd::f32>();
 }
 
-// The planner's algorithm of each direction at every size to 8M (fft::detail::planned_forward and planned_inverse),
-// one letter a size: Stockham, standalone-hier, IP4-AoS, the four-pass deep-split, the four-step, the six-step, the
-// tiled four-step. Every planned forward builds at its size, and a plan reports the pair.
+// The canonical planner's algorithm of each direction at every size to 8M (fft::detail::planned_forward and
+// planned_inverse), one letter a size: Stockham, standalone-hier, IP4-AoS, the four-pass deep-split, the four-step, the
+// six-step, the tiled four-step. Every planned forward builds at its size, and a plan built under CrossPlatform
+// reports the pair on every level.
 TEST_CASE("fft kernels: the planner's algorithm of every size", "[fft]")
 {
     const auto algorithm = [](char letter)
@@ -492,6 +515,7 @@ TEST_CASE("fft kernels: the planner's algorithm of every size", "[fft]")
         CHECK(fft::detail::forward_builds<crd::f64>(n, fft::detail::planned_forward<crd::f64>(n)));
         if (lg <= 16)
         {
+            const DeterminismScope canonical(crd::math::DeterminismMode::CrossPlatform);
             const fft::FftPlan<crd::f32> plan(&alloc, n);
             CHECK(plan.state().forward == algorithm(f32_forward[lg]));
             CHECK(plan.state().inverse == algorithm(f32_inverse[lg]));
@@ -503,16 +527,18 @@ namespace
 {
 // SIMD-DISPATCH's row-close board times every forward fft::detail::forward_builds offers at an f32 size against the
 // planned one: each forward here on every level the host runs (the random input, aligned), with the planner's inverse.
+// The process's own plan of the size is check_every_level's.
 void check_forced_forwards(u32 lg_lo, u32 lg_hi)
 {
     crd::memory::TlsfAllocator alloc(usize{1} << 30);
     for (u32 lg = lg_lo; lg <= lg_hi; ++lg)
     {
         const usize n = usize{1} << lg;
+        const fft::FftAlgorithm own =
+            fft::detail::level_forward<crd::f32>(n, fft::fft_kernels().level, crd::math::kernel_determinism());
         for (const fft::FftAlgorithm forward : fft::detail::kFftAlgorithms)
         {
-            if (forward == fft::detail::planned_forward<crd::f32>(n) ||
-                !fft::detail::forward_builds<crd::f32>(n, forward))
+            if (forward == own || !fft::detail::forward_builds<crd::f32>(n, forward))
             {
                 continue;
             }
@@ -539,6 +565,159 @@ TEST_CASE("fft kernels: every level runs each f32 forward the planner offers fro
 TEST_CASE("fft kernels: every level runs each f32 forward the planner offers at 2M and 4M", "[fft][kernels]")
 {
     check_forced_forwards(21, 22);
+}
+
+namespace
+{
+using crd::math::DeterminismMode;
+
+constexpr CpuLevel kEveryLevel[] = {CpuLevel::Portable, CpuLevel::Sse2,   CpuLevel::Sse42,
+                                    CpuLevel::Avx2,     CpuLevel::Avx512, CpuLevel::Neon};
+
+// The board's row of a type, level and size, or null.
+const fft::detail::FftLevelPlan* board_row(usize element_bytes, CpuLevel level, u32 log2)
+{
+    for (const fft::detail::FftLevelPlan& row : fft::detail::kFftLevelPlans)
+    {
+        if (row.element_bytes == element_bytes && row.level == level && row.log2 == log2)
+        {
+            return &row;
+        }
+    }
+    return nullptr;
+}
+
+// Every level and size to 8M: the deterministic modes plan canonically, Default plans the board's row where it has
+// one. Returns how many plans Default changes.
+template <typename T> usize default_changes()
+{
+    usize changed = 0;
+    for (const CpuLevel level : kEveryLevel)
+    {
+        for (u32 lg = 0; lg <= 23; ++lg)
+        {
+            const usize n = usize{1} << lg;
+            INFO(crd::cpu_level_name(level) << " n=" << n << " bytes=" << sizeof(T));
+            const fft::FftAlgorithm canonical = fft::detail::planned_forward<T>(n);
+            CHECK(fft::detail::level_forward<T>(n, level, DeterminismMode::CrossPlatform) == canonical);
+            CHECK(fft::detail::level_forward<T>(n, level, DeterminismMode::BackwardCompat) == canonical);
+            const fft::detail::FftLevelPlan* row = board_row(sizeof(T), level, lg);
+            const fft::FftAlgorithm own = fft::detail::level_forward<T>(n, level, DeterminismMode::Default);
+            CHECK(own == (row != nullptr ? row->forward : canonical));
+            changed += own != canonical ? 1U : 0U;
+        }
+    }
+    return changed;
+}
+} // namespace
+
+// The board's table (level_plans_gen.hpp): one row per type, level and size, each a forward its size builds; avx2,
+// the board's top level, runs the canonical planner at every size it measured, and switching to a deterministic mode
+// changes a plan exactly where the board found another level's winner.
+TEST_CASE("fft kernels: each level's board plans, and the canonical plan in the deterministic modes", "[fft]")
+{
+    usize differing = 0;
+    for (const fft::detail::FftLevelPlan& row : fft::detail::kFftLevelPlans)
+    {
+        const usize n = usize{1} << row.log2;
+        INFO(crd::cpu_level_name(row.level) << " n=" << n << " bytes=" << int{row.element_bytes}
+                                            << " forward=" << fft::fft_algorithm_name(row.forward));
+        REQUIRE((row.element_bytes == 4U || row.element_bytes == 8U));
+        const bool f32 = row.element_bytes == 4U;
+        CHECK((f32 ? fft::detail::forward_builds<crd::f32>(n, row.forward)
+                   : fft::detail::forward_builds<crd::f64>(n, row.forward)));
+        const fft::FftAlgorithm canonical =
+            f32 ? fft::detail::planned_forward<crd::f32>(n) : fft::detail::planned_forward<crd::f64>(n);
+        if (row.level == CpuLevel::Avx2)
+        {
+            CHECK(row.forward == canonical);
+        }
+        CHECK(board_row(row.element_bytes, row.level, row.log2) == &row);
+        differing += row.forward != canonical ? 1U : 0U;
+    }
+    CHECK(differing > 0U);
+    CHECK(default_changes<crd::f32>() + default_changes<crd::f64>() == differing);
+}
+
+// A plan built with no algorithm named reads the process's kernel level and determinism mode.
+TEST_CASE("fft kernels: a plan takes its level's board plan under Default and the canonical one otherwise",
+          "[fft][kernels]")
+{
+    crd::memory::TlsfAllocator alloc(usize{1} << 28);
+    const CpuLevel level = fft::fft_kernels().level;
+    for (const DeterminismMode mode :
+         {DeterminismMode::Default, DeterminismMode::CrossPlatform, DeterminismMode::BackwardCompat})
+    {
+        const DeterminismScope scope(mode);
+        for (u32 lg = 0; lg <= 16; ++lg)
+        {
+            const usize n = usize{1} << lg;
+            INFO(crd::cpu_level_name(level) << " mode=" << static_cast<int>(mode) << " n=" << n);
+            const fft::FftPlan<crd::f32> single(&alloc, n);
+            const fft::FftPlan<crd::f64> wide(&alloc, n);
+            CHECK(single.state().forward == fft::detail::level_forward<crd::f32>(n, level, mode));
+            CHECK(single.state().inverse == fft::detail::planned_inverse<crd::f32>(n));
+            CHECK(wide.state().forward == fft::detail::level_forward<crd::f64>(n, level, mode));
+            CHECK(wide.state().inverse == fft::detail::planned_inverse<crd::f64>(n));
+        }
+    }
+    CHECK(crd::math::kernel_determinism() == DeterminismMode::Default);
+}
+
+// Under Default each level runs its own board plan of an f32 size: bit-identical run to run, within the ADR-0092 §5
+// class of the radix-2 reference, and within twice that class of portable's own plan (the declared cross-level
+// tolerance); under the deterministic modes every level runs the canonical plan and gives portable's bits.
+TEST_CASE("fft kernels: every level's own f32 plan stays within the cross-level tolerance, the canonical one exact",
+          "[fft][kernels]")
+{
+    crd::memory::TlsfAllocator alloc(usize{1} << 30);
+    const auto levels = fft::fft_kernel_levels();
+    const fft::FftTypeKernels<crd::f32>& portable = fft::kernels_of<crd::f32>(*levels[0].table);
+    for (u32 lg = 10; lg <= 20; ++lg)
+    {
+        const usize n = usize{1} << lg;
+        Buffer<crd::f32> input(&alloc, n, 0);
+        fill_lcg(input.values(), 2 * n, 0xC0DEULL + n);
+        const auto run = [&](const fft::FftTypeKernels<crd::f32>& k, const fft::FftPlan<crd::f32>& plan)
+        {
+            Buffer<crd::f32> out(&alloc, n, 0);
+            std::memcpy(out.values(), input.values(), 2 * n * sizeof(crd::f32));
+            k.execute(plan.state(), out.data(), FftDirection::Forward);
+            return out;
+        };
+        const fft::FftPlan<crd::f32> canonical(&alloc, n, fft::detail::planned_forward<crd::f32>(n));
+        Buffer<crd::f32> want(&alloc, n, 0);
+        std::memcpy(want.values(), input.values(), 2 * n * sizeof(crd::f32));
+        canonical.execute_reference(Span<Complex<crd::f32>>(want.data(), n), FftDirection::Forward);
+        const fft::FftPlan<crd::f32> portable_own(
+            &alloc, n, fft::detail::level_forward<crd::f32>(n, CpuLevel::Portable, DeterminismMode::Default));
+        const Buffer<crd::f32> portable_bits = run(portable, portable_own);
+        const Buffer<crd::f32> canonical_bits = run(portable, canonical);
+        for (const KernelLevel<FftKernels>& level : levels)
+        {
+            if (!kernel_level_runs_here(level))
+            {
+                continue;
+            }
+            const fft::FftTypeKernels<crd::f32>& k = fft::kernels_of<crd::f32>(*level.table);
+            const fft::FftPlan<crd::f32> own(
+                &alloc, n, fft::detail::level_forward<crd::f32>(n, level.level, DeterminismMode::Default));
+            const Buffer<crd::f32> got = run(k, own);
+            const Buffer<crd::f32> again = run(k, own);
+            const Buffer<crd::f32> exact = run(k, canonical);
+            const double rel = rel_error(got.data(), want.data(), n);
+            const double across = rel_error(got.data(), portable_bits.data(), n);
+            INFO(crd::cpu_level_name(level.level)
+                 << " n=" << n << " own=" << fft::fft_algorithm_name(own.state().forward) << " rel=" << rel
+                 << " across=" << across);
+            CHECK(std::memcmp(got.values(), again.values(), 2 * n * sizeof(crd::f32)) == 0);
+            CHECK(rel < tolerance<crd::f32>(n));
+            CHECK(across < 2.0 * tolerance<crd::f32>(n));
+            CHECK(std::memcmp(exact.values(), canonical_bits.values(), 2 * n * sizeof(crd::f32)) == 0);
+            CHECK(got.guards_kept());
+            CHECK(exact.guards_kept());
+        }
+    }
 }
 
 TEST_CASE("fft kernels: the process runs the level its CPU selection resolves", "[fft][kernels]")

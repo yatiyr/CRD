@@ -947,6 +947,17 @@
       "sha256": "227f4c36c4a7f1a4bcdcee5bdb6d4866db7312b20b451ceadab0c81fd12d13da"
     },
     {
+      "path": "engine/numerics/hesap-fft/include/crd/hesap/fft/detail/level_plans_gen.hpp",
+      "generator": "scripts/gen_fft_level_plans.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "scripts/gen_fft_level_plans.py",
+        "--check"
+      ],
+      "sha256": "0d6e381753f63803e8e693faf72bbc29c711525aa97fd22b0c50be9c85436089"
+    },
+    {
       "path": "engine/numerics/hesap-fft/kernels/fft_batched_codelets_0.cpp",
       "generator": "scripts/gen_fft_batched.py",
       "status": "host-dependent",

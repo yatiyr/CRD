@@ -1,9 +1,10 @@
 // bench_fft_f32 — the complex-f32 forward FFT against Intel MKL DFTI, one thread (scripts/run_bench_fft.sh, at each CPU
 // level). Every power of two from 2^10 to 2^22 on identical data, each plan built once outside timing. At each size
-// every forward algorithm the planner offers there (fft::detail::forward_builds: the planned one first, then the
-// Stockham passes, the standalone-hier, IP4-AoS, the three- and four-pass deep-split, the four-step, the six-step and
-// the f32 1M tiled four-step) runs in this one binary, interleaved with MKL every rep, so all share the host's state;
-// a size's winner becomes its plan. The input is copied in before each timed transform, never inside the timing (as
+// every forward algorithm the planner offers there (fft::detail::forward_builds: the one this level runs first,
+// fft::detail::level_forward, then the Stockham passes, the standalone-hier, IP4-AoS, the three- and four-pass
+// deep-split, the four-step, the six-step and the f32 1M tiled four-step) runs in this one binary, interleaved with MKL
+// every rep, so all share the host's state; a level's winners become its plans (scripts/gen_fft_level_plans.py reads
+// the boards' logs). The input is copied in before each timed transform, never inside the timing (as
 // the pre-SIMD-DISPATCH board did). Each Cerid arm and MKL is measured against an FFTW f64 transform of the same f32
 // input values and fails above the ADR-0092 §5 f32 class (2e-4, 1e-3 from the four-step band): a fast wrong answer is
 // not a win, for either side. Cerid's Complex<f32> shares MKL's interleaved {re, im} layout.
@@ -194,7 +195,8 @@ int main()
         Arm arms[kMaxArms] = {};
         fft::FftPlan<f32>* plans[kMaxArms] = {};
         usize arm_count = 0;
-        const fft::FftAlgorithm planned = fft::detail::planned_forward<f32>(n);
+        const fft::FftAlgorithm planned =
+            fft::detail::level_forward<f32>(n, fft::fft_kernels().level, crd::math::kernel_determinism());
         const auto add = [&](fft::FftAlgorithm forward)
         {
             plans[arm_count] =

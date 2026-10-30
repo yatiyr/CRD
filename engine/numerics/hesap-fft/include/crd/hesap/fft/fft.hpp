@@ -1,10 +1,11 @@
 #pragma once
 
 // fft.hpp — Phase 3.1.6 v10: complex FFT. The DETERMINISTIC-PLAN contract (the v10 thesis): the algorithm
-// is chosen purely from the size factorization — NO runtime measurement or autotuning (the plan is a pure
-// function of the size, so it is reproducible across builds and runs). One twiddle table is precomputed per
-// plan and shared ⇒ cross-THREAD bit-identical (NOT cross-compiler: sin/cos ±1 ULP). Lower-layer RAW per
-// ADR-0078 (Complex<f32/f64>).
+// is chosen from the size, the CPU level the process runs and its determinism mode — NO runtime measurement or
+// autotuning (the per-level choices are the saved board's table, ADR-0134 §7; under CrossPlatform every level runs
+// the canonical plan of the size, so it is reproducible across builds, runs and levels). One twiddle table is
+// precomputed per plan and shared ⇒ cross-THREAD bit-identical (NOT cross-compiler: sin/cos ±1 ULP). Lower-layer
+// RAW per ADR-0078 (Complex<f32/f64>).
 //
 // v10-a: radix-2 (the correct baseline + the brute-force-DFT gate). v10-b: STOCKHAM AUTOSORT (no
 // bit-reversal — kills the large-N cache collapse) on SPLIT SoA buffers + AVX2 SIMD over the unit-stride
@@ -25,8 +26,11 @@
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/fft/detail/block_width.hpp>
+#include <crd/hesap/fft/detail/level_plans_gen.hpp>
 #include <crd/hesap/fft/fft_dispatch.hpp>
 #include <crd/math/cmath.hpp>
+#include <crd/math/determinism_mode.hpp>
+#include <crd/math/kernel_dispatch.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/memory/construct.hpp> // allocate_array_or_fatal / construct_or_fatal (DIAG.3a)
 
@@ -47,9 +51,10 @@ namespace detail
 // (crd-hesap-fft-fatal-* modes).
 inline constexpr const char* kFftPlanOutOfMemory = "FftPlan: out of memory for its tables";
 
-// THE PLANNER: every per-size choice of a type's plan, measured against MKL row by row (FFT-CRUSH 2026-07,
+// THE PLANNER: every per-size choice of a type's canonical plan, measured against MKL row by row (FFT-CRUSH 2026-07,
 // docs/research/fft-stockham-v2.md) and a pure function of the size. SIMD-DISPATCH's row-close board times every
-// algorithm forward_builds offers at a size against the planned one at every level; a size's winner becomes its plan.
+// algorithm forward_builds offers at a size against the planned one at every level; a level's measured winners are
+// its plans under DeterminismMode::Default (level_forward, level_plans_gen.hpp).
 
 // The four-step's sizes. From 2^19 the direct passes are DRAM-bound (log4(n) full passes) and the Bailey four-step
 // keeps the sub-FFTs cache-resident (O(1) DRAM passes). FFT-CRUSH 2026-07-03 opted 128K and 256K in for both types
@@ -163,6 +168,33 @@ template <typename T> [[nodiscard]] constexpr bool forward_builds(crd::usize n, 
     return false;
 }
 
+// The forward a plan of n runs at `level` under `mode` (ADR-0134 §7): under DeterminismMode::Default the saved board's
+// plan of that level and size (level_plans_gen.hpp), the canonical planned_forward under the other modes and wherever
+// the board did not measure. Each forward gives the same bits on every level, so CrossPlatform's are identical across
+// levels; under Default two levels' plans of a size each meet the ADR-0092 §5 class against the radix-2 reference, so
+// they differ by at most twice it (the declared cross-level tolerance).
+template <typename T>
+[[nodiscard]] constexpr FftAlgorithm level_forward(crd::usize n, crd::CpuLevel level,
+                                                   crd::math::DeterminismMode mode) noexcept
+{
+    if (mode == crd::math::DeterminismMode::Default && is_pow2(n))
+    {
+        crd::u32 log2 = 0U;
+        while ((crd::usize{1} << log2) < n)
+        {
+            ++log2;
+        }
+        for (const FftLevelPlan& row : kFftLevelPlans)
+        {
+            if (row.element_bytes == sizeof(T) && row.level == level && row.log2 == log2)
+            {
+                return row.forward;
+            }
+        }
+    }
+    return planned_forward<T>(n);
+}
+
 // Every algorithm, in FftAlgorithm order: the board and the tests walk the ones forward_builds offers at a size.
 inline constexpr FftAlgorithm kFftAlgorithms[] = {
     FftAlgorithm::Stockham,   FftAlgorithm::StandaloneHier, FftAlgorithm::Ip4,     FftAlgorithm::DeepSplit3,
@@ -173,7 +205,11 @@ inline constexpr FftAlgorithm kFftAlgorithms[] = {
 template <typename T> class FftPlan
 {
 public:
-    FftPlan(crd::memory::IAllocator* alloc, crd::usize n) : FftPlan(alloc, n, detail::planned_forward<T>(n)) {}
+    // The plan of n at the kernel level the process runs, under the process's determinism mode (read once, here).
+    FftPlan(crd::memory::IAllocator* alloc, crd::usize n)
+        : FftPlan(alloc, n, detail::level_forward<T>(n, fft_kernels().level, crd::math::kernel_determinism()))
+    {
+    }
 
     // A plan whose forward runs `forward`, an algorithm detail::forward_builds offers at n (the row-close board and
     // the tests run each against the planned one); its inverse stays the planner's. Only the six-step changes the
@@ -432,10 +468,12 @@ private:
             m_alloc->deallocate(table);
         }
     }
-    // A four-step sub-plan of size `n`, built from the same allocator.
+    // A four-step sub-plan of size `n`, built from the same allocator: the canonical plan on every level and in every
+    // mode, the composition the board measured.
     [[nodiscard]] FftPlan* sub_plan(crd::usize n)
     {
-        return crd::memory::construct_or_fatal<FftPlan>(*m_alloc, detail::kFftPlanOutOfMemory, m_alloc, n);
+        return crd::memory::construct_or_fatal<FftPlan>(*m_alloc, detail::kFftPlanOutOfMemory, m_alloc, n,
+                                                        detail::planned_forward<T>(n));
     }
 
     // The hierarchical generated-codelet sub-FFTs, which execute_batched runs when this plan is a four-step's

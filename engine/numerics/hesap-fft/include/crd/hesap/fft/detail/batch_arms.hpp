@@ -8,8 +8,9 @@
 // inside one transform, at a batch of exactly the sub-plan's block width (the hierarchical route, whose stage-1 strides
 // are the whole batch); no engine batch of independent transforms reaches it.
 //
-// Determinism (ADR-0063): every lever is scheduling. Each transform runs on an identical plan (a pure function of its
-// size) and writes only its own output, so every pick gives the serial bits.
+// Determinism (ADR-0063): every lever is scheduling. Each transform runs on an identical plan (a function of its size,
+// the process's kernel level and determinism mode) and writes only its own output, so every pick gives the serial
+// bits.
 
 #pragma once
 

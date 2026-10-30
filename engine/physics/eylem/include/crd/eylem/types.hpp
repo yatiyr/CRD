@@ -4,6 +4,7 @@
 // Layout pinned via static_assert; see ADR-0062.
 
 #include <crd/core/types.hpp>
+#include <crd/math/determinism_mode.hpp>
 
 namespace crd::eylem
 {
@@ -22,7 +23,7 @@ struct BodyId
 {
     crd::u32 raw = 0;
 
-    [[nodiscard]] constexpr crd::u32 index() const noexcept { return raw & 0x00FF'FFFFu; }
+    [[nodiscard]] constexpr crd::u32 index() const noexcept { return raw & 0x00FF'FFFFU; }
 
     [[nodiscard]] constexpr crd::u32 generation() const noexcept { return raw >> 24; }
 
@@ -32,7 +33,7 @@ struct BodyId
 
     [[nodiscard]] static constexpr BodyId make(crd::u32 index, crd::u32 generation) noexcept
     {
-        return BodyId{((generation & 0xFFu) << 24) | (index & 0x00FF'FFFFu)};
+        return BodyId{((generation & 0xFFU) << 24) | (index & 0x00FF'FFFFU)};
     }
 
     [[nodiscard]] constexpr bool operator==(const BodyId& other) const noexcept = default;
@@ -42,7 +43,7 @@ struct ColliderId
 {
     crd::u32 raw = 0;
 
-    [[nodiscard]] constexpr crd::u32 index() const noexcept { return raw & 0x00FF'FFFFu; }
+    [[nodiscard]] constexpr crd::u32 index() const noexcept { return raw & 0x00FF'FFFFU; }
 
     [[nodiscard]] constexpr crd::u32 generation() const noexcept { return raw >> 24; }
 
@@ -52,7 +53,7 @@ struct ColliderId
 
     [[nodiscard]] static constexpr ColliderId make(crd::u32 index, crd::u32 generation) noexcept
     {
-        return ColliderId{((generation & 0xFFu) << 24) | (index & 0x00FF'FFFFu)};
+        return ColliderId{((generation & 0xFFU) << 24) | (index & 0x00FF'FFFFU)};
     }
 
     [[nodiscard]] constexpr bool operator==(const ColliderId& other) const noexcept = default;
@@ -62,7 +63,7 @@ struct JointId
 {
     crd::u32 raw = 0;
 
-    [[nodiscard]] constexpr crd::u32 index() const noexcept { return raw & 0x00FF'FFFFu; }
+    [[nodiscard]] constexpr crd::u32 index() const noexcept { return raw & 0x00FF'FFFFU; }
 
     [[nodiscard]] constexpr crd::u32 generation() const noexcept { return raw >> 24; }
 
@@ -72,7 +73,7 @@ struct JointId
 
     [[nodiscard]] static constexpr JointId make(crd::u32 index, crd::u32 generation) noexcept
     {
-        return JointId{((generation & 0xFFu) << 24) | (index & 0x00FF'FFFFu)};
+        return JointId{((generation & 0xFFU) << 24) | (index & 0x00FF'FFFFU)};
     }
 
     [[nodiscard]] constexpr bool operator==(const JointId& other) const noexcept = default;
@@ -91,7 +92,7 @@ struct MaterialId
 {
     crd::u32 raw = 0;
 
-    [[nodiscard]] constexpr crd::u32 index() const noexcept { return raw & 0x00FF'FFFFu; }
+    [[nodiscard]] constexpr crd::u32 index() const noexcept { return raw & 0x00FF'FFFFU; }
 
     [[nodiscard]] constexpr crd::u32 generation() const noexcept { return raw >> 24; }
 
@@ -109,7 +110,7 @@ struct MaterialId
 
     [[nodiscard]] static constexpr MaterialId make(crd::u32 index, crd::u32 generation) noexcept
     {
-        return MaterialId{((generation & 0xFFu) << 24) | (index & 0x00FF'FFFFu)};
+        return MaterialId{((generation & 0xFFU) << 24) | (index & 0x00FF'FFFFU)};
     }
 
     [[nodiscard]] constexpr bool operator==(const MaterialId& other) const noexcept = default;
@@ -125,19 +126,9 @@ static_assert(sizeof(MaterialId) == 4, "MaterialId must pack to 4 bytes");
 // Closed enum tags
 // ---------------------------------------------------------------------------
 
-// Determinism contract per ADR-0063. The mode the scene runs under decides
-// which guards the implementation enforces.
-enum class DeterminismMode : crd::u8
-{
-    // Same-machine same-compiler bit-exact replay. Default.
-    Default = 0,
-    // Bit-exact across MSVC/clang/gcc x86/ARM. Requires the v0c
-    // crd::math::deterministic substrate + commutative cross-thread merges
-    // (eylem v9b 9-config replay-hash CI).
-    CrossPlatform = 1,
-    // Reserved for serialise-stable across engine versions (post-v9).
-    BackwardCompat = 2
-};
+// Determinism contract per ADR-0063: the engine's modes (crd/math/determinism_mode.hpp). The mode the scene runs
+// under decides which guards the implementation enforces (eylem v9b's 9-config replay-hash CI for CrossPlatform).
+using DeterminismMode = crd::math::DeterminismMode;
 
 // Continuous collision detection mode (v6+). v1 always uses Discrete.
 enum class CCDMode : crd::u8

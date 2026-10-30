@@ -123,6 +123,18 @@ TEST_CASE("kernel dispatch: the selected level is the highest one both the selec
     CHECK(pick(CpuLevel::Neon, CpuLevel::Avx512) == CpuLevel::Portable); // another architecture runs none of them
 }
 
+TEST_CASE("kernel dispatch: the determinism mode is Default until code sets it, and reads back as set", "[math]")
+{
+    using crd::math::DeterminismMode;
+    CHECK(crd::math::kernel_determinism() == DeterminismMode::Default);
+    for (const DeterminismMode mode :
+         {DeterminismMode::CrossPlatform, DeterminismMode::BackwardCompat, DeterminismMode::Default})
+    {
+        crd::math::set_kernel_determinism(mode);
+        CHECK(crd::math::kernel_determinism() == mode);
+    }
+}
+
 TEST_CASE("kernel dispatch: a feature variant runs only where its level runs and the selection holds its features",
           "[math][kernels]")
 {
