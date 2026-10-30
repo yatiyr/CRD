@@ -50,6 +50,9 @@ def load_config(path=CONFIG, environ=None):
         if not repo.get('url'):
             problems.append('repository %s has no url (set %s)' % (
                 name, document['repositories'][name].get('url_env', 'its url')))
+        if repo.get('checkout', 'direct') not in scheduler.CHECKOUT_STRATEGIES:
+            problems.append('repository %s: checkout %r is not one of %s' % (
+                name, repo.get('checkout'), ', '.join(scheduler.CHECKOUT_STRATEGIES)))
         status = repo.get('status')
         if status and not status.get('repository'):
             repo.pop('status')  # commit status is optional: without its repository name it is off

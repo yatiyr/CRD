@@ -240,6 +240,26 @@ def kill_tree(process, grace=10.0):
         pass
 
 
+CHECKOUT_STRATEGIES = ('direct', 'mirror')
+
+
+def resolve_checkout(base, checkout):
+    """The checkout to fetch. The strategy alone decides where from: `mirror` is the coordinator's mirror, whose
+    path the agent puts after the coordinator address it already uses; `direct` is the repository URL exactly as
+    configured, whatever its shape (a POSIX path such as /srv/git/cerid also starts with '/'). An unknown strategy
+    is refused rather than guessed."""
+    checkout = dict(checkout)
+    strategy = checkout.get('strategy', 'direct')
+    if strategy not in CHECKOUT_STRATEGIES:
+        raise ValueError('unknown checkout strategy %r' % strategy)
+    if strategy == 'mirror':
+        if not checkout['url'].startswith('/git/'):
+            raise ValueError('a mirror checkout names the coordinator path /git/<repository>.git, got %r'
+                             % checkout['url'])
+        checkout['url'] = base + checkout['url']
+    return checkout
+
+
 def clean_environment(job, extra, host=None):
     host = os.environ if host is None else host
     env = {}
@@ -357,9 +377,7 @@ class Agent:
         return env
 
     def checkout(self, assignment, log):
-        checkout = dict(assignment['checkout'])
-        if checkout['url'].startswith('/'):
-            checkout['url'] = self.base + checkout['url']  # the coordinator's mirror, at the address this agent uses
+        checkout = resolve_checkout(self.base, assignment['checkout'])
         work = self.workdir(assignment)
         work.mkdir(parents=True, exist_ok=True)
         env = self.git_env(checkout, assignment['token'])

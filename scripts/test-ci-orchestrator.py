@@ -886,6 +886,37 @@ class Core(Base):
             with self.assertRaises(scheduler.Refused):
                 self.c.poll(agent(self.c, queue='q', name='w2'))
 
+    def test_checkout_strategy_is_explicit_and_validated(self):
+        pinned = []
+
+        class Mirror:
+            def pin(self, repository, repo, number, commit):
+                pinned.append((repository, number))
+        self.c.mirror = Mirror()
+        self.c.repositories['cerid']['url'] = '/srv/git/cerid.git'
+        build = self.build()
+        got = self.c.poll(agent(self.c, name='l'))
+        self.assertEqual((got['checkout']['strategy'], got['checkout']['url']), ('direct', '/srv/git/cerid.git'))
+        self.assertEqual(pinned, [], 'a direct repository is never pinned in the mirror')
+        self.c.repositories['cerid']['checkout'] = 'mirror'
+        mirrored = self.build(commit='b' * 40)
+        got = self.c.poll(agent(self.c, name='l2'))
+        self.assertEqual((got['checkout']['url'], got['checkout']['ref']),
+                         ('/git/cerid.git', 'refs/cerid/builds/%d' % mirrored['number']))
+        self.assertEqual(pinned, [('cerid', mirrored['number'])])
+        self.c.repositories['cerid']['checkout'] = 'mirrror'
+        self.build(commit='c' * 40)
+        with self.assertRaises(ValueError):
+            self.c.poll(agent(self.c, name='l3'))
+        from coordinator import main as coordinator_main
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch) / 'c.json'
+            path.write_text(json.dumps({'schema': coordinator_main.SCHEMA, 'repositories': {
+                'r': {'url': '/srv/git/r.git', 'checkout': 'mirrror'}}}), encoding='utf-8')
+            _, problems = coordinator_main.load_config(path, {})
+        self.assertEqual(problems, ["repository r: checkout 'mirrror' is not one of direct, mirror"])
+        self.assertEqual(build['number'], 1)
+
     def test_fork_pull_requests_never_build_unless_the_repository_opts_in(self):
         fork = {'event': 'pull_request', 'branch': 'evil', 'commit': 'f' * 40, 'pull_request': '9',
                 'base_branch': 'main', 'trusted': False}
@@ -1303,6 +1334,43 @@ class AgentProgram(unittest.TestCase):
         r = agent_module.Redactor([])
         self.assertEqual(r.feed(b'plain') + r.close(), b'plain')
         self.assertEqual(agent_module.Redactor(['abcd1234']).text('error abcd1234'), 'error [REDACTED]')
+
+    def checkout_argv(self, checkout):
+        """Every git command the agent's checkout runs for `checkout`, with git itself replaced by a recorder."""
+        from unittest import mock
+        seen = []
+
+        def run(argv, **kwargs):
+            seen.append(argv[1:])
+            out = (checkout['commit'] + '\n').encode() if argv[1:2] == ['rev-parse'] else b''
+            return subprocess.CompletedProcess(argv, 1 if argv[1:3] == ['remote', 'get-url'] else 0, out, b'')
+        with tempfile.TemporaryDirectory() as scratch:
+            a = agent_module.Agent('http://127.0.0.1:8780', scratch, name='t', mode='one-shot')
+            log = type('Log', (), {'line': lambda self, text: None, 'write': lambda self, data: None})()
+            with mock.patch.object(agent_module.subprocess, 'run', side_effect=run):
+                a.checkout({'checkout': checkout, 'token': 'cjt_x', 'job': {'id': 'j' * 32, 'env': {}}}, log)
+        return seen
+
+    def test_the_strategy_alone_decides_where_a_checkout_fetches_from(self):
+        commit = 'a' * 40
+        # A direct checkout of a POSIX filesystem repository starts with '/', like the mirror's path; it must be
+        # fetched exactly as configured (on Linux the agent used to prefix the coordinator's address to it).
+        for url in ('/srv/git/cerid.git', 'https://git.example/cerid.git', 'git@git.example:o/cerid.git',
+                    'C:\\repos\\cerid', 'file:///srv/git/cerid.git'):
+            argv = self.checkout_argv({'url': url, 'commit': commit, 'branch': 'main', 'strategy': 'direct',
+                                       'depth': 1})
+            self.assertIn(['remote', 'add', 'origin', url], argv, url)
+        argv = self.checkout_argv({'url': '/git/cerid.git', 'commit': commit, 'branch': 'main', 'strategy': 'mirror',
+                                   'ref': 'refs/cerid/builds/4', 'depth': 1})
+        self.assertIn(['remote', 'add', 'origin', 'http://127.0.0.1:8780/git/cerid.git'], argv)
+        self.assertIn(['fetch', '--no-tags', '--quiet', '--depth=1', 'origin', 'refs/cerid/builds/4'], argv)
+        resolve = agent_module.resolve_checkout
+        self.assertEqual(resolve('https://ci', {'url': '/srv/x', 'strategy': 'direct'})['url'], '/srv/x')
+        self.assertEqual(resolve('https://ci', {'url': '/srv/x'})['url'], '/srv/x', 'no strategy means direct')
+        with self.assertRaises(ValueError):
+            resolve('https://ci', {'url': '/git/x.git', 'strategy': 'mirrror'})
+        with self.assertRaises(ValueError):
+            resolve('https://ci', {'url': 'https://elsewhere/x.git', 'strategy': 'mirror'})
 
     def test_tokens_never_cross_the_internet_in_the_clear(self):
         self.assertEqual(agent_module.safe_url('https://ci.example/'), 'https://ci.example')
