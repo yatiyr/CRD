@@ -20,7 +20,9 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 import urllib.parse
+import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'ci'))
@@ -37,7 +39,7 @@ def load(name, relative):
 
 
 pipeline = load('ci_pipeline', 'ci/pipeline.py')
-from coordinator import auth, dispatch, hosts, scheduler, state, steps  # noqa: E402
+from coordinator import auth, dispatch, hosts, scheduler, service, state, steps, triggers  # noqa: E402
 from executors import gce_vm  # noqa: E402
 
 REGISTRY = pipeline.load_registry(packs=[])
@@ -1219,6 +1221,195 @@ class Dispatching(Base):
         executor = FakeExecutor()
         self.assertEqual(self.dispatcher(executor).sweep_orphans(), ['cerid-ci-orphan'])
         self.assertEqual(executor.torn, ['cerid-ci-orphan'])
+
+
+# --------------------------------------------------------------------------------------------- triggers
+
+class Done:
+    def __init__(self, heads):
+        self.returncode = 0
+        self.stdout = ''.join('%s\trefs/heads/%s\n' % (sha, branch) for branch, sha in heads.items())
+        self.stderr = ''
+
+
+class Triggers(Base):
+    def setUp(self):
+        super().setUp()
+        self.c.repositories['cerid']['poll'] = {'branches': ['main'], 'interval_seconds': 60}
+        self.c.repositories['cerid']['schedules'] = [{'name': 'nightly', 'cron': '0 3 * * *', 'branch': 'main'}]
+
+    def test_polling_learns_heads_then_builds_new_ones_once(self):
+        heads = {'main': COMMIT}
+        run = lambda argv, **kw: Done(heads)
+        self.assertEqual(triggers.poll(self.c, run=run), [], 'the first poll only learns the heads')
+        heads['main'] = 'c' * 40
+        self.assertEqual(triggers.poll(self.c, run=run), [], 'the poll interval holds')
+        self.clock.advance(61)
+        made = triggers.poll(self.c, run=run)
+        self.assertEqual([(b['commit'], b['source'], b['before']) for b in made], [('c' * 40, 'poll', COMMIT)])
+        _, created = self.c.create_build('cerid', {'event': 'push', 'branch': 'main', 'commit': 'c' * 40}, 'webhook')
+        self.assertFalse(created, 'the webhook for the polled push builds nothing more')
+
+    def test_schedules_fire_once_per_occurrence_across_restarts(self):
+        self.clock.now = hosts.parse_utc('2026-10-31T03:00:30Z')
+        run = lambda argv, **kw: Done({'main': COMMIT})
+        made = triggers.schedules(self.c, run=run)
+        self.assertEqual([(b['source'], b['created_by']) for b in made], [('schedule', 'schedule:nightly')])
+        again = coordinator(self.store, self.clock)
+        self.assertEqual(triggers.schedules(again, run=run), [], 'a restarted coordinator does not fire it again')
+        self.clock.now = hosts.parse_utc('2026-11-01T05:00:00Z')
+        self.assertEqual(len(triggers.schedules(again, run=run)), 1, 'missed by two hours: caught up once')
+        self.clock.now = hosts.parse_utc('2026-11-02T12:00:00Z')
+        self.assertEqual(triggers.schedules(again, run=run), [], 'missed by nine hours: outside the catch-up window')
+
+    def test_mirror_serves_fetches_only(self):
+        mirror = triggers.Mirror(self.scratch.name)
+        status, _, _ = mirror.serve('POST', '/cerid.git/git-receive-pack', '', {}, b'')
+        self.assertEqual(status, 403)
+        status, _, _ = mirror.serve('GET', '/cerid.git/info/refs', 'service=git-receive-pack', {}, b'')
+        self.assertEqual(status, 403)
+        status, _, _ = mirror.serve('GET', '/../etc/passwd', '', {}, b'')
+        self.assertEqual(status, 403)
+
+
+# --------------------------------------------------------------------------------------------- agent
+
+agent_module = load('cerid_agent', 'ci/agent/agent.py')
+
+
+class AgentProgram(unittest.TestCase):
+    def test_redaction_holds_across_writes(self):
+        secret = 'hunter2-value'
+        for split in range(1, len(secret)):
+            r = agent_module.Redactor([secret, 'x'])
+            out = r.feed(b'before ' + secret[:split].encode()) + r.feed(secret[split:].encode() + b' after') + r.close()
+            self.assertEqual(out, b'before [REDACTED] after', split)
+        r = agent_module.Redactor([])
+        self.assertEqual(r.feed(b'plain') + r.close(), b'plain')
+        self.assertEqual(agent_module.Redactor(['abcd1234']).text('error abcd1234'), 'error [REDACTED]')
+
+    def test_tokens_never_cross_the_internet_in_the_clear(self):
+        self.assertEqual(agent_module.safe_url('https://ci.example/'), 'https://ci.example')
+        for url in ('http://127.0.0.1:8780', 'http://10.128.0.2:8780', 'http://localhost:1'):
+            self.assertTrue(agent_module.safe_url(url))
+        with self.assertRaises(SystemExit):
+            agent_module.safe_url('http://ci.example')
+        with self.assertRaises(SystemExit):
+            agent_module.safe_url('ftp://10.0.0.1')
+        self.assertTrue(agent_module.safe_url('http://ci.example', allow_insecure=True))
+
+    def test_clean_environment_is_an_allow_list(self):
+        host = {'PATH': '/bin', 'HOME': '/home/c', 'AWS_SECRET_ACCESS_KEY': 'x', 'GITHUB_TOKEN': 'y',
+                'CERID_CI_STORE': 'gs://z'}
+        env = agent_module.clean_environment({'env': {'A': '1'}, 'secrets': {'S': 'v'}}, {'CERID_AGENT_JOB_ID': 'j'},
+                                             host=host)
+        self.assertEqual(env, {'PATH': '/bin', 'HOME': '/home/c', 'A': '1', 'S': 'v', 'CERID_AGENT_JOB_ID': 'j',
+                               'PYTHONUTF8': '1', 'CERID_CI': '1'})
+
+    def test_step_scripts_stop_at_the_first_failure(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            argv = agent_module.script_for('%s -c "raise SystemExit(4)"\n%s -c "print(1)"' % (
+                sys.executable, sys.executable), scratch)
+            completed = subprocess.run(argv, capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 4)
+            self.assertNotIn('1', completed.stdout)
+
+    def test_kill_tree_stops_children(self):
+        child = subprocess.Popen([sys.executable, '-c', 'import subprocess, sys, time; '
+                                  'subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"]); '
+                                  'time.sleep(60)'], **({'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
+                                                         if os.name == 'nt' else {'start_new_session': True}))
+        time.sleep(0.5)
+        started = time.time()
+        agent_module.kill_tree(child, grace=2)
+        self.assertIsNotNone(child.poll())
+        self.assertLess(time.time() - started, 20)
+
+
+# --------------------------------------------------------------------------------------------- service
+
+class Service(Base):
+    def setUp(self):
+        super().setUp()
+        self.secrets = tempfile.TemporaryDirectory()
+        (Path(self.secrets.name) / 'hook').write_text('whsec', encoding='utf-8')
+        self.c.secrets = scheduler.DirectorySecrets(self.secrets.name)
+        fetch = lambda url: {'keys': [rsa_jwk()]}
+        self.ui = auth.UiAuth('cloudflare-access', audience='aud', team='t.cloudflareaccess.com', fetch=fetch,
+                              clock=lambda: self.clock())
+        self.server = service.serve(service.Service(self.c, self.ui, CONFIG), '127.0.0.1', 0)
+        self.base = 'http://127.0.0.1:%d' % self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.secrets.cleanup()
+        super().tearDown()
+
+    def call(self, method, path, body=b'', headers=None):
+        request = urllib.request.Request(self.base + path, data=body if method != 'GET' else None, method=method,
+                                         headers=headers or {})
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return response.status, response.read(), dict(response.headers)
+        except urllib.error.HTTPError as error:
+            data = error.read()
+            headers = dict(error.headers)
+            error.close()
+            return error.code, data, headers
+
+    def access(self, email='me@example.com'):
+        return {'Cf-Access-Jwt-Assertion': rs256({'iss': 'https://t.cloudflareaccess.com', 'aud': 'aud',
+                                                  'exp': self.clock() + 60, 'email': email})}
+
+    def test_the_ui_has_no_anonymous_access(self):
+        for path in ('/', '/api/builds', '/qual', '/app.js'):
+            status, _, headers = self.call('GET', path)
+            self.assertEqual(status, 401, path)
+            self.assertIn("default-src", headers['Content-Security-Policy'])
+        status, body, headers = self.call('GET', '/api/builds', headers=self.access())
+        self.assertEqual((status, json.loads(body)), (200, {'builds': []}))
+        self.assertEqual(headers['X-Content-Type-Options'], 'nosniff')
+        status, body, _ = self.call('GET', '/', headers=self.access())
+        self.assertIn(b'app.js', body)
+
+    def test_state_changes_need_the_request_header_and_same_origin(self):
+        build, _ = self.c.create_build('cerid', {'event': 'push', 'branch': 'main', 'commit': COMMIT}, 'manual')
+        path = '/api/builds/%d/cancel' % build['number']
+        self.assertEqual(self.call('POST', path, b'{}', self.access())[0], 403)
+        self.assertEqual(self.call('POST', path, b'{}', dict(self.access(), **{
+            'X-Cerid-Request': '1', 'Origin': 'https://evil.example'}))[0], 403)
+        self.assertEqual(self.call('POST', path, b'{}', dict(self.access(), **{'X-Cerid-Request': '1'}))[0], 200)
+        self.assertTrue(self.c.build(build['number'])['cancel_requested'])
+
+    def test_webhooks_are_verified_deduplicated_and_build(self):
+        body = github_push()
+        headers = {'X-Hub-Signature-256': 'sha256=' + hosts.hmac_hex('whsec', body), 'X-GitHub-Event': 'push',
+                   'X-GitHub-Delivery': 'abc', 'Content-Type': 'application/json'}
+        status, answer, _ = self.call('POST', '/webhooks/cerid', body, headers)
+        self.assertEqual((status, json.loads(answer)['created']), (200, True))
+        self.assertEqual(json.loads(self.call('POST', '/webhooks/cerid', body, headers)[1]), {'duplicate': True})
+        self.assertEqual(self.call('POST', '/webhooks/cerid', body + b' ', headers)[0], 401)
+        self.assertEqual(self.call('POST', '/webhooks/nope', body, headers)[0], 404)
+        ping = dict(headers, **{'X-GitHub-Event': 'ping', 'X-GitHub-Delivery': 'p'})
+        self.assertEqual(json.loads(self.call('POST', '/webhooks/cerid', body, ping)[1]), {'ignored': True})
+        self.assertEqual(len(self.c.recent()), 1)
+
+    def test_agent_api_and_public_paths(self):
+        status, data, headers = self.call('GET', '/agent/cerid-agent.py')
+        self.assertEqual(headers['X-Cerid-Agent-SHA256'], hashlib.sha256(data).hexdigest())
+        self.assertEqual(self.call('POST', '/api/agent/poll', b'{}', {'X-Cerid-Agent-Protocol': '2'})[0], 426)
+        self.assertEqual(self.call('POST', '/api/agent/poll', b'{}')[0], 401)
+        self.assertEqual(self.call('POST', '/api/agent/acquire', b'{"identity_token": "x"}')[0], 503)
+        token = self.c.create_registration('w', 'q')
+        status, body, _ = self.call('POST', '/api/agent/register', json.dumps({
+            'registration_token': token, 'protocol': 1, 'name': 'w'}).encode())
+        session = json.loads(body)['session_token']
+        status, body, _ = self.call('POST', '/api/agent/poll', b'{}', {'Authorization': 'Bearer ' + session})
+        self.assertEqual(json.loads(body), {'job': None, 'wait': 5})
+        self.assertEqual(json.loads(self.call('GET', '/healthz')[1])['ok'], True)
+        self.assertEqual(self.call('GET', '/../../etc/passwd')[0], 404)
 
 
 if __name__ == '__main__':

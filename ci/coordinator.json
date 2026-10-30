@@ -1,0 +1,41 @@
+{
+  "schema": "cerid-ci-coordinator/1",
+  "note": "The Cerid orchestrator's coordinator (ADR-0135 §12, docs/design/ci-platform.md#the-cerid-orchestrator). No value here is secret: a key ending in _env reads that environment variable on the launcher (/etc/cerid-ci/launcher.env), secrets are Secret Manager names. Setup: docs/recipes/ci-platform-setup.md.",
+  "url_env": "CERID_CI_URL",
+  "internal_url_env": "CERID_CI_INTERNAL_URL",
+  "listen": "127.0.0.1:8780",
+  "mirror_dir": "/var/lib/cerid-ci/mirror",
+  "ui": {
+    "mode": "cloudflare-access",
+    "team_env": "CERID_CI_ACCESS_TEAM",
+    "audience_env": "CERID_CI_ACCESS_AUD",
+    "allowed_emails_env": "CERID_CI_UI_EMAILS"
+  },
+  "secrets": {"provider": "secret-manager"},
+  "repositories": {
+    "cerid": {
+      "url_env": "CERID_CI_REPOSITORY_URL",
+      "host_env": "CERID_CI_GIT_HOST",
+      "host": "github",
+      "webhook_secret": "cerid-webhook-secret",
+      "checkout": "mirror",
+      "depth": 50,
+      "trusted_branches": ["main"],
+      "poll": {"branches": ["main"], "interval_seconds": 120},
+      "schedules": [
+        {"name": "nightly-complete", "cron": "0 3 * * *", "branch": "main"},
+        {"name": "weekly-fresh", "cron": "0 4 * * 0", "branch": "main", "env": {"CERID_CI_FRESH": "1"}}
+      ],
+      "status": {"kind": "github", "api": "https://api.github.com", "repository_env": "CERID_CI_STATUS_REPOSITORY",
+                 "token_secret": "cerid-status-token"},
+      "pipeline": {"command": "python ci/pipeline.py upload", "queue": "cerid-launcher", "timeout_in_minutes": 30}
+    }
+  },
+  "limits": {
+    "lost_after_seconds": 120,
+    "boot_seconds": 900,
+    "scheduled_expiry_minutes": 1440,
+    "logs_days": 90,
+    "artifacts_days": 30
+  }
+}

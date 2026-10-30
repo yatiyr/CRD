@@ -202,7 +202,7 @@ class Coordinator:
             raise ValueError('a build needs a full commit id, got %r' % trigger.get('commit'))
         now = self.clock()
         number = self.update('counters/build.json', lambda c: {'next': (c or {'next': 1})['next'] + 1})['next'] - 1
-        if source != 'manual':
+        if source in ('webhook', 'poll'):
             key = hosts.trigger_key(repository, trigger)
             if not self.create('triggers/%s.json' % key, {'build': number, 'at': now}):
                 existing = self.get('triggers/%s.json' % key) or {}
@@ -215,7 +215,8 @@ class Coordinator:
                  'commit': trigger['commit'], 'before': trigger.get('before', ''),
                  'pull_request': trigger.get('pull_request', ''), 'base_branch': trigger.get('base_branch', ''),
                  'message': trigger.get('message', ''), 'author': trigger.get('author', ''),
-                 'trusted': self.trusted(repo, trigger) if source != 'manual' else trigger.get('trusted', True),
+                 'trusted': self.trusted(repo, trigger) if source in ('webhook', 'poll') else bool(
+                     trigger.get('trusted', True)),
                  'env': dict(env or {}), 'created': now, 'created_by': created_by, 'jobs': [], 'keys': {},
                  'meta': {}, 'annotations': {}, 'cancel_requested': False, 'history': [],
                  'url': '%s/#/builds/%d' % (self.url, number)}
@@ -474,6 +475,19 @@ class Coordinator:
         self.log('job_acquired', job=job['id'], build=job['build'], instance=instance)
         return self.assignment(build, job, token, {'id': job['agent'], 'name': instance})
 
+    def claim_with_token(self, token):
+        """A one-shot agent holding the one job token its machine was launched with (an SSH host, a launcher-side
+        device job) takes that job."""
+        record = self.get('tokens/%s.json' % auth.token_hash(token or '')) if token else None
+        if not record:
+            raise auth.AuthError('unknown job token')
+        job = self.job_for_token(record['job'], token)
+        if job['state'] != 'assigned':
+            raise Refused('job %s is %s' % (job['id'], job['state']))
+        self.log('job_claimed', job=job['id'], build=job['build'], machine=job['machine'])
+        return self.assignment(self.build(job['build']), job, token, {'id': job['machine'] or job['agent'],
+                                                                      'name': job['machine'] or job['agent']})
+
     def assignment(self, build, job, token, agent):
         repo = self.repositories.get(build['repository'], {})
         env = {'CERID_CI': '1', 'CERID_CI_BUILD_NUMBER': str(build['number']), 'CERID_CI_BUILD_URL': build['url'],
@@ -595,7 +609,7 @@ class Coordinator:
         self.store.put_json(PREFIX + 'heartbeats/%s.json' % job_id, {'at': self.clock(), 'attempt': job['attempt']})
         return {'cancel': bool(job['cancel_requested']), 'reason': job['reason'] if job['cancel_requested'] else ''}
 
-    def finish(self, job_id, token, exit_status, infra=None, detail=''):
+    def finish(self, job_id, token, exit_status, infra=None, detail='', timed_out=False):
         """The agent's report. `infra` names an infrastructure loss the agent saw (preempted, agent_stop)."""
         job = self.job_for_token(job_id, token)
         if infra:
@@ -610,7 +624,7 @@ class Coordinator:
                 current['started_at'] = now
                 state.transition(current, 'running', 'start', now)
             current['exit_status'] = exit_status
-            if current['cancel_requested'] == 'timeout':
+            if timed_out or current['cancel_requested'] == 'timeout':
                 return state.transition(current, 'timed_out', 'finish', now, current['reason'] or 'timeout')
             if current['cancel_requested']:
                 return state.transition(current, 'canceled', 'finish', now, current['reason'] or 'canceled')

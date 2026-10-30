@@ -2,18 +2,19 @@
 daily quota) in the existing Firebase project (`CERID_FTL_PROJECT`, the project the FTL_GCP_PROJECT repository
 variable names).
 
-A job is acquired by a short-lived agent process on the launcher itself (FTL does the device work; the launcher only
-waits), so no VM is paid for. The job's command builds the `gcloud firebase test` invocation below; the daily quota
-(physical and virtual device tests) is kept in the result store and a test past it is reported as budget, never run.
+A job is taken by a one-shot Cerid agent process on the launcher itself (FTL does the device work; the launcher only
+waits), so no VM is paid for. Its one job token reaches it on standard input. The job's command builds the
+`gcloud firebase test` invocation below; the daily quota (physical and virtual device tests) is kept in the result
+store and a test past it is reported as budget, never run.
 """
 from __future__ import annotations
 
 from pathlib import Path
 import datetime as dt
-import os
 import subprocess
+import sys
 
-from . import agent_pin, agent_tags
+from . import AGENT
 
 # Spark plan quotas (Firebase Test Lab documentation, read 2026-10-30): tests per day.
 DAILY_QUOTA = {'physical': 5, 'virtual': 10}
@@ -22,10 +23,9 @@ DAILY_QUOTA = {'physical': 5, 'virtual': 10}
 class FirebaseTestLab:
     name = 'firebase_test_lab'
 
-    def __init__(self, environ, popen=subprocess.Popen, pins=None):
+    def __init__(self, environ, popen=subprocess.Popen):
         self.environ = environ
         self.popen = popen
-        self.pins = pins
 
     def missing(self, device):
         return [] if self.environ.get('CERID_FTL_PROJECT') else ['CERID_FTL_PROJECT']
@@ -56,18 +56,20 @@ class FirebaseTestLab:
         kind = 'physical' if device['executor_config'].get('physical', True) else 'virtual'
         store.put_json('quota/ftl/%s/%s/%s.json' % (today, kind, job_id), {'device': device['id']})
 
-    def launch(self, job_id, device, token):
-        """Start a one-job agent process on the launcher; the token reaches it through its environment."""
-        name, pin = agent_pin({'os': {'name': 'Ubuntu'}, 'cpu': {'arch': 'x86_64'}}, self.pins)
-        agent = self.environ.get('CERID_CI_LAUNCHER_AGENT', '/usr/local/bin/buildkite-agent')
+    def argv(self, machine, agent):
         builds = Path(self.environ.get('CERID_CI_LAUNCHER_BUILDS', '/var/lib/cerid-ci/ftl-builds'))
-        builds.mkdir(parents=True, exist_ok=True)
-        env = dict(os.environ)
-        env.update({'BUILDKITE_AGENT_ACQUIRE_JOB': job_id, 'BUILDKITE_AGENT_TOKEN': token,
-                    'BUILDKITE_BUILD_PATH': str(builds), 'BUILDKITE_AGENT_TAGS': agent_tags(device)})
-        process = self.popen([agent, 'start', '--reflect-exit-status'], env=env, stdout=subprocess.DEVNULL,
+        return [sys.executable, str(AGENT), 'start', '--mode', 'one-shot', '--token-stdin', '--coordinator',
+                agent['coordinator'], '--build-path', str(builds), '--name', machine]
+
+    def launch(self, machine, device, agent):
+        """Start a one-shot agent process on the launcher; its job token goes in on standard input."""
+        if not agent.get('token'):
+            raise RuntimeError('a Test Lab job needs the one job token of its launch')
+        process = self.popen(self.argv(machine, agent), stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True)
-        return {'pid': process.pid, 'agent_pin': name, 'agent_version': pin['version']}
+        process.stdin.write((agent['token'] + '\n').encode('utf-8'))
+        process.stdin.close()
+        return {'pid': process.pid, 'machine': machine}
 
     def teardown(self, handle):
         return None

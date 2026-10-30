@@ -122,7 +122,7 @@ it: their inline timing loops must first move into scripts. The parity proof its
 systems for every preset, test, guard, sanitizer, SDE arm and ARM64 lane) is CI-4's remaining evidence.
 
 <!-- parity:begin -->
-| GitHub job | GitHub step | Buildkite step | Carried by |
+| GitHub job | GitHub step | Cerid step | Carried by |
 |---|---|---|---|
 | `preflight` | uses actions/checkout | `plan` | agent checkout of the build commit |
 | `preflight` | uses actions/setup-python | `plan` | the launcher image's Python 3.12 |
@@ -161,6 +161,8 @@ systems for every preset, test, guard, sanitizer, SDE arm and ARM64 lane) is CI-
 | `repository` | Generated CEIR artifacts | `repository-<host>` | run repository: tools/ceir_opgen/ceir_opgen.py --check |
 | `repository` | Capability source references | `repository-<host>` | run repository: tools/ceir_capability_matrix/gen_matrix.py --check |
 | `repository` | CI platform contracts | `repository-<host>` | run repository: scripts/test-ci-platform.py |
+| `repository` | CI orchestrator contracts | `repository-<host>` | run repository: scripts/test-ci-orchestrator.py |
+| `repository` | CI orchestrator end to end | `repository-<host>` | run repository: scripts/test-ci-orchestrator-e2e.py |
 | `windows` | Checkout | `lane-<preset> (win-debug, win-release, win-asan, win-relwithdebinfo, win-debug-scalar, win-public-checks)` | Lane.checkout |
 | `windows` | Setup Python 3.12 | `lane-<preset> (win-debug, win-release, win-asan, win-relwithdebinfo, win-debug-scalar, win-public-checks)` | Lane.python_version |
 | `windows` | Install pinned Ninja 1.11.1 | `lane-<preset> (win-debug, win-release, win-asan, win-relwithdebinfo, win-debug-scalar, win-public-checks)` | Lane.ninja |
@@ -345,7 +347,7 @@ systems for every preset, test, guard, sanitizer, SDE arm and ARM64 lane) is CI-
 | `required` | uses actions/setup-python | `required` | the launcher image's Python 3.12 |
 | `required` | Every expected job ran and passed | `required` | pipeline.py conclude (ci-tier.py conclude rule) |
 
-| GitHub job | GitHub step | Buildkite step | Carried by |
+| GitHub job | GitHub step | Cerid step | Carried by |
 |---|---|---|---|
 | `host-check/fuzz` | Checkout | `experiment-fuzz` | open (CI-4): not yet carried |
 | `host-check/fuzz` | Setup Python 3.12 | `experiment-fuzz` | open (CI-4): not yet carried |

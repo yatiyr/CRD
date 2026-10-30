@@ -1,52 +1,43 @@
 """ssh_host: an existing host reached over SSH (AMD Developer Cloud, a rented Mac, a Windows ARM64 host).
 
-The launcher connects with a key the operator stored (by name: a key file named by `CERID_SSH_<HOST>_KEY_FILE` or
+The coordinator connects with a key the operator stored (by name: a key file named by `CERID_SSH_<HOST>_KEY_FILE` or
 the registry's Secret Manager secret), with strict host-key checking against a pinned known_hosts entry, optionally
-powers the host on, and starts the pinned buildkite-agent there with the one-job acquisition token sent on standard
-input, never on a command line. The job then runs natively on the host and streams its own log. Used only when the
-host's secrets exist.
+powers the host on, and starts the Cerid agent there in one-shot mode. The agent is downloaded from the coordinator
+and refused unless its SHA-256 matches; the one job token travels inside standard input (never on a command line)
+into a file only that user reads, which the agent deletes as it starts. The job then runs natively on the host and
+streams its own log. Used only when the host's secrets exist.
 """
 from __future__ import annotations
 
-from pathlib import Path
-import os
 import shlex
 import subprocess
-import tempfile
 
-from . import agent_pin, agent_tags, os_family
+from . import os_family
 
 POSIX_BOOTSTRAP = r'''read -r token
 set -eu
-dir="$HOME/.cerid-ci/agent-{version}"
-mkdir -p "$dir" "$HOME/.cerid-ci/builds"
-if [ ! -x "$dir/buildkite-agent" ]; then
-  curl -sSLf -o "$dir/agent.tar.gz" '{url}'
-  echo '{sha256}  '"$dir/agent.tar.gz" | (command -v sha256sum >/dev/null && sha256sum -c - || shasum -a 256 -c -)
-  tar -xzf "$dir/agent.tar.gz" -C "$dir" '{member}'
-fi
+dir="$HOME/.cerid-ci"
+mkdir -p "$dir/builds"
 umask 077
-printf '%s' "$token" > "$HOME/.cerid-ci/token-{job}"
-nohup env BUILDKITE_AGENT_ACQUIRE_JOB='{job}' BUILDKITE_AGENT_TOKEN="file://$HOME/.cerid-ci/token-{job}" \
-  BUILDKITE_BUILD_PATH="$HOME/.cerid-ci/builds" BUILDKITE_AGENT_TAGS='{tags}' \
-  sh -c '"$0/buildkite-agent" start --reflect-exit-status; rm -f "$HOME/.cerid-ci/token-{job}"' "$dir" \
-  > "$HOME/.cerid-ci/agent-{job}.log" 2>&1 &
+curl -sSLf -o "$dir/cerid-agent-{machine}.py" '{agent_url}'
+echo '{sha256}  '"$dir/cerid-agent-{machine}.py" | (command -v sha256sum >/dev/null && sha256sum -c - || shasum -a 256 -c -)
+printf '%s' "$token" > "$dir/token-{machine}"
+nohup python3 "$dir/cerid-agent-{machine}.py" start --mode one-shot --token-file "$dir/token-{machine}" \
+  --coordinator '{coordinator}' --build-path "$dir/builds" --name '{machine}' > "$dir/agent-{machine}.log" 2>&1 &
 '''
 
 POWERSHELL_BOOTSTRAP = r'''$ErrorActionPreference = 'Stop'
 $token = [Console]::In.ReadLine()
-$dir = "$env:USERPROFILE\.cerid-ci\agent-{version}"
-New-Item -ItemType Directory -Force -Path $dir, "$env:USERPROFILE\.cerid-ci\builds" | Out-Null
-if (-not (Test-Path "$dir\buildkite-agent.exe")) {{
-  Invoke-WebRequest -UseBasicParsing -Uri '{url}' -OutFile "$dir\agent.zip"
-  if ((Get-FileHash -Algorithm SHA256 "$dir\agent.zip").Hash.ToLower() -ne '{sha256}') {{ throw 'agent checksum mismatch' }}
-  Expand-Archive -Force -Path "$dir\agent.zip" -DestinationPath $dir
-}}
-$tokenFile = "$env:USERPROFILE\.cerid-ci\token-{job}"
+$dir = "$env:USERPROFILE\.cerid-ci"
+New-Item -ItemType Directory -Force -Path "$dir\builds" | Out-Null
+$agent = "$dir\cerid-agent-{machine}.py"
+Invoke-WebRequest -UseBasicParsing -Uri '{agent_url}' -OutFile $agent
+if ((Get-FileHash -Algorithm SHA256 $agent).Hash.ToLower() -ne '{sha256}') {{ throw 'agent checksum mismatch' }}
+$tokenFile = "$dir\token-{machine}"
 $token | Out-File -Encoding ascii -NoNewline $tokenFile
-$env:BUILDKITE_AGENT_ACQUIRE_JOB = '{job}'; $env:BUILDKITE_AGENT_TOKEN = "file://$tokenFile"
-$env:BUILDKITE_BUILD_PATH = "$env:USERPROFILE\.cerid-ci\builds"; $env:BUILDKITE_AGENT_TAGS = '{tags}'
-Start-Process -WindowStyle Hidden -FilePath "$dir\buildkite-agent.exe" -ArgumentList 'start', '--reflect-exit-status'
+icacls $tokenFile /inheritance:r /grant:r "$($env:USERNAME):(R,D)" | Out-Null
+Start-Process -WindowStyle Hidden -FilePath 'py' -ArgumentList '-3.12', $agent, 'start', '--mode', 'one-shot', `
+  '--token-file', $tokenFile, '--coordinator', '{coordinator}', '--build-path', "$dir\builds", '--name', '{machine}'
 '''
 
 
@@ -57,11 +48,9 @@ def env_name(device):
 class SshHost:
     name = 'ssh_host'
 
-    def __init__(self, environ, run=subprocess.run, pins=None, secret=None):
+    def __init__(self, environ, run=subprocess.run):
         self.environ = environ
         self.run = run
-        self.pins = pins
-        self.secret = secret
 
     def missing(self, device):
         host = env_name(device)
@@ -72,10 +61,12 @@ class SshHost:
                 missing.append(name)
         return missing
 
-    def bootstrap(self, job_id, device):
-        name, pin = agent_pin(device, self.pins)
-        values = {'version': pin['version'], 'url': pin['url'], 'sha256': pin['sha256'], 'member': pin['member'],
-                  'job': job_id, 'tags': agent_tags(device)}
+    def bootstrap(self, machine, device, agent):
+        """The script sent on standard input. An SSH host is outside the CI project's network: it reaches the
+        coordinator by its external HTTPS URL."""
+        base = agent.get('external') or agent['coordinator']
+        values = {'machine': machine, 'agent_url': base + '/agent/cerid-agent.py', 'sha256': agent['agent_sha256'],
+                  'coordinator': base}
         template = POWERSHELL_BOOTSTRAP if os_family(device) == 'windows' else POSIX_BOOTSTRAP
         return template.format(**values)
 
@@ -86,29 +77,33 @@ class SshHost:
         return ['ssh', '-i', str(key_file), '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
                 '-o', 'UserKnownHostsFile=%s' % known_hosts, '-o', 'ConnectTimeout=30', host, remote]
 
-    def launch(self, job_id, device, token):
+    def launch(self, machine, device, agent):
         host_env = env_name(device)
         key_file = self.environ.get(host_env.replace('_HOST', '_KEY_FILE'))
         known = self.environ.get(host_env.replace('_HOST', '_KNOWN_HOSTS'))
         if not key_file or not known:
             raise RuntimeError('%s needs its key file and known_hosts named by %s and %s' % (
                 device['id'], host_env.replace('_HOST', '_KEY_FILE'), host_env.replace('_HOST', '_KNOWN_HOSTS')))
+        if not agent.get('token'):
+            raise RuntimeError('an SSH host needs the one job token of its launch')
         power_on = device['executor_config'].get('power_on_command_env')
         if power_on and self.environ.get(power_on):
             self.run(shlex.split(self.environ[power_on]), check=True)
-        script = self.bootstrap(job_id, device)
+        script = self.bootstrap(machine, device, agent)
         # `sh -s` reads the script from standard input line by line: its first line, `read -r token`, consumes the
-        # line after it, so the token travels inside standard input and never appears in a process listing.
-        first, rest = script.split('\n', 1)
-        payload = first + '\n' + token + '\n' + rest
+        # line after it. PowerShell reads the whole script first, so the token is a literal inside it. Either way the
+        # token travels inside standard input and never appears in a process listing.
         if device['executor_config'].get('shell') == 'powershell':
-            payload = script.replace('[Console]::In.ReadLine()', "'" + token.replace("'", "''") + "'")
+            payload = script.replace('[Console]::In.ReadLine()', "'" + agent['token'].replace("'", "''") + "'")
+        else:
+            first, rest = script.split('\n', 1)
+            payload = first + '\n' + agent['token'] + '\n' + rest
         completed = self.run(self.command(device, key_file, known), input=payload, text=True, capture_output=True,
                              check=False)
         if completed.returncode != 0:
             raise RuntimeError('ssh to %s exited %d: %s' % (device['id'], completed.returncode,
                                                              (completed.stderr or '')[-400:]))
-        return {'device': device['id'], 'job': job_id}
+        return {'device': device['id'], 'machine': machine}
 
     def teardown(self, handle):
         return None

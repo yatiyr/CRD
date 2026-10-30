@@ -308,7 +308,7 @@ def publish(site, environ=None, run=subprocess.run):
     run([str(node_root / 'bin/npm'), 'ci', '--ignore-scripts', '--no-audit', '--no-fund'], cwd=str(HERE), env=env,
         check=True)
     run([str(node_root / 'bin/node'), str(HERE / 'node_modules/wrangler/bin/wrangler.js'), 'pages', 'deploy',
-         str(site), '--project-name', project, '--branch', environ.get('BUILDKITE_BRANCH', 'main'),
+         str(site), '--project-name', project, '--branch', environ.get('CERID_CI_BRANCH', 'main'),
          '--commit-dirty=true'], cwd=str(HERE), env=env, check=True)
     return 0
 
@@ -336,8 +336,8 @@ def main(argv=None):
     registry = pipeline.load_registry()
     planned = None
     if args.plan:
-        if not Path(args.plan).is_file() and os.environ.get('BUILDKITE'):
-            subprocess.run(['buildkite-agent', 'artifact', 'download', args.plan, '.'], check=False)
+        if not Path(args.plan).is_file() and os.environ.get('CERID_CI'):
+            subprocess.run(pipeline.agent_tool('artifact', 'download', args.plan, args.plan), check=False)
         if Path(args.plan).is_file():
             planned = json.loads(Path(args.plan).read_text(encoding='utf-8'))
     fixture = getattr(args, 'fixture', None)
@@ -358,8 +358,6 @@ def main(argv=None):
     write(args.out, page, document)
     print('Rendered %d cells into %s' % (len(document['cells']), args.out))
     if args.command == 'publish':
-        if os.environ.get('BUILDKITE'):
-            subprocess.run(['buildkite-agent', 'artifact', 'upload', str(Path(args.out) / '*')], check=False)
         return publish(Path(args.out))
     return 0
 
