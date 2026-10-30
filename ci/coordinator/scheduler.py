@@ -41,6 +41,9 @@ DEFAULTS = {
     'artifacts_days': 30,
 }
 TRIGGER_SOURCES = ('webhook', 'poll', 'manual', 'schedule')
+# How an agent gets the commit: `direct` fetches the configured repository URL as it is (any shape: https, ssh, a
+# filesystem path), `mirror` fetches the coordinator's mirror with the job token. Only this field decides.
+CHECKOUT_STRATEGIES = ('direct', 'mirror')
 SAFE_PATH = re.compile(r'^[A-Za-z0-9_@+=,.\- /]{1,400}$')
 
 
@@ -232,7 +235,7 @@ class Coordinator:
             return self.build(number), False
         self._index_active(number, True)
         self._index_recent(build)
-        if self.mirror is not None:
+        if self.mirror is not None and repo.get('checkout', 'direct') == 'mirror':
             try:
                 self.mirror.pin(repository, repo, number, build['commit'])
             except Exception as error:  # the agent fails its checkout visibly; the build still exists
@@ -518,6 +521,9 @@ class Coordinator:
                 secrets[item['env']] = self.secrets.value(item['name']) if self.secrets else ''
         checkout = {'url': repo.get('url', ''), 'commit': build['commit'], 'branch': build['branch'],
                     'strategy': repo.get('checkout', 'direct'), 'depth': int(repo.get('depth', 50))}
+        if checkout['strategy'] not in CHECKOUT_STRATEGIES:
+            raise ValueError('repository %s: unknown checkout strategy %r' % (build['repository'],
+                                                                             checkout['strategy']))
         if checkout['strategy'] == 'mirror':
             # Relative: the agent fetches from the coordinator address it already uses (a cloud VM inside the
             # project's network, an owned machine through the tunnel).
