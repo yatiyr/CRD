@@ -1,25 +1,31 @@
 #!/usr/bin/env python3
 """Tests for scripts/workspace.py: the agent overlay, NAS sync, export and restore (no network, no build).
 
-Synthetic checkouts in temporary folders stand in for the code repository, the NAS, a code host, the Claude Code
-configuration folder and the pinned download cache, so every path runs on any host with Git and Python 3.12+:
-the Claude Code project-key derivation against names observed on a real machine; refusal of transcripts,
-credential files and secret token shapes (with harmless look-alikes accepted); the code repository's ignore rules
-for every agent path; a dry run that writes nothing; an idempotent sync; the code-host checks (excluded branches,
-commits that touch agent files); the NAS rewrite lease; an export restored through the archive's own entry point
-into a new folder (refs, files, overlay, memory with path placeholders, workflow scripts and tool downloads); a
-restore from the NAS followed by a two-machine overlay merge; and an export refused for a confidential marker.
+Synthetic checkouts in temporary folders stand in for the code repository, the NAS folder (beside a neighbour file
+that must never change), a code host, the Claude Code configuration folder and the pinned download cache, so every
+path runs on any host with Git and Python 3.12+: the Claude Code project-key derivation against names observed on a
+real machine; refusal of transcripts, credential files and secret token shapes (with harmless look-alikes
+accepted); the code repository's ignore rules for every agent path; a dry run that lists every NAS file and size
+and writes nothing; a sync that writes only verified single files and nothing on a second run; a copy that reads
+back wrong (deleted, loud failure, NAS unchanged); the single-writer lock (another host refused, a dead local
+process's lock taken over, a restore refused while a sync writes); the free-space check; confinement to the NAS
+folder; generations pruned only among recorded files; the code-host checks; the NAS code lease against another
+machine's commits; an export written to the NAS and restored through its own entry point while the NAS is only
+read (refs, files, overlay, memory with path placeholders, workflow scripts, tool downloads); a NAS restore with a
+two-machine memory merge and a conflict resolved across syncs; and an export refused for a confidential marker.
 Run: python scripts/test-workspace.py
 """
 import importlib.util
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -177,6 +183,12 @@ class Machine:
         return self.claude / 'projects' / ws_mod.claude_project_key(Path(root or self.root).resolve()) / 'memory'
 
 
+def nas_listing(nas):
+    """{relative path: (size, mtime_ns)} of every file in the NAS folder."""
+    return {p.relative_to(nas).as_posix(): (p.stat().st_size, p.stat().st_mtime_ns)
+            for p in sorted(nas.rglob('*')) if p.is_file()}
+
+
 class EndToEndTests(unittest.TestCase):
     def setUp(self):
         self.base = Path(tempfile.mkdtemp(prefix='crd-ws-test-')).resolve()
@@ -191,7 +203,8 @@ class EndToEndTests(unittest.TestCase):
         os.environ.pop('CERID_WORKSPACE_NAS', None)
         os.environ.pop('CLAUDE_CONFIG_DIR', None)
         self.nas = self.base / 'nas' / 'crd'
-        (self.base / 'nas').mkdir()
+        self.nas.mkdir(parents=True)
+        (self.base / 'nas' / 'neighbour.txt').write_text('another folder on the share; never touched\n')
         self.host = self.base / 'host.git'
         git('init', '--quiet', '--bare', '-b', 'main', str(self.host))
         self.a = Machine(self.base, 'a')
@@ -203,9 +216,12 @@ class EndToEndTests(unittest.TestCase):
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+        self.assertEqual((self.base / 'nas' / 'neighbour.txt').read_text(),
+                         'another folder on the share; never touched\n')
+        self.assertEqual(sorted(p.name for p in (self.base / 'nas').iterdir()), ['crd', 'neighbour.txt'])
         remove_tree(self.base)
 
-    def make_checkout(self, machine):
+    def make_checkout(self, machine, generations=None):
         root = machine.root
         root.mkdir(parents=True)
         git('init', '--quiet', '-b', 'main', cwd=root)
@@ -232,8 +248,10 @@ class EndToEndTests(unittest.TestCase):
         (root / '.claude' / 'settings.local.json').write_bytes(b'{"permissions": {"allow": ["Bash(ls)"]}}\r\n')
         (root / '.claude' / 'scheduled_tasks.lock').write_text('{"pid": 1}')
         (root / '.agent').mkdir()
-        (root / '.agent' / 'workspace.json').write_text(json.dumps({
-            'schema': ws_mod.SCHEMA, 'code_remotes': ['host'], 'code_remote_exclude': ['worktree-*']}))
+        config = {'schema': ws_mod.SCHEMA, 'code_remotes': ['host'], 'code_remote_exclude': ['worktree-*']}
+        if generations:
+            config['generations'] = generations
+        (root / '.agent' / 'workspace.json').write_text(json.dumps(config))
         memory = machine.memory()
         memory.mkdir(parents=True)
         (memory / 'MEMORY.md').write_bytes(f'# memory\nEntry: [{root.as_posix()}/MEMORY.md]\n'.encode())
@@ -252,49 +270,78 @@ class EndToEndTests(unittest.TestCase):
         report = ws_mod.sync(machine.workspace(self.nas), **kwargs)
         return report, '\n'.join(report.lines)
 
-    def overlay_files(self, nas_overlay):
-        return set(git('--git-dir', str(nas_overlay), 'ls-tree', '-r', '--name-only', 'main').splitlines())
+    def manifest(self):
+        return json.loads((self.nas / 'MANIFEST.json').read_text())
 
-    def test_dry_run_writes_nothing_and_sync_is_idempotent(self):
+    def latest(self, kind):
+        rel, entry = ws_mod.Nas(self.nas).latest(self.manifest(), kind)
+        return self.nas / rel, entry
+
+    def bundle_repo(self, kind):
+        """A scratch bare repository holding the newest NAS bundle of `kind` (for reading its trees)."""
+        path, _ = self.latest(kind)
+        repo = self.base / f'read-{kind}-{len(list(self.base.glob("read-*")))}.git'
+        git('init', '--quiet', '--bare', str(repo))
+        git('--git-dir', str(repo), 'fetch', '--quiet', str(path), '+refs/heads/*:refs/heads/*',
+            '+refs/tags/*:refs/tags/*')
+        return repo
+
+    def overlay_files(self):
+        repo = self.bundle_repo('overlay')
+        return set(git('--git-dir', str(repo), 'ls-tree', '-r', '--name-only', 'main').splitlines())
+
+    def test_dry_run_lists_every_nas_file_and_writes_nothing(self):
         report, text = self.sync(self.a, dry_run=True)
         self.assertEqual(report.errors, 0, text)
         self.assertIn('nothing was written', text)
-        self.assertFalse(self.nas.exists())
+        self.assertEqual(nas_listing(self.nas), {})
         self.assertFalse((self.a.root / '.agent-overlay').exists())
         self.assertFalse((self.a.root / '.agent' / 'claude-memory').exists())
+        written = [line for line in report.lines if 'would write' in line]
+        self.assertEqual(len(written), 4, text)
+        self.assertRegex(written[0], r'/overlay/overlay-\d{8}T\d{6}Z\.bundle  [\d,]+ bytes$')
+        self.assertRegex(written[1], r'/code/code-\d{8}T\d{6}Z\.bundle  [\d,]+ bytes$')
+        self.assertIn('/tools/demo-1.0.tar.gz  26 bytes', written[2])
+        self.assertIn('/MANIFEST.json', written[3])
+        self.assertEqual(self.sync(self.a)[0].errors, 0)
+        _, overlay = self.latest('overlay')
+        planned = int(written[0].rsplit('  ', 1)[1].split()[0].replace(',', ''))
+        self.assertLess(abs(overlay['size'] - planned), 64, 'the preview bundle matches the real one in size')
 
+    def test_sync_writes_only_verified_single_files_and_is_idempotent(self):
         report, text = self.sync(self.a)
         self.assertEqual(report.errors, 0, text)
-        files = self.overlay_files(self.nas / 'overlay.git')
-        self.assertEqual(files, {'CLAUDE.md', 'opencode.json', '.claude/settings.local.json', '.agent/workspace.json',
-                                 '.agent/claude-memory/MEMORY.md', '.agent/claude-memory/lesson.md',
-                                 '.agent/workflows/session-1/serial.js'})
-        stored = git('--git-dir', str(self.nas / 'overlay.git'), 'show', 'main:.agent/claude-memory/MEMORY.md')
+        listing = nas_listing(self.nas)
+        self.assertEqual(sorted(re.sub(r'\d{8}T\d{6}Z', 'T', p) for p in listing),
+                         ['MANIFEST.json', 'code/code-T.bundle', 'overlay/overlay-T.bundle', 'tools/demo-1.0.tar.gz'])
+        manifest = self.manifest()
+        for rel, entry in manifest['files'].items():
+            self.assertEqual(ws_mod.file_sha256(self.nas / rel), entry['sha256'], rel)
+            self.assertEqual((self.nas / rel).stat().st_size, entry['size'], rel)
+        self.assertEqual(self.overlay_files(), {
+            'CLAUDE.md', 'opencode.json', '.claude/settings.local.json', '.agent/workspace.json',
+            '.agent/claude-memory/MEMORY.md', '.agent/claude-memory/lesson.md', '.agent/workflows/session-1/serial.js'})
+        repo = self.bundle_repo('overlay')
+        stored = git('--git-dir', str(repo), 'show', 'main:.agent/claude-memory/MEMORY.md')
         self.assertIn(ws_mod.ROOT_TOKEN + '/MEMORY.md', stored)
-        settings = subprocess.run(['git', '--git-dir', str(self.nas / 'overlay.git'), 'show',
-                                   'main:.claude/settings.local.json'], stdout=subprocess.PIPE).stdout
+        settings = subprocess.run(['git', '--git-dir', str(repo), 'show', 'main:.claude/settings.local.json'],
+                                  stdout=subprocess.PIPE).stdout
         self.assertTrue(settings.endswith(b'\r\n'), 'agent files are stored byte-exact')
-        nas_refs = ws_mod.ls_remote(self.nas / 'code.git')
-        self.assertEqual(set(nas_refs), {'refs/heads/main', 'refs/heads/feature', 'refs/heads/worktree-agent-x',
-                                         'refs/tags/v1'})
-        host_refs = ws_mod.ls_remote(self.host)
-        self.assertEqual(set(host_refs), {'refs/heads/main', 'refs/heads/feature', 'refs/tags/v1'})
-        tools = json.loads((self.nas / 'tools' / 'manifest.json').read_text())['entries']
-        self.assertEqual([(e['store'], e['sources']) for e in tools], [('tools/demo/demo-1.0.tar.gz',
-                                                                         ['demo-1.0/demo-1.0.tar.gz'])])
+        _, code = self.latest('code')
+        self.assertEqual(set(code['refs']), {'refs/heads/main', 'refs/heads/feature', 'refs/heads/worktree-agent-x',
+                                             'refs/tags/v1'})
+        self.assertEqual(code['head_branch'], 'main')
+        self.assertEqual(set(ws_mod.ls_remote(self.host)), {'refs/heads/main', 'refs/heads/feature', 'refs/tags/v1'})
+        tool = manifest['files']['tools/demo-1.0.tar.gz']
+        self.assertEqual(tool['sources'], ['demo-1.0/demo-1.0.tar.gz'])
         self.assertIn('unpinned.json', text)
         self.assertEqual(git('status', '--porcelain', cwd=self.a.root), '', 'overlay paths stay ignored by code')
 
-        head = git('--git-dir', str(self.nas / 'overlay.git'), 'rev-parse', 'main')
-        marker = (self.nas / 'crd-nas.json').read_bytes()
         report, text = self.sync(self.a)
         self.assertEqual(report.errors, 0, text)
         self.assertIn('no changes', text)
-        self.assertIn('NAS overlay already up to date', text)
-        self.assertIn('all 4 branches and tags up to date', text)
-        self.assertNotIn('pushed', text.replace('NAS overlay', ''))
-        self.assertEqual(git('--git-dir', str(self.nas / 'overlay.git'), 'rev-parse', 'main'), head)
-        self.assertEqual((self.nas / 'crd-nas.json').read_bytes(), marker)
+        self.assertIn('nothing to write; the NAS is up to date', text)
+        self.assertEqual(nas_listing(self.nas), listing, 'a second sync writes nothing to the NAS')
         status, differences = ws_mod.status(self.a.workspace(self.nas))
         self.assertEqual(differences, 0, '\n'.join(status.lines))
 
@@ -304,8 +351,87 @@ class EndToEndTests(unittest.TestCase):
         report, text = self.sync(self.a)
         self.assertEqual(report.errors, 2, text)
         self.assertNotIn(FAKE['GitHub token'], text)
-        self.assertFalse(self.nas.exists())
+        self.assertEqual(nas_listing(self.nas), {})
         self.assertFalse((self.a.root / '.agent-overlay').exists())
+
+    def test_a_copy_that_reads_back_wrong_is_deleted_and_fails_loudly(self):
+        self.assertEqual(self.sync(self.a, push_code_remotes=False)[0].errors, 0)
+        before = nas_listing(self.nas)
+        (self.a.memory() / 'new.md').write_text('new lesson\n')
+        real_copy = shutil.copyfileobj
+
+        def corrupting(reader, writer, length=0):
+            real_copy(reader, writer, length)
+            writer.write(b'!')
+        with mock.patch.object(ws_mod.shutil, 'copyfileobj', corrupting):
+            with self.assertRaisesRegex(ws_mod.WorkspaceError, 'does not match its SHA-256'):
+                self.sync(self.a, push_code_remotes=False)
+        self.assertEqual(nas_listing(self.nas), before, 'only the .partial was written, and it was deleted')
+        self.assertEqual(self.sync(self.a, push_code_remotes=False)[0].errors, 0)
+
+    def test_one_writer_at_a_time(self):
+        lock = self.nas / 'crd.lock'
+        lock.write_text(json.dumps({'host': 'other-machine', 'pid': 4242, 'started': '2026-10-31T09:00:00+00:00'}))
+        with self.assertRaisesRegex(ws_mod.WorkspaceError, 'locked by other-machine'):
+            self.sync(self.a)
+        self.assertEqual(nas_listing(self.nas), {'crd.lock': nas_listing(self.nas)['crd.lock']})
+        with self.assertRaisesRegex(ws_mod.WorkspaceError, 'other-machine is writing'):
+            ws_mod.restore(self.nas, self.base / 'restore', self.base / 'c', self.base / 'd')
+        dead = subprocess.Popen([sys.executable, '-c', 'pass'])
+        dead.wait()
+        lock.write_text(json.dumps({'host': ws_mod.platform.node(), 'pid': dead.pid, 'started': 'earlier'}))
+        report, text = self.sync(self.a)
+        self.assertEqual(report.errors, 0, text)
+        self.assertIn('removed a stale lock', text)
+        self.assertFalse(lock.exists(), 'the lock is released after the run')
+
+    def test_free_space_is_checked_before_any_write(self):
+        usage = shutil.disk_usage(self.nas)._replace(free=10)
+        with mock.patch.object(ws_mod.shutil, 'disk_usage', return_value=usage):
+            with self.assertRaisesRegex(ws_mod.WorkspaceError, 'needs twice that free'):
+                self.sync(self.a)
+        self.assertEqual(nas_listing(self.nas), {})
+
+    def test_paths_never_resolve_outside_the_nas_folder(self):
+        nas = ws_mod.Nas(self.nas)
+        for rel in ('../neighbour.txt', '..', '.', 'code/../../neighbour.txt'):
+            with self.assertRaisesRegex(ws_mod.WorkspaceError, 'outside the NAS folder'):
+                nas.path(rel)
+        if os.name == 'nt':
+            import _winapi  # a junction needs no privilege, unlike a Windows symlink
+            _winapi.CreateJunction(str(self.base / 'nas'), str(self.nas / 'code'))
+        else:
+            os.symlink(self.base / 'nas', self.nas / 'code', target_is_directory=True)
+        with self.assertRaisesRegex(ws_mod.WorkspaceError, 'outside the NAS folder'):
+            self.sync(self.a)
+        self.assertEqual(sorted(p.name for p in (self.base / 'nas').iterdir()), ['crd', 'neighbour.txt'])
+        if os.name == 'nt':
+            os.rmdir(self.nas / 'code')
+        else:
+            os.remove(self.nas / 'code')
+        with self.assertRaisesRegex(ws_mod.WorkspaceError, 'does not exist'):
+            ws_mod.Nas(self.base / 'nas' / 'missing')
+
+    def test_generations_are_pruned_only_among_recorded_files(self):
+        remove_tree(self.a.base)
+        self.make_checkout(self.a, generations=2)
+        (self.nas / 'code').mkdir()
+        (self.nas / 'code' / 'kept-by-the-user.bundle').write_text('not ours')
+        for round_number in range(4):
+            (self.a.root / 'docs' / f'r{round_number}.md').write_text(f'{round_number}\n')
+            git('add', 'docs', cwd=self.a.root)
+            git('commit', '--quiet', '-m', f'round {round_number}', cwd=self.a.root)
+            (self.a.memory() / f'r{round_number}.md').write_text(f'{round_number}\n')
+            report, text = self.sync(self.a, push_code_remotes=False)
+            self.assertEqual(report.errors, 0, text)
+        kinds = [ws_mod.Nas(self.nas).latest(self.manifest(), k) for k in ('code', 'overlay')]
+        code = sorted(p.name for p in (self.nas / 'code').iterdir())
+        self.assertEqual(len(code), 3, code)
+        self.assertIn('kept-by-the-user.bundle', code)
+        self.assertEqual(len(list((self.nas / 'overlay').iterdir())), 2)
+        self.assertEqual(len([e for e in self.manifest()['files'].values() if e['kind'] == 'code']), 2)
+        self.assertTrue(all(rel for rel, _ in kinds))
+        self.assertIn('pruned code/code-', text)
 
     def test_code_hosts_never_receive_new_agent_files(self):
         root = self.a.root
@@ -319,9 +445,9 @@ class EndToEndTests(unittest.TestCase):
         host_refs = ws_mod.ls_remote(self.host)
         self.assertNotIn('refs/heads/leak', host_refs)
         self.assertIn('refs/heads/feature', host_refs)
-        self.assertIn('refs/heads/leak', ws_mod.ls_remote(self.nas / 'code.git'), 'the private NAS mirror has it')
+        self.assertIn('refs/heads/leak', self.latest('code')[1]['refs'], 'the private NAS bundle has it')
 
-    def test_nas_ref_rewrites_need_a_tip_this_checkout_knew(self):
+    def test_nas_code_moves_on_only_from_a_checkout_that_knew_its_tips(self):
         root = self.a.root
         self.assertEqual(self.sync(self.a, push_code_remotes=False)[0].errors, 0)
         git('checkout', '--quiet', 'feature', cwd=root)
@@ -333,25 +459,31 @@ class EndToEndTests(unittest.TestCase):
         report, text = self.sync(self.a, push_code_remotes=False)
         self.assertEqual(report.errors, 0, text)
         self.assertIn('refs/heads/feature (rewritten here', text)
-        other = self.base / 'other'
-        git('clone', '--quiet', '--branch', 'feature', str(self.nas / 'code.git'), str(other))
-        (other / 'docs' / 'g.md').write_text('elsewhere\n')
-        git('add', 'docs/g.md', cwd=other)
-        git('commit', '--quiet', '-m', 'work from another machine', cwd=other)
-        git('push', '--quiet', 'origin', 'feature', cwd=other)
+        b = Machine(self.base, 'b')
+        self.assertEqual(ws_mod.restore(self.nas, b.root, b.claude, b.downloads).errors, 0)
+        git('checkout', '--quiet', 'feature', cwd=b.root)
+        (b.root / 'docs' / 'g.md').write_text('elsewhere\n')
+        git('add', 'docs/g.md', cwd=b.root)
+        git('commit', '--quiet', '-m', 'work from another machine', cwd=b.root)
+        self.assertEqual(self.sync(b, push_code_remotes=False)[0].errors, 0)
         git('commit', '--quiet', '--amend', '-m', 'feature work, reworded again', cwd=root)
+        before = nas_listing(self.nas)
         report, text = self.sync(self.a, push_code_remotes=False)
         self.assertEqual(report.errors, 1, text)
         self.assertIn('refs/heads/feature: the NAS holds commits this checkout has never seen', text)
+        self.assertEqual({k for k in nas_listing(self.nas) if k.startswith('code/')},
+                         {k for k in before if k.startswith('code/')}, 'no code bundle drops the other machine')
 
-    def test_export_restores_through_its_own_entry_point(self):
+    def test_export_to_the_nas_restores_through_its_own_entry_point_reading_only(self):
         self.assertEqual(self.sync(self.a)[0].errors, 0)
-        out_dir = self.base / 'exports'
-        report, archive = ws_mod.export(self.a.workspace(self.nas), out_dir)
+        report, archive = ws_mod.export(self.a.workspace(self.nas))
         self.assertEqual(report.errors, 0, '\n'.join(report.lines))
+        self.assertEqual(archive.parent, self.nas / 'exports')
         self.assertRegex(archive.name, r'^crd-workspace-\d{8}\.zip$')
-        self.assertTrue(archive.with_name(archive.name + '.sha256').is_file())
+        entry = self.manifest()['files']['exports/' + archive.name]
+        self.assertEqual((entry['kind'], entry['sha256']), ('export', ws_mod.file_sha256(archive)))
         self.assertEqual(ws_mod.verify_archive(archive).errors, 0)
+        before = nas_listing(self.nas)
         b = Machine(self.base, 'b')
         destination = self.base / 'friend folder' / 'crd'
         result = subprocess.run([sys.executable, str(archive), '--claude-config-dir', str(b.claude),
@@ -359,6 +491,7 @@ class EndToEndTests(unittest.TestCase):
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self.assertEqual(result.returncode, 0, result.stdout.decode())
         self.assertIn('[next]', result.stdout.decode())
+        self.assertEqual(nas_listing(self.nas), before, 'a restore never writes to the NAS')
         destination = destination.resolve()
         for ref in ('refs/heads/main', 'refs/heads/feature', 'refs/tags/v1'):
             self.assertEqual(git('rev-parse', ref, cwd=destination), git('rev-parse', ref, cwd=self.a.root))
@@ -376,18 +509,23 @@ class EndToEndTests(unittest.TestCase):
         self.assertFalse((memory.parent / 'session-1.jsonl').exists())
         self.assertEqual((b.downloads / 'demo-1.0' / 'demo-1.0.tar.gz').read_bytes(), self.a.tool)
         restored = ws_mod.Workspace(destination, self.nas, b.claude, b.downloads)
-        report, differences = ws_mod.status(restored, offline=True)
-        self.assertNotIn('changed', '\n'.join(l for l in report.lines if l.startswith('[overlay]')))
+        report, _ = ws_mod.status(restored, offline=True)
+        self.assertIn('working copy matches the last overlay commit', '\n'.join(report.lines))
         with self.assertRaisesRegex(ws_mod.WorkspaceError, 'not empty'):
             ws_mod.restore(archive, destination, b.claude, b.downloads)
+        local = self.base / 'local-exports'
+        report, copy = ws_mod.export(self.a.workspace(self.nas), local)
+        self.assertEqual((report.errors, copy.parent), (0, local))
+        self.assertEqual(nas_listing(self.nas), before, 'an export to a local folder leaves the NAS alone')
 
     def test_nas_restore_then_two_machines_merge_their_memory(self):
         self.assertEqual(self.sync(self.a)[0].errors, 0)
+        before = nas_listing(self.nas)
         b = Machine(self.base, 'b')
-        destination = (self.base / 'b' / 'crd')
-        report = ws_mod.restore(self.nas, destination, b.claude, b.downloads)
+        report = ws_mod.restore(self.nas, b.root, b.claude, b.downloads)
         self.assertEqual(report.errors, 0, '\n'.join(report.lines))
-        b.root = destination.resolve()
+        self.assertEqual(nas_listing(self.nas), before, 'a restore never writes to the NAS')
+        b.root = b.root.resolve()
         (b.memory() / 'from-b.md').write_text('learned on b\n')
         report, text = self.sync(b, push_code_remotes=False)
         self.assertEqual(report.errors, 0, text)
@@ -396,9 +534,36 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(report.errors, 0, text)
         self.assertIn('merged the NAS overlay', text)
         self.assertEqual((self.a.memory() / 'from-b.md').read_text(), 'learned on b\n')
-        self.assertTrue({'.agent/claude-memory/from-a.md', '.agent/claude-memory/from-b.md'} <=
-                        self.overlay_files(self.nas / 'overlay.git'))
+        self.assertTrue({'.agent/claude-memory/from-a.md', '.agent/claude-memory/from-b.md'} <= self.overlay_files())
         self.assertIn(f'[{self.a.root.as_posix()}/MEMORY.md]', (self.a.memory() / 'MEMORY.md').read_text())
+
+    def test_conflicting_memory_edits_stop_the_sync_until_resolved(self):
+        self.assertEqual(self.sync(self.a)[0].errors, 0)
+        b = Machine(self.base, 'b')
+        self.assertEqual(ws_mod.restore(self.nas, b.root, b.claude, b.downloads).errors, 0)
+        b.root = b.root.resolve()
+        (b.memory() / 'lesson.md').write_text('a lesson, as b sees it\n')
+        self.assertEqual(self.sync(b, push_code_remotes=False)[0].errors, 0)
+        (self.a.memory() / 'lesson.md').write_text('a lesson, as a sees it\n')
+        before = nas_listing(self.nas)
+        report, text = self.sync(self.a, push_code_remotes=False)
+        self.assertEqual(report.errors, 1, text)
+        self.assertIn('.agent/claude-memory/lesson.md', text)
+        self.assertEqual(nas_listing(self.nas), before, 'nothing reaches the NAS while the merge is open')
+        conflicted = self.a.root / '.agent' / 'claude-memory' / 'lesson.md'
+        self.assertIn('<<<<<<<', conflicted.read_text())
+        report, text = self.sync(self.a, push_code_remotes=False)
+        self.assertEqual(report.errors, 1, text)
+        self.assertIn('still has conflict markers', text)
+        conflicted.write_text('a lesson, as both see it\n')
+        report, text = self.sync(self.a, push_code_remotes=False)
+        self.assertEqual(report.errors, 0, text)
+        self.assertEqual((self.a.memory() / 'lesson.md').read_text(), 'a lesson, as both see it\n')
+        repo = self.bundle_repo('overlay')
+        self.assertEqual(git('--git-dir', str(repo), 'show', 'main:.agent/claude-memory/lesson.md'),
+                         'a lesson, as both see it')
+        self.assertEqual(self.sync(b, push_code_remotes=False)[0].errors, 0)
+        self.assertEqual((b.memory() / 'lesson.md').read_text(), 'a lesson, as both see it\n')
 
     def test_export_refuses_confidential_material(self):
         root = self.a.root
@@ -409,10 +574,11 @@ class EndToEndTests(unittest.TestCase):
         git('commit', '--quiet', '-m', 'console notes', cwd=root)
         git('checkout', '--quiet', 'main', cwd=root)
         self.assertEqual(self.sync(self.a, push_code_remotes=False)[0].errors, 0)
-        report, archive = ws_mod.export(self.a.workspace(self.nas), self.base / 'exports')
+        before = nas_listing(self.nas)
+        report, archive = ws_mod.export(self.a.workspace(self.nas))
         self.assertIsNone(archive)
         self.assertIn('marked confidential', '\n'.join(report.lines))
-        self.assertFalse((self.base / 'exports').exists())
+        self.assertEqual(nas_listing(self.nas), before)
 
 
 if __name__ == '__main__':

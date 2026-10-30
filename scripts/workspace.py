@@ -5,11 +5,17 @@ Two Git histories share one checkout. The code repository (`.git`) holds code an
 history pushed to the code hosts. The agent overlay is a second repository whose Git directory is `.agent-overlay/`
 and whose work tree is the same checkout root; it tracks only agent tool files (CLAUDE.md, opencode.json, .claude/,
 .codex/, ...) and `.agent/`, which holds copies of the agent state kept outside the checkout (the Claude Code memory
-folder of this project and the operator's workflow scripts). The overlay is pushed only to the NAS.
+folder of this project and the operator's workflow scripts). The overlay travels only to the NAS.
 
-    python scripts/workspace.py sync [--dry-run] [--nas DIR] [--no-code-remotes]
+The NAS folder receives only a few large single files, each written as `<name>.partial`, read back, compared by
+SHA-256 (and `git bundle verify`), then renamed: full Git bundles of the code and of the overlay (the newest
+generations kept), the pinned tool archives, export archives and one MANIFEST.json. Nothing outside that folder is
+touched, an existing file is never overwritten, only files recorded in the manifest are pruned, a lock file keeps
+one writer at a time, and a restore only reads.
+
+    python scripts/workspace.py sync [--dry-run] [--nas DIR] [--no-code-remotes] [--break-lock]
     python scripts/workspace.py status [--nas DIR] [--offline]
-    python scripts/workspace.py export [--nas DIR] [--output-dir DIR]
+    python scripts/workspace.py export [--nas DIR | --output-dir DIR]
     python scripts/workspace.py restore --from <archive.zip | NAS dir> <destination folder>
     python scripts/workspace.py verify <archive.zip>
     python scripts/workspace.py overlay <git arguments...>
@@ -36,6 +42,9 @@ import zipfile
 
 SCHEMA = 'cerid-workspace/1'
 NAS_SCHEMA = 'cerid-workspace-nas/1'
+MANIFEST_NAME = 'MANIFEST.json'
+LOCK_NAME = 'crd.lock'
+DEFAULT_GENERATIONS = 5
 OVERLAY_GIT_DIR = '.agent-overlay'
 OVERLAY_HOME = '.agent'
 OVERLAY_BRANCH = 'main'
@@ -185,14 +194,9 @@ def out(*args, **kwargs):
     return git(*args, **kwargs).stdout.decode('utf-8', errors='replace')
 
 
-def safe(path):
-    """A NAS share often reports another owner; trust exactly the repository this command opens."""
-    return ['-c', f'safe.directory={posix(path)}']
-
-
 def ls_remote(url):
     refs = {}
-    for line in out(*safe(url), 'ls-remote', posix(url)).splitlines():
+    for line in out('ls-remote', str(url)).splitlines():
         sha, _, ref = line.partition('\t')
         if ref.startswith(('refs/heads/', 'refs/tags/')) and not ref.endswith('^{}'):
             refs[ref] = sha
@@ -235,9 +239,11 @@ class Overlay:
     def exists(self):
         return (self.git_dir / 'HEAD').is_file()
 
+    def args(self):
+        return ['--literal-pathspecs', f'--git-dir={posix(self.git_dir)}', f'--work-tree={posix(self.root)}']
+
     def run(self, *args, data=None, check=True):
-        return git('--literal-pathspecs', f'--git-dir={posix(self.git_dir)}', f'--work-tree={posix(self.root)}',
-                   *args, cwd=self.root, data=data, check=check)
+        return git(*self.args(), *args, cwd=self.root, data=data, check=check)
 
     def text(self, *args, **kwargs):
         return self.run(*args, **kwargs).stdout.decode('utf-8', errors='replace')
@@ -266,17 +272,18 @@ class Overlay:
                 files[path] = meta.split()[2]
         return files
 
+    def merging(self):
+        return (self.git_dir / 'MERGE_HEAD').is_file()
+
+    def unmerged(self):
+        return sorted({p for p in self.text('diff', '--name-only', '-z', '--diff-filter=U').split('\0') if p})
+
     def is_ancestor(self, old, new):
         return self.run('merge-base', '--is-ancestor', old, new, check=False).returncode == 0
 
     def has_commit(self, sha):
         return self.run('cat-file', '-e', sha + '^{commit}', check=False).returncode == 0
 
-    def set_remote(self, url):
-        if self.run('remote', 'get-url', 'nas', check=False).returncode == 0:
-            self.run('remote', 'set-url', 'nas', posix(url))
-        else:
-            self.run('remote', 'add', 'nas', posix(url))
 
 
 # ---------------------------------------------------------------------------------------------- refusal checks
@@ -375,9 +382,21 @@ class Workspace:
             files[CONFIG_FILE] = config.read_bytes()
         return files
 
-    def copied_files(self):
-        """`.agent/` copies of state outside the checkout: Claude memory and every session's workflow scripts."""
+    def copied_files(self, from_work_tree=False):
+        """`.agent/` copies of state outside the checkout: Claude memory and every session's workflow scripts.
+
+        While a merge with the NAS overlay is unfinished the work tree's `.agent/` copies are the truth (they hold
+        the resolution); otherwise the live Claude Code folders are.
+        """
         files = {}
+        if from_work_tree:
+            for managed in (MEMORY_DIR, WORKFLOWS_DIR):
+                base = self.root / managed
+                if base.is_dir():
+                    for path in sorted(base.rglob('*')):
+                        if path.is_file():
+                            files[path.relative_to(self.root).as_posix()] = path.read_bytes()
+            return files
         if self.memory_dir.is_dir():
             for path in sorted(self.memory_dir.rglob('*')):
                 if path.is_file() and not path.is_symlink():
@@ -399,10 +418,6 @@ class Workspace:
         files = self.in_place_files()
         files.update(self.copied_files())
         return files
-
-    def live_targets(self):
-        """Where each `.agent/` copy lives on this machine (for writing back after a merge or a restore)."""
-        return {MEMORY_DIR: self.memory_dir, WORKFLOWS_DIR: self.memory_dir.parent}
 
 
 def workflow_target(project_dir, rel):
@@ -500,41 +515,253 @@ def local_downloads(downloads, pins_path):
             sha = file_sha256(path)
             if sha in index:
                 section, name, file_name = index[sha]
-                entry = found.setdefault(sha, {'section': section, 'name': name, 'file': file_name, 'sha256': sha,
-                                               'size': path.stat().st_size, 'sources': [], 'path': path})
+                entry = found.setdefault(sha, {'kind': 'tool', 'section': section, 'name': name, 'file': file_name,
+                                               'sha256': sha, 'size': path.stat().st_size, 'sources': [],
+                                               'path': path})
                 entry['sources'].append(rel)
             else:
                 unpinned.append(rel)
     return found, unpinned
 
 
-def tools_manifest(tools_dir):
-    path = Path(tools_dir) / 'manifest.json'
-    if path.is_file():
-        return {e['sha256']: e for e in json.loads(path.read_text(encoding='utf-8'))['entries']}
-    return {}
-
-
-def write_tools_manifest(tools_dir, entries):
-    document = {'schema': NAS_SCHEMA + '#tools', 'entries': [
-        {k: v for k, v in entry.items() if k != 'path'} for _, entry in sorted(entries.items(),
-                                                                             key=lambda item: item[1]['store'])]}
-    write_if_changed(Path(tools_dir) / 'manifest.json', (json.dumps(document, indent=2) + '\n').encode())
-
-
-def store_path(entry):
-    return f'{entry["section"]}/{entry["name"]}/{entry["file"]}'
-
-
 def copy_verified(source, destination, sha):
+    """Local copy through a .partial file, renamed only after its SHA-256 matches."""
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.name + '.partial')
     shutil.copyfile(source, temporary)
     if file_sha256(temporary) != sha:
         temporary.unlink()
-        raise WorkspaceError(f'Copy of {source} does not match its pinned SHA-256')
+        raise WorkspaceError(f'Copy of {source} does not match its SHA-256')
     os.replace(temporary, destination)
+
+
+def size_text(size):
+    for unit, scale in (('TiB', 1 << 40), ('GiB', 1 << 30), ('MiB', 1 << 20)):
+        if size >= scale:
+            return f'{size / scale:.1f} {unit} ({size:,} bytes)'
+    return f'{size:,} bytes'
+
+
+# ---------------------------------------------------------------------------------------------- the NAS folder
+
+def pid_alive(pid):
+    """Whether a process exists on this machine (never signals it: os.kill would terminate it on Windows)."""
+    if os.name == 'nt':
+        import ctypes
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        handle = kernel.OpenProcess(0x1000, False, int(pid))
+        if not handle:
+            return ctypes.get_last_error() == 5
+        code = ctypes.c_ulong()
+        kernel.GetExitCodeProcess(handle, ctypes.byref(code))
+        kernel.CloseHandle(handle)
+        return code.value == 259
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+class Nas:
+    """The operator's NAS folder, written only as a few large single files.
+
+    Layout: MANIFEST.json; code/code-<UTC>.bundle and overlay/overlay-<UTC>.bundle (full Git bundles, the newest
+    `generations` of each kept); tools/<pinned archive>; exports/crd-workspace-YYYYMMDD.zip; crd.lock while a sync
+    or export runs. Every path is confined to the folder after resolving links and junctions; every file is written
+    to `<name>.partial`, flushed, read back from the NAS and compared by SHA-256 (bundles also pass `git bundle
+    verify`) and only then renamed; an existing file is never overwritten. Only files recorded in MANIFEST.json
+    are ever pruned. MANIFEST.json itself is replaced atomically after the same read-back check.
+    """
+
+    def __init__(self, root):
+        self.root = Path(root)
+        if not self.root.is_dir():
+            raise WorkspaceError(f'NAS folder {self.root} does not exist or is not reachable; create it first '
+                                 f'(this tool never creates or touches anything outside it)')
+        self.real = Path(os.path.realpath(self.root))
+
+    def path(self, rel):
+        target = self.root / rel
+        real = Path(os.path.realpath(target))
+        if real == self.real or not real.is_relative_to(self.real):
+            raise WorkspaceError(f'{rel} resolves outside the NAS folder {self.root}; refusing')
+        return target
+
+    # ---- reading (restore and status only read)
+
+    def manifest(self):
+        path = self.path(MANIFEST_NAME)
+        if not path.is_file():
+            return {'schema': NAS_SCHEMA, 'source': {}, 'files': {}}
+        document = json.loads(path.read_text(encoding='utf-8'))
+        if document.get('schema') != NAS_SCHEMA:
+            raise WorkspaceError(f'{path}: expected schema {NAS_SCHEMA}')
+        return document
+
+    def latest(self, manifest, kind):
+        entries = sorted((e['created'], rel) for rel, e in manifest['files'].items() if e['kind'] == kind)
+        return (entries[-1][1], manifest['files'][entries[-1][1]]) if entries else (None, None)
+
+    def verified(self, rel, entry):
+        path = self.path(rel)
+        if not path.is_file() or path.stat().st_size != entry['size'] or file_sha256(path) != entry['sha256']:
+            raise WorkspaceError(f'{rel} on the NAS does not match MANIFEST.json (size or SHA-256)')
+        return path
+
+    def lock_holder(self):
+        path = self.path(LOCK_NAME)
+        if not path.is_file():
+            return None
+        try:
+            return json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return {'host': '?', 'pid': 0, 'started': '?'}
+
+    # ---- writing (sync and export, always under the lock)
+
+    def lock(self, report, break_lock=False):
+        path = self.path(LOCK_NAME)
+        me = {'host': platform.node(), 'pid': os.getpid(),
+              'started': datetime.datetime.now(datetime.UTC).isoformat(timespec='seconds'), 'tool': SCHEMA}
+        for _ in range(2):
+            try:
+                handle = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, 'O_BINARY', 0))
+            except FileExistsError:
+                holder = self.lock_holder() or {}
+                stale = holder.get('host') == me['host'] and not pid_alive(holder.get('pid', 0))
+                if stale or break_lock:
+                    path.unlink()
+                    report.add('nas', f'removed a {"stale" if stale else "broken"} lock of {holder.get("host")} '
+                                      f'pid {holder.get("pid")} from {holder.get("started")}')
+                    continue
+                raise WorkspaceError(f'The NAS folder is locked by {holder.get("host")} (pid {holder.get("pid")}, '
+                                     f'since {holder.get("started")}); wait for that sync to finish. If that machine '
+                                     f'is not syncing, run again with --break-lock.')
+            with os.fdopen(handle, 'w', encoding='utf-8') as stream:
+                json.dump(me, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            return NasLock(self, me)
+        raise WorkspaceError('could not take the NAS lock')
+
+    def write_file(self, rel, source, sha, bundle_repo=None):
+        """Copy a local file to the NAS: .partial, flush, read back, compare, verify, rename. Never overwrites."""
+        target = self.path(rel)
+        partial = self.path(rel + '.partial')
+        if target.exists():
+            raise WorkspaceError(f'{rel} already exists on the NAS; existing files are never overwritten')
+        target.parent.mkdir(exist_ok=True)
+        if partial.exists():
+            partial.unlink()  # a .partial of this tool, left by an interrupted run while it held the lock
+        try:
+            with open(source, 'rb') as reader, open(partial, 'xb') as writer:
+                shutil.copyfileobj(reader, writer, 8 << 20)
+                writer.flush()
+                os.fsync(writer.fileno())
+            if file_sha256(partial) != sha:
+                raise WorkspaceError(f'{rel}: the copy read back from the NAS does not match its SHA-256')
+            if bundle_repo is not None:
+                check = git('bundle', 'verify', '--quiet', posix(partial), cwd=bundle_repo, check=False)
+                if check.returncode:
+                    raise WorkspaceError(f'{rel}: git bundle verify failed on the NAS copy: '
+                                         + check.stderr.decode('utf-8', errors='replace').strip())
+        except BaseException:
+            if partial.exists():
+                partial.unlink()
+            raise
+        os.rename(partial, target)
+
+    def write_manifest(self, document):
+        data = (json.dumps(document, indent=2, sort_keys=True) + '\n').encode('utf-8')
+        target = self.path(MANIFEST_NAME)
+        partial = self.path(MANIFEST_NAME + '.partial')
+        try:
+            with open(partial, 'wb') as writer:
+                writer.write(data)
+                writer.flush()
+                os.fsync(writer.fileno())
+            if partial.read_bytes() != data:
+                raise WorkspaceError('MANIFEST.json read back from the NAS differs from what was written')
+        except BaseException:
+            if partial.exists():
+                partial.unlink()
+            raise
+        os.replace(partial, target)
+
+    def prune_plan(self, manifest, kind, generations):
+        entries = sorted((e['created'], rel) for rel, e in manifest['files'].items() if e['kind'] == kind)
+        return [rel for _, rel in entries[:-generations]] if len(entries) > generations else []
+
+    def prune(self, manifest, generations, report):
+        """Drop the oldest recorded generations: the manifest first, then exactly those recorded files."""
+        doomed = [rel for kind in ('code', 'overlay', 'export') for rel in self.prune_plan(manifest, kind,
+                                                                                            generations)]
+        if not doomed:
+            return
+        for rel in doomed:
+            self.path(rel)
+            del manifest['files'][rel]
+        self.write_manifest(manifest)
+        for rel in doomed:
+            path = self.path(rel)
+            if path.is_file():
+                path.unlink()
+            report.add('nas', f'pruned {rel} (older than the newest {generations} generations)')
+
+
+class NasLock:
+    def __init__(self, nas, me):
+        self.nas, self.me = nas, me
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        if self.nas.lock_holder() == self.me:
+            self.nas.path(LOCK_NAME).unlink()
+
+
+def stamp(now=None):
+    """File-name time stamp (seconds; unique_name adds -2, -3 within one second)."""
+    return (now or datetime.datetime.now(datetime.UTC)).strftime('%Y%m%dT%H%M%SZ')
+
+
+def created_now():
+    """Manifest order key: microseconds, so generations written within one second still sort by age."""
+    return datetime.datetime.now(datetime.UTC).isoformat(timespec='microseconds')
+
+
+def unique_name(nas, manifest, directory, stem, suffix):
+    rel, counter = f'{directory}/{stem}{suffix}', 2
+    while rel in manifest['files'] or nas.path(rel).exists():
+        rel, counter = f'{directory}/{stem}-{counter}{suffix}', counter + 1
+    return rel
+
+
+def bundle_heads(path):
+    refs = {}
+    for line in out('bundle', 'list-heads', posix(path)).splitlines():
+        sha, _, ref = line.partition(' ')
+        if ref.startswith(('refs/heads/', 'refs/tags/')):
+            refs[ref] = sha
+    return refs
+
+
+def make_bundle(repo_args, path, *selection):
+    git(*repo_args, 'bundle', 'create', '--quiet', posix(path), *selection)
+    return {'size': Path(path).stat().st_size, 'sha256': file_sha256(path), 'refs': bundle_heads(path)}
+
+
+def check_free_space(nas, planned, report):
+    free = shutil.disk_usage(nas.root).free
+    if planned and free < 2 * planned:
+        raise WorkspaceError(f'The NAS share has {size_text(free)} free; this run writes {size_text(planned)} and '
+                             f'needs twice that free. Nothing was written.')
+    report.add('nas', f'{size_text(free)} free; this run writes {size_text(planned)}')
 
 
 # ---------------------------------------------------------------------------------------------- code repository
@@ -565,22 +792,33 @@ def code_remotes(ws):
     return remotes, missing
 
 
-def nas_push_plan(root, nas_refs, refs):
-    """[(refspec, note)] and [rejections]: a NAS ref moves only forward, or to a rewrite of a tip this checkout had."""
-    plan, rejected = [], []
+def ref_plan(root, nas_refs, refs):
+    """(changes, rejections) of local refs against the newest NAS code bundle.
+
+    A ref may move forward, or be rewritten when its old NAS tip is known here (a rebase made on this machine).
+    A NAS tip this checkout has never seen came from another machine: the new bundle would drop it, so it is
+    reported and no code bundle is written until it is fetched. Refs deleted here stay in older generations.
+    """
+    changes, rejected = [], []
     for ref, sha in sorted(refs.items()):
         old = nas_refs.get(ref)
         if old == sha:
             continue
         if old is None:
-            plan.append((f'{ref}:{ref}', 'new'))
+            changes.append((ref, 'new'))
         elif is_ancestor(root, old, sha):
-            plan.append((f'{ref}:{ref}', 'fast-forward'))
+            changes.append((ref, 'fast-forward'))
         elif has_object(root, old):
-            plan.append((f'+{ref}:{ref}', 'rewritten here (the old NAS tip is known locally)'))
+            changes.append((ref, 'rewritten here (the old NAS tip is known locally)'))
         else:
             rejected.append(f'{ref}: the NAS holds commits this checkout has never seen; fetch them first')
-    return plan, rejected
+    for ref, old in sorted(nas_refs.items()):
+        if ref not in refs:
+            if has_object(root, old):
+                changes.append((ref, 'deleted here (kept in older NAS generations until they are pruned)'))
+            else:
+                rejected.append(f'{ref}: only the NAS has this ref, from another machine; fetch it first')
+    return changes, rejected
 
 
 def remote_branch_checks(root, ref, remote):
@@ -602,27 +840,32 @@ def remote_branch_checks(root, ref, remote):
     return reasons
 
 
-# ---------------------------------------------------------------------------------------------- NAS layout
-
-def nas_layout(nas):
-    nas = Path(nas)
-    return {'code': nas / 'code.git', 'overlay': nas / 'overlay.git', 'tools': nas / 'tools',
-            'exports': nas / 'exports', 'marker': nas / 'crd-nas.json'}
-
-
-def ensure_nas(nas):
-    nas = Path(nas)
-    if not nas.parent.is_dir():
-        raise WorkspaceError(f'NAS parent folder {nas.parent} is not reachable')
-    layout = nas_layout(nas)
-    nas.mkdir(exist_ok=True)
-    for key in ('code', 'overlay'):
-        if not (layout[key] / 'HEAD').is_file():
-            git(*safe(layout[key]), 'init', '--quiet', '--bare', f'--initial-branch={OVERLAY_BRANCH}',
-                posix(layout[key]))
-    layout['tools'].mkdir(exist_ok=True)
-    layout['exports'].mkdir(exist_ok=True)
-    return layout
+def push_code_remote(ws, remote, report):
+    git('fetch', '--quiet', remote, cwd=ws.root)
+    excluded = ws.config.get('code_remote_exclude') or []
+    spec = []
+    for ref in sorted(local_refs(ws.root, ('refs/heads',))):
+        branch = ref[len('refs/heads/'):]
+        if any(fnmatch.fnmatch(branch, pattern) for pattern in excluded):
+            continue
+        reasons = remote_branch_checks(ws.root, ref, remote)
+        if reasons:
+            report.error(f'code→{remote}', f'{branch} not pushed: ' + '; '.join(reasons))
+        else:
+            spec.append(f'{ref}:{ref}')
+    spec.append('refs/tags/*:refs/tags/*')
+    result = git('push', '--porcelain', remote, *spec, cwd=ws.root, check=False)
+    lines = result.stdout.decode('utf-8', errors='replace').splitlines()
+    for line in lines:
+        flag, _, rest = line.partition('\t')
+        if flag == '!':
+            report.error(f'code→{remote}', 'rejected ' + rest)
+        elif flag in ('+', '*', '-'):
+            report.add(f'code→{remote}', 'pushed ' + rest)
+    if result.returncode != 0 and not any(line.startswith('!') for line in lines):
+        report.error(f'code→{remote}', result.stderr.decode('utf-8', errors='replace').strip())
+    elif not any(line.startswith(('+', '*', '-')) for line in lines):
+        report.add(f'code→{remote}', 'up to date')
 
 
 def source_info(ws, remotes):
@@ -630,21 +873,12 @@ def source_info(ws, remotes):
             'code_remotes': {name: strip_userinfo(url) for name, url in remotes.items()}}
 
 
-def write_nas_marker(layout, info):
-    document = {'schema': NAS_SCHEMA, 'layout': {'code.git': 'bare code repository (heads and tags)',
-                                                 'overlay.git': 'bare agent overlay repository',
-                                                 'tools': 'pinned tool downloads by cmake/pins.json SHA-256',
-                                                 'exports': 'crd-workspace-YYYYMMDD.zip archives'},
-                'source': info}
-    return write_if_changed(layout['marker'], (json.dumps(document, indent=2) + '\n').encode())
-
-
 # ---------------------------------------------------------------------------------------------- sync
 
-def overlay_plan(ws):
-    """(desired files, in-place files, copies, problems) with every refusal check applied first."""
+def overlay_plan(ws, from_work_tree=False):
+    """(desired files, copies, problems) with every refusal check applied first."""
     in_place = ws.in_place_files()
-    copies = ws.copied_files()
+    copies = ws.copied_files(from_work_tree)
     desired = dict(in_place)
     desired.update(copies)
     return desired, copies, refusals(desired)
@@ -670,10 +904,26 @@ def stage_overlay(ws, desired):
     return overlay.run('diff', '--cached', '--quiet', check=False).returncode != 0
 
 
-def sync(ws, dry_run=False, push_code_remotes=True, report=None):
+def generations(ws):
+    value = int(ws.config.get('generations') or DEFAULT_GENERATIONS)
+    if value < 1:
+        raise WorkspaceError('"generations" must be at least 1')
+    return value
+
+
+def sync(ws, dry_run=False, push_code_remotes=True, break_lock=False, report=None):
     report = report or Report()
-    nas = ws.nas
-    desired, copies, problems = overlay_plan(ws)
+    nas = Nas(ws.nas)
+    merging = ws.overlay.exists() and ws.overlay.merging()
+    desired, copies, problems = overlay_plan(ws, from_work_tree=merging)
+    if merging:
+        for path in ws.overlay.unmerged():
+            data = desired.get(path, b'')
+            if re.search(rb'^(?:<<<<<<<|>>>>>>>)( |$)', data, flags=re.M):
+                report.error('overlay', f'{path} still has conflict markers; keep the wanted lines, delete the '
+                                        f'markers, then run sync again')
+        if report.errors:
+            return report
     if problems:
         for problem in problems:
             report.error('refused', problem)
@@ -682,144 +932,214 @@ def sync(ws, dry_run=False, push_code_remotes=True, report=None):
     remotes, missing = code_remotes(ws) if push_code_remotes else ({}, [])
     for name in missing:
         report.error('code', f'configured code remote {name!r} does not exist in this checkout')
-    layout = nas_layout(nas)
-    nas_ready = (layout['code'] / 'HEAD').is_file() and (layout['overlay'] / 'HEAD').is_file()
     if dry_run:
-        return sync_preview(ws, desired, layout, nas_ready, remotes, report)
-    layout = ensure_nas(nas)
+        return sync_preview(ws, nas, desired, remotes, report)
+    with tempfile.TemporaryDirectory(prefix='crd-sync-') as scratch, nas.lock(report, break_lock):
+        scratch = Path(scratch)
+        manifest = nas.manifest()
+        writes = []  # (rel, local path, entry, bundle repo or None)
+        now = stamp()
 
-    # 1. Overlay: mirror the outside state into .agent/, commit, reconcile with the NAS, write back, push.
-    written, removed = mirror_agent_home(ws.root, copies)
-    report.add('overlay', f'{len(copies)} copied agent-state files ({written} updated, {removed} removed) in .agent/')
-    overlay = ws.overlay
-    created = not overlay.exists()
-    if created:
-        overlay.init()
-    overlay.set_remote(layout['overlay'])
-    remote_tip = ls_remote(layout['overlay']).get(f'refs/heads/{OVERLAY_BRANCH}')
-    if remote_tip:
-        overlay.run(*safe(layout['overlay']), 'fetch', '--quiet', 'nas',
-                    f'+refs/heads/{OVERLAY_BRANCH}:refs/remotes/nas/{OVERLAY_BRANCH}')
-    if created and remote_tip and not overlay.head():
-        overlay.run('update-ref', f'refs/heads/{OVERLAY_BRANCH}', remote_tip)
-        overlay.run('read-tree', remote_tip)
-        report.add('overlay', 'adopted the NAS overlay history for this new checkout')
-    if stage_overlay(ws, desired):
-        overlay.run('commit', '--quiet', '--no-verify', '-m',
-                    f'chore(overlay): sync from {platform.node() or "host"}')
-        report.add('overlay', f'committed {len(desired)} tracked files as {overlay.head()[:12]}')
-    else:
-        report.add('overlay', f'no changes ({len(desired)} tracked files)')
-    head = overlay.head()
-    if remote_tip and head and remote_tip != head and not overlay.is_ancestor(remote_tip, head):
-        merged = overlay.run('merge', '--quiet', '--no-edit', f'refs/remotes/nas/{OVERLAY_BRANCH}', check=False)
-        if merged.returncode != 0:
-            overlay.run('merge', '--abort', check=False)
-            report.error('overlay', 'the NAS overlay and this checkout changed the same lines; nothing was pushed. '
-                                    'Resolve with `workspace.py overlay merge nas/main`, then sync again.')
-            return report
-        written, removed = write_back(ws.root, ws.memory_dir, ws.project_path)
-        report.add('overlay', f'merged the NAS overlay; wrote {written} and removed {removed} files in the '
-                              f'Claude Code folders')
+        # 1. Overlay: mirror the outside state into .agent/, commit, merge the newest NAS overlay, write back.
+        overlay = ws.overlay
+        if merging:
+            stage_overlay(ws, desired)
+            overlay.run('commit', '--quiet', '--no-verify', '--no-edit')
+            written, removed = write_back(ws.root, ws.memory_dir, ws.project_path)
+            report.add('overlay', f'finished the merge with the NAS overlay; wrote {written} and removed {removed} '
+                                  f'files in the Claude Code folders')
+        else:
+            written, removed = mirror_agent_home(ws.root, copies)
+            report.add('overlay', f'{len(copies)} copied agent-state files ({written} updated, {removed} removed) '
+                                  f'in .agent/')
+        created = not overlay.exists()
+        if created:
+            overlay.init()
+        latest_rel, latest = nas.latest(manifest, 'overlay')
+        remote_tip = latest['refs'].get(f'refs/heads/{OVERLAY_BRANCH}') if latest else None
+        if remote_tip and not overlay.has_commit(remote_tip):
+            overlay.run('fetch', '--quiet', posix(nas.verified(latest_rel, latest)),
+                        f'+refs/heads/{OVERLAY_BRANCH}:refs/remotes/nas/{OVERLAY_BRANCH}')
+        elif remote_tip:
+            overlay.run('update-ref', f'refs/remotes/nas/{OVERLAY_BRANCH}', remote_tip)
+        if created and remote_tip and not overlay.head():
+            overlay.run('update-ref', f'refs/heads/{OVERLAY_BRANCH}', remote_tip)
+            overlay.run('read-tree', remote_tip)
+            report.add('overlay', 'adopted the NAS overlay history for this new checkout')
+        if not merging and stage_overlay(ws, desired):
+            overlay.run('commit', '--quiet', '--no-verify', '-m',
+                        f'chore(overlay): sync from {platform.node() or "host"}')
+            report.add('overlay', f'committed {len(desired)} tracked files as {overlay.head()[:12]}')
+        elif not merging:
+            report.add('overlay', f'no changes ({len(desired)} tracked files)')
         head = overlay.head()
-    if head and head != remote_tip:
-        overlay.run(*safe(layout['overlay']), 'push', '--quiet', 'nas',
-                    f'refs/heads/{OVERLAY_BRANCH}:refs/heads/{OVERLAY_BRANCH}')
-        report.add('overlay', f'pushed {head[:12]} to {posix(layout["overlay"])}')
-    else:
-        report.add('overlay', 'NAS overlay already up to date')
+        if remote_tip and head and remote_tip != head and not overlay.is_ancestor(remote_tip, head):
+            merged = overlay.run('merge', '--quiet', '--no-edit', f'refs/remotes/nas/{OVERLAY_BRANCH}', check=False)
+            if merged.returncode != 0:
+                conflicts = overlay.unmerged() if overlay.merging() else []
+                if not conflicts:
+                    overlay.run('merge', '--abort', check=False)
+                    report.error('overlay', 'merging the NAS overlay failed: ' +
+                                 merged.stderr.decode('utf-8', errors='replace').strip())
+                    return report
+                for path in conflicts:
+                    report.error('overlay', f'{path} changed here and on the NAS: edit it (keep the wanted lines, '
+                                            f'delete the <<<<<<< ======= >>>>>>> markers), then run sync again')
+                report.add('overlay', 'nothing was written to the NAS; the merge stays open until those files are '
+                                      'resolved')
+                return report
+            written, removed = write_back(ws.root, ws.memory_dir, ws.project_path)
+            report.add('overlay', f'merged the NAS overlay; wrote {written} and removed {removed} files in the '
+                                  f'Claude Code folders')
+            head = overlay.head()
+        if head and head != remote_tip:
+            local = scratch / 'overlay.bundle'
+            entry = make_bundle(overlay.args(), local, '--branches')
+            writes.append((unique_name(nas, manifest, 'overlay', f'overlay-{now}', '.bundle'), local,
+                           dict(entry, kind='overlay'), overlay.git_dir))
+        else:
+            report.add('overlay', 'the newest NAS overlay bundle already has this overlay')
 
-    # 2. Code repository: every branch and tag to the NAS mirror, then the configured code hosts.
-    refs = local_refs(ws.root)
-    plan, rejected = nas_push_plan(ws.root, ls_remote(layout['code']), refs)
-    for reason in rejected:
-        report.error('code→nas', reason)
-    if plan:
-        git(*safe(layout['code']), 'push', '--quiet', posix(layout['code']), *[spec for spec, _ in plan], cwd=ws.root)
-        for spec, note in plan:
-            report.add('code→nas', f'{spec.lstrip("+").split(":")[0]} ({note})')
-    else:
-        report.add('code→nas', f'all {len(refs)} branches and tags up to date')
-    head_branch = code_head_branch(ws)
-    git(f'--git-dir={posix(layout["code"])}', *safe(layout['code']), 'symbolic-ref', 'HEAD',
-        f'refs/heads/{head_branch}')
-    for name, url in remotes.items():
+        # 2. Code repository: one full bundle of every branch and tag when they changed.
+        refs = local_refs(ws.root)
+        code_rel, code_latest = nas.latest(manifest, 'code')
+        changes, rejected = ref_plan(ws.root, code_latest['refs'] if code_latest else {}, refs)
+        for reason in rejected:
+            report.error('code→nas', reason)
+        if rejected:
+            report.add('code→nas', 'no code bundle written until the refs above are fetched')
+        elif changes or not code_latest:
+            local = scratch / 'code.bundle'
+            entry = make_bundle(['-C', posix(ws.root)], local, '--branches', '--tags')
+            writes.append((unique_name(nas, manifest, 'code', f'code-{now}', '.bundle'), local,
+                           dict(entry, kind='code', head_branch=code_head_branch(ws)), ws.root))
+            for ref, note in changes:
+                report.add('code→nas', f'{ref} ({note})')
+        else:
+            report.add('code→nas', f'the newest NAS code bundle already has all {len(refs)} branches and tags')
+
+        # 3. Pinned tool downloads, by cmake/pins.json SHA-256 (single compressed archives).
+        found, unpinned = local_downloads(ws.downloads, ws.root / 'cmake' / 'pins.json')
+        tool_writes = tool_plan(manifest, found, report)
+        writes.extend(tool_writes)
+        if unpinned:
+            report.add('tools', f'{len(unpinned)} unpinned files left local: ' + ', '.join(unpinned))
+
+        # 4. Write: free space first, every file verified, then the manifest, then pruning.
+        check_free_space(nas, sum(entry['size'] for _, _, entry, _ in writes), report)
+        for rel, local, entry, bundle_repo in writes:
+            nas.write_file(rel, local, entry['sha256'], bundle_repo)
+            record = {k: v for k, v in entry.items() if k != 'path'}
+            record.update(created=created_now(), host=platform.node())
+            if entry['kind'] == 'tool' and rel in manifest['files']:
+                continue
+            manifest['files'][rel] = record
+            report.add('nas', f'wrote {rel} ({size_text(entry["size"])}), verified')
+        info = source_info(ws, remotes if push_code_remotes else code_remotes(ws)[0])
+        if writes or manifest.get('source') != info:
+            manifest['source'] = info
+            nas.write_manifest(manifest)
+        nas.prune(manifest, generations(ws), report)
+        if not writes:
+            report.add('nas', 'nothing to write; the NAS is up to date')
+
+    # 5. Code hosts (network), after the NAS is safe.
+    for name in remotes:
         push_code_remote(ws, name, report)
     if not push_code_remotes:
         report.add('code→hosts', 'skipped (--no-code-remotes)')
-
-    # 3. Pinned tool downloads, by cmake/pins.json SHA-256.
-    sync_tools(ws, layout, report)
-    write_nas_marker(layout, source_info(ws, remotes if push_code_remotes else code_remotes(ws)[0]))
     return report
 
 
-def push_code_remote(ws, remote, report):
-    git('fetch', '--quiet', remote, cwd=ws.root)
-    excluded = ws.config.get('code_remote_exclude') or []
-    spec = []
-    for ref in sorted(local_refs(ws.root, ('refs/heads',))):
-        branch = ref[len('refs/heads/'):]
-        if any(fnmatch.fnmatch(branch, pattern) for pattern in excluded):
+def tool_plan(manifest, found, report):
+    writes, merged = [], 0
+    recorded = {e['sha256']: rel for rel, e in manifest['files'].items() if e['kind'] == 'tool'}
+    for sha, entry in sorted(found.items(), key=lambda item: item[1]['file']):
+        if sha in recorded:
+            stored = manifest['files'][recorded[sha]]
+            sources = sorted(set(stored.get('sources', [])) | set(entry['sources']))
+            if sources != stored.get('sources'):
+                stored['sources'] = sources
+                merged += 1
             continue
-        reasons = remote_branch_checks(ws.root, ref, remote)
-        if reasons:
-            report.error(f'code→{remote}', f'{branch} not pushed: ' + '; '.join(reasons))
-        else:
-            spec.append(f'{ref}:{ref}')
-    spec.append('refs/tags/*:refs/tags/*')
-    result = git('push', '--porcelain', remote, *spec, cwd=ws.root, check=False)
-    for line in result.stdout.decode('utf-8', errors='replace').splitlines():
-        flag, _, rest = line.partition('\t')
-        if flag in ('!',):
-            report.error(f'code→{remote}', 'rejected ' + rest)
-        elif flag in (' ', '+', '*', '-'):
-            report.add(f'code→{remote}', 'pushed ' + rest)
-    if result.returncode != 0 and not any(line.startswith('!') for line in result.stdout.decode().splitlines()):
-        report.error(f'code→{remote}', result.stderr.decode('utf-8', errors='replace').strip())
+        rel = f'tools/{entry["file"]}'
+        if rel in manifest['files']:
+            report.error('tools', f'{rel} is recorded with another SHA-256; not overwritten')
+            continue
+        writes.append((rel, entry['path'], entry, None))
+    report.add('tools', f'{len(found)} pinned downloads here; {len(writes)} new for the NAS')
+    return writes
 
 
-def sync_tools(ws, layout, report):
-    found, unpinned = local_downloads(ws.downloads, ws.root / 'cmake' / 'pins.json')
-    stored = tools_manifest(layout['tools'])
-    copied = 0
-    for sha, entry in found.items():
-        entry['store'] = store_path(entry)
-        target = layout['tools'] / entry['store']
-        if not (target.is_file() and target.stat().st_size == entry['size'] and sha in stored):
-            copy_verified(entry['path'], target, sha)
-            copied += 1
-        previous = stored.get(sha, {})
-        entry['sources'] = sorted(set(previous.get('sources', [])) | set(entry['sources']))
-        stored[sha] = entry
-    write_tools_manifest(layout['tools'], stored)
-    report.add('tools', f'{len(found)} pinned downloads ({copied} copied); {len(stored)} on the NAS')
-    if unpinned:
-        report.add('tools', f'{len(unpinned)} unpinned files left local: ' + ', '.join(unpinned))
+def preview_overlay_bundle(ws, desired, scratch):
+    """Size of the overlay bundle a sync would write: the desired tree committed in a scratch copy."""
+    repo = Path(scratch) / 'preview.git'
+    git('init', '--quiet', '--bare', f'--initial-branch={OVERLAY_BRANCH}', posix(repo))
+    head = ws.overlay.head() if ws.overlay.exists() else None
+    if head:
+        git(f'--git-dir={posix(repo)}', 'fetch', '--quiet', posix(ws.overlay.git_dir),
+            f'+refs/heads/{OVERLAY_BRANCH}:refs/heads/{OVERLAY_BRANCH}')
+    stream = [b'commit refs/heads/main\ncommitter Preview <preview@invalid> 0 +0000\ndata 7\npreview\n']
+    if head:
+        stream.append(b'from ' + head.encode() + b'\n')
+    stream.append(b'deleteall\n')
+    for path, data in sorted(desired.items()):
+        stream.append(b'M 100644 inline ' + path.encode('utf-8') + b'\ndata %d\n' % len(data) + data + b'\n')
+    git(f'--git-dir={posix(repo)}', 'fast-import', '--quiet', data=b''.join(stream))
+    return make_bundle([f'--git-dir={posix(repo)}'], Path(scratch) / 'overlay.bundle', '--branches')
 
 
-def sync_preview(ws, desired, layout, nas_ready, remotes, report):
+def sync_preview(ws, nas, desired, remotes, report):
+    """Dry run: exactly the files a sync would write to the NAS, with their sizes; writes nothing there."""
+    manifest = nas.manifest()
     overlay_tree = ws.overlay.tree() if ws.overlay.exists() else {}
     added, changed, removed = describe_changes(overlay_tree, desired)
-    report.add('dry-run', f'overlay: {len(desired)} files; {len(added)} new, {len(changed)} changed, '
+    report.add('dry-run', f'overlay: {len(desired)} tracked files; {len(added)} new, {len(changed)} changed, '
                           f'{len(removed)} removed since the last overlay commit')
-    for path in (added + changed + removed)[:20]:
-        report.add('dry-run', '  ' + path)
-    if not nas_ready:
-        report.add('dry-run', f'NAS repositories would be created under {posix(ws.nas)}')
-    refs = local_refs(ws.root)
-    nas_refs = ls_remote(layout['code']) if nas_ready else {}
-    plan, rejected = nas_push_plan(ws.root, nas_refs, refs)
-    report.add('dry-run', f'code→nas: {len(plan)} of {len(refs)} branches/tags would be pushed')
-    for reason in rejected:
-        report.error('dry-run', 'code→nas ' + reason)
+    writes = []
+    now = stamp()
+    with tempfile.TemporaryDirectory(prefix='crd-preview-') as scratch:
+        latest_rel, latest = nas.latest(manifest, 'overlay')
+        if added or changed or removed or not latest:
+            entry = preview_overlay_bundle(ws, desired, scratch)
+            writes.append((unique_name(nas, manifest, 'overlay', f'overlay-{now}', '.bundle'), entry['size']))
+            if latest:
+                report.add('dry-run', 'a sync also merges the newest NAS overlay first when another machine wrote it')
+        refs = local_refs(ws.root)
+        code_rel, code_latest = nas.latest(manifest, 'code')
+        changes, rejected = ref_plan(ws.root, code_latest['refs'] if code_latest else {}, refs)
+        for reason in rejected:
+            report.error('dry-run', 'code→nas ' + reason)
+        if not rejected and (changes or not code_latest):
+            entry = make_bundle(['-C', posix(ws.root)], Path(scratch) / 'code.bundle', '--branches',
+                                '--tags')
+            writes.append((unique_name(nas, manifest, 'code', f'code-{now}', '.bundle'), entry['size']))
+            report.add('dry-run', f'code: {len(changes)} of {len(refs)} branches and tags changed since the newest '
+                                  f'NAS code bundle')
+    found, unpinned = local_downloads(ws.downloads, ws.root / 'cmake' / 'pins.json')
+    for rel, _, entry, _ in tool_plan(manifest, found, Report()):
+        writes.append((rel, entry['size']))
+    planned = sum(size for _, size in writes)
+    for rel, size in writes:
+        report.add('dry-run', f'would write {posix(nas.root)}/{rel}  {size_text(size)}')
+    if writes:
+        report.add('dry-run', f'would write {posix(nas.root)}/{MANIFEST_NAME}  (index, replaced atomically)')
+    future = json.loads(json.dumps(manifest))
+    for rel, size in writes:
+        kind = rel.split('/')[0].rstrip('s') if not rel.startswith('tools/') else 'tool'
+        future['files'][rel] = {'kind': kind, 'created': '9999'}
+    for kind in ('code', 'overlay', 'export'):
+        for rel in nas.prune_plan(future, kind, generations(ws)):
+            report.add('dry-run', f'would prune {posix(nas.root)}/{rel} (recorded, older than the newest '
+                                  f'{generations(ws)})')
+    free = shutil.disk_usage(nas.root).free
+    report.add('dry-run', f'total {size_text(planned)}; NAS free {size_text(free)} (needs twice the total)')
+    if planned and free < 2 * planned:
+        report.error('dry-run', 'not enough free space on the NAS share')
+    report.add('dry-run', f'{len(unpinned)} unpinned downloads stay local')
     for name in remotes:
         report.add('dry-run', f'code→{name}: branches except {ws.config.get("code_remote_exclude")} and all tags '
                               f'(checked for agent files, transcripts and secrets first)')
-    found, unpinned = local_downloads(ws.downloads, ws.root / 'cmake' / 'pins.json')
-    stored = tools_manifest(layout['tools']) if layout['tools'].is_dir() else {}
-    report.add('dry-run', f'tools: {len([s for s in found if s not in stored])} of {len(found)} pinned downloads '
-                          f'would be copied; {len(unpinned)} unpinned stay local')
     report.add('dry-run', 'nothing was written')
     return report
 
@@ -827,9 +1147,14 @@ def sync_preview(ws, desired, layout, nas_ready, remotes, report):
 # ---------------------------------------------------------------------------------------------- status
 
 def status(ws, offline=False, report=None):
+    """What differs between this checkout, the NAS and the code hosts. Reads only."""
     report = report or Report()
     differences = 0
-    desired, copies, problems = overlay_plan(ws)
+    merging = ws.overlay.exists() and ws.overlay.merging()
+    if merging:
+        differences += 1
+        report.add('overlay', 'a merge with the NAS overlay is open: ' + ', '.join(ws.overlay.unmerged()))
+    desired, copies, problems = overlay_plan(ws, from_work_tree=merging)
     for problem in problems:
         report.error('refused', problem)
     overlay_tree = ws.overlay.tree() if ws.overlay.exists() else {}
@@ -844,26 +1169,30 @@ def status(ws, offline=False, report=None):
             report.add('overlay', '  ' + path)
     else:
         report.add('overlay', f'working copy matches the last overlay commit ({len(desired)} files)')
-    layout = nas_layout(ws.nas)
-    if not (layout['code'] / 'HEAD').is_file():
-        report.add('nas', f'no NAS repositories at {posix(ws.nas)} yet')
-        return report, differences + 1
+    nas = Nas(ws.nas)
+    manifest = nas.manifest()
+    holder = nas.lock_holder()
+    if holder:
+        report.add('nas', f'locked by {holder.get("host")} pid {holder.get("pid")} since {holder.get("started")}')
     head = ws.overlay.head() if ws.overlay.exists() else None
-    nas_overlay = ls_remote(layout['overlay']).get(f'refs/heads/{OVERLAY_BRANCH}')
+    _, latest = nas.latest(manifest, 'overlay')
+    nas_overlay = latest['refs'].get(f'refs/heads/{OVERLAY_BRANCH}') if latest else None
     if nas_overlay != head:
         differences += 1
-        known = head and nas_overlay and ws.overlay.has_commit(nas_overlay) and ws.overlay.is_ancestor(
-            nas_overlay, head)
-        report.add('overlay', 'NAS overlay is behind this checkout' if known else
-                   'NAS overlay has commits this checkout lacks (sync merges them)')
+        ahead = head and nas_overlay and ws.overlay.has_commit(nas_overlay) and ws.overlay.is_ancestor(nas_overlay,
+                                                                                                     head)
+        report.add('overlay', 'the NAS overlay is behind this checkout' if ahead or not nas_overlay else
+                   'the NAS overlay has commits this checkout lacks (sync merges them)')
     else:
-        report.add('overlay', 'NAS overlay matches this checkout')
+        report.add('overlay', 'the newest NAS overlay bundle matches this checkout')
     refs = local_refs(ws.root)
-    plan, rejected = nas_push_plan(ws.root, ls_remote(layout['code']), refs)
-    differences += len(plan) + len(rejected)
-    report.add('code→nas', f'{len(plan)} branches/tags to push' if plan else 'NAS mirror has every branch and tag')
-    for spec, note in plan:
-        report.add('code→nas', f'  {spec.lstrip("+").split(":")[0]} ({note})')
+    _, code_latest = nas.latest(manifest, 'code')
+    changes, rejected = ref_plan(ws.root, code_latest['refs'] if code_latest else {}, refs)
+    differences += len(changes) + len(rejected) + (0 if code_latest else 1)
+    report.add('code→nas', f'{len(changes)} branches/tags differ from the newest NAS code bundle' if changes or
+               not code_latest else 'the newest NAS code bundle has every branch and tag')
+    for ref, note in changes:
+        report.add('code→nas', f'  {ref} ({note})')
     for reason in rejected:
         report.add('code→nas', '  ' + reason)
     if not offline:
@@ -879,11 +1208,11 @@ def status(ws, offline=False, report=None):
                     differences += 1
                     report.add(f'code→{name}', f'  {ref} differs')
     found, _ = local_downloads(ws.downloads, ws.root / 'cmake' / 'pins.json')
-    stored = tools_manifest(layout['tools'])
+    stored = {e['sha256'] for e in manifest['files'].values() if e['kind'] == 'tool'}
     missing = [e['file'] for s, e in found.items() if s not in stored]
     differences += len(missing)
     report.add('tools', f'{len(missing)} pinned downloads not on the NAS' if missing else
-               f'NAS has all {len(found)} local pinned downloads ({len(stored)} stored)')
+               f'the NAS has all {len(found)} local pinned downloads ({len(stored)} stored)')
     return report, differences
 
 
@@ -903,13 +1232,13 @@ def confidential_paths(ws):
     return sorted(set(marked))
 
 
-def export(ws, output_dir=None, report=None, today=None):
+def export(ws, output_dir=None, break_lock=False, report=None, today=None):
+    """One restorable archive, built on local disk; to the NAS as one verified file unless output_dir is given."""
     report = report or Report()
     desired, _, problems = overlay_plan(ws)
     for problem in problems:
         report.error('refused', problem)
-    marked = confidential_paths(ws)
-    for path in marked:
+    for path in confidential_paths(ws):
         report.error('refused', f'{path}: marked confidential ({CONFIDENTIAL_MARKER}); exports never carry it')
     tips = sorted(set(local_refs(ws.root).values()))
     grep = git('grep', '-I', '-l', '-P', '|'.join(f'(?:{p})' for p in SECRET_PATTERNS.values()), *tips, '--',
@@ -925,70 +1254,83 @@ def export(ws, output_dir=None, report=None, today=None):
         report.error('export', 'agent files changed since the last overlay commit; run sync first')
     if report.errors:
         return report, None
-    stamp = (today or datetime.date.today()).strftime('%Y%m%d')
-    target_dir = Path(output_dir) if output_dir else ensure_nas(ws.nas)['exports']
-    target_dir.mkdir(parents=True, exist_ok=True)
-    name, counter = f'crd-workspace-{stamp}.zip', 2
-    while (target_dir / name).exists():
-        name, counter = f'crd-workspace-{stamp}-{counter}.zip', counter + 1
-    archive = target_dir / name
+    nas = None if output_dir else Nas(ws.nas)
     with tempfile.TemporaryDirectory(prefix='crd-export-') as scratch:
         scratch = Path(scratch)
-        git('bundle', 'create', '--quiet', posix(scratch / 'code.bundle'), '--branches', '--tags', cwd=ws.root)
-        ws.overlay.run('bundle', 'create', '--quiet', posix(scratch / 'overlay.bundle'), '--branches')
-        members = {'code.bundle': scratch / 'code.bundle', 'overlay.bundle': scratch / 'overlay.bundle'}
-        found, _ = local_downloads(ws.downloads, ws.root / 'cmake' / 'pins.json')
-        try:
-            nas_tools = nas_layout(ws.nas)['tools']
-        except WorkspaceError:
-            nas_tools = None
-        stored = tools_manifest(nas_tools) if nas_tools and nas_tools.is_dir() else {}
+        build = scratch / 'build'
+        build.mkdir()
+        members = {}
+        make_bundle(['-C', posix(ws.root)], build / 'code.bundle', '--branches', '--tags')
+        make_bundle(ws.overlay.args(), build / 'overlay.bundle', '--branches')
+        members['code.bundle'] = build / 'code.bundle'
+        members['overlay.bundle'] = build / 'overlay.bundle'
         tools = {}
-        for sha, entry in stored.items():
-            if (nas_tools / entry['store']).is_file():
-                tools[sha] = dict(entry, path=nas_tools / entry['store'])
+        found, _ = local_downloads(ws.downloads, ws.root / 'cmake' / 'pins.json')
         for sha, entry in found.items():
-            entry['store'] = store_path(entry)
-            if sha in tools:
-                tools[sha]['sources'] = sorted(set(tools[sha]['sources']) | set(entry['sources']))
-            else:
-                tools[sha] = entry
+            tools[sha] = dict(entry, store=f'tools/{entry["file"]}')
+        if nas is not None:
+            manifest = nas.manifest()
+            for rel, entry in manifest['files'].items():
+                if entry['kind'] == 'tool' and entry['sha256'] not in tools:
+                    tools[entry['sha256']] = dict(entry, store=rel, path=nas.verified(rel, entry))
         for entry in tools.values():
-            members['tools/' + entry['store']] = entry['path']
-        source = Path(__file__).read_bytes()
-        (scratch / 'workspace.py').write_bytes(source)
-        (scratch / '__main__.py').write_text(MAIN_SOURCE, encoding='utf-8', newline='\n')
-        (scratch / 'RESTORE.txt').write_text(RESTORE_TEXT.format(name=name), encoding='utf-8', newline='\n')
+            members[entry['store']] = entry['path']
+        (build / 'workspace.py').write_bytes(Path(__file__).read_bytes())
+        (build / '__main__.py').write_text(MAIN_SOURCE, encoding='utf-8', newline='\n')
+        stamp_text = (today or datetime.date.today()).strftime('%Y%m%d')
+        if nas is not None:
+            rel = unique_name(nas, manifest, 'exports', f'crd-workspace-{stamp_text}', '.zip')
+        else:
+            rel = f'crd-workspace-{stamp_text}.zip'
+            counter = 2
+            while (Path(output_dir) / rel).exists():
+                rel, counter = f'crd-workspace-{stamp_text}-{counter}.zip', counter + 1
+        name = PurePosixPath(rel).name
+        (build / 'RESTORE.txt').write_text(RESTORE_TEXT.format(name=name), encoding='utf-8', newline='\n')
         for extra in ('workspace.py', '__main__.py', 'RESTORE.txt'):
-            members[extra] = scratch / extra
+            members[extra] = build / extra
         remotes, _ = code_remotes(ws)
-        manifest = {'schema': SCHEMA + '#export', 'created': datetime.datetime.now(datetime.UTC).isoformat(
-                    timespec='seconds'), 'host': platform.node(), 'source': source_info(ws, remotes),
-                    'overlay_head': ws.overlay.head(),
-                    'tools': [{k: v for k, v in e.items() if k != 'path'} for e in tools.values()],
-                    'files': {}}
+        manifest_doc = {'schema': SCHEMA + '#export', 'created': datetime.datetime.now(datetime.UTC).isoformat(
+                        timespec='seconds'), 'host': platform.node(), 'source': source_info(ws, remotes),
+                        'overlay_head': ws.overlay.head(),
+                        'tools': [{k: v for k, v in e.items() if k != 'path'} for e in tools.values()],
+                        'files': {}}
         for member, path in sorted(members.items()):
-            manifest['files'][member] = {'size': Path(path).stat().st_size, 'sha256': file_sha256(path)}
-        (scratch / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8', newline='\n')
-        members['manifest.json'] = scratch / 'manifest.json'
+            manifest_doc['files'][member] = {'size': Path(path).stat().st_size, 'sha256': file_sha256(path)}
+        (build / 'manifest.json').write_text(json.dumps(manifest_doc, indent=2) + '\n', encoding='utf-8',
+                                             newline='\n')
+        members['manifest.json'] = build / 'manifest.json'
         sums = ''.join(f'{file_sha256(members[m])}  {m}\n' for m in sorted(members))
-        (scratch / 'SHA256SUMS').write_text(sums, encoding='utf-8', newline='\n')
-        members['SHA256SUMS'] = scratch / 'SHA256SUMS'
-        partial = archive.with_name(archive.name + '.partial')
-        with zipfile.ZipFile(partial, 'w', allowZip64=True) as bundle:
-            for member in ['__main__.py', 'workspace.py', 'RESTORE.txt', 'manifest.json', 'SHA256SUMS'] + sorted(
-                    m for m in members if m not in ('__main__.py', 'workspace.py', 'RESTORE.txt', 'manifest.json',
-                                                    'SHA256SUMS')):
+        (build / 'SHA256SUMS').write_text(sums, encoding='utf-8', newline='\n')
+        members['SHA256SUMS'] = build / 'SHA256SUMS'
+        archive = scratch / name
+        first = ['__main__.py', 'workspace.py', 'RESTORE.txt', 'manifest.json', 'SHA256SUMS']
+        with zipfile.ZipFile(archive, 'w', allowZip64=True) as bundle:
+            for member in first + sorted(m for m in members if m not in first):
                 method = zipfile.ZIP_STORED if member.lower().endswith(STORED) else zipfile.ZIP_DEFLATED
                 bundle.write(members[member], member, compress_type=method)
-        os.replace(partial, archive)
-    digest = file_sha256(archive)
-    archive.with_name(archive.name + '.sha256').write_text(f'{digest}  {archive.name}\n', encoding='utf-8',
-                                                           newline='\n')
-    report.add('export', f'{posix(archive)} ({archive.stat().st_size / 1048576:.1f} MiB, {len(members)} members, '
-                         f'{len(tools)} pinned downloads)')
+        if verify_archive(archive).errors:
+            raise WorkspaceError('the archive built on local disk failed its own verification')
+        digest = file_sha256(archive)
+        size = archive.stat().st_size
+        if nas is None:
+            target = Path(output_dir) / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            copy_verified(archive, target, digest)
+        else:
+            with nas.lock(report, break_lock):
+                manifest = nas.manifest()
+                check_free_space(nas, size, report)
+                nas.write_file(rel, archive, digest)
+                manifest['files'][rel] = {'kind': 'export', 'size': size, 'sha256': digest, 'created': created_now(),
+                                          'host': platform.node()}
+                nas.write_manifest(manifest)
+                nas.prune(manifest, generations(ws), report)
+            target = nas.root / rel
+    report.add('export', f'{posix(target)} ({size_text(size)}, {len(members)} members, {len(tools)} pinned '
+                         f'downloads), verified')
     report.add('export', f'SHA-256 {digest}')
-    return report, archive
+    return report, target
 
 
 MAIN_SOURCE = '''"""Run this archive with Python: `python <archive>.zip restore <folder>` (see RESTORE.txt)."""
@@ -1005,7 +1347,7 @@ This file holds the Cerid code repository and the agent overlay with full histor
 pinned tool downloads and this restore program. You need Git and Python 3.12 or newer.
 
   1. Check the archive:   python {name} verify
-  2. Restore it:          python {name} restore <empty or new folder>
+  2. Restore it:          python {name} restore <new or empty folder>
   3. Follow the "next steps" it prints.
 
 If your Python cannot run the archive directly, unzip it and run:  python workspace.py restore --from {name} <folder>
@@ -1041,7 +1383,7 @@ def verify_archive(path, report=None):
 
 
 class Source:
-    """A restore source: an extracted export archive or the NAS folder."""
+    """A restore source, opened read-only: an export archive (extracted locally) or the NAS folder."""
 
     def __init__(self, location, scratch):
         location = Path(location)
@@ -1051,26 +1393,36 @@ class Source:
                 raise WorkspaceError('archive failed verification: ' + '; '.join(report.lines))
             with zipfile.ZipFile(location) as bundle:
                 bundle.extractall(scratch)
-            self.base = Path(scratch)
-            manifest = json.loads((self.base / 'manifest.json').read_text(encoding='utf-8'))
+            base = Path(scratch)
+            manifest = json.loads((base / 'manifest.json').read_text(encoding='utf-8'))
             self.info = manifest['source']
-            self.code = self.base / 'code.bundle'
-            self.overlay = self.base / 'overlay.bundle'
-            self.tools = {e['sha256']: dict(e, path=self.base / 'tools' / e['store']) for e in manifest['tools']}
-            self.nas = None
-        else:
-            layout = nas_layout(location)
-            if not layout['marker'].is_file():
-                raise WorkspaceError(f'{location} is neither an export archive nor a NAS workspace folder')
-            self.info = json.loads(layout['marker'].read_text(encoding='utf-8'))['source']
-            self.code, self.overlay = layout['code'], layout['overlay']
-            self.tools = {sha: dict(e, path=layout['tools'] / e['store'])
-                          for sha, e in tools_manifest(layout['tools']).items()}
-            self.nas = location
+            self.code = base / 'code.bundle'
+            self.overlay = base / 'overlay.bundle'
+            self.tools = {e['sha256']: dict(e, path=base / e['store']) for e in manifest['tools']}
+            self.described = f'archive {location.name}'
+            return
+        nas = Nas(location)
+        holder = nas.lock_holder()
+        if holder:
+            raise WorkspaceError(f'{holder.get("host")} is writing to the NAS folder (since {holder.get("started")}); '
+                                 f'restore after that sync finishes')
+        manifest = nas.manifest()
+        code_rel, code = nas.latest(manifest, 'code')
+        overlay_rel, overlay = nas.latest(manifest, 'overlay')
+        if not code or not overlay:
+            raise WorkspaceError(f'{location} has no code or overlay bundle recorded in {MANIFEST_NAME}')
+        self.info = dict(manifest.get('source', {}))
+        self.info['head_branch'] = code.get('head_branch') or self.info.get('head_branch')
+        self.code = nas.verified(code_rel, code)
+        self.overlay = nas.verified(overlay_rel, overlay)
+        self.tools = {e['sha256']: dict(e, path=nas.path(rel)) for rel, e in manifest['files'].items()
+                      if e['kind'] == 'tool'}
+        self.described = f'NAS {code_rel} and {overlay_rel}'
 
 
 def restore(location, destination, claude_dir=None, downloads_dir=None, memory_dir=None, replace=False,
             report=None):
+    """Recreate the workspace in a new or empty folder. The source (archive or NAS) is only read."""
     report = report or Report()
     destination = Path(destination).resolve()
     if destination.exists() and any(destination.iterdir()):
@@ -1082,11 +1434,15 @@ def restore(location, destination, claude_dir=None, downloads_dir=None, memory_d
                              f'replace it')
     with tempfile.TemporaryDirectory(prefix='crd-restore-') as scratch:
         source = Source(location, scratch)
+        report.add('source', source.described)
         destination.mkdir(parents=True, exist_ok=True)
         # Code repository: every branch and tag, then the default branch checked out and the host remotes.
         git('init', '--quiet', posix(destination))
-        git(*safe(source.code), 'fetch', '--quiet', '--update-head-ok', posix(source.code),
-            '+refs/heads/*:refs/heads/*', '+refs/tags/*:refs/tags/*', cwd=destination)
+        verify = git('bundle', 'verify', '--quiet', posix(source.code), cwd=destination, check=False)
+        if verify.returncode:
+            raise WorkspaceError('the code bundle failed git bundle verify: ' + verify.stderr.decode(errors='replace'))
+        git('fetch', '--quiet', '--update-head-ok', posix(source.code), '+refs/heads/*:refs/heads/*',
+            '+refs/tags/*:refs/tags/*', cwd=destination)
         head = source.info.get('head_branch') or 'main'
         git('symbolic-ref', 'HEAD', f'refs/heads/{head}', cwd=destination)
         git('reset', '--quiet', '--hard', cwd=destination)
@@ -1098,16 +1454,10 @@ def restore(location, destination, claude_dir=None, downloads_dir=None, memory_d
                            f'{out("rev-parse", "--short", "HEAD", cwd=destination).strip()}')
         # Agent overlay: same work tree, its own Git directory.
         overlay = Overlay(destination)
-        git(*safe(source.overlay), 'clone', '--quiet', '--bare', posix(source.overlay), posix(overlay.git_dir))
-        git(f'--git-dir={posix(overlay.git_dir)}', 'remote', 'remove', 'origin')
-        for key, value in (('core.bare', 'false'), ('core.worktree', '..'), ('core.autocrlf', 'false'),
-                           ('core.safecrlf', 'false'), ('status.showUntrackedFiles', 'no')):
-            git(f'--git-dir={posix(overlay.git_dir)}', 'config', key, value)
-        (overlay.git_dir / 'info').mkdir(exist_ok=True)
-        (overlay.git_dir / 'info' / 'exclude').write_text('*\n', encoding='utf-8', newline='\n')
+        overlay.init()
+        overlay.run('fetch', '--quiet', '--update-head-ok', posix(source.overlay),
+                    f'+refs/heads/{OVERLAY_BRANCH}:refs/heads/{OVERLAY_BRANCH}')
         overlay.run('reset', '--quiet', '--hard', OVERLAY_BRANCH)
-        if source.nas:
-            overlay.set_remote(source.nas / 'overlay.git')
         report.add('overlay', f'{len(overlay.tree())} agent files restored at {overlay.head()[:12]}')
         # Claude Code memory and workflow scripts for this folder path on this machine.
         if memory.is_dir() and any(memory.iterdir()):
@@ -1116,7 +1466,7 @@ def restore(location, destination, claude_dir=None, downloads_dir=None, memory_d
             report.add('memory', f'previous memory moved to {backup}')
         written, _ = write_back(destination, memory, destination, replace=True)
         report.add('memory', f'{written} files placed under {memory.parent} (key {claude_project_key(destination)})')
-        # Pinned tool downloads, verified by SHA-256.
+        # Pinned tool downloads, verified by SHA-256 on the local copy.
         downloads = Path(downloads_dir) if downloads_dir else default_downloads_dir()
         placed = 0
         for sha, entry in source.tools.items():
@@ -1148,16 +1498,18 @@ def build_parser():
     parser.add_argument('--memory-dir', type=Path, help='explicit Claude Code memory folder for this checkout')
     parser.add_argument('--downloads-dir', type=Path, help='pinned download folder (default: ~/.cerid/downloads)')
     commands = parser.add_subparsers(dest='command', required=True)
-    sync_parser = commands.add_parser('sync', help='commit and push the overlay and code to the NAS and code hosts')
+    sync_parser = commands.add_parser('sync', help='commit the overlay; write verified bundles to the NAS; push code')
     sync_parser.add_argument('--nas', type=Path)
-    sync_parser.add_argument('--dry-run', action='store_true', help='report the plan; write nothing')
-    sync_parser.add_argument('--no-code-remotes', action='store_true', help='push code only to the NAS')
+    sync_parser.add_argument('--dry-run', action='store_true', help='list every file it would write; write nothing')
+    sync_parser.add_argument('--no-code-remotes', action='store_true', help='leave the code hosts alone')
+    sync_parser.add_argument('--break-lock', action='store_true', help='remove another machine\'s NAS lock first')
     status_parser = commands.add_parser('status', help='what differs between this checkout, the NAS and the hosts')
     status_parser.add_argument('--nas', type=Path)
     status_parser.add_argument('--offline', action='store_true', help='do not contact the code hosts')
     export_parser = commands.add_parser('export', help='write one restorable archive (default: <NAS>/exports)')
     export_parser.add_argument('--nas', type=Path)
-    export_parser.add_argument('--output-dir', type=Path)
+    export_parser.add_argument('--output-dir', type=Path, help='write the archive here instead of the NAS')
+    export_parser.add_argument('--break-lock', action='store_true')
     restore_parser = commands.add_parser('restore', help='recreate the workspace from an archive or the NAS')
     restore_parser.add_argument('--from', dest='source', type=Path, help='export archive or NAS folder')
     restore_parser.add_argument('--replace', action='store_true', help='back up and replace existing memory')
@@ -1189,15 +1541,14 @@ def main(argv=None, archive=None):
             if args.command == 'overlay':
                 if not ws.overlay.exists():
                     raise WorkspaceError('no overlay repository here; run sync or restore first')
-                return subprocess.run(['git', f'--git-dir={posix(ws.overlay.git_dir)}',
-                                       f'--work-tree={posix(ws.root)}', *args.args], cwd=ws.root).returncode
+                return subprocess.run(['git', *ws.overlay.args(), *args.args], cwd=ws.root).returncode
             if args.command == 'sync':
-                report = sync(ws, args.dry_run, not args.no_code_remotes)
+                report = sync(ws, args.dry_run, not args.no_code_remotes, args.break_lock)
             elif args.command == 'status':
                 report, differences = status(ws, args.offline)
                 report.add('status', 'in sync' if not differences else f'{differences} difference(s)')
             else:
-                report, _ = export(ws, args.output_dir)
+                report, _ = export(ws, args.output_dir, args.break_lock)
     except WorkspaceError as error:
         print(f'ERROR: {error}', file=sys.stderr)
         return 1
