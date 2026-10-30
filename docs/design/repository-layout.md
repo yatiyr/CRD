@@ -76,8 +76,12 @@ repository guard enforce that byte-stable authoring contract. Write scratch expe
 scripts in `scripts/` and measurement evidence in `docs/bench/`. The CI platform (device registry, planner,
 executors, operator command and dashboard; [ADR-0135](../decisions/0135-cerid-ci-platform.md)) lives in `ci/`; its
 contract tests stay with the other tooling tests in `scripts/`. Do not delete a harness because its name is old.
-Local SDKs, licensed reference dependencies, compiler output and IDE/user caches remain ignored. Agent entry files
-are portable project documentation and must remain visible to Git. Do not blanket-ignore source asset formats.
+Local SDKs, licensed reference dependencies, compiler output and IDE/user caches remain ignored. Every document,
+the agent entry documents included (AGENTS.md, MEMORY.md, context.md, START_HERE.md), is portable project
+documentation and must remain visible to Git. Tool-specific agent files (CLAUDE.md, CLAUDE.local.md, opencode.json,
+.mcp.json, `.claude/`, `.codex/`, `.agents/`, `.agent/`, `.agent-overlay/`) are ignored here and kept by the NAS-only
+agent overlay ([ADR-0136](../decisions/0136-workspace-overlay.md)); `check-repository.py` fails if one is tracked
+again. Do not blanket-ignore source asset formats.
 
 Deletion requires inspected provenance and preservation of unique content. Historical source excerpts and dated
 measurements retain their original meaning; source links route to the current locations. A cleanup manifest records

@@ -24,25 +24,25 @@ Every human/agent starts at [START_HERE](../START_HERE.md). [Context](../context
 | Cross-domain qualification and task closure | [Quality contract](design/system-quality-contract.md) |
 | Source owner, dependencies, public API | [Systems/source map](systems/README.md) |
 | Contribute a module, fix, asset/program or build change; publication handoff | [Contribution routes](CONTRIBUTING.md) |
+| Agent files, NAS sync, a new machine | [Workspace sync](recipes/workspace-sync.md) |
 | Specific implementation plan or decision | Row's link; reverse lookup in [design](design/README.md) or [ADRs](decisions/README.md) |
 | Prior lesson or matching failure | [MEMORY](../MEMORY.md); query one record |
 | What actually ran or was measured | Linked [session](sessions/), [benchmark](bench/README.md) or [recipe](recipes/README.md) |
 | Old requirements or dated implementation examples | [Archive](archive/README.md); phase/system pointers preserve their route |
 
-Useful commands from the repository root:
+Commands (repository root):
 
 ```powershell
 python scripts/check-master-plan.py --next
 python scripts/check-master-plan.py --slice RAH-1
 python scripts/check-master-plan.py --find reload
-python scripts/check-master-plan.py --find A24
 python scripts/check-master-plan.py --memory stale_exe
 python scripts/check-master-plan.py
 ```
 
 Queries read the same table. The validator checks links, IDs/dependencies, completion evidence, size budgets and
 [order](ROADMAP.md#strict-sequential-execution): context is the earliest available work; CI-only waits stay visible
-without stopping it. No open work is silently skipped. Passing proves documentation structure, not engine correctness.
+without stopping it. Passing proves documentation structure, not engine correctness.
 
 ## Start a slice
 

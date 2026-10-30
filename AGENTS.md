@@ -6,9 +6,9 @@
 **Purpose:** build Cerid as a modular, authorable C++20 engine/application substrate. Real-time and offline
 rendering, games, engineering tools and later scientific/creative applications share public modules.
 
-## Start here — same process for every tool or model
+## Start here — one process for every tool
 
-Universal entry: [START_HERE](START_HERE.md). It routes the same rules and single plan for every agent.
+Universal entry: [START_HERE](START_HERE.md).
 
 1. Read this file, [PRINCIPLES](docs/PRINCIPLES.md), [SANITY](docs/SANITY.md) and [MEMORY](MEMORY.md).
 2. Read [context](context.md) for the current pointer. Find that exact ID in [ROADMAP](docs/ROADMAP.md).
@@ -17,8 +17,9 @@ Universal entry: [START_HERE](START_HERE.md). It routes the same rules and singl
    also read [KERNEL-CRUSH-MANDATE](docs/KERNEL-CRUSH-MANDATE.md) and [crush playbook](docs/hints/crush-playbook.md).
 5. State the task's purpose, exact slice, full deliverable and verification scope before acting.
 
-Continue within the user's current request and existing authorization; do not ask again merely because an old session ritual says to. Ask when scope/requirements
-are genuinely unresolved or an explicit design gate is still unaccepted. Never invent approval or tool results.
+Continue within the user's current request and authorization; an old session ritual is no reason to ask again.
+Ask when scope/requirements are genuinely unresolved or an explicit design gate is still unaccepted. Never invent
+approval or tool results.
 
 ## One owner for each fact
 
@@ -26,7 +27,7 @@ are genuinely unresolved or an explicit design gate is still unaccepted. Never i
   an owning row there. Only context carries the current pointer; it does not duplicate row status.
 - ADRs and design notes define contracts. Source code determines implementation facts. Sessions, benches,
   recipes and archived plans preserve dated evidence. Old Next lists/status/loop grants have no live authority.
-- Read only the active contract and relevant evidence unless the user requests a broad audit. Do not load whole
+- Read only the active contract and relevant evidence unless the user requests a broad audit, never whole
   archives on entry. [Documentation workflow](docs/README.md) explains lookup, bug handling and close-out.
 - If sources conflict: report the exact conflict, follow the latest applicable user decision, and correct the
   stale pointer. An unaccepted proposal is not an accepted decision. Historical measurements are never rewritten.
@@ -37,7 +38,7 @@ are genuinely unresolved or an explicit design gate is still unaccepted. Never i
   Record CI-only waits as Needs CI and continue available work; never close or drop the pending gate. The
   [sequence rule](docs/ROADMAP.md#strict-sequential-execution) binds every agent and loop.
 - Re-anchor to the task's purpose at every prompt. Never silently narrow a slice, drop an inherited requirement,
-  weaken its tests or replace the requested quality bar with a smaller feature. Ask before a real scope reduction.
+  weaken its tests or lower the requested quality bar. Ask before a real scope reduction.
 - **Everything executable is an authorable asset.** Follow PRINCIPLES' exact form and deletion requirements.
   A shipped algorithm hidden in a C++ graph builder violates the purpose even if the pixels look correct.
 - Reuse before implementing: search public APIs, implementations and actual consumers. Extend the owning module;
@@ -48,8 +49,8 @@ are genuinely unresolved or an explicit design gate is still unaccepted. Never i
   retain unique source/recipes before deletion. Never restore unrelated files to HEAD to simplify a diff.
 - Work directly; do not fork/delegate to subagents (standing user instruction). Seek the `advisor` for non-trivial
   implementation plans when that capability exists. If unavailable, record it honestly; never claim a review ran.
-- Keep useful progress updates. Describe facts, evidence and uncertainty plainly. Do not call something broken
-  until the harness is verified (SANITY #11). A source concern is not a reproduced runtime failure.
+- Describe facts, evidence and uncertainty plainly. Do not call something broken until the harness is
+  verified (SANITY #11). A source concern is not a reproduced runtime failure.
 - Settled substrate follow-ons with a real consumer and bounded gates ship with that slice. Speculative design
   waits for its consumer as an explicit ROADMAP row; it is never silently discarded.
 - Prefer lifecycle hooks over cleanup calls consumers must remember. A stub/displayed field is not integration:
@@ -84,6 +85,8 @@ are genuinely unresolved or an explicit design gate is still unaccepted. Never i
 
 - **Never run `git commit` or `git push`.** The user commits. Propose a Conventional Commits message without any
   AI co-author trailer. Do not bypass hooks/signing; solve the underlying issue.
+- Agent files (CLAUDE.md, opencode.json, `.claude/`, `.codex/`, memory) live only in the NAS
+  [overlay](docs/recipes/workspace-sync.md); documents stay code.
 - Windows uses PowerShell. Use `rg` for searches, UTF-8 for text, absolute paths for executables, and verify
   deletion/move targets remain inside the intended directory. Never overwrite HOME/CODEX_HOME variables.
 - Source/project structure changes use the [synchronizer contract](docs/design/project-structure-sync.md).

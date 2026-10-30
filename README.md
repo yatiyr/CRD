@@ -61,6 +61,13 @@ full CHIR, UI widgets or CR-D007 have shipped. [Module inventory](docs/systems/R
 Use [BUILDING](docs/BUILDING.md) for scoped local targets, CTest, tidy and CI qualification.
 The helper scripts and CMake presets define actual tool paths and available configurations.
 
+## Workspace
+
+This repository holds the code and every document. AI-agent files (CLAUDE.md, opencode.json, `.claude/`, `.codex/`
+and the Claude Code memory) are not part of it: they live in a separate agent overlay kept only on the maintainer's
+NAS, and `python scripts/workspace.py` syncs, exports and restores the whole workspace on any machine
+([workspace sync](docs/recipes/workspace-sync.md), [ADR-0136](docs/decisions/0136-workspace-overlay.md)).
+
 ## Documentation
 
 Start at **[`docs/README.md`](docs/README.md)** — the documentation map: canonical reading

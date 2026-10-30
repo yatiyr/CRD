@@ -23,7 +23,7 @@ replaceable assets. A working demo that bypasses those assets does not meet the 
 4. State: **purpose; slice ID; complete deliverable; dependencies; evidence required; unresolved decisions**.
    Continue within existing authorization. Ask about material ambiguity, not routine reversible work.
 
-Current delivery order is in [ADR-0129](docs/decisions/0129-renderer-ui-editor-delivery-order.md): the entire retained
+Delivery order: [ADR-0129](docs/decisions/0129-renderer-ui-editor-delivery-order.md): the entire retained
 renderer library, then crd-ui/CR-D007, then the scientific notebook, followed by preserved programmes. Windows/Linux
 qualify first; macOS/web follow. Broader [system review](docs/research/2026-09-12-cerid-whole-system-review.md) explains
 AI, collaboration, simulation and manufacturing contracts. It is a reference, not another roadmap.
@@ -46,7 +46,8 @@ research. Preserve historical evidence instead of rewriting it as a new result. 
 Use [BUILDING's local/CI decision table](docs/BUILDING.md#fast-local-workflow--one-primary-configuration), not every
 local configuration/platform. Run the documentation validator. Record unavailable hardware/configurations
 as unqualified, with an owning gate; do not turn an emitter, schema, compile or mock into a runtime support claim.
-No agent commits or pushes. The user owns the final commit.
+No agent commits or pushes. Agent files live only in the NAS
+[overlay](docs/recipes/workspace-sync.md).
 
 ```powershell
 python scripts/check-master-plan.py --next

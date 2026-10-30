@@ -112,5 +112,8 @@ trailer, the dated session record with its evidence and limitations, and the upd
 reviews, commits and pushes to `main`; the workflow's tier resolver decides from the changed paths whether the push
 runs the change tier or the complete tier, and `Needs CI` rows carry the local evidence until the published run is
 green, after which they become Done or Recorded with that run as evidence. A red lane preempts slice work: its
-diagnosis and repair come first, on a new push by the maintainer. No purchase, runner registration or publication
-setting is inferred from a quality goal ([research](research/2026-09-12-large-cpp-development-and-ci.md#documentation-and-ownership)).
+diagnosis and repair come first, on a new push by the maintainer. The maintainer's `python scripts/workspace.py sync`
+pushes the code to the code hosts and writes the code and the agent overlay to the NAS; agent files (CLAUDE.md,
+opencode.json, `.claude/`, `.codex/`, Claude memory) never enter a code commit
+([workspace sync](recipes/workspace-sync.md), [ADR-0136](decisions/0136-workspace-overlay.md)). No purchase,
+runner registration or publication setting is inferred from a quality goal ([research](research/2026-09-12-large-cpp-development-and-ci.md#documentation-and-ownership)).

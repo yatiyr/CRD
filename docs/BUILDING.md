@@ -5,7 +5,7 @@
 
 [Presets](../CMakePresets.json) owns configurations; [CI](../.github/workflows/ci.yml) owns scheduling.
 C++20; CMake 3.25+ (VS 2026: 4.2+); Python 3.12+; MSVC/clang-cl/GCC.
-Overrides: ignored `CMakeUserPresets.json`.
+Overrides: `CMakeUserPresets.json`. New host: [restore](recipes/workspace-sync.md).
 
 ## Fast local workflow — one primary configuration
 
@@ -13,8 +13,8 @@ Overrides: ignored `CMakeUserPresets.json`.
 Add local lanes only for a discriminating risk/failure; CI owns broader qualification under the approved
 [policy](sessions/2026-09-12-large-cpp-research-and-loop-plan.md). Retain CI gates until replacements qualify.
 
-Check scope belongs to the [first unfinished slice](ROADMAP.md#strict-sequential-execution). Helpers initialize the
-toolchain; `build-target.bat` takes one target. Rebuild affected executables.
+Check scope belongs to the [first unfinished slice](ROADMAP.md#strict-sequential-execution). Helpers set the
+toolchain; `build-target.bat` takes one target. Rebuild affected exes.
 
 ```powershell
 $env:CMAKE_BUILD_PARALLEL_LEVEL = '2'
@@ -99,7 +99,7 @@ Third-party defects, ASan gate: [register](third-party-defects.md).
 - PowerShell: capture the native exit before filtering; never pipe to `Select-Object -First`.
 - Unload/free order, single jobs-init owner, String capacity, append-only vtables: [MEMORY](../MEMORY.md).
 
-Docs: `python scripts/check-master-plan.py`. Tool/layout changes: also `check-repository.py`,
+Docs: `check-master-plan.py`; tools/layout also `check-repository.py`,
 `test-repository-tools.py` and affected fixtures.
 New modules need CMake/tests, a consumer and [systems](systems/README.md) route.
 [Historical evidence](archive/2026-09-12-orientation-history.md#docs-building).

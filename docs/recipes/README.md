@@ -50,6 +50,7 @@ the offline and real-time forms are genuinely different systems (as hair does).
 
 ## Index
 
+- [Workspace sync](workspace-sync.md) — the operator's daily NAS sync, an export for a friend and a restore on a new machine; what the NAS receives and how it is protected.
 - [Setting up the Cerid CI platform](ci-platform-setup.md) — the operator's account, billing, budget-stop, identity, launcher, dashboard and device steps for ADR-0135, in order.
 - [Argument reduction for crd::math's log and trig](2026-10-29-scalar-log-and-trig-reduction.md) — log's carried quotient and exact head sum (≤0.52 ulp) and Payne–Hanek past Cody-Waite's exact range.
 - [DX12 inner-coverage qualification](2026-09-13-dx12-inner-coverage.md) — exact interior/edge pixels, the native/barycentric route contract, one CPU corner oracle and SDK-only provider isolation.

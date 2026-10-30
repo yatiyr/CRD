@@ -12,6 +12,7 @@ Existing dated decisions are amended explicitly, not silently rewritten as a dif
 
 | Reference | Purpose |
 |---|---|
+| [0136-workspace-overlay](0136-workspace-overlay.md) | Agent files in a NAS-only overlay beside the code repository; the NAS written only as verified bundles, archives and one manifest |
 | [0135-cerid-ci-platform](0135-cerid-ci-platform.md) | Cerid's own orchestrator (coordinator, agent, durable compare-and-swap state, web UI; Buildkite rejected, §12-§15) on cloud and owned machines; device registry, affected and cached work, four executors, 50 USD cap, QUAL dashboard, console packs |
 | [0134-runtime-cpu-dispatch](0134-runtime-cpu-dispatch.md) | SSE2 x64 floor; one CPU detection and selection, per-level kernel units, isolation guard, forced-level arms |
 | [0133-runtime-diagnostics-and-instrumentation](0133-runtime-diagnostics-and-instrumentation.md) | Authorized DIAG foundation immediately after REPO.DEV; bounded evidence, existing modules and platform qualification |
