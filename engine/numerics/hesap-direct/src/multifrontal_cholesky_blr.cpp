@@ -326,6 +326,10 @@ bool MultifrontalCholeskyBlr<T>::factorize_arm(const detail::MultifrontalBlrPick
         for (crd::u32 f = 0; f < nf; ++f)
         {
             factor_one_front(f, 0, true);
+            if (fstate[f] == front_failed)
+            {
+                break; // ascending order: the first failure is the answer
+            }
         }
     }
     else

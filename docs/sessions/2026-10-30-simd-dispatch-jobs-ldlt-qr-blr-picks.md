@@ -35,9 +35,9 @@ The last three hesap-direct consumers. `MultifrontalLDLT`, `MultifrontalQR` and 
   now runs a level front-parallel when every front of it is dense (a BLR front's interpolative decomposition, QR, SVD
   and Cholesky reach hesap-dense's own jobs); a front-parallel front is serial on its job. The BLR front's gemms take
   `walk.front` (default: `gemm_parallel_auto`'s 256K cut on the pool), a dense front's trsm and Schur gemms
-  `dense_gemm_min_mnk` (default never, today's serial), its dpotrf Cholesky's own cuts. A failure now marks its
-  front and skips only the fronts above it, so `info()` is the first failing front on every walk, as the serial walk
-  reported it.
+  `dense_gemm_min_mnk` (default never, today's serial), its dpotrf Cholesky's own cuts. A failure marks its front;
+  the serial walk stops there, a level walk skips only the fronts above it, so `info()` is the first failing front
+  on every walk.
 - One `detail::front_levels` (`front_levels.hpp`) replaces the four inline copies of the level schedule (LU too).
 - **Kept serial (no arm):** the three solves (LDLT's refinement, QR's Q apply and back substitution, BLR's refinement)
   run on the calling thread.
@@ -93,4 +93,6 @@ lines; Allman braces; the ctest guards.
 
 ## Left
 
-hesap-amg, -iterative, -autodiff and -sched.
+hesap-amg, -iterative, -autodiff and -sched. Follow-up: `svdvals` reaches the non-converging bidiagonal paths
+without `svd`'s guard (complex through `svd_complex_impl`, real through dqds). At the board, `kBlrArms` on
+laplace3d-32 sends the 1024-wide root fronts down the slow BLR path (7 arms, 6 rounds, 2 types, 4 thread counts).
