@@ -133,12 +133,15 @@ template <typename T> [[nodiscard]] T* allocate_packs(crd::memory::IAllocator& a
 //   - sums the depth in the kKc groups gemm() sums by, beta folded into the first, so its bits equal the packed
 //     path's at every worker count.
 // The path is taken below an m n k threshold where detail::gemm_resident_admits holds (every cube the thresholds
-// admit, k n <= 342K, fits its B budget). The parallel one was tuned on the 14900K vs-reference shootout at 16 threads:
-// 200M elements catches the N=512 cube (134M, 0.95x→1.0x+); from N=1024 (1G) the packed path wins (better cache reuse
-// via packed Ac); it is detail::GemmParallelPick's resident_mnk. The serial one keeps that value until the one-thread
-// board (SIMD-DISPATCH) sets it from both paths' rows at each size (detail::gemm_arm).
+// admit, k n <= 342K parallel and 660K serial, fits its B budget). The parallel one was tuned on the 14900K
+// vs-reference shootout at 16 threads: 200M elements catches the N=512 cube (134M, 0.95x→1.0x+); from N=1024 (1G) the
+// packed path wins (better cache reuse via packed Ac); it is detail::GemmParallelPick's resident_mnk. The serial one is
+// set from the one-thread board of 2026-10-30 (both paths forced, detail::gemm_arm, avx2, sse2 and portable): the
+// resident path's median was at or above the packed path's in every level and type at the 600 and 768 cubes and mixed
+// at 1000 (avx2 f32 packed ahead), so the threshold sits between 768^3 (453M) and 1000^3 (1G); the margins (0.4% to
+// 5%) lie inside the run-to-run ranges.
 // =======================================================================
-constexpr crd::usize kSerialResidentThreshold = 200ULL * 1024ULL * 1024ULL;
+constexpr crd::usize kSerialResidentThreshold = 512ULL * 1024ULL * 1024ULL;
 
 template <typename T, Layout L>
 [[nodiscard]] bool takes_small_gemm(const GemmKernels<T>& kernels, crd::usize threshold, Trans trans_a, crd::usize m,

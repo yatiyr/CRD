@@ -307,38 +307,22 @@ void shootout(const char* label, crd::f64 peak_per_core, crd::u32 nw, crd::memor
     }
 }
 
-// The one-thread GEMM board's arms (SIMD-DISPATCH): the level's kernels down gemm's Auto, Resident and Packed paths,
-// and at the portable level the 4 by 4 tile's too (detail::gemm_arm, kDenseGemmArmsPortable), timed round by round in
-// turn so they share the host's state; a row's GFLOPS is its best round. Resident runs only where
-// detail::gemm_resident_admits holds (n/a otherwise). Every arm must give the Auto arm's bits: the paths sum alike,
-// and both portable tiles round twice.
+// The one-thread GEMM board's arms (SIMD-DISPATCH): the level's kernels down gemm's Auto, Resident and Packed paths
+// (detail::gemm_arm), timed round by round in turn so they share the host's state; a row's GFLOPS is its best round.
+// Resident runs only where detail::gemm_resident_admits holds (n/a otherwise). Every arm must give the Auto arm's bits:
+// the paths sum alike. The rows set blas3's serial resident threshold.
 template <typename T> void gemm_arms(const char* label, crd::memory::IAllocator* alloc)
 {
     using namespace crd::hesap::dense;
     using detail::GemmPath;
     const GemmKernels<T>& level_kernels = detail::gemm_kernels_of<T>();
-    const GemmKernels<T>* tile4x4 = []() -> const GemmKernels<T>*
-    {
-        if constexpr (std::is_same_v<T, crd::f64>)
-        {
-            return &kDenseGemmArmsPortable.tile4x4_f64;
-        }
-        else
-        {
-            return &kDenseGemmArmsPortable.tile4x4_f32;
-        }
-    }();
     struct Arm
     {
         const char* name;
-        const GemmKernels<T>* kernels;
         GemmPath path;
     };
-    const Arm arms[] = {{"auto", &level_kernels, GemmPath::Auto},      {"resident", &level_kernels, GemmPath::Resident},
-                        {"packed", &level_kernels, GemmPath::Packed},  {"4x4 auto", tile4x4, GemmPath::Auto},
-                        {"4x4 resident", tile4x4, GemmPath::Resident}, {"4x4 packed", tile4x4, GemmPath::Packed}};
+    const Arm arms[] = {{"auto", GemmPath::Auto}, {"resident", GemmPath::Resident}, {"packed", GemmPath::Packed}};
     constexpr crd::usize kArms = sizeof(arms) / sizeof(arms[0]);
-    const crd::usize arm_count = dense_kernels().level == crd::CpuLevel::Portable ? kArms : 3U;
     std::fprintf(stdout, "\n==== %s arms, one thread, %s level (%zu by %zu tile) ====\n", label,
                  crd::cpu_level_name(dense_kernels().level), static_cast<std::size_t>(level_kernels.shape.mr),
                  static_cast<std::size_t>(level_kernels.shape.nr));
@@ -355,17 +339,17 @@ template <typename T> void gemm_arms(const char* label, crd::memory::IAllocator*
         fill(b.data(), n * n, 22U);
         auto run = [&](const Arm& arm, Matrix<T>& out)
         {
-            detail::gemm_arm<T, Layout::RowMajor>(*arm.kernels, arm.path, T{1}, a.cview(), b.cview(), T{}, out.view(),
+            detail::gemm_arm<T, Layout::RowMajor>(level_kernels, arm.path, T{1}, a.cview(), b.cview(), T{}, out.view(),
                                                   Trans::None, Trans::None, alloc);
         };
         bool admitted[kArms]{};
         bool same[kArms]{};
         crd::f64 best[kArms]{};
         run(arms[0], c_auto);
-        for (crd::usize i = 0; i < arm_count; ++i)
+        for (crd::usize i = 0; i < kArms; ++i)
         {
             admitted[i] = arms[i].path != GemmPath::Resident ||
-                          detail::gemm_resident_admits<T, Layout::RowMajor>(*arms[i].kernels, Trans::None, n, n);
+                          detail::gemm_resident_admits<T, Layout::RowMajor>(level_kernels, Trans::None, n, n);
             if (admitted[i])
             {
                 run(arms[i], c);
@@ -376,7 +360,7 @@ template <typename T> void gemm_arms(const char* label, crd::memory::IAllocator*
         }
         for (int round = 0; round < kRounds; ++round)
         {
-            for (crd::usize i = 0; i < arm_count; ++i)
+            for (crd::usize i = 0; i < kArms; ++i)
             {
                 if (!admitted[i])
                 {
@@ -395,7 +379,7 @@ template <typename T> void gemm_arms(const char* label, crd::memory::IAllocator*
             }
         }
         const crd::f64 flops = 2.0 * static_cast<crd::f64>(n) * static_cast<crd::f64>(n) * static_cast<crd::f64>(n);
-        for (crd::usize i = 0; i < arm_count; ++i)
+        for (crd::usize i = 0; i < kArms; ++i)
         {
             if (!admitted[i])
             {

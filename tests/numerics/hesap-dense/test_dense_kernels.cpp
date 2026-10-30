@@ -6,8 +6,7 @@
 // alpha 1 and otherwise, subtract, assign, the first group's beta merge at beta 0 and otherwise), both C layouts and
 // lower blocks whose diagonal crosses, skips or covers tiles; panel padding and A columns past the depth hold NaN,
 // which no written element may reach. Each level's packers write the panels a scalar model does from every source
-// stride. The one-thread GEMM board's arm (kDenseGemmArmsPortable's 4 by 4 tile, two roundings on every host) runs the
-// same block, packer and path cases, and gemm's forced paths (detail::gemm_arm) give the grouped bits on both tiles.
+// stride. gemm's forced paths (detail::gemm_arm) give the grouped bits on the selected level's tile.
 // crd-hesap-dense-kernels-at-<level> runs these [kernels] cases under each forced level.
 
 #include "hesap_jobs_fixture.hpp"
@@ -51,19 +50,6 @@ using crd::test::kernel_level_runs_here;
 bool sums_by_fma(CpuLevel level)
 {
     return crd::cpu_level_includes(level, CpuLevel::Avx2);
-}
-
-// The one-thread GEMM board's portable 4 by 4 arm.
-template <typename T> const GemmKernels<T>& tile4x4() noexcept
-{
-    if constexpr (std::is_same_v<T, crd::f64>)
-    {
-        return dn::kDenseGemmArmsPortable.tile4x4_f64;
-    }
-    else
-    {
-        return dn::kDenseGemmArmsPortable.tile4x4_f32;
-    }
 }
 
 template <typename T> bool same_bits(T a, T b)
@@ -306,8 +292,6 @@ template <typename T> void check_every_level()
                          0x5EEDULL + static_cast<u64>(level.level));
     }
     CHECK(ran >= 1U); // portable runs everywhere
-    INFO("the portable 4 by 4 arm");
-    check_kernels<T>(tile4x4<T>(), false, 0x4A4AULL);
 }
 
 // Each level's pack_a and pack_b against the scalar model: the panels of op(X) from every stride pairing (a row-major
@@ -403,8 +387,6 @@ template <typename T> void check_packers()
         INFO("level " << crd::cpu_level_name(level.level));
         check(dn::kernels_of<T>(*level.table).gemm);
     }
-    INFO("the portable 4 by 4 arm");
-    check(tile4x4<T>());
     CHECK(ran >= 1U);
     CHECK(wrong == 0U);
 }
@@ -435,18 +417,13 @@ T grouped(T alpha, T beta, T c, usize i, usize j, usize k, const crd::containers
 // One element type through every GEMM path on the selected level: gemm, gemm_parallel's resident-A small path and
 // its packed path, at 1, 2 and 3 workers, both layouts and both transposes of A, and the lower syrk, at m and n off
 // the tile shape and a depth across a kKc group; and gemm's forced paths (detail::gemm_arm: Auto, Resident where it
-// admits op(A), Packed) on the level's kernels and on the 4 by 4 arm. Every path gives the grouped model's bits.
+// admits op(A), Packed) on the level's kernels. Every path gives the grouped model's bits.
 template <typename T> void check_paths()
 {
     crd_hesap_dense_tests::hesap_jobs_listener();
     crd::memory::TlsfAllocator alloc(32U << 20);
     const bool fma = sums_by_fma(dn::dense_kernels().level);
     const GemmShape shape = dn::detail::gemm_kernels_of<T>().shape;
-    const struct
-    {
-        const GemmKernels<T>* kernels;
-        bool fma;
-    } arms[] = {{&dn::detail::gemm_kernels_of<T>(), fma}, {&tile4x4<T>(), false}};
     INFO(sizeof(T) * 8U << "-bit, " << shape.mr << " by " << shape.nr);
     using RowView = dn::MatrixView<const T, dn::Layout::RowMajor>;
     using ColView = dn::MatrixView<const T, dn::Layout::ColMajor>;
@@ -539,23 +516,20 @@ template <typename T> void check_paths()
                                       });
                         }
                     }
-                    for (const auto& arm : arms)
+                    for (const GemmPath path : {GemmPath::Auto, GemmPath::Resident, GemmPath::Packed})
                     {
-                        for (const GemmPath path : {GemmPath::Auto, GemmPath::Resident, GemmPath::Packed})
+                        for (const bool transposed : {false, true})
                         {
-                            for (const bool transposed : {false, true})
+                            if (path == GemmPath::Resident && col != transposed)
                             {
-                                if (path == GemmPath::Resident && col != transposed)
-                                {
-                                    continue; // op(A) column-major: the resident path does not admit it
-                                }
-                                check_run(transposed, arm.fma,
-                                          [&](auto av, auto bv, auto cv, dn::Trans trans_a)
-                                          {
-                                              dn::detail::gemm_arm(*arm.kernels, path, sc.alpha, av, bv, sc.beta, cv,
-                                                                   trans_a, dn::Trans::None, &alloc);
-                                          });
+                                continue; // op(A) column-major: the resident path does not admit it
                             }
+                            check_run(transposed, fma,
+                                      [&](auto av, auto bv, auto cv, dn::Trans trans_a)
+                                      {
+                                          dn::detail::gemm_arm(dn::detail::gemm_kernels_of<T>(), path, sc.alpha, av, bv,
+                                                               sc.beta, cv, trans_a, dn::Trans::None, &alloc);
+                                      });
                         }
                     }
                 }
@@ -581,7 +555,7 @@ template <typename T> void check_paths()
             }
         }
     }
-    CHECK(runs == 2U * 2U * (2U * 2U * (3U * 2U + 2U * 5U) + 1U));
+    CHECK(runs == 2U * 2U * (2U * 2U * (3U * 2U + 5U) + 1U));
     CHECK(wrong == 0U);
 }
 
@@ -681,14 +655,12 @@ TEST_CASE("dense kernels: a skinny GEMM packs B within the blocked budget", "[de
         }
     }
     CHECK(wrong == 0U);
-    for (const GemmKernels<crd::f64>* gk : {&dn::detail::gemm_kernels_of<crd::f64>(), &tile4x4<crd::f64>()})
-    {
-        CHECK_FALSE(dn::detail::gemm_resident_admits<crd::f64, dn::Layout::RowMajor>(*gk, dn::Trans::None, n, n));
-    }
+    const GemmKernels<crd::f64>& gk = dn::detail::gemm_kernels_of<crd::f64>();
+    CHECK_FALSE(dn::detail::gemm_resident_admits<crd::f64, dn::Layout::RowMajor>(gk, dn::Trans::None, n, n));
 }
 
 // A product of depth 0 scales C by beta alone (beta 0 stores +0 over any C, NaN included) and one with no column
-// writes nothing, down every forced path on both tiles.
+// writes nothing, down every forced path.
 TEST_CASE("dense kernels: every forced GEMM path of an empty product scales C by beta alone", "[dense][kernels]")
 {
     constexpr usize m = 5;
@@ -700,35 +672,33 @@ TEST_CASE("dense kernels: every forced GEMM path of an empty product scales C by
     using View = dn::MatrixView<const crd::f64, dn::Layout::RowMajor>;
     usize wrong = 0;
     usize runs = 0;
-    for (const GemmKernels<crd::f64>* gk : {&dn::detail::gemm_kernels_of<crd::f64>(), &tile4x4<crd::f64>()})
+    const GemmKernels<crd::f64>& gk = dn::detail::gemm_kernels_of<crd::f64>();
+    for (const GemmPath path : {GemmPath::Auto, GemmPath::Resident, GemmPath::Packed})
     {
-        for (const GemmPath path : {GemmPath::Auto, GemmPath::Resident, GemmPath::Packed})
+        for (const crd::f64 beta : {0.0, -2.0})
         {
-            for (const crd::f64 beta : {0.0, -2.0})
+            for (usize e = 0; e <= m * n; ++e)
             {
-                for (usize e = 0; e <= m * n; ++e)
-                {
-                    c[e] = beta == 0.0 ? nan : static_cast<crd::f64>(e) - 9.5;
-                }
-                dn::detail::gemm_arm(*gk, path, 3.0, View(&operand, m, 0, 0), View(&operand, 0, n, n), beta,
-                                     dn::MatrixView<crd::f64, dn::Layout::RowMajor>(c.data(), m, n, n), dn::Trans::None,
-                                     dn::Trans::None, nullptr);
-                for (usize e = 0; e < m * n; ++e)
-                {
-                    const crd::f64 want = beta == 0.0 ? 0.0 : beta * (static_cast<crd::f64>(e) - 9.5);
-                    wrong += exact_bits(c[e], want) ? 0U : 1U;
-                }
-                wrong += exact_bits(c[m * n], beta == 0.0 ? nan : static_cast<crd::f64>(m * n) - 9.5) ? 0U : 1U;
-                c[0] = nan;
-                dn::detail::gemm_arm(*gk, path, 3.0, View(&operand, m, 1, 1), View(&operand, 1, 0, 0), beta,
-                                     dn::MatrixView<crd::f64, dn::Layout::RowMajor>(c.data(), m, 0, 0), dn::Trans::None,
-                                     dn::Trans::None, nullptr);
-                wrong += std::isnan(c[0]) ? 0U : 1U;
-                runs += 2U;
+                c[e] = beta == 0.0 ? nan : static_cast<crd::f64>(e) - 9.5;
             }
+            dn::detail::gemm_arm(gk, path, 3.0, View(&operand, m, 0, 0), View(&operand, 0, n, n), beta,
+                                 dn::MatrixView<crd::f64, dn::Layout::RowMajor>(c.data(), m, n, n), dn::Trans::None,
+                                 dn::Trans::None, nullptr);
+            for (usize e = 0; e < m * n; ++e)
+            {
+                const crd::f64 want = beta == 0.0 ? 0.0 : beta * (static_cast<crd::f64>(e) - 9.5);
+                wrong += exact_bits(c[e], want) ? 0U : 1U;
+            }
+            wrong += exact_bits(c[m * n], beta == 0.0 ? nan : static_cast<crd::f64>(m * n) - 9.5) ? 0U : 1U;
+            c[0] = nan;
+            dn::detail::gemm_arm(gk, path, 3.0, View(&operand, m, 1, 1), View(&operand, 1, 0, 0), beta,
+                                 dn::MatrixView<crd::f64, dn::Layout::RowMajor>(c.data(), m, 0, 0), dn::Trans::None,
+                                 dn::Trans::None, nullptr);
+            wrong += std::isnan(c[0]) ? 0U : 1U;
+            runs += 2U;
         }
     }
-    CHECK(runs == 2U * 3U * 2U * 2U);
+    CHECK(runs == 3U * 2U * 2U);
     CHECK(wrong == 0U);
 }
 

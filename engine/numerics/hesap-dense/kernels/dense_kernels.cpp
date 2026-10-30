@@ -1,16 +1,15 @@
 // The hesap-dense kernels of crd/hesap/dense/dense_kernels.hpp, compiled once per CPU level by crd_add_cpu_kernels
 // (../CMakeLists.txt, ADR-0134 §5). Everything here lives in the level's namespace (CRD_MATH_LEVEL_NS).
 //
-// Each level has its own tile shape and packs its own panels (GemmShape). The portable level runs the block on a 2 by 4
-// PortableTile (two roundings, its accumulators in registers), and its unit alone also defines the one-thread GEMM
-// board's 4 by 4 arm (kDenseGemmArmsPortable). The vector levels run one tile of two registers a row: two accumulators
-// a row, two B registers and one A broadcast a step. sse2 and avx2 take 6 rows (15 of 16 vector registers), avx512 14
-// (31 of 32 ZMM, the transpose of BLIS's skx shape). sse2 rounds twice in 128-bit registers (f64 6 by 4, f32 6 by 8)
-// and gives the portable level's bits; avx2 sums by single-rounded FMA (f64 6 by 8, about 98% of peak in L1; f32 6 by
-// 16), as avx512 does (f64 14 by 16, f32 14 by 32), so those two give the same bits. The tile hands each finished row
-// to a sink while its accumulators are still in registers: the product stores the tile, the fused path merges a full
-// row-major tile straight into C with merge_element's expression. Each step prefetches the next B panel's row (one
-// line, two at avx512), which hides its re-stream from L3 at each panel boundary.
+// Each level has its own tile shape and packs its own panels (GemmShape). The portable level runs the block on a 4 by 4
+// PortableTile (two roundings, its accumulators in registers). The vector levels run one tile of two registers a row:
+// two accumulators a row, two B registers and one A broadcast a step. sse2 and avx2 take 6 rows (15 of 16 vector
+// registers), avx512 14 (31 of 32 ZMM, the transpose of BLIS's skx shape). sse2 rounds twice in 128-bit registers (f64
+// 6 by 4, f32 6 by 8) and gives the portable level's bits; avx2 sums by single-rounded FMA (f64 6 by 8, about 98% of
+// peak in L1; f32 6 by 16), as avx512 does (f64 14 by 16, f32 14 by 32), so those two give the same bits. The tile
+// hands each finished row to a sink while its accumulators are still in registers: the product stores the tile, the
+// fused path merges a full row-major tile straight into C with merge_element's expression. Each step prefetches the
+// next B panel's row (one line, two at avx512), which hides its re-stream from L3 at each panel boundary.
 
 //
 // The vector and matrix-vector kernels are written once over the level's vectors (vector_steps.hpp: Vec4d and Vec8f,
@@ -211,9 +210,11 @@ template <typename T> struct RowTile
 using F64Tile = RowTile<crd::f64>;
 using F32Tile = RowTile<crd::f32>;
 #else
-// 2 by 4: eight accumulators, two A and four B values a step (14 of 16 scalar registers on x64).
-using F64Tile = PortableTile<crd::f64, 2, 4, true>;
-using F32Tile = PortableTile<crd::f32, 2, 4, true>;
+// 4 by 4: sixteen accumulators, four A and four B values a step. On the one-thread board of 2026-10-30 it ran f64
+// 1.18x to 1.28x and f32 1.02x to 1.03x faster than a 2 by 4 tile at every size from 64 to 1024 on x64 (its 16 scalar
+// registers), with the same bits; ARM64 (32 registers) runs the dense kernels at this level.
+using F64Tile = PortableTile<crd::f64, 4, 4, true>;
+using F32Tile = PortableTile<crd::f32, 4, 4, true>;
 #endif
 
 // The packers of a tile's shape (GemmKernels) over a strided source.
@@ -959,12 +960,5 @@ const DenseKernels CRD_KERNEL_TABLE(kDenseKernels) = {
     level::type_kernels<crd::f64>(),
     level::type_kernels<crd::f32>(),
 };
-
-#if CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_PORTABLE
-const DenseGemmArms CRD_KERNEL_TABLE(kDenseGemmArms) = {
-    .tile4x4_f64 = level::gemm_kernels<crd::f64, level::PortableTile<crd::f64, 4, 4, true>>(),
-    .tile4x4_f32 = level::gemm_kernels<crd::f32, level::PortableTile<crd::f32, 4, 4, true>>(),
-};
-#endif
 
 } // namespace crd::hesap::dense

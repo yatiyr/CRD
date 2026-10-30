@@ -1,7 +1,7 @@
-// The blas3 boards' arms (SIMD-DISPATCH). gemm_arm: a serial GEMM on given kernels (the level the process runs, or
-// kDenseGemmArmsPortable's 4 by 4 tile, crd/hesap/dense/dense_kernels.hpp) down a forced path, so one binary times
-// both portable tiles and both small-size paths at every size; the board keeps one portable tile and sets blas3's
-// serial resident threshold, and GemmPath goes. gemm_parallel_arm and trsm_arm: gemm_parallel's and trsm's crd-jobs
+// The blas3 boards' arms (SIMD-DISPATCH). gemm_arm: a serial GEMM on given kernels down a forced path, the one way to
+// run both serial paths on one product: the paths' bit tests run it on every level, and the one-thread board times both
+// at every size to set blas3's serial resident threshold (2026-10-30 on avx2, sse2 and portable; avx512 and the ARM64
+// hosts at QUAL.1-HW). gemm_parallel_arm and trsm_arm: gemm_parallel's and trsm's crd-jobs
 // levers (the folded HESAP-JOBS-RETUNE), production's being GemmParallelPick{} and TrsmPick{}; the thread-sweep boards
 // set the defaults and a lever that loses goes with its field.
 
