@@ -12,6 +12,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
+#include <cstring>
 
 using namespace crd::hesap::iterative;
 using namespace crd::hesap::sparse;
@@ -234,6 +235,61 @@ TEST_CASE("LSMR is bit-exact over serial vs parallel spmv (determinism moat)", "
         for (crd::u32 i = 0; i < n; ++i)
         {
             REQUIRE(xs(i) == xp(i));
+        }
+    }
+    crd::jobs::shutdown();
+}
+
+// The least-squares op's picks (detail/operator_arms.hpp): LSQR, which applies A and A^H every iteration, repeats the
+// serial op's solve bit for bit on 1 to 32 forced jobs.
+TEST_CASE("LSQR over the least-squares op keeps the serial solve's bits at every forced job count",
+          "[hesap-iterative][lsqr][determinism][jobs]")
+{
+    using crd::hesap::sparse::detail::OperatorPick;
+    crd::jobs::init();
+    {
+        crd::memory::TlsfAllocator alloc{64U << 20};
+        const crd::u32 m = 260;
+        const crd::u32 n = 180;
+        auto a = tall<crd::f64>(&alloc, m, n);
+        dense::Vector<crd::f64> b(&alloc, m);
+        for (crd::u32 i = 0; i < m; ++i)
+        {
+            b(i) = 1.0 + 0.01 * static_cast<crd::f64>(i % 7);
+        }
+        auto solve = [&](const crd::hesap::LinearOp<crd::f64>& op, dense::Vector<crd::f64>& x)
+        {
+            IterativeOptions<crd::f64> opts;
+            opts.rel_tol = 1e-12;
+            opts.max_iter = 400;
+            opts.record_residuals = true;
+            LsqrWorkspace<crd::f64> ws(&alloc, m, n);
+            return lsqr<crd::f64>(op, b.span(), x.span(), opts, ws, &alloc);
+        };
+        const ParallelSpmvLeastSquaresOp<crd::f64> serial_op(a, &alloc, /*parallel_min_stored_bytes=*/~crd::usize{0});
+        dense::Vector<crd::f64> xs(&alloc, n);
+        const auto rs = solve(serial_op, xs);
+        REQUIRE(rs.iterations > 1);
+        for (const crd::u32 workers : {1U, 2U, 3U, 4U, 8U, 16U, 32U})
+        {
+            INFO("workers " << workers);
+            const ParallelSpmvLeastSquaresOp<crd::f64> op(a, &alloc,
+                                                          OperatorPick{.parallel_min_bytes = 0, .workers = workers});
+            REQUIRE(op.is_parallel());
+            dense::Vector<crd::f64> xp(&alloc, n);
+            const auto rp = solve(op, xp);
+            REQUIRE(rs.iterations == rp.iterations);
+            REQUIRE(rs.residual_history.size() == rp.residual_history.size());
+            bool same = true;
+            for (crd::usize i = 0; i < rs.residual_history.size(); ++i)
+            {
+                same = same && std::memcmp(&rs.residual_history[i], &rp.residual_history[i], sizeof(crd::f64)) == 0;
+            }
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                same = same && std::memcmp(&xs(i), &xp(i), sizeof(crd::f64)) == 0;
+            }
+            CHECK(same);
         }
     }
     crd::jobs::shutdown();

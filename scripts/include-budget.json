@@ -118,6 +118,13 @@
       "why": "the sparse product's crd-jobs levers, included by spgemm_parallel.hpp, the AMG picks, their board and tests; the pick is plain data, so the header brings no intrinsics header to them"
     },
     {
+      "include": "crd/hesap/sparse/detail/operator_arms.hpp",
+      "flags_of": "tests/numerics/hesap-sparse/test_operator_arms.cpp",
+      "forbid": ["chrono", "format"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
+      "why": "the sparse LinearOps' crd-jobs levers, included by the three ops the Krylov solvers run on, their board and tests; the pick is plain data over the L2 query and the job count, so the header brings no intrinsics header to them"
+    },
+    {
       "include": "crd/hesap/amg/amg.hpp",
       "flags_of": "tests/numerics/hesap-amg/test_amg.cpp",
       "forbid": ["chrono", "format"],

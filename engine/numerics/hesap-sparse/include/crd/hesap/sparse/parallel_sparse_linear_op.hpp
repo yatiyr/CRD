@@ -3,6 +3,7 @@
 #include <crd/core/assert.hpp>
 #include <crd/hesap/linear_op.hpp>
 #include <crd/hesap/sparse/convert.hpp>
+#include <crd/hesap/sparse/detail/operator_arms.hpp>
 #include <crd/hesap/sparse/sell.hpp>
 #include <crd/hesap/sparse/sell_parallel.hpp>
 #include <crd/hesap/sparse/sparse_matrix.hpp>
@@ -12,6 +13,23 @@
 
 namespace crd::hesap::sparse
 {
+namespace detail
+{
+// y = s x through the pick: the serial SELL spmv below the cut or on one job, the parallel one on the pick's jobs.
+template <typename T>
+void apply_sell(const OperatorPick& pick, bool parallel, const SellMatrix<T>& s, crd::containers::ConstSpan<T> x,
+                crd::containers::Span<T> y)
+{
+    const crd::u32 jobs = parallel ? operator_jobs(pick) : 1U;
+    if (jobs <= 1)
+    {
+        spmv_sell<T>(T(1), s, x, T(0), y); // sub-cache: serial wins (no dispatch overhead)
+        return;
+    }
+    spmv_sell_parallel<T>(T(1), s, x, T(0), y, jobs);
+}
+} // namespace detail
+
 // -----------------------------------------------------------------------
 // ParallelSparseLinearOp<T> -- a LinearOp<T> whose apply uses the row-balanced
 // parallel SELL-C-σ spmv (over crd::jobs). Phase 3.1.6 v4a-2.
@@ -24,7 +42,7 @@ namespace crd::hesap::sparse
 // bit-identical {iterations, residual sequence, solution} regardless of thread
 // count. Apply is None-orientation only (SELL spmv has no transpose path).
 //
-// Requires crd::jobs to be initialised by the caller. Non-square / transpose
+// Past the cut it applies on crd::jobs; on a pool that is down, serially. Non-square / transpose
 // uses are not supported (CG/PCG only need A·x). The wrapped CSR need not
 // outlive the op (the SELL copy is owned).
 // -----------------------------------------------------------------------
@@ -39,24 +57,27 @@ public:
     // (the v1b spmv regime, confirmed by the CG-vs-Eigen bench). Default: the L2 (sparse_resident_bytes()).
     explicit ParallelSparseLinearOp(const SparseMatrix<T, SparseFormat::Csr>& matrix, crd::memory::IAllocator* alloc,
                                     crd::usize parallel_min_stored_bytes = sparse_resident_bytes())
-        : crd::hesap::LinearOp<T>(/*has_transpose=*/false, /*has_adjoint=*/false), m_sell(to_sell<T>(matrix, alloc))
+        : ParallelSparseLinearOp(matrix, alloc, detail::OperatorPick{.parallel_min_bytes = parallel_min_stored_bytes})
+    {
+    }
+
+    // The cut and the forced jobs (detail/operator_arms.hpp); the bytes constructor is this with the cut alone.
+    ParallelSparseLinearOp(const SparseMatrix<T, SparseFormat::Csr>& matrix, crd::memory::IAllocator* alloc,
+                           const detail::OperatorPick& pick)
+        : crd::hesap::LinearOp<T>(/*has_transpose=*/false, /*has_adjoint=*/false), m_sell(to_sell<T>(matrix, alloc)),
+          m_pick(pick)
     {
         CRD_ASSERT_MSG(matrix.rows() == matrix.cols(), "ParallelSparseLinearOp: matrix must be square");
-        m_parallel = m_sell.stored_bytes() >= parallel_min_stored_bytes;
+        m_parallel = m_sell.stored_bytes() >= pick.parallel_min_bytes;
     }
 
     [[nodiscard]] bool apply(crd::containers::ConstSpan<T> x, crd::containers::Span<T> y) const override
     {
-        if (!m_parallel)
-        {
-            spmv_sell<T>(T(1), m_sell, x, T(0), y); // sub-cache: serial wins (no dispatch overhead)
-            return true;
-        }
-        spmv_sell_parallel<T>(T(1), m_sell, x, T(0), y);
+        detail::apply_sell<T>(m_pick, m_parallel, m_sell, x, y);
         return true;
     }
 
-    // Whether apply uses the parallel path (working set exceeded the threshold).
+    // Whether the matrix reached the cut (apply then runs on the pick's jobs unless that is one or the pool is down).
     [[nodiscard]] bool is_parallel() const noexcept { return m_parallel; }
 
     [[nodiscard]] crd::usize n_rows() const noexcept override { return m_sell.rows; }
@@ -64,6 +85,7 @@ public:
 
 private:
     SellMatrix<T> m_sell;
+    detail::OperatorPick m_pick;
     bool          m_parallel = false;
 };
 
@@ -85,25 +107,29 @@ class ParallelSpmvLeastSquaresOp final : public crd::hesap::LinearOp<T>
 public:
     explicit ParallelSpmvLeastSquaresOp(const SparseMatrix<T, SparseFormat::Csr>& a, crd::memory::IAllocator* alloc,
                                         crd::usize parallel_min_stored_bytes = sparse_resident_bytes())
-        : crd::hesap::LinearOp<T>(/*has_transpose=*/false, /*has_adjoint=*/true)
-        , m_a(to_sell<T>(a, alloc))
-        , m_ah(build_adjoint_sell(a, alloc))
-        , m_rows(a.rows())
-        , m_cols(a.cols())
+        : ParallelSpmvLeastSquaresOp(a, alloc, detail::OperatorPick{.parallel_min_bytes = parallel_min_stored_bytes})
+    {
+    }
+
+    // The cut (on the larger of A's and Aᴴ's SELL) and the forced jobs (detail/operator_arms.hpp).
+    ParallelSpmvLeastSquaresOp(const SparseMatrix<T, SparseFormat::Csr>& a, crd::memory::IAllocator* alloc,
+                               const detail::OperatorPick& pick)
+        : crd::hesap::LinearOp<T>(/*has_transpose=*/false, /*has_adjoint=*/true), m_a(to_sell<T>(a, alloc)),
+          m_ah(build_adjoint_sell(a, alloc)), m_pick(pick), m_rows(a.rows()), m_cols(a.cols())
     {
         const crd::usize bytes = m_a.stored_bytes() > m_ah.stored_bytes() ? m_a.stored_bytes() : m_ah.stored_bytes();
-        m_parallel             = bytes >= parallel_min_stored_bytes;
+        m_parallel = bytes >= pick.parallel_min_bytes;
     }
 
     [[nodiscard]] bool apply(crd::containers::ConstSpan<T> x, crd::containers::Span<T> y) const override
     {
-        spmv_dispatch(m_a, x, y);
+        detail::apply_sell<T>(m_pick, m_parallel, m_a, x, y);
         return true;
     }
 
     [[nodiscard]] bool apply_adjoint(crd::containers::ConstSpan<T> x, crd::containers::Span<T> y) const override
     {
-        spmv_dispatch(m_ah, x, y);
+        detail::apply_sell<T>(m_pick, m_parallel, m_ah, x, y);
         return true;
     }
 
@@ -124,18 +150,9 @@ private:
         return to_sell<T>(at, alloc);
     }
 
-    void spmv_dispatch(const SellMatrix<T>& s, crd::containers::ConstSpan<T> x, crd::containers::Span<T> y) const
-    {
-        if (!m_parallel)
-        {
-            spmv_sell<T>(T(1), s, x, T(0), y);
-            return;
-        }
-        spmv_sell_parallel<T>(T(1), s, x, T(0), y);
-    }
-
     SellMatrix<T> m_a;  // A   (rows × cols)
     SellMatrix<T> m_ah; // Aᴴ  (cols × rows)
+    detail::OperatorPick m_pick;
     crd::u32      m_rows;
     crd::u32      m_cols;
     bool          m_parallel = false;

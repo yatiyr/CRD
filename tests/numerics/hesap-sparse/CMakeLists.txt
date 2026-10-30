@@ -6,6 +6,7 @@ add_executable(crd-hesap-sparse-tests
     test_spmv.cpp
     test_sell.cpp
     test_sell_parallel.cpp
+    test_operator_arms.cpp
     test_sparse_kernels.cpp
     test_convert.cpp
     test_element_wise.cpp

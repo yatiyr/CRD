@@ -374,6 +374,59 @@ TEST_CASE("CG is bit-exact over serial vs parallel spmv (determinism moat)", "[h
     crd::jobs::shutdown();
 }
 
+// The square op's picks (detail/operator_arms.hpp): CG over the op on 1 to 32 forced jobs repeats the serial CSR
+// solve's iterations, residual history and solution bit for bit.
+TEST_CASE("CG over the parallel SELL op keeps the serial solve's bits at every forced job count",
+          "[hesap-iterative][cg][determinism][jobs]")
+{
+    using crd::hesap::sparse::detail::OperatorPick;
+    crd::jobs::init();
+    {
+        crd::memory::TlsfAllocator alloc{16U << 20};
+        const crd::u32 n = 300;
+        auto a = laplacian_1d<crd::f64>(&alloc, n);
+        dense::Vector<crd::f64> b(&alloc, n);
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            b(i) = 1.0 + 0.01 * static_cast<crd::f64>(i % 13);
+        }
+        auto solve = [&](const crd::hesap::LinearOp<crd::f64>& op, dense::Vector<crd::f64>& x)
+        {
+            IterativeOptions<crd::f64> opts;
+            opts.rel_tol = 1e-12;
+            opts.record_residuals = true;
+            KrylovWorkspace<crd::f64> ws(&alloc, n);
+            return cg<crd::f64>(op, b.span(), x.span(), opts, ws, &alloc);
+        };
+        const SparseLinearOp<crd::f64> serial_op(a);
+        dense::Vector<crd::f64> xs(&alloc, n);
+        const auto rs = solve(serial_op, xs);
+        REQUIRE(rs.converged);
+        for (const crd::u32 workers : {1U, 2U, 3U, 4U, 8U, 16U, 32U})
+        {
+            INFO("workers " << workers);
+            const ParallelSparseLinearOp<crd::f64> op(a, &alloc,
+                                                      OperatorPick{.parallel_min_bytes = 0, .workers = workers});
+            REQUIRE(op.is_parallel());
+            dense::Vector<crd::f64> xp(&alloc, n);
+            const auto rp = solve(op, xp);
+            REQUIRE(rs.iterations == rp.iterations);
+            REQUIRE(rs.residual_history.size() == rp.residual_history.size());
+            bool same = true;
+            for (crd::usize i = 0; i < rs.residual_history.size(); ++i)
+            {
+                same = same && std::memcmp(&rs.residual_history[i], &rp.residual_history[i], sizeof(crd::f64)) == 0;
+            }
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                same = same && std::memcmp(&xs(i), &xp(i), sizeof(crd::f64)) == 0;
+            }
+            CHECK(same);
+        }
+    }
+    crd::jobs::shutdown();
+}
+
 // ---- CLI ---------------------------------------------------------------
 
 namespace

@@ -14,6 +14,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
+#include <cstring>
 
 using namespace crd::hesap::iterative;
 using namespace crd::hesap::sparse;
@@ -326,6 +327,53 @@ TEST_CASE("Block-CG is bit-exact over serial vs parallel spmm (determinism moat)
         for (crd::usize i = 0; i < n * s; ++i)
         {
             REQUIRE(xsp(i) == xpp(i));
+        }
+    }
+    crd::jobs::shutdown();
+}
+
+// The block op's picks (detail/operator_arms.hpp): block CG at s 1, 4 and 8 repeats the serial spmm solve bit for bit
+// on 1 to 32 forced jobs.
+TEST_CASE("Block-CG over the spmm op keeps the serial solve's bits at every forced job count",
+          "[hesap-iterative][block-cg][determinism][jobs]")
+{
+    using crd::hesap::sparse::detail::OperatorPick;
+    crd::jobs::init();
+    {
+        crd::memory::TlsfAllocator alloc{96U << 20};
+        const crd::u32 n = 300;
+        auto a = spd_varying_diag<crd::f64>(&alloc, n);
+        const ParallelSpmmLinearOp<crd::f64> serial_op(a, ~crd::usize{0});
+        REQUIRE_FALSE(serial_op.is_parallel());
+        for (const crd::u32 s : {1U, 4U, 8U})
+        {
+            INFO("s " << s);
+            dense::Vector<crd::f64> b(&alloc, static_cast<crd::usize>(n) * s);
+            for (crd::usize i = 0; i < b.size(); ++i)
+            {
+                b(i) = 1.0 + 0.001 * static_cast<crd::f64>(i % 11);
+            }
+            auto solve = [&](const BlockLinearOp<crd::f64>& op, dense::Vector<crd::f64>& x)
+            {
+                IterativeOptions<crd::f64> opts;
+                opts.rel_tol = 1e-12;
+                opts.max_iter = 1000;
+                BlockCgWorkspace<crd::f64> ws(&alloc, n, s);
+                return block_cg<crd::f64>(op, b.span(), x.span(), opts, ws, &alloc);
+            };
+            dense::Vector<crd::f64> xs(&alloc, b.size());
+            const auto rs = solve(serial_op, xs);
+            REQUIRE(rs.converged);
+            for (const crd::u32 workers : {1U, 2U, 3U, 4U, 8U, 16U, 32U})
+            {
+                INFO("workers " << workers);
+                const ParallelSpmmLinearOp<crd::f64> op(a, OperatorPick{.parallel_min_bytes = 0, .workers = workers});
+                REQUIRE(op.is_parallel());
+                dense::Vector<crd::f64> xp(&alloc, b.size());
+                const auto rp = solve(op, xp);
+                REQUIRE(rs.iterations == rp.iterations);
+                CHECK(std::memcmp(xs.data(), xp.data(), b.size() * sizeof(crd::f64)) == 0);
+            }
         }
     }
     crd::jobs::shutdown();
