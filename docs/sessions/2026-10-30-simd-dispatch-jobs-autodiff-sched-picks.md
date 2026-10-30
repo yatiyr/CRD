@@ -74,5 +74,8 @@ non-reproducing local event, not chased.
 
 ## Left
 
-The batched fft transforms judged as jobs: hesap-fft has no jobs code, so the board needs a split of a batch across
-per-worker plans as its arm.
+- Dense QR, a named retune consumer without a pick yet: its panel width (`kQrBlockSize`) and unblocked cut
+  (`kQrUnblockedMax`, 128) as levers; it reaches the jobs only through `gemm_parallel_auto`, whose levers landed.
+  `trsm` is serial: its column split is an arm the board judges.
+- The batched fft transforms judged as jobs: hesap-fft has no jobs code, so the board needs a split of a batch across
+  per-worker plans as its arm.
