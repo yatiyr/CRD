@@ -45,7 +45,7 @@ Synology NAS, while the code hosts (GitLab, mirrored to a private GitHub) never 
   every agent path; `check-repository.py` treats them as ignored local state and fails if one is tracked again;
   `.github/ci-tiers.json` no longer lists opencode.json; `cerid_dev/selection.py` no longer classifies CLAUDE.md;
   `project_sync` protects `.agent/` and `.agent-overlay/` like `.claude/`.
-- `scripts/test-workspace.py` (26 tests) and one added assertion in `scripts/test-project-sync.py`.
+- `scripts/test-workspace.py` (28 tests) and one added assertion in `scripts/test-project-sync.py`.
 - Documents: ADR-0136, the workspace sync recipe, the WORKSPACE row, and routes in AGENTS, START_HERE, MEMORY,
   README, docs/README, BUILDING, CONTRIBUTING, the repository layout, the scripts index and the ADR/recipe indexes.
 
@@ -84,6 +84,13 @@ the memory where Claude Code looks for it there.
 - A manual overlay merge would have been overwritten by the next sync's copy of the live memory; sync now leaves a
   conflicting merge open, refuses while conflict markers remain, and finishes it on the next run.
 - Report labels used `→`, which a cp1254 console cannot print; labels are ASCII and output never stops on encoding.
+- The code-host check counted a deletion of an agent path as "touching" it, so the commit that untracks CLAUDE.md
+  and opencode.json (this branch) would have been refused by any host lacking it; deletions now pass, additions and
+  modifications are still refused.
+- A checkout that syncs against a populated NAS without a restore (the main checkout after this merge) adopted the
+  NAS history but then dropped its files (`.agent/workspace.json`, NAS-only notes) from the next commit. Adoption
+  now writes the files missing here, gives Claude Code the NAS-only notes without overwriting live ones, and lists
+  the files again before committing.
 
 ## Files touched
 
@@ -97,7 +104,7 @@ the memory where Claude Code looks for it there.
 
 ## Tests / verification
 
-- `python scripts/test-workspace.py`: 26 of 26 pass (Windows 11, Python 3.14.4, Git 2.52.0). `test-project-sync.py`
+- `python scripts/test-workspace.py`: 28 of 28 pass (Windows 11, Python 3.14.4, Git 2.52.0). `test-project-sync.py`
   60 of 60; `test-dev-workflow.py` 59 of 59; `check-repository.py`, `check-ci-tiers.py`, `check-master-plan.py` PASS.
   `test-repository-tools.py`: 160 of 161, the failure being `test_generated_target_folders`, which needs Ninja on PATH
   and a CMake configure (not available in this shell and outside this session's no-configure limit; unrelated to the
@@ -138,7 +145,8 @@ would write Z:/Arsivlik/Assets/Repos/crd/MANIFEST.json  (index, replaced atomica
 - CTest registration belongs to the tests/ owner: `add_test(NAME crd-workspace COMMAND Python3::Interpreter
   "${CMAKE_SOURCE_DIR}/scripts/test-workspace.py")`. Until then no hosted lane runs it.
 - After the merge, the operator's first `workspace.py sync` in `D:\Dev\cerid` creates `.agent-overlay/` there and
-  adopts the NAS overlay history. The push to the code hosts was not exercised against GitLab or GitHub.
+  adopts the NAS overlay history. The NAS bundles predate the last two fixes and this record; that sync refreshes
+  them. The push to the code hosts was not exercised against GitLab or GitHub.
 - Real-NAS evidence is Windows only; Linux and macOS paths are designed and covered by portable tests, not run here.
 - Synology snapshots and the Recycle Bin are user actions (recipe); they were not yet enabled when the first sync ran.
 

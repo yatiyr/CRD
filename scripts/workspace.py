@@ -465,8 +465,12 @@ def mirror_agent_home(root, copies):
     return written, removed
 
 
-def write_back(root, memory_dir, project_root, replace=True):
-    """Copy the overlay's `.agent/` state to this machine's Claude Code folders (memory is mirrored exactly)."""
+def write_back(root, memory_dir, project_root, replace=True, overwrite=True):
+    """Copy the overlay's `.agent/` state to this machine's Claude Code folders.
+
+    replace: memory is mirrored exactly (files the overlay lacks are removed). overwrite=False only adds files this
+    machine does not have yet (adopting the NAS overlay in a new checkout never discards a live note).
+    """
     root = Path(root)
     memory_dir = Path(memory_dir)
     written = removed = 0
@@ -477,7 +481,8 @@ def write_back(root, memory_dir, project_root, replace=True):
             if path.is_file():
                 wanted[path.relative_to(source).as_posix()] = expand_root(path.read_bytes(), project_root)
     for rel, data in wanted.items():
-        written += write_if_changed(memory_dir / rel, data)
+        if overwrite or not (memory_dir / rel).exists():
+            written += write_if_changed(memory_dir / rel, data)
     if replace and memory_dir.is_dir():
         for path in sorted(memory_dir.rglob('*'), reverse=True):
             rel = path.relative_to(memory_dir).as_posix()
@@ -489,8 +494,9 @@ def write_back(root, memory_dir, project_root, replace=True):
         for path in workflows.rglob('*'):
             if path.is_file():
                 rel = path.relative_to(workflows).as_posix()
-                written += write_if_changed(workflow_target(memory_dir.parent, rel),
-                                            expand_root(path.read_bytes(), project_root))
+                target = workflow_target(memory_dir.parent, rel)
+                if overwrite or not target.exists():
+                    written += write_if_changed(target, expand_root(path.read_bytes(), project_root))
     return written, removed
 
 
@@ -885,7 +891,7 @@ def remote_branch_checks(root, ref, remote):
     """Reasons a branch's commits that the remote lacks may not be pushed to a code host."""
     reasons = []
     pending = [ref, '--not', f'--remotes={remote}']
-    touched = out('log', '--format=', '--name-only', *pending, '--', *AGENT_PATHS, cwd=root)
+    touched = out('log', '--format=', '--name-only', '--diff-filter=d', *pending, '--', *AGENT_PATHS, cwd=root)
     touched = sorted({line for line in touched.splitlines() if line})
     if touched:
         reasons.append('new commits touch agent files (' + ', '.join(touched[:5]) + ')')
@@ -1005,16 +1011,6 @@ def sync(ws, dry_run=False, push_code_remotes=True, break_lock=False, report=Non
         if overlay.exists() and overlay.configure() and overlay.head():
             overlay.run('add', '--renormalize', '--force', '--', '.')
             report.add('overlay', 'agent files are now stored byte-exact (line-ending conversion turned off)')
-        if merging:
-            stage_overlay(ws, desired)
-            overlay.run('commit', '--quiet', '--no-verify', '--no-edit')
-            written, removed = write_back(ws.root, ws.memory_dir, ws.project_path)
-            report.add('overlay', f'finished the merge with the NAS overlay; wrote {written} and removed {removed} '
-                                  f'files in the Claude Code folders')
-        else:
-            written, removed = mirror_agent_home(ws.root, copies)
-            report.add('overlay', f'{len(copies)} copied agent-state files ({written} updated, {removed} removed) '
-                                  f'in .agent/')
         created = not overlay.exists()
         if created:
             overlay.init()
@@ -1026,9 +1022,29 @@ def sync(ws, dry_run=False, push_code_remotes=True, break_lock=False, report=Non
         elif remote_tip:
             overlay.run('update-ref', f'refs/remotes/nas/{OVERLAY_BRANCH}', remote_tip)
         if created and remote_tip and not overlay.head():
+            # A checkout that was not restored: take the NAS history, add only the files missing here (live agent
+            # files and notes win), give Claude Code the NAS-only notes, then list the files again.
             overlay.run('update-ref', f'refs/heads/{OVERLAY_BRANCH}', remote_tip)
             overlay.run('read-tree', remote_tip)
-            report.add('overlay', 'adopted the NAS overlay history for this new checkout')
+            overlay.run('checkout-index', '--all', '--quiet', check=False)
+            added, _ = write_back(ws.root, ws.memory_dir, ws.project_path, replace=False, overwrite=False)
+            report.add('overlay', f'adopted the NAS overlay history for this new checkout ({added} NAS-only files '
+                                  f'added to the Claude Code folders; files already here were kept)')
+            desired, copies, problems = overlay_plan(ws)
+            if problems:
+                for problem in problems:
+                    report.error('refused', problem)
+                return report
+        if merging:
+            stage_overlay(ws, desired)
+            overlay.run('commit', '--quiet', '--no-verify', '--no-edit')
+            written, removed = write_back(ws.root, ws.memory_dir, ws.project_path)
+            report.add('overlay', f'finished the merge with the NAS overlay; wrote {written} and removed {removed} '
+                                  f'files in the Claude Code folders')
+        else:
+            written, removed = mirror_agent_home(ws.root, copies)
+            report.add('overlay', f'{len(copies)} copied agent-state files ({written} updated, {removed} removed) '
+                                  f'in .agent/')
         if not merging and stage_overlay(ws, desired):
             overlay.run('commit', '--quiet', '--no-verify', '-m',
                         f'chore(overlay): sync from {platform.node() or "host"}')

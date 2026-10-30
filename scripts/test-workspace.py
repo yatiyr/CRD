@@ -475,6 +475,42 @@ class EndToEndTests(unittest.TestCase):
         self.assertIn('refs/heads/feature', host_refs)
         self.assertIn('refs/heads/leak', self.latest('code')[1]['refs'], 'the private NAS bundle has it')
 
+    def test_a_commit_that_untracks_agent_files_reaches_the_code_hosts(self):
+        root = self.a.root
+        git('checkout', '--quiet', '-b', 'cleanup', cwd=root)
+        git('add', '--force', 'CLAUDE.md', cwd=root)
+        git('commit', '--quiet', '-m', 'history from before the overlay', cwd=root)
+        git('push', '--quiet', 'host', 'cleanup', cwd=root)
+        git('rm', '--cached', '--quiet', 'CLAUDE.md', cwd=root)
+        git('commit', '--quiet', '-m', 'stop tracking the agent entry file', cwd=root)
+        git('checkout', '--quiet', 'main', cwd=root)
+        report, text = self.sync(self.a)
+        self.assertEqual(report.errors, 0, text)
+        self.assertEqual(ws_mod.ls_remote(self.host)['refs/heads/cleanup'], git('rev-parse', 'cleanup', cwd=root))
+
+    def test_a_new_checkout_adopts_the_nas_overlay_without_losing_either_side(self):
+        self.assertEqual(self.sync(self.a, push_code_remotes=False)[0].errors, 0)
+        b = Machine(self.base, 'b')
+        b.root.mkdir(parents=True)
+        git('clone', '--quiet', str(self.a.root), str(b.root))
+        (b.root / 'CLAUDE.md').write_text('# Local Claude entry pointer\n')
+        memory = b.memory()
+        memory.mkdir(parents=True)
+        (memory / 'lesson.md').write_text('a lesson, newer on b\n')
+        (memory / 'b-only.md').write_text('only on b\n')
+        report, text = self.sync(b, push_code_remotes=False)
+        self.assertEqual(report.errors, 0, text)
+        self.assertIn('adopted the NAS overlay history', text)
+        self.assertTrue((b.root / '.agent' / 'workspace.json').is_file(), 'the NAS config reaches the new checkout')
+        self.assertEqual((memory / 'MEMORY.md').read_text(), f'# memory\nEntry: [{b.root.resolve().as_posix()}/MEMORY.md]\n')
+        self.assertEqual((memory / 'lesson.md').read_text(), 'a lesson, newer on b\n', 'live notes are not overwritten')
+        files = self.overlay_files()
+        self.assertTrue({'.agent/workspace.json', '.agent/claude-memory/MEMORY.md', '.agent/claude-memory/b-only.md',
+                         'opencode.json', '.claude/settings.local.json'} <= files, files)
+        repo = self.bundle_repo('overlay')
+        self.assertEqual(git('--git-dir', str(repo), 'show', 'main:.agent/claude-memory/lesson.md'),
+                         'a lesson, newer on b')
+
     def test_nas_code_moves_on_only_from_a_checkout_that_knew_its_tips(self):
         root = self.a.root
         self.assertEqual(self.sync(self.a, push_code_remotes=False)[0].errors, 0)
