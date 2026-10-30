@@ -104,7 +104,8 @@ class Workspace:
     def path(self, name: str, *, internal=False) -> Path:
         name = portable_name(name)
         path = self.root / name
-        if name.split('/')[0] in {'.git', '.codex', '.agents', '.claude', 'out', *THIRD_PARTY_ROOTS}:
+        if name.split('/')[0] in {'.git', '.codex', '.agents', '.claude', '.agent', '.agent-overlay', 'out',
+                                   *THIRD_PARTY_ROOTS}:
             raise Conflict(f'Protected repository area: {name}')
         if name.split('/')[0] == 'build' and not internal:
             if not any(path.is_relative_to(build) for build in self.build_roots):

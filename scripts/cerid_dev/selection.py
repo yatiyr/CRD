@@ -225,7 +225,7 @@ def reverse_closure(targets, roots):
 
 def documentation(name):
     return (name.startswith('docs/') and Path(name).suffix.lower() in {'.md', '.png', '.jpg', '.svg', '.pdf'}) or name in {
-        'AGENTS.md', 'CLAUDE.md', 'MEMORY.md', 'README.md', 'START_HERE.md', 'context.md'}
+        'AGENTS.md', 'MEMORY.md', 'README.md', 'START_HERE.md', 'context.md'}
 
 
 CI_RISK = 'affected Windows/Linux CI; full matrix remains required for qualification'

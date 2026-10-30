@@ -7,14 +7,17 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+# Ignored, untracked agent tool files that the NAS agent overlay keeps (scripts/workspace.py); never source.
+AGENT_ROOT_FILES = {'CLAUDE.md', 'CLAUDE.local.md', 'opencode.json', '.mcp.json'}
+AGENT_ROOT_DIRS = {'.claude', '.codex', '.agents', '.agent', '.agent-overlay'}
 ROOT_FILES = {
     # `.git` is a file in a linked worktree (`gitdir: ...`), a directory in the main checkout.
     '.clang-format', '.clang-tidy', '.git', '.gitattributes', '.gitignore', '.natvis',
-    'AGENTS.md', 'CLAUDE.md', 'CMakeLists.txt', 'CMakePresets.json', 'CMakeUserPresets.json',
-    'context.md', 'LICENSE', 'MEMORY.md', 'opencode.json', 'README.md', 'START_HERE.md',
-}
-ROOT_DIRS = {
-    '.git', '.github', '.vs', '.vscode', '.idea', '.claude', '.codex', '.agents',
+    'AGENTS.md', 'CMakeLists.txt', 'CMakePresets.json', 'CMakeUserPresets.json',
+    'context.md', 'LICENSE', 'MEMORY.md', 'README.md', 'START_HERE.md',
+} | AGENT_ROOT_FILES
+ROOT_DIRS = AGENT_ROOT_DIRS | {
+    '.git', '.github', '.vs', '.vscode', '.idea',
     '.cpm-cache', '.sccache', '.venv', 'assets', 'bench', 'build', 'ci', 'cmake', 'docs', 'engine',
     'external', 'out', 'runtime', 'sandbox', 'scripts', 'tests', 'tools',
 }
@@ -94,11 +97,14 @@ def check(root=ROOT):
                 errors.append(f'Generated binary/capture in source: {name}')
             if re.search(r'(?:^|/)[^/]*[-_]tmp\.(?:bat|ps1)$', name):
                 errors.append(f'One-shot temporary script in source: {name}')
-        visible = ['AGENTS.md', 'CLAUDE.md', 'context.md', 'MEMORY.md', 'START_HERE.md',
+        visible = ['AGENTS.md', 'context.md', 'MEMORY.md', 'START_HERE.md', 'docs/README.md',
                    'assets/example.sdf', 'assets/example.ckir', 'assets/example.ceir',
                    'tests/example/reference.glb', 'docs/bench/example.md']
         hidden = ['build/scratch/run.txt', '.vs/session.bin', 'CMakeUserPresets.json',
-                  'external/ilupack/lib.a', '.cpm-cache/package/file', '__pycache__/module.pyc']
+                  'external/ilupack/lib.a', '.cpm-cache/package/file', '__pycache__/module.pyc',
+                  *sorted(AGENT_ROOT_FILES), *(name + '/state' for name in sorted(AGENT_ROOT_DIRS))]
+        errors.extend('Agent file tracked by the code repository (it belongs to the NAS overlay): ' + p
+                      for p in tracked if p.split('/')[0] in AGENT_ROOT_FILES | AGENT_ROOT_DIRS)
         ignored = set(git('check-ignore', '--no-index', '-z', '--stdin',
                           data=('\0'.join(visible + hidden) + '\0').encode()).split('\0'))
         errors.extend('Source hidden by ignore rules: ' + p for p in visible if p in ignored)

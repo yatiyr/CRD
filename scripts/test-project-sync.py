@@ -59,6 +59,9 @@ class Fixture(unittest.TestCase):
         self.assertFalse(outside_project(self.ws, self.root / self.name / 'src/main.cpp'))
         with self.assertRaisesRegex(Conflict, 'Protected repository area'):
             self.ws.path(cached)
+        for agent_state in ('.claude/settings.local.json', '.agent/claude-memory/MEMORY.md', '.agent-overlay/HEAD'):
+            with self.assertRaisesRegex(Conflict, 'Protected repository area'):
+                self.ws.path(agent_state)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='cerid-sync-')
