@@ -38,6 +38,33 @@ struct TileDep
     TileAccess access = TileAccess::Read;
 };
 
+namespace detail
+{
+// The schedulers' crd-jobs levers (SIMD-DISPATCH, the folded HESAP-JOBS-RETUNE): parallel_tiles_for,
+// TaskGraph::execute and each level of DependencyGraph::execute take the pick as their last argument, the default
+// keeping production's schedule, so production and the arms share one body; the thread-sweep board
+// (bench_hesap_sched_parallel) sets the defaults, and a lever that loses goes with its field. Both levers are
+// scheduling: which job runs a task, never what it computes. The level barrier stays: an executor that overlaps
+// levels has no consumer yet.
+struct SchedPick
+{
+    crd::u32 jobs_min_tasks = 1; // scheduling: a batch or level with fewer tasks runs on the calling thread in order
+    crd::u32 chunks_per_job = 1; // scheduling: a batch splits into this many contiguous ranges per job
+};
+
+// The ranges a batch of `tasks` runs as on `num_jobs`; 1 (the calling thread, no parallel_for) for one job, a pool
+// that is down or a batch below the cut.
+[[nodiscard]] inline crd::u32 sched_chunks(const SchedPick& pick, crd::u32 tasks, crd::u32 num_jobs) noexcept
+{
+    if (num_jobs <= 1 || tasks < pick.jobs_min_tasks || crd::jobs::num_workers() == 0)
+    {
+        return 1;
+    }
+    const crd::u64 chunks = crd::u64{num_jobs} * (pick.chunks_per_job == 0 ? 1U : pick.chunks_per_job);
+    return chunks < tasks ? static_cast<crd::u32>(chunks) : tasks;
+}
+} // namespace detail
+
 // -----------------------------------------------------------------------
 // parallel_tiles_for — convenience wrapper around `crd::jobs::parallel_for`
 // for 2D tile grids. Maps (i, j) ∈ [0, tile_rows) × [0, tile_cols) to a
@@ -48,14 +75,24 @@ struct TileDep
 // -----------------------------------------------------------------------
 
 template <typename Fn>
-inline void parallel_tiles_for(crd::u32 tile_rows, crd::u32 tile_cols, crd::u32 num_jobs, Fn fn)
+inline void parallel_tiles_for(crd::u32 tile_rows, crd::u32 tile_cols, crd::u32 num_jobs, Fn fn,
+                               const detail::SchedPick& pick = {})
 {
     const crd::u32 total = tile_rows * tile_cols;
     if (total == 0)
     {
         return;
     }
-    auto* counter = crd::jobs::parallel_for(total, num_jobs,
+    const crd::u32 chunks = detail::sched_chunks(pick, total, num_jobs);
+    if (chunks == 1)
+    {
+        for (crd::u32 k = 0; k < total; ++k)
+        {
+            fn(k / tile_cols, k % tile_cols);
+        }
+        return;
+    }
+    auto* counter = crd::jobs::parallel_for(total, chunks,
         [tile_cols, fn](crd::u32 begin, crd::u32 end)
         {
             for (crd::u32 k = begin; k < end; ++k)
@@ -102,9 +139,9 @@ public:
     [[nodiscard]] bool empty() const noexcept { return m_tasks.empty(); }
     void clear() noexcept { m_tasks.clear(); }
 
-    // Execute all tasks in parallel using `num_jobs` worker fibers.
-    // Caller must have called `crd::jobs::init()` beforehand.
-    void execute(crd::u32 num_jobs)
+    // Execute all tasks in parallel using `num_jobs` worker fibers; with one job,
+    // or with the jobs pool down, they run in order on the calling thread.
+    void execute(crd::u32 num_jobs, const detail::SchedPick& pick = {})
     {
         if (m_tasks.empty())
         {
@@ -112,7 +149,16 @@ public:
         }
         const auto* tasks_data = m_tasks.data();
         const crd::u32 total = static_cast<crd::u32>(m_tasks.size());
-        auto* counter = crd::jobs::parallel_for(total, num_jobs,
+        const crd::u32 chunks = detail::sched_chunks(pick, total, num_jobs);
+        if (chunks == 1)
+        {
+            for (crd::u32 k = 0; k < total; ++k)
+            {
+                tasks_data[k].fn(tasks_data[k].user_data, k);
+            }
+            return;
+        }
+        auto* counter = crd::jobs::parallel_for(total, chunks,
             [tasks_data](crd::u32 begin, crd::u32 end)
             {
                 for (crd::u32 k = begin; k < end; ++k)
@@ -262,14 +308,15 @@ public:
 
     // Run the DAG level-by-level. Each "level" is the set of currently-ready
     // tasks (unmet_in == 0). Tasks at one level run in parallel via
-    // `crd::jobs::parallel_for`. When a level finishes, successors whose
+    // `crd::jobs::parallel_for`, or in ready order on the calling thread when
+    // the pick keeps the level serial. When a level finishes, successors whose
     // unmet_in dropped to zero become the next level. Repeat until empty.
     //
     // This is simpler than a worker-pull-from-ring design and avoids fiber-
     // yield concerns. Trade-off: no overlap across levels (lose ~5-10% of
     // pipelined workloads). Filed: `v0d-formal-dag-pipeline` for the
     // pipelined variant when first consumer demands it.
-    void execute(crd::u32 num_jobs)
+    void execute(crd::u32 num_jobs, const detail::SchedPick& pick = {})
     {
         if (m_nodes.empty())
         {
@@ -302,18 +349,28 @@ public:
             // Run all tasks at this level in parallel.
             const crd::u32* batch = current.data();
             const crd::u32 batch_n = static_cast<crd::u32>(current.size());
-            const crd::u32 chunks = std::min(batch_n, num_jobs);
-            auto* counter = crd::jobs::parallel_for(
-                batch_n, chunks,
-                [batch, nodes_ptr](crd::u32 begin, crd::u32 end) {
-                    for (crd::u32 k = begin; k < end; ++k)
-                    {
-                        const crd::u32 task_idx = batch[k];
-                        const Node& node = nodes_ptr[task_idx];
-                        node.fn(node.user_data, task_idx);
-                    }
-                });
-            crd::jobs::wait(counter);
+            const crd::u32 chunks = detail::sched_chunks(pick, batch_n, num_jobs);
+            if (chunks == 1)
+            {
+                for (crd::u32 k = 0; k < batch_n; ++k)
+                {
+                    nodes_ptr[batch[k]].fn(nodes_ptr[batch[k]].user_data, batch[k]);
+                }
+            }
+            else
+            {
+                auto* counter = crd::jobs::parallel_for(batch_n, chunks,
+                                                        [batch, nodes_ptr](crd::u32 begin, crd::u32 end)
+                                                        {
+                                                            for (crd::u32 k = begin; k < end; ++k)
+                                                            {
+                                                                const crd::u32 task_idx = batch[k];
+                                                                const Node& node = nodes_ptr[task_idx];
+                                                                node.fn(node.user_data, task_idx);
+                                                            }
+                                                        });
+                crd::jobs::wait(counter);
+            }
 
             // Build next level: successors whose unmet count drops to zero.
             next.clear();

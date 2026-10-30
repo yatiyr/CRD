@@ -1,5 +1,6 @@
 add_executable(crd-hesap-sched-tests
     test_task_graph.cpp
+    test_sched_picks.cpp
 )
 
 target_link_libraries(crd-hesap-sched-tests PRIVATE
