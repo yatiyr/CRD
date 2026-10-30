@@ -377,4 +377,9 @@ systems for every preset, test, guard, sanitizer, SDE arm and ARM64 lane) is CI-
 | `host-check/arm64-sanitizer-cost` | Configure and build both trees | `experiment-arm64-sanitizer-cost` | open (CI-4): not yet carried |
 | `host-check/arm64-sanitizer-cost` | Interleaved timings | `experiment-arm64-sanitizer-cost` | open (CI-4): not yet carried |
 | `host-check/arm64-sanitizer-cost` | Preserve timings | `experiment-arm64-sanitizer-cost` | open (CI-4): not yet carried |
+| `host-check/x64-asan-stack-alignment` | Checkout | `experiment-x64-asan-stack-alignment` | open (CI-4): not yet carried |
+| `host-check/x64-asan-stack-alignment` | Setup Python 3.12 | `experiment-x64-asan-stack-alignment` | open (CI-4): not yet carried |
+| `host-check/x64-asan-stack-alignment` | Install pinned Intel SDE | `experiment-x64-asan-stack-alignment` | open (CI-4): not yet carried |
+| `host-check/x64-asan-stack-alignment` | Stack-alignment control | `experiment-x64-asan-stack-alignment` | open (CI-4): not yet carried |
+| `host-check/x64-asan-stack-alignment` | Preserve results | `experiment-x64-asan-stack-alignment` | open (CI-4): not yet carried |
 <!-- parity:end -->
