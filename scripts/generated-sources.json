@@ -944,7 +944,7 @@
         "numpy"
       ],
       "note": "Twiddles come from the host cmath.exp: Windows renders 11,802 lines one ulp apart (e.g. -0.7071067811865476 for -0.7071067811865475). A correctly rounded rendering and its regeneration are the FFT owner's qualification when that programme resumes; the reference host reproduced the header byte-for-byte in seven runs. Since 2026-10-28 the script also writes the codelet units (fft_codegen_split.py) and --check compares the header and every unit.",
-      "sha256": "721ee9f9ad9d0bae1e723d078631759c58dc66f9bd1066c1aac176537f398e66"
+      "sha256": "c0a4a9759520b05fbba06213938b523926e31720a4f1de87f6d6c117affe57fc"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_batched_codelets_0.cpp",
@@ -960,7 +960,7 @@
         "numpy"
       ],
       "note": "A codelet unit of batched_codelets_gen.hpp; twiddles render on the host as for the header, and the one --check run covers it.",
-      "sha256": "8df5811d155bb9164965b90d17504df3707a15133f68cd1ff764a668b8bf17f1"
+      "sha256": "44f29acc0c4ba21e6efa2b34572e9739eb5439ca7fc2c70803a28b5746401d77"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_batched_codelets_1.cpp",
@@ -976,7 +976,7 @@
         "numpy"
       ],
       "note": "A codelet unit of batched_codelets_gen.hpp; twiddles render on the host as for the header, and the one --check run covers it.",
-      "sha256": "d5327de3bd41f22c176c01be58cddf149a774f793a4ea9f5e7b5189d76e4ca6d"
+      "sha256": "9b69b3c5f0baf71ceb1fb7e3dcd7a45ab868aabc5df5e47555dfcf2d33441845"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_batched_codelets_2.cpp",
@@ -992,7 +992,7 @@
         "numpy"
       ],
       "note": "A codelet unit of batched_codelets_gen.hpp; twiddles render on the host as for the header, and the one --check run covers it.",
-      "sha256": "b1ffb8be10ec8c8a6246be4ca9178053bbc903c55dd3e13ad6c37ab27e04291d"
+      "sha256": "6dbd38dc888f47aefa3b295f019fa8aa111eed0fe9402a8755912b1c5179b344"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_batched_codelets_3.cpp",
@@ -1008,7 +1008,7 @@
         "numpy"
       ],
       "note": "A codelet unit of batched_codelets_gen.hpp; twiddles render on the host as for the header, and the one --check run covers it.",
-      "sha256": "247f0da1c37581cb2f2ddff35a37497ddda06111642e4abc9ca117fa92f9c797"
+      "sha256": "802b24cf6311189c94548568979c259162704ae34a9180506831fcbd7f4b9f06"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_batched_codelets_4.cpp",
@@ -1024,7 +1024,7 @@
         "numpy"
       ],
       "note": "A codelet unit of batched_codelets_gen.hpp; twiddles render on the host as for the header, and the one --check run covers it.",
-      "sha256": "b65e7ebdd33c0897425a2d0548e7e2d9b08d6e321ea42eae5bd33d297cba99e8"
+      "sha256": "b0f56c0c9ad4b436ec11bf87c657956e29b7256f68a493681fb3ef6ffac92518"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_batched_codelets_5.cpp",
@@ -1040,7 +1040,7 @@
         "numpy"
       ],
       "note": "A codelet unit of batched_codelets_gen.hpp; twiddles render on the host as for the header, and the one --check run covers it.",
-      "sha256": "eaa241274a44f273e23a8dca61b4ce5679a2cbe565fb5f27ad92a856afb6dcc9"
+      "sha256": "55ff890a21730f90e611691d44ef2e3918ad6d40488e0d1fa56e711273e84d03"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_batched_codelets_6.cpp",
@@ -1056,7 +1056,7 @@
         "numpy"
       ],
       "note": "A codelet unit of batched_codelets_gen.hpp; twiddles render on the host as for the header, and the one --check run covers it.",
-      "sha256": "b2aaa7e2a4026cd169f8e7bae94eb7bc9d022273e2236758e32a5f6480fd473f"
+      "sha256": "81e0fc6550535f0d661785adad7fd54edbb41ed5d59e28206e0246c6fc4537dd"
     },
     {
       "path": "engine/numerics/hesap-fft/include/crd/hesap/fft/detail/codelets.hpp",
@@ -1086,7 +1086,7 @@
         "numpy"
       ],
       "note": "The radix-8/16/32 combine codelets' declarations; twiddles render on the host as for codelets.hpp, and the one --check run covers it.",
-      "sha256": "2ebf180dcf6a88be680084a4fa960b9566c89542c8d4613c08aed9e2df5a21e9"
+      "sha256": "7be74a6478991726c1fce6233231154d0417674ed8e8d260eb7a0b053cd78186"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_twiddle_codelets_0.cpp",
@@ -1101,7 +1101,7 @@
         "numpy"
       ],
       "note": "A codelet unit of twiddle_codelets.hpp; twiddles render on the host as for the header, and the one --check run covers it.",
-      "sha256": "cb63cbbe713474a32d53a42712de39f50c93663acadb3a19ad9896a70001ec7a"
+      "sha256": "9cc06688c1a2cbf2bd61a4eae7533c0958a713054ab85bb201d2d6ad7d073ea0"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_twiddle_codelets_1.cpp",
@@ -1116,28 +1116,28 @@
         "numpy"
       ],
       "note": "A codelet unit of twiddle_codelets.hpp; twiddles render on the host as for the header, and the one --check run covers it.",
-      "sha256": "af862883ebac38b3eaf251b9af23584ebbe2257ca1cc1d40c4bf8c13f23d7ba0"
+      "sha256": "6e8fafc32b96fa22bba95d03fe0444bdb633c74318001473cc87db47738ce785"
     },
     {
       "path": "engine/numerics/hesap-fft/include/crd/hesap/fft/detail/hier_codelets.hpp",
       "generator": "build/gen_subfft_m3.py",
       "status": "generator-absent",
-      "note": "build/gen_subfft_m3.py was a scratch generator that was never committed; the header is the surviving artifact (style-normalized by fft_codegen_style.py on 2026-09-12). On 2026-10-27 (SIMD-DISPATCH) its never-defined CRD_FFT_* experiment gates were resolved to their default branches and three unreferenced f64 stage-1 codelets (64x16, 16x64, 32x64) deleted, and the codelets moved into the level namespace (crd::hesap::fft::gen::inline CRD_MATH_LEVEL_NS). On 2026-10-28 `scripts/fft_codegen_split.py --lanes <header> 150 2 engine/numerics/hesap-fft/kernels/fft_hier_codelets`, run on the bytes before the split (20c9f2a1^), left the header with the declarations and moved the definitions into two codelet units (tile bodies in parts of at most 150 lines, on codelet_lanes.hpp's lanes, so the portable level runs them a column at a time); the codelet_policy.hpp and simd.hpp includes it no longer needs were removed and the split command recorded in its comment.",
-      "sha256": "1e3ca6da1e450a5b675a72960c9003aacd6669f36a4a935c3b34de1cc4943fe2"
+      "note": "build/gen_subfft_m3.py was a scratch generator that was never committed; the header is the surviving artifact (style-normalized by fft_codegen_style.py on 2026-09-12). On 2026-10-27 (SIMD-DISPATCH) its never-defined CRD_FFT_* experiment gates were resolved to their default branches and three unreferenced f64 stage-1 codelets (64x16, 16x64, 32x64) deleted, and the codelets moved into the level namespace (crd::hesap::fft::gen::inline CRD_MATH_LEVEL_NS). On 2026-10-28 `scripts/fft_codegen_split.py --lanes <header> 150 2 engine/numerics/hesap-fft/kernels/fft_hier_codelets`, run on the bytes before the split (20c9f2a1^), left the header with the declarations and moved the definitions into two codelet units (tile bodies in parts of at most 150 lines, on codelet_lanes.hpp's lanes, so the portable level runs them a column at a time); the codelet_policy.hpp and simd.hpp includes it no longer needs were removed and the split command recorded in its comment. On 2026-10-30 the same command, the splitter now also writing each codelet whole for avx2 and avx512, re-split the units from those bytes.",
+      "sha256": "232a588040c7c5d8ddeb21d5d43c2f9bd2928858d5fd04960afff71cb28dbe29"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_hier_codelets_0.cpp",
       "generator": "build/gen_subfft_m3.py",
       "status": "generator-absent",
-      "note": "A codelet unit of hier_codelets.hpp, moved out of it by scripts/fft_codegen_split.py on 2026-10-28 and re-split the same day with parts templated on the lane (SIMD-DISPATCH fft zmm codelets): the same --lanes command on the 20c9f2a1^ header bytes; the bytes are the artifact, as for the header.",
-      "sha256": "2470edfbc1711f764632519ec40953cd4f1d76bf52c60e8275e68ced6983a9b1"
+      "note": "A codelet unit of hier_codelets.hpp, moved out of it by scripts/fft_codegen_split.py on 2026-10-28 and re-split the same day with parts templated on the lane (SIMD-DISPATCH fft zmm codelets): the same --lanes command on the 20c9f2a1^ header bytes, re-run on 2026-10-30 when the splitter began writing each codelet whole beside its split edition; the bytes are the artifact, as for the header.",
+      "sha256": "5ff7bda379445f30737435fa069a27497f11348384301c619f5c9f8cd59697a2"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_hier_codelets_1.cpp",
       "generator": "build/gen_subfft_m3.py",
       "status": "generator-absent",
-      "note": "A codelet unit of hier_codelets.hpp, moved out of it by scripts/fft_codegen_split.py on 2026-10-28 and re-split the same day with parts templated on the lane (SIMD-DISPATCH fft zmm codelets): the same --lanes command on the 20c9f2a1^ header bytes; the bytes are the artifact, as for the header.",
-      "sha256": "5f9dad14081bc6de65d30598ff51d03e343c1174b8e40804497478bbd6247994"
+      "note": "A codelet unit of hier_codelets.hpp, moved out of it by scripts/fft_codegen_split.py on 2026-10-28 and re-split the same day with parts templated on the lane (SIMD-DISPATCH fft zmm codelets): the same --lanes command on the 20c9f2a1^ header bytes, re-run on 2026-10-30 when the splitter began writing each codelet whole beside its split edition; the bytes are the artifact, as for the header.",
+      "sha256": "d8045b2c841c483c185c1c3279c6177ee04b3d1bd73e29205e0df9594b846c1f"
     },
     {
       "path": "engine/numerics/hesap-ode/include/crd/hesap/ode/detail/ark_tableaus.hpp",

@@ -296,7 +296,14 @@ class RepositoryTools(unittest.TestCase):
                       '    }\n    if constexpr (lanes::kPairedTiles<crd::f64>)\n    {\n'
                       '        using H = lanes::TileLane<crd::f64>;\n        if (wide < tiles)\n        {\n'
                       '            codelet2_part0<H>(in, out, b, wide);\n        }\n    }\n}', whole)
-        _, (split,) = split_kernels(single, 3, 1)
+        _, (both,) = split_kernels(single, 3, 1)
+        # Each unit holds every codelet whole for the levels whose lane is one register, then the split edition.
+        self.assertTrue(both.startswith(opening + '\n#ifdef CRD_FFT_GEN_WHOLE_BODY\n'))
+        self.assertTrue(both.endswith('\n#endif\n' + closing + '\n'))
+        whole, split = both[len(opening) + 1:].split('\n#else\n')
+        self.assertIn('codelet2_part0<V>(in, out, b, t);\n    }\n', whole)
+        self.assertNotIn('_part1', whole)
+        self.assertNotIn('sp[', whole)
         self.assertIn('crd::usize t, V* sp) noexcept', split)
         self.assertIn('crd::usize t, const V* sp) noexcept', split)
         self.assertIn('    alignas(64) V sp[2];\n' + drive + '        codelet2_part0<V>(in, out, b, t, sp);\n'

@@ -20,6 +20,12 @@
 
 #if (defined(NDEBUG) || defined(__OPTIMIZE__)) && !CRD_SIMD_IS_SCALAR
 #define CRD_FFT_GEN_SIMD_BODY
+// Where a lane is one register (avx2, avx512) the codelet units compile each tile body whole: the split edition's slot
+// traffic cost those levels up to a fifth of a large transform (fft_codegen_split.py). Elsewhere a lane is two
+// registers or a column, and the parts bound the optimizer.
+#if CRD_SIMD_HAS_AVX2
+#define CRD_FFT_GEN_WHOLE_BODY
+#endif
 #include <crd/math/simd/vec4d.hpp>
 #include <crd/math/simd/vec8f.hpp>
 #if CRD_SIMD_HAS_AVX512

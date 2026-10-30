@@ -401,8 +401,9 @@ def twiddle_source():
              "// split-radix DAGs, register-pressure scheduled, numerically self-checked against numpy before"
              " emission.",
              f"// Declarations only: the definitions sit in {CODELET_UNITS} codelet units balanced by line count",
-             f"// (kernels/fft_twiddle_codelets_<k>.cpp; tile bodies in parts of at most {SPLIT_BUDGET} lines,",
-             "// fft_codegen_split.py): MSVC's optimizer is superlinear in a function's and a unit's size.",
+             "// (kernels/fft_twiddle_codelets_<k>.cpp, fft_codegen_split.py): each codelet whole at avx2 and",
+             f"// avx512, else tile bodies in parts of at most {SPLIT_BUDGET} lines (MSVC's optimizer is",
+             "// superlinear in a function's and a unit's size).",
              "#include <crd/core/types.hpp>", "#include <crd/math/kernel_level.hpp>",
              "namespace crd::hesap::fft::detail::inline CRD_MATH_LEVEL_NS {"]
     for prec in ("f64", "f32"):

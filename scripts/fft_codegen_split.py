@@ -7,7 +7,10 @@ unit took 799 s and 4.9 GB at SSE2 even with split bodies (2026-10-28 SIMD-DISPA
 - It cuts each codelet's tile loop body, in its scheduled order, into parts of at most `budget` lines. Each part is
   a non-inlined internal function of the codelet's parameters, the tile index and a slot array; the values that
   cross a cut go through the slots, which reuse their storage once read for the last time. No operation changes or
-  moves past another, so every level keeps its bits. Cuts sit where the fewest values cross.
+  moves past another, so every level keeps its bits. Cuts sit where the fewest values cross. The slots cost a
+  register-wide lane up to a fifth of a deep-split or four-step transform (f64 128K to 8M at avx2, 2026-10-30), so
+  each unit also holds every codelet whole, one part, under CRD_FFT_GEN_WHOLE_BODY: codelet_lanes.hpp defines it
+  where a lane is one register (avx2 and avx512, optimized), and MSVC builds such a unit in about 140 s and 2.2 GB.
 - It leaves the header with the codelets' declarations and spreads their definitions over `units` codelet units by
   line count (largest first, each to the unit with the fewest lines so far), so no unit outgrows a compiler and the
   engine unit that calls them parses declarations only. One call per codelet covers a whole batch.
@@ -27,6 +30,7 @@ over the whole tiles it holds (one tile above the portable level, two at avx512,
 rewrites a generator-absent header in place and writes `<unit-stem>_<k>.cpp`; --lanes first retypes a header's
 Vec4d/Vec8f bodies onto the lanes. gen_fft_batched.py and gen_fft_codelets.py call split_kernels() themselves.
 """
+import math
 from pathlib import Path
 import re
 import sys
@@ -38,6 +42,7 @@ _VALUE_DEF = re.compile(r'(?:^\s*|[;{]\s*)(?:const )?V (n\d+[ri])\b', re.M)
 _LOCAL_DEF = re.compile(r'^\s*const (?!V )[^=;]*?\b(\w+) = ')
 _WORD = re.compile(r'\b[A-Za-z_]\w*\b')
 _SUFFIX = '_part'
+_WHOLE = 'CRD_FFT_GEN_WHOLE_BODY'
 _LANES = 'crd::hesap::fft::lanes'
 _RETYPE = {'    using V = crd::math::simd::Vec4d;': f'    using V = {_LANES}::Lane<crd::f64>;',
            '    using V = crd::math::simd::Vec8f;': f'    using V = {_LANES}::Lane<crd::f32>;',
@@ -241,8 +246,8 @@ def _split_kernel(name, signature, prologue, loop, body, budget):
 
 def split_kernels(source, budget, units):
     """Return (header, unit bodies): `source` with each codelet replaced by its declaration, and `units` texts, each
-    the header's namespace holding the definitions of that unit's codelets (tile bodies longer than `budget` lines
-    run in parts)."""
+    the header's namespace holding the definitions of that unit's codelets twice: whole under CRD_FFT_GEN_WHOLE_BODY,
+    else with tile bodies longer than `budget` lines in parts. The split edition's lines balance the units."""
     lines = source.split('\n')
     head = []
     kernels = []
@@ -291,13 +296,16 @@ def split_kernels(source, budget, units):
         if len(prologue) < 2 or not _LANE_OF.match(prologue[0]) or prologue[1] != f'    namespace simd = {_LANES};' or (
                 not _TILE_LOOP.match(loop)):
             raise ValueError(f'{name}: unexpected kernel prologue')
-        parts, driver = _split_kernel(name, signature, prologue, loop, body, budget)
         # The invariant locals a scalar tail reads.
         invariant = [(_LOCAL_DEF.match(line).group(1), line) for line in prologue[2:]]
-        definition = parts + comment + signature + ['{'] + driver + _closure('\n'.join(rest), invariant) + rest
+        tail_locals = _closure('\n'.join(rest), invariant)
+        editions = []
+        for edition_budget in (budget, math.inf):
+            parts, driver = _split_kernel(name, signature, prologue, loop, body, edition_budget)
+            editions.append(parts + comment + signature + ['{'] + driver + tail_locals + rest)
         declaration = [line for line in comment if 'NOLINT' not in line] + signature[:-1] + [signature[-1] + ';']
         # Comments and blank lines after a codelet belong to the next one; the last codelet's go to the tail.
-        kernels.append({'declaration': declaration, 'definition': definition, 'trailing': []})
+        kernels.append({'declaration': declaration, 'definition': editions[0], 'whole': editions[1], 'trailing': []})
         while index < len(lines) and not _KERNEL.match(lines[index]) and (
                 lines[index].startswith('//') or not lines[index].strip()):
             kernels[-1]['trailing'].append(lines[index])
@@ -318,8 +326,10 @@ def split_kernels(source, budget, units):
     header = head + [line for kernel in kernels for line in kernel['declaration']] + tail
     bodies = []
     for unit in range(units):
-        definitions = [line for k, kernel in enumerate(kernels) if unit_of[k] == unit for line in kernel['definition']]
-        bodies.append('\n'.join([opening] + definitions + [closing, '']))
+        mine = [kernel for k, kernel in enumerate(kernels) if unit_of[k] == unit]
+        whole = [line for kernel in mine for line in kernel['whole']]
+        split = [line for kernel in mine for line in kernel['definition']]
+        bodies.append('\n'.join([opening, f'#ifdef {_WHOLE}'] + whole + ['#else'] + split + ['#endif', closing, '']))
     return '\n'.join(header), bodies
 
 
