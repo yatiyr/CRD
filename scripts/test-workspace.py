@@ -119,6 +119,13 @@ class RefusalTests(unittest.TestCase):
         self.assertEqual(len(problems), 5)
         self.assertTrue(any('transcript' in p for p in problems))
 
+    def test_uncached_read_back_hashes_every_size_like_a_plain_read(self):
+        with tempfile.TemporaryDirectory() as temp:
+            for size in (0, 1, 4095, 4096, (1 << 20) - 1, 1 << 20, (1 << 20) + 3, 3 * (1 << 20) + 517):
+                path = Path(temp) / f'f{size}'
+                path.write_bytes(os.urandom(size))
+                self.assertEqual(ws_mod.uncached_sha256(path), ws_mod.file_sha256(path), size)
+
     def test_root_placeholders_round_trip_byte_exact(self):
         root = Path('D:/Dev/cerid') if os.name == 'nt' else Path('/home/u/cerid')
         original = (f'See {root.as_posix()}/MEMORY.md and {ws_mod.native_root(root)}\\docs\\x.md; '
@@ -227,6 +234,7 @@ class EndToEndTests(unittest.TestCase):
         git('init', '--quiet', '-b', 'main', cwd=root)
         git('config', 'core.autocrlf', 'false', cwd=root)
         shutil.copyfile(ROOT / '.gitignore', root / '.gitignore')
+        shutil.copyfile(ROOT / '.gitattributes', root / '.gitattributes')  # it also applies to the overlay
         (root / 'docs').mkdir()
         (root / 'docs' / 'README.md').write_text('# docs\n')
         (root / 'cmake').mkdir()
@@ -261,7 +269,9 @@ class EndToEndTests(unittest.TestCase):
         (project / 'session-1' / 'subagents').mkdir(parents=True)
         (project / 'session-1' / 'subagents' / 'agent.jsonl').write_text('{}\n')
         (project / 'session-1' / 'workflows' / 'scripts').mkdir(parents=True)
-        (project / 'session-1' / 'workflows' / 'scripts' / 'serial.js').write_text(f'// {root.as_posix()}\n')
+        (project / 'session-1' / 'workflows' / 'scripts' / 'serial.js').write_bytes(
+            f'// {root.as_posix()}\r\nexport const a = 1\r\n'.encode())
+        (memory / 'crlf-note.md').write_bytes(b'a note saved with CRLF\r\nsecond line\r\n')
         (machine.downloads / 'demo-1.0').mkdir(parents=True)
         (machine.downloads / 'demo-1.0' / 'demo-1.0.tar.gz').write_bytes(tool)
         (machine.downloads / 'unpinned.json').write_text('{}')
@@ -320,7 +330,8 @@ class EndToEndTests(unittest.TestCase):
             self.assertEqual((self.nas / rel).stat().st_size, entry['size'], rel)
         self.assertEqual(self.overlay_files(), {
             'CLAUDE.md', 'opencode.json', '.claude/settings.local.json', '.agent/workspace.json',
-            '.agent/claude-memory/MEMORY.md', '.agent/claude-memory/lesson.md', '.agent/workflows/session-1/serial.js'})
+            '.agent/claude-memory/MEMORY.md', '.agent/claude-memory/lesson.md', '.agent/claude-memory/crlf-note.md',
+            '.agent/workflows/session-1/serial.js'})
         repo = self.bundle_repo('overlay')
         stored = git('--git-dir', str(repo), 'show', 'main:.agent/claude-memory/MEMORY.md')
         self.assertIn(ws_mod.ROOT_TOKEN + '/MEMORY.md', stored)
@@ -344,6 +355,23 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(nas_listing(self.nas), listing, 'a second sync writes nothing to the NAS')
         status, differences = ws_mod.status(self.a.workspace(self.nas))
         self.assertEqual(differences, 0, '\n'.join(status.lines))
+
+    def test_an_overlay_made_before_the_byte_exact_rule_is_renormalized(self):
+        self.assertEqual(self.sync(self.a, push_code_remotes=False)[0].errors, 0)
+        overlay = ws_mod.Overlay(self.a.root)
+        (overlay.git_dir / 'info' / 'attributes').unlink()
+        overlay.run('rm', '--cached', '--quiet', '--', '.claude/settings.local.json')
+        overlay.run('add', '--force', '--', '.claude/settings.local.json')
+        overlay.run('commit', '--quiet', '-m', 'stored the way an early overlay did')
+        normalized = overlay.run('show', 'HEAD:.claude/settings.local.json').stdout
+        self.assertFalse(normalized.endswith(b'\r\n'), 'the code .gitattributes converted it')
+        report, text = self.sync(self.a, push_code_remotes=False)
+        self.assertEqual(report.errors, 0, text)
+        self.assertIn('now stored byte-exact', text)
+        repo = self.bundle_repo('overlay')
+        stored = subprocess.run(['git', '--git-dir', str(repo), 'show', 'main:.claude/settings.local.json'],
+                                stdout=subprocess.PIPE).stdout
+        self.assertEqual(stored, (self.a.root / '.claude' / 'settings.local.json').read_bytes())
 
     def test_sync_refuses_secrets_and_transcripts_before_writing(self):
         (self.a.memory() / 'leak.md').write_text('token ' + FAKE['GitHub token'] + '\n')
@@ -505,7 +533,8 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual((memory / 'MEMORY.md').read_text(), f'# memory\nEntry: [{destination.as_posix()}/MEMORY.md]\n')
         self.assertEqual((memory / 'lesson.md').read_text(), 'a lesson\n')
         flow = memory.parent / 'session-1' / 'workflows' / 'scripts' / 'serial.js'
-        self.assertEqual(flow.read_text(), f'// {destination.as_posix()}\n')
+        self.assertEqual(flow.read_bytes(), f'// {destination.as_posix()}\r\nexport const a = 1\r\n'.encode())
+        self.assertEqual((memory / 'crlf-note.md').read_bytes(), b'a note saved with CRLF\r\nsecond line\r\n')
         self.assertFalse((memory.parent / 'session-1.jsonl').exists())
         self.assertEqual((b.downloads / 'demo-1.0' / 'demo-1.0.tar.gz').read_bytes(), self.a.tool)
         restored = ws_mod.Workspace(destination, self.nas, b.claude, b.downloads)

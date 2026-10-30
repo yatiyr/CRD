@@ -60,6 +60,9 @@ LOCAL_STATE_DIRS = {'worktrees', 'cache', 'caches', 'log', 'logs', 'tmp', 'temp'
 LOCAL_STATE_FILES = ('*.lock', '*.log', '*.tmp', '*.pid', '*.swp')
 # The code repository must never receive these paths again (forward-only: history keeps its old copies).
 AGENT_PATHS = OVERLAY_ROOT_FILES + OVERLAY_ROOT_DIRS + (OVERLAY_HOME, OVERLAY_GIT_DIR)
+OVERLAY_EXCLUDE = '# The overlay stages an explicit file list (scripts/workspace.py); nothing else.\n*\n'
+OVERLAY_ATTRIBUTES = ('# Agent files are stored byte-exact: no line-ending, filter or encoding conversion.\n'
+                      '* -text !eol -filter -ident !working-tree-encoding\n')
 CONFIDENTIAL_MARKER = '.cerid-confidential'
 ROOT_TOKEN = '{{CERID_ROOT}}'
 NATIVE_ROOT_TOKEN = '{{CERID_ROOT_NATIVE}}'
@@ -250,13 +253,21 @@ class Overlay:
 
     def init(self):
         git('init', '--quiet', '--bare', f'--initial-branch={OVERLAY_BRANCH}', posix(self.git_dir))
+        self.configure()
+
+    def configure(self):
+        """Settings of an overlay repository; idempotent. Returns whether the stored-bytes rule had to change.
+
+        The code repository's .gitattributes sits in the overlay's work tree and would convert line endings
+        (`* text=auto`, `*.json eol=lf`, ...); info/attributes outranks it, so agent files are stored byte-exact.
+        """
         for key, value in (('core.bare', 'false'), ('core.worktree', '..'), ('core.autocrlf', 'false'),
                            ('core.safecrlf', 'false'), ('status.showUntrackedFiles', 'no')):
             git(f'--git-dir={posix(self.git_dir)}', 'config', key, value)
-        exclude = self.git_dir / 'info' / 'exclude'
-        exclude.parent.mkdir(parents=True, exist_ok=True)
-        exclude.write_text('# The overlay stages an explicit file list (scripts/workspace.py); nothing else.\n*\n',
-                           encoding='utf-8', newline='\n')
+        info = self.git_dir / 'info'
+        info.mkdir(parents=True, exist_ok=True)
+        write_if_changed(info / 'exclude', OVERLAY_EXCLUDE.encode())
+        return write_if_changed(info / 'attributes', OVERLAY_ATTRIBUTES.encode())
 
     def head(self):
         result = self.run('rev-parse', '--verify', '--quiet', 'HEAD^{commit}', check=False)
@@ -524,6 +535,55 @@ def local_downloads(downloads, pins_path):
     return found, unpinned
 
 
+def uncached_sha256(path):
+    """SHA-256 of a file read past this machine's file cache, so a NAS copy is checked as the NAS holds it.
+
+    Windows opens it with FILE_FLAG_NO_BUFFERING, which makes the SMB client fetch from the server instead of its
+    cache (page-aligned 1 MiB reads; the last read may return less). POSIX drops the cached pages first
+    (posix_fadvise DONTNEED; a CIFS mount with cache=strict or none honours it).
+    """
+    hasher = hashlib.sha256()
+    if os.name != 'nt':
+        descriptor = os.open(path, os.O_RDONLY)
+        try:
+            if hasattr(os, 'posix_fadvise'):
+                os.posix_fadvise(descriptor, 0, 0, os.POSIX_FADV_DONTNEED)
+            while chunk := os.read(descriptor, 1 << 20):
+                hasher.update(chunk)
+        finally:
+            os.close(descriptor)
+        return hasher.hexdigest()
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                   wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel.ReadFile.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+                                ctypes.c_void_p]
+    kernel.VirtualAlloc.restype = ctypes.c_void_p
+    kernel.VirtualAlloc.argtypes = [ctypes.c_void_p, ctypes.c_size_t, wintypes.DWORD, wintypes.DWORD]
+    kernel.VirtualFree.argtypes = [ctypes.c_void_p, ctypes.c_size_t, wintypes.DWORD]
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.CreateFileW(str(path), 0x80000000, 0x1, None, 3, 0x20000000 | 0x08000000, None)
+    if handle in (None, wintypes.HANDLE(-1).value):
+        raise WorkspaceError(f'cannot open {path} unbuffered (Windows error {ctypes.get_last_error()})')
+    size = 1 << 20
+    buffer = kernel.VirtualAlloc(None, size, 0x3000, 0x04)
+    try:
+        count = wintypes.DWORD()
+        while True:
+            if not kernel.ReadFile(handle, buffer, size, ctypes.byref(count), None):
+                raise WorkspaceError(f'unbuffered read of {path} failed (Windows error {ctypes.get_last_error()})')
+            if not count.value:
+                break
+            hasher.update(ctypes.string_at(buffer, count.value))
+    finally:
+        kernel.VirtualFree(buffer, 0, 0x8000)
+        kernel.CloseHandle(handle)
+    return hasher.hexdigest()
+
+
 def copy_verified(source, destination, sha):
     """Local copy through a .partial file, renamed only after its SHA-256 matches."""
     destination = Path(destination)
@@ -608,7 +668,7 @@ class Nas:
 
     def verified(self, rel, entry):
         path = self.path(rel)
-        if not path.is_file() or path.stat().st_size != entry['size'] or file_sha256(path) != entry['sha256']:
+        if not path.is_file() or path.stat().st_size != entry['size'] or uncached_sha256(path) != entry['sha256']:
             raise WorkspaceError(f'{rel} on the NAS does not match MANIFEST.json (size or SHA-256)')
         return path
 
@@ -662,7 +722,7 @@ class Nas:
                 shutil.copyfileobj(reader, writer, 8 << 20)
                 writer.flush()
                 os.fsync(writer.fileno())
-            if file_sha256(partial) != sha:
+            if uncached_sha256(partial) != sha:
                 raise WorkspaceError(f'{rel}: the copy read back from the NAS does not match its SHA-256')
             if bundle_repo is not None:
                 check = git('bundle', 'verify', '--quiet', posix(partial), cwd=bundle_repo, check=False)
@@ -684,7 +744,7 @@ class Nas:
                 writer.write(data)
                 writer.flush()
                 os.fsync(writer.fileno())
-            if partial.read_bytes() != data:
+            if uncached_sha256(partial) != hashlib.sha256(data).hexdigest():
                 raise WorkspaceError('MANIFEST.json read back from the NAS differs from what was written')
         except BaseException:
             if partial.exists():
@@ -850,7 +910,7 @@ def push_code_remote(ws, remote, report):
             continue
         reasons = remote_branch_checks(ws.root, ref, remote)
         if reasons:
-            report.error(f'code→{remote}', f'{branch} not pushed: ' + '; '.join(reasons))
+            report.error(f'code->{remote}', f'{branch} not pushed: ' + '; '.join(reasons))
         else:
             spec.append(f'{ref}:{ref}')
     spec.append('refs/tags/*:refs/tags/*')
@@ -859,13 +919,13 @@ def push_code_remote(ws, remote, report):
     for line in lines:
         flag, _, rest = line.partition('\t')
         if flag == '!':
-            report.error(f'code→{remote}', 'rejected ' + rest)
+            report.error(f'code->{remote}', 'rejected ' + rest)
         elif flag in ('+', '*', '-'):
-            report.add(f'code→{remote}', 'pushed ' + rest)
+            report.add(f'code->{remote}', 'pushed ' + rest)
     if result.returncode != 0 and not any(line.startswith('!') for line in lines):
-        report.error(f'code→{remote}', result.stderr.decode('utf-8', errors='replace').strip())
+        report.error(f'code->{remote}', result.stderr.decode('utf-8', errors='replace').strip())
     elif not any(line.startswith(('+', '*', '-')) for line in lines):
-        report.add(f'code→{remote}', 'up to date')
+        report.add(f'code->{remote}', 'up to date')
 
 
 def source_info(ws, remotes):
@@ -942,6 +1002,9 @@ def sync(ws, dry_run=False, push_code_remotes=True, break_lock=False, report=Non
 
         # 1. Overlay: mirror the outside state into .agent/, commit, merge the newest NAS overlay, write back.
         overlay = ws.overlay
+        if overlay.exists() and overlay.configure() and overlay.head():
+            overlay.run('add', '--renormalize', '--force', '--', '.')
+            report.add('overlay', 'agent files are now stored byte-exact (line-ending conversion turned off)')
         if merging:
             stage_overlay(ws, desired)
             overlay.run('commit', '--quiet', '--no-verify', '--no-edit')
@@ -1005,18 +1068,18 @@ def sync(ws, dry_run=False, push_code_remotes=True, break_lock=False, report=Non
         code_rel, code_latest = nas.latest(manifest, 'code')
         changes, rejected = ref_plan(ws.root, code_latest['refs'] if code_latest else {}, refs)
         for reason in rejected:
-            report.error('code→nas', reason)
+            report.error('code->nas', reason)
         if rejected:
-            report.add('code→nas', 'no code bundle written until the refs above are fetched')
+            report.add('code->nas', 'no code bundle written until the refs above are fetched')
         elif changes or not code_latest:
             local = scratch / 'code.bundle'
             entry = make_bundle(['-C', posix(ws.root)], local, '--branches', '--tags')
             writes.append((unique_name(nas, manifest, 'code', f'code-{now}', '.bundle'), local,
                            dict(entry, kind='code', head_branch=code_head_branch(ws)), ws.root))
             for ref, note in changes:
-                report.add('code→nas', f'{ref} ({note})')
+                report.add('code->nas', f'{ref} ({note})')
         else:
-            report.add('code→nas', f'the newest NAS code bundle already has all {len(refs)} branches and tags')
+            report.add('code->nas', f'the newest NAS code bundle already has all {len(refs)} branches and tags')
 
         # 3. Pinned tool downloads, by cmake/pins.json SHA-256 (single compressed archives).
         found, unpinned = local_downloads(ws.downloads, ws.root / 'cmake' / 'pins.json')
@@ -1047,7 +1110,7 @@ def sync(ws, dry_run=False, push_code_remotes=True, break_lock=False, report=Non
     for name in remotes:
         push_code_remote(ws, name, report)
     if not push_code_remotes:
-        report.add('code→hosts', 'skipped (--no-code-remotes)')
+        report.add('code->hosts', 'skipped (--no-code-remotes)')
     return report
 
 
@@ -1109,7 +1172,7 @@ def sync_preview(ws, nas, desired, remotes, report):
         code_rel, code_latest = nas.latest(manifest, 'code')
         changes, rejected = ref_plan(ws.root, code_latest['refs'] if code_latest else {}, refs)
         for reason in rejected:
-            report.error('dry-run', 'code→nas ' + reason)
+            report.error('dry-run', 'code->nas ' + reason)
         if not rejected and (changes or not code_latest):
             entry = make_bundle(['-C', posix(ws.root)], Path(scratch) / 'code.bundle', '--branches',
                                 '--tags')
@@ -1138,7 +1201,7 @@ def sync_preview(ws, nas, desired, remotes, report):
         report.error('dry-run', 'not enough free space on the NAS share')
     report.add('dry-run', f'{len(unpinned)} unpinned downloads stay local')
     for name in remotes:
-        report.add('dry-run', f'code→{name}: branches except {ws.config.get("code_remote_exclude")} and all tags '
+        report.add('dry-run', f'code->{name}: branches except {ws.config.get("code_remote_exclude")} and all tags '
                               f'(checked for agent files, transcripts and secrets first)')
     report.add('dry-run', 'nothing was written')
     return report
@@ -1189,12 +1252,12 @@ def status(ws, offline=False, report=None):
     _, code_latest = nas.latest(manifest, 'code')
     changes, rejected = ref_plan(ws.root, code_latest['refs'] if code_latest else {}, refs)
     differences += len(changes) + len(rejected) + (0 if code_latest else 1)
-    report.add('code→nas', f'{len(changes)} branches/tags differ from the newest NAS code bundle' if changes or
+    report.add('code->nas', f'{len(changes)} branches/tags differ from the newest NAS code bundle' if changes or
                not code_latest else 'the newest NAS code bundle has every branch and tag')
     for ref, note in changes:
-        report.add('code→nas', f'  {ref} ({note})')
+        report.add('code->nas', f'  {ref} ({note})')
     for reason in rejected:
-        report.add('code→nas', '  ' + reason)
+        report.add('code->nas', '  ' + reason)
     if not offline:
         remotes, _ = code_remotes(ws)
         excluded = ws.config.get('code_remote_exclude') or []
@@ -1206,7 +1269,7 @@ def status(ws, offline=False, report=None):
                     continue
                 if remote_refs.get(ref) != sha:
                     differences += 1
-                    report.add(f'code→{name}', f'  {ref} differs')
+                    report.add(f'code->{name}', f'  {ref} differs')
     found, _ = local_downloads(ws.downloads, ws.root / 'cmake' / 'pins.json')
     stored = {e['sha256'] for e in manifest['files'].values() if e['kind'] == 'tool'}
     missing = [e['file'] for s, e in found.items() if s not in stored]
@@ -1522,6 +1585,9 @@ def build_parser():
 
 
 def main(argv=None, archive=None):
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(errors='replace')  # a legacy console code page must never stop a report
     args = build_parser().parse_args(argv)
     try:
         if args.command == 'restore':
