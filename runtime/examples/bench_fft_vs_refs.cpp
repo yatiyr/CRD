@@ -6,13 +6,19 @@
 // standard FFT flop count) + max |Cerid-FFTW| and |pocketfft-FFTW| rel error, and fails above 32·eps·log2 n (a fast
 // wrong answer is not a win). The beat-MKL verdict on the AVX2-level i9-14900K (no AVX-512 ⇒ MKL runs AVX2 here ⇒
 // level fight). Cerid's Complex<f64> shares the {re,im} layout of fftw_complex and of the peer's re/im pairs.
+// From 2^10 to 2^22 every forward the planner offers at the size (fft::detail::forward_builds: the one this level
+// runs first, fft::detail::level_forward, then the others) runs in this one binary too, interleaved every rep and
+// gated against FFTW the same way; a level's winners become its f64 plans (scripts/gen_fft_level_plans.py reads the
+// boards' logs under the "fft kernel level" this program prints, the unit FftPlan keys on).
 
 #include "pocketfft_peer.hpp"
 
 #include <crd/containers/array.hpp>
+#include <crd/core/cpu_features.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/fft/fft.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/memory/construct.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -66,12 +72,85 @@ double max_rel(const Complex<f64>* x, const Complex<f64>* ref, usize n)
     }
     return maxdiff / (1.0 + maxmag);
 }
+
+constexpr int kArmsMaxLog2 = 22;
+constexpr usize kMaxArms = sizeof(fft::detail::kFftAlgorithms) / sizeof(fft::detail::kFftAlgorithms[0]);
+constexpr const char* kPlanOutOfMemory = "bench_fft_vs_refs: out of memory for a plan";
+
+// Every forward the planner offers at n, the level's own first, each timed best of `reps` with the arms interleaved
+// per rep and the input copied in untimed, and gated against FFTW's output. Returns false when an error is above
+// `bound`.
+bool forward_arms(crd::memory::IAllocator* alloc, const Complex<f64>* base, const Complex<f64>* fftw_out, usize n,
+                  int reps, double bound)
+{
+    fft::FftPlan<f64>* plans[kMaxArms] = {};
+    usize count = 0;
+    const fft::FftAlgorithm planned =
+        fft::detail::level_forward<f64>(n, fft::fft_kernels().level, crd::math::kernel_determinism());
+    const auto add = [&](fft::FftAlgorithm forward)
+    {
+        plans[count] = crd::memory::construct_or_fatal<fft::FftPlan<f64>>(*alloc, kPlanOutOfMemory, alloc, n, forward);
+        ++count;
+    };
+    add(planned);
+    for (const fft::FftAlgorithm forward : fft::detail::kFftAlgorithms)
+    {
+        if (forward != planned && fft::detail::forward_builds<f64>(n, forward))
+        {
+            add(forward);
+        }
+    }
+
+    cont::Array<Complex<f64>> work(alloc);
+    work.resize(n);
+    const auto run = [&](usize a)
+    {
+        plans[a]->execute(cont::Span<Complex<f64>>(work.data(), n), fft::FftDirection::Forward);
+    };
+    double err[kMaxArms] = {};
+    for (usize a = 0; a < count; ++a)
+    {
+        std::memcpy(work.data(), base, n * sizeof(Complex<f64>));
+        run(a);
+        err[a] = max_rel(work.data(), fftw_out, n);
+    }
+    double best[kMaxArms] = {};
+    std::fill(best, best + count, 1e300);
+    for (int r = 0; r < reps; ++r)
+    {
+        for (usize a = 0; a < count; ++a)
+        {
+            std::memcpy(work.data(), base, n * sizeof(Complex<f64>));
+            const auto t0 = std::chrono::steady_clock::now();
+            run(a);
+            const auto t1 = std::chrono::steady_clock::now();
+            best[a] = std::min(best[a], std::chrono::duration<double, std::milli>(t1 - t0).count());
+        }
+    }
+
+    bool ok = true;
+    usize winner = 0;
+    for (usize a = 0; a < count; ++a)
+    {
+        std::printf("%-9zu | %-15s | %9.3f | %.1e\n", n, fft::fft_algorithm_name(plans[a]->state().forward), best[a],
+                    err[a]);
+        ok = ok && err[a] <= bound;
+        winner = best[a] < best[winner] ? a : winner;
+    }
+    std::printf("n=%zu winner: %s\n", n, fft::fft_algorithm_name(plans[winner]->state().forward));
+    for (usize a = count; a-- > 0;)
+    {
+        crd::memory::destroy(*alloc, plans[a]);
+    }
+    return ok;
+}
 } // namespace
 
 int main()
 {
-    crd::memory::TlsfAllocator alloc(2ULL << 30);
+    crd::memory::TlsfAllocator alloc(4ULL << 30);
     std::printf("pocketfft peer: %s\n", pocket::isa());
+    std::printf("fft kernel level: %s\n", crd::cpu_level_name(fft::fft_kernels().level)); // the level's own plans
     std::printf("=== complex-f64 forward FFT, power-of-2 (best of reps). GFLOPS = 5 n log2(n)/t ===\n");
     std::printf("%-9s | %-22s | %-20s | %-20s | %-20s | Cerid err | pocket err\n", "n", "Cerid (ms / GFLOPS)",
                 "FFTW (ms/GFLOPS)", "pocketfft (ms/GFLOPS)", "MKL (ms/GFLOPS)");
@@ -155,6 +234,11 @@ int main()
         if (!(cerid_err <= bound) || !(pocket_err <= bound))
         {
             std::fprintf(stderr, "n=%zu: an error against FFTW is above the bound %.1e\n", n, bound);
+            wrong = true;
+        }
+        if (lg <= kArmsMaxLog2 && !forward_arms(&alloc, base.data(), fftw_out.data(), n, reps, bound))
+        {
+            std::fprintf(stderr, "n=%zu: a forward arm's error against FFTW is above the bound %.1e\n", n, bound);
             wrong = true;
         }
     }

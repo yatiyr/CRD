@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """Generate hesap-fft's per-level forward plans from SIMD-DISPATCH's saved fft board (ADR-0134 §7).
 
-The board (`bench_fft_f32` at each CPU level, five passes) times every forward the planner offers at each size; its
-data file keeps every arm's time per pass under the fft kernel level each log names (the level FftPlan keys on: a
-selection with no fft unit of its own, such as sse4.2, runs the one below). A level's plan of a size is the board's fastest arm there (the lowest
-median of its passes) when every pass of it beat every pass of the arm the level ran as planned during the board (the
-ranges are the board's run-to-run noise), and the planned arm otherwise. The board's top level runs the canonical
-planner, so its arms name each size's canonical forward. The header lists every measured level and size; FftPlan runs
-a cell under DeterminismMode::Default and the canonical planner everywhere else and under the other modes.
+The board (`bench_fft_f32` and `bench_fft_vs_refs` at each CPU level, five passes) times every forward the planner
+offers at each size of a type; each type's data file keeps every arm's time per pass under the fft kernel level each
+log names (the level FftPlan keys on: a selection with no fft unit of its own, such as sse4.2, runs the one below). A
+level's plan of a size is the board's fastest arm there (the lowest median of its passes) when every pass of it beat
+every pass of the arm the level ran as planned during the board (the ranges are the board's run-to-run noise), and the
+planned arm otherwise. The board's top level ran the canonical planner (it had no row of its own), so its planned arms
+name each size's canonical forward, and its own winners become rows like any level's. The header lists every measured type, level and size; FftPlan runs a cell under DeterminismMode::Default and
+the canonical planner everywhere else and under the other modes.
 
-  python scripts/gen_fft_level_plans.py                      # write the header from the data file
-  python scripts/gen_fft_level_plans.py --check              # fail when the header differs from the data file's
-  python scripts/gen_fft_level_plans.py --import DIR --commit TEXT
-                                                             # rewrite the data file from a board directory:
-                                                             # pass<k>-f32-<label>.log and pass<k>-level-<label>.txt
+  python scripts/gen_fft_level_plans.py                      # write the header from the data files
+  python scripts/gen_fft_level_plans.py --check              # fail when the header differs from the data files'
+  python scripts/gen_fft_level_plans.py --import DIR --type f32|f64 --commit TEXT
+                                                             # rewrite the type's data file from a board directory:
+                                                             # pass<k>-<type>-<label>.log, pass<k>-level-<label>.txt
 """
 from pathlib import Path
 import argparse
@@ -24,12 +25,17 @@ import statistics
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / 'docs' / 'bench' / '2026-10-30-simd-dispatch-fft-f32-arms.json'
+# Each element type: its data file, the board program that times its arms, its element size and the board section.
+TYPES = {
+    'f32': (ROOT / 'docs' / 'bench' / '2026-10-30-simd-dispatch-fft-f32-arms.json', 'bench_fft_f32', 4,
+            'docs/bench/2026-10-30-simd-dispatch-fft-board.md#board-3-the-per-level-plans'),
+    'f64': (ROOT / 'docs' / 'bench' / '2026-10-30-simd-dispatch-fft-f64-arms.json', 'bench_fft_vs_refs', 8,
+            'docs/bench/2026-10-30-simd-dispatch-fft-board.md#board-4-the-f64-plans-and-the-avx2-re-run'),
+}
 HEADER = ROOT / 'engine' / 'numerics' / 'hesap-fft' / 'include' / 'crd' / 'hesap' / 'fft' / 'detail' / \
     'level_plans_gen.hpp'
 KERNELS = ROOT / 'engine' / 'numerics' / 'hesap-fft' / 'include' / 'crd' / 'hesap' / 'fft' / 'fft_kernels.hpp'
 SCHEMA = 'cerid-fft-level-board/1'
-BOARD = 'docs/bench/2026-10-30-simd-dispatch-fft-board.md#board-3-the-per-level-plans'
 # The CRD_CPU_LEVEL spellings and their crd::CpuLevel enumerators, in enumeration order.
 LEVELS = {'portable': 'Portable', 'sse2': 'Sse2', 'sse4.2': 'Sse42', 'avx2': 'Avx2', 'avx512': 'Avx512',
           'neon': 'Neon'}
@@ -46,17 +52,17 @@ def algorithms():
     return {name: enumerator for enumerator, name in pairs}
 
 
-def import_board(directory, commit):
-    """The data file's object from a board directory's logs, one entry per fft kernel level the logs ran (a CPU
+def import_board(directory, commit, kind):
+    """The data file's object of a type from a board directory's logs, one entry per fft kernel level the logs ran (a CPU
     selection without an fft unit of its own runs the one below it, so its passes join that level's)."""
     by_level = {}
-    for log in sorted(glob.glob(str(Path(directory) / 'pass1-f32-*.log'))):
-        label = Path(log).name[len('pass1-f32-'):-len('.log')]
+    for log in sorted(glob.glob(str(Path(directory) / f'pass1-{kind}-*.log'))):
+        label = Path(log).name[len(f'pass1-{kind}-'):-len('.log')]
         lines = sorted(glob.glob(str(Path(directory) / f'pass*-level-{label}.txt')))
         if not lines:  # the pre-row programs: no level record, not this engine's arms
             continue
         selection = Path(lines[0]).read_text(encoding='utf-8').strip()
-        for path in sorted(glob.glob(str(Path(directory) / f'pass*-f32-{label}.log'))):
+        for path in sorted(glob.glob(str(Path(directory) / f'pass*-{kind}-{label}.log'))):
             text = Path(path).read_text(encoding='utf-8')
             match = KERNEL_LEVEL.search(text)
             if match is None:
@@ -78,13 +84,15 @@ def import_board(directory, commit):
     levels = sorted(by_level.values(), key=lambda entry: list(LEVELS).index(entry['level']))
     for entry in levels:
         entry['sizes'] = [entry['sizes'][n] for n in sorted(entry['sizes'])]
+    _, program, element_bytes, board = TYPES[kind]
     return {
         'schema': SCHEMA,
-        'note': 'SIMD-DISPATCH fft board (f32 forward arms, ms per transform, best of each program\'s repetitions, '
-                'one value per pass); scripts/gen_fft_level_plans.py derives detail/level_plans_gen.hpp from it.',
-        'board': BOARD,
-        'program': 'bench_fft_f32',
-        'element_bytes': 4,
+        'note': f'SIMD-DISPATCH fft board ({kind} forward arms, ms per transform, best of each program\'s '
+                'repetitions, one value per pass); scripts/gen_fft_level_plans.py derives detail/level_plans_gen.hpp '
+                'from it.',
+        'board': board,
+        'program': program,
+        'element_bytes': element_bytes,
         'commit': commit,
         'levels': levels,
     }
@@ -104,16 +112,18 @@ def derive(cell):
     return cell['planned']
 
 
-def header(data):
+def rows_of(path, data):
+    """One type's header rows and their notes, each level's cells against the canonical arms: the ones the top level
+    ran as planned (it had no row of its own during the boards)."""
     names = algorithms()
-    canonical = {cell['n']: derive(cell) for cell in data['levels'][-1]['sizes']}
+    canonical = {cell['n']: cell['planned'] for cell in data['levels'][-1]['sizes']}
     rows = []
     for entry in data['levels']:
         for cell in entry['sizes']:
             n = cell['n']
             log2 = n.bit_length() - 1
             if n != 1 << log2:
-                raise SystemExit(f'{DATA}: {n} is not a power of two')
+                raise SystemExit(f'{path}: {n} is not a power of two')
             arm = derive(cell)
             code = (f'    {{{data["element_bytes"]}, crd::CpuLevel::{LEVELS[entry["level"]]}, {log2}, '
                     f'FftAlgorithm::{names[arm]}}},')
@@ -121,19 +131,28 @@ def header(data):
             if arm != canonical[n]:
                 note += f'; {canonical[n]} {span(cell["arms"][canonical[n]])}'
             rows.append((code, note))
+    return rows
+
+
+def header(boards):
+    """The header from every type's (data file, data) pair, in TYPES order."""
+    rows = []
+    sources = []
+    for path, data in boards:
+        rows += rows_of(path, data)
+        sources += [f'// Data: {path.relative_to(ROOT).as_posix()}', f'// ({data["program"]} at {data["commit"]};',
+                    f'// {data["board"]}).']
     width = max(len(code) for code, _ in rows)
     out = [
         '// level_plans_gen.hpp -- GENERATED by scripts/gen_fft_level_plans.py; do not edit.',
-        f'// Data: {DATA.relative_to(ROOT).as_posix()}',
-        f'// ({data["program"]} at {data["commit"]};',
-        f'// {data["board"]}).',
+        *sources,
         '//',
-        '// Each CPU level\'s forward of a size as SIMD-DISPATCH\'s fft board measured it (ADR-0134 §7): the board\'s',
-        '// fastest arm (the lowest median of its passes) where its every pass beat every pass of the arm the level ran',
-        '// as planned, the planned arm otherwise (equal medians: the lower mean). Each row\'s comment is its arm\'s',
-        '// median ms, then the canonical arm\'s (the top level\'s) where the row differs from it. FftPlan runs a row',
-        '// under DeterminismMode::Default; every level and size the board did not measure, and every other mode, runs',
-        '// the canonical planner (detail::planned_forward).',
+        '// Each CPU level\'s forward of a type and size as SIMD-DISPATCH\'s fft board measured it (ADR-0134 §7): the',
+        '// board\'s fastest arm (the lowest median of its passes) where its every pass beat every pass of the arm the',
+        '// level ran as planned, the planned arm otherwise (equal medians: the lower mean). Each row\'s comment is its',
+        '// arm\'s median ms, then the canonical arm\'s (the top level\'s) where the row differs from it. FftPlan runs a',
+        '// row under DeterminismMode::Default; every type, level and size the board did not measure, and every other',
+        '// mode, runs the canonical planner (detail::planned_forward).',
         '',
         '#pragma once',
         '',
@@ -170,24 +189,30 @@ def header(data):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--check', action='store_true', help='fail when the header differs from the data file')
-    parser.add_argument('--import', dest='board', metavar='DIR', help='rewrite the data file from a board directory')
+    parser.add_argument('--check', action='store_true', help='fail when the header differs from the data files')
+    parser.add_argument('--import', dest='board', metavar='DIR', help='rewrite a data file from a board directory')
+    parser.add_argument('--type', choices=sorted(TYPES), help='the element type to import (with --import)')
     parser.add_argument('--commit', help='the board binary\'s commit (with --import)')
     args = parser.parse_args()
     if args.board is not None:
-        if not args.commit:
-            parser.error('--import needs --commit')
-        text = json.dumps(import_board(args.board, args.commit), indent=1)
+        if not args.commit or not args.type:
+            parser.error('--import needs --type and --commit')
+        text = json.dumps(import_board(args.board, args.commit, args.type), indent=1)
         text = re.sub(r'\[\s+([\d.,\s]+?)\s+\]', lambda m: '[' + ' '.join(m.group(1).split()) + ']', text)
-        DATA.write_bytes((text + '\n').encode('utf-8'))
-    data = json.loads(DATA.read_text(encoding='utf-8'))
-    if data.get('schema') != SCHEMA:
-        raise SystemExit(f'{DATA}: schema must be {SCHEMA}')
-    text = header(data)
+        TYPES[args.type][0].write_bytes((text + '\n').encode('utf-8'))
+    boards = []
+    for kind, (path, program, element_bytes, _) in TYPES.items():
+        data = json.loads(path.read_text(encoding='utf-8'))
+        if data.get('schema') != SCHEMA:
+            raise SystemExit(f'{path}: schema must be {SCHEMA}')
+        if data.get('element_bytes') != element_bytes or data.get('program') != program:
+            raise SystemExit(f'{path}: not the {kind} board ({program}, {element_bytes}-byte elements)')
+        boards.append((path, data))
+    text = header(boards)
     if args.check:
         current = HEADER.read_bytes().replace(b'\r\n', b'\n').decode('utf-8') if HEADER.exists() else ''
         if current != text:
-            print(f'{HEADER.relative_to(ROOT).as_posix()} differs from {DATA.relative_to(ROOT).as_posix()}; '
+            print(f'{HEADER.relative_to(ROOT).as_posix()} differs from the board data files; '
                   'run python scripts/gen_fft_level_plans.py', file=sys.stderr)
             return 1
         return 0
