@@ -267,7 +267,7 @@ if (typeof document !== 'undefined') {
     const jobs = b.jobs.map((j) => '<tr><td><a href="#/jobs/' + esc(j.id) + '">' + esc(j.label) + '</a><div class="muted mono">' +
       esc(j.key) + '</div></td><td>' + stateBadge(j) + (j.attempt > 1 ? ' <span class="muted">attempt ' + j.attempt +
       '</span>' : '') + '</td><td>' + esc(j.agents && j.agents.queue) + (j.agents && j.agents.device ? ' · ' +
-      esc(j.agents.device) : '') + '</td><td>' + esc(j.agent || j.machine || '') + '</td><td>' +
+      esc(j.agents.device) : '') + '</td><td>' + esc(j.agent_name || j.machine || j.agent || '') + '</td><td>' +
       esc(durationText(j.started_at, j.finished_at)) + '</td><td>' + esc(j.waiting && j.waiting !== 'ready' ? j.waiting :
         j.reason || '') + '</td><td>' + (['failed', 'canceled', 'timed_out', 'expired', 'budget'].includes(j.state) ?
         '<button data-retry="' + esc(j.id) + '">Retry</button>' : '') + (['scheduled', 'assigned', 'running'].includes(j.state) ?

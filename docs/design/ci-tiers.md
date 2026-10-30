@@ -8,8 +8,8 @@
 Purpose: one coverage contract in three tiers, every supported preset owned by a lane, one stable required status
 that cannot be satisfied by a skipped job, cancellation that cannot destroy qualification evidence, and structured
 evidence for the exact revision every lane built. The mapping and the resolver are the coverage contract of both the
-hosted workflow and the Buildkite-based [CI platform](ci-platform.md) (ADR-0135), which reads them rather than copying
-them.
+hosted workflow and the Cerid orchestrator of the [CI platform](ci-platform.md) (ADR-0135), which reads them rather
+than copying them.
 
 ## Tiers and the mapping
 

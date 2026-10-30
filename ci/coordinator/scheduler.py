@@ -398,7 +398,7 @@ class Coordinator:
         ready.sort(key=lambda bj: (-bj[1]['priority'], bj[1]['build'], bj[1]['order']))
         return ready
 
-    def _claim(self, job, target_agent=None, machine=None, issue_token=True):
+    def _claim(self, job, target_agent=None, machine=None, issue_token=True, agent_name=None):
         """scheduled -> assigned, holding a concurrency slot; returns (job, token) or (None, None) on a lost race."""
         if not self._slot(job, take=True):
             return None, None
@@ -413,6 +413,7 @@ class Coordinator:
             state.transition(current, 'assigned', 'reserve' if machine else 'assign', now,
                              'reserved for %s' % machine if machine else 'assigned to %s' % target_agent)
             current['agent'] = target_agent
+            current['agent_name'] = agent_name or machine or target_agent
             current['machine'] = machine
             current['assigned_at'] = now
             if token:
@@ -438,7 +439,7 @@ class Coordinator:
         for build, job in self.ready_jobs(agent['queue']):
             if not state.tags_match(job['agents'], offered):
                 continue
-            claimed, token = self._claim(job, target_agent=agent['id'])
+            claimed, token = self._claim(job, target_agent=agent['id'], agent_name=agent.get('name'))
             if claimed:
                 self.update('agents/%s.json' % agent['id'], lambda a: dict(a, job=claimed['id'],
                                                                           last_seen=self.clock()))
@@ -510,7 +511,9 @@ class Coordinator:
         checkout = {'url': repo.get('url', ''), 'commit': build['commit'], 'branch': build['branch'],
                     'strategy': repo.get('checkout', 'direct'), 'depth': int(repo.get('depth', 50))}
         if checkout['strategy'] == 'mirror':
-            checkout['url'] = '%s/git/%s.git' % (self.url, build['repository'])
+            # Relative: the agent fetches from the coordinator address it already uses (a cloud VM inside the
+            # project's network, an owned machine through the tunnel).
+            checkout['url'] = '/git/%s.git' % build['repository']
             checkout['ref'] = 'refs/cerid/builds/%d' % build['number']
         return {'protocol': PROTOCOL, 'token': token,
                 'job': {'id': job['id'], 'build': build['number'], 'key': job['key'], 'label': job['label'],
@@ -597,6 +600,7 @@ class Coordinator:
             if job['state'] == 'running':
                 return None
             job['started_at'] = now
+            job['reason'] = ''
             return state.transition(job, 'running', 'start', now)
         job = self.update('jobs/%s.json' % job_id, change)
         self.store.put_json(PREFIX + 'heartbeats/%s.json' % job_id, {'at': now, 'attempt': job['attempt']})
@@ -970,9 +974,9 @@ class Coordinator:
         view = []
         for job in jobs:
             item = {k: job.get(k) for k in ('id', 'key', 'label', 'state', 'reason', 'attempt', 'agent', 'machine',
-                                            'exit_status', 'priority', 'depends_on', 'created', 'started_at',
-                                            'finished_at', 'soft_fail', 'agents', 'cancel_requested', 'attempts',
-                                            'concurrency_group', 'timeout_minutes')}
+                                            'agent_name', 'exit_status', 'priority', 'depends_on', 'created',
+                                            'started_at', 'finished_at', 'soft_fail', 'agents', 'cancel_requested',
+                                            'attempts', 'concurrency_group', 'timeout_minutes')}
             item['soft_failed'] = state.soft_failed(job)
             if job['state'] == 'scheduled':
                 item['waiting'] = state.dependency_state(job, by_key)

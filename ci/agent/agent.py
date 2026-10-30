@@ -357,7 +357,9 @@ class Agent:
         return env
 
     def checkout(self, assignment, log):
-        checkout = assignment['checkout']
+        checkout = dict(assignment['checkout'])
+        if checkout['url'].startswith('/'):
+            checkout['url'] = self.base + checkout['url']  # the coordinator's mirror, at the address this agent uses
         work = self.workdir(assignment)
         work.mkdir(parents=True, exist_ok=True)
         env = self.git_env(checkout, assignment['token'])
@@ -365,8 +367,9 @@ class Agent:
         def git(*args, check=True):
             completed = subprocess.run([self.git] + list(args), cwd=str(work), env=env, capture_output=True,
                                        check=False)
-            output = (completed.stdout + completed.stderr)
-            if output:
+            output = completed.stdout + completed.stderr
+            # Plumbing output (remote URLs, object ids) only when it explains a failure or a transfer.
+            if output and (completed.returncode != 0 or args[0] in ('fetch', 'checkout')):
                 log.write(output if output.endswith(b'\n') else output + b'\n')
             if check and completed.returncode != 0:
                 raise RuntimeError('git %s exited %d' % (args[0], completed.returncode))

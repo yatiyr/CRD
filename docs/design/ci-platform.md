@@ -13,34 +13,43 @@ cloud machines now and owned machines later, under 50 USD a month, run by one pr
 | File | What it is |
 |---|---|
 | [ci/devices.json](../../ci/devices.json) | The device registry: one cell per device (kind, OS, CPU and levels, GPU and APIs, screen, executor, tier, cost, accounts), the features (dashboard columns) with their roadmap rows, the console profiles, the accounts by name and the budget |
-| [ci/pipeline.py](../../ci/pipeline.py) | Planner, lanes, console profile, conclusion, probes and the launcher's dispatcher |
+| [ci/pipeline.py](../../ci/pipeline.py) | Planner, lanes, console profile, conclusion and probes |
+| [ci/coordinator/](../../ci/coordinator/__init__.py) | The Cerid orchestrator: triggers, builds, scheduling, dispatch, durable state, logs, the HTTP service ([below](#the-cerid-orchestrator)) |
+| [ci/agent/agent.py](../../ci/agent/agent.py) | The agent on every machine, cloud (one-shot) and owned (long-running) |
+| [ci/web/](../../ci/web/index.html) | The web UI the coordinator serves |
 | [ci/executors/](../../ci/executors/__init__.py) | `gce_vm`, `owned_agent`, `firebase_test_lab`, `ssh_host` |
-| [ci/ops.py](../../ci/ops.py) | `status`, `add-device`, `budget`, `accounts`, `parity`, `bake` |
-| [ci/dashboard/generate.py](../../ci/dashboard/generate.py) | The QUAL dashboard (render, publish) |
+| [ci/ops.py](../../ci/ops.py) | `status`, `add-device`, `budget`, `accounts`, `parity`, `bake`, and for the orchestrator `builds`, `build`, `retry`, `cancel`, `agents`, `queues`, `logs`, `agent-token`, `health`, `backup`, `restore` |
+| [ci/dashboard/generate.py](../../ci/dashboard/generate.py) | The QUAL dashboard (rendered live by the coordinator at `/qual`; `render` for a build artifact, `publish` for an optional static copy) |
 
 Everything else is reused: [ci-tiers.json](../../.github/ci-tiers.json) and [ci-tier.py](../../scripts/ci-tier.py)
 (tiers, resolution, the required-result rule), the configure and test presets, the `crd_module()` registry
 ([module registry](module-registry.md)), the install helpers and `cmake/pins.json`, `ci-evidence.py` (inventory, watch,
 bundle), `check-registered-failures.py`, `diag-seeded-faults.py`, the GenMC helpers and every `crd-check-*` guard
-through CTest. The contract tests are [test-ci-platform.py](../../scripts/test-ci-platform.py), a step of the
-hosted repository job and of the new repository checks.
+through CTest. The contract tests are [test-ci-platform.py](../../scripts/test-ci-platform.py),
+[test-ci-orchestrator.py](../../scripts/test-ci-orchestrator.py) (unit, state-machine and fault-injection tests) and
+[test-ci-orchestrator-e2e.py](../../scripts/test-ci-orchestrator-e2e.py) (the coordinator and a real agent on the
+machine running it, a trivial pipeline end to end), steps of the hosted repository job and of the new repository
+checks.
 
 ## A build, end to end
 
-1. Buildkite starts the build's single configured step on the launcher queue: `python ci/pipeline.py upload`.
-2. `upload` runs the preflight checks (actionlint while GitHub workflows exist, `check-pins.py`, `check-ci-tiers.py`,
-   `test-ci-platform.py`), maps the Buildkite source to a ci-tier.py event (`schedule`, a manual build with
-   `CERID_CI_TIER` as `workflow_dispatch`, a pull request against its merge base, a push against the newest head the
-   store recorded for the branch), plans, uploads `ci-plan.json` as an artifact and the pipeline to Buildkite, and
-   records the head for the next push.
+1. A trigger reaches the coordinator: a signed webhook, a new head seen by the poller, a schedule
+   (`ci/coordinator.json`) or a manual build (web UI, `ci/ops.py build`). Each (repository, event, branch, commit,
+   pull request) builds once. The coordinator creates the build with one step, `plan`, on the launcher queue.
+2. `plan` runs `python ci/pipeline.py upload` on the launcher's agent: the preflight checks (actionlint while GitHub
+   workflows exist, `check-pins.py`, `check-ci-tiers.py`, `test-ci-platform.py`), the mapping of the build to a
+   ci-tier.py event (`schedule`; a manual build with `CERID_CI_TIER` as `workflow_dispatch`; a pull request against
+   its merge base; a push against the newest head the store recorded for the branch), the plan, `ci-plan.json` as an
+   artifact and the planned steps uploaded to the coordinator; it records the head for the next push.
 3. Every planned step runs `pipeline.py lane`, `pipeline.py run repository` or a device command on its cell's queue:
    `cerid-cloud` for launched machines, `cerid-owned` for owned agents.
-4. The dispatcher on the launcher (`pipeline.py dispatch`) lists the cloud queue's scheduled jobs, routes each by its
-   `device=` rule, applies the budget, reserves it, issues a one-job acquisition token and launches the cell's
-   executor; it reaps finished machines and writes their cost to the ledger.
-5. `Required result` (`pipeline.py conclude`) passes only when every planned step passed or was cached; a budget step
-   makes it fail as incomplete.
-6. `QUAL dashboard` renders the page from the store and publishes it when Cloudflare is configured.
+4. The coordinator's dispatcher turns each ready cloud step into a machine: routes it by its `device` tag to its
+   executor, applies the budget, reserves the step for a machine name and launches it; the machine's agent takes
+   exactly that step. The reaper ends the machine when the step ends and writes its cost to the ledger; a machine
+   that disappears under a running step (a preempted spot VM) becomes a retry on a new machine.
+5. `Required result` (`pipeline.py conclude`) passes only when every planned step passed or was cached (a
+   soft-failed step counts as passed); a budget step makes it fail as incomplete.
+6. `QUAL dashboard` renders the page from the store as an artifact; the coordinator serves the live page at `/qual`.
 
 ## Steps and their keys
 
@@ -90,6 +99,86 @@ GCP budget notification reports the budget reached. Estimates use the median of 
 the step, else the registry's defaults. `ci/ops.py budget` shows the cap, the spend, the GCP state and the price of a
 complete run.
 
+## The Cerid orchestrator
+
+[ADR-0135 §12](../decisions/0135-cerid-ci-platform.md#12-amendment-2026-10-30-cerids-own-orchestrator-replaces-buildkite)
+records the decision and §14 the security review. Everything is Python standard library and plain HTML/JS.
+
+| Part | File | Role |
+|---|---|---|
+| State machines | [state.py](../../ci/coordinator/state.py) | the ten job states and five build states; every allowed move is a table row |
+| Pipeline document | [steps.py](../../ci/coordinator/steps.py) | `cerid-ci-pipeline/1`: keys, `wait`, `depends_on`, queues and tags, priority, concurrency groups, timeouts, soft fail, retry, skip, env, artifacts, secrets; unknown fields refused |
+| Coordinator core | [scheduler.py](../../ci/coordinator/scheduler.py) | builds, uploads, assignment, agents, tokens, logs, artifacts, annotations, meta-data, commit status, the watchdog, retention |
+| Cloud dispatcher | [dispatch.py](../../ci/coordinator/dispatch.py) | one machine per ready cloud job through the four executors, the budget, the reaper, the orphan sweep |
+| Authentication | [auth.py](../../ci/coordinator/auth.py) | hashed bearer tokens; RS256/ES256 JWT verification for Google identity, Cloudflare Access and IAP |
+| Hosts | [hosts.py](../../ci/coordinator/hosts.py), [triggers.py](../../ci/coordinator/triggers.py) | signed webhooks, polling, cron schedules, commit status, the git mirror |
+| Service | [service.py](../../ci/coordinator/service.py), [main.py](../../ci/coordinator/main.py) | the HTTP service and the background loop; `python ci/coordinator/main.py serve` |
+| Configuration | [coordinator.json](../../ci/coordinator.json) | repositories, schedules, UI access, limits; `*_env` keys read the launcher's environment |
+| Agent | [agent.py](../../ci/agent/agent.py) | one-shot and long-running modes, checkout, clean environment, live logs with redaction, heartbeats, cancellation, artifacts; in-job tools |
+| Web UI | [ci/web/](../../ci/web/index.html) | builds, the build page and step graph, live logs, agents and queues, spend, the QUAL page |
+
+### Job lifecycle
+
+```
+            (cached, budget: created terminal by a skip)
+ upload --> scheduled --assign/reserve--> assigned --start--> running --finish--> passed | failed | canceled | timed_out
+               |  ^                          |  |                |
+               |  +------requeue (infrastructure loss, attempts left)-------+
+               |                             |                   +--cancel request: the heartbeat tells the agent
+               +--expire--> expired          +--cancel--> canceled
+               +--budget--> budget           +--infrastructure (no attempts left)--> failed
+               +--dependency failed--> canceled
+ failed | canceled | timed_out | expired | budget --manual retry--> scheduled (next attempt)
+```
+
+A scheduled job is *waiting* until every dependency is terminal and passed, cached or soft-failed (or allows
+failure), then *ready*; a ready job no agent takes in 24 hours expires. An assigned job whose machine never starts it
+in 15 minutes, or whose agent never starts it in 2, and a running job without a heartbeat for 2 minutes are an
+infrastructure loss: the next attempt runs on a fresh agent or machine while the step's `retry.automatic` allows
+(the planner's lanes: twice), else the job fails. A failed command is retried only by an `exit_status` rule, which the
+planner never sets. A timeout or cancel is first a request the agent sees on its next heartbeat (it stops the whole
+process tree); after a 2-minute grace the watchdog ends the job itself.
+
+### Surfaces
+
+| Path | Caller | Authentication |
+|---|---|---|
+| `POST /webhooks/<repository>` | a git host or relay | the host's HMAC signature (or GitLab token) over the raw body; delivery replay refused |
+| `POST /api/agent/register`, `/poll` | owned and launcher agents | registration token, then a 12-hour session token |
+| `POST /api/agent/acquire` | a cloud VM's agent | the VM's Google identity token, matched to the machine reserved for the job |
+| `POST /api/agent/claim` | an SSH host's or a Test Lab agent | the one job token of its launch |
+| `/api/agent/jobs/<id>/{start,heartbeat,log,finish,pipeline,annotations,artifacts,meta-data,steps}` | the agent and in-job tools | the job token of that attempt |
+| `/git/<repository>.git/...` | agents (`checkout: mirror`) | the job token; upload-pack only |
+| `/`, `/api/...`, `/qual` | operators | Cloudflare Access or IAP assertion verified here; `local` only on loopback |
+| `/healthz`, `/agent/cerid-agent.py` | probes, launched machines | none (no data; public code with its SHA-256 header) |
+
+### State layout (`orchestrator/` in the result store)
+
+| Path | Content |
+|---|---|
+| `schema.json` | the state schema version |
+| `counters/build.json` | the next build number (compare-and-swap) |
+| `builds/<number>.json` | a build: trigger, commit, state, job ids by key, annotations, meta-data, history |
+| `jobs/<id>.json` | a job: its step, state, attempt and previous attempts, agent or machine, token hash, history |
+| `index/active.json`, `index/recent.json` | active builds (the watchdog's work list) and the last 200 builds |
+| `heartbeats/<job>.json` | the last heartbeat of a running job |
+| `logs/<job>/<attempt>/<seq>.log` | live log chunks, written create-only |
+| `artifacts/<build>/<job>/<attempt>/<path>`, `artifacts/<build>/manifest.json` | artifacts and their SHA-256 |
+| `agents/<id>.json`, `registrations/<hash>.json`, `sessions/<hash>.json`, `tokens/<hash>.json` | agents and the hashes of their tokens |
+| `instances/<machine>.json` | the job reserved for a launched machine |
+| `deliveries/<hash>.json`, `triggers/<key>.json` | webhook replay protection and the once-per-push key |
+| `heads/<repository>.json`, `schedules/<repository>/<name>.json` | the poller's heads and the last fired schedule minutes |
+| `groups/<hash>.json` | concurrency-group slots |
+| `coordinator/heartbeat.json` | the coordinator's last tick (health) |
+
+### Operations
+
+`ci/ops.py builds`, `build [--number N]`, `retry JOB`, `cancel --build N | --job JOB`, `agents [--stop ID]`,
+`queues`, `logs JOB [--follow]`, `agent-token create|revoke`, `health`, `backup --out F`, `restore F` all act on the
+same state as the running coordinator (compare-and-swap). `health` fails when the store does not answer, the
+coordinator has not ticked for a minute or a running job is past the watchdog. Retention runs hourly; the orphan
+sweep every ten minutes.
+
 ## Result store layout
 
 | Path | Written by | Content |
@@ -98,7 +187,8 @@ complete run.
 | `cache/<input key>.json` | each passing step | the build and log that passed |
 | `tests-passed/<preset>@<device>/<build>.json` | each lane | the binary keys of the tests that passed in that run; a lane reads its last five |
 | `durations/<step>.json` | each step | the last 20 durations |
-| `machines/<job>.json`, `ledger/<YYYY-MM>/<job>.json` | the dispatcher | launched machines; their real cost |
+| `machines/<machine>.json`, `ledger/<YYYY-MM>/<machine>.json` | the dispatcher | launched machines (one per job attempt); their real cost |
+| `orchestrator/...` | the coordinator | builds, jobs, agents, logs and artifacts ([state layout](#state-layout-orchestrator-in-the-result-store)) |
 | `budget/gcp-<YYYY-MM>.json` | the dispatcher, `ops.py budget --pull` | the newest Cloud Billing notification |
 | `images/<family>.json` | `ops.py bake` | the baked image of a family |
 | `heads/<branch>.json` | `upload` | the last planned head (the next push's base) |
@@ -109,16 +199,18 @@ complete run.
 
 `python ci/ops.py add-device --id ... --kind ... --executor owned_agent ...` validates the whole registry with the new
 cell (kinds, levels, APIs, vendors, features, accounts, presets, the hosted jobs' single owners and the required
-coverage) and refuses an invalid one without writing. For an owned machine it prints the `buildkite-agent.cfg` and the
-install steps (the pinned archive and its digest). A gce_vm cell needs its image family baked once:
+coverage) and refuses an invalid one without writing. For an owned machine it prints the agent's command line and the
+install steps (a pinned checkout, a registration token from `ops.py agent-token create` whose `device` tag the agent
+cannot override, the service). A gce_vm cell needs its image family baked once:
 `python ci/ops.py bake <device>`.
 
 ## Parity with GitHub Actions (CI-4)
 
 Generated by `python ci/ops.py parity`; `scripts/test-ci-platform.py` fails when the workflow and this table differ,
-when a step has no Buildkite step, or when a mapped phase is not in the lane. The first table is `ci.yml`; the second
-lists the dispatch-only host-check experiments (`host-check.yml`), each open until a Buildkite experiment step carries
-it: their inline timing loops must first move into scripts. The parity proof itself (the same revisions green on both
+when a step has no Cerid orchestrator step, or when a mapped phase is not in the lane. Every GitHub Actions job maps
+to a step of the orchestrator (`plan`, `repository-<host>`, `lane-<preset>`, `required`). The first table is
+`ci.yml`; the second lists the dispatch-only host-check experiments (`host-check.yml`), each open until an
+orchestrator experiment step carries it: their inline timing loops must first move into scripts. The parity proof itself (the same revisions green on both
 systems for every preset, test, guard, sanitizer, SDE arm and ARM64 lane) is CI-4's remaining evidence.
 
 <!-- parity:begin -->
