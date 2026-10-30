@@ -21,6 +21,12 @@ add_test(NAME crd-module-selection
 # ADR-0135: the Cerid CI platform's registry, planner, lanes, executors, dashboard and parity table
 add_test(NAME crd-ci-platform
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-ci-platform.py")
+# ADR-0135 §12: the Cerid orchestrator's state machines, store, authentication, scheduler, agent and service
+add_test(NAME crd-ci-orchestrator
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-ci-orchestrator.py")
+# ADR-0135 §12: the coordinator and a real agent process on this host, a trivial pipeline end to end
+add_test(NAME crd-ci-orchestrator-e2e
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-ci-orchestrator-e2e.py")
 # DIAG.6c: verdict tests of the external sampling, counter-capability and debugger runbooks. They mock wpr, xperf,
 # perf and lldb, so they need neither the tools nor elevation and run on every host.
 add_test(NAME crd-diag-cpu-sampling-runbook
@@ -55,7 +61,7 @@ add_test(NAME crd-license-manifest # REPO.DEV.10: docs/generated/dependency-lice
 # through a 9p mount (WSL on a Windows drive) it measured 57 to 64 s and the former 60 s budget failed it honestly.
 # The budget is a ceiling against hangs, not a performance contract, so it covers the slowest supported instrument.
 set_tests_properties(crd-repository-hygiene crd-master-plan crd-repository-tools crd-ci-platform
-    PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONUTF8=1")
+    crd-ci-orchestrator crd-ci-orchestrator-e2e PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONUTF8=1")
 set_tests_properties(crd-project-structure-sync PROPERTIES TIMEOUT 90 ENVIRONMENT "PYTHONUTF8=1")
 set_tests_properties(crd-build-profiles PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
 set_tests_properties(crd-module-selection PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
