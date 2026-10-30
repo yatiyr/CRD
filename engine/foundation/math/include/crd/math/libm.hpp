@@ -309,7 +309,7 @@ inline void unpack(crd::f64 v, crd::u64& m, int& e) noexcept
 [[nodiscard]] inline crd::f32 fma_f32(crd::f32 x, crd::f32 y, crd::f32 z) noexcept
 {
     const crd::f64 p = static_cast<crd::f64>(x) * static_cast<crd::f64>(y);
-    const crd::f64 c = z;
+    const crd::f64 c = static_cast<crd::f64>(z);
     const crd::f64 s = p + c;
     const crd::f64 v = s - p;
     const crd::f64 err = (p - (s - v)) + (c - v);
