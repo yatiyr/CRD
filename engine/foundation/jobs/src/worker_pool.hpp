@@ -15,6 +15,11 @@
 namespace crd::jobs::detail
 {
 
+// The fiber tiers' base counts: a tier configured with 0 fibers holds its base count or a fiber a thread, the more.
+inline constexpr crd::u32 kSmallFiberBase = 128U;
+inline constexpr crd::u32 kMediumFiberBase = 64U;
+inline constexpr crd::u32 kLargeFiberBase = 16U;
+
 // Configuration for WorkerPool::init().
 struct WorkerConfig
 {
@@ -22,9 +27,9 @@ struct WorkerConfig
     crd::u32 deque_capacity     = 256U;
     crd::u32 injection_capacity = 4096U;
     crd::u32 pinned_capacity    = 64U;      // per-thread pinned lane (DIAG.10c)
-    crd::u32 small_fiber_count  = 128U;
-    crd::u32 medium_fiber_count = 64U;
-    crd::u32 large_fiber_count  = 16U;
+    crd::u32 small_fiber_count  = kSmallFiberBase; // 0: the base or a fiber a thread, the more (jobs::Config)
+    crd::u32 medium_fiber_count = kMediumFiberBase;
+    crd::u32 large_fiber_count  = kLargeFiberBase;
     crd::u32 max_counters       = 512U;
     crd::u32 frame_arena_bytes  = 1U << 20U; // 1 MB per thread
     bool     pcore_routing      = false;     // ADR-0094 opt-in (targeted wake + P-core affinity)

@@ -279,6 +279,25 @@ TEST_CASE("jobs diag10c: the pressure readings are unread before init and empty 
     crd::jobs::shutdown();
 }
 
+TEST_CASE("jobs diag10c: the default fiber tiers hold their base count or a fiber a thread, the more",
+          "[jobs][diag][diag10c]")
+{
+    // A thread holds at most one fiber of a job that does not wait (the one it runs or keeps), so a default tier never
+    // runs out short of parked jobs; the 16 Large fibers of a 32-thread pool did (the batched FFTs' jobs board).
+    for (const crd::u32 threads : {8U, 20U, 70U})
+    {
+        crd::jobs::Config cfg;
+        cfg.num_threads = threads;
+        crd::jobs::init(cfg);
+        const crd::jobs::JobsPressure p = crd::jobs::pressure_snapshot();
+        INFO("threads " << threads);
+        CHECK(p.fibers[0].capacity == (threads > 128U ? threads : 128U));
+        CHECK(p.fibers[1].capacity == (threads > 64U ? threads : 64U));
+        CHECK(p.fibers[2].capacity == (threads > 16U ? threads : 16U));
+        crd::jobs::shutdown();
+    }
+}
+
 TEST_CASE("jobs diag10c: held counters and fibers show in the readings and the probe judges near and saturated",
           "[jobs][diag][diag10c]")
 {

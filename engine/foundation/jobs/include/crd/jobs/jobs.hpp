@@ -27,9 +27,13 @@ using Counter = detail::Counter;
 struct Config
 {
     crd::u32 num_threads = 0U; // 0 = hardware_concurrency()
-    crd::u32 small_fiber_count = 128U;
-    crd::u32 medium_fiber_count = 64U;
-    crd::u32 large_fiber_count = 16U;
+    // The fibers of each stack tier. 0, the default, is the tier's base count (128, 64, 16) raised to num_threads: a
+    // thread holds at most one fiber of a job that does not wait (the one it runs or keeps), so a tier of a fiber a
+    // thread runs out only through parked jobs (an always-on fatal; the 16 Large fibers of a 32-thread pool ran out
+    // under one Large job a worker). An explicit count is taken as given.
+    crd::u32 small_fiber_count = 0U;
+    crd::u32 medium_fiber_count = 0U;
+    crd::u32 large_fiber_count = 0U;
     crd::u32 max_counters = 512U;
     crd::u32 injection_queue_capacity = 4096U;
     crd::u32 frame_alloc_bytes = 1U << 20U; // 1 MB per thread

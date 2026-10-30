@@ -616,10 +616,20 @@ bool WorkerPool::init(const WorkerConfig& cfg)
         return false;
     }
 
+    // A tier of 0 fibers (jobs::Config's default) holds its base count or a fiber a thread, the more: a thread holds at
+    // most one fiber of a job that does not wait, so such a tier runs out only through parked jobs.
+    const auto tier_count = [this](crd::u32 count, crd::u32 base) noexcept
+    {
+        if (count != 0U)
+        {
+            return count;
+        }
+        return base > m_num_threads ? base : m_num_threads;
+    };
     FiberPoolConfig fiber_cfg;
-    fiber_cfg.small_count  = cfg.small_fiber_count;
-    fiber_cfg.medium_count = cfg.medium_fiber_count;
-    fiber_cfg.large_count  = cfg.large_fiber_count;
+    fiber_cfg.small_count  = tier_count(cfg.small_fiber_count, kSmallFiberBase);
+    fiber_cfg.medium_count = tier_count(cfg.medium_fiber_count, kMediumFiberBase);
+    fiber_cfg.large_count  = tier_count(cfg.large_fiber_count, kLargeFiberBase);
     fiber_cfg.trampoline   = &job_fiber_trampoline;
 
     if (!m_fiber_pool.init(fiber_cfg))
