@@ -19,8 +19,10 @@ This folder is the meta-reflective sibling of `docs/sessions/`. Sessions are *wh
 
 - Pure "what shipped" status → that's a session log.
 - Stable architectural decisions → that's an ADR.
-- Build commands / coding conventions → that's `CLAUDE.md` / `AGENTS.md`.
-- A single one-line rule with no rationale → that's a `feedback_*.md` memory entry.
+- Build commands / coding conventions → [BUILDING](../BUILDING.md) / [CODING](../CODING.md); conduct →
+  [AGENTS](../../AGENTS.md).
+- A single durable rule with its reason → a record in the [memory corpus](memory/) routed from
+  [MEMORY](../../MEMORY.md).
 
 ## Reading order
 

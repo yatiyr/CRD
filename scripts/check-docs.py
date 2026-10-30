@@ -57,6 +57,8 @@ STALE_PHRASES = (
     (re.compile(r'never (?:run )?`?git commit|never commit or push|agents never commit|no agent commits|'
                 r'nobody but the maintainer|user commits\b|user owns the final commit', re.I),
      'retired commit rule; AGENTS.md#git-and-workspace names who commits and pushes', {'AGENTS.md'}),
+    (re.compile(r"(?:per|see|in|that's|\u2192)\s+`?CLAUDE\.md", re.I),
+     'CLAUDE.md is a tool pointer kept with the agent workspace; route rules to AGENTS.md', set()),
     (re.compile(r'no parallel agents', re.I),
      'retired 2026-10-04 assignment; parallel agents run by explicit user order (AGENTS.md)', set()),
     (re.compile(r'\bBuildkite\b(?![^.]*\b(?:reject|replac|supersed|instead of|first decision))', re.I),
@@ -140,6 +142,20 @@ def strip_code(text):
             lines.append('')
             continue
         lines.append('' if fence else re.sub(r'(`+).*?\1', '', line))
+    return lines
+
+
+def strip_fences(text):
+    """Every line with fenced blocks blanked and inline code kept, aligned with strip_code()."""
+    lines = []
+    fence = None
+    for line in text.splitlines():
+        marker = re.match(r'^\s*(`{3,}|~{3,})', line)
+        if marker:
+            fence = marker[1][0] if fence is None else (None if marker[1][0] == fence else fence)
+            lines.append('')
+            continue
+        lines.append('' if fence else line.replace('`', ''))
     return lines
 
 
@@ -639,9 +655,12 @@ def supersession_pairs(texts):
 def phrase_errors(root, docs):
     errors = []
     for name in docs:
-        # Fenced blocks are captured tool output (a checkmark column of a board); prose speaks in plain words.
-        prose = strip_code(read(root / name))
-        for number, line in enumerate(prose, 1):
+        # Fenced blocks are captured tool output (a checkmark column of a board); prose speaks in plain words. A
+        # retired rule is still stated when its key words sit in inline code ("never run `git commit`").
+        text = read(root / name)
+        prose = strip_code(text)
+        unfenced = strip_fences(text)
+        for number, (line, plain) in enumerate(zip(prose, unfenced), 1):
             if EMOJI.search(line):
                 errors.append(f'{name}:{number}: emoji or pictograph {EMOJI.search(line)[0]!r} (plain words only)')
             owned = 'ROADMAP.md#slice-' in line
@@ -649,8 +668,9 @@ def phrase_errors(root, docs):
             unquoted = re.sub(r'"[^"]*"', '', line)
             if TODO.search(unquoted) and not owned:
                 errors.append(f'{name}:{number}: {TODO.search(unquoted)[0]} without an owning ROADMAP row link')
+            plain = re.sub(r'\]\([^)]*\)', ']', plain)
             for pattern, reason, exempt in STALE_PHRASES:
-                if name not in exempt and pattern.search(line):
+                if name not in exempt and pattern.search(plain):
                     errors.append(f'{name}:{number}: {reason}')
     return errors
 
