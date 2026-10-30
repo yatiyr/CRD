@@ -109,15 +109,20 @@ TEST_CASE("CycleCounter::cycles_to_duration: basic conversion",
 
 namespace
 {
-// Read TickClock between two MonotonicClock reads for `span_ns` of MonotonicClock time: every reading must lie in its
-// bracket widened by `slack_ns`, and none may step back. Returns the number of readings, or 0 on the first miss.
+// Read TickClock between two MonotonicClock reads until a reading starts `span_ns` of MonotonicClock time after the
+// first one ended: every reading must lie in its bracket widened by `slack_ns`, and none may step back. Returns the
+// number of readings, or 0 on the first miss. The span counts from the first reading's end and up to a reading's
+// start, so neither the first read's one-time work (the CPU selection pins the thread to every processor in turn) nor
+// a preemption inside the last bracket shortens the reads: the last one runs at least `span_ns` past the clock's
+// first reading (2026-10-30: a span from before the first read let one slow read on a loaded runner end the case
+// while the clock still calibrated).
 crd::u64 bracket_reads(crd::i64 span_ns, crd::i64 slack_ns, crd::i64& worst_ns, bool& stepped_back)
 {
-    const crd::i64 start = MonotonicClock::now().ns_since_epoch();
-    crd::i64       last  = 0;
-    crd::u64       reads = 0U;
-    worst_ns             = 0;
-    stepped_back         = false;
+    crd::i64 first_end = 0;
+    crd::i64 last      = 0;
+    crd::u64 reads     = 0U;
+    worst_ns           = 0;
+    stepped_back       = false;
     for (;;)
     {
         const crd::i64 before = MonotonicClock::now().ns_since_epoch();
@@ -140,7 +145,11 @@ crd::u64 bracket_reads(crd::i64 span_ns, crd::i64 slack_ns, crd::i64& worst_ns, 
             return 0U;
         }
         ++reads;
-        if (after - start >= span_ns)
+        if (reads == 1U)
+        {
+            first_end = after;
+        }
+        else if (before - first_end >= span_ns)
         {
             return reads;
         }
@@ -160,10 +169,10 @@ TEST_CASE("TickClock: reads stay on MonotonicClock's timeline through calibratio
     bool           back  = false;
     const crd::u64 reads =
         bracket_reads(TickClock::kCalibrationNs + (4 * TickClock::kReanchorNs), 20'000, worst, back);
-    INFO("worst distance from the MonotonicClock bracket: " << worst << " ns");
+    INFO("worst distance from the MonotonicClock bracket: " << worst << " ns, reads: " << reads);
     CHECK(reads > 0U);
     CHECK_FALSE(back);
-    // The counter is used exactly where it may be.
+    // The counter is used exactly where it may be: the last read ran past the calibration.
     CHECK(TickClock::counter_mapped() == TickClock::counter_usable());
 }
 
@@ -412,8 +421,8 @@ TEST_CASE("TickClock: prefer_system before the first read keeps every read on Mo
 TEST_CASE("TickClock: a counter behind its calibration's start leaves every read on MonotonicClock for good",
           "[diag11b][clocks][tick]")
 {
-    // The counter stands below the origin when the calibration ends (2026-10-29: a hosted Windows runner whose counter
-    // fell behind its first reading): the clock settles on MonotonicClock instead of calibrating on every read.
+    // The counter stands below the origin when the calibration ends (processors whose counters disagree although CPUID
+    // calls them invariant): the clock settles on MonotonicClock instead of calibrating on every read.
     TickClock::test_calibrate_from(~u64{0});
     TickClock::warm(); // returns after one calibration span
     CHECK_FALSE(TickClock::counter_mapped());
