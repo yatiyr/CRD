@@ -33,8 +33,8 @@ checks.
 
 ## A build, end to end
 
-1. A trigger reaches the coordinator: a signed webhook, a new head seen by the poller, a schedule
-   (`ci/coordinator.json`) or a manual build (web UI, `ci/ops.py build`). Each (repository, event, branch, commit,
+1. A trigger reaches the coordinator: a new head seen by the poller (the default, every 60 s), a schedule
+   (`ci/coordinator.json`), a manual build (web UI, `ci/ops.py build start`) or, as an add-on, a signed webhook. Each (repository, event, branch, commit,
    pull request) builds once. The coordinator creates the build with one step, `plan`, on the launcher queue.
 2. `plan` runs `python ci/pipeline.py upload` on the launcher's agent: the preflight checks (actionlint while GitHub
    workflows exist, `check-pins.py`, `check-ci-tiers.py`, `test-ci-platform.py`), the mapping of the build to a
@@ -149,7 +149,11 @@ process tree); after a 2-minute grace the watchdog ends the job itself.
 | `POST /api/agent/claim` | an SSH host's or a Test Lab agent | the one job token of its launch |
 | `/api/agent/jobs/<id>/{start,heartbeat,log,finish,pipeline,annotations,artifacts,meta-data,steps}` | the agent and in-job tools | the job token of that attempt |
 | `/git/<repository>.git/...` | agents (`checkout: mirror`) | the job token; upload-pack only |
-| `/`, `/api/...`, `/qual` | operators | Cloudflare Access or IAP assertion verified here; `local` only on loopback |
+| `/`, `/api/...`, `/api/stream` (Server-Sent Events), `/qual` | operators | the listener's UI mode: `iap-tunnel` (the default: loopback and Google's IAP range only, reached with `ops.py ui`), `tailscale` (tailscaled whois, allow-listed logins), `cloudflare-access` or `iap` (signed assertion verified here), `local` (loopback only) |
+
+Each listener (`CERID_CI_LISTEN=host:port[=surfaces][@mode],...`) serves only its surfaces (`ui`, `agent`, `webhook`;
+`/healthz` everywhere) with its own UI mode. The default launcher listens on `127.0.0.1:8780` (the launcher agent and
+the IAP tunnel's local end) and on its internal address (the IAP tunnel and the job VMs), nowhere else.
 | `/healthz`, `/agent/cerid-agent.py` | probes, launched machines | none (no data; public code with its SHA-256 header) |
 
 ### State layout (`orchestrator/` in the result store)
@@ -170,14 +174,52 @@ process tree); after a 2-minute grace the watchdog ends the job itself.
 | `heads/<repository>.json`, `schedules/<repository>/<name>.json` | the poller's heads and the last fired schedule minutes |
 | `groups/<hash>.json` | concurrency-group slots |
 | `coordinator/heartbeat.json` | the coordinator's last tick (health) |
+| `audit/<date>/<ms>-<id>.json` | the audit log: who, what, on what, when |
+| `quarantine/<id>.json`, `issues/<id>.json` | quarantined flaky tests and their issue records |
+| `bisect/<id>.json` | first-bad-commit searches: range, re-runs, result |
+| `notified/<hash>.json` | each notification's key, so none is sent twice |
+| `metrics/queue/<date>.json`, `metrics/ticks/<date>.json` | queue-time samples and ticked minutes (the SLOs) |
+
+Lanes also write `test-runs/<preset>@<device>/<build>.json` in the result store: every test's outcome, duration and
+key of that run, the source of the per-test history, flaky detection and bisection.
 
 ### Operations
 
-`ci/ops.py builds`, `build [--number N]`, `retry JOB`, `cancel --build N | --job JOB`, `agents [--stop ID]`,
-`queues`, `logs JOB [--follow]`, `agent-token create|revoke`, `health`, `backup --out F`, `restore F` all act on the
-same state as the running coordinator (compare-and-swap). `health` fails when the store does not answer, the
-coordinator has not ticked for a minute or a running job is past the watchdog. Retention runs hourly; the orphan
-sweep every ten minutes.
+`ci/ops.py` is noun-verb: `ui`, `status`, `health`, `cost`, `slo`, `build list|show|start|cancel`,
+`job show|logs|retry|cancel`, `agent list|stop`, `token create|revoke`, `queue list`, `test list|history|flaky`,
+`quarantine list|release`, `bisect list`, `audit list`, `notify test`, `backup create|restore`, `retention run`,
+`device add|bake|list`, `accounts`, `parity`, `completion bash|zsh|powershell`. Every command takes `--json`;
+human output is coloured only on a terminal; an error names the next step and exits 2. They act on the same state as
+the running coordinator (compare-and-swap). `health` fails when the store does not answer, the coordinator has not
+ticked for a minute or a running job is past the watchdog. Retention runs hourly; the orphan sweep every ten
+minutes; the test-quality pass (quarantine, bisection) every five. The SLOs and the runbooks are in
+[the runbooks](../recipes/ci-platform-runbooks.md).
+
+### Test quality
+
+[quality.py](../../ci/coordinator/quality.py): a test is flaky only when its identical key both passed and failed;
+it is then quarantined (at most 10, 7 days, an issue record with the ROADMAP finding text, audited, notified). A
+quarantined test still runs; when every failure of a lane run is a quarantined one, the lane's verdict reads a JUnit
+view without them (`Lane.quarantine_view`), the original JUnit stays the evidence and the held failures are printed
+and annotated. A test that passed in the lane's previous run on the branch and fails now opens a bisection: the
+recorded runs narrow it, then up to three re-runs of that test alone on the middle commit
+(`pipeline.py lane --tests`).
+
+<a id="the-web-ui"></a>
+### The web UI
+
+[ci/web/](../../ci/web/index.html), plain HTML, CSS and JavaScript, no build step, strict CSP (no inline script or
+style). Pages: Builds, a build (status first, then what failed with the first error highlighted and jump-to-error,
+then the step graph, steps, annotations and artifacts), a job's log (live tail, ANSI colours, search with next and
+previous, follow, wrap, download, the reproducibility record), the QUAL matrix (filters, sticky headers, per-cell
+drill-down, legend), Test quality (failing, quarantined, first bad commit, flaky, per-test history), Spend (cap, the
+forecast, six months, breakdowns), Agents and queues, Operations (SLOs, the audit log). Design system: tokens for
+colour, space, type, radius and motion; light and dark following the OS and switchable; status always an icon and a
+word; WCAG 2.2 AA contrast held by a test; focus rings, skip link, landmarks, live announcements, reduced motion;
+keyboard shortcuts (`g` then `b m t s a o` for the pages, `j/k`, `/`, `e`, `n/N`, `f`, `?`); layouts down to phone
+width; designed empty, loading and error states. Live updates by Server-Sent Events (`/api/stream`). The pure
+functions (ANSI, the first error, log chunks, the matrix filters, status) are tested under Node.js.
+`python ci/coordinator/demo.py serve` shows it with labelled fixture data.
 
 ## Result store layout
 

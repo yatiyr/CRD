@@ -10,6 +10,8 @@ plug in later without redesign. The implementation contract and the CI-4 parity 
 [the CI platform design](../design/ci-platform.md); the operator's steps in
 [the setup recipe](../recipes/ci-platform-setup.md).
 
+**Amended 2026-10-31 (§16):** company-level operation (notifications, flaky-test quarantine, first-bad-commit bisection, audit, reproducibility, costs, SLOs, runbooks), the web UI opened through an IAP TCP tunnel with polling as the trigger, and a designed web UI and CLI.
+
 **Amended 2026-10-30 (§12 to §15):** by the user's order the same day, Cerid's own orchestrator (coordinator, agent,
 durable state, web UI) replaces Buildkite; Buildkite is recorded as the rejected alternative (§13). Sections §2 and
 the Buildkite wording of §4, §7, §10 and §11 are kept as the record of the first decision and are superseded where
@@ -253,6 +255,79 @@ schema and migrates an older one forward on start. Agents send their protocol (1
 426 naming the coordinator's version. Upgrade: `ops.py backup`, check out the new revision on the launcher, restart
 the coordinator unit, `ops.py health`; cloud agents always fetch the coordinator's agent, owned agents are updated
 with their checkout. Rollback is the previous revision (the schema only moves forward when a migration is added).
+
+## §16 Amendment (2026-10-31): company-level operation, IAP-tunnel access and polling
+
+The user ordered on 2026-10-31: "yes switch the guide to polling and tailscale, do not miss anything we need proper
+elite company level CI system and also design of the tool and all the UI UX must be gold standard"
+([session, verbatim](../sessions/2026-10-31-ci-orchestrator-elite.md#user-order)). The same day, after asking "why
+do we need tailscale?", the user decided that the default way to open the web UI is a Google IAP TCP tunnel, with
+Tailscale an optional add-on (for a phone) and Cloudflare the documented alternative; polling stays the default
+trigger; the user's own part of the setup is only creating the project, linking billing, setting the 50 USD budget
+and saying go, the rest being an operator runbook run with the user's signed-in `gcloud`.
+
+**Access (replaces the Cloudflare default of §12).**
+
+- *Triggers:* polling is the default (`git ls-remote` of the watched branches every 60 s through the launcher's
+  read-only deploy key: a push builds within a minute on average, about 1,440 small requests a day, and nothing has
+  to reach the coordinator from outside). Webhooks (§12) remain an add-on for when a public route exists.
+- *Web UI:* the coordinator listens on loopback and the launcher's internal address only. The firewall admits TCP
+  8780 only from Google's IAP TCP-forwarding range 35.235.240.0/20 (and from the project's subnet for the job VMs'
+  agent API). `python ci/ops.py ui` starts `gcloud compute start-iap-tunnel` under the user's own login to a local
+  port, waits until the coordinator answers and opens the browser. Only principals holding the IAP-secured Tunnel
+  User role reach the port; the coordinator then accepts UI requests only from loopback and that range (UI mode
+  `iap-tunnel`), so a runner VM inside the network is refused. The TCP tunnel carries no per-user identity: the audit
+  log names such actions "operator (IAP tunnel)" and the tunnel role is held by the user alone.
+- *Tailscale add-on:* a second listener on the tailnet address with UI mode `tailscale`: the peer must be a tailnet
+  address and its login, asked of the local tailscaled (LocalAPI `whois`, or `tailscale whois`), must be on
+  `ui.allowed_logins`; tagged devices are refused; no header is trusted. Each listener has its own surfaces (`ui`,
+  `agent`, `webhook`) and its own access mode.
+- *Alternatives:* Cloudflare Tunnel and Access (`cloudflare-access`, needed for webhooks) and Google IAP behind an
+  HTTPS load balancer (`iap`, about 18 USD a month).
+
+**Company-level operation.**
+
+| Capability | Implementation |
+|---|---|
+| Notifications | failure, recovery (green after red on the branch), budget at 80 % and 100 % and the GCP stop, flaky quarantine and its expiry, first-bad-commit results; email through the user's own SMTP provider or a self-hosted ntfy on the tailnet; each sent once per key; nothing exposed |
+| Per-test history and trends | every lane writes each test's outcome, duration and key per run (`test-runs/`); history, median and newest duration, sparklines |
+| Flaky tests | flaky only on proof: the identical test key (binary, arguments, device, inputs) both passed and failed |
+| Quarantine | at most 10 at once, 7 days, an issue record with the ROADMAP finding text, audited, notified; the test still runs and its failure is printed, annotated and recorded but does not fail the lane; it ends by itself |
+| First bad commit | a test that passed in the lane's previous run on the branch and fails now: narrowed with every recorded run, then up to 3 targeted re-runs of that test alone (`pipeline.py lane --tests`) on the middle commit through the normal dispatcher and budget |
+| Audit log | every manual and automatic decision (build start and cancel, job retry and cancel, agent stop, token create and revoke, quarantine and release, backup and restore, bisection) with who, what, target and when |
+| Retention | logs 90 days, artifacts 30 days after a build ends, applied hourly; records, test history and the ledger kept |
+| Reproducibility | each attempt's commit, machine, image, platform, CPUs, toolchain versions and environment (secrets and tokens left out), shown as "Reproduce this step" |
+| Cost reports | spend per build, lane, device and month against the cap with a linear forecast (`ops.py cost`, the Spend page) |
+| Backup and recovery | `ops.py backup create|restore` with a SHA-256 manifest; runbooks for a lost launcher, bucket or project |
+| Runbooks | stuck build, lost VM, budget hit, coordinator not ticking, agent cannot connect, upgrade, quarantine, bisection, queues ([runbooks](../recipes/ci-platform-runbooks.md)) |
+| SLOs | queue time (95 % within 120 s launcher, 300 s owned, 900 s cloud) and coordinator availability (99.5 % of minutes over 30 days), measured from every assignment and every watchdog minute |
+
+The quarantine is consistent with the repository's rule that a failure is fixed, never waived: only a proven-flaky
+test qualifies, the quarantine is bounded in time and number, the evidence and the ROADMAP finding text are created
+with it, and the original JUnit keeps the failure; the lane's verdict reads a view without the held failures, as it
+already reads the third-party register.
+
+**Design of the tool.** The web UI is plain HTML, CSS and JavaScript with no build step: a token-based design system
+(colour, space, type, radius, motion) with light and dark themes following the OS and switchable; status always as
+an icon and a word (never colour alone); WCAG 2.2 AA contrast held by a test; visible focus, a skip link, landmarks,
+reduced motion and keyboard shortcuts on every page; layouts from phone width up. Each build page is ordered status
+first, then what failed and why with the first error highlighted, then the step graph and the logs; logs, builds and
+the build page update by Server-Sent Events. The QUAL matrix has filters, sticky headers, per-cell drill-down and a
+legend; the Spend page the cap and the forecast. `ci/ops.py` is noun-verb with `--json` everywhere, colour only on a
+terminal, errors that say what to do next, and bash, zsh and PowerShell completion; the earlier verbs keep working.
+`ci/coordinator/demo.py` serves a labelled fixture locally to look at all of it without a cloud.
+
+**Security review, additions to §14.**
+
+| Threat | Mitigation |
+|---|---|
+| The UI reached from inside the network | UI mode `iap-tunnel` accepts only loopback and the IAP range; a runner VM's request is refused (tested) |
+| A forged identity header (Tailscale, a proxy) | identity only from tailscaled's whois of the connecting peer or a verified signed assertion; no header is trusted (tested with a forged `Tailscale-User-Login`) |
+| A listener serving more than it should | each listener serves only its surfaces; an agent-only listener has no UI and a UI-only one no agent API (tested) |
+| Quarantine used to hide a regression | only proof of flakiness from one key qualifies, a regression on a changed key never does; bounded, expiring, audited, notified, the original evidence kept |
+| A reproducibility record leaking secrets | secret values become `[secret]`, the job token and git's auth header are left out (tested) |
+| Notification channels | outbound only, credentials in Secret Manager, once per key, failures never fail a build |
+| The open SSH and RDP defaults of a new project | the runbook removes `default-allow-ssh` and `default-allow-rdp`; SSH to the launcher goes through IAP |
 
 ## Consequences
 

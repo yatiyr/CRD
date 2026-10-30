@@ -2,273 +2,414 @@
 
 <!-- doc-role: reference -->
 > Operator recipe. Live owner: [CI-1](../ROADMAP.md#slice-ci-1) to [CI-4](../ROADMAP.md#slice-ci-4); decision:
-> [ADR-0135](../decisions/0135-cerid-ci-platform.md) (the orchestrator: §12 to §15); contract:
-> [CI platform](../design/ci-platform.md).
+> [ADR-0135](../decisions/0135-cerid-ci-platform.md) (the orchestrator: §12 to §16); contract:
+> [CI platform](../design/ci-platform.md); day-to-day operations: [runbooks](ci-platform-runbooks.md).
 
-Every step here is a **user action**: it creates an account, turns on billing, issues a token or stores a credential.
-No agent performs these steps. Do them in order; after each, `python ci/ops.py accounts` shows the input as configured
-(by name only; it never prints a value). Steps 1 to 6 make the cloud lanes run behind a private web UI; 7 to 11 add
-device classes and options. There is no third-party CI account: the coordinator in `ci/coordinator/` is Cerid's own.
+The default route has no public endpoint at all: **polling** finds new commits (no webhook has to reach the
+coordinator) and the web UI opens through a **Google IAP TCP tunnel** from your own computer, under your own Google
+login. Tailscale (for a phone) and webhooks are optional add-ons; Cloudflare is the documented alternative.
 
-## Parameters
+There are two parts. **Part A is yours**: four steps that involve money and your Google account. **Part B is the
+operator's runbook**: exact commands, each safe to run twice and each followed by a check, which the operator runs
+with the `gcloud` you already installed and signed in to.
 
-| Name | Meaning | Default | Where it lives |
-|---|---|---|---|
-| `CERID_CI_URL` | the coordinator's public HTTPS URL (behind Cloudflare Access) | `https://ci.<your domain>` | launcher environment |
-| `CERID_CI_INTERNAL_URL` | the coordinator as the job VMs reach it inside the project's network | `http://<launcher internal IP>:8780` | launcher environment |
-| `CERID_CI_LISTEN` | the coordinator's listener | `0.0.0.0:8780` on the launcher (the firewall admits only the project's network) | launcher environment |
-| `CERID_CI_REPOSITORY_URL` | the repository the coordinator mirrors and builds | (your remote, SSH form) | launcher environment |
-| `CERID_CI_GIT_HOST` | its webhook kind: `github`, `gitea`, `gitlab` or `generic` | `github` | launcher environment |
-| `CERID_CI_ACCESS_TEAM`, `CERID_CI_ACCESS_AUD`, `CERID_CI_UI_EMAILS` | Cloudflare Access team domain, application AUD tag, optional allow-list | — | launcher environment |
-| `CERID_CI_STATUS_REPOSITORY` | `owner/name` for commit statuses (unset: no statuses) | — | launcher environment |
-| `cerid-webhook-secret`, `cerid-status-token`, `cerid-repository-deploy-key` | webhook HMAC secret, commit-status token, read-only deploy key | — | Secret Manager in the CI project |
-| `CERID_CI_GCP_PROJECT` | the CI project | `cerid-ci` | launcher environment |
-| `CERID_CI_GCP_ZONE` | zone for machines | `us-central1-a` | launcher |
-| `CERID_CI_RUNNER_SERVICE_ACCOUNT` | runner identity attached to every job VM (and checked in its identity token) | `cerid-ci-runner@cerid-ci.iam.gserviceaccount.com` | launcher |
-| `CERID_CI_STORE` | result store and orchestrator state | `gs://cerid-ci-results` (an owned coordinator: a local directory) | launcher and runners |
-| `CERID_CI_SCCACHE_BUCKET` | compiler cache bucket | `cerid-ci-sccache` | runners |
-| `CERID_CI_BUDGET_SUBSCRIPTION` | Pub/Sub pull subscription of the budget | `projects/cerid-ci/subscriptions/cerid-ci-budget-launcher` | launcher |
-| monthly cap | the hard limit | 50 USD | `ci/devices.json` `budget.monthly_cap_usd` and the GCP budget |
-| `CERID_FTL_PROJECT` | Firebase project for Test Lab (the `FTL_GCP_PROJECT` repository variable's value) | — | launcher |
-| `CERID_SSH_<HOST>_HOST`, `_KEY_FILE`, `_KNOWN_HOSTS` | an SSH host (AMD_DEVCLOUD, MAC, WINDOWS_ARM64, INTEL_TIBER) | — | launcher |
-| `CERID_CI_OWNED_AGENTS` | set to `1` once an owned agent is registered: the planner then schedules owned cells | — | launcher |
+## Part A — your four steps
 
 <a id="the-cerid-ci-project-and-billing"></a>
-## 1. The `cerid-ci` Google Cloud project and its billing
+### A1. Create the `cerid-ci` project
 
-1. <https://console.cloud.google.com/projectcreate>: project name `cerid-ci`, project id `cerid-ci` (or the nearest
-   free id; use it everywhere below). Do **not** reuse the Firebase project.
-2. **Billing → Link a billing account** to `cerid-ci` (create one if needed; a card is required). This is the only
-   project that can spend.
-3. **APIs & Services → Enable APIs**: Compute Engine, Cloud Storage, Secret Manager, Pub/Sub, Cloud Billing Budget,
-   IAM Service Account Credentials.
-4. **Cloud Storage → Buckets → Create**: `cerid-ci-results` (region `us-central1`, Standard, uniform access, public
-   access prevention on, **object versioning off**; the orchestrator's compare-and-swap uses object generations) and
-   `cerid-ci-sccache` (same; add a lifecycle rule "delete objects older than 30 days").
-5. **IAM & Admin → Quotas**, region `us-central1`: set CPUs to 48, `NVIDIA_L4_GPUS` and `NVIDIA_T4_GPUS` to 1 each,
-   preemptible CPUs to 48. The quotas bound concurrency (the planner's cloud concurrency group is six 8-vCPU
-   machines), and with it the worst hour of spend.
+1. Open <https://console.cloud.google.com/projectcreate>.
+2. **Project name:** `cerid-ci`. Under the name, Google shows the **Project ID**; if `cerid-ci` is taken it proposes
+   another (for example `cerid-ci-123456`). Write that ID down: the operator needs it.
+3. **Location:** leave "No organization". Click **Create**.
+
+*Check:* the project picker at the top of the console shows `cerid-ci`.
+
+### A2. Link billing
+
+1. Open <https://console.cloud.google.com/billing/linkedaccount?project=cerid-ci> (replace `cerid-ci` with your
+   project ID if it differs).
+2. Click **Link a billing account** and choose your billing account (or **Create billing account**, which asks for
+   a card). Do not reuse the Firebase project; this is the only project that can spend.
+
+*Check:* the page shows "This project is linked to billing account …".
 
 <a id="the-50-usd-budget-and-its-automated-stop"></a>
-## 2. The 50 USD budget and its automated stop
+### A3. Set the 50 USD budget
 
-1. **Pub/Sub → Topics → Create topic** `cerid-ci-budget`; **Create subscription** `cerid-ci-budget-launcher`, pull,
-   retention 7 days.
-2. **Billing → Budgets & alerts → Create budget**: name `cerid-ci monthly`, scope project `cerid-ci`, all services,
-   time range monthly, amount **50 USD**, thresholds 50 %, 90 % and 100 % of actual spend.
-3. In the same budget, **Manage notifications → Connect a Pub/Sub topic to this budget** → `projects/cerid-ci/topics/
-   cerid-ci-budget`. Cloud Billing then publishes the month's cost several times a day.
-4. The launcher (section 4) sets `CERID_CI_BUDGET_SUBSCRIPTION=projects/cerid-ci/subscriptions/cerid-ci-budget-launcher`;
-   every dispatcher tick pulls the notifications and, once the reported cost reaches the budget, starts no paid
-   machine. `python3 ci/ops.py budget --pull` shows the state; the web UI's Spend page shows the month. The
-   pipeline's own ledger caps the month independently and earlier, because the billing notification lags by hours.
-5. Optional backstop: in **Billing → Budgets**, email alerts to yourself at 90 %.
+1. Open <https://console.cloud.google.com/billing/budgets> and click **Create budget**.
+2. **Name:** exactly `cerid-ci monthly` (the operator finds it by this name). **Projects:** only `cerid-ci`.
+   **Services:** all. **Time range:** monthly. Click **Next**.
+3. **Budget type:** specified amount, **50** USD. Click **Next**.
+4. **Thresholds:** 50 %, 90 % and 100 % of actual spend. Keep "Email alerts to billing admins". Click **Finish**.
+
+*Check:* the budget list shows `cerid-ci monthly`, 50 USD. (The operator connects it to the automatic stop in B2.)
+
+### A4. Say go
+
+Tell the operator: "go, project ID `<your project ID>`". Saying go authorizes the operator to run Part B with your
+signed-in `gcloud` in that project (create the buckets, the service accounts, the launcher VM, the firewall rules,
+the secrets, bake the images) and, if the repository is private, to add one **read-only deploy key** for the launcher
+to the repository with your signed-in GitHub CLI (`gh`). Nothing else on your accounts changes.
+
+When Part B is done, the operator tells you to run `python ci/ops.py ui` (see [B9](#opening-the-web-ui)).
+
+## Part B — the operator's runbook
+
+Run from a checkout of this repository on the user's computer, in Git Bash (or any POSIX shell) with `gcloud`
+signed in as the user. Every block is idempotent: running it again changes nothing that is already right. Every
+block ends with a check whose expected output is stated.
+
+```bash
+export PROJECT=<project ID from A1>   # for example cerid-ci
+export REGION=us-central1 ZONE=us-central1-a
+export LAUNCHER_SA=cerid-ci-launcher@$PROJECT.iam.gserviceaccount.com
+export RUNNER_SA=cerid-ci-runner@$PROJECT.iam.gserviceaccount.com
+export ACCOUNT=$(gcloud config get-value account)
+gcloud config set project $PROJECT
+```
+
+*Check:* `gcloud config get-value project` prints the project ID; `gcloud billing projects describe $PROJECT
+--format='value(billingEnabled)'` prints `True`.
+
+### B1. APIs, buckets and quotas
+
+```bash
+gcloud services enable compute.googleapis.com storage.googleapis.com secretmanager.googleapis.com \
+  pubsub.googleapis.com billingbudgets.googleapis.com iap.googleapis.com iamcredentials.googleapis.com
+for bucket in cerid-ci-results-$PROJECT cerid-ci-sccache-$PROJECT; do
+  gcloud storage buckets describe gs://$bucket >/dev/null 2>&1 || gcloud storage buckets create gs://$bucket \
+    --location=$REGION --uniform-bucket-level-access --public-access-prevention
+done
+printf '{"rule":[{"action":{"type":"Delete"},"condition":{"age":30}}]}' > /tmp/cerid-sccache-lifecycle.json
+gcloud storage buckets update gs://cerid-ci-sccache-$PROJECT --lifecycle-file=/tmp/cerid-sccache-lifecycle.json
+gcloud storage buckets update gs://cerid-ci-results-$PROJECT --no-versioning
+```
+
+The bucket names carry the project ID because bucket names are global. Object versioning stays off on the results
+bucket: the orchestrator's compare-and-swap uses live object generations.
+
+*Check:* `gcloud storage buckets list --format='value(name)'` lists both buckets;
+`gcloud compute regions describe $REGION --format="table(quotas.metric,quotas.limit)" | grep -E "^CPUS |PREEMPTIBLE_CPUS|NVIDIA_(L4|T4)_GPUS"`
+shows the regional limits. The planner runs at most six 8-vCPU cloud machines at once (48 vCPUs). If `CPUS` or
+`PREEMPTIBLE_CPUS` is below 48 or a GPU limit is 0, request the increase in the console
+(<https://console.cloud.google.com/iam-admin/quotas>, filter by region `us-central1`, select the quota, **Edit
+quotas**); until Google grants it, launches past the quota fail and are retried, then reported.
+
+### B2. The budget's automatic stop
+
+```bash
+gcloud pubsub topics describe cerid-ci-budget >/dev/null 2>&1 || gcloud pubsub topics create cerid-ci-budget
+gcloud pubsub subscriptions describe cerid-ci-budget-launcher >/dev/null 2>&1 || gcloud pubsub subscriptions create \
+  cerid-ci-budget-launcher --topic=cerid-ci-budget --message-retention-duration=7d
+gcloud pubsub topics add-iam-policy-binding cerid-ci-budget \
+  --member=serviceAccount:billing-budget-alert@system.gserviceaccount.com --role=roles/pubsub.publisher
+export BILLING=$(gcloud billing projects describe $PROJECT --format='value(billingAccountName)' | sed 's#.*/##')
+export BUDGET=$(gcloud billing budgets list --billing-account=$BILLING --filter="displayName='cerid-ci monthly'" \
+  --format='value(name)')
+gcloud billing budgets update $BUDGET --billing-account=$BILLING \
+  --notifications-rule-pubsub-topic=projects/$PROJECT/topics/cerid-ci-budget
+```
+
+*Check:* `gcloud billing budgets describe $BUDGET --billing-account=$BILLING --format='value(notificationsRule.pubsubTopic)'`
+prints `projects/<project>/topics/cerid-ci-budget`. If `BUDGET` is empty, the budget of A3 is missing or named
+differently: ask the user, never create a budget yourself.
 
 <a id="service-accounts-and-workload-identity"></a>
-## 3. Service accounts and secrets
+### B3. Service accounts and their roles
 
-1. **IAM & Admin → Service accounts → Create**: `cerid-ci-launcher` and `cerid-ci-runner`.
-2. Grant `cerid-ci-launcher`, on project `cerid-ci`: Compute Instance Admin (v1), Service Account User on
-   `cerid-ci-runner` only, Storage Object Admin on both buckets, Secret Manager Secret Accessor, Pub/Sub Subscriber on
-   `cerid-ci-budget-launcher`, Compute Image User.
-3. Grant `cerid-ci-runner`: Storage Object Admin on both buckets, and Compute Instance Admin (v1) with the IAM
-   condition `resource.name.extract("/instances/{name}").startsWith("cerid-ci-")` so a job machine can delete itself
-   and nothing else. **No** Secret Manager role: a runner receives only the secrets its step declares, from the
-   coordinator, and only for a trusted build.
-4. Keyless identity everywhere: the launcher is a Compute Engine VM and uses its attached service account through the
-   metadata server; every job VM proves its identity to the coordinator with a Google-signed identity token. No
-   service-account key is ever created or downloaded. (A coordinator on an owned machine uses the filesystem backend,
-   `CERID_CI_STORE=/var/lib/cerid-ci/store`, and needs no Google credential at all unless it also launches cloud
-   machines; then run it on the launcher VM instead.)
-5. **Secret Manager → Create secret**, each value generated on your own machine and pasted only here:
-   `cerid-webhook-secret` (for example the output of `python -c "import secrets; print(secrets.token_hex(32))"`),
-   `cerid-status-token` (section 6) and `cerid-repository-deploy-key` (section 4.3). Nobody else needs to read them.
+```bash
+for sa in cerid-ci-launcher cerid-ci-runner; do
+  gcloud iam service-accounts describe $sa@$PROJECT.iam.gserviceaccount.com >/dev/null 2>&1 || \
+    gcloud iam service-accounts create $sa --display-name="$sa"
+done
+for role in roles/compute.instanceAdmin.v1 roles/compute.imageUser roles/secretmanager.secretAccessor; do
+  gcloud projects add-iam-policy-binding $PROJECT --member=serviceAccount:$LAUNCHER_SA --role=$role --condition=None
+done
+gcloud iam service-accounts add-iam-policy-binding $RUNNER_SA --member=serviceAccount:$LAUNCHER_SA \
+  --role=roles/iam.serviceAccountUser
+gcloud pubsub subscriptions add-iam-policy-binding cerid-ci-budget-launcher --member=serviceAccount:$LAUNCHER_SA \
+  --role=roles/pubsub.subscriber
+for bucket in cerid-ci-results-$PROJECT cerid-ci-sccache-$PROJECT; do
+  for sa in $LAUNCHER_SA $RUNNER_SA; do
+    gcloud storage buckets add-iam-policy-binding gs://$bucket --member=serviceAccount:$sa --role=roles/storage.objectAdmin
+  done
+done
+gcloud projects add-iam-policy-binding $PROJECT --member=serviceAccount:$RUNNER_SA \
+  --role=roles/compute.instanceAdmin.v1 \
+  --condition='expression=resource.name.extract("/instances/{name}").startsWith("cerid-ci-"),title=own-job-machines'
+gcloud projects add-iam-policy-binding $PROJECT --member=user:$ACCOUNT --role=roles/iap.tunnelResourceAccessor \
+  --condition=None
+```
+
+The runner account gets **no** Secret Manager role: a job receives only the secrets its step declares, from the
+coordinator, and only in a trusted build. No service-account key is ever created: the launcher uses its attached
+identity, every job VM proves its own.
+
+*Check:* `gcloud projects get-iam-policy $PROJECT --flatten=bindings --filter="bindings.members:$RUNNER_SA"
+--format='value(bindings.role)'` prints only `roles/compute.instanceAdmin.v1` (with the condition), and the same for
+`user:$ACCOUNT` includes `roles/iap.tunnelResourceAccessor`.
+
+### B4. Network: no public door
+
+```bash
+gcloud compute firewall-rules describe cerid-ci-iap >/dev/null 2>&1 || gcloud compute firewall-rules create \
+  cerid-ci-iap --network=default --direction=INGRESS --action=allow --rules=tcp:8780,tcp:22 \
+  --source-ranges=35.235.240.0/20 --target-tags=cerid-ci-launcher
+gcloud compute firewall-rules describe cerid-ci-agents >/dev/null 2>&1 || gcloud compute firewall-rules create \
+  cerid-ci-agents --network=default --direction=INGRESS --action=allow --rules=tcp:8780 \
+  --source-ranges=10.128.0.0/9 --target-tags=cerid-ci-launcher
+for rule in default-allow-ssh default-allow-rdp; do
+  gcloud compute firewall-rules describe $rule >/dev/null 2>&1 && gcloud compute firewall-rules delete $rule --quiet
+done
+```
+
+`35.235.240.0/20` is Google's IAP TCP-forwarding range: only principals holding the IAP-secured Tunnel User role
+(B3) reach port 8780 (the UI) and 22 (SSH) through it. The job VMs reach the coordinator inside the network. The two
+default rules that open SSH and RDP to the whole Internet are removed; nothing in this project needs them.
+
+*Check:* `gcloud compute firewall-rules list --format="table(name,sourceRanges.list(),allowed[].map().firewall_rule().list())"`
+shows `cerid-ci-iap` and `cerid-ci-agents` and no rule with source `0.0.0.0/0` on 22 or 3389.
+
+### B5. Secrets
+
+```bash
+gcloud secrets describe cerid-repository-deploy-key >/dev/null 2>&1 || \
+  gcloud secrets create cerid-repository-deploy-key --replication-policy=automatic
+```
+
+The key itself is generated on the launcher in B7 and added as a version there; no secret is ever typed or printed.
+(The webhook secret of the add-on and the commit-status token are created only when those options are chosen.)
+
+*Check:* `gcloud secrets list --format='value(name)'` lists `cerid-repository-deploy-key`.
 
 <a id="the-coordinator-on-the-launcher"></a>
-## 4. The coordinator on the launcher
+### B6. The launcher VM
 
-1. **Compute Engine → Create instance** `cerid-ci-launcher`: `e2-micro` in `us-central1-a` (free tier), Ubuntu 24.04
-   LTS, 30 GB standard disk, service account `cerid-ci-launcher`, access scope "Allow full access to all Cloud APIs"
-   (IAM roles above are the real limit), network tag `cerid-ci-launcher`. Note its internal IP.
-2. **VPC network → Firewall → Create rule** `cerid-ci-agents`: ingress, targets the tag `cerid-ci-launcher`, source
-   range the default network's subnet (`10.128.0.0/9`), TCP 8780. No external port is opened; the public route is the
-   Cloudflare Tunnel of section 5. (Google encrypts VM-to-VM traffic in its network; the agent refuses plain HTTP to
-   anything but a loopback or private address.)
-3. SSH into it (console button): `sudo apt-get install -y git python3 python-is-python3`; create the user `cerid-ci`;
-   `ssh-keygen -t ed25519 -f /etc/cerid-ci/deploy-key -N ''` (owned by `cerid-ci`, mode 0600), add the public key to
-   the repository as a **read-only deploy key** and store the private key as `cerid-repository-deploy-key`; then, as
-   `cerid-ci`, clone the repository to `/opt/cerid` with that key and check out the revision you reviewed
-   (`git checkout <tag or commit>`; upgrades in "Upgrades and backups" below).
-4. Create `/etc/cerid-ci/launcher.env` (mode 0600, owner `cerid-ci`), values only you know:
+```bash
+gcloud compute instances describe cerid-ci-launcher --zone=$ZONE >/dev/null 2>&1 || gcloud compute instances create \
+  cerid-ci-launcher --zone=$ZONE --machine-type=e2-micro --image-family=ubuntu-2404-lts-amd64 \
+  --image-project=ubuntu-os-cloud --boot-disk-size=30GB --boot-disk-type=pd-standard \
+  --service-account=$LAUNCHER_SA --scopes=cloud-platform --tags=cerid-ci-launcher --shielded-secure-boot
+export INTERNAL=$(gcloud compute instances describe cerid-ci-launcher --zone=$ZONE \
+  --format='value(networkInterfaces[0].networkIP)')
+```
 
-   ```
-   CERID_CI_URL=https://ci.<your domain>
-   CERID_CI_INTERNAL_URL=http://<launcher internal IP>:8780
-   CERID_CI_LISTEN=0.0.0.0:8780
-   CERID_CI_REPOSITORY_URL=git@github.com:<owner>/<repository>.git
-   CERID_CI_GIT_HOST=github
-   CERID_CI_ACCESS_TEAM=<team>.cloudflareaccess.com
-   CERID_CI_ACCESS_AUD=<application AUD tag>
-   CERID_CI_UI_EMAILS=<you@example.com>
-   CERID_CI_STATUS_REPOSITORY=<owner>/<repository>
-   CERID_CI_GCP_PROJECT=cerid-ci
-   CERID_CI_GCP_ZONE=us-central1-a
-   CERID_CI_RUNNER_SERVICE_ACCOUNT=cerid-ci-runner@cerid-ci.iam.gserviceaccount.com
-   CERID_CI_STORE=gs://cerid-ci-results
-   CERID_CI_SCCACHE_BUCKET=cerid-ci-sccache
-   CERID_CI_BUDGET_SUBSCRIPTION=projects/cerid-ci/subscriptions/cerid-ci-budget-launcher
-   CERID_CI_MIRROR_DIR=/var/lib/cerid-ci/mirror
-   GIT_SSH_COMMAND=ssh -i /etc/cerid-ci/deploy-key -o IdentitiesOnly=yes
-   ```
+The e2-micro in `us-central1` is in Google's free tier. It keeps an ephemeral external address for outbound traffic
+(git, packages); the console shows that address's hourly price when it applies. Nothing listens on it: the firewall
+admits only B4's two sources.
 
-5. `python3 /opt/cerid/ci/coordinator/main.py check` prints any missing value by name.
-6. Two systemd units, both `User=cerid-ci`, `EnvironmentFile=/etc/cerid-ci/launcher.env`, `Restart=always`:
-   `cerid-ci-coordinator.service` with `ExecStart=/usr/bin/python3 /opt/cerid/ci/coordinator/main.py serve`, and
-   `cerid-ci-launcher-agent.service` with `ExecStart=/usr/bin/python3 /opt/cerid/ci/agent/agent.py start
-   --coordinator http://127.0.0.1:8780 --mode long-running --registration-token-file /etc/cerid-ci/launcher-token
-   --name launcher --build-path /var/lib/cerid-ci/launcher-builds`. Before starting the agent, create its token once:
-   `python3 /opt/cerid/ci/ops.py agent-token create --name launcher --queue cerid-launcher --out
-   /etc/cerid-ci/launcher-token` (run as `cerid-ci` with the environment file loaded; the token is written to the
-   file, never printed). `sudo systemctl enable --now cerid-ci-coordinator cerid-ci-launcher-agent`. The
-   coordinator's own log is JSON lines in `journalctl -u cerid-ci-coordinator`.
-7. Bake the images once, from the launcher: `python3 /opt/cerid/ci/ops.py bake gce-linux-x64-intel`, then
-   `gce-linux-arm64-ampere`, `gce-windows-x64`, `gce-linux-x64-nvidia-l4` and `gce-windows-x64-nvidia-t4` (one per
-   image family; `ops.py status` lists any family still NOT BAKED). Rebake monthly or after a toolchain change; a
-   rebake changes every input key on that family, so its cells rerun.
-8. `python3 /opt/cerid/ci/ops.py health`, `accounts` and `status`: the coordinator ticks and every cloud cell reads
-   `runnable`. The poller already builds new heads of `main` every two minutes; section 6 adds instant webhooks.
+*Check:* `gcloud compute ssh cerid-ci-launcher --zone=$ZONE --tunnel-through-iap --command='uname -a'` prints an
+Ubuntu kernel line (the first SSH creates your key; accept the prompt).
 
-<a id="cloudflare-tunnel-and-access-for-the-web-ui"></a>
-## 5. Cloudflare Tunnel and Access for the web UI
+### B7. Install the coordinator
 
-The web UI has no anonymous mode: the coordinator verifies Cloudflare Access's signed assertion on every UI request.
+```bash
+ssh_l() { gcloud compute ssh cerid-ci-launcher --zone=$ZONE --tunnel-through-iap --command="$1"; }
+ssh_l 'sudo apt-get update -q && sudo apt-get install -y -q git python3 python-is-python3 && \
+  (id cerid-ci >/dev/null 2>&1 || sudo useradd --system --create-home --home-dir /var/lib/cerid-ci cerid-ci) && \
+  sudo install -d -o cerid-ci -g cerid-ci -m 0700 /etc/cerid-ci /var/lib/cerid-ci/mirror'
+ssh_l 'sudo test -f /etc/cerid-ci/deploy-key || sudo -u cerid-ci ssh-keygen -q -t ed25519 -N "" \
+  -C cerid-ci-launcher -f /etc/cerid-ci/deploy-key'
+ssh_l 'sudo cat /etc/cerid-ci/deploy-key | gcloud secrets versions add cerid-repository-deploy-key --data-file=- \
+  >/dev/null && sudo cat /etc/cerid-ci/deploy-key.pub' > /tmp/cerid-ci-deploy-key.pub
+```
 
-1. <https://dash.cloudflare.com/sign-up> (free) and add a domain you own to Cloudflare (any registrar; a domain is the
-   only cost here, outside the CI budget).
-2. **Zero Trust → Networks → Tunnels → Create a tunnel** (Cloudflared), name `cerid-ci`; follow its install command
-   on the launcher (it installs `cloudflared` as a service with the tunnel's own token, which stays on the launcher).
-   **Public hostname**: `ci.<your domain>` → service `http://localhost:8780`.
-3. **Zero Trust → Access → Applications → Add an application → Self-hosted**: domain `ci.<your domain>`, policy
-   "Allow", include "Emails" with your address (and your team's). Copy the **Application Audience (AUD) tag** into
-   `CERID_CI_ACCESS_AUD` and the team domain (`<team>.cloudflareaccess.com`) into `CERID_CI_ACCESS_TEAM`.
-4. In the same application, add a second policy **Bypass / Everyone** limited to the paths `/webhooks/*`,
-   `/api/agent/*`, `/agent/*`, `/git/*` and `/healthz` (Access application paths): those authenticate themselves
-   (HMAC signatures, job and agent tokens) and are called by git hosts and machines, not people. Every other path
-   stays behind the Allow policy and is verified again by the coordinator.
-5. Restart `cerid-ci-coordinator`; open `https://ci.<your domain>`: Access asks for a one-time code by email, then the
-   builds page shows. Google IAP is the supported alternative (`ui.mode: iap`), but it needs an HTTPS load balancer,
-   about 18 USD a month: a third of the cap, so Cloudflare Access is the recommendation.
+If the repository is private, add the public key as a **read-only** deploy key (the user's go in A4 covers this one
+GitHub change): `gh repo deploy-key add /tmp/cerid-ci-deploy-key.pub --repo <owner>/<repository> --title
+cerid-ci-launcher` (no `--allow-write`). Then clone and configure:
+
+```bash
+export REPO=git@github.com:<owner>/<repository>.git REVISION=<the reviewed tag or commit>
+ssh_l "sudo -u cerid-ci sh -c 'test -d /var/lib/cerid-ci/cerid || GIT_SSH_COMMAND=\"ssh -i /etc/cerid-ci/deploy-key \
+  -o StrictHostKeyChecking=accept-new\" git clone -q $REPO /var/lib/cerid-ci/cerid; cd /var/lib/cerid-ci/cerid && \
+  GIT_SSH_COMMAND=\"ssh -i /etc/cerid-ci/deploy-key\" git fetch -q origin && git checkout -q $REVISION'"
+ssh_l "sudo tee /etc/cerid-ci/launcher.env >/dev/null <<EOF
+CERID_CI_URL=http://localhost:8780
+CERID_CI_INTERNAL_URL=http://$INTERNAL:8780
+CERID_CI_LISTEN=127.0.0.1:8780,$INTERNAL:8780
+CERID_CI_REPOSITORY_URL=$REPO
+CERID_CI_GCP_PROJECT=$PROJECT
+CERID_CI_GCP_ZONE=$ZONE
+CERID_CI_RUNNER_SERVICE_ACCOUNT=$RUNNER_SA
+CERID_CI_STORE=gs://cerid-ci-results-$PROJECT
+CERID_CI_SCCACHE_BUCKET=cerid-ci-sccache-$PROJECT
+CERID_CI_BUDGET_SUBSCRIPTION=projects/$PROJECT/subscriptions/cerid-ci-budget-launcher
+CERID_CI_MIRROR_DIR=/var/lib/cerid-ci/mirror
+GIT_SSH_COMMAND=ssh -i /etc/cerid-ci/deploy-key -o IdentitiesOnly=yes
+EOF
+sudo chmod 0600 /etc/cerid-ci/launcher.env && sudo chown cerid-ci /etc/cerid-ci/launcher.env"
+ssh_l 'cd /var/lib/cerid-ci/cerid && sudo -u cerid-ci env $(sudo cat /etc/cerid-ci/launcher.env | xargs -d "\n") \
+  python ci/coordinator/main.py check'
+```
+
+*Check:* the last command prints `configuration complete: 1 repositories, UI iap-tunnel`.
+
+Two systemd units, both `User=cerid-ci`, `EnvironmentFile=/etc/cerid-ci/launcher.env`, `Restart=always`,
+`WorkingDirectory=/var/lib/cerid-ci/cerid`:
+
+```bash
+ssh_l "sudo tee /etc/systemd/system/cerid-ci-coordinator.service >/dev/null <<'EOF'
+[Unit]
+Description=Cerid CI coordinator
+After=network-online.target
+[Service]
+User=cerid-ci
+EnvironmentFile=/etc/cerid-ci/launcher.env
+WorkingDirectory=/var/lib/cerid-ci/cerid
+ExecStart=/usr/bin/python3 ci/coordinator/main.py serve
+Restart=always
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/cerid-ci
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo tee /etc/systemd/system/cerid-ci-launcher-agent.service >/dev/null <<'EOF'
+[Unit]
+Description=Cerid CI launcher agent
+After=cerid-ci-coordinator.service
+[Service]
+User=cerid-ci
+EnvironmentFile=/etc/cerid-ci/launcher.env
+WorkingDirectory=/var/lib/cerid-ci/cerid
+ExecStart=/usr/bin/python3 ci/agent/agent.py start --coordinator http://127.0.0.1:8780 --mode long-running --registration-token-file /etc/cerid-ci/launcher-token --name launcher --build-path /var/lib/cerid-ci/launcher-builds
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload && sudo systemctl enable --now cerid-ci-coordinator"
+ssh_l 'cd /var/lib/cerid-ci/cerid && (sudo test -f /etc/cerid-ci/launcher-token || sudo -u cerid-ci env \
+  $(sudo cat /etc/cerid-ci/launcher.env | xargs -d "\n") python ci/ops.py token create --name launcher \
+  --queue cerid-launcher --out /etc/cerid-ci/launcher-token) && sudo systemctl enable --now cerid-ci-launcher-agent'
+```
+
+*Check:* `ssh_l 'cd /var/lib/cerid-ci/cerid && sudo -u cerid-ci env $(sudo cat /etc/cerid-ci/launcher.env | xargs -d
+"\n") python ci/ops.py health'` prints `coordinator: ticking` and exits 0; `ssh_l 'journalctl -u cerid-ci-coordinator
+-n 5'` shows JSON lines, the first `coordinator_started`.
+
+### B8. Bake the images
+
+```bash
+for device in gce-linux-x64-intel gce-linux-arm64-ampere gce-windows-x64 gce-linux-x64-nvidia-l4 gce-windows-x64-nvidia-t4; do
+  ssh_l "cd /var/lib/cerid-ci/cerid && sudo -u cerid-ci env \$(sudo cat /etc/cerid-ci/launcher.env | xargs -d '\n') \
+    python ci/ops.py device bake $device"
+done
+```
+
+One bake per image family, up to an hour each (a bake is a paid machine; the Windows ones are the dearest). Rebake
+monthly or after a toolchain change; a rebake changes every input key of that family, so its cells run again.
+
+*Check:* `python ci/ops.py status` on the launcher shows no `NOT BAKED`.
+
+<a id="opening-the-web-ui"></a>
+### B9. Open the web UI (the user's daily command)
+
+On the user's computer, in the repository: `python ci/ops.py ui`. It starts `gcloud compute start-iap-tunnel
+cerid-ci-launcher 8780` to `localhost:8780` (another free port if that one is taken), waits until the coordinator
+answers and opens the browser. Ctrl+C closes the tunnel. Set `CERID_CI_GCP_PROJECT` (or pass `--project`) when the
+project ID is not `cerid-ci`.
+
+*Check:* the browser shows the Builds page; the header names you as "operator (IAP tunnel)". The first build
+appears within a minute of the next push to `main` (polling every 60 s), or start one with **New build**.
+
+## Optional pieces
+
+<a id="tailscale-add-on"></a>
+### Tailscale (to open the UI from a phone)
+
+1. On the launcher: install Tailscale (`curl -fsSL https://tailscale.com/install.sh | sh`, its official script),
+   `sudo tailscale up --hostname cerid-ci` (the user approves the device in the Tailscale admin console: a user
+   action) and note its address (`tailscale ip -4`).
+2. Add a UI listener with Tailscale identity: append `,<tailscale ip>:8781=ui@tailscale` to `CERID_CI_LISTEN` and set
+   `CERID_CI_UI_LOGINS=<the user's tailnet login>`; restart the coordinator. Identity comes from the local
+   tailscaled (`whois` of the connecting peer), never from a header.
+3. The tailnet policy (ACL) allows only that user to `tag:cerid-ci:8781`; install Tailscale on the phone and the
+   Windows PC, sign in, open `http://cerid-ci:8781/` (MagicDNS).
+
+*Check:* from a device signed in as another tailnet user the page answers 401.
 
 <a id="webhooks-and-commit-status"></a>
-## 6. Webhooks and commit status
+### Webhooks and commit status
 
-1. **Webhook** (GitHub: repository **Settings → Webhooks → Add webhook**): payload URL
-   `https://ci.<your domain>/webhooks/cerid`, content type `application/json`, secret: the value of
-   `cerid-webhook-secret` (copy it from Secret Manager into this form only), events "Pushes" and "Pull requests".
-   Gitea, Forgejo and Codeberg take the same form (`CERID_CI_GIT_HOST=gitea`); GitLab takes the value as its "Secret
-   token" (`gitlab`); any other host can relay through the `generic` signature (design doc, surfaces). Pull requests
-   from forks do not build (their own `ci/pipeline.py` would run on the launcher) unless you set `"build_forks": true`
-   on the repository in `ci/coordinator.json`; pull requests from the repository itself build untrusted, and a step
-   that declares secrets is refused for them.
-2. **Commit status** (optional): a fine-grained personal access token limited to this repository with "Commit
-   statuses: Read and write" only; store it as `cerid-status-token` and set `CERID_CI_STATUS_REPOSITORY`. Each build
-   then reports `cerid-ci` pending, success or failure with a link to its page.
-3. Without a webhook the poller still builds every new head of the watched branches within two minutes.
+Polling (every 60 s, one `git ls-remote` per watched branch: about 1,440 small requests a day, far inside every
+host's limits, and no inbound door) is the default because it needs no public endpoint. A webhook makes builds
+start within seconds but needs the coordinator reachable from the git host: add it together with a public route
+(Cloudflare below). Then create the secret `cerid-webhook-secret` (`openssl rand -hex 32 | gcloud secrets create
+cerid-webhook-secret --data-file=-`), add `"webhook_secret": "cerid-webhook-secret"` to the repository in
+`ci/coordinator.json`, add a `=webhook` listener, and in the repository's **Settings → Webhooks** (a user action)
+point `https://<public host>/webhooks/cerid` at it with that secret, events "Pushes" and "Pull requests". Pull
+requests from forks never build unless the repository sets `"build_forks": true`.
+
+Commit status (optional, user action for the token): a fine-grained personal access token for this repository only,
+"Commit statuses: Read and write", stored as `cerid-status-token`; set `CERID_CI_STATUS_REPOSITORY=<owner>/<name>`.
+
+<a id="cloudflare-tunnel-and-access-for-the-web-ui"></a>
+### The alternative: Cloudflare Tunnel and Access
+
+For a public HTTPS name (needed by webhooks): a domain on Cloudflare, a Cloudflare Tunnel from the launcher to
+`localhost:8780`, an Access application on that host (Allow: the user's e-mail; Bypass: `/webhooks/*`, `/healthz`),
+`CERID_CI_UI_MODE=cloudflare-access`, `CERID_CI_ACCESS_TEAM=<team>.cloudflareaccess.com`,
+`CERID_CI_ACCESS_AUD=<AUD tag>`. The coordinator verifies Access's signed assertion itself. Google IAP behind an HTTPS
+load balancer (`iap` mode) also works but costs about 18 USD a month, a third of the cap.
+
+### Notifications
+
+Add channels to `notifications.channels` in `ci/coordinator.json` (failures, recoveries, budget thresholds, flaky
+quarantines and first-bad-commit results; branch `main` by default):
+`{"kind": "email", "host": "smtp.<provider>", "port": 587, "from": "...", "to": ["..."], "username": "...",
+"password_secret": "cerid-smtp-password"}` (the user creates an app password at their provider: a user action) or
+`{"kind": "ntfy", "url": "http://<ntfy host on the tailnet>/cerid-ci", "token_secret": "cerid-ntfy-token"}`.
+`python ci/ops.py notify test` sends one test message.
 
 <a id="firebase-test-lab"></a>
-## 7. Firebase Test Lab (Tier B phones and tablets)
+### Firebase Test Lab (Tier B phones and tablets)
 
-1. In the **Firebase project** (the one `FTL_GCP_PROJECT` names), **IAM → Grant access**: principal
-   `cerid-ci-launcher@cerid-ci.iam.gserviceaccount.com`, roles Firebase Test Lab Admin and Firebase Analytics Viewer.
-   The Firebase project stays on Spark; nothing is billed there.
-2. Add `CERID_FTL_PROJECT=<that project id>` to `/etc/cerid-ci/launcher.env`. The adapter keeps within the Spark
-   plan's daily quota (5 physical and 10 virtual device tests) and marks the rest `budget`.
+In the Firebase project (the one `FTL_GCP_PROJECT` names): `gcloud projects add-iam-policy-binding <firebase
+project> --member=serviceAccount:$LAUNCHER_SA --role=roles/cloudtestservice.testAdmin` and
+`--role=roles/firebase.analyticsViewer`; add `CERID_FTL_PROJECT=<firebase project>` to `launcher.env`. The project
+stays on Spark; the adapter keeps within 5 physical and 10 virtual tests a day and marks the rest budget.
 
 <a id="optional-ssh-hosts-amd-mac-windows-arm64-intel"></a>
-## 8. Optional SSH hosts: AMD Developer Cloud, a rented Mac, Windows ARM64, Intel
+### SSH hosts: AMD Developer Cloud, a rented Mac, Windows ARM64, Intel
 
 Each is used only when all three of its names exist. For a host `X` (`AMD_DEVCLOUD`, `MAC`, `WINDOWS_ARM64`,
-`INTEL_TIBER`):
-
-1. Get the host from its provider (AMD Developer Cloud credit; an hourly Mac; an Azure Cobalt 100 Windows 11 ARM64
-   spot VM or an owned Snapdragon laptop; Intel Tiber AI Cloud). Create an unprivileged user `cerid` with Python 3.12
-   and git.
-2. On the launcher: `ssh-keygen -t ed25519 -f /etc/cerid-ci/ssh-X -N ''`; put the public key in the host's
-   `~cerid/.ssh/authorized_keys`; store the private key as the Secret Manager secret named in `ci/devices.json`
-   (`amd-devcloud-ssh-key`, `mac-ssh-key`, `windows-arm64-ssh-key`, `intel-tiber-ssh-key`).
-3. Record the host key: `ssh-keyscan <host> > /etc/cerid-ci/known-X`, and compare its fingerprint with the provider's
-   console before trusting it.
-4. Add `CERID_SSH_X_HOST=cerid@<host>`, `CERID_SSH_X_KEY_FILE=/etc/cerid-ci/ssh-X` and
-   `CERID_SSH_X_KNOWN_HOSTS=/etc/cerid-ci/known-X` to the launcher environment. The host downloads the agent from
-   `CERID_CI_URL` (through the tunnel) and checks its digest; its one job token arrives on standard input. An hourly
-   Mac may name a power command (`power_on_command_env` in its cell) that the launcher runs before a Mac job.
+`INTEL_TIBER`): get the host (a user action with the provider), create an unprivileged user `cerid` with Python 3.12
+and git; on the launcher `ssh-keygen -t ed25519 -f /etc/cerid-ci/ssh-X -N ''`, put the public key in the host's
+`authorized_keys`, record and compare the host key (`ssh-keyscan <host> > /etc/cerid-ci/known-X`), and add
+`CERID_SSH_X_HOST=cerid@<host>`, `CERID_SSH_X_KEY_FILE` and `CERID_SSH_X_KNOWN_HOSTS`. An SSH host is outside the
+project's network, so it needs a route to the coordinator: the Tailscale add-on (its agent API on the tailnet) or the
+Cloudflare alternative.
 
 <a id="owned-machines"></a>
-## 9. Owned machines
+### Owned machines
 
-1. `python ci/ops.py add-device --id owned-<name> --executor owned_agent ...` (or flip a planned owned cell's status
-   to `active`). It prints the agent's command line and install steps.
-2. On the launcher: `python3 /opt/cerid/ci/ops.py agent-token create --name owned-<name> --queue cerid-owned --tags
-   device=owned-<name> --out /tmp/owned-<name>-token`, then move that file to the machine (`scp`), readable only by
-   the agent's user, and delete the copy. The token's `device` tag pins the machine to its cell; the agent cannot
-   claim another. Revoke it any time with `ops.py agent-token revoke --name owned-<name>`.
-3. On the machine: a checkout of the repository at the revision the coordinator runs, then the printed command as a
-   service (systemd, launchd, or a Windows service or logon task for a workstation that only runs between quiet
-   sessions). It reaches the coordinator at `CERID_CI_URL` through the tunnel. Set `CERID_CI_OWNED_AGENTS=1` on the
-   launcher so the planner schedules owned cells; the agent shows on the Agents page.
-4. The result store: the step document already carries `CERID_CI_STORE`; the machine needs credentials for that
-   bucket without a key file (`gcloud auth login` as the agent user, with your own account limited to the bucket).
-   Without them a lane still passes or fails on its own evidence, but its result, cache entry and duration are not
-   recorded (the lane logs "result store unavailable") and its dashboard cell keeps its previous state.
+`python ci/ops.py device add --id owned-<name> --executor owned_agent ...` (or flip a planned owned cell to
+`active`) prints the agent's command line. On the launcher `python ci/ops.py token create --name owned-<name>
+--queue cerid-owned --tags device=owned-<name> --out /tmp/owned-<name>-token`; move the file to the machine, readable
+only by the agent's user, and delete the copy. The machine reaches the coordinator through the Tailscale add-on (add
+`=agent` to the tailnet listener) or a persistent `gcloud compute start-iap-tunnel` under an account with the tunnel
+role. Set `CERID_CI_OWNED_AGENTS=1` on the launcher so the planner schedules owned cells.
 
 <a id="console-platform-packs"></a>
-## 10. Console platform packs
+### Console platform packs
 
-When a platform program accepts Cerid (ID@Xbox / Partner Center, PlayStation Partners, the Nintendo Developer
-Portal), its SDK, dev kit and agreement are the user's. The pack is a separate **private** repository with its own
-access control, cloned on the dev-kit host to `external/platform-packs/<name>` (an ignored directory) or named by
-`CERID_PLATFORM_PACKS`; it is never committed here. It carries a `devices.json` with this registry's schema (the
-console cells move from "waiting on platform program" to active there) and its own lane scripts, and the dev-kit host
-runs an owned agent ([ADR-0135 §8](../decisions/0135-cerid-ci-platform.md#8-console-platform-packs-the-plug-in-contract)).
+When a platform program accepts Cerid, its SDK, dev kit and agreement are the user's. The pack is a separate private
+repository, cloned on the dev-kit host to `external/platform-packs/<name>` or named by `CERID_PLATFORM_PACKS`, never
+committed here; the dev-kit host runs an owned agent
+([ADR-0135 §8](../decisions/0135-cerid-ci-platform.md#8-console-platform-packs-the-plug-in-contract)).
 
 <a id="optional-static-copy-of-the-qual-page"></a>
-## 11. Optional: a static copy of the QUAL page
+### A static copy of the QUAL page
 
-The coordinator serves the live QUAL page at `/qual` (the web UI's QUAL tab), behind Access. A static copy on
-Cloudflare Pages is optional: create a Pages project `cerid-qual` (Direct Upload), protect it with its own Access
-application, store an API token limited to Cloudflare Pages: Edit as `cloudflare-pages-token`, and run
-`python ci/dashboard/generate.py publish` with `CERID_CLOUDFLARE_TOKEN_FILE` and `CERID_CLOUDFLARE_ACCOUNT_ID` set (the
-locked wrangler on the pinned Node.js).
-
-## Upgrades and backups
-
-- **Backup:** `python3 /opt/cerid/ci/ops.py backup --out /var/backups/cerid-ci-$(date +%F).tar.gz` (the state and the
-  result store with a SHA-256 manifest; `--all` adds caches, logs and artifacts). `restore <file>` verifies every
-  object and keeps existing ones unless `--overwrite`. A weekly cron job on the launcher plus the bucket itself is
-  enough.
-- **Upgrade:** back up; `git fetch` and `git checkout <new reviewed revision>` in `/opt/cerid` as `cerid-ci`;
-  `sudo systemctl restart cerid-ci-coordinator cerid-ci-launcher-agent`; `ops.py health`. Cloud machines fetch the new
-  agent from the coordinator automatically; update each owned machine's checkout the same way. A coordinator refuses a
-  store written by a newer schema, and an agent of another protocol is refused with the coordinator's version, so a
-  half-done upgrade fails loudly. Roll back by checking out the previous revision.
+The coordinator serves the QUAL matrix live. A static copy on Cloudflare Pages is optional: a Pages project
+`cerid-qual` behind its own Access application, an API token "Cloudflare Pages: Edit" stored as
+`cloudflare-pages-token`, and `python ci/dashboard/generate.py publish` with `CERID_CLOUDFLARE_TOKEN_FILE` and
+`CERID_CLOUDFLARE_ACCOUNT_ID`.
 
 ## What it costs
 
-`python ci/ops.py budget` prints the price of one complete run from the registry's prices and the recorded durations.
-At the registry's default durations (90 minutes a lane) a complete run costs about 16 USD before the cache (on
-2026-10-30; the Windows licence dominates), so three uncached complete runs fit a month; with the cache a nightly run
-reruns only what changed, and the recorded durations replace the defaults after the first runs. The weekly fresh run
-and the tier C GPU cells are the first to wait when the month's ledger nears the cap. The coordinator itself runs on
-the free e2-micro; the bucket holds kilobytes of state and the logs of the retention window.
-
-## Traps
-
-- A token or secret pasted into a pipeline step, an environment block or a log is a leaked secret: the agent's
-  redaction is a backstop, not a channel. Secrets travel only from Secret Manager to the step that declares them, and
-  tokens only as files named by the recipe.
-- The billing notification lags; the cap that actually stops spend first is the pipeline's ledger.
-- A cell whose image family is not baked fails at launch (and is retried, then failed); `ops.py status` names it.
-- Cloud machines are routed by the step's `device` tag; an owned agent can take only jobs whose tags its registration
-  token carries.
-- Object versioning on the results bucket must stay off: compare-and-swap relies on live generations, and versions
-  would only accumulate cost.
+`python ci/ops.py cost` prints the month's spend, the forecast, the breakdown by lane, device or build, and the
+price of one complete run before the cache (about 16 USD at the registry's default durations on 2026-10-30; the
+Windows licence dominates). The launcher is free tier; the bucket holds kilobytes of state plus the logs of the
+retention window. The weekly fresh run and the tier C GPU cells are the first to wait when the month nears the cap.
