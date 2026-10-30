@@ -71,9 +71,9 @@ python scripts/project-sync.py edit --operations build/my-task/operations.json
 python scripts/project-sync.py edit --operations build/my-task/operations.json --apply --regenerate
 ```
 
-The two removal choices are `{"op":"remove","target":"crd-core","path":"engine/foundation/core/src/example.cpp"}`
-(keep disk) and the same object with `"op":"delete"` (delete disk, remove every affected membership). Use real owned
-paths; `example.cpp` is illustrative. Visual Studio Remove retains bytes; a saved IDE Delete that already removed the
+The two removal choices are `{"op":"remove","target":"crd-core","path":"engine/foundation/core/src/cpu_features.cpp"}`
+(keep disk) and the same object with `"op":"delete"` (delete disk, remove every affected membership). The path names the
+owned file being removed (here an example of the form). Visual Studio Remove retains bytes; a saved IDE Delete that already removed the
 file removes its build references. CLI Delete journals bytes before deletion. Native IDE deletion performed before
 the synchronizer sees it needs IDE/OS recovery for those earlier deleted bytes; the tool cannot back up missing data.
 
