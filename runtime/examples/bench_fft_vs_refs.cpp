@@ -2,10 +2,10 @@
 // Complex f64 forward FFT, power-of-2 sizes. Contenders on IDENTICAL data, each with its plan built once:
 //   Cerid crd::hesap::fft::FftPlan  vs  FFTW3 (FFTW_MEASURE)  vs  pocketfft (the scipy/numpy backend, its peer
 //   library at the host's ISA: examples/peers/pocketfft_peer.hpp)  vs  Intel MKL DFTI.
-// Reports best-of-reps wall (ms) + GFLOPS (5·n·log2 n / t, the standard FFT flop count) + max |Cerid-FFTW| and
-// |pocketfft-FFTW| rel error, and fails above 32·eps·log2 n (a fast wrong answer is not a win). The beat-MKL verdict
-// on the AVX2-level i9-14900K (no AVX-512 ⇒ MKL runs AVX2 here ⇒ level fight). Cerid's Complex<f64> shares the
-// {re,im} layout of fftw_complex and of the peer's re/im pairs.
+// Reports best-of-reps wall (ms; the in-place contenders' input copy is untimed) + GFLOPS (5·n·log2 n / t, the
+// standard FFT flop count) + max |Cerid-FFTW| and |pocketfft-FFTW| rel error, and fails above 32·eps·log2 n (a fast
+// wrong answer is not a win). The beat-MKL verdict on the AVX2-level i9-14900K (no AVX-512 ⇒ MKL runs AVX2 here ⇒
+// level fight). Cerid's Complex<f64> shares the {re,im} layout of fftw_complex and of the peer's re/im pairs.
 
 #include "pocketfft_peer.hpp"
 
@@ -32,11 +32,13 @@ using crd::hesap::Complex;
 
 namespace
 {
-template <typename Fn> double time_best_ms(int reps, const Fn& fn)
+// Best of `reps` timed runs of `fn`, each after an untimed `prepare` (the in-place contenders' input copy).
+template <typename Prepare, typename Fn> double time_best_ms(int reps, const Prepare& prepare, const Fn& fn)
 {
     double best = 1e300;
     for (int r = 0; r < reps; ++r)
     {
+        prepare();
         const auto t0 = std::chrono::steady_clock::now();
         fn();
         const auto t1 = std::chrono::steady_clock::now();
@@ -78,7 +80,15 @@ int main()
     for (int lg = 10; lg <= 23; ++lg)
     {
         const usize n = usize{1} << lg;
-        const int reps = n <= (1U << 16) ? 200 : (n <= (1U << 20) ? 30 : 8);
+        int reps = 8;
+        if (n <= (1U << 16))
+        {
+            reps = 200;
+        }
+        else if (n <= (1U << 20))
+        {
+            reps = 30;
+        }
 
         // Reference input (deterministic).
         cont::Array<Complex<f64>> base(&alloc);
@@ -102,13 +112,8 @@ int main()
 
         // ---- Cerid ----
         const fft::FftPlan<f64> plan(&alloc, n);
-        const double cms =
-            time_best_ms(reps,
-                         [&]
-                         {
-                             reset();
-                             plan.execute(cont::Span<Complex<f64>>(work.data(), n), fft::FftDirection::Forward);
-                         });
+        const double cms = time_best_ms(
+            reps, reset, [&] { plan.execute(cont::Span<Complex<f64>>(work.data(), n), fft::FftDirection::Forward); });
         cont::Array<Complex<f64>> cerid_out(&alloc);
         cerid_out.resize(n);
         std::memcpy(cerid_out.data(), work.data(), n * sizeof(Complex<f64>));
@@ -116,12 +121,7 @@ int main()
         // ---- FFTW (MEASURE) ----
         auto* fin = reinterpret_cast<fftw_complex*>(work.data());
         fftw_plan fp = fftw_plan_dft_1d(static_cast<int>(n), fin, fin, FFTW_FORWARD, FFTW_MEASURE);
-        const double fms = time_best_ms(reps,
-                                        [&]
-                                        {
-                                            reset();
-                                            fftw_execute(fp);
-                                        });
+        const double fms = time_best_ms(reps, reset, [&] { fftw_execute(fp); });
         cont::Array<Complex<f64>> fftw_out(&alloc);
         fftw_out.resize(n);
         std::memcpy(fftw_out.data(), work.data(), n * sizeof(Complex<f64>));
@@ -133,19 +133,14 @@ int main()
         const pocket::Owned pplan{pocket::c2c_plan(static_cast<pocket::Index>(n))};
         const auto* pin = reinterpret_cast<const f64*>(base.data());
         auto* pdst = reinterpret_cast<f64*>(pout.data());
-        const double pms = time_best_ms(reps, [&] { pocket::forward(pplan.get(), pin, pdst); });
+        const double pms = time_best_ms(reps, [] {}, [&] { pocket::forward(pplan.get(), pin, pdst); });
 
         // ---- MKL DFTI ----
         DFTI_DESCRIPTOR_HANDLE h = nullptr;
         DftiCreateDescriptor(&h, DFTI_DOUBLE, DFTI_COMPLEX, 1, static_cast<MKL_LONG>(n));
         DftiSetValue(h, DFTI_PLACEMENT, DFTI_INPLACE);
         DftiCommitDescriptor(h);
-        const double mms = time_best_ms(reps,
-                                        [&]
-                                        {
-                                            reset();
-                                            DftiComputeForward(h, work.data());
-                                        });
+        const double mms = time_best_ms(reps, reset, [&] { DftiComputeForward(h, work.data()); });
         DftiFreeDescriptor(&h);
 
         // Correctness cross-check against FFTW.

@@ -3,7 +3,8 @@
 // every forward algorithm the planner offers there (fft::detail::forward_builds: the planned one first, then the
 // Stockham passes, the standalone-hier, IP4-AoS, the three- and four-pass deep-split, the four-step, the six-step and
 // the f32 1M tiled four-step) runs in this one binary, interleaved with MKL every rep, so all share the host's state;
-// a size's winner becomes its plan. Each Cerid arm and MKL is measured against an FFTW f64 transform of the same f32
+// a size's winner becomes its plan. The input is copied in before each timed transform, never inside the timing (as
+// the pre-SIMD-DISPATCH board did). Each Cerid arm and MKL is measured against an FFTW f64 transform of the same f32
 // input values and fails above the ADR-0092 §5 f32 class (2e-4, 1e-3 from the four-step band): a fast wrong answer is
 // not a win, for either side. Cerid's Complex<f32> shares MKL's interleaved {re, im} layout.
 
@@ -142,20 +143,13 @@ bool board(crd::memory::IAllocator* alloc, int lg, const Arm* arms, usize arm_co
     {
         for (usize a = 0; a < arm_count; ++a)
         {
+            reset();
             const double ms = time_ms(
-                [&]
-                {
-                    reset();
-                    arms[a].plan->execute(cont::Span<Complex<f32>>(work.data(), n), fft::FftDirection::Forward);
-                });
+                [&] { arms[a].plan->execute(cont::Span<Complex<f32>>(work.data(), n), fft::FftDirection::Forward); });
             best[a] = std::min(best[a], ms);
         }
-        const double ms = time_ms(
-            [&]
-            {
-                reset();
-                DftiComputeForward(h, work.data());
-            });
+        reset();
+        const double ms = time_ms([&] { DftiComputeForward(h, work.data()); });
         best[arm_count] = std::min(best[arm_count], ms);
     }
     DftiFreeDescriptor(&h);
