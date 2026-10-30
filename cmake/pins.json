@@ -379,6 +379,61 @@
       "llvm_major": "20",
       "license": "Apache-2.0 OR MIT",
       "note": "Built from source by scripts/install-genmc.py against the runner's apt LLVM of llvm_major (llvm-20-dev, clang-20; the exact package versions are recorded with dpkg-query). Parts of lli/Runtime are LLVM 3.5 derived under NCSA as well as Apache/MIT."
+    },
+    "buildkite-agent-linux-amd64": {
+      "version": "4.6.0",
+      "url": "https://github.com/buildkite/agent/releases/download/v4.6.0/buildkite-agent-linux-amd64-4.6.0.tar.gz",
+      "file": "buildkite-agent-linux-amd64-4.6.0.tar.gz",
+      "size": 30878045,
+      "sha256": "4cc7676ee78d6f534c946b8bc8205daf3900e06a7bf307243d32e980be4fc8e0",
+      "member": "./buildkite-agent",
+      "member_sha256": "8884142ba9001aefbac72e1fb541c0270a7832d142bff73b16ff8c51e47e98f2",
+      "license": "MIT",
+      "note": "The Cerid CI agent (ADR-0135) on Linux x64 cloud VMs, the launcher and owned machines. 4.6.0 (2026-10-16) is the newest release at least two weeks old on 2026-10-30 (4.9.0 was published that day); downloaded and hashed 2026-10-30, matching GitHub's recorded asset digest. Installed by the gce_vm startup script and the owned-agent steps, which read this entry."
+    },
+    "buildkite-agent-linux-arm64": {
+      "version": "4.6.0",
+      "url": "https://github.com/buildkite/agent/releases/download/v4.6.0/buildkite-agent-linux-arm64-4.6.0.tar.gz",
+      "file": "buildkite-agent-linux-arm64-4.6.0.tar.gz",
+      "size": 28373423,
+      "sha256": "2da2be82803d2b1e5d57a4d8e68b7731d8b9c81a7b708e7d19df1a461517053b",
+      "member": "./buildkite-agent",
+      "member_sha256": "359c48fdea8cc533cee5e6bc4931cf7a36ecf0eb17511f1179c6a0e7d4aabb1c",
+      "license": "MIT",
+      "note": "The Cerid CI agent on Linux ARM64 (T2A and Axion VMs, owned ARM64 machines). Downloaded and hashed 2026-10-30."
+    },
+    "buildkite-agent-windows-amd64": {
+      "version": "4.6.0",
+      "url": "https://github.com/buildkite/agent/releases/download/v4.6.0/buildkite-agent-windows-amd64-4.6.0.zip",
+      "file": "buildkite-agent-windows-amd64-4.6.0.zip",
+      "size": 31136459,
+      "sha256": "7f579fc3312d7f84fc89e2df9437c77c627b59b57979fa38df67ed1f8e19fc2b",
+      "member": "buildkite-agent.exe",
+      "member_sha256": "7e82880419bb00153c6a271c4d9a1ccf5a19f945dce764e31f44b1bb1a033ce3",
+      "license": "MIT",
+      "note": "The Cerid CI agent on Windows x64 VMs and owned Windows machines; Windows on ARM runs it under x64 emulation (Buildkite publishes no windows-arm64 build). Downloaded and hashed 2026-10-30."
+    },
+    "buildkite-agent-darwin-arm64": {
+      "version": "4.6.0",
+      "url": "https://github.com/buildkite/agent/releases/download/v4.6.0/buildkite-agent-darwin-arm64-4.6.0.tar.gz",
+      "file": "buildkite-agent-darwin-arm64-4.6.0.tar.gz",
+      "size": 30636086,
+      "sha256": "5d81372f8e3c396f1c78c0de54c90c6f9d427114f14da0ff796ed779999be945",
+      "member": "./buildkite-agent",
+      "member_sha256": "8fac4063062dc1dce59dabb6aaeea62904d2d8c335e6d96363c1308d74bd7b2b",
+      "license": "MIT",
+      "note": "The Cerid CI agent on Apple silicon (the rented Mac over SSH, an owned Mac). Downloaded and hashed 2026-10-30."
+    },
+    "node-linux-x64": {
+      "version": "24.22.0",
+      "url": "https://nodejs.org/dist/v24.22.0/node-v24.22.0-linux-x64.tar.xz",
+      "file": "node-v24.22.0-linux-x64.tar.xz",
+      "size": 32015600,
+      "sha256": "cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008",
+      "member": "node-v24.22.0-linux-x64/bin/node",
+      "member_sha256": "67ca5783febb8bf85736c79fcdd92c8d6d465a0eb2a082672bcdfa76a506751c",
+      "license": "MIT",
+      "note": "Node.js 24 LTS (Krypton, 2026-10-14) for the dashboard publisher only: ci/dashboard/generate.py publish runs the wrangler version locked with every transitive integrity hash in ci/dashboard/package-lock.json. Downloaded and hashed 2026-10-30; matches nodejs.org SHASUMS256.txt."
     }
   },
   "actions": {

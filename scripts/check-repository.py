@@ -8,13 +8,14 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_FILES = {
-    '.clang-format', '.clang-tidy', '.gitattributes', '.gitignore', '.natvis',
+    # `.git` is a file in a linked worktree (`gitdir: ...`), a directory in the main checkout.
+    '.clang-format', '.clang-tidy', '.git', '.gitattributes', '.gitignore', '.natvis',
     'AGENTS.md', 'CLAUDE.md', 'CMakeLists.txt', 'CMakePresets.json', 'CMakeUserPresets.json',
     'context.md', 'LICENSE', 'MEMORY.md', 'opencode.json', 'README.md', 'START_HERE.md',
 }
 ROOT_DIRS = {
     '.git', '.github', '.vs', '.vscode', '.idea', '.claude', '.codex', '.agents',
-    '.cpm-cache', '.sccache', '.venv', 'assets', 'bench', 'build', 'cmake', 'docs', 'engine',
+    '.cpm-cache', '.sccache', '.venv', 'assets', 'bench', 'build', 'ci', 'cmake', 'docs', 'engine',
     'external', 'out', 'runtime', 'sandbox', 'scripts', 'tests', 'tools',
 }
 SOURCE_FAMILIES = {
@@ -45,6 +46,15 @@ def canonical_asset_errors(root):
     return errors
 
 
+def root_artifact_errors(root):
+    errors = []
+    for path in sorted(root.iterdir()):
+        allowed = ROOT_DIRS if path.is_dir() else ROOT_FILES
+        if path.name not in allowed and not (path.is_dir() and path.name.startswith('cmake-build-')):
+            errors.append(f'Unexpected root artifact: {path.name}; scratch belongs under build/<task>/')
+    return errors
+
+
 def check(root=ROOT):
     errors = canonical_asset_errors(root)
     structure_file = root / 'cmake/project-structure.json'
@@ -58,10 +68,7 @@ def check(root=ROOT):
     excluded_modules = set(structure.get('excluded_modules', []))
     authored_families = {name.split('/')[1] for name in structure.get('directories', [])
                         if name.startswith('engine/') and len(name.split('/')) == 2}
-    for path in root.iterdir():
-        allowed = ROOT_DIRS if path.is_dir() else ROOT_FILES
-        if path.name not in allowed and not (path.is_dir() and path.name.startswith('cmake-build-')):
-            errors.append(f'Unexpected root artifact: {path.name}; scratch belongs under build/<task>/')
+    errors.extend(root_artifact_errors(root))
     modules = sorted((root / 'engine').glob('*/*/CMakeLists.txt'))
     if not modules:
         errors.append('No engine modules found; layout scan did not exercise the source tree')

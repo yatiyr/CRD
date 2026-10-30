@@ -1,0 +1,9 @@
+{
+  "name": "cerid-ci-dashboard-publisher",
+  "private": true,
+  "description": "Pinned Cloudflare Pages publisher for the CI dashboard (ci/dashboard/generate.py publish).",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "wrangler": "4.151.1"
+  }
+}

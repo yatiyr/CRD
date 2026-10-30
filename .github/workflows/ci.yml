@@ -210,6 +210,9 @@ jobs:
         run: python tools/ceir_opgen/ceir_opgen.py --check
       - name: Capability source references
         run: python tools/ceir_capability_matrix/gen_matrix.py --check
+      # ADR-0135: the Cerid CI platform's registry, planner, lanes, executors, dashboard and the CI-4 parity table.
+      - name: CI platform contracts
+        run: python scripts/test-ci-platform.py
 
   windows:
     needs: preflight

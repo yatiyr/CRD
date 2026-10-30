@@ -56,8 +56,8 @@
      "patterns": ["docs/**", "**/*.md", ".vscode/**", ".natvis", ".clang-format", ".gitattributes", ".gitignore",
                   "opencode.json"]},
     {"name": "build-system", "tier": "complete",
-     "patterns": [".github/**", "CMakeLists.txt", "CMakePresets.json", "cmake/**", "scripts/**", "tests/CMakeLists.txt",
-                  ".clang-tidy"]},
+     "patterns": [".github/**", "ci/**", "CMakeLists.txt", "CMakePresets.json", "cmake/**", "scripts/**",
+                  "tests/CMakeLists.txt", ".clang-tidy"]},
     {"name": "source", "tier": "change", "patterns": ["**"]}
   ]
 }
