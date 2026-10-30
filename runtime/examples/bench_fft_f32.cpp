@@ -10,6 +10,7 @@
 // not a win, for either side. Cerid's Complex<f32> shares MKL's interleaved {re, im} layout.
 
 #include <crd/containers/array.hpp>
+#include <crd/core/cpu_features.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/fft/fft.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -184,6 +185,7 @@ int main()
     char version[256] = {};
     mkl_get_version_string(version, static_cast<int>(sizeof(version)));
     std::printf("MKL: %s\n", version);
+    std::printf("fft kernel level: %s\n", crd::cpu_level_name(fft::fft_kernels().level)); // the level's own plans
     std::printf("=== complex-f32 forward FFT, best of reps (ms); ratio = MKL / Cerid; errors against FFTW f64 ===\n");
     std::printf("%-9s | %-15s | %9s | %9s | %7s | %-7s | %s\n", "n", "Cerid arm", "Cerid", "MKL", "ratio", "Cerid err",
                 "MKL err");

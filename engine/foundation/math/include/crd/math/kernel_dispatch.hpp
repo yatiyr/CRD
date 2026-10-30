@@ -29,7 +29,8 @@ template <typename Table> struct KernelLevel
 // CPU level runs the plan its family measured fastest there, within the family's declared tolerance across levels;
 // under CrossPlatform and BackwardCompat every level runs the family's one canonical plan, so a bit-exact family gives
 // the same bits on every level (replays, lockstep, golden tests). A plan reads the mode when it is built; code sets it
-// (no environment variable), before it builds the plans whose bits must match.
+// (no environment variable), before it builds the plans whose bits must match; a scene's eylem configuration names its
+// own mode and does not set this one.
 [[nodiscard]] DeterminismMode kernel_determinism() noexcept;
 void set_kernel_determinism(DeterminismMode mode) noexcept;
 

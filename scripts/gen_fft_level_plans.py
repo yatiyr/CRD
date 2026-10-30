@@ -2,7 +2,8 @@
 """Generate hesap-fft's per-level forward plans from SIMD-DISPATCH's saved fft board (ADR-0134 §7).
 
 The board (`bench_fft_f32` at each CPU level, five passes) times every forward the planner offers at each size; its
-data file keeps every arm's time per pass. A level's plan of a size is the board's fastest arm there (the lowest
+data file keeps every arm's time per pass under the fft kernel level each log names (the level FftPlan keys on: a
+selection with no fft unit of its own, such as sse4.2, runs the one below). A level's plan of a size is the board's fastest arm there (the lowest
 median of its passes) when every pass of it beat every pass of the arm the level ran as planned during the board (the
 ranges are the board's run-to-run noise), and the planned arm otherwise. The board's top level runs the canonical
 planner, so its arms name each size's canonical forward. The header lists every measured level and size; FftPlan runs
@@ -33,6 +34,7 @@ BOARD = 'docs/bench/2026-10-30-simd-dispatch-fft-board.md#board-3-the-per-level-
 LEVELS = {'portable': 'Portable', 'sse2': 'Sse2', 'sse4.2': 'Sse42', 'avx2': 'Avx2', 'avx512': 'Avx512',
           'neon': 'Neon'}
 ROW = re.compile(r'^(\d+)\s+\|\s+(\S+)\s+\|\s+([\d.]+)\s+\|')
+KERNEL_LEVEL = re.compile(r'^fft kernel level: (\S+)$', re.M)
 
 
 def algorithms():
@@ -45,26 +47,37 @@ def algorithms():
 
 
 def import_board(directory, commit):
-    """The data file's object from a board directory's logs."""
-    levels = []
+    """The data file's object from a board directory's logs, one entry per fft kernel level the logs ran (a CPU
+    selection without an fft unit of its own runs the one below it, so its passes join that level's)."""
+    by_level = {}
     for log in sorted(glob.glob(str(Path(directory) / 'pass1-f32-*.log'))):
         label = Path(log).name[len('pass1-f32-'):-len('.log')]
         lines = sorted(glob.glob(str(Path(directory) / f'pass*-level-{label}.txt')))
         if not lines:  # the pre-row programs: no level record, not this engine's arms
             continue
         selection = Path(lines[0]).read_text(encoding='utf-8').strip()
-        level = re.search(r'\bselected=(\S+)', selection).group(1)
-        sizes = {}
         for path in sorted(glob.glob(str(Path(directory) / f'pass*-f32-{label}.log'))):
-            for line in Path(path).read_text(encoding='utf-8').splitlines():
+            text = Path(path).read_text(encoding='utf-8')
+            match = KERNEL_LEVEL.search(text)
+            if match is None:
+                raise SystemExit(f'{path}: no "fft kernel level:" line')
+            entry = by_level.setdefault(match.group(1), {'level': match.group(1), 'selections': [], 'sizes': {}})
+            if selection not in entry['selections']:
+                entry['selections'].append(selection)
+            seen = set()
+            for line in text.splitlines():
                 match = ROW.match(line)
                 if match is None:
                     continue
                 n, arm, ms = int(match.group(1)), match.group(2), float(match.group(3))
-                cell = sizes.setdefault(n, {'n': n, 'planned': arm, 'arms': {}})
+                cell = entry['sizes'].setdefault(n, {'n': n, 'planned': arm, 'arms': {}})
+                if n not in seen and arm != cell['planned']:  # each log lists its planned arm first
+                    raise SystemExit(f'{path}: {n} planned {arm}, another log of its level {cell["planned"]}')
+                seen.add(n)
                 cell['arms'].setdefault(arm, []).append(ms)
-        levels.append({'level': level, 'selection': selection, 'sizes': [sizes[n] for n in sorted(sizes)]})
-    levels.sort(key=lambda entry: list(LEVELS).index(entry['level']))
+    levels = sorted(by_level.values(), key=lambda entry: list(LEVELS).index(entry['level']))
+    for entry in levels:
+        entry['sizes'] = [entry['sizes'][n] for n in sorted(entry['sizes'])]
     return {
         'schema': SCHEMA,
         'note': 'SIMD-DISPATCH fft board (f32 forward arms, ms per transform, best of each program\'s repetitions, '

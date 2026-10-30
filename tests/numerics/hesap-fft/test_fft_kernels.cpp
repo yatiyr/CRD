@@ -633,9 +633,20 @@ TEST_CASE("fft kernels: each level's board plans, and the canonical plan in the 
             CHECK(row.forward == canonical);
         }
         CHECK(board_row(row.element_bytes, row.level, row.log2) == &row);
+        // A row names a level fft builds a unit for (a selection without one runs the unit below and its rows).
+        const bool x64 = crd::cpu_selection().arch == crd::CpuArch::X64;
+        if ((row.level == CpuLevel::Portable || (x64 && row.level != CpuLevel::Neon)) &&
+            static_cast<int>(row.level) <= CRD_TEST_KERNEL_LEVELS_TOP)
+        {
+            bool built = false;
+            for (const KernelLevel<FftKernels>& level : fft::fft_kernel_levels())
+            {
+                built = built || level.level == row.level;
+            }
+            CHECK(built);
+        }
         differing += row.forward != canonical ? 1U : 0U;
     }
-    CHECK(differing > 0U);
     CHECK(default_changes<crd::f32>() + default_changes<crd::f64>() == differing);
 }
 
