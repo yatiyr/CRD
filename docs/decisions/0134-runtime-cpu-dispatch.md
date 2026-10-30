@@ -148,9 +148,12 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    UCRT libm's FMA3 bodies off, from a `.CRT$XCL` initializer that crd-core's interface keeps in every image, before
    any user initializer; it never raises them, and `cpu_runtime_dispatch()` reports them. The UCRT's software fma,
    which such an arm and a CPU without FMA3 run, does not round once (the first run showed lost signs of underflowing
-   products and sums rounded twice), so `crd::math`'s fma calls the UCRT only while its FMA3 bodies run, issues the
-   instruction in avx2 and avx512 units, and otherwise rounds once itself (an integer f64 body, f32 by rounding an
-   exact f64 sum to odd); engine code calls `crd::math::fma`, never `std::fma` (crd-no-std-transcendental-check).
+   products and sums rounded twice), so `crd::math`'s fma calls the C library only while its fma is the instruction
+   (`crd::detail::libc_fma_fused`: the UCRT's FMA3 state; glibc's FMA or FMA4 feature active, its resolver's choice),
+   issues the instruction in avx2 and avx512 units, and otherwise rounds once itself (an integer f64 body, f32 by
+   rounding an exact f64 sum to odd, always on glibc, whose fused fmaf call is no faster). glibc's software fma
+   rounds once but took 119 ns (f64) and 70 ns (f32) against 10 and 1.3 ns (amended 2026-10-30); engine code calls
+   `crd::math::fma`, never `std::fma` (crd-no-std-transcendental-check).
    The DLL runtimes' string routines (vcruntime140, ucrtbase), glibc's ifuncs and zstd's dynamic BMI2 decoders keep
    dispatching on the hardware with the same results. The doctor, the specimen harness's host tuple
    and every board record the detected and selected level and the override status. Landed 2026-10-29:

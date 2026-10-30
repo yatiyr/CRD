@@ -6,11 +6,12 @@
 // (GCC, Clang, clang-cl) or the C library's external functions (MSVC), so every level keeps its own copy. The sign
 // and class operations are bit operations, the same on every compiler and level.
 //
-// fma rounds once on every level. On x64 Windows the UCRT's fma runs the FMA3 instruction only while its FMA3 bodies
-// are enabled (the CPU has FMA3 and no CRD_CPU_LEVEL below avx2 turned them off); its software body otherwise does not
-// round once (it loses the sign of an underflowing product, and rounds some sums twice). A unit of the avx2 and
-// avx512 levels issues the instruction itself; every other unit there calls the UCRT only while FMA3 is active and
-// else computes the f64 result by integer arithmetic, and f32 always rounds an exact f64 sum to odd first.
+// fma rounds once on every level. On x64 a unit of the avx2 and avx512 levels issues the instruction itself; every
+// other unit calls the C library's fma only while that runs the instruction (crd::detail::libc_fma_fused) and else
+// computes the f64 result by integer arithmetic and the f32 one by rounding an exact f64 sum to odd. The UCRT's
+// software fma does not round once (it loses the sign of an underflowing product, and rounds some sums twice); glibc's
+// does, at 119 ns for f64 and 70 ns for f32 against the integer body's 10 ns and the rounding to odd's 1.3 ns, which
+// also ties glibc's fused fmaf call, so f32 never calls glibc (i9-14900K, 2026-10-30).
 
 #pragma once
 
@@ -32,6 +33,9 @@
 
 #include <intrin.h>
 #endif
+#elif defined(__x86_64__) && !defined(__FMA__)
+#define CRD_LIBM_FMA_SOFT 1
+#include <crd/core/cpu_features.hpp>
 #endif
 // NOLINTEND(cppcoreguidelines-macro-usage)
 
@@ -117,9 +121,27 @@ struct U128
 
 [[nodiscard]] inline int top_bit(crd::u64 x) noexcept // x != 0
 {
+#if defined(_MSC_VER)
     unsigned long index = 0;
     (void)_BitScanReverse64(&index, x);
     return static_cast<int>(index);
+#else
+    return 63 - __builtin_clzll(x);
+#endif
+}
+
+// The 128-bit product of two 64-bit words.
+[[nodiscard]] inline U128 multiply(crd::u64 a, crd::u64 b) noexcept
+{
+#if defined(_MSC_VER)
+    U128 p{};
+    p.lo = _umul128(a, b, &p.hi);
+    return p;
+#else
+    __extension__ using Wide = unsigned __int128; // __extension__ keeps it under -Werror=pedantic
+    const Wide p = static_cast<Wide>(a) * b;
+    return {static_cast<crd::u64>(p >> 64U), static_cast<crd::u64>(p)};
+#endif
 }
 
 // x >> s for s >= 0, every bit shifted out ORed into bit 0.
@@ -198,8 +220,7 @@ inline void unpack(crd::f64 v, crd::u64& m, int& e) noexcept
     unpack(x, mx, ex);
     unpack(y, my, ey);
     unpack(z, mz, ez);
-    U128 p{};
-    p.lo = _umul128(mx, my, &p.hi);
+    U128 p = multiply(mx, my);
     p = {(p.hi << 20U) | (p.lo >> 44U), p.lo << 20U};
     const int ep = ex + ey - 20;
     U128 q{mz << 9U, 0U}; // mz * 2^73
@@ -311,6 +332,8 @@ inline void unpack(crd::f64 v, crd::u64& m, int& e) noexcept
 {
 #if defined(CRD_LIBM_FMA_INSTRUCTION)
     return _mm_cvtss_f32(_mm_fmadd_ss(_mm_set_ss(x), _mm_set_ss(y), _mm_set_ss(z)));
+#elif defined(CRD_LIBM_FMA_SOFT) && defined(_MSC_VER)
+    return crd::detail::libc_fma_fused ? CRD_LIBM_FN(fmaf)(x, y, z) : detail::fma_f32(x, y, z);
 #elif defined(CRD_LIBM_FMA_SOFT)
     return detail::fma_f32(x, y, z);
 #else
@@ -322,7 +345,7 @@ inline void unpack(crd::f64 v, crd::u64& m, int& e) noexcept
 #if defined(CRD_LIBM_FMA_INSTRUCTION)
     return _mm_cvtsd_f64(_mm_fmadd_sd(_mm_set_sd(x), _mm_set_sd(y), _mm_set_sd(z)));
 #elif defined(CRD_LIBM_FMA_SOFT)
-    return crd::detail::ucrt_fma3_active ? CRD_LIBM_FN(fma)(x, y, z) : detail::fma_f64(x, y, z);
+    return crd::detail::libc_fma_fused ? CRD_LIBM_FN(fma)(x, y, z) : detail::fma_f64(x, y, z);
 #else
     return CRD_LIBM_FN(fma)(x, y, z);
 #endif

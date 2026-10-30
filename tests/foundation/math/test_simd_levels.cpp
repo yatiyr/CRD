@@ -17,6 +17,11 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#if !defined(_MSC_VER) && !defined(__clang__) && defined(__x86_64__) && defined(__GLIBC__)
+#if __has_include(<sys/platform/x86.h>)
+#include <sys/platform/x86.h> // glibc's view of the CPU, which picks its fma's body (_Bool: GCC only in C++)
+#endif
+#endif
 
 namespace probe = crd::test::simd_probe;
 using crd::CpuLevel;
@@ -548,12 +553,13 @@ TEST_CASE("simd types: every level's fused multiply-add rounds once on hard case
     }
 }
 
-#if defined(_MSC_VER) && defined(_M_X64)
-// The bodies libm::fma runs on x64 Windows outside the avx2 and avx512 levels while the UCRT's FMA3 bodies are off
-// (crd/math/libm.hpp): the f64 integer body and the f32 rounding to odd. With FMA3 enabled the UCRT's fma is the
-// instruction, the oracle for the hard cases; the fixed cases are the first forced-level run's, where the UCRT's
-// software fma lost an underflowing product's sign and rounded a sum twice.
-TEST_CASE("simd types: the x64 Windows fma bodies give the FMA3 instruction's bits", "[math][simd-levels][kernels]")
+#if (defined(_MSC_VER) && defined(_M_X64)) || (!defined(_MSC_VER) && defined(__x86_64__) && !defined(__FMA__))
+// The bodies libm::fma runs on x64 outside the avx2 and avx512 levels while the C library's fma is not the instruction
+// (crd/math/libm.hpp): the f64 integer body and the f32 rounding to odd, and libm::fma itself. The oracle for the hard
+// cases is the UCRT's fma with its FMA3 bodies enabled, or glibc's, which rounds once in its software body too; the
+// fixed cases are the first forced-level run's, where the UCRT's software fma lost an underflowing product's sign and
+// rounded a sum twice.
+TEST_CASE("simd types: the x64 soft fma bodies give the correctly rounded bits", "[math][simd-levels][kernels]")
 {
     namespace soft = crd::math::libm::detail;
     const auto f32_of = [](crd::u32 bits)
@@ -570,29 +576,44 @@ TEST_CASE("simd types: the x64 Windows fma bodies give the FMA3 instruction's bi
     CHECK(std::bit_cast<crd::u64>(soft::fma_f64(f64_of(0x1CC83BE3C7008851ULL), f64_of(0x9EB4DE71D59ED9C4ULL), 0.0)) ==
           0x8000000000000000ULL);
 
-    // The startup initializer recorded the UCRT's state, so libm::fma calls the UCRT exactly while FMA3 runs.
-    CHECK(crd::detail::ucrt_fma3_active == crd::cpu_runtime_dispatch().ucrt_fma3);
+    // The C library's state was recorded before the first user initializer, so libm::fma calls it exactly while it
+    // runs the instruction.
+#if defined(_MSC_VER)
+    CHECK(crd::detail::libc_fma_fused == crd::cpu_runtime_dispatch().ucrt_fma3);
     const int previous = _get_FMA3_enable();
-    const bool fused = _set_FMA3_enable(1) != 0;
-    INFO("the UCRT runs FMA3: " << fused);
+    const bool exact = _set_FMA3_enable(1) != 0;
+    INFO("the UCRT runs FMA3: " << exact);
+#else
+#if defined(CPU_FEATURE_ACTIVE)
+    CHECK(crd::detail::libc_fma_fused == (CPU_FEATURE_ACTIVE(FMA) || CPU_FEATURE_ACTIVE(FMA4)));
+#endif
+    const bool exact = true;
+    INFO("glibc's fma is the instruction: " << crd::detail::libc_fma_fused);
+#endif
     static probe::Input in;
     crd::usize wrong_f32 = 0;
     crd::usize wrong_f64 = 0;
     crd::u64 state = 0x50F7'F3A0'0D0DULL;
-    for (crd::usize set = 0; fused && set < 16384U; ++set)
+    for (crd::usize set = 0; exact && set < 16384U; ++set)
     {
         fill_fma(in, state);
         for (crd::usize i = 0; i < probe::kLanes; ++i)
         {
             const crd::u32 want32 = std::bit_cast<crd::u32>(::fmaf(in.a[i], in.b[i], in.c[i]));
             const crd::u32 got32 = std::bit_cast<crd::u32>(soft::fma_f32(in.a[i], in.b[i], in.c[i]));
+            const crd::u32 run32 = std::bit_cast<crd::u32>(crd::math::libm::fma(in.a[i], in.b[i], in.c[i]));
             wrong_f32 += same(probe::Compare::F32Value, want32, got32) ? 0U : 1U;
+            wrong_f32 += same(probe::Compare::F32Value, want32, run32) ? 0U : 1U;
             const crd::u64 want64 = std::bit_cast<crd::u64>(::fma(in.da[i], in.db[i], in.dc[i]));
             const crd::u64 got64 = std::bit_cast<crd::u64>(soft::fma_f64(in.da[i], in.db[i], in.dc[i]));
+            const crd::u64 run64 = std::bit_cast<crd::u64>(crd::math::libm::fma(in.da[i], in.db[i], in.dc[i]));
             wrong_f64 += same(probe::Compare::F64Value, want64, got64) ? 0U : 1U;
+            wrong_f64 += same(probe::Compare::F64Value, want64, run64) ? 0U : 1U;
         }
     }
+#if defined(_MSC_VER)
     (void)_set_FMA3_enable(previous);
+#endif
     CHECK(wrong_f32 == 0U);
     CHECK(wrong_f64 == 0U);
 }

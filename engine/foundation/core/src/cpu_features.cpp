@@ -39,6 +39,16 @@ extern "C"
 #include <unistd.h>
 #if CRD_ARCH_X64
 #include <cpuid.h>
+
+// <sys/platform/x86.h>'s ABI (glibc 2.33): leaf i holds CPUID_INDEX i's registers and their active bits (eax, ebx, ecx,
+// edx). The header's accessors return _Bool, which Clang refuses in C++, so crd-core reads the words itself; the type
+// and the declaration are the header's own (one definition with a unit that includes it), the reference weak.
+struct cpuid_feature
+{
+    unsigned int cpuid_array[4];  // NOLINT(modernize-avoid-c-arrays): glibc's layout
+    unsigned int active_array[4]; // NOLINT(modernize-avoid-c-arrays): glibc's layout
+};
+extern "C" const struct cpuid_feature* __x86_get_cpuid_feature_leaf(unsigned int) __attribute__((pure, weak));
 #endif
 #endif
 
@@ -924,8 +934,34 @@ CpuRuntimeDispatch cpu_runtime_dispatch() noexcept
     return d;
 }
 
+#if CRD_ARCH_X64
+bool detail::libc_fma_fused = false; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables): see the header
+#endif
+
+#if CRD_OS_LINUX && CRD_ARCH_X64
+namespace
+{
+
+// glibc's fma resolver (libm.so.6) picks its FMA body when the FMA feature (CPUID_INDEX_1 = 0, ecx bit 12) is active,
+// its FMA4 body when FMA4 (CPUID_INDEX_80000001 = 2, ecx bit 16) is, and its software body otherwise. GLIBC_TUNABLES
+// has set those bits before any constructor runs; priority 101 runs this ahead of every default-priority initializer.
+// A glibc before 2.33, or another C library, leaves the weak reference null and the flag false.
+__attribute__((constructor(101))) void record_libc_fma() noexcept
+{
+    if (__x86_get_cpuid_feature_leaf == nullptr)
+    {
+        return;
+    }
+    const cpuid_feature* leaf_1 = __x86_get_cpuid_feature_leaf(0U);
+    const cpuid_feature* ext_1 = __x86_get_cpuid_feature_leaf(2U);
+    detail::libc_fma_fused =
+        (leaf_1->active_array[2] & (1U << 12U)) != 0U || (ext_1->active_array[2] & (1U << 16U)) != 0U;
+}
+
+} // namespace
+#endif
+
 #if defined(_MSC_VER) && CRD_ARCH_X64
-bool detail::ucrt_fma3_active = false; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables): see the header
 
 namespace
 {
@@ -940,7 +976,7 @@ void __cdecl select_at_start() noexcept
     {
         (void)cpu_selection();
     }
-    detail::ucrt_fma3_active = _get_FMA3_enable() != 0;
+    detail::libc_fma_fused = _get_FMA3_enable() != 0;
 }
 
 } // namespace
