@@ -33,27 +33,32 @@ class HttpError(RuntimeError):
 
 
 def http_request(method, url, token=None, scheme='Bearer', body=None, data=None, raw=False, allow=(),
-                 content_type=None, timeout=60):
-    """(status, payload): JSON in and out unless `raw`; a status outside 2xx and `allow` raises HttpError."""
-    headers = {}
+                 content_type=None, timeout=60, headers=None, with_headers=False):
+    """(status, payload): JSON in and out unless `raw`; a status outside 2xx and `allow` raises HttpError. With
+    `with_headers` the response headers (lower-case names) come third: Cloud Storage returns an object's generation
+    there, which the coordinator's compare-and-swap needs."""
+    sent = dict(headers or {})
     if token:
-        headers['Authorization'] = '%s %s' % (scheme, token)
+        sent['Authorization'] = '%s %s' % (scheme, token)
     if body is not None:
         data = json.dumps(body).encode('utf-8')
-        headers['Content-Type'] = 'application/json'
+        sent['Content-Type'] = 'application/json'
     elif content_type:
-        headers['Content-Type'] = content_type
-    request = urllib.request.Request(url, data=data, method=method, headers=headers)
+        sent['Content-Type'] = content_type
+    request = urllib.request.Request(url, data=data, method=method, headers=sent)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             status, payload = response.status, response.read()
+            received = {k.lower(): v for k, v in response.headers.items()}
     except urllib.error.HTTPError as error:
         status, payload = error.code, error.read()
+        received = {k.lower(): v for k, v in (error.headers or {}).items()}
+        error.close()
         if status not in allow:
             raise HttpError(status, payload.decode('utf-8', errors='replace')) from None
-    if raw:
-        return status, payload
-    return status, (json.loads(payload.decode('utf-8')) if payload.strip() else {})
+    if not raw:
+        payload = json.loads(payload.decode('utf-8')) if payload.strip() else {}
+    return (status, payload, received) if with_headers else (status, payload)
 
 
 def access_token(http=None):

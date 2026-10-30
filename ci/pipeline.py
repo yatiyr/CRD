@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import contextlib
 import datetime as dt
 import hashlib
 import importlib.util
@@ -444,37 +445,147 @@ def device_fingerprint(device, store=None):
 
 # --------------------------------------------------------------------------------------------- result store
 
+def replace_file(source, target, attempts=100, sleep=time.sleep):
+    """os.replace that rides out Windows sharing violations: a reader, the indexer or an antivirus scan holding the
+    target open makes the rename fail with access denied for a few milliseconds (seen with three processes updating
+    one object), so the rename is retried for up to about two seconds before the error is raised."""
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if os.name != 'nt' or attempt == attempts - 1:
+                raise
+            sleep(min(0.001 * (attempt + 1), 0.05))
+
+
+class Conflict(RuntimeError):
+    """A compare-and-swap write lost its race: the object changed since it was read."""
+
+
 class LocalStore:
-    """The result store on a local or mounted directory (an owned machine, tests)."""
+    """The result store on a local or mounted directory (an owned machine, tests). Every object carries a generation
+    (0 means absent) kept beside it under `.cas/`; `read` and `write_if` give the same compare-and-swap contract as
+    Cloud Storage's object generations, under a per-object lock that the operating system releases if its holder
+    dies, so concurrent processes on one machine never lose an update."""
+
+    CAS = '.cas'
 
     def __init__(self, root):
         self.root = Path(root)
 
     def _path(self, name):
-        path = (self.root / name).resolve()
-        if not path.is_relative_to(self.root.resolve()):
+        base = self.root.resolve()
+        path = (base / name).resolve()
+        if not path.is_relative_to(base) or path == base:
             raise ValueError('store path escapes the store: %s' % name)
+        if path.relative_to(base).parts[0] == self.CAS:
+            raise ValueError('store path names the generation directory: %s' % name)
         return path
+
+    def _side(self, path, suffix):
+        base = self.root.resolve()
+        side = base / self.CAS / (path.relative_to(base).as_posix() + suffix)
+        side.parent.mkdir(parents=True, exist_ok=True)
+        return side
+
+    @contextlib.contextmanager
+    def _locked(self, path):
+        fd = os.open(str(self._side(path, '.lock')), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                while True:
+                    try:
+                        os.lseek(fd, 0, os.SEEK_SET)
+                        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                        break
+                    except OSError:
+                        time.sleep(0.002)
+                try:
+                    yield
+                finally:
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+    def _generation(self, path):
+        side = self._side(path, '.gen')
+        recorded = int(side.read_text(encoding='ascii')) if side.is_file() else 0
+        if not path.is_file():
+            return 0
+        return recorded if recorded > 0 else 1
+
+    def _tombstone(self, path):
+        side = self._side(path, '.gen')
+        return int(side.read_text(encoding='ascii')) if side.is_file() else 0
+
+    def _store(self, path, data):
+        # Generations only grow, across deletes too, so a reader holding an old generation can never match a new
+        # object that happens to reuse its number.
+        generation = max(self._generation(path), self._tombstone(path)) + 1
+        path.parent.mkdir(parents=True, exist_ok=True)
+        partial = path.with_name(path.name + '.partial')
+        partial.write_bytes(data)
+        replace_file(partial, path)
+        side = self._side(path, '.gen')
+        side_partial = side.with_name(side.name + '.partial')
+        side_partial.write_text(str(generation), encoding='ascii')
+        replace_file(side_partial, side)
+        return generation
 
     def get(self, name):
         path = self._path(name)
         return path.read_bytes() if path.is_file() else None
 
+    def read(self, name):
+        """(bytes or None, generation): a consistent snapshot for a later `write_if`."""
+        path = self._path(name)
+        with self._locked(path):
+            return (path.read_bytes() if path.is_file() else None), self._generation(path)
+
+    def write_if(self, name, data, generation):
+        """Write only if the object's generation is still `generation` (0: only if absent). Returns the new
+        generation, or None when another writer got there first."""
+        path = self._path(name)
+        with self._locked(path):
+            if self._generation(path) != generation:
+                return None
+            return self._store(path, data)
+
     def put(self, name, data):
         path = self._path(name)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        partial = path.with_name(path.name + '.partial')
-        partial.write_bytes(data)
-        os.replace(partial, path)
+        with self._locked(path):
+            self._store(path, data)
+
+    def delete(self, name, generation=None):
+        """Remove an object (only at `generation` when given); True when it was removed."""
+        path = self._path(name)
+        with self._locked(path):
+            current = self._generation(path)
+            if current == 0 or (generation is not None and current != generation):
+                return False
+            path.unlink()
+            return True
 
     def list(self, prefix):
-        base = self._path(prefix) if prefix else self.root
+        base = self._path(prefix) if prefix else self.root.resolve()
         if not base.exists():
             return []
         if base.is_file():
             return [prefix]
-        return sorted(p.relative_to(self.root).as_posix() for p in base.rglob('*')
-                      if p.is_file() and not p.name.endswith('.partial'))
+        root = self.root.resolve()
+        cas = root / self.CAS
+        return sorted(p.relative_to(root).as_posix() for p in base.rglob('*')
+                      if p.is_file() and not p.name.endswith('.partial') and not p.is_relative_to(cas))
 
     def get_json(self, name):
         data = self.get(name)
@@ -485,25 +596,54 @@ class LocalStore:
 
 
 class GcsStore(LocalStore):
-    """The result store on a Cloud Storage bucket through the JSON API with the machine's own credentials."""
+    """The result store on a Cloud Storage bucket through the JSON API with the machine's own credentials. Object
+    generations are the compare-and-swap version: `read` takes it from the `x-goog-generation` header of the media
+    GET and `write_if` sends it as `ifGenerationMatch` (0: the object must not exist), a 412 being a lost race."""
 
-    def __init__(self, bucket, prefix='', token=None, http=None):
+    def __init__(self, bucket, prefix='', token=None, http=None, endpoint='https://storage.googleapis.com'):
         from executors import gce_vm
+        self.endpoint = endpoint.rstrip('/')
         self.bucket = bucket
         self.prefix = prefix.strip('/') + '/' if prefix.strip('/') else ''
         self.token = token or gce_vm.access_token
         self.http = http or gce_vm.http_request
 
+    def _object(self, name):
+        return '%s/storage/v1/b/%s/o/%s' % (
+            self.endpoint, self.bucket, urllib.parse.quote(self.prefix + name, safe=''))
+
+    def _upload(self, name, generation=None):
+        url = '%s/upload/storage/v1/b/%s/o?uploadType=media&name=%s' % (
+            self.endpoint, self.bucket, urllib.parse.quote(self.prefix + name, safe=''))
+        return url if generation is None else url + '&ifGenerationMatch=%d' % generation
+
     def get(self, name):
-        url = 'https://storage.googleapis.com/storage/v1/b/%s/o/%s?alt=media' % (
-            self.bucket, urllib.parse.quote(self.prefix + name, safe=''))
-        status, body = self.http('GET', url, token=self.token(), raw=True, allow=(404,))
+        status, body = self.http('GET', self._object(name) + '?alt=media', token=self.token(), raw=True, allow=(404,))
         return None if status == 404 else body
 
+    def read(self, name):
+        status, body, headers = self.http('GET', self._object(name) + '?alt=media', token=self.token(), raw=True,
+                                          allow=(404,), with_headers=True)
+        if status == 404:
+            return None, 0
+        return body, int(headers['x-goog-generation'])
+
+    def write_if(self, name, data, generation):
+        status, payload = self.http('POST', self._upload(name, generation), token=self.token(), data=data,
+                                    content_type='application/octet-stream', allow=(412,))
+        if status == 412:
+            return None
+        return int(payload['generation'])
+
     def put(self, name, data):
-        url = 'https://storage.googleapis.com/upload/storage/v1/b/%s/o?uploadType=media&name=%s' % (
-            self.bucket, urllib.parse.quote(self.prefix + name, safe=''))
-        self.http('POST', url, token=self.token(), data=data, content_type='application/octet-stream')
+        self.http('POST', self._upload(name), token=self.token(), data=data, content_type='application/octet-stream')
+
+    def delete(self, name, generation=None):
+        url = self._object(name)
+        if generation is not None:
+            url += '?ifGenerationMatch=%d' % generation
+        status, _ = self.http('DELETE', url, token=self.token(), allow=(404, 412))
+        return status not in (404, 412)
 
     def list(self, prefix):
         names = []
@@ -512,12 +652,29 @@ class GcsStore(LocalStore):
             query = {'prefix': self.prefix + prefix, 'fields': 'items(name),nextPageToken'}
             if page:
                 query['pageToken'] = page
-            url = 'https://storage.googleapis.com/storage/v1/b/%s/o?%s' % (self.bucket, urllib.parse.urlencode(query))
+            url = '%s/storage/v1/b/%s/o?%s' % (self.endpoint, self.bucket, urllib.parse.urlencode(query))
             _, listing = self.http('GET', url, token=self.token())
             names += [item['name'][len(self.prefix):] for item in listing.get('items', [])]
             page = listing.get('nextPageToken')
             if not page:
                 return sorted(names)
+
+
+def update_json(store, name, change, attempts=50, sleep=time.sleep):
+    """Compare-and-swap loop: read `name`, apply `change(current or None)` and write it back only if nobody wrote in
+    between; on a lost race read again. `change` returns the new value, or None to leave the object as it is. Returns
+    the value now stored. Raises Conflict after `attempts` lost races (a live-lock, never a silent overwrite)."""
+    for attempt in range(attempts):
+        data, generation = store.read(name)
+        current = json.loads(data.decode('utf-8')) if data is not None else None
+        value = change(json.loads(data.decode('utf-8')) if data is not None else None)
+        if value is None:
+            return current
+        encoded = (json.dumps(value, indent=1, sort_keys=True) + '\n').encode('utf-8')
+        if store.write_if(name, encoded, generation) is not None:
+            return value
+        sleep(min(0.002 * (2 ** min(attempt, 6)), 0.25))
+    raise Conflict('%s: %d lost compare-and-swap races' % (name, attempts))
 
 
 def open_store(url=None):
