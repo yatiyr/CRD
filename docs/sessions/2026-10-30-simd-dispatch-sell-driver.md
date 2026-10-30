@@ -57,7 +57,7 @@ After it, one pass: f64 uniform-4 half the L2 0.026 against pre-row's 0.0229 in 
 to 1.42, f32 uniform-4 0.75 to 1.06 (single passes on a contended host; the board decides).
 
 Checks: win-debug `crd-hesap-sparse-tests` whole (113 cases) and `[kernels]` at portable, sse2, sse4.2, avx2 and
-avx512 under SDE 10.13.1 (`-spr`); the bench's bit gate on the WSL release tree; strict tidy clean (the bench and
+avx512 under SDE 10.13.1 (`-spr`); the bench's bit gate (`--one-thread`, every arm against the CSR bits, the forced Delta16 builds included) at detected, sse2 and portable on the WSL release tree, exit 0; strict tidy clean (the bench and
 kernel on the WSL database, the rest on win-debug); clang-format findings no more than HEAD's; the ctest guards (19);
 Allman, plan and repository checks.
 
