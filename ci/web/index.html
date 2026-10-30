@@ -3,21 +3,93 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>Cerid CI</title>
 <link rel="stylesheet" href="style.css">
 <script src="app.js" defer></script>
 </head>
 <body>
-<header class="bar">
-  <a class="brand" href="#/builds">Cerid CI</a>
-  <nav>
+<svg width="0" height="0" class="visually-hidden" aria-hidden="true" focusable="false">
+  <symbol id="i-logo" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M18.5 7.5A8 8 0 1 0 18.5 16.5M12 8v8M8 12h8"/></symbol>
+  <symbol id="i-passed" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="currentColor"/><path d="M7 12.5l3.2 3.2L17 9" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-failed" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="currentColor"/><path d="M8.5 8.5l7 7M15.5 8.5l-7 7" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></symbol>
+  <symbol id="i-running" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.4" stroke-dasharray="40 18" stroke-linecap="round"/></symbol>
+  <symbol id="i-scheduled" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-canceled" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M6 18L18 6" stroke="currentColor" stroke-width="2.2"/></symbol>
+  <symbol id="i-cached" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-budget" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/></symbol>
+  <symbol id="i-soft" viewBox="0 0 24 24"><path d="M12 3l10 18H2z" fill="currentColor"/><path d="M12 10v4M12 17v.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-waiting" viewBox="0 0 24 24"><circle cx="6" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor"/><circle cx="18" cy="12" r="2" fill="currentColor"/></symbol>
+  <symbol id="i-none" viewBox="0 0 24 24"><path d="M7 12h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-retry" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.6M4 4v5h5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v12M6 11l6 6 6-6M5 20h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-jump" viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-empty" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3 9h18" stroke="currentColor" stroke-width="1.8"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v6M12 16.5v.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+</svg>
+<a class="skip" href="#view">Skip to content</a>
+<header class="topbar">
+  <a class="brand" href="#/builds" aria-label="Cerid CI home"><svg aria-hidden="true"><use href="#i-logo"/></svg>Cerid CI</a>
+  <nav class="nav" aria-label="Main">
     <a href="#/builds" data-nav="builds">Builds</a>
-    <a href="#/agents" data-nav="agents">Agents and queues</a>
+    <a href="#/qual" data-nav="qual">QUAL matrix</a>
+    <a href="#/quality" data-nav="quality">Test quality</a>
     <a href="#/spend" data-nav="spend">Spend</a>
-    <a href="#/qual" data-nav="qual">QUAL</a>
+    <a href="#/agents" data-nav="agents">Agents</a>
+    <a href="#/operations" data-nav="operations">Operations</a>
   </nav>
-  <span id="user" class="muted"></span>
+  <div class="tools">
+    <span class="who" id="who"></span>
+    <span class="live-dot" id="live" data-live="off" role="img" aria-label="Live updates off"></span>
+    <div class="segmented" role="group" aria-label="Theme">
+      <button type="button" data-theme-choice="auto" aria-pressed="true" title="Follow the system">Auto</button>
+      <button type="button" data-theme-choice="light" aria-pressed="false">Light</button>
+      <button type="button" data-theme-choice="dark" aria-pressed="false">Dark</button>
+    </div>
+    <button type="button" class="ghost" id="help-open" aria-haspopup="dialog" title="Keyboard shortcuts (?)"><kbd>?</kbd><span class="visually-hidden">Keyboard shortcuts</span></button>
+  </div>
 </header>
-<main id="view" aria-live="polite"><p class="muted">Loading…</p></main>
+<main id="view" tabindex="-1"><div class="skeleton" aria-hidden="true"><i></i><i></i><i></i><i></i></div><p class="visually-hidden">Loading</p></main>
+<div class="visually-hidden" id="announce" role="status" aria-live="polite"></div>
+<div class="toasts" id="toasts" aria-live="assertive"></div>
+<dialog id="help" aria-labelledby="help-title">
+  <header><h2 id="help-title">Keyboard shortcuts</h2><button type="button" class="ghost" data-close>Close</button></header>
+  <div class="body">
+    <dl class="kv">
+      <dt><kbd>g</kbd> <kbd>b</kbd></dt><dd>Builds</dd>
+      <dt><kbd>g</kbd> <kbd>m</kbd></dt><dd>QUAL matrix</dd>
+      <dt><kbd>g</kbd> <kbd>t</kbd></dt><dd>Test quality</dd>
+      <dt><kbd>g</kbd> <kbd>s</kbd></dt><dd>Spend</dd>
+      <dt><kbd>g</kbd> <kbd>a</kbd></dt><dd>Agents</dd>
+      <dt><kbd>g</kbd> <kbd>o</kbd></dt><dd>Operations</dd>
+      <dt><kbd>j</kbd> / <kbd>k</kbd></dt><dd>Next / previous item in a list</dd>
+      <dt><kbd>Enter</kbd></dt><dd>Open the selected item</dd>
+      <dt><kbd>/</kbd></dt><dd>Search or filter on this page</dd>
+      <dt><kbd>e</kbd></dt><dd>Jump to the first error in a log</dd>
+      <dt><kbd>n</kbd> / <kbd>N</kbd></dt><dd>Next / previous search match in a log</dd>
+      <dt><kbd>f</kbd></dt><dd>Follow the live log</dd>
+      <dt><kbd>Esc</kbd></dt><dd>Close a dialog</dd>
+    </dl>
+  </div>
+</dialog>
+<dialog id="new-build" aria-labelledby="new-build-title">
+  <form method="dialog" id="new-build-form">
+    <header><h2 id="new-build-title">New build</h2></header>
+    <div class="body grid">
+      <label class="field">Repository<input name="repository" value="cerid" required></label>
+      <label class="field">Branch<input name="branch" value="main" required></label>
+      <label class="field">Commit <span class="subtle">(empty: the branch head)</span><input name="commit" pattern="[0-9a-f]{7,64}" autocomplete="off"></label>
+      <label class="field">Tier<select name="tier"><option value="">Automatic</option><option value="change">Change</option><option value="complete">Complete</option></select></label>
+      <label class="row"><input type="checkbox" name="fresh"> Ignore the result cache</label>
+    </div>
+    <footer><button type="button" data-close>Cancel</button><button class="primary" value="start">Start build</button></footer>
+  </form>
+</dialog>
+<dialog id="drawer" aria-labelledby="drawer-title">
+  <header><h2 id="drawer-title"></h2><button type="button" class="ghost" data-close>Close</button></header>
+  <div class="body" id="drawer-body"></div>
+</dialog>
 </body>
 </html>

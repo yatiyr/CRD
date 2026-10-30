@@ -427,6 +427,12 @@ class Coordinator:
                 if job['state'] != 'scheduled' or (queue and job['agents'].get('queue') != queue):
                     continue
                 if state.dependency_state(job, by_key) == 'ready':
+                    if job['ready_at'] is None:
+                        # The moment it became ready, even when an agent takes it before the next watchdog tick:
+                        # the queue-time objective measures every assignment.
+                        now = self.clock()
+                        job = self.update('jobs/%s.json' % job['id'], lambda j: dict(j, ready_at=now)
+                                          if j['ready_at'] is None else None)
                     ready.append((build, job))
         ready.sort(key=lambda bj: (-bj[1]['priority'], bj[1]['build'], bj[1]['order']))
         return ready

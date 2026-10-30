@@ -204,6 +204,15 @@ class Document(unittest.TestCase):
         with self.assertRaises(steps.PipelineError):
             steps.normalize({'steps': [{'key': 'a', 'command': 'x'}]}, existing_keys={'a'})
 
+    def test_allow_dependency_failure_covers_the_wait_barrier_too(self):
+        specs, _ = steps.normalize({'steps': [{'key': 'a', 'command': 'x'}, 'wait',
+                                              {'key': 'r', 'command': 'x', 'allow_dependency_failure': True,
+                                               'depends_on': ['a']}]})
+        self.assertEqual(specs[1]['depends_on'], [{'step': 'a', 'allow_failure': True}])
+        specs, _ = steps.normalize({'steps': [{'key': 'a', 'command': 'x'}, 'wait',
+                                              {'key': 'r', 'command': 'x', 'allow_dependency_failure': True}]})
+        self.assertEqual(specs[1]['depends_on'], [{'step': 'a', 'allow_failure': True}])
+
     def test_skip_secret_and_retry_forms(self):
         specs, _ = steps.normalize({'steps': [
             {'key': 'a', 'command': 'x', 'skip': 'cached: passed in build 4'},
@@ -1828,6 +1837,12 @@ class Reports(Base):
         self.c.tick()
         self.assertLess(reports.slo(self.c)['availability'], data['availability'], 'an hour without ticks counts')
 
+    def test_a_job_taken_before_any_watchdog_tick_is_still_measured(self):
+        self.c.create_build('cerid', {'event': 'push', 'branch': 'main', 'commit': COMMIT, 'trusted': True},
+                            'webhook')
+        self.c.poll(agent(self.c, name='l'))
+        self.assertEqual([q['samples'] for q in reports.slo(self.c)['queues']], [1])
+
     def test_audit_records_manual_actions(self):
         build, _ = self.c.create_build('cerid', {'event': 'push', 'branch': 'main', 'commit': COMMIT}, 'manual',
                                        created_by='alice')
@@ -2084,6 +2099,116 @@ class Cli(Base):
             ops.gcloud_path = original
         self.assertIn('4033', str(raised.exception))
         self.assertIn('IAP-secured Tunnel User', raised.exception.hint)
+
+
+# --------------------------------------------------------------------------------------------- web UI logic
+
+NODE = __import__('shutil').which('node')
+WEB_CHECKS = r'''
+const assert = require('assert');
+const m = require(process.argv[2]);
+// Live log text arrives in chunks that end anywhere: a line split across two chunks is one line.
+const lines = [];
+let open = m.appendLog(lines, false, 'one\ntw');
+open = m.appendLog(lines, open, 'o\nthree\n');
+open = m.appendLog(lines, open, 'four\n');
+assert.deepStrictEqual(lines, ['one', 'two', 'three', 'four']);
+assert.strictEqual(open, false);
+open = m.appendLog(lines, open, 'five');
+assert.deepStrictEqual(lines.slice(-1), ['five']);
+assert.strictEqual(open, true);
+// ANSI colours become escaped spans; other escape sequences vanish.
+assert.strictEqual(m.ansiToHtml('\x1b[1;31mred <b>\x1b[0m ok\x1b[2K'), '<span class="ansi-bold fg-31">red &lt;b&gt;</span> ok');
+// The first error line, never a zero count or the agent's own progress line.
+assert.strictEqual(m.firstErrorLine(['~~~ running x', '0 errors', '100% tests passed, 0 tests failed out of 5',
+  'plan.cpp:214:9: error: twiddle_bank was not declared', 'later: error: second']), 3);
+assert.strictEqual(m.isErrorLine('The following tests FAILED:'), true);
+assert.strictEqual(m.isErrorLine('LINK : fatal error LNK1120: 1 unresolved externals'), true);
+assert.strictEqual(m.isErrorLine('Traceback (most recent call last):'), true);
+assert.strictEqual(m.isErrorLine('-- Looking for -Werror support'), false);
+assert.strictEqual(m.isErrorLine('~~~ agent error: git fetch exited 128'), true);
+// Status is an icon and a word, never colour alone.
+const html = m.statusHtml('timed_out');
+assert.ok(html.includes('#i-failed') && html.includes('Timed out'));
+assert.ok(m.statusHtml('failed', {soft: true}).includes('Soft fail'));
+assert.strictEqual(m.cleanLabel(':hammer: win-debug'), 'win-debug');
+// The QUAL filters.
+const data = {features: {build: {title: 'Build'}, gpu: {title: 'GPU'}},
+  devices: [{id: 'a', tier: 'A', os: 'Ubuntu', gpu: 'L4', arch: 'x86_64', kind: 'VM', features: ['build', 'gpu']},
+            {id: 'b', tier: 'C', os: 'Windows', gpu: 'none', arch: 'aarch64', kind: 'VM', features: ['build']}],
+  cells: [{device: 'a', feature: 'build', state: 'fail'}, {device: 'b', feature: 'build', state: 'waiting'}]};
+assert.deepStrictEqual(m.matrixRows(data, {}).rows.map((r) => r.device.id), ['a', 'b']);
+assert.deepStrictEqual(m.matrixRows(data, {tier: 'C'}).rows.map((r) => r.device.id), ['b']);
+assert.deepStrictEqual(m.matrixRows(data, {state: 'fail'}).rows.map((r) => r.device.id), ['a']);
+assert.deepStrictEqual(m.matrixRows(data, {results: true}).rows.map((r) => r.device.id), ['a']);
+assert.deepStrictEqual(m.matrixRows(data, {query: 'windows'}).rows.map((r) => r.device.id), ['b']);
+// Markdown escapes before it formats.
+assert.ok(!m.markdown('<script>x</script>').includes('<script>'));
+console.log('web checks passed');
+'''
+
+
+class Demo(unittest.TestCase):
+    def test_the_fixture_fills_every_page(self):
+        from coordinator import demo
+        with tempfile.TemporaryDirectory() as scratch:
+            store = pipeline.LocalStore(scratch)
+            c = demo.seed(store)
+            self.assertEqual([b['state'] for b in c.recent()], ['passed', 'failed', 'passed', 'passed'])
+            self.assertEqual(len(store.list('orchestrator/quarantine/')), 1)
+            self.assertEqual(len(store.list('orchestrator/bisect/')), 1)
+            self.assertTrue(reports.audit_entries(c))
+            self.assertGreater(reports.costs(c, REGISTRY, pipeline.month_of())['spent_usd'], 0)
+
+
+class WebUi(unittest.TestCase):
+    @unittest.skipUnless(NODE, 'Node.js runs the web UI\'s pure functions')
+    def test_pure_functions_of_the_web_ui(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            script = Path(scratch) / 'checks.js'
+            script.write_text(WEB_CHECKS, encoding='utf-8')
+            completed = subprocess.run([NODE, str(script), str(ROOT / 'ci/web/app.js')], capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr[-2000:])
+
+    def test_the_page_loads_nothing_from_elsewhere_and_has_no_inline_code(self):
+        html = (ROOT / 'ci/web/index.html').read_text(encoding='utf-8')
+        self.assertNotRegex(html, r'(src|href)="https?://')
+        self.assertNotIn('<script>', html)
+        self.assertNotRegex(html, r'\son[a-z]+="', 'no inline event handler (CSP forbids them)')
+        self.assertNotIn(' style="', html + (ROOT / 'ci/web/app.js').read_text(encoding='utf-8'))
+        self.assertIn('class="skip"', html)
+        css = (ROOT / 'ci/web/style.css').read_text(encoding='utf-8')
+        for token in ('prefers-color-scheme: dark', 'prefers-reduced-motion', ':focus-visible', 'data-theme="dark"'):
+            self.assertIn(token, css)
+
+    def test_text_and_status_colours_meet_wcag_aa_in_both_themes(self):
+        import re
+        css = (ROOT / 'ci/web/style.css').read_text(encoding='utf-8')
+
+        def tokens(block):
+            return dict(re.findall(r'--([a-z0-9-]+):\s*(#[0-9a-f]{6})', block))
+        light = tokens(css.split('@media (prefers-color-scheme: dark)')[0])
+        dark = dict(light, **tokens(css.split(':root[data-theme="dark"] {')[1].split('}')[0]))
+        auto_dark = tokens(css.split(':root:not([data-theme="light"]) {')[1].split('}')[0])
+        self.assertEqual(tokens(css.split(':root[data-theme="dark"] {')[1].split('}')[0]), auto_dark,
+                         'the chosen dark theme and the system dark theme are the same tokens')
+
+        def luminance(colour):
+            channels = [int(colour[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+            channels = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+            return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+        def contrast(a, b):
+            high, low = sorted((luminance(a), luminance(b)), reverse=True)
+            return (high + 0.05) / (low + 0.05)
+        pairs = [('text', 'bg'), ('text', 'surface'), ('text-2', 'surface'), ('text-2', 'surface-2'),
+                 ('text-3', 'surface'), ('text-3', 'surface-2'), ('accent', 'surface'), ('accent-text', 'accent'),
+                 ('pass', 'pass-bg'), ('fail', 'fail-bg'), ('run', 'run-bg'), ('wait', 'wait-bg'), ('cache', 'cache-bg'),
+                 ('budget', 'budget-bg'), ('soft', 'soft-bg'), ('cancel', 'cancel-bg'), ('log-text', 'log-bg'),
+                 ('log-dim', 'log-bg')]
+        for name, theme in (('light', light), ('dark', dark)):
+            for fg, bg in pairs:
+                self.assertGreaterEqual(contrast(theme[fg], theme[bg]), 4.5, '%s: %s on %s' % (name, fg, bg))
 
 
 if __name__ == '__main__':
