@@ -35,6 +35,22 @@ Synology NAS, while the code hosts (GitLab, mirrored to a private GitHub) never 
   and junctions resolved); free space at least twice the write; one writer through a lock; restore reads only; the
   recipe tells the operator to enable Synology snapshots and the Recycle Bin; a dry run before the first real sync.
 
+## Follow-up decisions
+
+Later on 2026-10-31 the user approved the recommendations of the first hand-off ("do it") and refined them, verbatim:
+"Push to gitlab only, my user level cerid agent files always go to NAS! maybe we can keep claude permission rules
+excluded by default but again an agent must work as expected when I give the nas version to my friends! Space is
+fine". Applied ([ADR-0136](../decisions/0136-workspace-overlay.md) §9, §11, §12):
+
+- `code_remotes` is `["gitlab"]`; GitLab push-mirrors to the private GitHub. More names can be listed.
+- The user-level Cerid agent files (`agents/arch-review.md`, `ci-monitor.md`, `doc-writer.md`, `project-status.md`,
+  any agent naming Cerid or crd, `crd-loop-watchdog.ps1` and other `crd-*` files) always sync, under
+  `.agent/user-claude/`, with the project root and the Claude Code folder as placeholders; a restore backs up a
+  different existing file before replacing it and reports it.
+- A sharing export (the default) carries a sanitized, portable `.claude/settings.local.json` and a configuration
+  without the NAS folder; its overlay history never holds the originals; `--include-local-settings` makes an owner
+  copy. The NAS sync keeps the original files. Generations stay at 5.
+
 ## What we built / changed
 
 - `scripts/workspace.py` (stdlib only): `sync`, `status`, `export`, `restore`, `verify`, `overlay`. The agent overlay
@@ -45,7 +61,7 @@ Synology NAS, while the code hosts (GitLab, mirrored to a private GitHub) never 
   every agent path; `check-repository.py` treats them as ignored local state and fails if one is tracked again;
   `.github/ci-tiers.json` no longer lists opencode.json; `cerid_dev/selection.py` no longer classifies CLAUDE.md;
   `project_sync` protects `.agent/` and `.agent-overlay/` like `.claude/`.
-- `scripts/test-workspace.py` (28 tests) and one added assertion in `scripts/test-project-sync.py`.
+- `scripts/test-workspace.py` (31 tests) and one added assertion in `scripts/test-project-sync.py`.
 - Documents: ADR-0136, the workspace sync recipe, the WORKSPACE row, and routes in AGENTS, START_HERE, MEMORY,
   README, docs/README, BUILDING, CONTRIBUTING, the repository layout, the scripts index and the ADR/recipe indexes.
 
@@ -104,7 +120,7 @@ the memory where Claude Code looks for it there.
 
 ## Tests / verification
 
-- `python scripts/test-workspace.py`: 28 of 28 pass (Windows 11, Python 3.14.4, Git 2.52.0). `test-project-sync.py`
+- `python scripts/test-workspace.py`: 31 of 31 pass (Windows 11, Python 3.14.4, Git 2.52.0). `test-project-sync.py`
   60 of 60; `test-dev-workflow.py` 59 of 59; `check-repository.py`, `check-ci-tiers.py`, `check-master-plan.py` PASS.
   `test-repository-tools.py`: 160 of 161, the failure being `test_generated_target_folders`, which needs Ninja on PATH
   and a CMake configure (not available in this shell and outside this session's no-configure limit; unrelated to the
@@ -139,14 +155,23 @@ would write Z:/Arsivlik/Assets/Repos/crd/MANIFEST.json  (index, replaced atomica
   `.agent/` and `.agent-overlay/` as untracked because `main` does not yet have this branch's `.gitignore`.
 - Real export to a local scratch folder (not the NAS): 754.3 MiB, 14 members, the branch-tip secret scan and the
   confidential check clean; `python crd-workspace-20261031.zip verify` passes.
+- Follow-up: the settings sanitizer run read-only over the owner's real `.claude/settings.local.json` (3,585 `allow`
+  rules, 794,124 bytes): 692 kept, 1,421 rewritten, 1,467 dropped as locations outside the project and 5 as
+  elevation; 326,200 bytes out, valid JSON after expansion to another root, and no owner path, NAS name or user
+  profile string left. A synthetic realistic file pins every class in `SanitizeTests`. A fresh checkout that adopts
+  the NAS overlay now uses the adopted configuration for that run's code-host pushes (failing test first). No NAS
+  write was made for the follow-up.
 
 ## Limitations and open gates
 
 - CTest registration belongs to the tests/ owner: `add_test(NAME crd-workspace COMMAND Python3::Interpreter
   "${CMAKE_SOURCE_DIR}/scripts/test-workspace.py")`. Until then no hosted lane runs it.
 - After the merge, the operator's first `workspace.py sync` in `D:\Dev\cerid` creates `.agent-overlay/` there and
-  adopts the NAS overlay history. The NAS bundles predate the last two fixes and this record; that sync refreshes
-  them. The push to the code hosts was not exercised against GitLab or GitHub.
+  adopts the NAS overlay history. The NAS bundles predate the follow-up and the last fixes; that sync refreshes them.
+  The NAS copy of `.agent/workspace.json` still lists `gitlab` and `origin` (written by the first sync); a checkout's
+  own file wins when it adopts the NAS overlay, so `D:\Dev\cerid\.agent\workspace.json` with `"code_remotes":
+  ["gitlab"]` must exist before that first sync (or the first sync runs with `--no-code-remotes` and the file is
+  edited after it). The push to the code hosts was not exercised against GitLab or GitHub.
 - Real-NAS evidence is Windows only; Linux and macOS paths are designed and covered by portable tests, not run here.
 - Synology snapshots and the Recycle Bin are user actions (recipe); they were not yet enabled when the first sync ran.
 

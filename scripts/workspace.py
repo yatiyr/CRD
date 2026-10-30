@@ -51,6 +51,11 @@ OVERLAY_BRANCH = 'main'
 CONFIG_FILE = OVERLAY_HOME + '/workspace.json'
 MEMORY_DIR = OVERLAY_HOME + '/claude-memory'
 WORKFLOWS_DIR = OVERLAY_HOME + '/workflows'
+USER_CLAUDE_DIR = OVERLAY_HOME + '/user-claude'
+# User-level Claude Code files of this project, always synced (relative to the Claude Code folder); the
+# configuration's user_claude_files adds more, and agents naming Cerid or crd and crd-* files join automatically.
+DEFAULT_USER_CLAUDE_FILES = ('agents/arch-review.md', 'agents/ci-monitor.md', 'agents/doc-writer.md',
+                             'agents/project-status.md', 'crd-loop-watchdog.ps1')
 # Agent tool files at the checkout root that the overlay tracks in place (the code repository ignores them).
 OVERLAY_ROOT_FILES = ('CLAUDE.md', 'CLAUDE.local.md', 'opencode.json', '.mcp.json')
 OVERLAY_ROOT_DIRS = ('.claude', '.codex', '.agents')
@@ -159,27 +164,277 @@ def native_root(path):
     return str(Path(path)) if os.name == 'nt' else Path(path).as_posix()
 
 
-def collapse_root(data, root):
-    """Replace this machine's project root with placeholders so stored agent state is machine-neutral."""
+def path_forms(path):
+    """{suffix: spelling} of a path as agent files write it on this machine.
+
+    '' is the forward-slash form; a Windows path also has '_NATIVE' (backslashes), '_ESCAPED' (doubled backslashes,
+    as inside JSON or shell strings), '_ESCAPED2' (escaped twice: a rule string that is itself escaped, inside JSON),
+    '_MSYS' (/d/...) and '_WSL' (/mnt/d/...).
+    """
+    text = str(path)
+    forms = {'': text.replace('\\', '/') if re.match(r'^[A-Za-z]:[\\/]', text) else Path(path).as_posix()}
+    match = re.match(r'^([A-Za-z]):[\\/](.*)$', text)
+    if match:
+        native = text.replace('/', '\\')
+        rest = match.group(2).replace('\\', '/')
+        forms.update({'_NATIVE': native, '_ESCAPED': native.replace('\\', '\\\\'),
+                      '_ESCAPED2': native.replace('\\', '\\' * 4),
+                      '_MSYS': f'/{match.group(1).lower()}/{rest}', '_WSL': f'/mnt/{match.group(1).lower()}/{rest}'})
+    return forms
+
+
+def collapse(data, places, ignore_case=False):
+    """Replace each named place ({'CERID_ROOT': path, ...}) by {{NAME<suffix>}} placeholders in UTF-8 text."""
     try:
         text = data.decode('utf-8')
     except UnicodeDecodeError:
         return data
-    forms = [(str(Path(root)).replace('/', '\\'), NATIVE_ROOT_TOKEN), (Path(root).as_posix(), ROOT_TOKEN)]
-    for form, token in sorted(forms, key=lambda item: -len(item[0])):
-        if len(form) > 3:
-            text = text.replace(form, token)
+    pairs = [(form, '{{' + name + suffix + '}}') for name, path in places.items()
+             for suffix, form in path_forms(path).items() if len(form) > 3]
+    for form, token in sorted(pairs, key=lambda item: -len(item[0])):
+        text = re.sub(re.escape(form) + r'(?![A-Za-z0-9_-])', lambda _: token, text,
+                      flags=re.IGNORECASE if ignore_case else 0)
     return text.encode('utf-8')
 
 
-def expand_root(data, root):
+def expand(data, places):
+    """Undo collapse() for this machine: every placeholder becomes the local spelling of its place."""
     try:
         text = data.decode('utf-8')
     except UnicodeDecodeError:
         return data
-    if ROOT_TOKEN not in text and NATIVE_ROOT_TOKEN not in text:
+    if '{{' not in text:
         return data
-    return text.replace(NATIVE_ROOT_TOKEN, native_root(root)).replace(ROOT_TOKEN, posix(root)).encode('utf-8')
+    for name, path in places.items():
+        forms = path_forms(path)
+        local = {'': forms['']}
+        for suffix in ('_NATIVE', '_ESCAPED', '_ESCAPED2', '_MSYS', '_WSL'):
+            local[suffix] = forms.get(suffix, forms[''])
+        for suffix, form in local.items():
+            text = text.replace('{{' + name + suffix + '}}', form)
+    return text.encode('utf-8')
+
+
+def collapse_root(data, root):
+    """Replace this machine's project root with placeholders so stored agent state is machine-neutral."""
+    return collapse(data, {'CERID_ROOT': root})
+
+
+def expand_root(data, root):
+    return expand(data, {'CERID_ROOT': root})
+
+
+# ---------------------------------------------------------------------------------------------- shared settings
+
+# Rule classes of a sharing export's settings (ADR-0136 §11). The owner's NAS sync never changes the file.
+CREDENTIAL_RULE = re.compile(
+    r'(?i)(?:\b(?:token|password|passwd|secret|api[_-]?key|authorization|bearer|cookie)\b\s*[=:]'
+    r'|--(?:token|password|api-key|auth)\b|\b[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)\s*='
+    r'|\bAuthorization:|\bBearer\s+\S)')
+ELEVATION_RULE = re.compile(r'(?i)(?:\bsudo\b|\brunas\b|-Verb\s+RunAs|Set-ExecutionPolicy|\breg(?:\.exe)?\s+'
+                            r'(?:add|delete|import)\b|\bsetx\b|\bschtasks\b|\bRegister-ScheduledTask\b)')
+PERSONAL_RULE = re.compile(
+    r'(?i)(?:(?<![A-Za-z0-9])[A-Za-z]:[\\/]'                  # any drive path left after the project root
+    r'|(?:^|[\s"\'(=])\\\\\\?\\?[A-Za-z0-9]'                   # UNC share (\\server, \\\\server escaped)
+    r'|(?<![\w.:/])//?[A-Za-z](?:/|\*|\))'                   # /c/..., //c/... (Git Bash and Claude Code rules)
+    r'|(?<![\w.:])/(?:mnt|home|Users|root|etc|usr|var|opt|tmp|private|Volumes)\b'
+    r'|~[\\/]|\$HOME\b|\$\{HOME\}|%USERPROFILE%|%APPDATA%|%LOCALAPPDATA%|%TEMP%|%TMP%'
+    r'|\$env:(?:USERPROFILE|APPDATA|LOCALAPPDATA|TEMP|TMP|HOMEPATH|HOMEDRIVE)\b)')
+BROAD_ALLOW = re.compile(r'^(?:(?:Bash|PowerShell|Shell|Cmd)(?:\(\s*(?:\*|:\*)?\s*\))?'
+                         r'|(?:Read|Edit|Write|MultiEdit|Glob|Grep|NotebookEdit)\((?://|/|~)\*{0,2}\))$')
+CREDENTIAL_KEYS = {'apiKeyHelper', 'awsAuthRefresh', 'awsCredentialExport', 'otelHeadersHelper'}
+SECRET_ENV_NAME = re.compile(r'(?i)token|secret|password|passwd|key|credential|auth|cookie')
+SHARED_SETTINGS = re.compile(r'^\.claude/settings(?:\.local)?\.json$')
+PERSONAL_FILES = ('CLAUDE.local.md',)
+
+
+def classify_rule(text, places, allow=False):
+    """The class of one rule, hook command or value: kept, rewritten (names the project root), credentials,
+    elevation, broad (tool-wide grant) or personal (a location outside the project)."""
+    if SECRET_RE.search(text) or CREDENTIAL_RULE.search(text):
+        return 'credentials'
+    if ELEVATION_RULE.search(text):
+        return 'elevation'
+    if allow and BROAD_ALLOW.match(text.strip()):
+        return 'broad'
+    rewritten = collapse(text.encode('utf-8'), places, ignore_case=True).decode('utf-8')
+    if PERSONAL_RULE.search(rewritten.replace('{{', '\0').replace('}}', '\0')):
+        return 'personal'
+    return 'rewritten' if rewritten != text else 'kept'
+
+
+def sanitize_settings(data, project_root):
+    """A portable copy of a Claude Code settings file for sharing, and {class: count}.
+
+    Kept: rules, hooks, MCP choices and other keys that stay inside the project. Rewritten: the same, with the owner's
+    checkout root replaced by placeholders that a restore expands to the recipient's root. Dropped: credentials and
+    token-bearing commands, elevation or system-wide changes, tool-wide grants (`Bash`, `Bash(*)`, `Read(//**)`), and
+    anything naming a location outside the project (user profile, other drives, the NAS, UNC shares, system folders).
+    """
+    document = json.loads(data.decode('utf-8-sig'))
+    places = {'CERID_ROOT': project_root}
+    counts = {}
+
+    def take(text, allow=False):
+        kind = classify_rule(text, places, allow)
+        counts[kind] = counts.get(kind, 0) + 1
+        return text if kind in ('kept', 'rewritten') else None
+
+    def scrub(value):
+        """Any other JSON value: kept whole or dropped whole."""
+        kind = classify_rule(json.dumps(value, ensure_ascii=False), places)
+        counts[kind] = counts.get(kind, 0) + 1
+        return value if kind in ('kept', 'rewritten') else None
+
+    result = {}
+    for key, value in document.items():
+        if key in CREDENTIAL_KEYS:
+            counts['credentials'] = counts.get('credentials', 0) + 1
+        elif key == 'permissions' and isinstance(value, dict):
+            permissions = {}
+            for name, entries in value.items():
+                if name in ('allow', 'ask', 'deny') and isinstance(entries, list):
+                    permissions[name] = [r for r in (take(e, name == 'allow') for e in entries if isinstance(e, str))
+                                         if r is not None]
+                elif name == 'additionalDirectories' and isinstance(entries, list):
+                    permissions[name] = [r for r in (take(e) for e in entries) if r is not None]
+                else:
+                    kept = scrub(entries)
+                    if kept is not None:
+                        permissions[name] = kept
+            result[key] = permissions
+        elif key == 'hooks' and isinstance(value, dict):
+            hooks = {}
+            for event, groups in value.items():
+                kept_groups = []
+                for group in groups if isinstance(groups, list) else []:
+                    commands = [dict(h, command=c) for h in group.get('hooks', [])
+                                for c in [take(h.get('command', ''))] if c is not None]
+                    if commands:
+                        kept_groups.append(dict(group, hooks=commands))
+                if kept_groups:
+                    hooks[event] = kept_groups
+            result[key] = hooks
+        elif key == 'env' and isinstance(value, dict):
+            env = {}
+            for name, text in value.items():
+                if SECRET_ENV_NAME.search(name):
+                    counts['credentials'] = counts.get('credentials', 0) + 1
+                    continue
+                kept = take(str(text))
+                if kept is not None:
+                    env[name] = kept
+            result[key] = env
+        else:
+            kept = scrub(value)
+            if kept is not None:
+                result[key] = kept
+    text = (json.dumps(result, indent=2, ensure_ascii=False) + '\n').encode('utf-8')
+    return collapse(text, places, ignore_case=True), counts
+
+
+def sanitize_workspace_config(data):
+    """The overlay configuration without this machine's NAS folder (a recipient passes its own)."""
+    document = json.loads(data.decode('utf-8'))
+    document.pop('nas', None)
+    return (json.dumps(document, indent=2) + '\n').encode('utf-8')
+
+
+def filter_fast_export(stream, excluded):
+    """A `git fast-export` stream without any change to the excluded paths (their blobs become unreachable)."""
+    excluded = {p.encode('utf-8') for p in excluded}
+    parts, index = [], 0
+    while index < len(stream):
+        end = stream.find(b'\n', index)
+        end = len(stream) if end < 0 else end
+        line = stream[index:end]
+        index = end + 1
+        if line.startswith(b'data '):
+            size = int(line[5:])
+            parts.append(line + b'\n' + stream[index:index + size])
+            index += size
+            continue
+        if line.startswith(b'M ') and line.split(b' ', 3)[3] in excluded:
+            continue
+        if line.startswith(b'D ') and line[2:] in excluded:
+            continue
+        parts.append(line + b'\n')
+    return b''.join(parts)
+
+
+def sharing_overlay_bundle(ws, target, report):
+    """The overlay for an export to share: history without the owner's settings, then one commit adding portable
+    copies (sanitized settings, the configuration without the NAS folder); personal files left out."""
+    tree = ws.overlay.tree()
+    sanitized = {}
+    for path in tree:
+        data = ws.overlay.run('cat-file', 'blob', f'HEAD:{path}').stdout
+        if SHARED_SETTINGS.match(path):
+            sanitized[path], counts = sanitize_settings(data, ws.project_path)
+            report.add('export', f'{path}: shared as a portable copy (' + ', '.join(
+                f'{k} {v}' for k, v in sorted(counts.items())) + ')')
+        elif path == CONFIG_FILE:
+            sanitized[path] = sanitize_workspace_config(data)
+    personal = [p for p in tree if p in PERSONAL_FILES]
+    for path in personal:
+        report.add('export', f'{path}: personal file left out (--include-local-settings keeps it)')
+    stream = ws.overlay.run('fast-export', '--signed-tags=strip', '--tag-of-filtered-object=drop',
+                            '--reencode=no', '--branches').stdout
+    repo = Path(target).with_suffix('.git')
+    git('init', '--quiet', '--bare', f'--initial-branch={OVERLAY_BRANCH}', posix(repo))
+    git(f'--git-dir={posix(repo)}', 'fast-import', '--quiet',
+        data=filter_fast_export(stream, set(sanitized) | set(personal)))
+    head = out(f'--git-dir={posix(repo)}', 'rev-parse', f'refs/heads/{OVERLAY_BRANCH}').strip()
+    message = b'chore(overlay): portable settings for sharing\n'
+    commit = [b'commit refs/heads/' + OVERLAY_BRANCH.encode() + b'\n',
+              b'committer Cerid workspace export <export@invalid> %d +0000\n' % int(datetime.datetime.now(
+                  datetime.UTC).timestamp()),
+              b'data %d\n' % len(message) + message, b'from ' + head.encode() + b'\n']
+    for path, data in sorted(sanitized.items()):
+        commit.append(b'M 100644 inline ' + path.encode('utf-8') + b'\ndata %d\n' % len(data) + data + b'\n')
+    git(f'--git-dir={posix(repo)}', 'fast-import', '--quiet', data=b''.join(commit))
+    return make_bundle([f'--git-dir={posix(repo)}'], target, '--branches'), sorted(sanitized), personal
+
+
+# ---------------------------------------------------------------------------------------------- user-level files
+
+def user_claude_names(config, claude_dir):
+    """User-level Claude Code files of this project, relative to the Claude Code folder. Always synced.
+
+    The defaults, the configuration's `user_claude_files`, every agent definition that names Cerid or crd, and
+    every `crd-*` file at the top of the folder (logs excluded).
+    """
+    names = set(DEFAULT_USER_CLAUDE_FILES) | set(config.get('user_claude_files') or [])
+    claude_dir = Path(claude_dir)
+    agents = claude_dir / 'agents'
+    if agents.is_dir():
+        for path in agents.glob('*.md'):
+            if re.search(rb'(?i)\b(?:cerid|crd)\b', path.read_bytes()):
+                names.add(f'agents/{path.name}')
+    if claude_dir.is_dir():
+        for path in claude_dir.glob('crd-*'):
+            if path.is_file() and not any(fnmatch.fnmatch(path.name, p) for p in LOCAL_STATE_FILES):
+                names.add(path.name)
+    return sorted(n for n in names if (claude_dir / n).is_file())
+
+
+def user_places(project_root, claude_dir):
+    return {'CERID_ROOT': project_root, 'CLAUDE_HOME': claude_dir}
+
+
+def place_user_file(target, data, overwrite, conflicts):
+    """Write a user-level file; a different existing file is backed up first (or kept, when not overwriting)."""
+    target = Path(target)
+    if target.is_file():
+        if target.read_bytes() == data:
+            return 0
+        if not overwrite:
+            return 0
+        backup = target.with_name(target.name + '.before-workspace-' +
+                                  datetime.datetime.now().strftime('%Y%m%d%H%M%S'))
+        shutil.copy2(target, backup)
+        conflicts.append(f'{target} differed; the previous version is kept as {backup.name}')
+    return int(write_if_changed(target, data))
 
 
 # ---------------------------------------------------------------------------------------------- git
@@ -401,7 +656,7 @@ class Workspace:
         """
         files = {}
         if from_work_tree:
-            for managed in (MEMORY_DIR, WORKFLOWS_DIR):
+            for managed in (MEMORY_DIR, WORKFLOWS_DIR, USER_CLAUDE_DIR):
                 base = self.root / managed
                 if base.is_dir():
                     for path in sorted(base.rglob('*')):
@@ -423,6 +678,9 @@ class Workspace:
                             rel = path.relative_to(scripts).as_posix()
                             files[f'{WORKFLOWS_DIR}/{session.name}/{rel}'] = collapse_root(path.read_bytes(),
                                                                                          self.project_path)
+        places = user_places(self.project_path, self.claude_dir)
+        for name in user_claude_names(self.config, self.claude_dir):
+            files[f'{USER_CLAUDE_DIR}/{name}'] = collapse((self.claude_dir / name).read_bytes(), places)
         return files
 
     def desired(self):
@@ -452,7 +710,7 @@ def mirror_agent_home(root, copies):
     written = removed = 0
     for rel, data in copies.items():
         written += write_if_changed(Path(root) / rel, data)
-    for managed in (MEMORY_DIR, WORKFLOWS_DIR):
+    for managed in (MEMORY_DIR, WORKFLOWS_DIR, USER_CLAUDE_DIR):
         base = Path(root) / managed
         if base.is_dir():
             for path in sorted(base.rglob('*'), reverse=True):
@@ -465,11 +723,13 @@ def mirror_agent_home(root, copies):
     return written, removed
 
 
-def write_back(root, memory_dir, project_root, replace=True, overwrite=True):
+def write_back(root, memory_dir, project_root, replace=True, overwrite=True, claude_dir=None, conflicts=None):
     """Copy the overlay's `.agent/` state to this machine's Claude Code folders.
 
     replace: memory is mirrored exactly (files the overlay lacks are removed). overwrite=False only adds files this
     machine does not have yet (adopting the NAS overlay in a new checkout never discards a live note).
+    User-level files go to claude_dir and are never deleted; a different existing one is backed up before it is
+    replaced, and listed in conflicts.
     """
     root = Path(root)
     memory_dir = Path(memory_dir)
@@ -497,6 +757,14 @@ def write_back(root, memory_dir, project_root, replace=True, overwrite=True):
                 target = workflow_target(memory_dir.parent, rel)
                 if overwrite or not target.exists():
                     written += write_if_changed(target, expand_root(path.read_bytes(), project_root))
+    user = root / USER_CLAUDE_DIR
+    if claude_dir is not None and user.is_dir():
+        places = user_places(project_root, claude_dir)
+        for path in sorted(user.rglob('*')):
+            if path.is_file():
+                written += place_user_file(Path(claude_dir) / path.relative_to(user),
+                                           expand(path.read_bytes(), places), overwrite,
+                                           conflicts if conflicts is not None else [])
     return written, removed
 
 
@@ -1027,9 +1295,11 @@ def sync(ws, dry_run=False, push_code_remotes=True, break_lock=False, report=Non
             overlay.run('update-ref', f'refs/heads/{OVERLAY_BRANCH}', remote_tip)
             overlay.run('read-tree', remote_tip)
             overlay.run('checkout-index', '--all', '--quiet', check=False)
-            added, _ = write_back(ws.root, ws.memory_dir, ws.project_path, replace=False, overwrite=False)
+            added, _ = write_back(ws.root, ws.memory_dir, ws.project_path, replace=False, overwrite=False,
+                                  claude_dir=ws.claude_dir)
             report.add('overlay', f'adopted the NAS overlay history for this new checkout ({added} NAS-only files '
                                   f'added to the Claude Code folders; files already here were kept)')
+            ws.config = load_config(ws.root)  # the adopted configuration decides this run too
             desired, copies, problems = overlay_plan(ws)
             if problems:
                 for problem in problems:
@@ -1038,9 +1308,13 @@ def sync(ws, dry_run=False, push_code_remotes=True, break_lock=False, report=Non
         if merging:
             stage_overlay(ws, desired)
             overlay.run('commit', '--quiet', '--no-verify', '--no-edit')
-            written, removed = write_back(ws.root, ws.memory_dir, ws.project_path)
+            conflicts = []
+            written, removed = write_back(ws.root, ws.memory_dir, ws.project_path, claude_dir=ws.claude_dir,
+                                          conflicts=conflicts)
             report.add('overlay', f'finished the merge with the NAS overlay; wrote {written} and removed {removed} '
                                   f'files in the Claude Code folders')
+            for conflict in conflicts:
+                report.add('overlay', conflict)
         else:
             written, removed = mirror_agent_home(ws.root, copies)
             report.add('overlay', f'{len(copies)} copied agent-state files ({written} updated, {removed} removed) '
@@ -1067,9 +1341,13 @@ def sync(ws, dry_run=False, push_code_remotes=True, break_lock=False, report=Non
                 report.add('overlay', 'nothing was written to the NAS; the merge stays open until those files are '
                                       'resolved')
                 return report
-            written, removed = write_back(ws.root, ws.memory_dir, ws.project_path)
+            conflicts = []
+            written, removed = write_back(ws.root, ws.memory_dir, ws.project_path, claude_dir=ws.claude_dir,
+                                          conflicts=conflicts)
             report.add('overlay', f'merged the NAS overlay; wrote {written} and removed {removed} files in the '
                                   f'Claude Code folders')
+            for conflict in conflicts:
+                report.add('overlay', conflict)
             head = overlay.head()
         if head and head != remote_tip:
             local = scratch / 'overlay.bundle'
@@ -1122,7 +1400,11 @@ def sync(ws, dry_run=False, push_code_remotes=True, break_lock=False, report=Non
         if not writes:
             report.add('nas', 'nothing to write; the NAS is up to date')
 
-    # 5. Code hosts (network), after the NAS is safe.
+    # 5. Code hosts (network), after the NAS is safe; the configuration may have arrived with the NAS overlay.
+    if push_code_remotes:
+        remotes, missing = code_remotes(ws)
+        for name in missing:
+            report.error('code', f'configured code remote {name!r} does not exist in this checkout')
     for name in remotes:
         push_code_remote(ws, name, report)
     if not push_code_remotes:
@@ -1311,7 +1593,7 @@ def confidential_paths(ws):
     return sorted(set(marked))
 
 
-def export(ws, output_dir=None, break_lock=False, report=None, today=None):
+def export(ws, output_dir=None, break_lock=False, report=None, today=None, include_local_settings=False):
     """One restorable archive, built on local disk; to the NAS as one verified file unless output_dir is given."""
     report = report or Report()
     desired, _, problems = overlay_plan(ws)
@@ -1340,7 +1622,13 @@ def export(ws, output_dir=None, break_lock=False, report=None, today=None):
         build.mkdir()
         members = {}
         make_bundle(['-C', posix(ws.root)], build / 'code.bundle', '--branches', '--tags')
-        make_bundle(ws.overlay.args(), build / 'overlay.bundle', '--branches')
+        if include_local_settings:
+            make_bundle(ws.overlay.args(), build / 'overlay.bundle', '--branches')
+            sharing = {'mode': 'owner (local settings included verbatim)'}
+            report.add('export', 'owner copy: local settings and personal files included verbatim')
+        else:
+            _, portable, personal = sharing_overlay_bundle(ws, build / 'overlay.bundle', report)
+            sharing = {'mode': 'shared', 'portable': portable, 'left_out': personal}
         members['code.bundle'] = build / 'code.bundle'
         members['overlay.bundle'] = build / 'overlay.bundle'
         tools = {}
@@ -1371,7 +1659,7 @@ def export(ws, output_dir=None, break_lock=False, report=None, today=None):
         remotes, _ = code_remotes(ws)
         manifest_doc = {'schema': SCHEMA + '#export', 'created': datetime.datetime.now(datetime.UTC).isoformat(
                         timespec='seconds'), 'host': platform.node(), 'source': source_info(ws, remotes),
-                        'overlay_head': ws.overlay.head(),
+                        'overlay_head': ws.overlay.head(), 'overlay_sharing': sharing,
                         'tools': [{k: v for k, v in e.items() if k != 'path'} for e in tools.values()],
                         'files': {}}
         for member, path in sorted(members.items()):
@@ -1537,14 +1825,28 @@ def restore(location, destination, claude_dir=None, downloads_dir=None, memory_d
         overlay.run('fetch', '--quiet', '--update-head-ok', posix(source.overlay),
                     f'+refs/heads/{OVERLAY_BRANCH}:refs/heads/{OVERLAY_BRANCH}')
         overlay.run('reset', '--quiet', '--hard', OVERLAY_BRANCH)
-        report.add('overlay', f'{len(overlay.tree())} agent files restored at {overlay.head()[:12]}')
+        adapted = 0
+        for path in overlay.tree():
+            if not path.startswith(OVERLAY_HOME + '/'):
+                data = (destination / path).read_bytes()
+                local = expand(data, {'CERID_ROOT': destination})
+                if local != data:
+                    (destination / path).write_bytes(local)
+                    adapted += 1
+        report.add('overlay', f'{len(overlay.tree())} agent files restored at {overlay.head()[:12]}' +
+                   (f'; {adapted} shared settings files adapted to this folder' if adapted else ''))
         # Claude Code memory and workflow scripts for this folder path on this machine.
         if memory.is_dir() and any(memory.iterdir()):
             backup = memory.with_name('memory.before-restore-' + datetime.datetime.now().strftime('%Y%m%d%H%M%S'))
             memory.rename(backup)
             report.add('memory', f'previous memory moved to {backup}')
-        written, _ = write_back(destination, memory, destination, replace=True)
-        report.add('memory', f'{written} files placed under {memory.parent} (key {claude_project_key(destination)})')
+        conflicts = []
+        written, _ = write_back(destination, memory, destination, replace=True, claude_dir=config_dir,
+                                conflicts=conflicts)
+        report.add('memory', f'{written} files placed under {memory.parent} (key {claude_project_key(destination)}) '
+                             f'and the user-level Claude Code folder {config_dir}')
+        for conflict in conflicts:
+            report.add('memory', conflict)
         # Pinned tool downloads, verified by SHA-256 on the local copy.
         downloads = Path(downloads_dir) if downloads_dir else default_downloads_dir()
         placed = 0
@@ -1589,6 +1891,8 @@ def build_parser():
     export_parser.add_argument('--nas', type=Path)
     export_parser.add_argument('--output-dir', type=Path, help='write the archive here instead of the NAS')
     export_parser.add_argument('--break-lock', action='store_true')
+    export_parser.add_argument('--include-local-settings', action='store_true',
+                               help='owner copy: keep local settings and personal files verbatim')
     restore_parser = commands.add_parser('restore', help='recreate the workspace from an archive or the NAS')
     restore_parser.add_argument('--from', dest='source', type=Path, help='export archive or NAS folder')
     restore_parser.add_argument('--replace', action='store_true', help='back up and replace existing memory')
@@ -1630,7 +1934,8 @@ def main(argv=None, archive=None):
                 report, differences = status(ws, args.offline)
                 report.add('status', 'in sync' if not differences else f'{differences} difference(s)')
             else:
-                report, _ = export(ws, args.output_dir, args.break_lock)
+                report, _ = export(ws, args.output_dir, args.break_lock,
+                                   include_local_settings=args.include_local_settings)
     except WorkspaceError as error:
         print(f'ERROR: {error}', file=sys.stderr)
         return 1

@@ -129,14 +129,98 @@ class RefusalTests(unittest.TestCase):
     def test_root_placeholders_round_trip_byte_exact(self):
         root = Path('D:/Dev/cerid') if os.name == 'nt' else Path('/home/u/cerid')
         original = (f'See {root.as_posix()}/MEMORY.md and {ws_mod.native_root(root)}\\docs\\x.md; '
-                    f'{root.as_posix()}x stays.\n').encode()
+                    f'{root.as_posix()}-old is another folder.\n').encode()
         stored = ws_mod.collapse_root(original, root)
-        self.assertNotIn(root.as_posix().encode(), stored)
+        self.assertNotIn(root.as_posix().encode() + b'/', stored)
+        self.assertIn(root.as_posix().encode() + b'-old', stored, 'a longer folder name is not the root')
         self.assertIn(ws_mod.ROOT_TOKEN.encode(), stored)
         self.assertEqual(ws_mod.expand_root(stored, root), original)
         moved = ws_mod.expand_root(stored, Path('/srv/friend/crd'))
         self.assertIn(b'/srv/friend/crd/MEMORY.md', moved)
         self.assertEqual(ws_mod.collapse_root(b'\xff\xfe binary', root), b'\xff\xfe binary')
+
+
+OWNER_ROOT = 'D:\\Dev\\cerid'
+RECIPIENT_ROOT = 'E:\\Work\\crd'
+
+
+def owner_settings():
+    """A realistic synthetic settings.local.json of the owner (no real secret: token shapes are assembled)."""
+    return {
+        'permissions': {
+            'allow': [
+                'Bash(ls:*)',
+                'Bash(python scripts/check-master-plan.py)',
+                'PowerShell(cd D:\\Dev\\cerid; git status)',
+                'PowerShell(cd D:\\\\Dev\\\\cerid; python scripts/x.py)',
+                'Read(//d/Dev/cerid/docs/**)',
+                'Bash(wsl -e bash -lc "cd /mnt/d/Dev/cerid && ls")',
+                'Read(//c/Users/owner/.claude/**)',
+                'PowerShell(Get-Content Z:\\Arsivlik\\Assets\\Repos\\crd\\MANIFEST.json)',
+                'PowerShell(& "C:\\Program Files\\CMake\\bin\\cmake.exe" --version)',
+                'Bash(cat ~/.ssh/config)',
+                'Bash(curl -H "Authorization: Bearer abc" https://api.example.com)',
+                'Bash(export GITLAB_TOKEN=abc)',
+                'Bash(git push https://' + 'user:' + 'pw' + '@gitlab.com/x.git)',
+                'Bash(sudo apt-get install ninja-build)',
+                'PowerShell(wsl -d Ubuntu -- bash -c "sudo -n true 2>&1 && echo NOPROMPT || echo NEEDS_PASSWORD")',
+                'Bash',
+                'PowerShell(*)',
+                'Read(//**)',
+                'WebFetch(domain:docs.python.org)',
+                'mcp__searxng__search',
+                'WebSearch',
+            ],
+            'deny': ['Bash(rm -rf:*)'],
+            'additionalDirectories': ['D:\\Dev\\cerid\\build', 'C:\\Users\\owner\\Downloads'],
+        },
+        'hooks': {
+            'PreToolUse': [{'matcher': 'Bash', 'hooks': [
+                {'type': 'command', 'command': 'python D:/Dev/cerid/scripts/hook.py'}]}],
+            'Stop': [{'hooks': [{'type': 'command', 'command': 'powershell -File C:/Users/owner/notify.ps1'}]}],
+        },
+        'env': {'CRD_SCCACHE': 'off', 'GITLAB_TOKEN': 'abc', 'TMPDIR': 'C:\\Users\\owner\\tmp'},
+        'apiKeyHelper': '/home/owner/bin/key.sh',
+        'enabledMcpjsonServers': ['searxng'],
+        'model': 'opus',
+    }
+
+
+class SanitizeTests(unittest.TestCase):
+    def test_shared_settings_keep_project_rules_rewrite_the_root_and_drop_personal_access(self):
+        data = (json.dumps(owner_settings(), indent=2) + '\n').encode()
+        shared, counts = ws_mod.sanitize_settings(data, OWNER_ROOT)
+        self.assertEqual(counts, {'kept': 9, 'rewritten': 6, 'personal': 7, 'credentials': 5, 'elevation': 2,
+                                  'broad': 3})
+        for leak in (b'owner', b'Arsivlik', b'Dev/cerid', b'Dev\\\\cerid', b'abc', b'Program Files'):
+            self.assertNotIn(leak, shared)
+        local = json.loads(ws_mod.expand(shared, {'CERID_ROOT': RECIPIENT_ROOT}))
+        self.assertEqual(local['permissions']['allow'], [
+            'Bash(ls:*)',
+            'Bash(python scripts/check-master-plan.py)',
+            'PowerShell(cd E:\\Work\\crd; git status)',
+            'PowerShell(cd E:\\\\Work\\\\crd; python scripts/x.py)',
+            'Read(//e/Work/crd/docs/**)',
+            'Bash(wsl -e bash -lc "cd /mnt/e/Work/crd && ls")',
+            'WebFetch(domain:docs.python.org)',
+            'mcp__searxng__search',
+            'WebSearch',
+        ])
+        self.assertEqual(local['permissions']['deny'], ['Bash(rm -rf:*)'])
+        self.assertEqual(local['permissions']['additionalDirectories'], ['E:\\Work\\crd\\build'])
+        self.assertEqual(local['hooks'], {'PreToolUse': [{'matcher': 'Bash', 'hooks': [
+            {'type': 'command', 'command': 'python E:/Work/crd/scripts/hook.py'}]}]})
+        self.assertEqual(local['env'], {'CRD_SCCACHE': 'off'})
+        self.assertNotIn('apiKeyHelper', local)
+        self.assertEqual((local['enabledMcpjsonServers'], local['model']), (['searxng'], 'opus'))
+        on_linux = json.loads(ws_mod.expand(shared, {'CERID_ROOT': '/home/friend/crd'}))
+        self.assertIn('PowerShell(cd /home/friend/crd; git status)', on_linux['permissions']['allow'])
+        self.assertIn('Read(//home/friend/crd/docs/**)', on_linux['permissions']['allow'])
+
+    def test_the_shared_configuration_drops_only_the_nas_folder(self):
+        config = {'schema': ws_mod.SCHEMA, 'nas': 'Z:/Arsivlik/Assets/Repos/crd', 'code_remotes': ['gitlab']}
+        shared = json.loads(ws_mod.sanitize_workspace_config(json.dumps(config).encode()))
+        self.assertEqual(shared, {'schema': ws_mod.SCHEMA, 'code_remotes': ['gitlab']})
 
 
 class IgnoreTests(unittest.TestCase):
@@ -214,6 +298,8 @@ class EndToEndTests(unittest.TestCase):
         (self.base / 'nas' / 'neighbour.txt').write_text('another folder on the share; never touched\n')
         self.host = self.base / 'host.git'
         git('init', '--quiet', '--bare', '-b', 'main', str(self.host))
+        self.mirror = self.base / 'mirror.git'
+        git('init', '--quiet', '--bare', '-b', 'main', str(self.mirror))
         self.a = Machine(self.base, 'a')
         self.make_checkout(self.a)
 
@@ -248,12 +334,23 @@ class EndToEndTests(unittest.TestCase):
         git('branch', 'worktree-agent-x', cwd=root)
         git('tag', 'v1', cwd=root)
         git('remote', 'add', 'host', str(self.host), cwd=root)
+        git('remote', 'add', 'mirror', str(self.mirror), cwd=root)
         # Agent files the overlay keeps, and machine-local state it must not.
         (root / 'CLAUDE.md').write_text('# Local Claude entry pointer\n')
         (root / 'opencode.json').write_text('{"share": "disabled"}\n')
         (root / '.claude' / 'worktrees' / 'agent-1').mkdir(parents=True)
         (root / '.claude' / 'worktrees' / 'agent-1' / 'big.txt').write_text('worktree copy')
-        (root / '.claude' / 'settings.local.json').write_bytes(b'{"permissions": {"allow": ["Bash(ls)"]}}\r\n')
+        settings = {'permissions': {'allow': ['Bash(ls)', f'PowerShell(cd {root}; git status)',
+                                              'Read(//c/Users/owner/**)']}}
+        (root / '.claude' / 'settings.local.json').write_bytes(json.dumps(settings).encode() + b'\r\n')
+        claude = machine.claude
+        (claude / 'agents').mkdir(parents=True)
+        (claude / 'agents' / 'arch-review.md').write_text('---\nname: arch-review\n---\nReview Cerid designs.\n')
+        (claude / 'agents' / 'doc-writer.md').write_text('---\nname: doc-writer\n---\nUpdate status tables.\n')
+        (claude / 'agents' / 'navcore-reviewer.md').write_text('---\nname: navcore-reviewer\n---\nAnother project.\n')
+        (claude / 'crd-loop-watchdog.ps1').write_bytes(
+            f"$log = '{claude}\\crd-loop-watchdog.log'\r\n# repository {root.as_posix()}\r\n".encode())
+        (claude / 'crd-loop-watchdog.log').write_text('machine-local log\n')
         (root / '.claude' / 'scheduled_tasks.lock').write_text('{"pid": 1}')
         (root / '.agent').mkdir()
         config = {'schema': ws_mod.SCHEMA, 'code_remotes': ['host'], 'code_remote_exclude': ['worktree-*']}
@@ -331,10 +428,15 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(self.overlay_files(), {
             'CLAUDE.md', 'opencode.json', '.claude/settings.local.json', '.agent/workspace.json',
             '.agent/claude-memory/MEMORY.md', '.agent/claude-memory/lesson.md', '.agent/claude-memory/crlf-note.md',
-            '.agent/workflows/session-1/serial.js'})
+            '.agent/workflows/session-1/serial.js', '.agent/user-claude/agents/arch-review.md',
+            '.agent/user-claude/agents/doc-writer.md', '.agent/user-claude/crd-loop-watchdog.ps1'})
         repo = self.bundle_repo('overlay')
         stored = git('--git-dir', str(repo), 'show', 'main:.agent/claude-memory/MEMORY.md')
         self.assertIn(ws_mod.ROOT_TOKEN + '/MEMORY.md', stored)
+        watchdog = git('--git-dir', str(repo), 'show', 'main:.agent/user-claude/crd-loop-watchdog.ps1')
+        self.assertIn('{{CLAUDE_HOME_NATIVE}}\\crd-loop-watchdog.log' if os.name == 'nt' else
+                      '{{CLAUDE_HOME}}/crd-loop-watchdog.log', watchdog)
+        self.assertNotIn(str(self.a.claude), watchdog)
         settings = subprocess.run(['git', '--git-dir', str(repo), 'show', 'main:.claude/settings.local.json'],
                                   stdout=subprocess.PIPE).stdout
         self.assertTrue(settings.endswith(b'\r\n'), 'agent files are stored byte-exact')
@@ -343,6 +445,7 @@ class EndToEndTests(unittest.TestCase):
                                              'refs/tags/v1'})
         self.assertEqual(code['head_branch'], 'main')
         self.assertEqual(set(ws_mod.ls_remote(self.host)), {'refs/heads/main', 'refs/heads/feature', 'refs/tags/v1'})
+        self.assertEqual(ws_mod.ls_remote(self.mirror), {}, 'only the configured code remotes are pushed')
         tool = manifest['files']['tools/demo-1.0.tar.gz']
         self.assertEqual(tool['sources'], ['demo-1.0/demo-1.0.tar.gz'])
         self.assertIn('unpinned.json', text)
@@ -488,6 +591,18 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(report.errors, 0, text)
         self.assertEqual(ws_mod.ls_remote(self.host)['refs/heads/cleanup'], git('rev-parse', 'cleanup', cwd=root))
 
+    def test_an_adopted_configuration_decides_the_code_hosts_of_that_first_run(self):
+        self.assertEqual(self.sync(self.a, push_code_remotes=False)[0].errors, 0)
+        b = Machine(self.base, 'b')
+        b.root.mkdir(parents=True)
+        git('clone', '--quiet', str(self.a.root), str(b.root))
+        git('remote', 'add', 'host', str(self.host), cwd=b.root)
+        git('remote', 'add', 'mirror', str(self.mirror), cwd=b.root)
+        report, text = self.sync(b)
+        self.assertEqual(report.errors, 0, text)
+        self.assertIn('refs/heads/main', ws_mod.ls_remote(self.host))
+        self.assertEqual(ws_mod.ls_remote(self.mirror), {}, 'the NAS configuration lists only "host"')
+
     def test_a_new_checkout_adopts_the_nas_overlay_without_losing_either_side(self):
         self.assertEqual(self.sync(self.a, push_code_remotes=False)[0].errors, 0)
         b = Machine(self.base, 'b')
@@ -549,6 +664,8 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(ws_mod.verify_archive(archive).errors, 0)
         before = nas_listing(self.nas)
         b = Machine(self.base, 'b')
+        (b.claude / 'agents').mkdir(parents=True)
+        (b.claude / 'agents' / 'arch-review.md').write_text('the friend\'s own reviewer\n')
         destination = self.base / 'friend folder' / 'crd'
         result = subprocess.run([sys.executable, str(archive), '--claude-config-dir', str(b.claude),
                                  '--downloads-dir', str(b.downloads), 'restore', str(destination)],
@@ -562,8 +679,24 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(git('symbolic-ref', '--short', 'HEAD', cwd=destination), 'main')
         self.assertEqual(git('remote', 'get-url', 'host', cwd=destination), str(self.host))
         self.assertEqual(git('status', '--porcelain', cwd=destination), '')
-        for name in ('CLAUDE.md', 'opencode.json', '.claude/settings.local.json'):
+        for name in ('CLAUDE.md', 'opencode.json'):
             self.assertEqual((destination / name).read_bytes(), (self.a.root / name).read_bytes())
+        shared = json.loads((destination / '.claude' / 'settings.local.json').read_text())
+        self.assertEqual(shared['permissions']['allow'], ['Bash(ls)', f'PowerShell(cd {destination}; git status)'])
+        history = git('--git-dir', str(destination / '.agent-overlay'), 'log', '-p', '--all')
+        self.assertNotIn('Users/owner', history, 'the shared history never held the owner\'s rules')
+        self.assertNotIn('"nas"', (destination / '.agent' / 'workspace.json').read_text())
+        self.assertEqual((b.claude / 'agents' / 'arch-review.md').read_bytes(),
+                         (self.a.claude / 'agents' / 'arch-review.md').read_bytes())
+        backups = list((b.claude / 'agents').glob('arch-review.md.before-workspace-*'))
+        self.assertEqual([p.read_text() for p in backups], ['the friend\'s own reviewer\n'])
+        self.assertIn('arch-review.md differed', result.stdout.decode())
+        self.assertTrue((b.claude / 'agents' / 'doc-writer.md').is_file())
+        self.assertFalse((b.claude / 'agents' / 'navcore-reviewer.md').exists())
+        self.assertFalse((b.claude / 'crd-loop-watchdog.log').exists())
+        self.assertEqual((b.claude / 'crd-loop-watchdog.ps1').read_bytes(),
+                         f"$log = '{b.claude}\\crd-loop-watchdog.log'\r\n# repository "
+                         f"{destination.as_posix()}\r\n".encode())
         self.assertFalse((destination / '.claude' / 'worktrees').exists())
         memory = b.memory(destination)
         self.assertEqual((memory / 'MEMORY.md').read_text(), f'# memory\nEntry: [{destination.as_posix()}/MEMORY.md]\n')
@@ -575,13 +708,18 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual((b.downloads / 'demo-1.0' / 'demo-1.0.tar.gz').read_bytes(), self.a.tool)
         restored = ws_mod.Workspace(destination, self.nas, b.claude, b.downloads)
         report, _ = ws_mod.status(restored, offline=True)
-        self.assertIn('working copy matches the last overlay commit', '\n'.join(report.lines))
+        self.assertEqual([l for l in report.lines if l.startswith('[overlay]   ')],
+                         ['[overlay]   .claude/settings.local.json'], 'only the adapted settings await a first sync')
         with self.assertRaisesRegex(ws_mod.WorkspaceError, 'not empty'):
             ws_mod.restore(archive, destination, b.claude, b.downloads)
         local = self.base / 'local-exports'
-        report, copy = ws_mod.export(self.a.workspace(self.nas), local)
+        report, copy = ws_mod.export(self.a.workspace(self.nas), local, include_local_settings=True)
         self.assertEqual((report.errors, copy.parent), (0, local))
         self.assertEqual(nas_listing(self.nas), before, 'an export to a local folder leaves the NAS alone')
+        c = Machine(self.base, 'c')
+        self.assertEqual(ws_mod.restore(copy, c.root, c.claude, c.downloads).errors, 0)
+        self.assertEqual((c.root / '.claude' / 'settings.local.json').read_bytes(),
+                         (self.a.root / '.claude' / 'settings.local.json').read_bytes(), 'the owner copy is verbatim')
 
     def test_nas_restore_then_two_machines_merge_their_memory(self):
         self.assertEqual(self.sync(self.a)[0].errors, 0)

@@ -6,9 +6,9 @@
 
 Your Cerid folder holds two things: the **code** (with every document) and the **agent files** (CLAUDE.md,
 opencode.json, `.claude/`, `.codex/`, the Claude Code memory of this project and your workflow scripts). The code goes
-to GitLab and GitHub. The agent files go only to your NAS. One command keeps both up to date; one file on the NAS
-carries the whole workspace to another machine or a friend. The NAS only ever receives a few large files, each
-checked after it is written.
+to GitLab, which mirrors it to GitHub. The agent files go only to your NAS. One command keeps both up to date; one
+file on the NAS carries the whole workspace to another machine or a friend. The NAS only ever receives a few large
+files, each checked after it is written.
 
 ## Parameters
 
@@ -16,7 +16,8 @@ checked after it is written.
 |---|---|---|---|
 | NAS folder | the only folder the tool writes on the NAS (it must already exist) | `Z:/Arsivlik/Assets/Repos/crd` | `"nas"` in `.agent/workspace.json`; `--nas` or `CERID_WORKSPACE_NAS` override it |
 | `generations` | how many code bundles, overlay bundles and exports are kept | `5` | `.agent/workspace.json` |
-| `code_remotes` | the code hosts a sync pushes to, by Git remote name | every remote (this workspace: `gitlab`, `origin`) | `.agent/workspace.json` |
+| `code_remotes` | the code hosts a sync pushes to, by Git remote name | every remote; this workspace: `["gitlab"]` (GitLab push-mirrors to GitHub) | `.agent/workspace.json` |
+| `user_claude_files` | extra user-level Claude Code files to carry (relative to the Claude Code folder) | none beyond the always-carried Cerid agents and `crd-*` files | `.agent/workspace.json` |
 | `code_remote_exclude` | branch name patterns never pushed to a code host | `worktree-*` | `.agent/workspace.json` |
 | `default_branch` | branch a restore checks out | `main` | `.agent/workspace.json` |
 | Claude Code folder | where Claude Code keeps its configuration | `CLAUDE_CONFIG_DIR`, else `~/.claude` | `--claude-config-dir` |
@@ -31,13 +32,14 @@ checked after it is written.
 
 ```
 D:\Dev\cerid\                 one folder, two Git histories
-  .git\                         the code (pushed to GitLab and GitHub; bundled to the NAS)
+  .git\                         the code (pushed to GitLab, mirrored to GitHub; bundled to the NAS)
   .agent-overlay\               the agent overlay's history (bundled to the NAS only)
   CLAUDE.md, opencode.json,     agent files: ignored by the code, tracked by the overlay
   .claude\, .codex\, .agents\
   .agent\workspace.json         this table's settings
   .agent\claude-memory\         copy of the Claude Code memory folder
   .agent\workflows\<session>\   copies of the workflow scripts
+  .agent\user-claude\           copies of your user-level Cerid agents (~\.claude\agents\...) and crd-loop-watchdog.ps1
 
 Z:\Arsivlik\Assets\Repos\crd\   only large single files, every one listed in MANIFEST.json
   MANIFEST.json                 each file's kind, size, SHA-256, time, machine (and a bundle's branches)
@@ -86,23 +88,33 @@ python scripts/workspace.py sync --dry-run   # lists every file it would write, 
 python scripts/workspace.py sync
 ```
 
-A sync copies the Claude Code memory and workflow scripts into `.agent/`, commits the overlay, merges what another
-machine wrote to the NAS (and writes those memory changes back into Claude Code's folder), writes a new overlay bundle
-and a new code bundle when they changed, adds new pinned downloads, updates `MANIFEST.json`, prunes old generations,
-and finally pushes branches and tags to the code hosts. Running it twice writes nothing the second time. Add
-`--no-code-remotes` to leave the code hosts alone. `python scripts/workspace.py status` lists what differs, reading
-only (`--offline` skips the hosts).
+A sync copies the Claude Code memory, workflow scripts and user-level Cerid agents into `.agent/`, commits the
+overlay, merges what another machine wrote to the NAS (and writes those memory changes back into Claude Code's
+folder), writes a new overlay bundle and a new code bundle when they changed, adds new pinned downloads, updates
+`MANIFEST.json`, prunes old generations, and finally pushes branches and tags to the code hosts. Running it twice
+writes nothing the second time. Add `--no-code-remotes` to leave the code hosts alone. `python scripts/workspace.py
+status` lists what differs, reading only (`--offline` skips the hosts).
 
 ## Export for a friend or a backup
 
 ```powershell
 python scripts/workspace.py export                         # to the NAS: exports\crd-workspace-YYYYMMDD.zip
 python scripts/workspace.py export --output-dir D:\Handover   # to a local folder or USB disk instead
+python scripts/workspace.py export --include-local-settings  # an owner copy for your own machines
 ```
 
 The archive is built on your disk, checked, and copied to the NAS as one verified file. It holds both histories in
 full, the pinned downloads and the restore program. Sync first: an export refuses agent files that changed since the
 last sync. Anything marked confidential stops the export.
+
+By default an export is ready to share: your friend's agents work, but your personal permissions do not travel.
+`.claude/settings.local.json` goes in as a **portable copy**: rules that stay inside the project are kept, rules that
+name your Cerid folder are kept and pointed at your friend's folder when they restore, and rules that name places
+outside the project (your user folder, the NAS, other drives, installed tools), carry passwords or tokens, use
+`sudo` or similar, or allow a whole tool everywhere are left out. Your friend's Claude Code simply asks once for
+anything left out. `CLAUDE.local.md` and the NAS path are left out too, and the archive's history never contains the
+originals. `--include-local-settings` keeps everything exactly as it is, for your own machines. The daily sync to the
+NAS always keeps your original files. The export prints how many rules of each kind it kept, rewrote or left out.
 
 ## Restore on a new machine
 
@@ -117,7 +129,9 @@ python scripts/workspace.py restore --from Z:\Arsivlik\Assets\Repos\crd D:\Work\
 (The second form needs `scripts/workspace.py` from any Cerid checkout or an unzipped export.) A restore checks the
 files against `MANIFEST.json`, checks out the code with every branch and tag and the code-host remotes, restores the
 overlay, places the memory and workflow scripts where Claude Code looks for that folder on that machine (with paths
-adjusted), puts the pinned downloads back and prints the next steps: the documentation validator, `status`,
+adjusted), puts your user-level Cerid agents and the watchdog script into that machine's Claude Code folder (an
+existing different file is first saved as `<name>.before-workspace-<time>` and reported), puts the pinned downloads
+back and prints the next steps: the documentation validator, `status`,
 configuring a preset and `git fetch --all`. If memory already exists there it stops; `--replace` moves the old
 memory aside first.
 
@@ -137,8 +151,9 @@ which branch to fetch first; nothing on the NAS is lost.
 - **Credential files** (`.env`, `*.pem`, `*.key`, `.credentials.json`, `auth.json`, `.netrc` and similar).
 - **Secret shapes** in any agent file: private keys and GitHub, GitLab, AWS, Slack, Anthropic, OpenAI, Google,
   Hugging Face or npm tokens, or a password inside a URL. The report names the file and line, never the value.
-- **Agent files on a code host**: a branch whose unpublished commits touch CLAUDE.md, opencode.json, `.claude/`,
-  `.codex/`, `.agents/`, `.agent/` or `.agent-overlay/` is not pushed to GitLab or GitHub (the NAS bundle still has it).
+- **Agent files on a code host**: a branch whose unpublished commits add or change CLAUDE.md, opencode.json,
+  `.claude/`, `.codex/`, `.agents/`, `.agent/` or `.agent-overlay/` is not pushed to GitLab (the NAS bundle still has
+  it). A commit that only removes them passes.
 
 ## Traps
 
