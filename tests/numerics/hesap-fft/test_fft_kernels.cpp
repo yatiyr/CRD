@@ -450,8 +450,8 @@ TEST_CASE("fft kernels: every level keeps the reference's non-finite and subnorm
 }
 
 // The planner's algorithm of each direction at every size to 8M (fft::detail::planned_forward and planned_inverse),
-// one letter a size: Stockham, standalone-hier, IP4-AoS, the four-pass deep-split, the four-step, the six-step. Every
-// planned forward builds at its size, and a plan reports the pair.
+// one letter a size: Stockham, standalone-hier, IP4-AoS, the four-pass deep-split, the four-step, the six-step, the
+// tiled four-step. Every planned forward builds at its size, and a plan reports the pair.
 TEST_CASE("fft kernels: the planner's algorithm of every size", "[fft]")
 {
     const auto algorithm = [](char letter)
@@ -468,12 +468,14 @@ TEST_CASE("fft kernels: the planner's algorithm of every size", "[fft]")
                 return fft::FftAlgorithm::FourStep;
             case 'X':
                 return fft::FftAlgorithm::SixStep;
+            case 'T':
+                return fft::FftAlgorithm::TiledFourStep;
             default:
                 return fft::FftAlgorithm::Stockham;
         }
     };
     // index = log2(n), 2^0 .. 2^23
-    constexpr const char* f32_forward = "SSSSSSSSSShIhhIIIDDDDFFF";
+    constexpr const char* f32_forward = "SSSSSSSSSShIhhIIIDDDTFFF";
     constexpr const char* f32_inverse = "SSSSSSSSSSSISSIIIFFFFFFF";
     constexpr const char* f64_forward = "SSSSSSSSSSIIIIIIIDDDXFFF";
     constexpr const char* f64_inverse = "SSSSSSSSSSIIIIIIIFFFFFFF";

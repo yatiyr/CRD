@@ -92,8 +92,10 @@ template <typename T> [[nodiscard]] constexpr bool ip4_planned(crd::usize n) noe
 }
 
 // The forward algorithm of a size. The deep-split runs 8K..1M as four passes (the 2026-07-04 K-stage sweep; its 4096
-// = 16x16x16 lost, f32 8K lost 10% at eight lanes, and f64 1M takes the six-step, 5.38 against 5.88 ms); past L3 the
-// four-step's blocked structure wins (2M flat, 4M and 8M large losses under the deep-split).
+// = 16x16x16 lost, f32 8K lost 10% at eight lanes, and f64 1M takes the six-step, 5.38 against 5.88 ms); f32 1M takes
+// the tiled four-step (SIMD-DISPATCH's fft board of 2026-10-30: 2.10 against the deep-split's 2.55 ms at avx2, level
+// with it at sse4.2, sse2 and portable); past L3 the four-step's blocked structure wins (2M flat, 4M and 8M large
+// losses under the deep-split).
 template <typename T> [[nodiscard]] constexpr FftAlgorithm planned_forward(crd::usize n) noexcept
 {
     constexpr bool is_f32 = std::is_same_v<T, crd::f32>;
@@ -104,6 +106,10 @@ template <typename T> [[nodiscard]] constexpr FftAlgorithm planned_forward(crd::
     if (ip4_planned<T>(n))
     {
         return FftAlgorithm::Ip4;
+    }
+    if (is_f32 && n == (crd::usize{1} << 20))
+    {
+        return FftAlgorithm::TiledFourStep;
     }
     if (n >= (crd::usize{1} << 13) && n <= (crd::usize{1} << 20) && n != (crd::usize{1} << (is_f32 ? 13 : 20)))
     {
