@@ -61,7 +61,8 @@ void bidiagonalize(T* a, crd::usize m, crd::usize n, crd::usize lda, RealType<T>
 // min(m,n) in DESCENDING order (>= 0). Eigenvector signs pinned for
 // reproducibility (D(svd)-2): the largest-magnitude entry of each V column is
 // made positive, the matching U column flipped to preserve A = U S V^T.
-// Real f32/f64 (complex is v3b-1c). `a_in` is not modified.
+// Real f32/f64 (complex is v3b-1c). `a_in` is not modified. A matrix with a
+// NaN or infinite entry has no SVD: U, S and V come back quiet NaN in these shapes.
 // =======================================================================
 template <typename T>
 [[nodiscard]] SVD<T> svd(crd::memory::IAllocator* alloc, const Matrix<T>& a_in);

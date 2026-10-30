@@ -2,6 +2,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/hesap/cli/command_registry.hpp>
+#include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/cli_anchor.hpp>
 #include <crd/hesap/dense/detail/bdsqr.hpp>
 #include <crd/hesap/dense/detail/orgbr.hpp>
@@ -15,7 +16,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <tuple>
+#include <utility>
 
 namespace
 {
@@ -1591,4 +1594,71 @@ TEST_CASE("bidiagonalize: Q and P are orthonormal", "[hesap][svd][bidiag]")
     }
     CHECK(orth_err(m, q.data()) < 1.0e-12);
     CHECK(orth_err(n, p.data()) < 1.0e-12);
+}
+
+namespace
+{
+// Every entry of U, S and V quiet NaN, in the thin shapes of an m x n svd.
+template <typename T> bool all_nan_svd(const crd::hesap::dense::SVD<T>& f, crd::usize m, crd::usize n)
+{
+    const crd::usize k = m < n ? m : n;
+    bool nan = f.u.rows() == m && f.u.cols() == k && f.v.rows() == n && f.v.cols() == k && f.s.size() == k;
+    const auto is_nan = [](T v)
+    {
+        if constexpr (crd::hesap::dense::is_complex_v<T>)
+        {
+            return std::isnan(v.re) && std::isnan(v.im);
+        }
+        else
+        {
+            return std::isnan(v);
+        }
+    };
+    for (crd::usize i = 0; nan && i < m * k; ++i)
+    {
+        nan = is_nan(f.u.data()[i]);
+    }
+    for (crd::usize i = 0; nan && i < n * k; ++i)
+    {
+        nan = is_nan(f.v.data()[i]);
+    }
+    for (crd::usize i = 0; nan && i < k; ++i)
+    {
+        nan = std::isnan(f.s.data()[i]);
+    }
+    return nan;
+}
+
+template <typename T> void check_non_finite_svd(crd::memory::IAllocator* alloc)
+{
+    using R = crd::hesap::dense::RealType<T>;
+    // Below and above the divide-and-conquer crossover (n 64), tall and wide; a NaN, +Inf or -Inf entry.
+    for (const auto mn : {std::pair<crd::usize, crd::usize>{9, 6}, {6, 9}, {70, 66}, {66, 70}})
+    {
+        for (const R bad : {std::numeric_limits<R>::quiet_NaN(), std::numeric_limits<R>::infinity(),
+                            -std::numeric_limits<R>::infinity()})
+        {
+            INFO(mn.first << " x " << mn.second << ", entry " << bad);
+            crd::hesap::dense::Matrix<T> a(alloc, mn.first, mn.second);
+            for (crd::usize i = 0; i < mn.first; ++i)
+            {
+                for (crd::usize j = 0; j < mn.second; ++j)
+                {
+                    a.at(i, j) = T(static_cast<R>(1.0 / static_cast<double>(1 + i + 2 * j)));
+                }
+            }
+            a.at(mn.first / 2, mn.second / 3) = T(bad);
+            CHECK(all_nan_svd(crd::hesap::dense::svd<T>(alloc, a), mn.first, mn.second));
+        }
+    }
+}
+} // namespace
+
+TEST_CASE("svd: a NaN or infinite entry gives quiet NaN factors on every path", "[hesap][svd]")
+{
+    crd::memory::TlsfAllocator alloc(64U << 20);
+    check_non_finite_svd<crd::f64>(&alloc);
+    check_non_finite_svd<crd::f32>(&alloc);
+    check_non_finite_svd<crd::hesap::Complex64>(&alloc);
+    check_non_finite_svd<crd::hesap::Complex32>(&alloc);
 }

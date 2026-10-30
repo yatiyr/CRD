@@ -14,6 +14,7 @@
 #include <crd/hesap/dense/qr.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <crd/math/cmath.hpp>
 #include <limits>
 #include <type_traits>
@@ -677,12 +678,80 @@ SVD<C> svd_complex_impl(crd::memory::IAllocator* alloc, const Matrix<C>& a_in)
 }
 } // namespace
 
+namespace
+{
+template <typename T> bool finite_entries(const Matrix<T>& a)
+{
+    for (crd::usize i = 0; i < a.rows(); ++i)
+    {
+        for (crd::usize j = 0; j < a.cols(); ++j)
+        {
+            const T v = a.at(i, j);
+            bool finite = false;
+            if constexpr (is_complex_v<T>)
+            {
+                finite = std::isfinite(v.re) && std::isfinite(v.im);
+            }
+            else
+            {
+                finite = std::isfinite(v);
+            }
+            if (!finite)
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// The thin factors' shapes, every entry quiet NaN.
+template <typename T> SVD<T> non_finite_svd(crd::memory::IAllocator* alloc, crd::usize m, crd::usize n)
+{
+    using R = RealType<T>;
+    const R nan = std::numeric_limits<R>::quiet_NaN();
+    const crd::usize k = m < n ? m : n;
+    T nan_t{};
+    if constexpr (is_complex_v<T>)
+    {
+        nan_t = T{nan, nan};
+    }
+    else
+    {
+        nan_t = nan;
+    }
+    SVD<T> out(alloc);
+    out.u = Matrix<T>(alloc, m, k);
+    out.v = Matrix<T>(alloc, n, k);
+    out.s = Vector<R>(alloc, k);
+    for (crd::usize i = 0; i < m * k; ++i)
+    {
+        out.u.data()[i] = nan_t;
+    }
+    for (crd::usize i = 0; i < n * k; ++i)
+    {
+        out.v.data()[i] = nan_t;
+    }
+    for (crd::usize i = 0; i < k; ++i)
+    {
+        out.s.data()[i] = nan;
+    }
+    return out;
+}
+} // namespace
+
 // =======================================================================
 // svd (v3b-1b real / v3b-1c complex) — full SVD A = U diag(S) V^{T/H}.
 // =======================================================================
 template <typename T>
 SVD<T> svd(crd::memory::IAllocator* alloc, const Matrix<T>& a_in)
 {
+    // A non-finite entry has no SVD (the bidiagonal iteration cannot converge on it, and asserted it did): U, S and V
+    // come back quiet NaN in their thin shapes, a flagged result instead of a refusal.
+    if (!finite_entries(a_in))
+    {
+        return non_finite_svd<T>(alloc, a_in.rows(), a_in.cols());
+    }
     if constexpr (is_complex_v<T>)
     {
         return svd_complex_impl<T>(alloc, a_in);
