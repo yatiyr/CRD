@@ -177,6 +177,11 @@ function(_crd_add_kernel_unit archive objects level feature)
     target_compile_definitions(${objects} PRIVATE CRD_KERNEL_LEVEL=${_CRD_KERNEL_LEVEL_${level}}
                                ${CRD_FP_CONTRACT_DEFINITION})
     target_compile_options(${objects} PRIVATE ${CRD_FP_CONTRACT_OPTIONS} ${_CRD_KERNEL_FLAGS_${level}})
+    # cl stops optimizing a function past a size (C4883, off by default) and gives each of its values a stack slot:
+    # whole fft codelets took 1.4 to 3.9 MB frames and overflowed the stack (fft_codegen_split.py). A kernel errs.
+    if(MSVC AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        target_compile_options(${objects} PRIVATE /we4883)
+    endif()
     # Machine code at compile time, never link-time IL: a unit is entered only through its table, so link-time code
     # generation has no call to inline across it, yet it ran the unit's code generation again in every image that
     # links the archive (an LTCG link of one hesap-fft specimen, five fft units, passed 40 GB on win-release). The

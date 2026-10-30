@@ -315,6 +315,14 @@ class RepositoryTools(unittest.TestCase):
         # local follows the part that reads it.
         self.assertEqual((split.count('    sp['), split.count('= sp[')), (2, 2))
         self.assertEqual(split.count('    const crd::usize q = t >> 3;'), 1)
+        # The whole edition bounds a part's lines with its slot loads and stores, as MSVC stops optimizing a larger
+        # function.
+        _, (framed,) = split_kernels(single, 3, 1, whole_budget=5)
+        whole = framed[len(opening) + 1:].split('\n#else\n')[0]
+        self.assertIn('codelet2_part0<V>(in, out, b, t, sp);\n        codelet2_part1<V>(in, out, b, t, sp);\n', whole)
+        self.assertNotIn('_part2', whole)
+        with self.assertRaisesRegex(ValueError, 'codelet2: no part fits in 3 lines'):
+            split_kernels(single, 3, 1, whole_budget=3)
         with self.assertRaisesRegex(ValueError, 'used before its definition'):
             split_kernels(single.replace('const V n1r = n0r + n0i;', 'const V n1r = n9r + n0i;'), 3, 1)
         with self.assertRaisesRegex(ValueError, 'codelet2: a 8-column step straddles a column block of 4'):
