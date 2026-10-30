@@ -3,12 +3,16 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <crd/hesap/complex.hpp>
 #include <crd/hesap/sparse/sparse.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include "sparse_jobs_fixture.hpp"
 
 #include <cstdint>
+#include <cstring>
+#include <limits>
+#include <type_traits>
 
 namespace sp = crd::hesap::sparse;
 
@@ -94,4 +98,173 @@ TEST_CASE("parallel spgemm auto job count matches serial (non-square)", "[hesap]
     auto serial = sp::spgemm(a, b, &alloc);
     auto par    = sp::spgemm_parallel(a, b, &alloc, /*auto*/ 0);
     CHECK(csr_byte_equal(serial, par));
+}
+
+// ---- spgemm_arm: every cut and job count gives serial spgemm's bits ----
+
+namespace
+{
+template <typename T> struct ArmReal
+{
+    using type = T;
+};
+template <typename U> struct ArmReal<crd::hesap::Complex<U>>
+{
+    using type = U;
+};
+
+template <typename T> constexpr bool kArmComplex = !std::is_same_v<typename ArmReal<T>::type, T>;
+
+// A value from hash h; with `specials`, every eleventh value is NaN, +Inf, -Inf, -0 or the smallest subnormal.
+template <typename T> T arm_value(crd::u32 h, bool specials)
+{
+    using R = typename ArmReal<T>::type;
+    R re = static_cast<R>(1 + h % 9) / static_cast<R>(7);
+    if (specials && h % 11 < 5)
+    {
+        const R picks[] = {std::numeric_limits<R>::quiet_NaN(), std::numeric_limits<R>::infinity(),
+                           -std::numeric_limits<R>::infinity(), -R(0), std::numeric_limits<R>::denorm_min()};
+        re = picks[h % 11];
+    }
+    if constexpr (kArmComplex<T>)
+    {
+        return T{re, static_cast<R>(h % 5) / static_cast<R>(3) - R(1)};
+    }
+    else
+    {
+        return re;
+    }
+}
+
+// Skewed row degrees (every ninth row five times the rest) and every seventh row empty.
+template <typename T>
+sp::SparseMatrix<T, sp::SparseFormat::Csr> arm_csr(crd::memory::IAllocator* alloc, crd::u32 rows, crd::u32 cols,
+                                                   crd::u32 per_row, std::uint64_t seed, bool specials)
+{
+    std::uint64_t s = seed;
+    auto next = [&]()
+    {
+        s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+        return static_cast<crd::u32>(s >> 33);
+    };
+    sp::TripletBuilder<T> b(alloc, rows, cols);
+    for (crd::u32 r = 0; r < rows; ++r)
+    {
+        if (r % 7 == 3)
+        {
+            continue;
+        }
+        const crd::u32 deg = (next() % 9 == 0) ? (per_row * 5) : per_row;
+        for (crd::u32 k = 0; k < deg; ++k)
+        {
+            const crd::u32 col = next() % cols;
+            b.add(r, col, arm_value<T>(next(), specials));
+        }
+    }
+    return b.compress();
+}
+
+template <typename U> bool same_bytes(const U* x, const U* y, crd::usize n)
+{
+    return n == 0 || std::memcmp(x, y, n * sizeof(U)) == 0;
+}
+
+// Shape, topology hash, and every outer, inner and value byte.
+template <typename T>
+bool same_csr(const sp::SparseMatrix<T, sp::SparseFormat::Csr>& x, const sp::SparseMatrix<T, sp::SparseFormat::Csr>& y)
+{
+    return x.rows() == y.rows() && x.cols() == y.cols() && x.nnz() == y.nnz() &&
+           x.pattern().topology_hash == y.pattern().topology_hash &&
+           x.pattern().outer_ptr.size() == y.pattern().outer_ptr.size() &&
+           same_bytes(x.pattern().outer_ptr.data(), y.pattern().outer_ptr.data(), x.pattern().outer_ptr.size()) &&
+           same_bytes(x.pattern().inner_idx.data(), y.pattern().inner_idx.data(), x.nnz()) &&
+           same_bytes(x.values().values.data(), y.values().values.data(), x.nnz());
+}
+
+constexpr crd::u32 kArmWorkers[] = {0, 1, 2, 3, 4, 8, 16, 32};
+
+template <typename T>
+void check_spgemm_arms(const sp::SparseMatrix<T, sp::SparseFormat::Csr>& a,
+                       const sp::SparseMatrix<T, sp::SparseFormat::Csr>& b, crd::memory::IAllocator* alloc)
+{
+    const auto serial = sp::spgemm<T>(a, b, alloc);
+    crd::containers::Array<crd::u64> prefix(alloc);
+    sp::detail::spgemm_flop_prefix<T>(a, b, prefix);
+    const crd::u64 flop = prefix[a.rows()];
+    // On the jobs (0, the product's flops), serial below the cut (flops + 1) and the default.
+    for (const crd::u64 cut : {crd::u64{0}, flop, flop + 1, ~crd::u64{0}})
+    {
+        for (const crd::u32 workers : kArmWorkers)
+        {
+            INFO("cut " << cut << " of " << flop << " flops, workers " << workers);
+            CHECK(same_csr(sp::spgemm_arm<T>({.parallel_min_flop = cut, .workers = workers}, a, b, alloc), serial));
+        }
+    }
+}
+
+template <typename T> void check_spgemm_arm_type(crd::memory::IAllocator* alloc)
+{
+    for (const bool specials : {false, true})
+    {
+        INFO("specials " << specials);
+        // Fewer rows than jobs, square, and a non-square chain.
+        for (const crd::u32 n : {1U, 3U, 64U, 500U})
+        {
+            INFO("n " << n);
+            const auto a = arm_csr<T>(alloc, n, n, 5, 0xA1U ^ n, specials);
+            const auto b = arm_csr<T>(alloc, n, n, 5, 0xB2U ^ n, specials);
+            check_spgemm_arms<T>(a, b, alloc);
+        }
+        const auto a = arm_csr<T>(alloc, 300, 200, 6, 0xCAFE, specials);
+        const auto b = arm_csr<T>(alloc, 200, 450, 4, 0xF00D, specials);
+        check_spgemm_arms<T>(a, b, alloc);
+    }
+}
+} // namespace
+
+TEST_CASE("spgemm_arm keeps serial spgemm's bits at every cut and job count",
+          "[hesap][sparse][spgemm][parallel][jobs][determinism]")
+{
+    jobs_listener();
+    crd::memory::TlsfAllocator alloc(128 << 20);
+    {
+        INFO("f64");
+        check_spgemm_arm_type<crd::f64>(&alloc);
+    }
+    {
+        INFO("f32");
+        check_spgemm_arm_type<crd::f32>(&alloc);
+    }
+    {
+        INFO("c64");
+        check_spgemm_arm_type<crd::hesap::Complex64>(&alloc);
+    }
+    {
+        INFO("c32");
+        check_spgemm_arm_type<crd::hesap::Complex32>(&alloc);
+    }
+}
+
+TEST_CASE("spgemm_arm's hash path and an empty A keep serial spgemm's bits and shape",
+          "[hesap][sparse][spgemm][parallel][hash][jobs][determinism]")
+{
+    jobs_listener();
+    crd::memory::TlsfAllocator alloc(64 << 20);
+    // B past kMaxSpaCols columns (the hash accumulator), one entry per row at a distinct large column.
+    const crd::u32 k = 150;
+    const crd::u32 n = sp::kMaxSpaCols + 1U;
+    sp::TripletBuilder<crd::f64> bb(&alloc, k, n);
+    for (crd::u32 r = 0; r < k; ++r)
+    {
+        bb.add(r, n - 1U - r * 5U, arm_value<crd::f64>(r * 2654435761U, true));
+        bb.add(r, r, arm_value<crd::f64>(r * 40503U + 7U, true));
+    }
+    const auto b = bb.compress();
+    const auto a = arm_csr<crd::f64>(&alloc, 40, k, 4, 0xBEEF, true);
+    check_spgemm_arms<crd::f64>(a, b, &alloc);
+    // An empty A: every route is the serial product's 0 x n shape (spgemm_parallel's was 0 x 0 before the arm).
+    const auto empty = sp::TripletBuilder<crd::f64>(&alloc, 0, 40).compress();
+    const auto c = arm_csr<crd::f64>(&alloc, 40, 17, 3, 0x5EED, false);
+    check_spgemm_arms<crd::f64>(empty, c, &alloc);
+    CHECK(sp::spgemm_parallel<crd::f64>(empty, c, &alloc).cols() == 17);
 }

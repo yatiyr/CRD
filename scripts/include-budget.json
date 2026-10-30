@@ -111,6 +111,20 @@
       "why": "the sparse direct factors' crd-jobs levers, included by supernodal_cholesky.hpp, its board and its tests; the picks are plain data, so the header brings no intrinsics header to them"
     },
     {
+      "include": "crd/hesap/sparse/detail/spgemm_arms.hpp",
+      "flags_of": "tests/numerics/hesap-sparse/test_spgemm_parallel.cpp",
+      "forbid": ["chrono", "format"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
+      "why": "the sparse product's crd-jobs levers, included by spgemm_parallel.hpp, the AMG picks, their board and tests; the pick is plain data, so the header brings no intrinsics header to them"
+    },
+    {
+      "include": "crd/hesap/amg/amg.hpp",
+      "flags_of": "tests/numerics/hesap-amg/test_amg.cpp",
+      "forbid": ["chrono", "format"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
+      "why": "SaAmg, the Krylov solvers' and the eigensolvers' multigrid preconditioner, now reaching crd-jobs for its products' levers (detail/amg_arms.hpp); its products are baseline scalar code, so it brings no intrinsics header to its consumers"
+    },
+    {
       "include": "crd/hesap/sparse/sell.hpp",
       "flags_of": "tests/numerics/hesap-sparse/test_sell.cpp",
       "forbid": ["chrono", "format"],

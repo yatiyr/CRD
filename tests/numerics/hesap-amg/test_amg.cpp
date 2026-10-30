@@ -19,6 +19,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <limits>
 
 using namespace crd::hesap::sparse;
 using namespace crd::hesap::iterative;
@@ -38,6 +40,21 @@ const AmgAnchorPull kAmgAnchorPull;
 
 namespace
 {
+// A real or complex value from f64 parts, each rounded to the type's real.
+template <typename T> T amg_value(crd::f64 re, crd::f64 im)
+{
+    using R = dense::RealType<T>;
+    if constexpr (dense::is_complex_v<T>)
+    {
+        return T{static_cast<R>(re), static_cast<R>(im)};
+    }
+    else
+    {
+        (void)im;
+        return static_cast<T>(re);
+    }
+}
+
 // 2D 5-point Laplacian (SPD, isotropic) on a gridN×gridN mesh, n=gridN².
 template <typename T> SparseMatrix<T, SparseFormat::Csr> laplace2d(crd::memory::IAllocator* a, crd::u32 g)
 {
@@ -96,11 +113,11 @@ SparseMatrix<T, SparseFormat::Csr> cd2d(crd::memory::IAllocator* a, crd::u32 g, 
             double diag = 2.0 * eps + 2.0 + beta + c; // diffusion x+y + upwind convection + reaction
             if (j > 0)
             {
-                b.add(r, idx(i, j - 1), T(static_cast<crd::f64>(-eps - beta)));
+                b.add(r, idx(i, j - 1), amg_value<T>(-eps - beta, 0.0));
             } // west (upwind)
             if (j + 1 < g)
             {
-                b.add(r, idx(i, j + 1), T(static_cast<crd::f64>(-eps)));
+                b.add(r, idx(i, j + 1), amg_value<T>(-eps, 0.0));
             } // east
             if (i > 0)
             {
@@ -110,7 +127,7 @@ SparseMatrix<T, SparseFormat::Csr> cd2d(crd::memory::IAllocator* a, crd::u32 g, 
             {
                 b.add(r, idx(i + 1, j), T(static_cast<crd::f64>(-1.0)));
             } // north
-            b.add(r, r, T(static_cast<crd::f64>(diag)));
+            b.add(r, r, amg_value<T>(diag, 0.0));
         }
     }
     return b.compress();
@@ -506,4 +523,212 @@ TEST_CASE("AMG-CG iteration count is mesh-independent (the crush property)", "[h
         REQUIRE(i100 <= i50 + i50 / 2 + 3);
     }
     crd::jobs::shutdown();
+}
+
+// ---- sa_amg_arm: every products pick gives the one-job hierarchy and cycle bits ----
+
+namespace
+{
+template <typename U> bool amg_same_bytes(const U* x, const U* y, crd::usize n)
+{
+    return n == 0 || std::memcmp(x, y, n * sizeof(U)) == 0;
+}
+
+template <typename T>
+bool amg_same_csr(const SparseMatrix<T, SparseFormat::Csr>& x, const SparseMatrix<T, SparseFormat::Csr>& y)
+{
+    return x.rows() == y.rows() && x.cols() == y.cols() && x.nnz() == y.nnz() &&
+           x.pattern().topology_hash == y.pattern().topology_hash &&
+           amg_same_bytes(x.pattern().outer_ptr.data(), y.pattern().outer_ptr.data(), x.pattern().outer_ptr.size()) &&
+           amg_same_bytes(x.pattern().inner_idx.data(), y.pattern().inner_idx.data(), x.nnz()) &&
+           amg_same_bytes(x.values().values.data(), y.values().values.data(), x.nnz());
+}
+
+// Every level's A, P, R and 1/diag(A), and the coarsest dense LU.
+template <typename T> bool same_hierarchy(const SaAmg<T>& x, const SaAmg<T>& y)
+{
+    if (x.num_levels() != y.num_levels() || x.coarse_size() != y.coarse_size())
+    {
+        return false;
+    }
+    for (crd::u32 k = 0; k + 1 < x.num_levels(); ++k)
+    {
+        const auto& lx = x.level(k);
+        const auto& ly = y.level(k);
+        if (lx.n != ly.n || !amg_same_csr(lx.a, ly.a) || !amg_same_csr(lx.p, ly.p) || !amg_same_csr(lx.r, ly.r) ||
+            lx.dinv.size() != ly.dinv.size() || !amg_same_bytes(lx.dinv.data(), ly.dinv.data(), lx.dinv.size()))
+        {
+            return false;
+        }
+    }
+    const crd::usize nc = x.coarse_size();
+    return x.coarse_lu().info() == y.coarse_lu().info() &&
+           amg_same_bytes(x.coarse_lu().packed().data(), y.coarse_lu().packed().data(), nc * nc);
+}
+
+constexpr crd::usize kAmgGuard = 4;
+
+// z = M^-1 r into a span followed by guard words; false when apply wrote past n.
+template <typename T> bool amg_apply(const SaAmg<T>& m, crd::containers::Array<T>& z, crd::memory::IAllocator* alloc)
+{
+    const crd::u32 n = static_cast<crd::u32>(m.n_rows());
+    crd::containers::Array<T> r(alloc);
+    r.resize(n);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        r[i] = amg_value<T>(1.0 + 0.25 * static_cast<crd::f64>(i % 5), 0.125 * static_cast<crd::f64>(i % 3));
+    }
+    const T guard = amg_value<T>(-7777.0, 3.0);
+    z.resize(n + kAmgGuard);
+    for (crd::usize i = 0; i < z.size(); ++i)
+    {
+        z[i] = guard;
+    }
+    (void)m.apply(crd::containers::ConstSpan<T>{r.data(), n}, crd::containers::Span<T>{z.data(), n});
+    bool intact = true;
+    for (crd::usize i = n; i < z.size(); ++i)
+    {
+        intact = intact && amg_same_bytes(&z[i], &guard, 1);
+    }
+    return intact;
+}
+
+struct AmgArm
+{
+    const char* name;
+    amg::detail::AmgPick pick;
+};
+
+const AmgArm kAmgArms[] = {
+    {"spgemm forced to one job", {.spgemm = {.parallel_min_flop = 0, .workers = 1}}},
+    {"spgemm on the pool", {.spgemm = {.parallel_min_flop = 0}}},
+    {"spgemm on 3 jobs", {.spgemm = {.parallel_min_flop = 0, .workers = 3}}},
+    {"spgemm on 8 jobs", {.spgemm = {.parallel_min_flop = 0, .workers = 8}}},
+    {"spgemm on 32 jobs", {.spgemm = {.parallel_min_flop = 0, .workers = 32}}},
+    {"spmv on the pool", {.spmv_min_nnz = 0}},
+    {"spmv on 7 jobs", {.spmv_min_nnz = 0, .spmv_workers = 7}},
+    {"spmv on 16 jobs", {.spmv_min_nnz = 0, .spmv_workers = 16}},
+    {"spmv on 32 jobs", {.spmv_min_nnz = 0, .spmv_workers = 32}},
+    {"both on 16 jobs", {.spgemm = {.parallel_min_flop = 0, .workers = 16}, .spmv_min_nnz = 0, .spmv_workers = 16}},
+    {"finest levels only", {.spgemm = {.parallel_min_flop = 20000}, .spmv_min_nnz = 2000}},
+};
+
+template <typename T>
+void check_amg_arms(const SparseMatrix<T, SparseFormat::Csr>& a, const typename SaAmg<T>::Options& opts,
+                    crd::memory::IAllocator* alloc)
+{
+    const SaAmg<T> ref(a, alloc, opts);
+    REQUIRE(ref.num_levels() >= 3); // a K-cycle level above the coarsest one
+    crd::containers::Array<T> zref(alloc);
+    REQUIRE(amg_apply(ref, zref, alloc));
+    for (const AmgArm& arm : kAmgArms)
+    {
+        INFO(arm.name);
+        const SaAmg<T> m(a, alloc, opts, arm.pick);
+        CHECK(same_hierarchy(ref, m));
+        crd::containers::Array<T> z(alloc);
+        CHECK(amg_apply(m, z, alloc));
+        CHECK(amg_same_bytes(z.data(), zref.data(), zref.size()));
+    }
+}
+
+// `a` with its middle row's first off-diagonal coupling NaN (strength drops it as weak).
+template <typename T>
+SparseMatrix<T, SparseFormat::Csr> with_nan_coupling(const SparseMatrix<T, SparseFormat::Csr>& a,
+                                                     crd::memory::IAllocator* alloc)
+{
+    TripletBuilder<T> b(alloc, a.rows(), a.cols());
+    const auto* o = a.pattern().outer_ptr.data();
+    const auto* c = a.pattern().inner_idx.data();
+    const T* v = a.values().values.data();
+    bool placed = false;
+    for (crd::u32 i = 0; i < a.rows(); ++i)
+    {
+        for (crd::u32 q = o[i]; q < o[i + 1]; ++q)
+        {
+            const bool nan = !placed && i == a.rows() / 2 && c[q] != i;
+            placed = placed || nan;
+            b.add(i, c[q], nan ? amg_value<T>(std::numeric_limits<crd::f64>::quiet_NaN(), 0.0) : v[q]);
+        }
+    }
+    return b.compress();
+}
+
+template <typename T> void check_amg_arm_type(crd::memory::IAllocator* alloc)
+{
+    using Amg = SaAmg<T>;
+    const auto poisson = laplace2d<T>(alloc, 40); // n 1600: three levels
+    for (const auto cycle : {Amg::Cycle::V, Amg::Cycle::W, Amg::Cycle::F, Amg::Cycle::K})
+    {
+        INFO("Poisson, cycle " << static_cast<int>(cycle));
+        typename Amg::Options o;
+        o.cycle = cycle;
+        check_amg_arms<T>(poisson, o, alloc);
+    }
+    {
+        INFO("Poisson, Ruge-Stuben");
+        typename Amg::Options o;
+        o.coarsening = Amg::Coarsening::RugeStuben;
+        check_amg_arms<T>(poisson, o, alloc);
+    }
+    {
+        INFO("Poisson, adaptive candidate, ILU(0) smoother");
+        typename Amg::Options o;
+        o.adaptive_candidate = true;
+        o.smoother = Amg::Smoother::Ilu0;
+        check_amg_arms<T>(poisson, o, alloc);
+    }
+    {
+        INFO("Poisson, one NaN coupling");
+        check_amg_arms<T>(with_nan_coupling<T>(poisson, alloc), typename Amg::Options{}, alloc);
+    }
+    {
+        INFO("convection-diffusion, Petrov-Galerkin restriction, K-cycle");
+        typename Amg::Options o;
+        o.cycle = Amg::Cycle::K;
+        check_amg_arms<T>(cd2d<T>(alloc, 40, 0.1, 0.3, 0.01), o, alloc);
+    }
+    {
+        INFO("convection-diffusion, plain aggregation");
+        typename Amg::Options o;
+        o.smooth_prolongator = false;
+        check_amg_arms<T>(cd2d<T>(alloc, 40, 0.1, 0.3, 0.01), o, alloc);
+    }
+}
+} // namespace
+
+TEST_CASE("sa_amg_arm: every products pick keeps the one-job hierarchy and cycle bits",
+          "[hesap-amg][jobs][determinism]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 4; // a hosted runner's pool on every host: the 8 to 32 forced jobs outnumber its workers
+    crd::jobs::init(cfg);
+    {
+        crd::memory::TlsfAllocator alloc{256U << 20};
+        {
+            INFO("f64");
+            check_amg_arm_type<crd::f64>(&alloc);
+        }
+        {
+            INFO("f32");
+            check_amg_arm_type<crd::f32>(&alloc);
+        }
+        {
+            INFO("c64");
+            check_amg_arm_type<crd::hesap::Complex<crd::f64>>(&alloc);
+        }
+        {
+            INFO("c32");
+            check_amg_arm_type<crd::hesap::Complex<crd::f32>>(&alloc);
+        }
+    }
+    crd::jobs::shutdown();
+}
+
+TEST_CASE("sa_amg_arm: a forced parallel pick on a pool that is down runs serially", "[hesap-amg][jobs][determinism]")
+{
+    REQUIRE(crd::jobs::num_workers() == 0);
+    crd::memory::TlsfAllocator alloc{64U << 20};
+    const auto a = laplace2d<crd::f64>(&alloc, 40);
+    check_amg_arms<crd::f64>(a, SaAmg<crd::f64>::Options{}, &alloc);
 }

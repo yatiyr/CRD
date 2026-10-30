@@ -4,6 +4,7 @@
 #include <crd/containers/sort.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
+#include <crd/hesap/sparse/detail/spgemm_arms.hpp>
 #include <crd/hesap/sparse/sparse_matrix.hpp>
 #include <crd/hesap/sparse/spgemm.hpp>
 #include <crd/hesap/sparse/spgemm_hash.hpp>
@@ -13,25 +14,19 @@
 
 namespace crd::hesap::sparse
 {
-// Parallel hash-accumulator spgemm (cols > kMaxSpaCols). Same two-phase
-// structure as the dense path but per-JOB hash accumulators (bounded memory,
-// O(row distinct nnz)) instead of a per-worker dense SPA sized by B.cols.
-// Bit-exact with serial spgemm (identical per-row accumulation order + sorted
-// emit). `jobs` is small (~workers), so per-job hashes are built once up front.
+namespace detail
+{
+// prefix[i] is the multiply-adds of C's rows before i: over each A row r < i, nnz(B[k]) for each stored k.
 template <typename T>
-[[nodiscard]] SparseMatrix<T, SparseFormat::Csr> spgemm_parallel_hash(const SparseMatrix<T, SparseFormat::Csr>& a,
-                                                                      const SparseMatrix<T, SparseFormat::Csr>& b,
-                                                                      crd::memory::IAllocator* alloc, crd::u32 jobs)
+void spgemm_flop_prefix(const SparseMatrix<T, SparseFormat::Csr>& a, const SparseMatrix<T, SparseFormat::Csr>& b,
+                        crd::containers::Array<crd::u64>& prefix)
 {
     const crd::u32  m  = a.rows();
-    const crd::u32  n  = b.cols();
     const crd::u32* ao = a.pattern().outer_ptr.data();
     const crd::u32* ai = a.pattern().inner_idx.data();
     const crd::u32* bo = b.pattern().outer_ptr.data();
-
-    crd::containers::Array<crd::u64> flop_prefix(alloc);
-    flop_prefix.resize(static_cast<crd::usize>(m) + 1);
-    flop_prefix[0] = 0;
+    prefix.resize(static_cast<crd::usize>(m) + 1);
+    prefix[0] = 0;
     for (crd::u32 i = 0; i < m; ++i)
     {
         crd::u64 f = 0;
@@ -39,26 +34,43 @@ template <typename T>
         {
             f += bo[ai[ka] + 1] - bo[ai[ka]];
         }
-        flop_prefix[i + 1] = flop_prefix[i] + f;
+        prefix[i + 1] = prefix[i] + f;
     }
-    const crd::u64 total_flop = flop_prefix[m];
+}
 
-    crd::containers::Array<crd::u32> bnd(alloc);
+// Job jb's rows are [bnd[jb], bnd[jb + 1]): `jobs` ranges of balanced multiply-adds.
+inline void spgemm_job_bounds(const crd::containers::Array<crd::u64>& prefix, crd::u32 m, crd::u32 jobs,
+                              crd::containers::Array<crd::u32>& bnd)
+{
+    const crd::u64 total_flop = prefix[m];
     bnd.resize(static_cast<crd::usize>(jobs) + 1);
     bnd[0]    = 0;
     bnd[jobs] = m;
+    crd::u32 i = 0;
+    for (crd::u32 jb = 1; jb < jobs; ++jb)
     {
-        crd::u32 i = 0;
-        for (crd::u32 jb = 1; jb < jobs; ++jb)
+        const crd::u64 target = (total_flop * jb) / jobs;
+        while (i < m && prefix[i] < target)
         {
-            const crd::u64 target = (total_flop * jb) / jobs;
-            while (i < m && flop_prefix[i] < target)
-            {
-                ++i;
-            }
-            bnd[jb] = i;
+            ++i;
         }
+        bnd[jb] = i;
     }
+}
+
+// The hash-accumulator body (cols > kMaxSpaCols). Same two-phase
+// structure as the dense path but per-JOB hash accumulators (bounded memory,
+// O(row distinct nnz)) instead of a per-worker dense SPA sized by B.cols.
+// Bit-exact with serial spgemm (identical per-row accumulation order + sorted
+// emit). `jobs` is small (~workers), so per-job hashes are built once up front.
+template <typename T>
+[[nodiscard]] SparseMatrix<T, SparseFormat::Csr> spgemm_parallel_hash(const SparseMatrix<T, SparseFormat::Csr>& a,
+                                                                      const SparseMatrix<T, SparseFormat::Csr>& b,
+                                                                      crd::memory::IAllocator* alloc, crd::u32 jobs,
+                                                                      const crd::containers::Array<crd::u32>& bnd)
+{
+    const crd::u32 m = a.rows();
+    const crd::u32 n = b.cols();
 
     // Per-job hash accumulators (each touched by exactly one job at a time).
     crd::containers::Array<detail::SpgemmHash<T>> hashes(alloc);
@@ -138,7 +150,7 @@ template <typename T>
     return SparseMatrix<T, SparseFormat::Csr>(std::move(pat), std::move(vals));
 }
 
-// Parallel spgemm C = A * B. Two-phase (required for parallel disjoint writes):
+// The dense-SPA body. Two-phase (required for parallel disjoint writes):
 //   symbolic -- per C-row distinct-column COUNT (SPA marker, no values) ->
 //               prefix-sum -> C.outer_ptr (each row's output slice known
 //               before writing);
@@ -146,68 +158,19 @@ template <typename T>
 //               + column-sorted write into the row's preallocated slice.
 // Row-parallel over flop-balanced A-row ranges; each C row is produced by one
 // worker -> BIT-EXACT with serial spgemm at any worker count. Per-WORKER SPA
-// scratch (sized by num_workers, indexed by worker_index) reused across rows.
+// scratch (sized by the pool's `workers`, indexed by worker_index, so a forced
+// job count above the pool shares it safely) reused across rows.
 // Phase-1 stamps are [1,m]; phase-2 stamps are [m+1,2m] so the shared marker
 // scratch never mis-detects a first touch across the two passes.
 template <typename T>
-[[nodiscard]] SparseMatrix<T, SparseFormat::Csr> spgemm_parallel(const SparseMatrix<T, SparseFormat::Csr>& a,
-                                                                 const SparseMatrix<T, SparseFormat::Csr>& b,
-                                                                 crd::memory::IAllocator* alloc, crd::u32 num_jobs = 0)
+[[nodiscard]] SparseMatrix<T, SparseFormat::Csr> spgemm_parallel_spa(const SparseMatrix<T, SparseFormat::Csr>& a,
+                                                                     const SparseMatrix<T, SparseFormat::Csr>& b,
+                                                                     crd::memory::IAllocator* alloc, crd::u32 jobs,
+                                                                     crd::u32 workers,
+                                                                     const crd::containers::Array<crd::u32>& bnd)
 {
-    CRD_ASSERT_MSG(a.pattern().is_compressed() && b.pattern().is_compressed(), "spgemm requires compressed CSR");
-    CRD_ASSERT_MSG(a.cols() == b.rows(), "spgemm: inner dimension mismatch");
     const crd::u32 m = a.rows();
     const crd::u32 n = b.cols();
-    if (m == 0)
-    {
-        return SparseMatrix<T, SparseFormat::Csr>(alloc);
-    }
-
-    const crd::u32 workers = crd::jobs::num_workers() == 0 ? 1U : crd::jobs::num_workers();
-    crd::u32       jobs    = (num_jobs == 0) ? workers : num_jobs;
-    jobs = jobs < m ? jobs : m;
-
-    if (n > kMaxSpaCols)
-    {
-        // Dense SPA (sized by B.cols) is memory-infeasible -> hash accumulator.
-        return spgemm_parallel_hash<T>(a, b, alloc, jobs);
-    }
-
-    const crd::u32* ao = a.pattern().outer_ptr.data();
-    const crd::u32* ai = a.pattern().inner_idx.data();
-    const crd::u32* bo = b.pattern().outer_ptr.data();
-
-    // flop[i] = sum_{k in A[i]} nnz(B[k]); prefix for flop-balanced partition.
-    crd::containers::Array<crd::u64> flop_prefix(alloc);
-    flop_prefix.resize(static_cast<crd::usize>(m) + 1);
-    flop_prefix[0] = 0;
-    for (crd::u32 i = 0; i < m; ++i)
-    {
-        crd::u64 f = 0;
-        for (crd::u32 ka = ao[i]; ka < ao[i + 1]; ++ka)
-        {
-            f += bo[ai[ka] + 1] - bo[ai[ka]];
-        }
-        flop_prefix[i + 1] = flop_prefix[i] + f;
-    }
-    const crd::u64 total_flop = flop_prefix[m];
-
-    crd::containers::Array<crd::u32> bnd(alloc);
-    bnd.resize(static_cast<crd::usize>(jobs) + 1);
-    bnd[0]    = 0;
-    bnd[jobs] = m;
-    {
-        crd::u32 i = 0;
-        for (crd::u32 jb = 1; jb < jobs; ++jb)
-        {
-            const crd::u64 target = (total_flop * jb) / jobs;
-            while (i < m && flop_prefix[i] < target)
-            {
-                ++i;
-            }
-            bnd[jb] = i;
-        }
-    }
 
     // Per-worker SPA scratch.
     crd::containers::Array<T>        spa_val(alloc);
@@ -342,6 +305,51 @@ template <typename T>
 
     pat.recompute_topology_hash();
     return SparseMatrix<T, SparseFormat::Csr>(std::move(pat), std::move(vals));
+}
+} // namespace detail
+
+// C = A * B through the pick (detail/spgemm_arms.hpp): the serial spgemm for a product of fewer multiply-adds than
+// the cut, on one job, on a pool that is down or for an empty A (no flop pass for these), otherwise the row-parallel
+// body on the pick's jobs (the hash body above kMaxSpaCols columns). Every route gives serial spgemm's bits.
+template <typename T>
+[[nodiscard]] SparseMatrix<T, SparseFormat::Csr> spgemm_arm(const detail::SpgemmPick& pick,
+                                                            const SparseMatrix<T, SparseFormat::Csr>& a,
+                                                            const SparseMatrix<T, SparseFormat::Csr>& b,
+                                                            crd::memory::IAllocator* alloc)
+{
+    CRD_ASSERT_MSG(a.pattern().is_compressed() && b.pattern().is_compressed(), "spgemm requires compressed CSR");
+    CRD_ASSERT_MSG(a.cols() == b.rows(), "spgemm: inner dimension mismatch");
+    const crd::u32 m       = a.rows();
+    const crd::u32 workers = crd::jobs::num_workers();
+    crd::u32       jobs    = pick.workers == 0 ? workers : pick.workers;
+    jobs                   = jobs < m ? jobs : m;
+    if (pick.parallel_min_flop == ~0ULL || workers == 0 || jobs <= 1)
+    {
+        return spgemm<T>(a, b, alloc);
+    }
+    crd::containers::Array<crd::u64> prefix(alloc);
+    detail::spgemm_flop_prefix<T>(a, b, prefix);
+    if (prefix[m] < pick.parallel_min_flop)
+    {
+        return spgemm<T>(a, b, alloc);
+    }
+    crd::containers::Array<crd::u32> bnd(alloc);
+    detail::spgemm_job_bounds(prefix, m, jobs, bnd);
+    if (b.cols() > kMaxSpaCols)
+    {
+        // Dense SPA (sized by B.cols) is memory-infeasible -> hash accumulator.
+        return detail::spgemm_parallel_hash<T>(a, b, alloc, jobs, bnd);
+    }
+    return detail::spgemm_parallel_spa<T>(a, b, alloc, jobs, workers, bnd);
+}
+
+// Parallel spgemm C = A * B on `num_jobs` jobs (0: one per worker): the arm with the cut at 0.
+template <typename T>
+[[nodiscard]] SparseMatrix<T, SparseFormat::Csr> spgemm_parallel(const SparseMatrix<T, SparseFormat::Csr>& a,
+                                                                 const SparseMatrix<T, SparseFormat::Csr>& b,
+                                                                 crd::memory::IAllocator* alloc, crd::u32 num_jobs = 0)
+{
+    return spgemm_arm<T>(detail::SpgemmPick{.parallel_min_flop = 0, .workers = num_jobs}, a, b, alloc);
 }
 
 // C = A * Aᵀ in parallel (transpose + parallel spgemm).

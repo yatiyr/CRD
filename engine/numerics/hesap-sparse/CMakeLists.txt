@@ -29,7 +29,7 @@ target_link_libraries(crd-hesap-sparse
         crd-memory
         crd-math       # Complex<T> values (c32/c64) + the SELL kernel dispatch (crd/math/kernel_dispatch.hpp)
         crd-hesap      # SparseId sibling to MatrixId/VectorId; 'HSPM' CRDR pin
-        crd-jobs       # future row-balanced parallel spmv/spgemm (v1b+)
+        crd-jobs       # the row-parallel spgemm and SELL spmv
     PRIVATE
         crd-warnings
 )

@@ -5,6 +5,8 @@
 #include <crd/core/types.hpp>
 #include <crd/hesap/amg/aggregation.hpp>
 #include <crd/hesap/amg/cf_splitting.hpp>
+#include <crd/hesap/amg/detail/amg_arms.hpp>
+#include <crd/hesap/amg/detail/csr_apply.hpp>
 #include <crd/hesap/amg/prolongator.hpp>
 #include <crd/hesap/amg/rs_interpolation.hpp>
 #include <crd/hesap/amg/rs_strength.hpp>
@@ -15,7 +17,7 @@
 #include <crd/hesap/linear_op.hpp>
 #include <crd/hesap/preconditioners/ilu0.hpp> // ILU(0) smoother (convection-robust)
 #include <crd/hesap/sparse/convert.hpp>
-#include <crd/hesap/sparse/spgemm.hpp>
+#include <crd/hesap/sparse/spgemm_parallel.hpp>
 #include <crd/hesap/sparse/sparse_matrix.hpp>
 #include <crd/memory/allocator.hpp>
 
@@ -37,8 +39,10 @@ namespace crd::hesap::amg
 // smoother opt-in for near-symmetric diffusion (fewest iters, but can diverge
 // on strong convection — that regime is the v4j inverse-based-ILU's job).
 //
-// Deterministic (D(amg)-1..5): aggregation/Galerkin/λmax/V-cycle all fixed; the
-// factor is serial, only spmv/spgemm parallel (the moat). Real now; complex 2c.
+// Deterministic (D(amg)-1..5): aggregation/Galerkin/λmax/V-cycle all fixed. The
+// sparse products and the CSR products take the pick's jobs (detail/amg_arms.hpp,
+// serial by default), each output row on one job, so every pick gives the same
+// bits; the rest is serial. Real and complex.
 // ---------------------------------------------------------------------------
 
 template <typename T>
@@ -61,8 +65,8 @@ public:
     // per level — between V and W in cost/robustness) ; K = Krylov-accelerated cycle (Notay AGMG
     // 2010): each intermediate level's coarse correction is 2 GCR steps preconditioned by the
     // recursive cycle. The K projection STABILIZES the nonsymmetric coarse operator that W
-    // amplifies ⇒ the robust convection cycle. The AMG apply is fully serial, so K's inner
-    // products are deterministic (the moat is carried by the outer solver).
+    // amplifies ⇒ the robust convection cycle. K's inner products are serial fixed-order
+    // sums, so they are deterministic (the moat is carried by the outer solver).
     enum class Cycle : crd::u8 { V, W, F, K };
 
     // Coarsening strategy. SmoothedAggregation (Vaněk, default): strength → aggregates → smoothed
@@ -86,9 +90,10 @@ public:
         crd::u32 coarse_threshold = 50; // n ≤ this ⇒ dense LU coarsest
     };
 
-    SaAmg(const Csr& a, crd::memory::IAllocator* alloc, Options opts = {})
+    // `pick` holds the crd-jobs levers (detail/amg_arms.hpp); the default is serial.
+    SaAmg(const Csr& a, crd::memory::IAllocator* alloc, Options opts = {}, const detail::AmgPick& pick = {})
         : crd::hesap::LinearOp<T>(/*has_transpose=*/false, /*has_adjoint=*/false)
-        , m_alloc(alloc), m_opts(opts), m_levels(alloc), m_coarse_lu(alloc), m_n(a.rows())
+        , m_alloc(alloc), m_opts(opts), m_pick(pick), m_levels(alloc), m_coarse_lu(alloc), m_n(a.rows())
     {
         CRD_ASSERT_MSG(a.rows() == a.cols(), "SaAmg: matrix must be square");
         CRD_ASSERT_MSG(a.pattern().is_compressed(), "SaAmg: requires compressed CSR");
@@ -122,7 +127,6 @@ public:
     }
     [[nodiscard]] crd::u32 coarse_size() const noexcept { return m_coarse_n; }
 
-private:
     struct Level
     {
         Csr                       a;     // operator at this level
@@ -133,6 +137,12 @@ private:
         crd::u32                  n;
         explicit Level(crd::memory::IAllocator* al) : a(al), p(al), r(al), dinv(al), ilu(), n(0) {}
     };
+
+    // The hierarchy above the coarsest level (k < num_levels() - 1), and the coarsest level's dense LU.
+    [[nodiscard]] const Level& level(crd::u32 k) const noexcept { return m_levels[k]; }
+    [[nodiscard]] const LuT& coarse_lu() const noexcept { return m_coarse_lu; }
+
+private:
 
     [[nodiscard]] static R mag(T v)
     {
@@ -199,13 +209,13 @@ private:
                 }
                 if (m_opts.smooth_prolongator)
                 {
-                    const R rho   = estimate_drinv_a_radius<T>(a, level.dinv, m_alloc);
+                    const R rho   = estimate_drinv_a_radius<T>(a, level.dinv, m_alloc, m_pick);
                     const R omega = (rho > R(0)) ? R(static_cast<R>(4.0 / 3.0)) / rho : R(static_cast<R>(2.0 / 3.0));
-                    level.p = smoothed_prolongator<T>(a, tent, level.dinv, omega, m_alloc);
+                    level.p = smoothed_prolongator<T>(a, tent, level.dinv, omega, m_alloc, m_pick.spgemm);
                     // PETROV-GALERKIN restriction: smooth the tentative prolongator with Aᵀ (not A)
                     // then transpose. For symmetric A this is exactly Pᵀ; for NONSYMMETRIC A it
                     // adapts the restriction to the adjoint direction → a STABLE coarse operator.
-                    level.r = build_restriction(a, tent, level.dinv, m_alloc);
+                    level.r = build_restriction(a, tent, level.dinv, m_alloc, m_pick);
                 }
                 else
                 {
@@ -220,8 +230,8 @@ private:
                 level.ilu = std::make_unique<crd::hesap::preconditioners::Ilu0Preconditioner<T>>(level.a, m_alloc);
             }
             // Galerkin A_c = R A P
-            auto ap = crd::hesap::sparse::spgemm<T>(level.a, level.p, m_alloc);
-            a       = crd::hesap::sparse::spgemm<T>(level.r, ap, m_alloc);
+            auto ap = crd::hesap::sparse::spgemm_arm<T>(m_pick.spgemm, level.a, level.p, m_alloc);
+            a       = crd::hesap::sparse::spgemm_arm<T>(m_pick.spgemm, level.r, ap, m_alloc);
             m_levels.push_back(std::move(level));
         }
         // coarsest: dense LU
@@ -230,13 +240,13 @@ private:
 
     // Petrov-Galerkin restriction R = [ smoothed_prolongator(Aᵀ, T) ]ᵀ.
     // dinv(Aᵀ) = dinv(A) (same diagonal). For symmetric A, R = Pᵀ exactly.
-    [[nodiscard]] static Csr build_restriction(const Csr& a, const Csr& tent,
-                                               const crd::containers::Array<T>& dinv, crd::memory::IAllocator* alloc)
+    [[nodiscard]] static Csr build_restriction(const Csr& a, const Csr& tent, const crd::containers::Array<T>& dinv,
+                                               crd::memory::IAllocator* alloc, const detail::AmgPick& pick)
     {
         auto    at      = crd::hesap::sparse::transpose<T>(a, alloc);
-        const R rho_adj = estimate_drinv_a_radius<T>(at, dinv, alloc);
+        const R rho_adj = estimate_drinv_a_radius<T>(at, dinv, alloc, pick);
         const R w_adj   = (rho_adj > R(0)) ? R(static_cast<R>(4.0 / 3.0)) / rho_adj : R(static_cast<R>(2.0 / 3.0));
-        auto    p_adj   = smoothed_prolongator<T>(at, tent, dinv, w_adj, alloc);
+        auto    p_adj   = smoothed_prolongator<T>(at, tent, dinv, w_adj, alloc, pick.spgemm);
         return crd::hesap::sparse::transpose<T>(p_adj, alloc);
     }
 
@@ -329,23 +339,8 @@ private:
         return tb.compress();
     }
 
-    // y = A x  (CSR spmv).
-    static void spmv(const Csr& a, const T* x, T* y)
-    {
-        const crd::u32 n     = a.rows();
-        const auto*    outer = a.pattern().outer_ptr.data();
-        const auto*    inner = a.pattern().inner_idx.data();
-        const T*       vals  = a.values().values.data();
-        for (crd::u32 i = 0; i < n; ++i)
-        {
-            T s = T{};
-            for (crd::u32 q = outer[i]; q < outer[i + 1]; ++q)
-            {
-                s = s + vals[q] * x[inner[q]];
-            }
-            y[i] = s;
-        }
-    }
+    // y = A x through the pick's jobs.
+    void spmv(const Csr& a, const T* x, T* y) const { detail::csr_apply<T>(m_pick, a, x, y); }
 
     // Multigrid cycle: solve (approximately) A_lvl e = b into x (x preset). `cyc` selects the
     // coarse-correction schedule at this level (V/W/F/K); the recursion propagates it.
@@ -559,6 +554,7 @@ private:
 
     crd::memory::IAllocator* m_alloc;
     Options                  m_opts;
+    detail::AmgPick          m_pick;
     crd::containers::Array<Level> m_levels;
     LuT                      m_coarse_lu;
     crd::u32                 m_coarse_n   = 0;

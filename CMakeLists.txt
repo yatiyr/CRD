@@ -483,7 +483,8 @@ crd_module(engine/numerics/hesap-preconditioners engine/hesap-preconditioners
     DEPENDS containers core hesap hesap-dense hesap-iterative hesap-ordering hesap-sparse math memory)
 # v4k; smoothed-aggregation AMG (LinearOp; one-way, Krylov consumes it)
 crd_module(engine/numerics/hesap-amg engine/hesap-amg
-    DEPENDS containers core hesap hesap-dense hesap-preconditioners hesap-sparse math memory TESTS numerics/hesap-amg)
+    DEPENDS containers core hesap hesap-dense hesap-preconditioners hesap-sparse jobs math memory
+    TESTS numerics/hesap-amg)
 crd_module(engine/foundation/containers engine/containers DEPENDS core memory TESTS foundation/containers)
 crd_module(engine/foundation/toml engine/toml DEPENDS containers core TESTS foundation/toml)
 # RAF-1 (D-007 "RAF band"): canonical render-asset identity/namespaces/diagnostics/deps (deps: core/containers/memory)

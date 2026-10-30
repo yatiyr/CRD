@@ -3,9 +3,11 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
+#include <crd/hesap/amg/detail/amg_arms.hpp>
+#include <crd/hesap/amg/detail/csr_apply.hpp>
 #include <crd/hesap/dense/real_type.hpp>
 #include <crd/hesap/sparse/sparse_matrix.hpp>
-#include <crd/hesap/sparse/spgemm.hpp>
+#include <crd/hesap/sparse/spgemm_parallel.hpp>
 #include <crd/hesap/sparse/triplet_builder.hpp>
 #include <crd/memory/allocator.hpp>
 
@@ -79,11 +81,12 @@ tentative_prolongator_adaptive(const crd::containers::Array<crd::u32>& agg, crd:
 
 // Spectral radius of D⁻¹A by power iteration (deterministic seed, fixed iters):
 // used to set the Jacobi-smoothing weight ω = 4/(3·λmax) for the prolongator.
+// The product D⁻¹A x runs through the pick's csr_apply.
 template <typename T>
 [[nodiscard]] crd::hesap::dense::RealType<T>
 estimate_drinv_a_radius(const crd::hesap::sparse::SparseMatrix<T, SaCsr::Csr>& a,
                         const crd::containers::Array<T>& dinv,
-                        crd::memory::IAllocator* alloc, crd::u32 iters = 12)
+                        crd::memory::IAllocator* alloc, const detail::AmgPick& pick = {}, crd::u32 iters = 12)
 {
     using R = crd::hesap::dense::RealType<T>;
     // |v|² (real square or complex squared-modulus) — power-iteration norms work for complex A.
@@ -97,10 +100,7 @@ estimate_drinv_a_radius(const crd::hesap::sparse::SparseMatrix<T, SaCsr::Csr>& a
             return v * v;
         }
     };
-    const crd::u32 n     = a.rows();
-    const auto*    outer = a.pattern().outer_ptr.data();
-    const auto*    inner = a.pattern().inner_idx.data();
-    const T*       vals  = a.values().values.data();
+    const crd::u32 n = a.rows();
     crd::containers::Array<T> x(alloc), y(alloc);
     x.resize(n);
     y.resize(n);
@@ -125,16 +125,7 @@ estimate_drinv_a_radius(const crd::hesap::sparse::SparseMatrix<T, SaCsr::Csr>& a
         {
             x[i] = x[i] / T(nx);
         }
-        // y = D⁻¹ A x
-        for (crd::u32 i = 0; i < n; ++i)
-        {
-            T s = T{};
-            for (crd::u32 q = outer[i]; q < outer[i + 1]; ++q)
-            {
-                s = s + vals[q] * x[inner[q]];
-            }
-            y[i] = s * dinv[i];
-        }
+        detail::csr_apply<T>(pick, a, x.data(), y.data(), dinv.data()); // y = D⁻¹ A x
         R ny = R(0);
         for (crd::u32 i = 0; i < n; ++i)
         {
@@ -151,18 +142,19 @@ estimate_drinv_a_radius(const crd::hesap::sparse::SparseMatrix<T, SaCsr::Csr>& a
 
 // Smoothed prolongator  P = (I − ω D⁻¹ A) T = T − ω D⁻¹ (A T). This single
 // Jacobi smoothing of the tentative T is what gives SA-AMG its mesh-independent
-// convergence (Vaněk 1996). ω = 4/(3·λmax(D⁻¹A)).
+// convergence (Vaněk 1996). ω = 4/(3·λmax(D⁻¹A)). A T runs through the pick's spgemm_arm.
 template <typename T>
 [[nodiscard]] crd::hesap::sparse::SparseMatrix<T, SaCsr::Csr>
 smoothed_prolongator(const crd::hesap::sparse::SparseMatrix<T, SaCsr::Csr>& a,
                      const crd::hesap::sparse::SparseMatrix<T, SaCsr::Csr>& tent,
                      const crd::containers::Array<T>& dinv,
-                     crd::hesap::dense::RealType<T> omega, crd::memory::IAllocator* alloc)
+                     crd::hesap::dense::RealType<T> omega, crd::memory::IAllocator* alloc,
+                     const crd::hesap::sparse::detail::SpgemmPick& pick = {})
 {
     const crd::u32 n  = a.rows();
     const crd::u32 nc = tent.cols();
     // A T (n × n_agg).
-    auto at = crd::hesap::sparse::spgemm<T>(a, tent, alloc);
+    auto at = crd::hesap::sparse::spgemm_arm<T>(pick, a, tent, alloc);
     const auto* to = tent.pattern().outer_ptr.data();
     const auto* ti = tent.pattern().inner_idx.data();
     const T*    tv = tent.values().values.data();

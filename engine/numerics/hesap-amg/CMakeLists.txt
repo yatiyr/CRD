@@ -26,6 +26,7 @@ target_link_libraries(crd-hesap-amg
         crd-hesap-dense   # dense LU coarsest solve + Vector
         crd-hesap-sparse  # SparseMatrix + spgemm (Galerkin) + transpose
         crd-hesap-preconditioners  # Ilu0 smoother (convection-robust); one-way dep
+        crd-jobs          # the products' jobs levers (detail/amg_arms.hpp)
     PRIVATE
         crd-warnings
 )
