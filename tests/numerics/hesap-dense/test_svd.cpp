@@ -1633,7 +1633,7 @@ template <typename T> void check_non_finite_svd(crd::memory::IAllocator* alloc)
 {
     using R = crd::hesap::dense::RealType<T>;
     // Below and above the divide-and-conquer crossover (n 64), tall and wide; a NaN, +Inf or -Inf entry.
-    for (const auto mn : {std::pair<crd::usize, crd::usize>{9, 6}, {6, 9}, {70, 66}, {66, 70}})
+    for (const auto& mn : {std::pair<crd::usize, crd::usize>{9, 6}, {6, 9}, {70, 66}, {66, 70}})
     {
         for (const R bad : {std::numeric_limits<R>::quiet_NaN(), std::numeric_limits<R>::infinity(),
                             -std::numeric_limits<R>::infinity()})
