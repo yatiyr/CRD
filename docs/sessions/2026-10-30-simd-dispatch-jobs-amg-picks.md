@@ -74,6 +74,13 @@ win-debug builds of crd-hesap-sparse-tests, crd-hesap-amg-tests and the bench; t
 binary pass; clang-format on the added lines; Allman braces; the ctest guards (include budget with the two new
 entries, source routes); check-repository.
 
+## Follow-up carried in: svdvals of a non-finite matrix
+
+The LDLT note's follow-up. `svdvals` had no `svd` guard: with a NaN or infinite entry the complex driver asserted its
+bidiagonal iteration converged, and the real dqds path returned values that were not NaN (the extended test failed
+both before the fix). It now returns min(m, n) quiet NaN, sharing `svd`'s helper; tested in the `svd` case's
+shapes, entries and four types.
+
 ## Left
 
 hesap-iterative, -autodiff and -sched.
