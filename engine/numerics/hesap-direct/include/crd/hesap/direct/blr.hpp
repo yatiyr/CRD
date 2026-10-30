@@ -3,6 +3,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/hesap/dense/matrix.hpp>
 #include <crd/hesap/dense/real_type.hpp>
+#include <crd/hesap/direct/detail/direct_picks.hpp>
 #include <crd/memory/allocator.hpp>
 
 // =======================================================================
@@ -116,8 +117,8 @@ namespace detail
 template <typename T>
 void low_rank_recompress(crd::memory::IAllocator* alloc, const crd::hesap::dense::Matrix<T>& uc,
                          const crd::hesap::dense::Matrix<T>& vc, crd::hesap::dense::RealType<T> tol,
-                         crd::usize max_rank, crd::hesap::dense::Matrix<T>& u_out,
-                         crd::hesap::dense::Matrix<T>& v_out, crd::usize& rank_out);
+                         crd::usize max_rank, crd::hesap::dense::Matrix<T>& u_out, crd::hesap::dense::Matrix<T>& v_out,
+                         crd::usize& rank_out, const FrontJobsPick& jobs = {});
 } // namespace detail
 
 // factor_front_cholesky_dense — partial DENSE Cholesky of a symmetric front (the
@@ -125,10 +126,14 @@ void low_rank_recompress(crd::memory::IAllocator* alloc, const crd::hesap::dense
 // baseline). In place on `front` (m×m, RowMajor, lower): factor the leading `npiv`
 // pivots = dpotrf(A11) + dtrsm(L21) + dsyrk/gemm(A22 −= L21·L21ᵀ) — three BLAS-3
 // kernels (≈50 GF/s) instead of the naive scalar loops. No compression (no
-// interp_decomp). Returns false on a non-positive pivot. Real f32/f64.
+// interp_decomp). Returns false on a non-positive pivot. Real f32/f64. The trsm and
+// Schur gemms split across `jobs` from its m n k (by default never) and the dpotrf
+// takes its jobs at Cholesky's own cuts (by default the pool's); every setting gives
+// the same bits.
 template <typename T>
 [[nodiscard]] bool factor_front_cholesky_dense(crd::memory::IAllocator* alloc, crd::hesap::dense::Matrix<T>& front,
-                                               crd::usize npiv);
+                                               crd::usize npiv,
+                                               const detail::FrontJobsPick& jobs = {.gemm_min_mnk = ~crd::u64{0}});
 
 // factor_front_cholesky_blr — partial BLR Cholesky of a dense symmetric FRONT
 // (v5e-3d, the multifrontal driver's core kernel). In place on `front` (m×m,
@@ -141,10 +146,13 @@ template <typename T>
 // multifrontal driver's extend-add + L-extraction are unchanged. The block grid is
 // aligned so `npiv` is a hard boundary. Returns false on a non-positive pivot.
 // Real f32/f64. The flop-saving win lives here for large fronts (gate: 2.33× at 4096).
+// Its gemms split across `jobs` from its m n k (the default: gemm_parallel_auto's
+// cut on the pool), every setting giving the same bits; the compression's QR, SVD and
+// Cholesky take the pool's jobs at their own cuts.
 template <typename T>
 [[nodiscard]] bool factor_front_cholesky_blr(crd::memory::IAllocator* alloc, crd::hesap::dense::Matrix<T>& front,
-                                             crd::usize npiv, crd::usize block_size,
-                                             crd::hesap::dense::RealType<T> tol);
+                                             crd::usize npiv, crd::usize block_size, crd::hesap::dense::RealType<T> tol,
+                                             const detail::FrontJobsPick& jobs = {});
 
 // blr_cholesky_factor_lr — BLR-arithmetic Cholesky (v5e-3c, the FLOP-SAVING FSCU).
 // Unlike blr_cholesky_factor (dense factor, compress-for-memory), this factors the

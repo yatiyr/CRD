@@ -10,6 +10,8 @@
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
+#include "stencil_3d.hpp"
+
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -51,49 +53,11 @@ sp::SparseMatrix<double, sp::SparseFormat::Csc> laplacian_2d(crd::u32 k, crd::me
     return sp::to_csc<double>(tb.compress(), alloc);
 }
 
-// 3D 7-point Laplacian on a k×k×k grid (SPD: diagonal 6, 6 neighbors −1) — BIG dense
+// 3D 7-point Laplacian on a k×k×k grid (SPD: diagonal 6, 6 neighbors −1; stencil_3d.hpp) — BIG dense
 // fronts (separator ~n^2/3), exercises the BLR front-factor path for real.
 sp::SparseMatrix<double, sp::SparseFormat::Csc> laplacian_3d(crd::u32 k, crd::memory::IAllocator* alloc)
 {
-    const crd::u32 n = k * k * k;
-    sp::TripletBuilder<double> tb(alloc, n, n);
-    const auto idx = [k](crd::u32 x, crd::u32 y, crd::u32 z) { return (z * k + y) * k + x; };
-    for (crd::u32 z = 0; z < k; ++z)
-    {
-        for (crd::u32 y = 0; y < k; ++y)
-        {
-            for (crd::u32 x = 0; x < k; ++x)
-            {
-                const crd::u32 i = idx(x, y, z);
-                tb.add(i, i, 6.0);
-                if (x > 0)
-                {
-                    tb.add(i, idx(x - 1, y, z), -1.0);
-                }
-                if (x + 1 < k)
-                {
-                    tb.add(i, idx(x + 1, y, z), -1.0);
-                }
-                if (y > 0)
-                {
-                    tb.add(i, idx(x, y - 1, z), -1.0);
-                }
-                if (y + 1 < k)
-                {
-                    tb.add(i, idx(x, y + 1, z), -1.0);
-                }
-                if (z > 0)
-                {
-                    tb.add(i, idx(x, y, z - 1), -1.0);
-                }
-                if (z + 1 < k)
-                {
-                    tb.add(i, idx(x, y, z + 1), -1.0);
-                }
-            }
-        }
-    }
-    return sp::to_csc<double>(tb.compress(), alloc);
+    return dir::test::stencil_3d(k, 6.0, alloc);
 }
 
 // Relative solution error ‖x − x_true‖/‖x_true‖ of a solved A·x = A·x_true.
@@ -176,7 +140,7 @@ TEST_CASE("v5e-3d MultifrontalCholeskyBlr: 3D Laplacian BLR front path", "[hesap
 // The determinism MOAT: tree-parallel factor + solve must be BIT-IDENTICAL across worker
 // counts (the differentiator MUMPS/CHOLMOD lack). The factor is a pure function of the
 // pattern; the per-front BLR/dense kernels + gemm fixed-reduction + fixed child order deliver it.
-TEST_CASE("v5e-3d MultifrontalCholeskyBlr: tree-parallel factor+solve bit-identical {1,2,4,8}",
+TEST_CASE("v5e-3d MultifrontalCholeskyBlr: factor+solve bit-identical on 1 to 32 pool workers",
           "[hesap][mfblr][real][moat]")
 {
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(256U * 1024U * 1024U));
@@ -191,15 +155,15 @@ TEST_CASE("v5e-3d MultifrontalCholeskyBlr: tree-parallel factor+solve bit-identi
     crd::containers::Array<double> ref(&alloc);
     crd::u64 ref_nnz = 0;
     bool have_ref = false;
-    for (crd::u32 nw : {1U, 2U, 4U, 8U})
+    for (crd::u32 nw : {1U, 2U, 4U, 8U, 16U, 32U})
     {
         crd::jobs::Config cfg;
         cfg.num_threads = nw;
-        crd::jobs::init(cfg);  // the within-front gemm uses `nw` workers (node-parallel)
+        crd::jobs::init(cfg);  // the within-front jobs take the `nw`-worker pool
         dir::MultifrontalCholeskyBlr<double> chol(&alloc);
-        // DENSE fronts (blr_min huge): the {1,2,4,8} moat exercises the WITHIN-FRONT gemm
-        // (gemm_parallel_auto on the big ~256 near-root fronts) — the SAME deterministic kernel on dense or
-        // BLR fronts. The dense path keeps this moat FAST (~0.2 s/factor) vs the BLR path's ~138 s at n=4096
+        // DENSE fronts (blr_min huge): the moat exercises the within-front dpotrf on the pool (Cholesky's own
+        // job cuts on the big ~256 near-root fronts); the forced arms of every walk and within-front lever are
+        // blr_arms'. The dense path keeps this moat FAST (~0.2 s/factor) vs the BLR path's ~138 s at n=4096
         // (the documented slow-BLR finding — a 4x-factor moat at 138 s each made the default suite ~550 s).
         // The BLR front path's own determinism is covered by the [blr] substrate tests + the 2D BLR test.
         REQUIRE(chol.factorize(a, 128, 1e-9, 100000U));

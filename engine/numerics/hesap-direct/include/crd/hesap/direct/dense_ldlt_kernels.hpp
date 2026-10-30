@@ -1,11 +1,14 @@
 #pragma once
 
 #include <crd/containers/array.hpp>
+#include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp> // crd::hesap::conj / abs / real (the complex variants, v5d-f)
 #include <crd/hesap/dense/blas3.hpp> // dense::gemm + MatrixView (the v5d-perf blocked-BLAS-3 front factor)
 #include <crd/hesap/dense/dense_dispatch.hpp>
 #include <crd/hesap/dense/real_type.hpp>
+#include <crd/hesap/direct/detail/direct_picks.hpp>
+#include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocator.hpp>
 
 #include <type_traits>
@@ -418,18 +421,32 @@ template <typename T, bool Hermitian = false>
 // stability tests (colmax/rowmax) are EXACT. If the BK pivot candidate lies BEYOND the panel (imax ≥ p1) once
 // the panel has progress (k>p0), its row is NOT yet updated ⇒ we FLUSH the panel's BLAS-3 trailing (making all
 // of [k,m) fully updated) and RESTART the panel at k (where the candidate is now valid). A 2×2 that would
-// straddle the panel end is likewise flushed + restarted. MOAT: deterministic (one worker/front, serial gemm,
-// fixed nb) ⇒ bit-identical across worker counts. Real-only (the crush regime); complex keeps the unblocked
-// path. `scratch` backs the W panel + the gemm packing. (kLdltBlockBail retained for ABI; never returned now.)
+// straddle the panel end is likewise flushed + restarted, so nb is at least 2 (a 2×2 at a panel start must fit).
+// MOAT: deterministic (fixed nb; the flush's gemms give gemm's bits whatever their column tiles `flush_tile` and
+// jobs) ⇒ bit-identical across worker counts. `within` (nullptr: serial) splits a flush gemm of at least its
+// gemm_min_mnk across its workers: only a front factored on the main thread passes it. Real-only (the crush
+// regime); complex keeps the unblocked path. `scratch` backs the W panel + the gemm packing. (kLdltBlockBail
+// retained for ABI; never returned now.)
 inline constexpr crd::u32 kLdltBlockBail = 0xFFFFFFFEU;
 
 template <typename T>
 [[nodiscard]] inline crd::u32 factor_front_ldlt_blocked(T* d, crd::u32 ld, crd::u32 m, crd::u32 npiv,
                                                         crd::u8* block_kinds, crd::u32* piv, crd::u32 nb,
                                                         crd::memory::IAllocator* scratch,
-                                                        double pivot_alpha = kBunchKaufmanAlpha)
+                                                        double pivot_alpha = kBunchKaufmanAlpha,
+                                                        crd::u32 flush_tile = 192,
+                                                        const detail::FrontJobsPick* within = nullptr)
 {
     static_assert(!dense::is_complex_v<T>, "factor_front_ldlt_blocked is real-only (the crush regime)");
+    CRD_ASSERT_MSG(nb >= 2, "factor_front_ldlt_blocked: the panel must hold a 2x2 pivot");
+    CRD_ASSERT_MSG(flush_tile >= 1, "factor_front_ldlt_blocked: the flush tile must be at least one column");
+    crd::u32 gemm_jobs = 1;
+    crd::u64 gemm_min_mnk = 0;
+    if (within != nullptr)
+    {
+        gemm_jobs = within->workers != 0 ? within->workers : crd::jobs::num_workers();
+        gemm_min_mnk = within->gemm_min_mnk;
+    }
     namespace dl = crd::hesap::dense;
     const crd::usize ldz = static_cast<crd::usize>(ld);
     auto el = [&](crd::u32 i, crd::u32 j) -> T& { return d[static_cast<crd::usize>(j) * ldz + i]; };
@@ -478,16 +495,25 @@ template <typename T>
                 jj += 2;
             }
         }
-        constexpr crd::u32 trail_tile = 192;
-        for (crd::u32 cj0 = 0; cj0 < tr; cj0 += trail_tile)
+        for (crd::u32 cj0 = 0; cj0 < tr; cj0 += flush_tile)
         {
-            const crd::u32 cj1 = (cj0 + trail_tile < tr) ? cj0 + trail_tile : tr;
+            const crd::u32 cj1 = (tr - cj0 > flush_tile) ? cj0 + flush_tile : tr;
             const crd::u32 rrows = tr - cj0;
             const crd::u32 ccols = cj1 - cj0;
             const dl::MatrixView<const T, dl::Layout::ColMajor> l21(&el(b + cj0, a), rrows, bw, ld);
             const dl::MatrixView<const T, dl::Layout::ColMajor> wv(&w[cj0], ccols, bw, tr);
             dl::MatrixView<T, dl::Layout::ColMajor> c22(&el(b + cj0, b + cj0), rrows, ccols, ld);
-            dl::gemm<T, dl::Layout::ColMajor>(T{-1}, l21, wv, T{1}, c22, dl::Trans::None, dl::Trans::Transpose, scratch);
+            const crd::u64 mnk = static_cast<crd::u64>(rrows) * ccols * bw;
+            if (gemm_jobs > 1 && mnk >= gemm_min_mnk)
+            {
+                dl::gemm_parallel<T, dl::Layout::ColMajor>(gemm_jobs, T{-1}, l21, wv, T{1}, c22, dl::Trans::None,
+                                                           dl::Trans::Transpose, scratch);
+            }
+            else
+            {
+                dl::gemm<T, dl::Layout::ColMajor>(T{-1}, l21, wv, T{1}, c22, dl::Trans::None, dl::Trans::Transpose,
+                                                  scratch);
+            }
         }
     };
 

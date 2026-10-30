@@ -1,5 +1,6 @@
 #pragma once
 
+#include <crd/hesap/direct/detail/direct_picks.hpp>
 #include <crd/hesap/direct/multifrontal_lu.hpp> // MultifrontalSymbolic + build_symmetric_multifrontal_symbolic
 #include <crd/hesap/sparse/sparse_pattern.hpp>
 #include <crd/memory/allocator.hpp>
@@ -116,7 +117,16 @@ public:
     // true ⇒ A = P·L·D·Lᴴ·Pᵀ (HERMITIAN-indefinite, conjugated, D real-diagonal). The caller asserts A is of
     // the matching kind (symmetric vs Hermitian) — only the lower triangle is read either way.
     void factorize(const sparse::SparseMatrix<T, sparse::SparseFormat::Csc>& a, crd::u32 num_workers = 1,
-                   bool hermitian = false);
+                   bool hermitian = false)
+    {
+        factorize_arm(detail::MultifrontalLdltPick{}, a, num_workers, hermitian);
+    }
+
+    // factorize on pick's levers (detail/direct_picks.hpp; the jobs board and the arm tests). More than one job
+    // needs crd::jobs initialised.
+    void factorize_arm(const detail::MultifrontalLdltPick& pick,
+                       const sparse::SparseMatrix<T, sparse::SparseFormat::Csc>& a, crd::u32 num_workers = 1,
+                       bool hermitian = false);
 
     // Bunch-Kaufman pivot threshold (v5d-h indefinite-perf lever). Default = textbook (1+√17)/8 ≈ 0.64 (tightest
     // growth bound, most delays). A SMALLER value (MA57/MUMPS-style threshold pivoting, e.g. 0.1 or 0.01)

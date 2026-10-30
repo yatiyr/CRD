@@ -3,6 +3,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/hesap/dense/real_type.hpp>
+#include <crd/hesap/direct/detail/direct_picks.hpp>
 #include <crd/hesap/sparse/sparse_matrix.hpp>
 #include <crd/memory/allocator.hpp>
 
@@ -35,11 +36,25 @@ public:
 
     // factorize A = L·Lᵀ (A symmetric positive-definite, CSC, AS GIVEN). Large fronts
     // (extent ≥ `blr_min`) use BLR arithmetic at threshold `tol`; small fronts dense.
-    // Returns false (and sets info != 0) on a non-positive pivot.
+    // Returns false (and sets info != 0, the first failing front + 1) on a non-positive
+    // pivot. `num_workers` > 1 lets the pick's level walk run front-parallel; the
+    // default pick walks serially with every front's gemms on the pool. The factor is
+    // bit-identical across every pick and worker count.
     [[nodiscard]] bool factorize(const sparse::SparseMatrix<T, sparse::SparseFormat::Csc>& a,
                                  crd::usize block_size = 256,
                                  crd::hesap::dense::RealType<T> tol = static_cast<crd::hesap::dense::RealType<T>>(1e-6),
-                                 crd::u32 blr_min = 512, crd::u32 num_workers = 1);
+                                 crd::u32 blr_min = 512, crd::u32 num_workers = 1)
+    {
+        return factorize_arm(detail::MultifrontalBlrPick{}, a, block_size, tol, blr_min, num_workers);
+    }
+
+    // factorize on pick's levers (detail/direct_picks.hpp; the jobs board and the arm tests). More than one job
+    // needs crd::jobs initialised.
+    [[nodiscard]] bool
+    factorize_arm(const detail::MultifrontalBlrPick& pick, const sparse::SparseMatrix<T, sparse::SparseFormat::Csc>& a,
+                  crd::usize block_size = 256,
+                  crd::hesap::dense::RealType<T> tol = static_cast<crd::hesap::dense::RealType<T>>(1e-6),
+                  crd::u32 blr_min = 512, crd::u32 num_workers = 1);
 
     // Solve A·x = b (single RHS, in place: `x` holds b on entry, solution on exit)
     // via L·Lᵀ + `max_ir` iterative-refinement steps. Returns false on an unfactored
@@ -49,6 +64,8 @@ public:
     [[nodiscard]] crd::u32 info() const noexcept { return m_info; }
     [[nodiscard]] crd::u32 n() const noexcept { return m_n; }
     [[nodiscard]] crd::u64 nnz() const noexcept { return m_lp.empty() ? 0 : m_lp[m_n]; }
+    // L's values in CSC order (column c holds m_lp[c] to m_lp[c + 1]; the arm tests compare them bit for bit).
+    [[nodiscard]] crd::containers::ConstSpan<T> l_values() const noexcept { return {m_lx.data(), m_lx.size()}; }
 
 private:
     using RT = crd::hesap::dense::RealType<T>;

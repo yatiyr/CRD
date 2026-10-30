@@ -1,5 +1,6 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/environment.hpp>
+#include <crd/hesap/direct/detail/front_levels.hpp>
 #include <crd/hesap/direct/lu_solve.hpp>
 #include <crd/hesap/direct/multifrontal_lu.hpp>
 #include <crd/hesap/ordering/symbolic.hpp>
@@ -734,44 +735,10 @@ double MultifrontalLU<T>::factor_attempt(const detail::MultifrontalLuPick& pick,
     }
     else
     {
-        // Assembly-tree levels: level[f] = 1 + max(level[child]). Children g < f (ascending front order is a
-        // postorder) ⇒ a single ascending pass computes levels. Same-level fronts are mutually independent.
-        crd::containers::Array<crd::u32> level(m_alloc);
-        level.resize(nf);
-        crd::u32 nlevels = 0;
-        for (crd::u32 f = 0; f < nf; ++f)
-        {
-            crd::u32 lev = 0;
-            for (crd::u32 cc = chld_ptr[f]; cc < chld_ptr[f + 1]; ++cc)
-            {
-                const crd::u32 lk = level[chld_idx[cc]] + 1;
-                lev = lk > lev ? lk : lev;
-            }
-            level[f] = lev;
-            nlevels = (lev + 1 > nlevels) ? lev + 1 : nlevels;
-        }
-        crd::containers::Array<crd::u32> lvl_ptr(m_alloc);
-        lvl_ptr.resize(static_cast<crd::usize>(nlevels) + 1); // value-init 0
-        for (crd::u32 f = 0; f < nf; ++f)
-        {
-            ++lvl_ptr[level[f] + 1];
-        }
-        for (crd::u32 l = 0; l < nlevels; ++l)
-        {
-            lvl_ptr[l + 1] += lvl_ptr[l];
-        }
-        crd::containers::Array<crd::u32> lvl_list(m_alloc);
-        lvl_list.resize(nf);
-        crd::containers::Array<crd::u32> wp(m_alloc);
-        wp.resize(nlevels);
-        for (crd::u32 l = 0; l < nlevels; ++l)
-        {
-            wp[l] = lvl_ptr[l];
-        }
-        for (crd::u32 f = 0; f < nf; ++f)
-        {
-            lvl_list[wp[level[f]]++] = f; // ascending f within a level ⇒ worker-order-independent (the moat)
-        }
+        const detail::FrontLevels levels = detail::front_levels(m_alloc, nf, chld_ptr.data(), chld_idx.data(), nullptr);
+        const crd::u32 nlevels = levels.count();
+        const crd::u32* const lvl_ptr = levels.ptr.data();
+        const crd::u32* const lvl_list = levels.list.data();
         // HYBRID parallelism (the Amdahl fix). A level with >= front_par_thresh (≈ sw/2, measured) fronts has
         // enough independent work to SATURATE front-parallel (parallel_for over fronts, each factored serially —
         // all workers busy). A narrower level (1–3 big near-root separators) cannot saturate that way, so its

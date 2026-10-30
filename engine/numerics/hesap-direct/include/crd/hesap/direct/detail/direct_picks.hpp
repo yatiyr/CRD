@@ -57,4 +57,49 @@ struct MultifrontalLuPick
     DenseLuPick front = {};            // the fronts' factor_front
 };
 
+// A front's within-front jobs: its gemms of at least gemm_min_mnk m n k split across the jobs, which give gemm's bits.
+struct FrontJobsPick
+{
+    crd::u64 gemm_min_mnk = 256ULL * 1024ULL; // scheduling
+    crd::u32 workers = 0;                     // scheduling: the jobs; 0 is crd::jobs::num_workers()
+};
+
+// The level walks of MultifrontalLDLT, MultifrontalQR and MultifrontalCholeskyBlr. A level of at least level_min
+// fronts runs front-parallel, each front on one job; a narrower level runs front by front on the main thread, where a
+// front takes `front`'s jobs. A front-parallel level's fronts stay on their job, so no setting nests a parallel_for.
+struct FrontWalkPick
+{
+    crd::u32 level_min = 1;   // scheduling: 1 runs every level front-parallel
+    FrontJobsPick front = {}; // a main-thread front's
+};
+
+// MultifrontalLDLT's factorize_arm; the walk's job count stays factorize's parameter. The blocked Bunch-Kaufman is
+// real-only: complex fronts take the unblocked kernel at every setting.
+struct MultifrontalLdltPick
+{
+    crd::u32 block_min = 128;   // blocking: a real front with this many fully-summed columns takes the blocked kernel
+    crd::u32 block_panel = 128; // blocking: its panel width, at least 2 (a 2 x 2 pivot fits in one panel)
+    crd::u32 flush_tile = 192;  // scheduling: its trailing flush runs as gemms of this many lower columns
+    FrontWalkPick walk = {};    // a main-thread front's flush gemms
+};
+
+// MultifrontalQR's factorize_arm; the walk's job count stays factorize's parameter. The compact-WY path is real-only.
+struct MultifrontalQrPick
+{
+    crd::u32 panel = 48;     // blocking: the compact-WY panel width
+    crd::u32 block_min = 64; // blocking: a real front with this many rows takes the compact-WY path
+    FrontWalkPick walk = {}; // a main-thread front's larfb gemms
+};
+
+// MultifrontalCholeskyBlr's factorize_arm; the walk's job count stays factorize's parameter. Unlike LDLT's and QR's,
+// a main-thread front takes its jobs on the serial walk too. A level runs front-parallel only when every front of it
+// is dense: a BLR front's compression reaches hesap-dense's own jobs.
+struct MultifrontalBlrPick
+{
+    FrontWalkPick walk = {.level_min = ~crd::u32{0}}; // a BLR front's gemms; by default the serial walk
+    crd::u64 dense_gemm_min_mnk = ~crd::u64{0}; // scheduling: a main-thread dense front's trsm and Schur gemms split
+                                                // from this m n k on walk.front's jobs (its diagonal Cholesky
+                                                // takes them at Cholesky's own cuts)
+};
+
 } // namespace crd::hesap::direct::detail

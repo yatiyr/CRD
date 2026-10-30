@@ -978,7 +978,7 @@ TEST_CASE("v5c-1d blocked-WY: dense tall least_squares recovers x_true", "[hesap
 
 // ---------------------------------------------------------------------------
 // v5c tree-parallel — the DETERMINISM MOAT: R and the Householder vectors (hence
-// the least-squares solution) are BIT-IDENTICAL across worker counts {1,2,4,8}.
+// the least-squares solution) are BIT-IDENTICAL across worker counts 1 to 32.
 // No sparse-QR library (SPQR/Eigen) carries cross-thread bit-exact factors. Uses a
 // BLOCK-DIAGONAL matrix (K independent banded blocks ⇒ a level with K mutually
 // independent fronts ⇒ the per-worker scratch isolation is genuinely exercised by
@@ -1079,10 +1079,10 @@ template <typename T> void run_qr_parallel_moat(crd::memory::IAllocator* alloc)
 
     const auto& rx1 = qr1.rx();
     const auto& rj1 = qr1.rj();
-    // {1,2,4,8,16} workers (v5c-close moat). num_workers is the parallel_for hint; the per-worker scratch
-    // is pool-sized, so 16 over-requests on a smaller pool (parallel_for caps at the front count) — this
-    // proves WORKER-COUNT INVARIANCE of R + the solution, not 16-way concurrency.
-    for (crd::u32 nw : {2U, 4U, 8U, 16U})
+    // 1 to 32 workers (v5c-close moat). num_workers is the parallel_for hint; the per-worker scratch
+    // is pool-sized, so 32 over-requests on a smaller pool (parallel_for caps at the front count) — this
+    // proves WORKER-COUNT INVARIANCE of R + the solution, not 32-way concurrency.
+    for (crd::u32 nw : {2U, 4U, 8U, 16U, 32U})
     {
         auto qrp = dir::factor_multifrontal_qr<T>(a, {vals.data(), vals.size()}, alloc, dir::kQrFrontRelax, nw);
         REQUIRE(qrp.info() == 0);
@@ -1109,7 +1109,7 @@ template <typename T> void run_qr_parallel_moat(crd::memory::IAllocator* alloc)
 }
 } // namespace
 
-TEST_CASE("v5c tree-parallel QR: factor + solve bit-identical across {1,2,4,8} workers",
+TEST_CASE("v5c tree-parallel QR: factor + solve bit-identical across 1 to 32 workers",
           "[hesap][direct][v5c][v5c-1g][qr]")
 {
     crd::jobs::init();
@@ -1117,7 +1117,7 @@ TEST_CASE("v5c tree-parallel QR: factor + solve bit-identical across {1,2,4,8} w
         crd::memory::TlsfAllocator alloc(1U << 25);
         run_qr_parallel_moat<crd::f64>(&alloc); // f64
         run_qr_parallel_moat<crd::f32>(&alloc); // f32 — float reassociation is where worker-count drift shows first
-        run_qr_parallel_moat<crd::hesap::Complex64>(&alloc); // v5c-2a complex moat (Qᴴ path, {1,2,4,8} bit-identical)
+        run_qr_parallel_moat<crd::hesap::Complex64>(&alloc); // v5c-2a complex moat (Qᴴ path, 1 to 32 bit-identical)
         run_qr_parallel_moat<crd::hesap::Complex32>(&alloc);
     }
     crd::jobs::shutdown();

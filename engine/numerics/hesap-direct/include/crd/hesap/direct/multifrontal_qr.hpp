@@ -3,6 +3,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
+#include <crd/hesap/direct/detail/direct_picks.hpp>
 #include <crd/hesap/direct/factorization.hpp>
 #include <crd/hesap/direct/supernodal_cholesky.hpp>
 #include <crd/hesap/sparse/sparse_pattern.hpp>
@@ -128,7 +129,15 @@ public:
     // BIT-IDENTICAL across worker counts (the determinism moat — R + Householder vectors are a pure
     // function of the pattern, independent of how the front tree is scheduled).
     void factorize(const sparse::SparsePattern& pattern, crd::containers::ConstSpan<T> values,
-                   crd::u32 nrelax = kQrFrontRelax, crd::u32 num_workers = 0);
+                   crd::u32 nrelax = kQrFrontRelax, crd::u32 num_workers = 0)
+    {
+        factorize_arm(detail::MultifrontalQrPick{}, pattern, values, nrelax, num_workers);
+    }
+
+    // factorize on pick's levers (detail/direct_picks.hpp; the jobs board and the arm tests). More than one job
+    // needs crd::jobs initialised.
+    void factorize_arm(const detail::MultifrontalQrPick& pick, const sparse::SparsePattern& pattern,
+                       crd::containers::ConstSpan<T> values, crd::u32 nrelax = kQrFrontRelax, crd::u32 num_workers = 0);
 
     // Square solve A·X = B in place (asserts m == n): X = R⁻¹·(Qᵀ·B). v5c-1c.
     [[nodiscard]] bool solve(crd::containers::Span<T> rhs, crd::usize nrhs) const override;

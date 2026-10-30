@@ -2,6 +2,7 @@ add_executable(crd-hesap-direct-tests
     test_blr.cpp
     test_cli.cpp
     test_direct_kernels.cpp
+    test_front_walk_arms.cpp
     test_frontal.cpp
     test_gmres_refine.cpp
     test_hss.cpp

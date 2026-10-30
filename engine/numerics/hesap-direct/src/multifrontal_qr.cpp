@@ -4,6 +4,7 @@
 #include <crd/hesap/dense/detail/block_reflector.hpp>
 #include <crd/hesap/dense/detail/householder.hpp>
 #include <crd/hesap/dense/real_type.hpp>
+#include <crd/hesap/direct/detail/front_levels.hpp>
 #include <crd/hesap/direct/multifrontal_qr.hpp>
 #include <crd/hesap/ordering/symbolic.hpp>
 #include <crd/jobs/jobs.hpp>
@@ -16,12 +17,6 @@ namespace crd::hesap::direct
 {
 namespace
 {
-// Blocked-WY front factor (v5c-1d): panel width + the front-size gate. Large fronts (the dense
-// near-root ones that stall the unblocked Householder at O(n³)) take the BLAS-3 compact-WY path;
-// small fronts keep the proven unblocked path (no gemm-call overhead ⇒ no regression on the wins).
-constexpr crd::u32 kQrPanelW = 48;   // compact-WY panel width (nb)
-constexpr crd::u32 kQrBlockMin = 64; // block only fronts with ≥ this many rows
-
 // Conjugate that is the IDENTITY for real T and crd::hesap::conj for Complex<R> — the v5c-2a real↔complex
 // bridge (mirrors supernodal_cholesky's chol_conj). Lets the SAME reflector body compute A·P=Q·R (real,
 // Qᵀ-apply) and A·P=Q·R with the Hermitian transpose (complex, Qᴴ-apply): the dot uses qr_conj(v)=vᴴ and
@@ -278,9 +273,10 @@ MultifrontalQR<T>::MultifrontalQR(crd::memory::IAllocator* alloc) noexcept
 }
 
 template <typename T>
-void MultifrontalQR<T>::factorize(const sparse::SparsePattern& pat, crd::containers::ConstSpan<T> values,
-                                  crd::u32 nrelax, crd::u32 num_workers)
+void MultifrontalQR<T>::factorize_arm(const detail::MultifrontalQrPick& pick, const sparse::SparsePattern& pat,
+                                      crd::containers::ConstSpan<T> values, crd::u32 nrelax, crd::u32 num_workers)
 {
+    CRD_ASSERT_MSG(pick.panel >= 1, "MultifrontalQR: the compact-WY panel must be at least one column wide");
     CRD_ASSERT_MSG(pat.is_compressed(), "MultifrontalQR requires a compressed CSC pattern");
     CRD_ASSERT_MSG(pat.format == sparse::SparseFormat::Csc, "MultifrontalQR requires CSC");
     CRD_ASSERT_MSG(values.size() == pat.inner_idx.size(), "MultifrontalQR: values/pattern size mismatch");
@@ -434,9 +430,13 @@ void MultifrontalQR<T>::factorize(const sparse::SparsePattern& pat, crd::contain
     // per feedback_jobs_worker_index_aliasing); the larfb gemms pass scratch=nullptr → the per-thread
     // pooled GrowableTlsf (thread-safe + result-identical). sw=1 ⇒ serial (no jobs dispatch).
     const crd::u32 sw = (num_workers <= 1) ? 1U : crd::jobs::num_workers();
-    const crd::usize vbuf_stride = static_cast<crd::usize>(maxfm) * kQrPanelW;  // V panel
-    const crd::usize nbnb = static_cast<crd::usize>(kQrPanelW) * kQrPanelW;     // VᵀV / compact-WY T
-    const crd::usize wbuf_stride = static_cast<crd::usize>(kQrPanelW) * maxfsz; // W = VᵀC
+    // Blocked-WY front factor (v5c-1d): fronts of at least pick.block_min rows (the dense near-root ones that stall
+    // the unblocked Householder at O(n³)) take the BLAS-3 compact-WY path in pick.panel-wide panels; smaller fronts
+    // keep the unblocked path (no gemm-call overhead).
+    const crd::u32 qpw = pick.panel;
+    const crd::usize vbuf_stride = static_cast<crd::usize>(maxfm) * qpw;  // V panel
+    const crd::usize nbnb = static_cast<crd::usize>(qpw) * qpw;           // VᵀV / compact-WY T
+    const crd::usize wbuf_stride = static_cast<crd::usize>(qpw) * maxfsz; // W = VᵀC
     crd::containers::Array<T> vbuf_pool(m_alloc);
     crd::containers::Array<T> vtv_pool(m_alloc);
     crd::containers::Array<T> tblk_pool(m_alloc);
@@ -448,8 +448,29 @@ void MultifrontalQR<T>::factorize(const sparse::SparsePattern& pat, crd::contain
     wbuf_pool.resize(wbuf_stride * sw);
     colpos_pool.resize(static_cast<crd::usize>(n) * sw);
 
-    // Factor one front on worker wk. Pure function of the symbolic + already-factored children.
-    auto factor_front = [&](crd::u32 f, crd::u32 wk)
+    // A larfb gemm C = alpha op(X) Y + beta C: on pick.walk's jobs from its m n k for a main-thread front (a narrow
+    // level's), else serial. Both give gemm's bits.
+    using CView = dense::MatrixView<const T, dense::Layout::ColMajor>;
+    using View = dense::MatrixView<T, dense::Layout::ColMajor>;
+    const crd::u32 larfb_jobs = pick.walk.front.workers != 0 ? pick.walk.front.workers : crd::jobs::num_workers();
+    const auto larfb_gemm = [&](bool main_thread, T alpha, CView x, CView y, T beta, View c, dense::Trans tx)
+    {
+        const crd::u64 depth = tx == dense::Trans::None ? x.cols() : x.rows();
+        const crd::u64 mnk = static_cast<crd::u64>(c.rows()) * c.cols() * depth;
+        if (main_thread && sw > 1 && larfb_jobs > 1 && mnk >= pick.walk.front.gemm_min_mnk)
+        {
+            dense::gemm_parallel<T, dense::Layout::ColMajor>(larfb_jobs, alpha, x, y, beta, c, tx, dense::Trans::None,
+                                                             nullptr);
+        }
+        else
+        {
+            dense::gemm<T, dense::Layout::ColMajor>(alpha, x, y, beta, c, tx, dense::Trans::None, nullptr);
+        }
+    };
+
+    // Factor one front on worker wk. Pure function of the symbolic + already-factored children. `main_thread` (a
+    // narrow level's front) lets the larfb gemms take pick.walk's jobs.
+    auto factor_front = [&](crd::u32 f, crd::u32 wk, bool main_thread)
     {
         const crd::u32 fsz = fnsz(f);
         const crd::u32 fmv = m_fm[f];
@@ -516,17 +537,17 @@ void MultifrontalQR<T>::factorize(const sparse::SparsePattern& pat, crd::contain
         // block) — the lever that makes the big dense near-root fronts tractable + fast.
         const crd::u32 npiv = m_npiv[f];
         T* tau = m_tau.data() + m_tauoff[f];
-        // Real fronts ≥ kQrBlockMin take the compact-WY BLOCKED path; COMPLEX stays UNBLOCKED (v5c-2a):
+        // Real fronts ≥ pick.block_min take the compact-WY BLOCKED path; COMPLEX stays UNBLOCKED (v5c-2a):
         // blocked-WY-for-complex (VᴴV + ConjTranspose larfb + a conj-aware compact-WY T) is a PERF
         // follow-on, not a deferred feature — complex QR is correct at all sizes via the unblocked path.
         bool blocked = false;
         if constexpr (!dense::is_complex_v<T>)
         {
-            blocked = (fmv >= kQrBlockMin);
+            blocked = (fmv >= pick.block_min);
         }
-        for (crd::u32 ps = 0; ps < npiv; ps += kQrPanelW)
+        for (crd::u32 ps = 0; ps < npiv; ps += qpw)
         {
-            const crd::u32 pw = (npiv - ps < kQrPanelW) ? (npiv - ps) : kQrPanelW;
+            const crd::u32 pw = (npiv - ps < qpw) ? (npiv - ps) : qpw;
             const crd::u32 apply_end = blocked ? (ps + pw) : fsz; // within-panel only when blocked
             for (crd::u32 k = ps; k < ps + pw; ++k)
             {
@@ -617,14 +638,12 @@ void MultifrontalQR<T>::factorize(const sparse::SparsePattern& pat, crd::contain
                 using MV = dense::MatrixView<T, dense::Layout::ColMajor>;
                 const CV vview(vb, fmp, pw, fmp);
                 MV vtvview(vt, pw, pw, pw);
-                dense::gemm<T, dense::Layout::ColMajor>(T{1}, vview, vview, T{0}, vtvview, dense::Trans::Transpose,
-                                                        dense::Trans::None, nullptr); // VᵀV (symmetric)
+                larfb_gemm(main_thread, T{1}, vview, vview, T{0}, vtvview, dense::Trans::Transpose); // VᵀV
                 dense::detail::build_block_t_from_vtv<T>(vt, pw, tau, ps, pw, tb, pw);
                 T* cptr = fb + static_cast<crd::usize>(ps + pw) * fmv + ps;
                 const CV cview(cptr, fmp, tc, fmv);
                 MV wview(wb, pw, tc, pw);
-                dense::gemm<T, dense::Layout::ColMajor>(T{1}, vview, cview, T{0}, wview, dense::Trans::Transpose,
-                                                        dense::Trans::None, nullptr); // W = VᵀC
+                larfb_gemm(main_thread, T{1}, vview, cview, T{0}, wview, dense::Trans::Transpose); // W = VᵀC
                 for (crd::u32 c = 0; c < tc; ++c) // W := Tᵀ·W (T upper-tri row-major; descending row = in place)
                 {
                     T* wc = wb + static_cast<crd::usize>(c) * pw;
@@ -640,74 +659,22 @@ void MultifrontalQR<T>::factorize(const sparse::SparsePattern& pat, crd::contain
                 }
                 MV cwrite(cptr, fmp, tc, fmv);
                 const CV wconst(wb, pw, tc, pw);
-                dense::gemm<T, dense::Layout::ColMajor>(T{-1}, vview, wconst, T{1}, cwrite, dense::Trans::None,
-                                                        dense::Trans::None, nullptr); // C := C − V·W
+                larfb_gemm(main_thread, T{-1}, vview, wconst, T{1}, cwrite, dense::Trans::None); // C := C − V·W
             } // if constexpr (!is_complex) — the real-only blocked path
         }
     };
 
-    // Assembly-tree levels: level[f] = 1 + max(level[child]) (0 for a leaf). front_post is a postorder
-    // ⇒ children precede f, so a single front_post pass computes levels. Same-level fronts are mutually
-    // independent; ascending-f order within a level ⇒ the schedule is worker-order-independent (the moat).
-    crd::containers::Array<crd::u32> level(m_alloc);
-    level.resize(nf);
-    crd::u32 nlevels = 0;
-    for (crd::u32 idx = 0; idx < nf; ++idx)
+    // --- pass 2: numeric, level by level (front_post is a postorder). A level of at least pick.walk.level_min fronts
+    // runs front-parallel, each front on one job; a narrower one front by front on the main thread (worker slot 0)
+    // with its larfb gemms on the jobs. Neither nests a parallel_for. ---
+    const detail::FrontLevels levels =
+        detail::front_levels(m_alloc, nf, m_childp.data(), m_child.data(), m_sym.front_post.data());
+    for (crd::u32 l = 0; l < levels.count(); ++l)
     {
-        const crd::u32 f = m_sym.front_post[idx];
-        crd::u32 lev = 0;
-        for (crd::u32 cc = m_childp[f]; cc < m_childp[f + 1]; ++cc)
-        {
-            const crd::u32 cl = level[m_child[cc]] + 1;
-            if (cl > lev)
-            {
-                lev = cl;
-            }
-        }
-        level[f] = lev;
-        if (lev + 1 > nlevels)
-        {
-            nlevels = lev + 1;
-        }
-    }
-    crd::containers::Array<crd::u32> lvl_ptr(m_alloc);
-    lvl_ptr.resize(static_cast<crd::usize>(nlevels) + 1); // value-init 0
-    for (crd::u32 f = 0; f < nf; ++f)
-    {
-        ++lvl_ptr[level[f] + 1];
-    }
-    for (crd::u32 l = 0; l < nlevels; ++l)
-    {
-        lvl_ptr[l + 1] += lvl_ptr[l];
-    }
-    crd::containers::Array<crd::u32> lvl_list(m_alloc);
-    lvl_list.resize(nf);
-    {
-        crd::containers::Array<crd::u32> wp(m_alloc);
-        wp.resize(nlevels);
-        for (crd::u32 l = 0; l < nlevels; ++l)
-        {
-            wp[l] = lvl_ptr[l];
-        }
-        for (crd::u32 f = 0; f < nf; ++f)
-        {
-            lvl_list[wp[level[f]]++] = f; // ascending f within a level (the moat)
-        }
-    }
-
-    // --- pass 2: numeric, level-by-level (within a level, fronts are independent ⇒ front-parallel) ---
-    for (crd::u32 l = 0; l < nlevels; ++l)
-    {
-        const crd::u32 lo = lvl_ptr[l];
-        const crd::u32 cnt = lvl_ptr[l + 1] - lo;
-        if (sw <= 1)
-        {
-            for (crd::u32 t = 0; t < cnt; ++t)
-            {
-                factor_front(lvl_list[lo + t], 0);
-            }
-        }
-        else
+        const crd::u32 lo = levels.ptr[l];
+        const crd::u32 cnt = levels.ptr[l + 1] - lo;
+        const crd::u32* const list = levels.list.data() + lo;
+        if (sw > 1 && cnt >= pick.walk.level_min)
         {
             auto* counter = crd::jobs::parallel_for(cnt, num_workers,
                                                     [&](crd::u32 b, crd::u32 e)
@@ -715,10 +682,17 @@ void MultifrontalQR<T>::factorize(const sparse::SparsePattern& pat, crd::contain
                                                         const crd::u32 wk = crd::jobs::worker_index();
                                                         for (crd::u32 t = b; t < e; ++t)
                                                         {
-                                                            factor_front(lvl_list[lo + t], wk);
+                                                            factor_front(list[t], wk, false);
                                                         }
                                                     });
             crd::jobs::wait(counter);
+        }
+        else
+        {
+            for (crd::u32 t = 0; t < cnt; ++t)
+            {
+                factor_front(list[t], 0, true);
+            }
         }
     }
 

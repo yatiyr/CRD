@@ -4,9 +4,11 @@
 #include <crd/hesap/dense/blas3.hpp>
 #include <crd/hesap/dense/cholesky.hpp>
 #include <crd/hesap/dense/detail/apply_q_block.hpp>
+#include <crd/hesap/dense/detail/factor_arms.hpp>
 #include <crd/hesap/dense/interp_decomp.hpp>
 #include <crd/hesap/dense/qr.hpp>
 #include <crd/hesap/dense/svd.hpp>
+#include <crd/jobs/jobs.hpp>
 
 #include <cmath>
 #include <utility>
@@ -14,12 +16,7 @@
 namespace crd::hesap::direct
 {
 using crd::hesap::dense::factor_qr;
-using crd::hesap::dense::gemm;                 // SERIAL gemm for the dense crush path (syrk/trsm): node-parallel
-                                               // within-front scaling measured SUB-1× (0.67× — many small/medium
-                                               // fronts hit parallel-dispatch overhead) ⇒ serial is the shipped
-                                               // path; the level-scheduled hybrid is deferred (see docs/debt.md
-                                               // `gemm-parallel-frame-arena-leak` + the v5e-3 Leg B note).
-using crd::hesap::dense::gemm_parallel_auto;   // still used by the (deprecated, moat-tested-at-n=4096) BLR helpers
+using crd::hesap::dense::gemm_parallel;
 using crd::hesap::dense::interp_decomp;
 using crd::hesap::dense::InterpDecomp;
 using crd::hesap::dense::Layout;
@@ -216,52 +213,71 @@ void block_gemv_t_sub(const BlrBlock<T>& blk, const T* src, T* dst) noexcept
     }
 }
 
-// All three go through the fast gemm_parallel_auto (the kernel that beats Eigen;
-// fixed reduction order ⇒ moat-safe + the speed needed to crush). beta=0 over an
-// explicitly-zeroed C (gemm scales beta·C first, so C must not hold NaN garbage).
+// C = alpha op(A) op(B) + beta C on `jobs` from its m n k on, else on the calling thread: either gives gemm's bits
+// (fixed reduction order ⇒ moat-safe). FrontJobsPick{} is gemm_parallel_auto's choice. `scratch` packs the operands.
 template <typename T>
-Matrix<T> mm(crd::memory::IAllocator* alloc, const Matrix<T>& a, const Matrix<T>& b)  // A·B
+void front_gemm(const detail::FrontJobsPick& jobs, T alpha, MatrixView<const T, Layout::RowMajor> a,
+                MatrixView<const T, Layout::RowMajor> b, T beta, MatrixView<T, Layout::RowMajor> c, Trans ta, Trans tb,
+                crd::memory::IAllocator* scratch)
+{
+    const crd::u64 depth = ta == Trans::None ? a.cols() : a.rows();
+    const crd::u64 mnk = static_cast<crd::u64>(c.rows()) * c.cols() * depth;
+    crd::u32 nw = 1;
+    if (mnk >= jobs.gemm_min_mnk)
+    {
+        nw = jobs.workers != 0 ? jobs.workers : crd::jobs::num_workers();
+    }
+    gemm_parallel<T, Layout::RowMajor>(nw, alpha, a, b, beta, c, ta, tb, scratch);
+}
+
+// The three products, beta=0 over an explicitly-zeroed C (gemm scales beta·C first, so C must not hold NaN garbage).
+template <typename T>
+Matrix<T> mm(crd::memory::IAllocator* alloc, const Matrix<T>& a, const Matrix<T>& b,
+             const detail::FrontJobsPick& jobs)  // A·B
 {
     Matrix<T> out(alloc, a.rows(), b.cols());
     out.set_zero();
-    gemm_parallel_auto<T, Layout::RowMajor>(T{1}, a, b, T{0}, out, Trans::None, Trans::None);
+    front_gemm<T>(jobs, T{1}, a.cview(), b.cview(), T{0}, out.view(), Trans::None, Trans::None, a.allocator());
     return out;
 }
 
 template <typename T>
-Matrix<T> mm_at(crd::memory::IAllocator* alloc, const Matrix<T>& a, const Matrix<T>& b)  // Aᵀ·B
+Matrix<T> mm_at(crd::memory::IAllocator* alloc, const Matrix<T>& a, const Matrix<T>& b,
+                const detail::FrontJobsPick& jobs)  // Aᵀ·B
 {
     Matrix<T> out(alloc, a.cols(), b.cols());
     out.set_zero();
-    gemm_parallel_auto<T, Layout::RowMajor>(T{1}, a, b, T{0}, out, Trans::Transpose, Trans::None);
+    front_gemm<T>(jobs, T{1}, a.cview(), b.cview(), T{0}, out.view(), Trans::Transpose, Trans::None, a.allocator());
     return out;
 }
 
 template <typename T>
-Matrix<T> mm_bt(crd::memory::IAllocator* alloc, const Matrix<T>& a, const Matrix<T>& b)  // A·Bᵀ
+Matrix<T> mm_bt(crd::memory::IAllocator* alloc, const Matrix<T>& a, const Matrix<T>& b,
+                const detail::FrontJobsPick& jobs)  // A·Bᵀ
 {
     Matrix<T> out(alloc, a.rows(), b.rows());
     out.set_zero();
-    gemm_parallel_auto<T, Layout::RowMajor>(T{1}, a, b, T{0}, out, Trans::None, Trans::Transpose);
+    front_gemm<T>(jobs, T{1}, a.cview(), b.cview(), T{0}, out.view(), Trans::None, Trans::Transpose, a.allocator());
     return out;
 }
 
 // Expand a BLR block to its dense rows×cols matrix (LR: u·vᵀ via the fast gemm).
 template <typename T>
-Matrix<T> block_dense(crd::memory::IAllocator* alloc, const BlrBlock<T>& blk)
+Matrix<T> block_dense(crd::memory::IAllocator* alloc, const BlrBlock<T>& blk, const detail::FrontJobsPick& jobs)
 {
     if (!blk.is_lowrank)
     {
         return blk.dense.clone();
     }
-    return mm_bt<T>(alloc, blk.u, blk.v);  // u·vᵀ
+    return mm_bt<T>(alloc, blk.u, blk.v, jobs);  // u·vᵀ
 }
 
 // dst (rows×cols dense) -= ub·vbᵀ  (ub: rows×ru, vb: cols×ru) via the fast gemm.
 template <typename T>
-void dense_sub_lr(Matrix<T>& dst, const Matrix<T>& ub, const Matrix<T>& vb)
+void dense_sub_lr(Matrix<T>& dst, const Matrix<T>& ub, const Matrix<T>& vb, const detail::FrontJobsPick& jobs)
 {
-    gemm_parallel_auto<T, Layout::RowMajor>(T{-1}, ub, vb, T{1}, dst, Trans::None, Trans::Transpose);
+    front_gemm<T>(jobs, T{-1}, ub.cview(), vb.cview(), T{1}, dst.view(), Trans::None, Trans::Transpose,
+                  ub.allocator());
 }
 
 // Blocked lower-triangular solve L·X = B in place (X holds B, L npiv×npiv lower
@@ -269,7 +285,8 @@ void dense_sub_lr(Matrix<T>& dst, const Matrix<T>& ub, const Matrix<T>& vb)
 // (cast-as-gemm trsm — hesap-dense's `trsm` is unblocked ~5 GF/s; this is ~gemm rate).
 // Small nb diagonal blocks use scalar substitution.
 template <typename T>
-void blocked_trsm_lower(const Matrix<T>& l, Matrix<T>& x, crd::memory::IAllocator* alloc)
+void blocked_trsm_lower(const Matrix<T>& l, Matrix<T>& x, crd::memory::IAllocator* alloc,
+                        const detail::FrontJobsPick& jobs)
 {
     const crd::usize n = l.rows();
     const crd::usize nrhs = x.cols();
@@ -304,21 +321,19 @@ void blocked_trsm_lower(const Matrix<T>& l, Matrix<T>& x, crd::memory::IAllocato
             const MatrixView<const T, Layout::RowMajor> lv{l.data() + (kb + kk) * lld + kb, tail, kk, lld};
             const MatrixView<const T, Layout::RowMajor> xv{x.data() + kb * xld, kk, nrhs, xld};
             const MatrixView<T, Layout::RowMajor> cv{x.data() + (kb + kk) * xld, tail, nrhs, xld};
-            gemm<T, Layout::RowMajor>(T{-1}, lv, xv, T{1}, cv, Trans::None, Trans::None, alloc);  // serial
+            front_gemm<T>(jobs, T{-1}, lv, xv, T{1}, cv, Trans::None, Trans::None, alloc);
         }
     }
 }
 
-// Blocked lower-triangular syrk Schur update: front[off:, off:] (lower) −= l21·l21ᵀ. Only the
-// each over the lower TRAPEZOID — one `gemm_parallel_auto` per block-COLUMN (rows [bj,ms) × cols
-// [bj,bj+rj), k=kk): ~ms/nb BIG parallel gemms (dispatch overhead amortizes; v5e-3 Leg B B2a — the
-// prior nb×nb tiling fired ~ms²/nb² TINY parallel dispatches ⇒ 0.2× scaling) while still ~½ the
-// flops of a full ms×ms gemm. Reuses gemm_parallel's per-worker pack pool (one gemm at a time, main-
-// thread dispatch ⇒ no concurrent-alloc hazard). The diagonal block-row writes its unused upper half
-// (harmless: the front's upper trailing block is never read — cb[f]/L-extract take the lower only).
-// l21 is (ms × kk); off = npiv. THE serial+parallel Schur lever (the public `syrk` is naive scalar).
+// Blocked lower-triangular syrk Schur update: front[off:, off:] (lower) −= l21·l21ᵀ, one gemm per block-COLUMN
+// over the lower TRAPEZOID (rows [bj,ms) × cols [bj,bj+rj), k=kk): ~ms/nb big gemms (v5e-3 Leg B B2a — the prior
+// nb×nb tiling fired ~ms²/nb² tiny parallel dispatches ⇒ 0.2× scaling) for ~½ the flops of a full ms×ms gemm, each
+// on `jobs` from its m n k. The diagonal block-row writes its unused upper half (harmless: the front's upper trailing
+// block is never read — cb[f]/L-extract take the lower only). l21 is (ms × kk); off = npiv.
 template <typename T>
-void syrk_lower_sub(crd::memory::IAllocator* alloc, const Matrix<T>& l21, Matrix<T>& front, crd::usize off)
+void syrk_lower_sub(crd::memory::IAllocator* alloc, const Matrix<T>& l21, Matrix<T>& front, crd::usize off,
+                    const detail::FrontJobsPick& jobs)
 {
     const crd::usize ms = l21.rows();
     const crd::usize kk = l21.cols();
@@ -332,7 +347,7 @@ void syrk_lower_sub(crd::memory::IAllocator* alloc, const Matrix<T>& l21, Matrix
         const MatrixView<const T, Layout::RowMajor> ai{l21.data() + bj * lld, rows, kk, lld};  // rows [bj,ms)
         const MatrixView<const T, Layout::RowMajor> aj{l21.data() + bj * lld, rj, kk, lld};    // rows [bj,bj+rj)
         const MatrixView<T, Layout::RowMajor> cv{front.data() + (off + bj) * fld + (off + bj), rows, rj, fld};
-        gemm<T, Layout::RowMajor>(T{-1}, ai, aj, T{1}, cv, Trans::None, Trans::Transpose, alloc);  // serial
+        front_gemm<T>(jobs, T{-1}, ai, aj, T{1}, cv, Trans::None, Trans::Transpose, alloc);
     }
 }
 } // namespace
@@ -583,7 +598,8 @@ namespace detail
 {
 template <typename T>
 void low_rank_recompress(crd::memory::IAllocator* alloc, const Matrix<T>& uc, const Matrix<T>& vc, RealType<T> tol,
-                         crd::usize max_rank, Matrix<T>& u_out, Matrix<T>& v_out, crd::usize& rank_out)
+                         crd::usize max_rank, Matrix<T>& u_out, Matrix<T>& v_out, crd::usize& rank_out,
+                         const FrontJobsPick& jobs)
 {
     const crd::usize m = uc.rows();
     const crd::usize n = vc.rows();
@@ -599,7 +615,7 @@ void low_rank_recompress(crd::memory::IAllocator* alloc, const Matrix<T>& uc, co
     // product and column-ID it.
     if (rc >= m || rc >= n)
     {
-        Matrix<T> d = mm_bt<T>(alloc, uc, vc);  // m×n
+        Matrix<T> d = mm_bt<T>(alloc, uc, vc, jobs);  // m×n
         const InterpDecomp<T, Layout::RowMajor> id = interp_decomp<T, Layout::RowMajor>(alloc, d, tol, max_rank);
         rank_out = id.rank;
         u_out = id.cols.clone();
@@ -630,7 +646,7 @@ void low_rank_recompress(crd::memory::IAllocator* alloc, const Matrix<T>& uc, co
             rv.at(i, j) = qv.packed().at(i, j);
         }
     }
-    const Matrix<T> rr = mm_bt<T>(alloc, ru, rv);  // Ru·Rvᵀ (rc×rc)
+    const Matrix<T> rr = mm_bt<T>(alloc, ru, rv, jobs);  // Ru·Rvᵀ (rc×rc)
     const SVD<T> s = svd<T>(alloc, rr);
     crd::usize r = 0;
     if (s.s.size() > 0 && s.s.data()[0] > RealType<T>{0})
@@ -684,7 +700,7 @@ namespace
 // recompress (the LUAR — the flop-saving path). `wk` = panel width.
 template <typename T>
 void apply_schur_update(crd::memory::IAllocator* alloc, BlrBlock<T>& target, const BlrBlock<T>& lik,
-                        const BlrBlock<T>& ljk, bool is_diag, RealType<T> tol)
+                        const BlrBlock<T>& ljk, bool is_diag, RealType<T> tol, const detail::FrontJobsPick& jobs)
 {
     const crd::usize rows_i = lik.rows;
     const crd::usize rows_j = ljk.rows;
@@ -693,18 +709,18 @@ void apply_schur_update(crd::memory::IAllocator* alloc, BlrBlock<T>& target, con
     Matrix<T> vb(alloc);
     if (lik.is_lowrank && ljk.is_lowrank)
     {
-        const Matrix<T> mmat = mm_at<T>(alloc, lik.v, ljk.v);  // v_ikᵀ·v_jk (r_ik×r_jk)
-        ub = mm<T>(alloc, lik.u, mmat);                        // u_ik·M (rows_i×r_jk)
+        const Matrix<T> mmat = mm_at<T>(alloc, lik.v, ljk.v, jobs);  // v_ikᵀ·v_jk (r_ik×r_jk)
+        ub = mm<T>(alloc, lik.u, mmat, jobs);                        // u_ik·M (rows_i×r_jk)
         vb = ljk.u.clone();                                    // rows_j×r_jk
     }
     else if (lik.is_lowrank && !ljk.is_lowrank)
     {
         ub = lik.u.clone();                       // rows_i×r_ik
-        vb = mm<T>(alloc, ljk.dense, lik.v);      // L_jk·v_ik (rows_j×r_ik)
+        vb = mm<T>(alloc, ljk.dense, lik.v, jobs);  // L_jk·v_ik (rows_j×r_ik)
     }
     else if (!lik.is_lowrank && ljk.is_lowrank)
     {
-        ub = mm<T>(alloc, lik.dense, ljk.v);      // L_ik·v_jk (rows_i×r_jk)
+        ub = mm<T>(alloc, lik.dense, ljk.v, jobs);  // L_ik·v_jk (rows_i×r_jk)
         vb = ljk.u.clone();                       // rows_j×r_jk
     }
     else  // both dense
@@ -718,10 +734,10 @@ void apply_schur_update(crd::memory::IAllocator* alloc, BlrBlock<T>& target, con
         // Dense target (diagonal always; or an off-diagonal kept dense): subtract densely.
         if (target.is_lowrank)
         {
-            target.dense = block_dense<T>(alloc, target);
+            target.dense = block_dense<T>(alloc, target, jobs);
             target.is_lowrank = false;
         }
-        dense_sub_lr<T>(target.dense, ub, vb);
+        dense_sub_lr<T>(target.dense, ub, vb, jobs);
         return;
     }
     // LR off-diagonal target: [Ua, −Ub]·[Va, Vb]ᵀ then recompress.
@@ -755,7 +771,7 @@ void apply_schur_update(crd::memory::IAllocator* alloc, BlrBlock<T>& target, con
     crd::usize r_new = 0;
     Matrix<T> un(alloc);
     Matrix<T> vn(alloc);
-    detail::low_rank_recompress<T>(alloc, uc, vc, tol, 0, un, vn, r_new);
+    detail::low_rank_recompress<T>(alloc, uc, vc, tol, 0, un, vn, r_new, jobs);
     target.rank = r_new;
     target.u = std::move(un);
     target.v = std::move(vn);
@@ -819,7 +835,7 @@ bool blr_cholesky_factor_lr(crd::memory::IAllocator* alloc, const Matrix<T>& a, 
         {
             for (crd::usize i = j; i < nb; ++i)
             {
-                apply_schur_update<T>(alloc, l.at(i, j), l.at(i, k), l.at(j, k), i == j, tol);
+                apply_schur_update<T>(alloc, l.at(i, j), l.at(i, k), l.at(j, k), i == j, tol, detail::FrontJobsPick{});
             }
         }
     }
@@ -828,7 +844,7 @@ bool blr_cholesky_factor_lr(crd::memory::IAllocator* alloc, const Matrix<T>& a, 
 
 template <typename T>
 bool factor_front_cholesky_blr(crd::memory::IAllocator* alloc, Matrix<T>& front, crd::usize npiv,
-                               crd::usize block_size, RealType<T> tol)
+                               crd::usize block_size, RealType<T> tol, const detail::FrontJobsPick& jobs)
 {
     const crd::usize m = front.rows();
     if (npiv == 0 || m == 0)
@@ -970,7 +986,7 @@ bool factor_front_cholesky_blr(crd::memory::IAllocator* alloc, Matrix<T>& front,
         {
             for (crd::usize i = j; i < nb; ++i)
             {
-                apply_schur_update<T>(alloc, blr.at(i, j), blr.at(i, k), blr.at(j, k), i == j, tol);
+                apply_schur_update<T>(alloc, blr.at(i, j), blr.at(i, k), blr.at(j, k), i == j, tol, jobs);
             }
         }
     }
@@ -982,7 +998,7 @@ bool factor_front_cholesky_blr(crd::memory::IAllocator* alloc, Matrix<T>& front,
         for (crd::usize j = 0; j <= i; ++j)
         {
             const crd::usize c0 = bs[j];
-            const Matrix<T> dblk = block_dense<T>(alloc, blr.at(i, j));
+            const Matrix<T> dblk = block_dense<T>(alloc, blr.at(i, j), jobs);
             for (crd::usize p = 0; p < dblk.rows(); ++p)
             {
                 for (crd::usize q = 0; q < dblk.cols(); ++q)
@@ -999,10 +1015,10 @@ bool factor_front_cholesky_blr(crd::memory::IAllocator* alloc, Matrix<T>& front,
 }
 
 template <typename T>
-bool factor_front_cholesky_dense(crd::memory::IAllocator* alloc, Matrix<T>& front, crd::usize npiv)
+bool factor_front_cholesky_dense(crd::memory::IAllocator* alloc, Matrix<T>& front, crd::usize npiv,
+                                 const detail::FrontJobsPick& jobs)
 {
     using crd::hesap::dense::Cholesky;
-    using crd::hesap::dense::factor_cholesky;
     const crd::usize m = front.rows();
     if (npiv == 0 || m == 0)
     {
@@ -1018,7 +1034,8 @@ bool factor_front_cholesky_dense(crd::memory::IAllocator* alloc, Matrix<T>& fron
             pk.at(i, j) = front.at(i, j);
         }
     }
-    factor_cholesky<T, Layout::RowMajor>(chol, alloc);
+    crd::hesap::dense::detail::factor_cholesky_arm<T, Layout::RowMajor>(
+        crd::hesap::dense::detail::CholeskyPick{.workers = jobs.workers}, chol, alloc);
     if (chol.info() != 0)
     {
         return false;
@@ -1052,7 +1069,7 @@ bool factor_front_cholesky_dense(crd::memory::IAllocator* alloc, Matrix<T>& fron
             b.at(i, c) = front.at(npiv + c, i);  // A21ᵀ
         }
     }
-    blocked_trsm_lower<T>(l11, b, alloc);  // B = L11⁻¹·A21ᵀ
+    blocked_trsm_lower<T>(l11, b, alloc, jobs);  // B = L11⁻¹·A21ᵀ
     Matrix<T> l21(alloc, ms, npiv);
     for (crd::usize c = 0; c < ms; ++c)
     {
@@ -1063,17 +1080,19 @@ bool factor_front_cholesky_dense(crd::memory::IAllocator* alloc, Matrix<T>& fron
         }
     }
     // (3) Schur: A22 −= L21·L21ᵀ (lower) — blocked lower-tri syrk (½ the flops of a full gemm).
-    syrk_lower_sub<T>(alloc, l21, front, npiv);
+    syrk_lower_sub<T>(alloc, l21, front, npiv, jobs);
     return true;
 }
 
 // ---- explicit instantiations (v5e-3a/3b: real f32/f64) ----------------
-template bool factor_front_cholesky_dense<float>(crd::memory::IAllocator*, Matrix<float>&, crd::usize);
-template bool factor_front_cholesky_dense<double>(crd::memory::IAllocator*, Matrix<double>&, crd::usize);
+template bool factor_front_cholesky_dense<float>(crd::memory::IAllocator*, Matrix<float>&, crd::usize,
+                                                 const detail::FrontJobsPick&);
+template bool factor_front_cholesky_dense<double>(crd::memory::IAllocator*, Matrix<double>&, crd::usize,
+                                                  const detail::FrontJobsPick&);
 template bool factor_front_cholesky_blr<float>(crd::memory::IAllocator*, Matrix<float>&, crd::usize, crd::usize,
-                                               RealType<float>);
+                                               RealType<float>, const detail::FrontJobsPick&);
 template bool factor_front_cholesky_blr<double>(crd::memory::IAllocator*, Matrix<double>&, crd::usize, crd::usize,
-                                                RealType<double>);
+                                                RealType<double>, const detail::FrontJobsPick&);
 template bool blr_cholesky_factor<float>(crd::memory::IAllocator*, const Matrix<float>&, crd::usize, RealType<float>,
                                          BlrMatrix<float>&);
 template bool blr_cholesky_factor<double>(crd::memory::IAllocator*, const Matrix<double>&, crd::usize,
@@ -1087,10 +1106,11 @@ template bool blr_cholesky_factor_lr<double>(crd::memory::IAllocator*, const Mat
 namespace detail
 {
 template void low_rank_recompress<float>(crd::memory::IAllocator*, const Matrix<float>&, const Matrix<float>&,
-                                         RealType<float>, crd::usize, Matrix<float>&, Matrix<float>&, crd::usize&);
+                                         RealType<float>, crd::usize, Matrix<float>&, Matrix<float>&, crd::usize&,
+                                         const FrontJobsPick&);
 template void low_rank_recompress<double>(crd::memory::IAllocator*, const Matrix<double>&, const Matrix<double>&,
                                           RealType<double>, crd::usize, Matrix<double>&, Matrix<double>&,
-                                          crd::usize&);
+                                          crd::usize&, const FrontJobsPick&);
 } // namespace detail
 template BlrMatrix<float> compress_blr_sym<float>(crd::memory::IAllocator*, const Matrix<float>&, crd::usize,
                                                   RealType<float>);

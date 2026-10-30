@@ -16,6 +16,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include "stencil_3d.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -1192,7 +1193,7 @@ template <typename T> void run_ldlt_parallel_moat(crd::memory::IAllocator* alloc
     crd::containers::Array<T> x1 = make_b();
     REQUIRE(f1.solve({x1.data(), n}));
 
-    for (crd::u32 nw : {2U, 4U, 8U, 16U})
+    for (crd::u32 nw : {2U, 4U, 8U, 16U, 32U})
     {
         dir::MultifrontalLDLT<T> fp(alloc);
         fp.factorize(a, nw);
@@ -1216,7 +1217,7 @@ template <typename T> void run_ldlt_parallel_moat(crd::memory::IAllocator* alloc
 }
 } // namespace
 
-TEST_CASE("v5d-e MultifrontalLDLt: factor + solve bit-identical across {1,2,4,8,16} workers",
+TEST_CASE("v5d-e MultifrontalLDLt: factor + solve bit-identical across 1 to 32 workers",
           "[hesap][direct][v5d][v5d-e][ldlt]")
 {
     crd::jobs::init();
@@ -1556,7 +1557,7 @@ template <typename T> void run_complex_ldlt_moat(bool hermitian, crd::memory::IA
         }
         REQUIRE(has2);
     }
-    for (crd::u32 nw : {2U, 4U, 8U, 16U})
+    for (crd::u32 nw : {2U, 4U, 8U, 16U, 32U})
     {
         dir::MultifrontalLDLT<T> fp(alloc);
         fp.factorize(a, nw, hermitian);
@@ -1572,7 +1573,7 @@ template <typename T> void run_complex_ldlt_moat(bool hermitian, crd::memory::IA
 }
 } // namespace
 
-TEST_CASE("v5d-f MultifrontalLDLt: complex moat (LDLT + LDLH) bit-identical across {1,2,4,8,16} workers",
+TEST_CASE("v5d-f MultifrontalLDLt: complex moat (LDLT + LDLH) bit-identical across 1 to 32 workers",
           "[hesap][direct][v5d][v5d-f][ldlt]")
 {
     crd::jobs::init();
@@ -1646,7 +1647,7 @@ TEST_CASE("v5d-perf MultifrontalLDLt: big dense SPD front uses the blocked path 
     CHECK(err < 1e-9); // the blocked factor + solve recover x_true ⇒ blocked path is correct
 }
 
-TEST_CASE("v5d-perf MultifrontalLDLt: big-front blocked path bit-identical across {1,2,4} workers",
+TEST_CASE("v5d-perf MultifrontalLDLt: big-front blocked path bit-identical across 1 to 32 workers",
           "[hesap][direct][v5d][v5d-perf][ldlt]")
 {
     crd::jobs::init();
@@ -1675,7 +1676,7 @@ TEST_CASE("v5d-perf MultifrontalLDLt: big-front blocked path bit-identical acros
         REQUIRE(f1.info() == 0);
         REQUIRE(f1.front_count() >= nb);
         const auto x1 = f1.l_values();
-        for (crd::u32 nw : {2U, 4U})
+        for (crd::u32 nw : {2U, 4U, 8U, 16U, 32U})
         {
             dir::MultifrontalLDLT<double> fp(&alloc);
             fp.factorize(a, nw);
@@ -1700,42 +1701,13 @@ TEST_CASE("v5d-perf MultifrontalLDLt: big-front blocked path bit-identical acros
 
 namespace
 {
-// 3D 7-point Laplacian on a k³ grid, diagonal shifted by −σ ⇒ INDEFINITE (σ=3: diag 3 < Σ|offdiag|=6).
-// Same big dense fronts as the SPD 3D problem, but the per-front Bunch-Kaufman MUST delay pivots whose
-// stabilizing entries live in not-yet-assembled contribution rows. Returns a symmetric CSC matrix.
+// The 3D 7-point Laplacian shifted by −σ (stencil_3d.hpp) ⇒ INDEFINITE at σ=3 (diag 3 < Σ|offdiag|=6). Same big
+// dense fronts as the SPD 3D problem, but the per-front Bunch-Kaufman MUST delay pivots whose stabilizing entries
+// live in not-yet-assembled contribution rows.
 sp::SparseMatrix<double, sp::SparseFormat::Csc> indef_laplacian_3d(crd::u32 k, double sigma,
                                                                    crd::memory::IAllocator* alloc)
 {
-    const crd::u32 n = k * k * k;
-    auto id = [k](crd::u32 i, crd::u32 j, crd::u32 l) { return (i * k + j) * k + l; };
-    sp::TripletBuilder<double> tb(alloc, n, n);
-    for (crd::u32 i = 0; i < k; ++i)
-    {
-        for (crd::u32 j = 0; j < k; ++j)
-        {
-            for (crd::u32 l = 0; l < k; ++l)
-            {
-                const crd::u32 d = id(i, j, l);
-                tb.add(d, d, 6.0 - sigma);
-                if (i + 1 < k)
-                {
-                    tb.add(d, id(i + 1, j, l), -1.0);
-                    tb.add(id(i + 1, j, l), d, -1.0);
-                }
-                if (j + 1 < k)
-                {
-                    tb.add(d, id(i, j + 1, l), -1.0);
-                    tb.add(id(i, j + 1, l), d, -1.0);
-                }
-                if (l + 1 < k)
-                {
-                    tb.add(d, id(i, j, l + 1), -1.0);
-                    tb.add(id(i, j, l + 1), d, -1.0);
-                }
-            }
-        }
-    }
-    return sp::to_csc<double>(tb.compress(), alloc);
+    return dir::test::stencil_3d(k, 6.0 - sigma, alloc);
 }
 
 // Solve residual ‖A·x − b‖∞ for b = A·x_true (x_true ramped), via the factored ldlt.
@@ -1811,7 +1783,7 @@ TEST_CASE("v5d-h MultifrontalLDLt: big indefinite (3D shifted Laplacian) factors
     }
 }
 
-TEST_CASE("v5d-h MultifrontalLDLt: delayed-pivot factorization is bit-identical across {1,2,4,8} workers",
+TEST_CASE("v5d-h MultifrontalLDLt: delayed-pivot factorization is bit-identical across 1 to 32 workers",
           "[hesap][direct][v5d][v5d-h][ldlt]")
 {
     crd::jobs::init();
@@ -1828,7 +1800,7 @@ TEST_CASE("v5d-h MultifrontalLDLt: delayed-pivot factorization is bit-identical 
         REQUIRE(f1.info() == 0);
         REQUIRE(f1.delayed_count() > 0); // delays must occur for this test to mean anything
         REQUIRE(f1.front_count() > 1);   // a genuine multifrontal walk
-        for (crd::u32 nw : {2U, 4U, 8U})
+        for (crd::u32 nw : {2U, 4U, 8U, 16U, 32U})
         {
             dir::MultifrontalLDLT<double> fp(&alloc);
             fp.set_pivot_threshold(0.6403882032022075); // SAME threshold + fronts as f1 ⇒ compare like-for-like
@@ -1929,7 +1901,7 @@ TEST_CASE("v5d-h MultifrontalLDLt: big dense INDEFINITE front uses the blocked-B
     CHECK(res < 1e-9);                                         // the blocked indefinite factor is correct
 }
 
-TEST_CASE("v5d-h MultifrontalLDLt: blocked-BK indefinite fronts bit-identical across {1,2,4} workers",
+TEST_CASE("v5d-h MultifrontalLDLt: blocked-BK indefinite fronts bit-identical across 1 to 32 workers",
           "[hesap][direct][v5d][v5d-h][ldlt]")
 {
     crd::jobs::init();
@@ -1942,7 +1914,7 @@ TEST_CASE("v5d-h MultifrontalLDLt: blocked-BK indefinite fronts bit-identical ac
         f1.factorize(a, 1);
         REQUIRE(f1.info() == 0);
         REQUIRE(f1.front_count() >= 3);
-        for (crd::u32 nw : {2U, 4U})
+        for (crd::u32 nw : {2U, 4U, 8U, 16U, 32U})
         {
             dir::MultifrontalLDLT<double> fp(&alloc);
             fp.factorize(a, nw);

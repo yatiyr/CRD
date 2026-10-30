@@ -1,5 +1,6 @@
 #include <crd/core/assert.hpp>
 #include <crd/hesap/direct/dense_ldlt_kernels.hpp> // factor_front_ldlt (v5d-b)
+#include <crd/hesap/direct/detail/front_levels.hpp>
 #include <crd/hesap/direct/multifrontal_ldlt.hpp>
 #include <crd/hesap/ordering/symbolic.hpp> // ordering::kNoParent (amalgamation front-parent remap)
 #include <crd/jobs/jobs.hpp>
@@ -217,8 +218,9 @@ MultifrontalLDLT<T>::MultifrontalLDLT(crd::memory::IAllocator* alloc) noexcept
 }
 
 template <typename T>
-void MultifrontalLDLT<T>::factorize(const sparse::SparseMatrix<T, sparse::SparseFormat::Csc>& a, crd::u32 num_workers,
-                                    bool hermitian)
+void MultifrontalLDLT<T>::factorize_arm(const detail::MultifrontalLdltPick& pick,
+                                        const sparse::SparseMatrix<T, sparse::SparseFormat::Csc>& a,
+                                        crd::u32 num_workers, bool hermitian)
 {
     m_n = static_cast<crd::u32>(a.pattern().cols);
     m_info = 0;
@@ -390,8 +392,9 @@ void MultifrontalLDLT<T>::factorize(const sparse::SparseMatrix<T, sparse::Sparse
     // POSITION of an eliminated pivot is dynamic (a delayed pivot lands at an ancestor, not its symbolic
     // front), so all of perm/D/block_kinds/L are assigned by the serial postorder pass below. cb[f] (the full
     // factored front, row_index in POST-SWAP global-id order) + cb_npiv[f]=r + fbk[f] + fdelay[f] are the only
-    // outputs; each front writes its OWN slots (single-writer ⇒ race-free). `wk` selects per-worker scratch.
-    auto factor_one_front = [&](crd::u32 f, crd::u32 wk)
+    // outputs; each front writes its OWN slots (single-writer ⇒ race-free). `wk` selects per-worker scratch;
+    // `main_thread` (a narrow level's front) lets the blocked kernel's flush gemms take pick.walk's jobs.
+    auto factor_one_front = [&](crd::u32 f, crd::u32 wk, bool main_thread)
     {
         const crd::u32 c0 = mf.pivot_first[f];
         const crd::u32 npiv = mf.npiv(f);
@@ -487,12 +490,11 @@ void MultifrontalLDLT<T>::factorize(const sparse::SparseMatrix<T, sparse::Sparse
             // BLOCKED-BLAS-3 BK fast path for BIG fronts (v5d-h/perf): full Bunch-Kaufman (1×1/2×2) blocked
             // kernel — handles indefinite + delays directly (returns r ≤ attempt), so no copy/bail-restore.
             // Small fronts use the unblocked kernel (the gemm overhead is not worth amortizing there).
-            constexpr crd::u32 block_min = 128;
-            constexpr crd::u32 block_nb = 128;
-            if (attempt >= block_min)
+            if (attempt >= pick.block_min)
             {
-                r = factor_front_ldlt_blocked<T>(front.data.data(), fnr, fnr, attempt, bk_w, piv_w, block_nb,
-                                                 front_alloc, pa);
+                const detail::FrontJobsPick* const within = main_thread ? &pick.walk.front : nullptr;
+                r = factor_front_ldlt_blocked<T>(front.data.data(), fnr, fnr, attempt, bk_w, piv_w, pick.block_panel,
+                                                 front_alloc, pa, pick.flush_tile, within);
             }
             else
             {
@@ -585,69 +587,39 @@ void MultifrontalLDLT<T>::factorize(const sparse::SparseMatrix<T, sparse::Sparse
     {
         for (crd::u32 f = 0; f < nf; ++f)
         {
-            factor_one_front(f, 0);
+            factor_one_front(f, 0, false);
         }
     }
     else
     {
-        // Assembly-tree levels: level[f] = 1 + max(level[child]); children g < f (ascending = postorder) ⇒ a
-        // single ascending pass. Same-level fronts are mutually independent (a front's cb[f] is read ONLY by
-        // its direct parent, at a higher level, after that level's wait barrier). Front-parallel only.
-        crd::containers::Array<crd::u32> level(m_alloc);
-        level.resize(nf);
-        crd::u32 nlevels = 0;
-        for (crd::u32 f = 0; f < nf; ++f)
+        // Front-parallel by level (each front on one job), or, for a level narrower than pick.walk.level_min, front
+        // by front on the main thread (worker slot 0) with the flush gemms on the jobs. Neither nests a parallel_for.
+        const detail::FrontLevels levels = detail::front_levels(m_alloc, nf, chld_ptr.data(), chld_idx.data(), nullptr);
+        for (crd::u32 l = 0; l < levels.count(); ++l)
         {
-            crd::u32 lev = 0;
-            for (crd::u32 cc = chld_ptr[f]; cc < chld_ptr[f + 1]; ++cc)
+            const crd::u32 lo = levels.ptr[l];
+            const crd::u32 cnt = levels.ptr[l + 1] - lo;
+            const crd::u32* const list = levels.list.data() + lo;
+            if (cnt >= pick.walk.level_min)
             {
-                const crd::u32 lk = level[chld_idx[cc]] + 1;
-                lev = lk > lev ? lk : lev;
+                crd::jobs::Counter* counter = crd::jobs::parallel_for(cnt, num_workers,
+                                                                      [&](crd::u32 b, crd::u32 e)
+                                                                      {
+                                                                          const crd::u32 wk = crd::jobs::worker_index();
+                                                                          for (crd::u32 t = b; t < e; ++t)
+                                                                          {
+                                                                              factor_one_front(list[t], wk, false);
+                                                                          }
+                                                                      });
+                crd::jobs::wait(counter);
             }
-            level[f] = lev;
-            nlevels = (lev + 1 > nlevels) ? lev + 1 : nlevels;
-        }
-        crd::containers::Array<crd::u32> lvl_ptr(m_alloc);
-        lvl_ptr.resize(static_cast<crd::usize>(nlevels) + 1);
-        for (crd::u32 i = 0; i <= nlevels; ++i)
-        {
-            lvl_ptr[i] = 0;
-        }
-        for (crd::u32 f = 0; f < nf; ++f)
-        {
-            ++lvl_ptr[level[f] + 1];
-        }
-        for (crd::u32 l = 0; l < nlevels; ++l)
-        {
-            lvl_ptr[l + 1] += lvl_ptr[l];
-        }
-        crd::containers::Array<crd::u32> lvl_list(m_alloc);
-        lvl_list.resize(nf);
-        crd::containers::Array<crd::u32> wp(m_alloc);
-        wp.resize(nlevels);
-        for (crd::u32 l = 0; l < nlevels; ++l)
-        {
-            wp[l] = lvl_ptr[l];
-        }
-        for (crd::u32 f = 0; f < nf; ++f)
-        {
-            lvl_list[wp[level[f]]++] = f; // ascending f within a level ⇒ worker-order-independent (the moat)
-        }
-        for (crd::u32 l = 0; l < nlevels; ++l)
-        {
-            const crd::u32 lo = lvl_ptr[l];
-            const crd::u32 cnt = lvl_ptr[l + 1] - lo;
-            crd::jobs::Counter* counter = crd::jobs::parallel_for(
-                cnt, num_workers,
-                [&](crd::u32 b, crd::u32 e)
+            else
+            {
+                for (crd::u32 t = 0; t < cnt; ++t)
                 {
-                    const crd::u32 wk = crd::jobs::worker_index();
-                    for (crd::u32 t = b; t < e; ++t)
-                    {
-                        factor_one_front(lvl_list[lo + t], wk);
-                    }
-                });
-            crd::jobs::wait(counter);
+                    factor_one_front(list[t], 0, true);
+                }
+            }
         }
     }
 

@@ -3,8 +3,11 @@
 #include <crd/core/assert.hpp>
 #include <crd/hesap/dense/matrix.hpp>
 #include <crd/hesap/direct/blr.hpp>
+#include <crd/hesap/direct/detail/front_levels.hpp>
 #include <crd/hesap/direct/multifrontal_lu.hpp>  // MultifrontalSymbolic + build_symmetric_multifrontal_symbolic
 #include <crd/hesap/ordering/symbolic.hpp>        // ordering::kNoParent
+#include <crd/jobs/jobs.hpp>
+#include <crd/memory/allocators/thread_safe_allocator.hpp>
 
 #include <chrono>   // CRD_MFBLR_PROFILE phase timing (compile-gated; zero cost when off)
 #include <cmath>
@@ -23,8 +26,9 @@ MultifrontalCholeskyBlr<T>::MultifrontalCholeskyBlr(crd::memory::IAllocator* all
 }
 
 template <typename T>
-bool MultifrontalCholeskyBlr<T>::factorize(const sparse::SparseMatrix<T, sparse::SparseFormat::Csc>& a,
-                                           crd::usize block_size, RT tol, crd::u32 blr_min, crd::u32 num_workers)
+bool MultifrontalCholeskyBlr<T>::factorize_arm(const detail::MultifrontalBlrPick& pick,
+                                               const sparse::SparseMatrix<T, sparse::SparseFormat::Csc>& a,
+                                               crd::usize block_size, RT tol, crd::u32 blr_min, crd::u32 num_workers)
 {
     m_info = 0;
     const sparse::SparsePattern& ap = a.pattern();
@@ -66,7 +70,8 @@ bool MultifrontalCholeskyBlr<T>::factorize(const sparse::SparseMatrix<T, sparse:
     }
 
     // ---- Phase-timing diagnostic, COMPILE-GATED behind -DCRD_MFBLR_PROFILE (off ⇒ `prof` is a false
-    // const ⇒ every if(prof) branch is dead-eliminated, zero production cost; no getenv [MSVC C4996]).
+    // const ⇒ every if(prof) branch is dead-eliminated, zero production cost; no getenv [MSVC C4996]). Only
+    // main-thread fronts add to the phase times, so a front-parallel level is not split into phases.
     // Splits factor time into symbolic / assembly+extend-add / factor / extract + achieved GF/s; the
     // v5e-3 serial-gap probe. Build with the macro to re-profile.
     using Pclock = std::chrono::steady_clock;
@@ -120,14 +125,18 @@ bool MultifrontalCholeskyBlr<T>::factorize(const sparse::SparseMatrix<T, sparse:
         }
     }
 
-    // ---- NODE-parallel: factor fronts SERIALLY; the within-front gemm (gemm_parallel_auto) uses the
-    // jobs workers — parallel for big near-root fronts (where 3D flops concentrate), auto-serial for
-    // small ones. No outer parallel_for ⇒ no nested-parallel_for/frame-arena hazard. The factor is a
-    // pure function of the pattern + deterministic gemm reduction ⇒ bit-identical across worker counts
-    // (the MOAT). `num_workers` is informational; the real parallelism is jobs::num_workers().
-    (void)num_workers;
-    const crd::u32 sw = 1U;
-    crd::memory::IAllocator* const front_alloc = m_alloc;
+    // ---- The walk (pick.walk). A level of at least pick.walk.level_min fronts, all of them dense, runs
+    // front-parallel on num_workers jobs, each front serial on its job; any other level runs front by front on the
+    // main thread (worker slot 0), each front on the jobs of pick.walk.front (a BLR front's gemms) and
+    // pick.dense_gemm_min_mnk (a dense front's trsm and Schur gemms; its dpotrf at Cholesky's cuts). A BLR front's
+    // compression reaches hesap-dense's QR, SVD and Cholesky jobs, so a level holding one never runs
+    // front-parallel; no setting nests a parallel_for. The default is the serial walk with the within-front gemms
+    // at gemm_parallel_auto's cut. Every front is a pure function of the pattern and its children, and every gemm
+    // gives gemm's bits ⇒ bit-identical across every setting and worker count (the MOAT). `ts` guards the front
+    // buffers that migrate across workers on a parallel walk (declared before them: allocator-lifetime rule).
+    const crd::u32 sw = (num_workers <= 1) ? 1U : crd::jobs::num_workers();
+    crd::memory::ThreadSafeAllocator ts(m_alloc);
+    crd::memory::IAllocator* const front_alloc = (sw <= 1) ? m_alloc : static_cast<crd::memory::IAllocator*>(&ts);
 
     crd::containers::Array<Matrix<T>> cb(m_alloc);  // per-front Schur (front_alloc; freed once the parent consumes)
     cb.reserve(nf);
@@ -139,12 +148,13 @@ bool MultifrontalCholeskyBlr<T>::factorize(const sparse::SparseMatrix<T, sparse:
     loc.resize(static_cast<crd::usize>(sw) * n);
     crd::containers::Array<crd::u32> eamap(m_alloc);  // per-worker extend-add row map scratch (child-local -> parent-local)
     eamap.resize(static_cast<crd::usize>(sw) * n);
-    crd::containers::Array<crd::u32> winfo(m_alloc);  // per-worker first-failure (non-PD) front id + 1
-    winfo.resize(sw);
-    for (crd::u32 w = 0; w < sw; ++w)
-    {
-        winfo[w] = 0;
-    }
+    // Per-front state: 0 factored, 1 a non-positive pivot, 2 skipped (a child failed or was skipped, so its Schur is
+    // missing). The first failed front in ascending order is the one the serial walk stops at: every front below it
+    // factors alike on every walk.
+    constexpr crd::u8 front_failed = 1;
+    constexpr crd::u8 front_skipped = 2;
+    crd::containers::Array<crd::u8> fstate(m_alloc);
+    fstate.resize(nf); // value-init 0
 
     // ---- L's CSC STRUCTURE (m_lp + m_li) PRECOMPUTED FROM THE SYMBOLIC, so the factor writes values
     // STRAIGHT INTO m_lx at known column slots (MUMPS-style direct assembly) — no triplet buffers, no
@@ -189,15 +199,21 @@ bool MultifrontalCholeskyBlr<T>::factorize(const sparse::SparseMatrix<T, sparse:
         }
     }
 
-    // Per-front work; worker `wk` owns loc slice [wk*n,..) + triplet buffer wk. Each front's factor is
+    // Per-front work; worker `wk` owns loc slice [wk*n,..) + eamap slice wk. Each front's factor is
     // independent + deterministic; its children (lower level) are done before it runs (the level barrier).
-    const auto factor_one_front = [&](crd::u32 f, crd::u32 wk)
+    // `main_thread`: a front of a level that is not front-parallel, which takes its within-front jobs.
+    const auto factor_one_front = [&](crd::u32 f, crd::u32 wk, bool main_thread)
     {
-        if (winfo[wk] != 0)
+        for (crd::u32 cc = chld_ptr[f]; cc < chld_ptr[f + 1]; ++cc)
         {
-            return;
+            if (fstate[chld_idx[cc]] != 0)
+            {
+                fstate[f] = front_skipped;
+                return;
+            }
         }
-        const auto pasm0 = prof ? Pclock::now() : Pclock::time_point{};
+        const bool timed = prof && main_thread;
+        const auto pasm0 = timed ? Pclock::now() : Pclock::time_point{};
         crd::u32* lw = loc.data() + static_cast<crd::usize>(wk) * n;
         const crd::u32 r0 = mf.row_ptr[f];
         const crd::u32 fnr = mf.row_ptr[f + 1] - r0;
@@ -254,21 +270,31 @@ bool MultifrontalCholeskyBlr<T>::factorize(const sparse::SparseMatrix<T, sparse:
             }
             cb[g] = Matrix<T>(front_alloc);  // free the consumed child (single freer = g's only parent)
         }
-        const auto pfac0 = prof ? Pclock::now() : Pclock::time_point{};
-        if (prof)
+        const auto pfac0 = timed ? Pclock::now() : Pclock::time_point{};
+        if (timed)
         {
             t_asm += std::chrono::duration<double>(pfac0 - pasm0).count();
         }
-        const bool ok = (fnr >= blr_min) ? factor_front_cholesky_blr<T>(front_alloc, front, npiv, block_size, tol)
-                                         : factor_front_cholesky_dense<T>(front_alloc, front, npiv);
-        const auto pext0 = prof ? Pclock::now() : Pclock::time_point{};
-        if (prof)
+        bool ok = false;
+        if (fnr >= blr_min)
+        {
+            ok = factor_front_cholesky_blr<T>(front_alloc, front, npiv, block_size, tol, pick.walk.front);
+        }
+        else
+        {
+            const detail::FrontJobsPick serial{.gemm_min_mnk = ~crd::u64{0}, .workers = 1};
+            const detail::FrontJobsPick within{.gemm_min_mnk = pick.dense_gemm_min_mnk,
+                                               .workers = pick.walk.front.workers};
+            ok = factor_front_cholesky_dense<T>(front_alloc, front, npiv, main_thread ? within : serial);
+        }
+        const auto pext0 = timed ? Pclock::now() : Pclock::time_point{};
+        if (timed)
         {
             t_fac += std::chrono::duration<double>(pext0 - pfac0).count();
         }
         if (!ok)
         {
-            winfo[wk] = f + 1;
+            fstate[f] = front_failed;
             return;
         }
         for (crd::u32 k = 0; k < npiv; ++k)  // L values STRAIGHT into the CSC slot (rows precomputed in m_li)
@@ -289,22 +315,60 @@ bool MultifrontalCholeskyBlr<T>::factorize(const sparse::SparseMatrix<T, sparse:
             }
         }
         cb[f] = std::move(s);
-        if (prof)
+        if (timed)
         {
             t_ext += std::chrono::duration<double>(Pclock::now() - pext0).count();
         }
     };
 
-    for (crd::u32 f = 0; f < nf; ++f)
+    if (sw <= 1)
     {
-        factor_one_front(f, 0);
+        for (crd::u32 f = 0; f < nf; ++f)
+        {
+            factor_one_front(f, 0, true);
+        }
+    }
+    else
+    {
+        const detail::FrontLevels levels = detail::front_levels(m_alloc, nf, chld_ptr.data(), chld_idx.data(), nullptr);
+        for (crd::u32 l = 0; l < levels.count(); ++l)
+        {
+            const crd::u32 lo = levels.ptr[l];
+            const crd::u32 cnt = levels.ptr[l + 1] - lo;
+            const crd::u32* const list = levels.list.data() + lo;
+            bool all_dense = true;
+            for (crd::u32 t = 0; t < cnt; ++t)
+            {
+                all_dense = all_dense && mf.row_ptr[list[t] + 1] - mf.row_ptr[list[t]] < blr_min;
+            }
+            if (all_dense && cnt >= pick.walk.level_min)
+            {
+                crd::jobs::Counter* counter = crd::jobs::parallel_for(cnt, num_workers,
+                                                                      [&](crd::u32 b, crd::u32 e)
+                                                                      {
+                                                                          const crd::u32 wk = crd::jobs::worker_index();
+                                                                          for (crd::u32 t = b; t < e; ++t)
+                                                                          {
+                                                                              factor_one_front(list[t], wk, false);
+                                                                          }
+                                                                      });
+                crd::jobs::wait(counter);
+            }
+            else
+            {
+                for (crd::u32 t = 0; t < cnt; ++t)
+                {
+                    factor_one_front(list[t], 0, true);
+                }
+            }
+        }
     }
 
-    for (crd::u32 w = 0; w < sw; ++w)
+    for (crd::u32 f = 0; f < nf; ++f)
     {
-        if (winfo[w] != 0)
+        if (fstate[f] == front_failed)
         {
-            m_info = winfo[w];
+            m_info = f + 1;
             return false;
         }
     }
