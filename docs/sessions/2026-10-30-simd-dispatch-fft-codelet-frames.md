@@ -45,7 +45,8 @@ it, so it was stopped and not kept.
 
 win-shipping crd-hesap-fft-tests rebuilt with `/we4883` on its kernel units: the largest frame is now 26 KB at avx2
 (a part) and 49 KB at avx512 (a driver's slot array); the three failing cases, `[kernels]` at a forced avx2 and all
-45 cases passed. win-debug built. Generators `--check`, check-generated, the tooling tests (the splitter's case: a
+45 cases passed; under SDE 10.13.1 `-skx` at `CRD_CPU_LEVEL=avx512` both batched cases and `[cpu-level-applied]`
+passed. win-debug built. Generators `--check`, check-generated, the tooling tests (the splitter's case: a
 part bounded with its slots; a budget no part fits refused), Allman braces, the plan and repository checks.
 
 ## Left
