@@ -166,8 +166,10 @@ The web UI has no anonymous mode: the coordinator verifies Cloudflare Access's s
    `https://ci.<your domain>/webhooks/cerid`, content type `application/json`, secret: the value of
    `cerid-webhook-secret` (copy it from Secret Manager into this form only), events "Pushes" and "Pull requests".
    Gitea, Forgejo and Codeberg take the same form (`CERID_CI_GIT_HOST=gitea`); GitLab takes the value as its "Secret
-   token" (`gitlab`); any other host can relay through the `generic` signature (design doc, surfaces). Pull-request
-   builds are untrusted: a step that declares secrets is refused for them.
+   token" (`gitlab`); any other host can relay through the `generic` signature (design doc, surfaces). Pull requests
+   from forks do not build (their own `ci/pipeline.py` would run on the launcher) unless you set `"build_forks": true`
+   on the repository in `ci/coordinator.json`; pull requests from the repository itself build untrusted, and a step
+   that declares secrets is refused for them.
 2. **Commit status** (optional): a fine-grained personal access token limited to this repository with "Commit
    statuses: Read and write" only; store it as `cerid-status-token` and set `CERID_CI_STATUS_REPOSITORY`. Each build
    then reports `cerid-ci` pending, success or failure with a link to its page.

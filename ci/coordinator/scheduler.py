@@ -8,6 +8,7 @@ Nothing here keeps state in memory that a restart would need.
 from __future__ import annotations
 
 from pathlib import Path
+import copy
 import hashlib
 import json
 import os
@@ -91,7 +92,7 @@ class Coordinator:
     def __init__(self, store, config=None, clock=time.time, secrets=None, http=None, log=None, mirror=None):
         self.p = pipeline_module()
         self.store = store
-        self.config = config or {}
+        self.config = copy.deepcopy(config or {})  # its own copy: a caller's later edits never leak in
         self.clock = clock
         self.secrets = secrets
         self.http = http
@@ -200,6 +201,13 @@ class Coordinator:
         repo = self.repository(repository)
         if not re.match(r'^[0-9a-f]{7,64}$', trigger.get('commit', '')):
             raise ValueError('a build needs a full commit id, got %r' % trigger.get('commit'))
+        if source in ('webhook', 'poll') and trigger.get('event') == 'pull_request' and not trigger.get('trusted') \
+                and not repo.get('build_forks', False):
+            # A fork's pull request would run its own ci/pipeline.py as the build's first step, on the launcher and
+            # its service account: it is never built unless the repository opts in with `build_forks`.
+            self.log('build_refused_fork', repository=repository, pull_request=trigger.get('pull_request'),
+                     commit=trigger.get('commit'))
+            return None, False
         now = self.clock()
         number = self.update('counters/build.json', lambda c: {'next': (c or {'next': 1})['next'] + 1})['next'] - 1
         if source in ('webhook', 'poll'):

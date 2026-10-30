@@ -100,7 +100,9 @@ class Service:
         if trigger is None:
             return {'ignored': True}
         build, created = self.c.create_build(repository, trigger, 'webhook')
-        return {'build': build['number'] if build else None, 'created': created}
+        if build is None:
+            return {'ignored': True, 'reason': 'fork pull request (the repository does not set build_forks)'}
+        return {'build': build['number'], 'created': created}
 
     def spend(self):
         p = self.c.p

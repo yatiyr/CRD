@@ -52,7 +52,7 @@ budget, the four executors, `ci/ops.py` and the QUAL dashboard are reused.
   agent); the executors launch the Cerid agent (no token at all for a GCE VM; the agent's SHA-256 checked by every
   bootstrap); `ci/ops.py` gains builds, build, retry, cancel, agents, queues, logs, agent-token, health, backup and
   restore; the four buildkite-agent pins are removed and the licence manifest regenerated.
-- Tests: `scripts/test-ci-orchestrator.py` (75: state machines, document, compare-and-swap on both backends including
+- Tests: `scripts/test-ci-orchestrator.py` (76: state machines, document, compare-and-swap on both backends including
   a real-HTTP Cloud Storage fake, threads and processes, authentication with generated RSA and P-256 keys, host
   adapters and cron, the coordinator, the dispatcher, the agent and the service; fault injection: lost agent, bounded
   retries, an agent that vanishes after taking a job, preempted VM, a VM that never boots, launch failure, duplicate
@@ -80,10 +80,24 @@ budget, the four executors, `ci/ops.py` and the QUAL dashboard are reused.
   provisioning now installs `python-is-python3`. The Windows image installed Python per user, invisible to the
   startup script running as SYSTEM; it now installs machine-wide. The provisioning test asserts both.
 - `gce_vm.http_request` left HTTP error responses open (ResourceWarning on every 404 and 412); it closes them now.
+- The coordinator kept a reference to its caller's configuration, so a later edit by the caller changed a running
+  coordinator (in the suite it let one test's repository settings leak into the next and made the schedule-restart
+  test pass without checking anything). The coordinator now keeps its own copy; the restart test, which failed once
+  the leak was gone, now builds the restarted coordinator with the same configuration and holds the real property.
+
+## Review finding fixed before the push
+
+An advisor review found that a pull request from a fork would have run its own `ci/pipeline.py` as the build's first
+step on the launcher, with the launcher's service account: the `trusted` flag only withheld declared secrets. Fork
+pull requests (and every pull request through the generic host, which cannot tell a fork) are now never built
+unless the repository sets `build_forks`; the webhook answers "ignored" and the coordinator logs
+`build_refused_fork`. Pushes to any branch and pull requests from the repository itself still build, untrusted
+outside `trusted_branches`. Tests: `Core.test_fork_pull_requests_never_build_unless_the_repository_opts_in` and the
+service's webhook test; ADR-0135 §14 and the recipe's webhook section say so.
 
 ## Verification
 
-Python only, by the parallel-work limits: `python scripts/test-ci-orchestrator.py` (75 tests),
+Python only, by the parallel-work limits: `python scripts/test-ci-orchestrator.py` (76 tests),
 `python scripts/test-ci-orchestrator-e2e.py` (3 tests, about 18 s, a real agent process on this Windows host),
 `python scripts/test-ci-platform.py` (76), and the quick validators `check-master-plan.py`, `check-repository.py`,
 `check-allman-braces.py`, `check-pins.py`, `check-generated.py`, `check-ci-tiers.py` and

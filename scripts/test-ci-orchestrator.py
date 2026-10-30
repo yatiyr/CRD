@@ -880,10 +880,26 @@ class Core(Base):
             self.c.finish(got['job']['id'], got['token'], 0)
             stored = json.dumps([self.store.get_json(n) for n in self.store.list('orchestrator/')])
             self.assertNotIn('s3cret-value', stored, 'a secret value never reaches the store')
+            # A pull request from the repository itself builds, untrusted: its secrets are refused.
             self.build(document, commit='c' * 40, event='pull_request', branch='feature', pull_request='4',
-                       trusted=False)
+                       trusted=True)
             with self.assertRaises(scheduler.Refused):
                 self.c.poll(agent(self.c, queue='q', name='w2'))
+
+    def test_fork_pull_requests_never_build_unless_the_repository_opts_in(self):
+        fork = {'event': 'pull_request', 'branch': 'evil', 'commit': 'f' * 40, 'pull_request': '9',
+                'base_branch': 'main', 'trusted': False}
+        self.assertEqual(self.c.create_build('cerid', fork, 'webhook'), (None, False))
+        self.assertEqual(self.c.recent(), [])
+        self.assertTrue(any(r['event'] == 'build_refused_fork' for r in self.c.log.records))
+        self.c.repositories['cerid']['build_forks'] = True
+        build, created = self.c.create_build('cerid', fork, 'webhook')
+        self.assertTrue(created)
+        self.assertFalse(build['trusted'])
+        push = {'event': 'push', 'branch': 'feature', 'commit': 'e' * 40, 'trusted': True}
+        build, created = self.c.create_build('cerid', push, 'webhook')
+        self.assertTrue(created, 'a push to any branch of the repository builds')
+        self.assertFalse(build['trusted'], 'outside the trusted branches it gets no secrets')
 
     def test_logs_are_ordered_idempotent_chunks(self):
         self.build({'steps': [{'key': 'a', 'command': 'x', 'agents': {'queue': 'q'}}]})
@@ -1255,7 +1271,7 @@ class Triggers(Base):
         run = lambda argv, **kw: Done({'main': COMMIT})
         made = triggers.schedules(self.c, run=run)
         self.assertEqual([(b['source'], b['created_by']) for b in made], [('schedule', 'schedule:nightly')])
-        again = coordinator(self.store, self.clock)
+        again = scheduler.Coordinator(self.store, self.c.config, clock=self.clock, log=self.c.log)  # a restart
         self.assertEqual(triggers.schedules(again, run=run), [], 'a restarted coordinator does not fire it again')
         self.clock.now = hosts.parse_utc('2026-11-01T05:00:00Z')
         self.assertEqual(len(triggers.schedules(again, run=run)), 1, 'missed by two hours: caught up once')
@@ -1394,6 +1410,13 @@ class Service(Base):
         self.assertEqual(self.call('POST', '/webhooks/nope', body, headers)[0], 404)
         ping = dict(headers, **{'X-GitHub-Event': 'ping', 'X-GitHub-Delivery': 'p'})
         self.assertEqual(json.loads(self.call('POST', '/webhooks/cerid', body, ping)[1]), {'ignored': True})
+        pull = json.dumps({'action': 'opened', 'pull_request': {
+            'number': 3, 'state': 'open', 'head': {'sha': 'd' * 40, 'ref': 'x', 'repo': {'full_name': 'fork/c'}},
+            'base': {'ref': 'main', 'repo': {'full_name': 'o/cerid'}}}}).encode()
+        fork = dict(headers, **{'X-GitHub-Event': 'pull_request', 'X-GitHub-Delivery': 'f',
+                                'X-Hub-Signature-256': 'sha256=' + hosts.hmac_hex('whsec', pull)})
+        answer = json.loads(self.call('POST', '/webhooks/cerid', pull, fork)[1])
+        self.assertEqual((answer['ignored'], answer['reason'].startswith('fork')), (True, True))
         self.assertEqual(len(self.c.recent()), 1)
 
     def test_agent_api_and_public_paths(self):
