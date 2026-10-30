@@ -19,11 +19,14 @@ Method: [reference-class benchmarking policy](../PRINCIPLES_reference_class_benc
 3. The full peer board — every peer measured, losses and ties included (SANITY #6/#9: a loss is an open
    bug, not a disclosure; N/A stated *with the check*).
 4. The verdict line quoted by session logs / phase tables.
+5. The host's load before and after (`python scripts/build-bench.py host`). Boards do not wait for a quiet host
+   (user order, 2026-10-31): they run with `--allow-contended`, name the load, and judge by ratios of interleaved arms
+   against the peers and the pre-row engine; a regression is real only if it holds across the interleaved repetitions.
 
 Historical results (v5–v13 + the transcendental cluster) were retro-ported 2026-07-02 from the session
 logs / phase tables (recorded numbers, not re-measured — each file carries the note). From v14 on, every
 board is written here AT MEASUREMENT TIME — this is part of the per-slice Definition of Done for any
-perf/crush claim (see AGENTS.md § Numerical/perf work).
+perf/crush claim (see [AGENTS](../../AGENTS.md#conduct--mandatory)).
 
 ## Index
 
