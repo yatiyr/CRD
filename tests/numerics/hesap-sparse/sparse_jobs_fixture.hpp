@@ -1,5 +1,7 @@
 #pragma once
 
+#include "jobs_pool_listener.hpp"
+
 #include <crd/jobs/jobs.hpp>
 
 // Single jobs init/shutdown for the crd-hesap-sparse test binary. crd::jobs
@@ -10,7 +12,11 @@ namespace crd_hesap_sparse_tests
 {
 struct SparseJobsListener
 {
-    SparseJobsListener() { crd::jobs::init(); }
+    SparseJobsListener()
+    {
+        crd::jobs::init();
+        crd::test::keep_jobs_pool(); // up for the rest of the run, a failed case's included
+    }
     ~SparseJobsListener() { crd::jobs::shutdown(); }
     SparseJobsListener(const SparseJobsListener&) = delete;
     SparseJobsListener& operator=(const SparseJobsListener&) = delete;

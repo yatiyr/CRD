@@ -78,6 +78,8 @@ function(crd_discover_tests TARGET)
     _crd_uses_target(_uses_jobs "${TARGET}" crd-jobs)
     if(_uses_jobs)
         target_sources("${TARGET}" PRIVATE "${_CRD_JOBS_POOL_LISTENER}")
+        get_filename_component(_listener_dir "${_CRD_JOBS_POOL_LISTENER}" DIRECTORY)
+        target_include_directories("${TARGET}" PRIVATE "${_listener_dir}") # jobs_pool_listener.hpp for a kept pool
     endif()
     get_property(_before DIRECTORY PROPERTY TEST_INCLUDE_FILES)
     catch_discover_tests("${TARGET}" ${_forward})

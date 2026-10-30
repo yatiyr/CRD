@@ -1,5 +1,7 @@
 #pragma once
 
+#include "jobs_pool_listener.hpp"
+
 #include <crd/jobs/jobs.hpp>
 
 // Shared jobs-init/shutdown fixture for hesap-dense tests. Function-static
@@ -17,7 +19,11 @@ namespace crd_hesap_dense_tests
 {
 struct HesapJobsListener
 {
-    HesapJobsListener() { crd::jobs::init(); }
+    HesapJobsListener()
+    {
+        crd::jobs::init();
+        crd::test::keep_jobs_pool(); // up for the rest of the run, a failed case's included
+    }
     ~HesapJobsListener() { crd::jobs::shutdown(); }
     HesapJobsListener(const HesapJobsListener&) = delete;
     HesapJobsListener& operator=(const HesapJobsListener&) = delete;
