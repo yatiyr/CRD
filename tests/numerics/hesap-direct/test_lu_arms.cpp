@@ -2,10 +2,12 @@
 // HESAP-JOBS-RETUNE; detail::SupernodalLuPick, MultifrontalLuPick and DenseLuPick in direct_picks.hpp).
 //
 // A scheduling arm (the job count, the walk's and the fronts' cuts, the lookahead, the fronts' forced jobs) must give
-// the one-job factor's bits: L, U, their fill and, with partial pivoting, the row permutation. A blocking arm (the
-// inline foot update against gemm's, the diagonal block's and the fronts' panel widths) regroups sums: it must give
-// its own one-job bits on 8 and 32 jobs and keep the raw factor's normwise backward error within 4 n eps. The pool
-// has four workers on every host (a hosted runner's), so the 8 to 32 forced jobs outnumber it.
+// the one-job factor's bits, NaN payloads aside: L, U, their fill and, with partial pivoting, the row permutation. A
+// blocking arm (the inline foot update against gemm's, the diagonal block's and the fronts' panel widths) regroups
+// sums: it must give its own one-job bits on 8 and 32 jobs and keep the raw factor's normwise backward error within
+// 4 n eps. The pool has four workers on every host (a hosted runner's), so the 8 to 32 forced jobs outnumber it.
+
+#include "nan_aside.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>
@@ -23,6 +25,7 @@
 #include <cstring>
 #include <iterator>
 #include <limits>
+#include <type_traits>
 
 namespace
 {
@@ -281,9 +284,22 @@ template <typename F, typename T> bool within_bound(const F& f, const Mat<T>& a,
     return r <= bound;
 }
 
+// Indices and kinds byte for byte; values bit for bit, NaN payloads aside (ADR-0134 §7: the instruction forms an arm's
+// NaN meets decide a two-NaN operation's payload and sign).
 template <typename T> bool same_span(crd::containers::ConstSpan<T> x, crd::containers::ConstSpan<T> y)
 {
-    return x.size() == y.size() && (x.size() == 0 || std::memcmp(x.data(), y.data(), x.size() * sizeof(T)) == 0);
+    if (x.size() != y.size())
+    {
+        return false;
+    }
+    if constexpr (std::is_integral_v<T> || std::is_enum_v<T>)
+    {
+        return x.size() == 0 || std::memcmp(x.data(), y.data(), x.size() * sizeof(T)) == 0;
+    }
+    else
+    {
+        return crd::test::same_values_nan_aside(x.data(), y.data(), x.size());
+    }
 }
 
 // info(), the fill, L and U bit for bit, and (multifrontal) the row permutation.

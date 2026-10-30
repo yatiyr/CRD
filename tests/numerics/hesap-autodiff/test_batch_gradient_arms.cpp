@@ -1,6 +1,10 @@
 // batch_gradient's crd-jobs picks (reverse.hpp, detail::BatchGradientPick): every sample cut, fold split and job count
 // gives the bits of the per-sample gradients folded in ascending sample order (each taken with `gradient` on one
 // tape), IEEE specials included, writes only grad[0, n) and gbuf[0, S n), and runs serially on a pool that is down.
+// The fold's bits are compared NaN payloads aside (ADR-0134 §7): its add meets two NaNs once a NaN sample is in, and
+// the compiler's operand order there picks the payload.
+
+#include "nan_aside.hpp"
 
 #include <crd/hesap/autodiff/reverse.hpp>
 #include <crd/jobs/jobs.hpp>
@@ -60,6 +64,20 @@ f64 guard_value()
 bool same_bits(const f64* a, const f64* b, usize count)
 {
     return std::memcmp(a, b, count * sizeof(f64)) == 0;
+}
+
+// grad[0, n) against the fold, NaN payloads aside, with no guard word left (an unwritten guard is a NaN too).
+bool same_fold(const crd::containers::Array<f64>& grad, const f64* want, usize n)
+{
+    const f64 g = guard_value();
+    for (usize i = 0; i < n; ++i)
+    {
+        if (std::memcmp(&grad[i], &g, sizeof(f64)) == 0)
+        {
+            return false;
+        }
+    }
+    return crd::test::same_values_nan_aside(grad.data(), want, n);
 }
 
 bool guards_intact(const crd::containers::Array<f64>& v, usize from)
@@ -200,7 +218,7 @@ void check_every_pick(Tapes& t, int n, bool specials)
                                                 {gbuf.data(), rows}, jobs);
                 INFO("n " << n << " S " << samples << " jobs " << jobs << " jobs_min_samples " << pick.jobs_min_samples
                           << " fold_jobs " << pick.fold_jobs);
-                const bool grad_same = same_bits(grad.data(), want, static_cast<usize>(n));
+                const bool grad_same = same_fold(grad, want, static_cast<usize>(n));
                 const bool rows_same = same_bits(gbuf.data(), want_rows.data(), rows);
                 CHECK(grad_same);
                 CHECK(rows_same);
@@ -235,7 +253,7 @@ TEST_CASE("batch_gradient picks: every sample cut, fold split and job count give
         rev::batch_gradient(loss, {theta, 3}, 37, {a, 3}, {t.ptrs, 8}, {gbuf, 37 * 3}, 8U);
         rev::detail::batch_gradient_arm(rev::detail::BatchGradientPick{}, loss, {theta, 3}, 37, {b, 3}, {t.ptrs, 1},
                                         {gbuf, 37 * 3}, 1U);
-        CHECK(same_bits(a, b, 3));
+        CHECK(crd::test::same_values_nan_aside(a, b, 3));
     }
     crd::jobs::shutdown();
 }
@@ -263,7 +281,7 @@ TEST_CASE("batch_gradient picks: a pool that is down runs every job count on the
         // One tape is all the down pool's one job needs, whatever num_jobs says.
         rev::detail::batch_gradient_arm(pick, loss, {theta, 3}, 37, {grad.data(), 3}, {t.ptrs, 1},
                                         {gbuf.data(), 37 * 3}, 16U);
-        const bool grad_same = same_bits(grad.data(), want, 3);
+        const bool grad_same = same_fold(grad, want, 3);
         const bool rows_same = same_bits(gbuf.data(), want_rows.data(), 37 * 3);
         CHECK(grad_same);
         CHECK(rows_same);

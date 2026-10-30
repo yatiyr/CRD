@@ -3,11 +3,12 @@
 // MultifrontalBlrPick in direct_picks.hpp).
 //
 // A scheduling arm (the job count, the level-width cut, a main-thread front's gemm cut and jobs, LDLT's flush tile,
-// BLR's dense-front cut) must give the one-job factor's bits. A blocking arm (LDLT's blocked-kernel cut and panel,
-// QR's compact-WY panel and cut) regroups sums: it must give its own one-job bits under the scheduling extremes on 8
-// and 32 jobs and keep the raw factor's normwise backward error within 4 n eps. The pool has four workers on every
-// host (a hosted runner's), so the 8 to 32 forced jobs outnumber it.
+// BLR's dense-front cut) must give the one-job factor's bits, NaN payloads aside. A blocking arm (LDLT's
+// blocked-kernel cut and panel, QR's compact-WY panel and cut) regroups sums: it must give its own one-job bits under
+// the scheduling extremes on 8 and 32 jobs and keep the raw factor's normwise backward error within 4 n eps. The pool
+// has four workers on every host (a hosted runner's), so the 8 to 32 forced jobs outnumber it.
 
+#include "nan_aside.hpp"
 #include "stencil_3d.hpp"
 
 #include <crd/containers/array.hpp>
@@ -29,6 +30,7 @@
 #include <initializer_list>
 #include <iterator>
 #include <limits>
+#include <type_traits>
 
 namespace
 {
@@ -267,9 +269,22 @@ crd::f64 backward_ratio(const Csc<T>& a, Solve solve, crd::memory::IAllocator* a
     return r / bound;
 }
 
+// Indices and kinds byte for byte; values bit for bit, NaN payloads aside (ADR-0134 §7: the instruction forms an arm's
+// NaN meets decide a two-NaN operation's payload and sign).
 template <typename T> bool same_span(crd::containers::ConstSpan<T> x, crd::containers::ConstSpan<T> y)
 {
-    return x.size() == y.size() && (x.size() == 0 || std::memcmp(x.data(), y.data(), x.size() * sizeof(T)) == 0);
+    if (x.size() != y.size())
+    {
+        return false;
+    }
+    if constexpr (std::is_integral_v<T> || std::is_enum_v<T>)
+    {
+        return x.size() == 0 || std::memcmp(x.data(), y.data(), x.size() * sizeof(T)) == 0;
+    }
+    else
+    {
+        return crd::test::same_values_nan_aside(x.data(), y.data(), x.size());
+    }
 }
 
 template <typename T> bool same_array(const crd::containers::Array<T>& x, const crd::containers::Array<T>& y)

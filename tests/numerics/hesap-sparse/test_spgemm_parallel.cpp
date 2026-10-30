@@ -7,6 +7,7 @@
 #include <crd/hesap/sparse/sparse.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
+#include "nan_aside.hpp"
 #include "sparse_arm_fixture.hpp"
 #include "sparse_jobs_fixture.hpp"
 
@@ -98,7 +99,7 @@ TEST_CASE("parallel spgemm auto job count matches serial (non-square)", "[hesap]
     CHECK(csr_byte_equal(serial, par));
 }
 
-// ---- spgemm_arm: every cut and job count gives serial spgemm's bits ----
+// ---- spgemm_arm: every cut and job count gives serial spgemm's bits (NaN payloads aside, ADR-0134 §7) ----
 
 namespace
 {
@@ -106,7 +107,8 @@ using crd_hesap_sparse_tests::arm_csr;
 using crd_hesap_sparse_tests::arm_value;
 using crd_hesap_sparse_tests::same_bytes;
 
-// Shape, topology hash, and every outer, inner and value byte.
+// Shape, topology hash and every outer and inner byte; every value's bits, NaN payloads aside (a complex product meets
+// two NaNs in its commutative add, and the serial and parallel bodies' operand orders may differ there).
 template <typename T>
 bool same_csr(const sp::SparseMatrix<T, sp::SparseFormat::Csr>& x, const sp::SparseMatrix<T, sp::SparseFormat::Csr>& y)
 {
@@ -115,7 +117,7 @@ bool same_csr(const sp::SparseMatrix<T, sp::SparseFormat::Csr>& x, const sp::Spa
            x.pattern().outer_ptr.size() == y.pattern().outer_ptr.size() &&
            same_bytes(x.pattern().outer_ptr.data(), y.pattern().outer_ptr.data(), x.pattern().outer_ptr.size()) &&
            same_bytes(x.pattern().inner_idx.data(), y.pattern().inner_idx.data(), x.nnz()) &&
-           same_bytes(x.values().values.data(), y.values().values.data(), x.nnz());
+           crd::test::same_values_nan_aside(x.values().values.data(), y.values().values.data(), x.nnz());
 }
 
 constexpr crd::u32 kArmWorkers[] = {0, 1, 2, 3, 4, 8, 16, 32};
