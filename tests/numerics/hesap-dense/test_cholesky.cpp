@@ -337,7 +337,8 @@ template <typename T> bool cholesky_backward_stable(const Cholesky<T, Layout::Ro
             double bound = 0.0;
             for (crd::usize p = 0; p <= j; ++p)
             {
-                const double x = static_cast<double>(chol.packed().at(i, p)) * chol.packed().at(j, p);
+                const double x =
+                    static_cast<double>(chol.packed().at(i, p)) * static_cast<double>(chol.packed().at(j, p));
                 sum += x;
                 bound += std::fabs(x);
             }
