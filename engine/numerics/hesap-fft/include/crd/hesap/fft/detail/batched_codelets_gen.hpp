@@ -6,8 +6,8 @@
 // Scheduler mode: hybrid2 (f64 = greedy, f32 = belady).
 // Declarations only: the definitions sit in 7 codelet units balanced by line count
 // (kernels/fft_batched_codelets_<k>.cpp, fft_codegen_split.py): each codelet whole at avx2 and avx512,
-// else tile bodies in parts of at most 150 lines (MSVC's optimizer is superlinear in a
-// function's and a unit's size).
+// the largest in parts under MSVC's optimization limit, else tile bodies in parts of at most
+// 150 lines (MSVC's optimizer is superlinear in a function's and a unit's size).
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/math/kernel_level.hpp>

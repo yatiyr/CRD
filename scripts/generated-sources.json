@@ -944,7 +944,7 @@
         "numpy"
       ],
       "note": "Twiddles come from the host cmath.exp: Windows renders 11,802 lines one ulp apart (e.g. -0.7071067811865476 for -0.7071067811865475). A correctly rounded rendering and its regeneration are the FFT owner's qualification when that programme resumes; the reference host reproduced the header byte-for-byte in seven runs. Since 2026-10-28 the script also writes the codelet units (fft_codegen_split.py) and --check compares the header and every unit.",
-      "sha256": "c0a4a9759520b05fbba06213938b523926e31720a4f1de87f6d6c117affe57fc"
+      "sha256": "227f4c36c4a7f1a4bcdcee5bdb6d4866db7312b20b451ceadab0c81fd12d13da"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_batched_codelets_0.cpp",
