@@ -5,6 +5,8 @@
 > Owner row: [SIMD-DISPATCH](../ROADMAP.md#slice-simd-dispatch); session:
 > [2026-10-30](../sessions/2026-10-30-simd-dispatch-fft-board-whole-codelets.md); acceptance: the user's order of
 > [2026-10-30](../sessions/2026-10-30-simd-dispatch-peer-pins-board-acceptance.md#user-decisions-recorded).
+> Board 2 ([session](../sessions/2026-10-30-simd-dispatch-fft-board-method.md), [below](#board-2-one-program-on-both-engines))
+> supersedes this board's f32 verdict and its two method claims.
 
 - **Machine:** Intel i9-14900K, WSL2 (kernel 6.6.87.2, 32 logical CPUs, 31 GiB, 30 GiB available), Windows 11 host.
   `scripts/build-bench.py host` before and after each board: other processes 0.5 to 1.1 cores (the busiest Studio
@@ -96,10 +98,10 @@ The four-step sizes need the hierarchical units whole too; force-inlined parts k
 | 1048576 | 46.310 | 45.056 | 26.709 | 0.11x | 17.442 | 17.550 | 28.149 | 0.14x |
 | 4194304 | 191.577 | 191.505 | 124.225 | 0.15x | 64.705 | 63.953 | 109.627 | 0.21x |
 
-Pre-row had no such level, so these have no pre-row reference. Two method defects make them provisional: MKL ran its
-own AVX-512 kernels at every forced level (`MKL_ENABLE_INSTRUCTIONS` not set), and glibc's `fma`, which the portable
-level's `libm::fma` calls, takes the FMA instruction through its ifunc on this host, so portable measured a CPU with
-FMA (f64 portable faster than sse2's exact emulation). At sse2 and sse4.2 the planner's algorithms lose to others in
+Pre-row had no such level, so these have no pre-row reference. This board called two method defects that board 2
+corrects: MKL runs AVX2 on this host (`MKL_VERBOSE`), and a peer at the host's ISA at every forced level is ADR-0134
+§8's method (amended 2026-10-29); glibc's FMA ifunc is right for portable (its targets have the FPU's fma) and is now
+hidden on sse4.2 and sse2. At sse2 and sse4.2 the planner's algorithms lose to others in
 `bench_fft_f32`'s arms: Stockham 1.2x to 1.7x faster at 1K to 64K and the four-step 1.2x to 1.26x at 128K to 1M
 (pass 1, sse2).
 
@@ -110,3 +112,55 @@ FMA (f64 portable faster than sse2's exact emulation). At sse2 and sse4.2 the pl
   0.887-0.974) stay outside the noise; 256K, 1M and 2M +9% to +14% with overlapping ranges.
 - **sse4.2, sse2, portable: provisional** until the method defects are fixed; the plan per level is a decision (one
   plan on every level keeps the family's cross-level bits, ADR-0134 §7).
+
+## Board 2: one program on both engines
+
+The f32 rows above compare two programs: HEAD's `bench_fft_f32` timed the input copy with each transform (and
+MKL's), pre-row's did not; both f64 programs timed it. Board 2 builds pre-row's two programs against HEAD's lane
+tree (each its compile and link command with the source swapped) and runs them on both engines; HEAD's two programs
+now copy the input before each timed call. Same host (other processes 0.5 to 0.8 cores, Windows 10.3 to 11.4 of
+63.7 GiB available, the user's applications), CPU 4, five passes, each: pre-row's f32 and f64 programs on pre-row's
+engine, then on HEAD's (`62d9aedd` with the untimed copy), then HEAD's programs at detected, sse4.2, sse2 (glibc's
+features above the level hidden, `run-lane-bench.sh`) and portable.
+
+The avx2 level, pre-row's program, median [lowest - highest] ms (64K and below at the programs' 3-decimal
+resolution):
+
+| n | f32 pre-row | f32 HEAD | HEAD / pre-row | f64 pre-row | f64 HEAD | HEAD / pre-row |
+|---|---|---|---|---|---|---|
+| 65536 | 0.069 [0.067-0.072] | 0.069 [0.068-0.073] | 1.00 | 0.171 [0.166-0.179] | 0.176 [0.170-0.185] | 1.03 |
+| 131072 | 0.202 [0.185-0.224] | 0.176 [0.170-0.203] | 0.87 | 0.520 [0.453-0.547] | 0.513 [0.493-0.528] | 0.99 |
+| 262144 | 0.456 [0.429-0.543] | 0.437 [0.422-0.502] | 0.96 | 1.163 [1.039-1.258] | 1.180 [1.116-1.222] | 1.01 |
+| 524288 | 1.090 [0.960-1.240] | 1.018 [0.991-1.159] | 0.93 | 2.675 [2.486-2.880] | 2.984 [2.825-3.156] | 1.12 |
+| 1048576 | 2.912 [2.519-3.374] | 3.018 [2.403-3.257] | 1.04 | 6.165 [5.990-6.251] | 6.070 [5.953-6.216] | 0.98 |
+| 2097152 | 6.247 [5.980-6.400] | 6.387 [6.071-6.738] | 1.02 | 14.319 [13.521-14.616] | 14.292 [13.821-14.573] | 1.00 |
+| 4194304 | 13.480 [12.865-13.679] | 13.397 [12.742-13.677] | 0.99 | 27.929 [26.860-29.690] | 28.242 [28.107-29.753] | 1.01 |
+| 8388608 | | | | 64.735 [61.544-65.531] | 65.619 [62.197-67.671] | 1.01 |
+
+Every range overlaps its pre-row range. The widest median gap, f64 512K (+12%), overlaps; HEAD's own f64 program
+reads 2.440 [2.289-2.511] there with the copy untimed.
+
+HEAD's programs, every level (median ms; peers from the detected arm, at the host's ISA):
+
+| n | f64 avx2 | f64 sse4.2 | f64 sse2 | f64 portable | FFTW | pocketfft | MKL | f32 avx2 | f32 sse4.2 | f32 sse2 | f32 portable | f32 MKL |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1024 | 0.001 | 0.016 | 0.016 | 0.009 | 0.001 | 0.003 | 0.001 | 0.001 | 0.006 | 0.006 | 0.009 | 0.000 |
+| 16384 | 0.032 | 0.455 | 0.452 | 0.258 | 0.027 | 0.071 | 0.025 | 0.015 | 0.216 | 0.214 | 0.230 | 0.012 |
+| 131072 | 0.443 | 5.244 | 5.233 | 2.818 | 0.302 | 0.751 | 0.352 | 0.175 | 1.694 | 1.707 | 2.635 | 0.151 |
+| 1048576 | 5.240 | 44.679 | 45.820 | 27.000 | 6.142 | 9.410 | 4.082 | 2.554 | 16.836 | 16.890 | 28.359 | 1.933 |
+| 4194304 | 26.052 | 185.390 | 185.680 | 118.003 | 32.590 | 61.555 | 26.169 | 13.116 | 61.494 | 61.518 | 105.134 | 11.825 |
+
+Hiding glibc's FMA left sse4.2 and sse2 where board 1 had them: their codelets run Vec bodies, not libm's `fma`. On
+portable it made the f32 4M forward 3,357 ms against 109 (glibc's software `fma`), a machine no build targets, so
+portable keeps the host's glibc. At 1M the f32 tiled four-step arm ran 2.105 [2.098-2.128] against the planned
+deep-split's 2.554 [2.528-2.613] at avx2, 17.04 against 16.89 at sse2, 17.20 against 16.84 at sse4.2 and 28.43
+against 28.36 at portable; it is now the f32 1M plan on every level (one run after: 1.955 ms, MKL 1.857, 0.95x).
+
+## Verdict (board 2)
+
+- **f32 and f64, avx2: accepted.** No size regressed beyond the pass noise against pre-row on one program; board
+  1's f32 gap was the timed copy.
+- **sse4.2, sse2, portable:** no pre-row level; their standing against the peers is recorded above. At sse2 and
+  sse4.2 the planner's algorithms trail Stockham (1.36x to 1.69x, 1K to 64K) and the four-step (1.18x to 1.23x, 128K
+  to 1M); one plan on every level keeps the family's cross-level bits (ADR-0134 §7), a plan per level would give them
+  up, which is the user's decision.
