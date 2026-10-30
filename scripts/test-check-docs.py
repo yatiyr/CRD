@@ -192,7 +192,8 @@ class References(TreeCase):
             'Run `scripts/gone.py` and `vanished.ps1`; read cmake/Missing.cmake.\n'
             '`cmake --preset win-imaginary`; `-DCRD_NO_SUCH_OPTION=ON`; `crd-check-imaginary`.\n')
         joined = '\n'.join(errors)
-        for needle in ('missing path scripts/gone.py', 'missing script vanished.ps1', 'missing path cmake/Missing.cmake',
+        for needle in ('missing path scripts/gone.py', 'missing script vanished.ps1',
+                       'missing path cmake/Missing.cmake',
                        'missing preset win-imaginary', 'CRD_NO_SUCH_OPTION', 'crd-check-imaginary'):
             self.assertIn(needle, joined)
 
@@ -222,6 +223,7 @@ class Facts(TreeCase):
         self.assertEqual(values['engine-module-count'], '2')
         self.assertEqual(values['other-module-count'], '2')
         self.assertEqual(values['host-tool-count'], '1')
+        self.assertEqual(values['engine-families'], '`foundation`')
         self.assertEqual(values['test-directory-count'], '3')
         self.assertEqual(values['native-profile-count'], '3')
         self.assertEqual(values['copyright'], 'Copyright (c) 2026 Example Owner. All rights reserved.')
@@ -334,10 +336,12 @@ class Phrases(TreeCase):
         self.assertTrue(self.check('Agents never commit or push.\n'))
         self.assertTrue(self.check('Work serially, no parallel agents.\n', 'context.md'))
         self.assertTrue(self.check('CI runs on Buildkite agents.\n'))
-        self.assertTrue(self.check('Coding conventions live in CLAUDE.md.\n'))
+        self.assertTrue(self.check('For coding conventions see CLAUDE.md.\n'))
         self.assertTrue(self.check('- **Never run `git commit` or `git push`.** The user commits.\n'))
         self.assertTrue(self.check("- Build commands → that's `CLAUDE.md` / `AGENTS.md`.\n"))
         self.assertEqual(self.check('CLAUDE.md lives only in the agent workspace overlay.\n'), [])
+        self.assertEqual(self.check('The settings in CLAUDE.md belong to the overlay.\n'), [])
+        self.assertEqual(self.check('The buildkite-agent pins were removed with the orchestrator.\n'), [])
         self.assertTrue(self.check('Entire renderer → crd-ui and CR-D007 → hesap GPU and the notebook.\n'))
         self.assertEqual(self.check('Any other agent proposes the message and the user commits.\n', 'AGENTS.md'), [])
         self.assertEqual(self.check('Buildkite was the rejected alternative.\n'), [])

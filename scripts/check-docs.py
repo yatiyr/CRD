@@ -57,11 +57,12 @@ STALE_PHRASES = (
     (re.compile(r'never (?:run )?`?git commit|never commit or push|agents never commit|no agent commits|'
                 r'nobody but the maintainer|user commits\b|user owns the final commit', re.I),
      'retired commit rule; AGENTS.md#git-and-workspace names who commits and pushes', {'AGENTS.md'}),
-    (re.compile(r"(?:per|see|in|that's|\u2192)\s+`?CLAUDE\.md", re.I),
+    (re.compile(r"(?:per|see|that's|\u2192)\s+`?CLAUDE\.md", re.I),
      'CLAUDE.md is a tool pointer kept with the agent workspace; route rules to AGENTS.md', set()),
     (re.compile(r'no parallel agents', re.I),
      'retired 2026-10-04 assignment; parallel agents run by explicit user order (AGENTS.md)', set()),
-    (re.compile(r'\bBuildkite\b(?![^.]*\b(?:reject|replac|supersed|instead of|first decision))', re.I),
+    (re.compile(r'\bBuildkite\b(?![^.]*\b(?:reject|replac|supersed|instead of|first decision|remov|retir|record|'
+                r'histor|dropp|alternative))', re.I),
      'Buildkite was rejected (ADR-0135 section 13); name it only as the rejected alternative',
      {'docs/decisions/0135-cerid-ci-platform.md'}),
     (re.compile(r'renderer[^.\n]{0,60}(?:\u2192|->|, then)[^.\n]{0,40}(?:crd-ui|\bUI\b|CR-D007)[^.\n]{0,60}'
@@ -293,7 +294,7 @@ def glob_escape(text):
 
 
 # A line that narrates history (a deleted file, a former build, a rename) names paths that are gone by design.
-HISTORY = re.compile(r'\b(?:former(?:ly)?|deleted|retired|removed|renamed|no longer|was|were|replaced)\b', re.I)
+HISTORY = re.compile(r'\b(?:former(?:ly)?|deleted|retired|removed|renamed|no longer)\b', re.I)
 EXTERNAL_SCRIPTS = {'vcvars64.bat', 'vcvarsall.bat', 'VsDevCmd.bat'}
 
 
@@ -470,6 +471,7 @@ def fact_values(root, master=None):
         'engine-module-count': str(len(engine)),
         'other-module-count': str(len(modules) - len(engine)),
         'host-tool-count': str(sum(1 for path in modules.values() if path.startswith('tools/'))),
+        'engine-families': series(sorted({modules[name].split('/')[1] for name in engine})),
         'test-directory-count': str(len(module_test_directories(root))),
         'entry-budgets': budgets,
         'native-profile-count': str(len(native_configurations(root))),
