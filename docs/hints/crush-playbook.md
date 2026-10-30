@@ -3,7 +3,7 @@
 <!-- doc-role: reference -->
 > Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
-> **⛔ The BINDING ORDERS for kernel/perf crush work are `docs/KERNEL-CRUSH-MANDATE.md` — read them first.** This
+> **The BINDING ORDERS for kernel/perf crush work are `docs/KERNEL-CRUSH-MANDATE.md` — read them first.** This
 > playbook is the *techniques* (levers + traps); the mandate is the *law* (never invoke a wall a peer already beat; pin
 > the target; profile-then-fix; exhaust every lever; reverse-engineer + deep-research on plateau; never declare a crush
 > impossible). If they ever conflict, the mandate wins.
@@ -233,7 +233,7 @@ chunked (per-thread local scan → serial scan of the 256 chunk-totals → add p
 
 **H.3 — GEMM: shared-memory tiling IS a big win — but MEASURE PROPERLY, then profile the limiter**
 ([[feedback_ckir_tiled_gemm_occupancy_not_free]], `docs/bench/2026-07-08-v17g-gemm-nsight-loop.md`, `external/gemm_lab.cu`).
-⚠ A first pass "found" the tiled GEMM **4× slower** — that was a **measurement artifact** (wall-clock **with H2D upload**,
+Warning: A first pass "found" the tiled GEMM **4× slower** — that was a **measurement artifact** (wall-clock **with H2D upload**,
 on a **512³ L2-resident** matrix). Re-measured RIGHT (`cudaEvent` kernel-only, N=2048 > L2, clock-locked), register-tiling
 **CRUSHES naive**: 2.5 → 16.2 (4×4) → **21.7 TFLOP/s** (float4 + transposed-A), **8.5× over naive, bit-exact vs naive**.
 **Rule 1: time GPU kernels with `cudaEvent` (kernel-only) at a size that exceeds L2 — never wall-clock-with-transfers on

@@ -48,7 +48,7 @@ unchecked lever. If you haven't tried it, you haven't earned the right to say it
   Only after ALL rungs, WITH Order 3 satisfied, may you report a measured frontier.
 
 **ORDER 6 — AUTOTUNE, DON'T HAND-PICK.** The headline number is the swept-config winner (dozens of configs), not 2-3
-hand guesses. The peer's number is autotuned; so must yours be before any comparison is fair. **⛔ SWEEP THE TILE GEOMETRY
+hand guesses. The peer's number is autotuned; so must yours be before any comparison is fair. **SWEEP THE TILE GEOMETRY
 — ESPECIALLY THE WARP-TILE SIZE — BEFORE INVOKING ANY "CEILING."** Case in point (2026-07-08 tensor GEMM): I called ~77%
 of cuBLAS-tensor a "plateau needing the full CUTLASS mainloop" — it was NOT; it was a too-small warp tile (8-warp 64×32).
 A 64×64 warp tile (2×2 warps) + BK=16 (2 blocks/SM) took it to **92–99.6% (parity)** — a mundane geometry change. An

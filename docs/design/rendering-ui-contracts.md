@@ -41,7 +41,7 @@ the "historical test limits masquerading as public contracts" RAH removes.
 
 <a id="rpl"></a>
 ### RPL — Renderer Pipeline Proof Library
-*Prior art:* B8-a..l gold-standard lighting/shadow MATH is ✅ bit-exact CKIR (L1 for the whole family); forward/mesh/tess/
+*Prior art:* B8-a..l gold-standard lighting/shadow MATH is bit-exact CKIR (L1 for the whole family); forward/mesh/tess/
 visbuffer frames already ship (L5). RPL turns "expressible" into shipped, hot-reloadable, both-backend proof.
 Each renderer needs: `engine://frame/...` asset + resource/pass diagram + representative material/scene + Vk+DX12 visual
 gate + golden/cross-backend where deterministic + hot reload of frame/shader/technique/material + capability+fallback +
@@ -57,7 +57,7 @@ CR-D007 inspection schema + debug modes + perf counters.
 
 <a id="gva"></a>
 ### GVA — Geometry, Visibility, Animation *(A+R)*
-*Prior art:* REN-39 indexed-pull vertex reuse, F7 procedural-vertex vocabulary, F16 amplification, GPU-cull frames, skinning MATH (B8-j LBS+DQS ✅), REN-38 bindless multi-draw — all in-tree.
+*Prior art:* REN-39 indexed-pull vertex reuse, F7 procedural-vertex vocabulary, F16 amplification, GPU-cull frames, skinning MATH (B8-j LBS+DQS), REN-38 bindless multi-draw — all in-tree.
 - **GVA-0** static completeness (indexed/non-indexed · multi-stream · multi-material sections · per-instance transform+material · hw instancing · multi-draw · indirect/indirect-count · bindless geometry/material tables · negative-scale/winding · double-sided/alpha-test · robust tangents/normals).
 - **GVA-1** draw-list + culling (CPU/GPU frustum · HZB occlusion · instance/small-primitive/backface-cone cull · LOD/SSE · impostors · command compaction · material/pipeline sort · binning · visibility history · streaming-aware cull · debug heatmaps/reason codes).
 - **GVA-2** animation/skinning (skeleton+anim assets · LBS · DQS · VS/compute skinning · skin cache · rigid/skinned phase · prev-frame positions · skinned motion vectors · shadow/depth/vis/RT consistency · crowds).
@@ -67,7 +67,7 @@ CR-D007 inspection schema + debug modes + perf counters.
 
 <a id="lsh"></a>
 ### LSH — Lighting & Shadows *(A/A+R)*
-*Prior art:* B8-c punctual, B8-d LTC area (rect/disk/sphere/tube + aniso), B8-g PCF/PCSS/EVSM/MSM, B8-h stable CSM + SDSM, B8-i contact + VSM addressing, B8-e IBL split-sum — all ✅ bit-exact CKIR (L1). ReSTIR-DI gold core in-tree.
+*Prior art:* B8-c punctual, B8-d LTC area (rect/disk/sphere/tube + aniso), B8-g PCF/PCSS/EVSM/MSM, B8-h stable CSM + SDSM, B8-i contact + VSM addressing, B8-e IBL split-sum — all bit-exact CKIR (L1). ReSTIR-DI gold core in-tree.
 - **LSH-0** light data model (directional/point/spot/rect/disk/sphere/tube/mesh-emissive/environment · IES · cookies · channels/masks · volumetric-only · static/mixed/dynamic · physical units + exposure).
 - **LSH-1** assignment/culling (object lists · Forward+ tiles · clustered 3D grid · tiled/clustered deferred · depth-aware bounds · large/global lights · overflow policy · compact lists · bindless light data · debug · worst-case stress).
 - **LSH-2** shadow-map families (hard · stable CSM · SDSM · PCF · PCSS · VSM · EVSM · MSM · point cubemap · spot · area approx · contact/SS-contact · cached/static · alpha-test/transparent policy · colored · atlas alloc/defrag · receiver/caster masks · debug).
@@ -97,7 +97,7 @@ CR-D007 inspection schema + debug modes + perf counters.
 
 <a id="mat"></a>
 ### MAT — Materials & Shading *(A)*
-*Prior art:* the CKIR material→surface contract (B6 MaterialX node library, B7 lowering, B8 gold renderer), OpenPBR slab (B5), thin-film/transmission/SSS lobes — all ✅ math in-tree.
+*Prior art:* the CKIR material→surface contract (B6 MaterialX node library, B7 lowering, B8 gold renderer), OpenPBR slab (B5), thin-film/transmission/SSS lobes — all math in-tree.
 - **MAT-0** architecture hardening (definition vs instance · surface contract · technique contract · phase compatibility · static options vs dynamic params · deterministic bounded variants · inheritance/composition · subgraphs/functions · per-instance overrides · dependency-driven reload · **MaterialX import/export + OpenPBR profile** · graph source mapping/diagnostics).
 - **MAT-1** general surface library (unlit · metallic-roughness · specular-glossiness · OpenPBR standard surface · emissive · opacity modes · normal/bump/parallax · displacement/vector displacement · decals · lightmaps · baked/procedural inputs).
 - **MAT-2** layering & optics (layers · masks/blending · clear coat · sheen/fuzz · anisotropy · thin-film/iridescence · transmission · refraction · absorption · thin-walled/solid media · SSS · energy conservation/compensation · spectral seam).
@@ -107,7 +107,7 @@ CR-D007 inspection schema + debug modes + perf counters.
 
 <a id="tpr"></a>
 ### TPR — Temporal, Post, Resolution *(A)*
-*Prior art:* the TAA motion-vector + velocity contracts (⛔ scars in memory), FFT bloom, AgX/sRGB tonemap — all in-tree.
+*Prior art:* the TAA motion-vector + velocity contracts (scars in memory), FFT bloom, AgX/sRGB tonemap — all in-tree.
 - **TPR-0** canonical temporal contracts (jitter · current+previous transforms · rigid/skinned/morph/procedural motion vectors · camera cuts · history invalidation · disocclusion · reactive masks · transparency masks · exposure history · ping-pong · dyn-res-aware history · per-feature history ownership).
 - **TPR-1** AA/reconstruction (FXAA/SMAA · MSAA · TAA · TAAU · TSR-class · FSR seam · DLSS/XeSS/plugin seam · frame-gen seam · ray-reconstruction/neural-denoise seam · sharpening · presets).
 - **TPR-2** tone/color/display (sRGB · AgX · ACES · custom filmic · auto-exposure/histogram · white balance · grading/LUT · lift/gamma/gain · HDR10/PQ · scRGB · wide-gamut · OpenColorIO seam · dithering · SDR/HDR UI compositing).
@@ -143,7 +143,7 @@ UDIM · procedural · blue-noise/sampling libs · streaming viz/budgets · **hot
 
 <a id="cgp"></a>
 ### CGP — Compute & General GPU Platform *(A)*
-*Prior art (STRONG):* the AS auto-scheduler (GEMM at/above cuBLAS parity, flash-attention fusion, reduce autotuner), GM modules (transformer block from named CKIR fns), FFT (crushes cuFFT 4/5 regimes), scan/sort/reduce bit-exact — all ✅ in-tree. This band packages them as reusable workflow assets.
+*Prior art (STRONG):* the AS auto-scheduler (GEMM at/above cuBLAS parity, flash-attention fusion, reduce autotuner), GM modules (transformer block from named CKIR fns), FFT (crushes cuFFT 4/5 regimes), scan/sort/reduce bit-exact — all in-tree. This band packages them as reusable workflow assets.
 - **CGP-0** execution/scheduling (dispatch dims · indirect dispatch · async compute · queue ownership · subgroup/wave ops · barriers/memory model · persistent kernels where portable · work-graphs capability/fallback · coop matrix/vector capability · profiling/timestamps · cancellation/error reporting).
   - Compute backends are capability-gated across Vulkan, DX12 and CUDA. `engine/gpu/gpu-context-cuda` now exists; the August statement that CUDA was absent was stale. Selector/indirect/provider completeness is re-audited in CGP-0; existence is not blanket completion.
 
@@ -155,7 +155,7 @@ UDIM · procedural · blue-noise/sampling libs · streaming viz/budgets · **hot
 <a id="hgp"></a>
 ### HGP — CRD-Hesap GPU Completion *(A)* — the original reason D-007 began
 Every op: correct CPU reference · CKIR impl · Vk+DX12 validation · tolerance/bit-exact policy · vendor/reference perf comparison · memory/workspace policy · composable graph asset · CR-D007/Matlab-like viz.
-- **HGP-0** dense LA (BLAS 1/2/3 · GEMM variants · batched · triangular/symmetric/Hermitian · LU · QR · Cholesky · SVD · eigensolvers · mixed precision · iterative refinement). *Prior art: v17g GEMM cuBLAS parity ✅.*
+- **HGP-0** dense LA (BLAS 1/2/3 · GEMM variants · batched · triangular/symmetric/Hermitian · LU · QR · Cholesky · SVD · eigensolvers · mixed precision · iterative refinement). *Prior art: v17g GEMM cuBLAS parity reached.*
 - **HGP-1** sparse LA (formats · SpMV/SpMM · sparse triangular solve · preconditioners · CG/BiCGSTAB/GMRES · sparse factorizations · reorderings · inspection/viz). *Prior art: hesap-sparse/iterative/ordering in-tree.*
 - **HGP-2** optimization (LP · QP · nonlinear · constrained · gradient methods · line-search/trust-region · least squares · autodiff integration · differentiable-opt seam).
 - **HGP-3** DE/simulation math (ODE integrators · stiff solvers · DAE · PDE building blocks · FD/FV/FE primitives · spectral methods · event handling · adaptive stepping · parameter sweeps · live viz).
@@ -181,7 +181,7 @@ Every op: correct CPU reference · CKIR impl · Vk+DX12 validation · tolerance/
 
 <a id="d7e"></a>
 ### D7E — CR-D007 Editor, Authoring, Inspection *(T)* — starts EARLY, matures alongside every band
-> Lore preserved (see §Lore above): **the editor is CR-D007; on first boot it prints "Agent 007 — licensed to compute." 🍸**
+> Lore preserved (see §Lore above): **the editor is CR-D007; on first boot it prints "Agent 007 — licensed to compute."**
 Multiple **typed** graph domains over shared editor infra — NOT one giant untyped node graph.
 - **D7E-0** common graph framework (typed ports · schema/versioned nodes · validation · subgraphs/functions · deterministic serialization · source mapping · undo/redo · copy/paste · diff/merge · search/palette · docs/tooltips · live diagnostics · preview values · hot reload · schema migration · agent-readable representation).
 - **D7E-1** Frame-Graph editor · **D7E-2** CKIR Shader/Kernel editor · **D7E-3** Material editor (MaterialX/OpenPBR) · **D7E-4** Technique/Shading editor · **D7E-5** Geometry/Deformation editor · **D7E-6** Compute/Hesap workflow editor.
@@ -230,7 +230,7 @@ They **share lower-level rendering infrastructure** (Canvas primitives, image/te
 `UiEffectGraph` are the programmable shading layer. `FrameGraph` schedules it — UI and Scene2D are **ordinary frame-graph
 participants**, not a side renderer.
 
-**⛔ THE RULE (record verbatim):** *A game menu, HUD, inventory, settings screen, dialogue panel, editor panel, tooltip,
+**THE RULE (record verbatim):** *A game menu, HUD, inventory, settings screen, dialogue panel, editor panel, tooltip,
 tree view, and text field are UI even when their appearance uses sprites or animated images.* A sprite is **visual
 content**; UI adds layout · interaction · focus · navigation · accessibility · localization · persistent state ·
 semantics · binding · input capture · scroll · modal behaviour. The same low-level image quad may render both a UI icon
@@ -250,8 +250,8 @@ and a game sprite; their higher-level semantics differ.
 <a id="u-2"></a>
 ## U-2. UiWorld — a dedicated retained world (NOT the gameplay ECS)
 
-**⛔ Do not force every button / text fragment / table cell / menu entry / node-editor socket to be a normal `SceneWorld`
-entity.** Define a dedicated retained **`UiWorld`**. **⭐ Decision (user-chosen 2026-08-07, resolving the REN·B fork): the
+**Do not force every button / text fragment / table cell / menu entry / node-editor socket to be a normal `SceneWorld`
+entity.** Define a dedicated retained **`UiWorld`**. **Decision (user-chosen 2026-08-07, resolving the REN·B fork): the
 UiWorld is a BESPOKE retained store** — it reuses ECS *concepts* (data-oriented pools / sparse-sets / archetype-like
 storage) but **NOT crd-scene's ECS implementation**, and its change-detection / command-buffer-undo / layout-persistence
 are its OWN mechanisms. This supersedes REN·B's earlier "UI IS ECS entities in the crd-scene machinery" premise (see the
@@ -275,7 +275,7 @@ All three converge on the same retained structures/behaviour:
    hierarchy · widget types · stable local IDs · classes · style refs · bindings · templates · events/commands ·
    accessibility metadata · animation refs.
 2. **C++ builder / reconciliation API** — an immediate-*feeling* surface that **reconciles stable retained nodes** (resolves
-   stable IDs; deterministic create/update/remove; ⛔ never mints fresh identity every frame): `ui.panel("Inspector")
+   stable IDs; deterministic create/update/remove; never mints fresh identity every frame): `ui.panel("Inspector")
    .column([&]{ ui.text("Transform"); ui.property_row("Position",[&]{ ui.vec3_field(model.position); }); ui.button("Reset")
    .on_click(reset); });`
 3. **Low-level UiWorld API** — advanced apps create/modify nodes directly.
@@ -283,7 +283,7 @@ All three converge on the same retained structures/behaviour:
 <a id="u-4"></a>
 ## U-4. CanvasDisplayList + the canonical flows
 
-**⛔ The UI renderer must NOT traverse UiWorld and issue backend commands.** Interpose an explicit **compiled paint
+**The UI renderer must NOT traverse UiWorld and issue backend commands.** Interpose an explicit **compiled paint
 representation**: `CanvasDisplayList` — backend-neutral · ordered · compact · immutable during execution · frame-arena/
 cache friendly · independent of UiWorld pointers · usable by CPU-reference AND GPU rendering · validatable · serializable
 for capture/debug. Typed command vocabulary (NOT an untyped blob, NO Vulkan/D3D12 structs, NO widget semantics inside a
@@ -324,7 +324,7 @@ Example 2D-game frame: `tile/sprite culling → 2D light prep → opaque/masked 
 interface contract**: inputs (local pos/UV · element size/bounds · screen pos · device-pixel ratio · time/frame · hover/
 pressed/focus/disabled amounts · pointer pos · theme values · texture/mask/backdrop · custom params) and **effect
 metadata** (premultiplied · blend mode · required visual-overflow margin · requires backdrop · requires offscreen layer ·
-time-dependent redraw · required texture bindings · cacheability · clip interaction · color-space contract). ⛔ A shader
+time-dependent redraw · required texture bindings · cacheability · clip interaction · color-space contract). A shader
 may **not** emit effects outside its declared bounds without informing the compositor. The renderer uses the metadata for
 dirty bounds · culling · layer allocation · cache invalidation · frame-graph deps · diagnostics.
 
@@ -340,7 +340,7 @@ fallback · cache policy · update policy. (This is the UI-facing analogue of an
 **Typed, deterministic, CSS-*inspired* style system — NOT a browser CSS clone.** Selectors (widget type · id · class ·
 bounded ancestor/descendant · child · attribute/state · theme scope · pseudo-states `:hover :pressed :focused
 :focus-visible :disabled :checked :selected :dragging :drop-target :invalid`) cook into **compact matching structures**
-(⛔ no per-frame string-selector evaluation). Typed properties across **layout** (width/height/min/max · margin/padding ·
+(no per-frame string-selector evaluation). Typed properties across **layout** (width/height/min/max · margin/padding ·
 row/column · flex · alignment · grid · gap · absolute · aspect-ratio · overflow · scroll), **paint** (background · border ·
 radius · text color · font · opacity · cursor · image · UiMaterial · effect graph · shadow · clip · blend mode) and
 **behaviour** (hit-test mode · focusability · nav order · pointer-capture · tooltip delay · transition · animation).
@@ -366,7 +366,7 @@ Features: UTF-8/canonical Cerid string · Unicode validation · grapheme/word/se
 font fallback · OpenType shaping · kerning · ligatures · combining marks · variable fonts · emoji · color fonts · CJK ·
 Arabic · Hebrew · Indic · Thai/complex · vertical text · line breaking/wrapping · hyphenation seam · tabs · rich-text
 spans · inline images/icons · baseline alignment · selection · grapheme caret · IME · clipboard · undo/redo · password ·
-syntax-highlight seam · text accessibility. **Adaptive rendering (⛔ not one method at all sizes):** small = hinted
+syntax-highlight seam · text accessibility. **Adaptive rendering (not one method at all sizes):** small = hinted
 grayscale/coverage · medium/large = MSDF/MTSDF · extreme zoom/vector-export/print/CAD = vector outlines. `TextLayout` is
 **independent of the glyph representation**. Glyph atlas management · eviction/residency · multi-page · size/range quality
 policy · subpixel policy · LCD only where correct · HDR-safe composition · **CPU reference raster path** · golden text
@@ -390,7 +390,7 @@ CGP-2/CGP-3 compute primitives.
 - **Input/events (builds on `engine/foundation/platform` `input.hpp`):** mouse · touch · pen/stylus · keyboard · gamepad · multi-
   pointer · hi-res wheel · IME · drag/drop · clipboard · window focus · pointer capture · hover · click/double/long-press ·
   gestures · text input · shortcut/command routing. Event model: hit-test · capture/target/bubble phases · stop-propagation
-  · prevent-default · pointer capture · focus transfer · modal/popup scopes · **input replay** (for tests). ⛔ Do not couple
+  · prevent-default · pointer capture · focus transfer · modal/popup scopes · **input replay** (for tests). Do not couple
   event routing to rendering order.
 - **Focus/navigation (essential for game menus + editor):** keyboard + gamepad focus · tab order · directional nav · focus
   groups/scopes · restoration · modal focus · focus-visible styling · default/cancel action · menu nav · accessibility
@@ -398,7 +398,7 @@ CGP-2/CGP-3 compute primitives.
 - **Layout engine (deterministic, incremental):** intrinsic/fixed/min-max · row/column · flex · margin/padding · alignment ·
   gap · absolute · overlay/stack · scroll containers · aspect ratio · DPI scaling · baseline. Advanced: grid · constraint ·
   virtualized list/tree/table · text-dependent measurement · percent/viewport units · split panes · docking · pixel
-  snapping · layout animation · **incremental layout + dirty-subtree propagation** (⛔ no full-tree recalc for a paint-only
+  snapping · layout animation · **incremental layout + dirty-subtree propagation** (no full-tree recalc for a paint-only
   change). Tooling shows computed box · constraints · parent allocation · intrinsic size · overflow · invalidations · cost.
 
 <a id="u-10"></a>
@@ -410,7 +410,7 @@ text controls · tree/table semantics · **screen-reader OS bridge** · high con
 color-blind-safe themes · keyboard-only operation. Automated tests validate semantic trees + navigation.
 **Localization:** string catalogs · stable keys · parameterized messages · pluralization · gender/select rules · locale
 formatting (number/date/time) · RTL layout · mirroring policy · font fallback · pseudo-localization · text-expansion
-tests · hot reload · missing-key diagnostics. ⛔ Do not store user-visible text only inside compiled C++.
+tests · hot reload · missing-key diagnostics. Do not store user-visible text only inside compiled C++.
 
 <a id="u-11"></a>
 ## U-11. Widget library + windowing/docking
@@ -423,7 +423,7 @@ grid/thumbnail/breadcrumb/filter-sort) · overlays (tooltip/popup/context-menu/m
 palette) · editor-grade (docking/multi-window host/node-graph/curve-editor/timeline/sequencer/waveform/code-editor/console/
 log/profiler-timeline/flame-graph/resource-viewer/image-viewer/2D-viewport/3D-viewport-host/gizmo-overlay/inspector/
 outliner/asset-browser).
-**Windowing/docking (extends `engine/foundation/platform` `window.hpp`; ⛔ never assume one global window/scale):** main + native
+**Windowing/docking (extends `engine/foundation/platform` `window.hpp`; never assume one global window/scale):** main + native
 child/top-level windows · docking tree · tabs · splitters · floating windows · persistent layout · multi-monitor ·
 per-monitor DPI · window drag/drop · native resize · fullscreen · modal · popup placement · cross-monitor tooltips · state
 restore · render-surface lifecycle · swapchain recreation · HDR/SDR per display · cross-window input routing.
@@ -440,7 +440,7 @@ sorting layers/order · explicit depth · Y-sort · isometric sort · stable pai
 order · chunked · culling · pixel snapping · pixel-perfect + parallax + multi-camera · render layers/masks). **Tilemaps**
 (orthogonal/isometric/hex/staggered · layers · animated/rule tiles + autotiling · terrain transitions · metadata ·
 collision/nav · occluders · lighting masks · per-tile color/data · variants · **chunking/streaming + large-world coords** ·
-editor paint/fill/select/stamp · procedural seam · hot reload; ⛔ **no entity per static tile** — chunked/instanced GPU
+editor paint/fill/select/stamp · procedural seam · hot reload; **no entity per static tile** — chunked/instanced GPU
 reps). **2D animation/deformation** (flipbook + state machine/blend · **2D skeletal** mesh/bones/weights/LBS/DQS/IK/
 constraints/attachments/skin-swap/sockets/prev-pose/motion-vectors · deformation morphs/curve-driven/procedural-CKIR/
 cloth+physics input/neural seam/GPU-compute; shares GVA-2/3 + CRD-Geometry/Eylem where sensible). **2D materials** (unlit/
@@ -448,7 +448,7 @@ lit/normal/height/emissive/toon/palette-swap/outline/dissolve/hologram/water-dis
 CKIR; channels albedo/normal/height/mask/emission/rough/metallic/thickness/SDF/custom). **2D lighting/shadows** (unlit →
 basic-forward → **tiled/Forward+ 2D** → clustered/height-aware 2.5D → optional deferred 2D; point/spot/directional/polygon/
 sprite-shaped/cookie/line-tube/area; shadows polygon-caster/sprite-alpha/**SDF**/soft/ray-marched/height-aware/cached/
-dynamic/contact/colored-seam; effects volumetric-2D/god-rays/fog-layers/bloom/emissive-particles). ⛔ **every shipped 2D
+dynamic/contact/colored-seam; effects volumetric-2D/god-rays/fog-layers/bloom/emissive-particles). **every shipped 2D
 renderer is a normal `engine://frame/...` asset using RAF systems.** **2D VFX** (CPU+GPU particles/flipbook/trails/ribbons/
 beams/distortion/refraction/dynamic-masks/dissolve/decals/weather/fog/heat-haze/shockwaves/fluid-like/render-texture-
 feedback/lighting-aware/collision/event-spawn/editor-graph/hot-reload; integrates CGP + CKIR + frame graph).
@@ -471,11 +471,11 @@ feedback/lighting-aware/collision/event-spawn/editor-graph/hot-reload; integrate
   accessibility/localization omissions · hot-reload compat · GPU failures), each with asset id/path · source location ·
   node/widget id · property · expected/actual type · dependency chain · human message · **stable error code**.
 - **Performance (§31):** incremental style/layout · dirty-subtree paint compilation · cached display-list fragments + layers ·
-  frame arenas · ⛔ **no per-element heap alloc during rendering · no per-frame selector string matching · no authoring-text
+  frame arenas · **no per-element heap alloc during rendering · no per-frame selector string matching · no authoring-text
   parse on render thread** · compact handles · batch without violating painter order · atlas/resource-table · partial redraw ·
   avoid unnecessary offscreen layers · virtualize large data views. Sprite/2D: instancing · GPU cull · chunked tilemaps ·
-  stable sort · bindless · indirect draws · GPU anim/deform · streaming · ⛔ avoid one draw per sprite / one entity per tile.
-  Metrics (⛔ success is NOT just a low draw-call number): style/layout/shaping/paint-compile time · display-list size ·
+  stable sort · bindless · indirect draws · GPU anim/deform · streaming · avoid one draw per sprite / one entity per tile.
+  Metrics (success is NOT just a low draw-call number): style/layout/shaping/paint-compile time · display-list size ·
   upload bytes · draw count · pipeline/material changes · clip/layer count · filter cost · cache-hit rate · GPU time · atlas
   residency · sprite/tile count · overdraw.
 - **Testing (§32):** unit (identity/tree-ops/cascade/selector/layout/focus/input-routing/binding/text-seg-shape-layout/atlas-
@@ -556,13 +556,13 @@ default sprite renderer · **CR-D007 daily usable.**
 <a id="u-17"></a>
 ## U-17. CR-D007 bootstrap strategy · ImGui coexistence · D7E reconciliation
 
-**⛔ Do NOT finish all UI technology before starting CR-D007.** Sequence: `Canvas MVP (I2D-1) → Text MVP (I2D-2) → UiWorld
+**Do NOT finish all UI technology before starting CR-D007.** Sequence: `Canvas MVP (I2D-1) → Text MVP (I2D-2) → UiWorld
 MVP (I2D-3) → CR-D007 bootstrap (I2D-4) → build the remaining UI/editor tech INSIDE CR-D007`. CR-D007 is simultaneously the
 first major consumer · the authoring environment · the diagnostics surface · the regression-test application · the
 historical product of D-007. **Easter egg preserved** (see §Lore): on first boot it prints *"Agent 007 — licensed to
-compute." 🍸* — used tastefully.
+compute."* — used tastefully.
 **ImGui (§36):** Dear ImGui / the current debug UI (`engine/ui/imgui`, `perf-ui`, `draw-imgui`) is **kept** for bootstrap ·
-debug overlays · GPU diagnostics · recovery · emergency asset errors · low-level dev panels · tests. ⛔ It is **not** the
+debug overlays · GPU diagnostics · recovery · emergency asset errors · low-level dev panels · tests. It is **not** the
 final product/editor UI foundation, and it is **not deleted** because the new UI exists — the two serve different purposes.
 **D7E reconciliation:** the post-RAF **D7E** band (CR-D007 authoring/inspection/profiling) is **REFRAMED** — it no longer
 builds its own UI. Its editor DOMAINS (frame-graph/material/CKIR/geometry graph editors, the frame/resource/program/
@@ -589,7 +589,7 @@ one entity per tile (chunked) · UI waits until every feature is complete (boots
 
 Same L0–L7 model (§PR-3) and A/A+R/A+E/B/T classification (§PR-4). UI/2D per-feature status lives in the same
 `docs/capabilities/gpu-platform-capabilities.toml` (seeded 2026-08-07 with the existing seams at honest levels + the I2D/SPR
-targets at L0/L1). ⛔ A UI feature is **not** complete because a shader exists — nothing exceeds L5 today, and L6 needs the
+targets at L0/L1). A UI feature is **not** complete because a shader exists — nothing exceeds L5 today, and L6 needs the
 CR-D007 inspectors (I2D-9). **Documentation (§38):** the architecture diagram (U-1), the two paint flows + text pipeline
 (U-4/U-7), the band dependency graph (PR-6), the UI-vs-sprite decision table (U-1), authoring options (U-3), and the
 lifecycle/gate contracts (U-14..U-16) live here; deeper per-widget schemas land with I2D-0's ADR.
@@ -621,7 +621,7 @@ lifecycle/gate contracts (U-14..U-16) live here; deeper per-widget schemas land 
   (conflation + watertightness are the named hazards). Serves CAD sketches, node wires, DAW automation lanes, icons, charts.
 - **`crd-ui` — the product-UI module (I2D-3).** Mints the crd-ui ADR **superseding ADR-0023 in place**; `crd-imgui` stays
   the debug/recovery overlay (§36). `crd-ui` is the product UI.
-- **`hesap-interp` = the ONE curve engine for UI animation (I2D-5).** UI animation's 4th consumer (⭐ user-flagged "very
+- **`hesap-interp` = the ONE curve engine for UI animation (I2D-5).** UI animation's 4th consumer (user-flagged "very
   important"): eased transitions · FLIP layout animation · **spring dynamics** · interruptible/retargetable mid-flight ·
   deterministic given the clock · reduced-motion — targeting **reflected properties by path** (crd-reflect).
 - **Logical start/end directions ONLY (I2D-6/§18).** Never bare left/right — so an RTL locale **mirrors the whole interface
@@ -728,7 +728,7 @@ streaming · UDIM · streaming viz/budgets · hot reload without invalid refs
 <a id="as-4"></a>
 ### AS-4
 
-**broaden ops + BEAT THE VENDORS** — the cuBLAS GEMM board LANDED (`tests/gpu/kir-cuda/test_autotune_cublas.cpp`, `docs/bench/2026-07-22-as4-ckir-gemm-vs-cublas.md`): CKIR auto-tuned f32 GEMM vs cuBLAS Sgemm, matched precision (both f64-certified). ⛔⛔ SCAR: the bit-exact `--fmad=false` NVRTC flag was crippling GEMM 2× — the FAST/ULP tier must compile `--fmad=true` (per-tier flags, [[feedback_fast_tier_must_enable_fma_bitexact_flags_cripple_gemm]]); that lifted CKIR from 0.49× → **0.75–1.04× cuBLAS (beats it on 1024³, 13107 GFLOP/s)**. HONEST: large compute-bound GEMM → cuBLAS SASS (cp.async) still wins ≤2× (a kernel-family/tensor-core frontier). **The FUSED CRUSH LANDED (`time_fused_contract` + the fused board): CKIR fused GEMM+bias+SiLU (1 kernel) CRUSHES cuBLAS Sgemm + separate epilogue by 2.40–2.88× on 3/3 memory-bound MLP shapes (8192²×16/32, 4096²×32) — the structural moat cuBLAS can't fuse, measured live + oracle-correct, confirming the NRC 2.37×.** SHAPE-GENERAL: the CLI (extended to `MxNxK`) tuned a square+rectangular LADDER (512/1024/2048/4096³ + 2048×512×1024, 4096×1024×256, 1024×4096×512) into the DB, all 17/17 oracle-correct; the rectangular test confirms 26153 GFLOP/s, 14.3× naive, DB replays it — the auto-scheduler is a general compiler property, not square-only. Full CUDA suite 81389/17, tidy-clean. **OP-GENERALITY LANDED (the auto-scheduler beyond Contract): the SAME enumerate→cost-rank→measure→oracle-validate→pick-best loop now tunes a device-wide REDUCTION** (`enumerate_reduce_schedules`/`predict_reduce_ms`/`rank_reduce_top_k_cost` in `ckir_autotune.hpp`, backend-free + unit-tested — 33 valid (threads, per_thread) schedules for N=2²⁴, hand-tuned 256×8 a member, cost model ranks saturating>starved). The measured board (`[.reduce-autotune]` in `tests/gpu/gpu-context-vulkan`, `docs/bench/2026-07-23-as4-ckir-reduce-autotune.md`): top-10 candidates dispatched + GPU-timed + ORACLE-VALIDATED (all sum==N), **autotuned WINNER 128×64 → 636.7 GB/s (94.7% of the 672 peak) BEATS both the hand-tuned default (631.9) AND CUB `DeviceReduce` (602.6) = 1.057× at matched bit-exact accuracy** — proving AS is a GENERAL kernel auto-scheduler, not a Contract special case. HONEST: the reduce margin is inherently small (memory-bound streams DRAM; the value is op-generality, not the ratio). **FLASH-ATTENTION FUSION LANDED (the marquee AS-4 crush): a first-class `KOp::Attention` intrinsic (O = softmax(Q·Kᵀ·scale)·V) that the CUDA backend FUSES into ONE tiled online-softmax (flash) kernel** (`emit_attention_flash_cuda` + `select_attention_tile` in `ckir_cuda.hpp`; the CPU oracle `eval_cpu` computes the naive reference; a FAST tier — online softmax reassociates ⇒ ULP-tolerant). The S×S scores NEVER touch DRAM — the structural moat the unfused 3-kernel path (which round-trips S² through DRAM) cannot cross. **Gate GREEN: intrinsic oracle == expanded/module attention (GM-6) to 1e-12; the fused flash kernel via `cu.run` == the naive oracle to 3e-9 (S=256/512/300, the last exercises the S-remainder guards); the crush (`bench/gpu-compute/flash_attention_bench.cu`, `docs/bench/2026-07-23-as4-flash-attention-fusion.md`) GROWS with S — flash vs unfused 2.02× @ S=2048, 3.93× @ S=4096 (D=64, both ~1e-8 vs a double CPU ref); at small S flash loses (occupancy-starved) ⇒ the fused/tile choice is schedulable. CUDA suite 81404/18, tidy-clean.** **FLASH AUTOTUNER LANDED: the (BR,BC) tile is now SCHEDULED — `enumerate_attention_schedules` (backend-free + unit-tested, 16 tiles D=64, 64×32 a member) + `KirBackendCuda::time_attention` (GPU-event-timed) drive the same enumerate→measure→oracle-validate→pick-best loop; the search finds BR=128×BC=32 beats the hard-coded BR=64 across S∈{512,1024,2048,4096}, all 16 tiles oracle-correct. **AS-2-for-attention WIRED: the measured winners are CHECKED IN (`ckir_attention_db.inc`, `{device,S,D,BR,BC}`) + `lookup_attention_tuned` replays them — `select_attention_tile(dim,S,device,…)` consults the DB first (per-device exact-(S,D)), heuristic 64×32 on a miss (the `select_schedule`/`lookup_tuned` pattern), so `run()` emits the TUNED flash kernel with no runtime search; the flash-vs-oracle test (S=512, now DB-tuned 128×32) still matches to 3.1e-9. CUDA suite 81496/19, kir [autotune] 257/9, tidy-clean.** **CONV-via-FFT: ALREADY SHIPPED (`build_fft{1,2}d_convolution*`, board `2026-07-13-gpu-fft-cufft-gold.md`) — crushes cuFFT in 4/5 regimes (1-D 1.99×, 2-D 256² 2.90×, batched 1.16×, R2C 1.14×); the one loss (2-D single-image 1024² 0.40×) is MEMORY-bound (4 transpose passes = 88 MB vs cuFFT 56 MB), NOT the FMA wall. ⛔ 2026-07-23 verified: a fast/ULP compute tier (drop `precise` ⇒ driver FMA) gives **0% on the conv** (memory-bound) — FMA is the WRONG lever (the real one is transpose-on-write fusion, a fresh-context-scale FFT rewrite) — experiment REVERTED. Attention DB expanded to D∈{32,64} (D=128 spills, other GPUs env-blocked). **NEXT: transpose-on-write FFT fusion (the named conv lever); more devices/D into DBs when hardware available.**
+**broaden ops + BEAT THE VENDORS** — the cuBLAS GEMM board LANDED (`tests/gpu/kir-cuda/test_autotune_cublas.cpp`, `docs/bench/2026-07-22-as4-ckir-gemm-vs-cublas.md`): CKIR auto-tuned f32 GEMM vs cuBLAS Sgemm, matched precision (both f64-certified). SCAR: the bit-exact `--fmad=false` NVRTC flag was crippling GEMM 2× — the FAST/ULP tier must compile `--fmad=true` (per-tier flags, [[feedback_fast_tier_must_enable_fma_bitexact_flags_cripple_gemm]]); that lifted CKIR from 0.49× → **0.75–1.04× cuBLAS (beats it on 1024³, 13107 GFLOP/s)**. HONEST: large compute-bound GEMM → cuBLAS SASS (cp.async) still wins ≤2× (a kernel-family/tensor-core frontier). **The FUSED CRUSH LANDED (`time_fused_contract` + the fused board): CKIR fused GEMM+bias+SiLU (1 kernel) CRUSHES cuBLAS Sgemm + separate epilogue by 2.40–2.88× on 3/3 memory-bound MLP shapes (8192²×16/32, 4096²×32) — the structural moat cuBLAS can't fuse, measured live + oracle-correct, confirming the NRC 2.37×.** SHAPE-GENERAL: the CLI (extended to `MxNxK`) tuned a square+rectangular LADDER (512/1024/2048/4096³ + 2048×512×1024, 4096×1024×256, 1024×4096×512) into the DB, all 17/17 oracle-correct; the rectangular test confirms 26153 GFLOP/s, 14.3× naive, DB replays it — the auto-scheduler is a general compiler property, not square-only. Full CUDA suite 81389/17, tidy-clean. **OP-GENERALITY LANDED (the auto-scheduler beyond Contract): the SAME enumerate→cost-rank→measure→oracle-validate→pick-best loop now tunes a device-wide REDUCTION** (`enumerate_reduce_schedules`/`predict_reduce_ms`/`rank_reduce_top_k_cost` in `ckir_autotune.hpp`, backend-free + unit-tested — 33 valid (threads, per_thread) schedules for N=2²⁴, hand-tuned 256×8 a member, cost model ranks saturating>starved). The measured board (`[.reduce-autotune]` in `tests/gpu/gpu-context-vulkan`, `docs/bench/2026-07-23-as4-ckir-reduce-autotune.md`): top-10 candidates dispatched + GPU-timed + ORACLE-VALIDATED (all sum==N), **autotuned WINNER 128×64 → 636.7 GB/s (94.7% of the 672 peak) BEATS both the hand-tuned default (631.9) AND CUB `DeviceReduce` (602.6) = 1.057× at matched bit-exact accuracy** — proving AS is a GENERAL kernel auto-scheduler, not a Contract special case. HONEST: the reduce margin is inherently small (memory-bound streams DRAM; the value is op-generality, not the ratio). **FLASH-ATTENTION FUSION LANDED (the marquee AS-4 crush): a first-class `KOp::Attention` intrinsic (O = softmax(Q·Kᵀ·scale)·V) that the CUDA backend FUSES into ONE tiled online-softmax (flash) kernel** (`emit_attention_flash_cuda` + `select_attention_tile` in `ckir_cuda.hpp`; the CPU oracle `eval_cpu` computes the naive reference; a FAST tier — online softmax reassociates ⇒ ULP-tolerant). The S×S scores NEVER touch DRAM — the structural moat the unfused 3-kernel path (which round-trips S² through DRAM) cannot cross. **Gate GREEN: intrinsic oracle == expanded/module attention (GM-6) to 1e-12; the fused flash kernel via `cu.run` == the naive oracle to 3e-9 (S=256/512/300, the last exercises the S-remainder guards); the crush (`bench/gpu-compute/flash_attention_bench.cu`, `docs/bench/2026-07-23-as4-flash-attention-fusion.md`) GROWS with S — flash vs unfused 2.02× @ S=2048, 3.93× @ S=4096 (D=64, both ~1e-8 vs a double CPU ref); at small S flash loses (occupancy-starved) ⇒ the fused/tile choice is schedulable. CUDA suite 81404/18, tidy-clean.** **FLASH AUTOTUNER LANDED: the (BR,BC) tile is now SCHEDULED — `enumerate_attention_schedules` (backend-free + unit-tested, 16 tiles D=64, 64×32 a member) + `KirBackendCuda::time_attention` (GPU-event-timed) drive the same enumerate→measure→oracle-validate→pick-best loop; the search finds BR=128×BC=32 beats the hard-coded BR=64 across S∈{512,1024,2048,4096}, all 16 tiles oracle-correct. **AS-2-for-attention WIRED: the measured winners are CHECKED IN (`ckir_attention_db.inc`, `{device,S,D,BR,BC}`) + `lookup_attention_tuned` replays them — `select_attention_tile(dim,S,device,…)` consults the DB first (per-device exact-(S,D)), heuristic 64×32 on a miss (the `select_schedule`/`lookup_tuned` pattern), so `run()` emits the TUNED flash kernel with no runtime search; the flash-vs-oracle test (S=512, now DB-tuned 128×32) still matches to 3.1e-9. CUDA suite 81496/19, kir [autotune] 257/9, tidy-clean.** **CONV-via-FFT: ALREADY SHIPPED (`build_fft{1,2}d_convolution*`, board `2026-07-13-gpu-fft-cufft-gold.md`) — crushes cuFFT in 4/5 regimes (1-D 1.99×, 2-D 256² 2.90×, batched 1.16×, R2C 1.14×); the one loss (2-D single-image 1024² 0.40×) is MEMORY-bound (4 transpose passes = 88 MB vs cuFFT 56 MB), NOT the FMA wall. 2026-07-23 verified: a fast/ULP compute tier (drop `precise` ⇒ driver FMA) gives **0% on the conv** (memory-bound) — FMA is the WRONG lever (the real one is transpose-on-write fusion, a fresh-context-scale FFT rewrite) — experiment REVERTED. Attention DB expanded to D∈{32,64} (D=128 spills, other GPUs env-blocked). **NEXT: transpose-on-write FFT fusion (the named conv lever); more devices/D into DBs when hardware available.**
 
 <a id="as-6"></a>
 ### AS-6
@@ -738,7 +738,7 @@ streaming · UDIM · streaming viz/budgets · hot reload without invalid refs
 <a id="med-1"></a>
 ### MED-1
 
-**image decode completion — GIF · TIFF · progressive JPEG** — **✅ GIF single-frame DONE (2026-08-07):** LZW decode (engine's first LZW), interlace, local/global palettes, transparency, named-error refusals; `[gif]` 778 asserts / 6 cases + resources suite 14457 no-regression + tidy clean (⚠ follow-up: real-GIF corpus as external oracle — encoder+decoder both ours). **NEXT: animated GIF** (frames + disposal → `ImageSeq`) → TIFF → progressive JPEG. — **GIF** (LZW decode, interlace, local/global palettes, transparency, ANIMATION frames + disposal methods → `ImageSeq` — the first animated resource, feeds the GEO-9 timeline); **TIFF baseline** (II/MM both endians, strips + tiles, uncompressed/PackBits/LZW/Deflate via OUR inflate, 1-16 bit, palette/gray/RGB(A), planar + chunky — the CAD/scan/print world's format); **JPEG progressive** (SOF2: spectral selection + successive approximation — closes our named-`Unsupported`). All three join `ldr_sniff`/`ldr_decode`. Gates: hermetic analytic fixtures per codec (hand-built LZW streams, both-endian TIFFs, progressive scans vs the baseline decode of the same image), failure classes named.
+**image decode completion — GIF · TIFF · progressive JPEG** — **GIF single-frame DONE (2026-08-07):** LZW decode (engine's first LZW), interlace, local/global palettes, transparency, named-error refusals; `[gif]` 778 asserts / 6 cases + resources suite 14457 no-regression + tidy clean (Warning: follow-up: real-GIF corpus as external oracle — encoder+decoder both ours). **NEXT: animated GIF** (frames + disposal → `ImageSeq`) → TIFF → progressive JPEG. — **GIF** (LZW decode, interlace, local/global palettes, transparency, ANIMATION frames + disposal methods → `ImageSeq` — the first animated resource, feeds the GEO-9 timeline); **TIFF baseline** (II/MM both endians, strips + tiles, uncompressed/PackBits/LZW/Deflate via OUR inflate, 1-16 bit, palette/gray/RGB(A), planar + chunky — the CAD/scan/print world's format); **JPEG progressive** (SOF2: spectral selection + successive approximation — closes our named-`Unsupported`). All three join `ldr_sniff`/`ldr_decode`. Gates: hermetic analytic fixtures per codec (hand-built LZW streams, both-endian TIFFs, progressive scans vs the baseline decode of the same image), failure classes named.
 
 <a id="med-2"></a>
 ### MED-2
@@ -748,7 +748,7 @@ streaming · UDIM · streaming viz/budgets · hot reload without invalid refs
 <a id="med-3"></a>
 ### MED-3
 
-**WebP — VP8L + VP8-intra** — **VP8L lossless** (the self-contained spec: prefix codes, color-cache, transforms — predictor/color/subtract-green/palette) then **VP8-intra lossy** (the RFC 6386 BOOL CODER gated standalone first, intra prediction modes, WHT/DCT, the loop filter, 4:2:0 reconstruction). RIFF container. ⭐ VP8 is the deliberate training ground for the VP9/AV1 family (MED-10). Gates: bool-coder bit-exact vs spec traces; VP8L round-trip bit-exact; VP8 decode vs official test vectors + our JPEG-class analytic fixtures.
+**WebP — VP8L + VP8-intra** — **VP8L lossless** (the self-contained spec: prefix codes, color-cache, transforms — predictor/color/subtract-green/palette) then **VP8-intra lossy** (the RFC 6386 BOOL CODER gated standalone first, intra prediction modes, WHT/DCT, the loop filter, 4:2:0 reconstruction). RIFF container. VP8 is the deliberate training ground for the VP9/AV1 family (MED-10). Gates: bool-coder bit-exact vs spec traces; VP8L round-trip bit-exact; VP8 decode vs official test vectors + our JPEG-class analytic fixtures.
 
 <a id="med-4"></a>
 ### MED-4
@@ -773,7 +773,7 @@ streaming · UDIM · streaming viz/budgets · hot reload without invalid refs
 <a id="med-8"></a>
 ### MED-8
 
-**containers — MP4/ISO-BMFF · MKV/WebM · AVI (demux + MUX)** — **MP4** (the box tree: moov/trak/stbl sample tables, stsc/stco/stsz/stts/ctts, edit lists, RATIONAL timescales end-to-end); **MKV/WebM** (EBML parse, clusters/blocks, lacing); **AVI** (RIFF, idx1). Both directions: demux → codec packet streams + timestamps; MUX from packet streams (interleaving + index build). Codec-INDEPENDENT layer — unblocks every video slice. ⛔ rational time from day one (float seconds poison GEO-9 exactness). Gates: demux→remux round-trip preserves every packet byte-exact + timestamps exactly; real-world files from each container demux; a reference player oracle plays our muxed output.
+**containers — MP4/ISO-BMFF · MKV/WebM · AVI (demux + MUX)** — **MP4** (the box tree: moov/trak/stbl sample tables, stsc/stco/stsz/stts/ctts, edit lists, RATIONAL timescales end-to-end); **MKV/WebM** (EBML parse, clusters/blocks, lacing); **AVI** (RIFF, idx1). Both directions: demux → codec packet streams + timestamps; MUX from packet streams (interleaving + index build). Codec-INDEPENDENT layer — unblocks every video slice. rational time from day one (float seconds poison GEO-9 exactness). Gates: demux→remux round-trip preserves every packet byte-exact + timestamps exactly; real-world files from each container demux; a reference player oracle plays our muxed output.
 
 <a id="med-9"></a>
 ### MED-9
@@ -793,7 +793,7 @@ streaming · UDIM · streaming viz/budgets · hot reload without invalid refs
 <a id="med-12"></a>
 ### MED-12
 
-**the TRANSCODE ENGINE + resource/agent integration (the band's capstone)** — the ONE decode→intermediate→encode pipeline over EVERYTHING above: **`ceridc convert`** any→any (images · audio · video; explicit quality/rate/resample/tone-map knobs; machine-readable JSON reports — the GEO-11 agent surface grows these verbs); streamed **`VideoResource`/`AudioStreamResource`** via the existing streaming loader; GEO-9 timelines REFERENCE them (never embed), GEO-10's graph plays them, GEO-6's dependency graph tracks them (a source video edit recooks exactly its dependents). ⛔ audio decode NEVER on the realtime callback thread (GEO-10's rule); ⛔ every conversion report names what was lossy. Gates: the lossless matrix round-trips BIT-EXACT (FLAC↔WAV, PNG↔TGA↔BMP, demux↔remux); lossy paths PSNR-gated vs source; an agent via MCP alone converts a WAV→Opus and a PNG sequence→MJPEG/MP4 and verifies both through query verbs.
+**the TRANSCODE ENGINE + resource/agent integration (the band's capstone)** — the ONE decode→intermediate→encode pipeline over EVERYTHING above: **`ceridc convert`** any→any (images · audio · video; explicit quality/rate/resample/tone-map knobs; machine-readable JSON reports — the GEO-11 agent surface grows these verbs); streamed **`VideoResource`/`AudioStreamResource`** via the existing streaming loader; GEO-9 timelines REFERENCE them (never embed), GEO-10's graph plays them, GEO-6's dependency graph tracks them (a source video edit recooks exactly its dependents). audio decode NEVER on the realtime callback thread (GEO-10's rule); every conversion report names what was lossy. Gates: the lossless matrix round-trips BIT-EXACT (FLAC↔WAV, PNG↔TGA↔BMP, demux↔remux); lossy paths PSNR-gated vs source; an agent via MCP alone converts a WAV→Opus and a PNG sequence→MJPEG/MP4 and verifies both through query verbs.
 
 <a id="plg-1"></a>
 ### PLG-1
