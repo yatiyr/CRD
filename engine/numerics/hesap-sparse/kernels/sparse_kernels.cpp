@@ -25,6 +25,7 @@
 // one accumulator shape SddmmRows declares in Vec4d and Vec8f (scalar arrays on portable, 128-bit halves on SSE2),
 // and horizontal_sum folds a register pairwise through memory on every level, so every level gives the same bits.
 
+#include <crd/core/platform.hpp>
 #include <crd/hesap/sparse/sparse_kernels.hpp>
 #include <crd/math/simd/backend.hpp>
 #include <crd/math/simd/vec4d.hpp>
@@ -89,7 +90,7 @@ template <typename T> struct ComplexWrite
 
 // y of the C rows of slice s from their sums (Write::kParts values a row).
 template <crd::u32 C, typename T, typename Write>
-void write_slice(const SellSlices<T>& a, const Write& write, crd::u32 s, const T* sums, T* y) noexcept
+CRD_FORCEINLINE void write_slice(const SellSlices<T>& a, const Write& write, crd::u32 s, const T* sums, T* y) noexcept
 {
     const crd::u32 first = s * C;
     const crd::u32 lanes = (first + C < a.rows) ? C : (a.rows - first);
@@ -98,17 +99,6 @@ void write_slice(const SellSlices<T>& a, const Write& write, crd::u32 s, const T
         const crd::u32 r = a.perm == nullptr ? first + lane : a.perm[first + lane];
         write(y, r, sums + lane * Write::kParts);
     }
-}
-
-// The columns every row of a slice stores: the shortest of its C rows.
-template <crd::u32 C> crd::u32 full_columns(const crd::u32* lens) noexcept
-{
-    crd::u32 full = lens[0];
-    for (crd::u32 lane = 1; lane < C; ++lane)
-    {
-        full = lens[lane] < full ? lens[lane] : full;
-    }
-    return full;
 }
 
 template <typename Body> constexpr bool gathers() noexcept
@@ -222,8 +212,8 @@ template <typename Body, bool Delta, typename T> auto slice_columns(const SellSl
 
 // Columns [from, width) of slice s added to sums, the walk at column from: unmasked up to `full`, masked after it.
 template <typename Body, typename T, typename Walk>
-typename Body::Sums finish(typename Body::Sums sums, const SellSlices<T>& a, const T* x, crd::u32 s, crd::u32 from,
-                           crd::u32 full, Walk& walk) noexcept
+CRD_FORCEINLINE typename Body::Sums finish(typename Body::Sums sums, const SellSlices<T>& a, const T* x, crd::u32 s,
+                                           crd::u32 from, crd::u32 full, Walk& walk) noexcept
 {
     constexpr crd::u32 height = Body::kC;
     const crd::u32 base = a.slice_ptr[s];
@@ -242,25 +232,24 @@ typename Body::Sums finish(typename Body::Sums sums, const SellSlices<T>& a, con
 
 // Slice s alone, its sums stored to out.
 template <typename Body, bool Delta, typename T>
-void run_slice(const SellSlices<T>& a, const T* x, crd::u32 s, T (&out)[Body::kOut]) noexcept
+CRD_FORCEINLINE void run_slice(const SellSlices<T>& a, const T* x, crd::u32 s, T (&out)[Body::kOut]) noexcept
 {
-    constexpr crd::u32 height = Body::kC;
     auto walk = slice_columns<Body, Delta>(a, s);
-    const crd::u32 full = full_columns<height>(a.row_len + static_cast<crd::usize>(s) * height);
-    Body::store(finish<Body>(Body::zero(), a, x, s, 0, full, walk), out);
+    Body::store(finish<Body>(Body::zero(), a, x, s, 0, a.slice_full[s], walk), out);
 }
 
 // Slices s and s + 1 of one column form as a pair, two independent sets of sums in flight.
 template <typename Body, bool Delta, typename T>
-void run_pair(const SellSlices<T>& a, const T* x, crd::u32 s, T (&out0)[Body::kOut], T (&out1)[Body::kOut]) noexcept
+CRD_FORCEINLINE void run_pair(const SellSlices<T>& a, const T* x, crd::u32 s, T (&out0)[Body::kOut],
+                              T (&out1)[Body::kOut]) noexcept
 {
     constexpr crd::u32 height = Body::kC;
     auto walk0 = slice_columns<Body, Delta>(a, s);
     auto walk1 = slice_columns<Body, Delta>(a, s + 1U);
     const crd::u32* lens0 = a.row_len + static_cast<crd::usize>(s) * height;
     const crd::u32* lens1 = lens0 + height;
-    const crd::u32 full0 = full_columns<height>(lens0);
-    const crd::u32 full1 = full_columns<height>(lens1);
+    const crd::u32 full0 = a.slice_full[s];
+    const crd::u32 full1 = a.slice_full[s + 1U];
     const crd::u32 b0 = a.slice_ptr[s];
     const crd::u32 b1 = a.slice_ptr[s + 1U];
     const crd::u32 both = full0 < full1 ? full0 : full1;
@@ -294,12 +283,13 @@ void run_pair(const SellSlices<T>& a, const T* x, crd::u32 s, T (&out0)[Body::kO
 // to 15% on DRAM-resident matrices and gained nothing in L2 (2026-10-27 board). kSellNoPairs: every slice runs alone.
 inline constexpr crd::u32 kPairWidth = 8;
 
-// The driver, slices of one column form both at least pair_width wide running as a pair. Body: the lane sums of one
-// slice (Sums), zero(), step<Masked>(sums, a, x, offset, c, w, lens) for column w of the C lanes at element offset,
-// their columns at c, and store(sums, out) of its kOut values (C rows of Write::kParts).
-template <typename Body, typename T, typename Write>
-void sell_spmv(const SellSlices<T>& a, const Write& write, const T* x, T* y, crd::u32 s_begin, crd::u32 s_end,
-               crd::u32 pair_width) noexcept
+// The driver's slice loop, slices of one column form both at least pair_width wide running as a pair. Body: the lane
+// sums of one slice (Sums), zero(), step<Masked>(sums, a, x, offset, c, w, lens) for column w of the C lanes at element
+// offset, their columns at c, and store(sums, out) of its kOut values (C rows of Write::kParts). AnyDelta: whether the
+// range holds a Delta16 slice; a range of U32 slices alone runs a loop without the Delta16 forms.
+template <typename Body, bool AnyDelta, typename T, typename Write>
+CRD_FORCEINLINE void sell_slices(const SellSlices<T>& a, Write write, const T* x, T* y, crd::u32 s_begin,
+                                 crd::u32 s_end, crd::u32 pair_width) noexcept
 {
     constexpr crd::u32 height = Body::kC;
     static_assert(Body::kOut == height * Write::kParts, "a body stores one sum per part of each row");
@@ -308,9 +298,9 @@ void sell_spmv(const SellSlices<T>& a, const Write& write, const T* x, T* y, crd
     crd::u32 s = s_begin;
     while (s < s_end)
     {
-        const bool delta = delta16(a, s);
+        const bool delta = AnyDelta && delta16(a, s);
         const bool pair = pair_width != kSellNoPairs && s + 1U < s_end && a.slice_width[s] >= pair_width &&
-                          a.slice_width[s + 1U] >= pair_width && delta16(a, s + 1U) == delta;
+                          a.slice_width[s + 1U] >= pair_width && (!AnyDelta || delta16(a, s + 1U) == delta);
         if (!pair)
         {
             if (delta)
@@ -336,6 +326,21 @@ void sell_spmv(const SellSlices<T>& a, const Write& write, const T* x, T* y, crd
         write_slice<height>(a, write, s, out0, y);
         write_slice<height>(a, write, s + 1U, out1, y);
         s += 2U;
+    }
+}
+
+// The driver: the slice loop with the Delta16 forms only where the range holds a Delta16 slice (delta_ptr counts them).
+template <typename Body, typename T, typename Write>
+void sell_spmv(const SellSlices<T>& a, const Write& write, const T* x, T* y, crd::u32 s_begin, crd::u32 s_end,
+               crd::u32 pair_width) noexcept
+{
+    if (s_begin < s_end && a.delta_ptr[s_end] != a.delta_ptr[s_begin])
+    {
+        sell_slices<Body, true>(a, write, x, y, s_begin, s_end, pair_width);
+    }
+    else
+    {
+        sell_slices<Body, false>(a, write, x, y, s_begin, s_end, pair_width);
     }
 }
 

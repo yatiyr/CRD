@@ -19,7 +19,8 @@ inline constexpr crd::u32 kSellSliceComplex = 4;
 // The arrays of a SellMatrix a kernel reads, in its real scalar type T. Slice s holds rows [s C, s C + C) of the σ
 // order, column-major: element (lane, w) is number e = slice_ptr[s] + w C + lane of vals, padded with the value 0 to
 // slice_width[s]. A complex matrix stores each value as its (re, im) pair, element e at vals[2 e]. The padding of row
-// lane, its columns from row_len[s C + lane] on, is never multiplied by x.
+// lane, its columns from row_len[s C + lane] on, is never multiplied by x; the slice's first slice_full[s] columns (its
+// shortest row's length) need no such check.
 //
 // A slice's columns take one of two forms. A U32 slice (delta_ptr[s + 1] == delta_ptr[s]) stores them as u32 at
 // col_idx[e - delta_ptr[s]]. A Delta16 slice stores each row's first column at col_first[s C + lane] and the gap to
@@ -29,7 +30,8 @@ template <typename T> struct SellSlices
 {
     const crd::u32* slice_ptr;
     const crd::u32* slice_width;
-    const crd::u32* row_len; // stored values of each σ row, num_slices C long (0 past the last row)
+    const crd::u32* slice_full; // the columns every row of slice s stores: its shortest row's length
+    const crd::u32* row_len;    // stored values of each σ row, num_slices C long (0 past the last row)
     const T* vals;
     const crd::u32* col_idx;   // the U32 slices' columns
     const crd::u32* delta_ptr; // num_slices + 1: the Delta16 elements before each slice

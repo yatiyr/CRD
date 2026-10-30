@@ -85,6 +85,7 @@ struct SellMatrix
     crd::u32                         num_slices = 0;
     crd::containers::Array<crd::u32> slice_ptr;    // length num_slices+1; element offset of each slice
     crd::containers::Array<crd::u32> slice_width;  // length num_slices; padded column count of each slice
+    crd::containers::Array<crd::u32> slice_full;   // length num_slices; columns every row of the slice stores
     crd::containers::Array<crd::u32> row_len;      // length num_slices*kC; stored count of each σ row (0 = pad row)
     crd::containers::Array<T>        vals;         // column-major within slice; pad = 0
     crd::containers::Array<crd::u32> col_idx;      // the U32 slices' columns, laid out as vals; pad col = 0
@@ -95,8 +96,8 @@ struct SellMatrix
     bool perm_is_identity = true;                  // true when the σ sort reordered no rows (uniform/banded)
 
     explicit SellMatrix(crd::memory::IAllocator* alloc)
-        : slice_ptr(alloc), slice_width(alloc), row_len(alloc), vals(alloc), col_idx(alloc), delta_ptr(alloc),
-          col_first(alloc), col_delta(alloc), perm(alloc)
+        : slice_ptr(alloc), slice_width(alloc), slice_full(alloc), row_len(alloc), vals(alloc), col_idx(alloc),
+          delta_ptr(alloc), col_first(alloc), col_delta(alloc), perm(alloc)
     {
     }
 
@@ -123,8 +124,8 @@ struct SellMatrix
     [[nodiscard]] crd::usize stored_bytes() const noexcept
     {
         return vals.size() * sizeof(T) + col_delta.size() * sizeof(crd::u16) +
-               (col_idx.size() + row_len.size() + slice_ptr.size() + slice_width.size() + delta_ptr.size() +
-                col_first.size() + perm.size()) *
+               (col_idx.size() + row_len.size() + slice_ptr.size() + slice_width.size() + slice_full.size() +
+                delta_ptr.size() + col_first.size() + perm.size()) *
                    sizeof(crd::u32);
     }
 };
@@ -185,14 +186,17 @@ template <typename T>
         }
     }
 
-    // 1. per-row length and per-slice width = max length over the slice's permuted rows.
+    // 1. per-row length, per-slice width = max length over the slice's permuted rows, and its full columns = min
+    //    length over its C rows (a pad row's 0 included), which the kernels run without a row's length check.
     out.slice_width.resize(out.num_slices);
+    out.slice_full.resize(out.num_slices);
     out.row_len.resize(static_cast<crd::usize>(out.num_slices) * height); // pad rows stay 0
     out.slice_ptr.resize(static_cast<crd::usize>(out.num_slices) + 1);
     out.slice_ptr[0] = 0;
     for (crd::u32 s = 0; s < out.num_slices; ++s)
     {
         crd::u32       w     = 0;
+        crd::u32       full  = s * height + height <= pat.rows ? ~crd::u32{0} : 0U; // a pad row stores nothing
         const crd::u32 r_end = (s * height + height < pat.rows) ? (s * height + height) : pat.rows;
         for (crd::u32 sr = s * height; sr < r_end; ++sr)
         {
@@ -200,8 +204,10 @@ template <typename T>
             const crd::u32 len = outer[r + 1] - outer[r];
             out.row_len[sr] = len;
             w = len > w ? len : w;
+            full = len < full ? len : full;
         }
         out.slice_width[s]   = w;
+        out.slice_full[s]    = full;
         out.slice_ptr[s + 1] = out.slice_ptr[s] + height * w;
     }
 
@@ -295,6 +301,7 @@ template <typename T>
     using U = SellScalarT<T>;
     const SellSlices<U> slices{a.slice_ptr.data(),
                                a.slice_width.data(),
+                               a.slice_full.data(),
                                a.row_len.data(),
                                sell_scalars(a.vals.data()),
                                a.col_idx.data(),

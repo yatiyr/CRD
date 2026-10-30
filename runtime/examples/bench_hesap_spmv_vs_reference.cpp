@@ -275,8 +275,11 @@ template <typename T> typename Peer<T>::Vector* peer_vector(u32 n, const T* valu
     }
 }
 
+// One untimed call first: an arm timed right after another (or after Eigen) would otherwise pay for bringing its own
+// matrix, x and y back into the caches, which the interleaved rounds charge to whichever arm runs first.
 template <typename Fn> f64 time_ms(int inner, const Fn& fn)
 {
+    fn();
     const auto t0 = Clock::now();
     for (int k = 0; k < inner; ++k)
     {

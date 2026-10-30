@@ -167,6 +167,7 @@ template <typename T> sp::SellSlices<Scalar<T>> slices_of(const sp::SellMatrix<T
 {
     return {a.slice_ptr.data(),
             a.slice_width.data(),
+            a.slice_full.data(),
             a.row_len.data(),
             sp::detail::sell_scalars(a.vals.data()),
             a.col_idx.data(),
@@ -738,10 +739,26 @@ TEST_CASE("sparse kernels: to_sell records each sigma row's length, and the byte
         wrong += sell.row_len[sr] == want ? 0U : 1U;
     }
     CHECK(wrong == 0U);
+    // Each slice's full columns: its shortest row, a pad row's 0 included.
+    constexpr u32 height = sp::SellMatrix<crd::f64>::kC;
+    REQUIRE(sell.slice_full.size() == sell.num_slices);
+    usize wrong_full = 0;
+    for (u32 s = 0; s < sell.num_slices; ++s)
+    {
+        u32 shortest = sell.row_len[s * height];
+        for (u32 lane = 1; lane < height; ++lane)
+        {
+            const u32 len = sell.row_len[s * height + lane];
+            shortest = len < shortest ? len : shortest;
+        }
+        wrong_full += sell.slice_full[s] == shortest ? 0U : 1U;
+    }
+    CHECK(wrong_full == 0U);
+    CHECK(sell.slice_full[sell.num_slices - 1U] == 0U); // 70 rows: the last slice holds two pad rows
 
     const usize elements = sell.vals.size();
-    const usize words = sell.row_len.size() + sell.slice_ptr.size() + sell.slice_width.size() + sell.delta_ptr.size() +
-                        sell.perm.size();
+    const usize words = sell.row_len.size() + sell.slice_ptr.size() + sell.slice_width.size() + sell.slice_full.size() +
+                        sell.delta_ptr.size() + sell.perm.size();
     CHECK(sell.range_bytes(0U, sell.num_slices) == elements * 12U + sell.row_len.size() * 4U);
     CHECK(sell.range_bytes(3U, 3U) == 0U);
     CHECK(sell.stored_bytes() == elements * 12U + words * 4U);
