@@ -1894,9 +1894,11 @@ class Access(unittest.TestCase):
             whois.login('100.64.0.9', 1)
 
     def test_listeners(self):
-        self.assertEqual(coordinator_main.listeners({}, {}), [('127.0.0.1', 8780, ('ui', 'agent'))])
-        self.assertEqual(coordinator_main.listeners({}, {'CERID_CI_LISTEN': '127.0.0.1:8780,10.128.0.2:8780=agent'}),
-                         [('127.0.0.1', 8780, ('ui', 'agent')), ('10.128.0.2', 8780, ('agent',))])
+        self.assertEqual(coordinator_main.listeners({}, {}), [('127.0.0.1', 8780, ('ui', 'agent'), None)])
+        self.assertEqual(coordinator_main.listeners({}, {'CERID_CI_LISTEN': '127.0.0.1:8780,10.128.0.2:8780=agent,'
+                                                                           '100.101.1.2:8781=ui@tailscale'}),
+                         [('127.0.0.1', 8780, ('ui', 'agent'), None), ('10.128.0.2', 8780, ('agent',), None),
+                          ('100.101.1.2', 8781, ('ui',), 'tailscale')])
         with self.assertRaises(SystemExit):
             coordinator_main.listeners({}, {'CERID_CI_LISTEN': '1.2.3.4:1=everything'})
         config, problems = coordinator_main.load_config(ROOT / 'ci/coordinator.json', {
@@ -1939,6 +1941,13 @@ class Surfaces(Base):
     def test_iap_tunnel_listener_refuses_a_network_peer(self):
         base = self.serve(('ui', 'agent'), ui=auth.UiAuth('iap-tunnel', networks=('35.235.240.0/20',)))
         self.assertEqual(self.get(base + '/api/builds')[0], 401, '127.0.0.1 is not in this listener\'s networks')
+        server = service.serve(service.Service(self.c, auth.UiAuth('local', loopback=True), CONFIG), '127.0.0.1', 0,
+                               ('ui',), ui=auth.UiAuth('iap-tunnel', networks=('35.235.240.0/20',)))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.assertEqual(self.get('http://127.0.0.1:%d/api/builds' % server.server_address[1])[0], 401,
+                         'a listener\'s own access mode wins over the service default')
 
     def test_server_sent_events_follow_a_build_and_a_log(self):
         base = self.serve(('ui', 'agent'))

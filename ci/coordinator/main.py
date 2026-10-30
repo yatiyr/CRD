@@ -76,22 +76,24 @@ def secrets_provider(config, environ):
 
 
 def listeners(config, environ, override=None):
-    """[(host, port, surfaces)]: CERID_CI_LISTEN (or --listen) is a comma-separated list of host:port, each
-    optionally followed by `=ui+agent` style surfaces; the configuration's `listen` list otherwise. The default is
-    loopback only."""
+    """[(host, port, surfaces, ui mode or None)]: CERID_CI_LISTEN (or --listen) is a comma-separated list of
+    host:port, each optionally followed by `=ui+agent` style surfaces and `@mode` (the UI access mode of that
+    listener, for example `100.101.1.2:8781=ui@tailscale`); the configuration's `listen` list otherwise. The
+    default is loopback only."""
     text = override or environ.get('CERID_CI_LISTEN')
     items = [x.strip() for x in text.split(',') if x.strip()] if text else config.get('listen', ['127.0.0.1:8780'])
     if isinstance(items, str):
         items = [items]
     out = []
     for item in items:
+        item, _, mode = item.partition('@')
         address, _, surfaces = item.partition('=')
         host, _, port = address.rpartition(':')
         chosen = tuple(surfaces.split('+')) if surfaces else ('ui', 'agent')
         unknown = set(chosen) - set(service.SURFACES)
         if unknown:
             raise SystemExit('unknown listener surfaces %s in %s' % (', '.join(sorted(unknown)), item))
-        out.append((host.strip('[]'), int(port), chosen))
+        out.append((host.strip('[]'), int(port), chosen, mode or None))
     return out
 
 
@@ -253,7 +255,7 @@ def main(argv=None):
     parts = build(config, os.environ)
     c = parts['coordinator']
     c.ensure_schema()
-    ui_hosts = [host for host, _, surfaces in bound if 'ui' in surfaces]
+    ui_hosts = [host for host, _, surfaces, mode in bound if 'ui' in surfaces and not mode]
     ui = ui_auth(config, os.environ, ui_hosts[0] if len(ui_hosts) == 1 else '0.0.0.0')
     web = service.Service(c, ui, config, registry=parts['registry'],
                           identity=identity_verifier(config, os.environ), mirror=parts['mirror'],
@@ -263,10 +265,12 @@ def main(argv=None):
                         schedules=lambda: triggers.schedules(c),
                         quality=quality_work(c, parts['registry'], parts['mirror'], config))
     loop.start()
-    servers = [service.serve(web, host, port, surfaces) for host, port, surfaces in bound]
+    servers = [service.serve(web, host, port, surfaces, ui_auth(config, dict(os.environ, CERID_CI_UI_MODE=mode), host)
+                             if mode else None) for host, port, surfaces, mode in bound]
     for server in servers[1:]:
         threading.Thread(target=server.serve_forever, daemon=True).start()
-    c.log('coordinator_started', listen=['%s:%d=%s' % (h, p, '+'.join(s)) for h, p, s in bound],
+    c.log('coordinator_started', listen=['%s:%d=%s%s' % (h, p, '+'.join(s), '@' + m if m else '')
+                                         for h, p, s, m in bound],
           version=service.VERSION, ui=ui.mode)
     try:
         servers[0].serve_forever()

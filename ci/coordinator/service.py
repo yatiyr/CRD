@@ -159,10 +159,11 @@ class Service:
 SURFACES = ('ui', 'agent', 'webhook')
 
 
-def make_handler(service, surfaces=SURFACES):
+def make_handler(service, surfaces=SURFACES, ui=None):
     """The request handler of one listener. `surfaces` says which parts this listener serves: `ui` (the web UI
     and its API), `agent` (the agent API, the git mirror, the agent program) and `webhook`; /healthz is everywhere."""
     c = service.c
+    viewer = ui or service.ui  # a listener may have its own access mode (the Tailscale add-on beside the IAP tunnel)
 
     class Handler(http.server.BaseHTTPRequestHandler):
         protocol_version = 'HTTP/1.1'
@@ -234,7 +235,7 @@ def make_handler(service, surfaces=SURFACES):
             return token
 
         def ui_user(self, changing=False):
-            user = service.ui.user(self.headers, self.client_address)
+            user = viewer.user(self.headers, self.client_address)
             if changing:
                 if self.headers.get('X-Cerid-Request') != '1':
                     raise HttpError(403, 'state-changing calls need the X-Cerid-Request header')
@@ -532,8 +533,8 @@ def make_handler(service, surfaces=SURFACES):
     return Handler
 
 
-def serve(service, host='127.0.0.1', port=8780, surfaces=SURFACES):
-    server = http.server.ThreadingHTTPServer((host, port), make_handler(service, surfaces))
+def serve(service, host='127.0.0.1', port=8780, surfaces=SURFACES, ui=None):
+    server = http.server.ThreadingHTTPServer((host, port), make_handler(service, surfaces, ui))
     server.daemon_threads = True
     return server
 
