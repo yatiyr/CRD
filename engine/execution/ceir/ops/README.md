@@ -37,7 +37,7 @@ summary = "..."           # one-line dialect description (docs / reflection)
 
 ### Semantic-heavy fields — **schema-known now, codegen scaffolded until their band**
 
-The schema **validates** these today; the generator emits a structured TODO scaffold + a reflection record for them,
+The schema **validates** these today; the generator emits a structured `TODO` scaffold + a reflection record for them,
 because the machinery they need does not exist yet. This is NOT deferral — the schema contract is whole; the consuming
 bands land later (documented at the CEIR-2a/2b close).
 

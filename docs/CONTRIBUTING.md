@@ -9,8 +9,8 @@
 
 Orient through [START_HERE](../START_HERE.md): [context](../context.md) names the row, the row names its contract, and
 the [systems map](systems/README.md) names the module's public source, its `crd_module()` row in the root
-[CMakeLists](../CMakeLists.txt) and its tests. Every change is a reviewable diff plus a proposed Conventional Commits
-message; nobody but the maintainer commits or pushes ([publication handoff](#publication-handoff-human-only)).
+[CMakeLists](../CMakeLists.txt) and its tests. Every change is a reviewable diff with a Conventional Commits message;
+[AGENTS](../AGENTS.md#git-and-workspace) names who commits and pushes ([publication handoff](#publication-handoff)).
 Local verification follows BUILDING's decision table, one primary configuration for the changed modules and their
 consumers; the hosted lanes own the matrix.
 
@@ -105,12 +105,13 @@ there is one maintainer and no pull-request review flow: the maintainer pushes t
 pull requests that target it). An agent, a helper script, a bot or a delegated worker never holds merge rights, and
 a machine-recorded content hash or patch bundle is provenance, not a commit.
 
-## Publication handoff (human-only)
+## Publication handoff
 
-An agent hands over the working tree as a reviewable diff, a Conventional Commits message without any co-author
-trailer, the dated session record with its evidence and limitations, and the updated owning row. The maintainer
-reviews, commits and pushes to `main`; the workflow's tier resolver decides from the changed paths whether the push
-runs the change tier or the complete tier, and `Needs CI` rows carry the local evidence until the published run is
-green, after which they become Done or Recorded with that run as evidence. A red lane preempts slice work: its
-diagnosis and repair come first, on a new push by the maintainer. No purchase, runner registration or publication
+Every item lands as a reviewable diff, a plain Conventional Commits message (no AI mention, no co-author or
+"Generated with" trailer), the dated session record with its evidence and limitations, and the updated owning row.
+The serial roadmap workflow commits and pushes each item to `main`; a parallel agent pushes only its own branch for
+the user to merge; any other change is committed by the maintainer ([AGENTS](../AGENTS.md#git-and-workspace)). The
+workflow's tier resolver decides from the changed paths whether a push runs the change tier or the complete tier,
+and `Needs CI` rows carry the local evidence until the published run is green, after which they become Done or
+Recorded with that run as evidence. A red lane preempts slice work: its diagnosis and repair come first. No purchase, runner registration or publication
 setting is inferred from a quality goal ([research](research/2026-09-12-large-cpp-development-and-ci.md#documentation-and-ownership)).
