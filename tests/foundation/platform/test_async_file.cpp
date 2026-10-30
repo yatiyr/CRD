@@ -9,6 +9,7 @@
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
+#include <crd/platform/threading.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -39,12 +40,13 @@ struct AsyncFileJobsListener final : Catch::EventListenerBase
 };
 CATCH_REGISTER_LISTENER(AsyncFileJobsListener)
 
-// Write known bytes to a uniquely-named temp file; returns the path.
+// Write known bytes to a uniquely-named temp file; returns the path. The name carries the writing thread's id (unique
+// on the host while it runs), since parallel ctest runs each case in its own process in the same directory.
 static fs::Path write_temp_file(const crd::u8* data, crd::usize size)
 {
     const crd::u32 idx = s_file_counter.fetch_add(1U, std::memory_order_relaxed);
     char name[64];
-    std::snprintf(name, sizeof(name), "test_async_%u.bin", idx);
+    std::snprintf(name, sizeof(name), "test_async_%u_%u.bin", crd::platform::threading::current_thread_id(), idx);
     const fs::Path p(crd::containers::StringView(name, std::strlen(name)));
     crd::containers::Array<crd::u8> bytes(&s_alloc);
     bytes.resize(size);
