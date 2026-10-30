@@ -26,8 +26,8 @@
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
+#include <crd/hesap/fft/detail/batch_arms.hpp>
 #include <crd/hesap/fft/fft.hpp>
-#include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/memory/construct.hpp> // construct_or_fatal (DIAG.3a)
 
@@ -455,10 +455,13 @@ template <typename T> struct CwtResult
 // CWT of x at the given scales, faithful to pywt.cwt (FFT convolution; data spectrum shared across scales).
 // The scales are independent ⇒ multi-threaded batched: each job owns its plan + buffers, writes its own rows ⇒
 // the matrix is BIT-IDENTICAL across thread counts (the moat pywt/MATLAB lack). precision = 12 (pywt default).
+// detail::cwt_arm takes the scales' jobs levers (fft/detail/batch_arms.hpp); cwt runs the default.
+namespace detail
+{
 template <typename T>
-[[nodiscard]] CwtResult<T> cwt(crd::memory::IAllocator* alloc, crd::containers::ConstSpan<T> x,
-                               crd::containers::ConstSpan<T> scales, const ContinuousWavelet& w,
-                               double sampling_period = 1.0, int precision = 12)
+[[nodiscard]] CwtResult<T> cwt_arm(crd::memory::IAllocator* alloc, crd::containers::ConstSpan<T> x,
+                                   crd::containers::ConstSpan<T> scales, const ContinuousWavelet& w,
+                                   double sampling_period, int precision, const fft::detail::BatchPick& pick)
 {
     const crd::usize n = x.size();
     const crd::usize ns = scales.size();
@@ -524,13 +527,11 @@ template <typename T>
     }
     const T inv_lfft = T(1) / static_cast<T>(lfft);
 
-    // per-job FFT plans + scratch, built serially (the Welch pattern).
-    const crd::u32 nw = crd::jobs::num_workers();
-    crd::u32 njobs = 1U;
-    if (ns >= 4 && nw > 1)
-    {
-        njobs = nw < static_cast<crd::u32>(ns) ? nw : static_cast<crd::u32>(ns);
-    }
+    // per-job FFT plans + scratch, built serially (the Welch pattern). The per-scale FFT recurses on its worker
+    // fiber; the default 64 KB Small stack overflows under ASan redzones (CI linux-gcc-asan, T1 stack-overflow):
+    // Medium (512 KB) gives the recursion ample headroom.
+    constexpr crd::jobs::StackSize stack = crd::jobs::StackSize::Medium;
+    const crd::u32 njobs = fft::detail::batch_jobs(pick, ns, lfft);
     crd::containers::Array<fft::FftPlan<T>*> plans(alloc);
     crd::containers::Array<Complex<T>> kbuf(alloc);
     crd::containers::Array<Complex<T>> wbuf(alloc);
@@ -539,7 +540,7 @@ template <typename T>
     wbuf.resize(static_cast<crd::usize>(njobs) * lfft);
     for (crd::u32 j = 0; j < njobs; ++j)
     {
-        plans[j] = crd::memory::construct_or_fatal<fft::FftPlan<T>>(*alloc, detail::kCwtPlanOutOfMemory, alloc, lfft);
+        plans[j] = crd::memory::construct_or_fatal<fft::FftPlan<T>>(*alloc, kCwtPlanOutOfMemory, alloc, lfft);
     }
 
     auto do_scale = [&](crd::u32 job, crd::usize s) {
@@ -595,36 +596,29 @@ template <typename T>
         }
     };
 
-    if (njobs <= 1)
-    {
-        for (crd::usize s = 0; s < ns; ++s)
-        {
-            do_scale(0, s);
-        }
-    }
-    else
-    {
-        crd::jobs::Counter* c = crd::jobs::parallel_for(njobs, njobs, [&](crd::u32 jb, crd::u32 je) {
-            for (crd::u32 job = jb; job < je; ++job)
-            {
-                const crd::usize s0 = static_cast<crd::usize>(job) * ns / njobs;
-                const crd::usize s1 = static_cast<crd::usize>(job + 1) * ns / njobs;
-                for (crd::usize s = s0; s < s1; ++s)
-                {
-                    do_scale(job, s);
-                }
-            }
-            // the per-scale FFT recurses on this worker fiber; the default 64 KB Small stack overflows under ASan
-            // redzones (CI linux-gcc-asan, T1 stack-overflow) — Medium (512 KB) gives the recursion ample headroom.
-        }, crd::jobs::StackSize::Medium);
-        crd::jobs::wait(c);
-    }
+    fft::detail::run_batch(njobs, ns, stack,
+                           [&](crd::u32 job, crd::usize first, crd::usize last)
+                           {
+                               for (crd::usize s = first; s < last; ++s)
+                               {
+                                   do_scale(job, s);
+                               }
+                           });
     for (crd::u32 j = 0; j < njobs; ++j)
     {
         plans[j]->~FftPlan<T>();
         alloc->deallocate(plans[j]);
     }
     return out;
+}
+} // namespace detail
+
+template <typename T>
+[[nodiscard]] CwtResult<T> cwt(crd::memory::IAllocator* alloc, crd::containers::ConstSpan<T> x,
+                               crd::containers::ConstSpan<T> scales, const ContinuousWavelet& w,
+                               double sampling_period = 1.0, int precision = 12)
+{
+    return detail::cwt_arm<T>(alloc, x, scales, w, sampling_period, precision, fft::detail::BatchPick{});
 }
 
 // Ridge: for each time index, the scale that maximizes |W(a,b)|.

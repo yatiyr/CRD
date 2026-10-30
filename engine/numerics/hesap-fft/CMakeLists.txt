@@ -7,6 +7,7 @@
 #   crd-core / crd-containers / crd-memory — types, Array/Span, IAllocator
 #   crd-math  — crd::math::simd (the SIMD kernels land at v10-b)
 #   crd-hesap — Complex<T> (FFT is inherently complex; lower-layer raw per ADR-0078)
+#   crd-jobs  — the batched transforms' jobs (detail/batch_arms.hpp: a range of transforms a job, a plan each)
 
 if(CRD_HESAP_FFT_PROFILE)
     # Directory scope, so the archive and the kernel units below count the same phases; INTERFACE below for consumers.
@@ -30,6 +31,7 @@ target_link_libraries(crd-hesap-fft
         crd-memory
         crd-math
         crd-hesap
+        crd-jobs       # detail/batch_arms.hpp: the batched transforms' jobs
     PRIVATE
         crd-warnings
 )

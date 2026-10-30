@@ -1,5 +1,6 @@
 add_executable(crd-hesap-fft-tests
     test_fft.cpp
+    test_fft_batch_jobs.cpp
     test_fft_kernels.cpp
     test_nufft.cpp
     test_dct.cpp

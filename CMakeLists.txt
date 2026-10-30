@@ -600,7 +600,7 @@ crd_module(engine/numerics/hesap-ode engine/hesap-ode
     DEPENDS containers core hesap hesap-dense hesap-direct hesap-iterative hesap-sparse memory
     TESTS numerics/hesap-ode)
 # v10; FFT — Complex<T> transforms; gold standards FFTW/PocketFFT/MKL
-crd_module(engine/numerics/hesap-fft engine/hesap-fft DEPENDS containers core hesap math memory
+crd_module(engine/numerics/hesap-fft engine/hesap-fft DEPENDS containers core hesap jobs math memory
     TESTS numerics/hesap-fft)
 # v11; DSP — filters/spectral/multirate (depends on hesap-fft/eigen/units); ADR-0093
 crd_module(engine/numerics/hesap-dsp engine/hesap-dsp

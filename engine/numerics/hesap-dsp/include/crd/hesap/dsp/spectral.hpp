@@ -19,8 +19,8 @@
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/dsp/windows.hpp>
+#include <crd/hesap/fft/detail/batch_arms.hpp>
 #include <crd/hesap/fft/real_fft.hpp>
-#include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/memory/construct.hpp> // construct_or_fatal (DIAG.3a)
 
@@ -37,10 +37,13 @@ inline constexpr const char* kSegmentPlanOutOfMemory = "hesap::dsp: out of memor
 // (nseg × nfreq, row-major) of `x`. Welch averages these; the spectrogram returns them. Each job owns a
 // RealFftPlan (built serially up-front) and writes its own segment rows ⇒ the matrix is BIT-IDENTICAL across
 // thread counts. Returns the pgram Array; sets nseg/nfreq/hop. PERIODIC hann (scipy fftbins), detrend='constant'.
+// `pick` is the batch's jobs levers (fft/detail/batch_arms.hpp); segment_periodograms runs the default.
+namespace detail
+{
 template <typename T>
-[[nodiscard]] crd::containers::Array<T> segment_periodograms(crd::memory::IAllocator* alloc,
-                                                             crd::containers::ConstSpan<T> x, T fs, crd::usize nperseg,
-                                                             crd::usize noverlap, crd::usize& nseg, crd::usize& nfreq)
+[[nodiscard]] crd::containers::Array<T>
+segment_periodograms_arm(crd::memory::IAllocator* alloc, crd::containers::ConstSpan<T> x, T fs, crd::usize nperseg,
+                         crd::usize noverlap, crd::usize& nseg, crd::usize& nfreq, const fft::detail::BatchPick& pick)
 {
     const crd::usize hop = nperseg - noverlap;
     nfreq = nperseg / 2 + 1;
@@ -59,21 +62,22 @@ template <typename T>
     const T scale = T(1) / (fs * winsum2);
     pgram.resize(nseg * nfreq);
 
-    const crd::u32 nw = crd::jobs::num_workers();
-    const crd::u32 njobs = (nw < static_cast<crd::u32>(nseg)) ? nw : static_cast<crd::u32>(nseg);
+    // Generated FFT codelets can spill ~420 KiB in GCC Debug before nested calls: the 2 MiB tier, not the 64 KiB
+    // default.
+    constexpr crd::jobs::StackSize stack = crd::jobs::StackSize::Large;
+    const crd::u32 njobs = fft::detail::batch_jobs(pick, nseg, nperseg);
 
     // pre-build njobs plans + per-job scratch SERIALLY (no allocation inside the parallel region).
     crd::containers::Array<fft::RealFftPlan<T>*> plans(alloc);
-    crd::containers::Array<T> segbuf(alloc);            // njobs × nperseg
-    crd::containers::Array<Complex<T>> specbuf(alloc);  // njobs × nfreq
-    const crd::u32 npl = (njobs < 1U) ? 1U : njobs;
-    plans.resize(npl);
-    segbuf.resize(static_cast<crd::usize>(npl) * nperseg);
-    specbuf.resize(static_cast<crd::usize>(npl) * nfreq);
-    for (crd::u32 j = 0; j < npl; ++j)
+    crd::containers::Array<T> segbuf(alloc);           // njobs × nperseg
+    crd::containers::Array<Complex<T>> specbuf(alloc); // njobs × nfreq
+    plans.resize(njobs);
+    segbuf.resize(static_cast<crd::usize>(njobs) * nperseg);
+    specbuf.resize(static_cast<crd::usize>(njobs) * nfreq);
+    for (crd::u32 j = 0; j < njobs; ++j)
     {
-        plans[j] = crd::memory::construct_or_fatal<fft::RealFftPlan<T>>(*alloc, detail::kSegmentPlanOutOfMemory, alloc,
-                                                                        nperseg);
+        plans[j] =
+            crd::memory::construct_or_fatal<fft::RealFftPlan<T>>(*alloc, kSegmentPlanOutOfMemory, alloc, nperseg);
     }
 
     // one segment's periodogram: detrend (subtract mean) + window → rfft → scaled |·|² (one-sided doubling).
@@ -104,41 +108,30 @@ template <typename T>
             row[k] = p;
         }
     };
+    fft::detail::run_batch(njobs, nseg, stack,
+                           [&](crd::u32 job, crd::usize first, crd::usize last)
+                           {
+                               for (crd::usize s = first; s < last; ++s)
+                               {
+                                   do_segment(job, s);
+                               }
+                           });
 
-    if (nw <= 1 || nseg < 4)
-    {
-        for (crd::usize s = 0; s < nseg; ++s)
-        {
-            do_segment(0, s);
-        }
-    }
-    else
-    {
-        // Generated FFT codelets can spill ~420 KiB in GCC Debug before nested calls.
-        // Select the existing 2 MiB tier explicitly; the 64 KiB default cannot host this workload.
-        crd::jobs::Counter* c = crd::jobs::parallel_for(
-            njobs, njobs,
-            [&](crd::u32 jb, crd::u32 je)
-            {
-                for (crd::u32 job = jb; job < je; ++job)
-                {
-                    const crd::usize s0 = static_cast<crd::usize>(job) * nseg / njobs;
-                    const crd::usize s1 = static_cast<crd::usize>(job + 1) * nseg / njobs;
-                    for (crd::usize s = s0; s < s1; ++s)
-                    {
-                        do_segment(job, s);
-                    }
-                }
-            }, crd::jobs::StackSize::Large);
-        crd::jobs::wait(c);
-    }
-
-    for (crd::u32 j = 0; j < npl; ++j)
+    for (crd::u32 j = 0; j < njobs; ++j)
     {
         plans[j]->~RealFftPlan();
         alloc->deallocate(plans[j]);
     }
     return pgram;
+}
+} // namespace detail
+
+template <typename T>
+[[nodiscard]] crd::containers::Array<T> segment_periodograms(crd::memory::IAllocator* alloc,
+                                                             crd::containers::ConstSpan<T> x, T fs, crd::usize nperseg,
+                                                             crd::usize noverlap, crd::usize& nseg, crd::usize& nfreq)
+{
+    return detail::segment_periodograms_arm<T>(alloc, x, fs, nperseg, noverlap, nseg, nfreq, fft::detail::BatchPick{});
 }
 
 // Welch power spectral density (scipy.signal.welch): average the per-segment periodograms. `noverlap` default
@@ -333,11 +326,14 @@ template <typename T>
 // Short-Time Fourier Transform: the COMPLEX spectra of overlapping windowed (hann) segments — frame s =
 // rfft(x[s·hop : s·hop+nperseg] · win), kept complex (no scaling, no detrend). Returns the [nframes × nfreq]
 // row-major complex matrix; sets nframes/nfreq. Multi-threaded (per-job plans) ⇒ bit-identical across threads.
-// Pairs with istft for perfect reconstruction (COLA hann + 50% overlap).
+// Pairs with istft for perfect reconstruction (COLA hann + 50% overlap). detail::stft_arm takes the frames' jobs
+// levers (fft/detail/batch_arms.hpp); stft runs the default.
+namespace detail
+{
 template <typename T>
-[[nodiscard]] crd::containers::Array<Complex<T>> stft(crd::memory::IAllocator* alloc, crd::containers::ConstSpan<T> x,
-                                                      crd::usize nperseg, crd::usize noverlap, crd::usize& nframes,
-                                                      crd::usize& nfreq)
+[[nodiscard]] crd::containers::Array<Complex<T>>
+stft_arm(crd::memory::IAllocator* alloc, crd::containers::ConstSpan<T> x, crd::usize nperseg, crd::usize noverlap,
+         crd::usize& nframes, crd::usize& nfreq, const fft::detail::BatchPick& pick)
 {
     const crd::usize hop = nperseg - noverlap;
     nfreq = nperseg / 2 + 1;
@@ -350,17 +346,17 @@ template <typename T>
     const auto win = hann<T>(alloc, nperseg, /*sym=*/false);
     out.resize(nframes * nfreq);
 
-    const crd::u32 nw = crd::jobs::num_workers();
-    const crd::u32 njobs = (nw < static_cast<crd::u32>(nframes)) ? nw : static_cast<crd::u32>(nframes);
-    const crd::u32 npl = (njobs < 1U) ? 1U : njobs;
+    // Generated FFT codelets can spill ~420 KiB in GCC Debug before nested calls: the 2 MiB tier.
+    constexpr crd::jobs::StackSize stack = crd::jobs::StackSize::Large;
+    const crd::u32 njobs = fft::detail::batch_jobs(pick, nframes, nperseg);
     crd::containers::Array<fft::RealFftPlan<T>*> plans(alloc);
     crd::containers::Array<T> segbuf(alloc);
-    plans.resize(npl);
-    segbuf.resize(static_cast<crd::usize>(npl) * nperseg);
-    for (crd::u32 j = 0; j < npl; ++j)
+    plans.resize(njobs);
+    segbuf.resize(static_cast<crd::usize>(njobs) * nperseg);
+    for (crd::u32 j = 0; j < njobs; ++j)
     {
-        plans[j] = crd::memory::construct_or_fatal<fft::RealFftPlan<T>>(*alloc, detail::kSegmentPlanOutOfMemory, alloc,
-                                                                        nperseg);
+        plans[j] =
+            crd::memory::construct_or_fatal<fft::RealFftPlan<T>>(*alloc, kSegmentPlanOutOfMemory, alloc, nperseg);
     }
     auto do_frame = [&](crd::u32 jobidx, crd::usize frame)
     {
@@ -373,39 +369,29 @@ template <typename T>
         plans[jobidx]->rfft(crd::containers::ConstSpan<T>(sb, nperseg),
                             crd::containers::Span<Complex<T>>(out.data() + frame * nfreq, nfreq));
     };
-    if (nw <= 1 || nframes < 4)
-    {
-        for (crd::usize f = 0; f < nframes; ++f)
-        {
-            do_frame(0, f);
-        }
-    }
-    else
-    {
-        // Generated FFT codelets can spill ~420 KiB in GCC Debug before nested calls.
-        // Select the existing 2 MiB tier explicitly; the 64 KiB default cannot host this workload.
-        crd::jobs::Counter* c = crd::jobs::parallel_for(
-            njobs, njobs,
-            [&](crd::u32 jb, crd::u32 je)
-            {
-                for (crd::u32 job = jb; job < je; ++job)
-                {
-                    const crd::usize f0 = static_cast<crd::usize>(job) * nframes / njobs;
-                    const crd::usize f1 = static_cast<crd::usize>(job + 1) * nframes / njobs;
-                    for (crd::usize f = f0; f < f1; ++f)
-                    {
-                        do_frame(job, f);
-                    }
-                }
-            }, crd::jobs::StackSize::Large);
-        crd::jobs::wait(c);
-    }
-    for (crd::u32 j = 0; j < npl; ++j)
+    fft::detail::run_batch(njobs, nframes, stack,
+                           [&](crd::u32 job, crd::usize first, crd::usize last)
+                           {
+                               for (crd::usize f = first; f < last; ++f)
+                               {
+                                   do_frame(job, f);
+                               }
+                           });
+    for (crd::u32 j = 0; j < njobs; ++j)
     {
         plans[j]->~RealFftPlan();
         alloc->deallocate(plans[j]);
     }
     return out;
+}
+} // namespace detail
+
+template <typename T>
+[[nodiscard]] crd::containers::Array<Complex<T>> stft(crd::memory::IAllocator* alloc, crd::containers::ConstSpan<T> x,
+                                                      crd::usize nperseg, crd::usize noverlap, crd::usize& nframes,
+                                                      crd::usize& nfreq)
+{
+    return detail::stft_arm<T>(alloc, x, nperseg, noverlap, nframes, nfreq, fft::detail::BatchPick{});
 }
 
 // Inverse STFT: overlap-add reconstruction with COLA normalization. irfft each frame → synthesis-windowed (hann)

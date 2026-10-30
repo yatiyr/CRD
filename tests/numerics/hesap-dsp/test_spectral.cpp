@@ -7,6 +7,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <cmath>
+#include <cstring>
+#include <limits>
 namespace dsp = crd::hesap::dsp;
 namespace cont = crd::containers;
 using crd::f64; using crd::usize;
@@ -156,6 +158,63 @@ TEST_CASE("dsp spectral: STFT/ISTFT perfect reconstruction + {1..16} bit-identit
         }
         crd::jobs::shutdown();
     }
+}
+
+TEST_CASE("dsp spectral: segment periodograms and STFT on 1 to 32 forced jobs give one job's bits",
+          "[dsp][spectral][stft][batch-jobs]")
+{
+    // The segments' jobs levers (fft/detail/batch_arms.hpp), on eight workers: every forced job count, the cuts at 0,
+    // at the default and never, against the default pick on one worker. IEEE specials (a NaN, both infinities, a -0, a
+    // subnormal) poison or pass through their segments' rows.
+    crd::memory::TlsfAllocator alloc(1U << 25);
+    using crd::hesap::fft::detail::BatchPick;
+    const usize n = 8192;
+    cont::Array<f64> x(&alloc);
+    x.resize(n);
+    for (usize i = 0; i < n; ++i)
+    {
+        x[i] = std::sin(0.013 * static_cast<f64>(i)) + 0.25 * std::cos(0.41 * static_cast<f64>(i * i % 977));
+    }
+    x[700] = std::numeric_limits<f64>::quiet_NaN();
+    x[2100] = std::numeric_limits<f64>::infinity();
+    x[2101] = -std::numeric_limits<f64>::infinity();
+    x[5000] = -0.0;
+    x[6000] = std::numeric_limits<f64>::denorm_min();
+    const cont::ConstSpan<f64> xs(x.data(), n);
+    const auto run = [&](const BatchPick& pick, cont::Array<f64>& pg, cont::Array<crd::hesap::Complex<f64>>& z)
+    {
+        usize nseg = 0;
+        usize nfreq = 0;
+        pg = dsp::detail::segment_periodograms_arm<f64>(&alloc, xs, 100.0, 128, 64, nseg, nfreq, pick);
+        REQUIRE(nseg == 127);
+        z = dsp::detail::stft_arm<f64>(&alloc, xs, 128, 64, nseg, nfreq, pick);
+        REQUIRE(nseg == 127);
+    };
+    cont::Array<f64> pg1(&alloc);
+    cont::Array<crd::hesap::Complex<f64>> z1(&alloc);
+    {
+        crd::jobs::Config cfg;
+        cfg.num_threads = 1;
+        crd::jobs::init(cfg);
+        run(BatchPick{}, pg1, z1);
+        crd::jobs::shutdown();
+    }
+    crd::jobs::Config cfg;
+    cfg.num_threads = 8;
+    crd::jobs::init(cfg);
+    for (const crd::u32 jobs : {0U, 1U, 2U, 3U, 8U, 16U, 32U})
+    {
+        for (const usize min_transforms : {usize{0}, usize{4}, crd::hesap::fft::detail::kBatchNever})
+        {
+            cont::Array<f64> pg(&alloc);
+            cont::Array<crd::hesap::Complex<f64>> z(&alloc);
+            run(BatchPick{.min_transforms = min_transforms, .workers = jobs}, pg, z);
+            INFO("jobs " << jobs << " min_transforms " << min_transforms);
+            CHECK(std::memcmp(pg.data(), pg1.data(), pg1.size() * sizeof(f64)) == 0);
+            CHECK(std::memcmp(z.data(), z1.data(), z1.size() * sizeof(crd::hesap::Complex<f64>)) == 0);
+        }
+    }
+    crd::jobs::shutdown();
 }
 
 TEST_CASE("dsp spectral: periodogram + csd + coherence match scipy", "[v11-m][dsp][spectral]")

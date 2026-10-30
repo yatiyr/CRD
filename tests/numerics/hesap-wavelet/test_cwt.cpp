@@ -180,3 +180,39 @@ TEST_CASE("cwt: run-twice + {1,4,16}-thread bit-identical (batched-FFT moat)", "
         crd::jobs::shutdown();
     }
 }
+
+TEST_CASE("cwt: the scales on 1 to 32 forced jobs give one job's bits", "[wavelet][cwt][batch-jobs]")
+{
+    // The scales' jobs levers (fft/detail/batch_arms.hpp) on eight workers: every forced job count and the cuts at 0,
+    // at the default and never, against the default pick on one worker.
+    crd::memory::TlsfAllocator alloc(1U << 25);
+    using crd::hesap::fft::detail::BatchPick;
+    const cont::ConstSpan<f64> xs(ref_cwt_input, cwt_n());
+    const cont::ConstSpan<f64> sc(ref_cwt_scales, cwt_ns());
+    const auto w = wv::continuous_wavelet("cmor1.5-1.0");
+    cont::Array<Complex<f64>> ref(&alloc);
+    {
+        crd::jobs::Config cfg;
+        cfg.num_threads = 1;
+        crd::jobs::init(cfg);
+        const auto r = wv::detail::cwt_arm<f64>(&alloc, xs, sc, w, 1.0, 12, BatchPick{});
+        ref.resize(r.coeffs.size());
+        std::memcpy(ref.data(), r.coeffs.data(), ref.size() * sizeof(Complex<f64>));
+        crd::jobs::shutdown();
+    }
+    crd::jobs::Config cfg;
+    cfg.num_threads = 8;
+    crd::jobs::init(cfg);
+    for (const crd::u32 jobs : {0U, 1U, 2U, 3U, 8U, 16U, 32U})
+    {
+        for (const usize min_transforms : {usize{0}, usize{4}, crd::hesap::fft::detail::kBatchNever})
+        {
+            const auto r = wv::detail::cwt_arm<f64>(&alloc, xs, sc, w, 1.0, 12,
+                                                    BatchPick{.min_transforms = min_transforms, .workers = jobs});
+            INFO("jobs " << jobs << " min_transforms " << min_transforms);
+            REQUIRE(r.coeffs.size() == ref.size());
+            CHECK(std::memcmp(r.coeffs.data(), ref.data(), ref.size() * sizeof(Complex<f64>)) == 0);
+        }
+    }
+    crd::jobs::shutdown();
+}
