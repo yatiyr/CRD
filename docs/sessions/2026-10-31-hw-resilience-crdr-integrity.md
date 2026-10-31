@@ -34,7 +34,8 @@ is amended.
 
 - `CrdrFaultScope` records the first failing `crdr_read` on its thread. The resource manager opens one around each
   loader call, so it sees a parse failure however deep in the loader it happened (`hdr_from_crdr`, scene and obek
-  copies, matrix and tensor readers).
+  copies, matrix and tensor readers). The scope covers the loader call only: the streamed re-read waits on a job
+  and may resume on another thread, so no scope stays open across it.
 - `load_checked` runs the sync, async, streamed and hot-reload paths. When the loader fails and the scope holds a
   failure, the artifact is read once more from its source and loaded again. A second failure leaves the handle
   Failed (or Placeholder) with `integrity_error()` set and an error naming the chunk and the fix (re-cook or
@@ -71,7 +72,7 @@ This is the storage or transfer fault a read cannot see, and the tests use it to
 - Also run: the anim, audio, CEIR cook, cooker, hesap resources, preset, profile, scene and timeline programs, and the
   anim and tensor io CTests.
 - The fuzz target's CRDR restatement now checks the checksums, and its 19 raw seeds are regenerated
-  (`--seed`; the 15 script seeds are unchanged). The corpus replays with 34 inputs.
+  (`--seed`; the 14 script seeds and the short garbage seed are unchanged). The corpus replays with 34 inputs.
 - Teeth, each restored, rebuilt and rerun green:
   - Skipping the stored-bytes check failed 5 of the integrity cases (287 assertions).
   - Disabling the re-read failed the 3 manager cases.

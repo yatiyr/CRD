@@ -221,7 +221,8 @@ inline constexpr crd::u64 kCrdrZstdBlockMaxBytes = 128U * 1024U;
 // one around each loader call, so it can tell a load refused for its bytes (re-read once from the source) from one
 // refused for its content, whichever function of the loader parsed them. Scopes nest: an inner scope (a dependency's
 // load) takes the failures inside it. Like the manager's cycle stack, a scope assumes the loader does not move to
-// another thread while it runs (loaders do not wait on jobs).
+// another thread while it runs (loaders do not wait on jobs); the manager opens one across a loader call only, never
+// across a read or a wait.
 class CrdrFaultScope
 {
 public:

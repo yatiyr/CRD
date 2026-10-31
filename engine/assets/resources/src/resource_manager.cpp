@@ -239,51 +239,54 @@ template <typename Reread>
 LoadOutcome load_checked(ILoader& loader, LoadContext ctx, const Reread& reread, crd::memory::IAllocator* alloc,
                          bool placeholder)
 {
-    LoadOutcome outcome;
-    const auto attempt = [&loader, &ctx]() -> void*
+    // One loader call under its own fault scope, open across that call only: the re-read below may wait on a job and
+    // resume on another thread, so no scope is open across it.
+    const auto attempt = [&loader, &ctx](CrdrError& error, crd::u32& fourcc) -> void*
     {
+        const CrdrFaultScope scope;
         visiting_push(ctx.id);
         void* const payload = loader.load(ctx);
         visiting_pop();
+        error = scope.error();
+        fourcc = scope.fault_fourcc();
         return payload;
     };
 
+    LoadOutcome outcome;
+    CrdrError error = CrdrError::Ok;
+    crd::u32 fourcc = 0U;
     crd::containers::Array<crd::u8> again(alloc);
+    outcome.payload = attempt(error, fourcc);
+    if (outcome.payload == nullptr && error != CrdrError::Ok)
     {
-        CrdrFaultScope scope;
-        outcome.payload = attempt();
-        if (outcome.payload == nullptr && scope.error() != CrdrError::Ok)
+        char name[5];
+        fourcc_to_str(fourcc, name);
+        const auto id_text = ctx.id.to_string(alloc);
+        CRD_LOG_WARN(g_log_resources, "ResourceManager: artifact {}: {} (chunk '{}'); reading it once more",
+                     id_text.c_str(), crdr_error_text(error), name);
+        if (!reread(again))
         {
-            char fourcc[5];
-            fourcc_to_str(scope.fault_fourcc(), fourcc);
-            const auto id_text = ctx.id.to_string(alloc);
-            CRD_LOG_WARN(g_log_resources, "ResourceManager: artifact {}: {} (chunk '{}'); reading it once more",
-                         id_text.c_str(), crdr_error_text(scope.error()), fourcc);
-            if (!reread(again))
+            CRD_LOG_ERROR(g_log_resources, "ResourceManager: artifact {}: the re-read failed", id_text.c_str());
+            outcome.integrity = error;
+        }
+        else
+        {
+            ctx.bytes = crd::containers::as_const_span(again);
+            outcome.payload = attempt(error, fourcc);
+            if (outcome.payload != nullptr)
             {
-                CRD_LOG_ERROR(g_log_resources, "ResourceManager: artifact {}: the re-read failed", id_text.c_str());
-                outcome.integrity = scope.error();
+                CRD_LOG_WARN(g_log_resources,
+                             "ResourceManager: artifact {}: loaded from the re-read (the first read was corrupt)",
+                             id_text.c_str());
             }
-            else
+            else if (error != CrdrError::Ok)
             {
-                ctx.bytes = crd::containers::as_const_span(again);
-                CrdrFaultScope retry;
-                outcome.payload = attempt();
-                if (outcome.payload != nullptr)
-                {
-                    CRD_LOG_WARN(g_log_resources,
-                                 "ResourceManager: artifact {}: loaded from the re-read (the first read was corrupt)",
-                                 id_text.c_str());
-                }
-                else if (retry.error() != CrdrError::Ok)
-                {
-                    fourcc_to_str(retry.fault_fourcc(), fourcc);
-                    CRD_LOG_ERROR(g_log_resources,
-                                  "ResourceManager: artifact {}: {} (chunk '{}') again after a re-read; the stored "
-                                  "artifact is corrupt, so it is not loaded (re-cook or re-install it)",
-                                  id_text.c_str(), crdr_error_text(retry.error()), fourcc);
-                    outcome.integrity = retry.error();
-                }
+                fourcc_to_str(fourcc, name);
+                CRD_LOG_ERROR(g_log_resources,
+                              "ResourceManager: artifact {}: {} (chunk '{}') again after a re-read; the stored "
+                              "artifact is corrupt, so it is not loaded (re-cook or re-install it)",
+                              id_text.c_str(), crdr_error_text(error), name);
+                outcome.integrity = error;
             }
         }
     }
