@@ -3,6 +3,7 @@
 // arguments handed on as UTF-8 with their characters intact, a best-fit quote included. The splitting is the Windows
 // constructor's, run on every platform; on POSIX the constructor views argv in place.
 
+#include <crd/core/platform.hpp>
 #include <crd/platform/arguments.hpp>
 
 #include <catch2/catch_test_macros.hpp>
