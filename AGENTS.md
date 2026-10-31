@@ -40,8 +40,8 @@ unresolved or a design gate is unaccepted. Never invent approval or tool results
   weaken its tests or lower the quality bar. Recommend the complete, gold-standard option, never the easy one.
 - **Everything executable is an authorable asset.** Follow PRINCIPLES' exact form and deletion requirements.
   A shipped algorithm hidden in a C++ graph builder violates the purpose even if the pixels look correct.
-- Reuse before implementing: search public APIs, implementations and consumers. Extend the owning module; never
-  duplicate a helper or introduce dependency cycles. Same path for tests, sandbox and real apps.
+- Reuse first: search APIs, implementations, users. Extend the [owner](docs/design/capability-ownership.md);
+  never duplicate a helper or add dependency cycles. Same path for tests, sandbox and real apps.
 - **Defer nothing.** Fix every verified failure and finding on the spot (warnings, flakes, weak tests, stale docs,
   third-party defects via the register). An open failure blocks its slice; "pre-existing" or a retry-pass closes
   nothing. Only physical user actions (elevation, absent hardware, accounts) stay with the user, as one command.

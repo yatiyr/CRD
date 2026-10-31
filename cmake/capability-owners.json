@@ -1,0 +1,619 @@
+{
+  "schema": "cerid-capability-owners/1",
+  "about": "One owning module for every engine capability (OWN.1, user decision 2026-10-26), beside the module registry (the crd_module lines of the root CMakeLists.txt). status: landed (the owner is registered and its public API exists), assigned (the owner is registered; the named row creates its API there) or planned (the named row creates the owner module). A signature found in engine/ outside the owner is a second implementation: scripts/check-capability-owners.py (the crd-check-capability-owners CTest and repository step) fails on it unless the file is pending (its row moves it onto the owner) or allowed (with the reason). docs/design/capability-ownership.md.",
+  "capabilities": [
+    {
+      "id": "cpu.detection",
+      "summary": "CPUID, XGETBV and the OS feature queries: the one reading of the CPU's features, OS-enabled state, hybrid cores and the forced level (ADR-0134).",
+      "owner": "core",
+      "api": [
+        "engine/foundation/core/include/crd/core/cpu_features.hpp"
+      ],
+      "signatures": [
+        {"regex": "\\b(?:__cpuid(?:ex)?|__cpuidex|_xgetbv|__get_cpuid(?:_count|_max)?|getauxval|elf_aux_info|IsProcessorFeaturePresent)\\s*\\(", "what": "a CPU or OS feature query"}
+      ]
+    },
+    {
+      "id": "cpu.kernel-dispatch",
+      "summary": "Per-level kernel units and their runtime selection: the level macros, the kernel tables and the process level (ADR-0134); each kernel family lives in its owning module and reaches its level through these.",
+      "owner": "core",
+      "api": [
+        "engine/foundation/core/include/crd/core/kernel_level.hpp",
+        "engine/foundation/core/include/crd/core/kernel_dispatch.hpp"
+      ],
+      "signatures": [
+        {"regex": "\\b__(?:AVX\\w*|FMA|F16C|BMI2?|SSE\\d\\w*|SSSE3|PCLMUL|VPCLMULQDQ)__\\b|\\b__ARM_(?:NEON|FEATURE_\\w+)\\b", "what": "a compiler ISA macro read outside the kernel-level header"}
+      ],
+      "pending": [
+        {"path": "engine/foundation/math/include/crd/math/libm.hpp", "row": "OWN.1"}
+      ]
+    },
+    {
+      "id": "hash.fnv1a",
+      "summary": "FNV-1a hashing, 32- and 64-bit, over bytes and over words: identities, cache keys and cooked-content hashes.",
+      "owner": "containers",
+      "api": [
+        "engine/foundation/containers/include/crd/containers/hash.hpp"
+      ],
+      "signatures": [
+        {"regex": "\\b(?:1099511628211|0[xX]0*100000001[bB]3)[uUlL]*\\b", "what": "the FNV-1a 64-bit prime"},
+        {"regex": "\\b(?:14695981039346656037|0[xX][cC][bB][fF]29[cC][eE]484222325)[uUlL]*\\b", "what": "the FNV-1a 64-bit offset basis"},
+        {"regex": "\\b(?:16777619|0[xX]0*1000193)[uUlL]*\\b", "what": "the FNV-1a 32-bit prime"},
+        {"regex": "\\b(?:2166136261|0[xX]811[cC]9[dD][cC]5)[uUlL]*\\b", "what": "the FNV-1a 32-bit offset basis"}
+      ],
+      "pending": [
+        {"path": "engine/assets/frame-cook/include/crd/framecook/frame_asset.hpp", "row": "OWN.1"},
+        {"path": "engine/assets/frame-cook/src/frame_runtime.cpp", "row": "OWN.1"},
+        {"path": "engine/assets/frame-cook/src/frame_template_bridge.cpp", "row": "OWN.1"},
+        {"path": "engine/assets/frame-cook/src/frame_work.cpp", "row": "OWN.1"},
+        {"path": "engine/assets/light-cook/src/lighting_asset.cpp", "row": "OWN.1"},
+        {"path": "engine/assets/vertex-cook/src/vertex_asset.cpp", "row": "OWN.1"},
+        {"path": "engine/execution/ceir-cook/src/plan_cache.cpp", "row": "OWN.1"},
+        {"path": "engine/execution/ceir/include/crd/ceir/id.hpp", "row": "OWN.1"},
+        {"path": "engine/execution/ceir/src/program_asset.cpp", "row": "OWN.1"},
+        {"path": "engine/execution/chir/src/node.cpp", "row": "OWN.1"},
+        {"path": "engine/foundation/memory/src/allocators/diagnostic_allocator.cpp", "row": "OWN.1"},
+        {"path": "engine/foundation/perf/src/profiler.cpp", "row": "OWN.1"},
+        {"path": "engine/geometry/lod/src/lod_asset.cpp", "row": "OWN.1"},
+        {"path": "engine/geometry/lod/src/lod_chain.cpp", "row": "OWN.1"},
+        {"path": "engine/gpu/gpu-context-vulkan/src/vulkan_compute_context.cpp", "row": "OWN.1"},
+        {"path": "engine/gpu/kir-cuda/src/backend_cuda.cpp", "row": "OWN.1"},
+        {"path": "engine/gpu/kir-vulkan/src/backend_vulkan.cpp", "row": "OWN.1"},
+        {"path": "engine/gpu/kir/include/crd/kir/ckir.hpp", "row": "OWN.1"},
+        {"path": "engine/gpu/kir/include/crd/kir/ckir_hair_rt.hpp", "row": "OWN.1"},
+        {"path": "engine/gpu/kir/include/crd/kir/ckir_variant.hpp", "row": "OWN.1"},
+        {"path": "engine/gpu/perf-gpu-bridge/src/frame_graph_gpu_backend.cpp", "row": "OWN.1"},
+        {"path": "engine/numerics/hesap-autodiff/include/crd/hesap/autodiff/graph_ad.hpp", "row": "OWN.1"},
+        {"path": "engine/numerics/hesap-eigen/include/crd/hesap/eigen/feast.hpp", "row": "OWN.1"},
+        {"path": "engine/numerics/hesap-eigen/include/crd/hesap/eigen/jacobi_davidson.hpp", "row": "OWN.1"},
+        {"path": "engine/numerics/hesap-eigen/include/crd/hesap/eigen/krylov_schur.hpp", "row": "OWN.1"},
+        {"path": "engine/numerics/hesap-eigen/include/crd/hesap/eigen/lobpcg.hpp", "row": "OWN.1"},
+        {"path": "engine/numerics/hesap-eigen/include/crd/hesap/eigen/thick_restart.hpp", "row": "OWN.1"},
+        {"path": "engine/numerics/hesap-resources/include/crd/hesap/resources/tensor_artifact.hpp", "row": "OWN.1"},
+        {"path": "engine/numerics/hesap-sparse/src/sparse_pattern.cpp", "row": "OWN.1"},
+        {"path": "engine/rendering/scene-render/src/scene_renderer.cpp", "row": "OWN.1"},
+        {"path": "engine/rendering/scene-render/src/spec_apply.hpp", "row": "OWN.1"},
+        {"path": "engine/world/scene/src/obek.cpp", "row": "OWN.1"},
+        {"path": "engine/world/scene/src/sparse_set_storage.cpp", "row": "OWN.1"}
+      ]
+    },
+    {
+      "id": "checksum.crc",
+      "summary": "CRC-32 (ISO-HDLC) and CRC-32C, one dispatched family with its carry-less-multiply and CRC-instruction levels (HW-RESILIENCE.1).",
+      "owner": "containers",
+      "api": [
+        "engine/foundation/containers/include/crd/containers/checksum.hpp"
+      ],
+      "signatures": [
+        {"regex": "\\b0[xX](?:[eE][dD][bB]88320|82[fF]63[bB]78|0*4[cC]11[dD][bB]7|1[eE][dD][cC]6[fF]41)[uUlL]*\\b", "what": "a CRC-32 or CRC-32C polynomial"}
+      ]
+    },
+    {
+      "id": "hash.xxh3",
+      "summary": "XXH3-64, seeded, dispatched across its vector levels (HW-RESILIENCE.1).",
+      "owner": "containers",
+      "api": [
+        "engine/foundation/containers/include/crd/containers/checksum.hpp"
+      ],
+      "signatures": [
+        {"regex": "\\b0[xX](?:[cC]2[bB]2[aA][eE]3[dD]27[dD]4[eE][bB]4[fF]|165667[bB]19[eE]3779[fF]9|9[eE]3779[bB]185[eE][bB][cC][aA]87)[uUlL]*\\b", "what": "an xxHash 64-bit prime"}
+      ]
+    },
+    {
+      "id": "random.seed-generators",
+      "summary": "SplitMix64 and the 64-bit MMIX linear congruential step: the integer generators that seed engines, fault plans, workload probes and the starting vectors of iterative methods, below every module that uses them.",
+      "owner": "core",
+      "status": "assigned",
+      "row": "OWN.1",
+      "decision": "Foundation modules (core's workload probe, perf's fault injection, the CEIR input generator) cannot reach hesap-stats, so the step functions live in crd-core; hesap-stats' SplitMix64 and PCG engines build on them.",
+      "signatures": [
+        {"regex": "\\b0[xX](?:[bB][fF]58476[dD]1[cC][eE]4[eE]5[bB]9|94[dD]049[bB][bB]133111[eE][bB])[uUlL]*\\b", "what": "a SplitMix64 finalizer multiplier"},
+        {"regex": "\\b(?:6364136223846793005|0[xX]5851[fF]42[dD]4[cC]957[fF]2[dD])[uUlL]*\\b", "what": "the MMIX LCG multiplier"}
+      ],
+      "pending": [
+        {"path": "engine/execution/ceir/src/input.cpp", "row": "OWN.1"},
+        {"path": "engine/foundation/containers/include/crd/containers/hash.hpp", "row": "OWN.1"},
+        {"path": "engine/foundation/perf/src/fault_injection.cpp", "row": "OWN.1"},
+        {"path": "engine/numerics/hesap-dense/src/svd.cpp", "row": "OWN.1"},
+        {"path": "engine/numerics/hesap-eigen/include/crd/hesap/eigen/lanczos.hpp", "row": "OWN.1"},
+        {"path": "engine/numerics/hesap-fft/include/crd/hesap/fft/sparse_fft.hpp", "row": "OWN.1"},
+        {"path": "engine/numerics/hesap-iterative/include/crd/hesap/iterative/idrs.hpp", "row": "OWN.1"},
+        {"path": "engine/numerics/hesap-stats/include/crd/hesap/stats/chacha.hpp", "row": "OWN.1"},
+        {"path": "engine/numerics/hesap-stats/include/crd/hesap/stats/splitmix64.hpp", "row": "OWN.1"},
+        {"path": "engine/numerics/hesap-stats/include/crd/hesap/stats/streaming.hpp", "row": "OWN.1"}
+      ]
+    },
+    {
+      "id": "random.engines",
+      "summary": "Pseudo- and quasi-random engines (xoshiro256, PCG64, SFC64, Philox, Threefry, ChaCha, MT19937, QMC sequences) and every distribution and sampler built on them.",
+      "owner": "hesap-stats",
+      "api": [
+        "engine/numerics/hesap-stats/include/crd/hesap/stats/bitgen.hpp",
+        "engine/numerics/hesap-stats/include/crd/hesap/stats/distribution.hpp"
+      ],
+      "signatures": [
+        {"regex": "\\b0[xX]180[eE][cC]6[dD]33[cC][fF][dD]0[aA][bB][aA][uUlL]*\\b", "what": "the xoshiro256 jump polynomial"},
+        {"regex": "\\b0[xX](?:61707865|3320646[eE]|79622[dD]32|6[bB]206574)[uUlL]*\\b", "what": "the ChaCha constant words"}
+      ]
+    },
+    {
+      "id": "containers.sort",
+      "summary": "Sorting and selection over engine containers (the standard algorithms stay banned, check_no_std_sort).",
+      "owner": "containers",
+      "api": [
+        "engine/foundation/containers/include/crd/containers/sort.hpp"
+      ]
+    },
+    {
+      "id": "containers.collections",
+      "summary": "Arrays, hash maps and sets, rings, queues, slot maps, strings and spans (the standard containers stay banned, check_no_std_containers).",
+      "owner": "containers",
+      "api": [
+        "engine/foundation/containers/include/crd/containers/array.hpp",
+        "engine/foundation/containers/include/crd/containers/hash_map.hpp"
+      ]
+    },
+    {
+      "id": "memory.allocators",
+      "summary": "Allocators, arenas, pools, the diagnostic allocator and memory statistics.",
+      "owner": "memory",
+      "api": [
+        "engine/foundation/memory/include/crd/memory/allocator.hpp",
+        "engine/foundation/memory/include/crd/memory/diagnostic_allocator.hpp"
+      ]
+    },
+    {
+      "id": "jobs.scheduling",
+      "summary": "The fiber job system, parallel ranges and frame arenas.",
+      "owner": "jobs",
+      "api": [
+        "engine/foundation/jobs/include/crd/jobs/jobs.hpp"
+      ]
+    },
+    {
+      "id": "io.files",
+      "summary": "File-system access, asynchronous file I/O, file watching and dynamic libraries.",
+      "owner": "platform",
+      "api": [
+        "engine/foundation/platform/include/crd/platform/filesystem.hpp",
+        "engine/foundation/platform/include/crd/platform/async_file.hpp"
+      ]
+    },
+    {
+      "id": "log.logging",
+      "summary": "Log channels, records, levels and sinks.",
+      "owner": "log",
+      "api": [
+        "engine/foundation/log/include/crd/log/log.hpp"
+      ]
+    },
+    {
+      "id": "time.clocks",
+      "summary": "Clocks, durations, deadlines, deterministic and rational time.",
+      "owner": "time",
+      "api": [
+        "engine/foundation/time/include/crd/time/time.hpp"
+      ]
+    },
+    {
+      "id": "units.quantities",
+      "summary": "Dimensioned quantities and unit conversion.",
+      "owner": "units",
+      "api": [
+        "engine/foundation/units/include/crd/units/units.hpp"
+      ]
+    },
+    {
+      "id": "config.toml",
+      "summary": "TOML parsing for authored configuration.",
+      "owner": "toml",
+      "api": [
+        "engine/foundation/toml/include/crd/toml/toml.hpp"
+      ]
+    },
+    {
+      "id": "compression.codecs",
+      "summary": "Lossless compression codecs: raw DEFLATE and inflate, the zstd binding with trained dictionaries, and the GDeflate CPU paths of the crdr v2 chunks.",
+      "owner": "compression",
+      "status": "planned",
+      "row": "OWN.1",
+      "decision": "Compression belongs to a foundation module unless a decision records otherwise (OWN.1; the publishing research's P-4 asks): crd-perf's bundle refuses compressed sections only because the codec sits in crd-resources, above it. OWN.1 creates the module and moves resources' raw DEFLATE and inflate and its zstd binding there; resources, perf and shader-cook consume it, and SHIP.2's crdr v2 chunk codecs land in it."
+    },
+    {
+      "id": "math.fixed-size-linear-algebra",
+      "summary": "Fixed-size vector, matrix and quaternion types and their closed-form operations: 2x2, 3x3 and 4x4 determinants, inverses, inverse-transposes and small solves.",
+      "owner": "math",
+      "api": [
+        "engine/foundation/math/include/crd/math/vec.hpp",
+        "engine/foundation/math/include/crd/math/mat_types.hpp",
+        "engine/foundation/math/include/crd/math/quat.hpp"
+      ],
+      "signatures": [
+        {"regex": "\\b(?:det|determinant|inverse|invert|inverse_transpose|solve)_?(?:2|3|4|2x2|3x3|4x4)\\s*\\(", "what": "a closed-form small-matrix routine"}
+      ],
+      "pending": [
+        {"path": "engine/geometry/geometry-primitives/include/crd/geometry/primitives/transform.hpp", "row": "OWN.1"}
+      ],
+      "allowed": [
+        {"path": "engine/gpu/kir/include/crd/kir/ckir_cuda.hpp", "why": "CKIR's CUDA emitter writes the determinant into generated device source; the host routine is crd-math's."}
+      ]
+    },
+    {
+      "id": "math.scalar-functions",
+      "summary": "Deterministic transcendental and elementary scalar functions and their SIMD forms (check_no_std_math, check_no_std_transcendental).",
+      "owner": "math",
+      "api": [
+        "engine/foundation/math/include/crd/math/transcendental.hpp",
+        "engine/foundation/math/include/crd/math/scalar.hpp"
+      ]
+    },
+    {
+      "id": "geometry.robust-predicates",
+      "summary": "Adaptive exact orientation, in-circle and in-sphere predicates (Shewchuk).",
+      "owner": "geometry-primitives",
+      "api": [
+        "engine/geometry/geometry-primitives/include/crd/geometry/primitives/predicates.hpp"
+      ],
+      "signatures": [
+        {"regex": "\\b(?:ccw|o3d|icc|isp)errbound[A-C]?\\b", "what": "a Shewchuk predicate error bound"}
+      ]
+    },
+    {
+      "id": "geometry.spatial-queries",
+      "summary": "Spatial indices and their queries: k-d trees, octrees, R-trees, uniform grids, spatial hashes.",
+      "owner": "geometry-spatial",
+      "api": [
+        "engine/geometry/geometry-spatial/include/crd/geometry/spatial/spatial.hpp"
+      ]
+    },
+    {
+      "id": "geometry.bvh",
+      "summary": "Bounding-volume hierarchies: build, refit, ray, overlap and shape-cast queries.",
+      "owner": "geometry-bvh",
+      "api": [
+        "engine/geometry/geometry-bvh/include/crd/geometry/bvh/bvh.hpp"
+      ]
+    },
+    {
+      "id": "geometry.convex",
+      "summary": "Convex hulls, GJK, EPA, SAT and convex shape casts.",
+      "owner": "geometry-convex",
+      "api": [
+        "engine/geometry/geometry-convex/include/crd/geometry/convex/convex.hpp"
+      ]
+    },
+    {
+      "id": "geometry.delaunay",
+      "summary": "Delaunay triangulation and tetrahedralization, Voronoi diagrams, Lloyd relaxation and Delaunay refinement.",
+      "owner": "geometry-delaunay",
+      "api": [
+        "engine/geometry/geometry-delaunay/include/crd/geometry/delaunay/delaunay.hpp"
+      ]
+    },
+    {
+      "id": "geometry.polygons",
+      "summary": "Polygon booleans, constrained triangulation, segment intersection and polygon predicates.",
+      "owner": "geometry-polygon",
+      "api": [
+        "engine/geometry/geometry-polygon/include/crd/geometry/polygon/polygon.hpp"
+      ]
+    },
+    {
+      "id": "geometry.mesh-processing",
+      "summary": "Mesh repair, decimation, remeshing, smoothing, subdivision, meshlets and cluster DAGs.",
+      "owner": "geometry-mesh-processing",
+      "api": [
+        "engine/geometry/geometry-mesh-processing/include/crd/geometry/mesh_processing/mesh_processing.hpp"
+      ]
+    },
+    {
+      "id": "geometry.curves",
+      "summary": "Parametric curves: Bezier, B-spline, Catmull-Rom, Hermite, arcs, arc length and frames.",
+      "owner": "geometry-curves",
+      "api": [
+        "engine/geometry/geometry-curves/include/crd/geometry/curves/curves.hpp"
+      ]
+    },
+    {
+      "id": "geometry.decomposition",
+      "summary": "Voxelization and approximate convex decomposition.",
+      "owner": "geometry-decomposition",
+      "api": [
+        "engine/geometry/geometry-decomposition/include/crd/geometry/decomposition/decomposition.hpp"
+      ]
+    },
+    {
+      "id": "geometry.analysis-meshing",
+      "summary": "Analysis meshing for simulation: surface and tetrahedral meshing, size fields and quality metrics.",
+      "owner": "mesh-sim",
+      "status": "planned",
+      "row": "MESH-SIM.1"
+    },
+    {
+      "id": "numerics.dense-linear-algebra",
+      "summary": "Dense BLAS, LU, QR, Cholesky, LDLT, SVD and the dense symmetric and nonsymmetric eigenproblems.",
+      "owner": "hesap-dense",
+      "api": [
+        "engine/numerics/hesap-dense/include/crd/hesap/dense/dense.hpp"
+      ]
+    },
+    {
+      "id": "numerics.sparse-matrices",
+      "summary": "Sparse storage formats, conversions, sparse kernels and Matrix Market I/O.",
+      "owner": "hesap-sparse",
+      "api": [
+        "engine/numerics/hesap-sparse/include/crd/hesap/sparse/matrix_market.hpp"
+      ]
+    },
+    {
+      "id": "numerics.direct-solvers",
+      "summary": "Sparse direct factorizations and solves (supernodal and multifrontal LU, LDLT, Cholesky, low-rank compression).",
+      "owner": "hesap-direct",
+      "api": [
+        "engine/numerics/hesap-direct/include/crd/hesap/direct/direct.hpp"
+      ]
+    },
+    {
+      "id": "numerics.iterative-solvers",
+      "summary": "Krylov solvers: CG and preconditioned CG, GMRES, BiCGStab, IDR(s), GCR and their block forms.",
+      "owner": "hesap-iterative",
+      "api": [
+        "engine/numerics/hesap-iterative/include/crd/hesap/iterative/cg.hpp"
+      ],
+      "consumers": [
+        "EYLEM-v7a"
+      ]
+    },
+    {
+      "id": "numerics.preconditioners",
+      "summary": "Jacobi, block-Jacobi, incomplete factorizations, sparse approximate inverses and polynomial preconditioners.",
+      "owner": "hesap-preconditioners",
+      "api": [
+        "engine/numerics/hesap-preconditioners/include/crd/hesap/preconditioners/ilu0.hpp"
+      ]
+    },
+    {
+      "id": "numerics.multigrid",
+      "summary": "Algebraic multigrid: strength, coarsening, interpolation and cycles.",
+      "owner": "hesap-amg",
+      "api": [
+        "engine/numerics/hesap-amg/include/crd/hesap/amg/amg.hpp"
+      ]
+    },
+    {
+      "id": "numerics.graph-ordering",
+      "summary": "Fill-reducing and bandwidth orderings and symbolic analysis.",
+      "owner": "hesap-ordering",
+      "api": [
+        "engine/numerics/hesap-ordering/include/crd/hesap/ordering/ordering.hpp"
+      ]
+    },
+    {
+      "id": "numerics.sparse-eigen",
+      "summary": "Sparse and iterative eigensolvers and partial SVD (Lanczos, Arnoldi, Krylov-Schur, LOBPCG, Jacobi-Davidson, FEAST).",
+      "owner": "hesap-eigen",
+      "api": [
+        "engine/numerics/hesap-eigen/include/crd/hesap/eigen/eigen.hpp"
+      ]
+    },
+    {
+      "id": "numerics.optimization",
+      "summary": "Unconstrained, constrained, derivative-free and global optimization, QP, conic and KKT solvers.",
+      "owner": "hesap-opt",
+      "api": [
+        "engine/numerics/hesap-opt/include/crd/hesap/opt/qp.hpp"
+      ],
+      "consumers": [
+        "CONTROL.8"
+      ]
+    },
+    {
+      "id": "numerics.complementarity",
+      "summary": "Linear complementarity and box-constrained mixed LCP solves (projected Gauss-Seidel and its successors): the numerical core of contact and joint constraint solving.",
+      "owner": "hesap-opt",
+      "status": "assigned",
+      "row": "EYLEM-v1e",
+      "decision": "No eylem constraint solver exists yet (eylem ships data descriptors and a null scene). Eylem owns contact generation, constraint rows and their Jacobians; the solve itself is a hesap-opt capability that EYLEM-v1e's Sequential Impulses solver creates there and EYLEM-v1f's joints reuse.",
+      "consumers": [
+        "EYLEM-v1e",
+        "EYLEM-v1f"
+      ]
+    },
+    {
+      "id": "numerics.ode-integration",
+      "summary": "ODE and DAE integration: explicit, implicit, IMEX and BDF steppers, step control, dense output and events.",
+      "owner": "hesap-ode",
+      "api": [
+        "engine/numerics/hesap-ode/include/crd/hesap/ode/ode.hpp"
+      ]
+    },
+    {
+      "id": "numerics.fft",
+      "summary": "Complex, real, multidimensional, non-uniform and sparse Fourier transforms and the DCT.",
+      "owner": "hesap-fft",
+      "api": [
+        "engine/numerics/hesap-fft/include/crd/hesap/fft/fft.hpp"
+      ]
+    },
+    {
+      "id": "numerics.wavelets",
+      "summary": "Discrete, stationary, packet and continuous wavelet transforms and denoising.",
+      "owner": "hesap-wavelet",
+      "api": [
+        "engine/numerics/hesap-wavelet/include/crd/hesap/wavelet/wavelet.hpp"
+      ]
+    },
+    {
+      "id": "numerics.signal-processing",
+      "summary": "Digital signal processing, audio DSP included: filter design and filtering, convolution, spectral estimation, multirate and adaptive filters.",
+      "owner": "hesap-dsp",
+      "api": [
+        "engine/numerics/hesap-dsp/include/crd/hesap/dsp/dsp.hpp"
+      ]
+    },
+    {
+      "id": "numerics.image-metrics",
+      "summary": "Perceptual image metrics for golden tests (HDR-FLIP and a ColorVideoVDP-class metric) and their difference maps.",
+      "owner": "hesap-image",
+      "status": "planned",
+      "row": "IMG-ORACLE",
+      "decision": "OWN.1 takes IMG-ORACLE's recommendation: a crd-hesap module beside hesap-dsp, on hesap-fft and hesap-stats; tooling owns no numerics."
+    },
+    {
+      "id": "numerics.special-functions",
+      "summary": "Special functions: gamma, Bessel, Airy, elliptic, error and exponential integrals.",
+      "owner": "hesap-special",
+      "api": [
+        "engine/numerics/hesap-special/include/crd/hesap/special/gamma.hpp"
+      ]
+    },
+    {
+      "id": "numerics.quadrature",
+      "summary": "Numerical integration: Gauss rules, adaptive and oscillatory quadrature, cubature.",
+      "owner": "hesap-quadrature",
+      "api": [
+        "engine/numerics/hesap-quadrature/include/crd/hesap/quadrature/integrate.hpp"
+      ]
+    },
+    {
+      "id": "numerics.statistics",
+      "summary": "Descriptive, robust and streaming statistics, hypothesis tests, regression, resampling, density estimation and MCMC.",
+      "owner": "hesap-stats",
+      "api": [
+        "engine/numerics/hesap-stats/include/crd/hesap/stats/stats.hpp"
+      ]
+    },
+    {
+      "id": "numerics.interpolation",
+      "summary": "Interpolation and splines: piecewise, cubic and Akima splines, rational, barycentric, RBF, kriging, gridded and keyframe interpolation.",
+      "owner": "hesap-interp",
+      "api": [
+        "engine/numerics/hesap-interp/include/crd/hesap/interp/interp.hpp"
+      ]
+    },
+    {
+      "id": "numerics.numerical-differentiation",
+      "summary": "Finite-difference, complex-step, spectral and Savitzky-Golay differentiation.",
+      "owner": "hesap-diff",
+      "api": [
+        "engine/numerics/hesap-diff/include/crd/hesap/diff/diff.hpp"
+      ]
+    },
+    {
+      "id": "numerics.autodiff",
+      "summary": "Automatic differentiation: forward dual numbers, reverse tapes, sparse Jacobians and Hessians.",
+      "owner": "hesap-autodiff",
+      "api": [
+        "engine/numerics/hesap-autodiff/include/crd/hesap/autodiff/dual.hpp"
+      ],
+      "consumers": [
+        "8.2b"
+      ]
+    },
+    {
+      "id": "numerics.tensors",
+      "summary": "Dense tensors, einsum, batched and elementwise operations, DLPack exchange and tensor I/O.",
+      "owner": "hesap-tensor",
+      "api": [
+        "engine/numerics/hesap-tensor/include/crd/hesap/tensor/einsum.hpp"
+      ]
+    },
+    {
+      "id": "numerics.motion-profiles",
+      "summary": "Trajectory and motion profiles: online trajectory generation, polynomial trajectories, clothoids, NURBS paths and rotation splines.",
+      "owner": "hesap-motion",
+      "api": [
+        "engine/numerics/hesap-motion/include/crd/hesap/motion/motion.hpp"
+      ]
+    },
+    {
+      "id": "numerics.communications",
+      "summary": "Digital communications: modulation, pulse shaping, framing, equalization, timing and carrier recovery, OFDM.",
+      "owner": "hesap-comms",
+      "api": [
+        "engine/numerics/hesap-comms/include/crd/hesap/comms/comms.hpp"
+      ]
+    },
+    {
+      "id": "numerics.finite-elements",
+      "summary": "The finite-element core: function spaces, assembly, boundary conditions and hp-adaptivity, solving through hesap.",
+      "owner": "fe-core",
+      "status": "planned",
+      "row": "FE-CORE"
+    },
+    {
+      "id": "numerics.finite-volumes",
+      "summary": "The finite-volume core: polyhedral cells, fluxes, reconstruction, limiters and pressure-velocity coupling, solving through hesap.",
+      "owner": "fv-core",
+      "status": "planned",
+      "row": "FV-CORE"
+    },
+    {
+      "id": "physics.articulation-and-robot-import",
+      "summary": "Reduced-coordinate articulations and robot-description import (URDF, MJCF, USD physics), with forward and inverse kinematics.",
+      "owner": "eylem-articulation",
+      "status": "planned",
+      "row": "EYLEM-v6c",
+      "consumers": [
+        "8.0a"
+      ]
+    },
+    {
+      "id": "physics.aerodynamics",
+      "summary": "Aerodynamic forces, the standard atmosphere and propulsion for flight models.",
+      "owner": "eylem-aero",
+      "status": "planned",
+      "row": "EYLEM-v6f-aero-b",
+      "consumers": [
+        "8.1a"
+      ]
+    },
+    {
+      "id": "robotics.ros2-bridge",
+      "summary": "The bidirectional ROS 2 topic and service bridge over crd-net.",
+      "owner": "ros2-bridge",
+      "status": "planned",
+      "row": "4.2e",
+      "consumers": [
+        "8.0c"
+      ]
+    },
+    {
+      "id": "navigation.path-planning",
+      "summary": "Geometric path planning: A*, RRT and RRT*, PRM and lattice motion primitives; trajectory optimization stays numerics.optimization (CONTROL.8).",
+      "owner": "nav",
+      "status": "planned",
+      "row": "NAV.3",
+      "consumers": [
+        "CONTROL.10",
+        "CONTROL.13"
+      ]
+    },
+    {
+      "id": "visualization.plotting",
+      "summary": "2D and 3D plotting for tools, notebooks and CHIR scripts.",
+      "owner": "sciviz",
+      "status": "planned",
+      "row": "SCIVIZ-PLOT",
+      "consumers": [
+        "CHIR-SCI.3",
+        "NOTEBOOK.2",
+        "SCIVIZ.2"
+      ]
+    },
+    {
+      "id": "publishing.shipping",
+      "summary": "Publishing: profiles, target descriptors, cook orchestration, package assembly, signing orchestration, store adapters, entitlements and the updater.",
+      "owner": "ship",
+      "status": "planned",
+      "row": "SHIP.0"
+    },
+    {
+      "id": "publishing.store",
+      "summary": "The Cerid store services and client library; it consumes crd-ship and owns no entitlement, payment, updater or store-adapter code.",
+      "owner": "store",
+      "status": "planned",
+      "row": "STORE.0"
+    }
+  ]
+}

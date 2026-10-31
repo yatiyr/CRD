@@ -19,7 +19,8 @@ consumers; the hosted lanes own the matrix.
 1. Add or change the registry row (`crd_module(<dir> [<bin>] DEPENDS ... TESTS ... TEST_DEPENDS ...)`); the
    [module registry](design/module-registry.md) contract explains selection, closure and the verification pass.
 2. Give the module a row in the [systems map](systems/README.md); the validator holds the map and the registry to
-   one set of names.
+   one set of names. A capability the module owns gets an entry in `cmake/capability-owners.json`; a capability
+   another module owns is called there, never reimplemented ([capability ownership](design/capability-ownership.md)).
 3. Public headers compile alone through the consumer view: `check-headers.py --build <dir> --changed`
    ([public consumption](design/public-consumption.md)); a header that cannot needs `crd_public_header_exclude()`
    with a reason, not silence.

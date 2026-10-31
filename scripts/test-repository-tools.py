@@ -132,6 +132,10 @@ environment_reads_spec.loader.exec_module(environment_reads)
 frame_resets_spec = importlib.util.spec_from_file_location('check_frame_resets', ROOT / 'scripts/check-frame-resets.py')
 frame_resets = importlib.util.module_from_spec(frame_resets_spec)
 frame_resets_spec.loader.exec_module(frame_resets)
+capability_owners_spec = importlib.util.spec_from_file_location('check_capability_owners',
+                                                                ROOT / 'scripts/check-capability-owners.py')
+capability_owners = importlib.util.module_from_spec(capability_owners_spec)
+capability_owners_spec.loader.exec_module(capability_owners)
 peer_headers_spec = importlib.util.spec_from_file_location('check_peer_headers', ROOT / 'scripts/check-peer-headers.py')
 peer_headers = importlib.util.module_from_spec(peer_headers_spec)
 peer_headers_spec.loader.exec_module(peer_headers)
@@ -3980,6 +3984,140 @@ class FrameResets(unittest.TestCase):
             with patch('sys.stdout', new_callable=io.StringIO) as out:
                 self.assertEqual(0, frame_resets.main(['check', str(root)]))
             self.assertIn('no engine library resets', out.getvalue())
+
+
+class CapabilityOwners(unittest.TestCase):
+    """scripts/check-capability-owners.py: one owning module for every engine capability (OWN.1, OWN.2)."""
+
+    CMAKE = ('crd_module(engine/foundation/containers engine/containers DEPENDS core TESTS foundation/containers)\n'
+             'crd_module(engine/foundation/core engine/core TESTS foundation/core)\n'
+             'crd_module(engine/assets/a engine/a DEPENDS containers\n    TESTS assets/a)\n'
+             'crd_module(tools/shader-cook NAME shader_cook HOST EXECUTABLES shader_cook)\n'
+             'crd_module(engine/assets/shader-cook NAME engine-shader-cook DEPENDS core)\n')
+    ROADMAP = '| 1 | <a id="slice-own.1"></a>**OWN.1** | Open |\n| 2 | <a id="slice-ship.0"></a>**SHIP.0** | Open |\n'
+    PRIME = [{'regex': r'\b1099511628211[uUlL]*\b', 'what': 'the FNV-1a 64-bit prime'}]
+
+    def fixture(self, root, capabilities):
+        root = Path(root)
+        (root / 'cmake').mkdir()
+        (root / 'docs').mkdir()
+        (root / 'CMakeLists.txt').write_text(self.CMAKE, encoding='utf-8')
+        (root / 'docs/ROADMAP.md').write_text(self.ROADMAP, encoding='utf-8')
+        api = root / 'engine/foundation/containers/include/crd/containers/hash.hpp'
+        api.parent.mkdir(parents=True)
+        api.write_text('constexpr u64 prime = 1099511628211ULL;\n', encoding='utf-8')
+        (root / 'engine/assets/a/src').mkdir(parents=True)
+        self.write_registry(root, capabilities)
+        return root
+
+    @staticmethod
+    def write_registry(root, capabilities):
+        registry = {'schema': capability_owners.SCHEMA, 'capabilities': capabilities}
+        (Path(root) / capability_owners.REGISTRY).write_text(json.dumps(registry), encoding='utf-8')
+
+    def fnv(self, **extra):
+        capability = {'id': 'hash.fnv1a', 'summary': 'FNV-1a', 'owner': 'containers',
+                      'api': ['engine/foundation/containers/include/crd/containers/hash.hpp'],
+                      'signatures': self.PRIME}
+        capability.update(extra)
+        return capability
+
+    def test_module_names_are_the_ones_depends_uses_and_tools_are_not_engine_modules(self):
+        modules = capability_owners.registered_modules(self.CMAKE)
+        self.assertEqual({'containers': 'engine/foundation/containers/', 'core': 'engine/foundation/core/',
+                          'a': 'engine/assets/a/', 'engine-shader-cook': 'engine/assets/shader-cook/'}, modules)
+
+    def test_a_planted_copy_outside_the_owner_fails_and_the_owner_and_comments_do_not(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = self.fixture(scratch, [self.fnv()])
+            copy = root / 'engine/assets/a/src/a.cpp'
+            copy.write_text('// FNV prime 1099511628211ULL in a comment\nconst char* s = "1099511628211";\n',
+                            encoding='utf-8')
+            self.assertEqual([], capability_owners.check(root)[2])
+            copy.write_text('u64 h(u64 x)\n{\n    return (x ^ 7U) * 1099511628211ULL;\n}\n', encoding='utf-8')
+            problems = capability_owners.check(root)[2]
+            self.assertEqual(1, len(problems))
+            self.assertIn('engine/assets/a/src/a.cpp: hash.fnv1a implements it outside its owner containers at '
+                          'line(s) 3 (the FNV-1a 64-bit prime)', problems[0])
+            with patch('sys.stdout', new_callable=io.StringIO) as out:
+                self.assertEqual(1, capability_owners.main(['check', '--root', str(root), '--audit']))
+            self.assertIn('engine/assets/a/src/a.cpp: 3 [UNLISTED]', out.getvalue())
+
+    def test_pending_and_allowed_files_pass_until_they_go_stale(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            pending = [{'path': 'engine/assets/a/src/a.cpp', 'row': 'OWN.1'}]
+            root = self.fixture(scratch, [self.fnv(pending=pending)])
+            copy = root / 'engine/assets/a/src/a.cpp'
+            copy.write_text('u64 k = 1099511628211ULL;\n', encoding='utf-8')
+            with patch('sys.stdout', new_callable=io.StringIO) as out:
+                self.assertEqual(0, capability_owners.main(['check', '--root', str(root)]))
+            self.assertIn('1 capabilities, each with one owner; 1 file(s) pending', out.getvalue())
+            copy.write_text('u64 k = crd::containers::fnv1a_64(p, n);\n', encoding='utf-8')
+            self.assertEqual(['hash.fnv1a: engine/assets/a/src/a.cpp lists engine/assets/a/src/a.cpp as pending, '
+                              'but no signature matches there any more; remove the entry'],
+                             capability_owners.check(root)[2])
+            allowed = [{'path': 'engine/assets/a/src/a.cpp', 'why': 'emits the constant into generated source'}]
+            self.write_registry(root, [self.fnv(allowed=allowed)])
+            copy.write_text('emit(1099511628211ULL);\n', encoding='utf-8')
+            self.assertEqual([], capability_owners.check(root)[2])
+
+    def test_the_registry_refuses_unknown_owners_rows_api_files_and_bad_shapes(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = self.fixture(scratch, [])
+            (root / 'engine/assets/a/src/a.cpp').write_text('int a;\n', encoding='utf-8')
+
+            def problems(*capabilities):
+                self.write_registry(root, list(capabilities))
+                return capability_owners.check(root)[2]
+            self.assertEqual(['capabilities must be a non-empty list'], problems())
+            self.assertIn('hash.fnv1a: id registered twice', problems(self.fnv(), self.fnv()))
+            self.assertIn("hash.fnv1a: owner 'hesap' is not a crd_module registration (planned owners say "
+                          '"status": "planned")', problems(self.fnv(owner='hesap')))
+            self.assertIn("hash.fnv1a: API file 'engine/assets/a/a.hpp' is not inside the owner "
+                          'engine/foundation/containers/', problems(self.fnv(api=['engine/assets/a/a.hpp'])))
+            missing = 'engine/foundation/containers/include/crd/containers/gone.hpp'
+            self.assertIn('hash.fnv1a: API file %s does not exist' % missing, problems(self.fnv(api=[missing])))
+            self.assertIn('hash.fnv1a: a landed owner lists its public API files', problems(self.fnv(api=[])))
+            broken = self.fnv(signatures=[{'regex': '(', 'what': 'broken'}])
+            self.assertTrue(any("signature 'broken' does not compile" in p for p in problems(broken)))
+            self.assertIn('Hash: id must be lower-case words joined by "." or "-"', problems(self.fnv(id='Hash')))
+            self.assertIn('hash.fnv1a: unknown keys extra', problems(self.fnv(extra=1)))
+            self.assertIn('hash.fnv1a: a pending entry is {"path", "row"}', problems(self.fnv(pending=[{'path': 'x'}])))
+            self.assertIn("hash.fnv1a: pending file engine/assets/a/src/a.cpp names 'NOPE', not a ROADMAP row",
+                          problems(self.fnv(pending=[{'path': 'engine/assets/a/src/a.cpp', 'row': 'NOPE'}])))
+            self.assertIn('hash.fnv1a: allowed file engine/assets/a/src/a.cpp needs the reason',
+                          problems(self.fnv(allowed=[{'path': 'engine/assets/a/src/a.cpp', 'why': ' '}])))
+            self.assertIn("hash.fnv1a: consumer row 'X.1' is not a ROADMAP row", problems(self.fnv(consumers=['X.1'])))
+            ship = {'id': 'publishing.shipping', 'summary': 'ship', 'owner': 'ship', 'status': 'planned', 'row': 'SHIP.0'}
+            self.assertEqual([], problems(self.fnv(), ship))
+            self.assertIn('publishing.shipping: a planned owner names the ROADMAP row that creates it',
+                          problems(dict(ship, row='SHIP.9')))
+            self.assertIn("publishing.shipping: owner 'a' is registered now; mark it landed with its API files",
+                          problems(dict(ship, owner='a')))
+            self.assertIn('publishing.shipping: a planned owner has no directory for signatures to protect yet',
+                          problems(dict(ship, signatures=self.PRIME)))
+            assigned = {'id': 'random.seed', 'summary': 'seeds', 'owner': 'core', 'status': 'assigned',
+                        'row': 'OWN.1', 'signatures': [{'regex': 'splitmix', 'what': 'SplitMix64'}]}
+            self.assertEqual([], problems(assigned))
+            self.assertIn('random.seed: an assigned capability has no API yet; mark it landed with its API files',
+                          problems(dict(assigned, api=self.fnv()['api'])))
+            self.assertIn('random.seed: status must be "landed", "assigned" or "planned"',
+                          problems(dict(assigned, status='moving')))
+
+    def test_an_assigned_owner_guards_its_signatures_before_its_api_lands(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            assigned = {'id': 'random.seed', 'summary': 'seeds', 'owner': 'core', 'status': 'assigned',
+                        'row': 'OWN.1', 'signatures': [{'regex': r'\b0xBF58476D1CE4E5B9\b', 'what': 'SplitMix64'}]}
+            root = self.fixture(scratch, [assigned])
+            (root / 'engine/assets/a/src/a.cpp').write_text('z *= 0xBF58476D1CE4E5B9;\n', encoding='utf-8')
+            problems = capability_owners.check(root)[2]
+            self.assertEqual(1, len(problems))
+            self.assertIn('random.seed implements it outside its owner core', problems[0])
+
+    def test_this_checkout_has_one_owner_for_every_capability(self):
+        _, hits, problems = capability_owners.check(ROOT)
+        self.assertEqual([], problems)
+        self.assertTrue(hits, 'the signatures match the files the audit recorded as pending')
 
 
 class PeerHeaders(unittest.TestCase):

@@ -1984,6 +1984,7 @@ REPOSITORY_CHECKS = [
     ('Pinned inputs', ['scripts/check-pins.py'], None),
     ('Generated sources carry their provenance and bytes', ['scripts/check-generated.py'], None),
     ('Allman braces on every control statement', ['scripts/check-allman-braces.py'], None),
+    ('One owning module for every engine capability', ['scripts/check-capability-owners.py'], None),
     ('License manifest follows the registry', ['scripts/gen_license_manifest.py', '--check'], None),
     ('Build tooling regression checks', ['scripts/test-repository-tools.py'], None),
     ('Module registry contracts', ['scripts/test-module-selection.py'], None),

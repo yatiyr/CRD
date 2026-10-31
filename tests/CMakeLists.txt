@@ -94,6 +94,12 @@ set_tests_properties(crd-check-environment-reads PROPERTIES TIMEOUT 120 ENVIRONM
 add_test(NAME crd-check-frame-resets
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-frame-resets.py" "${CMAKE_SOURCE_DIR}")
 set_tests_properties(crd-check-frame-resets PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+# OWN.1 and OWN.2: every engine capability has one owning module (cmake/capability-owners.json); a registered
+# capability's signature in an engine source outside its owner fails unless the registry lists the file as pending a
+# move or allowed with the reason.
+add_test(NAME crd-check-capability-owners
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-capability-owners.py" --root "${CMAKE_SOURCE_DIR}")
+set_tests_properties(crd-check-capability-owners PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
 # ADR-0134 §8: only the board peer libraries (runtime/examples/peers/) include a peer header library (Eigen, Boost,
 # pocketfft), so no bench compiles a peer at the baseline ISA.
 add_test(NAME crd-check-peer-headers

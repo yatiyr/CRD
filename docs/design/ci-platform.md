@@ -340,6 +340,7 @@ systems for every preset, test, guard, sanitizer, SDE arm and ARM64 lane) is CI-
 | `repository` | Pinned inputs | `repository-<host>` | run repository: scripts/check-pins.py |
 | `repository` | Generated sources carry their provenance and bytes | `repository-<host>` | run repository: scripts/check-generated.py |
 | `repository` | Allman braces on every control statement | `repository-<host>` | run repository: scripts/check-allman-braces.py |
+| `repository` | One owning module for every engine capability | `repository-<host>` | run repository: scripts/check-capability-owners.py |
 | `repository` | License manifest follows the registry | `repository-<host>` | run repository: scripts/gen_license_manifest.py --check |
 | `repository` | Build tooling regression checks | `repository-<host>` | run repository: scripts/test-repository-tools.py |
 | `repository` | Module registry contracts | `repository-<host>` | run repository: scripts/test-module-selection.py |
