@@ -3136,6 +3136,36 @@ tab suspend/termination, bounded persistence/export and unavailable native tools
 download/export replace raw process/filesystem assumptions. Test actual supported browsers, secure context/isolation
 deployment and storage quotas. No universal native dump or GPU instruction replay promise.
 
+<a id="hardware-fault-resilience"></a>
+## HW-RESILIENCE — hardware-fault resilience
+
+[HW-RESILIENCE.1](../ROADMAP.md#slice-hw-resilience.1) holds the integrity paths; the I/O fault seam's `Flip` action
+and the `flipped-read` site (DIAG.9b, above) drive their tests.
+
+- Checksums: one dispatched family in crd-containers (`crd/containers/checksum.hpp`: CRC-32, CRC-32C, XXH3-64), the
+  same bits at every CPU level.
+- Cooked assets: CRDR container version 3
+  ([ADR-0038](../decisions/0038-cooked-binary-container-format.md#amendment-2026-10-31-container-version-3-checksums))
+  checks every header, stored payload and decoded payload; the resource manager reads a refused artifact once more,
+  then fails it with `integrity_error()`.
+- Durable saves (`crd/platform/durable_file.hpp`, crd-platform, which owns file I/O):
+  - `write_file_atomic` writes `<path>.tmp`, flushes it to stable storage (`FlushFileBuffers`, `fsync`, macOS
+    `F_FULLFSYNC`), renames it over the file (`MoveFileExW` with write-through) and, on POSIX, syncs the directory.
+  - `save_generation` writes each save with a 40-byte envelope (magic `CRDS`, version, generation, payload size and
+    XXH3-64, the header's CRC-32C). The newest is the file itself; the previous `kept` rotate through `<path>.1` ..
+    `<path>.<kept>` (generation g in slot g mod kept + 1); a damaged main file goes to `<path>.damaged`, never into
+    the ring. Each save takes two renames, so every crash point leaves a verifying generation.
+  - `load_generation` reads the headers, then the files newest first. A file that fails a check is read once more
+    (a fault in transfer), then skipped (a fault in storage). The result is Ok, Recovered (with why the newest
+    failed), NotFound or Corrupt, and `save_load_message` says it in one sentence. A complete save interrupted before
+    its rename (`<path>.tmp`) loads as the newest; a torn one is ignored.
+  - `Journal` appends records (sequence, size, XXH3-64 and a header CRC-32C) after a header that names the snapshot
+    generation they apply to; `commit` flushes them. `replay_journal` delivers the records before the first failing
+    one and the bytes lost after it; `open` cuts that tail; a journal of another snapshot is replaced.
+  - `Autosave` says when to commit (the most work a crash can cost, 2 s by default) and when to fold the journal
+    into a snapshot (age or size). Documents apply all of this through [DOC.2](../ROADMAP.md#slice-doc.2); the cook
+    database, artifacts, pack and journal use it now.
+
 ## Existing programme ownership after DIAG
 
 CORE-USE revalidates renderer-specific allocation/task/retirement consumers using DIAG; DG05's immediate repair is
