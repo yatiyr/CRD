@@ -568,17 +568,13 @@ private:
         adopt_buffer(new_data, new_cap);
     }
 
-    // Best-effort grow. Returns false if the allocator returned nullptr.
-    // (MallocAllocator never returns nullptr — it either succeeds or
-    // CRD_FATAL's. Sub-budget allocators DO return nullptr on exhaustion.)
+    // Best-effort grow: false when the allocator refuses. It allocates through IAllocator::try_allocate, so an
+    // allocator whose allocate is fatal on exhaustion (MallocAllocator, TlsfAllocator, the growable ones) refuses
+    // here instead; the caller of a try_ path has opted out of the fatal.
     [[nodiscard]] bool try_grow_to_at_least(usize required) noexcept
     {
         const usize new_cap = next_capacity(required);
-        // We need a non-throwing alloc. Our IAllocator::allocate is noexcept-safe
-        // for sub-budgets (returns nullptr) but heap allocators FATAL on OOM.
-        // For try_*, the caller has explicitly opted into "no fatal", so this
-        // is the right shape.
-        T* new_data = memory::allocate_array<T>(*m_alloc, new_cap); // nullptr when refused or its size overflows
+        T* new_data = memory::try_allocate_array<T>(*m_alloc, new_cap); // nullptr when refused or its size overflows
         if (!new_data)
         {
             return false;

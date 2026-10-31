@@ -87,6 +87,19 @@ template <typename T> [[nodiscard]] T* allocate_array(IAllocator& alloc, usize c
     return allocate_array<T>(alloc, count, alignof(T));
 }
 
+// try_allocate_array<T>(allocator, count) — the same through IAllocator::try_allocate: nullptr, never a fatal, when
+// the allocator refuses (a heap or TLSF allocator out of memory included) or the byte size overflows. The try_ paths
+// of the containers (Array::try_reserve, String::try_reserve) allocate through it.
+template <typename T> [[nodiscard]] T* try_allocate_array(IAllocator& alloc, usize count) noexcept
+{
+    usize bytes = 0;
+    if (count == 0 || !checked_mul(sizeof(T), count, &bytes) || bytes > static_cast<usize>(PTRDIFF_MAX))
+    {
+        return nullptr;
+    }
+    return static_cast<T*>(alloc.try_allocate(bytes, alignof(T)));
+}
+
 // deallocate_array<T>(allocator, p) — counterpart for allocate_array.
 // Does NOT call destructors. Use destroy_array if elements were constructed.
 template <typename T> void deallocate_array(IAllocator& alloc, T* p) noexcept

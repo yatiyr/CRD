@@ -510,11 +510,12 @@ private:
         set_heap_capacity(new_cap_chars); // usable chars only; allocation is new_cap_chars+1
     }
 
+    // Best-effort grow through IAllocator::try_allocate: false, never a fatal, when the allocator refuses.
     [[nodiscard]] bool try_grow_to(usize target) noexcept
     {
         const usize new_cap_chars = next_capacity(target);
         const usize old_size = size();
-        char* new_buf = static_cast<char*>(m_alloc->allocate(new_cap_chars + 1, alignof(char)));
+        char* new_buf = memory::try_allocate_array<char>(*m_alloc, new_cap_chars + 1);
         if (!new_buf)
         {
             return false;

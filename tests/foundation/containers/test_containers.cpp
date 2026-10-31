@@ -1,4 +1,5 @@
 #include <crd/containers/containers.hpp>
+#include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/memory/memory.hpp>
 
 #include <algorithm>
@@ -328,6 +329,26 @@ TEST_CASE("Array: try_push_back returns false on sub-budget exhaustion", "[conta
     // can't satisfy unbounded grow + element copies.
     REQUIRE(pushed > 0);
     REQUIRE(pushed < 100);
+}
+
+TEST_CASE("Array and String: a try_ path refuses where the allocator's allocate is fatal on exhaustion",
+          "[containers][array][string][allocator]")
+{
+    // TlsfAllocator::allocate is fatal when the pool cannot hold the request; the try_ paths ask try_allocate.
+    crd::memory::TlsfAllocator pool(static_cast<usize>(1) << 20U);
+    Array<u8> a(&pool);
+    a.push_back(7U);
+    REQUIRE_FALSE(a.try_reserve(static_cast<usize>(1) << 32U));
+    CHECK(a.size() == 1U);
+    CHECK(a[0] == 7U);
+    CHECK(a.try_reserve(4096U));
+    CHECK(a[0] == 7U);
+    String s(&pool);
+    s.append("kept");
+    REQUIRE_FALSE(s.try_reserve(static_cast<usize>(1) << 32U));
+    CHECK(s == "kept");
+    CHECK(s.try_reserve(4096U));
+    CHECK(s == "kept");
 }
 
 TEST_CASE("Array: dtors run on element destruction", "[containers][array][lifetime]")
