@@ -25,7 +25,10 @@ overflow under GCC's LTO (f635efb1) and the real-binary comply command (ee040d0f
   level in clang-cl's spelling through `--extra-arg` (`/arch:AVX2`, `/arch:AVX512`, `/clang:-march=x86-64-v2`;
   cl's `/arch:SSE4.2` is no clang `/arch`). The reconfigured win-tidy tree analysed all 77 kernel units clean;
   a temporary `#error` marker proved the analysis runs there and sees `__AVX2__`. `tidy-files.py` was not wrong:
-  through the database clang keeps `/arch`.
+  through the database clang keeps `/arch`. Track B's 11be5fc4 landed meanwhile: kernel units read their FMA from
+  their level and `kernel_level.hpp` holds the compiler to it, except under the analysis; with the restated
+  `/arch` that exception had nothing left to excuse and is gone, so the analysis is held to the level too. The
+  rerun found one finding in 35c6e3b3 (`staged_layout`'s image pointer can be const), fixed.
 
 Complete-tier run 41215667488 (c2645814) passed every job but linux-gcc-asan, stopped at the 6 h cap after 6,811 of
 8,766 cases in 20,331 s of serial tests (about 26,000 s for all). Its test preset now runs three cases at a time, as
