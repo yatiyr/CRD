@@ -93,11 +93,30 @@ identifiers" registry. The "Cerid GREASE values" registry holds the pattern `0x?
 never assigned, and sent by every build. Identifiers are never reused; a retired one stays in the register as
 `deprecated`.
 
+The "Cerid algorithm identifiers" registry names every algorithm a policy generation or another signed artefact
+refers to, so a signed artefact never carries an IANA value taken from knowledge or a provider's constant. The high
+byte is the class and the low byte (never 0) numbers the algorithm within it:
+
+| Class byte | Class | Assigned |
+|---|---|---|
+| `0x01` | Post-quantum/traditional hybrid key exchange | X25519MLKEM768 `0x0101`, SecP256r1MLKEM768 `0x0102`, SecP384r1MLKEM1024 `0x0103` |
+| `0x02` | Traditional elliptic-curve key exchange | X25519 `0x0201`, secp256r1 `0x0202`, secp384r1 `0x0203` |
+| `0x03` | Post-quantum signature | ML-DSA-44 `0x0301`, ML-DSA-65 `0x0302`, ML-DSA-87 `0x0303` |
+| `0x04` | Traditional signature | Ed25519 `0x0401`, ECDSA P-256 with SHA-256 `0x0402`, ECDSA P-384 with SHA-384 `0x0403` |
+| `0x05` | Authenticated encryption | AES-128-GCM `0x0501`, AES-256-GCM `0x0502`, ChaCha20-Poly1305 `0x0503` |
+| `0x06` | Key derivation | HKDF-SHA256 `0x0601`, HKDF-SHA384 `0x0602` |
+
+The class is what the trust set's hybrid rule and a provider's dispatch read; an identifier is never reused.
+
 Code never spells a codepoint by hand. [scripts/gen-register-ids.py](../../scripts/gen-register-ids.py) writes, for
 each owning module, a committed header of the codepoints its entries hold (for `net`,
 [register_ids.hpp](../../engine/foundation/net/include/crd/net/register_ids.hpp): `ProtocolId`, the GREASE table and
-the QUIC and ALPN values). A codepoint marked `verified: false` is written into a nested `unverified` namespace, so a
-use of it is visible where it is made and verifying it moves it out. A registry without a C++ type, a malformed value,
-a pattern that is not 16 bits and a registered owner with codepoints but no output each fail the generator. The
-`crd-net-register-ids-drift` CTest runs `--check`, and
-[scripts/generated-sources.json](../../scripts/generated-sources.json) records the header's bytes.
+the QUIC and ALPN values; for `crypto`,
+[register_ids.hpp](../../engine/foundation/crypto/include/crd/crypto/register_ids.hpp): `AlgorithmId`,
+`AlgorithmClass` and the TLS group, signature scheme, extension, AEAD and object identifier values). A codepoint
+marked `verified: false` is written into a nested `unverified` namespace, so a use of it is visible where it is made
+and verifying it moves it out. A registry without a C++ type, a malformed value or object identifier, a pattern that
+is not 16 bits, an algorithm identifier outside the class table or numbered 0 within its class and a registered owner
+with codepoints but no output each fail the generator. The `crd-net-register-ids-drift` and
+`crd-crypto-register-ids-drift` CTests run `--check`, and
+[scripts/generated-sources.json](../../scripts/generated-sources.json) records each header's bytes.

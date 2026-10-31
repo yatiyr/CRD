@@ -8,7 +8,7 @@
 // Contract and rationale: docs/design/network-foundation.md#negotiation.
 #include <crd/net/negotiation.hpp>
 
-#include <crd/core/assert.hpp>
+#include <crd/containers/wire_bytes.hpp>
 
 #include <algorithm>
 
@@ -21,89 +21,6 @@ constexpr usize kExtensionHeadBytes  = 4U;
 constexpr usize kOfferHeadBytes      = 4U; // kind, format, protocol
 constexpr usize kAnswerSelectedBytes = 4U;
 constexpr u8    kTranscriptLabel[8]  = {'c', 'r', 'd', 'n', 'e', 'g', '0', '1'};
-
-class Writer
-{
-public:
-    explicit Writer(cont::Span<u8> out) noexcept : m_out(out) {}
-
-    void put_u8(u8 value) noexcept
-    {
-        CRD_ASSERT(m_at < m_out.size());
-        m_out[m_at++] = value;
-    }
-
-    void put_u16(u16 value) noexcept
-    {
-        put_u8(static_cast<u8>(value >> 8U));
-        put_u8(static_cast<u8>(value & 0xFFU));
-    }
-
-    void put_u32(u32 value) noexcept
-    {
-        put_u16(static_cast<u16>(value >> 16U));
-        put_u16(static_cast<u16>(value & 0xFFFFU));
-    }
-
-    void put_bytes(cont::ConstSpan<u8> data) noexcept
-    {
-        for (const u8 byte : data)
-        {
-            put_u8(byte);
-        }
-    }
-
-    [[nodiscard]] usize written() const noexcept { return m_at; }
-
-private:
-    cont::Span<u8> m_out;
-    usize          m_at = 0U;
-};
-
-class Reader
-{
-public:
-    explicit Reader(cont::ConstSpan<u8> in) noexcept : m_in(in) {}
-
-    [[nodiscard]] bool take_u8(u8& out) noexcept
-    {
-        if (m_at >= m_in.size())
-        {
-            return false;
-        }
-        out = m_in[m_at++];
-        return true;
-    }
-
-    [[nodiscard]] bool take_u16(u16& out) noexcept
-    {
-        u8 high = 0U;
-        u8 low  = 0U;
-        if (!take_u8(high) || !take_u8(low))
-        {
-            return false;
-        }
-        out = static_cast<u16>((static_cast<u16>(high) << 8U) | low);
-        return true;
-    }
-
-    [[nodiscard]] bool take_bytes(usize count, cont::ConstSpan<u8>& out) noexcept
-    {
-        if (m_in.size() - m_at < count)
-        {
-            return false;
-        }
-        out = m_in.subspan(m_at, count);
-        m_at += count;
-        return true;
-    }
-
-    [[nodiscard]] bool done() const noexcept { return m_at == m_in.size(); }
-
-private:
-    cont::ConstSpan<u8> m_in;
-    usize               m_at = 0U;
-};
 
 // Where one message's GREASE goes and what it holds, drawn from its entropy: the version major and minor and its
 // slot among the versions; two distinct extension identifiers, their slots among the extensions and 0 to 7 value
@@ -166,7 +83,8 @@ usize extensions_bytes(cont::ConstSpan<ExtensionEntry> extensions, const GreaseP
     return size;
 }
 
-void write_versions(Writer& writer, cont::ConstSpan<ProtocolVersion> versions, const GreasePlan& plan) noexcept
+void write_versions(cont::WireWriter& writer, cont::ConstSpan<ProtocolVersion> versions,
+                    const GreasePlan& plan) noexcept
 {
     const auto count = static_cast<u32>(versions.size());
     writer.put_u8(static_cast<u8>(count + kGreaseVersions));
@@ -179,7 +97,8 @@ void write_versions(Writer& writer, cont::ConstSpan<ProtocolVersion> versions, c
     }
 }
 
-void write_extensions(Writer& writer, cont::ConstSpan<ExtensionEntry> extensions, const GreasePlan& plan) noexcept
+void write_extensions(cont::WireWriter& writer, cont::ConstSpan<ExtensionEntry> extensions,
+                      const GreasePlan& plan) noexcept
 {
     const auto count = static_cast<u32>(extensions.size());
     writer.put_u8(static_cast<u8>(count + kGreaseExtensions));
@@ -360,7 +279,7 @@ NegotiationError decode_negotiation(cont::ConstSpan<u8> bytes, MessageKind expec
     {
         return NegotiationError::TooLarge;
     }
-    Reader reader(bytes);
+    cont::WireReader reader(bytes);
     u8     kind = 0U;
     if (!reader.take_u8(kind))
     {
@@ -477,7 +396,7 @@ NegotiationError write_offer(const NegotiationPolicy& policy, cont::ConstSpan<Ex
     {
         return NegotiationError::BufferTooSmall;
     }
-    Writer writer(out);
+    cont::WireWriter writer(out);
     writer.put_u8(static_cast<u8>(MessageKind::Offer));
     writer.put_u8(kNegotiationFormat);
     writer.put_u16(static_cast<u16>(policy.protocol));
@@ -562,7 +481,7 @@ NegotiationError write_answer(const NegotiationPolicy& policy, const Negotiation
     {
         return NegotiationError::BufferTooSmall;
     }
-    Writer writer(out);
+    cont::WireWriter writer(out);
     writer.put_u8(static_cast<u8>(MessageKind::Answer));
     writer.put_u8(kNegotiationFormat);
     writer.put_u16(static_cast<u16>(policy.protocol));
@@ -643,7 +562,7 @@ NegotiationError write_transcript(cont::ConstSpan<u8> offer, cont::ConstSpan<u8>
     {
         return NegotiationError::BufferTooSmall;
     }
-    Writer writer(out);
+    cont::WireWriter writer(out);
     writer.put_bytes(kTranscriptLabel);
     writer.put_u32(static_cast<u32>(offer.size()));
     writer.put_bytes(offer);

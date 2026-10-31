@@ -16,8 +16,8 @@ Start with [rendering foundation](rendering-foundation.md), [CEIR](ceir.md), [CH
 
 ## Current module inventory
 
-All <!-- fact:module-count -->106<!-- /fact --> registered modules are represented: the
-<!-- fact:engine-module-count -->99<!-- /fact --> engine modules below and the
+All <!-- fact:module-count -->107<!-- /fact --> registered modules are represented: the
+<!-- fact:engine-module-count -->100<!-- /fact --> engine modules below and the
 <!-- fact:other-module-count -->7<!-- /fact --> application and tool modules in the next table. Existing overview
 links retain their dated evidence; where no dedicated overview exists, the public source and CMake manifest are the
 direct entry points. The documentation validator holds
@@ -37,6 +37,7 @@ this map and the `crd_module()` registry in the root CMakeLists to the same set 
 | `config` | [config](config.md) | [CMake](../../engine/foundation/config/CMakeLists.txt) |
 | `containers` | [containers](containers.md) | [CMake](../../engine/foundation/containers/CMakeLists.txt) |
 | `core` | [core](core.md) | [CMake](../../engine/foundation/core/CMakeLists.txt) |
+| `crypto` | [Public source](../../engine/foundation/crypto/include/) | [CMake](../../engine/foundation/crypto/CMakeLists.txt) |
 | `draw` | [Public source](../../engine/rendering/draw/include/) | [CMake](../../engine/rendering/draw/CMakeLists.txt) |
 | `draw-imgui` | [Public source](../../engine/rendering/draw-imgui/include/) | [CMake](../../engine/rendering/draw-imgui/CMakeLists.txt) |
 | `eylem` | [Public source](../../engine/physics/eylem/include/) | [CMake](../../engine/physics/eylem/CMakeLists.txt) |

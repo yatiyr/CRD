@@ -132,6 +132,14 @@
       ]
     },
     {
+      "id": "containers.wire-bytes",
+      "summary": "Big-endian integers over byte spans: the bounded writer and reader of every Cerid wire and signed artefact layout.",
+      "owner": "containers",
+      "api": [
+        "engine/foundation/containers/include/crd/containers/wire_bytes.hpp"
+      ]
+    },
+    {
       "id": "containers.collections",
       "summary": "Arrays, hash maps and sets, rings, queues, slot maps, strings and spans (the standard containers stay banned, check_no_std_containers).",
       "owner": "containers",
@@ -591,12 +599,27 @@
       "decision": "docs/design/network-foundation.md D1: one owner for every path that can reach another machine. NET-STD's negotiation codec created the module (2026-10-31); 4.2a adds the transport."
     },
     {
+      "id": "crypto.agility",
+      "summary": "Algorithm identifiers generated from the NET-STD standards register, the signature verification interface providers implement and signed, monotonic crypto policy generations with dated windows, an offline grace period and the build's ceiling.",
+      "owner": "crypto",
+      "api": [
+        "engine/foundation/crypto/include/crd/crypto/policy.hpp",
+        "engine/foundation/crypto/include/crd/crypto/register_ids.hpp",
+        "engine/foundation/crypto/include/crd/crypto/verifier.hpp"
+      ],
+      "decision": "docs/design/network-foundation.md D2 and D7: NET-STD's policy generations created the module (2026-10-31); every signed artefact names its algorithms by register identifier and verifies through the interface, never a provider's own constant."
+    },
+    {
       "id": "crypto.providers",
       "summary": "The cryptographic provider interface (AEAD, KEM, signatures, KDF, keyed PRF), the operating-system CSPRNG, the key store and the TLS and QUIC handshake integration over vetted providers; Cerid writes no primitive (network foundation D2).",
       "owner": "crypto",
-      "status": "planned",
+      "status": "assigned",
       "row": "NET.2",
-      "decision": "docs/design/network-foundation.md D2: its consumers are wider than the network (SUPPLY signing, policy and rule generations, crash pack protection), so cryptography is a foundation owner that depends on no network code."
+      "signatures": [
+        {"regex": "#\\s*include\\s*<(?:openssl/|sodium\\.h|bcrypt\\.h|CommonCrypto/|Security/SecRandom\\.h|sys/random\\.h)", "what": "a cryptographic library or operating-system randomness header"},
+        {"regex": "\\b(?:BCryptGenRandom|getrandom|getentropy|arc4random_buf|SecRandomCopyBytes|RAND_bytes|randombytes_buf)\\s*\\(", "what": "an operating-system or library randomness call"}
+      ],
+      "decision": "docs/design/network-foundation.md D2: its consumers are wider than the network (SUPPLY signing, policy and rule generations, crash pack protection), so cryptography is a foundation owner that depends on no network code. NET-STD created the module; NET.2 adds the providers behind crypto.agility's interface."
     },
     {
       "id": "robotics.ros2-bridge",

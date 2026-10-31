@@ -5,7 +5,11 @@ cmake/standards-register.json is the one record of every Cerid and IANA codepoin
 never spells one by hand: this generator writes, for every owner in OUTPUTS, a committed header holding the codepoints
 of the entries that owner owns:
 
-  - "Cerid protocol identifiers" become `enum class ProtocolId : u16` with `kProtocolIds` and `protocol_register_id`;
+  - each Cerid identifier registry (ENUMS) becomes an `enum class ... : u16` with its table of values and the
+    register entry of each value: "Cerid protocol identifiers" give `ProtocolId`, `kProtocolIds` and
+    `protocol_register_id`; "Cerid algorithm identifiers" give `AlgorithmId`, `kAlgorithmIds` and
+    `algorithm_register_id`, whose high byte is the algorithm's class (ALGORITHM_CLASSES: `AlgorithmClass` and
+    `algorithm_class`);
   - a value pattern with `?` nibbles ("0x?A?A") expands to every value with the same digit in each `?`, written as
     the reserved table of its registry (`kGreaseIds` and `is_grease`: the GREASE values, reserved as extension
     identifiers and as version majors);
@@ -31,19 +35,45 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 REGISTER = 'cmake/standards-register.json'
 GENERATOR = 'scripts/gen-register-ids.py'
-# owner -> (header, namespace). crypto joins when NET.2 registers crd-crypto.
-OUTPUTS = {'net': ('engine/foundation/net/include/crd/net/register_ids.hpp', 'crd::net')}
-PROTOCOLS = 'Cerid protocol identifiers'
+# owner -> (header, namespace)
+OUTPUTS = {
+    'net': ('engine/foundation/net/include/crd/net/register_ids.hpp', 'crd::net'),
+    'crypto': ('engine/foundation/crypto/include/crd/crypto/register_ids.hpp', 'crd::crypto'),
+}
+# Cerid identifier registry -> (enumeration, noun, what one value names)
+ENUMS = {
+    'Cerid protocol identifiers': ('ProtocolId', 'protocol', 'one per Cerid wire protocol'),
+    'Cerid algorithm identifiers': ('AlgorithmId', 'algorithm', 'one per algorithm, its class in the high byte'),
+}
+ALGORITHMS = 'Cerid algorithm identifiers'
+# The high byte of a Cerid algorithm identifier (docs/design/registers.md#cerid-identifiers).
+ALGORITHM_CLASSES = {
+    0x01: ('HybridKeyExchange', 'post-quantum/traditional hybrid key exchange'),
+    0x02: ('ClassicalKeyExchange', 'traditional elliptic-curve key exchange'),
+    0x03: ('PostQuantumSignature', 'post-quantum signature'),
+    0x04: ('ClassicalSignature', 'traditional signature'),
+    0x05: ('Aead', 'authenticated encryption with associated data'),
+    0x06: ('Kdf', 'key derivation'),
+}
 RESERVED = {'Cerid GREASE values': 'Grease'}
 # registry -> (constant prefix, C++ type, value kind)
 REGISTRIES = {
     'QUIC Versions': ('', 'u32', 'integer'),
     'QUIC Transport Parameters': ('QuicTp', 'u64', 'integer'),
-    'TLS ALPN Protocol IDs': ('Alpn', 'std::string_view', 'text'),
+    'TLS ALPN Protocol IDs': ('Alpn', 'std::string_view', 'alpn'),
+    'TLS Supported Groups': ('Group', 'u16', 'integer'),
+    'TLS SignatureScheme': ('SignatureScheme', 'u16', 'integer'),
+    'TLS ExtensionType Values': ('TlsExtension', 'u16', 'integer'),
+    'AEAD Algorithms': ('', 'u16', 'integer'),  # names start AEAD_
+    'Object identifiers': ('Oid', 'std::string_view', 'oid'),
 }
 HEX = re.compile(r'^0x[0-9A-Fa-f]+$')
 PATTERN = re.compile(r'^0x[0-9A-Fa-f?]*\?[0-9A-Fa-f?]*$')
-ALPN = re.compile(r'^[\x21-\x7e]{1,255}$')
+# text value kind -> (form, what it is)
+TEXT = {
+    'alpn': (re.compile(r'^[\x21-\x7e]{1,255}$'), 'a printable ALPN identifier'),
+    'oid': (re.compile(r'^[0-2](?:\.(?:0|[1-9][0-9]*))+$'), 'a dotted object identifier'),
+}
 LIMITS = {'u16': 0xFFFF, 'u32': 0xFFFFFFFF, 'u64': (1 << 62) - 1}  # QUIC varints stop at 2^62 - 1
 
 _spec = importlib.util.spec_from_file_location('check_master_plan', ROOT / 'scripts' / 'check-master-plan.py')
@@ -87,40 +117,47 @@ def owned_codepoints(register, owner):
 
 
 def model(register, owner):
-    """(protocols, reserved, constants) of one owner, each in register order."""
-    protocols, reserved, constants, names = [], [], [], {}
+    """(enums, reserved, constants) of one owner in register order; enums maps each Cerid identifier registry the
+    owner uses to its (name, value, entry) members."""
+    enums, reserved, constants, names = {}, [], [], {}
     for entry, point in owned_codepoints(register, owner):
         where = f'{REGISTER}: {entry["id"]} codepoint {point["name"]!r}'
         registry, verified = point['registry'], point.get('verified', True)
-        if registry == PROTOCOLS:
-            name = camel(point['name'])
-            protocols.append((name, integer(where, point['value'], 'u16'), entry['id']))
+        if registry in ENUMS:
+            name = f'{ENUMS[registry][0]}::{camel(point["name"])}'
+            value = integer(where, point['value'], 'u16')
+            if registry == ALGORITHMS and (value >> 8 not in ALGORITHM_CLASSES or not value & 0xFF):
+                raise RegisterError(f'{where}: {point["value"]} is not a class byte of ALGORITHM_CLASSES followed by '
+                                    'a nonzero number')
+            enums.setdefault(registry, []).append((camel(point['name']), value, entry['id']))
         elif registry in RESERVED:
             name = RESERVED[registry]
             reserved.append((name, expand(where, point['value']), entry['id'], registry, point['value']))
         elif registry in REGISTRIES:
             prefix, ctype, kind = REGISTRIES[registry]
             name = 'k' + prefix + camel(point['name'])
-            if kind == 'text':
-                if not ALPN.match(point['value']):
-                    raise RegisterError(f'{where}: {point["value"]!r} is not a printable ALPN identifier')
+            if kind in TEXT:
+                form, what = TEXT[kind]
+                if not form.match(point['value']):
+                    raise RegisterError(f'{where}: {point["value"]!r} is not {what}')
                 value = point['value']
             else:
                 value = integer(where, point['value'], ctype)
             constants.append((name, ctype, kind, value, verified, entry['id'], registry, point['name']))
         else:
             raise RegisterError(f'{where}: registry {registry!r} has no type in {GENERATOR}; add it to REGISTRIES')
-        if registry in (PROTOCOLS, *RESERVED) and not verified:
+        if (registry in ENUMS or registry in RESERVED) and not verified:
             raise RegisterError(f'{where}: a Cerid identifier is the register\'s own value and cannot be unverified')
         if name in names:
-            raise RegisterError(f'{where}: constant {name} is also generated for {names[name]}')
+            raise RegisterError(f'{where}: constant {name.rpartition(":")[2]} is also generated for {names[name]}')
         names[name] = entry['id']
-    values = [value for _, value, _ in protocols]
-    if len(set(values)) != len(values):
-        raise RegisterError(f'{REGISTER}: two Cerid protocol identifiers share a value')
-    if any(value in grease for value in values for _, grease, *_ in reserved):
-        raise RegisterError(f'{REGISTER}: a Cerid protocol identifier lies in a reserved pattern')
-    return protocols, reserved, constants
+    for registry, members in enums.items():
+        values = [value for _, value, _ in members]
+        if len(set(values)) != len(values):
+            raise RegisterError(f'{REGISTER}: two {registry} share a value')
+        if any(value in grease for value in values for _, grease, *_ in reserved):
+            raise RegisterError(f'{REGISTER}: a Cerid {ENUMS[registry][1]} identifier lies in a reserved pattern')
+    return enums, reserved, constants
 
 
 def pattern_test(pattern):
@@ -143,14 +180,44 @@ def pattern_test(pattern):
 
 
 def literal(ctype, kind, value):
-    if kind == 'text':
+    if kind in TEXT:
         return f'"{value}"'
     width = {'u16': 4, 'u32': 8, 'u64': 4}[ctype]
     return f'0x{value:0{width}X}U' if ctype != 'u64' else f'0x{value:0{width}X}ULL'
 
 
+def render_enum(registry, members):
+    """One Cerid identifier registry: its enumeration, its table and the register entry of each value."""
+    enum, noun, what = ENUMS[registry]
+    width = max(len(name) for name, _, _ in members)
+    lines = [f'// {registry}: {what}; never reused. 16 bits on the wire.',
+             '// NOLINTNEXTLINE(performance-enum-size)', f'enum class {enum} : u16', '{']
+    lines += [f'    {name:<{width}} = 0x{value:04X}U, // {entry}' for name, value, entry in members]
+    lines += ['};', '', f'inline constexpr {enum} k{enum[:-2]}Ids[] = {{']
+    lines += [f'    {enum}::{name},' for name, _, _ in members]
+    lines += ['};', '', '// The register entry that defines `id` ("" for a value outside the enumeration).',
+              f'[[nodiscard]] constexpr const char* {noun}_register_id({enum} id) noexcept', '{',
+              '    switch (id)', '    {']
+    for index, (name, _, entry) in enumerate(members):
+        lines.append(f'    case {enum}::{name}:')
+        if index + 1 == len(members) or members[index + 1][2] != entry:
+            lines.append(f'        return "{entry}";')  # consecutive values of one entry share the return
+    lines += ['    }', '    return "";', '}', '']
+    if registry == ALGORITHMS:
+        width = max(len(name) for name, _ in ALGORITHM_CLASSES.values())
+        lines += ['// The class of an algorithm: the high byte of its identifier. An identifier decoded from bytes may',
+                  '// carry a class byte outside this enumeration; no code accepts one.',
+                  'enum class AlgorithmClass : u8', '{']
+        lines += [f'    {name:<{width}} = 0x{value:02X}U, // {meaning}'
+                  for value, (name, meaning) in ALGORITHM_CLASSES.items()]
+        lines += ['};', '',
+                  '[[nodiscard]] constexpr AlgorithmClass algorithm_class(AlgorithmId id) noexcept', '{',
+                  '    return static_cast<AlgorithmClass>(static_cast<u16>(id) >> 8U);', '}', '']
+    return lines
+
+
 def render(owner, register, namespace):
-    protocols, reserved, constants = model(register, owner)
+    enums, reserved, constants = model(register, owner)
     lines = [
         '#pragma once',
         '',
@@ -165,22 +232,12 @@ def render(owner, register, namespace):
         '#include <crd/core/types.hpp>',
         '',
     ]
-    if any(kind == 'text' for _, _, kind, *_ in constants):
+    if any(kind in TEXT for _, _, kind, *_ in constants):
         lines += ['#include <string_view>', '']
     lines += [f'namespace {namespace}', '{']
-    if protocols:
-        width = max(len(name) for name, _, _ in protocols)
-        lines += [f'// {PROTOCOLS}: one per Cerid wire protocol; never reused. 16 bits on the wire.',
-                  '// NOLINTNEXTLINE(performance-enum-size)', 'enum class ProtocolId : u16', '{']
-        lines += [f'    {name:<{width}} = 0x{value:04X}U, // {entry}' for name, value, entry in protocols]
-        lines += ['};', '', f'inline constexpr ProtocolId kProtocolIds[] = {{']
-        lines += [f'    ProtocolId::{name},' for name, _, _ in protocols]
-        lines += ['};', '', '// The register entry that defines `id` ("" for a value outside the enumeration).',
-                  '[[nodiscard]] constexpr const char* protocol_register_id(ProtocolId id) noexcept', '{',
-                  '    switch (id)', '    {']
-        for name, _, entry in protocols:
-            lines += [f'    case ProtocolId::{name}:', f'        return "{entry}";']
-        lines += ['    }', '    return "";', '}', '']
+    for registry in ENUMS:
+        if registry in enums:
+            lines += render_enum(registry, enums[registry])
     for name, values, entry, registry, pattern in reserved:
         lines += [f'// {registry} reserved by {entry}: never assigned, sent by every build so that peers which',
                   '// refuse unknown values fail in testing (RFC 8701 practice).',

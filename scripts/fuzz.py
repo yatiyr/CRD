@@ -53,6 +53,10 @@ TARGETS = {
                          'executable': 'tests/resources/fuzz/crd-fuzz-resources-reload'},
     'memory-allocators': {'corpus': 'tests/foundation/memory/fuzz/corpus',
                           'executable': 'tests/memory/fuzz/crd-fuzz-memory-allocators'},
+    'net-negotiation': {'corpus': 'tests/foundation/net/fuzz/corpus',
+                        'executable': 'tests/net/fuzz/crd-fuzz-net-negotiation'},
+    'crypto-policy': {'corpus': 'tests/foundation/crypto/fuzz/corpus',
+                      'executable': 'tests/crypto/fuzz/crd-fuzz-crypto-policy'},
 }
 LIMITS = {'max_len': 65536, 'timeout': 10, 'rss_limit_mb': 2048, 'malloc_limit_mb': 256}
 STAT_PATTERN = re.compile(r'^stat::(\w+):\s+(\d+)', re.MULTILINE)

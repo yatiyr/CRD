@@ -516,6 +516,7 @@ crd_module(engine/foundation/platform engine/platform DEPENDS containers core jo
 crd_module(engine/foundation/app engine/app DEPENDS containers core jobs perf platform TESTS foundation/app)
 crd_module(engine/foundation/config engine/config DEPENDS containers core log math platform toml
     TESTS foundation/config)
+crd_module(engine/foundation/crypto engine/crypto DEPENDS containers core TESTS foundation/crypto support/fuzz)
 crd_module(engine/foundation/net engine/net DEPENDS containers core TESTS foundation/net support/fuzz)
 crd_module(engine/ui/imgui engine/imgui
     DEPENDS config gpu-context gpu-context-dx12 gpu-context-vulkan log platform units PACKAGES glfw imgui

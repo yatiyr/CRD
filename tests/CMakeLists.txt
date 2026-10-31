@@ -248,6 +248,7 @@ crd_tests(foundation/containers containers)
 crd_tests(foundation/platform platform)
 crd_tests(foundation/app app)
 crd_tests(foundation/config config)
+crd_tests(foundation/crypto crypto)  # NET-STD: algorithm identifiers and signed policy generations
 crd_tests(foundation/net net)  # NET-STD: version and extension negotiation, GREASE, register identifiers
 crd_tests(ui/imgui imgui)
 # RET-8 (ADR-0105): tests/{renderer,shader,rhi,rhi_vulkan} DELETED with their modules — the parity audit

@@ -1862,6 +1862,17 @@
         "--check"
       ],
       "sha256": "ebf6f59492d2f5329943b584f1427b55b5271395ed4cb9d5cd078cab1d27a0b2"
+    },
+    {
+      "path": "engine/foundation/crypto/include/crd/crypto/register_ids.hpp",
+      "generator": "scripts/gen-register-ids.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "scripts/gen-register-ids.py",
+        "--check"
+      ],
+      "sha256": "d05b046f29085015e92d3dad9318c39b44d38037f6900346ac1d069952754f8c"
     }
   ]
 }

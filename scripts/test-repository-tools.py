@@ -3477,8 +3477,9 @@ class TestInstruments(unittest.TestCase):
 
     def test_fuzz_driver_bounds_every_run_and_names_its_corpora(self):
         self.assertEqual(sorted(fuzz_driver.TARGETS), ['ceir-binary', 'ceir-differential', 'ceir-record', 'ceir-text',
-                                                       'ceridc-diag', 'ckir-binary', 'ckir-text', 'memory-allocators',
-                                                       'perf-assets', 'perf-bundle', 'perf-capture', 'perf-flight',
+                                                       'ceridc-diag', 'ckir-binary', 'ckir-text', 'crypto-policy',
+                                                       'memory-allocators', 'net-negotiation', 'perf-assets',
+                                                       'perf-bundle', 'perf-capture', 'perf-flight',
                                                        'resources-reload'])
         for name, target in fuzz_driver.TARGETS.items():
             corpus = ROOT / target['corpus']
@@ -5407,6 +5408,7 @@ class RegisterIds(unittest.TestCase):
     with GREASE patterns expanded, unverified IANA values kept apart and every unusable input refused."""
 
     HEADER = 'engine/foundation/net/include/crd/net/register_ids.hpp'
+    CRYPTO = 'engine/foundation/crypto/include/crd/crypto/register_ids.hpp'
 
     @staticmethod
     def entry(identifier, owner, *codepoints):
@@ -5425,8 +5427,9 @@ class RegisterIds(unittest.TestCase):
                 self.entry('tls.hybrid-kex', 'crypto', {'registry': 'TLS Supported Groups', 'name': 'X25519MLKEM768',
                                                         'value': '0x11EC', 'verified': False})]
 
-    def generate(self, entries, modules=('core', 'net'), check=False, header=None):
-        """(exit code, output, header text or None) of the generator over a fixture tree."""
+    def generate(self, entries, modules=('core', 'net'), check=False, header=None, output_path=None):
+        """(exit code, output, header text or None) of the generator over a fixture tree; the header read back is
+        crd-net's unless `output_path` names another owner's."""
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)
             (root / 'cmake').mkdir()
@@ -5440,7 +5443,7 @@ class RegisterIds(unittest.TestCase):
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
                 code = register_ids.main(['--root', str(root)] + (['--check'] if check else []))
-            written = root / self.HEADER
+            written = root / (output_path or self.HEADER)
             return code, output.getvalue(), written.read_text(encoding='utf-8') if written.exists() else None
 
     def test_header_holds_protocols_grease_and_typed_iana_values(self):
@@ -5456,8 +5459,35 @@ class RegisterIds(unittest.TestCase):
                       'inline constexpr u32 kQuicVersion1 = 0x00000001U;', header)
         self.assertIn('namespace iana\n{\n// http.h3: TLS ALPN Protocol IDs, HTTP/3\n'
                       'inline constexpr std::string_view kAlpnHttp3 = "h3";', header)
-        self.assertNotIn('X25519', header)  # crypto's codepoints wait for its module (NET.2)
+        self.assertNotIn('X25519', header)  # crypto's codepoints go to crypto's header
         self.assertNotIn('\r', header)
+
+    def test_crypto_header_holds_algorithm_ids_their_class_and_typed_iana_values(self):
+        entries = self.entries() + [
+            self.entry('crypto.ml-dsa', 'crypto', {'registry': 'Cerid algorithm identifiers', 'name': 'ml-dsa-65',
+                                                   'value': '0x0302'},
+                       {'registry': 'Cerid algorithm identifiers', 'name': 'ml-dsa-87', 'value': '0x0303'}),
+            self.entry('crypto.aes-gcm', 'crypto', {'registry': 'Cerid algorithm identifiers', 'name': 'aes-128-gcm',
+                                                    'value': '0x0501'},
+                       {'registry': 'AEAD Algorithms', 'name': 'AEAD_AES_128_GCM', 'value': '1', 'verified': False}),
+            self.entry('pki.ml-dsa', 'crypto', {'registry': 'Object identifiers', 'name': 'id-ml-dsa-65',
+                                                'value': '2.16.840.1.101.3.4.3.18', 'verified': False})]
+        code, _, header = self.generate(entries, modules=('core', 'net', 'crypto'), output_path=self.CRYPTO)
+        self.assertEqual(0, code)
+        self.assertIn('namespace crd::crypto\n{', header)
+        self.assertIn('enum class AlgorithmId : u16\n{\n    MlDsa65   = 0x0302U, // crypto.ml-dsa\n'
+                      '    MlDsa87   = 0x0303U, // crypto.ml-dsa\n    Aes128Gcm = 0x0501U, // crypto.aes-gcm\n};', header)
+        self.assertIn('    case AlgorithmId::MlDsa65:\n    case AlgorithmId::MlDsa87:\n        return "crypto.ml-dsa";\n'
+                      '    case AlgorithmId::Aes128Gcm:', header)  # one entry's values share a return
+        self.assertIn('inline constexpr AlgorithmId kAlgorithmIds[] = {', header)
+        self.assertIn('    case AlgorithmId::Aes128Gcm:\n        return "crypto.aes-gcm";', header)
+        self.assertIn('    PostQuantumSignature = 0x03U, // post-quantum signature', header)
+        self.assertIn('    return static_cast<AlgorithmClass>(static_cast<u16>(id) >> 8U);', header)
+        self.assertIn('inline constexpr u16 kGroupX25519mlkem768 = 0x11ECU;', header)
+        self.assertIn('inline constexpr u16 kAeadAes128Gcm = 0x0001U;', header)
+        self.assertIn('inline constexpr std::string_view kOidIdMlDsa65 = "2.16.840.1.101.3.4.3.18";', header)
+        self.assertNotIn('ProtocolId', header)
+        self.assertNotIn('Grease', header)
 
     def test_pattern_tests_follow_any_pattern(self):
         self.assertEqual(['    return (value & 0x0F0FU) == 0x0A0AU &&',
@@ -5490,7 +5520,7 @@ class RegisterIds(unittest.TestCase):
     def test_unusable_registers_are_refused(self):
         def point(registry, value, **extra):
             return self.entry('cerid.x', 'net', {'registry': registry, 'name': 'x', 'value': value, **extra})
-        self.assert_refused([point('TLS Supported Groups', '0x11EC')], "registry 'TLS Supported Groups' has no type")
+        self.assert_refused([point('TLS Cipher Suites', '0x1301')], "registry 'TLS Cipher Suites' has no type")
         self.assert_refused([point('QUIC Versions', '1x5')], "value '1x5' is neither hexadecimal")
         self.assert_refused([point('QUIC Versions', '0x1FFFFFFFF')], 'does not fit u32')
         self.assert_refused([point('Cerid protocol identifiers', '0x10000')], 'does not fit u16')
@@ -5508,8 +5538,19 @@ class RegisterIds(unittest.TestCase):
                                                   'value': '0x1A1A'}),
                     self.entry('cerid.g', 'net', {'registry': 'Cerid GREASE values', 'name': 'g', 'value': '0x?A?A'})]
         self.assert_refused(reserved, 'lies in a reserved pattern')
-        self.assert_refused(self.entries(), 'registered owners crypto own codepoints and have no output',
-                            modules=('core', 'net', 'crypto'))
+        self.assert_refused([point('Object identifiers', '2.16.x')], "'2.16.x' is not a dotted object identifier")
+        self.assert_refused([point('Object identifiers', '02.16')], "'02.16' is not a dotted object identifier")
+        self.assert_refused([point('Cerid algorithm identifiers', '0x0901')], 'is not a class byte of ALGORITHM_CLASSES')
+        self.assert_refused([point('Cerid algorithm identifiers', '0x0300')], 'followed by a nonzero number')
+        self.assert_refused([point('Cerid algorithm identifiers', '0x0301', verified=False)], 'cannot be unverified')
+        algorithms = [self.entry('crypto.a', 'net', {'registry': 'Cerid algorithm identifiers', 'name': 'a',
+                                                     'value': '0x0101'}),
+                      self.entry('crypto.b', 'net', {'registry': 'Cerid algorithm identifiers', 'name': 'b',
+                                                     'value': '0x0101'})]
+        self.assert_refused(algorithms, 'two Cerid algorithm identifiers share a value')
+        audio = [self.entry('media.x', 'audio', {'registry': 'QUIC Versions', 'name': 'x', 'value': '0x1'})]
+        self.assert_refused(audio, 'registered owners audio own codepoints and have no output',
+                            modules=('core', 'net', 'audio'))
 
 
 class AbBoard(unittest.TestCase):

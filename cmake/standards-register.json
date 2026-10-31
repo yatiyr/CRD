@@ -319,6 +319,35 @@
       "note": "GREASE values follow the RFC 8701 pattern (0x0A0A, 0x1A1A ... 0xFAFA, the same digit in each ?): reserved as extension identifiers and as version majors, never assigned, and sent by every build, shipping included."
     },
     {
+      "id": "cerid.policy-generation",
+      "title": "Cerid crypto policy generation: signed, monotonic, dated algorithm windows with an offline grace period",
+      "kind": "format",
+      "state": "implemented",
+      "owner": "crypto",
+      "rows": [
+        "NET-STD"
+      ],
+      "spec": {
+        "type": "cerid",
+        "ref": "docs/design/network-foundation.md#policy-wire",
+        "revision": "1",
+        "status": "design"
+      },
+      "source": {
+        "ref": "docs/design/network-foundation.md#policy-wire",
+        "read": "2026-10-31",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [
+        "tests/foundation/crypto/test_policy.cpp",
+        "tests/foundation/crypto/test_register_ids.cpp",
+        "tests/foundation/crypto/fuzz/fuzz_policy.cpp"
+      ],
+      "deprecation": null,
+      "note": "Names algorithms only by their Cerid algorithm identifiers, so a provider swap or an unverified IANA value never changes a signed artefact. NET.2 issues the first generation and its offline keys."
+    },
+    {
       "id": "ietf.grease",
       "title": "Applying GREASE to TLS extensibility",
       "kind": "guidance",
@@ -1232,6 +1261,7 @@
       "state": "planned",
       "owner": "crypto",
       "rows": [
+        "NET-STD",
         "NET.2"
       ],
       "spec": {
@@ -1240,6 +1270,21 @@
         "status": "current"
       },
       "codepoints": [
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "x25519-mlkem768",
+          "value": "0x0101"
+        },
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "secp256r1-mlkem768",
+          "value": "0x0102"
+        },
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "secp384r1-mlkem1024",
+          "value": "0x0103"
+        },
         {
           "registry": "TLS Supported Groups",
           "name": "X25519MLKEM768",
@@ -1268,6 +1313,66 @@
       "evidence": [],
       "deprecation": null,
       "note": "X25519MLKEM768 preferred, SecP384r1MLKEM1024 for high assurance (NET.2)."
+    },
+    {
+      "id": "crypto.ecdh",
+      "title": "Elliptic-curve Diffie-Hellman: X25519 and the NIST curves P-256 and P-384",
+      "kind": "algorithm",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "NET-STD",
+        "NET.2"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 7748",
+        "status": "current"
+      },
+      "codepoints": [
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "x25519",
+          "value": "0x0201"
+        },
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "secp256r1",
+          "value": "0x0202"
+        },
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "secp384r1",
+          "value": "0x0203"
+        },
+        {
+          "registry": "TLS Supported Groups",
+          "name": "x25519",
+          "value": "0x001D",
+          "verified": false
+        },
+        {
+          "registry": "TLS Supported Groups",
+          "name": "secp256r1",
+          "value": "0x0017",
+          "verified": false
+        },
+        {
+          "registry": "TLS Supported Groups",
+          "name": "secp384r1",
+          "value": "0x0018",
+          "verified": false
+        }
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#crypto",
+        "read": "2026-10-31",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The traditional components of the hybrids and the classical-only groups a policy generation refuses by date (first for Cerid services, everywhere by 2030; NET.2 sets the dates). RFC 7748 defines X25519; the NIST curves are FIPS 186-5 and SP 800-186."
     },
     {
       "id": "tls.ech",
@@ -1397,6 +1502,261 @@
       "review": "2027-10-27",
       "evidence": [],
       "deprecation": null
+    },
+    {
+      "id": "crypto.ml-dsa",
+      "title": "Module-lattice-based digital signature standard (ML-DSA)",
+      "kind": "algorithm",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "NET-STD",
+        "NET.2"
+      ],
+      "spec": {
+        "type": "nist",
+        "ref": "FIPS 204",
+        "posted": "2024-08-13",
+        "status": "final"
+      },
+      "codepoints": [
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "ml-dsa-44",
+          "value": "0x0301"
+        },
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "ml-dsa-65",
+          "value": "0x0302"
+        },
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "ml-dsa-87",
+          "value": "0x0303"
+        }
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#crypto",
+        "read": "2026-10-31",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Pure ML-DSA with an empty context string; its X.509 use is pki.ml-dsa. Policy generations are signed by an ML-DSA key and a traditional key together (network foundation D7)."
+    },
+    {
+      "id": "crypto.eddsa",
+      "title": "Edwards-curve digital signature algorithm: Ed25519",
+      "kind": "algorithm",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "NET-STD",
+        "NET.2"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 8032",
+        "status": "current"
+      },
+      "codepoints": [
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "ed25519",
+          "value": "0x0401"
+        },
+        {
+          "registry": "TLS SignatureScheme",
+          "name": "ed25519",
+          "value": "0x0807",
+          "verified": false
+        }
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#crypto",
+        "read": "2026-10-31",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Pure Ed25519."
+    },
+    {
+      "id": "crypto.ecdsa",
+      "title": "Elliptic-curve digital signature algorithm over P-256 and P-384",
+      "kind": "algorithm",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "NET-STD",
+        "NET.2"
+      ],
+      "spec": {
+        "type": "nist",
+        "ref": "FIPS 186-5",
+        "posted": "2023-02-03",
+        "status": "final"
+      },
+      "codepoints": [
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "ecdsa-secp256r1-sha256",
+          "value": "0x0402"
+        },
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "ecdsa-secp384r1-sha384",
+          "value": "0x0403"
+        },
+        {
+          "registry": "TLS SignatureScheme",
+          "name": "ecdsa_secp256r1_sha256",
+          "value": "0x0403",
+          "verified": false
+        },
+        {
+          "registry": "TLS SignatureScheme",
+          "name": "ecdsa_secp384r1_sha384",
+          "value": "0x0503",
+          "verified": false
+        }
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#crypto",
+        "read": "2026-10-31",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The traditional companion where a hardware key store holds no Ed25519 key."
+    },
+    {
+      "id": "crypto.aes-gcm",
+      "title": "AES in Galois/counter mode as an authenticated encryption algorithm",
+      "kind": "algorithm",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "NET-STD",
+        "NET.2"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 5116",
+        "status": "current"
+      },
+      "codepoints": [
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "aes-128-gcm",
+          "value": "0x0501"
+        },
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "aes-256-gcm",
+          "value": "0x0502"
+        },
+        {
+          "registry": "AEAD Algorithms",
+          "name": "AEAD_AES_128_GCM",
+          "value": "1",
+          "verified": false
+        },
+        {
+          "registry": "AEAD Algorithms",
+          "name": "AEAD_AES_256_GCM",
+          "value": "2",
+          "verified": false
+        }
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#crypto",
+        "read": "2026-10-31",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Chosen over ChaCha20-Poly1305 where the CPU has AES and carry-less multiply instructions (NET.2)."
+    },
+    {
+      "id": "crypto.chacha20-poly1305",
+      "title": "ChaCha20 and Poly1305 as an authenticated encryption algorithm",
+      "kind": "algorithm",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "NET-STD",
+        "NET.2"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 8439",
+        "status": "current"
+      },
+      "codepoints": [
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "chacha20-poly1305",
+          "value": "0x0503"
+        },
+        {
+          "registry": "AEAD Algorithms",
+          "name": "AEAD_CHACHA20_POLY1305",
+          "value": "29",
+          "verified": false
+        }
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#crypto",
+        "read": "2026-10-31",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Chosen where the CPU lacks AES instructions (NET.2)."
+    },
+    {
+      "id": "crypto.hkdf",
+      "title": "HMAC-based extract-and-expand key derivation (HKDF)",
+      "kind": "algorithm",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "NET-STD",
+        "NET.2"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 5869",
+        "status": "current"
+      },
+      "codepoints": [
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "hkdf-sha256",
+          "value": "0x0601"
+        },
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "hkdf-sha384",
+          "value": "0x0602"
+        }
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#crypto",
+        "read": "2026-10-31",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null,
+      "note": "With SHA-256 and SHA-384 (FIPS 180-4)."
     },
     {
       "id": "pki.merkle-tree-certificates",
@@ -1767,7 +2127,9 @@
         "NET-STD",
         "NET.2"
       ],
-      "evidence": []
+      "evidence": [
+        "tests/foundation/crypto/test_register_ids.cpp"
+      ]
     },
     {
       "section": "2.2",
@@ -1786,7 +2148,9 @@
         "NET-STD",
         "NET.2"
       ],
-      "evidence": []
+      "evidence": [
+        "tests/foundation/crypto/test_policy.cpp"
+      ]
     },
     {
       "section": "2.4",
@@ -1814,7 +2178,9 @@
       "rows": [
         "NET-STD"
       ],
-      "evidence": []
+      "evidence": [
+        "tests/foundation/crypto/test_policy.cpp"
+      ]
     },
     {
       "section": "2.7",

@@ -333,6 +333,58 @@ readers (OPS.2 owns the N-1 bundle reader). NET-STD implements the mechanism and
   NIST IR 8547 once final; NET.2 sets the dates.
 - RFC 7696 is the checklist; NET-STD records each item's evidence.
 
+<a id="policy-wire"></a>
+### The policy generation
+
+`crd-crypto` implements the mechanism in [policy.hpp](../../engine/foundation/crypto/include/crd/crypto/policy.hpp)
+(NET-STD, 2026-10-31); NET.2 issues the first generation, holds the offline keys and sets the dates. Algorithms are
+named only by their Cerid algorithm identifiers ([registers](registers.md#cerid-identifiers), generated into
+[register_ids.hpp](../../engine/foundation/crypto/include/crd/crypto/register_ids.hpp)), never by an IANA value or a
+provider constant, so a provider swap or a corrected IANA value never changes a signed generation. Every integer is
+big-endian.
+
+| Part | Layout |
+|---|---|
+| Body (signed) | magic `CRDPOLCY` (8 bytes), format (u8), generation (u64), issued, expires (u64 Unix seconds), offline grace (u32 seconds), minimum count (u8) and each protocol, major and minor (u16, u16, u16), rule count (u8) and each algorithm (u16) with accepted-from, preferred-from, preferred-until and refused-from (u64 each) |
+| Signatures | count (u8), each key identifier (32 bytes, the SHA-256 of the public key), algorithm (u16), length (u16) and bytes |
+
+Every signature covers the body exactly as received. The magic separates the domain: no other Cerid signed artefact
+begins with it, so a signature over one never verifies as another, whatever the provider.
+
+Decisions (numbered for the tests and the fuzz oracle):
+
+1. **Hybrid trust.** An installation trusts 2 to 4 keys, at least one post-quantum and one traditional signature
+   algorithm (D7), and every one of them must sign every generation: a missing signature is refused before a wrong
+   one is judged, in the trust set's order. Signatures by other keys are ignored, so a later build can add a key
+   without breaking an older one. A signature labelled with another algorithm than its key's is refused.
+2. **Monotonic numbers.** A generation below the newest one the installation ever accepted (the floor, persisted by
+   the caller and passed back at start, so a restart cannot be rolled back) is refused before any signature is
+   verified, which keeps a replay of old generations cheap. The current number again is `AlreadyCurrent` when its
+   content is equal (signature bytes may differ, signing can be randomised) and a `Conflict` otherwise, reported only
+   after its signatures verify, so a forgery never raises the conflict alarm. A newer number issued before the current
+   generation is refused.
+3. **Dates.** A generation is valid from issue to expiry (at most 400 days) and usable for its offline grace period
+   after that (at most 90 days); one issued more than 300 seconds after the caller's clock, or already past its
+   grace period, is refused. Past the grace period every algorithm is refused until a newer generation arrives, so
+   networked features require an update.
+4. **Windows.** An algorithm is accepted in `[accepted_from, refused_from)` and preferred in `[preferred_from,
+   preferred_until)`, with `accepted_from <= preferred_from <= preferred_until <= refused_from` and a non-empty
+   accepted window; outside it, or without a rule, it is refused. Dated refusals (classical-only key exchange first for
+   Cerid services and everywhere by 2030) are rules whose `refused_from` NET.2 sets.
+5. **Remote disable.** A generation whose rule refuses an algorithm from its own issue time, or that drops the rule,
+   disables it at the next session; distribution is the update channel's (T19).
+6. **The build's ceiling.** A rule takes effect only for an algorithm the build's providers implement. A generation
+   therefore cannot enable anything a reviewed build does not hold (additions are reviewed releases, D7), while a
+   removal reaches every build at once. Unknown identifiers decode and are ignored.
+7. **Live swap.** A session takes a `PolicySnapshot` (a value) when it starts and keeps it until its next key update;
+   applying a generation changes only what later snapshots hold. `PolicyStore` serialises `apply` and `snapshot`
+   across threads and verifies signatures outside its lock.
+8. **Bounds.** At most 16 protocol minimums, 32 rules, 8 signatures of 1 to 8192 bytes (room for SLH-DSA-128s) and
+   32 KiB per generation; each algorithm and protocol at most once and each key at most once among the signatures.
+   Decoding is exact (a short field, a count or a length above its bound and a byte after the last field are each
+   refused with their own error) and allocates nothing. The layout has its own format byte with an N-1 reader, as the
+   negotiation's.
+
 <a id="path-privacy"></a>
 ## Paths, metadata privacy and faulty peers
 
@@ -360,7 +412,9 @@ NAT traversal, relays' client side and capture. No other module opens a socket.
 
 <a id="d2"></a>**D2.** Cryptography has its own foundation owner, `crd-crypto`, because its consumers are wider than
 the network: SUPPLY signing, policy and rule generations, crash pack protection and the key store. `crd-net`
-depends on it; it depends on no network code.
+depends on it; it depends on no network code. NET-STD created the module with the algorithm identifiers, the
+signature verification interface and the policy generations (2026-10-31); NET.2 adds the providers behind that
+interface.
 
 <a id="d3"></a>**D3.** Game and project traffic are separate session types with separate protocol identifiers, key
 labels, schemas and authorisation contexts; only transport, admission and cryptography are shared.
@@ -382,10 +436,10 @@ reviewed releases, removals may be pushed at once.
 
 | Clause | Implemented and proven by |
 |---|---|
-| Standards register ([contract](registers.md)), negotiation, GREASE, algorithm identifiers, policy generation mechanism | [NET-STD](../ROADMAP.md#slice-net-std) |
+| Standards register ([contract](registers.md)), negotiation, GREASE, algorithm identifiers, the verification interface, policy generation mechanism ([wire](#policy-wire)) | [NET-STD](../ROADMAP.md#slice-net-std) |
 | Legal register entries for every networked flow | [COMPLY.0](../ROADMAP.md#slice-comply.0) |
 | Cryptography inventory and export classification | [COMPLY.1](../ROADMAP.md#slice-comply.1) |
-| `crd-crypto`, handshakes, capabilities, keys, MLS, ECH, the verified model | [NET.2](../ROADMAP.md#slice-net.2) |
+| `crd-crypto` providers, the first policy generation and its offline keys, handshakes, capabilities, keys, MLS, ECH, the verified model | [NET.2](../ROADMAP.md#slice-net.2) |
 | Network math (FEC, estimators, quantisation) | [HESAP-NET](../ROADMAP.md#slice-hesap-net) |
 | Schemas, wire format, admission stages S6 and S7, padding policies | [NET.3](../ROADMAP.md#slice-net.3) |
 | Adversarial and load evidence, fuzzing, interop, admission budgets | [NET.4](../ROADMAP.md#slice-net.4) |

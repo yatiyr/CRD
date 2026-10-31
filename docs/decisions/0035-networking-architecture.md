@@ -208,3 +208,12 @@ boundaries and a threat catalogue across every product class; signed, expiring, 
 authorisation separate from authentication; game and project traffic as separate session types; eight bounded
 admission stages; browser constraints; the cryptographic provider policy with a new `crd-crypto` owner beside
 `crd-net`; version and extension negotiation with GREASE; and monotonic, signed crypto policy generations.
+
+## Note 2026-10-31: crd-crypto exists
+
+NET-STD's policy generations created `crd-crypto` (decision D2) before NET.2: the Cerid algorithm identifiers
+generated from the standards register (one class byte per algorithm family), the signature verification interface
+every provider implements and the signed, monotonic policy generation with its numbered adoption rules
+([wire and decisions](../design/network-foundation.md#policy-wire)). Signed artefacts name algorithms only by those
+identifiers, so a provider swap or a corrected IANA value never changes one. NET.2 adds the providers, the first
+generation and its offline keys behind the same interface.
