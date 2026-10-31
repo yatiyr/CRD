@@ -41,9 +41,19 @@ class FirebaseTestLab:
             command = ['gcloud', 'firebase', 'test', 'android', 'run', '--project', project, '--type', kind,
                        '--app', artifact, '--device', spec]
         command += ['--timeout', timeout, '--format', 'json']
+        if self.environ.get('CERID_FTL_RESULTS_BUCKET'):
+            command += ['--results-bucket', self.environ['CERID_FTL_RESULTS_BUCKET']]
         if results_dir:
             command += ['--results-dir', results_dir]
         return command
+
+    def results_command(self, results_dir, local):
+        """Download a finished test's results tree (its screenshots under `artifacts/`) from the results bucket, for
+        the gold manifest (`python ci/coordinator/gold.py ftl-manifest --results <local> --device <id> --out ...`)."""
+        bucket = self.environ.get('CERID_FTL_RESULTS_BUCKET')
+        if not bucket:
+            raise RuntimeError('CERID_FTL_RESULTS_BUCKET must name the Test Lab results bucket (the screenshots)')
+        return ['gcloud', 'storage', 'cp', '--recursive', 'gs://%s/%s' % (bucket, results_dir.strip('/')), str(local)]
 
     def quota_left(self, store, device, today=None):
         today = today or dt.date.today().isoformat()

@@ -25,7 +25,7 @@ import time
 import traceback
 import urllib.parse
 
-from coordinator import PROTOCOL, VERSION, auth, hosts, quality, reports, state, steps
+from coordinator import PROTOCOL, VERSION, auth, gold, hosts, quality, reports, state, steps
 from coordinator.scheduler import NotFound, Refused, PREFIX
 
 CI = Path(__file__).resolve().parents[1]
@@ -471,6 +471,24 @@ def make_handler(service, surfaces=SURFACES, ui=None):
             if rest == 'quality/release' and method == 'POST':
                 body = self.json_body()
                 return self.send(200, quality.release(c, body['lane'], body['test'], user))
+            if rest == 'gold':
+                pending = (c.get('gold/pending.json') or {}).get('results', [])
+                include = ('untriaged', 'fail', 'pass') if query.get('all') else ('untriaged',)
+                return self.send(200, {'items': gold.triage_queue(c, include=include), 'pending': len(pending),
+                                       'findings': sorted(gold.findings(c), key=lambda f: -f['at'])[:20]})
+            match = re.match(r'^gold/(image|diff)/([0-9a-f]{64})(?:/([0-9a-f]{64})/([0-9a-f]{12}))?$', rest)
+            if match and method == 'GET':
+                kind, first, second, key = match.groups()
+                name = gold.blob_name(first) if kind == 'image' else (
+                    gold.diff_name(first, second) + '-%s.png' % key if second else None)
+                data = c.store.get(name) if name else None
+                if data is None:
+                    raise NotFound('gold %s' % kind)
+                return self.send(200, data, 'image/png')
+            if rest == 'gold/triage' and method == 'POST':
+                body = self.json_body()
+                return self.send(200, gold.triage(c, body.get('grouping'), body.get('digest'), body.get('expected'),
+                                                  body.get('label'), user, body.get('note', '')))
             if rest == 'qual':
                 if service.qual_data is None:
                     raise HttpError(404, 'the QUAL matrix is not configured')

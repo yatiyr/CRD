@@ -515,7 +515,7 @@ def cmd_job_reproduce(ctx, call=None):
     if not source.exists():
         code = call(['git', '-C', str(ROOT), 'worktree', 'add', '--detach', str(source), commit])
         if code:
-            raise OpsError('git worktree add failed (%d)' % code, 'fetch the commit first: git fetch origin %s' % commit)
+            raise OpsError('git worktree add failed (%d)' % code, 'fetch the commit: git fetch origin %s' % commit)
     argv = [sys.executable, 'ci/pipeline.py', 'lane', '--preset', preset, '--device', device]
     pattern = diagnostics.regex_for((summary or {}).get('failed_tests') or [])
     if pattern:

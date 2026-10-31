@@ -60,6 +60,7 @@ KINDS = {
     'gpu-validation': ('GPU validation', False),
     'summary': ('Diagnostics summary', False),
     'gold-image': ('Rendered image', False),
+    'gold-manifest': ('Gold manifest', False),
     'junit': ('Test results', False),
     'test-log': ('Test log', False),
     'evidence': ('Evidence', False),
@@ -111,6 +112,8 @@ def artifact_kind(path):
             return parts[index + 1]
         if parts[-1] == 'summary.json':
             return 'summary'
+    if 'gold' in parts[:-1] and parts[-1] == 'manifest.json':
+        return 'gold-manifest'
     if 'gold' in parts[:-1] and parts[-1].lower().endswith('.png'):
         return 'gold-image'
     name = parts[-1]

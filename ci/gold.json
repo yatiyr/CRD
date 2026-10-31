@@ -1,0 +1,22 @@
+{
+  "schema": "cerid-gold-policy/1",
+  "note": "Gold image policy (ADR-0135 §17, ci/coordinator/gold.py). defaults apply to every test; each tests entry whose match (an fnmatch pattern) matches a test name overrides them, in order. group_by names the keys besides the test that select a baseline set (api by default; add device_class or device where baselines differ per device class). mode is decided by the device (exact on a software GPU, perceptual otherwise) unless a test declares it. Perceptual passes need all of (one sRGB level of noise everywhere measures a mean FLIP of about 0.018 at 67 pixels per degree): mean LDR-FLIP <= flip_mean, the share of pixels with FLIP > flip_pixel <= flip_area, SSIM >= ssim_min. max_pixels bounds the pure-Python comparison (an integer box downsample above it; 512x512 takes about 6 s). viewing gives the viewing distance in metres per device kind for the pixels per degree of a device with screen data; any other device uses FLIP's 67 pixels per degree.",
+  "defaults": {
+    "group_by": ["api"],
+    "flip_mean": 0.02,
+    "flip_pixel": 0.1,
+    "flip_area": 0.002,
+    "ssim_min": 0.98,
+    "max_pixels": 262144
+  },
+  "viewing": {
+    "phone": 0.3,
+    "tablet": 0.4,
+    "laptop": 0.5,
+    "emulator": 0.3,
+    "simulator": 0.3
+  },
+  "tests": [
+    {"match": "app-launch.*", "group_by": ["api", "device_class"], "flip_mean": 0.02, "flip_area": 0.01, "ssim_min": 0.95}
+  ]
+}

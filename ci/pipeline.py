@@ -1474,7 +1474,8 @@ class Lane:
             self.diagnostics_summary = self.diagnostics()
         if self.env.get('CERID_CI'):
             self.run(agent_tool('artifact', 'upload', 'build/*/evidence/**/*;build/**/Testing/Temporary/*.log;'
-                                'build/**/Testing/Temporary/*.xml;build/*/diagnostics/**/*', environ=self.env),
+                                'build/**/Testing/Temporary/*.xml;build/*/diagnostics/**/*;build/*/gold/**/*',
+                                environ=self.env),
                      check=False)
 
     def diagnostics(self):

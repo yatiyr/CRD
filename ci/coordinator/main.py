@@ -20,7 +20,7 @@ CI = Path(__file__).resolve().parents[1]
 if str(CI) not in sys.path:
     sys.path.insert(0, str(CI))
 
-from coordinator import auth, dispatch, scheduler, service, triggers  # noqa: E402
+from coordinator import auth, dispatch, gold, scheduler, service, triggers  # noqa: E402
 
 CONFIG = CI / 'coordinator.json'
 SCHEMA = 'cerid-ci-coordinator/1'
@@ -155,8 +155,9 @@ def build(config, environ, store=None, log=None):
             'mirror': mirror}
 
 
-def qual_renderer(store, registry):
-    """The device x feature matrix as data, for the web UI's own QUAL page."""
+def qual_renderer(store, registry, coordinator=None):
+    """The device x feature matrix as data, for the web UI's own QUAL page; with the coordinator, each cell carries
+    its gold verdict (an untriaged image makes a passing cell `triage`, coordinator/gold.py)."""
     p = scheduler.pipeline_module()
     module = dashboard_module()
 
@@ -171,7 +172,8 @@ def qual_renderer(store, registry):
                              'os': '%s %s' % (d['os']['name'], d['os']['version']), 'arch': d['cpu']['arch'],
                              'gpu': d['gpu']['model'], 'executor': d['executor'], 'features': d['features']}
                             for d in registry['devices']],
-                'cells': document['cells'], 'regressions': document['regressions'], 'budget': document['budget']}
+                'cells': gold.overlay(coordinator, document['cells']) if coordinator else document['cells'],
+                'regressions': document['regressions'], 'budget': document['budget']}
     return data
 
 
@@ -261,11 +263,12 @@ def main(argv=None):
     web = service.Service(c, ui, config, registry=parts['registry'],
                           identity=identity_verifier(config, os.environ), mirror=parts['mirror'],
                           dashboard=dashboard_renderer(parts['store'], parts['registry']),
-                          qual_data=qual_renderer(parts['store'], parts['registry']))
+                          qual_data=qual_renderer(parts['store'], parts['registry'], c))
     loop = service.Loop(c, parts['dispatcher'], interval=args.interval, poll=lambda: triggers.poll(c),
                         schedules=lambda: triggers.schedules(c),
                         quality=quality_work(c, parts['registry'], parts['mirror'], config))
     loop.start()
+    gold.Worker(c, parts['registry'], seconds=float(config.get('gold', {}).get('interval_seconds', 30))).start()
     servers = [service.serve(web, host, port, surfaces, ui_auth(config, dict(os.environ, CERID_CI_UI_MODE=mode), host)
                              if mode else None) for host, port, surfaces, mode in bound]
     for server in servers[1:]:

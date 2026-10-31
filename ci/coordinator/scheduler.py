@@ -807,6 +807,9 @@ class Coordinator:
                        if not (e['job'] == job_id and e['attempt'] == job['attempt'] and e['path'] == path)]
             return {'entries': entries + [entry]}
         self.update('artifacts/%d/manifest.json' % job['build'], change)
+        if entry['kind'] == 'gold-manifest':
+            from coordinator import gold
+            gold.register_manifest(self, job, entry, data)
         return entry
 
     def artifacts(self, number):

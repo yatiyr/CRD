@@ -1,5 +1,5 @@
 """Notifications of the Cerid orchestrator (ADR-0135 §16): failure, recovery, budget, flaky quarantine and its
-expiry, first-bad-commit results.
+expiry, first-bad-commit results, gold images to triage and rejected ones.
 
 Two channel kinds, both outbound only, nothing exposed: email through the operator's own provider (SMTP with
 STARTTLS or implicit TLS; the password is a Secret Manager secret) and a self-hosted ntfy server (reachable on the
@@ -15,7 +15,7 @@ import smtplib
 import ssl
 import urllib.request
 
-EVENTS = ('failure', 'recovery', 'budget', 'flaky', 'quarantine_expired', 'bisect')
+EVENTS = ('failure', 'recovery', 'budget', 'flaky', 'quarantine_expired', 'bisect', 'gold')
 
 
 def email(channel, secrets, title, body, smtp=smtplib.SMTP, smtp_ssl=smtplib.SMTP_SSL):
