@@ -23,8 +23,8 @@
 //       docs/bench/README.md#fast-ab-boards.
 
 #include <crd/containers/array.hpp>
-#include <crd/containers/hash.hpp>
 #include <crd/core/cpu_features.hpp>
+#include <crd/core/fnv1a.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/fft/fft.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -174,7 +174,7 @@ bool board(crd::memory::IAllocator* alloc, int lg, const Arm* arms, usize arm_co
         reset();
         arms[a].plan->execute(cont::Span<Complex<f32>>(work.data(), n), fft::FftDirection::Forward);
         err[a] = max_rel(work.data(), data.truth.data(), n);
-        bits[a] = crd::containers::fnv1a_64(work.data(), n * sizeof(Complex<f32>));
+        bits[a] = crd::fnv1a_64(work.data(), n * sizeof(Complex<f32>));
     }
     reset();
     DftiComputeForward(h, work.data());
@@ -288,7 +288,7 @@ int loop(crd::memory::TlsfAllocator& alloc, int lg, const char* side, long itera
     };
     transform();
     const double err = copy ? 0.0 : max_rel(work.data(), data.truth.data(), n);
-    const crd::u64 bits = crd::containers::fnv1a_64(work.data(), n * sizeof(Complex<f32>));
+    const crd::u64 bits = crd::fnv1a_64(work.data(), n * sizeof(Complex<f32>));
     int status = 0;
     if (err > bound(n))
     {

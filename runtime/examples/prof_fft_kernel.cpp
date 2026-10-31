@@ -7,7 +7,7 @@
 // the phase counters.
 
 #include <crd/containers/array.hpp>
-#include <crd/containers/hash.hpp>
+#include <crd/core/fnv1a.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/fft/fft.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -45,7 +45,7 @@ template <typename T> void run(int lg, long iters, fft::FftDirection dir)
     once.resize(n);
     std::memcpy(once.data(), work.data(), n * sizeof(Complex<T>));
     plan.execute(cont::Span<Complex<T>>(once.data(), n), dir);
-    const crd::u64 bits = crd::containers::fnv1a_64(once.data(), n * sizeof(Complex<T>));
+    const crd::u64 bits = crd::fnv1a_64(once.data(), n * sizeof(Complex<T>));
 
     const auto t0 = std::chrono::steady_clock::now();
     for (long it = 0; it < iters; ++it)
