@@ -442,7 +442,8 @@ The user creates the firewall rule once (an ingress change is a user action): `g
 cerid-bench-iap --project=cerid-ci --network=default --direction=INGRESS --action=ALLOW --rules=tcp:22
 --source-ranges=35.235.240.0/20 --target-tags=cerid-bench`. Then, from the repository on the user's computer:
 `python ci/bench_vm.py create` makes the spot `c4-standard-8` with its performance counters on and leaves it stopped;
-`start`, `sync`, `run [--detach NAME] -- COMMAND`, `wait NAME`, `fetch` and `stop` drive it. It runs only while a
+`start`, `sync`, `run [--detach NAME] -- COMMAND`, `wait NAME`, `fetch` and `stop` drive it. `--name cerid-track-<x>`
+makes and drives a development track's machine the same way. It runs only while a
 batch needs it and stops itself after ten hours of one run.
 
 *Check:* `python ci/bench_vm.py status` reports `TERMINATED` between batches.

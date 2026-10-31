@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ci/bench_vm.py: the benchmark machine of the optimization track (SIMD-PERF, user order 2026-10-31).
 
-Usage: python ci/bench_vm.py <command> [options]
+Usage: python ci/bench_vm.py [--name MACHINE] <command> [options]
 
   create                 make the machine (once), then leave it stopped
   start | stop | status  power it on (and wait for SSH) | power it off | its state and this run's hours
@@ -14,7 +14,8 @@ Usage: python ci/bench_vm.py <command> [options]
                          with its status, or 124 while it still runs (call wait again)
   fetch REMOTE LOCAL     copy a file or directory from the machine (paths under ~ are relative to it)
 
-One spot c4-standard-8 (Intel Emerald Rapids, AVX-512) in the cerid-ci project, booted from the CI's Linux image
+--name picks the machine (default cerid-bench, the optimization track's; each development track has its own, such as
+cerid-track-b). One spot c4-standard-8 (Intel Emerald Rapids, AVX-512) in the cerid-ci project, booted from the CI's Linux image
 family, with the guest's hardware performance counters on (the standard PMU: perf stat, top-down
 analysis and sampling profiles see the core counters), with no service account (it holds no Google credential) and reached only through IAP (firewall rule
 cerid-bench-iap, tag cerid-bench). The code reaches it as git bundles over that tunnel, never with a token: the first
@@ -74,7 +75,7 @@ def create_command():
             '--max-run-duration', '%dh' % MAX_RUN_HOURS, '--image-family', IMAGE_FAMILY, '--image-project', PROJECT,
             '--boot-disk-size', '%dGB' % DISK_GB, '--boot-disk-type', DISK_TYPE, '--tags', TAG,
             '--no-service-account', '--no-scopes', '--network-interface', 'nic-type=GVNIC',
-            '--labels', 'cerid-track=simd-perf', '--performance-monitoring-unit', PMU]
+            '--labels', 'cerid-track=' + NAME, '--performance-monitoring-unit', PMU]
 
 
 def ssh_command(remote):
@@ -229,7 +230,9 @@ class BenchVm:
 
 
 def main(argv=None):
+    global NAME
     parser = argparse.ArgumentParser(prog='bench_vm.py', description=__doc__.splitlines()[0])
+    parser.add_argument('--name', default=NAME, help='the machine (default %(default)s)')
     sub = parser.add_subparsers(dest='command', required=True)
     for name in ('create', 'start', 'stop', 'status'):
         sub.add_parser(name)
@@ -245,6 +248,9 @@ def main(argv=None):
     fetch.add_argument('remote')
     fetch.add_argument('local')
     args = parser.parse_args(argv)
+    if not args.name.startswith(('cerid-bench', 'cerid-track-')):
+        parser.error('--name must start with cerid-bench or cerid-track- (the firewall tag and the CI sweep rely on it)')
+    NAME = args.name
     vm = BenchVm()
     try:
         if args.command == 'status':
