@@ -5,8 +5,11 @@ Each register is a JSON file beside the module registry (cmake/<domain>-register
 An entry names what Cerid implements, plans or watches, its owning module, the ROADMAP rows that implement it, its
 primary source with the date it was read, the date of its next review and the evidence that proves it. The
 standards domain (cmake/standards-register.json, NET-STD) adds the specification with its revision and status in the
-committed snapshot, the IANA or Cerid codepoints and the RFC 7696 agility checklist. docs/design/registers.md is the
-contract; COMPLY.0 adds the legal domain to this guard, never a second one.
+committed snapshot, the IANA or Cerid codepoints and the RFC 7696 agility checklist. The legal domain
+(cmake/legal-register.json, COMPLY.0) adds the instrument and article with its jurisdiction, its official primary
+source and the consolidated version read, the obligation in plain words, the products, data flows and channels
+(scopes) it applies to, the check that proves it, its effective and sunset dates and a counsel-review flag.
+docs/design/registers.md is the contract.
 
 The guard fails, among the format errors, on:
   - a pinned draft (an implemented or planned entry) that has expired in the snapshot: an Internet-Draft expires 185
@@ -18,7 +21,11 @@ The guard fails, among the format errors, on:
     scheduled re-research of scripts/register-review.py), or whose calendar names no event after the latest run;
   - an owning module neither registered nor in the capability registry, an unknown ROADMAP row, a governed row no
     entry names, an entry still planned when every one of its rows is Done, and an implemented entry without existing
-    evidence or with an unverified codepoint.
+    evidence or with an unverified codepoint;
+  - in the legal domain: a binding obligation (in force, not past its sunset, and applying to a live scope) without an
+    active check; a primary source outside its jurisdiction's official hosts; an entry whose rows are all Done, or
+    which is implemented, before its instrument was read in its consolidated text; an implemented entry whose counsel
+    review is outstanding; a scope still planned when its rows are Done; and a topic without a Turkish entry.
 
   python scripts/check-registers.py [--root <repository root>] [--today YYYY-MM-DD]
 """
@@ -32,7 +39,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = 'cerid-register/1'
-REGISTERS = {'standards': 'cmake/standards-register.json'}
+REGISTERS = {'standards': 'cmake/standards-register.json', 'legal': 'cmake/legal-register.json'}
 DRAFT_LIFETIME = datetime.timedelta(days=185)
 ID = re.compile(r'^[a-z0-9]+(?:[.-][a-z0-9]+)*$')
 DATE = re.compile(r'^\d{4}(?:-\d{2}(?:-\d{2})?)?$')
@@ -49,6 +56,11 @@ DOMAINS = {
         'entry_keys': {'spec', 'codepoints'},
         'kinds': {'protocol', 'extension', 'algorithm', 'format', 'guidance'},
     },
+    'legal': {
+        'register_keys': {'jurisdictions', 'scopes'},
+        'entry_keys': {'topic', 'instrument', 'obligation', 'applies_to', 'check', 'effective', 'sunset', 'counsel'},
+        'kinds': {'obligation', 'user-action'},
+    },
 }
 SPEC_STATUS = {
     'rfc': {'current', 'obsoleted'},
@@ -58,6 +70,21 @@ SPEC_STATUS = {
     'cerid': {'design', 'stable'},
 }
 HELD_DRAFT = {'iesg', 'rfc-editor'}
+# The legal domain: every topic but the platform and store policies holds a Turkish entry (Turkish law is a
+# first-class jurisdiction, never omitted).
+TOPICS = {'privacy', 'children', 'security', 'accessibility', 'export-control', 'ai', 'online-safety', 'consumer',
+          'age-rating', 'intellectual-property', 'communications', 'tax', 'payments', 'e-signature', 'platform'}
+TURKEY = 'TR'
+TOPICS_WITHOUT_JURISDICTION = {'platform'}
+INSTRUMENT_KEYS = {'name', 'article', 'type', 'jurisdiction', 'primary', 'consolidated'}
+INSTRUMENT_TYPES = {'law', 'regulation', 'directive', 'by-law', 'decision', 'code-of-practice', 'guidance', 'treaty',
+                    'policy', 'licence'}
+JURISDICTION = re.compile(r'^(?:[A-Z]{2}(?:-[A-Z0-9]{1,3})?|INT|PLATFORM)$')
+HOST = re.compile(r'^[a-z0-9-]+(?:\.[a-z0-9-]+)+$')
+SHA256 = re.compile(r'^[0-9a-f]{64}$')
+SCOPE_KINDS = {'product', 'flow', 'channel'}
+SCOPE_STATES = {'planned', 'live'}
+CHECK_STATES = {'active', 'planned'}
 
 _spec = importlib.util.spec_from_file_location('check_master_plan', Path(__file__).resolve().parent /
                                                'check-master-plan.py')
@@ -195,6 +222,146 @@ def codepoint_errors(where, entry):
     return errors
 
 
+def in_force(entry, today):
+    """Whether a legal entry's instrument applies on this day: effective, and not past its sunset."""
+    effective, sunset = parse_day(entry.get('effective')), parse_day(entry.get('sunset'))
+    return bool(effective) and effective <= today and not (sunset and sunset <= today)
+
+
+def live_scopes(entry, register):
+    """The scopes this legal entry applies to that are live: a product shipped, a flow leaving a machine, a channel
+    in use."""
+    live = {scope['id'] for scope in register.get('scopes') or [] if isinstance(scope, dict) and
+            scope.get('state') == 'live'}
+    return [scope for scope in entry.get('applies_to') or [] if scope in live]
+
+
+def host_of(url):
+    match = re.match(r'^https://([^/?#:]+)', url) if isinstance(url, str) else None
+    return match.group(1).lower() if match else None
+
+
+def instrument_errors(where, entry, register, context):
+    """The instrument: its name, article, type and jurisdiction, an https primary source on one of the jurisdiction's
+    official hosts, and the consolidated version once read (its version, day and the SHA-256 of the text read)."""
+    instrument = entry.get('instrument')
+    if not isinstance(instrument, dict) or set(instrument) != INSTRUMENT_KEYS:
+        return [f'{where}: instrument has {", ".join(sorted(INSTRUMENT_KEYS))}']
+    errors = []
+    for key in ('name', 'article'):
+        if not isinstance(instrument[key], str) or not instrument[key]:
+            errors.append(f'{where}: instrument.{key} is required')
+    if instrument['type'] not in INSTRUMENT_TYPES:
+        errors.append(f'{where}: instrument.type must be one of {sorted(INSTRUMENT_TYPES)}')
+    jurisdictions = register.get('jurisdictions') if isinstance(register.get('jurisdictions'), dict) else {}
+    jurisdiction = jurisdictions.get(instrument['jurisdiction'])
+    host = host_of(instrument['primary'])
+    if not isinstance(jurisdiction, dict):
+        errors.append(f'{where}: jurisdiction {instrument["jurisdiction"]!r} is not in the register\'s jurisdictions')
+    elif host is None:
+        errors.append(f'{where}: instrument.primary must be an https URL, not {instrument["primary"]!r}')
+    elif not any(host == official or host.endswith('.' + official) for official in jurisdiction.get('hosts', [])):
+        errors.append(f'{where}: primary source host {host} is not an official host of {instrument["jurisdiction"]} '
+                      f'({", ".join(jurisdiction.get("hosts", []))}); cite the official journal or regulator')
+    consolidated = instrument['consolidated']
+    if consolidated is not None:
+        if not isinstance(consolidated, dict) or set(consolidated) != {'version', 'read', 'sha256'} or \
+                not isinstance(consolidated.get('version'), str) or not consolidated['version'] or \
+                not isinstance(consolidated.get('sha256'), str) or not SHA256.match(consolidated['sha256']):
+            errors.append(f'{where}: instrument.consolidated is null until read, then version, read and the sha256 '
+                          'of the text read')
+        else:
+            errors += date_errors(where, 'instrument.consolidated.read', consolidated['read'])
+            if parse_day(consolidated['read']) and parse_day(consolidated['read']) > context.today:
+                errors.append(f'{where}: instrument.consolidated.read {consolidated["read"]} is after today')
+            if isinstance(entry.get('source'), dict) and entry['source'].get('verified') is not True:
+                errors.append(f'{where}: the consolidated text was read, so the source is verified')
+            if host and re.fullmatch(r'https://[^/?#]+/?', instrument['primary']):
+                errors.append(f'{where}: the consolidated text was read, so instrument.primary cites the '
+                              'instrument\'s own document, not the home page of its journal or regulator')
+    return errors
+
+
+def check_errors(where, check, context):
+    """The check that proves the obligation: active (it exists in the tree and runs, so CI fails when it fails) or
+    planned (its ref is the ROADMAP row that adds it)."""
+    if not isinstance(check, dict) or set(check) != {'ref', 'name', 'state'} or \
+            not all(isinstance(check.get(key), str) and check[key] for key in ('ref', 'name')):
+        return [f'{where}: check has ref, name and state']
+    if check['state'] not in CHECK_STATES:
+        return [f'{where}: check.state must be one of {sorted(CHECK_STATES)}']
+    errors = reference_errors(where, 'check', check['ref'], context.root)
+    on_roadmap = check['ref'].partition('#')[0] == 'docs/ROADMAP.md'
+    if check['state'] == 'planned' and not on_roadmap:
+        errors.append(f'{where}: a planned check cites the ROADMAP row that adds it (docs/ROADMAP.md#slice-...)')
+    elif check['state'] == 'active' and on_roadmap:
+        errors.append(f'{where}: an active check cites the test, script or step that runs it, not the ROADMAP')
+    return errors
+
+
+def legal_entry_errors(where, entry, register, context):
+    errors = []
+    if entry.get('topic') not in TOPICS:
+        errors.append(f'{where}: topic must be one of {sorted(TOPICS)}')
+    errors += instrument_errors(where, entry, register, context)
+    if not isinstance(entry.get('obligation'), str) or not entry['obligation']:
+        errors.append(f'{where}: obligation states the duty in plain words')
+    scopes = {scope.get('id') for scope in register.get('scopes') or [] if isinstance(scope, dict)}
+    applies_to = entry.get('applies_to')
+    if not isinstance(applies_to, list) or not applies_to:
+        errors.append(f'{where}: applies_to names the products, data flows and channels it governs')
+    else:
+        unknown = [scope for scope in applies_to if scope not in scopes]
+        if unknown:
+            errors.append(f'{where}: applies_to names unknown scopes {unknown}')
+    errors += check_errors(where, entry.get('check'), context)
+    state = entry.get('state')
+    effective_text = entry.get('effective')
+    if effective_text is None and state in PINNED:
+        errors.append(f'{where}: a pinned obligation names its effective date')
+    elif effective_text is not None and parse_day(effective_text) is None:
+        errors.append(f'{where}: effective must be YYYY, YYYY-MM or YYYY-MM-DD (the first day of a period counts), '
+                      f'not {effective_text!r}')
+    errors += date_errors(where, 'sunset', entry.get('sunset'), required=False)
+    effective, sunset = parse_day(entry.get('effective')), parse_day(entry.get('sunset'))
+    if effective and sunset and sunset <= effective:
+        errors.append(f'{where}: sunset {entry["sunset"]} is not after effective {entry["effective"]}')
+    counsel = entry.get('counsel')
+    if not isinstance(counsel, dict) or set(counsel) != {'needed', 'reviewed'} or \
+            not isinstance(counsel.get('needed'), bool):
+        errors.append(f'{where}: counsel has needed (true when interpretation needs counsel) and reviewed (its day)')
+        counsel = {'needed': False, 'reviewed': None}
+    else:
+        errors += date_errors(where, 'counsel.reviewed', counsel['reviewed'], required=False)
+        if parse_day(counsel['reviewed']) and parse_day(counsel['reviewed']) > context.today:
+            errors.append(f'{where}: counsel.reviewed {counsel["reviewed"]} is after today')
+        if counsel['reviewed'] and not counsel['needed']:
+            errors.append(f'{where}: counsel.reviewed records the review a needed flag asked for')
+    if errors:
+        return errors
+    check = entry['check']
+    read = entry['instrument']['consolidated'] is not None
+    if state in PINNED and sunset and sunset <= context.today:
+        errors.append(f'{where}: {entry["instrument"]["name"]} ended on {entry["sunset"]}; mark the entry deprecated')
+    live = live_scopes(entry, register)
+    if state in PINNED and live and in_force(entry, context.today) and check['state'] != 'active':
+        errors.append(f'{where}: binding since {entry["effective"]} on the live '
+                      f'{", ".join(live)} without an active check; land {check["name"]} first')
+    if state == 'implemented':
+        if check['state'] != 'active':
+            errors.append(f'{where}: implemented, so its check is active')
+        if not read:
+            errors.append(f'{where}: implemented before {entry["instrument"]["name"]} was read in its consolidated '
+                          'text from the primary source')
+        if counsel['needed'] and not counsel['reviewed']:
+            errors.append(f'{where}: implemented while its counsel review is outstanding (a user action)')
+    rows = entry.get('rows') or []
+    if not read and rows and all(context.row_state(row) == 'Done' for row in rows):
+        errors.append(f'{where}: every row ({", ".join(rows)}) is Done, but {entry["instrument"]["name"]} was never '
+                      'read in its consolidated text from the primary source')
+    return errors
+
+
 def entry_errors(entry, domain, register, context):
     where = f'{domain} entry {entry.get("id", "?")}'
     rules = DOMAINS[domain]
@@ -254,6 +421,8 @@ def entry_errors(entry, domain, register, context):
     if domain == 'standards':
         errors += spec_errors(where, entry, context)
         errors += codepoint_errors(where, entry)
+    elif domain == 'legal':
+        errors += legal_entry_errors(where, entry, register, context)
     return errors
 
 
@@ -276,6 +445,71 @@ def checklist_errors(register, context):
         for path in item['evidence']:
             errors += reference_errors(where, 'evidence', path, context.root)
     return errors
+
+
+def jurisdiction_errors(register):
+    """The jurisdictions table: a code (ISO 3166 alpha-2 with an optional subdivision, INT for treaties and
+    international bodies, PLATFORM for platform and store policies) to its name and official primary-source hosts;
+    Turkey is always present."""
+    jurisdictions = register.get('jurisdictions')
+    if not isinstance(jurisdictions, dict) or TURKEY not in jurisdictions:
+        return [f'legal register: jurisdictions maps codes to their official hosts and includes {TURKEY}']
+    errors = []
+    for code, jurisdiction in jurisdictions.items():
+        if not JURISDICTION.match(code):
+            errors.append(f'legal register: jurisdiction code {code!r} is ISO 3166 (optionally -subdivision), INT '
+                          'or PLATFORM')
+        if not isinstance(jurisdiction, dict) or set(jurisdiction) != {'name', 'hosts'} or \
+                not isinstance(jurisdiction.get('name'), str) or not isinstance(jurisdiction.get('hosts'), list) or \
+                not jurisdiction['hosts'] or \
+                not all(isinstance(host, str) and HOST.match(host) for host in jurisdiction['hosts']):
+            errors.append(f'legal register: jurisdiction {code} has a name and its official hosts (lower case)')
+    return errors
+
+
+def scope_errors(register, context):
+    """The products, data flows and channels obligations apply to. A scope turns live when what it names ships or
+    leaves a machine, which each of its rows does on its own; a scope still planned once any of its rows is Done
+    fails, so a binding obligation cannot hide behind a stale scope."""
+    scopes = register.get('scopes')
+    if not isinstance(scopes, list) or not scopes:
+        return ['legal register: scopes lists the products, data flows and channels the obligations apply to']
+    errors = []
+    seen = set()
+    for scope in scopes:
+        if not isinstance(scope, dict) or set(scope) != {'id', 'kind', 'title', 'state', 'rows', 'evidence'}:
+            errors.append('legal register: a scope has id, kind, title, state, rows and evidence')
+            continue
+        where = f'legal scope {scope["id"]}'
+        if not isinstance(scope['id'], str) or not ID.match(scope['id']) or scope['id'] in seen:
+            errors.append(f'{where}: id is unique lower-case dotted words')
+        seen.add(scope['id'])
+        if scope['kind'] not in SCOPE_KINDS or scope['state'] not in SCOPE_STATES or \
+                not isinstance(scope['title'], str) or not scope['title']:
+            errors.append(f'{where}: kind is one of {sorted(SCOPE_KINDS)}, state one of {sorted(SCOPE_STATES)}, '
+                          'with a title')
+        rows = scope['rows'] if isinstance(scope['rows'], list) else []
+        unknown = [row for row in rows if context.row_state(row) is None]
+        if not rows or unknown:
+            errors.append(f'{where}: rows names the ROADMAP rows that make it live (unknown: {unknown})')
+        elif scope['state'] == 'planned' and any(context.row_state(row) == 'Done' for row in rows):
+            done = [row for row in rows if context.row_state(row) == 'Done']
+            errors.append(f'{where}: {", ".join(done)} is Done, so it is live; mark it live with its evidence')
+        evidence = scope['evidence'] if isinstance(scope['evidence'], list) else None
+        if evidence is None or (scope['state'] == 'live' and not evidence):
+            errors.append(f'{where}: a live scope names the evidence that it shipped')
+        for path in evidence or []:
+            errors += reference_errors(where, 'evidence', path, context.root)
+    return errors
+
+
+def topic_errors(entries):
+    """Turkish law is never omitted: every topic the register holds, the platform policies aside, has a TR entry."""
+    topics = {entry.get('topic') for entry in entries if isinstance(entry, dict)}
+    turkish = {entry.get('topic') for entry in entries if isinstance(entry, dict) and
+               isinstance(entry.get('instrument'), dict) and entry['instrument'].get('jurisdiction') == TURKEY}
+    missing = sorted(topic for topic in topics - turkish - TOPICS_WITHOUT_JURISDICTION if topic in TOPICS)
+    return [f'legal register: topic {topic} has no Turkish ({TURKEY}) entry' for topic in missing]
 
 
 def review_errors(where, review, entries, context):
@@ -375,6 +609,8 @@ def register_errors(domain, register, context):
             errors.append(f'{where}: governed row {row} names no register entry')
     if domain == 'standards':
         errors += checklist_errors(register, context)
+    elif domain == 'legal':
+        errors += jurisdiction_errors(register) + scope_errors(register, context) + topic_errors(entries)
     return errors
 
 
@@ -388,6 +624,17 @@ def next_expiry(register, today):
             if day and day > today:
                 upcoming.append((day, entry['id']))
     return min(upcoming, default=None)
+
+
+def legal_summary(register, today):
+    """The summary tail of the legal register: the binding obligations and the next one to take effect."""
+    entries = [entry for entry in register['entries'] if entry['state'] in PINNED]
+    binding = sum(bool(live_scopes(entry, register)) and in_force(entry, today) for entry in entries)
+    upcoming = min(((parse_day(entry['effective']), entry['id']) for entry in entries
+                    if parse_day(entry['effective']) and parse_day(entry['effective']) > today), default=None)
+    live = sum(scope['state'] == 'live' for scope in register['scopes'])
+    tail = f'; {binding} binding on {live} live scopes'
+    return tail + (f'; the next to take effect is {upcoming[1]} on {upcoming[0]}' if upcoming else '')
 
 
 def check(root, today):
@@ -423,8 +670,11 @@ def main(argv=None):
         if register is not None and not errors:
             entries = register['entries']
             pinned = sum(entry['state'] in PINNED for entry in entries)
-            soonest = next_expiry(register, today) if domain == 'standards' else None
-            tail = f'; the first pinned draft to expire is {soonest[1]} on {soonest[0]}' if soonest else ''
+            if domain == 'legal':
+                tail = legal_summary(register, today)
+            else:
+                soonest = next_expiry(register, today)
+                tail = f'; the first pinned draft to expire is {soonest[1]} on {soonest[0]}' if soonest else ''
             print(f'PASS: {domain} register: {len(entries)} entries, {pinned} pinned, next review '
                   f'{register["review"]["next"]}{tail}')
     return 1 if failed else 0

@@ -5283,7 +5283,7 @@ class IsaIsolation(unittest.TestCase):
 
 
 class RegisterFixture:
-    """A fixture tree holding a standards register, shared by the guard's and the review tool's cases."""
+    """A fixture tree holding a standards and a legal register, shared by the guard's and the review tool's cases."""
 
     ROADMAP = ('| # | Slice | Status | Scope | Requires | Sources |\n|---|---|---|---|---|---|\n'
                '| 001 | <a id="slice-net-std"></a>**NET-STD** | Partial | x | y | z |\n'
@@ -5321,7 +5321,47 @@ class RegisterFixture:
         register.update(changes)
         return register
 
-    def write_tree(self, root, register):
+    KVKK = 'https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5'
+    READ = {'version': 'Consolidated text of 2024-03-12', 'read': '2026-10-30', 'sha256': 'ab' * 32}
+
+    def legal_entry(self, **changes):
+        """A pinned Turkish privacy obligation on a planned crash-report flow, read from no primary source yet."""
+        entry = {'id': 'tr.kvkk.processing', 'title': 'KVKK processing conditions', 'kind': 'obligation',
+                 'topic': 'privacy', 'state': 'planned', 'owner': 'comply', 'rows': ['NET.2'],
+                 'instrument': {'name': 'Law No. 6698', 'article': 'Articles 4-7', 'type': 'law', 'jurisdiction': 'TR',
+                                'primary': self.KVKK, 'consolidated': None},
+                 'obligation': 'Process personal data lawfully.', 'applies_to': ['flow.crash-reports'],
+                 'check': {'ref': 'docs/ROADMAP.md#slice-net.2', 'name': 'data inventory CTest', 'state': 'planned'},
+                 'effective': '2016-04-07', 'sunset': None, 'counsel': {'needed': True, 'reviewed': None},
+                 'source': {'ref': 'docs/research.md#n83', 'read': '2026-10-27', 'verified': False},
+                 'review': '2027-10-25', 'evidence': [], 'deprecation': None}
+        entry.update(changes)
+        return entry
+
+    def instrument(self, **changes):
+        return dict(self.legal_entry()['instrument'], **changes)
+
+    def scope(self, **changes):
+        scope = {'id': 'flow.crash-reports', 'kind': 'flow', 'title': 'Crash reports leaving a machine',
+                 'state': 'planned', 'rows': ['NET.2'], 'evidence': []}
+        scope.update(changes)
+        return scope
+
+    def legal_register(self, entries=None, **changes):
+        """A legal register due on 2027-10-25 (25 days after its quarterly review), so every case's day is before it."""
+        quarterly = [{'event': 'Quarterly review', 'day': '2027-09-30', 'scan': 'light', 'verified': True}]
+        register = {'schema': registers.SCHEMA, 'domain': 'legal', 'about': 'fixture',
+                    'snapshot': {'date': '2026-10-31', 'method': 'fixture'},
+                    'review': self.schedule(next='2027-10-25', calendar=quarterly),
+                    'governed_rows': ['NET.2'],
+                    'jurisdictions': {'TR': {'name': 'Türkiye', 'hosts': ['mevzuat.gov.tr']},
+                                      'EU': {'name': 'European Union', 'hosts': ['eur-lex.europa.eu']},
+                                      'PLATFORM': {'name': 'Platforms', 'hosts': ['developer.apple.com']}},
+                    'scopes': [self.scope()], 'entries': [self.legal_entry()] if entries is None else entries}
+        register.update(changes)
+        return register
+
+    def write_tree(self, root, register, legal=None):
         for directory in ('docs', 'cmake', 'tests'):
             (root / directory).mkdir(exist_ok=True)
         (root / 'docs' / 'ROADMAP.md').write_text(self.ROADMAP, encoding='utf-8')
@@ -5329,7 +5369,10 @@ class RegisterFixture:
         (root / 'tests' / 'test_quic.cpp').write_text('// evidence\n', encoding='utf-8')
         (root / 'CMakeLists.txt').write_text('crd_module(engine/foundation/core engine/core)\n', encoding='utf-8')
         (root / 'cmake' / 'standards-register.json').write_text(json.dumps(register), encoding='utf-8')
-        capabilities = {'capabilities': [{'id': 'network.transport', 'owner': 'net', 'status': 'planned'}]}
+        (root / 'cmake' / 'legal-register.json').write_text(json.dumps(legal or self.legal_register()),
+                                                            encoding='utf-8')
+        capabilities = {'capabilities': [{'id': 'network.transport', 'owner': 'net', 'status': 'planned'},
+                                         {'id': 'compliance.obligations', 'owner': 'comply', 'status': 'planned'}]}
         (root / 'cmake' / 'capability-owners.json').write_text(json.dumps(capabilities), encoding='utf-8')
 
     def guard(self, root, today):
@@ -5337,16 +5380,22 @@ class RegisterFixture:
             code = registers.main(['--root', str(root), '--today', today])
         return code, out.getvalue()
 
-    def run_guard(self, register, today='2026-11-01'):
-        """(exit code, output) of the guard over a fixture tree holding this register."""
+    def run_guard(self, register, today='2026-11-01', legal=None):
+        """(exit code, output) of the guard over a fixture tree holding these registers."""
         with tempfile.TemporaryDirectory() as scratch:
-            self.write_tree(Path(scratch), register)
+            self.write_tree(Path(scratch), register, legal)
             return self.guard(Path(scratch), today)
 
-    def assert_fails(self, register, message, today='2026-11-01'):
-        code, output = self.run_guard(register, today)
+    def assert_fails(self, register, message, today='2026-11-01', legal=None):
+        code, output = self.run_guard(register, today, legal)
         self.assertEqual(1, code, output)
         self.assertIn(message, output)
+
+    def run_legal(self, legal, today='2026-11-01'):
+        return self.run_guard(self.register([self.entry()]), today, legal)
+
+    def assert_legal_fails(self, legal, message, today='2026-11-01'):
+        self.assert_fails(self.register([self.entry()]), message, today, legal)
 
 
 class Registers(RegisterFixture, unittest.TestCase):
@@ -5484,6 +5533,162 @@ class Registers(RegisterFixture, unittest.TestCase):
         self.assertEqual(0, self.run_guard(held, today='2026-12-31')[0])
 
 
+class LegalRegister(RegisterFixture, unittest.TestCase):
+    """scripts/check-registers.py, legal domain (COMPLY.0): a binding obligation needs an active check, primary sources
+    are official, reading precedes closing, counsel review precedes implementation, scopes turn live with their rows
+    and Turkish law is never omitted."""
+
+    def live(self, **changes):
+        return self.scope(state='live', evidence=['tests/test_quic.cpp'], **changes)
+
+    def test_a_complete_legal_register_passes_and_names_the_next_effective_day(self):
+        code, output = self.run_legal(self.legal_register())
+        self.assertEqual(0, code, output)
+        self.assertIn('PASS: legal register: 1 entries, 1 pinned, next review 2027-10-25; 0 binding on 0 live scopes',
+                      output)
+        later = self.legal_entry(id='tr.5651.game-platforms', topic='privacy', effective='2026-11-01')
+        code, output = self.run_legal(self.legal_register([self.legal_entry(), later]), today='2026-10-31')
+        self.assertEqual(0, code, output)
+        self.assertIn('the next to take effect is tr.5651.game-platforms on 2026-11-01', output)
+
+    def test_a_binding_obligation_needs_an_active_check(self):
+        self.assert_legal_fails(self.legal_register(scopes=[self.live()]),
+                                'binding since 2016-04-07 on the live flow.crash-reports without an active check; '
+                                'land data inventory CTest first')
+        active = {'ref': 'tests/test_quic.cpp', 'name': 'crd-inventory-tests', 'state': 'active'}
+        code, output = self.run_legal(self.legal_register([self.legal_entry(check=active)], scopes=[self.live()]))
+        self.assertEqual(0, code, output)
+        self.assertIn('1 binding on 1 live scopes', output)
+        future = self.legal_register([self.legal_entry(effective='2026-12-09')], scopes=[self.live()])
+        self.assertEqual(0, self.run_legal(future, today='2026-12-08')[0])
+        self.assert_legal_fails(future, 'binding since 2026-12-09', today='2026-12-09')
+        month = self.legal_register([self.legal_entry(effective='2026-12')], scopes=[self.live()])
+        self.assert_legal_fails(month, 'binding since 2026-12', today='2026-12-01')
+        watched = self.legal_register([self.legal_entry(state='watch', effective=None)], scopes=[self.live()])
+        self.assertEqual(0, self.run_legal(watched)[0])
+        ended = self.legal_register([self.legal_entry(sunset='2026-10-01')], scopes=[self.live()])
+        self.assert_legal_fails(ended, 'Law No. 6698 ended on 2026-10-01; mark the entry deprecated')
+        self.assertNotIn('binding since', self.run_legal(ended)[1])
+        self.assert_legal_fails(self.legal_register([self.legal_entry(sunset='2016-01-01')]),
+                                'sunset 2016-01-01 is not after effective 2016-04-07')
+
+    def test_a_scope_turns_live_with_any_of_its_rows(self):
+        self.assert_legal_fails(self.legal_register(scopes=[self.scope(rows=['NET.2', 'DONE'])]),
+                                'legal scope flow.crash-reports: DONE is Done, so it is live; mark it live')
+        self.assert_legal_fails(self.legal_register(scopes=[self.scope(state='live')]),
+                                'a live scope names the evidence that it shipped')
+        self.assert_legal_fails(self.legal_register(scopes=[self.scope(rows=['NO-SUCH'])]), "unknown: ['NO-SUCH']")
+        self.assert_legal_fails(self.legal_register(scopes=[self.scope(), self.scope()]), 'id is unique')
+        self.assert_legal_fails(self.legal_register(scopes=[self.scope(kind='service')]), 'kind is one of')
+        self.assert_legal_fails(self.legal_register(scopes=[]), 'scopes lists the products')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(applies_to=['flow.nowhere'])]),
+                                "applies_to names unknown scopes ['flow.nowhere']")
+        self.assert_legal_fails(self.legal_register([self.legal_entry(applies_to=[])]), 'applies_to names the')
+
+    def test_primary_sources_are_official_and_jurisdictions_known(self):
+        foreign = self.instrument(primary='https://www.mondaq.com/turkey/kvkk')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(instrument=foreign)]),
+                                'primary source host www.mondaq.com is not an official host of TR (mevzuat.gov.tr)')
+        lookalike = self.instrument(primary='https://evilmevzuat.gov.tr/x')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(instrument=lookalike)]),
+                                'is not an official host of TR')
+        plain = self.instrument(primary='http://www.mevzuat.gov.tr/x')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(instrument=plain)]), 'must be an https URL')
+        unknown = self.instrument(jurisdiction='XX')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(instrument=unknown)]),
+                                "jurisdiction 'XX' is not in the register's jurisdictions")
+        europe = {'EU': {'name': 'EU', 'hosts': ['eur-lex.europa.eu']}}
+        self.assert_legal_fails(self.legal_register(jurisdictions=europe), 'includes TR')
+        bad = {'TR': {'name': 'Türkiye', 'hosts': ['mevzuat.gov.tr']}, 'Europe': {'name': 'x', 'hosts': ['A b']}}
+        self.assert_legal_fails(self.legal_register(jurisdictions=bad), "jurisdiction code 'Europe'")
+        self.assert_legal_fails(self.legal_register(jurisdictions=bad), 'jurisdiction Europe has a name and its')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(instrument=self.instrument(type='memo'))]),
+                                'instrument.type must be one of')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(instrument={'name': 'x'})]),
+                                'instrument has article, consolidated, jurisdiction, name, primary, type')
+
+    def test_reading_and_counsel_precede_closing_and_implementing(self):
+        read = self.instrument(consolidated=self.READ)
+        verified = {'ref': 'docs/research.md#n83', 'read': '2026-10-27', 'verified': True}
+        self.assert_legal_fails(self.legal_register([self.legal_entry(instrument=read)]),
+                                'the consolidated text was read, so the source is verified')
+        self.assertEqual(0, self.run_legal(self.legal_register([self.legal_entry(instrument=read,
+                                                                                 source=verified)]))[0])
+        home = self.instrument(consolidated=self.READ, primary='https://www.mevzuat.gov.tr/')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(instrument=home, source=verified)]),
+                                'cites the instrument\'s own document, not the home page')
+        for broken in ({'version': 'v'}, dict(self.READ, sha256='abc'), dict(self.READ, version='')):
+            self.assert_legal_fails(self.legal_register([self.legal_entry(instrument=self.instrument(
+                consolidated=broken), source=verified)]), 'instrument.consolidated is null until read')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(instrument=self.instrument(
+            consolidated=dict(self.READ, read='2026-11-05')), source=verified)]), 'is after today')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(rows=['DONE'])], governed_rows=[]),
+                                'every row (DONE) is Done, but Law No. 6698 was never read')
+        active = {'ref': 'tests/test_quic.cpp', 'name': 'crd-inventory-tests', 'state': 'active'}
+        proven = dict(state='implemented', evidence=['tests/test_quic.cpp'], check=active)
+        self.assert_legal_fails(self.legal_register([self.legal_entry(**proven)]),
+                                'implemented before Law No. 6698 was read in its consolidated text')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(**proven, instrument=read, source=verified)]),
+                                'implemented while its counsel review is outstanding (a user action)')
+        reviewed = {'needed': True, 'reviewed': '2026-10-30'}
+        self.assertEqual(0, self.run_legal(self.legal_register([self.legal_entry(
+            **proven, instrument=read, source=verified, counsel=reviewed)]))[0])
+        self.assert_legal_fails(self.legal_register([self.legal_entry(
+            **dict(proven, check=dict(active, ref='docs/ROADMAP.md#slice-net.2', state='planned')),
+            instrument=read, source=verified, counsel=reviewed)]), 'implemented, so its check is active')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(counsel={'needed': False,
+                                                                               'reviewed': '2026-10-30'})]),
+                                'counsel.reviewed records the review a needed flag asked for')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(counsel={'needed': 'yes', 'reviewed': None})]),
+                                'counsel has needed')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(counsel={'needed': True,
+                                                                               'reviewed': '2026-11-05'})]),
+                                'counsel.reviewed 2026-11-05 is after today')
+
+    def test_turkish_law_is_never_omitted(self):
+        eu = self.legal_entry(id='eu.ai-act.transparency', topic='ai', instrument=self.instrument(
+            jurisdiction='EU', primary='https://eur-lex.europa.eu/eli/reg/2024/1689/oj'))
+        self.assert_legal_fails(self.legal_register([self.legal_entry(), eu]),
+                                'legal register: topic ai has no Turkish (TR) entry')
+        platform = dict(eu, id='platform.apple-sdk-minimum', topic='platform', instrument=self.instrument(
+            jurisdiction='PLATFORM', primary='https://developer.apple.com/news/upcoming-requirements/'))
+        self.assertEqual(0, self.run_legal(self.legal_register([self.legal_entry(), platform]))[0])
+        self.assertEqual(0, self.run_legal(self.legal_register([self.legal_entry(), dict(eu, topic='privacy')]))[0])
+
+    def test_the_format_of_entries_checks_and_dates(self):
+        self.assert_legal_fails(self.legal_register([self.legal_entry(effective=None)]),
+                                'a pinned obligation names its effective date')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(effective='2016-13')]),
+                                "effective must be YYYY, YYYY-MM or YYYY-MM-DD")
+        self.assert_legal_fails(self.legal_register([self.legal_entry(topic='weather')]), 'topic must be one of')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(kind='protocol')]), 'kind must be one of')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(obligation='')]), 'obligation states the duty')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(check=None)]), 'check has ref, name and state')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(check={
+            'ref': 'tests/test_quic.cpp', 'name': 'x', 'state': 'planned'})]), 'a planned check cites the ROADMAP row')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(check={
+            'ref': 'docs/ROADMAP.md#slice-net.2', 'name': 'x', 'state': 'active'})]),
+            'an active check cites the test, script or step that runs it')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(check={
+            'ref': 'docs/ROADMAP.md#slice-net.2', 'name': 'x', 'state': 'green'})]), 'check.state must be one of')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(check={
+            'ref': 'tests/gone.cpp', 'name': 'x', 'state': 'active'})]), "check 'tests/gone.cpp' does not exist")
+        self.assert_legal_fails(self.legal_register([self.legal_entry(rows=['NET-STD'])]),
+                                'governed row NET.2 names no register entry')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(owner='nowhere')]), "owner 'nowhere' is neither")
+        self.assert_legal_fails(self.legal_register([self.legal_entry(spec={'type': 'rfc'})]), "unknown keys ['spec']")
+        self.assert_legal_fails(self.legal_register(checklist=[]), "unknown keys ['checklist']")
+
+    def test_a_missing_legal_register_fails(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            self.write_tree(root, self.register([self.entry()]))
+            (root / 'cmake' / 'legal-register.json').unlink()
+            code, output = self.guard(root, '2026-11-01')
+            self.assertEqual(1, code, output)
+            self.assertIn('cmake/legal-register.json:', output)
+
+
 class RegisterReview(RegisterFixture, unittest.TestCase):
     """scripts/register-review.py: the scheduled re-research plans the primary sources a refresh downloads (for the
     user to approve), reads them with digests, judges them against the register, proposes ROADMAP amendments without
@@ -5594,6 +5799,69 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
         register_review.fetch_sources(plan, root / 'fetched', opener=self.opener(bodies),
                                       today=datetime.date(2026, 12, 16))
         return plan
+
+    def test_the_legal_domain_plans_primary_texts_and_reads_them_by_digest(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            gdpr = 'https://eur-lex.europa.eu/eli/reg/2016/679/oj'
+            eu = {'jurisdiction': 'EU', 'primary': gdpr}
+            verified = {'ref': 'docs/research.md#n83', 'read': '2026-10-27', 'verified': True}
+            text = 'Regulation (EU) 2016/679'
+            read = dict(self.READ, sha256=hashlib.sha256(text.encode()).hexdigest())
+            legal = self.legal_register([
+                self.legal_entry(),
+                self.legal_entry(id='eu.gdpr.principles', instrument=self.instrument(**eu, consolidated=read),
+                                 source=verified),
+                self.legal_entry(id='eu.gdpr.rights', instrument=self.instrument(**eu, consolidated=dict(
+                    read, sha256='cd' * 32)), source=verified)])
+            self.write_tree(root, self.register(self.entries()), legal)
+            argv = ('--register', 'cmake/legal-register.json')
+            code, output = self.tool(root, *argv, 'plan', '--out', str(root / 'sources.json'))
+            self.assertEqual(0, code, output)
+            self.assertIn('2 sources to download once the user approves them, 1 items read by hand', output)
+            plan = json.loads((root / 'sources.json').read_text(encoding='utf-8'))
+            sources = {source['id']: source for source in plan['sources']}
+            self.assertEqual(['eu.gdpr.principles', 'eu.gdpr.rights'],
+                             sources['eur-lex.europa.eu-eli-reg-2016-679-oj']['entries'])
+            kvkk = 'mevzuat.gov.tr-mevzuat-mevzuatno-6698-mevzuattur-1-mevzuattertip-5'
+            self.assertEqual(self.KVKK, sources[kvkk]['url'])
+            self.assertEqual('primary', sources[kvkk]['kind'])
+            self.assertIn('https://www.resmigazete.gov.tr/', {item['url'] for item in plan['manual']})
+            bodies = {'/mevzuat?MevzuatNo=6698': 'Kanun 6698', '/eli/reg/2016/679/oj': text}
+
+            def urlopen(request, timeout):
+                body = next(body for path, body in bodies.items() if path in request.full_url)
+                return contextlib.closing(SimpleNamespace(read=lambda limit: body.encode()[:limit],
+                                                          close=lambda: None))
+            manifest = register_review.fetch_sources(plan, root / 'fetched', opener=urlopen,
+                                                     today=datetime.date(2026, 12, 16))
+            self.assertEqual({kvkk, 'eur-lex.europa.eu-eli-reg-2016-679-oj'},
+                             {item['file'] for item in manifest['items']})
+            report = root / 'docs' / 'legal-review.md'
+            code, output = self.tool(root, *argv, 'compare', '--fetched', str(root / 'fetched'), '--report',
+                                     str(report), '--apply')
+            self.assertEqual(0, code, output)
+            self.assertIn('0 register changes, 2 instruments to read', output)
+            text = report.read_text(encoding='utf-8')
+            self.assertIn('legal register', text)
+            self.assertIn('- tr.kvkk.processing (NET.2): Law No. 6698, Articles 4-7: never read from its primary '
+                          'source', text)
+            self.assertIn('- eu.gdpr.rights (NET.2): Law No. 6698, Articles 4-7: the primary text changed since it '
+                          'was read on 2026-10-30', text)
+            self.assertNotIn('eu.gdpr.principles', text)
+            register = json.loads((root / 'cmake' / 'legal-register.json').read_text(encoding='utf-8'))
+            self.assertEqual('docs/legal-review.md', register['review']['runs'][-1]['ref'])
+            legal_errors = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
+            self.assertEqual([], legal_errors['legal'])
+            code, output = self.tool(root, *argv, 'record', '--scan', 'light', '--ref', 'docs/research.md#n83',
+                                     '--day', '2026-12-17', '--trigger', 'eu.gdpr.rights', today='2026-12-17')
+            self.assertEqual(0, code, output)
+            self.assertIn('recorded the light run of 2026-12-17 with triggers eu.gdpr.rights; the next review is a '
+                          'full scan due on 2027-01-11', output)
+            code, output = self.tool(root, *argv, 'record', '--scan', 'light', '--ref', 'docs/research.md',
+                                     '--trigger', 'eu.nothing', today='2026-12-17')
+            self.assertEqual(2, code)
+            self.assertIn("unknown triggering entries ['eu.nothing']", output)
 
     def test_due_prints_the_computed_review_and_unverified_events(self):
         with tempfile.TemporaryDirectory() as scratch:
@@ -5729,7 +5997,8 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             code, output = self.guard(root, '2026-12-16')
             self.assertEqual(1, code, output)
             self.assertEqual(['FAIL: standards entry quic.transport: pinned RFC 9000 is obsoleted by RFC 9999 in the '
-                              'snapshot; pin the replacement'], output.splitlines())
+                              'snapshot; pin the replacement'],
+                             [line for line in output.splitlines() if 'legal register' not in line])
 
     def test_a_clean_refresh_passes_the_guard_and_tampering_or_strays_are_refused(self):
         with tempfile.TemporaryDirectory() as scratch:

@@ -664,6 +664,14 @@
       "owner": "store",
       "status": "planned",
       "row": "STORE.0"
+    },
+    {
+      "id": "compliance.obligations",
+      "summary": "Legal and platform obligations: the rules generated from the COMPLY.0 legal register as authored CHIR assets swapped live per jurisdiction as reviewed generations, their query over ceridc and MCP, the checks and the shared generators (data inventory, notices, classification records, store answers) the governed rows consume.",
+      "owner": "comply",
+      "status": "planned",
+      "row": "COMPLY.0",
+      "decision": "docs/design/registers.md#legal-domain: the JSON register is the guarded source of truth; COMPLY owns rules, checks and generators, the governed rows consume them and write no second rule engine."
     }
   ]
 }

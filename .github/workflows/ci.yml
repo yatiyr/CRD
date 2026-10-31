@@ -165,7 +165,7 @@ jobs:
         run: python scripts/check-ci-tiers.py
       - name: Pinned inputs
         run: python scripts/check-pins.py
-      - name: Standards register is current
+      - name: Standards and legal registers are current
         run: python scripts/check-registers.py
       - name: Generated sources carry their provenance and bytes
         run: python scripts/check-generated.py

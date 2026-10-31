@@ -1,0 +1,5271 @@
+{
+  "schema": "cerid-register/1",
+  "domain": "legal",
+  "about": "COMPLY.0 legal register: every legal and platform obligation that applies to Cerid or to products built with it, one entry per instrument and article, with its jurisdiction, official primary source and the consolidated version read, the obligation in plain words, the products, data flows and channels it applies to, the check that proves it, its effective and sunset dates, a counsel-review flag, the owning rows and the next review. scripts/check-registers.py (the crd-check-registers CTest and repository step) fails a binding obligation without an active check, a lapsed review, an entry read from no primary source when its rows close and a topic without a Turkish entry. docs/design/registers.md is the contract; it shares the standards register's format, guard and review machinery.",
+  "snapshot": {
+    "date": "2026-10-31",
+    "method": "Assembled on 2026-10-31 from the obligations the COMPLY rows name (user decision 2026-10-27) and the publishing and networking research read on 2026-10-27 (sources S02-S54, N21, N120); those sources are law-firm, regulator-news and secondary summaries, so every entry carries verified false and a null consolidated version, and the primary URLs are taken from knowledge. Reading each instrument from its primary source is a download the user approves first; scripts/register-review.py plans it."
+  },
+  "review": {
+    "cadence": "A light scan quarterly, after each yearly platform event (the April SDK rule, Google I/O, WWDC, the August target API rule) and after each dated effective day the register holds, and a full re-research every year or when a scan finds a pinned instrument amended; Official Gazette of Turkey, EUR-Lex and Steamworks announcements are recorded as runs with their triggering entries. Reviews propose ROADMAP amendments for the user and never edit rows.",
+    "next": "2026-11-26",
+    "lag_days": 25,
+    "full_every_days": 365,
+    "calendar": [
+      {
+        "event": "Law No. 5651 game-platform duties take effect",
+        "day": "2026-11-01",
+        "scan": "light",
+        "verified": false
+      },
+      {
+        "event": "AI Act Article 50 marking for systems already on the market",
+        "day": "2026-12-02",
+        "scan": "light",
+        "verified": false
+      },
+      {
+        "event": "EU Product Liability Directive applies",
+        "day": "2026-12-09",
+        "scan": "light",
+        "verified": false
+      },
+      {
+        "event": "Quarterly review, fourth quarter of 2026",
+        "day": "2026-12-31",
+        "scan": "light",
+        "verified": true
+      },
+      {
+        "event": "Quarterly review, first quarter of 2027",
+        "day": "2027-03-31",
+        "scan": "light",
+        "verified": true
+      },
+      {
+        "event": "Apple SDK minimum rule (April)",
+        "day": "2027-04-30",
+        "scan": "light",
+        "verified": false
+      },
+      {
+        "event": "Google I/O (May)",
+        "day": "2027-05-31",
+        "scan": "light",
+        "verified": false
+      },
+      {
+        "event": "WWDC (June)",
+        "day": "2027-06-15",
+        "scan": "light",
+        "verified": false
+      },
+      {
+        "event": "Quarterly review, second quarter of 2027",
+        "day": "2027-06-30",
+        "scan": "light",
+        "verified": true
+      },
+      {
+        "event": "Google Play target API deadline (August)",
+        "day": "2027-08-31",
+        "scan": "light",
+        "verified": false
+      },
+      {
+        "event": "Quarterly review, third quarter of 2027",
+        "day": "2027-09-30",
+        "scan": "light",
+        "verified": true
+      },
+      {
+        "event": "CRA obligations apply in full",
+        "day": "2027-12-11",
+        "scan": "light",
+        "verified": false
+      },
+      {
+        "event": "Quarterly review, fourth quarter of 2027",
+        "day": "2027-12-31",
+        "scan": "light",
+        "verified": true
+      }
+    ],
+    "runs": [
+      {
+        "day": "2026-10-27",
+        "scan": "full",
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#area-7-compliance-legal",
+        "triggers": []
+      }
+    ]
+  },
+  "governed_rows": [
+    "NET.2",
+    "CRASH-FIX.1",
+    "CRASH-FIX.2",
+    "OPS.1",
+    "NET-SERVER",
+    "NET-LIVE",
+    "COLLAB.1",
+    "4.2d",
+    "ANTICHEAT",
+    "EXT.5",
+    "SHIP.7",
+    "SHIP.9",
+    "STORE.1",
+    "STORE.3",
+    "STORE.6",
+    "STORE-SOCIAL",
+    "AGENT.1",
+    "AI.1",
+    "WEB.5",
+    "SUPPLY.1",
+    "SEC.1"
+  ],
+  "jurisdictions": {
+    "TR": {
+      "name": "Türkiye",
+      "hosts": [
+        "mevzuat.gov.tr",
+        "resmigazete.gov.tr",
+        "kvkk.gov.tr",
+        "btk.gov.tr",
+        "gib.gov.tr",
+        "ticaret.gov.tr",
+        "rtuk.gov.tr",
+        "tbmm.gov.tr",
+        "turkpatent.gov.tr"
+      ]
+    },
+    "EU": {
+      "name": "European Union",
+      "hosts": [
+        "eur-lex.europa.eu",
+        "edpb.europa.eu",
+        "enisa.europa.eu",
+        "commission.europa.eu",
+        "euipo.europa.eu",
+        "sanctionsmap.eu"
+      ]
+    },
+    "GB": {
+      "name": "United Kingdom",
+      "hosts": [
+        "legislation.gov.uk",
+        "ico.org.uk",
+        "ofcom.org.uk",
+        "gov.uk"
+      ]
+    },
+    "US": {
+      "name": "United States (federal)",
+      "hosts": [
+        "ecfr.gov",
+        "federalregister.gov",
+        "uscode.house.gov",
+        "bis.gov",
+        "ftc.gov",
+        "ada.gov",
+        "access-board.gov",
+        "cisa.gov",
+        "fcc.gov",
+        "treasury.gov"
+      ]
+    },
+    "US-CA": {
+      "name": "California",
+      "hosts": [
+        "leginfo.legislature.ca.gov",
+        "cppa.ca.gov"
+      ]
+    },
+    "US-TX": {
+      "name": "Texas",
+      "hosts": [
+        "capitol.texas.gov",
+        "statutes.capitol.texas.gov"
+      ]
+    },
+    "US-UT": {
+      "name": "Utah",
+      "hosts": [
+        "le.utah.gov"
+      ]
+    },
+    "BR": {
+      "name": "Brazil",
+      "hosts": [
+        "planalto.gov.br",
+        "gov.br"
+      ]
+    },
+    "CN": {
+      "name": "China",
+      "hosts": [
+        "npc.gov.cn",
+        "cac.gov.cn"
+      ]
+    },
+    "JP": {
+      "name": "Japan",
+      "hosts": [
+        "elaws.e-gov.go.jp",
+        "ppc.go.jp"
+      ]
+    },
+    "CA": {
+      "name": "Canada",
+      "hosts": [
+        "laws-lois.justice.gc.ca",
+        "priv.gc.ca"
+      ]
+    },
+    "AU": {
+      "name": "Australia",
+      "hosts": [
+        "legislation.gov.au",
+        "esafety.gov.au"
+      ]
+    },
+    "INT": {
+      "name": "Treaties, international bodies and licences",
+      "hosts": [
+        "wassenaar.org",
+        "un.org",
+        "globalratings.com",
+        "pegi.info",
+        "esrb.org",
+        "spdx.org"
+      ]
+    },
+    "PLATFORM": {
+      "name": "Platform and store policies",
+      "hosts": [
+        "developer.apple.com",
+        "developer.android.com",
+        "support.google.com",
+        "partner.steamgames.com",
+        "store.epicgames.com",
+        "learn.microsoft.com",
+        "cabforum.org"
+      ]
+    }
+  },
+  "scopes": [
+    {
+      "id": "channel.distribution",
+      "kind": "channel",
+      "title": "Engine, tools and products distributed outside the publisher (packages, installers, web builds)",
+      "state": "planned",
+      "rows": [
+        "SHIP.4",
+        "SHIP.5",
+        "SHIP-MAC",
+        "SHIP-WEB",
+        "SHIP-MOBILE",
+        "SHIP-CONSOLE",
+        "SHIP-XR",
+        "SHIP-ENTERPRISE"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "channel.third-party-stores",
+      "kind": "channel",
+      "title": "Releases through third-party stores and platform holders",
+      "state": "planned",
+      "rows": [
+        "SHIP.6",
+        "SHIP-MOBILE",
+        "SHIP-CONSOLE",
+        "SHIP-XR"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "channel.cerid-store",
+      "kind": "channel",
+      "title": "The Cerid store, open to customers in Turkey first",
+      "state": "planned",
+      "rows": [
+        "STORE.8"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "channel.mods-and-ugc",
+      "kind": "channel",
+      "title": "Mod, user content and marketplace distribution",
+      "state": "planned",
+      "rows": [
+        "SHIP.9",
+        "EXT.5",
+        "STORE.6"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "product.online-sessions",
+      "kind": "product",
+      "title": "Networked play, sessions and operated dedicated servers",
+      "state": "planned",
+      "rows": [
+        "NET-SERVER"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "product.communications",
+      "kind": "product",
+      "title": "Voice, video and text communication between people",
+      "state": "planned",
+      "rows": [
+        "NET-LIVE",
+        "STORE-SOCIAL"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "product.collaboration",
+      "kind": "product",
+      "title": "Shared project hosts and collaborative editing",
+      "state": "planned",
+      "rows": [
+        "COLLAB.1"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "product.ai-features",
+      "kind": "product",
+      "title": "AI and agent features in products and tools",
+      "state": "planned",
+      "rows": [
+        "AGENT.1",
+        "AI.1"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "product.purchases",
+      "kind": "product",
+      "title": "Purchase flows, entitlements and virtual currencies",
+      "state": "planned",
+      "rows": [
+        "SHIP.7",
+        "STORE.3"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "product.connectable-devices",
+      "kind": "product",
+      "title": "Connectable embedded products",
+      "state": "planned",
+      "rows": [
+        "EMBED.2"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "flow.crash-reports",
+      "kind": "flow",
+      "title": "Crash and failure reports leaving a machine",
+      "state": "planned",
+      "rows": [
+        "CRASH-FIX.2",
+        "OPS.1"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "flow.telemetry",
+      "kind": "flow",
+      "title": "Consented telemetry leaving a machine",
+      "state": "planned",
+      "rows": [
+        "OPS.1"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "flow.network-identity",
+      "kind": "flow",
+      "title": "Network addresses, session identifiers and tokens of users",
+      "state": "planned",
+      "rows": [
+        "NET-SERVER",
+        "SHIP.4",
+        "SHIP.5"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "flow.anticheat",
+      "kind": "flow",
+      "title": "Anti-cheat signals about players",
+      "state": "planned",
+      "rows": [
+        "ANTICHEAT"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "flow.account-data",
+      "kind": "flow",
+      "title": "Customer and developer accounts, families and age",
+      "state": "planned",
+      "rows": [
+        "STORE.1"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "flow.payments",
+      "kind": "flow",
+      "title": "Payment and invoicing data",
+      "state": "planned",
+      "rows": [
+        "SHIP.7",
+        "STORE.3"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "flow.user-content",
+      "kind": "flow",
+      "title": "User content, mods and shared projects",
+      "state": "planned",
+      "rows": [
+        "SHIP.9",
+        "EXT.5",
+        "STORE.6",
+        "COLLAB.1"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "flow.communications",
+      "kind": "flow",
+      "title": "Content and metadata of communications",
+      "state": "planned",
+      "rows": [
+        "NET-LIVE",
+        "STORE-SOCIAL"
+      ],
+      "evidence": []
+    }
+  ],
+  "entries": [
+    {
+      "id": "tr.kvkk.processing",
+      "title": "KVKK: processing conditions and special categories",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "NET.2",
+        "CRASH-FIX.1",
+        "CRASH-FIX.2",
+        "OPS.1",
+        "ANTICHEAT",
+        "NET-SERVER",
+        "STORE.1"
+      ],
+      "instrument": {
+        "name": "Law No. 6698 on the Protection of Personal Data (KVKK)",
+        "article": "Articles 4-7",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Process personal data only lawfully, for specified purposes, minimised and kept no longer than needed, on a condition of Article 5 (explicit consent or a listed ground) and the stricter Article 6 rules for special categories; delete, destroy or anonymise it when the purpose ends.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "data inventory CTest: every flow declares its lawful basis per jurisdiction",
+        "state": "planned"
+      },
+      "effective": "2016-04-07",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.kvkk.notice-and-consent",
+      "title": "KVKK: the aydınlatma notice kept separate from explicit consent",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "COMPLY.8",
+        "CRASH-FIX.1",
+        "OPS.1",
+        "STORE.1"
+      ],
+      "instrument": {
+        "name": "Law No. 6698 on the Protection of Personal Data (KVKK)",
+        "article": "Articles 3, 5 and 10",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Inform the data subject (aydınlatma) when data is collected, in a notice separate from any request for explicit consent; consent is specific, informed and freely given and is never bundled with the notice or a service condition.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "consent and notice records CTest",
+        "state": "planned"
+      },
+      "effective": "2016-04-07",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.kvkk.rights",
+      "title": "KVKK: data subject rights and the 30-day answer",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "STORE.1",
+        "CRASH-FIX.2",
+        "OPS.1"
+      ],
+      "instrument": {
+        "name": "Law No. 6698 on the Protection of Personal Data (KVKK)",
+        "article": "Articles 11 and 13",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Answer access, correction, deletion and objection requests free of charge within 30 days; deletion reaches every store and backup window.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "data subject request service tests (deletion reaches every store)",
+        "state": "planned"
+      },
+      "effective": "2016-04-07",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.kvkk.security-and-breach",
+      "title": "KVKK: data security and breach notification to the Board",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "COMPLY.3",
+        "CRASH-FIX.2"
+      ],
+      "instrument": {
+        "name": "Law No. 6698 on the Protection of Personal Data (KVKK)",
+        "article": "Article 12",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Take the technical and administrative measures that keep personal data secure; notify the data subject and the Board of a breach as soon as possible (the Board set 72 hours).",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "breach-notification runbook rehearsal with per-regulator clocks",
+        "state": "planned"
+      },
+      "effective": "2016-04-07",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.kvkk.transfer-abroad",
+      "title": "KVKK: transfer abroad after Law No. 7499 and the 2024 By-Law",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "COMPLY.8",
+        "NET-SERVER",
+        "CRASH-FIX.2"
+      ],
+      "instrument": {
+        "name": "Law No. 6698 Article 9 as amended by Law No. 7499, and the By-Law on the Procedures and Principles for the Transfer of Personal Data Abroad",
+        "article": "Article 9; By-Law Articles 13-14",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Transfer personal data abroad only on an adequacy decision, an appropriate safeguard (standard contracts notified to the Authority within five business days and used unmodified, binding corporate rules) or an incidental case; record each transfer and its mechanism.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "transfer records CTest with standard-contract notification reminders",
+        "state": "planned"
+      },
+      "effective": "2024-06-01",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s37",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.kvkk.verbis",
+      "title": "KVKK: VERBIS registration of the data controller",
+      "kind": "user-action",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "STORE.8"
+      ],
+      "instrument": {
+        "name": "Law No. 6698 on the Protection of Personal Data (KVKK)",
+        "article": "Article 16",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Register the publisher in the Data Controllers Registry (VERBIS) when the Board's thresholds or the foreign controller rule require it, before processing starts.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "VERBIS registration record",
+        "state": "planned"
+      },
+      "effective": "2016-04-07",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.kvkk.deletion",
+      "title": "KVKK: the regulation on deletion, destruction and anonymisation",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "OPS.1",
+        "CRASH-FIX.2"
+      ],
+      "instrument": {
+        "name": "Regulation on the Deletion, Destruction or Anonymisation of Personal Data",
+        "article": "Articles 5-12",
+        "type": "regulation",
+        "jurisdiction": "TR",
+        "primary": "https://www.resmigazete.gov.tr/eskiler/2017/10/20171028.htm",
+        "consolidated": null
+      },
+      "obligation": "Keep a retention and destruction policy, destroy personal data at the first periodic destruction after its purpose ends (at most every six months) and keep destruction records for three years.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "retention CTest: a flow outliving its retention fails",
+        "state": "planned"
+      },
+      "effective": "2018-01-01",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.tck.personal-data-offences",
+      "title": "Turkish Penal Code: personal data offences",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2"
+      ],
+      "instrument": {
+        "name": "Turkish Penal Code No. 5237",
+        "article": "Articles 135-140",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5237&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Never record, transfer, obtain or fail to destroy personal data unlawfully; the data inventory and deletion service make every processing step lawful and auditable.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "data inventory and retention CTests",
+        "state": "planned"
+      },
+      "effective": "2005-06-01",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.cybersecurity.reporting",
+      "title": "Cybersecurity Law No. 7545: incident and vulnerability reporting",
+      "kind": "obligation",
+      "topic": "security",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.3",
+        "SEC.1",
+        "CRASH-FIX.2"
+      ],
+      "instrument": {
+        "name": "Cybersecurity Law No. 7545",
+        "article": "Reporting duties and secondary rules",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=7545&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Report vulnerabilities and cyber incidents to the Cybersecurity Presidency without delay, keep the records the secondary rules require and cooperate with audits.",
+      "applies_to": [
+        "channel.distribution",
+        "flow.crash-reports",
+        "product.online-sessions"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.3",
+        "name": "reporting workflow rehearsed against seeded incidents",
+        "state": "planned"
+      },
+      "effective": "2025-03-19",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s38",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.cybersecurity.products",
+      "title": "Cybersecurity Law No. 7545: permits for cybersecurity products",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "COMPLY.3"
+      ],
+      "instrument": {
+        "name": "Cybersecurity Law No. 7545",
+        "article": "Permit, certification and export provisions",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=7545&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Obtain the regulator's permit or certification before offering or exporting a cybersecurity product or service the law covers; classify every Cerid product against that definition first.",
+      "applies_to": [
+        "channel.distribution",
+        "channel.third-party-stores"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "name": "classification record per product and release",
+        "state": "planned"
+      },
+      "effective": "2025-03-19",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s38",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.tck.information-system-offences",
+      "title": "Turkish Penal Code: information-system offences",
+      "kind": "obligation",
+      "topic": "security",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.3",
+        "SEC.1"
+      ],
+      "instrument": {
+        "name": "Turkish Penal Code No. 5237",
+        "article": "Articles 243-245",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5237&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "The coordinated disclosure policy and its researcher safe harbour respect the offences of unauthorised access, system interference and data interference; Cerid never asks a researcher to commit one.",
+      "applies_to": [
+        "channel.distribution",
+        "product.online-sessions"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.3",
+        "name": "disclosure policy review",
+        "state": "planned"
+      },
+      "effective": "2005-06-01",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.3",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.btk.encryption",
+      "title": "Electronic Communications Law No. 5809: BTK encryption rules",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "COMPLY.1",
+        "COMPLY.9",
+        "NET.2"
+      ],
+      "instrument": {
+        "name": "Electronic Communications Law No. 5809 and the BTK rules on encryption",
+        "article": "Article 5 and the BTK regulations",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5809&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Classify encryption in communication products against the BTK encryption rules and meet any notification or authorisation duty they set, without key escrow or weakened end-to-end encryption.",
+      "applies_to": [
+        "product.communications",
+        "channel.distribution"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "name": "cryptography inventory CTest: a changed inventory needs a reviewed classification",
+        "state": "planned"
+      },
+      "effective": "2008-11-10",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.dual-use-export",
+      "title": "Ministry of Trade dual-use export rules",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "watch",
+      "owner": "crypto",
+      "rows": [
+        "COMPLY.1"
+      ],
+      "instrument": {
+        "name": "Ministry of Trade communiqué on the export of dual-use and sensitive goods",
+        "article": "Category 5 Part 2 lists",
+        "type": "regulation",
+        "jurisdiction": "TR",
+        "primary": "https://www.ticaret.gov.tr/",
+        "consolidated": null
+      },
+      "obligation": "Identify the current communiqué and classify each export against its Category 5 Part 2 list.",
+      "applies_to": [
+        "channel.distribution"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "name": "classification record per product and release",
+        "state": "planned"
+      },
+      "effective": null,
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The instrument and its effective date are identified on the first primary read; it is then pinned."
+    },
+    {
+      "id": "tr.asset-freeze",
+      "title": "Turkey's asset-freeze regime",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "store",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Law No. 6415 on the Prevention of the Financing of Terrorism and Law No. 7262 on preventing the financing of the proliferation of weapons of mass destruction",
+        "article": "Asset-freeze decisions",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6415&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Screen distribution, accounts and payments against Turkey's asset-freeze decisions.",
+      "applies_to": [
+        "channel.cerid-store",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "name": "sanctions screening tests over accounts and payments",
+        "state": "planned"
+      },
+      "effective": "2013-02-16",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.5651.content",
+      "title": "Law No. 5651: content, hosting and social network provider duties",
+      "kind": "obligation",
+      "topic": "online-safety",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.5",
+        "SHIP.9",
+        "EXT.5",
+        "STORE.6",
+        "NET-LIVE",
+        "COLLAB.1",
+        "4.2d"
+      ],
+      "instrument": {
+        "name": "Law No. 5651 on the Regulation of Publications on the Internet",
+        "article": "Articles 4-9 and Additional Article 4",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5651&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Act on removal and access-blocking orders within the legal deadlines, keep the provider records the law requires and meet the social network provider duties when a product reaches their thresholds.",
+      "applies_to": [
+        "channel.mods-and-ugc",
+        "flow.user-content",
+        "product.communications",
+        "product.collaboration"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.5",
+        "name": "notice-and-action pipeline CTest",
+        "state": "planned"
+      },
+      "effective": "2007-05-23",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s41",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.5651.game-platforms",
+      "title": "Law No. 5651: game-platform duties",
+      "kind": "obligation",
+      "topic": "children",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.5",
+        "COMPLY.8",
+        "SHIP.9",
+        "STORE.1",
+        "STORE.4"
+      ],
+      "instrument": {
+        "name": "Law No. 5651 on the Regulation of Publications on the Internet, as amended in 2026",
+        "article": "Game-platform provisions",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5651&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "A game platform (a storefront, launcher with licence management or mod hub) shows age ratings, gives parents tools that control account settings and approve paid transactions, answers ICTA requests within 15 days and appoints a local representative above 100,000 daily accesses from Turkey.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.mods-and-ugc",
+        "product.purchases"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "name": "5651 game-platform kit CTests (parental payment approval, representative threshold monitoring)",
+        "state": "planned"
+      },
+      "effective": "2026-11-01",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s41",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2026-11-26",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.5651.game-platform-ratings",
+      "title": "Law No. 5651: age ratings on game platforms",
+      "kind": "obligation",
+      "topic": "age-rating",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.8",
+        "STORE.2"
+      ],
+      "instrument": {
+        "name": "Law No. 5651 on the Regulation of Publications on the Internet, as amended in 2026",
+        "article": "Game-platform provisions (age rating)",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5651&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Show an age rating for every game a platform offers and produce the Turkish rating once ICTA publishes its scheme.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.mods-and-ugc"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "name": "rating answers authored once generate every submission",
+        "state": "planned"
+      },
+      "effective": "2026-11-01",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s41",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2026-11-26",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.5651.icta-rules",
+      "title": "ICTA secondary rules for game platforms",
+      "kind": "obligation",
+      "topic": "children",
+      "state": "watch",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.5",
+        "COMPLY.8"
+      ],
+      "instrument": {
+        "name": "ICTA (BTK) regulation under Law No. 5651 for game platforms",
+        "article": "Pending",
+        "type": "regulation",
+        "jurisdiction": "TR",
+        "primary": "https://www.btk.gov.tr/",
+        "consolidated": null
+      },
+      "obligation": "Track the secondary rules ICTA issues for game platforms and pin them when published.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.mods-and-ugc"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.5",
+        "name": "watch item review",
+        "state": "planned"
+      },
+      "effective": null,
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s41",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2026-11-26",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.5651.under-15",
+      "title": "Law No. 5651: the under-15 restriction on social networks",
+      "kind": "obligation",
+      "topic": "children",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.5",
+        "STORE-SOCIAL",
+        "STORE.1"
+      ],
+      "instrument": {
+        "name": "Law No. 5651 on the Regulation of Publications on the Internet, as amended in 2026",
+        "article": "Social network provider provisions",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5651&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Keep children under 15 from social network accounts where a product meets the social network provider definition, with age signals and parental controls.",
+      "applies_to": [
+        "product.communications",
+        "channel.mods-and-ugc",
+        "flow.account-data"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.5",
+        "name": "age-signal and parental-control interface tests",
+        "state": "planned"
+      },
+      "effective": "2026",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s41",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2026-11-26",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.5809.authorisation",
+      "title": "Law No. 5809: authorisation for communication services",
+      "kind": "obligation",
+      "topic": "communications",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.9",
+        "NET-LIVE",
+        "STORE-SOCIAL"
+      ],
+      "instrument": {
+        "name": "Electronic Communications Law No. 5809 and the BTK authorisation regulation",
+        "article": "Articles 9-10",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5809&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Classify each communication product (voice, video, text) and obtain a BTK authorisation where the regulation requires one before operating it in Turkey.",
+      "applies_to": [
+        "product.communications",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.9",
+        "name": "classification record CTest per communication surface",
+        "state": "planned"
+      },
+      "effective": "2008-11-10",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.9",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.btk.personal-data",
+      "title": "BTK rules on personal data in electronic communications",
+      "kind": "obligation",
+      "topic": "communications",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.9",
+        "NET-LIVE"
+      ],
+      "instrument": {
+        "name": "BTK regulation on processing and protecting personal data in the electronic communications sector",
+        "article": "Whole regulation",
+        "type": "regulation",
+        "jurisdiction": "TR",
+        "primary": "https://www.btk.gov.tr/",
+        "consolidated": null
+      },
+      "obligation": "Apply the sector rules on traffic and location data, retention and security to communication products operated in Turkey.",
+      "applies_to": [
+        "product.communications",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.9",
+        "name": "classification record CTest per communication surface",
+        "state": "planned"
+      },
+      "effective": "2026-10-27",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.9",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "In force when the research read it on 2026-10-27; the version date is confirmed on the first primary read."
+    },
+    {
+      "id": "tr.6112.internet-broadcasting",
+      "title": "Law No. 6112 and RTÜK internet broadcasting rules",
+      "kind": "obligation",
+      "topic": "communications",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.9",
+        "NET-LIVE"
+      ],
+      "instrument": {
+        "name": "Law No. 6112 on Radio and Television Broadcasting and RTÜK's internet broadcasting regulation",
+        "article": "Article 29/A",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6112&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Classify live streaming against RTÜK's internet broadcasting licence duty before offering it in Turkey.",
+      "applies_to": [
+        "product.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.9",
+        "name": "classification record CTest",
+        "state": "planned"
+      },
+      "effective": "2011-03-03",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.9",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.6563.commercial-messages",
+      "title": "Law No. 6563: commercial electronic messages and IYS",
+      "kind": "obligation",
+      "topic": "consumer",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.8",
+        "STORE.7"
+      ],
+      "instrument": {
+        "name": "Law No. 6563 on the Regulation of Electronic Commerce",
+        "article": "Articles 6-8",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6563&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Send commercial electronic messages only with prior consent recorded in the message management system (IYS), with an opt-out in every message.",
+      "applies_to": [
+        "channel.cerid-store",
+        "flow.account-data"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "name": "consent records CTest for commercial messages",
+        "state": "planned"
+      },
+      "effective": "2015-05-01",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s40",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.6563.etbis",
+      "title": "Law No. 6563: ETBIS registration",
+      "kind": "user-action",
+      "topic": "consumer",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.8",
+        "STORE.8"
+      ],
+      "instrument": {
+        "name": "Law No. 6563 on the Regulation of Electronic Commerce and its intermediary service provider regulation",
+        "article": "ETBIS registration",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6563&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Register the store and its sellers in the e-commerce information system (ETBIS) before trading.",
+      "applies_to": [
+        "channel.cerid-store"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "name": "ETBIS registration record",
+        "state": "planned"
+      },
+      "effective": "2015-05-01",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s40",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.6502.distance-contracts",
+      "title": "Law No. 6502 and the Distance Contracts Regulation",
+      "kind": "obligation",
+      "topic": "consumer",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.8",
+        "STORE.3",
+        "SHIP.7"
+      ],
+      "instrument": {
+        "name": "Consumer Protection Law No. 6502 and the Regulation on Distance Contracts",
+        "article": "Articles 48-49; Regulation",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6502&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Give pre-contract information, confirm the contract on a durable medium and honour the withdrawal right, with its lawful waiver for digital content delivered at once.",
+      "applies_to": [
+        "channel.cerid-store",
+        "product.purchases",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "name": "checkout flow tests over the pre-contract steps",
+        "state": "planned"
+      },
+      "effective": "2014-05-28",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s39",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.5070.e-signature",
+      "title": "Law No. 5070 on electronic signatures",
+      "kind": "obligation",
+      "topic": "e-signature",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.8",
+        "STORE.5"
+      ],
+      "instrument": {
+        "name": "Electronic Signature Law No. 5070",
+        "article": "Articles 4-5",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5070&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Where a contract, invoice or developer agreement needs a written form, use a qualified electronic signature that the law equates with a handwritten one.",
+      "applies_to": [
+        "channel.cerid-store",
+        "product.purchases"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "name": "developer agreement signing tests",
+        "state": "planned"
+      },
+      "effective": "2004-07-23",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.5846.software-works",
+      "title": "Law No. 5846: software as a work and licence form",
+      "kind": "obligation",
+      "topic": "intellectual-property",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.4",
+        "SHIP.7",
+        "SHIP.9"
+      ],
+      "instrument": {
+        "name": "Law No. 5846 on Intellectual and Artistic Works",
+        "article": "Articles 2, 48-52",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5846&MevzuatTur=1&MevzuatTertip=3",
+        "consolidated": null
+      },
+      "obligation": "Treat software and assets as works; licences and transfers are written and name the rights granted; third-party works are used only within their licence.",
+      "applies_to": [
+        "channel.distribution",
+        "channel.mods-and-ugc",
+        "channel.cerid-store"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.4",
+        "name": "licence-policy CTest over every pin and package",
+        "state": "planned"
+      },
+      "effective": "1952-01-01",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.4",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.6769.industrial-property",
+      "title": "Industrial Property Law No. 6769",
+      "kind": "obligation",
+      "topic": "intellectual-property",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.4"
+      ],
+      "instrument": {
+        "name": "Industrial Property Law No. 6769",
+        "article": "Trademarks and patents",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6769&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Clear product names against registered trademarks and respect patents, including codec patents, before release.",
+      "applies_to": [
+        "channel.distribution",
+        "channel.cerid-store"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.4",
+        "name": "name clearance record per product",
+        "state": "planned"
+      },
+      "effective": "2017-01-10",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.4",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.turkpatent.trademarks",
+      "title": "Trademark filings for product names (TURKPATENT, EUIPO)",
+      "kind": "user-action",
+      "topic": "intellectual-property",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.4",
+        "STORE.8"
+      ],
+      "instrument": {
+        "name": "Industrial Property Law No. 6769",
+        "article": "Trademark registration",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6769&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "File trademarks for product names with TURKPATENT and the EUIPO before launch.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.4",
+        "name": "filing records",
+        "state": "planned"
+      },
+      "effective": "2017-01-10",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.4",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.5378.accessibility",
+      "title": "Law No. 5378 on Persons with Disabilities",
+      "kind": "obligation",
+      "topic": "accessibility",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.7",
+        "A11Y-GAME",
+        "STORE.2"
+      ],
+      "instrument": {
+        "name": "Law No. 5378 on Persons with Disabilities",
+        "article": "Accessibility of information and communication services",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5378&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Make information and communication services, storefronts and purchase flows accessible under the law and its accessibility rules.",
+      "applies_to": [
+        "channel.cerid-store",
+        "product.purchases",
+        "product.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.7",
+        "name": "conformance matrix CTest",
+        "state": "planned"
+      },
+      "effective": "2005-07-07",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.7",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.3065.vat",
+      "title": "VAT Law No. 3065 for digital sales",
+      "kind": "obligation",
+      "topic": "tax",
+      "state": "planned",
+      "owner": "store",
+      "rows": [
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Value Added Tax Law No. 3065",
+        "article": "Taxable events and the electronic services regime",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=3065&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Charge, invoice and declare VAT on store sales, including the VAT-3 regime for non-resident electronic service providers selling into Turkey.",
+      "applies_to": [
+        "channel.cerid-store",
+        "product.purchases",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-store.3",
+        "name": "tax calculation tests per sale type",
+        "state": "planned"
+      },
+      "effective": "1985-01-01",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s36",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.7194.digital-service-tax",
+      "title": "Digital service tax (Law No. 7194)",
+      "kind": "obligation",
+      "topic": "tax",
+      "state": "planned",
+      "owner": "store",
+      "rows": [
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Law No. 7194 on the Digital Service Tax",
+        "article": "Articles 1-8 and the 2026-2027 rate decision",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=7194&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Monitor the revenue thresholds and declare the digital service tax on in-scope store revenue at the current rate.",
+      "applies_to": [
+        "channel.cerid-store",
+        "product.purchases",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-store.3",
+        "name": "threshold monitoring tests",
+        "state": "planned"
+      },
+      "effective": "2020-03-01",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s35",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.213.e-archive",
+      "title": "Tax Procedure Law No. 213: e-invoice and e-archive",
+      "kind": "obligation",
+      "topic": "tax",
+      "state": "planned",
+      "owner": "store",
+      "rows": [
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Tax Procedure Law No. 213 and the e-invoice and e-archive general communiqués",
+        "article": "E-archive invoicing",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.gib.gov.tr/",
+        "consolidated": null
+      },
+      "obligation": "Issue e-archive or e-invoices for every store sale and keep them for the statutory period.",
+      "applies_to": [
+        "channel.cerid-store",
+        "product.purchases",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-store.3",
+        "name": "invoice generation tests",
+        "state": "planned"
+      },
+      "effective": "1961",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-store.3",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.6493.payment-institutions",
+      "title": "Law No. 6493 on payment services",
+      "kind": "obligation",
+      "topic": "payments",
+      "state": "planned",
+      "owner": "store",
+      "rows": [
+        "STORE.3",
+        "SHIP.7"
+      ],
+      "instrument": {
+        "name": "Law No. 6493 on Payment and Security Settlement Systems, Payment Services and Electronic Money Institutions",
+        "article": "Payment service licensing",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6493&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Collect payments only through a licensed payment institution and decide the merchant-of-record role so the store never provides an unlicensed payment service.",
+      "applies_to": [
+        "channel.cerid-store",
+        "product.purchases",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-store.3",
+        "name": "payment adapter tests against a licensed institution's sandbox",
+        "state": "planned"
+      },
+      "effective": "2013-06-27",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-store.0",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.kvkk.ai-recommendations",
+      "title": "KVKK recommendations on personal data in artificial intelligence",
+      "kind": "obligation",
+      "topic": "ai",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.6",
+        "AI.1",
+        "AGENT.1"
+      ],
+      "instrument": {
+        "name": "KVKK recommendations on the protection of personal data in the field of artificial intelligence",
+        "article": "Whole guidance",
+        "type": "guidance",
+        "jurisdiction": "TR",
+        "primary": "https://www.kvkk.gov.tr/",
+        "consolidated": null
+      },
+      "obligation": "Apply privacy by design, minimisation and impact assessment to AI features that process personal data.",
+      "applies_to": [
+        "product.ai-features"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.6",
+        "name": "AI feature inventory CTest",
+        "state": "planned"
+      },
+      "effective": "2021-09",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.6",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.ai-bill",
+      "title": "Turkey's artificial intelligence bill",
+      "kind": "obligation",
+      "topic": "ai",
+      "state": "watch",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.6"
+      ],
+      "instrument": {
+        "name": "Draft law on artificial intelligence",
+        "article": "Pending",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.tbmm.gov.tr/",
+        "consolidated": null
+      },
+      "obligation": "Track the bill and pin its duties once enacted.",
+      "applies_to": [
+        "product.ai-features"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.6",
+        "name": "watch item review",
+        "state": "planned"
+      },
+      "effective": null,
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.6",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.gdpr.principles",
+      "title": "GDPR: principles, lawful basis, privacy by design and records",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "NET.2",
+        "CRASH-FIX.1",
+        "CRASH-FIX.2",
+        "OPS.1",
+        "ANTICHEAT",
+        "NET-SERVER",
+        "STORE.1"
+      ],
+      "instrument": {
+        "name": "Regulation (EU) 2016/679 (GDPR)",
+        "article": "Articles 5, 6, 9, 25 and 30",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2016/679/oj",
+        "consolidated": null
+      },
+      "obligation": "Process personal data lawfully on an Article 6 basis (Article 9 for special categories), minimised and purpose-bound, with data protection by design and by default and a record of processing activities.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "data inventory CTest: every flow declares its lawful basis per jurisdiction",
+        "state": "planned"
+      },
+      "effective": "2018-05-25",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.gdpr.children",
+      "title": "GDPR: children's consent",
+      "kind": "obligation",
+      "topic": "children",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "COMPLY.5",
+        "STORE.1"
+      ],
+      "instrument": {
+        "name": "Regulation (EU) 2016/679 (GDPR)",
+        "article": "Article 8",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2016/679/oj",
+        "consolidated": null
+      },
+      "obligation": "Where consent is the basis for an information society service offered to a child, obtain the holder of parental responsibility's consent below the member state's age (13 to 16) with reasonable verification.",
+      "applies_to": [
+        "flow.account-data",
+        "flow.telemetry",
+        "product.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.5",
+        "name": "age-signal and parental-consent tests",
+        "state": "planned"
+      },
+      "effective": "2018-05-25",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.5",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.gdpr.rights",
+      "title": "GDPR: transparency and data subject rights",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "STORE.1",
+        "CRASH-FIX.2",
+        "OPS.1"
+      ],
+      "instrument": {
+        "name": "Regulation (EU) 2016/679 (GDPR)",
+        "article": "Articles 12-22",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2016/679/oj",
+        "consolidated": null
+      },
+      "obligation": "Give transparent notices and honour access, rectification, erasure, restriction, portability and objection within one month.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "data subject request service tests (deletion reaches every store)",
+        "state": "planned"
+      },
+      "effective": "2018-05-25",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.gdpr.breach",
+      "title": "GDPR: security and 72-hour breach notification",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "COMPLY.3",
+        "CRASH-FIX.2"
+      ],
+      "instrument": {
+        "name": "Regulation (EU) 2016/679 (GDPR)",
+        "article": "Articles 32-34",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2016/679/oj",
+        "consolidated": null
+      },
+      "obligation": "Secure processing appropriately and notify the supervisory authority within 72 hours of becoming aware of a breach, and the data subjects when the risk is high.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "breach-notification runbook rehearsal with per-regulator clocks",
+        "state": "planned"
+      },
+      "effective": "2018-05-25",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.gdpr.dpia",
+      "title": "GDPR: data protection impact assessments",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "CRASH-FIX.2",
+        "ANTICHEAT"
+      ],
+      "instrument": {
+        "name": "Regulation (EU) 2016/679 (GDPR)",
+        "article": "Article 35",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2016/679/oj",
+        "consolidated": null
+      },
+      "obligation": "Assess high-risk processing (crash pools with memory contents, anti-cheat signals, children's data) before it starts.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.anticheat",
+        "flow.account-data"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "DPIA template and records",
+        "state": "planned"
+      },
+      "effective": "2018-05-25",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.gdpr.transfers",
+      "title": "GDPR: transfers to third countries",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "NET-SERVER",
+        "CRASH-FIX.2"
+      ],
+      "instrument": {
+        "name": "Regulation (EU) 2016/679 (GDPR)",
+        "article": "Articles 44-49",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2016/679/oj",
+        "consolidated": null
+      },
+      "obligation": "Transfer personal data outside the EEA only on an adequacy decision or appropriate safeguards, recorded per flow, and choose server regions accordingly.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "transfer records CTest",
+        "state": "planned"
+      },
+      "effective": "2018-05-25",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.edpb.pseudonymisation",
+      "title": "EDPB Guidelines 01/2025 on pseudonymisation",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "CRASH-FIX.1",
+        "CRASH-FIX.2",
+        "OPS.1"
+      ],
+      "instrument": {
+        "name": "EDPB Guidelines 01/2025 on pseudonymisation",
+        "article": "Whole guidance",
+        "type": "guidance",
+        "jurisdiction": "EU",
+        "primary": "https://www.edpb.europa.eu/",
+        "consolidated": null
+      },
+      "obligation": "Pseudonymise crash and telemetry identifiers with keyed one-way functions whose keys stay separate; pseudonymised data remains personal data.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "pseudonymisation tests over crash packs",
+        "state": "planned"
+      },
+      "effective": "2025-01",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n120",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.eprivacy.device-storage",
+      "title": "ePrivacy Directive: storing and reading on devices",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "OPS.1",
+        "NET.2"
+      ],
+      "instrument": {
+        "name": "Directive 2002/58/EC (ePrivacy)",
+        "article": "Article 5(3)",
+        "type": "directive",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/dir/2002/58/oj",
+        "consolidated": null
+      },
+      "obligation": "Store or read identifiers on a user's device only with consent unless strictly necessary for the service the user asked for.",
+      "applies_to": [
+        "flow.telemetry",
+        "flow.crash-reports",
+        "flow.network-identity"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "consent records CTest",
+        "state": "planned"
+      },
+      "effective": "2003-10-31",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#area-9-crash-pipeline",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.cra.reporting",
+      "title": "CRA: reporting actively exploited vulnerabilities and severe incidents",
+      "kind": "obligation",
+      "topic": "security",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.3",
+        "SEC.1",
+        "CRASH-FIX.2"
+      ],
+      "instrument": {
+        "name": "Regulation (EU) 2024/2847 (Cyber Resilience Act)",
+        "article": "Article 14",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj",
+        "consolidated": null
+      },
+      "obligation": "Through ENISA's single reporting platform, send an early warning within 24 hours, a notification within 72 hours and a final report after a fix, for every actively exploited vulnerability and severe incident in a product with digital elements on the EU market.",
+      "applies_to": [
+        "channel.distribution",
+        "channel.third-party-stores",
+        "channel.cerid-store",
+        "flow.crash-reports"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.3",
+        "name": "reporting workflow rehearsed against seeded incidents",
+        "state": "planned"
+      },
+      "effective": "2026-09-11",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n21",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.cra.essential-requirements",
+      "title": "CRA: essential requirements, support period and SBOM",
+      "kind": "obligation",
+      "topic": "security",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.3",
+        "SUPPLY.1",
+        "SEC.1"
+      ],
+      "instrument": {
+        "name": "Regulation (EU) 2024/2847 (Cyber Resilience Act)",
+        "article": "Article 13 and Annex I",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj",
+        "consolidated": null
+      },
+      "obligation": "Meet the essential cybersecurity requirements, declare a support period, keep an SBOM, handle vulnerabilities with coordinated disclosure and ship security updates for every product with digital elements.",
+      "applies_to": [
+        "channel.distribution",
+        "channel.third-party-stores",
+        "channel.cerid-store"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.3",
+        "name": "release CTests: SBOM, declared support period and reporting contact",
+        "state": "planned"
+      },
+      "effective": "2027-12-11",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s49",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.cra.reporting-contact",
+      "title": "CRA: reporting contact and ENISA platform account",
+      "kind": "user-action",
+      "topic": "security",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.3"
+      ],
+      "instrument": {
+        "name": "Regulation (EU) 2024/2847 (Cyber Resilience Act)",
+        "article": "Articles 13-14",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj",
+        "consolidated": null
+      },
+      "obligation": "Name the single point of contact for vulnerability reports and open the ENISA single reporting platform account for products on the EU market.",
+      "applies_to": [
+        "channel.distribution",
+        "channel.third-party-stores",
+        "channel.cerid-store"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.3",
+        "name": "reporting contact record",
+        "state": "planned"
+      },
+      "effective": "2026-09-11",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s49",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.nis2",
+      "title": "NIS2 for services Cerid operates",
+      "kind": "obligation",
+      "topic": "security",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.3",
+        "STORE.7",
+        "NET-SERVER"
+      ],
+      "instrument": {
+        "name": "Directive (EU) 2022/2555 (NIS2)",
+        "article": "Articles 21 and 23",
+        "type": "directive",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/dir/2022/2555/oj",
+        "consolidated": null
+      },
+      "obligation": "If an operated service (store, servers, crash pool) falls in scope, apply the risk-management measures and the 24-hour, 72-hour and one-month incident reporting.",
+      "applies_to": [
+        "channel.cerid-store",
+        "product.online-sessions",
+        "flow.crash-reports"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.3",
+        "name": "scope classification record and incident runbook rehearsal",
+        "state": "planned"
+      },
+      "effective": "2024-10-18",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.3",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.pld",
+      "title": "Product Liability Directive: software as a product",
+      "kind": "obligation",
+      "topic": "security",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.3",
+        "SHIP.3"
+      ],
+      "instrument": {
+        "name": "Directive (EU) 2024/2853 (Product Liability Directive)",
+        "article": "Articles 4, 7 and 11",
+        "type": "directive",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/dir/2024/2853/oj",
+        "consolidated": null
+      },
+      "obligation": "Software is a product; a missing security update can make it defective and liability cannot be excluded by contract, so support periods and update delivery are evidence-backed.",
+      "applies_to": [
+        "channel.distribution",
+        "channel.third-party-stores",
+        "channel.cerid-store"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.3",
+        "name": "support-period and update-delivery records per product",
+        "state": "planned"
+      },
+      "effective": "2026-12-09",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s46",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-03",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.ai-act.transparency",
+      "title": "AI Act: transparency for AI interaction and synthetic media",
+      "kind": "obligation",
+      "topic": "ai",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.6",
+        "AGENT.1",
+        "AI.1"
+      ],
+      "instrument": {
+        "name": "Regulation (EU) 2024/1689 (AI Act)",
+        "article": "Article 50",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2024/1689/oj",
+        "consolidated": null
+      },
+      "obligation": "Tell people when they interact with an AI system and mark synthetic audio, image, video and text in a machine-readable way (C2PA content credentials); systems already on the market are marked by 2026-12-02.",
+      "applies_to": [
+        "product.ai-features"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.6",
+        "name": "AI feature CTests: disclosure and marking present",
+        "state": "planned"
+      },
+      "effective": "2026-08-02",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s47",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2026-12-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.ai-act.literacy-and-prohibitions",
+      "title": "AI Act: prohibited practices and AI literacy",
+      "kind": "obligation",
+      "topic": "ai",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.6",
+        "AI.1"
+      ],
+      "instrument": {
+        "name": "Regulation (EU) 2024/1689 (AI Act)",
+        "article": "Articles 4-5",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2024/1689/oj",
+        "consolidated": null
+      },
+      "obligation": "Never place a prohibited AI practice in a product and ensure AI literacy of the people operating AI features.",
+      "applies_to": [
+        "product.ai-features"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.6",
+        "name": "AI feature inventory CTest",
+        "state": "planned"
+      },
+      "effective": "2025-02-02",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.6",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.ai-act.gpai",
+      "title": "AI Act: general-purpose model obligations",
+      "kind": "obligation",
+      "topic": "ai",
+      "state": "watch",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.6",
+        "AI.1"
+      ],
+      "instrument": {
+        "name": "Regulation (EU) 2024/1689 (AI Act)",
+        "article": "Articles 53-55",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2024/1689/oj",
+        "consolidated": null
+      },
+      "obligation": "If Cerid ships or fine-tunes a general-purpose model, keep its documentation, copyright policy and training data summary.",
+      "applies_to": [
+        "product.ai-features"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.6",
+        "name": "model provenance records",
+        "state": "planned"
+      },
+      "effective": "2025-08-02",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.6",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Pinned when AI.1 decides that Cerid ships or fine-tunes a general-purpose model."
+    },
+    {
+      "id": "eu.dsa",
+      "title": "Digital Services Act: notice and action and protection of minors",
+      "kind": "obligation",
+      "topic": "online-safety",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.5",
+        "SHIP.9",
+        "EXT.5",
+        "STORE.6",
+        "COLLAB.1",
+        "4.2d"
+      ],
+      "instrument": {
+        "name": "Regulation (EU) 2022/2065 (Digital Services Act)",
+        "article": "Articles 16-17, 20 and 28",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2022/2065/oj",
+        "consolidated": null
+      },
+      "obligation": "Hosting and platform features take notices, issue statements of reasons, handle complaints and protect minors (Article 28); the micro and small enterprise exemption covers only the platform-tier duties.",
+      "applies_to": [
+        "channel.mods-and-ugc",
+        "flow.user-content",
+        "product.communications",
+        "product.collaboration"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.5",
+        "name": "notice-and-action pipeline CTest",
+        "state": "planned"
+      },
+      "effective": "2024-02-17",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s52",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.dsm-copyright",
+      "title": "Copyright DSM Directive: text and data mining and Article 17",
+      "kind": "obligation",
+      "topic": "intellectual-property",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.4",
+        "AI.1",
+        "SHIP.9"
+      ],
+      "instrument": {
+        "name": "Directive (EU) 2019/790 (Copyright in the Digital Single Market)",
+        "article": "Articles 4 and 17",
+        "type": "directive",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/dir/2019/790/oj",
+        "consolidated": null
+      },
+      "obligation": "Respect text and data mining opt-outs for training data and meet Article 17 for content-sharing services.",
+      "applies_to": [
+        "product.ai-features",
+        "channel.mods-and-ugc"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.4",
+        "name": "dataset licence and opt-out records",
+        "state": "planned"
+      },
+      "effective": "2021-06-07",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.4",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.eaa",
+      "title": "European Accessibility Act",
+      "kind": "obligation",
+      "topic": "accessibility",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.7",
+        "A11Y-GAME",
+        "WEB.5",
+        "STORE.2",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Directive (EU) 2019/882 (European Accessibility Act)",
+        "article": "Articles 4 and 13; Annex I",
+        "type": "directive",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/dir/2019/882/oj",
+        "consolidated": null
+      },
+      "obligation": "E-commerce services (storefronts, purchase flows) and electronic communications with real-time text meet the accessibility requirements (EN 301 549, WCAG 2.2 AA) with an accessibility statement.",
+      "applies_to": [
+        "channel.cerid-store",
+        "product.purchases",
+        "product.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.7",
+        "name": "conformance matrix CTest",
+        "state": "planned"
+      },
+      "effective": "2025-06-28",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s48",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.dual-use",
+      "title": "EU dual-use regulation: cryptography",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "COMPLY.1",
+        "NET.2"
+      ],
+      "instrument": {
+        "name": "Regulation (EU) 2021/821 (dual-use items)",
+        "article": "Annex I Category 5 Part 2 and the cryptography note",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2021/821/oj",
+        "consolidated": null
+      },
+      "obligation": "Classify every export's cryptography against Category 5 Part 2 and its cryptography note and hold the record.",
+      "applies_to": [
+        "channel.distribution",
+        "channel.third-party-stores",
+        "channel.cerid-store"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "name": "cryptography inventory CTest: a changed inventory needs a reviewed classification",
+        "state": "planned"
+      },
+      "effective": "2021-09-09",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.restrictive-measures",
+      "title": "EU restrictive measures",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "store",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council regulations adopted under Article 215 TFEU (EU sanctions)",
+        "article": "Asset freezes and prohibitions",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://www.sanctionsmap.eu/",
+        "consolidated": null
+      },
+      "obligation": "Screen distribution, accounts and payments against the EU sanctions lists.",
+      "applies_to": [
+        "channel.cerid-store",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "name": "sanctions screening tests over accounts and payments",
+        "state": "planned"
+      },
+      "effective": "2026-10-27",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The lists change continuously; the screening reads the current list at use."
+    },
+    {
+      "id": "eu.cpc.virtual-currencies",
+      "title": "CPC key principles on in-game virtual currencies",
+      "kind": "obligation",
+      "topic": "consumer",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.8",
+        "SHIP.7",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Consumer Protection Cooperation network key principles on in-game virtual currencies",
+        "article": "Whole guidance",
+        "type": "guidance",
+        "jurisdiction": "EU",
+        "primary": "https://commission.europa.eu/",
+        "consolidated": null
+      },
+      "obligation": "Price virtual currency items in real money as well, never obscure costs or pressure minors, and disclose paid random item odds.",
+      "applies_to": [
+        "product.purchases",
+        "channel.cerid-store"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "name": "loot-box and virtual-currency rule engine tests",
+        "state": "planned"
+      },
+      "effective": "2025-03",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s44",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.consumer-rights",
+      "title": "Consumer Rights Directive: digital content and withdrawal",
+      "kind": "obligation",
+      "topic": "consumer",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.8",
+        "STORE.3",
+        "SHIP.7"
+      ],
+      "instrument": {
+        "name": "Directive 2011/83/EU (Consumer Rights)",
+        "article": "Articles 6, 9 and 16(m)",
+        "type": "directive",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/dir/2011/83/oj",
+        "consolidated": null
+      },
+      "obligation": "Give pre-contract information and honour the 14-day withdrawal right, with the express-consent waiver for digital content supplied at once.",
+      "applies_to": [
+        "channel.cerid-store",
+        "product.purchases",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "name": "checkout flow tests over the pre-contract steps",
+        "state": "planned"
+      },
+      "effective": "2014-06-13",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.digital-fairness-act",
+      "title": "Digital Fairness Act",
+      "kind": "obligation",
+      "topic": "consumer",
+      "state": "watch",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.8"
+      ],
+      "instrument": {
+        "name": "Proposed Digital Fairness Act",
+        "article": "Pending",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://commission.europa.eu/",
+        "consolidated": null
+      },
+      "obligation": "Track the proposal (dark patterns, addictive design, virtual currencies) and pin its duties once adopted.",
+      "applies_to": [
+        "product.purchases",
+        "channel.cerid-store"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "name": "watch item review",
+        "state": "planned"
+      },
+      "effective": null,
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s45",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.eecc",
+      "title": "European Electronic Communications Code",
+      "kind": "obligation",
+      "topic": "communications",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.9",
+        "NET-LIVE"
+      ],
+      "instrument": {
+        "name": "Directive (EU) 2018/1972 (European Electronic Communications Code)",
+        "article": "Number-independent interpersonal communication services",
+        "type": "directive",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/dir/2018/1972/oj",
+        "consolidated": null
+      },
+      "obligation": "Classify voice, video and text features as number-independent interpersonal communication services and meet the duties that follow.",
+      "applies_to": [
+        "product.communications",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.9",
+        "name": "classification record CTest per communication surface",
+        "state": "planned"
+      },
+      "effective": "2020-12-21",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.9",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.avmsd",
+      "title": "Audiovisual Media Services Directive for video sharing and live streaming",
+      "kind": "obligation",
+      "topic": "communications",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.9",
+        "NET-LIVE"
+      ],
+      "instrument": {
+        "name": "Directive 2010/13/EU as amended by Directive (EU) 2018/1808",
+        "article": "Articles 28a-28b",
+        "type": "directive",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/dir/2010/13/oj",
+        "consolidated": null
+      },
+      "obligation": "Classify video-sharing and live-streaming features and apply the video-sharing platform duties (minors, reporting, terms) where they apply.",
+      "applies_to": [
+        "product.communications",
+        "channel.mods-and-ugc"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.9",
+        "name": "classification record CTest",
+        "state": "planned"
+      },
+      "effective": "2010-05-05",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.9",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "gb.uk-gdpr",
+      "title": "UK GDPR and the Data Protection Act 2018",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "STORE.1",
+        "OPS.1"
+      ],
+      "instrument": {
+        "name": "UK GDPR and Data Protection Act 2018",
+        "article": "Whole act, as amended",
+        "type": "law",
+        "jurisdiction": "GB",
+        "primary": "https://www.legislation.gov.uk/ukpga/2018/12",
+        "consolidated": null
+      },
+      "obligation": "Meet the UK GDPR's principles, rights, breach and transfer duties for UK users, as the GDPR entries do for the EU.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "data inventory CTest per jurisdiction",
+        "state": "planned"
+      },
+      "effective": "2021-01-01",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "gb.aadc",
+      "title": "Age Appropriate Design Code",
+      "kind": "obligation",
+      "topic": "children",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.5",
+        "STORE.1"
+      ],
+      "instrument": {
+        "name": "ICO Age Appropriate Design Code",
+        "article": "Standards 1-15",
+        "type": "code-of-practice",
+        "jurisdiction": "GB",
+        "primary": "https://ico.org.uk/",
+        "consolidated": null
+      },
+      "obligation": "Design services likely to be accessed by children with high-privacy defaults, minimised data and no nudging.",
+      "applies_to": [
+        "flow.account-data",
+        "flow.telemetry",
+        "product.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.5",
+        "name": "privacy default tests for child accounts",
+        "state": "planned"
+      },
+      "effective": "2021-09-02",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.5",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "gb.osa",
+      "title": "Online Safety Act 2023",
+      "kind": "obligation",
+      "topic": "online-safety",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.5",
+        "NET-LIVE",
+        "SHIP.9",
+        "STORE-SOCIAL"
+      ],
+      "instrument": {
+        "name": "Online Safety Act 2023 and Ofcom's codes",
+        "article": "Illegal-harms and children's safety duties",
+        "type": "law",
+        "jurisdiction": "GB",
+        "primary": "https://www.legislation.gov.uk/ukpga/2023/50",
+        "consolidated": null
+      },
+      "obligation": "In-game chat, voice and user content assess illegal-harm and children's risks, offer reporting and blocking, and use age assurance where children's access duties apply.",
+      "applies_to": [
+        "channel.mods-and-ugc",
+        "flow.user-content",
+        "product.communications",
+        "product.collaboration"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.5",
+        "name": "chat and voice safety hook CTests",
+        "state": "planned"
+      },
+      "effective": "2025-07-25",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s51",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "gb.psti",
+      "title": "Product Security and Telecommunications Infrastructure Act 2022",
+      "kind": "obligation",
+      "topic": "security",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.3",
+        "EMBED.2"
+      ],
+      "instrument": {
+        "name": "Product Security and Telecommunications Infrastructure Act 2022 and its regulations",
+        "article": "Security requirements for connectable products",
+        "type": "law",
+        "jurisdiction": "GB",
+        "primary": "https://www.legislation.gov.uk/ukpga/2022/46",
+        "consolidated": null
+      },
+      "obligation": "Connectable products ban universal default passwords, publish a vulnerability reporting policy and state the minimum security update period.",
+      "applies_to": [
+        "product.connectable-devices"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.3",
+        "name": "release CTests: reporting contact and support period",
+        "state": "planned"
+      },
+      "effective": "2024-04-29",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.3",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "gb.equality-act",
+      "title": "Equality Act 2010",
+      "kind": "obligation",
+      "topic": "accessibility",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.7",
+        "A11Y-GAME"
+      ],
+      "instrument": {
+        "name": "Equality Act 2010",
+        "article": "Section 29 and Schedule 2",
+        "type": "law",
+        "jurisdiction": "GB",
+        "primary": "https://www.legislation.gov.uk/ukpga/2010/15",
+        "consolidated": null
+      },
+      "obligation": "Make reasonable adjustments so disabled users can use services, storefronts and purchase flows.",
+      "applies_to": [
+        "channel.cerid-store",
+        "product.purchases"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.7",
+        "name": "conformance matrix CTest",
+        "state": "planned"
+      },
+      "effective": "2010-10-01",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.7",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "gb.sanctions",
+      "title": "UK sanctions (OFSI)",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "store",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Sanctions and Anti-Money Laundering Act 2018",
+        "article": "Regulations made under the act",
+        "type": "law",
+        "jurisdiction": "GB",
+        "primary": "https://www.legislation.gov.uk/ukpga/2018/13",
+        "consolidated": null
+      },
+      "obligation": "Screen distribution, accounts and payments against the UK consolidated list.",
+      "applies_to": [
+        "channel.cerid-store",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "name": "sanctions screening tests over accounts and payments",
+        "state": "planned"
+      },
+      "effective": "2018-05-23",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "us.coppa",
+      "title": "COPPA Rule as amended in 2025",
+      "kind": "obligation",
+      "topic": "children",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "COMPLY.5",
+        "STORE.1"
+      ],
+      "instrument": {
+        "name": "Children's Online Privacy Protection Rule",
+        "article": "16 CFR Part 312",
+        "type": "regulation",
+        "jurisdiction": "US",
+        "primary": "https://www.ecfr.gov/current/title-16/chapter-I/subchapter-C/part-312",
+        "consolidated": null
+      },
+      "obligation": "Services directed to children under 13 or knowingly collecting their data give notice, obtain verifiable parental consent, minimise and retain data only as long as needed, and keep a written security programme.",
+      "applies_to": [
+        "flow.account-data",
+        "flow.telemetry",
+        "product.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.5",
+        "name": "age-signal and parental-consent tests",
+        "state": "planned"
+      },
+      "effective": "2026-04-22",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s50",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "us.ear.encryption",
+      "title": "EAR: encryption classification and License Exception ENC",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "COMPLY.1",
+        "COMPLY.8",
+        "NET.2"
+      ],
+      "instrument": {
+        "name": "Export Administration Regulations (15 CFR 730-774)",
+        "article": "Category 5 Part 2; 5D002, 5D992.c; Section 740.17",
+        "type": "regulation",
+        "jurisdiction": "US",
+        "primary": "https://www.ecfr.gov/current/title-15/subtitle-B/chapter-VII/subchapter-C",
+        "consolidated": null
+      },
+      "obligation": "Classify every export's cryptography (5D002 or mass-market 5D992.c), apply License Exception ENC with its self-classification where it applies, and give stores the export-compliance answer the record supports.",
+      "applies_to": [
+        "channel.distribution",
+        "channel.third-party-stores",
+        "channel.cerid-store"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "name": "cryptography inventory CTest: a changed inventory needs a reviewed classification",
+        "state": "planned"
+      },
+      "effective": "2021-03-29",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s54",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "us.ear.self-classification-report",
+      "title": "EAR: annual self-classification report",
+      "kind": "user-action",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "COMPLY.1",
+        "COMPLY.8"
+      ],
+      "instrument": {
+        "name": "Export Administration Regulations (15 CFR 730-774)",
+        "article": "Section 740.17(b)(1) and Supplement 8 to Part 742",
+        "type": "regulation",
+        "jurisdiction": "US",
+        "primary": "https://www.ecfr.gov/current/title-15/subtitle-B/chapter-VII/subchapter-C",
+        "consolidated": null
+      },
+      "obligation": "File the self-classification report for mass-market encryption items by 1 February each year.",
+      "applies_to": [
+        "channel.distribution",
+        "channel.third-party-stores",
+        "channel.cerid-store"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "name": "report filing record",
+        "state": "planned"
+      },
+      "effective": "2021-03-29",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s54",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "us.sanctions",
+      "title": "US sanctions (OFAC)",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "store",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "International Emergency Economic Powers Act and the OFAC regulations",
+        "article": "31 CFR Chapter V",
+        "type": "regulation",
+        "jurisdiction": "US",
+        "primary": "https://www.ecfr.gov/current/title-31/subtitle-B/chapter-V",
+        "consolidated": null
+      },
+      "obligation": "Screen distribution, accounts and payments against the OFAC lists and embargoed destinations.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "name": "sanctions screening tests over accounts and payments",
+        "state": "planned"
+      },
+      "effective": "1977-10-28",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "us-ca.ccpa",
+      "title": "CCPA as amended by the CPRA",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "STORE.1"
+      ],
+      "instrument": {
+        "name": "California Consumer Privacy Act (CCPA/CPRA)",
+        "article": "Civil Code 1798.100 et seq.",
+        "type": "law",
+        "jurisdiction": "US-CA",
+        "primary": "https://leginfo.legislature.ca.gov/faces/codes_displayText.xhtml?division=3.&part=4.&lawCode=CIV&title=1.81.5",
+        "consolidated": null
+      },
+      "obligation": "Give notice at collection, honour know, delete, correct and opt-out (sale or sharing) requests and limit sensitive data use; the other US state laws join as their own entries when a product enters their markets.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "data subject request service tests",
+        "state": "planned"
+      },
+      "effective": "2023-01-01",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "us.section-508",
+      "title": "Section 508 standards",
+      "kind": "obligation",
+      "topic": "accessibility",
+      "state": "watch",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.7"
+      ],
+      "instrument": {
+        "name": "ICT Accessibility Standards (Section 508)",
+        "article": "36 CFR Part 1194",
+        "type": "regulation",
+        "jurisdiction": "US",
+        "primary": "https://www.ecfr.gov/current/title-36/chapter-XI/part-1194",
+        "consolidated": null
+      },
+      "obligation": "Engineering products sold to US federal bodies meet the 508 standards (WCAG 2.0 AA by reference).",
+      "applies_to": [
+        "channel.distribution"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.7",
+        "name": "conformance matrix CTest",
+        "state": "planned"
+      },
+      "effective": "2018-01-18",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.7",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Pinned when a product is offered to a US federal body."
+    },
+    {
+      "id": "us.ada",
+      "title": "Americans with Disabilities Act, Title III",
+      "kind": "obligation",
+      "topic": "accessibility",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.7"
+      ],
+      "instrument": {
+        "name": "Americans with Disabilities Act",
+        "article": "Title III",
+        "type": "law",
+        "jurisdiction": "US",
+        "primary": "https://www.ada.gov/law-and-regs/ada/",
+        "consolidated": null
+      },
+      "obligation": "Public accommodations, including online storefronts as US courts and the Department of Justice apply them, are accessible.",
+      "applies_to": [
+        "channel.cerid-store",
+        "product.purchases"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.7",
+        "name": "conformance matrix CTest",
+        "state": "planned"
+      },
+      "effective": "1990-07-26",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.7",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "us.cvaa",
+      "title": "CVAA: accessible advanced communications services",
+      "kind": "obligation",
+      "topic": "accessibility",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.7",
+        "NET-LIVE",
+        "A11Y-GAME"
+      ],
+      "instrument": {
+        "name": "Twenty-First Century Communications and Video Accessibility Act rules",
+        "article": "47 CFR Part 14",
+        "type": "regulation",
+        "jurisdiction": "US",
+        "primary": "https://www.ecfr.gov/current/title-47/chapter-I/subchapter-A/part-14",
+        "consolidated": null
+      },
+      "obligation": "Voice, video and text chat in games and products is accessible to people with disabilities.",
+      "applies_to": [
+        "product.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.7",
+        "name": "conformance matrix CTest",
+        "state": "planned"
+      },
+      "effective": "2013-10-08",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.7",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "us.secure-software-attestation",
+      "title": "Secure software development attestation",
+      "kind": "obligation",
+      "topic": "security",
+      "state": "watch",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.3",
+        "SUPPLY.1"
+      ],
+      "instrument": {
+        "name": "CISA secure software development attestation form (NIST SP 800-218)",
+        "article": "Whole form",
+        "type": "guidance",
+        "jurisdiction": "US",
+        "primary": "https://www.cisa.gov/secure-software-attestation-form",
+        "consolidated": null
+      },
+      "obligation": "Attest secure development practices when selling software to US federal agencies.",
+      "applies_to": [
+        "channel.distribution"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.3",
+        "name": "attestation record",
+        "state": "planned"
+      },
+      "effective": "2024-03-11",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.3",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Pinned when a product is sold to a US federal agency."
+    },
+    {
+      "id": "us.dmca",
+      "title": "DMCA notice and takedown",
+      "kind": "obligation",
+      "topic": "intellectual-property",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.4",
+        "SHIP.9",
+        "EXT.5"
+      ],
+      "instrument": {
+        "name": "Digital Millennium Copyright Act",
+        "article": "17 U.S.C. 512",
+        "type": "law",
+        "jurisdiction": "US",
+        "primary": "https://uscode.house.gov/view.xhtml?req=granuleid:USC-prelim-title17-section512",
+        "consolidated": null
+      },
+      "obligation": "Hosted user content keeps a designated agent, acts on notices and counter-notices and terminates repeat infringers.",
+      "applies_to": [
+        "channel.mods-and-ugc",
+        "flow.user-content"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.4",
+        "name": "notice-and-action pipeline CTest",
+        "state": "planned"
+      },
+      "effective": "1998-10-28",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.4",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "us-tx.app-store-accountability",
+      "title": "Texas App Store Accountability Act",
+      "kind": "obligation",
+      "topic": "children",
+      "state": "watch",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.5",
+        "COMPLY.8"
+      ],
+      "instrument": {
+        "name": "Texas App Store Accountability Act (SB 2420)",
+        "article": "Whole act",
+        "type": "law",
+        "jurisdiction": "US-TX",
+        "primary": "https://capitol.texas.gov/",
+        "consolidated": null
+      },
+      "obligation": "Track the enjoined law (age verification and parental consent through app stores) and pin it if it takes effect.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.third-party-stores"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.5",
+        "name": "watch item review",
+        "state": "planned"
+      },
+      "effective": null,
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s14",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "us-ut.app-store-accountability",
+      "title": "Utah App Store Accountability Act",
+      "kind": "obligation",
+      "topic": "children",
+      "state": "watch",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.5",
+        "COMPLY.8"
+      ],
+      "instrument": {
+        "name": "Utah App Store Accountability Act (SB 142)",
+        "article": "Whole act",
+        "type": "law",
+        "jurisdiction": "US-UT",
+        "primary": "https://le.utah.gov/",
+        "consolidated": null
+      },
+      "obligation": "Track the law's app store age verification and parental consent duties and pin them for a store serving Utah.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.third-party-stores"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.5",
+        "name": "watch item review",
+        "state": "planned"
+      },
+      "effective": "2025-05",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s14",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "br.lgpd",
+      "title": "Brazil LGPD",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2"
+      ],
+      "instrument": {
+        "name": "Lei Geral de Proteção de Dados (Law No. 13.709/2018)",
+        "article": "Articles 6-22",
+        "type": "law",
+        "jurisdiction": "BR",
+        "primary": "https://www.planalto.gov.br/ccivil_03/_ato2015-2018/2018/lei/l13709.htm",
+        "consolidated": null
+      },
+      "obligation": "Process Brazilian users' data on a legal basis with the principles, rights and breach duties of the law.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "data inventory CTest per jurisdiction",
+        "state": "planned"
+      },
+      "effective": "2020-09-18",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "br.eca-digital",
+      "title": "Brazil ECA Digital",
+      "kind": "obligation",
+      "topic": "children",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.5",
+        "COMPLY.8"
+      ],
+      "instrument": {
+        "name": "ECA Digital (Law No. 15.211/2025)",
+        "article": "Whole law",
+        "type": "law",
+        "jurisdiction": "BR",
+        "primary": "https://www.planalto.gov.br/ccivil_03/_ato2023-2026/2025/lei/L15211.htm",
+        "consolidated": null
+      },
+      "obligation": "Protect children in digital products: age verification, parental supervision tools and no paid random items for minors.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.third-party-stores",
+        "product.purchases"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.5",
+        "name": "loot-box rule engine and parental-tool tests",
+        "state": "planned"
+      },
+      "effective": "2026-03-17",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s43",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "cn.pipl",
+      "title": "China PIPL",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "watch",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2"
+      ],
+      "instrument": {
+        "name": "Personal Information Protection Law",
+        "article": "Articles 13, 38-40",
+        "type": "law",
+        "jurisdiction": "CN",
+        "primary": "https://www.npc.gov.cn/",
+        "consolidated": null
+      },
+      "obligation": "Process personal information of users in China on a legal basis, meet the localisation and cross-border assessment duties.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "data inventory CTest per jurisdiction",
+        "state": "planned"
+      },
+      "effective": "2021-11-01",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Pinned when a product enters China."
+    },
+    {
+      "id": "cn.synthetic-content-labelling",
+      "title": "China synthetic content labelling measures",
+      "kind": "obligation",
+      "topic": "ai",
+      "state": "watch",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.6"
+      ],
+      "instrument": {
+        "name": "Measures for labelling AI-generated synthetic content",
+        "article": "Whole measures",
+        "type": "regulation",
+        "jurisdiction": "CN",
+        "primary": "https://www.cac.gov.cn/",
+        "consolidated": null
+      },
+      "obligation": "Label generated content explicitly and implicitly for products in China.",
+      "applies_to": [
+        "product.ai-features"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.6",
+        "name": "AI feature CTests: disclosure and marking present",
+        "state": "planned"
+      },
+      "effective": "2025-09-01",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.6",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Pinned when a product enters China."
+    },
+    {
+      "id": "jp.appi",
+      "title": "Japan APPI",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2"
+      ],
+      "instrument": {
+        "name": "Act on the Protection of Personal Information",
+        "article": "Whole act, as amended",
+        "type": "law",
+        "jurisdiction": "JP",
+        "primary": "https://elaws.e-gov.go.jp/document?lawid=415AC0000000057",
+        "consolidated": null
+      },
+      "obligation": "Specify purposes, secure data, report leaks and meet the transfer rules for Japanese users.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "data inventory CTest per jurisdiction",
+        "state": "planned"
+      },
+      "effective": "2022-04-01",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "ca.pipeda",
+      "title": "Canada PIPEDA",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2"
+      ],
+      "instrument": {
+        "name": "Personal Information Protection and Electronic Documents Act",
+        "article": "Schedule 1 principles",
+        "type": "law",
+        "jurisdiction": "CA",
+        "primary": "https://laws-lois.justice.gc.ca/eng/acts/P-8.6/",
+        "consolidated": null
+      },
+      "obligation": "Meet the ten fair information principles and breach reporting for Canadian users.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "data inventory CTest per jurisdiction",
+        "state": "planned"
+      },
+      "effective": "2001-01-01",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "au.online-safety",
+      "title": "Australia Online Safety Act 2021",
+      "kind": "obligation",
+      "topic": "online-safety",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.5"
+      ],
+      "instrument": {
+        "name": "Online Safety Act 2021",
+        "article": "Basic online safety expectations and removal notices",
+        "type": "law",
+        "jurisdiction": "AU",
+        "primary": "https://www.legislation.gov.au/C2021A00076/latest/text",
+        "consolidated": null
+      },
+      "obligation": "Answer eSafety removal notices and meet the basic online safety expectations for chat and user content.",
+      "applies_to": [
+        "channel.mods-and-ugc",
+        "flow.user-content",
+        "product.communications",
+        "product.collaboration"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.5",
+        "name": "notice-and-action pipeline CTest",
+        "state": "planned"
+      },
+      "effective": "2022-01-23",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.5",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "int.wassenaar",
+      "title": "Wassenaar Arrangement dual-use list",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "COMPLY.1"
+      ],
+      "instrument": {
+        "name": "Wassenaar Arrangement List of Dual-Use Goods and Technologies",
+        "article": "Category 5 Part 2",
+        "type": "treaty",
+        "jurisdiction": "INT",
+        "primary": "https://www.wassenaar.org/control-lists/",
+        "consolidated": null
+      },
+      "obligation": "Classify cryptography against the Category 5 Part 2 controls Turkey, the EU members and the US implement.",
+      "applies_to": [
+        "channel.distribution"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "name": "classification record per product and release",
+        "state": "planned"
+      },
+      "effective": "1996-07-12",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "int.un-sanctions",
+      "title": "UN Security Council sanctions",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "store",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "UN Security Council Consolidated List",
+        "article": "Charter Article 41 measures",
+        "type": "treaty",
+        "jurisdiction": "INT",
+        "primary": "https://www.un.org/securitycouncil/content/un-sc-consolidated-list",
+        "consolidated": null
+      },
+      "obligation": "Screen distribution, accounts and payments against the UN consolidated list.",
+      "applies_to": [
+        "channel.cerid-store",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "name": "sanctions screening tests over accounts and payments",
+        "state": "planned"
+      },
+      "effective": "1945-10-24",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "int.iarc",
+      "title": "IARC age ratings",
+      "kind": "obligation",
+      "topic": "age-rating",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.8",
+        "SHIP.6",
+        "STORE.2"
+      ],
+      "instrument": {
+        "name": "International Age Rating Coalition questionnaire",
+        "article": "Rating questionnaire",
+        "type": "policy",
+        "jurisdiction": "INT",
+        "primary": "https://www.globalratings.com/",
+        "consolidated": null
+      },
+      "obligation": "Answer the rating questionnaire once per product and generate IARC, regional and store ratings from it.",
+      "applies_to": [
+        "channel.third-party-stores",
+        "channel.cerid-store"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "name": "rating answers authored once generate every submission",
+        "state": "planned"
+      },
+      "effective": "2015-03",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s13",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "int.pegi",
+      "title": "PEGI ratings",
+      "kind": "obligation",
+      "topic": "age-rating",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.8"
+      ],
+      "instrument": {
+        "name": "Pan European Game Information",
+        "article": "Rating criteria",
+        "type": "policy",
+        "jurisdiction": "INT",
+        "primary": "https://pegi.info/",
+        "consolidated": null
+      },
+      "obligation": "Rate games for Europe under PEGI (directly or through IARC).",
+      "applies_to": [
+        "channel.third-party-stores",
+        "channel.cerid-store"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "name": "rating answers authored once generate every submission",
+        "state": "planned"
+      },
+      "effective": "2003-04",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "int.esrb",
+      "title": "ESRB ratings",
+      "kind": "obligation",
+      "topic": "age-rating",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.8"
+      ],
+      "instrument": {
+        "name": "Entertainment Software Rating Board",
+        "article": "Rating process",
+        "type": "policy",
+        "jurisdiction": "INT",
+        "primary": "https://www.esrb.org/",
+        "consolidated": null
+      },
+      "obligation": "Rate games for North America under the ESRB (directly or through IARC).",
+      "applies_to": [
+        "channel.third-party-stores",
+        "channel.cerid-store"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "name": "rating answers authored once generate every submission",
+        "state": "planned"
+      },
+      "effective": "1994-09",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "int.open-source-licences",
+      "title": "Open-source licence obligations of every component",
+      "kind": "obligation",
+      "topic": "intellectual-property",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.4",
+        "SUPPLY.1"
+      ],
+      "instrument": {
+        "name": "The licence of every pinned and packaged third-party component (SPDX expressions)",
+        "article": "Attribution, notices, source offers and copyleft terms",
+        "type": "licence",
+        "jurisdiction": "INT",
+        "primary": "https://spdx.org/licenses/",
+        "consolidated": null
+      },
+      "obligation": "Ship attribution and licence texts, LGPL relinking and source offers, MPL file-level source and Apache NOTICE files per export, and refuse incompatible copyleft at resolve time.",
+      "applies_to": [
+        "channel.distribution",
+        "channel.third-party-stores",
+        "channel.cerid-store",
+        "channel.mods-and-ugc"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.4",
+        "name": "licence-policy CTest over every pin and package",
+        "state": "planned"
+      },
+      "effective": "2026-09-14",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.4",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Effective from the pins registry (cmake/pins.json, 2026-09-14), whose licence fields scripts/check-pins.py already requires; the notices and source offers per export are COMPLY.4's."
+    },
+    {
+      "id": "platform.apple-sdk-minimum",
+      "title": "Apple SDK minimum requirements",
+      "kind": "obligation",
+      "topic": "platform",
+      "state": "planned",
+      "owner": "ship",
+      "rows": [
+        "SHIP-MAC",
+        "SHIP-MOBILE"
+      ],
+      "instrument": {
+        "name": "Apple upcoming requirements: SDK minimums",
+        "article": "Yearly April rule",
+        "type": "policy",
+        "jurisdiction": "PLATFORM",
+        "primary": "https://developer.apple.com/news/upcoming-requirements/",
+        "consolidated": null
+      },
+      "obligation": "Build submissions with the SDK Apple requires from its yearly April deadline.",
+      "applies_to": [
+        "channel.third-party-stores"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-ship-mobile",
+        "name": "SDK version check per export",
+        "state": "planned"
+      },
+      "effective": "2026-04-28",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s12",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "platform.apple-privacy-manifest",
+      "title": "Apple privacy manifests and required reasons",
+      "kind": "obligation",
+      "topic": "platform",
+      "state": "planned",
+      "owner": "ship",
+      "rows": [
+        "COMPLY.8",
+        "SHIP-MAC",
+        "SHIP-MOBILE"
+      ],
+      "instrument": {
+        "name": "Apple privacy manifest files",
+        "article": "PrivacyInfo.xcprivacy and required-reason APIs",
+        "type": "policy",
+        "jurisdiction": "PLATFORM",
+        "primary": "https://developer.apple.com/documentation/bundleresources/privacy-manifest-files",
+        "consolidated": null
+      },
+      "obligation": "Generate the privacy manifest with required-reason entries from the data inventory for every Apple export.",
+      "applies_to": [
+        "channel.third-party-stores"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "name": "generated privacy labels checked against the data inventory",
+        "state": "planned"
+      },
+      "effective": "2024-05-01",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s16",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "platform.apple-age-rating",
+      "title": "Apple age rating questionnaire",
+      "kind": "obligation",
+      "topic": "platform",
+      "state": "planned",
+      "owner": "ship",
+      "rows": [
+        "COMPLY.8",
+        "SHIP-MOBILE"
+      ],
+      "instrument": {
+        "name": "App Store age ratings",
+        "article": "Updated questionnaire",
+        "type": "policy",
+        "jurisdiction": "PLATFORM",
+        "primary": "https://developer.apple.com/help/app-store-connect/",
+        "consolidated": null
+      },
+      "obligation": "Answer the updated age rating questionnaire from the ratings authored once.",
+      "applies_to": [
+        "channel.third-party-stores"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "name": "rating answers authored once generate every submission",
+        "state": "planned"
+      },
+      "effective": "2026-01-31",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s13",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "platform.apple-accessibility-labels",
+      "title": "Apple accessibility nutrition labels",
+      "kind": "obligation",
+      "topic": "platform",
+      "state": "watch",
+      "owner": "ship",
+      "rows": [
+        "COMPLY.7",
+        "COMPLY.8",
+        "SHIP-MOBILE"
+      ],
+      "instrument": {
+        "name": "App Store accessibility nutrition labels",
+        "article": "Whole policy",
+        "type": "policy",
+        "jurisdiction": "PLATFORM",
+        "primary": "https://developer.apple.com/help/app-store-connect/manage-app-accessibility/overview-of-accessibility-nutrition-labels",
+        "consolidated": null
+      },
+      "obligation": "Declare accessibility labels from the conformance matrix.",
+      "applies_to": [
+        "channel.third-party-stores"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "name": "labels generated from the conformance matrix",
+        "state": "planned"
+      },
+      "effective": "2025-06",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s15",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Pinned when Apple makes the labels required."
+    },
+    {
+      "id": "platform.play-target-api",
+      "title": "Google Play target API level",
+      "kind": "obligation",
+      "topic": "platform",
+      "state": "planned",
+      "owner": "ship",
+      "rows": [
+        "SHIP-MOBILE"
+      ],
+      "instrument": {
+        "name": "Google Play target API level requirement",
+        "article": "Yearly August deadline",
+        "type": "policy",
+        "jurisdiction": "PLATFORM",
+        "primary": "https://developer.android.com/google/play/requirements/target-sdk",
+        "consolidated": null
+      },
+      "obligation": "Target the API level Google Play requires from its yearly August deadline.",
+      "applies_to": [
+        "channel.third-party-stores"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-ship-mobile",
+        "name": "target API check per export",
+        "state": "planned"
+      },
+      "effective": "2026-08-31",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s05",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "platform.play-16kb-pages",
+      "title": "Google Play 16 KB page size support",
+      "kind": "obligation",
+      "topic": "platform",
+      "state": "planned",
+      "owner": "ship",
+      "rows": [
+        "SHIP-MOBILE"
+      ],
+      "instrument": {
+        "name": "Android 16 KB page size requirement",
+        "article": "Native libraries",
+        "type": "policy",
+        "jurisdiction": "PLATFORM",
+        "primary": "https://developer.android.com/guide/practices/page-sizes",
+        "consolidated": null
+      },
+      "obligation": "Align native libraries for 16 KB pages in every Android export.",
+      "applies_to": [
+        "channel.third-party-stores"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-ship-mobile",
+        "name": "ELF alignment check per export",
+        "state": "planned"
+      },
+      "effective": "2025-11-01",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s06",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "platform.android-developer-verification",
+      "title": "Android developer verification",
+      "kind": "user-action",
+      "topic": "platform",
+      "state": "planned",
+      "owner": "ship",
+      "rows": [
+        "SHIP-MOBILE"
+      ],
+      "instrument": {
+        "name": "Android developer verification",
+        "article": "Developer identity registration",
+        "type": "policy",
+        "jurisdiction": "PLATFORM",
+        "primary": "https://developer.android.com/developer-verification",
+        "consolidated": null
+      },
+      "obligation": "Verify the publisher's developer identity so Android devices install its apps outside Google Play.",
+      "applies_to": [
+        "channel.distribution",
+        "channel.third-party-stores"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-ship-mobile",
+        "name": "verification record",
+        "state": "planned"
+      },
+      "effective": "2026-09",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s07",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "platform.play-data-safety",
+      "title": "Google Play Data safety",
+      "kind": "obligation",
+      "topic": "platform",
+      "state": "planned",
+      "owner": "ship",
+      "rows": [
+        "COMPLY.8",
+        "SHIP-MOBILE"
+      ],
+      "instrument": {
+        "name": "Google Play Data safety section",
+        "article": "Whole policy",
+        "type": "policy",
+        "jurisdiction": "PLATFORM",
+        "primary": "https://support.google.com/googleplay/android-developer/answer/10787469",
+        "consolidated": null
+      },
+      "obligation": "Generate the Data safety answers from the data inventory.",
+      "applies_to": [
+        "channel.third-party-stores"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "name": "generated privacy labels checked against the data inventory",
+        "state": "planned"
+      },
+      "effective": "2022-07-20",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s16",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "platform.cab-code-signing",
+      "title": "CA/Browser Forum code signing requirements",
+      "kind": "obligation",
+      "topic": "platform",
+      "state": "planned",
+      "owner": "ship",
+      "rows": [
+        "SHIP.4",
+        "SUPPLY.2"
+      ],
+      "instrument": {
+        "name": "Baseline Requirements for the Issuance and Management of Publicly-Trusted Code Signing Certificates",
+        "article": "Certificate validity (460 days) and key protection",
+        "type": "policy",
+        "jurisdiction": "PLATFORM",
+        "primary": "https://cabforum.org/working-groups/code-signing/requirements/",
+        "consolidated": null
+      },
+      "obligation": "Hold code-signing keys in hardware and renew certificates within the 460-day validity.",
+      "applies_to": [
+        "channel.distribution",
+        "channel.third-party-stores"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-ship.4",
+        "name": "signing service tests",
+        "state": "planned"
+      },
+      "effective": "2026-03-01",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s02",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "platform.steamworks",
+      "title": "Steam distribution agreement and Steamworks rules",
+      "kind": "obligation",
+      "topic": "platform",
+      "state": "planned",
+      "owner": "ship",
+      "rows": [
+        "SHIP.6"
+      ],
+      "instrument": {
+        "name": "Steam Distribution Agreement and Steamworks documentation",
+        "article": "Whole policy",
+        "type": "policy",
+        "jurisdiction": "PLATFORM",
+        "primary": "https://partner.steamgames.com/doc/gettingstarted",
+        "consolidated": null
+      },
+      "obligation": "Meet Steam's content, store page, pricing and build rules for every Steam release.",
+      "applies_to": [
+        "channel.third-party-stores"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-ship.6",
+        "name": "store adapter submission tests",
+        "state": "planned"
+      },
+      "effective": "2026-10-27",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s21",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "In force when the research read it on 2026-10-27; the version date is confirmed on the first primary read."
+    },
+    {
+      "id": "platform.epic",
+      "title": "Epic Games Store distribution terms",
+      "kind": "obligation",
+      "topic": "platform",
+      "state": "planned",
+      "owner": "ship",
+      "rows": [
+        "SHIP.6"
+      ],
+      "instrument": {
+        "name": "Epic Games Store distribution agreement and guidelines",
+        "article": "Whole policy",
+        "type": "policy",
+        "jurisdiction": "PLATFORM",
+        "primary": "https://store.epicgames.com/news/new-epic-games-store-webshops-and-revenue-share-update",
+        "consolidated": null
+      },
+      "obligation": "Meet the Epic Games Store terms for every Epic release.",
+      "applies_to": [
+        "channel.third-party-stores"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-ship.6",
+        "name": "store adapter submission tests",
+        "state": "planned"
+      },
+      "effective": "2026-10-27",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s19",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "In force when the research read it on 2026-10-27; the version date is confirmed on the first primary read."
+    },
+    {
+      "id": "platform.microsoft-store",
+      "title": "Microsoft Store policies",
+      "kind": "obligation",
+      "topic": "platform",
+      "state": "planned",
+      "owner": "ship",
+      "rows": [
+        "SHIP.4"
+      ],
+      "instrument": {
+        "name": "Microsoft Store Policies",
+        "article": "Whole policy",
+        "type": "policy",
+        "jurisdiction": "PLATFORM",
+        "primary": "https://learn.microsoft.com/en-us/windows/apps/publish/store-policies",
+        "consolidated": null
+      },
+      "obligation": "Meet the Microsoft Store policies for every Store release.",
+      "applies_to": [
+        "channel.third-party-stores"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-ship.4",
+        "name": "store adapter submission tests",
+        "state": "planned"
+      },
+      "effective": "2026-10-27",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s24",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "In force when the research read it on 2026-10-27; the version date is confirmed on the first primary read."
+    }
+  ]
+}

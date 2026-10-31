@@ -1,25 +1,31 @@
 #!/usr/bin/env python3
-"""The scheduled re-research of the standards and obligations registers (NET-STD; COMPLY.0 adds its domain).
+"""The scheduled re-research of the standards and obligations registers (NET-STD and COMPLY.0).
 
-A register's `review` holds a calendar (for the standards domain, the IETF meetings), the runs recorded so far and
-`next`, the day check-registers.review_due computes from them; the guard fails once that day passes. A review run:
+A register's `review` holds a calendar (the IETF meetings for the standards domain; the quarterly reviews, platform
+events and dated effective days for the legal domain), the runs recorded so far and `next`, the day
+check-registers.review_due computes from them; the guard fails once that day passes. A review run:
 
   due      prints the next review the register owes, why, and the calendar events still unconfirmed.
   plan     writes the list of primary sources a refresh reads: the RFC Editor record of every RFC, the IETF datatracker
-           record of every draft and the IANA registry files holding the register's codepoints, plus the items that
-           are read by hand. Reading them is a download the user approves first: the plan is what is approved.
+           record of every draft and the IANA registry files holding the register's codepoints, or, for the legal
+           domain, the official primary text of every instrument, plus the items that are read by hand. Reading them
+           is a download the user approves first: the plan is what is approved.
   fetch    reads an approved plan's sources into a directory with a manifest of their SHA-256 digests.
   compare  judges the fetched records against the register and writes a report: the register changes (revisions,
-           statuses, codepoints confirmed against IANA), the ROADMAP amendments it proposes for the user and the
-           sources it could not read. With --apply it writes the register changes, records the run and moves
-           `next`; it never edits a ROADMAP row. A pinned entry whose status changed triggers a full re-research.
-  record   records a run made by hand (a full re-research document) and moves `next`.
+           statuses, codepoints confirmed against IANA), the instruments to read in their consolidated text (never
+           read, or changed since the digest recorded when they were read), the ROADMAP amendments it proposes for the
+           user and the sources it could not read. With --apply it writes the register changes, records the run and
+           moves `next`; it never edits a ROADMAP row. A pinned entry whose status changed triggers a full re-research.
+  record   records a run made by hand (a full re-research document, or an Official Gazette or EUR-Lex trigger with
+           the entries it changed) and moves `next`.
 
   python scripts/register-review.py due [--register R] [--today YYYY-MM-DD]
   python scripts/register-review.py plan --out sources.json
   python scripts/register-review.py fetch --plan sources.json --into DIR
   python scripts/register-review.py compare --fetched DIR --report docs/sessions/<day>-register-review.md [--apply]
-  python scripts/register-review.py record --scan full --ref <document#anchor> [--day YYYY-MM-DD]
+  python scripts/register-review.py record --scan full --ref <document#anchor> [--day YYYY-MM-DD] [--trigger ID]
+
+--register cmake/legal-register.json selects the legal domain.
 
 docs/design/registers.md#snapshot-and-review is the contract. The record shapes below were written from knowledge
 of the three services; a record that does not have them is reported as unreadable and changes nothing.
@@ -31,6 +37,7 @@ import importlib.util
 import json
 import re
 import sys
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
@@ -66,6 +73,10 @@ MANUAL_SPECS = {
 CALENDAR_SOURCE = {
     'standards': ('https://www.ietf.org/meeting/upcoming/',
                   'confirm the calendar events marked unverified and add the next IETF meetings'),
+    'legal': ('https://www.resmigazete.gov.tr/',
+              'read the Official Gazette of Turkey, the EUR-Lex Official Journal and the platform announcements since '
+              'the latest run for amendments to the registered instruments, and confirm the calendar events marked '
+              'unverified'),
 }
 # The IETF datatracker's IESG states while a draft is being processed, and the RFC Editor's queue.
 IESG_PROCESSING = {'publication requested', 'ad evaluation', 'ad evaluation::revised i-d needed', 'in last call',
@@ -108,6 +119,13 @@ def rfc_number(ref):
     return int(match.group(1)) if match else None
 
 
+def source_id(url):
+    """A plain identifier for a primary source URL: its host without `www.` and its path and query, slugged."""
+    parts = urllib.parse.urlsplit(url)
+    host = parts.netloc.lower().removeprefix('www.')
+    return re.sub(r'[^a-z0-9.]+', '-', f'{host}{parts.path}?{parts.query}'.lower()).strip('-.')
+
+
 def plan_sources(register):
     """The sources a refresh of this register reads: [{id, kind, url, entries, registries}] and the manual items."""
     sources = {}
@@ -127,6 +145,10 @@ def plan_sources(register):
             item['entries'].append(entry)
 
     for entry in register['entries']:
+        if 'instrument' in entry:
+            url = entry['instrument']['primary']
+            add(source_id(url), 'primary', url, entry['id'])
+            continue
         spec = entry.get('spec', {})
         kind, ref = spec.get('type'), spec.get('ref', '')
         if kind == 'rfc':
@@ -183,7 +205,7 @@ def fetch_sources(plan, into, opener=urllib.request.urlopen, today=None):
             item['error'] = f'larger than {FETCH_LIMIT} bytes'
             items.append(item)
             continue
-        name = source['id'] + Path(source['url']).suffix
+        name = source['id'] + Path(urllib.parse.urlsplit(source['url']).path).suffix
         (into / name).write_bytes(body)
         item.update(file=name, bytes=len(body), sha256=hashlib.sha256(body).hexdigest())
         items.append(item)
@@ -334,6 +356,7 @@ class Review:
         self.changes = []
         self.proposals = []
         self.unread = []
+        self.readings = []
         self.triggers = []
         self.bodies = {}
         for item in manifest['items']:
@@ -413,6 +436,20 @@ class Review:
                 self.proposals.append(f'{entry["id"]}: {point["registry"]} {point["name"]} = {point["value"]}: '
                                       f'{detail}; correct the register and regenerate scripts/gen-register-ids.py')
 
+    def judge_primary(self, entry, source_id):
+        """An instrument's primary text against the digest recorded when it was last read in its consolidated form."""
+        digest = hashlib.sha256(self.bodies[source_id]).hexdigest()
+        instrument = entry['instrument']
+        what = f'{entry["id"]} ({", ".join(entry["rows"])}): {instrument["name"]}, {instrument["article"]}'
+        consolidated = instrument['consolidated']
+        if consolidated is None:
+            self.readings.append(f'{what}: never read from its primary source; read {instrument["primary"]} in its '
+                                 f'consolidated text and record the version, the day and the SHA-256 {digest}')
+        elif consolidated['sha256'] != digest:
+            self.readings.append(f'{what}: the primary text changed since it was read on {consolidated["read"]} '
+                                 f'({consolidated["version"]}); read the amendment, record the new version and '
+                                 f'SHA-256 {digest}, and record a trigger if it changes a pinned obligation')
+
     def run(self, plan):
         registries = {}
         for source in plan['sources']:
@@ -426,6 +463,11 @@ class Review:
                    for entry_id in source['entries']}
         judges = {'rfc': ('rfc-editor', self.judge_rfc), 'draft': ('datatracker', self.judge_draft)}
         for entry in self.register['entries']:
+            if 'instrument' in entry:
+                source_id = sources.get(('primary', entry['id']))
+                if source_id in self.bodies:
+                    self.judge_primary(entry, source_id)
+                continue
             source_kind, judge = judges.get(entry['spec'].get('type'), (None, None))
             source_id = sources.get((source_kind, entry['id']))
             if source_id in self.bodies:
@@ -442,6 +484,7 @@ class Review:
                  f'the register changes below were {"applied" if applied else "proposed, not applied"}. '
                  'This review edits no ROADMAP row: the amendments are proposals for the user.', '']
         sections = [('Register changes', [f'{entry}: {text}' for entry, text, _ in self.changes]),
+                    ('Read in the consolidated text', self.readings),
                     ('Proposed ROADMAP amendments', self.proposals),
                     ('Triggers a full re-research', self.triggers),
                     ('Sources not read', self.unread),
@@ -529,8 +572,8 @@ def command_compare(args, root):
     report = Path(args.report)
     report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text(review.report(day, args.scan, args.apply, plan), encoding='utf-8', newline='\n')
-    print(f'{len(review.changes)} register changes, {len(review.proposals)} proposed amendments, '
-          f'{len(review.unread)} sources not read; report {report}')
+    print(f'{len(review.changes)} register changes, {len(review.readings)} instruments to read, '
+          f'{len(review.proposals)} proposed amendments, {len(review.unread)} sources not read; report {report}')
     if args.apply:
         ref = repository_ref(report, root)
         entries = {entry['id']: entry for entry in register['entries']}
@@ -555,9 +598,14 @@ def command_record(args, root):
     ref = repository_ref(root / target, root) + (f'#{anchor}' if anchor else '')
     if not (root / target).is_file():
         raise ReviewError(f'{target} does not exist; a run cites its document')
-    due, scan, reason = record_run(register, day, args.scan, ref, [])
+    unknown = sorted(set(args.trigger) - {entry['id'] for entry in register['entries']})
+    if unknown:
+        raise ReviewError(f'unknown triggering entries {unknown}')
+    due, scan, reason = record_run(register, day, args.scan, ref, args.trigger)
     write_json(path, register)
-    print(f'recorded the {args.scan} run of {day}; the next review is a {scan} scan due on {due}, after {reason}')
+    triggered = f' with triggers {", ".join(sorted(set(args.trigger)))}' if args.trigger else ''
+    print(f'recorded the {args.scan} run of {day}{triggered}; the next review is a {scan} scan due on {due}, '
+          f'after {reason}')
     return 0
 
 
@@ -584,6 +632,8 @@ def main(argv=None):
     record.add_argument('--scan', choices=sorted(_registers.SCANS), required=True)
     record.add_argument('--ref', required=True, help='the run\'s document, relative to root, with an optional #anchor')
     record.add_argument('--day', help='the day of the run (default today)')
+    record.add_argument('--trigger', action='append', default=[],
+                        help='an entry whose status or instrument the run found changed (repeatable)')
     args = parser.parse_args(argv)
     handlers = {'due': command_due, 'plan': command_plan, 'fetch': command_fetch, 'compare': command_compare,
                 'record': command_record}

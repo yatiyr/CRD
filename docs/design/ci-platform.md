@@ -338,7 +338,7 @@ systems for every preset, test, guard, sanitizer, SDE arm and ARM64 lane) is CI-
 | `repository` | Documentation and roadmap | `repository-<host>` | run repository: scripts/check-master-plan.py |
 | `repository` | CI tier mapping | `repository-<host>` | run repository: scripts/check-ci-tiers.py |
 | `repository` | Pinned inputs | `repository-<host>` | run repository: scripts/check-pins.py |
-| `repository` | Standards register is current | `repository-<host>` | run repository: scripts/check-registers.py |
+| `repository` | Standards and legal registers are current | `repository-<host>` | run repository: scripts/check-registers.py |
 | `repository` | Generated sources carry their provenance and bytes | `repository-<host>` | run repository: scripts/check-generated.py |
 | `repository` | Allman braces on every control statement | `repository-<host>` | run repository: scripts/check-allman-braces.py |
 | `repository` | One owning module for every engine capability | `repository-<host>` | run repository: scripts/check-capability-owners.py |

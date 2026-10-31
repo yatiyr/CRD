@@ -139,13 +139,17 @@ Run commands from the repository root. Build/test rules and exact quality requir
   builds it outside the tree, its includer, or the open ROADMAP row that owns routing it. Its cases are in
   `test-repository-tools.py`.
 - Standards and obligations registers ([contract](../docs/design/registers.md)): `check-registers.py [--today
-  YYYY-MM-DD]` (the `crd-check-registers` CTest and a repository CI step) holds `cmake/standards-register.json` to
-  its snapshot and the tree: no expired pinned draft, no obsoleted pinned RFC, no overdue review, known owners, rows,
-  sources and anchors, an entry for every governed row, evidence for finished work and a `review.next` that is the
-  day the register's review calendar and recorded runs owe. `register-review.py due|plan|fetch|compare|record` runs
+  YYYY-MM-DD]` (the `crd-check-registers` CTest and a repository CI step) holds `cmake/standards-register.json` and
+  `cmake/legal-register.json` to their snapshots and the tree: no expired pinned draft, no obsoleted pinned RFC, no
+  overdue review, known owners, rows, sources and anchors, an entry for every governed row, evidence for finished
+  work and a `review.next` that is the day the register's review calendar and recorded runs owe; in the legal domain
+  also an active check for every binding obligation, official primary sources, the consolidated text read before an
+  entry's rows close, counsel review before implementation, live scopes once their rows are Done and a Turkish entry
+  in every topic. `register-review.py due|plan|fetch|compare|record` runs
   the scheduled re-research ([contract](../docs/design/registers.md#snapshot-and-review)): it prints the review owed,
-  plans the RFC Editor, datatracker and IANA sources (a download the user approves first), reads them with SHA-256
-  digests, judges them against the register into a report of register changes and proposed ROADMAP amendments
+  plans the RFC Editor, datatracker and IANA sources or the instruments' official texts (a download the user
+  approves first), reads them with SHA-256 digests, judges them against the register into a report of register
+  changes, instruments to read in their consolidated text and proposed ROADMAP amendments
   (`--apply` writes the register and records the run; no row is ever edited) and records runs made by hand. Their
   cases are in `test-repository-tools.py`.
 - Generators, oracle scripts and `bench_*`/`run_bench_*` helpers are reproducibility assets. Their matching

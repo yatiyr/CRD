@@ -1982,7 +1982,7 @@ REPOSITORY_CHECKS = [
     ('Documentation and roadmap', ['scripts/check-master-plan.py'], None),
     ('CI tier mapping', ['scripts/check-ci-tiers.py'], None),
     ('Pinned inputs', ['scripts/check-pins.py'], None),
-    ('Standards register is current', ['scripts/check-registers.py'], None),
+    ('Standards and legal registers are current', ['scripts/check-registers.py'], None),
     ('Generated sources carry their provenance and bytes', ['scripts/check-generated.py'], None),
     ('Allman braces on every control statement', ['scripts/check-allman-braces.py'], None),
     ('One owning module for every engine capability', ['scripts/check-capability-owners.py'], None),
