@@ -1,0 +1,4 @@
+#host read root
+@{"command":"bundle.inspect","path":"none.cdb","args":{"replay":"reproduced"}}
+@{"command":"bundle.inspect","path":"none.cdb","args":{"replay":"sometimes"}}
+@{"command":"bundle.inspect","path":"none.cdb","args":{"other":"1"}}

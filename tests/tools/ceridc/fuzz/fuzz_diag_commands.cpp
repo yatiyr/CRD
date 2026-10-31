@@ -698,8 +698,8 @@ struct Spec
 };
 
 // The commands registered with an argument check, as their modules declare them.
-constexpr const char* kCheckedCommands[] = {"fault.arm", "flight.trigger", "program.inspect", "replay.record",
-                                            "replay.run"};
+constexpr const char* kCheckedCommands[] = {"bundle.inspect",  "fault.arm",     "flight.trigger",
+                                            "program.inspect", "replay.record", "replay.run"};
 
 enum class Stage : u8
 {
@@ -1773,6 +1773,11 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& out)
                   "@{\"command\":\"bundle.inspect\",\"path\":\"../secret\"}\n"
                   "@{\"command\":\"bundle.inspect\",\"path\":\"a/b.cdb\"}\n"
                   "@{\"command\":\"diag.commands\",\"args\":{\"x\":\"1\"}}\n");
+    sink.add_text("diag-inspect-replay", // bundle.inspect's one argument (HW-RESILIENCE.2)
+                  "#host read root\n"
+                  "@{\"command\":\"bundle.inspect\",\"path\":\"none.cdb\",\"args\":{\"replay\":\"reproduced\"}}\n"
+                  "@{\"command\":\"bundle.inspect\",\"path\":\"none.cdb\",\"args\":{\"replay\":\"sometimes\"}}\n"
+                  "@{\"command\":\"bundle.inspect\",\"path\":\"none.cdb\",\"args\":{\"other\":\"1\"}}\n");
     sink.add_text("diag-cursors",
                   "@{\"command\":\"diag.commands\",\"cursor\":1048576}\n"
                   "@{\"command\":\"diag.commands\"}\n"
