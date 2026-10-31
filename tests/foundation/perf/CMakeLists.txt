@@ -51,6 +51,7 @@ add_executable(crd-perf-tests
     test_diag_flight_sites.cpp # DIAG.11b: a disabled event site evaluates no payload; a filtered event never waits
     test_diag_flight_rings.cpp # DIAG.11b (q1): per-thread rings under one global sequence: order, window, lifetime
     test_hardware_identity.cpp # HW-RESILIENCE.2: the machine a bundle was written on
+    test_fault_classification.cpp # HW-RESILIENCE.2: impossible-state signatures and the unstable-CPU table
 )
 
 target_link_libraries(crd-perf-tests PRIVATE

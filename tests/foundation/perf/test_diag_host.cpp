@@ -48,6 +48,7 @@
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/diagnostic_host.hpp>
 #include <crd/perf/diagnostics.hpp>
+#include <crd/perf/fault_classification.hpp>
 #include <crd/perf/fault_injection.hpp>
 #include <crd/perf/flight_recorder.hpp>
 #include <crd/perf/hardware_identity.hpp>
@@ -1819,6 +1820,19 @@ TEST_CASE("diagnostic host: the application's wild write leaves one attributable
         const bool   same = cp::same_hardware_identity(machine.identity, cp::host_hardware_identity(), differing);
         INFO("differing: " << differing.c_str());
         CHECK(same);
+        // The capture's fault reads back as the OS reported it, and a null store is no sign of a hardware fault.
+        const cp::CrashEvidence evidence = cp::read_crash_evidence({capture_bytes.data(), capture_bytes.size()});
+        INFO("evidence: " << evidence.error);
+        REQUIRE(evidence.ok);
+        CHECK(evidence.pc == fault_pc);
+        CHECK(evidence.address_known);
+        CHECK(evidence.address < cp::kNullRegionBytes);
+        CHECK_FALSE(evidence.sent);
+        CHECK(find_module(evidence.modules, base_name(CRD_DIAG_HOST_SPECIMEN)) != nullptr);
+        const cp::FaultClassification judged =
+            cp::classify_fault(&evidence, &machine.identity, cp::ReplayOutcome::NotRun);
+        CHECK(judged.signals == 0U);
+        CHECK(judged.verdict == cp::HardwareVerdict::None);
     }
 
     (void)check_repaired_run("crash");

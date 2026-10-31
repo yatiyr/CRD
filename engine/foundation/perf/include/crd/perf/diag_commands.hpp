@@ -284,7 +284,10 @@ struct DiagServiceConfig
 //                              sections, build identity and modules, and a flight record decoded into its trigger
 //                              (kind, file:line, message, scalars), the window's end, loss and replay, and one item per
 //                              retained event (before or after the trigger); a flight record the decoder refuses is
-//                              reported as flight_refused with the reason
+//                              reported as flight_refused with the reason. A native crash capture (a minidump or a
+//                              Linux crash record) is read as it is. Either way a "classification" item judges the
+//                              crash (the bundle's or the capture's) on its machine (fault_classification.hpp);
+//                              replay=<not-run|reproduced|not-reproduced> says what the capture's replay did
 //   capture.start     Record  open a capture window (the profiler's sample rings are cleared)
 //   capture.stop       Record  write the open window as a CPROF capture file under the root (never overwriting)
 // Calls are serialized; handlers run on the calling thread.

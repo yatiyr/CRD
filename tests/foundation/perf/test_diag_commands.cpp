@@ -794,7 +794,9 @@ TEST_CASE("diag commands: bundle.inspect reads through the bounded importer and 
     const DiagResult ok = svc.execute(req);
     REQUIRE(ok.status == DiagStatus::Ok);
     CHECK(svc.file_bytes_read() == bundle.size());
-    CHECK(ok.total == 3U);
+    CHECK(ok.total == 5U); // three sections, the crash record (not one crd::crash wrote) and its classification
+    CHECK(contains(ok.json, "\"kind\":\"crash\",\"capture\":\"none\",\"read\":false"));
+    CHECK(contains(ok.json, "\"kind\":\"classification\",\"verdict\":\"none\""));
     CHECK(contains(ok.json, "\"status\":\"ok\",\"reject\":\"none\""));
     CHECK(contains(ok.json, "\"manifest\":true"));
     CHECK(contains(ok.json, "\"tag_name\":\"crash-record\",\"absent\":false"));

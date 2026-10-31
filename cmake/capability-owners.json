@@ -169,6 +169,20 @@
       ]
     },
     {
+      "id": "diagnostics.fault-classification",
+      "summary": "Hardware fault classification: a native crash capture's fault read from a minidump or a crash record, its impossible-state signatures (machine checks, one-bit code and data address flips, replays that do not reproduce), the known-unstable processor table and the user's sentence (HW-RESILIENCE.2).",
+      "owner": "perf",
+      "api": [
+        "engine/foundation/perf/include/crd/perf/fault_classification.hpp"
+      ],
+      "signatures": [
+        {
+          "regex": "\\bBUS_MCEERR_A[RO]\\b",
+          "what": "a machine-check signal code read"
+        }
+      ]
+    },
+    {
       "id": "io.durable-saves",
       "summary": "Durable saves: the atomic, flushed replace of a file, generational checksummed saves with their fallback, the checksummed journal and the autosave cadence (HW-RESILIENCE.1).",
       "owner": "platform",

@@ -10,6 +10,7 @@
 #include <crd/perf/config.hpp>
 #include <crd/perf/diagnostics.hpp>
 #include <crd/perf/doctor.hpp>
+#include <crd/perf/fault_classification.hpp>
 #include <crd/perf/flight_recorder.hpp>
 #include <crd/perf/hardware_identity.hpp>
 #include <crd/perf/memory.hpp>
@@ -386,6 +387,84 @@ void add_flight_items(const FlightCapture& c, DiagFields& item, DiagSnapshot& ou
     }
 }
 
+// bundle.inspect's one argument: what the capture's replay did when it was run (HW-RESILIENCE.2).
+DiagStatus check_bundle_inspect(void* /*context*/, cont::ConstSpan<DiagArg> args, cont::String& reason)
+{
+    ReplayOutcome replay = ReplayOutcome::NotRun;
+    if (args.empty() || (args.size() == 1U && args[0].name == cont::StringView{"replay"} &&
+                         parse_replay_outcome(args[0].value, replay)))
+    {
+        return DiagStatus::Ok;
+    }
+    reason.append("bundle.inspect takes at most one argument, replay=<not-run|reproduced|not-reproduced>");
+    return DiagStatus::BadArgument;
+}
+
+[[nodiscard]] ReplayOutcome requested_replay(const DiagRequest& request) noexcept
+{
+    ReplayOutcome replay = ReplayOutcome::NotRun;
+    for (const DiagArg& a : request.args)
+    {
+        if (a.name == cont::StringView{"replay"})
+        {
+            (void)parse_replay_outcome(a.value, replay);
+        }
+    }
+    return replay;
+}
+
+// The fault a native crash capture records ("crash", when there is one) and the judgement of it on its machine
+// ("classification": the verdict, each signature with its evidence, the processor advisory and the user's sentence).
+void add_classification_items(const CrashEvidence* crash, const HardwareIdentity* machine, ReplayOutcome replay,
+                              DiagFields& item, DiagSnapshot& out)
+{
+    if (crash != nullptr)
+    {
+        item.clear();
+        item.str("kind", "crash")
+            .str("capture", crash_capture_kind_name(crash->kind))
+            .boolean("read", crash->ok)
+            .str("error", crash->error)
+            .u64("code", crash->code)
+            .i64("signal_code", crash->signal_code)
+            .boolean("sent", crash->sent)
+            .boolean("pc_known", crash->pc_known)
+            .u64("pc", crash->pc)
+            .boolean("address_known", crash->address_known)
+            .u64("address", crash->address)
+            .u64("modules", crash->modules.size());
+        (void)out.add_item(item);
+    }
+    const FaultClassification c = classify_fault(crash, machine, replay, out.allocator());
+    cont::String signals(out.allocator());
+    append_fault_signal_names(c.signals, signals);
+    const cont::String message = fault_message(c, machine, out.allocator());
+    item.clear();
+    item.str("kind", "classification")
+        .str("verdict", hardware_verdict_name(c.verdict))
+        .str("signals", cont::StringView{signals.data(), signals.size()})
+        .boolean("crash", c.crash)
+        .boolean("sent_signal", c.sent)
+        .str("replay", replay_outcome_name(c.replay));
+    for (const BitFlipEvidence* f : {&c.code_flip, &c.data_flip})
+    {
+        if (f->found)
+        {
+            const bool code = f == &c.code_flip;
+            item.u64(code ? cont::StringView{"code_recorded"} : cont::StringView{"data_recorded"}, f->recorded)
+                .u64(code ? cont::StringView{"code_restored"} : cont::StringView{"data_restored"}, f->restored)
+                .u64(code ? cont::StringView{"code_bit"} : cont::StringView{"data_bit"}, f->bit)
+                .str(code ? cont::StringView{"code_module"} : cont::StringView{"data_module"},
+                     cont::StringView{f->module.data(), f->module.size()});
+        }
+    }
+    item.str("cpu_advisory", c.advisory != nullptr ? c.advisory->id : cont::StringView{})
+        .str("microcode_state", microcode_state_name(c.microcode))
+        .u64("fixed_microcode", c.advisory != nullptr ? c.advisory->fixed_microcode : 0U)
+        .str("message", cont::StringView{message.data(), message.size()});
+    (void)out.add_item(item);
+}
+
 constexpr DiagAuthority kAuthorityOrder[kDiagAuthorityCount] = {
     DiagAuthority::Read,   DiagAuthority::Record,        DiagAuthority::Inject,  DiagAuthority::RemoteEnable,
     DiagAuthority::Upload, DiagAuthority::ProcessMemory, DiagAuthority::Execute,
@@ -660,7 +739,9 @@ DiagCommandService::DiagCommandService(DiagAuthoritySet grant, const DiagService
          &DiagCommandService::run_allocators, this},
         {{"bundle.inspect", "perf", "a post-mortem bundle under the root, through the bounded non-executing importer",
           DiagAuthority::Read, true},
-         &DiagCommandService::run_bundle_inspect, this},
+         &DiagCommandService::run_bundle_inspect,
+         this,
+         &check_bundle_inspect},
         {{"capture.start", "perf", "open a capture window (clears the profiler's sample rings)", DiagAuthority::Record,
           false},
          &DiagCommandService::run_capture_start, this},
@@ -1361,6 +1442,29 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
         return DiagStatus::Cancelled;
     }
 
+    // A native crash capture (a minidump or a Linux crash record) is judged as it is: its fault, then its machine.
+    const ReplayOutcome replay = requested_replay(*call.request);
+    const cont::ConstSpan<crd::u8> whole{bytes.data(), bytes.size()};
+    const CrashEvidence direct = read_crash_evidence(whole, out.allocator());
+    if (direct.kind != CrashCaptureKind::None)
+    {
+        const HardwareIdentityRead machine = read_crash_hardware_identity(whole, out.allocator());
+        out.summary.str("path", call.request->path)
+            .u64("bytes", bytes.size())
+            .str("capture", crash_capture_kind_name(direct.kind))
+            .boolean("hardware_identity", machine.ok)
+            .str("hardware_error", machine.ok ? cont::StringView{} : machine.error);
+        DiagFields item(out.allocator());
+        add_classification_items(&direct, machine.ok ? &machine.identity : nullptr, replay, item, out);
+        if (machine.ok)
+        {
+            cont::String differing(out.allocator());
+            (void)same_machine(machine.identity, host_hardware_identity(), differing);
+            add_hardware_items(machine.identity, &differing, item, out);
+        }
+        return DiagStatus::Ok;
+    }
+
     BundleLimits limits;
     limits.max_total_bytes = svc->m_config.max_bundle_bytes;
     const BundleImport imp = import_bundle({bytes.data(), bytes.size()}, limits, out.allocator());
@@ -1399,8 +1503,28 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
         break;
     }
 
+    // A crash capture the bundle carries: the first that reads, else the last refusal, reported with its reason.
+    CrashEvidence bundled(out.allocator());
+    bool crash_present = false;
+    for (const ImportedSection& s : imp.sections)
+    {
+        if ((s.tag != BundleSectionTag::CrashRecord && s.tag != BundleSectionTag::RawDump) ||
+            (s.section_flags & (kSectionFlagAbsent | kSectionFlagCompressed)) != 0U ||
+            (s.import_flags & (kImportSectionDuplicate | kImportSectionOversized)) != 0U)
+        {
+            continue;
+        }
+        crash_present = true;
+        bundled = read_crash_evidence(s.payload, out.allocator());
+        if (bundled.ok)
+        {
+            break;
+        }
+    }
+
     out.summary.str("path", call.request->path)
         .u64("bytes", bytes.size())
+        .str("capture", "bundle")
         .str("status", import_status_name(imp.status))
         .str("reject", import_reject_name(imp.reject))
         .u64("format_version", imp.status == ImportStatus::Rejected ? 0U : imp.header.format_version)
@@ -1468,6 +1592,11 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
     if (flight.ok)
     {
         add_flight_items(flight.capture, item, out);
+    }
+    if (imp.status != ImportStatus::Rejected)
+    {
+        add_classification_items(crash_present ? &bundled : nullptr, imp.has_hardware ? &imp.hardware : nullptr, replay,
+                                 item, out);
     }
     cont::String id(out.allocator());
     for (const ModuleIdentity& m : imp.symbols)

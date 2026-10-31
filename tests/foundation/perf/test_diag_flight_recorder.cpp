@@ -618,10 +618,10 @@ TEST_CASE("flight record: bundle.inspect names the flight section of a written f
     const cp::DiagResult found = svc.execute(req);
     REQUIRE(found.status == cp::DiagStatus::Ok);
     // Five sections (manifest, flight record, build identity, hardware identity, the absent symbol index), the build
-    // item, decoded (DIAG.11a) the trigger, the flight window and the six retained events, then the machine
-    // (HW-RESILIENCE.2): its hardware item, one per memory module and one per GPU.
+    // item, decoded (DIAG.11a) the trigger, the flight window and the six retained events, the classification, then
+    // the machine (HW-RESILIENCE.2): its hardware item, one per memory module and one per GPU.
     const cp::HardwareIdentity& host = cp::host_hardware_identity();
-    CHECK(found.total == 15U + host.modules.size() + host.gpus.size());
+    CHECK(found.total == 16U + host.modules.size() + host.gpus.size());
     CHECK(found.complete);
     const char* json = found.json.c_str();
     CHECK(std::strstr(json, "\"tag_name\":\"flight-record\",\"absent\":false") != nullptr);
@@ -757,7 +757,7 @@ TEST_CASE("flight record: bundle.inspect reports a flight record it cannot decod
     req.path                   = "diag_flight_refused.cdb";
     const cp::DiagResult found = svc.execute(req);
     REQUIRE(found.status == cp::DiagStatus::Ok);
-    CHECK(found.total == 1U); // the section alone
+    CHECK(found.total == 2U); // the section and the classification (no crash, no machine: none)
     const char* json = found.json.c_str();
     CHECK(std::strstr(json, "\"flight_record\":false,\"flight_refused\":true,\"flight_error\":\"") != nullptr);
     CHECK(std::strstr(json, "\"flight_error\":\"\"") == nullptr);
