@@ -598,7 +598,7 @@ TEST_CASE("tensor kernels: the archive holds portable, each body level the build
     }
     const bool x64 = crd::cpu_selection().arch == crd::CpuArch::X64;
     CHECK(sse2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Sse2) ? 1U : 0U));
-    CHECK(sse42 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Sse42) ? 1U : 0U));
+    CHECK(sse42 == 0U); // no sse4.2 unit: its maddubs dots did not beat sse2's (the 2026-10-31 board)
     const usize built = x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx2) ? 1U : 0U;
     CHECK(avx2 == built);
     CHECK(avx2_vnni == built);

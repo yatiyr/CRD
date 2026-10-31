@@ -56,8 +56,10 @@ target_compile_features(crd-hesap-tensor PUBLIC cxx_std_20)
 # and softmax and the Philox block loop (tensor_kernels.cpp), the elementwise ops, Tier D and einsum's direct products
 # (tensor_ew_kernels.cpp), the batched GEMM, factorizations and solves (tensor_batched_kernels.cpp), the sparse
 # TTM and MTTKRP walks (tensor_sparse_kernels.cpp) and nn's f32 pooling and convolution (tensor_nn_kernels.cpp), once
-# per CPU level, and the avx2 and avx512 levels again with AVX-VNNI and AVX512-VNNI (the integer dots on dpbusd).
-crd_add_cpu_kernels(crd-hesap-tensor NAME tensor LEVELS portable sse2 sse42 avx2 avx512
+# per CPU level, and the avx2 and avx512 levels again with AVX-VNNI and AVX512-VNNI (the integer dots on dpbusd). No
+# sse4.2 unit: its maddubs dots did not beat sse2's (docs/bench/2026-10-31-simd-dispatch-sse2-boards.md), so an
+# sse4.2 selection runs the sse2 table.
+crd_add_cpu_kernels(crd-hesap-tensor NAME tensor LEVELS portable sse2 avx2 avx512
                     VARIANTS avx2+avxvnni avx512+avx512vnni INCLUDES crd-math
                     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/tensor_kernels.cpp"
                             "${CMAKE_CURRENT_SOURCE_DIR}/kernels/tensor_ew_kernels.cpp"

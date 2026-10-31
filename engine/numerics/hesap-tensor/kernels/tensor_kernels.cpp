@@ -5,10 +5,11 @@
 // complex elements (8x8 f32, 4x4 64-bit and 2x2 128-bit squares; 4x4, 2x2 and single elements on SSE2; with next-tile
 // prefetches, and non-temporal stores for the multithreaded DRAM-sized permutes), twelve binned accumulators (six on
 // SSE2), the nn quantizers eight lanes at a time, the quantized dots on maddubs/madd integer lanes, softmax's exp four
-// lanes at a time and the Philox block loop 24 blocks at a time (16 on SSE2 and SSE4.2). The SSE2 and SSE4.2 nn bodies
-// run four lanes: the quantizers on SSE2 operations, the dots on even/odd madd lanes (SSE2) or maddubs (SSE4.2), every
-// f32 combine through the exact fma. The AVX-512 bodies run the permute squares on zmm (16x16 f32, 8x8 64-bit, 4x4
-// 128-bit), three binned streams of eight lanes, the quantizers sixteen lanes at a time, softmax's exp eight, the Q8_0
+// lanes at a time and the Philox block loop 24 blocks at a time (16 on SSE2). The SSE2 nn bodies run four lanes: the
+// quantizers on SSE2 operations, the dots on even/odd madd lanes, every f32 combine through the exact fma; an sse4.2
+// selection runs them too (no sse4.2 unit: its maddubs dots did not beat these, ../CMakeLists.txt). The AVX-512
+// bodies run the permute squares on zmm (16x16 f32, 8x8 64-bit, 4x4 128-bit), three binned streams of eight lanes,
+// the quantizers sixteen lanes at a time, softmax's exp eight, the Q8_0
 // dots two blocks a zmm in the integer stage (each block's f32 combine stays on its own eight lanes in block order),
 // the int8 row dots 64 values a step and the packed dots two 8-output blocks a step. The avx2 and avx512 levels' VNNI
 // variants (CRD_KERNEL_HAS_AVXVNNI, CRD_KERNEL_HAS_AVX512VNNI) run the dots on dpbusd. Every body gives the same bits:
@@ -1077,7 +1078,7 @@ void binned_sum_f64(BinnedRungs& acc, const crd::f64* p, crd::u64 n) noexcept
 
 // ---- nn: softmax (last dim, stable) -----------------------------------------
 // exp rides the deterministic crd_exp1 core; the widen paths use crd_exp8 (eight lanes, AVX-512, then AVX2's step),
-// crd_exp4 (AVX2) and two crd_exp_x2 (SSE2, SSE4.2), which are bit-identical to crd_exp1 on every input, so the
+// crd_exp4 (AVX2) and two crd_exp_x2 (SSE2), which are bit-identical to crd_exp1 on every input, so the
 // vector/tail split cannot perturb results.
 void softmax_row(const crd::f32* x, crd::f32* y, crd::u64 d) noexcept
 {
@@ -1134,51 +1135,13 @@ void nn_softmax_rows(const NnSoftmaxF32& c, crd::u32 lo, crd::u32 hi) noexcept
 }
 
 #if CRD_SIMD_HAS_SSE2 && !CRD_SIMD_HAS_AVX2
-// ---- nn: the 128-bit integer lanes of the SSE2 and SSE4.2 levels ----------------
-// Lane k of a 16-byte step is the exact i32 sum of products 4k..4k+3, the lane structure of the AVX2 bodies. SSE4.2
-// runs SSSE3's maddubs (u8 x i8 pair sums to i16, then madd by ones); SSE2 has no u8 x i8 multiply, so it widens the
-// even and odd bytes of each operand to i16 lanes, and madd of the evens gives products 4k and 4k+2 in lane k, of the
-// odds 4k+1 and 4k+3. Every f32 combine is fma_exact.hpp's single-rounded fma.
+// ---- nn: the 128-bit integer lanes of the SSE2 level ---------------------------
+// Lane k of a 16-byte step is the exact i32 sum of products 4k..4k+3, the lane structure of the AVX2 bodies. SSE2
+// has no u8 x i8 multiply, so it widens the even and odd bytes of each operand to i16 lanes, and madd of the evens
+// gives products 4k and 4k+2 in lane k, of the odds 4k+1 and 4k+3. Every f32 combine is fma_exact.hpp's
+// single-rounded fma.
 using crd::math::simd::detail::fma_ps;
 
-#if CRD_SIMD_HAS_SSE42
-// The Q8_0 lanes of x and w (both i8, |x| <= 127): psignb puts w's sign on x, and pabsb's |w| is the u8 magnitude even
-// for w = -128 (0x80 reads as 128), so maddubs multiplies |w| by x*sign(w) exactly and no i16 pair sum saturates.
-inline __m128i q8_lanes(__m128i x, __m128i w) noexcept
-{
-    return _mm_madd_epi16(_mm_maddubs_epi16(_mm_abs_epi8(w), _mm_sign_epi8(x, w)), _mm_set1_epi16(1));
-}
-
-// u8 activations split as x = xl + 128*xh (xl <= 127, xh in {0, 1}), so the maddubs pair sums never saturate.
-struct U8Lhs
-{
-    __m128i low;
-    __m128i high;
-};
-
-inline U8Lhs u8_lhs(__m128i x) noexcept
-{
-    return {_mm_and_si128(x, _mm_set1_epi8(0x7F)), _mm_and_si128(_mm_srli_epi16(x, 7), _mm_set1_epi8(1))};
-}
-
-struct I8Rhs
-{
-    __m128i w;
-};
-
-inline I8Rhs i8_rhs(__m128i w) noexcept
-{
-    return {w};
-}
-
-inline __m128i u8i8_lanes(const U8Lhs& x, const I8Rhs& w) noexcept
-{
-    const __m128i ones = _mm_set1_epi16(1);
-    const __m128i pl = _mm_madd_epi16(_mm_maddubs_epi16(x.low, w.w), ones);
-    const __m128i ph = _mm_madd_epi16(_mm_maddubs_epi16(x.high, w.w), ones);
-    return _mm_add_epi32(pl, _mm_slli_epi32(ph, 7));
-}
-#else
 // The even and odd bytes of i8 values, sign-extended to i16 lanes.
 inline __m128i even_i8(__m128i v) noexcept
 {
@@ -1222,7 +1185,6 @@ inline __m128i u8i8_lanes(const U8Lhs& x, const I8Rhs& w) noexcept
 {
     return _mm_add_epi32(_mm_madd_epi16(x.even, w.even), _mm_madd_epi16(x.odd, w.odd));
 }
-#endif
 
 // (l0 + l1) + (l2 + l3), the Q8_0 tree within one half of an output's eight lanes.
 inline crd::f32 q8_half_sum(__m128 v) noexcept
