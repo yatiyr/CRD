@@ -443,7 +443,8 @@ cerid-bench-iap --project=cerid-ci --network=default --direction=INGRESS --actio
 --source-ranges=35.235.240.0/20 --target-tags=cerid-bench`. Then, from the repository on the user's computer:
 `python ci/bench_vm.py create` makes the spot `c4-standard-8` with its performance counters on and leaves it stopped;
 `start`, `sync`, `run [--detach NAME] -- COMMAND`, `wait NAME`, `fetch` and `stop` drive it. `--name cerid-track-<x>`
-makes and drives a development track's machine the same way. It runs only while a
+makes and drives a development track's machine the same way (a spot `n2-standard-8` on Persistent Disk, without
+counters: the region's 500 GB Hyperdisk quota is the benchmark machine's). It runs only while a
 batch needs it and stops itself after ten hours of one run.
 
 *Check:* `python ci/bench_vm.py status` reports `TERMINATED` between batches.

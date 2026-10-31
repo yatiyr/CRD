@@ -731,6 +731,14 @@ class BenchMachine(unittest.TestCase):
         self.assertIn('--no-service-account', command)
         self.assertIn('--no-scopes', command)
         self.assertNotIn('cerid-ci=job', ' '.join(command), 'the CI orphan sweep must never see it as a job machine')
+        saved = bench_vm.NAME
+        try:
+            bench_vm.NAME = 'cerid-track-b'
+            track = dict(zip(bench_vm.create_command(), bench_vm.create_command()[1:]))
+        finally:
+            bench_vm.NAME = saved
+        self.assertEqual((track['--machine-type'], track['--boot-disk-type']), ('n2-standard-8', 'pd-balanced'))
+        self.assertNotIn('--performance-monitoring-unit', track, 'a track machine builds; it needs no counters')
 
     def test_a_detached_command_keeps_its_exit_status_even_when_it_exits(self):
         if os.name == 'nt' or not shutil.which('bash'):

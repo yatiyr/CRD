@@ -15,7 +15,8 @@ Usage: python ci/bench_vm.py [--name MACHINE] <command> [options]
   fetch REMOTE LOCAL     copy a file or directory from the machine (paths under ~ are relative to it)
 
 --name picks the machine (default cerid-bench, the optimization track's; each development track has its own, such as
-cerid-track-b). One spot c4-standard-8 (Intel Emerald Rapids, AVX-512) in the cerid-ci project, booted from the CI's Linux image
+cerid-track-b, a spot n2-standard-8 on Persistent Disk without counters). One spot c4-standard-8 (Intel Emerald
+Rapids, AVX-512) in the cerid-ci project, booted from the CI's Linux image
 family, with the guest's hardware performance counters on (the standard PMU: perf stat, top-down
 analysis and sampling profiles see the core counters), with no service account (it holds no Google credential) and reached only through IAP (firewall rule
 cerid-bench-iap, tag cerid-bench). The code reaches it as git bundles over that tunnel, never with a token: the first
@@ -69,13 +70,23 @@ def where():
     return ['--project', PROJECT, '--zone', ZONE]
 
 
+# A development track's machine builds and tests: no counters, so the n2 shape on Persistent Disk (the region's
+# Hyperdisk quota is 500 GB, which the benchmark machine shares).
+TRACK_MACHINE = 'n2-standard-8'
+TRACK_DISK_TYPE = 'pd-balanced'
+
+
 def create_command():
-    return ['compute', 'instances', 'create', NAME, *where(), '--machine-type', MACHINE,
+    if NAME.startswith('cerid-track-'):
+        shape = ['--machine-type', TRACK_MACHINE, '--boot-disk-type', TRACK_DISK_TYPE]
+    else:
+        shape = ['--machine-type', MACHINE, '--boot-disk-type', DISK_TYPE, '--performance-monitoring-unit', PMU]
+    return ['compute', 'instances', 'create', NAME, *where(), *shape,
             '--provisioning-model', 'SPOT', '--instance-termination-action', 'STOP',
             '--max-run-duration', '%dh' % MAX_RUN_HOURS, '--image-family', IMAGE_FAMILY, '--image-project', PROJECT,
-            '--boot-disk-size', '%dGB' % DISK_GB, '--boot-disk-type', DISK_TYPE, '--tags', TAG,
+            '--boot-disk-size', '%dGB' % DISK_GB, '--tags', TAG,
             '--no-service-account', '--no-scopes', '--network-interface', 'nic-type=GVNIC',
-            '--labels', 'cerid-track=' + NAME, '--performance-monitoring-unit', PMU]
+            '--labels', 'cerid-track=' + NAME]
 
 
 def ssh_command(remote):
