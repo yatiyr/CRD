@@ -5,8 +5,9 @@
 // The file reads every engine module shares (crd-platform's read_file_binary, read_file_text, read_file_range and
 // AsyncFile's completion jobs, and crd-perf's read_diag_asset_file) consult the I/O seam before they touch the file.
 // With no hook installed the consult is one atomic load and the read proceeds. A diagnostics host installs one hook
-// (crd-perf's seeded FaultInjector provides FaultInjector::io_hook) to fail a read, cut it short, delay its completion
-// or cancel it, so a test can drive the real recovery paths of load, cook, reload and teardown without a broken disk.
+// (crd-perf's seeded FaultInjector provides FaultInjector::io_hook) to fail a read, cut it short, flip a bit of what
+// it delivers, delay its completion or cancel it, so a test can drive the real recovery paths of load, cook, reload,
+// the integrity checks (HW-RESILIENCE.1) and teardown without a broken disk.
 //
 // The GPU providers' queue submissions (the Vulkan completion seam's vk_submit and DX12's dx12_submit) consult the
 // GPU seam before any work of the submission is queued. Its hook (FaultInjector::gpu_hook) can answer LoseDevice:
@@ -45,13 +46,26 @@ enum class IoFaultAction : u8
     Short   = 2U, // the read delivers `value` bytes (fewer than asked) and then stops
     Delay   = 3U, // the read completes normally `value` nanoseconds late
     Cancel  = 4U, // the completion reports cancelled and delivers nothing (an AsyncRead only)
+    Flip    = 5U, // the read delivers every byte and succeeds, with bit `value` of what it delivered inverted (counted
+                  // from the first byte's lowest bit, modulo the bits delivered): a fault in storage or in transfer
+                  // that the read cannot see, left for the reader's checksums to find
 };
 
 struct IoFault
 {
     IoFaultAction action = IoFaultAction::Proceed;
-    u64           value  = 0U; // Short: bytes delivered; Delay: nanoseconds; otherwise 0
+    u64 value = 0U; // Short: bytes delivered; Delay: nanoseconds; Flip: the bit; otherwise 0
 };
+
+// Apply a Flip fault to the `size` bytes a read delivered at `data` (nothing for any other action or no bytes).
+inline void apply_io_flip(const IoFault& fault, u8* data, usize size) noexcept
+{
+    if (fault.action == IoFaultAction::Flip && size != 0U)
+    {
+        const u64 bit = fault.value % (static_cast<u64>(size) * 8U);
+        data[bit / 8U] = static_cast<u8>(data[bit / 8U] ^ (1U << (bit % 8U)));
+    }
+}
 
 using IoFaultHook = IoFault (*)(void* user, IoFaultOp op, const char* path, usize path_bytes, u64 offset,
                                 u64 size) noexcept;

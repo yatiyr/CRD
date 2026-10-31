@@ -383,6 +383,7 @@ bool read_file_text(const Path& path, containers::String& out) noexcept
                 return false;
             }
         }
+        apply_io_flip(fault, reinterpret_cast<u8*>(out.data()), out.size());
         return true;
     }
     catch (...)
@@ -431,6 +432,7 @@ bool read_file_binary(const Path& path, containers::Array<u8>& out) noexcept
                 return false;
             }
         }
+        apply_io_flip(fault, out.data(), out.size());
         return true;
     }
     catch (...)
@@ -477,6 +479,7 @@ bool read_file_range(const Path& path, crd::u64 offset, crd::u64 size, container
                 return false;
             }
         }
+        apply_io_flip(fault, out.data(), out.size());
         return true;
     }
     catch (...)

@@ -450,6 +450,19 @@ TEST_CASE("fault injector: the I/O hook counts each read at every eligible site 
     CHECK(delayed.action == crd::IoFaultAction::Delay);
     CHECK(delayed.value == 2000000U);
 
+    // flipped-read (HW-RESILIENCE.1) counts every read, ranks after partial-read and before the completion sites, and
+    // carries its bit as the value.
+    REQUIRE(injector.arm(plan_of("seed=1;partial-read@0+1%1000000=5;flipped-read@0+2%1000000=77;"
+                                 "cancelled-completion@0+1%1000000"),
+                         kInjectRead) == cp::FaultArmStatus::Armed);
+    CHECK(ask(crd::IoFaultOp::AsyncRead).action == crd::IoFaultAction::Short); // read 0: partial-read applies
+    const crd::IoFault flipped = ask(crd::IoFaultOp::ReadRange);               // read 1: flipped-read's second hit
+    CHECK(flipped.action == crd::IoFaultAction::Flip);
+    CHECK(flipped.value == 77U);
+    CHECK(ask(crd::IoFaultOp::ReadWhole).action == crd::IoFaultAction::Proceed);
+    CHECK(injector.hits(cp::FaultSite::FlippedRead) == 3U);
+    CHECK(injector.fired(cp::FaultSite::FlippedRead) == 1U);
+
     // Installed on the core seam, a consult reaches the injector; one hook at a time; uninstall restores Proceed.
     REQUIRE(injector.arm(plan_of("seed=1;failed-read@0+1%1000000"), kInjectRead) == cp::FaultArmStatus::Armed);
     REQUIRE(crd::install_io_fault_hook(&cp::FaultInjector::io_hook, &injector));

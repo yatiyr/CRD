@@ -71,6 +71,14 @@ public:
 
     [[nodiscard]] bool is_ready() const noexcept { return state() == LoadState::Ready; }
 
+    // Why a Failed or Placeholder load failed: its bytes failed their integrity check after one re-read from the
+    // source (HW-RESILIENCE.1). Ok for any other outcome, and until the load ends.
+    [[nodiscard]] CrdrError integrity_error() const noexcept
+    {
+        const LoadState s = state();
+        return (s == LoadState::Failed || s == LoadState::Placeholder) ? m_block->integrity : CrdrError::Ok;
+    }
+
     [[nodiscard]] ResourceId id() const noexcept
     {
         return m_block ? m_block->id : kNullResourceId;

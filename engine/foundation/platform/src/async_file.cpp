@@ -34,12 +34,13 @@ struct ReadJob
 
     void operator()() const noexcept
     {
-        // DIAG.9b fault seam: the completion may be failed, cut short, delayed or cancelled.
+        // DIAG.9b fault seam: the completion may be failed, cut short, flipped, delayed or cancelled.
         const IoFault fault = consult_io_fault(IoFaultOp::AsyncRead, path_data, path_size, offset, dst_size);
         crd::u64      want  = dst_size;
         switch (fault.action) // no default: every action is handled
         {
         case IoFaultAction::Proceed:
+        case IoFaultAction::Flip: // applied to the bytes once they are delivered
             break;
         case IoFaultAction::Fail:
             std::memset(dst_ptr, 0, dst_size);
@@ -70,6 +71,7 @@ struct ReadJob
             *status = AsyncReadStatus::Short;
             return;
         }
+        apply_io_flip(fault, dst_ptr, dst_size);
         *status = AsyncReadStatus::Complete;
     }
 };

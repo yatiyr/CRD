@@ -791,7 +791,7 @@ DiagAssetRead read_diag_asset_file(const char* path, cont::String& out)
 {
     out.clear();
     // The I/O fault seam, consulted before the file is touched as crd-platform's whole-file reads do: a failed, short
-    // or cancelled read is Failed, and a delay is slept here.
+    // or cancelled read is Failed, a delay is slept here and a flipped bit is applied to what was read.
     const crd::IoFault fault = crd::consult_io_fault(crd::IoFaultOp::ReadWhole, path, std::strlen(path), 0U, 0U);
     if (fault.action == crd::IoFaultAction::Fail || fault.action == crd::IoFaultAction::Short ||
         fault.action == crd::IoFaultAction::Cancel)
@@ -843,6 +843,7 @@ DiagAssetRead read_diag_asset_file(const char* path, cont::String& out)
     {
         out.clear();
     }
+    crd::apply_io_flip(fault, reinterpret_cast<crd::u8*>(out.data()), out.size());
     return result;
 }
 

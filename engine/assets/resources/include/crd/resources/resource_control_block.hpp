@@ -4,6 +4,7 @@
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/memory/ref_counted.hpp>
+#include <crd/resources/crdr.hpp>
 #include <crd/resources/load_state.hpp>
 #include <crd/resources/resource_id.hpp>
 
@@ -46,6 +47,9 @@ struct ResourceControlBlock : public crd::memory::RefCounted<ResourceControlBloc
     std::atomic<void*>       payload{nullptr};
     ILoader*                 loader      = nullptr;
     crd::memory::IAllocator* alloc       = nullptr;
+    // Why the last load failed its integrity check after its one re-read (Ok when it did not). Written before the
+    // terminal state is published; read after it is.
+    CrdrError integrity = CrdrError::Ok;
 };
 
 } // namespace crd::resources

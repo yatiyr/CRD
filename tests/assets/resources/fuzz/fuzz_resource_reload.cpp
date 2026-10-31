@@ -9,9 +9,9 @@
 // place, mount, unmount, load, release, reload_mount_now, drain to a zero budget, pin and unpin.
 //
 // Oracles, none of them the manager's own verdict:
-//   * an independent restatement of the CRDR layout and pack rules decides whether crdr_read accepts the bytes,
-//     where every chunk's payload lies (an uncompressed payload is a view at exactly that offset; a compressed one is
-//     exactly what zstd decodes from it), and whether a pack mounts or reloads;
+//   * an independent restatement of the CRDR layout (its checksums included) and the pack rules decides whether
+//     crdr_read accepts the bytes, where every chunk's payload lies (an uncompressed payload is a view at exactly
+//     that offset; a compressed one is exactly what zstd decodes from it), and whether a pack mounts or reloads;
 //   * crdr_read allocates at most eight times its input plus 64 KiB plus what its accepted claims decode to;
 //   * a model of the manager: the live table is, for each id, the entry of the newest mount whose manifest names it
 //     (find_entry's mount, type, flags, range and name equal it after every operation); a refused mount or reload
@@ -25,6 +25,7 @@
 #include <crd/fuzz/harness.hpp>
 
 #include <crd/containers/array.hpp>
+#include <crd/containers/checksum.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/log/log.hpp>
 #include <crd/platform/filesystem.hpp>
@@ -128,6 +129,8 @@ struct ModelChunk
     u64       uncompressed = 0U;
     usize     offset       = 0U; // payload's first byte in the file
     u64       stored       = 0U;
+    u64       hash         = 0U; // a compressed chunk's decoded XXH3-64
+    u32       stored_check = 0U; // the stored bytes' CRC-32C
     Array<u8> decoded;           // a compressed chunk's decoded bytes
 };
 
@@ -140,16 +143,25 @@ struct ModelContainer
     Array<ModelChunk> chunks;
 };
 
-// The CRDR layout (crdr.hpp): a 32-byte header, then chunk_count chunks of a 24-byte header and a payload padded to
-// 16 bytes; the padding after the last payload and any bytes after it (a pack's artifacts) are not part of it. A
-// compressed chunk claims at most what its stored bytes can hold (zstd: 3-byte block headers, 128 KiB per block) and
-// must decode to exactly its claim. Returns false where the reader must refuse; `skip` is set when the claims exceed
-// the target's bound (decided before any decoding, from the claims alone).
+// The CRC-32C of a 40-byte header's first 36 bytes, which its last four hold.
+[[nodiscard]] u32 header_check(const u8* header) noexcept
+{
+    return crd::containers::crc32c(ConstSpan<u8>(header, 36U));
+}
+
+// The CRDR layout (crdr.hpp): a 40-byte header (version 3, its last word the CRC-32C of the 36 bytes before it),
+// then chunk_count chunks of a 40-byte header (the same check; at +24 the XXH3-64 of a compressed chunk's decoded
+// bytes, 0 for a stored one; at +32 the CRC-32C of the stored bytes) and a payload padded to 16 bytes; the padding
+// after the last payload and any bytes after it (a pack's artifacts) are not part of it. A stored chunk holds exactly
+// its claim. A compressed chunk claims at most what its stored bytes can hold (zstd: 3-byte block headers, 128 KiB
+// per block) and must decode to exactly its claim and its hash. Returns false where the reader must refuse; `skip` is
+// set when the claims exceed the target's bound (decided before any decoding, from the claims alone).
 [[nodiscard]] bool model_container(const u8* data, usize size, ModelContainer& out, crd::memory::IAllocator* a,
                                    bool& skip)
 {
     skip = false;
-    if (size < 32U || get_u32(data) != res::kFourCC_CRDR || (static_cast<u16>(data[4] | (data[5] << 8U))) != 1U)
+    if (size < 40U || get_u32(data) != res::kFourCC_CRDR || (static_cast<u16>(data[4] | (data[5] << 8U))) != 3U ||
+        header_check(data) != get_u32(data + 36U))
     {
         return false;
     }
@@ -158,12 +170,12 @@ struct ModelContainer
     out.id.lo        = get_u64(data + 16U);
     out.type         = get_u32(data + 24U);
     const u32 count  = get_u32(data + 28U);
-    usize     pos    = 32U;
+    usize     pos    = 40U;
     out.chunks       = Array<ModelChunk>(a);
     out.claims       = 0U;
     for (u32 i = 0U; i < count; ++i)
     {
-        if (pos > size || size - pos < 24U)
+        if (pos > size || size - pos < 40U || header_check(data + pos) != get_u32(data + pos + 36U))
         {
             return false;
         }
@@ -173,7 +185,9 @@ struct ModelContainer
         chunk.flags        = get_u32(data + pos + 4U);
         chunk.uncompressed = get_u64(data + pos + 8U);
         chunk.stored       = get_u64(data + pos + 16U);
-        chunk.offset       = pos + 24U;
+        chunk.hash         = get_u64(data + pos + 24U);
+        chunk.stored_check = get_u32(data + pos + 32U);
+        chunk.offset = pos + 40U;
         if (chunk.stored > size - chunk.offset)
         {
             return false;
@@ -187,6 +201,10 @@ struct ModelContainer
             }
             out.claims += chunk.uncompressed;
         }
+        else if (chunk.uncompressed != chunk.stored || chunk.hash != 0U)
+        {
+            return false;
+        }
         const usize stored = static_cast<usize>(chunk.stored);
         pos                = chunk.offset + stored + ((16U - (stored % 16U)) % 16U);
         out.chunks.push_back(std::move(chunk));
@@ -198,6 +216,11 @@ struct ModelContainer
     }
     for (ModelChunk& chunk : out.chunks)
     {
+        if (crd::containers::crc32c(ConstSpan<u8>(data + chunk.offset, static_cast<usize>(chunk.stored))) !=
+            chunk.stored_check)
+        {
+            return false;
+        }
         if ((chunk.flags & 1U) == 0U)
         {
             continue;
@@ -205,7 +228,8 @@ struct ModelContainer
         chunk.decoded.resize(static_cast<usize>(chunk.uncompressed));
         const usize got = ZSTD_decompress(chunk.decoded.data(), chunk.decoded.size(), data + chunk.offset,
                                           static_cast<usize>(chunk.stored));
-        if (ZSTD_isError(got) != 0U || got != chunk.decoded.size())
+        if (ZSTD_isError(got) != 0U || got != chunk.decoded.size() ||
+            crd::containers::xxh3_64(ConstSpan<u8>(chunk.decoded.data(), chunk.decoded.size())) != chunk.hash)
         {
             return false;
         }
@@ -1112,7 +1136,7 @@ private:
         if (accepted)
         {
             CRD_FUZZ_REQUIRE(file.id == model.id && file.type_fourcc == model.type && file.flags == model.flags &&
-                             file.version == 1U && file.chunks.size() == model.chunks.size());
+                             file.version == 3U && file.chunks.size() == model.chunks.size());
             for (usize i = 0U; i < model.chunks.size(); ++i)
             {
                 const ModelChunk&    want = model.chunks[i];
@@ -1300,7 +1324,41 @@ void add_raw(crd::fuzz::SeedSink& sink, const char* name, const Array<u8>& pack)
     return out;
 }
 
-// A container with one compressed chunk of `fourcc` whose header claims `claim` bytes (zstd of `text`).
+// Close the 40-byte header that starts at `at`: its last word is the CRC-32C of the 36 bytes before it.
+void seal_header(Array<u8>& out, usize at)
+{
+    const u32 check = header_check(out.data() + at);
+    for (u32 i = 0U; i < 4U; ++i)
+    {
+        out[at + 36U + i] = static_cast<u8>(check >> (8U * i));
+    }
+}
+
+// A chunk header with the fields given as they are (a seed's lie is in them) and a valid header check.
+void chunk_header(Array<u8>& out, u32 fourcc, u32 flags, u64 claim, u64 stored, u64 hash, u32 stored_check)
+{
+    const usize at = out.size();
+    put_u32(out, fourcc);
+    put_u32(out, flags);
+    put_u64(out, claim);
+    put_u64(out, stored);
+    put_u64(out, hash);
+    put_u32(out, stored_check);
+    put_u32(out, 0U);
+    seal_header(out, at);
+}
+
+// `size` stored bytes, padded to 16 bytes of their own size.
+void stored_payload(Array<u8>& out, const u8* stored, usize size)
+{
+    append(out, stored, size);
+    for (usize pad = (16U - size % 16U) % 16U; pad > 0U; --pad)
+    {
+        out.push_back(0U);
+    }
+}
+
+// A compressed chunk of `fourcc` whose header claims `claim` bytes (zstd of `text`, with the text's hash).
 void compressed_chunk(Array<u8>& out, u32 fourcc, const char* text, u64 claim)
 {
     const usize n     = std::strlen(text);
@@ -1308,21 +1366,17 @@ void compressed_chunk(Array<u8>& out, u32 fourcc, const char* text, u64 claim)
     frame.resize(ZSTD_compressBound(n));
     const usize got = ZSTD_compress(frame.data(), frame.size(), text, n, 3);
     frame.resize(got);
-    put_u32(out, fourcc);
-    put_u32(out, 1U);
-    put_u64(out, claim);
-    put_u64(out, frame.size());
-    append(out, frame.data(), frame.size());
-    for (usize pad = (16U - frame.size() % 16U) % 16U; pad > 0U; --pad)
-    {
-        out.push_back(0U); // a payload is padded to 16 bytes of its own size
-    }
+    chunk_header(out, fourcc, 1U, claim, frame.size(),
+                 crd::containers::xxh3_64(ConstSpan<u8>(reinterpret_cast<const u8*>(text), n)),
+                 crd::containers::crc32c(ConstSpan<u8>(frame.data(), frame.size())));
+    stored_payload(out, frame.data(), frame.size());
 }
 
 void container_header(Array<u8>& out, u32 type, u32 chunks)
 {
+    const usize at = out.size();
     put_u32(out, res::kFourCC_CRDR);
-    out.push_back(1U);
+    out.push_back(3U);
     out.push_back(0U);
     out.push_back(0U);
     out.push_back(0U);
@@ -1330,6 +1384,9 @@ void container_header(Array<u8>& out, u32 type, u32 chunks)
     put_u64(out, 0x52U);
     put_u32(out, type);
     put_u32(out, chunks);
+    put_u32(out, 0U);
+    put_u32(out, 0U);
+    seal_header(out, at);
 }
 
 // Script assembly for the structured seeds.
@@ -1498,14 +1555,9 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     {
         Array<u8> odd(seed_alloc());
         container_header(odd, res::kFourCC_PACK, 1U);
-        put_u32(odd, res::kFourCC_MFST);
-        put_u32(odd, 0U);
-        put_u64(odd, 47U);
-        put_u64(odd, 47U);
-        for (int i = 0; i < 48; ++i)
-        {
-            odd.push_back(0U);
-        }
+        const u8 zeros[47] = {};
+        chunk_header(odd, res::kFourCC_MFST, 0U, 47U, 47U, 0U, crd::containers::crc32c(ConstSpan<u8>(zeros, 47U)));
+        stored_payload(odd, zeros, sizeof(zeros));
         add_raw(raw, "pack-manifest-not-whole-entries", odd);
     }
     {
@@ -1534,10 +1586,7 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     {
         Array<u8> past(seed_alloc());
         container_header(past, res::kFourCC_PACK, 1U);
-        put_u32(past, res::kFourCC_MFST);
-        put_u32(past, 0U);
-        put_u64(past, 96U);
-        put_u64(past, 96U);
+        chunk_header(past, res::kFourCC_MFST, 0U, 96U, 96U, 0U, 0U);
         add_raw(raw, "chunk-stored-past-end", past);
         Array<u8> header(seed_alloc());
         container_header(header, res::kFourCC_PACK, 3U);

@@ -1343,14 +1343,16 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-fault-injection.md
   Whether hit n of a site fires is a pure function of seed, site, rule and n (`fault_plan_fires`), so the same plan
   over the same call sequence injects the same faults. Arming restarts every site's hit count.
 - Sites are existing seams with existing failure paths: `allocation-failure` (`FaultAllocator`, an `IAllocator`
-  decorator; only `try_allocate` fails, since `allocate` is non-null or fatal), and four read sites on the I/O fault
-  seam: `failed-read`, `partial-read` (deliver n bytes), `delayed-completion` and `cancelled-completion` (the last two
-  only at an `AsyncFile` completion, the engine's one asynchronous completion; crd-jobs has no cancellation). A read
-  counts a hit at every site it is eligible for and applies the first that fires (failed, partial, cancelled,
-  delayed).
+  decorator; only `try_allocate` fails, since `allocate` is non-null or fatal), and five read sites on the I/O fault
+  seam: `failed-read`, `partial-read` (deliver n bytes), `flipped-read` (deliver every byte with bit n inverted, a
+  fault the read cannot see; HW-RESILIENCE.1's checksums find it), `delayed-completion` and `cancelled-completion`
+  (the last two only at an `AsyncFile` completion, the engine's one asynchronous completion; crd-jobs has no
+  cancellation). A read counts a hit at every site it is eligible for and applies the first that fires (failed,
+  partial, flipped, cancelled, delayed).
 - The I/O fault seam is crd-core's `crd/core/fault_seam.hpp`: one hook, consulted by `read_file_binary`,
   `read_file_range` and the `AsyncFile` completion job; with no hook it is one atomic load; uninstall waits for calls
-  in progress. A synchronous read fails on Fail, Short or Cancel, as a real failed or short read does.
+  in progress. A synchronous read fails on Fail, Short or Cancel, as a real failed or short read does, and succeeds
+  on Flip with the bit inverted in what it delivers.
 - `AsyncFile::read_async(offset, dst, status)` reports `Complete`, `Short`, `Failed` or `Cancelled`; there is no
   status-less form. Before this a failed or short completion silently zero-filled `dst` and the streamed load handed
   those bytes to the loader; now any status but Complete fails the load before the loader runs.

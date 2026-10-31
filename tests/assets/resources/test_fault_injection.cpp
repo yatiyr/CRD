@@ -17,6 +17,9 @@
 //     against the real cooker to a seed-free plan of single reads, each needed (checked by cooking without it).
 //   - (DIAG.9c) a read fault that fails a cook fails it the same way with no flight recorder, at basic and at full,
 //     and every instrumented run captures it (an observer-effect experiment, crd/perf/observer_effect.hpp).
+//   - (HW-RESILIENCE.1) a bit flipped in what a read delivers is caught by CRDR's checksums on every load path, the
+//     mount and the reload, and one re-read from the source loads the good bytes; bytes corrupt where they are stored
+//     fail with their typed error after exactly one re-read.
 // A shipping build cannot arm a plan; there the cases assert the refusal and that every path runs plain.
 //
 // Contract: docs/design/runtime-diagnostics.md (DIAG.9b, DIAG.9c); ADR-0133.
@@ -26,6 +29,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <crd/containers/checksum.hpp>
 #include <crd/cooker/cook_command.hpp>
 #include <crd/cooker/cook_handler.hpp>
 #include <crd/cooker/cook_io.hpp>
@@ -321,6 +325,216 @@ TEST_CASE("fault injection: a streamed load whose completion is short, failed or
         CHECK(injector.fired(cp::FaultSite::DelayedCompletion) == 1U);
     }
     injector.disarm();
+}
+
+// ---- HW-RESILIENCE.1: integrity checks and the one re-read --------------------------------------------------------
+
+namespace
+{
+// A flipped-read fault inverts one bit of what a read delivers, a fault the read cannot see; CRDR's checksums find it
+// and the manager reads the artifact once more from its source. The bits below land in blob_artifact's container
+// header (byte 10), its chunk header (byte 45) and its chunk's stored bytes (byte 90).
+constexpr crd::u64 kFlippedBits[] = {8U * 10U + 2U, 8U * 45U + 5U, 8U * 90U + 1U};
+
+cp::FaultPlan flipped_read_plan(crd::u64 first_hit, crd::u64 bit)
+{
+    char text[96];
+    (void)std::snprintf(text, sizeof(text), "seed=1;flipped-read@%llu+1%%1000000=%llu",
+                        static_cast<unsigned long long>(first_hit), static_cast<unsigned long long>(bit));
+    return plan_of(text);
+}
+
+void check_blob(const CountedBlob* blob)
+{
+    REQUIRE(blob != nullptr);
+    REQUIRE(blob->bytes.size() == 64U);
+    CHECK(blob->bytes[0] == 1U);
+    CHECK(blob->bytes[63] == static_cast<crd::u8>(63U * 3U + 1U));
+}
+
+// blob_artifact's BLOB chunk stored compressed (2 KiB that zstd shrinks), for the decoded-bytes check.
+cont::Array<crd::u8> compressed_blob_artifact(ResourceId id)
+{
+    crd::u8 payload[2048];
+    for (crd::u32 i = 0U; i < sizeof(payload); ++i)
+    {
+        payload[i] = static_cast<crd::u8>(i % 64U * 3U + 1U);
+    }
+    CrdrWriter writer(&s_fi_alloc, id, kFourCC_BLOB);
+    writer.add_chunk_compressed(kFourCC_BLOB, cont::ConstSpan<crd::u8>{payload, sizeof(payload)});
+    return writer.finish();
+}
+} // namespace
+
+TEST_CASE("integrity: a bit flipped in an artifact's read is caught and one re-read loads it, on every load path",
+          "[resources][hwres][fault]")
+{
+    // crd::jobs is initialised by the ResourcesJobsListener in test_resource_manager.cpp (same binary).
+    const ResourceId id = ResourceId::mint_random();
+    const ScopedTestFile pack(temp_pack_path("integrity_flip_", id));
+    write_pack(pack.path(), id, kFourCC_BLOB, blob_artifact(id));
+
+    cp::FaultInjector injector;
+    if (!crd::fault_seams_compiled())
+    {
+        CHECK(injector.arm(flipped_read_plan(0U, 3U), kInject) == cp::FaultArmStatus::Unavailable);
+        return;
+    }
+    enum class Route : crd::u8
+    {
+        Sync,
+        Async,
+        Streamed,
+    };
+    for (const crd::u64 bit : kFlippedBits)
+    {
+        for (const Route route : {Route::Sync, Route::Async, Route::Streamed})
+        {
+            INFO("bit " << bit << ", route " << static_cast<int>(route));
+            std::atomic<crd::u32> calls{0U};
+            ResourceManager rm(&s_fi_alloc);
+            rm.register_loader(std::make_unique<CountingBlobLoader>(&calls));
+            REQUIRE(rm.mount_manifest(pack.path().generic()).is_valid()); // the mount's own read happens unfaulted
+            REQUIRE(injector.arm(flipped_read_plan(0U, bit), kInject) == cp::FaultArmStatus::Armed);
+            const ScopedIoHook hook(injector);
+            REQUIRE(hook.installed);
+            ResourceHandle<CountedBlob> handle;
+            if (route == Route::Sync)
+            {
+                handle = rm.load_sync<CountedBlob>(id);
+            }
+            else if (route == Route::Async)
+            {
+                handle = rm.load_async<CountedBlob>(id);
+            }
+            else
+            {
+                handle = rm.load_streamed<CountedBlob>(id);
+            }
+            CHECK(handle.wait_ready() == LoadState::Ready);
+            check_blob(handle.get());
+            CHECK(handle.integrity_error() == CrdrError::Ok);
+            CHECK(injector.fired(cp::FaultSite::FlippedRead) == 1U);
+            CHECK(injector.hits(cp::FaultSite::FlippedRead) == 2U); // the flipped read and the one re-read
+            CHECK(calls.load() == 2U);
+        }
+    }
+    injector.disarm();
+}
+
+TEST_CASE("integrity: a bit flipped in a pack's read is caught; the mount and the reload read it once more",
+          "[resources][hwres][fault]")
+{
+    const ResourceId id = ResourceId::mint_random();
+    const ScopedTestFile pack(temp_pack_path("integrity_pack_", id));
+    const cont::Array<crd::u8> artifact = blob_artifact(id);
+    write_pack(pack.path(), id, kFourCC_BLOB, artifact);
+    cont::Array<crd::u8> on_disk(&s_fi_alloc);
+    REQUIRE(fs::read_file_binary(pack.path(), on_disk));
+    const crd::u64 blob_offset = static_cast<crd::u64>(on_disk.size() - artifact.size());
+
+    cp::FaultInjector injector;
+    if (!crd::fault_seams_compiled())
+    {
+        CHECK(injector.arm(flipped_read_plan(0U, 3U), kInject) == cp::FaultArmStatus::Unavailable);
+        return;
+    }
+    std::atomic<crd::u32> calls{0U};
+    ResourceManager rm(&s_fi_alloc);
+    rm.register_loader(std::make_unique<CountingBlobLoader>(&calls));
+    const ScopedIoHook hook(injector);
+    REQUIRE(hook.installed);
+
+    // The mount's whole-pack read has a bit of its manifest flipped: the container check refuses it, the second read
+    // mounts it.
+    REQUIRE(injector.arm(flipped_read_plan(0U, 8U * 50U + 6U), kInject) == cp::FaultArmStatus::Armed);
+    const MountId mount = rm.mount_manifest(pack.path().generic());
+    REQUIRE(mount.is_valid());
+    CHECK(injector.fired(cp::FaultSite::FlippedRead) == 1U);
+    CHECK(injector.hits(cp::FaultSite::FlippedRead) == 2U);
+    injector.disarm();
+    auto handle = rm.load_sync<CountedBlob>(id);
+    REQUIRE(handle.is_ready());
+    check_blob(handle.get());
+
+    // A reload whose pack read flips a bit of the manifest reads the pack once more; one that flips a bit of the
+    // artifact's own bytes passes the pack's check (they lie outside its manifest), fails the artifact's, and reads
+    // the artifact's range once more. Either way the reload swaps in a payload built from good bytes.
+    const crd::u64 reload_bits[] = {8U * 50U + 6U, (blob_offset + 90U) * 8U + 1U};
+    for (const crd::u64 bit : reload_bits)
+    {
+        INFO("bit " << bit);
+        const crd::u32 generation = handle.generation();
+        REQUIRE(injector.arm(flipped_read_plan(0U, bit), kInject) == cp::FaultArmStatus::Armed);
+        CHECK(rm.reload_mount_now(mount) == 1U);
+        CHECK(injector.fired(cp::FaultSite::FlippedRead) == 1U);
+        CHECK(injector.hits(cp::FaultSite::FlippedRead) == 2U);
+        CHECK(handle.generation() == generation + 1U);
+        check_blob(handle.get());
+    }
+    injector.disarm();
+}
+
+TEST_CASE("integrity: an artifact corrupt where it is stored fails with its typed error after exactly one re-read",
+          "[resources][hwres][fault]")
+{
+    struct Corruption
+    {
+        const char* what;
+        CrdrError error;
+    };
+    const Corruption cases[] = {{"a flipped bit in the stored bytes", CrdrError::ChunkCorrupt},
+                                {"bytes that decode to other bytes", CrdrError::DecodedCorrupt}};
+    for (const Corruption& c : cases)
+    {
+        INFO(c.what);
+        const ResourceId id = ResourceId::mint_random();
+        const ScopedTestFile pack(temp_pack_path("integrity_stored_", id));
+        cont::Array<crd::u8> artifact(&s_fi_alloc);
+        if (c.error == CrdrError::ChunkCorrupt)
+        {
+            artifact = blob_artifact(id);
+            artifact[90] = static_cast<crd::u8>(artifact[90] ^ 0x10U);
+        }
+        else
+        {
+            // The decoded hash changed and the chunk header's checksum recomputed: every check of the read passes.
+            artifact = compressed_blob_artifact(id);
+            crd::u8* const chunk = artifact.data() + 40U;
+            REQUIRE((chunk[4] & 1U) == 1U);
+            chunk[24] = static_cast<crd::u8>(chunk[24] ^ 0x01U);
+            const crd::u32 crc = crd::containers::crc32c(cont::ConstSpan<crd::u8>{chunk, 36U});
+            std::memcpy(chunk + 36U, &crc, sizeof(crc));
+        }
+        write_pack(pack.path(), id, kFourCC_BLOB, artifact);
+
+        std::atomic<crd::u32> calls{0U};
+        ResourceManager rm(&s_fi_alloc);
+        rm.register_loader(std::make_unique<CountingBlobLoader>(&calls));
+        REQUIRE(rm.mount_manifest(pack.path().generic()).is_valid());
+        // A plan that never fires counts the reads (every read is a failed-read hit).
+        cp::FaultInjector injector;
+        const bool counted = crd::fault_seams_compiled();
+        if (counted)
+        {
+            REQUIRE(injector.arm(plan_of("seed=1;failed-read@1000+1%1000000"), kInject) == cp::FaultArmStatus::Armed);
+        }
+        {
+            const ScopedIoHook hook(injector);
+            CHECK(hook.installed == counted);
+            auto handle = rm.load_sync<CountedBlob>(id);
+            CHECK(handle.state() == LoadState::Failed);
+            CHECK(handle.get() == nullptr);
+            CHECK(handle.integrity_error() == c.error);
+            CHECK(calls.load() == 2U); // the first read and the one re-read, each refused by its check
+        }
+        if (counted)
+        {
+            CHECK(injector.hits(cp::FaultSite::FailedRead) == 2U);
+            CHECK(injector.fired(cp::FaultSite::FailedRead) == 0U);
+            injector.disarm();
+        }
+    }
 }
 
 // ---- the cook stage ---------------------------------------------------------------------------------------------

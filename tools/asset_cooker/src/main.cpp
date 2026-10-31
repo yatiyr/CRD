@@ -41,17 +41,7 @@ static int cmd_manifest_dump(const char* pack_path)
 
     if (err != CrdrError::Ok)
     {
-        const char* err_str = "unknown";
-        switch (err)
-        {
-            case CrdrError::BadMagic:        err_str = "bad magic";       break;
-            case CrdrError::BadVersion:      err_str = "bad version";     break;
-            case CrdrError::Truncated:       err_str = "truncated";       break;
-            case CrdrError::InvalidChunk:    err_str = "invalid chunk";   break;
-            case CrdrError::DecompressFailed:err_str = "decompress failed"; break;
-            case CrdrError::Ok:              break;
-        }
-        std::fprintf(stderr, "asset_cooker: CRDR parse error (%s): %s\n", err_str, pack_path);
+        std::fprintf(stderr, "asset_cooker: CRDR parse error (%s): %s\n", crdr_error_text(err), pack_path);
         return 1;
     }
 

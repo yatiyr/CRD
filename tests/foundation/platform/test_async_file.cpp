@@ -244,6 +244,18 @@ TEST_CASE("AsyncFile: each injected completion fault is reported through the rea
             CHECK(b == 0xEEU);
         }
     }
+    SECTION("flipped: complete, every byte delivered with exactly the one bit inverted")
+    {
+        script.fault = crd::IoFault{crd::IoFaultAction::Flip, 8U * 8U * 3U + 8U * 5U + 6U}; // wraps to byte 5, bit 6
+        const ScopedHook hook(script);
+        REQUIRE(hook.installed);
+        crd::u8 dst[sizeof(data)] = {};
+        CHECK(read_all(f, dst, sizeof(dst)) == AsyncReadStatus::Complete);
+        for (crd::usize i = 0U; i < sizeof(data); ++i)
+        {
+            CHECK(dst[i] == (i == 5U ? static_cast<crd::u8>(data[i] ^ 0x40U) : data[i]));
+        }
+    }
     SECTION("delayed: complete, and not before the delay")
     {
         script.fault = crd::IoFault{crd::IoFaultAction::Delay, 30ULL * 1000ULL * 1000ULL};
@@ -274,7 +286,8 @@ TEST_CASE("AsyncFile: each injected completion fault is reported through the rea
     (void)fs::remove_file(p);
 }
 
-TEST_CASE("fs: synchronous reads fail on an injected failed, short or cancelled read and wait out a delay",
+TEST_CASE("fs: synchronous reads fail on an injected failed, short or cancelled read, deliver a flipped bit and wait "
+          "out a delay",
           "[platform][async_file][diag9b]")
 {
     const crd::u8  data[] = {0x10, 0x20, 0x30, 0x40};
@@ -319,6 +332,29 @@ TEST_CASE("fs: synchronous reads fail on an injected failed, short or cancelled 
         CHECK_FALSE(fs::read_file_text(p, text));
         CHECK(text.size() == 0U);
         CHECK(script.last_op.load() == static_cast<crd::u32>(crd::IoFaultOp::ReadWhole));
+    }
+
+    // HW-RESILIENCE.1: a flipped read succeeds with one bit of what it delivered inverted, counted from its first byte.
+    script.fault = crd::IoFault{crd::IoFaultAction::Flip, 8U + 3U};
+    {
+        const ScopedHook hook(script);
+        REQUIRE(hook.installed);
+        crd::containers::Array<crd::u8> whole(&s_alloc);
+        REQUIRE(fs::read_file_binary(p, whole));
+        REQUIRE(whole.size() == sizeof(data));
+        CHECK(whole[0] == 0x10U);
+        CHECK(whole[1] == 0x28U);
+        CHECK(whole[2] == 0x30U);
+        CHECK(whole[3] == 0x40U);
+        crd::containers::Array<crd::u8> range(&s_alloc);
+        REQUIRE(fs::read_file_range(p, 2U, 2U, range));
+        REQUIRE(range.size() == 2U);
+        CHECK(range[0] == 0x30U);
+        CHECK(range[1] == 0x48U);
+        crd::containers::String text(&s_alloc);
+        REQUIRE(fs::read_file_text(p, text));
+        REQUIRE(text.size() == sizeof(data));
+        CHECK(static_cast<crd::u8>(text.data()[1]) == 0x28U);
     }
 
     script.fault = crd::IoFault{crd::IoFaultAction::Delay, 20ULL * 1000ULL * 1000ULL};

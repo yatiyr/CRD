@@ -2,27 +2,38 @@
 
 // CRDR — Cerid chunked binary container format (ADR-0038).
 //
-// All cooked artifacts share one format: a 32-byte header + N typed chunks.
-// Every chunk stores a fourcc, flags, sizes, and a zero-padded payload.
+// All cooked artifacts share one format: a 40-byte header + N typed chunks.
+// Every chunk stores a fourcc, flags, sizes, its checksums and a zero-padded payload.
 // The container itself carries the ResourceId and a type fourcc ('PACK', 'SHDR', …).
 //
 // File layout (little-endian):
 //
-//   Header (32 bytes):
+//   Header (40 bytes):
 //     +0  u32  magic       = make_fourcc('C','R','D','R')
-//     +4  u16  version     = 1
-//     +6  u16  flags       (bit 0: payloads are zstd-compressed — v1b)
+//     +4  u16  version     = 3
+//     +6  u16  flags       (reserved, 0)
 //     +8  u64  uuid_hi     ← ResourceId::hi
 //     +16 u64  uuid_lo     ← ResourceId::lo
 //     +24 u32  type_fourcc ← 'PACK', 'SHDR', 'MATR', 'BLOB', …
 //     +28 u32  chunk_count
+//     +32 u32  reserved    (0)
+//     +36 u32  header_crc  CRC-32C of bytes +0..+35
 //
-//   Each chunk (24-byte header + payload):
+//   Each chunk (40-byte header + payload):
 //     +0  u32  fourcc
-//     +4  u32  flags            (bit 0: payload compressed — unused until v1b)
+//     +4  u32  flags            (bit 0: payload zstd-compressed)
 //     +8  u64  uncompressed_size
-//     +16 u64  compressed_size  (== uncompressed_size when bit 0 of flags is clear)
-//     +24 u8[] payload          (compressed_size bytes, zero-padded to 16-byte alignment)
+//     +16 u64  compressed_size  (the stored bytes; == uncompressed_size when bit 0 of flags is clear)
+//     +24 u64  decoded_hash     XXH3-64 of the decompressed payload (compressed chunks; 0 otherwise)
+//     +32 u32  stored_crc       CRC-32C of the stored bytes
+//     +36 u32  header_crc       CRC-32C of this chunk header's bytes +0..+35
+//     +40 u8[] payload          (compressed_size bytes, zero-padded to 16-byte alignment)
+//
+// Integrity (HW-RESILIENCE.1, ADR-0038 amendment): the reader checks the header and each chunk header before it
+// trusts a field of them, each chunk's stored bytes after the read and each compressed chunk's bytes after
+// decompression, so a flipped bit anywhere but the padding is a typed error, never a crash or silent bad data. CRC-32C
+// guards what storage and transfer flip (every burst of up to 32 bits is caught); XXH3-64 guards the decoder's output,
+// where a fault is not a burst. Version 2 is skipped: the DX12 device-removal bundle uses 'CRDR' with version 2.
 //
 // Determinism: chunk order is sorted ascending by fourcc at write time.
 //              Padding bytes are zero-filled. No timestamps inside any chunk.
@@ -122,7 +133,7 @@ void fourcc_to_str(crd::u32 fourcc, char (&buf)[5]) noexcept;
 
 // ── Container version ───────────────────────────────────────────────────────
 
-inline constexpr crd::u16 kCrdrVersion = 1U;
+inline constexpr crd::u16 kCrdrVersion = 3U;
 
 // ── CRDR chunk (read view) ──────────────────────────────────────────────────
 
@@ -145,6 +156,10 @@ struct CrdrFile
     crd::containers::Array<CrdrChunk> chunks;
     // Owns decompressed bytes for compressed chunks; chunk payloads point here.
     crd::containers::Array<crd::u8>   decompressed_backing;
+    // On ChunkCorrupt, DecodedCorrupt, InvalidChunk and DecompressFailed: the chunk's index and its fourcc as stored
+    // (a corrupt header's fourcc may itself be flipped).
+    crd::u32 fault_chunk = 0;
+    crd::u32 fault_fourcc = 0;
 
     explicit CrdrFile(crd::memory::IAllocator* a = crd::memory::default_allocator())
         : chunks(a), decompressed_backing(a)
@@ -162,7 +177,13 @@ enum class CrdrError : crd::u8
     Truncated,
     InvalidChunk,
     DecompressFailed,
+    HeaderCorrupt,  // the container header fails its checksum
+    ChunkCorrupt,   // a chunk header or its stored bytes fail their checksum (a fault in storage or in the read)
+    DecodedCorrupt, // a compressed chunk decodes to bytes that fail their hash (a fault in decompression)
 };
+
+// A short, plain description of `error` for messages ("ok" for Ok).
+[[nodiscard]] const char* crdr_error_text(CrdrError error) noexcept;
 
 // ── Reader ──────────────────────────────────────────────────────────────────
 
@@ -181,13 +202,44 @@ inline constexpr crd::u64 kCrdrZstdBlockMaxBytes = 128U * 1024U;
 }
 
 // Parse a CRDR blob. Chunk payloads are views into `bytes` — keep `bytes`
-// alive as long as any CrdrChunk from `out` is accessed. A compressed chunk is refused (InvalidChunk) when it claims
-// more than crdr_max_decompressed_size of its stored bytes, before any memory is reserved for the claim, and
-// (DecompressFailed) unless its payload decodes to exactly the size it claims.
+// alive as long as any CrdrChunk from `out` is accessed. A header that fails its checksum is BadMagic when it does
+// not start with the magic, BadVersion when its version is not kCrdrVersion and HeaderCorrupt otherwise; a chunk
+// header or stored payload that fails its checksum is ChunkCorrupt and a decompressed payload that fails its hash is
+// DecodedCorrupt. A compressed chunk is refused (InvalidChunk) when it claims more than crdr_max_decompressed_size of
+// its stored bytes, before any memory is reserved for the claim, and (DecompressFailed) unless its payload decodes to
+// exactly the size it claims.
 [[nodiscard]] CrdrError crdr_read(
     crd::containers::ConstSpan<crd::u8> bytes,
     CrdrFile&                           out,
     crd::memory::IAllocator*            a = crd::memory::default_allocator());
+
+// Whether `bytes` start with a container header of this version that passes its checksum, without reading the chunks:
+// the cooker's cache check, so an artifact cooked in an older container version is cooked again.
+[[nodiscard]] bool crdr_is_current(crd::containers::ConstSpan<crd::u8> bytes) noexcept;
+
+// The first crdr_read on this thread that fails while the scope is open (HW-RESILIENCE.1). The resource manager opens
+// one around each loader call, so it can tell a load refused for its bytes (re-read once from the source) from one
+// refused for its content, whichever function of the loader parsed them. Scopes nest: an inner scope (a dependency's
+// load) takes the failures inside it. Like the manager's cycle stack, a scope assumes the loader does not move to
+// another thread while it runs (loaders do not wait on jobs).
+class CrdrFaultScope
+{
+public:
+    CrdrFaultScope() noexcept;
+    ~CrdrFaultScope();
+    CrdrFaultScope(const CrdrFaultScope&) = delete;
+    CrdrFaultScope& operator=(const CrdrFaultScope&) = delete;
+
+    [[nodiscard]] CrdrError error() const noexcept { return m_error; }
+    [[nodiscard]] crd::u32 fault_fourcc() const noexcept { return m_fault_fourcc; }
+
+private:
+    friend CrdrError crdr_read(crd::containers::ConstSpan<crd::u8>, CrdrFile&, crd::memory::IAllocator*);
+
+    CrdrFaultScope* m_outer = nullptr;
+    CrdrError m_error = CrdrError::Ok;
+    crd::u32 m_fault_fourcc = 0;
+};
 
 // Find the first chunk with the given fourcc, or nullptr.
 [[nodiscard]] const CrdrChunk* crdr_find_chunk(
@@ -205,10 +257,10 @@ public:
         ResourceId               id,
         crd::u32                 type_fourcc);
 
+    // Store `payload` as it is.
     void add_chunk(
         crd::u32                              fourcc,
-        crd::containers::ConstSpan<crd::u8>  payload,
-        crd::u32                             chunk_flags = 0U);
+        crd::containers::ConstSpan<crd::u8>  payload);
 
     // Compress `payload` with zstd (level `zstd_level`) and store the chunk.
     // Falls back to uncompressed storage if compression doesn't help.
@@ -226,6 +278,7 @@ private:
         crd::u32                        fourcc;
         crd::u32                        flags;
         crd::u64                        uncompressed_size; // original size before compression
+        crd::u64                        decoded_hash;      // XXH3-64 of the original bytes (compressed chunks; else 0)
         crd::containers::Array<crd::u8> payload;           // compressed bytes (or raw if uncompressed)
     };
 

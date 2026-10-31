@@ -141,15 +141,28 @@ PackRead read_pack(const crd::platform::fs::Path& path, crd::u32 mount_id, crd::
                    crd::containers::HashMap<ResourceId, crd::usize>& index)
 {
     PackRead result;
-    if (!crd::platform::fs::read_file_binary(path, file_bytes))
-    {
-        result.refusal = PackRefusal::Unreadable;
-        return result;
-    }
-    result.pack_size = static_cast<crd::u64>(file_bytes.size());
-
     CrdrFile crdr_file(alloc);
-    result.crdr_error = crdr_read(crd::containers::as_const_span(file_bytes), crdr_file, alloc);
+    // A pack whose bytes fail the container's checks (its checksums included) is read once more before it is refused
+    // (HW-RESILIENCE.1): a transient fault between the medium and the parse costs one re-read.
+    for (crd::u32 attempt = 0U; attempt < 2U; ++attempt)
+    {
+        if (!crd::platform::fs::read_file_binary(path, file_bytes))
+        {
+            result.refusal = PackRefusal::Unreadable;
+            return result;
+        }
+        result.pack_size = static_cast<crd::u64>(file_bytes.size());
+        result.crdr_error = crdr_read(crd::containers::as_const_span(file_bytes), crdr_file, alloc);
+        if (result.crdr_error == CrdrError::Ok)
+        {
+            break;
+        }
+        if (attempt == 0U)
+        {
+            CRD_LOG_WARN(g_log_resources, "ResourceManager: pack '{}': {}; reading it once more", path.generic(),
+                         crdr_error_text(result.crdr_error));
+        }
+    }
     if (result.crdr_error != CrdrError::Ok)
     {
         result.refusal = PackRefusal::Unparsable;
@@ -205,6 +218,85 @@ PackRead read_pack(const crd::platform::fs::Path& path, crd::u32 mount_id, crd::
         entries.push_back(std::move(live));
     }
     return result;
+}
+
+// What one artifact load produced.
+struct LoadOutcome
+{
+    void* payload = nullptr;
+    LoadState state = LoadState::Failed;
+    CrdrError integrity = CrdrError::Ok; // the typed error of bytes that failed their checks twice
+};
+
+// Run `loader` on the artifact `ctx` carries, under a CrdrFaultScope (HW-RESILIENCE.1). When the loader refuses bytes
+// that failed a CRDR check (a checksum after the read or after decompression, or any other container error), the
+// artifact is read once more from its source by `reread` (bool(Array<u8>&)) and loaded again: a transient fault
+// anywhere from the medium to the decoder costs one re-read, and bytes that fail again end the load with their typed
+// error and a message naming it, never with a payload built on bad bytes. A loader that refuses bytes that passed
+// (its content, or its own allocation) fails as before, without a re-read. With `placeholder`, a load that ends
+// without a payload asks the loader for its placeholder.
+template <typename Reread>
+LoadOutcome load_checked(ILoader& loader, LoadContext ctx, const Reread& reread, crd::memory::IAllocator* alloc,
+                         bool placeholder)
+{
+    LoadOutcome outcome;
+    const auto attempt = [&loader, &ctx]() -> void*
+    {
+        visiting_push(ctx.id);
+        void* const payload = loader.load(ctx);
+        visiting_pop();
+        return payload;
+    };
+
+    crd::containers::Array<crd::u8> again(alloc);
+    {
+        CrdrFaultScope scope;
+        outcome.payload = attempt();
+        if (outcome.payload == nullptr && scope.error() != CrdrError::Ok)
+        {
+            char fourcc[5];
+            fourcc_to_str(scope.fault_fourcc(), fourcc);
+            const auto id_text = ctx.id.to_string(alloc);
+            CRD_LOG_WARN(g_log_resources, "ResourceManager: artifact {}: {} (chunk '{}'); reading it once more",
+                         id_text.c_str(), crdr_error_text(scope.error()), fourcc);
+            if (!reread(again))
+            {
+                CRD_LOG_ERROR(g_log_resources, "ResourceManager: artifact {}: the re-read failed", id_text.c_str());
+                outcome.integrity = scope.error();
+            }
+            else
+            {
+                ctx.bytes = crd::containers::as_const_span(again);
+                CrdrFaultScope retry;
+                outcome.payload = attempt();
+                if (outcome.payload != nullptr)
+                {
+                    CRD_LOG_WARN(g_log_resources,
+                                 "ResourceManager: artifact {}: loaded from the re-read (the first read was corrupt)",
+                                 id_text.c_str());
+                }
+                else if (retry.error() != CrdrError::Ok)
+                {
+                    fourcc_to_str(retry.fault_fourcc(), fourcc);
+                    CRD_LOG_ERROR(g_log_resources,
+                                  "ResourceManager: artifact {}: {} (chunk '{}') again after a re-read; the stored "
+                                  "artifact is corrupt, so it is not loaded (re-cook or re-install it)",
+                                  id_text.c_str(), crdr_error_text(retry.error()), fourcc);
+                    outcome.integrity = retry.error();
+                }
+            }
+        }
+    }
+    if (outcome.payload != nullptr)
+    {
+        outcome.state = LoadState::Ready;
+    }
+    else if (placeholder)
+    {
+        outcome.payload = loader.load_placeholder(ctx);
+        outcome.state = outcome.payload != nullptr ? LoadState::Placeholder : LoadState::Failed;
+    }
+    return outcome;
 }
 
 // Heap-allocated context for an in-flight async load job.
@@ -909,31 +1001,23 @@ ResourceControlBlock* ResourceManager::load_sync_impl(ResourceId id)
     const bool read_ok = crd::platform::fs::read_file_range(
         fs_path, blob_offset, blob_size, artifact_bytes);
 
-    void*     payload     = nullptr;
-    LoadState final_state = LoadState::Failed;
+    LoadOutcome outcome;
 
     if (read_ok)
     {
-        visiting_push(id);
         const LoadContext ctx{id, crd::containers::as_const_span(artifact_bytes), this, m_alloc};
-        payload = loader->load(ctx);
-        visiting_pop();
-
-        if (payload != nullptr)
-        {
-            final_state = LoadState::Ready;
-        }
-        else
-        {
-            payload     = loader->load_placeholder(ctx);
-            final_state = payload ? LoadState::Placeholder : LoadState::Failed;
-        }
+        outcome = load_checked(
+            *loader, ctx, [&](crd::containers::Array<crd::u8>& out)
+            { return crd::platform::fs::read_file_range(fs_path, blob_offset, blob_size, out); }, m_alloc, true);
     }
     else
     {
         CRD_LOG_ERROR(g_log_resources,
                       "ResourceManager::load_sync: failed to read artifact bytes");
     }
+    void* const payload = outcome.payload;
+    const LoadState final_state = outcome.state;
+    block->integrity = outcome.integrity;
 
     // ── Phase 4: Finalize under lock ──────────────────────────────────────
 
@@ -1142,36 +1226,24 @@ CRD_NOINLINE void ResourceManager::run_load_job(void* raw_ctx) noexcept
     const bool read_ok = crd::platform::fs::read_file_range(
         fs_path, ctx->blob_offset, ctx->blob_size, artifact_bytes);
 
-    void*     payload     = nullptr;
-    LoadState final_state = LoadState::Failed;
+    LoadOutcome outcome;
 
     if (read_ok)
     {
-        visiting_push(ctx->id);
-        const LoadContext load_ctx{
-            ctx->id,
-            crd::containers::as_const_span(artifact_bytes),
-            mgr,
-            mgr->m_alloc
-        };
-        payload = ctx->loader->load(load_ctx);
-        visiting_pop();
-
-        if (payload != nullptr)
-        {
-            final_state = LoadState::Ready;
-        }
-        else
-        {
-            payload     = ctx->loader->load_placeholder(load_ctx);
-            final_state = payload ? LoadState::Placeholder : LoadState::Failed;
-        }
+        const LoadContext load_ctx{ctx->id, crd::containers::as_const_span(artifact_bytes), mgr, mgr->m_alloc};
+        outcome = load_checked(
+            *ctx->loader, load_ctx, [&](crd::containers::Array<crd::u8>& out)
+            { return crd::platform::fs::read_file_range(fs_path, ctx->blob_offset, ctx->blob_size, out); },
+            mgr->m_alloc, true);
     }
     else
     {
         CRD_LOG_ERROR(g_log_resources,
                       "ResourceManager::run_load_job: failed to read artifact bytes");
     }
+    void* const payload = outcome.payload;
+    const LoadState final_state = outcome.state;
+    block->integrity = outcome.integrity;
 
     // Finalize under lock: update state, move from in_flight to handles.
     {
@@ -1370,26 +1442,29 @@ CRD_NOINLINE void ResourceManager::run_stream_load_job(void* raw_ctx) noexcept
     crd::platform::AsyncFile af = crd::platform::AsyncFile::open(
         crd::containers::StringView(ctx->pack_path.data(), ctx->pack_path.size()));
 
-    void*     payload     = nullptr;
-    LoadState final_state = LoadState::Failed;
+    LoadOutcome outcome;
 
     if (af.is_open() && ctx->blob_offset + ctx->blob_size <= af.size())
     {
-        crd::containers::Array<crd::u8> buf(mgr->m_alloc);
-        buf.resize(ctx->blob_size);
-
-        crd::platform::AsyncReadStatus read_status = crd::platform::AsyncReadStatus::Pending;
-        crd::jobs::Counter* c = af.read_async(
-            ctx->blob_offset,
-            crd::containers::Span<crd::u8>(buf.data(), buf.size()),
-            read_status);
-
-        if (c != nullptr)
+        // One read of the artifact's range into `out`: false when no read was issued, else `status` is how it ended.
+        const auto read_range = [&af, ctx](crd::containers::Array<crd::u8>& out, crd::platform::AsyncReadStatus& status)
         {
-            crd::jobs::wait(c); // suspend fiber or spin until read completes
-        }
+            out.resize(ctx->blob_size);
+            status = crd::platform::AsyncReadStatus::Pending;
+            crd::jobs::Counter* const counter =
+                af.read_async(ctx->blob_offset, crd::containers::Span<crd::u8>(out.data(), out.size()), status);
+            if (counter == nullptr)
+            {
+                return false;
+            }
+            crd::jobs::wait(counter); // suspend fiber or spin until read completes
+            return true;
+        };
+        crd::containers::Array<crd::u8> buf(mgr->m_alloc);
+        crd::platform::AsyncReadStatus read_status = crd::platform::AsyncReadStatus::Pending;
+        const bool issued = read_range(buf, read_status);
 
-        if (c != nullptr && read_status != crd::platform::AsyncReadStatus::Complete)
+        if (issued && read_status != crd::platform::AsyncReadStatus::Complete)
         {
             // DIAG.9b: a short, failed or cancelled read never reaches the loader as zero-filled bytes; the load
             // fails like the sync and async paths do on a failed read.
@@ -1397,7 +1472,7 @@ CRD_NOINLINE void ResourceManager::run_stream_load_job(void* raw_ctx) noexcept
                           "ResourceManager::run_stream_load_job: artifact read ended {}",
                           crd::platform::async_read_status_name(read_status));
         }
-        else if (c != nullptr)
+        else if (issued)
         {
             LoadContext load_ctx{};
             load_ctx.id            = ctx->id;
@@ -1408,19 +1483,14 @@ CRD_NOINLINE void ResourceManager::run_stream_load_job(void* raw_ctx) noexcept
             load_ctx.stream_offset = ctx->blob_offset;
             load_ctx.stream_size   = ctx->blob_size;
 
-            visiting_push(ctx->id);
-            payload = ctx->loader->load(load_ctx);
-            visiting_pop();
-
-            if (payload != nullptr)
-            {
-                final_state = LoadState::Ready;
-            }
-            else
-            {
-                payload     = ctx->loader->load_placeholder(load_ctx);
-                final_state = payload ? LoadState::Placeholder : LoadState::Failed;
-            }
+            outcome = load_checked(
+                *ctx->loader, load_ctx,
+                [&](crd::containers::Array<crd::u8>& out)
+                {
+                    crd::platform::AsyncReadStatus status = crd::platform::AsyncReadStatus::Pending;
+                    return read_range(out, status) && status == crd::platform::AsyncReadStatus::Complete;
+                },
+                mgr->m_alloc, true);
         }
         else
         {
@@ -1433,6 +1503,9 @@ CRD_NOINLINE void ResourceManager::run_stream_load_job(void* raw_ctx) noexcept
         CRD_LOG_ERROR(g_log_resources,
                       "ResourceManager::run_stream_load_job: failed to open pack or invalid range");
     }
+    void* const payload = outcome.payload;
+    const LoadState final_state = outcome.state;
+    block->integrity = outcome.integrity;
 
     // Finalize under lock.
     {
@@ -1722,7 +1795,12 @@ crd::usize ResourceManager::do_reload_mount(PackWatch& watch)
             file_bytes.data() + task.blob_offset, static_cast<crd::usize>(task.blob_size));
 
         const LoadContext ctx{task.id, artifact_span, this, m_alloc};
-        void* new_payload = task.loader->load(ctx);
+        void* const new_payload =
+            load_checked(
+                *task.loader, ctx, [&](crd::containers::Array<crd::u8>& out)
+                { return crd::platform::fs::read_file_range(fs_path, task.blob_offset, task.blob_size, out); }, m_alloc,
+                false)
+                .payload;
 
         if (new_payload == nullptr)
         {

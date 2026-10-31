@@ -11,6 +11,9 @@
 //   failed-read           the I/O fault seam (crd/core/fault_seam.hpp), every read: the read fails.
 //   partial-read          the same, every read: the read delivers `value` bytes (clamped below the request) and
 //                         stops. A synchronous read then reports failure; an AsyncFile completion reports Short.
+//   flipped-read          the same, every read: the read delivers every byte and succeeds with bit `value` of them
+//                         inverted (modulo the bits delivered), a storage or transfer fault the read cannot see; the
+//                         reader's checksums find it (HW-RESILIENCE.1: CRDR's checks and the manager's one re-read).
 //   delayed-completion    the same, AsyncFile completions only: the completion arrives `value` ns late.
 //   cancelled-completion  the same, AsyncFile completions only: the completion reports Cancelled.
 //   device-loss           the GPU fault seam (crd/core/fault_seam.hpp), every queue submission (Vulkan vk_submit, DX12
@@ -22,7 +25,7 @@
 // function of (seed, site, n, the rules) -- fault_plan_fires() -- so the same plan over the same sequence of calls
 // injects the same faults, and a fired fault is reproduced alone by the one-hit plan its recipe names. A read
 // consults every read site it is eligible for (so each site's ordinals count reads), then applies the first site that
-// fires in the order failed-read, partial-read, cancelled-completion, delayed-completion.
+// fires in the order failed-read, partial-read, flipped-read, cancelled-completion, delayed-completion.
 //
 // Evidence. Every fired fault is recorded into the attached FlightRecorder (kFlightCodeFaultInjected, a = site,
 // b = hit; a read's event message also names the file it failed, by its last path component only). With
@@ -66,11 +69,13 @@ enum class FaultSite : crd::u8
     DelayedCompletion   = 3U,
     CancelledCompletion = 4U,
     DeviceLoss          = 5U,
+    FlippedRead         = 6U,
 };
 
-inline constexpr crd::u32 kFaultSiteCount = 6U;
+inline constexpr crd::u32 kFaultSiteCount = 7U;
 
-// "allocation-failure", "failed-read", "partial-read", "delayed-completion", "cancelled-completion", "device-loss".
+// "allocation-failure", "failed-read", "partial-read", "delayed-completion", "cancelled-completion", "device-loss",
+// "flipped-read".
 [[nodiscard]] cont::StringView fault_site_name(FaultSite s) noexcept;
 [[nodiscard]] bool             parse_fault_site(cont::StringView text, FaultSite& out) noexcept;
 
@@ -87,7 +92,7 @@ struct FaultRule
     crd::u64  first_hit       = 0U;              // the site's first covered hit ordinal (0-based)
     crd::u64  hit_limit       = 1U;              // covered hits from first_hit; 0 = every later hit
     crd::u32  probability_ppm = kFaultPpmAlways; // of the covered hits, the share that fires (seeded), 1..1000000
-    crd::u64  value           = 0U;              // partial-read: bytes delivered; delayed-completion: ns; else 0
+    crd::u64  value           = 0U; // partial-read: bytes delivered; delayed-completion: ns; flipped-read: the bit
 };
 
 struct FaultPlan

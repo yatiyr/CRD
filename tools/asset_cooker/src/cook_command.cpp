@@ -218,7 +218,9 @@ void scan_recursive(const fs::Path& dir, crd::containers::Array<fs::Path>& out)
         {
             return false;
         }
-        if (cook_hash64(crd::containers::as_const_span(bytes)) != rec.products[p].artifact_hash)
+        // The recorded bytes, in the current container version (an older cook's artifacts are cooked again).
+        if (cook_hash64(crd::containers::as_const_span(bytes)) != rec.products[p].artifact_hash ||
+            !crd::resources::crdr_is_current(crd::containers::as_const_span(bytes)))
         {
             return false;
         }

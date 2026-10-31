@@ -224,6 +224,7 @@ cont::StringView fault_site_name(FaultSite s) noexcept
     case FaultSite::DelayedCompletion:   return cont::StringView{"delayed-completion"};
     case FaultSite::CancelledCompletion: return cont::StringView{"cancelled-completion"};
     case FaultSite::DeviceLoss:          return cont::StringView{"device-loss"};
+    case FaultSite::FlippedRead:         return cont::StringView{"flipped-read"};
     }
     return cont::StringView{"unknown"};
 }
@@ -282,7 +283,7 @@ FaultPlanError validate_fault_plan(const FaultPlan& plan) noexcept
             return FaultPlanError::RangeOverflow;
         }
         const bool delay_ok = r.site == FaultSite::DelayedCompletion && r.value != 0U && r.value <= kFaultMaxDelayNs;
-        const bool value_ok = r.site == FaultSite::PartialRead || delay_ok ||
+        const bool value_ok = r.site == FaultSite::PartialRead || r.site == FaultSite::FlippedRead || delay_ok ||
                               (r.site != FaultSite::DelayedCompletion && r.value == 0U);
         if (!value_ok)
         {
@@ -636,10 +637,11 @@ crd::IoFault FaultInjector::io_hook(void* injector, crd::IoFaultOp op, const cha
     }
     // Every eligible site counts this read, so each site's ordinals count reads; the first that fires applies.
     const bool    completion = op == crd::IoFaultOp::AsyncRead;
-    FaultDecision decisions[4];
+    FaultDecision decisions[5];
     crd::u32      count = 0U;
     decisions[count++]  = self->evaluate(FaultSite::FailedRead);
     decisions[count++]  = self->evaluate(FaultSite::PartialRead);
+    decisions[count++]  = self->evaluate(FaultSite::FlippedRead);
     if (completion)
     {
         decisions[count++] = self->evaluate(FaultSite::CancelledCompletion);
@@ -657,6 +659,7 @@ crd::IoFault FaultInjector::io_hook(void* injector, crd::IoFaultOp op, const cha
         {
         case FaultSite::FailedRead:          return crd::IoFault{crd::IoFaultAction::Fail, 0U};
         case FaultSite::PartialRead:         return crd::IoFault{crd::IoFaultAction::Short, d.value};
+        case FaultSite::FlippedRead:         return crd::IoFault{crd::IoFaultAction::Flip, d.value};
         case FaultSite::CancelledCompletion: return crd::IoFault{crd::IoFaultAction::Cancel, 0U};
         case FaultSite::DelayedCompletion:   return crd::IoFault{crd::IoFaultAction::Delay, d.value};
         case FaultSite::AllocationFailure:

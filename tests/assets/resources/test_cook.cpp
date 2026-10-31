@@ -3,6 +3,7 @@
 #include <crd/cooker/cook_handler.hpp>
 #include <crd/cooker/cook_io.hpp>
 #include <crd/containers/array.hpp>
+#include <crd/containers/checksum.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <new>
@@ -13,6 +14,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <string>
 
@@ -487,5 +489,64 @@ TEST_CASE("GEO-6: the dependency graph is QUERYABLE -- forward and reverse edges
     const crd::cooker::DbJob* producer = db.find_producer(job->products[0].id);
     REQUIRE(producer == job);
 
+    REQUIRE(fs::remove_all(tmp));
+}
+
+TEST_CASE("HW-RESILIENCE.1: a cached artifact of an older container version is cooked again, never shipped",
+          "[resources][cook][hwres]")
+{
+    register_builtin_handlers();
+    const auto tmp = make_temp_dir();
+    REQUIRE(fs::create_directories(tmp));
+    const auto pack_path = tmp / "out.crdr";
+    const crd::u8 a[] = {3, 1, 4};
+    write_bytes(tmp / "a.bin", a, sizeof(a));
+    REQUIRE(cmd_cook(tmp.generic().data(), pack_path.generic().data()) == 0);
+    crd::containers::Array<crd::u8> pack_good(&g_alloc);
+    REQUIRE(fs::read_file_binary(pack_path, pack_good));
+
+    // The cache artifact as an older cook left it: version 1 with a valid header checksum, and a cook database that
+    // records exactly those bytes, so only the version tells it apart.
+    crd::containers::String meta_text(&g_alloc);
+    REQUIRE(fs::read_file_text(tmp / "a.bin.meta", meta_text));
+    const std::string_view meta(meta_text.data(), meta_text.size());
+    const auto q = meta.find("uuid = \"");
+    REQUIRE(q != std::string_view::npos);
+    crd::containers::String art(ResourceId::parse(meta.substr(q + 8U, 36U)).to_string(&g_alloc).c_str(), &g_alloc);
+    art.append(".crdr");
+    const fs::Path cached = tmp / ".cook_cache" / crd::containers::StringView(art.data(), art.size());
+    crd::containers::Array<crd::u8> bytes(&g_alloc);
+    REQUIRE(fs::read_file_binary(cached, bytes));
+    REQUIRE(crdr_is_current(crd::containers::as_const_span(bytes)));
+    const crd::u64 current_hash = cook_hash64(crd::containers::as_const_span(bytes));
+    bytes[4] = 1U;
+    const crd::u32 check = crd::containers::crc32c(crd::containers::ConstSpan<crd::u8>(bytes.data(), 36U));
+    std::memcpy(bytes.data() + 36U, &check, sizeof(check));
+    CHECK_FALSE(crdr_is_current(crd::containers::as_const_span(bytes)));
+    write_bytes(cached, bytes.data(), bytes.size());
+    char old_hash[17];
+    char new_hash[17];
+    (void)std::snprintf(old_hash, sizeof(old_hash), "%016llx", static_cast<unsigned long long>(current_hash));
+    (void)std::snprintf(new_hash, sizeof(new_hash), "%016llx",
+                        static_cast<unsigned long long>(cook_hash64(crd::containers::as_const_span(bytes))));
+    const fs::Path db_file = tmp / ".cook_cache" / "cookdb.toml";
+    crd::containers::String db_text(&g_alloc);
+    REQUIRE(fs::read_file_text(db_file, db_text));
+    const std::string_view db(db_text.data(), db_text.size());
+    const auto at = db.find(old_hash);
+    REQUIRE(at != std::string_view::npos);
+    crd::containers::String patched(&g_alloc);
+    patched.append(crd::containers::StringView(db.data(), at));
+    patched.append(crd::containers::StringView(new_hash, 16U));
+    patched.append(crd::containers::StringView(db.data() + at + 16U, db.size() - at - 16U));
+    REQUIRE(fs::write_file_binary(db_file, crd::containers::ConstSpan<crd::u8>(
+                                               reinterpret_cast<const crd::u8*>(patched.data()), patched.size())));
+
+    REQUIRE(cmd_cook(tmp.generic().data(), pack_path.generic().data()) == 0);
+    CHECK(log_status_is(tmp, "a.bin", "cooked"));
+    crd::containers::Array<crd::u8> pack_again(&g_alloc);
+    REQUIRE(fs::read_file_binary(pack_path, pack_again));
+    REQUIRE(pack_good.size() == pack_again.size());
+    CHECK(std::memcmp(pack_good.data(), pack_again.data(), pack_good.size()) == 0);
     REQUIRE(fs::remove_all(tmp));
 }
