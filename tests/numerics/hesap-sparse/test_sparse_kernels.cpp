@@ -176,7 +176,8 @@ template <typename T> sp::SellSlices<Scalar<T>> slices_of(const sp::SellMatrix<T
             a.col_delta.data(),
             a.perm_is_identity ? nullptr : a.perm.data(),
             a.rows,
-            a.cols};
+            a.cols,
+            a.max_width};
 }
 
 // The column forms to_sell is asked for.
@@ -250,9 +251,11 @@ void check_layout(const sp::SparseMatrix<T, sp::SparseFormat::Csr>& csr, const s
     counts.layout += sell.col_first.size() == (sell.col_delta.empty() ? 0U : sell.row_len.size()) ? 0U : 1U;
     usize delta_slices = 0;
     usize u32_slices = 0;
+    u32 widest = 0;
     for (u32 s = 0; s < sell.num_slices; ++s)
     {
         const u32 width = sell.slice_width[s];
+        widest = width > widest ? width : widest;
         bool fits = form == sp::SellIndex::Delta16 && width > 2U;
         for (u32 lane = 0; lane < height && s * height + lane < sell.rows; ++lane)
         {
@@ -290,6 +293,7 @@ void check_layout(const sp::SparseMatrix<T, sp::SparseFormat::Csr>& csr, const s
         }
     }
     counts.mixed += form == sp::SellIndex::Delta16 && delta_slices > 0U && u32_slices > 0U ? 1U : 0U;
+    counts.layout += sell.max_width == widest ? 0U : 1U; // the driver drops the pair test below it
 }
 
 inline constexpr usize kScalePairs = 5;

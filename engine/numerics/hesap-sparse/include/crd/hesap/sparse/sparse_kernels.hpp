@@ -39,7 +39,8 @@ template <typename T> struct SellSlices
     const crd::u16* col_delta; // the Delta16 slices' gaps
     const crd::u32* perm;      // perm[σ row] = original row; nullptr when the σ order is the identity
     crd::u32 rows;
-    crd::u32 cols; // of the matrix: x's length
+    crd::u32 cols;      // of the matrix: x's length
+    crd::u32 max_width; // the widest slice's width: a pair width above it pairs no slice
 };
 
 // Where a call's data sits (crd/hesap/sparse/sell.hpp decides it from the range's bytes and the L2): each level and

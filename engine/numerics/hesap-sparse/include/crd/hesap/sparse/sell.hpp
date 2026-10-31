@@ -83,6 +83,7 @@ struct SellMatrix
     crd::u32                         rows = 0;
     crd::u32                         cols = 0;
     crd::u32                         num_slices = 0;
+    crd::u32                         max_width = 0; // the widest slice_width
     crd::containers::Array<crd::u32> slice_ptr;    // length num_slices+1; element offset of each slice
     crd::containers::Array<crd::u32> slice_width;  // length num_slices; padded column count of each slice
     crd::containers::Array<crd::u32> slice_full;   // length num_slices; columns every row of the slice stores
@@ -207,6 +208,7 @@ template <typename T>
             full = len < full ? len : full;
         }
         out.slice_width[s]   = w;
+        out.max_width        = w > out.max_width ? w : out.max_width;
         out.slice_full[s]    = full;
         out.slice_ptr[s + 1] = out.slice_ptr[s] + height * w;
     }
@@ -310,7 +312,8 @@ template <typename T>
                                a.col_delta.data(),
                                a.perm_is_identity ? nullptr : a.perm.data(),
                                a.rows,
-                               a.cols};
+                               a.cols,
+                               a.max_width};
     // Resident when the range's matrix bytes, all of x and its rows of y fit resident_bytes.
     constexpr crd::u32 height = SellMatrix<T>::kC;
     const crd::u32 row_end = s_end * height < a.rows ? s_end * height : a.rows;
