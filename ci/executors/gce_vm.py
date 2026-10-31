@@ -259,6 +259,12 @@ class GceVm:
             return False
         return payload.get('status') not in ('STOPPING', 'STOPPED', 'TERMINATED', 'SUSPENDING', 'SUSPENDED')
 
+    def gone(self, handle):
+        """True once the instance no longer exists: its vCPUs and disk are released."""
+        status, _ = self.http('GET', '%s/projects/%s/zones/%s/instances/%s' % (
+            COMPUTE, handle['project'], handle['zone'], handle['instance']), token=self.token(), allow=(404,))
+        return status == 404
+
     def lost_reason(self, handle):
         """(reason, detail) of a machine that is gone: launch_failed when its insert operation failed (a quota
         refusal), preempted when a zone operation records Compute Engine preempting it, vm_lost otherwise (a machine

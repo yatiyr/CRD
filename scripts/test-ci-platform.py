@@ -810,6 +810,8 @@ class Executors(unittest.TestCase):
         self.assertFalse(executor.alive(dict(handle, instance='gone')))
         self.assertEqual([m['name'] for m in executor.machines()], ['cerid-ci-x'])
         self.assertIn('filter=labels.cerid-ci%3Djob', calls[3][1])
+        self.assertFalse(executor.gone(handle))
+        self.assertTrue(executor.gone(dict(handle, instance='gone')))
         executor.teardown(handle)
         self.assertEqual(calls[0][0], 'POST')
         self.assertTrue(calls[0][1].endswith('/projects/cerid-ci/zones/us-central1-a/instances'))

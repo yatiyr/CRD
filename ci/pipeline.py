@@ -97,7 +97,8 @@ RETRY = {'automatic': [{'reason': 'infrastructure', 'limit': 2}], 'manual': {'al
 BUDGET_EXIT = 75
 PIPELINE_SCHEMA = 'cerid-ci-pipeline/1'
 # One-job cloud machines at once: the recipe's regional quota of 48 vCPUs over 8-vCPU machines. The coordinator holds
-# the group's limit, so a quota refusal never turns into failed launches.
+# the group's limit, so a quota refusal never turns into failed launches; the dispatcher also counts a machine until
+# its instance is gone (a canceled job releases its slot while its machine is still being deleted).
 CLOUD_GROUP = ('cerid-cloud-machines', 6)
 
 

@@ -4,8 +4,9 @@ Every ready job on the cloud queue is routed by its `device` tag to its registry
 the budget (the month's ledger plus the worst case of every machine already launched, and the GCP budget stop),
 reserved for a machine name and launched. A gce_vm machine needs no credential at all: its agent proves its Google
 identity and takes the job reserved for that instance. An ssh_host or firebase_test_lab machine gets one job token
-that expires with the job. The reaper ends a machine whose job is finished, retried or canceled, writes its real
-cost to the ledger and turns a machine that disappeared under a running job (a preempted spot VM, a lost VM) into an
+that expires with the job. The reaper deletes a machine whose job is finished, retried or canceled; its record,
+which counts against the cloud machine limit, stays open until the instance is gone and then writes its real cost
+to the ledger. The reaper also turns a machine that disappeared under a running job (a preempted spot VM, a lost VM) into an
 infrastructure retry on a new machine; the orphan sweep deletes any labelled instance no record knows.
 """
 from __future__ import annotations
@@ -19,6 +20,9 @@ from coordinator.scheduler import NotFound
 ORPHAN_SECONDS = 900
 
 
+DELETE_STALLED = 600
+
+
 class Dispatcher:
     def __init__(self, coordinator, registry, executors, environ=None, agent=None, now=None):
         self.c = coordinator
@@ -29,6 +33,10 @@ class Dispatcher:
         self.agent = agent or {}
         self.queue = registry['queues']['cloud']
         self.devices = self.p.devices_by_id(registry)
+        # Cloud machines alive at once, counted by machine record (open until the instance is gone), not by job: a
+        # canceled build's machines keep their vCPUs while Compute Engine deletes them, and launches past the quota
+        # failed.
+        self.machine_limit = self.p.CLOUD_GROUP[1]
         self.now = now or (lambda: dt.datetime.fromtimestamp(self.c.clock(), dt.timezone.utc))
 
     def machine_name(self, job):
@@ -51,6 +59,15 @@ class Dispatcher:
                 total += float(record.get('bound_usd', 0.0))
         return total
 
+    def open_machines(self):
+        """Machine records of Compute Engine machines not yet gone: running, or deleted and not yet removed."""
+        count = 0
+        for name in self.c.store.list('machines/'):
+            record = self.c.store.get_json(name)
+            if record and not record.get('ended') and record.get('executor') == 'gce_vm':
+                count += 1
+        return count
+
     def tick(self):
         p = self.p
         store = self.c.store
@@ -65,7 +82,9 @@ class Dispatcher:
         stop = p.gcp_budget_stop(store, month)
         spent = p.month_spend(store, month) + self.running_bound()
         self.budget_alerts(month, spent, cap, stop)
+        self.reap()  # first: a machine gone since the last tick frees its capacity for this tick's launches
         launched = []
+        machines = self.open_machines()
         for build, job in self.c.ready_jobs(self.queue):
             device = self.devices.get(job['agents'].get('device'))
             if device is None or device['executor'] not in self.executors or device['executor'] == 'owned_agent':
@@ -86,6 +105,8 @@ class Dispatcher:
                     'build': str(build['number']), 'reason': detail,
                     'finished': self.now().isoformat(timespec='seconds')})
                 continue
+            if device['executor'] == 'gce_vm' and machines >= self.machine_limit:
+                continue  # the job stays scheduled until a machine is gone
             machine = self.machine_name(job)
             needs_token = device['executor'] != 'gce_vm'
             claimed, token = self.c.reserve(job, machine, issue_token=needs_token)
@@ -100,6 +121,7 @@ class Dispatcher:
                                       attempt=claimed['attempt'])
                 continue
             spent += bound
+            machines += device['executor'] == 'gce_vm'
             record = {'job': job['id'], 'attempt': claimed['attempt'], 'machine': machine, 'device': device['id'],
                       'executor': device['executor'], 'handle': handle, 'build': build['number'], 'key': job['key'],
                       'started': self.now().isoformat(timespec='seconds'), 'rate': hourly, 'bound_usd': bound,
@@ -107,7 +129,6 @@ class Dispatcher:
             store.put_json('machines/%s.json' % machine, record)
             self.c.log('machine_launched', job=job['id'], machine=machine, device=device['id'])
             launched.append(record)
-        self.reap()
         return launched
 
     def budget_alerts(self, month, spent, cap, stop):
@@ -155,13 +176,29 @@ class Dispatcher:
                     done = True
             if not done:
                 continue
-            if executor is not None:
-                try:
-                    executor.teardown(record['handle'])
-                except Exception as error:  # try again next tick; the record stays open until it is gone
-                    self.c.log('teardown_failed', level='error', machine=record['machine'], error=str(error)[:300])
-                    continue
             now = self.now()
+            if executor is not None:
+                # The record stays open, holding its capacity and its cost, until the machine is gone; a deletion
+                # still pending after DELETE_STALLED seconds is requested again.
+                deleting = record.get('deleting')
+                if not deleting or (now - dt.datetime.fromisoformat(deleting)).total_seconds() > DELETE_STALLED:
+                    try:
+                        executor.teardown(record['handle'])
+                    except Exception as error:  # try again next tick
+                        self.c.log('teardown_failed', level='error', machine=record['machine'],
+                                   error=str(error)[:300])
+                        continue
+                    record['deleting'] = now.isoformat(timespec='seconds')
+                    store.put_json(name, record)
+                if hasattr(executor, 'gone'):
+                    try:
+                        gone = executor.gone(record['handle'])
+                    except Exception as error:
+                        self.c.log('machine_probe_failed', level='warning', machine=record['machine'],
+                                   error=str(error))
+                        gone = False
+                    if not gone:
+                        continue
             started = dt.datetime.fromisoformat(record['started'])
             hours = max((now - started).total_seconds(), 60.0) / 3600.0
             record['ended'] = now.isoformat(timespec='seconds')

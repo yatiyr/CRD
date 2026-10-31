@@ -45,8 +45,10 @@ checks.
    `cerid-cloud` for launched machines, `cerid-owned` for owned agents.
 4. The coordinator's dispatcher turns each ready cloud step into a machine: routes it by its `device` tag to its
    executor, applies the budget, reserves the step for a machine name and launches it; the machine's agent takes
-   exactly that step. The reaper ends the machine when the step ends and writes its cost to the ledger; a machine
-   that disappears under a running step (a preempted spot VM) becomes a retry on a new machine.
+   exactly that step. The reaper deletes the machine when the step ends and writes its cost to the ledger once the
+   instance is gone; until then the machine still counts against the cloud machine limit, so a canceled build's
+   machines never push launches past the vCPU quota. A machine that disappears under a running step (a preempted
+   spot VM) becomes a retry on a new machine.
 5. `Required result` (`pipeline.py conclude`) passes only when every planned step passed or was cached (a
    soft-failed step counts as passed); a budget step makes it fail as incomplete.
 6. `QUAL dashboard` renders the page from the store as an artifact; the coordinator serves the live page at `/qual`.

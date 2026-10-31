@@ -117,6 +117,9 @@ Done in the `cerid-ci` project, following [the setup recipe](../recipes/ci-platf
     left the Python path unquoted (`C:\Program Files\...`), and cmd exited 9009.
   - The lane's host-record sampler died on a Windows sharing violation, raised while a reader held the record. Its
     rename now retries like the store's. `ops.py` also leaked an open `os.devnull` per command.
+- **Launches went past the vCPU quota after a cancel:** a canceled job released its concurrency slot at once, while
+  Compute Engine was still deleting its machine. A machine record now stays open, and counts against the cloud
+  machine limit, until the instance is gone; a deletion still pending after ten minutes is requested again.
 
 ## Workspace
 

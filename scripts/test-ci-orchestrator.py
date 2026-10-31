@@ -1166,6 +1166,7 @@ class FakeExecutor:
         self.torn = []
         self.dead = set()
         self.preempted = set()
+        self.lingering = set()
         self.fail = fail
 
     def launch(self, machine, device, agent):
@@ -1184,6 +1185,9 @@ class FakeExecutor:
 
     def teardown(self, handle):
         self.torn.append(handle['instance'])
+
+    def gone(self, handle):
+        return handle['instance'] in self.torn and handle['instance'] not in self.lingering
 
     def machines(self):
         return [{'name': 'cerid-ci-orphan', 'created': 0, 'handle': {'instance': 'cerid-ci-orphan'}}]
@@ -1289,6 +1293,29 @@ class Dispatching(Base):
         executor = FakeExecutor()
         launched = self.dispatcher(executor, cap=0.2).tick()
         self.assertEqual(len(launched), 1, 'the second worst case would pass the cap')
+
+    def test_a_machine_holds_its_capacity_until_it_is_gone(self):
+        build = self.build(cloud_steps('gce-linux-x64-intel', 'gce-linux-x64-amd-zen4'))
+        executor = FakeExecutor()
+        d = self.dispatcher(executor)
+        d.machine_limit = 1
+        first = d.tick()
+        self.assertEqual(len(first), 1, 'one machine at the limit')
+        got = self.c.acquire(first[0]['machine'])
+        self.c.start(got['job']['id'], got['token'])
+        self.c.finish(got['job']['id'], got['token'], 0)
+        executor.lingering.add(first[0]['machine'])  # deleted, and Compute Engine is still removing it
+        self.assertEqual(d.tick(), [], 'a machine being deleted still holds its vCPUs')
+        self.assertEqual(executor.torn, [first[0]['machine']])
+        self.assertEqual(self.store.list('ledger/'), [], 'its cost runs until it is gone')
+        self.clock.advance(dispatch.DELETE_STALLED + 1)
+        d.reap()
+        self.assertEqual(executor.torn, [first[0]['machine']] * 2, 'a stalled deletion is requested again')
+        executor.lingering.clear()
+        second = d.tick()
+        self.assertEqual(len(self.store.list('ledger/')), 1)
+        self.assertEqual([r['key'] for r in second], ['lane-gce-linux-x64-amd-zen4'])
+        self.assertEqual(self.jobs(build)['lane-gce-linux-x64-amd-zen4']['state'], 'assigned')
 
     def test_ssh_machines_get_a_one_job_token(self):
         self.build(cloud_steps('windows-arm64-host'))
