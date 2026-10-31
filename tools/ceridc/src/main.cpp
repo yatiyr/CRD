@@ -74,6 +74,10 @@ void print_usage()
         "  ceridc query --pack <pack.crdr>\n"
         "  ceridc comply --rules <dir> --scope <id> --jurisdiction <code,...> --day <YYYY-MM-DD>\n"
         "                (the reviewed rules that bind the scope that day, each proven or unproven)\n"
+        "  ceridc screen --lists <dir> --authority <id,...> --day <YYYY-MM-DD> [--destination <region>]\n"
+        "                [--kind <individual|entity|vessel|aircraft> --name <n>... [--birth <date>]\n"
+        "                [--country <cc>]... [--identifier <type:value>]...] [--review <n>] [--match <n>]\n"
+        "                (sanctions and embargo screening: clear, review, unavailable or blocked, every hit)\n"
         "  ceridc instantiate --pack <p> --asset <name> [--x --y --z] --out <scene.scen> [--dry-run]\n"
         "  ceridc sequence --name <n> --clip-a <n> --frames-a <n> --clip-b <n> --frames-b <n>\n"
         "                  [--transition <frames>] --out-timl <f> --out-otio <f>\n"
@@ -259,6 +263,28 @@ int main(int argc, char* argv[])
         return emit(crd::ceridc::verb_comply(
             flag_of(argc, argv, "--rules", nullptr), flag_of(argc, argv, "--scope", nullptr),
             flag_of(argc, argv, "--jurisdiction", nullptr), flag_of(argc, argv, "--day", nullptr), &g_alloc));
+    }
+    if (std::strcmp(verb, "screen") == 0)
+    {
+        crd::containers::Array<const char*> names(&g_alloc);
+        crd::containers::Array<const char*> countries(&g_alloc);
+        crd::containers::Array<const char*> identifiers(&g_alloc);
+        flags_of(argc, argv, "--name", names);
+        flags_of(argc, argv, "--country", countries);
+        flags_of(argc, argv, "--identifier", identifiers);
+        crd::ceridc::ScreenFlags flags;
+        flags.lists = flag_of(argc, argv, "--lists", nullptr);
+        flags.authorities = flag_of(argc, argv, "--authority", nullptr);
+        flags.day = flag_of(argc, argv, "--day", nullptr);
+        flags.destination = flag_of(argc, argv, "--destination", nullptr);
+        flags.kind = flag_of(argc, argv, "--kind", nullptr);
+        flags.names = crd::containers::ConstSpan<const char*>(names.data(), names.size());
+        flags.birth = flag_of(argc, argv, "--birth", nullptr);
+        flags.countries = crd::containers::ConstSpan<const char*>(countries.data(), countries.size());
+        flags.identifiers = crd::containers::ConstSpan<const char*>(identifiers.data(), identifiers.size());
+        flags.review = flag_of(argc, argv, "--review", nullptr);
+        flags.match = flag_of(argc, argv, "--match", nullptr);
+        return emit(crd::ceridc::verb_screen(flags, &g_alloc));
     }
     if (std::strcmp(verb, "instantiate") == 0)
     {

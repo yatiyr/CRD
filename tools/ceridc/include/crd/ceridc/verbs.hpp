@@ -7,7 +7,7 @@
 // write). The CLI (main.cpp) and the MCP loop are thin shells over these functions — one implementation, two
 // transports (the Blender-MCP lesson: the surface is the product, the socket is plumbing).
 //
-// Verbs: import · cook · query · instantiate · sequence · render · export_timeline · inspect · diag.
+// Verbs: import · cook · query · comply · screen · instantiate · sequence · render · export_timeline · inspect · diag.
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
@@ -42,6 +42,29 @@ namespace crd::ceridc
 // Contract: docs/design/registers.md#rule-generations.
 [[nodiscard]] crd::containers::String verb_comply(const char* rules_dir, const char* scope, const char* jurisdictions,
                                                   const char* day, crd::memory::IAllocator* alloc);
+
+// COMPLY.1: screen a subject (a customer, a payee, a counterparty), a destination or both on `day` against the
+// sanctions lists of the comma-separated `authorities`, each read from <lists>/<authority>.sanctions.toml (a
+// cerid-sanctions/1 generation). The answer lists each authority's generation (0 when its file is absent), the
+// verdict (clear, review, unavailable or blocked), the list gaps (missing, stale, not yet published: a missing or
+// stale list never reads as clear), every party hit with its score and disposition and every destination hit. A
+// subject's kind is required with its names, never assumed. A malformed request is refused before any file is read,
+// a malformed list with its file, error, line and key. Contract: docs/design/registers.md#screening.
+struct ScreenFlags
+{
+    const char* lists = nullptr;                         // --lists: the directory of the lists
+    const char* authorities = nullptr;                   // --authority: a comma-separated list (us.ofac,eu.fsf,...)
+    const char* day = nullptr;                           // --day: YYYY-MM-DD
+    const char* destination = nullptr;                   // --destination: a region (CU, UA-43); none when nullptr
+    const char* kind = nullptr;                          // --kind: individual, entity, vessel or aircraft
+    crd::containers::ConstSpan<const char*> names;       // --name, repeated: the name and its other spellings
+    const char* birth = nullptr;                         // --birth: YYYY, YYYY-MM or YYYY-MM-DD
+    crd::containers::ConstSpan<const char*> countries;   // --country, repeated: ISO 3166-1 alpha-2
+    crd::containers::ConstSpan<const char*> identifiers; // --identifier, repeated: type:value
+    const char* review = nullptr; // --review: the possible-match threshold in thousandths (default 850)
+    const char* match = nullptr;  // --match: the match threshold in thousandths (default 950)
+};
+[[nodiscard]] crd::containers::String verb_screen(const ScreenFlags& flags, crd::memory::IAllocator* alloc);
 
 // Compose a scene: an entity instancing `asset_name` from the pack at `translate`, serialized as a SCEN
 // artifact. TRANSACTIONAL: unknown asset / non-finite transform rejects with NO file written; dry_run

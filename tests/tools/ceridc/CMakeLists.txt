@@ -3,6 +3,7 @@ add_executable(crd-ceridc-tests
     test_ceridc_inspect.cpp # DIAG.8b: the headless inspection consumer — `ceridc inspect` on the committed authored program
     test_ceridc_diag.cpp # the diag verb: native, CLI verb, MCP tool and the real binary return the same bounded result
     test_ceridc_comply.cpp # COMPLY.0: the comply verb and the real binary answer the committed rule generations
+    test_ceridc_screen.cpp # COMPLY.1: the screen verb and the real binary screen against sanctions lists
 )
 
 target_link_libraries(crd-ceridc-tests PRIVATE

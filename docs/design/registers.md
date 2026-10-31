@@ -267,9 +267,22 @@ elsewhere).
   embargoed region the request does not exclude; else **Clear**. A malformed request (no authority, an impossible day,
   thresholds out of order, a subject without words or with a bad birth, country or identifier, a bad region) is
   refused with its key.
+- **Served.** `ceridc screen --lists <dir> --authority <id,...> --day <YYYY-MM-DD>` screens a destination
+  (`--destination`), a subject (`--kind` and repeated `--name`, with `--birth`, repeated `--country` and
+  `--identifier`) or both, with optional `--review` and `--match` thresholds. Each authority's list is the file
+  `<dir>/<authority>.sanctions.toml`; one that cannot be read is a missing list, so the answer fails closed. A
+  subject's kind is required with its names, never assumed, because a wrong kind discounts the very party that
+  matches. The module's own request rules judge the request against an empty store before any file is read (an
+  authority's shape among them, which keeps every file name inside `<dir>`). A malformed list is refused with its
+  file, error, line and key, and a file holding another authority's list is refused. The answer lists each
+  authority's generation (0 when absent), the verdict, the gaps and every party and destination hit. The subject is
+  screened, never echoed. `ok` is true for every verdict, Blocked included: the verdict is the answer. The MCP tool
+  serves the same screening once [MCP-ADAPT](../ROADMAP.md#slice-mcp-adapt) gives commands one declaration for
+  every surface.
 - **Tests.** `crd-comply-tests` (`[names]` and `[sanctions]`: folding, both sides of the review threshold, every
-  refusal, the store, every disposition and verdict, a concurrent applier and screener, a list of 20 000 parties) and
-  the `crd-fuzz-comply-sanctions` corpus.
+  refusal, the store, every disposition and verdict, a concurrent applier and screener, a list of 20 000 parties),
+  the `crd-fuzz-comply-sanctions` corpus and `crd-ceridc-tests` `[screen]` (every verdict and hit field, failing
+  closed, every refusal, the real binary's bytes).
 
 <a id="snapshot-and-review"></a>
 ## Snapshot and review

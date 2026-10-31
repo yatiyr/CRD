@@ -715,7 +715,7 @@
     },
     {
       "id": "compliance.obligations",
-      "summary": "Legal and platform obligations: the reviewed rule generations scripts/gen-comply-rules.py writes per jurisdiction from the COMPLY.0 legal register, decoded whole and swapped live by RuleStore, the query of the rules that bind a scope on a day (proven or unproven) served by ceridc comply and, after MCP-ADAPT, by MCP; sanctions and embargo screening (COMPLY.1): each authority's list as a cerid-sanctions/1 generation swapped live by SanctionsStore, the name matcher and the fail-closed screening of parties and destinations; and the checks and shared generators (data inventory, notices, classification records, store answers) the governed rows consume.",
+      "summary": "Legal and platform obligations: the reviewed rule generations scripts/gen-comply-rules.py writes per jurisdiction from the COMPLY.0 legal register, decoded whole and swapped live by RuleStore, the query of the rules that bind a scope on a day (proven or unproven) served by ceridc comply and, after MCP-ADAPT, by MCP; sanctions and embargo screening (COMPLY.1): each authority's list as a cerid-sanctions/1 generation swapped live by SanctionsStore, the name matcher and the fail-closed screening of parties and destinations, served by ceridc screen; and the checks and shared generators (data inventory, notices, classification records, store answers) the governed rows consume.",
       "owner": "comply",
       "api": [
         "engine/foundation/comply/include/crd/comply/generation.hpp",

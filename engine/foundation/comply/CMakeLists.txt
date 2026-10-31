@@ -2,7 +2,8 @@
 #
 # Decodes the reviewed rule generations scripts/gen-comply-rules.py writes from cmake/legal-register.json
 # (assets/comply/<code>.rules.toml, cerid-rules/1), swaps them live per jurisdiction and answers which rules bind a
-# scope on a day, proven or not. ceridc comply serves the query. Contract: docs/design/registers.md#rule-generations.
+# scope on a day, proven or not; screens parties and destinations against sanctions lists (COMPLY.1). ceridc comply
+# and ceridc screen serve both. Contract: docs/design/registers.md#rule-generations and #screening.
 
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
