@@ -61,6 +61,10 @@
         "revision": "1",
         "status": "design"
       },
+      "cryptography": [
+        "authentication",
+        "key-exchange"
+      ],
       "codepoints": [
         {
           "registry": "Cerid protocol identifiers",
@@ -93,6 +97,7 @@
         "revision": "1",
         "status": "design"
       },
+      "cryptography": [],
       "codepoints": [
         {
           "registry": "Cerid protocol identifiers",
@@ -125,6 +130,7 @@
         "revision": "1",
         "status": "design"
       },
+      "cryptography": [],
       "codepoints": [
         {
           "registry": "Cerid protocol identifiers",
@@ -157,6 +163,9 @@
         "revision": "1",
         "status": "design"
       },
+      "cryptography": [
+        "key-exchange"
+      ],
       "codepoints": [
         {
           "registry": "Cerid protocol identifiers",
@@ -189,6 +198,7 @@
         "revision": "1",
         "status": "design"
       },
+      "cryptography": [],
       "codepoints": [
         {
           "registry": "Cerid protocol identifiers",
@@ -220,6 +230,7 @@
         "revision": "1",
         "status": "design"
       },
+      "cryptography": [],
       "codepoints": [
         {
           "registry": "Cerid protocol identifiers",
@@ -252,6 +263,9 @@
         "revision": "1",
         "status": "design"
       },
+      "cryptography": [
+        "authentication"
+      ],
       "codepoints": [
         {
           "registry": "Cerid protocol identifiers",
@@ -284,6 +298,9 @@
         "revision": "1",
         "status": "design"
       },
+      "cryptography": [
+        "authentication"
+      ],
       "codepoints": [
         {
           "registry": "Cerid protocol identifiers",
@@ -315,6 +332,7 @@
         "revision": "1",
         "status": "design"
       },
+      "cryptography": [],
       "codepoints": [
         {
           "registry": "Cerid GREASE values",
@@ -351,6 +369,9 @@
         "revision": "1",
         "status": "design"
       },
+      "cryptography": [
+        "authentication"
+      ],
       "source": {
         "ref": "docs/design/network-foundation.md#policy-wire",
         "read": "2026-10-31",
@@ -379,6 +400,7 @@
         "ref": "RFC 8701",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n91",
         "read": "2026-10-27",
@@ -403,6 +425,7 @@
         "ref": "RFC 7696",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n91",
         "read": "2026-10-27",
@@ -426,6 +449,7 @@
         "ref": "RFC 8999",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n83",
         "read": "2026-10-27",
@@ -451,6 +475,13 @@
         "ref": "RFC 9000",
         "status": "current"
       },
+      "cryptography": [
+        "authentication",
+        "confidentiality",
+        "integrity",
+        "key-exchange",
+        "key-derivation"
+      ],
       "codepoints": [
         {
           "registry": "QUIC Versions",
@@ -483,6 +514,13 @@
         "ref": "RFC 9001",
         "status": "current"
       },
+      "cryptography": [
+        "authentication",
+        "confidentiality",
+        "integrity",
+        "key-exchange",
+        "key-derivation"
+      ],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n83",
         "read": "2026-10-27",
@@ -506,6 +544,7 @@
         "ref": "RFC 9002",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n83",
         "read": "2026-10-27",
@@ -529,6 +568,7 @@
         "ref": "RFC 9221",
         "status": "current"
       },
+      "cryptography": [],
       "codepoints": [
         {
           "registry": "QUIC Transport Parameters",
@@ -560,6 +600,7 @@
         "ref": "RFC 9287",
         "status": "current"
       },
+      "cryptography": [],
       "codepoints": [
         {
           "registry": "QUIC Transport Parameters",
@@ -591,6 +632,7 @@
         "ref": "RFC 9368",
         "status": "current"
       },
+      "cryptography": [],
       "codepoints": [
         {
           "registry": "QUIC Transport Parameters",
@@ -622,6 +664,13 @@
         "ref": "RFC 9369",
         "status": "current"
       },
+      "cryptography": [
+        "authentication",
+        "confidentiality",
+        "integrity",
+        "key-exchange",
+        "key-derivation"
+      ],
       "codepoints": [
         {
           "registry": "QUIC Versions",
@@ -653,6 +702,7 @@
         "ref": "RFC 9114",
         "status": "current"
       },
+      "cryptography": [],
       "codepoints": [
         {
           "registry": "TLS ALPN Protocol IDs",
@@ -684,6 +734,7 @@
         "ref": "RFC 9204",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n83",
         "read": "2026-10-27",
@@ -707,6 +758,7 @@
         "ref": "RFC 9297",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n02",
         "read": "2026-10-27",
@@ -735,6 +787,7 @@
         "revision": "16",
         "posted": "2026-07"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n02",
         "read": "2026-10-27",
@@ -760,6 +813,7 @@
         "ref": "draft-ietf-webtrans-http2",
         "status": "active"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n123",
         "read": "2026-10-27",
@@ -784,6 +838,7 @@
         "ref": "RFC 6455",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n124",
         "read": "2026-10-27",
@@ -807,6 +862,7 @@
         "ref": "RFC 8441",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n124",
         "read": "2026-10-27",
@@ -830,6 +886,7 @@
         "ref": "RFC 9220",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n124",
         "read": "2026-10-27",
@@ -854,6 +911,7 @@
         "status": "rfc-editor",
         "revision": "11"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#area-1-transport",
         "read": "2026-10-27",
@@ -880,6 +938,7 @@
         "revision": "21",
         "posted": "2026-03-17"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n01",
         "read": "2026-10-27",
@@ -905,6 +964,7 @@
         "revision": "01",
         "posted": "2026-08-15"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n06",
         "read": "2026-10-27",
@@ -929,6 +989,7 @@
         "status": "expired",
         "revision": "14"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#area-1-transport",
         "read": "2026-10-27",
@@ -953,6 +1014,7 @@
         "ref": "draft-ietf-quic-receive-ts",
         "status": "active"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#area-1-transport",
         "read": "2026-10-27",
@@ -979,6 +1041,9 @@
         "revision": "22",
         "posted": "2026-10-23"
       },
+      "cryptography": [
+        "confidentiality"
+      ],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#area-1-transport",
         "read": "2026-10-27",
@@ -1004,6 +1069,7 @@
         "revision": "00",
         "posted": "2026-07"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n03",
         "read": "2026-10-27",
@@ -1027,6 +1093,7 @@
         "ref": "RFC 9298",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n84",
         "read": "2026-10-27",
@@ -1050,6 +1117,7 @@
         "ref": "RFC 9484",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n84",
         "read": "2026-10-27",
@@ -1075,6 +1143,7 @@
         "revision": "16",
         "posted": "2026-08-24"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n10",
         "read": "2026-10-27",
@@ -1098,6 +1167,7 @@
         "ref": "RFC 8899",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n85",
         "read": "2026-10-27",
@@ -1122,6 +1192,7 @@
         "ref": "RFC 9330",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n05",
         "read": "2026-10-27",
@@ -1145,6 +1216,7 @@
         "ref": "RFC 9331",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n05",
         "read": "2026-10-27",
@@ -1169,6 +1241,10 @@
         "ref": "RFC 8445",
         "status": "current"
       },
+      "cryptography": [
+        "authentication",
+        "integrity"
+      ],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n121",
         "read": "2026-10-27",
@@ -1192,6 +1268,10 @@
         "ref": "RFC 8489",
         "status": "current"
       },
+      "cryptography": [
+        "authentication",
+        "integrity"
+      ],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n121",
         "read": "2026-10-27",
@@ -1215,6 +1295,10 @@
         "ref": "RFC 8656",
         "status": "current"
       },
+      "cryptography": [
+        "authentication",
+        "integrity"
+      ],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n121",
         "read": "2026-10-27",
@@ -1239,6 +1323,7 @@
         "ref": "RFC 8838",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n121",
         "read": "2026-10-27",
@@ -1262,6 +1347,13 @@
         "ref": "RFC 8446",
         "status": "current"
       },
+      "cryptography": [
+        "authentication",
+        "confidentiality",
+        "integrity",
+        "key-exchange",
+        "key-derivation"
+      ],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#area-2-security",
         "read": "2026-10-27",
@@ -1287,21 +1379,36 @@
         "ref": "RFC 10024",
         "status": "current"
       },
+      "cryptography": [
+        "key-exchange"
+      ],
       "codepoints": [
         {
           "registry": "Cerid algorithm identifiers",
           "name": "x25519-mlkem768",
-          "value": "0x0101"
+          "value": "0x0101",
+          "key_bits": [
+            256,
+            9472
+          ]
         },
         {
           "registry": "Cerid algorithm identifiers",
           "name": "secp256r1-mlkem768",
-          "value": "0x0102"
+          "value": "0x0102",
+          "key_bits": [
+            256,
+            9472
+          ]
         },
         {
           "registry": "Cerid algorithm identifiers",
           "name": "secp384r1-mlkem1024",
-          "value": "0x0103"
+          "value": "0x0103",
+          "key_bits": [
+            384,
+            12544
+          ]
         },
         {
           "registry": "TLS Supported Groups",
@@ -1347,21 +1454,33 @@
         "ref": "RFC 7748",
         "status": "current"
       },
+      "cryptography": [
+        "key-exchange"
+      ],
       "codepoints": [
         {
           "registry": "Cerid algorithm identifiers",
           "name": "x25519",
-          "value": "0x0201"
+          "value": "0x0201",
+          "key_bits": [
+            256
+          ]
         },
         {
           "registry": "Cerid algorithm identifiers",
           "name": "secp256r1",
-          "value": "0x0202"
+          "value": "0x0202",
+          "key_bits": [
+            256
+          ]
         },
         {
           "registry": "Cerid algorithm identifiers",
           "name": "secp384r1",
-          "value": "0x0203"
+          "value": "0x0203",
+          "key_bits": [
+            384
+          ]
         },
         {
           "registry": "TLS Supported Groups",
@@ -1406,6 +1525,10 @@
         "ref": "RFC 9849",
         "status": "current"
       },
+      "cryptography": [
+        "confidentiality",
+        "key-exchange"
+      ],
       "codepoints": [
         {
           "registry": "TLS ExtensionType Values",
@@ -1437,6 +1560,7 @@
         "ref": "RFC 8879",
         "status": "current"
       },
+      "cryptography": [],
       "codepoints": [
         {
           "registry": "TLS ExtensionType Values",
@@ -1468,6 +1592,7 @@
         "ref": "RFC 9850",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n62",
         "read": "2026-10-27",
@@ -1492,6 +1617,9 @@
         "ref": "RFC 9881",
         "status": "current"
       },
+      "cryptography": [
+        "authentication"
+      ],
       "codepoints": [
         {
           "registry": "Object identifiers",
@@ -1537,21 +1665,33 @@
         "posted": "2024-08-13",
         "status": "final"
       },
+      "cryptography": [
+        "authentication"
+      ],
       "codepoints": [
         {
           "registry": "Cerid algorithm identifiers",
           "name": "ml-dsa-44",
-          "value": "0x0301"
+          "value": "0x0301",
+          "key_bits": [
+            10496
+          ]
         },
         {
           "registry": "Cerid algorithm identifiers",
           "name": "ml-dsa-65",
-          "value": "0x0302"
+          "value": "0x0302",
+          "key_bits": [
+            15616
+          ]
         },
         {
           "registry": "Cerid algorithm identifiers",
           "name": "ml-dsa-87",
-          "value": "0x0303"
+          "value": "0x0303",
+          "key_bits": [
+            20736
+          ]
         }
       ],
       "source": {
@@ -1579,11 +1719,17 @@
         "ref": "RFC 8032",
         "status": "current"
       },
+      "cryptography": [
+        "authentication"
+      ],
       "codepoints": [
         {
           "registry": "Cerid algorithm identifiers",
           "name": "ed25519",
-          "value": "0x0401"
+          "value": "0x0401",
+          "key_bits": [
+            256
+          ]
         },
         {
           "registry": "TLS SignatureScheme",
@@ -1618,16 +1764,25 @@
         "posted": "2023-02-03",
         "status": "final"
       },
+      "cryptography": [
+        "authentication"
+      ],
       "codepoints": [
         {
           "registry": "Cerid algorithm identifiers",
           "name": "ecdsa-secp256r1-sha256",
-          "value": "0x0402"
+          "value": "0x0402",
+          "key_bits": [
+            256
+          ]
         },
         {
           "registry": "Cerid algorithm identifiers",
           "name": "ecdsa-secp384r1-sha384",
-          "value": "0x0403"
+          "value": "0x0403",
+          "key_bits": [
+            384
+          ]
         },
         {
           "registry": "TLS SignatureScheme",
@@ -1667,16 +1822,26 @@
         "ref": "RFC 5116",
         "status": "current"
       },
+      "cryptography": [
+        "confidentiality",
+        "integrity"
+      ],
       "codepoints": [
         {
           "registry": "Cerid algorithm identifiers",
           "name": "aes-128-gcm",
-          "value": "0x0501"
+          "value": "0x0501",
+          "key_bits": [
+            128
+          ]
         },
         {
           "registry": "Cerid algorithm identifiers",
           "name": "aes-256-gcm",
-          "value": "0x0502"
+          "value": "0x0502",
+          "key_bits": [
+            256
+          ]
         },
         {
           "registry": "AEAD Algorithms",
@@ -1716,11 +1881,18 @@
         "ref": "RFC 8439",
         "status": "current"
       },
+      "cryptography": [
+        "confidentiality",
+        "integrity"
+      ],
       "codepoints": [
         {
           "registry": "Cerid algorithm identifiers",
           "name": "chacha20-poly1305",
-          "value": "0x0503"
+          "value": "0x0503",
+          "key_bits": [
+            256
+          ]
         },
         {
           "registry": "AEAD Algorithms",
@@ -1754,16 +1926,25 @@
         "ref": "RFC 5869",
         "status": "current"
       },
+      "cryptography": [
+        "key-derivation"
+      ],
       "codepoints": [
         {
           "registry": "Cerid algorithm identifiers",
           "name": "hkdf-sha256",
-          "value": "0x0601"
+          "value": "0x0601",
+          "key_bits": [
+            256
+          ]
         },
         {
           "registry": "Cerid algorithm identifiers",
           "name": "hkdf-sha384",
-          "value": "0x0602"
+          "value": "0x0602",
+          "key_bits": [
+            384
+          ]
         }
       ],
       "source": {
@@ -1792,6 +1973,9 @@
         "revision": "00",
         "posted": "2026"
       },
+      "cryptography": [
+        "authentication"
+      ],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n18",
         "read": "2026-10-27",
@@ -1816,6 +2000,7 @@
         "posted": "2024-11-12",
         "status": "draft"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n22",
         "read": "2026-10-27",
@@ -1842,6 +2027,13 @@
         "ref": "RFC 9420",
         "status": "current"
       },
+      "cryptography": [
+        "authentication",
+        "confidentiality",
+        "integrity",
+        "key-exchange",
+        "key-derivation"
+      ],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n89",
         "read": "2026-10-27",
@@ -1865,6 +2057,7 @@
         "ref": "RFC 9750",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n89",
         "read": "2026-10-27",
@@ -1888,6 +2081,10 @@
         "ref": "RFC 9605",
         "status": "current"
       },
+      "cryptography": [
+        "confidentiality",
+        "integrity"
+      ],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n43",
         "read": "2026-10-27",
@@ -1911,6 +2108,7 @@
         "ref": "RFC 9725",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n41",
         "read": "2026-10-27",
@@ -1935,6 +2133,7 @@
         "status": "active",
         "revision": "14"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n42",
         "read": "2026-10-27",
@@ -1960,6 +2159,7 @@
         "revision": "20",
         "posted": "2026-08-31"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n39",
         "read": "2026-10-27",
@@ -1985,6 +2185,7 @@
         "revision": "07",
         "posted": "2026-08-04"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n40",
         "read": "2026-10-27",
@@ -2008,6 +2209,7 @@
         "ref": "RFC 8627",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n99",
         "read": "2026-10-27",
@@ -2031,6 +2233,7 @@
         "ref": "RFC 2198",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n99",
         "read": "2026-10-27",
@@ -2054,6 +2257,7 @@
         "ref": "RFC 6330",
         "status": "current"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n122",
         "read": "2026-10-27",
@@ -2079,6 +2283,7 @@
         "revision": "14",
         "posted": "2026-07"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n61",
         "read": "2026-10-27",
@@ -2103,6 +2308,7 @@
         "ref": "draft-ietf-opsawg-pcapng",
         "status": "active"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n113",
         "read": "2026-10-27",
@@ -2126,6 +2332,7 @@
         "ref": "https://www.w3.org/TR/trace-context/",
         "status": "recommendation"
       },
+      "cryptography": [],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n115",
         "read": "2026-10-27",

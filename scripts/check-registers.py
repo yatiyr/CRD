@@ -28,7 +28,12 @@ The guard fails, among the format errors, on:
     review is outstanding; a scope still planned when its rows are Done; a topic without a Turkish entry; and a rule
     generation (assets/comply/<code>.rules.toml, scripts/gen-comply-rules.py) whose bytes differ from the digest its
     review recorded in `rule_generations`, a jurisdiction with rules and no reviewed generation, or a record for a
-    jurisdiction without rules.
+    jurisdiction without rules;
+  - the cryptography of every standards entry (`cryptography`, which an algorithm's class fixes, and each algorithm's
+    `key_bits`) and, in the legal domain (COMPLY.1), an export whose cryptography inventory (recomputed by
+    scripts/gen-crypto-inventory.py from the build and the standards register) differs from the one its head
+    classification record was reviewed against, a head record whose findings do not answer every export-control
+    obligation the classification checks, and a release classified before counsel reviewed it.
 
   python scripts/check-registers.py [--root <repository root>] [--today YYYY-MM-DD]
 """
@@ -57,11 +62,11 @@ PINNED = {'implemented', 'planned'}
 DOMAINS = {
     'standards': {
         'register_keys': {'checklist'},
-        'entry_keys': {'spec', 'codepoints'},
+        'entry_keys': {'spec', 'codepoints', 'cryptography'},
         'kinds': {'protocol', 'extension', 'algorithm', 'format', 'guidance'},
     },
     'legal': {
-        'register_keys': {'jurisdictions', 'scopes', 'rule_generations'},
+        'register_keys': {'jurisdictions', 'scopes', 'rule_generations', 'crypto_classifications'},
         'entry_keys': {'topic', 'instrument', 'obligation', 'applies_to', 'check', 'effective', 'sunset', 'counsel'},
         'kinds': {'obligation', 'user-action'},
     },
@@ -98,6 +103,11 @@ _spec = importlib.util.spec_from_file_location('gen_comply_rules', Path(__file__
                                                'gen-comply-rules.py')
 _rules = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_rules)
+_spec = importlib.util.spec_from_file_location('gen_crypto_inventory', Path(__file__).resolve().parent /
+                                               'gen-crypto-inventory.py')
+_inventory = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_inventory)
+_ids = _inventory._ids
 
 
 def parse_day(text):
@@ -220,13 +230,48 @@ def codepoint_errors(where, entry):
         return [f'{where}: codepoints must be a list']
     errors = []
     for index, point in enumerate(codepoints):
-        if not isinstance(point, dict) or set(point) - {'registry', 'name', 'value', 'verified'} or \
+        if not isinstance(point, dict) or set(point) - {'registry', 'name', 'value', 'verified', 'key_bits'} or \
                 not all(isinstance(point.get(key), str) and point[key] for key in ('registry', 'name', 'value')):
             errors.append(f'{where}: codepoint {index} has a registry, a name, a value and an optional verified flag')
             continue
         if entry.get('state') == 'implemented' and point.get('verified') is False:
             errors.append(f'{where}: implemented with the unverified codepoint {point["name"]} = {point["value"]}; '
                           'verify it against the IANA registry first')
+        key_bits = point.get('key_bits')
+        if point['registry'] != _ids.ALGORITHMS:
+            if key_bits is not None:
+                errors.append(f'{where}: codepoint {point["name"]} names an algorithm\'s key_bits outside the '
+                              f'{_ids.ALGORITHMS} registry')
+        elif not isinstance(key_bits, list) or not key_bits or \
+                not all(type(bits) is int and bits > 0 for bits in key_bits):
+            errors.append(f'{where}: algorithm {point["name"]} names key_bits, the key length of each component in '
+                          'bits (the cryptography inventory states them)')
+    return errors
+
+
+def cryptography_errors(where, entry):
+    """The cryptographic functions the entry performs, in canonical order (empty when none); an algorithm's class
+    fixes functions its entry must declare, so the cryptography inventory cannot miss one."""
+    functions = entry.get('cryptography')
+    if not isinstance(functions, list) or any(name not in _ids.CRYPTO_FUNCTIONS for name in functions) or \
+            functions != [name for name in _ids.CRYPTO_FUNCTIONS if name in functions]:
+        return [f'{where}: cryptography lists the functions it performs, each once in the order '
+                f'{", ".join(_ids.CRYPTO_FUNCTIONS)} (empty when none)']
+    errors = []
+    for point in entry.get('codepoints') or []:
+        if not isinstance(point, dict) or point.get('registry') != _ids.ALGORITHMS:
+            continue
+        value = point.get('value')
+        algorithm_class = _ids.ALGORITHM_CLASSES.get(int(value, 16) >> 8) \
+            if isinstance(value, str) and re.fullmatch(r'0x[0-9A-Fa-f]{4}', value) else None
+        if algorithm_class is None:
+            errors.append(f'{where}: algorithm {point.get("name")} = {value!r} is not in a class of the Cerid '
+                          'algorithm identifiers')
+            continue
+        missing = [name for name in algorithm_class[2] if name not in functions]
+        if missing:
+            errors.append(f'{where}: algorithm {point.get("name")} ({algorithm_class[1]}) performs '
+                          f'{", ".join(missing)}, which cryptography does not name')
     return errors
 
 
@@ -429,6 +474,7 @@ def entry_errors(entry, domain, register, context):
     if domain == 'standards':
         errors += spec_errors(where, entry, context)
         errors += codepoint_errors(where, entry)
+        errors += cryptography_errors(where, entry)
     elif domain == 'legal':
         errors += legal_entry_errors(where, entry, register, context)
     return errors
@@ -614,6 +660,117 @@ def rule_generation_errors(register, context):
     return errors
 
 
+def finding_errors(where, findings, entries, required):
+    """A record's findings: one per export-control obligation it classifies against, each with its classification,
+    authorization, whether a report is owed and its basis in plain words; a head record answers exactly `required`."""
+    if not isinstance(findings, list) or not findings:
+        return [f'{where}: findings classify the export against each obligation']
+    errors, named = [], []
+    for finding in findings:
+        if not isinstance(finding, dict) or set(finding) != {'entry', 'classification', 'authorization', 'report',
+                                                             'basis'} or \
+                not all(isinstance(finding.get(key), str) and finding[key] for key in
+                        ('entry', 'classification', 'authorization', 'basis')) or \
+                not isinstance(finding.get('report'), bool):
+            errors.append(f'{where}: a finding has entry, classification, authorization, report (true when a report '
+                          'is owed) and basis')
+            continue
+        entry = entries.get(finding['entry'])
+        if entry is None or entry.get('topic') != 'export-control':
+            errors.append(f'{where}: finding {finding["entry"]} is no export-control entry of the register')
+        if finding['entry'] in named:
+            errors.append(f'{where}: finding {finding["entry"]} is stated twice')
+        named.append(finding['entry'])
+    if required is not None and not errors and set(named) != required:
+        errors.append(f'{where}: the findings answer {", ".join(sorted(set(named)))}, not the obligations whose '
+                      f'active check is the classification ({", ".join(sorted(required))})')
+    return errors
+
+
+def classification_record_errors(where, record, entries, required, context):
+    if not isinstance(record, dict) or set(record) != {'release', 'inventory', 'reviewed', 'findings', 'counsel'}:
+        return [f'{where}: a record has release, inventory, reviewed, findings and counsel']
+    errors = []
+    if not isinstance(record['inventory'], str) or not SHA256.match(record['inventory']):
+        errors.append(f'{where}: inventory is the sha256 of the export\'s inventory it was reviewed against')
+    errors += date_errors(where, 'reviewed', record['reviewed'])
+    reviewed = parse_day(record['reviewed'])
+    if reviewed and reviewed > context.today:
+        errors.append(f'{where}: reviewed {record["reviewed"]} is after today')
+    errors += finding_errors(where, record['findings'], entries, required)
+    counsel = record['counsel']
+    if not isinstance(counsel, dict) or set(counsel) != {'needed', 'reviewed'} or \
+            not isinstance(counsel.get('needed'), bool):
+        return errors + [f'{where}: counsel has needed and reviewed (its day)']
+    errors += date_errors(where, 'counsel.reviewed', counsel['reviewed'], required=False)
+    answered = parse_day(counsel['reviewed'])
+    if counsel['reviewed'] and not counsel['needed']:
+        errors.append(f'{where}: counsel.reviewed records the review a needed flag asked for')
+    elif answered and (answered > context.today or (reviewed and answered < reviewed)):
+        errors.append(f'{where}: counsel.reviewed {counsel["reviewed"]} is not between the record\'s review and '
+                      'today')
+    findings = record['findings'] if isinstance(record['findings'], list) else []
+    asking = sorted(finding['entry'] for finding in findings if isinstance(finding, dict) and
+                    isinstance(entries.get(finding.get('entry')), dict) and
+                    isinstance(entries[finding['entry']].get('counsel'), dict) and
+                    entries[finding['entry']]['counsel'].get('needed') is True)
+    if asking and not counsel['needed']:
+        errors.append(f'{where}: {", ".join(asking)} need counsel, so the classification does')
+    if record['release'] is not None and counsel['needed'] and not counsel['reviewed']:
+        errors.append(f'{where}: released before counsel reviewed its classification (a user action)')
+    return errors
+
+
+def classification_errors(register, context):
+    """Every export's cryptography inventory, recomputed from the tree, is the one its head classification record
+    was reviewed against; released records are frozen history (docs/design/registers.md#crypto-classification)."""
+    where = 'legal register: crypto_classifications'
+    classifications = register.get('crypto_classifications', {})
+    if not isinstance(classifications, dict):
+        return [f'{where} maps each export to its classification records']
+    try:
+        inventory = _inventory.build(context.root)
+    except _inventory.InventoryError as error:
+        return [f'{where}: {error}']
+    entries = {entry.get('id'): entry for entry in register.get('entries') or [] if isinstance(entry, dict)}
+    required = {entry_id for entry_id, entry in entries.items() if entry.get('state') in PINNED and
+                isinstance(entry.get('check'), dict) and entry['check'].get('state') == 'active' and
+                entry['check'].get('ref') == _inventory.GENERATOR}
+    live = {export['id']: export for export in inventory['exports']}
+    errors = []
+    for export_id in sorted(set(live) | set(classifications)):
+        records = classifications.get(export_id)
+        if records is None:
+            errors.append(f'{where}: the export {export_id} has no classification; author its head record with its '
+                          f'findings and review it with python {_inventory.GENERATOR} --review {export_id}')
+            continue
+        if not isinstance(records, list) or not records:
+            errors.append(f'{where}: {export_id} holds a list of classification records')
+            continue
+        releases = [record.get('release') for record in records if isinstance(record, dict)]
+        heads = [index for index, release in enumerate(releases) if release is None]
+        if export_id in live and heads != [len(records) - 1]:
+            errors.append(f'{where}: {export_id} ends with exactly one head record (release null)')
+        elif export_id not in live and heads:
+            errors.append(f'{where}: {export_id} is no longer an export; delete its head record (its released '
+                          'records stay)')
+        released = [release for release in releases if release is not None]
+        if any(not isinstance(release, str) or not _inventory.RELEASE.match(release) for release in released) or \
+                len(set(released)) != len(released):
+            errors.append(f'{where}: {export_id}\'s releases are distinct MAJOR.MINOR.PATCH[-PRE] versions')
+        for record in records:
+            release = record.get('release') if isinstance(record, dict) else None
+            head = release is None and export_id in live
+            errors += classification_record_errors(f'{where}: {export_id} {release or "head"}', record, entries,
+                                                   required if head else None, context)
+        if export_id in live and heads == [len(records) - 1] and \
+                records[-1].get('inventory') != _inventory.digest(live[export_id]):
+            errors.append(f'{where}: {export_id}\'s cryptography inventory changed since its classification was '
+                          f'reviewed on {records[-1].get("reviewed")}; restate its findings and review them with '
+                          f'python {_inventory.GENERATOR} --review {export_id}')
+    return errors
+
+
 def register_errors(domain, register, context):
     where = f'{domain} register'
     if not isinstance(register, dict) or register.get('schema') != SCHEMA or register.get('domain') != domain:
@@ -653,7 +810,7 @@ def register_errors(domain, register, context):
         errors += checklist_errors(register, context)
     elif domain == 'legal':
         errors += jurisdiction_errors(register) + scope_errors(register, context) + topic_errors(entries) + \
-            rule_generation_errors(register, context)
+            rule_generation_errors(register, context) + classification_errors(register, context)
     return errors
 
 

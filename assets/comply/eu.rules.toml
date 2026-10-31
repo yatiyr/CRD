@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review EU
 format = "cerid-rules/1"
 jurisdiction = "EU"
-generation = 1
+generation = 2
 register = "2026-10-31"
 
 [[scope]]
@@ -480,9 +480,9 @@ primary = "https://eur-lex.europa.eu/eli/reg/2021/821/oj"
 read = false
 obligation = "Classify every export's cryptography against Category 5 Part 2 and its cryptography note and hold the record."
 applies_to = ["channel.distribution", "channel.third-party-stores", "channel.cerid-store"]
-check = "planned"
-check_name = "cryptography inventory CTest: a changed inventory needs a reviewed classification"
-check_ref = "docs/ROADMAP.md#slice-comply.1"
+check = "active"
+check_name = "crd-check-registers: every export's cryptography inventory against its reviewed classification"
+check_ref = "scripts/gen-crypto-inventory.py"
 effective = "2021-09-09"
 sunset = ""
 counsel = "needed"

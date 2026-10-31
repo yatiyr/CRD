@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review TR
 format = "cerid-rules/1"
 jurisdiction = "TR"
-generation = 1
+generation = 2
 register = "2026-10-31"
 
 [[scope]]
@@ -291,9 +291,9 @@ primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=7545&MevzuatTur=1&Mevzua
 read = false
 obligation = "Obtain the regulator's permit or certification before offering or exporting a cybersecurity product or service the law covers; classify every Cerid product against that definition first."
 applies_to = ["channel.distribution", "channel.third-party-stores"]
-check = "planned"
-check_name = "classification record per product and release"
-check_ref = "docs/ROADMAP.md#slice-comply.1"
+check = "active"
+check_name = "crd-check-registers: every export's cryptography inventory against its reviewed classification"
+check_ref = "scripts/gen-crypto-inventory.py"
 effective = "2025-03-19"
 sunset = ""
 counsel = "needed"
@@ -333,9 +333,9 @@ primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5809&MevzuatTur=1&Mevzua
 read = false
 obligation = "Classify encryption in communication products against the BTK encryption rules and meet any notification or authorisation duty they set, without key escrow or weakened end-to-end encryption."
 applies_to = ["product.communications", "channel.distribution"]
-check = "planned"
-check_name = "cryptography inventory CTest: a changed inventory needs a reviewed classification"
-check_ref = "docs/ROADMAP.md#slice-comply.1"
+check = "active"
+check_name = "crd-check-registers: every export's cryptography inventory against its reviewed classification"
+check_ref = "scripts/gen-crypto-inventory.py"
 effective = "2008-11-10"
 sunset = ""
 counsel = "needed"

@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review INT
 format = "cerid-rules/1"
 jurisdiction = "INT"
-generation = 1
+generation = 2
 register = "2026-10-31"
 
 [[scope]]
@@ -47,9 +47,9 @@ primary = "https://www.wassenaar.org/control-lists/"
 read = false
 obligation = "Classify cryptography against the Category 5 Part 2 controls Turkey, the EU members and the US implement."
 applies_to = ["channel.distribution"]
-check = "planned"
-check_name = "classification record per product and release"
-check_ref = "docs/ROADMAP.md#slice-comply.1"
+check = "active"
+check_name = "crd-check-registers: every export's cryptography inventory against its reviewed classification"
+check_ref = "scripts/gen-crypto-inventory.py"
 effective = "1996-07-12"
 sunset = ""
 counsel = "none"

@@ -24,6 +24,12 @@ if(Python3_FOUND)
              COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/gen-comply-rules.py" --check
                      --root "${CMAKE_SOURCE_DIR}")
     set_tests_properties(crd-comply-rules-drift PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+    # assets/comply/crypto-inventory.json is scripts/gen-crypto-inventory.py's output for the module registry and
+    # cmake/standards-register.json (COMPLY.1); crd-check-registers holds each export to its reviewed classification.
+    add_test(NAME crd-comply-crypto-inventory-drift
+             COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/gen-crypto-inventory.py" --check
+                     --root "${CMAKE_SOURCE_DIR}")
+    set_tests_properties(crd-comply-crypto-inventory-drift PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
 endif()
 
 # The rule generation decoder and store under the bounded fuzz harness, with its committed corpus.

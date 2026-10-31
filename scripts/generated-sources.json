@@ -1916,7 +1916,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "2646b98b0764474ae2281f950d71e4af0d8398041a406a9b46172fa957753839"
+      "sha256": "532e84a1a51ecf49132effa204c62298b6db1c96a1bcd50bddcd12b928a0d470"
     },
     {
       "path": "assets/comply/gb.rules.toml",
@@ -1938,7 +1938,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "f1d8a609a6788b19fe463a9b464a6caed30ab627f0955f1f919606a4911b9760"
+      "sha256": "27f0baecbf329309f9fa9ec86977606881120c99e1e49660ba0b10b21da9cafe"
     },
     {
       "path": "assets/comply/jp.rules.toml",
@@ -1971,7 +1971,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "d75f9865c01dd21c3a76ca6390320a665f4a47d24b1ce21034e0f0d55f2901c0"
+      "sha256": "a8b97f518f81a0374e532b81c6bd05356cb91fd583ca6899015d921b23387052"
     },
     {
       "path": "assets/comply/us-ca.rules.toml",
@@ -1993,7 +1993,18 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "c39592e6432d68a073996086c395b7ff447ffafd6e583119b4f3e17ca9b2ce1e"
+      "sha256": "756ee69c04914c3aa556d6f7ecf4a0ce61d336987a84ed3ac5fb61123b4c63e9"
+    },
+    {
+      "path": "assets/comply/crypto-inventory.json",
+      "generator": "scripts/gen-crypto-inventory.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "scripts/gen-crypto-inventory.py",
+        "--check"
+      ],
+      "sha256": "c1c50320c9ad522f0fe1415c54a57c4a137a480245941ea1dca8294cacdd0a9c"
     }
   ]
 }

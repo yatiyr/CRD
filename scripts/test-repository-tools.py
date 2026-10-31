@@ -162,6 +162,10 @@ register_ids_spec.loader.exec_module(register_ids)
 comply_rules_spec = importlib.util.spec_from_file_location('gen_comply_rules', ROOT / 'scripts/gen-comply-rules.py')
 comply_rules = importlib.util.module_from_spec(comply_rules_spec)
 comply_rules_spec.loader.exec_module(comply_rules)
+crypto_inventory_spec = importlib.util.spec_from_file_location('gen_crypto_inventory',
+                                                               ROOT / 'scripts/gen-crypto-inventory.py')
+crypto_inventory = importlib.util.module_from_spec(crypto_inventory_spec)
+crypto_inventory_spec.loader.exec_module(crypto_inventory)
 review_spec = importlib.util.spec_from_file_location('register_review', ROOT / 'scripts/register-review.py')
 register_review = importlib.util.module_from_spec(review_spec)
 review_spec.loader.exec_module(register_review)
@@ -5299,6 +5303,7 @@ class RegisterFixture:
     def entry(self, **changes):
         entry = {'id': 'quic.transport', 'title': 'QUIC', 'kind': 'protocol', 'state': 'planned', 'owner': 'net',
                  'rows': ['NET-STD'], 'spec': {'type': 'rfc', 'ref': 'RFC 9000', 'status': 'current'},
+                 'cryptography': [],
                  'codepoints': [{'registry': 'QUIC Versions', 'name': 'v1', 'value': '0x00000001'}],
                  'source': {'ref': 'docs/research.md#n83', 'read': '2026-10-27', 'verified': True},
                  'review': '2026-12-15', 'evidence': [], 'deprecation': None}
@@ -5852,6 +5857,329 @@ class ComplyRules(RegisterFixture, unittest.TestCase):
                                 'reviewed must be a YYYY-MM-DD date')
         self.assert_legal_fails(self.legal(rule_generations=[]),
                                 'rule_generations maps each jurisdiction with rules to its reviewed generation')
+
+
+class CryptoInventory(RegisterFixture, unittest.TestCase):
+    """scripts/gen-crypto-inventory.py and the guard's cryptography rules (COMPLY.1): every standards entry declares its
+    cryptographic functions and every algorithm its key lengths, every export's inventory is read from the build and
+    the register, and the guard holds each export to the inventory its head classification record was reviewed
+    against."""
+
+    CMAKE = ('crd_module(engine/foundation/core engine/core)\n'
+             'crd_module(engine/foundation/crypto engine/crypto DEPENDS core)\n'
+             '# crd_module(tools/retired HOST EXECUTABLES retired DEPENDS crypto)\n'
+             'crd_module(engine/foundation/net engine/net DEPENDS core)\n'
+             'crd_module(tools/tool HOST EXECUTABLES tool DEPENDS crypto\n    PACKAGES zstd)\n')
+
+    def algorithm(self, **changes):
+        """AES-256-GCM, implemented by the crypto module."""
+        entry = self.entry(id='crypto.aes-gcm', kind='algorithm', owner='crypto', state='implemented',
+                           evidence=['tests/test_quic.cpp'], cryptography=['confidentiality', 'integrity'],
+                           spec={'type': 'rfc', 'ref': 'RFC 5116', 'status': 'current'},
+                           codepoints=[{'registry': 'Cerid algorithm identifiers', 'name': 'aes-256-gcm',
+                                        'value': '0x0502', 'key_bits': [256]}])
+        entry.update(changes)
+        return entry
+
+    def policy(self):
+        """A Cerid format that only authenticates (the signed policy generations), implemented by crypto."""
+        return self.entry(id='cerid.policy-generation', kind='format', owner='crypto', state='implemented',
+                          evidence=['tests/test_quic.cpp'], cryptography=['authentication'], codepoints=[],
+                          spec={'type': 'cerid', 'ref': 'docs/design/network-foundation.md', 'status': 'stable'})
+
+    def standards(self, algorithm_state='planned'):
+        algorithm = self.algorithm() if algorithm_state == 'implemented' else \
+            self.algorithm(state=algorithm_state, evidence=[])
+        return self.register([self.entry(), self.policy(), algorithm])
+
+    def classified(self, entry_id='tr.btk.encryption', **changes):
+        """An export-control obligation whose active check is the classification."""
+        return self.legal_entry(id=entry_id, topic='export-control',
+                                check={'ref': crypto_inventory.GENERATOR, 'name': 'classification', 'state': 'active'},
+                                **changes)
+
+    def finding(self, **changes):
+        finding = {'entry': 'tr.btk.encryption', 'classification': 'Carries no encryption',
+                   'authorization': 'None required', 'report': False, 'basis': 'It encrypts nothing.'}
+        finding.update(changes)
+        return finding
+
+    def head(self, inventory='0' * 64, **changes):
+        record = {'release': None, 'inventory': inventory, 'reviewed': '2026-10-31', 'findings': [self.finding()],
+                  'counsel': {'needed': True, 'reviewed': None}}
+        record.update(changes)
+        return record
+
+    def tree(self, scratch, classifications=None, legal_entries=None, algorithm_state='planned'):
+        """Core and crypto are packaged, net is not, and the tool program reaches crypto; zstd is its package."""
+        root = Path(scratch)
+        legal = self.legal_register([self.legal_entry(), self.classified()] if legal_entries is None else
+                                    legal_entries)
+        if classifications is not None:
+            legal['crypto_classifications'] = classifications
+        self.write_tree(root, self.standards(algorithm_state), legal)
+        (root / 'CMakeLists.txt').write_text(self.CMAKE, encoding='utf-8')
+        for module, text in (('core', 'crd_package_library(crd-core NAME core)\n'),
+                             ('crypto', 'crd_package_library(crd-crypto NAME crypto)\n'),
+                             ('net', 'add_library(crd-net STATIC)\n')):
+            (root / 'engine/foundation' / module).mkdir(parents=True)
+            (root / 'engine/foundation' / module / 'CMakeLists.txt').write_text(text, encoding='utf-8')
+        (root / 'scripts').mkdir(exist_ok=True)
+        (root / crypto_inventory.GENERATOR).write_text('# fixture\n', encoding='utf-8')
+        return root
+
+    def digests(self, root):
+        return {export['id']: crypto_inventory.digest(export) for export in crypto_inventory.build(root)['exports']}
+
+    def reviewed_tree(self, scratch, **changes):
+        """A tree whose two exports carry head records reviewed against their current inventories."""
+        root = self.tree(scratch, {}, **changes)
+        self.set_classifications(root, {export: [self.head(digest)] for export, digest in self.digests(root).items()})
+        return root
+
+    @staticmethod
+    def legal_of(root):
+        return json.loads((root / 'cmake/legal-register.json').read_text(encoding='utf-8'))
+
+    def set_classifications(self, root, classifications):
+        legal = self.legal_of(root)
+        legal['crypto_classifications'] = classifications
+        (root / 'cmake/legal-register.json').write_text(json.dumps(legal), encoding='utf-8')
+
+    @staticmethod
+    def implement_algorithm(root):
+        path = root / 'cmake/standards-register.json'
+        standards = json.loads(path.read_text(encoding='utf-8'))
+        standards['entries'][2].update(state='implemented', evidence=['tests/test_quic.cpp'])
+        path.write_text(json.dumps(standards), encoding='utf-8')
+
+    def run_tool(self, root, *args):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = crypto_inventory.main(['--root', str(root), *args])
+        return code, output.getvalue()
+
+    def assert_guard_fails(self, root, message):
+        code, output = self.guard(root, '2026-11-01')
+        self.assertEqual(1, code, output)
+        self.assertIn(message, output)
+
+    def test_every_standards_entry_declares_its_cryptography(self):
+        missing = self.entry()
+        del missing['cryptography']
+        message = 'cryptography lists the functions it performs, each once in the order authentication, '
+        for broken in (missing, self.entry(cryptography=['integrity', 'authentication']),
+                       self.entry(cryptography=['encryption']), self.entry(cryptography=['integrity', 'integrity']),
+                       self.entry(cryptography='authentication')):
+            with self.subTest(broken=broken.get('cryptography')):
+                self.assert_fails(self.register([broken]), message)
+        algorithm = self.algorithm(owner='core')
+        self.assertEqual(0, self.run_guard(self.register([self.entry(), algorithm]))[0])
+        self.assert_fails(self.register([self.algorithm(owner='core', cryptography=['integrity'])]),
+                          'algorithm aes-256-gcm (authenticated encryption with associated data) performs '
+                          'confidentiality, which cryptography does not name')
+        point = algorithm['codepoints'][0]
+        for key_bits in (None, [], [0], ['256'], [True], 256):
+            with self.subTest(key_bits=key_bits):
+                self.assert_fails(self.register([self.algorithm(owner='core', codepoints=[dict(point,
+                                                                                                key_bits=key_bits)])]),
+                                  'algorithm aes-256-gcm names key_bits')
+        self.assert_fails(self.register([self.algorithm(owner='core', codepoints=[dict(point, value='0x0901')])]),
+                          "algorithm aes-256-gcm = '0x0901' is not in a class of the Cerid algorithm identifiers")
+        quic = dict(self.entry()['codepoints'][0], key_bits=[128])
+        self.assert_fails(self.register([self.entry(codepoints=[quic])]),
+                          "codepoint v1 names an algorithm's key_bits outside the Cerid algorithm identifiers")
+
+    def test_the_inventory_reads_the_build_and_the_register(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = self.tree(scratch)
+            inventory = crypto_inventory.build(root)
+            self.assertEqual(crypto_inventory.FORMAT, inventory['format'])
+            self.assertEqual(['cerid-package', 'tool'], [export['id'] for export in inventory['exports']])
+            package, tool = inventory['exports']
+            self.assertEqual(('package', [], ['authentication'], False),
+                             (package['kind'], package['packages'], package['functions'], package['confidentiality']))
+            self.assertEqual([{'id': 'cerid.policy-generation', 'kind': 'format', 'owner': 'crypto',
+                               'functions': ['authentication'], 'spec': 'docs/design/network-foundation.md',
+                               'standard': False}], package['entries'])
+            self.assertEqual([], package['algorithms'])  # a planned algorithm is in no export
+            self.assertEqual(('program', ['zstd'], 'The tool program (tools/tool)'),
+                             (tool['kind'], tool['packages'], tool['title']))
+            self.assertEqual(package['entries'], tool['entries'])  # reached through DEPENDS crypto
+            self.implement_algorithm(root)
+            package = crypto_inventory.build(root)['exports'][0]
+            self.assertEqual([{'name': 'aes-256-gcm', 'value': '0x0502', 'class': 'Aead',
+                               'functions': ['confidentiality', 'integrity'], 'key_bits': [256],
+                               'entry': 'crypto.aes-gcm', 'spec': 'RFC 5116', 'standard': True, 'owner': 'crypto'}],
+                             package['algorithms'])
+            self.assertEqual((['authentication', 'confidentiality', 'integrity'], True),
+                             (package['functions'], package['confidentiality']))
+            for extra, message in (('crd_module(tools/broken HOST DEPENDS nowhere)\n',
+                                    'the module nowhere is depended on but not registered'),
+                                   ('crd_module(tools/x NAME cerid-package)\n', 'may not be named cerid-package'),
+                                   ('crd_module(tools/tool)\n', 'registers the module tool twice')):
+                with self.subTest(extra=extra):
+                    (root / 'CMakeLists.txt').write_text(self.CMAKE + extra, encoding='utf-8')
+                    with self.assertRaisesRegex(crypto_inventory.InventoryError, message):
+                        crypto_inventory.build(root)
+
+    def test_check_names_drift(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = self.tree(scratch)
+            self.assertEqual((0, 'wrote assets/comply/crypto-inventory.json\n'), self.run_tool(root))
+            self.assertEqual((0, 'cryptography inventory current: 2 export(s)\n'), self.run_tool(root, '--check'))
+            self.implement_algorithm(root)
+            code, output = self.run_tool(root, '--check')
+            self.assertEqual(1, code)
+            self.assertIn("FAIL: assets/comply/crypto-inventory.json differs from scripts/gen-crypto-inventory.py's "
+                          'output', output)
+            (root / 'CMakeLists.txt').write_text(self.CMAKE + 'crd_module(tools/broken DEPENDS nowhere)\n',
+                                                 encoding='utf-8')
+            code, output = self.run_tool(root, '--check')
+            self.assertEqual(1, code)
+            self.assertIn('FAIL: the module nowhere is depended on but not registered', output)
+
+    def test_the_guard_holds_every_export_to_its_reviewed_inventory(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = self.tree(scratch)
+            self.assert_guard_fails(root, 'the export cerid-package has no classification; author its head record '
+                                          'with its findings and review it with python scripts/gen-crypto-inventory.py '
+                                          '--review cerid-package')
+            self.set_classifications(root, {'cerid-package': [self.head()], 'tool': [self.head()]})
+            for export in ('cerid-package', 'tool'):
+                self.assertEqual(0, self.run_tool(root, '--review', export, '--day', '2026-10-31')[0])
+            code, output = self.guard(root, '2026-11-01')
+            self.assertEqual(0, code, output)
+            self.implement_algorithm(root)  # the package and the tool now carry encryption
+            self.assert_guard_fails(root, "cerid-package's cryptography inventory changed since its classification "
+                                          'was reviewed on 2026-10-31; restate its findings and review them with '
+                                          'python scripts/gen-crypto-inventory.py --review cerid-package')
+            self.assert_guard_fails(root, "tool's cryptography inventory changed")
+            for export in ('cerid-package', 'tool'):
+                self.assertEqual(0, self.run_tool(root, '--review', export, '--day', '2026-11-01')[0])
+            self.assertEqual(0, self.guard(root, '2026-11-01')[0])
+            head = self.legal_of(root)['crypto_classifications']['tool'][-1]
+            self.assertEqual(('2026-11-01', {'needed': True, 'reviewed': None}), (head['reviewed'], head['counsel']))
+            (root / 'CMakeLists.txt').write_text(self.CMAKE + 'crd_module(tools/broken DEPENDS nowhere)\n',
+                                                 encoding='utf-8')
+            self.assert_guard_fails(root, 'crypto_classifications: the module nowhere is depended on but not '
+                                          'registered')
+
+    def test_a_head_record_answers_every_classified_obligation(self):
+        eu = self.classified('eu.dual-use', instrument=self.instrument(
+            jurisdiction='EU', primary='https://eur-lex.europa.eu/eli/reg/2021/821/oj'))
+        cases = (
+            ({}, 'the findings answer tr.btk.encryption, not the obligations whose active check is the '
+                 'classification (eu.dual-use, tr.btk.encryption)', [self.legal_entry(), self.classified(), eu]),
+            ({'findings': [self.finding(entry='tr.kvkk.processing')]},
+             'finding tr.kvkk.processing is no export-control entry of the register', None),
+            ({'findings': [self.finding(), self.finding()]}, 'finding tr.btk.encryption is stated twice', None),
+            ({'findings': [self.finding(report='no')]}, 'a finding has entry, classification, authorization, report',
+             None),
+            ({'findings': [self.finding(basis='')]}, 'a finding has entry, classification', None),
+            ({'findings': []}, 'findings classify the export against each obligation', None),
+            ({'inventory': 'AB' * 32}, "inventory is the sha256 of the export's inventory", None),
+            ({'reviewed': '2026-11-02'}, 'reviewed 2026-11-02 is after today', None),
+            ({'counsel': {'needed': False, 'reviewed': None}},
+             'tr.btk.encryption need counsel, so the classification does', None),
+            ({'counsel': {'needed': False, 'reviewed': '2026-10-31'}},
+             'counsel.reviewed records the review a needed flag asked for', None),
+            ({'counsel': {'needed': True, 'reviewed': '2026-10-30'}},
+             'counsel.reviewed 2026-10-30 is not between', None),
+            ({'counsel': {'needed': 'yes', 'reviewed': None}}, 'counsel has needed and reviewed', None),
+            ({'colour': 'red'}, 'a record has release, inventory, reviewed, findings and counsel', None),
+        )
+        for changes, message, legal_entries in cases:
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as scratch:
+                root = self.reviewed_tree(scratch, legal_entries=legal_entries)
+                classifications = self.legal_of(root)['crypto_classifications']
+                classifications['tool'][-1].update(changes)
+                self.set_classifications(root, classifications)
+                self.assert_guard_fails(root, message)
+        with tempfile.TemporaryDirectory() as scratch:
+            root = self.reviewed_tree(scratch)
+            self.assertEqual(0, self.guard(root, '2026-11-01')[0])
+            classifications = self.legal_of(root)['crypto_classifications']
+            classifications['tool'][-1]['counsel']['reviewed'] = '2026-11-01'
+            self.set_classifications(root, classifications)
+            self.assertEqual(0, self.guard(root, '2026-11-01')[0])
+
+    def test_records_end_with_one_head_and_releases_are_frozen(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = self.reviewed_tree(scratch)
+            good = self.legal_of(root)['crypto_classifications']
+            head = good['tool'][-1]
+            answered = dict(head, counsel={'needed': True, 'reviewed': '2026-11-01'})
+            released = dict(answered, release='1.0.0', inventory='cd' * 32)
+            cases = (
+                ({'tool': [head, released]}, 'tool ends with exactly one head record (release null)'),
+                ({'tool': [released]}, 'tool ends with exactly one head record'),
+                ({'tool': [dict(released, release='1.0'), head]}, "tool's releases are distinct"),
+                ({'tool': [released, released, head]}, "tool's releases are distinct"),
+                ({'tool': [dict(released, counsel=head['counsel']), head]},
+                 'tool 1.0.0: released before counsel reviewed its classification (a user action)'),
+                ({'gone': [head]}, 'gone is no longer an export; delete its head record'),
+                ({'tool': []}, 'tool holds a list of classification records'),
+            )
+            for changes, message in cases:
+                with self.subTest(message=message):
+                    self.set_classifications(root, dict(good, **changes))
+                    self.assert_guard_fails(root, message)
+            self.set_classifications(root, dict(good, tool=[released, head], gone=[released]))
+            code, output = self.guard(root, '2026-11-01')
+            self.assertEqual(0, code, output)
+            self.set_classifications(root, [])
+            self.assert_guard_fails(root, 'crypto_classifications maps each export to its classification records')
+
+    def test_review_release_and_facts(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = self.reviewed_tree(scratch)
+            code, output = self.run_tool(root, '--review', 'tool')
+            self.assertEqual(1, code)
+            self.assertIn("tool's inventory is unchanged since its review on 2026-10-31; nothing to review", output)
+            code, output = self.run_tool(root, '--release', 'tool', '1.0.0')
+            self.assertEqual(1, code)
+            self.assertIn("tool's classification awaits its counsel review (a user action)", output)
+            classifications = self.legal_of(root)['crypto_classifications']
+            classifications['tool'][-1]['counsel']['reviewed'] = '2026-11-01'
+            self.set_classifications(root, classifications)
+            self.assertIn('is not a release version', self.run_tool(root, '--release', 'tool', 'v1')[1])
+            self.assertEqual((0, 'released tool 1.0.0\n'), self.run_tool(root, '--release', 'tool', '1.0.0'))
+            records = self.legal_of(root)['crypto_classifications']['tool']
+            self.assertEqual(['1.0.0', None], [record['release'] for record in records])
+            self.assertEqual(records[0]['inventory'], records[1]['inventory'])
+            self.assertEqual(0, self.guard(root, '2026-11-01')[0])
+            self.assertIn('already has a classification record for 1.0.0',
+                          self.run_tool(root, '--release', 'tool', '1.0.0')[1])
+            facts = json.loads(self.run_tool(root, '--facts', 'tool')[1])
+            self.assertEqual((False, {'uses_non_exempt_encryption': False}, [], [self.finding()]),
+                             (facts['confidentiality'], facts['apple'], facts['reports'], facts['findings']))
+            self.implement_algorithm(root)
+            for args in (('--facts', 'tool'), ('--release', 'tool', '1.1.0')):
+                code, output = self.run_tool(root, *args)
+                self.assertEqual(1, code)
+                self.assertIn("tool's inventory changed since its head record was reviewed; review it first", output)
+            classifications = self.legal_of(root)['crypto_classifications']
+            classifications['tool'][-1]['findings'] = [self.finding(classification='5D992.c', report=True)]
+            self.set_classifications(root, classifications)
+            self.assertEqual(0, self.run_tool(root, '--review', 'tool', '--day', '2026-11-01')[0])
+            head = self.legal_of(root)['crypto_classifications']['tool'][-1]
+            self.assertIsNone(head['counsel']['reviewed'])  # a changed inventory needs counsel again
+            facts = json.loads(self.run_tool(root, '--facts', 'tool')[1])
+            self.assertEqual({'uses_non_exempt_encryption': True}, facts['apple'])
+            self.assertEqual([{'name': 'aes-256-gcm', 'key_bits': [256], 'spec': 'RFC 5116', 'standard': True}],
+                             facts['algorithms'])
+            self.assertEqual([{'entry': 'tr.btk.encryption', 'classification': '5D992.c',
+                               'authorization': 'None required'}], facts['reports'])
+            self.assertEqual([], facts['non_standard'])
+            self.assertIn('nowhere is not an export (cerid-package, tool)', self.run_tool(root, '--facts', 'nowhere')[1])
+            classifications['cerid-package'] = []
+            self.set_classifications(root, classifications)
+            self.assertIn('cerid-package has no head record', self.run_tool(root, '--review', 'cerid-package')[1])
+            classifications['cerid-package'] = [self.head(findings=[])]
+            self.set_classifications(root, classifications)
+            self.assertIn("cerid-package's head record states no findings",
+                          self.run_tool(root, '--review', 'cerid-package')[1])
 
 
 class RegisterReview(RegisterFixture, unittest.TestCase):

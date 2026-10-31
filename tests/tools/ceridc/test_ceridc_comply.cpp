@@ -2,6 +2,7 @@
 // and the real binary give the same bytes, and every malformed request or generation is refused before it answers.
 
 #include <crd/ceridc/verbs.hpp>
+#include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/environment.hpp>
 #include <crd/memory/allocator.hpp>
@@ -23,6 +24,36 @@ cont::String comply(const char* rules, const char* scope, const char* jurisdicti
     return crd::ceridc::verb_comply(rules, scope, jurisdictions, day, crd::memory::default_allocator());
 }
 
+// The generation number a committed file carries. A reviewed rule change raises it, so the expectations read it
+// rather than spell it.
+cont::String committed_generation(const char* file)
+{
+    cont::String path(kRules);
+    path += "/";
+    path += file;
+    cont::Array<crd::u8> bytes;
+    REQUIRE(fs::read_file_binary(fs::Path(cont::StringView(path)), bytes));
+    const cont::StringView text(reinterpret_cast<const char*>(bytes.data()), bytes.size()); // NOLINT
+    constexpr cont::StringView marker = "\ngeneration = ";
+    const crd::usize at = text.find(marker);
+    REQUIRE(at != cont::StringView::npos);
+    const crd::usize begin = at + marker.size();
+    crd::usize end = begin;
+    while (end < text.size() && text[end] >= '0' && text[end] <= '9')
+    {
+        ++end;
+    }
+    REQUIRE(end > begin);
+    return cont::String(text.substr(begin, end - begin));
+}
+
+template <typename... Parts> cont::String joined(const Parts&... parts)
+{
+    cont::String out;
+    (out.append(cont::StringView(parts)), ...);
+    return out;
+}
+
 bool has(const cont::String& text, cont::StringView needle)
 {
     return cont::StringView(text).find(needle) != cont::StringView::npos;
@@ -34,10 +65,13 @@ TEST_CASE("comply verb: the rules binding the crash pool in Turkey and the EU", 
     const cont::String out = comply(kRules, "flow.crash-reports", "TR,EU,XX", "2026-11-01");
     INFO(out.c_str());
     CHECK(has(out, R"("verb":"comply","ok":true,"scope":"flow.crash-reports","day":"2026-11-01")"));
-    CHECK(has(out, R"({"code":"TR","present":true,"generation":1})"));
-    CHECK(has(out, R"({"code":"EU","present":true,"generation":1})"));
+    const cont::String tr = committed_generation("tr.rules.toml");
+    const cont::String eu = committed_generation("eu.rules.toml");
+    CHECK(has(out, joined(R"({"code":"TR","present":true,"generation":)", tr, "}")));
+    CHECK(has(out, joined(R"({"code":"EU","present":true,"generation":)", eu, "}")));
     CHECK(has(out, R"({"code":"XX","present":false,"generation":0})"));
-    CHECK(has(out, R"("jurisdiction":"TR","generation":1,"id":"tr.kvkk.processing","kind":"obligation")"));
+    CHECK(has(out,
+              joined(R"("jurisdiction":"TR","generation":)", tr, R"(,"id":"tr.kvkk.processing","kind":"obligation")")));
     CHECK(has(out, R"("proof":"unproven","scope_state":"planned")"));
     CHECK(has(out, R"("proven":0,)"));
     CHECK_FALSE(has(out, R"("proof":"proven")"));

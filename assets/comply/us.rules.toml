@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review US
 format = "cerid-rules/1"
 jurisdiction = "US"
-generation = 1
+generation = 2
 register = "2026-10-31"
 
 [[scope]]
@@ -88,9 +88,9 @@ primary = "https://www.ecfr.gov/current/title-15/subtitle-B/chapter-VII/subchapt
 read = false
 obligation = "Classify every export's cryptography (5D002 or mass-market 5D992.c), apply License Exception ENC with its self-classification where it applies, and give stores the export-compliance answer the record supports."
 applies_to = ["channel.distribution", "channel.third-party-stores", "channel.cerid-store"]
-check = "planned"
-check_name = "cryptography inventory CTest: a changed inventory needs a reviewed classification"
-check_ref = "docs/ROADMAP.md#slice-comply.1"
+check = "active"
+check_name = "crd-check-registers: every export's cryptography inventory against its reviewed classification"
+check_ref = "scripts/gen-crypto-inventory.py"
 effective = "2021-03-29"
 sunset = ""
 counsel = "needed"

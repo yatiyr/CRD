@@ -49,7 +49,8 @@ Every entry holds:
 
 The standards domain adds `spec` (the document: `type` `rfc`, `draft`, `w3c`, `nist` or `cerid`; `ref`; for a draft
 its `revision` and `posted` day, month or year; `status` in the snapshot; `obsoleted_by` for an obsoleted RFC),
-`codepoints` (IANA or Cerid registry, name, value; `verified: false` marks a value taken from knowledge) and, at the
+`codepoints` (IANA or Cerid registry, name, value; `verified: false` marks a value taken from knowledge),
+`cryptography` (the cryptographic functions the entry performs, [below](#crypto-classification)) and, at the
 register level, the RFC 7696 `checklist` (section, item, the Cerid mechanism, its rows and evidence). The legal domain
 adds the fields [below](#legal-domain).
 
@@ -155,6 +156,62 @@ engine.
   other scopes, or not yet effective, are not answered; `ceridc comply` prints the answer as JSON and the MCP tool
   serves the same query once [MCP-ADAPT](../ROADMAP.md#slice-mcp-adapt) gives commands one declaration for every
   surface.
+
+<a id="crypto-classification"></a>
+### Cryptography inventory and classification (COMPLY.1)
+
+Export control classifies what an export does with cryptography, so the facts are read from the build and the
+standards register, never typed, and a change to them reaches no release without a reviewed classification.
+
+- **Functions and key lengths are register facts.** Every standards entry carries `cryptography`: the functions it
+  performs, each once in the order `authentication`, `confidentiality`, `integrity`, `key-exchange`,
+  `key-derivation` (empty when none; a protocol whose packets are protected, such as QUIC or TLS, names all five, and
+  a protocol riding on one names only what it adds). The class byte of a Cerid algorithm identifier fixes functions
+  its entry must name (key exchange for 0x01 and 0x02, authentication for 0x03 and 0x04, confidentiality and
+  integrity for 0x05, key derivation for 0x06; `ALGORITHM_CLASSES` in
+  [gen-register-ids.py](../../scripts/gen-register-ids.py) is the one table), and each of its codepoints carries
+  `key_bits`: one length per component, in the order the name gives. A symmetric or elliptic-curve key states its
+  length as its specification encodes it (AES-128 128, ChaCha20 and the 32-byte X25519 and Ed25519 keys 256, P-384
+  384), a key derivation its hash output, and a lattice algorithm its encoded public key (ML-KEM-768's 1184 bytes are
+  9472 bits; ML-DSA-44, -65 and -87 are 10496, 15616 and 20736), so `x25519-mlkem768` is `[256, 9472]`. Key bits
+  elsewhere, a missing or malformed length, and a function its class performs but the entry omits each fail the
+  guard.
+- **Exports are read from the build.** An export is the relocatable package (every engine module whose
+  `CMakeLists.txt` calls `crd_package_library`; id `cerid-package`) and every program module the root `CMakeLists.txt`
+  registers outside `engine/` (the host tools, the runtime and the sandbox; id the module's name). Product exports
+  join through the same reading when the publishing profiles of [SHIP.0](../ROADMAP.md#slice-ship.0) exist.
+- **The inventory.** [scripts/gen-crypto-inventory.py](../../scripts/gen-crypto-inventory.py) walks each export's
+  module closure (`DEPENDS`) and writes `assets/comply/crypto-inventory.json` (`cerid-crypto-inventory/1`): per export,
+  its third-party packages (`PACKAGES`), every implemented standards entry its modules own whose `cryptography` is not
+  empty (id, kind, owner, functions, specification, whether it is a published standard) and every implemented
+  algorithm among them (name, identifier, class, functions, key lengths, entry, specification, owner), then the union
+  of functions and whether it performs `confidentiality`. Planned entries are in no export. Third-party cryptography
+  enters only through the crypto owner's providers (the `crypto.providers` signatures refuse a crypto library header
+  in any other module), so the register entries are the whole of it. `--check` is the
+  `crd-comply-crypto-inventory-drift` CTest and the file is in
+  [generated-sources.json](../../scripts/generated-sources.json).
+- **Classification records.** `crypto_classifications` in the legal register maps each export to its records: one per
+  release, frozen, and last one head record (`release` null) for the next. A record holds `inventory` (the SHA-256 of
+  the export's inventory in canonical JSON: sorted keys, no spaces), `reviewed`, `findings` and `counsel`. A finding
+  names an export-control `entry`, its `classification`, the `authorization` it ships under, whether a `report` is
+  owed and its `basis` in plain words. The head record answers exactly the pinned obligations whose active check cites
+  the generator (today the US EAR, EU dual-use, Wassenaar and the two Turkish entries); the classification needs
+  counsel when any of them does, and it is a proposal until counsel answers: interpretation is never guessed.
+- **The guard.** `crd-check-registers` recomputes every inventory and fails an export without records, a head record
+  that is not last or not alone, an export whose inventory differs from the one its head record was reviewed against,
+  findings that miss or repeat an obligation or name a non-export-control entry, a counsel answer outside the record's
+  review and today, releases that are not distinct `MAJOR.MINOR.PATCH[-PRE]` versions, a release recorded before
+  counsel reviewed it, and a head record kept for something that is no longer an export (its released records stay).
+- **The review.** When an inventory changes, the reviewer restates the head record's findings and runs
+  `--review <export> [--day D]`, which records the new digest and day and clears `counsel.reviewed` (a changed
+  inventory goes back to counsel); it refuses an unchanged inventory and a head record without findings.
+  `--release <export> <version>` freezes the current, counsel-reviewed head record for a release.
+- **Facts for stores.** `--facts <export>` prints what the store compliance kit ([COMPLY.8](../ROADMAP.md#slice-comply.8))
+  turns into the Apple export compliance answer and the EAR self-classification report: the inventory digest, review
+  and counsel status, the functions and algorithms with their key lengths, any non-standard algorithm performing
+  confidentiality, the findings, `apple.uses_non_exempt_encryption` (true exactly when the export performs
+  confidentiality; authentication and integrity alone are exempt uses) and the findings that owe a report. It refuses
+  an export whose inventory changed since its review.
 
 <a id="snapshot-and-review"></a>
 ## Snapshot and review

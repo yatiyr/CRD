@@ -46,14 +46,18 @@ ENUMS = {
     'Cerid algorithm identifiers': ('AlgorithmId', 'algorithm', 'one per algorithm, its class in the high byte'),
 }
 ALGORITHMS = 'Cerid algorithm identifiers'
-# The high byte of a Cerid algorithm identifier (docs/design/registers.md#cerid-identifiers).
+# The cryptographic functions a register entry declares in `cryptography`, in their canonical order.
+CRYPTO_FUNCTIONS = ('authentication', 'confidentiality', 'integrity', 'key-exchange', 'key-derivation')
+# The high byte of a Cerid algorithm identifier (docs/design/registers.md#cerid-identifiers): its enumerator, meaning
+# and the cryptographic functions an algorithm of the class performs (the register's `cryptography` vocabulary, which
+# the COMPLY.1 cryptography inventory reads).
 ALGORITHM_CLASSES = {
-    0x01: ('HybridKeyExchange', 'post-quantum/traditional hybrid key exchange'),
-    0x02: ('ClassicalKeyExchange', 'traditional elliptic-curve key exchange'),
-    0x03: ('PostQuantumSignature', 'post-quantum signature'),
-    0x04: ('ClassicalSignature', 'traditional signature'),
-    0x05: ('Aead', 'authenticated encryption with associated data'),
-    0x06: ('Kdf', 'key derivation'),
+    0x01: ('HybridKeyExchange', 'post-quantum/traditional hybrid key exchange', ('key-exchange',)),
+    0x02: ('ClassicalKeyExchange', 'traditional elliptic-curve key exchange', ('key-exchange',)),
+    0x03: ('PostQuantumSignature', 'post-quantum signature', ('authentication',)),
+    0x04: ('ClassicalSignature', 'traditional signature', ('authentication',)),
+    0x05: ('Aead', 'authenticated encryption with associated data', ('confidentiality', 'integrity')),
+    0x06: ('Kdf', 'key derivation', ('key-derivation',)),
 }
 RESERVED = {'Cerid GREASE values': 'Grease'}
 # registry -> (constant prefix, C++ type, value kind)
@@ -204,12 +208,12 @@ def render_enum(registry, members):
             lines.append(f'        return "{entry}";')  # consecutive values of one entry share the return
     lines += ['    }', '    return "";', '}', '']
     if registry == ALGORITHMS:
-        width = max(len(name) for name, _ in ALGORITHM_CLASSES.values())
+        width = max(len(name) for name, _, _ in ALGORITHM_CLASSES.values())
         lines += ['// The class of an algorithm: the high byte of its identifier. An identifier decoded from bytes may',
                   '// carry a class byte outside this enumeration; no code accepts one.',
                   'enum class AlgorithmClass : u8', '{']
         lines += [f'    {name:<{width}} = 0x{value:02X}U, // {meaning}'
-                  for value, (name, meaning) in ALGORITHM_CLASSES.items()]
+                  for value, (name, meaning, _) in ALGORITHM_CLASSES.items()]
         lines += ['};', '',
                   '[[nodiscard]] constexpr AlgorithmClass algorithm_class(AlgorithmId id) noexcept', '{',
                   '    return static_cast<AlgorithmClass>(static_cast<u16>(id) >> 8U);', '}', '']

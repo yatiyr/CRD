@@ -204,7 +204,8 @@
       "name": "China",
       "hosts": [
         "npc.gov.cn",
-        "cac.gov.cn"
+        "cac.gov.cn",
+        "oscca.gov.cn"
       ]
     },
     "JP": {
@@ -943,9 +944,9 @@
         "channel.third-party-stores"
       ],
       "check": {
-        "ref": "docs/ROADMAP.md#slice-comply.1",
-        "name": "classification record per product and release",
-        "state": "planned"
+        "ref": "scripts/gen-crypto-inventory.py",
+        "name": "crd-check-registers: every export's cryptography inventory against its reviewed classification",
+        "state": "active"
       },
       "effective": "2025-03-19",
       "sunset": null,
@@ -1032,9 +1033,9 @@
         "channel.distribution"
       ],
       "check": {
-        "ref": "docs/ROADMAP.md#slice-comply.1",
-        "name": "cryptography inventory CTest: a changed inventory needs a reviewed classification",
-        "state": "planned"
+        "ref": "scripts/gen-crypto-inventory.py",
+        "name": "crd-check-registers: every export's cryptography inventory against its reviewed classification",
+        "state": "active"
       },
       "effective": "2008-11-10",
       "sunset": null,
@@ -3047,9 +3048,9 @@
         "channel.cerid-store"
       ],
       "check": {
-        "ref": "docs/ROADMAP.md#slice-comply.1",
-        "name": "cryptography inventory CTest: a changed inventory needs a reviewed classification",
-        "state": "planned"
+        "ref": "scripts/gen-crypto-inventory.py",
+        "name": "crd-check-registers: every export's cryptography inventory against its reviewed classification",
+        "state": "active"
       },
       "effective": "2021-09-09",
       "sunset": null,
@@ -3685,9 +3686,9 @@
         "channel.cerid-store"
       ],
       "check": {
-        "ref": "docs/ROADMAP.md#slice-comply.1",
-        "name": "cryptography inventory CTest: a changed inventory needs a reviewed classification",
-        "state": "planned"
+        "ref": "scripts/gen-crypto-inventory.py",
+        "name": "crd-check-registers: every export's cryptography inventory against its reviewed classification",
+        "state": "active"
       },
       "effective": "2021-03-29",
       "sunset": null,
@@ -4341,6 +4342,50 @@
       "note": "Pinned when a product enters China."
     },
     {
+      "id": "cn.commercial-cryptography",
+      "title": "China commercial cryptography import and export controls",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "watch",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1"
+      ],
+      "instrument": {
+        "name": "Cryptography Law of the People's Republic of China and the Commercial Cryptography Administration Regulations",
+        "article": "Cryptography Law Article 28; the Regulations' import licensing, export control and product certification provisions",
+        "type": "law",
+        "jurisdiction": "CN",
+        "primary": "https://www.npc.gov.cn/",
+        "consolidated": null
+      },
+      "obligation": "Before a product carrying commercial cryptography enters China, determine whether its cryptography falls under the import licence and export control lists and the certification of commercial cryptography products, and meet those duties.",
+      "applies_to": [
+        "channel.distribution",
+        "channel.third-party-stores"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "name": "classification record per product and release",
+        "state": "planned"
+      },
+      "effective": "2020-01-01",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "read": "2026-10-31",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Pinned when a product enters China. The Regulations' 2023 revision (effective 2023-07-01) and the administering body (the State Cryptography Administration, oscca.gov.cn) are from knowledge; the first primary read confirms them and replaces the home-page URL."
+    },
+    {
       "id": "jp.appi",
       "title": "Japan APPI",
       "kind": "obligation",
@@ -4506,9 +4551,9 @@
         "channel.distribution"
       ],
       "check": {
-        "ref": "docs/ROADMAP.md#slice-comply.1",
-        "name": "classification record per product and release",
-        "state": "planned"
+        "ref": "scripts/gen-crypto-inventory.py",
+        "name": "crd-check-registers: every export's cryptography inventory against its reviewed classification",
+        "state": "active"
       },
       "effective": "1996-07-12",
       "sunset": null,
@@ -5285,9 +5330,9 @@
       "sha256": "767b32a0266f64352d531fc9a190e536e4c520918853eb31d853f59aa39c5605"
     },
     "EU": {
-      "generation": 1,
+      "generation": 2,
       "reviewed": "2026-10-31",
-      "sha256": "2646b98b0764474ae2281f950d71e4af0d8398041a406a9b46172fa957753839"
+      "sha256": "532e84a1a51ecf49132effa204c62298b6db1c96a1bcd50bddcd12b928a0d470"
     },
     "GB": {
       "generation": 1,
@@ -5295,9 +5340,9 @@
       "sha256": "ee6d2a19672f639be3e702de9f689f64d5345fc57346cf14d392296f13590059"
     },
     "INT": {
-      "generation": 1,
+      "generation": 2,
       "reviewed": "2026-10-31",
-      "sha256": "f1d8a609a6788b19fe463a9b464a6caed30ab627f0955f1f919606a4911b9760"
+      "sha256": "27f0baecbf329309f9fa9ec86977606881120c99e1e49660ba0b10b21da9cafe"
     },
     "JP": {
       "generation": 1,
@@ -5310,19 +5355,405 @@
       "sha256": "21377a60378504ff4a0d108eef26ea0665a22382a5698d67a9012c0f8b665809"
     },
     "TR": {
-      "generation": 1,
+      "generation": 2,
       "reviewed": "2026-10-31",
-      "sha256": "d75f9865c01dd21c3a76ca6390320a665f4a47d24b1ce21034e0f0d55f2901c0"
+      "sha256": "a8b97f518f81a0374e532b81c6bd05356cb91fd583ca6899015d921b23387052"
     },
     "US": {
-      "generation": 1,
+      "generation": 2,
       "reviewed": "2026-10-31",
-      "sha256": "c39592e6432d68a073996086c395b7ff447ffafd6e583119b4f3e17ca9b2ce1e"
+      "sha256": "756ee69c04914c3aa556d6f7ecf4a0ce61d336987a84ed3ac5fb61123b4c63e9"
     },
     "US-CA": {
       "generation": 1,
       "reviewed": "2026-10-31",
       "sha256": "1bf52c737e702845ae574f17482aa72b4aa497e9d70f6a83bdf1b932557ce071"
     }
+  },
+  "crypto_classifications": {
+    "asset_cooker": [
+      {
+        "release": null,
+        "inventory": "3062e76b39b81847adfb8177b43f257ed548c28ee86165706a856e6901e9bddf",
+        "reviewed": "2026-10-31",
+        "findings": [
+          {
+            "entry": "tr.cybersecurity.products",
+            "classification": "Not a cybersecurity product",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The export performs no security function that defines a cybersecurity product or service; counsel confirms this against Law No. 7545's definition once its text is read."
+          },
+          {
+            "entry": "tr.btk.encryption",
+            "classification": "Carries no encryption",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The export implements no encryption, so the BTK encryption rules set it no duty."
+          },
+          {
+            "entry": "eu.dual-use",
+            "classification": "Not listed in Annex I",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so no item of Annex I Category 5 Part 2 (5A002, 5D002) describes the export."
+          },
+          {
+            "entry": "us.ear.encryption",
+            "classification": "EAR99 where the EAR applies",
+            "authorization": "NLR",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so Category 5 Part 2 does not describe the export. Whether the EAR reaches a Turkish publisher's software at all (US-origin content, export from US servers such as a store's) is part of the counsel review."
+          },
+          {
+            "entry": "int.wassenaar",
+            "classification": "Not on the Dual-Use List",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so Category 5 Part 2 of the List does not describe the export."
+          }
+        ],
+        "counsel": {
+          "needed": true,
+          "reviewed": null
+        }
+      }
+    ],
+    "cerid-package": [
+      {
+        "release": null,
+        "inventory": "a90904cfb64491878f3872818f2eeb778df4fec5e1dd11cb4d51338136b99d53",
+        "reviewed": "2026-10-31",
+        "findings": [
+          {
+            "entry": "tr.cybersecurity.products",
+            "classification": "Not a cybersecurity product",
+            "authorization": "None required",
+            "report": false,
+            "basis": "Verifying the publisher's signed policy generations protects the engine's own configuration; it is no cybersecurity product or service offered to others. Counsel confirms this against Law No. 7545's definition once its text is read."
+          },
+          {
+            "entry": "tr.btk.encryption",
+            "classification": "Carries no encryption",
+            "authorization": "None required",
+            "report": false,
+            "basis": "Signature verification only; the export encrypts no communication, so the BTK encryption rules set it no duty."
+          },
+          {
+            "entry": "eu.dual-use",
+            "classification": "Not listed in Annex I",
+            "authorization": "None required",
+            "report": false,
+            "basis": "Its only cryptographic function is authentication: crd-crypto verifies the publisher's signed policy generations (cerid.policy-generation) through a verifier the caller supplies and implements no algorithm. Cryptography limited to authentication, digital signature and data integrity is not cryptography for data confidentiality, which Category 5 Part 2 controls (from knowledge until the text is read)."
+          },
+          {
+            "entry": "us.ear.encryption",
+            "classification": "EAR99 where the EAR applies",
+            "authorization": "NLR",
+            "report": false,
+            "basis": "Its only cryptographic function is authentication: crd-crypto verifies the publisher's signed policy generations (cerid.policy-generation) through a verifier the caller supplies and implements no algorithm. Cryptography limited to authentication, digital signature and data integrity is not cryptography for data confidentiality, which Category 5 Part 2 controls (from knowledge until the text is read). Whether the EAR reaches a Turkish publisher's software at all (US-origin content, export from US servers such as a store's) is part of the counsel review."
+          },
+          {
+            "entry": "int.wassenaar",
+            "classification": "Not on the Dual-Use List",
+            "authorization": "None required",
+            "report": false,
+            "basis": "Its only cryptographic function is authentication: crd-crypto verifies the publisher's signed policy generations (cerid.policy-generation) through a verifier the caller supplies and implements no algorithm. Cryptography limited to authentication, digital signature and data integrity is not cryptography for data confidentiality, which Category 5 Part 2 controls (from knowledge until the text is read)."
+          }
+        ],
+        "counsel": {
+          "needed": true,
+          "reviewed": null
+        }
+      }
+    ],
+    "ceridc": [
+      {
+        "release": null,
+        "inventory": "85626c2c61bb9a4646e8bc2e700b9c13b9320ca358a287df800a466615851d5e",
+        "reviewed": "2026-10-31",
+        "findings": [
+          {
+            "entry": "tr.cybersecurity.products",
+            "classification": "Not a cybersecurity product",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The export performs no security function that defines a cybersecurity product or service; counsel confirms this against Law No. 7545's definition once its text is read."
+          },
+          {
+            "entry": "tr.btk.encryption",
+            "classification": "Carries no encryption",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The export implements no encryption, so the BTK encryption rules set it no duty."
+          },
+          {
+            "entry": "eu.dual-use",
+            "classification": "Not listed in Annex I",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so no item of Annex I Category 5 Part 2 (5A002, 5D002) describes the export."
+          },
+          {
+            "entry": "us.ear.encryption",
+            "classification": "EAR99 where the EAR applies",
+            "authorization": "NLR",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so Category 5 Part 2 does not describe the export. Whether the EAR reaches a Turkish publisher's software at all (US-origin content, export from US servers such as a store's) is part of the counsel review."
+          },
+          {
+            "entry": "int.wassenaar",
+            "classification": "Not on the Dual-Use List",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so Category 5 Part 2 of the List does not describe the export."
+          }
+        ],
+        "counsel": {
+          "needed": true,
+          "reviewed": null
+        }
+      }
+    ],
+    "cprof_export": [
+      {
+        "release": null,
+        "inventory": "a7b0e256e8466049f52c3ade96209f05ecc0502852d9396832d8231903316488",
+        "reviewed": "2026-10-31",
+        "findings": [
+          {
+            "entry": "tr.cybersecurity.products",
+            "classification": "Not a cybersecurity product",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The export performs no security function that defines a cybersecurity product or service; counsel confirms this against Law No. 7545's definition once its text is read."
+          },
+          {
+            "entry": "tr.btk.encryption",
+            "classification": "Carries no encryption",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The export implements no encryption, so the BTK encryption rules set it no duty."
+          },
+          {
+            "entry": "eu.dual-use",
+            "classification": "Not listed in Annex I",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so no item of Annex I Category 5 Part 2 (5A002, 5D002) describes the export."
+          },
+          {
+            "entry": "us.ear.encryption",
+            "classification": "EAR99 where the EAR applies",
+            "authorization": "NLR",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so Category 5 Part 2 does not describe the export. Whether the EAR reaches a Turkish publisher's software at all (US-origin content, export from US servers such as a store's) is part of the counsel review."
+          },
+          {
+            "entry": "int.wassenaar",
+            "classification": "Not on the Dual-Use List",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so Category 5 Part 2 of the List does not describe the export."
+          }
+        ],
+        "counsel": {
+          "needed": true,
+          "reviewed": null
+        }
+      }
+    ],
+    "kir_autotune": [
+      {
+        "release": null,
+        "inventory": "76b7a0e10aa13f7ed887b841fa549fb11851d030571050e08254d59a565e288f",
+        "reviewed": "2026-10-31",
+        "findings": [
+          {
+            "entry": "tr.cybersecurity.products",
+            "classification": "Not a cybersecurity product",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The export performs no security function that defines a cybersecurity product or service; counsel confirms this against Law No. 7545's definition once its text is read."
+          },
+          {
+            "entry": "tr.btk.encryption",
+            "classification": "Carries no encryption",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The export implements no encryption, so the BTK encryption rules set it no duty."
+          },
+          {
+            "entry": "eu.dual-use",
+            "classification": "Not listed in Annex I",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so no item of Annex I Category 5 Part 2 (5A002, 5D002) describes the export."
+          },
+          {
+            "entry": "us.ear.encryption",
+            "classification": "EAR99 where the EAR applies",
+            "authorization": "NLR",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so Category 5 Part 2 does not describe the export. Whether the EAR reaches a Turkish publisher's software at all (US-origin content, export from US servers such as a store's) is part of the counsel review."
+          },
+          {
+            "entry": "int.wassenaar",
+            "classification": "Not on the Dual-Use List",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so Category 5 Part 2 of the List does not describe the export."
+          }
+        ],
+        "counsel": {
+          "needed": true,
+          "reviewed": null
+        }
+      }
+    ],
+    "runtime": [
+      {
+        "release": null,
+        "inventory": "878392a03c45943d4b9131809352a18e07db3a96bff4473d2bd696dd960c783e",
+        "reviewed": "2026-10-31",
+        "findings": [
+          {
+            "entry": "tr.cybersecurity.products",
+            "classification": "Not a cybersecurity product",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The export performs no security function that defines a cybersecurity product or service; counsel confirms this against Law No. 7545's definition once its text is read."
+          },
+          {
+            "entry": "tr.btk.encryption",
+            "classification": "Carries no encryption",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The export implements no encryption, so the BTK encryption rules set it no duty."
+          },
+          {
+            "entry": "eu.dual-use",
+            "classification": "Not listed in Annex I",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so no item of Annex I Category 5 Part 2 (5A002, 5D002) describes the export."
+          },
+          {
+            "entry": "us.ear.encryption",
+            "classification": "EAR99 where the EAR applies",
+            "authorization": "NLR",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so Category 5 Part 2 does not describe the export. Whether the EAR reaches a Turkish publisher's software at all (US-origin content, export from US servers such as a store's) is part of the counsel review."
+          },
+          {
+            "entry": "int.wassenaar",
+            "classification": "Not on the Dual-Use List",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so Category 5 Part 2 of the List does not describe the export."
+          }
+        ],
+        "counsel": {
+          "needed": true,
+          "reviewed": null
+        }
+      }
+    ],
+    "sandbox": [
+      {
+        "release": null,
+        "inventory": "2778a2e8453b1b1b48a4cdfba43ff23f12b4e35ef1ec37d55467b3caa64b2425",
+        "reviewed": "2026-10-31",
+        "findings": [
+          {
+            "entry": "tr.cybersecurity.products",
+            "classification": "Not a cybersecurity product",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The export performs no security function that defines a cybersecurity product or service; counsel confirms this against Law No. 7545's definition once its text is read."
+          },
+          {
+            "entry": "tr.btk.encryption",
+            "classification": "Carries no encryption",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The export implements no encryption, so the BTK encryption rules set it no duty."
+          },
+          {
+            "entry": "eu.dual-use",
+            "classification": "Not listed in Annex I",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so no item of Annex I Category 5 Part 2 (5A002, 5D002) describes the export."
+          },
+          {
+            "entry": "us.ear.encryption",
+            "classification": "EAR99 where the EAR applies",
+            "authorization": "NLR",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so Category 5 Part 2 does not describe the export. Whether the EAR reaches a Turkish publisher's software at all (US-origin content, export from US servers such as a store's) is part of the counsel review."
+          },
+          {
+            "entry": "int.wassenaar",
+            "classification": "Not on the Dual-Use List",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so Category 5 Part 2 of the List does not describe the export."
+          }
+        ],
+        "counsel": {
+          "needed": true,
+          "reviewed": null
+        }
+      }
+    ],
+    "shader_cook": [
+      {
+        "release": null,
+        "inventory": "776a1df84f14db73a77f1ef100524051299ed9ca30b4829d08d8673cd3cca747",
+        "reviewed": "2026-10-31",
+        "findings": [
+          {
+            "entry": "tr.cybersecurity.products",
+            "classification": "Not a cybersecurity product",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The export performs no security function that defines a cybersecurity product or service; counsel confirms this against Law No. 7545's definition once its text is read."
+          },
+          {
+            "entry": "tr.btk.encryption",
+            "classification": "Carries no encryption",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The export implements no encryption, so the BTK encryption rules set it no duty."
+          },
+          {
+            "entry": "eu.dual-use",
+            "classification": "Not listed in Annex I",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so no item of Annex I Category 5 Part 2 (5A002, 5D002) describes the export."
+          },
+          {
+            "entry": "us.ear.encryption",
+            "classification": "EAR99 where the EAR applies",
+            "authorization": "NLR",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so Category 5 Part 2 does not describe the export. Whether the EAR reaches a Turkish publisher's software at all (US-origin content, export from US servers such as a store's) is part of the counsel review."
+          },
+          {
+            "entry": "int.wassenaar",
+            "classification": "Not on the Dual-Use List",
+            "authorization": "None required",
+            "report": false,
+            "basis": "The inventory holds no cryptographic function, so Category 5 Part 2 of the List does not describe the export."
+          }
+        ],
+        "counsel": {
+          "needed": true,
+          "reviewed": null
+        }
+      }
+    ]
   }
 }
