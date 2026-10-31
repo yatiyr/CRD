@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import urllib.parse
 
@@ -37,6 +38,7 @@ def load(name, relative):
 
 pipeline = load('ci_pipeline', 'ci/pipeline.py')
 ops = load('ci_ops', 'ci/ops.py')
+bench_vm = load('ci_bench_vm', 'ci/bench_vm.py')
 dashboard = load('ci_dashboard', 'ci/dashboard/generate.py')
 master = load('check_master_plan', 'scripts/check-master-plan.py')
 evidence = load('ci_evidence_platform', 'scripts/ci-evidence.py')
@@ -692,6 +694,67 @@ class Console(unittest.TestCase):
 
 AGENT_SPEC = {'coordinator': 'http://10.128.0.2:8780', 'external': 'https://ci.example',
               'agent_url': 'http://10.128.0.2:8780/agent/cerid-agent.py', 'agent_sha256': 'ab' * 32}
+
+
+class BenchMachine(unittest.TestCase):
+    """ci/bench_vm.py: the optimization track's machine runs only on demand, holds no credential and keeps the
+    exit status of a detached command."""
+
+    def test_the_machine_is_spot_bounded_counted_and_credential_free(self):
+        command = bench_vm.create_command()
+        flags = dict(zip(command, command[1:]))
+        self.assertEqual(flags['--provisioning-model'], 'SPOT')
+        self.assertEqual(flags['--instance-termination-action'], 'STOP')
+        self.assertEqual(flags['--max-run-duration'], '%dh' % bench_vm.MAX_RUN_HOURS)
+        self.assertEqual(flags['--performance-monitoring-unit'], 'standard', 'profiles need the core counters')
+        self.assertEqual(flags['--tags'], 'cerid-bench')
+        self.assertIn('--no-service-account', command)
+        self.assertIn('--no-scopes', command)
+        self.assertNotIn('cerid-ci=job', ' '.join(command), 'the CI orphan sweep must never see it as a job machine')
+
+    def test_a_detached_command_keeps_its_exit_status_even_when_it_exits(self):
+        if os.name == 'nt' or not shutil.which('bash'):
+            self.skipTest('needs a POSIX bash')
+        with tempfile.TemporaryDirectory() as home:
+            Path(home, 'cerid').mkdir()
+            script = bench_vm.detach_script('t', 'echo out; exit 3')
+            subprocess.run(['bash', '-c', script], env=dict(os.environ, HOME=home), check=True)
+            for _ in range(100):
+                if Path(home, 'jobs', 't.exit').exists():
+                    break
+                time.sleep(0.05)
+            output = subprocess.run(['bash', '-c', bench_vm.wait_script('t')], env=dict(os.environ, HOME=home),
+                                    capture_output=True, text=True).stdout
+        self.assertEqual(bench_vm.parse_wait(output), (True, 3, 'out'))
+
+    def test_wait_reports_a_running_command(self):
+        self.assertEqual(bench_vm.parse_wait('line 1\nline 2\n@@running\n'), (False, None, 'line 1\nline 2'))
+        self.assertEqual(bench_vm.parse_wait('@@exit 0\n'), (True, 0, ''))
+
+    def test_sync_fetches_only_from_the_bundle_and_checks_out_detached(self):
+        script = bench_vm.sync_script('~/sync.bundle', 'c' * 40, 'b' * 40)
+        self.assertIn('git clone --quiet https://github.com/yatiyr/CRD.git', script)
+        self.assertIn('fetch --quiet ~/sync.bundle refs/bench/sync:refs/bench/sync', script)
+        self.assertIn('checkout --quiet --detach ' + 'c' * 40, script)
+        self.assertNotIn('fetch', bench_vm.sync_script('~/sync.bundle', 'c' * 40, 'c' * 40).split('&&')[1])
+
+    def test_commands_wait_for_ssh_then_stop_after_create(self):
+        calls = []
+
+        class Done:
+            def __init__(self, code=0, stdout=''):
+                self.returncode, self.stdout, self.stderr = code, stdout, ''
+
+        def runner(argv, **kwargs):
+            calls.append(argv[1:4])
+            if argv[1:4] == ['compute', 'instances', 'describe']:
+                return Done(1)
+            return Done()
+        vm = bench_vm.BenchVm(runner=runner, which=lambda name: '/usr/bin/gcloud', sleep=lambda s: None)
+        self.assertEqual(vm.create(), 'created and stopped')
+        self.assertEqual([c[:3] for c in calls], [['compute', 'instances', 'describe'],
+                                                   ['compute', 'instances', 'create'], ['compute', 'ssh', 'cerid-bench'],
+                                                   ['compute', 'instances', 'stop']])
 
 
 class Executors(unittest.TestCase):
