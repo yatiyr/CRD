@@ -252,8 +252,9 @@ the policy's `group_by` keys). A positive digest passes and a negative fails; ot
 and a real GPU or phone passes when mean FLIP, the share of pixels over `flip_pixel` and SSIM are all within the
 test's tolerances against the closest of the grouping's three newest positives, else needs triage. The QUAL cell of
 the job's device and the image's feature reads needs triage while an image is untriaged or not compared, and fail for
-a rejected or unreadable image, on the web UI's QUAL page and on the served static page alike (`generate.render`
-applies the verdicts through `cells_hook` before counting). Firebase Test Lab: `FirebaseTestLab.results_command` downloads a test's results from
+a rejected or unreadable image, on the web UI's QUAL page, the served static page and the per-build dashboard
+artifact alike (`generate.render` applies the verdicts through `cells_hook` before counting; the dashboard step reads
+them from the store through `gold.StoreView`). Firebase Test Lab: `FirebaseTestLab.results_command` downloads a test's results from
 `CERID_FTL_RESULTS_BUCKET`, `python ci/coordinator/gold.py ftl-manifest --results DIR --device ID --out
 build/ftl-<device>/gold` writes the manifest (`app-launch.<screenshot>`), and the device's `screen` gives the pixels
 per degree. `python ci/coordinator/gold.py compare A.png B.png [--ppd N] [--heatmap D.png]` compares two files

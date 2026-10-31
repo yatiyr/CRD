@@ -391,6 +391,17 @@ def default_reader(coordinator):
 
 # --------------------------------------------------------------------------------------------- views
 
+class StoreView:
+    """The two things the read side (overlay, expectations, results_of) needs of a coordinator, on a bare result
+    store: for the per-build dashboard step, which has the store but runs no coordinator."""
+
+    def __init__(self, store):
+        self.store = store
+
+    def get(self, name):
+        return self.store.get_json(PREFIX + name)
+
+
 def results_of(coordinator, number):
     return [coordinator.store.get_json(n) for n in coordinator.store.list(PREFIX + 'gold/results/%010d/' %
                                                                             int(number))]

@@ -66,7 +66,8 @@ C++ build, configure, engine CTest or WSL lane ran.
   Approve and reject are compare-and-swap with the state the person saw (a stale click is refused), audited, and a
   reject writes a finding with the text of the ROADMAP row its owner files and notifies. A newly approved baseline
   re-compares the grouping's untriaged images. The verdicts are applied to the matrix before anything is counted or
-  drawn (`generate.render(cells_hook=...)`), so the served static QUAL page and the web UI's QUAL page agree.
+  drawn (`generate.render(cells_hook=...)`), so the web UI's QUAL page, the served static page and the per-build
+  dashboard artifact agree.
 - **Web UI.** A Gold images page: the queue (filter, `j`/`k`), the approved, new and FLIP-difference images side by
   side with synchronised scrolling, blink (`b`; a manual flip under reduced motion), zoom (`+`, `-`, `0`) with
   pixelated scaling, the metrics against the tolerances, where it was rendered, a note, Approve (`a`) and Reject
@@ -123,7 +124,7 @@ it lands.
 
 ## Verification
 
-`python scripts/test-ci-orchestrator.py` (147 tests, one skipped without `CERID_FLIP_REFERENCE`), `python
+`python scripts/test-ci-orchestrator.py` (148 tests, one skipped without `CERID_FLIP_REFERENCE`), `python
 scripts/test-ci-orchestrator-e2e.py` (3), `python scripts/test-ci-platform.py` (76), and the quick validators. The
 CDB1 reader and writer read the engine's own fuzz-corpus bundles (`tests/foundation/perf/fuzz/corpus/bundle`) and
 write them back byte for byte, and recover the truncated seed's complete prefix. In the desktop app's browser pane
@@ -149,7 +150,8 @@ directory `C:\Users\abici\.claude\projects\D--Dev-cerid\25b5b653-fafe-48b3-9c70-
 Three local runs failed in ways pure Python cannot: one segmentation fault, and twice `operator.mul` reporting
 one argument from `map(mul, kernel, window)` at the same line; each passed when rerun unchanged. That matches this
 host's recorded misexecution under load (MEMORY: "This host misexecutes") and is recorded here, not chased; the
-convolution now calls `math.sumprod` instead (twice as fast, and no longer that call path).
+convolution now calls `math.sumprod` instead (twice as fast, and no longer that call path). One later full run of the
+orchestrator suite reported one error that two unchanged reruns did not repeat; recorded the same way.
 
 ## User actions now needed (in order)
 

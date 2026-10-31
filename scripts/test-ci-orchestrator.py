@@ -2619,6 +2619,18 @@ class GoldImages(Base):
         actions = [e['action'] for e in reports.audit_entries(self.c, days=1)]
         self.assertIn('gold-reject', actions)
 
+    def test_the_dashboard_step_reads_the_same_verdicts_from_the_bare_store(self):
+        number, _, _ = self.upload(SOFTWARE, {'render.f': picture()})
+        cells = lambda: [{'device': SOFTWARE, 'feature': 'vulkan', 'build': str(number), 'state': 'pass'}]
+        self.assertEqual(gold.overlay(gold.StoreView(self.store), cells())[0]['state'], 'triage')
+        self.assertEqual(gold.overlay(self.c, cells())[0]['state'], 'triage')
+        module = coordinator_main.dashboard_module()
+        page, document = module.render(REGISTRY, [{'device': SOFTWARE, 'step': 'lane', 'outcome': 'pass',
+                                                   'build': str(number), 'features': ['vulkan']}],
+                                       cells_hook=module.gold_hook(self.store))
+        self.assertEqual([c['state'] for c in document['cells'] if c['feature'] == 'vulkan' and
+                          c['device'] == SOFTWARE], ['triage'])
+
     def test_the_repository_policy_is_valid(self):
         policy = gold.load_policy()
         self.assertEqual(gold.rules_for(policy, 'app-launch.menu')['group_by'], ['api', 'device_class'])

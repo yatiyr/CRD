@@ -373,7 +373,7 @@ uploaded unscrubbed; that defect is fixed with a test.
 | Never a pass by default | an untriaged or not yet compared image marks its cell needs triage; a rejected or unreadable image, a bad manifest or a missing file fails it |
 | Triage | approve or reject (or reset) by compare-and-swap with the label the person saw; audited; a reject writes a finding with the ROADMAP text its owner files and notifies; a new baseline re-compares the grouping's untriaged images |
 | Policy | `ci/gold.json` in the repository, reviewed like code: defaults, per-test overrides by pattern, viewing distances |
-| One verdict everywhere | the verdicts are applied to the matrix before it is counted or drawn, for the web UI's QUAL page and the served static page alike |
+| One verdict everywhere | the verdicts are applied to the matrix before it is counted or drawn, for the web UI's QUAL page, the served static page and the per-build dashboard artifact alike |
 | Retention | images, comparisons, expectations and findings are kept by content and not swept: a baseline must outlive the builds that produced it |
 
 *Comparison in the standard library.* FLIP (the reference algorithm, NVlabs/flip, BSD-3-Clause, written again) and

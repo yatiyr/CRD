@@ -333,6 +333,16 @@ def load_script_pins():
     return module
 
 
+def gold_hook(store):
+    """The gold verdicts (ci/coordinator/gold.py) for a page rendered from the result store, so this page, the served
+    one and the web UI's QUAL page agree."""
+    if str(ROOT / 'ci') not in sys.path:
+        sys.path.insert(0, str(ROOT / 'ci'))
+    from coordinator import gold
+    view = gold.StoreView(store)
+    return lambda cells: gold.overlay(view, cells)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest='command', required=True)
@@ -355,6 +365,7 @@ def main(argv=None):
             planned = json.loads(Path(args.plan).read_text(encoding='utf-8'))
     fixture = getattr(args, 'fixture', None)
     budget = None
+    hook = None
     if fixture:
         data = json.loads(Path(fixture).read_text(encoding='utf-8'))
         results = data['results']
@@ -363,11 +374,13 @@ def main(argv=None):
     else:
         store = pipeline.open_store(getattr(args, 'store', None))
         results = results_from_store(store)
+        hook = gold_hook(store)
         if planned is None:
             month = pipeline.month_of()
             budget = {'cap_usd': registry['budget']['monthly_cap_usd'], 'spent_usd': pipeline.month_spend(store, month),
                       'month': month}
-    page, document = render(registry, results, planned, roadmap_rows(), budget, fixture=bool(fixture))
+    page, document = render(registry, results, planned, roadmap_rows(), budget, fixture=bool(fixture),
+                            cells_hook=hook)
     write(args.out, page, document)
     print('Rendered %d cells into %s' % (len(document['cells']), args.out))
     if args.command == 'publish':
