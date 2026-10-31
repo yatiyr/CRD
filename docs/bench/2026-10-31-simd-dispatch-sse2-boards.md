@@ -86,6 +86,24 @@ cnn 1.65x to 1.69x. The bench's gates held in every post-fold arm (the f32 tier 
 reference, Q8_0 and i8 within their bounds), and the 199 nn and tensor kernel cases pass on Linux and win-debug.
 Logs: `~/sse2-board/logs-nnfix2`.
 
+### The Student-t attempt
+
+2026-10-31, [session](../sessions/2026-10-31-simd-dispatch-student-t-log.md). One reciprocal for the log reduction's
+quotient pair in the scalar core and its three twins, the fix the row had named. Five interleaved rounds of
+`bench_logpdf_grad` on CPU 4 (`build-bench.py host`: 14.4 of 63.7 GiB available, other processes 1.2 cores, dota2),
+binaries `c1e226c5` (pre-row), `722437e0` (HEAD, the lane tree's `7aeacb8e` build; the stats kernels unchanged since)
+and `31ab10a0` (the attempt), in ms per call:
+
+| arm | pre-row | HEAD | attempt | HEAD over attempt |
+|---|---|---|---|---|
+| avx2 | 0.924 [0.898-0.946] | 1.202 [1.185-1.227] | 1.196 [1.170-1.209] | 1.005 [1.00-1.02] |
+| sse2 | | 49.5 [49.3-49.7] | 50.0 [49.7-50.1] | 0.991 [0.986-0.993] |
+
+Pre-row over HEAD 0.766 [0.758-0.773]. No win, reverted. HEAD's avx2 loop has about 65 operations and three
+divisions per four elements against pre-row's 45 and two; with the divisions equalised nothing moved, so the cost is
+the carried rounding and the exact head sum that took log from 7 ulp to 0.52 (the attempt's model: 0.511 against
+0.516 ulp). Accepted under the 2026-10-30 rule. Logs and disassemblies: `~/stt-board` in WSL.
+
 ## sse2 and sse4.2 bodies against the portable loop
 
 `portable@sse2` ms over `sse2@sse2` ms, above 1 the sse2 body faster:
