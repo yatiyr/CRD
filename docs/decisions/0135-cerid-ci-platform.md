@@ -329,6 +329,69 @@ terminal, errors that say what to do next, and bash, zsh and PowerShell completi
 | Notification channels | outbound only, credentials in Secret Manager, once per key, failures never fail a build |
 | The open SSH and RDP defaults of a new project | the runbook removes `default-allow-ssh` and `default-allow-rdp`; SSH to the launcher goes through IAP |
 
+## §17 Amendment (2026-10-31): failure diagnostics and gold images
+
+The user ordered on 2026-10-31: "do it I want the full CI system available!"
+([session, verbatim](../sessions/2026-10-31-ci-diag-visual.md#user-order)), relayed with two scopes: the engine's
+diagnostics hooked into every failed job, with a local reproduction command, and golden-image visual testing in the
+spirit of Skia Gold. No engine code changes; what the engine must add is named by row in the session note.
+
+**Failure diagnostics (CI-1).** A failed lane collects, before its upload (a phase that always runs), the files the
+run left that the engine's diagnostics define (runtime-diagnostics.md, diagnostic-runbooks.md): cerid-diagnostics/1
+bundles and flight records, crash records, raw dumps, CEIR run records, Perfetto and CPROF captures, plus the
+sanitizer reports and validation-layer messages cut out of the test output per test, and a summary naming the failed
+phase, the failed tests, the CPU level and the exact test command. Only files newer than the lane's start count, so
+a long-lived machine never reports an earlier run's. Artifacts carry a kind (by an explicit `--kind` or by their
+`diagnostics/<kind>/` path); the build, job and QUAL pages link them from the failed cell. `ops.py job reproduce`
+downloads them with the job's reproducibility record (each checked against its SHA-256) and prints the exact local
+replay: the commit in its own worktree, the lane as CI ran it with the failed tests only, the failed tests at the
+job's CPU level, and each diagnostic's reader; `--run` runs the worktree and lane steps, never in the current
+checkout.
+
+*Privacy, following the engine's redaction contract (`crd/core/redaction.hpp`; ADR-0133 ID-8: a raw dump is never
+declared redacted).* A raw memory dump of a test process holds its environment, and so the job's secrets: raw dumps
+(minidumps, GPU dumps, cores) are withheld unless the device's cell opts in (`"diagnostics": {"raw_dumps": true}`,
+for an owned machine whose jobs carry no secret), and a bundle's RawDump section becomes an explicit absent section
+with the bundle's checksums rewritten. Every text item has the job's secret values replaced. The agent, which alone
+holds the values, scrubs every artifact it uploads (UTF-8 and UTF-16 spellings): text is redacted, a bundle's
+sections are redacted and rewritten, and any other binary that carries a value is withheld with a line in the log.
+A withheld item stays in the summary by kind, size and SHA-256, never silently. Before this amendment artifacts were
+uploaded unscrubbed; that defect is fixed with a test.
+
+**Gold images (CI-3).**
+
+| Part | Decision |
+|---|---|
+| Input | a `cerid-gold/1` manifest beside the PNGs in `<build>/gold/` (test name, file, API, backend, feature, CPU level), uploaded by the lane; Firebase Test Lab screenshots get the same manifest from the downloaded results tree |
+| Identity | the digest of the pixels (SHA-256 of the size and RGBA8 data), so re-encoding is the same image; stored once |
+| Keys | test, device, device class (GPU vendor and device kind), vendor, kind, API, backend, CPU level, feature, commit, build |
+| Baselines | per grouping: the test plus the keys the policy names (`api` by default; `device_class` or `device` where a test declares that baselines differ, as app-launch screenshots do); any number of positive digests |
+| Exact | the device's GPU is a software renderer (lavapipe, WARP, SwiftShader): only an approved digest passes |
+| Perceptual | real GPUs and phones: LDR-FLIP at the device's pixels per degree (screen density at its kind's viewing distance; 67 otherwise) and SSIM against the newest positives; within all of the test's tolerances (mean FLIP, the share of pixels over a FLIP threshold, minimum SSIM) it passes, and says so; the pass lasts only while that baseline stays approved |
+| Never a pass by default | an untriaged or not yet compared image marks its cell needs triage; a rejected or unreadable image, a bad manifest or a missing file fails it |
+| Triage | approve or reject (or reset) by compare-and-swap with the label the person saw; audited; a reject writes a finding with the ROADMAP text its owner files and notifies; a new baseline re-compares the grouping's untriaged images |
+| Policy | `ci/gold.json` in the repository, reviewed like code: defaults, per-test overrides by pattern, viewing distances |
+
+*Comparison in the standard library.* FLIP (the reference algorithm, NVlabs/flip, BSD-3-Clause, written again) and
+SSIM are pure Python with separable Gaussians: 512 x 512 takes about 7 s for both on the development host, so the
+comparison runs on its own worker thread beside the coordinator's loop and never delays dispatch; an image over the
+policy's pixel budget is compared box-downsampled by a declared integer factor with the pixels per degree divided by
+it. A NumPy pin was considered and rejected: it would add a binary dependency to the launcher for a workload this
+small, and the engine's own metric (IMG-ORACLE: HDR-FLIP and a ColorVideoVDP-class metric in crd-hesap) is the one
+renderer rows qualify against; the CI cross-checks with it when it lands and with NVIDIA's reference tool when the
+user approves its download (a test runs when `CERID_FLIP_REFERENCE` names its output).
+
+**Security review, additions to §14.**
+
+| Threat | Mitigation |
+|---|---|
+| A secret value in an uploaded artifact | the agent scrubs every upload (UTF-8 and UTF-16), rewrites bundles, withholds other binaries (tested against the previous agent, which leaked) |
+| Raw memory leaving the machine | withheld unless the device opts in; RawDump bundle sections made absent; a dump holding a secret value is withheld even then |
+| A crafted bundle or PNG | the readers bound every length, check every CRC, recover only complete prefixes, refuse palette, 16-bit and interlaced PNGs, and cap the pixel count |
+| A crafted manifest | test names and file names are validated (no `..`, no absolute path); images are read only from the job's own artifacts |
+| A stale or forged triage | triage needs a signed-in UI user and the request header; it applies only if the label is still the one the person saw |
+| Untrusted text in summaries | everything an artifact supplies is escaped before display |
+
 ## Consequences
 
 - One registry, one planner, one coordinator and one agent cover cloud and owned machines; buying hardware is adding

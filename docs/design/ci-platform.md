@@ -179,6 +179,9 @@ the IAP tunnel's local end) and on its internal address (the IAP tunnel and the 
 | `bisect/<id>.json` | first-bad-commit searches: range, re-runs, result |
 | `notified/<hash>.json` | each notification's key, so none is sent twice |
 | `metrics/queue/<date>.json`, `metrics/ticks/<date>.json` | queue-time samples and ticked minutes (the SLOs) |
+| `gold/results/<build>/<job>-<attempt>-<hash>.json`, `gold/pending.json`, `gold/index.json` | each job's gold images (keys, digest, grouping, mode, tolerances, comparison), the results still to compare and the newest 500 |
+| `gold/blobs/<digest>.png`, `gold/diffs/<approved>-<new>-<key>.json` and `.png` | images by pixel digest; each comparison's metrics and FLIP heatmap |
+| `gold/expectations/<grouping>.json`, `gold/findings/<id>.json` | the positive and negative digests of a grouping (who, when, note); rejected images' findings |
 
 Lanes also write `test-runs/<preset>@<device>/<build>.json` in the result store: every test's outcome, duration and
 key of that run, the source of the per-test history, flaky detection and bisection.
@@ -186,7 +189,7 @@ key of that run, the source of the per-test history, flaky detection and bisecti
 ### Operations
 
 `ci/ops.py` is noun-verb: `ui`, `status`, `health`, `cost`, `slo`, `build list|show|start|cancel`,
-`job show|logs|retry|cancel`, `agent list|stop`, `token create|revoke`, `queue list`, `test list|history|flaky`,
+`job show|logs|retry|cancel|reproduce`, `agent list|stop`, `token create|revoke`, `queue list`, `test list|history|flaky`,
 `quarantine list|release`, `bisect list`, `audit list`, `notify test`, `backup create|restore`, `retention run`,
 `device add|bake|list`, `accounts`, `parity`, `completion bash|zsh|powershell`. Every command takes `--json`;
 human output is coloured only on a terminal; an error names the next step and exits 2. They act on the same state as
@@ -205,6 +208,53 @@ and annotated. The tests that passed in the lane's previous run on the branch an
 together: the recorded runs narrow it, then up to three re-runs of those tests alone on the middle commit
 (`pipeline.py lane --tests`); at most two bisections run at once, the rest wait `queued`.
 
+<a id="failure-diagnostics"></a>
+### Failure diagnostics
+
+[diagnostics.py](../../ci/coordinator/diagnostics.py) (ADR-0135 §17). A failed lane's `upload` phase collects what
+the run left (files newer than its start, in the build tree and the temporary directory) and writes
+`<build dir>/diagnostics/<kind>/<name>` and `summary.json` (`cerid-ci-diagnostics/1`: preset, device, commit, job,
+failed phase, CPU level, failed tests, the exact CTest command, items with kind, size, SHA-256, test and why one was
+withheld). Kinds: `crash-bundle` (`*.cdb`), `flight-record` (`flight-<n>.cdb`), `crash-record` (`crash_*.log`),
+`crash-dump`, `gpu-dump` and `core-dump` (raw memory: `crash_*.dmp`, `gpu_*.dmp`, `core`), `replay-record` (`*.crpl`),
+`perfetto-trace` (`*.perfetto.json`, `*.pftrace`), `profile-capture` (`*.cprof`), `sanitizer-report` (ASan, LSan,
+TSan, UBSan and MSan reports cut out of `LastTest*.log` per test), `gpu-validation` (Vulkan validation, D3D12 debug
+layer and Metal API validation messages per test) and `summary`. Every artifact entry carries a kind: the agent's
+`--kind`, else the `diagnostics/<kind>/` path, else the file name. Raw memory is withheld unless the device's cell
+says `"diagnostics": {"raw_dumps": true}`; a bundle's RawDump section becomes an explicit absent one; text has the
+job's secret values replaced, and the agent scrubs every upload again (it alone holds the values). The build page
+shows a chip per kind on the failed step, the job page a Diagnostics card with the reproduce command, the QUAL cell's
+drawer the kinds and the job (the result record's `job_id`, `failed_phase`, `diagnostics`).
+`python ci/ops.py job reproduce <id>` downloads the newest attempt's diagnostics (SHA-256 checked) and the
+reproducibility record into `build/ci-repro/<build>-<step>/` and prints the commit's worktree, the lane with the
+failed tests only, the failed tests at the job's CPU level and each diagnostic's reader; `--run` runs the first two.
+
+<a id="gold-images"></a>
+### Gold images
+
+[gold.py](../../ci/coordinator/gold.py), [image.py](../../ci/coordinator/image.py), policy
+[ci/gold.json](../../ci/gold.json) (ADR-0135 §17). A job uploads `<build dir>/gold/manifest.json`:
+
+```json
+{"schema": "cerid-gold/1", "images": [{"test": "render.triangle", "file": "render.triangle.png", "api": "Vulkan",
+  "backend": "lavapipe", "feature": "vulkan", "cpu_level": "avx2"}]}
+```
+
+(`file` relative to the manifest, 8-bit RGB or RGBA PNG; `api`, `backend`, `feature` and `cpu_level` default from the
+device and the job). The manifest's arrival records a pending result; once the job is over the gold worker (its own
+thread, every 30 s) reads each image, stores it by pixel digest and compares it within its grouping (the test plus
+the policy's `group_by` keys). A positive digest passes and a negative fails; otherwise a software GPU needs triage,
+and a real GPU or phone passes when mean FLIP, the share of pixels over `flip_pixel` and SSIM are all within the
+test's tolerances against the closest of the grouping's three newest positives, else needs triage. The QUAL cell of
+the job's device and the image's feature reads needs triage while an image is untriaged or not compared, and fail for
+a rejected or unreadable image. Firebase Test Lab: `FirebaseTestLab.results_command` downloads a test's results from
+`CERID_FTL_RESULTS_BUCKET`, `python ci/coordinator/gold.py ftl-manifest --results DIR --device ID --out
+build/ftl-<device>/gold` writes the manifest (`app-launch.<screenshot>`), and the device's `screen` gives the pixels
+per degree. `python ci/coordinator/gold.py compare A.png B.png [--ppd N] [--heatmap D.png]` compares two files
+locally. API: `GET /api/gold` (the queue and the findings), `GET /api/gold/image/<digest>`,
+`GET /api/gold/diff/<approved>/<new>/<key>`, `POST /api/gold/triage` (`grouping`, `digest`, `expected`, `label`,
+`note`; 409 when the label changed).
+
 <a id="the-web-ui"></a>
 ### The web UI
 
@@ -212,11 +262,14 @@ together: the recorded runs narrow it, then up to three re-runs of those tests a
 style). Pages: Builds, a build (status first, then what failed with the first error highlighted and jump-to-error,
 then the step graph, steps, annotations and artifacts), a job's log (live tail, ANSI colours, search with next and
 previous, follow, wrap, download, the reproducibility record), the QUAL matrix (filters, sticky headers, per-cell
-drill-down, legend), Test quality (failing, quarantined, first bad commit, flaky, per-test history), Spend (cap, the
+drill-down, legend, needs-triage cells), Gold images (the triage queue; approved, new and FLIP difference side by
+side with synchronised scrolling, blink, zoom, the metrics against the tolerances, approve and reject), Test quality
+(failing, quarantined, first bad commit, flaky, per-test history), Spend (cap, the
 forecast, six months, breakdowns), Agents and queues, Operations (SLOs, the audit log). Design system: tokens for
 colour, space, type, radius and motion; light and dark following the OS and switchable; status always an icon and a
 word; WCAG 2.2 AA contrast held by a test; focus rings, skip link, landmarks, live announcements, reduced motion;
-keyboard shortcuts (`g` then `b m t s a o` for the pages, `j/k`, `/`, `e`, `n/N`, `f`, `?`); layouts down to phone
+keyboard shortcuts (`g` then `b m i t s a o` for the pages, `j/k`, `/`, `e`, `n/N`, `f`, `?`; on Gold images `a`,
+`r`, `b`, `+`, `-`, `0`); layouts down to phone
 width; designed empty, loading and error states. Live updates by Server-Sent Events (`/api/stream`). The pure
 functions (ANSI, the first error, log chunks, the matrix filters, status) are tested under Node.js.
 `python ci/coordinator/demo.py serve` shows it with labelled fixture data.
