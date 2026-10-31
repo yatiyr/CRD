@@ -218,9 +218,10 @@ ssh_l() { gcloud compute ssh cerid-ci-launcher --zone=$ZONE --tunnel-through-iap
 ssh_l 'sudo apt-get update -q && sudo apt-get install -y -q git python3 python-is-python3 && \
   (id cerid-ci >/dev/null 2>&1 || sudo useradd --system --create-home --home-dir /var/lib/cerid-ci cerid-ci) && \
   sudo install -d -o cerid-ci -g cerid-ci -m 0700 /etc/cerid-ci /var/lib/cerid-ci/mirror'
-ssh_l "set -e; T=\$(gcloud secrets versions access latest --secret=cerid-gitlab-deploy-token --project=$PROJECT); \
-  umask 077; printf 'https://%s:%s@%s\n' \"\$(echo $DEPLOY_USER | sed 's/+/%2B/')\" \"\$T\" \"\$(echo $REPO | cut -d/ -f3)\" | \
-  sudo -u cerid-ci tee /var/lib/cerid-ci/.git-credentials >/dev/null; sudo -u cerid-ci git config --global credential.helper store"
+ssh_l "set -e; cd /tmp; sudo -u cerid-ci git config --global credential.helper store; \
+  T=\$(gcloud secrets versions access latest --secret=cerid-gitlab-deploy-token --project=$PROJECT); \
+  printf 'protocol=https\nhost=%s\nusername=%s\npassword=%s\n\n' \"\$(echo $REPO | cut -d/ -f3)\" '$DEPLOY_USER' \"\$T\" | \
+  sudo -u cerid-ci git credential approve; sudo -u cerid-ci git ls-remote -q $REPO HEAD >/dev/null && echo ok"
 ```
 
 The token stays on the launcher, readable by `cerid-ci` only (mode 0600); the coordinator's mirror fetches with

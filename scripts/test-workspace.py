@@ -581,6 +581,19 @@ class EndToEndTests(unittest.TestCase):
         self.assertIn('refs/heads/feature', host_refs)
         self.assertIn('refs/heads/leak', self.latest('code')[1]['refs'], 'the private NAS bundle has it')
 
+    def test_a_refused_current_branch_stays_off_the_code_hosts_when_nothing_else_is_pushed(self):
+        root = self.a.root
+        git('branch', '--quiet', '-D', 'feature', cwd=root)
+        git('tag', '-d', 'v1', 'backup-before-strip', cwd=root)
+        (root / 'notes.txt').write_text('remote = ' + FAKE['credentials in a URL'] + '\n')
+        git('add', 'notes.txt', cwd=root)
+        git('commit', '--quiet', '-m', 'a URL with credentials', cwd=root)
+        report, text = self.sync(self.a)
+        self.assertEqual(report.errors, 1, text)
+        self.assertIn('main not pushed: new commits add text shaped like: credentials in a URL', text)
+        self.assertNotIn('refs/heads/main', ws_mod.ls_remote(self.host),
+                         'an empty refspec list must not fall back to pushing the current branch')
+
     def test_a_commit_that_untracks_agent_files_reaches_the_code_hosts(self):
         root = self.a.root
         git('checkout', '--quiet', '-b', 'cleanup', cwd=root)

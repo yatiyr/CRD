@@ -1198,6 +1198,10 @@ def push_code_remote(ws, remote, report):
         else:
             spec.append(f'{ref}:{ref}')
     spec += [f'{ref}:{ref}' for ref in sorted(local_refs(ws.root, ('refs/tags',))) if not remote_excluded(ws, ref)]
+    if not spec:
+        # A bare 'git push' would push the current branch (push.default), refused or not.
+        report.add(f'code->{remote}', 'nothing to push')
+        return
     result = git('push', '--porcelain', remote, *spec, cwd=ws.root, check=False)
     lines = result.stdout.decode('utf-8', errors='replace').splitlines()
     for line in lines:
