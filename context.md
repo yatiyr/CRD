@@ -5,7 +5,7 @@
 
 <!-- current-slice: SIMD-DISPATCH -->
 **Current work:** [SIMD-DISPATCH](docs/ROADMAP.md#slice-simd-dispatch) (Partial): the row-close boards
-after fft and gemm (sell, permute, sse2 bodies, jobs retune).
+after fft, gemm, sell and permute (sse2 bodies, jobs retune, fft f32 against MKL).
 [DIAG.11b](docs/ROADMAP.md#slice-diag.11b): user re-record (8). [DIAG.11c](docs/ROADMAP.md#slice-diag.11c),
 [DIAG.12](docs/ROADMAP.md#slice-diag.12): final complete-tier run.
 Local routes: cached trees, WSL mirror, mold links, bounded waits ([build performance](docs/design/build-performance.md)).
