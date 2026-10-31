@@ -21,6 +21,7 @@
 // inventing a language: a new technique = a CKIR shader + a graph node, and a new MECHANIC = a registered
 // executor — none of them an engine-enum edit, all of them assets.
 
+#include <crd/core/fnv1a.hpp>
 #include <crd/gpu/frame_graph.hpp>   // FgImageFormat — the API-neutral format enum the asset reuses
 #include <crd/gpu/raster_context.hpp> // DepthCompare — likewise
 #include <crd/renderpass/executor_registry.hpp> // RAF-12.3: ExecutorTypeId — a pass' cooked MECHANIC
@@ -52,18 +53,11 @@ namespace detail
 {
 // constexpr FNV-1a of an executor name — the SAME algorithm + constants as `crd::containers::fnv1a_64` (which
 // `crd::renderpass::executor_type_id` runs), so a cook-time id equals a record-time id (gated in test_frame_asset).
-// Spelled inline over `char` rather than calling `fnv1a_64` because the latter's `void*`→`u8*` cast is not a
-// constant expression — a real MSVC constexpr rejection, not a style choice.
+// crd-core's text form of FNV-1a is a constant expression, so the executor ids are compile-time constants.
 template <crd::usize N>
 [[nodiscard]] constexpr crd::renderpass::ExecutorTypeId exec_id(const char (&s)[N]) noexcept
 {
-    crd::u64 h = 0xcbf29ce484222325ULL; // FNV-1a 64-bit offset basis
-    for (crd::usize i = 0; i < N - 1U; ++i)
-    {
-        h ^= static_cast<crd::u64>(static_cast<crd::u8>(s[i]));
-        h *= 0x00000100000001B3ULL; // FNV-1a 64-bit prime
-    }
-    return crd::renderpass::ExecutorTypeId{h};
+    return crd::renderpass::ExecutorTypeId{crd::fnv1a_64(s, N - 1U)};
 }
 } // namespace detail
 

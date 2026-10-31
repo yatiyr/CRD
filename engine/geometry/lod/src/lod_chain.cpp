@@ -1,5 +1,6 @@
 // lod_chain.cpp — REN-40-C1. See lod_chain.hpp for the design and the numbers.
 
+#include <crd/core/fnv1a.hpp>
 #include <crd/lod/lod_chain.hpp>
 
 #include <crd/containers/array.hpp>
@@ -137,15 +138,10 @@ void build_weld_groups(const crd::containers::Array<V3>& pos, crd::containers::A
     {
         crd::i32 k[3]{};
         key_of(pos[v], k);
-        crd::u32 h = 2166136261U; // FNV-1a over the three integer coordinates
+        crd::u32 h = crd::kFnv1a32Offset; // FNV-1a over the three integer coordinates
         for (const crd::i32 c : k)
         {
-            const auto uc = static_cast<crd::u32>(c);
-            for (crd::u32 b = 0; b < 4U; ++b)
-            {
-                h ^= (uc >> (b * 8U)) & 0xFFU;
-                h *= 16777619U;
-            }
+            h = crd::fnv1a_32_le(c, h);
         }
         crd::usize i = static_cast<crd::usize>(h) & (cap - 1U);
         crd::u32   found = 0xFFFFFFFFU;

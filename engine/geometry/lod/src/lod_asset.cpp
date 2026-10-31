@@ -1,5 +1,6 @@
 // lod_asset.cpp — REN-40-C1. See lod_asset.hpp for why the policy is a file.
 
+#include <crd/core/fnv1a.hpp>
 #include <crd/lod/lod_asset.hpp>
 
 #include <crd/toml/toml.hpp>
@@ -254,7 +255,7 @@ void write_lod_toml(const LodPolicy& policy, crd::containers::String& out)
 
 crd::u64 lod_policy_identity(const LodPolicy& policy) noexcept
 {
-    crd::u64 h = 0xCBF29CE484222325ULL;
+    crd::u64 h = crd::kFnv1a64Offset;
     hash_u64(h, policy.extra_levels);
     hash_f32(h, policy.boundary_weight);
     // ⛔ It changes the COOKED CHAIN — how many levels exist at all — so it changes the identity.

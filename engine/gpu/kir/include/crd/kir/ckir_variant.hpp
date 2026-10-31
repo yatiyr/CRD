@@ -25,10 +25,12 @@
 // ONE by content hash. What other engines hand-engineer as "depth-only permutations" falls out of lowering plus a
 // hash, because we compose in an IR rather than in text. `dedup_ratio()` measures it instead of asserting it.
 
+#include <crd/core/fnv1a.hpp>
 #include <crd/kir/ckir_serialize.hpp>
 #include <crd/kir/ckir_technique.hpp>
 
 #include <crd/containers/array.hpp>
+#include <crd/containers/string_view.hpp>
 
 namespace crd::kir::technique
 {
@@ -53,16 +55,10 @@ struct VariantKey
 
 namespace detail
 {
-inline constexpr crd::u64 kFnvOffset = 14695981039346656037ULL;
-inline constexpr crd::u64 kFnvPrime  = 1099511628211ULL;
-
+// Every field folds as eight little-endian bytes (crd-core's FNV-1a), whatever its own width: the lookup key.
 inline void hash_u64(crd::u64& h, crd::u64 v) noexcept
 {
-    for (int i = 0; i < 8; ++i)
-    {
-        h ^= (v >> (i * 8)) & 0xFFULL;
-        h *= kFnvPrime;
-    }
+    h = crd::fnv1a_64_le(v, h);
 }
 } // namespace detail
 
@@ -71,7 +67,7 @@ inline void hash_u64(crd::u64& h, crd::u64 v) noexcept
 // hashes must never be conflated.
 [[nodiscard]] inline crd::u64 variant_key_hash(const VariantKey& k) noexcept
 {
-    crd::u64 h = detail::kFnvOffset;
+    crd::u64 h = crd::kFnv1a64Offset;
     detail::hash_u64(h, k.material);
     detail::hash_u64(h, k.technique);
     detail::hash_u64(h, static_cast<crd::u64>(k.pass));
@@ -91,13 +87,7 @@ inline void hash_u64(crd::u64& h, crd::u64 v) noexcept
 [[nodiscard]] inline crd::u64 graph_content_hash(const KGraph& g, const KEntry& e, crd::memory::IAllocator* a)
 {
     const crd::containers::Array<crd::u8> bytes = serialize_graph(g, e, a);
-    crd::u64                              h     = detail::kFnvOffset;
-    for (crd::usize i = 0; i < bytes.size(); ++i)
-    {
-        h ^= bytes[i];
-        h *= detail::kFnvPrime;
-    }
-    return h;
+    return crd::fnv1a_64(bytes.data(), bytes.size());
 }
 
 // ── Declaring the matrix ────────────────────────────────────────────────────────────────────────────────────
@@ -259,12 +249,9 @@ struct VariantRequest
         {
             VariantKey key;
             key.material  = req.material_id;
-            key.technique = 0;
-            for (const char* p = req.tech->name; p != nullptr && *p != '\0'; ++p)
-            {
-                key.technique ^= static_cast<crd::u64>(static_cast<unsigned char>(*p));
-                key.technique *= detail::kFnvPrime;
-            }
+            // FNV-1a of the technique name seeded from 0, not the offset basis: the cooked keys predate the owner.
+            const crd::containers::StringView tech_name = req.tech->name != nullptr ? req.tech->name : "";
+            key.technique = crd::fnv1a_64(tech_name.data(), tech_name.size(), 0U);
             key.pass      = req.passes[pi];
             key.alpha     = req.alpha;
             key.shading   = req.shading;

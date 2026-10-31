@@ -3,6 +3,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/core/assert.hpp>
+#include <crd/core/fnv1a.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/tensor/io.hpp>
 #include <crd/hesap/tensor/tensor.hpp>
@@ -41,9 +42,12 @@ namespace crd::hesap::resources
 // -----------------------------------------------------------------------
 
 // CRDR type + chunk FourCCs.
+// NOLINTBEGIN(readability-identifier-naming) - the repo-wide kFourCC_<MNEMONIC> convention: the suffix IS the
+// four-character code, verbatim (crd/resources/crdr.hpp).
 inline constexpr crd::u32 kFourCC_TNSR = crd::resources::make_fourcc('T', 'N', 'S', 'R'); // container type
 inline constexpr crd::u32 kFourCC_TNHD = crd::resources::make_fourcc('T', 'N', 'H', 'D'); // header
 inline constexpr crd::u32 kFourCC_TNVL = crd::resources::make_fourcc('T', 'N', 'V', 'L'); // values
+// NOLINTEND(readability-identifier-naming)
 
 namespace tensordetail
 {
@@ -52,13 +56,7 @@ namespace tensordetail
 // construction sparse_pattern.cpp uses for topology_hash).
 [[nodiscard]] inline crd::u64 fnv1a_bytes(crd::containers::ConstSpan<crd::u8> bytes) noexcept
 {
-    crd::u64 h = 0xCBF29CE484222325ULL;
-    for (const crd::u8 b : bytes)
-    {
-        h ^= b;
-        h *= 0x00000100000001B3ULL;
-    }
-    return h;
+    return crd::fnv1a_64(bytes.data(), bytes.size());
 }
 
 } // namespace tensordetail

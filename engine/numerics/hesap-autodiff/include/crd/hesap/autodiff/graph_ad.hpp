@@ -9,6 +9,7 @@
 // identical to the interpreter). ADR-0081 (hot-reload cells) / ADR-0097.
 
 #include <crd/containers/array.hpp>
+#include <crd/core/fnv1a.hpp>
 #include <crd/core/types.hpp>
 #include <crd/math/cmath.hpp>
 #include <crd/memory/allocator.hpp>
@@ -261,8 +262,8 @@ private:
     }
     static crd::u64 key_hash(const GNode& g) noexcept
     {
-        crd::u64 h = 1469598103934665603ULL;
-        auto     mix = [&](crd::u64 v) { h ^= v; h *= 1099511628211ULL; };
+        crd::u64 h   = crd::kFnv1a64Offset;
+        auto     mix = [&](crd::u64 v) { h = crd::fnv1a_64_word(v, h); };
         mix(static_cast<crd::u64>(g.op));
         mix(static_cast<crd::u64>(static_cast<crd::u32>(g.a)));
         mix(static_cast<crd::u64>(static_cast<crd::u32>(g.b)));

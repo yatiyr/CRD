@@ -1,4 +1,5 @@
 #include <crd/core/assert.hpp>
+#include <crd/core/fnv1a.hpp>
 #include <crd/log/log.hpp>
 #include <crd/memory/alignment.hpp>
 #include <crd/memory/checked_math.hpp>
@@ -192,11 +193,10 @@ StackId DiagnosticAllocator::intern_current_stack(void* caller) noexcept
     {
         return kNullStackId;
     }
-    crd::u64 hash = 1469598103934665603ULL; // FNV-1a over the PCs
+    crd::u64 hash = crd::kFnv1a64Offset; // one FNV-1a word step per PC
     for (crd::u32 i = 0U; i < n; ++i)
     {
-        hash ^= reinterpret_cast<std::uintptr_t>(pcs[i]);
-        hash *= 1099511628211ULL;
+        hash = crd::fnv1a_64_word(static_cast<crd::u64>(reinterpret_cast<std::uintptr_t>(pcs[i])), hash);
     }
     for (crd::u32 i = 1U; i < m_stack_count; ++i) // dedup against interned stacks (0 reserved)
     {

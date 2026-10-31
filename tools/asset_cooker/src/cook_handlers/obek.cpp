@@ -16,6 +16,7 @@
 //   v1m3d — `overrides = [...]` cook-time override patches + OOVR chunk.
 
 #include <crd/cooker/obek_cooker.hpp>
+#include <crd/core/fnv1a.hpp>
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/hash_map.hpp>
@@ -231,19 +232,6 @@ struct EntityNamePair
         }
     }
     return nullptr;
-}
-
-[[nodiscard]] crd::u64 fnv1a_64_bytes(const char* data, crd::usize size) noexcept
-{
-    constexpr crd::u64 prime  = 1099511628211ULL;
-    constexpr crd::u64 offset = 14695981039346656037ULL;
-    crd::u64 h = offset;
-    for (crd::usize i = 0; i < size; ++i)
-    {
-        h ^= static_cast<crd::u8>(data[i]);
-        h *= prime;
-    }
-    return h;
 }
 
 // One queued OCHN entry for the cooker. Path is owned to outlive the
@@ -525,7 +513,7 @@ namespace
                        line_of(*ext));
             return false;
         }
-        const crd::u64 path_hash = fnv1a_64_bytes(ext_sv->data(), ext_sv->size());
+        const crd::u64 path_hash = crd::fnv1a_64(ext_sv->data(), ext_sv->size());
         for (crd::u64 h : rc.visited_path_hashes)
         {
             if (h == path_hash)
@@ -554,7 +542,7 @@ namespace
                        line_of(*ext));
             return false;
         }
-        step.content_hash = fnv1a_64_bytes(step.text.c_str(), step.text.size());
+        step.content_hash = crd::fnv1a_64(step.text.c_str(), step.text.size());
         iter_text = std::string_view{step.text.c_str(), step.text.size()};
         ancestors.push_back(std::move(step));
     }
@@ -692,7 +680,7 @@ void apply_table_to_world(const crd::toml::node& root, RecCtx& rc)
             }
             else
             {
-                const crd::u64 path_hash = fnv1a_64_bytes(obek_path_sv->data(), obek_path_sv->size());
+                const crd::u64 path_hash = crd::fnv1a_64(obek_path_sv->data(), obek_path_sv->size());
                 bool already_visited = false;
                 for (crd::u64 h : rc.visited_path_hashes)
                 {
@@ -727,7 +715,7 @@ void apply_table_to_world(const crd::toml::node& root, RecCtx& rc)
                     else
                     {
                         const crd::u64 nested_hash =
-                            fnv1a_64_bytes(nested_text.c_str(), nested_text.size());
+                            crd::fnv1a_64(nested_text.c_str(), nested_text.size());
 
                         // Save + clear the parent's name table so nested entity
                         // names are scoped to the nested öbek (don't leak into

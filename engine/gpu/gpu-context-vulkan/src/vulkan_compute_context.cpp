@@ -2,6 +2,7 @@
 // buffers + cached pipelines + a recorder that records copies/barriers/dispatches into one command buffer and submits
 // on the compute queue. The compute layer the geometry-bvh-gpu pipelines migrate onto (off the rendering RHI).
 
+#include <crd/core/fnv1a.hpp>
 #include <crd/gpu/vulkan_compute_context.hpp>
 
 #include "vulkan_execution.hpp"      // DIAG.7c(c): bounded, observed submit and fence wait
@@ -224,10 +225,12 @@ struct VulkanComputeContext::Impl final : public ComputeRecorder
         const int nb = p.nb();
 
         // Hash the dispatch identity from the C++ object addresses (stable across a rep loop) — reuse the memoized set.
-        crd::u64 bh = 1469598103934665603ULL ^ static_cast<crd::u64>(reinterpret_cast<std::uintptr_t>(&pipeline));
+        crd::u64 bh = crd::fnv1a_64_word(static_cast<crd::u64>(reinterpret_cast<std::uintptr_t>(&pipeline)),
+                                          crd::kFnv1a64Offset);
         for (int i = 0; i < nb && i < kMaxBindings; ++i)
         {
-            bh = (bh ^ static_cast<crd::u64>(reinterpret_cast<std::uintptr_t>(bindings[static_cast<crd::usize>(i)]))) * 1099511628211ULL;
+            const auto address = reinterpret_cast<std::uintptr_t>(bindings[static_cast<crd::usize>(i)]);
+            bh                 = crd::fnv1a_64_word(static_cast<crd::u64>(address), bh);
         }
 
         VkDescriptorSet set = VK_NULL_HANDLE;

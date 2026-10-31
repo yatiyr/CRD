@@ -18,6 +18,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/core/assert.hpp>
+#include <crd/core/fnv1a.hpp>
 #include <crd/core/types.hpp>
 #include <crd/math/cmath.hpp>
 #include <crd/memory/allocator.hpp>
@@ -2259,8 +2260,8 @@ private:
 
     [[nodiscard]] static crd::u64 key_hash(const KNode& g, const crd::containers::Array<crd::i32>& pool) noexcept
     {
-        crd::u64 h = 1469598103934665603ULL;
-        const auto mix = [&h](crd::u64 v) { h ^= v; h *= 1099511628211ULL; };
+        crd::u64 h = crd::kFnv1a64Offset;
+        const auto mix = [&h](crd::u64 v) { h = crd::fnv1a_64_word(v, h); };
         mix(static_cast<crd::u64>(g.op));
         // the FULL type participates in the key — two values that differ only in scalar type or form (ivec3 vs vec3,
         // vec4 vs mat2, Light vs Material) must never hash-cons together.

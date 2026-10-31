@@ -1,5 +1,6 @@
 #pragma once
 
+#include <crd/core/fnv1a.hpp>
 #include <crd/core/types.hpp>
 
 #include <cstring>
@@ -27,22 +28,9 @@ constexpr u64 hash_u64(u64 x) noexcept
     return x;
 }
 
-// FNV-1a 64-bit. Not the fastest hash on Earth but stable, simple,
-// header-only-friendly, and good enough for short keys (file paths,
-// identifiers). We can swap in xxhash/wyhash later when profiling demands.
-constexpr u64 fnv1a_64(const void* data, usize n) noexcept
-{
-    constexpr u64 fnv_offset = 0xcbf29ce484222325ULL;
-    constexpr u64 fnv_prime = 0x00000100000001B3ULL;
-    const u8* bytes = static_cast<const u8*>(data);
-    u64 h = fnv_offset;
-    for (usize i = 0; i < n; ++i)
-    {
-        h ^= static_cast<u64>(bytes[i]);
-        h *= fnv_prime;
-    }
-    return h;
-}
+// FNV-1a 64-bit, crd-core's (crd/core/fnv1a.hpp): stable across hosts and good enough for short keys (file paths,
+// identifiers); XXH3 (crd/containers/checksum.hpp) is the fast hash for long inputs.
+using crd::fnv1a_64;
 
 // Convenience wrappers
 inline u64 hash_string(const char* s, usize n) noexcept

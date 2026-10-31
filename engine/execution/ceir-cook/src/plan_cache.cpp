@@ -1,4 +1,5 @@
 #include <crd/ceir/cook/plan_cache.hpp>
+#include <crd/core/fnv1a.hpp>
 
 #include <crd/memory/construct.hpp> // allocate_array_or_fatal (DIAG.3a: a refused copy is fatal, never written through)
 
@@ -6,13 +7,7 @@ namespace crd::ceir::cook
 {
 crd::u64 plan_target(containers::StringView provider_name) noexcept
 {
-    crd::u64 h = 0xcbf29ce484222325ULL; // FNV-1a (the CapabilityId pattern) over the provider name bytes
-    for (crd::usize i = 0; i < provider_name.size(); ++i)
-    {
-        h ^= static_cast<crd::u8>(provider_name[i]);
-        h *= 0x100000001b3ULL;
-    }
-    return h;
+    return crd::fnv1a_64(provider_name.data(), provider_name.size()); // the CapabilityId pattern
 }
 
 namespace

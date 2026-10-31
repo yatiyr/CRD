@@ -1,6 +1,7 @@
 // scene_renderer.cpp — GEO-7 (D-007 row 72): chunk-grain extract → cull → partial upload → vertex-pulling
 // instanced submission. See scene_renderer.hpp for the pipeline + data contract.
 
+#include <crd/core/fnv1a.hpp>
 #include <crd/scenerender/scene_renderer.hpp>
 
 #include <crd/lod/impostor_atlas.hpp>
@@ -528,8 +529,6 @@ namespace
 
 // ── hashing / small helpers ────────────────────────────────────────────────────────────────────────────────────────
 
-constexpr crd::u64 kFnvOffset = 14695981039346656037ULL;
-constexpr crd::u64 kFnvPrime  = 1099511628211ULL;
 
 } // namespace
 
@@ -5533,7 +5532,7 @@ struct ExtractCtx
     SyncStats*                stats = nullptr;
 
     // pass 1 outputs
-    crd::u64 sig       = kFnvOffset;
+    crd::u64 sig       = crd::kFnv1a64Offset;
     bool     any_dirty = false;
 
     // rebuild-pass scratch: per-(chunk × group) run starts
@@ -5546,11 +5545,7 @@ struct ExtractCtx
 // MeshRenderer byte in the world every frame; this is the same FNV over 8 bytes per FACT instead.
 inline void hash_u64_into(crd::u64& h, crd::u64 v) noexcept
 {
-    for (crd::u32 i = 0; i < 8U; ++i)
-    {
-        h ^= (v >> (i * 8U)) & 0xFFULL;
-        h *= kFnvPrime;
-    }
+    h = crd::fnv1a_64_le(v, h);
 }
 
 // resolve-or-create the group for a mesh id (loads the mesh resource; null on load failure)
@@ -7707,17 +7702,16 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
             std::memcpy(&params[kCullArgsHzbSize + 0U], static_cast<const void*>(&hzb_w), 4U);
             std::memcpy(&params[kCullArgsHzbSize + 1U], static_cast<const void*>(&hzb_h), 4U);
             crd::u64 sig = cdst_base;
-            sig          = (sig * 1099511628211ULL) ^ static_cast<crd::u64>(target.height());
-            sig          = (sig * 1099511628211ULL) ^ static_cast<crd::u64>(target.width());
-            sig          = (sig * 1099511628211ULL) ^ static_cast<crd::u64>(impl.csm.map_size);
-            sig          = (sig * 1099511628211ULL) ^ static_cast<crd::u64>(params[kCullArgsBaseRow]);
+            sig          = crd::fnv1a_64_word(static_cast<crd::u64>(target.height()), sig);
+            sig          = crd::fnv1a_64_word(static_cast<crd::u64>(target.width()), sig);
+            sig          = crd::fnv1a_64_word(static_cast<crd::u64>(impl.csm.map_size), sig);
+            sig          = crd::fnv1a_64_word(static_cast<crd::u64>(params[kCullArgsBaseRow]), sig);
             // ⛔ the BIAS joins the change signature: installing a policy with different per-view biases
             // must re-upload, or the selector keeps using the previous policy's pixel heights forever.
-            sig          = (sig * 1099511628211ULL) ^ static_cast<crd::u64>(params[kCullArgsPixelHeight]);
+            sig          = crd::fnv1a_64_word(static_cast<crd::u64>(params[kCullArgsPixelHeight]), sig);
             for (crd::u32 cv = 0; cv < kMaxCascades; ++cv)
             {
-                sig = (sig * 1099511628211ULL)
-                      ^ static_cast<crd::u64>(params[kCullArgsPixelHeight + 1U + cv]);
+                sig = crd::fnv1a_64_word(static_cast<crd::u64>(params[kCullArgsPixelHeight + 1U + cv]), sig);
             }
             if (group.cull_params_sig != sig
                 && impl.raster->upload_storage(*group.cull_args, 0U, params, sizeof(params)))
@@ -8128,11 +8122,7 @@ RenderStats SceneRenderer::render(crd::gpu::IRasterTarget& target, const crd::ma
                 if (fb != nullptr)
                 {
                     // reported ONCE per transition, not once per frame — the step-down is state, not an event
-                    crd::u64 key = 1469598103934665603ULL;
-                    for (const char* p = fb->name.c_str(); *p != '\0'; ++p)
-                    {
-                        key = (key ^ static_cast<crd::u64>(*p)) * 1099511628211ULL;
-                    }
+                    const crd::u64 key = crd::fnv1a_64(fb->name.c_str(), fb->name.size());
                     if (impl.stepdown_logged != key)
                     {
                         impl.stepdown_logged = key;

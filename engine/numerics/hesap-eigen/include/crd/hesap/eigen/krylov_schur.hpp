@@ -16,6 +16,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/core/fnv1a.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/blas1.hpp>
@@ -194,7 +195,7 @@ template <typename T>
             {
                 for (crd::u32 i = 0; i < n; ++i)
                 {
-                    vnext[i] = detail::splitmix_pm1<R>(opts.seed + seed_ctr * 0x100000001B3ULL, i);
+                    vnext[i] = detail::splitmix_pm1<R>(opts.seed + seed_ctr * crd::kFnv1a64Prime, i);
                 }
                 ++seed_ctr;
                 for (int pass = 0; pass < 2; ++pass)
@@ -457,17 +458,17 @@ template <typename T>
         }
         (void)a.apply({xre.data(), n}, {axre.data(), n});
         (void)a.apply({xim.data(), n}, {axim.data(), n});
-        R rn2 = R{0};
+        R res_norm2 = R{0};
         for (crd::u32 i = 0; i < n; ++i)
         {
             const R rr = axre[i] - (th.re * xre[i] - th.im * xim[i]);
             const R ri = axim[i] - (th.re * xim[i] + th.im * xre[i]);
-            rn2 += rr * rr + ri * ri;
+            res_norm2 += rr * rr + ri * ri;
         }
-        const R rn = crd::math::sqrt(rn2);
-        result.residuals[s] = rn;
+        const R res_norm = crd::math::sqrt(res_norm2);
+        result.residuals[s] = res_norm;
         const R sc = detail::cmag<R>(th);
-        if (rn <= tol * (sc > R{1} ? sc : R{1}))
+        if (res_norm <= tol * (sc > R{1} ? sc : R{1}))
         {
             ++nconv;
         }

@@ -5,6 +5,7 @@
 
 #include <crd/gpu/dx12_context.hpp>            // compile_hlsl_to_dxil
 #include <crd/gpu/dx12_ray_tracing_context.hpp>
+#include <crd/renderpass/executor_registry.hpp>
 
 #include <crd/kir/ckir.hpp>
 #include <crd/kir/ckir_asset.hpp> // CEIR-19c: load the AUTHORED rt_witness.ckir (ckir_read)
@@ -1515,16 +1516,10 @@ struct WfHostBuf
     void* host = nullptr;
     crd::u64 bytes = 0U;
 };
-crd::u64
-wf_name_hash(crd::containers::StringView s) // FNV-1a — BYTE-IDENTICAL to crd::framecook's name_hash (source_param).
+// The resource-name identity frame-cook's work extraction writes as source_param: the pass-parameter id.
+crd::u64 wf_name_hash(crd::containers::StringView s)
 {
-    crd::u64 h = 1469598103934665603ULL;
-    for (crd::usize i = 0; i < s.size(); ++i)
-    {
-        h ^= static_cast<crd::u8>(s[i]);
-        h *= 1099511628211ULL;
-    }
-    return h;
+    return crd::renderpass::pass_param_id(s);
 }
 struct WfCtx
 {

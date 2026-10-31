@@ -17,6 +17,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/core/fnv1a.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/blas1.hpp>
@@ -111,7 +112,7 @@ template <typename T>
         T* xj = col(x, j);
         for (crd::u32 i = 0; i < n; ++i)
         {
-            xj[i] = detail::splitmix_pm1<R>(opts.seed + static_cast<crd::u64>(j) * 0x100000001B3ULL, i);
+            xj[i] = detail::splitmix_pm1<R>(opts.seed + static_cast<crd::u64>(j) * crd::kFnv1a64Prime, i);
         }
         // orthonormalize against the kept X columns [0..xcols-1]; place at slot xcols on success.
         if (xcols != j)
@@ -191,9 +192,9 @@ template <typename T>
             {
                 rj[i] = axj[i] - static_cast<T>(theta[j]) * xj[i];
             }
-            const R rn = dn::nrm2<T>({rj, n});
+            const R res_norm = dn::nrm2<T>({rj, n});
             const R sc = crd::math::fabs(theta[j]) > R{1} ? crd::math::fabs(theta[j]) : R{1};
-            const R rel = rn / sc;
+            const R rel = res_norm / sc;
             if (rel <= tol)
             {
                 ++nconv;
@@ -334,16 +335,16 @@ template <typename T>
             vj[i] = sgn * xj[i];
         }
         const T* axj = ccol(ax, j);
-        R rn2 = R{0};
+        R res_norm2 = R{0};
         for (crd::u32 i = 0; i < n; ++i)
         {
             const R e = static_cast<R>(axj[i]) - theta[j] * static_cast<R>(xj[i]);
-            rn2 += e * e;
+            res_norm2 += e * e;
         }
-        const R rn = crd::math::sqrt(rn2);
-        result.residuals[j] = rn;
+        const R res_norm = crd::math::sqrt(res_norm2);
+        result.residuals[j] = res_norm;
         const R sc = crd::math::fabs(theta[j]) > R{1} ? crd::math::fabs(theta[j]) : R{1};
-        if (rn / sc <= tol)
+        if (res_norm / sc <= tol)
         {
             ++nconv;
         }
@@ -389,12 +390,25 @@ template <typename T>
         buf.resize(static_cast<crd::usize>(n) * width);
         return buf;
     };
-    crd::containers::Array<T> x = mk(k), ax = mk(k), bx = mk(k);
-    crd::containers::Array<T> p = mk(k), ap = mk(k), bp = mk(k);
-    crd::containers::Array<T> s = mk(maxcols), as = mk(maxcols), bs = mk(maxcols);
-    crd::containers::Array<T> xn = mk(k), axn = mk(k), bxn = mk(k);
-    crd::containers::Array<T> pn = mk(k), apn = mk(k), bpn = mk(k);
-    crd::containers::Array<T> rblk = mk(k), wv = mk(k), aw = mk(k), bw = mk(k);
+    crd::containers::Array<T> x = mk(k);
+    crd::containers::Array<T> ax = mk(k);
+    crd::containers::Array<T> bx = mk(k);
+    crd::containers::Array<T> p = mk(k);
+    crd::containers::Array<T> ap = mk(k);
+    crd::containers::Array<T> bp = mk(k);
+    crd::containers::Array<T> s = mk(maxcols);
+    crd::containers::Array<T> as = mk(maxcols);
+    crd::containers::Array<T> bs = mk(maxcols);
+    crd::containers::Array<T> xn = mk(k);
+    crd::containers::Array<T> axn = mk(k);
+    crd::containers::Array<T> bxn = mk(k);
+    crd::containers::Array<T> pn = mk(k);
+    crd::containers::Array<T> apn = mk(k);
+    crd::containers::Array<T> bpn = mk(k);
+    crd::containers::Array<T> rblk = mk(k);
+    crd::containers::Array<T> wv = mk(k);
+    crd::containers::Array<T> aw = mk(k);
+    crd::containers::Array<T> bw = mk(k);
     auto col = [&](crd::containers::Array<T>& buf, crd::u32 j) noexcept -> T* {
         return buf.data() + static_cast<crd::usize>(j) * n;
     };
@@ -433,7 +447,7 @@ template <typename T>
         T* sj = col(s, xcols);
         for (crd::u32 i = 0; i < n; ++i)
         {
-            sj[i] = detail::splitmix_pm1<R>(opts.seed + static_cast<crd::u64>(j) * 0x100000001B3ULL, i);
+            sj[i] = detail::splitmix_pm1<R>(opts.seed + static_cast<crd::u64>(j) * crd::kFnv1a64Prime, i);
         }
         (void)b.apply({sj, n}, {col(bs, xcols), n}); // B·x (A-image not needed for the X ortho)
         for (crd::u32 i = 0; i < n; ++i)
@@ -512,9 +526,9 @@ template <typename T>
             {
                 rj[i] = axj[i] - static_cast<T>(theta[j]) * bxj[i];
             }
-            const R rn = dn::nrm2<T>({rj, n});
+            const R res_norm = dn::nrm2<T>({rj, n});
             const R den = dn::nrm2<T>({axj, n}) + crd::math::fabs(theta[j]) * dn::nrm2<T>({bxj, n});
-            if (rn <= tol * (den > R{0} ? den : R{1}))
+            if (res_norm <= tol * (den > R{0} ? den : R{1}))
             {
                 ++nconv;
             }
@@ -661,21 +675,21 @@ template <typename T>
         }
         const T sgn = (xj[imax] < T{0}) ? T{-1} : T{1};
         T* vj = result.vectors.data() + static_cast<crd::usize>(j) * n;
-        R rn2 = R{0};
+        R res_norm2 = R{0};
         R an2 = R{0};
         R bn2 = R{0};
         for (crd::u32 i = 0; i < n; ++i)
         {
             vj[i] = sgn * xj[i];
             const R e = static_cast<R>(axj[i]) - theta[j] * static_cast<R>(bxj[i]);
-            rn2 += e * e;
+            res_norm2 += e * e;
             an2 += static_cast<R>(axj[i]) * static_cast<R>(axj[i]);
             bn2 += static_cast<R>(bxj[i]) * static_cast<R>(bxj[i]);
         }
-        const R rn = crd::math::sqrt(rn2);
-        result.residuals[j] = rn;
+        const R res_norm = crd::math::sqrt(res_norm2);
+        result.residuals[j] = res_norm;
         const R den = crd::math::sqrt(an2) + crd::math::fabs(theta[j]) * crd::math::sqrt(bn2);
-        if (rn <= tol * (den > R{0} ? den : R{1}))
+        if (res_norm <= tol * (den > R{0} ? den : R{1}))
         {
             ++nconv;
         }

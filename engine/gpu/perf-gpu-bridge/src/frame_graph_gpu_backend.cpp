@@ -2,6 +2,7 @@
 // only real work is in resolve_completed_frames(), which walks the last execute's passes and emits a positioned GPU
 // span for each pass whose raw ticks the graph exposes, counting the rest unavailable (never fabricating a begin).
 
+#include <crd/core/fnv1a.hpp>
 #include <crd/perf/gpu/frame_graph_gpu_backend.hpp>
 
 #include <crd/gpu/frame_graph.hpp>
@@ -40,8 +41,7 @@ namespace
 
 void fnv_mix(crd::u64& h, crd::u64 v) noexcept
 {
-    h ^= v;
-    h *= 1099511628211ULL; // FNV-1a prime
+    h = crd::fnv1a_64_word(v, h);
 }
 
 // DIAG.6b(j): the placed total's reduction is the SPAN (first begin -> last end, gaps INCLUDED -- gpu_ms_total's own
@@ -89,7 +89,7 @@ crd::f64 FrameGraphGpuBackend::ns_per_tick() const noexcept
 
 crd::u64 FrameGraphGpuBackend::fingerprint() const noexcept
 {
-    crd::u64       h = 1469598103934665603ULL; // FNV-1a offset basis
+    crd::u64       h = crd::kFnv1a64Offset;
     const crd::u32 n = m_fg.pass_count();
     fnv_mix(h, n);
     for (crd::u32 i = 0U; i < n; ++i)

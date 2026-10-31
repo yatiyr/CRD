@@ -1,5 +1,6 @@
 // RAF-8 (ADR-0106): FrameGraphDesc -> render-graph FrameGraphTemplate. See the header for the contract.
 
+#include <crd/core/fnv1a.hpp>
 #include <crd/framecook/frame_template_bridge.hpp>
 
 namespace crd::framecook
@@ -159,12 +160,8 @@ rg::ResourceLifetime resource_lifetime(FrameResourceKind k) noexcept
 // or scale-relative extent, format, samples, layers for images; the byte size for buffers.
 crd::u64 size_class_of(const FrameResourceDesc& r) noexcept
 {
-    crd::u64 h = 1469598103934665603ULL; // FNV-1a offset
-    const auto mix = [&h](crd::u64 v)
-    {
-        h ^= v;
-        h *= 1099511628211ULL;
-    };
+    crd::u64 h = crd::kFnv1a64Offset;
+    const auto mix = [&h](crd::u64 v) { h = crd::fnv1a_64_word(v, h); };
     if (is_buffer(r.kind))
     {
         const crd::u64 bytes = r.size_bytes != 0U ? r.size_bytes : (static_cast<crd::u64>(r.stride) * r.count);

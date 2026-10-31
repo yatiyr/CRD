@@ -1,4 +1,5 @@
 #include <crd/core/assert.hpp>
+#include <crd/core/fnv1a.hpp>
 #include <crd/memory/construct.hpp>
 #include <crd/scene/sparse_set_storage.hpp>
 
@@ -311,13 +312,7 @@ void SparseSetStorage::insert_shared(EntityId e, ComponentId c, const void* data
 
     // v1m4b3: content-hash dedup. Byte-identical inserts (cross-call too)
     // share ONE pool entry — refcount tracks the share count. FNV-1a 64.
-    crd::u64 hash = 14695981039346656037ULL;
-    const crd::u8* src_bytes = static_cast<const crd::u8*>(data);
-    for (crd::usize i = 0; i < pool.info->size; ++i)
-    {
-        hash ^= src_bytes[i];
-        hash *= 1099511628211ULL;
-    }
+    crd::u64 hash = crd::fnv1a_64(data, pool.info->size);
     // 0 is a sentinel for "no hash" inside the pool (`acquire`-only path);
     // ensure a non-zero hash by setting bit 63 if all bytes happened to mix
     // to 0. Probability is negligible but the sentinel must be unambiguous.

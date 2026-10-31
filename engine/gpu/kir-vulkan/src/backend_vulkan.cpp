@@ -5,6 +5,7 @@
 // (SPIR-V) → cache the pipeline (by GLSL hash) → host-visible in/out buffers → recorder dispatch → readback. `precise`
 // GLSL + sequential order ⇒ bit-matches the CPU reference. ADR-0098 + ADR-0099 + ADR-0100 (one GPU compute manager).
 
+#include <crd/core/fnv1a.hpp>
 #include <crd/kir/vulkan/backend_vulkan.hpp>
 
 #include <crd/kir/ckir_glsl.hpp>
@@ -43,12 +44,7 @@ namespace
 // FNV-1a over the GLSL source — the pipeline-cache key (also caches the GLSL→SPIR-V compile).
 [[nodiscard]] crd::u64 hash_glsl(crd::containers::StringView s) noexcept
 {
-    crd::u64 h = 1469598103934665603ULL;
-    for (crd::usize i = 0; i < s.size(); ++i)
-    {
-        h = (h ^ static_cast<crd::u8>(s[i])) * 1099511628211ULL;
-    }
-    return h;
+    return crd::fnv1a_64(s.data(), s.size());
 }
 
 // Compile GLSL → SPIR-V → get-or-cache the pipeline → N host-visible inputs (upload) + 1 host-visible output → recorder

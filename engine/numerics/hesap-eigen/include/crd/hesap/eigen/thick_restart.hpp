@@ -19,6 +19,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/core/fnv1a.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/dense/blas1.hpp>
 #include <crd/hesap/dense/eig_sym.hpp>
@@ -137,7 +138,7 @@ template <typename T>
                 // Lucky breakdown: re-seed v_{j+1} with a fresh deterministic vector, reorthogonalize.
                 for (crd::u32 i = 0; i < n; ++i)
                 {
-                    vnext[i] = detail::splitmix_pm1<R>(opts.seed + seed_ctr * 0x100000001B3ULL, i);
+                    vnext[i] = detail::splitmix_pm1<R>(opts.seed + seed_ctr * crd::kFnv1a64Prime, i);
                 }
                 ++seed_ctr;
                 for (int pass = 0; pass < 2; ++pass)
@@ -357,15 +358,15 @@ template <typename T>
             dn::scal<T>(static_cast<T>(-R{1}), {x.data(), n});
         }
         (void)a.apply({x.data(), n}, {ax.data(), n});
-        R rn = R{0};
+        R res_norm = R{0};
         for (crd::u32 i = 0; i < n; ++i)
         {
             const R d = static_cast<R>(ax[i]) - th * static_cast<R>(x[i]);
-            rn += d * d;
+            res_norm += d * d;
         }
-        rn = crd::math::sqrt(rn);
-        result.residuals[s] = rn;
-        if (rn <= tol * (crd::math::fabs(th) > R{1} ? crd::math::fabs(th) : R{1}))
+        res_norm = crd::math::sqrt(res_norm);
+        result.residuals[s] = res_norm;
+        if (res_norm <= tol * (crd::math::fabs(th) > R{1} ? crd::math::fabs(th) : R{1}))
         {
             ++nconv;
         }

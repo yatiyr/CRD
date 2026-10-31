@@ -18,6 +18,7 @@
 
 #include <crd/containers/hash_map.hpp>
 #include <crd/core/assert.hpp>
+#include <crd/core/fnv1a.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/scene/obek.hpp>
 #include <crd/scene/relation.hpp>
@@ -267,26 +268,11 @@ template <typename T>
     return pd::check_cycles(registry, res.info.entity_count, res.relations, alloc, refused_fourcc);
 }
 
-// FNV-1a 64 mixing — same family as the rest of Cerid's content hashes
-// (containers::fnv1a_64, used by SceneCooker's name lookup). Re-implemented
-// here over (u64, u32) so make_obek_entity_guid is a pure function not
-// depending on the StringView overload.
+// FNV-1a 64 (crd-core's) over the little-endian bytes of (u64, u32): the same family as the rest of Cerid's content
+// hashes, so make_obek_entity_guid stays a pure function of its two fields.
 [[nodiscard]] constexpr crd::u64 mix_fnv1a_64(crd::u64 a, crd::u32 b) noexcept
 {
-    constexpr crd::u64 prime  = 1099511628211ULL;
-    constexpr crd::u64 k_offset = 14695981039346656037ULL;
-    crd::u64 h = k_offset;
-    for (crd::u32 i = 0; i < 8; ++i)
-    {
-        h ^= static_cast<crd::u8>((a >> (i * 8U)) & 0xFFU);
-        h *= prime;
-    }
-    for (crd::u32 i = 0; i < 4; ++i)
-    {
-        h ^= static_cast<crd::u8>((b >> (i * 8U)) & 0xFFU);
-        h *= prime;
-    }
-    return h;
+    return crd::fnv1a_64_le(b, crd::fnv1a_64_le(a, crd::kFnv1a64Offset));
 }
 
 } // namespace

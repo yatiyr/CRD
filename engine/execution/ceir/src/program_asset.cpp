@@ -1,4 +1,5 @@
 #include <crd/ceir/program_asset.hpp>
+#include <crd/core/fnv1a.hpp>
 
 #include <crd/ceir/attr.hpp>   // AttrValue / AttrKind (sym_name, callee, depth reads)
 #include <crd/ceir/dialect.hpp> // OpInfo (op_info), OpTrait::StateEdge
@@ -14,18 +15,6 @@ namespace crd::ceir
 {
 namespace
 {
-constexpr u64 kFnvOffset = 14695981039346656037ULL;
-constexpr u64 kFnvPrime  = 1099511628211ULL;
-[[nodiscard]] u64 fnv1a(containers::ConstSpan<u8> bytes) noexcept
-{
-    u64 h = kFnvOffset;
-    for (usize i = 0; i < bytes.size(); ++i)
-    {
-        h ^= static_cast<u64>(bytes[i]);
-        h *= kFnvPrime;
-    }
-    return h;
-}
 void push_u32(containers::Array<u8>& out, u32 v)
 {
     out.push_back(static_cast<u8>(v & 0xFFU));
@@ -331,7 +320,7 @@ u64 interface_hash(Context& ctx, const Module& module, memory::IAllocator* scrat
         push_u32(proj, cells[i].depth);
     }
     push_caps_projection(ctx, module, proj, scratch);
-    return fnv1a(containers::ConstSpan<u8>(proj.data(), proj.size()));
+    return crd::fnv1a_64(proj.data(), proj.size());
 }
 
 // §107 CONTRACT HASH (CEIR-10a) — `interface_hash`'s projection MINUS the state schema (funcs + caps only). `interface_hash`
@@ -342,7 +331,7 @@ u64 contract_hash(Context& ctx, const Module& module, memory::IAllocator* scratc
     containers::Array<u8> proj(scratch);
     push_funcs_projection(ctx, module, proj, scratch);
     push_caps_projection(ctx, module, proj, scratch);
-    return fnv1a(containers::ConstSpan<u8>(proj.data(), proj.size()));
+    return crd::fnv1a_64(proj.data(), proj.size());
 }
 
 containers::Array<StateCell> collect_state_schema(Context& ctx, const Module& module, memory::IAllocator* alloc)

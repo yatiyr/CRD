@@ -38,11 +38,14 @@ namespace crd::hesap::resources
 // -----------------------------------------------------------------------
 
 // CRDR type + chunk FourCCs.
+// NOLINTBEGIN(readability-identifier-naming) - the repo-wide kFourCC_<MNEMONIC> convention: the suffix IS the
+// four-character code, verbatim (crd/resources/crdr.hpp).
 inline constexpr crd::u32 kFourCC_HMTX = crd::resources::make_fourcc('H', 'M', 'T', 'X'); // container type
 inline constexpr crd::u32 kFourCC_MXHD = crd::resources::make_fourcc('M', 'X', 'H', 'D'); // header
 inline constexpr crd::u32 kFourCC_MXOP = crd::resources::make_fourcc('M', 'X', 'O', 'P'); // outer_ptr
 inline constexpr crd::u32 kFourCC_MXII = crd::resources::make_fourcc('M', 'X', 'I', 'I'); // inner_idx
 inline constexpr crd::u32 kFourCC_MXVL = crd::resources::make_fourcc('M', 'X', 'V', 'L'); // values
+// NOLINTEND(readability-identifier-naming)
 
 // Element-type tag stored in the header. PINNED + APPEND-ONLY (ADR-0084):
 // values must NEVER be renumbered -- a reorder silently mis-types every
@@ -94,9 +97,8 @@ template <typename T> [[nodiscard]] constexpr MatrixVariant matrix_variant_of() 
         case MatrixVariant::F32:
             return 4U;
         case MatrixVariant::F64:
+        case MatrixVariant::C32: // 2 x f32
             return 8U;
-        case MatrixVariant::C32:
-            return 8U; // 2 x f32
         case MatrixVariant::C64:
             return 16U; // 2 x f64
     }

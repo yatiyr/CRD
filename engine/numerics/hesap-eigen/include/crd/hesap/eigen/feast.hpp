@@ -33,6 +33,7 @@
 // bit-identical across worker counts (the differentiator FEAST-lib / ARPACK lack).
 
 #include <crd/containers/array.hpp>
+#include <crd/core/fnv1a.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/blas1.hpp>
@@ -182,7 +183,7 @@ template <typename T>
         T* yj = col(yb, j);
         for (crd::u32 i = 0; i < n; ++i)
         {
-            yj[i] = detail::splitmix_pm1<R>(opts.seed + static_cast<crd::u64>(j) * 0x100000001B3ULL, i);
+            yj[i] = detail::splitmix_pm1<R>(opts.seed + static_cast<crd::u64>(j) * crd::kFnv1a64Prime, i);
         }
     }
 
@@ -281,7 +282,7 @@ template <typename T>
             if (lam >= lo && lam <= hi)
             {
                 ++m_inside;
-                R rn2 = R{0};
+                R res_norm2 = R{0};
                 for (crd::u32 i = 0; i < n; ++i)
                 {
                     R ax = R{0};
@@ -290,11 +291,11 @@ template <typename T>
                         ax += static_cast<R>(es.vectors.at(l, t)) * static_cast<R>(ccol(aqb, l)[i]);
                     }
                     const R e = ax - lam * static_cast<R>(xt[i]);
-                    rn2 += e * e;
+                    res_norm2 += e * e;
                 }
-                const R rn = crd::math::sqrt(rn2);
+                const R res_norm = crd::math::sqrt(res_norm2);
                 const R sc = crd::math::fabs(lam) > R{1} ? crd::math::fabs(lam) : R{1};
-                if (rn / sc > tol)
+                if (res_norm / sc > tol)
                 {
                     all_conv = false;
                 }
@@ -321,7 +322,7 @@ template <typename T>
                     continue;
                 }
                 const T* xt = ccol(xb, t);
-                R rn2 = R{0};
+                R res_norm2 = R{0};
                 for (crd::u32 i = 0; i < n; ++i)
                 {
                     R ax = R{0};
@@ -330,11 +331,11 @@ template <typename T>
                         ax += static_cast<R>(es.vectors.at(l, t)) * static_cast<R>(ccol(aqb, l)[i]);
                     }
                     const R e = ax - lam * static_cast<R>(xt[i]);
-                    rn2 += e * e;
+                    res_norm2 += e * e;
                 }
-                const R rn = crd::math::sqrt(rn2);
+                const R res_norm = crd::math::sqrt(res_norm2);
                 const R sc = crd::math::fabs(lam) > R{1} ? crd::math::fabs(lam) : R{1};
-                if (rn / sc > tol)
+                if (res_norm / sc > tol)
                 {
                     continue; // in-interval but not a genuine eigenpair ⇒ excluded (the safety net)
                 }
@@ -356,7 +357,7 @@ template <typename T>
                 {
                     vo[i] = sgn * xt[i];
                 }
-                result.residuals[out] = rn;
+                result.residuals[out] = res_norm;
                 ++out;
             }
             result.values.resize(out); // trim to the genuine in-interval eigenpairs actually emitted

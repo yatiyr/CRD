@@ -4049,6 +4049,16 @@ class CapabilityOwners(unittest.TestCase):
                 self.assertEqual(1, capability_owners.main(['check', '--root', str(root), '--audit']))
             self.assertIn('engine/assets/a/src/a.cpp: 3 [UNLISTED]', out.getvalue())
 
+    def test_host_tools_and_the_sandbox_are_scanned_and_tests_and_benches_are_not(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = self.fixture(scratch, [self.fnv()])
+            for name in ('tools/asset_cooker/src/hash.cpp', 'sandbox/src/demo.cpp', 'tests/a/test_a.cpp',
+                         'runtime/examples/bench_a.cpp'):
+                (root / name).parent.mkdir(parents=True)
+                (root / name).write_text('u64 k = 1099511628211ULL;\n', encoding='utf-8')
+            flagged = sorted(p.split(':')[0] for p in capability_owners.check(root)[2])
+            self.assertEqual(['sandbox/src/demo.cpp', 'tools/asset_cooker/src/hash.cpp'], flagged)
+
     def test_pending_and_allowed_files_pass_until_they_go_stale(self):
         with tempfile.TemporaryDirectory() as scratch:
             pending = [{'path': 'engine/assets/a/src/a.cpp', 'row': 'OWN.1'}]

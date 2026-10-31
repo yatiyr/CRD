@@ -1,6 +1,7 @@
 // cook_io.cpp — GEO-6 (D-007 row 71): the declared-input seam. See cook_io.hpp for the contract.
 
 #include <crd/cooker/cook_io.hpp>
+#include <crd/core/fnv1a.hpp>
 
 #include <crd/platform/filesystem.hpp>
 
@@ -13,9 +14,6 @@ namespace crd::cooker
 
 namespace
 {
-
-constexpr crd::u64 kFnvOffset64 = 14695981039346656037ULL;
-constexpr crd::u64 kFnvPrime64  = 1099511628211ULL;
 
 // a relative auxiliary path's FORM is acceptable: no absolute forms, no schemes / drive letters. ".." segments
 // pass here — the ESCAPE check happens on the lexically normalized resolved path against the root boundary.
@@ -84,13 +82,7 @@ constexpr crd::u64 kFnvPrime64  = 1099511628211ULL;
 
 crd::u64 cook_hash64(crd::containers::ConstSpan<crd::u8> bytes) noexcept
 {
-    crd::u64 hash = kFnvOffset64;
-    for (crd::usize i = 0; i < bytes.size(); ++i)
-    {
-        hash ^= static_cast<crd::u64>(bytes[i]);
-        hash *= kFnvPrime64;
-    }
-    return hash;
+    return crd::fnv1a_64(bytes.data(), bytes.size());
 }
 
 CookIO::CookIO(crd::containers::StringView source_path, crd::containers::StringView meta_path,

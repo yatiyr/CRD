@@ -15,6 +15,7 @@
 #include <cstring> // std::memcpy — the codebase's bit-cast idiom (ckir_asset.hpp:150, ckir.hpp:926)
 
 #include <crd/core/assert.hpp>             // CRD_ASSERT_MSG — the duplicate-id contract check (cook-guaranteed, debug-only)
+#include <crd/core/fnv1a.hpp>
 #include <crd/framecook/frame_asset.hpp>   // SpecConst · SpecSet · kMaxSpecConsts
 #include <crd/framecook/frame_runtime.hpp> // FrameExecError
 #include <crd/kir/ckir.hpp>                 // KGraph · KNode · is_spec_const · spec_const_id
@@ -93,20 +94,13 @@ namespace crd::scenerender
         }
         tmp[j] = key;
     }
-    crd::u64 h = 0xCBF29CE484222325ULL; // FNV-1a offset basis
+    crd::u64 h = crd::kFnv1a64Offset;
     for (crd::u32 i = 0U; i < n; ++i)
     {
         crd::u64 valbits = 0U;
         std::memcpy(&valbits, &tmp[i].value, sizeof(valbits)); // f64 -> bits (value-sensitive)
-        const crd::u64 idbits = tmp[i].id;
-        for (int b = 0; b < 8; ++b)
-        {
-            h = (h ^ ((idbits >> (b * 8)) & 0xFFU)) * 0x100000001B3ULL;
-        }
-        for (int b = 0; b < 8; ++b)
-        {
-            h = (h ^ ((valbits >> (b * 8)) & 0xFFU)) * 0x100000001B3ULL;
-        }
+        h = crd::fnv1a_64_le(static_cast<crd::u64>(tmp[i].id), h);
+        h = crd::fnv1a_64_le(valbits, h);
     }
     return h;
 }

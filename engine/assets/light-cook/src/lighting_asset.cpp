@@ -3,6 +3,7 @@
 // ⛔⛔ 1100 lines of gold-standard shading in `ckir_lighting.hpp` were UNREACHABLE because the technique ABI
 // carried exactly one directional light. This file is the vocabulary that reaches them.
 
+#include <crd/core/fnv1a.hpp>
 #include <crd/lightcook/lighting_asset.hpp>
 
 #include <crd/kir/ckir_lighting.hpp>
@@ -565,26 +566,16 @@ LightingCookError validate_lighting(const LightingDesc& d, crd::containers::Stri
 // ── THE VARIANT IDENTITY ──────────────────────────────────────────────────────────────────────────────────
 namespace
 {
-constexpr crd::u64 kFnvOffset = 14695981039346656037ULL;
-constexpr crd::u64 kFnvPrime  = 1099511628211ULL;
-void               hash_u64(crd::u64& h, crd::u64 v) noexcept
+// Every field folds as eight little-endian bytes (crd-core's FNV-1a), whatever its own width: the cooked id.
+void hash_u64(crd::u64& h, crd::u64 v) noexcept
 {
-    for (int i = 0; i < 8; ++i)
-    {
-        h ^= (v >> (i * 8)) & 0xFFULL;
-        h *= kFnvPrime;
-    }
+    h = crd::fnv1a_64_le(v, h);
 }
 } // namespace
 
 crd::u64 lighting_variant_id(const LightingDesc& d) noexcept
 {
-    crd::u64 h = kFnvOffset;
-    for (crd::usize i = 0; i < d.name.size(); ++i)
-    {
-        h ^= static_cast<crd::u8>(d.name.c_str()[i]);
-        h *= kFnvPrime;
-    }
+    crd::u64 h = crd::fnv1a_64(d.name.c_str(), d.name.size());
     for (crd::u32 i = 0; i < kLightTypeCount; ++i)
     {
         hash_u64(h, d.set.count[i]);

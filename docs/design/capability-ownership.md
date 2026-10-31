@@ -39,8 +39,10 @@ CTest and the repository step "One owning module for every engine capability". I
 
 - the registry is malformed: an unknown key, a duplicate id, an owner that is not a registration (or a planned owner
   that now is one), a missing or foreign API file, a row that is not in the ROADMAP, a signature that does not compile;
-- a signature of a landed or assigned capability matches an engine source outside the owner's directory and the file
-  is neither pending nor allowed;
+- a signature of a landed or assigned capability matches a product source outside the owner's directory and the file
+  is neither pending nor allowed. Product sources are `engine/`, the host tools under `tools/` (they ship) and the
+  `sandbox/` application (it models engine use for real applications); `tests/` and the measurement programs under
+  `runtime/examples` keep reference implementations as oracles and peers and are not scanned;
 - a pending or allowed file no longer matches (the entry is stale and goes, so the lists only shrink).
 
 `--audit` prints every match outside its owner, listed or not. The unit tests (`CapabilityOwners` in
@@ -79,6 +81,10 @@ OWN.1 records these owners (2026-10-31):
    owns no entitlement, payment, updater or store-adapter code).
 6. **Code generators** that write an operation into device source (CKIR's CUDA emitter writing a determinant) are
    allowed matches: the host routine is crd-math's; the generator emits the device's own copy by design.
+7. **FNV-1a and the hash combiner** live in crd-core (`crd/core/fnv1a.hpp`), not crd-containers as first registered:
+   crd-memory, below crd-containers, hashes allocation stacks, and crd-core already holds the dependency-free integer
+   primitives (`wide_multiply`, the seed generators). crd-containers re-exports `fnv1a_64` for `hash_string`; the
+   checksum family (CRC-32, CRC-32C, XXH3) stays in crd-containers on crd-core's kernel dispatch.
 
 ## Duplicate rows
 
@@ -99,7 +105,8 @@ each a `pending` entry or a listed review, all on OWN.1:
 
 | Capability → owner | Copies | Notes |
 |---|---|---|
-| hash.fnv1a → containers | 33 files | byte-stream FNV-1a-64 (onto `fnv1a_64`), byte-stream FNV-1a-32 (profiler, frame runtime, LOD chain: the owner gains `fnv1a_32`), word combiners `h = (h ^ v) * prime` (the owner gains one word step), and hesap-eigen's seed strides `seed + j * prime`, which use the prime as a constant and take the owner's named constant. Several feed persisted identity (cooked assets, CRDR, LOD and tensor artifacts, obek), so each move keeps HEAD's bits, pinned by golden values computed before the edit. |
+| hash.fnv1a → core | 33 engine files and 2 asset-cooker files, **moved** 2026-10-31 | see below; `sandbox`'s BVH-viewer fingerprint mixes the FNV constants into SplitMix64 and moves with the seed generators. |
+| hash.combine → core | `lod/lod_asset.cpp`, `scene/archetype_graph.hpp` | the golden-ratio combiner `h ^= v + 0x9E3779B97F4A7C15 + (h << 6) + (h >> 2)`, twice. |
 | random.seed-generators → core | 10 files | SplitMix64 in ceir, perf, hesap-eigen, three hesap-stats headers and containers' `hash_u64` finalizer; the MMIX LCG step in hesap-dense's SVD, hesap-fft's sparse FFT and hesap-iterative's IDR(s); bit-exact. |
 | cpu.kernel-dispatch → core | `math/libm.hpp` | reads `__AVX2__` and `__FMA__` to choose the FMA instruction; the choice moves behind a crd-core kernel-level macro. |
 | math.fixed-size-linear-algebra → math | `geometry-primitives/transform.hpp` | `det3` and the inverse-transpose; crd-math gains Mat2/Mat3 `determinant`, `inverse` and the 3x3 solve. By reading also: `circumcenter.hpp` and mesh-processing's `quadric.hpp` (Cramer's rule), which move onto the same routines with declared tolerances. |
@@ -109,3 +116,27 @@ each a `pending` entry or a listed review, all on OWN.1:
 
 Each move is recorded in the OWN.1 session that lands it, with its oracle (bit-exact or the declared tolerance) and
 its before/after board.
+
+### The FNV-1a move
+
+`crd/core/fnv1a.hpp` gives FNV-1a-64 and -32 over bytes and over text (the text form is a constant expression, which
+the `void*` form cannot be), little-endian integer folds and `fnv1a_64_word`, one step over a whole word for runtime
+keys. Each site took the form that keeps its meaning:
+
+- **Persisted or stable identities, bit-exact.** The cooked lighting, vertex-layout, CKIR variant, LOD-policy, sparse
+  topology, tensor-artifact, CEIR program and plan-target ids, the obek entity GUID, spec-set and scene signatures, the
+  frame executor ids, CEIR's compile-time ids and the asset cooker's content and path hashes fold the same bytes in the
+  same order through the owner. Each local `hash_u64` helper keeps its `u64` parameter, so a narrower field still folds
+  eight bytes. vertex-cook's string fold ended with an extra prime multiply, which is the string's terminating NUL: it
+  now folds `size() + 1` bytes of `c_str()`. CHIR's node ids folded native bytes (identical on the little-endian
+  targets) and now fold little-endian by shifts, so the stable id (ADR-0128) is the same on every host.
+- **Runtime keys whose values change.** Nine sites started from 1469598103934665603, the offset basis with its last
+  digit lost, and scene-render's cull-argument signature multiplied before it xored. None persists or is pinned by a
+  test: the template bridge's alias size classes, the diagnostic allocator's stack dedup, the Vulkan descriptor-set
+  memo, the CUDA module and Vulkan pipeline caches (in memory), CKIR and autodiff hash-consing, the GPU frame-graph
+  fingerprint, the step-down log key and the cull upload signature. They now use the true offset and the word step.
+  frame-cook's work extraction hashed resource names with its own truncated FNV while the frame runtime keys the same
+  resources by `pass_param_id`; it now uses `pass_param_id`.
+- **Not a hash.** hesap-eigen's seeds stride by the prime (`seed + j * prime`) and take the owner's named constant;
+  CKIR's hair kernel bakes `0x1000193` into a device hash with xxHash32 constants (allowed, decision 6).
+

@@ -26,6 +26,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/core/fnv1a.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/blas1.hpp>
@@ -206,8 +207,14 @@ template <typename T>
     crd::containers::Array<T> vtmp = mk(jmax);   // restart-compaction scratch
     crd::containers::Array<T> avtmp = mk(jmax);  // restart-compaction scratch
     crd::containers::Array<T> qu = mk(nev + 1);  // deflation basis Ũ = [locked Q | current u]
-    crd::containers::Array<T> u(alloc), au(alloc), r(alloc), rp(alloc), t(alloc), rhs(alloc);
-    crd::containers::Array<T> wp(alloc), wq(alloc);
+    crd::containers::Array<T> u(alloc);
+    crd::containers::Array<T> au(alloc);
+    crd::containers::Array<T> r(alloc);
+    crd::containers::Array<T> rp(alloc);
+    crd::containers::Array<T> t(alloc);
+    crd::containers::Array<T> rhs(alloc);
+    crd::containers::Array<T> wp(alloc);
+    crd::containers::Array<T> wq(alloc);
     u.resize(n);
     au.resize(n);
     r.resize(n);
@@ -216,7 +223,8 @@ template <typename T>
     rhs.resize(n);
     wp.resize(n);
     wq.resize(n);
-    crd::containers::Array<T> cp(alloc), cq(alloc);
+    crd::containers::Array<T> cp(alloc);
+    crd::containers::Array<T> cq(alloc);
     cp.resize(nev + 1);
     cq.resize(nev + 1);
 
@@ -264,7 +272,7 @@ template <typename T>
     crd::u64 seed_ctr = 0;
     auto seed_into = [&](crd::u32 dst, crd::u32 nconv, crd::u32 ndone) noexcept -> R {
         T* d = col(vv, dst);
-        const crd::u64 s = opts.seed + seed_ctr * 0x100000001B3ULL;
+        const crd::u64 s = opts.seed + seed_ctr * crd::kFnv1a64Prime;
         ++seed_ctr;
         for (crd::u32 i = 0; i < n; ++i)
         {
@@ -405,7 +413,8 @@ template <typename T>
                 break;
             }
             // restart keeping the best non-tgt Ritz vectors (⊥ the new Q automatically: orthonormal S ⇒ ⊥ u).
-            crd::u32 keep = mdim > 1 ? (mdim - 1 < jmin ? mdim - 1 : jmin) : 0;
+            const crd::u32 kept_max = mdim > 1 ? mdim - 1 : 0;
+            crd::u32       keep     = kept_max < jmin ? kept_max : jmin;
             if (keep == 0)
             {
                 R nr = seed_into(0, nconv, 0);

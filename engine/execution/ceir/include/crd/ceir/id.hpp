@@ -7,24 +7,24 @@
 // individually). `TypeId` is an interned type handle; the real type system is CEIR-3, so here it is an opaque
 // Context-interned id (0 = none/unknown).
 
+#include <crd/core/fnv1a.hpp>
 #include <crd/core/types.hpp>
 
 #include <compare>
 
 namespace crd::ceir
 {
-// The ONE shared compile-time FNV-1a-64 over a NUL-terminated string (CEIR-8g) — BYTE-IDENTICAL to
-// `containers::fnv1a_64` (which takes a `void*` and so is not usable in a constant expression over a string literal).
-// Every FNV id's compile-time `kId` (make_interface_id/make_analysis_id/make_diagnostic_code) calls THIS — a
-// copy-per-id would silently drift from `hash_string`, and drift means `T::kId != intern(name)`.
+// The ONE shared compile-time FNV-1a-64 over a NUL-terminated string (CEIR-8g): crd-core's text form, so every FNV
+// id's compile-time `kId` (make_interface_id/make_analysis_id/make_diagnostic_code) equals `hash_string` at runtime —
+// drift would mean `T::kId != intern(name)`.
 [[nodiscard]] constexpr u64 fnv1a_ct(const char* s) noexcept
 {
-    u64 h = 0xcbf29ce484222325ULL;
-    for (const char* p = s; *p != '\0'; ++p)
+    usize n = 0;
+    while (s[n] != '\0')
     {
-        h = (h ^ static_cast<u64>(static_cast<unsigned char>(*p))) * 0x00000100000001B3ULL;
+        ++n;
     }
-    return h;
+    return crd::fnv1a_64(s, n);
 }
 // An interned op-kind identity: the FNV-1a hash of "dialect.op". Records/ops store THIS, never a string at runtime.
 struct OpId

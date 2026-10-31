@@ -4,6 +4,7 @@
 // header word map, the vertex record, the instance record, skinning, morphing, displacement, the transform and the
 // varying set are all DECLARED, and the cook builds the same CKIR `KEntry` the hand-written builders returned.
 
+#include <crd/core/fnv1a.hpp>
 #include <crd/vertexcook/vertex_asset.hpp>
 
 #include <crd/kir/ckir_shape.hpp> // REN-38 audit: the cook refuses a shape-invalid entry by name
@@ -1493,24 +1494,15 @@ bool fs_varying_requirements(const crd::kir::KGraph& g, const crd::kir::KEntry& 
 // ── THE LAYOUT IDENTITY ───────────────────────────────────────────────────────────────────────────────────
 namespace
 {
-constexpr crd::u64 kFnvOffset = 14695981039346656037ULL;
-constexpr crd::u64 kFnvPrime  = 1099511628211ULL;
-void               hash_u64(crd::u64& h, crd::u64 v) noexcept
+// Every field folds as eight little-endian bytes (crd-core's FNV-1a), whatever its own width: the cooked id.
+void hash_u64(crd::u64& h, crd::u64 v) noexcept
 {
-    for (int i = 0; i < 8; ++i)
-    {
-        h ^= (v >> (i * 8)) & 0xFFULL;
-        h *= kFnvPrime;
-    }
+    h = crd::fnv1a_64_le(v, h);
 }
+// The string with its terminating NUL, so "ab" + "c" and "a" + "bc" fold differently.
 void hash_str(crd::u64& h, const crd::containers::String& s) noexcept
 {
-    for (crd::usize i = 0; i < s.size(); ++i)
-    {
-        h ^= static_cast<crd::u8>(s.c_str()[i]);
-        h *= kFnvPrime;
-    }
-    h *= kFnvPrime;
+    h = crd::fnv1a_64(s.c_str(), s.size() + 1U, h);
 }
 } // namespace
 
@@ -1519,7 +1511,7 @@ crd::u64 vertex_layout_id(const VertexProgramDesc& desc) noexcept
     // ⛔ Hashed FIELD BY FIELD, never over the struct's bytes. A POD memcpy would fold PADDING — uninitialised
     // stack history — into the id, so the same layout would hash differently between runs and the variant cache
     // would miss every time (the 2026-07-25 cook-dedup scar, one asset over).
-    crd::u64 h = kFnvOffset;
+    crd::u64 h = crd::kFnv1a64Offset;
     hash_u64(h, desc.vertex_stride);
     hash_u64(h, desc.instance.stride);
     hash_u64(h, desc.instance.transform);

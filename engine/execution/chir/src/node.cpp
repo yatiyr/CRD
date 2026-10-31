@@ -1,26 +1,19 @@
 // node.cpp — the CHIR-0 source model (CEIR-32b, ADR-0128 D5). See node.hpp.
 
 #include <crd/chir/node.hpp>
+#include <crd/core/fnv1a.hpp>
 
 namespace crd::chir
 {
 namespace
 {
-// Fold a byte range into a running FNV-1a-64 accumulator (the SAME constants as containers::fnv1a_64, so a one-shot over
-// a concatenated buffer and this incremental fold agree — used to combine an id's constituent fields without a scratch
-// buffer). offset 0xcbf29ce484222325, prime 0x100000001B3 (containers/hash.hpp).
-inline void fnv_fold(crd::u64& h, const void* data, crd::usize n) noexcept
-{
-    const auto* p = static_cast<const unsigned char*>(data);
-    for (crd::usize i = 0; i < n; ++i)
-    {
-        h = (h ^ p[i]) * 0x00000100000001B3ULL;
-    }
-}
-inline void fnv_fold_u64(crd::u64& h, crd::u64 v) noexcept { fnv_fold(h, &v, sizeof v); }
-inline void fnv_fold_u32(crd::u64& h, crd::u32 v) noexcept { fnv_fold(h, &v, sizeof v); }
-inline void fnv_fold_u8(crd::u64& h, crd::u8 v) noexcept { fnv_fold(h, &v, sizeof v); }
-inline constexpr crd::u64 kFnvOffset = 0xcbf29ce484222325ULL;
+// Fold an id's constituent fields into a running FNV-1a-64 (crd-core's), so a one-shot over the concatenated bytes and
+// this incremental fold agree without a scratch buffer. Integers fold little-endian by shifts: the stable id (ADR-0128)
+// is the same on every host (these folded native bytes before, identical on the little-endian targets).
+inline void fnv_fold(crd::u64& h, const char* data, crd::usize n) noexcept { h = crd::fnv1a_64(data, n, h); }
+inline void fnv_fold_u64(crd::u64& h, crd::u64 v) noexcept { h = crd::fnv1a_64_le(v, h); }
+inline void fnv_fold_u32(crd::u64& h, crd::u32 v) noexcept { h = crd::fnv1a_64_le(v, h); }
+inline void fnv_fold_u8(crd::u64& h, crd::u8 v) noexcept { h = crd::fnv1a_64_le(v, h); }
 } // namespace
 
 StringView node_kind_name(NodeKind k) noexcept
@@ -163,7 +156,7 @@ void SourceModel::derive_ids() noexcept
     {
         ChirNode&      n  = m_nodes[i];
         const crd::u64 pid = (n.parent != kInvalidNode) ? m_nodes[n.parent].id.value : 0ULL;
-        crd::u64       h  = kFnvOffset;
+        crd::u64       h  = crd::kFnv1a64Offset;
         fnv_fold_u64(h, pid);
         fnv_fold_u8(h, static_cast<crd::u8>(n.kind));
         if (n.name.len != 0U)
@@ -204,7 +197,7 @@ crd::u64 SourceModel::semantic_hash() const noexcept
 {
     // Canonical fold over SEMANTIC content only — kind, name, pins, attrs, child stable-ids, and edges (by endpoint
     // STABLE IDS, so it is position-independent). ⛔ IGNORES layout AND SourceLoc (§180 #10). Requires derive_ids first.
-    crd::u64 h = kFnvOffset;
+    crd::u64 h = crd::kFnv1a64Offset;
     for (crd::u32 i = 0; i < m_nodes.size(); ++i)
     {
         const ChirNode& n = m_nodes[i];

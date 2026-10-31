@@ -1,5 +1,6 @@
 // frame_runtime.cpp — REN-36.2: drive `IFrameGraph` from a cooked `FrameGraphDesc`. See frame_runtime.hpp.
 
+#include <crd/core/fnv1a.hpp>
 #include <crd/framecook/frame_runtime.hpp>
 
 #include <crd/ceir/context.hpp>                     // CEIR-16-3c: the per-asset plan Context (build_frame_plans)
@@ -123,13 +124,7 @@ struct PassRec
 // buffer) or discards one. The name is what the author actually stated, so the name is what keys it.
 [[nodiscard]] crd::u32 name_key(const crd::containers::String& n) noexcept
 {
-    crd::u32 h = 2166136261U;
-    for (crd::usize i = 0; i < n.size(); ++i)
-    {
-        h ^= static_cast<crd::u32>(static_cast<crd::u8>(n.c_str()[i]));
-        h *= 16777619U;
-    }
-    return h;
+    return crd::fnv1a_32(n.c_str(), n.size());
 }
 
 // ⭐⭐ RAF-12.2-b: translate a RESOLVED PassRec → an rg::AuthoredPass (payload + slot bindings + draw/dispatch list +

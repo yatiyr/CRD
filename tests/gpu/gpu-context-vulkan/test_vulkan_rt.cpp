@@ -8,6 +8,7 @@
 #include <crd/gpu/vulkan_ray_tracing_context.hpp>
 #include <crd/gpu/identity_registry.hpp> // DIAG.7a(d2b-vk): live_count(Resource) for the AS-scene identity test
 #include <crd/gpu/vulkan_shader_compile.hpp>
+#include <crd/renderpass/executor_registry.hpp>
 
 #include <crd/kir/ckir.hpp>
 #include <crd/kir/ckir_lss.hpp>
@@ -3806,17 +3807,11 @@ struct WfHostBuf
     void* host = nullptr; // upload for a read binding, readback for a write binding
     crd::u64 bytes = 0U;
 };
-// FNV-1a — BYTE-IDENTICAL to crd::framecook's name_hash (the source_param the WorkResolvedBinding table + queue dedup
-// key on).
+// The resource-name identity frame-cook's work extraction writes as source_param (the WorkResolvedBinding table and
+// the queue dedup key on it): the pass-parameter id.
 crd::u64 wf_name_hash(crd::containers::StringView s)
 {
-    crd::u64 h = 1469598103934665603ULL;
-    for (crd::usize i = 0; i < s.size(); ++i)
-    {
-        h ^= static_cast<crd::u8>(s[i]);
-        h *= 1099511628211ULL;
-    }
-    return h;
+    return crd::renderpass::pass_param_id(s);
 }
 // The WorkHooks user context: the 19c RtGateState (rt + scene, reused verbatim) + the two work-kernel SPIR-Vs + the
 // ceir Context (op_name routes produce->compact / consume->shade) + the count-driven-grid pin capture.

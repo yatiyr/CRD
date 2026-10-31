@@ -4,6 +4,7 @@
 // NVRTC compile (~50–200ms) happens ONCE per distinct kernel, allocations are reused, and work rides a stream.
 // Bit-exact vs the CPU reference for correctly-rounded ops (incl. division). ADR-0098.
 
+#include <crd/core/fnv1a.hpp>
 #include <crd/kir/cuda/backend_cuda.hpp>
 
 #include <crd/kir/ckir_cuda.hpp>
@@ -26,12 +27,12 @@ constexpr int kCacheMax = 256;
 // FNV-1a over the emitted source — the module-cache key (identical kernels ⇒ one NVRTC compile, then reuse).
 crd::u64 hash_src(const char* s)
 {
-    crd::u64 h = 1469598103934665603ULL;
-    for (; *s != '\0'; ++s)
+    crd::usize n = 0;
+    while (s[n] != '\0')
     {
-        h = (h ^ static_cast<crd::u8>(*s)) * 1099511628211ULL;
+        ++n;
     }
-    return h;
+    return crd::fnv1a_64(s, n);
 }
 struct CacheEntry
 {

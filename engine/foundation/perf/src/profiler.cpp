@@ -28,6 +28,7 @@
 //   NameId travels through the macro's static.
 // ---------------------------------------------------------------------------
 
+#include <crd/core/fnv1a.hpp>
 #include <crd/perf/profiler.hpp>
 
 #include <crd/core/assert.hpp>
@@ -298,16 +299,15 @@ thread_local crd::u8 t_copy_priority_ring = kInvalidThread;
 // thread shutdown never cleared) is detected and the thread re-registers against the new state. 0 = never registered.
 thread_local crd::u32 t_state_gen = 0U;
 
-// FNV-1a string hash (deterministic across compilers/platforms).
+// FNV-1a-32 of a NUL-terminated name (crd-core's; deterministic across compilers and platforms).
 [[nodiscard]] crd::u32 fnv1a(const char* s) noexcept
 {
-    crd::u32 h = 0x811C9DC5U;
-    while (*s != '\0')
+    crd::usize n = 0;
+    while (s[n] != '\0')
     {
-        h ^= static_cast<crd::u8>(*s++);
-        h *= 0x01000193U;
+        ++n;
     }
-    return h;
+    return crd::fnv1a_32(s, n);
 }
 
 [[nodiscard]] bool is_power_of_two(crd::u32 v) noexcept { return v != 0U && (v & (v - 1U)) == 0U; }

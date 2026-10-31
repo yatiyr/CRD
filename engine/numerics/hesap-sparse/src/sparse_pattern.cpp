@@ -4,6 +4,7 @@
 // pinned algorithm (D1): little-endian explicit byte feed, used-bytes only,
 // format + block_size mixed in.
 
+#include <crd/core/fnv1a.hpp>
 #include <crd/hesap/sparse/sparse_pattern.hpp>
 
 namespace crd::hesap::sparse
@@ -11,30 +12,18 @@ namespace crd::hesap::sparse
 namespace
 {
 
-constexpr crd::u64 kFnvOffsetBasis = 0xCBF29CE484222325ULL;
-constexpr crd::u64 kFnvPrime       = 0x00000100000001B3ULL;
-
-inline void fnv1a_byte(crd::u64& h, crd::u8 b) noexcept
-{
-    h ^= static_cast<crd::u64>(b);
-    h *= kFnvPrime;
-}
-
-// Feed an integer little-endian via explicit shifts (endian-independent).
+// Feed an integer little-endian (crd-core's FNV-1a fold; endian-independent).
 template <typename UInt>
 inline void fnv1a_int(crd::u64& h, UInt v) noexcept
 {
-    for (crd::usize i = 0; i < sizeof(UInt); ++i)
-    {
-        fnv1a_byte(h, static_cast<crd::u8>((static_cast<crd::u64>(v) >> (8U * i)) & 0xFFU));
-    }
+    h = crd::fnv1a_64_le(v, h);
 }
 
 } // namespace
 
 crd::u64 topology_hash(const SparsePattern& pattern) noexcept
 {
-    crd::u64 h = kFnvOffsetBasis;
+    crd::u64 h = crd::kFnv1a64Offset;
 
     fnv1a_int<crd::u32>(h, pattern.rows);
     fnv1a_int<crd::u32>(h, pattern.cols);

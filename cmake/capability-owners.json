@@ -30,10 +30,11 @@
     },
     {
       "id": "hash.fnv1a",
-      "summary": "FNV-1a hashing, 32- and 64-bit, over bytes and over words: identities, cache keys and cooked-content hashes.",
-      "owner": "containers",
+      "summary": "FNV-1a hashing, 32- and 64-bit, over bytes and text (constant-expression capable), little-endian integer folds and the runtime word step: identities, cache keys and cooked-content hashes.",
+      "owner": "core",
+      "decision": "crd-core, not crd-containers: crd-memory (below containers) hashes allocation stacks with it, and crd-core already holds the other dependency-free integer primitives (wide_multiply, the seed generators). crd-containers re-exports fnv1a_64 for its hash_string.",
       "api": [
-        "engine/foundation/containers/include/crd/containers/hash.hpp"
+        "engine/foundation/core/include/crd/core/fnv1a.hpp"
       ],
       "signatures": [
         {"regex": "\\b(?:1099511628211|0[xX]0*100000001[bB]3)[uUlL]*\\b", "what": "the FNV-1a 64-bit prime"},
@@ -42,39 +43,24 @@
         {"regex": "\\b(?:2166136261|0[xX]811[cC]9[dD][cC]5)[uUlL]*\\b", "what": "the FNV-1a 32-bit offset basis"}
       ],
       "pending": [
-        {"path": "engine/assets/frame-cook/include/crd/framecook/frame_asset.hpp", "row": "OWN.1"},
-        {"path": "engine/assets/frame-cook/src/frame_runtime.cpp", "row": "OWN.1"},
-        {"path": "engine/assets/frame-cook/src/frame_template_bridge.cpp", "row": "OWN.1"},
-        {"path": "engine/assets/frame-cook/src/frame_work.cpp", "row": "OWN.1"},
-        {"path": "engine/assets/light-cook/src/lighting_asset.cpp", "row": "OWN.1"},
-        {"path": "engine/assets/vertex-cook/src/vertex_asset.cpp", "row": "OWN.1"},
-        {"path": "engine/execution/ceir-cook/src/plan_cache.cpp", "row": "OWN.1"},
-        {"path": "engine/execution/ceir/include/crd/ceir/id.hpp", "row": "OWN.1"},
-        {"path": "engine/execution/ceir/src/program_asset.cpp", "row": "OWN.1"},
-        {"path": "engine/execution/chir/src/node.cpp", "row": "OWN.1"},
-        {"path": "engine/foundation/memory/src/allocators/diagnostic_allocator.cpp", "row": "OWN.1"},
-        {"path": "engine/foundation/perf/src/profiler.cpp", "row": "OWN.1"},
+        {"path": "sandbox/src/geometry_showcase.cpp", "row": "OWN.1"}
+      ],
+      "allowed": [
+        {"path": "engine/gpu/kir/include/crd/kir/ckir_hair_rt.hpp", "why": "A per-light seed stride baked into a generated device hash (with xxHash32 constants); not FNV-1a, and the device program carries its own copy by design."}
+      ]
+    },
+    {
+      "id": "hash.combine",
+      "summary": "The golden-ratio hash combiner (seed ^= v + 0x9E3779B97F4A7C15 + (seed << 6) + (seed >> 2)) that folds already-hashed words into one key.",
+      "owner": "core",
+      "status": "assigned",
+      "row": "OWN.1",
+      "signatures": [
+        {"regex": "\\(\\s*\\w+\\s*<<\\s*6U?\\s*\\)\\s*\\+\\s*\\(\\s*\\w+\\s*>>\\s*2U?\\s*\\)", "what": "the hash_combine shift pair"}
+      ],
+      "pending": [
         {"path": "engine/geometry/lod/src/lod_asset.cpp", "row": "OWN.1"},
-        {"path": "engine/geometry/lod/src/lod_chain.cpp", "row": "OWN.1"},
-        {"path": "engine/gpu/gpu-context-vulkan/src/vulkan_compute_context.cpp", "row": "OWN.1"},
-        {"path": "engine/gpu/kir-cuda/src/backend_cuda.cpp", "row": "OWN.1"},
-        {"path": "engine/gpu/kir-vulkan/src/backend_vulkan.cpp", "row": "OWN.1"},
-        {"path": "engine/gpu/kir/include/crd/kir/ckir.hpp", "row": "OWN.1"},
-        {"path": "engine/gpu/kir/include/crd/kir/ckir_hair_rt.hpp", "row": "OWN.1"},
-        {"path": "engine/gpu/kir/include/crd/kir/ckir_variant.hpp", "row": "OWN.1"},
-        {"path": "engine/gpu/perf-gpu-bridge/src/frame_graph_gpu_backend.cpp", "row": "OWN.1"},
-        {"path": "engine/numerics/hesap-autodiff/include/crd/hesap/autodiff/graph_ad.hpp", "row": "OWN.1"},
-        {"path": "engine/numerics/hesap-eigen/include/crd/hesap/eigen/feast.hpp", "row": "OWN.1"},
-        {"path": "engine/numerics/hesap-eigen/include/crd/hesap/eigen/jacobi_davidson.hpp", "row": "OWN.1"},
-        {"path": "engine/numerics/hesap-eigen/include/crd/hesap/eigen/krylov_schur.hpp", "row": "OWN.1"},
-        {"path": "engine/numerics/hesap-eigen/include/crd/hesap/eigen/lobpcg.hpp", "row": "OWN.1"},
-        {"path": "engine/numerics/hesap-eigen/include/crd/hesap/eigen/thick_restart.hpp", "row": "OWN.1"},
-        {"path": "engine/numerics/hesap-resources/include/crd/hesap/resources/tensor_artifact.hpp", "row": "OWN.1"},
-        {"path": "engine/numerics/hesap-sparse/src/sparse_pattern.cpp", "row": "OWN.1"},
-        {"path": "engine/rendering/scene-render/src/scene_renderer.cpp", "row": "OWN.1"},
-        {"path": "engine/rendering/scene-render/src/spec_apply.hpp", "row": "OWN.1"},
-        {"path": "engine/world/scene/src/obek.cpp", "row": "OWN.1"},
-        {"path": "engine/world/scene/src/sparse_set_storage.cpp", "row": "OWN.1"}
+        {"path": "engine/world/scene/include/crd/scene/archetype_graph.hpp", "row": "OWN.1"}
       ]
     },
     {
@@ -120,7 +106,8 @@
         {"path": "engine/numerics/hesap-iterative/include/crd/hesap/iterative/idrs.hpp", "row": "OWN.1"},
         {"path": "engine/numerics/hesap-stats/include/crd/hesap/stats/chacha.hpp", "row": "OWN.1"},
         {"path": "engine/numerics/hesap-stats/include/crd/hesap/stats/splitmix64.hpp", "row": "OWN.1"},
-        {"path": "engine/numerics/hesap-stats/include/crd/hesap/stats/streaming.hpp", "row": "OWN.1"}
+        {"path": "engine/numerics/hesap-stats/include/crd/hesap/stats/streaming.hpp", "row": "OWN.1"},
+        {"path": "sandbox/src/geometry_showcase.cpp", "row": "OWN.1"}
       ]
     },
     {

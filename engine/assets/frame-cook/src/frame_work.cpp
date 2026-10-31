@@ -3,6 +3,8 @@
 
 #include <crd/framecook/frame_work.hpp>
 
+#include <crd/renderpass/executor_registry.hpp>
+
 namespace crd::framecook
 {
 namespace ceg = crd::ceir::gpu;
@@ -16,16 +18,10 @@ using crd::containers::StringView;
 }
 
 // A stable id for a resource NAME — the caller correlates each queue/binding Value → its device/host buffer by the SAME
-// hash.
+// hash: the pass-parameter identity the frame runtime and the template bridge key resources by.
 [[nodiscard]] crd::u64 name_hash(StringView s) noexcept
 {
-    crd::u64 h = 1469598103934665603ULL; // FNV-1a
-    for (crd::usize i = 0; i < s.size(); ++i)
-    {
-        h ^= static_cast<crd::u8>(s[i]);
-        h *= 1099511628211ULL;
-    }
-    return h;
+    return crd::renderpass::pass_param_id(s);
 }
 
 [[nodiscard]] const FrameResourceDesc* find_res(const FrameGraphDesc& desc, StringView name) noexcept

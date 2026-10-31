@@ -4,15 +4,17 @@
 The registry names each capability's owner: a module the root CMakeLists.txt registers with crd_module (a landed
 owner, whose public API files must exist inside it) or a module a ROADMAP row will create (a planned owner). A
 capability with a recognisable implementation lists signatures: regular expressions over C-family code (comments and
-string literals are not code) that match its constants, intrinsics or definitions. A signature found in an engine
-source outside the owner's directory is a second implementation, and this guard fails on it unless the registry lists
-that file as `pending` (an owning row moves it onto the owner) or `allowed` (the match is not an implementation, with
-the reason). A pending or allowed file that no longer matches is stale and fails too, so the lists only shrink.
+string literals are not code) that match its constants, intrinsics or definitions. A signature found outside the
+owner's directory in first-party product code (engine/, the host tools under tools/ and the sandbox application) is a
+second implementation, and this guard fails on it unless the registry lists that file as `pending` (an owning row
+moves it onto the owner) or `allowed` (the match is not an implementation, with the reason). A pending or allowed file
+that no longer matches is stale and fails too, so the lists only shrink.
 
   python scripts/check-capability-owners.py [--root <repository root>] [--audit]
 
---audit prints every match outside its owner, pending and allowed ones included, grouped by capability. Mods,
-plugins, user projects and CHIR/CEIR scripts are outside engine/ and outside this guard.
+--audit prints every match outside its owner, pending and allowed ones included, grouped by capability. Tests and the
+measurement programs under runtime/examples carry reference implementations as oracles and peers; they, mods, plugins,
+user projects and CHIR/CEIR scripts are outside this guard.
 """
 import argparse
 import importlib.util
@@ -23,6 +25,7 @@ from pathlib import Path
 
 REGISTRY = 'cmake/capability-owners.json'
 SCHEMA = 'cerid-capability-owners/1'
+ROOTS = ('engine', 'tools', 'sandbox')
 SUFFIXES = {'.c', '.cc', '.cpp', '.cxx', '.cu', '.h', '.hpp', '.inl', '.mm'}
 MODULE = re.compile(r'^crd_module\(([^)]*)\)', re.MULTILINE)
 ROW = re.compile(r'<a id="slice-([^"]+)"></a>')
@@ -164,14 +167,15 @@ def _validate_entries(capability, key, where, rows, root):
     return problems
 
 
-def engine_sources(root):
-    for path in sorted((root / 'engine').rglob('*')):
-        if path.suffix in SUFFIXES and path.is_file():
-            yield path.relative_to(root).as_posix(), path
+def product_sources(root):
+    for top in ROOTS:
+        for path in sorted((root / top).rglob('*')):
+            if path.suffix in SUFFIXES and path.is_file():
+                yield path.relative_to(root).as_posix(), path
 
 
 def scan(registry, modules, root):
-    """{capability id: {path: [(line, what)]}} for every signature match in an engine source outside its owner."""
+    """{capability id: {path: [(line, what)]}} for every signature match in a product source outside its owner."""
     compiled = []
     for capability in registry['capabilities']:
         if capability.get('status', 'landed') == 'planned' or capability['owner'] not in modules:
@@ -180,7 +184,7 @@ def scan(registry, modules, root):
             compiled.append((capability['id'], modules[capability['owner']], re.compile(signature['regex']),
                              signature['what']))
     hits = {}
-    for name, path in engine_sources(root):
+    for name, path in product_sources(root):
         relevant = [c for c in compiled if not name.startswith(c[1])]
         if not relevant:
             continue
