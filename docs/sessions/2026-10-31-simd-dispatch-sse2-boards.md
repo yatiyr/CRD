@@ -58,7 +58,28 @@ Checks: linux-gcc-release `crd-math-tests` and `crd-hesap-tensor-tests` built, t
 cases and every `kernels-at-<level>` arm pass (47 and 102), the v14-a gates pass; win-debug builds of both targets
 and their kernel cases; Allman braces, clang-format (no new finding).
 
+## The nn regression
+
+`perf` runs in WSL with the 6.8 linux-tools build and the cpu-clock software event (the kernel's own perf is absent),
+so both binaries were profiled; callgrind counted 59.8 G instructions in HEAD against 48.2 G pre-row, too few to
+explain 3.7x, which pointed at serial chains:
+
+- The convolution's fused 2x2 pool called the scalar IEEE `maximum` three times per output (54% of HEAD's samples).
+  `max_pool2_row` now takes the vertical maximum and the column pairs' maximum (`load_complex_deinterleaved`'s even
+  and odd lanes) on vector lanes, with zero-filled vector tails; the fused pool and the stand-alone 2x2 pool share
+  it. The same expression per output, so the bits are unchanged.
+- The mlp's layernorm stayed in general code, so its f32 `fma` chain ran the exact emulation at the baseline ISA.
+  It is now `nn_layernorm_rows`, a kernel of the nn unit (`NnLayerNormF32`), in the same operation order; a new
+  level test checks its bits on every level against the scalar order (constant rows, a large offset, NaN, a variance
+  below eps and one that overflows).
+
+After them the mlp rows are at pre-row within the spread but Q8_0 at batch 16 (0.91x), and the cnn rows trail by
+11% to 16% in every round: the convolution kernel takes 18% more samples than pre-row's and the pool and image loop
+55% more. Linux: the 199 nn and tensor kernel cases pass.
+
 ## Left
 
-The row's Left list carries: the nn avx2 regression, the scalar transcendentals of baseline general code (Gamma), the
-Student-t quotient's second division, then the jobs-retune thread sweep and fft f32 against MKL.
+The row's Left list carries: the cnn rows' remaining 11% to 16% (the convolution step's code against pre-row's, the
+per-row pool call), the scalar transcendentals of baseline general code (Gamma; nn's gelu, tanh and sigmoid spans,
+whose erf, tanh and exp cores are general code too), the Student-t quotient's second division, then the jobs-retune
+thread sweep and fft f32 against MKL.

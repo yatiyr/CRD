@@ -58,8 +58,31 @@ Accepted: dtypes and reduce. Three regressions hold in every round:
   (the quotient's rounding carried so log stays within an ulp; it had reached 7 ulp next to sqrt(2)). The sum now
   divides three times per four elements instead of twice. It stays 2.23x ahead of JAX.
 - **nn.** Every layer kind and tier, worst on the 3x3 convolutions (0.27 to 0.38). The input is now the corpus's
-  frozen rows repeated (pre-row: Philox values in [-1, 1]); both nets are relu nets with no data-dependent branch,
-  and the ratio is the same at batch 8 and 4096. Not located yet.
+  frozen rows repeated (pre-row: Philox values in [-1, 1]); no input or output value is subnormal, and the ratio is
+  the same at batch 8 and 4096. A `perf` cpu-clock profile of each binary (the 6.8 linux-tools build runs the
+  software event in WSL) and callgrind's counts (HEAD 59.8 G instructions, pre-row 48.2 G) named two causes:
+  - the convolution's fused 2x2 pool ran the scalar IEEE `maximum` (compares, `setnp`, `cmov`) three times per
+    output: 54% of HEAD's samples, where pre-row's `vmaxss` ternaries were a small part of `conv_run`;
+  - the mlp's layernorm stayed in general code, so its `fma` chain ran the exact f32 emulation (double products,
+    rounding to odd) at the baseline ISA: `run_op` took 6.4x pre-row's samples.
+
+**After the nn folds** (the pool's vertical and column-pair maxima on vector lanes through one row helper shared by
+the fused and the stand-alone pool, zero-filled vector tails; layernorm as a kernel of the tensor family's nn unit),
+pre-row over HEAD at avx2, three rounds:
+
+| row | batch 16 (mlp), 8 (cnn) | batch 4096 |
+|---|---|---|
+| mlp f32 | 0.969 [0.966-1.020] | 0.961 [0.956-1.019] |
+| mlp Q8_0 | 0.909 [0.868-0.941] | 0.985 [0.978-1.018] |
+| mlp i8 | 0.989 [0.989-1.047] | 1.016 [1.008-1.078] |
+| cnn f32 | 0.840 [0.807-0.859] | 0.835 [0.831-0.875] |
+| cnn Q8_0 | 0.862 [0.861-0.914] | 0.890 [0.881-0.933] |
+| cnn i8 | 0.858 [0.838-0.916] | 0.849 [0.838-0.859] |
+
+The mlp rows are at pre-row within the spread but Q8_0 at batch 16 (0.91). The cnn rows still trail by 11% to 16%
+in every round: in the profile the convolution kernel takes 18% more samples than pre-row's and the pool and
+image loop 55% more (a call and two partial tails per pooled row). sse2 against `portable@sse2`: mlp 1.28x to 2.78x,
+cnn 1.65x to 1.69x. Logs: `~/sse2-board/logs-nnfix2`.
 
 ## sse2 and sse4.2 bodies against the portable loop
 
@@ -112,12 +135,12 @@ special and fft already do.
 | Gamma gradient (O(1)), ns/call | 88.6 | 472 | JAX 238,300, PyTorch 13.6 M |
 | lgamma 4 Mi batch, ns/elem | 4.85 | 82.1 | scipy 8.41, MATLAB-1T 7.49, Boost (scalar) 234 |
 | tgamma 4 Mi batch | 5.92 | 142 | scipy 15.1, MATLAB-1T 14.1, Boost (scalar) 258 |
-| mlp f32 batch 16 / 4096, ns/sample | 352 / 345 | 11,700 / 11,050 | onnxruntime 445 / 239, torch 1,247 / 401 |
-| cnn f32 batch 8 / 4096, ns/sample | 6,493 / 5,180 | 81,000 / 81,210 | onnxruntime 2,296 / 2,180, torch 17,560 / 14,300 |
+| mlp f32 batch 16 / 4096, ns/sample (after the nn folds) | 210 / 216 | 10,810 / 11,010 | onnxruntime 445 / 239, torch 1,247 / 401 |
+| cnn f32 batch 8 / 4096, ns/sample (after the nn folds) | 2,135 / 2,270 | 77,580 / 79,320 | onnxruntime 2,296 / 2,180, torch 17,560 / 14,300 |
 
 The peers run their AVX2 (and FMA) code at every Cerid level, so a sse2 column against them is a floor, not a
-like-for-like row. Behind a peer at avx2: torch's f32 to f16 (0.97), onnxruntime's mlp at batch 4096 (0.69) and its
-cnn (0.35, 0.42), the cnn being the regression above.
+like-for-like row. Behind a peer at avx2: torch's f32 to f16 (0.97) and onnxruntime's cnn at batch 4096 (0.96);
+before the nn folds onnxruntime led the mlp at batch 4096 (0.69) and the cnn by 2.4x to 2.8x.
 
 Logs: `~/sse2-board/logs` in WSL (`round<N>-<bench>.log`; after the fold `~/sse2-board/logs-rne`; the pre-row
 binaries in `~/sse2-board/prerow`). `scripts/run-lane-bench.sh` now takes `<level>@<glibc level>` list entries, so
