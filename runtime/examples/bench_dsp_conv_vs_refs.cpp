@@ -31,6 +31,13 @@ int main()
     for (int r = 0; r < reps; ++r)
     {
         auto c = conv.convolve(cont::ConstSpan<double>(x.data(), n), cont::ConstSpan<double>(h.data(), n));
+        // The full convolution, so c[n] is one of its samples; checked, since an empty result would hold no array
+        // (GCC's link-time pass reported that path as a null dereference).
+        if (c.size() != 2 * n - 1)
+        {
+            std::fprintf(stderr, "bench_dsp_conv_vs_refs: convolve returned %zu samples\n", c.size());
+            return 1;
+        }
         chk += c[n];
     }
     auto t1 = std::chrono::high_resolution_clock::now();
