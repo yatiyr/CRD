@@ -629,6 +629,11 @@ void sleep_for_injected_delay(crd::u64 ns) noexcept
 {
     std::this_thread::sleep_for(std::chrono::nanoseconds(static_cast<std::chrono::nanoseconds::rep>(ns)));
 }
+
+std::filesystem::path native_path(const Path& path)
+{
+    return to_native_path(path);
+}
 } // namespace detail
 
 } // namespace crd::platform::fs

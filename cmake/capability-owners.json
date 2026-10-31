@@ -180,6 +180,27 @@
       ]
     },
     {
+      "id": "io.durable-saves",
+      "summary": "Durable saves: the atomic, flushed replace of a file, generational checksummed saves with their fallback, the checksummed journal and the autosave cadence (HW-RESILIENCE.1).",
+      "owner": "platform",
+      "api": [
+        "engine/foundation/platform/include/crd/platform/durable_file.hpp"
+      ],
+      "signatures": [
+        {
+          "regex": "\\bMOVEFILE_REPLACE_EXISTING\\b|\\bF_FULLFSYNC\\b",
+          "what": "a durable replace or flush of a file"
+        }
+      ],
+      "pending": [
+        {
+          "path": "engine/foundation/perf/src/bundle.cpp",
+          "row": "OWN.1"
+        }
+      ],
+      "decision": "crd-platform owns durable files with the rest of file I/O. crd-perf's bundle publish (write_bundle_atomic) moves onto it when crd-perf can link crd-platform: crd-perf is in the relocatable package and crd-platform is not yet."
+    },
+    {
       "id": "log.logging",
       "summary": "Log channels, records, levels and sinks.",
       "owner": "log",

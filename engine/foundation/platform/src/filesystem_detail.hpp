@@ -5,6 +5,8 @@
 #include <crd/core/types.hpp>
 #include <crd/platform/filesystem.hpp>
 
+#include <filesystem>
+
 namespace crd::platform::fs::detail
 {
 
@@ -20,5 +22,8 @@ struct RangeRead
 
 // Sleep for an injected completion delay.
 void sleep_for_injected_delay(crd::u64 ns) noexcept;
+
+// The OS spelling of `path` (UTF-16 on Windows). May throw (allocation), as std::filesystem::path does.
+[[nodiscard]] std::filesystem::path native_path(const Path& path);
 
 } // namespace crd::platform::fs::detail
