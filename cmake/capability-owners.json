@@ -273,7 +273,7 @@
           "row": "OWN.1"
         }
       ],
-      "decision": "Compression belongs to a foundation module unless a decision records otherwise (OWN.1; the publishing research's P-4 asks): crd-perf's bundle refused compressed sections only because the codec sat in crd-resources, above it. OWN.1 created crd-compression (2026-10-31) and moved resources' raw DEFLATE, inflate, zlib and Adler-32 and its zstd binding there (zstd's header is private to it); resources, its CRDR container and shader-cook through it consume it, hesap-tensor's npz inflate moves onto it and perf's bundle consumes it, and SHIP.2's crdr v2 chunk codecs (trained dictionaries, GDeflate) land in it."
+      "decision": "Compression belongs to a foundation module unless a decision records otherwise (OWN.1; the publishing research's P-4 asks): crd-perf's bundle refused compressed sections only because the codec sat in crd-resources, above it. OWN.1 created crd-compression (2026-10-31) and moved resources' raw DEFLATE, inflate, zlib and Adler-32 and its zstd binding there (zstd's header is private to it); resources, its CRDR container and shader-cook through it consume it, hesap-tensor's npz inflate is to move onto it, perf's bundle is to consume it once the module is in the relocatable package, and SHIP.2's crdr v2 chunk codecs (trained dictionaries, GDeflate) land in it."
     },
     {
       "id": "math.fixed-size-linear-algebra",

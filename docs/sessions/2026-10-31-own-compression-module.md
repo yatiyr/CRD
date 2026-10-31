@@ -61,11 +61,13 @@ drops its private zstd include path. The registry lands `compression.codecs` wit
 ## Before/after board
 
 `runtime/examples/bench_compression.cpp` (a retained bench) times each codec per KiB of a 256 KiB text-like input and
-prints the XXH3-64 of every case's output. The engine before the move (main at 0fa75ccf with the bench added) and after it are two
-builds, two commands of [ab-board.py](../../scripts/ab-board.py) with `--same` on the digests: both print the same
-bytes at every case of every repetition, so the move is **bit-exact**. linux-gcc-release, GCC 13.3, `cerid-track-b`
-(8 vCPUs, Intel Xeon), CPU 3 pinned, one warm-up, band 2%, the host idle before and after (`build-bench.py host`).
-Times are ns per KiB; speed ratio = before over after, median with its bootstrap 95% interval.
+prints the XXH3-64 of every case's output. The engine before the move and after it are two builds, two commands of
+[ab-board.py](../../scripts/ab-board.py) with `--same` on the digests: both print the same bytes at every case of
+every repetition, so the move is **bit-exact**. The before arm's source is not in history: it is main at 0fa75ccf with
+this bench added, its `deflate.hpp` include and `namespace codec` naming `crd/resources` and `crd::resources`.
+linux-gcc-release, GCC 13.3, `cerid-track-b` (8 vCPUs, Intel Xeon), CPU 3 pinned, one warm-up, band 2%, the host idle
+before and after (`build-bench.py host`). Times are ns per KiB; speed ratio = before over after, median with its
+bootstrap 95% interval.
 
 | case | before | after | speed ratio | verdict |
 |---|---|---|---|---|
@@ -83,12 +85,14 @@ function aligned to 64 bytes in both builds (`-falign-functions=64`, both at 0x8
 
 | case | before | after | speed ratio | verdict |
 |---|---|---|---|---|
-| deflate-raw | 66353 | 66761 | 0.989 [0.9782-1.004] | within noise of level (30 repetitions) |
+| deflate-raw | 66353 | 66761 | 0.989 [0.9782-1.004] | unresolved (30 repetitions) |
 | zlib-deflate | 69913 | 69866 | 1.001 [0.9917-1.01] | level |
 | the other five | | | 0.9949 to 0.9998 | level |
 
-So the 4% is the hot loop's placement, not the move; the 16-byte-offset placement is the faster one for this loop,
-which is a code-layout question for the optimization track rather than an ownership one.
+deflate-raw stays unresolved after 30 repetitions: its interval reaches 0.2% below the band and holds 1. With the
+instructions identical and the start address the same, the 4% is the hot loop's placement, not the move; the
+16-byte-offset placement is the faster one for this loop, which is a code-layout question for the optimization track
+rather than an ownership one.
 
 ## Verification (cerid-track-b, linux-gcc-debug, GCC 13.3)
 
