@@ -346,7 +346,9 @@ a long-lived machine never reports an earlier run's. Artifacts carry a kind (by 
 downloads them with the job's reproducibility record (each checked against its SHA-256) and prints the exact local
 replay: the commit in its own worktree, the lane as CI ran it with the failed tests only, the failed tests at the
 job's CPU level, and each diagnostic's reader; `--run` runs the worktree and lane steps, never in the current
-checkout.
+checkout. A step that never reaches its upload phase (a timeout, a crashed or killed lane) is collected by the agent
+after the failed step with the checkout's own collector, and the plan's artifact paths include the diagnostics and
+gold trees, so the end-of-job upload sends them either way.
 
 *Privacy, following the engine's redaction contract (`crd/core/redaction.hpp`; ADR-0133 ID-8: a raw dump is never
 declared redacted).* A raw memory dump of a test process holds its environment, and so the job's secrets: raw dumps
@@ -371,9 +373,11 @@ uploaded unscrubbed; that defect is fixed with a test.
 | Never a pass by default | an untriaged or not yet compared image marks its cell needs triage; a rejected or unreadable image, a bad manifest or a missing file fails it |
 | Triage | approve or reject (or reset) by compare-and-swap with the label the person saw; audited; a reject writes a finding with the ROADMAP text its owner files and notifies; a new baseline re-compares the grouping's untriaged images |
 | Policy | `ci/gold.json` in the repository, reviewed like code: defaults, per-test overrides by pattern, viewing distances |
+| One verdict everywhere | the verdicts are applied to the matrix before it is counted or drawn, for the web UI's QUAL page and the served static page alike |
+| Retention | images, comparisons, expectations and findings are kept by content and not swept: a baseline must outlive the builds that produced it |
 
 *Comparison in the standard library.* FLIP (the reference algorithm, NVlabs/flip, BSD-3-Clause, written again) and
-SSIM are pure Python with separable Gaussians: 512 x 512 takes about 7 s for both on the development host, so the
+SSIM are pure Python with separable Gaussians: 512 x 512 takes about 5 s for both on the development host, so the
 comparison runs on its own worker thread beside the coordinator's loop and never delays dispatch; an image over the
 policy's pixel budget is compared box-downsampled by a declared integer factor with the pixels per degree divided by
 it. A NumPy pin was considered and rejected: it would add a binary dependency to the launcher for a workload this

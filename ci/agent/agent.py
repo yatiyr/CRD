@@ -492,6 +492,7 @@ class Agent:
             process = subprocess.Popen(argv, cwd=str(work), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                        stdin=subprocess.DEVNULL, **flags)
             process_box['process'] = process
+            step_started = time.time()
             deadline = time.monotonic() + float(job['timeout_minutes']) * 60.0
 
             def watch():
@@ -513,6 +514,8 @@ class Agent:
             timed_out = bool(cancel.get('timeout'))
             infra = cancel.get('infra')
             log.line('exit status %d%s' % (exit_status, ' (%s)' % cancel['reason'] if cancel['reason'] else ''))
+            if exit_status != 0 and not infra:
+                collect_diagnostics(work, env, step_started, log.line)
             if job.get('artifact_paths') and not infra:
                 upload_artifacts(client, job['id'], work, ';'.join(job['artifact_paths']), log.line,
                                  secrets=job.get('secrets', {}).values())
@@ -694,6 +697,26 @@ def upload_artifacts(client, job_id, work, patterns, say, secrets=(), kind=None)
                 say('artifact %s not uploaded: %s' % (relative, error))
     say('%d artifacts uploaded' % count)
     return count
+
+
+def collect_diagnostics(work, env, since, say, run=subprocess.run, timeout=600):
+    """After a failed, timed-out or killed step: the checkout's own collector (ci/coordinator/diagnostics.py) gathers
+    what the step left in every build tree it did not summarise itself, typed and scrubbed, for the end-of-job upload.
+    A checkout without the collector, or a collector that fails, never changes the job's result."""
+    script = Path(work) / 'ci' / 'coordinator' / 'diagnostics.py'
+    if not script.is_file():
+        return False
+    try:
+        completed = run([sys.executable, str(script), 'collect', '--checkout', str(work), '--since', repr(since)],
+                        cwd=str(work), env=env, capture_output=True, text=True, timeout=timeout, check=False)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        say('diagnostics not collected: %s' % error)
+        return False
+    for line in (completed.stdout or '').splitlines()[:200]:
+        say(line)
+    if completed.returncode:
+        say('diagnostics collector exited %d: %s' % (completed.returncode, (completed.stderr or '')[-300:]))
+    return completed.returncode == 0
 
 
 def job_secret_values(environ=None):

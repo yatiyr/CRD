@@ -145,13 +145,18 @@ def register_manifest(coordinator, job, entry, data):
     """Called when a job uploads `.../gold/manifest.json`: a pending result for the job's attempt, compared by
     `tick` once the job is over. A bad manifest is recorded as an error (the cell fails), never ignored."""
     base = entry['path'].rsplit('/', 1)[0]
+    name = result_name(job['build'], job['id'], job['attempt'], base)
+    digest = hashlib.sha256(data).hexdigest()
+    existing = coordinator.get(name)
+    if existing and existing.get('manifest_sha256') == digest:
+        return name  # the same manifest again (the in-job upload, then the end-of-job one)
     try:
         images = parse_manifest(data)
         error = None
     except GoldError as problem:
         images, error = [], str(problem)
-    name = result_name(job['build'], job['id'], job['attempt'], base)
     record = {'build': job['build'], 'job': job['id'], 'attempt': job['attempt'], 'key': job['key'],
+              'manifest_sha256': digest,
               'device': (job.get('env') or {}).get('CERID_CI_DEVICE'), 'commit': None, 'base': base,
               'cpu_level': (job.get('env') or {}).get('CRD_CPU_LEVEL'), 'status': 'pending', 'error': error,
               'entries': [dict(i, digest=None, state=None) for i in images], 'at': coordinator.clock()}

@@ -30,6 +30,7 @@ absent one. Every text item has the job's secret values replaced, and the agent 
 from __future__ import annotations
 
 from pathlib import Path
+import argparse
 import fnmatch
 import hashlib
 import importlib.util
@@ -200,11 +201,12 @@ def failed_tests(junits):
 
 # --------------------------------------------------------------------------------------------- collection
 
-def find_files(roots, since, skip=SKIP_DIRS, depth=12):
+def find_files(roots, since, skip=SKIP_DIRS, depth=12, seen=None):
     """[(path, kind)] of engine diagnostics under the roots, modified at or after `since` (a run's own files, never a
-    previous run's left on a long-lived machine)."""
+    previous run's left on a long-lived machine). `seen` (resolved paths) is shared across calls, so a root inside
+    another (a checkout under the temporary directory) reports each file once."""
     found = []
-    seen = set()
+    seen = set() if seen is None else seen
     for root in roots:
         root = Path(root)
         if not root.is_dir():
@@ -267,7 +269,7 @@ def item_name(path, roots):
 
 
 def collect(build_dir, since, context, secrets=(), raw_dumps=False, extra_roots=(), logs=None, junits=None,
-            max_item=MAX_ITEM_BYTES, max_total=MAX_TOTAL_BYTES, root=None):
+            max_item=MAX_ITEM_BYTES, max_total=MAX_TOTAL_BYTES, root=None, only_if_found=False):
     """Collect a failed run's diagnostics into `<build_dir>/diagnostics/` and return the summary (also written as
     `summary.json`; item paths are relative to `root`, the checkout, as the upload names them). `context`: preset,
     test_preset, device, commit, build, job, phase, cpu_level, ctest, lane_command."""
@@ -305,7 +307,8 @@ def collect(build_dir, since, context, secrets=(), raw_dumps=False, extra_roots=
                 entry['path'] = target.as_posix()
         items.append(entry)
 
-    for path, kind in find_files([build_dir], since) + find_files(extra_roots, since, depth=4):
+    seen = set()
+    for path, kind in find_files([build_dir], since, seen=seen) + find_files(extra_roots, since, depth=4, seen=seen):
         name = item_name(path, roots)
         try:
             size = path.stat().st_size
@@ -357,9 +360,12 @@ def collect(build_dir, since, context, secrets=(), raw_dumps=False, extra_roots=
         place('gpu-validation', name, scrub_text('\n'.join(lines) + '\n'), 'test output', test=test or None,
               note='%d messages' % len(lines))
 
+    failed = failed_tests(junits)
+    if only_if_found and not items and not failed:
+        return None
     summary = dict({k: context.get(k) for k in ('preset', 'test_preset', 'device', 'commit', 'build', 'job', 'phase',
-                                                 'cpu_level', 'ctest', 'lane_command')},
-                   schema=SCHEMA, failed_tests=failed_tests(junits), items=items,
+                                                 'cpu_level', 'ctest', 'lane_command', 'collected_by')},
+                   schema=SCHEMA, failed_tests=failed, items=items,
                    privacy={'raw_dumps': bool(raw_dumps), 'secret_values_scrubbed': len(secrets)},
                    collected=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
     out.mkdir(parents=True, exist_ok=True)
@@ -466,6 +472,52 @@ def reproduce_steps(job, summary, files, windows, checkout='.'):
     return steps
 
 
+def collect_after_step(checkout, since, environ=None, registry=None):
+    """The agent's collection when a step failed, timed out or was killed before its own `upload` phase ran (the
+    jobs most likely to leave a crash dump): every build tree of the checkout without a summary of this run gets one,
+    typed and scrubbed like the lane's. Returns the summaries written."""
+    environ = os.environ if environ is None else environ
+    checkout = Path(checkout)
+    names = [n for n in environ.get('CERID_CI_SECRET_NAMES', '').split(',') if n]
+    secrets = [environ[n] for n in names if environ.get(n)]
+    device_id = environ.get('CERID_CI_DEVICE')
+    try:
+        registry = registry or json.loads((checkout / 'ci/devices.json').read_text(encoding='utf-8'))
+        device = next((d for d in registry['devices'] if d['id'] == device_id), {})
+    except (OSError, ValueError):
+        device = {}
+    written = []
+    for build_dir in sorted(p for p in (checkout / 'build').glob('*') if (p / 'CMakeCache.txt').is_file()):
+        summary = build_dir / 'diagnostics' / 'summary.json'
+        if summary.is_file() and summary.stat().st_mtime + 2 >= since:
+            continue  # the lane collected this run itself
+        level = environ.get('CRD_CPU_LEVEL')
+        context = {'preset': build_dir.name, 'test_preset': build_dir.name, 'device': device_id,
+                   'commit': environ.get('CERID_CI_COMMIT'), 'build': environ.get('CERID_CI_BUILD_NUMBER'),
+                   'job': environ.get('CERID_AGENT_JOB_ID'), 'phase': None, 'cpu_level': level or 'native',
+                   'collected_by': 'agent: the step ended before its own upload phase',
+                   'ctest': 'ctest --preset %s --output-on-failure' % build_dir.name}
+        result = collect(build_dir, since, context, secrets=secrets,
+                         raw_dumps=bool((device.get('diagnostics') or {}).get('raw_dumps')),
+                         extra_roots=default_roots(), root=checkout, only_if_found=True)
+        if result is not None:
+            written.append(result)
+    return written
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description='Cerid CI failure diagnostics')
+    sub = parser.add_subparsers(dest='command', required=True)
+    run = sub.add_parser('collect', help='collect a failed step\'s diagnostics in a checkout (the agent runs this)')
+    run.add_argument('--checkout', required=True)
+    run.add_argument('--since', type=float, required=True, help='the step\'s start (seconds since the epoch)')
+    args = parser.parse_args(argv)
+    for summary in collect_after_step(args.checkout, args.since):
+        for line in describe(summary):
+            print(line)
+    return 0
+
+
 def diagnostic_entries(entries, job_id, attempt=None):
     """The artifacts of one job attempt (the newest by default) that are diagnostics."""
     mine = [e for e in entries if e['job'] == job_id]
@@ -473,3 +525,7 @@ def diagnostic_entries(entries, job_id, attempt=None):
         attempt = max(e['attempt'] for e in mine)
     return [dict(e, kind=e.get('kind') or artifact_kind(e['path'])) for e in mine if e['attempt'] == attempt and (
         e.get('kind') or artifact_kind(e['path'])) in DIAGNOSTIC_KINDS + ('junit',)]
+
+
+if __name__ == '__main__':
+    sys.exit(main())

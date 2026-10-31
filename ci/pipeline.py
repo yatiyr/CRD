@@ -981,7 +981,8 @@ def orchestrator_pipeline(planned, queues, environ=None):
                          'CERID_CI_INPUT_KEY': step['input_key'], 'CERID_CI_TIER': planned['tier'],
                          'CERID_CI_FEATURES': ','.join(step['features'])},
                  'artifact_paths': ['build/*/evidence/**/*', 'build/**/Testing/Temporary/*.log',
-                                    'build/**/Testing/Temporary/*.xml']}
+                                    'build/**/Testing/Temporary/*.xml', 'build/*/diagnostics/**/*',
+                                    'build/*/gold/**/*']}
         if step['agents'].get('queue') == queues['cloud']:
             entry['concurrency_group'], entry['concurrency'] = CLOUD_GROUP
         if step['state'] in ('cached', 'budget'):

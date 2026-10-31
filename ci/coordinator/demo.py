@@ -297,7 +297,7 @@ def main(argv=None):
     registry = c.p.load_registry()
     web = service.Service(c, auth.UiAuth('local', loopback=True), {}, registry=registry,
                           qual_data=coordinator_main.qual_renderer(store, registry, c),
-                          dashboard=coordinator_main.dashboard_renderer(store, registry))
+                          dashboard=coordinator_main.dashboard_renderer(store, registry, c))
     server = service.serve(web, '127.0.0.1', args.port)
     stop = threading.Event()
     threading.Thread(target=live_build, args=(c, stop), daemon=True).start()

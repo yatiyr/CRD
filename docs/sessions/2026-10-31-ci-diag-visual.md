@@ -37,7 +37,11 @@ C++ build, configure, engine CTest or WSL lane ran.
   `summary.json` (failed phase, failed tests, CPU level, the exact CTest command, every item or why it was
   withheld). The coordinator types each artifact by that path (or an explicit `--kind`); the build page shows a chip
   per kind on the failed step, the job page a Diagnostics card with the reproduce command, the QUAL drawer the kinds
-  with a link to the job.
+  with a link to the job. A step that never reaches its `upload` phase (a timeout, a crashed or killed lane: the
+  jobs most likely to leave a crash dump) is collected by the agent: after a failed step it runs the checkout's
+  collector (`diagnostics.py collect --checkout DIR --since T`) for every build tree the lane did not summarise, and
+  the plan's steps now list `build/*/diagnostics/**/*` and `build/*/gold/**/*` among their artifact paths, so the
+  agent's end-of-job upload sends them either way.
 - **Privacy.** Raw memory (minidumps, GPU dumps, cores) is withheld unless the device opts in
   (`"diagnostics": {"raw_dumps": true}`), because a dump of a test process holds its environment and so the job's
   secrets; a bundle keeps its other sections with the RawDump section an explicit absent one (its checksums
@@ -61,7 +65,8 @@ C++ build, configure, engine CTest or WSL lane ran.
   not-yet-compared images turn a passing QUAL cell into **needs triage**; rejected or unreadable ones fail it.
   Approve and reject are compare-and-swap with the state the person saw (a stale click is refused), audited, and a
   reject writes a finding with the text of the ROADMAP row its owner files and notifies. A newly approved baseline
-  re-compares the grouping's untriaged images.
+  re-compares the grouping's untriaged images. The verdicts are applied to the matrix before anything is counted or
+  drawn (`generate.render(cells_hook=...)`), so the served static QUAL page and the web UI's QUAL page agree.
 - **Web UI.** A Gold images page: the queue (filter, `j`/`k`), the approved, new and FLIP-difference images side by
   side with synchronised scrolling, blink (`b`; a manual flip under reduced motion), zoom (`+`, `-`, `0`) with
   pixelated scaling, the metrics against the tolerances, where it was rendered, a note, Approve (`a`) and Reject
@@ -78,11 +83,19 @@ C++ build, configure, engine CTest or WSL lane ran.
 - The fixture's gold results sat on builds the coordinator's recent list does not hold, so the triage page read
   nothing: the page and the re-comparison now read an index of the newest results the coordinator keeps
   (`Demo.test_the_fixture_fills_every_page`).
+- From the advisor review: a step killed by its timeout, or a lane that crashed, never reached its own upload phase
+  and so uploaded no diagnostics; the agent now collects after any failed step
+  (`Diagnostics.test_a_step_killed_before_its_upload_still_leaves_its_diagnostics`). And the served static QUAL
+  page did not carry the gold verdicts, so it showed pass where the web UI showed needs triage
+  (`Demo.test_the_fixture_fills_every_page` counts the needs-triage cells on the served page).
+- A file found under both the build tree and the temporary directory (a one-shot agent's checkout lives in the
+  temporary directory) would have been collected twice; the two searches share one set of seen paths.
 
 ## The perceptual comparison in the standard library
 
 FLIP and SSIM are written in pure Python (no NumPy pin): every Gaussian is separable, so a pass is one dimension at
-a time. Measured on this host (Python 3.14.4): 512 x 512 takes 5.6 s for FLIP and 1.3 s for SSIM. `max_pixels`
+a time, each window's dot product one `math.sumprod` call. Measured on this host (Python 3.14.4): 512 x 512 takes
+3.9 s for FLIP and 0.9 s for SSIM. `max_pixels`
 (262,144 by default) bounds the work: a larger image (a phone screenshot is about 2.6 megapixels) is compared box-
 downsampled by a declared integer factor with the pixels per degree divided by it, never skipped. Properties are
 tested (identical images score 0, inverted ones about 0.92, error grows with noise, white against black gives the
@@ -110,7 +123,7 @@ it lands.
 
 ## Verification
 
-`python scripts/test-ci-orchestrator.py` (146 tests, one skipped without `CERID_FLIP_REFERENCE`), `python
+`python scripts/test-ci-orchestrator.py` (147 tests, one skipped without `CERID_FLIP_REFERENCE`), `python
 scripts/test-ci-orchestrator-e2e.py` (3), `python scripts/test-ci-platform.py` (76), and the quick validators. The
 CDB1 reader and writer read the engine's own fuzz-corpus bundles (`tests/foundation/perf/fuzz/corpus/bundle`) and
 write them back byte for byte, and recover the truncated seed's complete prefix. In the desktop app's browser pane
@@ -133,9 +146,10 @@ directory `C:\Users\abici\.claude\projects\D--Dev-cerid\25b5b653-fafe-48b3-9c70-
 | Job diagnostics, phone width, light | `mcp-Claude_Browser-blob-1793406402312-6vny0i.jpg` |
 | Gold images, phone width, light | `mcp-Claude_Browser-blob-1793406409077-v7bnqo.jpg` |
 
-Two local runs failed in ways pure Python cannot (a segmentation fault, and `operator.mul` reporting one argument
-from `map(mul, a, b)`); each passed when rerun unchanged. This host's recorded misexecution under load
-(MEMORY: "This host misexecutes"), recorded here and not chased.
+Three local runs failed in ways pure Python cannot: one segmentation fault, and twice `operator.mul` reporting
+one argument from `map(mul, kernel, window)` at the same line; each passed when rerun unchanged. That matches this
+host's recorded misexecution under load (MEMORY: "This host misexecutes") and is recorded here, not chased; the
+convolution now calls `math.sumprod` instead (twice as fast, and no longer that call path).
 
 ## User actions now needed (in order)
 

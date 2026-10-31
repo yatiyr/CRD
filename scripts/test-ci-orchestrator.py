@@ -2247,6 +2247,51 @@ class Diagnostics(Base):
             self.assertTrue((Path(scratch) / dumps['crash_101.dmp']['path']).is_file())
             self.assertIn('secret value', dumps['crash_100.dmp']['withheld'], 'even then no secret value leaves')
 
+    def test_a_step_killed_before_its_upload_still_leaves_its_diagnostics(self):
+        """A timeout or a crashed lane never reaches its own upload phase: the agent runs the checkout's collector
+        and its end-of-job upload (the plan's artifact paths) sends the result."""
+        import shutil
+        with tempfile.TemporaryDirectory() as scratch:
+            work = Path(scratch) / 'checkout'
+            for relative in ('ci/coordinator/diagnostics.py', 'ci/agent/agent.py', 'ci/devices.json'):
+                (work / relative).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / relative, work / relative)
+            build = work / 'build/linux-gcc-debug'
+            (build / 'Testing/Temporary').mkdir(parents=True)
+            (build / 'CMakeCache.txt').write_text('# cache\n', encoding='utf-8')
+            (build / 'Testing/Temporary/LastTest.log').write_text(TEST_LOG, encoding='utf-8')
+            (build / 'tests').mkdir()
+            (build / 'tests/crash_7.log').write_text('signal 6 with %s in the environment\n' % SECRET, encoding='utf-8')
+            done = work / 'build/linux-clang-tsan'
+            (done / 'diagnostics').mkdir(parents=True)
+            (done / 'CMakeCache.txt').write_text('# cache\n', encoding='utf-8')
+            (done / 'diagnostics/summary.json').write_text('{"collected_by": null}', encoding='utf-8')
+            env = dict(os.environ, CERID_CI_SECRET_NAMES='DEPLOY_KEY', DEPLOY_KEY=SECRET,
+                       CERID_CI_DEVICE='gce-linux-x64-intel', CERID_AGENT_JOB_ID='j' * 32, CERID_CI_COMMIT=COMMIT)
+            said = []
+            self.assertTrue(agent_module.collect_diagnostics(work, env, time.time() - 60, said.append), said)
+            summary = json.loads((build / 'diagnostics/summary.json').read_text(encoding='utf-8'))
+            self.assertIn('agent', summary['collected_by'])
+            self.assertEqual(summary['failed_tests'], [])
+            self.assertEqual(sorted({i['kind'] for i in summary['items']}), [
+                'crash-record', 'gpu-validation', 'sanitizer-report'])
+            self.assertEqual(json.loads((done / 'diagnostics/summary.json').read_text(encoding='utf-8')),
+                             {'collected_by': None}, 'a tree the lane summarised itself is left alone')
+            plan = pipeline.orchestrator_pipeline({'tier': 'change', 'steps': [{
+                'label': 'l', 'key': 'lane', 'command': 'x', 'agents': {'queue': 'cerid-cloud'}, 'timeout': 60,
+                'priority': 1, 'device': 'gce-linux-x64-intel', 'input_key': 'k', 'features': ['unit'],
+                'state': 'run', 'reason': ''}]}, {'cloud': 'cerid-cloud', 'launcher': 'cerid-launcher'})
+            paths = ';'.join(plan['steps'][0]['artifact_paths'])
+            client = FakeUploads()
+            agent_module.upload_artifacts(client, 'j' * 32, work, paths, said.append, secrets=[SECRET])
+            uploaded = [urllib.parse.unquote(p.split('path=')[1]) for _, p, _ in client.calls]
+            self.assertIn('build/linux-gcc-debug/diagnostics/summary.json', uploaded)
+            self.assertIn(SECRET.encode(), (build / 'tests/crash_7.log').read_bytes(), 'the file on the machine has it')
+            for _, _, data in client.calls:
+                self.assertNotIn(SECRET.encode(), data)
+        self.assertFalse(agent_module.collect_diagnostics(Path(scratch) / 'gone', {}, 0.0, said.append),
+                         'a checkout without the collector is left as it is')
+
     def test_artifacts_carry_a_kind(self):
         for path, kind in (('build/p/diagnostics/crash-dump/x.dmp', 'crash-dump'),
                            ('build/p/diagnostics/summary.json', 'summary'), ('a/crash_1.dmp', 'crash-dump'),
@@ -2900,6 +2945,9 @@ class Demo(unittest.TestCase):
             states = {(cell['device'], cell['feature']): cell['state'] for cell in data['cells']}
             self.assertEqual((states[('gce-linux-x64-intel', 'vulkan')], states[('gce-linux-x64-nvidia-l4', 'vulkan')],
                               states[('gce-windows-x64', 'dx12')]), ('triage', 'triage', 'triage'))
+            page = coordinator_main.dashboard_renderer(store, REGISTRY, c)()
+            self.assertEqual(page.count('class="cell triage"'), 3, 'the served static page agrees with the web UI')
+            self.assertIn('needs triage cells', page)
             failed = next(cell for cell in data['cells'] if cell.get('diagnostics'))
             kinds = {a['kind'] for a in c.artifacts(3) if a['job'] == failed['job']}
             self.assertTrue({'sanitizer-report', 'flight-record', 'summary'} <= kinds)

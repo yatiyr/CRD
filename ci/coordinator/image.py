@@ -27,6 +27,8 @@ import zlib
 from operator import mul
 
 PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
+# The dot product of a kernel and a window: math.sumprod (Python 3.12+, in C, twice as fast as sum(map(mul)))
+DOT = getattr(math, 'sumprod', None) or (lambda a, b: sum(map(mul, a, b)))
 DEFAULT_PPD = 67.0  # FLIP's default: a 0.7 m wide 4K display seen from 0.7 m
 
 
@@ -189,7 +191,7 @@ def convolve_rows(plane, width, height, kernel):
     for y in range(height):
         row = plane[y * width:(y + 1) * width]
         padded = [row[0]] * r + row + [row[-1]] * r
-        out[y * width:(y + 1) * width] = [sum(map(mul, kernel, padded[x:x + 2 * r + 1])) for x in range(width)]
+        out[y * width:(y + 1) * width] = [DOT(kernel, padded[x:x + 2 * r + 1]) for x in range(width)]
     return out
 
 
