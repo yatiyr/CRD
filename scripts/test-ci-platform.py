@@ -793,9 +793,23 @@ class BenchMachine(unittest.TestCase):
     def test_sync_fetches_only_from_the_bundle_and_checks_out_detached(self):
         script = bench_vm.sync_script('~/sync.bundle', 'c' * 40, 'b' * 40)
         self.assertIn('git clone --quiet https://github.com/yatiyr/CRD.git', script)
-        self.assertIn('fetch --quiet ~/sync.bundle refs/bench/sync:refs/bench/sync', script)
+        self.assertIn('fetch --quiet ~/sync.bundle +refs/bench/sync-cerid-bench:refs/bench/sync-cerid-bench', script)
         self.assertIn('checkout --quiet --detach ' + 'c' * 40, script)
         self.assertNotIn('fetch', bench_vm.sync_script('~/sync.bundle', 'c' * 40, 'c' * 40).split('&&')[1])
+
+    def test_each_machine_syncs_through_its_own_ref(self):
+        # The parallel tracks' worktrees share refs/: two tracks syncing at once must not share the bundle's ref.
+        saved = bench_vm.NAME
+        try:
+            bench_vm.NAME = 'cerid-track-b'
+            track_b = bench_vm.sync_ref()
+            bench_vm.NAME = 'cerid-track-c'
+            track_c = bench_vm.sync_ref()
+            self.assertIn('+refs/bench/sync-cerid-track-c:refs/bench/sync-cerid-track-c',
+                          bench_vm.sync_script('~/sync.bundle', 'c' * 40, 'b' * 40))
+        finally:
+            bench_vm.NAME = saved
+        self.assertEqual((track_b, track_c), ('refs/bench/sync-cerid-track-b', 'refs/bench/sync-cerid-track-c'))
 
     def test_commands_wait_for_ssh_then_stop_after_create(self):
         calls = []

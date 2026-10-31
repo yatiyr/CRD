@@ -52,7 +52,6 @@ MAX_RUN_HOURS = 10
 PUBLIC_REPOSITORY = 'https://github.com/yatiyr/CRD.git'
 CHECKOUT = 'cerid'
 JOBS = 'jobs'
-SYNC_REF = 'refs/bench/sync'  # a bundle carries refs, not bare commits
 MAX_REMOTE_COMMAND = 7000  # cmd.exe's 8191-character line, less gcloud's path and other arguments
 
 
@@ -130,11 +129,18 @@ def parse_wait(output):
     return False, None, text
 
 
+def sync_ref():
+    """The ref a sync bundle carries (a bundle carries refs, not bare commits): one per machine, because the
+    worktrees of the parallel tracks share refs/ and one track's sync must never move or delete another's."""
+    return 'refs/bench/sync-' + NAME
+
+
 def sync_script(bundle, ref_commit, base):
     """Remote text that brings ~/cerid to `ref_commit` from an uploaded bundle (cloning the public repository first
     when the checkout does not exist yet)."""
     clone = '[ -d ~/%s/.git ] || git clone --quiet %s ~/%s' % (CHECKOUT, PUBLIC_REPOSITORY, CHECKOUT)
-    fetch = ('git -C ~/%s fetch --quiet %s %s:%s' % (CHECKOUT, bundle, SYNC_REF, SYNC_REF)
+    # Forced: a rebased or amended branch syncs a commit that does not descend from the last one.
+    fetch = ('git -C ~/%s fetch --quiet %s +%s:%s' % (CHECKOUT, bundle, sync_ref(), sync_ref())
              if base != ref_commit else 'true')
     return ' && '.join([clone, fetch, 'git -C ~/%s checkout --quiet --detach %s' % (CHECKOUT, ref_commit),
                         'rm -f %s' % bundle, 'git -C ~/%s log --oneline -1' % CHECKOUT])
@@ -227,12 +233,13 @@ class BenchVm:
         with tempfile.TemporaryDirectory() as scratch:
             bundle = Path(scratch) / 'sync.bundle'
             if base != commit:
-                subprocess.run([git, 'update-ref', SYNC_REF, commit], check=True, cwd=ROOT)
+                ref = sync_ref()
+                subprocess.run([git, 'update-ref', ref, commit], check=True, cwd=ROOT)
                 try:
-                    subprocess.run([git, 'bundle', 'create', str(bundle), SYNC_REF, '--not', base], check=True,
+                    subprocess.run([git, 'bundle', 'create', str(bundle), ref, '--not', base], check=True,
                                    cwd=ROOT, capture_output=True)
                 finally:
-                    subprocess.run([git, 'update-ref', '-d', SYNC_REF], cwd=ROOT)
+                    subprocess.run([git, 'update-ref', '-d', ref], cwd=ROOT)
                 self.gcloud(['compute', 'scp', str(bundle), '%s:sync.bundle' % NAME, *where(),
                              '--tunnel-through-iap', '--quiet'])
             out = self.gcloud(ssh_command(sync_script('~/sync.bundle', commit, base))).stdout.strip()
