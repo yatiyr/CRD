@@ -2326,40 +2326,68 @@ template <typename T> struct Engine
                     const V wsiv = V::load_aligned(wsi);
                     V wr = V::zero();
                     V wi = V::zero();
-                    for (crd::usize k1 = 0; k1 < n1; ++k1)
+                    // A micro-tile of `lanes` k1 steps a pass (n1 is a power of two of at least 32, so whole ones):
+                    // on the whole-line levels step kk's vector holds the tile's columns at k1 = k0 + kk, and
+                    // transposed in registers each column's run of k1 reaches its tbuf row as whole cache lines; the
+                    // other levels store each step's elements into their rows at once.
+                    for (crd::usize k0 = 0; k0 < n1; k0 += lanes)
                     {
-                        if ((k1 & (period - 1)) == 0) // reseed from the exact factored table (bounds recurrence drift)
+                        [[maybe_unused]] V xr[lanes];
+                        [[maybe_unused]] V xi[lanes];
+                        for (crd::usize kk = 0; kk < lanes; ++kk)
                         {
-                            alignas(64) T sr[lanes];
-                            alignas(64) T si[lanes];
+                            const crd::usize k1 = k0 + kk;
+                            if ((k1 & (period - 1)) == 0) // reseed from the exact factored table (bounds the drift)
+                            {
+                                alignas(64) T sr[lanes];
+                                alignas(64) T si[lanes];
+                                for (crd::usize l = 0; l < lanes; ++l)
+                                {
+                                    const crd::usize a = (i2 + g + l) * k1;
+                                    const crd::usize hh = a >> plan.ftw_h;
+                                    const crd::usize ll = a & mmask;
+                                    sr[l] = hir[hh] * lor[ll] - hii[hh] * loi[ll];
+                                    si[l] = isign * (hir[hh] * loi[ll] + hii[hh] * lor[ll]);
+                                }
+                                wr = V::load_aligned(sr);
+                                wi = V::load_aligned(si);
+                            }
+                            V zr;
+                            V zi;
+                            simd::load_complex_deinterleaved(reinterpret_cast<const T*>(scratch + k1 * bw + g), zr,
+                                                             zi);
+                            if constexpr (kWholeLineTiles)
+                            {
+                                xr[kk] = zr * wr - zi * wi;
+                                xi[kk] = zr * wi + zi * wr;
+                            }
+                            else
+                            {
+                                alignas(64) T orr[lanes];
+                                alignas(64) T oii[lanes];
+                                (zr * wr - zi * wi).store_aligned(orr);
+                                (zr * wi + zi * wr).store_aligned(oii);
+                                for (crd::usize l = 0; l < lanes; ++l)
+                                {
+                                    store_complex(tbuf + (i2 + g + l) * n1 + k1, orr[l], oii[l], true);
+                                }
+                            }
+                            if ((k1 & (period - 1)) != period - 1) // advance recurrence: w *= W_n^col
+                            {
+                                const V nr = wr * wsrv - wi * wsiv;
+                                const V ni = wr * wsiv + wi * wsrv;
+                                wr = nr;
+                                wi = ni;
+                            }
+                        }
+                        if constexpr (kWholeLineTiles)
+                        {
+                            transpose_rows(xr);
+                            transpose_rows(xi);
                             for (crd::usize l = 0; l < lanes; ++l)
                             {
-                                const crd::usize a = (i2 + g + l) * k1;
-                                const crd::usize hh = a >> plan.ftw_h;
-                                const crd::usize ll = a & mmask;
-                                sr[l] = hir[hh] * lor[ll] - hii[hh] * loi[ll];
-                                si[l] = isign * (hir[hh] * loi[ll] + hii[hh] * lor[ll]);
+                                store_tile_row(tbuf + (i2 + g + l) * n1 + k0, xr[l], xi[l]);
                             }
-                            wr = V::load_aligned(sr);
-                            wi = V::load_aligned(si);
-                        }
-                        V zr;
-                        V zi;
-                        simd::load_complex_deinterleaved(reinterpret_cast<const T*>(scratch + k1 * bw + g), zr, zi);
-                        alignas(64) T orr[lanes];
-                        alignas(64) T oii[lanes];
-                        (zr * wr - zi * wi).store_aligned(orr);
-                        (zr * wi + zi * wr).store_aligned(oii);
-                        for (crd::usize l = 0; l < lanes; ++l)
-                        {
-                            store_complex(tbuf + (i2 + g + l) * n1 + k1, orr[l], oii[l], true);
-                        }
-                        if ((k1 & (period - 1)) != period - 1) // advance recurrence: w *= W_n^col
-                        {
-                            const V nr = wr * wsrv - wi * wsiv;
-                            const V ni = wr * wsiv + wi * wsrv;
-                            wr = nr;
-                            wi = ni;
                         }
                     }
                 }
@@ -2506,6 +2534,42 @@ template <typename T> struct Engine
 #endif
         dst->re = re;
         dst->im = im;
+    }
+
+    // Whether the four-step's phase-1 step writes whole lines from a transposed micro-tile of k1 steps (the levels
+    // whose tile is one register, avx2, and two, avx512) or one complex a column's row a step (the levels whose tile
+    // spans two narrower registers, where the micro-tile does not fit the register file). The benchmark machine's
+    // boards (docs/bench/2026-10-31-simd-perf-fft-four-step-lines.md): the line path 1.6x to 2.7x faster at avx512,
+    // 1% to 6% at avx2, 1% to 3% slower at sse2; the same bits either way.
+#if CRD_SIMD_HAS_AVX2
+    static constexpr bool kWholeLineTiles = true;
+#else
+    static constexpr bool kWholeLineTiles = false;
+#endif
+
+    // One row of a transposed micro-tile: kCols<T, V> complex at dst, a whole number of 64-byte lines on a 64-byte
+    // boundary (a tbuf row starts on one, and the run's first k1 is a multiple of the tile). f64 as the four-step's
+    // non-temporal stores, now whole lines; f32 as plain stores, as before (the same bits either way).
+    template <typename V> static void store_tile_row(Complex<T>* dst, V re, V im) noexcept
+    {
+#if CRD_SIMD_HAS_SSE2
+        if constexpr (std::is_same_v<T, crd::f64>)
+        {
+            constexpr crd::usize count = 2U * kCols<T, V>;
+            alignas(64) crd::f64 line[count];
+            simd::store_complex_interleaved(line, re, im);
+            for (crd::usize i = 0; i < count; i += 2U)
+            {
+                _mm_stream_pd(reinterpret_cast<double*>(dst) + i, _mm_load_pd(line + i));
+            }
+        }
+        else
+        {
+            simd::store_complex_interleaved(reinterpret_cast<T*>(dst), re, im);
+        }
+#else
+        simd::store_complex_interleaved(reinterpret_cast<T*>(dst), re, im);
+#endif
     }
 
     // Store two adjacent Complex<f32> as one 16-byte non-temporal store (dst 16B-aligned) on the levels with SSE2;
