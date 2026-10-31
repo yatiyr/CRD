@@ -716,6 +716,61 @@ class Executors(unittest.TestCase):
         self.assertIn('Microsoft.VisualStudio.2026.BuildTools', windows)
         self.assertIn('--scope machine --id Python.Python.3.12', windows)
         self.assertNotIn('{extra}', windows)
+        # The completion marker is the last step before the power-off (Linux) or before sysprep (Windows).
+        self.assertLess(script.index(gce_vm.BAKE_MARKER), script.index('shutdown -h now'))
+        self.assertLess(windows.index(gce_vm.BAKE_MARKER), windows.index('sysprep.exe'))
+        self.assertIn(gce_vm.BAKE_FAILED_MARKER, windows)
+
+    def bake_calls(self, serial, operation_error=None):
+        calls, clock = [], [0.0]
+
+        def http(method, url, **kwargs):
+            calls.append((method, url))
+            if method == 'GET' and 'serialPort' in url:
+                return 200, ({'contents': serial, 'next': len(serial)} if '&start=0' in url else
+                             {'contents': '', 'next': len(serial)})
+            if method == 'GET' and '/global/operations/' in url:
+                done = {'name': 'op-image', 'status': 'DONE'}
+                return 200, dict(done, error=operation_error) if operation_error else done
+            if method == 'GET':
+                return 200, {'status': 'TERMINATED' if clock[0] >= 60 else 'RUNNING'}
+            if method == 'POST' and url.endswith('/global/images'):
+                return 200, {'name': 'op-image', 'status': 'RUNNING'}
+            return 200, {}
+
+        def sleep(seconds):
+            clock[0] += seconds
+        executor = gce_vm.GceVm({'CERID_CI_GCP_PROJECT': 'cerid-ci'}, http=http, token=lambda: 't')
+        device = pipeline.devices_by_id(REGISTRY)['gce-linux-x64-intel']
+        try:
+            image = executor.bake(device, 'script', '202610310900', log=lambda line: None, sleep=sleep,
+                                  clock=lambda: clock[0])
+        except gce_vm.BakeError as error:
+            return calls, error
+        return calls, image
+
+    def test_bake_deletes_the_instance_only_after_the_image_is_done(self):
+        calls, image = self.bake_calls('startup-script: + echo cerid-ci-bake-complete\ncerid-ci-bake-complete\n')
+        self.assertEqual(image['family'], 'cerid-ci-ubuntu-2404-x64')
+        order = [m + ' ' + ('operation' if '/global/operations/' in u else 'image' if u.endswith('/global/images')
+                            else 'serial' if 'serialPort' in u else 'instance') for m, u in calls]
+        last_serial = len(order) - 1 - order[::-1].index('GET serial')
+        self.assertEqual(order.index('POST image'), last_serial + 1, 'the image follows the whole serial read')
+        self.assertLess(order.index('GET operation'), order.index('DELETE instance'),
+                        'deleting the instance first removes the image source disk (RESOURCE_NOT_FOUND)')
+        self.assertEqual(order[-1], 'DELETE instance')
+
+    def test_bake_refuses_an_unfinished_provision_and_a_failed_image(self):
+        calls, error = self.bake_calls('startup-script: apt-get failed\n')
+        self.assertIsInstance(error, gce_vm.BakeError)
+        self.assertIn('stays for inspection', str(error))
+        self.assertFalse([u for m, u in calls if m == 'POST' and u.endswith('/global/images')], 'no image is made')
+        self.assertFalse([m for m, _ in calls if m == 'DELETE'])
+        calls, error = self.bake_calls('cerid-ci-bake-complete\n', operation_error={'errors': [
+            {'code': 'RESOURCE_NOT_FOUND'}]})
+        self.assertIsInstance(error, gce_vm.BakeError)
+        self.assertIn('RESOURCE_NOT_FOUND', str(error))
+        self.assertFalse([m for m, _ in calls if m == 'DELETE'], 'the instance stays when the image failed')
 
     def test_ssh_host_sends_the_token_on_standard_input_only(self):
         seen = {}

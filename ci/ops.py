@@ -343,27 +343,16 @@ def cmd_device_bake(ctx):
         raise OpsError('%s is a %s cell; only gce_vm cells have images' % (device['id'], device['executor']))
     executor = gce_vm.GceVm(ctx.environ)
     packages = list(p.APT_PACKAGES['arm64' if device['cpu']['arch'] == 'aarch64' else 'x64'])
-    zone, body = executor.bake_body(device, gce_vm.provision_script(device, packages))
+    provision = gce_vm.provision_script(device, packages)
     if ctx.args.dry_run:
+        zone, body = executor.bake_body(device, provision)
         return 0, {'zone': zone, 'instance': body}, json.dumps({'zone': zone, 'instance': body}, indent=1).splitlines()
-    base = '%s/projects/%s/zones/%s/instances' % (gce_vm.COMPUTE, executor.project, zone)
-    executor.http('POST', base, token=executor.token(), body=body)
-    print('baking %s on %s; waiting for it to power off (up to four hours)' % (device['id'], body['name']),
-          file=sys.stderr)
-    deadline = time.time() + 4 * 3600
-    while time.time() < deadline:
-        _, state = executor.http('GET', '%s/%s' % (base, body['name']), token=executor.token())
-        if state.get('status') == 'TERMINATED':
-            break
-        time.sleep(30)
-    else:
-        raise OpsError('the bake did not finish in four hours; instance %s stays for inspection' % body['name'],
-                       'look at its serial console in the Compute Engine page, then delete it')
     stamp = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d%H%M')
-    image = executor.image_body(device, zone, body['name'], stamp)
-    executor.http('POST', '%s/projects/%s/global/images' % (gce_vm.COMPUTE, executor.project), token=executor.token(),
-                  body=image)
-    executor.http('DELETE', '%s/%s' % (base, body['name']), token=executor.token(), allow=(404,))
+    try:
+        image = executor.bake(device, provision, stamp, log=lambda line: print(line, file=sys.stderr),
+                              sleep=time.sleep, clock=time.time)
+    except gce_vm.BakeError as error:
+        raise OpsError(str(error), 'look at its serial console in the Compute Engine page, then delete it')
     p.open_store(ctx.args.store).put_json('images/%s.json' % image['family'], {
         'image': image['name'], 'family': image['family'], 'baked': stamp, 'device': device['id']})
     return 0, {'image': image['name'], 'family': image['family']}, ['image %s in family %s' % (

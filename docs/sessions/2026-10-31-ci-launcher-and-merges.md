@@ -56,6 +56,17 @@ Done in the `cerid-ci` project, following [the setup recipe](../recipes/ci-platf
     credential URL from placeholders. No secret left the machine.
   - The fix: an empty refspec list now pushes nothing. A new test fails without the fix and passes with it. The
     recipe now writes the credential with `git credential approve`, so it no longer has that shape.
+- **`ops.py device bake` reported an image that was never made:** it deleted the bake instance, and with it the
+  auto-deleted disk, right after requesting the image, so `cerid-ci-ubuntu-2404-x64-202610310321` failed with
+  RESOURCE_NOT_FOUND (audit log) while the bake printed the image name and recorded it as baked. The ARM64 bake
+  succeeded only by timing. A failed provisioning script would also have been imaged after maxRunDuration stopped the
+  instance. The bake now lives in `GceVm.bake`, with three changes:
+  - it images only a disk whose provisioning printed `cerid-ci-bake-complete` on the serial console (and on Windows,
+    no `cerid-ci-bake-failed`);
+  - it waits for the image operation and checks its error;
+  - it deletes the instance only after that.
+
+  Tests cover the order and both refusals, and the order test fails on the old order.
 - **`workspace.py sync` reported a fast-forward push as "up to date":** Git's porcelain flag for a fast-forward is a
   space, which the report did not count. Every ref line is now parsed, and a test asserts the fast-forward is reported.
 - **`workspace.py` pushed every tag:** the local tag `backup-before-pdf-strip` holds a 218 MiB blob, over GitLab's

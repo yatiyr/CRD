@@ -28,6 +28,15 @@ SECRETS = 'https://secretmanager.googleapis.com/v1'
 NAME = re.compile(r'[^a-z0-9-]')
 
 
+# The provisioning scripts print these on serial port 1; an image is made only after the first and without the second.
+BAKE_MARKER = 'cerid-ci-bake-complete'
+BAKE_FAILED_MARKER = 'cerid-ci-bake-failed'
+
+
+class BakeError(RuntimeError):
+    pass
+
+
 class HttpError(RuntimeError):
     def __init__(self, status, body):
         super().__init__('HTTP %s: %s' % (status, body[:400]))
@@ -281,6 +290,61 @@ class GceVm:
         return {'name': '%s-%s' % (family, stamp), 'family': family,
                 'sourceDisk': 'zones/%s/disks/%s' % (zone, instance), 'labels': {'cerid-ci': 'image'}}
 
+    def serial_output(self, zone, instance):
+        """Serial port 1 of an instance, every page: the guest agent logs each startup-script line there."""
+        url = '%s/projects/%s/zones/%s/instances/%s/serialPort?port=1' % (COMPUTE, self.project, zone, instance)
+        text, start = '', 0
+        while True:
+            _, page = self.http('GET', '%s&start=%d' % (url, start), token=self.token())
+            text += page.get('contents', '')
+            following = int(page.get('next', start))
+            if following <= start or not page.get('contents'):
+                return text
+            start = following
+
+    def bake(self, device, provision, stamp, log, sleep, clock, hours=4):
+        """Provision a one-off instance, image its disk and delete it; the image record, or BakeError.
+
+        The image is made only after the provisioning script printed BAKE_MARKER (a failed script leaves the instance
+        running until maxRunDuration stops it, and that disk must never become an image). The instance and its
+        auto-deleted disk are removed only after the image operation is DONE without an error: deleting earlier
+        removes the image's source disk and the insert fails with RESOURCE_NOT_FOUND."""
+        zone, body = self.bake_body(device, provision)
+        base = '%s/projects/%s/zones/%s/instances' % (COMPUTE, self.project, zone)
+        self.http('POST', base, token=self.token(), body=body)
+        log('baking %s on %s; waiting for it to power off (up to %d hours)' % (device['id'], body['name'], hours))
+        deadline = clock() + hours * 3600
+        while True:
+            _, state = self.http('GET', '%s/%s' % (base, body['name']), token=self.token())
+            if state.get('status') == 'TERMINATED':
+                break
+            if clock() >= deadline:
+                raise BakeError('the bake did not finish in %d hours; instance %s stays for inspection'
+                                % (hours, body['name']))
+            sleep(30)
+        serial = self.serial_output(zone, body['name'])
+        if BAKE_MARKER not in serial or BAKE_FAILED_MARKER in serial:
+            raise BakeError('instance %s stopped without finishing its provisioning; it stays for inspection (its '
+                            'serial console shows the failing step)' % body['name'])
+        image = self.image_body(device, zone, body['name'], stamp)
+        _, operation = self.http('POST', '%s/projects/%s/global/images' % (COMPUTE, self.project),
+                                 token=self.token(), body=image)
+        operation = self.wait_global_operation(operation, sleep, clock, deadline=clock() + 3600)
+        if operation.get('error'):
+            raise BakeError('creating image %s failed (%s); instance %s stays for inspection' % (
+                image['name'], json.dumps(operation['error'])[:300], body['name']))
+        self.http('DELETE', '%s/%s' % (base, body['name']), token=self.token(), allow=(404,))
+        return image
+
+    def wait_global_operation(self, operation, sleep, clock, deadline):
+        url = '%s/projects/%s/global/operations/%s' % (COMPUTE, self.project, operation['name'])
+        while operation.get('status') != 'DONE':
+            if clock() >= deadline:
+                raise BakeError('operation %s did not finish in time' % operation['name'])
+            sleep(10)
+            _, operation = self.http('GET', url, token=self.token())
+        return operation
+
 
 PROVISION = {
     'linux': r'''#!/bin/bash
@@ -299,6 +363,7 @@ mkdir -p /var/lib/cerid-ci
 (lsb_release -ds; uname -r; cmake --version | head -1; gcc --version | head -1; clang --version | head -1;
  python3 --version; dpkg-query -W -f='${{Package}} ${{Version}}\n') > /var/lib/cerid-ci/image-census.txt
 rm -f /etc/machine-id && touch /etc/machine-id
+echo cerid-ci-bake-complete
 shutdown -h now
 ''',
     'windows': r'''# Cerid CI image bake (ci/ops.py bake): the toolchain the hosted windows-2025-vs2026 image provided.
@@ -311,7 +376,9 @@ winget install --silent --accept-package-agreements --accept-source-agreements -
 {extra}
 New-Item -ItemType Directory -Force -Path 'C:\cerid-ci' | Out-Null
 (Get-ComputerInfo | Select-Object OsName, OsVersion | Out-String) + (winget list | Out-String) | Out-File 'C:\cerid-ci\image-census.txt'
+Write-Output 'cerid-ci-bake-complete'
 & "$env:SystemRoot\System32\Sysprep\sysprep.exe" /generalize /oobe /shutdown /quiet
+if ($LASTEXITCODE -ne 0) { Write-Output "cerid-ci-bake-failed: sysprep exited $LASTEXITCODE" }
 ''',
 }
 PROVISION_EXTRA = {
