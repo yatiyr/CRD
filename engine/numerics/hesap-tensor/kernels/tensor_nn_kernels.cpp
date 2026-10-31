@@ -1,14 +1,16 @@
-// The f32 CNN kernels of crd/hesap/tensor/tensor_kernels.hpp (NnPool2d, NnConv2d), the fifth unit of the tensor family,
-// compiled once per CPU level by crd_add_cpu_kernels (../CMakeLists.txt, ADR-0134 §5).
+// The f32 CNN and layernorm kernels of crd/hesap/tensor/tensor_kernels.hpp (NnPool2d, NnConv2d, NnLayerNormF32), the
+// fifth unit of the tensor family, compiled once per CPU level by crd_add_cpu_kernels (../CMakeLists.txt, ADR-0134
+// §5), so their single-rounded fmas are the level's instruction or its exact emulation, never a library call.
 //
 // The direct 3x3/s1/p1 convolution stages an image's rows once into a zero-padded buffer, so every kj shift is a full
 // load, and keeps up to eight output channels' fma chains in registers over the output columns: a Vec16f while 16
 // columns remain at avx512, then Vec8f, the tail stored partially. Other shapes run im2col into the scratch slot, the
 // bias prefill and the batched unit's tiny GEMM. The max pool is IEEE 754 maximum (a NaN wins, +0 over -0), so its
 // result does not depend on the window order, NaN payloads aside: the 2x2/s2 hot shape takes the vertical maximum in
-// registers, the other windows fold row-major, and the direct convolution's fused pool gives the bits of conv, relu,
-// pool. Every output is the same operations on every level: one (c, ki, kj)-ordered chain of single-rounded fmas from
-// 0, one rounding for bias + chain, relu as maxps against +0 (BinaryOp::Max) and the order-free maximum.
+// registers and the column pairs' maximum on their even and odd lanes, the other windows fold row-major, and the
+// direct convolution's fused pool runs the same rows, so it gives the bits of conv, relu, pool. Every output is the
+// same operations on every level: one (c, ki, kj)-ordered chain of single-rounded fmas from 0, one rounding for bias
+// + chain, relu as maxps against +0 (BinaryOp::Max) and the order-free maximum.
 
 #include "tensor_nn_kernels.hpp"
 
@@ -16,6 +18,7 @@
 #include "tensor_ew_kernels.hpp"
 
 #include <crd/core/platform.hpp>
+#include <crd/math/select.hpp>
 #include <crd/math/simd/simd.hpp>
 #include <crd/math/simd/vec16f.hpp>
 
@@ -81,6 +84,49 @@ void relu_inplace(f32* y, u64 n) noexcept
     const i64 sa[1] = {1};
     const i64 sb[1] = {0};
     EwBinaryKernel<f32, BinaryOp::Max>::walk({y, y, &zero, shape, sa, sb, 1U});
+}
+
+// vm[j] = maximum(r0[j], r1[j]) for j in [j, w) in steps of V; returns where the steps stop.
+template <typename V> CRD_FORCEINLINE u64 vertical_steps(const f32* r0, const f32* r1, f32* vm, u64 j, u64 w) noexcept
+{
+    for (; j + kLanes<V> <= w; j += kLanes<V>)
+    {
+        maximum(V::load(r0 + j), V::load(r1 + j)).store(vm + j);
+    }
+    return j;
+}
+
+// One 2x2/s2 max-pooled row: vm[j] = maximum(r0[j], r1[j]) over the w columns (vm may be r0), then yrow[oj] =
+// maximum(vm[2 oj], vm[2 oj + 1]) for oj < ow <= w / 2, the column pairs split into even and odd lanes.
+void max_pool2_row(const f32* r0, const f32* r1, f32* vm, f32* yrow, u64 w, u64 ow) noexcept
+{
+    u64 j = vertical_steps<Wide>(r0, r1, vm, 0U, w);
+    j = vertical_steps<Group>(r0, r1, vm, j, w);
+    if (j < w) // the last columns through zero-filled copies: the scalar maximum is a chain of compares and selects
+    {
+        f32 a[kLanes<Group>] = {};
+        f32 b[kLanes<Group>] = {};
+        std::memcpy(a, r0 + j, (w - j) * sizeof(f32));
+        std::memcpy(b, r1 + j, (w - j) * sizeof(f32));
+        maximum(Group::load(a), Group::load(b)).store_partial(vm + j, static_cast<usize>(w - j));
+    }
+    u64 oj = 0;
+    for (; oj + kLanes<Group> <= ow; oj += kLanes<Group>)
+    {
+        Group even;
+        Group odd;
+        simd::load_complex_deinterleaved(vm + 2U * oj, even, odd);
+        maximum(even, odd).store(yrow + oj);
+    }
+    if (oj < ow)
+    {
+        f32 pairs[2U * kLanes<Group>] = {};
+        std::memcpy(pairs, vm + 2U * oj, 2U * (ow - oj) * sizeof(f32));
+        Group even;
+        Group odd;
+        simd::load_complex_deinterleaved(pairs, even, odd);
+        maximum(even, odd).store_partial(yrow + oj, static_cast<usize>(ow - oj));
+    }
 }
 
 // ---- the direct 3x3 / stride-1 / pad-1 convolution ------------------------------------------------------------------
@@ -243,13 +289,8 @@ void conv3x3_image(const NnConv2d& c, const f32* xi, f32* yi, f32* stage) noexce
             conv3x3_rowblock_any(r, c, s, o0, rb1, rs, 2U * oi2 + 1U);
             for (u32 rr = 0; rr < r; ++rr)
             {
-                const f32* a = rb0 + static_cast<u64>(rr) * rs;
-                const f32* b = rb1 + static_cast<u64>(rr) * rs;
-                f32* yrow = yi + (o0 + rr) * oh2 * ow2 + oi2 * ow2;
-                for (u64 oj = 0; oj < ow2; ++oj)
-                {
-                    yrow[oj] = maximum(maximum(a[2U * oj], b[2U * oj]), maximum(a[2U * oj + 1U], b[2U * oj + 1U]));
-                }
+                f32* a = rb0 + static_cast<u64>(rr) * rs;
+                max_pool2_row(a, rb1 + static_cast<u64>(rr) * rs, a, yi + (o0 + rr) * oh2 * ow2 + oi2 * ow2, w, ow2);
             }
         }
     }
@@ -347,36 +388,14 @@ void bias_fill(f32* y, const f32* bias, u64 oc, u64 ohw) noexcept
 
 // ---- pooling ----------------------------------------------------------------------------------------------------
 
-// vm[j] = maximum(r0[j], r1[j]) for j in [j, w) in steps of V; returns where the steps stop.
-template <typename V> CRD_FORCEINLINE u64 vertical_steps(const f32* r0, const f32* r1, f32* vm, u64 j, u64 w) noexcept
-{
-    for (; j + kLanes<V> <= w; j += kLanes<V>)
-    {
-        maximum(V::load(r0 + j), V::load(r1 + j)).store(vm + j);
-    }
-    return j;
-}
-
-// The 2x2/s2 max pool of a plane at most kPoolRowMax wide: each pair of rows' vertical maximum, then each pair of
-// columns'.
+// The 2x2/s2 max pool of a plane at most kPoolRowMax wide.
 void max_pool2_plane(const NnPool2d& c, const f32* xp, f32* yp) noexcept
 {
     f32 vm[kPoolRowMax];
     for (u64 oi = 0; oi < c.oh; ++oi)
     {
         const f32* r0 = xp + (2U * oi) * c.w;
-        const f32* r1 = r0 + c.w;
-        u64 j = vertical_steps<Wide>(r0, r1, vm, 0U, c.w);
-        j = vertical_steps<Group>(r0, r1, vm, j, c.w);
-        for (; j < c.w; ++j)
-        {
-            vm[j] = maximum(r0[j], r1[j]);
-        }
-        f32* yrow = yp + oi * c.ow;
-        for (u64 oj = 0; oj < c.ow; ++oj)
-        {
-            yrow[oj] = maximum(vm[2U * oj], vm[2U * oj + 1U]);
-        }
+        max_pool2_row(r0, r0 + c.w, vm, yp + oi * c.ow, c.w, c.ow);
     }
 }
 
@@ -436,6 +455,33 @@ void NnKernel::conv2d_images(const NnConv2d& c, f32* scratch, u32 lo, u32 hi) no
         if (c.relu)
         {
             relu_inplace(yi, c.oc * ohw);
+        }
+    }
+}
+
+void NnKernel::layernorm_rows(const NnLayerNormF32& c, u32 lo, u32 hi) noexcept
+{
+    for (u32 r = lo; r < hi; ++r)
+    {
+        const f32* x = c.x + static_cast<u64>(r) * c.d;
+        f32* y = c.y + static_cast<u64>(r) * c.d;
+        f32 mean = 0.0F;
+        for (u64 j = 0; j < c.d; ++j)
+        {
+            mean += x[j];
+        }
+        mean /= static_cast<f32>(c.d);
+        f32 var = 0.0F;
+        for (u64 j = 0; j < c.d; ++j)
+        {
+            const f32 t = x[j] - mean;
+            var = crd::math::fma(t, t, var);
+        }
+        var /= static_cast<f32>(c.d);
+        const f32 rstd = 1.0F / crd::math::sqrt(var + c.eps);
+        for (u64 j = 0; j < c.d; ++j)
+        {
+            y[j] = crd::math::fma((x[j] - mean) * rstd, c.g[j], c.b[j]);
         }
     }
 }
