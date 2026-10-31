@@ -496,11 +496,32 @@ SaveWrite save_generation(const Path& path, cont::ConstSpan<u8> payload, u32 kep
         bool main_good = main != nullptr && main->fault == SaveFault::None &&
                          read_save(main->path, main->header.generation, scratch, rereads) == SaveFault::None;
 
-        // A save interrupted after its bytes were durable and before its rename is completed first.
-        if (main == nullptr && pending != nullptr && pending->fault == SaveFault::None &&
-            read_save(pending->path, pending->header.generation, scratch, rereads) == SaveFault::None)
+        // Move the main file out of the way: into the ring's slot of its generation (which holds the oldest kept
+        // one) when it verifies, aside to `path.damaged` when it does not.
+        const auto set_main_aside = [&]() -> bool
         {
-            if (!replace_durable(pending->path, path))
+            if (main == nullptr)
+            {
+                return true;
+            }
+            if (!main_good)
+            {
+                return replace_durable(path, with_suffix(path, ".damaged"));
+            }
+            if (kept == 0U)
+            {
+                return true;
+            }
+            return replace_durable(path, slot_path(path, static_cast<u32>(main->header.generation % kept) + 1U));
+        };
+
+        // A save interrupted after its bytes were durable and before its rename is completed first, so its
+        // generation enters the ring like any other.
+        const bool pending_newest = pending != nullptr && pending->fault == SaveFault::None &&
+                                    (!main_good || pending->header.generation > main->header.generation);
+        if (pending_newest && read_save(pending->path, pending->header.generation, scratch, rereads) == SaveFault::None)
+        {
+            if (!set_main_aside() || !replace_durable(pending->path, path))
             {
                 return out;
             }
@@ -517,24 +538,10 @@ SaveWrite save_generation(const Path& path, cont::ConstSpan<u8> payload, u32 kep
             (void)remove_file(tmp);
             return out;
         }
-        if (main != nullptr)
+        if (!set_main_aside())
         {
-            // The ring's slot of the main file's generation holds the oldest kept one, which it replaces.
-            bool kept_aside = true;
-            if (!main_good)
-            {
-                kept_aside = replace_durable(path, with_suffix(path, ".damaged"));
-            }
-            else if (kept != 0U)
-            {
-                const u32 slot = static_cast<u32>(main->header.generation % kept) + 1U;
-                kept_aside = replace_durable(path, slot_path(path, slot));
-            }
-            if (!kept_aside)
-            {
-                (void)remove_file(tmp);
-                return out;
-            }
+            (void)remove_file(tmp);
+            return out;
         }
         // A failure here leaves the new save durable as `path.tmp`, which a load delivers.
         if (!replace_durable(tmp, path))

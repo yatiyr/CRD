@@ -57,11 +57,12 @@ platform-acceptance clause, linked both ways: each document format saves through
 
 ## Verification (win-debug)
 
-- `crd-platform-tests`, all 65 cases. New `[durable]` cases: every bit of the newest save flipped on disk and every
+- `crd-platform-tests`, all 66 cases. New `[durable]` cases: every bit of the newest save flipped on disk and every
   shorter length (each falls back to the previous generation with the typed fault, after one re-read); flipped reads
   through the seam (one flip is read again, every read flipped falls back); all generations damaged (Corrupt, empty
   payload); an interrupted save loaded and completed; every torn length of a save in flight ignored; a damaged main
-  file kept out of the ring; every bit and every torn length of a journal (a prefix of the records, never a changed
+  file kept out of the ring; a complete save newer than the main file entering the ring (it was first written over
+  by the next save: found in review, fixed in 2026-10-31's second commit); every bit and every torn length of a journal (a prefix of the records, never a changed
   one, and appends continue after the cut); journal reset and base; the autosave cadence.
 - `crd-resources-tests [cook]`, 18 cases, with a new one: a torn last journal record keeps the records before it,
   a damaged journal header recooks every job.

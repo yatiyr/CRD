@@ -302,6 +302,37 @@ TEST_CASE("durable: a save interrupted before its rename loads and is completed"
     CHECK(same(payload, kSaves[2]));
 }
 
+TEST_CASE("durable: a newer complete save beside the main file enters the ring", "[platform][durable]")
+{
+    const TempRoot root;
+    const fs::Path doc = root.path / "doc.crds";
+    save_all(doc, 3U);
+    const cont::Array<crd::u8> third = read_all(doc);
+    const cont::Array<crd::u8> second = read_all(suffixed(doc, ".1"));
+    // The crash point after the new save was durable and before the main file moved into the ring.
+    write_all(doc, second, second.size());
+    write_all(suffixed(doc, ".tmp"), third, third.size());
+
+    cont::Array<crd::u8> payload;
+    fs::SaveLoad load = fs::load_generation(doc, 2U, payload);
+    CHECK(load.status == fs::SaveStatus::Ok);
+    CHECK(load.generation == 3U);
+
+    const fs::SaveWrite w = fs::save_generation(doc, span_of(bytes_of(kSaves[3])), 2U);
+    REQUIRE(w.ok);
+    CHECK(w.generation == 4U);
+    CHECK_FALSE(fs::exists(suffixed(doc, ".tmp")));
+    // Generations 3 and 2 are the ring now: losing the main file delivers 3, then 2.
+    REQUIRE(fs::remove_file(doc));
+    load = fs::load_generation(doc, 2U, payload);
+    CHECK(load.generation == 3U);
+    CHECK(same(payload, kSaves[2]));
+    REQUIRE(fs::remove_file(load.source));
+    load = fs::load_generation(doc, 2U, payload);
+    CHECK(load.generation == 2U);
+    CHECK(same(payload, kSaves[1]));
+}
+
 TEST_CASE("durable: a torn save in flight never displaces the saved one", "[platform][durable]")
 {
     const TempRoot root;
