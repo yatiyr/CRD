@@ -1203,16 +1203,22 @@ def push_code_remote(ws, remote, report):
         report.add(f'code->{remote}', 'nothing to push')
         return
     result = git('push', '--porcelain', remote, *spec, cwd=ws.root, check=False)
-    lines = result.stdout.decode('utf-8', errors='replace').splitlines()
-    for line in lines:
-        flag, _, rest = line.partition('\t')
+    # Porcelain ref lines are '<flag>\t<from>:<to>\t<summary>': ' ' fast-forward, '+' forced, '*' new, '-' deleted,
+    # '=' up to date, '!' rejected.
+    pushed = rejected = 0
+    for line in result.stdout.decode('utf-8', errors='replace').splitlines():
+        flag, tab, rest = line.partition('\t')
+        if not tab or len(flag) != 1:
+            continue
         if flag == '!':
+            rejected += 1
             report.error(f'code->{remote}', 'rejected ' + rest)
-        elif flag in ('+', '*', '-'):
+        elif flag in (' ', '+', '*', '-'):
+            pushed += 1
             report.add(f'code->{remote}', 'pushed ' + rest)
-    if result.returncode != 0 and not any(line.startswith('!') for line in lines):
+    if result.returncode != 0 and not rejected:
         report.error(f'code->{remote}', result.stderr.decode('utf-8', errors='replace').strip())
-    elif not any(line.startswith(('+', '*', '-')) for line in lines):
+    elif not pushed and not rejected:
         report.add(f'code->{remote}', 'up to date')
 
 

@@ -56,6 +56,8 @@ Done in the `cerid-ci` project, following [the setup recipe](../recipes/ci-platf
     credential URL from placeholders. No secret left the machine.
   - The fix: an empty refspec list now pushes nothing. A new test fails without the fix and passes with it. The
     recipe now writes the credential with `git credential approve`, so it no longer has that shape.
+- **`workspace.py sync` reported a fast-forward push as "up to date":** Git's porcelain flag for a fast-forward is a
+  space, which the report did not count. Every ref line is now parsed, and a test asserts the fast-forward is reported.
 - **`workspace.py` pushed every tag:** the local tag `backup-before-pdf-strip` holds a 218 MiB blob, over GitLab's
   100 MiB limit, so GitLab would refuse the whole push. `code_remote_exclude_tags` now keeps chosen tags off the code
   hosts; the NAS bundle keeps every tag. A test covers it.

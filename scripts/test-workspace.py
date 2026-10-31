@@ -606,6 +606,7 @@ class EndToEndTests(unittest.TestCase):
         report, text = self.sync(self.a)
         self.assertEqual(report.errors, 0, text)
         self.assertEqual(ws_mod.ls_remote(self.host)['refs/heads/cleanup'], git('rev-parse', 'cleanup', cwd=root))
+        self.assertIn('pushed refs/heads/cleanup:refs/heads/cleanup', text, 'a fast-forward is reported as pushed')
 
     def test_an_adopted_configuration_decides_the_code_hosts_of_that_first_run(self):
         self.assertEqual(self.sync(self.a, push_code_remotes=False)[0].errors, 0)
