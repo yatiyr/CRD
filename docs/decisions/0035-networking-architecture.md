@@ -4,7 +4,8 @@
 > Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
 **Status:** Accepted; amended 2026-10-27 ([below](#amendment-2026-10-27-the-foundation-window-and-the-layers-above),
-[Part 4](#amendment-2026-10-27-part-4-path-reachability-time-standards-and-law))  
+[Part 4](#amendment-2026-10-27-part-4-path-reachability-time-standards-and-law)); amended 2026-10-31
+([the NET.1 design](#amendment-2026-10-31-the-net1-design))  
 **Date:** 2026-05-02  
 **Tags:** arch, networking, determinism, simulation
 
@@ -199,3 +200,11 @@ published clock quality) precedes 4.2c, whose policies are specified by techniqu
 twins read the same clock. NET-SCALE names its mechanisms (authority leases, exactly-once handoff, an event-sourced
 journal, an overload mode), NET-SERVER its fleet adapters, ANTICHEAT ships no kernel component, and the crash rows
 carry network context, consent tiers and the CRA Article 14 workflow.
+
+## Amendment 2026-10-31: the NET.1 design
+
+The [network foundation contract](../design/network-foundation.md) is the NET.1 design: assets, adversaries, trust
+boundaries and a threat catalogue across every product class; signed, expiring, session-bound capabilities with
+authorisation separate from authentication; game and project traffic as separate session types; eight bounded
+admission stages; browser constraints; the cryptographic provider policy with a new `crd-crypto` owner beside
+`crd-net`; version and extension negotiation with GREASE; and monotonic, signed crypto policy generations.

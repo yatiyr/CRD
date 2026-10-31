@@ -24,6 +24,7 @@ and verification evidence in the linked note; its live status belongs only to th
 | [CI platform](ci-platform.md) | ADR-0135's orchestrator, device registry, executors, budget, QUAL dashboard and the CI-4 parity table |
 | [CI tiers](ci-tiers.md) | Change, nightly and complete tiers, the required result and exact-revision lane evidence |
 | [Delivery plan](delivery-plan.md) | The accepted, dependency-ordered grouping of every master-table row (ADR-0129 amendment of 2026-10-27) |
+| [Network foundation](network-foundation.md) | NET.1's threat model, capabilities, game/project channel separation, bounded admission, browser constraints, crypto provider and agility policy |
 | [Module registry](module-registry.md) | `crd_module()` rows, dependency-closed `CRD_MODULES` selection and the verification pass |
 | [Pinned inputs](pinned-inputs.md) | `cmake/pins.json`: versions, sources, SHA-256, licences and verified offline archives |
 | [Public consumption](public-consumption.md) | Self-contained public headers, the public-check presets and the relocatable package consumer |
