@@ -111,7 +111,7 @@ each a `pending` entry or a listed review, all on OWN.1:
 | cpu.kernel-dispatch → core | `math/libm.hpp`, **moved** 2026-10-31 | read `__AVX2__` and `__FMA__` to choose the FMA instruction; it now reads crd-core's `CRD_TARGET_X64` and `CRD_TARGET_X64_FMA`, see below. |
 | math.fixed-size-linear-algebra → math | `geometry-primitives/transform.hpp`, `circumcenter.hpp`, mesh-processing's `quadric.hpp`, **moved** 2026-10-31 | `det3`, the inverse-transpose, the 2D attributes' determinant, the symmetric cofactor inverse and both circumcentres' Cramer's rule; crd-math gained Mat2/Mat3 `determinant`, `inverse`, `try_inverse`, `inverse_transpose`, `solve` and `try_solve`, see below. |
 | io.durable-saves → platform | `perf/bundle.cpp` | crd-perf's `write_bundle_atomic` replaces a file durably by hand; it moves onto `durable_file.hpp` once crd-perf, which ships in the relocatable package, can link crd-platform. |
-| compression.codecs → compression (new) | resources' `deflate`, `crdr` zstd use | decision 1. |
+| compression.codecs → compression | resources' `deflate`, `crdr`'s zstd calls and the resources fuzz target's, **moved** 2026-10-31; hesap-tensor's `io_zip.hpp` npz inflate (pending) | decision 1: crd-compression created; see below. |
 | numerics.signal-processing → hesap-dsp | `audio/audio_kernels.hpp`, hesap-dsp's own `sosfilt_stream`, **moved** 2026-10-31 | the audio biquad designed with hesap-dsp's RBJ formulas but ran its own transposed direct-form II loop; both loops now run hesap-dsp's `biquad_step`, bit-exact, see below. |
 | geometry.robust-predicates | `hesap-interp/clough_tocher.hpp` `fast_orient`, **moved** 2026-10-31 | a deliberate non-robust orientation for the walk with an exact fallback; it is now crd-math's 2D `cross`, not a second predicate, bit-exact, see below. |
 
@@ -173,10 +173,14 @@ Clang's `-mfma`, which the avx2 and avx512 levels' x86-64-v3 and -v4 carry, or M
 defines no `__FMA__`). `libm.hpp` chooses its fma body from them, and `CRD_MATH_SCALAR_DISPATCH` is now
 `CRD_TARGET_X64 && !CRD_TARGET_X64_FMA` in general code. The two conditions it replaces differed only for GCC or Clang
 code built with `-mavx2` but not `-mfma`, which no preset or level compiles (every x64 level is an x86-64-vN level).
-The oracle is the preprocessor's: the SIMD-type probe, compiled once per CPU level, refuses to compile unless crd-core
-reports FMA on exactly the avx2 and avx512 levels, `libm.hpp` computes fma in software on exactly the others, and on
-MSVC issues the intrinsic on exactly the FMA levels; CI's forced-level lanes and its MSVC, clang-cl and ARM64 lanes
-compile it on every target. The selected code is unchanged, so no board applies.
+A kernel unit takes `CRD_TARGET_X64_FMA` from its level rather than its compiler (FMA on exactly the avx2 and avx512
+levels), because the level's define reaches clang-tidy and MSVC's `/arch` does not: win-tidy analysed the avx2 and
+avx512 units without `__AVX2__` and the first form's probe refused them (2026-10-31). The oracle is the
+preprocessor's: every kernel unit compiled outside the analysis refuses to compile when its compiler's instruction set
+disagrees with its level, and the SIMD-type probe, compiled once per CPU level, checks that `libm.hpp` computes fma in
+software on exactly the levels without FMA and on MSVC issues the intrinsic on exactly the FMA levels; CI's
+forced-level lanes and its MSVC, clang-cl, tidy and ARM64 lanes compile them on every target. The selected code is
+unchanged, so no board applies.
 
 crd-math's `mat_types.hpp` gained the closed-form routines: `determinant` (Mat2, Mat3: the cofactor expansion along
 the first column, in the written order), `inverse` (Mat2, Mat3, beside Mat4's), `try_inverse` (Mat3: refuses
@@ -222,3 +226,31 @@ The Clough-Tocher walk read the sign of its own `fast_orient`; it now reads crd-
 same products in the same order, **bit-exact** over 65536 drawn triangles per precision, one query in eight on the edge
 line (`test_clough_tocher.cpp`). It stays a non-robust sign on purpose: a misrouted step costs a step, and the exact
 fallback scan is geometry's adaptive `orient2d`.
+
+### The compression module
+
+crd-compression (`engine/foundation/compression`, decision 1) holds the lossless codecs below every module that reads
+or writes compressed bytes. `deflate.hpp` is resources' own RFC 1951 DEFLATE and inflate with the RFC 1950 zlib
+wrapper and Adler-32, moved whole (namespace `crd::compression`, the code clang-formatted and otherwise unchanged).
+`zstd.hpp` is the binding of the pinned zstd, whose header is now private to the module: `zstd_compress_bound`,
+`zstd_compress` (one frame at a level, the output replaced, refused with an empty output when zstd fails),
+`zstd_decompress_exact` (the frames decode to exactly the buffer's size or are refused: corrupt, truncated, longer and
+shorter alike), and `zstd_max_decompressed_size` with `kZstdBlockMaxBytes` (the 3-byte block headers and 128 KiB
+blocks a claim is bounded by, moved from `crdr.hpp`). The CRDR reader and writer call the binding with the semantics
+they had (the claim checked before anything is reserved, a frame that decodes to any other size refused, a chunk stored
+raw when zstd fails or does not shrink it), and the resources fuzz target restates the layout over the binding instead
+of linking zstd itself. `crdr.hpp` names the writer's default level as `kZstdDefaultLevel`, so crd-resources links
+crd-compression publicly; the registry's signatures (the DEFLATE length base table, the Adler-32 modulus, a direct zstd
+call or include) refuse a second codec outside the module.
+
+The move is **bit-exact**: the before/after board runs the engine before the move and after it as two builds of
+`runtime/examples/bench_compression.cpp`, and `ab-board.py --same` holds both to the same XXH3-64 of every case's
+output (raw and zlib deflate and inflate, Adler-32, a CRDR chunk compressed and read back) on every repetition. The two
+deflate cases read 4% slower after the move; `deflate_raw`'s instructions are identical in both binaries and it starts
+16 bytes earlier, and with every function aligned to 64 bytes in both builds (the same start address) the cases are
+level, so the difference is the hot loop's placement, not the move.
+
+Still on OWN.1: hesap-tensor's npz reader carries a second inflate (`io_zip.hpp`, exact-size and allocation-free, with
+an over-subscription check resources' lacked); the two merge into one decoder in crd-compression with an exact-size
+form. crd-perf's bundle reads and writes compressed sections through the module once crd-compression and its zstd are
+in the relocatable package that ships crd-perf.
