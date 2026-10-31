@@ -390,6 +390,62 @@
       "member_sha256": "67ca5783febb8bf85736c79fcdd92c8d6d465a0eb2a082672bcdfa76a506751c",
       "license": "MIT",
       "note": "Node.js 24 LTS (Krypton, 2026-10-14) for the dashboard publisher only: ci/dashboard/generate.py publish runs the wrangler version locked with every transitive integrity hash in ci/dashboard/package-lock.json. Downloaded and hashed 2026-10-30; matches nodejs.org SHASUMS256.txt."
+    },
+    "bake-python-windows": {
+      "version": "3.12.10",
+      "url": "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe",
+      "file": "python-3.12.10-amd64.exe",
+      "sha256": "67b5635e80ea51072b87941312d00ec8927c4db9ba18938f7ad2d27b328b95fb",
+      "license": "PSF-2.0",
+      "note": "The own-CI Windows image bake (ci/executors/gce_vm.py) installs it for all users; 3.12.10 is the last 3.12 release with a Windows installer, the series the hosted workflow's setup-python uses. Downloaded and hashed 2026-10-31; Authenticode-signed by the Python Software Foundation."
+    },
+    "bake-git-windows": {
+      "version": "2.56.0.windows.4",
+      "url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.4/Git-2.56.0.4-64-bit.exe",
+      "file": "Git-2.56.0.4-64-bit.exe",
+      "sha256": "4961a4a8cc778d8b6e00a5819e5fe4d078b754555aff7aedc2d77a5d74c2de80",
+      "license": "GPL-2.0-only",
+      "note": "The own-CI Windows image bake installs it silently; the digest is GitHub's recorded asset digest, checked against the download."
+    },
+    "bake-cmake-windows": {
+      "version": "4.4.5",
+      "url": "https://github.com/Kitware/CMake/releases/download/v4.4.5/cmake-4.4.5-windows-x86_64.msi",
+      "file": "cmake-4.4.5-windows-x86_64.msi",
+      "sha256": "c18b52b4017c4e5ffcd7d516ea39c4e0ed37f58920b90a5c98a46280b1857145",
+      "license": "BSD-3-Clause",
+      "note": "The own-CI Windows image bake installs it on the system PATH; the same release as bake-cmake-linux-*. The digest is GitHub's recorded asset digest, checked against the download."
+    },
+    "bake-cmake-linux-x64": {
+      "version": "4.4.5",
+      "url": "https://github.com/Kitware/CMake/releases/download/v4.4.5/cmake-4.4.5-linux-x86_64.tar.gz",
+      "file": "cmake-4.4.5-linux-x86_64.tar.gz",
+      "sha256": "ed85135c5a5135b45e50423cb406dea04ca3338da0b8ef3c9ede963559680be0",
+      "license": "BSD-3-Clause",
+      "note": "The own-CI x86-64 Linux image bake unpacks it under /opt and links its binaries into /usr/local/bin. The digest is GitHub's recorded asset digest, checked against the download."
+    },
+    "bake-cmake-linux-arm64": {
+      "version": "4.4.5",
+      "url": "https://github.com/Kitware/CMake/releases/download/v4.4.5/cmake-4.4.5-linux-aarch64.tar.gz",
+      "file": "cmake-4.4.5-linux-aarch64.tar.gz",
+      "sha256": "301d5063ab259577c1b57ce5490b1aab9ea5c56dc4c822f73499553dab94925f",
+      "license": "BSD-3-Clause",
+      "note": "The own-CI ARM64 Linux image bake unpacks it under /opt and links its binaries into /usr/local/bin. The digest is GitHub's recorded asset digest, checked against the download."
+    },
+    "bake-vs-buildtools-windows": {
+      "version": "18 (stable channel bootstrapper)",
+      "url": "https://download.visualstudio.microsoft.com/download/pr/5f474104-723f-4007-bf4c-92e42a23dcc6/5a2e8014ae21c6e2e0aab37e12fa47357e8ac7a516f13f3ab1ded295af119bed/vs_BuildTools.exe",
+      "file": "vs_BuildTools.exe",
+      "sha256": "5a2e8014ae21c6e2e0aab37e12fa47357e8ac7a516f13f3ab1ded295af119bed",
+      "license": "Microsoft Visual Studio Build Tools license terms",
+      "note": "The Visual Studio 2026 Build Tools bootstrapper that https://aka.ms/vs/18/stable/vs_buildtools.exe resolved to on 2026-10-31; Authenticode-signed by Microsoft. It installs the stable channel's current toolset at bake time; the image census records the installed version (see unpinned.note)."
+    },
+    "bake-gpu-driver-installer-windows": {
+      "version": "9a05b735a56c45d87788720ed18ccca7205d224b",
+      "url": "https://raw.githubusercontent.com/GoogleCloudPlatform/compute-gpu-installation/9a05b735a56c45d87788720ed18ccca7205d224b/windows/install_gpu_driver.ps1",
+      "file": "install_gpu_driver.ps1",
+      "sha256": "ebee3a513540b4cc91abc4e64853a4e5fa00a6f57402ee277626312eb8d16e9f",
+      "license": "Apache-2.0",
+      "note": "Google's NVIDIA driver installer for Compute Engine Windows machines, commit-addressed; the own-CI Windows GPU image bake runs it. The driver it downloads is the one Google publishes for the machine's GPU; the image census records the installed driver. Downloaded and hashed 2026-10-31."
     }
   },
   "actions": {
@@ -445,6 +501,6 @@
       "clang",
       "libclang-rt-18-dev"
     ],
-    "note": "OS-provided by the pinned runner image; the Linux lanes record the installed versions with dpkg-query into the lane census (llvm-20-dev, clang-20, g++-14 and libedit-dev only on the linux-clang-tsan entry, for the GenMC build; ninja-build, clang and libclang-rt-18-dev only on the linux-arm64 lanes, whose image runs no x86-64 pinned Ninja). The MSVC toolset comes from the pinned Windows image and is recorded by the evidence bundle."
+    "note": "OS-provided by the pinned runner image; the Linux lanes record the installed versions with dpkg-query into the lane census (llvm-20-dev, clang-20, g++-14 and libedit-dev only on the linux-clang-tsan entry, for the GenMC build; ninja-build, clang and libclang-rt-18-dev only on the linux-arm64 lanes, whose image runs no x86-64 pinned Ninja). The MSVC toolset comes from the pinned Windows image and is recorded by the evidence bundle. The own-CI images (ci/executors/gce_vm.py) take their apt packages at bake time, and their Windows image takes the Build Tools from the stable channel of the pinned bake-vs-buildtools-windows bootstrapper; each records the installed versions in its image census."
   }
 }

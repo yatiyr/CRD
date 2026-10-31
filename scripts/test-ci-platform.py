@@ -779,17 +779,38 @@ class Executors(unittest.TestCase):
         self.assertIn('image-census.txt', script)
         # Lane commands start with `python`; Ubuntu ships only python3 unless python-is-python3 is installed.
         self.assertIn('python-is-python3', script)
-        windows = gce_vm.provision_script(pipeline.devices_by_id(REGISTRY)['gce-windows-x64'], [])
-        self.assertIn('Microsoft.VisualStudio.2026.BuildTools', windows)
-        self.assertIn('--scope machine --id Python.Python.3.12', windows)
+        # glfw's configure needs pkg-config, which the hosted image had and the first baked image did not.
+        self.assertIn(' pkg-config ', script)
+        devices = pipeline.devices_by_id(REGISTRY)
+        windows = gce_vm.provision_script(devices['gce-windows-x64'], [])
+        self.assertNotIn('winget install', windows, 'winget is per-user; a startup script runs as SYSTEM')
+        self.assertIn("'--add', 'Microsoft.VisualStudio.Workload.VCTools'", windows)
+        self.assertNotIn('{installers}', windows)
         self.assertNotIn('{extra}', windows)
+        # Every download of a bake is a pinned tool with its digest, on Linux (both architectures) and Windows.
+        tools = json.loads((ROOT / 'cmake/pins.json').read_text(encoding='utf-8'))['tools']
+        arm = gce_vm.provision_script(devices['gce-linux-arm64-ampere'], [])
+        gpu = gce_vm.provision_script(devices['gce-windows-x64-nvidia-t4'], [])
+        for text, names in ((script, ['bake-cmake-linux-x64']), (arm, ['bake-cmake-linux-arm64']),
+                            (windows, [n for n, _, _ in gce_vm.WINDOWS_INSTALLS]),
+                            (gpu, ['bake-gpu-driver-installer-windows'])):
+            for name in names:
+                self.assertIn(tools[name]['url'], text, name)
+                self.assertIn(tools[name]['sha256'], text, name)
+        for text in (script, arm, windows, gpu):
+            urls = re.findall(r"https://[^\s'\"]+", text)
+            self.assertFalse([u for u in urls if u not in {t.get('url') for t in tools.values()}], 'unpinned download')
+        self.assertNotIn('install_gpu_driver', windows)
+        self.assertLess(windows.index('Install-Pinned '), windows.index(gce_vm.BAKE_MARKER))
         # The completion marker is the last step before the power-off (Linux) or before sysprep (Windows).
         self.assertLess(script.index(gce_vm.BAKE_MARKER), script.index('sleep 90'))
         self.assertLess(script.index('sleep 90'), script.rindex('shutdown -h now'))
         self.assertLess(script.index("trap '"), script.index('set -Eeuxo'), 'a traced trap prints the failed marker')
         self.assertEqual(script.count(gce_vm.BAKE_FAILED_MARKER), 1)
-        self.assertLess(windows.index(gce_vm.BAKE_MARKER), windows.index('sysprep.exe'))
-        self.assertIn(gce_vm.BAKE_FAILED_MARKER, windows)
+        self.assertLess(windows.index(gce_vm.BAKE_MARKER), windows.index('Start-Sleep -Seconds 90'))
+        self.assertLess(windows.index('Start-Sleep -Seconds 90'), windows.index('    GCESysprep'))
+        self.assertLess(windows.index('try {'), windows.index('Install-Pinned '))
+        self.assertIn('cerid-ci-bake-failed: $($_.Exception.Message)', windows)
 
     def bake_calls(self, serial, operation_error=None):
         calls, clock = [], [0.0]

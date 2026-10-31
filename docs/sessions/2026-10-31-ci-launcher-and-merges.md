@@ -67,6 +67,22 @@ Done in the `cerid-ci` project, following [the setup recipe](../recipes/ci-platf
   - it deletes the instance only after that.
 
   Tests cover the order and both refusals, and the order test fails on the old order.
+- **The fixed bake still could not finish:** Compute Engine answers 400 `resourceNotReady` for a stopped instance's
+  serial console, and the bake read it after the power-off. It now reads the console on every poll while the
+  instance runs; the script pauses 90 seconds after the marker, longer than a poll. A failure stops the instance at
+  once: the Windows bake had idled three hours after a startup script that failed in five seconds.
+- **The Windows bake used winget:** winget is a per-user package, so the SYSTEM account that runs a startup script
+  does not have it. The bake now installs Python, Git, CMake and the Build Tools from installers pinned in
+  `cmake/pins.json` (`bake-*`). Each is checked by SHA-256 inside the machine, and the image is generalized with
+  `GCESysprep`. The Linux bake also stopped piping Kitware's unpinned apt script into bash: it unpacks the pinned
+  CMake 4.4.5 archive for its architecture instead.
+- **Builds #1 to #15 planned no lanes:** an agent runs every job in a clean environment, so the plan step saw no
+  account and every device read `waiting: account`. The coordinator now passes the launcher's non-secret settings to
+  the plan step. `ops.py build start` made its coordinator without the git mirror (build #15 failed its checkout)
+  and now builds it like the service does. The plan also keeps a device waiting until its image family is baked,
+  instead of starting a machine from an empty family.
+- **Axion machines could not start:** c4a takes no Persistent Disk (HTTP 400 in build #16). The boot disk type is
+  now a device setting, `hyperdisk-balanced` on Axion, and the registry refuses a Hyperdisk-only family without it.
 - **`workspace.py sync` reported a fast-forward push as "up to date":** Git's porcelain flag for a fast-forward is a
   space, which the report did not count. Every ref line is now parsed, and a test asserts the fast-forward is reported.
 - **`workspace.py` pushed every tag:** the local tag `backup-before-pdf-strip` holds a 218 MiB blob, over GitLab's

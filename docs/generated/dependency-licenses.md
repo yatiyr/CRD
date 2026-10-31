@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **13** · tools: **22** · workflow actions: **5** · runner images: **5** · unpinned apt packages: **21**
+- packages: **13** · tools: **29** · workflow actions: **5** · runner images: **5** · unpinned apt packages: **21**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -55,6 +55,13 @@
 | llvm | 20.1.8 | Apache-2.0 WITH LLVM-exception | github.com | `clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz` |
 | genmc | 0.19.0 | Apache-2.0 OR MIT | MPI-SWS/genmc (9f6c4c0772d0) | `genmc-9f6c4c07.tar.gz` |
 | node-linux-x64 | 24.22.0 | MIT | nodejs.org | `node-v24.22.0-linux-x64.tar.xz` |
+| bake-python-windows | 3.12.10 | PSF-2.0 | www.python.org | `python-3.12.10-amd64.exe` |
+| bake-git-windows | 2.56.0.windows.4 | GPL-2.0-only | github.com | `Git-2.56.0.4-64-bit.exe` |
+| bake-cmake-windows | 4.4.5 | BSD-3-Clause | github.com | `cmake-4.4.5-windows-x86_64.msi` |
+| bake-cmake-linux-x64 | 4.4.5 | BSD-3-Clause | github.com | `cmake-4.4.5-linux-x86_64.tar.gz` |
+| bake-cmake-linux-arm64 | 4.4.5 | BSD-3-Clause | github.com | `cmake-4.4.5-linux-aarch64.tar.gz` |
+| bake-vs-buildtools-windows | 18 (stable channel bootstrapper) | Microsoft Visual Studio Build Tools license terms | download.visualstudio.microsoft.com | `vs_BuildTools.exe` |
+| bake-gpu-driver-installer-windows | 9a05b735a56c45d87788720ed18ccca7205d224b | Apache-2.0 | raw.githubusercontent.com | `install_gpu_driver.ps1` |
 
 ## Workflow actions (pinned to a reviewed commit)
 
@@ -80,4 +87,4 @@
 
 OS packages of the Linux image, recorded with their installed versions in every Linux lane census: `libvulkan-dev`, `glslang-tools`, `libshaderc-dev`, `libwayland-dev`, `wayland-protocols`, `libxkbcommon-dev`, `libx11-dev`, `libxrandr-dev`, `libxinerama-dev`, `libxcursor-dev`, `libxi-dev`, `mesa-common-dev`, `mesa-vulkan-drivers`, `gdb`, `llvm-20-dev`, `clang-20`, `g++-14`, `libedit-dev`, `ninja-build`, `clang`, `libclang-rt-18-dev`.
 
-OS-provided by the pinned runner image; the Linux lanes record the installed versions with dpkg-query into the lane census (llvm-20-dev, clang-20, g++-14 and libedit-dev only on the linux-clang-tsan entry, for the GenMC build; ninja-build, clang and libclang-rt-18-dev only on the linux-arm64 lanes, whose image runs no x86-64 pinned Ninja). The MSVC toolset comes from the pinned Windows image and is recorded by the evidence bundle.
+OS-provided by the pinned runner image; the Linux lanes record the installed versions with dpkg-query into the lane census (llvm-20-dev, clang-20, g++-14 and libedit-dev only on the linux-clang-tsan entry, for the GenMC build; ninja-build, clang and libclang-rt-18-dev only on the linux-arm64 lanes, whose image runs no x86-64 pinned Ninja). The MSVC toolset comes from the pinned Windows image and is recorded by the evidence bundle. The own-CI images (ci/executors/gce_vm.py) take their apt packages at bake time, and their Windows image takes the Build Tools from the stable channel of the pinned bake-vs-buildtools-windows bootstrapper; each records the installed versions in its image census.

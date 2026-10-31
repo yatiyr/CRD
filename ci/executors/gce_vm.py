@@ -10,6 +10,7 @@ the DELETE termination action. Images come from per-device image families baked 
 """
 from __future__ import annotations
 
+from pathlib import Path
 import base64
 import datetime as dt
 import json
@@ -397,9 +398,11 @@ set -Eeuxo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y ca-certificates curl git python3 python-is-python3 python3-venv python3-pip build-essential gcc-14 g++-14 clang \
-  clang-tools lld llvm ninja-build gdb rsync unzip xz-utils {packages}
-curl -sSLf https://apt.kitware.com/kitware-archive.sh | bash
-apt-get install -y cmake
+  clang-tools lld llvm ninja-build gdb pkg-config rsync unzip xz-utils {packages}
+curl -sSfL -o /tmp/{cmake_file} '{cmake_url}'
+echo '{cmake_sha256}  /tmp/{cmake_file}' | sha256sum -c -
+mkdir -p /opt/cmake && tar -xzf /tmp/{cmake_file} -C /opt/cmake --strip-components=1 && rm /tmp/{cmake_file}
+ln -sf /opt/cmake/bin/cmake /opt/cmake/bin/ctest /opt/cmake/bin/cpack /usr/local/bin/
 {extra}
 id cerid >/dev/null 2>&1 || useradd --create-home --shell /bin/bash cerid
 echo 'cerid ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/cerid && chmod 0440 /etc/sudoers.d/cerid
@@ -411,40 +414,90 @@ echo cerid-ci-bake-complete
 sleep 90  # the bake reads the serial console every 30 seconds, and only while the instance runs
 shutdown -h now
 ''',
-    'windows': r'''# Cerid CI image bake (ci/ops.py bake): the toolchain the hosted windows-2025-vs2026 image provided.
+    'windows': r'''# Cerid CI image bake (ci/ops.py bake): the toolchain the hosted windows-2025-vs2026 image provided, from the
+# installers pinned in cmake/pins.json (tools bake-*-windows), each checked against its SHA-256 before it runs. winget is
+# not used: it is a per-user package, absent for the SYSTEM account that runs a startup script.
 $ErrorActionPreference = 'Stop'
-winget install --silent --accept-package-agreements --accept-source-agreements --scope machine --id Python.Python.3.12
-winget install --silent --accept-package-agreements --accept-source-agreements --id Git.Git
-winget install --silent --accept-package-agreements --accept-source-agreements --id Kitware.CMake
-winget install --silent --accept-package-agreements --accept-source-agreements --id Microsoft.VisualStudio.2026.BuildTools `
-  --override '--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Llvm.Clang --add Microsoft.VisualStudio.Component.VC.Llvm.ClangToolset --add Microsoft.VisualStudio.Component.Windows11SDK.26100 --includeRecommended'
+$ProgressPreference = 'SilentlyContinue'
+function Get-Pinned([string]$Url, [string]$File, [string]$Sha256) {
+    $path = Join-Path 'C:\cerid-ci\bake' $File
+    Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $path
+    $actual = (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLowerInvariant()
+    if ($actual -ne $Sha256) { throw "$File has SHA-256 $actual; cmake/pins.json pins $Sha256" }
+    return $path
+}
+function Install-Pinned([string]$Url, [string]$File, [string]$Sha256, [string[]]$Arguments, [int[]]$Success) {
+    $path = Get-Pinned $Url $File $Sha256
+    if ($File.EndsWith('.msi')) {
+        $process = Start-Process msiexec.exe -ArgumentList (@('/i', $path) + $Arguments) -Wait -PassThru
+    } else {
+        $process = Start-Process $path -ArgumentList $Arguments -Wait -PassThru
+    }
+    if ($Success -notcontains $process.ExitCode) { throw "$File exited $($process.ExitCode)" }
+    Write-Output "installed $File"
+}
+try {
+    New-Item -ItemType Directory -Force -Path 'C:\cerid-ci\bake' | Out-Null
+{installers}
 {extra}
-New-Item -ItemType Directory -Force -Path 'C:\cerid-ci' | Out-Null
-(Get-ComputerInfo | Select-Object OsName, OsVersion | Out-String) + (winget list | Out-String) | Out-File 'C:\cerid-ci\image-census.txt'
-Write-Output 'cerid-ci-bake-complete'
-& "$env:SystemRoot\System32\Sysprep\sysprep.exe" /generalize /oobe /shutdown /quiet
-if ($LASTEXITCODE -ne 0) { Write-Output "cerid-ci-bake-failed: sysprep exited $LASTEXITCODE" }
+    $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    ((Get-ComputerInfo | Select-Object OsName, OsVersion | Out-String), (python --version), (git --version),
+     (cmake --version | Select-Object -First 1), (& $vswhere -products * -format text | Out-String)) -join "`n" |
+        Out-File 'C:\cerid-ci\image-census.txt'
+    Remove-Item -Recurse -Force 'C:\cerid-ci\bake'
+    Write-Output 'cerid-ci-bake-complete'
+    Start-Sleep -Seconds 90  # the bake reads the serial console every 30 seconds, and only while the instance runs
+    GCESysprep  # Compute Engine's sysprep: generalizes with the guest environment's answer file, then powers off
+} catch {
+    Write-Output "cerid-ci-bake-failed: $($_.Exception.Message)"
+    Stop-Computer -Force
+}
 ''',
 }
 PROVISION_EXTRA = {
     'nvidia-linux': 'ubuntu-drivers install --gpgpu\napt-get install -y nvidia-utils-570-server libnvidia-gl-570-server '
                     'nvidia-cuda-toolkit',
-    'nvidia-windows': "Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/GoogleCloudPlatform/compute-gpu-"
-                      "installation/raw/main/windows/install_gpu_driver.ps1' -OutFile C:\\install_gpu_driver.ps1\n"
-                      "& C:\\install_gpu_driver.ps1",
     'android': 'apt-get install -y openjdk-17-jdk-headless qemu-kvm\nusermod -aG kvm cerid || true',
 }
+# The Windows installers in order: (cmake/pins.json tool, arguments, exit codes that mean installed). 3010 is
+# "installed, restart pending"; GCESysprep's power-off is that restart.
+WINDOWS_INSTALLS = (
+    ('bake-python-windows', ('/quiet', 'InstallAllUsers=1', 'PrependPath=1', 'Include_test=0'), (0,)),
+    ('bake-git-windows', ('/VERYSILENT', '/NORESTART', '/NOCANCEL', '/SP-', '/SUPPRESSMSGBOXES'), (0,)),
+    ('bake-cmake-windows', ('/qn', '/norestart', 'ADD_CMAKE_TO_PATH=System'), (0, 3010)),
+    ('bake-vs-buildtools-windows', (
+        '--quiet', '--wait', '--norestart', '--nocache', '--add', 'Microsoft.VisualStudio.Workload.VCTools',
+        '--add', 'Microsoft.VisualStudio.Component.VC.Llvm.Clang', '--add',
+        'Microsoft.VisualStudio.Component.VC.Llvm.ClangToolset', '--add',
+        'Microsoft.VisualStudio.Component.Windows11SDK.26100', '--includeRecommended'), (0, 3010)),
+)
+PINS = Path(__file__).resolve().parents[2] / 'cmake' / 'pins.json'
 
 
-def provision_script(device, apt_packages):
+def pinned(tool):
+    """The PowerShell arguments naming a pinned file: its URL, file name and SHA-256."""
+    return "'%s' '%s' '%s'" % (tool['url'], tool['file'], tool['sha256'])
+
+
+def provision_script(device, apt_packages, pins=None):
+    """The bake's startup script for `device`; every download it makes is a cmake/pins.json tool, checked by
+    SHA-256."""
+    tools = (pins or json.loads(PINS.read_text(encoding='utf-8')))['tools']
     family = os_family(device)
     config = device['executor_config']
     extra = []
+    if family == 'windows':
+        installers = ['    Install-Pinned %s @(%s) @(%s)' % (
+            pinned(tools[name]), ', '.join("'%s'" % a for a in arguments), ', '.join(str(c) for c in codes))
+            for name, arguments, codes in WINDOWS_INSTALLS]
+        if config.get('accelerator'):
+            extra.append('    & (Get-Pinned %s)' % pinned(tools['bake-gpu-driver-installer-windows']))
+        return PROVISION[family].replace('{installers}', '\n'.join(installers)).replace('{extra}', '\n'.join(extra))
     if config.get('accelerator'):
-        extra.append(PROVISION_EXTRA['nvidia-' + family])
+        extra.append(PROVISION_EXTRA['nvidia-linux'])
     if config.get('nested_virtualization'):
         extra.append(PROVISION_EXTRA['android'])
-    template = PROVISION[family]
-    if family == 'windows':
-        return template.replace('{extra}', '\n'.join(extra))
-    return template.format(packages=' '.join(apt_packages), extra='\n'.join(extra))
+    cmake = tools['bake-cmake-linux-arm64' if device['cpu']['arch'] in ('aarch64', 'arm64') else 'bake-cmake-linux-x64']
+    return PROVISION[family].format(packages=' '.join(apt_packages), extra='\n'.join(extra), cmake_url=cmake['url'],
+                                    cmake_file=cmake['file'], cmake_sha256=cmake['sha256'])
