@@ -67,12 +67,11 @@
 #include "dtypes.hpp" // BlockQ8Zero + f16 converts + quantize_q8_0 (activations)
 #include "io.hpp"     // SafetensorsFile — the v14-l reader consumed by the builders
 #include "tensor.hpp"
-#include "tensor_dispatch.hpp" // dots, quantizers, softmax, layernorm, GEMM, conv, pool, relu: the level kernels
+#include "tensor_dispatch.hpp" // dots, quantizers, softmax, layernorm, GEMM, conv, pool, activations: the level kernels
 
 #include <crd/hesap/dense/blas3.hpp>
 #include <crd/jobs/jobs.hpp>
-#include <crd/math/cmath.hpp>         // crd::math::exp / tanh / sqrt / nearbyint — the deterministic surface
-#include <crd/math/deterministic.hpp> // crd::math::deterministic::erf — the exact (erf-form) gelu
+#include <crd/math/cmath.hpp> // crd::math::nearbyint / clamp — the deterministic surface
 #include <crd/memory/allocators/linear_allocator.hpp>
 #include <crd/memory/allocators/thread_safe_allocator.hpp>
 
@@ -198,73 +197,10 @@ inline void relu_span(const crd::f32* x, crd::f32* y, crd::u64 n) noexcept
     tensor_kernels().table->ew_binary_f32[static_cast<crd::u32>(BinaryOp::Max)]({y, x, &zero, shape, sa, sb, 1U});
 }
 
-// exact gelu (torch approximate='none'): 0.5 x (1 + erf(x / sqrt(2))) in f64.
-[[nodiscard]] inline crd::f32 gelu_one(crd::f32 x) noexcept
-{
-    constexpr crd::f64 inv_sqrt2 = 0.70710678118654752440;
-    const crd::f64 xd = static_cast<crd::f64>(x);
-    return static_cast<crd::f32>(0.5 * xd * (1.0 + crd::math::deterministic::erf(xd * inv_sqrt2)));
-}
-
-[[nodiscard]] inline crd::f32 sigmoid_one(crd::f32 x) noexcept
-{
-    return static_cast<crd::f32>(1.0 / (1.0 + crd::math::exp(-static_cast<crd::f64>(x))));
-}
-
-[[nodiscard]] inline crd::f32 tanh_one(crd::f32 x) noexcept
-{
-    return crd::math::tanh(x);
-}
-
-enum class NnAct : crd::u8
-{
-    Relu,
-    Gelu,
-    Tanh,
-    Sigmoid,
-};
-
+// An activation over n values, y may be x: the tensor kernels' NnActF32 rows.
 inline void act_span(NnAct act, const crd::f32* x, crd::f32* y, crd::u64 n) noexcept
 {
-    switch (act)
-    {
-    case NnAct::Relu:
-        relu_span(x, y, n);
-        return;
-    case NnAct::Gelu:
-        for (crd::u64 i = 0; i < n; ++i)
-        {
-            y[i] = gelu_one(x[i]);
-        }
-        return;
-    case NnAct::Tanh:
-        for (crd::u64 i = 0; i < n; ++i)
-        {
-            y[i] = tanh_one(x[i]);
-        }
-        return;
-    case NnAct::Sigmoid:
-        for (crd::u64 i = 0; i < n; ++i)
-        {
-            y[i] = sigmoid_one(x[i]);
-        }
-        return;
-    }
-}
-
-struct EwCtx
-{
-    const crd::f32* x;
-    crd::f32* y;
-    crd::u64 per; // elements per partition unit (one sample)
-    NnAct act;
-};
-
-inline void ew_run(const EwCtx& c, crd::u32 lo, crd::u32 hi)
-{
-    const crd::u64 n0 = static_cast<crd::u64>(lo) * c.per;
-    const crd::u64 n1 = static_cast<crd::u64>(hi) * c.per;
-    act_span(c.act, c.x + n0, c.y + n0, n1 - n0);
+    tensor_kernels().table->nn_act_rows({x, y, n, act}, 0U, 1U);
 }
 
 // ---- pooling and conv2d: the tensor kernels (NnPool2d, NnConv2d) ------------
@@ -408,19 +344,19 @@ inline void nn_relu(crd::containers::ConstSpan<crd::f32> x, crd::containers::Spa
 inline void nn_gelu(crd::containers::ConstSpan<crd::f32> x, crd::containers::Span<crd::f32> y) noexcept
 {
     CRD_ASSERT_MSG(x.size() == y.size(), "nn_gelu: size mismatch");
-    nndetail::act_span(nndetail::NnAct::Gelu, x.data(), y.data(), x.size());
+    nndetail::act_span(NnAct::Gelu, x.data(), y.data(), x.size());
 }
 
 inline void nn_tanh(crd::containers::ConstSpan<crd::f32> x, crd::containers::Span<crd::f32> y) noexcept
 {
     CRD_ASSERT_MSG(x.size() == y.size(), "nn_tanh: size mismatch");
-    nndetail::act_span(nndetail::NnAct::Tanh, x.data(), y.data(), x.size());
+    nndetail::act_span(NnAct::Tanh, x.data(), y.data(), x.size());
 }
 
 inline void nn_sigmoid(crd::containers::ConstSpan<crd::f32> x, crd::containers::Span<crd::f32> y) noexcept
 {
     CRD_ASSERT_MSG(x.size() == y.size(), "nn_sigmoid: size mismatch");
-    nndetail::act_span(nndetail::NnAct::Sigmoid, x.data(), y.data(), x.size());
+    nndetail::act_span(NnAct::Sigmoid, x.data(), y.data(), x.size());
 }
 
 // softmax over the LAST dim of a contiguous view (any rank >= 1).
@@ -1672,21 +1608,21 @@ private:
         case NnOpKind::Tanh:
         case NnOpKind::Sigmoid:
         {
-            nndetail::NnAct act = nndetail::NnAct::Relu;
+            NnAct act = NnAct::Relu;
             if (op.kind == NnOpKind::Gelu)
             {
-                act = nndetail::NnAct::Gelu;
+                act = NnAct::Gelu;
             }
             else if (op.kind == NnOpKind::Tanh)
             {
-                act = nndetail::NnAct::Tanh;
+                act = NnAct::Tanh;
             }
             else if (op.kind == NnOpKind::Sigmoid)
             {
-                act = nndetail::NnAct::Sigmoid;
+                act = NnAct::Sigmoid;
             }
-            const nndetail::EwCtx ctx{in, out, op.in_elems, act};
-            nndetail::nn_parallel(static_cast<crd::u32>(batch), nw, &ctx, nndetail::ew_run);
+            const NnActF32 ctx{in, out, op.in_elems, act};
+            nndetail::nn_parallel(static_cast<crd::u32>(batch), nw, &ctx, tensor_kernels().table->nn_act_rows);
             return;
         }
         case NnOpKind::LayerNorm:
@@ -1740,8 +1676,8 @@ private:
         }
         if (op.fuse_relu)
         {
-            const nndetail::EwCtx rc{out, out, op.dim_out, nndetail::NnAct::Relu};
-            nndetail::nn_parallel(static_cast<crd::u32>(batch), nw, &rc, nndetail::ew_run);
+            const NnActF32 rc{out, out, op.dim_out, NnAct::Relu};
+            nndetail::nn_parallel(static_cast<crd::u32>(batch), nw, &rc, tensor_kernels().table->nn_act_rows);
         }
     }
 

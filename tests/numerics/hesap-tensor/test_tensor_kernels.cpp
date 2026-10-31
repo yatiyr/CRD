@@ -14,8 +14,9 @@
 // depth and column tails), the scalar tier's batched GEMM, Cholesky, LU, SVD and solves (every lane-tier edge of n,
 // poisoned lanes, split ranges, guard words) and the scalar sparse TTM scatter, staged tile, part fold and CSF and COO
 // MTTKRP walks (ranks 1 to 5, every mode, column tails at every width, sub-ranges, guard words) and nn's scalar
-// pooling (IEEE maximum ties, the 256-wide row stage, every window) and convolution (every output-channel block, column
-// tails, the fused relu and pool, im2col shapes, guard words).
+// pooling (IEEE maximum ties, the 256-wide row stage, every window), convolution (every output-channel block, column
+// tails, the fused relu and pool, im2col shapes, guard words) and activations (IEEE specials, saturating and
+// underflowing arguments, in place, guard words).
 // crd-hesap-tensor-kernels-at-<level> runs these [kernels] cases, the SR converts and the sketch fill under each forced
 // level.
 
@@ -27,6 +28,8 @@
 #include <crd/hesap/tensor/dtypes.hpp>
 #include <crd/hesap/tensor/reduce.hpp>
 #include <crd/hesap/tensor/tensor_dispatch.hpp>
+#include <crd/math/deterministic.hpp>
+#include <crd/math/hyperbolic.hpp>
 #include <crd/math/kernel_level.hpp>
 #include <crd/math/select.hpp>
 #include <crd/math/transcendental.hpp>
@@ -579,6 +582,7 @@ TEST_CASE("tensor kernels: the archive holds portable, each body level the build
         CHECK(sparse_complete(levels[i].table->sparse_f64));
         CHECK(levels[i].table->nn_pool2d_planes != nullptr);
         CHECK(levels[i].table->nn_layernorm_rows != nullptr);
+        CHECK(levels[i].table->nn_act_rows != nullptr);
         CHECK(levels[i].table->nn_conv2d_images != nullptr);
         CHECK(static_cast<int>(levels[i].level) <= CRD_TEST_KERNEL_LEVELS_TOP);
         if (i > 0U)
@@ -2831,6 +2835,76 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar nn pooling
         INFO(crd::cpu_level_name(level.level) << variant_suffix(level));
         CHECK(check_nn_pool(*level.table) == 0U);
         CHECK(check_nn_conv(*level.table) == 0U);
+    }
+    CHECK(ran >= 1U);
+}
+
+// The activations' scalar formulas in general code, whose crd::math routines run the scalar table at the process
+// level: relu maxps(x, +0), the erf-form gelu and sigmoid in f64, tanh in f32, each rounded once.
+f32 act_reference(tn::NnAct act, f32 v)
+{
+    const f64 vd = static_cast<f64>(v);
+    switch (act)
+    {
+        case tn::NnAct::Relu:
+            return v > 0.0F ? v : 0.0F;
+        case tn::NnAct::Gelu:
+            return static_cast<f32>(0.5 * vd * (1.0 + crd::math::deterministic::erf(vd * 0.70710678118654752440)));
+        case tn::NnAct::Tanh:
+            return crd::math::tanh(v);
+        case tn::NnAct::Sigmoid:
+            return static_cast<f32>(1.0 / (1.0 + crd::math::exp(-vd)));
+    }
+    return 0.0F;
+}
+
+TEST_CASE("tensor kernels: every level the host runs gives the scalar nn activation bits", "[tensor][kernels]")
+{
+    // Five samples, the rows [1, 4) leaving the first and the last to their guard words; every third value an IEEE
+    // special, a subnormal, a saturating or underflowing argument of tanh, sigmoid and gelu, or a near-zero one.
+    constexpr u64 samples = 5U;
+    constexpr u64 max_per = 37U;
+    constexpr u64 total = samples * max_per + kSlack;
+    const f32 specials[] = {kQNaN,   kInf,    -kInf,    0.0F,  -0.0F,  1e-40F, -1e-40F, 1e-30F,
+                            -1e-30F, 20.0F,   -20.0F,   90.0F, -90.0F, 104.0F, -104.0F, -5.5F,
+                            -40.0F,  3.4e38F, -3.4e38F, 9.0F,  -9.0F,  0.5F,   -0.5F};
+    constexpr usize n_specials = sizeof(specials) / sizeof(specials[0]);
+    static f32 x[total];
+    static f32 want[total];
+    static f32 got[total];
+    usize ran = 0;
+    for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
+    {
+        if (!kernel_level_runs_here(level))
+        {
+            continue;
+        }
+        ++ran;
+        for (const tn::NnAct act : {tn::NnAct::Relu, tn::NnAct::Gelu, tn::NnAct::Tanh, tn::NnAct::Sigmoid})
+        {
+            for (const u64 per : {1U, 3U, 8U, 37U})
+            {
+                for (const bool in_place : {false, true})
+                {
+                    fill_uniform(x, total, 0xAC7U + per, 30.0F);
+                    for (u64 i = 0; i < samples * per; i += 3U)
+                    {
+                        x[i] = specials[(i / 3U) % n_specials];
+                    }
+                    for (u64 i = 0; i < total; ++i)
+                    {
+                        const bool inside = i >= per && i < 4U * per;
+                        want[i] = inside ? act_reference(act, x[i]) : kGuard<f32>;
+                        got[i] = in_place && inside ? x[i] : kGuard<f32>;
+                    }
+                    const f32* src = in_place ? got : x;
+                    level.table->nn_act_rows({src, got, per, act}, 1U, 4U);
+                    INFO(crd::cpu_level_name(level.level) << variant_suffix(level) << " act " << static_cast<int>(act)
+                                                          << " per " << per << (in_place ? " in place" : ""));
+                    CHECK(nan_aside_mismatches(want, got, total) == 0U);
+                }
+            }
+        }
     }
     CHECK(ran >= 1U);
 }

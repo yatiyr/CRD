@@ -7,8 +7,9 @@
 // (single-rounded FMAs), softmax's exp core has a bit-identical vector twin, the Philox blocks are integer rounds, the
 // elementwise ops and the einsum products are per-element IEEE operations in one order, Tier D's reduction order is
 // fixed by kEwLanes and kReduceBlock alone, each batched matrix runs its own lane in the scalar tier's operations, each
-// sparse walk's output element is one fma chain in the canonical nonzero order, and the nn convolution's outputs are
-// fma chains in one order and its max pool the order-free IEEE maximum.
+// sparse walk's output element is one fma chain in the canonical nonzero order, the nn convolution's outputs are fma
+// chains in one order and its max pool the order-free IEEE maximum, and the nn activations run crd::math's scalar
+// routines, bit-identical on every level (crd/math/scalar_kernels.hpp).
 
 #pragma once
 
@@ -338,6 +339,27 @@ struct NnLayerNormF32
     crd::f32 eps;
 };
 
+// The f32 activations of nn.hpp's spans and NnSequential's activation ops.
+enum class NnAct : crd::u8
+{
+    Relu,
+    Gelu,
+    Tanh,
+    Sigmoid,
+};
+
+// The samples [lo, hi) of an activation over per values each, y may be x: relu as maxps against +0 (+0 for a NaN or
+// -0), gelu the exact erf form 0.5 x (1 + erf(x / sqrt(2))) in f64 through crd::math::deterministic::erf, sigmoid
+// 1 / (1 + exp(-x)) in f64 and tanh in f32 through crd::math, each rounded once to f32: the scalar formula's bits on
+// every level.
+struct NnActF32
+{
+    const crd::f32* x;
+    crd::f32* y;
+    crd::u64 per;
+    NnAct act;
+};
+
 // The Q8_0 linear y = x @ W^T + b (optionally ReLU) for the rows [lo, hi): each row's activations quantize to Q8_0
 // blocks (quant_core.hpp quantize_q8_0_blocks) and every output is the pinned lane-parallel dot (nn.hpp).
 struct NnLinearQ8
@@ -441,6 +463,7 @@ struct TensorKernels
                             crd::i32& zero_point) noexcept;
     void (*nn_softmax_rows)(const NnSoftmaxF32& c, crd::u32 lo, crd::u32 hi) noexcept;
     void (*nn_layernorm_rows)(const NnLayerNormF32& c, crd::u32 lo, crd::u32 hi) noexcept;
+    void (*nn_act_rows)(const NnActF32& c, crd::u32 lo, crd::u32 hi) noexcept;
     void (*nn_linear_q8_rows)(const NnLinearQ8& c, crd::u32 lo, crd::u32 hi) noexcept;
     // The row-major weights of nn_linear_i8 and the packed weights of the NnSequential runner; the same bits.
     void (*nn_linear_i8_rows)(const NnLinearI8& c, crd::u32 lo, crd::u32 hi) noexcept;

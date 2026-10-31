@@ -1,6 +1,7 @@
-// The f32 CNN and layernorm kernels of crd/hesap/tensor/tensor_kernels.hpp (NnPool2d, NnConv2d, NnLayerNormF32), the
-// fifth unit of the tensor family, compiled once per CPU level by crd_add_cpu_kernels (../CMakeLists.txt, ADR-0134
-// §5), so their single-rounded fmas are the level's instruction or its exact emulation, never a library call.
+// The f32 CNN, layernorm and activation kernels of crd/hesap/tensor/tensor_kernels.hpp (NnPool2d, NnConv2d,
+// NnLayerNormF32, NnActF32), the fifth unit of the tensor family, compiled once per CPU level by crd_add_cpu_kernels
+// (../CMakeLists.txt, ADR-0134 §5), so their single-rounded fmas, and the fmas of the f64 exp and tanh the activations
+// run, are the level's instruction or its exact emulation, never a library call or a scalar-table call.
 //
 // The direct 3x3/s1/p1 convolution stages an image's rows once into a zero-padded buffer, so every kj shift is a full
 // load, and keeps up to eight output channels' fma chains in registers over the output columns: a Vec16f while 16
@@ -18,9 +19,12 @@
 #include "tensor_ew_kernels.hpp"
 
 #include <crd/core/platform.hpp>
+#include <crd/math/deterministic.hpp>
+#include <crd/math/hyperbolic.hpp>
 #include <crd/math/select.hpp>
 #include <crd/math/simd/simd.hpp>
 #include <crd/math/simd/vec16f.hpp>
+#include <crd/math/transcendental.hpp>
 
 #include <cstring>
 
@@ -32,6 +36,7 @@ namespace
 namespace simd = crd::math::simd;
 
 using crd::f32;
+using crd::f64;
 using crd::i64;
 using crd::u32;
 using crd::u64;
@@ -76,14 +81,27 @@ template <typename V> CRD_FORCEINLINE V maximum(V a, V b) noexcept
     return simd::select(simd::cmp_eq(a, a), z, a);
 }
 
-// y[i] = maxps(y[i], +0) in place: the elementwise Max walk with a broadcast zero.
-void relu_inplace(f32* y, u64 n) noexcept
+// y[i] = maxps(x[i], +0), y may be x: the elementwise Max walk with a broadcast zero.
+void relu(const f32* x, f32* y, u64 n) noexcept
 {
     const f32 zero = 0.0F;
     const u64 shape[1] = {n};
     const i64 sa[1] = {1};
     const i64 sb[1] = {0};
-    EwBinaryKernel<f32, BinaryOp::Max>::walk({y, y, &zero, shape, sa, sb, 1U});
+    EwBinaryKernel<f32, BinaryOp::Max>::walk({y, x, &zero, shape, sa, sb, 1U});
+}
+
+// The exact gelu (torch approximate='none'), sigmoid and tanh of NnActF32, each rounded once to f32.
+f32 gelu(f32 v) noexcept
+{
+    constexpr f64 inv_sqrt2 = 0.70710678118654752440;
+    const f64 vd = static_cast<f64>(v);
+    return static_cast<f32>(0.5 * vd * (1.0 + crd::math::deterministic::erf(vd * inv_sqrt2)));
+}
+
+f32 sigmoid(f32 v) noexcept
+{
+    return static_cast<f32>(1.0 / (1.0 + crd::math::exp(-static_cast<f64>(v))));
 }
 
 // vm[j] = maximum(r0[j], r1[j]) for j in [j, w) in steps of V; returns where the steps stop.
@@ -454,7 +472,7 @@ void NnKernel::conv2d_images(const NnConv2d& c, f32* scratch, u32 lo, u32 hi) no
         BatchedKernel<f32>::gemm_tiny({1.0F, 1.0F, c.w, scratch, yi, 0, 0, 0, c.oc, ckk, ohw}, 0U, 1U);
         if (c.relu)
         {
-            relu_inplace(yi, c.oc * ohw);
+            relu(yi, yi, c.oc * ohw);
         }
     }
 }
@@ -483,6 +501,38 @@ void NnKernel::layernorm_rows(const NnLayerNormF32& c, u32 lo, u32 hi) noexcept
         {
             y[j] = crd::math::fma((x[j] - mean) * rstd, c.g[j], c.b[j]);
         }
+    }
+}
+
+void NnKernel::act_rows(const NnActF32& c, u32 lo, u32 hi) noexcept
+{
+    const u64 first = static_cast<u64>(lo) * c.per;
+    const u64 n = static_cast<u64>(hi - lo) * c.per;
+    const f32* x = c.x + first;
+    f32* y = c.y + first;
+    switch (c.act)
+    {
+        case NnAct::Relu:
+            relu(x, y, n);
+            return;
+        case NnAct::Gelu:
+            for (u64 i = 0; i < n; ++i)
+            {
+                y[i] = gelu(x[i]);
+            }
+            return;
+        case NnAct::Tanh:
+            for (u64 i = 0; i < n; ++i)
+            {
+                y[i] = crd::math::tanh(x[i]);
+            }
+            return;
+        case NnAct::Sigmoid:
+            for (u64 i = 0; i < n; ++i)
+            {
+                y[i] = sigmoid(x[i]);
+            }
+            return;
     }
 }
 
