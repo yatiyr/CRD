@@ -9,7 +9,8 @@
 //
 // Crash safety: `begin <src>` journals durably before a job's artifacts are written, `commit <src>` after; a
 // killed run leaves a dangling begin and that source recooks unconditionally next run (its cache is distrusted).
-// Artifacts, the database, and the PACK all publish via write-temp → rename — no consumer ever sees a torn file.
+// Artifacts, the database, and the PACK all publish through fs::write_file_atomic (flushed to storage, then renamed)
+// — no consumer ever sees a torn file, and a committed job's artifacts survive a power loss.
 
 #include <crd/cooker/cook_command.hpp>
 #include <crd/cooker/cook_db.hpp>
@@ -20,6 +21,7 @@
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#include <crd/platform/durable_file.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/resource_id.hpp>
@@ -141,20 +143,6 @@ fs::Path cache_artifact_path(const fs::Path& root, const ResourceId& id)
     name.append(id_str.c_str());
     name.append(".crdr");
     return cache_dir(root) / crd::containers::StringView(name.data(), name.size());
-}
-
-// write-temp → rename: an artifact file is either absent, the old version, or the new version — never torn
-bool write_file_atomic(const fs::Path& path, crd::containers::ConstSpan<crd::u8> bytes)
-{
-    crd::containers::String tmp(&g_cook_alloc);
-    tmp.append(path.generic().data(), path.generic().size());
-    tmp.append(".tmp");
-    const fs::Path tmp_path(crd::containers::StringView(tmp.data(), tmp.size()));
-    if (!fs::write_file_binary(tmp_path, bytes))
-    {
-        return false;
-    }
-    return fs::rename_file(tmp_path, path);
 }
 
 // ── Recursive directory scan ───────────────────────────────────────────────
@@ -427,7 +415,7 @@ int cmd_cook(const char* root_cstr, const char* out_cstr)
         // products: main first, then extras in handler order — the PACK preserves this order
         const auto publish = [&](const ResourceId& id, crd::containers::Array<crd::u8>&& bytes,
                                  crd::containers::StringView display_name) -> bool {
-            if (!write_file_atomic(cache_artifact_path(root, id), crd::containers::as_const_span(bytes)))
+            if (!fs::write_file_atomic(cache_artifact_path(root, id), crd::containers::as_const_span(bytes)))
             {
                 std::fprintf(stderr, "cook: failed to write artifact cache for %.*s\n",
                              static_cast<int>(display_name.size()), display_name.data());
@@ -548,7 +536,7 @@ int cmd_cook(const char* root_cstr, const char* out_cstr)
         }
     }
 
-    if (!write_file_atomic(out_path, crd::containers::as_const_span(pack_bytes)))
+    if (!fs::write_file_atomic(out_path, crd::containers::as_const_span(pack_bytes)))
     {
         std::fprintf(stderr, "cook: failed to write pack: %s\n", out_cstr);
         return 1;

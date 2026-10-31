@@ -42,6 +42,7 @@
 #include <crd/perf/fault_minimize.hpp>
 #include <crd/perf/flight_recorder.hpp>
 #include <crd/perf/observer_effect.hpp>
+#include <crd/platform/durable_file.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/load_state.hpp>
@@ -824,9 +825,15 @@ TEST_CASE("fault injection: a cook interrupted by a failed or short read publish
         CHECK(injector.fired(cp::FaultSite::FailedRead) + injector.fired(cp::FaultSite::PartialRead) == 1U);
         check_unchanged(good, snapshot(tree, meta));
         CHECK(meta_id(meta) == id);
-        const cont::Array<crd::u8> log = bytes_of(journal);
-        CHECK(cont::StringView{reinterpret_cast<const char*>(log.data()), log.size()} ==
-              cont::StringView{f.started ? "begin a.bin\n" : ""});
+        const fs::JournalReplay log = fs::replay_journal(journal, 0U);
+        CHECK(log.status == (f.started ? fs::JournalStatus::Ok : fs::JournalStatus::NotFound));
+        REQUIRE(log.records.size() == (f.started ? 1U : 0U));
+        if (f.started)
+        {
+            const fs::JournalRecord& begin = log.records[0];
+            CHECK(cont::StringView{reinterpret_cast<const char*>(log.bytes.data() + begin.offset), begin.size} ==
+                  cont::StringView{"begin a.bin"});
+        }
         (void)fs::remove_file(journal);
         const FaultEvidence evidence = take_fault_evidence(recorder);
         cont::String        tail(" on ", &s_fi_alloc);

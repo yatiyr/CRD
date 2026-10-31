@@ -446,6 +446,64 @@ TEST_CASE("GEO-6: kill-resume + torn-cache refusal -- a killed run's jobs recook
     REQUIRE(fs::remove_all(tmp));
 }
 
+TEST_CASE("GEO-6: a damaged cook journal distrusts every job; a torn last record keeps the records before it",
+          "[resources][cook][geo6]")
+{
+    register_builtin_handlers();
+    const auto tmp = make_temp_dir();
+    REQUIRE(fs::create_directories(tmp));
+    const auto pack_path = tmp / "out.crdr";
+    const crd::u8 a[] = {1, 1};
+    const crd::u8 b[] = {2, 2};
+    write_bytes(tmp / "a.bin", a, sizeof(a));
+    write_bytes(tmp / "b.bin", b, sizeof(b));
+    REQUIRE(cmd_cook(tmp.generic().data(), pack_path.generic().data()) == 0);
+    const fs::Path journal = tmp / ".cook_cache" / "journal.log";
+    CHECK_FALSE(fs::exists(journal)); // a finished run removes it
+
+    // A run killed after `begin b.bin` was durable and while `commit b.bin` was half written.
+    {
+        crd::cooker::CookDb db(&g_alloc);
+        db.load(tmp);
+        REQUIRE(db.journal_begin(tmp, crd::containers::StringView("b.bin")));
+        REQUIRE(db.journal_commit(tmp, crd::containers::StringView("b.bin")));
+    }
+    crd::containers::Array<crd::u8> log(&g_alloc);
+    REQUIRE(fs::read_file_binary(journal, log));
+    write_bytes(journal, log.data(), log.size() - 3U);
+    {
+        crd::cooker::CookDb db(&g_alloc);
+        db.load(tmp);
+        CHECK(db.is_distrusted(crd::containers::StringView("b.bin")));
+        CHECK_FALSE(db.is_distrusted(crd::containers::StringView("a.bin")));
+        CHECK(db.find_job(crd::containers::StringView("a.bin")) != nullptr);
+    }
+    REQUIRE(cmd_cook(tmp.generic().data(), pack_path.generic().data()) == 0);
+    CHECK(log_status_is(tmp, "a.bin", "skipped"));
+    CHECK(log_status_is(tmp, "b.bin", "cooked"));
+
+    // A journal whose header is damaged cannot say which jobs were cut short: every job recooks.
+    {
+        crd::cooker::CookDb db(&g_alloc);
+        db.load(tmp);
+        REQUIRE(db.journal_begin(tmp, crd::containers::StringView("b.bin")));
+    }
+    REQUIRE(fs::read_file_binary(journal, log));
+    log[0] = static_cast<crd::u8>(log[0] ^ 0x01U);
+    write_bytes(journal, log.data(), log.size());
+    {
+        crd::cooker::CookDb db(&g_alloc);
+        db.load(tmp);
+        CHECK(db.jobs().empty());
+    }
+    REQUIRE(cmd_cook(tmp.generic().data(), pack_path.generic().data()) == 0);
+    CHECK(log_status_is(tmp, "a.bin", "cooked"));
+    CHECK(log_status_is(tmp, "b.bin", "cooked"));
+    CHECK_FALSE(fs::exists(journal));
+
+    REQUIRE(fs::remove_all(tmp));
+}
+
 TEST_CASE("GEO-6: the dependency graph is QUERYABLE -- forward and reverse edges from the cook database",
           "[resources][cook][geo6]")
 {

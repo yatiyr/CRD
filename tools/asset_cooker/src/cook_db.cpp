@@ -5,7 +5,6 @@
 #include <crd/toml/toml.hpp>
 
 #include <cstdio>
-#include <cstring>
 #include <string_view>
 #include <utility>
 
@@ -18,8 +17,10 @@ namespace
 {
 
 [[nodiscard]] fs::Path db_path(const fs::Path& root) { return root / ".cook_cache" / "cookdb.toml"; }
-[[nodiscard]] fs::Path db_tmp_path(const fs::Path& root) { return root / ".cook_cache" / "cookdb.toml.tmp"; }
 [[nodiscard]] fs::Path journal_path(const fs::Path& root) { return root / ".cook_cache" / "journal.log"; }
+
+// The journal's records apply to no snapshot generation: the database is replaced whole and the journal removed.
+constexpr crd::u64 kJournalBase = 0U;
 
 // u64 hashes as fixed-width hex STRINGS — TOML integers are i64 and the top bit of an FNV hash is routinely set
 void append_hex64(crd::containers::String& out, crd::u64 v)
@@ -73,31 +74,6 @@ void append_toml_string(crd::containers::String& out, crd::containers::StringVie
         out.push_back(c);
     }
     out.push_back('"');
-}
-
-// durable append: the journal must be append-only (a rewrite could tear PREVIOUS records on crash)
-[[nodiscard]] bool journal_append(const fs::Path& root, const char* verb, crd::containers::StringView source)
-{
-    const fs::Path jp = journal_path(root);
-    const crd::containers::StringView jp_sv = jp.generic();
-    crd::containers::String path_z(jp_sv.data(), jp_sv.size(), crd::memory::default_allocator());
-#ifdef _MSC_VER
-    std::FILE* f = nullptr;
-    (void)fopen_s(&f, path_z.c_str(), "ab");
-#else
-    std::FILE* f = std::fopen(path_z.c_str(), "ab");
-#endif
-    if (f == nullptr)
-    {
-        return false;
-    }
-    bool ok = std::fwrite(verb, 1U, std::strlen(verb), f) == std::strlen(verb);
-    ok      = ok && std::fwrite(" ", 1U, 1U, f) == 1U;
-    ok      = ok && std::fwrite(source.data(), 1U, source.size(), f) == source.size();
-    ok      = ok && std::fwrite("\n", 1U, 1U, f) == 1U;
-    ok      = ok && std::fflush(f) == 0;
-    (void)std::fclose(f);
-    return ok;
 }
 
 } // namespace
@@ -207,49 +183,47 @@ void CookDb::load(const fs::Path& root)
     }
 
     // ── the journal: dangling `begin` = a job killed mid-write; its cache is distrusted ────────────────────────
-    crd::containers::String journal(m_alloc);
-    if (fs::read_file_text(journal_path(root), journal))
+    m_journal.close();
+    m_replay_path = journal_path(root);
+    m_replay = fs::replay_journal(m_replay_path, kJournalBase);
+    if (m_replay.status != fs::JournalStatus::Ok && m_replay.status != fs::JournalStatus::TornTail &&
+        m_replay.status != fs::JournalStatus::NotFound)
     {
-        const std::string_view jsv(journal.data(), journal.size());
-        crd::usize             line_start = 0;
-        while (line_start < jsv.size())
+        // The journal cannot say which jobs were cut short: none is trusted, so every job recooks (safe, never stale).
+        m_jobs.clear();
+        return;
+    }
+    // A torn tail is the record being appended when the run died; the records before it are whole.
+    for (const fs::JournalRecord& record : m_replay.records)
+    {
+        const std::string_view line(reinterpret_cast<const char*>(m_replay.bytes.data() + record.offset), record.size);
+        if (line.starts_with("begin "))
         {
-            auto line_end = jsv.find('\n', line_start);
-            if (line_end == std::string_view::npos)
+            const std::string_view src = line.substr(6U);
+            bool present = false;
+            for (crd::usize i = 0; i < m_distrusted.size(); ++i)
             {
-                line_end = jsv.size();
-            }
-            const std::string_view line = jsv.substr(line_start, line_end - line_start);
-            line_start                  = line_end + 1U;
-
-            if (line.starts_with("begin "))
-            {
-                const std::string_view src = line.substr(6U);
-                bool                   present = false;
-                for (crd::usize i = 0; i < m_distrusted.size(); ++i)
+                if (std::string_view(m_distrusted[i].data(), m_distrusted[i].size()) == src)
                 {
-                    if (std::string_view(m_distrusted[i].data(), m_distrusted[i].size()) == src)
-                    {
-                        present = true;
-                        break;
-                    }
-                }
-                if (!present)
-                {
-                    m_distrusted.push_back(crd::containers::String(src.data(), src.size(), m_alloc));
+                    present = true;
+                    break;
                 }
             }
-            else if (line.starts_with("commit "))
+            if (!present)
             {
-                const std::string_view src = line.substr(7U);
-                for (crd::usize i = 0; i < m_distrusted.size(); ++i)
+                m_distrusted.push_back(crd::containers::String(src.data(), src.size(), m_alloc));
+            }
+        }
+        else if (line.starts_with("commit "))
+        {
+            const std::string_view src = line.substr(7U);
+            for (crd::usize i = 0; i < m_distrusted.size(); ++i)
+            {
+                if (std::string_view(m_distrusted[i].data(), m_distrusted[i].size()) == src)
                 {
-                    if (std::string_view(m_distrusted[i].data(), m_distrusted[i].size()) == src)
-                    {
-                        m_distrusted[i] = static_cast<crd::containers::String&&>(m_distrusted.back());
-                        m_distrusted.pop_back();
-                        break;
-                    }
+                    m_distrusted[i] = static_cast<crd::containers::String&&>(m_distrusted.back());
+                    m_distrusted.pop_back();
+                    break;
                 }
             }
         }
@@ -318,19 +292,39 @@ bool CookDb::save(const fs::Path& root)
         out.push_back('\n');
     }
 
-    // atomic publish: temp → rename (a crash leaves the OLD database, never a torn one)
-    if (!fs::write_file_text(db_tmp_path(root), crd::containers::StringView(out.data(), out.size())))
-    {
-        return false;
-    }
-    if (!fs::rename_file(db_tmp_path(root), db_path(root)))
+    // atomic, durable publish (a crash leaves the OLD database, never a torn one)
+    if (!fs::write_file_atomic(db_path(root), crd::containers::ConstSpan<crd::u8>{
+                                                  reinterpret_cast<const crd::u8*>(out.data()), out.size()}))
     {
         return false;
     }
 
     // the run is fully recorded — the journal's history is obsolete
+    m_journal.close();
     (void)fs::remove_file(journal_path(root));
     return true;
+}
+
+bool CookDb::journal_append(const fs::Path& root, const char* verb, crd::containers::StringView source)
+{
+    if (!m_journal.is_open())
+    {
+        const fs::Path path = journal_path(root);
+        const bool opened =
+            m_replay_path == path ? m_journal.open(path, kJournalBase, m_replay) : m_journal.open(path, kJournalBase);
+        m_replay = fs::JournalReplay{};
+        m_replay_path = fs::Path{};
+        if (!opened)
+        {
+            return false;
+        }
+    }
+    crd::containers::String record(verb, m_alloc);
+    record.push_back(' ');
+    record.append(source.data(), source.size());
+    return m_journal.append(
+               crd::containers::ConstSpan<crd::u8>{reinterpret_cast<const crd::u8*>(record.data()), record.size()}) &&
+           m_journal.commit();
 }
 
 bool CookDb::journal_begin(const fs::Path& root, crd::containers::StringView source)

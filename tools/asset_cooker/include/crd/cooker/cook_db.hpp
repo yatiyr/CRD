@@ -9,15 +9,17 @@
 //
 // Crash safety: `journal_begin(source)` is appended DURABLY before a job's artifacts are written;
 // `journal_commit(source)` after they land. A run that died mid-job leaves a dangling `begin` — on the next run
-// those sources are DISTRUSTED (their cache may be torn) and recook unconditionally. The database file itself is
-// replaced atomically (write-temp → rename), so a crash anywhere leaves either the old or the new database, never
-// a torn one.
+// those sources are DISTRUSTED (their cache may be torn) and recook unconditionally. The journal is a platform
+// journal (crd/platform/durable_file.hpp: checksummed records, a torn tail cut); a journal that cannot be read
+// distrusts every job. The database file and every artifact are replaced atomically and durably
+// (fs::write_file_atomic), so a crash anywhere leaves either the old or the new file, never a torn one.
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/platform/durable_file.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/resource_id.hpp>
 
@@ -69,7 +71,7 @@ public:
     // journal: sources with a dangling `begin` land in the DISTRUSTED set (their cache may be torn).
     void load(const crd::platform::fs::Path& root);
 
-    // Atomically replace the database file (write-temp → rename) and RESET the journal. Returns false on I/O
+    // Atomically replace the database file and RESET the journal. Returns false on I/O
     // failure (the old database survives).
     [[nodiscard]] bool save(const crd::platform::fs::Path& root);
 
@@ -97,9 +99,15 @@ public:
     [[nodiscard]] const crd::containers::Array<DbJob>& jobs() const noexcept { return m_jobs; }
 
 private:
+    [[nodiscard]] bool journal_append(const crd::platform::fs::Path& root, const char* verb,
+                                      crd::containers::StringView source);
+
     crd::containers::Array<DbJob>                  m_jobs;
     crd::containers::Array<crd::containers::String> m_distrusted;
     crd::memory::IAllocator*                       m_alloc = nullptr;
+    crd::platform::fs::Journal                     m_journal;
+    crd::platform::fs::JournalReplay               m_replay;      // what load() read, reused to open the journal
+    crd::platform::fs::Path                        m_replay_path; // the journal m_replay is of (empty: none)
 };
 
 } // namespace crd::cooker
