@@ -6,15 +6,16 @@
 // The direct 3x3/s1/p1 convolution stages an image's rows once into a zero-padded buffer (its zeros written once for
 // every image of a call), each channel's rows between two zero rows, so every kj shift is a full load and every ki step
 // the next row, and keeps up to eight output channels' fma chains in registers over the output columns: a Vec16f while
-// 16 columns remain at avx512, then Vec8f, the tail stored partially; at avx512 a row of at most eight columns runs two
-// conv rows in one Vec16f, and the fused pool takes their maxima in that register. Other shapes
-// run im2col into the scratch slot, the bias prefill and the batched unit's tiny GEMM. The max pool is IEEE 754 maximum
-// (a NaN wins, +0 over -0), so its result does not depend on the window order, NaN payloads aside: the 2x2/s2 hot shape
-// takes the vertical maximum in registers and the column pairs' maximum on their even and odd lanes, the other windows
-// fold row-major, and the direct convolution's fused pool runs the same rows (after a relu, whose rows hold no NaN and
-// no -0, as the plain larger value, the same bits), so it gives the bits of conv, relu, pool. Every output is the same
-// operations on every level: one (c, ki, kj)-ordered chain of single-rounded fmas from 0, one rounding for bias +
-// chain, relu as maxps against +0 (BinaryOp::Max) and the order-free maximum.
+// 16 columns remain at avx512, then Vec8f, the tail stored partially; two conv rows run together in registers where
+// they fit (at avx512 a row of at most eight columns in one Vec16f a channel and of up to 16 in one a row, at avx2 any
+// row one Vec8f group of columns and four channels at a time), and the fused pool takes their maxima in those
+// registers. Other shapes run im2col into the scratch slot, the bias prefill and the batched unit's tiny GEMM. The max
+// pool is IEEE 754 maximum (a NaN wins, +0 over -0), so its result does not depend on the window order, NaN payloads
+// aside: the 2x2/s2 hot shape takes the vertical maximum in registers and the column pairs' maximum on their even and
+// odd lanes, the other windows fold row-major, and the direct convolution's fused pool runs the same rows (after a
+// relu, whose rows hold no NaN and no -0, as the plain larger value, the same bits), so it gives the bits of conv,
+// relu, pool. Every output is the same operations on every level: one (c, ki, kj)-ordered chain of single-rounded fmas
+// from 0, one rounding for bias + chain, relu as maxps against +0 (BinaryOp::Max) and the order-free maximum.
 
 #include "tensor_nn_kernels.hpp"
 
@@ -60,6 +61,16 @@ static_assert(kLanes<Group> == kEwLanes<f32>);
 // Whether a row of at most Wide's columns runs its two conv rows a channel in registers: at most one group's columns in
 // one register (the low and the high group), more in one register a row.
 inline constexpr bool kRowPairs = kLanes<Wide> == 2U * kLanes<Group>;
+
+// Whether, where kRowPairs does not hold and a Group is one register (avx2), every row runs its two conv rows a channel
+// in Group registers instead, one group of columns and at most kPairChannels output channels at a time: two rows by
+// four channels are 8 of avx2's 16 ymm registers, beside the two row loads and the weight's broadcast.
+#if CRD_SIMD_HAS_AVX2
+inline constexpr bool kGroupPairs = !kRowPairs;
+#else
+inline constexpr bool kGroupPairs = false;
+#endif
+inline constexpr u32 kPairChannels = 4U;
 
 // The widest row the 2x2/s2 max pool stages its vertical maximum for.
 constexpr u64 kPoolRowMax = 256U;
@@ -254,8 +265,8 @@ CRD_FORCEINLINE void conv3x3_step(const NnConv2d& c, const Staged& s, const f32*
 
 // A row pair's output channel r stored as its two conv rows, dst + r * stride and next + r * stride: from
 // conv3x3_row_pair's one register (V = Vec16f, row oi in the low lanes and oi + 1 in the high ones) or
-// conv3x3_wide_pair's two (top: row oi, bottom: row oi + 1). The member templates keep the levels that never build a
-// pair free of unused functions.
+// conv3x3_two_rows' two (top: row oi, bottom: row oi + 1), at avx2 a group of their columns from j0. The member
+// templates keep the levels that never build a pair free of unused functions.
 struct PairRows
 {
     f32* dst;
@@ -294,11 +305,28 @@ struct PairRows
             bottom.store_partial(d1, static_cast<usize>(w));
         }
     }
+
+    template <typename V> CRD_FORCEINLINE void operator()(u32 r, V top, V bottom, u64 j0) const noexcept
+    {
+        f32* d0 = dst + static_cast<u64>(r) * stride + j0;
+        f32* d1 = next + static_cast<u64>(r) * stride + j0;
+        if (j0 + kLanes<V> <= w)
+        {
+            top.store(d0);
+            bottom.store(d1);
+        }
+        else
+        {
+            top.store_partial(d0, static_cast<usize>(w - j0));
+            bottom.store_partial(d1, static_cast<usize>(w - j0));
+        }
+    }
 };
 
 // The same output channel pooled 2x2/s2 in its registers into the pooled row y + r * stride of ow columns (at most 4
-// from one register, 8 from two): max_pool2_row's operations on the same operands (the two rows' vertical maximum,
-// then each column pair's), so its bits, with no row buffer, store or reload.
+// from one register, 8 from two Wide ones, the pooled columns [j0 / 2, j0 / 2 + 4) from an avx2 group's two):
+// max_pool2_row's operations on the same operands (the two rows' vertical maximum, then each column pair's; j0 is even,
+// so no pair straddles two groups), so its bits, with no row buffer, store or reload.
 template <bool Relued> struct PairPool
 {
     f32* y;
@@ -340,6 +368,25 @@ template <bool Relued> struct PairPool
             yr[oj] = pooled.lane(static_cast<usize>(oj));
         }
     }
+
+    template <typename V> CRD_FORCEINLINE void operator()(u32 r, V top, V bottom, u64 j0) const noexcept
+    {
+        simd::Vec4f even;
+        simd::Vec4f odd;
+        simd::deinterleave(pool_max<Relued>(top, bottom), even, odd);
+        const simd::Vec4f pooled = pool_max<Relued>(even, odd);
+        const u64 oj = j0 / 2U; // up to ow: an odd row's last group may hold only its unpooled column
+        f32* yr = y + static_cast<u64>(r) * stride + oj;
+        if (oj + kLanes<simd::Vec4f> <= ow)
+        {
+            pooled.store(yr);
+            return;
+        }
+        for (u64 k = 0; oj + k < ow; ++k)
+        {
+            yr[k] = pooled.lane(static_cast<usize>(k));
+        }
+    }
 };
 
 // Conv rows oi and oi + 1 of a row of w <= 8 columns for the output channels r in I, row oi in a Vec16f's low lanes
@@ -377,19 +424,19 @@ CRD_FORCEINLINE void conv3x3_row_pair(std::integer_sequence<u32, I...> /*channel
     (sink(I, acc[I]), ...);
 }
 
-// Conv rows oi and oi + 1 of a row of more than one group's and at most Wide's columns for the output channels r in I,
-// each row a Wide register of its own a channel (two rows by eight channels: 16 of avx512's 32 registers), each
-// channel's pair after bias + chain and the relu handed to sink(r, top, bottom): each lane is one output's column, so
-// it runs conv3x3_step's chain and gives its bits, every row load shared by the R channels.
-template <u32... I, typename Sink>
-CRD_FORCEINLINE void conv3x3_wide_pair(std::integer_sequence<u32, I...> /*channels*/, const NnConv2d& c,
-                                       const Staged& s, const f32* wblk, const f32* bias, u64 oi,
-                                       const Sink& sink) noexcept
+// Conv rows oi and oi + 1 at the columns [j0, j0 + V's lanes) for the output channels r in I, each row a V register of
+// its own a channel (two rows by eight Wide channels: 16 of avx512's 32 registers; by kPairChannels Group channels at
+// avx2), each channel's pair after bias + chain and the relu handed to sink(r, top, bottom, j0): each lane is one
+// output's column, so it runs conv3x3_step's chain and gives its bits, every row load shared by the channels.
+template <typename V, u32... I, typename Sink>
+CRD_FORCEINLINE void conv3x3_two_rows(std::integer_sequence<u32, I...> /*channels*/, const NnConv2d& c,
+                                      const Staged& s, const f32* wblk, const f32* bias, u64 oi, u64 j0,
+                                      const Sink& sink) noexcept
 {
-    Wide top[sizeof...(I)] = {(static_cast<void>(I), Wide(0.0F))...};
-    Wide bottom[sizeof...(I)] = {(static_cast<void>(I), Wide(0.0F))...};
+    V top[sizeof...(I)] = {(static_cast<void>(I), V(0.0F))...};
+    V bottom[sizeof...(I)] = {(static_cast<void>(I), V(0.0F))...};
     const u64 chans = c.chans;
-    const f32* chan = s.rows + oi * s.rs; // channel 0's padded row oi: row oi's tap ki = 0, and row oi + 1's above it
+    const f32* chan = s.rows + oi * s.rs + j0; // channel 0's padded row oi: row oi's tap ki = 0, row oi + 1's above it
     for (u64 ci = 0; ci < chans; ++ci, chan += s.plane)
     {
         const f32* srow = chan;
@@ -397,23 +444,60 @@ CRD_FORCEINLINE void conv3x3_wide_pair(std::integer_sequence<u32, I...> /*channe
         {
             for (u64 kj = 0; kj < 3U; ++kj)
             {
-                const Wide xt = Wide::load(srow + kj);
-                const Wide xb = Wide::load(srow + s.rs + kj);
+                const V xt = V::load(srow + kj);
+                const V xb = V::load(srow + s.rs + kj);
                 const u64 wo = (ci * 3U + ki) * 3U + kj;
-                ((top[I] = simd::fma(Wide(wblk[I * chans * 9U + wo]), xt, top[I])), ...);
-                ((bottom[I] = simd::fma(Wide(wblk[I * chans * 9U + wo]), xb, bottom[I])), ...);
+                ((top[I] = simd::fma(V(wblk[I * chans * 9U + wo]), xt, top[I])), ...);
+                ((bottom[I] = simd::fma(V(wblk[I * chans * 9U + wo]), xb, bottom[I])), ...);
             }
         }
     }
-    const Wide zero(0.0F);
-    ((top[I] = Wide(bias[I]) + top[I]), ...); // fl(bias + chain)
-    ((bottom[I] = Wide(bias[I]) + bottom[I]), ...);
+    const V zero(0.0F);
+    ((top[I] = V(bias[I]) + top[I]), ...); // fl(bias + chain)
+    ((bottom[I] = V(bias[I]) + bottom[I]), ...);
     if (c.relu)
     {
         ((top[I] = simd::max(top[I], zero)), ...);
         ((bottom[I] = simd::max(bottom[I], zero)), ...);
     }
-    (sink(I, top[I], bottom[I]), ...);
+    (sink(I, top[I], bottom[I], j0), ...);
+}
+
+// Conv rows oi and oi + 1 for R output channels, each channel's registers handed to the sink: at avx512 (kRowPairs) a
+// row of at most one group's columns in one Vec16f a channel, a row of up to Wide's columns in one Wide a row; at avx2
+// (kGroupPairs) any width, each group of columns from the left, its channels kPairChannels at a time (the row loads
+// repeated for each such block).
+template <u32 R, typename Sink>
+CRD_FORCEINLINE void conv3x3_pair(const NnConv2d& c, const Staged& s, const f32* wblk, const f32* bias, u64 oi,
+                                  const Sink& sink) noexcept
+{
+    if constexpr (kRowPairs)
+    {
+        const auto channels = std::make_integer_sequence<u32, R>{};
+        if (c.w_in <= kLanes<Group>)
+        {
+            conv3x3_row_pair(channels, c, s, wblk, bias, oi, sink);
+        }
+        else
+        {
+            const auto rows = [&](u32 r, Wide top, Wide bottom, u64 /*j0*/) { sink(r, top, bottom); };
+            conv3x3_two_rows<Wide>(channels, c, s, wblk, bias, oi, 0U, rows);
+        }
+    }
+    else
+    {
+        constexpr u32 head = R < kPairChannels ? R : kPairChannels;
+        for (u64 j0 = 0; j0 < c.w_in; j0 += kLanes<Group>)
+        {
+            conv3x3_two_rows<Group>(std::make_integer_sequence<u32, head>{}, c, s, wblk, bias, oi, j0, sink);
+            if constexpr (R > head)
+            {
+                const auto rest = [&](u32 r, Group top, Group bottom, u64 j) { sink(head + r, top, bottom, j); };
+                conv3x3_two_rows<Group>(std::make_integer_sequence<u32, R - head>{}, c, s, wblk + head * c.chans * 9U,
+                                        bias + head, oi, j0, rest);
+            }
+        }
+    }
 }
 
 // One conv row for R output channels.
@@ -434,10 +518,11 @@ void conv3x3_row(const NnConv2d& c, const Staged& s, const f32* wblk, const f32*
     }
 }
 
-// Whether conv3x3_rowblock runs a row pair in registers: where kRowPairs holds and the row has at most Wide's columns.
+// Whether conv3x3_rowblock runs a row pair in registers: where kRowPairs holds and the row has at most Wide's columns,
+// and where kGroupPairs holds.
 CRD_FORCEINLINE bool row_pairs(const NnConv2d& c) noexcept
 {
-    return kRowPairs && c.w_in <= kLanes<Wide>;
+    return kRowPairs ? c.w_in <= kLanes<Wide> : kGroupPairs;
 }
 
 // Where conv3x3_rowblock pools a row pair in its registers: the pooled row of the block's first output channel, the
@@ -450,30 +535,19 @@ struct PooledRow
 };
 
 // Conv row oi for R output channels into dst and, with next, row oi + 1 into next, or with pooled.y those two rows
-// pooled 2x2/s2 into the pooled rows: both rows in registers where row_pairs holds (then the pool too), one register a
-// channel for at most one group's columns and two for more.
+// pooled 2x2/s2 into the pooled rows: both rows in registers where row_pairs holds (then the pool too, see
+// conv3x3_pair).
 template <u32 R>
 void conv3x3_rowblock(const NnConv2d& c, const Staged& s, const f32* wblk, const f32* bias, f32* dst, f32* next,
                       u64 dst_stride, u64 oi, const PooledRow& pooled) noexcept
 {
     if (next != nullptr)
     {
-        if constexpr (kRowPairs)
+        if constexpr (kRowPairs || kGroupPairs)
         {
             if (row_pairs(c))
             {
-                const auto channels = std::make_integer_sequence<u32, R>{};
-                const auto pair = [&](const auto& sink)
-                {
-                    if (c.w_in <= kLanes<Group>)
-                    {
-                        conv3x3_row_pair(channels, c, s, wblk, bias, oi, sink);
-                    }
-                    else
-                    {
-                        conv3x3_wide_pair(channels, c, s, wblk, bias, oi, sink);
-                    }
-                };
+                const auto pair = [&](const auto& sink) { conv3x3_pair<R>(c, s, wblk, bias, oi, sink); };
                 if (pooled.y == nullptr)
                 {
                     pair(PairRows{dst, next, dst_stride, c.w_in});
