@@ -113,11 +113,48 @@ Rules of the legal domain, beside the common ones:
   and an agent never marks an obligation satisfied without an active check and evidence.
 - **Turkish law is never omitted.** Every topic the register holds, the platform policies aside, has a Turkish entry.
 
-The JSON register is the guarded source of truth. The rules products consume at run time are generated from it as
-authored CHIR assets, swapped live per jurisdiction as reviewed generations and queryable over `ceridc` and MCP; that
-generator and query belong to the planned `comply` owner (`compliance.obligations` in the
-[capability registry](capability-ownership.md)) and land in COMPLY.0, and no governed row writes a second rule
+The JSON register is the guarded source of truth. The rules products consume at run time are generated from it,
+swapped live per jurisdiction as reviewed generations and queryable over `ceridc` and MCP; the generator, the store
+and the query belong to the `comply` owner (`compliance.obligations` in the
+[capability registry](capability-ownership.md), module `crd-comply`), and no governed row writes a second rule
 engine.
+
+<a id="rule-generations"></a>
+### Rule generations
+
+- **One generation per jurisdiction.** [scripts/gen-comply-rules.py](../../scripts/gen-comply-rules.py) writes
+  `assets/comply/<code>.rules.toml` (the code in lower case: `tr`, `eu`, `us-ca`, `int`, `platform`) for every
+  jurisdiction holding a rule: an `obligation` or `user-action` entry that is `planned` or `implemented`. Watched and
+  deprecated entries are not rules. The file is `cerid-rules/1`, canonical UTF-8 with LF in the TOML subset
+  `crd-toml` reads (strings, integers, booleans, arrays and arrays of tables; days are `YYYY`, `YYYY-MM` or
+  `YYYY-MM-DD` strings, an absent day is the empty string): `format`, `jurisdiction`, `generation`, `register` (the
+  snapshot day), then one `[[scope]]` table per scope its rules name (`id`, `kind`, `state`) and one `[[rule]]` table
+  per entry in register order (`id`, `kind`, `topic`, `state`, `title`, `instrument`, `article`, `primary`, `read`,
+  `obligation`, `applies_to`, `check`, `check_name`, `check_ref`, `effective`, `sunset`, `counsel`,
+  `counsel_reviewed`, `rows`). `counsel` is `none`, `needed` or `reviewed`. `--check` (the `crd-comply-rules-drift`
+  CTest) byte-compares every file and refuses a stray one.
+- **Reviewed.** `rule_generations` in the register records, per jurisdiction with rules, its `generation` (from 1),
+  the day it was `reviewed` and the `sha256` of the committed file. The guard fails a file whose digest differs from
+  its record (the rules changed and nobody reviewed them), a record without a file or a file without a record, and a
+  review day after today. `gen-comply-rules.py --review <code> [--day YYYY-MM-DD]` is the review: it refuses when the
+  rules are unchanged, otherwise increments the generation, writes the file and records the day and digest. The
+  JSON stays the authored source until CHIR can hold structured values ([LANG.2](../ROADMAP.md#slice-lang.2)); the
+  CHIR projection then lowers to the same generation.
+- **Swapped live.** `crd::comply::RuleStore` holds one generation per jurisdiction. `apply` decodes and validates
+  the whole text before anything changes (bounded sizes, every key known and typed, days real calendar days, scopes
+  unique and every `applies_to` naming one, the enumerations closed) and adopts it only above the current number:
+  a lower number is a rollback, the same number with other bytes (XXH3-64) a conflict and the same bytes already
+  current, all refused with the store unchanged. A query runs under the store's lock, so it sees one whole generation
+  of each jurisdiction, never a mix. Authenticity on delivery (a signed generation from the publisher) is the
+  envelope NET.2 gives every signed artefact, through `crd-crypto`.
+- **Queried.** A query names a scope, the jurisdictions a product serves and a day, and answers every rule of those
+  jurisdictions that applies to the scope and is in force that day (effective on or before it, its sunset after it),
+  with the scope's state, the check, the counsel status and whether the text was read. A rule is `proven` only when it
+  is implemented with an active check (implemented entries carry evidence, the guard holds that); every other rule in
+  force is `unproven`, so no consumer, human or agent, can read an obligation as satisfied without evidence. Rules of
+  other scopes, or not yet effective, are not answered; `ceridc comply` prints the answer as JSON and the MCP tool
+  serves the same query once [MCP-ADAPT](../ROADMAP.md#slice-mcp-adapt) gives commands one declaration for every
+  surface.
 
 <a id="snapshot-and-review"></a>
 ## Snapshot and review

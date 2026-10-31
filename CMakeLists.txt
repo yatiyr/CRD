@@ -518,6 +518,8 @@ crd_module(engine/foundation/config engine/config DEPENDS containers core log ma
     TESTS foundation/config)
 crd_module(engine/foundation/crypto engine/crypto DEPENDS containers core TESTS foundation/crypto support/fuzz)
 crd_module(engine/foundation/net engine/net DEPENDS containers core TESTS foundation/net support/fuzz)
+crd_module(engine/foundation/comply engine/comply DEPENDS containers core toml TESTS foundation/comply support/fuzz
+    TEST_DEPENDS platform)
 crd_module(engine/ui/imgui engine/imgui
     DEPENDS config gpu-context gpu-context-dx12 gpu-context-vulkan log platform units PACKAGES glfw imgui
     TESTS ui/imgui)
@@ -679,8 +681,8 @@ crd_module(tools/asset_cooker HOST EXECUTABLES asset_cooker
     TESTS assets/scene_cooker assets/cooker)
 # GEO-11 (D-007 row 76): the agent surface — CLI verbs + MCP stdio server
 crd_module(tools/ceridc HOST EXECUTABLES ceridc
-    DEPENDS asset-io asset_cooker audio ceir ceir-cook ceir-host containers core jobs memory perf perf-gpu-bridge
-    platform resources scene time timeline TESTS tools/ceridc support/fuzz)
+    DEPENDS asset-io asset_cooker audio ceir ceir-cook ceir-host comply containers core jobs memory perf
+    perf-gpu-bridge platform resources scene time timeline TESTS tools/ceridc support/fuzz)
 # D-007 D2: the offline shader-cook CLI (.kgph -> .crdr); ADR-0104
 crd_module(tools/shader-cook NAME shader_cook HOST EXECUTABLES shader_cook
     DEPENDS containers core kir memory platform resources shader-cook)

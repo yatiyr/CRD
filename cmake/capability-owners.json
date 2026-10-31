@@ -667,11 +667,12 @@
     },
     {
       "id": "compliance.obligations",
-      "summary": "Legal and platform obligations: the rules generated from the COMPLY.0 legal register as authored CHIR assets swapped live per jurisdiction as reviewed generations, their query over ceridc and MCP, the checks and the shared generators (data inventory, notices, classification records, store answers) the governed rows consume.",
+      "summary": "Legal and platform obligations: the reviewed rule generations scripts/gen-comply-rules.py writes per jurisdiction from the COMPLY.0 legal register, decoded whole and swapped live by RuleStore, the query of the rules that bind a scope on a day (proven or unproven) served by ceridc comply and, after MCP-ADAPT, by MCP, and the checks and shared generators (data inventory, notices, classification records, store answers) the governed rows consume.",
       "owner": "comply",
-      "status": "planned",
-      "row": "COMPLY.0",
-      "decision": "docs/design/registers.md#legal-domain: the JSON register is the guarded source of truth; COMPLY owns rules, checks and generators, the governed rows consume them and write no second rule engine."
+      "api": [
+        "engine/foundation/comply/include/crd/comply/rules.hpp"
+      ],
+      "decision": "docs/design/registers.md#rule-generations: the JSON register is the guarded source of truth and every jurisdiction's generation is reviewed before it ships (its digest recorded in the register); COMPLY owns rules, checks and generators, the governed rows consume them and write no second rule engine."
     }
   ]
 }

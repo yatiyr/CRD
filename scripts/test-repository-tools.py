@@ -159,6 +159,9 @@ registers_spec.loader.exec_module(registers)
 register_ids_spec = importlib.util.spec_from_file_location('gen_register_ids', ROOT / 'scripts/gen-register-ids.py')
 register_ids = importlib.util.module_from_spec(register_ids_spec)
 register_ids_spec.loader.exec_module(register_ids)
+comply_rules_spec = importlib.util.spec_from_file_location('gen_comply_rules', ROOT / 'scripts/gen-comply-rules.py')
+comply_rules = importlib.util.module_from_spec(comply_rules_spec)
+comply_rules_spec.loader.exec_module(comply_rules)
 review_spec = importlib.util.spec_from_file_location('register_review', ROOT / 'scripts/register-review.py')
 register_review = importlib.util.module_from_spec(review_spec)
 review_spec.loader.exec_module(register_review)
@@ -3481,8 +3484,9 @@ class TestInstruments(unittest.TestCase):
 
     def test_fuzz_driver_bounds_every_run_and_names_its_corpora(self):
         self.assertEqual(sorted(fuzz_driver.TARGETS), ['ceir-binary', 'ceir-differential', 'ceir-record', 'ceir-text',
-                                                       'ceridc-diag', 'ckir-binary', 'ckir-text', 'crypto-policy',
-                                                       'memory-allocators', 'net-negotiation', 'perf-assets',
+                                                       'ceridc-diag', 'ckir-binary', 'ckir-text', 'comply-rules',
+                                                       'crypto-policy', 'memory-allocators', 'net-negotiation',
+                                                       'perf-assets',
                                                        'perf-bundle', 'perf-capture', 'perf-flight',
                                                        'resources-reload'])
         for name, target in fuzz_driver.TARGETS.items():
@@ -5369,11 +5373,29 @@ class RegisterFixture:
         (root / 'tests' / 'test_quic.cpp').write_text('// evidence\n', encoding='utf-8')
         (root / 'CMakeLists.txt').write_text('crd_module(engine/foundation/core engine/core)\n', encoding='utf-8')
         (root / 'cmake' / 'standards-register.json').write_text(json.dumps(register), encoding='utf-8')
-        (root / 'cmake' / 'legal-register.json').write_text(json.dumps(legal or self.legal_register()),
-                                                            encoding='utf-8')
+        legal = legal or self.legal_register()
+        if 'rule_generations' not in legal:
+            legal = dict(legal, rule_generations=self.reviewed(root, legal))
+        (root / 'cmake' / 'legal-register.json').write_text(json.dumps(legal), encoding='utf-8')
         capabilities = {'capabilities': [{'id': 'network.transport', 'owner': 'net', 'status': 'planned'},
                                          {'id': 'compliance.obligations', 'owner': 'comply', 'status': 'planned'}]}
         (root / 'cmake' / 'capability-owners.json').write_text(json.dumps(capabilities), encoding='utf-8')
+
+    @staticmethod
+    def reviewed(root, legal):
+        """Generation 1 of every jurisdiction with rules, written into the tree and recorded as reviewed (a register
+        too malformed to generate from records nothing; the entry errors name it)."""
+        try:
+            texts = comply_rules.outputs(legal, {code: 1 for code in comply_rules.rules_by_jurisdiction(legal)})
+        except (comply_rules.RuleError, KeyError, TypeError):
+            return {}
+        records = {}
+        for relative, text in texts.items():
+            (root / relative).parent.mkdir(parents=True, exist_ok=True)
+            (root / relative).write_bytes(text.encode('utf-8'))
+            code = text.split('jurisdiction = "', 1)[1].split('"', 1)[0]
+            records[code] = {'generation': 1, 'reviewed': '2026-10-31', 'sha256': comply_rules.digest(text)}
+        return records
 
     def guard(self, root, today):
         with patch('sys.stdout', new_callable=io.StringIO) as out:
@@ -5687,6 +5709,149 @@ class LegalRegister(RegisterFixture, unittest.TestCase):
             code, output = self.guard(root, '2026-11-01')
             self.assertEqual(1, code, output)
             self.assertIn('cmake/legal-register.json:', output)
+
+
+class ComplyRules(RegisterFixture, unittest.TestCase):
+    """scripts/gen-comply-rules.py and the guard's rule generation rules (COMPLY.0): one canonical generation per
+    jurisdiction with rules, reviewed before it ships, its file held to the digest its review recorded."""
+
+    def entries(self):
+        reviewed = self.legal_entry(id='tr.5651.game-platform', topic='online-safety', state='implemented',
+                                    instrument=self.instrument(name='Law No. 5651', consolidated=self.READ),
+                                    title='Game "platform" duties\\ rules', obligation='Rate\tgames.',
+                                    check={'ref': 'tests/test_quic.cpp', 'name': 'ratings', 'state': 'active'},
+                                    effective='2026-11', sunset='2030-01-01', evidence=['tests/test_quic.cpp'],
+                                    source={'ref': 'docs/research.md#n83', 'read': '2026-10-27', 'verified': True},
+                                    counsel={'needed': True, 'reviewed': '2026-10-30'})
+        action = self.legal_entry(id='eu.gdpr.records', kind='user-action', counsel={'needed': False,
+                                                                                        'reviewed': None},
+                                  instrument=self.instrument(name='GDPR', jurisdiction='EU',
+                                                             primary='https://eur-lex.europa.eu/eli/reg/2016/679/oj'))
+        watched = self.legal_entry(id='tr.ai.bill', state='watch', effective=None)
+        return [self.legal_entry(), reviewed, action, watched]
+
+    def legal(self, **changes):
+        scopes = [self.scope(id='product.store', kind='product', title='The store'), self.scope()]
+        return self.legal_register(self.entries(), scopes=scopes, **changes)
+
+    def tree(self, scratch, legal):
+        root = Path(scratch)
+        self.write_tree(root, self.register([self.entry()]), legal)
+        return root
+
+    def run_tool(self, root, *args):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = comply_rules.main(['--root', str(root), *args])
+        return code, output.getvalue()
+
+    def test_one_canonical_generation_per_jurisdiction_with_rules(self):
+        texts = comply_rules.outputs(self.legal(), {'TR': 4, 'EU': 1})
+        self.assertEqual(['assets/comply/tr.rules.toml', 'assets/comply/eu.rules.toml'], list(texts))
+        tr = texts['assets/comply/tr.rules.toml']
+        self.assertTrue(tr.startswith('# Generated by scripts/gen-comply-rules.py from cmake/legal-register.json; '
+                                      'never edit by hand.\n# A change is reviewed with: python '
+                                      'scripts/gen-comply-rules.py --review TR\nformat = "cerid-rules/1"\n'
+                                      'jurisdiction = "TR"\ngeneration = 4\nregister = "2026-10-31"\n\n[[scope]]\n'
+                                      'id = "flow.crash-reports"\nkind = "flow"\nstate = "planned"\n\n[[rule]]\n'
+                                      'id = "tr.kvkk.processing"\n'), tr)
+        self.assertNotIn('product.store', tr)  # only the scopes its rules name
+        self.assertNotIn('tr.ai.bill', tr)  # a watched entry is not a rule
+        self.assertIn('read = false\nobligation = "Process personal data lawfully."\n'
+                      'applies_to = ["flow.crash-reports"]\ncheck = "planned"\n', tr)
+        self.assertIn('effective = "2016-04-07"\nsunset = ""\ncounsel = "needed"\ncounsel_reviewed = ""\n'
+                      'rows = ["NET.2"]\n', tr)
+        self.assertIn('title = "Game \\"platform\\" duties\\\\ rules"\n', tr)
+        self.assertIn('obligation = "Rate\\u0009games."\n', tr)
+        self.assertIn('state = "implemented"\n', tr)
+        self.assertIn('read = true\n', tr)
+        self.assertIn('effective = "2026-11"\nsunset = "2030-01-01"\ncounsel = "reviewed"\n'
+                      'counsel_reviewed = "2026-10-30"\n', tr)
+        self.assertTrue(tr.endswith('rows = ["NET.2"]\n'))
+        eu = texts['assets/comply/eu.rules.toml']
+        self.assertIn('kind = "user-action"\n', eu)
+        self.assertIn('counsel = "none"\n', eu)
+        self.assertEqual(texts, comply_rules.outputs(self.legal(), {'TR': 4, 'EU': 1}))
+        with self.assertRaisesRegex(comply_rules.RuleError, 'no generation for TR'):
+            comply_rules.outputs(self.legal())
+        unknown = self.legal_register([self.legal_entry(applies_to=['flow.none'])])
+        with self.assertRaisesRegex(comply_rules.RuleError, "unknown scope 'flow.none'"):
+            comply_rules.outputs(unknown, {'TR': 1})
+
+    def test_check_names_drift_and_stray_files(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = self.tree(scratch, self.legal())
+            self.assertEqual((0, 'rule generations current: 2 jurisdiction(s)\n'), self.run_tool(root, '--check'))
+            path = root / 'assets/comply/tr.rules.toml'
+            path.write_bytes(path.read_bytes().replace(b'\n', b'\r\n'))
+            code, output = self.run_tool(root, '--check')
+            self.assertEqual(1, code)
+            self.assertIn("FAIL: assets/comply/tr.rules.toml differs from scripts/gen-comply-rules.py's output", output)
+            self.assertEqual(0, self.run_tool(root)[0])
+            (root / 'assets/comply/gb.rules.toml').write_text('x', encoding='utf-8')
+            code, output = self.run_tool(root, '--check')
+            self.assertEqual(1, code)
+            self.assertIn("FAIL: assets/comply/gb.rules.toml is no jurisdiction's rule generation", output)
+
+    def test_review_records_the_next_generation_only_for_changed_rules(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = self.tree(scratch, self.legal(rule_generations={}))
+            self.assertEqual((0, 'reviewed TR: generation 1 on 2026-10-31, assets/comply/tr.rules.toml\n'),
+                             self.run_tool(root, '--review', 'TR', '--day', '2026-10-31'))
+            code, output = self.run_tool(root, '--review', 'TR', '--day', '2026-11-02')
+            self.assertEqual(1, code)
+            self.assertIn("TR's rules are unchanged since generation 1; nothing to review", output)
+            legal = json.loads((root / 'cmake/legal-register.json').read_text(encoding='utf-8'))
+            legal['entries'][0]['obligation'] = 'Process personal data lawfully and minimally.'
+            (root / 'cmake/legal-register.json').write_text(json.dumps(legal), encoding='utf-8')
+            self.assertEqual(0, self.run_tool(root, '--review', 'TR', '--day', '2026-11-02')[0])
+            legal = json.loads((root / 'cmake/legal-register.json').read_text(encoding='utf-8'))
+            record = legal['rule_generations']['TR']
+            text = (root / 'assets/comply/tr.rules.toml').read_bytes()
+            self.assertEqual({'generation': 2, 'reviewed': '2026-11-02',
+                              'sha256': hashlib.sha256(text).hexdigest()}, record)
+            self.assertIn(b'generation = 2\n', text)
+            self.assertIn(b'and minimally', text)
+            self.assertEqual(['TR'], list(legal['rule_generations']))
+            code, output = self.run_tool(root, '--review', 'GB')
+            self.assertEqual(1, code)
+            self.assertIn('GB holds no rule', output)
+
+    def test_the_guard_holds_each_file_to_its_reviewed_digest(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = self.tree(scratch, self.legal())
+            self.assertEqual(0, self.guard(root, '2026-11-01')[0])
+            path = root / 'assets/comply/tr.rules.toml'
+            path.write_bytes(path.read_bytes() + b'\n')
+            code, output = self.guard(root, '2026-11-01')
+            self.assertEqual(1, code)
+            self.assertIn('legal register: rule_generations: assets/comply/tr.rules.toml changed since generation 1 '
+                          'was reviewed; review it with python scripts/gen-comply-rules.py --review TR', output)
+            path.unlink()
+            code, output = self.guard(root, '2026-11-01')
+            self.assertIn("TR's generation assets/comply/tr.rules.toml is missing", output)
+
+    def test_the_guard_wants_one_well_formed_record_per_jurisdiction_with_rules(self):
+        legal = self.legal()
+        with tempfile.TemporaryDirectory() as scratch:
+            records = self.reviewed(Path(scratch), legal)
+        good = records['TR']
+        self.assert_legal_fails(self.legal(rule_generations={'EU': records['EU']}),
+                                'TR has rules but no reviewed generation; review them with python '
+                                'scripts/gen-comply-rules.py --review TR')
+        self.assert_legal_fails(self.legal(rule_generations=dict(records, GB=good)),
+                                'GB holds no rule, so it has no generation')
+        for bad in (dict(good, generation=0), dict(good, generation=True), dict(good, generation='1'),
+                    dict(good, sha256='AB' * 32), {'generation': 1, 'reviewed': '2026-10-31'}, ['TR'], 5):
+            with self.subTest(bad=bad):
+                self.assert_legal_fails(self.legal(rule_generations=dict(records, TR=bad)),
+                                        'TR has a generation (from 1), its reviewed day and the sha256 of its file')
+        self.assert_legal_fails(self.legal(rule_generations=dict(records, TR=dict(good, reviewed='2026-11-02'))),
+                                'TR was reviewed on 2026-11-02, after today')
+        self.assert_legal_fails(self.legal(rule_generations=dict(records, TR=dict(good, reviewed='2026-11'))),
+                                'reviewed must be a YYYY-MM-DD date')
+        self.assert_legal_fails(self.legal(rule_generations=[]),
+                                'rule_generations maps each jurisdiction with rules to its reviewed generation')
 
 
 class RegisterReview(RegisterFixture, unittest.TestCase):

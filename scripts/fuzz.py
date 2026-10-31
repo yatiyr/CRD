@@ -57,6 +57,8 @@ TARGETS = {
                         'executable': 'tests/net/fuzz/crd-fuzz-net-negotiation'},
     'crypto-policy': {'corpus': 'tests/foundation/crypto/fuzz/corpus',
                       'executable': 'tests/crypto/fuzz/crd-fuzz-crypto-policy'},
+    'comply-rules': {'corpus': 'tests/foundation/comply/fuzz/corpus',
+                     'executable': 'tests/comply/fuzz/crd-fuzz-comply-rules'},
 }
 LIMITS = {'max_len': 65536, 'timeout': 10, 'rss_limit_mb': 2048, 'malloc_limit_mb': 256}
 STAT_PATTERN = re.compile(r'^stat::(\w+):\s+(\d+)', re.MULTILINE)

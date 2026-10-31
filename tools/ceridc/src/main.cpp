@@ -72,6 +72,8 @@ void print_usage()
         "  ceridc import <file>\n"
         "  ceridc cook --root <dir> --out <pack.crdr>\n"
         "  ceridc query --pack <pack.crdr>\n"
+        "  ceridc comply --rules <dir> --scope <id> --jurisdiction <code,...> --day <YYYY-MM-DD>\n"
+        "                (the reviewed rules that bind the scope that day, each proven or unproven)\n"
         "  ceridc instantiate --pack <p> --asset <name> [--x --y --z] --out <scene.scen> [--dry-run]\n"
         "  ceridc sequence --name <n> --clip-a <n> --frames-a <n> --clip-b <n> --frames-b <n>\n"
         "                  [--transition <frames>] --out-timl <f> --out-otio <f>\n"
@@ -251,6 +253,12 @@ int main(int argc, char* argv[])
     if (std::strcmp(verb, "query") == 0)
     {
         return emit(crd::ceridc::verb_query(flag_of(argc, argv, "--pack", nullptr), &g_alloc));
+    }
+    if (std::strcmp(verb, "comply") == 0)
+    {
+        return emit(crd::ceridc::verb_comply(
+            flag_of(argc, argv, "--rules", nullptr), flag_of(argc, argv, "--scope", nullptr),
+            flag_of(argc, argv, "--jurisdiction", nullptr), flag_of(argc, argv, "--day", nullptr), &g_alloc));
     }
     if (std::strcmp(verb, "instantiate") == 0)
     {

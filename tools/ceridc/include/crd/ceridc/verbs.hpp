@@ -34,6 +34,15 @@ namespace crd::ceridc
 // List a PACK's manifest — every UUID, type, and debug name (the agent's resource-graph query).
 [[nodiscard]] crd::containers::String verb_query(const char* pack_path, crd::memory::IAllocator* alloc);
 
+// COMPLY.0: the legal and platform rules that bind `scope` on `day` (YYYY-MM-DD) in the comma-separated
+// `jurisdictions`, from the reviewed rule generations in `rules_dir` (<dir>/<code in lower case>.rules.toml, written
+// by scripts/gen-comply-rules.py). Each binding names its jurisdiction and generation, the rule, its check, counsel
+// status and proof (proven only when implemented with an active check). A jurisdiction without a generation file is
+// reported as absent; a malformed generation fails the verb with its error, line and key.
+// Contract: docs/design/registers.md#rule-generations.
+[[nodiscard]] crd::containers::String verb_comply(const char* rules_dir, const char* scope, const char* jurisdictions,
+                                                  const char* day, crd::memory::IAllocator* alloc);
+
 // Compose a scene: an entity instancing `asset_name` from the pack at `translate`, serialized as a SCEN
 // artifact. TRANSACTIONAL: unknown asset / non-finite transform rejects with NO file written; dry_run
 // validates and reports without writing.

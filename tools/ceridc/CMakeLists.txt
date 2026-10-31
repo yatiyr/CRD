@@ -32,6 +32,7 @@ target_link_libraries(crd-ceridc
         crd-ceir-cook # DIAG.8b: the InspectHost (ReloadSet generation, compiled entry, executing thread)
         crd-perf-gpu-bridge # the gpu.resources diagnostic command (ceridc registers no GPU context)
         crd-ceir-host # DIAG.9a: the host provider as the replay commands' host executor
+        crd-comply    # COMPLY.0: the comply verb answers the rule generations' query
 )
 
 target_compile_features(crd-ceridc PUBLIC cxx_std_20)

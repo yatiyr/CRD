@@ -1873,6 +1873,127 @@
         "--check"
       ],
       "sha256": "d05b046f29085015e92d3dad9318c39b44d38037f6900346ac1d069952754f8c"
+    },
+    {
+      "path": "assets/comply/au.rules.toml",
+      "generator": "scripts/gen-comply-rules.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "scripts/gen-comply-rules.py",
+        "--check"
+      ],
+      "sha256": "670ede4cfb4a6f030a146be164865c06c3a3b4c14accb0a7ef2ee58c9bc074ed"
+    },
+    {
+      "path": "assets/comply/br.rules.toml",
+      "generator": "scripts/gen-comply-rules.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "scripts/gen-comply-rules.py",
+        "--check"
+      ],
+      "sha256": "24765fc13ce5bafefa5ff46ab5a4df0027674c0454e60db282cd34dd132a2e8d"
+    },
+    {
+      "path": "assets/comply/ca.rules.toml",
+      "generator": "scripts/gen-comply-rules.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "scripts/gen-comply-rules.py",
+        "--check"
+      ],
+      "sha256": "767b32a0266f64352d531fc9a190e536e4c520918853eb31d853f59aa39c5605"
+    },
+    {
+      "path": "assets/comply/eu.rules.toml",
+      "generator": "scripts/gen-comply-rules.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "scripts/gen-comply-rules.py",
+        "--check"
+      ],
+      "sha256": "2646b98b0764474ae2281f950d71e4af0d8398041a406a9b46172fa957753839"
+    },
+    {
+      "path": "assets/comply/gb.rules.toml",
+      "generator": "scripts/gen-comply-rules.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "scripts/gen-comply-rules.py",
+        "--check"
+      ],
+      "sha256": "ee6d2a19672f639be3e702de9f689f64d5345fc57346cf14d392296f13590059"
+    },
+    {
+      "path": "assets/comply/int.rules.toml",
+      "generator": "scripts/gen-comply-rules.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "scripts/gen-comply-rules.py",
+        "--check"
+      ],
+      "sha256": "f1d8a609a6788b19fe463a9b464a6caed30ab627f0955f1f919606a4911b9760"
+    },
+    {
+      "path": "assets/comply/jp.rules.toml",
+      "generator": "scripts/gen-comply-rules.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "scripts/gen-comply-rules.py",
+        "--check"
+      ],
+      "sha256": "73b27daf95d3381d80bca546214a4077bc28dfeb5d9344151cec910dc19cbefd"
+    },
+    {
+      "path": "assets/comply/platform.rules.toml",
+      "generator": "scripts/gen-comply-rules.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "scripts/gen-comply-rules.py",
+        "--check"
+      ],
+      "sha256": "21377a60378504ff4a0d108eef26ea0665a22382a5698d67a9012c0f8b665809"
+    },
+    {
+      "path": "assets/comply/tr.rules.toml",
+      "generator": "scripts/gen-comply-rules.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "scripts/gen-comply-rules.py",
+        "--check"
+      ],
+      "sha256": "d75f9865c01dd21c3a76ca6390320a665f4a47d24b1ce21034e0f0d55f2901c0"
+    },
+    {
+      "path": "assets/comply/us-ca.rules.toml",
+      "generator": "scripts/gen-comply-rules.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "scripts/gen-comply-rules.py",
+        "--check"
+      ],
+      "sha256": "1bf52c737e702845ae574f17482aa72b4aa497e9d70f6a83bdf1b932557ce071"
+    },
+    {
+      "path": "assets/comply/us.rules.toml",
+      "generator": "scripts/gen-comply-rules.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "scripts/gen-comply-rules.py",
+        "--check"
+      ],
+      "sha256": "c39592e6432d68a073996086c395b7ff447ffafd6e583119b4f3e17ca9b2ce1e"
     }
   ]
 }

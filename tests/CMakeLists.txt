@@ -250,6 +250,7 @@ crd_tests(foundation/app app)
 crd_tests(foundation/config config)
 crd_tests(foundation/crypto crypto)  # NET-STD: algorithm identifiers and signed policy generations
 crd_tests(foundation/net net)  # NET-STD: version and extension negotiation, GREASE, register identifiers
+crd_tests(foundation/comply comply)  # COMPLY.0: reviewed rule generations, the live store and the query
 crd_tests(ui/imgui imgui)
 # RET-8 (ADR-0105): tests/{renderer,shader,rhi,rhi_vulkan} DELETED with their modules — the parity audit
 # (D-007 rows 89-96) records every assertion's green gpu-context home.

@@ -25,12 +25,16 @@ The guard fails, among the format errors, on:
   - in the legal domain: a binding obligation (in force, not past its sunset, and applying to a live scope) without an
     active check; a primary source outside its jurisdiction's official hosts; an entry whose rows are all Done, or
     which is implemented, before its instrument was read in its consolidated text; an implemented entry whose counsel
-    review is outstanding; a scope still planned when its rows are Done; and a topic without a Turkish entry.
+    review is outstanding; a scope still planned when its rows are Done; a topic without a Turkish entry; and a rule
+    generation (assets/comply/<code>.rules.toml, scripts/gen-comply-rules.py) whose bytes differ from the digest its
+    review recorded in `rule_generations`, a jurisdiction with rules and no reviewed generation, or a record for a
+    jurisdiction without rules.
 
   python scripts/check-registers.py [--root <repository root>] [--today YYYY-MM-DD]
 """
 import argparse
 import datetime
+import hashlib
 import importlib.util
 import json
 import re
@@ -57,7 +61,7 @@ DOMAINS = {
         'kinds': {'protocol', 'extension', 'algorithm', 'format', 'guidance'},
     },
     'legal': {
-        'register_keys': {'jurisdictions', 'scopes'},
+        'register_keys': {'jurisdictions', 'scopes', 'rule_generations'},
         'entry_keys': {'topic', 'instrument', 'obligation', 'applies_to', 'check', 'effective', 'sunset', 'counsel'},
         'kinds': {'obligation', 'user-action'},
     },
@@ -90,6 +94,10 @@ _spec = importlib.util.spec_from_file_location('check_master_plan', Path(__file_
                                                'check-master-plan.py')
 _plan = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_plan)
+_spec = importlib.util.spec_from_file_location('gen_comply_rules', Path(__file__).resolve().parent /
+                                               'gen-comply-rules.py')
+_rules = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_rules)
 
 
 def parse_day(text):
@@ -572,6 +580,40 @@ def review_errors(where, review, entries, context):
     return errors
 
 
+def rule_generation_errors(register, context):
+    """Every jurisdiction with rules has a reviewed generation whose committed file is the one reviewed."""
+    where = 'legal register: rule_generations'
+    records = register.get('rule_generations')
+    if not isinstance(records, dict):
+        return [f'{where} maps each jurisdiction with rules to its reviewed generation']
+    try:
+        holding = set(_rules.rules_by_jurisdiction(register))
+    except (KeyError, TypeError):
+        return []  # the entry errors name the malformed entry
+    errors = [f'{where}: {code} has rules but no reviewed generation; review them with python '
+              f'{_rules.GENERATOR} --review {code}' for code in sorted(holding - set(records))]
+    errors += [f'{where}: {code} holds no rule, so it has no generation' for code in sorted(set(records) - holding)]
+    for code in sorted(holding & set(records)):
+        record = records[code]
+        keys = set(record) if isinstance(record, dict) else set()
+        if keys != {'generation', 'reviewed', 'sha256'} or type(record['generation']) is not int or \
+                record['generation'] < 1 or \
+                not isinstance(record['sha256'], str) or not SHA256.match(record['sha256']):
+            errors.append(f'{where}: {code} has a generation (from 1), its reviewed day and the sha256 of its file')
+            continue
+        errors += date_errors(f'{where}: {code}', 'reviewed', record['reviewed'])
+        if parse_day(record['reviewed']) and parse_day(record['reviewed']) > context.today:
+            errors.append(f'{where}: {code} was reviewed on {record["reviewed"]}, after today')
+        path = context.root / _rules.file_name(code)
+        if not path.is_file():
+            errors.append(f'{where}: {code}\'s generation {_rules.file_name(code)} is missing; run python '
+                          f'{_rules.GENERATOR}')
+        elif hashlib.sha256(path.read_bytes()).hexdigest() != record['sha256']:
+            errors.append(f'{where}: {_rules.file_name(code)} changed since generation {record["generation"]} was '
+                          f'reviewed; review it with python {_rules.GENERATOR} --review {code}')
+    return errors
+
+
 def register_errors(domain, register, context):
     where = f'{domain} register'
     if not isinstance(register, dict) or register.get('schema') != SCHEMA or register.get('domain') != domain:
@@ -610,7 +652,8 @@ def register_errors(domain, register, context):
     if domain == 'standards':
         errors += checklist_errors(register, context)
     elif domain == 'legal':
-        errors += jurisdiction_errors(register) + scope_errors(register, context) + topic_errors(entries)
+        errors += jurisdiction_errors(register) + scope_errors(register, context) + topic_errors(entries) + \
+            rule_generation_errors(register, context)
     return errors
 
 
