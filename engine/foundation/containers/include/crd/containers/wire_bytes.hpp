@@ -3,8 +3,8 @@
 // crd-containers -- big-endian integers over byte spans: the bounded reader and writer of every Cerid wire and signed
 // artefact layout (crd-net's negotiation, crd-crypto's policy generations). Network byte order regardless of the host.
 //
-//   WireWriter  writes into a span the caller sized from the layout; writing past it is a contract violation (assert),
-//               never a silent truncation.
+//   WireWriter  writes into a span the caller sized from the layout; writing past it is a contract violation that
+//               stops the process in every build (CRD_FATAL), never a silent truncation or a write out of bounds.
 //   WireReader  takes fields from received bytes; every take reports whether the bytes held the whole field and
 //               consumes nothing when they did not, so a decoder refuses a short message instead of reading past it.
 //               A taken byte range views the input.
@@ -22,7 +22,10 @@ public:
 
     void put_u8(u8 value) noexcept
     {
-        CRD_ASSERT(m_at < m_out.size());
+        if (m_at >= m_out.size())
+        {
+            CRD_FATAL("WireWriter: a write past the span its layout sized");
+        }
         m_out[m_at++] = value;
     }
 
