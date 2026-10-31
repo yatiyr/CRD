@@ -85,6 +85,12 @@ OWN.1 records these owners (2026-10-31):
    crd-memory, below crd-containers, hashes allocation stacks, and crd-core already holds the dependency-free integer
    primitives (`wide_multiply`, the seed generators). crd-containers re-exports `fnv1a_64` for `hash_string`; the
    checksum family (CRC-32, CRC-32C, XXH3) stays in crd-containers on crd-core's kernel dispatch.
+8. **The ZIP container** (2026-11-01) goes to crd-compression. Two exist: resources' `ZipReader` and `ZipWriter` (3MF
+   and the cooker; Zip64 read, DEFLATE members written) and hesap-tensor's npz reader and writer (STORED members
+   written, as `np.savez` does). hesap-tensor sits below crd-resources, so the one container cannot live there; it is
+   a container of compressed members over the module's codecs, so it moves into crd-compression with a writer that
+   takes each member's method and a reader whose STORED members stay views of the source, and both modules consume
+   it.
 
 ## Duplicate rows
 
@@ -111,7 +117,8 @@ each a `pending` entry or a listed review, all on OWN.1:
 | cpu.kernel-dispatch → core | `math/libm.hpp`, **moved** 2026-10-31 | read `__AVX2__` and `__FMA__` to choose the FMA instruction; it now reads crd-core's `CRD_TARGET_X64` and `CRD_TARGET_X64_FMA`, see below. |
 | math.fixed-size-linear-algebra → math | `geometry-primitives/transform.hpp`, `circumcenter.hpp`, mesh-processing's `quadric.hpp`, **moved** 2026-10-31 | `det3`, the inverse-transpose, the 2D attributes' determinant, the symmetric cofactor inverse and both circumcentres' Cramer's rule; crd-math gained Mat2/Mat3 `determinant`, `inverse`, `try_inverse`, `inverse_transpose`, `solve` and `try_solve`, see below. |
 | io.durable-saves → platform | `perf/bundle.cpp` | crd-perf's `write_bundle_atomic` replaces a file durably by hand; it moves onto `durable_file.hpp` once crd-perf, which ships in the relocatable package, can link crd-platform. |
-| compression.codecs → compression | resources' `deflate`, `crdr`'s zstd calls and the resources fuzz target's, **moved** 2026-10-31; hesap-tensor's `io_zip.hpp` npz inflate (pending) | decision 1: crd-compression created; see below. |
+| compression.codecs → compression | resources' `deflate`, `crdr`'s zstd calls and the resources fuzz target's, **moved** 2026-10-31; hesap-tensor's `io_zip.hpp` npz inflate, **merged** 2026-11-01 | decision 1: crd-compression created; one exact-size decoder; see below. |
+| compression.zip-archives → compression | resources' `zip_archive.cpp`, hesap-tensor's npz reader and writer in `io.hpp` (pending) | decision 8; the registry's signature is the ZIP record signatures. |
 | numerics.signal-processing → hesap-dsp | `audio/audio_kernels.hpp`, hesap-dsp's own `sosfilt_stream`, **moved** 2026-10-31 | the audio biquad designed with hesap-dsp's RBJ formulas but ran its own transposed direct-form II loop; both loops now run hesap-dsp's `biquad_step`, bit-exact, see below. |
 | geometry.robust-predicates | `hesap-interp/clough_tocher.hpp` `fast_orient`, **moved** 2026-10-31 | a deliberate non-robust orientation for the walk with an exact fallback; it is now crd-math's 2D `cross`, not a second predicate, bit-exact, see below. |
 
@@ -250,7 +257,34 @@ deflate cases read 4% slower after the move; `deflate_raw`'s instructions are id
 16 bytes earlier, and with every function aligned to 64 bytes in both builds (the same start address) the cases are
 level, so the difference is the hot loop's placement, not the move.
 
-Still on OWN.1: hesap-tensor's npz reader carries a second inflate (`io_zip.hpp`, exact-size and allocation-free, with
-an over-subscription check resources' lacked); the two merge into one decoder in crd-compression with an exact-size
-form. crd-perf's bundle reads and writes compressed sections through the module once crd-compression and its zstd are
-in the relocatable package that ships crd-perf.
+### One inflate decoder
+
+hesap-tensor's npz reader carried a second inflate (`io_zip.hpp`): exact-size and allocation-free, with an
+over-subscription check resources' lacked, where resources' appended to a growing array, read one bit at a time and
+let a back-reference reach bytes the caller had put in the array before the call. They are one decoder now
+(2026-11-01), in crd-compression, in the one form every consumer needs: `inflate_raw` and `zlib_inflate` decode into a
+buffer of the exact size the caller knows (a zip directory entry, a PNG header's scanlines, an EXR block, an npz
+member). The buffer is the LZ77 window, nothing is allocated, and a stream that decodes to any other size is refused,
+so no claim grows memory past what its caller sized. The appending form had no consumer left and is gone.
+
+The decoder keeps zlib's validity rules, the strictest of either copy and nothing stricter than zlib, so no stream zlib
+reads is refused: at most 286 literal/length and 30 distance codes; an over-subscribed code refused; an incomplete one
+refused but for a single one-bit literal/length or distance code; a complete code-length code; a repeat that runs past
+the declared lengths, or repeats a length before the first, refused; an end-of-block code required; a back-reference
+only into what this stream decoded; zlib's window size at most 32 KiB. The fixed code's trees are built at compile time
+(the distance tree over all 32 five-bit codes, so 30 and 31 decode and are refused). `deflate_max_inflated_size` (1032
+bytes per compressed byte: a 258-byte match in a one-bit length code and a one-bit distance code) bounds a claim before
+anything is allocated: resources' ZIP, PNG and EXR readers and the npz reader refuse a size past it before they
+allocate, and the npz reader a compressed size larger than the archive. The PNG reader sizes its stream from the
+header (the scanlines of the image or of the seven Adam7 passes, each with its filter byte), so its separate size
+checks are gone.
+
+The board (two builds of `bench_compression`, `--same` on every output) is bit-exact. The ZIP, PNG and EXR inflate,
+which decoded through resources' one-bit-a-call appending copy, are 1.39x and 1.19x faster; the npz inflate is level
+with hesap-tensor's inline copy under a 64-byte function-alignment layout control and 3.7% slower without it, the
+same flip as the unchanged encoder's: placement, not the code. Inside a block the decoder keeps its bit reader and
+output position in locals: behind references every byte store, which may alias anything, sent both through memory and
+cost 30%.
+
+crd-perf's bundle reads and writes compressed sections through the module once crd-compression and its zstd are in the
+relocatable package that ships crd-perf. The two ZIP containers move into the module (decision 8).
