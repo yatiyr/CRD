@@ -246,8 +246,13 @@ CERID_CI_BUDGET_SUBSCRIPTION=projects/$PROJECT/subscriptions/cerid-ci-budget-lau
 CERID_CI_MIRROR_DIR=/var/lib/cerid-ci/mirror
 EOF
 sudo chmod 0600 /etc/cerid-ci/launcher.env && sudo chown cerid-ci /etc/cerid-ci/launcher.env"
-ssh_l 'cd /var/lib/cerid-ci/cerid && sudo -u cerid-ci env $(sudo cat /etc/cerid-ci/launcher.env | xargs -d "\n") \
-  python ci/coordinator/main.py check'
+ssh_l "sudo tee /usr/local/bin/cerid-ci >/dev/null <<'EOF'
+#!/bin/sh
+# Runs a coordinator or ops command as cerid-ci with the launcher environment; call it with sudo.
+cd /var/lib/cerid-ci/cerid && exec sudo -u cerid-ci env \$(cat /etc/cerid-ci/launcher.env | xargs -d '\n') python \"\$@\"
+EOF
+sudo chmod 0755 /usr/local/bin/cerid-ci"
+ssh_l 'sudo cerid-ci ci/coordinator/main.py check'
 ```
 
 *Check:* the last command prints `configuration complete: 1 repositories, UI iap-tunnel`.
@@ -286,21 +291,18 @@ Restart=always
 WantedBy=multi-user.target
 EOF
 sudo systemctl daemon-reload && sudo systemctl enable --now cerid-ci-coordinator"
-ssh_l 'cd /var/lib/cerid-ci/cerid && (sudo test -f /etc/cerid-ci/launcher-token || sudo -u cerid-ci env \
-  $(sudo cat /etc/cerid-ci/launcher.env | xargs -d "\n") python ci/ops.py token create --name launcher \
+ssh_l '(sudo test -f /etc/cerid-ci/launcher-token || sudo cerid-ci ci/ops.py token create --name launcher \
   --queue cerid-launcher --out /etc/cerid-ci/launcher-token) && sudo systemctl enable --now cerid-ci-launcher-agent'
 ```
 
-*Check:* `ssh_l 'cd /var/lib/cerid-ci/cerid && sudo -u cerid-ci env $(sudo cat /etc/cerid-ci/launcher.env | xargs -d
-"\n") python ci/ops.py health'` prints `coordinator: ticking` and exits 0; `ssh_l 'journalctl -u cerid-ci-coordinator
+*Check:* `ssh_l 'sudo cerid-ci ci/ops.py health'` prints `coordinator: ticking` and exits 0; `ssh_l 'journalctl -u cerid-ci-coordinator
 -n 5'` shows JSON lines, the first `coordinator_started`.
 
 ### B8. Bake the images
 
 ```bash
 for device in gce-linux-x64-intel gce-linux-arm64-ampere gce-windows-x64 gce-linux-x64-nvidia-l4 gce-windows-x64-nvidia-t4; do
-  ssh_l "cd /var/lib/cerid-ci/cerid && sudo -u cerid-ci env \$(sudo cat /etc/cerid-ci/launcher.env | xargs -d '\n') \
-    python ci/ops.py device bake $device"
+  ssh_l "sudo cerid-ci ci/ops.py device bake $device"
 done
 ```
 

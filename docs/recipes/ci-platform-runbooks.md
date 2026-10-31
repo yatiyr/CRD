@@ -8,8 +8,8 @@
 Every runbook starts from `python ci/ops.py health` (on the launcher, or anywhere with `--store` and credentials for
 the bucket) and ends with it green. `ops.py` acts on the same state as the running coordinator with
 compare-and-swap, so it is safe to use while the coordinator runs; every manual action is written to the audit log
-(`ops.py audit list`, the Operations page). On the launcher prefix the commands with the environment:
-`cd /var/lib/cerid-ci/cerid && sudo -u cerid-ci env $(sudo cat /etc/cerid-ci/launcher.env | xargs -d "\n") ...`.
+(`ops.py audit list`, the Operations page). On the launcher run them through the wrapper the setup installs, which adds the environment:
+`sudo cerid-ci ci/ops.py ...` ([launcher setup](ci-platform-setup.md#the-coordinator-on-the-launcher)).
 
 ## Service-level objectives and how they are measured
 
