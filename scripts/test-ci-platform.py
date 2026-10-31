@@ -701,6 +701,11 @@ class Executors(unittest.TestCase):
         executor = gce_vm.GceVm({'CERID_CI_GCP_PROJECT': 'cerid-ci', 'CERID_CI_RUNNER_SERVICE_ACCOUNT': 'r@x'})
         device = pipeline.devices_by_id(REGISTRY)['gce-linux-x64-nvidia-l4']
         zone, body = executor.body('cerid-ci-0190abcd-a1', device, AGENT_SPEC)
+        # The coordinator finds a machine's reserved job by the instance name in its identity token, so the instance
+        # is named exactly as the dispatcher named the machine (a doubled prefix left every machine refused).
+        self.assertEqual(body['name'], 'cerid-ci-0190abcd-a1')
+        self.assertIn({'key': 'cerid-machine', 'value': 'cerid-ci-0190abcd-a1'}, body['metadata']['items'])
+        self.assertEqual(gce_vm.instance_name('bake-gce-windows-x64'), 'cerid-ci-bake-gce-windows-x64')
         self.assertEqual(body['scheduling']['provisioningModel'], 'SPOT')
         self.assertEqual(body['scheduling']['instanceTerminationAction'], 'DELETE')
         self.assertEqual(body['scheduling']['maxRunDuration'], {'seconds': 4 * 3600})

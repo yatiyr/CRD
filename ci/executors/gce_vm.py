@@ -108,8 +108,12 @@ def secret_value(project, name, http=http_request, token=access_token):
     return base64.b64decode(payload['payload']['data']).decode('utf-8')
 
 
-def instance_name(job_id):
-    return NAME.sub('-', ('cerid-ci-' + job_id.lower()))[:62].rstrip('-')
+def instance_name(name):
+    """A Compute Engine instance name with the cerid-ci- prefix once. The dispatcher's machine names carry it
+    already, and the coordinator finds the job reserved for a machine by the exact instance name in its identity
+    token: a doubled prefix left every job machine refused."""
+    name = name.lower()
+    return NAME.sub('-', name if name.startswith('cerid-ci-') else 'cerid-ci-' + name)[:62].rstrip('-')
 
 
 LINUX_STARTUP = r'''#!/bin/bash
