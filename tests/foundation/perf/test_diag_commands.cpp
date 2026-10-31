@@ -15,6 +15,7 @@
 #include <crd/perf/config.hpp>
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/diagnostics.hpp>
+#include <crd/perf/hardware_identity.hpp>
 #include <crd/perf/profiler.hpp>
 #include <crd/perf/scope.hpp>
 
@@ -738,6 +739,16 @@ TEST_CASE("diag commands: capabilities report the doctor, the grant and the auth
     CHECK(contains(caps.json, "{\"kind\":\"authority\",\"name\":\"execute\",\"granted\":false}"));
     CHECK(contains(caps.json, "{\"kind\":\"mode\",\"name\":"));
     CHECK(contains(caps.json, "{\"kind\":\"dependency\",\"name\":\"sanitizer_runtime\""));
+    // HW-RESILIENCE.2: the machine, with no comparison (it is the host).
+    const crd::perf::HardwareIdentity& hw = crd::perf::host_hardware_identity();
+    cont::String machine(&alloc);
+    machine.append(R"({"kind":"hardware","cpu_vendor":")");
+    machine.append(cont::StringView{hw.cpu_vendor.data(), hw.cpu_vendor.size()});
+    machine.append(R"(","cpu_model":")");
+    machine.append(cont::StringView{hw.cpu_model.data(), hw.cpu_model.size()});
+    machine.append("\",");
+    CHECK(contains(caps.json, machine.c_str()));
+    CHECK_FALSE(contains(caps.json, "\"same_as_host\""));
 
     // DIAG.11c: an upper module's mode is reported from the commands registered with this service.
     CHECK(contains(caps.json, R"("name":"controlled-replay","compiled":false)"));

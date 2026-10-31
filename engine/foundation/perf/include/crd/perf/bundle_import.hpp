@@ -6,8 +6,8 @@
 // A BOUNDED, NON-EXECUTING reader over UNTRUSTED bundle bytes. It wraps read_bundle and adds the
 // checks a merely-trusting reader lacks: oversized / too-many-sections / schema-mismatch rejection,
 // a per-section byte cap, duplicate-tag and compressed-section handling, and decode of the Manifest
-// (tag 1), SymbolIndex (tag 5) and BuildIdentity (tag 7). It NEVER executes anything -- it decodes POD
-// and bounds-checks; every payload it exposes BORROWS a view into `buf`, which must outlive the result.
+// (tag 1), SymbolIndex (tag 5), BuildIdentity (tag 7) and HardwareIdentity (tag 8). It NEVER executes anything -- it
+// decodes POD and bounds-checks; every payload it exposes BORROWS a view into `buf`, which must outlive the result.
 // noexcept throughout (post-mortem code lets no exception escape).
 //
 // This is the acceptance's "CLI import/inspect is bounded and does not execute content" as a LIBRARY;
@@ -24,6 +24,7 @@
 #include <crd/perf/build_identity.hpp>
 #include <crd/perf/bundle.hpp>
 #include <crd/perf/bundle_manifest.hpp>
+#include <crd/perf/hardware_identity.hpp>
 #include <crd/perf/symbol_index.hpp>
 
 namespace crd::perf
@@ -79,6 +80,9 @@ struct BundleImport
     bool               has_build     = false; // a BuildIdentity section (tag 7) decoded into `build`
     bool               build_refused = false; // a BuildIdentity section was present and its decoder refused it
     BuildIdentity      build;
+    bool               has_hardware     = false; // a HardwareIdentity section (tag 8) decoded into `hardware`
+    bool               hardware_refused = false; // a HardwareIdentity section was present and its decoder refused it
+    HardwareIdentity   hardware;
 
     crd::containers::Array<ModuleIdentity>  symbols;
     crd::containers::Array<ImportedSection> sections;

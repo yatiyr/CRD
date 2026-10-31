@@ -39,8 +39,9 @@ target_compile_definitions(crd-core PRIVATE "CRD_KERNEL_LEVEL_CAP=${_crd_kernel_
 # build tree: a package consumer keeps its own warning policy.
 target_link_libraries(crd-core PUBLIC $<BUILD_INTERFACE:crd-warnings>)
 if(WIN32)
-    # ntdll: the lifetime ledger's handle-table oracle (crd/core/os_resource_probe.hpp) asks NtQueryInformationProcess.
-    target_link_libraries(crd-core PRIVATE dbghelp ntdll)
+    # ntdll: the lifetime ledger's handle-table oracle (crd/core/os_resource_probe.hpp) asks NtQueryInformationProcess;
+    # advapi32: the CPU identity's registry values (microcode, the ARM64 MIDR and part name).
+    target_link_libraries(crd-core PRIVATE dbghelp ntdll advapi32)
 endif()
 
 # An applied CRD_CPU_LEVEL lowers the CRT's own ISA dispatch from a startup object in cpu_features.cpp (ADR-0134 §8);

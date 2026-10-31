@@ -1278,3 +1278,155 @@ TEST_CASE("cpu features: an applied CRD_CPU_LEVEL lowers the C runtime's own dis
     const cont::String unchanged = runtime_line(own, 6L, own_fma3);
     CHECK(contains(other, unchanged.c_str()));
 }
+
+TEST_CASE("cpu identity: x64 signatures, ARM64 MIDR names and Windows' revision bytes decode as their makers define",
+          "[core][cpu][hw-resilience]")
+{
+    // Intel Raptor Lake (i9-14900K), AMD Zen 4 (extended family 0xA), a family 0xF part without the extension.
+    const crd::CpuSignatureParts raptor = crd::x64_signature_parts(0x000B0671U);
+    CHECK(raptor.family == 6U);
+    CHECK(raptor.model == 183U);
+    CHECK(raptor.stepping == 1U);
+    const crd::CpuSignatureParts zen4 = crd::x64_signature_parts(0x00A60F12U);
+    CHECK(zen4.family == 25U);
+    CHECK(zen4.model == 0x61U);
+    CHECK(zen4.stepping == 2U);
+    const crd::CpuSignatureParts netburst = crd::x64_signature_parts(0x00000F29U);
+    CHECK(netburst.family == 15U);
+    CHECK(netburst.model == 2U);
+    CHECK(netburst.stepping == 9U);
+    // A family 5 part ignores the extended model.
+    CHECK(crd::x64_signature_parts(0x00010543U).model == 4U);
+
+    // MIDR_EL1: implementer [31:24], variant [23:20], architecture [19:16], part [15:4], revision [3:0].
+    CHECK(std::string_view{crd::arm64_implementer_name(0x410FD490U)} == "Arm");
+    CHECK(std::string_view{crd::arm64_part_name(0x410FD490U)} == "Neoverse N2");
+    CHECK(std::string_view{crd::arm64_part_name(0x411FD0C1U)} == "Neoverse N1"); // variant and revision ignored
+    CHECK(std::string_view{crd::arm64_implementer_name(0xC00FAC30U)} == "Ampere");
+    CHECK(std::string_view{crd::arm64_part_name(0xC00FAC30U)} == "AmpereOne");
+    CHECK(crd::arm64_part_name(0x510FD490U) == nullptr); // Arm's part number under another implementer
+    CHECK(crd::arm64_implementer_name(0xFF000000U) == nullptr);
+
+    // Windows' "Update Revision": 4 bytes (Windows 11 24H2) are the revision; 8 bytes hold it in the high word (Intel)
+    // or the low one when the high word is 0.
+    crd::u32 revision = 0U;
+    const crd::u8 four[4] = {0x33U, 0x01U, 0x00U, 0x00U}; // NOLINT(modernize-avoid-c-arrays)
+    CHECK(crd::windows_update_revision(four, 4U, revision));
+    CHECK(revision == 0x133U);
+    const crd::u8 intel[8] = {0U, 0U, 0U, 0U, 0x29U, 0x01U, 0U, 0U}; // NOLINT(modernize-avoid-c-arrays)
+    CHECK(crd::windows_update_revision(intel, 8U, revision));
+    CHECK(revision == 0x129U);
+    const crd::u8 low[8] = {0x5AU, 0x10U, 0x20U, 0x0AU, 0U, 0U, 0U, 0U}; // NOLINT(modernize-avoid-c-arrays)
+    CHECK(crd::windows_update_revision(low, 8U, revision));
+    CHECK(revision == 0x0A20105AU);
+    CHECK_FALSE(crd::windows_update_revision(four, 3U, revision));
+    CHECK_FALSE(crd::windows_update_revision(nullptr, 4U, revision));
+}
+
+namespace
+{
+#if defined(_WIN32)
+// A string value of CPU 0's registry key, read here independently of crd-core.
+std::string_view registry_text(const char* name, char (&buffer)[128]) // NOLINT(modernize-avoid-c-arrays)
+{
+    DWORD size = sizeof(buffer);
+    if (::RegGetValueA(HKEY_LOCAL_MACHINE, R"(HARDWARE\DESCRIPTION\System\CentralProcessor\0)", name, RRF_RT_REG_SZ,
+                       nullptr, buffer, &size) != ERROR_SUCCESS)
+    {
+        return {};
+    }
+    return std::string_view{buffer};
+}
+#elif defined(__linux__)
+// The value of CPU 0's first "<key>\t: <value>" line of /proc/cpuinfo, read here independently of crd-core.
+cont::String cpuinfo_value(const char* key)
+{
+    cont::String value;
+    std::FILE* f = std::fopen("/proc/cpuinfo", "r");
+    if (f == nullptr)
+    {
+        return value;
+    }
+    char line[4096]; // NOLINT(modernize-avoid-c-arrays)
+    const std::size_t key_len = std::strlen(key);
+    while (std::fgets(line, sizeof(line), f) != nullptr)
+    {
+        if (std::strncmp(line, key, key_len) != 0)
+        {
+            continue;
+        }
+        const char* rest = line + key_len;
+        while (*rest == '\t' || *rest == ' ')
+        {
+            ++rest; // "model" must not match "model name": only blanks lie between the key and its colon
+        }
+        if (*rest == ':')
+        {
+            const char* v = rest + 1;
+            while (*v == ' ')
+            {
+                ++v;
+            }
+            value.append(v, std::strcspn(v, "\n"));
+            break;
+        }
+    }
+    (void)std::fclose(f);
+    return value;
+}
+#endif
+} // namespace
+
+TEST_CASE("cpu identity: this CPU's identity agrees with the OS's own description of it", "[core][cpu][hw-resilience]")
+{
+    const crd::CpuIdentity id = crd::read_cpu_identity();
+#if defined(__x86_64__) || defined(_M_X64)
+    REQUIRE(id.signature != 0U);
+    CHECK(id.vendor[0] != '\0');
+    CHECK(id.model[0] != '\0');
+    const crd::CpuSignatureParts parts = crd::x64_signature_parts(id.signature);
+#if defined(_WIN32)
+    char buffer[128] = {}; // NOLINT(modernize-avoid-c-arrays)
+    CHECK(registry_text("VendorIdentifier", buffer) == std::string_view{id.vendor});
+    CHECK(registry_text("ProcessorNameString", buffer) == std::string_view{id.model});
+    // "Intel64 Family 6 Model 183 Stepping 1" (AMD64 on AMD).
+    const std::string_view identifier = registry_text("Identifier", buffer);
+    char expected[64] = {}; // NOLINT(modernize-avoid-c-arrays)
+    (void)std::snprintf(expected, sizeof(expected), " Family %u Model %u Stepping %u", parts.family, parts.model,
+                        parts.stepping);
+    CHECK(identifier.find(expected) != std::string_view::npos);
+    CHECK(id.microcode_known);
+#elif defined(__linux__)
+    CHECK(std::string_view{cpuinfo_value("vendor_id").c_str()} == std::string_view{id.vendor});
+    CHECK(std::strtoul(cpuinfo_value("cpu family").c_str(), nullptr, 10) == parts.family);
+    CHECK(std::strtoul(cpuinfo_value("model").c_str(), nullptr, 10) == parts.model);
+    CHECK(std::strtoul(cpuinfo_value("stepping").c_str(), nullptr, 10) == parts.stepping);
+    // A hypervisor that hides the microcode reports all ones, which is no revision.
+    const cont::String microcode = cpuinfo_value("microcode");
+    const unsigned long reported = std::strtoul(microcode.c_str(), nullptr, 16);
+    CHECK(id.microcode_known == (!microcode.empty() && reported != 0xFFFFFFFFUL));
+    if (id.microcode_known)
+    {
+        CHECK(reported == id.microcode);
+    }
+#endif
+#elif defined(__aarch64__) && defined(__linux__)
+    REQUIRE(id.signature != 0U);
+    CHECK(std::strtoul(cpuinfo_value("CPU implementer").c_str(), nullptr, 16) == ((id.signature >> 24U) & 0xFFU));
+    CHECK(std::strtoul(cpuinfo_value("CPU part").c_str(), nullptr, 16) == ((id.signature >> 4U) & 0xFFFU));
+    CHECK(std::strtoul(cpuinfo_value("CPU revision").c_str(), nullptr, 10) == (id.signature & 0xFU));
+    CHECK(id.vendor[0] != '\0');
+    CHECK(id.model[0] != '\0');
+    CHECK_FALSE(id.microcode_known);
+#elif defined(_M_ARM64)
+    REQUIRE(id.signature != 0U);
+    char buffer[128] = {}; // NOLINT(modernize-avoid-c-arrays)
+    CHECK(registry_text("ProcessorNameString", buffer) == std::string_view{id.model});
+    CHECK(id.vendor[0] != '\0');
+#endif
+    // Evidence on every run (CTest's log and JUnit keep it): the lane's CPU as crd-core reads it.
+    char line[192] = {}; // NOLINT(modernize-avoid-c-arrays)
+    (void)std::snprintf(line, sizeof(line), "cpu identity: %s | %s | signature 0x%08x | microcode %s0x%x", id.vendor,
+                        id.model, id.signature, id.microcode_known ? "" : "unknown ", id.microcode);
+    WARN(line);
+}

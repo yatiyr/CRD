@@ -5,11 +5,13 @@
 #include <crd/perf/build_identity.hpp>
 #include <crd/perf/bundle.hpp>
 #include <crd/perf/bundle_manifest.hpp>
+#include <crd/perf/hardware_identity.hpp>
 
 #include <crd/core/platform.hpp>
 #include <crd/memory/asan_poison.hpp>
 
 #include "json_writer.hpp"
+#include "payload_codec.hpp"
 #include "striped_count.hpp"
 
 #include <algorithm>
@@ -30,6 +32,12 @@ namespace
 {
 using detail::append_json_escaped;
 using detail::append_u64;
+using detail::Cursor;
+using detail::put_bytes;
+using detail::put_u16;
+using detail::put_u32;
+using detail::put_u64;
+using detail::put_u8;
 
 // Armed -> Triggered (trigger(), under the trigger mutex) -> Complete (the claim of the post window's last sequence,
 // or a collector) -> Armed (collection, under both mutexes). A capture that ended Fatal moves to FatalEntered instead of
@@ -1503,101 +1511,6 @@ constexpr crd::u8 kEventFlagTruncated  = 1U << 0U;
 constexpr crd::u8 kEventFlagRestricted = 1U << 1U;
 constexpr crd::u8 kEventKnownFlags     = 0x03U;
 
-void put_u8(cont::Array<crd::u8>& out, crd::u8 v)
-{
-    out.push_back(v);
-}
-
-void put_u16(cont::Array<crd::u8>& out, crd::u16 v)
-{
-    for (crd::u32 i = 0U; i < 2U; ++i)
-    {
-        out.push_back(static_cast<crd::u8>((v >> (8U * i)) & 0xFFU));
-    }
-}
-
-void put_u32(cont::Array<crd::u8>& out, crd::u32 v)
-{
-    for (crd::u32 i = 0U; i < 4U; ++i)
-    {
-        out.push_back(static_cast<crd::u8>((v >> (8U * i)) & 0xFFU));
-    }
-}
-
-void put_u64(cont::Array<crd::u8>& out, crd::u64 v)
-{
-    for (crd::u32 i = 0U; i < 8U; ++i)
-    {
-        out.push_back(static_cast<crd::u8>((v >> (8U * i)) & 0xFFU));
-    }
-}
-
-void put_bytes(cont::Array<crd::u8>& out, const char* p, crd::usize n)
-{
-    for (crd::usize i = 0U; i < n; ++i)
-    {
-        out.push_back(static_cast<crd::u8>(p[i]));
-    }
-}
-
-// A bounds-checked little-endian cursor over untrusted bytes. Every read fails (and stays failed) past the end.
-struct Cursor
-{
-    cont::ConstSpan<crd::u8> bytes;
-    crd::usize               at = 0U;
-    bool                     ok = true;
-
-    bool need(crd::usize n) noexcept
-    {
-        if (!ok || bytes.size() - at < n)
-        {
-            ok = false;
-        }
-        return ok;
-    }
-
-    crd::u64 uint(crd::u32 width) noexcept
-    {
-        if (!need(width))
-        {
-            return 0U;
-        }
-        crd::u64 v = 0U;
-        for (crd::u32 i = 0U; i < width; ++i)
-        {
-            v |= static_cast<crd::u64>(bytes[at + i]) << (8U * i);
-        }
-        at += width;
-        return v;
-    }
-
-    crd::u8  u8() noexcept { return static_cast<crd::u8>(uint(1U)); }
-    crd::u16 u16() noexcept { return static_cast<crd::u16>(uint(2U)); }
-    crd::u32 u32() noexcept { return static_cast<crd::u32>(uint(4U)); }
-    crd::u64 u64() noexcept { return uint(8U); }
-
-    // Copy `n` bytes into a fixed buffer of `cap` bytes (n must leave room for the NUL).
-    bool text(char* dst, crd::u32 cap, crd::u16 n) noexcept
-    {
-        if (n >= cap)
-        {
-            ok = false;
-            return false;
-        }
-        if (!need(n))
-        {
-            return false;
-        }
-        if (n > 0U)
-        {
-            std::memcpy(dst, bytes.data() + at, n);
-        }
-        dst[n] = '\0';
-        at += n;
-        return true;
-    }
-};
-
 FlightRecordRead refuse(FlightRecordRead& r, const char* why)
 {
     r.ok    = false;
@@ -1860,6 +1773,7 @@ cont::Array<crd::u8> write_flight_bundle(const FlightCapture& capture, cont::Con
     const cont::Array<crd::u8> manifest_bytes = serialize_manifest(manifest);
     const cont::Array<crd::u8> record_bytes   = encode_flight_record(capture);
     const cont::Array<crd::u8> build_bytes    = encode_build_identity(current_build_identity());
+    const cont::Array<crd::u8> hardware_bytes = encode_hardware_identity(host_hardware_identity());
 
     BundleWriter writer;
     (void)writer.add_section(BundleSectionTag::Manifest,
@@ -1868,6 +1782,8 @@ cont::Array<crd::u8> write_flight_bundle(const FlightCapture& capture, cont::Con
                              cont::ConstSpan<crd::u8>{record_bytes.data(), record_bytes.size()});
     (void)writer.add_section(BundleSectionTag::BuildIdentity,
                              cont::ConstSpan<crd::u8>{build_bytes.data(), build_bytes.size()});
+    (void)writer.add_section(BundleSectionTag::HardwareIdentity,
+                             cont::ConstSpan<crd::u8>{hardware_bytes.data(), hardware_bytes.size()});
     if (modules.empty())
     {
         (void)writer.add_absent(BundleSectionTag::SymbolIndex);

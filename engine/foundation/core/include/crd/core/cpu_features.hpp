@@ -286,6 +286,39 @@ extern bool libc_fma_fused; // NOLINT(cppcoreguidelines-avoid-non-const-global-v
 [[nodiscard]] crd::usize format_cpu_selection(const CpuSelection& selection, const CpuRuntimeDispatch& crt, char* out,
                                               crd::usize capacity) noexcept;
 
+// The CPU's identity for diagnostics and hardware-fault classification (HW-RESILIENCE.2): the part and the microcode
+// it runs, never its features. The CPUID words come from the CPU the calling thread runs on, the OS's values from its
+// first CPU. Text is NUL-terminated, cut to its buffer, leading and trailing spaces trimmed.
+struct CpuIdentity
+{
+    char vendor[16] = {};    // NOLINT(modernize-avoid-c-arrays): x64 CPUID 0 ("GenuineIntel"); ARM64 the implementer
+    char model[64] = {};     // NOLINT(modernize-avoid-c-arrays): x64 the CPUID brand string; ARM64 the OS's name for
+                             // the part (Windows, macOS), else the MIDR part's name ("Neoverse N2")
+    crd::u32 signature = 0U; // x64 CPUID 1 EAX (family, model, stepping); ARM64 MIDR_EL1 (0 when unread)
+    crd::u32 microcode = 0U; // the loaded microcode revision, when microcode_known
+    bool microcode_known = false; // the OS reports it (Windows' registry, Linux's sysfs; x64), and no
+                                  // hypervisor hid it (all ones)
+};
+[[nodiscard]] CpuIdentity read_cpu_identity() noexcept;
+
+// An x64 signature's display family, model and stepping, the extended fields folded in as Intel and AMD define them.
+struct CpuSignatureParts
+{
+    crd::u32 family = 0U;
+    crd::u32 model = 0U;
+    crd::u32 stepping = 0U;
+};
+[[nodiscard]] CpuSignatureParts x64_signature_parts(crd::u32 signature) noexcept;
+
+// ARM64 MIDR_EL1 names: the implementer's ("Arm", "Qualcomm", "Apple", ...) and the part's ("Neoverse N2"); nullptr
+// when the table does not know it.
+[[nodiscard]] const char* arm64_implementer_name(crd::u32 midr) noexcept;
+[[nodiscard]] const char* arm64_part_name(crd::u32 midr) noexcept;
+
+// The microcode revision in Windows' "Update Revision" registry bytes: 4 bytes are the revision; 8 bytes are the
+// signature MSR's two words, the revision in the high one (Intel) or, when that is 0, the low one. False otherwise.
+[[nodiscard]] bool windows_update_revision(const crd::u8* bytes, crd::usize size, crd::u32& out) noexcept;
+
 // `have` runs code built for `want`: the same architecture's level, at or above it.
 [[nodiscard]] bool cpu_level_includes(CpuLevel have, CpuLevel want) noexcept;
 

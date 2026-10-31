@@ -4,7 +4,7 @@
   "capabilities": [
     {
       "id": "cpu.detection",
-      "summary": "CPUID, XGETBV and the OS feature queries: the one reading of the CPU's features, OS-enabled state, hybrid cores and the forced level (ADR-0134).",
+      "summary": "CPUID, XGETBV and the OS feature queries: the one reading of the CPU's features, OS-enabled state, hybrid cores and the forced level (ADR-0134), and of its identity: vendor, model, signature and microcode (HW-RESILIENCE.2).",
       "owner": "core",
       "api": [
         "engine/foundation/core/include/crd/core/cpu_features.hpp"
@@ -172,6 +172,20 @@
       "api": [
         "engine/foundation/platform/include/crd/platform/filesystem.hpp",
         "engine/foundation/platform/include/crd/platform/async_file.hpp"
+      ]
+    },
+    {
+      "id": "diagnostics.hardware-identity",
+      "summary": "The machine a diagnostic bundle was written on: firmware and board, memory and its modules from the SMBIOS table, the GPUs and drivers, with the CPU identity from cpu.detection (HW-RESILIENCE.2).",
+      "owner": "perf",
+      "api": [
+        "engine/foundation/perf/include/crd/perf/hardware_identity.hpp"
+      ],
+      "signatures": [
+        {
+          "regex": "\\bGetSystemFirmwareTable\\b|/sys/firmware/dmi/|/sys/class/dmi/id",
+          "what": "a firmware table or DMI read"
+        }
       ]
     },
     {

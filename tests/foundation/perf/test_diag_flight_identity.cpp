@@ -577,6 +577,12 @@ TEST_CASE("flight bundle: it carries this build's identity and the module snapsh
     cont::String differing;
     CHECK(cp::same_build_identity(imp.build, cp::current_build_identity(), differing));
     CHECK(differing.empty());
+    // HW-RESILIENCE.2: the writing machine rides along, read once by the host, decoded by the importer.
+    REQUIRE(section(imp, cp::BundleSectionTag::HardwareIdentity) != nullptr);
+    REQUIRE(imp.has_hardware);
+    CHECK_FALSE(imp.hardware_refused);
+    CHECK(cp::same_hardware_identity(imp.hardware, cp::host_hardware_identity(), differing));
+    CHECK(differing.empty());
     REQUIRE(imp.has_symbols);
     REQUIRE(imp.symbols.size() == live.modules.size());
     for (crd::usize i = 0U; i < live.modules.size(); ++i)

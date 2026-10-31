@@ -8,8 +8,10 @@
 #include <crd/perf/diagnostics.hpp>
 
 #include "json_writer.hpp"
+#include "payload_codec.hpp"
 
 #include <cstring>
+#include <initializer_list>
 
 namespace crd::perf
 {
@@ -18,6 +20,8 @@ namespace
 namespace cont = crd::containers;
 using detail::append_json_escaped;
 using detail::append_u64;
+using detail::Cursor;
+using detail::put_u32;
 
 [[nodiscard]] constexpr bool built_with_asan() noexcept
 {
@@ -77,65 +81,6 @@ void append_compiler_version(cont::String& out)
 {
     return cont::StringView{s.data(), s.size()};
 }
-
-void put_u32(cont::Array<crd::u8>& out, crd::u32 v)
-{
-    for (crd::u32 i = 0U; i < 4U; ++i)
-    {
-        out.push_back(static_cast<crd::u8>((v >> (8U * i)) & 0xFFU));
-    }
-}
-
-void put_field(cont::Array<crd::u8>& out, const cont::String& s)
-{
-    const crd::usize n = s.size() < kBuildFieldBytes ? s.size() : kBuildFieldBytes;
-    out.push_back(static_cast<crd::u8>(n & 0xFFU));
-    out.push_back(static_cast<crd::u8>((n >> 8U) & 0xFFU));
-    for (crd::usize i = 0U; i < n; ++i)
-    {
-        out.push_back(static_cast<crd::u8>(s.data()[i]));
-    }
-}
-
-struct Reader
-{
-    cont::ConstSpan<crd::u8> payload;
-    crd::usize               at = 0U;
-
-    [[nodiscard]] bool u32(crd::u32& v) noexcept
-    {
-        if (payload.size() - at < 4U)
-        {
-            return false;
-        }
-        v = 0U;
-        for (crd::u32 i = 0U; i < 4U; ++i)
-        {
-            v |= static_cast<crd::u32>(payload[at + i]) << (8U * i);
-        }
-        at += 4U;
-        return true;
-    }
-
-    // A u16 length then that many bytes. Refused when the length is over the bound or past the payload.
-    [[nodiscard]] bool field(cont::String& out) noexcept
-    {
-        if (payload.size() - at < 2U)
-        {
-            return false;
-        }
-        const crd::usize n = static_cast<crd::usize>(payload[at]) | (static_cast<crd::usize>(payload[at + 1U]) << 8U);
-        at += 2U;
-        if (n > kBuildFieldBytes || payload.size() - at < n)
-        {
-            return false;
-        }
-        out.clear();
-        out.append(cont::StringView{reinterpret_cast<const char*>(payload.data() + at), n});
-        at += n;
-        return true;
-    }
-};
 
 BuildIdentityRead refuse(BuildIdentityRead& r, const char* why) noexcept
 {
@@ -222,12 +167,10 @@ cont::Array<crd::u8> encode_build_identity(const BuildIdentity& b, crd::memory::
     put_u32(out, kBuildIdentityVersion);
     put_u32(out, b.diagnostic_schema);
     put_u32(out, b.flags & kBuildKnownFlags);
-    put_field(out, b.version);
-    put_field(out, b.platform);
-    put_field(out, b.compiler);
-    put_field(out, b.compiler_version);
-    put_field(out, b.arch);
-    put_field(out, b.config);
+    for (const cont::String* field : {&b.version, &b.platform, &b.compiler, &b.compiler_version, &b.arch, &b.config})
+    {
+        detail::put_field(out, view(*field), kBuildFieldBytes);
+    }
     return out;
 }
 
@@ -235,18 +178,18 @@ BuildIdentityRead decode_build_identity(cont::ConstSpan<crd::u8> payload, crd::m
 {
     BuildIdentityRead r;
     r.identity = BuildIdentity(alloc);
-    Reader   in{payload, 0U};
-    crd::u32 magic   = 0U;
-    crd::u32 version = 0U;
-    if (!in.u32(magic) || magic != kBuildIdentityMagic)
+    Cursor in{payload};
+    if (in.u32() != kBuildIdentityMagic || !in.ok)
     {
         return refuse(r, "not a build identity payload (magic)");
     }
-    if (!in.u32(version) || version != kBuildIdentityVersion)
+    if (in.u32() != kBuildIdentityVersion || !in.ok)
     {
         return refuse(r, "unsupported build identity version");
     }
-    if (!in.u32(r.identity.diagnostic_schema) || !in.u32(r.identity.flags))
+    r.identity.diagnostic_schema = in.u32();
+    r.identity.flags = in.u32();
+    if (!in.ok)
     {
         return refuse(r, "build identity header is short");
     }
@@ -254,12 +197,15 @@ BuildIdentityRead decode_build_identity(cont::ConstSpan<crd::u8> payload, crd::m
     {
         return refuse(r, "unknown build identity flags");
     }
-    if (!in.field(r.identity.version) || !in.field(r.identity.platform) || !in.field(r.identity.compiler) ||
-        !in.field(r.identity.compiler_version) || !in.field(r.identity.arch) || !in.field(r.identity.config))
+    for (cont::String* field : {&r.identity.version, &r.identity.platform, &r.identity.compiler,
+                                &r.identity.compiler_version, &r.identity.arch, &r.identity.config})
     {
-        return refuse(r, "a build identity field is over its bound or past the payload");
+        if (!in.field(*field, kBuildFieldBytes))
+        {
+            return refuse(r, "a build identity field is over its bound or past the payload");
+        }
     }
-    if (in.at != payload.size())
+    if (!in.done())
     {
         return refuse(r, "trailing bytes after the build identity");
     }

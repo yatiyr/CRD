@@ -15,6 +15,7 @@
 #include <crd/perf/diagnostics.hpp>
 #include <crd/perf/flight_recorder.hpp>
 #include <crd/perf/flight_triggers.hpp>
+#include <crd/perf/hardware_identity.hpp>
 
 #include <crd/core/assert.hpp>
 #include <crd/diag/specimen_runner.hpp>
@@ -616,9 +617,11 @@ TEST_CASE("flight record: bundle.inspect names the flight section of a written f
     req.page_items             = 64U;
     const cp::DiagResult found = svc.execute(req);
     REQUIRE(found.status == cp::DiagStatus::Ok);
-    // Four sections (manifest, flight record, build identity, the absent symbol index), the build item and, decoded
-    // (DIAG.11a), the trigger, the flight window and the six retained events.
-    CHECK(found.total == 13U);
+    // Five sections (manifest, flight record, build identity, hardware identity, the absent symbol index), the build
+    // item, decoded (DIAG.11a) the trigger, the flight window and the six retained events, then the machine
+    // (HW-RESILIENCE.2): its hardware item, one per memory module and one per GPU.
+    const cp::HardwareIdentity& host = cp::host_hardware_identity();
+    CHECK(found.total == 15U + host.modules.size() + host.gpus.size());
     CHECK(found.complete);
     const char* json = found.json.c_str();
     CHECK(std::strstr(json, "\"tag_name\":\"flight-record\",\"absent\":false") != nullptr);
@@ -650,6 +653,21 @@ TEST_CASE("flight record: bundle.inspect names the flight section of a written f
         CHECK(std::strstr(json, expected) != nullptr);
     }
     CHECK(std::strstr(json, "\"index\":6,") == nullptr);
+    CHECK(std::strstr(json, "\"tag_name\":\"hardware-identity\",\"absent\":false") != nullptr);
+    CHECK(std::strstr(json, "\"hardware_identity\":true,\"hardware_refused\":false") != nullptr);
+    const cont::String vendor_field = [&host]()
+    {
+        cont::String s;
+        s.append(R"({"kind":"hardware","cpu_vendor":")");
+        s.append(cont::StringView{host.cpu_vendor.data(), host.cpu_vendor.size()});
+        s.append("\",");
+        return s;
+    }();
+    CHECK(std::strstr(json, vendor_field.c_str()) != nullptr);
+    // The bundle was written on this machine.
+    (void)std::snprintf(expected, sizeof(expected), R"("gpus":%u,"same_as_host":true,"differing":""})",
+                        static_cast<unsigned>(host.gpus.size()));
+    CHECK(std::strstr(json, expected) != nullptr);
     (void)std::remove(path);
 }
 

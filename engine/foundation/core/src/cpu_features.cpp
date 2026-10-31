@@ -4,6 +4,7 @@
 #include <crd/core/environment.hpp>
 #include <crd/core/platform.hpp>
 
+#include <cstdio>
 #include <cstring>
 #include <initializer_list>
 
@@ -1204,6 +1205,345 @@ const char* cpu_override_name(CpuOverride status) noexcept
             return "above-hardware";
     }
     return "?";
+}
+
+namespace
+{
+
+// Copies `n` bytes of `src` up to its first NUL into `dst` (`cap` bytes), spaces and line ends trimmed at both ends.
+void copy_trimmed(char* dst, crd::usize cap, const char* src, crd::usize n) noexcept
+{
+    crd::usize len = 0U;
+    while (len < n && src[len] != '\0')
+    {
+        ++len;
+    }
+    const auto blank = [](char c) noexcept
+    {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+    };
+    crd::usize begin = 0U;
+    while (begin < len && blank(src[begin]))
+    {
+        ++begin;
+    }
+    while (len > begin && blank(src[len - 1U]))
+    {
+        --len;
+    }
+    crd::usize count = len - begin;
+    if (count >= cap)
+    {
+        count = cap - 1U;
+    }
+    std::memcpy(dst, src + begin, count);
+    dst[count] = '\0';
+}
+
+template <crd::usize N> void copy_trimmed(char (&dst)[N], const char* src) noexcept // NOLINT(modernize-avoid-c-arrays)
+{
+    copy_trimmed(dst, N, src, std::strlen(src));
+}
+
+#if CRD_OS_LINUX
+// A hex number ("0x133", "0x00000000410fd490"), leading blanks and a colon skipped; false when no digit follows.
+bool parse_hex(const char* text, crd::u64& out) noexcept
+{
+    while (*text == ' ' || *text == '\t' || *text == ':')
+    {
+        ++text;
+    }
+    if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X'))
+    {
+        text += 2;
+    }
+    out = 0U;
+    bool any = false;
+    for (;; ++text)
+    {
+        const char c = *text;
+        crd::u64 digit = 0U;
+        if (c >= '0' && c <= '9')
+        {
+            digit = static_cast<crd::u64>(c - '0');
+        }
+        else if (c >= 'a' && c <= 'f')
+        {
+            digit = static_cast<crd::u64>(c - 'a' + 10);
+        }
+        else if (c >= 'A' && c <= 'F')
+        {
+            digit = static_cast<crd::u64>(c - 'A' + 10);
+        }
+        else
+        {
+            return any;
+        }
+        out = (out << 4U) | digit;
+        any = true;
+    }
+}
+
+// The first bytes of a small file, NUL-terminated; 0 when it cannot be read.
+crd::usize read_small_file(const char* path, char* out, crd::usize cap) noexcept
+{
+    const int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+    {
+        return 0U;
+    }
+    crd::usize got = 0U;
+    while (got + 1U < cap)
+    {
+        const ssize_t n = ::read(fd, out + got, cap - 1U - got);
+        if (n <= 0)
+        {
+            break;
+        }
+        got += static_cast<crd::usize>(n);
+    }
+    (void)::close(fd);
+    out[got] = '\0';
+    return got;
+}
+
+// A hex value from a sysfs attribute, else from the first "<key> : <hex>" line of /proc/cpuinfo (CPU 0's block);
+// either may be nullptr.
+bool read_hex_attribute(const char* sysfs_path, const char* cpuinfo_key, crd::u64& out) noexcept
+{
+    char text[8192] = {}; // NOLINT(modernize-avoid-c-arrays): CPU 0's block of /proc/cpuinfo fits
+    if (sysfs_path != nullptr && read_small_file(sysfs_path, text, sizeof(text)) > 0U && parse_hex(text, out))
+    {
+        return true;
+    }
+    if (cpuinfo_key == nullptr || read_small_file("/proc/cpuinfo", text, sizeof(text)) == 0U)
+    {
+        return false;
+    }
+    const crd::usize key_len = std::strlen(cpuinfo_key);
+    for (const char* line = text; *line != '\0';)
+    {
+        if (std::strncmp(line, cpuinfo_key, key_len) == 0 &&
+            (line[key_len] == '\t' || line[key_len] == ' ' || line[key_len] == ':'))
+        {
+            return parse_hex(line + key_len, out);
+        }
+        const char* next = std::strchr(line, '\n');
+        if (next == nullptr)
+        {
+            break;
+        }
+        line = next + 1;
+    }
+    return false;
+}
+#endif
+
+#if CRD_OS_WINDOWS
+// One value of CPU 0's registry key, HARDWARE\DESCRIPTION\System\CentralProcessor\0.
+bool processor_registry_value(const char* name, DWORD type_flags, void* data, DWORD& size) noexcept
+{
+    return ::RegGetValueA(HKEY_LOCAL_MACHINE, R"(HARDWARE\DESCRIPTION\System\CentralProcessor\0)", name, type_flags,
+                          nullptr, data, &size) == ERROR_SUCCESS;
+}
+#endif
+
+struct MidrName
+{
+    crd::u32 key; // implementer << 12 | part for a part; the implementer alone for an implementer
+    const char* name;
+};
+
+// NOLINTNEXTLINE(modernize-avoid-c-arrays)
+constexpr MidrName kArmImplementers[] = {
+    {0x41U, "Arm"},       {0x42U, "Broadcom"}, {0x43U, "Cavium"},    {0x46U, "Fujitsu"},
+    {0x48U, "HiSilicon"}, {0x4EU, "NVIDIA"},   {0x50U, "APM"},       {0x51U, "Qualcomm"},
+    {0x53U, "Samsung"},   {0x61U, "Apple"},    {0x6DU, "Microsoft"}, {0xC0U, "Ampere"},
+};
+
+// NOLINTNEXTLINE(modernize-avoid-c-arrays)
+constexpr MidrName kArmParts[] = {
+    {0x41D03U, "Cortex-A53"},  {0x41D04U, "Cortex-A35"},  {0x41D05U, "Cortex-A55"},  {0x41D07U, "Cortex-A57"},
+    {0x41D08U, "Cortex-A72"},  {0x41D09U, "Cortex-A73"},  {0x41D0AU, "Cortex-A75"},  {0x41D0BU, "Cortex-A76"},
+    {0x41D0CU, "Neoverse N1"}, {0x41D0DU, "Cortex-A77"},  {0x41D40U, "Neoverse V1"}, {0x41D41U, "Cortex-A78"},
+    {0x41D44U, "Cortex-X1"},   {0x41D46U, "Cortex-A510"}, {0x41D47U, "Cortex-A710"}, {0x41D48U, "Cortex-X2"},
+    {0x41D49U, "Neoverse N2"}, {0x41D4AU, "Neoverse E1"}, {0x41D4BU, "Cortex-A78C"}, {0x41D4DU, "Cortex-A715"},
+    {0x41D4EU, "Cortex-X3"},   {0x41D4FU, "Neoverse V2"}, {0x41D80U, "Cortex-A520"}, {0x41D81U, "Cortex-A720"},
+    {0x41D82U, "Cortex-X4"},   {0x41D84U, "Neoverse V3"}, {0x41D85U, "Cortex-X925"}, {0x41D87U, "Cortex-A725"},
+    {0x41D8EU, "Neoverse N3"}, {0x51001U, "Oryon"},       {0xC0AC3U, "AmpereOne"},
+};
+
+template <crd::usize N>
+const char* find_midr_name(const MidrName (&table)[N], crd::u32 key) noexcept // NOLINT(modernize-avoid-c-arrays)
+{
+    for (const MidrName& entry : table)
+    {
+        if (entry.key == key)
+        {
+            return entry.name;
+        }
+    }
+    return nullptr;
+}
+
+} // namespace
+
+CpuSignatureParts x64_signature_parts(crd::u32 signature) noexcept
+{
+    CpuSignatureParts p;
+    const crd::u32 base_family = (signature >> 8U) & 0xFU;
+    const crd::u32 base_model = (signature >> 4U) & 0xFU;
+    p.stepping = signature & 0xFU;
+    p.family = base_family == 0xFU ? base_family + ((signature >> 20U) & 0xFFU) : base_family;
+    p.model =
+        base_family == 0x6U || base_family == 0xFU ? (((signature >> 16U) & 0xFU) << 4U) | base_model : base_model;
+    return p;
+}
+
+const char* arm64_implementer_name(crd::u32 midr) noexcept
+{
+    return find_midr_name(kArmImplementers, (midr >> 24U) & 0xFFU);
+}
+
+const char* arm64_part_name(crd::u32 midr) noexcept
+{
+    return find_midr_name(kArmParts, (((midr >> 24U) & 0xFFU) << 12U) | ((midr >> 4U) & 0xFFFU));
+}
+
+bool windows_update_revision(const crd::u8* bytes, crd::usize size, crd::u32& out) noexcept
+{
+    if (bytes == nullptr || (size != 4U && size != 8U))
+    {
+        return false;
+    }
+    const auto word = [bytes](crd::usize at) noexcept
+    {
+        return static_cast<crd::u32>(bytes[at]) | (static_cast<crd::u32>(bytes[at + 1U]) << 8U) |
+               (static_cast<crd::u32>(bytes[at + 2U]) << 16U) | (static_cast<crd::u32>(bytes[at + 3U]) << 24U);
+    };
+    out = size == 8U && word(4U) != 0U ? word(4U) : word(0U);
+    return true;
+}
+
+CpuIdentity read_cpu_identity() noexcept
+{
+    CpuIdentity id;
+#if CRD_ARCH_X64
+    crd::u32 r[4] = {}; // NOLINT(modernize-avoid-c-arrays)
+    cpuid(0U, 0U, r);
+    const crd::u32 max_leaf = r[0];
+    char vendor[13] = {}; // NOLINT(modernize-avoid-c-arrays)
+    std::memcpy(vendor, &r[1], 4U);
+    std::memcpy(vendor + 4, &r[3], 4U);
+    std::memcpy(vendor + 8, &r[2], 4U);
+    copy_trimmed(id.vendor, vendor);
+    if (max_leaf >= 1U)
+    {
+        cpuid(1U, 0U, r);
+        id.signature = r[0];
+    }
+    cpuid(0x80000000U, 0U, r);
+    if (r[0] >= 0x80000004U)
+    {
+        char brand[49] = {}; // NOLINT(modernize-avoid-c-arrays)
+        for (crd::u32 leaf = 0U; leaf < 3U; ++leaf)
+        {
+            cpuid(0x80000002U + leaf, 0U, r);
+            std::memcpy(brand + 16U * leaf, r, 16U);
+        }
+        copy_trimmed(id.model, brand);
+    }
+#elif CRD_ARCH_ARM64 && CRD_OS_LINUX
+    crd::u64 midr = 0U;
+    crd::u64 implementer = 0U;
+    crd::u64 variant = 0U;
+    crd::u64 part = 0U;
+    crd::u64 revision = 0U;
+    if (read_hex_attribute("/sys/devices/system/cpu/cpu0/regs/identification/midr_el1", nullptr, midr))
+    {
+        id.signature = static_cast<crd::u32>(midr);
+    }
+    else if (read_hex_attribute(nullptr, "CPU implementer", implementer) &&
+             read_hex_attribute(nullptr, "CPU part", part))
+    {
+        // An older kernel without the sysfs register: MIDR_EL1 from /proc/cpuinfo's fields (architecture 0xF).
+        (void)read_hex_attribute(nullptr, "CPU variant", variant);
+        (void)read_hex_attribute(nullptr, "CPU revision", revision);
+        id.signature = static_cast<crd::u32>(((implementer & 0xFFU) << 24U) | ((variant & 0xFU) << 20U) |
+                                             (0xFU << 16U) | ((part & 0xFFFU) << 4U) | (revision & 0xFU));
+    }
+#elif CRD_ARCH_ARM64 && CRD_OS_WINDOWS
+    crd::u64 midr = 0U;
+    DWORD size = sizeof(midr);
+    if (processor_registry_value("CP 4000", RRF_RT_REG_QWORD, &midr, size))
+    {
+        id.signature = static_cast<crd::u32>(midr);
+    }
+    char name[64] = {}; // NOLINT(modernize-avoid-c-arrays)
+    size = sizeof(name);
+    if (processor_registry_value("ProcessorNameString", RRF_RT_REG_SZ, name, size))
+    {
+        copy_trimmed(id.model, name);
+    }
+#elif CRD_ARCH_ARM64 && CRD_OS_MAC
+    char name[64] = {}; // NOLINT(modernize-avoid-c-arrays)
+    std::size_t size = sizeof(name) - 1U;
+    if (::sysctlbyname("machdep.cpu.brand_string", name, &size, nullptr, 0U) == 0)
+    {
+        copy_trimmed(id.model, name);
+    }
+    copy_trimmed(id.vendor, "Apple");
+#endif
+#if CRD_ARCH_ARM64
+    if (id.vendor[0] == '\0' && id.signature != 0U)
+    {
+        const char* implementer = arm64_implementer_name(id.signature);
+        if (implementer != nullptr)
+        {
+            copy_trimmed(id.vendor, implementer);
+        }
+        else
+        {
+            (void)std::snprintf(id.vendor, sizeof(id.vendor), "impl 0x%02x",
+                                static_cast<unsigned>((id.signature >> 24U) & 0xFFU));
+        }
+    }
+    if (id.model[0] == '\0' && id.signature != 0U)
+    {
+        const char* part = arm64_part_name(id.signature);
+        if (part != nullptr)
+        {
+            copy_trimmed(id.model, part);
+        }
+        else
+        {
+            (void)std::snprintf(id.model, sizeof(id.model), "part 0x%03x",
+                                static_cast<unsigned>((id.signature >> 4U) & 0xFFFU));
+        }
+    }
+#endif
+#if CRD_OS_WINDOWS
+    crd::u8 revision[8] = {}; // NOLINT(modernize-avoid-c-arrays)
+    DWORD revision_size = sizeof(revision);
+    if (processor_registry_value("Update Revision", RRF_RT_REG_BINARY, revision, revision_size))
+    {
+        id.microcode_known = windows_update_revision(revision, revision_size, id.microcode);
+    }
+#elif CRD_OS_LINUX && CRD_ARCH_X64
+    crd::u64 microcode = 0U;
+    if (read_hex_attribute("/sys/devices/system/cpu/cpu0/microcode/version", "microcode", microcode))
+    {
+        id.microcode = static_cast<crd::u32>(microcode);
+        id.microcode_known = true;
+    }
+#endif
+    if (id.microcode == 0xFFFFFFFFU)
+    {
+        // A hypervisor that hides the microcode reports all ones, which is no revision.
+        id.microcode = 0U;
+        id.microcode_known = false;
+    }
+    return id;
 }
 
 } // namespace crd

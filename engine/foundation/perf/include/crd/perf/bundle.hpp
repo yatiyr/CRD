@@ -73,7 +73,8 @@ enum class BundleSectionTag : crd::u32
     SymbolIndex   = 5, // module identities (filled by (c))
     FlightRecord  = 6, // DIAG.9b triggered flight capture (flight_recorder.hpp: encode/decode_flight_record)
     BuildIdentity = 7, // DIAG.9b the writing build (build_identity.hpp: encode/decode_build_identity)
-    // 8 .. 0x0000FFFF reserved for foundation; modules register above 0x00010000.
+    HardwareIdentity = 8, // HW-RESILIENCE.2 the writing machine (hardware_identity.hpp: encode/decode)
+    // 9 .. 0x0000FFFF reserved for foundation; modules register above 0x00010000.
 };
 
 // Per-section flags (bitset in BundleSectionHeader::flags).

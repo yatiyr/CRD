@@ -50,6 +50,7 @@ add_executable(crd-perf-tests
     test_diag_host.cpp # DIAG.9b/11a: the reusable diagnostic host, its authored profile and its change rules
     test_diag_flight_sites.cpp # DIAG.11b: a disabled event site evaluates no payload; a filtered event never waits
     test_diag_flight_rings.cpp # DIAG.11b (q1): per-thread rings under one global sequence: order, window, lifetime
+    test_hardware_identity.cpp # HW-RESILIENCE.2: the machine a bundle was written on
 )
 
 target_link_libraries(crd-perf-tests PRIVATE

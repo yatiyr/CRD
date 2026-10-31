@@ -11,6 +11,7 @@
 #include <crd/perf/diagnostics.hpp>
 #include <crd/perf/doctor.hpp>
 #include <crd/perf/flight_recorder.hpp>
+#include <crd/perf/hardware_identity.hpp>
 #include <crd/perf/memory.hpp>
 #include <crd/perf/profiler.hpp>
 
@@ -203,6 +204,8 @@ void append_hex(cont::String& out, const crd::u8* bytes, crd::usize n)
             return "flight-record";
         case BundleSectionTag::BuildIdentity:
             return "build-identity";
+        case BundleSectionTag::HardwareIdentity:
+            return "hardware-identity";
         case BundleSectionTag::Invalid:
             return "invalid";
     }
@@ -264,6 +267,67 @@ void append_hex(cont::String& out, const crd::u8* bytes, crd::usize n)
 // bundle.inspect's decoded flight record: one trigger item (what fired, where, with its scalars), one flight item (how
 // the window ended, the policy, the loss metadata and the replay recipe) and one event item per retained event, in
 // sequence order, each saying whether it was recorded before or after the trigger.
+// The machine (HW-RESILIENCE.2): one "hardware" item, then one "memory-module" and one "gpu" item each. With
+// `differing`, the item says whether the machine is this host and names the fields that differ.
+void add_hardware_items(const HardwareIdentity& h, const cont::String* differing, DiagFields& item, DiagSnapshot& out)
+{
+    const auto text = [](const cont::String& s)
+    {
+        return cont::StringView{s.data(), s.size()};
+    };
+    item.clear();
+    item.str("kind", "hardware")
+        .str("cpu_vendor", text(h.cpu_vendor))
+        .str("cpu_model", text(h.cpu_model))
+        .u64("cpu_signature", h.cpu_signature)
+        .boolean("cpu_known", (h.flags & kHardwareCpuKnown) != 0U)
+        .u64("microcode", h.microcode)
+        .boolean("microcode_known", (h.flags & kHardwareMicrocodeKnown) != 0U)
+        .u64("logical_cpus", h.logical_cpus)
+        .u64("memory_bytes", h.memory_bytes)
+        .boolean("memory_known", (h.flags & kHardwareMemoryKnown) != 0U)
+        .str("bios_vendor", text(h.bios_vendor))
+        .str("bios_version", text(h.bios_version))
+        .str("bios_date", text(h.bios_date))
+        .str("board_vendor", text(h.board_vendor))
+        .str("board_name", text(h.board_name))
+        .str("system_vendor", text(h.system_vendor))
+        .str("system_name", text(h.system_name))
+        .boolean("firmware_known", (h.flags & kHardwareFirmwareKnown) != 0U)
+        .u64("memory_modules", h.modules.size())
+        .boolean("modules_known", (h.flags & kHardwareModulesKnown) != 0U)
+        .u64("gpus", h.gpus.size());
+    if (differing != nullptr)
+    {
+        item.boolean("same_as_host", differing->empty()).str("differing", text(*differing));
+    }
+    (void)out.add_item(item);
+    for (const MemoryModule& m : h.modules)
+    {
+        item.clear();
+        item.str("kind", "memory-module")
+            .str("locator", text(m.locator))
+            .u64("size_mib", m.size_mib)
+            .u64("rated_mts", m.rated_mts)
+            .u64("configured_mts", m.configured_mts)
+            .u64("type", m.type)
+            .u64("form_factor", m.form_factor)
+            .str("manufacturer", text(m.manufacturer))
+            .str("part_number", text(m.part_number));
+        (void)out.add_item(item);
+    }
+    for (const GpuIdentity& g : h.gpus)
+    {
+        item.clear();
+        item.str("kind", "gpu")
+            .str("name", text(g.name))
+            .u64("vendor_id", g.vendor_id)
+            .u64("device_id", g.device_id)
+            .str("driver", text(g.driver));
+        (void)out.add_item(item);
+    }
+}
+
 void add_flight_items(const FlightCapture& c, DiagFields& item, DiagSnapshot& out)
 {
     const FlightTriggerRecord& t = c.trigger;
@@ -1146,6 +1210,7 @@ DiagStatus DiagCommandService::run_capabilities(void* self, const DiagCall& call
             .str("detail", cont::StringView{d.detail.data(), d.detail.size()});
         (void)out.add_item(item);
     }
+    add_hardware_items(host_hardware_identity(), nullptr, item, out);
     return DiagStatus::Ok;
 }
 
@@ -1350,6 +1415,8 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
         .u64("unsafe_names", imp.unsafe_names)
         .boolean("build_identity", imp.has_build)
         .boolean("build_refused", imp.build_refused)
+        .boolean("hardware_identity", imp.has_hardware)
+        .boolean("hardware_refused", imp.hardware_refused)
         .boolean("flight_record", flight.ok)
         .boolean("flight_refused", flight_present && !flight.ok)
         .str("flight_error", flight_error);
@@ -1417,6 +1484,13 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
             .u64("image_bytes", m.size)
             .boolean("unloaded", m.unloaded);
         (void)out.add_item(item);
+    }
+    if (imp.has_hardware) // last, after the symbols: a machine with many modules pages them after the evidence
+    {
+        // The writing machine against this host: a classification reads which machine failed, and how it differs.
+        cont::String differing(out.allocator());
+        (void)same_hardware_identity(imp.hardware, host_hardware_identity(), differing);
+        add_hardware_items(imp.hardware, &differing, item, out);
     }
     return DiagStatus::Ok;
 }

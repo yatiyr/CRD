@@ -151,6 +151,16 @@ BundleImport import_bundle(cont::ConstSpan<crd::u8> buf, BundleLimits limits, cr
                     r.build = static_cast<BuildIdentity&&>(build.identity);
                 }
             }
+            else if (sv.tag == BundleSectionTag::HardwareIdentity && (is.section_flags & kSectionFlagAbsent) == 0U)
+            {
+                HardwareIdentityRead hardware = decode_hardware_identity(sv.payload, alloc);
+                r.has_hardware = hardware.ok;
+                r.hardware_refused = !hardware.ok;
+                if (hardware.ok)
+                {
+                    r.hardware = static_cast<HardwareIdentity&&>(hardware.identity);
+                }
+            }
             else if (sv.tag == BundleSectionTag::SymbolIndex && !r.has_symbols &&
                      (is.section_flags & kSectionFlagAbsent) == 0U) // an explicit absent section holds no symbols
             {
