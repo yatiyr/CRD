@@ -8,6 +8,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/checksum.hpp>
 #include <crd/containers/checksum_dispatch.hpp>
+#include <crd/containers/string.hpp>
 #include <crd/core/cpu_features.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -295,4 +296,17 @@ TEST_CASE("checksum kernels: the process runs the levels its CPU selection resol
                                                           crd::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, crc.level));
     CHECK(crd::cpu_level_includes(s.selected, hash.level));
+    // Evidence on every run (CTest's log and JUnit keep it): which crc variant and hash level this host ran, so a
+    // hosted lane's record shows the carry-less and CRC32 variants were the ones tested, not only the plain levels.
+    cc::String variant;
+    for (u32 f = 0; f < static_cast<u32>(crd::CpuFeature::Count); ++f)
+    {
+        if (crc.features.has(static_cast<crd::CpuFeature>(f)))
+        {
+            variant.append(" +");
+            variant.append(crd::cpu_feature_name(static_cast<crd::CpuFeature>(f)));
+        }
+    }
+    WARN("checksum kernels ran: crc " << crd::cpu_level_name(crc.level) << variant.c_str() << ", hash "
+                                      << crd::cpu_level_name(hash.level));
 }

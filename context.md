@@ -3,12 +3,12 @@
 <!-- doc-role: pointer -->
 > Current-work pointer. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
 
-<!-- current-slice: HW-RESILIENCE.1 -->
-**Current work:** [HW-RESILIENCE.1](docs/ROADMAP.md#slice-hw-resilience.1) (user order 2026-10-31).
-Beside it: [SIMD-PERF](docs/ROADMAP.md#slice-simd-perf) on a cloud benchmark machine; CI-1 to CI-4 on the
+<!-- current-slice: HW-RESILIENCE.2 -->
+**Current work:** [HW-RESILIENCE.2](docs/ROADMAP.md#slice-hw-resilience.2) (user order 2026-10-31);
+[HW-RESILIENCE.1](docs/ROADMAP.md#slice-hw-resilience.1): Needs CI. Beside it: [SIMD-PERF](docs/ROADMAP.md#slice-simd-perf) on a cloud benchmark machine; CI-1 to CI-4 on the
 launcher. [DIAG.11b](docs/ROADMAP.md#slice-diag.11b): user re-record (8). [DIAG.11c](docs/ROADMAP.md#slice-diag.11c),
 [DIAG.12](docs/ROADMAP.md#slice-diag.12): final complete-tier run.
-Local routes: cached trees, WSL mirror, mold links, bounded waits ([build performance](docs/design/build-performance.md)).
+Local routes: [build performance](docs/design/build-performance.md).
 [Contract](docs/design/runtime-diagnostics.md); [runbooks](docs/design/diagnostic-runbooks.md).
 **Only tracker:** [ROADMAP](docs/ROADMAP.md). Rules: [AGENTS](AGENTS.md); lessons: [MEMORY](MEMORY.md).
 
