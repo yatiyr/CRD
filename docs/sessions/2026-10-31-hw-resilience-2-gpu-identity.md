@@ -33,6 +33,12 @@ Before this, the identity's GPU entries existed in the format and stayed empty.
   entry's driver is the backend and its version (`vulkan 581.57`, `dx12 32.0.15.8157`), since one GPU seen through two
   APIs reports two versions of one driver. The sandbox calls it where its diagnostic host starts.
 
+- `same_machine`: each process names only the GPUs it opened, so a bundle written before a device opened (or read
+  by a process that opened none) lists fewer GPUs than its host. `bundle.inspect`'s `same_as_host` now uses it: every
+  other field equal, and no GPU both name through one API with different drivers. `same_hardware_identity` stays
+  exact for the codec and crash-stream round trips. The Vulkan case reads the driver properties as the backend does
+  (core from 1.2, `VK_KHR_driver_properties` before) and, without `driverInfo`, expects the vendor-packed version.
+
 ## Verification (win-debug)
 
 - `crd-gpu-context-tests [hw-resilience]`: the version formats (NVIDIA 10.8.8.6, Intel on Windows 18.14, the

@@ -134,6 +134,13 @@ void parse_smbios(crd::containers::ConstSpan<crd::u8> table, HardwareIdentity& o
 [[nodiscard]] bool same_hardware_identity(const HardwareIdentity& a, const HardwareIdentity& b,
                                           crd::containers::String& differing);
 
+// True when `a` and `b` can describe one machine: every field but the GPUs matches, and no GPU both name (vendor,
+// device and name) was seen through one API with different drivers, since each process names only the GPUs it opened
+// (a bundle written before a device opened, or read by a process that opened none, lists fewer). Otherwise appends
+// the differing field names as same_hardware_identity does. bundle.inspect's `same_as_host` is this judgement.
+[[nodiscard]] bool same_machine(const HardwareIdentity& a, const HardwareIdentity& b,
+                                crd::containers::String& differing);
+
 // Encode `h` as a HardwareIdentity section payload. A text field longer than kHardwareFieldBytes is clipped to it;
 // modules and GPUs past their bounds are left out and their Known flag cleared.
 [[nodiscard]] crd::containers::Array<crd::u8>

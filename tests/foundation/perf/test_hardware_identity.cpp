@@ -6,6 +6,9 @@
 #include <crd/core/cpu_features.hpp>
 #include <crd/core/crash.hpp>
 #include <crd/core/platform.hpp>
+#include <crd/perf/bundle.hpp>
+#include <crd/perf/diag_commands.hpp>
+#include <crd/perf/flight_recorder.hpp>
 #include <crd/perf/hardware_identity.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -598,6 +601,49 @@ TEST_CASE("hardware identity: a GPU added to this machine joins it once, in ever
     crd::crash::uninstall();
     fs::remove_all(dir, ec);
 #endif
+
+    // Each process names only the GPUs it opened: a bundle written before a device opened is still this machine, and
+    // so is one read by a process that opened none; one GPU through one API with another driver is a difference.
+    const cp::HardwareIdentity& now = cp::host_hardware_identity();
+    CHECK(cp::same_machine(kept, now, differing));
+    CHECK(cp::same_machine(now, kept, differing));
+    CHECK(differing.empty());
+    cp::HardwareIdentity updated = now;
+    updated.gpus[had].driver.clear();
+    updated.gpus[had].driver.append("vulkan 2.0.310"); // the same GPU, its driver updated
+    CHECK_FALSE(cp::same_machine(updated, now, differing));
+    CHECK(view(differing) == "gpus");
+    differing.clear();
+    updated.gpus[had].driver.clear();
+    updated.gpus[had].driver.append("dx12 32.0.21025.1"); // the same GPU through another API
+    CHECK(cp::same_machine(updated, now, differing));
+    updated.cpu_signature ^= 1U;
+    CHECK_FALSE(cp::same_machine(updated, now, differing)); // every other field still has to match
+    CHECK(view(differing) == "cpu_signature");
+    differing.clear();
+
+    // bundle.inspect judges the writing machine that way: a GPU opened after the bundle was written changes nothing.
+    const cp::FlightCapture capture;
+    const cont::Array<u8> bundle = cp::write_flight_bundle(capture);
+    const usize written = cp::host_hardware_identity().gpus.size();
+    char path[512];
+    (void)std::snprintf(path, sizeof(path), "%s/hw_identity_gpu_inspect.cdb", CRD_DIAG_COMMANDS_SCRATCH);
+    REQUIRE(cp::write_bundle_atomic(path, cont::ConstSpan<u8>{bundle.data(), bundle.size()}));
+    REQUIRE(cp::add_host_gpu(test_gpu(0x7480U, "Radeon Opened Later", "vulkan 2.0.302")));
+    cp::DiagServiceConfig config;
+    config.root = cont::StringView{CRD_DIAG_COMMANDS_SCRATCH};
+    cp::DiagCommandService svc{cp::authority_bit(cp::DiagAuthority::Read), config, crd::memory::default_allocator()};
+    cp::DiagRequest req;
+    req.command = "bundle.inspect";
+    req.path = "hw_identity_gpu_inspect.cdb";
+    req.page_items = 256U;
+    const cp::DiagResult result = svc.execute(req);
+    REQUIRE(result.status == cp::DiagStatus::Ok);
+    char hardware_item[96]; // the hardware item's tail (the build item reports its own same_as_host)
+    (void)std::snprintf(hardware_item, sizeof(hardware_item), R"("gpus":%u,"same_as_host":true,"differing":""})",
+                        static_cast<unsigned>(written));
+    CHECK(std::strstr(result.json.c_str(), hardware_item) != nullptr);
+    (void)std::remove(path);
 
     // Bounded: past kMaxGpus nothing is added, and an entry already there still counts as there.
     for (u32 device = 1U; cp::host_hardware_identity().gpus.size() < cp::kMaxGpus; ++device)

@@ -75,8 +75,10 @@
 #include <ckir_abuffer_test.hpp>    // B17-c: the SHARED exact-reference A-buffer OIT scene + oracle + 2-kernel dispatch
 #include <ckir_light_cull_test.hpp> // CEIR-18a-1: the SHARED Forward+/clustered light-cull producer scene + oracle + dispatch
 
+#include <crd/containers/array.hpp>
 #include <crd/containers/checksum.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/core/platform.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -18155,21 +18157,42 @@ TEST_CASE("HW-RESILIENCE.2: the Vulkan context reports its adapter and notes it 
     driver.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
     VkPhysicalDeviceProperties2 p2{};
     p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-    p2.pNext = &driver;
-    vkGetPhysicalDeviceProperties2(vk->vk_physical_device(), &p2);
+    vkGetPhysicalDeviceProperties(vk->vk_physical_device(), &p2.properties);
+    bool with_driver = p2.properties.apiVersion >= VK_API_VERSION_1_2; // core from 1.2, an extension before
+    if (!with_driver)
+    {
+        crd::u32 count = 0U;
+        REQUIRE(vkEnumerateDeviceExtensionProperties(vk->vk_physical_device(), nullptr, &count, nullptr) == VK_SUCCESS);
+        crd::containers::Array<VkExtensionProperties> listed;
+        listed.resize(count);
+        REQUIRE(vkEnumerateDeviceExtensionProperties(vk->vk_physical_device(), nullptr, &count, listed.data()) >=
+                VK_SUCCESS);
+        for (crd::u32 i = 0U; i < count; ++i)
+        {
+            with_driver =
+                with_driver || std::strcmp(listed[i].extensionName, VK_KHR_DRIVER_PROPERTIES_EXTENSION_NAME) == 0;
+        }
+    }
+    if (with_driver)
+    {
+        p2.pNext = &driver;
+        vkGetPhysicalDeviceProperties2(vk->vk_physical_device(), &p2);
+    }
     CHECK(std::strcmp(a.name, p2.properties.deviceName) == 0);
     CHECK(a.vendor == p2.properties.vendorID);
     CHECK(a.device == p2.properties.deviceID);
     CHECK(a.driver == p2.properties.driverVersion);
     CHECK(a.api == p2.properties.apiVersion);
-    REQUIRE(p2.properties.apiVersion >= VK_API_VERSION_1_2); // every device Cerid's Vulkan lanes create
     if (driver.driverInfo[0] != '\0')
     {
         CHECK(std::strncmp(a.driver_version, driver.driverInfo, sizeof(a.driver_version) - 1U) == 0);
     }
-    else
+    else // no driverInfo: the driverVersion in its vendor's packing
     {
-        CHECK(a.driver_version[0] != '\0');
+        char packed[gpu::kAdapterDriverVersionBytes];
+        gpu::format_vulkan_driver_version(p2.properties.vendorID, p2.properties.driverVersion, CRD_OS_WINDOWS != 0,
+                                          packed);
+        CHECK(std::strcmp(a.driver_version, packed) == 0);
     }
 
     bool noted = false;

@@ -481,7 +481,35 @@ bool add_host_gpu(const GpuIdentity& gpu)
     return true;
 }
 
-bool same_hardware_identity(const HardwareIdentity& a, const HardwareIdentity& b, cont::String& differing)
+namespace
+{
+// The API a GPU entry was seen through: its driver up to the first space ("vulkan 581.57" -> "vulkan").
+[[nodiscard]] cont::StringView gpu_api(const GpuIdentity& g) noexcept
+{
+    const cont::StringView driver = view(g.driver);
+    const crd::usize space = driver.find(' ');
+    return space == cont::StringView::npos ? driver : cont::StringView{driver.data(), space};
+}
+
+// Each process names only the GPUs it opened, so two identities of one machine may list different GPUs; they disagree
+// only when both name one GPU (vendor, device and name) through one API with different drivers.
+[[nodiscard]] bool consistent_gpus(const HardwareIdentity& a, const HardwareIdentity& b) noexcept
+{
+    for (const GpuIdentity& x : a.gpus)
+    {
+        for (const GpuIdentity& y : b.gpus)
+        {
+            if (x.vendor_id == y.vendor_id && x.device_id == y.device_id && view(x.name) == view(y.name) &&
+                gpu_api(x) == gpu_api(y) && view(x.driver) != view(y.driver))
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool compare_identities(const HardwareIdentity& a, const HardwareIdentity& b, bool exact_gpus, cont::String& differing)
 {
     const crd::usize before = differing.size();
     const auto note = [&differing](bool same, const char* name)
@@ -545,8 +573,19 @@ bool same_hardware_identity(const HardwareIdentity& a, const HardwareIdentity& b
     note(view(a.system_vendor) == view(b.system_vendor), "system_vendor");
     note(view(a.system_name) == view(b.system_name), "system_name");
     note(same_modules(), "modules");
-    note(same_gpus(), "gpus");
+    note(exact_gpus ? same_gpus() : consistent_gpus(a, b), "gpus");
     return differing.size() == before;
+}
+} // namespace
+
+bool same_hardware_identity(const HardwareIdentity& a, const HardwareIdentity& b, cont::String& differing)
+{
+    return compare_identities(a, b, true, differing);
+}
+
+bool same_machine(const HardwareIdentity& a, const HardwareIdentity& b, cont::String& differing)
+{
+    return compare_identities(a, b, false, differing);
 }
 
 cont::Array<crd::u8> encode_hardware_identity(const HardwareIdentity& h, crd::memory::IAllocator* alloc)

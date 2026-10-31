@@ -3196,7 +3196,8 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   called where a host starts its diagnostics) adds each, earlier ones included, through `add_host_gpu`; the entry's
   driver is the backend and its version. The host identity is a chain of immutable snapshots (one per GPU, at most
   `kMaxGpus`) behind an atomic index, so a fatal delivery reads it without a lock; each addition replaces the crash
-  stream once attached.
+  stream once attached. Each process names only the GPUs it opened, so `bundle.inspect`'s `same_as_host` is
+  `same_machine`: every other field equal, and no GPU both name through one API with different drivers.
 
 ## Existing programme ownership after DIAG
 

@@ -1489,7 +1489,7 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
     {
         // The writing machine against this host: a classification reads which machine failed, and how it differs.
         cont::String differing(out.allocator());
-        (void)same_hardware_identity(imp.hardware, host_hardware_identity(), differing);
+        (void)same_machine(imp.hardware, host_hardware_identity(), differing);
         add_hardware_items(imp.hardware, &differing, item, out);
     }
     return DiagStatus::Ok;
