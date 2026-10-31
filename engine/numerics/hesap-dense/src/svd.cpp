@@ -2,6 +2,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/sort.hpp>
+#include <crd/core/seed_generators.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/blas3.hpp>
 #include <crd/hesap/dense/dense_dispatch.hpp>
@@ -1179,8 +1180,8 @@ SVD<T> rsvd(crd::memory::IAllocator* alloc, const Matrix<T>& a_in, crd::usize ra
         R acc = R{0};
         for (int t = 0; t < 12; ++t)
         {
-            st = st * 6364136223846793005ULL + 1442695040888963407ULL;
-            acc += static_cast<R>((st >> 11) & 0xFFFFFFFFFFFFFULL) / static_cast<R>(1ULL << 52);
+            const crd::u64 bits = (crd::mmix_lcg_next(st) >> 11) & 0xFFFFFFFFFFFFFULL;
+            acc += static_cast<R>(bits) / static_cast<R>(1ULL << 52);
         }
         return acc - R{6};
     };
@@ -1349,8 +1350,8 @@ EigSym<T> rsyev(crd::memory::IAllocator* alloc, const Symmetric<T>& a, crd::usiz
         R acc = R{0};
         for (int t = 0; t < 12; ++t)
         {
-            st = st * 6364136223846793005ULL + 1442695040888963407ULL;
-            acc += static_cast<R>((st >> 11) & 0xFFFFFFFFFFFFFULL) / static_cast<R>(1ULL << 52);
+            const crd::u64 bits = (crd::mmix_lcg_next(st) >> 11) & 0xFFFFFFFFFFFFFULL;
+            acc += static_cast<R>(bits) / static_cast<R>(1ULL << 52);
         }
         return acc - R{6};
     };

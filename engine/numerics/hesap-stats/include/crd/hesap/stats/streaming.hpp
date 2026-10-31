@@ -9,6 +9,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/sort.hpp>
+#include <crd/core/seed_generators.hpp>
 #include <crd/core/types.hpp>
 #include <crd/math/cmath.hpp>
 #include <crd/memory/allocator.hpp>
@@ -146,16 +147,6 @@ private:
     T m_dn[5] = {};
 };
 
-namespace detail
-{
-[[nodiscard]] inline crd::u64 splitmix64_mix(crd::u64 z) noexcept
-{
-    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
-    return z ^ (z >> 31);
-}
-} // namespace detail
-
 // HyperLogLog cardinality estimator (Flajolet et al.), with linear-counting small-range and large-range corrections.
 // 2^Precision registers; relative error ~ 1.04 / sqrt(2^Precision).
 template <int Precision = 11> class HyperLogLog
@@ -172,7 +163,7 @@ public:
 
     void add(crd::u64 key) noexcept
     {
-        const crd::u64 h = detail::splitmix64_mix(key);
+        const crd::u64 h = crd::splitmix64_mix(key);
         const crd::usize idx = static_cast<crd::usize>(h >> (64 - Precision));
         const crd::u64 w = (h << Precision) | (static_cast<crd::u64>(1) << (Precision - 1));
         const crd::u8 rho = static_cast<crd::u8>(std::countl_zero(w) + 1);
@@ -230,7 +221,7 @@ public:
         }
         for (int d = 0; d < D; ++d)
         {
-            m_seed[d] = detail::splitmix64_mix(static_cast<crd::u64>(d) + 0x9e3779b97f4a7c15ULL);
+            m_seed[d] = crd::splitmix64_at(static_cast<crd::u64>(d), 0U);
         }
     }
 
@@ -259,7 +250,7 @@ public:
 private:
     [[nodiscard]] crd::usize col(crd::u64 key, int d) const noexcept
     {
-        return static_cast<crd::usize>(detail::splitmix64_mix(key ^ m_seed[d]) % static_cast<crd::u64>(W));
+        return static_cast<crd::usize>(crd::splitmix64_mix(key ^ m_seed[d]) % static_cast<crd::u64>(W));
     }
     crd::containers::Array<crd::u32> m_table;
     crd::u64 m_seed[D] = {};

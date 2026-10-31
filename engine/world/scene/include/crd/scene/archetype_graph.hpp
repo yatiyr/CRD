@@ -3,6 +3,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/hash.hpp>
 #include <crd/containers/hash_map.hpp>
+#include <crd/core/fnv1a.hpp> // hash_combine
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/memory/allocators/growable_pool_allocator.hpp>
@@ -13,9 +14,9 @@
 
 namespace crd::scene
 {
-// Hash functor for ComponentMask (256-bit). Folds the four u64 words with a
-// boost-style mix (golden ratio + rotation) so distinct masks differing only
-// in the higher words still spread across buckets. ComponentMask has
+// Hash functor for ComponentMask (256-bit). Folds the four hashed u64 words with
+// crd-core's golden-ratio combiner so distinct masks differing only in the
+// higher words still spread across buckets. ComponentMask has
 // value-semantic equality so DefaultEqual suffices for the HashMap's
 // key-equal predicate.
 struct ComponentMaskHash
@@ -25,8 +26,7 @@ struct ComponentMaskHash
         crd::u64 h = crd::containers::hash_u64(m.bits[0]);
         for (crd::u32 i = 1; i < 4; ++i)
         {
-            const crd::u64 wh = crd::containers::hash_u64(m.bits[i]);
-            h ^= wh + 0x9E3779B97F4A7C15ULL + (h << 6) + (h >> 2);
+            h = crd::hash_combine(h, crd::containers::hash_u64(m.bits[i]));
         }
         return h;
     }

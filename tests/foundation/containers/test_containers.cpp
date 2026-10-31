@@ -21,6 +21,8 @@ TEST_CASE("hash_u64 splitmix is deterministic and different from identity", "[co
     REQUIRE(hash_u64(0) == hash_u64(0));
     REQUIRE(hash_u64(42) == hash_u64(42));
     REQUIRE(hash_u64(0) != 0);
+    // The SplitMix64 finalizer of 0 xor the golden ratio: the first output of SplitMix64 seeded with 0.
+    REQUIRE(hash_u64(0) == 0xE220A8397B1DCDAFULL);
     REQUIRE(hash_u64(1) != hash_u64(2));
 }
 

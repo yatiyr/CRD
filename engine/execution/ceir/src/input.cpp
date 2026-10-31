@@ -2,20 +2,12 @@
 
 #include <crd/ceir/attr.hpp>
 #include <crd/ceir/time.hpp> // builtin_domain_index, kBuiltinDomainCount
+#include <crd/core/seed_generators.hpp>
 
 namespace crd::ceir::input
 {
 namespace
 {
-// The splitmix64 output function (Steele, Lea and Flood): a bijective 64-bit mix.
-[[nodiscard]] constexpr crd::u64 mix64(crd::u64 z) noexcept
-{
-    z += 0x9E3779B97F4A7C15ULL;
-    z = (z ^ (z >> 30U)) * 0xBF58476D1CE4E5B9ULL;
-    z = (z ^ (z >> 27U)) * 0x94D049BB133111EBULL;
-    return z ^ (z >> 31U);
-}
-
 // The event type names, by EventType ordinal.
 constexpr containers::StringView kEventTypeNames[] = {"none",     "key_down",   "key_up", "key_repeat", "mouse_down",
                                                       "mouse_up", "mouse_move", "scroll", "resize"};
@@ -138,7 +130,9 @@ void SeededInputs::reset(crd::u64 seed)
 
 crd::i64 SeededInputs::draw(crd::u64 seed, crd::u32 stream, crd::u64 n) noexcept
 {
-    return static_cast<crd::i64>(mix64(mix64(seed ^ mix64(static_cast<crd::u64>(stream))) + n));
+    // Each mix is one SplitMix64 step from its argument (output 0 of the stream it seeds).
+    const crd::u64 stream_key = crd::splitmix64_at(seed ^ crd::splitmix64_at(stream, 0U), 0U);
+    return static_cast<crd::i64>(crd::splitmix64_at(stream_key + n, 0U));
 }
 
 bool SeededInputs::next(InputKind kind, crd::u32 channel, crd::i64& out, void* user)

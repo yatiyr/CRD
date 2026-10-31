@@ -2,6 +2,8 @@
 
 #include <crd/perf/fault_injection.hpp>
 
+#include <crd/core/seed_generators.hpp>
+
 #include <crd/perf/diag_assets.hpp>
 #include <crd/perf/flight_recorder.hpp>
 
@@ -112,15 +114,6 @@ void write_plan(FixedText& out, const FaultPlan& plan)
         out.put(";");
         write_rule(out, plan.rules[i]);
     }
-}
-
-[[nodiscard]] crd::u64 mix64(crd::u64 x) noexcept
-{
-    // splitmix64's finalizer: a fixed, well-distributed hash of (seed, site, rule, hit).
-    x += 0x9E3779B97F4A7C15ULL;
-    x = (x ^ (x >> 30U)) * 0xBF58476D1CE4E5B9ULL;
-    x = (x ^ (x >> 27U)) * 0x94D049BB133111EBULL;
-    return x ^ (x >> 31U);
 }
 
 // Parse a decimal u64 that must make up all of `text`.
@@ -306,7 +299,9 @@ bool fault_plan_fires(const FaultPlan& plan, FaultSite site, crd::u64 hit, crd::
         if (!fires)
         {
             const crd::u64 key = plan.seed ^ (static_cast<crd::u64>(site) << 56U) ^ (static_cast<crd::u64>(i) << 48U);
-            fires              = mix64(mix64(key) ^ hit) % kFaultPpmAlways < r.probability_ppm;
+            // One SplitMix64 step from (seed, site, rule), then from the hit: fixed and well distributed.
+            const crd::u64 draw = crd::splitmix64_at(crd::splitmix64_at(key, 0U) ^ hit, 0U);
+            fires               = draw % kFaultPpmAlways < r.probability_ppm;
         }
         if (fires)
         {

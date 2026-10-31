@@ -18,6 +18,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/sort.hpp>
+#include <crd/core/seed_generators.hpp>
 #include <crd/memory/construct.hpp> // construct_or_fatal (DIAG.3a)
 
 #include <algorithm>
@@ -116,8 +117,7 @@ public:
 
         for (crd::usize round = 0; round < m_rounds; ++round)
         {
-            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
-            const crd::usize sigma = ((rng >> 16) | 1ULL) & (m_n - 1); // random odd permutation stride
+            const crd::usize sigma = ((crd::mmix_lcg_next(rng) >> 16) | 1ULL) & (m_n - 1); // random odd stride
             bucketize(xp, sigma, 0, m_zbuf.data());                    // reference (offset 0)
             for (crd::usize j = 0; j < m_m; ++j)                       // dyadic offsets β_j = 2^{m-j-1}
             {

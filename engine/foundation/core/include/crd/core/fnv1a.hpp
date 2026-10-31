@@ -4,12 +4,14 @@
 // cmake/capability-owners.json). It lives in crd-core so every module can reach it, crd-memory included.
 //
 // Every form continues from a running state `h`, so a value built from several fields needs no scratch buffer:
-// fnv1a_64(b, nb, fnv1a_64(a, na)) == fnv1a_64(a ++ b). The text form is usable in constant expressions (a `void*` cannot
-// be read there). The integer folds feed a value's bytes least significant first by shifts, so an identity that is
-// persisted (cooked assets, stable ids) is the same on every host. `fnv1a_64_word` is one FNV-1a step over a whole
-// 64-bit word: a cheap combiner for runtime keys (hash-consing, memo and cache keys, change signatures), not FNV-1a over
-// the word's bytes, so it never names a persisted identity.
+// fnv1a_64(b, nb, fnv1a_64(a, na)) == fnv1a_64(a ++ b). The text form is usable in constant expressions (a `void*`
+// cannot be read there). The integer folds feed a value's bytes least significant first by shifts, so an identity that
+// is persisted (cooked assets, stable ids) is the same on every host. `fnv1a_64_word` is one FNV-1a step over a whole
+// 64-bit word: a cheap combiner for runtime keys (hash-consing, memo and cache keys, change signatures), not FNV-1a
+// over the word's bytes, so it never names a persisted identity. `hash_combine` is the golden-ratio combiner (Boost's
+// hash_combine at 64 bits, capability hash.combine) that folds already-hashed words into one key.
 
+#include <crd/core/seed_generators.hpp> // kGoldenRatio64
 #include <crd/core/types.hpp>
 
 #include <type_traits>
@@ -88,6 +90,11 @@ template <typename T>
 [[nodiscard]] constexpr u64 fnv1a_64_word(u64 v, u64 h) noexcept
 {
     return (h ^ v) * kFnv1a64Prime;
+}
+
+[[nodiscard]] constexpr u64 hash_combine(u64 seed, u64 v) noexcept
+{
+    return seed ^ (v + kGoldenRatio64 + (seed << 6U) + (seed >> 2U));
 }
 
 } // namespace crd

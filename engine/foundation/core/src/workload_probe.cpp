@@ -1,5 +1,7 @@
 #include <crd/core/workload_probe.hpp>
 
+#include <crd/core/seed_generators.hpp>
+
 #include <chrono>
 #include <cstdio>
 
@@ -23,14 +25,6 @@ crd::u64 now_ns() noexcept
 {
     const auto t = std::chrono::steady_clock::now().time_since_epoch();
     return static_cast<crd::u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(t).count());
-}
-
-crd::u64 splitmix64(crd::u64 x) noexcept
-{
-    x += 0x9E3779B97F4A7C15ULL;
-    x = (x ^ (x >> 30U)) * 0xBF58476D1CE4E5B9ULL;
-    x = (x ^ (x >> 27U)) * 0x94D049BB133111EBULL;
-    return x ^ (x >> 31U);
 }
 
 crd::usize append_text(char* out, crd::usize capacity, crd::usize length, const char* text) noexcept
@@ -413,7 +407,8 @@ bool workload_injects(crd::u64 seed, crd::u32 permille, crd::u32 cycle, crd::u32
     {
         return true;
     }
-    const crd::u64 h = splitmix64(seed ^ splitmix64((static_cast<crd::u64>(cycle) << 32U) | iteration));
+    const crd::u64 cycle_iteration = (static_cast<crd::u64>(cycle) << 32U) | iteration;
+    const crd::u64 h               = crd::splitmix64_at(seed ^ crd::splitmix64_at(cycle_iteration, 0U), 0U);
     return h % 1000U < permille;
 }
 

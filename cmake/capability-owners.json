@@ -42,9 +42,6 @@
         {"regex": "\\b(?:16777619|0[xX]0*1000193)[uUlL]*\\b", "what": "the FNV-1a 32-bit prime"},
         {"regex": "\\b(?:2166136261|0[xX]811[cC]9[dD][cC]5)[uUlL]*\\b", "what": "the FNV-1a 32-bit offset basis"}
       ],
-      "pending": [
-        {"path": "sandbox/src/geometry_showcase.cpp", "row": "OWN.1"}
-      ],
       "allowed": [
         {"path": "engine/gpu/kir/include/crd/kir/ckir_hair_rt.hpp", "why": "A per-light seed stride baked into a generated device hash (with xxHash32 constants); not FNV-1a, and the device program carries its own copy by design."}
       ]
@@ -53,14 +50,12 @@
       "id": "hash.combine",
       "summary": "The golden-ratio hash combiner (seed ^= v + 0x9E3779B97F4A7C15 + (seed << 6) + (seed >> 2)) that folds already-hashed words into one key.",
       "owner": "core",
-      "status": "assigned",
-      "row": "OWN.1",
+      "decision": "Beside FNV-1a in crd/core/fnv1a.hpp (design decision 7): both fold words into runtime and cooked keys.",
+      "api": [
+        "engine/foundation/core/include/crd/core/fnv1a.hpp"
+      ],
       "signatures": [
         {"regex": "\\(\\s*\\w+\\s*<<\\s*6U?\\s*\\)\\s*\\+\\s*\\(\\s*\\w+\\s*>>\\s*2U?\\s*\\)", "what": "the hash_combine shift pair"}
-      ],
-      "pending": [
-        {"path": "engine/geometry/lod/src/lod_asset.cpp", "row": "OWN.1"},
-        {"path": "engine/world/scene/include/crd/scene/archetype_graph.hpp", "row": "OWN.1"}
       ]
     },
     {
@@ -89,25 +84,13 @@
       "id": "random.seed-generators",
       "summary": "SplitMix64 and the 64-bit MMIX linear congruential step: the integer generators that seed engines, fault plans, workload probes and the starting vectors of iterative methods, below every module that uses them.",
       "owner": "core",
-      "status": "assigned",
-      "row": "OWN.1",
       "decision": "Foundation modules (core's workload probe, perf's fault injection, the CEIR input generator) cannot reach hesap-stats, so the step functions live in crd-core; hesap-stats' SplitMix64 and PCG engines build on them.",
+      "api": [
+        "engine/foundation/core/include/crd/core/seed_generators.hpp"
+      ],
       "signatures": [
         {"regex": "\\b0[xX](?:[bB][fF]58476[dD]1[cC][eE]4[eE]5[bB]9|94[dD]049[bB][bB]133111[eE][bB])[uUlL]*\\b", "what": "a SplitMix64 finalizer multiplier"},
         {"regex": "\\b(?:6364136223846793005|0[xX]5851[fF]42[dD]4[cC]957[fF]2[dD])[uUlL]*\\b", "what": "the MMIX LCG multiplier"}
-      ],
-      "pending": [
-        {"path": "engine/execution/ceir/src/input.cpp", "row": "OWN.1"},
-        {"path": "engine/foundation/containers/include/crd/containers/hash.hpp", "row": "OWN.1"},
-        {"path": "engine/foundation/perf/src/fault_injection.cpp", "row": "OWN.1"},
-        {"path": "engine/numerics/hesap-dense/src/svd.cpp", "row": "OWN.1"},
-        {"path": "engine/numerics/hesap-eigen/include/crd/hesap/eigen/lanczos.hpp", "row": "OWN.1"},
-        {"path": "engine/numerics/hesap-fft/include/crd/hesap/fft/sparse_fft.hpp", "row": "OWN.1"},
-        {"path": "engine/numerics/hesap-iterative/include/crd/hesap/iterative/idrs.hpp", "row": "OWN.1"},
-        {"path": "engine/numerics/hesap-stats/include/crd/hesap/stats/chacha.hpp", "row": "OWN.1"},
-        {"path": "engine/numerics/hesap-stats/include/crd/hesap/stats/splitmix64.hpp", "row": "OWN.1"},
-        {"path": "engine/numerics/hesap-stats/include/crd/hesap/stats/streaming.hpp", "row": "OWN.1"},
-        {"path": "sandbox/src/geometry_showcase.cpp", "row": "OWN.1"}
       ]
     },
     {

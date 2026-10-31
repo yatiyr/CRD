@@ -2,6 +2,7 @@
 
 #include <crd/containers/span.hpp>
 #include <crd/core/assert.hpp>
+#include <crd/core/seed_generators.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/blas1.hpp>
@@ -95,8 +96,8 @@ private:
         using namespace crd::hesap::dense;
         crd::u64 state = seed;
         auto     next  = [&state]() -> R {
-            state = state * 6364136223846793005ULL + 1442695040888963407ULL;
-            return static_cast<R>(static_cast<crd::f64>(state >> 11) / static_cast<crd::f64>(1ULL << 53) - 0.5);
+            const crd::u64 bits = crd::mmix_lcg_next(state) >> 11;
+            return static_cast<R>(static_cast<crd::f64>(bits) / static_cast<crd::f64>(1ULL << 53) - 0.5);
         };
         for (crd::usize i = 0; i < s; ++i)
         {

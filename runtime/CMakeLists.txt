@@ -1221,6 +1221,7 @@ if(CRD_BUILD_RETAINED_BENCHES)
     crd_add_retained_bench(bench_dtypes crd-hesap-tensor)
     crd_add_retained_bench(bench_einsum crd-hesap-tensor)
     crd_add_retained_bench(bench_elementwise crd-hesap-tensor)
+    crd_add_retained_bench(bench_hash) # OWN.1: the hashing and seed-generator moves onto crd-core
     crd_add_retained_bench(bench_hyperopt crd-hesap-tensor)
     crd_add_retained_bench(bench_hypothesis crd-hesap-stats)
     crd_add_retained_bench(bench_interp crd-hesap-interp)

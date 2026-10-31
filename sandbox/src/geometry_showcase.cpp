@@ -7,6 +7,8 @@
 
 #include "geometry_showcase.hpp"
 
+#include <crd/core/fnv1a.hpp>
+#include <crd/core/seed_generators.hpp>
 #include <crd/draw/active_buffer.hpp> // ScopedActiveBuffer + active-buffer-style wrappers used by render_draw_showcase
 #include <crd/draw/shapes.hpp>
 #include <crd/draw/types.hpp>
@@ -54,13 +56,7 @@ struct Rng
 {
     crd::u64 state;
     explicit Rng(crd::u64 seed) : state(seed) {}
-    crd::u64 next()
-    {
-        crd::u64 z = (state += 0x9E3779B97F4A7C15ULL);
-        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-        z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-        return z ^ (z >> 31);
-    }
+    crd::u64 next() { return crd::splitmix64_next(state); }
     f32 unit() { return static_cast<f32>(next() >> 40) / static_cast<f32>(1U << 24); }
     f32 range(f32 lo, f32 hi) { return lo + (hi - lo) * unit(); }
 };
@@ -394,28 +390,19 @@ void render_query_showcase(GeometryShowcaseState& s, crd::draw::RenderBuffer& bu
 // 3. BVH VIEWER
 // ===========================================================================
 
-// SplitMix64 hash mixer — used for the BVH viewer's cache fingerprint. Hashes
-// the slider tuple (N, seed, world_size, max_box_size, tree_kind) into one u64
-// the cache compares per frame to decide rebuild-or-reuse.
-[[nodiscard]] crd::u64 mix64(crd::u64 z) noexcept
-{
-    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-    return z ^ (z >> 31);
-}
-
+// The BVH viewer's cache fingerprint: FNV-1a over the slider tuple (N, seed, world_size, max_box_size,
+// tree_kind), which the cache compares per frame to decide rebuild-or-reuse.
 [[nodiscard]] crd::u64 bvh_viewer_fingerprint(const GeometryShowcaseState& s) noexcept
 {
-    crd::u64 h = 0xCBF29CE484222325ULL; // FNV offset basis
-    h ^= mix64(static_cast<crd::u64>(s.bv_n) * 0x100000001B3ULL);
-    h ^= mix64(static_cast<crd::u64>(s.bv_seed) * 0xC4CEB9FE1A85EC53ULL);
     crd::u32 ws_bits = 0;
     crd::u32 mb_bits = 0;
     std::memcpy(&ws_bits, &s.bv_world_size, sizeof(ws_bits));
     std::memcpy(&mb_bits, &s.bv_max_box_size, sizeof(mb_bits));
-    h ^= mix64(static_cast<crd::u64>(ws_bits) * 0x9E3779B97F4A7C15ULL);
-    h ^= mix64(static_cast<crd::u64>(mb_bits) * 0xBF58476D1CE4E5B9ULL);
-    h ^= mix64(static_cast<crd::u64>(s.bv_tree_kind));
+    crd::u64 h = crd::fnv1a_64_le(s.bv_n, crd::kFnv1a64Offset);
+    h          = crd::fnv1a_64_le(s.bv_seed, h);
+    h          = crd::fnv1a_64_le(ws_bits, h);
+    h          = crd::fnv1a_64_le(mb_bits, h);
+    h          = crd::fnv1a_64_le(static_cast<crd::u8>(s.bv_tree_kind), h);
     if (h == 0)
     {
         h = 1; // 0 sentinel = "no cache"

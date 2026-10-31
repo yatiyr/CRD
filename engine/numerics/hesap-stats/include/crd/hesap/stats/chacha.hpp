@@ -5,6 +5,7 @@
 // (counter, key, nonce) ⇒ seekable + the determinism moat. Gated vs the RFC 8439 all-zero-key test vector.
 
 #include <crd/hesap/stats/bitgen.hpp> // rotl (u32 variant below)
+#include <crd/core/seed_generators.hpp>
 #include <crd/core/types.hpp>
 
 namespace crd::hesap::stats
@@ -18,11 +19,7 @@ public:
         crd::u64 s = seed;
         for (int i = 0; i < 4; ++i)
         {
-            s += 0x9E3779B97F4A7C15ULL;
-            crd::u64 z = s;
-            z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-            z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-            z ^= z >> 31;
+            const crd::u64 z = crd::splitmix64_next(s);
             m_key[2 * i] = static_cast<crd::u32>(z);
             m_key[2 * i + 1] = static_cast<crd::u32>(z >> 32);
         }

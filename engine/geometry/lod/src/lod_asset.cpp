@@ -36,11 +36,6 @@ void app_f32(crd::containers::String& o, crd::f32 v)
     app(o, buf);
 }
 
-void hash_u64(crd::u64& h, crd::u64 v) noexcept
-{
-    h ^= v + 0x9E3779B97F4A7C15ULL + (h << 6U) + (h >> 2U);
-}
-
 void hash_f32(crd::u64& h, crd::f32 v) noexcept
 {
     // ⛔ the BIT PATTERN, not the value: two policies that differ in the last ulp
@@ -49,7 +44,7 @@ void hash_f32(crd::u64& h, crd::f32 v) noexcept
     crd::u32 bits = 0;
     static_assert(sizeof(bits) == sizeof(v));
     std::memcpy(static_cast<void*>(&bits), static_cast<const void*>(&v), sizeof(bits));
-    hash_u64(h, bits);
+    h = crd::hash_combine(h, bits);
 }
 } // namespace
 
@@ -256,16 +251,16 @@ void write_lod_toml(const LodPolicy& policy, crd::containers::String& out)
 crd::u64 lod_policy_identity(const LodPolicy& policy) noexcept
 {
     crd::u64 h = crd::kFnv1a64Offset;
-    hash_u64(h, policy.extra_levels);
+    h = crd::hash_combine(h, policy.extra_levels);
     hash_f32(h, policy.boundary_weight);
     // ⛔ It changes the COOKED CHAIN — how many levels exist at all — so it changes the identity.
-    hash_u64(h, policy.min_triangles);
+    h = crd::hash_combine(h, policy.min_triangles);
     hash_f32(h, policy.min_extent_ratio);
     hash_f32(h, policy.min_area_ratio);
     hash_f32(h, policy.hysteresis);
     hash_f32(h, policy.dither_band);
-    hash_u64(h, policy.impostor_grid);
-    hash_u64(h, policy.impostor_tile);
+    h = crd::hash_combine(h, policy.impostor_grid);
+    h = crd::hash_combine(h, policy.impostor_tile);
     // ⛔ It changes WHICH LEVEL each view selects, so two policies differing only here are different assets.
     for (crd::u32 vb = 0; vb < kMaxLodLevels; ++vb)
     {

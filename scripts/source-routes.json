@@ -69,6 +69,7 @@
         "runtime/examples/bench_dtypes.cpp",
         "runtime/examples/bench_einsum.cpp",
         "runtime/examples/bench_elementwise.cpp",
+        "runtime/examples/bench_hash.cpp",
         "runtime/examples/bench_hyperopt.cpp",
         "runtime/examples/bench_hypothesis.cpp",
         "runtime/examples/bench_interp.cpp",

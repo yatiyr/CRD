@@ -1,6 +1,7 @@
 #pragma once
 
 #include <crd/core/fnv1a.hpp>
+#include <crd/core/seed_generators.hpp>
 #include <crd/core/types.hpp>
 
 #include <cstring>
@@ -13,19 +14,11 @@ namespace crd::containers
 // Bit mixers / byte hashers
 // -----------------------------------------------------------------------
 
-// splitmix64 finalizer with a non-zero seed mix.
-// The vanilla finalizer has 0 as a fixed point (hash(0) == 0), which is
-// ugly even though it's not a correctness issue. We XOR a constant first
-// so that hash_u64(0) is non-zero and well-distributed.
+// The SplitMix64 finalizer (crd-core's) after an XOR with the golden ratio: the bare finalizer has 0 as a fixed point
+// (hash(0) == 0), which is ugly even though it is not a correctness issue, so hash_u64(0) is non-zero.
 constexpr u64 hash_u64(u64 x) noexcept
 {
-    x ^= 0x9E3779B97F4A7C15ULL; // golden-ratio 64-bit constant
-    x ^= x >> 30;
-    x *= 0xbf58476d1ce4e5b9ULL;
-    x ^= x >> 27;
-    x *= 0x94d049bb133111ebULL;
-    x ^= x >> 31;
-    return x;
+    return splitmix64_mix(x ^ kGoldenRatio64);
 }
 
 // FNV-1a 64-bit, crd-core's (crd/core/fnv1a.hpp): stable across hosts and good enough for short keys (file paths,

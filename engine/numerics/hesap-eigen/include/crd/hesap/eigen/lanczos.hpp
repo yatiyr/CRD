@@ -15,6 +15,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/core/seed_generators.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/dense/blas1.hpp>
 #include <crd/hesap/dense/eig_sym.hpp>
@@ -32,14 +33,11 @@ namespace crd::hesap::eigen
 {
 namespace detail
 {
-// Deterministic SplitMix64 → a uniform value in [-1, 1). Pure function of (seed, i) ⇒ the moat start is
-// reproducible and thread-count independent.
+// Output i of the SplitMix64 stream seeded with `seed` → a uniform value in [-1, 1). Pure function of (seed, i) ⇒ the
+// moat start is reproducible and thread-count independent.
 template <typename R> [[nodiscard]] inline R splitmix_pm1(crd::u64 seed, crd::u32 i) noexcept
 {
-    crd::u64 z = seed + (static_cast<crd::u64>(i) + 1) * 0x9E3779B97F4A7C15ULL;
-    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-    z = z ^ (z >> 31);
+    const crd::u64 z = crd::splitmix64_at(seed, i);
     const R u = static_cast<R>(z >> 11) * (static_cast<R>(1) / static_cast<R>(1ULL << 53)); // [0,1)
     return static_cast<R>(2) * u - static_cast<R>(1);
 }
@@ -250,15 +248,15 @@ template <typename T>
         }
         // True residual ‖A·x − θ·x‖ / ‖x‖ (‖x‖ == 1).
         (void)a.apply({x.data(), n}, {ax.data(), n});
-        R rn = R{0};
+        R res_norm = R{0};
         for (crd::u32 i = 0; i < n; ++i)
         {
             const R d = static_cast<R>(ax[i]) - th * static_cast<R>(x[i]);
-            rn += d * d;
+            res_norm += d * d;
         }
-        rn = crd::math::sqrt(rn);
-        result.residuals[s] = rn;
-        if (rn <= tol * (crd::math::fabs(th) > R{1} ? crd::math::fabs(th) : R{1}))
+        res_norm = crd::math::sqrt(res_norm);
+        result.residuals[s] = res_norm;
+        if (res_norm <= tol * (crd::math::fabs(th) > R{1} ? crd::math::fabs(th) : R{1}))
         {
             ++nconv;
         }
