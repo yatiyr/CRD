@@ -472,7 +472,7 @@ CRD_FORCEINLINE void copy_row(const f32* src, f32* dst, u64 w) noexcept
 }
 
 // The staged image's layout (see Staged) for a convolution's images.
-Staged staged_layout(const NnConv2d& c, f32* stage) noexcept
+Staged staged_layout(const NnConv2d& c, const f32* stage) noexcept
 {
     const u64 rs = c.w_in + 10U;
     return {stage, rs, (c.h + 2U) * rs};
