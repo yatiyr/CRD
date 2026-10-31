@@ -106,10 +106,11 @@ each a `pending` entry or a listed review, all on OWN.1:
 | Capability → owner | Copies | Notes |
 |---|---|---|
 | hash.fnv1a → core | 33 engine files and 2 asset-cooker files, **moved** 2026-10-31 | see below; `sandbox`'s BVH-viewer fingerprint mixes the FNV constants into SplitMix64 and moves with the seed generators. |
-| hash.combine → core | `lod/lod_asset.cpp`, `scene/archetype_graph.hpp` | the golden-ratio combiner `h ^= v + 0x9E3779B97F4A7C15 + (h << 6) + (h >> 2)`, twice. |
-| random.seed-generators → core | 10 files | SplitMix64 in ceir, perf, hesap-eigen, three hesap-stats headers and containers' `hash_u64` finalizer; the MMIX LCG step in hesap-dense's SVD, hesap-fft's sparse FFT and hesap-iterative's IDR(s); bit-exact. |
+| hash.combine → core | `lod/lod_asset.cpp`, `scene/archetype_graph.hpp`, **moved** 2026-10-31 | the golden-ratio combiner `h ^= v + 0x9E3779B97F4A7C15 + (h << 6) + (h >> 2)`, twice; see below. |
+| random.seed-generators → core | 11 files and core's own workload probe, **moved** 2026-10-31 | SplitMix64 in ceir, perf, core, hesap-eigen, three hesap-stats headers, containers' `hash_u64` finalizer and the sandbox; the MMIX LCG step in hesap-dense's SVD, hesap-fft's sparse FFT and hesap-iterative's IDR(s); bit-exact, see below. |
 | cpu.kernel-dispatch → core | `math/libm.hpp` | reads `__AVX2__` and `__FMA__` to choose the FMA instruction; the choice moves behind a crd-core kernel-level macro. |
 | math.fixed-size-linear-algebra → math | `geometry-primitives/transform.hpp` | `det3` and the inverse-transpose; crd-math gains Mat2/Mat3 `determinant`, `inverse` and the 3x3 solve. By reading also: `circumcenter.hpp` and mesh-processing's `quadric.hpp` (Cramer's rule), which move onto the same routines with declared tolerances. |
+| io.durable-saves → platform | `perf/bundle.cpp` | crd-perf's `write_bundle_atomic` replaces a file durably by hand; it moves onto `durable_file.hpp` once crd-perf, which ships in the relocatable package, can link crd-platform. |
 | compression.codecs → compression (new) | resources' `deflate`, `crdr` zstd use | decision 1. |
 | numerics.signal-processing → hesap-dsp | `audio/audio_kernels.hpp` | designs its biquad with hesap-dsp's RBJ formulas but runs its own transposed direct-form II loop; the stateful section step belongs to hesap-dsp. |
 | geometry.robust-predicates | `hesap-interp/clough_tocher.hpp` `fast_orient` | a deliberate non-robust orientation for the walk with an exact fallback; it becomes geometry's or crd-math's cross product, not a second predicate. |
@@ -139,4 +140,28 @@ keys. Each site took the form that keeps its meaning:
   resources by `pass_param_id`; it now uses `pass_param_id`.
 - **Not a hash.** hesap-eigen's seeds stride by the prime (`seed + j * prime`) and take the owner's named constant;
   CKIR's hair kernel bakes `0x1000193` into a device hash with xxHash32 constants (allowed, decision 6).
+
+### The seed-generator and combiner move
+
+`crd/core/seed_generators.hpp` gives SplitMix64 in three forms and the MMIX step, all constant expressions:
+`splitmix64_mix` (the finalizer), `splitmix64_next` (the stateful generator: add the golden-ratio gamma, then mix),
+`splitmix64_at(seed, n)` (output `n` of the stream seeded with `seed`, directly) and `mmix_lcg_next`; `kGoldenRatio64`
+names the constant both SplitMix64 and the combiner use. `hash_combine` sits beside FNV-1a in `crd/core/fnv1a.hpp`
+(decision 7). The copies had four SplitMix64 shapes, each now a composition of the owner's forms with the same bits:
+
+- the stateful step (`stats::SplitMix64`, now the bit-generator form of `splitmix64_next`; ChaCha20's key expansion;
+  the sandbox's box generator);
+- one step from a value, `mix(x + gamma)` = `splitmix64_at(x, 0)` (CEIR's seeded input draws, crd-perf's fault draws,
+  crd-core's workload probe, the count-min sketch's row seeds);
+- output `i` of a stream, `mix(seed + (i + 1) * gamma)` = `splitmix64_at(seed, i)` (hesap-eigen's starting vectors);
+- the bare finalizer after an xor, `mix(x ^ gamma)` (containers' `hash_u64`, whose value at 0 is SplitMix64's first
+  output from seed 0, now a test).
+
+`test_seed_generators.cpp` (crd-core-tests) writes each shape out as the copies had it and compares it with the
+owner's composition over the edges and a 4096-value Weyl sweep of the 64-bit range, beside SplitMix64's published
+seed-0 stream (checked at compile time) and the MMIX step's wrap. The LOD policy identity (cooked) and the archetype
+mask hash fold through `hash_combine` with the same bits. The sandbox's BVH-viewer fingerprint, a runtime cache key,
+mixed FNV and SplitMix constants by hand and is now FNV-1a over the slider tuple. The before/after board
+(`runtime/examples/bench_hash.cpp`, through `ab-board.py`) times every moved function against the copy it replaced
+and covers the FNV-1a move as well.
 
