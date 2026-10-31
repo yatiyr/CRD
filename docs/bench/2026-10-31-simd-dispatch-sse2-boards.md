@@ -137,8 +137,10 @@ general code into the nn unit (`NnActF32`, `nn_act_rows`). Five interleaved roun
 | mlp and cnn rows (control) | 0.961 to 1.025 | 0.980 to 1.005 | 0.990 to 1.001 |
 
 The scalar-table call cost nothing measurable here: gelu's erf was never a table routine (Cephes in general code,
-no fma, the same call before and after), and tanh's and sigmoid's routines take 2.8 to 5.3 ns, so one call of about
-2 ns per element was mostly hidden. At sse2 and portable the exact fma emulation (40 calls of the integer `fma` per
+no fma, the same call before and after), and the indirect call before tanh's and sigmoid's routines measured within
+noise, unlike the Gamma probe's 2 ns (four calls inside a short constructor). No pre-row act row exists, so the
+comparison is before and after the move; the after-move avx2 loop is pre-row's shape (the inline bodies at AVX2). The
+sse2 and portable rows run the same scalar loop, so there is no sse2 body to judge against `portable@sse2`. At sse2 and portable the exact fma emulation (40 calls of the integer `fma` per
 sigmoid or tanh element) takes 130 to 150 ns, the SSE2 floor's price for bits identical to every other level.
 `objdump` of the release binary: the avx2, sse2 and portable `act_rows` call no scalar-table routine.
 

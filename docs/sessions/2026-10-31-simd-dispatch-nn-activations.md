@@ -45,11 +45,14 @@ spans). Before: [the Student-t sum and the scalar table](2026-10-31-simd-dispatc
 ## A local event
 
 Under `ctest -j 8`, the permute region case failed twice in about 85 runs of the same binary, once at the detected
-level and once in the forced avx2 arm (signature: `avx2+avx-vnni Complex<f32> na 16 nb 40 sa 1 sb 0 tiles 64x64
-alpha -0.5+0.25i stream 1 next 1 lead 0`, 8 scalars off). The case is single-threaded, its inputs fixed and its
+level (its output was not kept: the rerun overwrote the log) and once in the forced avx2 arm (signature:
+`avx2+avx-vnni Complex<f32> na 16 nb 40 sa 1 sb 0 tiles 64x64 alpha -0.5+0.25i stream 1 next 1 lead 0`, 8 scalars
+off). The case is single-threaded, its inputs fixed and its
 buffers fully initialised, and its stores are fenced; 60 six-wide reruns and three full sets passed. The TSan host
-check (20 rounds) recorded 0 events, which the 2026-10-26 note says does not expose this host's fault; push run
-41167488972 ran the case on every hosted lane and level, green. Recorded per the host lesson, not chased as code.
+check (20 rounds) recorded 0 events, which the 2026-10-26 note says does not expose this host's fault. The forced
+level arms run this case on every lane at every push, so a code defect at this rate would have shown there; push run
+41167488972 ran it on every hosted lane and level, green. Recorded per the host lesson, not chased as code; a hosted
+failure of this case is a code defect and goes first.
 
 ## Left
 
