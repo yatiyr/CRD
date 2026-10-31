@@ -50,6 +50,7 @@ the offline and real-time forms are genuinely different systems (as hair does).
 
 ## Index
 
+- [Workspace sync](workspace-sync.md) — the operator's daily NAS sync, an export for a friend and a restore on a new machine; what the NAS receives and how it is protected.
 - [Setting up the Cerid CI platform](ci-platform-setup.md) — the user's four steps (project, billing, budget, go) and the operator's idempotent runbook (APIs, buckets, budget stop, identities, network, launcher, images, the IAP-tunnel UI) for ADR-0135, then the optional pieces.
 - [Operating the Cerid CI platform](ci-platform-runbooks.md) — SLOs and runbooks: stuck build, lost VM, budget hit, coordinator down, flaky quarantine, first bad commit, upgrade, backup and disaster recovery.
 - [Argument reduction for crd::math's log and trig](2026-10-29-scalar-log-and-trig-reduction.md) — log's carried quotient and exact head sum (≤0.52 ulp) and Payne–Hanek past Cody-Waite's exact range.

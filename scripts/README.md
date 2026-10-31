@@ -26,6 +26,12 @@ Run commands from the repository root. Build/test rules and exact quality requir
   contracts: `test-module-selection.py` ([design](../docs/design/module-registry.md)); CI tier mapping,
   resolution and lane evidence: `check-ci-tiers.py`, `ci-tier.py`, `ci-evidence.py`
   ([design](../docs/design/ci-tiers.md)).
+- Workspace ([recipe](../docs/recipes/workspace-sync.md), [ADR-0136](../docs/decisions/0136-workspace-overlay.md)):
+  `workspace.py sync|status|export|restore|verify|overlay` keeps the agent overlay (`.agent-overlay/`: CLAUDE.md,
+  opencode.json, `.claude/`, `.codex/`, `.agent/`) beside the code repository, writes verified Git bundles, pinned
+  tool archives and exports to the NAS folder under a lock, pushes code to the code hosts after refusing agent
+  files, transcripts and secret shapes, exports a self-restoring archive (portable settings by default,
+  `--include-local-settings` for an owner copy) and restores the whole workspace on any machine; `test-workspace.py`.
 - Native Visual Studio: `project-sync.py open --preset win-vs-debug` starts saved structure synchronization.
   `status`, `stop`, `sync` preview and `edit --operations <json> --apply --regenerate` share one portable transaction path.
   Read [structure/recovery](../docs/design/project-structure-sync.md) before module moves or Remove/Delete operations.

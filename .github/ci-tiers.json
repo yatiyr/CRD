@@ -53,8 +53,7 @@
   "classes": [
     {"name": "register", "tier": "complete", "patterns": ["docs/third-party-defects.md"]},
     {"name": "documentation", "tier": "preflight",
-     "patterns": ["docs/**", "**/*.md", ".vscode/**", ".natvis", ".clang-format", ".gitattributes", ".gitignore",
-                  "opencode.json"]},
+     "patterns": ["docs/**", "**/*.md", ".vscode/**", ".natvis", ".clang-format", ".gitattributes", ".gitignore"]},
     {"name": "build-system", "tier": "complete",
      "patterns": [".github/**", "ci/**", "CMakeLists.txt", "CMakePresets.json", "cmake/**", "scripts/**",
                   "tests/CMakeLists.txt", ".clang-tidy"]},

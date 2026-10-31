@@ -75,6 +75,14 @@ The hosted workflow is GitHub Actions ([ci.yml](.github/workflows/ci.yml)), with
 ([ADR-0135](docs/decisions/0135-cerid-ci-platform.md), [CI platform](docs/design/ci-platform.md), rows CI-0 to CI-4);
 GitHub Actions remains the qualifying CI until CI-4 shows parity.
 
+## Workspace
+
+This repository holds the code and every document; GitLab is its code host and mirrors it to GitHub. AI-agent files
+(CLAUDE.md, opencode.json, `.claude/`, `.codex/` and the Claude Code memory) are not part of it: they live in a
+separate agent overlay kept only on the maintainer's NAS, and `python scripts/workspace.py` syncs, exports and
+restores the whole workspace on any machine ([workspace sync](docs/recipes/workspace-sync.md),
+[ADR-0136](docs/decisions/0136-workspace-overlay.md)).
+
 ## Where work is tracked
 
 - [ROADMAP](docs/ROADMAP.md) is the only live tracker: one ordered master table of slices, bugs and findings. Its

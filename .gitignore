@@ -55,9 +55,19 @@ __pycache__/
 .ruff_cache/
 .venv/
 
-# Local tool state and secrets. AGENTS/CLAUDE/context/MEMORY remain versioned.
+# Agent tool files live only in the NAS agent overlay (scripts/workspace.py, docs/recipes/workspace-sync.md);
+# the code hosts never receive them. Every document (AGENTS, MEMORY, context, START_HERE, docs/) stays versioned.
+/CLAUDE.md
+/CLAUDE.local.md
+/opencode.json
+/.mcp.json
 /.claude/
 /.codex/
+/.agents/
+/.agent/
+/.agent-overlay/
+
+# Secrets.
 .env
 .env.local
 .env.*.local

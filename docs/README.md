@@ -24,18 +24,18 @@ Every human/agent starts at [START_HERE](../START_HERE.md). [Context](../context
 | Cross-domain qualification and task closure | [Quality contract](design/system-quality-contract.md) |
 | Source owner, dependencies, public API | [Systems/source map](systems/README.md) |
 | Contribute a module, fix, asset/program or build change; publication handoff | [Contribution routes](CONTRIBUTING.md) |
+| Agent files, NAS sync, new machine | [Workspace sync](recipes/workspace-sync.md) |
 | Specific implementation plan or decision | Row's link; reverse lookup in [design](design/README.md) or [ADRs](decisions/README.md) |
 | Prior lesson or matching failure | [MEMORY](../MEMORY.md); query one record |
 | What actually ran or was measured | Linked [session](sessions/), [benchmark](bench/README.md) or [recipe](recipes/README.md) |
-| Old requirements or dated implementation examples | [Archive](archive/README.md), [phase](phases/README.md) and [detour](detours/README.md) pointers |
+| Old requirements or dated examples | [Archive](archive/README.md), [phase](phases/README.md) and [detour](detours/README.md) pointers |
 
-Useful commands from the repository root:
+Commands (repository root):
 
 ```powershell
 python scripts/check-master-plan.py --next
 python scripts/check-master-plan.py --slice RAH-1
 python scripts/check-master-plan.py --find reload
-python scripts/check-master-plan.py --find A24
 python scripts/check-master-plan.py --memory stale_exe
 python scripts/check-master-plan.py
 python scripts/check-docs.py

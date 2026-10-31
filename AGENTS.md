@@ -6,9 +6,9 @@
 **Purpose:** build Cerid as a modular, authorable C++20 engine/application substrate. Real-time and offline
 rendering, games, engineering tools and later scientific/creative applications share public modules.
 
-## Start here — same process for every tool or model
+## Start here — one process for every tool
 
-Universal entry: [START_HERE](START_HERE.md), one route and one plan for every agent.
+Universal entry: [START_HERE](START_HERE.md).
 
 1. Read this file, [PRINCIPLES](docs/PRINCIPLES.md), [SANITY](docs/SANITY.md) and [MEMORY](MEMORY.md).
 2. Read [context](context.md) for the current pointer. Find that exact ID in [ROADMAP](docs/ROADMAP.md).
@@ -17,8 +17,8 @@ Universal entry: [START_HERE](START_HERE.md), one route and one plan for every a
    also read [KERNEL-CRUSH-MANDATE](docs/KERNEL-CRUSH-MANDATE.md) and [crush playbook](docs/hints/crush-playbook.md).
 5. State the task's purpose, exact slice, full deliverable and verification scope before acting.
 
-Continue within the user's current request and existing authorization; ask only when scope or requirements are
-genuinely unresolved or a design gate is unaccepted. Never invent approval or tool results.
+Continue within the user's request and authorization; ask only when scope or requirements are genuinely
+unresolved or a design gate is unaccepted. Never invent approval or tool results.
 
 ## One owner for each fact
 
@@ -26,8 +26,8 @@ genuinely unresolved or a design gate is unaccepted. Never invent approval or to
   owning row there. Only context carries the current pointer; it does not duplicate row status.
 - ADRs and design notes define contracts; source code determines implementation facts. Sessions, benches, recipes
   and archives preserve dated evidence; old Next lists, status and loop grants have no live authority.
-- Read the active contract and its evidence, not whole archives. [Documentation workflow](docs/README.md)
-  explains lookup, bug handling and close-out.
+- Read the active contract and its evidence, not whole archives; [docs workflow](docs/README.md) covers lookup,
+  bugs and close-out.
 - If sources conflict: report the exact conflict, follow the latest applicable user decision and correct the stale
   document. An unaccepted proposal is not a decision. Historical measurements are never rewritten.
 
@@ -49,7 +49,7 @@ genuinely unresolved or a design gate is unaccepted. Never invent approval or to
   unrelated files to simplify a diff.
 - Work directly; do not delegate on your own initiative. Workflows and parallel agents run only by user order, each
   in its own worktree and branch with an explicit file scope; verify any delegated claim before relying on it. Use
-  the `advisor` for non-trivial plans when available; never claim a review that did not run.
+  the `advisor` for non-trivial plans; never claim a review that did not run.
 - Describe facts, evidence and uncertainty plainly. Do not call something broken until the harness is verified
   (SANITY #11); a source concern is not a reproduced failure.
 - Settled follow-ons with a real consumer ship with their slice; speculative design waits as a ROADMAP row.
@@ -70,7 +70,7 @@ genuinely unresolved or a design gate is unaccepted. Never invent approval or to
 - Fulfil the entire row, its children and inherited contract: public behaviour, error paths, authored assets,
   persistence/reload and backend evidence; cooking alone is insufficient.
 - Keep warnings zero. Match surrounding hand formatting; **do not run `clang-format -i`**. Run the LLVM-20
-  incremental tidy helper on changed C++ and confirm it parsed them. Commands: BUILDING.
+  incremental tidy helper on changed C++ and confirm it parsed them (BUILDING).
 - **CI first:** each item starts by reading the completed CI runs and fixing their failures. Locally build and test
   only changed targets and affected consumers on one primary configuration, plus scoped guards and tidy; CI runs the
   full matrix. Never run full local sweeps; preserve oracles, nonzero test counts, real exit codes and timeouts.
@@ -89,6 +89,8 @@ genuinely unresolved or a design gate is unaccepted. Never invent approval or to
 - The serial roadmap workflow commits and pushes each finished item to `main` (user authorization, 2026-10-06).
   A parallel agent commits on its own branch, rebases on `origin/main` before each push and never pushes `main`.
   Any other agent proposes the commit message and the user commits.
+- Agent files live only in the NAS [overlay](docs/recipes/workspace-sync.md); code pushes go to GitLab, which
+  mirrors to GitHub.
 - Windows uses PowerShell. Use `rg` for searches, UTF-8 for text, absolute paths for executables, and verify
   deletion/move targets stay inside the intended directory. Never overwrite HOME/CODEX_HOME.
 - Source/project structure changes follow the [synchronizer contract](docs/design/project-structure-sync.md);

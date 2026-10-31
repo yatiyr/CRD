@@ -7,7 +7,7 @@ Portable lessons; [context](context.md) owns current work. Entry: [START_HERE](S
 
 ## Read only what the task needs
 
-- Commits, CI first, downloads, busy-host boards → [AGENTS](AGENTS.md#conduct--mandatory).
+- Commits, CI first, downloads, busy-host boards, the NAS overlay → [AGENTS](AGENTS.md#conduct--mandatory).
 - Earliest unfinished work; explicit user overrides; retain CI waits while continuing → [order](docs/ROADMAP.md#strict-sequential-execution).
 - Scoped local checks, the CI matrix → [BUILDING](docs/BUILDING.md#fast-local-workflow--one-primary-configuration).
 - Native VS configuration names require matching flags, headers, CRT and ISA; presets own the matrix →

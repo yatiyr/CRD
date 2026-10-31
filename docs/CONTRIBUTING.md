@@ -115,3 +115,7 @@ workflow's tier resolver decides from the changed paths whether a push runs the 
 and `Needs CI` rows carry the local evidence until the published run is green, after which they become Done or
 Recorded with that run as evidence. A red lane preempts slice work: its diagnosis and repair come first. No purchase, runner registration or publication
 setting is inferred from a quality goal ([research](research/2026-09-12-large-cpp-development-and-ci.md#documentation-and-ownership)).
+Code pushes go to GitLab, which mirrors to GitHub. The maintainer's `python scripts/workspace.py sync`
+writes the code and the agent overlay to the NAS; agent files (CLAUDE.md, opencode.json, `.claude/`,
+`.codex/`, Claude memory) never enter a code commit
+([workspace sync](recipes/workspace-sync.md), [ADR-0136](decisions/0136-workspace-overlay.md)).

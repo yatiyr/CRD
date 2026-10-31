@@ -46,7 +46,8 @@ research. Preserve historical evidence instead of rewriting it as a new result. 
 Use [BUILDING's local/CI decision table](docs/BUILDING.md#fast-local-workflow--one-primary-configuration), not every
 local configuration/platform. Run the documentation validator. Record unavailable hardware/configurations
 as unqualified, with an owning gate; do not turn an emitter, schema, compile or mock into a runtime support claim.
-Commits and pushes follow [AGENTS](AGENTS.md#git-and-workspace); each item starts by reading completed CI runs.
+Commits, pushes, the NAS agent [overlay](docs/recipes/workspace-sync.md) follow
+[AGENTS](AGENTS.md#git-and-workspace); each item starts by reading completed CI runs.
 
 ```powershell
 python scripts/check-master-plan.py --next
