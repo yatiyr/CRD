@@ -33,14 +33,14 @@ double lanczos_lgamma(double x) noexcept
         return kInf; // the poles 0, -1, -2, ... and -inf
     }
     const double s = crd::math::abs(crd::math::sin(kPi * x));
-    return kLnPi - crd::math::crd_log1(s) - lanczos_lgamma_half(1.0 - x);
+    return kLnPi - crd::math::log(s) - lanczos_lgamma_half(1.0 - x);
 }
 
 double lanczos_tgamma(double x) noexcept
 {
     if (lanczos_in_half(x))
     {
-        return crd::math::crd_exp1(lanczos_lgamma_half(x));
+        return crd::math::exp(lanczos_lgamma_half(x));
     }
     if (x == kInf || crd::math::libm::is_nan(x))
     {
@@ -52,14 +52,14 @@ double lanczos_tgamma(double x) noexcept
     }
     if (x > 0.0)
     {
-        return crd::math::crd_exp1(lanczos_lgamma(x)); // 0 < x < 0.5: Gamma > 0
+        return crd::math::exp(lanczos_lgamma(x)); // 0 < x < 0.5: Gamma > 0
     }
     if (x == crd::math::floor(x))
     {
         return std::numeric_limits<double>::quiet_NaN(); // the poles -1, -2, ... and -inf
     }
     const double s = crd::math::sin(kPi * x);
-    return kPi / (s * crd::math::crd_exp1(lanczos_lgamma_half(1.0 - x)));
+    return kPi / (s * crd::math::exp(lanczos_lgamma_half(1.0 - x)));
 }
 
 } // namespace crd::hesap::special::detail

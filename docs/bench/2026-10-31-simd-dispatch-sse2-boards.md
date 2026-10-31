@@ -104,6 +104,23 @@ divisions per four elements against pre-row's 45 and two; with the divisions equ
 the carried rounding and the exact head sum that took log from 7 ulp to 0.52 (the attempt's model: 0.511 against
 0.516 ulp). Accepted under the 2026-10-30 rule. Logs and disassemblies: `~/stt-board` in WSL.
 
+### The scalar table
+
+2026-10-31, [session](../sessions/2026-10-31-simd-dispatch-student-t-log.md#the-scalar-table). General code of an
+x64 build calls the 23 fma-bearing scalar transcendentals through crd-math's scalar table (portable and avx2 bodies,
+ADR-0134 §5) instead of a C library fma call per fma. Five interleaved rounds as above (13.2 of 63.7 GiB available,
+other processes 0.7 cores), binaries `c1e226c5`, `722437e0` and `60fbb6f1` (the table), ns per call:
+
+| arm | pre-row | HEAD | table | HEAD over table |
+|---|---|---|---|---|
+| Gamma, avx2 | 10.9 [10.5-11.7] | 95.1 [88.0-96.4] | 27.8 [25.5-28.1] | 3.45 [3.39-3.47] |
+| Gamma, sse2 | | 445 [432-470] | 430 [420-466] | 1.012 [0.955-1.121] |
+
+Pre-row over the table 0.414 [0.375-0.426]: four logs a call, each a call of about 2 ns (a probe: 13.0 to 13.3 ns
+for a log and a digamma through a call, 9.0 compiled at avx2), and the 0.52 ulp log. Normal and Student-t unchanged.
+Accepted under the 2026-10-30 rule: the call is the SSE2 floor's price, the rest the log's accuracy. Logs:
+`~/stt-board/board-table.log`.
+
 ## sse2 and sse4.2 bodies against the portable loop
 
 `portable@sse2` ms over `sse2@sse2` ms, above 1 the sse2 body faster:

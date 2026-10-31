@@ -79,12 +79,19 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    body, with baseline code or another level. The crd-math SIMD types follow the unit's level, not a global macro;
    raw `__AVX2__` tests go. Headers shared with kernel units call no inline function of the standard library
    (`crd/math/libm.hpp`); the scalar `crd::math` surface (select, the exp/log, trig, power and hyperbolic families) is
-   one and lives in the level namespace (amended 2026-10-28). A carrier whose register layout follows the level (the
-   forward jets, `JetPackD`) lives in the level namespace, and a functor over it runs at the level of the unit that
-   instantiates it: general code at the baseline, a module's kernel family at each level (hesap-autodiff's canned
-   gradients); a caller's jets and the code evaluating them are one unit, no cooked data holds a jet, and no generic jet
-   workspace ABI exists until a second consumer needs one (amended 2026-10-28). Layout constants that reach data
-   (`kNativeLaneWidth` for AoSoA) become level-independent, so one binary and its cooked data agree on every level.
+   one and lives in the level namespace (amended 2026-10-28). General code of an x64 build without FMA calls the 23
+   f64 routines of those families whose bodies run fma (the exp and log families, sin, cos, sincos, tan, atan, atan2,
+   asin, acos, pow and the hyperbolics; the f32 overloads round them) through crd-math's scalar table, built at
+   portable and avx2: one indirect call per routine, as glibc's own libm selects its FMA bodies, where baseline code
+   would call the C library's fma for every fma (the Gamma gradient 88.6 ns against the pre-row engine's 10.9, 26.5
+   with the table; a call costs about 2 ns against the inline body) (amended 2026-10-31,
+   [session](../sessions/2026-10-31-simd-dispatch-student-t-log.md#the-scalar-table)). A carrier whose register
+   layout follows the level (the forward jets, `JetPackD`) lives in the level namespace, and a functor over it runs at
+   the level of the unit that instantiates it: general code at the baseline, a module's kernel family at each level
+   (hesap-autodiff's canned gradients); a caller's jets and the code evaluating them are one unit, no cooked data holds
+   a jet, and no generic jet workspace ABI exists until a second consumer needs one (amended 2026-10-28). Layout
+   constants that reach data (`kNativeLaneWidth` for AoSoA) become level-independent, so one binary and its cooked
+   data agree on every level.
    Dispatch is one indirect call per kernel invocation at the routine level (a whole GEMM panel loop), never per
    microkernel (ADR-0088's measured loss). Each table is resolved
    once from `cpu_selection()` (the last whose level the selection and the build's cap include and whose features

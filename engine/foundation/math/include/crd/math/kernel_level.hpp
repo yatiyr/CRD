@@ -68,6 +68,15 @@
 #define CRD_KERNEL_TABLE_NAME(base, level) CRD_KERNEL_TABLE_JOIN(base, level)
 #define CRD_KERNEL_TABLE(base) CRD_KERNEL_TABLE_NAME(base, CRD_KERNEL_LEVEL_SUFFIX)
 
+// 1 in general code of an x64 build without FMA: the scalar transcendental families reach their bodies through
+// crd-math's scalar table (crd/math/scalar_kernels.hpp), so a CPU with FMA runs them with the instruction inline.
+#if !defined(CRD_KERNEL_LEVEL) && (defined(__x86_64__) || (defined(_M_X64) && !defined(_M_ARM64EC))) &&                \
+    !defined(__FMA__) && !defined(__AVX2__)
+#define CRD_MATH_SCALAR_DISPATCH 1
+#else
+#define CRD_MATH_SCALAR_DISPATCH 0
+#endif
+
 // Whether a family's mask of built levels (CRD_KERNELS_<FAMILY>, defined on the owning archive by
 // crd_add_cpu_kernels; bit n is CpuLevel n) holds a level: CRD_KERNEL_BUILT(CRD_KERNELS_FLOAT_CONVERT, AVX2).
 #define CRD_KERNEL_BUILT(mask, level) ((((mask) >> CRD_KERNEL_LEVEL_##level) & 1) != 0)

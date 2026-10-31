@@ -13,9 +13,10 @@
 // gen→mpmath-gate→golden-determinism test entry. Kernel units include the family too, so it lives in the unit's level
 // namespace (ADR-0134 §5).
 
-#include <crd/math/exp_log_core.hpp> // crd_exp1 / crd_log1, the scalar cores
-#include <crd/math/libm.hpp>         // edge fallbacks ONLY (NaN/Inf/subnormal/huge)
-#include <crd/math/trig.hpp>         // crd::math::sin/cos/sincos/tan (the trig family)
+#include <crd/math/exp_log_core.hpp>   // crd_exp1 / crd_log1, the scalar cores
+#include <crd/math/libm.hpp>           // edge fallbacks ONLY (NaN/Inf/subnormal/huge)
+#include <crd/math/scalar_kernels.hpp> // the routines general code calls through a table
+#include <crd/math/trig.hpp>           // crd::math::sin/cos/sincos/tan (the trig family)
 
 namespace crd::math::inline CRD_MATH_LEVEL_NS
 {
@@ -38,6 +39,7 @@ inline constexpr double kQ7 = 2.48015683892776966e-05, kQ8 = 2.75572658065231532
 inline constexpr double kQ9 = 2.75740743827247530e-07, kQ10 = 2.51013627883170904e-08;
 inline constexpr double kQ11 = 1.55781323301372000e-09;
 
+#if !CRD_MATH_SCALAR_DISPATCH // general code of an x64 build without FMA calls the scalar table instead
 // ───────────────────────── exp family ─────────────────────────
 [[nodiscard]] inline double exp(double x) noexcept { return crd_exp1(x); }
 
@@ -189,5 +191,7 @@ inline constexpr double kQ11 = 1.55781323301372000e-09;
 [[nodiscard]] inline float log2(float x) noexcept { return static_cast<float>(log2(static_cast<double>(x))); }
 [[nodiscard]] inline float log10(float x) noexcept { return static_cast<float>(log10(static_cast<double>(x))); }
 [[nodiscard]] inline float log1p(float x) noexcept { return static_cast<float>(log1p(static_cast<double>(x))); }
+
+#endif
 
 } // namespace crd::math::inline CRD_MATH_LEVEL_NS

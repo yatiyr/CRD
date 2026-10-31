@@ -1,19 +1,25 @@
-// SIMD-DISPATCH (ADR-0134 §5, §7, §8): which kernel level a process selects, which levels the build compiles, and the
-// batch small-float conversions of every level the host executes against the scalar converts, bit for bit. The
-// [kernels] cases also run once per compiled level with CRD_CPU_LEVEL forcing the selection (CMakeLists.txt).
+// SIMD-DISPATCH (ADR-0134 §5, §7, §8): which kernel level a process selects, which levels the build compiles, the
+// batch small-float conversions of every level the host executes against the scalar converts, bit for bit, and the
+// scalar transcendental table of every such level against portable's. The [kernels] cases also run once per compiled
+// level with CRD_CPU_LEVEL forcing the selection (CMakeLists.txt).
 
 #include "kernel_levels.hpp"
+#include "nan_aside.hpp"
+#include "transcendental_refs.inc" // crd::math::txref::ref_<fn>_x
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/math/float_convert.hpp>
 #include <crd/math/kernel_dispatch.hpp>
+#include <crd/math/scalar_dispatch.hpp>
 
 #include <bit>
 #include <catch2/catch_test_macros.hpp>
+#include <type_traits>
 
 using crd::CpuLevel;
 using crd::math::FloatConvertKernels;
 using crd::math::KernelLevel;
+using crd::math::ScalarMathKernels;
 
 namespace
 {
@@ -313,4 +319,175 @@ TEST_CASE("float conversion kernels: the process runs the level its CPU selectio
                                                                           crd::math::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
     CHECK(crd::cpu_level_includes(crd::math::kernel_level_cap(), chosen.level));
+}
+
+// The scalar transcendental table (crd/math/scalar_kernels.hpp): every level the host runs returns portable's bits,
+// NaN payloads aside, for every routine over the mpmath grids, the IEEE specials and random doubles. Its accuracy is
+// gated through the public functions (test_transcendental.cpp), which general code of an x64 build reaches through the
+// selected table.
+namespace
+{
+
+// Signed zeros, the subnormal and normal edges, +-1, the largest finites, infinities, NaNs (quiet, signalling, with a
+// payload), the log seams at sqrt(2) and sqrt(1/2), exp's overflow and underflow edges and pi.
+constexpr crd::u64 kDoubleSpecials[] = {
+    0x0000000000000000ULL, 0x8000000000000000ULL, 0x0000000000000001ULL, 0x800FFFFFFFFFFFFFULL, 0x0010000000000000ULL,
+    0x3FF0000000000000ULL, 0xBFF0000000000000ULL, 0x7FEFFFFFFFFFFFFFULL, 0xFFEFFFFFFFFFFFFFULL, 0x7FF0000000000000ULL,
+    0xFFF0000000000000ULL, 0x7FF8000000000000ULL, 0xFFF8000000000001ULL, 0x7FF0000000000001ULL, 0x3FE0000000000000ULL,
+    0x4086232BDD7ABCD2ULL, 0xC0874910D52D3051ULL, 0x3FF6A09E667F3BCDULL, 0x3FE6A09E667F3BCCULL, 0x400921FB54442D18ULL,
+};
+
+// Every grid of transcendental_refs.inc, the specials and random bit patterns over the whole double range.
+const double* scalar_inputs(crd::usize& n)
+{
+    namespace r = crd::math::txref;
+    static double xs[40000];
+    static crd::usize count = 0;
+    if (count == 0U)
+    {
+        const auto add = [&](const double* g, int m)
+        {
+            for (int i = 0; i < m; ++i)
+            {
+                xs[count++] = g[i];
+            }
+        };
+        add(r::ref_exp_x, r::ref_exp_n);
+        add(r::ref_exp2_x, r::ref_exp2_n);
+        add(r::ref_exp10_x, r::ref_exp10_n);
+        add(r::ref_expm1_x, r::ref_expm1_n);
+        add(r::ref_log_x, r::ref_log_n);
+        add(r::ref_log1p_x, r::ref_log1p_n);
+        add(r::ref_sin_x, r::ref_sin_n);
+        add(r::ref_sin_large_x, r::ref_sin_large_n);
+        add(r::ref_sinh_x, r::ref_sinh_n);
+        add(r::ref_asinh_x, r::ref_asinh_n);
+        add(r::ref_acosh_x, r::ref_acosh_n);
+        add(r::ref_atanh_x, r::ref_atanh_n);
+        add(r::ref_atan_x, r::ref_atan_n);
+        add(r::ref_asin_x, r::ref_asin_n);
+        add(r::ref_pow_x, r::ref_pow_n);
+        add(r::ref_pow_p, r::ref_pow_n);
+        for (const crd::u64 bits : kDoubleSpecials)
+        {
+            xs[count++] = std::bit_cast<double>(bits);
+        }
+        crd::u64 state = 0x5CA1A2D15EA5EULL;
+        while (count < sizeof(xs) / sizeof(xs[0]))
+        {
+            const crd::u64 hi = next_pattern(state);
+            xs[count++] = std::bit_cast<double>((hi << 32U) | next_pattern(state));
+        }
+    }
+    n = count;
+    return xs;
+}
+
+// Disagreements of one level's routine with portable's over the inputs (one argument) or input pairs (two).
+template <typename Level, typename Portable> crd::usize scalar_mismatches(Level level, Portable portable)
+{
+    crd::usize n = 0;
+    const double* xs = scalar_inputs(n);
+    crd::usize bad = 0;
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        if constexpr (std::is_invocable_v<Level, double, double>)
+        {
+            const double y = xs[(i * 7919U + 13U) % n];
+            bad += crd::test::same_bits_nan_aside(level(xs[i], y), portable(xs[i], y)) ? 0U : 1U;
+        }
+        else
+        {
+            bad += crd::test::same_bits_nan_aside(level(xs[i]), portable(xs[i])) ? 0U : 1U;
+        }
+    }
+    return bad;
+}
+
+} // namespace
+
+TEST_CASE("scalar transcendental kernels: the archive holds portable and avx2 where the build compiles it",
+          "[math][kernels]")
+{
+    const auto levels = crd::math::scalar_math_levels();
+    REQUIRE(!levels.empty());
+    CHECK(levels[0].level == CpuLevel::Portable);
+    const bool x64 = crd::cpu_selection().arch == crd::CpuArch::X64;
+    const bool avx2 = x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx2);
+    REQUIRE(levels.size() == (avx2 ? 2U : 1U));
+    CHECK(levels[0].table == &crd::math::kScalarMathKernelsPortable);
+    CHECK(levels.back().level == (avx2 ? CpuLevel::Avx2 : CpuLevel::Portable));
+    CHECK(levels.back().table != nullptr);
+}
+
+TEST_CASE("scalar transcendental kernels: every level the host runs gives portable's bits", "[math][kernels]")
+{
+    const ScalarMathKernels& p = *crd::math::scalar_math_levels()[0].table;
+    crd::usize ran = 0;
+    for (const KernelLevel<ScalarMathKernels>& level : crd::math::scalar_math_levels())
+    {
+        if (!crd::test::kernel_level_runs_here(level))
+        {
+            continue;
+        }
+        ++ran;
+        const ScalarMathKernels& k = *level.table;
+        INFO("level " << crd::cpu_level_name(level.level));
+        CHECK(scalar_mismatches(k.exp, p.exp) == 0U);
+        CHECK(scalar_mismatches(k.exp2, p.exp2) == 0U);
+        CHECK(scalar_mismatches(k.exp10, p.exp10) == 0U);
+        CHECK(scalar_mismatches(k.expm1, p.expm1) == 0U);
+        CHECK(scalar_mismatches(k.log, p.log) == 0U);
+        CHECK(scalar_mismatches(k.log2, p.log2) == 0U);
+        CHECK(scalar_mismatches(k.log10, p.log10) == 0U);
+        CHECK(scalar_mismatches(k.log1p, p.log1p) == 0U);
+        CHECK(scalar_mismatches(k.sin, p.sin) == 0U);
+        CHECK(scalar_mismatches(k.cos, p.cos) == 0U);
+        CHECK(scalar_mismatches(k.tan, p.tan) == 0U);
+        CHECK(scalar_mismatches(k.atan, p.atan) == 0U);
+        CHECK(scalar_mismatches(k.atan2, p.atan2) == 0U);
+        CHECK(scalar_mismatches(k.asin, p.asin) == 0U);
+        CHECK(scalar_mismatches(k.acos, p.acos) == 0U);
+        CHECK(scalar_mismatches(k.pow, p.pow) == 0U);
+        CHECK(scalar_mismatches(k.sinh, p.sinh) == 0U);
+        CHECK(scalar_mismatches(k.cosh, p.cosh) == 0U);
+        CHECK(scalar_mismatches(k.tanh, p.tanh) == 0U);
+        CHECK(scalar_mismatches(k.asinh, p.asinh) == 0U);
+        CHECK(scalar_mismatches(k.acosh, p.acosh) == 0U);
+        CHECK(scalar_mismatches(k.atanh, p.atanh) == 0U);
+        const auto sin_of = [](const ScalarMathKernels& t)
+        {
+            return [&t](double x)
+            {
+                double s = 0.0;
+                double c = 0.0;
+                t.sincos(x, s, c);
+                return s;
+            };
+        };
+        const auto cos_of = [](const ScalarMathKernels& t)
+        {
+            return [&t](double x)
+            {
+                double s = 0.0;
+                double c = 0.0;
+                t.sincos(x, s, c);
+                return c;
+            };
+        };
+        CHECK(scalar_mismatches(sin_of(k), sin_of(p)) == 0U);
+        CHECK(scalar_mismatches(cos_of(k), cos_of(p)) == 0U);
+    }
+    CHECK(ran >= 1U); // portable runs everywhere
+}
+
+TEST_CASE("scalar transcendental kernels: the process runs the level its CPU selection resolves", "[math][kernels]")
+{
+    const crd::CpuSelection& s = crd::cpu_selection();
+    const auto levels = crd::math::scalar_math_levels();
+    const KernelLevel<ScalarMathKernels>& chosen = crd::math::scalar_math_level();
+    INFO("selected " << crd::cpu_level_name(s.selected) << ", running " << crd::cpu_level_name(chosen.level));
+    CHECK(&chosen == &crd::math::select_kernel_level<ScalarMathKernels>(levels, s.selected, s.kernel_features,
+                                                                        crd::math::kernel_level_cap()));
+    CHECK(&crd::math::scalar_math() == chosen.table);
 }

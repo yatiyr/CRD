@@ -21,6 +21,10 @@ crd_enable_default_pch(crd-math)
 # The batch small-float conversions, one body per CPU level (ADR-0134); src/float_convert_dispatch.cpp lists them.
 crd_add_cpu_kernels(crd-math NAME float_convert LEVELS portable sse2 sse42 avx2 avx512
                     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/float_convert_kernels.cpp")
+# The scalar transcendental routines general code calls through a table, at the baseline and with FMA (ADR-0134 §5);
+# src/scalar_dispatch.cpp lists them.
+crd_add_cpu_kernels(crd-math NAME scalar LEVELS portable avx2
+                    SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/scalar_kernels.cpp")
 
 # Cerid::math of the relocatable package, with the SIMD and floating-point contract flags its consumers must compile
 # with (Cerid::simd-flags: the baseline ISA, CRD_SIMD_TARGET and the ADR-0063 determinism options).

@@ -1,6 +1,6 @@
 #pragma once
 
-// crd-hesap-special — the recurrence-free Lanczos lgamma (g = 7, n = 9) on the crd_log1 core. Unlike the Stirling
+// crd-hesap-special — the recurrence-free Lanczos lgamma (g = 7, n = 9) on crd::math::log. Unlike the Stirling
 // form with its product recurrence (a per-lane shift count that defeats SIMD), the Lanczos sum is a fixed 8-term
 // rational, branch-free, so the batch kernels vectorize it (SIMD-DISPATCH, kernels/special_kernels.cpp).
 //
@@ -8,14 +8,14 @@
 //                         lgamma = ln(2 pi)/2 + (z + 0.5) ln(t) - t + ln(a)
 //   x < 0.5:  reflection  lgamma(x) = ln(pi) - ln|sin(pi x)| - lgamma(1 - x), with 1 - x >= 0.5
 //
-// The half-plane core lives in the unit's level namespace and calls only crd_log1 (ADR-0134 §5), so the kernel
-// units include it. The full functions (reflection, poles, NaN, infinities) are out of line in general code; the
-// kernels call them for the lanes the core does not cover. Every level keeps the core's operation order, its
-// single-rounded FMAs and -ffp-contract=off, so a batch gives lanczos_lgamma's bits on every level and partition (the
-// {1,4,16}-thread determinism moat). The coefficients are the canonical g = 7 set (about 1e-15 in the right
-// half-plane); gated against scipy at 1e-13.
+// The half-plane core lives in the unit's level namespace and calls only the level's log (ADR-0134 §5; general code
+// reaches it through the scalar table), so the kernel units include it. The full functions (reflection, poles, NaN,
+// infinities) are out of line in general code; the kernels call them for the lanes the core does not cover. Every level
+// keeps the core's operation order, its single-rounded FMAs and -ffp-contract=off, so a batch gives lanczos_lgamma's
+// bits on every level and partition (the {1,4,16}-thread determinism moat). The coefficients are the canonical g = 7
+// set (about 1e-15 in the right half-plane); gated against scipy at 1e-13.
 
-#include <crd/math/exp_log_core.hpp>
+#include <crd/math/transcendental.hpp>
 
 namespace crd::hesap::special::detail
 {
@@ -49,7 +49,7 @@ inline constexpr double kLanczosC[9] = {0.99999999999980993,  676.5203681218851,
     a += kLanczosC[7] / (z + 7.0);
     a += kLanczosC[8] / (z + 8.0);
     const double t = z + kLanczosGph;
-    return kHalfLn2Pi + (z + 0.5) * crd::math::crd_log1(t) - t + crd::math::crd_log1(a);
+    return kHalfLn2Pi + (z + 0.5) * crd::math::log(t) - t + crd::math::log(a);
 }
 
 // The finite half-plane the core covers (x >= 0.5, not +inf; NaN fails both).

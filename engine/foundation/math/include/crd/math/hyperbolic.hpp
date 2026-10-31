@@ -5,10 +5,12 @@
 // hardware sqrt. Same contract as transcendental.hpp; the C library appears only in the non-finite edge fallback.
 
 #include <crd/math/libm.hpp>           // sqrt (IEEE-exact, deterministic) + non-finite edge fallback
+#include <crd/math/scalar_kernels.hpp> // the routines general code calls through a table
 #include <crd/math/transcendental.hpp> // crd::math::exp/expm1/log/log1p (≤1 ulp)
 
 namespace crd::math::inline CRD_MATH_LEVEL_NS
 {
+#if !CRD_MATH_SCALAR_DISPATCH // general code of an x64 build without FMA calls the scalar table instead
 // sinh(x): small/moderate via ½·t·(t+2)/(t+1), t=expm1(|x|) (no e^x−e^−x cancellation); |x|>22 via e^{|x|−ln2}
 // (= ½e^|x|, but the subtracted ln2 keeps the near-overflow band x∈[709.78,710.5] finite instead of ½·Inf).
 [[nodiscard]] inline double sinh(double x) noexcept
@@ -98,5 +100,7 @@ namespace crd::math::inline CRD_MATH_LEVEL_NS
 [[nodiscard]] inline float asinh(float x) noexcept { return static_cast<float>(asinh(static_cast<double>(x))); }
 [[nodiscard]] inline float acosh(float x) noexcept { return static_cast<float>(acosh(static_cast<double>(x))); }
 [[nodiscard]] inline float atanh(float x) noexcept { return static_cast<float>(atanh(static_cast<double>(x))); }
+
+#endif
 
 } // namespace crd::math::inline CRD_MATH_LEVEL_NS

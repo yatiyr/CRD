@@ -5,10 +5,12 @@
 // transcendental.hpp.
 
 #include <crd/math/libm.hpp>           // sqrt (IEEE-exact) + non-finite edge fallback
+#include <crd/math/scalar_kernels.hpp> // the routines general code calls through a table
 #include <crd/math/transcendental.hpp> // the exp/log cores
 
 namespace crd::math::inline CRD_MATH_LEVEL_NS
 {
+#if !CRD_MATH_SCALAR_DISPATCH // general code of an x64 build without FMA calls the scalar table instead
 // pow(x,y) = x^y = 2^{y·log2 x} for finite x > 0 (and x < 0 with integer y → (−1)^y·|x|^y): ≤0.58 ulp for a normal
 // result, ≤0.76 for a subnormal one (its scale rounds a second time), against mpmath. log2|x| comes as a pair to
 // 2^-69 and y·log2|x| as a pair; its head alone decides overflow (≥ 1025 → ∞) and underflow (< −1076 → 0) before the
@@ -44,6 +46,8 @@ namespace crd::math::inline CRD_MATH_LEVEL_NS
 {
     return static_cast<float>(pow(static_cast<double>(x), static_cast<double>(y)));
 }
+#endif
+
 // cbrt(x) = sign·∛|x|. Fast bit-trick seed (exponent/3 + bias) ⇒ ~6-bit ∛, then Halley steps t·(t³+2a)/(2t³+a)
 // (cubic) to ≤1 ulp — no transcendentals (the exp2/log2 route was 3× slower than libm). Subnormal → library (rare).
 [[nodiscard]] inline double cbrt(double x) noexcept

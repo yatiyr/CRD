@@ -6,6 +6,7 @@
 // Same contract as transcendental.hpp; the C library appears ONLY in the non-finite edge fallback.
 
 #include <crd/math/libm.hpp> // edge fallback (NaN/Inf) + floor/fma reduction primitives ONLY
+#include <crd/math/scalar_kernels.hpp>
 
 namespace crd::math::inline CRD_MATH_LEVEL_NS
 {
@@ -202,6 +203,7 @@ inline constexpr crd::u32 kTwoOverPiBits[37] = {
 }
 } // namespace trig_detail
 
+#if !CRD_MATH_SCALAR_DISPATCH // general code of an x64 build without FMA calls the scalar table instead
 // atan(x): reduce to |t| ≤ tan(π/8) via x↦1/x (|x|>1, +π/2) and the π/4 half-angle (|t|>tan(π/8)).
 [[nodiscard]] inline double atan(double x) noexcept
 {
@@ -382,5 +384,7 @@ inline void sincos(float x, float& s_out, float& c_out) noexcept
     s_out = static_cast<float>(sd);
     c_out = static_cast<float>(cd);
 }
+
+#endif
 
 } // namespace crd::math::inline CRD_MATH_LEVEL_NS
