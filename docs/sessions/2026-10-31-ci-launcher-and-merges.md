@@ -83,6 +83,21 @@ Done in the `cerid-ci` project, following [the setup recipe](../recipes/ci-platf
   instead of starting a machine from an empty family.
 - **Axion machines could not start:** c4a takes no Persistent Disk (HTTP 400 in build #16). The boot disk type is
   now a device setting, `hyperdisk-balanced` on Axion, and the registry refuses a Hyperdisk-only family without it.
+- **No job machine ever took its job:** the dispatcher names a machine `cerid-ci-<job>-a<n>` and the executor added
+  `cerid-ci-` again, so the instance name in each machine's identity token matched no reservation (409). The
+  machine then deleted itself, and the reaper recorded every one as a spot preemption. The prefix is now added
+  once. A vanished machine is now called preempted only when a `compute.instances.preempted` operation names it,
+  and launch_failed, with Compute Engine's message, when its insert operation failed (the bake checks its own
+  insert too).
+- **Every Linux lane failed at configure (build #19):** the agent gave the job the mirror's bearer header as an
+  unscoped `http.extraHeader`, so the Vulkan-Headers clone from GitHub carried the job token and got 401. The
+  header is now scoped to the mirror's URL. The image also lacked `pkg-config`, which glfw's configure needs.
+- **Quotas and identity:** the region's `SSD_TOTAL_GB` is 500 GB, which holds three job machines; an increase to
+  2048 GB was filed (`cerid-ci-ssd`), and bake machines take pd-standard disks again. The runner account's IAM
+  condition had been stored as `resource.name.extract("C:/Program Files/Git/instances/{name}")`: Git Bash rewrote
+  the `/instances/{name}` argument when the binding was created. Job machines therefore cannot delete themselves;
+  they power off and the reaper deletes them. Repairing the binding is an IAM change left to the user. The recipe
+  now exports `MSYS_NO_PATHCONV=1` and checks the stored expression.
 - **`workspace.py sync` reported a fast-forward push as "up to date":** Git's porcelain flag for a fast-forward is a
   space, which the report did not count. Every ref line is now parsed, and a test asserts the fast-forward is reported.
 - **`workspace.py` pushed every tag:** the local tag `backup-before-pdf-strip` holds a 218 MiB blob, over GitLab's
