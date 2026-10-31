@@ -26,6 +26,16 @@
       ]
     },
     {
+      "id": "text.search-folding",
+      "summary": "Search folding of Unicode text one code point at a time: letters lower case, Latin diacritics, ligatures and fullwidth forms to ASCII (the Turkish dotted and dotless i to i), Greek and Cyrillic without case or accents, combining marks and apostrophes elided, punctuation and spaces as separators, from the table scripts/gen-text-fold.py derives from the Unicode Character Database; and the UTF-8 decoding it reads.",
+      "owner": "core",
+      "api": [
+        "engine/foundation/core/include/crd/core/text_fold.hpp",
+        "engine/foundation/core/include/crd/core/utf8.hpp"
+      ],
+      "decision": "crd-core, beside its UTF-8 well-formedness rule: dependency-free and allocation-free, so name screening (crd-comply) and every later search, sort key or identifier comparison folds text one way. docs/design/registers.md#screening."
+    },
+    {
       "id": "hash.fnv1a",
       "summary": "FNV-1a hashing, 32- and 64-bit, over bytes and text (constant-expression capable), little-endian integer folds and the runtime word step: identities, cache keys and cooked-content hashes.",
       "owner": "core",
@@ -683,12 +693,18 @@
     },
     {
       "id": "compliance.obligations",
-      "summary": "Legal and platform obligations: the reviewed rule generations scripts/gen-comply-rules.py writes per jurisdiction from the COMPLY.0 legal register, decoded whole and swapped live by RuleStore, the query of the rules that bind a scope on a day (proven or unproven) served by ceridc comply and, after MCP-ADAPT, by MCP, and the checks and shared generators (data inventory, notices, classification records, store answers) the governed rows consume.",
+      "summary": "Legal and platform obligations: the reviewed rule generations scripts/gen-comply-rules.py writes per jurisdiction from the COMPLY.0 legal register, decoded whole and swapped live by RuleStore, the query of the rules that bind a scope on a day (proven or unproven) served by ceridc comply and, after MCP-ADAPT, by MCP; sanctions and embargo screening (COMPLY.1): each authority's list as a cerid-sanctions/1 generation swapped live by SanctionsStore, the name matcher and the fail-closed screening of parties and destinations; and the checks and shared generators (data inventory, notices, classification records, store answers) the governed rows consume.",
       "owner": "comply",
       "api": [
-        "engine/foundation/comply/include/crd/comply/rules.hpp"
+        "engine/foundation/comply/include/crd/comply/generation.hpp",
+        "engine/foundation/comply/include/crd/comply/rules.hpp",
+        "engine/foundation/comply/include/crd/comply/names.hpp",
+        "engine/foundation/comply/include/crd/comply/sanctions.hpp"
       ],
-      "decision": "docs/design/registers.md#rule-generations: the JSON register is the guarded source of truth and every jurisdiction's generation is reviewed before it ships (its digest recorded in the register); COMPLY owns rules, checks and generators, the governed rows consume them and write no second rule engine."
+      "signatures": [
+        {"regex": "(?i)\\bjaro_?winkler\\b", "what": "a Jaro-Winkler name similarity (the screening matcher is crd-comply's names.hpp)"}
+      ],
+      "decision": "docs/design/registers.md#rule-generations and #screening: the JSON register is the guarded source of truth and every jurisdiction's generation is reviewed before it ships (its digest recorded in the register); COMPLY owns rules, checks, screening and generators, the governed rows (the STORE rows for accounts and payments) consume them and write no second rule engine or matcher."
     }
   ]
 }

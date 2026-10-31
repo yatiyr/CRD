@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review EU
 format = "cerid-rules/1"
 jurisdiction = "EU"
-generation = 2
+generation = 3
 register = "2026-10-31"
 
 [[scope]]
@@ -501,9 +501,9 @@ primary = "https://www.sanctionsmap.eu/"
 read = false
 obligation = "Screen distribution, accounts and payments against the EU sanctions lists."
 applies_to = ["channel.cerid-store", "flow.account-data", "flow.payments"]
-check = "planned"
-check_name = "sanctions screening tests over accounts and payments"
-check_ref = "docs/ROADMAP.md#slice-comply.1"
+check = "active"
+check_name = "crd-comply-tests [sanctions]: parties and destinations screened against each authority's list, failing closed on a missing or stale list"
+check_ref = "tests/foundation/comply/test_sanctions.cpp"
 effective = "2026-10-27"
 sunset = ""
 counsel = "none"

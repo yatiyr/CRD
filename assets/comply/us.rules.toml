@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review US
 format = "cerid-rules/1"
 jurisdiction = "US"
-generation = 2
+generation = 3
 register = "2026-10-31"
 
 [[scope]]
@@ -130,9 +130,9 @@ primary = "https://www.ecfr.gov/current/title-31/subtitle-B/chapter-V"
 read = false
 obligation = "Screen distribution, accounts and payments against the OFAC lists and embargoed destinations."
 applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
-check = "planned"
-check_name = "sanctions screening tests over accounts and payments"
-check_ref = "docs/ROADMAP.md#slice-comply.1"
+check = "active"
+check_name = "crd-comply-tests [sanctions]: parties and destinations screened against each authority's list, failing closed on a missing or stale list"
+check_ref = "tests/foundation/comply/test_sanctions.cpp"
 effective = "1977-10-28"
 sunset = ""
 counsel = "none"

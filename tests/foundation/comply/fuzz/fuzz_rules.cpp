@@ -234,14 +234,14 @@ void decode_checked(const u8* data, usize size)
 {
     const cont::StringView text(reinterpret_cast<const char*>(data), size); // NOLINT
     RuleGeneration generation;
-    if (decode_rules(text, generation).error != RuleError::None)
+    if (decode_rules(text, generation).error != ComplyError::None)
     {
         return;
     }
     check_invariants(generation);
     const cont::String printed = print(generation);
     RuleGeneration again;
-    CRD_FUZZ_REQUIRE(decode_rules(printed, again).error == RuleError::None);
+    CRD_FUZZ_REQUIRE(decode_rules(printed, again).error == ComplyError::None);
     CRD_FUZZ_REQUIRE(same(generation, again));
     CRD_FUZZ_REQUIRE(print(again) == cont::StringView(printed));
 }
@@ -340,17 +340,17 @@ void generated_sequence(const u8* data, usize size)
             ++slot;
         }
         Adopted& held = model[slot];
-        RuleError want = RuleError::None;
+        ComplyError want = ComplyError::None;
         if (held.held && generation.number < held.generation.number)
         {
-            want = RuleError::Rollback;
+            want = ComplyError::Rollback;
         }
         else if (held.held && generation.number == held.generation.number)
         {
-            want = held.text == cont::StringView(text) ? RuleError::AlreadyCurrent : RuleError::Conflict;
+            want = held.text == cont::StringView(text) ? ComplyError::AlreadyCurrent : ComplyError::Conflict;
         }
         CRD_FUZZ_REQUIRE(store.apply(text).error == want);
-        if (want == RuleError::None)
+        if (want == ComplyError::None)
         {
             held.text = text;
             held.generation = generation;

@@ -21,3 +21,13 @@ crd_enable_default_pch(crd-core-tests)
 # DIAG.11c: the [diag-workflow] cases are the native diagnostic workflow; their CTests carry its label.
 crd_discover_tests(crd-core-tests TEST_SPEC "~[diag-workflow]")
 crd_discover_tests(crd-core-tests TEST_SPEC "[diag-workflow]" PROPERTIES LABELS "diag;diag-workflow")
+
+# engine/foundation/core/src/text_fold_table.inc is scripts/gen-text-fold.py's output from the Unicode Character
+# Database Python carries; the covered blocks read the same from Python 3.12 (UCD 15.0) on.
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_FOUND)
+    add_test(NAME crd-core-text-fold-drift
+             COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/gen-text-fold.py" --check
+                     --root "${CMAKE_SOURCE_DIR}")
+    set_tests_properties(crd-core-text-fold-drift PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+endif()

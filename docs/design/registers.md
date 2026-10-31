@@ -213,6 +213,64 @@ standards register, never typed, and a change to them reaches no release without
   confidentiality; authentication and integrity alone are exempt uses) and the findings that owe a report. It refuses
   an export whose inventory changed since its review.
 
+<a id="screening"></a>
+### Sanctions and embargo screening (COMPLY.1)
+
+Distribution, accounts and payments are screened against every list the product's jurisdictions require (the
+`us.sanctions`, `eu.restrictive-measures`, `int.un-sanctions`, `gb.sanctions` and `tr.asset-freeze` entries, whose
+active check is the screening tests). The `comply` owner holds the lists, the matcher and the screening; the STORE
+rows call it and write no second matcher (`compliance.obligations`, whose signatures refuse a Jaro-Winkler
+elsewhere).
+
+- **Lists are generations.** Each authority's list arrives as one `cerid-sanctions/1` document imported from the
+  authority's own publication: `authority` (dotted, such as `us.ofac`), `jurisdiction`, `generation` (the
+  authority's publications in order), `published`, `max_age_days` (1 to 366), the official file's `source` URL and
+  `source_sha256`, then `[[destination]]` tables (`region`: ISO 3166-1 alpha-2 or an ISO 3166-2 subdivision,
+  `program`, `measure`: `comprehensive` or `sectoral`) and `[[party]]` tables (`id`, `kind`: individual, entity,
+  vessel or aircraft, `names`: the primary name then the aliases, well-formed UTF-8, `programs`, `listed`, `births`:
+  YYYY, YYYY-MM or YYYY-MM-DD, individuals only, `countries`: ISO 3166-1 alpha-2, `identifiers`: `type:value`). A list
+  is decoded whole within its bounds (64 MiB, 131 072 parties, 1 024 destinations, 512 names and 64 other items a
+  party) and `SanctionsStore` adopts it only above its authority's generation, swapping it under the store's lock;
+  rollbacks, conflicts and repeats are refused with the store unchanged, as rule generations are. Authenticity on
+  delivery is NET.2's signed envelope.
+- **Importers come with the first read.** The official formats (OFAC's SDN and consolidated lists, the EU's financial
+  sanctions file, the UN Security Council's consolidated list, the UK sanctions list and Turkey's asset-freeze
+  decisions) are read from the files themselves, never from memory; the importers that write `cerid-sanctions/1`
+  land with the first read, which is a download the user approves.
+- **Folding.** Names are compared in search-folded form (`text.search-folding`, crd-core's
+  [text_fold.hpp](../../engine/foundation/core/include/crd/core/text_fold.hpp)): lower case; Latin letters with
+  diacritics, ligatures and fullwidth forms to ASCII (Ş and ş to s, İ and ı to i, ø to o, ß to ss, æ to ae, the
+  Azerbaijani schwa to a); Greek and Cyrillic without case or accents; combining marks and apostrophes elided;
+  punctuation and spaces as separators. [gen-text-fold.py](../../scripts/gen-text-fold.py) derives the table from the
+  Unicode Character Database for the blocks sanctions lists print names in, holds every fold to a fixed point and is
+  the `crd-core-text-fold-drift` CTest; outside those blocks a code point is a letter kept as it is. Scripts are not
+  transliterated into each other: the lists carry Latin aliases.
+- **Matching** ([names.hpp](../../engine/foundation/comply/include/crd/comply/names.hpp)). Honorifics and legal forms
+  go unless nothing else is left (a legal form spelt in single letters, A.Ş. or L.L.C., included). Each word pairs with
+  at most one word of the other name, best pairs first, rated by Jaro-Winkler, an initial against a word it starts
+  (0.9), and at least 0.9 when both spell one consonant skeleton (Muhammad and Mohamed); pairs below 0.88 do not
+  pair. The score (0 to 1000) is the highest of the pairs' similarity weighted by both names' word lengths; when the
+  word counts differ and the shorter name has two words or more, its covered share less 0.05 for each unpaired word
+  of the longer (a missing middle name or patronymic scores 950); and, when the word counts differ, the Levenshtein
+  similarity of the words written together (split and joined spellings). Word order never matters.
+- **Dispositions.** `ScreenPolicy` holds the thresholds (review 850 and match 950 by default). A party whose best
+  name scores at least the review threshold, or whose identifier agrees, is a hit: **Discounted** when the subject's
+  kind or birth contradicts it (reported, never dropped), **Match** when an identifier agrees or the score reaches the
+  match threshold with a birth or country that agrees, else **Possible**. A destination is a **Match** when the
+  request names the embargoed region or a place inside an embargoed country, and **Possible** when the request names
+  only the country an embargoed region belongs to.
+- **Fail closed.** A list the request names that the store does not hold is **missing**; one screened after its
+  publication day plus its maximum age is **stale**, and one screened before its publication day is **not yet
+  published**. A stale list is still screened (what it lists blocks), and any gap keeps the verdict from Clear.
+- **Verdict.** **Blocked** when a party matches or a destination lies in a comprehensive embargo; else
+  **Unavailable** when a list has a gap; else **Review** for a possible party, a sectoral embargo or a country whose
+  embargoed region the request does not exclude; else **Clear**. A malformed request (no authority, an impossible day,
+  thresholds out of order, a subject without words or with a bad birth, country or identifier, a bad region) is
+  refused with its key.
+- **Tests.** `crd-comply-tests` (`[names]` and `[sanctions]`: folding, both sides of the review threshold, every
+  refusal, the store, every disposition and verdict, a concurrent applier and screener, a list of 20 000 parties) and
+  the `crd-fuzz-comply-sanctions` corpus.
+
 <a id="snapshot-and-review"></a>
 ## Snapshot and review
 

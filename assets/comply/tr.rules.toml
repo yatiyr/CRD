@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review TR
 format = "cerid-rules/1"
 jurisdiction = "TR"
-generation = 2
+generation = 3
 register = "2026-10-31"
 
 [[scope]]
@@ -354,9 +354,9 @@ primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6415&MevzuatTur=1&Mevzua
 read = false
 obligation = "Screen distribution, accounts and payments against Turkey's asset-freeze decisions."
 applies_to = ["channel.cerid-store", "flow.account-data", "flow.payments"]
-check = "planned"
-check_name = "sanctions screening tests over accounts and payments"
-check_ref = "docs/ROADMAP.md#slice-comply.1"
+check = "active"
+check_name = "crd-comply-tests [sanctions]: parties and destinations screened against each authority's list, failing closed on a missing or stale list"
+check_ref = "tests/foundation/comply/test_sanctions.cpp"
 effective = "2013-02-16"
 sunset = ""
 counsel = "none"

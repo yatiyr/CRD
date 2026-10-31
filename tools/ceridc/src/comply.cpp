@@ -145,7 +145,7 @@ cont::String verb_comply(const char* rules_dir, const char* scope, const char* j
         }
         const comply::DecodeFailure failure =
             store.apply(cont::StringView(reinterpret_cast<const char*>(bytes.data()), bytes.size())); // NOLINT
-        if (failure.error != comply::RuleError::None && failure.error != comply::RuleError::AlreadyCurrent)
+        if (failure.error != comply::ComplyError::None && failure.error != comply::ComplyError::AlreadyCurrent)
         {
             JsonWriter w(alloc);
             w.begin_object();
@@ -153,7 +153,7 @@ cont::String verb_comply(const char* rules_dir, const char* scope, const char* j
             w.kv("verb", kVerb);
             w.kv("reason", "a rule generation was refused");
             w.kv("file", cont::StringView(path));
-            w.kv("error", comply::rule_error_name(failure.error));
+            w.kv("error", comply::comply_error_name(failure.error));
             w.kv("line", failure.line);
             w.kv("key", failure.key);
             w.end_object();

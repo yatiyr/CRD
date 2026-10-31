@@ -1101,7 +1101,7 @@
       "kind": "obligation",
       "topic": "export-control",
       "state": "planned",
-      "owner": "store",
+      "owner": "comply",
       "rows": [
         "COMPLY.1",
         "STORE.1",
@@ -1122,9 +1122,9 @@
         "flow.payments"
       ],
       "check": {
-        "ref": "docs/ROADMAP.md#slice-comply.1",
-        "name": "sanctions screening tests over accounts and payments",
-        "state": "planned"
+        "ref": "tests/foundation/comply/test_sanctions.cpp",
+        "name": "crd-comply-tests [sanctions]: parties and destinations screened against each authority's list, failing closed on a missing or stale list",
+        "state": "active"
       },
       "effective": "2013-02-16",
       "sunset": null,
@@ -3073,7 +3073,7 @@
       "kind": "obligation",
       "topic": "export-control",
       "state": "planned",
-      "owner": "store",
+      "owner": "comply",
       "rows": [
         "COMPLY.1",
         "STORE.1",
@@ -3094,9 +3094,9 @@
         "flow.payments"
       ],
       "check": {
-        "ref": "docs/ROADMAP.md#slice-comply.1",
-        "name": "sanctions screening tests over accounts and payments",
-        "state": "planned"
+        "ref": "tests/foundation/comply/test_sanctions.cpp",
+        "name": "crd-comply-tests [sanctions]: parties and destinations screened against each authority's list, failing closed on a missing or stale list",
+        "state": "active"
       },
       "effective": "2026-10-27",
       "sunset": null,
@@ -3573,7 +3573,7 @@
       "kind": "obligation",
       "topic": "export-control",
       "state": "planned",
-      "owner": "store",
+      "owner": "comply",
       "rows": [
         "COMPLY.1",
         "STORE.1",
@@ -3594,9 +3594,9 @@
         "flow.payments"
       ],
       "check": {
-        "ref": "docs/ROADMAP.md#slice-comply.1",
-        "name": "sanctions screening tests over accounts and payments",
-        "state": "planned"
+        "ref": "tests/foundation/comply/test_sanctions.cpp",
+        "name": "crd-comply-tests [sanctions]: parties and destinations screened against each authority's list, failing closed on a missing or stale list",
+        "state": "active"
       },
       "effective": "2018-05-23",
       "sunset": null,
@@ -3756,7 +3756,7 @@
       "kind": "obligation",
       "topic": "export-control",
       "state": "planned",
-      "owner": "store",
+      "owner": "comply",
       "rows": [
         "COMPLY.1",
         "STORE.1",
@@ -3778,9 +3778,9 @@
         "flow.payments"
       ],
       "check": {
-        "ref": "docs/ROADMAP.md#slice-comply.1",
-        "name": "sanctions screening tests over accounts and payments",
-        "state": "planned"
+        "ref": "tests/foundation/comply/test_sanctions.cpp",
+        "name": "crd-comply-tests [sanctions]: parties and destinations screened against each authority's list, failing closed on a missing or stale list",
+        "state": "active"
       },
       "effective": "1977-10-28",
       "sunset": null,
@@ -4576,7 +4576,7 @@
       "kind": "obligation",
       "topic": "export-control",
       "state": "planned",
-      "owner": "store",
+      "owner": "comply",
       "rows": [
         "COMPLY.1",
         "STORE.1",
@@ -4597,9 +4597,9 @@
         "flow.payments"
       ],
       "check": {
-        "ref": "docs/ROADMAP.md#slice-comply.1",
-        "name": "sanctions screening tests over accounts and payments",
-        "state": "planned"
+        "ref": "tests/foundation/comply/test_sanctions.cpp",
+        "name": "crd-comply-tests [sanctions]: parties and destinations screened against each authority's list, failing closed on a missing or stale list",
+        "state": "active"
       },
       "effective": "1945-10-24",
       "sunset": null,
@@ -5330,19 +5330,19 @@
       "sha256": "767b32a0266f64352d531fc9a190e536e4c520918853eb31d853f59aa39c5605"
     },
     "EU": {
-      "generation": 2,
+      "generation": 3,
       "reviewed": "2026-10-31",
-      "sha256": "532e84a1a51ecf49132effa204c62298b6db1c96a1bcd50bddcd12b928a0d470"
+      "sha256": "314edebef386bdba06d42bd55703993c6e24998ece74df96db11e0105a74b61e"
     },
     "GB": {
-      "generation": 1,
-      "reviewed": "2026-10-31",
-      "sha256": "ee6d2a19672f639be3e702de9f689f64d5345fc57346cf14d392296f13590059"
-    },
-    "INT": {
       "generation": 2,
       "reviewed": "2026-10-31",
-      "sha256": "27f0baecbf329309f9fa9ec86977606881120c99e1e49660ba0b10b21da9cafe"
+      "sha256": "04b7da3accca408c90f2f66c1413cad56434cb8ebcac3e21f95b347800ca2fac"
+    },
+    "INT": {
+      "generation": 3,
+      "reviewed": "2026-10-31",
+      "sha256": "a95da3ec17cc1f87f9082c50d1f214b210cd94056e666ee36ceda02809ac1535"
     },
     "JP": {
       "generation": 1,
@@ -5355,14 +5355,14 @@
       "sha256": "21377a60378504ff4a0d108eef26ea0665a22382a5698d67a9012c0f8b665809"
     },
     "TR": {
-      "generation": 2,
+      "generation": 3,
       "reviewed": "2026-10-31",
-      "sha256": "a8b97f518f81a0374e532b81c6bd05356cb91fd583ca6899015d921b23387052"
+      "sha256": "a5c6b13385c4e4234c84b354a44aac4a2c885e63a65be44b7c2275387c455e60"
     },
     "US": {
-      "generation": 2,
+      "generation": 3,
       "reviewed": "2026-10-31",
-      "sha256": "756ee69c04914c3aa556d6f7ecf4a0ce61d336987a84ed3ac5fb61123b4c63e9"
+      "sha256": "ace2908f82e114c8967b2eb7709eb9c709b4b1e0660c79007485a7c5948ee011"
     },
     "US-CA": {
       "generation": 1,

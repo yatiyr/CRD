@@ -1,6 +1,9 @@
-# crd-comply tests (COMPLY.0): rule generation decoding, the live store and the query, and the committed generations.
+# crd-comply tests (COMPLY.0 and COMPLY.1): rule generation decoding, the live store and the query, the committed
+# generations, the name matcher and sanctions screening.
 add_executable(crd-comply-tests
+    test_names.cpp
     test_rules.cpp
+    test_sanctions.cpp
 )
 
 target_link_libraries(crd-comply-tests PRIVATE

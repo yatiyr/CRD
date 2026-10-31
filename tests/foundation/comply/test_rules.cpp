@@ -127,10 +127,10 @@ DecodeFailure decode(cont::StringView text)
     return decode_rules(text, generation);
 }
 
-void check_refusal(cont::StringView text, RuleError error, cont::StringView key)
+void check_refusal(cont::StringView text, ComplyError error, cont::StringView key)
 {
     const DecodeFailure failure = decode(text);
-    INFO(rule_error_name(failure.error) << " key " << failure.key);
+    INFO(comply_error_name(failure.error) << " key " << failure.key);
     CHECK(failure.error == error);
     CHECK(failure.key == key);
 }
@@ -177,7 +177,7 @@ TEST_CASE("comply: days are real calendar days, a period counting from its first
 TEST_CASE("comply: a generation decodes whole, every field typed", "[comply]")
 {
     RuleGeneration generation;
-    REQUIRE(decode_rules(kBase, generation).error == RuleError::None);
+    REQUIRE(decode_rules(kBase, generation).error == ComplyError::None);
     CHECK(cont::StringView(generation.jurisdiction) == "TR");
     CHECK(generation.number == 3U);
     CHECK(generation.register_day == 20261031U);
@@ -231,34 +231,34 @@ TEST_CASE("comply: a generation decodes whole, every field typed", "[comply]")
     // Non-ASCII text, escapes and another generation's bytes.
     RuleGeneration other;
     REQUIRE(decode_rules(with("title = \"KVKK processing\"", "title = \"Kişisel veri \\\"işleme\\\"\""), other).error ==
-            RuleError::None);
+            ComplyError::None);
     CHECK(cont::StringView(other.rules[0].title) == "Kişisel veri \"işleme\"");
     CHECK(other.digest != generation.digest);
 }
 
 TEST_CASE("comply: format, syntax and size refusals", "[comply]")
 {
-    CHECK(decode("format = ").error == RuleError::Syntax);
+    CHECK(decode("format = ").error == ComplyError::Syntax);
     const cont::String broken = with("check = \"planned\"", "check = \"planned");
     const DecodeFailure syntax = decode(broken);
-    CHECK(syntax.error == RuleError::Syntax);
+    CHECK(syntax.error == ComplyError::Syntax);
     CHECK(syntax.line == line_of(broken, "check = \"planned"));
-    check_refusal(with("cerid-rules/1", "cerid-rules/2"), RuleError::UnsupportedFormat, "format");
+    check_refusal(with("cerid-rules/1", "cerid-rules/2"), ComplyError::UnsupportedFormat, "format");
 
     cont::String huge(kBase);
     huge.append(cont::String(kMaxRulesBytes, '#'));
-    CHECK(decode(huge).error == RuleError::TooLarge);
+    CHECK(decode(huge).error == ComplyError::TooLarge);
 
     const cont::String long_title(kMaxTextBytes + 1U, 'x');
     cont::String title("title = \"");
     title.append(long_title);
     title.append("\"");
-    check_refusal(with("title = \"KVKK processing\"", title), RuleError::TooLarge, "title");
+    check_refusal(with("title = \"KVKK processing\"", title), ComplyError::TooLarge, "title");
     const cont::String fits(kMaxTextBytes, 'x');
     cont::String at_bound("title = \"");
     at_bound.append(fits);
     at_bound.append("\"");
-    CHECK(decode(with("title = \"KVKK processing\"", at_bound)).error == RuleError::None);
+    CHECK(decode(with("title = \"KVKK processing\"", at_bound)).error == ComplyError::None);
 
     cont::String rows("rows = [");
     for (u32 i = 0U; i <= kMaxListItems; ++i)
@@ -266,7 +266,7 @@ TEST_CASE("comply: format, syntax and size refusals", "[comply]")
         rows.append(i == 0U ? "\"R.1\"" : ", \"R.1\"");
     }
     rows.append("]");
-    check_refusal(with("rows = [\"STORE.1\"]", rows), RuleError::TooLarge, "rows");
+    check_refusal(with("rows = [\"STORE.1\"]", rows), ComplyError::TooLarge, "rows");
 
     cont::String scopes(kBase);
     for (u32 i = 0U; i < kMaxScopes; ++i)
@@ -277,15 +277,15 @@ TEST_CASE("comply: format, syntax and size refusals", "[comply]")
         scopes.append(number);
         scopes.append("\"\nkind = \"flow\"\nstate = \"planned\"\n");
     }
-    check_refusal(scopes, RuleError::TooLarge, "scope");
+    check_refusal(scopes, ComplyError::TooLarge, "scope");
 }
 
 TEST_CASE("comply: every required key, no unknown key, every type", "[comply]")
 {
-    check_refusal(with("format = \"cerid-rules/1\"\n", ""), RuleError::MissingKey, "format");
-    check_refusal(with("jurisdiction = \"TR\"\n", ""), RuleError::MissingKey, "jurisdiction");
-    check_refusal(with("generation = 3\n", ""), RuleError::MissingKey, "generation");
-    check_refusal(with("register = \"2026-10-31\"\n", ""), RuleError::MissingKey, "register");
+    check_refusal(with("format = \"cerid-rules/1\"\n", ""), ComplyError::MissingKey, "format");
+    check_refusal(with("jurisdiction = \"TR\"\n", ""), ComplyError::MissingKey, "jurisdiction");
+    check_refusal(with("generation = 3\n", ""), ComplyError::MissingKey, "generation");
+    check_refusal(with("register = \"2026-10-31\"\n", ""), ComplyError::MissingKey, "register");
     for (const cont::StringView line :
          {"kind = \"obligation\"\n", "topic = \"privacy\"\n", "title = \"KVKK processing\"\n",
           "instrument = \"Law No. 6698\"\n", "article = \"Articles 4-7\"\n",
@@ -295,41 +295,41 @@ TEST_CASE("comply: every required key, no unknown key, every type", "[comply]")
           "rows = [\"COMPLY.2\", \"CRASH-FIX.1\"]\n"})
     {
         INFO(line);
-        CHECK(decode(with(line, "")).error == RuleError::MissingKey);
+        CHECK(decode(with(line, "")).error == ComplyError::MissingKey);
     }
-    check_refusal(with("id = \"product.store\"\n", ""), RuleError::MissingKey, "id");
+    check_refusal(with("id = \"product.store\"\n", ""), ComplyError::MissingKey, "id");
 
     const cont::String top = with("generation = 3", "generation = 3\nnote = \"x\"");
     const DecodeFailure unknown = decode(top);
-    CHECK(unknown.error == RuleError::UnknownKey);
+    CHECK(unknown.error == ComplyError::UnknownKey);
     CHECK(unknown.line == line_of(top, "note ="));
-    CHECK(decode(with("kind = \"flow\"", "kind = \"flow\"\nowner = \"x\"")).error == RuleError::UnknownKey);
-    CHECK(decode(with("rows = [\"STORE.1\"]", "rows = [\"STORE.1\"]\nverified = true")).error == RuleError::UnknownKey);
+    CHECK(decode(with("kind = \"flow\"", "kind = \"flow\"\nowner = \"x\"")).error == ComplyError::UnknownKey);
+    CHECK(decode(with("rows = [\"STORE.1\"]", "rows = [\"STORE.1\"]\nverified = true")).error == ComplyError::UnknownKey);
 
-    check_refusal(with("generation = 3", "generation = \"3\""), RuleError::WrongType, "generation");
-    check_refusal(with("jurisdiction = \"TR\"", "jurisdiction = 90"), RuleError::WrongType, "jurisdiction");
-    check_refusal(with("read = false", "read = \"false\""), RuleError::WrongType, "read");
+    check_refusal(with("generation = 3", "generation = \"3\""), ComplyError::WrongType, "generation");
+    check_refusal(with("jurisdiction = \"TR\"", "jurisdiction = 90"), ComplyError::WrongType, "jurisdiction");
+    check_refusal(with("read = false", "read = \"false\""), ComplyError::WrongType, "read");
     check_refusal(with("applies_to = [\"flow.crash-reports\"]", "applies_to = \"flow.crash-reports\""),
-                  RuleError::WrongType, "applies_to");
-    check_refusal(with("rows = [\"STORE.1\"]", "rows = [\"STORE.1\", 2]"), RuleError::WrongType, "rows");
+                  ComplyError::WrongType, "applies_to");
+    check_refusal(with("rows = [\"STORE.1\"]", "rows = [\"STORE.1\", 2]"), ComplyError::WrongType, "rows");
     const cont::String no_scopes = with("[[scope]]\nid = \"flow.crash-reports\"\nkind = \"flow\"\nstate = \"live\"\n\n"
                                         "[[scope]]\nid = \"product.store\"\nkind = \"product\"\nstate = \"planned\"\n",
                                         "");
-    check_refusal(with("generation = 3", "generation = 3\nscope = 1", no_scopes), RuleError::WrongType, "scope");
-    check_refusal(no_scopes, RuleError::MissingKey, "scope");
+    check_refusal(with("generation = 3", "generation = 3\nscope = 1", no_scopes), ComplyError::WrongType, "scope");
+    check_refusal(no_scopes, ComplyError::MissingKey, "scope");
 }
 
 TEST_CASE("comply: values, identifiers and enumerations are closed", "[comply]")
 {
-    check_refusal(with("generation = 3", "generation = 0"), RuleError::BadGeneration, "generation");
-    check_refusal(with("generation = 3", "generation = -4"), RuleError::BadGeneration, "generation");
+    check_refusal(with("generation = 3", "generation = 0"), ComplyError::BadGeneration, "generation");
+    check_refusal(with("generation = 3", "generation = -4"), ComplyError::BadGeneration, "generation");
     for (const cont::StringView code : {"tr", "T", "TUR", "US-", "US-CALIF", "US_CA", "INTL", ""})
     {
         cont::String line("jurisdiction = \"");
         line.append(code);
         line.append("\"");
         INFO(code);
-        CHECK(decode(with("jurisdiction = \"TR\"", line)).error == RuleError::BadValue);
+        CHECK(decode(with("jurisdiction = \"TR\"", line)).error == ComplyError::BadValue);
     }
     for (const cont::StringView code : {"US-CA", "INT", "PLATFORM", "GB", "US-123"})
     {
@@ -337,7 +337,7 @@ TEST_CASE("comply: values, identifiers and enumerations are closed", "[comply]")
         line.append(code);
         line.append("\"");
         INFO(code);
-        CHECK(decode(with("jurisdiction = \"TR\"", line)).error == RuleError::None);
+        CHECK(decode(with("jurisdiction = \"TR\"", line)).error == ComplyError::None);
     }
     for (const cont::StringView id : {"Tr.kvkk", "tr..kvkk", "tr.kvkk.", ".tr", "tr kvkk", "tr_kvkk", "tr.-kvkk"})
     {
@@ -345,11 +345,11 @@ TEST_CASE("comply: values, identifiers and enumerations are closed", "[comply]")
         line.append(id);
         line.append("\"");
         INFO(id);
-        CHECK(decode(with("id = \"tr.kvkk.processing\"", line)).error == RuleError::BadValue);
+        CHECK(decode(with("id = \"tr.kvkk.processing\"", line)).error == ComplyError::BadValue);
     }
-    check_refusal(with("id = \"product.store\"", "id = \"Product.store\""), RuleError::BadValue, "id");
-    check_refusal(with("topic = \"privacy\"", "topic = \"Privacy\""), RuleError::BadValue, "topic");
-    check_refusal(with("title = \"KVKK processing\"", "title = \"\""), RuleError::BadValue, "title");
+    check_refusal(with("id = \"product.store\"", "id = \"Product.store\""), ComplyError::BadValue, "id");
+    check_refusal(with("topic = \"privacy\"", "topic = \"Privacy\""), ComplyError::BadValue, "topic");
+    check_refusal(with("title = \"KVKK processing\"", "title = \"\""), ComplyError::BadValue, "title");
     for (const cont::StringView url :
          {"http://www.mevzuat.gov.tr/x", "https://", "https:///x", "https://a b", "ftp://x", "www.mevzuat.gov.tr"})
     {
@@ -358,56 +358,56 @@ TEST_CASE("comply: values, identifiers and enumerations are closed", "[comply]")
         line.append("\"");
         INFO(url);
         CHECK(decode(with("primary = \"https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698\"", line)).error ==
-              RuleError::BadValue);
+              ComplyError::BadValue);
     }
-    check_refusal(with("kind = \"obligation\"", "kind = \"duty\""), RuleError::BadValue, "kind");
-    check_refusal(with("state = \"planned\"\ntitle", "state = \"watch\"\ntitle"), RuleError::BadValue, "state");
-    check_refusal(with("kind = \"flow\"", "kind = \"stream\""), RuleError::BadValue, "kind");
-    check_refusal(with("state = \"live\"", "state = \"shipped\""), RuleError::BadValue, "state");
-    check_refusal(with("check = \"planned\"", "check = \"passing\""), RuleError::BadValue, "check");
-    check_refusal(with("counsel = \"needed\"", "counsel = \"maybe\""), RuleError::BadValue, "counsel");
-    check_refusal(with("applies_to = [\"flow.crash-reports\"]", "applies_to = []"), RuleError::BadValue, "applies_to");
-    check_refusal(with("rows = [\"STORE.1\"]", "rows = [\"STORE..1\"]"), RuleError::BadValue, "rows");
+    check_refusal(with("kind = \"obligation\"", "kind = \"duty\""), ComplyError::BadValue, "kind");
+    check_refusal(with("state = \"planned\"\ntitle", "state = \"watch\"\ntitle"), ComplyError::BadValue, "state");
+    check_refusal(with("kind = \"flow\"", "kind = \"stream\""), ComplyError::BadValue, "kind");
+    check_refusal(with("state = \"live\"", "state = \"shipped\""), ComplyError::BadValue, "state");
+    check_refusal(with("check = \"planned\"", "check = \"passing\""), ComplyError::BadValue, "check");
+    check_refusal(with("counsel = \"needed\"", "counsel = \"maybe\""), ComplyError::BadValue, "counsel");
+    check_refusal(with("applies_to = [\"flow.crash-reports\"]", "applies_to = []"), ComplyError::BadValue, "applies_to");
+    check_refusal(with("rows = [\"STORE.1\"]", "rows = [\"STORE..1\"]"), ComplyError::BadValue, "rows");
     check_refusal(with(R"(applies_to = ["product.store", "flow.crash-reports"])",
                        R"(applies_to = ["product.store", "product.store"])"),
-                  RuleError::BadValue, "applies_to");
+                  ComplyError::BadValue, "applies_to");
 }
 
 TEST_CASE("comply: scopes and rules are unique and named", "[comply]")
 {
-    check_refusal(with("id = \"product.store\"", "id = \"flow.crash-reports\""), RuleError::DuplicateScope, "id");
+    check_refusal(with("id = \"product.store\"", "id = \"flow.crash-reports\""), ComplyError::DuplicateScope, "id");
     check_refusal(with("applies_to = [\"flow.crash-reports\"]", "applies_to = [\"flow.telemetry\"]"),
-                  RuleError::UnknownScope, "applies_to");
-    check_refusal(with("id = \"tr.verbis.registration\"", "id = \"tr.kvkk.processing\""), RuleError::DuplicateRule,
+                  ComplyError::UnknownScope, "applies_to");
+    check_refusal(with("id = \"tr.verbis.registration\"", "id = \"tr.kvkk.processing\""), ComplyError::DuplicateRule,
                   "id");
 }
 
 TEST_CASE("comply: days, sunsets and counsel days are consistent", "[comply]")
 {
-    check_refusal(with("effective = \"2016-04-07\"", "effective = \"2016-04-31\""), RuleError::BadDay, "effective");
-    check_refusal(with("effective = \"2016-04-07\"", "effective = \"\""), RuleError::BadDay, "effective");
-    check_refusal(with("register = \"2026-10-31\"", "register = \"\""), RuleError::BadDay, "register");
-    check_refusal(with("register = \"2026-10-31\"", "register = \"2026-10-32\""), RuleError::BadDay, "register");
-    check_refusal(with("sunset = \"2027-01-01\"", "sunset = \"2026-11-01\""), RuleError::BadDay, "sunset");
-    check_refusal(with("sunset = \"2027-01-01\"", "sunset = \"2026-10\""), RuleError::BadDay, "sunset");
-    CHECK(decode(with("sunset = \"2027-01-01\"", "sunset = \"2026-11-02\"")).error == RuleError::None);
-    check_refusal(with("counsel_reviewed = \"2026-10-30\"", "counsel_reviewed = \"\""), RuleError::BadDay,
+    check_refusal(with("effective = \"2016-04-07\"", "effective = \"2016-04-31\""), ComplyError::BadDay, "effective");
+    check_refusal(with("effective = \"2016-04-07\"", "effective = \"\""), ComplyError::BadDay, "effective");
+    check_refusal(with("register = \"2026-10-31\"", "register = \"\""), ComplyError::BadDay, "register");
+    check_refusal(with("register = \"2026-10-31\"", "register = \"2026-10-32\""), ComplyError::BadDay, "register");
+    check_refusal(with("sunset = \"2027-01-01\"", "sunset = \"2026-11-01\""), ComplyError::BadDay, "sunset");
+    check_refusal(with("sunset = \"2027-01-01\"", "sunset = \"2026-10\""), ComplyError::BadDay, "sunset");
+    CHECK(decode(with("sunset = \"2027-01-01\"", "sunset = \"2026-11-02\"")).error == ComplyError::None);
+    check_refusal(with("counsel_reviewed = \"2026-10-30\"", "counsel_reviewed = \"\""), ComplyError::BadDay,
                   "counsel_reviewed");
     check_refusal(with("counsel = \"needed\"\ncounsel_reviewed = \"\"", "counsel = \"needed\"\ncounsel_reviewed = "
                                                                         "\"2026-10-01\""),
-                  RuleError::BadDay, "counsel_reviewed");
+                  ComplyError::BadDay, "counsel_reviewed");
 }
 
 TEST_CASE("comply: an implemented rule cannot claim a proof the register would refuse", "[comply]")
 {
-    check_refusal(with("check = \"active\"", "check = \"planned\""), RuleError::BadValue, "state");
-    check_refusal(with("read = true", "read = false"), RuleError::BadValue, "state");
+    check_refusal(with("check = \"active\"", "check = \"planned\""), ComplyError::BadValue, "state");
+    check_refusal(with("read = true", "read = false"), ComplyError::BadValue, "state");
     check_refusal(with("counsel = \"reviewed\"\ncounsel_reviewed = \"2026-10-30\"",
                        "counsel = \"needed\"\ncounsel_reviewed = \"\""),
-                  RuleError::BadValue, "state");
+                  ComplyError::BadValue, "state");
     // A planned rule may already have an active check: it is still unproven.
     RuleGeneration generation;
-    REQUIRE(decode_rules(with("check = \"planned\"", "check = \"active\""), generation).error == RuleError::None);
+    REQUIRE(decode_rules(with("check = \"planned\"", "check = \"active\""), generation).error == ComplyError::None);
     CHECK(proof_of(generation.rules[0]) == Proof::Unproven);
     CHECK(proof_of(generation.rules[1]) == Proof::Proven);
 }
@@ -416,21 +416,21 @@ TEST_CASE("comply: the store adopts only newer generations, unchanged on every r
 {
     RuleStore store;
     CHECK(store.generation("TR") == 0U);
-    REQUIRE(store.apply(kBase).error == RuleError::None);
+    REQUIRE(store.apply(kBase).error == ComplyError::None);
     CHECK(store.generation("TR") == 3U);
-    CHECK(store.apply(kBase).error == RuleError::AlreadyCurrent);
+    CHECK(store.apply(kBase).error == ComplyError::AlreadyCurrent);
 
     const cont::String changed = with("Rate games by age.", "Rate games by age and content.");
     const DecodeFailure conflict = store.apply(changed);
-    CHECK(conflict.error == RuleError::Conflict);
+    CHECK(conflict.error == ComplyError::Conflict);
     CHECK(conflict.key == "generation");
-    CHECK(store.apply(with("generation = 3", "generation = 2", changed)).error == RuleError::Rollback);
-    CHECK(store.apply(with("cerid-rules/1", "cerid-rules/9")).error == RuleError::UnsupportedFormat);
+    CHECK(store.apply(with("generation = 3", "generation = 2", changed)).error == ComplyError::Rollback);
+    CHECK(store.apply(with("cerid-rules/1", "cerid-rules/9")).error == ComplyError::UnsupportedFormat);
     REQUIRE(query(store, "product.store", "2026-12-01", {"TR"}).size() == 1U);
     CHECK(cont::StringView(query(store, "product.store", "2026-12-01", {"TR"})[0].rule.obligation) ==
           "Rate games by age.");
 
-    REQUIRE(store.apply(with("generation = 3", "generation = 4", changed)).error == RuleError::None);
+    REQUIRE(store.apply(with("generation = 3", "generation = 4", changed)).error == ComplyError::None);
     CHECK(store.generation("TR") == 4U);
     const cont::Array<Binding> swapped = query(store, "product.store", "2026-12-01", {"TR"});
     REQUIRE(swapped.size() == 1U);
@@ -438,7 +438,7 @@ TEST_CASE("comply: the store adopts only newer generations, unchanged on every r
     CHECK(cont::StringView(swapped[0].rule.obligation) == "Rate games by age and content.");
 
     // Jurisdictions are independent; the store holds kMaxJurisdictions of them.
-    REQUIRE(store.apply(with("jurisdiction = \"TR\"", "jurisdiction = \"EU\"")).error == RuleError::None);
+    REQUIRE(store.apply(with("jurisdiction = \"TR\"", "jurisdiction = \"EU\"")).error == ComplyError::None);
     CHECK(store.generation("EU") == 3U);
     CHECK(store.generation("TR") == 4U);
     for (u32 i = 2U; i < kMaxJurisdictions; ++i)
@@ -447,19 +447,19 @@ TEST_CASE("comply: the store adopts only newer generations, unchanged on every r
         cont::String line("jurisdiction = \"");
         line.append(code);
         line.append("\"");
-        REQUIRE(store.apply(with("jurisdiction = \"TR\"", line)).error == RuleError::None);
+        REQUIRE(store.apply(with("jurisdiction = \"TR\"", line)).error == ComplyError::None);
     }
     const DecodeFailure full = store.apply(with("jurisdiction = \"TR\"", "jurisdiction = \"ZZ\""));
-    CHECK(full.error == RuleError::StoreFull);
+    CHECK(full.error == ComplyError::StoreFull);
     CHECK(store.generation("ZZ") == 0U);
-    CHECK(store.apply(with("generation = 3", "generation = 5")).error == RuleError::None);
+    CHECK(store.apply(with("generation = 3", "generation = 5")).error == ComplyError::None);
 }
 
 TEST_CASE("comply: the query answers rules in force for the scope, in jurisdiction order", "[comply]")
 {
     RuleStore store;
-    REQUIRE(store.apply(kBase).error == RuleError::None);
-    REQUIRE(store.apply(with("jurisdiction = \"TR\"", "jurisdiction = \"EU\"")).error == RuleError::None);
+    REQUIRE(store.apply(kBase).error == ComplyError::None);
+    REQUIRE(store.apply(with("jurisdiction = \"TR\"", "jurisdiction = \"EU\"")).error == ComplyError::None);
 
     // tr.kvkk.processing from 2016-04-07; tr.5651.game-platform in [2026-11-01, 2027-01-01).
     CHECK(query(store, "flow.crash-reports", "2016-04-06", {"TR"}).empty());
@@ -549,7 +549,7 @@ TEST_CASE("comply: a query never sees half a swap", "[comply]")
         texts.push_back(generation_text(number));
     }
     RuleStore store;
-    REQUIRE(store.apply(texts[0]).error == RuleError::None);
+    REQUIRE(store.apply(texts[0]).error == ComplyError::None);
     std::atomic<bool> torn{false};
     std::atomic<bool> done{false};
     std::thread reader(
@@ -569,7 +569,7 @@ TEST_CASE("comply: a query never sees half a swap", "[comply]")
         });
     for (u32 number = 2U; number <= last; ++number)
     {
-        CHECK(store.apply(texts[number - 1U]).error == RuleError::None);
+        CHECK(store.apply(texts[number - 1U]).error == ComplyError::None);
     }
     done = true;
     reader.join();
@@ -579,23 +579,25 @@ TEST_CASE("comply: a query never sees half a swap", "[comply]")
 
 TEST_CASE("comply: error names", "[comply]")
 {
-    CHECK(rule_error_name(RuleError::None) == "none");
-    CHECK(rule_error_name(RuleError::TooLarge) == "too-large");
-    CHECK(rule_error_name(RuleError::Syntax) == "syntax");
-    CHECK(rule_error_name(RuleError::UnsupportedFormat) == "unsupported-format");
-    CHECK(rule_error_name(RuleError::MissingKey) == "missing-key");
-    CHECK(rule_error_name(RuleError::UnknownKey) == "unknown-key");
-    CHECK(rule_error_name(RuleError::WrongType) == "wrong-type");
-    CHECK(rule_error_name(RuleError::BadValue) == "bad-value");
-    CHECK(rule_error_name(RuleError::BadDay) == "bad-day");
-    CHECK(rule_error_name(RuleError::BadGeneration) == "bad-generation");
-    CHECK(rule_error_name(RuleError::DuplicateScope) == "duplicate-scope");
-    CHECK(rule_error_name(RuleError::UnknownScope) == "unknown-scope");
-    CHECK(rule_error_name(RuleError::DuplicateRule) == "duplicate-rule");
-    CHECK(rule_error_name(RuleError::Rollback) == "rollback");
-    CHECK(rule_error_name(RuleError::Conflict) == "conflict");
-    CHECK(rule_error_name(RuleError::AlreadyCurrent) == "already-current");
-    CHECK(rule_error_name(RuleError::StoreFull) == "store-full");
+    CHECK(comply_error_name(ComplyError::None) == "none");
+    CHECK(comply_error_name(ComplyError::TooLarge) == "too-large");
+    CHECK(comply_error_name(ComplyError::Syntax) == "syntax");
+    CHECK(comply_error_name(ComplyError::UnsupportedFormat) == "unsupported-format");
+    CHECK(comply_error_name(ComplyError::MissingKey) == "missing-key");
+    CHECK(comply_error_name(ComplyError::UnknownKey) == "unknown-key");
+    CHECK(comply_error_name(ComplyError::WrongType) == "wrong-type");
+    CHECK(comply_error_name(ComplyError::BadValue) == "bad-value");
+    CHECK(comply_error_name(ComplyError::BadDay) == "bad-day");
+    CHECK(comply_error_name(ComplyError::BadGeneration) == "bad-generation");
+    CHECK(comply_error_name(ComplyError::DuplicateScope) == "duplicate-scope");
+    CHECK(comply_error_name(ComplyError::UnknownScope) == "unknown-scope");
+    CHECK(comply_error_name(ComplyError::DuplicateRule) == "duplicate-rule");
+    CHECK(comply_error_name(ComplyError::DuplicateParty) == "duplicate-party");
+    CHECK(comply_error_name(ComplyError::DuplicateDestination) == "duplicate-destination");
+    CHECK(comply_error_name(ComplyError::Rollback) == "rollback");
+    CHECK(comply_error_name(ComplyError::Conflict) == "conflict");
+    CHECK(comply_error_name(ComplyError::AlreadyCurrent) == "already-current");
+    CHECK(comply_error_name(ComplyError::StoreFull) == "store-full");
 }
 
 TEST_CASE("comply: the committed generations decode, and Turkish law binds the crash pool", "[comply]")
@@ -617,11 +619,11 @@ TEST_CASE("comply: the committed generations decode, and Turkish law binds the c
         const cont::StringView text(reinterpret_cast<const char*>(bytes.data()), bytes.size()); // NOLINT
         RuleGeneration generation;
         const DecodeFailure failure = decode_rules(text, generation);
-        INFO(rule_error_name(failure.error) << " line " << failure.line << " key " << failure.key);
-        REQUIRE(failure.error == RuleError::None);
+        INFO(comply_error_name(failure.error) << " line " << failure.line << " key " << failure.key);
+        REQUIRE(failure.error == ComplyError::None);
         CHECK(cont::StringView(generation.jurisdiction) == code);
         CHECK(generation.number >= 1U);
-        REQUIRE(store.apply(text).error == RuleError::None);
+        REQUIRE(store.apply(text).error == ComplyError::None);
         ++loaded;
     }
     CHECK(loaded == 11U);

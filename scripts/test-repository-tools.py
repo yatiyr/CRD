@@ -166,6 +166,9 @@ crypto_inventory_spec = importlib.util.spec_from_file_location('gen_crypto_inven
                                                                ROOT / 'scripts/gen-crypto-inventory.py')
 crypto_inventory = importlib.util.module_from_spec(crypto_inventory_spec)
 crypto_inventory_spec.loader.exec_module(crypto_inventory)
+text_fold_spec = importlib.util.spec_from_file_location('gen_text_fold', ROOT / 'scripts/gen-text-fold.py')
+text_fold = importlib.util.module_from_spec(text_fold_spec)
+text_fold_spec.loader.exec_module(text_fold)
 review_spec = importlib.util.spec_from_file_location('register_review', ROOT / 'scripts/register-review.py')
 register_review = importlib.util.module_from_spec(review_spec)
 review_spec.loader.exec_module(register_review)
@@ -3489,8 +3492,8 @@ class TestInstruments(unittest.TestCase):
     def test_fuzz_driver_bounds_every_run_and_names_its_corpora(self):
         self.assertEqual(sorted(fuzz_driver.TARGETS), ['ceir-binary', 'ceir-differential', 'ceir-record', 'ceir-text',
                                                        'ceridc-diag', 'ckir-binary', 'ckir-text', 'comply-rules',
-                                                       'crypto-policy', 'memory-allocators', 'net-negotiation',
-                                                       'perf-assets',
+                                                       'comply-sanctions', 'crypto-policy', 'memory-allocators',
+                                                       'net-negotiation', 'perf-assets',
                                                        'perf-bundle', 'perf-capture', 'perf-flight',
                                                        'resources-reload'])
         for name, target in fuzz_driver.TARGETS.items():
@@ -5857,6 +5860,84 @@ class ComplyRules(RegisterFixture, unittest.TestCase):
                                 'reviewed must be a YYYY-MM-DD date')
         self.assert_legal_fails(self.legal(rule_generations=[]),
                                 'rule_generations maps each jurisdiction with rules to its reviewed generation')
+
+
+class TextFold(unittest.TestCase):
+    """scripts/gen-text-fold.py (COMPLY.1): crd-core's search-folding table from the Unicode Character Database, each
+    letter folded by the first rule that answers, every fold a fixed point, and the committed table held by --check."""
+
+    def run_tool(self, root, *args):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = text_fold.main(['--root', str(root), *args])
+        return code, output.getvalue()
+
+    def test_each_letter_folds_by_the_first_rule_that_answers(self):
+        fold = text_fold.fold_of
+        self.assertEqual('ss', fold(0x00DF))  # manual: sharp s
+        self.assertEqual('th', fold(0x00FE))  # manual: thorn
+        self.assertEqual('a', fold(0x0259))  # manual: schwa
+        self.assertEqual('oe', fold(0x0152))  # manual: the OE ligature
+        self.assertEqual('s', fold(0x015E))  # NFKD: S with cedilla
+        self.assertEqual('i', fold(0x0130))  # NFKD: I with dot above
+        self.assertEqual('a', fold(0xFF21))  # NFKD: fullwidth A
+        self.assertEqual('dz', fold(0x01C5))  # NFKD: two letters
+        self.assertEqual('o', fold(0x00D8))  # the name: O WITH STROKE
+        self.assertEqual('i', fold(0x0131))  # the name: DOTLESS I
+        self.assertEqual('l', fold(0x0142))  # the name: L WITH STROKE
+        self.assertEqual('z', fold(0x01EE))  # NFKD to small ezh, which folds again to z
+        self.assertEqual('ж', fold(0x0416))  # case: Cyrillic Zhe
+        self.assertEqual('σ', fold(0x03C2))  # case fold: final sigma
+        self.assertEqual('α', fold(0x0386))  # accent and case: Alpha with tonos
+        self.assertIsNone(fold(ord('a')))  # already folded
+        self.assertIsNone(fold(0x0436))
+        self.assertIsNone(fold(0x01C0))  # a click letter: no rule answers, kept
+
+    def test_code_points_are_letters_separators_or_elided(self):
+        kind = text_fold.kind_of
+        self.assertEqual('letter', kind(ord('a')))
+        self.assertEqual('letter', kind(ord('7')))
+        self.assertEqual('separator', kind(ord(' ')))
+        self.assertEqual('separator', kind(ord('-')))
+        self.assertEqual('separator', kind(0x00D7))  # multiplication sign
+        self.assertEqual('elided', kind(ord("'")))
+        self.assertEqual('elided', kind(0x2019))
+        self.assertEqual('elided', kind(0x0301))  # a combining mark
+        self.assertEqual('elided', kind(0x02BF))  # ayn: a modifier letter, elided
+
+    def test_tables_cover_the_blocks_and_hold_every_fold_to_a_fixed_point(self):
+        ranges, mappings = text_fold.tables()
+        for first, last, kind in ranges:
+            self.assertLessEqual(first, last)
+            self.assertIn(kind, ('separator', 'elided'))
+            self.assertTrue(text_fold.covered(first) and text_fold.covered(last))
+        for (_, last, _), (first, _, _) in zip(ranges, ranges[1:]):
+            self.assertLess(last, first)
+        folded = dict(mappings)
+        self.assertEqual(sorted(folded), [cp for cp, _ in mappings])
+        for cp, out in mappings:
+            self.assertTrue(1 <= len(out) <= 2, hex(cp))
+            for target in out:
+                self.assertEqual([target], folded.get(target, [target]), hex(cp))
+        with patch.dict(text_fold.MANUAL, {0x00DF: 'ßß'}):
+            with self.assertRaises(SystemExit):
+                text_fold.tables()
+
+    def test_check_holds_the_committed_table(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            target = root / text_fold.OUT
+            target.parent.mkdir(parents=True)
+            self.assertEqual(1, self.run_tool(root, '--check')[0])  # missing
+            code, output = self.run_tool(root)
+            self.assertEqual(0, code, output)
+            self.assertEqual(text_fold.render().encode('utf-8'), target.read_bytes())
+            self.assertEqual(0, self.run_tool(root, '--check')[0])
+            target.write_bytes(target.read_bytes().replace(b'0x0131U', b'0x0132U', 1))
+            code, output = self.run_tool(root, '--check')
+            self.assertEqual(1, code)
+            self.assertIn('differs', output)
+        self.assertEqual(0, self.run_tool(ROOT, '--check')[0])  # the committed table
 
 
 class CryptoInventory(RegisterFixture, unittest.TestCase):

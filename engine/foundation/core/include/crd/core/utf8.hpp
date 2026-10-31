@@ -74,4 +74,23 @@ namespace crd
     return length;
 }
 
+// Decodes the well-formed UTF-8 sequence at `p` into `code_point` and returns its length, or returns 0 (and leaves
+// `code_point` unchanged) when the bytes there are not one, as utf8_sequence_length judges them.
+[[nodiscard]] constexpr usize utf8_decode(const u8* p, usize n, u32& code_point) noexcept
+{
+    const usize length = utf8_sequence_length(p, n);
+    if (length == 0U)
+    {
+        return 0U;
+    }
+    constexpr u8 lead_bits[] = {0x7FU, 0x1FU, 0x0FU, 0x07U}; // NOLINT(modernize-avoid-c-arrays)
+    u32 value = static_cast<u32>(p[0] & lead_bits[length - 1U]);
+    for (usize i = 1U; i < length; ++i)
+    {
+        value = (value << 6U) | (p[i] & 0x3FU);
+    }
+    code_point = value;
+    return length;
+}
+
 } // namespace crd
