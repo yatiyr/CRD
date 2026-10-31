@@ -325,6 +325,19 @@ struct NnSoftmaxF32
     crd::u64 d;
 };
 
+// The rows [lo, hi) of a last-dimension layernorm over [rows, d] (nn.hpp nn_layernorm, torch semantics: biased
+// variance, affine): the index-order mean, the variance as an index-order chain of single-rounded fmas from 0, then
+// y = fma((x - mean) * rstd, g, b) with rstd = 1 / sqrt(var / d + eps).
+struct NnLayerNormF32
+{
+    const crd::f32* x;
+    const crd::f32* g;
+    const crd::f32* b;
+    crd::f32* y;
+    crd::u64 d;
+    crd::f32 eps;
+};
+
 // The Q8_0 linear y = x @ W^T + b (optionally ReLU) for the rows [lo, hi): each row's activations quantize to Q8_0
 // blocks (quant_core.hpp quantize_q8_0_blocks) and every output is the pinned lane-parallel dot (nn.hpp).
 struct NnLinearQ8
@@ -427,6 +440,7 @@ struct TensorKernels
     void (*quantize_u8_row)(const crd::f32* x, crd::u64 k, crd::u8* out, crd::f32& scale,
                             crd::i32& zero_point) noexcept;
     void (*nn_softmax_rows)(const NnSoftmaxF32& c, crd::u32 lo, crd::u32 hi) noexcept;
+    void (*nn_layernorm_rows)(const NnLayerNormF32& c, crd::u32 lo, crd::u32 hi) noexcept;
     void (*nn_linear_q8_rows)(const NnLinearQ8& c, crd::u32 lo, crd::u32 hi) noexcept;
     // The row-major weights of nn_linear_i8 and the packed weights of the NnSequential runner; the same bits.
     void (*nn_linear_i8_rows)(const NnLinearI8& c, crd::u32 lo, crd::u32 hi) noexcept;

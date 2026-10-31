@@ -2250,6 +2250,7 @@ const TensorKernels CRD_KERNEL_TABLE(kTensorKernels) = {
     &CRD_MATH_LEVEL_NS::quantize_q8_0,
     &CRD_MATH_LEVEL_NS::quantize_u8_row,
     &CRD_MATH_LEVEL_NS::nn_softmax_rows,
+    &CRD_MATH_LEVEL_NS::NnKernel::layernorm_rows,
     &CRD_MATH_LEVEL_NS::nn_linear_q8_rows,
     &CRD_MATH_LEVEL_NS::nn_linear_i8_rows,
     &CRD_MATH_LEVEL_NS::nn_linear_i8_packed_rows,

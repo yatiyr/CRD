@@ -67,7 +67,7 @@
 #include "dtypes.hpp" // BlockQ8Zero + f16 converts + quantize_q8_0 (activations)
 #include "io.hpp"     // SafetensorsFile — the v14-l reader consumed by the builders
 #include "tensor.hpp"
-#include "tensor_dispatch.hpp" // the dots, quantizers, softmax, GEMM, conv, pool and relu: the per-level tensor kernels
+#include "tensor_dispatch.hpp" // dots, quantizers, softmax, layernorm, GEMM, conv, pool, relu: the level kernels
 
 #include <crd/hesap/dense/blas3.hpp>
 #include <crd/jobs/jobs.hpp>
@@ -265,49 +265,6 @@ inline void ew_run(const EwCtx& c, crd::u32 lo, crd::u32 hi)
     const crd::u64 n0 = static_cast<crd::u64>(lo) * c.per;
     const crd::u64 n1 = static_cast<crd::u64>(hi) * c.per;
     act_span(c.act, c.x + n0, c.y + n0, n1 - n0);
-}
-
-// ---- layernorm (torch semantics: biased variance, affine) ------------------
-inline void layernorm_row(const crd::f32* x, const crd::f32* g, const crd::f32* b, crd::f32 eps, crd::f32* y,
-                          crd::u64 d) noexcept
-{
-    crd::f32 mean = 0.0F;
-    for (crd::u64 jj = 0; jj < d; ++jj)
-    {
-        mean += x[jj];
-    }
-    mean /= static_cast<crd::f32>(d);
-    crd::f32 var = 0.0F;
-    for (crd::u64 jj = 0; jj < d; ++jj)
-    {
-        const crd::f32 t = x[jj] - mean;
-        var = crd::math::fma(t, t, var);
-    }
-    var /= static_cast<crd::f32>(d);
-    const crd::f32 rstd = 1.0F / crd::math::sqrt(var + eps);
-    for (crd::u64 jj = 0; jj < d; ++jj)
-    {
-        y[jj] = crd::math::fma((x[jj] - mean) * rstd, g[jj], b[jj]);
-    }
-}
-
-struct LayerNormCtx
-{
-    const crd::f32* x;
-    const crd::f32* g;
-    const crd::f32* b;
-    crd::f32* y;
-    crd::u64 d;
-    crd::f32 eps;
-};
-
-inline void layernorm_run(const LayerNormCtx& c, crd::u32 lo, crd::u32 hi)
-{
-    for (crd::u32 r = lo; r < hi; ++r)
-    {
-        layernorm_row(c.x + static_cast<crd::u64>(r) * c.d, c.g, c.b, c.eps,
-                      c.y + static_cast<crd::u64>(r) * c.d, c.d);
-    }
 }
 
 // ---- pooling and conv2d: the tensor kernels (NnPool2d, NnConv2d) ------------
@@ -513,8 +470,8 @@ inline void nn_sigmoid(crd::containers::ConstSpan<crd::f32> x, crd::containers::
     {
         return TensorStatus::NotContiguous;
     }
-    const nndetail::LayerNormCtx ctx{x.data(), gamma.data(), beta.data(), y.data(), x.shape(1), eps};
-    nndetail::nn_parallel(static_cast<crd::u32>(x.shape(0)), 1U, &ctx, nndetail::layernorm_run);
+    const NnLayerNormF32 ctx{x.data(), gamma.data(), beta.data(), y.data(), x.shape(1), eps};
+    nndetail::nn_parallel(static_cast<crd::u32>(x.shape(0)), 1U, &ctx, tensor_kernels().table->nn_layernorm_rows);
     return TensorStatus::Ok;
 }
 
@@ -1734,8 +1691,8 @@ private:
         }
         case NnOpKind::LayerNorm:
         {
-            const nndetail::LayerNormCtx ctx{in, weight_ptr(op), bias_ptr(op), out, op.dim_in, op.eps};
-            nndetail::nn_parallel(static_cast<crd::u32>(batch), nw, &ctx, nndetail::layernorm_run);
+            const NnLayerNormF32 ctx{in, weight_ptr(op), bias_ptr(op), out, op.dim_in, op.eps};
+            nndetail::nn_parallel(static_cast<crd::u32>(batch), nw, &ctx, tensor_kernels().table->nn_layernorm_rows);
             return;
         }
         case NnOpKind::Softmax:

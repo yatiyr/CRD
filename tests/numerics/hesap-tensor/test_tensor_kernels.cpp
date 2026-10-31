@@ -578,6 +578,7 @@ TEST_CASE("tensor kernels: the archive holds portable, each body level the build
         CHECK(sparse_complete(levels[i].table->sparse_f32));
         CHECK(sparse_complete(levels[i].table->sparse_f64));
         CHECK(levels[i].table->nn_pool2d_planes != nullptr);
+        CHECK(levels[i].table->nn_layernorm_rows != nullptr);
         CHECK(levels[i].table->nn_conv2d_images != nullptr);
         CHECK(static_cast<int>(levels[i].level) <= CRD_TEST_KERNEL_LEVELS_TOP);
         if (i > 0U)
@@ -1191,6 +1192,73 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar softmax bi
             {
                 CHECK(std::bit_cast<u32>(got[1U * d]) == std::bit_cast<u32>(0.25F));
             }
+        }
+    }
+    CHECK(ran >= 1U);
+}
+
+TEST_CASE("tensor kernels: every level the host runs gives the scalar layernorm bits", "[tensor][kernels]")
+{
+    constexpr u64 rows = 7U;
+    constexpr u64 max_d = 37U;
+    static f32 x[rows * max_d];
+    static f32 g[max_d];
+    static f32 b[max_d];
+    static f32 want[rows * max_d];
+    static f32 got[rows * max_d];
+    constexpr f32 eps = 1e-5F;
+    usize ran = 0;
+    for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
+    {
+        if (!kernel_level_runs_here(level))
+        {
+            continue;
+        }
+        ++ran;
+        for (const u64 d : {1U, 2U, 3U, 8U, 31U, 32U, 37U})
+        {
+            fill_uniform(x, rows * d, 0x1A7EU + d, 4.0F);
+            fill_uniform(g, d, 0x9A3U + d, 2.0F);
+            fill_uniform(b, d, 0xB1A5U + d, 1.0F);
+            for (u64 j = 0; j < d; ++j)
+            {
+                x[1U * d + j] = 3.25F;                                   // a constant row: zero variance
+                x[2U * d + j] = 1e4F + static_cast<f32>(j % 5U) * 1e-3F; // a large offset, the mean's rounding
+                x[3U * d + j] = (j % 4U) == 1U ? kQNaN : x[3U * d + j];  // NaN propagates
+                x[4U * d + j] = static_cast<f32>(j % 2U) * 1e-20F;       // a variance below eps
+                x[5U * d + j] = (j % 3U) == 0U ? -3e18F : x[5U * d + j]; // a variance that overflows f32
+            }
+            for (u64 r = 0; r < rows; ++r) // the scalar order: index-order mean, fma chain, rstd, affine fma
+            {
+                const f32* xr = x + r * d;
+                f32* yr = want + r * d;
+                f32 mean = 0.0F;
+                for (u64 j = 0; j < d; ++j)
+                {
+                    mean += xr[j];
+                }
+                mean /= static_cast<f32>(d);
+                f32 var = 0.0F;
+                for (u64 j = 0; j < d; ++j)
+                {
+                    const f32 t = xr[j] - mean;
+                    var = crd::math::fma(t, t, var);
+                }
+                var /= static_cast<f32>(d);
+                const f32 rstd = 1.0F / crd::math::sqrt(var + eps);
+                for (u64 j = 0; j < d; ++j)
+                {
+                    const f32 affine = crd::math::fma((xr[j] - mean) * rstd, g[j], b[j]);
+                    yr[j] = r == 0U ? std::bit_cast<f32>(kSentinel) : affine; // row 0 lies outside [lo, hi)
+                }
+            }
+            for (u64 i = 0; i < rows * d; ++i)
+            {
+                got[i] = std::bit_cast<f32>(kSentinel);
+            }
+            level.table->nn_layernorm_rows({x, g, b, got, d, eps}, 1U, static_cast<u32>(rows));
+            INFO(crd::cpu_level_name(level.level) << variant_suffix(level) << " d " << d);
+            CHECK(f32_mismatches(want, got, rows * d) == 0U);
         }
     }
     CHECK(ran >= 1U);
