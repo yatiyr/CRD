@@ -589,22 +589,28 @@ TEST_CASE("sanctions: a screening never sees half a swap", "[comply][sanctions]"
 {
     SanctionsStore store;
     loaded(store);
+    // Odd generations keep the vessel, even ones delist it. The texts are written here: Catch2 assertions stay on
+    // this thread, and the applier only applies.
     const usize at = kList.find("[[party]]\nid = \"test.ofac.1003\"");
+    cont::Array<cont::String> texts;
+    for (u64 n = 1U; n <= 200U; ++n)
+    {
+        const cont::String number = joined({"generation = ", digits(2026103101U + n)});
+        texts.push_back(with("generation = 2026103101", number, (n % 2U) != 0U ? kList : kList.substr(0U, at)));
+    }
     std::atomic<bool> stop{false};
+    std::atomic<u32> refused{0U};
     std::thread applier(
-        [&store, &stop, at]
+        [&store, &stop, &refused, &texts]
         {
-            for (u64 n = 1U; n <= 200U; ++n)
+            for (const cont::String& text : texts)
             {
-                // Odd generations keep the vessel, even ones delist it.
-                const cont::String number = joined({"generation = ", digits(2026103101U + n)});
-                const cont::StringView base = (n % 2U) != 0U ? kList : kList.substr(0U, at);
-                (void)store.apply(with("generation = 2026103101", number, base));
+                refused += store.apply(text).error != ComplyError::None ? 1U : 0U;
             }
             stop = true;
         });
     u32 seen = 0U;
-    while (!stop)
+    do
     {
         Request request({"test.ofac"}, {"Sea Falcon"}, PartyKind::Vessel);
         request.identifiers.push_back("imo:9123456");
@@ -612,8 +618,9 @@ TEST_CASE("sanctions: a screening never sees half a swap", "[comply][sanctions]"
         CHECK(
             (screening.parties.empty() ? screening.verdict == Verdict::Clear : screening.verdict == Verdict::Blocked));
         ++seen;
-    }
+    } while (!stop);
     applier.join();
+    CHECK(refused.load() == 0U);
     CHECK(store.generation("test.ofac") == 2026103101U + 200U);
     CHECK(seen > 0U);
 }

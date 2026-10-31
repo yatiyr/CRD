@@ -304,7 +304,8 @@ TEST_CASE("comply: every required key, no unknown key, every type", "[comply]")
     CHECK(unknown.error == ComplyError::UnknownKey);
     CHECK(unknown.line == line_of(top, "note ="));
     CHECK(decode(with("kind = \"flow\"", "kind = \"flow\"\nowner = \"x\"")).error == ComplyError::UnknownKey);
-    CHECK(decode(with("rows = [\"STORE.1\"]", "rows = [\"STORE.1\"]\nverified = true")).error == ComplyError::UnknownKey);
+    CHECK(decode(with("rows = [\"STORE.1\"]", "rows = [\"STORE.1\"]\nverified = true")).error ==
+          ComplyError::UnknownKey);
 
     check_refusal(with("generation = 3", "generation = \"3\""), ComplyError::WrongType, "generation");
     check_refusal(with("jurisdiction = \"TR\"", "jurisdiction = 90"), ComplyError::WrongType, "jurisdiction");
@@ -366,7 +367,8 @@ TEST_CASE("comply: values, identifiers and enumerations are closed", "[comply]")
     check_refusal(with("state = \"live\"", "state = \"shipped\""), ComplyError::BadValue, "state");
     check_refusal(with("check = \"planned\"", "check = \"passing\""), ComplyError::BadValue, "check");
     check_refusal(with("counsel = \"needed\"", "counsel = \"maybe\""), ComplyError::BadValue, "counsel");
-    check_refusal(with("applies_to = [\"flow.crash-reports\"]", "applies_to = []"), ComplyError::BadValue, "applies_to");
+    check_refusal(with("applies_to = [\"flow.crash-reports\"]", "applies_to = []"), ComplyError::BadValue,
+                  "applies_to");
     check_refusal(with("rows = [\"STORE.1\"]", "rows = [\"STORE..1\"]"), ComplyError::BadValue, "rows");
     check_refusal(with(R"(applies_to = ["product.store", "flow.crash-reports"])",
                        R"(applies_to = ["product.store", "product.store"])"),
@@ -550,6 +552,9 @@ TEST_CASE("comply: a query never sees half a swap", "[comply]")
     }
     RuleStore store;
     REQUIRE(store.apply(texts[0]).error == ComplyError::None);
+    // The request is made here: Catch2 assertions stay on this thread, and the reader only queries.
+    const cont::StringView codes[] = {"TR"};
+    const RuleQuery request{"flow.x", cont::ConstSpan<cont::StringView>(codes, 1U), day("2026-01-01")};
     std::atomic<bool> torn{false};
     std::atomic<bool> done{false};
     std::thread reader(
@@ -557,7 +562,8 @@ TEST_CASE("comply: a query never sees half a swap", "[comply]")
         {
             while (!done.load())
             {
-                const cont::Array<Binding> answer = query(store, "flow.x", "2026-01-01", {"TR"});
+                cont::Array<Binding> answer;
+                store.query(request, answer);
                 const u64 number = answer.empty() ? 0U : answer[0].generation;
                 bool whole = answer.size() == number;
                 for (const Binding& binding : answer)

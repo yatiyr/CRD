@@ -29,7 +29,7 @@ enum class FoldKind : u8
 struct CodePointFold
 {
     FoldKind kind = FoldKind::Letter;
-    u8 count = 0U;   // 1 or 2 for a letter, 0 otherwise
+    u32 count = 0U;  // 1 or 2 for a letter, 0 otherwise
     u32 out[2] = {}; // NOLINT(modernize-avoid-c-arrays): fixed storage, no heap
 };
 
