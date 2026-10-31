@@ -39,7 +39,7 @@ checks.
 2. `plan` runs `python ci/pipeline.py upload` on the launcher's agent: the preflight checks (actionlint while GitHub
    workflows exist, `check-pins.py`, `check-ci-tiers.py`, `test-ci-platform.py`), the mapping of the build to a
    ci-tier.py event (`schedule`; a manual build with `CERID_CI_TIER` as `workflow_dispatch`; a pull request against
-   its merge base; a push against the newest head the store recorded for the branch), the plan, `ci-plan.json` as an
+   its merge base; a push against the commit of the branch's newest passing build, so a cancelled or failed build's changes stay in the next change set), the plan, `ci-plan.json` as an
    artifact and the planned steps uploaded to the coordinator; it records the head for the next push.
 3. Every planned step runs `pipeline.py lane`, `pipeline.py run repository` or a device command on its cell's queue:
    `cerid-cloud` for launched machines, `cerid-owned` for owned agents.
@@ -296,7 +296,7 @@ functions (ANSI, the first error, log chunks, the matrix filters, status) are te
 | `orchestrator/...` | the coordinator | builds, jobs, agents, logs and artifacts ([state layout](#state-layout-orchestrator-in-the-result-store)) |
 | `budget/gcp-<YYYY-MM>.json` | the dispatcher, `ops.py budget --pull` | the newest Cloud Billing notification |
 | `images/<family>.json` | `ops.py bake` | the baked image of a family |
-| `heads/<branch>.json` | `upload` | the last planned head (the next push's base) |
+| `heads/<branch>.json` | `conclude` | the commit of the branch's newest passing build (the next push's base) |
 | `quota/ftl/<date>/<kind>/<job>.json` | the FTL adapter | the Spark plan's daily test quota |
 | `blobs/cpm/`, `blobs/genmc/` | lanes | dependency caches |
 
@@ -327,7 +327,7 @@ systems for every preset, test, guard, sanitizer, SDE arm and ARM64 lane) is CI-
 | `preflight` | Validate workflows (actionlint 1.7.12) | `plan` | run preflight: Validate workflows (actionlint) |
 | `preflight` | Pinned inputs agree with the registry | `plan` | run preflight: Pinned inputs agree with the registry |
 | `preflight` | Tier mapping owns every preset | `plan` | run preflight: Tier mapping owns every preset |
-| `preflight` | Choose the comparison base | `plan` | push_base(): the newest planned head on the branch (result store) |
+| `preflight` | Choose the comparison base | `plan` | push_base(): the commit of the branch's newest passing build (result store) |
 | `preflight` | Fetch the comparison base | `plan` | git fetch of the base before planning |
 | `preflight` | Resolve the tier | `plan` | plan(): ci-tier.py resolve, then the module selection |
 | `repository` | uses actions/checkout | `repository-<host>` | agent checkout of the build commit |

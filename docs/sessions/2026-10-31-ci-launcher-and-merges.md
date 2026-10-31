@@ -125,6 +125,9 @@ Done in the `cerid-ci` project, following [the setup recipe](../recipes/ci-platf
   finished. Builds now follow `ci.yml`'s concurrency groups: one push build per branch runs, a newer push cancels the
   one still waiting, a pull request's newer build cancels the one in progress, and manual and scheduled builds run on
   their own.
+- **A cancelled build's changes left the change set:** the next push's base was the head of the newest build whose
+  plan had passed, so a build cancelled after its plan (builds #30 to #42) took its changes out of the next build's
+  module selection. The base is now the commit of the branch's newest passing build, recorded by the required step.
 
 ## Workspace
 

@@ -696,6 +696,26 @@ AGENT_SPEC = {'coordinator': 'http://10.128.0.2:8780', 'external': 'https://ci.e
               'agent_url': 'http://10.128.0.2:8780/agent/cerid-agent.py', 'agent_sha256': 'ab' * 32}
 
 
+class GreenBase(unittest.TestCase):
+    def test_only_a_passing_branch_build_moves_the_change_base(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            store = pipeline.open_store(scratch)
+            env = {'CERID_CI_EVENT': 'push', 'CERID_CI_BRANCH': 'main', 'CERID_CI_COMMIT': 'a' * 40,
+                   'CERID_CI_BUILD_NUMBER': '7', 'CERID_CI_PULL_REQUEST': 'false'}
+            self.assertFalse(pipeline.record_green(store, env, False))
+            self.assertEqual(pipeline.push_base(store, 'main'), '', 'a failed or cancelled build moves nothing')
+            self.assertTrue(pipeline.record_green(store, env, True))
+            self.assertEqual(pipeline.push_base(store, 'main'), 'a' * 40)
+            self.assertFalse(pipeline.record_green(store, dict(env, CERID_CI_EVENT='pull_request',
+                                                               CERID_CI_COMMIT='b' * 40), True))
+            self.assertEqual(pipeline.push_base(store, 'main'), 'a' * 40, 'a pull request never moves its branch')
+
+    def test_planning_no_longer_moves_the_base(self):
+        source = (ROOT / 'ci/pipeline.py').read_text(encoding='utf-8')
+        upload = source[source.index("if args.command == 'upload':"):source.index("if args.command == 'lane':")]
+        self.assertNotIn("heads/", upload, 'a plan that succeeds says nothing about its lanes')
+
+
 class BenchMachine(unittest.TestCase):
     """ci/bench_vm.py: the optimization track's machine runs only on demand, holds no credential and keeps the
     exit status of a detached command."""

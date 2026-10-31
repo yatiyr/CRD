@@ -1059,10 +1059,24 @@ def agent_tool(*args, environ=None):
 
 
 def push_base(store, branch):
-    """The head of the newest earlier build on the branch whose plan succeeded (ci-tier.py base's rule without a
-    hosting API): a replaced or cancelled build can never drop its changes from the next tier decision."""
+    """The commit of the newest build on the branch that passed (record_green): the change set runs from there, so
+    the changes of a build that was cancelled, replaced or failed after its plan are never dropped from the next
+    tier and module selection. The result cache keeps re-running the passed steps cheap."""
     record = store.get_json('heads/%s.json' % branch.replace('/', '__')) if store else None
     return (record or {}).get('head', '')
+
+
+def record_green(store, environ, ok):
+    """After the required result: a passing push, manual or scheduled build makes its commit the branch's base."""
+    if not ok or store is None or environ.get('CERID_CI_EVENT') == 'pull_request' \
+            or environ.get('CERID_CI_PULL_REQUEST', 'false') not in ('', 'false'):
+        return False
+    branch, commit = environ.get('CERID_CI_BRANCH'), environ.get('CERID_CI_COMMIT')
+    if not branch or not commit:
+        return False
+    store.put_json('heads/%s.json' % branch.replace('/', '__'), {'head': commit,
+                                                                  'build': environ.get('CERID_CI_BUILD_NUMBER')})
+    return True
 
 
 # --------------------------------------------------------------------------------------------- lanes
@@ -2306,9 +2320,6 @@ def main(argv=None):
         subprocess.run(agent_tool('artifact', 'upload', 'ci-plan.json'), cwd=str(ROOT), check=True)
         document = json.dumps(orchestrator_pipeline(planned, load_registry()['queues']))
         subprocess.run(agent_tool('pipeline', 'upload', '-'), input=document, text=True, check=True)
-        store.put_json('heads/%s.json' % branch.replace('/', '__'), {'head': subprocess.run(
-            ['git', 'rev-parse', 'HEAD'], cwd=str(ROOT), capture_output=True, text=True, check=True).stdout.strip(),
-            'build': os.environ.get('CERID_CI_BUILD_NUMBER')})
         return 0
     if args.command == 'lane':
         registry = load_registry()
@@ -2325,6 +2336,8 @@ def main(argv=None):
         planned = load_json(args.plan)
         ok, rows = conclude(planned, orchestrator_outcome)
         print(ci_tier.conclusion_markdown(ok, rows, planned['tier']))
+        if os.environ.get('CERID_CI'):
+            record_green(open_store(), os.environ, ok)
         return 0 if ok else 1
     if args.command == 'probe':
         return probe_macos()
