@@ -43,6 +43,17 @@ DEFAULTS = {
     'artifacts_days': 30,
 }
 TRIGGER_SOURCES = ('webhook', 'poll', 'manual', 'schedule')
+
+
+def concurrency_group(build):
+    """(group, cancel_in_progress) of a build, GitHub's concurrency groups in .github/workflows/ci.yml: a branch's pushes
+    build one at a time and a newer push replaces the build still waiting; a pull request's newer build cancels the one
+    in progress; a manual or scheduled build runs on its own (None)."""
+    if build.get('source') not in ('webhook', 'poll'):
+        return None, False
+    if build.get('event') == 'pull_request':
+        return 'pr:%s:%s' % (build['repository'], build.get('pull_request') or build.get('branch')), True
+    return 'push:%s:%s' % (build['repository'], build.get('branch')), False
 # How an agent gets the commit: `direct` fetches the configured repository URL as it is (any shape: https, ssh, a
 # filesystem path), `mirror` fetches the coordinator's mirror with the job token. Only this field decides.
 CHECKOUT_STRATEGIES = ('direct', 'mirror')
@@ -274,6 +285,7 @@ class Coordinator:
             except Exception as error:  # the agent fails its checkout visibly; the build still exists
                 self.log('mirror_failed', level='error', build=number, error=str(error))
         self.upload(number, document or self.bootstrap(repo))
+        self._supersede(self.build(number))
         if source == 'manual':
             self.audit(created_by or 'unknown', 'build-create', 'build %d' % number, '%s %s at %s %s' % (
                 repository, build['branch'], build['commit'][:12], ' '.join(
@@ -281,6 +293,19 @@ class Coordinator:
         self.log('build_created', build=number, repository=repository, source=source, branch=build['branch'],
                  commit=build['commit'])
         return self.build(number), True
+
+    def _supersede(self, build):
+        """Cancel the builds `build` replaces in its concurrency group: every older one still waiting (all but the
+        oldest, which holds the group and runs) or, for a pull request, every older one."""
+        group, cancel_in_progress = concurrency_group(build)
+        if group is None:
+            return
+        older = sorted((b for b in (self.get(self.build_name(n)) for n in self.active_builds() if n < build['number'])
+                        if b and not b['cancel_requested'] and b['state'] not in state.BUILD_TERMINAL
+                        and concurrency_group(b)[0] == group), key=lambda b: b['number'])
+        for replaced in older[0 if cancel_in_progress else 1:]:
+            self.cancel_build(replaced['number'], by='concurrency',
+                              reason='superseded by build #%d' % build['number'])
 
     def upload(self, number, document, by_job=None):
         """Add the steps of `document` to build `number` (a step uploading more steps, or the first pipeline)."""
@@ -435,10 +460,15 @@ class Coordinator:
     def ready_jobs(self, queue=None):
         """Scheduled jobs whose dependencies are satisfied, highest priority first, then oldest build, then order."""
         ready = []
-        for number in self.active_builds():
-            build = self.get(self.build_name(number))
-            if build is None or build['cancel_requested']:
-                continue
+        builds = [b for b in (self.get(self.build_name(n)) for n in self.active_builds())
+                  if b is not None and not b['cancel_requested']]
+        holders = {}
+        for build in sorted(builds, key=lambda b: b['number']):
+            holders.setdefault(concurrency_group(build)[0], build['number'])
+        for build in builds:
+            group = concurrency_group(build)[0]
+            if group is not None and holders[group] != build['number']:
+                continue  # an older build of its group still runs; this one waits for it
             jobs = self.jobs_of(build)
             by_key = {j['key']: j for j in jobs}
             for job in jobs:

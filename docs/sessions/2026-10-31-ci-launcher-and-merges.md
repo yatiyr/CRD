@@ -121,6 +121,11 @@ Done in the `cerid-ci` project, following [the setup recipe](../recipes/ci-platf
   Compute Engine was still deleting its machine. A machine record now stays open, and counts against the cloud
   machine limit, until the instance is gone; a deletion still pending after ten minutes is requested again.
 
+- **Every push started a full build, and they all ran at once:** builds #30 to #41 shared the six machines, so none
+  finished. Builds now follow `ci.yml`'s concurrency groups: one push build per branch runs, a newer push cancels the
+  one still waiting, a pull request's newer build cancels the one in progress, and manual and scheduled builds run on
+  their own.
+
 ## Workspace
 
 `.agent/workspace.json` was created with `code_remotes: ["origin"]` and that tag excluded. The first sync from this

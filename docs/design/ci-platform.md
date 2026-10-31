@@ -110,7 +110,7 @@ records the decision and §14 the security review. Everything is Python standard
 |---|---|---|
 | State machines | [state.py](../../ci/coordinator/state.py) | the ten job states and five build states; every allowed move is a table row |
 | Pipeline document | [steps.py](../../ci/coordinator/steps.py) | `cerid-ci-pipeline/1`: keys, `wait`, `depends_on`, queues and tags, priority, concurrency groups, timeouts, soft fail, retry, skip, env, artifacts, secrets; unknown fields refused |
-| Coordinator core | [scheduler.py](../../ci/coordinator/scheduler.py) | builds, uploads, assignment, agents, tokens, logs, artifacts, annotations, meta-data, commit status, the watchdog, retention |
+| Coordinator core | [scheduler.py](../../ci/coordinator/scheduler.py) | builds, uploads, assignment, agents, tokens, logs, artifacts, annotations, meta-data, commit status, the watchdog, retention; build concurrency as GitHub's `ci.yml` groups it: a branch's pushes build one at a time and a newer push cancels the build still waiting, a pull request's newer build cancels the one in progress, manual and scheduled builds run on their own |
 | Cloud dispatcher | [dispatch.py](../../ci/coordinator/dispatch.py) | one machine per ready cloud job through the four executors, the budget, the reaper, the orphan sweep |
 | Authentication | [auth.py](../../ci/coordinator/auth.py) | hashed bearer tokens; RS256/ES256 JWT verification for Google identity, Cloudflare Access and IAP |
 | Hosts | [hosts.py](../../ci/coordinator/hosts.py), [triggers.py](../../ci/coordinator/triggers.py) | signed webhooks, polling, cron schedules, commit status, the git mirror |

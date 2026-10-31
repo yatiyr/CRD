@@ -717,6 +717,39 @@ class Base(unittest.TestCase):
 
 
 
+class Concurrency(Base):
+    """GitHub's concurrency groups: one push build per branch at a time, the newest waiting one kept."""
+
+    def test_a_branch_builds_one_push_at_a_time_and_keeps_only_the_newest_waiting(self):
+        first = self.build()
+        second = self.build(commit='b' * 40)
+        launcher = agent(self.c, name='l')
+        self.assertEqual(self.c.poll(launcher)['job']['build'], first['number'])
+        self.assertIsNone(self.c.poll(agent(self.c, name='l2')), 'the second push waits for the first')
+        third = self.build(commit='c' * 40)
+        self.assertTrue(self.c.build(second['number'])['cancel_requested'])
+        self.assertEqual(self.c.build(second['number'])['cancel_reason'], 'superseded by build #%d' % third['number'])
+        self.assertFalse(self.c.build(first['number'])['cancel_requested'], 'the running build keeps running')
+        self.assertEqual([j['build'] for _, j in self.c.ready_jobs()], [])
+        self.c.cancel_build(first['number'], by='t')
+        self.assertEqual([j['build'] for _, j in self.c.ready_jobs()], [third['number']])
+
+    def test_other_branches_manual_and_scheduled_builds_do_not_wait(self):
+        self.build()
+        other = self.build(branch='feature', commit='d' * 40)
+        manual, _ = self.c.create_build('cerid', {'event': 'push', 'branch': 'main', 'commit': 'e' * 40}, 'manual',
+                                        created_by='t')
+        ready = sorted(j['build'] for _, j in self.c.ready_jobs())
+        self.assertEqual(ready, sorted([1, other['number'], manual['number']]))
+
+    def test_a_pull_requests_newer_build_cancels_the_one_in_progress(self):
+        first = self.build(event='pull_request', pull_request='7', commit='a' * 40)
+        self.c.poll(agent(self.c, name='l'))
+        second = self.build(event='pull_request', pull_request='7', commit='f' * 40)
+        self.assertTrue(self.c.build(first['number'])['cancel_requested'])
+        self.assertEqual([j['build'] for _, j in self.c.ready_jobs()], [second['number']])
+
+
 class Core(Base):
     def test_a_build_starts_with_its_plan_on_the_launcher_queue(self):
         build = self.build()
@@ -919,13 +952,13 @@ class Core(Base):
         self.assertEqual((got['checkout']['strategy'], got['checkout']['url']), ('direct', '/srv/git/cerid.git'))
         self.assertEqual(pinned, [], 'a direct repository is never pinned in the mirror')
         self.c.repositories['cerid']['checkout'] = 'mirror'
-        mirrored = self.build(commit='b' * 40)
+        mirrored = self.build(commit='b' * 40, branch='mirrored')  # its own branch: main's build still runs
         got = self.c.poll(agent(self.c, name='l2'))
         self.assertEqual((got['checkout']['url'], got['checkout']['ref']),
                          ('/git/cerid.git', 'refs/cerid/builds/%d' % mirrored['number']))
         self.assertEqual(pinned, [('cerid', mirrored['number'])])
         self.c.repositories['cerid']['checkout'] = 'mirrror'
-        self.build(commit='c' * 40)
+        self.build(commit='c' * 40, branch='misspelt')
         with self.assertRaises(ValueError):
             self.c.poll(agent(self.c, name='l3'))
         from coordinator import main as coordinator_main
