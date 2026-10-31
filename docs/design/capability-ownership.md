@@ -108,8 +108,8 @@ each a `pending` entry or a listed review, all on OWN.1:
 | hash.fnv1a → core | 33 engine files and 2 asset-cooker files, **moved** 2026-10-31 | see below; `sandbox`'s BVH-viewer fingerprint mixes the FNV constants into SplitMix64 and moves with the seed generators. |
 | hash.combine → core | `lod/lod_asset.cpp`, `scene/archetype_graph.hpp`, **moved** 2026-10-31 | the golden-ratio combiner `h ^= v + 0x9E3779B97F4A7C15 + (h << 6) + (h >> 2)`, twice; see below. |
 | random.seed-generators → core | 11 files and core's own workload probe, **moved** 2026-10-31 | SplitMix64 in ceir, perf, core, hesap-eigen, three hesap-stats headers, containers' `hash_u64` finalizer and the sandbox; the MMIX LCG step in hesap-dense's SVD, hesap-fft's sparse FFT and hesap-iterative's IDR(s); bit-exact, see below. |
-| cpu.kernel-dispatch → core | `math/libm.hpp` | reads `__AVX2__` and `__FMA__` to choose the FMA instruction; the choice moves behind a crd-core kernel-level macro. |
-| math.fixed-size-linear-algebra → math | `geometry-primitives/transform.hpp` | `det3` and the inverse-transpose; crd-math gains Mat2/Mat3 `determinant`, `inverse` and the 3x3 solve. By reading also: `circumcenter.hpp` and mesh-processing's `quadric.hpp` (Cramer's rule), which move onto the same routines with declared tolerances. |
+| cpu.kernel-dispatch → core | `math/libm.hpp`, **moved** 2026-10-31 | read `__AVX2__` and `__FMA__` to choose the FMA instruction; it now reads crd-core's `CRD_TARGET_X64` and `CRD_TARGET_X64_FMA`, see below. |
+| math.fixed-size-linear-algebra → math | `geometry-primitives/transform.hpp`, `circumcenter.hpp`, mesh-processing's `quadric.hpp`, **moved** 2026-10-31 | `det3`, the inverse-transpose, the 2D attributes' determinant, the symmetric cofactor inverse and both circumcentres' Cramer's rule; crd-math gained Mat2/Mat3 `determinant`, `inverse`, `try_inverse`, `inverse_transpose`, `solve` and `try_solve`, see below. |
 | io.durable-saves → platform | `perf/bundle.cpp` | crd-perf's `write_bundle_atomic` replaces a file durably by hand; it moves onto `durable_file.hpp` once crd-perf, which ships in the relocatable package, can link crd-platform. |
 | compression.codecs → compression (new) | resources' `deflate`, `crdr` zstd use | decision 1. |
 | numerics.signal-processing → hesap-dsp | `audio/audio_kernels.hpp` | designs its biquad with hesap-dsp's RBJ formulas but runs its own transposed direct-form II loop; the stateful section step belongs to hesap-dsp. |
@@ -165,3 +165,42 @@ mixed FNV and SplitMix constants by hand and is now FNV-1a over the slider tuple
 (`runtime/examples/bench_hash.cpp`, through `ab-board.py`) times every moved function against the copy it replaced
 and covers the FNV-1a move as well.
 
+### The ISA-read and small-matrix move
+
+`crd/core/kernel_level.hpp` reports the instruction set of the unit being compiled for code whose choice is not a
+kernel table's: `CRD_TARGET_X64` (x64, ARM64EC excluded) and `CRD_TARGET_X64_FMA` (such a unit may issue FMA: GCC and
+Clang's `-mfma`, which the avx2 and avx512 levels' x86-64-v3 and -v4 carry, or MSVC's `/arch:AVX2` and up, which
+defines no `__FMA__`). `libm.hpp` chooses its fma body from them, and `CRD_MATH_SCALAR_DISPATCH` is now
+`CRD_TARGET_X64 && !CRD_TARGET_X64_FMA` in general code. The two conditions it replaces differed only for GCC or Clang
+code built with `-mavx2` but not `-mfma`, which no preset or level compiles (every x64 level is an x86-64-vN level).
+The oracle is the preprocessor's: the SIMD-type probe, compiled once per CPU level, refuses to compile unless crd-core
+reports FMA on exactly the avx2 and avx512 levels, `libm.hpp` computes fma in software on exactly the others, and on
+MSVC issues the intrinsic on exactly the FMA levels; CI's forced-level lanes and its MSVC, clang-cl and ARM64 lanes
+compile it on every target. The selected code is unchanged, so no board applies.
+
+crd-math's `mat_types.hpp` gained the closed-form routines: `determinant` (Mat2, Mat3: the cofactor expansion along
+the first column, in the written order), `inverse` (Mat2, Mat3, beside Mat4's), `try_inverse` (Mat3: refuses
+`|det| < min_abs_det`, a NaN determinant passes, as `optimal_position` did), `inverse_transpose` (Mat3), and `solve` and
+`try_solve` (Mat2, Mat3: Cramer's rule, gated like `try_inverse`). The inverses divide by the value `determinant`
+returns, bit for bit, so a caller that tests the determinant tests the value the inverse uses. The 3x3 solve takes each
+of its four determinants as `determinant` of the transpose (the expansion along the first row), in which the four share
+the six 2x2 minors of the lower two rows of `[m | b]`: 27 multiplications where the adjugate takes 33, which the first
+board measured as the difference between parity and a 9% loss. `try_solve` gates on the determinant it divides by. The
+sites:
+
+- `transform.hpp`'s `det3`, `inverse_transpose_3` and the 2D attributes' determinant: the same expressions,
+  **bit-exact** (a 4096-draw sweep in f32 and f64 against the copies, `test_transform.cpp`).
+- `quadric.hpp`'s `optimal_position`: `try_inverse` and the matrix-vector product reproduce the symmetric cofactor
+  inverse's six cofactors, its gate and its summation order, **bit-exact**, refusals included (`test_quadric.cpp`).
+- `circumcenter.hpp`: both centres solve the translated system `(v - a)·O' = |v - a|^2 / 2` with `try_solve`, the
+  centroid when `|det|` is below the smallest normal f64 (zero, as the copies tested, or so small its reciprocal
+  overflows, where they returned infinities). The 3D centre is **bit-exact** (the copy expanded along the first row
+  too); the 2D copy squared absolute coordinates, and the translated centre is within a declared tolerance of 2^-40 of
+  the extent plus the circumradius near the origin and keeps digits the copy lost away from it (`test_circumcenter.cpp`,
+  the first direct tests of these functions; the Delaunay, Voronoi, Ruppert and tetrahedral refinement suites pass
+  unchanged).
+
+Reviewed and left: geometry-convex's sub-distance barycentrics (signed volumes from crd-math's `dot` and `cross`, a
+geometric formula rather than a matrix routine); CKIR's evaluator `mat_det` (the IR oracle's determinant, rounded per
+operation at the node's dtype, the IR's own semantics like decision 6) and its 2D-Gaussian-splat emitter (Cramer's rule
+written into IR, decision 6).
