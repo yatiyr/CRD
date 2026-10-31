@@ -9,8 +9,11 @@ qualified on) exists in each listed preset's job, is gated on exactly the listed
 tier; every compiler-cached lane (CRD_CACHED_PRESETS) is a hosted preset the local cache rule covers, never a
 cold-acquisition preset, built in a job with the cache steps and statistics (docs/design/build-performance.md#hosted-lanes);
 the class table ends with a catch-all so every changed path resolves to a tier; cancellation stays limited to
-superseded pull-request runs. Every other workflow file is an experiment triggered only by workflow_dispatch, so it
-never joins a tier; only there may a diagnostic preset run hosted.
+superseded pull-request runs. Every job declares a time limit of at most MAX_JOB_MINUTES. A preset split into
+`shards` runs in a job that hands each leg its shard (CRD_SHARD) for the inventory, the tests, the register gate and
+the evidence bundle, uploads each leg's evidence under its own name and runs the preset's steps on shard 1 only.
+Every other workflow file is an experiment triggered only by workflow_dispatch, so it never joins a tier; only there
+may a diagnostic preset run hosted.
 """
 from pathlib import Path
 import argparse
@@ -25,6 +28,13 @@ DEFAULT_WORKFLOW = ROOT / '.github/workflows/ci.yml'
 TIER_ORDER = ('preflight', 'change', 'complete')
 PRESET_TIERS = ('change', 'complete', 'diagnostic')
 FIXED_JOBS = ('preflight', 'repository', 'required')
+# GitHub's 6 h job limit less the hour docs/design/ci-tiers.md#parallelism-and-shards keeps in hand.
+MAX_JOB_MINUTES = 300
+SHARD_ENV = "CRD_SHARD: ${{ matrix.shards && format('{0}/{1}', matrix.shard, matrix.shards) || '' }}"
+SHARD_EVIDENCE = ("evidence-${{ matrix.preset }}${{ matrix.shards && format('-shard-{0}-of-{1}', matrix.shard, "
+                  "matrix.shards) || '' }}")
+SHARD_ONE = '(!matrix.shard || matrix.shard == 1)'
+SHARD_COMMANDS = ('ci-evidence.py inventory', 'ci-evidence.py watch', 'ci-evidence.py bundle')
 
 
 def output_key(job):
@@ -96,6 +106,66 @@ def validate_preset_step(step, spec, entries, blocks):
     for job, names in sorted(gated.items()):
         for name in sorted(names - set(presets)):
             problems.append("step %r in job %s is gated on %s, which the mapping does not list" % (step, job, name))
+    return problems
+
+
+def command_calls(block, command):
+    """Each call of `command` in a job with its continuation lines (a line ending in a backslash or a backtick)."""
+    calls, current = [], None
+    for line in block.splitlines():
+        if current is not None:
+            current += ' ' + line.strip()
+        elif command in line:
+            current = line.strip()
+        if current is not None and not line.rstrip().endswith(('\\', '`')):
+            calls.append(current)
+            current = None
+    return calls
+
+
+def validate_shards(entries, blocks, preset_steps):
+    """A sharded preset's job gives each leg its shard and keeps the legs' evidence apart; its steps run once."""
+    problems = []
+    for name, entry in entries.items():
+        if 'shards' not in entry:
+            continue
+        count = entry['shards']
+        if entry.get('tier') == 'diagnostic' or not isinstance(count, int) or isinstance(count, bool) or count < 2:
+            problems.append('preset %s: shards is a count of at least 2 on a hosted preset' % name)
+            continue
+        job = entry.get('job', '')
+        block = blocks.get(job, '')
+        folded = re.sub(r'\s*\n\s*', ' ', block)
+        if SHARD_ENV not in block:
+            problems.append('job %s runs sharded preset %s but does not set %s' % (job, name, SHARD_ENV))
+        for command in SHARD_COMMANDS:
+            calls = command_calls(block, command)
+            if not calls or any('--shard=' not in call for call in calls):
+                problems.append('job %s runs sharded preset %s but its %s does not take --shard='
+                                % (job, name, command))
+        if '--lane-inventory' not in block:
+            problems.append('job %s runs sharded preset %s but its register gate gets no --lane-inventory'
+                            % (job, name))
+        if SHARD_EVIDENCE not in folded:
+            problems.append('job %s runs sharded preset %s but its legs share one evidence name' % (job, name))
+        for step, spec in preset_steps.items():
+            if name not in spec.get('presets', [spec.get('preset')]):
+                continue
+            step_block = re.search(r'^ +- name: %s\n((?: {8,}\S.*\n)+)' % re.escape(step), block, re.M)
+            if step_block is not None and SHARD_ONE not in re.sub(r'\s*\n\s*', ' ', step_block.group(1)):
+                problems.append('step %r rides on sharded preset %s but is not gated on %s' % (step, name, SHARD_ONE))
+    return problems
+
+
+def validate_time_limits(blocks):
+    """Every job of the workflow stops at MAX_JOB_MINUTES at the latest."""
+    problems = []
+    for job, block in blocks.items():
+        limit = re.search(r'^    timeout-minutes: ([0-9]+)\s*$', block, re.M)
+        if limit is None:
+            problems.append('job %s declares no timeout-minutes' % job)
+        elif int(limit.group(1)) > MAX_JOB_MINUTES:
+            problems.append('job %s may run %s minutes, more than %d' % (job, limit.group(1), MAX_JOB_MINUTES))
     return problems
 
 
@@ -209,13 +279,16 @@ def validate(tiers, presets_document, workflow_text):
             problems.append('job %s must need preflight' % job)
         if ("if: needs.preflight.outputs.%s != '[]'" % key) not in block:
             problems.append("job %s must be gated on needs.preflight.outputs.%s != '[]'" % (job, key))
-        if ('fromJSON(needs.preflight.outputs.%s)' % key) not in block:
-            problems.append('job %s must take its matrix from fromJSON(needs.preflight.outputs.%s)' % (job, key))
+        if ('include: ${{ fromJSON(needs.preflight.outputs.%s) }}' % key) not in block:
+            problems.append('job %s must take its matrix entries from include: ${{ fromJSON('
+                            'needs.preflight.outputs.%s) }}' % (job, key))
         if 'runs-on: %s' % jobs[job]['runner'] not in block:
             problems.append('job %s must run on %s' % (job, jobs[job]['runner']))
     for step, spec in tiers.get('preset_steps', {}).items():
         problems.extend(validate_preset_step(step, spec, entries, blocks))
     problems.extend(validate_cached_presets(entries, workflow_text, blocks))
+    problems.extend(validate_shards(entries, blocks, tiers.get('preset_steps', {})))
+    problems.extend(validate_time_limits(blocks))
     for name, entry in entries.items():
         test = entry.get('test')
         if test and not re.search(r'--preset\s+%s\b' % re.escape(test), blocks.get(entry.get('job', ''), '')):

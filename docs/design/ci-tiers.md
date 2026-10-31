@@ -141,7 +141,9 @@ board of the lane from its Ninja log (edges, span, edge sum, effective paralleli
 statistics of a cached lane ([build performance](build-performance.md)), the host (`host`: CPU, logical CPUs and
 memory, and from the Test step its wall time, least available memory and commit peak), the job status when the bundle
 ran and what evidence was missing), copies the JUnit and inventory beside it, and appends a table to the job summary.
-The artifact `evidence-<preset>` carries the bundle and the CTest logs. The bundle never changes a lane's exit code.
+The artifact `evidence-<preset>` (a shard's `evidence-<preset>-shard-<K>-of-<N>`, its record carrying `shard`)
+carries the bundle and the CTest logs. The bundle never changes a lane's exit code; `ci-evidence.py compare` reads a
+sharded lane from all its shards' directories.
 
 The native lane (`windows-native`, VS 2026 image) configures `win-vs`, builds the Debug sandbox profile exactly as
 the IDE build preset does and runs the repository guards under the multi-config CTest, including the two
@@ -149,20 +151,32 @@ native-only fixtures no Ninja lane can register; engine suites stay with the Nin
 
 ## Parallelism and shards
 
-A lane runs its suite serially until its measured serial sum no longer fits GitHub's 6 h job limit with an hour
-to spare after setup, build and its later steps; then its test preset gets `execution.jobs`, sized from the floor
-max(longest case, the `crd_gpu_device` chain, the serial guard, serial sum / jobs) and at most the runner's logical
-CPUs. Every case is its own process, the `crd_gpu_device` lock and `RUN_SERIAL` stay as they are, so the
-pass, fail and skip set and the JUnit names do not depend on the bound. Shards would split one lane across runners;
-no lane needs that yet.
+Every job stops at 300 minutes (`timeout-minutes`, GitHub's 6 h limit less an hour; `check-ci-tiers.py` holds every
+job to it), so a lane that grows fails visibly with its partial evidence instead of being cancelled at the cap.
+A lane runs its suite serially until its measured serial sum no longer fits that limit with its setup, build and
+later steps; then its test preset gets `execution.jobs`, sized from the floor max(longest case, the
+`crd_gpu_device` chain, the serial guard, serial sum / jobs) and at most the runner's logical CPUs. Every case is its
+own process, the `crd_gpu_device` lock and `RUN_SERIAL` stay as they are, so the pass, fail and skip set and the
+JUnit names do not depend on the bound.
 
-| Lane | Bound | Why |
-|---|---|---|
-| `linux-clang-tsan` | 4 | TSan's per-case cost |
-| `win-asan` | 3 of 4 CPUs | e496d16c: 8,106 cases, 20,031 s serial, 7 min under the cap; floor 6,677 s; a core for the pools ([session](../sessions/2026-10-29-simd-dispatch-win-asan-bound.md)) |
-| `linux-gcc-asan` | 3 of 4 CPUs | c2645814: stopped at the cap after 6,811 of 8,766 cases in 20,331 s serial (about 26,000 s for all); a core for the pools ([session](../sessions/2026-11-01-hw-resilience-2-ci-hosted-identity.md)) |
+When a bounded lane still comes within an hour of the limit, `.github/ci-tiers.json` splits it into `shards`: the
+preflight emits one matrix leg per shard (`{"preset", "shard", "shards"}`, a whole lane `{"preset"}`), and leg K of
+N builds the preset and runs CTest's stride selection `-I K,,N` (tests K, K+N, K+2N and so on in registration
+order), so each runner carries its own share of the device chain. Each leg's `ci-evidence.py inventory --shard=K/N`
+records the lane's inventory (`Testing/inventory-lane.json`) beside its own and checks that the N selections
+partition the lane (every test in exactly one shard, only fixture providers in more), failing the leg otherwise.
+The register gate holds the leg to the registered tests its selection runs and fails when a registered test is in
+no shard (`--selection`, `--lane-inventory`), so the legs' gates together hold the lane to its whole register. The
+preset's other steps (the seeded detector failures, an sse2 arm) run on shard 1 only; the legs upload separate
+evidence, and the required aggregate fails when any leg does.
 
-The other lanes stay serial; the host record in each bundle shows when one comes close.
+| Lane | Bound | Shards | Why |
+|---|---|---|---|
+| `linux-clang-tsan` | 4 | 1 | TSan's per-case cost |
+| `win-asan` | 3 of 4 CPUs | 2 | e496d16c: 8,106 cases, 20,031 s serial; c2645814: the bounded Test step took 292 min and the job 315 min, under an hour from the cap ([session](../sessions/2026-11-01-diag-ci-asan-shards.md)) |
+| `linux-gcc-asan` | 3 of 4 CPUs | 2 | c2645814: stopped at the cap after 6,811 of 8,766 cases in 20,331 s serial (about 26,000 s for all) ([session](../sessions/2026-11-01-diag-ci-asan-shards.md)) |
+
+The other lanes stay whole and serial; the host record in each bundle shows when one comes close.
 
 ## Not in scope
 

@@ -7,6 +7,10 @@ failed tests equals the registered set: an unexpected failure, a registered test
 run, and a CTest error without a matching failure all fail the gate. Lanes without entries require zero failures and
 propagate CTest's own exit code, so the gate never masks a CTest problem. Nothing is suppressed, filtered or skipped:
 the tests run and the sanitizer stays strict; only the lane verdict consults the register.
+
+A lane split into shards (docs/design/ci-tiers.md#parallelism-and-shards) gates each shard on the registered tests
+its own inventory selects, after checking that every registered test is in the lane's inventory: the shards'
+inventories partition the lane's, so the shards' gates together hold the whole lane to its register.
 """
 from pathlib import Path
 import argparse
@@ -88,7 +92,24 @@ def junit_results(path):
     return results
 
 
-def evaluate(expected, results, ctest_exit):
+def inventory_names(path):
+    """The test names of a `ctest --show-only=json-v1` inventory."""
+    try:
+        tests = json.loads(Path(path).read_text(encoding='utf-8'))['tests']
+        return {test['name'] for test in tests}
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise RegisterError(f'{path}: not a CTest json-v1 inventory: {error}') from error
+
+
+def shard_share(expected, selection, lane):
+    """The registered tests one shard must see fail, and a report line for each one no shard can run."""
+    outside = sorted(name for name in expected if name not in lane)
+    lines = [f'  UNEXPECTED ABSENT: registered {expected[name]} is not in the lane inventory: {name}'
+             for name in outside]
+    return {name: defect for name, defect in expected.items() if name in selection}, lines
+
+
+def evaluate(expected, results, ctest_exit, absent=()):
     """Return (exit_code, report_lines). Exit 0 only when the failing set equals the registered set."""
     failed = {name for name, state in results.items() if state == 'failed'}
     # A test that exits with its declared skip code (a capability the lane lacks, e.g. no GPU device) is counted
@@ -105,7 +126,8 @@ def evaluate(expected, results, ctest_exit):
         lines.append(f'  UNEXPECTED FAILURE: {name}')
     for name in not_failing:
         lines.append(f'  UNEXPECTED {results.get(name, "absent").upper()}: registered {expected[name]} did not fail: {name}')
-    if unexpected or not_failing:
+    lines += absent
+    if unexpected or not_failing or absent:
         lines.append('gate: FAIL (the failing set differs from the register; fix the defect, or retire the entry)')
         return 1, lines
     if not expected:
@@ -124,14 +146,22 @@ def main(argv=None):
     parser.add_argument('--lane', required=True, help='CI lane key, e.g. the CMake preset name')
     parser.add_argument('--junit', required=True, help='CTest --output-junit document for the lane')
     parser.add_argument('--ctest-exit', type=int, default=0, help='exit code CTest returned for the lane')
+    parser.add_argument('--selection', help="json-v1 inventory of the tests this shard ran (with --lane-inventory)")
+    parser.add_argument('--lane-inventory', help="json-v1 inventory of the whole lane (with --selection)")
     args = parser.parse_args(argv)
+    if (args.selection is None) != (args.lane_inventory is None):
+        parser.error('--selection and --lane-inventory go together')
+    absent = []
     try:
         expected = registered(load_register(args.register), args.lane)
         results = junit_results(args.junit)
+        if args.selection is not None:
+            expected, absent = shard_share(expected, inventory_names(args.selection),
+                                           inventory_names(args.lane_inventory))
     except RegisterError as error:
         print(f'gate: ERROR {error}', file=sys.stderr)
         return 2
-    code, lines = evaluate(expected, results, args.ctest_exit)
+    code, lines = evaluate(expected, results, args.ctest_exit, absent)
     print('\n'.join(lines))
     return code
 

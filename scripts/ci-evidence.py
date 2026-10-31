@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Structured exact-revision evidence for one CI lane.
 
-`inventory` records the CTest inventory of a build directory (`ctest --show-only=json-v1`) before anything runs.
-`watch` runs the lane's test command with the host's memory sampled and records the machine and the samples. `bundle`
+`inventory` records the CTest inventory of a build directory (`ctest --show-only=json-v1`) before anything runs; for
+shard `K/N` of a lane it records the lane's inventory beside the shard's and checks that CTest's stride selections
+`-I s,,N` partition the lane. `watch` runs the lane's test command, a shard's with its selection, with the host's
+memory sampled and records the machine and the samples. `bundle`
 collects, after the lane's steps, the revision and tree identity, the toolchain fingerprint from the CMake cache, the
 adapter census, the inventory, the JUnit results, the host record and the failing tests' output into
 `<output>/conclusion.json`, copies the raw JUnit and inventory beside it and appends a concise job summary. No command
 changes a lane's verdict (`watch` passes the test command's exit code on): the register gate owns the exit code.
-`compare` reads two lanes' evidence and reports one lane's per-test slowdown against the other (a separate-binary
-mode's cost, DIAG.11b). Contract: docs/design/ci-tiers.md.
+`compare` reads two lanes' evidence (each one directory or its shards') and reports one lane's per-test slowdown
+against the other (a separate-binary mode's cost, DIAG.11b). Contract: docs/design/ci-tiers.md.
 """
 from pathlib import Path
 import argparse
@@ -51,6 +53,8 @@ GIB = 1024.0 ** 3
 HOST_TEST = 'Testing/Temporary/host-test.json'
 # Seconds between the memory samples taken while a lane's tests run.
 HOST_TEST_INTERVAL = 5.0
+# A shard's record of the whole lane's inventory, beside its own selection's (Testing/inventory.json).
+LANE_INVENTORY = 'inventory-lane.json'
 
 
 # ---- machine and memory -------------------------------------------------------------------------------------------
@@ -251,9 +255,10 @@ def junit_summary(path, labels=None):
             'labels': dict(sorted(by_label.items()))}
 
 
-def passed_seconds(path):
-    """Seconds per passed test of a CTest JUnit document."""
-    return {case.get('name', '?'): float(case.get('time') or 0.0) for case in junit_cases(path) or []
+def passed_seconds(paths):
+    """Seconds per passed test of one CTest JUnit document or of several (a lane's shards)."""
+    paths = [paths] if isinstance(paths, (str, Path)) else paths
+    return {case.get('name', '?'): float(case.get('time') or 0.0) for path in paths for case in junit_cases(path) or []
             if case_outcome(case) == 'passed'}
 
 
@@ -271,10 +276,15 @@ def slowdown(mode_junit, reference_junit, floor=RATIO_FLOOR):
             'reference_seconds': round(sum(reference[name] for name in names), 1)}
 
 
-def compare_markdown(mode_dir, reference_dir, floor=RATIO_FLOOR):
-    """A board row: both lanes' presets and recorded modes, the per-test slowdown and the lanes' test totals."""
-    lanes = [json.loads((Path(d) / 'conclusion.json').read_text(encoding='utf-8')) for d in (mode_dir, reference_dir)]
-    ratio = slowdown(Path(mode_dir) / 'ctest-junit.xml', Path(reference_dir) / 'ctest-junit.xml', floor)
+def compare_markdown(mode_dirs, reference_dirs, floor=RATIO_FLOOR):
+    """A board row: both lanes' presets and recorded modes, the per-test slowdown and the lanes' test totals; a lane
+    is one evidence directory or its shards' directories."""
+    sides = [[Path(d) for d in ([dirs] if isinstance(dirs, (str, Path)) else dirs)]
+             for dirs in (mode_dirs, reference_dirs)]
+    records = [[json.loads((d / 'conclusion.json').read_text(encoding='utf-8')) for d in side] for side in sides]
+    lanes = [dict(side[0], results={'duration_seconds': sum(r['results']['duration_seconds'] for r in side)})
+             for side in records]
+    ratio = slowdown([d / 'ctest-junit.xml' for d in sides[0]], [d / 'ctest-junit.xml' for d in sides[1]], floor)
     name = lambda lane: '%s (%s)' % (lane['preset'],
                                      ', '.join(lane['modes']) if 'modes' in lane else 'modes not recorded')
     if not ratio['tests']:
@@ -370,7 +380,7 @@ def sccache_summary(path):
 
 
 def bundle(preset, build_dir, output, junit=None, inventory=None, adapters=None, outcome=None, repo=ROOT,
-           environ=None, packages=None, sccache=None, host=machine):
+           environ=None, packages=None, sccache=None, host=machine, shard=None):
     """Write conclusion.json and copies of the raw inputs; return the conclusion record."""
     environ = os.environ if environ is None else environ
     build_dir = Path(build_dir)
@@ -379,7 +389,8 @@ def bundle(preset, build_dir, output, junit=None, inventory=None, adapters=None,
     junit = Path(junit) if junit else build_dir / 'Testing/Temporary/ctest-junit.xml'
     inventory = Path(inventory) if inventory else build_dir / 'Testing/inventory.json'
     missing = []
-    record = {'schema': SCHEMA, 'preset': preset, 'build_dir': str(build_dir).replace('\\', '/'),
+    record = {'schema': SCHEMA, 'preset': preset, 'shard': shard_text(shard),
+              'build_dir': str(build_dir).replace('\\', '/'),
               'run': {key: environ[key] for key in RUN_KEYS if environ.get(key)}}
     record.update(revision_identity(repo))
     record['toolchain'] = toolchain(build_dir)
@@ -495,7 +506,8 @@ def summary_markdown(record):
                 label, t['tests'], t['passed'], t['failed'], t['skipped'])
                 for label, t in results['labels'].items()) or 'no labelled test executed'
              if results else 'no JUnit document')]
-    lines = ['### %s: %s' % (record['preset'], record['status']), '', '| Field | Value |', '|---|---|']
+    title = record['preset'] + (' shard %s' % record['shard'] if record.get('shard') else '')
+    lines = ['### %s: %s' % (title, record['status']), '', '| Field | Value |', '|---|---|']
     lines += ['| %s | %s |' % (k, v.replace('|', '\\|')) for k, v in rows]
     if results and results['failed']:
         lines += ['', '**Failed tests**', '']
@@ -508,18 +520,83 @@ def summary_markdown(record):
     return '\n'.join(lines) + '\n'
 
 
-def run_inventory(build_dir, config=None, output=None):
-    build_dir = Path(build_dir)
-    output = Path(output) if output else build_dir / 'Testing/inventory.json'
-    command = ['ctest', '--test-dir', str(build_dir), '--show-only=json-v1']
+def parse_shard(text):
+    """(K, N) of a shard `K/N`, or None for a whole lane (None or an empty string)."""
+    if not text:
+        return None
+    match = re.fullmatch(r'([1-9][0-9]*)/([1-9][0-9]*)', text)
+    if match is None or int(match.group(1)) > int(match.group(2)) or int(match.group(2)) < 2:
+        raise ValueError('a shard is K/N with 1 <= K <= N and N >= 2, not %r' % text)
+    return int(match.group(1)), int(match.group(2))
+
+
+def shard_text(shard):
+    return '%d/%d' % shard if shard else None
+
+
+def selection_args(shard):
+    """CTest's stride selection of a shard: the lane's tests K, K+N, K+2N and so on."""
+    return ['-I', '%d,,%d' % shard] if shard else []
+
+
+def fixture_providers(document):
+    """Tests that set up or clean up a fixture: CTest adds them to every selection whose tests require it."""
+    return {test['name'] for test in document.get('tests', [])
+            if any(p['name'] in ('FIXTURES_SETUP', 'FIXTURES_CLEANUP') for p in test.get('properties', []))}
+
+
+def partition_problems(lane, selections):
+    """How CTest's selections of the N shards fail to partition the lane: shard s runs every N-th test from test s
+    on and nothing else but fixture providers."""
+    names = [test['name'] for test in lane.get('tests', [])]
+    providers = fixture_providers(lane)
+    count = len(selections)
+    problems = []
+    for index, selection in enumerate(selections):
+        chosen = {test['name'] for test in selection.get('tests', [])}
+        stride = set(names[index::count])
+        problems += ['shard %d/%d lacks %s' % (index + 1, count, name) for name in sorted(stride - chosen)]
+        problems += ['shard %d/%d also runs %s' % (index + 1, count, name)
+                     for name in sorted(chosen - stride - providers)]
+    return problems
+
+
+def ctest_inventory(build_dir, config=None, shard=None, run=subprocess.run):
+    """CTest's json-v1 inventory of a build directory or of one shard's selection, and CTest's exit code."""
+    command = ['ctest', '--test-dir', str(build_dir), '--show-only=json-v1'] + selection_args(shard)
     if config:
         command += ['-C', config]
-    completed = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', check=False)
+    completed = run(command, capture_output=True, text=True, encoding='utf-8', check=False)
     if completed.returncode != 0:
         sys.stderr.write(completed.stderr)
-        return completed.returncode
-    document = json.loads(completed.stdout)
+        return None, completed.returncode
+    return json.loads(completed.stdout), 0
+
+
+def run_inventory(build_dir, config=None, output=None, shard=None, run=subprocess.run):
+    """Record the inventory of what this leg runs; a shard also records the lane's and checks the partition."""
+    build_dir = Path(build_dir)
+    output = Path(output) if output else build_dir / 'Testing/inventory.json'
+    document, code = ctest_inventory(build_dir, config, run=run)
+    if document is None:
+        return code
     output.parent.mkdir(parents=True, exist_ok=True)
+    if shard:
+        lane, selections = document, []
+        for index in range(1, shard[1] + 1):
+            selection, code = ctest_inventory(build_dir, config, (index, shard[1]), run)
+            if selection is None:
+                return code
+            selections.append(selection)
+        problems = partition_problems(lane, selections)
+        for problem in problems:
+            print('FAIL: ' + problem)
+        if problems:
+            return 1
+        (output.parent / LANE_INVENTORY).write_text(json.dumps(lane, indent=1) + '\n', encoding='utf-8')
+        document = selections[shard[0] - 1]
+        print("Shard %s runs %d of the lane's %d tests; the %d shards partition the lane"
+              % (shard_text(shard), len(document.get('tests', [])), len(lane.get('tests', [])), shard[1]))
     output.write_text(json.dumps(document, indent=1) + '\n', encoding='utf-8')
     print('Inventoried %d tests into %s' % (len(document.get('tests', [])), output))
     return 0
@@ -568,6 +645,7 @@ def main(argv=None):
     inv.add_argument('--build-dir', required=True)
     inv.add_argument('--config', help='multi-config generator configuration')
     inv.add_argument('--output', help='inventory path (default: <build-dir>/Testing/inventory.json)')
+    inv.add_argument('--shard', default='', help='K/N: shard K of N (empty: the whole lane)')
     bun = sub.add_parser('bundle', help='write conclusion.json and the job summary')
     bun.add_argument('--preset', required=True)
     bun.add_argument('--build-dir', required=True)
@@ -579,24 +657,32 @@ def main(argv=None):
     bun.add_argument('--sccache-stats', help='sccache --show-stats --stats-format json output of the build step')
     bun.add_argument('--outcome', help='outcome of the step that decides the lane (success, failure, cancelled, skipped)')
     bun.add_argument('--summary', help='GITHUB_STEP_SUMMARY file to append to')
+    bun.add_argument('--shard', default='', help='K/N: the shard the evidence is of (empty: the whole lane)')
     wat = sub.add_parser('watch', help="run a lane's tests with the host's memory sampled (exit code passed on)")
     wat.add_argument('--build-dir', required=True, help='build directory; the record goes to <build-dir>/' + HOST_TEST)
+    wat.add_argument('--shard', default='', help="K/N: run CTest's selection of shard K of N (empty: the whole lane)")
     wat.add_argument('command_line', nargs=argparse.REMAINDER, metavar='command', help='the test command, after --')
     cmp = sub.add_parser('compare', help="a board row: one lane's per-test slowdown against another's")
-    cmp.add_argument('--mode', required=True, help='evidence directory of the lane built with the mode')
-    cmp.add_argument('--reference', required=True, help='evidence directory of the lane without it')
+    cmp.add_argument('--mode', required=True, nargs='+',
+                     help="evidence directory of the lane built with the mode, or its shards' directories")
+    cmp.add_argument('--reference', required=True, nargs='+',
+                     help="evidence directory of the lane without it, or its shards' directories")
     cmp.add_argument('--floor', type=float, default=RATIO_FLOOR, help='least reference seconds of a compared test')
     args = parser.parse_args(argv)
+    try:
+        shard = parse_shard(getattr(args, 'shard', ''))
+    except ValueError as error:
+        parser.error(str(error))
     if args.command == 'inventory':
-        return run_inventory(args.build_dir, args.config, args.output)
+        return run_inventory(args.build_dir, args.config, args.output, shard)
     if args.command == 'watch':
         command = args.command_line[1:] if args.command_line[:1] == ['--'] else args.command_line
-        return watch(args.build_dir, command) if command else 2
+        return watch(args.build_dir, command + selection_args(shard)) if command else 2
     if args.command == 'compare':
         print(compare_markdown(args.mode, args.reference, args.floor))
         return 0
     record = bundle(args.preset, args.build_dir, args.output, args.junit, args.inventory, args.adapters,
-                    args.outcome or None, packages=args.packages, sccache=args.sccache_stats)
+                    args.outcome or None, packages=args.packages, sccache=args.sccache_stats, shard=shard)
     markdown = summary_markdown(record)
     if args.summary:
         with open(args.summary, 'a', encoding='utf-8') as handle:

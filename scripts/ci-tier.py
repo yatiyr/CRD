@@ -3,7 +3,8 @@
 
 `resolve` classifies the changed paths between a base and a head revision with the class table in
 `.github/ci-tiers.json`, picks the highest tier any class asks for (scheduled and manual runs take the complete tier,
-an unknown base takes the complete tier) and writes the expected jobs and every job's preset list as workflow outputs.
+an unknown base takes the complete tier) and writes the expected jobs and every job's matrix as workflow outputs: one
+`{"preset"}` entry per preset, or one `{"preset", "shard", "shards"}` entry per shard of a preset the mapping splits.
 `base` finds a push's base: the head of the newest earlier run whose preflight succeeded, not the push's `before`,
 whose run a newer push may have replaced before it started. `conclude` reads the `needs` context of the required job and fails unless preflight succeeded, every expected job
 succeeded and no unexpected job failed. Contract: docs/design/ci-tiers.md.
@@ -148,6 +149,18 @@ def selection(tiers, tier):
     return jobs
 
 
+def matrix_entries(tiers, presets):
+    """A job's matrix `include` list: one entry per preset, or one per shard of a preset with `shards`."""
+    entries = []
+    for name in presets:
+        count = tiers['presets'][name].get('shards', 1)
+        if count == 1:
+            entries.append({'preset': name})
+        else:
+            entries += [{'preset': name, 'shard': shard, 'shards': count} for shard in range(1, count + 1)]
+    return entries
+
+
 def resolve(tiers, event, base=None, head=None, requested=None, paths=None):
     """Return the resolution record for one run."""
     classified = []
@@ -175,14 +188,15 @@ def resolve(tiers, event, base=None, head=None, requested=None, paths=None):
     jobs = selection(tiers, tier)
     expected = list(ALWAYS_EXPECTED) + [job for job, presets in jobs.items() if presets]
     return {'tier': tier, 'reason': reason, 'expected': expected, 'jobs': jobs,
+            'matrix': {job: matrix_entries(tiers, presets) for job, presets in jobs.items()},
             'classified': classified, 'event': event, 'base': base, 'head': head}
 
 
 def write_outputs(record, path):
     lines = ['tier=%s' % record['tier'], 'reason=%s' % record['reason'],
              'expected=%s' % json.dumps(record['expected'])]
-    for job, presets in record['jobs'].items():
-        lines.append('%s=%s' % (output_key(job), json.dumps(presets)))
+    for job, entries in record['matrix'].items():
+        lines.append('%s=%s' % (output_key(job), json.dumps(entries)))
     with open(path, 'a', encoding='utf-8') as handle:
         handle.write('\n'.join(lines) + '\n')
 
@@ -190,8 +204,9 @@ def write_outputs(record, path):
 def resolution_markdown(record):
     lines = ['### CI tier: %s' % record['tier'], '', record['reason'], '',
              '| Job | Presets |', '|---|---|']
-    for job, presets in record['jobs'].items():
-        lines.append('| %s | %s |' % (job, ', '.join('`%s`' % p for p in presets) or 'skipped'))
+    for job, entries in record['matrix'].items():
+        legs = ['`%s`' % e['preset'] + (' %d/%d' % (e['shard'], e['shards']) if 'shard' in e else '') for e in entries]
+        lines.append('| %s | %s |' % (job, ', '.join(legs) or 'skipped'))
     if record['classified']:
         counts = {}
         for _, name, tier in record['classified']:

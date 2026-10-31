@@ -632,6 +632,50 @@ class RegisteredFailures(unittest.TestCase):
         self.assertEqual(code, 0, lines)
         self.assertIn('observed failures: 0; skipped: 1; results: 2', lines[0])
 
+    def test_a_shard_is_held_to_the_registered_tests_it_runs_and_each_must_be_in_the_lane(self):
+        def inventory(directory, name, tests):
+            path = Path(directory) / name
+            path.write_text(json.dumps({'kind': 'ctest', 'tests': [{'name': n} for n in tests]}), encoding='utf-8')
+            return str(path)
+
+        with tempfile.TemporaryDirectory() as temp:
+            register = Path(temp) / 'register.md'
+            register.write_text(self.register_text(self.LANES), encoding='utf-8')
+            lane = inventory(temp, 'lane.json', ['A (DX12)', 'B (DX12)', 'C', 'D'])
+            first = inventory(temp, 'first.json', ['A (DX12)', 'C'])
+            second = inventory(temp, 'second.json', ['B (DX12)', 'D'])
+
+            def run(states, selection, ctest_exit, lane_inventory=lane):
+                junit = Path(temp) / 'ctest.xml'
+                junit.write_text(self.junit_text(states), encoding='utf-8')
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    code = gate.main(['--register', str(register), '--lane', 'win-asan', '--junit', str(junit),
+                                      '--ctest-exit', str(ctest_exit), '--selection', selection,
+                                      '--lane-inventory', lane_inventory])
+                return code, output.getvalue()
+
+            # Each shard sees its own registered failure; the other shard's is not expected of it.
+            self.assertEqual(run({'A (DX12)': 'failed', 'C': 'passed'}, first, 8)[0], 0)
+            self.assertEqual(run({'B (DX12)': 'failed', 'D': 'passed'}, second, 8)[0], 0)
+            code, report = run({'A (DX12)': 'passed', 'C': 'passed'}, first, 0)
+            self.assertEqual(code, 1, report)
+            self.assertIn('UNEXPECTED PASSED: registered TP-1 did not fail: A (DX12)', report)
+            code, report = run({'B (DX12)': 'failed', 'D': 'failed'}, second, 8)
+            self.assertEqual(code, 1, report)
+            self.assertIn('UNEXPECTED FAILURE: D', report)
+            # A registered test no shard runs fails every shard's gate.
+            short = inventory(temp, 'short.json', ['A (DX12)', 'C', 'D'])
+            code, report = run({'A (DX12)': 'failed', 'C': 'passed'}, first, 8, short)
+            self.assertEqual(code, 1, report)
+            self.assertIn('UNEXPECTED ABSENT: registered TP-1 is not in the lane inventory: B (DX12)', report)
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                gate.main(['--lane', 'win-asan', '--junit', 'x.xml', '--selection', first])
+            junit = Path(temp) / 'ctest.xml'
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(gate.main(['--register', str(register), '--lane', 'win-asan', '--junit', str(junit),
+                                            '--selection', str(register), '--lane-inventory', lane]), 2)
+
     def test_lane_without_entries_requires_zero_failures_and_propagates_ctest_exit(self):
         self.assertEqual(self.gate(self.LANES, 'win-debug', {'A (DX12)': 'passed'}, 0)[0], 0)
         self.assertEqual(self.gate(self.LANES, 'win-debug', {'A (DX12)': 'passed'}, 3)[0], 3)
@@ -752,6 +796,44 @@ class CiTiers(unittest.TestCase):
         problems = ci_tiers.validate(self.mutated(classes=classes), self.presets, self.workflow)
         self.assertTrue(any('catch-all' in p for p in problems), problems)
 
+    def test_sharded_lanes_carry_their_shard_and_every_job_stops_within_the_limit(self):
+        entries = self.tiers['presets']
+        self.assertEqual({n for n, e in entries.items() if 'shards' in e}, {'win-asan', 'linux-gcc-asan'})
+        blocks = ci_tiers.workflow_jobs(self.workflow)
+        steps = self.tiers['preset_steps']
+        self.assertEqual(ci_tiers.validate_shards(entries, blocks, steps), [])
+        self.assertEqual(ci_tiers.validate_time_limits(blocks), [])
+        self.assertEqual(len(ci_tiers.command_calls(blocks['windows'], 'ci-evidence.py bundle')), 1)
+
+        def problems(job, old, new, mapping=entries):
+            changed = dict(blocks, **{job: blocks[job].replace(old, new)})
+            self.assertNotEqual(changed[job], blocks[job], old)
+            return ci_tiers.validate_shards(mapping, changed, steps)
+
+        self.assertTrue(any('does not set CRD_SHARD' in p for p in problems('windows', ci_tiers.SHARD_ENV, 'X: 1')))
+        bundle = problems('linux-gcc', '--shard="$CRD_SHARD" --summary', '--summary')
+        self.assertEqual(bundle, ['job linux-gcc runs sharded preset linux-gcc-asan but its ci-evidence.py bundle '
+                                  'does not take --shard='])
+        shared = problems('windows', "format('-shard-{0}-of-{1}'", "format('-{0}-of-{1}'")
+        self.assertEqual(shared, ['job windows runs sharded preset win-asan but its legs share one evidence name'])
+        every_shard = problems('linux-gcc', ' && (!matrix.shard || matrix.shard == 1)', '')
+        self.assertEqual(every_shard, ["step 'Seeded detector failures' rides on sharded preset linux-gcc-asan but "
+                                       'is not gated on (!matrix.shard || matrix.shard == 1)'])
+        ungated = problems('windows', "'--lane-inventory'", "'--lane'")
+        self.assertTrue(any('gets no --lane-inventory' in p for p in ungated), ungated)
+        for count in (1, '2', True):
+            mapping = dict(entries, **{'win-asan': dict(entries['win-asan'], shards=count)})
+            self.assertEqual(ci_tiers.validate_shards(mapping, blocks, steps),
+                             ['preset win-asan: shards is a count of at least 2 on a hosted preset'], count)
+        unlimited = dict(blocks, **{'clang-cl': blocks['clang-cl'].replace('    timeout-minutes: 300\n', '')})
+        self.assertEqual(ci_tiers.validate_time_limits(unlimited), ['job clang-cl declares no timeout-minutes'])
+        longer = dict(blocks, windows=blocks['windows'].replace('timeout-minutes: 300', 'timeout-minutes: 360'))
+        self.assertEqual(ci_tiers.validate_time_limits(longer), ['job windows may run 360 minutes, more than 300'])
+        listed = self.workflow.replace('include: ${{ fromJSON(needs.preflight.outputs.presets_clang_cl) }}',
+                                       'preset: ${{ fromJSON(needs.preflight.outputs.presets_clang_cl) }}')
+        self.assertTrue(any('clang-cl must take its matrix entries' in p
+                            for p in ci_tiers.validate(self.tiers, self.presets, listed)))
+
     def test_other_workflows_are_dispatch_only_experiments(self):
         # A diagnostic preset may run hosted only in a workflow that never joins a tier: one triggered only by
         # workflow_dispatch (the DIAG.10a host check), which never cancels a running experiment.
@@ -788,6 +870,9 @@ class CiTiers(unittest.TestCase):
         change = ci_tier.resolve(self.tiers, 'push', 'a', 'b', paths=['engine/core/src/a.cpp', 'docs/x.md'])
         self.assertEqual(change['tier'], 'change')
         self.assertEqual(change['jobs']['windows'], ['win-debug', 'win-release', 'win-asan'])
+        self.assertEqual(change['matrix']['windows'], [{'preset': 'win-debug'}, {'preset': 'win-release'},
+                                                       {'preset': 'win-asan', 'shard': 1, 'shards': 2},
+                                                       {'preset': 'win-asan', 'shard': 2, 'shards': 2}])
         self.assertEqual(change['jobs']['windows-native'], [])
         self.assertNotIn('windows-native', change['expected'])
         complete = ci_tier.resolve(self.tiers, 'push', 'a', 'b', paths=['engine/core/src/a.cpp', 'cmake/x.cmake'])
@@ -805,7 +890,10 @@ class CiTiers(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             out = Path(temp) / 'outputs'
             ci_tier.write_outputs(change, out)
-            keys = {line.split('=', 1)[0] for line in out.read_text(encoding='utf-8').splitlines()}
+            written = dict(line.split('=', 1) for line in out.read_text(encoding='utf-8').splitlines())
+            self.assertEqual(json.loads(written['presets_windows']), change['matrix']['windows'])
+            self.assertIn('`win-asan` 2/2', ci_tier.resolution_markdown(change))
+            keys = set(written)
             self.assertEqual(keys, {'tier', 'reason', 'expected'} | {ci_tier.output_key(j) for j in self.tiers['jobs']})
             for key in keys:
                 self.assertIn('%s: ${{ steps.tier.outputs.%s }}' % (key, key), self.workflow) if key != 'reason' else None
@@ -975,6 +1063,10 @@ class CiEvidence(unittest.TestCase):
             self.assertTrue((out / 'ctest-junit.xml').is_file() and (out / 'inventory.json').is_file())
             markdown = ci_evidence.summary_markdown(record)
             self.assertIn('### win-debug: fail', markdown)
+            self.assertIsNone(record['shard'])
+            shard = ci_evidence.bundle('win-asan', build, out, environ={}, host=lambda: self.MACHINE, shard=(2, 2))
+            self.assertEqual(shard['shard'], '2/2')
+            self.assertIn('### win-asan shard 2/2: fail', ci_evidence.summary_markdown(shard))
             self.assertIn('`broken` (0.5 s): boom', markdown)
             self.assertIn('3 executed: 1 passed, 1 failed, 1 skipped', markdown)
             self.assertIn('| Diagnostic modes | ASan |', markdown)
@@ -1043,6 +1135,64 @@ class CiEvidence(unittest.TestCase):
                              exit_four)
             self.assertEqual(ci_evidence.main(['watch', '--build-dir', temp]), 2)
 
+    def test_a_shard_inventory_records_the_lane_and_checks_the_stride_partition(self):
+        lane = {'kind': 'ctest', 'tests': [{'name': 't%d' % i, 'properties': []} for i in range(1, 6)]
+                + [{'name': 'setup', 'properties': [{'name': 'FIXTURES_SETUP', 'value': ['f']}]}]}
+
+        def stride(index, count, extra=()):
+            names = [test['name'] for test in lane['tests']][index - 1::count]
+            return {'kind': 'ctest', 'tests': [{'name': n} for n in list(names) + list(extra)]}
+
+        self.assertEqual(ci_evidence.parse_shard(''), None)
+        self.assertEqual(ci_evidence.parse_shard('2/3'), (2, 3))
+        for bad in ('0/2', '3/2', '1/1', '1-2', '/2'):
+            with self.assertRaises(ValueError):
+                ci_evidence.parse_shard(bad)
+        self.assertEqual(ci_evidence.selection_args((2, 3)), ['-I', '2,,3'])
+        self.assertEqual(ci_evidence.selection_args(None), [])
+        self.assertEqual(ci_evidence.partition_problems(lane, [stride(1, 2, ['setup']), stride(2, 2)]), [])
+        self.assertEqual(ci_evidence.partition_problems(lane, [stride(1, 2, ['t2']), {'tests': [{'name': 't4'}]}]),
+                         ['shard 1/2 also runs t2', 'shard 2/2 lacks setup', 'shard 2/2 lacks t2'])
+
+        def ctest(answers):
+            seen = []
+
+            def run(command, **_):
+                seen.append(command)
+                key = command[command.index('-I') + 1] if '-I' in command else 'lane'
+                return subprocess.CompletedProcess(command, 0, json.dumps(answers[key]), '')
+            return run, seen
+
+        with tempfile.TemporaryDirectory() as temp:
+            build = Path(temp)
+            run, seen = ctest({'lane': lane, '1,,2': stride(1, 2), '2,,2': stride(2, 2)})
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(ci_evidence.run_inventory(build, shard=(2, 2), run=run), 0)
+            self.assertEqual([c[-2:] for c in seen], [[str(build), '--show-only=json-v1'], ['-I', '1,,2'],
+                                                      ['-I', '2,,2']])
+            recorded = json.loads((build / 'Testing/inventory.json').read_text(encoding='utf-8'))
+            self.assertEqual([test['name'] for test in recorded['tests']], ['t2', 't4', 'setup'])
+            self.assertEqual(json.loads((build / 'Testing' / ci_evidence.LANE_INVENTORY).read_text(encoding='utf-8')), lane)
+            run, _ = ctest({'lane': lane, '1,,2': stride(1, 2), '2,,2': {'tests': [{'name': 't2'}]}})
+            (build / 'Testing' / ci_evidence.LANE_INVENTORY).unlink()
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(ci_evidence.run_inventory(build, shard=(1, 2), run=run), 1)
+            self.assertIn('FAIL: shard 2/2 lacks t4', output.getvalue())
+            self.assertFalse((build / 'Testing' / ci_evidence.LANE_INVENTORY).exists())
+            run, seen = ctest({'lane': lane})
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(ci_evidence.run_inventory(build, run=run), 0)
+            self.assertEqual(len(seen), 1)
+            self.assertEqual(json.loads((build / 'Testing/inventory.json').read_text(encoding='utf-8')), lane)
+            exit_args = [sys.executable, '-c', 'import sys; raise SystemExit(len(sys.argv))']
+            self.assertEqual(ci_evidence.main(['watch', '--build-dir', temp, '--shard=2/3', '--'] + exit_args), 3)
+            self.assertEqual(json.loads((build / ci_evidence.HOST_TEST).read_text(encoding='utf-8'))['command'],
+                             exit_args + ['-I', '2,,3'])
+            self.assertEqual(ci_evidence.main(['watch', '--build-dir', temp, '--shard=', '--'] + exit_args), 1)
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                ci_evidence.main(['watch', '--build-dir', temp, '--shard=4/3', '--'] + exit_args)
+
     def test_compare_takes_tests_that_passed_on_both_above_the_floor(self):
         def lane(root, preset, cases, modes=None):
             root.mkdir()
@@ -1072,6 +1222,12 @@ class CiEvidence(unittest.TestCase):
                              '| win-asan (ASan) | win-debug (modes not recorded) | 4 | 2.00 | 1.00-3.00 | 12 s / 5 s '
                              '| 32 s / 7 s |')
             self.assertEqual(ci_evidence.slowdown(mode_junit, reference_junit, 5.0), {'tests': 0})
+            # A sharded lane is read from its shards' directories together.
+            first = lane(Path(temp) / 'first', 'win-asan', [('a', 2.0, True), ('b', 1.0, True)], ['ASan'])
+            second = lane(Path(temp) / 'second', 'win-asan', [('c', 3.0, True), ('d', 6.0, True)], ['ASan'])
+            self.assertEqual(ci_evidence.compare_markdown([first, second], [reference]),
+                             '| win-asan (ASan) | win-debug (modes not recorded) | 4 | 2.00 | 1.00-3.00 | 12 s / 5 s '
+                             '| 12 s / 7 s |')
 
     def test_glob_patterns_match_segments_and_trees(self):
         matches = lambda pattern, path: bool(ci_tier.glob_regex(pattern).match(path))
@@ -4818,12 +4974,14 @@ class CiPresetSteps(unittest.TestCase):
         step = 'Seeded detector failures'
         self.assertEqual(tiers['preset_steps'][step],
                          {'presets': ['win-debug', 'win-asan', 'linux-gcc-debug', 'linux-gcc-asan', 'linux-clang-tsan']})
-        windows_gate = "if: matrix.preset == 'win-debug' || matrix.preset == 'win-asan'\n"
+        shard_one = ' && (!matrix.shard || matrix.shard == 1)\n'
+        windows_gate = "if: (matrix.preset == 'win-debug' || matrix.preset == 'win-asan')" + shard_one
         self.assertIn(windows_gate, workflow)
-        dropped = workflow.replace(windows_gate, "if: matrix.preset == 'win-debug'\n")
+        dropped = workflow.replace(windows_gate, "if: (matrix.preset == 'win-debug')" + shard_one)
         problems = ci_tiers.validate(tiers, presets, dropped)
         self.assertEqual(["step %r must be gated on matrix.preset == 'win-asan'" % step], problems)
-        widened = workflow.replace(windows_gate, windows_gate[:-1] + " || matrix.preset == 'win-release'\n")
+        widened = workflow.replace(windows_gate, windows_gate.replace("'win-asan')", "'win-asan' || "
+                                                                      "matrix.preset == 'win-release')"))
         problems = ci_tiers.validate(tiers, presets, widened)
         self.assertEqual(["step %r in job windows is gated on win-release, which the mapping does not list" % step],
                          problems)

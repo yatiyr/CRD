@@ -16,7 +16,7 @@
   "presets": {
     "win-debug": {"tier": "change", "job": "windows"},
     "win-release": {"tier": "change", "job": "windows"},
-    "win-asan": {"tier": "change", "job": "windows"},
+    "win-asan": {"tier": "change", "job": "windows", "shards": 2},
     "win-relwithdebinfo": {"tier": "complete", "job": "windows"},
     "win-debug-scalar": {"tier": "complete", "job": "windows"},
     "win-public-checks": {"tier": "complete", "job": "windows"},
@@ -33,7 +33,7 @@
     "linux-gcc-debug": {"tier": "change", "job": "linux-gcc"},
     "linux-gcc-release": {"tier": "change", "job": "linux-gcc"},
     "linux-gcc-relwithdebinfo": {"tier": "change", "job": "linux-gcc"},
-    "linux-gcc-asan": {"tier": "change", "job": "linux-gcc"},
+    "linux-gcc-asan": {"tier": "change", "job": "linux-gcc", "shards": 2},
     "linux-gcc-debug-scalar": {"tier": "complete", "job": "linux-gcc"},
     "linux-gcc-public-checks": {"tier": "complete", "job": "linux-gcc"},
     "linux-gcc-shipping": {"tier": "change", "job": "linux-gcc-shipping"},
