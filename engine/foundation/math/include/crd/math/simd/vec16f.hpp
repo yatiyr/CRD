@@ -561,6 +561,28 @@ CRD_FORCEINLINE void store_complex_interleaved(f32* p, Vec16f re, Vec16f im) noe
 #endif
 }
 
+// The register form of Vec8f's split load: even = {a0, a2, ..., a14}, odd = {a1, a3, ..., a15} (the fused 2x2 pool's
+// column pairs of a 16-column row held in a register, tensor_nn_kernels.cpp). Pure data movement, so every level gives
+// the same bits.
+CRD_FORCEINLINE void deinterleave(Vec16f a, Vec8f& even, Vec8f& odd) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    const __m512i order = _mm512_setr_epi32(0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15);
+    const __m512 split = _mm512_permutexvar_ps(order, a.v);
+    even.v = _mm512_castps512_ps256(split);
+    odd.v = _mm512_extractf32x8_ps(split, 1);
+#else
+    Vec4f even_lo;
+    Vec4f odd_lo;
+    Vec4f even_hi;
+    Vec4f odd_hi;
+    deinterleave(a.lo, even_lo, odd_lo);
+    deinterleave(a.hi, even_hi, odd_hi);
+    even = Vec8f(even_lo, even_hi);
+    odd = Vec8f(odd_lo, odd_hi);
+#endif
+}
+
 // Vec8f's interleaved-complex helpers on eight complex (c0..c7, 64 bits each), each the two halves' helper.
 // [a1, a0, a3, a2, ...]: the real and imaginary parts of every complex lane swapped.
 CRD_FORCEINLINE Vec16f swap_pairs(Vec16f a) noexcept

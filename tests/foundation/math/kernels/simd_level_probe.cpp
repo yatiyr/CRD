@@ -463,6 +463,23 @@ usize v4_deinterleave(const Input& in, u64* out) noexcept
     }
     return n;
 }
+// Vec8f has the split load and Vec16f its register form (the fused pool of a row of nine to sixteen columns).
+usize v8_deinterleave(const Input& in, u64* out) noexcept
+{
+    usize n = 0;
+    for (usize i = 0; i + 16 <= kLanes; i += 16)
+    {
+        Vec8f re;
+        Vec8f im;
+        s::load_complex_deinterleaved(in.a + i, re, im);
+        n += put(re, out + n);
+        n += put(im, out + n);
+        s::deinterleave(Vec16f::load(in.b + i), re, im);
+        n += put(re, out + n);
+        n += put(im, out + n);
+    }
+    return n;
+}
 usize v8_complex(const Input& in, u64* out) noexcept
 {
     return complex_round_trip<Vec8f>(in.a, out);
@@ -1170,6 +1187,7 @@ constexpr Op kVectorOps[] = {
     {"vec8f partial load/store", Compare::F32Value, &v8_partial},
     {"vec8f transpose8x8", Compare::Bits, &v8_transpose},
     {"vec4f deinterleave and vec8f split", Compare::Bits, &v4_deinterleave},
+    {"vec8f deinterleave and vec16f split", Compare::Bits, &v8_deinterleave},
     {"vec8f complex (de)interleave", Compare::Bits, &v8_complex},
     {"vec16f complex (de)interleave", Compare::Bits, &v16_complex},
     {"vec4d arithmetic", Compare::F64Value, &F64<Vec4d>::arith},
