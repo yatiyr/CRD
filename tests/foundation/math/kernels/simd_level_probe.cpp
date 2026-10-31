@@ -456,6 +456,20 @@ template <typename V, typename T> usize complex_round_trip(const T* in, u64* out
     }
     return n;
 }
+// Vec4f has the split load only (the fused 2x2 pool's column pairs, tensor_nn_kernels.cpp).
+usize v4_deinterleave(const Input& in, u64* out) noexcept
+{
+    usize n = 0;
+    for (usize i = 0; i + 8 <= kLanes; i += 8)
+    {
+        Vec4f re;
+        Vec4f im;
+        s::load_complex_deinterleaved(in.a + i, re, im);
+        n += put(re, out + n);
+        n += put(im, out + n);
+    }
+    return n;
+}
 usize v8_complex(const Input& in, u64* out) noexcept
 {
     return complex_round_trip<Vec8f>(in.a, out);
@@ -1162,6 +1176,7 @@ constexpr Op kVectorOps[] = {
     {"vec8f half stores", Compare::Bits, &v8_half_stores},
     {"vec8f partial load/store", Compare::F32Value, &v8_partial},
     {"vec8f transpose8x8", Compare::Bits, &v8_transpose},
+    {"vec4f complex deinterleave", Compare::Bits, &v4_deinterleave},
     {"vec8f complex (de)interleave", Compare::Bits, &v8_complex},
     {"vec16f complex (de)interleave", Compare::Bits, &v16_complex},
     {"vec4d arithmetic", Compare::F64Value, &F64<Vec4d>::arith},

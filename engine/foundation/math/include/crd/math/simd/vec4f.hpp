@@ -385,4 +385,22 @@ CRD_FORCEINLINE Vec4f select(Vec4f mask, Vec4f true_v, Vec4f false_v) noexcept
 #endif
 }
 
+// Four interleaved pairs p[0 .. 8): re takes the even elements and im the odd ones (Vec8f's form, vec8f.hpp).
+CRD_FORCEINLINE void load_complex_deinterleaved(const f32* p, Vec4f& re, Vec4f& im) noexcept
+{
+#if CRD_SIMD_HAS_SSE2
+    const __m128 a = _mm_loadu_ps(p);                      // r0 i0 r1 i1
+    const __m128 b = _mm_loadu_ps(p + 4);                  // r2 i2 r3 i3
+    re.v = _mm_shuffle_ps(a, b, _MM_SHUFFLE(2, 0, 2, 0)); // r0 r1 r2 r3
+    im.v = _mm_shuffle_ps(a, b, _MM_SHUFFLE(3, 1, 3, 1)); // i0 i1 i2 i3
+#elif CRD_SIMD_HAS_NEON
+    const float32x4x2_t z = vld2q_f32(p);
+    re.v = z.val[0];
+    im.v = z.val[1];
+#else
+    re = Vec4f(p[0], p[2], p[4], p[6]);
+    im = Vec4f(p[1], p[3], p[5], p[7]);
+#endif
+}
+
 } // namespace crd::math::simd::inline CRD_MATH_LEVEL_NS

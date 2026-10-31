@@ -434,13 +434,13 @@ struct NnConv2d
     bool pool;
 };
 
-// One conv2d scratch slot in floats: the im2col column matrix, or the direct kernel's staging (a zero row, the C * H
-// padded rows and 16 fused-pool row buffers, each OW + 10 wide), whichever is larger.
+// One conv2d scratch slot in floats: the im2col column matrix, or the direct kernel's staging (each channel's H padded
+// rows between two zero rows, and 16 fused-pool row buffers, each OW + 10 wide), whichever is larger.
 [[nodiscard]] constexpr crd::u64 nn_conv2d_scratch_floats(crd::u64 chans, crd::u64 kh, crd::u64 kw, crd::u64 oh,
                                                           crd::u64 ow) noexcept
 {
     const crd::u64 col = chans * kh * kw * oh * ow;
-    const crd::u64 stage = (chans * oh + 1U + 16U) * (ow + 10U);
+    const crd::u64 stage = (chans * (oh + 2U) + 16U) * (ow + 10U);
     return col > stage ? col : stage;
 }
 

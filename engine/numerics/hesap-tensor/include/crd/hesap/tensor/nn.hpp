@@ -31,8 +31,9 @@
 //   + align64(scratch_bytes)              the op scratch region, max over ops:
 //       conv2d:    kNnConvScratchSlots * align64(scratch_floats * 4) where
 //                  scratch_floats = max(C*KH*KW * OH*OW,               im2col
-//                                       (C*OH + 17) * (OW + 10))  3x3 staging
-//                  (zero row + C*H padded rows + 16 pool-fusion row buffers;
+//                                       (C*(OH + 2) + 16) * (OW + 10))  3x3
+//                  staging (each channel's H padded rows between two zero
+//                  rows + 16 pool-fusion row buffers;
 //                  one slot per worker; OH/OW are the CONV output dims)
 //       Q8 linear: align64(max_batch * (K/32) * sizeof(BlockQ8Zero))
 //                  + align64(max_batch * (K/32) * 4)
