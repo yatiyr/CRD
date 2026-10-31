@@ -95,7 +95,11 @@ template <typename T>
     {
         nsv = mn;
     }
-    crd::u32 ncv = opts.ncv > 0 ? opts.ncv : (2 * nsv + 10 < 20 ? 20 : 2 * nsv + 10);
+    crd::u32 ncv = opts.ncv;
+    if (ncv == 0)
+    {
+        ncv = 2 * nsv + 10 < 20 ? 20 : 2 * nsv + 10;
+    }
     if (ncv > mn)
     {
         ncv = mn;
@@ -273,7 +277,11 @@ template <typename T>
         }
 
         // ---- thick restart: keep the jkeep largest triplets, record spike ρ, continue from the residual ----
-        const crd::u32 jk = jkeep < kk ? jkeep : (kk > 0 ? kk - 1 : 0);
+        crd::u32 jk = jkeep;
+        if (jk >= kk)
+        {
+            jk = kk > 0 ? kk - 1 : 0;
+        }
         if (jk == 0)
         {
             break;
@@ -369,10 +377,10 @@ template <typename T>
             const R e = static_cast<R>(atu[r]) - sigma * static_cast<R>(vo[r]);
             r2 += e * e;
         }
-        const R rn = crd::math::sqrt(r2);
-        result.residuals[i] = rn;
+        const R res_norm = crd::math::sqrt(r2);
+        result.residuals[i] = res_norm;
         const R sc = sigma > R{1} ? sigma : R{1};
-        if (rn / sc <= tol)
+        if (res_norm / sc <= tol)
         {
             ++nconv;
         }

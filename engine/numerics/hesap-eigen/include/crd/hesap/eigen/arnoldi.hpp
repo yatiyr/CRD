@@ -280,17 +280,17 @@ template <typename T>
         // True residual ‖A·X − λ·X‖ (A real, X + λ complex): A·X = A·xre + i·A·xim.
         (void)a.apply({xre.data(), n}, {axre.data(), n});
         (void)a.apply({xim.data(), n}, {axim.data(), n});
-        R rn2 = R{0};
+        R res_norm2 = R{0};
         for (crd::u32 i = 0; i < n; ++i)
         {
             const R rr = axre[i] - (th.re * xre[i] - th.im * xim[i]);
             const R ri = axim[i] - (th.re * xim[i] + th.im * xre[i]);
-            rn2 += rr * rr + ri * ri;
+            res_norm2 += rr * rr + ri * ri;
         }
-        const R rn = crd::math::sqrt(rn2);
-        result.residuals[s] = rn;
+        const R res_norm = crd::math::sqrt(res_norm2);
+        result.residuals[s] = res_norm;
         const R scale = detail::cmag<R>(th);
-        if (rn <= tol * (scale > R{1} ? scale : R{1}))
+        if (res_norm <= tol * (scale > R{1} ? scale : R{1}))
         {
             ++nconv;
         }
