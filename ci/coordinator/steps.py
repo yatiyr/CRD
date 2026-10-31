@@ -179,9 +179,10 @@ def normalize(document, existing_keys=(), order_start=0):
         agents = {str(k): str(v) for k, v in agents.items()}
         agents.setdefault('queue', 'default')
         deps = _dependencies(raw.get('depends_on'), problems, where)
-        if raw.get('allow_dependency_failure'):
-            deps = [dict(d, allow_failure=True) for d in deps]
         deps = barrier + [d for d in deps if d['step'] not in {b['step'] for b in barrier}]
+        if raw.get('allow_dependency_failure'):
+            # Every dependency, the ones a wait step adds included: the step runs whatever they end as.
+            deps = [dict(d, allow_failure=True) for d in deps]
         priority = raw.get('priority', 0)
         if not isinstance(priority, int):
             problems.append('%s: priority must be an integer' % where)

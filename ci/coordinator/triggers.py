@@ -127,6 +127,15 @@ class Mirror:
                 self._git(path, 'fetch', '--quiet', '--no-tags', 'origin', '+refs/heads/*:refs/heads/*')
         self._git(path, 'update-ref', 'refs/cerid/builds/%d' % int(number), commit)
 
+    def commits_between(self, repository, good, bad):
+        """Commits strictly after `good` up to but excluding `bad` on bad's first-parent line, oldest first."""
+        path = self.path(repository)
+        if not path.exists():
+            return []
+        completed = self._git(path, 'rev-list', '--first-parent', '--reverse', '%s..%s' % (good, bad), check=False)
+        commits = [line.strip() for line in (completed.stdout or '').splitlines() if line.strip()]
+        return [commit for commit in commits if commit != bad]
+
     def unpin(self, repository, number):
         path = self.path(repository)
         if path.exists():

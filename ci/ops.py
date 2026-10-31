@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 """ci/ops.py: the one operator command of the Cerid CI platform (ADR-0135).
 
-  status       every device cell: runnable or why it waits, baked images, machines running, the month's spend
-  add-device   add one cell to ci/devices.json, validated with the whole registry; prints an owned agent's setup
-  budget       the cap, the month's spend, the GCP budget stop and what a complete run would cost
-  accounts     which account-backed lanes are configured, by name only (never a value)
-  parity       the CI-4 table: every GitHub Actions job and step and the Cerid orchestrator step that carries it
-  bake         bake a device's image family (gce_vm) from its base image
+Usage: python ci/ops.py [--json] [--no-color] [--store URL] [--config FILE] <noun> <verb> [options]
 
-The orchestrator (ci/coordinator, ADR-0135 §12), on the same state the running coordinator uses:
+  ui                         open the web UI through the IAP tunnel (gcloud) in your browser
+  status | health           the registry's cells and the spend | the coordinator, store, jobs, agents
+  build  list|show|start|cancel          job  show|logs|retry|cancel
+  agent  list|stop          token create|revoke          queue list
+  test   list|history|flaky quarantine list|release      bisect list
+  cost   [--month --by]     slo                          audit list [--days]
+  notify test               backup create|restore         retention run
+  device add|bake|list      accounts | parity            completion bash|zsh|powershell
 
-  builds       the recent builds                  build        start a build, or show one (build --number N)
-  retry        retry a job                        cancel       cancel a build or one job
-  agents       the agents (agents --stop ID)      queues       every queue's agents and waiting jobs
-  logs         a job's log (logs JOB --follow)    agent-token  create or revoke an owned machine's registration
-  health       store, coordinator tick, stuck jobs, lost agents, machines
-  backup       the state store to a tar.gz        restore      a backup back into the store
+Every command takes --json (machine-readable output on standard output, nothing else). Human output is coloured on
+a terminal and plain otherwise (NO_COLOR and --no-color are honoured). An error says what went wrong and what to do
+next, and exits 2 (1 means the command ran and found a problem, such as an unhealthy coordinator). The legacy verbs
+`add-device`, `bake`, `budget`, `builds`, `agents`, `queues`, `logs`, `retry`, `cancel`, `agent-token`, `backup` and
+`restore` keep working.
 """
 from __future__ import annotations
 
@@ -26,10 +27,16 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
+import socket
+import subprocess
 import sys
 import time
+import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / 'ci') not in sys.path:
+    sys.path.insert(0, str(ROOT / 'ci'))
 
 
 def pipeline():
@@ -40,6 +47,56 @@ def pipeline():
     sys.modules['ci_pipeline'] = module
     spec.loader.exec_module(module)
     return module
+
+
+class OpsError(Exception):
+    """A failure the operator can act on: what happened and what to do next."""
+
+    def __init__(self, message, hint=''):
+        super().__init__(message)
+        self.hint = hint
+
+
+class Out:
+    """Human output: colour only on a terminal, never with NO_COLOR or --no-color."""
+
+    CODES = {'ok': '32', 'bad': '31', 'warn': '33', 'dim': '2', 'bold': '1', 'head': '1;36'}
+    STATE = {'passed': 'ok', 'pass': 'ok', 'running': 'warn', 'assigned': 'warn', 'scheduled': 'dim',
+             'failed': 'bad', 'fail': 'bad', 'timed_out': 'bad', 'expired': 'bad', 'canceled': 'dim',
+             'cached': 'ok', 'budget': 'warn', 'idle': 'ok', 'busy': 'warn', 'lost': 'bad', 'stopped': 'dim',
+             'configured': 'ok', 'missing': 'bad', 'runnable': 'ok', 'met': 'ok', 'missed': 'bad'}
+    MARK = {'ok': '✓', 'bad': '✗', 'warn': '●', 'dim': '○'}
+
+    def __init__(self, color):
+        self.color = color
+
+    def paint(self, text, style):
+        code = self.CODES.get(style)
+        return '\033[%sm%s\033[0m' % (code, text) if self.color and code else str(text)
+
+    def state(self, value):
+        style = self.STATE.get(str(value).split(' ')[0], '')
+        mark = self.MARK.get(style, ' ') if self.color else ''
+        return self.paint(('%s %s' % (mark, value)).strip(), style)
+
+    def table(self, headers, rows):
+        """Aligned columns; widths measured on the text without colour codes."""
+        import re
+        plain = lambda s: re.sub(r'\033\[[0-9;]*m', '', str(s))
+        widths = [max([len(plain(h))] + [len(plain(r[i])) for r in rows]) for i, h in enumerate(headers)]
+        lines = ['  '.join(self.paint(h.ljust(w), 'head') for h, w in zip(headers, widths)).rstrip()]
+        for row in rows:
+            lines.append('  '.join(str(cell) + ' ' * (w - len(plain(cell))) for cell, w in zip(row, widths)).rstrip())
+        return lines
+
+
+def use_color(args, stream=None):
+    stream = stream or sys.stdout
+    return not args.no_color and not os.environ.get('NO_COLOR') and hasattr(stream, 'isatty') and stream.isatty()
+
+
+def when(stamp):
+    return time.strftime('%Y-%m-%d %H:%M:%SZ', time.gmtime(stamp)) if stamp else '-'
 
 
 def secret_names(environ):
@@ -72,109 +129,6 @@ def accounts_report(registry, environ, secrets):
     return rows
 
 
-def cmd_accounts(args, registry, environ):
-    secrets = secret_names(environ)
-    rows = accounts_report(registry, environ, secrets)
-    print('Account-backed inputs (names only; values are never read here). Setup: docs/recipes/ci-platform-setup.md')
-    width = max(len(r[0]) for r in rows)
-    for name, kind, where, state, users, recipe in rows:
-        print('  %-*s  %-8s  %-18s  cells %-3d  %s  [#%s]' % (width, name, kind, state, users, where, recipe))
-    return 0
-
-
-def cmd_status(args, registry, environ):
-    p = pipeline()
-    secrets = secret_names(environ)
-    store = p.open_store(args.store)
-    month = p.month_of()
-    print('Registry: %d cells (%s)' % (len(registry['devices']), ', '.join(
-        '%s %d' % (s, sum(1 for d in registry['devices'] if d['status'] == s)) for s in p.STATUSES)))
-    for device in registry['devices']:
-        if device['status'] != 'active':
-            why = device['status']
-        else:
-            missing = p.missing_accounts(device, registry, environ, secrets)
-            why = 'runnable' if not missing else 'waiting: account ' + ', '.join(missing)
-        image = ''
-        if device['executor'] == 'gce_vm':
-            baked = store.get_json('images/%s.json' % device['executor_config']['image_family'])
-            image = ' image %s' % (baked['image'] if baked else 'NOT BAKED (ci/ops.py bake %s)' % device['id'])
-        print('  %-34s %s  %-17s %-11s %s%s' % (device['id'], device['tier'], device['executor'], device['cost_class'],
-                                              why, image))
-    running = [store.get_json(n) for n in store.list('machines/')]
-    running = [r for r in running if r and not r.get('ended')]
-    print('Machines running: %d' % len(running))
-    for record in running:
-        print('  %s on %s since %s' % (record['job'], record['device'], record['started']))
-    print('Spend %s: %.2f of %.2f USD%s' % (month, p.month_spend(store, month), registry['budget']['monthly_cap_usd'],
-                                           '; GCP budget stop in force' if p.gcp_budget_stop(store, month) else ''))
-    problems = p.validate_registry(registry, p.ci_tier.load_tiers(p.TIERS), rows=set(p.roadmap_ids()))
-    for problem in problems:
-        print('REGISTRY: ' + problem)
-    return 1 if problems else 0
-
-
-def cmd_budget(args, registry, environ):
-    p = pipeline()
-    store = p.open_store(args.store)
-    month = args.month or p.month_of()
-    if args.pull:
-        subscription = environ.get('CERID_CI_BUDGET_SUBSCRIPTION')
-        if not subscription:
-            print('CERID_CI_BUDGET_SUBSCRIPTION is not set; see the recipe section on the budget stop')
-            return 1
-        print('Read %d budget notifications' % len(p.pull_budget(store, subscription)))
-    cap = float(registry['budget']['monthly_cap_usd'])
-    spent = p.month_spend(store, month)
-    print('Cap: %.2f USD per month (pipeline ledger and the GCP budget both enforce it)' % cap)
-    print('Spent %s: %.2f USD recorded machine time; GCP budget stop: %s' % (
-        month, spent, 'IN FORCE' if p.gcp_budget_stop(store, month) else 'no'))
-    note = store.get_json('budget/gcp-%s.json' % month)
-    if note:
-        print('Last GCP notification: %s of %s %s' % (note.get('costAmount'), note.get('budgetAmount'),
-                                                      note.get('currencyCode', '')))
-    defaults = registry['budget']['default_minutes']
-    total = 0.0
-    print('One complete run, estimated (default minutes until the store has durations):')
-    tiers = p.ci_tier.load_tiers(p.TIERS)
-    hosts = p.job_hosts(registry)
-    devices = p.devices_by_id(registry)
-    lines = []
-    for preset, entry in tiers['presets'].items():
-        if entry['tier'] == 'diagnostic':
-            continue
-        device = devices[hosts[entry['job']]]
-        minutes = p.estimate_minutes(store, 'lane-%s' % preset, defaults['lane'])
-        lines.append(('lane-%s' % preset, device, minutes))
-    for device in registry['devices']:
-        if device['status'] != 'active':
-            continue
-        for preset in device.get('lane_presets', []):
-            key = 'lane-%s@%s' % (preset, device['id'])
-            lines.append((key, device, p.estimate_minutes(store, key, defaults['lane'])))
-        if device.get('console_profile'):
-            key = 'console-%s' % device['id']
-            lines.append((key, device, p.estimate_minutes(store, key, defaults['console-profile'])))
-    for key, device, minutes in lines:
-        cost = p.step_cost(device, minutes)
-        total += cost
-        print('  %-52s %-30s %6.0f min  %6.2f USD' % (key, device['id'], minutes, cost))
-    print('Complete run: %.2f USD before the result cache; runs left this month at that price: %d' % (
-        total, int(max(cap - spent, 0.0) // total) if total else 0))
-    return 0
-
-
-def cmd_parity(args, registry, environ):
-    p = pipeline()
-    rows, problems = p.parity_rows()
-    print(p.parity_markdown(rows), end='')
-    print('\nDispatch-only experiments (host-check.yml):\n')
-    print(p.parity_markdown(p.experiment_rows()), end='')
-    for problem in problems:
-        print('PARITY: ' + problem, file=sys.stderr)
-    return 1 if problems else 0
-
-
 def device_entry(args):
     entry = {
         'id': args.id, 'status': args.status, 'kind': args.kind,
@@ -182,7 +136,7 @@ def device_entry(args):
         'cpu': {'model': args.cpu_model, 'arch': args.arch, 'levels': args.levels.split(',')},
         'gpu': {'vendor': args.gpu_vendor, 'model': args.gpu_model,
                 'apis': [a for a in (args.apis or '').split(',') if a]},
-        'executor': args.executor, 'executor_config': json.loads(args.config or '{}'), 'tier': args.tier,
+        'executor': args.executor, 'executor_config': json.loads(args.config_json or '{}'), 'tier': args.tier,
         'cost_class': args.cost_class, 'cost_per_hour_usd': args.cost,
         'features': args.features.split(','), 'accounts': [a for a in (args.accounts or '').split(',') if a],
         'route': args.route,
@@ -209,47 +163,193 @@ def insert_device(text, entry):
     return head + ',\n' + body + '\n  ' + text[end:]
 
 
-def cmd_add_device(args, registry, environ):
+def orchestrator(ctx):
+    """The coordinator library on the state store, configured like the running coordinator. Every command works
+    beside a running coordinator: all writes are compare-and-swap."""
+    from coordinator import main as coordinator_main, scheduler
+    config, _ = coordinator_main.load_config(ctx.args.config, ctx.environ)
+    store = pipeline().open_store(ctx.args.store)
+    log = scheduler.JsonLog(open(os.devnull, 'w'))
+    return scheduler.Coordinator(store, config, secrets=coordinator_main.secrets_provider(config, ctx.environ),
+                                 log=log)
+
+
+def who(environ):
+    import getpass
+    try:
+        name = getpass.getuser()
+    except Exception:
+        name = 'unknown'
+    return 'ops.py:%s' % name
+
+
+# --------------------------------------------------------------------------------------------- commands
+# Every command returns (exit code, data for --json, human lines).
+
+def cmd_accounts(ctx):
+    rows = accounts_report(ctx.registry, ctx.environ, secret_names(ctx.environ))
+    data = [{'account': r[0], 'kind': r[1], 'where': r[2], 'state': r[3], 'cells': r[4], 'recipe': r[5]}
+            for r in rows]
+    lines = ['Account-backed inputs (names only; values are never read). Setup: docs/recipes/ci-platform-setup.md']
+    lines += ctx.out.table(['ACCOUNT', 'KIND', 'STATE', 'CELLS', 'WHERE'], [
+        (r[0], r[1], ctx.out.state(r[3]), r[4], '%s  [#%s]' % (r[2], r[5])) for r in rows])
+    return 0, data, lines
+
+
+def cmd_status(ctx):
     p = pipeline()
-    entry = device_entry(args)
+    registry, environ = ctx.registry, ctx.environ
+    secrets = secret_names(environ)
+    store = p.open_store(ctx.args.store)
+    month = p.month_of()
+    cells = []
+    for device in registry['devices']:
+        if device['status'] != 'active':
+            why = device['status']
+        else:
+            missing = p.missing_accounts(device, registry, environ, secrets)
+            why = 'runnable' if not missing else 'waiting: account ' + ', '.join(missing)
+        image = None
+        if device['executor'] == 'gce_vm':
+            baked = store.get_json('images/%s.json' % device['executor_config']['image_family'])
+            image = baked['image'] if baked else None
+        cells.append({'device': device['id'], 'tier': device['tier'], 'executor': device['executor'],
+                      'cost_class': device['cost_class'], 'state': why, 'image': image,
+                      'needs_bake': device['executor'] == 'gce_vm' and image is None})
+    running = [r for r in (store.get_json(n) for n in store.list('machines/')) if r and not r.get('ended')]
+    problems = p.validate_registry(registry, p.ci_tier.load_tiers(p.TIERS), rows=set(p.roadmap_ids()))
+    data = {'cells': cells, 'machines_running': running, 'month': month, 'spent_usd': p.month_spend(store, month),
+            'cap_usd': registry['budget']['monthly_cap_usd'], 'gcp_stop': p.gcp_budget_stop(store, month),
+            'registry_problems': problems}
+    lines = ['Registry: %d cells (%s)' % (len(cells), ', '.join('%s %d' % (s, sum(
+        1 for d in registry['devices'] if d['status'] == s)) for s in p.STATUSES))]
+    lines += ctx.out.table(['DEVICE', 'TIER', 'EXECUTOR', 'COST', 'STATE', 'IMAGE'], [
+        (c['device'], c['tier'], c['executor'], c['cost_class'], ctx.out.state(c['state']),
+         c['image'] or (ctx.out.paint('NOT BAKED: ops.py device bake %s' % c['device'], 'warn') if c['needs_bake']
+                        else '')) for c in cells])
+    lines.append('Machines running: %d' % len(running))
+    lines += ['  %s on %s since %s' % (r['job'], r['device'], r['started']) for r in running]
+    lines.append('Spend %s: %.2f of %.2f USD%s' % (month, data['spent_usd'], data['cap_usd'],
+                                                   '; GCP budget stop in force' if data['gcp_stop'] else ''))
+    lines += [ctx.out.paint('REGISTRY: ' + problem, 'bad') for problem in problems]
+    return (1 if problems else 0), data, lines
+
+
+def complete_run_estimate(p, registry, store):
+    defaults = registry['budget']['default_minutes']
+    tiers = p.ci_tier.load_tiers(p.TIERS)
+    hosts = p.job_hosts(registry)
+    devices = p.devices_by_id(registry)
+    items = []
+    for preset, entry in tiers['presets'].items():
+        if entry['tier'] == 'diagnostic':
+            continue
+        device = devices[hosts[entry['job']]]
+        items.append(('lane-%s' % preset, device, p.estimate_minutes(store, 'lane-%s' % preset, defaults['lane'])))
+    for device in registry['devices']:
+        if device['status'] != 'active':
+            continue
+        for preset in device.get('lane_presets', []):
+            key = 'lane-%s@%s' % (preset, device['id'])
+            items.append((key, device, p.estimate_minutes(store, key, defaults['lane'])))
+        if device.get('console_profile'):
+            key = 'console-%s' % device['id']
+            items.append((key, device, p.estimate_minutes(store, key, defaults['console-profile'])))
+    return [{'step': k, 'device': d['id'], 'minutes': m, 'usd': p.step_cost(d, m)} for k, d, m in items]
+
+
+def cmd_cost(ctx):
+    """The cap, the month's spend and forecast, the breakdown by build, lane and device, and a complete run."""
+    p = pipeline()
+    from coordinator import reports
+    store = p.open_store(ctx.args.store)
+    if getattr(ctx.args, 'pull', False):
+        subscription = ctx.environ.get('CERID_CI_BUDGET_SUBSCRIPTION')
+        if not subscription:
+            raise OpsError('CERID_CI_BUDGET_SUBSCRIPTION is not set',
+                           'set it as in the operator runbook, "the budget stop", then run this again')
+        p.pull_budget(store, subscription)
+    c = orchestrator(ctx)
+    month = ctx.args.month or p.month_of()
+    data = reports.costs(c, ctx.registry, month)
+    data['complete_run'] = complete_run_estimate(p, ctx.registry, store)
+    total = round(sum(i['usd'] for i in data['complete_run']), 2)
+    data['complete_run_usd'] = total
+    by = getattr(ctx.args, 'by', 'lane')
+    ratio = data['spent_usd'] / data['cap_usd'] if data['cap_usd'] else 0.0
+    style = 'bad' if ratio >= 1 or data['forecast_over_cap'] else ('warn' if ratio >= 0.8 else 'ok')
+    lines = [ctx.out.paint('%s: %.2f of %.2f USD spent (%d %%), forecast %.2f USD%s' % (
+        month, data['spent_usd'], data['cap_usd'], ratio * 100, data['forecast_usd'],
+        ', OVER THE CAP' if data['forecast_over_cap'] else ''), style),
+        'Running now: %d machines, worst case %.2f USD; GCP budget stop: %s' % (
+            data['running'], data['running_bound_usd'], 'IN FORCE' if data['gcp_stop'] else 'no')]
+    rows = data['by_%s' % by]
+    lines += ['', 'By %s:' % by] + ctx.out.table([by.upper(), 'MACHINES', 'HOURS', 'USD'], [
+        (r[{'build': 'build', 'lane': 'key', 'device': 'device'}[by]], r['machines'], '%.2f' % r['hours'],
+         '%.2f' % r['usd']) for r in rows[:30]])
+    lines += ['', 'One complete run, estimated before the cache: %.2f USD (runs left this month: %d)' % (
+        total, int(max(data['cap_usd'] - data['spent_usd'], 0.0) // total) if total else 0)]
+    return 0, data, lines
+
+
+def cmd_parity(ctx):
+    p = pipeline()
+    rows, problems = p.parity_rows()
+    data = {'workflow': [list(r) for r in rows], 'experiments': [list(r) for r in p.experiment_rows()],
+            'problems': problems}
+    lines = p.parity_markdown(rows).splitlines() + ['', 'Dispatch-only experiments (host-check.yml):', ''] + \
+        p.parity_markdown(p.experiment_rows()).splitlines()
+    for problem in problems:
+        print('PARITY: ' + problem, file=sys.stderr)
+    return (1 if problems else 0), data, lines
+
+
+def cmd_device_add(ctx):
+    p = pipeline()
+    entry = device_entry(ctx.args)
     text = p.DEVICES.read_text(encoding='utf-8')
     updated = insert_device(text, entry)
-    candidate = json.loads(updated)
-    problems = p.validate_registry(candidate, p.ci_tier.load_tiers(p.TIERS), rows=set(p.roadmap_ids()))
+    problems = p.validate_registry(json.loads(updated), p.ci_tier.load_tiers(p.TIERS), rows=set(p.roadmap_ids()))
     if problems:
-        for problem in problems:
-            print('REFUSED: ' + problem)
-        return 1
-    if not args.dry_run:
+        return 1, {'added': False, 'problems': problems}, [ctx.out.paint('REFUSED: ' + x, 'bad') for x in problems]
+    if not ctx.args.dry_run:
         p.DEVICES.write_text(updated, encoding='utf-8', newline='\n')
-    print('%s %s (%s, tier %s)' % ('Would add' if args.dry_run else 'Added', entry['id'], entry['executor'],
-                                   entry['tier']))
+    lines = ['%s %s (%s, tier %s)' % ('Would add' if ctx.args.dry_run else 'Added', entry['id'], entry['executor'],
+                                      entry['tier'])]
+    data = {'added': not ctx.args.dry_run, 'device': entry}
     if entry['executor'] == 'owned_agent':
         from executors import owned_agent
-        agent = owned_agent.OwnedAgent(environ)
-        print('\nOn the machine, the agent:\n' + agent.config(entry))
-        for step in agent.install(entry):
-            print('  - ' + step)
-    return 0
+        agent = owned_agent.OwnedAgent(ctx.environ)
+        data['agent'] = {'command': agent.command(entry), 'install': agent.install(entry)}
+        lines += ['', 'On the machine, the agent:', agent.config(entry)] + ['  - ' + s for s in agent.install(entry)]
+    return 0, data, lines
 
 
-def cmd_bake(args, registry, environ):
+def cmd_device_list(ctx):
+    devices = ctx.registry['devices']
+    data = [{k: d.get(k) for k in ('id', 'status', 'kind', 'tier', 'executor', 'cost_class')} for d in devices]
+    return 0, data, ctx.out.table(['DEVICE', 'STATUS', 'KIND', 'TIER', 'EXECUTOR', 'COST'], [
+        (d['id'], d['status'], d['kind'], d['tier'], d['executor'], d['cost_class']) for d in data])
+
+
+def cmd_device_bake(ctx):
     p = pipeline()
     from executors import gce_vm
-    device = p.devices_by_id(registry)[args.device]
+    devices = p.devices_by_id(ctx.registry)
+    if ctx.args.device not in devices:
+        raise OpsError('no device %s' % ctx.args.device, 'list the cells with: python ci/ops.py device list')
+    device = devices[ctx.args.device]
     if device['executor'] != 'gce_vm':
-        print('%s is not a gce_vm cell' % args.device)
-        return 1
-    executor = gce_vm.GceVm(environ)
+        raise OpsError('%s is a %s cell; only gce_vm cells have images' % (device['id'], device['executor']))
+    executor = gce_vm.GceVm(ctx.environ)
     packages = list(p.APT_PACKAGES['arm64' if device['cpu']['arch'] == 'aarch64' else 'x64'])
-    script = gce_vm.provision_script(device, packages)
-    zone, body = executor.bake_body(device, script)
-    if args.dry_run:
-        print(json.dumps({'zone': zone, 'instance': body}, indent=1))
-        return 0
+    zone, body = executor.bake_body(device, gce_vm.provision_script(device, packages))
+    if ctx.args.dry_run:
+        return 0, {'zone': zone, 'instance': body}, json.dumps({'zone': zone, 'instance': body}, indent=1).splitlines()
     base = '%s/projects/%s/zones/%s/instances' % (gce_vm.COMPUTE, executor.project, zone)
     executor.http('POST', base, token=executor.token(), body=body)
-    print('baking %s on %s; waiting for it to power off' % (args.device, body['name']))
+    print('baking %s on %s; waiting for it to power off (up to four hours)' % (device['id'], body['name']),
+          file=sys.stderr)
     deadline = time.time() + 4 * 3600
     while time.time() < deadline:
         _, state = executor.http('GET', '%s/%s' % (base, body['name']), token=executor.token())
@@ -257,142 +357,134 @@ def cmd_bake(args, registry, environ):
             break
         time.sleep(30)
     else:
-        print('bake did not finish in four hours; the instance stays for inspection')
-        return 1
+        raise OpsError('the bake did not finish in four hours; instance %s stays for inspection' % body['name'],
+                       'look at its serial console in the Compute Engine page, then delete it')
     stamp = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d%H%M')
     image = executor.image_body(device, zone, body['name'], stamp)
     executor.http('POST', '%s/projects/%s/global/images' % (gce_vm.COMPUTE, executor.project), token=executor.token(),
                   body=image)
     executor.http('DELETE', '%s/%s' % (base, body['name']), token=executor.token(), allow=(404,))
-    p.open_store(args.store).put_json('images/%s.json' % image['family'], {'image': image['name'],
-                                                                           'family': image['family'], 'baked': stamp,
-                                                                           'device': device['id']})
-    print('image %s in family %s' % (image['name'], image['family']))
-    return 0
+    p.open_store(ctx.args.store).put_json('images/%s.json' % image['family'], {
+        'image': image['name'], 'family': image['family'], 'baked': stamp, 'device': device['id']})
+    return 0, {'image': image['name'], 'family': image['family']}, ['image %s in family %s' % (
+        image['name'], image['family'])]
 
 
-# --------------------------------------------------------------------------------------------- orchestrator
-
-def orchestrator(args, environ):
-    """The coordinator library on the state store, configured like the running coordinator. Every command works
-    beside a running coordinator: all writes are compare-and-swap."""
-    if str(ROOT / 'ci') not in sys.path:
-        sys.path.insert(0, str(ROOT / 'ci'))
-    from coordinator import main as coordinator_main, scheduler
-    config, _ = coordinator_main.load_config(args.config, environ)
-    store = pipeline().open_store(args.store)
-    log = scheduler.JsonLog(open(os.devnull, 'w'))
-    return scheduler.Coordinator(store, config, secrets=coordinator_main.secrets_provider(config, environ), log=log)
+def cmd_build_list(ctx):
+    builds = orchestrator(ctx).recent(ctx.args.limit)
+    return 0, builds, ctx.out.table(['BUILD', 'STATE', 'REPOSITORY', 'BRANCH', 'COMMIT', 'MESSAGE'], [
+        ('#%d' % b['number'], ctx.out.state(b['state']), b['repository'], (b['branch'] or '')[:24],
+         (b['commit'] or '')[:12], (b['message'] or '')[:60]) for b in builds]) or ['No builds yet.']
 
 
-def when(stamp):
-    return time.strftime('%Y-%m-%d %H:%M:%SZ', time.gmtime(stamp)) if stamp else '-'
+def cmd_build_show(ctx):
+    view = orchestrator(ctx).build_view(ctx.args.number)
+    lines = ['Build #%d %s  %s %s %s' % (view['number'], ctx.out.state(view['state']), view['repository'],
+                                        view['branch'], view['commit'])]
+    lines += ctx.out.table(['STEP', 'STATE', 'ATTEMPT', 'REASON'], [
+        (j['key'][:48], ctx.out.state(j['state'] + (' (soft)' if j['soft_failed'] else '')), j['attempt'],
+         (j.get('waiting') or j['reason'] or '')[:70]) for j in view['jobs']])
+    return (0 if view['state'] in ('passed', 'running', 'scheduled') else 1), view, lines
 
 
-def cmd_builds(args, registry, environ):
-    c = orchestrator(args, environ)
-    for b in c.recent(args.limit):
-        print('#%-6d %-9s %-10s %-24s %s  %s' % (b['number'], b['state'], b['repository'], (b['branch'] or '')[:24],
-                                                 (b['commit'] or '')[:12], (b['message'] or '')[:60]))
-    return 0
-
-
-def cmd_build(args, registry, environ):
-    c = orchestrator(args, environ)
-    if args.number:
-        view = c.build_view(args.number)
-        print('Build #%d %s  %s %s %s' % (view['number'], view['state'], view['repository'], view['branch'],
-                                         view['commit']))
-        for job in view['jobs']:
-            print('  %-40s %-9s attempt %d  %s' % (job['key'][:40], job['state'] + (' (soft)' if job['soft_failed']
-                                                                                   else ''), job['attempt'],
-                                                   job.get('waiting') or job['reason'] or ''))
-        return 0 if view['state'] in ('passed', 'running', 'scheduled') else 1
+def cmd_build_start(ctx):
     from coordinator import hosts
-    repo = c.repository(args.repository)
-    commit = args.commit or hosts.ls_remote(repo['url'], [args.branch])[args.branch]
+    c = orchestrator(ctx)
+    repo = c.repository(ctx.args.repository)
+    commit = ctx.args.commit or hosts.ls_remote(repo['url'], [ctx.args.branch])[ctx.args.branch]
     env = {}
-    if args.tier:
-        env['CERID_CI_TIER'] = args.tier
-    if args.fresh:
+    if ctx.args.tier:
+        env['CERID_CI_TIER'] = ctx.args.tier
+    if ctx.args.fresh:
         env['CERID_CI_FRESH'] = '1'
-    build, _ = c.create_build(args.repository, {'event': 'push', 'branch': args.branch, 'commit': commit,
-                                                'message': args.message or 'manual build (ci/ops.py)',
-                                                'trusted': True}, 'manual', env=env, created_by='ops.py')
-    print('build #%d scheduled for %s at %s' % (build['number'], args.branch, commit))
-    return 0
+    build, _ = c.create_build(ctx.args.repository, {'event': 'push', 'branch': ctx.args.branch, 'commit': commit,
+                                                    'message': ctx.args.message or 'manual build (ci/ops.py)',
+                                                    'trusted': True}, 'manual', env=env, created_by=who(ctx.environ))
+    return 0, {'build': build['number'], 'commit': commit}, ['build #%d scheduled for %s at %s' % (
+        build['number'], ctx.args.branch, commit)]
 
 
-def cmd_retry(args, registry, environ):
-    job = orchestrator(args, environ).retry_job(args.job, by='ops.py')
-    print('job %s (%s) is %s, attempt %d' % (job['id'], job['key'], job['state'], job['attempt']))
-    return 0
+def cmd_build_cancel(ctx):
+    orchestrator(ctx).cancel_build(ctx.args.number, by=who(ctx.environ))
+    return 0, {'canceled': ctx.args.number}, ['cancel requested for build #%d' % ctx.args.number]
 
 
-def cmd_cancel(args, registry, environ):
-    c = orchestrator(args, environ)
-    if args.job:
-        c.cancel_job(args.job, reason='canceled by ops.py')
-    else:
-        c.cancel_build(args.build, by='ops.py')
-    print('cancel requested')
-    return 0
+def cmd_job_show(ctx):
+    job = orchestrator(ctx).job(ctx.args.job)
+    job.pop('token_hash', None)
+    lines = ['%s %s attempt %d  %s' % (job['key'], ctx.out.state(job['state']), job['attempt'], job['reason'] or '')]
+    if job.get('repro'):
+        lines += ['Reproduce:', '  git checkout %s' % job['repro'].get('commit'), '  %s' % job['command']]
+        lines += ['  %s: %s' % (k, v) for k, v in sorted((job['repro'].get('tools') or {}).items())]
+    return 0, job, lines
 
 
-def cmd_agents(args, registry, environ):
-    c = orchestrator(args, environ)
-    if args.stop:
-        c.stop_agent(args.stop)
-        print('agent %s stopped' % args.stop)
-        return 0
-    for agent in c.agents():
-        print('%-24s %-8s %-14s %-10s %-8s %s  last %s' % (agent['name'][:24], agent['status'], agent['queue'],
-                                                          agent['os'], agent['arch'], ','.join(
-                                                              '%s=%s' % kv for kv in sorted(agent['tags'].items())),
-                                                          when(agent.get('last_seen'))))
-    return 0
+def cmd_job_retry(ctx):
+    job = orchestrator(ctx).retry_job(ctx.args.job, by=who(ctx.environ))
+    return 0, {'job': job['id'], 'state': job['state'], 'attempt': job['attempt']}, [
+        'job %s (%s) is %s, attempt %d' % (job['id'], job['key'], job['state'], job['attempt'])]
 
 
-def cmd_queues(args, registry, environ):
-    for queue in orchestrator(args, environ).queues():
-        print('%-16s agents %-3d scheduled %-3d assigned %-3d running %-3d oldest wait %ds' % (
-            queue['queue'], queue['agents'], queue['scheduled'], queue['assigned'], queue['running'],
-            queue['oldest_wait_s']))
-    return 0
+def cmd_job_cancel(ctx):
+    c = orchestrator(ctx)
+    job = c.cancel_job(ctx.args.job, reason='canceled by %s' % who(ctx.environ))
+    c.audit(who(ctx.environ), 'job-cancel', 'build %d %s' % (job['build'], job['key']), '')
+    return 0, {'job': job['id'], 'state': job['state']}, ['cancel requested for %s' % job['key']]
 
 
-def cmd_logs(args, registry, environ):
-    c = orchestrator(args, environ)
+def cmd_job_logs(ctx):
+    c = orchestrator(ctx)
     start = 0
     while True:
-        data, start, live, job = c.read_log(args.job, args.attempt, start)
+        data, start, live, job = c.read_log(ctx.args.job, ctx.args.attempt, start)
+        if ctx.args.json:
+            return 0, {'text': data.decode('utf-8', 'replace'), 'next': start, 'live': live}, []
         sys.stdout.buffer.write(data)
         sys.stdout.flush()
-        if not (args.follow and live):
-            return 0
+        if not (ctx.args.follow and live):
+            return 0, None, []
         time.sleep(2)
 
 
-def cmd_agent_token(args, registry, environ):
-    c = orchestrator(args, environ)
-    if args.action == 'revoke':
-        print('%d registration tokens revoked for %s' % (c.revoke_registration(args.name), args.name))
-        return 0
-    if not args.out:
-        print('agent-token create needs --out FILE: the token is written there, never printed')
-        return 1
-    out = Path(args.out)
+def cmd_agent_list(ctx):
+    agents = orchestrator(ctx).agents()
+    return 0, agents, ctx.out.table(['NAME', 'STATUS', 'QUEUE', 'OS', 'ARCH', 'TAGS', 'LAST SEEN'], [
+        (a['name'][:24], ctx.out.state(a['status']), a['queue'], a['os'], a['arch'],
+         ','.join('%s=%s' % kv for kv in sorted(a['tags'].items())), when(a.get('last_seen'))) for a in agents]) or [
+        'No agents registered yet: python ci/ops.py token create --name <machine> --queue cerid-owned --out <file>']
+
+
+def cmd_agent_stop(ctx):
+    agent = orchestrator(ctx).stop_agent(ctx.args.agent, by=who(ctx.environ))
+    return 0, {'stopped': agent['id']}, ['agent %s stopped; it takes no new job' % agent['name']]
+
+
+def cmd_queue_list(ctx):
+    queues = orchestrator(ctx).queues()
+    return 0, queues, ctx.out.table(['QUEUE', 'AGENTS', 'SCHEDULED', 'ASSIGNED', 'RUNNING', 'OLDEST WAIT'], [
+        (q['queue'], q['agents'], q['scheduled'], q['assigned'], q['running'], '%ds' % q['oldest_wait_s'])
+        for q in queues]) or ['No active work.']
+
+
+def cmd_token_create(ctx):
+    if not ctx.args.out:
+        raise OpsError('token create needs --out FILE', 'the token is written to that file, never printed')
+    out = Path(ctx.args.out)
     if out.exists():
-        print('%s exists; refusing to overwrite a token file' % out)
-        return 1
-    tags = dict(part.split('=', 1) for part in (args.tags or '').split(',') if '=' in part)
-    token = c.create_registration(args.name, args.queue, tags)
+        raise OpsError('%s exists' % out, 'choose a new file; an existing token file is never overwritten')
+    tags = dict(part.split('=', 1) for part in (ctx.args.tags or '').split(',') if '=' in part)
+    token = orchestrator(ctx).create_registration(ctx.args.name, ctx.args.queue, tags, by=who(ctx.environ))
     descriptor = os.open(str(out), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, 'w', encoding='utf-8') as handle:
         handle.write(token + '\n')
-    print('registration token for %s (queue %s) written to %s; move it to the machine, readable only by the agent '
-          'user' % (args.name, args.queue, out))
-    return 0
+    return 0, {'name': ctx.args.name, 'queue': ctx.args.queue, 'file': str(out)}, [
+        'registration token for %s (queue %s) written to %s; move it to the machine, readable only by the agent '
+        'user' % (ctx.args.name, ctx.args.queue, out)]
+
+
+def cmd_token_revoke(ctx):
+    count = orchestrator(ctx).revoke_registration(ctx.args.name, by=who(ctx.environ))
+    return 0, {'revoked': count}, ['%d registration tokens revoked for %s' % (count, ctx.args.name)]
 
 
 def health_report(c, now=None):
@@ -429,16 +521,110 @@ def health_report(c, now=None):
     lost = [a['name'] for a in agents if a['status'] == 'lost']
     lines.append('agents: %d (%d lost%s)' % (len(agents), len(lost), ': ' + ', '.join(lost) if lost else ''))
     machines = [c.store.get_json(n) for n in c.store.list('machines/')]
-    running = [m for m in machines if m and not m.get('ended')]
-    lines.append('machines running: %d' % len(running))
+    lines.append('machines running: %d' % len([m for m in machines if m and not m.get('ended')]))
     return ok, lines
 
 
-def cmd_health(args, registry, environ):
-    ok, lines = health_report(orchestrator(args, environ))
-    for line in lines:
-        print(line)
-    return 0 if ok else 1
+def cmd_health(ctx):
+    ok, lines = health_report(orchestrator(ctx))
+    painted = [ctx.out.paint(line, 'bad' if any(w in line for w in ('NOT', 'STUCK', 'UNREACHABLE')) else 'ok')
+               for line in lines]
+    if not ok:
+        painted.append('next: docs/recipes/ci-platform-runbooks.md, "the coordinator is not ticking" and "a stuck '
+                       'build"')
+    return (0 if ok else 1), {'ok': ok, 'checks': lines}, painted
+
+
+def cmd_test_list(ctx):
+    from coordinator import quality
+    c = orchestrator(ctx)
+    lanes = [ctx.args.lane] if ctx.args.lane else quality.lanes(c.store)
+    data = {lane: quality.summary(c.store, lane) for lane in lanes}
+    lines = []
+    for lane, tests in data.items():
+        lines += ['', ctx.out.paint(lane, 'bold')] + ctx.out.table(['TEST', 'RUNS', 'PASS', 'FAIL', 'LAST', 'MEDIAN',
+                                                                     'FLAKY'], [
+            (t['test'][:60], t['runs'], t['pass'], t['fail'], ctx.out.state(t['last']), '%.2fs' % t['median_s'],
+             ctx.out.paint('flaky', 'warn') if t['flaky'] else '') for t in tests[:ctx.args.limit]])
+    return 0, data, lines or ['No test runs recorded yet.']
+
+
+def cmd_test_history(ctx):
+    from coordinator import quality
+    history = quality.history(orchestrator(ctx).store, ctx.args.lane, ctx.args.test)
+    return 0, history, ctx.out.table(['BUILD', 'COMMIT', 'OUTCOME', 'SECONDS', 'KEY'], [
+        (h['build'], (h.get('commit') or '')[:12], ctx.out.state(h['outcome']), h.get('seconds'), (h.get('key') or
+                                                                                                  '')[:12])
+        for h in history]) or ['No runs of %s on %s.' % (ctx.args.test, ctx.args.lane)]
+
+
+def cmd_test_flaky(ctx):
+    from coordinator import quality
+    c = orchestrator(ctx)
+    data = {lane: quality.flaky(c.store, lane) for lane in quality.lanes(c.store)}
+    rows = [(lane, test, ', '.join(e['passed_in']), ', '.join(e['failed_in'])) for lane, found in data.items()
+            for test, e in found.items()]
+    return 0, data, ctx.out.table(['LANE', 'TEST', 'PASSED IN', 'FAILED IN'], rows) or [
+        'No flaky test: no test key both passed and failed.']
+
+
+def cmd_quarantine_list(ctx):
+    c = orchestrator(ctx)
+    records = [r for r in (c.store.get_json(n) for n in c.store.list('orchestrator/quarantine/')) if r]
+    now = c.clock()
+    return 0, records, ctx.out.table(['LANE', 'TEST', 'STATE', 'UNTIL', 'ISSUE'], [
+        (r['lane'], r['test'][:50], ctx.out.state('active' if r.get('active') and r['expires'] > now else 'ended'),
+         r['expires_text'], r['issue']) for r in records]) or ['Nothing is quarantined.']
+
+
+def cmd_quarantine_release(ctx):
+    from coordinator import quality
+    record = quality.release(orchestrator(ctx), ctx.args.lane, ctx.args.test, who(ctx.environ))
+    return 0, record, ['released %s on %s; its failures fail the lane again' % (ctx.args.test, ctx.args.lane)]
+
+
+def cmd_bisect_list(ctx):
+    c = orchestrator(ctx)
+    records = [r for r in (c.store.get_json(n) for n in c.store.list('orchestrator/bisect/')) if r]
+    return 0, records, ctx.out.table(['LANE', 'TEST', 'STATE', 'GOOD', 'BAD', 'FIRST BAD', 'RE-RUNS'], [
+        (r['lane'], ', '.join(r['tests'])[:40], r['state'], (r['good']['commit'] or '')[:10], (r['bad']['commit'] or '')[:10],
+         (r.get('first_bad') or '')[:12], len(r['reruns'])) for r in records]) or ['No bisection.']
+
+
+def cmd_audit_list(ctx):
+    from coordinator import reports
+    entries = reports.audit_entries(orchestrator(ctx), days=ctx.args.days)
+    return 0, entries, ctx.out.table(['WHEN', 'WHO', 'ACTION', 'TARGET', 'DETAIL'], [
+        (when(e['at']), e['who'][:30], e['action'], e['target'][:40], e['detail'][:50]) for e in entries]) or [
+        'No audited action in the last %d days.' % ctx.args.days]
+
+
+def cmd_slo(ctx):
+    from coordinator import reports
+    c = orchestrator(ctx)
+    data = reports.slo(c, config=c.config.get('slo'))
+    lines = ['Window: %d days' % data['window_days']]
+    lines += ctx.out.table(['QUEUE', 'SAMPLES', 'P50', 'P95', 'TARGET', 'WITHIN', 'OBJECTIVE'], [
+        (q['queue'], q['samples'], '%ss' % q['p50_s'], '%ss' % q['p95_s'], '%ss' % q['target_s'],
+         '%.1f %%' % (q['within'] * 100), ctx.out.state('met' if q['met'] else 'missed')) for q in data['queues']])
+    if data['availability'] is None:
+        lines.append('Coordinator availability: no tick recorded yet')
+    else:
+        lines.append('Coordinator availability: %.3f %% (objective %.1f %%) %s' % (
+            data['availability'] * 100, data['availability_objective'] * 100,
+            ctx.out.state('met' if data['availability_met'] else 'missed')))
+    ok = data['availability_met'] and all(q['met'] for q in data['queues'])
+    return (0 if ok else 1), data, lines
+
+
+def cmd_notify_test(ctx):
+    c = orchestrator(ctx)
+    if not c.config.get('notifications', {}).get('channels'):
+        raise OpsError('no notification channel is configured',
+                       'add notifications.channels to ci/coordinator.json (email or ntfy), see the runbook')
+    sent = c.notify('failure', 'Test notification', 'A test from python ci/ops.py notify test by %s.' %
+                    who(ctx.environ), key='test:%f' % time.time())
+    return (0 if sent else 1), {'sent': sent}, ['sent through: %s' % (', '.join(sent) or 'nothing (see the log)')]
 
 
 BACKUP_SKIP = ('blobs/', 'orchestrator/logs/', 'orchestrator/artifacts/', 'orchestrator/heartbeats/')
@@ -492,94 +678,440 @@ def restore(store, source, overwrite=False):
     return written, kept
 
 
-def cmd_backup(args, registry, environ):
-    manifest = backup(pipeline().open_store(args.store), args.out, args.all)
-    print('%d objects backed up to %s' % (len(manifest), args.out))
-    return 0
+def cmd_backup_create(ctx):
+    manifest = backup(pipeline().open_store(ctx.args.store), ctx.args.out, ctx.args.all)
+    try:
+        orchestrator(ctx).audit(who(ctx.environ), 'backup', ctx.args.out, '%d objects' % len(manifest))
+    except Exception:  # an audit record never fails a backup
+        pass
+    return 0, {'objects': len(manifest), 'file': ctx.args.out}, ['%d objects backed up to %s' % (
+        len(manifest), ctx.args.out)]
 
 
-def cmd_restore(args, registry, environ):
-    written, kept = restore(pipeline().open_store(args.store), args.source, args.overwrite)
-    print('%d objects restored, %d existing objects kept%s' % (written, kept, '' if args.overwrite or not kept else
-                                                                ' (--overwrite replaces them)'))
-    return 0
+def cmd_backup_restore(ctx):
+    written, kept = restore(pipeline().open_store(ctx.args.store), ctx.args.source, ctx.args.overwrite)
+    try:
+        orchestrator(ctx).audit(who(ctx.environ), 'restore', ctx.args.source, '%d written, %d kept' % (written, kept))
+    except Exception:
+        pass
+    return 0, {'written': written, 'kept': kept}, ['%d objects restored, %d existing objects kept%s' % (
+        written, kept, '' if ctx.args.overwrite or not kept else ' (--overwrite replaces them)')]
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+def cmd_retention_run(ctx):
+    c = orchestrator(ctx)
+    cursor = c.sweep(limit=ctx.args.limit)
+    return 0, {'next_build': cursor, 'logs_days': c.limits['logs_days'],
+               'artifacts_days': c.limits['artifacts_days']}, [
+        'retention: logs %d days, artifacts %d days; swept up to build #%d' % (
+            c.limits['logs_days'], c.limits['artifacts_days'], cursor - 1)]
+
+
+# --------------------------------------------------------------------------------------------- ui (IAP tunnel)
+
+def gcloud_path(which=shutil.which):
+    for name in ('gcloud', 'gcloud.cmd'):
+        found = which(name)
+        if found:
+            return found
+    raise OpsError('gcloud is not installed or not on PATH',
+                   'install the Google Cloud CLI, run `gcloud auth login`, then run this again')
+
+
+def free_port(preferred):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind(('127.0.0.1', preferred))
+            return preferred
+        except OSError:
+            probe.bind(('127.0.0.1', 0))
+            return probe.getsockname()[1]
+
+
+def tunnel_ready(port, opener=urllib.request.urlopen):
+    try:
+        with opener('http://localhost:%d/healthz' % port, timeout=3) as response:
+            return json.loads(response.read().decode('utf-8')).get('ok') is True
+    except (OSError, ValueError):
+        return False
+
+
+def cmd_ui(ctx, popen=subprocess.Popen, ready=tunnel_ready, browser=None, sleep=time.sleep, clock=time.time):
+    """Open the web UI: an IAP TCP tunnel from this computer to the launcher's port 8780 under your own gcloud
+    login (only principals with the IAP-secured Tunnel User role on the launcher get through), then the browser."""
+    args = ctx.args
+    project = args.project or ctx.environ.get('CERID_CI_GCP_PROJECT') or 'cerid-ci'
+    zone = args.zone or ctx.environ.get('CERID_CI_GCP_ZONE') or 'us-central1-a'
+    port = free_port(args.port)
+    command = [gcloud_path(), 'compute', 'start-iap-tunnel', args.instance, '8780',
+               '--local-host-port=localhost:%d' % port, '--zone', zone, '--project', project]
+    tunnel = popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    url = 'http://localhost:%d/' % port
+    deadline = clock() + args.timeout
+    try:
+        while not ready(port):
+            if tunnel.poll() is not None:
+                output = tunnel.stdout.read() if tunnel.stdout else ''
+                raise OpsError('the IAP tunnel stopped: %s' % ' '.join(output.split())[-400:],
+                               'check that you are signed in (`gcloud auth list`), that your account has the '
+                               '"IAP-secured Tunnel User" role on %s, and that the firewall rule cerid-ci-iap allows '
+                               '35.235.240.0/20 to TCP 8780 (operator runbook, step "the UI tunnel")' % args.instance)
+            if clock() > deadline:
+                raise OpsError('the tunnel to %s did not answer in %d s' % (args.instance, args.timeout),
+                               'is the coordinator running? `gcloud compute ssh %s --tunnel-through-iap --command '
+                               '"systemctl status cerid-ci-coordinator"`' % args.instance)
+            sleep(0.5)
+        if not args.no_browser:
+            (browser or __import__('webbrowser').open)(url)
+        print('Cerid CI is open at %s (IAP tunnel to %s in %s). Press Ctrl+C to close it.' % (url, args.instance,
+                                                                                              project), flush=True)
+        if args.once:
+            return 0, {'url': url, 'port': port}, []
+        tunnel.wait()
+        return 0, {'url': url}, []
+    except KeyboardInterrupt:
+        return 0, {'url': url}, ['tunnel closed']
+    finally:
+        if tunnel.poll() is None:
+            tunnel.terminate()
+
+
+# --------------------------------------------------------------------------------------------- completion
+
+def command_tree(parser):
+    """{command path: [options]} from the argparse parser, for the completion scripts."""
+    tree = {}
+
+    def walk(node, path):
+        actions = [a for a in node._actions if a.option_strings]
+        tree[' '.join(path)] = sorted(o for a in actions for o in a.option_strings if o.startswith('--'))
+        for action in node._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                for name, child in action.choices.items():
+                    if name in LEGACY:
+                        continue
+                    walk(child, path + [name])
+    walk(parser, [])
+    return tree
+
+
+def completion(shell, parser):
+    tree = command_tree(parser)
+    children = {}
+    for path in tree:
+        if path:
+            head, _, last = path.rpartition(' ')
+            children.setdefault(head, []).append(last)
+    if shell in ('bash', 'zsh'):
+        cases = []
+        for path in sorted(tree):
+            words = sorted(children.get(path, [])) + tree[path]
+            cases.append('    "%s") words="%s" ;;' % (path, ' '.join(words)))
+        script = '''# Cerid CI ops.py completion (%s). Install: python ci/ops.py completion %s > ~/.cerid-ops-completion
+# and source it from your shell's rc file.
+_cerid_ops() {
+  local cur path w i
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  path=""
+  for ((i=1; i<COMP_CWORD; i++)); do
+    w="${COMP_WORDS[i]}"
+    case "$w" in -*) continue ;; esac
+    if [ -z "$path" ]; then candidate="$w"; else candidate="$path $w"; fi
+    case "$candidate" in
+%s
+      *) continue ;;
+    esac
+    path="$candidate"
+  done
+  case "$path" in
+%s
+    *) words="" ;;
+  esac
+  COMPREPLY=( $(compgen -W "$words" -- "$cur") )
+}
+''' % (shell, shell, '\n'.join('      "%s") ;;' % p for p in sorted(tree) if p), '\n'.join(cases))
+        if shell == 'zsh':
+            script += 'autoload -U +X bashcompinit && bashcompinit\n'
+        return script + 'complete -F _cerid_ops ops.py\ncomplete -F _cerid_ops "python ci/ops.py"\n'
+    if shell == 'powershell':
+        entries = ',\n'.join("    '%s' = @(%s)" % (path, ', '.join("'%s'" % w for w in sorted(children.get(
+            path, [])) + tree[path])) for path in sorted(tree))
+        return '''# Cerid CI ops.py completion (PowerShell). Install: python ci/ops.py completion powershell >> $PROFILE
+$CeridOpsTree = @{
+%s
+}
+Register-ArgumentCompleter -Native -CommandName python, py -ScriptBlock {
+  param($wordToComplete, $commandAst, $cursorPosition)
+  $words = @($commandAst.CommandElements | ForEach-Object { $_.ToString() })
+  $index = [Array]::FindIndex($words, [Predicate[string]]{ param($w) $w -like '*ops.py' })
+  if ($index -lt 0) { return }
+  $path = ''
+  foreach ($w in $words[($index + 1)..($words.Count - 1)]) {
+    if ($w -eq $wordToComplete -or $w.StartsWith('-')) { continue }
+    $candidate = if ($path) { "$path $w" } else { $w }
+    if ($CeridOpsTree.ContainsKey($candidate)) { $path = $candidate }
+  }
+  $CeridOpsTree[$path] | Where-Object { $_ -like "$wordToComplete*" } |
+    ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
+}
+''' % entries
+    raise OpsError('unknown shell %s' % shell, 'choose bash, zsh or powershell')
+
+
+# --------------------------------------------------------------------------------------------- parser
+
+LEGACY = {'add-device': ('device', 'add'), 'bake': ('device', 'bake'), 'budget': ('cost', None),
+          'builds': ('build', 'list'), 'agents': ('agent', 'list'), 'queues': ('queue', 'list'),
+          'logs': ('job', 'logs'), 'retry': ('job', 'retry'), 'agent-token': ('token', None),
+          'restore': ('backup', 'restore')}
+
+HANDLERS = {
+    ('ui', None): cmd_ui, ('status', None): cmd_status, ('health', None): cmd_health,
+    ('accounts', None): cmd_accounts, ('parity', None): cmd_parity, ('cost', None): cmd_cost, ('slo', None): cmd_slo,
+    ('device', 'add'): cmd_device_add, ('device', 'bake'): cmd_device_bake, ('device', 'list'): cmd_device_list,
+    ('build', 'list'): cmd_build_list, ('build', 'show'): cmd_build_show, ('build', 'start'): cmd_build_start,
+    ('build', 'cancel'): cmd_build_cancel, ('job', 'show'): cmd_job_show, ('job', 'logs'): cmd_job_logs,
+    ('job', 'retry'): cmd_job_retry, ('job', 'cancel'): cmd_job_cancel, ('agent', 'list'): cmd_agent_list,
+    ('agent', 'stop'): cmd_agent_stop, ('queue', 'list'): cmd_queue_list, ('token', 'create'): cmd_token_create,
+    ('token', 'revoke'): cmd_token_revoke, ('test', 'list'): cmd_test_list, ('test', 'history'): cmd_test_history,
+    ('test', 'flaky'): cmd_test_flaky, ('quarantine', 'list'): cmd_quarantine_list,
+    ('quarantine', 'release'): cmd_quarantine_release, ('bisect', 'list'): cmd_bisect_list,
+    ('audit', 'list'): cmd_audit_list, ('notify', 'test'): cmd_notify_test, ('backup', 'create'): cmd_backup_create,
+    ('backup', 'restore'): cmd_backup_restore, ('retention', 'run'): cmd_retention_run,
+}
+
+
+def add_device_options(parser):
+    for flag in ('--id', '--kind', '--os', '--os-version', '--arch', '--cpu-model', '--levels', '--gpu-vendor',
+                 '--gpu-model', '--executor', '--tier', '--cost-class', '--features', '--route'):
+        parser.add_argument(flag, required=True)
+    parser.add_argument('--status', default='active')
+    parser.add_argument('--apis')
+    parser.add_argument('--accounts')
+    parser.add_argument('--cost', type=float, default=0.0)
+    parser.add_argument('--config-json', '--executor-config', dest='config_json', help='executor_config as JSON')
+    parser.add_argument('--screen', help='size_in,density_dpi,refresh_hz,hdr')
+    parser.add_argument('--lane-presets')
+    parser.add_argument('--dry-run', action='store_true')
+
+
+def build_parser():
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument('--json', action='store_true', default=argparse.SUPPRESS,
+                        help='machine-readable output on standard output')
+    common.add_argument('--no-color', action='store_true', default=argparse.SUPPRESS, help='plain human output')
+    parser = argparse.ArgumentParser(prog='ops.py', description=__doc__.splitlines()[0], parents=[common],
+                                     formatter_class=argparse.RawDescriptionHelpFormatter,
+                                     epilog='\n'.join(__doc__.splitlines()[2:16]))
     parser.add_argument('--store', help='result store URL (default: CERID_CI_STORE)')
-    sub = parser.add_subparsers(dest='command', required=True)
-    sub.add_parser('status')
-    bud = sub.add_parser('budget')
-    bud.add_argument('--month')
-    bud.add_argument('--pull', action='store_true', help='read the GCP budget notifications first')
-    sub.add_parser('accounts')
-    sub.add_parser('parity')
-    bake = sub.add_parser('bake')
+    parser.add_argument('--config', default=str(ROOT / 'ci/coordinator.json'),
+                        help='coordinator configuration (default: ci/coordinator.json)')
+    nouns = parser.add_subparsers(dest='noun', metavar='<command>')
+
+    def noun(name, help_text, verbs=None):
+        node = nouns.add_parser(name, help=help_text, parents=[common])
+        if verbs is None:
+            return node, None
+        return node, node.add_subparsers(dest='verb', metavar='<verb>', required=True)
+
+    def verb(sub, name, help_text):
+        return sub.add_parser(name, help=help_text, parents=[common])
+
+    ui, _ = noun('ui', 'open the web UI through the IAP tunnel')
+    ui.add_argument('--port', type=int, default=8780, help='local port (another free one if taken)')
+    ui.add_argument('--instance', default='cerid-ci-launcher')
+    ui.add_argument('--zone')
+    ui.add_argument('--project')
+    ui.add_argument('--timeout', type=int, default=60)
+    ui.add_argument('--no-browser', action='store_true')
+    ui.add_argument('--once', action='store_true', help=argparse.SUPPRESS)
+    noun('status', 'every device cell, machines running, the month\'s spend')
+    noun('health', 'store, coordinator tick, stuck jobs, lost agents, machines')
+    noun('accounts', 'which account-backed inputs exist, by name only')
+    noun('parity', 'the CI-4 table: every GitHub Actions step and the orchestrator step carrying it')
+    cost, _ = noun('cost', 'spend, forecast and breakdown against the cap')
+    cost.add_argument('--month')
+    cost.add_argument('--by', choices=('build', 'lane', 'device'), default='lane')
+    cost.add_argument('--pull', action='store_true', help='read the GCP budget notifications first')
+    noun('slo', 'queue-time and availability objectives')
+    _, sub = noun('device', 'registry cells', True)
+    add_device_options(verb(sub, 'add', 'add one cell, validated with the whole registry'))
+    bake = verb(sub, 'bake', 'bake a gce_vm cell\'s image family')
     bake.add_argument('device')
     bake.add_argument('--dry-run', action='store_true')
-    add = sub.add_parser('add-device')
-    for flag, default in (('--id', None), ('--kind', None), ('--os', None), ('--os-version', None), ('--arch', None),
-                          ('--cpu-model', None), ('--levels', None), ('--gpu-vendor', None), ('--gpu-model', None),
-                          ('--executor', None), ('--tier', None), ('--cost-class', None), ('--features', None),
-                          ('--route', None)):
-        add.add_argument(flag, required=True, default=default)
-    add.add_argument('--status', default='active')
-    add.add_argument('--apis')
-    add.add_argument('--accounts')
-    add.add_argument('--cost', type=float, default=0.0)
-    add.add_argument('--config', help='executor_config as JSON')
-    add.add_argument('--screen', help='size_in,density_dpi,refresh_hz,hdr')
-    add.add_argument('--lane-presets')
-    add.add_argument('--dry-run', action='store_true')
-    config = str(ROOT / 'ci/coordinator.json')
-    parser.add_argument('--config', default=config, help='coordinator configuration (default ci/coordinator.json)')
-    builds = sub.add_parser('builds')
-    builds.add_argument('--limit', type=int, default=30)
-    bld = sub.add_parser('build')
-    bld.add_argument('--number', type=int)
-    bld.add_argument('--repository', default='cerid')
-    bld.add_argument('--branch', default='main')
-    bld.add_argument('--commit')
-    bld.add_argument('--message')
-    bld.add_argument('--tier', choices=('change', 'complete'))
-    bld.add_argument('--fresh', action='store_true')
-    retry = sub.add_parser('retry')
-    retry.add_argument('job')
-    cancel = sub.add_parser('cancel')
-    target = cancel.add_mutually_exclusive_group(required=True)
-    target.add_argument('--build', type=int)
-    target.add_argument('--job')
-    agents = sub.add_parser('agents')
-    agents.add_argument('--stop')
-    sub.add_parser('queues')
-    logs = sub.add_parser('logs')
+    verb(sub, 'list', 'every cell')
+    _, sub = noun('build', 'builds', True)
+    verb(sub, 'list', 'recent builds').add_argument('--limit', type=int, default=30)
+    verb(sub, 'show', 'one build and its steps').add_argument('number', type=int)
+    start = verb(sub, 'start', 'start a build')
+    start.add_argument('--repository', default='cerid')
+    start.add_argument('--branch', default='main')
+    start.add_argument('--commit')
+    start.add_argument('--message')
+    start.add_argument('--tier', choices=('change', 'complete'))
+    start.add_argument('--fresh', action='store_true', help='ignore the result cache')
+    verb(sub, 'cancel', 'cancel a build').add_argument('number', type=int)
+    _, sub = noun('job', 'jobs (steps of builds)', True)
+    verb(sub, 'show', 'a job and its reproducibility record').add_argument('job')
+    logs = verb(sub, 'logs', 'a job\'s log')
     logs.add_argument('job')
     logs.add_argument('--attempt', type=int)
     logs.add_argument('--follow', action='store_true')
-    token = sub.add_parser('agent-token')
-    token.add_argument('action', choices=('create', 'revoke'))
-    token.add_argument('--name', required=True)
-    token.add_argument('--queue', default='cerid-owned')
-    token.add_argument('--tags', help='k=v,... the agent can never override (device=<cell>)')
-    token.add_argument('--out', help='the file to write the token to (created, mode 0600; never printed)')
-    sub.add_parser('health')
-    bak = sub.add_parser('backup')
-    bak.add_argument('--out', required=True)
-    bak.add_argument('--all', action='store_true', help='include caches, logs and artifacts')
-    res = sub.add_parser('restore')
-    res.add_argument('source')
-    res.add_argument('--overwrite', action='store_true')
+    verb(sub, 'retry', 'run a failed job again').add_argument('job')
+    verb(sub, 'cancel', 'cancel one job').add_argument('job')
+    _, sub = noun('agent', 'agents', True)
+    verb(sub, 'list', 'every agent')
+    verb(sub, 'stop', 'stop an agent').add_argument('agent')
+    _, sub = noun('queue', 'queues', True)
+    verb(sub, 'list', 'agents and waiting work per queue')
+    _, sub = noun('token', 'registration tokens of owned machines', True)
+    create = verb(sub, 'create', 'write a new registration token to a file')
+    create.add_argument('--name', required=True)
+    create.add_argument('--queue', default='cerid-owned')
+    create.add_argument('--tags', help='k=v,... the agent can never override (device=<cell>)')
+    create.add_argument('--out', help='file to create (mode 0600); the token is never printed')
+    verb(sub, 'revoke', 'revoke a machine\'s tokens').add_argument('--name', required=True)
+    _, sub = noun('test', 'per-test history and flaky tests', True)
+    tl = verb(sub, 'list', 'tests per lane')
+    tl.add_argument('--lane')
+    tl.add_argument('--limit', type=int, default=40)
+    th = verb(sub, 'history', 'one test across runs')
+    th.add_argument('--lane', required=True)
+    th.add_argument('--test', required=True)
+    verb(sub, 'flaky', 'tests whose identical key both passed and failed')
+    _, sub = noun('quarantine', 'quarantined flaky tests', True)
+    verb(sub, 'list', 'every quarantine')
+    rel = verb(sub, 'release', 'end a quarantine now')
+    rel.add_argument('--lane', required=True)
+    rel.add_argument('--test', required=True)
+    _, sub = noun('bisect', 'first-bad-commit searches', True)
+    verb(sub, 'list', 'every bisection')
+    _, sub = noun('audit', 'the audit log', True)
+    verb(sub, 'list', 'audited actions').add_argument('--days', type=int, default=7)
+    _, sub = noun('notify', 'notifications', True)
+    verb(sub, 'test', 'send a test notification to every channel')
+    _, sub = noun('backup', 'backup and restore of the state', True)
+    bc = verb(sub, 'create', 'write a backup')
+    bc.add_argument('--out', required=True)
+    bc.add_argument('--all', action='store_true', help='include caches, logs and artifacts')
+    br = verb(sub, 'restore', 'restore a backup')
+    br.add_argument('source')
+    br.add_argument('--overwrite', action='store_true')
+    _, sub = noun('retention', 'log and artifact retention', True)
+    verb(sub, 'run', 'apply the retention now').add_argument('--limit', type=int, default=200)
+    comp, _ = noun('completion', 'print a shell-completion script')
+    comp.add_argument('shell', choices=('bash', 'zsh', 'powershell'))
+    return parser
+
+
+def legacy(argv):
+    """Rewrite the earlier flat verbs to the noun-verb form (add-device -> device add, builds -> build list, ...)."""
+    flags = [a for a in argv if a in ('--json', '--no-color')]
+    rest = [a for a in argv if a not in ('--json', '--no-color')]
+    index = 0
+    while index < len(rest) and rest[index].startswith('-'):
+        index += 2 if rest[index] in ('--store', '--config') else 1
+    if index >= len(rest):
+        return list(argv)
+    head, name, tail = rest[:index], rest[index], rest[index + 1:]
+
+    def value(flag):
+        return tail[tail.index(flag) + 1] if flag in tail and tail.index(flag) + 1 < len(tail) else None
+    if name == 'build' and tail and tail[0].startswith('-'):
+        if '--number' in tail:
+            new = ['build', 'show', value('--number')]
+        else:
+            new = ['build', 'start'] + tail
+    elif name == 'backup' and (not tail or tail[0].startswith('-')):
+        new = ['backup', 'create'] + tail
+    elif name == 'cancel':
+        new = ['build', 'cancel', value('--build')] if '--build' in tail else ['job', 'cancel', value('--job')]
+    elif name == 'agents' and '--stop' in tail:
+        new = ['agent', 'stop', value('--stop')]
+    elif name == 'agent-token' and tail:
+        new = ['token'] + tail
+    elif name == 'add-device':
+        # The old `--config <executor_config JSON>` is now --config-json: the global --config names the coordinator's
+        # configuration file.
+        new = ['device', 'add'] + ['--config-json' if a == '--config' else a for a in tail]
+    elif name in LEGACY:
+        target, verb_name = LEGACY[name]
+        new = [target] + ([verb_name] if verb_name else []) + tail
+    else:
+        return list(argv)
+    return head + new + flags
+
+
+def main(argv=None, environ=None):
+    argv = legacy(sys.argv[1:] if argv is None else argv)
+    environ = os.environ if environ is None else environ
+    parser = build_parser()
     args = parser.parse_args(argv)
+    args.json = getattr(args, 'json', False)
+    args.no_color = getattr(args, 'no_color', False)
     if hasattr(sys.stdout, 'reconfigure'):
-        sys.stdout.reconfigure(encoding='utf-8')
-    registry = pipeline().load_registry()
-    handlers = {'status': cmd_status, 'budget': cmd_budget, 'accounts': cmd_accounts, 'parity': cmd_parity,
-                'add-device': cmd_add_device, 'bake': cmd_bake, 'builds': cmd_builds, 'build': cmd_build,
-                'retry': cmd_retry, 'cancel': cmd_cancel, 'agents': cmd_agents, 'queues': cmd_queues,
-                'logs': cmd_logs, 'agent-token': cmd_agent_token, 'health': cmd_health, 'backup': cmd_backup,
-                'restore': cmd_restore}
-    return handlers[args.command](args, registry, os.environ)
+        try:
+            sys.stdout.reconfigure(encoding='utf-8')
+        except ValueError:
+            pass
+    if not args.noun:
+        parser.print_help()
+        return 2
+    out = Out(use_color(args))
+    if args.noun == 'completion':
+        sys.stdout.write(completion(args.shell, parser))
+        return 0
+
+    class Context:
+        pass
+    ctx = Context()
+    ctx.args, ctx.environ, ctx.out = args, environ, out
+    ctx.registry = pipeline().load_registry()
+    handler = HANDLERS[(args.noun, getattr(args, 'verb', None))]
+    try:
+        code, data, lines = handler(ctx)
+    except OpsError as error:
+        return fail(args, out, str(error), error.hint)
+    except Exception as error:  # a known failure with a next step, else the plain error
+        message, hint = explain(error)
+        return fail(args, out, message, hint)
+    if args.json:
+        if data is not None:
+            print(json.dumps(data, indent=1, sort_keys=True, default=str))
+    else:
+        for line in lines:
+            print(line)
+    return code
+
+
+def explain(error):
+    """(message, next step) for the failures an operator meets."""
+    name = type(error).__name__
+    text = str(error) or name
+    if name == 'NotFound':
+        return text, 'list what exists: python ci/ops.py build list | job show | agent list'
+    if name in ('Refused', 'TransitionError'):
+        return text, 'reload the build (python ci/ops.py build show N) and decide again'
+    if name == 'AuthError':
+        return text, 'the token or identity was refused; see the runbook "an agent cannot connect"'
+    if 'no Google Cloud credentials' in text or 'HTTP 401' in text or 'HTTP 403' in text:
+        return text, ('sign in with `gcloud auth application-default login`, or set CERID_CI_STORE to a local '
+                      'directory for an owned setup')
+    if isinstance(error, (FileNotFoundError, PermissionError)):
+        return text, 'check the path and that this user may read it'
+    if isinstance(error, KeyError):
+        return 'missing %s' % text, 'check the arguments with --help'
+    return '%s: %s' % (name, text), 'run again with --json for the details, or see docs/recipes/ci-platform-runbooks.md'
+
+
+def fail(args, out, message, hint):
+    if args.json:
+        print(json.dumps({'error': message, 'next': hint}))
+    else:
+        print(out.paint('error: ', 'bad') + message, file=sys.stderr)
+        if hint:
+            print(out.paint('next:  ', 'warn') + hint, file=sys.stderr)
+    return 2
 
 
 if __name__ == '__main__':

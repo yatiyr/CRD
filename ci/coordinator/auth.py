@@ -11,13 +11,18 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import secrets
+import socket
+import subprocess
 import threading
 import time
+import urllib.parse
 
 LEEWAY = 60
 
@@ -218,12 +223,95 @@ def google_instance(claims, service_account, project):
     return engine['instance_name'], engine.get('zone', '')
 
 
-class UiAuth:
-    """Who is calling the web UI. Modes: `cloudflare-access` (the Cf-Access-Jwt-Assertion header, RS256),
-    `iap` (x-goog-iap-jwt-assertion, ES256) and `local` (only on a loopback listener: tests and a workstation).
-    There is no anonymous mode; an optional allow-list of e-mail addresses narrows any mode."""
+IAP_TUNNEL_RANGE = '35.235.240.0/20'
+TAILNET_RANGES = ('100.64.0.0/10', 'fd7a:115c:a1e0::/48')
 
-    def __init__(self, mode, audience='', team='', fetch=None, allowed=(), loopback=False, clock=time.time):
+
+def in_networks(address, networks):
+    try:
+        ip = ipaddress.ip_address((address or '').split('%', 1)[0])
+    except ValueError:
+        return False
+    if getattr(ip, 'ipv4_mapped', None):
+        ip = ip.ipv4_mapped
+    return any(ip in ipaddress.ip_network(n, strict=False) for n in networks)
+
+
+class TailscaleWhois:
+    """Who a tailnet peer is, from the local tailscaled (its LocalAPI over the Unix socket on Linux, else the
+    `tailscale whois --json` command): the identity WireGuard authenticated, not a header a client could forge.
+    Answers are cached for a minute per peer address."""
+
+    SOCKET = '/var/run/tailscale/tailscaled.sock'
+
+    def __init__(self, run=subprocess.run, socket_path=SOCKET, clock=time.time, ttl=60.0):
+        self.run = run
+        self.socket_path = socket_path
+        self.clock = clock
+        self.ttl = ttl
+        self.cache = {}
+        self.lock = threading.Lock()
+
+    def _localapi(self, address):
+        import http.client
+
+        class Connection(http.client.HTTPConnection):
+            def connect(conn):
+                conn.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                conn.sock.settimeout(5)
+                conn.sock.connect(self.socket_path)
+        connection = Connection('local-tailscaled.sock', timeout=5)
+        try:
+            connection.request('GET', '/localapi/v0/whois?addr=%s' % urllib.parse.quote(address, safe=''))
+            response = connection.getresponse()
+            body = response.read()
+            if response.status != 200:
+                raise AuthError('tailscaled does not know peer %s' % address)
+            return json.loads(body.decode('utf-8'))
+        finally:
+            connection.close()
+
+    def _cli(self, address):
+        completed = self.run(['tailscale', 'whois', '--json', address], capture_output=True, text=True, timeout=10,
+                             check=False)
+        if completed.returncode != 0:
+            raise AuthError('tailscale whois %s failed: %s' % (address, (completed.stderr or '').strip()[:200]))
+        return json.loads(completed.stdout)
+
+    def login(self, host, port):
+        address = '[%s]:%s' % (host, port) if ':' in host else '%s:%s' % (host, port)
+        with self.lock:
+            hit = self.cache.get(address)
+            if hit and self.clock() - hit[0] < self.ttl:
+                return hit[1]
+        if hasattr(socket, 'AF_UNIX') and Path(self.socket_path).exists():
+            answer = self._localapi(address)
+        else:
+            answer = self._cli(address)
+        login = ((answer.get('UserProfile') or {}).get('LoginName') or '').strip()
+        node = answer.get('Node') or {}
+        if not login or node.get('Tags'):
+            raise AuthError('peer %s is a tagged device or has no user login' % address)
+        with self.lock:
+            self.cache[address] = (self.clock(), login)
+        return login
+
+
+class UiAuth:
+    """Who is calling the web UI. There is no anonymous mode. Modes:
+
+    - `iap-tunnel` (the default): the coordinator listens only on loopback and the launcher's internal address,
+      the firewall admits TCP 8780 only from Google's IAP TCP-forwarding range, and only principals holding the IAP
+      tunnel role on the launcher can open that tunnel (`ci/ops.py ui`). The coordinator accepts UI requests only
+      from loopback and that range; a runner VM inside the network is refused.
+    - `tailscale` (optional add-on): the peer must be a tailnet address and its user login, asked of the local
+      tailscaled (whois), must be on the allow-list.
+    - `cloudflare-access` (RS256 assertion) and `iap` (ES256 assertion behind an HTTPS load balancer): alternatives.
+    - `local`: only on a loopback listener (tests and a workstation).
+    """
+
+    def __init__(self, mode, audience='', team='', fetch=None, allowed=(), loopback=False, clock=time.time,
+                 networks=None, whois=None):
         self.mode = mode
         self.audience = audience
         self.allowed = {a.lower() for a in allowed}
@@ -242,15 +330,36 @@ class UiAuth:
             self.issuers = IAP_ISSUERS
             self.jwks = Jwks(IAP_CERTS, fetch)
             self.algorithms = ('ES256',)
+        elif mode == 'iap-tunnel':
+            self.networks = tuple(networks or ('127.0.0.0/8', '::1/128', IAP_TUNNEL_RANGE))
+        elif mode == 'tailscale':
+            if not self.allowed:
+                raise ValueError('tailscale mode needs ui.allowed_logins: the tailnet users who may open the UI')
+            self.whois = whois or TailscaleWhois(clock=clock)
         elif mode == 'local':
             if not loopback:
                 raise ValueError('local UI authentication is allowed only on a loopback listener')
         else:
             raise ValueError('unknown UI authentication mode %r' % mode)
 
-    def user(self, headers):
+    def user(self, headers, peer=None):
+        """The viewer's name, or AuthError. `peer` is the connection's (host, port)."""
         if self.mode == 'local':
             return 'local-operator'
+        if self.mode == 'iap-tunnel':
+            host = (peer or ('', 0))[0]
+            if not in_networks(host, self.networks):
+                raise AuthError('the UI is reachable only through the IAP tunnel (python ci/ops.py ui); %s is not '
+                                'an allowed source' % host)
+            return 'operator (IAP tunnel)' if not in_networks(host, ('127.0.0.0/8', '::1/128')) else 'operator (local)'
+        if self.mode == 'tailscale':
+            host, port = peer or ('', 0)
+            if not in_networks(host, TAILNET_RANGES):
+                raise AuthError('the UI answers only tailnet peers; %s is not one' % host)
+            login = self.whois.login(host, port)
+            if login.lower() not in self.allowed:
+                raise AuthError('%s is not on ui.allowed_logins' % login)
+            return login
         token = headers.get(self.header) or headers.get(self.header.lower())
         if not token:
             raise AuthError('no %s header: the UI is reachable only through the access proxy' % self.header)

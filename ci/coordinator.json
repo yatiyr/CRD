@@ -1,27 +1,29 @@
 {
   "schema": "cerid-ci-coordinator/1",
-  "note": "The Cerid orchestrator's coordinator (ADR-0135 §12, docs/design/ci-platform.md#the-cerid-orchestrator). No value here is secret: a key ending in _env reads that environment variable on the launcher (/etc/cerid-ci/launcher.env), secrets are Secret Manager names. Setup: docs/recipes/ci-platform-setup.md.",
+  "note": "The Cerid orchestrator's coordinator (ADR-0135 §12 and §16, docs/design/ci-platform.md#the-cerid-orchestrator). No value here is secret: a key ending in _env reads that environment variable on the launcher (/etc/cerid-ci/launcher.env) and overrides a literal of the same name; secrets are Secret Manager names. Default access: polling for triggers, the web UI through a Google IAP TCP tunnel (python ci/ops.py ui). Operator runbook: docs/recipes/ci-platform-setup.md.",
+  "url": "http://localhost:8780",
   "url_env": "CERID_CI_URL",
   "internal_url_env": "CERID_CI_INTERNAL_URL",
-  "listen": "127.0.0.1:8780",
+  "listen": ["127.0.0.1:8780"],
   "mirror_dir": "/var/lib/cerid-ci/mirror",
   "ui": {
-    "mode": "cloudflare-access",
+    "mode": "iap-tunnel",
+    "mode_env": "CERID_CI_UI_MODE",
+    "networks_note": "iap-tunnel accepts the UI only from loopback and Google's IAP TCP-forwarding range 35.235.240.0/20; tailscale (optional add-on) needs allowed_logins; cloudflare-access and iap (load balancer) are the documented alternatives",
+    "allowed_logins_env": "CERID_CI_UI_LOGINS",
     "team_env": "CERID_CI_ACCESS_TEAM",
-    "audience_env": "CERID_CI_ACCESS_AUD",
-    "allowed_emails_env": "CERID_CI_UI_EMAILS"
+    "audience_env": "CERID_CI_ACCESS_AUD"
   },
   "secrets": {"provider": "secret-manager"},
   "repositories": {
     "cerid": {
       "url_env": "CERID_CI_REPOSITORY_URL",
-      "host_env": "CERID_CI_GIT_HOST",
       "host": "github",
-      "webhook_secret": "cerid-webhook-secret",
+      "host_env": "CERID_CI_GIT_HOST",
       "checkout": "mirror",
       "depth": 50,
       "trusted_branches": ["main"],
-      "poll": {"branches": ["main"], "interval_seconds": 120},
+      "poll": {"branches": ["main"], "interval_seconds": 60},
       "schedules": [
         {"name": "nightly-complete", "cron": "0 3 * * *", "branch": "main"},
         {"name": "weekly-fresh", "cron": "0 4 * * 0", "branch": "main", "env": {"CERID_CI_FRESH": "1"}}
@@ -30,6 +32,18 @@
                  "token_secret": "cerid-status-token"},
       "pipeline": {"command": "python ci/pipeline.py upload", "queue": "cerid-launcher", "timeout_in_minutes": 30}
     }
+  },
+  "notifications": {
+    "events": ["failure", "recovery", "budget", "flaky", "quarantine_expired", "bisect"],
+    "branches": ["main"],
+    "channels": []
+  },
+  "quality": {"quarantine_days": 7, "max_quarantined": 10, "bisect": true, "max_bisections": 2},
+  "slo": {
+    "queue_seconds": {"cerid-launcher": 120, "cerid-owned": 300, "cerid-cloud": 900, "default": 300},
+    "queue_objective": 0.95,
+    "availability_objective": 0.995,
+    "window_days": 30
   },
   "limits": {
     "lost_after_seconds": 120,
