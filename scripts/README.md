@@ -143,7 +143,14 @@ Run commands from the repository root. Build/test rules and exact quality requir
   [-D<option>=ON ...]` builds a `runtime/examples` program in the WSL linux-gcc-release lane tree and runs it pinned
   at each CPU level the pinned CPUs run (`cpu_level_record --levels`); the boards' Cerid programs are CMake targets, so
   no script keeps a link line for one. Each level's run follows the line of `runtime/cpu_level_record` under the same
-  `CRD_CPU_LEVEL` and CPU list (ADR-0134 §8), which stops the board when the level did not apply.
+  `CRD_CPU_LEVEL` and CPU list (ADR-0134 §8), which stops the board when the level did not apply. On the
+  optimization track's benchmark machine (`ci/bench_vm.py`) the checkout is native, so the same drivers build from it
+  without a mirror; `bench-host-setup.sh` provisions that machine (perf, the pinned Ninja and Vulkan headers, the
+  system peers) and prints its census.
+- Fast A/B boards ([method](../docs/bench/README.md#fast-ab-boards)): `ab-board.py --cmd NAME=COMMAND --arm
+  LABEL=NAME:REGEX --reference LABEL [--cpus LIST]` runs the arms' processes interleaved and pinned, pairs each arm's
+  values with the reference's by repetition and reports the median speed ratio with its bootstrap 95% interval and a
+  verdict against the noise band, stopping once every cell is decided. Its cases are in `test-repository-tools.py`.
 - `per-slice-check.*`, `full-sweep.ps1` and the unfiltered WSL wrapper are broad CI recipes. Locally select targets.
 
 Put one-shot scripts, logs and probes in ignored `build/<task>/`. Shared scripts must not encode a particular

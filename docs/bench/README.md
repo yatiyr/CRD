@@ -28,8 +28,31 @@ logs / phase tables (recorded numbers, not re-measured — each file carries the
 board is written here AT MEASUREMENT TIME — this is part of the per-slice Definition of Done for any
 perf/crush claim (see [AGENTS](../../AGENTS.md#conduct--mandatory)).
 
+## Fast A/B boards
+
+A question about one change or one gap is answered in minutes on the optimization track's benchmark machine
+(`ci/bench_vm.py`, [SIMD-PERF](../ROADMAP.md#slice-simd-perf)), never compared with another machine's boards:
+
+1. **Profile first.** Before a lever is chosen, the time is located on that machine: `perf stat -M TopdownL1` and
+   `TopdownL2`, cycles, instructions and branch misses for Cerid and for the peer doing the same work, then
+   `perf record -g` and `perf annotate` on the hot loop. A bench program gives each side a loop of its own for this
+   (`bench_fft_f32 --loop <side>`, with a `copy` side whose counts are the loop's own overhead), so a profile never
+   mixes the two. The bound named with its evidence goes into the session note.
+2. **Interleave and pair.** [ab-board.py](../../scripts/ab-board.py) runs the arms on one pinned core
+   (`--cpus`), one process per command per repetition in a rotated order, after warm-up repetitions it discards. Two
+   builds of one program (HEAD and a candidate, or the pre-row engine `2f2aed72` and HEAD, both kept on that machine)
+   are two commands; Cerid and a peer timed in one process (`bench_fft_f32 --planned`: the level's planned forward
+   and MKL each repetition) are two arms of one command.
+3. **Judge by the ratio and its spread.** Each cell is the median of the per-repetition speed ratios with a
+   percentile-bootstrap 95% interval, judged against a noise band (2% by default): faster, slower, level, or
+   unresolved. The board stops as soon as no cell is unresolved (at least five repetitions) and saves every
+   process's output and value (`--log-dir`, `--json`).
+4. **Keep only a decisive win** whose results are bit-exact or within the kernel's declared tolerance (ADR-0063,
+   ADR-0134); otherwise revert, and record the measured gap and the reason.
+
 ## Index
 
+- **2026-10-31-simd-perf-fft-f32-xeon.md** — SIMD-PERF's first board on the benchmark machine (GCE c4-standard-8, Xeon Platinum 8581C, real AVX-512; `scripts/ab_fft_f32.sh` and `scripts/ab_fft_prerow.sh` through `ab-board.py`, one pinned CPU, bootstrap intervals; MKL 2020.0.4, FFTW 3.3.10, pocketfft `4d865cba`; perf top-down profiles): **MKL leads the planned f32 forward at 1K to 64K (0.52x to 0.88x avx512, 0.44x to 0.89x avx2) and at 2M to 4M (0.70x to 0.90x); Cerid leads at 128K to 1M (1.17x to 1.70x). At 4096 Cerid runs 1.28x MKL's instructions at 0.74x its IPC from the legacy decoder; at 2M and 4M another offered forward beats MKL by 1.4x to 1.55x here while the i9 ranks it last (a machine-dependent plan). HEAD is level with or faster than the pre-row engine (f64 kernel, avx2 0.99x to 1.08x, avx512 1.15x to 1.45x).**
 - **2026-10-31-simd-dispatch-sse2-boards.md** — SIMD-DISPATCH row-close boards, the sse2 and sse4.2 bodies (i9-14900K, WSL2; dtypes, reduce, log-density gradients, the Lanczos gamma batch and nn at every level, each body against the portable loop on an SSE2 machine's glibc, the pre-row engine at avx2 alternating, the peers; busy host): **every sse2 body but the round-to-nearest f16 and fp8 narrowings (0.62x to 0.72x) beats the portable loop (1.11x to 5.48x); the conversion family's sse4.2 unit beats sse2, the hesap-tensor family's does not; three rows regressed against pre-row: the nn nets (0.27x to 0.70x), the Gamma O(1) gradient (0.122x, glibc fma calls in baseline general code) and the Student-t sum (0.761x, the log reduction's second division); after the fold the narrowings beat it too (1.43x to 1.73x) and the tensor sse4.2 unit is gone.**
 - **2026-10-31-simd-dispatch-permute-board.md** — SIMD-DISPATCH row-close board, permute (i9-14900K, WSL2; a probe on the pre-row and HEAD engines alternating, `bench_permute`'s arms and HPTT interleaved, one thread at every level, 8 and 16 workers; busy host): **the next-tile prefetch had put five one-thread cells 15% to 27% behind pre-row and the unstaged tiles the multithreaded f32 cells 13% to 30%; with no prefetch and staged multithreaded strips as the rules no cell trails pre-row (one thread 1.00x to 2.45x, 8 and 16 workers 1.15x to 1.85x) and HPTT trails at avx2 but for two one-thread cells at 0.97 and 0.99.**
 - **2026-10-31-simd-dispatch-sell-board.md** — SIMD-DISPATCH row-close board, SELL spmv (i9-14900K, WSL2; five interleaved passes on a contended host against the pre-row engine and Eigen, every level): **at avx2 Cerid leads Eigen by geometric means of 1.16 (f64), 1.39 (f32), 1.39 (c64) and 1.57 (c32); complex and wide rows beat the pre-row engine (c32 up to 3.9x), but f64 rows with 4 or 5 stored values run at 0.84 to 0.90 of the pre-row engine in a same-process A/B at eight placements, a real slice-driver regression (open), and f32 narrow rows at 0.96 to 0.98.** Beyond the L2, crd-jobs' wake and join floor bounds the threaded cells.

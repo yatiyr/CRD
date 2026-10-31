@@ -256,6 +256,11 @@ The trees configured from `/mnt/d` (`~/cerid-build/<preset>`) stay as they are; 
 (identical compile commands up to the source and tree paths, identical test inventories, the suites passing) are in
 the [board](../bench/2026-10-18-build-speed-cache-mirror.md).
 
+A checkout on a native Linux disk needs no mirror: when `wsl-lane.sh` lives outside `/mnt` and no
+`CRD_MIRROR_SOURCE` is set, the checkout is the lanes' source and `sync` and `check` do nothing. The benchmark
+machine of the optimization track (`ci/bench_vm.py`, its `~/cerid` a git checkout that `sync` moves between commits)
+builds its lane trees this way, so `run-lane-bench.sh` and every `run_bench_*.sh` driver run there unchanged.
+
 ## Waiting for long commands
 
 [wait-for.py](../../scripts/wait-for.py) replaces fixed sleeps with bounded, event-driven waits: `file` (a file

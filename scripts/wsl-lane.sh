@@ -17,8 +17,9 @@
 #
 # test, run and dev check without syncing: a source edited after the build is refused instead of being tested against
 # binaries built from older sources. Run it through the checkout's path (bash /mnt/d/.../scripts/wsl-lane.sh) so the
-# mirror's source is known. One heavy job at a time: configure, build, test, run and dev wait for
-# ~/.cerid/wsl-lane.lock.
+# mirror's source is known. A checkout on a native Linux disk (the benchmark machine's ~/cerid, ci/bench_vm.py) is
+# its own source: with no CRD_MIRROR_SOURCE it builds from the checkout, and sync and check do nothing. One heavy job
+# at a time: configure, build, test, run and dev wait for ~/.cerid/wsl-lane.lock.
 # Environment: CRD_LANE_ROOT (the trees, default ~/cerid-mirror-build), CRD_SOURCE_MIRROR (default ~/cerid-src),
 # CRD_LANE_JOBS (default 16), CRD_LANE_TIMEOUT (seconds per heavy command, default 3500), CRD_LANE_KEEP_GOING (1: build
 # past failures, so a change to a widely included header shows every unit it breaks in one round), CRD_SCCACHE, CRD_MOLD and
@@ -29,7 +30,17 @@
 set -euo pipefail
 unset DEBUGINFOD_URLS
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-MIRROR=${CRD_SOURCE_MIRROR:-$HOME/cerid-src}
+CHECKOUT=$(dirname "$HERE")
+# The mirror exists because drvfs makes every file open cost milliseconds; a checkout outside /mnt needs none.
+NATIVE=0
+if [[ $CHECKOUT != /mnt/* && -z ${CRD_MIRROR_SOURCE:-} ]]; then
+    NATIVE=1
+fi
+if [[ $NATIVE == 1 ]]; then
+    MIRROR=$CHECKOUT
+else
+    MIRROR=${CRD_SOURCE_MIRROR:-$HOME/cerid-src}
+fi
 ROOT=${CRD_LANE_ROOT:-$HOME/cerid-mirror-build}
 JOBS=${CRD_LANE_JOBS:-16}
 # compiler-cache.py sizes mold's threads per link from the lane's job count at configure time.
@@ -58,6 +69,9 @@ usage() {
 }
 
 mirror() {
+    if [[ $NATIVE == 1 ]]; then
+        return 0
+    fi
     python3 "$HERE/source-mirror.py" "$@" --mirror "$MIRROR"
 }
 

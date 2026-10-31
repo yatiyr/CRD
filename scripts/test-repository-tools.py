@@ -148,6 +148,9 @@ source_routes_spec.loader.exec_module(source_routes)
 isa_spec = importlib.util.spec_from_file_location('check_isa_isolation', ROOT / 'scripts/check-isa-isolation.py')
 isa_isolation = importlib.util.module_from_spec(isa_spec)
 isa_spec.loader.exec_module(isa_isolation)
+ab_spec = importlib.util.spec_from_file_location('ab_board', ROOT / 'scripts/ab-board.py')
+ab_board = importlib.util.module_from_spec(ab_spec)
+ab_spec.loader.exec_module(ab_board)
 sys.path.insert(0, str(ROOT / 'scripts'))
 import pins as pins_registry
 from cerid_dev import tidy as tidy_gate  # noqa: E402  # noqa: E402  (scripts/pins.py; the installers import the same module)
@@ -2659,6 +2662,14 @@ class CompilerCache(unittest.TestCase):
             # The focused plan's lane route (wsl-lane.sh dev): dev.py check in the lane's tree under the lane lock,
             # with the build's cache server and the test preset's environment, refused on a stale mirror.
             self.assertIn('configure|build|test|run|dev)\n        heavy "$@"', wsl_lane)
+            # A checkout on a native Linux disk (the benchmark machine) is its own source: no mirror to sync or check,
+            # while a /mnt checkout, or an explicit CRD_MIRROR_SOURCE, keeps the mirror and its refusal.
+            self.assertIn('if [[ $CHECKOUT != /mnt/* && -z ${CRD_MIRROR_SOURCE:-} ]]; then\n    NATIVE=1', wsl_lane)
+            self.assertIn('if [[ $NATIVE == 1 ]]; then\n    MIRROR=$CHECKOUT\nelse\n    MIRROR=${CRD_SOURCE_MIRROR:-',
+                          wsl_lane)
+            mirror_function = wsl_lane[wsl_lane.index('\nmirror() {\n'):]
+            mirror_function = mirror_function[:mirror_function.index('\n}\n')]
+            self.assertLess(mirror_function.index('return 0'), mirror_function.index('source-mirror.py'))
             dev_branch = wsl_lane[wsl_lane.index('\n    dev)\n'):]
             dev_branch = dev_branch[:dev_branch.index('\n        ;;')]
             for needle in ('mirror check', 'server_env=$(python3 "$MIRROR/scripts/compiler-cache.py" server "$tree"',
@@ -5111,6 +5122,123 @@ class IsaIsolation(unittest.TestCase):
             with self.assertRaisesRegex(isa_isolation.GuardError, 'malformed'):
                 isa_isolation.read_manifest(str(manifest))
 
+
+class AbBoard(unittest.TestCase):
+    """scripts/ab-board.py: interleaved arms, paired speed ratios with a bootstrap interval, a decisive stop."""
+
+    ROW = r'^(?P<key>\d+) (?P<value>[\d.]+)'
+
+    def fake_runner(self, outputs, calls):
+        """A runner whose command `name` prints outputs[name](call index); records each command line it ran."""
+        def run(line, shell, capture_output, text):
+            self.assertTrue(shell and capture_output and text)
+            calls.append(line)
+            name = line.split()[-1]
+            return SimpleNamespace(returncode=0, stdout=outputs[name](len(calls)), stderr='')
+        return run
+
+    def arms(self, commands, *specs):
+        return [ab_board.parse_arm(spec, commands) for spec in specs]
+
+    def test_verdicts_and_ratios(self):
+        self.assertEqual(ab_board.verdict(1.05, 1.08, 0.02), 'faster')
+        self.assertEqual(ab_board.verdict(0.90, 0.97, 0.02), 'slower')
+        self.assertEqual(ab_board.verdict(0.99, 1.01, 0.02), 'level')
+        self.assertEqual(ab_board.verdict(0.99, 1.03, 0.02), 'unresolved')
+        self.assertEqual(ab_board.verdict(None, None, 0.02), 'unresolved')
+        # Above 1 the arm is faster: the reference's time over the arm's, or the arm's rate over the reference's.
+        self.assertEqual(ab_board.speed_ratio(2.0, 1.0, False), 2.0)
+        self.assertEqual(ab_board.speed_ratio(2.0, 1.0, True), 0.5)
+        self.assertEqual([ab_board.number(v) for v in (None, 51634.2, 0.00057, 1.30449)],
+                         ['-', '51634', '0.00057', '1.304'])
+
+    def test_arguments_are_checked(self):
+        commands = {'a': 'x'}
+        with self.assertRaisesRegex(ab_board.BoardError, 'NAME:REGEX'):
+            ab_board.parse_arm('arm=b:' + self.ROW, commands)
+        with self.assertRaisesRegex(ab_board.BoardError, 'groups key and value'):
+            ab_board.parse_arm(r'arm=a:^(\d+)', commands)
+        with self.assertRaisesRegex(ab_board.BoardError, 'NAME=VALUE'):
+            ab_board.parse_assignment('novalue', '--cmd')
+        arms = self.arms(commands, 'ref=a:' + self.ROW)
+        with self.assertRaisesRegex(ab_board.BoardError, 'at least one other arm'):
+            ab_board.Board(commands, arms, 'ref')
+        with self.assertRaisesRegex(ab_board.BoardError, 'is not an arm'):
+            ab_board.Board(commands, arms, 'other')
+
+    def test_instrument_failures_stop_the_board(self):
+        regex = re.compile(self.ROW, re.M)
+        with self.assertRaisesRegex(ab_board.BoardError, 'printed twice'):
+            ab_board.arm_values('x', regex, '1 2.0\n1 3.0\n')
+        with self.assertRaisesRegex(ab_board.BoardError, 'no line'):
+            ab_board.arm_values('x', regex, 'nothing\n')
+        commands = {'a': 'run a', 'b': 'run b'}
+        arms = self.arms(commands, 'ref=a:' + self.ROW, 'cand=b:' + self.ROW)
+
+        def failing(line, **_):
+            return SimpleNamespace(returncode=3, stdout='', stderr='boom')
+        board = ab_board.Board(commands, arms, 'ref', runner=failing, out=io.StringIO())
+        with self.assertRaisesRegex(ab_board.BoardError, 'exited 3: boom'):
+            board.run()
+
+    def test_interleaves_pins_and_stops_once_decided(self):
+        # The candidate is 25% faster at key 1 and level at key 2, with a little noise on both.
+        commands = {'a': 'run a', 'b': 'run b'}
+        noise = [1.0, 1.004, 0.997, 1.002, 0.999, 1.001, 0.998]
+        outputs = {'a': lambda i: '1 %.4f\n2 %.4f\n' % (10.0 * noise[i % 7], 5.0 * noise[(i + 3) % 7]),
+                   'b': lambda i: '1 %.4f\n2 %.4f\n' % (8.0 * noise[(i + 1) % 7], 5.0 * noise[(i + 5) % 7])}
+        calls = []
+        with tempfile.TemporaryDirectory() as scratch:
+            board = ab_board.Board(commands, self.arms(commands, 'ref=a:' + self.ROW, 'cand=b:' + self.ROW), 'ref',
+                                   cpus='4', warmup=1, min_reps=4, max_reps=12,
+                                   runner=self.fake_runner(outputs, calls), log_dir=scratch, out=io.StringIO())
+            document = board.run()
+            self.assertTrue((Path(scratch) / 'warmup1-a.log').is_file())
+            self.assertTrue((Path(scratch) / 'rep4-b.log').is_file())
+        self.assertEqual(document['stop'], 'every cell decided after 4 repetitions')
+        self.assertEqual(len(document['repetitions']), 4)
+        self.assertEqual(len(calls), 10, 'one warm-up and four repetitions of both commands')
+        self.assertTrue(all(line.startswith('taskset -c 4 run ') for line in calls))
+        # Each repetition rotates the order: a b, b a, a b, ...
+        self.assertEqual([line[-1] for line in calls[:4]], ['a', 'b', 'b', 'a'])
+        cells = {cell['key']: cell for cell in document['comparisons']['cand']}
+        self.assertEqual(cells['1']['verdict'], 'faster')
+        self.assertAlmostEqual(cells['1']['ratio'], 1.25, delta=0.01)
+        self.assertEqual(cells['2']['verdict'], 'level')
+        table = ab_board.render(document)
+        self.assertIn('| key | ref | cand | speed ratio | verdict |', table)
+        self.assertIn('| faster |', table)
+
+    def test_one_process_gives_two_arms_and_noise_runs_to_the_maximum(self):
+        # A program that times Cerid and its peer in the same process (bench_fft_f32's planned row and MKL); the
+        # peer's time swings by 10% each run, so the cell stays unresolved and the board runs to its maximum.
+        commands = {'p': 'run p'}
+        outputs = {'p': lambda i: '1 | 1.000 | %.3f\n' % (1.0 + (0.1 if i % 2 else -0.1))}
+        calls = []
+        arms = self.arms(commands, r'cerid=p:^(?P<key>\d+) \| (?P<value>[\d.]+) \|',
+                         r'mkl=p:^(?P<key>\d+) \| [\d.]+ \| (?P<value>[\d.]+)')
+        board = ab_board.Board(commands, arms, 'mkl', warmup=0, min_reps=2, max_reps=5,
+                               runner=self.fake_runner(outputs, calls), out=io.StringIO())
+        document = board.run()
+        self.assertEqual(len(calls), 5)
+        self.assertEqual(document['stop'], 'the maximum of 5 repetitions')
+        self.assertEqual(document['comparisons']['cerid'][0]['verdict'], 'unresolved')
+
+    def test_runs_real_processes_through_the_shell(self):
+        python = '"%s"' % sys.executable
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as scratch:
+            report = Path(scratch) / 'board.json'
+            code = ab_board.main(['--cmd', 'a=%s -c "print(7, 2.0)"' % python,
+                                  '--cmd', 'b=%s -c "print(7, 1.0)"' % python,
+                                  '--arm', 'ref=a:' + self.ROW, '--arm', 'cand=b:' + self.ROW, '--reference', 'ref',
+                                  '--warmup', '0', '--min-reps', '2', '--max-reps', '3', '--json', str(report)],
+                                 out=out)
+            self.assertEqual(code, 0)
+            document = json.loads(report.read_text(encoding='utf-8'))
+        self.assertEqual(document['schema'], 'cerid-ab-board/1')
+        self.assertEqual(document['comparisons']['cand'][0]['ratio'], 2.0)
+        self.assertIn('| 7 | 2 | 1 | 2 [2-2] | faster |', out.getvalue())
 
 if __name__ == '__main__':
     unittest.main()
