@@ -169,7 +169,7 @@ def orchestrator(ctx):
     from coordinator import main as coordinator_main, scheduler
     config, _ = coordinator_main.load_config(ctx.args.config, ctx.environ)
     store = pipeline().open_store(ctx.args.store)
-    log = scheduler.JsonLog(open(os.devnull, 'w'))
+    log = scheduler.JsonLog(scheduler.Discard())
     return coordinator_main.make_coordinator(config, ctx.environ, store, log, ctx.registry)
 
 

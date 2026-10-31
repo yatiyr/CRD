@@ -72,6 +72,17 @@ def pipeline_module():
     return module
 
 
+class Discard:
+    """A log stream that writes nothing (JsonLog still keeps its last records): an opened os.devnull per ops command
+    was a file handle never closed."""
+
+    def write(self, _text):
+        pass
+
+    def flush(self):
+        pass
+
+
 class JsonLog:
     """Structured log of the coordinator itself: one JSON object per line (journald keeps it on the launcher)."""
 

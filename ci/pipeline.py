@@ -1134,6 +1134,18 @@ def tool_pin(name):
     return load_json(PINS)['tools'][name]
 
 
+def llvm_candidates(env):
+    """Directories that may hold clang-cl, best first: the Visual Studio that msvc() set up (VSINSTALLDIR), any year
+    and edition under either Program Files (the Build Tools install under Program Files (x86), the hosted image's
+    Enterprise under Program Files), then the standalone LLVM."""
+    roots = [Path(env.get(name) or default) for name, default in (
+        ('ProgramFiles', 'C:/Program Files'), ('ProgramFiles(x86)', 'C:/Program Files (x86)'))]
+    candidates = [Path(env['VSINSTALLDIR']) / 'VC/Tools/Llvm/x64/bin'] if env.get('VSINSTALLDIR') else []
+    for root in roots:
+        candidates += sorted((root / 'Microsoft Visual Studio').glob('*/*/VC/Tools/Llvm/x64/bin'))
+    return candidates + [roots[0] / 'LLVM/bin']
+
+
 class Lane:
     """One lane: a ci-tiers preset on its device, phase for phase the hosted job it replaces (parity table in
     docs/design/ci-platform.md, held by scripts/test-ci-platform.py)."""
@@ -1324,9 +1336,7 @@ class Lane:
                 raise LaneFailure(['clang-tidy --version'], 1)
 
     def llvm_path(self):
-        candidates = sorted(Path('C:/Program Files/Microsoft Visual Studio').glob('*/*/VC/Tools/Llvm/x64/bin'))
-        candidates.append(Path('C:/Program Files/LLVM/bin'))
-        found = next((c for c in candidates if (c / 'clang-cl.exe').is_file()), None)
+        found = next((c for c in llvm_candidates(self.env) if (c / 'clang-cl.exe').is_file()), None)
         if found is None:
             which = shutil.which('clang-cl')
             found = Path(which).parent if which else None

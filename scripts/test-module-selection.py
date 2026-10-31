@@ -244,7 +244,8 @@ class Fixture(unittest.TestCase):
         self.assertIn('crd-vulkan: skipped', result.stdout)
 
     def test_host_tools_import_replaces_the_tool_module(self):
-        tools = Path(self.temp.name) / 'host-tools'
+        # CMake records the real path: on Windows its case can differ from TEMP's spelling (C:\Windows\TEMP).
+        tools = Path(self.temp.name).resolve() / 'host-tools'
         tools.mkdir()
         result = self.configure('-DCRD_MODULES=sandbox', f'-DCRD_HOST_TOOLS_DIR={tools.as_posix()}')
         self.assertNotEqual(result.returncode, 0)

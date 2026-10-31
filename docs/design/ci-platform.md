@@ -114,7 +114,7 @@ records the decision and §14 the security review. Everything is Python standard
 | Hosts | [hosts.py](../../ci/coordinator/hosts.py), [triggers.py](../../ci/coordinator/triggers.py) | signed webhooks, polling, cron schedules, commit status, the git mirror |
 | Service | [service.py](../../ci/coordinator/service.py), [main.py](../../ci/coordinator/main.py) | the HTTP service and the background loop; `python ci/coordinator/main.py serve` |
 | Configuration | [coordinator.json](../../ci/coordinator.json) | repositories, schedules, UI access, limits; `*_env` keys read the launcher's environment |
-| Agent | [agent.py](../../ci/agent/agent.py) | one-shot and long-running modes, checkout, clean environment, live logs with redaction, heartbeats, cancellation, artifacts; in-job tools |
+| Agent | [agent.py](../../ci/agent/agent.py) | one-shot and long-running modes, checkout, clean environment, a temporary directory per job inside the build path (`TEMP`, `TMP`, `TMPDIR` and `CERID_CI_TEMP`, removed with the job), live logs with redaction, heartbeats, cancellation, artifacts; in-job tools |
 | Web UI | [ci/web/](../../ci/web/index.html) | builds, the build page and step graph, live logs, agents and queues, spend, the QUAL page |
 
 ### Job lifecycle

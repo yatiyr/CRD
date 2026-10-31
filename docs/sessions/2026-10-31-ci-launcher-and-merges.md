@@ -104,6 +104,20 @@ Done in the `cerid-ci` project, following [the setup recipe](../recipes/ci-platf
   100 MiB limit, so GitLab would refuse the whole push. `code_remote_exclude_tags` now keeps chosen tags off the code
   hosts; the NAS bundle keeps every tag. A test covers it.
 
+- **Build #30, the first with lanes on every Linux and Windows image:** Linux release passed 8523 of 8528 tests;
+  four Windows steps failed, each for a reason outside the engine.
+  - Both clang-cl lanes: the Build Tools install under Program Files (x86), and the lane looked only under Program
+    Files. The lane now looks under both, and first in the Visual Studio its MSVC step set up.
+  - win-release: Python refused the Intel SDE download (`CERTIFICATE_VERIFY_FAILED`). Python trusts only roots
+    already in the machine store, which Windows otherwise fills on demand. The Windows bake now installs Microsoft's
+    trusted root list from Windows Update first.
+  - repository-windows: two tests compared a path under `TEMP` with CMake's real path. A SYSTEM job's `TEMP` is
+    `C:\Windows\TEMP`, but the directory is spelled `Temp`. The tests now compare real paths, and the agent gives
+    each job its own temporary directory inside the build path (`CERID_CI_TEMP`), removed with the job. A third test
+    left the Python path unquoted (`C:\Program Files\...`), and cmd exited 9009.
+  - The lane's host-record sampler died on a Windows sharing violation, raised while a reader held the record. Its
+    rename now retries like the store's. `ops.py` also leaked an open `os.devnull` per command.
+
 ## Workspace
 
 `.agent/workspace.json` was created with `code_remotes: ["origin"]` and that tag excluded. The first sync from this

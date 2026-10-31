@@ -525,6 +525,20 @@ def run_inventory(build_dir, config=None, output=None):
     return 0
 
 
+def replace_file(source, target, attempts=100, sleep=time.sleep):
+    """os.replace that rides out Windows sharing violations (ci/pipeline.py replace_file): a reader of the record,
+    the indexer or an antivirus scan holding the target open fails the rename with access denied for a few
+    milliseconds, which killed the sampler thread and froze the record."""
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if os.name != 'nt' or attempt == attempts - 1:
+                raise
+            sleep(min(0.001 * (attempt + 1), 0.05))
+
+
 def watch(build_dir, command, interval=HOST_TEST_INTERVAL, runner=subprocess.call, clock=time.monotonic,
           host=machine):
     """Run a lane's test command with the host's memory sampled and return its exit code. HOST_TEST is rewritten at
@@ -539,7 +553,7 @@ def watch(build_dir, command, interval=HOST_TEST_INTERVAL, runner=subprocess.cal
                   'memory': sampler.summary()}
         partial = path.with_suffix('.partial')
         partial.write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
-        os.replace(partial, path)
+        replace_file(partial, path)
 
     with PressureSampler(interval, on_sample=write) as sampler:
         code = runner(command)

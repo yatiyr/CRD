@@ -14,6 +14,7 @@ import io
 import json
 import os
 import random
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -1440,10 +1441,28 @@ class AgentProgram(unittest.TestCase):
         self.assertEqual(env, {'PATH': '/bin', 'HOME': '/home/c', 'A': '1', 'S': 'v', 'CERID_AGENT_JOB_ID': 'j',
                                'PYTHONUTF8': '1', 'CERID_CI': '1', 'CERID_CI_SECRET_NAMES': 'S'})
 
+    def test_a_job_gets_its_own_temp_and_no_host_spelling_of_it(self):
+        env = agent_module.with_temp({'PATH': '/bin', 'Temp': 'C:\\Windows\\TEMP', 'TMP': 'x', 'tmpdir': 'y'},
+                                     '/b/cerid-job-1/tmp')
+        self.assertEqual(env, {'PATH': '/bin', 'TEMP': '/b/cerid-job-1/tmp', 'TMP': '/b/cerid-job-1/tmp',
+                               'TMPDIR': '/b/cerid-job-1/tmp'})
+
+    def test_llvm_is_found_in_the_build_tools_under_program_files_x86(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            env = {'ProgramFiles': str(root / 'pf'), 'ProgramFiles(x86)': str(root / 'pf86')}
+            build_tools = root / 'pf86/Microsoft Visual Studio/18/BuildTools'
+            (build_tools / 'VC/Tools/Llvm/x64/bin').mkdir(parents=True)
+            found = [c for c in pipeline.llvm_candidates(env) if c.is_dir()]
+            self.assertEqual(found, [build_tools / 'VC/Tools/Llvm/x64/bin'])
+            self.assertEqual(pipeline.llvm_candidates(env)[-1], root / 'pf/LLVM/bin')
+            chosen = pipeline.llvm_candidates(dict(env, VSINSTALLDIR=str(root / 'vs')))[0]
+            self.assertEqual(chosen, root / 'vs/VC/Tools/Llvm/x64/bin', 'the Visual Studio msvc() set up comes first')
+
     def test_step_scripts_stop_at_the_first_failure(self):
         with tempfile.TemporaryDirectory() as scratch:
-            argv = agent_module.script_for('%s -c "raise SystemExit(4)"\n%s -c "print(1)"' % (
-                sys.executable, sys.executable), scratch)
+            python = subprocess.list2cmdline([sys.executable]) if os.name == 'nt' else shlex.quote(sys.executable)
+            argv = agent_module.script_for('%s -c "raise SystemExit(4)"\n%s -c "print(1)"' % (python, python), scratch)
             completed = subprocess.run(argv, capture_output=True, text=True)
             self.assertEqual(completed.returncode, 4)
             self.assertNotIn('1', completed.stdout)

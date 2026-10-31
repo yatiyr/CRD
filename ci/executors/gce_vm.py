@@ -469,6 +469,14 @@ function Install-Pinned([string]$Url, [string]$File, [string]$Sha256, [string[]]
 }
 try {
     New-Item -ItemType Directory -Force -Path 'C:\cerid-ci\bake' | Out-Null
+    # Windows fetches a missing root on demand, but Python's ssl (the lanes' pinned downloads) trusts only the roots
+    # already in the machine store, and a fresh image holds few: the SDE download failed CERTIFICATE_VERIFY_FAILED.
+    # The store gets Microsoft's whole trusted root list, signed by Microsoft and read from Windows Update.
+    certutil.exe -generateSSTFromWU 'C:\cerid-ci\bake\roots.sst' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "certutil -generateSSTFromWU exited $LASTEXITCODE" }
+    $roots = @(Import-Certificate -FilePath 'C:\cerid-ci\bake\roots.sst' -CertStoreLocation 'Cert:\LocalMachine\Root')
+    if ($roots.Count -lt 100) { throw "Windows Update listed only $($roots.Count) trusted roots" }
+    Write-Output "trusted roots: $($roots.Count) from Windows Update"
 {installers}
 {extra}
     $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')

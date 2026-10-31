@@ -968,6 +968,17 @@ class CiEvidence(unittest.TestCase):
             self.assertIn('Missing evidence: CMakeCache.txt, adapters, host-test, inventory, junit',
                           ci_evidence.summary_markdown(record))
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows sharing violations')
+    def test_the_host_record_rename_rides_out_a_sharing_violation(self):
+        from unittest import mock
+        with mock.patch('os.replace', side_effect=[PermissionError(13, 'denied'), PermissionError(13, 'denied'),
+                                                   None]) as replace:
+            ci_evidence.replace_file('a', 'b', sleep=lambda s: None)
+        self.assertEqual(replace.call_count, 3)
+        with mock.patch('os.replace', side_effect=PermissionError(13, 'denied')):
+            with self.assertRaises(PermissionError):
+                ci_evidence.replace_file('a', 'b', attempts=3, sleep=lambda s: None)
+
     def test_watch_runs_the_tests_with_the_host_sampled_and_passes_their_exit_code_on(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / ci_evidence.HOST_TEST
@@ -2368,7 +2379,8 @@ class BuildPerformance(unittest.TestCase):
             self.assertNotIn('[crd] Linker', output)
             # The linker: only on link lines (no compile option, so a cached tree keeps its keys), only for the
             # installed mold with the ld.mold name beside it, and ignored by MSVC-compatible compilers.
-            tools = Path(temp) / 'tools'
+            # CMake reports the real path: on Windows its case can differ from TEMP's spelling (C:\Windows\TEMP).
+            tools = Path(temp).resolve() / 'tools'
             tools.mkdir()
             mold = tools / 'mold'
             mold.write_bytes(b'')

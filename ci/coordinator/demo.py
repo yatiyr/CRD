@@ -176,7 +176,7 @@ def seed(store, now=None):
     config = {'url': '', 'repositories': {'cerid': {'url': 'https://example.invalid/cerid.git',
                                                     'trusted_branches': ['main']}},
               'notifications': {'channels': []}}
-    c = scheduler.Coordinator(store, config, clock=clock, log=scheduler.JsonLog(open(__import__('os').devnull, 'w')))
+    c = scheduler.Coordinator(store, config, clock=clock, log=scheduler.JsonLog(scheduler.Discard()))
     c.ensure_schema()
     launcher = c.register(c.create_registration('launcher', 'cerid-launcher', by='fixture'),
                           {'name': 'launcher', 'protocol': 1, 'os': 'linux', 'arch': 'x86_64'})[0]

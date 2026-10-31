@@ -11,6 +11,7 @@ from pathlib import Path
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -45,6 +46,11 @@ print("secret is " + os.environ["DEMO_SECRET"])
 print("split " + os.environ["DEMO_SECRET"][:5], end="", flush=True)
 print(os.environ["DEMO_SECRET"][5:], flush=True)
 assert "CERID_E2E_HOST_ONLY" not in os.environ, "the host environment leaked into the step"
+import tempfile
+temp = pathlib.Path(os.environ["CERID_CI_TEMP"])
+assert temp.is_dir() and os.environ["TEMP"] == os.environ["TMP"] == os.environ["TMPDIR"] == str(temp)
+assert pathlib.Path(tempfile.gettempdir()) == temp, (tempfile.gettempdir(), temp)
+print("job temp " + str(temp))
 pathlib.Path("out").mkdir(exist_ok=True)
 pathlib.Path("out/result.txt").write_text("artifact " + os.environ["CERID_CI_COMMIT"], encoding="utf-8")
 '''
@@ -211,6 +217,9 @@ class EndToEnd(unittest.TestCase):
         self.assertIn('secret is [REDACTED]', log['text'])
         self.assertIn('split [REDACTED]', log['text'], 'a secret split across two writes is still redacted')
         self.assertNotIn(SECRET, log['text'])
+        job_temp = Path(re.search(r'job temp (.+)', log['text']).group(1).strip())
+        self.assertTrue(job_temp.is_relative_to(Path(self.scratch.name) / "builds"), job_temp)
+        self.assertFalse(job_temp.exists(), 'the job temp is removed with the job')
         raw = self.call('GET', '/api/jobs/%s/log?raw=1' % hello['id'], raw=True)[1]
         self.assertNotIn(SECRET.encode(), raw)
         everything = b''.join(self.store.get(n) or b'' for n in self.store.list(''))

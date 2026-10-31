@@ -317,7 +317,9 @@ One bake per image family, up to an hour each (a bake is a paid machine; the Win
 monthly or after a toolchain change; a rebake changes every input key of that family, so its cells run again. A bake
 images the disk only after its provisioning printed `cerid-ci-bake-complete` on the serial console, which it reads
 while the instance runs. A failed provisioning stops the instance at once and the bake exits with the failing line;
-the stopped instance `cerid-ci-bake-<device>` stays for inspection, and you delete it before the next bake.
+the stopped instance `cerid-ci-bake-<device>` stays for inspection, and you delete it before the next bake. A
+Windows bake first installs Microsoft's trusted root list from Windows Update into the machine store: Python trusts
+only the roots already there, and a fresh image holds few.
 
 *Check:* `python ci/ops.py status` on the launcher shows no `NOT BAKED`.
 

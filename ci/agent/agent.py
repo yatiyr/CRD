@@ -279,6 +279,14 @@ def clean_environment(job, extra, host=None):
     return env
 
 
+def with_temp(env, directory):
+    """env with TEMP, TMP and TMPDIR naming `directory` (any host spelling of those names replaced: Windows names
+    are case-insensitive, and two spellings in one block leave the choice to the child)."""
+    env = {k: v for k, v in env.items() if k.upper() not in ('TEMP', 'TMP', 'TMPDIR')}
+    env.update({'TEMP': str(directory), 'TMP': str(directory), 'TMPDIR': str(directory)})
+    return env
+
+
 def script_for(command, directory):
     """The command as a script file outside the checkout: bash with errexit on POSIX, a batch file that stops at the
     first failing line on Windows (both shells' defaults would run on past a failure)."""
@@ -429,7 +437,13 @@ class Agent:
         client = Client(self.base, token=token, opener=self.opener)
         redactor = Redactor(job.get('secrets', {}).values())
         log = LogStream(client, job, redactor, echo=self.echo)
-        scratch = Path(tempfile.mkdtemp(prefix='cerid-job-'))
+        # The job's scratch, and its TEMP, live in the build path, never the account's temporary directory: on a
+        # Windows job machine that is C:\Windows\TEMP, shared, scanned and cased unlike the real directory (Temp),
+        # so tools that canonicalize a path (CMake) disagree with the tests that compare it.
+        self.build_path.mkdir(parents=True, exist_ok=True)
+        scratch = Path(tempfile.mkdtemp(prefix='cerid-job-', dir=self.build_path))
+        job_temp = scratch / 'tmp'
+        job_temp.mkdir()
         cancel = {'reason': None}
         process_box = {}
         finished = threading.Event()
@@ -477,11 +491,11 @@ class Agent:
             work = self.checkout(assignment, log)
             extra = {'CERID_AGENT_ENDPOINT': self.base, 'CERID_AGENT_JOB_ID': job['id'],
                      'CERID_AGENT_JOB_TOKEN': token, 'CERID_AGENT_SCRIPT': self.script,
-                     'CERID_CI_CHECKOUT': str(work)}
+                     'CERID_CI_CHECKOUT': str(work), 'CERID_CI_TEMP': str(job_temp)}
             if assignment['checkout'].get('strategy') == 'mirror':
                 extra.update({k: v for k, v in self.git_env(resolve_checkout(self.base, assignment['checkout']),
                                                             token).items() if k.startswith('GIT_CONFIG_')})
-            env = clean_environment(job, extra)
+            env = with_temp(clean_environment(job, extra), job_temp)
             try:
                 client.call('POST', '/api/agent/jobs/%s/environment' % job['id'],
                             reproducibility(job, env, assignment['checkout'], self.name, gce=os.environ.get(

@@ -749,6 +749,13 @@ class Executors(unittest.TestCase):
         self.assertEqual(reason, 'launch_failed', 'a quota refusal is not a lost machine')
         self.assertIn('SSD_TOTAL_GB', detail)
 
+    def test_windows_bake_installs_the_trusted_root_list_before_any_download(self):
+        script = gce_vm.provision_script(pipeline.devices_by_id(REGISTRY)['gce-windows-x64'], [])
+        roots = script.index('certutil.exe -generateSSTFromWU')
+        self.assertLess(roots, script.index('Install-Pinned \''), 'the roots precede the first pinned installer')
+        self.assertIn("-CertStoreLocation 'Cert:\\LocalMachine\\Root'", script)
+        self.assertIn('if ($LASTEXITCODE -ne 0)', script[roots:roots + 200])
+
     def test_powershell_scripts_parse_and_define_no_alias_named_function(self):
         """A function named like a built-in alias is never called (an alias wins): the job script's `Md` ran mkdir.
         Both PowerShell scripts must also parse; checked with Windows PowerShell where it exists."""
