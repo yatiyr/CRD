@@ -3198,6 +3198,20 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   `kMaxGpus`) behind an atomic index, so a fatal delivery reads it without a lock; each addition replaces the crash
   stream once attached. Each process names only the GPUs it opened, so `bundle.inspect`'s `same_as_host` is
   `same_machine`: every other field equal, and no GPU both name through one API with different drivers.
+- Classification (`crd/perf/fault_classification.hpp`): `read_crash_evidence` reads a minidump's exception stream
+  and module lists or a crash record's signal line, `rip`/`pc` and module lines, on any platform. `classify_fault`
+  finds the impossible-state signatures: `machine-check` (SIGBUS `BUS_MCEERR_AR`/`AO`, the kernel's own report),
+  `code-address-bit-flip` (a fetch fault at an address outside every module that one flipped bit puts in a loaded
+  one), `data-address-bit-flip` (the same for a data access) and `replay-not-reproduced` (the caller's replay
+  outcome). Addresses in the first 64 KiB, inside a module or inside an unloaded one are never flips, and a sent
+  signal's address (si_code at most 0: the sender's pid and uid) is never judged. Verdict: likely on a machine check,
+  on two signatures, or on one with a listed processor; possible on one; else none. `cpu_advisories()` lists
+  Intel's 13th and 14th Gen desktop Vmin Shift instability (signature `0xB0671`, desktop Core i5, i7 and i9 of 65 W
+  or more, fixed by microcode `0x12F`) with its source; unread microcode is `unknown`, never a verdict.
+  `fault_message` says it in one sentence: a BIOS update before the fix, a warranty replacement after it (microcode
+  stops the damage, never repairs it), a memory test for a machine check. `bundle.inspect` reads a crash capture as
+  it is or the first one a bundle carries, adds a `classification` item before the symbols, and takes
+  `replay=<not-run|reproduced|not-reproduced>`.
 
 ## Existing programme ownership after DIAG
 
