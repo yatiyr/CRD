@@ -202,7 +202,7 @@ function(_crd_add_kernel_unit archive objects level feature)
     endif()
     # clang-tidy drops every /-spelled flag of the compile command it is handed (the CMAKE Tidy block of the root
     # CMakeLists), /arch included, so the level is restated through --extra-arg, the channel it honors: the analysis
-    # sees the instruction set the unit is compiled for, which CRD_TARGET_X64_FMA (crd/core/kernel_level.hpp) reads.
+    # sees the instruction set the unit is compiled for, which crd/core/kernel_level.hpp holds to the unit's level.
     get_target_property(tidy ${objects} CXX_CLANG_TIDY)
     if(MSVC AND tidy AND DEFINED _CRD_KERNEL_CLANG_CL_FLAGS_${level})
         set_target_properties(${objects} PROPERTIES

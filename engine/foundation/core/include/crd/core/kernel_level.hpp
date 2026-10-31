@@ -120,9 +120,8 @@
 // CRD_TARGET_X64 is 1 on x64 (ARM64EC, which compiles x64 code as AArch64, excluded), and CRD_TARGET_X64_FMA is 1 when
 // such a unit may also issue the FMA instruction. Both are 0 on every other target. General code reads its compiler:
 // GCC and Clang's -mfma, or MSVC's /arch:AVX2 and up, which defines __AVX2__ but no __FMA__. A kernel unit reads its
-// level (the avx2 and avx512 levels' flags carry FMA), because CRD_KERNEL_LEVEL reaches clang-tidy and MSVC's /arch
-// does not (the analysis drops slash-spelled flags, root CMakeLists.txt): the analysis then reads the body the unit
-// compiles. Every compile of a kernel unit outside the analysis holds the compiler to its level.
+// level (the avx2 and avx512 levels' flags carry FMA), and every compile of it, clang-tidy's included (each unit
+// restates its /arch there, cmake/CrdSimd.cmake), holds the compiler to that level.
 #if (defined(__x86_64__) || defined(_M_X64)) && !defined(_M_ARM64EC)
 #define CRD_TARGET_X64 1
 #if !defined(CRD_KERNEL_LEVEL)
@@ -137,8 +136,7 @@
 #else
 #define CRD_TARGET_X64_FMA 0
 #endif
-#if !defined(__clang_analyzer__) &&                                                                                    \
-    CRD_TARGET_X64_FMA != ((defined(_MSC_VER) && defined(__AVX2__)) || (!defined(_MSC_VER) && defined(__FMA__)))
+#if CRD_TARGET_X64_FMA != ((defined(_MSC_VER) && defined(__AVX2__)) || (!defined(_MSC_VER) && defined(__FMA__)))
 #error "this kernel unit's instruction-set flags disagree with its level's"
 #endif
 #endif
