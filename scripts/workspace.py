@@ -591,7 +591,7 @@ def refusals(files):
 def load_config(root):
     path = Path(root) / CONFIG_FILE
     config = {'schema': SCHEMA, 'nas': None, 'code_remotes': None, 'code_remote_exclude': ['worktree-*'],
-              'default_branch': 'main'}
+              'code_remote_exclude_tags': [], 'default_branch': 'main'}
     if path.is_file():
         stored = json.loads(path.read_text(encoding='utf-8'))
         if stored.get('schema') != SCHEMA:
@@ -1174,20 +1174,30 @@ def remote_branch_checks(root, ref, remote):
     return reasons
 
 
+def remote_excluded(ws, ref):
+    """Whether a sync keeps this branch or tag off the code hosts (the NAS code bundle still carries it)."""
+    if ref.startswith('refs/heads/'):
+        name, patterns = ref[len('refs/heads/'):], ws.config.get('code_remote_exclude') or []
+    elif ref.startswith('refs/tags/'):
+        name, patterns = ref[len('refs/tags/'):], ws.config.get('code_remote_exclude_tags') or []
+    else:
+        return False
+    return any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
+
+
 def push_code_remote(ws, remote, report):
     git('fetch', '--quiet', remote, cwd=ws.root)
-    excluded = ws.config.get('code_remote_exclude') or []
     spec = []
     for ref in sorted(local_refs(ws.root, ('refs/heads',))):
         branch = ref[len('refs/heads/'):]
-        if any(fnmatch.fnmatch(branch, pattern) for pattern in excluded):
+        if remote_excluded(ws, ref):
             continue
         reasons = remote_branch_checks(ws.root, ref, remote)
         if reasons:
             report.error(f'code->{remote}', f'{branch} not pushed: ' + '; '.join(reasons))
         else:
             spec.append(f'{ref}:{ref}')
-    spec.append('refs/tags/*:refs/tags/*')
+    spec += [f'{ref}:{ref}' for ref in sorted(local_refs(ws.root, ('refs/tags',))) if not remote_excluded(ws, ref)]
     result = git('push', '--porcelain', remote, *spec, cwd=ws.root, check=False)
     lines = result.stdout.decode('utf-8', errors='replace').splitlines()
     for line in lines:
@@ -1499,8 +1509,9 @@ def sync_preview(ws, nas, desired, remotes, report):
         report.error('dry-run', 'not enough free space on the NAS share')
     report.add('dry-run', f'{len(unpinned)} unpinned downloads stay local')
     for name in remotes:
-        report.add('dry-run', f'code->{name}: branches except {ws.config.get("code_remote_exclude")} and all tags '
-                              f'(checked for agent files, transcripts and secrets first)')
+        report.add('dry-run', f'code->{name}: branches except {ws.config.get("code_remote_exclude")} and tags '
+                              f'except {ws.config.get("code_remote_exclude_tags")} (checked for agent files, '
+                              f'transcripts and secrets first)')
     report.add('dry-run', 'nothing was written')
     return report
 
@@ -1558,12 +1569,10 @@ def status(ws, offline=False, report=None):
         report.add('code->nas', '  ' + reason)
     if not offline:
         remotes, _ = code_remotes(ws)
-        excluded = ws.config.get('code_remote_exclude') or []
         for name in remotes:
             remote_refs = ls_remote(remotes[name])
             for ref, sha in sorted(refs.items()):
-                branch = ref.split('/', 2)[2]
-                if ref.startswith('refs/heads/') and any(fnmatch.fnmatch(branch, p) for p in excluded):
+                if remote_excluded(ws, ref):
                     continue
                 if remote_refs.get(ref) != sha:
                     differences += 1

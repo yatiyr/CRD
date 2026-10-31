@@ -16,9 +16,10 @@ files, each checked after it is written.
 |---|---|---|---|
 | NAS folder | the only folder the tool writes on the NAS (it must already exist) | `Z:/Arsivlik/Assets/Repos/crd` | `"nas"` in `.agent/workspace.json`; `--nas` or `CERID_WORKSPACE_NAS` override it |
 | `generations` | how many code bundles, overlay bundles and exports are kept | `5` | `.agent/workspace.json` |
-| `code_remotes` | the code hosts a sync pushes to, by Git remote name | every remote; this workspace: `["gitlab"]` (GitLab push-mirrors to GitHub) | `.agent/workspace.json` |
+| `code_remotes` | the code hosts a sync pushes to, by Git remote name | every remote; this workspace: `["origin"]`, the GitLab remote (GitLab push-mirrors to GitHub; the `github` remote is read-only here) | `.agent/workspace.json` |
 | `user_claude_files` | extra user-level Claude Code files to carry (relative to the Claude Code folder) | none beyond the always-carried Cerid agents and `crd-*` files | `.agent/workspace.json` |
 | `code_remote_exclude` | branch name patterns never pushed to a code host | `worktree-*` | `.agent/workspace.json` |
+| `code_remote_exclude_tags` | tag name patterns never pushed to a code host (the NAS code bundle keeps them) | none; this workspace: `["backup-before-pdf-strip"]`, whose 218 MiB blob is over GitLab's 100 MiB limit | `.agent/workspace.json` |
 | `default_branch` | branch a restore checks out | `main` | `.agent/workspace.json` |
 | Claude Code folder | where Claude Code keeps its configuration | `CLAUDE_CONFIG_DIR`, else `~/.claude` | `--claude-config-dir` |
 | Memory folder | this project's Claude Code memory | `<Claude Code folder>/projects/<key>/memory` | `--memory-dir` |

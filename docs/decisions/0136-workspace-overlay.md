@@ -77,8 +77,10 @@ many small files, every write verified, nothing outside the workspace folder eve
    Code hosts receive branches (except `worktree-*`) and tags without force; a branch whose unpublished commits add
    or change an agent path, add a transcript or add a secret shape is not pushed and the sync reports it (a commit
    that only deletes agent paths, such as the one that stopped tracking them, passes). The hosts are the remotes in
-   `code_remotes`: for this workspace `["gitlab"]` only, since GitLab push-mirrors to the private GitHub; more names
-   can be added there. A checkout that first adopts the NAS overlay uses the adopted configuration for that run.
+   `code_remotes`: for this workspace `["origin"]` only, the GitLab remote (renamed from `gitlab` on 2026-10-31, when
+   GitLab became `origin` and GitHub the read-only `github`), since GitLab push-mirrors to the private GitHub; more
+   names can be added there. `code_remote_exclude_tags` keeps tags off the hosts, such as one whose blob is over
+   GitLab's 100 MiB limit; the NAS code bundle still carries every tag. A checkout that first adopts the NAS overlay uses the adopted configuration for that run.
 10. **Transport and archive.** The share is reached as a mounted path (`Z:` → `\\Arsiv-Dere\home`); the Synology Git
     Server package (Git over SSH) was not chosen: it would keep bare repositories with many small files on the NAS
     and needs an account and key. An export is `crd-workspace-YYYYMMDD.zip`, built on local disk and copied as one

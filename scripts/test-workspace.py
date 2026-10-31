@@ -333,6 +333,7 @@ class EndToEndTests(unittest.TestCase):
         git('branch', 'feature', cwd=root)
         git('branch', 'worktree-agent-x', cwd=root)
         git('tag', 'v1', cwd=root)
+        git('tag', 'backup-before-strip', cwd=root)
         git('remote', 'add', 'host', str(self.host), cwd=root)
         git('remote', 'add', 'mirror', str(self.mirror), cwd=root)
         # Agent files the overlay keeps, and machine-local state it must not.
@@ -353,7 +354,8 @@ class EndToEndTests(unittest.TestCase):
         (claude / 'crd-loop-watchdog.log').write_text('machine-local log\n')
         (root / '.claude' / 'scheduled_tasks.lock').write_text('{"pid": 1}')
         (root / '.agent').mkdir()
-        config = {'schema': ws_mod.SCHEMA, 'code_remotes': ['host'], 'code_remote_exclude': ['worktree-*']}
+        config = {'schema': ws_mod.SCHEMA, 'code_remotes': ['host'], 'code_remote_exclude': ['worktree-*'],
+                  'code_remote_exclude_tags': ['backup-*']}
         if generations:
             config['generations'] = generations
         (root / '.agent' / 'workspace.json').write_text(json.dumps(config))
@@ -442,9 +444,10 @@ class EndToEndTests(unittest.TestCase):
         self.assertTrue(settings.endswith(b'\r\n'), 'agent files are stored byte-exact')
         _, code = self.latest('code')
         self.assertEqual(set(code['refs']), {'refs/heads/main', 'refs/heads/feature', 'refs/heads/worktree-agent-x',
-                                             'refs/tags/v1'})
+                                             'refs/tags/v1', 'refs/tags/backup-before-strip'})
         self.assertEqual(code['head_branch'], 'main')
-        self.assertEqual(set(ws_mod.ls_remote(self.host)), {'refs/heads/main', 'refs/heads/feature', 'refs/tags/v1'})
+        self.assertEqual(set(ws_mod.ls_remote(self.host)), {'refs/heads/main', 'refs/heads/feature', 'refs/tags/v1'},
+                         'excluded branches and tags stay off the code host; the NAS bundle keeps them')
         self.assertEqual(ws_mod.ls_remote(self.mirror), {}, 'only the configured code remotes are pushed')
         tool = manifest['files']['tools/demo-1.0.tar.gz']
         self.assertEqual(tool['sources'], ['demo-1.0/demo-1.0.tar.gz'])
