@@ -105,7 +105,8 @@ bucket: the orchestrator's compare-and-swap uses live object generations.
 
 *Check:* `gcloud storage buckets list --format='value(name)'` lists both buckets;
 `gcloud compute regions describe $REGION --format="table(quotas.metric,quotas.limit)" | grep -E "^CPUS |PREEMPTIBLE_CPUS|NVIDIA_(L4|T4)_GPUS"`
-shows the regional limits. The planner runs at most six 8-vCPU cloud machines at once (48 vCPUs). If `CPUS` or
+shows the regional limits. The planner runs at most four 8-vCPU cloud machines at once (32 vCPUs), leaving room for the development tracks'
+machines (`ci/bench_vm.py`). If `CPUS` or
 `PREEMPTIBLE_CPUS` is below 48 or a GPU limit is 0, request the increase in the console
 (<https://console.cloud.google.com/iam-admin/quotas>, filter by region `us-central1`, select the quota, **Edit
 quotas**); until Google grants it, launches past the quota fail and are retried, then reported.

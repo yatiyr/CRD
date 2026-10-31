@@ -96,10 +96,11 @@ DX12_PROBE = '^crd-dx12-device-info$'
 RETRY = {'automatic': [{'reason': 'infrastructure', 'limit': 2}], 'manual': {'allowed': True}}
 BUDGET_EXIT = 75
 PIPELINE_SCHEMA = 'cerid-ci-pipeline/1'
-# One-job cloud machines at once: the recipe's regional quota of 48 vCPUs over 8-vCPU machines. The coordinator holds
-# the group's limit, so a quota refusal never turns into failed launches; the dispatcher also counts a machine until
-# its instance is gone (a canceled job releases its slot while its machine is still being deleted).
-CLOUD_GROUP = ('cerid-cloud-machines', 6)
+# One-job cloud machines at once: four 8-vCPU machines (32 vCPUs) leave room under the project's 64-vCPU
+# CPUS_ALL_REGIONS for the launcher and the development tracks' machines (ci/bench_vm.py, 8 vCPUs each). The
+# coordinator holds the group's limit, so a quota refusal never turns into failed launches; the dispatcher also counts
+# a machine until its instance is gone (a canceled job releases its slot while its machine is still being deleted).
+CLOUD_GROUP = ('cerid-cloud-machines', 4)
 
 
 # --------------------------------------------------------------------------------------------- registry and graph
@@ -2105,7 +2106,7 @@ FIXED_STEP_MAP = {
         'Validate workflows (actionlint 1.7.12)': ('plan', 'run preflight: Validate workflows (actionlint)'),
         'Pinned inputs agree with the registry': ('plan', 'run preflight: Pinned inputs agree with the registry'),
         'Tier mapping owns every preset': ('plan', 'run preflight: Tier mapping owns every preset'),
-        'Choose the comparison base': ('plan', 'push_base(): the newest planned head on the branch (result store)'),
+        'Choose the comparison base': ('plan', 'push_base(): the commit of the newest passing build on the branch (result store)'),
         'Fetch the comparison base': ('plan', 'git fetch of the base before planning'),
         'Resolve the tier': ('plan', 'plan(): ci-tier.py resolve, then the module selection'),
     },

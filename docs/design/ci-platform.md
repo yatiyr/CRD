@@ -328,7 +328,7 @@ systems for every preset, test, guard, sanitizer, SDE arm and ARM64 lane) is CI-
 | `preflight` | Validate workflows (actionlint 1.7.12) | `plan` | run preflight: Validate workflows (actionlint) |
 | `preflight` | Pinned inputs agree with the registry | `plan` | run preflight: Pinned inputs agree with the registry |
 | `preflight` | Tier mapping owns every preset | `plan` | run preflight: Tier mapping owns every preset |
-| `preflight` | Choose the comparison base | `plan` | push_base(): the commit of the branch's newest passing build (result store) |
+| `preflight` | Choose the comparison base | `plan` | push_base(): the commit of the newest passing build on the branch (result store) |
 | `preflight` | Fetch the comparison base | `plan` | git fetch of the base before planning |
 | `preflight` | Resolve the tier | `plan` | plan(): ci-tier.py resolve, then the module selection |
 | `repository` | uses actions/checkout | `repository-<host>` | agent checkout of the build commit |
