@@ -252,19 +252,23 @@ template <crd::u32 EBITS, crd::u32 MBITS, bool Fn> [[nodiscard]] V narrow_rne_la
     V res = I::bit_or(I::slli<static_cast<int>(MBITS)>(te2), man);
     res = I::select(res, I::set1(Fn ? nan_fn : inf_bits), m_ovf);
 
-    // ---- subnormal path (te <= 0) ----
+    // ---- subnormal path (te <= 0), run only when a nonzero lane takes it: its variable shifts are emulated below
+    // AVX2, and a zero lane's result is replaced by the class selection anyway ----
     const M m_sub = I::cmpgt(one, te); // 1 > te  <=>  te <= 0
-    V shift_s = I::sub(I::set1(static_cast<crd::u32>(shift_n) + 1U), te);
-    const M m_under = I::cmpgt(shift_s, I::set1(24U));
-    shift_s = I::min(shift_s, I::set1(31U)); // keep the variable shifts defined
-    V keep_s = I::srlv(sig, shift_s);
-    const V rem_s = I::bit_and(sig, I::sub(I::pow2(shift_s), one));
-    const V half_s = I::pow2(I::sub(shift_s, one));
-    const M m_gt_s = I::cmpgt(rem_s, half_s);
-    const M m_tie_s = I::cmpeq(rem_s, half_s);
-    const M m_odd_s = I::cmpeq(I::bit_and(keep_s, one), one);
-    keep_s = I::inc(keep_s, I::mask_or(m_gt_s, I::mask_and(m_tie_s, m_odd_s)));
-    keep_s = I::zero_where(m_under, keep_s);
+    if (I::movemask(I::mask_andnot(m_fzero, m_sub)) != 0)
+    {
+        V shift_s = I::sub(I::set1(static_cast<crd::u32>(shift_n) + 1U), te);
+        const M m_under = I::cmpgt(shift_s, I::set1(24U));
+        shift_s = I::min(shift_s, I::set1(31U)); // keep the variable shifts defined
+        V keep_s = I::srlv(sig, shift_s);
+        const V rem_s = I::bit_and(sig, I::sub(I::pow2(shift_s), one));
+        const V half_s = I::pow2(I::sub(shift_s, one));
+        const M m_gt_s = I::cmpgt(rem_s, half_s);
+        const M m_tie_s = I::cmpeq(rem_s, half_s);
+        const M m_odd_s = I::cmpeq(I::bit_and(keep_s, one), one);
+        keep_s = I::inc(keep_s, I::mask_or(m_gt_s, I::mask_and(m_tie_s, m_odd_s)));
+        res = I::select(res, I::zero_where(m_under, keep_s), m_sub);
+    }
 
     // ---- nan/inf lane values ----
     V res_ni;
@@ -278,8 +282,7 @@ template <crd::u32 EBITS, crd::u32 MBITS, bool Fn> [[nodiscard]] V narrow_rne_la
         res_ni = I::select(I::set1(inf_bits), pay, I::mask_not(I::cmpeq(fman, I::zero())));
     }
 
-    // ---- class selection (mirrors the scalar control flow) ----
-    res = I::select(res, keep_s, m_sub);
+    // ---- class selection (mirrors the scalar control flow; the subnormal lanes are in res already) ----
     res = I::zero_where(m_fzero, res);
     res = I::select(res, res_ni, m_naninf);
     return I::bit_or(res, sign);
