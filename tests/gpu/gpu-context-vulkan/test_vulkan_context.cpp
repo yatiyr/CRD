@@ -7,6 +7,7 @@
 #include <crd/gpu/vulkan_raster_context.hpp>
 #include <crd/gpu/vulkan_shader_compile.hpp>
 
+#include <crd/perf/gpu/gpu_hardware_identity.hpp> // HW-RESILIENCE.2: the opened adapters join the machine
 #include <crd/gpu/identity_registry.hpp> // DIAG.7a(d2b-vk): identity_registry().live_count/alive the identity tests assert on
 #include "vulkan_identity_naming.hpp"    // DIAG.7a(d2b-vk): the vk_attach/name/detach adapter under test (src-private)
 #include "vulkan_execution.hpp"         // DIAG.7c(c): the completion seam under test (src-private)
@@ -18129,4 +18130,77 @@ TEST_CASE("D2b-vk: VulkanComputeContext::create_pipeline_from_spirv mints one Pr
         CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Program) == before + 1U); // p2 retired
     }
     CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Program) == before); // baseline
+}
+
+// HW-RESILIENCE.2: the context reads its adapter once, as the physical device reports it, and notes it in the
+// process's opened-adapter log; the compute context over it reports the same adapter.
+TEST_CASE("HW-RESILIENCE.2: the Vulkan context reports its adapter and notes it as opened",
+          "[gpu-context][vulkan][diag][hw-resilience]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr)
+    {
+        SKIP("no Vulkan device available");
+    }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    const gpu::GpuAdapter a = vk->adapter();
+    REQUIRE(a.known);
+    CHECK(std::strcmp(a.backend, "vulkan") == 0);
+    CHECK(std::strcmp(a.name, vk->adapter_name()) == 0);
+
+    VkPhysicalDeviceDriverProperties driver{};
+    driver.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+    VkPhysicalDeviceProperties2 p2{};
+    p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    p2.pNext = &driver;
+    vkGetPhysicalDeviceProperties2(vk->vk_physical_device(), &p2);
+    CHECK(std::strcmp(a.name, p2.properties.deviceName) == 0);
+    CHECK(a.vendor == p2.properties.vendorID);
+    CHECK(a.device == p2.properties.deviceID);
+    CHECK(a.driver == p2.properties.driverVersion);
+    CHECK(a.api == p2.properties.apiVersion);
+    REQUIRE(p2.properties.apiVersion >= VK_API_VERSION_1_2); // every device Cerid's Vulkan lanes create
+    if (driver.driverInfo[0] != '\0')
+    {
+        CHECK(std::strncmp(a.driver_version, driver.driverInfo, sizeof(a.driver_version) - 1U) == 0);
+    }
+    else
+    {
+        CHECK(a.driver_version[0] != '\0');
+    }
+
+    bool noted = false;
+    for (crd::u32 i = 0U; i < gpu::opened_adapters().count(); ++i)
+    {
+        const gpu::GpuAdapter o = gpu::opened_adapters().at(i);
+        noted = noted || (std::strcmp(o.backend, a.backend) == 0 && std::strcmp(o.name, a.name) == 0 &&
+                          std::strcmp(o.driver_version, a.driver_version) == 0 && o.device == a.device);
+    }
+    CHECK(noted);
+
+    // The machine's identity (crd-perf) names it once a host attaches, as the backend and its driver version.
+    crd::perf::gpu::attach_gpus_to_hardware_identity();
+    char driver_text[2U * gpu::kAdapterDriverVersionBytes];
+    (void)std::snprintf(driver_text, sizeof(driver_text), "vulkan %s", a.driver_version);
+    bool in_machine = false;
+    for (const crd::perf::GpuIdentity& g : crd::perf::host_hardware_identity().gpus)
+    {
+        in_machine =
+            in_machine || (g.vendor_id == a.vendor && g.device_id == a.device &&
+                           std::strcmp(g.name.c_str(), a.name) == 0 && std::strcmp(g.driver.c_str(), driver_text) == 0);
+    }
+    CHECK(in_machine);
+    gpu::opened_adapters().listen(nullptr);
+
+    gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+    REQUIRE(compute.valid());
+    const gpu::GpuAdapter c = compute.adapter();
+    CHECK(c.known);
+    CHECK(std::strcmp(c.driver_version, a.driver_version) == 0);
+    CHECK(c.device == a.device);
+    std::printf("[HW-RESILIENCE.2] vulkan adapter: %s 0x%04x:0x%04x driver %s (driverName %s)\n", a.name, a.vendor,
+                a.device, a.driver_version, driver.driverName);
 }

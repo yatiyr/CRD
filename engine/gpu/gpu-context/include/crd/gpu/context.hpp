@@ -11,6 +11,7 @@
 
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
+#include <crd/gpu/adapter.hpp>         // HW-RESILIENCE.2: GpuAdapter (vendor-free)
 #include <crd/gpu/device_pressure.hpp> // DIAG.10c: DeviceMemoryReading (vendor-free)
 #include <crd/gpu/queue_pressure.hpp>  // DIAG.10c: QueueDepthReading (vendor-free)
 #include <crd/gpu/validation.hpp> // DIAG.7a(f): ValidationActivation + ValidationMode (vendor-free)
@@ -93,6 +94,10 @@ public:
     // queued and not yet observed complete, with the high water and the submitted, retired and abandoned counts.
     // Appended with a default that reports the depth as unread.
     [[nodiscard]] virtual QueueDepthReading queue_pressure() const noexcept { return QueueDepthReading{}; }
+
+    // HW-RESILIENCE.2: the adapter this device runs on, read when the device was created (crd/gpu/adapter.hpp).
+    // Appended with a default that reports none.
+    [[nodiscard]] virtual GpuAdapter adapter() const noexcept { return GpuAdapter{}; }
 };
 
 // Owns the configured set of live contexts. Per-backend factories construct them; the manager holds + serves them, so

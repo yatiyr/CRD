@@ -45,7 +45,7 @@ public:
 
     // The executor; its adapter views point into this object.
     [[nodiscard]] const ceir::cook::DeviceExecutor& executor() const noexcept { return m_executor; }
-    [[nodiscard]] const gpu::ComputeAdapter&        adapter() const noexcept { return m_adapter; }
+    [[nodiscard]] const gpu::GpuAdapter&            adapter() const noexcept { return m_adapter; }
     // Runs started on the device (evidence).
     [[nodiscard]] crd::u32 runs() const noexcept { return m_rig.runs; }
 
@@ -60,7 +60,7 @@ private:
 
     std::unique_ptr<gpu::IComputeContext> m_compute;
     ceir::gpu::DeviceRunRig               m_rig;
-    gpu::ComputeAdapter                   m_adapter;
+    gpu::GpuAdapter                       m_adapter;
     ceir::cook::DeviceExecutor            m_executor;
 };
 } // namespace crd::sandbox

@@ -97,6 +97,7 @@
 #include <crd/perf/diag_assets.hpp>
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/diagnostic_host.hpp> // DIAG.11a: the engine's reusable diagnostic host
+#include <crd/perf/gpu/gpu_hardware_identity.hpp>
 #include <crd/perf/gpu/gpu_resources_diag.hpp>
 #include <crd/perf/perf.hpp>
 #include <crd/perf/ui/diag_panel.hpp>
@@ -986,6 +987,8 @@ int main(int argc, char** argv)
                          flight_policy.post_events, flight_policy.hitch_threshold_ns,
                          host_profile.capture_dir.empty() ? "kept in memory" : host_profile.capture_dir.c_str());
         }
+        // HW-RESILIENCE.2: every GPU device opened from here on names its adapter in bundles and native crashes.
+        crd::perf::gpu::attach_gpus_to_hardware_identity();
     }
     // ⭐⭐ DIAG.8c: the sandbox's diagnostic service, built before the window and the device so that a refused flag
     // exits before anything needs undoing. Its grant is fixed here. A started command must be one it serves (the

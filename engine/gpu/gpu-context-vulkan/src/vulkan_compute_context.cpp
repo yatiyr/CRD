@@ -5,6 +5,7 @@
 #include <crd/core/fnv1a.hpp>
 #include <crd/gpu/vulkan_compute_context.hpp>
 
+#include "vulkan_adapter.hpp"        // DIAG.9a: the adapter
 #include "vulkan_execution.hpp"      // DIAG.7c(c): bounded, observed submit and fence wait
 #include "vulkan_identity_naming.hpp" // DIAG.7a(d2b-vk): one Cerid Resource identity per compute buffer
 
@@ -800,25 +801,9 @@ void VulkanComputeContext::submit_and_wait()
 
 double VulkanComputeContext::last_gpu_ms() const noexcept { return m_impl->last_gpu_ms; }
 
-ComputeAdapter VulkanComputeContext::adapter() const noexcept
+GpuAdapter VulkanComputeContext::adapter() const noexcept
 {
-    ComputeAdapter a{};
-    if (m_impl->physical == VK_NULL_HANDLE)
-    {
-        return a;
-    }
-    VkPhysicalDeviceProperties p{};
-    vkGetPhysicalDeviceProperties(m_impl->physical, &p);
-    std::memcpy(a.backend, "vulkan", sizeof("vulkan"));
-    static_assert(sizeof(a.name) >= VK_MAX_PHYSICAL_DEVICE_NAME_SIZE, "a Vulkan device name fits");
-    std::memcpy(a.name, p.deviceName, VK_MAX_PHYSICAL_DEVICE_NAME_SIZE);
-    a.name[sizeof(a.name) - 1U] = '\0';
-    a.vendor = p.vendorID;
-    a.device = p.deviceID;
-    a.driver = p.driverVersion;
-    a.api    = p.apiVersion;
-    a.known  = true;
-    return a;
+    return detail::vk_adapter(m_impl->physical);
 }
 
 } // namespace crd::gpu

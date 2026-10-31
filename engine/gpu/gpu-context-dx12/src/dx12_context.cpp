@@ -6,6 +6,7 @@
 
 #include "dx12_device_scope.hpp"
 
+#include "dx12_adapter.hpp" // DIAG.9a, HW-RESILIENCE.2: the adapter, read once
 #include "dx12_adapter_classification.hpp"
 #include "dx12_device_memory.hpp" // DIAG.10c: device_memory() through DXGI
 #include "dx12_execution.hpp" // B1-f: dx12_inner_coverage_route shared with the raster context
@@ -195,7 +196,7 @@ public:
             return;
         }
         m_validation_activation = m_validation.activation();
-        capture_adapter_name();
+        m_adapter = detail::dx12_adapter(m_device.Get()); // HW-RESILIENCE.2: read once
         m_ok = true;
     }
     ~Dx12GpuContext() override                          = default;
@@ -206,7 +207,8 @@ public:
 
     [[nodiscard]] bool        valid() const noexcept override { return m_ok; }
     [[nodiscard]] GpuBackend  backend() const noexcept override { return GpuBackend::Dx12; }
-    [[nodiscard]] const char* adapter_name() const noexcept override { return m_adapter; }
+    [[nodiscard]] const char* adapter_name() const noexcept override { return m_adapter.name; }
+    [[nodiscard]] GpuAdapter  adapter() const noexcept override { return m_adapter; } // HW-RESILIENCE.2
     [[nodiscard]] ValidationActivation validation_activation() const noexcept override { return m_validation_activation; } // DIAG.7a(f-3)
     [[nodiscard]] DeviceMemoryReading device_memory() const noexcept override // DIAG.10c
     {
@@ -361,30 +363,10 @@ public:
     }
 
 private:
-    void capture_adapter_name() noexcept
-    {
-        m_adapter[0] = '\0';
-        ComPtr<IDXGIFactory4> factory;
-        if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
-        {
-            return;
-        }
-        ComPtr<IDXGIAdapter1> adapter;
-        const LUID            luid = m_device->GetAdapterLuid();
-        if (SUCCEEDED(factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter))) && adapter != nullptr)
-        {
-            DXGI_ADAPTER_DESC1 desc{};
-            if (SUCCEEDED(adapter->GetDesc1(&desc)))
-            {
-                WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, m_adapter, sizeof(m_adapter), nullptr, nullptr);
-            }
-        }
-    }
-
     detail::Dx12DeviceScope m_validation;
     crd::memory::IAllocator* m_alloc = nullptr;
     ComPtr<ID3D12Device>     m_device;
-    char                     m_adapter[192] = {};
+    GpuAdapter               m_adapter{};
     ValidationActivation     m_validation_activation{}; // DIAG.7a(f-3)
     bool                     m_ok           = false;
 };

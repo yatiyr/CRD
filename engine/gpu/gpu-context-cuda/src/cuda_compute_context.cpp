@@ -268,6 +268,8 @@ public:
         m_warp  = warp > 0 ? static_cast<crd::u32>(warp) : 32U;
         m_shmem = shmem > 0 ? static_cast<crd::u32>(shmem) : 49152U;
         m_ok    = true;
+        read_adapter();
+        (void)opened_adapters().note(m_adapter); // HW-RESILIENCE.2: the machine's identity names this GPU
     }
 
     ~CudaContextImpl() override
@@ -404,6 +406,7 @@ public:
     [[nodiscard]] crd::u32 subgroup_size() const noexcept override { return m_warp; }
     [[nodiscard]] crd::u32 shared_memory_bytes() const noexcept override { return m_shmem; }
     [[nodiscard]] double   last_gpu_ms() const noexcept override { return m_last_ms; }
+    [[nodiscard]] GpuAdapter adapter() const noexcept override { return m_adapter; } // HW-RESILIENCE.2
 
     // CEIR-29b-2: start stream capture on the SAME stream (THREAD_LOCAL mode — scopes the capture's "no unsafe call" rule to
     // this thread, so another thread touching the driver can't invalidate it). Subsequent dispatches RECORD into the graph.
@@ -473,6 +476,26 @@ public:
     }
 
 private:
+    // The device's name and the driver's CUDA version ("13.0"); CUDA reports no PCI device id.
+    void read_adapter() noexcept
+    {
+        std::memcpy(m_adapter.backend, "cuda", sizeof("cuda"));
+        if (cuDeviceGetName(m_adapter.name, static_cast<int>(sizeof(m_adapter.name)), m_device) != CUDA_SUCCESS)
+        {
+            m_adapter.name[0] = '\0';
+        }
+        m_adapter.name[sizeof(m_adapter.name) - 1U] = '\0';
+        m_adapter.vendor = 0x10DEU;
+        int version = 0;
+        if (cuDriverGetVersion(&version) == CUDA_SUCCESS && version > 0)
+        {
+            m_adapter.driver = static_cast<crd::u64>(version);
+            (void)std::snprintf(m_adapter.driver_version, sizeof(m_adapter.driver_version), "%d.%d", version / 1000,
+                                (version % 1000) / 10);
+        }
+        m_adapter.known = true;
+    }
+
     crd::memory::IAllocator& m_alloc;
     Recorder                 m_rec;
     CUdevice                 m_device = 0;
@@ -481,6 +504,7 @@ private:
     CUevent                  m_ev0    = nullptr;
     CUevent                  m_ev1    = nullptr;
     char                     m_arch[16] = {'s', 'm', '_', '5', '2', '\0'};
+    GpuAdapter               m_adapter{};
     crd::u32                 m_warp   = 32U;
     crd::u32                 m_shmem  = 49152U;
     double                   m_last_ms = 0.0;

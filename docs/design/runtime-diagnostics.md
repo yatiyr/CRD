@@ -1190,7 +1190,7 @@ Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-device-records.md)
   one device-local buffer per binding, `validate_lowered` before anything is recorded, upload with the CKIR harness's
   barriers, `execute_lowered`, read back the written buffers, submit and wait; a binding without data or a buffer the
   device refuses is the new `ExecuteError::HostTransfer`. `IComputeContext::adapter()` (appended, default unknown)
-  reports `ComputeAdapter`; the Vulkan context answers from its physical device's properties, the DX12 context from
+  reports `GpuAdapter` (`crd/gpu/adapter.hpp`); the Vulkan context answers from its physical device's properties, the DX12 context from
   its device's DXGI adapter (driver: the user-mode driver version). The tests' GPU executor lowers the block,
   compiles each kernel's CKIR text for its backend and reports the context's adapter.
 - Measured on this machine (RTX 4070 Ti SUPER): the fixture's `exp(b) * a` over 256 elements recorded on Vulkan and
@@ -3190,6 +3190,13 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   identity (at most `kHardwareIdentityMaxBytes`, 16,438 bytes, held to the cap at compile time) where the crash
   handler is installed (`DiagnosticHost::start`, `Application`); `read_crash_hardware_identity` reads it back from
   either capture on any platform (`find_minidump_stream` walks a dump's directory without DbgHelp).
+- GPUs: every backend reads its adapter (`crd/gpu/adapter.hpp`: PCI ids, name, driver version as its API reports it;
+  Vulkan `driverInfo`, D3D12's user-mode driver version, CUDA's driver version) once and notes it in
+  `crd::gpu::opened_adapters()` where it creates a device. `attach_gpus_to_hardware_identity` (crd-perf-gpu-bridge,
+  called where a host starts its diagnostics) adds each, earlier ones included, through `add_host_gpu`; the entry's
+  driver is the backend and its version. The host identity is a chain of immutable snapshots (one per GPU, at most
+  `kMaxGpus`) behind an atomic index, so a fatal delivery reads it without a lock; each addition replaces the crash
+  stream once attached.
 
 ## Existing programme ownership after DIAG
 

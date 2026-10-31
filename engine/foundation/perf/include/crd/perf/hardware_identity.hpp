@@ -7,9 +7,10 @@
 // past its rating. The identity records what fault classification and a support reply need: the CPU's vendor, model,
 // signature and microcode (crd::read_cpu_identity), the firmware and board (SMBIOS types 0, 1 and 2), the memory (its
 // total, and each populated module from SMBIOS type 17: size, rated and configured speed, type, maker and part) and the
-// GPUs with their drivers (filled by the host that owns the devices). What the OS does not let the process read stays
-// unknown (its kHardware*Known flag clear), never guessed: Linux's SMBIOS table is root-only, so an unprivileged Linux
-// process reports the firmware strings from /sys/class/dmi/id and no modules.
+// GPUs with their drivers (add_host_gpu, which crd-perf-gpu-bridge feeds from every device the process opens). What
+// the OS does not let the process read stays unknown (its kHardware*Known flag clear), never guessed: Linux's SMBIOS
+// table is root-only, so an unprivileged Linux process reports the firmware strings from /sys/class/dmi/id and no
+// modules.
 //
 // Reading it touches the registry, sysfs and the firmware table, so it never runs on a fatal path:
 // host_hardware_identity() reads it once, FlightRecorder::init reads it before any capture can be delivered, and every
@@ -110,8 +111,14 @@ struct HardwareIdentity
 read_hardware_identity(crd::memory::IAllocator* alloc = crd::memory::default_allocator());
 
 // This machine, read once at the first call (thread-safe); FlightRecorder::init calls it, so a bundle never reads
-// the OS.
+// the OS. The reference is lock-free and stays valid for the process's life; it holds the GPUs added before the call
+// (each add_host_gpu publishes a new immutable copy), so take it again for later ones.
 [[nodiscard]] const HardwareIdentity& host_hardware_identity();
+
+// Add `gpu` (its name and driver trimmed and clipped as the reader does) to host_hardware_identity(), and to the native
+// crash stream once attach_hardware_identity_to_crashes has run. True when it is now there (an equal entry counts);
+// false when kMaxGpus GPUs are already recorded. Not for a fatal path.
+bool add_host_gpu(const GpuIdentity& gpu);
 
 // Fills the firmware strings and the module list of `out` from an SMBIOS structure table (Windows' RSMB table after
 // its 8-byte header; Linux's /sys/firmware/dmi/tables/DMI), setting kHardwareFirmwareKnown when a BIOS structure

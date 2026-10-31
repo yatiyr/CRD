@@ -53,7 +53,7 @@ using CompileFn = crd::ceir::gpu::KernelCompileFn;
 struct GpuRig
 {
     crd::ceir::gpu::DeviceRunRig run;
-    crd::gpu::ComputeAdapter     adapter{};
+    crd::gpu::GpuAdapter         adapter{};
 };
 
 inline bool gpu_run(crd::ceir::Context& ctx, const crd::ceir::Module& module, ConstSpan<ck::DeviceKernelSource> kernels,

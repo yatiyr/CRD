@@ -14,6 +14,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdio>
+#include <cstring>
+
 namespace g = crd::gpu;
 
 namespace
@@ -134,4 +137,37 @@ TEST_CASE("CUDA compute: vec-add through IComputeContext == CPU reference + last
     CHECK(ok);                          // vec-add == CPU reference (a[i]+b[i] == 3i)
     CHECK(ctx->last_gpu_ms() > 0.0);    // real CUDA-event GPU timing
     CHECK(ctx->subgroup_size() == 32U); // NVIDIA warp
+}
+
+// HW-RESILIENCE.2: the CUDA context reads its device's name and the driver's CUDA version once and notes the adapter
+// in the process's opened-adapter log.
+TEST_CASE("HW-RESILIENCE.2: the CUDA context reports its adapter and notes it as opened",
+          "[cuda][compute][gpu][diag][hw-resilience]")
+{
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+    auto ctx = g::create_cuda_compute_context(alloc);
+    REQUIRE(ctx != nullptr);
+    if (!ctx->valid())
+    {
+        SKIP("CUDA device unavailable");
+    }
+    const g::GpuAdapter a = ctx->adapter();
+    REQUIRE(a.known);
+    CHECK(std::strcmp(a.backend, "cuda") == 0);
+    CHECK(a.vendor == 0x10DEU);
+    CHECK(a.name[0] != '\0');
+    REQUIRE(a.driver >= 1000U); // cuDriverGetVersion: 1000 * major + 10 * minor
+    char text[g::kAdapterDriverVersionBytes];
+    (void)std::snprintf(text, sizeof(text), "%u.%u", static_cast<unsigned>(a.driver / 1000U),
+                        static_cast<unsigned>((a.driver % 1000U) / 10U));
+    CHECK(std::strcmp(a.driver_version, text) == 0);
+    bool noted = false;
+    for (crd::u32 i = 0U; i < g::opened_adapters().count(); ++i)
+    {
+        const g::GpuAdapter o = g::opened_adapters().at(i);
+        noted = noted || (std::strcmp(o.backend, "cuda") == 0 && std::strcmp(o.name, a.name) == 0 &&
+                          std::strcmp(o.driver_version, a.driver_version) == 0);
+    }
+    CHECK(noted);
+    std::printf("[HW-RESILIENCE.2] cuda adapter: %s driver %s\n", a.name, a.driver_version);
 }

@@ -1,4 +1,5 @@
 #include "dx12_device_scope.hpp"
+#include "dx12_adapter.hpp" // HW-RESILIENCE.2: every device's adapter joins opened_adapters()
 #include "dx12_execution.hpp"
 
 #include <crd/gpu/driver_witness.hpp> // DIAG.10c: driver and compiler calls under the mode witness
@@ -455,6 +456,7 @@ HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* 
     }
     m_created = true;
     m_device_hold.hold(); // DIAG.10c: D3D12CreateDevice handed this scope a device reference
+    (void)opened_adapters().note(dx12_adapter(output.Get())); // HW-RESILIENCE.2: the machine's identity names it
     // DIAG.7a(f-3): device created -> resolve per-mode activation. Core active is OBSERVABLE (ID3D12InfoQueue QI on this
     // device succeeds iff the debug layer is on for it -- the post-hoc oracle Vulkan lacks). GPU-assisted active == the
     // Debug1 enable ran pre-device (enabled, not proven instrumenting; (g) proves that). Sync has no D3D12 equivalent.

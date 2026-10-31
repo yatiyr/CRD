@@ -3,6 +3,7 @@
 // sub-allocated per dispatch; RAW (ByteAddressBuffer) UAVs so no element-type is baked into the interface. Mirrors the
 // Vulkan backend's recorder shape (copy / barrier / dispatch → submit_and_wait). D3D12 helpers mirror crd-kir-dx12.
 
+#include "dx12_adapter.hpp" // DIAG.9a: the adapter
 #include "dx12_device_scope.hpp"
 #include "dx12_execution.hpp"
 #include "dx12_identity_naming.hpp" // DIAG.7a(d2b-dx12-b) batch 3b: mint/name a Cerid Program identity on a compute pipeline
@@ -765,36 +766,9 @@ void Dx12ComputeContext::submit_and_wait()
 
 double Dx12ComputeContext::last_gpu_ms() const noexcept { return m_impl->last_gpu_ms_v; }
 
-ComputeAdapter Dx12ComputeContext::adapter() const noexcept
+GpuAdapter Dx12ComputeContext::adapter() const noexcept
 {
-    ComputeAdapter a{};
-    if (!m_impl->device)
-    {
-        return a;
-    }
-    ComPtr<IDXGIFactory4> factory;
-    ComPtr<IDXGIAdapter1> dxgi;
-    DXGI_ADAPTER_DESC1    desc{};
-    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) ||
-        FAILED(factory->EnumAdapterByLuid(m_impl->device->GetAdapterLuid(), IID_PPV_ARGS(&dxgi))) ||
-        FAILED(dxgi->GetDesc1(&desc)))
-    {
-        return a;
-    }
-    std::memcpy(a.backend, "dx12", sizeof("dx12"));
-    if (WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, a.name, sizeof(a.name), nullptr, nullptr) == 0)
-    {
-        a.name[0] = '\0';
-    }
-    a.vendor = desc.VendorId;
-    a.device = desc.DeviceId;
-    LARGE_INTEGER umd{};
-    if (SUCCEEDED(dxgi->CheckInterfaceSupport(__uuidof(IDXGIDevice), &umd)))
-    {
-        a.driver = static_cast<crd::u64>(umd.QuadPart);
-    }
-    a.known = true;
-    return a;
+    return detail::dx12_adapter(m_impl->device.Get());
 }
 
 } // namespace crd::gpu

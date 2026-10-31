@@ -10,6 +10,7 @@
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
+#include <crd/gpu/adapter.hpp>         // DIAG.9a: GpuAdapter
 #include <crd/gpu/object_identity.hpp> // DIAG.8a: the identity a recorded debug label carries
 
 #include <memory>
@@ -121,20 +122,6 @@ public:
     virtual void end_label() {}
 };
 
-// DIAG.9a: the adapter a compute context runs on, as its API reports it. A device run's numerics belong to this
-// adapter: a run record claims bit identity only on the adapter (and build) that recorded it. `known` is false for a
-// backend that does not report one.
-struct ComputeAdapter
-{
-    char     backend[16] = {}; // "vulkan", "dx12", ...
-    char     name[256]   = {}; // the adapter's description (UTF-8, truncated to fit)
-    crd::u32 vendor      = 0U;
-    crd::u32 device      = 0U;
-    crd::u64 driver      = 0U; // Vulkan: driverVersion; D3D12: the user-mode driver version
-    crd::u32 api         = 0U; // Vulkan: the device's apiVersion; D3D12: 0
-    bool     known       = false;
-};
-
 // The one GPU compute dispatch surface (ADR-0100). Kernel-source-agnostic: pipelines are requested BY NAME and the
 // backend loads its own cooked kernel. Consumers depend on THIS, never on a concrete backend.
 class IComputeContext
@@ -178,7 +165,7 @@ public:
     [[nodiscard]] virtual double last_gpu_ms() const noexcept { return 0.0; }
 
     // DIAG.9a: the adapter this context runs on. Appended at END (vtable stability); the default reports none.
-    [[nodiscard]] virtual ComputeAdapter adapter() const noexcept { return ComputeAdapter{}; }
+    [[nodiscard]] virtual GpuAdapter adapter() const noexcept { return GpuAdapter{}; }
 };
 
 } // namespace crd::gpu

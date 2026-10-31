@@ -5,6 +5,7 @@
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/gpu/vulkan_shader_compile.hpp> // the relocated GLSL→SPIR-V compiler (C1-c graph on-ramp)
 
+#include "vulkan_adapter.hpp"       // DIAG.9a, HW-RESILIENCE.2: the adapter, read once
 #include "vulkan_device_memory.hpp" // DIAG.10c: device_memory() through VK_EXT_memory_budget
 #include "vulkan_execution.hpp"      // DIAG.7c(c): the device's failure record is released with the device
 #include "vulkan_identity_naming.hpp" // DIAG.7a(d2b-vk): one Cerid Program identity per compiled shader stage
@@ -255,7 +256,8 @@ public:
 
     [[nodiscard]] bool             valid() const noexcept override { return m_valid; }
     [[nodiscard]] GpuBackend       backend() const noexcept override { return GpuBackend::Vulkan; }
-    [[nodiscard]] const char*      adapter_name() const noexcept override { return m_name; }
+    [[nodiscard]] const char*      adapter_name() const noexcept override { return m_adapter.name; }
+    [[nodiscard]] GpuAdapter       adapter() const noexcept override { return m_adapter; } // HW-RESILIENCE.2
     [[nodiscard]] ValidationActivation validation_activation() const noexcept override { return m_validation_activation; } // DIAG.7a(f)
     [[nodiscard]] VulkanValidationLayer validation_layer() const noexcept override { return m_validation_layer; } // DIAG.7c(b)
     [[nodiscard]] VkInstance       vk_instance() const noexcept override { return m_instance; }
@@ -733,12 +735,7 @@ private:
                 break;
             }
         }
-        VkPhysicalDeviceProperties props{};
-        vkGetPhysicalDeviceProperties(m_physical, &props);
-        for (int i = 0; i < 255 && props.deviceName[i] != '\0'; ++i) // m_name zero-init
-        {
-            m_name[i] = props.deviceName[i];
-        }
+        m_adapter = detail::vk_adapter(m_physical); // HW-RESILIENCE.2: read once, before the device exists
 
         // Compute queue family — prefer a DEDICATED compute family (async vs a renderer), else any compute-capable one.
         std::uint32_t           nqf = 16;
@@ -1628,6 +1625,7 @@ private:
         VkPhysicalDeviceProperties adapter{};
         vkGetPhysicalDeviceProperties(m_physical, &adapter);
         detail::vk_register_device_adapter(m_device, adapter);
+        (void)opened_adapters().note(m_adapter); // HW-RESILIENCE.2: the machine's identity names this GPU
         detail::vk_register_device_memory(m_device, m_physical, m_memory_budget); // DIAG.10c
         if (!m_device_fault)
         {
@@ -1687,7 +1685,7 @@ private:
     bool             m_geometry_shader       = false; // REN-38-A11: gl_PrimitiveID in a FS declares the Geometry capability
     bool             m_tessellation          = false; // B4-tess: tessellationShader + EDS2 patch-control-points enabled
     bool             m_valid           = false;
-    char             m_name[256]       = {};
+    GpuAdapter       m_adapter{};
 };
 
 } // namespace

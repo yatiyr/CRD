@@ -8,8 +8,10 @@
 #include <crd/perf/hardware_identity.hpp>
 #include <crd/perf/symbol_index.hpp>
 
+#include <atomic>
 #include <cstdio>
 #include <initializer_list>
+#include <mutex>
 #include <thread>
 
 #if CRD_OS_WINDOWS
@@ -404,10 +406,79 @@ HardwareIdentity read_hardware_identity(crd::memory::IAllocator* alloc)
     return h;
 }
 
+namespace
+{
+[[nodiscard]] bool same_gpu(const GpuIdentity& x, const GpuIdentity& y) noexcept
+{
+    return x.vendor_id == y.vendor_id && x.device_id == y.device_id && view(x.name) == view(y.name) &&
+           view(x.driver) == view(y.driver);
+}
+
+// This machine as immutable snapshots: snapshot k is the machine with its first k GPUs, published by an atomic index.
+// A reader (a fatal delivery's bundle included) takes a reference without a lock, valid for the process's life; at
+// most kMaxGpus additions publish, so the array never runs out. The writers (add_host_gpu and
+// attach_hardware_identity_to_crashes) hold `writer`, so the crash stream always carries the newest snapshot.
+struct HostIdentity
+{
+    HostIdentity() { snapshots[0] = read_hardware_identity(); }
+
+    HardwareIdentity snapshots[kMaxGpus + 1U];
+    std::atomic<crd::u32> published{0U};
+    std::mutex writer;
+    bool crashes_attached = false; // under `writer`
+};
+
+HostIdentity& host_identity()
+{
+    static HostIdentity host;
+    return host;
+}
+
+bool set_crash_stream(const HardwareIdentity& h)
+{
+    const cont::Array<crd::u8> bytes = encode_hardware_identity(h);
+    return crd::crash::set_machine_stream(bytes.data(), static_cast<crd::u32>(bytes.size()));
+}
+} // namespace
+
 const HardwareIdentity& host_hardware_identity()
 {
-    static const HardwareIdentity kHost = read_hardware_identity();
-    return kHost;
+    const HostIdentity& host = host_identity();
+    return host.snapshots[host.published.load(std::memory_order_acquire)];
+}
+
+bool add_host_gpu(const GpuIdentity& gpu)
+{
+    GpuIdentity stored;
+    stored.vendor_id = gpu.vendor_id;
+    stored.device_id = gpu.device_id;
+    assign_trimmed(stored.name, gpu.name.data(), gpu.name.size());
+    assign_trimmed(stored.driver, gpu.driver.data(), gpu.driver.size());
+
+    HostIdentity& host = host_identity();
+    const std::lock_guard<std::mutex> lock(host.writer);
+    const crd::u32 at = host.published.load(std::memory_order_relaxed);
+    const HardwareIdentity& current = host.snapshots[at];
+    for (const GpuIdentity& known : current.gpus)
+    {
+        if (same_gpu(known, stored))
+        {
+            return true;
+        }
+    }
+    if (current.gpus.size() >= kMaxGpus)
+    {
+        return false;
+    }
+    HardwareIdentity& next = host.snapshots[at + 1U];
+    next = current;
+    next.gpus.push_back(static_cast<GpuIdentity&&>(stored));
+    host.published.store(at + 1U, std::memory_order_release);
+    if (host.crashes_attached)
+    {
+        (void)set_crash_stream(next);
+    }
+    return true;
 }
 
 bool same_hardware_identity(const HardwareIdentity& a, const HardwareIdentity& b, cont::String& differing)
@@ -452,10 +523,7 @@ bool same_hardware_identity(const HardwareIdentity& a, const HardwareIdentity& b
         }
         for (crd::usize i = 0U; i < a.gpus.size(); ++i)
         {
-            const GpuIdentity& x = a.gpus[i];
-            const GpuIdentity& y = b.gpus[i];
-            if (x.vendor_id != y.vendor_id || x.device_id != y.device_id || view(x.name) != view(y.name) ||
-                view(x.driver) != view(y.driver))
+            if (!same_gpu(a.gpus[i], b.gpus[i]))
             {
                 return false;
             }
@@ -612,8 +680,10 @@ static_assert(kHardwareIdentityMaxBytes <= crd::crash::kMaxMachineStreamBytes,
 
 bool attach_hardware_identity_to_crashes()
 {
-    const cont::Array<crd::u8> bytes = encode_hardware_identity(host_hardware_identity());
-    return crd::crash::set_machine_stream(bytes.data(), static_cast<crd::u32>(bytes.size()));
+    HostIdentity& host = host_identity();
+    const std::lock_guard<std::mutex> lock(host.writer);
+    host.crashes_attached = true;
+    return set_crash_stream(host.snapshots[host.published.load(std::memory_order_relaxed)]);
 }
 
 HardwareIdentityRead read_crash_hardware_identity(cont::ConstSpan<crd::u8> capture, crd::memory::IAllocator* alloc)

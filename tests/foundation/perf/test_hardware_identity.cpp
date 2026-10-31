@@ -11,6 +11,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <initializer_list>
 #include <utility>
 
@@ -513,4 +514,97 @@ TEST_CASE("hardware identity: this machine reads its CPU, memory and, where the 
                         (h.flags & cp::kHardwareModulesKnown) != 0U ? "" : " (list unknown)", h.bios_vendor.c_str(),
                         h.bios_version.c_str(), h.bios_date.c_str(), h.board_vendor.c_str(), h.board_name.c_str());
     WARN(line);
+}
+
+namespace
+{
+cp::GpuIdentity test_gpu(u32 device, const char* name, const char* driver)
+{
+    cp::GpuIdentity g;
+    g.vendor_id = 0x1002U;
+    g.device_id = device;
+    g.name.append(name);
+    g.driver.append(driver);
+    return g;
+}
+
+#if CRD_OS_WINDOWS
+// The identity the next live dump carries (its machine stream), decoded.
+cp::HardwareIdentityRead dump_identity()
+{
+    const char* path = nullptr;
+    REQUIRE(crd::crash::capture_dump(&path) == crd::crash::WriteResult::Ok);
+    cont::Array<u8> stream;
+    stream.resize(crd::crash::kMaxMachineStreamBytes);
+    const usize n = crd::crash::read_dump_stream(path, crd::crash::kMachineStreamType, stream.data(), stream.size());
+    REQUIRE(n <= stream.size());
+    return cp::decode_hardware_identity({stream.data(), n});
+}
+#endif
+} // namespace
+
+TEST_CASE("hardware identity: a GPU added to this machine joins it once, in every later read and crash stream",
+          "[perf][diag][hw-resilience]")
+{
+    const cp::HardwareIdentity& before = cp::host_hardware_identity();
+    const cp::HardwareIdentity kept = before;
+    const usize had = before.gpus.size();
+    cont::String differing;
+
+    REQUIRE(cp::add_host_gpu(test_gpu(0x744CU, "  Radeon Test GPU \t", " vulkan 2.0.302 ")));
+    const cp::HardwareIdentity& after = cp::host_hardware_identity();
+    REQUIRE(after.gpus.size() == had + 1U);
+    CHECK(view(after.gpus[had].name) == "Radeon Test GPU"); // trimmed as the reader trims
+    CHECK(view(after.gpus[had].driver) == "vulkan 2.0.302");
+    CHECK(cp::same_hardware_identity(before, kept, differing)); // an earlier reference never changes
+    CHECK(differing.empty());
+    REQUIRE(cp::add_host_gpu(test_gpu(0x744CU, "Radeon Test GPU", "vulkan 2.0.302"))); // the same GPU again
+    CHECK(&cp::host_hardware_identity() == &after);
+
+    // A name past the field bound is clipped as the encoder clips it, so a bundle's identity equals the host's.
+    cont::String long_name;
+    for (u32 i = 0U; i < 2U * cp::kHardwareFieldBytes; ++i)
+    {
+        long_name.push_back(static_cast<char>('a' + i % 26U));
+    }
+    REQUIRE(cp::add_host_gpu(test_gpu(0x7550U, long_name.c_str(), "dx12 32.0.21025.1")));
+    const cp::HardwareIdentity& clipped = cp::host_hardware_identity();
+    CHECK(clipped.gpus[clipped.gpus.size() - 1U].name.size() == cp::kHardwareFieldBytes);
+    const cont::Array<u8> bytes = cp::encode_hardware_identity(clipped);
+    const cp::HardwareIdentityRead read = cp::decode_hardware_identity({bytes.data(), bytes.size()});
+    REQUIRE(read.ok);
+    CHECK(cp::same_hardware_identity(read.identity, clipped, differing));
+    CHECK(differing.empty());
+
+#if CRD_OS_WINDOWS
+    // Once attached, the crash stream follows every addition.
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "crd_hw_identity_gpu_dumps";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    crd::crash::uninstall();
+    REQUIRE(crd::crash::install(dir.string().c_str()) == crd::crash::InstallResult::Ok);
+    REQUIRE(cp::attach_hardware_identity_to_crashes());
+    const cp::HardwareIdentityRead attached = dump_identity();
+    REQUIRE(attached.ok);
+    CHECK(cp::same_hardware_identity(attached.identity, cp::host_hardware_identity(), differing));
+    REQUIRE(cp::add_host_gpu(test_gpu(0x73BFU, "Radeon Later GPU", "vulkan 2.0.310")));
+    const cp::HardwareIdentityRead later = dump_identity();
+    REQUIRE(later.ok);
+    CHECK(later.identity.gpus.size() == attached.identity.gpus.size() + 1U);
+    CHECK(cp::same_hardware_identity(later.identity, cp::host_hardware_identity(), differing));
+    CHECK(differing.empty());
+    crd::crash::uninstall();
+    fs::remove_all(dir, ec);
+#endif
+
+    // Bounded: past kMaxGpus nothing is added, and an entry already there still counts as there.
+    for (u32 device = 1U; cp::host_hardware_identity().gpus.size() < cp::kMaxGpus; ++device)
+    {
+        REQUIRE(cp::add_host_gpu(test_gpu(device, "Filler GPU", "cuda 13.0")));
+    }
+    CHECK_FALSE(cp::add_host_gpu(test_gpu(0xFFFFU, "Filler GPU", "cuda 13.0")));
+    CHECK(cp::add_host_gpu(test_gpu(1U, "Filler GPU", "cuda 13.0")));
+    CHECK(cp::host_hardware_identity().gpus.size() == cp::kMaxGpus);
 }
