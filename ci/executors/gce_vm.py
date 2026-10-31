@@ -239,6 +239,16 @@ class GceVm:
             return False
         return payload.get('status') not in ('STOPPING', 'STOPPED', 'TERMINATED', 'SUSPENDING', 'SUSPENDED')
 
+    def lost_reason(self, handle):
+        """'preempted' when a zone operation records Compute Engine preempting the instance, 'vm_lost' otherwise: a
+        machine that deleted or powered itself off (its agent was refused, for example) was not preempted."""
+        query = urllib.parse.urlencode({'filter': 'operationType="compute.instances.preempted"', 'maxResults': 500})
+        _, payload = self.http('GET', '%s/projects/%s/zones/%s/operations?%s' % (
+            COMPUTE, handle['project'], handle['zone'], query), token=self.token())
+        target = '/instances/%s' % handle['instance']
+        hit = any(item.get('targetLink', '').endswith(target) for item in payload.get('items', []))
+        return 'preempted' if hit else 'vm_lost'
+
     def machines(self):
         """Every job machine of the project (label cerid-ci=job), for the orphan sweep."""
         out = []

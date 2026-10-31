@@ -1164,6 +1164,7 @@ class FakeExecutor:
         self.launched = []
         self.torn = []
         self.dead = set()
+        self.preempted = set()
         self.fail = fail
 
     def launch(self, machine, device, agent):
@@ -1174,6 +1175,9 @@ class FakeExecutor:
 
     def alive(self, handle):
         return handle['instance'] not in self.dead
+
+    def lost_reason(self, handle):
+        return 'preempted' if handle['instance'] in self.preempted else 'vm_lost'
 
     def teardown(self, handle):
         self.torn.append(handle['instance'])
@@ -1211,6 +1215,18 @@ class Dispatching(Base):
             self.c.acquire('cerid-ci-unknown')
         self.assertEqual(self.dispatcher(executor).tick(), [], 'a reserved job is never launched twice')
 
+    def test_a_spot_machine_that_went_away_by_itself_is_lost_not_preempted(self):
+        build = self.build(cloud_steps('gce-linux-x64-intel'))
+        executor = FakeExecutor()
+        d = self.dispatcher(executor)
+        first = d.tick()[0]
+        executor.dead.add(first['machine'])  # it deleted itself: its agent was refused, nothing was preempted
+        d.reap()
+        job = self.jobs(build)['lane-gce-linux-x64-intel']
+        self.assertEqual((job['state'], job['attempt']), ('scheduled', 2))
+        self.assertIn('vm_lost', job['reason'])
+        self.assertNotIn('preempted', job['reason'])
+
     def test_preempted_vm_is_retried_on_a_new_machine(self):
         build = self.build(cloud_steps('gce-linux-x64-intel'))
         executor = FakeExecutor()
@@ -1219,6 +1235,7 @@ class Dispatching(Base):
         got = self.c.acquire(first['machine'])
         self.c.start(got['job']['id'], got['token'])
         executor.dead.add(first['machine'])
+        executor.preempted.add(first['machine'])
         d.reap()
         job = self.jobs(build)['lane-gce-linux-x64-intel']
         self.assertEqual((job['state'], job['attempt']), ('scheduled', 2))

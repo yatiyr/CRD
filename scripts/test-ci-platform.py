@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.parse
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'ci'))
@@ -53,6 +54,7 @@ ALL_ACCOUNTS = {'CERID_CI_URL': 'https://ci.example', 'CERID_CI_GCP_PROJECT': 'c
                 'CERID_CLOUDFLARE_ACCOUNT_ID': 'a', 'CERID_SSH_AMD_DEVCLOUD_HOST': 'h', 'CERID_SSH_MAC_HOST': 'h',
                 'CERID_SSH_WINDOWS_ARM64_HOST': 'h', 'CERID_SSH_INTEL_TIBER_HOST': 'h', 'CERID_CI_OWNED_AGENTS': '1'}
 SECRETS = {'cloudflare-pages-token'}
+COMPUTE_ZONE = 'https://compute.googleapis.com/compute/v1/projects/cerid-ci/zones/us-central1-a'
 
 
 def fake_entries(extra=()):
@@ -722,6 +724,18 @@ class Executors(unittest.TestCase):
         self.assertIn('images/family/cerid-ci-ubuntu-2404-x64-nvidia', body['disks'][0]['initializeParams']['sourceImage'])
         with self.assertRaises(ValueError):
             executor.body('m', device, dict(AGENT_SPEC, token='cjt_x'))
+
+    def test_gce_names_a_preemption_only_when_compute_engine_recorded_one(self):
+        seen = []
+
+        def http(method, url, **kwargs):
+            seen.append(url)
+            return 200, {'items': [{'targetLink': COMPUTE_ZONE + '/instances/cerid-ci-a-a1'}]}
+        executor = gce_vm.GceVm({}, http=http, token=lambda: 't')
+        handle = {'project': 'cerid-ci', 'zone': 'us-central1-a', 'instance': 'cerid-ci-a-a1'}
+        self.assertEqual(executor.lost_reason(handle), 'preempted')
+        self.assertEqual(executor.lost_reason(dict(handle, instance='cerid-ci-a-a2')), 'vm_lost')
+        self.assertIn('compute.instances.preempted', urllib.parse.unquote(seen[0]))
 
     def test_gce_console_and_android_machine_features(self):
         executor = gce_vm.GceVm({})
