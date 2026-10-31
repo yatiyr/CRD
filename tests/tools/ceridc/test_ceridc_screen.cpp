@@ -16,7 +16,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <initializer_list>
 
 namespace
 {
@@ -96,6 +95,10 @@ void write_lists()
     REQUIRE(fs::write_file_text(fs::Path("test.un.sanctions.toml"), kUn));
 }
 
+// A repeated flag's values fill an array's leading slots and leave the rest null: MSVC cannot default an
+// initializer_list member (C2797).
+constexpr crd::usize kMaxValues = 4U;
+
 struct Screen
 {
     const char* lists = ".";
@@ -103,13 +106,23 @@ struct Screen
     const char* day = "2026-11-01";
     const char* destination = nullptr;
     const char* kind = nullptr;
-    std::initializer_list<const char*> names = {};
+    const char* names[kMaxValues] = {};
     const char* birth = nullptr;
-    std::initializer_list<const char*> countries = {};
-    std::initializer_list<const char*> identifiers = {};
+    const char* countries[kMaxValues] = {};
+    const char* identifiers[kMaxValues] = {};
     const char* review = nullptr;
     const char* match = nullptr;
 };
+
+cont::ConstSpan<const char*> given(const char* const (&values)[kMaxValues])
+{
+    crd::usize count = 0U;
+    while (count < kMaxValues && values[count] != nullptr)
+    {
+        ++count;
+    }
+    return cont::ConstSpan<const char*>(values, count);
+}
 
 cont::String screen(const Screen& s)
 {
@@ -119,10 +132,10 @@ cont::String screen(const Screen& s)
     flags.day = s.day;
     flags.destination = s.destination;
     flags.kind = s.kind;
-    flags.names = cont::ConstSpan<const char*>(s.names.begin(), s.names.size());
+    flags.names = given(s.names);
     flags.birth = s.birth;
-    flags.countries = cont::ConstSpan<const char*>(s.countries.begin(), s.countries.size());
-    flags.identifiers = cont::ConstSpan<const char*>(s.identifiers.begin(), s.identifiers.size());
+    flags.countries = given(s.countries);
+    flags.identifiers = given(s.identifiers);
     flags.review = s.review;
     flags.match = s.match;
     return crd::ceridc::verb_screen(flags, crd::memory::default_allocator());
@@ -146,7 +159,7 @@ constexpr const char* kShellQuote = "";
 int run_shell(const char* command)
 {
 #if CRD_OS_WINDOWS
-    const crd::usize     bytes = std::strlen(command);
+    const crd::usize bytes = std::strlen(command);
     cont::Array<wchar_t> wide;
     wide.resize(bytes + 1U); // UTF-16 takes at most a unit per UTF-8 byte; the last stays the NUL
     (void)crd::utf8_to_utf16(reinterpret_cast<const crd::u8*>(command), bytes, wide.data(), bytes);
@@ -415,13 +428,13 @@ TEST_CASE("screen verb: the real ceridc binary reads a name written in Turkish w
     REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe)); // wired by CMake
     const char* turkish = "KUZEY DEN\xC4\xB0Z T\xC4\xB0"
                           "CARET A.\xC5\x9E.";
-    char        cmd[1024];
+    char cmd[1024];
     (void)std::snprintf(cmd, sizeof(cmd),
                         R"(%s"%s" screen --lists . --authority test.ofac --day 2026-11-01 --kind entity --name "%s" )"
                         R"(> ceridc_screen_turkish.json%s)",
                         kShellQuote, exe.c_str(), turkish, kShellQuote);
     REQUIRE(run_shell(cmd) == 0);
-    const cont::String out      = report_file("ceridc_screen_turkish.json");
+    const cont::String out = report_file("ceridc_screen_turkish.json");
     const cont::String expected = screen({.kind = "entity", .names = {turkish}});
     INFO(expected.c_str());
     CHECK(has(expected, R"("party":"test.ofac.1002")"));
