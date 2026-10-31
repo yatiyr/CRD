@@ -1236,6 +1236,7 @@ if(CRD_BUILD_RETAINED_BENCHES)
     crd_add_retained_bench(bench_resampling crd-hesap-stats)
     crd_add_retained_bench(bench_rng crd-hesap-stats)
     crd_add_retained_bench(bench_samplers crd-hesap-stats)
+    crd_add_retained_bench(bench_small_matrix crd-geometry-primitives crd-geometry-mesh-processing) # OWN.1
     crd_add_retained_bench(bench_sparse_tensor crd-hesap-tensor)
     crd_add_retained_bench(bench_special_batch crd-hesap-special)
     crd_add_retained_bench(bench_tensor_io crd-hesap-tensor)

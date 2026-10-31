@@ -22,20 +22,18 @@
 #include <math.h>
 #endif
 
-// NOLINTBEGIN(cppcoreguidelines-macro-usage): the choice reaches the preprocessor.
-#if defined(_MSC_VER) && defined(_M_X64) && !defined(_M_ARM64EC)
-#if defined(__AVX2__)
+// NOLINTBEGIN(cppcoreguidelines-macro-usage): the choice reaches the preprocessor. The instruction set is crd-core's
+// (CRD_TARGET_X64 and CRD_TARGET_X64_FMA): MSVC has no fma builtin, so its FMA units issue the intrinsic, and GCC and
+// Clang's builtin is the instruction in theirs.
+#if CRD_TARGET_X64_FMA && defined(_MSC_VER)
 #define CRD_LIBM_FMA_INSTRUCTION 1
 #include <immintrin.h>
-#else
+#elif CRD_TARGET_X64 && !CRD_TARGET_X64_FMA
 #define CRD_LIBM_FMA_SOFT 1
 #include <crd/core/cpu_features.hpp>
-
+#if defined(_MSC_VER)
 #include <intrin.h>
 #endif
-#elif defined(__x86_64__) && !defined(__FMA__)
-#define CRD_LIBM_FMA_SOFT 1
-#include <crd/core/cpu_features.hpp>
 #endif
 // NOLINTEND(cppcoreguidelines-macro-usage)
 
@@ -47,6 +45,23 @@
 
 namespace crd::math::inline CRD_MATH_LEVEL_NS::libm
 {
+
+// The body fma runs in this unit: the compiler's builtin or the C library's fma (`Native`, the instruction in an x64
+// unit with FMA), MSVC's intrinsic in an x64 unit with FMA (`Intrinsic`), or the bodies below in an x64 unit without
+// it (`Software`).
+enum class FmaBody : crd::u8
+{
+    Native,
+    Intrinsic,
+    Software,
+};
+#if defined(CRD_LIBM_FMA_INSTRUCTION)
+inline constexpr FmaBody kFmaBody = FmaBody::Intrinsic;
+#elif defined(CRD_LIBM_FMA_SOFT)
+inline constexpr FmaBody kFmaBody = FmaBody::Software;
+#else
+inline constexpr FmaBody kFmaBody = FmaBody::Native;
+#endif
 
 // The exact operations, in both precisions.
 [[nodiscard]] inline crd::f32 sqrt(crd::f32 x) noexcept

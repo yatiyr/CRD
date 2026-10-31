@@ -1,8 +1,10 @@
+#include <crd/core/seed_generators.hpp>
 #include <crd/math/math.hpp>
 
 #include <bit>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <format>
 #include <limits>
 #include <type_traits>
@@ -270,6 +272,236 @@ TEST_CASE("Mat4 identity is neutral for matrix and vector multiplication", "[mat
     require_mat4_close(identity * m, m, 1.0e-6F);
     require_mat4_close(m * identity, m, 1.0e-6F);
     require_vec4_close(identity * v, v, 1.0e-6F);
+}
+
+// ---------------------------------------------------------------------------
+// The closed-form small-matrix routines (OWN.1 moved geometry's copies here): the bits where a routine promises an
+// order, and residuals within the conditioning of the random draws elsewhere.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+// A value in [-1, 1) from the next SplitMix64 output.
+template <typename T> T unit_draw(u64& state) noexcept
+{
+    return static_cast<T>(static_cast<f64>(splitmix64_next(state) >> 11U) * 0x1.0p-52 - 1.0);
+}
+
+template <typename T> Vec2<T> vec2_draw(u64& state) noexcept
+{
+    Vec2<T> v;
+    v.x = unit_draw<T>(state);
+    v.y = unit_draw<T>(state);
+    return v;
+}
+
+template <typename T> Vec3<T> vec3_draw(u64& state) noexcept
+{
+    Vec3<T> v;
+    v.x = unit_draw<T>(state);
+    v.y = unit_draw<T>(state);
+    v.z = unit_draw<T>(state);
+    return v;
+}
+
+template <typename T> Mat3<T> mat3_draw(u64& state) noexcept
+{
+    Mat3<T> m;
+    m.c0 = vec3_draw<T>(state);
+    m.c1 = vec3_draw<T>(state);
+    m.c2 = vec3_draw<T>(state);
+    return m;
+}
+
+template <typename T> bool same_bits(T a, T b) noexcept
+{
+    if constexpr (sizeof(T) == sizeof(u32))
+    {
+        return std::bit_cast<u32>(a) == std::bit_cast<u32>(b);
+    }
+    else
+    {
+        return std::bit_cast<u64>(a) == std::bit_cast<u64>(b);
+    }
+}
+
+template <typename T> bool same_bits(const Mat3<T>& a, const Mat3<T>& b) noexcept
+{
+    for (usize j = 0; j < 3U; ++j)
+    {
+        for (usize i = 0; i < 3U; ++i)
+        {
+            if (!same_bits(a[j][i], b[j][i]))
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+template <typename T> T max_abs_difference(const Mat3<T>& a, const Mat3<T>& b) noexcept
+{
+    T worst = static_cast<T>(0);
+    for (usize j = 0; j < 3U; ++j)
+    {
+        for (usize i = 0; i < 3U; ++i)
+        {
+            worst = max(worst, abs(a[j][i] - b[j][i]));
+        }
+    }
+    return worst;
+}
+} // namespace
+
+TEST_CASE("Mat2 and Mat3 determinants expand along the first column", "[math][mat][small-linear-algebra]")
+{
+    static_assert(determinant(Mat2d(Vec2d(1.0, 3.0), Vec2d(2.0, 4.0))) == -2.0);
+    static_assert(determinant(Mat3d(Vec3d(2.0, 1.0, 1.0), Vec3d(0.0, 3.0, 1.0), Vec3d(1.0, 2.0, 2.0))) == 6.0);
+    static_assert(determinant(Mat3d::identity()) == 1.0);
+    // Triangular (rows [2 5 7], [0 3 11], [0 0 -0.5]): the product of the diagonal, exactly.
+    CHECK(determinant(Mat3f(Vec3f(2.0F, 0.0F, 0.0F), Vec3f(5.0F, 3.0F, 0.0F), Vec3f(7.0F, 11.0F, -0.5F))) == -3.0F);
+
+    // The inverses' determinant (the first column's entries times their cofactors) is determinant() bit for bit, so
+    // a caller testing determinant() tests the value the inverse divides by; the transpose's agrees to rounding.
+    u64 state = 0x0DE7'3A11'5EEDULL;
+    for (usize n = 0; n < 4096U; ++n)
+    {
+        const Mat3d m = mat3_draw<f64>(state);
+        const Mat3f mf = mat3_draw<f32>(state);
+        REQUIRE(same_bits(crd::math::detail::determinant_of(m, crd::math::detail::cofactors(m)), determinant(m)));
+        REQUIRE(same_bits(crd::math::detail::determinant_of(mf, crd::math::detail::cofactors(mf)), determinant(mf)));
+        REQUIRE(abs(determinant(transpose(m)) - determinant(m)) <= 16.0 * std::numeric_limits<f64>::epsilon());
+    }
+}
+
+TEST_CASE("Mat2, Mat3 and Mat4 inverses are exact on unimodular matrices", "[math][mat][small-linear-algebra]")
+{
+    // Rows [2 1], [1 1].
+    constexpr Mat2d m2(Vec2d(2.0, 1.0), Vec2d(1.0, 1.0));
+    static_assert(inverse(m2) == Mat2d(Vec2d(1.0, -1.0), Vec2d(-1.0, 2.0)));
+
+    // Rows [1 2 3], [0 1 4], [5 6 0].
+    constexpr Mat3d m3(Vec3d(1.0, 0.0, 5.0), Vec3d(2.0, 1.0, 6.0), Vec3d(3.0, 4.0, 0.0));
+    constexpr Mat3d inv3(Vec3d(-24.0, 20.0, -5.0), Vec3d(18.0, -15.0, 4.0), Vec3d(5.0, -4.0, 1.0));
+    static_assert(inverse(m3) == inv3);
+    static_assert(inverse_transpose(m3) == transpose(inv3));
+    static_assert(m3 * inverse(m3) == Mat3d::identity());
+    static_assert(solve(m3, m3 * Vec3d(1.0, -2.0, 3.0)) == Vec3d(1.0, -2.0, 3.0));
+    static_assert(solve(m2, m2 * Vec2d(-4.0, 5.0)) == Vec2d(-4.0, 5.0));
+
+    // Rows [1 1 0 0], [0 1 1 0], [0 0 1 1], [0 0 0 1]: the inverse alternates.
+    const Mat4d m4(Vec4d(1.0, 0.0, 0.0, 0.0), Vec4d(1.0, 1.0, 0.0, 0.0), Vec4d(0.0, 1.0, 1.0, 0.0),
+                   Vec4d(0.0, 0.0, 1.0, 1.0));
+    CHECK(inverse(m4) == Mat4d(Vec4d(1.0, 0.0, 0.0, 0.0), Vec4d(-1.0, 1.0, 0.0, 0.0), Vec4d(1.0, -1.0, 1.0, 0.0),
+                               Vec4d(-1.0, 1.0, -1.0, 1.0)));
+}
+
+TEST_CASE("Mat2 and Mat3 inverse, inverse-transpose and solve agree on random matrices",
+          "[math][mat][small-linear-algebra]")
+{
+    // Entries in [-1, 1) and |det| >= 0.1 bound the condition number by a few hundred, so the residuals stay within
+    // 1e-12.
+    u64 state = 0x1A7E'C0DEULL;
+    usize tested = 0;
+    for (usize n = 0; n < 4096U; ++n)
+    {
+        const Mat3d m = mat3_draw<f64>(state);
+        const Vec3d b = vec3_draw<f64>(state);
+        if (abs(determinant(m)) < 0.1)
+        {
+            continue;
+        }
+        ++tested;
+        const Mat3d inv = inverse(m);
+        REQUIRE(same_bits(inverse_transpose(m), transpose(inv)));
+        REQUIRE(max_abs_difference(m * inv, Mat3d::identity()) <= 1.0e-12);
+        REQUIRE(max_abs_difference(inv * m, Mat3d::identity()) <= 1.0e-12);
+        // Cramer's determinants are determinant() of the transposes, bit for bit.
+        const auto cramer = crd::math::detail::cramer(m, b);
+        REQUIRE(same_bits(cramer.det, determinant(transpose(m))));
+        REQUIRE(same_bits(cramer.numerators.x, determinant(transpose(Mat3d(b, m.c1, m.c2)))));
+        REQUIRE(same_bits(cramer.numerators.y, determinant(transpose(Mat3d(m.c0, b, m.c2)))));
+        REQUIRE(same_bits(cramer.numerators.z, determinant(transpose(Mat3d(m.c0, m.c1, b)))));
+        const Vec3d x = solve(m, b);
+        const Vec3d r = m * x - b;
+        REQUIRE(max(abs(r.x), max(abs(r.y), abs(r.z))) <= 1.0e-12);
+        Mat3d out;
+        REQUIRE(try_inverse(m, out, 0.1));
+        REQUIRE(same_bits(out, inv));
+        Vec3d xs;
+        REQUIRE(try_solve(m, b, xs, 0.1));
+        REQUIRE((same_bits(xs.x, x.x) && same_bits(xs.y, x.y) && same_bits(xs.z, x.z)));
+    }
+    CHECK(tested > 1000U);
+
+    tested = 0;
+    for (usize n = 0; n < 4096U; ++n)
+    {
+        Mat2d mm;
+        mm.c0 = vec2_draw<f64>(state);
+        mm.c1 = vec2_draw<f64>(state);
+        const Vec2d b = vec2_draw<f64>(state);
+        if (abs(determinant(mm)) < 0.1)
+        {
+            continue;
+        }
+        ++tested;
+        const Mat2d p = mm * inverse(mm);
+        REQUIRE(abs(p.c0.x - 1.0) + abs(p.c0.y) + abs(p.c1.x) + abs(p.c1.y - 1.0) <= 1.0e-12);
+        const Vec2d x = solve(mm, b);
+        const Vec2d r = mm * x - b;
+        REQUIRE(abs(r.x) + abs(r.y) <= 1.0e-12);
+        Vec2d xs;
+        REQUIRE(try_solve(mm, b, xs, 0.1));
+        REQUIRE((same_bits(xs.x, x.x) && same_bits(xs.y, x.y)));
+    }
+    CHECK(tested > 1000U);
+}
+
+TEST_CASE("Mat3 try_inverse and try_solve refuse a determinant below their bound and leave the output alone",
+          "[math][mat][small-linear-algebra]")
+{
+    const Mat3d half(Vec3d(1.0, 0.0, 0.0), Vec3d(0.0, 1.0, 0.0), Vec3d(0.0, 0.0, 0.5));
+    const Mat3d sentinel(7.0);
+    Mat3d out = sentinel;
+    CHECK(try_inverse(half, out, 0.5)); // a determinant equal to the bound passes
+    CHECK(out == Mat3d(Vec3d(1.0, 0.0, 0.0), Vec3d(0.0, 1.0, 0.0), Vec3d(0.0, 0.0, 2.0)));
+    out = sentinel;
+    CHECK_FALSE(try_inverse(half, out, std::nextafter(0.5, 1.0)));
+    CHECK(out == sentinel);
+    CHECK_FALSE(try_inverse(Mat3d::zero(), out, 1.0e-10));
+    CHECK(out == sentinel);
+
+    // The bound is on the magnitude: a reflection passes.
+    const Mat3d flip(Vec3d(-1.0, 0.0, 0.0), Vec3d(0.0, 1.0, 0.0), Vec3d(0.0, 0.0, 1.0));
+    CHECK(try_inverse(flip, out, 1.0));
+    CHECK(out == flip);
+
+    // A NaN determinant is not below any bound: the inverse is returned, NaNs and all.
+    Mat3d nan_entry = Mat3d::identity();
+    nan_entry.c0.x = std::numeric_limits<f64>::quiet_NaN();
+    CHECK(try_inverse(nan_entry, out, 1.0));
+    CHECK(std::isnan(out.c0.x));
+
+    // try_solve, in both sizes, on the same gate.
+    const Vec3d sentinel3(7.0, 7.0, 7.0);
+    Vec3d x3 = sentinel3;
+    CHECK(try_solve(half, Vec3d(1.0, 2.0, 3.0), x3, 0.5));
+    CHECK(x3 == Vec3d(1.0, 2.0, 6.0));
+    x3 = sentinel3;
+    CHECK_FALSE(try_solve(half, Vec3d(1.0, 2.0, 3.0), x3, std::nextafter(0.5, 1.0)));
+    CHECK(x3 == sentinel3);
+    const Mat2d quarter(Vec2d(0.5, 0.0), Vec2d(0.0, 0.5));
+    const Vec2d sentinel2(7.0, 7.0);
+    Vec2d x2 = sentinel2;
+    CHECK(try_solve(quarter, Vec2d(1.0, -1.0), x2, 0.25));
+    CHECK(x2 == Vec2d(2.0, -2.0));
+    x2 = sentinel2;
+    CHECK_FALSE(try_solve(quarter, Vec2d(1.0, -1.0), x2, std::nextafter(0.25, 1.0)));
+    CHECK(x2 == sentinel2);
+    CHECK_FALSE(try_solve(Mat2d::zero(), Vec2d(1.0, 1.0), x2, std::numeric_limits<f64>::min()));
+    CHECK(x2 == sentinel2);
 }
 
 // ---------------------------------------------------------------------------

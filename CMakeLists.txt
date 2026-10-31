@@ -694,10 +694,10 @@ crd_module(tools/cprof-export NAME cprof_export HOST EXECUTABLES cprof_export
     DEPENDS containers core memory perf)
 
 crd_module(runtime
-    DEPENDS app config containers core geometry-primitives hesap hesap-amg hesap-autodiff hesap-comms hesap-dense
-        hesap-direct hesap-dsp hesap-eigen hesap-fft hesap-interp hesap-iterative hesap-ode hesap-opt hesap-ordering
-        hesap-preconditioners hesap-quadrature hesap-resources hesap-sched hesap-sparse hesap-special hesap-stats
-        hesap-tensor hesap-wavelet jobs log math memory meshgen platform resources vm
+    DEPENDS app config containers core geometry-mesh-processing geometry-primitives hesap hesap-amg hesap-autodiff
+        hesap-comms hesap-dense hesap-direct hesap-dsp hesap-eigen hesap-fft hesap-interp hesap-iterative hesap-ode
+        hesap-opt hesap-ordering hesap-preconditioners hesap-quadrature hesap-resources hesap-sched hesap-sparse
+        hesap-special hesap-stats hesap-tensor hesap-wavelet jobs log math memory meshgen platform resources vm
     TESTS bench TEST_DEPENDS ceir ceir-cook geometry-bvh geometry-convex scene)
 
 if(CRD_BUILD_SANDBOX)

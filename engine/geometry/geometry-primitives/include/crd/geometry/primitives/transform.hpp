@@ -185,40 +185,6 @@ template <crd::math::MathScalar T>
                               crd::math::Vec2<T>(m.c1.x, m.c1.y));
 }
 
-// 3x3 determinant (cofactor expansion along the first column).
-template <crd::math::MathScalar T>
-[[nodiscard]] constexpr T det3(const crd::math::Mat3<T>& m) noexcept
-{
-    return m.c0.x * (m.c1.y * m.c2.z - m.c2.y * m.c1.z)
-         - m.c0.y * (m.c1.x * m.c2.z - m.c2.x * m.c1.z)
-         + m.c0.z * (m.c1.x * m.c2.y - m.c2.x * m.c1.y);
-}
-
-// 3x3 inverse-transpose. Computes `(inverse(M))^T = adjugate / det`.
-// Used by `transform_plane` (per D222) -- preserves perpendicularity under
-// general affine.
-template <crd::math::MathScalar T>
-[[nodiscard]] constexpr crd::math::Mat3<T> inverse_transpose_3(const crd::math::Mat3<T>& m) noexcept
-{
-    const T cof00 =  (m.c1.y * m.c2.z - m.c2.y * m.c1.z);
-    const T cof01 = -(m.c1.x * m.c2.z - m.c2.x * m.c1.z);
-    const T cof02 =  (m.c1.x * m.c2.y - m.c2.x * m.c1.y);
-    const T cof10 = -(m.c0.y * m.c2.z - m.c2.y * m.c0.z);
-    const T cof11 =  (m.c0.x * m.c2.z - m.c2.x * m.c0.z);
-    const T cof12 = -(m.c0.x * m.c2.y - m.c2.x * m.c0.y);
-    const T cof20 =  (m.c0.y * m.c1.z - m.c1.y * m.c0.z);
-    const T cof21 = -(m.c0.x * m.c1.z - m.c1.x * m.c0.z);
-    const T cof22 =  (m.c0.x * m.c1.y - m.c1.x * m.c0.y);
-
-    const T det      = m.c0.x * cof00 + m.c0.y * cof01 + m.c0.z * cof02;
-    const T inv_det  = static_cast<T>(1) / det;
-    // Note: adjugate is transpose of cofactor matrix; inverse = adjugate / det.
-    // We want INVERSE-TRANSPOSE = (cofactor / det)^TT = cofactor / det.
-    return crd::math::Mat3<T>(crd::math::Vec3<T>(cof00 * inv_det, cof01 * inv_det, cof02 * inv_det),
-                              crd::math::Vec3<T>(cof10 * inv_det, cof11 * inv_det, cof12 * inv_det),
-                              crd::math::Vec3<T>(cof20 * inv_det, cof21 * inv_det, cof22 * inv_det));
-}
-
 // Cached attributes of a Mat4 transform (D228).
 template <crd::math::MathScalar T>
 struct MatrixAttributes3
@@ -274,7 +240,7 @@ template <crd::math::MathScalar T>
         a.max_axial_scale = col2_len;
     }
 
-    a.determinant = det3(upper);
+    a.determinant = crd::math::determinant(upper);
 
     // Uniform scale: all three column lengths agree within a relative epsilon.
     const T eps          = crd::math::default_epsilon<T>() * static_cast<T>(10);
@@ -319,7 +285,7 @@ template <crd::math::MathScalar T>
     const T    col1_len    = static_cast<T>(std::sqrt(static_cast<double>(col1_len_sq)));
 
     a.max_axial_scale      = (col0_len > col1_len) ? col0_len : col1_len;
-    a.determinant          = upper.c0.x * upper.c1.y - upper.c0.y * upper.c1.x;
+    a.determinant          = crd::math::determinant(upper);
 
     const T eps          = crd::math::default_epsilon<T>() * static_cast<T>(10);
     const T avg_col_len  = (col0_len + col1_len) / static_cast<T>(2);
@@ -586,7 +552,7 @@ template <crd::math::MathScalar T>
     }
 
     const auto                  upper = detail_transform::upper3(m);
-    [[maybe_unused]] const T    det   = detail_transform::det3(upper);
+    [[maybe_unused]] const T    det   = crd::math::determinant(upper);
     CRD_ASSERT(std::abs(det) > crd::math::default_epsilon<T>()); // D225
 
     // Pick any point on the original plane: p = -d * n. Transform it.
@@ -594,7 +560,7 @@ template <crd::math::MathScalar T>
     const T       d_old      = plane.d;
     const auto    p_on_plane = n_old * (-d_old);
     const auto    p_new      = detail_transform::mul_point(m, p_on_plane);
-    const auto    inv_t      = detail_transform::inverse_transpose_3(upper);
+    const auto    inv_t      = crd::math::inverse_transpose(upper);
     auto          n_new      = inv_t * n_old;
     // Renormalize the new normal (inverse-transpose can change its magnitude).
     (void) crd::math::try_normalize(n_new);
@@ -664,10 +630,10 @@ template <crd::math::MathScalar T>
     }
 
     const auto                  upper = detail_transform::upper3(m);
-    [[maybe_unused]] const T    det   = detail_transform::det3(upper);
+    [[maybe_unused]] const T    det   = crd::math::determinant(upper);
     CRD_ASSERT(std::abs(det) > crd::math::default_epsilon<T>()); // D225
 
-    const auto inv_t = detail_transform::inverse_transpose_3(upper);
+    const auto inv_t = crd::math::inverse_transpose(upper);
 
     Frustum<T> out;
     for (crd::usize i = 0U; i < 6U; ++i)

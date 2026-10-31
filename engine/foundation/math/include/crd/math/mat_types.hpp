@@ -204,6 +204,153 @@ template <MathScalar T> [[nodiscard]] constexpr Mat4<T> transpose(const Mat4<T>&
                    Vec4<T>(m.c0.z, m.c1.z, m.c2.z, m.c3.z), Vec4<T>(m.c0.w, m.c1.w, m.c2.w, m.c3.w));
 }
 
+// The closed-form small-matrix routines, crd-math's alone (cmake/capability-owners.json,
+// math.fixed-size-linear-algebra). determinant is the cofactor expansion along the first column, in the order written,
+// and the inverses and the inverse-transpose divide by that value, so a caller that tests the determinant before
+// inverting tests the value the inverse uses. The 3x3 solve takes each of Cramer's determinants as determinant() of the
+// transpose (the expansion along the first row, in which the four share their minors), so its determinant can differ
+// from determinant(m)'s in the last bit; try_solve gates on the value it divides by. The inverses and solves need a
+// regular matrix (a zero determinant gives infinities and NaNs); try_inverse and try_solve refuse a small one.
+
+template <MathScalar T> [[nodiscard]] constexpr T determinant(const Mat2<T>& m) noexcept
+{
+    return m.c0.x * m.c1.y - m.c0.y * m.c1.x;
+}
+
+template <MathScalar T> [[nodiscard]] constexpr T determinant(const Mat3<T>& m) noexcept
+{
+    return m.c0.x * (m.c1.y * m.c2.z - m.c2.y * m.c1.z) - m.c0.y * (m.c1.x * m.c2.z - m.c2.x * m.c1.z) +
+           m.c0.z * (m.c1.x * m.c2.y - m.c2.x * m.c1.y);
+}
+
+namespace detail
+{
+// The cofactor matrix of m, column-major like m: column j holds the signed minors of column j's entries.
+template <MathScalar T> [[nodiscard]] constexpr Mat3<T> cofactors(const Mat3<T>& m) noexcept
+{
+    return Mat3<T>(Vec3<T>(m.c1.y * m.c2.z - m.c2.y * m.c1.z, -(m.c1.x * m.c2.z - m.c2.x * m.c1.z),
+                           m.c1.x * m.c2.y - m.c2.x * m.c1.y),
+                   Vec3<T>(-(m.c0.y * m.c2.z - m.c2.y * m.c0.z), m.c0.x * m.c2.z - m.c2.x * m.c0.z,
+                           -(m.c0.x * m.c2.y - m.c2.x * m.c0.y)),
+                   Vec3<T>(m.c0.y * m.c1.z - m.c1.y * m.c0.z, -(m.c0.x * m.c1.z - m.c1.x * m.c0.z),
+                           m.c0.x * m.c1.y - m.c1.x * m.c0.y));
+}
+
+// determinant(m) from m's cofactor matrix: the first column's entries times their cofactors, the same bits.
+template <MathScalar T> [[nodiscard]] constexpr T determinant_of(const Mat3<T>& m, const Mat3<T>& cof) noexcept
+{
+    return m.c0.x * cof.c0.x + m.c0.y * cof.c0.y + m.c0.z * cof.c0.z;
+}
+
+// The inverse from the cofactor matrix and the determinant: the adjugate (the transposed cofactors) over det.
+template <MathScalar T> [[nodiscard]] constexpr Mat3<T> adjugate_over(const Mat3<T>& cof, T det) noexcept
+{
+    const Mat3<T> adjugate = transpose(cof);
+    const T inv_det = static_cast<T>(1) / det;
+    return Mat3<T>(adjugate.c0 * inv_det, adjugate.c1 * inv_det, adjugate.c2 * inv_det);
+}
+
+// Cramer's rule for m x = b: the numerators (entry i the determinant of m with column i replaced by b) and m's.
+template <typename V, MathScalar T> struct Cramer
+{
+    V numerators;
+    T det;
+};
+
+template <MathScalar T> [[nodiscard]] constexpr Cramer<Vec2<T>, T> cramer(const Mat2<T>& m, const Vec2<T>& b) noexcept
+{
+    return {Vec2<T>(b.x * m.c1.y - b.y * m.c1.x, m.c0.x * b.y - m.c0.y * b.x), determinant(m)};
+}
+
+// Each of the four determinants is determinant() of its transpose, the expansion along the first row, so all four share
+// the six 2x2 minors of rows 1 and 2 of [m | b]: 27 multiplications, where the adjugate's numerators take 33.
+template <MathScalar T> [[nodiscard]] constexpr Cramer<Vec3<T>, T> cramer(const Mat3<T>& m, const Vec3<T>& b) noexcept
+{
+    const T m12 = m.c1.y * m.c2.z - m.c2.y * m.c1.z; // rows 1 and 2 of columns 1 and 2
+    const T m02 = m.c0.y * m.c2.z - m.c2.y * m.c0.z;
+    const T m01 = m.c0.y * m.c1.z - m.c1.y * m.c0.z;
+    const T b2 = b.y * m.c2.z - m.c2.y * b.z; // of b and column 2
+    const T b1 = b.y * m.c1.z - m.c1.y * b.z;
+    const T b0 = m.c0.y * b.z - b.y * m.c0.z; // of column 0 and b
+    return {Vec3<T>(b.x * m12 - m.c1.x * b2 + m.c2.x * b1, m.c0.x * b2 - b.x * m02 + m.c2.x * b0,
+                    -(m.c0.x * b1) - m.c1.x * b0 + b.x * m01),
+            m.c0.x * m12 - m.c1.x * m02 + m.c2.x * m01};
+}
+} // namespace detail
+
+template <MathScalar T> [[nodiscard]] constexpr Mat2<T> inverse(const Mat2<T>& m) noexcept
+{
+    const T inv_det = static_cast<T>(1) / determinant(m);
+    return Mat2<T>(Vec2<T>(m.c1.y * inv_det, -m.c0.y * inv_det), Vec2<T>(-m.c1.x * inv_det, m.c0.x * inv_det));
+}
+
+template <MathScalar T> [[nodiscard]] constexpr Mat3<T> inverse(const Mat3<T>& m) noexcept
+{
+    const Mat3<T> cof = detail::cofactors(m);
+    return detail::adjugate_over(cof, detail::determinant_of(m, cof));
+}
+
+// The inverse when |determinant(m)| >= min_abs_det (a NaN determinant passes, and gives NaNs); else false, `out`
+// untouched.
+template <MathScalar T> [[nodiscard]] constexpr bool try_inverse(const Mat3<T>& m, Mat3<T>& out, T min_abs_det) noexcept
+{
+    const Mat3<T> cof = detail::cofactors(m);
+    const T det = detail::determinant_of(m, cof);
+    if (abs(det) < min_abs_det)
+    {
+        return false;
+    }
+    out = detail::adjugate_over(cof, det);
+    return true;
+}
+
+// transpose(inverse(m)), the map of normals under m: the cofactor matrix over the determinant.
+template <MathScalar T> [[nodiscard]] constexpr Mat3<T> inverse_transpose(const Mat3<T>& m) noexcept
+{
+    const Mat3<T> cof = detail::cofactors(m);
+    const T inv_det = static_cast<T>(1) / detail::determinant_of(m, cof);
+    return Mat3<T>(cof.c0 * inv_det, cof.c1 * inv_det, cof.c2 * inv_det);
+}
+
+// The x with m x = b, by Cramer's rule: x_i is the determinant of m with column i replaced by b, over m's.
+template <MathScalar T> [[nodiscard]] constexpr Vec2<T> solve(const Mat2<T>& m, const Vec2<T>& b) noexcept
+{
+    const auto c = detail::cramer(m, b);
+    return c.numerators * (static_cast<T>(1) / c.det);
+}
+
+template <MathScalar T> [[nodiscard]] constexpr Vec3<T> solve(const Mat3<T>& m, const Vec3<T>& b) noexcept
+{
+    const auto c = detail::cramer(m, b);
+    return c.numerators * (static_cast<T>(1) / c.det);
+}
+
+// solve(m, b) when the |determinant| it divides by is >= min_abs_det (a NaN passes, as in try_inverse); else false,
+// `out` untouched.
+template <MathScalar T>
+[[nodiscard]] constexpr bool try_solve(const Mat2<T>& m, const Vec2<T>& b, Vec2<T>& out, T min_abs_det) noexcept
+{
+    const auto c = detail::cramer(m, b);
+    if (abs(c.det) < min_abs_det)
+    {
+        return false;
+    }
+    out = c.numerators * (static_cast<T>(1) / c.det);
+    return true;
+}
+
+template <MathScalar T>
+[[nodiscard]] constexpr bool try_solve(const Mat3<T>& m, const Vec3<T>& b, Vec3<T>& out, T min_abs_det) noexcept
+{
+    const auto c = detail::cramer(m, b);
+    if (abs(c.det) < min_abs_det)
+    {
+        return false;
+    }
+    out = c.numerators * (static_cast<T>(1) / c.det);
+    return true;
+}
+
 // Laplace cofactor expansion for 4x4 inverse (column-major: c0..c3, each a Vec4 column).
 // Undefined behaviour if the matrix is singular (det == 0).
 template <MathScalar T> [[nodiscard]] constexpr Mat4<T> inverse(const Mat4<T>& m) noexcept

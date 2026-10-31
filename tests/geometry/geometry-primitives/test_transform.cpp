@@ -15,6 +15,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <crd/core/seed_generators.hpp>
 #include <crd/core/types.hpp>
 #include <crd/geometry/primitives/primitives.hpp>
 #include <crd/geometry/primitives/transform.hpp>
@@ -23,6 +24,7 @@
 #include <crd/units/quantity_aliases.hpp>
 #include <crd/math/vec.hpp>
 
+#include <bit>
 #include <cmath>
 
 namespace
@@ -571,4 +573,106 @@ TEST_CASE("transform: f64 instantiations work end-to-end",
     const Sphere<f64> sphere{Vec3<f64>(0, 0, 0), 1.0};
     const auto        sphere_out = transform_sphere(s, sphere);
     REQUIRE(std::abs(sphere_out.radius - 3.0) < 1e-12);
+}
+
+// ---------------------------------------------------------------------------
+// OWN.1: the 3x3 determinant and inverse-transpose this header carried moved onto crd-math (determinant,
+// inverse_transpose), and the 2D attributes' determinant with them. The copies are written out here as they were;
+// crd-math gives their bits on every input of a 4096-draw sweep, in both precisions.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+template <typename T> [[nodiscard]] T removed_det3(const crd::math::Mat3<T>& m) noexcept
+{
+    return m.c0.x * (m.c1.y * m.c2.z - m.c2.y * m.c1.z)
+         - m.c0.y * (m.c1.x * m.c2.z - m.c2.x * m.c1.z)
+         + m.c0.z * (m.c1.x * m.c2.y - m.c2.x * m.c1.y);
+}
+
+template <typename T> [[nodiscard]] crd::math::Mat3<T> removed_inverse_transpose_3(const crd::math::Mat3<T>& m) noexcept
+{
+    const T cof00 =  (m.c1.y * m.c2.z - m.c2.y * m.c1.z);
+    const T cof01 = -(m.c1.x * m.c2.z - m.c2.x * m.c1.z);
+    const T cof02 =  (m.c1.x * m.c2.y - m.c2.x * m.c1.y);
+    const T cof10 = -(m.c0.y * m.c2.z - m.c2.y * m.c0.z);
+    const T cof11 =  (m.c0.x * m.c2.z - m.c2.x * m.c0.z);
+    const T cof12 = -(m.c0.x * m.c2.y - m.c2.x * m.c0.y);
+    const T cof20 =  (m.c0.y * m.c1.z - m.c1.y * m.c0.z);
+    const T cof21 = -(m.c0.x * m.c1.z - m.c1.x * m.c0.z);
+    const T cof22 =  (m.c0.x * m.c1.y - m.c1.x * m.c0.y);
+    const T det     = m.c0.x * cof00 + m.c0.y * cof01 + m.c0.z * cof02;
+    const T inv_det = static_cast<T>(1) / det;
+    return crd::math::Mat3<T>(crd::math::Vec3<T>(cof00 * inv_det, cof01 * inv_det, cof02 * inv_det),
+                              crd::math::Vec3<T>(cof10 * inv_det, cof11 * inv_det, cof12 * inv_det),
+                              crd::math::Vec3<T>(cof20 * inv_det, cof21 * inv_det, cof22 * inv_det));
+}
+
+template <typename T> [[nodiscard]] bool same_bits(T a, T b) noexcept
+{
+    if constexpr (sizeof(T) == sizeof(crd::u32))
+    {
+        return std::bit_cast<crd::u32>(a) == std::bit_cast<crd::u32>(b);
+    }
+    else
+    {
+        return std::bit_cast<crd::u64>(a) == std::bit_cast<crd::u64>(b);
+    }
+}
+
+template <typename T> [[nodiscard]] bool same_bits(const crd::math::Mat3<T>& a, const crd::math::Mat3<T>& b) noexcept
+{
+    for (crd::usize j = 0; j < 3U; ++j)
+    {
+        for (crd::usize i = 0; i < 3U; ++i)
+        {
+            if (!same_bits(a[j][i], b[j][i]))
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// Entries in [-4, 4) with an exponent spread, so small and large cofactors both occur.
+template <typename T> [[nodiscard]] crd::math::Mat3<T> spread_mat3(crd::u64& state) noexcept
+{
+    crd::math::Mat3<T> m;
+    for (crd::usize j = 0; j < 3U; ++j)
+    {
+        for (crd::usize i = 0; i < 3U; ++i)
+        {
+            const crd::u64 bits = crd::splitmix64_next(state);
+            const double unit = static_cast<double>(bits >> 11U) * 0x1.0p-52 - 1.0;
+            m[j][i] = static_cast<T>(std::ldexp(unit, static_cast<int>(bits & 7U) - 5) * 4.0);
+        }
+    }
+    return m;
+}
+
+template <typename T> void check_moved_matrix_routines()
+{
+    crd::u64 state = 0x7AA5'F0E3ULL;
+    for (crd::usize n = 0; n < 4096U; ++n)
+    {
+        const crd::math::Mat3<T> m = spread_mat3<T>(state);
+        REQUIRE(same_bits(crd::math::determinant(m), removed_det3(m)));
+        if (removed_det3(m) != static_cast<T>(0))
+        {
+            REQUIRE(same_bits(crd::math::inverse_transpose(m), removed_inverse_transpose_3(m)));
+        }
+        const crd::math::Mat2<T> upper(crd::math::Vec2<T>(m.c0.x, m.c0.y), crd::math::Vec2<T>(m.c1.x, m.c1.y));
+        REQUIRE(same_bits(crd::math::determinant(upper), upper.c0.x * upper.c1.y - upper.c0.y * upper.c1.x));
+    }
+}
+
+} // namespace
+
+TEST_CASE("transform: the determinant and inverse-transpose moved onto crd-math keep their bits",
+          "[transform][own]")
+{
+    check_moved_matrix_routines<f32>();
+    check_moved_matrix_routines<f64>();
 }

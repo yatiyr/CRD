@@ -116,10 +116,25 @@
 #define CRD_KERNEL_TABLE_NAME(base, level) CRD_KERNEL_TABLE_JOIN(base, level)
 #define CRD_KERNEL_TABLE(base) CRD_KERNEL_TABLE_NAME(base, CRD_KERNEL_LEVEL_SUFFIX)
 
+// The instruction set the unit being compiled targets, for code whose choice of instruction is not a kernel table's:
+// CRD_TARGET_X64 is 1 on x64 (ARM64EC, which compiles x64 code as AArch64, excluded), and CRD_TARGET_X64_FMA is 1 when
+// such a unit may also issue the FMA instruction. That is GCC and Clang's -mfma (the avx2 and avx512 levels' x86-64-v3
+// and -v4) and MSVC's /arch:AVX2 and up, which defines __AVX2__ but no __FMA__. Both are 0 on every other target.
+#if (defined(__x86_64__) || defined(_M_X64)) && !defined(_M_ARM64EC)
+#define CRD_TARGET_X64 1
+#if (defined(_MSC_VER) && defined(__AVX2__)) || (!defined(_MSC_VER) && defined(__FMA__))
+#define CRD_TARGET_X64_FMA 1
+#else
+#define CRD_TARGET_X64_FMA 0
+#endif
+#else
+#define CRD_TARGET_X64 0
+#define CRD_TARGET_X64_FMA 0
+#endif
+
 // 1 in general code of an x64 build without FMA: the scalar transcendental families reach their bodies through
 // crd-math's scalar table (crd/math/scalar_kernels.hpp), so a CPU with FMA runs them with the instruction inline.
-#if !defined(CRD_KERNEL_LEVEL) && (defined(__x86_64__) || (defined(_M_X64) && !defined(_M_ARM64EC))) &&                \
-    !defined(__FMA__) && !defined(__AVX2__)
+#if !defined(CRD_KERNEL_LEVEL) && CRD_TARGET_X64 && !CRD_TARGET_X64_FMA
 #define CRD_MATH_SCALAR_DISPATCH 1
 #else
 #define CRD_MATH_SCALAR_DISPATCH 0

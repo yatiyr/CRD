@@ -8,6 +8,7 @@
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/core/kernel_level.hpp>
+#include <crd/math/libm.hpp>
 #include <crd/math/select.hpp>
 #include <crd/math/simd/backend.hpp>
 
@@ -553,7 +554,7 @@ TEST_CASE("simd types: every level's fused multiply-add rounds once on hard case
     }
 }
 
-#if (defined(_MSC_VER) && defined(_M_X64)) || (!defined(_MSC_VER) && defined(__x86_64__) && !defined(__FMA__))
+#if CRD_TARGET_X64 && !CRD_TARGET_X64_FMA // libm.hpp's software bodies (FmaBody::Software)
 // The bodies libm::fma runs on x64 outside the avx2 and avx512 levels while the C library's fma is not the instruction
 // (crd/math/libm.hpp): the f64 integer body and the f32 rounding to odd, and libm::fma itself. The oracle for the hard
 // cases is the UCRT's fma with its FMA3 bodies enabled, or glibc's, which rounds once in its software body too; the
@@ -562,6 +563,7 @@ TEST_CASE("simd types: every level's fused multiply-add rounds once on hard case
 TEST_CASE("simd types: the x64 soft fma bodies give the correctly rounded bits", "[math][simd-levels][kernels]")
 {
     namespace soft = crd::math::libm::detail;
+    STATIC_REQUIRE(crd::math::libm::kFmaBody == crd::math::libm::FmaBody::Software);
     const auto f32_of = [](crd::u32 bits)
     {
         return std::bit_cast<crd::f32>(bits);

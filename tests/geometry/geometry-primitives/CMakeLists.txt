@@ -15,6 +15,7 @@ add_executable(crd-geometry-primitives-tests
     test_predicates.cpp
     test_queries_typed.cpp  # v0d-2
     test_transform.cpp      # v11
+    test_circumcenter.cpp
 )
 
 target_include_directories(crd-geometry-primitives-tests PRIVATE

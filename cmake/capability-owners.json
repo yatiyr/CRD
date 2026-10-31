@@ -23,9 +23,6 @@
       ],
       "signatures": [
         {"regex": "\\b__(?:AVX\\w*|FMA|F16C|BMI2?|SSE\\d\\w*|SSSE3|PCLMUL|VPCLMULQDQ)__\\b|\\b__ARM_(?:NEON|FEATURE_\\w+)\\b", "what": "a compiler ISA macro read outside the kernel-level header"}
-      ],
-      "pending": [
-        {"path": "engine/foundation/math/include/crd/math/libm.hpp", "row": "OWN.1"}
       ]
     },
     {
@@ -234,7 +231,7 @@
     },
     {
       "id": "math.fixed-size-linear-algebra",
-      "summary": "Fixed-size vector, matrix and quaternion types and their closed-form operations: 2x2, 3x3 and 4x4 determinants, inverses, inverse-transposes and small solves.",
+      "summary": "Fixed-size vector, matrix and quaternion types and their closed-form operations: 2x2 and 3x3 determinants, inverses, the inverse-transpose and Cramer solves, and the 4x4 inverse.",
       "owner": "math",
       "api": [
         "engine/foundation/math/include/crd/math/vec.hpp",
@@ -243,9 +240,6 @@
       ],
       "signatures": [
         {"regex": "\\b(?:det|determinant|inverse|invert|inverse_transpose|solve)_?(?:2|3|4|2x2|3x3|4x4)\\s*\\(", "what": "a closed-form small-matrix routine"}
-      ],
-      "pending": [
-        {"path": "engine/geometry/geometry-primitives/include/crd/geometry/primitives/transform.hpp", "row": "OWN.1"}
       ],
       "allowed": [
         {"path": "engine/gpu/kir/include/crd/kir/ckir_cuda.hpp", "why": "CKIR's CUDA emitter writes the determinant into generated device source; the host routine is crd-math's."}

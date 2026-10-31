@@ -84,6 +84,7 @@
         "runtime/examples/bench_resampling.cpp",
         "runtime/examples/bench_rng.cpp",
         "runtime/examples/bench_samplers.cpp",
+        "runtime/examples/bench_small_matrix.cpp",
         "runtime/examples/bench_sparse_tensor.cpp",
         "runtime/examples/bench_special_batch.cpp",
         "runtime/examples/bench_tensor_io.cpp",

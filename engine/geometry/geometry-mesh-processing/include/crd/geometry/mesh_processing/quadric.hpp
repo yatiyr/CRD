@@ -33,8 +33,8 @@
 //
 // **Determinism contract:** all operations use deterministic FP per
 // `crd-math` (no transcendentals; no std::sort on FP). The 3x3 inverse in
-// `optimal_position` uses cofactor expansion + Cramer's rule (no pivoting)
-// so the same input yields the same output across compilers.
+// `optimal_position` is crd-math's cofactor inverse (`try_inverse`, no
+// pivoting), so the same input yields the same output across compilers.
 //
 // **Two-layer typing:** raw `<MathScalar T>` template only. Typed
 // (`Quantity`-wrapped) consumers ride wrappers in `quadric_typed.hpp` at
@@ -42,6 +42,7 @@
 // ---------------------------------------------------------------------------
 
 #include <crd/core/types.hpp>
+#include <crd/math/mat.hpp>
 #include <crd/math/scalar.hpp>
 #include <crd/math/vec.hpp>
 
@@ -144,39 +145,16 @@ template <crd::math::MathScalar T>
     const Quadric<T>& q,
     T                 det_epsilon = static_cast<T>(1e-10)) noexcept
 {
-    const T a = q.data[0]; // m00
-    const T b = q.data[1]; // m01
-    const T c = q.data[2]; // m02
-    const T d = q.data[4]; // m11
-    const T e = q.data[5]; // m12
-    const T f = q.data[7]; // m22
-
-    // det = a(df - e²) - b(bf - ce) + c(be - cd)
-    const T det = a * (d * f - e * e) - b * (b * f - c * e) + c * (b * e - c * d);
-    if (crd::math::abs(det) < det_epsilon)
+    // The symmetric upper-left 3x3 block, by columns.
+    const crd::math::Mat3<T> m{crd::math::Vec3<T>{q.data[0], q.data[1], q.data[2]},
+                               crd::math::Vec3<T>{q.data[1], q.data[4], q.data[5]},
+                               crd::math::Vec3<T>{q.data[2], q.data[5], q.data[7]}};
+    crd::math::Mat3<T> inv{};
+    if (!crd::math::try_inverse(m, inv, det_epsilon))
     {
         return std::nullopt;
     }
-
-    const T rx = -q.data[3]; // -m03
-    const T ry = -q.data[6]; // -m13
-    const T rz = -q.data[8]; // -m23
-
-    const T inv_det = T{1} / det;
-
-    // Symmetric 3x3 inverse via cofactors (matrix of cofactors / det).
-    const T i00 = (d * f - e * e) * inv_det;
-    const T i01 = -(b * f - c * e) * inv_det;
-    const T i02 = (b * e - c * d) * inv_det;
-    const T i11 = (a * f - c * c) * inv_det;
-    const T i12 = -(a * e - b * c) * inv_det;
-    const T i22 = (a * d - b * b) * inv_det;
-
-    return crd::math::Vec3<T>{
-        i00 * rx + i01 * ry + i02 * rz,
-        i01 * rx + i11 * ry + i12 * rz,
-        i02 * rx + i12 * ry + i22 * rz,
-    };
+    return inv * crd::math::Vec3<T>{-q.data[3], -q.data[6], -q.data[8]};
 }
 
 } // namespace crd::geometry::mesh_processing

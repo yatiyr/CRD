@@ -10,12 +10,15 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <crd/core/seed_generators.hpp>
 #include <crd/core/types.hpp>
 #include <crd/geometry/mesh_processing/quadric.hpp>
 #include <crd/math/scalar.hpp>
 #include <crd/math/vec.hpp>
 
+#include <bit>
 #include <cmath>
+#include <optional>
 
 using crd::f32;
 using crd::f64;
@@ -132,4 +135,122 @@ TEST_CASE("Quadric: f64 precision tier evaluates plane-distance correctly",
     CHECK(crd::math::abs(evaluate(q, Vec3<f64>{1, 2, 3})) < 1e-12);
     // Origin → 14.
     CHECK(crd::math::abs(evaluate(q, Vec3<f64>{0, 0, 0}) - 14.0) < 1e-10);
+}
+
+// ---------------------------------------------------------------------------
+// OWN.1: optimal_position's symmetric cofactor inverse moved onto crd-math (try_inverse and the matrix-vector
+// product). The copy is written out here as it was; crd-math gives its bits, and its refusals, on every quadric of a
+// sweep in both precisions: sums of planes (the decimator's quadrics, mostly regular) and raw symmetric blocks.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+template <typename T>
+[[nodiscard]] std::optional<Vec3<T>> removed_optimal_position(const Quadric<T>& q, T det_epsilon) noexcept
+{
+    const T a = q.data[0];
+    const T b = q.data[1];
+    const T c = q.data[2];
+    const T d = q.data[4];
+    const T e = q.data[5];
+    const T f = q.data[7];
+    const T det = a * (d * f - e * e) - b * (b * f - c * e) + c * (b * e - c * d);
+    if (crd::math::abs(det) < det_epsilon)
+    {
+        return std::nullopt;
+    }
+    const T rx = -q.data[3];
+    const T ry = -q.data[6];
+    const T rz = -q.data[8];
+    const T inv_det = T{1} / det;
+    const T i00 = (d * f - e * e) * inv_det;
+    const T i01 = -(b * f - c * e) * inv_det;
+    const T i02 = (b * e - c * d) * inv_det;
+    const T i11 = (a * f - c * c) * inv_det;
+    const T i12 = -(a * e - b * c) * inv_det;
+    const T i22 = (a * d - b * b) * inv_det;
+    return Vec3<T>{i00 * rx + i01 * ry + i02 * rz, i01 * rx + i11 * ry + i12 * rz, i02 * rx + i12 * ry + i22 * rz};
+}
+
+template <typename T> [[nodiscard]] bool same_bits(T x, T y) noexcept
+{
+    if constexpr (sizeof(T) == sizeof(crd::u32))
+    {
+        return std::bit_cast<crd::u32>(x) == std::bit_cast<crd::u32>(y);
+    }
+    else
+    {
+        return std::bit_cast<crd::u64>(x) == std::bit_cast<crd::u64>(y);
+    }
+}
+
+template <typename T> [[nodiscard]] T unit_draw(crd::u64& state) noexcept
+{
+    return static_cast<T>(static_cast<double>(crd::splitmix64_next(state) >> 11U) * 0x1.0p-52 - 1.0);
+}
+
+// Returns how many of the quadrics were regular, so the caller can see both paths ran.
+template <typename T> crd::usize check_moved_optimal_position(T det_epsilon)
+{
+    crd::u64 state = 0x0E57'A7E0ULL;
+    crd::usize regular = 0;
+    for (crd::usize n = 0; n < 4096U; ++n)
+    {
+        Quadric<T> q = Quadric<T>::zero();
+        if ((n & 1U) == 0U)
+        {
+            const crd::usize planes = 1U + (n / 2U) % 4U; // one to four planes: singular to regular
+            for (crd::usize k = 0; k < planes; ++k)
+            {
+                const T a = unit_draw<T>(state);
+                const T b = unit_draw<T>(state);
+                const T c = unit_draw<T>(state);
+                const T d = unit_draw<T>(state);
+                q += Quadric<T>::from_plane(a, b, c, d);
+            }
+        }
+        else
+        {
+            for (T& x : q.data)
+            {
+                x = unit_draw<T>(state);
+            }
+        }
+        const auto expected = removed_optimal_position(q, det_epsilon);
+        const auto got = optimal_position(q, det_epsilon);
+        REQUIRE(got.has_value() == expected.has_value());
+        if (expected.has_value())
+        {
+            ++regular;
+            REQUIRE(same_bits(got->x, expected->x));
+            REQUIRE(same_bits(got->y, expected->y));
+            REQUIRE(same_bits(got->z, expected->z));
+        }
+    }
+    return regular;
+}
+
+} // namespace
+
+TEST_CASE("Quadric: optimal_position on crd-math keeps the removed copy's bits and refusals",
+          "[geometry-mesh-processing][quadric][own]")
+{
+    const crd::usize regular32 = check_moved_optimal_position<f32>(static_cast<f32>(1e-10));
+    const crd::usize regular64 = check_moved_optimal_position<f64>(1e-10);
+    CHECK(regular32 > 1000U);
+    CHECK(regular32 < 4096U);
+    CHECK(regular64 > 1000U);
+    CHECK(regular64 < 4096U);
+
+    // A determinant equal to the bound passes on both sides (diagonal 1, 1, 2^-20: exact in f32 and f64).
+    Quadric<f64> edge = Quadric<f64>::zero();
+    edge.data[0] = 1.0;
+    edge.data[4] = 1.0;
+    edge.data[7] = 0x1.0p-20;
+    edge.data[3] = -2.0;
+    REQUIRE(optimal_position(edge, 0x1.0p-20).has_value());
+    CHECK(removed_optimal_position(edge, 0x1.0p-20).has_value());
+    CHECK_FALSE(optimal_position(edge, 0x1.0p-19).has_value());
+    CHECK(optimal_position(edge, 0x1.0p-20)->x == 2.0);
 }
