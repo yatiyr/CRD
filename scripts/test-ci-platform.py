@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -747,6 +748,32 @@ class Executors(unittest.TestCase):
         reason, detail = executor.lost_reason(dict(handle, operation='op-refused'))
         self.assertEqual(reason, 'launch_failed', 'a quota refusal is not a lost machine')
         self.assertIn('SSD_TOTAL_GB', detail)
+
+    def test_powershell_scripts_parse_and_define_no_alias_named_function(self):
+        """A function named like a built-in alias is never called (an alias wins): the job script's `Md` ran mkdir.
+        Both PowerShell scripts must also parse; checked with Windows PowerShell where it exists."""
+        devices = pipeline.devices_by_id(REGISTRY)
+        scripts = {'startup': gce_vm.WINDOWS_STARTUP,
+                   'bake': gce_vm.provision_script(devices['gce-windows-x64-nvidia-t4'], [])}
+        names = sorted({n for text in scripts.values() for n in re.findall(r'^\s*function ([\w-]+)', text, re.M)})
+        self.assertIn('Get-Metadata', names)
+        self.assertTrue(all('-' in n for n in names), 'Verb-Noun names cannot collide with an alias: %s' % names)
+        shell = shutil.which('powershell') or shutil.which('pwsh')
+        if not shell:
+            self.skipTest('no PowerShell on this host')
+        aliases = subprocess.run([shell, '-NoProfile', '-Command', '(Get-Alias).Name -join ","'], capture_output=True,
+                                 text=True, check=True).stdout.strip().lower().split(',')
+        self.assertFalse(set(n.lower() for n in names) & set(aliases))
+        self.assertIn('md', aliases, 'the alias list was read')
+        for label, text in scripts.items():
+            with tempfile.TemporaryDirectory() as scratch:
+                path = Path(scratch) / ('%s.ps1' % label)
+                path.write_text(text, encoding='utf-8')
+                parsed = subprocess.run([shell, '-NoProfile', '-Command',
+                                         '$e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile('
+                                         '"%s", [ref]$null, [ref]$e); $e.Count' % path], capture_output=True,
+                                        text=True, check=True).stdout.strip()
+            self.assertEqual(parsed, '0', label)
 
     def test_gce_console_and_android_machine_features(self):
         executor = gce_vm.GceVm({})

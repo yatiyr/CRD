@@ -145,10 +145,13 @@ sudo -u cerid -H python3 /var/lib/cerid-ci/cerid-agent.py start --mode one-shot 
 WINDOWS_STARTUP = r'''# Cerid CI one-job runner (ci/executors/gce_vm.py). Values come from instance metadata; the agent's digest from the
 # coordinator that launched this machine. The machine holds no credential: its agent proves the VM's identity.
 $ErrorActionPreference = 'Stop'
-function Md($path) { Invoke-RestMethod -Headers @{'Metadata-Flavor'='Google'} -Uri "http://metadata.google.internal/computeMetadata/v1/instance/$path" }
-$name = Md 'name'; $zone = (Md 'zone').Split('/')[-1]
+# Not `Md`: that is PowerShell's alias of mkdir, and an alias wins over a function of the same name.
+function Get-Metadata($path) { Invoke-RestMethod -Headers @{'Metadata-Flavor'='Google'} -Uri "http://metadata.google.internal/computeMetadata/v1/instance/$path" }
+$name = $null
 try {
-  $url = Md 'attributes/cerid-agent-url'; $sha = Md 'attributes/cerid-agent-sha256'; $coordinator = Md 'attributes/cerid-coordinator'
+  $name = Get-Metadata 'name'; $zone = (Get-Metadata 'zone').Split('/')[-1]
+  $url = Get-Metadata 'attributes/cerid-agent-url'; $sha = Get-Metadata 'attributes/cerid-agent-sha256'
+  $coordinator = Get-Metadata 'attributes/cerid-coordinator'
   $work = 'C:\cerid-ci'; New-Item -ItemType Directory -Force -Path $work, 'C:\b' | Out-Null
   Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile "$work\cerid-agent.py"
   if ((Get-FileHash -Algorithm SHA256 "$work\cerid-agent.py").Hash.ToLower() -ne $sha) { throw 'agent checksum mismatch' }
@@ -156,7 +159,12 @@ try {
   if (-not $py) { $py = 'C:\Program Files\Python312\python.exe' }
   & $py "$work\cerid-agent.py" start --mode one-shot --identity gce --coordinator $coordinator --build-path 'C:\b' --name $name
 } finally {
-  & gcloud compute instances delete $name --zone $zone --quiet
+  # The machine deletes itself; when that is refused or its name is unknown it powers off, and the reaper deletes it.
+  $deleted = $false
+  try {
+    if ($name) { & gcloud compute instances delete $name --zone $zone --quiet; $deleted = $LASTEXITCODE -eq 0 }
+  } catch { $deleted = $false }
+  if (-not $deleted) { Stop-Computer -Force }
 }
 '''
 
