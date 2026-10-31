@@ -136,7 +136,8 @@ Done in the `cerid-ci` project, following [the setup recipe](../recipes/ci-platf
   we do CI's". The coordinator no longer polls `main` or runs the nightly and weekly schedules. The operator starts a
   build at a checkpoint (a row or group closing, evidence a Done needs, a batch of risky changes), and it tests
   everything changed since the last passing build. The tracks test on their own machines; GitHub Actions stays free
-  while the repository is public.
+  while the repository is public. Automatic bisection, which started first-bad-commit builds after a failure, is off
+  too (`quality.bisect`).
 
 ## Workspace
 

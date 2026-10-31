@@ -2090,6 +2090,7 @@ class Access(unittest.TestCase):
         self.assertEqual((problems, config['ui']['mode']), ([], 'iap-tunnel'))
         self.assertNotIn('poll', config['repositories']['cerid'], 'checkpoint builds only: no build per push')
         self.assertNotIn('schedules', config['repositories']['cerid'], 'checkpoint builds only: no nightly')
+        self.assertFalse(config['quality']['bisect'], 'checkpoint builds only: no automatic bisection builds')
         self.assertNotIn('webhook_secret', config['repositories']['cerid'], 'webhooks are an optional add-on')
 
 
