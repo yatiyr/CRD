@@ -16,8 +16,8 @@ it is qualified: every row's state, evidence and remaining work is in the [maste
 
 ## Architecture in brief
 
-- **Modules.** <!-- fact:module-count -->105<!-- /fact --> modules are registered with `crd_module()` in the root
-  [CMakeLists](CMakeLists.txt): <!-- fact:engine-module-count -->98<!-- /fact --> engine modules in the families
+- **Modules.** <!-- fact:module-count -->106<!-- /fact --> modules are registered with `crd_module()` in the root
+  [CMakeLists](CMakeLists.txt): <!-- fact:engine-module-count -->99<!-- /fact --> engine modules in the families
   <!-- fact:engine-families -->`assets`, `execution`, `foundation`, `geometry`, `gpu`, `media`, `numerics`, `physics`, `rendering`, `ui` and `world`<!-- /fact --> (`engine/<family>/<module>`), and
   <!-- fact:other-module-count -->7<!-- /fact --> tools and hosts (`tools/`, `runtime/`, `sandbox/`). The
   [systems map](docs/systems/README.md) gives each module's source, CMake contract and overview.

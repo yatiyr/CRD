@@ -572,9 +572,15 @@
       "id": "network.transport",
       "summary": "Sockets, transport, sessions, channels, bounded admission, wire negotiation with GREASE, link conditioning, NAT traversal, the client side of relays and capture: no other module opens a socket (network foundation D1).",
       "owner": "net",
-      "status": "planned",
-      "row": "NET-STD",
-      "decision": "docs/design/network-foundation.md D1: one owner for every path that can reach another machine; NET-STD's negotiation codec creates the module and 4.2a adds the transport."
+      "api": [
+        "engine/foundation/net/include/crd/net/negotiation.hpp",
+        "engine/foundation/net/include/crd/net/register_ids.hpp"
+      ],
+      "signatures": [
+        {"regex": "\\b(?:WSAStartup|WSASocket[AW]?|WSASendTo|WSARecvFrom|socket|socketpair|getaddrinfo|GetAddrInfo(?:W|ExW)?|sendto|recvfrom|sendmmsg|recvmmsg)\\s*\\(", "what": "a socket or name-resolution call"},
+        {"regex": "#\\s*include\\s*<(?:winsock2|ws2tcpip|mswsock|sys/socket|netinet/(?:in|tcp|udp)|arpa/inet|netdb)\\.h>", "what": "a socket header"}
+      ],
+      "decision": "docs/design/network-foundation.md D1: one owner for every path that can reach another machine. NET-STD's negotiation codec created the module (2026-10-31); 4.2a adds the transport."
     },
     {
       "id": "crypto.providers",

@@ -1851,6 +1851,17 @@
       "generator": "gen_wavelet_refs.py",
       "status": "generator-absent",
       "sha256": "85727cf39e2d60fff16c8357d4f0f09cbc6181991db2ff4da7a1ab133fc5491b"
+    },
+    {
+      "path": "engine/foundation/net/include/crd/net/register_ids.hpp",
+      "generator": "scripts/gen-register-ids.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "scripts/gen-register-ids.py",
+        "--check"
+      ],
+      "sha256": "ebf6f59492d2f5329943b584f1427b55b5271395ed4cb9d5cd078cab1d27a0b2"
     }
   ]
 }

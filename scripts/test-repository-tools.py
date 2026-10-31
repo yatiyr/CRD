@@ -155,6 +155,9 @@ isa_spec.loader.exec_module(isa_isolation)
 registers_spec = importlib.util.spec_from_file_location('check_registers', ROOT / 'scripts/check-registers.py')
 registers = importlib.util.module_from_spec(registers_spec)
 registers_spec.loader.exec_module(registers)
+register_ids_spec = importlib.util.spec_from_file_location('gen_register_ids', ROOT / 'scripts/gen-register-ids.py')
+register_ids = importlib.util.module_from_spec(register_ids_spec)
+register_ids_spec.loader.exec_module(register_ids)
 ab_spec = importlib.util.spec_from_file_location('ab_board', ROOT / 'scripts/ab-board.py')
 ab_board = importlib.util.module_from_spec(ab_spec)
 ab_spec.loader.exec_module(ab_board)
@@ -5388,6 +5391,116 @@ class Registers(unittest.TestCase):
         self.assert_fails(self.register([]), 'entries is a non-empty list')
         self.assert_fails(self.register([self.entry(colour='red')]), "unknown keys ['colour']")
         self.assert_fails(self.register([self.entry()], owners={'net': 'NET-STD'}), "unknown keys ['owners']")
+
+class RegisterIds(unittest.TestCase):
+    """scripts/gen-register-ids.py: each owning module's header of the codepoints the standards register assigns to it,
+    with GREASE patterns expanded, unverified IANA values kept apart and every unusable input refused."""
+
+    HEADER = 'engine/foundation/net/include/crd/net/register_ids.hpp'
+
+    @staticmethod
+    def entry(identifier, owner, *codepoints):
+        return {'id': identifier, 'owner': owner, 'codepoints': [dict(point) for point in codepoints]}
+
+    def entries(self):
+        return [self.entry('cerid.game', 'net', {'registry': 'Cerid protocol identifiers', 'name': 'game',
+                                                 'value': '0x0002'}),
+                self.entry('cerid.agent', 'net', {'registry': 'Cerid protocol identifiers', 'name': 'agent',
+                                                  'value': '0x0006'}),
+                self.entry('cerid.negotiation', 'net', {'registry': 'Cerid GREASE values', 'name': 'grease',
+                                                        'value': '0x?A?A'}),
+                self.entry('quic.transport', 'net', {'registry': 'QUIC Versions', 'name': 'QUIC version 1',
+                                                     'value': '0x00000001', 'verified': False}),
+                self.entry('http.h3', 'net', {'registry': 'TLS ALPN Protocol IDs', 'name': 'HTTP/3', 'value': 'h3'}),
+                self.entry('tls.hybrid-kex', 'crypto', {'registry': 'TLS Supported Groups', 'name': 'X25519MLKEM768',
+                                                        'value': '0x11EC', 'verified': False})]
+
+    def generate(self, entries, modules=('core', 'net'), check=False, header=None):
+        """(exit code, output, header text or None) of the generator over a fixture tree."""
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            (root / 'cmake').mkdir()
+            (root / 'cmake' / 'standards-register.json').write_text(json.dumps({'entries': entries}),
+                                                                     encoding='utf-8')
+            (root / 'CMakeLists.txt').write_text(''.join(f'crd_module(engine/foundation/{name} engine/{name})\n'
+                                                         for name in modules), encoding='utf-8')
+            if header is not None:
+                (root / self.HEADER).parent.mkdir(parents=True)
+                (root / self.HEADER).write_text(header, encoding='utf-8')
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                code = register_ids.main(['--root', str(root)] + (['--check'] if check else []))
+            written = root / self.HEADER
+            return code, output.getvalue(), written.read_text(encoding='utf-8') if written.exists() else None
+
+    def test_header_holds_protocols_grease_and_typed_iana_values(self):
+        code, _, header = self.generate(self.entries())
+        self.assertEqual(0, code)
+        self.assertIn('    Game  = 0x0002U, // cerid.game', header)
+        self.assertIn('    case ProtocolId::Agent:\n        return "cerid.agent";', header)
+        self.assertIn('0x0A0AU, 0x1A1AU, 0x2A2AU', header)
+        self.assertIn('0xFAFAU,', header)
+        self.assertIn('return (value & 0x0F0FU) == 0x0A0AU &&\n           ((value >> 12U) & 0x0FU) == '
+                      '((value >> 4U) & 0x0FU);', header)
+        self.assertIn('namespace iana::unverified\n{\n// quic.transport: QUIC Versions, QUIC version 1\n'
+                      'inline constexpr u32 kQuicVersion1 = 0x00000001U;', header)
+        self.assertIn('namespace iana\n{\n// http.h3: TLS ALPN Protocol IDs, HTTP/3\n'
+                      'inline constexpr std::string_view kAlpnHttp3 = "h3";', header)
+        self.assertNotIn('X25519', header)  # crypto's codepoints wait for its module (NET.2)
+        self.assertNotIn('\r', header)
+
+    def test_pattern_tests_follow_any_pattern(self):
+        self.assertEqual(['    return (value & 0x0F0FU) == 0x0A0AU &&',
+                          '           ((value >> 12U) & 0x0FU) == ((value >> 4U) & 0x0FU);'],
+                         register_ids.pattern_test('0x?A?A'))
+        self.assertEqual(['    return (value & 0xFF00U) == 0xBE00U &&',
+                          '           ((value >> 4U) & 0x0FU) == ((value >> 0U) & 0x0FU);'],
+                         register_ids.pattern_test('0xBE??'))
+        self.assertEqual(['    return ((value >> 12U) & 0x0FU) == ((value >> 8U) & 0x0FU) &&',
+                          '           ((value >> 12U) & 0x0FU) == ((value >> 4U) & 0x0FU) &&',
+                          '           ((value >> 12U) & 0x0FU) == ((value >> 0U) & 0x0FU);'],
+                         register_ids.pattern_test('0x????'))
+        self.assertEqual([0x0B0B + 0x1010 * nibble for nibble in range(16)], register_ids.expand('w', '0x?B?B'))
+
+    def test_check_passes_on_the_committed_bytes_and_fails_on_drift(self):
+        _, _, header = self.generate(self.entries())
+        self.assertEqual(0, self.generate(self.entries(), check=True, header=header)[0])
+        code, output, _ = self.generate(self.entries(), check=True, header=header.replace('0x0002U', '0x0003U'))
+        self.assertEqual(1, code)
+        self.assertIn('differs from scripts/gen-register-ids.py', output)
+        self.assertEqual(1, self.generate(self.entries(), check=True)[0])
+        self.assertEqual(0, self.generate(self.entries(), modules=('core',))[0])  # no net module: nothing to write
+
+    def assert_refused(self, entries, message, modules=('core', 'net')):
+        code, output, header = self.generate(entries, modules=modules)
+        self.assertEqual(1, code)
+        self.assertIn(message, output)
+        self.assertIsNone(header)
+
+    def test_unusable_registers_are_refused(self):
+        def point(registry, value, **extra):
+            return self.entry('cerid.x', 'net', {'registry': registry, 'name': 'x', 'value': value, **extra})
+        self.assert_refused([point('TLS Supported Groups', '0x11EC')], "registry 'TLS Supported Groups' has no type")
+        self.assert_refused([point('QUIC Versions', '1x5')], "value '1x5' is neither hexadecimal")
+        self.assert_refused([point('QUIC Versions', '0x1FFFFFFFF')], 'does not fit u32')
+        self.assert_refused([point('Cerid protocol identifiers', '0x10000')], 'does not fit u16')
+        self.assert_refused([point('Cerid GREASE values', '0x?A?')], 'is not a 16-bit identifier')
+        self.assert_refused([point('Cerid GREASE values', '0x0A0A')], 'is not 0x followed by hexadecimal digits and ?')
+        self.assert_refused([point('TLS ALPN Protocol IDs', 'h 3')], 'is not a printable ALPN identifier')
+        self.assert_refused([point('Cerid protocol identifiers', '0x0001', verified=False)],
+                            'cannot be unverified')
+        self.assert_refused([point('Cerid protocol identifiers', '0x0001'),
+                             point('Cerid protocol identifiers', '0x0002')], 'constant X is also generated for cerid.x')
+        twins = [self.entry('cerid.a', 'net', {'registry': 'Cerid protocol identifiers', 'name': 'a', 'value': '0x1'}),
+                 self.entry('cerid.b', 'net', {'registry': 'Cerid protocol identifiers', 'name': 'b', 'value': '0x1'})]
+        self.assert_refused(twins, 'two Cerid protocol identifiers share a value')
+        reserved = [self.entry('cerid.a', 'net', {'registry': 'Cerid protocol identifiers', 'name': 'a',
+                                                  'value': '0x1A1A'}),
+                    self.entry('cerid.g', 'net', {'registry': 'Cerid GREASE values', 'name': 'g', 'value': '0x?A?A'})]
+        self.assert_refused(reserved, 'lies in a reserved pattern')
+        self.assert_refused(self.entries(), 'registered owners crypto own codepoints and have no output',
+                            modules=('core', 'net', 'crypto'))
+
 
 class AbBoard(unittest.TestCase):
     """scripts/ab-board.py: interleaved arms, paired speed ratios with a bootstrap interval, a decisive stop."""

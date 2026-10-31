@@ -88,6 +88,16 @@ NETCRASH window runs the review. The calendar points at which the guard fails wi
 
 The Cerid wire protocols of the [network foundation](network-foundation.md#negotiation) are entries of type `cerid`
 with their protocol identifiers (session control `0x0001` to relay allocation `0x0008`) in the "Cerid protocol
-identifiers" registry. Extension identifiers of the pattern `0x?A?A` (`0x0A0A`, `0x1A1A` ... `0xFAFA`, the RFC 8701
-pattern) are reserved for GREASE, never assigned, and sent by every build. Identifiers are never reused; a
-retired one stays in the register as `deprecated`. NET-STD's negotiation code takes these values from the register.
+identifiers" registry. The "Cerid GREASE values" registry holds the pattern `0x?A?A` (the same digit in each `?`:
+`0x0A0A`, `0x1A1A` ... `0xFAFA`, the RFC 8701 pattern): reserved as extension identifiers and as version majors,
+never assigned, and sent by every build. Identifiers are never reused; a retired one stays in the register as
+`deprecated`.
+
+Code never spells a codepoint by hand. [scripts/gen-register-ids.py](../../scripts/gen-register-ids.py) writes, for
+each owning module, a committed header of the codepoints its entries hold (for `net`,
+[register_ids.hpp](../../engine/foundation/net/include/crd/net/register_ids.hpp): `ProtocolId`, the GREASE table and
+the QUIC and ALPN values). A codepoint marked `verified: false` is written into a nested `unverified` namespace, so a
+use of it is visible where it is made and verifying it moves it out. A registry without a C++ type, a malformed value,
+a pattern that is not 16 bits and a registered owner with codepoints but no output each fail the generator. The
+`crd-net-register-ids-drift` CTest runs `--check`, and
+[scripts/generated-sources.json](../../scripts/generated-sources.json) records the header's bytes.

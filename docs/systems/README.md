@@ -16,8 +16,8 @@ Start with [rendering foundation](rendering-foundation.md), [CEIR](ceir.md), [CH
 
 ## Current module inventory
 
-All <!-- fact:module-count -->105<!-- /fact --> registered modules are represented: the
-<!-- fact:engine-module-count -->98<!-- /fact --> engine modules below and the
+All <!-- fact:module-count -->106<!-- /fact --> registered modules are represented: the
+<!-- fact:engine-module-count -->99<!-- /fact --> engine modules below and the
 <!-- fact:other-module-count -->7<!-- /fact --> application and tool modules in the next table. Existing overview
 links retain their dated evidence; where no dedicated overview exists, the public source and CMake manifest are the
 direct entry points. The documentation validator holds
@@ -101,6 +101,7 @@ this map and the `crd_module()` registry in the root CMakeLists to the same set 
 | `math` | [math](math.md) | [CMake](../../engine/foundation/math/CMakeLists.txt) |
 | `memory` | [memory](memory.md) | [CMake](../../engine/foundation/memory/CMakeLists.txt) |
 | `meshgen` | [meshgen](meshgen.md) | [CMake](../../engine/geometry/meshgen/CMakeLists.txt) |
+| `net` | [Public source](../../engine/foundation/net/include/) | [CMake](../../engine/foundation/net/CMakeLists.txt) |
 | `perf` | [perf](perf.md) | [CMake](../../engine/foundation/perf/CMakeLists.txt) |
 | `perf-gpu-bridge` | [Public source](../../engine/gpu/perf-gpu-bridge/include/) | [CMake](../../engine/gpu/perf-gpu-bridge/CMakeLists.txt) |
 | `perf-ui` | [Public source](../../engine/ui/perf-ui/include/) | [CMake](../../engine/ui/perf-ui/CMakeLists.txt) |

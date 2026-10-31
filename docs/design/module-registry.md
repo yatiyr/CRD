@@ -12,9 +12,9 @@ registrations are literal lines in the root `CMakeLists.txt` and `tests/CMakeLis
 
 ## Registration
 
-Every directory the build adds is a node: <!-- fact:engine-module-count -->98<!-- /fact --> engine modules,
+Every directory the build adds is a node: <!-- fact:engine-module-count -->99<!-- /fact --> engine modules,
 <!-- fact:host-tool-count -->5<!-- /fact --> host tools, `runtime`, `sandbox` and
-<!-- fact:test-directory-count -->109<!-- /fact --> test directories. Each node is one literal call, one per line,
+<!-- fact:test-directory-count -->110<!-- /fact --> test directories. Each node is one literal call, one per line,
 which the structure synchronizer and the hygiene guard parse:
 
 ```cmake

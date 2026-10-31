@@ -286,7 +286,7 @@
       "id": "cerid.negotiation",
       "title": "Cerid version and extension negotiation: (identifier, length, value) extensions, ignore-unknown, transcript binding",
       "kind": "extension",
-      "state": "planned",
+      "state": "implemented",
       "owner": "net",
       "rows": [
         "NET-STD"
@@ -299,9 +299,9 @@
       },
       "codepoints": [
         {
-          "registry": "Cerid extension identifiers",
+          "registry": "Cerid GREASE values",
           "name": "grease",
-          "value": "0x?A?A (0x0A0A, 0x1A1A ... 0xFAFA)"
+          "value": "0x?A?A"
         }
       ],
       "source": {
@@ -310,9 +310,13 @@
         "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
+      "evidence": [
+        "tests/foundation/net/test_negotiation.cpp",
+        "tests/foundation/net/test_register_ids.cpp",
+        "tests/foundation/net/fuzz/fuzz_negotiation.cpp"
+      ],
       "deprecation": null,
-      "note": "GREASE identifiers follow the RFC 8701 pattern and are sent by every build, shipping included."
+      "note": "GREASE values follow the RFC 8701 pattern (0x0A0A, 0x1A1A ... 0xFAFA, the same digit in each ?): reserved as extension identifiers and as version majors, never assigned, and sent by every build, shipping included."
     },
     {
       "id": "ietf.grease",

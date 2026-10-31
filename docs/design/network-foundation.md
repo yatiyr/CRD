@@ -276,6 +276,42 @@ Schemas evolve by adding fields with new identifiers; identifiers are never reus
 Long-lived artefacts (replays, crash packs, qlog and pcapng captures, world journals) carry schema versions with N-1
 readers (OPS.2 owns the N-1 bundle reader). NET-STD implements the mechanism and its register.
 
+<a id="negotiation-wire"></a>
+### The negotiation messages
+
+`crd-net` implements this in [negotiation.hpp](../../engine/foundation/net/include/crd/net/negotiation.hpp)
+(NET-STD, 2026-10-31). Every integer is big-endian; the protocol identifiers and the GREASE values come from the
+[standards register](registers.md#cerid-identifiers) through the generated
+[register_ids.hpp](../../engine/foundation/net/include/crd/net/register_ids.hpp).
+
+| Message | Layout |
+|---|---|
+| Offer (client) | kind `1` (u8), format (u8), protocol (u16), version count (u8), each version major and its highest minor (u16, u16), extension count (u8), each extension identifier, length and value (u16, u16, bytes) |
+| Answer (server) | kind `2`, format, protocol, the selected major and minor (u16, u16), the server's available versions (count and entries as above), the accepted extensions with the server's values |
+
+- **Selection.** The server picks the highest major both lists hold; the minor is the lower of the two highest minors
+  (minors are compatible additions). It keeps the offered extensions it knows, in offer order, and answers only those.
+- **Ignore-unknown.** A major or an extension a receiver does not know is skipped in both directions. An answer may
+  carry an extension the client does not know (a newer server's addition); only an extension the client knows and
+  did not offer is refused (`UnsolicitedExtension`), because the client deliberately left it out.
+- **GREASE.** Every offer and answer, in every build, holds one GREASE version major and two distinct GREASE
+  extensions (0 to 7 value bytes) from the reserved `0x?A?A` values, their values and positions drawn from 24 bytes of
+  caller entropy (the CSPRNG in the transport, the seeded stream in NET-SIM, so a simulated run is replayable). A
+  policy may not list a GREASE value; a selected GREASE major is refused.
+- **Downgrade.** The answer lists the server's available versions (the RFC 9368 pattern). The client compares them
+  with the offer it really sent: a higher common major than the selection means the offer was stripped in flight
+  (`Downgrade`); a selection the available list contradicts is `InconsistentAnswer`. The in-band check is only as good
+  as the answer's integrity, so the handshake binds both messages: `write_transcript` gives the 8-byte label
+  `crdneg01`, the offer's length (u32), the offer, the answer's length and the answer, which NET.2 folds into its
+  transcript hash. A change to either message in flight makes the two sides' transcripts differ.
+- **Bounds.** At most 8 versions and 32 extensions per message (GREASE included, so a policy has at most 7 majors and
+  30 extensions), 1024 bytes per extension value and 4096 bytes per message. Decoding is exact: a short field, a count
+  or a value above its bound, a repeated major or identifier and a byte after the last field are each refused with
+  their own error, and nothing allocates (decoded values view the received bytes).
+- **Format.** The message layout has its own format byte. A build writes `kNegotiationFormat` and reads every format
+  from `kNegotiationFormatOldest` on; when layout 2 lands, the oldest readable stays 1 (N-1) and an answer is written
+  in the offer's layout.
+
 <a id="agility"></a>
 ## Crypto agility
 
