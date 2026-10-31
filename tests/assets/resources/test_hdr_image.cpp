@@ -240,6 +240,37 @@ TEST_CASE("B-hdr-c: EXR ZIP (our own DEFLATE) FLOAT lossless round-trip across m
     }
 }
 
+TEST_CASE("B-hdr-c: an EXR ZIP block larger than its compressed bytes can hold is BadData",
+          "[resources][hdr][exr][zip]")
+{
+    HdrImage src(&s_hdr);
+    fill_test_image(src, 23U, 40U, 3U); // three blocks; the offset table is the 24 bytes before the first
+    Array<crd::u8> enc = hdr_encode_exr(src, ExrPixelType::Float, ExrCompression::Zip, &s_hdr);
+    const auto u64_at = [&](crd::usize at)
+    {
+        crd::u64 v = 0;
+        for (crd::usize b = 0; b < 8U; ++b)
+        {
+            v |= static_cast<crd::u64>(enc[at + b]) << (8U * b);
+        }
+        return v;
+    };
+    crd::usize table = 0;
+    while (table + 24U < enc.size() && u64_at(table) != table + 24U)
+    {
+        ++table;
+    }
+    REQUIRE(table + 24U < enc.size());
+    const crd::usize block = table + 24U;
+    // dsz of one byte: a 16-line block of 23 RGB floats (4416 bytes) is past what one compressed byte can claim
+    enc[block + 4U] = 1U;
+    enc[block + 5U] = 0U;
+    enc[block + 6U] = 0U;
+    enc[block + 7U] = 0U;
+    HdrImage dst(&s_hdr);
+    CHECK(hdr_decode_exr({enc.data(), enc.size()}, dst, &s_hdr) == HdrError::BadData);
+}
+
 TEST_CASE("B-hdr-c: EXR ZIP compresses a smooth FLOAT image (where RLE couldn't)", "[resources][hdr][exr][zip]")
 {
     HdrImage src(&s_hdr);

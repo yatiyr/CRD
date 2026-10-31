@@ -248,6 +248,37 @@ constexpr crd::u32 kA7y0[7] = {0, 0, 4, 0, 2, 0, 1};
 constexpr crd::u32 kA7dx[7] = {8, 8, 4, 4, 2, 2, 1};
 constexpr crd::u32 kA7dy[7] = {8, 8, 8, 4, 4, 2, 2};
 
+// An Adam7 pass's size in pixels; a zero side means the pass holds no pixel.
+struct PassSize
+{
+    crd::u32 w = 0;
+    crd::u32 h = 0;
+};
+[[nodiscard]] PassSize adam7_pass(int pass, crd::u32 w, crd::u32 h) noexcept
+{
+    return {w > kA7x0[pass] ? (w - kA7x0[pass] + kA7dx[pass] - 1U) / kA7dx[pass] : 0U,
+            h > kA7y0[pass] ? (h - kA7y0[pass] + kA7dy[pass] - 1U) / kA7dy[pass] : 0U};
+}
+
+// The inflated stream's exact size: a filter byte before every packed scanline of the image, or of each Adam7 pass.
+[[nodiscard]] crd::usize filtered_stream_bytes(const PngState& st, crd::u32 w, crd::u32 h, bool interlaced) noexcept
+{
+    if (!interlaced)
+    {
+        return static_cast<crd::usize>(h) * (st.row_bytes(w) + 1U);
+    }
+    crd::usize total = 0;
+    for (int pass = 0; pass < 7; ++pass)
+    {
+        const PassSize ps = adam7_pass(pass, w, h);
+        if (ps.w != 0U && ps.h != 0U)
+        {
+            total += static_cast<crd::usize>(ps.h) * (st.row_bytes(ps.w) + 1U);
+        }
+    }
+    return total;
+}
+
 } // namespace
 
 bool png_sniff(crd::containers::ConstSpan<crd::u8> bytes) noexcept
@@ -424,8 +455,16 @@ PngError png_decode(crd::containers::ConstSpan<crd::u8> bytes, PngImage& out, cr
     }
 
     // ── inflate the pixel stream (OUR zlib) ────────────────────────────────────────────────────────────────────────────
+
+    // The header's stream size, refused before anything is allocated when the compressed stream cannot hold it.
+    const crd::usize stream_bytes = filtered_stream_bytes(st, w, h, interlace != 0U);
+    if (stream_bytes > crd::compression::deflate_max_inflated_size(idat.size()))
+    {
+        return PngError::BadData;
+    }
     crd::containers::Array<crd::u8> raw(a);
-    if (!crd::compression::zlib_inflate(crd::containers::as_const_span(idat), raw))
+    raw.resize_uninitialized(stream_bytes);
+    if (!crd::compression::zlib_inflate(crd::containers::as_const_span(idat), {raw.data(), raw.size()}))
     {
         return PngError::BadData;
     }
@@ -443,10 +482,6 @@ PngError png_decode(crd::containers::ConstSpan<crd::u8> bytes, PngImage& out, cr
         const crd::usize rb = st.row_bytes(w);
         rows.resize(static_cast<crd::usize>(h) * rb, 0);
         if (!defilter(raw.data(), raw.size(), rows.data(), h, rb, st.filter_bpp()))
-        {
-            return PngError::BadData;
-        }
-        if (raw.size() != static_cast<crd::usize>(h) * (rb + 1U)) // exact-size contract
         {
             return PngError::BadData;
         }
@@ -469,8 +504,7 @@ PngError png_decode(crd::containers::ConstSpan<crd::u8> bytes, PngImage& out, cr
     crd::usize off = 0;
     for (int pass = 0; pass < 7; ++pass)
     {
-        const crd::u32 pw = w > kA7x0[pass] ? (w - kA7x0[pass] + kA7dx[pass] - 1U) / kA7dx[pass] : 0U;
-        const crd::u32 ph = h > kA7y0[pass] ? (h - kA7y0[pass] + kA7dy[pass] - 1U) / kA7dy[pass] : 0U;
+        const auto [pw, ph] = adam7_pass(pass, w, h);
         if (pw == 0U || ph == 0U)
         {
             continue;
@@ -478,10 +512,6 @@ PngError png_decode(crd::containers::ConstSpan<crd::u8> bytes, PngImage& out, cr
         const crd::usize rb = st.row_bytes(pw);
         rows.clear();
         rows.resize(static_cast<crd::usize>(ph) * rb, 0);
-        if (off + static_cast<crd::usize>(ph) * (rb + 1U) > raw.size())
-        {
-            return PngError::BadData;
-        }
         if (!defilter(raw.data() + off, static_cast<crd::usize>(ph) * (rb + 1U), rows.data(), ph, rb, st.filter_bpp()))
         {
             return PngError::BadData;
@@ -501,10 +531,6 @@ PngError png_decode(crd::containers::ConstSpan<crd::u8> bytes, PngImage& out, cr
                 st.emit(row, sx, out.pixels.data() + (static_cast<crd::usize>(y) * w + x) * 4U);
             }
         }
-    }
-    if (off != raw.size()) // exact-size contract across all passes
-    {
-        return PngError::BadData;
     }
     return PngError::Ok;
 }

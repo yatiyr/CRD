@@ -760,8 +760,12 @@ HdrError hdr_decode_exr(ConstSpan<crd::u8> bytes, HdrImage& out, crd::memory::IA
         }
         else // ZIPS (2) / ZIP (3) — our own DEFLATE
         {
-            tmp.resize(0);
-            if (!crd::compression::zlib_inflate({data, static_cast<crd::usize>(dsz)}, tmp) || tmp.size() != block_bytes)
+            if (block_bytes > crd::compression::deflate_max_inflated_size(static_cast<crd::u64>(dsz)))
+            {
+                return HdrError::BadData; // more than the block's compressed bytes can hold: nothing is allocated
+            }
+            tmp.resize_uninitialized(block_bytes);
+            if (!crd::compression::zlib_inflate({data, static_cast<crd::usize>(dsz)}, {tmp.data(), block_bytes}))
             {
                 return HdrError::BadData;
             }

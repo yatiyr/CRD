@@ -291,13 +291,31 @@
           "what": "a direct zstd call or include"
         }
       ],
+      "decision": "Compression belongs to a foundation module unless a decision records otherwise (OWN.1; the publishing research's P-4 asks): crd-perf's bundle refused compressed sections only because the codec sat in crd-resources, above it. OWN.1 created crd-compression (2026-10-31) and moved resources' raw DEFLATE, inflate, zlib and Adler-32 and its zstd binding there (zstd's header is private to it); resources, its CRDR container and shader-cook through it consume it, hesap-tensor's npz inflate merged with it into one exact-size decoder (2026-11-01), perf's bundle is to consume it once the module is in the relocatable package, and SHIP.2's crdr v2 chunk codecs (trained dictionaries, GDeflate) land in it."
+    },
+    {
+      "id": "compression.zip-archives",
+      "summary": "The ZIP (PKZIP APPNOTE) container: the end-of-central-directory search (Zip64 included), the central directory and local headers, STORED and DEFLATE members extracted with their CRC-32 and size checked, and an archive written with its central directory.",
+      "owner": "compression",
+      "status": "assigned",
+      "row": "OWN.1",
+      "signatures": [
+        {
+          "regex": "\\b0x0(?:4034|2014|6054|6064|7064)[bB]50[uU]?\\b",
+          "what": "a ZIP record signature"
+        }
+      ],
       "pending": [
         {
-          "path": "engine/numerics/hesap-tensor/include/crd/hesap/tensor/detail/io_zip.hpp",
+          "path": "engine/assets/resources/src/zip_archive.cpp",
+          "row": "OWN.1"
+        },
+        {
+          "path": "engine/numerics/hesap-tensor/include/crd/hesap/tensor/io.hpp",
           "row": "OWN.1"
         }
       ],
-      "decision": "Compression belongs to a foundation module unless a decision records otherwise (OWN.1; the publishing research's P-4 asks): crd-perf's bundle refused compressed sections only because the codec sat in crd-resources, above it. OWN.1 created crd-compression (2026-10-31) and moved resources' raw DEFLATE, inflate, zlib and Adler-32 and its zstd binding there (zstd's header is private to it); resources, its CRDR container and shader-cook through it consume it, hesap-tensor's npz inflate is to move onto it, perf's bundle is to consume it once the module is in the relocatable package, and SHIP.2's crdr v2 chunk codecs (trained dictionaries, GDeflate) land in it."
+      "decision": "Two ZIP containers exist: resources' ZipReader and ZipWriter (3MF and the cooker; Zip64 read, DEFLATE written) and hesap-tensor's npz reader and writer (STORED written, as np.savez does). hesap-tensor sits below crd-resources, so the one container cannot live there; it is a compression-format container over the codecs, so it moves into crd-compression (decision 8 of docs/design/capability-ownership.md), with a writer that takes the member method and a reader whose STORED members stay views of the source, and both modules consume it."
     },
     {
       "id": "math.fixed-size-linear-algebra",

@@ -1,8 +1,10 @@
-// OWN.1's before/after board for the compression codecs moved from crd-resources into crd-compression: raw DEFLATE
-// and inflate, the zlib wrapper and Adler-32, and the zstd binding the CRDR container compresses and decompresses its
-// chunks through. The move changes no code path, so the board is two builds of this program (the engine before the
-// move and HEAD) as two commands of scripts/ab-board.py: `time <case> <ns per KiB of input>` gives each build's arm,
-// and `bits <case> <XXH3-64 of the case's output>` lets --same hold both builds to the same bytes.
+// OWN.1's before/after boards for the compression codecs crd-compression owns: raw DEFLATE and inflate, the zlib
+// wrapper and Adler-32, and the zstd binding the CRDR container compresses and decompresses its chunks through. Each
+// board is two builds of this program (the engine before the change and HEAD) as two commands of scripts/ab-board.py:
+// `time <case> <ns per KiB of input>` gives each build's arm, and `bits <case> <XXH3-64 of the case's output>` lets
+// --same hold both builds to the same bytes. The inflate cases decode as their consumers do: inflate-raw and
+// zlib-inflate into an output allocated per call (a zip member, a PNG or EXR stream), inflate-exact into a buffer
+// sized once (an npz member in its reader's backing store).
 
 #include <crd/compression/deflate.hpp>
 #include <crd/containers/array.hpp>
@@ -135,28 +137,42 @@ int main()
     const Array<u8> raw = codec::deflate_raw(in, &alloc);
     report("deflate-raw", ns_per_kib([&] { g_sink = g_sink + codec::deflate_raw(in, &alloc).size(); }), digest(raw));
 
+    const auto inflate_into = [&](auto inflate, ConstSpan<u8> comp, Array<u8>& out)
+    {
+        out.resize_uninitialized(kInputBytes);
+        return inflate(comp, {out.data(), out.size()});
+    };
     Array<u8> inflated(&alloc);
-    const bool raw_ok = codec::inflate_raw(view(raw), inflated);
+    const bool raw_ok = inflate_into(codec::inflate_raw, view(raw), inflated);
     report("inflate-raw",
            ns_per_kib(
                [&]
                {
                    Array<u8> out(&alloc);
-                   g_sink = g_sink + (codec::inflate_raw(view(raw), out) ? out.size() : 0U);
+                   g_sink = g_sink + (inflate_into(codec::inflate_raw, view(raw), out) ? out.size() : 0U);
                }),
            raw_ok ? digest(inflated) : 0U);
+    Array<u8> backing(&alloc);
+    backing.resize_uninitialized(kInputBytes);
+    const auto inflate_exact = [&]
+    {
+        return codec::inflate_raw(view(raw), {backing.data(), backing.size()});
+    };
+    const bool exact_ok = inflate_exact();
+    const u64 exact_bits = exact_ok ? digest(backing) : 0U;
+    report("inflate-exact", ns_per_kib([&] { g_sink = g_sink + (inflate_exact() ? 1U : 0U); }), exact_bits);
 
     const Array<u8> zlib = codec::zlib_deflate(in, &alloc);
     report("zlib-deflate", ns_per_kib([&] { g_sink = g_sink + codec::zlib_deflate(in, &alloc).size(); }), digest(zlib));
 
     Array<u8> unzlibbed(&alloc);
-    const bool zlib_ok = codec::zlib_inflate(view(zlib), unzlibbed);
+    const bool zlib_ok = inflate_into(codec::zlib_inflate, view(zlib), unzlibbed);
     report("zlib-inflate",
            ns_per_kib(
                [&]
                {
                    Array<u8> out(&alloc);
-                   g_sink = g_sink + (codec::zlib_inflate(view(zlib), out) ? out.size() : 0U);
+                   g_sink = g_sink + (inflate_into(codec::zlib_inflate, view(zlib), out) ? out.size() : 0U);
                }),
            zlib_ok ? digest(unzlibbed) : 0U);
 
@@ -177,5 +193,5 @@ int main()
                    g_sink = g_sink + static_cast<u64>(crd::resources::crdr_read(view(container), again, &alloc));
                }),
            read_ok ? crd::containers::xxh3_64(file.chunks[0].payload) : 0U);
-    return raw_ok && zlib_ok && read_ok ? 0 : 1;
+    return raw_ok && exact_ok && zlib_ok && read_ok ? 0 : 1;
 }

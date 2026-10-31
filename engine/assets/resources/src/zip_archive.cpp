@@ -286,18 +286,18 @@ ZipError ZipReader::extract(crd::usize i, crd::containers::Array<crd::u8>& out) 
             out.push_back(comp[b]);
         }
     }
-    else // deflate
+    else // deflate: the directory's size, bounded by what the compressed bytes can claim, is the exact output
     {
-        if (!crd::compression::inflate_raw(comp, out))
+        if (ze.uncompressed_size > crd::compression::deflate_max_inflated_size(ze.compressed_size))
+        {
+            return ZipError::Corrupt;
+        }
+        out.resize_uninitialized(static_cast<crd::usize>(ze.uncompressed_size));
+        if (!crd::compression::inflate_raw(comp, {out.data(), out.size()}))
         {
             out.clear();
             return ZipError::Corrupt;
         }
-    }
-    if (out.size() != ze.uncompressed_size)
-    {
-        out.clear();
-        return ZipError::Corrupt;
     }
     if (crd::containers::crc32(crd::containers::ConstSpan<crd::u8>(out.data(), out.size())) != ze.crc32)
     {

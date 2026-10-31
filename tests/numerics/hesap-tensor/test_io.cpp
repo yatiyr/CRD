@@ -384,6 +384,40 @@ TEST_CASE("io: npz adversaries return clean statuses", "[v14l][io][npz][adversar
         const crd::u8 junk[32] = {1, 2, 3, 4};
         REQUIRE(rd.parse({junk, 32U}) == TensorStatus::BadInput);
     }
+    // a deflated member's directory claims: one byte off what it decodes to, more than its compressed bytes can
+    // hold, and a compressed size past the archive
+    {
+        crd::containers::Array<crd::u8> def(&alloc);
+        REQUIRE(read_ref(&alloc, "ref_deflate.npz", def) == TensorStatus::Ok);
+        REQUIRE(rd.parse(crd::containers::as_const_span(def)) == TensorStatus::Ok);
+        const auto u32_at = [&](crd::usize at)
+        {
+            crd::u32 v = 0;
+            std::memcpy(&v, def.data() + at, sizeof(v));
+            return v;
+        };
+        // np.savez writes no archive comment, so the EOCD is the tail; the first member is DEFLATE (method 8)
+        const crd::usize cd = u32_at(def.size() - 22U + 16U);
+        REQUIRE(def[cd + 10U] == 8U);
+        const crd::u32 csize = u32_at(cd + 20U);
+        const crd::u32 usize = u32_at(cd + 24U);
+        struct Patch
+        {
+            crd::usize at;
+            crd::u32 value;
+        };
+        const Patch patches[5] = {{cd + 24U, usize + 1U},
+                                  {cd + 24U, usize - 1U},
+                                  {cd + 24U, csize * 1032U + 1U},
+                                  {cd + 24U, 0xFFFFFFF0U},
+                                  {cd + 20U, static_cast<crd::u32>(def.size()) + 1U}};
+        for (const Patch& patch : patches)
+        {
+            crd::containers::Array<crd::u8> bad(def, &alloc);
+            std::memcpy(bad.data() + patch.at, &patch.value, sizeof(patch.value));
+            CHECK(rd.parse(crd::containers::as_const_span(bad)) == TensorStatus::BadInput);
+        }
+    }
 }
 
 TEST_CASE("io: safetensors corpus parses bit-exact incl bf16 and fp8", "[v14l][io][safetensors]")

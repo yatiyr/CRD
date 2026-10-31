@@ -635,7 +635,8 @@ crd_module(engine/numerics/hesap-diff engine/hesap-diff
 crd_module(engine/numerics/hesap-motion engine/hesap-motion
     DEPENDS containers core hesap hesap-dense hesap-special math memory TESTS numerics/hesap-motion)
 # v14; TENSORS — the N-D substrate (views/broadcast/einsum/sparse/decomp/nn); ADR-0096
-crd_module(engine/numerics/hesap-tensor engine/hesap-tensor DEPENDS containers core jobs math memory platform
+crd_module(engine/numerics/hesap-tensor engine/hesap-tensor
+    DEPENDS compression containers core jobs math memory platform
     TESTS numerics/hesap-tensor TEST_DEPENDS hesap hesap-autodiff hesap-dense hesap-resources)
 crd_module(engine/assets/resources engine/resources DEPENDS compression containers core jobs log memory platform
     TESTS assets/resources support/fuzz TEST_DEPENDS asset_cooker gpu-context gpu-context-vulkan perf)

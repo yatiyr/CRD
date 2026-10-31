@@ -1,14 +1,18 @@
 #include <crd/compression/deflate.hpp>
 #include <crd/core/types.hpp>
 
-// deflate.cpp — our own RFC-1951 DEFLATE + RFC-1950 zlib. inflate = a puff-style decoder (stored/fixed/dynamic Huffman
-// + LZ77); deflate = a single fixed-Huffman block with hash-chain LZ77 matching.
+#include <cstring>
+
+// deflate.cpp — our own RFC-1951 DEFLATE + RFC-1950 zlib. inflate = a puff-style decoder (stored, fixed and dynamic
+// Huffman + LZ77) into a buffer of the exact decoded size, which is its window, with zlib's validity rules; deflate = a
+// single fixed-Huffman block with hash-chain LZ77 matching.
 
 namespace crd::compression
 {
 
 using crd::containers::Array;
 using crd::containers::ConstSpan;
+using crd::containers::Span;
 
 namespace
 {
@@ -24,128 +28,309 @@ constexpr crd::u16 kDistBase[30] = {1,    2,    3,    4,    5,    7,    9,    13
 constexpr crd::u8 kDistExtra[30] = {0, 0, 0, 0, 1, 1, 2, 2,  3,  3,  4,  4,  5,  5,  6,
                                     6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
 constexpr crd::u8 kClOrder[19] = {16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
-constexpr crd::usize kWindowSize = 32768; // DEFLATE max back-reference distance
+constexpr crd::usize kWindowSize = 32768;   // DEFLATE max back-reference distance
+constexpr crd::u32 kMaxCodeBits = 15U;      // the longest Huffman code
+constexpr crd::usize kLitCodes = 288U;      // the literal/length alphabet (286 and 287 occur only in the fixed code)
+constexpr crd::usize kLitCodesUsed = 286U;  // the most literal/length codes a dynamic block may declare
+constexpr crd::usize kDistCodes = 30U;      // the distance alphabet
+constexpr crd::usize kFixedDistCodes = 32U; // the fixed code's five-bit distance codes (30 and 31 never occur)
+
+// The fixed Huffman code's lengths (RFC 1951 §3.2.6), shared by the encoder and the decoder.
+struct FixedLengths
+{
+    crd::u8 lit[kLitCodes] = {};
+    crd::u8 dist[kFixedDistCodes] = {};
+};
+[[nodiscard]] constexpr FixedLengths make_fixed_lengths() noexcept
+{
+    FixedLengths f;
+    // 0-143 eight bits, 144-255 nine, 256-279 seven, 280-287 eight.
+    for (crd::usize s = 0; s < kLitCodes; ++s)
+    {
+        f.lit[s] = 8U;
+    }
+    for (crd::usize s = 144U; s < 256U; ++s)
+    {
+        f.lit[s] = 9U;
+    }
+    for (crd::usize s = 256U; s < 280U; ++s)
+    {
+        f.lit[s] = 7U;
+    }
+    for (crd::usize s = 0; s < kFixedDistCodes; ++s)
+    {
+        f.dist[s] = 5U;
+    }
+    return f;
+}
+constexpr FixedLengths kFixed = make_fixed_lengths();
 
 // ── bit reader (DEFLATE is LSB-first)
 // ──────────────────────────────────────────────────────────────────────────────────
-struct BitReader
+// Bits are pulled a byte at a time, so after any read fewer than 8 buffered bits remain, all from the last byte
+// pulled: aligning to a byte drops them and `p` is the next whole byte. A read past the input sets `err` and returns 0.
+class BitReader
 {
-    const crd::u8* p;
-    const crd::u8* end;
-    crd::u32 acc = 0;
-    int nbits = 0;
-    bool err = false;
+public:
+    explicit BitReader(ConstSpan<crd::u8> in) noexcept : m_p(in.data()), m_end(in.data() + in.size()) {}
 
-    int getbit()
+    // `n` (at most 16) bits, the first read in the lowest bit.
+    [[nodiscard]] crd::u32 bits(crd::u32 n) noexcept
     {
-        if (nbits == 0)
+        while (m_count < n)
         {
-            if (p < end)
+            if (m_p == m_end)
             {
-                acc = *p++;
+                m_err = true;
+                return 0U;
             }
-            else
-            {
-                acc = 0;
-                err = true;
-            }
-            nbits = 8;
+            m_buf |= static_cast<crd::u32>(*m_p++) << m_count;
+            m_count += 8U;
         }
-        const int b = static_cast<int>(acc & 1U);
-        acc >>= 1U;
-        --nbits;
-        return b;
-    }
-    crd::u32 getbits(int n)
-    {
-        crd::u32 v = 0;
-        for (int i = 0; i < n; ++i)
-        {
-            v |= static_cast<crd::u32>(getbit()) << i;
-        }
+        const crd::u32 v = m_buf & ((1U << n) - 1U);
+        m_buf >>= n;
+        m_count -= n;
         return v;
     }
-    void align() { nbits = 0; }
+    void align() noexcept
+    {
+        m_buf = 0U;
+        m_count = 0U;
+    }
+    // The next `n` whole bytes after an `align`, or nullptr (and `err`) when fewer remain.
+    [[nodiscard]] const crd::u8* take(crd::usize n) noexcept
+    {
+        if (static_cast<crd::usize>(m_end - m_p) < n)
+        {
+            m_err = true;
+            return nullptr;
+        }
+        const crd::u8* at = m_p;
+        m_p += n;
+        return at;
+    }
+    [[nodiscard]] bool err() const noexcept { return m_err; }
+
+private:
+    const crd::u8* m_p;
+    const crd::u8* m_end;
+    crd::u32 m_buf = 0U;
+    crd::u32 m_count = 0U;
+    bool m_err = false;
 };
 
 // ── canonical Huffman decode table (puff-style: counts + sorted symbols)
 // ────────────────────────────────────────────────
 struct Huff
 {
-    crd::u16 count[16] = {};
-    crd::u16 symbol[288] = {};
+    crd::u16 count[kMaxCodeBits + 1U] = {};
+    crd::u16 symbol[kLitCodes] = {};
 };
-void huff_build(Huff& h, const crd::u8* lengths, int n)
+
+// Build from code lengths (each at most 15). zlib's rules: an over-subscribed code is refused; an incomplete one is
+// refused too, except a single one-bit code in a literal/length or distance tree (its unused code then decodes to an
+// error); a tree without codes builds, and decoding with it is an error.
+[[nodiscard]] constexpr bool huff_build(Huff& h, const crd::u8* lengths, crd::usize n, bool single_code_ok) noexcept
 {
-    for (int i = 0; i < 16; ++i)
+    for (crd::u16& c : h.count)
     {
-        h.count[i] = 0;
+        c = 0U;
     }
-    for (int s = 0; s < n; ++s)
+    for (crd::usize s = 0; s < n; ++s)
     {
         ++h.count[lengths[s]];
     }
-    h.count[0] = 0;
-    crd::u16 offs[16] = {};
-    offs[1] = 0;
-    for (int i = 1; i < 15; ++i)
+    if (h.count[0] == n)
     {
-        offs[i + 1] = static_cast<crd::u16>(offs[i] + h.count[i]);
+        return true;
     }
-    for (int s = 0; s < n; ++s)
+    crd::i32 left = 1;
+    for (crd::u32 len = 1; len <= kMaxCodeBits; ++len)
+    {
+        left = 2 * left - static_cast<crd::i32>(h.count[len]);
+        if (left < 0)
+        {
+            return false;
+        }
+    }
+    if (left > 0 && !(single_code_ok && h.count[1] == 1U && h.count[0] == n - 1U))
+    {
+        return false;
+    }
+    crd::u16 offs[kMaxCodeBits + 1U] = {};
+    for (crd::u32 len = 1; len < kMaxCodeBits; ++len)
+    {
+        offs[len + 1U] = static_cast<crd::u16>(offs[len] + h.count[len]);
+    }
+    for (crd::usize s = 0; s < n; ++s)
     {
         if (lengths[s] != 0U)
         {
             h.symbol[offs[lengths[s]]++] = static_cast<crd::u16>(s);
         }
     }
+    return true;
 }
-[[nodiscard]] int huff_decode(BitReader& br, const Huff& h)
+
+// The fixed code's trees, built once at compile time.
+struct FixedTrees
 {
-    int code = 0;
-    int first = 0;
-    int index = 0;
-    for (int len = 1; len <= 15; ++len)
+    Huff lit;
+    Huff dist;
+    bool complete = false;
+};
+[[nodiscard]] constexpr FixedTrees make_fixed_trees() noexcept
+{
+    FixedTrees t;
+    t.complete =
+        huff_build(t.lit, kFixed.lit, kLitCodes, false) && huff_build(t.dist, kFixed.dist, kFixedDistCodes, false);
+    return t;
+}
+constexpr FixedTrees kFixedTrees = make_fixed_trees();
+static_assert(kFixedTrees.complete, "the fixed literal/length and distance codes are complete");
+
+// The next symbol, or -1 past the longest code or the input.
+[[nodiscard]] crd::i32 huff_decode(BitReader& br, const Huff& h) noexcept
+{
+    crd::i32 code = 0;
+    crd::i32 first = 0;
+    crd::i32 index = 0;
+    for (crd::u32 len = 1; len <= kMaxCodeBits; ++len)
     {
-        code |= br.getbit();
-        const int cnt = h.count[len];
+        code |= static_cast<crd::i32>(br.bits(1U));
+        const crd::i32 cnt = h.count[len];
         if (code - first < cnt)
         {
-            return h.symbol[index + (code - first)];
+            return br.err() ? -1 : h.symbol[index + (code - first)];
         }
         index += cnt;
-        first += cnt;
-        first <<= 1;
+        first = (first + cnt) << 1;
         code <<= 1;
     }
     return -1;
 }
-void build_fixed(Huff& lit, Huff& dist)
+
+// The literal/length and distance trees of a dynamic block (§3.2.7).
+[[nodiscard]] bool read_dynamic_trees(BitReader& br, Huff& lit, Huff& dist) noexcept
 {
-    crd::u8 fl[288];
-    for (int i = 0; i < 144; ++i)
+    const crd::u32 hlit = br.bits(5U) + 257U;
+    const crd::u32 hdist = br.bits(5U) + 1U;
+    const crd::u32 hclen = br.bits(4U) + 4U;
+    if (br.err() || hlit > kLitCodesUsed || hdist > kDistCodes)
     {
-        fl[i] = 8;
+        return false;
     }
-    for (int i = 144; i < 256; ++i)
+    crd::u8 cl[19] = {};
+    for (crd::u32 i = 0; i < hclen; ++i)
     {
-        fl[i] = 9;
+        cl[kClOrder[i]] = static_cast<crd::u8>(br.bits(3U));
     }
-    for (int i = 256; i < 280; ++i)
+    Huff clh;
+    if (br.err() || !huff_build(clh, cl, 19U, false))
     {
-        fl[i] = 7;
+        return false;
     }
-    for (int i = 280; i < 288; ++i)
+    crd::u8 lengths[kLitCodesUsed + kDistCodes] = {};
+    crd::u32 idx = 0;
+    while (idx < hlit + hdist)
     {
-        fl[i] = 8;
+        const crd::i32 sym = huff_decode(br, clh);
+        if (sym < 0)
+        {
+            return false;
+        }
+        if (sym < 16)
+        {
+            lengths[idx++] = static_cast<crd::u8>(sym);
+            continue;
+        }
+        crd::u8 value = 0U;
+        crd::u32 repeat = 0U;
+        if (sym == 16) // the previous length 3 to 6 times
+        {
+            if (idx == 0U)
+            {
+                return false;
+            }
+            value = lengths[idx - 1U];
+            repeat = 3U + br.bits(2U);
+        }
+        else if (sym == 17) // zero 3 to 10 times
+        {
+            repeat = 3U + br.bits(3U);
+        }
+        else // 18: zero 11 to 138 times
+        {
+            repeat = 11U + br.bits(7U);
+        }
+        if (br.err() || idx + repeat > hlit + hdist)
+        {
+            return false;
+        }
+        for (crd::u32 r = 0; r < repeat; ++r)
+        {
+            lengths[idx++] = value;
+        }
     }
-    huff_build(lit, fl, 288);
-    crd::u8 fd[30];
-    for (int i = 0; i < 30; ++i)
+    if (lengths[256] == 0U) // the end-of-block code must exist
     {
-        fd[i] = 5;
+        return false;
     }
-    huff_build(dist, fd, 30);
+    return huff_build(lit, lengths, hlit, true) && huff_build(dist, lengths + hlit, hdist, true);
+}
+
+// One Huffman-coded block into `out` from `position`; every write stays inside `out`, every reference inside what
+// this stream decoded. It works on local copies of the reader and the position: a byte store into `out` may alias
+// anything, and would otherwise send both through memory on every byte.
+[[nodiscard]] bool inflate_codes(BitReader& reader, const Huff& lit, const Huff& dist, Span<crd::u8> out,
+                                 crd::usize& position) noexcept
+{
+    BitReader br = reader;
+    crd::usize pos = position;
+    while (true)
+    {
+        const crd::i32 sym = huff_decode(br, lit);
+        if (sym < 0)
+        {
+            return false;
+        }
+        if (sym < 256)
+        {
+            if (pos == out.size())
+            {
+                return false;
+            }
+            out[pos++] = static_cast<crd::u8>(sym);
+            continue;
+        }
+        if (sym == 256)
+        {
+            reader = br;
+            position = pos;
+            return true;
+        }
+        const crd::usize ls = static_cast<crd::usize>(sym) - 257U;
+        if (ls >= 29U)
+        {
+            return false;
+        }
+        const crd::usize length = kLenBase[ls] + br.bits(kLenExtra[ls]);
+        const crd::i32 dsym = huff_decode(br, dist);
+        if (dsym < 0 || dsym >= 30)
+        {
+            return false;
+        }
+        const auto ds = static_cast<crd::usize>(dsym);
+        const crd::usize distance = kDistBase[ds] + br.bits(kDistExtra[ds]);
+        if (br.err() || distance > pos || length > out.size() - pos)
+        {
+            return false;
+        }
+        for (crd::usize i = 0; i < length; ++i, ++pos) // byte by byte: an overlapping copy repeats the run
+        {
+            out[pos] = out[pos - distance];
+        }
+    }
 }
 
 // ── bit writer + canonical encode
@@ -183,10 +368,10 @@ struct BitWriter
         }
     }
 };
-void canonical_codes(const crd::u8* len, int n, crd::u16* codes)
+constexpr void canonical_codes(const crd::u8* len, crd::usize n, crd::u16* codes) noexcept
 {
     crd::u16 bl[16] = {};
-    for (int s = 0; s < n; ++s)
+    for (crd::usize s = 0; s < n; ++s)
     {
         ++bl[len[s]];
     }
@@ -198,11 +383,26 @@ void canonical_codes(const crd::u8* len, int n, crd::u16* codes)
         code = static_cast<crd::u16>((code + bl[bits - 1]) << 1);
         next[bits] = code;
     }
-    for (int s = 0; s < n; ++s)
+    for (crd::usize s = 0; s < n; ++s)
     {
         codes[s] = len[s] != 0U ? next[len[s]]++ : 0U;
     }
 }
+
+// The fixed code's canonical codes, built once at compile time for the encoder.
+struct FixedCodes
+{
+    crd::u16 lit[kLitCodes] = {};
+    crd::u16 dist[kFixedDistCodes] = {};
+};
+[[nodiscard]] constexpr FixedCodes make_fixed_codes() noexcept
+{
+    FixedCodes c;
+    canonical_codes(kFixed.lit, kLitCodes, c.lit);
+    canonical_codes(kFixed.dist, kFixedDistCodes, c.dist);
+    return c;
+}
+constexpr FixedCodes kFixedCodes = make_fixed_codes();
 
 } // namespace
 
@@ -222,166 +422,66 @@ crd::u32 adler32(ConstSpan<crd::u8> data) noexcept
 
 // ── inflate
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
-bool inflate_raw(ConstSpan<crd::u8> in, Array<crd::u8>& out)
+bool inflate_raw(ConstSpan<crd::u8> in, Span<crd::u8> out) noexcept
 {
-    BitReader br{in.data(), in.data() + in.size()};
-    int bfinal = 0;
+    BitReader br(in);
+    crd::usize pos = 0;
+    crd::u32 bfinal = 0;
     do
     {
-        bfinal = br.getbit();
-        const int bt = static_cast<int>(br.getbits(2));
-        if (br.err)
+        bfinal = br.bits(1U);
+        const crd::u32 btype = br.bits(2U);
+        if (br.err())
         {
             return false;
         }
-        if (bt == 0) // stored
+        if (btype == 0U) // stored
         {
             br.align();
-            if (br.end - br.p < 4)
+            const crd::u8* head = br.take(4U);
+            if (head == nullptr)
             {
                 return false;
             }
-            const crd::u32 len = static_cast<crd::u32>(br.p[0]) | (static_cast<crd::u32>(br.p[1]) << 8U);
-            const crd::u32 nlen = static_cast<crd::u32>(br.p[2]) | (static_cast<crd::u32>(br.p[3]) << 8U);
-            br.p += 4;
-            if ((len ^ 0xFFFFU) != nlen)
+            const crd::u32 len = static_cast<crd::u32>(head[0]) | (static_cast<crd::u32>(head[1]) << 8U);
+            const crd::u32 nlen = static_cast<crd::u32>(head[2]) | (static_cast<crd::u32>(head[3]) << 8U);
+            if ((len ^ 0xFFFFU) != nlen || len > out.size() - pos)
             {
                 return false;
             }
-            if (static_cast<crd::usize>(br.end - br.p) < len)
+            const crd::u8* body = br.take(len);
+            if (body == nullptr)
             {
                 return false;
             }
-            for (crd::u32 i = 0; i < len; ++i)
+            if (len != 0U) // an empty output's data may be null, which memcpy may not be given
             {
-                out.push_back(*br.p++);
+                std::memcpy(out.data() + pos, body, len);
+                pos += len;
             }
         }
-        else if (bt == 1 || bt == 2)
+        else if (btype == 1U)
+        {
+            if (!inflate_codes(br, kFixedTrees.lit, kFixedTrees.dist, out, pos))
+            {
+                return false;
+            }
+        }
+        else if (btype == 2U)
         {
             Huff lit;
             Huff dist;
-            if (bt == 1)
+            if (!read_dynamic_trees(br, lit, dist) || !inflate_codes(br, lit, dist, out, pos))
             {
-                build_fixed(lit, dist);
-            }
-            else
-            {
-                const int hlit = static_cast<int>(br.getbits(5)) + 257;
-                const int hdist = static_cast<int>(br.getbits(5)) + 1;
-                const int hclen = static_cast<int>(br.getbits(4)) + 4;
-                if (hlit > 286 || hdist > 30)
-                {
-                    return false;
-                }
-                crd::u8 cl[19] = {};
-                for (int i = 0; i < hclen; ++i)
-                {
-                    cl[kClOrder[i]] = static_cast<crd::u8>(br.getbits(3));
-                }
-                Huff clh;
-                huff_build(clh, cl, 19);
-                crd::u8 lengths[288 + 32] = {};
-                int idx = 0;
-                while (idx < hlit + hdist)
-                {
-                    const int sym = huff_decode(br, clh);
-                    if (sym < 0 || br.err)
-                    {
-                        return false;
-                    }
-                    if (sym < 16)
-                    {
-                        lengths[idx++] = static_cast<crd::u8>(sym);
-                    }
-                    else if (sym == 16)
-                    {
-                        if (idx == 0)
-                        {
-                            return false;
-                        }
-                        int r = static_cast<int>(br.getbits(2)) + 3;
-                        const crd::u8 pv = lengths[idx - 1];
-                        while (r-- > 0 && idx < hlit + hdist)
-                        {
-                            lengths[idx++] = pv;
-                        }
-                    }
-                    else if (sym == 17)
-                    {
-                        int r = static_cast<int>(br.getbits(3)) + 3;
-                        while (r-- > 0 && idx < hlit + hdist)
-                        {
-                            lengths[idx++] = 0;
-                        }
-                    }
-                    else
-                    {
-                        int r = static_cast<int>(br.getbits(7)) + 11;
-                        while (r-- > 0 && idx < hlit + hdist)
-                        {
-                            lengths[idx++] = 0;
-                        }
-                    }
-                }
-                huff_build(lit, lengths, hlit);
-                huff_build(dist, lengths + hlit, hdist);
-            }
-            while (true)
-            {
-                const int sym = huff_decode(br, lit);
-                if (sym < 0 || br.err)
-                {
-                    return false;
-                }
-                if (sym == 256)
-                {
-                    break;
-                }
-                if (sym < 256)
-                {
-                    out.push_back(static_cast<crd::u8>(sym));
-                }
-                else
-                {
-                    const int ls = sym - 257;
-                    if (ls >= 29)
-                    {
-                        return false;
-                    }
-                    const int length = static_cast<int>(kLenBase[ls]) + static_cast<int>(br.getbits(kLenExtra[ls]));
-                    const int dsym = huff_decode(br, dist);
-                    if (dsym < 0 || dsym >= 30)
-                    {
-                        return false;
-                    }
-                    const int distance =
-                        static_cast<int>(kDistBase[dsym]) + static_cast<int>(br.getbits(kDistExtra[dsym]));
-                    if (static_cast<crd::usize>(distance) > out.size())
-                    {
-                        return false;
-                    }
-                    const crd::usize start = out.size() - static_cast<crd::usize>(distance);
-                    // NB: copy to a local first — push_back(out[k]) aliases the container; a realloc mid-copy would
-                    // read a dangling reference (self-reference UAF). Index-fetch each byte into `b` before pushing.
-                    for (int i = 0; i < length; ++i)
-                    {
-                        const crd::u8 b = out[start + static_cast<crd::usize>(i)];
-                        out.push_back(b);
-                    }
-                }
+                return false;
             }
         }
-        else
+        else // 3: reserved
         {
             return false;
         }
-        if (br.err)
-        {
-            return false;
-        }
-    } while (bfinal == 0);
-    return true;
+    } while (bfinal == 0U);
+    return pos == out.size();
 }
 
 // ── deflate (single fixed-Huffman block + hash-chain LZ77)
@@ -393,32 +493,9 @@ Array<crd::u8> deflate_raw(ConstSpan<crd::u8> in, crd::memory::IAllocator* a)
     bw.putbits(1, 1); // bfinal
     bw.putbits(1, 2); // btype = 01 (fixed)
 
-    crd::u8 fl[288];
-    for (int i = 0; i < 144; ++i)
-    {
-        fl[i] = 8;
-    }
-    for (int i = 144; i < 256; ++i)
-    {
-        fl[i] = 9;
-    }
-    for (int i = 256; i < 280; ++i)
-    {
-        fl[i] = 7;
-    }
-    for (int i = 280; i < 288; ++i)
-    {
-        fl[i] = 8;
-    }
-    crd::u16 fl_codes[288];
-    canonical_codes(fl, 288, fl_codes);
-    crd::u8 fd[30];
-    for (int i = 0; i < 30; ++i)
-    {
-        fd[i] = 5;
-    }
-    crd::u16 fd_codes[30];
-    canonical_codes(fd, 30, fd_codes);
+    const auto& fl = kFixed.lit;
+    const auto& fl_codes = kFixedCodes.lit;
+    const auto& fd_codes = kFixedCodes.dist;
 
     const crd::u8* d = in.data();
     const crd::usize n = in.size();
@@ -531,7 +608,7 @@ Array<crd::u8> deflate_raw(ConstSpan<crd::u8> in, crd::memory::IAllocator* a)
 
 // ── zlib wrapper
 // ────────────────────────────────────────────────────────────────────────────────────────────────────────
-bool zlib_inflate(ConstSpan<crd::u8> in, Array<crd::u8>& out)
+bool zlib_inflate(ConstSpan<crd::u8> in, Span<crd::u8> out) noexcept
 {
     if (in.size() < 6U)
     {
@@ -539,7 +616,7 @@ bool zlib_inflate(ConstSpan<crd::u8> in, Array<crd::u8>& out)
     }
     const crd::u8 cmf = in[0];
     const crd::u8 flg = in[1];
-    if ((cmf & 0x0FU) != 8U) // must be DEFLATE
+    if ((cmf & 0x0FU) != 8U || (cmf >> 4U) > 7U) // DEFLATE with a window of at most 32 KiB
     {
         return false;
     }
@@ -551,16 +628,14 @@ bool zlib_inflate(ConstSpan<crd::u8> in, Array<crd::u8>& out)
     {
         return false;
     }
-    const crd::usize start = out.size();
-    const ConstSpan<crd::u8> body{in.data() + 2, in.size() - 6}; // strip 2 header + 4 adler
-    if (!inflate_raw(body, out))
+    if (!inflate_raw(in.subspan(2U, in.size() - 6U), out)) // between the header and the Adler-32
     {
         return false;
     }
-    const crd::u32 want = (static_cast<crd::u32>(in[in.size() - 4]) << 24U) |
-                          (static_cast<crd::u32>(in[in.size() - 3]) << 16U) |
-                          (static_cast<crd::u32>(in[in.size() - 2]) << 8U) | in[in.size() - 1];
-    return adler32({out.data() + start, out.size() - start}) == want;
+    const crd::u8* t = in.data() + in.size() - 4U;
+    const crd::u32 want = (static_cast<crd::u32>(t[0]) << 24U) | (static_cast<crd::u32>(t[1]) << 16U) |
+                          (static_cast<crd::u32>(t[2]) << 8U) | t[3];
+    return adler32(out) == want;
 }
 Array<crd::u8> zlib_deflate(ConstSpan<crd::u8> in, crd::memory::IAllocator* a)
 {

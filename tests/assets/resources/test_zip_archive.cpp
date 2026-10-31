@@ -36,6 +36,22 @@ void wr64(crd::containers::Array<crd::u8>& b, crd::u64 v)
         b.push_back(static_cast<crd::u8>((v >> s) & 0xFFU));
     }
 }
+[[nodiscard]] crd::u32 rd32_at(const crd::containers::Array<crd::u8>& b, crd::usize at)
+{
+    crd::u32 v = 0;
+    for (crd::u32 s = 0; s < 32U; s += 8U)
+    {
+        v |= static_cast<crd::u32>(b[at + s / 8U]) << s;
+    }
+    return v;
+}
+void wr32_at(crd::containers::Array<crd::u8>& b, crd::usize at, crd::u32 v)
+{
+    for (crd::u32 s = 0; s < 32U; s += 8U)
+    {
+        b[at + s / 8U] = static_cast<crd::u8>((v >> s) & 0xFFU);
+    }
+}
 } // namespace
 
 TEST_CASE("zip: write -> read round-trip, deflate + stored, deterministic", "[resources][zip]")
@@ -227,6 +243,24 @@ TEST_CASE("zip: refusal classes -- corruption, truncation, not-a-zip", "[resourc
         crd::containers::Array<crd::u8> out(&alloc);
         CHECK(r.extract(0U, out) == res::ZipError::Corrupt);
         CHECK(out.size() == 0U); // nothing partial survives
+    }
+    { // a deflated member's directory size it does not decode to, or beyond what its compressed bytes can hold
+        // No archive comment: the EOCD is the tail. The member is DEFLATE (method 8).
+        const crd::usize cdir = rd32_at(zip, zip.size() - 22U + 16U);
+        REQUIRE(zip[cdir + 10U] == 8U);
+        REQUIRE(zip[cdir + 11U] == 0U);
+        const crd::u32 csize = rd32_at(zip, cdir + 20U);
+        const crd::u32 usize = rd32_at(zip, cdir + 24U);
+        for (const crd::u32 claim : {usize + 1U, usize - 1U, csize * 1032U + 1U, 0xFFFFFFF0U})
+        {
+            auto bad = zip; // copy
+            wr32_at(bad, cdir + 24U, claim);
+            res::ZipReader r(&alloc);
+            REQUIRE(r.open(crd::containers::ConstSpan<crd::u8>(bad.data(), bad.size())) == res::ZipError::Ok);
+            crd::containers::Array<crd::u8> out(&alloc);
+            CHECK(r.extract(0U, out) == res::ZipError::Corrupt);
+            CHECK(out.size() == 0U);
+        }
     }
     { // truncation: cut the tail (EOCD gone) -> NotRecognized
         res::ZipReader r(&alloc);

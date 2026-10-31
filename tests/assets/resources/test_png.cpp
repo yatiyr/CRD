@@ -368,6 +368,19 @@ TEST_CASE("resources: PNG failure classes", "[resources][png]")
         PngImage img(&alloc);
         CHECK(png_decode(crd::containers::as_const_span(png), img, &alloc) == PngError::BadHeader);
     }
+    SECTION("a header larger than its compressed stream can hold is BadData, before anything is allocated")
+    {
+        // 16384 x 16384 16-bit RGBA is a 2 GiB stream: far past the 8 MiB pool, and past what two bytes deflated can
+        // claim, so it is refused before the stream buffer is sized.
+        crd::containers::Array<crd::u8> raw(&alloc);
+        raw.push_back(0);
+        raw.push_back(7);
+        crd::containers::Array<crd::u8> png(&alloc);
+        begin_png(png, &alloc, 16384U, 16384U, 16, 6, 0);
+        add_idat_end(png, &alloc, raw);
+        PngImage img(&alloc);
+        CHECK(png_decode(crd::containers::as_const_span(png), img, &alloc) == PngError::BadData);
+    }
     SECTION("a bad filter id in the stream is BadData")
     {
         crd::containers::Array<crd::u8> raw(&alloc);

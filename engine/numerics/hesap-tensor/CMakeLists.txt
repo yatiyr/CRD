@@ -2,6 +2,7 @@
 #
 # Edges (acyclic; ADR-0096 §1 — lean-consumer via link-edge visibility):
 #   crd-core / crd-containers / crd-memory — types, Span, IAllocator (PUBLIC: on the API surface)
+#   crd-compression — the npz reader's inflate (PUBLIC: io.hpp is a header-only surface)
 #   Later slices add PRIVATE TU-local edges (hesap-sparse for sparse tensors, hesap-dense for
 #   decompositions) — NEVER PUBLIC, gated by the link-isolation smoke. The Philox counter-RNG
 #   (deterministic SR, sketches) is consumed include-only (header-only constexpr) — no link edge.
@@ -39,6 +40,7 @@ target_include_directories(crd-hesap-tensor
 
 target_link_libraries(crd-hesap-tensor
     PUBLIC
+        crd-compression  # OWN.1: io.hpp's npz reader inflates DEFLATE members through the one decoder
         crd-core
         crd-containers
         crd-memory

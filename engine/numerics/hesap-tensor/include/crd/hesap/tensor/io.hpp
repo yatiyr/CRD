@@ -12,8 +12,8 @@
 //   - .npz read/write   — a zip container of .npy members (numpy convention:
 //     key 'a' → member 'a.npy'). WRITE emits STORED members — byte-for-byte
 //     what np.savez does. READ accepts STORED and DEFLATE members
-//     (np.savez_compressed) via the RFC 1951 inflate in detail/io_zip.hpp;
-//     CRC-32 is verified on every member read. No zip64 (Unsupported past
+//     (np.savez_compressed) via crd-compression's exact-size RFC 1951
+//     inflate; CRC-32 is verified on every member read. No zip64 (Unsupported past
 //     4 GiB — np.savez has the same container limits).
 //   - safetensors read/write — the huggingface format: u64-LE header length,
 //     a JSON header {"name":{"dtype","shape","data_offsets"},...} with
@@ -47,8 +47,9 @@
 
 #include "tensor.hpp"
 
-#include "detail/io_zip.hpp"
+#include "detail/io_bytes.hpp"
 
+#include <crd/compression/deflate.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/checksum.hpp>
 #include <crd/containers/span.hpp>
@@ -1347,6 +1348,12 @@ public:
                 return TensorStatus::Unsupported;
             }
             ent.deflated = method == 8U;
+            // a member larger than the archive, or a claim larger than its compressed bytes can hold, reserves nothing
+            if (ent.comp_size > bytes.size() ||
+                (ent.deflated && ent.uncomp_size > crd::compression::deflate_max_inflated_size(ent.comp_size)))
+            {
+                return TensorStatus::BadInput;
+            }
             if (p + 46U + name_len > static_cast<crd::usize>(cd_off) + cd_size)
             {
                 return TensorStatus::BadInput;
@@ -1396,8 +1403,8 @@ public:
             {
                 const crd::usize dst_off = m_backing.size();
                 m_backing.resize_uninitialized(dst_off + ent.uncomp_size); // within the reserve
-                if (!iodetail::inflate(bytes.subspan(static_cast<crd::usize>(data_off), ent.comp_size),
-                                       {m_backing.data() + dst_off, ent.uncomp_size}))
+                if (!crd::compression::inflate_raw(bytes.subspan(static_cast<crd::usize>(data_off), ent.comp_size),
+                                                   {m_backing.data() + dst_off, ent.uncomp_size}))
                 {
                     return TensorStatus::BadInput;
                 }
