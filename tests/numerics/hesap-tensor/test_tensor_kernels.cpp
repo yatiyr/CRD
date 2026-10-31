@@ -2750,8 +2750,8 @@ void conv_oracle(const tn::NnConv2d& c, u64 images, f32* conv, f32* out)
 }
 
 // The direct 3x3/s1/p1 kernel at every output-channel block R 1 to 8 (and 17 = 8 + 8 + 1), heights 1 to 5 and widths
-// around one and two vectors (rows of at most eight columns, avx512's two rows a register, at R 1, 3, 6, 7, 8 and
-// 8 + 8 with even and odd heights), with and without relu and the fused pool; im2col at kernels 1 to 5 (and 1 x 3), pads 0
+// around one and two vectors (rows of at most eight columns, avx512's two rows a register, at R 3, 6, 7, 8 and 8 + 8
+// with even and odd heights), with and without relu and the fused pool; im2col at kernels 1 to 5 (and 1 x 3), pads 0
 // to 2 and strides 1 to 3, its bias prefill below, inside and past a vector. Two images, split into [1, 2) then
 // [0, 1); NaNs, infinities, signed zeros and subnormals in x, the weights and the bias; guard words after y and after
 // the scratch slot.

@@ -250,13 +250,15 @@ CRD_FORCEINLINE void conv3x3_step(const NnConv2d& c, const Staged& s, const f32*
     }
 }
 
-// bias + chain, the relu, and the two rows' stores of one output channel of conv3x3_row_pair.
-CRD_FORCEINLINE void conv3x3_pair_out(simd::Vec16f acc, f32 bias, bool relu, f32* d0, f32* d1, u64 w) noexcept
+// bias + chain, the relu, and the two rows' stores of one output channel of conv3x3_row_pair (V = Vec16f; a template,
+// so the levels that never build a pair hold no unused function).
+template <typename V>
+CRD_FORCEINLINE void conv3x3_pair_out(V acc, f32 bias, bool relu, f32* d0, f32* d1, u64 w) noexcept
 {
-    simd::Vec16f out = simd::Vec16f(bias) + acc;
+    V out = V(bias) + acc;
     if (relu)
     {
-        out = simd::max(out, simd::Vec16f(0.0F));
+        out = simd::max(out, V(0.0F));
     }
     if (w == kLanes<Group>)
     {

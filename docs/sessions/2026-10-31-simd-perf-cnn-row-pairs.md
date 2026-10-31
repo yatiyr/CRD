@@ -48,8 +48,11 @@ tap row 3 loads and 24 `vfmadd231ps mem{1to8}` on ymm registers, 9,216 fmas an i
 On the machine (linux-gcc-release lane tree at the candidate): every `crd-hesap-tensor*` case matching nn, kernel,
 level or simd, 402, all passing at every forced level; the convolution case's shapes gain rows of 2, 5 and 8
 columns at R 6, 7 and 8 + 8 with even and odd heights; a teeth edit (the low half stored into both rows) failed the
-avx512 arm. Every board process passed its tier bound. Locally: the plan, repository and Allman checks. The machine
-ran 0.46 h in one start and is stopped.
+avx512 arm. Every board process passed its tier bound. Clang 18 (`-fsyntax-only`, the lane's flags) on the unit at
+every level: the pushed form's output step, a plain inline function, was unused below avx512 and failed
+`-Werror,-Wunused-function` on the five other levels (the clang lanes); it is now a template like the pair, every level
+clean, and the avx512 object's disassembly identical to the boarded build's. Locally: the plan, repository and
+Allman checks. The machine ran 0.52 h in two starts and is stopped.
 
 ## Left
 

@@ -73,8 +73,9 @@
 [1.020-1.042], 1.025 [1.021-1.034]), the other four cells unresolved (0.991 [0.978-1.020] to 1.025 [1.011-1.044]),
 none slower. Kept for the cleaner code (no stack array, no `rep stos`) at no measured cost.
 
-**avx2, HEAD the reference (25 repetitions):** the row pair is not built there (`Wide` is `Vec8f`); the image loop
-now hands two rows a row-block call. 1.007 to 1.031: q8 batch 8 level (1.007 [0.992-1.014]), i8 batch 4096 faster
+**avx2, HEAD the reference (25 repetitions):** measured on the first candidate (`~/ab/nn-pair`); the row pair is
+not built there (`Wide` is `Vec8f`), and its avx2 code, where the image loop hands two rows a row-block call, is the
+kept change's, which differs only inside the pair. 1.007 to 1.031: q8 batch 8 level (1.007 [0.992-1.014]), i8 batch 4096 faster
 (1.031 [1.026-1.040]), the other four unresolved at 1.018 to 1.024 (lower bounds 1.001 to 1.015); nothing slower.
 
 ## Correctness
