@@ -79,6 +79,13 @@ Every sse2 body beats the portable loop but the three round-to-nearest narrowing
 runs the subnormal path (two emulated variable shifts and three `pow2` conversions) on every step, which the scalar
 loop branches past on normal inputs.
 
+**After the fold** (`narrow_rne_lanes` runs the subnormal path only when a nonzero lane takes it; the same bits, the
+conversion differentials and the v14-a gates passing), three more rounds of `bench_dtypes`, `portable@sse2` over
+`sse2@sse2`: f32 to f16 1.497 [1.440-1.604], e4m3 1.725 [1.715-1.737], e5m2 1.427 [1.382-1.487]; the sse4.2 unit
+over sse2 1.18 to 1.26. The avx2 fp8 narrowings, on the same transcription, now run 1.443 [1.403-1.505] times
+pre-row (0.41 against 0.57 ns/elem); the other rows held (f32 to f16 at avx2 1.057, the SR batches 1.10 and 1.11).
+At sse2 e4m3 now leads ml_dtypes (0.706 against 1.28 ns/elem).
+
 `sse2@sse4.2` ms over `sse4.2@sse4.2` ms, above 1 the sse4.2 unit faster:
 
 | family | ratio |
@@ -89,7 +96,8 @@ loop branches past on normal inputs.
 | stats, special | the sse2 table at both levels |
 
 The conversion family's sse4.2 unit stays. The hesap-tensor family's sse4.2 unit does not beat sse2 (its
-`pmaddubsw` i8 dot loses 8%, the rest ties) and goes.
+`pmaddubsw` i8 dot loses 8%, the rest ties) and was removed: an sse4.2 selection runs the sse2 table, as stats,
+special and fft already do.
 
 ## Against the peers
 
@@ -111,4 +119,6 @@ The peers run their AVX2 (and FMA) code at every Cerid level, so a sse2 column a
 like-for-like row. Behind a peer at avx2: torch's f32 to f16 (0.97), onnxruntime's mlp at batch 4096 (0.69) and its
 cnn (0.35, 0.42), the cnn being the regression above.
 
-Logs: `~/sse2-board/logs` in WSL (`round<N>-<bench>.log`; the pre-row binaries in `~/sse2-board/prerow`).
+Logs: `~/sse2-board/logs` in WSL (`round<N>-<bench>.log`; after the fold `~/sse2-board/logs-rne`; the pre-row
+binaries in `~/sse2-board/prerow`). `scripts/run-lane-bench.sh` now takes `<level>@<glibc level>` list entries, so
+`CRD_BENCH_LEVELS="avx2 sse4.2 sse2@sse4.2 sse2 portable@sse2"` runs these arms through the drivers.

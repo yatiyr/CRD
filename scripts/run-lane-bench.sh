@@ -12,7 +12,10 @@
 # the host or the build's cap). A forced x64 level also hides the features above it from glibc's ifuncs (GLIBC_TUNABLES
 # glibc.cpu.hwcaps), so libm and the string routines run the bodies a CPU of that level gets (fma without the FMA
 # instruction on sse4.2 and sse2); portable keeps the host's glibc, as its targets (architectures without x64 levels)
-# have the FPU's fma. The peers dispatch on their own CPUID and stay at the host's.
+# have the FPU's fma. A list entry <level>@<glibc level> runs the level's kernels on another level's glibc: an sse2
+# body is judged against portable@sse2, the portable loop as an SSE2 machine runs it, and an sse4.2 unit against
+# sse2@sse4.2 (docs/bench/2026-10-31-simd-dispatch-sse2-boards.md). The peers dispatch on their own CPUID and stay at
+# the host's.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 if [[ $# -lt 1 || $1 == -* ]]; then
@@ -60,10 +63,12 @@ read -r -a levels <<< "$level_list"
 above_avx2=-AVX512F,-AVX512CD,-AVX512BW,-AVX512DQ,-AVX512VL
 above_sse42=$above_avx2,-AVX,-AVX2,-FMA,-FMA4,-BMI1,-BMI2,-LZCNT,-MOVBE
 above_sse2=$above_sse42,-SSSE3,-SSE4_1,-SSE4_2,-POPCNT
-for level in "${levels[@]}"; do
+for entry in "${levels[@]}"; do
+    level=${entry%@*}
+    glibc=${entry#*@}
     select=()
     hidden=
-    case $level in
+    case $glibc in
         avx2) hidden=$above_avx2 ;;
         sse4.2) hidden=$above_sse42 ;;
         sse2) hidden=$above_sse2 ;;
@@ -74,7 +79,7 @@ for level in "${levels[@]}"; do
     if [[ -n $hidden ]]; then
         select+=("GLIBC_TUNABLES=glibc.cpu.hwcaps=$hidden")
     fi
-    echo "--- $target, CPU level: $level${hidden:+ (glibc hwcaps $hidden)} ---"
+    echo "--- $target, CPU level: $entry${hidden:+ (glibc hwcaps $hidden)} ---"
     bash scripts/wsl-lane.sh run "$PRESET" -- env "${select[@]}" taskset -c "$cpus" \
         "$tree/runtime/cpu_level_record" --expect "$level"
     bash scripts/wsl-lane.sh run "$PRESET" -- env "${select[@]}" MKL_NUM_THREADS=1 OMP_NUM_THREADS=1 \

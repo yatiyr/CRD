@@ -43,8 +43,22 @@ Findings, all in every round:
 - Peers: MATLAB-1T lgamma 7.49 and tgamma 14.13 ns, scipy 8.41 and 15.06, against 4.85 and 5.92 at avx2; Boost's
   scalar digamma now leads Cerid's (21.9 against 24.8 ns), the Gamma class again.
 
+## Folds
+
+- **Narrowings.** `narrow_rne_lanes` (`float_convert_kernels.cpp`) runs the subnormal path only when a nonzero lane
+  takes it (a zero lane's result is the class selection's anyway); the bits are unchanged. One focused attempt, kept:
+  every sse2 and sse4.2 narrowing now beats `portable@sse2` (1.43x to 1.73x), and the avx2 fp8 narrowings, on the
+  same transcription, run 1.44x pre-row.
+- **hesap-tensor sse4.2 unit removed** (`LEVELS portable sse2 avx2 avx512`): an sse4.2 selection runs the sse2 table;
+  its `maddubs` branch is gone and the level test holds that no sse4.2 table exists.
+- **`run-lane-bench.sh`** takes `<level>@<glibc level>` entries, so the drivers can run `portable@sse2` and
+  `sse2@sse4.2`.
+
+Checks: linux-gcc-release `crd-math-tests` and `crd-hesap-tensor-tests` built, the conversion and tensor kernel
+cases and every `kernels-at-<level>` arm pass (47 and 102), the v14-a gates pass; win-debug builds of both targets
+and their kernel cases; Allman braces, clang-format (no new finding).
+
 ## Left
 
 The row's Left list carries: the nn avx2 regression, the scalar transcendentals of baseline general code (Gamma), the
-Student-t quotient's second division, the hesap-tensor family's sse4.2 unit, the three narrowings, then the
-jobs-retune thread sweep and fft f32 against MKL.
+Student-t quotient's second division, then the jobs-retune thread sweep and fft f32 against MKL.
