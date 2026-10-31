@@ -1397,7 +1397,7 @@ class AgentProgram(unittest.TestCase):
         env = agent_module.clean_environment({'env': {'A': '1'}, 'secrets': {'S': 'v'}}, {'CERID_AGENT_JOB_ID': 'j'},
                                              host=host)
         self.assertEqual(env, {'PATH': '/bin', 'HOME': '/home/c', 'A': '1', 'S': 'v', 'CERID_AGENT_JOB_ID': 'j',
-                               'PYTHONUTF8': '1', 'CERID_CI': '1'})
+                               'PYTHONUTF8': '1', 'CERID_CI': '1', 'CERID_CI_SECRET_NAMES': 'S'})
 
     def test_step_scripts_stop_at_the_first_failure(self):
         with tempfile.TemporaryDirectory() as scratch:
@@ -2049,6 +2049,320 @@ class Reproducibility(Base):
         self.c.start(got['job']['id'], got['token'])
         self.c.record_environment(got['job']['id'], got['token'], record)
         self.assertEqual(self.c.job(got['job']['id'])['repro']['tools'], {'git': 'git 2.0'})
+
+
+# --------------------------------------------------------------------------------------------- diagnostics
+
+from coordinator import diagnostics  # noqa: E402
+
+CORPUS = ROOT / 'tests/foundation/perf/fuzz/corpus/bundle'
+SECRET = 'tok-s3cret-value'
+TEST_LOG = '''Start testing: Oct 31 10:00 UTC
+----------------------------------------------------------
+1/3 Testing: vk.clear
+1/3 Test: vk.clear
+Output:
+----------------------------------------------------------
+Validation Error: [ VUID-vkCmdDraw-None-02699 ] Object 0: handle = 0x1 | descriptor set not bound
+ordinary line
+<end of output>
+Test Failed.
+----------------------------------------------------------
+2/3 Testing: mem.uaf
+2/3 Test: mem.uaf
+Output:
+----------------------------------------------------------
+=================================================================
+==4242==ERROR: AddressSanitizer: heap-use-after-free on address 0x602000000010
+READ of size 4 at 0x602000000010 thread T0
+    #0 0x4f1 in use_after_free test.cpp:12
+SUMMARY: AddressSanitizer: heap-use-after-free test.cpp:12 in use_after_free
+after the report
+src/math.cpp:7:12: runtime error: signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'
+    #0 0x55 in add src/math.cpp:7
+token in the environment: tok-s3cret-value
+<end of output>
+Test Failed.
+----------------------------------------------------------
+3/3 Testing: jobs.race
+3/3 Test: jobs.race
+Output:
+----------------------------------------------------------
+WARNING: ThreadSanitizer: data race (pid=77)
+  Write of size 8 at 0x7b0 by thread T1:
+    #0 worker jobs.cpp:40
+SUMMARY: ThreadSanitizer: data race jobs.cpp:40 in worker
+D3D12 ERROR: ID3D12CommandList::DrawInstanced: root signature not set [ EXECUTION ERROR #201 ]
+<end of output>
+Test Failed.
+'''
+
+
+def make_bundle(sections, created=5):
+    return agent_module.bundle_bytes({'schema': 1, 'flags': 0, 'created': created},
+                                     [(tag, 0, payload, len(payload)) for tag, payload in sections])
+
+
+class FakeUploads:
+    def __init__(self):
+        self.calls = []
+
+    def call(self, method, path, data=None, headers=None, **kw):
+        self.calls.append((method, path, data))
+        return {}
+
+
+class Diagnostics(Base):
+    def test_the_bundle_reader_and_writer_match_the_engine_corpus_byte_for_byte(self):
+        whole = (CORPUS / 'seed-93d7bc78755b63aa').read_bytes()
+        header, sections, complete = agent_module.bundle_sections(whole)
+        self.assertTrue(complete)
+        self.assertEqual([s[0] for s in sections], [1, 2, 4, 5])
+        self.assertEqual(agent_module.bundle_bytes(header, sections), whole, 'the writer reproduces engine bytes')
+        absent = (CORPUS / 'seed-055969ee4c532f18').read_bytes()
+        header, sections, _ = agent_module.bundle_sections(absent)
+        self.assertEqual(agent_module.bundle_bytes(header, sections), absent)
+        truncated = (CORPUS / 'seed-3598718e8e0e22fe').read_bytes()
+        _, sections, complete = agent_module.bundle_sections(truncated)
+        self.assertFalse(complete)
+        self.assertEqual([s[0] for s in sections], [1, 2, 4], 'the complete prefix is recovered')
+        self.assertIsNone(agent_module.bundle_sections(b'this is not a bundle at all, not even close.....'))
+
+    def test_a_raw_dump_section_becomes_an_explicit_absent_section(self):
+        data = make_bundle([(1, b'{"manifest":1}'), (3, b'MDMP raw memory'), (7, b'build identity')])
+        stripped, size, note = diagnostics.strip_raw_dump(data)
+        header, sections, complete = agent_module.bundle_sections(stripped)
+        self.assertTrue(complete)
+        self.assertEqual([(s[0], s[1], s[2]) for s in sections], [
+            (1, 0, b'{"manifest":1}'), (3, agent_module.SECTION_ABSENT, b''), (7, 0, b'build identity')])
+        self.assertEqual(size, len(b'MDMP raw memory'))
+        self.assertIn('raw dump section', note)
+        self.assertNotIn(b'MDMP', stripped)
+
+    def test_no_secret_value_is_ever_uploaded(self):
+        text, note = agent_module.scrub_artifact('a.log', b'x ' + SECRET.encode() + b' y', [SECRET])
+        self.assertEqual((text, note), (b'x [REDACTED] y', 'secret values redacted'))
+        binary, note = agent_module.scrub_artifact('a.bin', b'\x00\xff' + SECRET.encode('utf-16-le'), [SECRET])
+        self.assertIsNone(binary)
+        self.assertIn('withheld', note)
+        bundle = make_bundle([(1, b'manifest'), (4, b'log tail ' + SECRET.encode())])
+        cleaned, note = agent_module.scrub_artifact('flight-1.cdb', bundle, [SECRET])
+        self.assertNotIn(SECRET.encode(), cleaned)
+        _, sections, complete = agent_module.bundle_sections(cleaned)
+        self.assertTrue(complete, 'the checksums are rewritten')
+        self.assertEqual(sections[1][2], b'log tail [REDACTED]')
+        self.assertEqual(sections[1][3], len(sections[1][2]), 'a whole section stays whole')
+        same, note = agent_module.scrub_artifact('a.bin', b'\x00clean', [SECRET])
+        self.assertEqual((same, note), (b'\x00clean', None))
+
+    def test_uploads_are_scrubbed_typed_and_withheld_binaries_reported(self):
+        """Before ADR-0135 §17 the agent uploaded artifact files as they were: a log holding a secret value left
+        the machine. Every upload is scrubbed now."""
+        with tempfile.TemporaryDirectory() as scratch:
+            work = Path(scratch)
+            (work / 'out').mkdir()
+            (work / 'out/run.log').write_bytes(b'value=' + SECRET.encode())
+            (work / 'out/dump.bin').write_bytes(b'\x00\x01' + SECRET.encode('utf-16-le'))
+            (work / 'out/clean.bin').write_bytes(b'\x00\x01')
+            client, said = FakeUploads(), []
+            count = agent_module.upload_artifacts(client, 'j' * 32, work, 'out/*', said.append, secrets=[SECRET],
+                                                  kind='crash-record')
+            self.assertEqual(count, 2)
+            for _, path, data in client.calls:
+                self.assertNotIn(SECRET.encode(), data)
+                self.assertNotIn(SECRET.encode('utf-16-le'), data)
+                self.assertIn('kind=crash-record', path)
+            self.assertTrue(any('dump.bin: withheld' in line for line in said))
+            env = agent_module.clean_environment({'env': {}, 'secrets': {'DEPLOY_KEY': SECRET}}, {}, host={})
+            self.assertEqual(env['CERID_CI_SECRET_NAMES'], 'DEPLOY_KEY')
+            self.assertEqual(agent_module.job_secret_values(env), [SECRET])
+
+    def test_sanitizer_reports_and_validation_messages_are_cut_out_per_test(self):
+        reports = diagnostics.sanitizer_reports(TEST_LOG)
+        self.assertEqual([(r['test'], r['sanitizer']) for r in reports], [
+            ('mem.uaf', 'AddressSanitizer'), ('mem.uaf', 'UndefinedBehaviorSanitizer'),
+            ('jobs.race', 'ThreadSanitizer')])
+        self.assertTrue(reports[0]['text'].rstrip().endswith('in use_after_free'))
+        self.assertNotIn('after the report', reports[0]['text'])
+        self.assertEqual(reports[1]['text'].count('\n'), 2, 'the UBSan line and its stack')
+        found = diagnostics.gpu_validation(TEST_LOG)
+        self.assertEqual(sorted(found), ['jobs.race', 'vk.clear'])
+        self.assertIn('VUID-vkCmdDraw', found['vk.clear'][0])
+        self.assertIn('D3D12 ERROR', found['jobs.race'][0])
+
+    def collect_tree(self, scratch, raw_dumps=False):
+        build = Path(scratch) / 'build' / 'linux-gcc-debug'
+        temporary = build / 'Testing/Temporary'
+        temporary.mkdir(parents=True)
+        (temporary / 'LastTest.log').write_text(TEST_LOG, encoding='utf-8')
+        (temporary / 'ctest-junit.xml').write_text(
+            '<testsuite><testcase name="vk.clear"><failure/></testcase><testcase name="ok"/>'
+            '<testcase name="mem.uaf"><failure/></testcase></testsuite>', encoding='utf-8')
+        tests = build / 'tests/perf'
+        tests.mkdir(parents=True)
+        (tests / 'crash_100.dmp').write_bytes(b'MDMP' + SECRET.encode('utf-16-le'))
+        (tests / 'crash_101.dmp').write_bytes(b'MDMP\x00 stack memory')
+        (tests / 'crash_100.log').write_text('signal 11 at 0x0\n', encoding='utf-8')
+        (tests / 'flight-3.cdb').write_bytes(make_bundle([(1, b'manifest'), (3, b'MDMP raw'), (6, b'events')]))
+        (tests / 'run.crpl').write_bytes(b'CRPL record')
+        (tests / 'frame.perfetto.json').write_text('{"traceEvents": [], "note": "%s"}' % SECRET, encoding='utf-8')
+        old = tests / 'flight-1.cdb'
+        old.write_bytes(make_bundle([(1, b'old')]))
+        since = time.time() - 60
+        os.utime(old, (since - 3600, since - 3600))
+        context = {'preset': 'linux-gcc-debug', 'test_preset': 'linux-gcc-debug', 'device': 'gce-linux-x64-intel',
+                   'commit': COMMIT, 'build': '7', 'job': 'j' * 32, 'phase': 'test', 'cpu_level': 'native'}
+        summary = diagnostics.collect(build, since, context, secrets=[SECRET], raw_dumps=raw_dumps,
+                                      root=Path(scratch))
+        return build, summary
+
+    def test_a_failed_runs_diagnostics_are_collected_typed_and_private(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            build, summary = self.collect_tree(scratch)
+            by_kind = {}
+            for item in summary['items']:
+                by_kind.setdefault(item['kind'], []).append(item)
+            self.assertEqual(sorted(by_kind), ['crash-dump', 'crash-record', 'flight-record', 'gpu-validation',
+                                               'perfetto-trace', 'replay-record', 'sanitizer-report'])
+            self.assertEqual(len(by_kind['flight-record']), 1, 'a previous run\'s file is never collected')
+            self.assertIn('restricted', by_kind['crash-dump'][0]['withheld'])
+            self.assertNotIn('path', by_kind['crash-dump'][0])
+            self.assertEqual(by_kind['flight-record'][0]['path'],
+                             'build/linux-gcc-debug/diagnostics/flight-record/tests__perf__flight-3.cdb')
+            flight = (Path(scratch) / by_kind['flight-record'][0]['path']).read_bytes()
+            self.assertNotIn(b'MDMP raw', flight)
+            self.assertTrue(agent_module.bundle_sections(flight)[2])
+            for path in (build / 'diagnostics').rglob('*'):
+                if path.is_file():
+                    self.assertNotIn(SECRET.encode(), path.read_bytes(), path)
+            self.assertEqual(summary['failed_tests'], ['vk.clear', 'mem.uaf'])
+            self.assertEqual(summary['schema'], 'cerid-ci-diagnostics/1')
+            saved = json.loads((build / 'diagnostics/summary.json').read_text(encoding='utf-8'))
+            self.assertEqual(saved['commit'], COMMIT)
+            self.assertEqual(diagnostics.artifact_kind(by_kind['sanitizer-report'][0]['path']), 'sanitizer-report')
+        with tempfile.TemporaryDirectory() as scratch:
+            build, summary = self.collect_tree(scratch, raw_dumps=True)
+            dumps = {Path(i['source']).name: i for i in summary['items'] if i['kind'] == 'crash-dump'}
+            self.assertIsNone(dumps['crash_101.dmp'].get('withheld'), 'a device that opts in keeps raw dumps')
+            self.assertTrue((Path(scratch) / dumps['crash_101.dmp']['path']).is_file())
+            self.assertIn('secret value', dumps['crash_100.dmp']['withheld'], 'even then no secret value leaves')
+
+    def test_artifacts_carry_a_kind(self):
+        for path, kind in (('build/p/diagnostics/crash-dump/x.dmp', 'crash-dump'),
+                           ('build/p/diagnostics/summary.json', 'summary'), ('a/crash_1.dmp', 'crash-dump'),
+                           ('a/flight-2.cdb', 'flight-record'), ('a/b.cdb', 'crash-bundle'),
+                           ('a/run.crpl', 'replay-record'), ('a/t.perfetto.json', 'perfetto-trace'),
+                           ('build/p/Testing/Temporary/ctest-junit.xml', 'junit'),
+                           ('build/p/Testing/Temporary/LastTest.log', 'test-log'),
+                           ('build/p/gold/vk.clear.png', 'gold-image'), ('notes.txt', 'file')):
+            self.assertEqual(diagnostics.artifact_kind(path), kind, path)
+        self.build({'steps': [{'key': 'lane', 'command': 'x', 'agents': {'queue': 'q'}}]})
+        got = self.c.poll(agent(self.c, queue='q', name='w'))
+        self.c.start(got['job']['id'], got['token'])
+        data = b'report'
+        entry = self.c.put_artifact(got['job']['id'], got['token'], 'build/p/diagnostics/sanitizer-report/t.txt',
+                                    data, hashlib.sha256(data).hexdigest())
+        self.assertEqual(entry['kind'], 'sanitizer-report')
+        with self.assertRaises(scheduler.Refused):
+            self.c.put_artifact(got['job']['id'], got['token'], 'x.txt', data, hashlib.sha256(data).hexdigest(),
+                                kind='anything')
+        self.c.update('artifacts/1/manifest.json', lambda m: {'entries': [dict(e, kind=None) for e in m['entries']]})
+        self.assertEqual(self.c.artifacts(1)[0]['kind'], 'sanitizer-report', 'old entries are typed by path')
+
+    def lane(self, scratch, status, phase):
+        class Recording(pipeline.Runner):
+            def __call__(self, argv, check=True, **kw):
+                self.commands.append({'argv': argv})
+                return 0
+        run = Recording(environ={'CERID_CI': '1', 'CERID_CI_COMMIT': COMMIT, 'CERID_AGENT_JOB_ID': 'j' * 32,
+                                 'CERID_CI_SECRET_NAMES': 'DEPLOY_KEY', 'DEPLOY_KEY': SECRET},
+                        dry=False, log=lambda *_: None)
+        device = pipeline.devices_by_id(REGISTRY)['gce-linux-x64-intel']
+        lane = pipeline.Lane('linux-gcc-debug', device, tiers=pipeline.ci_tier.load_tiers(pipeline.TIERS), run=run,
+                             temp=scratch)
+        build = Path(scratch) / 'build' / 'linux-gcc-debug'
+        (build / 'Testing/Temporary').mkdir(parents=True)
+        (build / 'Testing/Temporary/LastTest.log').write_text(TEST_LOG, encoding='utf-8')
+        lane.build_dir = str(build)
+        lane.status, lane.failed_phase = status, phase
+        lane.upload()
+        return lane, run, build
+
+    def test_a_failed_lane_collects_its_diagnostics_before_the_upload(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            lane, run, build = self.lane(scratch, 'failure', 'test_sse2')
+            summary = json.loads((build / 'diagnostics/summary.json').read_text(encoding='utf-8'))
+            self.assertEqual((summary['cpu_level'], summary['phase'], summary['job']), ('sse2', 'test_sse2', 'j' * 32))
+            self.assertEqual(summary['ctest'], 'ctest --preset linux-gcc-debug-at-sse2 --output-on-failure')
+            self.assertEqual(summary['privacy']['secret_values_scrubbed'], 1)
+            upload = ' '.join(map(str, run.commands[-1]['argv']))
+            self.assertIn('build/*/diagnostics/**/*', upload)
+            self.assertIn('sanitizer-report', lane.result('fail', time.time())['diagnostics'])
+        with tempfile.TemporaryDirectory() as scratch:
+            _, run, build = self.lane(scratch, 'success', None)
+            self.assertFalse((build / 'diagnostics').exists(), 'a passing lane collects nothing')
+
+    def test_the_qual_cell_links_the_failed_jobs_diagnostics(self):
+        module = coordinator_main.dashboard_module()
+        cells, _ = module.matrix(REGISTRY, [{'device': 'gce-linux-x64-intel', 'step': 'lane-linux-gcc-debug',
+                                             'outcome': 'fail', 'build': '7', 'features': ['unit'],
+                                             'job_id': 'j' * 32, 'failed_phase': 'test',
+                                             'diagnostics': ['crash-bundle', 'sanitizer-report']}])
+        cell = cells[('gce-linux-x64-intel', 'unit')]
+        self.assertEqual((cell['job'], cell['diagnostics'], cell['phase']),
+                         ('j' * 32, ['crash-bundle', 'sanitizer-report'], 'test'))
+
+    def failed_job_with_diagnostics(self):
+        self.build({'steps': [{'key': 'lane-linux-gcc-debug', 'command': 'python ci/pipeline.py lane',
+                               'agents': {'queue': 'q'}, 'env': {'CERID_CI_DEVICE': 'gce-linux-x64-intel'}}]})
+        got = self.c.poll(agent(self.c, queue='q', name='w'))
+        job_id, token = got['job']['id'], got['token']
+        self.c.start(job_id, token)
+        self.c.record_environment(job_id, token, {'commit': COMMIT, 'machine': 'vm-1', 'tools': {}})
+        summary = {'schema': diagnostics.SCHEMA, 'preset': 'linux-gcc-debug', 'test_preset': 'linux-gcc-debug',
+                   'device': 'gce-linux-x64-intel', 'commit': COMMIT, 'phase': 'test_sse2', 'cpu_level': 'sse2',
+                   'failed_tests': ['mem.uaf', 'a.b'], 'items': [
+                       {'kind': 'crash-dump', 'source': '/w/crash_1.dmp', 'size': 9, 'sha256': 'x',
+                        'withheld': 'raw memory is restricted'}]}
+        for path, data in (('build/linux-gcc-debug/diagnostics/summary.json', json.dumps(summary).encode()),
+                           ('build/linux-gcc-debug/diagnostics/flight-record/flight-3.cdb', make_bundle([(1, b'm')])),
+                           ('build/linux-gcc-debug/diagnostics/replay-record/run.crpl', b'CRPL'),
+                           ('build/linux-gcc-debug/evidence/host.json', b'{}')):
+            self.c.put_artifact(job_id, token, path, data, hashlib.sha256(data).hexdigest())
+        self.c.finish(job_id, token, 1)
+        return job_id
+
+    def test_reproduce_downloads_the_diagnostics_and_prints_the_exact_replay(self):
+        job_id = self.failed_job_with_diagnostics()
+        with tempfile.TemporaryDirectory() as dest:
+            code, out, err = Cli.ops(self, '--json', 'job', 'reproduce', job_id, '--dest', dest)
+            self.assertEqual(code, 0, err)
+            data = json.loads(out)
+            self.assertEqual(sorted(Path(f['path']).name for f in data['files']), ['flight-3.cdb', 'run.crpl'])
+            self.assertTrue((Path(dest) / 'flight-record/flight-3.cdb').is_file())
+            self.assertEqual(json.loads((Path(dest) / 'repro.json').read_text(encoding='utf-8'))['repro']['commit'],
+                             COMMIT)
+            commands = [s['command'] or '' for s in data['steps']]
+            self.assertIn(COMMIT, commands[0])
+            self.assertTrue(commands[0].startswith('git worktree add --detach'))
+            self.assertEqual(commands[1], 'python ci/pipeline.py lane --preset linux-gcc-debug --device '
+                                          'gce-linux-x64-intel --tests "^(mem\\.uaf|a\\.b)$"')
+            self.assertEqual(commands[2], 'ctest --preset linux-gcc-debug-at-sse2 --output-on-failure -R '
+                                          '"^(mem\\.uaf|a\\.b)$"')
+            self.assertTrue(any('bundle.inspect' in c for c in commands))
+            self.assertTrue(any('replay.run --grant read,execute' in c for c in commands))
+            code, out, err = Cli.ops(self, 'job', 'reproduce', job_id, '--dest', dest)
+            self.assertIn('withheld on the machine: crash-dump', out)
+            from unittest import mock
+            calls = []
+            with mock.patch.object(ops.subprocess, 'call', side_effect=lambda argv, **kw: calls.append(
+                    (argv, kw.get('cwd'))) or 0):
+                code, out, err = Cli.ops(self, '--json', 'job', 'reproduce', job_id, '--dest', dest, '--run')
+            self.assertEqual(code, 0, err)
+            self.assertEqual(calls[0][0][1:4], ['-C', str(ops.ROOT), 'worktree'])
+            self.assertEqual(calls[1][0][1:], ['ci/pipeline.py', 'lane', '--preset', 'linux-gcc-debug', '--device',
+                                               'gce-linux-x64-intel', '--tests', '^(mem\\.uaf|a\\.b)$'])
+            self.assertEqual(calls[1][1], str(Path(dest) / 'src'))
 
 
 # --------------------------------------------------------------------------------------------- ops CLI

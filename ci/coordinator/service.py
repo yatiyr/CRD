@@ -361,7 +361,7 @@ def make_handler(service, surfaces=SURFACES, ui=None):
                 return self.send(200, {'ok': True})
             if call == 'artifacts' and method == 'PUT':
                 entry = c.put_artifact(job_id, token, query.get('path', ''), self.body(c.limits['artifact_bytes']),
-                                       self.headers.get('X-Content-SHA256', ''))
+                                       self.headers.get('X-Content-SHA256', ''), kind=query.get('kind'))
                 return self.send(200, entry)
             if call == 'artifacts' and method == 'GET':
                 job = c.job_for_token(job_id, token, writing=False)

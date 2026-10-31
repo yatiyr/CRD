@@ -71,7 +71,8 @@ def matrix(registry, results, planned=None):
             previous = cells.get(key)
             cells[key] = {'state': outcome, 'build': record.get('build'), 'log': record.get('log'),
                           'step': record.get('step'), 'previous': previous['state'] if previous else None,
-                          'reason': record.get('reason', '')}
+                          'reason': record.get('reason', ''), 'job': record.get('job_id'),
+                          'diagnostics': record.get('diagnostics') or [], 'phase': record.get('failed_phase')}
         if outcome != 'budget':
             history.setdefault(record['device'], []).append((build_number(record.get('build')), outcome))
     if planned:

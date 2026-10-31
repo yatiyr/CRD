@@ -1134,6 +1134,8 @@ class Lane:
         self.env_file = self.temp / 'env.txt'
         self.path_file = self.temp / 'path.txt'
         self.status = 'success'
+        self.started = time.time()
+        self.failed_phase = None
         self.test_preset = 'win-vs-debug' if self.job == 'windows-native' else preset
         self.env.setdefault('CPM_SOURCE_CACHE', str(ROOT / '.cpm-cache'))
         self.env['CRD_PLATFORM_HEADLESS'] = '1'
@@ -1468,9 +1470,41 @@ class Lane:
                                 environ=self.env), check=False)
 
     def upload(self):
+        if self.status != 'success':
+            self.diagnostics_summary = self.diagnostics()
         if self.env.get('CERID_CI'):
             self.run(agent_tool('artifact', 'upload', 'build/*/evidence/**/*;build/**/Testing/Temporary/*.log;'
-                                'build/**/Testing/Temporary/*.xml', environ=self.env), check=False)
+                                'build/**/Testing/Temporary/*.xml;build/*/diagnostics/**/*', environ=self.env),
+                     check=False)
+
+    def diagnostics(self):
+        """A failed lane's diagnostics, typed, scrubbed and summarised under `<build dir>/diagnostics/`
+        (ci/coordinator/diagnostics.py); `upload` sends them, and `ops.py job reproduce` reads the summary."""
+        from coordinator import diagnostics
+        level = 'sse2' if self.failed_phase == 'test_sse2' else self.env.get('CRD_CPU_LEVEL') or 'native'
+        tests = self.tests
+        context = {'preset': self.preset, 'test_preset': self.test_preset, 'device': self.device['id'],
+                   'commit': self.env.get('CERID_CI_COMMIT'), 'build': self.env.get('CERID_CI_BUILD_NUMBER'),
+                   'job': self.env.get('CERID_AGENT_JOB_ID'), 'phase': self.failed_phase, 'cpu_level': level,
+                   'lane_command': 'python ci/pipeline.py lane --preset %s --device %s%s' % (
+                       self.preset, self.device['id'], ' --tests "%s"' % tests if tests else ''),
+                   'ctest': 'ctest --preset %s --output-on-failure' % (
+                       self.test_preset + '-at-sse2' if level == 'sse2' else self.test_preset)}
+        if self.run.dry:
+            self.run.log('collect the diagnostics of the failed phase %s into %s/diagnostics' % (
+                self.failed_phase, self.build_dir))
+            return None
+        secrets = [self.env[n] for n in (self.env.get('CERID_CI_SECRET_NAMES') or '').split(',') if self.env.get(n)]
+        try:
+            summary = diagnostics.collect(ROOT / self.build_dir, self.started, context, secrets=secrets,
+                                          raw_dumps=bool((self.device.get('diagnostics') or {}).get('raw_dumps')),
+                                          extra_roots=diagnostics.default_roots(), root=ROOT)
+        except Exception as error:  # diagnostics are evidence: they never turn a lane's verdict
+            self.run.log('diagnostics not collected: %s' % error)
+            return None
+        for line in diagnostics.describe(summary):
+            self.run.log(line)
+        return summary
 
     # Per-test cache --------------------------------------------------------------------------------------------
     def test_keys(self):
@@ -1552,6 +1586,9 @@ class Lane:
                   'minutes': round((time.time() - started) / 60.0, 2), 'console': self.console,
                   'features': (self.env.get('CERID_CI_FEATURES') or '').split(',') if self.env.get(
                       'CERID_CI_FEATURES') else None, 'cached_tests': getattr(self, 'cached_test_count', 0),
+                  'job_id': self.env.get('CERID_AGENT_JOB_ID'), 'failed_phase': self.failed_phase,
+                  'diagnostics': sorted({i['kind'] for i in (getattr(self, 'diagnostics_summary', None) or {}).get(
+                      'items', []) if i.get('path')}),
                   'finished': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')}
         try:
             record_result(self.store, record)
@@ -1602,6 +1639,7 @@ class Lane:
                 self.run.log('phase %s failed: %s' % (phase, error))
                 if failure is None:
                     failure = error
+                    self.failed_phase = phase
                     self.status = 'failure'
         self.cpm_save()
         self.result('fail' if failure else 'pass', started)

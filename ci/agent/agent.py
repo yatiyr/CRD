@@ -35,6 +35,7 @@ import os
 import platform
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
@@ -43,6 +44,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 
 VERSION = '1.0.0'
 PROTOCOL = 1
@@ -270,6 +272,8 @@ def clean_environment(job, extra, host=None):
     env.update(job['env'])
     env.update(extra)
     env.update(job.get('secrets', {}))
+    # Names only, never values: in-job tools (artifact upload) read the values from their own environment to scrub.
+    env['CERID_CI_SECRET_NAMES'] = ','.join(sorted(job.get('secrets', {})))
     env['PYTHONUTF8'] = '1'
     env['CERID_CI'] = '1'
     return env
@@ -510,7 +514,8 @@ class Agent:
             infra = cancel.get('infra')
             log.line('exit status %d%s' % (exit_status, ' (%s)' % cancel['reason'] if cancel['reason'] else ''))
             if job.get('artifact_paths') and not infra:
-                upload_artifacts(client, job['id'], work, ';'.join(job['artifact_paths']), log.line)
+                upload_artifacts(client, job['id'], work, ';'.join(job['artifact_paths']), log.line,
+                                 secrets=job.get('secrets', {}).values())
         except Exception as error:  # checkout or start failures are the job's failure, reported with the reason
             detail = redactor.text(str(error))[:500]
             log.line('agent error: %s' % detail)
@@ -572,9 +577,99 @@ def reproducibility(job, env, checkout, name, gce=False, opener=None, run=subpro
                     if k not in HIDDEN_ENV}}
 
 
-def upload_artifacts(client, job_id, work, patterns, say):
-    """Upload every file matching the `;`-separated globs (relative to the checkout, `**` recursive)."""
+# cerid-diagnostics/1 bundles (DIAG.5d, engine/foundation/perf/include/crd/perf/bundle.hpp): a 40-byte header
+# (magic, schema, format, flags, created_at_ns, total_len, section_count, crc32 of the first 36 bytes), then per
+# section a 32-byte header (tag, flags, payload_length, original_length, payload crc32, spare) and the payload. The
+# CRC is IEEE 802.3, the same as zlib.crc32.
+BUNDLE_MAGIC = b'CDB1'
+BUNDLE_HEADER = struct.Struct('<IIIIQQI')
+SECTION_HEADER = struct.Struct('<IIQQII')
+SECTION_RAW_DUMP = 3
+SECTION_ABSENT = 1
+SECTION_TRUNCATED = 2
+TEXT_SUFFIXES = ('.txt', '.log', '.md', '.json', '.xml', '.csv', '.html', '.toml', '.yaml', '.yml', '.ini', '.cfg')
+
+
+def bundle_sections(data):
+    """(header, [(tag, flags, payload, original_length)], complete) of a CDB1 bundle, recovering the complete prefix
+    of a truncated or partly damaged one the way the engine's reader does; None when it is not a bundle at all."""
+    if len(data) < 40 or data[:4] != BUNDLE_MAGIC:
+        return None
+    _, schema, version, flags, created, _, count, crc = struct.unpack_from('<IIIIQQII', data, 0)
+    if zlib.crc32(data[:36]) != crc or version != 1:
+        return None
+    sections = []
+    offset = 40
+    for _ in range(count):
+        if offset + SECTION_HEADER.size > len(data):
+            break
+        tag, section_flags, length, original, payload_crc, _ = SECTION_HEADER.unpack_from(data, offset)
+        payload = data[offset + SECTION_HEADER.size:offset + SECTION_HEADER.size + length]
+        if len(payload) != length or (length and zlib.crc32(payload) != payload_crc):
+            break
+        sections.append((tag, section_flags, payload, original))
+        offset += SECTION_HEADER.size + length
+    return {'schema': schema, 'flags': flags, 'created': created}, sections, len(sections) == count
+
+
+def bundle_bytes(header, sections):
+    """A well-formed CDB1 bundle of these sections: lengths, total and every CRC recomputed."""
+    body = b''.join(SECTION_HEADER.pack(tag, flags, len(payload), original, zlib.crc32(payload) if payload else 0, 0)
+                    + payload for tag, flags, payload, original in sections)
+    head = BUNDLE_HEADER.pack(struct.unpack('<I', BUNDLE_MAGIC)[0], header['schema'], 1, header['flags'],
+                              header['created'], 40 + len(body), len(sections))
+    return head + struct.pack('<I', zlib.crc32(head)) + body
+
+
+def secret_forms(values):
+    """Every byte spelling of each secret a file can carry: UTF-8 and the UTF-16 a Windows process block holds."""
+    forms = []
+    for value in values:
+        if value and len(value) >= 4:
+            forms += [value.encode('utf-8'), value.encode('utf-16-le')]
+    return sorted(set(forms), key=len, reverse=True)
+
+
+def scrub_artifact(path, data, secrets):
+    """(bytes to upload or None, note): no secret value ever leaves the machine. Text has every value replaced; a
+    diagnostics bundle has every section scrubbed and its checksums rewritten; any other binary that carries a
+    value is withheld, with a note saying so."""
+    forms = secret_forms(secrets)
+    if not any(form in data for form in forms):
+        return data, None
+    parsed = bundle_sections(data)
+    if parsed is not None:
+        header, sections, _ = parsed
+        clean = []
+        for tag, flags, payload, original in sections:
+            for form in forms:
+                payload = payload.replace(form, REDACTED)
+            # A truncated section keeps the size it was cut from; any other one stays whole at its new length.
+            clean.append((tag, flags, payload, original if flags & SECTION_TRUNCATED else len(payload)))
+        cleaned = bundle_bytes(header, clean)
+        if not any(form in cleaned for form in forms):
+            return cleaned, 'secret values redacted in the bundle sections'
+        return None, 'withheld: a secret value survives in the bundle'
+    text = str(path).lower().endswith(TEXT_SUFFIXES)
+    if not text and b'\x00' not in data:  # NUL bytes mark binary (and UTF-16) data even when it decodes as UTF-8
+        try:
+            data.decode('utf-8')
+            text = True
+        except UnicodeDecodeError:
+            text = False
+    if text:
+        for form in forms:
+            data = data.replace(form, REDACTED)
+        return data, 'secret values redacted'
+    return None, 'withheld: a secret value appears in this binary file'
+
+
+def upload_artifacts(client, job_id, work, patterns, say, secrets=(), kind=None):
+    """Upload every file matching the `;`-separated globs (relative to the checkout, `**` recursive), each scrubbed of
+    the job's secret values first (scrub_artifact). `kind` types them (crash-dump, sanitizer-report, ...); without
+    it the coordinator types each by its path."""
     count = 0
+    secrets = list(secrets)
     work = Path(work).resolve()
     for pattern in [p.strip() for p in patterns.split(';') if p.strip()]:
         for match in sorted(glob.glob(str(work / pattern), recursive=True)):
@@ -582,16 +677,30 @@ def upload_artifacts(client, job_id, work, patterns, say):
             if not path.is_file():
                 continue
             relative = path.resolve().relative_to(work).as_posix()
-            data = path.read_bytes()
+            data, note = scrub_artifact(relative, path.read_bytes(), secrets)
+            if note:
+                say('artifact %s: %s' % (relative, note))
+            if data is None:
+                continue
+            query = 'path=%s' % urllib.parse.quote(relative, safe='')
+            if kind:
+                query += '&kind=%s' % urllib.parse.quote(kind, safe='')
             try:
-                client.call('PUT', '/api/agent/jobs/%s/artifacts?path=%s' % (job_id, urllib.parse.quote(
-                    relative, safe='')), data=data, headers={'Content-Type': 'application/octet-stream',
-                                                            'X-Content-SHA256': hashlib.sha256(data).hexdigest()})
+                client.call('PUT', '/api/agent/jobs/%s/artifacts?%s' % (job_id, query), data=data,
+                            headers={'Content-Type': 'application/octet-stream',
+                                     'X-Content-SHA256': hashlib.sha256(data).hexdigest()})
                 count += 1
             except CoordinatorError as error:
                 say('artifact %s not uploaded: %s' % (relative, error))
     say('%d artifacts uploaded' % count)
     return count
+
+
+def job_secret_values(environ=None):
+    """The secret values of the running job, read from the step's environment by the names the agent passed."""
+    environ = os.environ if environ is None else environ
+    names = [n for n in environ.get('CERID_CI_SECRET_NAMES', '').split(',') if n]
+    return [environ[n] for n in names if environ.get(n)]
 
 
 # --------------------------------------------------------------------------------------------- in-job tools
@@ -623,7 +732,8 @@ def tool(args):
     if args.tool == 'artifact':
         if args.action == 'upload':
             work = Path(os.environ.get('CERID_CI_CHECKOUT', os.getcwd()))
-            return 0 if upload_artifacts(client, job, work, args.path, print) else 1
+            return 0 if upload_artifacts(client, job, work, args.path, print, secrets=job_secret_values(),
+                                         kind=args.kind) else 1
         data = client.call('GET', '/api/agent/jobs/%s/artifacts?path=%s' % (job, urllib.parse.quote(
             args.path, safe='')), raw=True)
         destination = Path(args.destination or '.')
@@ -685,6 +795,7 @@ def main(argv=None):
     art.add_argument('action', choices=('upload', 'download'))
     art.add_argument('path')
     art.add_argument('destination', nargs='?')
+    art.add_argument('--kind', help='type the uploaded files (crash-dump, sanitizer-report, gold-image, ...)')
     meta = sub.add_parser('meta-data')
     meta.add_argument('action', choices=('set', 'get'))
     meta.add_argument('key')
