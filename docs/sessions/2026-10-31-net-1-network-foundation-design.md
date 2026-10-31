@@ -42,5 +42,6 @@ Track C of the [parallel tracks](2026-10-31-parallel-tracks.md), first batch. Ro
   its fix. The other two were fixed here, with tests in `scripts/test-ci-platform.py` run under Windows and Linux
   Python: on Windows `gcloud` is a batch file, so cmd.exe cut a remote command at its first newline, expanded percent
   signs and acted on pipes after an embedded quote (remote text now travels base64-encoded and runs from a private
-  file); and a detached command held the SSH call open until it ended (it now starts in its own session with
+  file, and a command longer than cmd.exe's line once encoded is refused with an error that names the bound); and a
+  detached command held the SSH call open until it ended (it now starts in its own session with
   `setsid -f`).

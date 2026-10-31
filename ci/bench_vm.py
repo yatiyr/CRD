@@ -53,6 +53,7 @@ PUBLIC_REPOSITORY = 'https://github.com/yatiyr/CRD.git'
 CHECKOUT = 'cerid'
 JOBS = 'jobs'
 SYNC_REF = 'refs/bench/sync'  # a bundle carries refs, not bare commits
+MAX_REMOTE_COMMAND = 7000  # cmd.exe's 8191-character line, less gcloud's path and other arguments
 
 
 class BenchVmError(RuntimeError):
@@ -96,6 +97,10 @@ def ssh_command(remote):
     and act on `|`, `&` or `>` after an embedded quote; the file keeps the script off the remote command's stdin."""
     encoded = base64.b64encode(remote.encode('utf-8')).decode('ascii')
     wrapper = ('f=$(mktemp) && echo %s | base64 -d > $f && bash $f < /dev/null; s=$?; rm -f $f; exit $s' % encoded)
+    if len(wrapper) > MAX_REMOTE_COMMAND:
+        raise BenchVmError('the remote command is %d characters encoded; cmd.exe takes about 8191 per line, so keep '
+                           'it under %d (put a longer script in the repository and run it by path)'
+                           % (len(wrapper), MAX_REMOTE_COMMAND))
     return ['compute', 'ssh', NAME, *where(), '--tunnel-through-iap', '--quiet', '--command', wrapper]
 
 

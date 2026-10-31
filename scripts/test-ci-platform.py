@@ -766,6 +766,11 @@ class BenchMachine(unittest.TestCase):
         result = subprocess.run(['bash', '-c', wrapper], capture_output=True, text=True)
         self.assertEqual((result.returncode, result.stdout), (7, 'a|b & c > d\n50%PATH%\n'))
 
+    def test_a_remote_command_too_long_for_cmd_is_refused_by_name(self):
+        bench_vm.ssh_command('x' * 5000)
+        with self.assertRaisesRegex(bench_vm.BenchVmError, '8191'):
+            bench_vm.ssh_command('x' * 6000)
+
     def test_wait_reports_a_running_command(self):
         self.assertEqual(bench_vm.parse_wait('line 1\nline 2\n@@running\n'), (False, None, 'line 1\nline 2'))
         self.assertEqual(bench_vm.parse_wait('@@exit 0\n'), (True, 0, ''))
