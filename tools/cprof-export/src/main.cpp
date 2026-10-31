@@ -13,11 +13,15 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#include <crd/platform/arguments.hpp>
 
 #include <cstdio>
 
 int main(int argc, char** argv)
 {
+    const crd::platform::Arguments arguments(argc, argv); // UTF-8 on every platform (crd/platform/arguments.hpp)
+    argc = arguments.count();
+    argv = arguments.values();
     if (argc != 3)
     {
         std::fprintf(stderr, "usage: cprof_export <in.cprof> <out.json>\n");

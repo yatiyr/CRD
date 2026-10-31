@@ -5518,7 +5518,7 @@
     "cprof_export": [
       {
         "release": null,
-        "inventory": "a7b0e256e8466049f52c3ade96209f05ecc0502852d9396832d8231903316488",
+        "inventory": "bd10a76a22ca52be583d9fd0a764fb869cf6f2bf66678b279cc51102cc0ac62b",
         "reviewed": "2026-10-31",
         "findings": [
           {
@@ -5566,7 +5566,7 @@
     "kir_autotune": [
       {
         "release": null,
-        "inventory": "76b7a0e10aa13f7ed887b841fa549fb11851d030571050e08254d59a565e288f",
+        "inventory": "3787a87f4c79f787eb13a99913ed347bc15a67d5886f0a8ff2115e3c24de1534",
         "reviewed": "2026-10-31",
         "findings": [
           {

@@ -8,12 +8,14 @@
 #include <crd/containers/string.hpp>
 #include <crd/core/environment.hpp>
 #include <crd/core/platform.hpp>
+#include <crd/core/utf16.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <initializer_list>
 
 namespace
@@ -129,6 +131,41 @@ cont::String screen(const Screen& s)
 bool has(const cont::String& text, cont::StringView needle)
 {
     return cont::StringView(text).find(needle) != cont::StringView::npos;
+}
+
+// cmd.exe drops the first and the last quote of a command line that holds more than two, so on Windows the whole
+// command is quoted once more; sh takes it as it is.
+#if CRD_OS_WINDOWS
+constexpr const char* kShellQuote = "\"";
+#else
+constexpr const char* kShellQuote = "";
+#endif
+
+// Runs a UTF-8 command line through the shell: sh takes its bytes, cmd.exe its UTF-16 form (std::system would hand it
+// over in the ANSI code page, so a Turkish name would reach ceridc as other characters).
+int run_shell(const char* command)
+{
+#if CRD_OS_WINDOWS
+    const crd::usize     bytes = std::strlen(command);
+    cont::Array<wchar_t> wide;
+    wide.resize(bytes + 1U); // UTF-16 takes at most a unit per UTF-8 byte; the last stays the NUL
+    (void)crd::utf8_to_utf16(reinterpret_cast<const crd::u8*>(command), bytes, wide.data(), bytes);
+    return _wsystem(wide.data());
+#else
+    return std::system(command);
+#endif
+}
+
+// The verb's report a real-binary run wrote to `path`, without the line end.
+cont::String report_file(const char* path)
+{
+    cont::String out;
+    REQUIRE(fs::read_file_text(fs::Path(path), out));
+    while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
+    {
+        out.pop_back();
+    }
+    return out;
 }
 
 crd::usize occurrences(const cont::String& text, cont::StringView needle)
@@ -340,27 +377,15 @@ TEST_CASE("screen verb: the real ceridc binary answers the same bytes", "[ceridc
     write_lists();
     cont::String exe;
     REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe)); // wired by CMake
-    // cmd.exe drops the first and the last quote of a command line that holds more than two, so on Windows the whole
-    // command is quoted once more; sh takes it as it is.
-#if CRD_OS_WINDOWS
-    constexpr const char* shell_quote = "\"";
-#else
-    constexpr const char* shell_quote = "";
-#endif
     char cmd[1024];
     (void)std::snprintf(cmd, sizeof(cmd),
                         "%s\"%s\" screen --lists . --authority test.ofac,test.un,test.absent --day 2026-11-01 "
                         "--kind individual --name \"Aras Demirkoll\" --name \"A. Demirkol\" --birth 1971 "
                         "--country TR --identifier \"passport:A1234567\" --destination UA --review 800 --match 940 "
                         "> ceridc_screen_out.json%s",
-                        shell_quote, exe.c_str(), shell_quote);
-    REQUIRE(std::system(cmd) == 0); // a blocked verdict is an answer, not a failure
-    cont::String out;
-    REQUIRE(fs::read_file_text(fs::Path("ceridc_screen_out.json"), out));
-    while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
-    {
-        out.pop_back();
-    }
+                        kShellQuote, exe.c_str(), kShellQuote);
+    REQUIRE(run_shell(cmd) == 0); // a blocked verdict is an answer, not a failure
+    const cont::String out = report_file("ceridc_screen_out.json");
     const cont::String expected = screen({.authorities = "test.ofac,test.un,test.absent",
                                           .destination = "UA",
                                           .kind = "individual",
@@ -376,6 +401,30 @@ TEST_CASE("screen verb: the real ceridc binary answers the same bytes", "[ceridc
     CHECK(cont::StringView(out) == cont::StringView(expected));
 
     (void)std::snprintf(cmd, sizeof(cmd), R"(%s"%s" screen --lists . --authority test.ofac > ceridc_screen_out.json%s)",
-                        shell_quote, exe.c_str(), shell_quote);
-    CHECK(std::system(cmd) != 0);
+                        kShellQuote, exe.c_str(), kShellQuote);
+    CHECK(run_shell(cmd) != 0);
+}
+
+TEST_CASE("screen verb: the real ceridc binary reads a name written in Turkish whole", "[ceridc][comply][screen]")
+{
+    // On Windows the name crosses the command line as UTF-16 and reaches the verb as UTF-8 (crd/platform/arguments.hpp)
+    // where the ANSI code page's argv would hold other characters: the screening must be the in-process one, byte for
+    // byte, and find the listed party.
+    write_lists();
+    cont::String exe;
+    REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe)); // wired by CMake
+    const char* turkish = "KUZEY DEN\xC4\xB0Z T\xC4\xB0"
+                          "CARET A.\xC5\x9E.";
+    char        cmd[1024];
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        R"(%s"%s" screen --lists . --authority test.ofac --day 2026-11-01 --kind entity --name "%s" )"
+                        R"(> ceridc_screen_turkish.json%s)",
+                        kShellQuote, exe.c_str(), turkish, kShellQuote);
+    REQUIRE(run_shell(cmd) == 0);
+    const cont::String out      = report_file("ceridc_screen_turkish.json");
+    const cont::String expected = screen({.kind = "entity", .names = {turkish}});
+    INFO(expected.c_str());
+    CHECK(has(expected, R"("party":"test.ofac.1002")"));
+    CHECK(has(expected, R"("disposition":"possible")"));
+    CHECK(cont::StringView(out) == cont::StringView(expected));
 }

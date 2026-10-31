@@ -691,10 +691,10 @@ crd_module(tools/shader-cook NAME shader_cook HOST EXECUTABLES shader_cook
     DEPENDS containers core kir memory platform resources shader-cook)
 # ADR-0098 §4 AS-2b: the offline auto-scheduler CLI (GEMM schedule search -> tuning DB)
 crd_module(tools/kir-autotune NAME kir_autotune HOST EXECUTABLES kir_autotune
-    DEPENDS containers core kir kir-cuda memory)
+    DEPENDS containers core kir kir-cuda memory platform)
 # DIAG.6c(e): the offline CPROF -> Perfetto trace-events JSON export CLI (ADR-0133 DG14)
 crd_module(tools/cprof-export NAME cprof_export HOST EXECUTABLES cprof_export
-    DEPENDS containers core memory perf)
+    DEPENDS containers core memory perf platform)
 
 crd_module(runtime
     DEPENDS app audio config containers core geometry-mesh-processing geometry-primitives hesap hesap-amg hesap-autodiff

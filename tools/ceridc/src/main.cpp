@@ -10,6 +10,7 @@
 #include <crd/perf/diag_assets.hpp>
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/diagnostic_host.hpp>
+#include <crd/platform/arguments.hpp>
 
 #include <cstdio>
 #include <cstdlib>
@@ -144,6 +145,9 @@ public:
 
 int main(int argc, char* argv[])
 {
+    const crd::platform::Arguments arguments(argc, argv); // UTF-8 on every platform (crd/platform/arguments.hpp)
+    argc = arguments.count();
+    argv = arguments.values();
     if (argc < 2)
     {
         print_usage();

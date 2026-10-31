@@ -68,7 +68,9 @@
       "id": "kir_autotune",
       "kind": "program",
       "title": "The kir_autotune program (tools/kir-autotune)",
-      "packages": [],
+      "packages": [
+        "glfw"
+      ],
       "functions": [],
       "confidentiality": false,
       "entries": [],
@@ -78,7 +80,9 @@
       "id": "cprof_export",
       "kind": "program",
       "title": "The cprof_export program (tools/cprof-export)",
-      "packages": [],
+      "packages": [
+        "glfw"
+      ],
       "functions": [],
       "confidentiality": false,
       "entries": [],

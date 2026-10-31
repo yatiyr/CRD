@@ -102,6 +102,7 @@
 #include <crd/perf/perf.hpp>
 #include <crd/perf/ui/diag_panel.hpp>
 #include <crd/perf/ui/ui.hpp>
+#include <crd/platform/arguments.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/mesh_resource.hpp>
@@ -494,6 +495,9 @@ int main(int argc, char** argv)
     // CRD_DEBUG counts an allocator only when asked before its first allocation, so ask first; the panel's Counted
     // column says too_late if something allocated through it before main.
     (void)crd::memory::default_allocator()->request_statistics();
+    const crd::platform::Arguments arguments(argc, argv); // UTF-8 on every platform (crd/platform/arguments.hpp)
+    argc = arguments.count();
+    argv = arguments.values();
     std::setvbuf(stdout, nullptr, _IONBF, 0); // unbuffered so log lines survive a crash
 
     bool     headless         = false;

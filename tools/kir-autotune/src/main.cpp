@@ -5,12 +5,16 @@
 // SIZE args are square-GEMM sizes (default 512 1024 2048); a trailing non-numeric arg is the output path (else stdout).
 #include <crd/kir/cuda/autotune_cuda.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/platform/arguments.hpp>
 
 #include <cstdio>
 #include <cstdlib>
 
 int main(int argc, char** argv)
 {
+    const crd::platform::Arguments arguments(argc, argv); // UTF-8 on every platform (crd/platform/arguments.hpp)
+    argc = arguments.count();
+    argv = arguments.values();
     crd::memory::TlsfAllocator alloc(512U << 20U);
     crd::kir::KirBackendCuda   cu(&alloc);
     if (!cu.valid())

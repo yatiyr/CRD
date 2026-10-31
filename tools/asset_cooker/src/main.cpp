@@ -4,6 +4,7 @@
 #include <crd/cooker/cook_db.hpp>
 #include <crd/cooker/cook_handler.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#include <crd/platform/arguments.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/resource_id.hpp>
@@ -213,6 +214,9 @@ static void print_usage(const char* argv0)
 
 int main(int argc, char* argv[])
 {
+    const crd::platform::Arguments arguments(argc, argv); // UTF-8 on every platform (crd/platform/arguments.hpp)
+    argc = arguments.count();
+    argv = arguments.values();
     if (argc < 2)  // NOLINT(cppcoreguidelines-avoid-magic-numbers)
     {
         print_usage(argv[0]);

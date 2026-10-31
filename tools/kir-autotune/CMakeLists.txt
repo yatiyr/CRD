@@ -14,6 +14,7 @@ target_link_libraries(kir_autotune PRIVATE
     crd-memory
     crd-kir
     crd-kir-cuda
+    crd-platform # the arguments as UTF-8 (crd/platform/arguments.hpp)
 )
 
 target_compile_definitions(kir_autotune PRIVATE _CRT_SECURE_NO_WARNINGS) # std::fopen for the generated-header write (offline CLI)

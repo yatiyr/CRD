@@ -2015,7 +2015,7 @@
         "scripts/gen-crypto-inventory.py",
         "--check"
       ],
-      "sha256": "c1c50320c9ad522f0fe1415c54a57c4a137a480245941ea1dca8294cacdd0a9c"
+      "sha256": "7d54db56757b990b2a1488e41c6a8978307e4c651cda97162a78a4a9b0585288"
     }
   ]
 }

@@ -9,6 +9,7 @@ target_link_libraries(cprof_export PRIVATE
     crd-containers
     crd-memory
     crd-perf
+    crd-platform # the arguments as UTF-8 (crd/platform/arguments.hpp)
 )
 
 target_compile_features(cprof_export PRIVATE cxx_std_20)

@@ -36,6 +36,30 @@
       "decision": "crd-core, beside its UTF-8 well-formedness rule: dependency-free and allocation-free, so name screening (crd-comply) and every later search, sort key or identifier comparison folds text one way. docs/design/registers.md#screening."
     },
     {
+      "id": "text.utf16",
+      "summary": "UTF-16 decoding and encoding and the transcoding between UTF-16 and UTF-8 into caller storage, an unpaired surrogate and a byte that starts no UTF-8 sequence read as U+FFFD: every crossing between the engine's UTF-8 text and Windows' UTF-16 (paths, module and adapter names, the environment, the command line) and the UTF-16 a minidump holds.",
+      "owner": "core",
+      "api": [
+        "engine/foundation/core/include/crd/core/utf16.hpp"
+      ],
+      "signatures": [
+        {"regex": "\\b(?:MultiByteToWideChar|WideCharToMultiByte)\\s*\\(", "what": "a Win32 code-page conversion"}
+      ],
+      "decision": "crd-core, beside the UTF-8 rule it shares: header-only, constexpr and allocation-free, so the environment reader before main, the crash path and every module transcode one way, and the Linux lanes test what Windows runs. COMPLY.1, docs/sessions/2026-11-01-utf8-arguments-and-environment.md."
+    },
+    {
+      "id": "process.arguments",
+      "summary": "The program's command-line arguments as UTF-8 on every platform: on Windows the UTF-16 command line split by the Microsoft C runtime's rules and transcoded, never the ANSI code page's argv or its best-fit mapping; on POSIX main's argv in place.",
+      "owner": "platform",
+      "api": [
+        "engine/foundation/platform/include/crd/platform/arguments.hpp"
+      ],
+      "signatures": [
+        {"regex": "\\b(?:GetCommandLine[AW]?|CommandLineToArgvW)\\s*\\(|\\b__w?argv\\b|\\b__argc\\b", "what": "a read of the process's command line"}
+      ],
+      "decision": "crd-platform, the process's boundary with its OS: every tool's main and the sandbox read their arguments through it, so a Turkish name or a fullwidth quote reaches a verb as it was passed. COMPLY.1, docs/sessions/2026-11-01-utf8-arguments-and-environment.md."
+    },
+    {
       "id": "hash.fnv1a",
       "summary": "FNV-1a hashing, 32- and 64-bit, over bytes and text (constant-expression capable), little-endian integer folds and the runtime word step: identities, cache keys and cooked-content hashes.",
       "owner": "core",

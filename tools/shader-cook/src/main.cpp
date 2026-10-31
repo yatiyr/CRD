@@ -11,6 +11,7 @@
 #include <crd/kir/ckir.hpp>
 #include <crd/kir/ckir_serialize.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#include <crd/platform/arguments.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/shadercook/cook.hpp>
@@ -181,6 +182,9 @@ int cmd_info(int argc, char** argv)
 
 int main(int argc, char** argv)
 {
+    const crd::platform::Arguments arguments(argc, argv); // UTF-8 on every platform (crd/platform/arguments.hpp)
+    argc = arguments.count();
+    argv = arguments.values();
     if (argc < 2)
     {
         usage();
