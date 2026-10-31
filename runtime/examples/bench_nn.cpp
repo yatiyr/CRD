@@ -1,7 +1,8 @@
 // v14-m NN inference bench: ours f32 + ours Q8_0 + ours i8 on the frozen tiny models
 // (MLP batch 16 / CNN batch 8) + a scaled batch (4096). Pinned single-thread
 // protocol (taskset -c 4, no jobs pool); best-of-50 whole-batch inferences.
-// Peers (torch-CPU / onnxruntime-CPU, matched 1T) ride scripts/v14m_nn_peers.py.
+// The peers (torch-CPU and onnxruntime-CPU, one thread) were measured in 2026-07 (docs/bench/2026-07-05-v14m-nn.md);
+// their driver left the tree in that month's cleanup, and the peers wait for their pins (SIMD-PERF).
 // The nets run the hesap-tensor kernel level the process selected (CRD_CPU_LEVEL forces one, scripts/run_bench_nn.sh
 // runs each). The input is the corpus's frozen rows (<model>_x.npy), repeated to fill a batch, so every timed output
 // row has a reference: the f32 net at the corpus batch, itself within 1e-6 of torch's frozen outputs (<model>_y.npy).
