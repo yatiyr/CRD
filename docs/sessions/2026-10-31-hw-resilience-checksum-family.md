@@ -42,6 +42,8 @@ xxHash 0.8 specification, default secret, seeded). The CRCs chain: `crc32(b, crc
   `crc32`; the encoder chains the chunk type and payload without a copy) and `hesap-tensor`'s `iodetail::crc32`. The
   perf tests and the bundle fuzz harness drop their own CRC copies too.
 
+The technique is the [recipe](../recipes/2026-10-31-crc-folding-and-xxh3.md).
+
 ARM64's CRC32 and PMULL instructions are optional ARMv8.0 features crd-core does not detect yet, so neon runs the
 portable CRCs; that stays on the row.
 

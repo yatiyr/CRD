@@ -53,6 +53,7 @@ the offline and real-time forms are genuinely different systems (as hair does).
 - [Workspace sync](workspace-sync.md) — the operator's daily NAS sync, an export for a friend and a restore on a new machine; what the NAS receives and how it is protected.
 - [Setting up the Cerid CI platform](ci-platform-setup.md) — the user's four steps (project, billing, budget, go) and the operator's idempotent runbook (APIs, buckets, budget stop, identities, network, launcher, images, the IAP-tunnel UI) for ADR-0135, then the optional pieces.
 - [Operating the Cerid CI platform](ci-platform-runbooks.md) — SLOs and runbooks: stuck build, lost VM, budget hit, coordinator down, flaky quarantine, first bad commit, upgrade, backup and disaster recovery.
+- [CRC folding and XXH3 in the checksum family](2026-10-31-crc-folding-and-xxh3.md) — carry-less multiply fold and Barrett constants derived from the polynomial, the PCLMULQDQ variants, and XXH3's bit-identical vector loop.
 - [Argument reduction for crd::math's log and trig](2026-10-29-scalar-log-and-trig-reduction.md) — log's carried quotient and exact head sum (≤0.52 ulp) and Payne–Hanek past Cody-Waite's exact range.
 - [DX12 inner-coverage qualification](2026-09-13-dx12-inner-coverage.md) — exact interior/edge pixels, the native/barycentric route contract, one CPU corner oracle and SDK-only provider isolation.
 - [Pinned WARP provider](2026-09-13-dx12-pinned-warp.md) — hash-verified app-local Microsoft WARP 1.0.20 staged beside test executables; hosted lanes qualify one software tuple.
