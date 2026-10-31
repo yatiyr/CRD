@@ -238,10 +238,11 @@ struct Counts
 };
 
 // Each slice's form against the rule (Delta16 when asked, wider than 2 and every gap within 16 bits) and its columns,
-// decoded from the form, against the CSR rows; a Delta16 slice's gaps are 0 at w = 0 and in the padding.
+// decoded from the form, against the CSR rows; a Delta16 slice's gaps are 0 at w = 0 and in the padding. The forms
+// change at most twice a σ window (to_sell orders a Delta16 build's rows by the form they allow first).
 template <typename T>
 void check_layout(const sp::SparseMatrix<T, sp::SparseFormat::Csr>& csr, const sp::SellMatrix<T>& sell,
-                  sp::SellIndex form, Counts& counts)
+                  sp::SellIndex form, u32 sigma, Counts& counts)
 {
     constexpr u32 height = sp::SellMatrix<T>::kC;
     const u32* outer = csr.pattern().outer_ptr.data();
@@ -252,10 +253,12 @@ void check_layout(const sp::SparseMatrix<T, sp::SparseFormat::Csr>& csr, const s
     usize delta_slices = 0;
     usize u32_slices = 0;
     u32 widest = 0;
+    u32 changes = 0;
     for (u32 s = 0; s < sell.num_slices; ++s)
     {
         const u32 width = sell.slice_width[s];
         widest = width > widest ? width : widest;
+        changes += s > 0U && sell.slice_is_delta16(s) != sell.slice_is_delta16(s - 1U) ? 1U : 0U;
         bool fits = form == sp::SellIndex::Delta16 && width > 2U;
         for (u32 lane = 0; lane < height && s * height + lane < sell.rows; ++lane)
         {
@@ -294,6 +297,8 @@ void check_layout(const sp::SparseMatrix<T, sp::SparseFormat::Csr>& csr, const s
     }
     counts.mixed += form == sp::SellIndex::Delta16 && delta_slices > 0U && u32_slices > 0U ? 1U : 0U;
     counts.layout += sell.max_width == widest ? 0U : 1U; // the driver drops the pair test below it
+    const u32 windows = sigma == 0U || sigma >= sell.rows ? 1U : (sell.rows + sigma - 1U) / sigma;
+    counts.layout += changes <= 2U * windows ? 0U : 1U;
 }
 
 inline constexpr usize kScalePairs = 5;
@@ -341,7 +346,7 @@ void check_level(const SparseKernels& k, CpuLevel level, crd::memory::IAllocator
     const u32 cols = wide ? kWideColumns : rows + 3U;
     const auto csr = test_matrix<T>(alloc, rows, cols, 0x51ULL + rows * 977ULL + sigma);
     const sp::SellMatrix<T> sell = sp::to_sell(csr, alloc, sigma, form);
-    check_layout(csr, sell, form, counts);
+    check_layout(csr, sell, form, sigma, counts);
     const sp::SellSlices<U> slices = slices_of(sell);
 
     crd::containers::Array<T> x(alloc);
@@ -804,6 +809,55 @@ TEST_CASE("sparse kernels: Auto stores Delta16 exactly where a whole-matrix spmv
         INFO("n " << n << ", resident " << resident);
         CHECK((sell.delta_ptr[sell.num_slices] != 0U) == (n != fits));
     }
+}
+
+TEST_CASE("sparse kernels: a Delta16 build runs the rows its form holds as one run of slices", "[sparse][kernels]")
+{
+    // Rows of four values alternate between gaps of 1 (Delta16 holds them) and gaps of 70,000 (it does not): in row
+    // order every slice mixes both and stays U32, so to_sell orders the rows the form holds after the others.
+    constexpr u32 n = 4096U;
+    constexpr u32 cols = 4U * 70000U;
+    crd::memory::TlsfAllocator alloc(usize{64} << 20);
+    sp::TripletBuilder<crd::f64> b(&alloc, n, cols);
+    for (u32 r = 0; r < n; ++r)
+    {
+        for (u32 k = 0; k < 4U; ++k)
+        {
+            b.add(r, r % 2U == 0U ? r + k : k * 70000U + r % 7U, 1.0 + static_cast<crd::f64>((r + k) % 5U));
+        }
+    }
+    const auto csr = b.compress();
+    const auto packed = sp::to_sell(csr, &alloc, 0U, sp::SellIndex::Delta16);
+    const auto plain = sp::to_sell(csr, &alloc, 0U, sp::SellIndex::U32);
+    constexpr u32 height = sp::SellMatrix<crd::f64>::kC;
+    u32 delta_slices = 0;
+    u32 changes = 0;
+    for (u32 s = 0; s < packed.num_slices; ++s)
+    {
+        delta_slices += packed.slice_is_delta16(s) ? 1U : 0U;
+        changes += s > 0U && packed.slice_is_delta16(s) != packed.slice_is_delta16(s - 1U) ? 1U : 0U;
+    }
+    CHECK(delta_slices == n / 2U / height);
+    CHECK(changes == 1U);
+    CHECK(plain.perm_is_identity);
+    crd::containers::Array<crd::f64> x(&alloc);
+    for (u32 i = 0; i < cols; ++i)
+    {
+        x.push_back(static_cast<crd::f64>(i % 11U) - 4.5);
+    }
+    crd::containers::Array<crd::f64> want(&alloc);
+    crd::containers::Array<crd::f64> got(&alloc);
+    want.resize(n);
+    got.resize(n);
+    const crd::containers::ConstSpan<crd::f64> xs{x.data(), x.size()};
+    sp::spmv<crd::f64>(1.0, csr, sp::Trans::None, xs, 0.0, crd::containers::Span<crd::f64>{want.data(), n});
+    sp::spmv_sell<crd::f64>(1.0, packed, xs, 0.0, crd::containers::Span<crd::f64>{got.data(), n});
+    usize wrong = 0;
+    for (u32 r = 0; r < n; ++r)
+    {
+        wrong += same_bits(got[r], want[r]) ? 0U : 1U;
+    }
+    CHECK(wrong == 0U);
 }
 
 TEST_CASE("sparse kernels: spmv_sell runs the selected level and gives the CSR bits", "[sparse][kernels]")

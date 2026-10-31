@@ -138,8 +138,8 @@ struct SellMatrix
 // row's entries keep their column-ascending order, so per-row reduction is
 // unchanged -> spmv stays bit-exact with the CSR baseline (D(sparse)-3). For
 // uniform / banded matrices (equal row lengths) the stable sort is the
-// identity permutation -> zero overhead and contiguous y writes. `index` picks each slice's column form; every form
-// gives the same bits.
+// identity permutation -> zero overhead and contiguous y writes, unless a Delta16 build puts the rows its form holds
+// after the others (step 0). `index` picks each slice's column form; every form gives the same bits.
 template <typename T>
 [[nodiscard]] SellMatrix<T> to_sell(const SparseMatrix<T, SparseFormat::Csr>& a, crd::memory::IAllocator* alloc,
                                     crd::u32 sigma = 0, SellIndex index = SellIndex::Auto)
@@ -157,35 +157,54 @@ template <typename T>
     const crd::u32* inner = pat.inner_idx.data();
     const T*        srcv  = a.values().values.data();
 
-    // 0. perm = rows stably sorted by length within each window of `sigma`.
+    // Whether every gap of row r fits 16 bits (u32 differences, so an unsorted row takes U32).
+    auto gaps_fit = [outer, inner](crd::u32 r)
+    {
+        bool fits = true;
+        for (crd::u32 k = outer[r] + 1U; fits && k < outer[r + 1]; ++k)
+        {
+            fits = inner[k] - inner[k - 1U] <= 0xFFFFU;
+        }
+        return fits;
+    };
+
+    // 0. perm = rows stably sorted by length within each window of `sigma`; with `form` (a Delta16 matrix, step 2)
+    //    first by it, so the rows the form holds follow the others and the slices of each window run in two runs of
+    //    one form: interleaved forms cost the driver a mispredicted form branch a slice (uniform-4 rows between the L2
+    //    and the L3, 45% of the slices Delta16: 0.74x of the U32 build; 2026-10-31 SELL board).
     out.perm.resize(pat.rows);
-    for (crd::u32 i = 0; i < pat.rows; ++i)
-    {
-        out.perm[i] = i;
-    }
     const crd::u32 win = (sigma == 0 || sigma > pat.rows) ? pat.rows : sigma;
-    if (pat.rows > 1)
+    auto order_rows = [&](const crd::u8* form)
     {
-        for (crd::u32 w0 = 0; w0 < pat.rows; w0 += win)
+        for (crd::u32 i = 0; i < pat.rows; ++i)
+        {
+            out.perm[i] = i;
+        }
+        for (crd::u32 w0 = 0; pat.rows > 1 && w0 < pat.rows; w0 += win)
         {
             const crd::u32 w1 = (w0 + win < pat.rows) ? (w0 + win) : pat.rows;
             crd::containers::stable_sort(
                 out.perm.data() + w0, out.perm.data() + w1,
-                [outer](crd::u32 ra, crd::u32 rb) {
+                [outer, form](crd::u32 ra, crd::u32 rb)
+                {
+                    if (form != nullptr && form[ra] != form[rb])
+                    {
+                        return form[ra] < form[rb];
+                    }
                     return (outer[ra + 1] - outer[ra]) < (outer[rb + 1] - outer[rb]);
                 },
                 alloc);
         }
-    }
-    const crd::u32* perm = out.perm.data();
-    for (crd::u32 i = 0; i < pat.rows; ++i)
-    {
-        if (perm[i] != i)
+        out.perm_is_identity = true;
+        for (crd::u32 i = 0; i < pat.rows; ++i)
         {
-            out.perm_is_identity = false;
-            break;
+            if (out.perm[i] != i)
+            {
+                out.perm_is_identity = false;
+                break;
+            }
         }
-    }
+    };
 
     // 1. per-row length, per-slice width = max length over the slice's permuted rows, and its full columns = min
     //    length over its C rows (a pad row's 0 included), which the kernels run without a row's length check.
@@ -193,37 +212,61 @@ template <typename T>
     out.slice_full.resize(out.num_slices);
     out.row_len.resize(static_cast<crd::usize>(out.num_slices) * height); // pad rows stay 0
     out.slice_ptr.resize(static_cast<crd::usize>(out.num_slices) + 1);
-    out.slice_ptr[0] = 0;
-    for (crd::u32 s = 0; s < out.num_slices; ++s)
+    auto measure_slices = [&]()
     {
-        crd::u32       w     = 0;
-        crd::u32       full  = s * height + height <= pat.rows ? ~crd::u32{0} : 0U; // a pad row stores nothing
-        const crd::u32 r_end = (s * height + height < pat.rows) ? (s * height + height) : pat.rows;
-        for (crd::u32 sr = s * height; sr < r_end; ++sr)
+        out.slice_ptr[0] = 0;
+        out.max_width = 0;
+        for (crd::u32 s = 0; s < out.num_slices; ++s)
         {
-            const crd::u32 r   = perm[sr];
-            const crd::u32 len = outer[r + 1] - outer[r];
-            out.row_len[sr] = len;
-            w = len > w ? len : w;
-            full = len < full ? len : full;
+            crd::u32       w     = 0;
+            crd::u32       full  = s * height + height <= pat.rows ? ~crd::u32{0} : 0U; // a pad row stores nothing
+            const crd::u32 r_end = (s * height + height < pat.rows) ? (s * height + height) : pat.rows;
+            for (crd::u32 sr = s * height; sr < r_end; ++sr)
+            {
+                const crd::u32 r   = out.perm[sr];
+                const crd::u32 len = outer[r + 1] - outer[r];
+                out.row_len[sr] = len;
+                w = len > w ? len : w;
+                full = len < full ? len : full;
+            }
+            out.slice_width[s]   = w;
+            out.max_width        = w > out.max_width ? w : out.max_width;
+            out.slice_full[s]    = full;
+            out.slice_ptr[s + 1] = out.slice_ptr[s] + height * w;
         }
-        out.slice_width[s]   = w;
-        out.max_width        = w > out.max_width ? w : out.max_width;
-        out.slice_full[s]    = full;
-        out.slice_ptr[s + 1] = out.slice_ptr[s] + height * w;
-    }
+    };
+    order_rows(nullptr);
+    measure_slices();
 
     // 2. each slice's column form: Delta16 where asked (Auto: where a whole-matrix spmv streams), the slice is wider
     //    than 2 (it then reads fewer index bytes: 4 C first columns plus 2 C a column against 4 C a column) and every
-    //    gap of its rows fits 16 bits (u32 differences, so an unsorted row takes U32); else U32.
-    const crd::u32 total = out.slice_ptr[out.num_slices];
+    //    gap of its rows fits 16 bits; else U32. A Delta16 matrix whose rows differ in the form they allow (longer than
+    //    2, every gap within 16 bits) is ordered and measured again with that form first (step 0).
     if (index == SellIndex::Auto)
     {
-        const crd::usize spmv_bytes = crd::usize{total} * (sizeof(T) + sizeof(crd::u32)) +
+        const crd::usize spmv_bytes = crd::usize{out.slice_ptr[out.num_slices]} * (sizeof(T) + sizeof(crd::u32)) +
                                       out.row_len.size() * sizeof(crd::u32) +
                                       (crd::usize{pat.rows} + pat.cols) * sizeof(T);
         index = spmv_bytes > sparse_resident_bytes() ? SellIndex::Delta16 : SellIndex::U32;
     }
+    if (index == SellIndex::Delta16)
+    {
+        crd::containers::Array<crd::u8> form(alloc);
+        form.resize(pat.rows);
+        crd::u32 held = 0;
+        for (crd::u32 r = 0; r < pat.rows; ++r)
+        {
+            form[r] = outer[r + 1] - outer[r] > 2U && gaps_fit(r) ? 1U : 0U;
+            held += form[r];
+        }
+        if (held != 0U && held != pat.rows)
+        {
+            order_rows(form.data());
+            measure_slices();
+        }
+    }
+    const crd::u32* perm = out.perm.data();
+    const crd::u32 total = out.slice_ptr[out.num_slices];
     out.delta_ptr.resize(static_cast<crd::usize>(out.num_slices) + 1); // 0: no slice is Delta16
     for (crd::u32 s = 0; index == SellIndex::Delta16 && s < out.num_slices; ++s)
     {
@@ -231,11 +274,7 @@ template <typename T>
         const crd::u32 r_end = (s * height + height < pat.rows) ? (s * height + height) : pat.rows;
         for (crd::u32 sr = s * height; fits && sr < r_end; ++sr)
         {
-            const crd::u32 r = perm[sr];
-            for (crd::u32 k = outer[r] + 1U; fits && k < outer[r + 1]; ++k)
-            {
-                fits = inner[k] - inner[k - 1U] <= 0xFFFFU;
-            }
+            fits = gaps_fit(perm[sr]);
         }
         out.delta_ptr[s + 1] = out.delta_ptr[s] + (fits ? height * out.slice_width[s] : 0U);
     }
