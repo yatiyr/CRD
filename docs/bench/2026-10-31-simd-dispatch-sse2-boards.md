@@ -121,6 +121,33 @@ for a log and a digamma through a call, 9.0 compiled at avx2), and the 0.52 ulp 
 Accepted under the 2026-10-30 rule: the call is the SSE2 floor's price, the rest the log's accuracy. Logs:
 `~/stt-board/board-table.log`.
 
+### The activation spans
+
+`bench_nn` gained gated `act` rows: `nn_gelu`, `nn_tanh` and `nn_sigmoid` over 4096 x 128 values spread over
+[-12, 12], best-of-50, every output bit for bit against the scalar formula in general code. The spans moved from
+general code into the nn unit (`NnActF32`, `nn_act_rows`). Five interleaved rounds, one core, binaries `60bb7aae`
+(before the move) and `7bbf3262` (after), busy host (12.4 to 13.1 of 63.7 GiB available on Windows, other processes
+0.7 to 1.1 cores). Before over after, median [min-max]:
+
+| row | avx2 | sse2@sse2 | portable@sse2 |
+|---|---|---|---|
+| gelu, ns/element (after) | 1.004 [0.965-1.005] (7.73) | 0.995 [0.966-1.062] (7.75) | 0.991 [0.965-1.017] (7.73) |
+| tanh | 1.011 [0.966-1.016] (5.26) | 1.005 [0.993-1.011] (148) | 0.997 [0.978-1.003] (146) |
+| sigmoid | 1.030 [0.988-1.031] (2.78) | 1.005 [0.988-1.015] (133) | 0.987 [0.951-1.114] (134) |
+| mlp and cnn rows (control) | 0.961 to 1.025 | 0.980 to 1.005 | 0.990 to 1.001 |
+
+The scalar-table call cost nothing measurable here: gelu's erf was never a table routine (Cephes in general code,
+no fma, the same call before and after), and tanh's and sigmoid's routines take 2.8 to 5.3 ns, so one call of about
+2 ns per element was mostly hidden. At sse2 and portable the exact fma emulation (40 calls of the integer `fma` per
+sigmoid or tanh element) takes 130 to 150 ns, the SSE2 floor's price for bits identical to every other level.
+`objdump` of the release binary: the avx2, sse2 and portable `act_rows` call no scalar-table routine.
+
+Against torch 2.12.1 (one thread, AVX2, its f32 approximations): gelu 0.389, tanh 0.897, sigmoid 0.327 ns/element,
+so Cerid's f64-evaluated, once-rounded spans stand 20x, 5.9x and 8.5x behind. Recorded, not chased under the
+2026-10-30 rule: the levers are lane twins (sigmoid could ride `crd_exp4`/`crd_exp8`, bit-identical to `crd_exp1`,
+as softmax does, an estimated 0.6 ns, still behind torch; tanh needs a lane `expm1`, gelu a lane twin of the Cephes
+erf), none a measured win over the peer. Logs: `~/actmove/logs` in WSL.
+
 ## sse2 and sse4.2 bodies against the portable loop
 
 `portable@sse2` ms over `sse2@sse2` ms, above 1 the sse2 body faster:
