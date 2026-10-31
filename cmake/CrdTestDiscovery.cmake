@@ -3,7 +3,7 @@ include_guard(GLOBAL)
 include(Catch)
 include(CrdTestOwnership)
 
-# A test executable may run many cases in one process (a kernel-level arm, a direct run): every one that links
+# A test executable may run many cases in one process (a direct run, an SDE arm): every one that links
 # crd-jobs (sees its headers) gets the listener that shuts down a jobs pool a failed case left up.
 set(_CRD_JOBS_POOL_LISTENER "${CMAKE_CURRENT_LIST_DIR}/../tests/support/catch/jobs_pool_listener.cpp")
 
@@ -76,7 +76,8 @@ function(crd_discover_tests TARGET)
         endif()
     endforeach()
     _crd_uses_target(_uses_jobs "${TARGET}" crd-jobs)
-    if(_uses_jobs)
+    get_target_property(_sources "${TARGET}" SOURCES)
+    if(_uses_jobs AND NOT "${_CRD_JOBS_POOL_LISTENER}" IN_LIST _sources) # once for a target discovered again
         target_sources("${TARGET}" PRIVATE "${_CRD_JOBS_POOL_LISTENER}")
         get_filename_component(_listener_dir "${_CRD_JOBS_POOL_LISTENER}" DIRECTORY)
         target_include_directories("${TARGET}" PRIVATE "${_listener_dir}") # jobs_pool_listener.hpp for a kept pool

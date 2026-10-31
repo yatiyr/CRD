@@ -24,7 +24,12 @@ Push run 41127915077 (`3db4573f`) completed with four failed jobs:
   sse4.2) on a 16 GiB runner: a hosted runner shutdown, nothing to carry.
 - win-asan: `crd-hesap-fft-kernels-at-sse2` reached the 3,600 s test timeout, as in run 41112483075. The fft
   `[kernels]` arms grew 2.6x on win-debug (sse2 363 s to 958 s) since `338d0c4d` ran the forced-forward and own-plan
-  cases for f64 too. Open: the next batch's first item.
+  cases for f64 too. Here the sse2 arm took 1,015 s in 17 cases, the largest 293 s (f64 forced forwards at 2M and
+  4M), none dominating. `crd_add_kernel_level_tests` now registers each case of an arm as its own CTest,
+  `<suite>-kernels-at-<level>: <case>` (934 on win-debug, from 85 arms), so no arm's sum meets the timeout and win-asan's
+  three jobs spread the cases; the `-at-sse2` passes still leave them out by name, the SDE arms (at most 335 s) stay
+  one process. Catch2 names a discovery's file by a hash without the prefix, so each level passes its own unused
+  `OUTPUT_SUFFIX`.
 
 Needs CI: DIAG.11c and DIAG.12 still wait on a green complete-tier run. Repository variables `FTL_GCP_PROJECT`,
 `FTL_WIF_PROVIDER` and `FTL_SERVICE_ACCOUNT` exist (names only); no secrets, so the AMD and Mac lanes wait on their

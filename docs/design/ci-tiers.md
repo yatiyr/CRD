@@ -48,7 +48,7 @@ second CTest pass of the win-debug and linux-gcc-debug binaries under the `<pres
 (`CRD_CPU_LEVEL=sse2`, which on MSVC also lowers the CRT's own `__isa_available` dispatch and turns the UCRT's
 FMA3 libm off), checked against the register as lane `<preset>-at-sse2`, after the hidden `[cpu-level-applied]`
 case proves the level was applied. The pass leaves out what cannot change with the level: the
-`<suite>-kernels-at-<level>` arms, which set their own level and ran in the lane's pass, and the `crd-check-*` and
+`<suite>-kernels-at-<level>: <case>` arms, which set their own level and ran in the lane's pass, and the `crd-check-*` and
 `crd-no-*` source and build-tree guards.
 
 ### ARM64 lanes

@@ -270,9 +270,11 @@ set(_CRD_LEVEL_APPLIED_TEST "${_CRD_KERNEL_LEVELS_SUPPORT}/test_cpu_level_applie
 
 # crd_add_kernel_level_tests(<test-executable> <filter> [SDE_CPUS <cpu>...] [ENVIRONMENT <var=value>...])
 #
-# ADR-0134 §8: <prefix>-kernels-at-<level> runs the executable's <filter> once per level CRD_KERNEL_LEVELS holds, with
-# CRD_CPU_LEVEL forcing the selection in the one binary (a level above the host is refused, and that arm runs at the
-# detected level) and the ENVIRONMENT the suite needs; <prefix> is the executable's name without "-tests". With
+# ADR-0134 §8: "<prefix>-kernels-at-<level>: <case>" runs each case of the executable's <filter> once per level
+# CRD_KERNEL_LEVELS holds, with CRD_CPU_LEVEL forcing the selection in the one binary (a level above the host is
+# refused, and that arm runs at the detected level) and the ENVIRONMENT the suite needs; <prefix> is the executable's
+# name without "-tests". Each case is its own CTest, so an arm's growing sum of cases never meets a test timeout (the fft
+# arm at sse2 outgrew win-asan's 3,600 s, 2026-10-31) and a parallel lane spreads an arm's cases. With
 # CRD_SDE, <prefix>-kernels-at-avx512-sde-<cpu> runs the filter under SDE's model of each _CRD_SDE_CPUS CPU and each
 # SDE_CPUS CPU (a model with the features a suite's variant selects on, ADR-0134 §8) at avx512. Those arms, and the
 # arms of the levels every CPU of the architecture runs (portable, sse2, neon), also run the hidden
@@ -292,10 +294,13 @@ function(crd_add_kernel_level_tests executable filter)
         if(level MATCHES "^(portable|sse2|neon)$")
             string(APPEND arm_filter ",[cpu-level-applied]")
         endif()
-        add_test(NAME ${prefix}-kernels-at-${level} COMMAND ${executable} "${arm_filter}")
         set(environment "CRD_CPU_LEVEL=${spelling}" ${arg_ENVIRONMENT})
-        set_tests_properties(${prefix}-kernels-at-${level} PROPERTIES
-            ENVIRONMENT "${environment}" LABELS "cerid.test.target=${executable}")
+        # Catch2 3.7.1 names a discovery's include file by a hash of its TEST_SPEC, EXTRA_ARGS, REPORTER and OUTPUT_*
+        # but not its TEST_PREFIX, so the levels sharing one filter differ by OUTPUT_SUFFIX, which only a set
+        # OUTPUT_DIR would use.
+        crd_discover_tests(${executable} TEST_SPEC "${arm_filter}" TEST_PREFIX "${prefix}-kernels-at-${level}: "
+                           TEST_LIST "${executable}_kernels_at_${level}" OUTPUT_SUFFIX ".${level}"
+                           PROPERTIES ENVIRONMENT "${environment}" LABELS "cerid.test.target=${executable}")
     endforeach()
     if(CRD_SDE AND "avx512" IN_LIST CRD_KERNEL_LEVELS)
         foreach(cpu IN LISTS _CRD_SDE_CPUS arg_SDE_CPUS)
