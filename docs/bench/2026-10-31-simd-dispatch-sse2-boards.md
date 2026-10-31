@@ -82,7 +82,9 @@ pre-row over HEAD at avx2, three rounds:
 The mlp rows are at pre-row within the spread but Q8_0 at batch 16 (0.91). The cnn rows still trail by 11% to 16%
 in every round: in the profile the convolution kernel takes 18% more samples than pre-row's and the pool and
 image loop 55% more (a call and two partial tails per pooled row). sse2 against `portable@sse2`: mlp 1.28x to 2.78x,
-cnn 1.65x to 1.69x. Logs: `~/sse2-board/logs-nnfix2`.
+cnn 1.65x to 1.69x. The bench's gates held in every post-fold arm (the f32 tier 0.00e+00 from the corpus
+reference, Q8_0 and i8 within their bounds), and the 199 nn and tensor kernel cases pass on Linux and win-debug.
+Logs: `~/sse2-board/logs-nnfix2`.
 
 ## sse2 and sse4.2 bodies against the portable loop
 
