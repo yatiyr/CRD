@@ -483,6 +483,13 @@ try {
     $roots = @(Import-Certificate -FilePath 'C:\cerid-ci\bake\roots.sst' -CertStoreLocation 'Cert:\LocalMachine\Root')
     if ($roots.Count -lt 100) { throw "Windows Update listed only $($roots.Count) trusted roots" }
     Write-Output "trusted roots: $($roots.Count) from Windows Update"
+    # The DX12 tests run under the D3D12 debug layer (d3d12SDKLayers.dll), which Windows ships only in the Graphics
+    # Tools optional feature: without it every DX12 qualification test stops at DebugLayerUnavailable (build #30).
+    $graphicsTools = 'Tools.Graphics.DirectX~~~~0.0.1.0'
+    Add-WindowsCapability -Online -Name $graphicsTools | Out-Null
+    if ((Get-WindowsCapability -Online -Name $graphicsTools).State -ne 'Installed') { throw 'Graphics Tools did not install' }
+    if (-not (Test-Path (Join-Path $env:SystemRoot 'System32\d3d12SDKLayers.dll'))) { throw 'no d3d12SDKLayers.dll after Graphics Tools' }
+    Write-Output 'Graphics Tools installed: the D3D12 debug layer is present'
 {installers}
 {extra}
     $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine')

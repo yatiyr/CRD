@@ -878,6 +878,14 @@ class Executors(unittest.TestCase):
         self.assertIn("-CertStoreLocation 'Cert:\\LocalMachine\\Root'", script)
         self.assertIn('if ($LASTEXITCODE -ne 0)', script[roots:roots + 200])
 
+    def test_windows_bake_installs_the_d3d12_debug_layer(self):
+        for device in ('gce-windows-x64', 'gce-windows-x64-nvidia-t4'):
+            script = gce_vm.provision_script(pipeline.devices_by_id(REGISTRY)[device], [])
+            self.assertIn("'Tools.Graphics.DirectX~~~~0.0.1.0'", script)
+            self.assertIn('Add-WindowsCapability -Online -Name $graphicsTools', script)
+            self.assertIn("System32\\d3d12SDKLayers.dll", script, 'the bake proves the layer is there')
+            self.assertLess(script.index('Add-WindowsCapability'), script.index('cerid-ci-bake-complete'))
+
     def test_powershell_scripts_parse_and_define_no_alias_named_function(self):
         """A function named like a built-in alias is never called (an alias wins): the job script's `Md` ran mkdir.
         Both PowerShell scripts must also parse; checked with Windows PowerShell where it exists."""

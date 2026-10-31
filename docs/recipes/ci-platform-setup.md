@@ -320,7 +320,8 @@ images the disk only after its provisioning printed `cerid-ci-bake-complete` on 
 while the instance runs. A failed provisioning stops the instance at once and the bake exits with the failing line;
 the stopped instance `cerid-ci-bake-<device>` stays for inspection, and you delete it before the next bake. A
 Windows bake first installs Microsoft's trusted root list from Windows Update into the machine store: Python trusts
-only the roots already there, and a fresh image holds few.
+only the roots already there, and a fresh image holds few. It also installs the Graphics Tools optional feature,
+the D3D12 debug layer every DX12 test runs under.
 
 *Check:* `python ci/ops.py status` on the launcher shows no `NOT BAKED`.
 

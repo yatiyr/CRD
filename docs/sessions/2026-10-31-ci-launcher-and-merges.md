@@ -128,6 +128,9 @@ Done in the `cerid-ci` project, following [the setup recipe](../recipes/ci-platf
 - **A cancelled build's changes left the change set:** the next push's base was the head of the newest build whose
   plan had passed, so a build cancelled after its plan (builds #30 to #42) took its changes out of the next build's
   module selection. The base is now the commit of the branch's newest passing build, recorded by the required step.
+- **36 DX12 tests failed on every Windows lane of build #30 before testing anything:** they run under the D3D12
+  debug layer, which Windows ships only in the Graphics Tools optional feature, and the baked image lacked it
+  (`DebugLayerUnavailable`). The Windows bake now installs Graphics Tools and proves `d3d12SDKLayers.dll` is present.
 
 ## Workspace
 
