@@ -496,13 +496,15 @@ TEST_CASE("hardware identity: this machine reads its CPU, memory and, where the 
     CHECK_FALSE(h.cpu_model.empty());
     CHECK(crd::x64_signature_parts(h.cpu_signature).family != 0U);
 #endif
+    // The microcode is crd-core's reading (which the core suite checks against the OS): a hosted runner's Hyper-V
+    // guest records none, so it is unknown there.
+    const crd::CpuIdentity cpu = crd::read_cpu_identity();
+    CHECK(((h.flags & cp::kHardwareMicrocodeKnown) != 0U) == cpu.microcode_known);
+    CHECK(h.microcode == (cpu.microcode_known ? cpu.microcode : 0U));
 #if CRD_OS_WINDOWS
-    // Windows gives every process the firmware table and the microcode revision.
+    // Windows gives every process the firmware table.
     CHECK((h.flags & cp::kHardwareFirmwareKnown) != 0U);
     CHECK((h.flags & cp::kHardwareModulesKnown) != 0U);
-#if CRD_ARCH_X64
-    CHECK((h.flags & cp::kHardwareMicrocodeKnown) != 0U);
-#endif
 #endif
     // Evidence on every run (CTest's log and JUnit keep it): what each lane's machine reported.
     const crd::CpuSignatureParts parts = crd::x64_signature_parts(h.cpu_signature);

@@ -1326,16 +1326,38 @@ TEST_CASE("cpu identity: x64 signatures, ARM64 MIDR names and Windows' revision 
 namespace
 {
 #if defined(_WIN32)
-// A string value of CPU 0's registry key, read here independently of crd-core.
+constexpr const char* kProcessorKey = R"(HARDWARE\DESCRIPTION\System\CentralProcessor\0)";
+
+// A string value of CPU 0's registry key, read here independently of crd-core, without the blanks the OS pads it with
+// (an EPYC's ProcessorNameString keeps the CPUID brand string's trailing spaces).
 std::string_view registry_text(const char* name, char (&buffer)[128]) // NOLINT(modernize-avoid-c-arrays)
 {
     DWORD size = sizeof(buffer);
-    if (::RegGetValueA(HKEY_LOCAL_MACHINE, R"(HARDWARE\DESCRIPTION\System\CentralProcessor\0)", name, RRF_RT_REG_SZ,
-                       nullptr, buffer, &size) != ERROR_SUCCESS)
+    if (::RegGetValueA(HKEY_LOCAL_MACHINE, kProcessorKey, name, RRF_RT_REG_SZ, nullptr, buffer, &size) != ERROR_SUCCESS)
     {
         return {};
     }
-    return std::string_view{buffer};
+    std::string_view text{buffer};
+    const std::size_t first = text.find_first_not_of(' ');
+    if (first == std::string_view::npos)
+    {
+        return {};
+    }
+    text = text.substr(first);
+    return text.substr(0U, text.find_last_not_of(' ') + 1U);
+}
+
+// The size in bytes of CPU 0's "Update Revision" (0 when the OS records none, as a Hyper-V guest does), its bytes in
+// `bytes`.
+DWORD registry_update_revision(unsigned char (&bytes)[64]) // NOLINT(modernize-avoid-c-arrays)
+{
+    DWORD size = sizeof(bytes);
+    if (::RegGetValueA(HKEY_LOCAL_MACHINE, kProcessorKey, "Update Revision", RRF_RT_REG_BINARY, nullptr, bytes,
+                       &size) != ERROR_SUCCESS)
+    {
+        return 0U;
+    }
+    return size;
 }
 #elif defined(__linux__)
 // The value of CPU 0's first "<key>\t: <value>" line of /proc/cpuinfo, read here independently of crd-core.
@@ -1395,7 +1417,20 @@ TEST_CASE("cpu identity: this CPU's identity agrees with the OS's own descriptio
     (void)std::snprintf(expected, sizeof(expected), " Family %u Model %u Stepping %u", parts.family, parts.model,
                         parts.stepping);
     CHECK(identifier.find(expected) != std::string_view::npos);
-    CHECK(id.microcode_known);
+    // The revision is the 4-byte value, or the 8-byte value's high word (its low one when that is 0); a guest whose OS
+    // records none (the hosted runners on Hyper-V) has it unknown, as an all-ones one is.
+    unsigned char revision[64] = {}; // NOLINT(modernize-avoid-c-arrays)
+    const DWORD revision_size = registry_update_revision(revision);
+    crd::u32 low = 0U;
+    crd::u32 high = 0U;
+    std::memcpy(&low, revision, sizeof(low));
+    std::memcpy(&high, revision + 4, sizeof(high));
+    const crd::u32 recorded = revision_size == 8U && high != 0U ? high : low;
+    CHECK(id.microcode_known == ((revision_size == 4U || revision_size == 8U) && recorded != 0xFFFFFFFFU));
+    if (id.microcode_known)
+    {
+        CHECK(id.microcode == recorded);
+    }
 #elif defined(__linux__)
     CHECK(std::string_view{cpuinfo_value("vendor_id").c_str()} == std::string_view{id.vendor});
     CHECK(std::strtoul(cpuinfo_value("cpu family").c_str(), nullptr, 10) == parts.family);
