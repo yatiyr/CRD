@@ -54,8 +54,10 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    AVX-VNNI on avx2 (hesap-tensor's integer dots). Carry-less multiply is in no psABI level, so PCLMULQDQ on sse4.2
    and VPCLMULQDQ on avx2 and avx512 are variants too (crd-containers' CRC folds, amended 2026-10-31); a variant's
    level may then have no plain table, and a CPU of that level without the feature runs the highest table below it.
-   ARM64: `Neon` is architectural; SVE, SVE2 and SME detection and levels come with the ARM64 release rows
-   (`getauxval` HWCAP/HWCAP2, `IsProcessorFeaturePresent`). WebAssembly SIMD128 tiers belong to WEB.1.
+   ARM64: `Neon` is architectural. CRC32 and PMULL, optional in ARMv8.0, are features decoded from the OS's word for
+   every CPU (Linux `getauxval(AT_HWCAP)`, Windows `IsProcessorFeaturePresent`, macOS `sysctlbyname`) and variants of
+   neon (the CRCs; amended 2026-10-31, HW-RESILIENCE.1); SVE, SVE2 and SME detection and levels come with the ARM64
+   release rows (HWCAP2). WebAssembly SIMD128 tiers belong to WEB.1.
 2. **One detection owner.** `crd/core/cpu_features.hpp` (crd-core, below crd-time and crd-math) is the engine's only
    CPUID and XGETBV site; TickClock reads its invariant-TSC bit. A feature counts only when CPUID reports it and XCR0
    holds the state its registers need (YMM; opmask and both ZMM components; the tile state; the APX GPRs). On Linux an
@@ -111,8 +113,9 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    objects and images), amended: the floor also bars REX2 and XOP and every legacy-encoded instruction of a later
    level (SSE3 to SSE4.2, POPCNT, LZCNT, MOVBE, AES, PCLMUL, SHA, GFNI, RDRAND, ADX, XSAVE and XGETBV, RDTSCP,
    CLFLUSHOPT, CLWB, PREFETCHW; not TZCNT, which every x86-64 CPU runs as BSF; on Windows CMPXCHG16B, PREFETCHW and
-   LAHF/SAHF are inside the OS's own floor), and on ARM64 SVE, SME, LSE and the later-revision instructions; each
-   kernel unit is held to its level, with VEX code at avx2 and EVEX at avx512 (this retires `crd-simd-emission-check`);
+   LAHF/SAHF are inside the OS's own floor), and on ARM64 SVE, SME, LSE, CRC32, PMULL to 128 bits and the
+   later-revision instructions; each kernel unit is held to its level and features, with VEX code at avx2 and EVEX at
+   avx512 (this retires `crd-simd-emission-check`) and CRC32 and PMULL only in their neon variants;
    a symbol is per-level when its mangled name names a level namespace, and a kernel object defines no other
    non-local symbol than its table and reviewed compiler constants. The linked-image route covers every IL lane, MSVC
    and clang-cl through the `/MAP` map of each IPO link (each function's address and object, so win-release needs no

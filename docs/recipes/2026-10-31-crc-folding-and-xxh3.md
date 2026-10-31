@@ -37,12 +37,15 @@ the same 128-bit path.
 
 Pitfalls:
 
-- PCLMULQDQ and VPCLMULQDQ are in no x86-64 psABI level, so the folds are kernel variants (ADR-0134 §1); a CPU of a
-  level without them runs the sse4.2 or portable table.
+- PCLMULQDQ and VPCLMULQDQ are in no x86-64 psABI level, and ARM64's CRC32 and PMULL are optional in ARMv8.0, so the
+  folds and the ARM64 CRC instructions are kernel variants (ADR-0134 §1); a CPU without them runs the table below.
+- One 128-bit fold serves PCLMULQDQ and PMULL through a few primitives (products of the low or high halves, a byte
+  shift). `vmull_p64` differs by compiler: ACLE takes two `poly64_t` scalars, cl takes and returns vector registers.
 - Constants are derived at compile time from P and checked against the published CRC-32 ones (`static_assert`); a
   hand-typed table is the usual source of a wrong CRC-32C.
 - The register is injected into the first lane's low 32 bits; the wide paths must zero the rest of the register.
-- Inputs under 64 bytes, and the tail under 16, go to the slicing tables (CRC-32) or the CRC32 instruction (CRC-32C).
+- Inputs under 64 bytes, and the tail under 16, go to the slicing tables (CRC-32) or the CRC32 instruction (CRC-32C
+  on x64, both polynomials on ARM64).
 
 ## XXH3
 
@@ -55,4 +58,5 @@ lanes only, so SSE2, AVX2, AVX-512 and NEON compute the same bits; the 32 × 32 
 ## Verification
 
 Reference vectors from libxxhash 0.8.2, Python's zlib and a bit-serial CRC; every level against the bitwise register
-or the portable accumulators at every length class and alignment; avx512 under Intel SDE (`icx` for VPCLMULQDQ).
+or the portable accumulators at every length class and alignment; avx512 under Intel SDE (`icx` for VPCLMULQDQ);
+the ARM64 variants on the hosted ARM64 lanes.

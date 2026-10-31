@@ -51,9 +51,7 @@ namespace
 {
 
 using crd::KernelLevel;
-
-constexpr crd::CpuFeatureSet kClmul = crd::CpuFeatureSet{}.with(crd::CpuFeature::Pclmulqdq);
-constexpr crd::CpuFeatureSet kWideClmul = kClmul.with(crd::CpuFeature::Vpclmulqdq);
+using F = crd::CpuFeature;
 
 // CRD_KERNELS_CRC and CRD_KERNELS_HASH: the levels crd_add_cpu_kernels built (../CMakeLists.txt), and
 // CRD_KERNELS_CRC_<LEVEL>_<FEATURE> the crc variants. Each needs its entry below.
@@ -72,13 +70,19 @@ constexpr KernelLevel<CrcKernels> kCrcLevels[] = {
     {crd::CpuLevel::Sse42, &kCrcKernelsSse42, {}},
 #endif
 #if CRD_KERNELS_CRC_SSE42_PCLMULQDQ
-    {crd::CpuLevel::Sse42, &kCrcKernelsSse42Pclmulqdq, kClmul},
+    {crd::CpuLevel::Sse42, &kCrcKernelsSse42Pclmulqdq, crd::CpuFeatureSet{}.with(F::Pclmulqdq)},
 #endif
 #if CRD_KERNELS_CRC_AVX2_VPCLMULQDQ
-    {crd::CpuLevel::Avx2, &kCrcKernelsAvx2Vpclmulqdq, kWideClmul},
+    {crd::CpuLevel::Avx2, &kCrcKernelsAvx2Vpclmulqdq, crd::CpuFeatureSet{}.with(F::Pclmulqdq).with(F::Vpclmulqdq)},
 #endif
 #if CRD_KERNELS_CRC_AVX512_VPCLMULQDQ
-    {crd::CpuLevel::Avx512, &kCrcKernelsAvx512Vpclmulqdq, kWideClmul},
+    {crd::CpuLevel::Avx512, &kCrcKernelsAvx512Vpclmulqdq, crd::CpuFeatureSet{}.with(F::Pclmulqdq).with(F::Vpclmulqdq)},
+#endif
+#if CRD_KERNELS_CRC_NEON_CRC32
+    {crd::CpuLevel::Neon, &kCrcKernelsNeonCrc32, crd::CpuFeatureSet{}.with(F::Crc32)},
+#endif
+#if CRD_KERNELS_CRC_NEON_PMULL
+    {crd::CpuLevel::Neon, &kCrcKernelsNeonPmull, crd::CpuFeatureSet{}.with(F::Crc32).with(F::Pmull)},
 #endif
 };
 
@@ -275,8 +279,8 @@ crd::u64 xxh3_long(const crd::u8* in, crd::usize len, crd::u64 seed) noexcept
         secret = derived;
     }
     // NOLINTNEXTLINE(modernize-avoid-c-arrays): the accumulators the kernel runs on
-    alignas(64) crd::u64 acc[8] = {kPrime32Three, kPrime64One, kPrime64Two, kPrime64Three,
-                                   kPrime64Four, kPrime32Two, kPrime64Five, kPrime32One};
+    alignas(64) crd::u64 acc[8] = {kPrime32Three, kPrime64One, kPrime64Two,  kPrime64Three,
+                                   kPrime64Four,  kPrime32Two, kPrime64Five, kPrime32One};
     hash_kernels().table->xxh3_accumulate(acc, in, len, secret);
     constexpr crd::usize merge_start = 11U; // XXH_SECRET_MERGEACCS_START
     crd::u64 result = static_cast<crd::u64>(len) * kPrime64One;

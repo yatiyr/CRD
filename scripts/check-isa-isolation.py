@@ -45,7 +45,7 @@ SCHEMA = 'cerid-isa-isolation/1'
 SUFFIX = {'portable': 'Portable', 'sse2': 'Sse2', 'sse42': 'Sse42', 'avx2': 'Avx2', 'avx512': 'Avx512',
           'neon': 'Neon', 'avx2_avxvnni': 'Avx2AvxVnni', 'avx512_avx512vnni': 'Avx512Avx512Vnni',
           'sse42_pclmulqdq': 'Sse42Pclmulqdq', 'avx2_vpclmulqdq': 'Avx2Vpclmulqdq',
-          'avx512_vpclmulqdq': 'Avx512Vpclmulqdq'}
+          'avx512_vpclmulqdq': 'Avx512Vpclmulqdq', 'neon_crc32': 'NeonCrc32', 'neon_pmull': 'NeonPmull'}
 _NS = '|'.join(sorted(SUFFIX, key=len, reverse=True))
 
 
@@ -108,6 +108,12 @@ ARM64_ABOVE = re.compile(r'^(?:(?:ld|st)(?:add|clr|eor|set|smax|smin|umax|umin)(
                          r'(?:b|h)?|casp?(?:a|l|al)?(?:b|h)?|ldapu?r\w*|stlur\w*|[su]dot|usdot|sudot|[su]mmla|usmmla|'
                          r'bf(?:dot|mmla|mlal[bt]|cvtn?2?)|fcadd|fcmla|fjcvtzs|crc32\w*|aes[edm]\w*|aesimc|sha1\w+|'
                          r'sha256\w+|sha512\w+|sm3\w+|sm4\w+|rax1|eor3|bcax|xar|smstart|smstop|frint(?:32|64)[xz])$')
+# PMULL and PMULL2 to 128 bits (the .1q arrangement) are the optional FEAT_PMULL; the 8-bit form is base NEON.
+ARM64_PMULL = re.compile(r'^pmull2?$')
+ARM64_Q_ARRANGEMENT = re.compile(r'\.1q\b', re.I)
+# The above-baseline instructions an ARM64 feature variant adds to neon; the pmull variant selects on CRC32 too.
+ARM64_CRC32 = frozenset(f'crc32{c}{w}' for c in ('', 'c') for w in 'bhwx')
+ARM64_FEATURE = {'crc32': ARM64_CRC32, 'pmull': ARM64_CRC32 | {'pmull', 'pmull2'}}
 ARM64_FP16 = re.compile(r'^f(?:add|sub|mul|div|madd|msub|nmadd|nmsub|abs|neg|sqrt|max|min|maxnm|minnm|cmp|cmpe|ccmp|'
                         r'mla|mls|mulx|recpe|rsqrte|cvtz[su]|cvta[su])$')
 ARM64_HALF = re.compile(r'^(?:h\d+|v\d+\.[48]h)\b')
@@ -178,7 +184,7 @@ def arm64_above(mnemonic, operands):
         return None
     if not ARM64_TARGET.match(mnemonic) and ARM64_SVE.search(operands):
         return 'SVE/SME'
-    if ARM64_ABOVE.match(mnemonic):
+    if ARM64_ABOVE.match(mnemonic) or (ARM64_PMULL.match(mnemonic) and ARM64_Q_ARRANGEMENT.search(operands)):
         return mnemonic
     if ARM64_FP16.match(mnemonic) and ARM64_HALF.match(operands):
         return 'FP16'
@@ -619,6 +625,13 @@ def judge_kernel_code(level, hits, coff, reviewed=None):
     return code_failures(f'above level {level}: ', above)
 
 
+def judge_arm64_kernel_code(level, hits):
+    """Failures of an ARM64 kernel object's instructions: neon holds nothing above v8.0 with NEON, a feature variant
+    only its feature's instructions besides."""
+    allowed = ARM64_FEATURE.get(level.partition('_')[2], frozenset())
+    return code_failures(f'above level {level}: ', [hit for hit in hits if hit[2] not in allowed])
+
+
 class Exceptions:
     """The reviewed above-floor code (scripts/isa-isolation.json)."""
 
@@ -980,7 +993,7 @@ def run(args):
                     counts['kernel'] += 1
                     found, tables = judge_kernel_symbols(level, names, exceptions.kernel_symbols)
                     found += (judge_kernel_code(level, hits, coff, reviewed) if args.arch == 'x64'
-                              else code_failures('', hits))
+                              else judge_arm64_kernel_code(level, hits))
                     family = families.setdefault((object_library(path), level), [0, set()])
                     family[0] += tables
                     family[1].update(kind for _, _, kind, _ in hits)

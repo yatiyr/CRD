@@ -4762,6 +4762,20 @@ class IsaIsolation(unittest.TestCase):
         self.assertEqual(1, len(judge('sse2', [('f', 0, 'cmpxchg16b', 'lock cmpxchg16b')], False)))
         self.assertEqual([], judge('portable', [], True))
 
+    def test_arm64_kernel_code_stays_within_its_feature(self):
+        judge = isa_isolation.judge_arm64_kernel_code
+        crc = ('f', 0, 'crc32cx', 'crc32cx w0, w0, x1')
+        pmull = ('f', 4, 'pmull', 'pmull v0.1q, v1.1d, v2.1d')
+        pmull2 = ('f', 8, 'pmull2', 'pmull2 v0.1q, v1.2d, v2.2d')
+        self.assertEqual([], judge('neon_crc32', [crc, ('f', 4, 'crc32b', 'crc32b w0, w0, w1')]))
+        self.assertEqual([], judge('neon_pmull', [crc, pmull, pmull2]))
+        self.assertEqual(1, len(judge('neon_crc32', [crc, pmull])))
+        self.assertEqual(1, len(judge('neon', [crc])))
+        self.assertEqual(1, len(judge('neon', [pmull2])))
+        self.assertEqual(1, len(judge('portable', [crc])))
+        self.assertEqual(1, len(judge('neon_pmull', [('f', 0, 'SVE/SME', 'ld1w {z0.s}, p0/z, [x0]')])))
+        self.assertEqual([], judge('neon', []))
+
     def test_each_family_level_holds_its_table_and_encoding(self):
         judge = isa_isolation.judge_families
         self.assertEqual([], judge({('t-avx2.dir', 'avx2'): [1, {'VEX'}], ('t-avx512.dir', 'avx512'): [1, {'EVEX'}],
@@ -4848,6 +4862,12 @@ class IsaIsolation(unittest.TestCase):
         self.assertIsNone(above('fcvt', 'h0, s0'))
         self.assertIsNone(above('zip1', 'v0.4s, v1.4s, v2.4s'))
         self.assertIsNone(above('add', 'x0, x1, #0x10'))
+        self.assertEqual('crc32cx', above('crc32cx', 'w0, w0, x1'))
+        # PMULL to 128 bits is FEAT_PMULL in objdump's and dumpbin's spelling; the 8-bit polynomial form is base NEON.
+        self.assertEqual('pmull', above('pmull', 'v0.1q, v1.1d, v2.1d'))
+        self.assertEqual('pmull2', above('pmull2', 'v16.1Q,v16.2D,v17.2D'))
+        self.assertIsNone(above('pmull', 'v0.8h, v1.8b, v2.8b'))
+        self.assertIsNone(above('pmull2', 'v0.8h, v1.16b, v2.16b'))
         self.assertIsNone(above('.word', '0x05a0e000'))
         self.assertEqual('SVE/SME', above('ld1d', '{z1.d}, p7/z, [x0, z2.d, lsl #3]'))
         self.assertEqual('SVE/SME', above('zero', '{za}'))

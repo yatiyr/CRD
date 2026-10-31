@@ -449,6 +449,50 @@ TEST_CASE("cpu features: each level needs its features and the OS-saved state th
     }
 }
 
+TEST_CASE("cpu features: ARM64 features come from the OS's hwcap word and define no level", "[core][cpu]")
+{
+    constexpr crd::u64 hwcap_asimd = crd::u64{1} << 1U; // Linux's HWCAP_ASIMD, HWCAP_AES, HWCAP_PMULL, HWCAP_CRC32
+    constexpr crd::u64 hwcap_aes = crd::u64{1} << 3U;
+    constexpr crd::u64 hwcap_pmull = crd::u64{1} << 4U;
+    constexpr crd::u64 hwcap_crc32 = crd::u64{1} << 7U;
+    const crd::CpuFeatureSet crc{crd::CpuFeatureSet{}.with(CpuFeature::Crc32)};
+    const crd::CpuFeatureSet both{crc.with(CpuFeature::Pmull)};
+    CHECK(crd::decode_arm64_hwcap(0U).usable == crd::CpuFeatureSet{});
+    CHECK(crd::decode_arm64_hwcap(hwcap_asimd | hwcap_aes).usable == crd::CpuFeatureSet{});
+    CHECK(crd::decode_arm64_hwcap(hwcap_crc32).usable == crc);
+    CHECK(crd::decode_arm64_hwcap(hwcap_crc32).reported == crc);
+    const crd::CpuReport all = crd::decode_arm64_hwcap(~crd::u64{0});
+    CHECK(all.usable == both);
+    CHECK(all.reported == both);
+    CHECK(crd::decode_arm64_hwcap(hwcap_pmull).usable == crd::CpuFeatureSet{}.with(CpuFeature::Pmull));
+    CHECK(crd::cpu_level_of(crd::CpuArch::Arm64, all) == CpuLevel::Neon);
+    CHECK(crd::cpu_level_of(crd::CpuArch::Arm64, crd::CpuReport{}) == CpuLevel::Neon);
+
+    // CPUID never reports them, whatever its words hold.
+    crd::CpuidWords w = v3_words();
+    w.max_leaf = 0x24U;
+    w.leaf1_ecx = w.leaf1_edx = w.leaf7_ebx = w.leaf7_ecx = w.leaf7_edx = w.leaf7_1_eax = w.leaf7_1_edx = ~0U;
+    w.ext1_ecx = w.ext7_edx = ~0U;
+    CHECK_FALSE(crd::decode_cpuid(w).reported.has(CpuFeature::Crc32));
+    CHECK_FALSE(crd::decode_cpuid(w).reported.has(CpuFeature::Pmull));
+
+    // Optional in ARMv8.0: a forced neon arm runs as the smallest neon CPU, without them; the unforced run has them.
+    crd::CpuSelection arm;
+    arm.arch = crd::CpuArch::Arm64;
+    arm.detected = CpuLevel::Neon;
+    arm.selected = CpuLevel::Neon;
+    arm.features = all;
+    const crd::CpuSelection unforced = crd::apply_cpu_override(arm, nullptr);
+    CHECK(unforced.kernel_features == both);
+    CHECK(crd::apply_cpu_override(arm, "neon").kernel_features == crd::CpuFeatureSet{});
+    CHECK(crd::apply_cpu_override(arm, "portable").kernel_features == crd::CpuFeatureSet{});
+    CHECK(crd::apply_cpu_override(arm, "sse2").kernel_features == both); // another architecture's: refused
+
+    char line[128] = {}; // NOLINT(modernize-avoid-c-arrays)
+    (void)crd::format_cpu_selection(unforced, crd::CpuRuntimeDispatch{}, line, sizeof(line));
+    CHECK(std::string_view{line} == "cpu detected=neon selected=neon override=none extra=crc32,pmull");
+}
+
 TEST_CASE("cpu features: AVX-512, AVX10 and APX count only with their register state saved", "[core][cpu]")
 {
     crd::CpuidWords w = v4_words();
@@ -685,16 +729,31 @@ TEST_CASE("cpu features: the selection is what every CPU of the process executes
         if (s.arch == crd::CpuArch::Arm64)
         {
             CHECK(s.detected == CpuLevel::Neon); // Advanced SIMD is architectural, and the OS says so
+            CHECK(s.features == crd::decode_arm64_hwcap(crd::read_arm64_hwcap()));
+            const bool crc = s.features.usable.has(CpuFeature::Crc32);
+            const bool pmull = s.features.usable.has(CpuFeature::Pmull);
+            INFO("crc32 " << crc << ", pmull " << pmull);
 #if defined(_WIN32)
             CHECK(::IsProcessorFeaturePresent(PF_ARM_NEON_INSTRUCTIONS_AVAILABLE) != 0);
+            CHECK(crc == (::IsProcessorFeaturePresent(PF_ARM_V8_CRC32_INSTRUCTIONS_AVAILABLE) != 0));
+            CHECK(pmull == (::IsProcessorFeaturePresent(PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE) != 0));
 #elif defined(__aarch64__)
             CHECK((::getauxval(AT_HWCAP) & HWCAP_ASIMD) != 0U);
+            CHECK(crc == ((::getauxval(AT_HWCAP) & HWCAP_CRC32) != 0U));
+            CHECK(pmull == ((::getauxval(AT_HWCAP) & HWCAP_PMULL) != 0U));
 #endif
+        }
+        else
+        {
+            CHECK(crd::read_arm64_hwcap() == 0U);
         }
         return;
     }
     CHECK(std::strlen(s.walk_note) == 0U);
     CHECK(s.uniform);
+    CHECK(crd::read_arm64_hwcap() == 0U);
+    CHECK_FALSE(s.features.reported.has(CpuFeature::Crc32));
+    CHECK_FALSE(s.features.reported.has(CpuFeature::Pmull));
     CHECK(s.features.usable.has(CpuFeature::Sse2));
     if (s.features.reported.has(CpuFeature::Hybrid))
     {

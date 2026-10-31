@@ -152,22 +152,29 @@ elseif(_crd_arch_x64)
 endif()
 
 # The features a level's variant may add (ADR-0134 §1): the levels each extends and its flags (cl compiles every
-# intrinsic at any /arch and has no such flag). PCLMULQDQ and VPCLMULQDQ are in no psABI level, so the carry-less
-# multiply bodies (the CRC folds of crd-containers' checksum family) are variants.
+# intrinsic at any /arch and has no such flag). PCLMULQDQ and VPCLMULQDQ are in no psABI level, and ARM64's CRC32 and
+# PMULL are optional in ARMv8.0, so the CRC instruction and carry-less multiply bodies (crd-containers' checksum family)
+# are variants; the pmull variant selects on CRC32 too.
 set(_CRD_KERNEL_FEATURE_LEVEL_avxvnni avx2)
 set(_CRD_KERNEL_FEATURE_LEVEL_avx512vnni avx512)
 set(_CRD_KERNEL_FEATURE_LEVEL_pclmulqdq sse42)
 set(_CRD_KERNEL_FEATURE_LEVEL_vpclmulqdq avx2 avx512)
+set(_CRD_KERNEL_FEATURE_LEVEL_crc32 neon)
+set(_CRD_KERNEL_FEATURE_LEVEL_pmull neon)
 if(MSVC AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     set(_CRD_KERNEL_FLAGS_FEATURE_avxvnni "")
     set(_CRD_KERNEL_FLAGS_FEATURE_avx512vnni "")
     set(_CRD_KERNEL_FLAGS_FEATURE_pclmulqdq "")
     set(_CRD_KERNEL_FLAGS_FEATURE_vpclmulqdq "")
+    set(_CRD_KERNEL_FLAGS_FEATURE_crc32 "")
+    set(_CRD_KERNEL_FLAGS_FEATURE_pmull "")
 else()
     set(_CRD_KERNEL_FLAGS_FEATURE_avxvnni -mavxvnni)
     set(_CRD_KERNEL_FLAGS_FEATURE_avx512vnni -mavx512vnni)
     set(_CRD_KERNEL_FLAGS_FEATURE_pclmulqdq -mpclmul)
     set(_CRD_KERNEL_FLAGS_FEATURE_vpclmulqdq -mpclmul -mvpclmulqdq)
+    set(_CRD_KERNEL_FLAGS_FEATURE_crc32 -march=armv8-a+crc)
+    set(_CRD_KERNEL_FLAGS_FEATURE_pmull -march=armv8-a+crc+aes)
 endif()
 
 # One kernel unit: the sources as the object library <objects> at <level> (and <feature> unless it is empty), joined

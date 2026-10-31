@@ -54,6 +54,21 @@
 #define CRD_MATH_LEVEL_NS avx512_vpclmulqdq
 #define CRD_KERNEL_LEVEL_SUFFIX Avx512Vpclmulqdq
 #endif
+#elif defined(CRD_KERNEL_FEATURE_CRC32)
+#if !defined(CRD_KERNEL_LEVEL) || CRD_KERNEL_LEVEL != CRD_KERNEL_LEVEL_NEON
+#error "CRC32 is a feature variant of the neon level"
+#endif
+#define CRD_KERNEL_HAS_CRC32 1
+#define CRD_MATH_LEVEL_NS neon_crc32
+#define CRD_KERNEL_LEVEL_SUFFIX NeonCrc32
+#elif defined(CRD_KERNEL_FEATURE_PMULL)
+#if !defined(CRD_KERNEL_LEVEL) || CRD_KERNEL_LEVEL != CRD_KERNEL_LEVEL_NEON
+#error "PMULL is a feature variant of the neon level"
+#endif
+#define CRD_KERNEL_HAS_CRC32 1 // the PMULL variant selects on CRC32 too
+#define CRD_KERNEL_HAS_PMULL 1
+#define CRD_MATH_LEVEL_NS neon_pmull
+#define CRD_KERNEL_LEVEL_SUFFIX NeonPmull
 #elif !defined(CRD_KERNEL_LEVEL)
 #define CRD_MATH_LEVEL_NS general
 #elif CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_PORTABLE
@@ -88,6 +103,12 @@
 #endif
 #if !defined(CRD_KERNEL_HAS_VPCLMULQDQ)
 #define CRD_KERNEL_HAS_VPCLMULQDQ 0
+#endif
+#if !defined(CRD_KERNEL_HAS_CRC32)
+#define CRD_KERNEL_HAS_CRC32 0
+#endif
+#if !defined(CRD_KERNEL_HAS_PMULL)
+#define CRD_KERNEL_HAS_PMULL 0
 #endif
 
 // The name of the kernel table a unit of this level defines: CRD_KERNEL_TABLE(kFoo) is kFooAvx2 in an AVX2 unit.

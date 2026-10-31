@@ -1665,7 +1665,8 @@ jobs:
   # ARM64 on real NEON hardware (SIMD-DISPATCH, docs/design/ci-tiers.md#arm64-lanes). crd-jobs has no ARM64 fiber
   # context before JOBS-PORT.2, so the presets configure every module whose closure and tests avoid it
   # (CRD_MODULES_WITHOUT=jobs, cmake/CrdModules.cmake); the lanes widen with no workflow edit once it lands. Every
-  # kernel family builds portable here and the level probe runs portable and neon, as the forced-level arms do on x64.
+  # kernel family builds its portable and neon units here (the CRCs as the CRC32 and PMULL variants, which the lane's
+  # own run takes) and the level probe runs portable and neon, as the forced-level arms do on x64.
   # The image's toolchains only: GCC and Clang, Ubuntu's ninja-build (the pinned Ninja is an x86-64 binary) and gdb
   # for the support/diag watchpoint routes; no compiler cache (the pinned sccache is x86-64 too).
   linux-arm64:

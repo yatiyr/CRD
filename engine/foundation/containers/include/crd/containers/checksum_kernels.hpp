@@ -4,14 +4,13 @@
 // per CPU level that bit-exactly computes its formats (crd/containers/checksum.hpp; the level the process runs:
 // crd/containers/checksum_dispatch.hpp):
 //
-//   crc:  portable (slicing by 8), sse4.2 (CRC-32C on the CRC32 instruction), and the carry-less multiply folds as
-//         variants: sse4.2 + PCLMULQDQ (128-bit), avx2 + VPCLMULQDQ (256-bit) and avx512 + VPCLMULQDQ (512-bit).
-//         PCLMULQDQ is in no psABI level, so a CPU without it runs the sse4.2 or portable table.
+//   crc:  portable (slicing by 8), sse4.2 (CRC-32C on the CRC32 instruction), and as variants the carry-less
+//         multiply folds, sse4.2 + PCLMULQDQ (128-bit), avx2 + VPCLMULQDQ (256-bit) and avx512 + VPCLMULQDQ
+//         (512-bit), and ARM64's neon + CRC32 (both polynomials on the CRC32 instructions) and neon + PMULL (the
+//         128-bit fold, CRC32 for the bytes it leaves). PCLMULQDQ is in no psABI level and CRC32 and PMULL are
+//         optional in ARMv8.0, so a CPU without them runs the table below.
 //   hash: XXH3's long-input loop (over 240 bytes) on portable, sse2, avx2, avx512 and neon vectors; the short inputs
 //         and the final merge are scalar general code.
-//
-// The ARM64 CRC32 and PMULL instructions are optional ARMv8.0 features that crd-core does not detect yet, so neon runs
-// the portable CRCs.
 
 #include <crd/core/types.hpp>
 
@@ -40,6 +39,8 @@ extern const CrcKernels kCrcKernelsSse42;
 extern const CrcKernels kCrcKernelsSse42Pclmulqdq;
 extern const CrcKernels kCrcKernelsAvx2Vpclmulqdq;
 extern const CrcKernels kCrcKernelsAvx512Vpclmulqdq;
+extern const CrcKernels kCrcKernelsNeonCrc32;
+extern const CrcKernels kCrcKernelsNeonPmull;
 extern const HashKernels kHashKernelsPortable;
 extern const HashKernels kHashKernelsSse2;
 extern const HashKernels kHashKernelsAvx2;

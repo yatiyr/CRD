@@ -39,7 +39,8 @@ enum class CpuLevel : crd::u8
     Neon,     // ARM64 Advanced SIMD, architectural
 };
 
-// x64 features a kernel may select on. The order is the bit index in CpuFeatureSet.
+// Features a kernel may select on: x64's from CPUID, then ARM64's from the OS (decode_arm64_hwcap). The order is the
+// bit index in CpuFeatureSet.
 enum class CpuFeature : crd::u8
 {
     Sse2,
@@ -87,6 +88,8 @@ enum class CpuFeature : crd::u8
     Apx,
     Hybrid,
     InvariantTsc,
+    Crc32, // ARM64 CRC32 and CRC32C instructions (FEAT_CRC32, optional in ARMv8.0)
+    Pmull, // ARM64 64-bit polynomial multiply, PMULL and PMULL2 to 128 bits (FEAT_PMULL)
     Count,
 };
 
@@ -223,6 +226,12 @@ struct CpuSelection
 
 // CPUID and XCR0 of the CPU the calling thread runs on (zeros off x64).
 [[nodiscard]] CpuidWords read_cpuid_here() noexcept;
+
+// ARM64 features in the layout of Linux's AT_HWCAP word (HWCAP_PMULL bit 4, HWCAP_CRC32 bit 7), which the kernel and
+// the other OSes report for every CPU of the system: decode, and the word this OS gives (Linux and Android read it,
+// Windows and macOS set its bits from their own feature queries; 0 off ARM64). No ARM64 feature needs OS state.
+[[nodiscard]] CpuReport decode_arm64_hwcap(crd::u64 hwcap) noexcept;
+[[nodiscard]] crd::u64 read_arm64_hwcap() noexcept;
 
 // The highest level `report` can execute on `arch`.
 [[nodiscard]] CpuLevel cpu_level_of(CpuArch arch, const CpuReport& report) noexcept;

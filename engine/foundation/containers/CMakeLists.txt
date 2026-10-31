@@ -34,10 +34,11 @@ target_compile_features(crd-containers PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-containers)
 
 # The checksum family's kernels, one body per CPU level (HW-RESILIENCE.1, ADR-0134); src/checksum.cpp lists them. The
-# CRCs: portable slicing, sse4.2's CRC32 instruction and the carry-less multiply folds, which are in no psABI level
-# (variants; an avx2 or avx512 CPU without VPCLMULQDQ runs the sse4.2 fold). XXH3's long loop on every vector level.
+# CRCs: portable slicing, sse4.2's CRC32 instruction and the carry-less multiply folds, which are in no psABI level,
+# and ARM64's optional CRC32 and PMULL instructions (variants; an avx2 or avx512 CPU without VPCLMULQDQ runs the sse4.2
+# fold, an ARM64 CPU without them the portable table). XXH3's long loop on every vector level.
 crd_add_cpu_kernels(crd-containers NAME crc LEVELS portable sse42
-                    VARIANTS sse42+pclmulqdq avx2+vpclmulqdq avx512+vpclmulqdq
+                    VARIANTS sse42+pclmulqdq avx2+vpclmulqdq avx512+vpclmulqdq neon+crc32 neon+pmull
                     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/crc_kernels.cpp")
 crd_add_cpu_kernels(crd-containers NAME hash LEVELS portable sse2 avx2 avx512 neon
                     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/hash_kernels.cpp")

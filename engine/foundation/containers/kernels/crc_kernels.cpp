@@ -1,12 +1,14 @@
 // The crc kernel family (crd/containers/checksum_kernels.hpp), compiled by crd_add_cpu_kernels (../CMakeLists.txt) at
-// portable and sse4.2 and as the PCLMULQDQ and VPCLMULQDQ variants; crd/core/kernel_level.hpp names the unit's level.
+// portable and sse4.2 and as the PCLMULQDQ, VPCLMULQDQ, CRC32 and PMULL variants; crd/core/kernel_level.hpp names the
+// unit's level.
 //
 // Every body computes the same reflected CRC register, so every level gives the same bits. The carry-less multiply
 // folds follow Gopal et al., "Fast CRC Computation for Generic Polynomials Using PCLMULQDQ Instruction" (Intel, 2009),
 // for reflected polynomials: a 128-bit lane holding message bits at distance D ahead of the next data folds as
 // lo64 * (x^(D+32) mod P) xor hi64 * (x^(D-32) mod P), each constant bit-reflected and shifted left once; 128 bits
 // reduce to 64 with x^64 mod P and to 32 by Barrett reduction with floor(x^64 / P). The constants are computed below
-// from the polynomial and checked against the published CRC-32 ones.
+// from the polynomial and checked against the published CRC-32 ones. x64's PCLMULQDQ and ARM64's PMULL run the same
+// 128-bit fold through a few vector primitives each.
 
 #include <crd/containers/checksum_kernels.hpp>
 #include <crd/core/kernel_level.hpp>
@@ -15,15 +17,28 @@
 #include <bit>
 #include <cstring>
 
+// NOLINTBEGIN(cppcoreguidelines-macro-usage): select the unit's bodies
 #if CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_SSE42 || CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_AVX2 ||                         \
     CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_AVX512
 #include <immintrin.h>
-// NOLINTNEXTLINE(cppcoreguidelines-macro-usage): selects the unit's bodies
-#define CRD_CRC_HARDWARE_C 1 // the SSE4.2 CRC32 instruction computes CRC-32C
+#define CRD_CRC_HARDWARE_C 1  // the SSE4.2 CRC32 instruction computes CRC-32C
+#define CRD_CRC_HARDWARE_32 0 // and no x64 instruction computes CRC-32
+#elif CRD_KERNEL_HAS_CRC32
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
 #else
-// NOLINTNEXTLINE(cppcoreguidelines-macro-usage): selects the unit's bodies
-#define CRD_CRC_HARDWARE_C 0
+#include <arm_acle.h>
 #endif
+#define CRD_CRC_HARDWARE_C 1 // ARM64's CRC32 instructions compute both polynomials
+#define CRD_CRC_HARDWARE_32 1
+#else
+#define CRD_CRC_HARDWARE_C 0
+#define CRD_CRC_HARDWARE_32 0
+#endif
+#if CRD_KERNEL_HAS_PMULL
+#include <arm_neon.h>
+#endif
+// NOLINTEND(cppcoreguidelines-macro-usage)
 
 namespace crd::containers::inline CRD_MATH_LEVEL_NS
 {
@@ -32,8 +47,6 @@ namespace
 
 static_assert(std::endian::native == std::endian::little, "the byte loops read little-endian words");
 
-using detail::CrcSlices;
-
 crd::u64 load_u64(const crd::u8* p) noexcept
 {
     crd::u64 v = 0U;
@@ -41,8 +54,9 @@ crd::u64 load_u64(const crd::u8* p) noexcept
     return v;
 }
 
+#if !CRD_CRC_HARDWARE_32
 // Slicing by 8 (Kounavis and Berry, 2008): eight bytes per step, each through the table of its distance to the end.
-crd::u32 crc_slices(const CrcSlices& s, crd::u32 c, const crd::u8* p, crd::usize n) noexcept
+crd::u32 crc_slices(const detail::CrcSlices& s, crd::u32 c, const crd::u8* p, crd::usize n) noexcept
 {
     while (n >= 8U)
     {
@@ -60,15 +74,43 @@ crd::u32 crc_slices(const CrcSlices& s, crd::u32 c, const crd::u8* p, crd::usize
     }
     return c;
 }
+#endif
 
-crd::u32 crc32_slices(crd::u32 state, const crd::u8* data, crd::usize n) noexcept
+// The CRC register over n bytes a word at a time: the unit's CRC instruction where it has one, else slicing by 8.
+crd::u32 crc32_bytes(crd::u32 state, const crd::u8* data, crd::usize n) noexcept
 {
+#if CRD_CRC_HARDWARE_32
+    for (; n >= 8U; n -= 8U)
+    {
+        state = __crc32d(state, load_u64(data));
+        data += 8;
+    }
+    for (; n > 0U; --n)
+    {
+        state = __crc32b(state, *data);
+        ++data;
+    }
+    return state;
+#else
     return crc_slices(detail::kCrc32Slices, state, data, n);
+#endif
 }
 
-#if CRD_CRC_HARDWARE_C
-crd::u32 crc32c_hardware(crd::u32 state, const crd::u8* data, crd::usize n) noexcept
+crd::u32 crc32c_bytes(crd::u32 state, const crd::u8* data, crd::usize n) noexcept
 {
+#if CRD_CRC_HARDWARE_32
+    for (; n >= 8U; n -= 8U)
+    {
+        state = __crc32cd(state, load_u64(data));
+        data += 8;
+    }
+    for (; n > 0U; --n)
+    {
+        state = __crc32cb(state, *data);
+        ++data;
+    }
+    return state;
+#elif CRD_CRC_HARDWARE_C
     crd::u64 c = state;
     for (; n >= 8U; n -= 8U)
     {
@@ -82,15 +124,12 @@ crd::u32 crc32c_hardware(crd::u32 state, const crd::u8* data, crd::usize n) noex
         ++data;
     }
     return c32;
-}
 #else
-crd::u32 crc32c_slices(crd::u32 state, const crd::u8* data, crd::usize n) noexcept
-{
     return crc_slices(detail::kCrc32cSlices, state, data, n);
-}
 #endif
+}
 
-#if CRD_KERNEL_HAS_PCLMULQDQ
+#if CRD_KERNEL_HAS_PCLMULQDQ || CRD_KERNEL_HAS_PMULL
 
 constexpr crd::u32 kPoly32 = 0x04C11DB7U;  // CRC-32, unreflected, without x^32
 constexpr crd::u32 kPoly32c = 0x1EDC6F41U; // CRC-32C
@@ -187,39 +226,120 @@ static_assert(kFold32.d512.lo == 0x154442BD4U && kFold32.d512.hi == 0x1C6E41596U
 static_assert(kFold32.d128.lo == 0x1751997D0U && kFold32.d128.hi == 0x0CCAA009EU);
 static_assert(kFold32.x64 == 0x163CD6124U && kFold32.poly == 0x1DB710641U && kFold32.mu == 0x1F7011641U);
 
-__m128i pair128(const FoldPair& k) noexcept
+// The fold's 128-bit primitives: two 64-bit lanes, lo the low one.
+#if CRD_KERNEL_HAS_PCLMULQDQ
+using V128 = __m128i;
+
+V128 make128(crd::u64 lo, crd::u64 hi) noexcept
 {
-    return _mm_set_epi64x(static_cast<long long>(k.hi), static_cast<long long>(k.lo));
+    return _mm_set_epi64x(static_cast<long long>(hi), static_cast<long long>(lo));
 }
 
-__m128i load128(const crd::u8* p) noexcept
+V128 load128(const crd::u8* p) noexcept
 {
     return _mm_loadu_si128(reinterpret_cast<const __m128i*>(p));
 }
 
-// x folded `k`'s distance onto data.
-__m128i fold128(__m128i x, __m128i data, __m128i k) noexcept
+V128 xor128(V128 a, V128 b) noexcept
 {
-    return _mm_xor_si128(_mm_xor_si128(_mm_clmulepi64_si128(x, k, 0x00), _mm_clmulepi64_si128(x, k, 0x11)), data);
+    return _mm_xor_si128(a, b);
+}
+
+V128 and128(V128 a, V128 b) noexcept
+{
+    return _mm_and_si128(a, b);
+}
+
+V128 clmul_lo(V128 a, V128 b) noexcept // a.lo * b.lo
+{
+    return _mm_clmulepi64_si128(a, b, 0x00);
+}
+
+V128 clmul_hi(V128 a, V128 b) noexcept // a.hi * b.hi
+{
+    return _mm_clmulepi64_si128(a, b, 0x11);
+}
+
+template <int Bytes> V128 shift_right_bytes(V128 x) noexcept
+{
+    return _mm_srli_si128(x, Bytes);
+}
+
+crd::u32 bits_32_to_63(V128 x) noexcept
+{
+    return static_cast<crd::u32>(_mm_extract_epi32(x, 1));
+}
+#else
+using V128 = uint64x2_t;
+
+V128 make128(crd::u64 lo, crd::u64 hi) noexcept
+{
+    return vcombine_u64(vcreate_u64(lo), vcreate_u64(hi));
+}
+
+V128 load128(const crd::u8* p) noexcept
+{
+    return vreinterpretq_u64_u8(vld1q_u8(p));
+}
+
+V128 xor128(V128 a, V128 b) noexcept
+{
+    return veorq_u64(a, b);
+}
+
+V128 and128(V128 a, V128 b) noexcept
+{
+    return vandq_u64(a, b);
+}
+
+V128 clmul_lo(V128 a, V128 b) noexcept // a.lo * b.lo
+{
+#if defined(_MSC_VER) && !defined(__clang__)
+    return vmull_p64(vget_low_u64(a), vget_low_u64(b)); // cl's PMULL takes and gives vector registers
+#else
+    return vreinterpretq_u64_p128(
+        vmull_p64(static_cast<poly64_t>(vgetq_lane_u64(a, 0)), static_cast<poly64_t>(vgetq_lane_u64(b, 0))));
+#endif
+}
+
+V128 clmul_hi(V128 a, V128 b) noexcept // a.hi * b.hi
+{
+    return vreinterpretq_u64_p128(vmull_high_p64(vreinterpretq_p64_u64(a), vreinterpretq_p64_u64(b)));
+}
+
+template <int Bytes> V128 shift_right_bytes(V128 x) noexcept
+{
+    return vreinterpretq_u64_u8(vextq_u8(vreinterpretq_u8_u64(x), vdupq_n_u8(0U), Bytes));
+}
+
+crd::u32 bits_32_to_63(V128 x) noexcept
+{
+    return vgetq_lane_u32(vreinterpretq_u32_u64(x), 1);
+}
+#endif
+
+V128 pair128(const FoldPair& k) noexcept
+{
+    return make128(k.lo, k.hi);
+}
+
+// x folded `k`'s distance onto data.
+V128 fold128(V128 x, V128 data, V128 k) noexcept
+{
+    return xor128(xor128(clmul_lo(x, k), clmul_hi(x, k)), data);
 }
 
 // The CRC register of a 128-bit remainder.
-crd::u32 reduce128(__m128i x, const FoldConstants& f) noexcept
+crd::u32 reduce128(V128 x, const FoldConstants& f) noexcept
 {
-    const __m128i low32 = _mm_setr_epi32(-1, 0, -1, 0);
+    const V128 low32 = make128(0xFFFFFFFFU, 0U);
     // 128 bits to 64: the low qword one lane ahead (x^(128-32)), the high qword in place.
-    __m128i t = _mm_clmulepi64_si128(x, pair128(f.d128), 0x10);
-    x = _mm_xor_si128(_mm_srli_si128(x, 8), t);
+    x = xor128(shift_right_bytes<8>(x), clmul_lo(x, make128(f.d128.hi, 0U)));
     // 64 bits to 32 above a 32-bit remainder: the low dword times x^64.
-    t = _mm_srli_si128(x, 4);
-    x = _mm_clmulepi64_si128(_mm_and_si128(x, low32), _mm_cvtsi64_si128(static_cast<long long>(f.x64)), 0x00);
-    x = _mm_xor_si128(x, t);
+    x = xor128(shift_right_bytes<4>(x), clmul_lo(and128(x, low32), make128(f.x64, 0U)));
     // Barrett: the quotient's low 32 bits times mu, times P, cancel all but the remainder.
-    const __m128i pm = _mm_set_epi64x(static_cast<long long>(f.mu), static_cast<long long>(f.poly));
-    t = _mm_clmulepi64_si128(_mm_and_si128(x, low32), pm, 0x10);
-    t = _mm_clmulepi64_si128(_mm_and_si128(t, low32), pm, 0x00);
-    x = _mm_xor_si128(x, t);
-    return static_cast<crd::u32>(_mm_extract_epi32(x, 1));
+    const V128 q = clmul_lo(and128(x, low32), make128(f.mu, 0U));
+    return bits_32_to_63(xor128(x, clmul_lo(and128(q, low32), make128(f.poly, 0U))));
 }
 
 #if CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_AVX2
@@ -319,15 +439,15 @@ constexpr crd::usize kWideMin = 256U;
 #endif
 
 // n >= 64: four 128-bit lanes fold 64 bytes a step; leaves n < 64 and the 128-bit remainder.
-__m128i fold_lanes(crd::u32 state, const crd::u8*& p, crd::usize& n, const FoldConstants& f) noexcept
+V128 fold_lanes(crd::u32 state, const crd::u8*& p, crd::usize& n, const FoldConstants& f) noexcept
 {
-    __m128i x0 = _mm_xor_si128(load128(p), _mm_cvtsi32_si128(static_cast<int>(state)));
-    __m128i x1 = load128(p + 16);
-    __m128i x2 = load128(p + 32);
-    __m128i x3 = load128(p + 48);
+    V128 x0 = xor128(load128(p), make128(state, 0U));
+    V128 x1 = load128(p + 16);
+    V128 x2 = load128(p + 32);
+    V128 x3 = load128(p + 48);
     p += 64;
     n -= 64U;
-    const __m128i k4 = pair128(f.d512);
+    const V128 k4 = pair128(f.d512);
     for (; n >= 64U; n -= 64U)
     {
         x0 = fold128(x0, load128(p), k4);
@@ -336,7 +456,7 @@ __m128i fold_lanes(crd::u32 state, const crd::u8*& p, crd::usize& n, const FoldC
         x3 = fold128(x3, load128(p + 48), k4);
         p += 64;
     }
-    const __m128i k1 = pair128(f.d128);
+    const V128 k1 = pair128(f.d128);
     return fold128(fold128(fold128(x0, x1, k1), x2, k1), x3, k1);
 }
 
@@ -349,11 +469,11 @@ crd::u32 crc_fold(crd::u32 state, const crd::u8* p, crd::usize n, const FoldCons
         return Small(state, p, n);
     }
 #if CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_AVX2 || CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_AVX512
-    __m128i x = n >= kWideMin ? fold_wide(state, p, n, f) : fold_lanes(state, p, n, f);
+    V128 x = n >= kWideMin ? fold_wide(state, p, n, f) : fold_lanes(state, p, n, f);
 #else
-    __m128i x = fold_lanes(state, p, n, f);
+    V128 x = fold_lanes(state, p, n, f);
 #endif
-    const __m128i k1 = pair128(f.d128);
+    const V128 k1 = pair128(f.d128);
     for (; n >= 16U; n -= 16U)
     {
         x = fold128(x, load128(p), k1);
@@ -364,15 +484,15 @@ crd::u32 crc_fold(crd::u32 state, const crd::u8* p, crd::usize n, const FoldCons
 
 crd::u32 crc32_fold(crd::u32 state, const crd::u8* data, crd::usize n) noexcept
 {
-    return crc_fold<&crc32_slices>(state, data, n, kFold32);
+    return crc_fold<&crc32_bytes>(state, data, n, kFold32);
 }
 
 crd::u32 crc32c_fold(crd::u32 state, const crd::u8* data, crd::usize n) noexcept
 {
-    return crc_fold<&crc32c_hardware>(state, data, n, kFold32c);
+    return crc_fold<&crc32c_bytes>(state, data, n, kFold32c);
 }
 
-#endif // CRD_KERNEL_HAS_PCLMULQDQ
+#endif // CRD_KERNEL_HAS_PCLMULQDQ || CRD_KERNEL_HAS_PMULL
 
 } // namespace
 } // namespace crd::containers::inline CRD_MATH_LEVEL_NS
@@ -380,13 +500,10 @@ crd::u32 crc32c_fold(crd::u32 state, const crd::u8* data, crd::usize n) noexcept
 namespace crd::containers
 {
 
-#if CRD_KERNEL_HAS_PCLMULQDQ
+#if CRD_KERNEL_HAS_PCLMULQDQ || CRD_KERNEL_HAS_PMULL
 const CrcKernels CRD_KERNEL_TABLE(kCrcKernels) = {&CRD_MATH_LEVEL_NS::crc32_fold, &CRD_MATH_LEVEL_NS::crc32c_fold};
-#elif CRD_CRC_HARDWARE_C
-const CrcKernels CRD_KERNEL_TABLE(kCrcKernels) = {&CRD_MATH_LEVEL_NS::crc32_slices,
-                                                  &CRD_MATH_LEVEL_NS::crc32c_hardware};
 #else
-const CrcKernels CRD_KERNEL_TABLE(kCrcKernels) = {&CRD_MATH_LEVEL_NS::crc32_slices, &CRD_MATH_LEVEL_NS::crc32c_slices};
+const CrcKernels CRD_KERNEL_TABLE(kCrcKernels) = {&CRD_MATH_LEVEL_NS::crc32_bytes, &CRD_MATH_LEVEL_NS::crc32c_bytes};
 #endif
 
 } // namespace crd::containers

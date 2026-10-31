@@ -37,6 +37,9 @@ extern "C"
 #include <fcntl.h>
 #include <sched.h>
 #include <unistd.h>
+#if CRD_ARCH_ARM64
+#include <sys/auxv.h>
+#endif
 #if CRD_ARCH_X64
 #include <cpuid.h>
 
@@ -50,6 +53,8 @@ struct cpuid_feature
 };
 extern "C" const struct cpuid_feature* __x86_get_cpuid_feature_leaf(unsigned int) __attribute__((pure, weak));
 #endif
+#elif CRD_OS_MAC && CRD_ARCH_ARM64
+#include <sys/sysctl.h>
 #endif
 
 namespace crd
@@ -57,7 +62,7 @@ namespace crd
 namespace
 {
 
-// The CPUID word a feature bit lives in.
+// The word a feature bit lives in: a CPUID word, or ARM64's hwcap word (decode_arm64_hwcap).
 enum class Word : crd::u8
 {
     Leaf1Ecx,
@@ -69,6 +74,7 @@ enum class Word : crd::u8
     Leaf71Edx,
     Ext1Ecx,
     Ext7Edx,
+    Arm64Hwcap,
 };
 
 // XCR0 state components a feature's registers need: SSE (bit 1) and AVX (bit 2) for YMM; opmask (5), ZMM_Hi256 (6)
@@ -89,6 +95,7 @@ struct FeatureBit
 };
 
 // Intel SDM vol. 2A CPUID and AMD APM vol. 3 appendix E; GFNI keeps its legacy SSE encoding, so it needs no XCR0 state.
+// The ARM64 bits are Linux's arch/arm64/include/uapi/asm/hwcap.h.
 // NOLINTNEXTLINE(modernize-avoid-c-arrays): a constant table indexed by CpuFeature
 constexpr FeatureBit kFeatures[] = {
     {CpuFeature::Sse2, Word::Leaf1Edx, 26U, kStateNone, "sse2"},
@@ -136,6 +143,8 @@ constexpr FeatureBit kFeatures[] = {
     {CpuFeature::Apx, Word::Leaf71Edx, 21U, kStateApx, "apx"},
     {CpuFeature::Hybrid, Word::Leaf7Edx, 15U, kStateNone, "hybrid"},
     {CpuFeature::InvariantTsc, Word::Ext7Edx, 8U, kStateNone, "invariant-tsc"},
+    {CpuFeature::Crc32, Word::Arm64Hwcap, 7U, kStateNone, "crc32"},
+    {CpuFeature::Pmull, Word::Arm64Hwcap, 4U, kStateNone, "pmull"},
 };
 static_assert(sizeof(kFeatures) / sizeof(kFeatures[0]) == static_cast<crd::usize>(CpuFeature::Count),
               "one table row per CpuFeature");
@@ -189,6 +198,8 @@ crd::u32 word_of(const CpuidWords& w, Word which) noexcept
             break;
         case Word::Ext7Edx:
             result = ext7 ? w.ext7_edx : 0U;
+            break;
+        case Word::Arm64Hwcap: // not a CPUID word
             break;
     }
     return result;
@@ -758,6 +769,53 @@ CpuidWords read_cpuid_here() noexcept
     return w;
 }
 
+CpuReport decode_arm64_hwcap(crd::u64 hwcap) noexcept
+{
+    CpuReport r;
+    for (const FeatureBit& f : kFeatures)
+    {
+        if (f.word == Word::Arm64Hwcap && ((hwcap >> f.bit) & 1U) != 0U)
+        {
+            r.reported.set(f.feature);
+            r.usable.set(f.feature);
+        }
+    }
+    return r;
+}
+
+crd::u64 read_arm64_hwcap() noexcept
+{
+#if CRD_ARCH_ARM64 && CRD_OS_LINUX
+    return ::getauxval(AT_HWCAP);
+#elif CRD_ARCH_ARM64
+    crd::u64 hwcap = 0U;
+    const auto set = [&hwcap](CpuFeature feature, bool present) noexcept
+    {
+        if (present)
+        {
+            hwcap |= crd::u64{1} << kFeatures[static_cast<crd::usize>(feature)].bit;
+        }
+    };
+#if CRD_OS_WINDOWS
+    set(CpuFeature::Crc32, ::IsProcessorFeaturePresent(PF_ARM_V8_CRC32_INSTRUCTIONS_AVAILABLE) != 0);
+    // Windows reports the ARMv8.0 cryptographic extension as one: AES, PMULL, SHA-1 and SHA-256.
+    set(CpuFeature::Pmull, ::IsProcessorFeaturePresent(PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE) != 0);
+#else
+    const auto sysctl_flag = [](const char* name) noexcept
+    {
+        int value = 0;
+        std::size_t size = sizeof(value);
+        return ::sysctlbyname(name, &value, &size, nullptr, 0U) == 0 && value != 0;
+    };
+    set(CpuFeature::Crc32, sysctl_flag("hw.optional.armv8_crc32"));
+    set(CpuFeature::Pmull, sysctl_flag("hw.optional.arm.FEAT_PMULL"));
+#endif
+    return hwcap;
+#else
+    return 0U;
+#endif
+}
+
 CpuLevel cpu_level_of(CpuArch arch, const CpuReport& report) noexcept
 {
     if (arch == CpuArch::Arm64)
@@ -866,7 +924,12 @@ CpuSelection detect_cpus() noexcept
     }
     else
     {
-        s.walk_note = "no CPUID on this architecture; its level is architectural";
+        // The OS reports the features every CPU of the system has (Linux's hwcaps are the CPUs' common set).
+        if (kArch == CpuArch::Arm64)
+        {
+            s.features = decode_arm64_hwcap(read_arm64_hwcap());
+        }
+        s.walk_note = "no CPUID on this architecture; its level is architectural, its features the OS's";
     }
     read_os_l2(s);
     s.detected = cpu_level_of(s.arch, s.features);
