@@ -112,8 +112,8 @@ each a `pending` entry or a listed review, all on OWN.1:
 | math.fixed-size-linear-algebra → math | `geometry-primitives/transform.hpp`, `circumcenter.hpp`, mesh-processing's `quadric.hpp`, **moved** 2026-10-31 | `det3`, the inverse-transpose, the 2D attributes' determinant, the symmetric cofactor inverse and both circumcentres' Cramer's rule; crd-math gained Mat2/Mat3 `determinant`, `inverse`, `try_inverse`, `inverse_transpose`, `solve` and `try_solve`, see below. |
 | io.durable-saves → platform | `perf/bundle.cpp` | crd-perf's `write_bundle_atomic` replaces a file durably by hand; it moves onto `durable_file.hpp` once crd-perf, which ships in the relocatable package, can link crd-platform. |
 | compression.codecs → compression (new) | resources' `deflate`, `crdr` zstd use | decision 1. |
-| numerics.signal-processing → hesap-dsp | `audio/audio_kernels.hpp` | designs its biquad with hesap-dsp's RBJ formulas but runs its own transposed direct-form II loop; the stateful section step belongs to hesap-dsp. |
-| geometry.robust-predicates | `hesap-interp/clough_tocher.hpp` `fast_orient` | a deliberate non-robust orientation for the walk with an exact fallback; it becomes geometry's or crd-math's cross product, not a second predicate. |
+| numerics.signal-processing → hesap-dsp | `audio/audio_kernels.hpp`, hesap-dsp's own `sosfilt_stream`, **moved** 2026-10-31 | the audio biquad designed with hesap-dsp's RBJ formulas but ran its own transposed direct-form II loop; both loops now run hesap-dsp's `biquad_step`, bit-exact, see below. |
+| geometry.robust-predicates | `hesap-interp/clough_tocher.hpp` `fast_orient`, **moved** 2026-10-31 | a deliberate non-robust orientation for the walk with an exact fallback; it is now crd-math's 2D `cross`, not a second predicate, bit-exact, see below. |
 
 Each move is recorded in the OWN.1 session that lands it, with its oracle (bit-exact or the declared tolerance) and
 its before/after board.
@@ -204,3 +204,21 @@ Reviewed and left: geometry-convex's sub-distance barycentrics (signed volumes f
 geometric formula rather than a matrix routine); CKIR's evaluator `mat_det` (the IR oracle's determinant, rounded per
 operation at the node's dtype, the IR's own semantics like decision 6) and its 2D-Gaussian-splat emitter (Cramer's rule
 written into IR, decision 6).
+
+### The biquad-step and walk-orientation move
+
+hesap-dsp's `filter.hpp` holds the engine's one direct-form II transposed section step: `BiquadState<T>` (moved there
+from `filtering.hpp`) and `biquad_step(bq, state, x)`, a `constexpr` multiply-add in scipy's order that returns the
+output and advances the state. `sosfilt_stream` cascades it, and the audio module's `apply_biquad` runs it once per
+channel with one `BiquadState<f64>` per channel in place of its `z1`/`z2` arrays (the graph renderer's per-node state
+and the CEIR executor's per-op state with it). The registry's `numerics.signal-processing` entry gains the step's
+signature, so a third hand-written DF2T update outside hesap-dsp is refused. Both moves are **bit-exact**: the step
+against the recurrence written out, 64 drawn stable sections of 512 samples in f32 and f64, outputs and states
+(`test_filtering.cpp`), with an impulse response checked at compile time; `apply_biquad` against the audio copy for
+every filter type, three cutoffs and three Qs, in one pass and cut into blocks of 256, 7, 1, 113 and 64 frames, the
+filtered bus and both channels' states (`test_audio_graph.cpp`); the graph and CEIR render suites pass unchanged.
+
+The Clough-Tocher walk read the sign of its own `fast_orient`; it now reads crd-math's 2D `cross(b - a, q - a)`, the
+same products in the same order, **bit-exact** over 65536 drawn triangles per precision, one query in eight on the edge
+line (`test_clough_tocher.cpp`). It stays a non-robust sign on purpose: a misrouted step costs a step, and the exact
+fallback scan is geometry's adaptive `orient2d`.
