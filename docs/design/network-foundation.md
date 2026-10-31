@@ -31,8 +31,10 @@ entirely plan still holds. The foundation reuses these owned capabilities and du
 
 Two capabilities have no owner yet and this design assigns them (decisions [D1](#d1) and [D2](#d2)): `crd-net` owns
 sockets, transport, sessions, channels, admission, conditioning, NAT traversal and capture; `crd-crypto` owns the
-cryptographic provider interface, the key store, the CSPRNG and keyed pseudorandom functions. Both need OWN.1
-registry entries when their modules land.
+cryptographic provider interface, the key store, the CSPRNG and keyed pseudorandom functions. Both are OWN.1
+registry entries. Since 2026-10-31 `crd-net` exists (NET-STD's negotiation created it, and `network.transport` is a
+landed capability whose signatures refuse a socket call or socket header in any other module); `crd-crypto` stays
+planned until NET.2 creates it. The review above records the tree before that.
 
 ## Assets
 
