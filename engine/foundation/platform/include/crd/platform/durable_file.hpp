@@ -136,7 +136,8 @@ public:
     // journal is read once.
     [[nodiscard]] bool open(const Path& path, u64 base_generation, const JournalReplay& existing) noexcept;
 
-    // Write one record. It is durable after the next commit().
+    // Write one record. It is durable after the next commit(). A failed write cuts its partial record off; a journal
+    // that cannot cut it closes, since an append after those bytes would follow where replay stops.
     [[nodiscard]] bool append(containers::ConstSpan<u8> record) noexcept;
 
     // Flush every appended record to stable storage.

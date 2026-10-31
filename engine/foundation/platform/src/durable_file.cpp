@@ -836,8 +836,10 @@ bool Journal::append(cont::ConstSpan<u8> record) noexcept
         // Cut the partial record, so the next append does not follow bytes replay stops at.
         LARGE_INTEGER at{};
         at.QuadPart = static_cast<LONGLONG>(m_bytes);
-        (void)SetFilePointerEx(h, at, nullptr, FILE_BEGIN);
-        (void)SetEndOfFile(h);
+        if (SetFilePointerEx(h, at, nullptr, FILE_BEGIN) == 0 || SetEndOfFile(h) == 0)
+        {
+            close(); // the partial record stays: an append after it would follow bytes replay stops at
+        }
         return false;
     }
 #else
@@ -845,8 +847,10 @@ bool Journal::append(cont::ConstSpan<u8> record) noexcept
     const bool ok = write_all(fd, head) && write_all(fd, record);
     if (!ok)
     {
-        (void)::ftruncate(fd, static_cast<off_t>(m_bytes));
-        (void)::lseek(fd, static_cast<off_t>(m_bytes), SEEK_SET);
+        if (::ftruncate(fd, static_cast<off_t>(m_bytes)) != 0 || ::lseek(fd, static_cast<off_t>(m_bytes), SEEK_SET) < 0)
+        {
+            close(); // the partial record stays: an append after it would follow bytes replay stops at
+        }
         return false;
     }
 #endif
