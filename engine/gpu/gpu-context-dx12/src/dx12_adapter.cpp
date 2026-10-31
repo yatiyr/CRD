@@ -1,6 +1,9 @@
 #include "dx12_adapter.hpp"
 
+#include <crd/core/utf16.hpp>
+
 #include <cstring>
+#include <cwchar>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
@@ -24,10 +27,10 @@ GpuAdapter dx12_adapter(ID3D12Device* device) noexcept
         return a;
     }
     std::memcpy(a.backend, "dx12", sizeof("dx12"));
-    if (WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, a.name, sizeof(a.name), nullptr, nullptr) == 0)
-    {
-        a.name[0] = '\0';
-    }
+    // The description as UTF-8: the whole code points that fit before the last byte, which stays the NUL of the
+    // value-initialised name.
+    (void)crd::utf16_to_utf8(desc.Description, std::wcslen(desc.Description), reinterpret_cast<crd::u8*>(a.name),
+                             sizeof(a.name) - 1U);
     a.vendor = desc.VendorId;
     a.device = desc.DeviceId;
     LARGE_INTEGER umd{};

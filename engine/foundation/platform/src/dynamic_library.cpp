@@ -1,3 +1,5 @@
+#include "wide_text.hpp"
+
 #include <crd/core/lifetime_ledger.hpp>
 #include <crd/log/log.hpp>
 #include <crd/platform/dynamic_library.hpp>
@@ -9,44 +11,13 @@
 #include <dlfcn.h>
 #endif
 
-#include <crd/containers/array.hpp>
-
 namespace crd::platform
 {
-namespace
-{
-#if CRD_OS_WINDOWS
-[[nodiscard]] crd::containers::Array<wchar_t> utf8_to_wide(containers::StringView sv) noexcept
-{
-    // crd::Array uses CRD_FATAL on OOM (never throws), so nothing escapes this noexcept.
-    // A single L'\0' is the valid-empty default and this function's failure signal.
-    crd::containers::Array<wchar_t> out;
-    out.push_back(L'\0');
-    if (sv.empty())
-    {
-        return out;
-    }
-    const int needed = MultiByteToWideChar(CP_UTF8, 0, sv.data(), static_cast<int>(sv.size()), nullptr, 0);
-    if (needed <= 0)
-    {
-        return out;
-    }
-    out.resize(static_cast<crd::usize>(needed) + 1); // content + trailing null (value-initialised)
-    const int written = MultiByteToWideChar(CP_UTF8, 0, sv.data(), static_cast<int>(sv.size()), out.data(), needed);
-    if (written != needed)
-    {
-        out.clear();
-        out.push_back(L'\0');
-    }
-    return out;
-}
-#endif
-} // namespace
 
 DynamicLibrary DynamicLibrary::open(const fs::Path& path, bool log_on_failure) noexcept
 {
 #if CRD_OS_WINDOWS
-    HMODULE handle = LoadLibraryW(utf8_to_wide(path.generic()).data());
+    HMODULE handle = LoadLibraryW(wide_text::utf8_to_wide(path.generic()).data());
     if (handle == nullptr)
     {
         if (log_on_failure)

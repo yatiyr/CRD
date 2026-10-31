@@ -2,6 +2,7 @@
 // The minidump parser is byte-based and platform-neutral (its structs are defined here, not from
 // <DbgHelp.h>), so it compiles on every lane and treats the dump as untrusted input.
 
+#include <crd/core/utf16.hpp>
 #include <crd/perf/symbol_index.hpp>
 
 #include <cstddef>
@@ -70,46 +71,22 @@ void append_hex_u32_min(cont::String& s, crd::u32 v) noexcept // uppercase, no l
     }
 }
 
-// UTF-16LE (char_count code units at p) -> UTF-8 into a crd::String. Handles surrogate pairs.
+// UTF-16LE (char_count code units at p) -> UTF-8 into a crd::String (crd/core/utf16.hpp: an unpaired surrogate is
+// U+FFFD). The units are read as bytes: a dump holds them at any alignment.
 cont::String utf16le_to_utf8(const crd::u8* p, crd::usize char_count, crd::memory::IAllocator* a) noexcept
 {
+    const auto unit = [p](crd::usize k) { return static_cast<crd::u16>(p[2U * k] | (p[2U * k + 1U] << 8U)); };
     cont::String s(a);
     crd::usize   i = 0;
     while (i < char_count)
     {
-        crd::u32 cp = static_cast<crd::u32>(p[2 * i]) | (static_cast<crd::u32>(p[2 * i + 1]) << 8);
-        ++i;
-        if (cp >= 0xD800U && cp <= 0xDBFFU && i < char_count)
-        {
-            const crd::u32 lo = static_cast<crd::u32>(p[2 * i]) | (static_cast<crd::u32>(p[2 * i + 1]) << 8);
-            if (lo >= 0xDC00U && lo <= 0xDFFFU)
-            {
-                cp = 0x10000U + ((cp - 0xD800U) << 10) + (lo - 0xDC00U);
-                ++i;
-            }
-        }
-        if (cp < 0x80U)
-        {
-            s.push_back(static_cast<char>(cp));
-        }
-        else if (cp < 0x800U)
-        {
-            s.push_back(static_cast<char>(0xC0U | (cp >> 6)));
-            s.push_back(static_cast<char>(0x80U | (cp & 0x3FU)));
-        }
-        else if (cp < 0x10000U)
-        {
-            s.push_back(static_cast<char>(0xE0U | (cp >> 12)));
-            s.push_back(static_cast<char>(0x80U | ((cp >> 6) & 0x3FU)));
-            s.push_back(static_cast<char>(0x80U | (cp & 0x3FU)));
-        }
-        else
-        {
-            s.push_back(static_cast<char>(0xF0U | (cp >> 18)));
-            s.push_back(static_cast<char>(0x80U | ((cp >> 12) & 0x3FU)));
-            s.push_back(static_cast<char>(0x80U | ((cp >> 6) & 0x3FU)));
-            s.push_back(static_cast<char>(0x80U | (cp & 0x3FU)));
-        }
+        // NOLINTNEXTLINE(modernize-avoid-c-arrays): one code point's units
+        const crd::u16 units[2] = {unit(i), i + 1U < char_count ? unit(i + 1U) : crd::u16{0}};
+        crd::u32       cp       = 0U;
+        i += crd::utf16_decode(units, char_count - i, cp);
+        crd::u8          sequence[4] = {}; // NOLINT(modernize-avoid-c-arrays): one UTF-8 sequence
+        const crd::usize size        = crd::utf8_encode(cp, sequence);
+        s.append(reinterpret_cast<const char*>(sequence), size);
     }
     return s;
 }

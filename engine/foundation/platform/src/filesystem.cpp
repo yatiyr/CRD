@@ -1,4 +1,5 @@
 #include "filesystem_detail.hpp"
+#include "wide_text.hpp"
 
 #include <crd/core/environment.hpp>
 #include <crd/core/fault_seam.hpp>
@@ -32,61 +33,14 @@ namespace
 namespace stdfs = std::filesystem;
 
 #if CRD_OS_WINDOWS
-[[nodiscard]] crd::containers::Array<wchar_t> utf8_to_wide(containers::StringView sv) noexcept
-{
-    // crd::Array uses CRD_FATAL on OOM (never throws). A single L'\0' is the valid-empty default.
-    crd::containers::Array<wchar_t> out;
-    out.push_back(L'\0');
-    if (sv.empty())
-    {
-        return out;
-    }
-    const int needed = MultiByteToWideChar(CP_UTF8, 0, sv.data(), static_cast<int>(sv.size()), nullptr, 0);
-    if (needed <= 0)
-    {
-        return out;
-    }
-    out.resize(static_cast<crd::usize>(needed) + 1);
-    const int written = MultiByteToWideChar(CP_UTF8, 0, sv.data(), static_cast<int>(sv.size()), out.data(), needed);
-    if (written != needed)
-    {
-        out.clear();
-        out.push_back(L'\0');
-    }
-    return out;
-}
-
-[[nodiscard]] containers::String wide_to_utf8(std::wstring_view ws) noexcept
-{
-    if (ws.empty())
-    {
-        return containers::String{};
-    }
-    const int needed =
-        WideCharToMultiByte(CP_UTF8, 0, ws.data(), static_cast<int>(ws.size()), nullptr, 0, nullptr, nullptr);
-    if (needed <= 0)
-    {
-        return containers::String{};
-    }
-    containers::String out;
-    out.resize(static_cast<crd::usize>(needed));
-    const int written =
-        WideCharToMultiByte(CP_UTF8, 0, ws.data(), static_cast<int>(ws.size()), out.data(), needed, nullptr, nullptr);
-    if (written != needed)
-    {
-        return containers::String{};
-    }
-    return out;
-}
-
 [[nodiscard]] stdfs::path to_native_path(const Path& path)
 {
-    return stdfs::path(utf8_to_wide(path.generic()).data());
+    return stdfs::path(wide_text::utf8_to_wide(path.generic()).data());
 }
 
 [[nodiscard]] Path from_native_path(const stdfs::path& path)
 {
-    return Path{wide_to_utf8(path.wstring())};
+    return Path{wide_text::wide_to_utf8(path.wstring())};
 }
 #else
 [[nodiscard]] stdfs::path to_native_path(const Path& path)

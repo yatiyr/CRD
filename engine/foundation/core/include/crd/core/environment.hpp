@@ -2,7 +2,10 @@
 
 // The process environment, read into caller storage: no heap, no lock, safe in a CRT initializer before main. Code
 // reads environment variables through it (MSVC deprecates std::getenv, and Windows cannot tell an empty variable
-// from a missing one, so an empty value reads as unset on every platform).
+// from a missing one, so an empty value reads as unset on every platform). A value reads as UTF-8 on every platform:
+// Windows' is read as UTF-16 and transcoded (crd/core/utf16.hpp), never through the ANSI code page; one longer than
+// 255 UTF-16 units is read into pages of its own size, released before the read returns. A name is UTF-8 of at most
+// 255 UTF-16 units.
 
 #include <crd/core/types.hpp>
 

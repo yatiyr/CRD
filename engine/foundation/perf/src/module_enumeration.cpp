@@ -6,9 +6,11 @@
 // malformed or missing header yields id_kind None (nothing to match), never a read outside the image.
 // parse_crash_record_modules reads the same Linux identities back from a crash record's text, on every lane.
 
+#include <crd/core/utf16.hpp>
 #include <crd/perf/symbol_index.hpp>
 
 #include <cstring>
+#include <cwchar>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -264,10 +266,10 @@ void enumerate_windows(LiveModules& out, crd::memory::IAllocator* alloc)
             m.size = me.modBaseSize;
             // The loader's base name, in the case the module was loaded by (OLEAUT32.dll where a dump, which reads
             // the mapped file, says oleaut32.dll): Windows module names compare without case.
-            char      name[MAX_PATH * 3] = {};
-            const int bytes = ::WideCharToMultiByte(CP_UTF8, 0U, me.szModule, -1, name, static_cast<int>(sizeof(name)),
-                                                    nullptr, nullptr);
-            const crd::usize len = bytes > 0 ? static_cast<crd::usize>(bytes) - 1U : 0U;
+            char             name[MAX_PATH * 3] = {}; // three UTF-8 bytes at most per UTF-16 unit
+            const crd::usize bytes = crd::utf16_to_utf8(me.szModule, std::wcslen(me.szModule),
+                                                        reinterpret_cast<crd::u8*>(name), sizeof(name));
+            const crd::usize len   = bytes <= sizeof(name) ? bytes : 0U;
             m.name               = cont::String(basename_of_path(name, len), alloc);
             m.debug_file         = cont::String(alloc);
             read_pe_identity(me.modBaseAddr, me.modBaseSize, m, alloc);
