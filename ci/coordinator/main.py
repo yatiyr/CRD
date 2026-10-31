@@ -20,7 +20,7 @@ CI = Path(__file__).resolve().parents[1]
 if str(CI) not in sys.path:
     sys.path.insert(0, str(CI))
 
-from coordinator import auth, dispatch, scheduler, service, triggers  # noqa: E402
+from coordinator import auth, dispatch, gold, scheduler, service, triggers  # noqa: E402
 
 CONFIG = CI / 'coordinator.json'
 SCHEMA = 'cerid-ci-coordinator/1'
@@ -155,8 +155,9 @@ def build(config, environ, store=None, log=None):
             'mirror': mirror}
 
 
-def qual_renderer(store, registry):
-    """The device x feature matrix as data, for the web UI's own QUAL page."""
+def qual_renderer(store, registry, coordinator=None):
+    """The device x feature matrix as data, for the web UI's own QUAL page; with the coordinator, each cell carries
+    its gold verdict (an untriaged image makes a passing cell `triage`, coordinator/gold.py)."""
     p = scheduler.pipeline_module()
     module = dashboard_module()
 
@@ -164,7 +165,9 @@ def qual_renderer(store, registry):
         month = p.month_of()
         budget = {'cap_usd': registry['budget']['monthly_cap_usd'], 'spent_usd': p.month_spend(store, month),
                   'month': month}
-        _, document = module.render(registry, module.results_from_store(store), None, module.roadmap_rows(), budget)
+        hook = (lambda cells: gold.overlay(coordinator, cells)) if coordinator else None
+        _, document = module.render(registry, module.results_from_store(store), None, module.roadmap_rows(), budget,
+                                    cells_hook=hook)
         return {'features': {k: {'title': v['title'], 'rows': v.get('rows', []), 'enforced_by': v.get('enforced_by')}
                              for k, v in registry['features'].items()},
                 'devices': [{'id': d['id'], 'kind': d['kind'], 'tier': d['tier'], 'status': d['status'],
@@ -210,7 +213,8 @@ def quality_work(coordinator, registry, mirror, config):
     return work
 
 
-def dashboard_renderer(store, registry):
+def dashboard_renderer(store, registry, coordinator=None):
+    """The served static QUAL page; with the coordinator it carries the gold verdicts like the web UI's page."""
     p = scheduler.pipeline_module()
     import importlib.util
     spec = importlib.util.spec_from_file_location('ci_dashboard', CI / 'dashboard/generate.py')
@@ -224,7 +228,9 @@ def dashboard_renderer(store, registry):
         month = p.month_of()
         budget = {'cap_usd': registry['budget']['monthly_cap_usd'], 'spent_usd': p.month_spend(store, month),
                   'month': month}
-        page, _ = module.render(registry, module.results_from_store(store), None, module.roadmap_rows(), budget)
+        hook = (lambda cells: gold.overlay(coordinator, cells)) if coordinator else None
+        page, _ = module.render(registry, module.results_from_store(store), None, module.roadmap_rows(), budget,
+                                cells_hook=hook)
         return page
     return render
 
@@ -260,12 +266,13 @@ def main(argv=None):
     ui = ui_auth(config, os.environ, ui_hosts[0] if len(ui_hosts) == 1 else '0.0.0.0')
     web = service.Service(c, ui, config, registry=parts['registry'],
                           identity=identity_verifier(config, os.environ), mirror=parts['mirror'],
-                          dashboard=dashboard_renderer(parts['store'], parts['registry']),
-                          qual_data=qual_renderer(parts['store'], parts['registry']))
+                          dashboard=dashboard_renderer(parts['store'], parts['registry'], c),
+                          qual_data=qual_renderer(parts['store'], parts['registry'], c))
     loop = service.Loop(c, parts['dispatcher'], interval=args.interval, poll=lambda: triggers.poll(c),
                         schedules=lambda: triggers.schedules(c),
                         quality=quality_work(c, parts['registry'], parts['mirror'], config))
     loop.start()
+    gold.Worker(c, parts['registry'], seconds=float(config.get('gold', {}).get('interval_seconds', 30))).start()
     servers = [service.serve(web, host, port, surfaces, ui_auth(config, dict(os.environ, CERID_CI_UI_MODE=mode), host)
                              if mode else None) for host, port, surfaces, mode in bound]
     for server in servers[1:]:

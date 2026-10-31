@@ -370,6 +370,13 @@ project> --member=serviceAccount:$LAUNCHER_SA --role=roles/cloudtestservice.test
 `--role=roles/firebase.analyticsViewer`; add `CERID_FTL_PROJECT=<firebase project>` to `launcher.env`. The project
 stays on Spark; the adapter keeps within 5 physical and 10 virtual tests a day and marks the rest budget.
 
+Screenshots for the gold images: Test Lab writes each test's results, screenshots included, to its results bucket
+(created by Test Lab on the first run and printed in the run's output as `gs://test-lab-<id>-<id>/`). Let the
+launcher read it, `gcloud storage buckets add-iam-policy-binding gs://<bucket> --member=serviceAccount:$LAUNCHER_SA
+--role=roles/storage.objectViewer`, and add `CERID_FTL_RESULTS_BUCKET=<bucket>` to `launcher.env`. Check from the
+launcher: `gcloud storage ls gs://<bucket>/` lists the runs. A device job then downloads its results and writes the
+gold manifest (`python ci/coordinator/gold.py ftl-manifest`); the comparison uses the device's screen data.
+
 <a id="optional-ssh-hosts-amd-mac-windows-arm64-intel"></a>
 ### SSH hosts: AMD Developer Cloud, a rented Mac, Windows ARM64, Intel
 

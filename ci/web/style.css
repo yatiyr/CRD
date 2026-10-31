@@ -19,7 +19,7 @@
   --focus: #1f5fd1; --focus-ring: 0 0 0 3px rgba(31, 95, 209, .45);
   --pass: #157a3c; --pass-bg: #e3f4e9; --fail: #c4221f; --fail-bg: #fbe6e5; --run: #9a5b00; --run-bg: #fdf0db;
   --wait: #5f6875; --wait-bg: #eceff3; --cache: #1d6a9b; --cache-bg: #e2f0f8; --budget: #7a3fb0; --budget-bg: #f1e8fa;
-  --cancel: #4a5360; --cancel-bg: #eceff3; --soft: #8a5a00; --soft-bg: #fbf1dc;
+  --cancel: #4a5360; --cancel-bg: #eceff3; --soft: #8a5a00; --soft-bg: #fbf1dc; --triage: #a3195f; --triage-bg: #fbe5f0;
   --log-bg: #11151a; --log-text: #d9dee5; --log-dim: #8b95a3; --log-hit: #5c4a00; --log-error-bg: #4a1414;
   --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .10);
   --shadow-lg: 0 12px 32px rgba(16, 24, 40, .18);
@@ -35,7 +35,7 @@
     --focus: #8fb8ff; --focus-ring: 0 0 0 3px rgba(143, 184, 255, .55);
     --pass: #4cc47a; --pass-bg: #12301f; --fail: #ff7b74; --fail-bg: #3a1716; --run: #f0b14a; --run-bg: #3a2a10;
     --wait: #a2acba; --wait-bg: #232a34; --cache: #6cc0f0; --cache-bg: #102b3b; --budget: #c9a0f5; --budget-bg: #2b1c3d;
-    --cancel: #a2acba; --cancel-bg: #232a34; --soft: #f0c26a; --soft-bg: #33280f;
+    --cancel: #a2acba; --cancel-bg: #232a34; --soft: #f0c26a; --soft-bg: #33280f; --triage: #ff8cc6; --triage-bg: #3a1229;
     --shadow: 0 1px 2px rgba(0, 0, 0, .4); --shadow-lg: 0 12px 32px rgba(0, 0, 0, .55);
     color-scheme: dark;
   }
@@ -48,7 +48,7 @@
   --focus: #8fb8ff; --focus-ring: 0 0 0 3px rgba(143, 184, 255, .55);
   --pass: #4cc47a; --pass-bg: #12301f; --fail: #ff7b74; --fail-bg: #3a1716; --run: #f0b14a; --run-bg: #3a2a10;
   --wait: #a2acba; --wait-bg: #232a34; --cache: #6cc0f0; --cache-bg: #102b3b; --budget: #c9a0f5; --budget-bg: #2b1c3d;
-  --cancel: #a2acba; --cancel-bg: #232a34; --soft: #f0c26a; --soft-bg: #33280f;
+  --cancel: #a2acba; --cancel-bg: #232a34; --soft: #f0c26a; --soft-bg: #33280f; --triage: #ff8cc6; --triage-bg: #3a1229;
   --shadow: 0 1px 2px rgba(0, 0, 0, .4); --shadow-lg: 0 12px 32px rgba(0, 0, 0, .55);
   color-scheme: dark;
 }
@@ -140,6 +140,7 @@ label.field { display: grid; gap: var(--sp-1); font-weight: 550; font-size: var(
 .st-canceled { color: var(--cancel); background: var(--cancel-bg); border-color: var(--border); }
 .st-soft { color: var(--soft); background: var(--soft-bg); border-color: color-mix(in srgb, var(--soft) 35%, transparent); }
 .st-waiting { color: var(--wait); background: var(--wait-bg); border-color: var(--border); }
+.st-triage { color: var(--triage); background: var(--triage-bg); border-color: color-mix(in srgb, var(--triage) 35%, transparent); }
 .st-pass { color: var(--pass); background: var(--pass-bg); }
 .st-fail { color: var(--fail); background: var(--fail-bg); }
 .spin { animation: spin 1.2s linear infinite; transform-origin: 50% 50%; }
@@ -229,9 +230,40 @@ details.step[open] > summary::before { transform: rotate(45deg); }
 .cell.none { color: var(--text-3); font-weight: 400; cursor: default; }
 .cell.c-pass { color: var(--pass); background: var(--pass-bg); } .cell.c-fail { color: var(--fail); background: var(--fail-bg); }
 .cell.c-cached { color: var(--cache); background: var(--cache-bg); } .cell.c-waiting { color: var(--wait); background: var(--wait-bg); }
-.cell.c-budget { color: var(--budget); background: var(--budget-bg); }
+.cell.c-budget { color: var(--budget); background: var(--budget-bg); } .cell.c-triage { color: var(--triage); background: var(--triage-bg); }
 .legend { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); align-items: center; }
 .legend .status { font-weight: 550; }
+
+/* Diagnostics ------------------------------------------------------------------------------------------------- */
+.chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); padding: var(--sp-2) var(--sp-4) var(--sp-3); }
+.chip { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 var(--sp-3); border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface); color: var(--text); font-size: var(--fs-sm); font-weight: 550; text-decoration: none; }
+.chip:hover { background: var(--surface-2); text-decoration: none; }
+.chip svg { width: 14px; height: 14px; color: var(--text-2); }
+.chip .count { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.chip.restricted { border-style: dashed; color: var(--text-2); }
+.command { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.command pre { margin: 0; padding: var(--sp-2) var(--sp-3); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); overflow-x: auto; max-width: 100%; }
+
+/* Gold triage --------------------------------------------------------------------------------------------------- */
+.gold { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: var(--sp-4); align-items: start; }
+.gold .queue { max-height: 78vh; overflow: auto; }
+.gold .queue .item { grid-template-columns: minmax(0, 1fr) auto; }
+.gold .detail > * + * { margin-top: var(--sp-3); }
+.gold .detail .body > p, #diagnostics .body > p { margin: 0; }
+.panes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); }
+.panes.blink { grid-template-columns: minmax(0, 1fr); }
+.pane { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); overflow: hidden; }
+.pane > header { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); font-size: var(--fs-sm); font-weight: 650; }
+.pane .view { overflow: auto; max-height: 56vh; min-height: 120px; background: repeating-conic-gradient(var(--surface-2) 0% 25%, var(--surface) 0% 50%) 50% / 16px 16px; }
+.pane .view img { display: block; image-rendering: pixelated; max-width: none; }
+.pane .none { display: grid; place-items: center; min-height: 120px; padding: var(--sp-4); color: var(--text-3); font-size: var(--fs-sm); text-align: center; }
+.pane.fit .view img { width: 100%; height: auto; }
+.metrics td.bad { color: var(--fail); font-weight: 650; } .metrics td.ok { color: var(--pass); font-weight: 650; }
+.triage-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+.triage-actions input { flex: 1; min-width: 200px; }
+button.approve { background: var(--pass); border-color: var(--pass); color: var(--surface); }
+@media (max-width: 960px) { .gold { grid-template-columns: minmax(0, 1fr); } .gold .queue { max-height: 40vh; } }
+@media (max-width: 720px) { .panes { grid-template-columns: minmax(0, 1fr); } }
 
 /* Drawer and dialog --------------------------------------------------------------------------------------------- */
 dialog { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); box-shadow: var(--shadow-lg); padding: 0; max-width: min(640px, calc(100vw - 32px)); width: 100%; }

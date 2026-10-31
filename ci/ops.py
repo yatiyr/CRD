@@ -5,7 +5,7 @@ Usage: python ci/ops.py [--json] [--no-color] [--store URL] [--config FILE] <nou
 
   ui                         open the web UI through the IAP tunnel (gcloud) in your browser
   status | health           the registry's cells and the spend | the coordinator, store, jobs, agents
-  build  list|show|start|cancel          job  show|logs|retry|cancel
+  build  list|show|start|cancel          job  show|logs|retry|cancel|reproduce
   agent  list|stop          token create|revoke          queue list
   test   list|history|flaky quarantine list|release      bisect list
   cost   [--month --by]     slo                          audit list [--days]
@@ -446,6 +446,85 @@ def cmd_job_logs(ctx):
         time.sleep(2)
 
 
+def cmd_job_reproduce(ctx, call=None):
+    """Download a failed job's diagnostics (ci/coordinator/diagnostics.py) and its reproducibility record, and print
+    the exact local replay: the commit in its own worktree, the lane as CI ran it (the failed tests only), the failed
+    tests at the job's CPU level, and each diagnostic's reader. --run runs the worktree and lane steps."""
+    from coordinator import diagnostics, scheduler
+    call = call or subprocess.call
+    c = orchestrator(ctx)
+    job = c.job(ctx.args.job)
+    entries = diagnostics.diagnostic_entries(c.artifacts(job['build']), job['id'], ctx.args.attempt)
+    name = '%d-%s' % (job['build'], ''.join(ch if ch.isalnum() or ch in '-_.' else '_' for ch in job['key'])[:60])
+    dest = Path(ctx.args.dest) if ctx.args.dest else ROOT / 'build' / 'ci-repro' / name
+    dest.mkdir(parents=True, exist_ok=True)
+    files = []
+    summary = None
+    missing = []
+    for entry in entries:
+        data = c.store.get(scheduler.PREFIX + entry['object'])
+        if data is None:
+            missing.append(entry['path'])
+            continue
+        if hashlib.sha256(data).hexdigest() != entry['sha256']:
+            raise OpsError('artifact %s does not match its recorded SHA-256' % entry['path'],
+                           'the store copy is damaged; run the job again')
+        target = dest / entry['kind'] / Path(entry['path']).name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        if entry['kind'] == 'summary':
+            summary = json.loads(data.decode('utf-8'))
+        else:
+            files.append((target, entry['kind']))
+    record = {'job': job['id'], 'build': job['build'], 'key': job['key'], 'attempt': job['attempt'],
+              'state': job['state'], 'command': job['command'], 'env': job.get('env', {}), 'repro': job.get('repro')}
+    (dest / 'repro.json').write_text(json.dumps(record, indent=1, sort_keys=True) + '\n', encoding='utf-8')
+    source = dest / 'src'
+    steps = diagnostics.reproduce_steps(job, summary, [(f, k) for f, k in files if k != 'junit'], os.name == 'nt',
+                                        checkout=str(source))
+    withheld = [i for i in (summary or {}).get('items', []) if i.get('withheld')]
+    lines = ['Job %s (%s), build #%d, %s: %d diagnostics in %s' % (job['id'], job['key'], job['build'],
+                                                                   ctx.out.state(job['state']), len(files), dest)]
+    if not job.get('repro'):
+        lines.append('No reproducibility record: the agent did not report one for this attempt.')
+    if summary is None:
+        lines.append('No diagnostics summary: the job did not fail in a lane, or it ran before diagnostics existed.')
+    else:
+        lines.append('Failed phase %s at the CPU level %s; failed tests: %s' % (
+            summary.get('phase'), summary.get('cpu_level'), ', '.join(summary.get('failed_tests') or []) or 'none'))
+    for path in missing:
+        lines.append('removed by retention: %s' % path)
+    for item in withheld:
+        lines.append('withheld on the machine: %s %s (%s)' % (item['kind'], item['source'], item['withheld']))
+    for number, (title, command, note) in enumerate(steps, 1):
+        lines.append('%d. %s' % (number, title))
+        if command:
+            lines.append('   %s' % command)
+        if note:
+            lines.append('   (%s)' % note)
+    data = {'job': job['id'], 'dest': str(dest), 'summary': summary, 'files': [
+        {'path': str(f), 'kind': k} for f, k in files], 'missing': missing,
+        'steps': [{'title': t, 'command': cmd, 'note': n} for t, cmd, n in steps]}
+    if not ctx.args.run:
+        return 0, data, lines
+    commit = (job.get('repro') or {}).get('commit') or (summary or {}).get('commit')
+    preset = (summary or {}).get('preset')
+    device = (summary or {}).get('device') or job.get('env', {}).get('CERID_CI_DEVICE')
+    if not (commit and preset and device):
+        raise OpsError('this job has no commit, preset and device to run', 'run the printed commands by hand')
+    if not source.exists():
+        code = call(['git', '-C', str(ROOT), 'worktree', 'add', '--detach', str(source), commit])
+        if code:
+            raise OpsError('git worktree add failed (%d)' % code, 'fetch the commit: git fetch origin %s' % commit)
+    argv = [sys.executable, 'ci/pipeline.py', 'lane', '--preset', preset, '--device', device]
+    pattern = diagnostics.regex_for((summary or {}).get('failed_tests') or [])
+    if pattern:
+        argv += ['--tests', pattern]
+    code = call(argv, cwd=str(source))
+    data['exit'] = code
+    return code, data, lines + ['the lane exited %d' % code]
+
+
 def cmd_agent_list(ctx):
     agents = orchestrator(ctx).agents()
     return 0, agents, ctx.out.table(['NAME', 'STATUS', 'QUEUE', 'OS', 'ARCH', 'TAGS', 'LAST SEEN'], [
@@ -871,7 +950,8 @@ HANDLERS = {
     ('device', 'add'): cmd_device_add, ('device', 'bake'): cmd_device_bake, ('device', 'list'): cmd_device_list,
     ('build', 'list'): cmd_build_list, ('build', 'show'): cmd_build_show, ('build', 'start'): cmd_build_start,
     ('build', 'cancel'): cmd_build_cancel, ('job', 'show'): cmd_job_show, ('job', 'logs'): cmd_job_logs,
-    ('job', 'retry'): cmd_job_retry, ('job', 'cancel'): cmd_job_cancel, ('agent', 'list'): cmd_agent_list,
+    ('job', 'retry'): cmd_job_retry, ('job', 'cancel'): cmd_job_cancel, ('job', 'reproduce'): cmd_job_reproduce,
+    ('agent', 'list'): cmd_agent_list,
     ('agent', 'stop'): cmd_agent_stop, ('queue', 'list'): cmd_queue_list, ('token', 'create'): cmd_token_create,
     ('token', 'revoke'): cmd_token_revoke, ('test', 'list'): cmd_test_list, ('test', 'history'): cmd_test_history,
     ('test', 'flaky'): cmd_test_flaky, ('quarantine', 'list'): cmd_quarantine_list,
@@ -959,6 +1039,11 @@ def build_parser():
     logs.add_argument('--follow', action='store_true')
     verb(sub, 'retry', 'run a failed job again').add_argument('job')
     verb(sub, 'cancel', 'cancel one job').add_argument('job')
+    repro = verb(sub, 'reproduce', 'download a job\'s diagnostics and print (or run) its exact local replay')
+    repro.add_argument('job')
+    repro.add_argument('--attempt', type=int, help='an earlier attempt (default: the newest with diagnostics)')
+    repro.add_argument('--dest', help='directory for the downloads (default build/ci-repro/<build>-<step>)')
+    repro.add_argument('--run', action='store_true', help='check the commit out in DEST/src and run the lane there')
     _, sub = noun('agent', 'agents', True)
     verb(sub, 'list', 'every agent')
     verb(sub, 'stop', 'stop an agent').add_argument('agent')

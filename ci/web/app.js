@@ -264,6 +264,8 @@ const STATUS = {
   cached: ['cached', 'Cached'], budget: ['budget', 'Budget'], soft: ['soft', 'Soft fail'],
   waiting: ['waiting', 'Waiting'], idle: ['passed', 'Idle'], busy: ['running', 'Busy'], lost: ['failed', 'Lost'],
   stopped: ['canceled', 'Stopped'], met: ['passed', 'Met'], missed: ['failed', 'Missed'],
+  triage: ['triage', 'Needs triage'], untriaged: ['triage', 'Needs triage'], positive: ['passed', 'Approved'],
+  negative: ['failed', 'Rejected'], pending: ['scheduled', 'Not compared yet'], error: ['failed', 'Unreadable'],
 };
 function statusParts(state, softFailed) {
   if (softFailed) {
@@ -280,10 +282,58 @@ function statusHtml(state, options) {
     '"><svg aria-hidden="true"' + live + '><use href="#i-' + parts.icon + '"/></svg>' + esc(parts.text) + '</span>';
 }
 
+// Diagnostic artifact kinds (ci/coordinator/diagnostics.py), most useful first; `restricted` ones are raw memory.
+const DIAGNOSTICS = [['crash-bundle', 'Crash bundle'], ['crash-record', 'Crash record'],
+  ['sanitizer-report', 'Sanitizer report'], ['gpu-validation', 'GPU validation'], ['flight-record', 'Flight record'],
+  ['replay-record', 'Replay record'], ['perfetto-trace', 'Perfetto trace'], ['profile-capture', 'Profile capture'],
+  ['crash-dump', 'Crash dump'], ['gpu-dump', 'GPU crash dump'], ['core-dump', 'Core dump'],
+  ['summary', 'Diagnostics summary']];
+const RESTRICTED = ['crash-dump', 'gpu-dump', 'core-dump'];
+
+// The diagnostics of one job's newest attempt, grouped by kind in DIAGNOSTICS order: [{kind, title, items}].
+function diagnosticGroups(artifacts, jobId) {
+  const mine = (artifacts || []).filter((a) => a.job === jobId);
+  const attempt = Math.max(0, ...mine.map((a) => a.attempt || 0));
+  return DIAGNOSTICS.map(([kind, title]) => ({ kind: kind, title: title, restricted: RESTRICTED.includes(kind),
+    items: mine.filter((a) => a.kind === kind && (a.attempt || 0) === attempt) })).filter((g) => g.items.length);
+}
+
+// A gold item's metrics against its tolerances: [{label, value, limit, ok}] (ok null when there is no limit).
+function goldMetrics(item) {
+  const m = ((item.comparison || {}).metrics) || {};
+  const t = item.tolerance || {};
+  if (m.size_mismatch) {
+    return [{ label: 'Size', value: (m.test_size || []).join('x') + ' (approved ' + (m.reference_size || []).join('x') +
+      ')', limit: 'the same size', ok: false }];
+  }
+  if (m.flip_mean === undefined) {
+    return [];
+  }
+  const row = (label, value, limit, ok, digits, unit) => ({ label: label, value: Number(value).toFixed(digits) +
+    (unit || ''), limit: limit, ok: ok });
+  return [row('Mean FLIP', m.flip_mean, t.flip_mean !== undefined ? '\u2264 ' + t.flip_mean : '', t.flip_mean !==
+      undefined ? m.flip_mean <= t.flip_mean : null, 4),
+    row('Pixels over FLIP ' + (t.flip_pixel !== undefined ? t.flip_pixel : 0.1), m.flip_area * 100, t.flip_area !==
+      undefined ? '\u2264 ' + (t.flip_area * 100).toFixed(2) + ' %' : '', t.flip_area !== undefined ? m.flip_area <=
+      t.flip_area : null, 2, ' %'),
+    row('SSIM', m.ssim, t.ssim_min !== undefined ? '\u2265 ' + t.ssim_min : '', t.ssim_min !== undefined ? m.ssim >=
+      t.ssim_min : null, 4),
+    row('Max FLIP', m.flip_max, '', null, 4),
+    row('Pixels per degree', m.ppd, (m.scale > 1 ? 'compared downsampled 1/' + m.scale : 'compared at full size'),
+      null, 1)];
+}
+
+const ZOOMS = [0, 1, 2, 4, 8, 16]; // 0 fits the pane
+function zoomStep(current, direction) {
+  const index = Math.max(0, ZOOMS.indexOf(current));
+  return ZOOMS[Math.max(0, Math.min(ZOOMS.length - 1, index + direction))];
+}
+
 if (typeof module !== 'undefined') {
   module.exports = { esc: esc, stripAnsi: stripAnsi, ansiToHtml: ansiToHtml, isErrorLine: isErrorLine,
     firstErrorLine: firstErrorLine, appendLog: appendLog, cleanLabel: cleanLabel, markdown: markdown, layout: layout,
-    durationText: durationText, ago: ago, matrixRows: matrixRows, statusParts: statusParts, statusHtml: statusHtml };
+    durationText: durationText, ago: ago, matrixRows: matrixRows, statusParts: statusParts, statusHtml: statusHtml,
+    diagnosticGroups: diagnosticGroups, goldMetrics: goldMetrics, zoomStep: zoomStep };
 }
 
 // ------------------------------------------------------------------------------------------- the application
@@ -532,8 +582,8 @@ if (typeof document !== 'undefined') {
         '<header>' + statusHtml(j.state) + '<h3><a href="#/jobs/' + esc(j.id) + '">' + esc(cleanLabel(j.label)) + '</a></h3><span ' +
         'class="subtle">attempt ' + j.attempt + (j.exit_status !== null && j.exit_status !== undefined ? ' · exit ' +
           esc(j.exit_status) : '') + '</span></header><div class="reason">' +
-        esc(j.reason || '') + '</div>' + (i === 0 ? '<div id="first-failure" data-job="' + esc(j.id) + '"></div>' : '') +
-        '</article>').join('') + '</section>' : '';
+        esc(j.reason || '') + '</div>' + diagnosticChips(data.artifacts, j.id) + (i === 0 ? '<div id="first-failure" ' +
+        'data-job="' + esc(j.id) + '"></div>' : '') + '</article>').join('') + '</section>' : '';
       const steps = '<section class="card" aria-labelledby="steps-title"><header><h2 id="steps-title">Steps</h2>' +
         '<span class="subtle">' + data.jobs.length + ' steps</span></header><div class="graph">' + graphSvg(data.jobs) +
         '</div><div class="table-wrap"><table><thead><tr><th scope="col">Step</th><th scope="col">State</th>' +
@@ -555,11 +605,12 @@ if (typeof document !== 'undefined') {
           'soft' : 'scheduled', { soft: note.style === 'warning' }) + ' ' + esc(context) + '</h3>' + markdown(note.body) +
         '</div>').join('') + '</div></section>' : '') + ((data.artifacts || []).length ? '<section class="card" ' +
         'aria-labelledby="artifacts-title"><header><h2 id="artifacts-title">Artifacts</h2></header><div class="table-wrap">' +
-        '<table><thead><tr><th scope="col">File</th><th scope="col">Step</th><th scope="col" class="num">Size</th></tr>' +
-        '</thead><tbody>' + data.artifacts.map((a) => '<tr><td><a href="/api/jobs/' + esc(a.job) + '/artifacts?path=' +
-          encodeURIComponent(a.path) + '"><svg aria-hidden="true" width="14" height="14"><use href="#i-down"/></svg> ' +
-          esc(a.path) + '</a></td><td>' + esc(a.key) + '</td><td class="num">' + a.size.toLocaleString() + ' B</td>' +
-          '</tr>').join('') + '</tbody></table></div></section>' : '');
+        '<table><thead><tr><th scope="col">File</th><th scope="col">Kind</th><th scope="col">Step</th><th scope="col" ' +
+        'class="num">Size</th></tr></thead><tbody>' + data.artifacts.map((a) => '<tr><td><a href="/api/jobs/' +
+          esc(a.job) + '/artifacts?path=' + encodeURIComponent(a.path) + '"><svg aria-hidden="true" width="14" ' +
+          'height="14"><use href="#i-down"/></svg> ' + esc(a.path) + '</a></td><td>' + esc(a.kind || 'file') + '</td><td>' +
+          esc(a.key) + '</td><td class="num">' + a.size.toLocaleString() + ' B</td></tr>').join('') +
+        '</tbody></table></div></section>' : '');
       const failureNode = keepFailure ? document.getElementById('first-failure') : null;
       view.innerHTML = '<div class="stack">' + banner + failure + steps + extra + '</div>';
       if (failureNode && document.getElementById('first-failure')) {
@@ -613,6 +664,19 @@ if (typeof document !== 'undefined') {
       } });
     }
   }
+
+  // Links to a failed step's diagnostics, one chip per kind (counts when there are several files).
+  const diagnosticChips = (artifacts, jobId) => {
+    const groups = diagnosticGroups(artifacts, jobId);
+    if (!groups.length) {
+      return '';
+    }
+    return '<div class="chips" aria-label="Diagnostics">' + groups.map((g) => '<a class="chip' + (g.restricted ?
+      ' restricted' : '') + '" href="' + (g.items.length === 1 ? '/api/jobs/' + esc(jobId) + '/artifacts?path=' +
+      encodeURIComponent(g.items[0].path) : '#/jobs/' + esc(jobId)) + '"><svg aria-hidden="true"><use href="#i-down"/>' +
+      '</svg>' + esc(g.title) + (g.items.length > 1 ? ' <span class="count">' + g.items.length + '</span>' : '') +
+      '</a>').join('') + '<a class="chip" href="#/jobs/' + esc(jobId) + '">Reproduce</a></div>';
+  };
 
   async function inlineFailure(node) {
     const jobId = node.dataset.job;
@@ -674,6 +738,7 @@ if (typeof document !== 'undefined') {
         '<button type="button" id="retry-job"><svg aria-hidden="true"><use href="#i-retry"/></svg>Retry</button>' : '') +
       (['scheduled', 'assigned', 'running'].includes(j.state) ? '<button type="button" class="danger" id="cancel-job">' +
         '<svg aria-hidden="true"><use href="#i-stop"/></svg>Cancel</button>' : '') + '</div></section>' + repro +
+      '<div id="diagnostics"></div>' +
       '<section class="card flush" aria-labelledby="log-title"><h2 class="visually-hidden" id="log-title">Log</h2>' +
       '<div class="log-tools"><label class="visually-hidden" for="log-search">Search the log</label><input ' +
       'id="log-search" type="search" placeholder="Search the log (/)" autocomplete="off"><span class="subtle num" ' +
@@ -772,6 +837,43 @@ if (typeof document !== 'undefined') {
         }
       });
     }
+    api('jobs/' + id + '/artifacts').then((listing) => {
+      const groups = diagnosticGroups(listing.artifacts, id);
+      const node = document.getElementById('diagnostics');
+      if (!node || !groups.length) {
+        return;
+      }
+      node.innerHTML = '<section class="card" aria-labelledby="diag-title"><header><h2 id="diag-title">Diagnostics' +
+        '</h2><span class="subtle">collected when the step failed; secrets scrubbed, raw memory only where the ' +
+        'device allows it</span></header><div class="body stack"><div class="table-wrap"><table><thead><tr><th ' +
+        'scope="col">Kind</th><th scope="col">File</th><th scope="col" class="num">Size</th></tr></thead><tbody>' +
+        [].concat(...groups.map((g) => g.items.map((a) => '<tr><td>' + esc(g.title) + (g.restricted ? ' <span ' +
+          'class="subtle">(raw memory)</span>' : '') + '</td><td><a href="/api/jobs/' + esc(id) +
+          '/artifacts?path=' + encodeURIComponent(a.path) + '"><svg aria-hidden="true" width="14" height="14"><use ' +
+          'href="#i-down"/></svg> ' + esc(a.path.split('/').pop()) + '</a></td><td class="num">' +
+          a.size.toLocaleString() + ' B</td></tr>'))).join('') + '</tbody></table></div><div class="command"><span>' +
+        'Reproduce locally (downloads these, prints the exact replay for this commit, preset and CPU level):</span>' +
+        '<pre class="mono">python ci/ops.py job reproduce ' + esc(id) + '</pre><button type="button" id="copy-repro">' +
+        'Copy</button></div></div></section>';
+      const summary = groups.find((g) => g.kind === 'summary');
+      if (summary) {
+        fetch('/api/jobs/' + id + '/artifacts?path=' + encodeURIComponent(summary.items[0].path), {
+          credentials: 'same-origin' }).then((r) => r.json()).then((info) => {
+          const withheld = (info.items || []).filter((i) => i.withheld);
+          const lines = '<p>Failed phase <b>' + esc(info.phase || 'unknown') + '</b> at the CPU level <b>' +
+            esc(info.cpu_level || 'native') + '</b>' + ((info.failed_tests || []).length ? '; failed tests: ' +
+            esc(info.failed_tests.join(', ')) : '') + '.</p>' + (withheld.length ? '<p class="subtle">Kept on the ' +
+            'machine, not uploaded: ' + esc(withheld.map((i) => i.kind + ' ' + String(i.source).split('/').pop() +
+              ' (' + i.withheld + ')').join('; ')) + '</p>' : '');
+          node.querySelector('.body').insertAdjacentHTML('afterbegin', lines);
+        }).catch(() => {});
+      }
+      document.getElementById('copy-repro').addEventListener('click', () => {
+        const text = 'python ci/ops.py job reproduce ' + id;
+        (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject(new Error('no clipboard')))
+          .then(() => toast('Copied')).catch(() => toast('Select the command and copy it', true));
+      });
+    }).catch(() => {});
     const first = await api('jobs/' + id + '/log?attempt=' + attempt);
     appendText(first.text);
     const tail = document.getElementById('tail');
@@ -798,8 +900,8 @@ if (typeof document !== 'undefined') {
   }
 
   // QUAL matrix ------------------------------------------------------------------------------------------------------
-  const CELL = { pass: ['passed', 'Pass'], fail: ['failed', 'Fail'], cached: ['cached', 'Cached'],
-    waiting: ['waiting', 'Waiting'], budget: ['budget', 'Budget'] };
+  const CELL = { pass: ['passed', 'Pass'], fail: ['failed', 'Fail'], triage: ['triage', 'Needs triage'],
+    cached: ['cached', 'Cached'], waiting: ['waiting', 'Waiting'], budget: ['budget', 'Budget'] };
   async function qual() {
     const data = await api('qual');
     const counts = {};
@@ -810,14 +912,15 @@ if (typeof document !== 'undefined') {
       esc(v.title) + '</option>').join('');
     view.innerHTML = '<div class="stack"><div class="page-head"><div class="grow"><h1>QUAL matrix</h1><p ' +
       'class="muted">Every device cell against every feature, from the result store. Cached means the same input key ' +
-      'passed before. Budget and waiting cells are never passes.</p></div></div><div class="tiles">' +
+      'passed before. Budget, waiting and needs-triage cells are never passes.</p></div></div><div class="tiles">' +
       Object.entries(CELL).map(([key, [icon, text]]) => '<div class="tile"><div class="value num">' + (counts[key] || 0) +
         '</div><div class="label">' + statusHtml(key === 'pass' ? 'passed' : key === 'fail' ? 'failed' : key) + ' cells' +
         '</div></div>').join('') + '</div><div class="filters" role="search" aria-label="Filter the matrix"><label ' +
       'class="field">Device<input id="q" type="search" placeholder="id, OS, GPU (/)" autocomplete="off"></label><label ' +
       'class="field">Tier<select id="tier"><option value="">All</option><option>A</option><option>B</option><option>' +
       'C</option></select></label><label class="field">State<select id="state"><option value="">Any</option>' +
-      '<option value="fail">Has a failure</option><option value="pass">Has a pass</option><option value="waiting">' +
+      '<option value="fail">Has a failure</option><option value="triage">Has images to triage</option><option ' +
+      'value="pass">Has a pass</option><option value="waiting">' +
       'Has a waiting cell</option><option value="budget">Has a budget cell</option></select></label><label ' +
       'class="field">Feature<select id="feature"><option value="">All features</option>' + featureOptions +
       '</select></label><label class="row"><input type="checkbox" id="results"> Only devices with results</label>' +
@@ -861,9 +964,15 @@ if (typeof document !== 'undefined') {
       const cell = data.cells.find((c) => c.device === deviceId && c.feature === feature);
       const device = data.devices.find((d) => d.id === deviceId);
       openDrawer(device.id + ' · ' + data.features[feature].title, '<div class="stack">' + statusHtml(
-        CELL[cell.state][0]) + '<dl class="kv"><dt>Reason</dt><dd>' + esc(cell.reason || '—') + '</dd><dt>Build</dt><dd>' +
+        (CELL[cell.state] || ['scheduled'])[0]) + '<dl class="kv"><dt>Reason</dt><dd>' + esc(cell.reason || '—') + '</dd><dt>Build</dt><dd>' +
         (cell.build ? '<a href="#/builds/' + esc(cell.build) + '">#' + esc(cell.build) + '</a>' : '—') + '</dd><dt>Log' +
-        '</dt><dd>' + (cell.log ? '<a href="' + esc(cell.log) + '">open</a>' : '—') + '</dd><dt>Roadmap rows</dt><dd>' +
+        '</dt><dd>' + (cell.log ? '<a href="' + esc(cell.log) + '">open</a>' : '—') + '</dd>' + ((cell.diagnostics ||
+          []).length ? '<dt>Diagnostics</dt><dd>' + (cell.job ? '<a href="#/jobs/' + esc(cell.job) + '">' : '') +
+          esc(cell.diagnostics.map((k) => (DIAGNOSTICS.find((d) => d[0] === k) || [k, k])[1]).join(', ')) +
+          (cell.job ? '</a>' : '') + (cell.phase ? ' <span class="subtle">(phase ' + esc(cell.phase) + ')</span>' : '') +
+          '</dd>' : '') + (cell.gold ? '<dt>Gold images</dt><dd><a href="#/gold">' + esc(Object.entries(cell.gold)
+          .map(([k, v]) => v + ' ' + statusParts(k === 'pass' ? 'passed' : k).text.toLowerCase()).join(', ')) +
+          '</a></dd>' : '') + '<dt>Roadmap rows</dt><dd>' +
         esc((data.features[feature].rows || []).join(', ')) + '</dd><dt>Device</dt><dd>' + esc(device.kind + ', ' +
           device.os + ', ' + device.arch + ', ' + device.gpu + ', executor ' + device.executor + ', ' + device.status) +
         '</dd></dl></div>');
@@ -998,6 +1107,251 @@ if (typeof document !== 'undefined') {
       '</tr>').join('') + '</tbody></table></div>' : '<div class="body subtle">' + esc(emptyText) + '</div>') +
     '</section>';
 
+  // Gold images: triage ------------------------------------------------------------------------------------------------
+  async function goldPage() {
+    const data = await api('gold');
+    const params = new URLSearchParams(location.hash.split('?')[1] || '');
+    let items = data.items;
+    let current = Math.max(0, items.findIndex((i) => i.digest === params.get('digest')));
+    let zoom = 0;
+    let blink = null;
+    const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    view.innerHTML = '<div class="stack"><div class="page-head"><div class="grow"><h1>Gold images</h1><p ' +
+      'class="muted">Rendered images that match no approved baseline. Software renderers are compared exactly, real ' +
+      'GPUs and phones perceptually (LDR-FLIP and SSIM against each test\'s declared tolerances). Until a person ' +
+      'approves or rejects an image its QUAL cell reads needs triage, never pass.</p></div></div><div class="tiles">' +
+      '<div class="tile"><div class="value num">' + items.length + '</div><div class="label">' + statusHtml('triage') +
+      '</div></div><div class="tile"><div class="value num">' + data.pending + '</div><div class="label">results not ' +
+      'yet compared</div></div><div class="tile"><div class="value num">' + data.findings.length + '</div><div ' +
+      'class="label">recent rejections</div></div></div><div class="filters" role="search" aria-label="Filter the ' +
+      'images"><label class="field">Test or device<input id="gold-filter" type="search" placeholder="Filter (/)" ' +
+      'autocomplete="off"></label></div><div class="gold"><section class="card flush queue" aria-labelledby=' +
+      '"queue-title"><header><h2 id="queue-title">To triage</h2><span class="subtle" id="queue-count"></span></header>' +
+      '<ul class="list" id="gold-queue"></ul></section><section class="detail" id="gold-detail" aria-live="polite">' +
+      '</section></div>' + (data.findings.length ? section('Rejected images (findings)', ['When', 'Test', 'By',
+        'Finding'], data.findings.map((f) => [esc(when(f.at)), esc(f.test), esc(f.by), esc(f.text)]), '') : '') +
+      '</div>';
+    const queue = document.getElementById('gold-queue');
+    const detail = document.getElementById('gold-detail');
+    const shown = () => {
+      const filter = document.getElementById('gold-filter').value.toLowerCase();
+      return items.filter((i) => !filter || (i.test + ' ' + i.occurrences.map((o) => o.device).join(' '))
+        .toLowerCase().includes(filter));
+    };
+    const stopBlink = () => {
+      clearInterval(blink);
+      blink = null;
+    };
+    state.cleanup.push(stopBlink);
+    const imageUrl = (digest) => '/api/gold/image/' + digest;
+    const pane = (title, url, alt, empty) => '<div class="pane' + (zoom === 0 ? ' fit' : '') + '"><header>' +
+      esc(title) + '</header><div class="view" tabindex="0" aria-label="' + esc(title) + '">' + (url ? '<img src="' +
+      esc(url) + '" alt="' + esc(alt) + '" data-zoomable>' : '<div class="none">' + esc(empty) + '</div>') +
+      '</div></div>';
+    const applyZoom = () => {
+      detail.querySelectorAll('.pane').forEach((p) => p.classList.toggle('fit', zoom === 0));
+      detail.querySelectorAll('img[data-zoomable]').forEach((img) => {
+        const set = () => {
+          img.style.width = zoom === 0 ? '' : (img.naturalWidth * zoom) + 'px';
+        };
+        if (img.complete) {
+          set();
+        } else {
+          img.addEventListener('load', set, { once: true });
+        }
+      });
+      const label = document.getElementById('zoom-level');
+      if (label) {
+        label.textContent = zoom === 0 ? 'Fit' : zoom + 'x';
+      }
+    };
+    const syncScroll = () => {
+      const views = Array.from(detail.querySelectorAll('.pane .view'));
+      views.forEach((v) => v.addEventListener('scroll', () => {
+        views.forEach((other) => {
+          if (other !== v) {
+            other.scrollLeft = v.scrollLeft;
+            other.scrollTop = v.scrollTop;
+          }
+        });
+      }));
+    };
+    const paintQueue = () => {
+      const list = shown();
+      document.getElementById('queue-count').textContent = list.length + ' of ' + items.length;
+      queue.innerHTML = list.length ? list.map((i) => '<li><a class="item" data-item href="#/gold?digest=' +
+        esc(i.digest) + '" data-digest="' + esc(i.digest) + '" aria-selected="' + String(items[current] === i) + '">' +
+        '<span><span class="title">' + esc(i.test) + '</span><span class="meta"><span>' + esc(i.mode) + '</span><span>' +
+        i.occurrences.length + ' run' + (i.occurrences.length === 1 ? '' : 's') + '</span><span>' +
+        esc(Array.from(new Set(i.occurrences.map((o) => o.device))).join(', ')) + '</span></span></span><span>' +
+        statusHtml(i.state) + '</span></a></li>').join('') : '<li>' + empty('Nothing to triage', 'Every rendered ' +
+        'image matches an approved baseline or is within its tolerance.') + '</li>';
+      queue.querySelectorAll('[data-digest]').forEach((a) => a.addEventListener('click', (event) => {
+        event.preventDefault();
+        current = items.findIndex((i) => i.digest === a.dataset.digest);
+        paintQueue();
+        paintDetail();
+      }));
+    };
+    const paintDetail = () => {
+      stopBlink();
+      const item = items[current];
+      if (!item) {
+        detail.innerHTML = '';
+        return;
+      }
+      const comparison = item.comparison || {};
+      const reference = comparison.against;
+      const metrics = comparison.metrics || {};
+      const diff = reference && metrics.diff && !metrics.size_mismatch ? '/api/gold/diff/' + reference + '/' +
+        item.digest + '/' + metrics.diff : null;
+      const rows = goldMetrics(item);
+      const group = Object.entries(item.group || {}).filter(([k]) => k !== 'test').map(([k, v]) => k + ' ' + v)
+        .join(' · ');
+      detail.innerHTML = '<div class="card"><header><h2 class="grow">' + esc(item.test) + '</h2>' + statusHtml(
+        item.state) + '</header><div class="body stack"><p class="subtle">' + esc(group || 'one baseline set for ' +
+        'every device') + ' · ' + esc(item.mode === 'exact' ? 'exact comparison (a software renderer)' :
+        'perceptual comparison at ' + (item.ppd || 67) + ' pixels per degree') + ' · ' + esc((item.size || [])
+        .join('x')) + '</p><div class="row" role="toolbar" aria-label="View"><button type="button" id="blink" ' +
+        'aria-pressed="false"' + (reference ? '' : ' disabled') + ' title="Alternate the approved and the new image ' +
+        '(b)">' + (reduced ? 'Flip (b)' :
+        'Blink (b)') + '</button><button type="button" id="zoom-out" title="Zoom out (-)">−<span ' +
+        'class="visually-hidden">Zoom out</span></button><span class="subtle num" id="zoom-level" aria-live="polite">' +
+        'Fit</span><button type="button" id="zoom-in" title="Zoom in (+)">+<span class="visually-hidden">Zoom in' +
+        '</span></button><button type="button" id="zoom-fit" title="Fit (0)">Fit</button></div><div class="panes" ' +
+        'id="panes">' + pane('Approved', reference ? imageUrl(reference) : null, 'The approved image of ' + item.test,
+        'No approved image yet: approving makes this the first baseline.') + pane('New', imageUrl(item.digest),
+        'The new image of ' + item.test, '') + pane('Difference (FLIP)', diff, 'The FLIP difference map, brighter ' +
+        'is more visible', metrics.size_mismatch ? 'The sizes differ.' : reference ? 'No difference map.' :
+        'Nothing to compare with.') + '</div>' + (rows.length ? '<div class="table-wrap"><table class="metrics">' +
+        '<thead><tr><th scope="col">Metric</th><th scope="col" class="num">Value</th><th scope="col">Tolerance</th>' +
+        '</tr></thead><tbody>' + rows.map((r) => '<tr><td>' + esc(r.label) + '</td><td class="num ' + (r.ok ===
+          null ? '' : r.ok ? 'ok' : 'bad') + '">' + esc(r.value) + (r.ok === null ? '' : r.ok ? ' (within)' :
+          ' (over)') + '</td><td>' + esc(r.limit) + '</td></tr>').join('') + '</tbody></table></div>' : '') +
+        '<details><summary>Where it was rendered (' + item.occurrences.length + ')</summary><div class="table-wrap">' +
+        '<table><thead><tr><th scope="col">Build</th><th scope="col">Device</th><th scope="col">API</th><th ' +
+        'scope="col">CPU level</th><th scope="col">Commit</th></tr></thead><tbody>' + item.occurrences.map((o) =>
+        '<tr><td><a href="#/builds/' + esc(o.build) + '">#' + esc(o.build) + '</a></td><td>' + esc(o.device) +
+          '</td><td>' + esc(((o.keys || {}).api || '') + ' ' + ((o.keys || {}).backend || '')) + '</td><td>' +
+          esc((o.keys || {}).cpu_level || '') + '</td><td class="mono">' + esc((o.commit || '').slice(0, 10)) +
+          '</td></tr>').join('') + '</tbody></table></div></details><div class="triage-actions"><label ' +
+        'class="visually-hidden" for="triage-note">Note</label><input id="triage-note" placeholder="Note (why), ' +
+        'kept in the audit log" autocomplete="off"><button type="button" class="approve" id="approve">' +
+        '<svg aria-hidden="true"><use href="#i-passed"/></svg>Approve (a)</button><button type="button" ' +
+        'class="danger" id="reject"><svg aria-hidden="true"><use href="#i-failed"/></svg>Reject (r)</button></div>' +
+        '<p class="subtle">Approve makes this image a baseline of its grouping; Reject marks it wrong and files a ' +
+        'finding. Both are audited.</p></div></div>';
+      applyZoom();
+      syncScroll();
+      document.getElementById('zoom-in').addEventListener('click', () => {
+        zoom = zoomStep(zoom, 1);
+        applyZoom();
+      });
+      document.getElementById('zoom-out').addEventListener('click', () => {
+        zoom = zoomStep(zoom, -1);
+        applyZoom();
+      });
+      document.getElementById('zoom-fit').addEventListener('click', () => {
+        zoom = 0;
+        applyZoom();
+      });
+      document.getElementById('blink').addEventListener('click', toggleBlink);
+      document.getElementById('approve').addEventListener('click', () => decide('positive'));
+      document.getElementById('reject').addEventListener('click', () => decide('negative'));
+    };
+    const toggleBlink = () => {
+      const item = items[current];
+      const button = document.getElementById('blink');
+      const reference = item && (item.comparison || {}).against;
+      if (!item || !reference) {
+        toast('There is no approved image to compare with');
+        return;
+      }
+      const panes = document.getElementById('panes');
+      const showing = panes.dataset.showing === 'new' ? 'reference' : 'new';
+      if (!panes.classList.contains('blink')) {
+        panes.classList.add('blink');
+        panes.innerHTML = pane('Approved', imageUrl(reference), 'The approved image of ' + item.test, '');
+        panes.dataset.showing = 'reference';
+        applyZoom();
+        button.setAttribute('aria-pressed', 'true');
+        if (!reduced) {
+          blink = setInterval(() => swap(panes, item, reference), 600);
+        }
+        return;
+      }
+      if (reduced && button.getAttribute('aria-pressed') === 'true' && showing) {
+        swap(panes, item, reference);
+        return;
+      }
+      button.setAttribute('aria-pressed', 'false');
+      paintDetail();
+    };
+    const swap = (panes, item, reference) => {
+      const next = panes.dataset.showing === 'new' ? 'reference' : 'new';
+      const img = panes.querySelector('img');
+      const title = panes.querySelector('.pane > header');
+      if (!img || !title) {
+        return;
+      }
+      img.src = imageUrl(next === 'new' ? item.digest : reference);
+      img.alt = (next === 'new' ? 'The new image of ' : 'The approved image of ') + item.test;
+      title.textContent = next === 'new' ? 'New' : 'Approved';
+      panes.dataset.showing = next;
+    };
+    const decide = async (label) => {
+      const item = items[current];
+      if (!item) {
+        return;
+      }
+      const note = (document.getElementById('triage-note') || {}).value || '';
+      if (label === 'negative' && !confirmAction('Reject this image of ' + item.test + '? Its cells fail and a ' +
+          'finding is filed.')) {
+        return;
+      }
+      try {
+        const result = await post('gold/triage', { grouping: item.grouping, digest: item.digest, expected:
+          item.label, label: label, note: note });
+        toast((label === 'positive' ? 'Approved: ' : 'Rejected: ') + item.test + (result.finding ? ' (finding ' +
+          result.finding.id + ')' : ''));
+        announce((label === 'positive' ? 'Approved ' : 'Rejected ') + item.test);
+        items = items.filter((i) => i !== item);
+        current = Math.min(current, items.length - 1);
+        paintQueue();
+        paintDetail();
+      } catch (error) {
+        toast(error.message, true);
+        if (error.status === 409) {
+          route();
+        }
+      }
+    };
+    document.getElementById('gold-filter').addEventListener('input', () => {
+      paintQueue();
+    });
+    state.keys = {
+      a: () => decide('positive'), r: () => decide('negative'), b: toggleBlink,
+      '+': () => document.getElementById('zoom-in') && document.getElementById('zoom-in').click(),
+      '=': () => document.getElementById('zoom-in') && document.getElementById('zoom-in').click(),
+      '-': () => document.getElementById('zoom-out') && document.getElementById('zoom-out').click(),
+      0: () => document.getElementById('zoom-fit') && document.getElementById('zoom-fit').click(),
+    };
+    state.onSelect = (index) => {
+      const list = shown();
+      if (list[index]) {
+        current = items.indexOf(list[index]);
+        paintQueue();
+        paintDetail();
+        const node = queue.querySelectorAll('[data-item]')[index];
+        if (node) {
+          node.focus();
+        }
+      }
+    };
+    paintQueue();
+    paintDetail();
+  }
+
   // Agents ------------------------------------------------------------------------------------------------------------
   async function agents() {
     const [a, q] = await Promise.all([api('agents'), api('queues')]);
@@ -1039,7 +1393,8 @@ if (typeof document !== 'undefined') {
   }
 
   // Router and keyboard --------------------------------------------------------------------------------------------------
-  const ROUTES = { builds: builds, qual: qual, quality: quality, spend: spend, agents: agents, operations: operations };
+  const ROUTES = { builds: builds, qual: qual, quality: quality, gold: goldPage, spend: spend, agents: agents,
+    operations: operations };
   async function route() {
     stopLive();
     const hash = location.hash.replace(/^#/, '').split('?')[0] || '/builds';
@@ -1054,6 +1409,8 @@ if (typeof document !== 'undefined') {
     });
     state.selection = -1;
     state.jumpError = null;
+    state.keys = null;
+    state.onSelect = null;
     const changed = hash !== state.lastRoute;
     if (changed) {
       loading();
@@ -1078,7 +1435,8 @@ if (typeof document !== 'undefined') {
     }
   }
 
-  const GO = { b: '#/builds', m: '#/qual', t: '#/quality', s: '#/spend', a: '#/agents', o: '#/operations' };
+  const GO = { b: '#/builds', m: '#/qual', i: '#/gold', t: '#/quality', s: '#/spend', a: '#/agents',
+    o: '#/operations' };
   document.addEventListener('keydown', (event) => {
     const target = event.target;
     const typing = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName ===
@@ -1119,6 +1477,12 @@ if (typeof document !== 'undefined') {
       }
     } else if (key === 'j' || key === 'k') {
       select(state.selection + (key === 'j' ? 1 : -1));
+      if (state.onSelect) {
+        state.onSelect(state.selection);
+      }
+    } else if (state.keys && state.keys[key]) {
+      event.preventDefault();
+      state.keys[key]();
     } else if (key === 'e' && state.jumpError) {
       state.jumpError();
     } else if ((key === 'n' || key === 'N') && state.gotoHit) {

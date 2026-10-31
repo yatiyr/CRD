@@ -94,6 +94,40 @@ where any of the tests fails.
 `python ci/ops.py bisect list` (or the Test quality page) shows the state; `found` names the first bad commit and
 sends a notification; `stopped` means the re-runs were spent or one could not run the test (its build failed).
 
+<a id="a-failed-job-reproduce-it-locally"></a>
+## A failed job: reproduce it locally
+
+The failed step on the build page shows its diagnostics as chips (crash bundle, sanitizer report, GPU validation,
+flight record, replay record, Perfetto trace, summary); the job page lists them with what was kept on the machine.
+
+1. `python ci/ops.py job reproduce <job id>` downloads them and the reproducibility record into
+   `build/ci-repro/<build>-<step>/` and prints the replay in order: the commit in a separate worktree, the lane as
+   CI ran it with the failed tests only, the failed tests in the built tree at the job's CPU level, and each
+   diagnostic's reader (`ceridc diag --command bundle.inspect` for a bundle, `replay.run` for a `.crpl`, the Perfetto
+   UI for a trace, `cdb` or `gdb` for a dump).
+2. `--run` creates the worktree under `DEST/src` and runs the lane there (it configures and builds: minutes); the
+   current checkout is never touched. `--attempt N` picks an earlier attempt.
+3. A raw dump says "withheld": raw memory stays on the machine unless the device's cell allows it. On an owned
+   machine, read it there; to upload them from a machine whose jobs carry no secret, set
+   `"diagnostics": {"raw_dumps": true}` on its cell in `ci/devices.json`.
+
+<a id="gold-images-need-triage"></a>
+## Gold images need triage
+
+A QUAL cell reads "needs triage" when a rendered image matches no approved baseline (or is not compared yet), and a
+notification lists the tests. Open Gold images (`g i`).
+
+1. Compare the approved, new and difference images (blink with `b`, zoom with `+`/`-`/`0`) and the metrics against
+   the tolerances. A software renderer (lavapipe, WARP, SwiftShader) needs the exact image; a real GPU or phone
+   passes within the tolerances by itself, so what reaches the queue is beyond them.
+2. Approve (`a`) when the new rendering is right (an intended change or a first image): it becomes a baseline of its
+   grouping, its cells pass at once and the grouping's other untriaged images are compared again against it.
+3. Reject (`r`) when it is wrong: its cells fail, a finding is written (Rejected images on the page) whose text is
+   the ROADMAP finding row to file, and a notification is sent. Fix the renderer, then approve the corrected image.
+4. A tolerance that is too tight or too loose for a test is changed in `ci/gold.json` (reviewed like code); a test
+   whose baselines differ per device class names `device_class` in its `group_by`.
+5. A click on an image someone else already triaged is refused ("already approved"); reload the page.
+
 ## A queue waits
 
 `python ci/ops.py queue list` shows waiting steps and the oldest wait. Cloud steps wait for the concurrency group

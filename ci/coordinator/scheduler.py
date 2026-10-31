@@ -22,7 +22,8 @@ CI = Path(__file__).resolve().parents[1]
 if str(CI) not in sys.path:
     sys.path.insert(0, str(CI))
 
-from coordinator import PROTOCOL, SCHEMA_VERSION, VERSION, auth, hosts, notify, reports, state, steps  # noqa: E402
+from coordinator import PROTOCOL, SCHEMA_VERSION, VERSION, auth, diagnostics, hosts, notify  # noqa: E402
+from coordinator import reports, state, steps  # noqa: E402
 
 PREFIX = 'orchestrator/'
 DEFAULTS = {
@@ -783,7 +784,8 @@ class Coordinator:
         live = job['state'] not in state.TERMINAL and attempt == job['attempt']
         return b''.join(chunks), nxt, live, job
 
-    def put_artifact(self, job_id, token, path, data, digest):
+    def put_artifact(self, job_id, token, path, data, digest, kind=None):
+        """Store one artifact of the job's attempt, typed by `kind` or by its path (coordinator/diagnostics.py)."""
         job = self.job_for_token(job_id, token)
         path = path.replace('\\', '/').lstrip('/')
         if not SAFE_PATH.match(path) or '..' in path.split('/'):
@@ -794,18 +796,26 @@ class Coordinator:
             raise Refused('artifact digest mismatch')
         name = 'artifacts/%d/%s/%d/%s' % (job['build'], job_id, job['attempt'], path)
         self.store.put(PREFIX + name, data)
+        if kind is not None and kind not in diagnostics.KINDS:
+            raise Refused('artifact kind %r refused' % kind)
         entry = {'job': job_id, 'key': job['key'], 'attempt': job['attempt'], 'path': path, 'size': len(data),
-                 'sha256': digest, 'at': self.clock(), 'object': name}
+                 'sha256': digest, 'at': self.clock(), 'object': name,
+                 'kind': kind or diagnostics.artifact_kind(path)}
 
         def change(current):
             entries = [e for e in (current or {}).get('entries', [])
                        if not (e['job'] == job_id and e['attempt'] == job['attempt'] and e['path'] == path)]
             return {'entries': entries + [entry]}
         self.update('artifacts/%d/manifest.json' % job['build'], change)
+        if entry['kind'] == 'gold-manifest':
+            from coordinator import gold
+            gold.register_manifest(self, job, entry, data)
         return entry
 
     def artifacts(self, number):
-        return (self.get('artifacts/%d/manifest.json' % int(number)) or {}).get('entries', [])
+        """Every artifact entry of a build, each with its kind (entries stored before kinds are typed by path)."""
+        return [dict(e, kind=e.get('kind') or diagnostics.artifact_kind(e['path']))
+                for e in (self.get('artifacts/%d/manifest.json' % int(number)) or {}).get('entries', [])]
 
     def artifact(self, number, path, job_id=None):
         matches = [e for e in self.artifacts(number) if e['path'] == path and (job_id is None or e['job'] == job_id)]

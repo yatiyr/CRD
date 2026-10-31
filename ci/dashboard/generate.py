@@ -3,7 +3,9 @@
 
 Every cell is pass, fail, cached (an unchanged input key that passed before, linked to that run), waiting (a planned
 device, a missing account, an engine option or roadmap row not yet delivered) or budget (a paid cell the monthly cap
-stopped). A budget or waiting cell is never shown as a pass. The page also carries per-device trends, regressions
+stopped). A cell whose rendered images wait for a person's triage (the gold service, ci/coordinator/gold.py) reads
+needs triage, and one with a rejected image fails. A budget, waiting or needs-triage cell is never shown as a pass.
+The page also carries per-device trends, regressions
 (a cell that passed in its previous run and fails now), the month's spend against the cap and the roadmap clauses
 that have no evidence yet. Inputs: the result store (or a fixture with the same records), the build plan and the
 device registry. `publish` deploys the page to Cloudflare Pages behind Cloudflare Access when that account exists.
@@ -71,7 +73,8 @@ def matrix(registry, results, planned=None):
             previous = cells.get(key)
             cells[key] = {'state': outcome, 'build': record.get('build'), 'log': record.get('log'),
                           'step': record.get('step'), 'previous': previous['state'] if previous else None,
-                          'reason': record.get('reason', '')}
+                          'reason': record.get('reason', ''), 'job': record.get('job_id'),
+                          'diagnostics': record.get('diagnostics') or [], 'phase': record.get('failed_phase')}
         if outcome != 'budget':
             history.setdefault(record['device'], []).append((build_number(record.get('build')), outcome))
     if planned:
@@ -149,14 +152,16 @@ def roadmap_rows(path=ROOT / 'docs/ROADMAP.md'):
 STYLE = '''
 :root { --bg:#f7f7f5; --panel:#ffffff; --ink:#1d1d1b; --muted:#5f5f5a; --line:#dcdcd6;
   --pass:#1f7a3a; --pass-bg:#e3f3e7; --fail:#b3261e; --fail-bg:#fbe4e2; --cached:#2d6a8f; --cached-bg:#e2eff7;
-  --waiting:#6b6b66; --waiting-bg:#eeeeea; --budget:#8a5a00; --budget-bg:#fbf0d9; --accent:#3a4ccc; }
+  --waiting:#6b6b66; --waiting-bg:#eeeeea; --budget:#8a5a00; --budget-bg:#fbf0d9; --accent:#3a4ccc;
+  --triage:#a3195f; --triage-bg:#fbe5f0; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#141413; --panel:#1d1d1b; --ink:#ecece8;
   --muted:#a3a39c; --line:#33332f; --pass:#7fd49a; --pass-bg:#173322; --fail:#ff9b92; --fail-bg:#3a1a17;
   --cached:#8cc6ea; --cached-bg:#142a38; --waiting:#b0b0a8; --waiting-bg:#262623; --budget:#f2c26b; --budget-bg:#352a12;
-  --accent:#9aa6ff; } }
+  --accent:#9aa6ff; --triage:#ff8cc6; --triage-bg:#3a1229; } }
 :root[data-theme="dark"] { --bg:#141413; --panel:#1d1d1b; --ink:#ecece8; --muted:#a3a39c; --line:#33332f;
   --pass:#7fd49a; --pass-bg:#173322; --fail:#ff9b92; --fail-bg:#3a1a17; --cached:#8cc6ea; --cached-bg:#142a38;
-  --waiting:#b0b0a8; --waiting-bg:#262623; --budget:#f2c26b; --budget-bg:#352a12; --accent:#9aa6ff; }
+  --waiting:#b0b0a8; --waiting-bg:#262623; --budget:#f2c26b; --budget-bg:#352a12; --accent:#9aa6ff;
+  --triage:#ff8cc6; --triage-bg:#3a1229; }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
 main { max-width:1400px; margin:0 auto; padding:24px 16px 48px; }
@@ -174,7 +179,7 @@ th.dev { white-space:nowrap; } th.dev small { display:block; color:var(--muted);
 .cell { display:inline-block; min-width:58px; padding:1px 6px; border-radius:4px; font-weight:600; text-decoration:none; }
 .pass { color:var(--pass); background:var(--pass-bg); } .fail { color:var(--fail); background:var(--fail-bg); }
 .cached { color:var(--cached); background:var(--cached-bg); } .waiting { color:var(--waiting); background:var(--waiting-bg); }
-.budget { color:var(--budget); background:var(--budget-bg); }
+.budget { color:var(--budget); background:var(--budget-bg); } .triage { color:var(--triage); background:var(--triage-bg); }
 .na { color:var(--line); }
 .meter { height:10px; background:var(--waiting-bg); border-radius:5px; overflow:hidden; margin-top:6px; }
 .meter i { display:block; height:100%; background:var(--accent); }
@@ -188,7 +193,7 @@ def cell_html(cell):
         return '<span class="na" aria-label="not applicable">·</span>'
     state = cell['state']
     title = html.escape(cell.get('reason') or ('build %s' % cell['build'] if cell.get('build') else state), quote=True)
-    label = state
+    label = {'triage': 'needs triage'}.get(state, state)
     if cell.get('log'):
         return '<a class="cell %s" href="%s" title="%s">%s</a>' % (state, html.escape(cell['log'], quote=True), title,
                                                                    label)
@@ -205,12 +210,19 @@ def trend_svg(points):
         len(points) * 7, len(points), bars)
 
 
-def render(registry, results, planned=None, rows=None, budget=None, fixture=False):
+def render(registry, results, planned=None, rows=None, budget=None, fixture=False, cells_hook=None):
+    """(page, document). `cells_hook` takes and returns the cell list ({device, feature, state, ...}) before anything
+    is counted or drawn: the coordinator passes the gold verdicts (gold.overlay), so this page and the web UI's QUAL
+    page always agree."""
     rows = rows or {}
     cells, history = matrix(registry, results, planned)
+    if cells_hook is not None:
+        listed = cells_hook([dict(c, device=d, feature=f) for (d, f), c in cells.items()])
+        cells = {(c['device'], c['feature']): {k: v for k, v in c.items() if k not in ('device', 'feature')}
+                 for c in listed}
     features = list(registry['features'])
     used = [f for f in features if any(k[1] == f for k in cells) or any(f in d['features'] for d in registry['devices'])]
-    counts = {state: 0 for state in ('pass', 'fail', 'cached', 'waiting', 'budget')}
+    counts = {state: 0 for state in ('pass', 'fail', 'triage', 'cached', 'waiting', 'budget')}
     for cell in cells.values():
         counts[cell['state']] += 1
     budget = budget or (planned or {}).get('budget') or {}
@@ -221,14 +233,15 @@ def render(registry, results, planned=None, rows=None, budget=None, fixture=Fals
            '<title>Cerid QUAL dashboard</title><style>%s</style></head><body><main>' % STYLE,
            '<h1>Cerid QUAL dashboard</h1>',
            '<p class="sub">Devices &times; features from the result store, the build plan and '
-           '<code>ci/devices.json</code>. Cached means the same input key passed before; budget and waiting cells '
-           'are never passes.</p>']
+           '<code>ci/devices.json</code>. Cached means the same input key passed before; budget, waiting and needs '
+           'triage cells are never passes.</p>']
     if fixture:
         out.append('<p class="banner">Fixture data: rendered from <code>ci/dashboard/fixtures/results.json</code>, '
                    'not from a CI run.</p>')
     out.append('<div class="tiles">')
-    for state in ('pass', 'fail', 'cached', 'waiting', 'budget'):
-        out.append('<div class="tile"><b class="%s">%d</b><span>%s cells</span></div>' % (state, counts[state], state))
+    for state in ('pass', 'fail', 'triage', 'cached', 'waiting', 'budget'):
+        out.append('<div class="tile"><b class="%s">%d</b><span>%s cells</span></div>' % (
+            state, counts[state], {'triage': 'needs triage'}.get(state, state)))
     ratio = min(spent / cap, 1.0) if cap else 0.0
     out.append('<div class="tile"><b>%.2f / %.0f USD</b><span>spent this month (%s)</span>'
                '<div class="meter"><i style="width:%.1f%%"></i></div></div>' % (spent, cap, html.escape(
@@ -320,6 +333,16 @@ def load_script_pins():
     return module
 
 
+def gold_hook(store):
+    """The gold verdicts (ci/coordinator/gold.py) for a page rendered from the result store, so this page, the served
+    one and the web UI's QUAL page agree."""
+    if str(ROOT / 'ci') not in sys.path:
+        sys.path.insert(0, str(ROOT / 'ci'))
+    from coordinator import gold
+    view = gold.StoreView(store)
+    return lambda cells: gold.overlay(view, cells)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest='command', required=True)
@@ -342,6 +365,7 @@ def main(argv=None):
             planned = json.loads(Path(args.plan).read_text(encoding='utf-8'))
     fixture = getattr(args, 'fixture', None)
     budget = None
+    hook = None
     if fixture:
         data = json.loads(Path(fixture).read_text(encoding='utf-8'))
         results = data['results']
@@ -350,11 +374,13 @@ def main(argv=None):
     else:
         store = pipeline.open_store(getattr(args, 'store', None))
         results = results_from_store(store)
+        hook = gold_hook(store)
         if planned is None:
             month = pipeline.month_of()
             budget = {'cap_usd': registry['budget']['monthly_cap_usd'], 'spent_usd': pipeline.month_spend(store, month),
                       'month': month}
-    page, document = render(registry, results, planned, roadmap_rows(), budget, fixture=bool(fixture))
+    page, document = render(registry, results, planned, roadmap_rows(), budget, fixture=bool(fixture),
+                            cells_hook=hook)
     write(args.out, page, document)
     print('Rendered %d cells into %s' % (len(document['cells']), args.out))
     if args.command == 'publish':

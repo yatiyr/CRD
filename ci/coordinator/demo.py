@@ -7,7 +7,10 @@
 The state lives in a temporary directory on the filesystem backend. The fixture: finished builds (passed, failed
 with a compiler error and a failing test, a soft failure, cached and budget steps), one build that keeps running with a
 live log, lane test runs with a proven flaky test and its quarantine, a bisection, the month's ledger, SLO samples,
-audit entries, two agents and the QUAL results of ci/dashboard/fixtures/results.json. Every value is invented and
+audit entries, two agents, the QUAL results of ci/dashboard/fixtures/results.json, the diagnostics of the failed
+sanitizer lane (a sanitizer report, a flight record, a Perfetto trace and a withheld crash dump) and gold images to
+triage (an exact lavapipe difference, a perceptual L4 difference, a first WARP image, a pass within tolerance and a
+rejected image with its finding). Every value is invented and
 labelled as fixture data; nothing here is evidence. The server listens on loopback only and stops by itself.
 """
 from __future__ import annotations
@@ -26,7 +29,8 @@ CI = Path(__file__).resolve().parents[1]
 if str(CI) not in sys.path:
     sys.path.insert(0, str(CI))
 
-from coordinator import auth, main as coordinator_main, reports, scheduler, service  # noqa: E402
+from coordinator import auth, diagnostics, gold, image, main as coordinator_main, reports, scheduler  # noqa: E402
+from coordinator import service  # noqa: E402
 
 COMMITS = [hashlib.sha1(('cerid fixture commit %d' % i).encode('ascii')).hexdigest() for i in range(8)]
 LANE = 'linux-gcc-debug@gce-linux-x64-intel'
@@ -60,7 +64,7 @@ class Clock:
         return self.now
 
 
-def run_job(c, agent, log=b'', code=0, minutes=1.0, clock=None):
+def run_job(c, agent, log=b'', code=0, minutes=1.0, clock=None, artifacts=None):
     got = c.poll(agent)
     job_id, token = got['job']['id'], got['token']
     c.start(job_id, token)
@@ -72,10 +76,97 @@ def run_job(c, agent, log=b'', code=0, minutes=1.0, clock=None):
                                                    'git': 'git version 2.43.0'},
                                          'env': {'CERID_CI': '1', 'PATH': '/usr/local/bin:/usr/bin'},
                                          'image': 'cerid-ci-ubuntu-2404-x64-202610300300 (fixture)'})
+    for path, data in (artifacts or {}).items():
+        c.put_artifact(job_id, token, path, data, hashlib.sha256(data).hexdigest())
     if clock is not None:
         clock.now += minutes * 60
     c.finish(job_id, token, code)
     return got
+
+
+SANITIZER = ('==4242==ERROR: AddressSanitizer: heap-use-after-free on address 0x602000000010 (fixture)\n'
+             'READ of size 8 at 0x602000000010 thread T0\n'
+             '    #0 0x4f1a2b in crd::hesap::TwiddleBank::prepare(unsigned long) plan.cpp:214\n'
+             '    #1 0x4f0c11 in crd::hesap::Plan::Plan(unsigned long) plan.cpp:96\n'
+             'SUMMARY: AddressSanitizer: heap-use-after-free plan.cpp:214 in TwiddleBank::prepare\n')
+
+
+def diagnostic_artifacts(commit):
+    """The typed diagnostics a failed sanitizer lane uploads (fixture data)."""
+    agent = diagnostics.agent_module()
+    flight = agent.bundle_bytes({'schema': 1, 'flags': 0, 'created': 1}, [
+        (1, 0, b'{"manifest": "fixture"}', 23), (3, agent.SECTION_ABSENT, b'', 0), (6, 0, b'flight events', 13)])
+    base = 'build/linux-gcc-asan/diagnostics/'
+    summary = {'schema': diagnostics.SCHEMA, 'preset': 'linux-gcc-asan', 'test_preset': 'linux-gcc-asan',
+               'device': 'gce-linux-x64-intel', 'commit': commit, 'phase': 'test', 'cpu_level': 'native',
+               'failed_tests': ['crd-hesap-fft-tests'], 'privacy': {'raw_dumps': False, 'secret_values_scrubbed': 0},
+               'items': [{'kind': 'crash-dump', 'source': 'tests/numerics/crash_4242.dmp', 'size': 1048576,
+                          'sha256': '0' * 64, 'withheld': 'raw memory is restricted (fixture)'}]}
+    return {base + 'summary.json': json.dumps(summary, indent=1).encode('utf-8'),
+            base + 'sanitizer-report/crd-hesap-fft-tests-1-AddressSanitizer.txt': SANITIZER.encode('utf-8'),
+            base + 'flight-record/tests__numerics__flight-1.cdb': flight,
+            base + 'perfetto-trace/tests__numerics__fft.perfetto.json': b'{"traceEvents": []}'}
+
+
+def render(width=160, height=120, shift=0, tint=(255, 140, 40), shadow=(30, 30, 46), noise=0, seed=3, sky=False,
+           banding=False):
+    """A small synthetic rendering for the gold fixture: a sky gradient, a lit triangle and its shadow."""
+    import random
+    rnd = random.Random(seed)
+    out = bytearray()
+    a, b, c3 = (40 + shift, 96), (120 + shift, 96), (80 + shift, 22)
+
+    def inside(x, y):
+        def edge(p, q):
+            return (q[0] - p[0]) * (y - p[1]) - (q[1] - p[1]) * (x - p[0])
+        e1, e2, e3 = edge(a, b), edge(b, c3), edge(c3, a)
+        return (e1 >= 0 and e2 >= 0 and e3 >= 0) or (e1 <= 0 and e2 <= 0 and e3 <= 0)
+    for y in range(height):
+        for x in range(width):
+            t = y / (height - 1)
+            if banding:
+                t = round(t * 6) / 6
+            pixel = [int(20 + 60 * t), int(40 + 80 * t), int(90 + 120 * t)] if sky or banding else [24, 26, 34]
+            if y > 98 and 46 + shift <= x <= 134 + shift and abs(y - 104) < 4:
+                pixel = list(shadow)
+            if inside(x, y):
+                light = 0.55 + 0.45 * (1 - (y - 22) / 74)
+                pixel = [int(v * light) for v in tint]
+            if noise:
+                pixel = [min(255, max(0, v + rnd.randint(-noise, noise))) for v in pixel]
+            out += bytes(pixel + [255])
+    return image.Image(width, height, out)
+
+
+def seed_gold(c, registry):
+    """Gold results of the fixture builds 102 (lavapipe, L4) and 103 (WARP), through the real comparison."""
+    policy = gold.load_policy()
+    pictures = {}
+
+    def job(number, device, test_images, approve=(), reject=()):
+        job_id = hashlib.sha256(('gold fixture %d %s' % (number, device)).encode('ascii')).hexdigest()[:32]
+        record = {'build': number, 'id': job_id, 'attempt': 1, 'key': 'lane@' + device,
+                  'env': {'CERID_CI_DEVICE': device}}
+        manifest = {'schema': gold.SCHEMA, 'images': [{'test': t, 'file': '%s.png' % t, 'api': api}
+                                                       for t, (api, _) in test_images.items()]}
+        for test, (_, picture) in test_images.items():
+            pictures['b/gold/%s.png' % test] = image.encode_png(picture)
+        name = gold.register_manifest(c, record, {'path': 'b/gold/manifest.json'}, json.dumps(manifest).encode())
+        gold.process(c, name, registry, policy, lambda rec, path: pictures[path])
+        for test in approve + reject:
+            entry = next(e for e in c.get(name)['entries'] if e['test'] == test)
+            gold.triage(c, entry['grouping'], entry['digest'], 'untriaged', 'positive' if test in approve else
+                        'negative', 'fixture@example.invalid', 'fixture baseline' if test in approve else
+                        'banding in the sky gradient (fixture)')
+    job(101, 'gce-linux-x64-intel', {'render.triangle': ('Vulkan', render())}, approve=('render.triangle',))
+    job(101, 'gce-linux-x64-nvidia-l4', {'render.shadows': ('Vulkan', render(sky=True)),
+                                         'render.ui-text': ('Vulkan', render(tint=(220, 220, 230))),
+                                         'render.sky': ('Vulkan', render(banding=True))},
+        approve=('render.shadows', 'render.ui-text'), reject=('render.sky',))
+    job(102, 'gce-linux-x64-intel', {'render.triangle': ('Vulkan', render(shift=1))})
+    job(102, 'gce-linux-x64-nvidia-l4', {'render.shadows': ('Vulkan', render(sky=True, shift=6, shadow=(10, 10, 16))),
+                                         'render.ui-text': ('Vulkan', render(tint=(220, 220, 230), noise=1))})
+    job(103, 'gce-windows-x64', {'app-launch.menu': ('DX12', render(tint=(60, 200, 120), sky=True))})
 
 
 def seed(store, now=None):
@@ -119,6 +210,7 @@ def seed(store, now=None):
                ('main', COMMITS[2], 'hesap-fft: share the twiddle bank across plans',
                 {'lane-linux-gcc-debug': (FAILED_LOG % COMMITS[2], 1), 'lane-linux-gcc-asan': (TEST_LOG, 8)}),
                ('feature/sse2-floor', COMMITS[3], 'simd: keep the SSE2 floor in the dispatcher', {})]
+    diagnosed = None
     for branch, commit, message, failures in stories:
         build, _ = c.create_build('cerid', {'event': 'push', 'branch': branch, 'commit': commit, 'message': message,
                                             'trusted': branch == 'main'}, 'poll')
@@ -127,7 +219,10 @@ def seed(store, now=None):
         for key in ('repository-linux', 'lane-linux-gcc-debug', 'lane-linux-gcc-asan'):
             log, code = failures.get(key, ('~~~ running %s\n--- Build\n[812/812] Linking\n--- Test\n100%% tests '
                                            'passed, 0 tests failed out of 412\n~~~ exit status 0\n' % key, 0))
-            run_job(c, cloud, log.encode('utf-8'), code, minutes=40, clock=clock)
+            extra = diagnostic_artifacts(commit) if key == 'lane-linux-gcc-asan' and code else None
+            got = run_job(c, cloud, log.encode('utf-8'), code, minutes=40, clock=clock, artifacts=extra)
+            if extra:
+                diagnosed = got['job']['id']
         run_job(c, owned, b'~~~ running on the workstation\n100% tests passed\n~~~ exit status 0\n', minutes=30,
                 clock=clock)
         run_job(c, launcher, b'Required result\n', 3 if failures else 0, clock=clock)
@@ -154,7 +249,11 @@ def seed(store, now=None):
                                                                   'usd': usd, 'hours': usd / 0.3})
     fixtures = json.loads((CI / 'dashboard/fixtures/results.json').read_text(encoding='utf-8'))
     for record in fixtures['results']:
+        if record['outcome'] == 'fail' and record['step'] == 'lane-linux-gcc-asan':
+            record = dict(record, job_id=diagnosed, failed_phase='test', diagnostics=[
+                'flight-record', 'perfetto-trace', 'sanitizer-report', 'summary'])
         store.put_json('results/%s/%s.json' % (record['build'], record['step']), record)
+    seed_gold(c, c.p.load_registry())
     for minute in range(0, 3 * 1440, 7):
         reports.record_tick(c, now - 3 * 86400 + minute * 60)
     c.clock = time.time
@@ -197,8 +296,8 @@ def main(argv=None):
     c = seed(store)
     registry = c.p.load_registry()
     web = service.Service(c, auth.UiAuth('local', loopback=True), {}, registry=registry,
-                          qual_data=coordinator_main.qual_renderer(store, registry),
-                          dashboard=coordinator_main.dashboard_renderer(store, registry))
+                          qual_data=coordinator_main.qual_renderer(store, registry, c),
+                          dashboard=coordinator_main.dashboard_renderer(store, registry, c))
     server = service.serve(web, '127.0.0.1', args.port)
     stop = threading.Event()
     threading.Thread(target=live_build, args=(c, stop), daemon=True).start()

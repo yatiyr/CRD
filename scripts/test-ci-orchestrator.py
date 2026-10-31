@@ -1397,7 +1397,7 @@ class AgentProgram(unittest.TestCase):
         env = agent_module.clean_environment({'env': {'A': '1'}, 'secrets': {'S': 'v'}}, {'CERID_AGENT_JOB_ID': 'j'},
                                              host=host)
         self.assertEqual(env, {'PATH': '/bin', 'HOME': '/home/c', 'A': '1', 'S': 'v', 'CERID_AGENT_JOB_ID': 'j',
-                               'PYTHONUTF8': '1', 'CERID_CI': '1'})
+                               'PYTHONUTF8': '1', 'CERID_CI': '1', 'CERID_CI_SECRET_NAMES': 'S'})
 
     def test_step_scripts_stop_at_the_first_failure(self):
         with tempfile.TemporaryDirectory() as scratch:
@@ -2051,6 +2051,722 @@ class Reproducibility(Base):
         self.assertEqual(self.c.job(got['job']['id'])['repro']['tools'], {'git': 'git 2.0'})
 
 
+# --------------------------------------------------------------------------------------------- diagnostics
+
+from coordinator import diagnostics  # noqa: E402
+
+CORPUS = ROOT / 'tests/foundation/perf/fuzz/corpus/bundle'
+SECRET = 'tok-s3cret-value'
+TEST_LOG = '''Start testing: Oct 31 10:00 UTC
+----------------------------------------------------------
+1/3 Testing: vk.clear
+1/3 Test: vk.clear
+Output:
+----------------------------------------------------------
+Validation Error: [ VUID-vkCmdDraw-None-02699 ] Object 0: handle = 0x1 | descriptor set not bound
+ordinary line
+<end of output>
+Test Failed.
+----------------------------------------------------------
+2/3 Testing: mem.uaf
+2/3 Test: mem.uaf
+Output:
+----------------------------------------------------------
+=================================================================
+==4242==ERROR: AddressSanitizer: heap-use-after-free on address 0x602000000010
+READ of size 4 at 0x602000000010 thread T0
+    #0 0x4f1 in use_after_free test.cpp:12
+SUMMARY: AddressSanitizer: heap-use-after-free test.cpp:12 in use_after_free
+after the report
+src/math.cpp:7:12: runtime error: signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'
+    #0 0x55 in add src/math.cpp:7
+token in the environment: tok-s3cret-value
+<end of output>
+Test Failed.
+----------------------------------------------------------
+3/3 Testing: jobs.race
+3/3 Test: jobs.race
+Output:
+----------------------------------------------------------
+WARNING: ThreadSanitizer: data race (pid=77)
+  Write of size 8 at 0x7b0 by thread T1:
+    #0 worker jobs.cpp:40
+SUMMARY: ThreadSanitizer: data race jobs.cpp:40 in worker
+D3D12 ERROR: ID3D12CommandList::DrawInstanced: root signature not set [ EXECUTION ERROR #201 ]
+<end of output>
+Test Failed.
+'''
+
+
+def make_bundle(sections, created=5):
+    return agent_module.bundle_bytes({'schema': 1, 'flags': 0, 'created': created},
+                                     [(tag, 0, payload, len(payload)) for tag, payload in sections])
+
+
+class FakeUploads:
+    def __init__(self):
+        self.calls = []
+
+    def call(self, method, path, data=None, headers=None, **kw):
+        self.calls.append((method, path, data))
+        return {}
+
+
+class Diagnostics(Base):
+    def test_the_bundle_reader_and_writer_match_the_engine_corpus_byte_for_byte(self):
+        whole = (CORPUS / 'seed-93d7bc78755b63aa').read_bytes()
+        header, sections, complete = agent_module.bundle_sections(whole)
+        self.assertTrue(complete)
+        self.assertEqual([s[0] for s in sections], [1, 2, 4, 5])
+        self.assertEqual(agent_module.bundle_bytes(header, sections), whole, 'the writer reproduces engine bytes')
+        absent = (CORPUS / 'seed-055969ee4c532f18').read_bytes()
+        header, sections, _ = agent_module.bundle_sections(absent)
+        self.assertEqual(agent_module.bundle_bytes(header, sections), absent)
+        truncated = (CORPUS / 'seed-3598718e8e0e22fe').read_bytes()
+        _, sections, complete = agent_module.bundle_sections(truncated)
+        self.assertFalse(complete)
+        self.assertEqual([s[0] for s in sections], [1, 2, 4], 'the complete prefix is recovered')
+        self.assertIsNone(agent_module.bundle_sections(b'this is not a bundle at all, not even close.....'))
+
+    def test_a_raw_dump_section_becomes_an_explicit_absent_section(self):
+        data = make_bundle([(1, b'{"manifest":1}'), (3, b'MDMP raw memory'), (7, b'build identity')])
+        stripped, size, note = diagnostics.strip_raw_dump(data)
+        header, sections, complete = agent_module.bundle_sections(stripped)
+        self.assertTrue(complete)
+        self.assertEqual([(s[0], s[1], s[2]) for s in sections], [
+            (1, 0, b'{"manifest":1}'), (3, agent_module.SECTION_ABSENT, b''), (7, 0, b'build identity')])
+        self.assertEqual(size, len(b'MDMP raw memory'))
+        self.assertIn('raw dump section', note)
+        self.assertNotIn(b'MDMP', stripped)
+
+    def test_no_secret_value_is_ever_uploaded(self):
+        text, note = agent_module.scrub_artifact('a.log', b'x ' + SECRET.encode() + b' y', [SECRET])
+        self.assertEqual((text, note), (b'x [REDACTED] y', 'secret values redacted'))
+        binary, note = agent_module.scrub_artifact('a.bin', b'\x00\xff' + SECRET.encode('utf-16-le'), [SECRET])
+        self.assertIsNone(binary)
+        self.assertIn('withheld', note)
+        bundle = make_bundle([(1, b'manifest'), (4, b'log tail ' + SECRET.encode())])
+        cleaned, note = agent_module.scrub_artifact('flight-1.cdb', bundle, [SECRET])
+        self.assertNotIn(SECRET.encode(), cleaned)
+        _, sections, complete = agent_module.bundle_sections(cleaned)
+        self.assertTrue(complete, 'the checksums are rewritten')
+        self.assertEqual(sections[1][2], b'log tail [REDACTED]')
+        self.assertEqual(sections[1][3], len(sections[1][2]), 'a whole section stays whole')
+        same, note = agent_module.scrub_artifact('a.bin', b'\x00clean', [SECRET])
+        self.assertEqual((same, note), (b'\x00clean', None))
+
+    def test_uploads_are_scrubbed_typed_and_withheld_binaries_reported(self):
+        """Before ADR-0135 §17 the agent uploaded artifact files as they were: a log holding a secret value left
+        the machine. Every upload is scrubbed now."""
+        with tempfile.TemporaryDirectory() as scratch:
+            work = Path(scratch)
+            (work / 'out').mkdir()
+            (work / 'out/run.log').write_bytes(b'value=' + SECRET.encode())
+            (work / 'out/dump.bin').write_bytes(b'\x00\x01' + SECRET.encode('utf-16-le'))
+            (work / 'out/clean.bin').write_bytes(b'\x00\x01')
+            client, said = FakeUploads(), []
+            count = agent_module.upload_artifacts(client, 'j' * 32, work, 'out/*', said.append, secrets=[SECRET],
+                                                  kind='crash-record')
+            self.assertEqual(count, 2)
+            for _, path, data in client.calls:
+                self.assertNotIn(SECRET.encode(), data)
+                self.assertNotIn(SECRET.encode('utf-16-le'), data)
+                self.assertIn('kind=crash-record', path)
+            self.assertTrue(any('dump.bin: withheld' in line for line in said))
+            env = agent_module.clean_environment({'env': {}, 'secrets': {'DEPLOY_KEY': SECRET}}, {}, host={})
+            self.assertEqual(env['CERID_CI_SECRET_NAMES'], 'DEPLOY_KEY')
+            self.assertEqual(agent_module.job_secret_values(env), [SECRET])
+
+    def test_sanitizer_reports_and_validation_messages_are_cut_out_per_test(self):
+        reports = diagnostics.sanitizer_reports(TEST_LOG)
+        self.assertEqual([(r['test'], r['sanitizer']) for r in reports], [
+            ('mem.uaf', 'AddressSanitizer'), ('mem.uaf', 'UndefinedBehaviorSanitizer'),
+            ('jobs.race', 'ThreadSanitizer')])
+        self.assertTrue(reports[0]['text'].rstrip().endswith('in use_after_free'))
+        self.assertNotIn('after the report', reports[0]['text'])
+        self.assertEqual(reports[1]['text'].count('\n'), 2, 'the UBSan line and its stack')
+        found = diagnostics.gpu_validation(TEST_LOG)
+        self.assertEqual(sorted(found), ['jobs.race', 'vk.clear'])
+        self.assertIn('VUID-vkCmdDraw', found['vk.clear'][0])
+        self.assertIn('D3D12 ERROR', found['jobs.race'][0])
+
+    def collect_tree(self, scratch, raw_dumps=False):
+        build = Path(scratch) / 'build' / 'linux-gcc-debug'
+        temporary = build / 'Testing/Temporary'
+        temporary.mkdir(parents=True)
+        (temporary / 'LastTest.log').write_text(TEST_LOG, encoding='utf-8')
+        (temporary / 'ctest-junit.xml').write_text(
+            '<testsuite><testcase name="vk.clear"><failure/></testcase><testcase name="ok"/>'
+            '<testcase name="mem.uaf"><failure/></testcase></testsuite>', encoding='utf-8')
+        tests = build / 'tests/perf'
+        tests.mkdir(parents=True)
+        (tests / 'crash_100.dmp').write_bytes(b'MDMP' + SECRET.encode('utf-16-le'))
+        (tests / 'crash_101.dmp').write_bytes(b'MDMP\x00 stack memory')
+        (tests / 'crash_100.log').write_text('signal 11 at 0x0\n', encoding='utf-8')
+        (tests / 'flight-3.cdb').write_bytes(make_bundle([(1, b'manifest'), (3, b'MDMP raw'), (6, b'events')]))
+        (tests / 'run.crpl').write_bytes(b'CRPL record')
+        (tests / 'frame.perfetto.json').write_text('{"traceEvents": [], "note": "%s"}' % SECRET, encoding='utf-8')
+        old = tests / 'flight-1.cdb'
+        old.write_bytes(make_bundle([(1, b'old')]))
+        since = time.time() - 60
+        os.utime(old, (since - 3600, since - 3600))
+        context = {'preset': 'linux-gcc-debug', 'test_preset': 'linux-gcc-debug', 'device': 'gce-linux-x64-intel',
+                   'commit': COMMIT, 'build': '7', 'job': 'j' * 32, 'phase': 'test', 'cpu_level': 'native'}
+        summary = diagnostics.collect(build, since, context, secrets=[SECRET], raw_dumps=raw_dumps,
+                                      root=Path(scratch))
+        return build, summary
+
+    def test_a_failed_runs_diagnostics_are_collected_typed_and_private(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            build, summary = self.collect_tree(scratch)
+            by_kind = {}
+            for item in summary['items']:
+                by_kind.setdefault(item['kind'], []).append(item)
+            self.assertEqual(sorted(by_kind), ['crash-dump', 'crash-record', 'flight-record', 'gpu-validation',
+                                               'perfetto-trace', 'replay-record', 'sanitizer-report'])
+            self.assertEqual(len(by_kind['flight-record']), 1, 'a previous run\'s file is never collected')
+            self.assertIn('restricted', by_kind['crash-dump'][0]['withheld'])
+            self.assertNotIn('path', by_kind['crash-dump'][0])
+            self.assertEqual(by_kind['flight-record'][0]['path'],
+                             'build/linux-gcc-debug/diagnostics/flight-record/tests__perf__flight-3.cdb')
+            flight = (Path(scratch) / by_kind['flight-record'][0]['path']).read_bytes()
+            self.assertNotIn(b'MDMP raw', flight)
+            self.assertTrue(agent_module.bundle_sections(flight)[2])
+            for path in (build / 'diagnostics').rglob('*'):
+                if path.is_file():
+                    self.assertNotIn(SECRET.encode(), path.read_bytes(), path)
+            self.assertEqual(summary['failed_tests'], ['vk.clear', 'mem.uaf'])
+            self.assertEqual(summary['schema'], 'cerid-ci-diagnostics/1')
+            saved = json.loads((build / 'diagnostics/summary.json').read_text(encoding='utf-8'))
+            self.assertEqual(saved['commit'], COMMIT)
+            self.assertEqual(diagnostics.artifact_kind(by_kind['sanitizer-report'][0]['path']), 'sanitizer-report')
+        with tempfile.TemporaryDirectory() as scratch:
+            build, summary = self.collect_tree(scratch, raw_dumps=True)
+            dumps = {Path(i['source']).name: i for i in summary['items'] if i['kind'] == 'crash-dump'}
+            self.assertIsNone(dumps['crash_101.dmp'].get('withheld'), 'a device that opts in keeps raw dumps')
+            self.assertTrue((Path(scratch) / dumps['crash_101.dmp']['path']).is_file())
+            self.assertIn('secret value', dumps['crash_100.dmp']['withheld'], 'even then no secret value leaves')
+
+    def test_a_step_killed_before_its_upload_still_leaves_its_diagnostics(self):
+        """A timeout or a crashed lane never reaches its own upload phase: the agent runs the checkout's collector
+        and its end-of-job upload (the plan's artifact paths) sends the result."""
+        import shutil
+        with tempfile.TemporaryDirectory() as scratch:
+            work = Path(scratch) / 'checkout'
+            for relative in ('ci/coordinator/diagnostics.py', 'ci/agent/agent.py', 'ci/devices.json'):
+                (work / relative).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / relative, work / relative)
+            build = work / 'build/linux-gcc-debug'
+            (build / 'Testing/Temporary').mkdir(parents=True)
+            (build / 'CMakeCache.txt').write_text('# cache\n', encoding='utf-8')
+            (build / 'Testing/Temporary/LastTest.log').write_text(TEST_LOG, encoding='utf-8')
+            (build / 'tests').mkdir()
+            (build / 'tests/crash_7.log').write_text('signal 6 with %s in the environment\n' % SECRET, encoding='utf-8')
+            done = work / 'build/linux-clang-tsan'
+            (done / 'diagnostics').mkdir(parents=True)
+            (done / 'CMakeCache.txt').write_text('# cache\n', encoding='utf-8')
+            (done / 'diagnostics/summary.json').write_text('{"collected_by": null}', encoding='utf-8')
+            env = dict(os.environ, CERID_CI_SECRET_NAMES='DEPLOY_KEY', DEPLOY_KEY=SECRET,
+                       CERID_CI_DEVICE='gce-linux-x64-intel', CERID_AGENT_JOB_ID='j' * 32, CERID_CI_COMMIT=COMMIT)
+            said = []
+            self.assertTrue(agent_module.collect_diagnostics(work, env, time.time() - 60, said.append), said)
+            summary = json.loads((build / 'diagnostics/summary.json').read_text(encoding='utf-8'))
+            self.assertIn('agent', summary['collected_by'])
+            self.assertEqual(summary['failed_tests'], [])
+            self.assertEqual(sorted({i['kind'] for i in summary['items']}), [
+                'crash-record', 'gpu-validation', 'sanitizer-report'])
+            self.assertEqual(json.loads((done / 'diagnostics/summary.json').read_text(encoding='utf-8')),
+                             {'collected_by': None}, 'a tree the lane summarised itself is left alone')
+            plan = pipeline.orchestrator_pipeline({'tier': 'change', 'steps': [{
+                'label': 'l', 'key': 'lane', 'command': 'x', 'agents': {'queue': 'cerid-cloud'}, 'timeout': 60,
+                'priority': 1, 'device': 'gce-linux-x64-intel', 'input_key': 'k', 'features': ['unit'],
+                'state': 'run', 'reason': ''}]}, {'cloud': 'cerid-cloud', 'launcher': 'cerid-launcher'})
+            paths = ';'.join(plan['steps'][0]['artifact_paths'])
+            client = FakeUploads()
+            agent_module.upload_artifacts(client, 'j' * 32, work, paths, said.append, secrets=[SECRET])
+            uploaded = [urllib.parse.unquote(p.split('path=')[1]) for _, p, _ in client.calls]
+            self.assertIn('build/linux-gcc-debug/diagnostics/summary.json', uploaded)
+            self.assertIn(SECRET.encode(), (build / 'tests/crash_7.log').read_bytes(), 'the file on the machine has it')
+            for _, _, data in client.calls:
+                self.assertNotIn(SECRET.encode(), data)
+        self.assertFalse(agent_module.collect_diagnostics(Path(scratch) / 'gone', {}, 0.0, said.append),
+                         'a checkout without the collector is left as it is')
+
+    def test_artifacts_carry_a_kind(self):
+        for path, kind in (('build/p/diagnostics/crash-dump/x.dmp', 'crash-dump'),
+                           ('build/p/diagnostics/summary.json', 'summary'), ('a/crash_1.dmp', 'crash-dump'),
+                           ('a/flight-2.cdb', 'flight-record'), ('a/b.cdb', 'crash-bundle'),
+                           ('a/run.crpl', 'replay-record'), ('a/t.perfetto.json', 'perfetto-trace'),
+                           ('build/p/Testing/Temporary/ctest-junit.xml', 'junit'),
+                           ('build/p/Testing/Temporary/LastTest.log', 'test-log'),
+                           ('build/p/gold/vk.clear.png', 'gold-image'), ('notes.txt', 'file')):
+            self.assertEqual(diagnostics.artifact_kind(path), kind, path)
+        self.build({'steps': [{'key': 'lane', 'command': 'x', 'agents': {'queue': 'q'}}]})
+        got = self.c.poll(agent(self.c, queue='q', name='w'))
+        self.c.start(got['job']['id'], got['token'])
+        data = b'report'
+        entry = self.c.put_artifact(got['job']['id'], got['token'], 'build/p/diagnostics/sanitizer-report/t.txt',
+                                    data, hashlib.sha256(data).hexdigest())
+        self.assertEqual(entry['kind'], 'sanitizer-report')
+        with self.assertRaises(scheduler.Refused):
+            self.c.put_artifact(got['job']['id'], got['token'], 'x.txt', data, hashlib.sha256(data).hexdigest(),
+                                kind='anything')
+        self.c.update('artifacts/1/manifest.json', lambda m: {'entries': [dict(e, kind=None) for e in m['entries']]})
+        self.assertEqual(self.c.artifacts(1)[0]['kind'], 'sanitizer-report', 'old entries are typed by path')
+
+    def lane(self, scratch, status, phase):
+        class Recording(pipeline.Runner):
+            def __call__(self, argv, check=True, **kw):
+                self.commands.append({'argv': argv})
+                return 0
+        run = Recording(environ={'CERID_CI': '1', 'CERID_CI_COMMIT': COMMIT, 'CERID_AGENT_JOB_ID': 'j' * 32,
+                                 'CERID_CI_SECRET_NAMES': 'DEPLOY_KEY', 'DEPLOY_KEY': SECRET},
+                        dry=False, log=lambda *_: None)
+        device = pipeline.devices_by_id(REGISTRY)['gce-linux-x64-intel']
+        lane = pipeline.Lane('linux-gcc-debug', device, tiers=pipeline.ci_tier.load_tiers(pipeline.TIERS), run=run,
+                             temp=scratch)
+        build = Path(scratch) / 'build' / 'linux-gcc-debug'
+        (build / 'Testing/Temporary').mkdir(parents=True)
+        (build / 'Testing/Temporary/LastTest.log').write_text(TEST_LOG, encoding='utf-8')
+        lane.build_dir = str(build)
+        lane.status, lane.failed_phase = status, phase
+        lane.upload()
+        return lane, run, build
+
+    def test_a_failed_lane_collects_its_diagnostics_before_the_upload(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            lane, run, build = self.lane(scratch, 'failure', 'test_sse2')
+            summary = json.loads((build / 'diagnostics/summary.json').read_text(encoding='utf-8'))
+            self.assertEqual((summary['cpu_level'], summary['phase'], summary['job']), ('sse2', 'test_sse2', 'j' * 32))
+            self.assertEqual(summary['ctest'], 'ctest --preset linux-gcc-debug-at-sse2 --output-on-failure')
+            self.assertEqual(summary['privacy']['secret_values_scrubbed'], 1)
+            upload = ' '.join(map(str, run.commands[-1]['argv']))
+            self.assertIn('build/*/diagnostics/**/*', upload)
+            self.assertIn('sanitizer-report', lane.result('fail', time.time())['diagnostics'])
+        with tempfile.TemporaryDirectory() as scratch:
+            _, run, build = self.lane(scratch, 'success', None)
+            self.assertFalse((build / 'diagnostics').exists(), 'a passing lane collects nothing')
+
+    def test_the_qual_cell_links_the_failed_jobs_diagnostics(self):
+        module = coordinator_main.dashboard_module()
+        cells, _ = module.matrix(REGISTRY, [{'device': 'gce-linux-x64-intel', 'step': 'lane-linux-gcc-debug',
+                                             'outcome': 'fail', 'build': '7', 'features': ['unit'],
+                                             'job_id': 'j' * 32, 'failed_phase': 'test',
+                                             'diagnostics': ['crash-bundle', 'sanitizer-report']}])
+        cell = cells[('gce-linux-x64-intel', 'unit')]
+        self.assertEqual((cell['job'], cell['diagnostics'], cell['phase']),
+                         ('j' * 32, ['crash-bundle', 'sanitizer-report'], 'test'))
+
+    def failed_job_with_diagnostics(self):
+        self.build({'steps': [{'key': 'lane-linux-gcc-debug', 'command': 'python ci/pipeline.py lane',
+                               'agents': {'queue': 'q'}, 'env': {'CERID_CI_DEVICE': 'gce-linux-x64-intel'}}]})
+        got = self.c.poll(agent(self.c, queue='q', name='w'))
+        job_id, token = got['job']['id'], got['token']
+        self.c.start(job_id, token)
+        self.c.record_environment(job_id, token, {'commit': COMMIT, 'machine': 'vm-1', 'tools': {}})
+        summary = {'schema': diagnostics.SCHEMA, 'preset': 'linux-gcc-debug', 'test_preset': 'linux-gcc-debug',
+                   'device': 'gce-linux-x64-intel', 'commit': COMMIT, 'phase': 'test_sse2', 'cpu_level': 'sse2',
+                   'failed_tests': ['mem.uaf', 'a.b'], 'items': [
+                       {'kind': 'crash-dump', 'source': '/w/crash_1.dmp', 'size': 9, 'sha256': 'x',
+                        'withheld': 'raw memory is restricted'}]}
+        for path, data in (('build/linux-gcc-debug/diagnostics/summary.json', json.dumps(summary).encode()),
+                           ('build/linux-gcc-debug/diagnostics/flight-record/flight-3.cdb', make_bundle([(1, b'm')])),
+                           ('build/linux-gcc-debug/diagnostics/replay-record/run.crpl', b'CRPL'),
+                           ('build/linux-gcc-debug/evidence/host.json', b'{}')):
+            self.c.put_artifact(job_id, token, path, data, hashlib.sha256(data).hexdigest())
+        self.c.finish(job_id, token, 1)
+        return job_id
+
+    def test_reproduce_downloads_the_diagnostics_and_prints_the_exact_replay(self):
+        job_id = self.failed_job_with_diagnostics()
+        with tempfile.TemporaryDirectory() as dest:
+            code, out, err = Cli.ops(self, '--json', 'job', 'reproduce', job_id, '--dest', dest)
+            self.assertEqual(code, 0, err)
+            data = json.loads(out)
+            self.assertEqual(sorted(Path(f['path']).name for f in data['files']), ['flight-3.cdb', 'run.crpl'])
+            self.assertTrue((Path(dest) / 'flight-record/flight-3.cdb').is_file())
+            self.assertEqual(json.loads((Path(dest) / 'repro.json').read_text(encoding='utf-8'))['repro']['commit'],
+                             COMMIT)
+            commands = [s['command'] or '' for s in data['steps']]
+            self.assertIn(COMMIT, commands[0])
+            self.assertTrue(commands[0].startswith('git worktree add --detach'))
+            self.assertEqual(commands[1], 'python ci/pipeline.py lane --preset linux-gcc-debug --device '
+                                          'gce-linux-x64-intel --tests "^(mem\\.uaf|a\\.b)$"')
+            self.assertEqual(commands[2], 'ctest --preset linux-gcc-debug-at-sse2 --output-on-failure -R '
+                                          '"^(mem\\.uaf|a\\.b)$"')
+            self.assertTrue(any('bundle.inspect' in c for c in commands))
+            self.assertTrue(any('replay.run --grant read,execute' in c for c in commands))
+            code, out, err = Cli.ops(self, 'job', 'reproduce', job_id, '--dest', dest)
+            self.assertIn('withheld on the machine: crash-dump', out)
+            from unittest import mock
+            calls = []
+            with mock.patch.object(ops.subprocess, 'call', side_effect=lambda argv, **kw: calls.append(
+                    (argv, kw.get('cwd'))) or 0):
+                code, out, err = Cli.ops(self, '--json', 'job', 'reproduce', job_id, '--dest', dest, '--run')
+            self.assertEqual(code, 0, err)
+            self.assertEqual(calls[0][0][1:4], ['-C', str(ops.ROOT), 'worktree'])
+            self.assertEqual(calls[1][0][1:], ['ci/pipeline.py', 'lane', '--preset', 'linux-gcc-debug', '--device',
+                                               'gce-linux-x64-intel', '--tests', '^(mem\\.uaf|a\\.b)$'])
+            self.assertEqual(calls[1][1], str(Path(dest) / 'src'))
+
+
+# --------------------------------------------------------------------------------------------- gold images
+
+from coordinator import gold, image  # noqa: E402
+from executors import firebase_test_lab  # noqa: E402
+
+POLICY = {'schema': 'cerid-gold-policy/1', 'defaults': {
+    'group_by': ['api'], 'flip_mean': 0.03, 'flip_pixel': 0.1, 'flip_area': 0.01, 'ssim_min': 0.9,
+    'max_pixels': 4096}, 'viewing': {'phone': 0.3}, 'tests': [{'match': 'per-class.*', 'group_by': ['api',
+                                                                                                    'device_class']}]}
+
+
+def picture(width=24, height=16, shade=0, noise=0, seed=1, invert=False):
+    """A synthetic rendering: a gradient with a bright square, optionally shifted, noisy or inverted."""
+    rnd = random.Random(seed)
+    out = bytearray()
+    for y in range(height):
+        for x in range(width):
+            r, g, b = x * 255 // (width - 1), y * 255 // (height - 1), 200 if 6 <= x < 12 and 4 <= y < 10 else 40
+            pixel = [min(255, max(0, v + shade + (rnd.randint(-noise, noise) if noise else 0))) for v in (r, g, b)]
+            if invert:
+                pixel = [255 - v for v in pixel]
+            out += bytes(pixel + [255])
+    return image.Image(width, height, out)
+
+
+def paeth(a, b, c):
+    p = a + b - c
+    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+    return a if pa <= pb and pa <= pc else b if pb <= pc else c
+
+
+def png_bytes(width, height, rows, colour, filters, depth=8, interlace=0, break_crc=False):
+    """A PNG written by hand with the given filter type per row (the decoder's other half, for its tests)."""
+    import struct
+    import zlib
+    bpp = {0: 1, 2: 3, 4: 2, 6: 4, 3: 1}[colour]
+    raw = bytearray()
+    previous = bytes(len(rows[0]))
+    for row, kind in zip(rows, filters):
+        out = bytearray()
+        for i, value in enumerate(row):
+            a = row[i - bpp] if i >= bpp else 0
+            b = previous[i]
+            c = previous[i - bpp] if i >= bpp else 0
+            out.append((value - [0, a, b, (a + b) // 2, paeth(a, b, c)][kind]) & 0xFF)
+        raw += bytes([kind]) + out
+        previous = row
+
+    def chunk(kind, body):
+        crc = zlib.crc32(kind + body) ^ (1 if break_crc and kind == b'IDAT' else 0)
+        return struct.pack('>I', len(body)) + kind + body + struct.pack('>I', crc)
+    return (image.PNG_SIGNATURE + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, depth, colour, 0, 0,
+                                                            interlace)) +
+            chunk(b'IDAT', zlib.compress(bytes(raw))) + chunk(b'IEND', b''))
+
+
+class Images(unittest.TestCase):
+    def test_png_decodes_every_filter_and_colour_type(self):
+        pic = picture(9, 5)
+        rgba_rows = [pic.rgba[y * 36:(y + 1) * 36] for y in range(5)]
+        for colour, take in ((6, lambda r: r), (2, lambda r: bytes(v for i, v in enumerate(r) if i % 4 != 3))):
+            rows = [take(r) for r in rgba_rows]
+            decoded = image.decode_png(png_bytes(9, 5, rows, colour, [0, 1, 2, 3, 4]))
+            self.assertEqual(decoded.rgba, pic.rgba, colour)
+            self.assertEqual(decoded.digest(), pic.digest(), 'the digest is of the pixels, not the encoding')
+        grey = [bytes(range(y * 9, y * 9 + 9)) for y in range(5)]
+        decoded = image.decode_png(png_bytes(9, 5, grey, 0, [4, 3, 2, 1, 0]))
+        self.assertEqual(decoded.rgba[4 * 10:4 * 11], bytes([10, 10, 10, 255]))
+        alpha = [bytes(v for p in range(9) for v in (y * 9 + p, 128)) for y in range(5)]
+        self.assertEqual(image.decode_png(png_bytes(9, 5, alpha, 4, [1] * 5)).rgba[:4], bytes([0, 0, 0, 128]))
+        self.assertEqual(image.decode_png(image.encode_png(pic)).rgba, pic.rgba)
+
+    def test_png_refuses_what_it_cannot_read(self):
+        rows = [bytes(9)] * 5
+        for data, reason in ((png_bytes(9, 5, rows, 3, [0] * 5), 'palette'),
+                             (png_bytes(9, 5, [bytes(18)] * 5, 0, [0] * 5, depth=16), 'bit depth 16'),
+                             (png_bytes(9, 5, rows, 0, [0] * 5, interlace=1), 'interlaced'),
+                             (png_bytes(9, 5, rows, 0, [0] * 5, break_crc=True), 'CRC'),
+                             (b'GIF89a', 'not a PNG')):
+            with self.assertRaises(image.ImageError) as caught:
+                image.decode_png(data)
+            self.assertIn(reason, str(caught.exception))
+
+    def test_flip_and_ssim_behave_as_metrics(self):
+        base = picture()
+        self.assertEqual(image.summarize(image.flip(base, base), 0.1)['flip_max'], 0.0)
+        self.assertAlmostEqual(image.ssim(base, base), 1.0)
+        means = [image.summarize(image.flip(base, picture(noise=n)), 0.1)['flip_mean'] for n in (2, 8, 32)]
+        self.assertEqual(means, sorted(means), 'more noise, more error')
+        self.assertLess(means[0], 0.05)
+        self.assertGreater(image.summarize(image.flip(base, picture(invert=True)), 0.1)['flip_mean'], 0.8)
+        white = image.Image(4, 4, b'\xff' * 64)
+        black = image.Image(4, 4, bytes([0, 0, 0, 255] * 16))
+        # white against black: HyAB 100 -> 100^0.7 compressed above pc * cmax, the paper's colour mapping
+        expected = image.PT + (100 ** image.QC - image.PC * image.CMAX) / (image.CMAX - image.PC * image.CMAX) * (
+            1 - image.PT)
+        self.assertAlmostEqual(image.flip(white, black)[0], expected, places=6)
+        self.assertGreater(image.ssim(base, picture(noise=2)), image.ssim(base, picture(noise=32)))
+        with self.assertRaises(image.ImageError):
+            image.flip(base, picture(width=10))
+
+    def test_viewing_conditions_and_downsampling(self):
+        self.assertAlmostEqual(image.ppd_for({'density_dpi': 428}, 'phone', {'phone': 0.3}), 88.24, places=2)
+        self.assertEqual(image.ppd_for({'output': 'television'}, 'console', {'phone': 0.3}), image.DEFAULT_PPD)
+        small = image.downsample(picture(24, 16), 4)
+        self.assertEqual((small.width, small.height), (6, 4))
+        heat = image.heatmap([0.0, 1.0], 2, 1)
+        self.assertEqual((heat.rgba[:3], heat.rgba[4:7]), (bytes((0, 0, 4)), bytes((252, 253, 191))))
+
+    @unittest.skipUnless(os.environ.get('CERID_FLIP_REFERENCE'), 'CERID_FLIP_REFERENCE names a directory with '
+                         'reference.png, test.png and flip.json (the reference tool\'s mean and pixels per degree)')
+    def test_flip_agrees_with_the_reference_implementation(self):
+        folder = Path(os.environ['CERID_FLIP_REFERENCE'])
+        expected = json.loads((folder / 'flip.json').read_text(encoding='utf-8'))
+        ours = image.summarize(image.flip(image.decode_png((folder / 'reference.png').read_bytes()),
+                                          image.decode_png((folder / 'test.png').read_bytes()),
+                                          float(expected.get('ppd', image.DEFAULT_PPD))), 0.1)['flip_mean']
+        self.assertAlmostEqual(ours, expected['mean'], delta=0.02 * expected['mean'] + 1e-4)
+
+
+SOFTWARE = 'gce-linux-x64-intel'      # Mesa lavapipe: exact
+NVIDIA = 'gce-linux-x64-nvidia-l4'    # a real GPU: perceptual
+AMD = 'owned-amd-radeon-desktop'
+
+
+class GoldImages(Base):
+    def upload(self, device, images, finish=True, manifest=None, api='Vulkan', feature=None):
+        """One lane job on `device` uploading `images` ({test: Image}) and its manifest; the gold tick follows."""
+        self.uploads = getattr(self, 'uploads', 0) + 1
+        build = self.build({'steps': [{'key': 'lane', 'command': 'x', 'agents': {'queue': 'q'},
+                                       'env': {'CERID_CI_DEVICE': device}}]}, commit='%040x' % self.uploads)
+        got = self.c.poll(agent(self.c, queue='q', name='w%d' % build['number']))
+        job_id, token = got['job']['id'], got['token']
+        self.c.start(job_id, token)
+        for test, pic in images.items():
+            data = image.encode_png(pic)
+            self.c.put_artifact(job_id, token, 'build/p/gold/%s.png' % test, data, hashlib.sha256(data).hexdigest())
+        body = manifest if manifest is not None else json.dumps({'schema': 'cerid-gold/1', 'images': [
+            dict({'test': t, 'file': '%s.png' % t, 'api': api}, **({'feature': feature} if feature else {}))
+            for t in images]}).encode()
+        self.c.put_artifact(job_id, token, 'build/p/gold/manifest.json', body, hashlib.sha256(body).hexdigest())
+        if finish:
+            self.c.finish(job_id, token, 0)
+            gold.tick(self.c, REGISTRY, POLICY)
+        return build['number'], job_id, token
+
+    def entry(self, number, test):
+        return next(e for r in gold.results_of(self.c, number) for e in r['entries'] if e['test'] == test)
+
+    def verdict(self, number, test):
+        entry = self.entry(number, test)
+        return gold.entry_state(entry, gold.expectations(self.c, entry['grouping']) if entry.get('grouping') else {})
+
+    def approve(self, number, test, label='positive', expected='untriaged', who='me@example.com', note=''):
+        entry = self.entry(number, test)
+        return gold.triage(self.c, entry['grouping'], entry['digest'], expected, label, who, note)
+
+    def cell(self, number, device, feature='vulkan'):
+        return gold.overlay(self.c, [{'device': device, 'feature': feature, 'build': str(number), 'state': 'pass',
+                                      'reason': ''}])[0]
+
+    def test_a_software_renderer_is_compared_exactly(self):
+        first, _, _ = self.upload(SOFTWARE, {'render.triangle': picture()})
+        self.assertEqual(self.verdict(first, 'render.triangle'), 'untriaged', 'a new image is never a pass')
+        self.assertEqual(self.cell(first, SOFTWARE)['state'], 'triage')
+        self.assertEqual(self.entry(first, 'render.triangle')['mode'], 'exact')
+        self.approve(first, 'render.triangle')
+        self.assertEqual(self.verdict(first, 'render.triangle'), 'pass')
+        self.assertEqual(self.cell(first, SOFTWARE)['state'], 'pass', 'approval turns the cell without a re-run')
+        second, _, _ = self.upload(SOFTWARE, {'render.triangle': picture(shade=1)})
+        self.assertEqual(self.verdict(second, 'render.triangle'), 'untriaged', 'one level off is a difference')
+        comparison = self.entry(second, 'render.triangle')['comparison']
+        self.assertFalse(comparison['within'], 'exact mode never passes on tolerance')
+        self.assertLess(comparison['metrics']['flip_mean'], 0.05, 'the metrics are still shown for triage')
+        third, _, _ = self.upload(SOFTWARE, {'render.triangle': picture()})
+        self.assertEqual(self.verdict(third, 'render.triangle'), 'pass')
+
+    def test_a_real_gpu_is_compared_perceptually_within_declared_tolerances(self):
+        first, _, _ = self.upload(NVIDIA, {'render.triangle': picture()})
+        self.assertEqual(self.entry(first, 'render.triangle')['mode'], 'perceptual')
+        self.approve(first, 'render.triangle')
+        near, _, _ = self.upload(NVIDIA, {'render.triangle': picture(noise=2)})
+        entry = self.entry(near, 'render.triangle')
+        self.assertTrue(entry['comparison']['within'])
+        self.assertEqual(self.verdict(near, 'render.triangle'), 'pass')
+        self.assertEqual(entry['tolerance']['flip_mean'], 0.03)
+        far, _, _ = self.upload(NVIDIA, {'render.triangle': picture(invert=True)})
+        self.assertEqual(self.verdict(far, 'render.triangle'), 'untriaged')
+        self.assertEqual(self.cell(far, NVIDIA)['state'], 'triage')
+        self.approve(first, 'render.triangle', label='negative', expected='positive', note='wrong winding')
+        self.assertEqual(self.verdict(near, 'render.triangle'), 'untriaged',
+                         'a tolerance pass holds only while its baseline stays positive')
+
+    def test_reject_fails_the_cell_files_a_finding_and_is_audited(self):
+        sent = []
+        self.c.notifier = lambda event, title, body, key, branch=None: sent.append((event, title))
+        number, _, _ = self.upload(NVIDIA, {'render.sky': picture()})
+        result = self.approve(number, 'render.sky', label='negative', note='banding')
+        self.assertEqual(self.verdict(number, 'render.sky'), 'fail')
+        self.assertEqual(self.cell(number, NVIDIA)['state'], 'fail')
+        finding = gold.findings(self.c)[0]
+        self.assertEqual(finding['id'], result['finding']['id'])
+        self.assertIn('finding row in docs/ROADMAP.md', finding['text'])
+        self.assertEqual(finding['devices'], [NVIDIA])
+        self.assertIn(('gold', 'Gold image rejected: render.sky'), sent)
+        self.assertTrue(any(t.startswith('1 images need triage') for _, t in sent), 'new images are announced')
+        actions = [e['action'] for e in reports.audit_entries(self.c, days=1)]
+        self.assertIn('gold-reject', actions)
+
+    def test_the_dashboard_step_reads_the_same_verdicts_from_the_bare_store(self):
+        number, _, _ = self.upload(SOFTWARE, {'render.f': picture()})
+        cells = lambda: [{'device': SOFTWARE, 'feature': 'vulkan', 'build': str(number), 'state': 'pass'}]
+        self.assertEqual(gold.overlay(gold.StoreView(self.store), cells())[0]['state'], 'triage')
+        self.assertEqual(gold.overlay(self.c, cells())[0]['state'], 'triage')
+        module = coordinator_main.dashboard_module()
+        page, document = module.render(REGISTRY, [{'device': SOFTWARE, 'step': 'lane', 'outcome': 'pass',
+                                                   'build': str(number), 'features': ['vulkan']}],
+                                       cells_hook=module.gold_hook(self.store))
+        self.assertEqual([c['state'] for c in document['cells'] if c['feature'] == 'vulkan' and
+                          c['device'] == SOFTWARE], ['triage'])
+
+    def test_the_repository_policy_is_valid(self):
+        policy = gold.load_policy()
+        self.assertEqual(gold.rules_for(policy, 'app-launch.menu')['group_by'], ['api', 'device_class'])
+        self.assertEqual(gold.rules_for(policy, 'render.triangle')['group_by'], ['api'])
+        for rules in [policy['defaults']] + policy['tests']:
+            for key in rules.get('group_by', []):
+                self.assertIn(key, gold.KEYS)
+        for kind in policy['viewing']:
+            self.assertTrue(any(d['kind'] == kind for d in REGISTRY['devices']), kind)
+
+    def test_a_stale_or_impossible_triage_is_refused(self):
+        number, _, _ = self.upload(SOFTWARE, {'render.a': picture()})
+        self.approve(number, 'render.a')
+        with self.assertRaises(scheduler.Refused) as caught:
+            self.approve(number, 'render.a')
+        self.assertIn('already positive', str(caught.exception))
+        with self.assertRaises(gold.GoldError):
+            self.approve(number, 'render.a', label='untriaged', expected='untriaged')
+        self.approve(number, 'render.a', label='untriaged', expected='positive')
+        self.assertEqual(self.verdict(number, 'render.a'), 'untriaged')
+        self.assertEqual([e['action'] for e in reports.audit_entries(self.c, days=1)].count('gold-approve'), 1)
+
+    def test_baselines_are_shared_per_api_unless_a_test_declares_device_classes(self):
+        first, _, _ = self.upload(NVIDIA, {'render.shared': picture(), 'per-class.ui': picture()})
+        self.approve(first, 'render.shared')
+        self.approve(first, 'per-class.ui')
+        other, _, _ = self.upload(AMD, {'render.shared': picture(), 'per-class.ui': picture()})
+        self.assertEqual(self.verdict(other, 'render.shared'), 'pass')
+        self.assertEqual(self.verdict(other, 'per-class.ui'), 'untriaged', 'AMD desktops have their own baseline')
+        self.assertEqual(self.entry(other, 'per-class.ui')['keys']['device_class'], 'AMD/desktop')
+        dx12, _, _ = self.upload(NVIDIA, {'render.shared': picture()}, api='DX12')
+        self.assertEqual(self.verdict(dx12, 'render.shared'), 'untriaged', 'DX12 is another grouping')
+
+    def test_size_changes_bad_manifests_and_missing_images_never_pass(self):
+        first, _, _ = self.upload(NVIDIA, {'render.b': picture()})
+        self.approve(first, 'render.b')
+        bigger, _, _ = self.upload(NVIDIA, {'render.b': picture(width=30)})
+        self.assertTrue(self.entry(bigger, 'render.b')['comparison']['metrics']['size_mismatch'])
+        self.assertEqual(self.verdict(bigger, 'render.b'), 'untriaged')
+        broken, _, _ = self.upload(NVIDIA, {}, manifest=b'{"schema": "cerid-gold/1", "images": []}')
+        self.assertEqual(self.cell(broken, NVIDIA)['state'], 'fail')
+        missing, _, _ = self.upload(NVIDIA, {}, manifest=json.dumps({'schema': 'cerid-gold/1', 'images': [
+            {'test': 'render.c', 'file': 'nowhere.png'}]}).encode())
+        self.assertIn('was not uploaded', self.entry(missing, 'render.c')['error'])
+        self.assertEqual(self.cell(missing, NVIDIA)['state'], 'fail')
+        with self.assertRaises(gold.GoldError):
+            gold.parse_manifest(json.dumps({'schema': 'cerid-gold/1', 'images': [
+                {'test': 'x', 'file': '../escape.png'}]}).encode())
+
+    def test_images_wait_for_their_job_and_a_new_baseline_recompares_the_untriaged(self):
+        number, job_id, token = self.upload(NVIDIA, {'render.d': picture()}, finish=False)
+        gold.tick(self.c, REGISTRY, POLICY)
+        self.assertEqual(self.verdict(number, 'render.d'), 'pending', 'a running job is not read yet')
+        self.assertEqual(self.cell(number, NVIDIA)['state'], 'triage')
+        self.c.finish(job_id, token, 0)
+        gold.tick(self.c, REGISTRY, POLICY)
+        self.assertEqual(self.verdict(number, 'render.d'), 'untriaged')
+        later, _, _ = self.upload(NVIDIA, {'render.d': picture(noise=2, seed=5)})
+        self.approve(later, 'render.d')
+        gold.tick(self.c, REGISTRY, POLICY)
+        self.assertEqual(self.verdict(number, 'render.d'), 'pass', 'compared again against the new baseline')
+
+    def test_phone_screenshots_take_the_same_path_with_the_devices_screen(self):
+        device = pipeline.devices_by_id(REGISTRY)['ftl-pixel-phone']
+        with tempfile.TemporaryDirectory() as scratch:
+            results = Path(scratch) / 'results/shiba-34-en-portrait/artifacts/sdcard/screenshots'
+            results.mkdir(parents=True)
+            (results / 'menu 1.png').write_bytes(image.encode_png(picture()))
+            (Path(scratch) / 'results/logcat.png').write_bytes(b'not an artifact')
+            manifest = gold.ftl_manifest(Path(scratch) / 'results', device, Path(scratch) / 'gold')
+            self.assertEqual(manifest['images'], [{'test': 'app-launch.menu_1', 'file': 'menu_1.png', 'api': 'Vulkan',
+                                                   'feature': 'app-launch', 'backend': 'Mali-G715 class'}])
+            self.assertTrue((Path(scratch) / 'gold/menu_1.png').is_file())
+        executor = firebase_test_lab.FirebaseTestLab({'CERID_FTL_PROJECT': 'p', 'CERID_FTL_RESULTS_BUCKET': 'b'})
+        self.assertIn('--results-bucket', executor.test_command(device, 'app.apk', results_dir='r/1'))
+        self.assertEqual(executor.results_command('r/1/', 'out'), ['gcloud', 'storage', 'cp', '--recursive',
+                                                                   'gs://b/r/1', 'out'])
+        number, _, _ = self.upload('ftl-pixel-phone', {'app-launch.menu_1': picture()}, feature='app-launch')
+        entry = self.entry(number, 'app-launch.menu_1')
+        self.assertEqual((entry['mode'], entry['keys']['feature'], entry['ppd']), ('perceptual', 'app-launch', 88.237))
+        self.assertEqual(self.cell(number, 'ftl-pixel-phone', 'app-launch')['state'], 'triage')
+
+    def test_the_triage_api(self):
+        number, _, _ = self.upload(NVIDIA, {'render.e': picture()})
+        later, _, _ = self.upload(NVIDIA, {'render.e': picture(invert=True)})
+        entry = self.entry(number, 'render.e')
+        self.c.secrets = None
+        fetch = lambda url: {'keys': [rsa_jwk()]}
+        ui = auth.UiAuth('cloudflare-access', audience='aud', team='t.cloudflareaccess.com', fetch=fetch,
+                         clock=lambda: self.clock())
+        server = service.serve(service.Service(self.c, ui, CONFIG), '127.0.0.1', 0)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base = 'http://127.0.0.1:%d' % server.server_address[1]
+        headers = {'Cf-Access-Jwt-Assertion': rs256({'iss': 'https://t.cloudflareaccess.com', 'aud': 'aud',
+                                                     'exp': self.clock() + 60, 'email': 'me@example.com'})}
+
+        def call(method, path, body=None):
+            data = json.dumps(body).encode() if body is not None else None
+            request = urllib.request.Request(base + path, data=data, method=method, headers=dict(
+                headers, **({'X-Cerid-Request': '1', 'Content-Type': 'application/json'} if data else {})))
+            try:
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    return response.status, response.read(), response.headers.get('Content-Type')
+            except urllib.error.HTTPError as error:
+                payload = error.read()
+                error.close()
+                return error.code, payload, None
+        try:
+            status, body, _ = call('GET', '/api/gold')
+            items = json.loads(body)['items']
+            self.assertEqual(status, 200)
+            self.assertEqual(sorted(i['test'] for i in items), ['render.e', 'render.e'])
+            status, body, kind = call('GET', '/api/gold/image/%s' % entry['digest'])
+            self.assertEqual((status, kind), (200, 'image/png'))
+            self.assertEqual(image.decode_png(body).digest(), entry['digest'])
+            status, body, _ = call('POST', '/api/gold/triage', {'grouping': entry['grouping'], 'digest':
+                                                                entry['digest'], 'expected': 'untriaged',
+                                                                'label': 'positive'})
+            self.assertEqual(status, 200, body)
+            status, body, _ = call('POST', '/api/gold/triage', {'grouping': entry['grouping'], 'digest':
+                                                                entry['digest'], 'expected': 'untriaged',
+                                                                'label': 'positive'})
+            self.assertEqual(status, 409, 'a stale click is refused')
+            gold.tick(self.c, REGISTRY, POLICY)
+            comparison = self.entry(later, 'render.e')['comparison']
+            status, body, kind = call('GET', '/api/gold/diff/%s/%s/%s' % (comparison['against'], self.entry(
+                later, 'render.e')['digest'], comparison['metrics']['diff']))
+            self.assertEqual((status, kind), (200, 'image/png'))
+            self.assertEqual(call('GET', '/api/gold/image/%s' % ('0' * 64))[0], 404)
+            self.assertEqual([e['who'] for e in reports.audit_entries(self.c, days=1) if e['action'] == 'gold-approve'],
+                             ['me@example.com'])
+        finally:
+            server.shutdown()
+            server.server_close()
+
+
 # --------------------------------------------------------------------------------------------- ops CLI
 
 class Cli(Base):
@@ -2200,6 +2916,25 @@ assert.deepStrictEqual(m.matrixRows(data, {results: true}).rows.map((r) => r.dev
 assert.deepStrictEqual(m.matrixRows(data, {query: 'windows'}).rows.map((r) => r.device.id), ['b']);
 // Markdown escapes before it formats.
 assert.ok(!m.markdown('<script>x</script>').includes('<script>'));
+// Needs triage is its own state, never a pass.
+assert.deepStrictEqual(m.statusParts('triage'), {cls: 'triage', icon: 'triage', text: 'Needs triage'});
+// Diagnostics: the newest attempt of one job, grouped in order, raw memory marked.
+const arts = [{job: 'j', attempt: 1, kind: 'crash-dump', path: 'old'}, {job: 'j', attempt: 2, kind: 'crash-dump', path: 'd'},
+  {job: 'j', attempt: 2, kind: 'sanitizer-report', path: 's1'}, {job: 'j', attempt: 2, kind: 'sanitizer-report', path: 's2'},
+  {job: 'other', attempt: 2, kind: 'crash-bundle', path: 'x'}, {job: 'j', attempt: 2, kind: 'junit', path: 'u'}];
+const groups = m.diagnosticGroups(arts, 'j');
+assert.deepStrictEqual(groups.map((g) => [g.kind, g.items.length, g.restricted]),
+  [['sanitizer-report', 2, false], ['crash-dump', 1, true]]);
+// Gold metrics against tolerances; a size change is its own row.
+const rows = m.goldMetrics({comparison: {metrics: {flip_mean: 0.03, flip_area: 0.001, flip_max: 0.4, ssim: 0.99, ppd: 67,
+  scale: 1}}, tolerance: {flip_mean: 0.02, flip_area: 0.002, ssim_min: 0.98, flip_pixel: 0.1}});
+assert.deepStrictEqual(rows.slice(0, 3).map((r) => r.ok), [false, true, true]);
+assert.strictEqual(m.goldMetrics({comparison: {metrics: {size_mismatch: true, test_size: [2, 2], reference_size: [1, 1]}}})[0].ok,
+  false);
+assert.deepStrictEqual(m.goldMetrics({}), []);
+assert.strictEqual(m.zoomStep(0, 1), 1);
+assert.strictEqual(m.zoomStep(16, 1), 16);
+assert.strictEqual(m.zoomStep(1, -1), 0);
 console.log('web checks passed');
 '''
 
@@ -2215,6 +2950,19 @@ class Demo(unittest.TestCase):
             self.assertEqual(len(store.list('orchestrator/bisect/')), 1)
             self.assertTrue(reports.audit_entries(c))
             self.assertGreater(reports.costs(c, REGISTRY, pipeline.month_of())['spent_usd'], 0)
+            self.assertEqual(sorted(i['test'] for i in gold.triage_queue(c)), [
+                'app-launch.menu', 'render.shadows', 'render.triangle'])
+            self.assertEqual([f['test'] for f in gold.findings(c)], ['render.sky'])
+            data = coordinator_main.qual_renderer(store, REGISTRY, c)()
+            states = {(cell['device'], cell['feature']): cell['state'] for cell in data['cells']}
+            self.assertEqual((states[('gce-linux-x64-intel', 'vulkan')], states[('gce-linux-x64-nvidia-l4', 'vulkan')],
+                              states[('gce-windows-x64', 'dx12')]), ('triage', 'triage', 'triage'))
+            page = coordinator_main.dashboard_renderer(store, REGISTRY, c)()
+            self.assertEqual(page.count('class="cell triage"'), 3, 'the served static page agrees with the web UI')
+            self.assertIn('needs triage cells', page)
+            failed = next(cell for cell in data['cells'] if cell.get('diagnostics'))
+            kinds = {a['kind'] for a in c.artifacts(3) if a['job'] == failed['job']}
+            self.assertTrue({'sanitizer-report', 'flight-record', 'summary'} <= kinds)
 
 
 class WebUi(unittest.TestCase):
@@ -2261,7 +3009,7 @@ class WebUi(unittest.TestCase):
                  ('text-3', 'surface'), ('text-3', 'surface-2'), ('accent', 'surface'), ('accent-text', 'accent'),
                  ('pass', 'pass-bg'), ('fail', 'fail-bg'), ('run', 'run-bg'), ('wait', 'wait-bg'), ('cache', 'cache-bg'),
                  ('budget', 'budget-bg'), ('soft', 'soft-bg'), ('cancel', 'cancel-bg'), ('log-text', 'log-bg'),
-                 ('log-dim', 'log-bg')]
+                 ('log-dim', 'log-bg'), ('triage', 'triage-bg'), ('triage', 'surface'), ('surface', 'pass')]
         for name, theme in (('light', light), ('dark', dark)):
             for fg, bg in pairs:
                 self.assertGreaterEqual(contrast(theme[fg], theme[bg]), 4.5, '%s: %s on %s' % (name, fg, bg))

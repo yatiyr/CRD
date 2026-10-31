@@ -34,7 +34,7 @@
     }
   },
   "notifications": {
-    "events": ["failure", "recovery", "budget", "flaky", "quarantine_expired", "bisect"],
+    "events": ["failure", "recovery", "budget", "flaky", "quarantine_expired", "bisect", "gold"],
     "branches": ["main"],
     "channels": []
   },
