@@ -140,9 +140,9 @@ def build(config, environ, store=None, log=None):
     if any(r.get('checkout') == 'mirror' for r in config.get('repositories', {}).values()):
         mirror = triggers.Mirror(environ.get('CERID_CI_MIRROR_DIR') or config.get('mirror_dir',
                                                                                    '/var/lib/cerid-ci/mirror'))
-    coordinator = scheduler.Coordinator(store, config, secrets=secrets_provider(config, environ), http=http,
-                                        log=log, mirror=mirror)
     registry = p.load_registry()
+    coordinator = scheduler.Coordinator(store, config, secrets=secrets_provider(config, environ), http=http,
+                                        log=log, mirror=mirror, plan_env=p.plan_environment(registry, environ))
     dispatcher = None
     if environ.get('CERID_CI_GCP_PROJECT'):
         import executors

@@ -94,7 +94,8 @@ class JsonLog:
 
 
 class Coordinator:
-    def __init__(self, store, config=None, clock=time.time, secrets=None, http=None, log=None, mirror=None):
+    def __init__(self, store, config=None, clock=time.time, secrets=None, http=None, log=None, mirror=None,
+                 plan_env=None):
         self.p = pipeline_module()
         self.store = store
         self.config = copy.deepcopy(config or {})  # its own copy: a caller's later edits never leak in
@@ -103,6 +104,7 @@ class Coordinator:
         self.http = http
         self.log = log or JsonLog()
         self.mirror = mirror
+        self.plan_env = dict(plan_env or {})
         self.limits = dict(DEFAULTS)
         self.limits.update(self.config.get('limits', {}))
         self.repositories = self.config.get('repositories', {})
@@ -200,8 +202,11 @@ class Coordinator:
         return self.repositories[name]
 
     def bootstrap(self, repo):
+        """The build's first document: the plan step on the launcher. It carries the launcher's settings the plan reads
+        (`plan_env`, from pipeline.plan_environment): an agent gives every job a clean environment, so without them
+        the plan finds no account configured and plans no step."""
         spec = repo.get('pipeline', {})
-        return {'schema': steps.SCHEMA, 'steps': [{
+        return {'schema': steps.SCHEMA, 'env': dict(self.plan_env), 'steps': [{
             'key': 'plan', 'label': ':pipeline: plan', 'command': spec.get('command', 'python ci/pipeline.py upload'),
             'agents': {'queue': spec.get('queue', 'cerid-launcher')},
             'timeout_in_minutes': spec.get('timeout_in_minutes', 30),

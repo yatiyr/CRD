@@ -966,6 +966,21 @@ def plan(event, base='', head='HEAD', requested=None, paths=None, registry=None,
 RUNNER_SETTINGS = ('CERID_CI_STORE', 'CERID_CI_SCCACHE_BUCKET', 'CERID_CI_GCP_PROJECT')
 
 
+def plan_environment(registry, environ):
+    """{name: value} of the launcher settings the plan step reads, which the coordinator puts in the build's first
+    document: every environment account of the registry (an unset one leaves its cells waiting), a secret account's
+    file-path variable, the owned-agent list and the runner settings the uploaded steps carry on. An agent gives a
+    job a clean environment, so the plan would otherwise see no account at all. No value here is a secret
+    (ci/coordinator.json); unset names stay out."""
+    names = set(RUNNER_SETTINGS) | {'CERID_CI_OWNED_AGENTS'}
+    for spec in registry.get('accounts', {}).values():
+        if spec.get('kind') == 'env':
+            names.add(spec['name'])
+        if spec.get('env_file'):
+            names.add(spec['env_file'])
+    return {name: environ[name] for name in sorted(names) if environ.get(name)}
+
+
 def orchestrator_pipeline(planned, queues, environ=None):
     """The build's steps for the Cerid orchestrator (`cerid-ci-pipeline/1`, ci/coordinator/steps.py). The launcher's
     non-secret runner settings (where the result store and the compiler cache live) travel in the document's

@@ -349,6 +349,21 @@ class Plan(unittest.TestCase):
         self.assertEqual(planned['steps'], [])
         self.assertTrue(all(c['state'] == 'waiting' for c in planned['cells']))
 
+    def test_the_plan_step_environment_carries_every_launcher_account_and_nothing_else(self):
+        """The plan runs in an agent's clean environment, so plan_environment is all of the launcher it sees: every
+        environment account must be in it (without them the plan planned nothing) and no other launcher variable."""
+        accounts = REGISTRY['accounts'].values()
+        launcher = {spec['name']: 'v' for spec in accounts if spec.get('kind') == 'env'}
+        launcher.update({spec['env_file']: '/etc/cerid-ci/f' for spec in accounts if spec.get('env_file')})
+        launcher.update({'CERID_CI_OWNED_AGENTS': '1', 'CERID_CI_SCCACHE_BUCKET': 'c', 'HOME': '/var/lib/cerid-ci',
+                         'CERID_CI_REPOSITORY_URL': 'https://git.example/cerid.git', 'CERID_CI_MIRROR_DIR': '/m'})
+        passed = pipeline.plan_environment(REGISTRY, launcher)
+        self.assertEqual(set(launcher) - set(passed), {'HOME', 'CERID_CI_REPOSITORY_URL', 'CERID_CI_MIRROR_DIR'})
+        self.assertEqual(pipeline.plan_environment(REGISTRY, {'CERID_CI_GCP_PROJECT': ''}), {})
+        planned = self.plan(event='schedule', environ=pipeline.plan_environment(REGISTRY, ALL_ACCOUNTS))
+        self.assertEqual([s['key'] for s in planned['steps']], [s['key'] for s in self.plan(event='schedule')['steps']])
+        self.assertTrue(planned['steps'])
+
     def test_budget_and_cache_states(self):
         store = pipeline.LocalStore(tempfile.mkdtemp(prefix='cerid-plan-'))
         store.put_json('ledger/2026-10/x.json', {'usd': 49.5})

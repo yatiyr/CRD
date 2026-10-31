@@ -729,6 +729,16 @@ class Core(Base):
         self.assertEqual(got['checkout'], {'url': 'https://git.example/cerid.git', 'commit': COMMIT,
                                            'branch': 'main', 'strategy': 'direct', 'depth': 50})
 
+    def test_the_plan_step_carries_the_launcher_settings_and_the_uploaded_steps_do_not(self):
+        c = coordinator(self.store, self.clock, plan_env={'CERID_CI_GCP_PROJECT': 'cerid-ci'})
+        build, _ = c.create_build('cerid', {'event': 'push', 'branch': 'main', 'commit': COMMIT, 'trusted': True},
+                                  'webhook')
+        got = finish_plan(c, build, {'steps': [{'key': 'lane', 'command': 'x', 'agents': {'queue': 'q'}}]})
+        self.assertEqual(got['job']['env']['CERID_CI_GCP_PROJECT'], 'cerid-ci')
+        lane = c.poll(agent(c, queue='q', name='w'))
+        self.assertEqual(lane['job']['key'], 'lane')
+        self.assertNotIn('CERID_CI_GCP_PROJECT', lane['job']['env'])
+
     def test_dependencies_wait_and_priority(self):
         build = self.build({'steps': [{'key': 'low', 'command': 'x', 'agents': {'queue': 'q'}},
                                       {'key': 'high', 'command': 'x', 'agents': {'queue': 'q'}, 'priority': 5},
