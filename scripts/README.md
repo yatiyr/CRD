@@ -138,6 +138,11 @@ Run commands from the repository root. Build/test rules and exact quality requir
   target, or named with the conditions under which the tree builds it (platform, option, target), the file that
   builds it outside the tree, its includer, or the open ROADMAP row that owns routing it. Its cases are in
   `test-repository-tools.py`.
+- Standards and obligations registers ([contract](../docs/design/registers.md)): `check-registers.py [--today
+  YYYY-MM-DD]` (the `crd-check-registers` CTest and a repository CI step) holds `cmake/standards-register.json` to
+  its snapshot and the tree: no expired pinned draft, no obsoleted pinned RFC, no overdue review, known owners, rows,
+  sources and anchors, an entry for every governed row and evidence for finished work. Its cases are in
+  `test-repository-tools.py`.
 - Generators, oracle scripts and `bench_*`/`run_bench_*` helpers are reproducibility assets. Their matching
   recipes and dated benchmark boards define inputs, peers and qualification scope. `run-lane-bench.sh <target>
   [-D<option>=ON ...]` builds a `runtime/examples` program in the WSL linux-gcc-release lane tree and runs it pinned

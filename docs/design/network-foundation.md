@@ -344,7 +344,7 @@ reviewed releases, removals may be pushed at once.
 
 | Clause | Implemented and proven by |
 |---|---|
-| Standards register, negotiation, GREASE, algorithm identifiers, policy generation mechanism | [NET-STD](../ROADMAP.md#slice-net-std) |
+| Standards register ([contract](registers.md)), negotiation, GREASE, algorithm identifiers, policy generation mechanism | [NET-STD](../ROADMAP.md#slice-net-std) |
 | Legal register entries for every networked flow | [COMPLY.0](../ROADMAP.md#slice-comply.0) |
 | Cryptography inventory and export classification | [COMPLY.1](../ROADMAP.md#slice-comply.1) |
 | `crd-crypto`, handshakes, capabilities, keys, MLS, ECH, the verified model | [NET.2](../ROADMAP.md#slice-net.2) |

@@ -1,0 +1,1834 @@
+{
+  "schema": "cerid-register/1",
+  "domain": "standards",
+  "about": "NET-STD standards register: every protocol, extension, algorithm and format Cerid implements, plans or watches, with its specification and revision, its status in the committed snapshot, its IANA or Cerid codepoints, its owning module and the ROADMAP rows that implement it. A pinned entry (implemented or planned) fails scripts/check-registers.py (the crd-check-registers CTest and repository step) when its draft has expired or its RFC is obsoleted in the snapshot, and every entry fails past its review date. docs/design/registers.md is the contract; COMPLY.0 adds the legal domain in the same format.",
+  "snapshot": {
+    "date": "2026-10-31",
+    "method": "Assembled on 2026-10-31 from the networking research read on 2026-10-27 (its source list N01-N124) and the network foundation design (2026-10-31); entries the research marks (K) or secondary carry verified false. A refresh from the RFC Editor and the IETF datatracker is a download the user approves first."
+  },
+  "review": {
+    "cadence": "A light scan after each IETF meeting (March, July and November) and a full re-research every year or when a pinned item changes status; each run proposes amendments for the user and never edits rows itself.",
+    "next": "2026-12-15"
+  },
+  "governed_rows": [
+    "NET.2",
+    "NET.3",
+    "4.2a",
+    "NET-PATH",
+    "NET-REACH",
+    "NET-DEBUG",
+    "NET.5",
+    "HESAP-NET",
+    "CRASH-FIX.2",
+    "NET-LIVE",
+    "NET-SERVER",
+    "COLLAB.1",
+    "WEB.5",
+    "OPS.1"
+  ],
+  "entries": [
+    {
+      "id": "cerid.session-control",
+      "title": "Cerid session control: handshake, capabilities, key update and close",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET.2",
+        "NET.3"
+      ],
+      "spec": {
+        "type": "cerid",
+        "ref": "docs/design/network-foundation.md#negotiation",
+        "revision": "1",
+        "status": "design"
+      },
+      "codepoints": [
+        {
+          "registry": "Cerid protocol identifiers",
+          "name": "session-control",
+          "value": "0x0001"
+        }
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#negotiation",
+        "read": "2026-10-31",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "cerid.game",
+      "title": "Cerid game session protocol: input, snapshots, deltas and events",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET.3",
+        "4.2a"
+      ],
+      "spec": {
+        "type": "cerid",
+        "ref": "docs/design/network-foundation.md#negotiation",
+        "revision": "1",
+        "status": "design"
+      },
+      "codepoints": [
+        {
+          "registry": "Cerid protocol identifiers",
+          "name": "game",
+          "value": "0x0002"
+        }
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#negotiation",
+        "read": "2026-10-31",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "cerid.project",
+      "title": "Cerid project session protocol: collaborative edits, assets and history",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET.3",
+        "COLLAB.1"
+      ],
+      "spec": {
+        "type": "cerid",
+        "ref": "docs/design/network-foundation.md#negotiation",
+        "revision": "1",
+        "status": "design"
+      },
+      "codepoints": [
+        {
+          "registry": "Cerid protocol identifiers",
+          "name": "project",
+          "value": "0x0003"
+        }
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#negotiation",
+        "read": "2026-10-31",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "cerid.media-control",
+      "title": "Cerid media control: call setup, forwarding layers and key epochs",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET.3",
+        "NET-LIVE"
+      ],
+      "spec": {
+        "type": "cerid",
+        "ref": "docs/design/network-foundation.md#negotiation",
+        "revision": "1",
+        "status": "design"
+      },
+      "codepoints": [
+        {
+          "registry": "Cerid protocol identifiers",
+          "name": "media-control",
+          "value": "0x0004"
+        }
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#negotiation",
+        "read": "2026-10-31",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "cerid.crash-upload",
+      "title": "Cerid crash upload: consented reproduction packs and symbols",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET.3",
+        "CRASH-FIX.2"
+      ],
+      "spec": {
+        "type": "cerid",
+        "ref": "docs/design/network-foundation.md#negotiation",
+        "revision": "1",
+        "status": "design"
+      },
+      "codepoints": [
+        {
+          "registry": "Cerid protocol identifiers",
+          "name": "crash-upload",
+          "value": "0x0005"
+        }
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#negotiation",
+        "read": "2026-10-31",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "cerid.agent",
+      "title": "Cerid agent protocol: agent hub sessions over the network foundation",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET.3"
+      ],
+      "spec": {
+        "type": "cerid",
+        "ref": "docs/design/network-foundation.md#negotiation",
+        "revision": "1",
+        "status": "design"
+      },
+      "codepoints": [
+        {
+          "registry": "Cerid protocol identifiers",
+          "name": "agent",
+          "value": "0x0006"
+        }
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#negotiation",
+        "read": "2026-10-31",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "cerid.service",
+      "title": "Cerid service-to-service protocol with mutual authentication",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET.2",
+        "NET.3"
+      ],
+      "spec": {
+        "type": "cerid",
+        "ref": "docs/design/network-foundation.md#negotiation",
+        "revision": "1",
+        "status": "design"
+      },
+      "codepoints": [
+        {
+          "registry": "Cerid protocol identifiers",
+          "name": "service",
+          "value": "0x0007"
+        }
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#negotiation",
+        "read": "2026-10-31",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "cerid.relay-allocation",
+      "title": "Cerid relay allocation: authenticated, per-session permissions and quotas",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET-REACH",
+        "NET.3"
+      ],
+      "spec": {
+        "type": "cerid",
+        "ref": "docs/design/network-foundation.md#negotiation",
+        "revision": "1",
+        "status": "design"
+      },
+      "codepoints": [
+        {
+          "registry": "Cerid protocol identifiers",
+          "name": "relay-allocation",
+          "value": "0x0008"
+        }
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#negotiation",
+        "read": "2026-10-31",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "cerid.negotiation",
+      "title": "Cerid version and extension negotiation: (identifier, length, value) extensions, ignore-unknown, transcript binding",
+      "kind": "extension",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET-STD"
+      ],
+      "spec": {
+        "type": "cerid",
+        "ref": "docs/design/network-foundation.md#negotiation",
+        "revision": "1",
+        "status": "design"
+      },
+      "codepoints": [
+        {
+          "registry": "Cerid extension identifiers",
+          "name": "grease",
+          "value": "0x?A?A (0x0A0A, 0x1A1A ... 0xFAFA)"
+        }
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#negotiation",
+        "read": "2026-10-31",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null,
+      "note": "GREASE identifiers follow the RFC 8701 pattern and are sent by every build, shipping included."
+    },
+    {
+      "id": "ietf.grease",
+      "title": "Applying GREASE to TLS extensibility",
+      "kind": "guidance",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET-STD"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 8701",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n91",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "ietf.algorithm-agility",
+      "title": "Guidelines for cryptographic algorithm agility (BCP 201)",
+      "kind": "guidance",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "NET-STD",
+        "NET.2"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 7696",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n91",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "quic.invariants",
+      "title": "Version-independent properties of QUIC",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "4.2a"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 8999",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n83",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "quic.transport",
+      "title": "QUIC: a UDP-based multiplexed and secure transport",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "4.2a",
+        "NET-PATH",
+        "NET.5"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9000",
+        "status": "current"
+      },
+      "codepoints": [
+        {
+          "registry": "QUIC Versions",
+          "name": "QUIC version 1",
+          "value": "0x00000001",
+          "verified": false
+        }
+      ],
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n83",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "quic.tls",
+      "title": "Using TLS to secure QUIC",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "4.2a",
+        "NET.2"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9001",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n83",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "quic.recovery",
+      "title": "QUIC loss detection and congestion control",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET-PATH"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9002",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n83",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "quic.datagram",
+      "title": "An unreliable datagram extension to QUIC",
+      "kind": "extension",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "4.2a"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9221",
+        "status": "current"
+      },
+      "codepoints": [
+        {
+          "registry": "QUIC Transport Parameters",
+          "name": "max_datagram_frame_size",
+          "value": "0x20",
+          "verified": false
+        }
+      ],
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n83",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "quic.grease-bit",
+      "title": "Greasing the QUIC bit",
+      "kind": "extension",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET-STD"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9287",
+        "status": "current"
+      },
+      "codepoints": [
+        {
+          "registry": "QUIC Transport Parameters",
+          "name": "grease_quic_bit",
+          "value": "0x2ab2",
+          "verified": false
+        }
+      ],
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n83",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "quic.version-negotiation",
+      "title": "Compatible version negotiation for QUIC",
+      "kind": "extension",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET-STD"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9368",
+        "status": "current"
+      },
+      "codepoints": [
+        {
+          "registry": "QUIC Transport Parameters",
+          "name": "version_information",
+          "value": "0x11",
+          "verified": false
+        }
+      ],
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n83",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "quic.v2",
+      "title": "QUIC version 2",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "4.2a"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9369",
+        "status": "current"
+      },
+      "codepoints": [
+        {
+          "registry": "QUIC Versions",
+          "name": "QUIC version 2",
+          "value": "0x6b3343cf",
+          "verified": false
+        }
+      ],
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n83",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "http.h3",
+      "title": "HTTP/3",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "4.2a"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9114",
+        "status": "current"
+      },
+      "codepoints": [
+        {
+          "registry": "TLS ALPN Protocol IDs",
+          "name": "HTTP/3",
+          "value": "h3",
+          "verified": false
+        }
+      ],
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n83",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "http.qpack",
+      "title": "QPACK: field compression for HTTP/3",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "4.2a"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9204",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n83",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "http.datagrams",
+      "title": "HTTP datagrams and the capsule protocol",
+      "kind": "extension",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "4.2a"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9297",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n02",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null,
+      "note": "WebTransport over HTTP/3 requires it (N02); the RFC number is from knowledge."
+    },
+    {
+      "id": "webtransport.h3",
+      "title": "WebTransport over HTTP/3",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "4.2a",
+        "WEB.5",
+        "NET.5"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-webtrans-http3",
+        "status": "active",
+        "revision": "16",
+        "posted": "2026-07"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n02",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2026-12-15",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Both :protocol spellings are accepted and the draft revision is negotiated (4.2a)."
+    },
+    {
+      "id": "webtransport.h2",
+      "title": "WebTransport over HTTP/2",
+      "kind": "protocol",
+      "state": "watch",
+      "owner": "net",
+      "rows": [
+        "4.2a",
+        "WEB.5"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-webtrans-http2",
+        "status": "active"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n123",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2026-12-15",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "websocket",
+      "title": "The WebSocket protocol",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "4.2a",
+        "WEB.5"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 6455",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n124",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "websocket.h2",
+      "title": "Bootstrapping WebSockets with HTTP/2",
+      "kind": "extension",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "4.2a"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 8441",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n124",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "websocket.h3",
+      "title": "Bootstrapping WebSockets with HTTP/3",
+      "kind": "extension",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "4.2a"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9220",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n124",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "quic.reliable-reset",
+      "title": "QUIC stream resets with partial delivery (RESET_STREAM_AT)",
+      "kind": "extension",
+      "state": "watch",
+      "owner": "net",
+      "rows": [
+        "4.2a"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-quic-reliable-stream-reset",
+        "status": "rfc-editor",
+        "revision": "11"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#area-1-transport",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2026-12-15",
+      "evidence": [],
+      "deprecation": null,
+      "note": "A dependency of WebTransport over HTTP/3 (N02)."
+    },
+    {
+      "id": "quic.multipath",
+      "title": "Multipath extension for QUIC",
+      "kind": "extension",
+      "state": "watch",
+      "owner": "net",
+      "rows": [
+        "NET-PATH"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-quic-multipath",
+        "status": "rfc-editor",
+        "revision": "21",
+        "posted": "2026-03-17"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n01",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2026-12-15",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "quic.address-discovery",
+      "title": "QUIC address discovery",
+      "kind": "extension",
+      "state": "watch",
+      "owner": "net",
+      "rows": [
+        "NET-REACH"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-quic-address-discovery",
+        "status": "active",
+        "revision": "01",
+        "posted": "2026-08-15"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n06",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2026-12-15",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "quic.ack-frequency",
+      "title": "QUIC acknowledgement frequency",
+      "kind": "extension",
+      "state": "watch",
+      "owner": "net",
+      "rows": [
+        "NET-PATH"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-quic-ack-frequency",
+        "status": "expired",
+        "revision": "14"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#area-1-transport",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2026-12-15",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Consensus reached; expired waiting for write-up (October 2026)."
+    },
+    {
+      "id": "quic.receive-timestamps",
+      "title": "QUIC receive timestamps",
+      "kind": "extension",
+      "state": "watch",
+      "owner": "net",
+      "rows": [
+        "NET-PATH"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-quic-receive-ts",
+        "status": "active"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#area-1-transport",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2026-12-15",
+      "evidence": [],
+      "deprecation": null,
+      "note": "A QUIC WG document; the draft name is confirmed at the first refresh."
+    },
+    {
+      "id": "quic.lb",
+      "title": "QUIC-LB: generating routable QUIC connection IDs",
+      "kind": "extension",
+      "state": "watch",
+      "owner": "net",
+      "rows": [
+        "NET-SERVER"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-quic-load-balancers",
+        "status": "active",
+        "revision": "22",
+        "posted": "2026-10-23"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#area-1-transport",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2026-12-15",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "quic.nat-traversal",
+      "title": "QUIC NAT traversal (iroh, informational individual draft)",
+      "kind": "extension",
+      "state": "watch",
+      "owner": "net",
+      "rows": [
+        "NET-REACH"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-bruynooghe-n0-quic-nat-traversal",
+        "status": "active",
+        "revision": "00",
+        "posted": "2026-07"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n03",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2026-12-15",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "masque.connect-udp",
+      "title": "Proxying UDP in HTTP",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET-REACH"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9298",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n84",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "masque.connect-ip",
+      "title": "Proxying IP in HTTP",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET-REACH"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9484",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n84",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "masque.connect-udp-listen",
+      "title": "Proxying bound UDP in HTTP",
+      "kind": "extension",
+      "state": "watch",
+      "owner": "net",
+      "rows": [
+        "NET-REACH"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-masque-connect-udp-listen",
+        "status": "iesg",
+        "revision": "16",
+        "posted": "2026-08-24"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n10",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2026-12-15",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "path.dplpmtud",
+      "title": "Packetization layer path MTU discovery for datagram transports",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET-PATH"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 8899",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n85",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null,
+      "note": "1280-byte IPv6 floor with blackhole detection (NET-PATH)."
+    },
+    {
+      "id": "path.l4s-architecture",
+      "title": "Low Latency, Low Loss, and Scalable Throughput (L4S) architecture",
+      "kind": "guidance",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET-PATH"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9330",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n05",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "path.l4s-ecn",
+      "title": "The ECN protocol for L4S (experimental)",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET-PATH"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9331",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n05",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "reach.ice",
+      "title": "Interactive Connectivity Establishment",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET-REACH",
+        "NET-LIVE"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 8445",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n121",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "reach.stun",
+      "title": "Session Traversal Utilities for NAT",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET-REACH"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 8489",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n121",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "reach.turn",
+      "title": "Traversal Using Relays around NAT",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET-REACH"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 8656",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n121",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "reach.trickle-ice",
+      "title": "Trickle ICE",
+      "kind": "extension",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET-REACH",
+        "NET-LIVE"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 8838",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n121",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tls.v13",
+      "title": "The Transport Layer Security protocol version 1.3",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "NET.2"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 8446",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#area-2-security",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2026-12-15",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The RFC number is from knowledge; the refresh records whether its revision has obsoleted it."
+    },
+    {
+      "id": "tls.hybrid-kex",
+      "title": "Post-quantum/traditional hybrid key exchange for TLS 1.3",
+      "kind": "algorithm",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "NET.2"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 10024",
+        "status": "current"
+      },
+      "codepoints": [
+        {
+          "registry": "TLS Supported Groups",
+          "name": "X25519MLKEM768",
+          "value": "0x11EC",
+          "verified": false
+        },
+        {
+          "registry": "TLS Supported Groups",
+          "name": "SecP256r1MLKEM768",
+          "value": "0x11EB",
+          "verified": false
+        },
+        {
+          "registry": "TLS Supported Groups",
+          "name": "SecP384r1MLKEM1024",
+          "value": "0x11ED",
+          "verified": false
+        }
+      ],
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n14",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null,
+      "note": "X25519MLKEM768 preferred, SecP384r1MLKEM1024 for high assurance (NET.2)."
+    },
+    {
+      "id": "tls.ech",
+      "title": "TLS Encrypted Client Hello",
+      "kind": "extension",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "NET.2"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9849",
+        "status": "current"
+      },
+      "codepoints": [
+        {
+          "registry": "TLS ExtensionType Values",
+          "name": "encrypted_client_hello",
+          "value": "0xfe0d",
+          "verified": false
+        }
+      ],
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n15",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tls.certificate-compression",
+      "title": "TLS certificate compression",
+      "kind": "extension",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "NET.2"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 8879",
+        "status": "current"
+      },
+      "codepoints": [
+        {
+          "registry": "TLS ExtensionType Values",
+          "name": "compress_certificate",
+          "value": "27",
+          "verified": false
+        }
+      ],
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n92",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tls.keylog",
+      "title": "The SSLKEYLOGFILE format for TLS (non-shipping builds only)",
+      "kind": "format",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET-DEBUG"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9850",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n62",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null,
+      "note": "MUST NOT be used in production; refused at runtime and by a CI guard in shipping builds (T22)."
+    },
+    {
+      "id": "pki.ml-dsa",
+      "title": "ML-DSA in the Internet X.509 public key infrastructure",
+      "kind": "algorithm",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "NET.2"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9881",
+        "status": "current"
+      },
+      "codepoints": [
+        {
+          "registry": "Object identifiers",
+          "name": "id-ml-dsa-44",
+          "value": "2.16.840.1.101.3.4.3.17",
+          "verified": false
+        },
+        {
+          "registry": "Object identifiers",
+          "name": "id-ml-dsa-65",
+          "value": "2.16.840.1.101.3.4.3.18",
+          "verified": false
+        },
+        {
+          "registry": "Object identifiers",
+          "name": "id-ml-dsa-87",
+          "value": "2.16.840.1.101.3.4.3.19",
+          "verified": false
+        }
+      ],
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n16",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "pki.merkle-tree-certificates",
+      "title": "Merkle Tree Certificates",
+      "kind": "format",
+      "state": "watch",
+      "owner": "crypto",
+      "rows": [
+        "NET.2"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-plants-merkle-tree-certs",
+        "status": "active",
+        "revision": "00",
+        "posted": "2026"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n18",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2026-12-15",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "nist.ir-8547",
+      "title": "NIST IR 8547: transition to post-quantum cryptography standards",
+      "kind": "guidance",
+      "state": "watch",
+      "owner": "crypto",
+      "rows": [
+        "NET.2"
+      ],
+      "spec": {
+        "type": "nist",
+        "ref": "NIST IR 8547 ipd",
+        "posted": "2024-11-12",
+        "status": "draft"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n22",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2026-12-15",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Deprecates 112-bit RSA and ECC after 2030 and disallows them after 2035 (draft; status uncertain)."
+    },
+    {
+      "id": "mls.protocol",
+      "title": "The Messaging Layer Security protocol",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "NET.2",
+        "COLLAB.1",
+        "NET-LIVE"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9420",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n89",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "mls.architecture",
+      "title": "The Messaging Layer Security architecture",
+      "kind": "guidance",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "NET.2"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9750",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n89",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "media.sframe",
+      "title": "Secure Frame (SFrame) media encryption",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET-LIVE"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9605",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n43",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "media.whip",
+      "title": "WebRTC-HTTP ingestion protocol",
+      "kind": "protocol",
+      "state": "planned",
+      "owner": "net",
+      "rows": [
+        "NET-LIVE"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9725",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n41",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "media.rtp-over-quic",
+      "title": "RTP over QUIC",
+      "kind": "protocol",
+      "state": "watch",
+      "owner": "net",
+      "rows": [
+        "NET-LIVE"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-avtcore-rtp-over-quic",
+        "status": "active",
+        "revision": "14"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n42",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2026-12-15",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "media.moq-transport",
+      "title": "Media over QUIC transport",
+      "kind": "protocol",
+      "state": "watch",
+      "owner": "net",
+      "rows": [
+        "NET-LIVE"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-moq-transport",
+        "status": "active",
+        "revision": "20",
+        "posted": "2026-08-31"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n39",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2026-12-15",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "media.opus-dred",
+      "title": "Opus deep redundancy (DRED)",
+      "kind": "extension",
+      "state": "watch",
+      "owner": "audio",
+      "rows": [
+        "NET-LIVE"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-mlcodec-opus-dred",
+        "status": "active",
+        "revision": "07",
+        "posted": "2026-08-04"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n40",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2026-12-15",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "fec.flexfec",
+      "title": "RTP payload format for flexible forward error correction",
+      "kind": "algorithm",
+      "state": "planned",
+      "owner": "hesap-comms",
+      "rows": [
+        "HESAP-NET"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 8627",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n99",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "fec.red",
+      "title": "RTP payload for redundant audio data",
+      "kind": "algorithm",
+      "state": "planned",
+      "owner": "hesap-comms",
+      "rows": [
+        "HESAP-NET"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 2198",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n99",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "fec.raptorq",
+      "title": "RaptorQ forward error correction",
+      "kind": "algorithm",
+      "state": "planned",
+      "owner": "hesap-comms",
+      "rows": [
+        "HESAP-NET"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 6330",
+        "status": "current"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n122",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "capture.qlog",
+      "title": "qlog: structured logging for network protocols (main schema and QUIC events)",
+      "kind": "format",
+      "state": "watch",
+      "owner": "net",
+      "rows": [
+        "NET-DEBUG"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-quic-qlog-main-schema",
+        "status": "active",
+        "revision": "14",
+        "posted": "2026-07"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n61",
+        "read": "2026-10-27",
+        "verified": true
+      },
+      "review": "2026-12-15",
+      "evidence": [],
+      "deprecation": null,
+      "note": "QUIC events are draft-ietf-quic-qlog-quic-events-13; NET-DEBUG pins both when it lands."
+    },
+    {
+      "id": "capture.pcapng",
+      "title": "PCAP Now Generic with the decryption secrets block",
+      "kind": "format",
+      "state": "watch",
+      "owner": "net",
+      "rows": [
+        "NET-DEBUG"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-opsawg-pcapng",
+        "status": "active"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n113",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2026-12-15",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "ops.trace-context",
+      "title": "W3C Trace Context",
+      "kind": "format",
+      "state": "planned",
+      "owner": "perf",
+      "rows": [
+        "OPS.1"
+      ],
+      "spec": {
+        "type": "w3c",
+        "ref": "https://www.w3.org/TR/trace-context/",
+        "status": "recommendation"
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n115",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-10-27",
+      "evidence": [],
+      "deprecation": null
+    }
+  ],
+  "checklist": [
+    {
+      "section": "2.1",
+      "item": "Algorithm identifiers",
+      "mechanism": "Every algorithm, group and suite is a register entry with its IANA codepoint; code names the identifier, never a hard-coded choice outside the policy generation.",
+      "rows": [
+        "NET-STD",
+        "NET.2"
+      ],
+      "evidence": []
+    },
+    {
+      "section": "2.2",
+      "item": "Mandatory-to-implement algorithms",
+      "mechanism": "NET.2 pins the defaults (X25519MLKEM768, SecP384r1MLKEM1024, AES-GCM or ChaCha20-Poly1305, HKDF, ML-DSA with a classical companion) and every product class implements them.",
+      "rows": [
+        "NET.2"
+      ],
+      "evidence": []
+    },
+    {
+      "section": "2.3",
+      "item": "Transitioning from weak algorithms",
+      "mechanism": "Signed, monotonic policy generations carry dated migration windows (preferred, accepted only, refused) and a remote signed disable for a broken algorithm.",
+      "rows": [
+        "NET-STD",
+        "NET.2"
+      ],
+      "evidence": []
+    },
+    {
+      "section": "2.4",
+      "item": "Algorithm transition mechanisms",
+      "mechanism": "Version, extension and algorithm negotiation is bound to the handshake transcript, so a downgrade is detected (T05); unknown values are ignored and GREASE keeps the extension points open.",
+      "rows": [
+        "NET-STD",
+        "NET.2"
+      ],
+      "evidence": []
+    },
+    {
+      "section": "2.5",
+      "item": "Cryptographic key size",
+      "mechanism": "Key sizes follow the pinned groups and the NIST IR 8547 dates; classical-only key exchange is refused first for Cerid services and everywhere by 2030.",
+      "rows": [
+        "NET.2"
+      ],
+      "evidence": []
+    },
+    {
+      "section": "2.6",
+      "item": "Providing notice of expected changes",
+      "mechanism": "Register deprecation dates and generation migration windows are published ahead of time; the offline grace period is bounded.",
+      "rows": [
+        "NET-STD"
+      ],
+      "evidence": []
+    },
+    {
+      "section": "2.7",
+      "item": "Considering balance",
+      "mechanism": "Post-quantum handshake cost against the amplification limit and the admission budgets is measured, not assumed.",
+      "rows": [
+        "NET.4"
+      ],
+      "evidence": []
+    },
+    {
+      "section": "2.8",
+      "item": "Opportunistic security",
+      "mechanism": "No opportunistic or unauthenticated mode reaches a non-loopback address: every such path is authenticated and encrypted in every build (D4).",
+      "rows": [
+        "NET.2"
+      ],
+      "evidence": []
+    }
+  ]
+}

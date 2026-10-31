@@ -25,6 +25,7 @@ and verification evidence in the linked note; its live status belongs only to th
 | [CI tiers](ci-tiers.md) | Change, nightly and complete tiers, the required result and exact-revision lane evidence |
 | [Delivery plan](delivery-plan.md) | The accepted, dependency-ordered grouping of every master-table row (ADR-0129 amendment of 2026-10-27) |
 | [Network foundation](network-foundation.md) | NET.1's threat model, capabilities, game/project channel separation, bounded admission, browser constraints, crypto provider and agility policy |
+| [Standards and obligations registers](registers.md) | NET-STD's standards register and COMPLY.0's legal register: one format, the `crd-check-registers` guard, snapshot and review cadence |
 | [Module registry](module-registry.md) | `crd_module()` rows, dependency-closed `CRD_MODULES` selection and the verification pass |
 | [Capability ownership](capability-ownership.md) | One owning module per engine capability: the registry, its guard, the owner decisions and the audit |
 | [Pinned inputs](pinned-inputs.md) | `cmake/pins.json`: versions, sources, SHA-256, licences and verified offline archives |

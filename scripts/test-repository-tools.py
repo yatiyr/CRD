@@ -152,6 +152,9 @@ source_routes_spec.loader.exec_module(source_routes)
 isa_spec = importlib.util.spec_from_file_location('check_isa_isolation', ROOT / 'scripts/check-isa-isolation.py')
 isa_isolation = importlib.util.module_from_spec(isa_spec)
 isa_spec.loader.exec_module(isa_isolation)
+registers_spec = importlib.util.spec_from_file_location('check_registers', ROOT / 'scripts/check-registers.py')
+registers = importlib.util.module_from_spec(registers_spec)
+registers_spec.loader.exec_module(registers)
 ab_spec = importlib.util.spec_from_file_location('ab_board', ROOT / 'scripts/ab-board.py')
 ab_board = importlib.util.module_from_spec(ab_spec)
 ab_spec.loader.exec_module(ab_board)
@@ -5260,6 +5263,131 @@ class IsaIsolation(unittest.TestCase):
             with self.assertRaisesRegex(isa_isolation.GuardError, 'malformed'):
                 isa_isolation.read_manifest(str(manifest))
 
+
+class Registers(unittest.TestCase):
+    """scripts/check-registers.py: the NET-STD standards register fails on expired pinned drafts, obsoleted pinned
+    RFCs, overdue reviews, unknown owners and rows, uncovered governed rows and unproven implemented entries."""
+
+    ROADMAP = ('| # | Slice | Status | Scope | Requires | Sources |\n|---|---|---|---|---|---|\n'
+               '| 001 | <a id="slice-net-std"></a>**NET-STD** | Partial | x | y | z |\n'
+               '| 002 | <a id="slice-net.2"></a>**NET.2** | Open | x | y | z |\n'
+               '| 003 | <a id="slice-done"></a>**DONE** | Done | x | y | z |\n')
+    DRAFT = {'type': 'draft', 'ref': 'draft-ietf-webtrans-http3', 'revision': '16', 'posted': '2026-07',
+             'status': 'active'}
+
+    def entry(self, **changes):
+        entry = {'id': 'quic.transport', 'title': 'QUIC', 'kind': 'protocol', 'state': 'planned', 'owner': 'net',
+                 'rows': ['NET-STD'], 'spec': {'type': 'rfc', 'ref': 'RFC 9000', 'status': 'current'},
+                 'codepoints': [{'registry': 'QUIC Versions', 'name': 'v1', 'value': '0x00000001'}],
+                 'source': {'ref': 'docs/research.md#n83', 'read': '2026-10-27', 'verified': True},
+                 'review': '2026-12-15', 'evidence': [], 'deprecation': None}
+        entry.update(changes)
+        return entry
+
+    def register(self, entries, **changes):
+        register = {'schema': registers.SCHEMA, 'domain': 'standards', 'about': 'fixture',
+                    'snapshot': {'date': '2026-10-31', 'method': 'fixture'},
+                    'review': {'cadence': 'after each IETF meeting', 'next': '2026-12-15'},
+                    'governed_rows': ['NET-STD'], 'entries': entries,
+                    'checklist': [{'section': '2.1', 'item': 'Algorithm identifiers', 'mechanism': 'the register',
+                                   'rows': ['NET-STD'], 'evidence': []}]}
+        register.update(changes)
+        return register
+
+    def run_guard(self, register, today='2026-11-01'):
+        """(exit code, output) of the guard over a fixture tree holding this register."""
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            for directory in ('docs', 'cmake', 'tests'):
+                (root / directory).mkdir()
+            (root / 'docs' / 'ROADMAP.md').write_text(self.ROADMAP, encoding='utf-8')
+            (root / 'docs' / 'research.md').write_text('<a id="n83"></a>N83. QUIC WG documents\n', encoding='utf-8')
+            (root / 'tests' / 'test_quic.cpp').write_text('// evidence\n', encoding='utf-8')
+            (root / 'CMakeLists.txt').write_text('crd_module(engine/foundation/core engine/core)\n', encoding='utf-8')
+            (root / 'cmake' / 'standards-register.json').write_text(json.dumps(register), encoding='utf-8')
+            capabilities = {'capabilities': [{'id': 'network.transport', 'owner': 'net', 'status': 'planned'}]}
+            (root / 'cmake' / 'capability-owners.json').write_text(json.dumps(capabilities), encoding='utf-8')
+            with patch('sys.stdout', new_callable=io.StringIO) as out:
+                code = registers.main(['--root', str(root), '--today', today])
+            return code, out.getvalue()
+
+    def assert_fails(self, register, message, today='2026-11-01'):
+        code, output = self.run_guard(register, today)
+        self.assertEqual(1, code, output)
+        self.assertIn(message, output)
+
+    def test_a_complete_register_passes_and_names_the_first_expiry(self):
+        webtransport = self.entry(id='webtransport.h3', codepoints=[], spec=self.DRAFT)
+        code, output = self.run_guard(self.register([self.entry(), webtransport]))
+        self.assertEqual(0, code, output)
+        self.assertIn('2 entries, 2 pinned', output)
+        self.assertIn('webtransport.h3 on 2027-01-02', output)
+
+    def test_a_pinned_draft_expires_185_days_from_the_start_of_its_posted_period(self):
+        later = {'cadence': 'c', 'next': '2027-06-01'}
+        register = self.register([self.entry(spec=self.DRAFT, review='2027-06-01')], review=later)
+        self.assertEqual(0, self.run_guard(register, today='2027-01-01')[0])
+        self.assert_fails(register, 'expired on 2027-01-02', today='2027-01-02')
+        exact = self.register([self.entry(spec=dict(self.DRAFT, posted='2026-07-20'), review='2027-06-01')],
+                              review=later)
+        self.assertEqual(0, self.run_guard(exact, today='2027-01-20')[0])
+        self.assert_fails(exact, 'expired on 2027-01-21', today='2027-01-21')
+        held = self.register([self.entry(spec=dict(self.DRAFT, status='rfc-editor'), review='2027-06-01')],
+                             review=later)
+        self.assertEqual(0, self.run_guard(held, today='2027-03-01')[0])
+        watched = self.register([self.entry(state='watch', spec=dict(self.DRAFT, status='expired'))])
+        self.assertEqual(0, self.run_guard(watched)[0])
+        self.assert_fails(self.register([self.entry(spec=dict(self.DRAFT, status='replaced'))]),
+                          'is replaced in the snapshot')
+        unpinnable = {'type': 'draft', 'ref': 'draft-x', 'status': 'active'}
+        self.assert_fails(self.register([self.entry(spec=unpinnable)]), 'names its revision and posted date')
+
+    def test_a_pinned_rfc_obsoleted_in_the_snapshot_fails(self):
+        obsoleted = {'type': 'rfc', 'ref': 'RFC 8446', 'status': 'obsoleted', 'obsoleted_by': ['RFC 9999']}
+        self.assert_fails(self.register([self.entry(spec=obsoleted)]), 'obsoleted by RFC 9999')
+        self.assertEqual(0, self.run_guard(self.register([self.entry(state='watch', spec=obsoleted)]))[0])
+        self.assert_fails(self.register([self.entry(spec=dict(obsoleted, obsoleted_by=[]))]),
+                          'exactly when the status is obsoleted')
+
+    def test_overdue_reviews_and_future_reads_fail(self):
+        self.assert_fails(self.register([self.entry(review='2026-10-30')]), 'review was due on 2026-10-30')
+        self.assert_fails(self.register([self.entry()], review={'cadence': 'c', 'next': '2026-10-01'}),
+                          'scheduled review was due on 2026-10-01')
+        future = {'ref': 'docs/research.md#n83', 'read': '2026-11-05', 'verified': True}
+        self.assert_fails(self.register([self.entry(source=future)]), 'after the snapshot or today')
+        self.assert_fails(self.register([self.entry(review='2026-12')]), 'review must be a YYYY-MM-DD date')
+
+    def test_owners_rows_and_sources_must_exist(self):
+        self.assert_fails(self.register([self.entry(owner='nowhere')]), "owner 'nowhere' is neither")
+        self.assert_fails(self.register([self.entry(rows=['NET-STD', 'NO-SUCH'])]), "unknown ROADMAP row 'NO-SUCH'")
+        self.assertEqual(0, self.run_guard(self.register([self.entry(owner='core')]))[0])
+        self.assert_fails(self.register([self.entry()], governed_rows=['NET-STD', 'NET.2']),
+                          'governed row NET.2 names no register entry')
+        anchorless = {'ref': 'docs/research.md#n99', 'read': '2026-10-27', 'verified': True}
+        self.assert_fails(self.register([self.entry(source=anchorless)]), "has no anchor 'n99'")
+        self.assert_fails(self.register([self.entry(), self.entry()]), 'duplicate entry quic.transport')
+
+    def test_finished_rows_require_implemented_entries_with_evidence_and_verified_codepoints(self):
+        self.assert_fails(self.register([self.entry(rows=['DONE'])], governed_rows=[]),
+                          'every row (DONE) is Done; mark it implemented')
+        self.assert_fails(self.register([self.entry(state='implemented')]), 'names its evidence')
+        self.assert_fails(self.register([self.entry(state='implemented', evidence=['tests/missing.cpp'])]),
+                          "evidence 'tests/missing.cpp' does not exist")
+        unverified = [{'registry': 'QUIC Versions', 'name': 'v1', 'value': '0x00000001', 'verified': False}]
+        self.assert_fails(self.register([self.entry(state='implemented', evidence=['tests/test_quic.cpp'],
+                                                    codepoints=unverified)]), 'unverified codepoint v1')
+        proven = self.entry(state='implemented', evidence=['tests/test_quic.cpp'])
+        self.assertEqual(0, self.run_guard(self.register([proven]))[0])
+        self.assert_fails(self.register([self.entry(state='deprecated')]), 'names its deprecation date')
+        done_item = [{'section': '2.1', 'item': 'i', 'mechanism': 'm', 'rows': ['DONE'], 'evidence': []}]
+        self.assert_fails(self.register([self.entry()], checklist=done_item), 'checklist 2.1: every row is Done')
+
+    def test_a_wrong_schema_or_an_empty_register_fails(self):
+        self.assert_fails(self.register([self.entry()], schema='cerid-register/0'),
+                          "schema must be 'cerid-register/1'")
+        self.assert_fails(self.register([]), 'entries is a non-empty list')
+        self.assert_fails(self.register([self.entry(colour='red')]), "unknown keys ['colour']")
+        self.assert_fails(self.register([self.entry()], owners={'net': 'NET-STD'}), "unknown keys ['owners']")
 
 class AbBoard(unittest.TestCase):
     """scripts/ab-board.py: interleaved arms, paired speed ratios with a bootstrap interval, a decisive stop."""

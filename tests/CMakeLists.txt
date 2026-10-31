@@ -105,6 +105,11 @@ set_tests_properties(crd-check-capability-owners PROPERTIES TIMEOUT 120 ENVIRONM
 add_test(NAME crd-check-peer-headers
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-peer-headers.py" "${CMAKE_SOURCE_DIR}")
 set_tests_properties(crd-check-peer-headers PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+# NET-STD and COMPLY.0: the standards register (cmake/standards-register.json) holds no expired pinned draft, no
+# obsoleted pinned RFC and no overdue review; owners, rows, sources and evidence exist (docs/design/registers.md).
+add_test(NAME crd-check-registers
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-registers.py" --root "${CMAKE_SOURCE_DIR}")
+set_tests_properties(crd-check-registers PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
 # DIAG.11b clause (10): the investigation runbooks (docs/design/diagnostic-runbooks.md) against this tree: every
 # command, flag, diag command, artifact and example exists, and every test a runbook names (on the rows for this host)
 # is one this tree registers (it lists them with ctest --show-only); nothing publishes.
