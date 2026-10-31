@@ -5,8 +5,8 @@
 > [ADR-0135](../decisions/0135-cerid-ci-platform.md) (the orchestrator: §12 to §16); contract:
 > [CI platform](../design/ci-platform.md); day-to-day operations: [runbooks](ci-platform-runbooks.md).
 
-Builds run at **checkpoints** (user order 2026-10-31): the operator starts one with **New build** or
-`python ci/ops.py build start`, and it tests everything changed since the branch's last passing build. Nothing builds
+Builds run **only when the user decides** (user orders 2026-10-31; GitHub Actions does the routine work): one
+starts with **New build** or `python ci/ops.py build start`, and it tests everything changed since the branch's last passing build. Nothing builds
 per push or nightly; a repository's `poll` and `schedules` keys in `ci/coordinator.json` turn that back on. There is
 no public endpoint at all, and the web UI opens through a **Google IAP TCP tunnel** from your own computer, under your own Google
 login. Tailscale (for a phone) and webhooks are optional add-ons; Cloudflare is the documented alternative.

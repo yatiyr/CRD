@@ -138,6 +138,9 @@ Done in the `cerid-ci` project, following [the setup recipe](../recipes/ci-platf
   everything changed since the last passing build. The tracks test on their own machines; GitHub Actions stays free
   while the repository is public. Automatic bisection, which started first-bad-commit builds after a failure, is off
   too (`quality.bisect`).
+- **The user starts every own-CI build (user order, about 20:15):** "right now I want to command our own CI. I don't
+  want any more tests. Let's get github CI do the work and we watch it and I will decide when we run our own CI". No
+  agent or operator starts an own-CI build; GitHub Actions runs on every push and the tracks read its results.
 
 ## Workspace
 
