@@ -15,8 +15,8 @@
 
 #pragma once
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/core/types.hpp>
-#include <crd/math/kernel_level.hpp>
 
 #if !defined(__clang__) && !defined(__GNUC__)
 #include <math.h>

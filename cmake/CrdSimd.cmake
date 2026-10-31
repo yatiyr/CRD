@@ -96,7 +96,7 @@ target_compile_definitions(crd-simd-flags INTERFACE CRD_SIMD_TARGET=${_crd_simd_
 #
 # CRD_KERNEL_LEVELS: the CPU levels this build compiles kernel units for, lowest first (the names are the CpuLevel
 # spellings of crd/core/cpu_features.hpp without the dot). CRD_KERNEL_LEVEL_CAP, on crd-simd-flags, is the CpuLevel
-# value of the highest one: the dispatcher never selects above it (crd::math::kernel_level_cap()). Under the native
+# value of the highest one: the dispatcher never selects above it (crd::kernel_level_cap()). Under the native
 # Visual Studio profiles every configuration compiles the auto set and a scalar or sse2 configuration caps lower.
 set(_CRD_KERNEL_LEVEL_portable 0)
 set(_CRD_KERNEL_LEVEL_sse2 1)
@@ -214,7 +214,7 @@ endfunction()
 # (<archive>-<family>-<level>-<feature>, CRD_KERNEL_FEATURE_<FEATURE>=1 and its own level namespace), and the archive
 # gets CRD_KERNELS_<FAMILY>_<LEVEL>_<FEATURE>, 1 when its level was built. The units see the archive's interface
 # include directories and those of the INCLUDES targets.
-# The sources include only headers that put their inline code in CRD_MATH_LEVEL_NS (crd/math/kernel_level.hpp),
+# The sources include only headers that put their inline code in CRD_MATH_LEVEL_NS (crd/core/kernel_level.hpp),
 # plain declarations and intrinsics: an inline function compiled at a higher level and shared with general code is the
 # defect class this rule removes. Kernel sources live outside the archive's src/.
 function(crd_add_cpu_kernels archive)

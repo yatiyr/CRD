@@ -383,8 +383,8 @@ def leaf_header():
              "// numerically self-checked against numpy before emission. The Stockham/four-step driver combines",
              "// them as cache-resident leaves (v10-b2). SoA split re/im; istride/ostride index complex elements.",
              "// The radix-8/16/32 combine codelets are in twiddle_codelets.hpp.", "",
-             "#include <crd/core/platform.hpp>", "#include <crd/core/types.hpp>",
-             "#include <crd/math/kernel_level.hpp>", "",
+             "#include <crd/core/kernel_level.hpp>", "#include <crd/core/platform.hpp>",
+             "#include <crd/core/types.hpp>", "",
              "namespace crd::hesap::fft::detail::inline CRD_MATH_LEVEL_NS", "{"]
     for n in LEAF_SIZES:
         lines.append(gen_codelet(n, inverse=False))
@@ -404,7 +404,7 @@ def twiddle_source():
              "// (kernels/fft_twiddle_codelets_<k>.cpp, fft_codegen_split.py): each codelet whole at avx2 and",
              f"// avx512, else tile bodies in parts of at most {SPLIT_BUDGET} lines (MSVC's optimizer is",
              "// superlinear in a function's and a unit's size).",
-             "#include <crd/core/types.hpp>", "#include <crd/math/kernel_level.hpp>",
+             "#include <crd/core/kernel_level.hpp>", "#include <crd/core/types.hpp>",
              "namespace crd::hesap::fft::detail::inline CRD_MATH_LEVEL_NS {"]
     for prec in ("f64", "f32"):
         for n in TWIDDLE_SIZES:

@@ -34,10 +34,10 @@
 // The >1-register regime is competitive but does not yet CRUSH Eigen-Ceres; that remains an OPEN crush target
 // (SANITY #9 — a documented gap, never an accepted loss).
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/core/platform.hpp> // CRD_FORCEINLINE
 #include <crd/core/types.hpp>
 #include <crd/math/hyperbolic.hpp>
-#include <crd/math/kernel_level.hpp>
 #include <crd/math/power.hpp>
 #include <crd/math/select.hpp>
 #include <crd/math/simd/vec4d.hpp>

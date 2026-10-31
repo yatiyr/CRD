@@ -6,8 +6,8 @@
 
 #pragma once
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/hesap/dense/dense_kernels.hpp>
-#include <crd/math/kernel_level.hpp>
 
 namespace crd::hesap::dense::detail::inline CRD_MATH_LEVEL_NS
 {

@@ -27,7 +27,7 @@ int main(int argc, char** argv)
         return 2;
     }
     const crd::CpuSelection& s = crd::cpu_selection();
-    const crd::CpuLevel cap = crd::math::kernel_level_cap();
+    const crd::CpuLevel cap = crd::kernel_level_cap();
     if (levels)
     {
         // Highest first: the first level both include is the one the detected arm runs, so it is not listed again.

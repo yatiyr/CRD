@@ -19,7 +19,7 @@ struct CpuLevelListener final : Catch::EventListenerBase
     {
         char line[512] = {}; // NOLINT(modernize-avoid-c-arrays)
         (void)crd::format_cpu_selection(crd::cpu_selection(), crd::cpu_runtime_dispatch(), line, sizeof(line));
-        std::printf("%s kernel_cap=%s\n", line, crd::cpu_level_name(crd::math::kernel_level_cap()));
+        std::printf("%s kernel_cap=%s\n", line, crd::cpu_level_name(crd::kernel_level_cap()));
         (void)std::fflush(stdout);
     }
 };

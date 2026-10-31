@@ -14,8 +14,8 @@ namespace crd::geometry::primitives
 {
 
 // Every level this archive built, ascending, and the one the process runs (resolved once from cpu_selection()).
-[[nodiscard]] std::span<const crd::math::KernelLevel<PrimitiveKernels>> primitive_kernel_levels() noexcept;
-[[nodiscard]] const crd::math::KernelLevel<PrimitiveKernels>& primitive_kernels() noexcept;
+[[nodiscard]] std::span<const crd::KernelLevel<PrimitiveKernels>> primitive_kernel_levels() noexcept;
+[[nodiscard]] const crd::KernelLevel<PrimitiveKernels>& primitive_kernels() noexcept;
 
 // The kernels' plain form of a ray and its slab precompute.
 [[nodiscard]] RaySlab ray_slab(const Ray3<crd::f32>& ray, const RayAABBPrecompute<crd::f32>& pre) noexcept;

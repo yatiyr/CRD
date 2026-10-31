@@ -41,7 +41,7 @@ ROOT = Path(__file__).resolve().parent.parent
 EXCEPTIONS = ROOT / 'scripts/isa-isolation.json'
 SCHEMA = 'cerid-isa-isolation/1'
 
-# The level namespaces (crd/math/kernel_level.hpp) and the suffix each level's table name ends with.
+# The level namespaces (crd/core/kernel_level.hpp) and the suffix each level's table name ends with.
 SUFFIX = {'portable': 'Portable', 'sse2': 'Sse2', 'sse42': 'Sse42', 'avx2': 'Avx2', 'avx512': 'Avx512',
           'neon': 'Neon', 'avx2_avxvnni': 'Avx2AvxVnni', 'avx512_avx512vnni': 'Avx512Avx512Vnni'}
 _NS = '|'.join(sorted(SUFFIX, key=len, reverse=True))

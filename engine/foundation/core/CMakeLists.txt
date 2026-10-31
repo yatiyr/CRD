@@ -28,6 +28,13 @@ if(NOT DEFINED _crd_shipping)
 endif()
 target_compile_definitions(crd-core PRIVATE "CRD_FAULT_SEAMS=$<IF:${_crd_shipping},0,1>")
 
+# The kernel dispatch's build cap (crd/core/kernel_dispatch.hpp, ADR-0134 §4): the value crd-simd-flags carries.
+# Private: crd-core takes no ISA or floating-point options from crd-simd-flags, and callers ask kernel_level_cap().
+if(NOT DEFINED _crd_kernel_cap)
+    message(FATAL_ERROR "[crd] crd-core needs CrdSimd.cmake's kernel level cap (_crd_kernel_cap)")
+endif()
+target_compile_definitions(crd-core PRIVATE "CRD_KERNEL_LEVEL_CAP=${_crd_kernel_cap}")
+
 # crd-warnings (/W4 /WX or -Wall -Werror) reaches every engine target through this edge and stays inside the
 # build tree: a package consumer keeps its own warning policy.
 target_link_libraries(crd-core PUBLIC $<BUILD_INTERFACE:crd-warnings>)

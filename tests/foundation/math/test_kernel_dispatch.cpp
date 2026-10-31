@@ -17,8 +17,8 @@
 #include <type_traits>
 
 using crd::CpuLevel;
+using crd::KernelLevel;
 using crd::math::FloatConvertKernels;
-using crd::math::KernelLevel;
 using crd::math::ScalarMathKernels;
 
 namespace
@@ -116,7 +116,7 @@ TEST_CASE("kernel dispatch: the selected level is the highest one both the selec
                                        {CpuLevel::Avx512, &tables[3], {}}};
     const auto pick = [&](CpuLevel selected, CpuLevel cap)
     {
-        return crd::math::select_kernel_level<int>(levels, selected, crd::CpuFeatureSet{}, cap).level;
+        return crd::select_kernel_level<int>(levels, selected, crd::CpuFeatureSet{}, cap).level;
     };
     CHECK(pick(CpuLevel::Avx512, CpuLevel::Avx512) == CpuLevel::Avx512);
     CHECK(pick(CpuLevel::Avx2, CpuLevel::Avx512) == CpuLevel::Avx2);
@@ -155,7 +155,7 @@ TEST_CASE("kernel dispatch: a feature variant runs only where its level runs and
         {CpuLevel::Avx512, &tables[4], {}},   {CpuLevel::Avx512, &tables[5], vnni512}};
     const auto pick = [&](CpuLevel selected, CpuFeatureSet features, CpuLevel cap)
     {
-        return crd::math::select_kernel_level<int>(levels, selected, features, cap).table - tables;
+        return crd::select_kernel_level<int>(levels, selected, features, cap).table - tables;
     };
     const CpuFeatureSet none;
     const CpuFeatureSet both = vnni.with(CpuFeature::Gfni);
@@ -315,10 +315,10 @@ TEST_CASE("float conversion kernels: the process runs the level its CPU selectio
     const auto levels = crd::math::float_convert_levels();
     const KernelLevel<FloatConvertKernels>& chosen = crd::math::float_convert_kernels();
     INFO("selected " << crd::cpu_level_name(s.selected) << ", running " << crd::cpu_level_name(chosen.level));
-    CHECK(&chosen == &crd::math::select_kernel_level<FloatConvertKernels>(levels, s.selected, s.kernel_features,
-                                                                          crd::math::kernel_level_cap()));
+    CHECK(&chosen == &crd::select_kernel_level<FloatConvertKernels>(levels, s.selected, s.kernel_features,
+                                                                    crd::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
-    CHECK(crd::cpu_level_includes(crd::math::kernel_level_cap(), chosen.level));
+    CHECK(crd::cpu_level_includes(crd::kernel_level_cap(), chosen.level));
 }
 
 // The scalar transcendental table (crd/math/scalar_kernels.hpp): every level the host runs returns portable's bits,
@@ -487,7 +487,7 @@ TEST_CASE("scalar transcendental kernels: the process runs the level its CPU sel
     const auto levels = crd::math::scalar_math_levels();
     const KernelLevel<ScalarMathKernels>& chosen = crd::math::scalar_math_level();
     INFO("selected " << crd::cpu_level_name(s.selected) << ", running " << crd::cpu_level_name(chosen.level));
-    CHECK(&chosen == &crd::math::select_kernel_level<ScalarMathKernels>(levels, s.selected, s.kernel_features,
-                                                                        crd::math::kernel_level_cap()));
+    CHECK(&chosen ==
+          &crd::select_kernel_level<ScalarMathKernels>(levels, s.selected, s.kernel_features, crd::kernel_level_cap()));
     CHECK(&crd::math::scalar_math() == chosen.table);
 }

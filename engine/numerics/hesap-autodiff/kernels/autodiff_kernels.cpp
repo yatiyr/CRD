@@ -2,10 +2,10 @@
 // canned functions' forward gradient on this level's jets (crd/hesap/autodiff/autodiff_kernels.hpp). The table is this
 // level's (CRD_KERNEL_TABLE); everything else has internal linkage or lives in the level namespace.
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/hesap/autodiff/autodiff_kernels.hpp>
 #include <crd/hesap/autodiff/canned_functions.hpp>
 #include <crd/hesap/autodiff/jet_simd.hpp>
-#include <crd/math/kernel_level.hpp>
 
 namespace crd::hesap::autodiff::inline CRD_MATH_LEVEL_NS
 {

@@ -30,10 +30,10 @@
 
 namespace dn = crd::hesap::dense;
 using crd::CpuLevel;
+using crd::KernelLevel;
 using crd::u32;
 using crd::u64;
 using crd::usize;
-using crd::math::KernelLevel;
 using dn::DenseKernels;
 using dn::GemmBlock;
 using dn::GemmKernels;
@@ -708,8 +708,8 @@ TEST_CASE("dense kernels: the process runs the level its CPU selection resolves"
     const auto levels = dn::dense_kernel_levels();
     const KernelLevel<DenseKernels>& chosen = dn::dense_kernels();
     INFO("selected " << crd::cpu_level_name(s.selected) << ", running " << crd::cpu_level_name(chosen.level));
-    CHECK(&chosen == &crd::math::select_kernel_level<DenseKernels>(levels, s.selected, s.kernel_features,
-                                                                   crd::math::kernel_level_cap()));
+    CHECK(&chosen ==
+          &crd::select_kernel_level<DenseKernels>(levels, s.selected, s.kernel_features, crd::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
-    CHECK(crd::cpu_level_includes(crd::math::kernel_level_cap(), chosen.level));
+    CHECK(crd::cpu_level_includes(crd::kernel_level_cap(), chosen.level));
 }

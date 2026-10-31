@@ -25,11 +25,11 @@
 
 namespace sp = crd::hesap::sparse;
 using crd::CpuLevel;
+using crd::KernelLevel;
 using crd::u32;
 using crd::u64;
 using crd::usize;
 using crd::hesap::Complex;
-using crd::math::KernelLevel;
 using sp::SparseKernels;
 
 namespace
@@ -900,10 +900,10 @@ TEST_CASE("sparse kernels: the process runs the level its CPU selection resolves
     const auto levels = sp::sparse_kernel_levels();
     const KernelLevel<SparseKernels>& chosen = sp::sparse_kernels();
     INFO("selected " << crd::cpu_level_name(s.selected) << ", running " << crd::cpu_level_name(chosen.level));
-    CHECK(&chosen == &crd::math::select_kernel_level<SparseKernels>(levels, s.selected, s.kernel_features,
-                                                                    crd::math::kernel_level_cap()));
+    CHECK(&chosen ==
+          &crd::select_kernel_level<SparseKernels>(levels, s.selected, s.kernel_features, crd::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
-    CHECK(crd::cpu_level_includes(crd::math::kernel_level_cap(), chosen.level));
+    CHECK(crd::cpu_level_includes(crd::kernel_level_cap(), chosen.level));
 }
 
 TEST_CASE("sparse kernels: every level the host runs gives the SDDMM order's bits (f64)", "[sparse][kernels]")

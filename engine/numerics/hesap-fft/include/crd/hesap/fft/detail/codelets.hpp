@@ -6,9 +6,9 @@
 // them as cache-resident leaves (v10-b2). SoA split re/im; istride/ostride index complex elements.
 // The radix-8/16/32 combine codelets are in twiddle_codelets.hpp.
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
-#include <crd/math/kernel_level.hpp>
 
 namespace crd::hesap::fft::detail::inline CRD_MATH_LEVEL_NS
 {

@@ -12,7 +12,7 @@ namespace crd::geometry::mesh
 {
 
 // Every level this archive built, ascending, and the one the process runs (resolved once from cpu_selection()).
-[[nodiscard]] std::span<const crd::math::KernelLevel<MeshKernels>> mesh_kernel_levels() noexcept;
-[[nodiscard]] const crd::math::KernelLevel<MeshKernels>& mesh_kernels() noexcept;
+[[nodiscard]] std::span<const crd::KernelLevel<MeshKernels>> mesh_kernel_levels() noexcept;
+[[nodiscard]] const crd::KernelLevel<MeshKernels>& mesh_kernels() noexcept;
 
 } // namespace crd::geometry::mesh

@@ -20,10 +20,10 @@
 namespace gm = crd::geometry::mesh;
 namespace gp = crd::geometry::primitives;
 using crd::f32;
+using crd::KernelLevel;
 using crd::u32;
 using crd::u64;
 using crd::usize;
-using crd::math::KernelLevel;
 using crd::math::Vec3f;
 using gm::MeshKernels;
 
@@ -209,7 +209,7 @@ TEST_CASE("mesh kernels: the process runs the level its CPU selection resolves",
     const crd::CpuSelection& s = crd::cpu_selection();
     const KernelLevel<MeshKernels>& chosen = gm::mesh_kernels();
     INFO("selected " << crd::cpu_level_name(s.selected) << ", running " << crd::cpu_level_name(chosen.level));
-    CHECK(&chosen == &crd::math::select_kernel_level<MeshKernels>(gm::mesh_kernel_levels(), s.selected,
-                                                                  s.kernel_features, crd::math::kernel_level_cap()));
+    CHECK(&chosen == &crd::select_kernel_level<MeshKernels>(gm::mesh_kernel_levels(), s.selected, s.kernel_features,
+                                                            crd::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
 }

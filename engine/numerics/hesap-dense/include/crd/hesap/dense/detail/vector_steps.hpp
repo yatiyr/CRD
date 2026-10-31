@@ -6,8 +6,8 @@
 
 #pragma once
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/core/types.hpp>
-#include <crd/math/kernel_level.hpp>
 #include <crd/math/simd/backend.hpp>
 #include <crd/math/simd/vec4d.hpp>
 #include <crd/math/simd/vec8f.hpp>

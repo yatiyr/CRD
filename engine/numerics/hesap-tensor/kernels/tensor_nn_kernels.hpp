@@ -4,9 +4,9 @@
 
 #pragma once
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/tensor/tensor_kernels.hpp>
-#include <crd/math/kernel_level.hpp>
 
 namespace crd::hesap::tensor::inline CRD_MATH_LEVEL_NS
 {

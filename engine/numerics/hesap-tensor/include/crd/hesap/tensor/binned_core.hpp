@@ -9,8 +9,8 @@
 // these operations, so they live in the unit's level namespace (CRD_MATH_LEVEL_NS, ADR-0134 §5) and use the bit-cast
 // builtin, not std::bit_cast's shared instantiation. BinnedRungs is one plain type on every level.
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/core/types.hpp>
-#include <crd/math/kernel_level.hpp>
 
 namespace crd::hesap::tensor::detail
 {

@@ -10,9 +10,9 @@
 // (2026-10-28; re-run 2026-10-30): each codelet whole at avx2 and avx512, else tile bodies in parts of at most 150
 // lines, as MSVC's optimizer is superlinear in a function's and a unit's size and the portable level runs the bodies
 // a column at a time.
+#include <crd/core/kernel_level.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
-#include <crd/math/kernel_level.hpp>
 namespace crd::hesap::fft::gen::inline CRD_MATH_LEVEL_NS {
 // N=16 batched split-radix codelet (Vec4d over batch). GENERATED.
 void codelet16_batched(const crd::hesap::Complex<crd::f64>* in,

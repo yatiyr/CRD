@@ -6,8 +6,8 @@
 // its R x R systems. They live in the unit's level namespace (CRD_MATH_LEVEL_NS, ADR-0134 §5) and call only
 // crd/math/libm.hpp, so general code and every kernel level compile their own copies.
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/core/types.hpp>
-#include <crd/math/kernel_level.hpp>
 #include <crd/math/libm.hpp>
 
 #include <type_traits>

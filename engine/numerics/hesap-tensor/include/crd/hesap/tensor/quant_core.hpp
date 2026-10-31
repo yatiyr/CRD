@@ -9,9 +9,9 @@
 // times a zero inverse scale; any non-zero element when the scale is subnormal and its inverse overflows) quantizes as
 // zero (Q8_0: q = 0; u8: q = the zero point), so every level gives the same bytes for every input.
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/core/types.hpp>
 #include <crd/math/float_convert_scalar.hpp>
-#include <crd/math/kernel_level.hpp>
 #include <crd/math/libm.hpp>
 
 namespace crd::hesap::tensor

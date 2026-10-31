@@ -16,9 +16,9 @@
 namespace sf = crd::hesap::special;
 using crd::CpuLevel;
 using crd::f64;
+using crd::KernelLevel;
 using crd::u64;
 using crd::usize;
-using crd::math::KernelLevel;
 using sf::SpecialKernels;
 
 namespace
@@ -141,8 +141,8 @@ TEST_CASE("special kernels: the process runs the level its CPU selection resolve
     const auto levels = sf::special_kernel_levels();
     const KernelLevel<SpecialKernels>& chosen = sf::special_kernels();
     INFO("selected " << crd::cpu_level_name(s.selected) << ", running " << crd::cpu_level_name(chosen.level));
-    CHECK(&chosen == &crd::math::select_kernel_level<SpecialKernels>(levels, s.selected, s.kernel_features,
-                                                                     crd::math::kernel_level_cap()));
+    CHECK(&chosen ==
+          &crd::select_kernel_level<SpecialKernels>(levels, s.selected, s.kernel_features, crd::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
-    CHECK(crd::cpu_level_includes(crd::math::kernel_level_cap(), chosen.level));
+    CHECK(crd::cpu_level_includes(crd::kernel_level_cap(), chosen.level));
 }

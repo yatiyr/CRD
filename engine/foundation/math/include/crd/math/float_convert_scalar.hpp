@@ -2,13 +2,13 @@
 // rounding) of crd/math/float_convert.hpp: the API for single values and the bit-exact reference of every batch kernel.
 //
 // General code and each conversion kernel unit compile these functions into their own inline namespace
-// (CRD_MATH_LEVEL_NS, crd/math/kernel_level.hpp), so a unit built for a higher ISA never provides general code's copy.
+// (CRD_MATH_LEVEL_NS, crd/core/kernel_level.hpp), so a unit built for a higher ISA never provides general code's copy.
 // For the same reason the bit casts use the compiler builtin: std::bit_cast's instantiation would be one shared body.
 
 #pragma once
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/core/types.hpp>
-#include <crd/math/kernel_level.hpp>
 
 namespace crd::math::inline CRD_MATH_LEVEL_NS
 {

@@ -1,14 +1,14 @@
 // The hesap-fft kernels of this archive and the level the process runs (SIMD-DISPATCH).
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/hesap/fft/fft_dispatch.hpp>
-#include <crd/math/kernel_level.hpp>
 
 namespace crd::hesap::fft
 {
 namespace
 {
 
-using crd::math::KernelLevel;
+using crd::KernelLevel;
 
 // CRD_KERNELS_FFT: the levels crd_add_cpu_kernels built (../CMakeLists.txt). Each needs its entry below.
 constexpr int kLevelsWithBody = (1 << CRD_KERNEL_LEVEL_PORTABLE) | (1 << CRD_KERNEL_LEVEL_SSE2) |
@@ -38,7 +38,7 @@ std::span<const KernelLevel<FftKernels>> fft_kernel_levels() noexcept
 
 const KernelLevel<FftKernels>& fft_kernels() noexcept
 {
-    static const KernelLevel<FftKernels>& selected = crd::math::process_kernel_level<FftKernels>(kLevels);
+    static const KernelLevel<FftKernels>& selected = crd::process_kernel_level<FftKernels>(kLevels);
     return selected;
 }
 

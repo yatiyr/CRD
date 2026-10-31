@@ -25,9 +25,9 @@
 // every backend (shuffles, IEEE add/sub/mul, the single-rounded fmaddsub), so each kernel unit gives the same bits
 // (kernels/fft_kernels.cpp). The twiddles are plain data (SmallNTwiddles, fft_kernels.hpp) built once in general code.
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/fft/fft_kernels.hpp>
-#include <crd/math/kernel_level.hpp>
 #include <crd/math/simd/vec4d.hpp>
 #if CRD_SIMD_HAS_AVX512
 #include <crd/math/simd/vec8d.hpp>

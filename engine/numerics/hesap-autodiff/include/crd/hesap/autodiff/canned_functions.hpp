@@ -4,8 +4,8 @@
 
 #pragma once
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/hesap/autodiff/autodiff_kernels.hpp>
-#include <crd/math/kernel_level.hpp>
 
 namespace crd::hesap::autodiff::inline CRD_MATH_LEVEL_NS::canned
 {

@@ -6,7 +6,7 @@
 
 #include "../jet_probe_ops.hpp"
 
-#include <crd/math/kernel_level.hpp>
+#include <crd/core/kernel_level.hpp>
 
 namespace crd::test::jet_probe::inline CRD_MATH_LEVEL_NS
 {

@@ -29,7 +29,7 @@ namespace crd::test
     return crd::cpu_level_includes(s.detected, level);
 }
 
-template <typename Table> [[nodiscard]] bool kernel_level_runs_here(const crd::math::KernelLevel<Table>& level) noexcept
+template <typename Table> [[nodiscard]] bool kernel_level_runs_here(const crd::KernelLevel<Table>& level) noexcept
 {
     return kernel_level_runs_here(level.level, level.features);
 }

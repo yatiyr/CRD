@@ -10,11 +10,11 @@
 #include "kernel_levels.hpp"
 
 #include <crd/core/cpu_features.hpp>
+#include <crd/core/kernel_level.hpp>
 #include <crd/hesap/autodiff/autodiff_dispatch.hpp>
 #include <crd/hesap/autodiff/canned_functions.hpp>
 #include <crd/hesap/autodiff/jet.hpp>
 #include <crd/hesap/autodiff/jet_simd.hpp>
-#include <crd/math/kernel_level.hpp>
 #include <crd/math/simd/backend.hpp>
 
 #include <bit>
@@ -375,8 +375,8 @@ TEST_CASE("jets: the canned gradients' table holds portable and each body level 
     CHECK(avx2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx2)));
     CHECK(avx512 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx512)));
     const crd::CpuSelection& s = crd::cpu_selection();
-    CHECK(&ad::autodiff_kernels() == &crd::math::select_kernel_level<ad::AutodiffKernels>(
-                                         levels, s.selected, s.kernel_features, crd::math::kernel_level_cap()));
+    CHECK(&ad::autodiff_kernels() == &crd::select_kernel_level<ad::AutodiffKernels>(
+                                         levels, s.selected, s.kernel_features, crd::kernel_level_cap()));
 }
 
 TEST_CASE("jets: every canned gradient level the host runs gives general code's bits", "[autodiff][kernels]")

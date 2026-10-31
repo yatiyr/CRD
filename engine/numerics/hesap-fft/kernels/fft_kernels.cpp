@@ -8,6 +8,7 @@
 // or eight f32 columns (Vec4d, Vec8f), two tiles a step at avx512 (Vec8d, Vec16f). Only memory hints (prefetch,
 // non-temporal stores, the store fence) depend on the level; they change no value.
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/fft/detail/batched_codelets_gen.hpp>
@@ -17,7 +18,6 @@
 #include <crd/hesap/fft/detail/small_n_codelets.hpp>
 #include <crd/hesap/fft/detail/twiddle_codelets.hpp>
 #include <crd/hesap/fft/fft_kernels.hpp>
-#include <crd/math/kernel_level.hpp>
 #include <crd/math/simd/vec4d.hpp>
 #include <crd/math/simd/vec8f.hpp>
 #if CRD_SIMD_HAS_AVX512

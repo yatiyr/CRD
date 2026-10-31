@@ -13,8 +13,8 @@ namespace crd::hesap::fft
 {
 
 // Every level this archive built, ascending, and the one the process runs (resolved once from cpu_selection()).
-[[nodiscard]] std::span<const crd::math::KernelLevel<FftKernels>> fft_kernel_levels() noexcept;
-[[nodiscard]] const crd::math::KernelLevel<FftKernels>& fft_kernels() noexcept;
+[[nodiscard]] std::span<const crd::KernelLevel<FftKernels>> fft_kernel_levels() noexcept;
+[[nodiscard]] const crd::KernelLevel<FftKernels>& fft_kernels() noexcept;
 
 // The kernels of element type T (f64 or f32, the types FftPlan is built for) in a table, and in the one the process
 // runs.

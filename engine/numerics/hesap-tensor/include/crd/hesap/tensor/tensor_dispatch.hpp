@@ -12,7 +12,7 @@ namespace crd::hesap::tensor
 {
 
 // Every level this archive built, ascending, and the one the process runs (resolved once from cpu_selection()).
-[[nodiscard]] std::span<const crd::math::KernelLevel<TensorKernels>> tensor_kernel_levels() noexcept;
-[[nodiscard]] const crd::math::KernelLevel<TensorKernels>& tensor_kernels() noexcept;
+[[nodiscard]] std::span<const crd::KernelLevel<TensorKernels>> tensor_kernel_levels() noexcept;
+[[nodiscard]] const crd::KernelLevel<TensorKernels>& tensor_kernels() noexcept;
 
 } // namespace crd::hesap::tensor

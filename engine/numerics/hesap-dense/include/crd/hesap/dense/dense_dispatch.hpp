@@ -13,8 +13,8 @@ namespace crd::hesap::dense
 {
 
 // Every level this archive built, ascending, and the one the process runs (resolved once from cpu_selection()).
-[[nodiscard]] std::span<const crd::math::KernelLevel<DenseKernels>> dense_kernel_levels() noexcept;
-[[nodiscard]] const crd::math::KernelLevel<DenseKernels>& dense_kernels() noexcept;
+[[nodiscard]] std::span<const crd::KernelLevel<DenseKernels>> dense_kernel_levels() noexcept;
+[[nodiscard]] const crd::KernelLevel<DenseKernels>& dense_kernels() noexcept;
 
 // The element types with dense kernels; the others run their scalar loops.
 template <typename T>

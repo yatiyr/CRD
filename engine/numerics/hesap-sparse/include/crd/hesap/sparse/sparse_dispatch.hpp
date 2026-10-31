@@ -12,8 +12,8 @@ namespace crd::hesap::sparse
 {
 
 // Every level this archive built, ascending, and the one the process runs (resolved once from cpu_selection()).
-[[nodiscard]] std::span<const crd::math::KernelLevel<SparseKernels>> sparse_kernel_levels() noexcept;
-[[nodiscard]] const crd::math::KernelLevel<SparseKernels>& sparse_kernels() noexcept;
+[[nodiscard]] std::span<const crd::KernelLevel<SparseKernels>> sparse_kernel_levels() noexcept;
+[[nodiscard]] const crd::KernelLevel<SparseKernels>& sparse_kernels() noexcept;
 
 // The working set a sparse product counts as cache resident: the smallest L2 of the process's CPUs
 // (crd/core/cpu_features.hpp: CPUID's, else the OS's), 2 MiB where neither describes one. It picks the SELL sweep and

@@ -12,9 +12,9 @@
 
 #pragma once
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
-#include <crd/math/kernel_level.hpp>
 #include <crd/math/libm.hpp>
 #include <crd/math/simd/backend.hpp>
 

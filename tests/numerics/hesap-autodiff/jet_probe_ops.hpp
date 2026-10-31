@@ -6,9 +6,9 @@
 
 #include "jet_level_probe.hpp"
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/autodiff/jet_simd.hpp>
-#include <crd/math/kernel_level.hpp>
 
 namespace crd::test::jet_probe::inline CRD_MATH_LEVEL_NS
 {

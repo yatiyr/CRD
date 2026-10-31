@@ -1,6 +1,6 @@
 // The scalar transcendental tables of this archive and the level the process runs (SIMD-DISPATCH).
 
-#include <crd/math/kernel_level.hpp>
+#include <crd/core/kernel_level.hpp>
 #include <crd/math/scalar_dispatch.hpp>
 
 namespace crd::math

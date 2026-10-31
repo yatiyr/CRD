@@ -13,10 +13,10 @@
 namespace st = crd::hesap::stats;
 using crd::CpuLevel;
 using crd::f64;
+using crd::KernelLevel;
 using crd::u32;
 using crd::u64;
 using crd::usize;
-using crd::math::KernelLevel;
 using st::StatsKernels;
 
 namespace
@@ -206,8 +206,8 @@ TEST_CASE("stats kernels: the process runs the level its CPU selection resolves"
     const auto levels = st::stats_kernel_levels();
     const KernelLevel<StatsKernels>& chosen = st::stats_kernels();
     INFO("selected " << crd::cpu_level_name(s.selected) << ", running " << crd::cpu_level_name(chosen.level));
-    CHECK(&chosen == &crd::math::select_kernel_level<StatsKernels>(levels, s.selected, s.kernel_features,
-                                                                   crd::math::kernel_level_cap()));
+    CHECK(&chosen ==
+          &crd::select_kernel_level<StatsKernels>(levels, s.selected, s.kernel_features, crd::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
-    CHECK(crd::cpu_level_includes(crd::math::kernel_level_cap(), chosen.level));
+    CHECK(crd::cpu_level_includes(crd::kernel_level_cap(), chosen.level));
 }

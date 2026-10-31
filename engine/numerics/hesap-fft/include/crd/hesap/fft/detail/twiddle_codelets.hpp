@@ -5,8 +5,8 @@
 // (kernels/fft_twiddle_codelets_<k>.cpp, fft_codegen_split.py): each codelet whole at avx2 and
 // avx512, else tile bodies in parts of at most 150 lines (MSVC's optimizer is
 // superlinear in a function's and a unit's size).
+#include <crd/core/kernel_level.hpp>
 #include <crd/core/types.hpp>
-#include <crd/math/kernel_level.hpp>
 namespace crd::hesap::fft::detail::inline CRD_MATH_LEVEL_NS {
 // Radix-8 Stockham combine of one twiddle group, forward (f64): tiles of 4 columns on the lanes, the
 // last r % 4 on scalars, whose twiddle products round twice. GENERATED.

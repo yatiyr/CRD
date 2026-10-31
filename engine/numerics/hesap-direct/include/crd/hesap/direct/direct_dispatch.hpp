@@ -14,8 +14,8 @@ namespace crd::hesap::direct
 {
 
 // Every level this archive built, ascending, and the one the process runs (resolved once from cpu_selection()).
-[[nodiscard]] std::span<const crd::math::KernelLevel<DirectKernels>> direct_kernel_levels() noexcept;
-[[nodiscard]] const crd::math::KernelLevel<DirectKernels>& direct_kernels() noexcept;
+[[nodiscard]] std::span<const crd::KernelLevel<DirectKernels>> direct_kernel_levels() noexcept;
+[[nodiscard]] const crd::KernelLevel<DirectKernels>& direct_kernels() noexcept;
 
 // The kernels of element type T in a table, and in the one the process runs.
 template <typename T> [[nodiscard]] constexpr const DirectTypeKernels<T>& kernels_of(const DirectKernels& k) noexcept

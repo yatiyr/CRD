@@ -23,6 +23,7 @@
 #include "kernel_levels.hpp"
 
 #include <crd/core/cpu_features.hpp>
+#include <crd/core/kernel_level.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/tensor/batched_core.hpp>
 #include <crd/hesap/tensor/dtypes.hpp>
@@ -30,7 +31,6 @@
 #include <crd/hesap/tensor/tensor_dispatch.hpp>
 #include <crd/math/deterministic.hpp>
 #include <crd/math/hyperbolic.hpp>
-#include <crd/math/kernel_level.hpp>
 #include <crd/math/select.hpp>
 #include <crd/math/transcendental.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -47,10 +47,10 @@ using crd::CpuLevel;
 using crd::f32;
 using crd::f64;
 using crd::i64;
+using crd::KernelLevel;
 using crd::u32;
 using crd::u64;
 using crd::usize;
-using crd::math::KernelLevel;
 using tn::BlockQ8Zero;
 using tn::PermuteRegion;
 using tn::PermuteWalk;
@@ -2918,10 +2918,10 @@ TEST_CASE("tensor kernels: the process runs the level its CPU selection resolves
     const KernelLevel<TensorKernels>& chosen = tn::tensor_kernels();
     INFO("selected " << crd::cpu_level_name(s.selected) << ", running " << crd::cpu_level_name(chosen.level)
                      << variant_suffix(chosen));
-    CHECK(&chosen == &crd::math::select_kernel_level<TensorKernels>(levels, s.selected, s.kernel_features,
-                                                                    crd::math::kernel_level_cap()));
+    CHECK(&chosen ==
+          &crd::select_kernel_level<TensorKernels>(levels, s.selected, s.kernel_features, crd::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
-    CHECK(crd::cpu_level_includes(crd::math::kernel_level_cap(), chosen.level));
+    CHECK(crd::cpu_level_includes(crd::kernel_level_cap(), chosen.level));
     CHECK(s.kernel_features.has_all(chosen.features));
 #if CRD_TEST_KERNEL_LEVELS_TOP == CRD_KERNEL_LEVEL_AVX2 || CRD_TEST_KERNEL_LEVELS_TOP == CRD_KERNEL_LEVEL_AVX512
     // The avx2 tables (built only here): with usable AVX-VNNI the dpbusd dots, under a forced level the plain ones.

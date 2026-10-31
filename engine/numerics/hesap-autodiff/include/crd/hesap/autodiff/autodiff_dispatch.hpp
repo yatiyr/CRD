@@ -12,7 +12,7 @@ namespace crd::hesap::autodiff
 {
 
 // Every level this archive built, ascending, and the one the process runs (resolved once from cpu_selection()).
-[[nodiscard]] std::span<const crd::math::KernelLevel<AutodiffKernels>> autodiff_kernel_levels() noexcept;
-[[nodiscard]] const crd::math::KernelLevel<AutodiffKernels>& autodiff_kernels() noexcept;
+[[nodiscard]] std::span<const crd::KernelLevel<AutodiffKernels>> autodiff_kernel_levels() noexcept;
+[[nodiscard]] const crd::KernelLevel<AutodiffKernels>& autodiff_kernels() noexcept;
 
 } // namespace crd::hesap::autodiff

@@ -1,14 +1,14 @@
 // The geometry-mesh kernels of this archive and the level the process runs (SIMD-DISPATCH).
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/geometry/mesh/mesh_dispatch.hpp>
-#include <crd/math/kernel_level.hpp>
 
 namespace crd::geometry::mesh
 {
 namespace
 {
 
-using crd::math::KernelLevel;
+using crd::KernelLevel;
 
 // CRD_KERNELS_MESH: the levels crd_add_cpu_kernels built (../CMakeLists.txt). Each needs its entry below.
 constexpr int kLevelsWithBody = (1 << CRD_KERNEL_LEVEL_PORTABLE) | (1 << CRD_KERNEL_LEVEL_SSE2) |
@@ -38,7 +38,7 @@ std::span<const KernelLevel<MeshKernels>> mesh_kernel_levels() noexcept
 
 const KernelLevel<MeshKernels>& mesh_kernels() noexcept
 {
-    static const KernelLevel<MeshKernels>& selected = crd::math::process_kernel_level<MeshKernels>(kLevels);
+    static const KernelLevel<MeshKernels>& selected = crd::process_kernel_level<MeshKernels>(kLevels);
     return selected;
 }
 

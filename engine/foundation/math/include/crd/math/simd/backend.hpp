@@ -8,14 +8,14 @@
 // The level is never read from compiler ISA macros (`__AVX2__`), which MSVC defines only under /arch.
 //
 // Every type and function of these headers lives in the unit's level namespace (CRD_MATH_LEVEL_NS,
-// crd/math/kernel_level.hpp), so a copy compiled for one level never provides another level's symbol. The headers
+// crd/core/kernel_level.hpp), so a copy compiled for one level never provides another level's symbol. The headers
 // therefore call no inline function of the standard library: lane math goes through crd/math/libm.hpp.
 
 #pragma once
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
-#include <crd/math/kernel_level.hpp>
 
 // CRD_SIMD_UNIT_LEVEL: the CRD_KERNEL_LEVEL_* value whose backend this unit's types use.
 #if defined(CRD_KERNEL_LEVEL)

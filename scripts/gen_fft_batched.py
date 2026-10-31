@@ -623,9 +623,9 @@ def main(mode="hybrid"):
     print("// (kernels/fft_batched_codelets_<k>.cpp, fft_codegen_split.py): each codelet whole at avx2 and avx512,")
     print("// the largest in parts under MSVC's optimization limit, else tile bodies in parts of at most")
     print(f"// {SPLIT_BUDGET} lines (MSVC's optimizer is superlinear in a function's and a unit's size).")
+    print("#include <crd/core/kernel_level.hpp>")
     print("#include <crd/core/types.hpp>")
     print("#include <crd/hesap/complex.hpp>")
-    print("#include <crd/math/kernel_level.hpp>")
     print("namespace crd::hesap::fft::gen::inline CRD_MATH_LEVEL_NS {")
     for n in (128, 256):
         SCHED_VARIANT = "belady" if (mode == "hybrid2" and n == 128) else sched_of["f64"]

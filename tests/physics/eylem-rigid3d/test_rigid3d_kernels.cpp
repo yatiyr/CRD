@@ -29,12 +29,12 @@
 
 namespace er = crd::eylem_rigid3d;
 using crd::f32;
+using crd::KernelLevel;
 using crd::u32;
 using crd::u64;
 using crd::u8;
 using crd::usize;
 using crd::eylem::RigidBody;
-using crd::math::KernelLevel;
 using er::BodyChunk;
 using er::kChunkLanes;
 using er::Rigid3dKernels;

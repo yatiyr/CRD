@@ -8,9 +8,9 @@
 // (kernels/fft_batched_codelets_<k>.cpp, fft_codegen_split.py): each codelet whole at avx2 and avx512,
 // the largest in parts under MSVC's optimization limit, else tile bodies in parts of at most
 // 150 lines (MSVC's optimizer is superlinear in a function's and a unit's size).
+#include <crd/core/kernel_level.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
-#include <crd/math/kernel_level.hpp>
 namespace crd::hesap::fft::gen::inline CRD_MATH_LEVEL_NS {
 // N=128 batched split-radix codelet (f64). GENERATED.
 void codelet128_batched(const crd::hesap::Complex<crd::f64>* in,

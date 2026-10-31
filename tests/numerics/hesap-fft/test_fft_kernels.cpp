@@ -27,13 +27,13 @@
 
 namespace fft = crd::hesap::fft;
 using crd::CpuLevel;
+using crd::KernelLevel;
 using crd::u32;
 using crd::u64;
 using crd::usize;
 using crd::containers::Array;
 using crd::containers::Span;
 using crd::hesap::Complex;
-using crd::math::KernelLevel;
 using fft::FftDirection;
 using fft::FftKernels;
 
@@ -762,8 +762,8 @@ TEST_CASE("fft kernels: the process runs the level its CPU selection resolves", 
     const auto levels = fft::fft_kernel_levels();
     const KernelLevel<FftKernels>& chosen = fft::fft_kernels();
     INFO("selected " << crd::cpu_level_name(s.selected) << ", running " << crd::cpu_level_name(chosen.level));
-    CHECK(&chosen == &crd::math::select_kernel_level<FftKernels>(levels, s.selected, s.kernel_features,
-                                                                 crd::math::kernel_level_cap()));
+    CHECK(&chosen ==
+          &crd::select_kernel_level<FftKernels>(levels, s.selected, s.kernel_features, crd::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
-    CHECK(crd::cpu_level_includes(crd::math::kernel_level_cap(), chosen.level));
+    CHECK(crd::cpu_level_includes(crd::kernel_level_cap(), chosen.level));
 }

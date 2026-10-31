@@ -7,8 +7,8 @@
 
 #pragma once
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/core/types.hpp>
-#include <crd/math/kernel_level.hpp>
 
 namespace crd::math
 {

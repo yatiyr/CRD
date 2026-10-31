@@ -927,7 +927,7 @@ int main(int argc, char** argv)
     j.str("detected", crd::cpu_level_name(cpu.detected));
     j.str("selected", crd::cpu_level_name(cpu.selected));
     j.str("override", crd::cpu_override_name(cpu.override_status));
-    j.str("kernel_cap", crd::cpu_level_name(crd::math::kernel_level_cap()));
+    j.str("kernel_cap", crd::cpu_level_name(crd::kernel_level_cap()));
     if (crt.crt_level >= 0)
     {
         j.u("crt", static_cast<u64>(crt.crt_level));

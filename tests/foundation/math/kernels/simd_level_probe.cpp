@@ -5,9 +5,9 @@
 
 #include "../simd_level_probe.hpp"
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/math/exp_log_core.hpp>
 #include <crd/math/hyperbolic.hpp>
-#include <crd/math/kernel_level.hpp>
 #include <crd/math/power.hpp>
 #include <crd/math/select.hpp>
 #include <crd/math/simd/convert.hpp>

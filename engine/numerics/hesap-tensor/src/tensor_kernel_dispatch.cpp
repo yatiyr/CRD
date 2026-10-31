@@ -1,14 +1,14 @@
 // The hesap-tensor kernels of this archive and the level the process runs (SIMD-DISPATCH).
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/hesap/tensor/tensor_dispatch.hpp>
-#include <crd/math/kernel_level.hpp>
 
 namespace crd::hesap::tensor
 {
 namespace
 {
 
-using crd::math::KernelLevel;
+using crd::KernelLevel;
 
 // CRD_KERNELS_TENSOR: the levels crd_add_cpu_kernels built (../CMakeLists.txt), and CRD_KERNELS_TENSOR_AVX2_AVXVNNI
 // and CRD_KERNELS_TENSOR_AVX512_AVX512VNNI its variants. Each needs its entry below.
@@ -45,7 +45,7 @@ std::span<const KernelLevel<TensorKernels>> tensor_kernel_levels() noexcept
 
 const KernelLevel<TensorKernels>& tensor_kernels() noexcept
 {
-    static const KernelLevel<TensorKernels>& selected = crd::math::process_kernel_level<TensorKernels>(kLevels);
+    static const KernelLevel<TensorKernels>& selected = crd::process_kernel_level<TensorKernels>(kLevels);
     return selected;
 }
 

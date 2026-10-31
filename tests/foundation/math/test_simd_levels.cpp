@@ -7,7 +7,7 @@
 #include "simd_level_probe.hpp"
 
 #include <crd/core/cpu_features.hpp>
-#include <crd/math/kernel_level.hpp>
+#include <crd/core/kernel_level.hpp>
 #include <crd/math/select.hpp>
 #include <crd/math/simd/backend.hpp>
 

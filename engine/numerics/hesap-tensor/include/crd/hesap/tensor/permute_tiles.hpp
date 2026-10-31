@@ -6,9 +6,9 @@
 // (../../../../kernels/tensor_kernels.cpp, the f32, f64 and complex bodies) both compile them, so they live in the
 // unit's level namespace (CRD_MATH_LEVEL_NS, ADR-0134 §5).
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/tensor/tensor_kernels.hpp>
-#include <crd/math/kernel_level.hpp>
 
 namespace crd::hesap::tensor::detail::inline CRD_MATH_LEVEL_NS
 {

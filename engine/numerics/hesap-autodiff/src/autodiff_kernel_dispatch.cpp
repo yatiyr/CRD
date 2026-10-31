@@ -1,15 +1,15 @@
 // The hesap-autodiff kernels of this archive and the level the process runs (SIMD-DISPATCH).
 
 #include <crd/core/cpu_features.hpp>
+#include <crd/core/kernel_level.hpp>
 #include <crd/hesap/autodiff/autodiff_dispatch.hpp>
-#include <crd/math/kernel_level.hpp>
 
 namespace crd::hesap::autodiff
 {
 namespace
 {
 
-using crd::math::KernelLevel;
+using crd::KernelLevel;
 
 // CRD_KERNELS_AUTODIFF: the levels crd_add_cpu_kernels built (../CMakeLists.txt). Each needs its entry below.
 constexpr int kLevelsWithBody = (1 << CRD_KERNEL_LEVEL_PORTABLE) | (1 << CRD_KERNEL_LEVEL_SSE2) |
@@ -39,7 +39,7 @@ std::span<const KernelLevel<AutodiffKernels>> autodiff_kernel_levels() noexcept
 
 const KernelLevel<AutodiffKernels>& autodiff_kernels() noexcept
 {
-    static const KernelLevel<AutodiffKernels>& selected = crd::math::process_kernel_level<AutodiffKernels>(kLevels);
+    static const KernelLevel<AutodiffKernels>& selected = crd::process_kernel_level<AutodiffKernels>(kLevels);
     return selected;
 }
 

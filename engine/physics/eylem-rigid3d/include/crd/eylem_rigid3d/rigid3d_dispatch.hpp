@@ -12,7 +12,7 @@ namespace crd::eylem_rigid3d
 {
 
 // Every level this archive built, ascending, and the one the process runs (resolved once from cpu_selection()).
-[[nodiscard]] std::span<const crd::math::KernelLevel<Rigid3dKernels>> rigid3d_kernel_levels() noexcept;
-[[nodiscard]] const crd::math::KernelLevel<Rigid3dKernels>& rigid3d_kernels() noexcept;
+[[nodiscard]] std::span<const crd::KernelLevel<Rigid3dKernels>> rigid3d_kernel_levels() noexcept;
+[[nodiscard]] const crd::KernelLevel<Rigid3dKernels>& rigid3d_kernels() noexcept;
 
 } // namespace crd::eylem_rigid3d

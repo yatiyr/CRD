@@ -1,7 +1,7 @@
 // The batch small-float conversion kernels of this archive and the level the process runs (SIMD-DISPATCH).
 
+#include <crd/core/kernel_level.hpp>
 #include <crd/math/float_convert.hpp>
-#include <crd/math/kernel_level.hpp>
 
 namespace crd::math
 {

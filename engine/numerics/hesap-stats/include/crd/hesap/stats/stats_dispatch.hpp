@@ -12,7 +12,7 @@ namespace crd::hesap::stats
 {
 
 // Every level this archive built, ascending, and the one the process runs (resolved once from cpu_selection()).
-[[nodiscard]] std::span<const crd::math::KernelLevel<StatsKernels>> stats_kernel_levels() noexcept;
-[[nodiscard]] const crd::math::KernelLevel<StatsKernels>& stats_kernels() noexcept;
+[[nodiscard]] std::span<const crd::KernelLevel<StatsKernels>> stats_kernel_levels() noexcept;
+[[nodiscard]] const crd::KernelLevel<StatsKernels>& stats_kernels() noexcept;
 
 } // namespace crd::hesap::stats
