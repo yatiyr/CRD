@@ -135,7 +135,21 @@ All on the track machine, which `bench_vm.py status` reports as n2-standard-8, U
 **Validators.** `check-registers.py`, `check-generated.py`, `gen-comply-rules.py --check`,
 `check-capability-owners.py`, `check-docs.py` and `check-allman-braces.py` pass.
 
-The track machine ran from 20:11 to 20:52 and from 20:55 to 21:05 UTC, about 0.84 h, and is stopped.
+**A follow-up commit after the first push** (`fix(comply)`) closes three gaps found in review:
+- The concurrent rule and sanctions tests built their requests and texts inside the second thread, where helpers
+  assert through Catch2, which is not thread-safe. The TSan lane would have flagged this. Both are now made on the
+  main thread, and the second thread only queries or applies.
+- The fold's `count` is a `u32`. A promoted byte compared with an unsigned value is the shape MSVC refused in
+  `fix(net)`.
+- Two rule-test lines that the error rename pushed past 120 columns are wrapped.
+
+Verification of that commit on the track machine:
+- `crd-comply-tests`: 37 cases. `crd-core-tests [text-fold],[utf8]`: 7 cases.
+- Strict tidy is clean on the five changed files.
+- The scoped CTests pass. `crd-check-isa-isolation` passes again after rebuilding three test targets: after the
+  rebase, track A's new test sources had left them with stale objects.
+
+The track machine ran from 20:11 to 20:52, 20:55 to 21:05 and 21:12 to 21:21 UTC, about 0.98 h, and is stopped.
 
 ## Remaining in COMPLY.1
 
