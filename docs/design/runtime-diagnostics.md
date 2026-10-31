@@ -3180,8 +3180,9 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   MT/s, type, form factor, slot, maker, part) from the SMBIOS table: Windows' `RSMB` firmware table for every process;
   on Linux `/sys/firmware/dmi/tables/DMI` when readable (root), else the `/sys/class/dmi/id` strings and no module
   list. Each part carries a known flag; an unread part is reported unknown, never guessed. `host_hardware_identity()`
-  reads it once; flight bundles carry it, the importer decodes it, `bundle.inspect` reports it last (after the
-  symbols) with `same_as_host` and the differing fields, and `diag.capabilities` reports the host's.
+  reads it once, at `FlightRecorder::init` (never on the fatal delivery); flight bundles carry it, the importer
+  decodes it, `bundle.inspect` reports it last (after the symbols) with `same_as_host` and the differing fields, and
+  `diag.capabilities` reports the host's.
 
 ## Existing programme ownership after DIAG
 

@@ -11,8 +11,9 @@
 // unknown (its kHardware*Known flag clear), never guessed: Linux's SMBIOS table is root-only, so an unprivileged Linux
 // process reports the firmware strings from /sys/class/dmi/id and no modules.
 //
-// Reading it touches the registry, sysfs and the firmware table, so it never runs on a fatal path: a host reads it
-// once (host_hardware_identity()) and every bundle copies that.
+// Reading it touches the registry, sysfs and the firmware table, so it never runs on a fatal path:
+// host_hardware_identity() reads it once, FlightRecorder::init reads it before any capture can be delivered, and every
+// bundle copies that.
 //
 // On-disk payload (little-endian, versioned; the bundle section CRC covers it):
 //   u32 magic 'CHW1', u32 version, u32 flags (kHardware*Known, a closed set), u32 cpu signature, u32 microcode,
@@ -107,7 +108,8 @@ struct HardwareIdentity
 [[nodiscard]] HardwareIdentity
 read_hardware_identity(crd::memory::IAllocator* alloc = crd::memory::default_allocator());
 
-// This machine, read once at the first call (thread-safe); a host calls it at start so a bundle never reads the OS.
+// This machine, read once at the first call (thread-safe); FlightRecorder::init calls it, so a bundle never reads
+// the OS.
 [[nodiscard]] const HardwareIdentity& host_hardware_identity();
 
 // Fills the firmware strings and the module list of `out` from an SMBIOS structure table (Windows' RSMB table after

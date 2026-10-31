@@ -46,3 +46,7 @@ little-endian helpers and cursor are deleted.
 - Teeth, each restored, rebuilt and rerun green: a walk that calls a cut table complete failed every cut; dropping
   the KiB size's rounding failed the hostile-structures case; reading the low registry word always failed the
   8-byte layout.
+- Found in review: nothing read the identity before the first bundle, so a process whose first bundle was a fatal
+  delivery would read the registry, sysfs and the firmware table inside the crash path. `FlightRecorder::init` now
+  reads it, before any capture can be delivered. No seam observes when a static is first read, so this ordering has
+  no test of its own; the `[flight]` cases pass with it.

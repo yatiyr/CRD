@@ -1018,6 +1018,9 @@ FlightPolicyStatus FlightRecorder::init(const FlightPolicy& policy) noexcept
     impl->replay_length = copy_clipped(impl->replay, kFlightRecipeBytes, kNoRecipe, nullptr);
     add_live(impl);
     m_impl = impl;
+    // Every bundle copies the machine (HW-RESILIENCE.2), a fatal delivery's included; reading it touches the registry,
+    // sysfs and the firmware table, so it is read here, where a capture can first be delivered, never on that path.
+    (void)host_hardware_identity();
     return FlightPolicyStatus::Committed;
 }
 
