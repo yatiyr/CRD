@@ -2087,8 +2087,9 @@ class Access(unittest.TestCase):
             coordinator_main.listeners({}, {'CERID_CI_LISTEN': '1.2.3.4:1=everything'})
         config, problems = coordinator_main.load_config(ROOT / 'ci/coordinator.json', {
             'CERID_CI_REPOSITORY_URL': 'git@example:o/r.git'})
-        self.assertEqual((problems, config['ui']['mode'], config['repositories']['cerid']['poll']['interval_seconds']),
-                         ([], 'iap-tunnel', 60))
+        self.assertEqual((problems, config['ui']['mode']), ([], 'iap-tunnel'))
+        self.assertNotIn('poll', config['repositories']['cerid'], 'checkpoint builds only: no build per push')
+        self.assertNotIn('schedules', config['repositories']['cerid'], 'checkpoint builds only: no nightly')
         self.assertNotIn('webhook_secret', config['repositories']['cerid'], 'webhooks are an optional add-on')
 
 

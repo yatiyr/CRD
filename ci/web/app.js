@@ -466,7 +466,7 @@ if (typeof document !== 'undefined') {
   async function builds() {
     const data = await api('builds?limit=100');
     view.innerHTML = '<div class="page-head"><div class="grow"><h1>Builds</h1><p class="muted">Newest first; updates ' +
-      'live. Polling builds every new head of the watched branches within a minute.</p></div><div class="row">' +
+      'live. Builds start at checkpoints: New build, or python ci/ops.py build start.</p></div><div class="row">' +
       '<label class="visually-hidden" for="filter">Filter builds</label><input id="filter" type="search" ' +
       'placeholder="Filter builds (/)" autocomplete="off"><label class="visually-hidden" for="state-filter">State' +
       '</label><select id="state-filter"><option value="">All states</option><option value="failed">Failed</option>' +

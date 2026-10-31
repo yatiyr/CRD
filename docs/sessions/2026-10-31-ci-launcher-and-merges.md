@@ -131,6 +131,12 @@ Done in the `cerid-ci` project, following [the setup recipe](../recipes/ci-platf
 - **36 DX12 tests failed on every Windows lane of build #30 before testing anything:** they run under the D3D12
   debug layer, which Windows ships only in the Graphics Tools optional feature, and the baked image lacked it
   (`DebugLayerUnavailable`). The Windows bake now installs Graphics Tools and proves `d3d12SDKLayers.dll` is present.
+- **Checkpoint builds (user order, about 20:00):** "we should not waste hell of a lot money on testing all the time.
+  We should implement, test on our own machine or the machine we are building on ... and after certain checkpoints
+  we do CI's". The coordinator no longer polls `main` or runs the nightly and weekly schedules. The operator starts a
+  build at a checkpoint (a row or group closing, evidence a Done needs, a batch of risky changes), and it tests
+  everything changed since the last passing build. The tracks test on their own machines; GitHub Actions stays free
+  while the repository is public.
 
 ## Workspace
 

@@ -5,8 +5,10 @@
 > [ADR-0135](../decisions/0135-cerid-ci-platform.md) (the orchestrator: §12 to §16); contract:
 > [CI platform](../design/ci-platform.md); day-to-day operations: [runbooks](ci-platform-runbooks.md).
 
-The default route has no public endpoint at all: **polling** finds new commits (no webhook has to reach the
-coordinator) and the web UI opens through a **Google IAP TCP tunnel** from your own computer, under your own Google
+Builds run at **checkpoints** (user order 2026-10-31): the operator starts one with **New build** or
+`python ci/ops.py build start`, and it tests everything changed since the branch's last passing build. Nothing builds
+per push or nightly; a repository's `poll` and `schedules` keys in `ci/coordinator.json` turn that back on. There is
+no public endpoint at all, and the web UI opens through a **Google IAP TCP tunnel** from your own computer, under your own Google
 login. Tailscale (for a phone) and webhooks are optional add-ons; Cloudflare is the documented alternative.
 
 There are two parts. **Part A is yours**: four steps that involve money and your Google account. **Part B is the
@@ -333,8 +335,8 @@ cerid-ci-launcher 8780` to `localhost:8780` (another free port if that one is ta
 answers and opens the browser. Ctrl+C closes the tunnel. Set `CERID_CI_GCP_PROJECT` (or pass `--project`) when the
 project ID is not `cerid-ci`.
 
-*Check:* the browser shows the Builds page; the header names you as "operator (IAP tunnel)". The first build
-appears within a minute of the next push to `main` (polling every 60 s), or start one with **New build**.
+*Check:* the browser shows the Builds page; the header names you as "operator (IAP tunnel)". Start the first
+build with **New build** (builds run at checkpoints).
 
 ## Optional pieces
 
@@ -355,8 +357,8 @@ appears within a minute of the next push to `main` (polling every 60 s), or star
 <a id="webhooks-and-commit-status"></a>
 ### Webhooks and commit status
 
-Polling (every 60 s, one `git ls-remote` per watched branch: about 1,440 small requests a day, far inside every
-host's limits, and no inbound door) is the default because it needs no public endpoint. A webhook makes builds
+Polling (a repository's `poll` key: every 60 s, one `git ls-remote` per watched branch, no inbound door) is off:
+builds run at checkpoints. A webhook makes builds
 start within seconds but needs the coordinator reachable from the git host: add it together with a public route
 (Cloudflare below). Then create the secret `cerid-webhook-secret` (`openssl rand -hex 32 | gcloud secrets create
 cerid-webhook-secret --data-file=-`), add `"webhook_secret": "cerid-webhook-secret"` to the repository in
