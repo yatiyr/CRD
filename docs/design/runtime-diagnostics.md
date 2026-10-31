@@ -3165,6 +3165,23 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   - `Autosave` says when to commit (the most work a crash can cost, 2 s by default) and when to fold the journal
     into a snapshot (age or size). Documents apply all of this through [DOC.2](../ROADMAP.md#slice-doc.2); the cook
     database, artifacts, pack and journal use it now.
+- Installer, patch and update chunks use the same family through [SHIP.2](../ROADMAP.md#slice-ship.2) and
+  [SHIP.3](../ROADMAP.md#slice-ship.3); the network's plaintext hash and state hashes belong to
+  [NET.3](../ROADMAP.md#slice-net.3) and [4.2c](../ROADMAP.md#slice-4.2c).
+
+[HW-RESILIENCE.2](../ROADMAP.md#slice-hw-resilience.2) names the machine a failure happened on.
+
+- CPU identity (`crd::read_cpu_identity`, crd-core with the rest of the CPU's reading): vendor and brand string from
+  CPUID on x64, the signature (CPUID 1 EAX; MIDR_EL1 on ARM64, its implementer and part named from a table when the OS
+  gives no name), and the loaded microcode from Windows' `Update Revision` registry bytes or Linux's sysfs (else
+  `/proc/cpuinfo`). A hypervisor's all-ones placeholder counts as unknown.
+- Hardware identity (`crd/perf/hardware_identity.hpp`, bundle section 8, magic `CHW1`): the CPU identity, logical
+  CPUs and total memory, BIOS, system and board strings, and each populated memory module (size, rated and configured
+  MT/s, type, form factor, slot, maker, part) from the SMBIOS table: Windows' `RSMB` firmware table for every process;
+  on Linux `/sys/firmware/dmi/tables/DMI` when readable (root), else the `/sys/class/dmi/id` strings and no module
+  list. Each part carries a known flag; an unread part is reported unknown, never guessed. `host_hardware_identity()`
+  reads it once; flight bundles carry it, the importer decodes it, `bundle.inspect` reports it last (after the
+  symbols) with `same_as_host` and the differing fields, and `diag.capabilities` reports the host's.
 
 ## Existing programme ownership after DIAG
 
