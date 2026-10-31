@@ -12,6 +12,7 @@ tags: [resources, arch, cooker]
 > Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
 **Amended 2026-10-27:** [crdr v2 content packaging](#amendment-2026-10-27-crdr-v2-content-packaging).
+**Amended 2026-10-31:** [container version 3, checksums](#amendment-2026-10-31-container-version-3-checksums).
 
 ## Context
 
@@ -186,6 +187,24 @@ builds crdr v2 in `crd-resources`. What v2 adds to this decision:
   entitlements, is documented as a deterrent, not security against a determined user. No kernel component ships.
 - **Determinism.** Section 6 still holds: [SUPPLY.4](../ROADMAP.md#slice-supply.4)'s double build covers v2 packs and
   update metadata.
+
+## Amendment 2026-10-31: container version 3, checksums
+
+[HW-RESILIENCE.1](../ROADMAP.md#slice-hw-resilience.1) delivers the integrity bullet of the 2026-10-27 amendment for
+every container now ([session](../sessions/2026-10-31-hw-resilience-crdr-integrity.md)); the rest of that packaging
+stays with [SHIP.2](../ROADMAP.md#slice-ship.2).
+
+- **Layout.** The header grows to 40 bytes and each chunk header to 40: a reserved word and the CRC-32C of the
+  header's first 36 bytes; per chunk, the XXH3-64 of a compressed chunk's decoded bytes (0 for a stored chunk) and
+  the CRC-32C of its stored bytes. The version is 3: version 2 already names the DX12 device-removal bundle, which
+  shares the `CRDR` magic. A reader refuses every other version; a cooker cache of an older version is cooked again.
+- **Why two checks.** CRC-32C guards what storage and transfer flip: it detects every error burst of up to 32 bits,
+  which a hash does not promise, and runs on the SSE4.2, carry-less multiply and ARM64 CRC32 paths of the checksum
+  family. XXH3-64 guards the decoder's output, where a fault is not a burst and a 64-bit hash misses one in 2^64.
+- **Reading.** Each header is checked before any of its fields is trusted, each stored payload after the read and
+  each decoded payload after decompression, each failure a typed `CrdrError` naming the chunk. A loader refused
+  for its bytes is read once more from the source by the resource manager (the mount and the reload too), so a
+  transient fault costs one re-read and a lasting one a typed failure with a clear message, never bad data.
 
 ## References
 
