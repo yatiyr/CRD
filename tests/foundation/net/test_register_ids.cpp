@@ -48,7 +48,7 @@ TEST_CASE("Register ids: GREASE values are exactly the RFC 8701 pattern 0x?A?A",
     for (u32 value = 0U; value <= 0xFFFFU; ++value)
     {
         const auto id      = static_cast<u16>(value);
-        const bool pattern = (id & 0x0F0FU) == 0x0A0AU && (id >> 12U) == ((id >> 4U) & 0x0FU);
+        const bool pattern = (value & 0x0F0FU) == 0x0A0AU && (value >> 12U) == ((value >> 4U) & 0x0FU);
         CHECK(is_grease(id) == pattern);
         matches += pattern ? 1U : 0U;
     }
