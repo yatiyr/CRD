@@ -136,13 +136,17 @@ set(_CRD_KERNEL_FLAGS_portable "")
 set(_CRD_KERNEL_FLAGS_sse2 "")
 set(_CRD_KERNEL_FLAGS_neon "")
 if(MSVC)
+    # clang-cl's spelling, which clang-tidy also analyses cl's units with (_crd_add_kernel_unit).
+    set(_CRD_KERNEL_CLANG_CL_FLAGS_sse42 /clang:-march=x86-64-v2)
+    set(_CRD_KERNEL_CLANG_CL_FLAGS_avx2 /arch:AVX2)
+    set(_CRD_KERNEL_CLANG_CL_FLAGS_avx512 /arch:AVX512)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        set(_CRD_KERNEL_FLAGS_sse42 /clang:-march=x86-64-v2)
+        set(_CRD_KERNEL_FLAGS_sse42 ${_CRD_KERNEL_CLANG_CL_FLAGS_sse42})
     else()
         set(_CRD_KERNEL_FLAGS_sse42 /arch:SSE4.2)
     endif()
-    set(_CRD_KERNEL_FLAGS_avx2 /arch:AVX2)
-    set(_CRD_KERNEL_FLAGS_avx512 /arch:AVX512)
+    set(_CRD_KERNEL_FLAGS_avx2 ${_CRD_KERNEL_CLANG_CL_FLAGS_avx2})
+    set(_CRD_KERNEL_FLAGS_avx512 ${_CRD_KERNEL_CLANG_CL_FLAGS_avx512})
 elseif(_crd_arch_x64)
     set(_CRD_KERNEL_FLAGS_portable -march=x86-64)
     set(_CRD_KERNEL_FLAGS_sse2 -march=x86-64)
@@ -195,6 +199,14 @@ function(_crd_add_kernel_unit archive objects level feature)
     # whole fft codelets took 1.4 to 3.9 MB frames and overflowed the stack (fft_codegen_split.py). A kernel errs.
     if(MSVC AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         target_compile_options(${objects} PRIVATE /we4883)
+    endif()
+    # clang-tidy drops every /-spelled flag of the compile command it is handed (the CMAKE Tidy block of the root
+    # CMakeLists), /arch included, so the level is restated through --extra-arg, the channel it honors: the analysis
+    # sees the instruction set the unit is compiled for, which CRD_TARGET_X64_FMA (crd/core/kernel_level.hpp) reads.
+    get_target_property(tidy ${objects} CXX_CLANG_TIDY)
+    if(MSVC AND tidy AND DEFINED _CRD_KERNEL_CLANG_CL_FLAGS_${level})
+        set_target_properties(${objects} PROPERTIES
+                              CXX_CLANG_TIDY "${tidy};--extra-arg=${_CRD_KERNEL_CLANG_CL_FLAGS_${level}}")
     endif()
     # Machine code at compile time, never link-time IL: a unit is entered only through its table, so link-time code
     # generation has no call to inline across it, yet it ran the unit's code generation again in every image that

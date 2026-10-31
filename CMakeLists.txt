@@ -1151,7 +1151,8 @@ if(CRD_ENABLE_CLANG_TIDY)
         #      ANALYSED. General code now builds at the baseline (no /arch), and kernel units select their bodies on
         #      CRD_KERNEL_LEVEL, a dash-spelled define that reaches the analysis; clang reports an intrinsic's missing
         #      target feature only in code generation, which clang-tidy never runs (ADR-0134 §4-5).
-        # Fix: re-state the analysis-relevant flags through `--extra-arg`, the one channel clang-tidy honors.
+        # Fix: re-state the analysis-relevant flags through `--extra-arg`, the one channel clang-tidy honors; each
+        # kernel unit adds its level's ISA flag there (cmake/CrdSimd.cmake, _crd_add_kernel_unit).
         set(_crd_tidy_extra_args "")
         if(MSVC)
             list(APPEND _crd_tidy_extra_args --extra-arg=/EHsc)
