@@ -57,7 +57,8 @@ using Wide = Group;
 template <typename V> inline constexpr u64 kLanes = sizeof(V) / sizeof(f32);
 static_assert(kLanes<Group> == kEwLanes<f32>);
 
-// Whether a row of at most one group's columns runs two conv rows in one register (the low and the high group).
+// Whether a row of at most Wide's columns runs its two conv rows a channel in registers: at most one group's columns in
+// one register (the low and the high group), more in one register a row.
 inline constexpr bool kRowPairs = kLanes<Wide> == 2U * kLanes<Group>;
 
 // The widest row the 2x2/s2 max pool stages its vertical maximum for.
@@ -194,8 +195,8 @@ void max_pool2_rows(const NnConv2d& c, f32* rb0, const f32* rb1, u64 rs, u32 r, 
 
 // The staged image: per channel a zero row, the h input rows and a zero row (plane = (h + 2) * rs floats), each row
 // [0, x[0 .. w), 0 x 9] at stride rs = w + 10, so the padded row oi + ki of a channel is conv row oi's ki tap, and a
-// load of 16 lanes at any output column below w - 15 (8 lanes at any column below w) and kj <= 2 stays inside its
-// row.
+// load of 16 lanes at any output column below w - 15 or at column 0 of a row of at least eight columns (8 lanes at any
+// column below w) and kj <= 2 stays inside its row.
 struct Staged
 {
     const f32* rows;
@@ -251,8 +252,9 @@ CRD_FORCEINLINE void conv3x3_step(const NnConv2d& c, const Staged& s, const f32*
     }
 }
 
-// conv3x3_row_pair's output channel r (V = Vec16f, row oi in the low lanes and oi + 1 in the high ones) stored as its
-// two conv rows, dst + r * stride and next + r * stride. The member templates keep the levels that never build a
+// A row pair's output channel r stored as its two conv rows, dst + r * stride and next + r * stride: from
+// conv3x3_row_pair's one register (V = Vec16f, row oi in the low lanes and oi + 1 in the high ones) or
+// conv3x3_wide_pair's two (top: row oi, bottom: row oi + 1). The member templates keep the levels that never build a
 // pair free of unused functions.
 struct PairRows
 {
@@ -276,16 +278,49 @@ struct PairRows
             simd::high_half(out).store_partial(d1, static_cast<usize>(w));
         }
     }
+
+    template <typename V> CRD_FORCEINLINE void operator()(u32 r, V top, V bottom) const noexcept
+    {
+        f32* d0 = dst + static_cast<u64>(r) * stride;
+        f32* d1 = next + static_cast<u64>(r) * stride;
+        if (w == kLanes<V>)
+        {
+            top.store(d0);
+            bottom.store(d1);
+        }
+        else
+        {
+            top.store_partial(d0, static_cast<usize>(w));
+            bottom.store_partial(d1, static_cast<usize>(w));
+        }
+    }
 };
 
-// The same output channel pooled 2x2/s2 in its register into the pooled row y + r * stride of ow <= 4 columns:
-// max_pool2_row's operations on the same operands (the two rows' vertical maximum, then each column pair's), so its
-// bits, with no row buffer, store or reload.
+// The same output channel pooled 2x2/s2 in its registers into the pooled row y + r * stride of ow columns (at most 4
+// from one register, 8 from two): max_pool2_row's operations on the same operands (the two rows' vertical maximum,
+// then each column pair's), so its bits, with no row buffer, store or reload.
 template <bool Relued> struct PairPool
 {
     f32* y;
     u64 stride;
     u64 ow;
+
+    template <typename V> CRD_FORCEINLINE void operator()(u32 r, V top, V bottom) const noexcept
+    {
+        Group even;
+        Group odd;
+        simd::deinterleave(pool_max<Relued>(top, bottom), even, odd);
+        const Group pooled = pool_max<Relued>(even, odd);
+        f32* yr = y + static_cast<u64>(r) * stride;
+        if (ow == kLanes<Group>)
+        {
+            pooled.store(yr);
+        }
+        else
+        {
+            pooled.store_partial(yr, static_cast<usize>(ow));
+        }
+    }
 
     template <typename V> CRD_FORCEINLINE void operator()(u32 r, V out) const noexcept
     {
@@ -342,6 +377,45 @@ CRD_FORCEINLINE void conv3x3_row_pair(std::integer_sequence<u32, I...> /*channel
     (sink(I, acc[I]), ...);
 }
 
+// Conv rows oi and oi + 1 of a row of more than one group's and at most Wide's columns for the output channels r in I,
+// each row a Wide register of its own a channel (two rows by eight channels: 16 of avx512's 32 registers), each
+// channel's pair after bias + chain and the relu handed to sink(r, top, bottom): each lane is one output's column, so
+// it runs conv3x3_step's chain and gives its bits, every row load shared by the R channels.
+template <u32... I, typename Sink>
+CRD_FORCEINLINE void conv3x3_wide_pair(std::integer_sequence<u32, I...> /*channels*/, const NnConv2d& c,
+                                       const Staged& s, const f32* wblk, const f32* bias, u64 oi,
+                                       const Sink& sink) noexcept
+{
+    Wide top[sizeof...(I)] = {(static_cast<void>(I), Wide(0.0F))...};
+    Wide bottom[sizeof...(I)] = {(static_cast<void>(I), Wide(0.0F))...};
+    const u64 chans = c.chans;
+    const f32* chan = s.rows + oi * s.rs; // channel 0's padded row oi: row oi's tap ki = 0, and row oi + 1's above it
+    for (u64 ci = 0; ci < chans; ++ci, chan += s.plane)
+    {
+        const f32* srow = chan;
+        for (u64 ki = 0; ki < 3U; ++ki, srow += s.rs)
+        {
+            for (u64 kj = 0; kj < 3U; ++kj)
+            {
+                const Wide xt = Wide::load(srow + kj);
+                const Wide xb = Wide::load(srow + s.rs + kj);
+                const u64 wo = (ci * 3U + ki) * 3U + kj;
+                ((top[I] = simd::fma(Wide(wblk[I * chans * 9U + wo]), xt, top[I])), ...);
+                ((bottom[I] = simd::fma(Wide(wblk[I * chans * 9U + wo]), xb, bottom[I])), ...);
+            }
+        }
+    }
+    const Wide zero(0.0F);
+    ((top[I] = Wide(bias[I]) + top[I]), ...); // fl(bias + chain)
+    ((bottom[I] = Wide(bias[I]) + bottom[I]), ...);
+    if (c.relu)
+    {
+        ((top[I] = simd::max(top[I], zero)), ...);
+        ((bottom[I] = simd::max(bottom[I], zero)), ...);
+    }
+    (sink(I, top[I], bottom[I]), ...);
+}
+
 // One conv row for R output channels.
 template <u32 R>
 void conv3x3_row(const NnConv2d& c, const Staged& s, const f32* wblk, const f32* bias, f32* dst, u64 dst_stride,
@@ -360,11 +434,10 @@ void conv3x3_row(const NnConv2d& c, const Staged& s, const f32* wblk, const f32*
     }
 }
 
-// Whether conv3x3_rowblock runs a row pair in one register: where kRowPairs holds and the row has at most one group's
-// columns.
+// Whether conv3x3_rowblock runs a row pair in registers: where kRowPairs holds and the row has at most Wide's columns.
 CRD_FORCEINLINE bool row_pairs(const NnConv2d& c) noexcept
 {
-    return kRowPairs && c.w_in <= kLanes<Group>;
+    return kRowPairs && c.w_in <= kLanes<Wide>;
 }
 
 // Where conv3x3_rowblock pools a row pair in its registers: the pooled row of the block's first output channel, the
@@ -377,7 +450,8 @@ struct PooledRow
 };
 
 // Conv row oi for R output channels into dst and, with next, row oi + 1 into next, or with pooled.y those two rows
-// pooled 2x2/s2 into the pooled rows: both rows in one register where row_pairs holds (then the pool too).
+// pooled 2x2/s2 into the pooled rows: both rows in registers where row_pairs holds (then the pool too), one register a
+// channel for at most one group's columns and two for more.
 template <u32 R>
 void conv3x3_rowblock(const NnConv2d& c, const Staged& s, const f32* wblk, const f32* bias, f32* dst, f32* next,
                       u64 dst_stride, u64 oi, const PooledRow& pooled) noexcept
@@ -389,19 +463,28 @@ void conv3x3_rowblock(const NnConv2d& c, const Staged& s, const f32* wblk, const
             if (row_pairs(c))
             {
                 const auto channels = std::make_integer_sequence<u32, R>{};
+                const auto pair = [&](const auto& sink)
+                {
+                    if (c.w_in <= kLanes<Group>)
+                    {
+                        conv3x3_row_pair(channels, c, s, wblk, bias, oi, sink);
+                    }
+                    else
+                    {
+                        conv3x3_wide_pair(channels, c, s, wblk, bias, oi, sink);
+                    }
+                };
                 if (pooled.y == nullptr)
                 {
-                    conv3x3_row_pair(channels, c, s, wblk, bias, oi, PairRows{dst, next, dst_stride, c.w_in});
+                    pair(PairRows{dst, next, dst_stride, c.w_in});
                 }
                 else if (c.relu)
                 {
-                    conv3x3_row_pair(channels, c, s, wblk, bias, oi,
-                                     PairPool<true>{pooled.y, pooled.stride, pooled.ow});
+                    pair(PairPool<true>{pooled.y, pooled.stride, pooled.ow});
                 }
                 else
                 {
-                    conv3x3_row_pair(channels, c, s, wblk, bias, oi,
-                                     PairPool<false>{pooled.y, pooled.stride, pooled.ow});
+                    pair(PairPool<false>{pooled.y, pooled.stride, pooled.ow});
                 }
                 return;
             }
