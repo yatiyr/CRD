@@ -546,6 +546,16 @@ def sampler_calls(calls):
     return [c[1] for c in calls if c[0] == 'wpr']
 
 
+def iterations_of(command):
+    return int(command[command.index('--iterations') + 1])
+
+
+def calibrating(command, timeout):
+    """A harness whose off frames take 218 us (jobs on 2026-10-31); only calibration runs are expected."""
+    assert iterations_of(command) == wpr.CALIBRATION_FRAMES, command
+    return 4000, 0, harness_record(218000, frames=wpr.CALIBRATION_FRAMES), 0.2
+
+
 class Record(unittest.TestCase):
     def args(self, temp, **extra):
         exe = Path(temp) / 'crd-diag-overhead.exe'
@@ -562,7 +572,7 @@ class Record(unittest.TestCase):
     def test_a_denied_sampler_is_permission_denied_and_leaves_nothing(self):
         with tempfile.TemporaryDirectory() as temp:
             calls = []
-            code = wpr.record(self.args(temp), runner=None, which=lambda name: name,
+            code = wpr.record(self.args(temp), runner=calibrating, which=lambda name: name,
                               subprocess_run=fake_run(calls, start_code=0xc5585011))
             self.assertEqual(code, 3)
             self.assertEqual(sampler_calls(calls), ['-start'])
@@ -581,7 +591,7 @@ class Record(unittest.TestCase):
             self.assertFalse((Path(temp) / 'out').exists())
             calls.clear()
             args = self.args(temp, arms='compiled-out,off')
-            code = wpr.record(args, runner=None, which=lambda name: name,
+            code = wpr.record(args, runner=calibrating, which=lambda name: name,
                               subprocess_run=fake_run(calls, start_code=0xc5585011))
             self.assertEqual(code, 3, 'both trees current: the sampler is asked (and the fake denies it)')
             self.assertEqual([c[-1] for c in calls if c[0] == 'ninja'], ['crd-diag-overhead', 'base'],
@@ -606,12 +616,15 @@ class Record(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(sampler_calls(calls), ['-start', '-stop'], 'one session; never cancelled')
             modes = [p[p.index('--mode') + 1] for p in processes]
-            self.assertEqual(modes, ['off', 'full', 'full', 'off'], 'arms rotate per repetition')
+            self.assertEqual(modes, ['off', 'off', 'full', 'full', 'off'], 'calibrated; arms rotate per repetition')
+            # The calibration's 100 ns median sizes every measured process to FRAME_SECONDS of off frames.
+            self.assertEqual([iterations_of(p) for p in processes], [wpr.CALIBRATION_FRAMES] + [32000000] * 4)
             for option, value in (('--affinity', '5555'), ('--threads', '4')):
-                self.assertEqual(processes[0][processes[0].index(option) + 1], value, "the boards' shape")
+                self.assertEqual(processes[1][processes[1].index(option) + 1], value, "the boards' shape")
             run_dir = analysed.call_args[0][0]
             saved = json.loads((run_dir / 'manifest.json').read_text(encoding='utf-8'))
-            self.assertEqual([r['pid'] for r in saved['runs']], [5001, 5002, 5003, 5004])
+            self.assertEqual([r['pid'] for r in saved['runs']], [5002, 5003, 5004, 5005])
+            self.assertEqual(saved['iterations'], {'alloc': 32000000})
             self.assertEqual(saved['runs'][0]['harness']['median_ns'], 100)
             self.assertEqual(saved['runs'][0]['harness']['cpu_timed'], 123456, 'the CPU measurand is kept')
             self.assertEqual(saved['runs'][0]['harness']['cpu_unit'], 'cycles')
@@ -628,11 +641,35 @@ class Record(unittest.TestCase):
             calls = []
 
             def runner(command, timeout):
+                if iterations_of(command) == wpr.CALIBRATION_FRAMES:
+                    return calibrating(command, timeout)
                 raise KeyboardInterrupt
 
             with self.assertRaises(KeyboardInterrupt):
                 wpr.record(self.args(temp), runner=runner, which=lambda name: name, subprocess_run=fake_run(calls))
             self.assertEqual(sampler_calls(calls), ['-start', '-cancel'], 'a kernel session is never left running')
+
+    def test_frames_are_sized_from_a_calibration_run_before_the_sampler(self):
+        with tempfile.TemporaryDirectory() as temp:
+            seen = []
+
+            def runner(command, timeout):
+                seen.append(command)
+                return calibrating(command, timeout)
+
+            self.assertEqual(wpr.calibrate('h.exe', 'jobs', temp, runner, 5.0), (14679, None),
+                             '3.2 s of 218 us frames, rounded up')
+            self.assertEqual(seen[0][:5], ['h.exe', '--workload', 'jobs', '--mode', 'off'])
+            failed = lambda command, timeout: (4000, 3, '', 0.1)
+            self.assertEqual(wpr.calibrate('h.exe', 'jobs', temp, failed, 5.0),
+                             (None, 'the calibration run of jobs failed (exit 3)'))
+            empty = lambda command, timeout: (4000, 0, 'not a record', 0.1)
+            self.assertIsNone(wpr.calibrate('h.exe', 'jobs', temp, empty, 5.0)[0])
+            calls = []
+            code = wpr.record(self.args(temp), runner=failed, which=lambda name: name, subprocess_run=fake_run(calls))
+            self.assertEqual(code, 2)
+            self.assertEqual(sampler_calls(calls), [], 'refused before the kernel sampler starts')
+            self.assertFalse((Path(temp) / 'out').exists())
 
     def test_missing_tools_and_harness(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -6,10 +6,12 @@ external sampler where the CPU went in the same processes, so a mode's measured 
 that land in the diagnostic mechanisms (the allocator statistics, the allocator watch, the flight recorder, the
 diagnostic host, the profiler and the CEIR profiling bridge).
 
-  record   (an elevated shell: WPR's kernel sampler needs it) one WPR CPU session with stacks; inside it every arm of
-           every workload runs `--repetitions` times as its own process, the arms interleaved and rotated per
-           repetition, each process's PID, wall time and own JSON record kept in `manifest.json`. The trace and both
-           binaries' PDBs stay in the run directory (a later rebuild cannot orphan the trace); `analyze` runs at once.
+  record   (an elevated shell: WPR's kernel sampler needs it) sizes each workload's frames from a short off run
+           (calibrate), then holds one WPR CPU session with stacks; inside it every arm of every workload runs
+           `--repetitions` times as its own process, the arms interleaved and rotated per repetition, each
+           process's PID, wall time and own JSON record kept in `manifest.json` with the frame counts. The trace
+           and both binaries' PDBs stay in the run directory (a later rebuild cannot orphan the trace); `analyze`
+           runs at once.
   analyze  (no elevation) streams `xperf -a dumper -stacktimeshifting` of the trace, counts every CPU sample of each
            recorded process and the samples whose deciding frame is a diagnostic one (by class), and writes
            `analysis.json`.
@@ -53,7 +55,8 @@ Verdicts (one line each; the exit code is the worst):
   UNRESOLVED      (4)  too few samples (MIN_SAMPLES) or frames that do not dominate their process
   UNREADABLE      (5)  the trace held no sampled-profile events for a recorded process (never read as zero)
   PERMISSION_DENIED (3) wpr could not start the kernel sampler (re-run from an elevated shell)
-  TOOL_MISSING    (2)  wpr/xperf or the harness is missing, or a harness tree is not current with the checkout
+  TOOL_MISSING    (2)  wpr/xperf or the harness is missing, a harness tree is not current with the checkout, or
+                       the harness's calibration run failed
   USAGE           (64) bad arguments
 
 `record` runs every workload in the boards' shape (`diag-overhead.py run`: the jobs pool at THREADS, every process
@@ -89,11 +92,14 @@ DEFAULT_BASELINE = ROOT / 'build/win-shipping/tests/diag-overhead/crd-diag-overh
 DEFAULT_OUT = ROOT / 'build/diag-overhead-wpr'
 WORKLOADS = ('alloc', 'jobs', 'offline', 'io')
 ARMS = ('compiled-out', 'off', 'basic', 'full')
-# Timed frames per process, sized so the frames take at least 3.2 s in the off arm on the 2026-10-19 capture's machine
-# (alloc 83-92 us, jobs 370-417 us and offline 350-420 us per frame; io 592-596 us on 2026-10-24) and cover
-# FRAME_FRACTION with a margin of the process: the basic arm's setup takes 0.35 s (it left alloc's 20,000 frames 84% of
-# the process).
-ITERATIONS = {'alloc': 40000, 'jobs': 9000, 'offline': 10000, 'io': 6000}
+# Every process's timed frames last at least FRAME_SECONDS in the off arm, so they cover FRAME_FRACTION of the process
+# with a margin: outside them a basic or full process spends about 0.36 s, three captures' 100 ms post windows
+# (assets/diag/overhead_*.flight.toml) and its start and stop, against 0.04 s for off. The frame count is measured, not
+# fixed: `record` times CALIBRATION_FRAMES off frames of each workload before the sampler starts. Fixed counts went
+# stale as the engine got faster: jobs' 9,000 frames, sized at 370-417 us on 2026-10-19, ran at 218 us on 2026-10-31
+# and covered 84.6% of a basic process.
+FRAME_SECONDS = 3.2
+CALIBRATION_FRAMES = 500
 WARMUP = 50
 # The boards' shape (diag-overhead.py run --threads 4 --affinity 5555): a four-thread jobs pool, one logical processor
 # of each of eight cores. The 2026-10-25 trace ran the harness's default eight threads on 16 logical processors, where
@@ -150,6 +156,16 @@ def arm_command(exe, baseline, workload, arm, scratch, iterations):
     mode = 'off' if arm == 'compiled-out' else arm
     return [str(program), '--workload', workload, '--mode', mode, '--iterations', str(iterations),
             '--warmup', str(WARMUP), '--threads', str(THREADS), '--affinity', AFFINITY, '--scratch', str(scratch)]
+
+
+def calibrate(exe, workload, scratch, runner, timeout):
+    """(frames, None): the frame count that makes `workload`'s off-arm frames last FRAME_SECONDS at the median of a
+    CALIBRATION_FRAMES off run; (None, why) when that run fails."""
+    _, code, out, _ = runner(arm_command(exe, None, workload, 'off', scratch, CALIBRATION_FRAMES), timeout)
+    summary = harness_summary(out) if code == 0 else None
+    if summary is None or summary['median_ns'] <= 0:
+        return None, 'the calibration run of %s failed (exit %d)' % (workload, code)
+    return -(-int(FRAME_SECONDS * 1e9) // summary['median_ns']), None
 
 
 def build_tree(exe):
@@ -318,6 +334,14 @@ def record(args, runner=run_process, which=shutil.which, subprocess_run=subproce
         stale = tree_current(program, subprocess_run) if program is not None else None
         if stale:
             return verdict('TOOL_MISSING', stale)
+    workloads = args.workloads.split(',')
+    iterations = {}
+    with tempfile.TemporaryDirectory(prefix='crd-overhead-calibration-') as calibration:
+        for workload in workloads:
+            frames, why = calibrate(exe, workload, calibration, runner, args.timeout)
+            if frames is None:
+                return verdict('TOOL_MISSING', why)
+            iterations[workload] = frames
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = Path(args.out) / stamp
     scratch = run_dir / 'scratch'
@@ -330,7 +354,7 @@ def record(args, runner=run_process, which=shutil.which, subprocess_run=subproce
             shutil.copy2(pdb, run_dir / 'symbols' / name / pdb.name)
     manifest = {'schema': SCHEMA, 'started': stamp, 'interval_ms': INTERVAL_MS, 'exe': file_identity(exe),
                 'baseline_exe': file_identity(baseline) if baseline else None, 'arms': arms,
-                'workloads': list(args.workloads.split(',')), 'repetitions': args.repetitions, 'trace': etl.name,
+                'workloads': workloads, 'iterations': iterations, 'repetitions': args.repetitions, 'trace': etl.name,
                 'threads': THREADS, 'affinity': AFFINITY, 'source': checkout_identity(subprocess_run), 'runs': []}
     start = subprocess_run([wpr, '-start', 'CPU', '-filemode'], capture_output=True, text=True)
     if start.returncode != 0:
@@ -343,7 +367,7 @@ def record(args, runner=run_process, which=shutil.which, subprocess_run=subproce
         for repetition in range(args.repetitions):
             for workload in manifest['workloads']:
                 for arm in arm_order(arms, repetition):
-                    command = arm_command(exe, baseline, workload, arm, scratch, ITERATIONS.get(workload, 5000))
+                    command = arm_command(exe, baseline, workload, arm, scratch, iterations[workload])
                     pid, code, out, wall = runner(command, args.timeout)
                     manifest['runs'].append({'workload': workload, 'arm': arm, 'repetition': repetition, 'pid': pid,
                                              'exit_code': code, 'wall_seconds': round(wall, 3),
