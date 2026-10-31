@@ -308,7 +308,10 @@ done
 ```
 
 One bake per image family, up to an hour each (a bake is a paid machine; the Windows ones are the dearest). Rebake
-monthly or after a toolchain change; a rebake changes every input key of that family, so its cells run again.
+monthly or after a toolchain change; a rebake changes every input key of that family, so its cells run again. A bake
+images the disk only after its provisioning printed `cerid-ci-bake-complete` on the serial console, which it reads
+while the instance runs. A failed provisioning stops the instance at once and the bake exits with the failing line;
+the stopped instance `cerid-ci-bake-<device>` stays for inspection, and you delete it before the next bake.
 
 *Check:* `python ci/ops.py status` on the launcher shows no `NOT BAKED`.
 

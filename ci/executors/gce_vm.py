@@ -31,6 +31,8 @@ NAME = re.compile(r'[^a-z0-9-]')
 # The provisioning scripts print these on serial port 1; an image is made only after the first and without the second.
 BAKE_MARKER = 'cerid-ci-bake-complete'
 BAKE_FAILED_MARKER = 'cerid-ci-bake-failed'
+# The guest agent's line for a startup script that exited non-zero (Linux and Windows agents, old and new).
+SCRIPT_FAILED = re.compile(r'Script "[\w-]*startup-script[\w-]*" failed with error|startup-script exit status [1-9]')
 
 
 class BakeError(RuntimeError):
@@ -290,42 +292,61 @@ class GceVm:
         return {'name': '%s-%s' % (family, stamp), 'family': family,
                 'sourceDisk': 'zones/%s/disks/%s' % (zone, instance), 'labels': {'cerid-ci': 'image'}}
 
-    def serial_output(self, zone, instance):
-        """Serial port 1 of an instance, every page: the guest agent logs each startup-script line there."""
+    def serial_since(self, zone, instance, start):
+        """(text, next offset): serial port 1 of a running instance from `start`, every page; the guest agent logs
+        each startup-script line there. Compute Engine answers 400 for a stopped instance, so the bake reads it
+        while the instance runs and keeps its own copy."""
         url = '%s/projects/%s/zones/%s/instances/%s/serialPort?port=1' % (COMPUTE, self.project, zone, instance)
-        text, start = '', 0
+        text = ''
         while True:
             _, page = self.http('GET', '%s&start=%d' % (url, start), token=self.token())
             text += page.get('contents', '')
             following = int(page.get('next', start))
             if following <= start or not page.get('contents'):
-                return text
+                return text, start
             start = following
 
     def bake(self, device, provision, stamp, log, sleep, clock, hours=4):
         """Provision a one-off instance, image its disk and delete it; the image record, or BakeError.
 
-        The image is made only after the provisioning script printed BAKE_MARKER (a failed script leaves the instance
-        running until maxRunDuration stops it, and that disk must never become an image). The instance and its
-        auto-deleted disk are removed only after the image operation is DONE without an error: deleting earlier
-        removes the image's source disk and the insert fails with RESOURCE_NOT_FOUND."""
+        The image is made only after the provisioning script printed BAKE_MARKER (a disk whose provisioning failed
+        must never become an image). The serial console that carries it is readable only while the instance runs,
+        so it is read on every poll; the script pauses after the marker for longer than a poll. A failure (the
+        script's BAKE_FAILED_MARKER or the guest agent's failed-script line) stops the instance at once instead of
+        leaving it idle until maxRunDuration. The instance and its auto-deleted disk are removed only after the image
+        operation is DONE without an error: deleting earlier removes the image's source disk and the insert fails
+        with RESOURCE_NOT_FOUND."""
         zone, body = self.bake_body(device, provision)
         base = '%s/projects/%s/zones/%s/instances' % (COMPUTE, self.project, zone)
+        instance = '%s/%s' % (base, body['name'])
         self.http('POST', base, token=self.token(), body=body)
         log('baking %s on %s; waiting for it to power off (up to %d hours)' % (device['id'], body['name'], hours))
         deadline = clock() + hours * 3600
+        serial, offset = '', 0
         while True:
-            _, state = self.http('GET', '%s/%s' % (base, body['name']), token=self.token())
+            _, state = self.http('GET', instance, token=self.token())
+            if state.get('status') == 'RUNNING':
+                try:
+                    text, offset = self.serial_since(zone, body['name'], offset)
+                    serial += text
+                except HttpError as error:
+                    if error.status != 400:  # 400: it stopped between the two reads; the next poll sees that
+                        raise
+            failed = BAKE_FAILED_MARKER in serial or SCRIPT_FAILED.search(serial)
+            if failed:
+                self.http('POST', instance + '/stop', token=self.token(), allow=(404,))
+                line = next((x for x in serial.splitlines() if BAKE_FAILED_MARKER in x or SCRIPT_FAILED.search(x)))
+                raise BakeError('provisioning failed on %s (%s); it is stopped and stays for inspection'
+                                % (body['name'], line.strip()[:300]))
             if state.get('status') == 'TERMINATED':
                 break
             if clock() >= deadline:
                 raise BakeError('the bake did not finish in %d hours; instance %s stays for inspection'
                                 % (hours, body['name']))
             sleep(30)
-        serial = self.serial_output(zone, body['name'])
-        if BAKE_MARKER not in serial or BAKE_FAILED_MARKER in serial:
-            raise BakeError('instance %s stopped without finishing its provisioning; it stays for inspection (its '
-                            'serial console shows the failing step)' % body['name'])
+        if BAKE_MARKER not in serial:
+            raise BakeError('instance %s stopped without printing %s while it ran; it stays for inspection'
+                            % (body['name'], BAKE_MARKER))
         image = self.image_body(device, zone, body['name'], stamp)
         _, operation = self.http('POST', '%s/projects/%s/global/images' % (COMPUTE, self.project),
                                  token=self.token(), body=image)
@@ -349,7 +370,9 @@ class GceVm:
 PROVISION = {
     'linux': r'''#!/bin/bash
 # Cerid CI image bake (ci/ops.py bake): the toolchain the hosted ubuntu-24.04 image provided, recorded in the census.
-set -euxo pipefail
+# The failure trap is set before tracing starts: a traced definition would print the failure marker on every run.
+trap 'status=$?; echo "cerid-ci-bake-failed: line $LINENO exited $status"; shutdown -h now' ERR
+set -Eeuxo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y ca-certificates curl git python3 python-is-python3 python3-venv python3-pip build-essential gcc-14 g++-14 clang \
@@ -364,6 +387,7 @@ mkdir -p /var/lib/cerid-ci
  python3 --version; dpkg-query -W -f='${{Package}} ${{Version}}\n') > /var/lib/cerid-ci/image-census.txt
 rm -f /etc/machine-id && touch /etc/machine-id
 echo cerid-ci-bake-complete
+sleep 90  # the bake reads the serial console every 30 seconds, and only while the instance runs
 shutdown -h now
 ''',
     'windows': r'''# Cerid CI image bake (ci/ops.py bake): the toolchain the hosted windows-2025-vs2026 image provided.

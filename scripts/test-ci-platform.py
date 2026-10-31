@@ -732,7 +732,10 @@ class Executors(unittest.TestCase):
         self.assertIn('--scope machine --id Python.Python.3.12', windows)
         self.assertNotIn('{extra}', windows)
         # The completion marker is the last step before the power-off (Linux) or before sysprep (Windows).
-        self.assertLess(script.index(gce_vm.BAKE_MARKER), script.index('shutdown -h now'))
+        self.assertLess(script.index(gce_vm.BAKE_MARKER), script.index('sleep 90'))
+        self.assertLess(script.index('sleep 90'), script.rindex('shutdown -h now'))
+        self.assertLess(script.index("trap '"), script.index('set -Eeuxo'), 'a traced trap prints the failed marker')
+        self.assertEqual(script.count(gce_vm.BAKE_FAILED_MARKER), 1)
         self.assertLess(windows.index(gce_vm.BAKE_MARKER), windows.index('sysprep.exe'))
         self.assertIn(gce_vm.BAKE_FAILED_MARKER, windows)
 
@@ -741,14 +744,17 @@ class Executors(unittest.TestCase):
 
         def http(method, url, **kwargs):
             calls.append((method, url))
+            running = clock[0] < 60
             if method == 'GET' and 'serialPort' in url:
-                return 200, ({'contents': serial, 'next': len(serial)} if '&start=0' in url else
-                             {'contents': '', 'next': len(serial)})
+                if not running:  # Compute Engine refuses a stopped instance's serial console
+                    raise gce_vm.HttpError(400, '{"error": {"errors": [{"reason": "resourceNotReady"}]}}')
+                start = int(url.rsplit('&start=', 1)[1])
+                return 200, {'contents': serial[start:], 'next': len(serial)}
             if method == 'GET' and '/global/operations/' in url:
                 done = {'name': 'op-image', 'status': 'DONE'}
                 return 200, dict(done, error=operation_error) if operation_error else done
             if method == 'GET':
-                return 200, {'status': 'TERMINATED' if clock[0] >= 60 else 'RUNNING'}
+                return 200, {'status': 'RUNNING' if running else 'TERMINATED'}
             if method == 'POST' and url.endswith('/global/images'):
                 return 200, {'name': 'op-image', 'status': 'RUNNING'}
             return 200, {}
@@ -769,8 +775,8 @@ class Executors(unittest.TestCase):
         self.assertEqual(image['family'], 'cerid-ci-ubuntu-2404-x64')
         order = [m + ' ' + ('operation' if '/global/operations/' in u else 'image' if u.endswith('/global/images')
                             else 'serial' if 'serialPort' in u else 'instance') for m, u in calls]
-        last_serial = len(order) - 1 - order[::-1].index('GET serial')
-        self.assertEqual(order.index('POST image'), last_serial + 1, 'the image follows the whole serial read')
+        self.assertLess(order.index('GET serial'), order.index('POST image'), 'the marker is read while it runs')
+        self.assertEqual(order[order.index('POST image') - 1], 'GET instance', 'the image follows the power-off')
         self.assertLess(order.index('GET operation'), order.index('DELETE instance'),
                         'deleting the instance first removes the image source disk (RESOURCE_NOT_FOUND)')
         self.assertEqual(order[-1], 'DELETE instance')
@@ -786,6 +792,17 @@ class Executors(unittest.TestCase):
         self.assertIsInstance(error, gce_vm.BakeError)
         self.assertIn('RESOURCE_NOT_FOUND', str(error))
         self.assertFalse([m for m, _ in calls if m == 'DELETE'], 'the instance stays when the image failed')
+
+    def test_bake_stops_a_failed_provision_at_once(self):
+        for line in ('cerid-ci-bake-failed: line 7 exited 100',
+                     '[WARNING]: Script "windows-startup-script-ps1" failed with error: exit status 1'):
+            calls, error = self.bake_calls('startup-script: apt-get update\n%s\n' % line)
+            self.assertIsInstance(error, gce_vm.BakeError)
+            self.assertIn(line[:30], str(error))
+            stops = [i for i, (m, u) in enumerate(calls) if m == 'POST' and u.endswith('/stop')]
+            self.assertEqual(len(stops), 1, 'the idle instance is stopped, not left running for hours')
+            self.assertEqual(len([m for m, u in calls[:stops[0]] if m == 'GET' and 'serialPort' not in u]), 1)
+            self.assertFalse([u for m, u in calls if u.endswith('/global/images')])
 
     def test_ssh_host_sends_the_token_on_standard_input_only(self):
         seen = {}
