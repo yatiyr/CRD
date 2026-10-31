@@ -5,14 +5,15 @@
 // CONSTRUCTION (the 30b-2b-1 identical-kernel precedent), not by mirroring. Each stage operates on a stereo f32 block bus
 // `bus` of `len` frames (interleaved L,R). ⛔ params are f32 (matching the AGRF's stored f32 cutoff/q/gain_db) so a caller
 // reading an f64 source (the CEIR attr) is FORCED by the signature to narrow through f32 -- the coefficient-divergence
-// guard. Biquad state (f64 DF2T z1/z2 per channel) is passed IN, so a single-pass call [start=0,len=frames] and
-// render_graph's per-block call are the SAME function with different slicing -- the single-pass==chunked bit-exactness
-// argument made structural. ⛔ Gain AUTOMATION (per-sample dB) stays INLINE in render_graph (the automated branch computes
-// a per-sample dB); the ceir.audio dialect has no automation node, so the CEIR side never takes that path.
+// guard. Biquad state (hesap-dsp's f64 DF2T BiquadState, one per channel) is passed IN, so a single-pass call
+// [start=0,len=frames] and render_graph's per-block call are the SAME function with different slicing -- the
+// single-pass==chunked bit-exactness argument made structural. ⛔ Gain AUTOMATION (per-sample dB) stays INLINE in
+// render_graph (the automated branch computes a per-sample dB); the ceir.audio dialect has no automation node, so the
+// CEIR side never takes that path.
 
 #include <crd/audio/audio_graph.hpp> // GraphSourceBinding, BiquadType
 #include <crd/core/types.hpp>
-#include <crd/hesap/dsp/filter.hpp> // Biquad<T>
+#include <crd/hesap/dsp/filter.hpp> // Biquad<T>, BiquadState<T>, biquad_step
 #include <crd/hesap/dsp/rbj.hpp>    // rbj_lowpass/highpass/bandpass/notch
 #include <crd/math/cmath.hpp>       // pow
 
@@ -63,10 +64,11 @@ inline void apply_gain(crd::f32* bus, crd::i64 len, crd::f32 gain_db)
     }
 }
 
-// Biquad (RBJ, DF2T): filter the stereo bus in place; f64 state z1/z2 per channel carried across calls. cutoff (Nyquist
-// fraction) + q are f32, cast UP to f64 for the coefficient closed form (the AGRF-f32 narrowing the signature enforces).
-inline void apply_biquad(crd::f32* bus, crd::i64 len, crd::u8 filter, crd::f32 cutoff, crd::f32 q, crd::f64 z1[2],
-                         crd::f64 z2[2])
+// Biquad (RBJ, DF2T): filter the stereo bus in place through hesap-dsp's section step; one f64 state per channel
+// carried across calls. cutoff (Nyquist fraction) + q are f32, cast UP to f64 for the coefficient closed form (the
+// AGRF-f32 narrowing the signature enforces).
+inline void apply_biquad(crd::f32* bus, crd::i64 len, crd::u8 filter, crd::f32 cutoff, crd::f32 q,
+                         crd::hesap::dsp::BiquadState<crd::f64> state[2])
 {
     crd::hesap::dsp::Biquad<crd::f64> bq;
     const crd::f64                    f0 = static_cast<crd::f64>(cutoff);
@@ -83,10 +85,7 @@ inline void apply_biquad(crd::f32* bus, crd::i64 len, crd::u8 filter, crd::f32 c
     {
         for (int c = 0; c < 2; ++c)
         {
-            const crd::f64 x = static_cast<crd::f64>(bus[i * 2 + c]);
-            const crd::f64 y = bq.b0 * x + z1[c];
-            z1[c]            = bq.b1 * x - bq.a1 * y + z2[c];
-            z2[c]            = bq.b2 * x - bq.a2 * y;
+            const crd::f64 y = crd::hesap::dsp::biquad_step(bq, state[c], static_cast<crd::f64>(bus[i * 2 + c]));
             bus[i * 2 + c]   = static_cast<crd::f32>(y);
         }
     }

@@ -2,6 +2,7 @@
 // vs scipy.signal.sosfilt + the {1..16}-style STREAMING determinism moat: feeding the kernel in ARBITRARY block
 // sizes produces output IDENTICAL (bit-for-bit) to one batch call. References = the SAME SOS scipy used.
 
+#include <crd/core/seed_generators.hpp>
 #include <crd/hesap/dsp/filter.hpp>
 #include <crd/hesap/dsp/filtering.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -133,4 +134,70 @@ TEST_CASE("dsp filtering: lfilter BIT-EXACT vs scipy + filtfilt matches scipy (z
         INFO("ff[" << i << "]");
         CHECK_THAT(yff[i], WithinAbs(ref_filtfilt[i], 1e-10));
     }
+}
+
+namespace
+{
+// The DF2T recurrence as sosfilt_stream and the audio module each wrote it before OWN.1 moved both onto biquad_step.
+template <typename T> T reference_df2t(const dsp::Biquad<T>& bq, T& z1, T& z2, T x)
+{
+    const T y = bq.b0 * x + z1;
+    z1 = bq.b1 * x - bq.a1 * y + z2;
+    z2 = bq.b2 * x - bq.a2 * y;
+    return y;
+}
+
+template <typename T> T draw(crd::u64& state)
+{
+    return static_cast<T>(static_cast<f64>(crd::splitmix64_next(state) >> 11U) * 0x1.0p-52 - 1.0);
+}
+
+template <typename T> void check_step_against_reference()
+{
+    crd::u64 state = 0xB1'0AD5ULL;
+    for (int filter = 0; filter < 64; ++filter)
+    {
+        dsp::Biquad<T> bq;
+        bq.b0 = draw<T>(state);
+        bq.b1 = draw<T>(state);
+        bq.b2 = draw<T>(state);
+        bq.a1 = draw<T>(state) * static_cast<T>(0.9); // inside the stability triangle: |a2| < 1, |a1| < 1 + a2
+        bq.a2 = draw<T>(state) * static_cast<T>(0.05);
+        dsp::BiquadState<T> st;
+        T z1 = T(0);
+        T z2 = T(0);
+        for (int i = 0; i < 512; ++i)
+        {
+            const T x = draw<T>(state);
+            const T y = dsp::biquad_step(bq, st, x);
+            const T y_ref = reference_df2t(bq, z1, z2, x);
+            REQUIRE(std::memcmp(&y, &y_ref, sizeof(T)) == 0);
+            REQUIRE(std::memcmp(&st.z1, &z1, sizeof(T)) == 0);
+            REQUIRE(std::memcmp(&st.z2, &z2, sizeof(T)) == 0);
+        }
+    }
+}
+
+// An impulse through b = {1, 2, 1}, a1 = -1/2, a2 = 1/4 at compile time: y = 1, 2.5, 2.0 (all dyadic, exact).
+constexpr bool impulse_response_at_compile_time()
+{
+    dsp::Biquad<f64> bq;
+    bq.b1 = 2.0;
+    bq.b2 = 1.0;
+    bq.a1 = -0.5;
+    bq.a2 = 0.25;
+    dsp::BiquadState<f64> st;
+    const f64 y0 = dsp::biquad_step(bq, st, 1.0);
+    const f64 y1 = dsp::biquad_step(bq, st, 0.0);
+    const f64 y2 = dsp::biquad_step(bq, st, 0.0);
+    return y0 == 1.0 && y1 == 2.5 && y2 == 2.0;
+}
+} // namespace
+
+TEST_CASE("dsp filtering: biquad_step is the DF2T recurrence, bit-exact against the copies it replaced",
+          "[dsp][filtering][own]")
+{
+    static_assert(impulse_response_at_compile_time());
+    check_step_against_reference<f64>();
+    check_step_against_reference<crd::f32>();
 }

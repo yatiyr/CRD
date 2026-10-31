@@ -455,8 +455,16 @@
       "summary": "Digital signal processing, audio DSP included: filter design and filtering, convolution, spectral estimation, multirate and adaptive filters.",
       "owner": "hesap-dsp",
       "api": [
-        "engine/numerics/hesap-dsp/include/crd/hesap/dsp/dsp.hpp"
-      ]
+        "engine/numerics/hesap-dsp/include/crd/hesap/dsp/dsp.hpp",
+        "engine/numerics/hesap-dsp/include/crd/hesap/dsp/filter.hpp"
+      ],
+      "signatures": [
+        {
+          "regex": "\\bb2\\s*\\*\\s*[\\w.\\[\\]]+\\s*-\\s*[\\w.\\[\\]>-]*\\ba2\\s*\\*",
+          "what": "a biquad's direct-form II transposed state update"
+        }
+      ],
+      "decision": "The section step (biquad_step, beside Biquad and BiquadState in filter.hpp) is the engine's one DF2T recurrence: sosfilt_stream cascades it and the audio module's apply_biquad runs it per channel (OWN.1, 2026-10-31)."
     },
     {
       "id": "numerics.image-metrics",

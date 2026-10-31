@@ -1205,6 +1205,7 @@ if(CRD_BUILD_RETAINED_BENCHES)
             crd-core crd-memory crd-containers crd-math crd-jobs crd-hesap crd-hesap-dense ${ARGN})
         crd_enable_default_pch(${name})
     endfunction()
+    crd_add_retained_bench(bench_biquad_and_orient crd-audio crd-hesap-dsp) # OWN.1
     crd_add_retained_bench(bench_comms_vs_refs crd-hesap-comms crd-hesap-stats)
     crd_add_retained_bench(bench_decomp crd-hesap-tensor)
     crd_add_retained_bench(bench_distributions crd-hesap-stats)

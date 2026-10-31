@@ -247,9 +247,8 @@ crd::i64 execute_audio_graph_ceir(const crd::ceir::Context& ctx, const crd::ceir
             {
                 return 0;
             }
-            crd::f64 z1[2] = {};
-            crd::f64 z2[2] = {};
-            apply_biquad(mine, frames, static_cast<crd::u8>(filter), cutoff, q, z1, z2);
+            crd::hesap::dsp::BiquadState<crd::f64> state[2] = {};
+            apply_biquad(mine, frames, static_cast<crd::u8>(filter), cutoff, q, state);
         }
         else if (nm == StringView("audio.delay"))
         {
@@ -271,8 +270,9 @@ crd::i64 execute_audio_graph_ceir(const crd::ceir::Context& ctx, const crd::ceir
             {
                 return 0;
             }
-            crd::f64 env = 0.0; // one linked envelope, local per op (single-pass; passed IN like biquad z1/z2 so a future
-                                // chunked caller could thread it across blocks -- the 31a-1b-i "state passed in" argument)
+            crd::f64 env = 0.0; // one linked envelope, local per op (single-pass; passed IN like the biquad state so a
+                                // future chunked caller could thread it across blocks -- the 31a-1b-i "state passed in"
+                                // argument)
             apply_compressor(mine, frames, threshold_db, ratio, attack_ms, release_ms, sample_rate, env);
         }
         else if (nm == StringView("audio.mix")) { /* the input operands are already summed above -- nothing more */ }

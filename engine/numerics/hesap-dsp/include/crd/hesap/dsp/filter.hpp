@@ -52,6 +52,22 @@ template <typename T> struct Biquad
     T a1 = T(0), a2 = T(0); // a0 is normalized to 1
 };
 
+// Per-section DF2T state (z1, z2). One per biquad; carried across streaming blocks.
+template <typename T> struct BiquadState
+{
+    T z1 = T(0), z2 = T(0);
+};
+
+// One Direct-Form-II-Transposed step of a section (scipy's recurrence, the engine's one copy): returns the output for
+// `x` and advances the section's state. Pure multiply-add in a fixed order, so a stream is bit-exact however it is cut.
+template <typename T> [[nodiscard]] constexpr T biquad_step(const Biquad<T>& bq, BiquadState<T>& st, T x) noexcept
+{
+    const T y = bq.b0 * x + st.z1;
+    st.z1     = bq.b1 * x - bq.a1 * y + st.z2;
+    st.z2     = bq.b2 * x - bq.a2 * y;
+    return y;
+}
+
 // Cascade of biquads (scipy SOS = rows of [b0 b1 b2 1 a1 a2]).
 template <typename T> struct SecondOrderSections
 {
@@ -78,7 +94,14 @@ template <typename T> [[nodiscard]] Zpk<T> tf_to_zpk(crd::memory::IAllocator* al
     Zpk<T> zpk(alloc);
     zpk.z = roots<T>(alloc, crd::containers::ConstSpan<T>(tf.b.data(), tf.b.size()));
     zpk.p = roots<T>(alloc, crd::containers::ConstSpan<T>(tf.a.data(), tf.a.size()));
-    zpk.k = tf.b.empty() ? T(0) : (tf.a.empty() ? tf.b[0] : tf.b[0] / tf.a[0]);
+    if (tf.b.empty())
+    {
+        zpk.k = T(0);
+    }
+    else
+    {
+        zpk.k = tf.a.empty() ? tf.b[0] : tf.b[0] / tf.a[0];
+    }
     return zpk;
 }
 
@@ -198,12 +221,15 @@ template <typename T> [[nodiscard]] SecondOrderSections<T> zpk_to_sos(crd::memor
 {
     SecondOrderSections<T> sos(alloc);
 
-    crd::containers::Array<Complex<T>> zc(alloc), pc(alloc);
-    crd::containers::Array<T> zr(alloc), pr(alloc);
+    crd::containers::Array<Complex<T>> zc(alloc);
+    crd::containers::Array<Complex<T>> pc(alloc);
+    crd::containers::Array<T> zr(alloc);
+    crd::containers::Array<T> pr(alloc);
     detail::cplx_real_split<T>(alloc, crd::containers::ConstSpan<Complex<T>>(zpk.z.data(), zpk.z.size()), zc, zr);
     detail::cplx_real_split<T>(alloc, crd::containers::ConstSpan<Complex<T>>(zpk.p.data(), zpk.p.size()), pc, pr);
 
-    crd::containers::Array<detail::Quad<T>> num(alloc), den(alloc);
+    crd::containers::Array<detail::Quad<T>> num(alloc);
+    crd::containers::Array<detail::Quad<T>> den(alloc);
     detail::build_quads<T>(alloc, zc, zr, num);
     detail::build_quads<T>(alloc, pc, pr, den);
 

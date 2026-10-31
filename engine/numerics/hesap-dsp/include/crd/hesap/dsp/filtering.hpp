@@ -32,7 +32,10 @@ template <typename T>
                                                 crd::containers::ConstSpan<T> zi = {})
 {
     const crd::usize order = ((b.size() > a.size() ? b.size() : a.size())) - 1;
-    crd::containers::Array<T> bn(alloc), an(alloc), z(alloc), y(alloc);
+    crd::containers::Array<T> bn(alloc);
+    crd::containers::Array<T> an(alloc);
+    crd::containers::Array<T> z(alloc);
+    crd::containers::Array<T> y(alloc);
     bn.resize(order + 1);
     an.resize(order + 1);
     z.resize(order == 0 ? 1 : order);
@@ -71,7 +74,8 @@ template <typename T>
                                                    crd::containers::ConstSpan<T> a)
 {
     const crd::usize n = (b.size() > a.size() ? b.size() : a.size());
-    crd::containers::Array<T> bn(alloc), an(alloc);
+    crd::containers::Array<T> bn(alloc);
+    crd::containers::Array<T> an(alloc);
     bn.resize(n);
     an.resize(n);
     const T a0 = a[0];
@@ -89,21 +93,21 @@ template <typename T>
     }
     // (I - companion(a)ᵀ) zi = B, B[i] = b[i+1] - a[i+1]·b[0]. companion(a) row 0 = -a[1..]; sub-diag 1s ⇒ ᵀ has
     // first column = -a[1..], super-diagonal 1s.
-    dense::Matrix<T> M(alloc, d, d);
+    dense::Matrix<T> m(alloc, d, d);
     for (crd::usize i = 0; i < d; ++i)
     {
         for (crd::usize j = 0; j < d; ++j)
         {
-            M(i, j) = (i == j) ? T(1) : T(0);
+            m(i, j) = (i == j) ? T(1) : T(0);
         }
     }
     for (crd::usize i = 0; i < d; ++i)
     {
-        M(i, 0) -= -an[i + 1]; // I - companionᵀ[i][0]
+        m(i, 0) -= -an[i + 1]; // I - companionᵀ[i][0]
     }
     for (crd::usize i = 0; i + 1 < d; ++i)
     {
-        M(i, i + 1) -= T(1); // companionᵀ super-diagonal
+        m(i, i + 1) -= T(1); // companionᵀ super-diagonal
     }
     crd::containers::Array<T> rhs(alloc);
     rhs.resize(d);
@@ -112,7 +116,7 @@ template <typename T>
         rhs[i] = bn[i + 1] - an[i + 1] * bn[0];
     }
     dense::LU<T> lu(alloc, d);
-    dense::factor_lu<T, dense::Layout::RowMajor>(lu, M);
+    dense::factor_lu<T, dense::Layout::RowMajor>(lu, m);
     dense::solve_lu<T, dense::Layout::RowMajor>(lu, crd::containers::Span<T>(rhs.data(), d));
     for (crd::usize i = 0; i < d; ++i)
     {
@@ -155,7 +159,8 @@ template <typename T>
         ext[edge + n + i] = T(2) * x[n - 1] - x[n - 2 - i];
     }
     const auto zi = lfilter_zi<T>(alloc, b, a);
-    crd::containers::Array<T> zi0(alloc), zi1(alloc);
+    crd::containers::Array<T> zi0(alloc);
+    crd::containers::Array<T> zi1(alloc);
     zi0.resize(zi.size());
     for (crd::usize i = 0; i < zi.size(); ++i)
     {
@@ -184,15 +189,9 @@ template <typename T>
     return out;
 }
 
-// Per-section DF2T state (z1, z2). One per biquad; carried across streaming blocks.
-template <typename T> struct BiquadState
-{
-    T z1 = T(0), z2 = T(0);
-};
-
 // The CORE streaming kernel: apply the SOS cascade to `x` (length n) writing `out` (length n), advancing the
-// per-section `state` (length sos.sections.size()). Direct-Form-II-Transposed, exactly scipy's recurrence ⇒
-// bit-exact + block-size-invariant. Allocation-free (caller owns out + state). out may alias x.
+// per-section `state` (length sos.sections.size()). Each section is filter.hpp's biquad_step (DF2T, exactly scipy's
+// recurrence) ⇒ bit-exact + block-size-invariant. Allocation-free (caller owns out + state). out may alias x.
 template <typename T>
 void sosfilt_stream(const SecondOrderSections<T>& sos, crd::containers::ConstSpan<T> x, crd::containers::Span<T> out,
                     crd::containers::Span<BiquadState<T>> state) noexcept
@@ -203,12 +202,7 @@ void sosfilt_stream(const SecondOrderSections<T>& sos, crd::containers::ConstSpa
         T xn = x[i];
         for (crd::usize s = 0; s < ns; ++s)
         {
-            const Biquad<T>& bq = sos.sections[s];
-            BiquadState<T>& st = state[s];
-            const T xnew = bq.b0 * xn + st.z1;
-            st.z1 = bq.b1 * xn - bq.a1 * xnew + st.z2;
-            st.z2 = bq.b2 * xn - bq.a2 * xnew;
-            xn = xnew;
+            xn = biquad_step(sos.sections[s], state[s], xn);
         }
         out[i] = xn;
     }

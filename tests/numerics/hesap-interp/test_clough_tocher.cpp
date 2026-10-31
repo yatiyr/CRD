@@ -4,12 +4,14 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/core/seed_generators.hpp>
 #include <crd/hesap/interp/interp.hpp>
 #include <crd/math/vec.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
+#include <cstring>
 
 using namespace crd::hesap::interp;
 using crd::usize;
@@ -265,4 +267,41 @@ TEST_CASE("v13-f: Clough-Tocher locates every interior point (no NaN) + eval is 
         }
     }
     CHECK(order_independent); // (b) reverse-order eval is bit-identical
+}
+
+namespace
+{
+// The walk's orientation as clough_tocher.hpp wrote it (fast_orient) before OWN.1 moved it onto crd-math's cross.
+template <typename T> T reference_fast_orient(const Vec2<T>& a, const Vec2<T>& b, const Vec2<T>& c)
+{
+    return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+template <typename T> void check_walk_orientation_against_reference()
+{
+    crd::u64 state = 0xC7'0A1EULL;
+    const auto draw = [&state]
+    {
+        return static_cast<T>(static_cast<double>(crd::splitmix64_next(state) >> 11U) * 0x1.0p-52 * 8.0 - 4.0);
+    };
+    for (int i = 0; i < 1 << 16; ++i)
+    {
+        const Vec2<T> a{draw(), draw()};
+        const Vec2<T> b{draw(), draw()};
+        // every eighth query sits on the line through a and b (up to rounding): the degenerate edge of the walk
+        const T       t = draw();
+        const Vec2<T> on_edge{a.x + t * (b.x - a.x), a.y + t * (b.y - a.y)};
+        const Vec2<T> c = (i % 8 == 0) ? on_edge : Vec2<T>{draw(), draw()};
+        const T owner = crd::math::cross(b - a, c - a);
+        const T reference = reference_fast_orient(a, b, c);
+        REQUIRE(std::memcmp(&owner, &reference, sizeof(T)) == 0);
+    }
+}
+} // namespace
+
+TEST_CASE("v13-f: Clough-Tocher walk orientation (crd-math cross) is bit-exact against the copy it replaced",
+          "[v13-f][interp][own]")
+{
+    check_walk_orientation_against_reference<double>();
+    check_walk_orientation_against_reference<float>();
 }

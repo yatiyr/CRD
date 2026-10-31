@@ -811,9 +811,8 @@ TEST_CASE("ceir 31a-3: execute_audio_graph_ceir walks the committed full-chain a
     zeroed(b2);
     sum_into(b2, b1);
     {
-        crd::f64 z1[2] = {};
-        crd::f64 z2[2] = {};
-        audio::apply_biquad(b2.data(), n, a_filter, a_cutoff, a_q, z1, z2);
+        crd::hesap::dsp::BiquadState<crd::f64> state[2] = {};
+        audio::apply_biquad(b2.data(), n, a_filter, a_cutoff, a_q, state);
     }
     zeroed(b3);
     sum_into(b3, b2);

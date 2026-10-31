@@ -105,15 +105,22 @@ public:
         }
         m_last_tri = t;
 
-        const crd::u32 i0 = m_tri[3 * t + 0], i1 = m_tri[3 * t + 1], i2 = m_tri[3 * t + 2];
-        T b0, b1, b2;
+        const crd::u32 i0 = m_tri[3 * t + 0];
+        const crd::u32 i1 = m_tri[3 * t + 1];
+        const crd::u32 i2 = m_tri[3 * t + 2];
+        T b0;
+        T b1;
+        T b2;
         barycentric(m_points[i0], m_points[i1], m_points[i2], q, b0, b1, b2);
 
         // Extended barycentric (scipy _interpnd.pyx): fold the centroid-split sub-triangle selection into one cubic.
         T mn = b0;
         mn   = b1 < mn ? b1 : mn;
         mn   = b2 < mn ? b2 : mn;
-        const T u1 = b0 - mn, u2 = b1 - mn, u3 = b2 - mn, u4 = static_cast<T>(3) * mn;
+        const T u1 = b0 - mn;
+        const T u2 = b1 - mn;
+        const T u3 = b2 - mn;
+        const T u4 = static_cast<T>(3) * mn;
         const T* c       = &m_coeffs[19 * static_cast<crd::usize>(t)];
         const T  three   = static_cast<T>(3);
         const T  six     = static_cast<T>(6);
@@ -188,20 +195,14 @@ private:
         }
     }
 
-    // Non-adaptive orient2d (signed twice-area). The locate walk only needs the SIGN; a wrong sign near a degenerate
-    // edge merely costs an extra step, and the CT is C⁰ across edges so either adjacent triangle gives the same value.
-    // (The Delaunay BUILD uses the exact Shewchuk predicate; this fast form is purely for the query-time walk.)
-    [[nodiscard]] static T fast_orient(const crd::math::Vec2<T>& a, const crd::math::Vec2<T>& b,
-                                       const crd::math::Vec2<T>& c) noexcept
-    {
-        return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-    }
-
-    // Jump-walk point location, starting from the last-located triangle (clustered-query cache). The fast non-adaptive
-    // orient2d makes the common case ~O(√T) cheap, but it gives up the exact-arithmetic termination guarantee of
-    // Lawson's walk: a query near a degenerate edge can be misrouted to a hull edge or cycle. On ANY walk failure we
-    // fall back to an EXACT linear scan (adaptive predicate) — off the hot path, but it guarantees no interior query
-    // ever spuriously returns kNull/NaN. (The exhaustive scan also resolves the rare cycle deterministically.)
+    // Jump-walk point location, starting from the last-located triangle (clustered-query cache). Each step reads the
+    // sign of crd-math's non-adaptive 2D cross product, the signed twice-area cross(b - a, q - a): a wrong sign near a
+    // degenerate edge merely costs an extra step, and the CT is C⁰ across edges so either adjacent triangle gives the
+    // same value. That makes the common case ~O(√T) cheap, but it gives up the exact-arithmetic termination guarantee
+    // of Lawson's walk: a query near a degenerate edge can be misrouted to a hull edge or cycle. On ANY walk failure we
+    // fall back to an EXACT linear scan (geometry's adaptive Shewchuk predicate, which the Delaunay build uses too) —
+    // off the hot path, but it guarantees no interior query ever spuriously returns kNull/NaN. (The exhaustive scan
+    // also resolves the rare cycle deterministically.)
     [[nodiscard]] crd::u32 locate(const crd::math::Vec2<T>& q) const noexcept
     {
         crd::u32       cur      = m_last_tri < m_tri_count ? m_last_tri : 0;
@@ -212,10 +213,12 @@ private:
             {
                 break; // walked off a hull edge — confirm via the exact scan (a fast-orient misroute is possible)
             }
-            const crd::u32 ia = m_tri[3 * cur + 0], ib = m_tri[3 * cur + 1], ic = m_tri[3 * cur + 2];
-            const T s0 = fast_orient(m_points[ia], m_points[ib], q);
-            const T s1 = fast_orient(m_points[ib], m_points[ic], q);
-            const T s2 = fast_orient(m_points[ic], m_points[ia], q);
+            const crd::u32 ia = m_tri[3 * cur + 0];
+            const crd::u32 ib = m_tri[3 * cur + 1];
+            const crd::u32 ic = m_tri[3 * cur + 2];
+            const T s0 = crd::math::cross(m_points[ib] - m_points[ia], q - m_points[ia]);
+            const T s1 = crd::math::cross(m_points[ic] - m_points[ib], q - m_points[ib]);
+            const T s2 = crd::math::cross(m_points[ia] - m_points[ic], q - m_points[ic]);
             if (s0 >= static_cast<T>(0) && s1 >= static_cast<T>(0) && s2 >= static_cast<T>(0))
             {
                 return cur;
@@ -248,7 +251,9 @@ private:
     {
         for (crd::u32 t = 0; t < m_tri_count; ++t)
         {
-            const crd::u32 ia = m_tri[3 * t + 0], ib = m_tri[3 * t + 1], ic = m_tri[3 * t + 2];
+            const crd::u32 ia = m_tri[3 * t + 0];
+            const crd::u32 ib = m_tri[3 * t + 1];
+            const crd::u32 ic = m_tri[3 * t + 2];
             const T s0 = crd::geometry::primitives::orient2d(m_points[ia], m_points[ib], q);
             const T s1 = crd::geometry::primitives::orient2d(m_points[ib], m_points[ic], q);
             const T s2 = crd::geometry::primitives::orient2d(m_points[ic], m_points[ia], q);
@@ -281,7 +286,8 @@ private:
         }
         crd::containers::sort(pairs.data(), pairs.data() + pairs.size(),
                               [](crd::u64 l, crd::u64 r) noexcept { return l < r; });
-        crd::containers::Array<crd::u32> indptr(m_alloc), indices(m_alloc);
+        crd::containers::Array<crd::u32> indptr(m_alloc);
+        crd::containers::Array<crd::u32> indices(m_alloc);
         indptr.resize(static_cast<crd::usize>(n) + 1, 0);
         crd::u64 prev = std::numeric_limits<crd::u64>::max();
         for (crd::usize i = 0; i < pairs.size(); ++i)
@@ -292,7 +298,7 @@ private:
             }
             prev               = pairs[i];
             const crd::u32 u   = static_cast<crd::u32>(pairs[i] >> 32);
-            const crd::u32 v   = static_cast<crd::u32>(pairs[i] & 0xFFFFFFFFu);
+            const crd::u32 v   = static_cast<crd::u32>(pairs[i] & 0xFFFFFFFFU);
             indices.push_back(v);
             ++indptr[u + 1];
         }
@@ -306,14 +312,20 @@ private:
             T err = static_cast<T>(0);
             for (crd::u32 ip = 0; ip < n; ++ip)
             {
-                T q0 = 0, q1 = 0, q3 = 0, s0 = 0, s1 = 0;
+                T q0 = 0;
+                T q1 = 0;
+                T q3 = 0;
+                T s0 = 0;
+                T s1 = 0;
                 for (crd::u32 jj = indptr[ip]; jj < indptr[ip + 1]; ++jj)
                 {
                     const crd::u32 ip2 = indices[jj];
-                    const T ex = m_points[ip2].x - m_points[ip].x, ey = m_points[ip2].y - m_points[ip].y;
+                    const T ex = m_points[ip2].x - m_points[ip].x;
+                    const T ey = m_points[ip2].y - m_points[ip].y;
                     const T l  = crd::math::sqrt(ex * ex + ey * ey);
                     const T l3 = l * l * l;
-                    const T f1 = data[ip], f2 = data[ip2];
+                    const T f1 = data[ip];
+                    const T f2 = data[ip2];
                     const T df2 = -ex * y[2 * ip2 + 0] - ey * y[2 * ip2 + 1];
                     q0 += static_cast<T>(4) * ex * ex / l3;
                     q1 += static_cast<T>(4) * ex * ey / l3;
@@ -322,13 +334,15 @@ private:
                     s1 += (static_cast<T>(6) * (f1 - f2) - static_cast<T>(2) * df2) * ey / l3;
                 }
                 const T det = q0 * q3 - q1 * q1;
-                const T r0 = (q3 * s0 - q1 * s1) / det, r1 = (-q1 * s0 + q0 * s1) / det;
+                const T r0 = (q3 * s0 - q1 * s1) / det;
+                const T r1 = (-q1 * s0 + q0 * s1) / det;
                 T change   = crd::math::fabs(y[2 * ip + 0] + r0);
                 const T c1 = crd::math::fabs(y[2 * ip + 1] + r1);
                 change     = c1 > change ? c1 : change;
                 y[2 * ip + 0] = -r0;
                 y[2 * ip + 1] = -r1;
-                const T ar0 = crd::math::fabs(r0), ar1 = crd::math::fabs(r1);
+                const T ar0 = crd::math::fabs(r0);
+                const T ar1 = crd::math::fabs(r1);
                 T scale     = ar0 > ar1 ? ar0 : ar1;
                 scale       = scale > static_cast<T>(1) ? scale : static_cast<T>(1);
                 change /= scale;
@@ -345,15 +359,29 @@ private:
     void precompute_ordinates(crd::containers::ConstSpan<T> values, const crd::containers::Array<T>& g)
     {
         m_coeffs.resize(19 * static_cast<crd::usize>(m_tri_count));
-        const T two = static_cast<T>(2), three = static_cast<T>(3), half = static_cast<T>(0.5);
+        const T two = static_cast<T>(2);
+        const T three = static_cast<T>(3);
+        const T half = static_cast<T>(0.5);
         for (crd::u32 t = 0; t < m_tri_count; ++t)
         {
-            const crd::u32 i0 = m_tri[3 * t + 0], i1 = m_tri[3 * t + 1], i2 = m_tri[3 * t + 2];
-            const T x0 = m_points[i0].x, y0 = m_points[i0].y;
-            const T x1 = m_points[i1].x, y1 = m_points[i1].y;
-            const T x2 = m_points[i2].x, y2 = m_points[i2].y;
-            const T e12x = x1 - x0, e12y = y1 - y0, e23x = x2 - x1, e23y = y2 - y1, e31x = x0 - x2, e31y = y0 - y2;
-            const T f1 = values[i0], f2 = values[i1], f3 = values[i2];
+            const crd::u32 i0 = m_tri[3 * t + 0];
+            const crd::u32 i1 = m_tri[3 * t + 1];
+            const crd::u32 i2 = m_tri[3 * t + 2];
+            const T x0 = m_points[i0].x;
+            const T y0 = m_points[i0].y;
+            const T x1 = m_points[i1].x;
+            const T y1 = m_points[i1].y;
+            const T x2 = m_points[i2].x;
+            const T y2 = m_points[i2].y;
+            const T e12x = x1 - x0;
+            const T e12y = y1 - y0;
+            const T e23x = x2 - x1;
+            const T e23y = y2 - y1;
+            const T e31x = x0 - x2;
+            const T e31y = y0 - y2;
+            const T f1 = values[i0];
+            const T f2 = values[i1];
+            const T f3 = values[i2];
             const T df12 = g[2 * i0] * e12x + g[2 * i0 + 1] * e12y;
             const T df21 = -(g[2 * i1] * e12x + g[2 * i1 + 1] * e12y);
             const T df23 = g[2 * i1] * e23x + g[2 * i1 + 1] * e23y;
@@ -361,9 +389,15 @@ private:
             const T df31 = g[2 * i2] * e31x + g[2 * i2 + 1] * e31y;
             const T df13 = -(g[2 * i0] * e31x + g[2 * i0 + 1] * e31y);
 
-            const T c3000 = f1, c2100 = (df12 + three * c3000) / three, c2010 = (df13 + three * c3000) / three;
-            const T c0300 = f2, c1200 = (df21 + three * c0300) / three, c0210 = (df23 + three * c0300) / three;
-            const T c0030 = f3, c1020 = (df31 + three * c0030) / three, c0120 = (df32 + three * c0030) / three;
+            const T c3000 = f1;
+            const T c2100 = (df12 + three * c3000) / three;
+            const T c2010 = (df13 + three * c3000) / three;
+            const T c0300 = f2;
+            const T c1200 = (df21 + three * c0300) / three;
+            const T c0210 = (df23 + three * c0300) / three;
+            const T c0030 = f3;
+            const T c1020 = (df31 + three * c0030) / three;
+            const T c0120 = (df32 + three * c0030) / three;
             const T c2001 = (c2100 + c2010 + c3000) / three;
             const T c0201 = (c1200 + c0300 + c0210) / three;
             const T c0021 = (c1020 + c0120 + c0030) / three;
@@ -377,10 +411,14 @@ private:
                     gk[k] = -half;
                     continue;
                 }
-                const crd::u32 j0 = m_tri[3 * nbr + 0], j1 = m_tri[3 * nbr + 1], j2 = m_tri[3 * nbr + 2];
+                const crd::u32 j0 = m_tri[3 * nbr + 0];
+                const crd::u32 j1 = m_tri[3 * nbr + 1];
+                const crd::u32 j2 = m_tri[3 * nbr + 2];
                 const T cx = (m_points[j0].x + m_points[j1].x + m_points[j2].x) / three;
                 const T cy = (m_points[j0].y + m_points[j1].y + m_points[j2].y) / three;
-                T cb0, cb1, cb2;
+                T cb0;
+                T cb1;
+                T cb2;
                 barycentric(m_points[i0], m_points[i1], m_points[i2], crd::math::Vec2<T>{cx, cy}, cb0, cb1, cb2);
                 if (k == 0)
                 {

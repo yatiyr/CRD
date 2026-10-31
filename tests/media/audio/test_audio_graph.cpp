@@ -6,8 +6,11 @@
 //    (silence with sources muted; superposition holds), and the master encodes to WAV through our codec.
 
 #include <crd/audio/audio_graph.hpp>
+#include <crd/audio/audio_kernels.hpp>
 #include <crd/audio/audio_resources.hpp>
 #include <crd/audio/wav.hpp>
+#include <crd/core/seed_generators.hpp>
+#include <crd/hesap/dsp/rbj.hpp>
 #include <crd/hesap/interp/keyframe.hpp>
 #include <crd/math/cmath.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -254,4 +257,94 @@ TEST_CASE("THE 4-TRACK GATE: offline render bit-stable, mix verifiable, master e
     audio::GraphSourceBinding none[5] = {};
     containers::Array<f32>    dummy(&galloc());
     CHECK(audio::render_graph(g, {none, 5}, frames, dummy) == 0);
+}
+
+namespace
+{
+// apply_biquad's loop as the audio module wrote it before OWN.1 moved the section step onto hesap-dsp.
+void reference_apply_biquad(f32* bus, i64 len, u8 filter, f32 cutoff, f32 q, f64 z1[2], f64 z2[2])
+{
+    hesap::dsp::Biquad<f64> bq;
+    const f64               f0 = static_cast<f64>(cutoff);
+    const f64               qq = static_cast<f64>(q);
+    switch (static_cast<audio::BiquadType>(filter))
+    {
+    case audio::BiquadType::Lowpass: bq = hesap::dsp::rbj_lowpass<f64>(f0, qq); break;
+    case audio::BiquadType::Highpass: bq = hesap::dsp::rbj_highpass<f64>(f0, qq); break;
+    case audio::BiquadType::Bandpass: bq = hesap::dsp::rbj_bandpass<f64>(f0, qq); break;
+    case audio::BiquadType::Notch:
+    default: bq = hesap::dsp::rbj_notch<f64>(f0, qq); break;
+    }
+    for (i64 i = 0; i < len; ++i)
+    {
+        for (int c = 0; c < 2; ++c)
+        {
+            const f64 x    = static_cast<f64>(bus[i * 2 + c]);
+            const f64 y    = bq.b0 * x + z1[c];
+            z1[c]          = bq.b1 * x - bq.a1 * y + z2[c];
+            z2[c]          = bq.b2 * x - bq.a2 * y;
+            bus[i * 2 + c] = static_cast<f32>(y);
+        }
+    }
+}
+} // namespace
+
+TEST_CASE("biquad: hesap-dsp's section step is bit-exact against the audio copy it replaced, single-pass and chunked",
+          "[audio][graph][own]")
+{
+    constexpr i64 frames = 3001;
+    u64           seed   = 0xA0D1'0B1AULL;
+    containers::Array<f32> input(&galloc());
+    for (i64 i = 0; i < frames * 2; ++i)
+    {
+        input.push_back(static_cast<f32>(static_cast<f64>(splitmix64_next(seed) >> 40U) * 0x1.0p-24 - 0.5));
+    }
+    const f32 cutoffs[] = {0.01F, 0.125F, 0.49F};
+    const f32 qs[]      = {0.5F, 0.7071F, 8.0F};
+    for (u8 filter = 0; filter < 4; ++filter)
+    {
+        for (const f32 cutoff : cutoffs)
+        {
+            for (const f32 q : qs)
+            {
+                containers::Array<f32> single(&galloc());
+                containers::Array<f32> chunked(&galloc());
+                containers::Array<f32> reference(&galloc());
+                for (const f32 v : input)
+                {
+                    single.push_back(v);
+                    chunked.push_back(v);
+                    reference.push_back(v);
+                }
+                hesap::dsp::BiquadState<f64> single_state[2] = {};
+                audio::apply_biquad(single.data(), frames, filter, cutoff, q, single_state);
+
+                hesap::dsp::BiquadState<f64> chunk_state[2] = {};
+                const i64                    blocks[]       = {256, 7, 1, 113, 64};
+                i64                          off            = 0;
+                for (usize b = 0; off < frames; ++b)
+                {
+                    const i64 len = blocks[b % 5] < frames - off ? blocks[b % 5] : frames - off;
+                    audio::apply_biquad(chunked.data() + off * 2, len, filter, cutoff, q, chunk_state);
+                    off += len;
+                }
+
+                f64 z1[2] = {};
+                f64 z2[2] = {};
+                reference_apply_biquad(reference.data(), frames, filter, cutoff, q, z1, z2);
+
+                INFO("filter " << int(filter) << " cutoff " << cutoff << " q " << q);
+                const usize bytes = input.size() * sizeof(f32);
+                CHECK(std::memcmp(single.data(), reference.data(), bytes) == 0);
+                CHECK(std::memcmp(chunked.data(), reference.data(), bytes) == 0);
+                for (int c = 0; c < 2; ++c)
+                {
+                    CHECK(std::memcmp(&single_state[c].z1, &z1[c], sizeof(f64)) == 0);
+                    CHECK(std::memcmp(&single_state[c].z2, &z2[c], sizeof(f64)) == 0);
+                    CHECK(std::memcmp(&chunk_state[c].z1, &z1[c], sizeof(f64)) == 0);
+                    CHECK(std::memcmp(&chunk_state[c].z2, &z2[c], sizeof(f64)) == 0);
+                }
+            }
+        }
+    }
 }

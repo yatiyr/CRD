@@ -149,8 +149,7 @@ crd::i64 render_graph(const AudioGraphResource& graph, crd::containers::ConstSpa
     constexpr crd::i64                block_cap = 256;
     crd::containers::Array<crd::f32>  bus(alloc);
     bus.resize(static_cast<crd::usize>(n) * block_cap * 2U);
-    crd::f64 bq_z1[256][2] = {};
-    crd::f64 bq_z2[256][2] = {};
+    crd::hesap::dsp::BiquadState<crd::f64> bq_state[256][2] = {};
 
     for (crd::i64 start = 0; start < frames; start += block_cap)
     {
@@ -211,7 +210,7 @@ crd::i64 render_graph(const AudioGraphResource& graph, crd::containers::ConstSpa
                 const crd::f32      cutoff = autom != nullptr
                                                  ? auto_value_at(graph, *autom, start, graph.sample_rate)
                                                  : node.cutoff; // coeffs per block (state carries across)
-                apply_biquad(mine, len, node.filter, cutoff, node.q, bq_z1[node_index], bq_z2[node_index]);
+                apply_biquad(mine, len, node.filter, cutoff, node.q, bq_state[node_index]);
                 break;
             }
             case AudioNodeType::Mix:

@@ -53,6 +53,7 @@
     },
     {
       "paths": [
+        "runtime/examples/bench_biquad_and_orient.cpp",
         "runtime/examples/bench_comms_vs_refs.cpp",
         "runtime/examples/bench_decomp.cpp",
         "runtime/examples/bench_distributions.cpp",
