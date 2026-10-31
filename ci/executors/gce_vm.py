@@ -39,6 +39,12 @@ class BakeError(RuntimeError):
     pass
 
 
+def disk_type(config, zone):
+    """The boot disk type of a device's machines: `disk_type` in its config, pd-balanced by default (the registry
+    requires hyperdisk-balanced on the families that support no Persistent Disk, pipeline.HYPERDISK_ONLY)."""
+    return 'zones/%s/diskTypes/%s' % (zone, config.get('disk_type', 'pd-balanced'))
+
+
 class HttpError(RuntimeError):
     def __init__(self, status, body):
         super().__init__('HTTP %s: %s' % (status, body[:400]))
@@ -185,7 +191,7 @@ class GceVm:
             'scheduling': scheduling,
             'disks': [{'boot': True, 'autoDelete': True, 'initializeParams': {
                 'sourceImage': 'projects/%s/global/images/family/%s' % (self.project, config['image_family']),
-                'diskSizeGb': str(config['disk_gb']), 'diskType': 'zones/%s/diskTypes/pd-balanced' % zone}}],
+                'diskSizeGb': str(config['disk_gb']), 'diskType': disk_type(config, zone)}}],
             'networkInterfaces': [{'network': 'global/networks/default',
                                    'accessConfigs': [{'type': 'ONE_TO_ONE_NAT', 'name': 'External NAT'}]}],
             'serviceAccounts': [{'email': self.environ.get('CERID_CI_RUNNER_SERVICE_ACCOUNT', ''),
@@ -271,7 +277,8 @@ class GceVm:
             'scheduling': {'automaticRestart': False, 'onHostMaintenance': 'TERMINATE',
                            'maxRunDuration': {'seconds': 4 * 3600}, 'instanceTerminationAction': 'STOP'},
             'disks': [{'boot': True, 'autoDelete': True, 'initializeParams': {
-                'sourceImage': config['base_image'], 'diskSizeGb': str(config['disk_gb'])}}],
+                'sourceImage': config['base_image'], 'diskSizeGb': str(config['disk_gb']),
+                'diskType': disk_type(config, zone)}}],
             'networkInterfaces': [{'network': 'global/networks/default',
                                    'accessConfigs': [{'type': 'ONE_TO_ONE_NAT', 'name': 'External NAT'}]}],
             'serviceAccounts': [{'email': self.environ.get('CERID_CI_RUNNER_SERVICE_ACCOUNT', ''),

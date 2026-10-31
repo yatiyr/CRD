@@ -161,7 +161,7 @@
       "cpu": {"model": "Google Axion, Neoverse V2 (c4a; SVE2)", "arch": "aarch64", "levels": ["portable", "neon"]},
       "gpu": {"vendor": "software", "model": "none", "apis": []},
       "executor": "gce_vm",
-      "executor_config": {"machine_type": "c4a-standard-8", "image_family": "cerid-ci-ubuntu-2404-arm64",
+      "executor_config": {"machine_type": "c4a-standard-8", "disk_type": "hyperdisk-balanced", "image_family": "cerid-ci-ubuntu-2404-arm64",
                           "base_image": "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-arm64", "disk_gb": 150, "spot": true, "max_run_hours": 6},
       "tier": "A",
       "cost_class": "spot",

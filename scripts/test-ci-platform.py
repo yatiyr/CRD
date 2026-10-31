@@ -96,6 +96,22 @@ class Registry(unittest.TestCase):
         self.assertIn("kind 'mainframe'", problems)
         self.assertIn('no cell has a Imagination PowerVR GPU', problems)
 
+    def test_a_hyperdisk_only_machine_needs_a_hyperdisk(self):
+        broken = json.loads(json.dumps(REGISTRY))
+        axion = pipeline.devices_by_id(broken)['gce-linux-arm64-axion']['executor_config']
+        axion.pop('disk_type')
+        self.assertIn('device gce-linux-arm64-axion: c4a machines take no Persistent Disk; set disk_type '
+                      'hyperdisk-balanced',
+                      pipeline.validate_registry(broken, TIERS, PRESETS, ROWS))
+        executor = gce_vm.GceVm({})
+        devices = pipeline.devices_by_id(REGISTRY)
+        for ident, disk in (('gce-linux-arm64-axion', 'hyperdisk-balanced'), ('gce-linux-x64-intel', 'pd-balanced')):
+            _, body = executor.body('m', devices[ident], AGENT_SPEC)
+            _, bake = executor.bake_body(devices[ident], 'script')
+            for made in (body, bake):
+                self.assertEqual(made['disks'][0]['initializeParams']['diskType'],
+                                 'zones/us-central1-a/diskTypes/%s' % disk, ident)
+
     def test_unknown_roadmap_row_is_refused(self):
         broken = json.loads(json.dumps(REGISTRY))
         broken['features']['vulkan']['rows'].append('NO-SUCH-ROW')

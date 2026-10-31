@@ -163,6 +163,10 @@ def tracked_inside(path, root=ROOT):
     return bool(completed.stdout.strip())
 
 
+# Compute Engine machine families whose boot disk must be a Hyperdisk (pd-balanced is refused with HTTP 400).
+HYPERDISK_ONLY = ('c4', 'c4a', 'c4d', 'n4', 'n4a', 'n4d', 'x4', 'm4', 'a4', 'a4x')
+
+
 def validate_registry(document, tiers, presets=None, rows=None):
     """Problems of the registry: shape, references, ownership of every ci-tiers job and the required coverage."""
     problems = []
@@ -245,6 +249,10 @@ def validate_registry(document, tiers, presets=None, rows=None):
             for field in ('machine_type', 'image_family', 'base_image', 'disk_gb', 'max_run_hours'):
                 if field not in config:
                     problems.append('%s: gce_vm config lacks %s' % (where, field))
+            family = str(config.get('machine_type', '')).split('-')[0]
+            if family in HYPERDISK_ONLY and not config.get('disk_type', '').startswith('hyperdisk-'):
+                problems.append('%s: %s machines take no Persistent Disk; set disk_type hyperdisk-balanced'
+                                % (where, family))
         for job in device.get('ci_jobs', []):
             hosts.setdefault(job, []).append(ident)
     for job in tiers.get('jobs', {}):
