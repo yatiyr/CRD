@@ -128,10 +128,11 @@ def identity_verifier(config, environ):
     return verify
 
 
-def build(config, environ, store=None, log=None):
-    """Every component of a running coordinator, from the configuration and the environment."""
+def make_coordinator(config, environ, store, log=None, registry=None):
+    """The coordinator library as the running service configures it: secrets, HTTP, the git mirror and the plan
+    step's launcher settings. ops.py builds its coordinator here too, so a build it starts is pinned in the mirror
+    and plans like a triggered one."""
     p = scheduler.pipeline_module()
-    store = store or p.open_store(environ.get('CERID_CI_STORE'))
     from executors import gce_vm
 
     def http(method, url, body=None, headers=None):
@@ -140,9 +141,18 @@ def build(config, environ, store=None, log=None):
     if any(r.get('checkout') == 'mirror' for r in config.get('repositories', {}).values()):
         mirror = triggers.Mirror(environ.get('CERID_CI_MIRROR_DIR') or config.get('mirror_dir',
                                                                                    '/var/lib/cerid-ci/mirror'))
+    registry = registry or p.load_registry()
+    return scheduler.Coordinator(store, config, secrets=secrets_provider(config, environ), http=http, log=log,
+                                 mirror=mirror, plan_env=p.plan_environment(registry, environ))
+
+
+def build(config, environ, store=None, log=None):
+    """Every component of a running coordinator, from the configuration and the environment."""
+    p = scheduler.pipeline_module()
+    store = store or p.open_store(environ.get('CERID_CI_STORE'))
     registry = p.load_registry()
-    coordinator = scheduler.Coordinator(store, config, secrets=secrets_provider(config, environ), http=http,
-                                        log=log, mirror=mirror, plan_env=p.plan_environment(registry, environ))
+    coordinator = make_coordinator(config, environ, store, log, registry)
+    mirror = coordinator.mirror
     dispatcher = None
     if environ.get('CERID_CI_GCP_PROJECT'):
         import executors

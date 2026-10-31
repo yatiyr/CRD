@@ -2797,6 +2797,25 @@ class Cli(Base):
             self.assertIn(code, (0, 1), (argv, err))
             json.loads(out)
 
+    def test_a_started_build_is_pinned_in_the_mirror_and_plans_with_the_launcher_settings(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            source, mirror = Path(scratch) / 'source.git', Path(scratch) / 'mirror'
+
+            def git(*args, cwd=None):
+                return subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@example.com'] + list(args),
+                                      cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
+            git('init', '--quiet', '-b', 'main', str(source))
+            git('commit', '--quiet', '--allow-empty', '-m', 'one', cwd=source)
+            commit = git('rev-parse', 'HEAD', cwd=source)
+            code, out, err = self.ops('--json', 'build', 'start', '--commit', commit, environ={
+                'CERID_CI_REPOSITORY_URL': str(source), 'CERID_CI_MIRROR_DIR': str(mirror),
+                'CERID_CI_GCP_PROJECT': 'cerid-ci'})
+            self.assertEqual(code, 0, err)
+            number = json.loads(out)['build']
+            self.assertEqual(git('rev-parse', 'refs/cerid/builds/%d' % number, cwd=mirror / 'cerid.git'), commit)
+            got = self.c.poll(agent(self.c, name='launcher'))
+            self.assertEqual((got['job']['key'], got['job']['env']['CERID_CI_GCP_PROJECT']), ('plan', 'cerid-ci'))
+
     def test_legacy_verbs_still_work(self):
         self.assertEqual(ops.legacy(['builds']), ['build', 'list'])
         self.assertEqual(ops.legacy(['--json', 'add-device', '--id', 'x']), ['device', 'add', '--id', 'x', '--json'])

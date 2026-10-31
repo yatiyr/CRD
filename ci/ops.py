@@ -170,8 +170,7 @@ def orchestrator(ctx):
     config, _ = coordinator_main.load_config(ctx.args.config, ctx.environ)
     store = pipeline().open_store(ctx.args.store)
     log = scheduler.JsonLog(open(os.devnull, 'w'))
-    return scheduler.Coordinator(store, config, secrets=coordinator_main.secrets_provider(config, ctx.environ),
-                                 log=log)
+    return coordinator_main.make_coordinator(config, ctx.environ, store, log, ctx.registry)
 
 
 def who(environ):
