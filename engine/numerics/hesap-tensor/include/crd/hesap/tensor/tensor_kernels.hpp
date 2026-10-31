@@ -233,11 +233,12 @@ struct PermuteNext
     crd::u64 nb;
 };
 
-// The permute board's levers (SIMD-DISPATCH; board scaffolding: the board folds the winners into these defaults, which
-// are HEAD's choices, and deletes what picks nothing). hint is the hint of the next-tile prefetches, distance how many
-// tiles ahead they reach (0 none, 1 the next tile, HPTT's macro-tile order), dst_prefetch whether they also reach the
-// next tile's destination rows under regular stores, scalar runs the scalar tile in place of the level's register
-// transposes, and order is the outer odometer's (permute_tiles.hpp permute_outer_order).
+// The permute board's levers (SIMD-DISPATCH; board scaffolding: the board folds the winners into these defaults and
+// deletes what picks nothing). hint is the hint of the next-tile prefetches, distance how many tiles ahead they reach
+// (0 none, 1 the next tile, HPTT's macro-tile order), dst_prefetch whether they also reach the next tile's destination
+// rows under regular stores, scalar runs the scalar tile in place of the level's register transposes, and order is the
+// outer odometer's (permute_tiles.hpp permute_outer_order). No next-tile prefetch: distance 1 trailed none in 47 of 48
+// cells of the 2026-10-31 board (one thread at avx2, sse4.2 and sse2, 8 and 16 workers at avx2; none 1.05x to 1.92x).
 enum class PermuteHint : crd::u8
 {
     T0,
@@ -255,7 +256,7 @@ enum class PermuteOrder : crd::u8
 struct PermutePick
 {
     PermuteHint hint = PermuteHint::T2;
-    crd::u8 distance = 1U;
+    crd::u8 distance = 0U;
     bool dst_prefetch = true;
     bool scalar = false;
     PermuteOrder order = PermuteOrder::Src;

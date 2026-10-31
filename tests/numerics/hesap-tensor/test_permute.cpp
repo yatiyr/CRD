@@ -645,7 +645,8 @@ namespace tn = crd::hesap::tensor;
 
 // The permute board's arms (detail::PermuteArm): the rules, then the kernel levers (hints, distances, no destination
 // prefetch, the scalar tile, HPTT's outer order), both serial tile edges, forced and refused non-temporal stores,
-// multithreaded tiles and super-blocks for every element size, and staged strips (the rules' tall tiles and others).
+// multithreaded tiles and super-blocks for every element size, staged strips (the rule: its tall tiles and others) and
+// unstaged tiles.
 constexpr tn::PermutePick kPickA{tn::PermuteHint::T0, 2U, false, false, tn::PermuteOrder::Hptt};
 constexpr tn::PermutePick kPickB{tn::PermuteHint::Nta, 0U, true, false, tn::PermuteOrder::Src};
 constexpr tn::PermutePick kPickC{tn::PermuteHint::T1, 1U, true, true, tn::PermuteOrder::Hptt};
@@ -654,8 +655,8 @@ constexpr tn::detail::PermuteArm kArms[] = {
     {kPickA, 32U, 0U, 0U, 0U, 0U, tn::detail::PermuteStream::Auto, false},
     {kPickB, 64U, 0U, 0U, 0U, 0U, tn::detail::PermuteStream::On, false},
     {kPickC, 0U, 64U, 16U, 4U, 4U, tn::detail::PermuteStream::Off, true},
-    {{}, 0U, 512U, 32U, 2U, 8U, tn::detail::PermuteStream::Auto, true},
-    {kPickA, 0U, 32U, 64U, 8U, 2U, tn::detail::PermuteStream::On, true},
+    {{}, 0U, 512U, 32U, 2U, 8U, tn::detail::PermuteStream::Auto, false},
+    {kPickA, 0U, 32U, 64U, 8U, 2U, tn::detail::PermuteStream::On, false},
 };
 
 // Every arm, serial and at 1, 3, 8 and 16 workers, gives permute_copy's serial bits, unscaled and scaled; an arm

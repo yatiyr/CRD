@@ -529,12 +529,12 @@ void transpose_micro(const typename E::Scalar* src, crd::i64 src_stride, typenam
 
 // One tile, strides and extents in elements. With a unit source stride the micro transposes cover the tile's grid in
 // blocks of E::kBlockRows rows of a (ib outer within a block), and the right and bottom strips finish scalar; any
-// other source stride, or pick.scalar, is the scalar tile. Each block step prefetches with pick.hint (HPTT's T2 by
-// default) the same block step of the next tile (next, inside its extents only): one line of each source column and,
-// unless the stores are non-temporal or pick.dst_prefetch is off, the destination rows once per line of them. On the
-// streamed path with near columns (<= 64 KB apart) it also prefetches the next step's source columns into L1: it hides
-// strided-read latency the streamer cannot track in the multithreaded regime (2D f32 46.8 -> 51.2 GB/s); on
-// page-scattered columns those TLB walks cost more than they hide.
+// other source stride, or pick.scalar, is the scalar tile. Given a next tile (pick.distance; the rules give none), each
+// block step prefetches with pick.hint the same block step of the next tile (inside its extents only): one line of
+// each source column and, unless the stores are non-temporal or pick.dst_prefetch is off, the destination rows once
+// per line of them. On the streamed path with near columns (<= 64 KB apart) it also prefetches the next step's source
+// columns into L1: it hides strided-read latency the streamer cannot track in the multithreaded regime (2D f32 46.8 ->
+// 51.2 GB/s); on page-scattered columns those TLB walks cost more than they hide.
 template <typename E, bool Scale, bool Stream>
 void permute_tile(typename E::Scalar* dst, crd::i64 ra, const typename E::Scalar* src, crd::i64 sa, crd::i64 sb,
                   crd::u64 na, crd::u64 nb, typename E::Scalar ar, typename E::Scalar ai, PermuteNext next,
@@ -780,7 +780,7 @@ void permute_region_f64(const PermuteRegion<crd::f64>& r) noexcept
     }
 }
 
-// The serial walk: every plane one region, which prefetches the next plane.
+// The serial walk: every plane one region, handed the next plane for a pick distance that reaches past it.
 template <typename E, bool Scale, bool Stream> void permute_walk(const PermuteWalk<typename E::Scalar>& w) noexcept
 {
     const crd::u32 b = w.m - 1U;

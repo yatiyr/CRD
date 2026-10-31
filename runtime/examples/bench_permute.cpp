@@ -5,10 +5,11 @@
 // timed round by round in turn so the arms share the host's state, the median of the rounds reported.
 //
 // --one-thread: the serial walk's arms: the rules, tile edges 32 and 64, non-temporal stores, HPTT's outer order, the
-// prefetch hints T0, T1 and NTA, prefetch distances 0 and 2, no destination prefetch, and the scalar tile in place of
-// the level's register transposes. --threads N: the multithreaded tasks' arms on N workers: the rules, stores forced
-// regular or non-temporal, staged full-column strips (each also with forced stores), tiles and super-blocks for 8- and
-// 16-byte elements, HPTT's order, distance 2, the T0 hint and the scalar tile. No argument runs --one-thread.
+// prefetch hints T0, T1 and NTA, prefetch distances 1 and 2, no destination prefetch, and the scalar tile in place of
+// the level's register transposes. --threads N: the multithreaded tasks' arms on N workers: the rules (staged
+// full-column strips), stores forced regular or non-temporal, unstaged tiles (each also with forced stores), tiles
+// and super-blocks for 8- and 16-byte elements, HPTT's order, distances 1 and 2, the T0 hint and the scalar tile. No
+// argument runs --one-thread.
 //
 // Every arm must give the bits of a reference walk of src.permute(order) (a plain copy, the family is bit-exact on
 // every level and worker count, ADR-0063); a refusal or a miss fails the run. GB/s counts one read and one write per
@@ -83,10 +84,12 @@ struct Arm
     PermuteArm arm;
 };
 
+// A hint applies to the next-tile prefetches, which the rules leave out: each hint arm reaches the next tile.
 constexpr PermutePick pick_hint(PermuteHint hint)
 {
     PermutePick p{};
     p.hint = hint;
+    p.distance = 1U;
     return p;
 }
 
@@ -97,9 +100,9 @@ constexpr PermutePick pick_distance(u32 distance)
     return p;
 }
 
-constexpr PermutePick kHpttOrder{PermuteHint::T2, 1U, true, false, PermuteOrder::Hptt};
-constexpr PermutePick kNoDstPrefetch{PermuteHint::T2, 1U, false, false, PermuteOrder::Src};
-constexpr PermutePick kScalar{PermuteHint::T2, 1U, true, true, PermuteOrder::Src};
+constexpr PermutePick kHpttOrder{PermuteHint::T2, 0U, true, false, PermuteOrder::Hptt};
+constexpr PermutePick kNoDstPrefetch{PermuteHint::T2, 1U, false, false, PermuteOrder::Src}; // against distance 1
+constexpr PermutePick kScalar{PermuteHint::T2, 0U, true, true, PermuteOrder::Src};
 
 constexpr PermuteArm serial(PermutePick pick, u64 tile, PermuteStream stream)
 {
@@ -107,9 +110,9 @@ constexpr PermuteArm serial(PermutePick pick, u64 tile, PermuteStream stream)
 }
 
 constexpr PermuteArm parallel(PermutePick pick, u64 tile_a, u64 tile_b, u64 sup_a, u64 sup_b, PermuteStream stream,
-                              bool staged)
+                              bool unstaged)
 {
-    return PermuteArm{pick, 0U, tile_a, tile_b, sup_a, sup_b, stream, staged};
+    return PermuteArm{pick, 0U, tile_a, tile_b, sup_a, sup_b, stream, unstaged};
 }
 
 constexpr PermuteStream kAuto = PermuteStream::Auto;
@@ -123,7 +126,7 @@ constexpr Arm kSerialArms[] = {
     {"hint t0", serial(pick_hint(PermuteHint::T0), 0U, kAuto)},
     {"hint t1", serial(pick_hint(PermuteHint::T1), 0U, kAuto)},
     {"hint nta", serial(pick_hint(PermuteHint::Nta), 0U, kAuto)},
-    {"distance 0", serial(pick_distance(0U), 0U, kAuto)},
+    {"distance 1", serial(pick_distance(1U), 0U, kAuto)},
     {"distance 2", serial(pick_distance(2U), 0U, kAuto)},
     {"no dst prefetch", serial(kNoDstPrefetch, 0U, kAuto)},
     {"scalar tile", serial(kScalar, 0U, kAuto)},
@@ -133,9 +136,9 @@ constexpr Arm kParallelArms[] = {
     {"rules", {}},
     {"stream off", parallel({}, 0U, 0U, 0U, 0U, PermuteStream::Off, false)},
     {"stream on", parallel({}, 0U, 0U, 0U, 0U, PermuteStream::On, false)},
-    {"staged", parallel({}, 0U, 0U, 0U, 0U, kAuto, true)},
-    {"staged, stream off", parallel({}, 0U, 0U, 0U, 0U, PermuteStream::Off, true)},
-    {"staged, stream on", parallel({}, 0U, 0U, 0U, 0U, PermuteStream::On, true)},
+    {"unstaged", parallel({}, 0U, 0U, 0U, 0U, kAuto, true)},
+    {"unstaged, stream off", parallel({}, 0U, 0U, 0U, 0U, PermuteStream::Off, true)},
+    {"unstaged, stream on", parallel({}, 0U, 0U, 0U, 0U, PermuteStream::On, true)},
     {"tiles 16x16", parallel({}, 16U, 16U, 0U, 0U, kAuto, false)},
     {"tiles 32x16", parallel({}, 32U, 16U, 0U, 0U, kAuto, false)},
     {"tiles 64x64", parallel({}, 64U, 64U, 0U, 0U, kAuto, false)},
@@ -144,6 +147,7 @@ constexpr Arm kParallelArms[] = {
     {"supers 4x4", parallel({}, 0U, 0U, 4U, 4U, kAuto, false)},
     {"supers 16x16", parallel({}, 0U, 0U, 16U, 16U, kAuto, false)},
     {"order hptt", parallel(kHpttOrder, 0U, 0U, 0U, 0U, kAuto, false)},
+    {"distance 1", parallel(pick_distance(1U), 0U, 0U, 0U, 0U, kAuto, false)},
     {"distance 2", parallel(pick_distance(2U), 0U, 0U, 0U, 0U, kAuto, false)},
     {"hint t0", parallel(pick_hint(PermuteHint::T0), 0U, 0U, 0U, 0U, kAuto, false)},
     {"scalar tile", parallel(kScalar, 0U, 0U, 0U, 0U, kAuto, false)},

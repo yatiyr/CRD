@@ -232,9 +232,9 @@ template <typename S> bool scaled(Alpha<S> alpha)
     return !(alpha.re == S(1) && alpha.im == S(0));
 }
 
-// The permute board's levers (PermutePick, a stage or non-temporal stores): HEAD's first, then other hints and
-// distances (none, two tiles ahead), no destination prefetch, the scalar tile, HPTT's outer order, each with and
-// without the region's stage (or, on a walk, the stores' variant).
+// The permute board's levers (PermutePick, a stage or non-temporal stores): the rules first (no next-tile prefetch),
+// then other hints and distances (two tiles ahead, the next tile), no destination prefetch, the scalar tile, HPTT's
+// outer order, each with and without the region's stage (or, on a walk, the stores' variant).
 struct PickCase
 {
     tn::PermutePick pick;

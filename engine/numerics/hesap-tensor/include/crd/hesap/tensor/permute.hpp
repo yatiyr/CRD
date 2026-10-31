@@ -40,7 +40,7 @@
 //        one call, a multithreaded task one call per region; tiles with a unit
 //        source stride run the in-register transposes (32-byte squares on
 //        AVX2, 16-byte on SSE2) over blocks of one 64-byte source line per
-//        column, and prefetch the next tile (across planes and tasks); every
+//        column (no next-tile prefetch: it lost the 2026-10-31 board); every
 //        other element type runs the scalar tile loop with the write stream
 //        contiguous.
 //      - tiny inner extents fall back to the simple strided row loop (tile
@@ -149,9 +149,10 @@ inline constexpr crd::u64 kPermuteTinyDim = 8U;
 
 // The permute board's arms (SIMD-DISPATCH; board scaffolding: the keep-or-drop step folds the winners into the rules
 // below and deletes this): the kernel levers (PermutePick), the serial tile edge, the multithreaded tile and
-// super-block (its edges in tiles), the non-temporal stores, and staged strips for the multithreaded tasks (each task
-// stages through its own thread's frame arena, unstaged when the arena refuses: the same bits). 0 and Auto keep the
-// rule.
+// super-block (its edges in tiles), the non-temporal stores, and unstaged multithreaded tasks. The rule stages each
+// multithreaded task's tiles of a kernel element through its own thread's frame arena (unstaged when the arena refuses:
+// the same bits): staged strips beat unstaged tiles in all 24 cells of the 2026-10-31 board (8 and 16 workers, 1.07x
+// to 1.85x). 0, Auto and false keep the rule.
 enum class PermuteStream : crd::u8
 {
     Auto, // the rule: multithreaded on a DRAM-sized dst the stores align to, never serial
@@ -168,7 +169,7 @@ struct PermuteArm
     crd::u64 sup_a = 0U;
     crd::u64 sup_b = 0U;
     PermuteStream stream = PermuteStream::Auto;
-    bool staged = false;
+    bool unstaged = false;
 };
 
 inline constexpr PermuteArm kPermuteRules{};
@@ -456,9 +457,9 @@ inline void permute_tiled_mt(T* dst, const T* src, const crd::u64* shp, const cr
                 }
                 return k;
             };
-            // A staged arm's stage comes from this thread's frame arena and goes back before the job returns: the job
-            // never waits, so it cannot resume on another thread holding this thread's mark.
-            const bool staged = prm.arm->staged && kPermuteKernel<T>;
+            // The stage comes from this thread's frame arena and goes back before the job returns: the job never
+            // waits, so it cannot resume on another thread holding this thread's mark.
+            const bool staged = !prm.arm->unstaged && kPermuteKernel<T>;
             const crd::usize mark = staged ? crd::jobs::frame_get_mark() : 0U;
             T* stage = nullptr;
             if (staged)
