@@ -45,8 +45,18 @@ one process across eight layouts: f64 uniform-4 and banded-5 0.76 to 0.90 at eve
 probe gap was mostly layout), wide rows faster. In `sell_ab`, HEAD's own pick for these rows (scalar loads, one slice
 alone, no prefetch) written as a flat loop runs 0.0204 to 0.0210 ms against production's 0.0255 to 0.0261: the
 cost is the slice driver. Its avx2 f64 single-slice path reloads a 0x140-byte frame of spilled view fields and
-stacks every slice's sums before the write, about 170 instructions a slice. A local copy of the slice view (the
-fields no longer reachable through `a`) left the time unchanged (0.83 to 0.89) and was reverted.
+stacks every slice's sums before the write, about 170 instructions a slice; the flat loop (from the linked `sell_ab`
+binary) runs about 100, its frame fields in registers and its write `y[r] = acc` with no scale. Three experiments,
+each built and run through `sell_ab2` at three layouts, were reverted:
+
+- a local copy of the slice view (its fields no longer reachable through `a`): 0.83 to 0.89, unchanged, the fields
+  still spilled;
+- the pair width a constant (`kPairWidth`): 0.84 to 0.87, unchanged, so the pair test is not the cost;
+- the lone slices' loop in a function of its own (`CRD_NOINLINE`): 0.77 to 0.80 and uniform-16 0.97 to 1.02, worse.
+
+So the cost is spread over the per-slice bookkeeping (pair test, column base through `delta_ptr`, `slice_full`, the
+stacked sums, the scaled write) under register pressure, not one item. The fix rebuilds the U32 lone-slice step as
+the flat loop does (state hoisted once per range, the sums written from the register) and is the row's first item.
 
 ## Jobs
 
