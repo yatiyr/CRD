@@ -40,10 +40,18 @@ class BakeError(RuntimeError):
     pass
 
 
-def disk_type(config, zone):
-    """The boot disk type of a device's machines: `disk_type` in its config, pd-balanced by default (the registry
-    requires hyperdisk-balanced on the families that support no Persistent Disk, pipeline.HYPERDISK_ONLY)."""
-    return 'zones/%s/diskTypes/%s' % (zone, config.get('disk_type', 'pd-balanced'))
+def disk_type(config, zone, default='pd-balanced'):
+    """The boot disk type of a device's machines: `disk_type` in its config, else `default` (the registry requires
+    hyperdisk-balanced on the families that support no Persistent Disk, pipeline.HYPERDISK_ONLY). A job machine
+    defaults to pd-balanced; a bake machine to pd-standard, which needs no speed and leaves the region's SSD quota
+    to the job machines."""
+    return 'zones/%s/diskTypes/%s' % (zone, config.get('disk_type', default))
+
+
+def operation_error(operation):
+    """The first error message of a finished Compute Engine operation, or None."""
+    errors = ((operation or {}).get('error') or {}).get('errors') or []
+    return (errors[0].get('message') or errors[0].get('code') or 'error') if errors else None
 
 
 class HttpError(RuntimeError):
@@ -226,10 +234,13 @@ class GceVm:
         return zone, body
 
     def launch(self, machine, device, agent):
+        """The machine's handle. The insert is asynchronous: a quota refusal arrives in its operation, whose name the
+        handle keeps for lost_reason."""
         zone, body = self.body(machine, device, agent)
-        self.http('POST', '%s/projects/%s/zones/%s/instances' % (COMPUTE, self.project, zone), token=self.token(),
-                  body=body)
-        return {'project': self.project, 'zone': zone, 'instance': body['name']}
+        _, operation = self.http('POST', '%s/projects/%s/zones/%s/instances' % (COMPUTE, self.project, zone),
+                                 token=self.token(), body=body)
+        return {'project': self.project, 'zone': zone, 'instance': body['name'],
+                'operation': (operation or {}).get('name')}
 
     def alive(self, handle):
         """False once the instance is gone or stopped (a preempted spot VM is deleted by its termination action);
@@ -241,14 +252,21 @@ class GceVm:
         return payload.get('status') not in ('STOPPING', 'STOPPED', 'TERMINATED', 'SUSPENDING', 'SUSPENDED')
 
     def lost_reason(self, handle):
-        """'preempted' when a zone operation records Compute Engine preempting the instance, 'vm_lost' otherwise: a
-        machine that deleted or powered itself off (its agent was refused, for example) was not preempted."""
+        """(reason, detail) of a machine that is gone: launch_failed when its insert operation failed (a quota
+        refusal), preempted when a zone operation records Compute Engine preempting it, vm_lost otherwise (a machine
+        that deleted or powered itself off, its agent refused for example, was not preempted)."""
+        zone = '%s/projects/%s/zones/%s' % (COMPUTE, handle['project'], handle['zone'])
+        if handle.get('operation'):
+            _, operation = self.http('GET', '%s/operations/%s' % (zone, handle['operation']), token=self.token())
+            error = operation_error(operation)
+            if error:
+                return 'launch_failed', 'creating %s failed: %s' % (handle['instance'], error[:300])
         query = urllib.parse.urlencode({'filter': 'operationType="compute.instances.preempted"', 'maxResults': 500})
-        _, payload = self.http('GET', '%s/projects/%s/zones/%s/operations?%s' % (
-            COMPUTE, handle['project'], handle['zone'], query), token=self.token())
+        _, payload = self.http('GET', '%s/operations?%s' % (zone, query), token=self.token())
         target = '/instances/%s' % handle['instance']
-        hit = any(item.get('targetLink', '').endswith(target) for item in payload.get('items', []))
-        return 'preempted' if hit else 'vm_lost'
+        if any(item.get('targetLink', '').endswith(target) for item in payload.get('items', [])):
+            return 'preempted', 'Compute Engine preempted %s' % handle['instance']
+        return 'vm_lost', 'machine %s disappeared' % handle['instance']
 
     def machines(self):
         """Every job machine of the project (label cerid-ci=job), for the orphan sweep."""
@@ -293,7 +311,7 @@ class GceVm:
                            'maxRunDuration': {'seconds': 4 * 3600}, 'instanceTerminationAction': 'STOP'},
             'disks': [{'boot': True, 'autoDelete': True, 'initializeParams': {
                 'sourceImage': config['base_image'], 'diskSizeGb': str(config['disk_gb']),
-                'diskType': disk_type(config, zone)}}],
+                'diskType': disk_type(config, zone, default='pd-standard')}}],
             'networkInterfaces': [{'network': 'global/networks/default',
                                    'accessConfigs': [{'type': 'ONE_TO_ONE_NAT', 'name': 'External NAT'}]}],
             'serviceAccounts': [{'email': self.environ.get('CERID_CI_RUNNER_SERVICE_ACCOUNT', ''),
@@ -341,7 +359,10 @@ class GceVm:
         zone, body = self.bake_body(device, provision)
         base = '%s/projects/%s/zones/%s/instances' % (COMPUTE, self.project, zone)
         instance = '%s/%s' % (base, body['name'])
-        self.http('POST', base, token=self.token(), body=body)
+        _, operation = self.http('POST', base, token=self.token(), body=body)
+        operation = self.wait_operation(operation, sleep, clock, deadline=clock() + 600, zone=zone)
+        if operation_error(operation):
+            raise BakeError('creating %s failed: %s' % (body['name'], operation_error(operation)))
         log('baking %s on %s; waiting for it to power off (up to %d hours)' % (device['id'], body['name'], hours))
         deadline = clock() + hours * 3600
         serial, offset = '', 0
@@ -372,15 +393,17 @@ class GceVm:
         image = self.image_body(device, zone, body['name'], stamp)
         _, operation = self.http('POST', '%s/projects/%s/global/images' % (COMPUTE, self.project),
                                  token=self.token(), body=image)
-        operation = self.wait_global_operation(operation, sleep, clock, deadline=clock() + 3600)
+        operation = self.wait_operation(operation, sleep, clock, deadline=clock() + 3600)
         if operation.get('error'):
             raise BakeError('creating image %s failed (%s); instance %s stays for inspection' % (
                 image['name'], json.dumps(operation['error'])[:300], body['name']))
         self.http('DELETE', '%s/%s' % (base, body['name']), token=self.token(), allow=(404,))
         return image
 
-    def wait_global_operation(self, operation, sleep, clock, deadline):
-        url = '%s/projects/%s/global/operations/%s' % (COMPUTE, self.project, operation['name'])
+    def wait_operation(self, operation, sleep, clock, deadline, zone=None):
+        """The operation once DONE: a zone operation with `zone`, a global one without."""
+        scope = 'zones/%s' % zone if zone else 'global'
+        url = '%s/projects/%s/%s/operations/%s' % (COMPUTE, self.project, scope, operation['name'])
         while operation.get('status') != 'DONE':
             if clock() >= deadline:
                 raise BakeError('operation %s did not finish in time' % operation['name'])

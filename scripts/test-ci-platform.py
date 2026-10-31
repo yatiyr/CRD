@@ -107,12 +107,15 @@ class Registry(unittest.TestCase):
                       pipeline.validate_registry(broken, TIERS, PRESETS, ROWS))
         executor = gce_vm.GceVm({})
         devices = pipeline.devices_by_id(REGISTRY)
-        for ident, disk in (('gce-linux-arm64-axion', 'hyperdisk-balanced'), ('gce-linux-x64-intel', 'pd-balanced')):
-            _, body = executor.body('m', devices[ident], AGENT_SPEC)
-            _, bake = executor.bake_body(devices[ident], 'script')
-            for made in (body, bake):
-                self.assertEqual(made['disks'][0]['initializeParams']['diskType'],
-                                 'zones/us-central1-a/diskTypes/%s' % disk, ident)
+        # A bake machine takes pd-standard unless the family needs a Hyperdisk: the SSD quota is the job machines'.
+        for ident, job, bake in (('gce-linux-arm64-axion', 'hyperdisk-balanced', 'hyperdisk-balanced'),
+                                 ('gce-linux-x64-intel', 'pd-balanced', 'pd-standard')):
+            _, made = executor.body('m', devices[ident], AGENT_SPEC)
+            _, baked = executor.bake_body(devices[ident], 'script')
+            self.assertEqual(made['disks'][0]['initializeParams']['diskType'],
+                             'zones/us-central1-a/diskTypes/%s' % job, ident)
+            self.assertEqual(baked['disks'][0]['initializeParams']['diskType'],
+                             'zones/us-central1-a/diskTypes/%s' % bake, ident)
 
     def test_unknown_roadmap_row_is_refused(self):
         broken = json.loads(json.dumps(REGISTRY))
@@ -725,17 +728,25 @@ class Executors(unittest.TestCase):
         with self.assertRaises(ValueError):
             executor.body('m', device, dict(AGENT_SPEC, token='cjt_x'))
 
-    def test_gce_names_a_preemption_only_when_compute_engine_recorded_one(self):
+    def test_gce_names_why_a_machine_is_gone(self):
         seen = []
 
         def http(method, url, **kwargs):
             seen.append(url)
+            if url.endswith('/operations/op-refused'):
+                return 200, {'status': 'DONE', 'error': {'errors': [
+                    {'code': 'QUOTA_EXCEEDED', 'message': "Quota 'SSD_TOTAL_GB' exceeded.  Limit: 500.0"}]}}
+            if url.endswith('/operations/op-made'):
+                return 200, {'status': 'DONE'}
             return 200, {'items': [{'targetLink': COMPUTE_ZONE + '/instances/cerid-ci-a-a1'}]}
         executor = gce_vm.GceVm({}, http=http, token=lambda: 't')
-        handle = {'project': 'cerid-ci', 'zone': 'us-central1-a', 'instance': 'cerid-ci-a-a1'}
-        self.assertEqual(executor.lost_reason(handle), 'preempted')
-        self.assertEqual(executor.lost_reason(dict(handle, instance='cerid-ci-a-a2')), 'vm_lost')
-        self.assertIn('compute.instances.preempted', urllib.parse.unquote(seen[0]))
+        handle = {'project': 'cerid-ci', 'zone': 'us-central1-a', 'instance': 'cerid-ci-a-a1', 'operation': 'op-made'}
+        self.assertEqual(executor.lost_reason(handle)[0], 'preempted')
+        self.assertIn('compute.instances.preempted', urllib.parse.unquote(seen[-1]))
+        self.assertEqual(executor.lost_reason(dict(handle, instance='cerid-ci-a-a2'))[0], 'vm_lost')
+        reason, detail = executor.lost_reason(dict(handle, operation='op-refused'))
+        self.assertEqual(reason, 'launch_failed', 'a quota refusal is not a lost machine')
+        self.assertIn('SSD_TOTAL_GB', detail)
 
     def test_gce_console_and_android_machine_features(self):
         executor = gce_vm.GceVm({})
@@ -812,12 +823,17 @@ class Executors(unittest.TestCase):
         self.assertLess(windows.index('try {'), windows.index('Install-Pinned '))
         self.assertIn('cerid-ci-bake-failed: $($_.Exception.Message)', windows)
 
-    def bake_calls(self, serial, operation_error=None):
+    def bake_calls(self, serial, operation_error=None, insert_error=None):
         calls, clock = [], [0.0]
 
         def http(method, url, **kwargs):
             calls.append((method, url))
             running = clock[0] < 60
+            if url.endswith('/operations/op-insert'):
+                return 200, dict({'name': 'op-insert', 'status': 'DONE'}, **(
+                    {'error': {'errors': [{'message': insert_error}]}} if insert_error else {}))
+            if method == 'POST' and url.endswith('/instances'):
+                return 200, {'name': 'op-insert', 'status': 'RUNNING'}
             if method == 'GET' and 'serialPort' in url:
                 if not running:  # Compute Engine refuses a stopped instance's serial console
                     raise gce_vm.HttpError(400, '{"error": {"errors": [{"reason": "resourceNotReady"}]}}')
@@ -866,6 +882,12 @@ class Executors(unittest.TestCase):
         self.assertIn('RESOURCE_NOT_FOUND', str(error))
         self.assertFalse([m for m, _ in calls if m == 'DELETE'], 'the instance stays when the image failed')
 
+    def test_bake_reports_a_refused_instance(self):
+        calls, error = self.bake_calls('', insert_error="Quota 'SSD_TOTAL_GB' exceeded.  Limit: 500.0")
+        self.assertIsInstance(error, gce_vm.BakeError)
+        self.assertIn('SSD_TOTAL_GB', str(error))
+        self.assertFalse([u for m, u in calls if 'serialPort' in u or u.endswith('/global/images')])
+
     def test_bake_stops_a_failed_provision_at_once(self):
         for line in ('cerid-ci-bake-failed: line 7 exited 100',
                      '[WARNING]: Script "windows-startup-script-ps1" failed with error: exit status 1'):
@@ -874,7 +896,8 @@ class Executors(unittest.TestCase):
             self.assertIn(line[:30], str(error))
             stops = [i for i, (m, u) in enumerate(calls) if m == 'POST' and u.endswith('/stop')]
             self.assertEqual(len(stops), 1, 'the idle instance is stopped, not left running for hours')
-            self.assertEqual(len([m for m, u in calls[:stops[0]] if m == 'GET' and 'serialPort' not in u]), 1)
+            polls = [u for m, u in calls[:stops[0]] if m == 'GET' and 'serialPort' not in u and '/operations/' not in u]
+            self.assertEqual(len(polls), 1, 'stopped on the first poll that read the failure')
             self.assertFalse([u for m, u in calls if u.endswith('/global/images')])
 
     def test_ssh_host_sends_the_token_on_standard_input_only(self):

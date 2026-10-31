@@ -144,15 +144,14 @@ class Dispatcher:
                     self.c.log('machine_probe_failed', level='warning', machine=record['machine'], error=str(error))
                     alive = None
                 if alive is False:
-                    reason = 'vm_lost'
-                    if record.get('spot') and hasattr(executor, 'lost_reason'):
+                    reason, detail = 'vm_lost', 'machine %s disappeared' % record['machine']
+                    if hasattr(executor, 'lost_reason'):
                         try:
-                            reason = executor.lost_reason(record['handle'])
+                            reason, detail = executor.lost_reason(record['handle'])
                         except Exception as error:
                             self.c.log('machine_probe_failed', level='warning', machine=record['machine'],
                                        error=str(error))
-                    self.c.infrastructure(job['id'], reason, 'machine %s disappeared' % record['machine'],
-                                          attempt=record['attempt'])
+                    self.c.infrastructure(job['id'], reason, detail, attempt=record['attempt'])
                     done = True
             if not done:
                 continue

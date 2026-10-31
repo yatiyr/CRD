@@ -1177,7 +1177,9 @@ class FakeExecutor:
         return handle['instance'] not in self.dead
 
     def lost_reason(self, handle):
-        return 'preempted' if handle['instance'] in self.preempted else 'vm_lost'
+        if handle['instance'] in self.preempted:
+            return 'preempted', 'Compute Engine preempted %s' % handle['instance']
+        return 'vm_lost', 'machine %s disappeared' % handle['instance']
 
     def teardown(self, handle):
         self.torn.append(handle['instance'])
