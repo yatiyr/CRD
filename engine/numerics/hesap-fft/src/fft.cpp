@@ -93,11 +93,26 @@ long g_ds_calls = 0;
 unsigned long long g_ip_gather = 0, g_ip_pass = 0;
 long g_ip_calls = 0;
 
+namespace
+{
+// A cycle count as a double (the conversion the profile tree's -Wconversion build asks to be spelled).
+[[nodiscard]] double cycles(unsigned long long count) noexcept
+{
+    return static_cast<double>(count);
+}
+
+// One four-step phase: Mcyc a call and its share of the transform.
+void print_phase(const char* name, unsigned long long count, double calls, double pct) noexcept
+{
+    std::fprintf(stderr, "  %-11s %8.1f  (%4.1f%%)\n", name, cycles(count) / calls / 1e6, cycles(count) * pct);
+}
+} // namespace
+
 void dump_ip() noexcept
 {
     const double c = static_cast<double>(g_ip_calls > 0 ? g_ip_calls : 1);
     std::fprintf(stderr, "[fft-prof ip4aos, %ld calls] gather %.1f Kcyc  passes %.1f Kcyc\n", g_ip_calls,
-                 g_ip_gather / c / 1e3, g_ip_pass / c / 1e3);
+                 cycles(g_ip_gather) / c / 1e3, cycles(g_ip_pass) / c / 1e3);
     g_ip_gather = g_ip_pass = 0;
     g_ip_calls = 0;
 }
@@ -115,24 +130,24 @@ void dump() noexcept
 void dump_four_step() noexcept
 {
     const double c = static_cast<double>(g_fs_calls > 0 ? g_fs_calls : 1);
-    const double tot = static_cast<double>(g_p1_gather + g_p1_sub + g_p1_tw + g_p2_gather + g_p2_sub + g_p2_scatter);
+    const double tot = cycles(g_p1_gather + g_p1_sub + g_p1_tw + g_p2_gather + g_p2_sub + g_p2_scatter);
     const double pct = tot > 0 ? 100.0 / tot : 0.0;
     std::fprintf(stderr, "[fft-prof four-step, %ld calls, Mcyc/call]\n", g_fs_calls);
-    std::fprintf(stderr, "  P1 gather   %8.1f  (%4.1f%%)\n", g_p1_gather / c / 1e6, g_p1_gather * pct);
-    std::fprintf(stderr, "  P1 sub-FFT  %8.1f  (%4.1f%%)\n", g_p1_sub / c / 1e6, g_p1_sub * pct);
-    std::fprintf(stderr, "  P1 twid+NT  %8.1f  (%4.1f%%)\n", g_p1_tw / c / 1e6, g_p1_tw * pct);
-    std::fprintf(stderr, "  P2 gather   %8.1f  (%4.1f%%)\n", g_p2_gather / c / 1e6, g_p2_gather * pct);
-    std::fprintf(stderr, "  P2 sub-FFT  %8.1f  (%4.1f%%)\n", g_p2_sub / c / 1e6, g_p2_sub * pct);
-    std::fprintf(stderr, "  P2 scatter  %8.1f  (%4.1f%%)\n", g_p2_scatter / c / 1e6, g_p2_scatter * pct);
+    print_phase("P1 gather", g_p1_gather, c, pct);
+    print_phase("P1 sub-FFT", g_p1_sub, c, pct);
+    print_phase("P1 twid+NT", g_p1_tw, c, pct);
+    print_phase("P2 gather", g_p2_gather, c, pct);
+    print_phase("P2 sub-FFT", g_p2_sub, c, pct);
+    print_phase("P2 scatter", g_p2_scatter, c, pct);
     g_p1_gather = g_p1_sub = g_p1_tw = g_p2_gather = g_p2_sub = g_p2_scatter = 0;
     g_fs_calls = 0;
     if (g_ds_calls > 0)
     {
         const double dc = static_cast<double>(g_ds_calls);
         std::fprintf(stderr, "[fft-prof deep-split, %ld calls, Mcyc/call]\n", g_ds_calls);
-        std::fprintf(stderr, "  S1 fused    %8.2f\n", g_ds1 / dc / 1e6);
-        std::fprintf(stderr, "  S2 notr     %8.2f\n", g_ds2 / dc / 1e6);
-        std::fprintf(stderr, "  S3 strided  %8.2f\n", g_ds3 / dc / 1e6);
+        std::fprintf(stderr, "  S1 fused    %8.2f\n", cycles(g_ds1) / dc / 1e6);
+        std::fprintf(stderr, "  S2 notr     %8.2f\n", cycles(g_ds2) / dc / 1e6);
+        std::fprintf(stderr, "  S3 strided  %8.2f\n", cycles(g_ds3) / dc / 1e6);
         g_ds1 = g_ds2 = g_ds3 = 0;
         g_ds_calls = 0;
     }
