@@ -1,9 +1,12 @@
 // prof_fft_kernel — isolated Cerid FFT kernel for perf profiling. Runs ONE size in a tight loop so `perf stat`
 // attributes uops/IPC/port-pressure/cache-misses to the Cerid butterfly alone (no ref libs in the binary).
-// argv: log2N iters.  Build: see scripts/prof_fft_kernel.sh.  Use at an L1-resident N (e.g. 10 => 1024) to
-// measure the PURE kernel quality (no memory pressure) — that 0.44× vs MKL is the real wall.
+// argv: log2N iters [inverse].  Build: see scripts/prof_fft_kernel.sh.  Use at an L1-resident N (e.g. 10 => 1024) to
+// measure the PURE kernel quality (no memory pressure) — that 0.44× vs MKL is the real wall. The line ends with the
+// FNV-1a digest of one transform of the input (`bits`), so two builds' boards also show they compute the same bits
+// (docs/bench/README.md#fast-ab-boards); the profile tree (CRD_HESAP_FFT_PROFILE) adds the phase counters.
 
 #include <crd/containers/array.hpp>
+#include <crd/containers/hash.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/fft/fft.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -12,6 +15,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 using crd::f64;
 using crd::usize;
@@ -23,6 +27,8 @@ int main(int argc, char** argv)
 {
     const int lg = argc > 1 ? std::atoi(argv[1]) : 10;
     const long iters = argc > 2 ? std::atol(argv[2]) : 2000000;
+    const fft::FftDirection dir =
+        (argc > 3 && std::strcmp(argv[3], "inverse") == 0) ? fft::FftDirection::Inverse : fft::FftDirection::Forward;
     const usize n = usize{1} << lg;
 
     crd::memory::TlsfAllocator alloc(1ULL << 30);
@@ -35,20 +41,28 @@ int main(int argc, char** argv)
         work[i] = Complex<f64>{static_cast<double>(s >> 11) / static_cast<double>(1ULL << 53), 0.5};
     }
     const fft::FftPlan<f64> plan(&alloc, n);
+    // The digest of one transform of the input, outside the timed loop (which runs on its own output).
+    cont::Array<Complex<f64>> once(&alloc);
+    once.resize(n);
+    std::memcpy(once.data(), work.data(), n * sizeof(Complex<f64>));
+    plan.execute(cont::Span<Complex<f64>>(once.data(), n), dir);
+    const crd::u64 bits = crd::containers::fnv1a_64(once.data(), n * sizeof(Complex<f64>));
 
     const auto t0 = std::chrono::steady_clock::now();
     for (long it = 0; it < iters; ++it)
     {
-        plan.execute(cont::Span<Complex<f64>>(work.data(), n), fft::FftDirection::Forward);
+        plan.execute(cont::Span<Complex<f64>>(work.data(), n), dir);
     }
     const auto t1 = std::chrono::steady_clock::now();
     const double secs = std::chrono::duration<double>(t1 - t0).count();
     const double per = secs / static_cast<double>(iters);
     const double gf = 5.0 * static_cast<double>(n) * std::log2(static_cast<double>(n)) / (per * 1e9);
-    std::printf("N=%zu iters=%ld  %.3f ns/fft  %.2f GFLOPS  (sink=%.3f)\n", n, iters, per * 1e9, gf,
-                work[0].re + work[n / 2].im);
+    std::printf("N=%zu iters=%ld  %.3f ns/fft  %.2f GFLOPS  (sink=%.3f) %s bits=%016llx\n", n, iters, per * 1e9,
+                gf, work[0].re + work[n / 2].im, dir == fft::FftDirection::Inverse ? "inverse" : "forward",
+                static_cast<unsigned long long>(bits));
 #ifdef CRD_FFT_PROFILE
     fft::prof::dump();
+    fft::prof::dump_four_step();
 #endif
     return 0;
 }

@@ -16,9 +16,12 @@
 //       the profile loop: one side's forward at 2^A, K times, nothing else in the loop but the input copy each
 //       transform starts from (as the board's); <side> is planned, an algorithm name the planner offers there, mkl,
 //       or copy (the input copy alone: the control whose counters perf stat subtracts). The side is gated against the
-//       FFTW f64 truth first. docs/bench/README.md#fast-ab-boards.
+//       FFTW f64 truth first, and its line ends with the FNV-1a digest of that transform's output (`bits`: two builds
+//       of one side compute the same bits when they match); a CRD_HESAP_FFT_PROFILE tree adds the phase counters.
+//       docs/bench/README.md#fast-ab-boards.
 
 #include <crd/containers/array.hpp>
+#include <crd/containers/hash.hpp>
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/fft/fft.hpp>
@@ -281,6 +284,7 @@ int loop(crd::memory::TlsfAllocator& alloc, int lg, const char* side, long itera
     };
     transform();
     const double err = copy ? 0.0 : max_rel(work.data(), data.truth.data(), n);
+    const crd::u64 bits = crd::containers::fnv1a_64(work.data(), n * sizeof(Complex<f32>));
     int status = 0;
     if (err > bound(n))
     {
@@ -296,9 +300,13 @@ int loop(crd::memory::TlsfAllocator& alloc, int lg, const char* side, long itera
                 transform();
             }
         });
-    std::printf("loop n=%zu side=%s forward=%s iterations=%ld: %.4f ms per transform (with its copy), err %.1e\n", n,
-                side, mkl || copy ? side : fft::fft_algorithm_name(forward), iterations,
-                ms / static_cast<double>(iterations), err);
+    std::printf("loop n=%zu side=%s forward=%s iterations=%ld: %.4f ms per transform (with its copy), err %.1e "
+                "bits=%016llx\n",
+                n, side, mkl || copy ? side : fft::fft_algorithm_name(forward), iterations,
+                ms / static_cast<double>(iterations), err, static_cast<unsigned long long>(bits));
+#ifdef CRD_FFT_PROFILE
+    fft::prof::dump_four_step();
+#endif
     if (h != nullptr)
     {
         DftiFreeDescriptor(&h);
