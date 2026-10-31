@@ -24,6 +24,7 @@
 // never run), and at most 16 handles are held.
 #include <crd/fuzz/harness.hpp>
 
+#include <crd/compression/zstd.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/checksum.hpp>
 #include <crd/containers/string.hpp>
@@ -33,8 +34,6 @@
 #include <crd/resources/loader.hpp>
 #include <crd/resources/resource_handle.hpp>
 #include <crd/resources/resource_manager.hpp>
-
-#include <zstd.h>
 
 #include <cstdio>
 #include <cstring>
@@ -56,6 +55,7 @@ using crd::u8;
 using crd::usize;
 using crd::containers::Array;
 using crd::containers::ConstSpan;
+using crd::containers::Span;
 using crd::containers::String;
 using crd::resources::LoadState;
 using crd::resources::ResourceId;
@@ -226,9 +226,8 @@ struct ModelContainer
             continue;
         }
         chunk.decoded.resize(static_cast<usize>(chunk.uncompressed));
-        const usize got = ZSTD_decompress(chunk.decoded.data(), chunk.decoded.size(), data + chunk.offset,
-                                          static_cast<usize>(chunk.stored));
-        if (ZSTD_isError(got) != 0U || got != chunk.decoded.size() ||
+        const ConstSpan<u8> stored(data + chunk.offset, static_cast<usize>(chunk.stored));
+        if (!crd::compression::zstd_decompress_exact(stored, Span<u8>(chunk.decoded.data(), chunk.decoded.size())) ||
             crd::containers::xxh3_64(ConstSpan<u8>(chunk.decoded.data(), chunk.decoded.size())) != chunk.hash)
         {
             return false;
@@ -1361,11 +1360,10 @@ void stored_payload(Array<u8>& out, const u8* stored, usize size)
 // A compressed chunk of `fourcc` whose header claims `claim` bytes (zstd of `text`, with the text's hash).
 void compressed_chunk(Array<u8>& out, u32 fourcc, const char* text, u64 claim)
 {
-    const usize n     = std::strlen(text);
-    Array<u8>   frame(seed_alloc());
-    frame.resize(ZSTD_compressBound(n));
-    const usize got = ZSTD_compress(frame.data(), frame.size(), text, n, 3);
-    frame.resize(got);
+    const usize n = std::strlen(text);
+    Array<u8> frame(seed_alloc());
+    CRD_FUZZ_REQUIRE(crd::compression::zstd_compress(ConstSpan<u8>(reinterpret_cast<const u8*>(text), n),
+                                                     crd::compression::kZstdDefaultLevel, frame));
     chunk_header(out, fourcc, 1U, claim, frame.size(),
                  crd::containers::xxh3_64(ConstSpan<u8>(reinterpret_cast<const u8*>(text), n)),
                  crd::containers::crc32c(ConstSpan<u8>(frame.data(), frame.size())));

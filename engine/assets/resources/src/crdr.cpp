@@ -1,10 +1,9 @@
 #include <crd/resources/crdr.hpp>
 
+#include <crd/compression/zstd.hpp>
 #include <crd/containers/checksum.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
-
-#include <zstd.h>
 
 #include <crd/containers/sort.hpp>
 
@@ -197,7 +196,7 @@ CrdrError parse_container(
     // Pass 1: check every chunk header, then scan the sizes to compute total decompressed bytes needed,
     // so we can pre-allocate decompressed_backing in one shot (no reallocations
     // that would invalidate any ConstSpan views into it). A compressed chunk's claimed size is checked against the
-    // most its stored bytes can decode to (crdr_max_decompressed_size) before anything is reserved for it, so the
+    // most its stored bytes can decode to (zstd_max_decompressed_size) before anything is reserved for it, so the
     // backing is never sized by a claim the file cannot back, and the total cannot wrap.
     {
         crd::usize scan_offset = kHeaderSize;
@@ -224,7 +223,7 @@ CrdrError parse_container(
             }
             if ((chunk_flags & 0x1U) != 0U)
             {
-                if (uncomp_size > crdr_max_decompressed_size(compressed_size))
+                if (uncomp_size > crd::compression::zstd_max_decompressed_size(compressed_size))
                 {
                     return fault(CrdrError::InvalidChunk, i, header);
                 }
@@ -276,10 +275,9 @@ CrdrError parse_container(
             // Compressed chunk: decompress into pre-allocated backing buffer.
             const crd::usize uncomp_size = static_cast<crd::usize>(uncompressed_size);
             crd::u8* dst = out.decompressed_backing.data() + backing_write;
-            const std::size_t result = ZSTD_decompress(dst, uncomp_size, stored.data(), comp_size);
             // A frame that decodes to fewer bytes than the chunk claims would leave the payload's tail as zero fill
             // the file never held; the claim and the decoded size must agree exactly.
-            if (ZSTD_isError(result) || result != uncomp_size)
+            if (!crd::compression::zstd_decompress_exact(stored, crd::containers::Span<crd::u8>(dst, uncomp_size)))
             {
                 return fault(CrdrError::DecompressFailed, i, header);
             }
@@ -379,24 +377,14 @@ void CrdrWriter::add_chunk_compressed(
     int                                  zstd_level)
 {
     const crd::usize src_size = payload.size();
-    const std::size_t bound   = ZSTD_compressBound(src_size);
-
     crd::containers::Array<crd::u8> compressed(m_alloc);
-    compressed.resize(bound);
-
-    const std::size_t compressed_size = ZSTD_compress(
-        compressed.data(), bound,
-        payload.data(), src_size,
-        zstd_level);
 
     // Fall back to uncompressed if zstd failed or didn't help.
-    if (ZSTD_isError(compressed_size) || compressed_size >= src_size)
+    if (!crd::compression::zstd_compress(payload, zstd_level, compressed) || compressed.size() >= src_size)
     {
         add_chunk(fourcc, payload);
         return;
     }
-
-    compressed.resize(compressed_size);
 
     PendingChunk chunk;
     chunk.fourcc            = fourcc;

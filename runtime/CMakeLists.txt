@@ -1207,6 +1207,7 @@ if(CRD_BUILD_RETAINED_BENCHES)
     endfunction()
     crd_add_retained_bench(bench_biquad_and_orient crd-audio crd-hesap-dsp) # OWN.1
     crd_add_retained_bench(bench_comms_vs_refs crd-hesap-comms crd-hesap-stats)
+    crd_add_retained_bench(bench_compression crd-resources) # OWN.1
     crd_add_retained_bench(bench_decomp crd-hesap-tensor)
     crd_add_retained_bench(bench_distributions crd-hesap-stats)
     crd_add_retained_bench(bench_dsp_adaptive_vs_refs crd-hesap-dsp)

@@ -1900,7 +1900,7 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-10a-resource-reload.m
 - Findings fixed. `crdr_read` sized its decompression buffer by the chunks' claims before reading a byte of them: a
   97-byte file claiming 1 TiB reserved it, and two claims whose sum wraps reserved 16 bytes and decoded 32 into them
   (a heap overrun); a claim is now bounded by what its stored bytes can decode to (3-byte zstd block headers, 128 KiB
-  per block, `crdr_max_decompressed_size`), and a frame that decodes to fewer bytes than claimed is refused instead
+  per block, `zstd_max_decompressed_size`), and a frame that decodes to fewer bytes than claimed is refused instead
   of leaving a zero-filled tail. `do_reload_mount` copied a new manifest's offsets into the live table before any range
   check (a torn pack picked up by hot reload left entries pointing past the file) and checked a reloaded range as
   `offset + size > file`, which wraps (an offset near 2^64 read before the buffer); it now refuses what mount refuses,

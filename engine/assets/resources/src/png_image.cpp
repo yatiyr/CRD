@@ -2,8 +2,8 @@
 
 #include <crd/resources/png_image.hpp>
 
+#include <crd/compression/deflate.hpp>
 #include <crd/containers/checksum.hpp>
-#include <crd/resources/deflate.hpp>
 
 #include <cstring>
 
@@ -425,7 +425,7 @@ PngError png_decode(crd::containers::ConstSpan<crd::u8> bytes, PngImage& out, cr
 
     // ── inflate the pixel stream (OUR zlib) ────────────────────────────────────────────────────────────────────────────
     crd::containers::Array<crd::u8> raw(a);
-    if (!zlib_inflate(crd::containers::as_const_span(idat), raw))
+    if (!crd::compression::zlib_inflate(crd::containers::as_const_span(idat), raw))
     {
         return PngError::BadData;
     }

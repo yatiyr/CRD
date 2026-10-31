@@ -2,8 +2,8 @@
 
 #include "hdr_piz.hpp"
 
+#include <crd/compression/deflate.hpp>
 #include <crd/core/types.hpp>
-#include <crd/resources/deflate.hpp>
 
 #include <cstring>
 
@@ -468,7 +468,7 @@ Array<crd::u8> hdr_encode_exr(const HdrImage& img, ExrPixelType pixel_type, ExrC
         else if (compression == ExrCompression::Zip)
         {
             exr_reorder_predict(raw.data(), raw.size(), tmp);
-            comp_buf = zlib_deflate({tmp.data(), tmp.size()}, a);
+            comp_buf = crd::compression::zlib_deflate({tmp.data(), tmp.size()}, a);
             emit_payload(comp_buf);
         }
         else // PIZ
@@ -761,7 +761,7 @@ HdrError hdr_decode_exr(ConstSpan<crd::u8> bytes, HdrImage& out, crd::memory::IA
         else // ZIPS (2) / ZIP (3) — our own DEFLATE
         {
             tmp.resize(0);
-            if (!zlib_inflate({data, static_cast<crd::usize>(dsz)}, tmp) || tmp.size() != block_bytes)
+            if (!crd::compression::zlib_inflate({data, static_cast<crd::usize>(dsz)}, tmp) || tmp.size() != block_bytes)
             {
                 return HdrError::BadData;
             }

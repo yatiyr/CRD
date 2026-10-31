@@ -2,8 +2,8 @@
 
 #include <crd/resources/zip_archive.hpp>
 
+#include <crd/compression/deflate.hpp>
 #include <crd/containers/checksum.hpp>
-#include <crd/resources/deflate.hpp>
 
 #include <cstring>
 
@@ -288,7 +288,7 @@ ZipError ZipReader::extract(crd::usize i, crd::containers::Array<crd::u8>& out) 
     }
     else // deflate
     {
-        if (!inflate_raw(comp, out))
+        if (!crd::compression::inflate_raw(comp, out))
         {
             out.clear();
             return ZipError::Corrupt;
@@ -316,7 +316,7 @@ bool ZipWriter::add(const char* name, crd::containers::ConstSpan<crd::u8> bytes)
     }
 
     const crd::u32 crc = crd::containers::crc32(bytes);
-    crd::containers::Array<crd::u8> deflated = deflate_raw(bytes, m_alloc);
+    crd::containers::Array<crd::u8> deflated = crd::compression::deflate_raw(bytes, m_alloc);
     const bool stored = deflated.size() >= bytes.size(); // deflate only when it SHRINKS
     const crd::containers::ConstSpan<crd::u8> payload =
         stored ? bytes : crd::containers::ConstSpan<crd::u8>(deflated.data(), deflated.size());

@@ -5,6 +5,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <crd/compression/deflate.hpp>
 #include <crd/containers/checksum.hpp>
 #include <crd/cooker/cook_handler.hpp>
 #include <crd/cooker/cook_io.hpp>
@@ -12,7 +13,6 @@
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
-#include <crd/resources/deflate.hpp>
 #include <crd/resources/ldr_image.hpp>
 #include <crd/resources/loader.hpp>
 #include <crd/resources/openpbr_material.hpp>
@@ -104,7 +104,7 @@ crd::containers::Array<crd::u8> build_png_1x1(crd::u8 r, crd::u8 g, crd::u8 b, c
     raw.push_back(g);
     raw.push_back(b);
     raw.push_back(a);
-    auto idat = crd::resources::zlib_deflate(crd::containers::as_const_span(raw), &g_alloc);
+    auto idat = crd::compression::zlib_deflate(crd::containers::as_const_span(raw), &g_alloc);
     add_png_chunk(png, "IDAT", idat);
     crd::containers::Array<crd::u8> empty(&g_alloc);
     add_png_chunk(png, "IEND", empty);

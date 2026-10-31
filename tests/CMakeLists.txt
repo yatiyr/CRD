@@ -248,6 +248,7 @@ crd_tests(foundation/containers containers)
 crd_tests(foundation/platform platform)
 crd_tests(foundation/app app)
 crd_tests(foundation/config config)
+crd_tests(foundation/compression compression)  # OWN.1: raw DEFLATE, zlib and the zstd binding
 crd_tests(foundation/crypto crypto)  # NET-STD: algorithm identifiers and signed policy generations
 crd_tests(foundation/net net)  # NET-STD: version and extension negotiation, GREASE, register identifiers
 crd_tests(foundation/comply comply)  # COMPLY.0: reviewed rule generations, the live store and the query

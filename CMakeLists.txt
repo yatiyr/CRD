@@ -516,6 +516,9 @@ crd_module(engine/foundation/platform engine/platform DEPENDS containers core jo
 crd_module(engine/foundation/app engine/app DEPENDS containers core jobs perf platform TESTS foundation/app)
 crd_module(engine/foundation/config engine/config DEPENDS containers core log math platform toml
     TESTS foundation/config)
+# OWN.1: the lossless compression codecs (raw DEFLATE, zlib, the zstd binding), below every module that compresses
+crd_module(engine/foundation/compression engine/compression DEPENDS containers core memory PACKAGES zstd
+    TESTS foundation/compression)
 crd_module(engine/foundation/crypto engine/crypto DEPENDS containers core TESTS foundation/crypto support/fuzz)
 crd_module(engine/foundation/net engine/net DEPENDS containers core TESTS foundation/net support/fuzz)
 crd_module(engine/foundation/comply engine/comply DEPENDS containers core toml TESTS foundation/comply support/fuzz
@@ -634,7 +637,7 @@ crd_module(engine/numerics/hesap-motion engine/hesap-motion
 # v14; TENSORS — the N-D substrate (views/broadcast/einsum/sparse/decomp/nn); ADR-0096
 crd_module(engine/numerics/hesap-tensor engine/hesap-tensor DEPENDS containers core jobs math memory platform
     TESTS numerics/hesap-tensor TEST_DEPENDS hesap hesap-autodiff hesap-dense hesap-resources)
-crd_module(engine/assets/resources engine/resources DEPENDS containers core jobs log memory platform PACKAGES zstd
+crd_module(engine/assets/resources engine/resources DEPENDS compression containers core jobs log memory platform
     TESTS assets/resources support/fuzz TEST_DEPENDS asset_cooker gpu-context gpu-context-vulkan perf)
 crd_module(engine/world/scene engine/scene
     DEPENDS containers core geometry-primitives geometry-spatial math memory resources

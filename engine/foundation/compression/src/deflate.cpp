@@ -1,11 +1,10 @@
-#include <crd/resources/deflate.hpp>
-
+#include <crd/compression/deflate.hpp>
 #include <crd/core/types.hpp>
 
-// deflate.cpp — our own RFC-1951 DEFLATE + RFC-1950 zlib. inflate = a puff-style decoder (stored/fixed/dynamic Huffman +
-// LZ77); deflate = a single fixed-Huffman block with hash-chain LZ77 matching.
+// deflate.cpp — our own RFC-1951 DEFLATE + RFC-1950 zlib. inflate = a puff-style decoder (stored/fixed/dynamic Huffman
+// + LZ77); deflate = a single fixed-Huffman block with hash-chain LZ77 matching.
 
-namespace crd::resources
+namespace crd::compression
 {
 
 using crd::containers::Array;
@@ -15,21 +14,27 @@ namespace
 {
 
 // RFC 1951 length/distance tables.
-constexpr crd::u16 kLenBase[29]  = {3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258};
-constexpr crd::u8  kLenExtra[29] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0};
-constexpr crd::u16 kDistBase[30] = {1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577};
-constexpr crd::u8  kDistExtra[30] = {0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
-constexpr crd::u8  kClOrder[19]  = {16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
+constexpr crd::u16 kLenBase[29] = {3,  4,  5,  6,  7,  8,  9,  10, 11,  13,  15,  17,  19,  23, 27,
+                                   31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258};
+constexpr crd::u8 kLenExtra[29] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2,
+                                   2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0};
+constexpr crd::u16 kDistBase[30] = {1,    2,    3,    4,    5,    7,    9,    13,    17,    25,
+                                    33,   49,   65,   97,   129,  193,  257,  385,   513,   769,
+                                    1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577};
+constexpr crd::u8 kDistExtra[30] = {0, 0, 0, 0, 1, 1, 2, 2,  3,  3,  4,  4,  5,  5,  6,
+                                    6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
+constexpr crd::u8 kClOrder[19] = {16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
 constexpr crd::usize kWindowSize = 32768; // DEFLATE max back-reference distance
 
-// ── bit reader (DEFLATE is LSB-first) ──────────────────────────────────────────────────────────────────────────────────
+// ── bit reader (DEFLATE is LSB-first)
+// ──────────────────────────────────────────────────────────────────────────────────
 struct BitReader
 {
     const crd::u8* p;
     const crd::u8* end;
-    crd::u32       acc   = 0;
-    int            nbits = 0;
-    bool           err   = false;
+    crd::u32 acc = 0;
+    int nbits = 0;
+    bool err = false;
 
     int getbit()
     {
@@ -46,7 +51,10 @@ struct BitReader
             }
             nbits = 8;
         }
-        const int b = static_cast<int>(acc & 1U); acc >>= 1U; --nbits; return b;
+        const int b = static_cast<int>(acc & 1U);
+        acc >>= 1U;
+        --nbits;
+        return b;
     }
     crd::u32 getbits(int n)
     {
@@ -55,14 +63,16 @@ struct BitReader
         {
             v |= static_cast<crd::u32>(getbit()) << i;
         }
-        return v; }
+        return v;
+    }
     void align() { nbits = 0; }
 };
 
-// ── canonical Huffman decode table (puff-style: counts + sorted symbols) ────────────────────────────────────────────────
+// ── canonical Huffman decode table (puff-style: counts + sorted symbols)
+// ────────────────────────────────────────────────
 struct Huff
 {
-    crd::u16 count[16]  = {};
+    crd::u16 count[16] = {};
     crd::u16 symbol[288] = {};
 };
 void huff_build(Huff& h, const crd::u8* lengths, int n)
@@ -76,7 +86,8 @@ void huff_build(Huff& h, const crd::u8* lengths, int n)
         ++h.count[lengths[s]];
     }
     h.count[0] = 0;
-    crd::u16 offs[16] = {}; offs[1] = 0;
+    crd::u16 offs[16] = {};
+    offs[1] = 0;
     for (int i = 1; i < 15; ++i)
     {
         offs[i + 1] = static_cast<crd::u16>(offs[i] + h.count[i]);
@@ -91,7 +102,9 @@ void huff_build(Huff& h, const crd::u8* lengths, int n)
 }
 [[nodiscard]] int huff_decode(BitReader& br, const Huff& h)
 {
-    int code = 0; int first = 0; int index = 0;
+    int code = 0;
+    int first = 0;
+    int index = 0;
     for (int len = 1; len <= 15; ++len)
     {
         code |= br.getbit();
@@ -100,7 +113,10 @@ void huff_build(Huff& h, const crd::u8* lengths, int n)
         {
             return h.symbol[index + (code - first)];
         }
-        index += cnt; first += cnt; first <<= 1; code <<= 1;
+        index += cnt;
+        first += cnt;
+        first <<= 1;
+        code <<= 1;
     }
     return -1;
 }
@@ -132,15 +148,17 @@ void build_fixed(Huff& lit, Huff& dist)
     huff_build(dist, fd, 30);
 }
 
-// ── bit writer + canonical encode ──────────────────────────────────────────────────────────────────────────────────────
+// ── bit writer + canonical encode
+// ──────────────────────────────────────────────────────────────────────────────────────
 struct BitWriter
 {
     Array<crd::u8>* out;
-    crd::u32        acc   = 0;
-    int             nbits = 0;
+    crd::u32 acc = 0;
+    int nbits = 0;
     void putbits(crd::u32 v, int n)
     {
-        acc |= (v & ((1U << n) - 1U)) << nbits; nbits += n;
+        acc |= (v & ((1U << n) - 1U)) << nbits;
+        nbits += n;
         while (nbits >= 8)
         {
             out->push_back(static_cast<crd::u8>(acc & 0xFFU));
@@ -173,7 +191,8 @@ void canonical_codes(const crd::u8* len, int n, crd::u16* codes)
         ++bl[len[s]];
     }
     bl[0] = 0;
-    crd::u16 next[16] = {}; crd::u16 code = 0;
+    crd::u16 next[16] = {};
+    crd::u16 code = 0;
     for (int bits = 1; bits <= 15; ++bits)
     {
         code = static_cast<crd::u16>((code + bl[bits - 1]) << 1);
@@ -187,10 +206,12 @@ void canonical_codes(const crd::u8* len, int n, crd::u16* codes)
 
 } // namespace
 
-// ── Adler-32 ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── Adler-32
+// ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 crd::u32 adler32(ConstSpan<crd::u8> data) noexcept
 {
-    crd::u32 a = 1; crd::u32 b = 0;
+    crd::u32 a = 1;
+    crd::u32 b = 0;
     for (crd::usize i = 0; i < data.size(); ++i)
     {
         a = (a + data[i]) % 65521U;
@@ -199,15 +220,16 @@ crd::u32 adler32(ConstSpan<crd::u8> data) noexcept
     return (b << 16U) | a;
 }
 
-// ── inflate ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── inflate
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 bool inflate_raw(ConstSpan<crd::u8> in, Array<crd::u8>& out)
 {
     BitReader br{in.data(), in.data() + in.size()};
     int bfinal = 0;
     do
     {
-        bfinal        = br.getbit();
-        const int bt  = static_cast<int>(br.getbits(2));
+        bfinal = br.getbit();
+        const int bt = static_cast<int>(br.getbits(2));
         if (br.err)
         {
             return false;
@@ -219,7 +241,7 @@ bool inflate_raw(ConstSpan<crd::u8> in, Array<crd::u8>& out)
             {
                 return false;
             }
-            const crd::u32 len  = static_cast<crd::u32>(br.p[0]) | (static_cast<crd::u32>(br.p[1]) << 8U);
+            const crd::u32 len = static_cast<crd::u32>(br.p[0]) | (static_cast<crd::u32>(br.p[1]) << 8U);
             const crd::u32 nlen = static_cast<crd::u32>(br.p[2]) | (static_cast<crd::u32>(br.p[3]) << 8U);
             br.p += 4;
             if ((len ^ 0xFFFFU) != nlen)
@@ -237,14 +259,15 @@ bool inflate_raw(ConstSpan<crd::u8> in, Array<crd::u8>& out)
         }
         else if (bt == 1 || bt == 2)
         {
-            Huff lit; Huff dist;
+            Huff lit;
+            Huff dist;
             if (bt == 1)
             {
                 build_fixed(lit, dist);
             }
             else
             {
-                const int hlit  = static_cast<int>(br.getbits(5)) + 257;
+                const int hlit = static_cast<int>(br.getbits(5)) + 257;
                 const int hdist = static_cast<int>(br.getbits(5)) + 1;
                 const int hclen = static_cast<int>(br.getbits(4)) + 4;
                 if (hlit > 286 || hdist > 30)
@@ -256,7 +279,8 @@ bool inflate_raw(ConstSpan<crd::u8> in, Array<crd::u8>& out)
                 {
                     cl[kClOrder[i]] = static_cast<crd::u8>(br.getbits(3));
                 }
-                Huff clh; huff_build(clh, cl, 19);
+                Huff clh;
+                huff_build(clh, cl, 19);
                 crd::u8 lengths[288 + 32] = {};
                 int idx = 0;
                 while (idx < hlit + hdist)
@@ -326,19 +350,20 @@ bool inflate_raw(ConstSpan<crd::u8> in, Array<crd::u8>& out)
                         return false;
                     }
                     const int length = static_cast<int>(kLenBase[ls]) + static_cast<int>(br.getbits(kLenExtra[ls]));
-                    const int dsym   = huff_decode(br, dist);
+                    const int dsym = huff_decode(br, dist);
                     if (dsym < 0 || dsym >= 30)
                     {
                         return false;
                     }
-                    const int distance = static_cast<int>(kDistBase[dsym]) + static_cast<int>(br.getbits(kDistExtra[dsym]));
+                    const int distance =
+                        static_cast<int>(kDistBase[dsym]) + static_cast<int>(br.getbits(kDistExtra[dsym]));
                     if (static_cast<crd::usize>(distance) > out.size())
                     {
                         return false;
                     }
                     const crd::usize start = out.size() - static_cast<crd::usize>(distance);
-                    // NB: copy to a local first — push_back(out[k]) aliases the container; a realloc mid-copy would read a
-                    // dangling reference (self-reference UAF). Index-fetch each byte into `b` before pushing.
+                    // NB: copy to a local first — push_back(out[k]) aliases the container; a realloc mid-copy would
+                    // read a dangling reference (self-reference UAF). Index-fetch each byte into `b` before pushing.
                     for (int i = 0; i < length; ++i)
                     {
                         const crd::u8 b = out[start + static_cast<crd::usize>(i)];
@@ -359,11 +384,12 @@ bool inflate_raw(ConstSpan<crd::u8> in, Array<crd::u8>& out)
     return true;
 }
 
-// ── deflate (single fixed-Huffman block + hash-chain LZ77) ──────────────────────────────────────────────────────────────
+// ── deflate (single fixed-Huffman block + hash-chain LZ77)
+// ──────────────────────────────────────────────────────────────
 Array<crd::u8> deflate_raw(ConstSpan<crd::u8> in, crd::memory::IAllocator* a)
 {
     Array<crd::u8> out(a);
-    BitWriter      bw{&out};
+    BitWriter bw{&out};
     bw.putbits(1, 1); // bfinal
     bw.putbits(1, 2); // btype = 01 (fixed)
 
@@ -384,24 +410,33 @@ Array<crd::u8> deflate_raw(ConstSpan<crd::u8> in, crd::memory::IAllocator* a)
     {
         fl[i] = 8;
     }
-    crd::u16 fl_codes[288]; canonical_codes(fl, 288, fl_codes);
+    crd::u16 fl_codes[288];
+    canonical_codes(fl, 288, fl_codes);
     crd::u8 fd[30];
     for (int i = 0; i < 30; ++i)
     {
         fd[i] = 5;
     }
-    crd::u16 fd_codes[30]; canonical_codes(fd, 30, fd_codes);
+    crd::u16 fd_codes[30];
+    canonical_codes(fd, 30, fd_codes);
 
     const crd::u8* d = in.data();
     const crd::usize n = in.size();
 
-    Array<crd::i32> head(a); head.resize(1U << 15U);
+    Array<crd::i32> head(a);
+    head.resize(1U << 15U);
     for (crd::usize i = 0; i < head.size(); ++i)
     {
         head[i] = -1;
     }
-    Array<crd::i32> prev(a); prev.resize(n > 0 ? n : 1);
-    auto hash3 = [&](crd::usize i) -> crd::u32 { return ((static_cast<crd::u32>(d[i]) << 10U) ^ (static_cast<crd::u32>(d[i + 1]) << 5U) ^ static_cast<crd::u32>(d[i + 2])) & 0x7FFFU; };
+    Array<crd::i32> prev(a);
+    prev.resize(n > 0 ? n : 1);
+    auto hash3 = [&](crd::usize i) -> crd::u32
+    {
+        return ((static_cast<crd::u32>(d[i]) << 10U) ^ (static_cast<crd::u32>(d[i + 1]) << 5U) ^
+                static_cast<crd::u32>(d[i + 2])) &
+               0x7FFFU;
+    };
     auto insert = [&](crd::usize i)
     {
         if (i + 3 <= n)
@@ -418,7 +453,9 @@ Array<crd::u8> deflate_raw(ConstSpan<crd::u8> in, crd::memory::IAllocator* a)
         {
             --s;
         }
-        bw.put_code(fl_codes[257 + s], fl[257 + s]); bw.putbits(static_cast<crd::u32>(length - kLenBase[s]), kLenExtra[s]); };
+        bw.put_code(fl_codes[257 + s], fl[257 + s]);
+        bw.putbits(static_cast<crd::u32>(length - kLenBase[s]), kLenExtra[s]);
+    };
     auto emit_dist = [&](int dst)
     {
         int s = 29;
@@ -426,17 +463,20 @@ Array<crd::u8> deflate_raw(ConstSpan<crd::u8> in, crd::memory::IAllocator* a)
         {
             --s;
         }
-        bw.put_code(fd_codes[s], 5); bw.putbits(static_cast<crd::u32>(dst - kDistBase[s]), kDistExtra[s]); };
+        bw.put_code(fd_codes[s], 5);
+        bw.putbits(static_cast<crd::u32>(dst - kDistBase[s]), kDistExtra[s]);
+    };
 
     crd::usize i = 0;
     while (i < n)
     {
-        int        best_len  = 0;
+        int best_len = 0;
         crd::usize best_dist = 0;
         if (i + 3 <= n)
         {
             const crd::u32 h = hash3(i);
-            crd::i32 chain = head[h]; int tries = 0;
+            crd::i32 chain = head[h];
+            int tries = 0;
             crd::usize maxl = n - i;
             if (maxl > 258U)
             {
@@ -463,7 +503,8 @@ Array<crd::u8> deflate_raw(ConstSpan<crd::u8> in, crd::memory::IAllocator* a)
                         break;
                     }
                 }
-                chain = prev[j]; ++tries;
+                chain = prev[j];
+                ++tries;
             }
         }
         if (best_len >= 3)
@@ -488,14 +529,16 @@ Array<crd::u8> deflate_raw(ConstSpan<crd::u8> in, crd::memory::IAllocator* a)
     return out;
 }
 
-// ── zlib wrapper ────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── zlib wrapper
+// ────────────────────────────────────────────────────────────────────────────────────────────────────────
 bool zlib_inflate(ConstSpan<crd::u8> in, Array<crd::u8>& out)
 {
     if (in.size() < 6U)
     {
         return false;
     }
-    const crd::u8 cmf = in[0]; const crd::u8 flg = in[1];
+    const crd::u8 cmf = in[0];
+    const crd::u8 flg = in[1];
     if ((cmf & 0x0FU) != 8U) // must be DEFLATE
     {
         return false;
@@ -509,27 +552,32 @@ bool zlib_inflate(ConstSpan<crd::u8> in, Array<crd::u8>& out)
         return false;
     }
     const crd::usize start = out.size();
-    const ConstSpan<crd::u8> body{in.data() + 2, in.size() - 6};                 // strip 2 header + 4 adler
+    const ConstSpan<crd::u8> body{in.data() + 2, in.size() - 6}; // strip 2 header + 4 adler
     if (!inflate_raw(body, out))
     {
         return false;
     }
-    const crd::u32 want = (static_cast<crd::u32>(in[in.size() - 4]) << 24U) | (static_cast<crd::u32>(in[in.size() - 3]) << 16U) | (static_cast<crd::u32>(in[in.size() - 2]) << 8U) | in[in.size() - 1];
+    const crd::u32 want = (static_cast<crd::u32>(in[in.size() - 4]) << 24U) |
+                          (static_cast<crd::u32>(in[in.size() - 3]) << 16U) |
+                          (static_cast<crd::u32>(in[in.size() - 2]) << 8U) | in[in.size() - 1];
     return adler32({out.data() + start, out.size() - start}) == want;
 }
 Array<crd::u8> zlib_deflate(ConstSpan<crd::u8> in, crd::memory::IAllocator* a)
 {
     Array<crd::u8> out(a);
-    out.push_back(0x78U); out.push_back(0x9CU); // CMF/FLG (32K window, deflate, default level; %31 == 0)
+    out.push_back(0x78U);
+    out.push_back(0x9CU); // CMF/FLG (32K window, deflate, default level; %31 == 0)
     Array<crd::u8> body = deflate_raw(in, a);
     for (crd::usize i = 0; i < body.size(); ++i)
     {
         out.push_back(body[i]);
     }
     const crd::u32 ad = adler32(in);
-    out.push_back(static_cast<crd::u8>((ad >> 24U) & 0xFFU)); out.push_back(static_cast<crd::u8>((ad >> 16U) & 0xFFU));
-    out.push_back(static_cast<crd::u8>((ad >> 8U) & 0xFFU)); out.push_back(static_cast<crd::u8>(ad & 0xFFU));
+    out.push_back(static_cast<crd::u8>((ad >> 24U) & 0xFFU));
+    out.push_back(static_cast<crd::u8>((ad >> 16U) & 0xFFU));
+    out.push_back(static_cast<crd::u8>((ad >> 8U) & 0xFFU));
+    out.push_back(static_cast<crd::u8>(ad & 0xFFU));
     return out;
 }
 
-} // namespace crd::resources
+} // namespace crd::compression

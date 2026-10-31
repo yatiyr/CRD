@@ -6,10 +6,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <crd/compression/deflate.hpp>
 #include <crd/containers/checksum.hpp>
-#include <crd/resources/deflate.hpp>
-#include <crd/resources/png_image.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/resources/png_image.hpp>
 
 #include <cstring>
 
@@ -65,7 +65,7 @@ void begin_png(crd::containers::Array<crd::u8>& png, crd::memory::IAllocator* a,
 void add_idat_end(crd::containers::Array<crd::u8>& png, crd::memory::IAllocator* a,
                   const crd::containers::Array<crd::u8>& raw)
 {
-    const auto compressed = zlib_deflate(crd::containers::as_const_span(raw), a);
+    const auto compressed = crd::compression::zlib_deflate(crd::containers::as_const_span(raw), a);
     add_chunk(png, "IDAT", compressed);
     crd::containers::Array<crd::u8> empty(a);
     add_chunk(png, "IEND", empty);

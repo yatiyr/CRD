@@ -2,7 +2,7 @@
 
 #include <crd/resources/png_encode.hpp>
 
-#include <crd/resources/deflate.hpp>
+#include <crd/compression/deflate.hpp>
 #include <crd/containers/checksum.hpp>
 
 namespace crd::resources
@@ -83,7 +83,7 @@ crd::containers::Array<crd::u8> png_encode_rgba(crd::containers::ConstSpan<crd::
         }
     }
     const crd::containers::Array<crd::u8> idat =
-        zlib_deflate(crd::containers::ConstSpan<crd::u8>(raw.data(), raw.size()), alloc);
+        crd::compression::zlib_deflate(crd::containers::ConstSpan<crd::u8>(raw.data(), raw.size()), alloc);
     put_chunk(out, "IDAT", crd::containers::ConstSpan<crd::u8>(idat.data(), idat.size()));
 
     put_chunk(out, "IEND", crd::containers::ConstSpan<crd::u8>{});

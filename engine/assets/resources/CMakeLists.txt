@@ -13,7 +13,8 @@ add_library(crd-resources STATIC ${SOURCES} ${HEADERS})
 # is insufficient). NOINLINE on crdr_read alone does not clear it; the
 # miscompile is somewhere in the LTO IR transforms over crdr.cpp's
 # constellation of std::memcpy + Array<u8>::resize/push_back +
-# ZSTD_decompress, none of which are individually problematic in MSVC LTCG
+# ZSTD_decompress (since OWN.1 reached through crd-compression's
+# zstd_decompress_exact), none of which are individually problematic in MSVC LTCG
 # or GCC LTO (both ship the full async test suite green at 1038/1038).
 #
 # Resolution: emit native code (no thin-LTO bitcode) for this one TU. MSVC
@@ -44,14 +45,9 @@ target_link_libraries(crd-resources
         crd-containers
         crd-log
         crd-platform
+        crd-compression # crdr.hpp names the zstd level its writer compresses at
     PRIVATE
-        libzstd_static
         crd-jobs
-)
-
-target_include_directories(crd-resources
-    PRIVATE
-        "${zstd_SOURCE_DIR}/lib"
 )
 
 target_compile_features(crd-resources PUBLIC cxx_std_20)

@@ -63,7 +63,7 @@
 #include <crd/cooker/cook_handler.hpp> // GEO-1: the wave1 (.stl/.obj/.ply) cook handler — the import→cook→draw gate
 #include <crd/cooker/cook_io.hpp>      // GEO-6: the declared-input seam every cook reads through
 #include <crd/resources/crdr.hpp>      // GEO-1: crdr_read (the cooked MESH artifact readback)
-#include <crd/resources/deflate.hpp>          // GEO-3 close: OUR zlib deflate (the in-test PNG fixture)
+#include <crd/compression/deflate.hpp>        // GEO-3 close: OUR zlib deflate (the in-test PNG fixture)
 #include <crd/resources/openpbr_material.hpp> // GEO-3 close: the authored 'PBRM' material (params + texture slots)
 #include <crd/scene/serialize.hpp>            // GEO-3 close: kFourCC_SCEN (the decomposed scene artifact)
 #include "win32_test_window.hpp"              // RET-2: the isolated real-window helper for the present gate
@@ -16604,7 +16604,7 @@ TEST_CASE("GEO-3 CLOSE: a textured glTF decomposes (MESH+TXTR+PBRM+SCEN) and REN
                 raw.push_back(b);
             }
         }
-        auto idat = crd::resources::zlib_deflate(crd::containers::as_const_span(raw), &alloc);
+        auto idat = crd::compression::zlib_deflate(crd::containers::as_const_span(raw), &alloc);
         add_chunk("IDAT", idat);
         crd::containers::Array<crd::u8> iend(&alloc);
         add_chunk("IEND", iend);

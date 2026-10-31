@@ -249,9 +249,31 @@
       "id": "compression.codecs",
       "summary": "Lossless compression codecs: raw DEFLATE and inflate, the zstd binding with trained dictionaries, and the GDeflate CPU paths of the crdr v2 chunks.",
       "owner": "compression",
-      "status": "planned",
-      "row": "OWN.1",
-      "decision": "Compression belongs to a foundation module unless a decision records otherwise (OWN.1; the publishing research's P-4 asks): crd-perf's bundle refuses compressed sections only because the codec sits in crd-resources, above it. OWN.1 creates the module and moves resources' raw DEFLATE and inflate and its zstd binding there; resources, perf and shader-cook consume it, and SHIP.2's crdr v2 chunk codecs land in it."
+      "api": [
+        "engine/foundation/compression/include/crd/compression/deflate.hpp",
+        "engine/foundation/compression/include/crd/compression/zstd.hpp"
+      ],
+      "signatures": [
+        {
+          "regex": "\\b227\\s*,\\s*258\\b",
+          "what": "the DEFLATE length base table"
+        },
+        {
+          "regex": "\\b65521[uU]?\\b",
+          "what": "the Adler-32 modulus"
+        },
+        {
+          "regex": "\\bZSTD_\\w+\\s*\\(|#\\s*include\\s*<zstd\\.h>",
+          "what": "a direct zstd call or include"
+        }
+      ],
+      "pending": [
+        {
+          "path": "engine/numerics/hesap-tensor/include/crd/hesap/tensor/detail/io_zip.hpp",
+          "row": "OWN.1"
+        }
+      ],
+      "decision": "Compression belongs to a foundation module unless a decision records otherwise (OWN.1; the publishing research's P-4 asks): crd-perf's bundle refused compressed sections only because the codec sat in crd-resources, above it. OWN.1 created crd-compression (2026-10-31) and moved resources' raw DEFLATE, inflate, zlib and Adler-32 and its zstd binding there (zstd's header is private to it); resources, its CRDR container and shader-cook through it consume it, hesap-tensor's npz inflate moves onto it and perf's bundle consumes it, and SHIP.2's crdr v2 chunk codecs (trained dictionaries, GDeflate) land in it."
     },
     {
       "id": "math.fixed-size-linear-algebra",

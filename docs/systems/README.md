@@ -16,8 +16,8 @@ Start with [rendering foundation](rendering-foundation.md), [CEIR](ceir.md), [CH
 
 ## Current module inventory
 
-All <!-- fact:module-count -->108<!-- /fact --> registered modules are represented: the
-<!-- fact:engine-module-count -->101<!-- /fact --> engine modules below and the
+All <!-- fact:module-count -->109<!-- /fact --> registered modules are represented: the
+<!-- fact:engine-module-count -->102<!-- /fact --> engine modules below and the
 <!-- fact:other-module-count -->7<!-- /fact --> application and tool modules in the next table. Existing overview
 links retain their dated evidence; where no dedicated overview exists, the public source and CMake manifest are the
 direct entry points. The documentation validator holds
@@ -35,6 +35,7 @@ this map and the `crd_module()` registry in the root CMakeLists to the same set 
 | `ceir-host` | [Public source](../../engine/execution/ceir-host/include/) | [CMake](../../engine/execution/ceir-host/CMakeLists.txt) |
 | `chir` | [chir](chir.md) | [CMake](../../engine/execution/chir/CMakeLists.txt) |
 | `comply` | [Rule generations](../design/registers.md#rule-generations); [Public source](../../engine/foundation/comply/include/) | [CMake](../../engine/foundation/comply/CMakeLists.txt) |
+| `compression` | [Capability ownership](../design/capability-ownership.md#decisions); [Public source](../../engine/foundation/compression/include/) | [CMake](../../engine/foundation/compression/CMakeLists.txt) |
 | `config` | [config](config.md) | [CMake](../../engine/foundation/config/CMakeLists.txt) |
 | `containers` | [containers](containers.md) | [CMake](../../engine/foundation/containers/CMakeLists.txt) |
 | `core` | [core](core.md) | [CMake](../../engine/foundation/core/CMakeLists.txt) |
