@@ -755,6 +755,17 @@ class BenchMachine(unittest.TestCase):
                                     capture_output=True, text=True).stdout
         self.assertEqual(bench_vm.parse_wait(output), (True, 3, 'out'))
 
+    def test_remote_text_survives_the_windows_batch_launcher(self):
+        text = 'printf "%s\\n" "a|b & c > d"; echo 50%PATH%\nexit 7'
+        wrapper = bench_vm.ssh_command(text)[-1]
+        # cmd.exe runs gcloud.cmd: no newline, quote, percent sign, redirection or pipe may reach it unencoded.
+        self.assertIsNone(re.search(r'[\n"%^]', wrapper))
+        self.assertEqual(base64.b64decode(re.search(r'echo (\S+) \|', wrapper).group(1)).decode('utf-8'), text)
+        if os.name == 'nt' or not shutil.which('bash'):
+            self.skipTest('needs a POSIX bash')
+        result = subprocess.run(['bash', '-c', wrapper], capture_output=True, text=True)
+        self.assertEqual((result.returncode, result.stdout), (7, 'a|b & c > d\n50%PATH%\n'))
+
     def test_wait_reports_a_running_command(self):
         self.assertEqual(bench_vm.parse_wait('line 1\nline 2\n@@running\n'), (False, None, 'line 1\nline 2'))
         self.assertEqual(bench_vm.parse_wait('@@exit 0\n'), (True, 0, ''))

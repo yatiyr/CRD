@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import base64
 import json
 import os
 import shlex
@@ -90,15 +91,21 @@ def create_command():
 
 
 def ssh_command(remote):
-    return ['compute', 'ssh', NAME, *where(), '--tunnel-through-iap', '--quiet', '--command', remote]
+    """The gcloud arguments that run the shell text `remote` on the machine. The text travels base64-encoded and runs
+    from a private file: on Windows gcloud is a batch file, so cmd.exe would end the command at a newline, expand `%`
+    and act on `|`, `&` or `>` after an embedded quote; the file keeps the script off the remote command's stdin."""
+    encoded = base64.b64encode(remote.encode('utf-8')).decode('ascii')
+    wrapper = ('f=$(mktemp) && echo %s | base64 -d > $f && bash $f < /dev/null; s=$?; rm -f $f; exit $s' % encoded)
+    return ['compute', 'ssh', NAME, *where(), '--tunnel-through-iap', '--quiet', '--command', wrapper]
 
 
 def detach_script(name, command):
     """The remote shell text that runs `command` in the checkout under nohup, its output and exit status in files."""
     log, status = '~/%s/%s.log' % (JOBS, name), '~/%s/%s.exit' % (JOBS, name)
-    # A subshell, so an `exit` in the command still leaves its status behind.
+    # A subshell, so an `exit` in the command still leaves its status behind. A new session (`setsid -f`): a plain
+    # background job keeps the SSH session open until it ends.
     inner = 'cd ~/%s && ( %s ); echo $? > %s' % (CHECKOUT, command, status)
-    return 'mkdir -p ~/%s && rm -f %s && nohup bash -lc %s > %s 2>&1 < /dev/null &' % (
+    return 'mkdir -p ~/%s && rm -f %s && setsid -f nohup bash -lc %s > %s 2>&1 < /dev/null' % (
         JOBS, status, shlex.quote(inner), log)
 
 
