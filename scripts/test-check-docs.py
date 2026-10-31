@@ -174,6 +174,16 @@ class Links(TreeCase):
         self.assertIn('missing anchor #missing', errors[1])
 
 
+class Walk(TreeCase):
+    def test_agent_overlay_copies_are_not_project_documents(self):
+        self.tree.write('docs/guide.md', BANNER + 'A guide.\n')
+        self.tree.write('.agent/claude-memory/note.md', 'names scripts/gone.py\n')
+        self.tree.write('.agent-overlay/info/note.md', 'names scripts/gone.py\n')
+        found = docs.markdown_files(self.root)
+        self.assertIn('docs/guide.md', found)
+        self.assertFalse([name for name in found if name.startswith('.agent')], found)
+
+
 class References(TreeCase):
     def check(self, body):
         name = self.tree.write('docs/BUILDING.md', BANNER + body)

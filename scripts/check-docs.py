@@ -34,8 +34,9 @@ import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-SKIP_DIRS = {'.git', '.claude', '.codex', '.agents', '.vs', '.vscode', '.idea', '.cpm-cache', '.sccache', '.venv',
-             'build', 'external', 'out', 'node_modules', '__pycache__'}
+# .agent and .agent-overlay hold the NAS overlay's copies of agent files (ADR-0136), ignored by the code repository.
+SKIP_DIRS = {'.git', '.claude', '.codex', '.agents', '.agent', '.agent-overlay', '.vs', '.vscode', '.idea',
+             '.cpm-cache', '.sccache', '.venv', 'build', 'external', 'out', 'node_modules', '__pycache__'}
 ENTRY_POINTS = ('README.md', 'START_HERE.md', 'AGENTS.md', 'MEMORY.md', 'context.md', 'docs/README.md',
                 'docs/BUILDING.md', 'docs/CODING.md', 'docs/CONTRIBUTING.md', 'docs/PRINCIPLES.md', 'docs/SANITY.md')
 # Tool-specific files owned by the agent workspace overlay, not by the documentation set.
