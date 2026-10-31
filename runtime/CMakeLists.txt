@@ -1057,9 +1057,10 @@ if(CRD_BUILD_HESAP_VS_STRUMPACK)
     endif()
 endif()
 
-# --- The hesap-fft boards against peers installed on the measuring host (never fetched, never in CI) ---
-# FFTW 3 and Intel MKL from the system (libfftw3-dev, oneAPI MKL), the pocketfft header from CRD_POCKETFFT_DIR (built
-# as the crd-bench-pocketfft-peer library) and FINUFFT built from source in CRD_FINUFFT_DIR. scripts/run-lane-bench.sh
+# --- The hesap-fft boards against their peers (never in CI) ---
+# FFTW 3 and Intel MKL from the measuring host's system (libfftw3-dev, intel-mkl: scripts/bench-host-setup.sh), the
+# pinned pocketfft header (cmake/pins.json pocketfft, built as the crd-bench-pocketfft-peer library) and FINUFFT built
+# from source in CRD_FINUFFT_DIR. scripts/run-lane-bench.sh
 # builds and runs them at each CPU level. The benches build with the tree's warnings as errors: no peer header library
 # reaches them, and FFTW's, MKL's and FINUFFT's C declarations come in as system headers.
 function(crd_add_fft_peer_bench name)
@@ -1073,25 +1074,23 @@ if(CRD_BUILD_HESAP_VS_FFT_REFS OR CRD_BUILD_HESAP_VS_FINUFFT)
     endif()
 endif()
 if(CRD_BUILD_HESAP_VS_FFT_REFS)
-    set(CRD_POCKETFFT_DIR "$ENV{HOME}/fft_refs" CACHE PATH "The directory holding pocketfft_hdronly.h")
-    find_path(CRD_POCKETFFT_INCLUDE pocketfft_hdronly.h HINTS "${CRD_POCKETFFT_DIR}")
     find_path(CRD_FFTW_INCLUDE fftw3.h)
     find_path(CRD_MKL_INCLUDE mkl_dfti.h PATH_SUFFIXES mkl)
     find_library(CRD_MKL_LIB mkl_rt)
-    foreach(found IN ITEMS CRD_POCKETFFT_INCLUDE CRD_FFTW_INCLUDE CRD_MKL_INCLUDE CRD_MKL_LIB)
+    foreach(found IN ITEMS CRD_FFTW_INCLUDE CRD_MKL_INCLUDE CRD_MKL_LIB)
         if(NOT ${found})
-            message(FATAL_ERROR "[hesap-vs-fft-refs] ${found} not found (FFTW 3, Intel MKL, pocketfft_hdronly.h in "
-                                "CRD_POCKETFFT_DIR)")
+            message(FATAL_ERROR "[hesap-vs-fft-refs] ${found} not found (FFTW 3 and Intel MKL: "
+                                "scripts/bench-host-setup.sh)")
         endif()
     endforeach()
     # The pocketfft header reaches only its peer library, built without its thread pool (every board is one thread),
-    # which names the measured copy by its SHA-256 prefix.
-    file(SHA256 "${CRD_POCKETFFT_INCLUDE}/pocketfft_hdronly.h" pocketfft_sha)
-    string(SUBSTRING "${pocketfft_sha}" 0 12 pocketfft_sha)
+    # whose version line names the pinned commit.
+    crd_pin(pocketfft_commit packages pocketfft commit)
+    string(SUBSTRING "${pocketfft_commit}" 0 12 pocketfft_commit)
     add_library(pocketfft_headers INTERFACE)
-    target_include_directories(pocketfft_headers SYSTEM INTERFACE "${CRD_POCKETFFT_INCLUDE}")
+    target_include_directories(pocketfft_headers SYSTEM INTERFACE "${pocketfft_SOURCE_DIR}")
     target_compile_definitions(pocketfft_headers INTERFACE
-        POCKETFFT_NO_MULTITHREADING "CRD_POCKETFFT_SHA=\"${pocketfft_sha}\"")
+        POCKETFFT_NO_MULTITHREADING "CRD_POCKETFFT_COMMIT=\"${pocketfft_commit}\"")
     crd_add_bench_peer(crd-bench-pocketfft-peer SOURCES examples/peers/pocketfft_peer.cpp LIBRARIES pocketfft_headers)
     add_library(crd-fft-peers INTERFACE)
     target_include_directories(crd-fft-peers SYSTEM INTERFACE "${CRD_FFTW_INCLUDE}" "${CRD_MKL_INCLUDE}")
@@ -1101,8 +1100,7 @@ if(CRD_BUILD_HESAP_VS_FFT_REFS)
     crd_add_fft_peer_bench(bench_dct_vs_refs crd-fft-peers crd-bench-pocketfft-peer)
     target_include_directories(bench_fft_vs_refs PRIVATE examples/peers)
     target_include_directories(bench_dct_vs_refs PRIVATE examples/peers)
-    message(STATUS "[hesap-vs-fft-refs] FFTW ${CRD_FFTW_LIB}, MKL ${CRD_MKL_LIB}, pocketfft ${CRD_POCKETFFT_INCLUDE} "
-                   "(${pocketfft_sha})")
+    message(STATUS "[hesap-vs-fft-refs] FFTW ${CRD_FFTW_LIB}, MKL ${CRD_MKL_LIB}, pocketfft ${pocketfft_commit}")
 endif()
 if(CRD_BUILD_HESAP_VS_FINUFFT)
     set(CRD_FINUFFT_DIR "$ENV{HOME}/finufft" CACHE PATH "The FINUFFT source tree, built (lib-static/libfinufft.a)")

@@ -45,10 +45,10 @@ option(CRD_BUILD_HESAP_VS_STRUMPACK "Build hesap-vs-STRUMPACK HSS bench (local-o
 # compiled them before 2026-10-19 (crd-check-source-routes), so an API change broke them unseen; linux-gcc-debug and
 # the presets inheriting it turn this on, so a hosted lane compiles and links every one.
 option(CRD_BUILD_RETAINED_BENCHES "Build the peer-free retained benchmark programs of runtime/examples" OFF)
-# The hesap-fft boards' peers, installed on the measuring host and never fetched: FFTW 3, Intel MKL and the pocketfft
-# header, built as a peer library (bench_fft_vs_refs, bench_fft_f32, bench_dct_vs_refs), and FINUFFT
-# (bench_nufft_vs_finufft). Local only, never in CI or a shipped build; scripts/run-lane-bench.sh builds and runs them
-# per CPU level.
+# The hesap-fft boards' peers: FFTW 3 and Intel MKL installed on the measuring host (scripts/bench-host-setup.sh), the
+# pinned pocketfft header (cmake/pins.json pocketfft, fetched on demand into build/_deps) built as a peer library
+# (bench_fft_vs_refs, bench_fft_f32, bench_dct_vs_refs), and FINUFFT (bench_nufft_vs_finufft). Local only, never in CI
+# or a shipped build; scripts/run-lane-bench.sh builds and runs them per CPU level.
 option(CRD_BUILD_HESAP_VS_FFT_REFS "Build the FFT and DCT benches against FFTW, MKL and pocketfft (local-only)" OFF)
 option(CRD_BUILD_HESAP_VS_FINUFFT "Build the NUFFT bench against FINUFFT (local-only)" OFF)
 # The hesap-ode boards against SUNDIALS 6 from the system (libsundials-dev): CVODE's SPGMR Krylov path, CVODES's forward
@@ -988,6 +988,11 @@ if(CRD_BUILD_HESAP_VS_HPTT)
         message(FATAL_ERROR "[hesap-vs-hptt] needs x64 Linux and CRD_BUILD_RETAINED_BENCHES (bench_permute)")
     endif()
     crd_add_pinned_package(hptt DOWNLOAD_ONLY YES)
+endif()
+
+# ----- The FFT and DCT boards' pocketfft peer: the pinned header, built by runtime/CMakeLists.txt (bench-only) -----
+if(CRD_BUILD_HESAP_VS_FFT_REFS)
+    crd_add_pinned_package(pocketfft DOWNLOAD_ONLY YES)
 endif()
 
 # ----- The dispatch-cost board's peer: Highway's library from its own CMake (bench-only) -----

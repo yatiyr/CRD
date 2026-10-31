@@ -131,6 +131,19 @@
       "gated": "CRD_BUILD_HESAP_VS_HPTT",
       "note": "HPTT, Paul Springer's tensor transpose (no release tag; the commit of the permute board's earlier local clone). Its four sources are compiled only into crd-hptt and crd-bench-hptt-peer, the permute board's peer library; never into an engine module or a default build. LICENSE.txt read from the archive: BSD-3-Clause, (c) 2018 Paul Springer."
     },
+    "pocketfft": {
+      "version": "4d865cb",
+      "repository": "mreineck/pocketfft",
+      "ref": "4d865cba24359b05b37da4e75aee24498c3b78e7",
+      "commit": "4d865cba24359b05b37da4e75aee24498c3b78e7",
+      "url": "https://github.com/mreineck/pocketfft/archive/4d865cba24359b05b37da4e75aee24498c3b78e7.tar.gz",
+      "file": "pocketfft-4d865cba.tar.gz",
+      "sha256": "db236e44b1020dd0b415e5040ce10d8be604fefb7ce83ec0b32bc0f78975aa2f",
+      "size": 28893,
+      "license": "BSD-3-Clause",
+      "gated": "CRD_BUILD_HESAP_VS_FFT_REFS",
+      "note": "pocketfft's C++ header (the cpp branch's head on 2026-10-31; the project tags no release), compiled only into crd-bench-pocketfft-peer, the FFT and DCT boards' peer library, without its thread pool; never into an engine module or a default build. Before this pin the boards read an unversioned copy from ~/fft_refs (header SHA-256 prefix 2e88a5b0addf); this commit's header is 518a95c552ae. LICENSE.md read from the archive: BSD-3-Clause, (c) 2010-2018 Max-Planck-Society."
+    },
     "highway": {
       "version": "1.4.0",
       "repository": "google/highway",

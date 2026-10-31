@@ -39,7 +39,7 @@ const char* isa() noexcept
     {
         std::array<char, 160> text{};
         (void)std::snprintf(text.data(), text.size(), "pocketfft %s, f64 vector length %zu, one thread (%s)",
-                            CRD_POCKETFFT_SHA, pf::VLEN<double>::val, CRD_BENCH_PEER_ISA);
+                            CRD_POCKETFFT_COMMIT, pf::VLEN<double>::val, CRD_BENCH_PEER_ISA);
         return text;
     }();
     return kText.data();
