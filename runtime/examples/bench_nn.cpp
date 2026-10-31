@@ -8,7 +8,8 @@
 // Each tier's rows must stay within its test's bound of that reference (f32 1e-6, Q8_0 and i8 2e-2: test_nn.cpp), or
 // the run exits 1. The act rows time nn_gelu, nn_tanh and nn_sigmoid over 4096 x 128 values spread over [-12, 12]
 // (the frozen MLP's hidden width at the scaled batch), best-of-50; each output must carry the bits of the scalar
-// formula in general code (nn.hpp: f64 erf-form gelu and sigmoid, f32 tanh), or the run exits 1.
+// formula in general code (nn.hpp: f64 erf-form gelu and sigmoid, f32 tanh), or the run exits 1. Arguments name the
+// parts to run (`mlp`, `cnn`, `act`; all of them without one), so a board times only the rows its question needs.
 #include <crd/core/cpu_features.hpp>
 #include <crd/core/environment.hpp>
 #include <crd/hesap/tensor/io.hpp>
@@ -240,14 +241,33 @@ bool bench_activations(crd::memory::IAllocator* alloc)
 
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
+    const char* const parts[] = {"mlp", "cnn", "act"};
+    bool run[3] = {argc < 2, argc < 2, argc < 2};
+    for (int i = 1; i < argc; ++i)
+    {
+        bool known = false;
+        for (crd::usize p = 0; p < 3U; ++p)
+        {
+            if (std::strcmp(argv[i], parts[p]) == 0)
+            {
+                run[p] = true;
+                known = true;
+            }
+        }
+        if (!known)
+        {
+            std::printf("usage: bench_nn [mlp] [cnn] [act]\n");
+            return 2;
+        }
+    }
     crd::memory::TlsfAllocator alloc(1U << 28);
     std::printf("v14-m NN inference bench (ours, 1T, best-of-50), hesap-tensor kernel level %s (selected %s)\n",
                 crd::cpu_level_name(crd::hesap::tensor::tensor_kernels().level),
                 crd::cpu_level_name(crd::cpu_selection().selected));
-    const bool mlp = bench_model(&alloc, "mlp", 4096U);
-    const bool cnn = bench_model(&alloc, "cnn", 4096U);
-    const bool act = bench_activations(&alloc);
+    const bool mlp = !run[0] || bench_model(&alloc, "mlp", 4096U);
+    const bool cnn = !run[1] || bench_model(&alloc, "cnn", 4096U);
+    const bool act = !run[2] || bench_activations(&alloc);
     return mlp && cnn && act ? 0 : 1;
 }
