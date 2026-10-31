@@ -1408,6 +1408,23 @@ class Triggers(Base):
         self.clock.now = hosts.parse_utc('2026-11-02T12:00:00Z')
         self.assertEqual(triggers.schedules(again, run=run), [], 'missed by nine hours: outside the catch-up window')
 
+    def test_a_polled_build_takes_its_title_from_the_pinned_commit(self):
+        source = Path(self.scratch.name) / 'source'
+        source.mkdir()
+        git = lambda *a: subprocess.run(['git', '-C', str(source)] + list(a), check=True, capture_output=True, text=True)
+        git('init', '-q', '-b', 'main')
+        git('-c', 'user.name=Ada', '-c', 'user.email=a@x', 'commit', '-q', '--allow-empty', '-m',
+            'feat(core): add the thing', '-m', 'body text')
+        commit = git('rev-parse', 'HEAD').stdout.strip()
+        mirror = triggers.Mirror(Path(self.scratch.name) / 'mirror')
+        self.c.mirror = mirror
+        self.c.repositories['cerid'].update(url=str(source), checkout='mirror')
+        build, _ = self.c.create_build('cerid', {'event': 'push', 'branch': 'main', 'commit': commit, 'trusted': True},
+                                       'poll')
+        self.assertEqual((build['message'], build['author']), ('feat(core): add the thing', 'Ada'))
+        self.assertEqual(self.c.recent()[0]['message'], 'feat(core): add the thing', 'the build list shows it')
+        self.assertEqual(mirror.commit_summary('cerid', 'f' * 40), ('', ''), 'an unknown commit has no title')
+
     def test_mirror_serves_fetches_only(self):
         mirror = triggers.Mirror(self.scratch.name)
         status, _, _ = mirror.serve('POST', '/cerid.git/git-receive-pack', '', {}, b'')

@@ -282,6 +282,13 @@ class Coordinator:
         if self.mirror is not None and repo.get('checkout', 'direct') == 'mirror':
             try:
                 self.mirror.pin(repository, repo, number, build['commit'])
+                if not build['message'] and hasattr(self.mirror, 'commit_summary'):
+                    # A polled or scheduled head carries no message: the pinned commit's subject is the build's title.
+                    subject, author = self.mirror.commit_summary(repository, build['commit'])
+                    if subject:
+                        build = self.update(self.build_name(number), lambda b: dict(
+                            b, message=subject, author=b['author'] or author))
+                        self._index_recent(build)
             except Exception as error:  # the agent fails its checkout visibly; the build still exists
                 self.log('mirror_failed', level='error', build=number, error=str(error))
         self.upload(number, document or self.bootstrap(repo))

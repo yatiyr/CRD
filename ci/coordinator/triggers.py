@@ -127,6 +127,14 @@ class Mirror:
                 self._git(path, 'fetch', '--quiet', '--no-tags', 'origin', '+refs/heads/*:refs/heads/*')
         self._git(path, 'update-ref', 'refs/cerid/builds/%d' % int(number), commit)
 
+    def commit_summary(self, repository, commit):
+        """(subject, author) of a pinned commit, from the mirror; ('', '') when it cannot be read."""
+        completed = self._git(self.path(repository), 'log', '-1', '--format=%s%x00%an', commit, check=False)
+        if completed.returncode != 0 or '\0' not in completed.stdout:
+            return '', ''
+        subject, _, author = completed.stdout.strip().partition('\0')
+        return subject, author
+
     def commits_between(self, repository, good, bad):
         """Commits strictly after `good` up to but excluding `bad` on bad's first-parent line, oldest first."""
         path = self.path(repository)
