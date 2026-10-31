@@ -24,16 +24,6 @@
 #include <crd/math/simd/vec8f.hpp>
 #include <crd/math/simd/vec8i.hpp>
 
-// The instruction set crd-core reports for this level (crd/core/kernel_level.hpp): FMA on exactly the avx2 and avx512
-// levels of x64.
-#if CRD_TARGET_X64
-#if CRD_TARGET_X64_FMA != (CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_AVX2 || CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_AVX512)
-#error "crd-core's FMA report disagrees with this level's instruction set"
-#endif
-#elif CRD_TARGET_X64_FMA
-#error "crd-core reports x64's FMA outside x64"
-#endif
-
 namespace crd::test::simd_probe::inline CRD_MATH_LEVEL_NS
 {
 
