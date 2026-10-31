@@ -162,7 +162,7 @@ a budget threshold per month), so a restart never repeats one.
 
 - **Backups:** a weekly cron job on the launcher runs `python ci/ops.py backup create --out ...` (state and results
   with a SHA-256 manifest; `--all` adds caches, logs and artifacts) and copies the file off the launcher
-  (`gcloud storage cp <file> gs://cerid-ci-results-<project>/backups/`). Object versioning stays off; the backup is
+  (`gcloud storage cp <file> gs://<results bucket>/backups/`). Object versioning stays off; the backup is
   the history.
 - **Launcher lost:** create it again with the setup recipe's B6 and B7 (the same commands); the state is in the
   bucket, so builds, agents and history are intact; owned agents re-register by themselves with their tokens.

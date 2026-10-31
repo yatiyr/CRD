@@ -40,17 +40,24 @@ with the `gcloud` you already installed and signed in to.
 1. Open <https://console.cloud.google.com/billing/budgets> and click **Create budget**.
 2. **Name:** exactly `cerid-ci monthly` (the operator finds it by this name). **Projects:** only `cerid-ci`.
    **Services:** all. **Time range:** monthly. Click **Next**.
-3. **Budget type:** specified amount, **50** USD. Click **Next**.
+3. **Budget type:** specified amount, **50** USD, or its equivalent when the billing account uses another currency
+   (this project's account is in Turkish lira: 2,400 TRY). Click **Next**.
 4. **Thresholds:** 50 %, 90 % and 100 % of actual spend. Keep "Email alerts to billing admins". Click **Finish**.
 
 *Check:* the budget list shows `cerid-ci monthly`, 50 USD. (The operator connects it to the automatic stop in B2.)
 
 ### A4. Say go
 
-Tell the operator: "go, project ID `<your project ID>`". Saying go authorizes the operator to run Part B with your
-signed-in `gcloud` in that project (create the buckets, the service accounts, the launcher VM, the firewall rules,
-the secrets, bake the images) and, if the repository is private, to add one **read-only deploy key** for the launcher
-to the repository with your signed-in GitHub CLI (`gh`). Nothing else on your accounts changes.
+First create the launcher's read-only access to the code host. On GitLab: the project, **Settings → Repository →
+Deploy tokens → Add token**, name `cerid-ci-launcher`, scope **read_repository** only. GitLab shows the username
+(`gitlab+deploy-token-<number>`, not secret) and the token once. Store the token in the project's Secret Manager
+yourself, never in a chat or a file: run `gcloud secrets create cerid-gitlab-deploy-token --project=<project ID>
+--replication-policy=automatic --data-file=-`, paste the token, then press Enter and Ctrl+D (Ctrl+Z, Enter on
+Windows).
+
+Then tell the operator: "go, project ID `<your project ID>`, deploy token user `<username>`". Saying go authorizes
+the operator to run Part B with your signed-in `gcloud` in that project (create the buckets, the service accounts,
+the launcher VM, the firewall rules, bake the images). Nothing else on your accounts changes.
 
 When Part B is done, the operator tells you to run `python ci/ops.py ui` (see [B9](#opening-the-web-ui)).
 
@@ -66,6 +73,8 @@ export REGION=us-central1 ZONE=us-central1-a
 export LAUNCHER_SA=cerid-ci-launcher@$PROJECT.iam.gserviceaccount.com
 export RUNNER_SA=cerid-ci-runner@$PROJECT.iam.gserviceaccount.com
 export ACCOUNT=$(gcloud config get-value account)
+export RESULTS_BUCKET=cerid-ci-results SCCACHE_BUCKET=cerid-ci-sccache   # global names: choose free ones
+export REPO=https://gitlab.com/<owner>/<repository>.git DEPLOY_USER=<the deploy token username from A4>
 gcloud config set project $PROJECT
 ```
 
@@ -77,16 +86,16 @@ gcloud config set project $PROJECT
 ```bash
 gcloud services enable compute.googleapis.com storage.googleapis.com secretmanager.googleapis.com \
   pubsub.googleapis.com billingbudgets.googleapis.com iap.googleapis.com iamcredentials.googleapis.com
-for bucket in cerid-ci-results-$PROJECT cerid-ci-sccache-$PROJECT; do
+for bucket in $RESULTS_BUCKET $SCCACHE_BUCKET; do
   gcloud storage buckets describe gs://$bucket >/dev/null 2>&1 || gcloud storage buckets create gs://$bucket \
     --location=$REGION --uniform-bucket-level-access --public-access-prevention
 done
 printf '{"rule":[{"action":{"type":"Delete"},"condition":{"age":30}}]}' > /tmp/cerid-sccache-lifecycle.json
-gcloud storage buckets update gs://cerid-ci-sccache-$PROJECT --lifecycle-file=/tmp/cerid-sccache-lifecycle.json
-gcloud storage buckets update gs://cerid-ci-results-$PROJECT --no-versioning
+gcloud storage buckets update gs://$SCCACHE_BUCKET --lifecycle-file=/tmp/cerid-sccache-lifecycle.json
+gcloud storage buckets update gs://$RESULTS_BUCKET --no-versioning
 ```
 
-The bucket names carry the project ID because bucket names are global. Object versioning stays off on the results
+Bucket names are global; this project's are `cerid-ci-results` and `cerid-ci-sccache`. Object versioning stays off on the results
 bucket: the orchestrator's compare-and-swap uses live object generations.
 
 *Check:* `gcloud storage buckets list --format='value(name)'` lists both buckets;
@@ -130,7 +139,7 @@ gcloud iam service-accounts add-iam-policy-binding $RUNNER_SA --member=serviceAc
   --role=roles/iam.serviceAccountUser
 gcloud pubsub subscriptions add-iam-policy-binding cerid-ci-budget-launcher --member=serviceAccount:$LAUNCHER_SA \
   --role=roles/pubsub.subscriber
-for bucket in cerid-ci-results-$PROJECT cerid-ci-sccache-$PROJECT; do
+for bucket in $RESULTS_BUCKET $SCCACHE_BUCKET; do
   for sa in $LAUNCHER_SA $RUNNER_SA; do
     gcloud storage buckets add-iam-policy-binding gs://$bucket --member=serviceAccount:$sa --role=roles/storage.objectAdmin
   done
@@ -174,14 +183,14 @@ shows `cerid-ci-iap` and `cerid-ci-agents` and no rule with source `0.0.0.0/0` o
 ### B5. Secrets
 
 ```bash
-gcloud secrets describe cerid-repository-deploy-key >/dev/null 2>&1 || \
-  gcloud secrets create cerid-repository-deploy-key --replication-policy=automatic
+gcloud secrets describe cerid-gitlab-deploy-token --format='value(name)'
 ```
 
-The key itself is generated on the launcher in B7 and added as a version there; no secret is ever typed or printed.
+The user stored the deploy token in A4; the launcher reads it with its own identity in B7 and nothing prints it.
 (The webhook secret of the add-on and the commit-status token are created only when those options are chosen.)
 
-*Check:* `gcloud secrets list --format='value(name)'` lists `cerid-repository-deploy-key`.
+*Check:* `gcloud secrets list --format='value(name)'` lists `cerid-gitlab-deploy-token`. If it is missing, ask the
+user to run A4's command; never ask for the token itself.
 
 <a id="the-coordinator-on-the-launcher"></a>
 ### B6. The launcher VM
@@ -209,34 +218,32 @@ ssh_l() { gcloud compute ssh cerid-ci-launcher --zone=$ZONE --tunnel-through-iap
 ssh_l 'sudo apt-get update -q && sudo apt-get install -y -q git python3 python-is-python3 && \
   (id cerid-ci >/dev/null 2>&1 || sudo useradd --system --create-home --home-dir /var/lib/cerid-ci cerid-ci) && \
   sudo install -d -o cerid-ci -g cerid-ci -m 0700 /etc/cerid-ci /var/lib/cerid-ci/mirror'
-ssh_l 'sudo test -f /etc/cerid-ci/deploy-key || sudo -u cerid-ci ssh-keygen -q -t ed25519 -N "" \
-  -C cerid-ci-launcher -f /etc/cerid-ci/deploy-key'
-ssh_l 'sudo cat /etc/cerid-ci/deploy-key | gcloud secrets versions add cerid-repository-deploy-key --data-file=- \
-  >/dev/null && sudo cat /etc/cerid-ci/deploy-key.pub' > /tmp/cerid-ci-deploy-key.pub
+ssh_l "set -e; T=\$(gcloud secrets versions access latest --secret=cerid-gitlab-deploy-token --project=$PROJECT); \
+  umask 077; printf 'https://%s:%s@%s\n' \"\$(echo $DEPLOY_USER | sed 's/+/%2B/')\" \"\$T\" \"\$(echo $REPO | cut -d/ -f3)\" | \
+  sudo -u cerid-ci tee /var/lib/cerid-ci/.git-credentials >/dev/null; sudo -u cerid-ci git config --global credential.helper store"
 ```
 
-If the repository is private, add the public key as a **read-only** deploy key (the user's go in A4 covers this one
-GitHub change): `gh repo deploy-key add /tmp/cerid-ci-deploy-key.pub --repo <owner>/<repository> --title
-cerid-ci-launcher` (no `--allow-write`). Then clone and configure:
+The token stays on the launcher, readable by `cerid-ci` only (mode 0600); the coordinator's mirror fetches with
+it, and job machines fetch from that mirror with their job token, so no job ever sees it. A GitHub SSH remote
+works the same way with a read-only deploy key and `GIT_SSH_COMMAND` in `launcher.env`. Then clone and configure:
 
 ```bash
-export REPO=git@github.com:<owner>/<repository>.git REVISION=<the reviewed tag or commit>
-ssh_l "sudo -u cerid-ci sh -c 'test -d /var/lib/cerid-ci/cerid || GIT_SSH_COMMAND=\"ssh -i /etc/cerid-ci/deploy-key \
-  -o StrictHostKeyChecking=accept-new\" git clone -q $REPO /var/lib/cerid-ci/cerid; cd /var/lib/cerid-ci/cerid && \
-  GIT_SSH_COMMAND=\"ssh -i /etc/cerid-ci/deploy-key\" git fetch -q origin && git checkout -q $REVISION'"
+export REVISION=<the reviewed tag or commit>
+ssh_l "sudo -u cerid-ci sh -c 'test -d /var/lib/cerid-ci/cerid || git clone -q $REPO /var/lib/cerid-ci/cerid; \
+  cd /var/lib/cerid-ci/cerid && git fetch -q origin && git checkout -q $REVISION'"
 ssh_l "sudo tee /etc/cerid-ci/launcher.env >/dev/null <<EOF
 CERID_CI_URL=http://localhost:8780
 CERID_CI_INTERNAL_URL=http://$INTERNAL:8780
 CERID_CI_LISTEN=127.0.0.1:8780,$INTERNAL:8780
 CERID_CI_REPOSITORY_URL=$REPO
+CERID_CI_GIT_HOST=gitlab
 CERID_CI_GCP_PROJECT=$PROJECT
 CERID_CI_GCP_ZONE=$ZONE
 CERID_CI_RUNNER_SERVICE_ACCOUNT=$RUNNER_SA
-CERID_CI_STORE=gs://cerid-ci-results-$PROJECT
-CERID_CI_SCCACHE_BUCKET=cerid-ci-sccache-$PROJECT
+CERID_CI_STORE=gs://$RESULTS_BUCKET
+CERID_CI_SCCACHE_BUCKET=$SCCACHE_BUCKET
 CERID_CI_BUDGET_SUBSCRIPTION=projects/$PROJECT/subscriptions/cerid-ci-budget-launcher
 CERID_CI_MIRROR_DIR=/var/lib/cerid-ci/mirror
-GIT_SSH_COMMAND=ssh -i /etc/cerid-ci/deploy-key -o IdentitiesOnly=yes
 EOF
 sudo chmod 0600 /etc/cerid-ci/launcher.env && sudo chown cerid-ci /etc/cerid-ci/launcher.env"
 ssh_l 'cd /var/lib/cerid-ci/cerid && sudo -u cerid-ci env $(sudo cat /etc/cerid-ci/launcher.env | xargs -d "\n") \
