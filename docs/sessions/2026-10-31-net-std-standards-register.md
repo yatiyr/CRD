@@ -60,8 +60,9 @@ PowerShell alias test.
   reviews, future reads, unknown owners and rows, stale planned owners, uncovered governed rows, missing anchors,
   duplicates, Done rows, missing or unproven evidence, unverified codepoints and schema errors. Mutating the expiry
   comparison (`<=` to `<`) and disabling the obsoleted-RFC rule each fail one test.
-- On the track machine (linux-gcc-debug tree reconfigured from the commit): `ctest -N` lists `crd-check-registers`
-  and it passes; the guard prints 65 entries, 49 pinned, the next review 2026-12-15 and the first pinned draft to
+- On the track machine (linux-gcc-debug tree reconfigured from the batch's first commit, 8ba09586): `ctest -N`
+  lists `crd-check-registers` and it passes; the later change that reads the planned owners from the capability
+  registry was verified locally (guard and tests), with the CTest registration unchanged; the guard prints 65 entries, 49 pinned, the next review 2026-12-15 and the first pinned draft to
   expire, `webtransport.h3` on 2027-01-02. `scripts/test-ci-platform.py` (96 tests) passes on Windows and Linux.
 - Local validators: `check-master-plan.py`, `check-repository.py`, `check-allman-braces.py`, `check-generated.py`,
   `check-ci-tiers.py`.

@@ -574,14 +574,7 @@
       "owner": "net",
       "status": "planned",
       "row": "NET-STD",
-      "decision": "docs/design/network-foundation.md D1: one owner for every path that can reach another machine; NET-STD's negotiation codec creates the module and 4.2a adds the transport.",
-      "consumers": [
-        "4.2a",
-        "NET-PATH",
-        "NET-REACH",
-        "NET-DEBUG",
-        "CRASH-FIX.2"
-      ]
+      "decision": "docs/design/network-foundation.md D1: one owner for every path that can reach another machine; NET-STD's negotiation codec creates the module and 4.2a adds the transport."
     },
     {
       "id": "crypto.providers",
@@ -589,12 +582,7 @@
       "owner": "crypto",
       "status": "planned",
       "row": "NET.2",
-      "decision": "docs/design/network-foundation.md D2: its consumers are wider than the network (SUPPLY signing, policy and rule generations, crash pack protection), so cryptography is a foundation owner that depends on no network code.",
-      "consumers": [
-        "NET-STD",
-        "SUPPLY.1",
-        "CRASH-FIX.1"
-      ]
+      "decision": "docs/design/network-foundation.md D2: its consumers are wider than the network (SUPPLY signing, policy and rule generations, crash pack protection), so cryptography is a foundation owner that depends on no network code."
     },
     {
       "id": "robotics.ros2-bridge",
