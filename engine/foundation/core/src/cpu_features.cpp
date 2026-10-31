@@ -1497,10 +1497,10 @@ CpuIdentity read_cpu_identity() noexcept
 #if CRD_ARCH_ARM64
     if (id.vendor[0] == '\0' && id.signature != 0U)
     {
-        const char* implementer = arm64_implementer_name(id.signature);
-        if (implementer != nullptr)
+        const char* implementer_name = arm64_implementer_name(id.signature);
+        if (implementer_name != nullptr)
         {
-            copy_trimmed(id.vendor, implementer);
+            copy_trimmed(id.vendor, implementer_name);
         }
         else
         {
@@ -1510,10 +1510,10 @@ CpuIdentity read_cpu_identity() noexcept
     }
     if (id.model[0] == '\0' && id.signature != 0U)
     {
-        const char* part = arm64_part_name(id.signature);
-        if (part != nullptr)
+        const char* part_name = arm64_part_name(id.signature);
+        if (part_name != nullptr)
         {
-            copy_trimmed(id.model, part);
+            copy_trimmed(id.model, part_name);
         }
         else
         {
