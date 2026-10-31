@@ -759,6 +759,21 @@ class BenchMachine(unittest.TestCase):
         self.assertEqual(bench_vm.parse_wait('line 1\nline 2\n@@running\n'), (False, None, 'line 1\nline 2'))
         self.assertEqual(bench_vm.parse_wait('@@exit 0\n'), (True, 0, ''))
 
+    def test_wait_keeps_the_machine_name_apart_from_the_job_name(self):
+        seen = []
+
+        class Vm:
+            def wait(self, job, timeout):
+                seen.append((bench_vm.NAME, job, timeout))
+                return 0
+        saved, saved_class = bench_vm.NAME, bench_vm.BenchVm
+        try:
+            bench_vm.BenchVm = Vm
+            self.assertEqual(bench_vm.main(['--name', 'cerid-track-b', 'wait', 'setup', '--timeout', '5']), 0)
+        finally:
+            bench_vm.NAME, bench_vm.BenchVm = saved, saved_class
+        self.assertEqual(seen, [('cerid-track-b', 'setup', 5)])
+
     def test_sync_fetches_only_from_the_bundle_and_checks_out_detached(self):
         script = bench_vm.sync_script('~/sync.bundle', 'c' * 40, 'b' * 40)
         self.assertIn('git clone --quiet https://github.com/yatiyr/CRD.git', script)

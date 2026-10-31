@@ -253,7 +253,8 @@ def main(argv=None):
     run.add_argument('--detach')
     run.add_argument('remote', nargs=argparse.REMAINDER)
     wait = sub.add_parser('wait')
-    wait.add_argument('name')
+    # dest 'job': a positional 'name' would overwrite --name, the machine.
+    wait.add_argument('job', metavar='NAME')
     wait.add_argument('--timeout', type=int, default=540)
     fetch = sub.add_parser('fetch')
     fetch.add_argument('remote')
@@ -276,7 +277,7 @@ def main(argv=None):
                 parser.error('run needs a command after --')
             return vm.run(' '.join(remote), detach=args.detach)
         elif args.command == 'wait':
-            return vm.wait(args.name, args.timeout)
+            return vm.wait(args.job, args.timeout)
         elif args.command == 'fetch':
             print(vm.fetch(args.remote, args.local))
     except BenchVmError as error:
