@@ -477,6 +477,28 @@ CRD_FORCEINLINE void load_complex_deinterleaved(const f32* p, Vec8f& re, Vec8f& 
 #endif
 }
 
+// The register form of Vec4f's split load: even = {a0, a2, a4, a6}, odd = {a1, a3, a5, a7} (the fused 2x2 pool's
+// column pairs of a row held in a register, tensor_nn_kernels.cpp). Pure data shuffles, bit-identical everywhere.
+CRD_FORCEINLINE void deinterleave(Vec8f a, Vec4f& even, Vec4f& odd) noexcept
+{
+#if CRD_SIMD_HAS_AVX2
+    const __m128 lo = _mm256_castps256_ps128(a.v);
+    const __m128 hi = _mm256_extractf128_ps(a.v, 1);
+    even.v = _mm_shuffle_ps(lo, hi, _MM_SHUFFLE(2, 0, 2, 0));
+    odd.v = _mm_shuffle_ps(lo, hi, _MM_SHUFFLE(3, 1, 3, 1));
+#elif CRD_SIMD_HAS_SSE2
+    even.v = _mm_shuffle_ps(a.lo.v, a.hi.v, _MM_SHUFFLE(2, 0, 2, 0));
+    odd.v = _mm_shuffle_ps(a.lo.v, a.hi.v, _MM_SHUFFLE(3, 1, 3, 1));
+#elif CRD_SIMD_HAS_NEON
+    const float32x4x2_t z = vuzpq_f32(a.lo.v, a.hi.v);
+    even.v = z.val[0];
+    odd.v = z.val[1];
+#else
+    even = Vec4f(a.lane(0), a.lane(2), a.lane(4), a.lane(6));
+    odd = Vec4f(a.lane(1), a.lane(3), a.lane(5), a.lane(7));
+#endif
+}
+
 CRD_FORCEINLINE void store_complex_interleaved(f32* p, Vec8f re, Vec8f im) noexcept
 {
 #if CRD_SIMD_HAS_AVX2
