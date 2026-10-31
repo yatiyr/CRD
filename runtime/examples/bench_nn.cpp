@@ -6,14 +6,19 @@
 // runs each). The input is the corpus's frozen rows (<model>_x.npy), repeated to fill a batch, so every timed output
 // row has a reference: the f32 net at the corpus batch, itself within 1e-6 of torch's frozen outputs (<model>_y.npy).
 // Each tier's rows must stay within its test's bound of that reference (f32 1e-6, Q8_0 and i8 2e-2: test_nn.cpp), or
-// the run exits 1.
+// the run exits 1. The act rows time nn_gelu, nn_tanh and nn_sigmoid over 4096 x 128 values spread over [-12, 12]
+// (the frozen MLP's hidden width at the scaled batch), best-of-50; each output must carry the bits of the scalar
+// formula in general code (nn.hpp: f64 erf-form gelu and sigmoid, f32 tanh), or the run exits 1.
 #include <crd/core/cpu_features.hpp>
 #include <crd/core/environment.hpp>
 #include <crd/hesap/tensor/io.hpp>
 #include <crd/hesap/tensor/nn.hpp>
 #include <crd/hesap/tensor/tensor_dispatch.hpp>
+#include <crd/math/cmath.hpp>
+#include <crd/math/deterministic.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -186,6 +191,53 @@ bool bench_model(crd::memory::IAllocator* alloc, const char* name, crd::u64 big_
     return ok;
 }
 
+// The activation spans against their scalar formulas, bit for bit.
+bool bench_activations(crd::memory::IAllocator* alloc)
+{
+    constexpr crd::u64 n = 4096U * 128U;
+    constexpr crd::u64 period = 4093U;
+    const crd::u64 shp[1] = {n};
+    Tensor<crd::f32> x(alloc, {shp, 1});
+    Tensor<crd::f32> y(alloc, {shp, 1});
+    for (crd::u64 i = 0; i < n; ++i)
+    {
+        x.data()[i] = -12.0F + 24.0F * static_cast<crd::f32>(i % period) / static_cast<crd::f32>(period - 1U);
+    }
+    const auto gelu = [](crd::f32 v)
+    {
+        const crd::f64 vd = static_cast<crd::f64>(v);
+        return static_cast<crd::f32>(0.5 * vd * (1.0 + crd::math::deterministic::erf(vd * 0.70710678118654752440)));
+    };
+    const auto tanh = [](crd::f32 v)
+    {
+        return crd::math::tanh(v);
+    };
+    const auto sigmoid = [](crd::f32 v)
+    {
+        return static_cast<crd::f32>(1.0 / (1.0 + crd::math::exp(-static_cast<crd::f64>(v))));
+    };
+    const crd::containers::ConstSpan<crd::f32> xs{x.data(), static_cast<crd::usize>(n)};
+    const crd::containers::Span<crd::f32> ys{y.data(), static_cast<crd::usize>(n)};
+    bool ok = true;
+    const auto row = [&](const char* label, auto&& span, auto&& one)
+    {
+        const double ns = best_of_ns([&]() { span(xs, ys); }, 50, 5);
+        crd::u64 mismatches = 0;
+        for (crd::u64 i = 0; i < n; ++i)
+        {
+            mismatches += std::bit_cast<crd::u32>(y.data()[i]) != std::bit_cast<crd::u32>(one(x.data()[i])) ? 1U : 0U;
+        }
+        ok = ok && mismatches == 0U;
+        std::printf("act  %-7s n %7llu : %12.0f ns/span  %9.3f ns/element  %llu bit mismatches%s\n", label,
+                    static_cast<unsigned long long>(n), ns, ns / static_cast<double>(n),
+                    static_cast<unsigned long long>(mismatches), mismatches == 0U ? "" : "  !MISMATCH!");
+    };
+    row("gelu", crd::hesap::tensor::nn_gelu, gelu);
+    row("tanh", crd::hesap::tensor::nn_tanh, tanh);
+    row("sigmoid", crd::hesap::tensor::nn_sigmoid, sigmoid);
+    return ok;
+}
+
 } // namespace
 
 int main()
@@ -196,5 +248,6 @@ int main()
                 crd::cpu_level_name(crd::cpu_selection().selected));
     const bool mlp = bench_model(&alloc, "mlp", 4096U);
     const bool cnn = bench_model(&alloc, "cnn", 4096U);
-    return mlp && cnn ? 0 : 1;
+    const bool act = bench_activations(&alloc);
+    return mlp && cnn && act ? 0 : 1;
 }
