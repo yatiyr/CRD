@@ -46,6 +46,8 @@ all 24 multithreaded cells (1.07x to 1.85x).
   keep the rules' distance, so each arm moves one lever.
 - Every multithreaded task stages its tiles of a kernel element through its thread's frame arena. The bool
   `PermuteArm::staged` became `unstaged`, the arm; the arm tests keep a staged and an unstaged multithreaded arm.
+  Each task's stage (at most 256 KiB, c64's 512 by 32 tall tile) goes back by its own thread's `frame_set_mark`
+  before the job returns, so calls never grow the arena; the board ran the default 1 MiB `frame_alloc_bytes`.
 
 After both, no cell trails pre-row in every round (one thread 1.00x to 2.45x, 8 workers 1.15x to 1.85x, 16 workers
 1.19x to 1.67x, medians). HPTT trails at avx2 in all but two one-thread cells (f32 4D 0.97, f64 3D 0.99). At sse4.2
