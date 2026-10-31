@@ -8,6 +8,7 @@
 // version-mismatch, golden manifests, fuzz corpus) is DIAG.5d(e) and builds on read_bundle().
 
 #include <crd/containers/array.hpp>
+#include <crd/containers/checksum.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/perf/bundle.hpp>
 
@@ -41,22 +42,6 @@ cont::Array<crd::u8> pattern(crd::u8 seed, crd::usize n)
         a[i] = static_cast<crd::u8>(seed * 31U + i);
     }
     return a;
-}
-
-// IEEE 802.3 crc32 -- mirrors bundle.cpp so the test can forge a header whose crc is valid but whose
-// version is unknown, reaching the reader's version check instead of stopping at the crc check.
-crd::u32 test_crc32(const crd::u8* p, crd::usize n) noexcept
-{
-    crd::u32 c = 0xFFFFFFFFU;
-    for (crd::usize i = 0; i < n; ++i)
-    {
-        c ^= p[i];
-        for (int k = 0; k < 8; ++k)
-        {
-            c = (c & 1U) ? (0xEDB88320U ^ (c >> 1)) : (c >> 1);
-        }
-    }
-    return c ^ 0xFFFFFFFFU;
 }
 
 std::atomic<unsigned> g_uniq{0};
@@ -320,7 +305,9 @@ TEST_CASE("bundle reader flags corruption and bad framing", "[perf][diag][bundle
         hdr.format_version = 999U;
         // Recompute the header crc (over the first offsetof(header_crc32) bytes) so parsing reaches
         // the version check rather than stopping at the crc check.
-        hdr.header_crc32 = test_crc32(reinterpret_cast<const crd::u8*>(&hdr), offsetof(BundleHeader, header_crc32));
+        const crd::containers::ConstSpan<crd::u8> header(reinterpret_cast<const crd::u8*>(&hdr),
+                                                         offsetof(BundleHeader, header_crc32));
+        hdr.header_crc32 = crd::containers::crc32(header);
         std::memcpy(bad.data(), &hdr, sizeof(hdr));
         const BundleReadResult r = read_bundle(span_of(bad.data(), bad.size()));
         CHECK(r.status == BundleReadStatus::UnsupportedVersion);

@@ -151,16 +151,23 @@ elseif(_crd_arch_x64)
     set(_CRD_KERNEL_FLAGS_avx512 -march=x86-64-v4)
 endif()
 
-# The features a level's variant may add (ADR-0134 §1): the level each extends and its flags (cl compiles every
-# intrinsic at any /arch and has no such flag).
+# The features a level's variant may add (ADR-0134 §1): the levels each extends and its flags (cl compiles every
+# intrinsic at any /arch and has no such flag). PCLMULQDQ and VPCLMULQDQ are in no psABI level, so the carry-less
+# multiply bodies (the CRC folds of crd-containers' checksum family) are variants.
 set(_CRD_KERNEL_FEATURE_LEVEL_avxvnni avx2)
 set(_CRD_KERNEL_FEATURE_LEVEL_avx512vnni avx512)
+set(_CRD_KERNEL_FEATURE_LEVEL_pclmulqdq sse42)
+set(_CRD_KERNEL_FEATURE_LEVEL_vpclmulqdq avx2 avx512)
 if(MSVC AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     set(_CRD_KERNEL_FLAGS_FEATURE_avxvnni "")
     set(_CRD_KERNEL_FLAGS_FEATURE_avx512vnni "")
+    set(_CRD_KERNEL_FLAGS_FEATURE_pclmulqdq "")
+    set(_CRD_KERNEL_FLAGS_FEATURE_vpclmulqdq "")
 else()
     set(_CRD_KERNEL_FLAGS_FEATURE_avxvnni -mavxvnni)
     set(_CRD_KERNEL_FLAGS_FEATURE_avx512vnni -mavx512vnni)
+    set(_CRD_KERNEL_FLAGS_FEATURE_pclmulqdq -mpclmul)
+    set(_CRD_KERNEL_FLAGS_FEATURE_vpclmulqdq -mpclmul -mvpclmulqdq)
 endif()
 
 # One kernel unit: the sources as the object library <objects> at <level> (and <feature> unless it is empty), joined
@@ -210,10 +217,11 @@ endfunction()
 # per level (<archive>-<family>-<level>) with that level's ISA flags, CRD_KERNEL_LEVEL and the ADR-0063 contract, and
 # never crd-simd-flags' global ISA. The objects join the archive, which gets CRD_KERNELS_<FAMILY>: the mask of the
 # built levels (bit n is CpuLevel n). LEVELS names the levels the sources have a body for; a CPU between two of them
-# runs the lower one. Each of VARIANTS builds one of those levels again with one more feature
-# (<archive>-<family>-<level>-<feature>, CRD_KERNEL_FEATURE_<FEATURE>=1 and its own level namespace), and the archive
-# gets CRD_KERNELS_<FAMILY>_<LEVEL>_<FEATURE>, 1 when its level was built. The units see the archive's interface
-# include directories and those of the INCLUDES targets.
+# runs the lower one. Each of VARIANTS builds a level with one more feature (<archive>-<family>-<level>-<feature>,
+# CRD_KERNEL_FEATURE_<FEATURE>=1 and its own level namespace), and the archive gets
+# CRD_KERNELS_<FAMILY>_<LEVEL>_<FEATURE>, 1 when its level was built. A variant's level may be absent from LEVELS when only the feature gives that level a
+# body of its own: a CPU of that level without the feature runs the highest table below it. The units see the
+# archive's interface include directories and those of the INCLUDES targets.
 # The sources include only headers that put their inline code in CRD_MATH_LEVEL_NS (crd/core/kernel_level.hpp),
 # plain declarations and intrinsics: an inline function compiled at a higher level and shared with general code is the
 # defect class this rule removes. Kernel sources live outside the archive's src/.
@@ -245,9 +253,9 @@ function(crd_add_cpu_kernels archive)
             list(GET parts 0 level)
             list(GET parts 1 feature)
         endif()
-        if(NOT level IN_LIST arg_LEVELS OR NOT "${_CRD_KERNEL_FEATURE_LEVEL_${feature}}" STREQUAL "${level}")
-            message(FATAL_ERROR "crd_add_cpu_kernels(${archive}): variant '${variant}' is not a level of LEVELS "
-                                "plus a feature that extends it")
+        if(NOT DEFINED _CRD_KERNEL_LEVEL_${level} OR NOT level IN_LIST _CRD_KERNEL_FEATURE_LEVEL_${feature})
+            message(FATAL_ERROR "crd_add_cpu_kernels(${archive}): variant '${variant}' is not a level plus a feature "
+                                "that extends it")
         endif()
         set(built 0)
         if(level IN_LIST CRD_KERNEL_LEVELS)

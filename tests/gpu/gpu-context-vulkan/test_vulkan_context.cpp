@@ -63,7 +63,6 @@
 #include <crd/cooker/cook_io.hpp>      // GEO-6: the declared-input seam every cook reads through
 #include <crd/resources/crdr.hpp>      // GEO-1: crdr_read (the cooked MESH artifact readback)
 #include <crd/resources/deflate.hpp>          // GEO-3 close: OUR zlib deflate (the in-test PNG fixture)
-#include <crd/resources/png_image.hpp>        // GEO-3 close: OUR crc32 (the in-test PNG fixture)
 #include <crd/resources/openpbr_material.hpp> // GEO-3 close: the authored 'PBRM' material (params + texture slots)
 #include <crd/scene/serialize.hpp>            // GEO-3 close: kFourCC_SCEN (the decomposed scene artifact)
 #include "win32_test_window.hpp"              // RET-2: the isolated real-window helper for the present gate
@@ -75,6 +74,7 @@
 #include <ckir_abuffer_test.hpp>    // B17-c: the SHARED exact-reference A-buffer OIT scene + oracle + 2-kernel dispatch
 #include <ckir_light_cull_test.hpp> // CEIR-18a-1: the SHARED Forward+/clustered light-cull producer scene + oracle + dispatch
 
+#include <crd/containers/checksum.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
@@ -16576,7 +16576,7 @@ TEST_CASE("GEO-3 CLOSE: a textured glTF decomposes (MESH+TXTR+PBRM+SCEN) and REN
             {
                 png.push_back(payload[i]);
             }
-            push_be(png, crd::resources::png_crc32(crd::containers::as_const_span(crc_in)));
+            push_be(png, crd::containers::crc32(crd::containers::as_const_span(crc_in)));
         };
         const crd::u8 sig[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
         for (crd::u8 s : sig)

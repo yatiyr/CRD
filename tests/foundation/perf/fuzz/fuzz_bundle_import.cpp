@@ -18,6 +18,7 @@
 #include <crd/fuzz/harness.hpp>
 
 #include <crd/containers/array.hpp>
+#include <crd/containers/checksum.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/perf/build_identity.hpp>
 #include <crd/perf/bundle.hpp>
@@ -45,20 +46,6 @@ template <typename T> ConstSpan<T> span_of(const T* p, usize n) noexcept
     return ConstSpan<T>{p, n};
 }
 
-u32 crc32(const u8* p, usize n) noexcept
-{
-    u32 c = 0xFFFFFFFFU;
-    for (usize i = 0; i < n; ++i)
-    {
-        c ^= p[i];
-        for (int k = 0; k < 8; ++k)
-        {
-            c = (c & 1U) ? (0xEDB88320U ^ (c >> 1)) : (c >> 1);
-        }
-    }
-    return c ^ 0xFFFFFFFFU;
-}
-
 // Rewrite header_crc32 over the first 36 bytes so a header field mutated above reaches the check it targets (schema
 // mismatch, the section_count peek) instead of being rejected earlier as BadHeader.
 void refresh_header_crc(Array<u8>& b) noexcept
@@ -67,7 +54,7 @@ void refresh_header_crc(Array<u8>& b) noexcept
     {
         return;
     }
-    const u32 crc = crc32(b.data(), 36U);
+    const u32 crc = crd::containers::crc32(span_of(b.data(), 36U));
     std::memcpy(&b[36], &crc, sizeof(crc));
 }
 

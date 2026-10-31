@@ -5,6 +5,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <crd/containers/checksum.hpp>
 #include <crd/cooker/cook_handler.hpp>
 #include <crd/cooker/cook_io.hpp>
 #include <crd/cooker/texture_cook.hpp>
@@ -15,7 +16,6 @@
 #include <crd/resources/ldr_image.hpp>
 #include <crd/resources/loader.hpp>
 #include <crd/resources/openpbr_material.hpp>
-#include <crd/resources/png_image.hpp>
 #include <crd/resources/resource_id.hpp>
 
 #include <cstring>
@@ -65,7 +65,7 @@ void push_u32_be(crd::containers::Array<crd::u8>& b, crd::u32 v)
     b.push_back(static_cast<crd::u8>(v));
 }
 
-// a PNG chunk: BE length + type + payload + CRC-32 over (type ‖ payload) — via OUR png_crc32
+// a PNG chunk: BE length + type + payload + CRC-32 over (type ‖ payload) — via the foundation crc32
 void add_png_chunk(crd::containers::Array<crd::u8>& out, const char* type, const crd::containers::Array<crd::u8>& payload)
 {
     push_u32_be(out, static_cast<crd::u32>(payload.size()));
@@ -80,7 +80,7 @@ void add_png_chunk(crd::containers::Array<crd::u8>& out, const char* type, const
     {
         out.push_back(payload[i]);
     }
-    push_u32_be(out, crd::resources::png_crc32(crd::containers::as_const_span(crc_input)));
+    push_u32_be(out, crd::containers::crc32(crd::containers::as_const_span(crc_input)));
 }
 
 // a 1×1 RGBA8 PNG built with OUR deflate + OUR crc (the codec proves itself through its own stack)

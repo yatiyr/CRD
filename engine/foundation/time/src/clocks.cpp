@@ -5,6 +5,7 @@
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/core/platform.hpp> // CRD_NOINLINE
+#include <crd/core/wide_multiply.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -113,22 +114,8 @@ bool counter_invariant() noexcept
 // (ticks * ns_per_tick_q32) >> 32: a tick count scaled by a 32.32 fixed-point rate, without overflow for any count.
 crd::i64 scale(crd::u64 ticks, crd::u64 rate_q32) noexcept
 {
-#if defined(__SIZEOF_INT128__)
-    __extension__ using u128 = unsigned __int128; // __extension__ keeps it under -Werror=pedantic
-    return static_cast<crd::i64>((static_cast<u128>(ticks) * static_cast<u128>(rate_q32)) >> 32U);
-#elif defined(_MSC_VER) && defined(_M_X64)
-    crd::u64 high = 0U;
-    const crd::u64 low = _umul128(ticks, rate_q32, &high);
-    return static_cast<crd::i64>((high << 32U) | (low >> 32U));
-#elif defined(_MSC_VER) && defined(_M_ARM64)
-    const crd::u64 high = __umulh(ticks, rate_q32);
-    const crd::u64 low = ticks * rate_q32;
-    return static_cast<crd::i64>((high << 32U) | (low >> 32U));
-#else
-    const crd::u64 t_lo = ticks & 0xFFFFFFFFULL;
-    const crd::u64 t_hi = ticks >> 32U;
-    return static_cast<crd::i64>((t_hi * rate_q32) + ((t_lo * rate_q32) >> 32U));
-#endif
+    const crd::WideProduct p = crd::multiply_wide(ticks, rate_q32);
+    return static_cast<crd::i64>((p.hi << 32U) | (p.lo >> 32U));
 }
 
 crd::u64 to_q32(crd::f64 ns_per_tick) noexcept

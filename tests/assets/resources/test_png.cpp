@@ -1,10 +1,12 @@
-// tests/assets/resources/test_png.cpp — the PNG decoder gates. Every fixture is built IN-MEMORY with OUR zlib_deflate + OUR
-// png_crc32 (the codec proves itself end-to-end through its own compression stack): all five filters reconstructed
-// against reference pixels, every color type × representative bit depths, palette+tRNS, color keys, 16-bit
-// downconversion, Adam7 interlace scatter, and the failure classes (CRC corruption is REJECTED, size contracts hold).
+// tests/assets/resources/test_png.cpp — the PNG decoder gates. Every fixture is built IN-MEMORY with OUR zlib_deflate
+// and OUR foundation crc32 (the codec proves itself end-to-end through the stacks it builds on): all five filters
+// reconstructed against reference pixels, every color type × representative bit depths, palette+tRNS, color keys,
+// 16-bit downconversion, Adam7 interlace scatter, and the failure classes (CRC corruption is REJECTED, size contracts
+// hold).
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <crd/containers/checksum.hpp>
 #include <crd/resources/deflate.hpp>
 #include <crd/resources/png_image.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -38,7 +40,7 @@ void add_chunk(crd::containers::Array<crd::u8>& png, const char* type, const crd
         png.push_back(data[i]);
         crc_input.push_back(data[i]);
     }
-    push_be32(png, png_crc32(crd::containers::as_const_span(crc_input)));
+    push_be32(png, crd::containers::crc32(crd::containers::as_const_span(crc_input)));
 }
 
 void begin_png(crd::containers::Array<crd::u8>& png, crd::memory::IAllocator* a, crd::u32 w, crd::u32 h, crd::u8 depth,

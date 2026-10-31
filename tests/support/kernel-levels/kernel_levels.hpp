@@ -10,7 +10,7 @@
 #pragma once
 
 #include <crd/core/cpu_features.hpp>
-#include <crd/math/kernel_dispatch.hpp>
+#include <crd/core/kernel_dispatch.hpp>
 
 namespace crd::test
 {

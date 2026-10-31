@@ -51,7 +51,9 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    features a level's kernel selects on; a new level above `Avx512` is added only for a measured kernel that needs it.
    A feature variant is the level's kernel unit built again with the feature (`crd_add_cpu_kernels` `VARIANTS`, its
    own level namespace and table), listed after the level's plain table with the features it needs; the first is
-   AVX-VNNI on avx2 (hesap-tensor's integer dots).
+   AVX-VNNI on avx2 (hesap-tensor's integer dots). Carry-less multiply is in no psABI level, so PCLMULQDQ on sse4.2
+   and VPCLMULQDQ on avx2 and avx512 are variants too (crd-containers' CRC folds, amended 2026-10-31); a variant's
+   level may then have no plain table, and a CPU of that level without the feature runs the highest table below it.
    ARM64: `Neon` is architectural; SVE, SVE2 and SME detection and levels come with the ARM64 release rows
    (`getauxval` HWCAP/HWCAP2, `IsProcessorFeaturePresent`). WebAssembly SIMD128 tiers belong to WEB.1.
 2. **One detection owner.** `crd/core/cpu_features.hpp` (crd-core, below crd-time and crd-math) is the engine's only

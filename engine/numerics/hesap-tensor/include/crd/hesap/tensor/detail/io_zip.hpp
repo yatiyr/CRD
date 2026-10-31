@@ -1,7 +1,7 @@
 #pragma once
 // ---------------------------------------------------------------------------
-// crd-hesap-tensor — v14-l io detail: CRC-32 + RFC 1951 DEFLATE decompressor
-// (read side) for the .npz zip container.
+// crd-hesap-tensor — v14-l io detail: RFC 1951 DEFLATE decompressor (read
+// side) for the .npz zip container; its CRC-32 is crd/containers/checksum.hpp.
 //
 // Scope (deliberate): npz WRITE emits STORED members (exactly what np.savez
 // does — method 0), so no compressor lives here; npz READ must also accept
@@ -12,7 +12,7 @@
 // destination buffer itself — no ring buffer, no scratch allocation.
 //
 // HOME-> flag: if the engine ever gains a general compression module, this
-// inflate (and crc32) is the seed — move it there and re-point this include.
+// inflate is the seed — move it there and re-point this include.
 // ---------------------------------------------------------------------------
 
 #include <crd/containers/span.hpp>
@@ -54,40 +54,6 @@ inline void wr_u32(crd::u8* p, crd::u32 v) noexcept
 inline void wr_u64(crd::u8* p, crd::u64 v) noexcept
 {
     std::memcpy(p, &v, sizeof(v));
-}
-
-// ---- CRC-32 (zip / ISO 3309, reflected poly 0xEDB88320), table at compile time ----
-
-struct Crc32Table
-{
-    crd::u32 t[256];
-};
-
-[[nodiscard]] constexpr Crc32Table make_crc32_table() noexcept
-{
-    Crc32Table tab{};
-    for (crd::u32 i = 0; i < 256U; ++i)
-    {
-        crd::u32 c = i;
-        for (crd::u32 k = 0; k < 8U; ++k)
-        {
-            c = (c & 1U) != 0U ? (0xEDB88320U ^ (c >> 1U)) : (c >> 1U);
-        }
-        tab.t[i] = c;
-    }
-    return tab;
-}
-
-inline constexpr Crc32Table kCrc32Table = make_crc32_table();
-
-[[nodiscard]] inline crd::u32 crc32(crd::containers::ConstSpan<crd::u8> data) noexcept
-{
-    crd::u32 c = 0xFFFFFFFFU;
-    for (const crd::u8 b : data)
-    {
-        c = kCrc32Table.t[(c ^ b) & 0xFFU] ^ (c >> 8U);
-    }
-    return c ^ 0xFFFFFFFFU;
 }
 
 // ---- RFC 1951 inflate -----------------------------------------------------

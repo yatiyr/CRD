@@ -4,6 +4,7 @@
 
 #include <crd/perf/bundle.hpp>
 
+#include <crd/containers/checksum.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/perf/diagnostics.hpp> // diagnostic_now_ns(), kDiagnosticSchemaVersion
 
@@ -33,38 +34,10 @@ namespace cont = crd::containers;
 
 namespace
 {
-// ---- crc32 (IEEE 802.3, poly 0xEDB88320) -- self-contained; crd-perf must not depend on
-// the codec stack in crd-resources/crd-numerics that carry the other crc32 tables. --------
-struct Crc32Table
-{
-    crd::u32 v[256];
-};
-
-constexpr Crc32Table make_crc32_table() noexcept
-{
-    Crc32Table t{};
-    for (crd::u32 i = 0; i < 256U; ++i)
-    {
-        crd::u32 c = i;
-        for (int k = 0; k < 8; ++k)
-        {
-            c = (c & 1U) ? (0xEDB88320U ^ (c >> 1)) : (c >> 1);
-        }
-        t.v[i] = c;
-    }
-    return t;
-}
-
-constexpr Crc32Table kCrc32 = make_crc32_table();
-
+// The CRC-32 of the bundle's header and payloads (crd/containers/checksum.hpp).
 crd::u32 crc32_bytes(const crd::u8* p, crd::usize n) noexcept
 {
-    crd::u32 c = 0xFFFFFFFFU;
-    for (crd::usize i = 0; i < n; ++i)
-    {
-        c = kCrc32.v[(c ^ p[i]) & 0xFFU] ^ (c >> 8);
-    }
-    return c ^ 0xFFFFFFFFU;
+    return cont::crc32(cont::ConstSpan<crd::u8>(p, n));
 }
 
 void append_bytes(cont::Array<crd::u8>& a, const void* src, crd::usize n) noexcept

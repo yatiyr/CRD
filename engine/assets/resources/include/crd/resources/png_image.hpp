@@ -7,7 +7,7 @@
 //   • PLTE + tRNS (palette alpha, gray/RGB color-key transparency)
 //   • all five scanline filters (None/Sub/Up/Average/Paeth), correct sub-byte bpp handling
 //   • Adam7 INTERLACE (the 7-pass origin/stride table, per-pass defilter + scatter)
-//   • per-chunk CRC-32 VERIFICATION (a corrupt chunk is rejected, never silently decoded)
+//   • per-chunk CRC-32 VERIFICATION (crd/containers/checksum.hpp; a corrupt chunk is rejected, never decoded)
 //
 // Output is always RGBA8 (the GPU-upload layout): 16-bit samples take the high byte (the standard downconversion),
 // palette expands, gray replicates, tRNS becomes real alpha. `source_channels`/`source_bit_depth` report what the file
@@ -24,9 +24,6 @@ namespace crd::resources
 // PNG shares the family-wide LDR types (ldr_image.hpp) — the aliases keep the codec-local spelling readable.
 using PngImage = LdrImage;
 using PngError = LdrError;
-
-// CRC-32 (ISO 3309 / ITU-T V.42 — the PNG chunk checksum). Exposed for chunk building (tests, the future encoder).
-[[nodiscard]] crd::u32 png_crc32(crd::containers::ConstSpan<crd::u8> data) noexcept;
 
 // True iff the 8-byte PNG signature leads `bytes`.
 [[nodiscard]] bool png_sniff(crd::containers::ConstSpan<crd::u8> bytes) noexcept;

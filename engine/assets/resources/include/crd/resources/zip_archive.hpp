@@ -1,9 +1,9 @@
 #pragma once
 
 // zip_archive.hpp — GEO-5 pt 2 (D-007): the owned ZIP (PKZIP appnote) container — the OPC substrate 3MF/USDZ-class
-// formats ride on, built ENTIRELY from the codec stack we already own (`inflate_raw`/`deflate_raw` + the standard
-// CRC-32 the PNG codec exposes). A codec-stack citizen of crd-resources, deliberately NOT asset-io: document parsers
-// take pre-extracted bytes (the glTF "caller does I/O" posture) and the COOKER bridges the two layers.
+// formats ride on, built ENTIRELY from the codec stack we already own (`inflate_raw`/`deflate_raw` + the foundation
+// CRC-32, crd/containers/checksum.hpp). A codec-stack citizen of crd-resources, deliberately NOT asset-io: document
+// parsers take pre-extracted bytes (the glTF "caller does I/O" posture) and the COOKER bridges the two layers.
 //
 // Read scope: the classic 32-bit format AND Zip64 (the 3MF reference toolchain — lib3mf, hence every slicer riding
 // it — writes Zip64 structures unconditionally, even for KB-sized archives): EOCD located by a bounded back-scan

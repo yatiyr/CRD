@@ -2,8 +2,8 @@
 
 #include <crd/resources/zip_archive.hpp>
 
+#include <crd/containers/checksum.hpp>
 #include <crd/resources/deflate.hpp>
-#include <crd/resources/png_image.hpp> // png_crc32 — the standard CRC-32 (same polynomial ZIP specifies)
 
 #include <cstring>
 
@@ -299,7 +299,7 @@ ZipError ZipReader::extract(crd::usize i, crd::containers::Array<crd::u8>& out) 
         out.clear();
         return ZipError::Corrupt;
     }
-    if (png_crc32(crd::containers::ConstSpan<crd::u8>(out.data(), out.size())) != ze.crc32)
+    if (crd::containers::crc32(crd::containers::ConstSpan<crd::u8>(out.data(), out.size())) != ze.crc32)
     {
         out.clear();
         return ZipError::Corrupt;
@@ -315,7 +315,7 @@ bool ZipWriter::add(const char* name, crd::containers::ConstSpan<crd::u8> bytes)
         return false;
     }
 
-    const crd::u32 crc = png_crc32(bytes);
+    const crd::u32 crc = crd::containers::crc32(bytes);
     crd::containers::Array<crd::u8> deflated = deflate_raw(bytes, m_alloc);
     const bool stored = deflated.size() >= bytes.size(); // deflate only when it SHRINKS
     const crd::containers::ConstSpan<crd::u8> payload =

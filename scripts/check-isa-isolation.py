@@ -43,7 +43,9 @@ SCHEMA = 'cerid-isa-isolation/1'
 
 # The level namespaces (crd/core/kernel_level.hpp) and the suffix each level's table name ends with.
 SUFFIX = {'portable': 'Portable', 'sse2': 'Sse2', 'sse42': 'Sse42', 'avx2': 'Avx2', 'avx512': 'Avx512',
-          'neon': 'Neon', 'avx2_avxvnni': 'Avx2AvxVnni', 'avx512_avx512vnni': 'Avx512Avx512Vnni'}
+          'neon': 'Neon', 'avx2_avxvnni': 'Avx2AvxVnni', 'avx512_avx512vnni': 'Avx512Avx512Vnni',
+          'sse42_pclmulqdq': 'Sse42Pclmulqdq', 'avx2_vpclmulqdq': 'Avx2Vpclmulqdq',
+          'avx512_vpclmulqdq': 'Avx512Vpclmulqdq'}
 _NS = '|'.join(sorted(SUFFIX, key=len, reverse=True))
 
 
@@ -90,6 +92,8 @@ LEVEL_LEGACY = {'portable': frozenset(), 'sse2': frozenset(), 'sse42': X64_V2, '
 LEVEL_ENCODINGS = {'portable': frozenset(), 'sse2': frozenset(), 'sse42': frozenset(),
                    'avx2': frozenset({'VEX'}), 'avx512': frozenset({'VEX', 'EVEX'})}
 LEVEL_PRESENT = {'avx2': 'VEX', 'avx512': 'EVEX'}
+# The legacy instructions a feature variant adds to its level (a VEX or EVEX form is its level's encoding).
+FEATURE_LEGACY = {'pclmulqdq': frozenset('pclmulqdq pclmullqlqdq pclmulhqlqdq pclmullqhqdq pclmulhqhqdq'.split())}
 _SEGMENT = frozenset({0x26, 0x2E, 0x36, 0x3E, 0x64, 0x65, 0x67})
 _PREFIX_WORDS = r'(?:(?:lock|rep|repe|repz|repne|repnz|data16|addr32|notrack|bnd|cs|ds|es|ss|fs|gs) +)*'
 _LEGACY = '|'.join(sorted(X64_LEGACY, key=len, reverse=True))
@@ -608,8 +612,9 @@ def judge_families(families, arch):
 def judge_kernel_code(level, hits, coff, reviewed=None):
     """Failures of a kernel object's instructions against its level; `reviewed(hit)` holds the reviewed runtime
     dispatch (the compiler's own, which tests __isa_available)."""
-    base = level.split('_')[0]
-    above = [hit for hit in hits if not (hit[2] in LEVEL_ENCODINGS[base] or hit[2] in LEVEL_LEGACY[base]
+    base, _, feature = level.partition('_')
+    legacy = LEVEL_LEGACY[base] | FEATURE_LEGACY.get(feature, frozenset())
+    above = [hit for hit in hits if not (hit[2] in LEVEL_ENCODINGS[base] or hit[2] in legacy
                                           or coff and hit[2] in WINDOWS_FLOOR or reviewed and reviewed(hit))]
     return code_failures(f'above level {level}: ', above)
 

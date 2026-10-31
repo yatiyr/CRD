@@ -6,6 +6,7 @@
 // names. Adversarial corpus + libFuzzer is DIAG.5d(e2).
 
 #include <crd/containers/array.hpp>
+#include <crd/containers/checksum.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/perf/bundle.hpp>
 #include <crd/perf/bundle_import.hpp>
@@ -27,20 +28,6 @@ namespace
 template <typename T> cont::ConstSpan<T> span_of(const T* p, crd::usize n) noexcept
 {
     return cont::ConstSpan<T>{p, n};
-}
-
-crd::u32 test_crc32(const crd::u8* p, crd::usize n) noexcept
-{
-    crd::u32 c = 0xFFFFFFFFU;
-    for (crd::usize i = 0; i < n; ++i)
-    {
-        c ^= p[i];
-        for (int k = 0; k < 8; ++k)
-        {
-            c = (c & 1U) ? (0xEDB88320U ^ (c >> 1)) : (c >> 1);
-        }
-    }
-    return c ^ 0xFFFFFFFFU;
 }
 
 const crd::u8 kCrashBytes[16] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
@@ -179,7 +166,8 @@ TEST_CASE("golden bundle: an N+1 container version is rejected", "[perf][diag][i
     BundleHeader         hdr{};
     std::memcpy(&hdr, g.data(), sizeof(hdr));
     hdr.format_version = kBundleFormatVersion + 1U;
-    hdr.header_crc32   = test_crc32(reinterpret_cast<const crd::u8*>(&hdr), offsetof(BundleHeader, header_crc32));
+    const auto* header = reinterpret_cast<const crd::u8*>(&hdr);
+    hdr.header_crc32   = cont::crc32(span_of(header, offsetof(BundleHeader, header_crc32)));
     std::memcpy(g.data(), &hdr, sizeof(hdr));
 
     const BundleImport imp = import_bundle(span_of(g.data(), g.size()));
@@ -219,7 +207,8 @@ TEST_CASE("importer rejects structurally unusable bundles", "[perf][diag][import
         BundleHeader         hdr{};
         std::memcpy(&hdr, bad.data(), sizeof(hdr));
         hdr.schema_version = kDiagnosticSchemaVersion + 7U;
-        hdr.header_crc32   = test_crc32(reinterpret_cast<const crd::u8*>(&hdr), offsetof(BundleHeader, header_crc32));
+        const auto* header = reinterpret_cast<const crd::u8*>(&hdr);
+        hdr.header_crc32   = cont::crc32(span_of(header, offsetof(BundleHeader, header_crc32)));
         std::memcpy(bad.data(), &hdr, sizeof(hdr));
         CHECK(import_bundle(span_of(bad.data(), bad.size())).reject == ImportReject::SchemaMismatch);
     }

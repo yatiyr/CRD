@@ -2,6 +2,7 @@
 
 #include <crd/resources/png_image.hpp>
 
+#include <crd/containers/checksum.hpp>
 #include <crd/resources/deflate.hpp>
 
 #include <cstring>
@@ -12,26 +13,6 @@ namespace
 {
 
 constexpr crd::u32 kMaxDim = 16384; // sane cap: nothing real exceeds it; a crafted 4-GB bomb does
-
-// ── CRC-32 (ISO 3309, reflected, poly 0xEDB88320) ──────────────────────────────────────────────────────────────────────
-
-struct CrcTable
-{
-    crd::u32 t[256];
-
-    CrcTable() noexcept
-    {
-        for (crd::u32 n = 0; n < 256U; ++n)
-        {
-            crd::u32 c = n;
-            for (int k = 0; k < 8; ++k)
-            {
-                c = ((c & 1U) != 0U) ? 0xEDB88320U ^ (c >> 1U) : c >> 1U;
-            }
-            t[n] = c;
-        }
-    }
-};
 
 // ── big-endian reads ────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -269,17 +250,6 @@ constexpr crd::u32 kA7dy[7] = {8, 8, 8, 4, 4, 2, 2};
 
 } // namespace
 
-crd::u32 png_crc32(crd::containers::ConstSpan<crd::u8> data) noexcept
-{
-    static const CrcTable kTable; // computed once
-    crd::u32              c = 0xFFFFFFFFU;
-    for (crd::usize i = 0; i < data.size(); ++i)
-    {
-        c = kTable.t[(c ^ data[i]) & 0xFFU] ^ (c >> 8U);
-    }
-    return c ^ 0xFFFFFFFFU;
-}
-
 bool png_sniff(crd::containers::ConstSpan<crd::u8> bytes) noexcept
 {
     static constexpr crd::u8 kSig[8] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
@@ -317,7 +287,7 @@ PngError png_decode(crd::containers::ConstSpan<crd::u8> bytes, PngImage& out, cr
         const crd::u8* type = p + 4;
         const crd::u8* data = p + 8;
         const crd::u32 crc  = be32(data + len);
-        if (png_crc32(crd::containers::ConstSpan<crd::u8>(type, 4U + len)) != crc)
+        if (crd::containers::crc32(crd::containers::ConstSpan<crd::u8>(type, 4U + len)) != crc)
         {
             return PngError::BadChunkCrc;
         }

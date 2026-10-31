@@ -944,7 +944,7 @@
         "numpy"
       ],
       "note": "Twiddles come from the host cmath.exp: Windows renders 11,802 lines one ulp apart (e.g. -0.7071067811865476 for -0.7071067811865475). A correctly rounded rendering and its regeneration are the FFT owner's qualification when that programme resumes; the reference host reproduced the header byte-for-byte in seven runs. Since 2026-10-28 the script also writes the codelet units (fft_codegen_split.py) and --check compares the header and every unit.",
-      "sha256": "227f4c36c4a7f1a4bcdcee5bdb6d4866db7312b20b451ceadab0c81fd12d13da"
+      "sha256": "d4a29d589427672ba4166699641dfdc55d2a5c31383fb870ba352af80326712f"
     },
     {
       "path": "engine/numerics/hesap-fft/include/crd/hesap/fft/detail/level_plans_gen.hpp",
@@ -1082,7 +1082,7 @@
         "numpy"
       ],
       "note": "Byte-identical on the reference host; on Windows the twiddle constants from the host cmath render one ulp apart, as for batched_codelets_gen.hpp. Since 2026-10-28 the script also writes twiddle_codelets.hpp and its codelet units (fft_codegen_split.py) and --check compares all four.",
-      "sha256": "886e5e5da6616cd34d38cdd3547eb39f1b01bd346753d42d3617ba5465c19db5"
+      "sha256": "03079d10eaa395ecb9945eac763bd1706e74adbd7fbb6149a72ab3a464fa9131"
     },
     {
       "path": "engine/numerics/hesap-fft/include/crd/hesap/fft/detail/twiddle_codelets.hpp",
@@ -1097,7 +1097,7 @@
         "numpy"
       ],
       "note": "The radix-8/16/32 combine codelets' declarations; twiddles render on the host as for codelets.hpp, and the one --check run covers it.",
-      "sha256": "7be74a6478991726c1fce6233231154d0417674ed8e8d260eb7a0b053cd78186"
+      "sha256": "6e429cd8f9850c944bd3418a77b67ccecf2ed4d9805ceaa8998e2adf88cd9943"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_twiddle_codelets_0.cpp",
@@ -1133,8 +1133,8 @@
       "path": "engine/numerics/hesap-fft/include/crd/hesap/fft/detail/hier_codelets.hpp",
       "generator": "build/gen_subfft_m3.py",
       "status": "generator-absent",
-      "note": "build/gen_subfft_m3.py was a scratch generator that was never committed; the header is the surviving artifact (style-normalized by fft_codegen_style.py on 2026-09-12). On 2026-10-27 (SIMD-DISPATCH) its never-defined CRD_FFT_* experiment gates were resolved to their default branches and three unreferenced f64 stage-1 codelets (64x16, 16x64, 32x64) deleted, and the codelets moved into the level namespace (crd::hesap::fft::gen::inline CRD_MATH_LEVEL_NS). On 2026-10-28 `scripts/fft_codegen_split.py --lanes <header> 150 2 engine/numerics/hesap-fft/kernels/fft_hier_codelets`, run on the bytes before the split (20c9f2a1^), left the header with the declarations and moved the definitions into two codelet units (tile bodies in parts of at most 150 lines, on codelet_lanes.hpp's lanes, so the portable level runs them a column at a time); the codelet_policy.hpp and simd.hpp includes it no longer needs were removed and the split command recorded in its comment. On 2026-10-30 the same command, the splitter now also writing each codelet whole for avx2 and avx512, re-split the units from those bytes.",
-      "sha256": "232a588040c7c5d8ddeb21d5d43c2f9bd2928858d5fd04960afff71cb28dbe29"
+      "note": "build/gen_subfft_m3.py was a scratch generator that was never committed; the header is the surviving artifact (style-normalized by fft_codegen_style.py on 2026-09-12). On 2026-10-27 (SIMD-DISPATCH) its never-defined CRD_FFT_* experiment gates were resolved to their default branches and three unreferenced f64 stage-1 codelets (64x16, 16x64, 32x64) deleted, and the codelets moved into the level namespace (crd::hesap::fft::gen::inline CRD_MATH_LEVEL_NS). On 2026-10-28 `scripts/fft_codegen_split.py --lanes <header> 150 2 engine/numerics/hesap-fft/kernels/fft_hier_codelets`, run on the bytes before the split (20c9f2a1^), left the header with the declarations and moved the definitions into two codelet units (tile bodies in parts of at most 150 lines, on codelet_lanes.hpp's lanes, so the portable level runs them a column at a time); the codelet_policy.hpp and simd.hpp includes it no longer needs were removed and the split command recorded in its comment. On 2026-10-30 the same command, the splitter now also writing each codelet whole for avx2 and avx512, re-split the units from those bytes. On 2026-10-31 its kernel_level.hpp include became crd/core/kernel_level.hpp (the dispatch mechanism moved to crd-core).",
+      "sha256": "85c3b119d96cd488e12e4d2111a8ad6adc4f8eec0765174d97d698954e7a38a6"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_hier_codelets_0.cpp",

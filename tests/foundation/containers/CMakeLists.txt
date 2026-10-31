@@ -14,6 +14,10 @@ crd_enable_default_pch(crd-containers-tests)
 
 crd_discover_tests(crd-containers-tests)
 
+# ADR-0134 §8: the checksum [kernels] cases once per compiled level (crd-containers-kernels-at-<level>), and at avx512
+# under SDE's icx model too, whose VPCLMULQDQ selects the 512-bit CRC fold.
+crd_add_kernel_level_tests(crd-containers-tests "[kernels]" SDE_CPUS icx)
+
 # The containers' contract fatals, one child process per mode (a fatal cannot run in-process): a sub-budget
 # allocator's refusal ends in the container's out-of-memory fatal, never a null buffer adopted with a capacity, and
 # HashMap::at's miss is fatal. Source and protocol: tests/support/diag/specimens/containers_fatal_specimen.cpp.

@@ -50,6 +50,7 @@
 #include "detail/io_zip.hpp"
 
 #include <crd/containers/array.hpp>
+#include <crd/containers/checksum.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
@@ -1183,7 +1184,7 @@ public:
         // local headers + data
         for (Member& m : m_members)
         {
-            m.crc = iodetail::crc32(crd::containers::as_const_span(m.npy_bytes));
+            m.crc = crd::containers::crc32(crd::containers::as_const_span(m.npy_bytes));
             m.local_offset = static_cast<crd::u32>(w);
             iodetail::wr_u32(base + w, 0x04034B50U);
             iodetail::wr_u16(base + w + 4U, 20U);  // version needed: 2.0
@@ -1400,7 +1401,7 @@ public:
             // CRC-32 gate on every member (bit-exactness doctrine)
             const crd::u8* payload = ent.in_backing ? m_backing.data() + ent.src_offset
                                                     : m_src.data() + ent.src_offset;
-            if (iodetail::crc32({payload, ent.uncomp_size}) != ent.crc)
+            if (crd::containers::crc32({payload, ent.uncomp_size}) != ent.crc)
             {
                 return TensorStatus::BadInput;
             }

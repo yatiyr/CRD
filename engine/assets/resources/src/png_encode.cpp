@@ -3,7 +3,7 @@
 #include <crd/resources/png_encode.hpp>
 
 #include <crd/resources/deflate.hpp>
-#include <crd/resources/png_image.hpp> // png_crc32
+#include <crd/containers/checksum.hpp>
 
 namespace crd::resources
 {
@@ -20,23 +20,21 @@ void put_be32(crd::containers::Array<crd::u8>& out, crd::u32 v)
     out.push_back(static_cast<crd::u8>(v & 0xFFU));
 }
 
-// one chunk: length + type + payload + CRC(type||payload)
-void put_chunk(crd::containers::Array<crd::u8>& out, const char type[4], crd::containers::ConstSpan<crd::u8> payload,
-               crd::memory::IAllocator* alloc)
+// one chunk: length + type + payload + CRC(type||payload), the CRC chained over the two without a copy
+void put_chunk(crd::containers::Array<crd::u8>& out, const char type[4], crd::containers::ConstSpan<crd::u8> payload)
 {
     put_be32(out, static_cast<crd::u32>(payload.size()));
-    crd::containers::Array<crd::u8> crc_input(alloc);
+    const crd::usize type_at = out.size();
     for (crd::u32 i = 0; i < 4U; ++i)
     {
         out.push_back(static_cast<crd::u8>(type[i]));
-        crc_input.push_back(static_cast<crd::u8>(type[i]));
     }
     for (crd::usize i = 0; i < payload.size(); ++i)
     {
         out.push_back(payload[i]);
-        crc_input.push_back(payload[i]);
     }
-    put_be32(out, png_crc32(crd::containers::ConstSpan<crd::u8>(crc_input.data(), crc_input.size())));
+    const crd::u32 type_crc = crd::containers::crc32(crd::containers::ConstSpan<crd::u8>(out.data() + type_at, 4U));
+    put_be32(out, crd::containers::crc32(payload, type_crc));
 }
 
 } // namespace
@@ -70,7 +68,7 @@ crd::containers::Array<crd::u8> png_encode_rgba(crd::containers::ConstSpan<crd::
     ihdr.push_back(0U); // compression
     ihdr.push_back(0U); // filter method
     ihdr.push_back(0U); // no interlace
-    put_chunk(out, "IHDR", crd::containers::ConstSpan<crd::u8>(ihdr.data(), ihdr.size()), alloc);
+    put_chunk(out, "IHDR", crd::containers::ConstSpan<crd::u8>(ihdr.data(), ihdr.size()));
 
     // IDAT: filter byte 0 (None) + the raw scanline, per row, zlib-deflated
     crd::containers::Array<crd::u8> raw(alloc);
@@ -86,9 +84,9 @@ crd::containers::Array<crd::u8> png_encode_rgba(crd::containers::ConstSpan<crd::
     }
     const crd::containers::Array<crd::u8> idat =
         zlib_deflate(crd::containers::ConstSpan<crd::u8>(raw.data(), raw.size()), alloc);
-    put_chunk(out, "IDAT", crd::containers::ConstSpan<crd::u8>(idat.data(), idat.size()), alloc);
+    put_chunk(out, "IDAT", crd::containers::ConstSpan<crd::u8>(idat.data(), idat.size()));
 
-    put_chunk(out, "IEND", crd::containers::ConstSpan<crd::u8>{}, alloc);
+    put_chunk(out, "IEND", crd::containers::ConstSpan<crd::u8>{});
     return out;
 }
 

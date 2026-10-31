@@ -33,6 +33,27 @@
 #define CRD_KERNEL_HAS_AVX512VNNI 1
 #define CRD_MATH_LEVEL_NS avx512_avx512vnni
 #define CRD_KERNEL_LEVEL_SUFFIX Avx512Avx512Vnni
+#elif defined(CRD_KERNEL_FEATURE_PCLMULQDQ)
+#if !defined(CRD_KERNEL_LEVEL) || CRD_KERNEL_LEVEL != CRD_KERNEL_LEVEL_SSE42
+#error "PCLMULQDQ is a feature variant of the sse4.2 level"
+#endif
+#define CRD_KERNEL_HAS_PCLMULQDQ 1
+#define CRD_MATH_LEVEL_NS sse42_pclmulqdq
+#define CRD_KERNEL_LEVEL_SUFFIX Sse42Pclmulqdq
+#elif defined(CRD_KERNEL_FEATURE_VPCLMULQDQ)
+#if !defined(CRD_KERNEL_LEVEL) ||                                                                                      \
+    (CRD_KERNEL_LEVEL != CRD_KERNEL_LEVEL_AVX2 && CRD_KERNEL_LEVEL != CRD_KERNEL_LEVEL_AVX512)
+#error "VPCLMULQDQ is a feature variant of the avx2 and avx512 levels"
+#endif
+#define CRD_KERNEL_HAS_PCLMULQDQ 1
+#define CRD_KERNEL_HAS_VPCLMULQDQ 1
+#if CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_AVX2
+#define CRD_MATH_LEVEL_NS avx2_vpclmulqdq
+#define CRD_KERNEL_LEVEL_SUFFIX Avx2Vpclmulqdq
+#else
+#define CRD_MATH_LEVEL_NS avx512_vpclmulqdq
+#define CRD_KERNEL_LEVEL_SUFFIX Avx512Vpclmulqdq
+#endif
 #elif !defined(CRD_KERNEL_LEVEL)
 #define CRD_MATH_LEVEL_NS general
 #elif CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_PORTABLE
@@ -61,6 +82,12 @@
 #endif
 #if !defined(CRD_KERNEL_HAS_AVX512VNNI)
 #define CRD_KERNEL_HAS_AVX512VNNI 0
+#endif
+#if !defined(CRD_KERNEL_HAS_PCLMULQDQ)
+#define CRD_KERNEL_HAS_PCLMULQDQ 0
+#endif
+#if !defined(CRD_KERNEL_HAS_VPCLMULQDQ)
+#define CRD_KERNEL_HAS_VPCLMULQDQ 0
 #endif
 
 // The name of the kernel table a unit of this level defines: CRD_KERNEL_TABLE(kFoo) is kFooAvx2 in an AVX2 unit.
