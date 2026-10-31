@@ -5629,5 +5629,33 @@ class AbBoard(unittest.TestCase):
         self.assertEqual(document['comparisons']['cand'][0]['ratio'], 2.0)
         self.assertIn('| 7 | 2 | 1 | 2 [2-2] | faster |', out.getvalue())
 
+    def test_same_results_are_checked(self):
+        commands = {'a': 'run a', 'b': 'run b'}
+        bits = r'^(?P<key>\d+) [\d.]+ bits=(?P<value>[0-9a-f]+)'
+        for spec in ('a:' + bits, 'a,z:' + bits, 'a,a:' + bits):
+            with self.assertRaisesRegex(ab_board.BoardError, 'two or more distinct'):
+                ab_board.parse_same(spec, commands)
+        with self.assertRaisesRegex(ab_board.BoardError, 'groups key and value'):
+            ab_board.parse_same(r'a,b:^(\d+)', commands)
+        same = [ab_board.parse_same('a,b:' + bits, commands)]
+        arms = self.arms(commands, 'ref=a:' + self.ROW, 'cand=b:' + self.ROW)
+        # The candidate is faster and prints the reference's digest at every key: the board runs and records them.
+        outputs = {'a': lambda i: '1 2.0 bits=ab\n2 4.0 bits=cd\n', 'b': lambda i: '1 1.0 bits=ab\n2 2.0 bits=cd\n'}
+        board = ab_board.Board(commands, arms, 'ref', warmup=0, min_reps=2, max_reps=3, same=same,
+                               runner=self.fake_runner(outputs, []), out=io.StringIO())
+        document = board.run()
+        self.assertEqual(document['same'][0]['values'], {'1': 'ab', '2': 'cd'})
+        self.assertIn('a, b printed the same results', ab_board.render(document))
+        # Another digest at a key, one that changes between repetitions, or a key one command lacks stops the board.
+        failures = ((lambda i: '1 1.0 bits=ab\n2 2.0 bits=ce\n', 'printed ce at key 2 where a printed cd'),
+                    (lambda i: '1 1.0 bits=ab\n2 2.0 bits=%s\n' % ('cd' if i < 3 else 'cf'), 'printed cf'),
+                    (lambda i: '1 1.0 bits=ab\n', 'printed different keys'))
+        for candidate, message in failures:
+            board = ab_board.Board(commands, arms, 'ref', warmup=0, min_reps=2, max_reps=3, same=same,
+                                   runner=self.fake_runner({'a': outputs['a'], 'b': candidate}, []),
+                                   out=io.StringIO())
+            with self.assertRaisesRegex(ab_board.BoardError, message):
+                board.run()
+
 if __name__ == '__main__':
     unittest.main()

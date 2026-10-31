@@ -7,7 +7,9 @@
 // the boards' logs). The input is copied in before each timed transform, never inside the timing (as
 // the pre-SIMD-DISPATCH board did). Each Cerid arm and MKL is measured against an FFTW f64 transform of the same f32
 // input values and fails above the ADR-0092 §5 f32 class (2e-4, 1e-3 from the four-step band): a fast wrong answer is
-// not a win, for either side. Cerid's Complex<f32> shares MKL's interleaved {re, im} layout.
+// not a win, for either side. Each Cerid row ends with the FNV-1a digest of that gated transform's output (`bits`), so
+// a board of two builds shows they compute the same bits (ab_fft_f32.sh). Cerid's Complex<f32> shares MKL's
+// interleaved {re, im} layout.
 //
 //   bench_fft_f32 [--sizes A-B] [--planned]
 //       the board over 2^A to 2^B (default 10-22); --planned times only the level's planned forward beside MKL (the
@@ -164,13 +166,15 @@ bool board(crd::memory::IAllocator* alloc, int lg, const Arm* arms, usize arm_co
 
     DFTI_DESCRIPTOR_HANDLE h = mkl_plan(n);
 
-    // Each side's error, from one untimed transform.
+    // Each side's error and each arm's digest, from one untimed transform.
     double err[kMaxArms + 1] = {};
+    crd::u64 bits[kMaxArms] = {};
     for (usize a = 0; a < arm_count; ++a)
     {
         reset();
         arms[a].plan->execute(cont::Span<Complex<f32>>(work.data(), n), fft::FftDirection::Forward);
         err[a] = max_rel(work.data(), data.truth.data(), n);
+        bits[a] = crd::containers::fnv1a_64(work.data(), n * sizeof(Complex<f32>));
     }
     reset();
     DftiComputeForward(h, work.data());
@@ -199,8 +203,8 @@ bool board(crd::memory::IAllocator* alloc, int lg, const Arm* arms, usize arm_co
     usize winner = 0;
     for (usize a = 0; a < arm_count; ++a)
     {
-        std::printf("%-9zu | %-15s | %10.5f | %10.5f | %6.2fx | %.1e | %.1e\n", n, arms[a].name, best[a], mkl,
-                    mkl / best[a], err[a], err[arm_count]);
+        std::printf("%-9zu | %-15s | %10.5f | %10.5f | %6.2fx | %.1e | %.1e | %016llx\n", n, arms[a].name, best[a],
+                    mkl, mkl / best[a], err[a], err[arm_count], static_cast<unsigned long long>(bits[a]));
         ok = ok && err[a] <= limit;
         winner = best[a] < best[winner] ? a : winner;
     }
@@ -377,8 +381,8 @@ int main(int argc, char** argv)
         return loop(alloc, options.lg_first, options.loop_side, options.iterations);
     }
     std::printf("=== complex-f32 forward FFT, best of reps (ms); ratio = MKL / Cerid; errors against FFTW f64 ===\n");
-    std::printf("%-9s | %-15s | %10s | %10s | %7s | %-7s | %s\n", "n", "Cerid arm", "Cerid", "MKL", "ratio",
-                "Cerid err", "MKL err");
+    std::printf("%-9s | %-15s | %10s | %10s | %7s | %-7s | %-7s | %s\n", "n", "Cerid arm", "Cerid", "MKL", "ratio",
+                "Cerid err", "MKL err", "bits");
 
     bool ok = true;
     for (int lg = options.lg_first; lg <= options.lg_last; ++lg)

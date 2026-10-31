@@ -155,7 +155,11 @@ Run commands from the repository root. Build/test rules and exact quality requir
 - Fast A/B boards ([method](../docs/bench/README.md#fast-ab-boards)): `ab-board.py --cmd NAME=COMMAND --arm
   LABEL=NAME:REGEX --reference LABEL [--cpus LIST]` runs the arms' processes interleaved and pinned, pairs each arm's
   values with the reference's by repetition and reports the median speed ratio with its bootstrap 95% interval and a
-  verdict against the noise band, stopping once every cell is decided. Its cases are in `test-repository-tools.py`.
+  verdict against the noise band, stopping once every cell is decided; `--same NAME,NAME:REGEX` stops it when two
+  builds print different result digests (`bits`). Its cases are in `test-repository-tools.py`. The fft drivers:
+  `ab_fft_f32.sh` (the planned f32 forward against MKL, HEAD against a candidate), `ab_fft_prerow.sh`
+  (`prof_fft_kernel` against the pre-row engine or a saved build, forward or inverse) and `prof_fft_f32.sh` (perf
+  stat top-down and further events, perf record).
 - `per-slice-check.*`, `full-sweep.ps1` and the unfiltered WSL wrapper are broad CI recipes. Locally select targets.
 
 Put one-shot scripts, logs and probes in ignored `build/<task>/`. Shared scripts must not encode a particular

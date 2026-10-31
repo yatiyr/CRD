@@ -2,8 +2,8 @@
 """The fast A/B board: two or more arms of a runtime benchmark, interleaved, judged by paired ratios with their spread.
 
     python3 scripts/ab-board.py --cmd NAME=COMMAND [--cmd ...] --arm LABEL=NAME:REGEX [--arm ...] --reference LABEL
-                                [--cpus LIST] [--warmup N] [--min-reps N] [--max-reps N] [--band F]
-                                [--higher-is-better] [--log-dir DIR] [--json PATH]
+                                [--same NAME,NAME[,...]:REGEX ...] [--cpus LIST] [--warmup N] [--min-reps N]
+                                [--max-reps N] [--band F] [--higher-is-better] [--log-dir DIR] [--json PATH]
 
 A command is one process of a bench program (a shell command line, run from the current directory). An arm is the
 values one command prints: REGEX, matched against every line of its output, names a `key` group (a size, a case) and
@@ -23,6 +23,10 @@ seed) and a verdict against the noise band F (default 0.02):
   unresolved  it straddles a band edge: more repetitions are needed, or the effect is the size of the noise.
 After --min-reps repetitions the board stops as soon as no cell is unresolved, else at --max-reps. A command that
 fails, or prints no value or a key twice for an arm, stops the board: an instrument failure is never a measurement.
+--same names commands that must compute the same results: REGEX's `key` and `value` groups read a digest of each
+key's output (bench_fft_f32's and prof_fft_kernel's `bits`), and the board stops when two of the named commands, or
+two repetitions of one, print different values at a key, or a named command prints none (a faster wrong answer is
+not a win: HEAD against a candidate that claims the same bits).
 The board prints a markdown table per comparison (docs/bench), saves each process's output with --log-dir
 (rep<k>-<command>.log) and every value with --json (schema cerid-ab-board/1).
 Method: docs/bench/README.md#fast-ab-boards.
@@ -88,6 +92,44 @@ def arm_values(label, regex, text):
     return values
 
 
+def parse_same(text, commands):
+    """(command names, regex) of one --same NAME,NAME[,...]:REGEX."""
+    names, separator, pattern = text.partition(':')
+    group = names.split(',') if separator else []
+    if len(group) < 2 or len(set(group)) != len(group) or any(name not in commands for name in group):
+        raise BoardError('--same must name two or more distinct --cmd (NAME,NAME:REGEX), not %r' % text)
+    try:
+        regex = re.compile(pattern, re.M)
+    except re.error as error:
+        raise BoardError('--same %s: bad regular expression: %s' % (names, error))
+    if not {'key', 'value'} <= set(regex.groupindex):
+        raise BoardError('--same %s: the regular expression needs the groups key and value' % names)
+    return group, regex
+
+
+def same_values(group, regex, outputs, seen):
+    """Check one repetition's outputs of a --same group against each other and every earlier repetition (`seen`,
+    {key: (command, value)}, updated)."""
+    printed = {}
+    for name in group:
+        values = printed[name] = {}
+        for match in regex.finditer(outputs[name]):
+            key = match.group('key')
+            if key in values:
+                raise BoardError('--same: command %s printed key %s twice in one run' % (name, key))
+            values[key] = match.group('value')
+        if not values:
+            raise BoardError('--same: no line of command %s matched' % name)
+        if set(values) != set(printed[group[0]]):
+            raise BoardError('--same: commands %s and %s printed different keys' % (group[0], name))
+    for name, values in printed.items():
+        for key, value in values.items():
+            first = seen.setdefault(key, (name, value))
+            if first[1] != value:
+                raise BoardError('--same: command %s printed %s at key %s where %s printed %s' % (
+                    name, value, key, first[0], first[1]))
+
+
 def speed_ratio(reference, arm, higher_is_better):
     if higher_is_better:
         return arm / reference
@@ -125,7 +167,7 @@ def taskset_prefix(cpus):
 
 class Board:
     def __init__(self, commands, arms, reference, cpus=None, warmup=1, min_reps=5, max_reps=15, band=0.02,
-                 higher_is_better=False, log_dir=None, runner=subprocess.run, out=sys.stdout):
+                 higher_is_better=False, log_dir=None, runner=subprocess.run, out=sys.stdout, same=()):
         if reference not in [label for label, _, _ in arms]:
             raise BoardError('--reference %s is not an arm' % reference)
         if len(arms) < 2:
@@ -144,6 +186,7 @@ class Board:
         self.log_dir = Path(log_dir) if log_dir else None
         self.runner = runner
         self.out = out
+        self.same = [(group, regex, {}) for group, regex in same]
 
     def run_command(self, name, label):
         line = taskset_prefix(self.cpus) + self.commands[name]
@@ -160,6 +203,8 @@ class Board:
         outputs = {}
         for name in arm_order(list(self.commands), index):
             outputs[name] = self.run_command(name, label)
+        for group, regex, seen in self.same:
+            same_values(group, regex, outputs, seen)
         return {arm: arm_values(arm, regex, outputs[command]) for arm, command, regex in self.arms}
 
     def comparisons(self, reps):
@@ -185,6 +230,9 @@ class Board:
                                                    for arm, command, regex in self.arms},
                 'reference': self.reference, 'cpus': self.cpus, 'warmup': self.warmup, 'band': self.band,
                 'higher_is_better': self.higher_is_better, 'stop': stop, 'repetitions': reps,
+                'same': [{'commands': group, 'regex': regex.pattern, 'values': {key: value for key, (_, value)
+                                                                                 in seen.items()}}
+                         for group, regex, seen in self.same],
                 'comparisons': self.comparisons(reps)}
 
 
@@ -205,6 +253,9 @@ def render(document):
                                     document['cpus'] or 'unpinned', document['band'] * 100, unit, unit)]
     if document['higher_is_better']:
         lines[0] = lines[0].replace('reference rate / arm rate', 'arm rate / reference rate')
+    for same in document.get('same', []):
+        lines[0] += ' %s printed the same results at every key of every repetition (%d keys).' % (
+            ', '.join(same['commands']), len(same['values']))
     for arm, cells in document['comparisons'].items():
         lines += ['', '%s against %s:' % (arm, document['reference']), '',
                   '| key | %s | %s | speed ratio | verdict |' % (document['reference'], arm), '|---|---|---|---|---|']
@@ -220,6 +271,7 @@ def main(argv=None, out=sys.stdout):
     parser.add_argument('--cmd', action='append', default=[], required=True, help='NAME=COMMAND')
     parser.add_argument('--arm', action='append', default=[], required=True, help='LABEL=NAME:REGEX')
     parser.add_argument('--reference', required=True)
+    parser.add_argument('--same', action='append', default=[], help='NAME,NAME[,...]:REGEX')
     parser.add_argument('--cpus', help='the taskset CPU list every process is pinned to')
     parser.add_argument('--warmup', type=int, default=1)
     parser.add_argument('--min-reps', type=int, default=5)
@@ -238,7 +290,7 @@ def main(argv=None, out=sys.stdout):
             raise BoardError('two --arm share a label')
         board = Board(commands, arms, args.reference, cpus=args.cpus, warmup=args.warmup, min_reps=args.min_reps,
                       max_reps=args.max_reps, band=args.band, higher_is_better=args.higher_is_better,
-                      log_dir=args.log_dir, out=out)
+                      log_dir=args.log_dir, out=out, same=[parse_same(text, commands) for text in args.same])
         document = board.run()
     except BoardError as error:
         print('ab-board: %s' % error, file=sys.stderr)
