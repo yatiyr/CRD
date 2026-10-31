@@ -330,7 +330,8 @@ readers (OPS.2 owns the N-1 bundle reader). NET-STD implements the mechanism and
 - **Remote disable**: a signed generation that removes a broken algorithm takes effect at the next connection, with
   priority distribution through the update channel (T19).
 - **Dated refusal of classical-only key exchange**: first for Cerid services, and everywhere by 2030, aligned with
-  NIST IR 8547 once final; NET.2 sets the dates.
+  NIST IR 8547 (final on 2026-10-27: every quantum-vulnerable public-key algorithm, whatever its strength, is
+  deprecated after 2030 and disallowed after 2035); NET.2 sets the dates.
 - RFC 7696 is the checklist; NET-STD records each item's evidence.
 
 <a id="policy-wire"></a>

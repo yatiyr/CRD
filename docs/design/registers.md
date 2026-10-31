@@ -345,10 +345,20 @@ EUR-Lex or Steamworks change found between them is recorded as a run with its tr
    full re-research document, or a gazette change with the pinned entries it changed, which owe a full re-research)
    and moves `next`.
 
-The record shapes the readers expect were written from knowledge of the three services; a record without them is
-reported as unreadable and changes nothing, and the first approved refresh confirms them. The calendar points at which
-the guard fails without a refresh are the register's `review.next` (2026-12-15, after IETF 127) and the first pinned
-draft's expiry, which the guard prints (`webtransport.h3`, 2027-01-02, counted conservatively from July 2026).
+The readers follow the records the first approved refresh read (2026-10-31,
+[report](../sessions/2026-10-31-standards-register-refresh.md)); a record without their shape is reported as unreadable
+and changes nothing. An IANA record's `value` is a number, or the record's name where the registry keys by name (ALPN's
+`HTTP/3`); its `description` is a name, or the value an identification sequence spells (`0x68 0x33 ("h3")`); a range
+names nothing. A registry whose records carry no name (QUIC Versions) confirms a value only when the record cites the
+entry's own document (`<xref type="rfc">`, or a draft without its revision); a named record confirms by its name alone.
+The report pins every record read (source, URL, bytes, SHA-256, retrieval day); the bodies stay outside the
+repository, under `~/.cerid/downloads/register-review/`, and the same plan fetches them again.
+
+The first refresh confirmed every IANA codepoint (the generated headers lost their `iana::unverified` namespaces), read
+the NIST object identifiers, the FIPS and W3C statuses and the IETF meeting calendar by hand, and found RFC 8446
+obsoleted by RFC 9846: `tls.v13` is re-pinned to RFC 9846, and the run's trigger owes the full re-research by
+2026-11-25, which `review.next` holds. The calendar's other point is the first pinned draft's expiry, which the guard
+prints (`webtransport.h3`, posted 2026-07-06).
 
 ## Cerid identifiers
 
