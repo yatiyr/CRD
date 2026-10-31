@@ -3,10 +3,11 @@
 // (../CMakeLists.txt, ADR-0134 §5), so their single-rounded fmas, and the fmas of the f64 exp and tanh the activations
 // run, are the level's instruction or its exact emulation, never a library call or a scalar-table call.
 //
-// The direct 3x3/s1/p1 convolution stages an image's rows once into a zero-padded buffer, each channel's rows between
-// two zero rows, so every kj shift is a full load and every ki step the next row, and keeps up to eight output
-// channels' fma chains in registers over the output columns: a Vec16f while 16 columns remain at avx512, then Vec8f,
-// the tail stored partially; at avx512 a row of at most eight columns runs two conv rows in one Vec16f. Other shapes
+// The direct 3x3/s1/p1 convolution stages an image's rows once into a zero-padded buffer (its zeros written once for
+// every image of a call), each channel's rows between two zero rows, so every kj shift is a full load and every ki step
+// the next row, and keeps up to eight output channels' fma chains in registers over the output columns: a Vec16f while
+// 16 columns remain at avx512, then Vec8f, the tail stored partially; at avx512 a row of at most eight columns runs two
+// conv rows in one Vec16f, and the fused pool takes their maxima in that register. Other shapes
 // run im2col into the scratch slot, the bias prefill and the batched unit's tiny GEMM. The max pool is IEEE 754 maximum
 // (a NaN wins, +0 over -0), so its result does not depend on the window order, NaN payloads aside: the 2x2/s2 hot shape
 // takes the vertical maximum in registers and the column pairs' maximum on their even and odd lanes, the other windows
@@ -250,37 +251,71 @@ CRD_FORCEINLINE void conv3x3_step(const NnConv2d& c, const Staged& s, const f32*
     }
 }
 
-// bias + chain, the relu, and the two rows' stores of one output channel of conv3x3_row_pair (V = Vec16f; a template,
-// so the levels that never build a pair hold no unused function).
-template <typename V>
-CRD_FORCEINLINE void conv3x3_pair_out(V acc, f32 bias, bool relu, f32* d0, f32* d1, u64 w) noexcept
+// conv3x3_row_pair's output channel r (V = Vec16f, row oi in the low lanes and oi + 1 in the high ones) stored as its
+// two conv rows, dst + r * stride and next + r * stride. The member templates keep the levels that never build a
+// pair free of unused functions.
+struct PairRows
 {
-    V out = V(bias) + acc;
-    if (relu)
-    {
-        out = simd::max(out, V(0.0F));
-    }
-    if (w == kLanes<Group>)
-    {
-        simd::low_half(out).store(d0);
-        simd::high_half(out).store(d1);
-    }
-    else
-    {
-        simd::low_half(out).store_partial(d0, static_cast<usize>(w));
-        simd::high_half(out).store_partial(d1, static_cast<usize>(w));
-    }
-}
+    f32* dst;
+    f32* next;
+    u64 stride;
+    u64 w;
 
-// Conv rows oi (into dst + r * dst_stride) and oi + 1 (into next + r * dst_stride) of a row of w <= 8 columns for the
-// output channels r in I, row oi in a Vec16f's low lanes and oi + 1 in its high lanes: each lane is one output's
-// column, so it runs conv3x3_step's chain and gives its bits, with half the fmas of two Vec8f rows. The channels
-// expand as packs, not loops, so every accumulator stays a register (a loop over them left the array on the stack,
-// zeroed by a rep stos each call).
-template <u32... I>
+    template <typename V> CRD_FORCEINLINE void operator()(u32 r, V out) const noexcept
+    {
+        f32* d0 = dst + static_cast<u64>(r) * stride;
+        f32* d1 = next + static_cast<u64>(r) * stride;
+        if (w == kLanes<Group>)
+        {
+            simd::low_half(out).store(d0);
+            simd::high_half(out).store(d1);
+        }
+        else
+        {
+            simd::low_half(out).store_partial(d0, static_cast<usize>(w));
+            simd::high_half(out).store_partial(d1, static_cast<usize>(w));
+        }
+    }
+};
+
+// The same output channel pooled 2x2/s2 in its register into the pooled row y + r * stride of ow <= 4 columns:
+// max_pool2_row's operations on the same operands (the two rows' vertical maximum, then each column pair's), so its
+// bits, with no row buffer, store or reload.
+template <bool Relued> struct PairPool
+{
+    f32* y;
+    u64 stride;
+    u64 ow;
+
+    template <typename V> CRD_FORCEINLINE void operator()(u32 r, V out) const noexcept
+    {
+        const Group vm = pool_max<Relued>(simd::low_half(out), simd::high_half(out));
+        simd::Vec4f even;
+        simd::Vec4f odd;
+        simd::deinterleave(vm, even, odd);
+        const simd::Vec4f pooled = pool_max<Relued>(even, odd);
+        f32* yr = y + static_cast<u64>(r) * stride;
+        if (ow == kLanes<simd::Vec4f>)
+        {
+            pooled.store(yr);
+            return;
+        }
+        for (u64 oj = 0; oj < ow; ++oj)
+        {
+            yr[oj] = pooled.lane(static_cast<usize>(oj));
+        }
+    }
+};
+
+// Conv rows oi and oi + 1 of a row of w <= 8 columns for the output channels r in I, row oi in a Vec16f's low lanes
+// and oi + 1 in its high lanes, each channel's register after bias + chain and the relu handed to sink(r, out): each
+// lane is one output's column, so it runs conv3x3_step's chain and gives its bits, with half the fmas of two Vec8f
+// rows. The channels expand as packs, not loops, so every accumulator stays a register (a loop over them left the
+// array on the stack, zeroed by a rep stos each call).
+template <u32... I, typename Sink>
 CRD_FORCEINLINE void conv3x3_row_pair(std::integer_sequence<u32, I...> /*channels*/, const NnConv2d& c,
-                                      const Staged& s, const f32* wblk, const f32* bias, f32* dst, f32* next,
-                                      u64 dst_stride, u64 oi) noexcept
+                                      const Staged& s, const f32* wblk, const f32* bias, u64 oi,
+                                      const Sink& sink) noexcept
 {
     simd::Vec16f acc[sizeof...(I)] = {(static_cast<void>(I), simd::Vec16f(0.0F))...};
     const u64 chans = c.chans;
@@ -298,7 +333,13 @@ CRD_FORCEINLINE void conv3x3_row_pair(std::integer_sequence<u32, I...> /*channel
             }
         }
     }
-    (conv3x3_pair_out(acc[I], bias[I], c.relu, dst + I * dst_stride, next + I * dst_stride, c.w_in), ...);
+    const simd::Vec16f zero(0.0F);
+    ((acc[I] = simd::Vec16f(bias[I]) + acc[I]), ...); // fl(bias + chain)
+    if (c.relu)
+    {
+        ((acc[I] = simd::max(acc[I], zero)), ...);
+    }
+    (sink(I, acc[I]), ...);
 }
 
 // One conv row for R output channels.
@@ -319,19 +360,49 @@ void conv3x3_row(const NnConv2d& c, const Staged& s, const f32* wblk, const f32*
     }
 }
 
-// Conv row oi for R output channels into dst and, with next, row oi + 1 into next: both in one register where
-// kRowPairs holds and the row has at most one group's columns.
+// Whether conv3x3_rowblock runs a row pair in one register: where kRowPairs holds and the row has at most one group's
+// columns.
+CRD_FORCEINLINE bool row_pairs(const NnConv2d& c) noexcept
+{
+    return kRowPairs && c.w_in <= kLanes<Group>;
+}
+
+// Where conv3x3_rowblock pools a row pair in its registers: the pooled row of the block's first output channel, the
+// stride between the channels' pooled planes and the pooled columns. y == nullptr: the conv rows go to dst and next.
+struct PooledRow
+{
+    f32* y;
+    u64 stride;
+    u64 ow;
+};
+
+// Conv row oi for R output channels into dst and, with next, row oi + 1 into next, or with pooled.y those two rows
+// pooled 2x2/s2 into the pooled rows: both rows in one register where row_pairs holds (then the pool too).
 template <u32 R>
 void conv3x3_rowblock(const NnConv2d& c, const Staged& s, const f32* wblk, const f32* bias, f32* dst, f32* next,
-                      u64 dst_stride, u64 oi) noexcept
+                      u64 dst_stride, u64 oi, const PooledRow& pooled) noexcept
 {
     if (next != nullptr)
     {
         if constexpr (kRowPairs)
         {
-            if (c.w_in <= kLanes<Group>)
+            if (row_pairs(c))
             {
-                conv3x3_row_pair(std::make_integer_sequence<u32, R>{}, c, s, wblk, bias, dst, next, dst_stride, oi);
+                const auto channels = std::make_integer_sequence<u32, R>{};
+                if (pooled.y == nullptr)
+                {
+                    conv3x3_row_pair(channels, c, s, wblk, bias, oi, PairRows{dst, next, dst_stride, c.w_in});
+                }
+                else if (c.relu)
+                {
+                    conv3x3_row_pair(channels, c, s, wblk, bias, oi,
+                                     PairPool<true>{pooled.y, pooled.stride, pooled.ow});
+                }
+                else
+                {
+                    conv3x3_row_pair(channels, c, s, wblk, bias, oi,
+                                     PairPool<false>{pooled.y, pooled.stride, pooled.ow});
+                }
                 return;
             }
         }
@@ -342,64 +413,95 @@ void conv3x3_rowblock(const NnConv2d& c, const Staged& s, const f32* wblk, const
 
 // The output channels [o0, o0 + r), r <= 8.
 void conv3x3_rowblock_any(u32 r, const NnConv2d& c, const Staged& s, u64 o0, f32* dst, f32* next, u64 dst_stride,
-                          u64 oi) noexcept
+                          u64 oi, const PooledRow& pooled) noexcept
 {
     const f32* wblk = c.w + o0 * c.chans * 9U;
     const f32* bias = c.bias + o0;
     switch (r)
     {
         case 8U:
-            conv3x3_rowblock<8U>(c, s, wblk, bias, dst, next, dst_stride, oi);
+            conv3x3_rowblock<8U>(c, s, wblk, bias, dst, next, dst_stride, oi, pooled);
             return;
         case 7U:
-            conv3x3_rowblock<7U>(c, s, wblk, bias, dst, next, dst_stride, oi);
+            conv3x3_rowblock<7U>(c, s, wblk, bias, dst, next, dst_stride, oi, pooled);
             return;
         case 6U:
-            conv3x3_rowblock<6U>(c, s, wblk, bias, dst, next, dst_stride, oi);
+            conv3x3_rowblock<6U>(c, s, wblk, bias, dst, next, dst_stride, oi, pooled);
             return;
         case 5U:
-            conv3x3_rowblock<5U>(c, s, wblk, bias, dst, next, dst_stride, oi);
+            conv3x3_rowblock<5U>(c, s, wblk, bias, dst, next, dst_stride, oi, pooled);
             return;
         case 4U:
-            conv3x3_rowblock<4U>(c, s, wblk, bias, dst, next, dst_stride, oi);
+            conv3x3_rowblock<4U>(c, s, wblk, bias, dst, next, dst_stride, oi, pooled);
             return;
         case 3U:
-            conv3x3_rowblock<3U>(c, s, wblk, bias, dst, next, dst_stride, oi);
+            conv3x3_rowblock<3U>(c, s, wblk, bias, dst, next, dst_stride, oi, pooled);
             return;
         case 2U:
-            conv3x3_rowblock<2U>(c, s, wblk, bias, dst, next, dst_stride, oi);
+            conv3x3_rowblock<2U>(c, s, wblk, bias, dst, next, dst_stride, oi, pooled);
             return;
         case 1U:
-            conv3x3_rowblock<1U>(c, s, wblk, bias, dst, next, dst_stride, oi);
+            conv3x3_rowblock<1U>(c, s, wblk, bias, dst, next, dst_stride, oi, pooled);
             return;
         default:
             return;
     }
 }
 
-// One image: the staged rows, then each output row (or, fused, each pair of conv rows pooled 2x2/s2 through 16 row
-// buffers after the staging, so only the pooled rows reach memory), two conv rows a row block.
+// dst[j] = src[j] for j < w in whole registers of each width, the last one to three columns one partial group: no
+// call a row (a memcpy of a short row was a library call each).
+template <typename V> CRD_FORCEINLINE u64 copy_steps(const f32* src, f32* dst, u64 j, u64 w) noexcept
+{
+    for (; j + kLanes<V> <= w; j += kLanes<V>)
+    {
+        V::load(src + j).store(dst + j);
+    }
+    return j;
+}
+
+CRD_FORCEINLINE void copy_row(const f32* src, f32* dst, u64 w) noexcept
+{
+    u64 j = copy_steps<Wide>(src, dst, 0U, w);
+    j = copy_steps<Group>(src, dst, j, w);
+    j = copy_steps<simd::Vec4f>(src, dst, j, w);
+    if (j < w)
+    {
+        const auto rest = static_cast<usize>(w - j);
+        Group::load_partial(src + j, rest).store_partial(dst + j, rest);
+    }
+}
+
+// The staged image's layout (see Staged) for a convolution's images.
+Staged staged_layout(const NnConv2d& c, f32* stage) noexcept
+{
+    const u64 rs = c.w_in + 10U;
+    return {stage, rs, (c.h + 2U) * rs};
+}
+
+// The zero rows and columns of the staged image, written once for every image the scratch stages: conv3x3_image
+// writes only the input columns of each row.
+void stage_zero(const NnConv2d& c, f32* stage) noexcept
+{
+    std::memset(stage, 0, c.chans * staged_layout(c, stage).plane * sizeof(f32));
+}
+
+// One image: the input rows staged into the zeroed rows, then each output row (or, fused, each pair of conv rows pooled
+// 2x2/s2, in registers where row_pairs holds and else through 16 row buffers after the staging, so only the pooled
+// rows reach memory), two conv rows a row block.
 void conv3x3_image(const NnConv2d& c, const f32* xi, f32* yi, f32* stage) noexcept
 {
     const u64 h = c.h;
     const u64 w = c.w_in;
-    const u64 rs = w + 10U;
-    const u64 plane = (h + 2U) * rs;
-    f32* rows = stage;
+    const Staged s = staged_layout(c, stage);
+    const u64 rs = s.rs;
     for (u64 ci = 0; ci < c.chans; ++ci)
     {
-        f32* chan = rows + ci * plane;
-        std::memset(chan, 0, rs * sizeof(f32));
+        f32* chan = stage + ci * s.plane;
         for (u64 ih = 0; ih < h; ++ih)
         {
-            f32* dst = chan + (ih + 1U) * rs;
-            dst[0] = 0.0F;
-            std::memcpy(dst + 1, xi + (ci * h + ih) * w, w * sizeof(f32));
-            std::memset(dst + 1 + w, 0, 9U * sizeof(f32));
+            copy_row(xi + (ci * h + ih) * w, chan + (ih + 1U) * rs + 1U, w);
         }
-        std::memset(chan + (h + 1U) * rs, 0, rs * sizeof(f32));
     }
-    const Staged s{rows, rs, plane};
     if (!c.pool)
     {
         for (u64 oi = 0; oi < h;)
@@ -409,7 +511,7 @@ void conv3x3_image(const NnConv2d& c, const f32* xi, f32* yi, f32* stage) noexce
             {
                 const u32 r = c.oc - o0 < 8U ? static_cast<u32>(c.oc - o0) : 8U;
                 f32* d = yi + o0 * h * w + oi * w;
-                conv3x3_rowblock_any(r, c, s, o0, d, pair ? d + w : nullptr, h * w, oi);
+                conv3x3_rowblock_any(r, c, s, o0, d, pair ? d + w : nullptr, h * w, oi, PooledRow{});
             }
             oi += pair ? 2U : 1U;
         }
@@ -417,7 +519,8 @@ void conv3x3_image(const NnConv2d& c, const f32* xi, f32* yi, f32* stage) noexce
     }
     const u64 oh2 = (h - 2U) / 2U + 1U;
     const u64 ow2 = (w - 2U) / 2U + 1U;
-    f32* rowbuf = rows + c.chans * plane;
+    const bool in_registers = row_pairs(c);
+    f32* rowbuf = stage + c.chans * s.plane;
     for (u64 oi2 = 0; oi2 < oh2; ++oi2)
     {
         for (u64 o0 = 0; o0 < c.oc; o0 += 8U)
@@ -425,7 +528,13 @@ void conv3x3_image(const NnConv2d& c, const f32* xi, f32* yi, f32* stage) noexce
             const u32 r = c.oc - o0 < 8U ? static_cast<u32>(c.oc - o0) : 8U;
             f32* rb0 = rowbuf;           // conv row 2 * oi2, r rows of rs
             f32* rb1 = rowbuf + 8U * rs; // conv row 2 * oi2 + 1
-            conv3x3_rowblock_any(r, c, s, o0, rb0, rb1, rs, 2U * oi2); // conv rows 2 oi2 and 2 oi2 + 1
+            if (in_registers)
+            {
+                const PooledRow pooled{yi + o0 * oh2 * ow2 + oi2 * ow2, oh2 * ow2, ow2};
+                conv3x3_rowblock_any(r, c, s, o0, rb0, rb1, rs, 2U * oi2, pooled);
+                continue;
+            }
+            conv3x3_rowblock_any(r, c, s, o0, rb0, rb1, rs, 2U * oi2, PooledRow{}); // conv rows 2 oi2, 2 oi2 + 1
             if (c.relu)
             {
                 max_pool2_rows<true>(c, rb0, rb1, rs, r, yi, o0, oi2, oh2, ow2);
@@ -582,6 +691,10 @@ void NnKernel::conv2d_images(const NnConv2d& c, f32* scratch, u32 lo, u32 hi) no
     const u64 ohw = c.oh * c.ow;
     const bool direct = c.kh == 3U && c.kw == 3U && c.pad == 1U && c.stride == 1U;
     const u64 yohw = c.pool ? ((c.oh - 2U) / 2U + 1U) * ((c.ow - 2U) / 2U + 1U) : ohw;
+    if (direct)
+    {
+        stage_zero(c, scratch);
+    }
     for (u32 img = lo; img < hi; ++img)
     {
         const f32* xi = c.x + static_cast<u64>(img) * c.chans * c.h * c.w_in;

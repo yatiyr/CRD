@@ -2753,7 +2753,7 @@ void conv_oracle(const tn::NnConv2d& c, u64 images, f32* conv, f32* out)
 // around one and two vectors (rows of at most eight columns, avx512's two rows a register, at R 3, 6, 7, 8 and 8 + 8
 // with even and odd heights), with and without relu and the fused pool; im2col at kernels 1 to 5 (and 1 x 3), pads 0
 // to 2 and strides 1 to 3, its bias prefill below, inside and past a vector. Two images, split into [1, 2) then
-// [0, 1); NaNs, infinities, signed zeros and subnormals in x, the weights and the bias; guard words after y and after
+// [0, 1), then both in one call; NaNs, infinities, signed zeros and subnormals in x, the weights and the bias; guard words after y and after
 // the scratch slot.
 u64 check_nn_conv(const TensorKernels& k)
 {
@@ -2815,6 +2815,19 @@ u64 check_nn_conv(const TensorKernels& k)
             }
             k.nn_conv2d_images(c, scratch, 0U, 1U);
             conv_oracle(c, images, conv, want);
+            bad += nan_aside_mismatches(want, y, images * per);
+            bad += scratch_overruns(y, images * per);
+            bad += scratch_overruns(scratch, slot);
+            // Both images in one call: the second stages its rows into the first's zero rows and columns.
+            for (u64 i = 0; i < images * per + 3U; ++i)
+            {
+                y[i] = kGuard<f32>;
+            }
+            for (u64 i = 0; i < slot + 3U; ++i)
+            {
+                scratch[i] = kGuard<f32>;
+            }
+            k.nn_conv2d_images(c, scratch, 0U, 2U);
             bad += nan_aside_mismatches(want, y, images * per);
             bad += scratch_overruns(y, images * per);
             bad += scratch_overruns(scratch, slot);
