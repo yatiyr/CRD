@@ -7,18 +7,20 @@
 # CRD_CPU_LEVEL as the boards select it.
 #   bash scripts/prof_fft_f32.sh <log2 n> <iterations> <side> [side ...]     (sides: planned, an algorithm, mkl, copy)
 # Environment: CRD_BENCH_CPUS (the taskset CPU, default 3), CRD_PROF_OUT (the output directory, default
-# ~/boards/prof-fft-f32), CRD_PROF_RECORD (0: perf stat only).
+# ~/boards/prof-fft-f32), CRD_PROF_RECORD (0: perf stat only), CRD_PROF_EVENTS (a comma list of further perf events,
+# such as l1d.replacement,l1d_pend_miss.fb_full,ocr.streaming_wr.any_response, counted in a pass of their own),
+# CRD_PROF_PROGRAM (another build's bench_fft_f32, such as a saved HEAD copy, in place of the lane tree's).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 if [[ $# -lt 3 ]]; then
-    sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 2
 fi
 lg=$1
 iterations=$2
 shift 2
 tree=$(bash scripts/wsl-lane.sh tree linux-gcc-release)
-program=$tree/runtime/bench_fft_f32
+program=${CRD_PROF_PROGRAM:-$tree/runtime/bench_fft_f32}
 cpu=${CRD_BENCH_CPUS:-3}
 out=${CRD_PROF_OUT:-$HOME/boards/prof-fft-f32}
 mkdir -p "$out"
@@ -30,6 +32,10 @@ for side in "$@"; do
     perf stat -o "$stem.topdown2.txt" -M TopdownL2 "${loop[@]}" > /dev/null
     grep -E 'cycles|instructions|branch-misses|tma_|seconds time' "$stem.topdown1.txt" "$stem.topdown2.txt" |
         sed "s|$out/||"
+    if [[ -n ${CRD_PROF_EVENTS:-} ]]; then
+        perf stat -o "$stem.events.txt" -e "cycles,instructions,$CRD_PROF_EVENTS" "${loop[@]}" > /dev/null
+        grep -E '^ +[0-9,]+ ' "$stem.events.txt" | sed "s|$out/||"
+    fi
     if [[ ${CRD_PROF_RECORD:-1} != 0 ]]; then
         perf record -q -g -o "$stem.perf.data" "${loop[@]}" > /dev/null
         perf report -i "$stem.perf.data" --no-children --percent-limit 2 --stdio 2>/dev/null |
