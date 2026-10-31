@@ -3,7 +3,8 @@
 <!-- doc-role: rule -->
 > Current rule. Current work: [ROADMAP](ROADMAP.md); conduct: [AGENTS](../AGENTS.md).
 
-[Presets](../CMakePresets.json) owns configurations; [CI](../.github/workflows/ci.yml) owns scheduling.
+[Presets](../CMakePresets.json) owns configurations; hosted [CI](../.github/workflows/ci.yml) owns scheduling
+(GitHub Actions until [CI-4](design/ci-platform.md)).
 C++20; CMake 3.25+ (VS 2026: 4.2+); Python 3.12+; MSVC/clang-cl/GCC.
 Overrides: ignored `CMakeUserPresets.json`.
 
@@ -66,8 +67,7 @@ Distinguish executed, failed, skipped and unsupported; a compile or missing-devi
 
 CI failure: inspect the exact job/revision, reproduce narrowly, fix the mechanism and verify the next published
 revision. Never weaken checks, ignore older failures or substitute a retry-pass for diagnosis.
-**Agents never commit or push, directly or through automation/helpers.** Continue independent work while publication
-waits; local passes cannot qualify unpublished changes. Missing evidence keeps its gate open.
+Publication: [AGENTS](../AGENTS.md#git-and-workspace). Local passes cannot qualify unpublished changes.
 
 Never run [per-slice-check](../scripts/per-slice-check.ps1)/[full-sweep](../scripts/full-sweep.ps1) or unfiltered local
 sweeps. CI [tiers](design/ci-tiers.md): preflight; change lanes on pushes; nightly/manual complete
@@ -75,7 +75,7 @@ matrix. Preserve every preset and cluster/release gate; a fast pass cannot close
 
 ## Visual Studio
 
-`python scripts/project-sync.py open --preset win-vs` opens all eight native profiles and starts sync. Save All, wait
+`python scripts/project-sync.py open --preset win-vs` opens every native profile and starts sync. Save All, wait
 for watching/reload; inspect `project-sync.py status`. See
 [configurations](design/visual-studio-configurations.md) and [structure/recovery](design/project-structure-sync.md).
 Native build `--config` and CTest `-C` must match; pass PowerShell arguments explicitly:
@@ -99,7 +99,7 @@ Third-party defects, ASan gate: [register](third-party-defects.md).
 - PowerShell: capture the native exit before filtering; never pipe to `Select-Object -First`.
 - Unload/free order, single jobs-init owner, String capacity, append-only vtables: [MEMORY](../MEMORY.md).
 
-Docs: `python scripts/check-master-plan.py`. Tool/layout changes: also `check-repository.py`,
+Docs: `python scripts/check-master-plan.py` (runs `check-docs.py`). Tool/layout changes: also `check-repository.py`,
 `test-repository-tools.py` and affected fixtures.
 New modules need CMake/tests, a consumer and [systems](systems/README.md) route.
 [Historical evidence](archive/2026-09-12-orientation-history.md#docs-building).

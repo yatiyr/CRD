@@ -6,6 +6,9 @@
 **Status:** Proposed (2026-08-07) — the **I2D-0** gate of the post-RAF **I2D band** (D-007 §UI/2D SUB-PROGRAMME, U-1…U-19).
 The **bespoke retained UiWorld** decision (D2 — reuses ECS *concepts* only, `UiNodeId` ≠ `EntityId`) was user-chosen 2026-08-07,
 superseding REN·B's "UI is ECS entities" premise. Independent design review cleared 2026-08-07 (RAH-1 seam consistent).
+**Supersedes (D2 only):** the UI-in-scene clauses of [ADR-0020](0020-scene-ecs-hybrid.md),
+[ADR-0023](0023-ui-architecture.md) and [ADR-0057](0057-scene-ui-in-tree-boundary.md), each of which carries the matching
+status note (reciprocal note added 2026-10-31).
 This ADR is the design gate that must be **reviewed and accepted before any I2D/SPR implementation**; I2D-1 (Canvas) also
 depends on RAH-1 (typed attachments) + RAH-2 (resource-table bindless) landing first.
 **Phase:** D-007 (post-RAF programme, I2D band). Source: `CRD_D007_UI_2D_MASTER_ROADMAP_PROMPT` (2026-08-07).

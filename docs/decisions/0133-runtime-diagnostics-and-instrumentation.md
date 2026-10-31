@@ -70,6 +70,9 @@ installation decisions or performance claims. DIAG.0 resolves tool versions, sch
 child evidence resolves algorithm/provider choices within this authorized scope. Record these decisions here rather
 than inventing hidden defaults. A real scope reduction, publication, paid service or changed product authority requires
 the applicable user decision. Existing human-only commit/push and no-delegation rules remain unchanged.
+*(Amendment note, 2026-10-31: on 2026-10-06 the user authorized the serial roadmap workflow to commit and push each
+item itself, and later orders run parallel agents on their own branches; [AGENTS](../../AGENTS.md#git-and-workspace)
+owns the current commit, push and delegation rules.)*
 
 ## Implementation decisions
 

@@ -66,3 +66,14 @@ the offline and real-time forms are genuinely different systems (as hair does).
   real-time tier is measured against.
 - **2026-07-21-hair-realtime.md** — the same hair in real time (games): the levers that turn the 194 ms/sample
   film path into a 29 ms/frame real-time path, plus temporal accumulation + denoising and the raster tier.
+- [Recipe — 2D Gaussian Splatting (surfels): the geometrically-accurate radiance-field primitive](2026-07-21-2d-gaussian-splatting-surfels.md)
+- [Recipe — Physically-based hair, film / offline quality](2026-07-21-hair-offline-film.md)
+- [Recipe — Real-time hair (games)](2026-07-21-hair-realtime.md)
+- [Recipe — mesh extraction: TSDF fusion + marching cubes](2026-07-21-mesh-extraction-tsdf-marching-cubes.md)
+- [Recipe — Cinematic ocean sky + a seamless projected-grid horizon (CKIR)](2026-07-22-cinematic-ocean-sky-and-seamless-horizon.md)
+- [Recipe — A neural material (2-D neural field) on the cooperative-vector tensor path](2026-07-22-neural-material-coopvec-field.md)
+- [Recipe — Reverse-mode autodiff as a CEIR compiler transform](2026-09-04-ceir-reverse-mode-autodiff.md)
+- [Conservative affected-build selection](2026-09-12-affected-build-selection.md)
+- [DX12 consumer contracts: shader interfaces, caches and attachment clears](2026-09-13-dx12-consumer-contracts.md)
+- [Bounded DX12 frame descriptor allocation](2026-09-13-dx12-frame-descriptors.md)
+- [DX12 resource states across indirect draws, aliasing and repeated frames](2026-09-13-dx12-resource-states.md)

@@ -38,9 +38,10 @@ root. `--smoke-test 3` bounds a sandbox run to three seconds, long enough for a 
 <a id="human-only-publication"></a>
 ## Human-only publication
 
-Nothing in these runbooks publishes. Committing, pushing, opening an issue or a pull request, attaching a bundle to a
-release, uploading a dump and enabling remote access are the user's steps, taken after reading what would leave the
-machine:
+Nothing in these runbooks publishes. No runbook command commits, pushes, opens an issue or a pull request, attaches
+a bundle to a release, uploads a dump or enables remote access. Uploads, releases and remote access are the user's
+steps, taken after reading what would leave the machine; commits and pushes of source follow
+[AGENTS](../../AGENTS.md#git-and-workspace):
 
 - every artifact here is written locally (a crash directory, a capture directory, a `build/` tree, a CTest log);
 - the diagnostic service's `upload` and `remote-enable` authority classes are never granted by a runbook command, and

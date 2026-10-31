@@ -2,7 +2,9 @@
 """Validate Cerid's single documentation tracker and its current entry-point links.
 
 Run from any directory: python scripts/check-master-plan.py
-This checks documentation structure and references, not runtime completion or performance.
+This checks documentation structure and references, not runtime completion or performance. It also runs the
+documentation drift guard (scripts/check-docs.py) so every lane that runs this validator holds the living documents
+to the tree.
 """
 from pathlib import Path
 import json
@@ -10,6 +12,7 @@ import re
 import sys
 import argparse
 import hashlib
+import importlib.util
 from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -270,6 +273,15 @@ def registry_map_errors(build_text=None, systems_text=None):
     return errors
 
 
+def document_drift_errors():
+    """Living documents against the tree they describe (scripts/check-docs.py; its own tests are
+    scripts/test-check-docs.py): paths, presets, generated facts, indexes, ADR supersession and retired rules."""
+    spec = importlib.util.spec_from_file_location('check_docs', ROOT / 'scripts' / 'check-docs.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.check(ROOT)[2]
+
+
 def main():
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
@@ -404,6 +416,7 @@ def main():
         if name not in memory_index['records']:
             errors.append('Memory alias has no target: ' + alias)
     errors.extend(registry_map_errors())
+    errors.extend(document_drift_errors())
     count, broken = link_errors(files)
     errors.extend(broken)
     print(f'Checked {len(rows)} rows, {len(files)} documents, {count} local links, '

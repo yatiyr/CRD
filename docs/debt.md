@@ -21,9 +21,9 @@ move to a session log entry and remove from here.
 > Not blockers — the ocean renders (Vulkan) + the mesh path is proven; these finish B16/B4 in gold standard. Session:
 > `docs/sessions/2026-07-16-b16-displaced-ocean-mesh-shaders.md`. Mesh device scars: [[feedback_mesh_shader_device_scars]].
 >
-> 1. ~~**B16-close DoD**~~ — ✅ DONE: B16 closed 2026-07-18 with the full ctest+shipping sweep (see the SANITY ledger
+> 1. ~~**B16-close DoD**~~ — DONE: B16 closed 2026-07-18 with the full ctest+shipping sweep (see the SANITY ledger
 >    2026-07-18 entry — the close peeled a five-layer onion the binaries had hidden).
-> 2. ~~**DX12 device mesh render**~~ — ✅ core LANDED since: the DX12 raster context ships `DispatchMesh`/mesh draws
+> 2. ~~**DX12 device mesh render**~~ — core LANDED since: the DX12 raster context ships `DispatchMesh`/mesh draws
 >    (see [[feedback_mesh_shader_device_scars]] + [[feedback_draw_mesh_storage_had_no_synchronous_path_both_backends]]);
 >    the visibility buffer landed (REN-38-F6, now RAH-1a.1 typed attachment). Amplification landed via F16. Remaining
 >    tessellation coverage is tracked post-RAF (GVA/RPL bands), not here.

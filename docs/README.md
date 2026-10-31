@@ -11,7 +11,7 @@ Every human/agent starts at [START_HERE](../START_HERE.md). [Context](../context
 
 | Need | Read |
 |---|---|
-| Purpose, authorization, conduct and session ritual | [AGENTS](../AGENTS.md) |
+| Purpose, authorization, conduct, commits | [AGENTS](../AGENTS.md) |
 | Current slice | [context](../context.md), then its one [master row](ROADMAP.md) |
 | Architecture and ownership | [PRINCIPLES](PRINCIPLES.md), then the row's ADR |
 | Bug diagnosis and evidence standard | [SANITY](SANITY.md) |
@@ -27,7 +27,7 @@ Every human/agent starts at [START_HERE](../START_HERE.md). [Context](../context
 | Specific implementation plan or decision | Row's link; reverse lookup in [design](design/README.md) or [ADRs](decisions/README.md) |
 | Prior lesson or matching failure | [MEMORY](../MEMORY.md); query one record |
 | What actually ran or was measured | Linked [session](sessions/), [benchmark](bench/README.md) or [recipe](recipes/README.md) |
-| Old requirements or dated implementation examples | [Archive](archive/README.md); phase/system pointers preserve their route |
+| Old requirements or dated implementation examples | [Archive](archive/README.md), [phase](phases/README.md) and [detour](detours/README.md) pointers |
 
 Useful commands from the repository root:
 
@@ -38,11 +38,13 @@ python scripts/check-master-plan.py --find reload
 python scripts/check-master-plan.py --find A24
 python scripts/check-master-plan.py --memory stale_exe
 python scripts/check-master-plan.py
+python scripts/check-docs.py
 ```
 
-Queries read the same table. The validator checks links, IDs/dependencies, completion evidence, size budgets and
-[order](ROADMAP.md#strict-sequential-execution): context is the earliest available work; CI-only waits stay visible
-without stopping it. No open work is silently skipped. Passing proves documentation structure, not engine correctness.
+The validator checks links, IDs/dependencies, completion evidence, budgets and [order](ROADMAP.md#strict-sequential-execution):
+context is the earliest available work; CI-only waits stay visible without stopping it. `check-docs.py`, which it
+runs, holds living documents' paths, presets, generated facts, indexes, ADR supersession notes and tone to the tree.
+Passing proves documentation, not engine correctness.
 
 ## Start a slice
 
@@ -61,17 +63,16 @@ and its owner live only in ROADMAP. The audit's A01…A27 IDs are searchable fro
 
 ## Close and hand off
 
-Applies after implementations, fixes, investigations and documentation tasks. Inspect all affected current documents;
-correct changed facts, preserve historical evidence and leave already-correct text compact.
+Applies to every task. Inspect all affected current documents; correct changed facts, preserve historical evidence.
 
 1. Finish the full contract and all children. Verify production asset/runtime behaviour and the relevant test matrix.
 2. Write `docs/sessions/YYYY-MM-DD-<slice-or-topic>.md`: purpose, changes, exact verification, evidence and limitations.
    Record continuation as a pointer to ROADMAP, not a competing live Next list.
 3. Update the one row's state and evidence link. **Done** requires evidence and completed children. **Recorded** means
-   dated earlier evidence, not a new run. Keep unresolved/review/later work visible; never use it to hide a failure.
+   dated earlier evidence, not a new run. Keep unresolved/review work visible; never use it to hide a failure.
 4. Update context's current ID/handoff; correct affected contracts and source references. New decision → ADR/index;
    new measured board → bench immediately; learned implementation technique → recipe; durable scar → memory reference.
-5. Run the documentation validator and scoped code checks if code changed. Propose a Conventional Commit; user commits.
+5. Run the validators (and scoped code checks if code changed); commit per [AGENTS](../AGENTS.md#git-and-workspace).
 
 ## Keep documents small without losing knowledge
 
@@ -79,7 +80,6 @@ Each file declares its role. Only ROADMAP owns live state. Historical statuses, 
 and grants are not current instructions. Recheck source facts after code changes. Preserve original evidence when
 superseding claims; never rewrite history as though tests ran again.
 
-Entry budgets in bytes: AGENTS 8,000; PRINCIPLES 6,500; SANITY 4,500; BUILDING 7,000; MEMORY 3,000;
-context 2,500; this map 6,000; START_HERE 4,500. These are ceilings, not targets. Move examples/scars to linked references before
-exceeding them. The master table and full technical/evidence documents have no arbitrary truncation limit.
-Compatibility pointer pages stay below 1,200 bytes. New reference docs must be reachable from a row or index.
+Entry budgets in bytes (ceilings, not targets): <!-- fact:entry-budgets -->START_HERE 4,500; AGENTS 8,000; PRINCIPLES 6,500; SANITY 4,500; BUILDING 7,000; MEMORY 3,000; context 2,500; this map 6,000<!-- /fact -->. Move examples and scars
+to linked references first. The master table and evidence documents have no truncation limit. Compatibility
+pointers stay below 1,200 bytes. Every document under docs/ is linked from a row or index.

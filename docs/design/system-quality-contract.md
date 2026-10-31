@@ -136,8 +136,10 @@ Convergence alone does not guarantee a valid CAD feature graph or preserve the u
    SANITY, MEMORY and context. Correct facts/routes that changed; do not rewrite correct documents or historical boards
    merely to change their date. Add new documents to the appropriate index and row. Remove redundancy only after unique
    content has a verified preserved destination.
-5. Run `python scripts/check-master-plan.py`, inspect the scoped diff and leave the next exact master-row pointer.
-   Parent closure requires all child evidence; never tick it from test count alone. The user commits/pushes.
+5. Run `python scripts/check-master-plan.py` (it runs `check-docs.py`), inspect the scoped diff and leave the next
+   exact master-row pointer.
+   Parent closure requires all child evidence; never tick it from test count alone. Commit and push per
+   [AGENTS](../../AGENTS.md#git-and-workspace).
 
 An interrupted handoff gives a reproducible resume action and the open gate. The invariant is **no changed fact left
 stale**, not an uncontrolled rewrite of the entire documentation corpus after every code edit.

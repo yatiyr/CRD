@@ -25,9 +25,10 @@ full gold-standard way. The plan places every one of the 1068 rows of commit da0
 6. The verticals in priority order, each right after the last backbone it needs.
 7. Operations, then the real-hardware halves of every hardware-gated row, then the cross-domain portfolio.
 
-The machine form is `build/ci-final/roadmap-order.json`; `build/ci-final/apply_roadmap_order.py` applies it (see
-[Applying the plan](#applying-the-plan)). The dry run on a copy of the live table passes the applier's checks and the
-repository validator.
+The machine form (a JSON order file) and its applier were one-time operator tools in the untracked
+`build/ci-final/` scratch tree and were never committed; the plan was applied on 2026-10-27 and the master table
+itself is now the record (see [Applying the plan](#applying-the-plan)). The dry run on a copy of the live
+table passed the applier's checks and the repository validator.
 
 ## Ordering rules
 
@@ -1338,9 +1339,11 @@ are applied:
 
 ## Applying the plan
 
-`python build/ci-final/apply_roadmap_order.py <roadmap> build/ci-final/roadmap-order.json [--check]`
+Applied once on 2026-10-27 with an operator tool kept outside the repository (an applier and its JSON order file
+in the untracked `build/ci-final/` scratch tree); after one apply it refuses a second, so this section records what it
+did. New rows now follow the ordering rules above directly in the master table.
 
-It inserts the 16 real-hardware rows of `pending_rows` that the table lacks, rewrites the table in the JSON's order,
+The tool inserts the 16 real-hardware rows of `pending_rows` that the table lacks, rewrites the table in the JSON's order,
 sets Later to Open, applies the Requires fixes (pending ones once their rows exist) and the `requires_add`
 prerequisites of pending rows that have landed, appends the planned clauses, renumbers, keeps every other byte of every
 existing row and the line endings, and refuses (listing the rows) when a row is unassigned, unknown, placed twice, a

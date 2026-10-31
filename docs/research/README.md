@@ -10,6 +10,8 @@ Older index commentary is [preserved](../archive/2026-09-12-orientation-history.
 Contracts retain full scope. Before implementation, refresh the source reuse census, increments, failure cases
 and verification evidence in the linked note; its live status belongs only to the master row.
 
+Local paper copies (not repository source): [books](../books/README.md).
+
 | Reference | Purpose |
 |---|---|
 | [Diagnostics and instrumentation](2026-09-14-diagnostics-and-instrumentation.md) | DG01–DG18 source findings, primary research, tool limits and DIAG ownership |
@@ -18,6 +20,8 @@ and verification evidence in the linked note; its live status belongs only to th
 | [2026 state-of-the-art comparison](2026-10-26-state-of-the-art-2026-comparison.md) | Cerid versus 2026 engines, APIs and libraries in eleven areas plus runtime changeability; ranked gaps and proposed rows awaiting user approval |
 | [2026 comparison beyond games](2026-10-26-beyond-games-2026-comparison.md) | Part 2: audio/DAW, media/cinematics, engineering simulation, CAD, scientific computing, web, networking/collaboration and robotics/embedded versus 2026 peers; ranked gaps and proposed rows awaiting user approval |
 | [2026 comparison: building with Cerid](2026-10-26-building-with-cerid-2026-comparison.md) | Part 3: languages/compilers/IR, language tooling and REPL, agent-native design and MCP, developer experience, data/versioning, supply chain, testing methodology and accessibility/i18n versus 2026 peers; end-to-end walkthrough, ranked gaps and proposed rows awaiting user approval |
+| [Cerid networking and the crash-to-fix pipeline: the 2026 state of the art](2026-10-27-networking-and-crash-pipeline-2026-comparison.md) | Research part 4, adopted by the user on 2026-10-27 through RESEARCH-ADOPT |
+| [Cerid publishing, packaging and app management: the 2026 state of the art](2026-10-27-publishing-packaging-and-app-management-2026-comparison.md) | Research part 5, adopted by the user on 2026-10-27 through RESEARCH-ADOPT |
 | [2026-07-06-v15-forward-ad-crush](2026-07-06-v15-forward-ad-crush.md) | Research — 2026-07-06 — v15 forward-mode AD: the frontier crush levers + reconstruct-verify tables |
 | [2026-07-06-v16-reverse-ad-crush](2026-07-06-v16-reverse-ad-crush.md) | v16 — reverse-mode AD + differentiable solvers: the crush reference (2026-07-06) |
 | [2026-07-07-v17-gpu-crush](2026-07-07-v17-gpu-crush.md) | v17 GPU compute compiler — research + crush dossier (2026-07-07) |

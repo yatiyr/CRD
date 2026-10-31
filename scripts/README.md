@@ -44,6 +44,8 @@ Run commands from the repository root. Build/test rules and exact quality requir
   every hosted build's Ninja log and sccache statistics with the cache backend. Every board records the host's
   available memory and busiest processes before and after (on WSL the Windows host's too) and refuses a contended
   host unless `--allow-contended`; `build-bench.py host` prints that snapshot and exits 3 when it is contended.
+  Decision boards do not wait for a quiet host (user order, 2026-10-31): they pass `--allow-contended`, record the
+  load and are judged by ratios of interleaved arms ([bench rules](../docs/bench/README.md)).
   `build-profile.py run --compiler msvc|clang --preset <p> --build-dir <fresh> --jobs <n> --label <l> --output <json>`
   profiles a preset's compile time in an uncached tree (MSVC `/Bt+ /d1reportTime`; Clang `-ftime-trace` read by the
   pinned ClangBuildAnalyzer that `install-clang-build-analyzer.py` builds into `~/.cerid/tools`; `--vcperf <session>`

@@ -9,6 +9,7 @@ are not live instructions.** Use [ROADMAP](../ROADMAP.md#master-table) for every
 - [D-007 source programme](D-007-gpu-program-system.md): original GPU/RAF/renderer/UI/media contracts and dated evidence.
 - [Consolidated superseded plans](2026-09-12-superseded-plans.md): pre-audit roadmap, previous renderer/UI proposal,
   old UI/editor/font/platform plans and redundant phase records.
+- [Per-slice verification protocol](../protocols/per-slice-verification.md): the 2026-05-15 four-configuration sweep, superseded by BUILDING and CI tiers.
 - [Audit and migration inventory](../research/2026-09-12-system-audit.md): scope routing, findings and verification.
 
 Current detailed requirements are in [the catalogue](../design/rendering-ui-contracts.md) and

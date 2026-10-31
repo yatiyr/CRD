@@ -15,11 +15,19 @@ and verification evidence in the linked note; its live status belongs only to th
 | [Runtime diagnostics](runtime-diagnostics.md) | DIAG source owners, allocator/race/crash/trace/replay implementation contracts and detector acceptance |
 | [Diagnostic runbooks](diagnostic-runbooks.md) | From a symptom to its command, artifact and discriminating test; adoption and cost per capability; held to the tree by a guard |
 | [Developer workflow](developer-workflow.md) | Conservative affected-target/CTest planning, scoped frontend and exact content evidence |
-| [Visual Studio configurations](visual-studio-configurations.md) | Full CMake preset selector, eight native MSVC profiles and configuration-aware synchronization gates |
+| [Visual Studio configurations](visual-studio-configurations.md) | Full CMake preset selector, the native MSVC profiles and configuration-aware synchronization gates |
 | [Project structure synchronization](project-structure-sync.md) | Transaction, IDE/CMake round-trip, conflict/recovery and physical path migration contract |
 | [Repository layout](repository-layout.md) | Physical/IDE families, hygiene, preservation and build/CI verification |
 | [DX12 workload repair](dx12-workload-repair.md) | Validation readiness, resource states, descriptor lifetime/exhaustion and actual authored-consumer qualification |
 | [System qualification contract](system-quality-contract.md) | Cross-platform, ownership, correctness, security, agent access and complete document/session close-out |
+| [Build performance](build-performance.md) | Measured build boards, the qualified compiler cache, bounded compile and link jobs, the WSL mirror and bounded waits |
+| [CI platform](ci-platform.md) | ADR-0135's orchestrator, device registry, executors, budget, QUAL dashboard and the CI-4 parity table |
+| [CI tiers](ci-tiers.md) | Change, nightly and complete tiers, the required result and exact-revision lane evidence |
+| [Delivery plan](delivery-plan.md) | The accepted, dependency-ordered grouping of every master-table row (ADR-0129 amendment of 2026-10-27) |
+| [Module registry](module-registry.md) | `crd_module()` rows, dependency-closed `CRD_MODULES` selection and the verification pass |
+| [Pinned inputs](pinned-inputs.md) | `cmake/pins.json`: versions, sources, SHA-256, licences and verified offline archives |
+| [Public consumption](public-consumption.md) | Self-contained public headers, the public-check presets and the relocatable package consumer |
+| [Test instruments](test-instruments.md) | Fuzz targets and corpora, the fiber scheduler under sanitizers, host experiments and source routes |
 | [ceir-0a-execution-path-inventory](ceir-0a-execution-path-inventory.md) | CEIR-0a — Execution-path inventory (FROM CODE) |
 | [ceir-0e-chir-0-language-design-note](ceir-0e-chir-0-language-design-note.md) | CEIR-0e — CHIR-0: the Cerid high-level language design note (DESIGN-ONLY) |
 | [ceir-0g-maturity-and-manifest](ceir-0g-maturity-and-manifest.md) | CEIR-0g — One maturity model + the §174 machine-readable manifest |

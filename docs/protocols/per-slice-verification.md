@@ -1,7 +1,7 @@
 # Per-slice verification protocol
 
-<!-- doc-role: reference -->
-> Technical reference; verify dated claims against current contracts/source. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
+<!-- doc-role: historical -->
+> Historical protocol of 2026-05-15, superseded by [BUILDING](../BUILDING.md)'s scoped local workflow (scoped CTest with the `crd-no-*`/`crd-check*` guards) and the hosted CI matrix; never run its per-slice sweeps. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
 > Locked 2026-05-15 per Strategic Execution Plan (`docs/ROADMAP.md` §
 > Strategic Execution Plan) + CLAUDE.md DoD #8 + memory

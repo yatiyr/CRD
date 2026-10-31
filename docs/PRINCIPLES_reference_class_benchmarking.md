@@ -142,8 +142,8 @@ comparison. The bench is the **last** gate, not the first.
 
 | Kernel | Status | Reference(s) | Session log |
 |---|---|---|---|
-| `crd-hesap-dense` GEMM (multi-threaded) | ✅ **10/10 WINS over Eigen-MT** for both f32 and f64 at every N (1.01×–368×). | Eigen 3.4, OpenBLAS 0.3.27 (MSVC-generic limitation) | `2026-05-19-hesap-vs-reference-shootout.md` |
-| `crd-hesap-dense` BLAS L1 (axpy / dot / nrm2) | ✅ axpy 4/5 WINS; dot 0.71-1.07×; nrm2 0.64-1.48× (WINS at L1-resident sizes). vs OpenBLAS: WINS everywhere 1.6-14.7×. | Eigen 3.4, OpenBLAS 0.3.27 | `2026-05-19-hesap-vs-reference-shootout.md` |
+| `crd-hesap-dense` GEMM (multi-threaded) | **10/10 WINS over Eigen-MT** for both f32 and f64 at every N (1.01×–368×). | Eigen 3.4, OpenBLAS 0.3.27 (MSVC-generic limitation) | `2026-05-19-hesap-vs-reference-shootout.md` |
+| `crd-hesap-dense` BLAS L1 (axpy / dot / nrm2) | axpy 4/5 WINS; dot 0.71-1.07×; nrm2 0.64-1.48× (WINS at L1-resident sizes). vs OpenBLAS: WINS everywhere 1.6-14.7×. | Eigen 3.4, OpenBLAS 0.3.27 | `2026-05-19-hesap-vs-reference-shootout.md` |
 | `crd-hesap-dense` BLAS L2 (gemv / symv / trsv) | ◑ gemv 3/7 WINS (large N); trsv 1/7 WIN; symv 0/7 WINS but all 0.72-0.99× of Eigen. vs OpenBLAS: WINS everywhere 1.4-5.4×. Last 5-25% gap requires asm or AVX-512. | Eigen 3.4, OpenBLAS 0.3.27 | `2026-05-19-hesap-vs-reference-shootout.md` |
 | `crd-hesap-dense` v0e direct solvers (LU/QR/Chol) | BLOCKED on v0e shipping | Eigen LU/QR/LLT, LAPACK | — filed |
 | `crd-hesap` sparse | BLOCKED on v1 sparse shipping | Eigen Sparse, SuiteSparse:CHOLMOD/UMFPACK | — filed |

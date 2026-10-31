@@ -24,9 +24,9 @@ summary = "..."           # one-line dialect description (docs / reflection)
 
 | Field | Req | Type | Meaning (§8) |
 |---|---|---|---|
-| `name` | ✅ | string | op name; the full kind is `"<dialect>.<name>"` (e.g. `arith.const`) |
-| `summary` | ✅ | string | one-line description (docs, editor hint, reflection) |
-| `version` | ✅ | int | op schema version (§104 — old versions handled, not silently broken) |
+| `name` | yes | string | op name; the full kind is `"<dialect>.<name>"` (e.g. `arith.const`) |
+| `summary` | yes | string | one-line description (docs, editor hint, reflection) |
+| `version` | yes | int | op schema version (§104 — old versions handled, not silently broken) |
 | `operands` | | array of operand | positional SSA inputs; `{ name, type = "any", variadic = false, doc = "" }` (at most one variadic, last) |
 | `results` | | array of result | SSA outputs; `{ name, type = "any", doc = "" }` |
 | `attributes` | | array of attr | compile-time config; `{ name, kind, required = false, doc = "" }`, `kind ∈ {int,float,bool,string,symbol,type}` |
@@ -37,7 +37,7 @@ summary = "..."           # one-line dialect description (docs / reflection)
 
 ### Semantic-heavy fields — **schema-known now, codegen scaffolded until their band**
 
-The schema **validates** these today; the generator emits a structured TODO scaffold + a reflection record for them,
+The schema **validates** these today; the generator emits a structured `TODO` scaffold + a reflection record for them,
 because the machinery they need does not exist yet. This is NOT deferral — the schema contract is whole; the consuming
 bands land later (documented at the CEIR-2a/2b close).
 

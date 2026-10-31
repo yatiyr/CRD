@@ -16,9 +16,11 @@ Start with [rendering foundation](rendering-foundation.md), [CEIR](ceir.md), [CH
 
 ## Current module inventory
 
-All 102 registered modules are represented: the 96 engine modules below and the six application and tool
-modules in the next table. Existing overview links retain their dated evidence; where no dedicated overview
-exists, the public source and CMake manifest are the direct entry points. The documentation validator holds
+All <!-- fact:module-count -->105<!-- /fact --> registered modules are represented: the
+<!-- fact:engine-module-count -->98<!-- /fact --> engine modules below and the
+<!-- fact:other-module-count -->7<!-- /fact --> application and tool modules in the next table. Existing overview
+links retain their dated evidence; where no dedicated overview exists, the public source and CMake manifest are the
+direct entry points. The documentation validator holds
 this map and the `crd_module()` registry in the root CMakeLists to the same set of names.
 
 | Module | Overview / source | Build and dependency contract |
@@ -137,6 +139,20 @@ ROADMAP row, then the single maintainer.
 | `cprof_export` | [Source](../../tools/cprof-export/) | [CMake](../../tools/cprof-export/CMakeLists.txt) |
 | `runtime` | [Source](../../runtime/) | [CMake](../../runtime/CMakeLists.txt) |
 | `sandbox` | [Source](../../sandbox/) | [CMake](../../sandbox/CMakeLists.txt) |
+
+## Further system references
+
+Subsystem pages that are not a single module's overview; each is a pointer to its preserved
+reference or a dated design note.
+
+- [Eylem allocator strategy](eylem-allocators.md)
+- [`crd::math::simd` — SIMD + AoSoA storage substrate](math-simd.md)
+- [MeshResource](mesh_resource.md)
+- [RAH-0 — Canonical GPU-model audit (design note)](rah-0-canonical-model-audit.md)
+- [crd-sandbox — System Overview](sandbox.md)
+- [crd-scene — concurrency contracts](scene-concurrency.md)
+- [TextureResource](texture_resource.md)
+- [crd-jobs Windows verification (2026-05-12)](../jobs/WINDOWS_VERIFICATION.md)
 
 ## Planned product modules
 

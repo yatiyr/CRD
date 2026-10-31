@@ -8,6 +8,8 @@ zero-compile load + persistent pipeline cache → hot-reload → joint VS+FS spe
 multi-variant container (D8) → neural-material completeness (D9) → parallel cook on `crd-jobs` fibers (D10) → async pipeline
 warmup (D11) → spec-constant binding at load (D12)). See `docs/sessions/2026-07-22-d6-d12-shader-polish.md`.
 **Extends:** ADR-0101 (the IR is the source of truth for all shaders) · ADR-0103 (gpu-context owns every GPU program) · ADR-0037 (CRDR container: FourCC, little-endian)
+**Supersedes (with ADR-0103 and ADR-0105):** [ADR-0080](0080-crd-rhi-compute.md)'s compute substrate, as ADR-0080's
+status records (reciprocal note added 2026-10-31).
 
 ## Context
 

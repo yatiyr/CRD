@@ -23,15 +23,15 @@ replaceable assets. A working demo that bypasses those assets does not meet the 
 4. State: **purpose; slice ID; complete deliverable; dependencies; evidence required; unresolved decisions**.
    Continue within existing authorization. Ask about material ambiguity, not routine reversible work.
 
-Current delivery order is in [ADR-0129](docs/decisions/0129-renderer-ui-editor-delivery-order.md): the entire retained
-renderer library, then crd-ui/CR-D007, then the scientific notebook, followed by preserved programmes. Windows/Linux
-qualify first; macOS/web follow. Broader [system review](docs/research/2026-09-12-cerid-whole-system-review.md) explains
-AI, collaboration, simulation and manufacturing contracts. It is a reference, not another roadmap.
+The table's order is the accepted [delivery plan](docs/design/delivery-plan.md)
+([ADR-0129](docs/decisions/0129-renderer-ui-editor-delivery-order.md) and amendments): backbones before their
+consumers, the renderer library before crd-ui/CR-D007, CR-D007 before the notebook. The
+[system review](docs/research/2026-09-12-cerid-whole-system-review.md) is a reference, not another roadmap.
 
 ## Work and close the loop
 
-Runtime diagnosis: [DIAG contract](docs/design/runtime-diagnostics.md). It follows REPO.DEV in ROADMAP; seeded faults,
-actual instrument activation and useful captured evidence are required before claiming detection coverage.
+Runtime diagnosis: [DIAG contract](docs/design/runtime-diagnostics.md). Seeded faults, actual instrument activation
+and useful captured evidence are required before claiming detection coverage.
 
 Use existing modules and canonical execution. Implement the complete consumer behaviour, adverse paths, asset
 replacement and lifecycle. A source suspicion needs investigation before being called a bug. A verified failure
@@ -46,7 +46,7 @@ research. Preserve historical evidence instead of rewriting it as a new result. 
 Use [BUILDING's local/CI decision table](docs/BUILDING.md#fast-local-workflow--one-primary-configuration), not every
 local configuration/platform. Run the documentation validator. Record unavailable hardware/configurations
 as unqualified, with an owning gate; do not turn an emitter, schema, compile or mock into a runtime support claim.
-No agent commits or pushes. The user owns the final commit.
+Commits and pushes follow [AGENTS](AGENTS.md#git-and-workspace); each item starts by reading completed CI runs.
 
 ```powershell
 python scripts/check-master-plan.py --next
@@ -54,6 +54,7 @@ python scripts/check-master-plan.py --slice RAH-1
 python scripts/check-master-plan.py --find browser
 python scripts/check-master-plan.py --memory stale_exe
 python scripts/check-master-plan.py
+python scripts/check-docs.py
 ```
 
 If interrupted: leave the exact row, reproduction/commands, files changed, results and next discriminating action
