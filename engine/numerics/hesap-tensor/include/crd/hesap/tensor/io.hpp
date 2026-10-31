@@ -63,6 +63,7 @@
 
 #include <cstdio> // streaming file paths (single-pass, no staging buffer) — house precedent: perf capture, log sinks
 #include <cstring>
+#include <utility> // std::move
 
 #if defined(_WIN32)
 #include <io.h> // _chsize_s / _fileno (truncate-in-place on the overwrite path)
@@ -124,7 +125,6 @@ enum class IoDtype : crd::u8
         return 4U;
     case IoDtype::I64:
     case IoDtype::U64:
-        return 8U;
     case IoDtype::C32:
         return 8U;
     case IoDtype::C64:
@@ -483,13 +483,13 @@ namespace iodetail
         const char* code;
         IoDtype dtype;
     };
-    static constexpr Row rows[] = {
+    static constexpr Row kRows[] = {
         {"f2", IoDtype::F16}, {"f4", IoDtype::F32},  {"f8", IoDtype::F64}, {"i1", IoDtype::I8},
         {"i2", IoDtype::I16}, {"i4", IoDtype::I32},  {"i8", IoDtype::I64}, {"u1", IoDtype::U8},
         {"u2", IoDtype::U16}, {"u4", IoDtype::U32},  {"u8", IoDtype::U64}, {"b1", IoDtype::Bool},
         {"c8", IoDtype::C32}, {"c16", IoDtype::C64},
     };
-    for (const Row& r : rows)
+    for (const Row& r : kRows)
     {
         if (code == r.code)
         {
@@ -793,6 +793,12 @@ private:
         unpadded = preamble + dict.size() + 1U;
         header_len = ((unpadded + 63U) / 64U) * 64U - preamble;
     }
+    // v2.0 stores the length in four bytes, and the padded header holds the dict and its '\n' (the bounded rank keeps
+    // both true; checked, since a wrapped sum would leave an empty header that the writes below then dereference).
+    if (header_len > 0xFFFFFFFFU || preamble + header_len < unpadded)
+    {
+        return TensorStatus::BadInput;
+    }
     crd::containers::Array<crd::u8> hdr(alloc);
     if (!hdr.try_reserve(static_cast<crd::usize>(preamble + header_len)))
     {
@@ -800,8 +806,8 @@ private:
     }
     hdr.resize_uninitialized(static_cast<crd::usize>(preamble + header_len));
     crd::u8* w = hdr.data();
-    static constexpr crd::u8 magic[6] = {0x93U, 'N', 'U', 'M', 'P', 'Y'};
-    std::memcpy(w, magic, 6U);
+    static constexpr crd::u8 kMagic[6] = {0x93U, 'N', 'U', 'M', 'P', 'Y'};
+    std::memcpy(w, kMagic, 6U);
     w[6] = major;
     w[7] = 0U;
     if (major == 1U)
@@ -827,8 +833,8 @@ private:
 // Parse an in-memory .npy file. Zero-copy: out.payload views `bytes`.
 [[nodiscard]] inline TensorStatus npy_parse(crd::containers::ConstSpan<crd::u8> bytes, NpyView& out) noexcept
 {
-    static constexpr crd::u8 magic[6] = {0x93U, 'N', 'U', 'M', 'P', 'Y'};
-    if (bytes.size() < 10U || std::memcmp(bytes.data(), magic, 6U) != 0)
+    static constexpr crd::u8 kMagic[6] = {0x93U, 'N', 'U', 'M', 'P', 'Y'};
+    if (bytes.size() < 10U || std::memcmp(bytes.data(), kMagic, 6U) != 0)
     {
         return TensorStatus::BadInput;
     }
@@ -1024,8 +1030,8 @@ template <typename T>
     {
         return TensorStatus::BadInput;
     }
-    static constexpr crd::u8 magic[6] = {0x93U, 'N', 'U', 'M', 'P', 'Y'};
-    if (std::memcmp(pre, magic, 6U) != 0)
+    static constexpr crd::u8 kMagic[6] = {0x93U, 'N', 'U', 'M', 'P', 'Y'};
+    if (std::memcmp(pre, kMagic, 6U) != 0)
     {
         return TensorStatus::BadInput;
     }
@@ -1428,7 +1434,7 @@ public:
             {
                 return static_cast<crd::i64>(i);
             }
-            if (n.size() == key.size() + 4U && n.substr(0, key.size()) == key && n.substr(key.size()) == ".npy")
+            if (n.size() == key.size() + 4U && n.starts_with(key) && n.ends_with(".npy"))
             {
                 return static_cast<crd::i64>(i);
             }
@@ -1570,8 +1576,8 @@ inline constexpr StDtypeRow kStDtypes[] = {
                 break;
             default:
             {
-                static constexpr char hex[] = "0123456789abcdef";
-                const char u[6] = {'\\', 'u', '0', '0', hex[(b >> 4U) & 0xFU], hex[b & 0xFU]};
+                static constexpr char kHex[] = "0123456789abcdef";
+                const char u[6] = {'\\', 'u', '0', '0', kHex[(b >> 4U) & 0xFU], kHex[b & 0xFU]};
                 ok = append_bytes(dst, u, 6U);
                 break;
             }
@@ -2033,7 +2039,7 @@ private:
                                             const crd::u8* buf_data, crd::u64 buf_size) noexcept
     {
         SafetensorsEntry e(m_alloc);
-        e.name = static_cast<crd::containers::String&&>(name);
+        e.name = std::move(name);
         bool have_dtype = false;
         bool have_shape = false;
         bool have_offsets = false;
@@ -2376,9 +2382,9 @@ private:
             first = false;
             ok = ok && iodetail::append_cstr(hdr, "\"");
             ok = ok && iodetail::json_escape_append(hdr, e.name_view());
-            ok = ok && iodetail::append_cstr(hdr, "\":{\"dtype\":\"");
+            ok = ok && iodetail::append_cstr(hdr, R"(":{"dtype":")");
             ok = ok && iodetail::append_cstr(hdr, iodetail::st_dtype_name(e.dtype));
-            ok = ok && iodetail::append_cstr(hdr, "\",\"shape\":[");
+            ok = ok && iodetail::append_cstr(hdr, R"(","shape":[)");
             for (crd::u32 d = 0; d < e.rank; ++d)
             {
                 if (d > 0U)

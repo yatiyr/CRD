@@ -9,8 +9,9 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
-using crd::hesap::tensor::IoDtype;
 using crd::hesap::tensor::Tensor;
 using crd::hesap::tensor::TensorStatus;
 using crd::hesap::tensor::TensorView;
@@ -27,7 +28,7 @@ double now_ms()
 }
 
 template <typename Fn>
-double best_of(int reps, Fn&& fn)
+double best_of(int reps, const Fn& fn)
 {
     double best = 1e300;
     for (int r = 0; r < reps; ++r)
@@ -78,10 +79,11 @@ int main()
             Tensor<crd::f32> back(&alloc);
             require_ok(crd::hesap::tensor::npy_read_file<crd::f32>(&alloc, npy_path, back), "npy_read_file");
         });
-        // correctness anchor: bit-exact read-back
+        // correctness anchor: bit-exact read-back (the bytes, so a NaN payload or a signed zero counts too)
         Tensor<crd::f32> back(&alloc);
         require_ok(crd::hesap::tensor::npy_read_file<crd::f32>(&alloc, npy_path, back), "npy verify");
-        if (std::memcmp(back.data(), t.data(), n * sizeof(crd::f32)) != 0)
+        if (std::memcmp(static_cast<const void*>(back.data()), static_cast<const void*>(t.data()),
+                        n * sizeof(crd::f32)) != 0)
         {
             std::printf("FATAL: npy read-back mismatch\n");
             return 1;
@@ -106,7 +108,8 @@ int main()
         Tensor<crd::f32> back(&alloc);
         require_ok(crd::hesap::tensor::safetensors_read_tensor_file<crd::f32>(&alloc, st_path, "w", back),
                    "st verify");
-        if (std::memcmp(back.data(), t.data(), n * sizeof(crd::f32)) != 0)
+        if (std::memcmp(static_cast<const void*>(back.data()), static_cast<const void*>(t.data()),
+                        n * sizeof(crd::f32)) != 0)
         {
             std::printf("FATAL: safetensors read-back mismatch\n");
             return 1;
@@ -114,6 +117,6 @@ int main()
         std::printf("crd safetensors write %.3fs (%.2f GB/s)  read %.3fs (%.2f GB/s)\n", w * 1e-3,
                     gb / (w * 1e-3), r * 1e-3, gb / (r * 1e-3));
     }
-    std::printf("payload bytes: %llu\n", static_cast<unsigned long long>(n * sizeof(crd::f32)));
+    std::printf("payload bytes: %llu\n", static_cast<unsigned long long>(n) * sizeof(crd::f32));
     return 0;
 }
