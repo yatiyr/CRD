@@ -2,6 +2,7 @@
 """Regression checks for hygiene rejection and CMake's generated IDE model."""
 from pathlib import Path
 import contextlib
+import datetime
 import importlib.util
 import hashlib
 import http.client
@@ -158,6 +159,9 @@ registers_spec.loader.exec_module(registers)
 register_ids_spec = importlib.util.spec_from_file_location('gen_register_ids', ROOT / 'scripts/gen-register-ids.py')
 register_ids = importlib.util.module_from_spec(register_ids_spec)
 register_ids_spec.loader.exec_module(register_ids)
+review_spec = importlib.util.spec_from_file_location('register_review', ROOT / 'scripts/register-review.py')
+register_review = importlib.util.module_from_spec(review_spec)
+review_spec.loader.exec_module(register_review)
 ab_spec = importlib.util.spec_from_file_location('ab_board', ROOT / 'scripts/ab-board.py')
 ab_board = importlib.util.module_from_spec(ab_spec)
 ab_spec.loader.exec_module(ab_board)
@@ -5278,9 +5282,8 @@ class IsaIsolation(unittest.TestCase):
                 isa_isolation.read_manifest(str(manifest))
 
 
-class Registers(unittest.TestCase):
-    """scripts/check-registers.py: the NET-STD standards register fails on expired pinned drafts, obsoleted pinned
-    RFCs, overdue reviews, unknown owners and rows, uncovered governed rows and unproven implemented entries."""
+class RegisterFixture:
+    """A fixture tree holding a standards register, shared by the guard's and the review tool's cases."""
 
     ROADMAP = ('| # | Slice | Status | Scope | Requires | Sources |\n|---|---|---|---|---|---|\n'
                '| 001 | <a id="slice-net-std"></a>**NET-STD** | Partial | x | y | z |\n'
@@ -5298,37 +5301,58 @@ class Registers(unittest.TestCase):
         entry.update(changes)
         return entry
 
+    def schedule(self, **changes):
+        """A review schedule due on 2026-12-15: 25 days after IETF 127, the first event after the full research."""
+        schedule = {'cadence': 'after each IETF meeting', 'next': '2026-12-15', 'lag_days': 25,
+                    'full_every_days': 365,
+                    'calendar': [{'event': 'IETF 126', 'day': '2026-07-24', 'scan': 'light', 'verified': True},
+                                 {'event': 'IETF 127', 'day': '2026-11-20', 'scan': 'light', 'verified': False}],
+                    'runs': [{'day': '2026-10-27', 'scan': 'full', 'ref': 'docs/research.md#n83', 'triggers': []}]}
+        schedule.update(changes)
+        return schedule
+
     def register(self, entries, **changes):
         register = {'schema': registers.SCHEMA, 'domain': 'standards', 'about': 'fixture',
                     'snapshot': {'date': '2026-10-31', 'method': 'fixture'},
-                    'review': {'cadence': 'after each IETF meeting', 'next': '2026-12-15'},
+                    'review': self.schedule(),
                     'governed_rows': ['NET-STD'], 'entries': entries,
                     'checklist': [{'section': '2.1', 'item': 'Algorithm identifiers', 'mechanism': 'the register',
                                    'rows': ['NET-STD'], 'evidence': []}]}
         register.update(changes)
         return register
 
+    def write_tree(self, root, register):
+        for directory in ('docs', 'cmake', 'tests'):
+            (root / directory).mkdir(exist_ok=True)
+        (root / 'docs' / 'ROADMAP.md').write_text(self.ROADMAP, encoding='utf-8')
+        (root / 'docs' / 'research.md').write_text('<a id="n83"></a>N83. QUIC WG documents\n', encoding='utf-8')
+        (root / 'tests' / 'test_quic.cpp').write_text('// evidence\n', encoding='utf-8')
+        (root / 'CMakeLists.txt').write_text('crd_module(engine/foundation/core engine/core)\n', encoding='utf-8')
+        (root / 'cmake' / 'standards-register.json').write_text(json.dumps(register), encoding='utf-8')
+        capabilities = {'capabilities': [{'id': 'network.transport', 'owner': 'net', 'status': 'planned'}]}
+        (root / 'cmake' / 'capability-owners.json').write_text(json.dumps(capabilities), encoding='utf-8')
+
+    def guard(self, root, today):
+        with patch('sys.stdout', new_callable=io.StringIO) as out:
+            code = registers.main(['--root', str(root), '--today', today])
+        return code, out.getvalue()
+
     def run_guard(self, register, today='2026-11-01'):
         """(exit code, output) of the guard over a fixture tree holding this register."""
         with tempfile.TemporaryDirectory() as scratch:
-            root = Path(scratch)
-            for directory in ('docs', 'cmake', 'tests'):
-                (root / directory).mkdir()
-            (root / 'docs' / 'ROADMAP.md').write_text(self.ROADMAP, encoding='utf-8')
-            (root / 'docs' / 'research.md').write_text('<a id="n83"></a>N83. QUIC WG documents\n', encoding='utf-8')
-            (root / 'tests' / 'test_quic.cpp').write_text('// evidence\n', encoding='utf-8')
-            (root / 'CMakeLists.txt').write_text('crd_module(engine/foundation/core engine/core)\n', encoding='utf-8')
-            (root / 'cmake' / 'standards-register.json').write_text(json.dumps(register), encoding='utf-8')
-            capabilities = {'capabilities': [{'id': 'network.transport', 'owner': 'net', 'status': 'planned'}]}
-            (root / 'cmake' / 'capability-owners.json').write_text(json.dumps(capabilities), encoding='utf-8')
-            with patch('sys.stdout', new_callable=io.StringIO) as out:
-                code = registers.main(['--root', str(root), '--today', today])
-            return code, out.getvalue()
+            self.write_tree(Path(scratch), register)
+            return self.guard(Path(scratch), today)
 
     def assert_fails(self, register, message, today='2026-11-01'):
         code, output = self.run_guard(register, today)
         self.assertEqual(1, code, output)
         self.assertIn(message, output)
+
+
+class Registers(RegisterFixture, unittest.TestCase):
+    """scripts/check-registers.py: the NET-STD standards register fails on expired pinned drafts, obsoleted pinned
+    RFCs, overdue reviews, a review schedule that is not the computed one, unknown owners and rows, uncovered governed
+    rows and unproven implemented entries."""
 
     def test_a_complete_register_passes_and_names_the_first_expiry(self):
         webtransport = self.entry(id='webtransport.h3', codepoints=[], spec=self.DRAFT)
@@ -5338,7 +5362,8 @@ class Registers(unittest.TestCase):
         self.assertIn('webtransport.h3 on 2027-01-02', output)
 
     def test_a_pinned_draft_expires_185_days_from_the_start_of_its_posted_period(self):
-        later = {'cadence': 'c', 'next': '2027-06-01'}
+        later = self.schedule(next='2027-06-01', calendar=[{'event': 'IETF 128', 'day': '2027-05-07', 'scan': 'light',
+                                                            'verified': False}])
         register = self.register([self.entry(spec=self.DRAFT, review='2027-06-01')], review=later)
         self.assertEqual(0, self.run_guard(register, today='2027-01-01')[0])
         self.assert_fails(register, 'expired on 2027-01-02', today='2027-01-02')
@@ -5365,8 +5390,9 @@ class Registers(unittest.TestCase):
 
     def test_overdue_reviews_and_future_reads_fail(self):
         self.assert_fails(self.register([self.entry(review='2026-10-30')]), 'review was due on 2026-10-30')
-        self.assert_fails(self.register([self.entry()], review={'cadence': 'c', 'next': '2026-10-01'}),
-                          'scheduled review was due on 2026-10-01')
+        self.assert_fails(self.register([self.entry(review='2027-01-01')]),
+                          'the scheduled light review was due on 2026-12-15 (IETF 127 (2026-11-20))',
+                          today='2026-12-16')
         future = {'ref': 'docs/research.md#n83', 'read': '2026-11-05', 'verified': True}
         self.assert_fails(self.register([self.entry(source=future)]), 'after the snapshot or today')
         self.assert_fails(self.register([self.entry(review='2026-12')]), 'review must be a YYYY-MM-DD date')
@@ -5402,6 +5428,380 @@ class Registers(unittest.TestCase):
         self.assert_fails(self.register([]), 'entries is a non-empty list')
         self.assert_fails(self.register([self.entry(colour='red')]), "unknown keys ['colour']")
         self.assert_fails(self.register([self.entry()], owners={'net': 'NET-STD'}), "unknown keys ['owners']")
+
+    def test_the_review_schedule_is_the_computed_one(self):
+        self.assert_fails(self.register([self.entry()], review=self.schedule(next='2026-12-01')),
+                          'review.next 2026-12-01 is not the due day 2026-12-15 (light scan after IETF 127')
+        past = [{'event': 'IETF 126', 'day': '2026-07-24', 'scan': 'light', 'verified': True}]
+        self.assert_fails(self.register([self.entry()], review=self.schedule(calendar=past, next='2027-10-27')),
+                          'names no event after the latest run (2026-10-27)')
+        self.assert_fails(self.register([self.entry()], review=self.schedule(lag_days=0)), 'positive number of days')
+        self.assert_fails(self.register([self.entry()], review=self.schedule(lag_days=True)), 'positive number')
+        self.assert_fails(self.register([self.entry()], review={'cadence': 'c', 'next': '2026-12-15'}),
+                          'review has cadence, calendar, full_every_days, lag_days, next, runs')
+        self.assert_fails(self.register([self.entry()], review=self.schedule(calendar=[])), 'non-empty lists')
+        unordered = list(reversed(self.schedule()['calendar']))
+        self.assert_fails(self.register([self.entry()], review=self.schedule(calendar=unordered)),
+                          'strictly increasing day order (IETF 126)')
+        malformed = [{'event': 'IETF 127', 'day': '2026-11-20', 'scan': 'weekly', 'verified': False}]
+        self.assert_fails(self.register([self.entry()], review=self.schedule(calendar=malformed)),
+                          'a calendar event has event, day, scan (light or full) and verified')
+        full = self.schedule()['runs'][0]
+        self.assert_fails(self.register([self.entry()], review=self.schedule(runs=[dict(full, ref='docs/gone.md')])),
+                          "run 2026-10-27 ref 'docs/gone.md' does not exist")
+        self.assert_fails(self.register([self.entry()], review=self.schedule(runs=[dict(full, scan='light')])),
+                          'records the full research the register was assembled from')
+        self.assert_fails(self.register([self.entry()], review=self.schedule(runs=[dict(full, day='2026-11-05')])),
+                          'the run of 2026-11-05 is after today')
+        unknown = self.schedule(runs=[full, dict(full, day='2026-10-30', scan='light', triggers=['nothing'])])
+        self.assert_fails(self.register([self.entry()], review=unknown), "unknown triggering entries ['nothing']")
+        backwards = self.schedule(runs=[full, dict(full, day='2026-10-20', scan='light')])
+        self.assert_fails(self.register([self.entry()], review=backwards), 'runs are recorded in day order')
+        self.assert_fails(self.register([self.entry()], review=self.schedule(runs=[dict(full, triggers='x')])),
+                          'a run has day, scan (light or full), ref (its report) and triggers')
+
+    def test_review_due_takes_the_first_of_events_triggers_and_the_year(self):
+        schedule = self.schedule()
+        self.assertEqual((datetime.date(2026, 12, 15), 'light', 'IETF 127 (2026-11-20)'),
+                         registers.review_due(schedule))
+        full = schedule['runs'][0]
+        light = {'day': '2026-12-10', 'scan': 'light', 'ref': 'docs/research.md', 'triggers': []}
+        covered = self.schedule(runs=[full, light])
+        self.assertEqual((datetime.date(2027, 10, 27), 'full'), registers.review_due(covered)[:2])
+        triggered = self.schedule(runs=[full, dict(light, triggers=['quic.transport', 'webtransport.h3'])])
+        day, scan, reason = registers.review_due(triggered)
+        self.assertEqual((datetime.date(2027, 1, 4), 'full'), (day, scan))
+        self.assertIn('quic.transport, webtransport.h3', reason)
+        answered = self.schedule(runs=[full, dict(light, triggers=['quic.transport']),
+                                       dict(light, day='2026-12-20', scan='full')])
+        self.assertEqual(datetime.date(2027, 12, 20), registers.review_due(answered)[0])
+        yearly = self.schedule(full_every_days=30)
+        self.assertEqual((datetime.date(2026, 11, 26), 'full'), registers.review_due(yearly)[:2])
+        later = triggered['calendar'] + [{'event': 'IETF 128', 'day': '2027-03-26', 'scan': 'light', 'verified': False}]
+        held = self.register([self.entry(review='2027-06-01'),
+                              self.entry(id='webtransport.h3', codepoints=[], spec=self.DRAFT, review='2027-06-01')],
+                             review=dict(triggered, calendar=later, next='2027-01-04'))
+        self.assertEqual(0, self.run_guard(held, today='2026-12-31')[0])
+
+
+class RegisterReview(RegisterFixture, unittest.TestCase):
+    """scripts/register-review.py: the scheduled re-research plans the primary sources a refresh downloads (for the
+    user to approve), reads them with digests, judges them against the register, proposes ROADMAP amendments without
+    editing a row, applies register changes on request and records each run so the guard's due day moves."""
+
+    QUIC_XML = ('<?xml version="1.0"?><registry xmlns="http://www.iana.org/assignments" id="quic">'
+                '<title>QUIC</title>'
+                '<registry id="quic-versions"><title>QUIC Versions</title>'
+                '<record><value>0x00000000</value><description>Reserved for Version Negotiation</description></record>'
+                '<record><value>0x00000001</value><description>QUIC</description></record>'
+                '<record><value>0x6b3343cf</value><description>QUIC Version 2</description></record>'
+                '<record><value>0x00000002-0x0000ffff</value><description>Unassigned</description></record>'
+                '</registry>'
+                '<registry id="quic-transport"><title>QUIC Transport Parameters</title>'
+                '<record><value>0x20</value><description>max_datagram_frame_size</description></record>'
+                '<record><value>0x11</value><description>version_information</description></record>'
+                '</registry></registry>')
+    ALPN_XML = ('<?xml version="1.0"?><registry xmlns="http://www.iana.org/assignments" id="tls-extensiontype-values">'
+                '<registry id="alpn-protocol-ids">'
+                '<title>TLS Application-Layer Protocol Negotiation (ALPN) Protocol IDs</title>'
+                '<record><protocol>HTTP/3</protocol><id>0x68 0x33 ("h3")</id></record></registry>'
+                '<registry id="tls-extensiontype-values-1"><title>TLS ExtensionType Values</title>'
+                '<record><value>27</value><description>compress_certificate</description></record>'
+                '</registry></registry>')
+
+    def register(self, entries, **changes):
+        """The fixture register with IETF 128 on its calendar, so a run on the fixture's day still owes a scan."""
+        calendar = self.schedule()['calendar'] + [{'event': 'IETF 128', 'day': '2027-03-26', 'scan': 'light',
+                                                   'verified': False}]
+        return super().register(entries, **dict({'review': self.schedule(calendar=calendar)}, **changes))
+
+    def entries(self):
+        """A pinned RFC, a pinned and a watched draft, a W3C document and IANA and manual codepoints."""
+        quic = self.entry(codepoints=[
+            {'registry': 'QUIC Versions', 'name': 'QUIC', 'value': '0x00000001', 'verified': False},
+            {'registry': 'QUIC Versions', 'name': 'QUIC v2', 'value': '0x6b3343cf', 'verified': False},
+            {'registry': 'QUIC Transport Parameters', 'name': 'max_datagram_frame_size', 'value': '0x21',
+             'verified': False},
+            {'registry': 'QUIC Transport Parameters', 'name': 'ack_frequency', 'value': '0xff04de1b',
+             'verified': False},
+            {'registry': 'QUIC Transport Parameters', 'name': 'version_information', 'value': '0x11'}])
+        h3 = self.entry(id='http.h3', spec={'type': 'rfc', 'ref': 'RFC 9114', 'status': 'current'},
+                        codepoints=[{'registry': 'TLS ALPN Protocol IDs', 'name': 'HTTP/3', 'value': 'h3',
+                                     'verified': False},
+                                    {'registry': 'TLS ExtensionType Values', 'name': 'compress_certificate',
+                                     'value': '27', 'verified': False},
+                                    {'registry': 'Object identifiers', 'name': 'id-ml-dsa-44',
+                                     'value': '2.16.840.1.101.3.4.3.17', 'verified': False}])
+        pinned = self.entry(id='webtransport.h3', spec=self.DRAFT, codepoints=[])
+        watched = self.entry(id='quic.multipath', state='watch', codepoints=[],
+                             spec={'type': 'draft', 'ref': 'draft-ietf-quic-multipath', 'revision': '21',
+                                   'posted': '2026-03-17', 'status': 'active'})
+        published = self.entry(id='quic.reliable-reset', state='watch', codepoints=[],
+                               spec={'type': 'draft', 'ref': 'draft-ietf-quic-reliable-stream-reset',
+                                     'revision': '11', 'status': 'rfc-editor'})
+        trace = self.entry(id='ops.trace-context', codepoints=[],
+                           spec={'type': 'w3c', 'ref': 'https://www.w3.org/TR/trace-context/',
+                                 'status': 'recommendation'})
+        entries = [quic, h3, pinned, watched, published, trace]
+        for entry in entries:
+            entry['review'] = '2027-06-01'
+        return entries
+
+    def tool(self, root, *argv, today='2026-12-16'):
+        with patch('sys.stdout', new_callable=io.StringIO) as out, \
+                patch('sys.stderr', new_callable=io.StringIO) as err:
+            code = register_review.main(['--root', str(root), '--today', today, *argv])
+        return code, out.getvalue() + err.getvalue()
+
+    def records(self, rfc9000=None, rfc9114=None, webtransport=None, multipath=None, reset=None):
+        """The fetched bodies by source id; None keeps the record unchanged from the register."""
+        def tracker(name, rev, state, published, **extra):
+            return json.dumps(dict({'name': name, 'rev': rev, 'state': state, 'iesg_state': None,
+                                    'rfceditor_state': None, 'aliases': [name],
+                                    'rev_history': [{'rev': rev, 'published': published + 'T12:00:00Z'}]}, **extra))
+        return {
+            'rfc9000': rfc9000 or json.dumps({'doc_id': 'RFC9000', 'obsoleted_by': []}),
+            'rfc9114': rfc9114 or json.dumps({'doc_id': 'RFC9114', 'obsoleted_by': []}),
+            'draft-ietf-webtrans-http3': webtransport or tracker('draft-ietf-webtrans-http3', '16', 'Active',
+                                                                 '2026-07-01'),
+            'draft-ietf-quic-multipath': multipath or tracker('draft-ietf-quic-multipath', '21', 'Active',
+                                                              '2026-03-17'),
+            'draft-ietf-quic-reliable-stream-reset': reset or tracker('draft-ietf-quic-reliable-stream-reset', '11',
+                                                                      'Active', '2026-05-01',
+                                                                      rfceditor_state='EDIT'),
+            'iana-quic': self.QUIC_XML,
+            'iana-tls-extensiontype-values': self.ALPN_XML,
+        }
+
+    def opener(self, bodies):
+        def urlopen(request, timeout):
+            self.assertEqual('cerid-register-review/1', request.get_header('User-agent'))
+            self.assertEqual(register_review.FETCH_TIMEOUT, timeout)
+            for source_id, body in bodies.items():
+                path = f'/assignments/{source_id[5:]}/' if source_id.startswith('iana-') else f'/{source_id}'
+                if path in request.full_url:
+                    if isinstance(body, Exception):
+                        raise body
+                    return contextlib.closing(SimpleNamespace(read=lambda limit, body=body: body.encode()[:limit],
+                                                              close=lambda: None))
+            raise urllib.error.URLError('no fixture')
+        return urlopen
+
+    def fetched(self, root, bodies):
+        """Plans and fetches the fixture's sources into root/fetched; returns the plan."""
+        self.assertEqual(0, self.tool(root, 'plan', '--out', str(root / 'sources.json'))[0])
+        plan = json.loads((root / 'sources.json').read_text(encoding='utf-8'))
+        register_review.fetch_sources(plan, root / 'fetched', opener=self.opener(bodies),
+                                      today=datetime.date(2026, 12, 16))
+        return plan
+
+    def test_due_prints_the_computed_review_and_unverified_events(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            self.write_tree(root, self.register(self.entries()))
+            code, output = self.tool(root, 'due', today='2026-11-01')
+            self.assertEqual(0, code, output)
+            self.assertIn('a light review is due on 2026-12-15, after IETF 127 (2026-11-20)', output)
+            self.assertIn('IETF 127 on 2026-11-20 is unverified', output)
+            self.assertNotIn('overdue', output)
+            self.assertIn('overdue', self.tool(root, 'due')[1])
+            (root / 'cmake' / 'standards-register.json').write_text(json.dumps(self.register(
+                self.entries(), review={'cadence': 'c', 'next': '2026-12-15'})), encoding='utf-8')
+            code, output = self.tool(root, 'due')
+            self.assertEqual(2, code)
+            self.assertIn('the review schedule is malformed', output)
+
+    def test_plan_lists_every_primary_source_and_the_items_read_by_hand(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            self.write_tree(root, self.register(self.entries()))
+            code, output = self.tool(root, 'plan', '--out', str(root / 'sources.json'))
+            self.assertEqual(0, code, output)
+            self.assertIn('7 sources to download once the user approves them, 3 items read by hand', output)
+            plan = json.loads((root / 'sources.json').read_text(encoding='utf-8'))
+            self.assertEqual(register_review.PLAN_SCHEMA, plan['schema'])
+            urls = {source['id']: source['url'] for source in plan['sources']}
+            self.assertEqual('https://www.rfc-editor.org/rfc/rfc9000.json', urls['rfc9000'])
+            self.assertEqual('https://datatracker.ietf.org/doc/draft-ietf-quic-multipath/doc.json',
+                             urls['draft-ietf-quic-multipath'])
+            self.assertEqual('https://www.iana.org/assignments/quic/quic.xml', urls['iana-quic'])
+            quic = next(source for source in plan['sources'] if source['id'] == 'iana-quic')
+            self.assertEqual(['QUIC Versions', 'QUIC Transport Parameters'], quic['registries'])
+            manual = {item['url']: item for item in plan['manual']}
+            self.assertEqual(['ops.trace-context'], manual['https://www.w3.org/TR/trace-context/']['entries'])
+            self.assertIn('Object identifiers', next(item['read'] for item in plan['manual']
+                                                     if item['entries'] == ['http.h3']))
+            self.assertIn('https://www.ietf.org/meeting/upcoming/', manual)
+            for broken, message in (({'spec': {'type': 'rfc', 'ref': 'RFC9000bis', 'status': 'current'}},
+                                     'is not "RFC <number>"'),
+                                    ({'spec': dict(self.DRAFT, ref='Draft QUIC')}, 'is not a draft name'),
+                                    ({'codepoints': [{'registry': 'Nowhere', 'name': 'n', 'value': '1'}]},
+                                     "registry 'Nowhere' has no source")):
+                (root / 'cmake' / 'standards-register.json').write_text(
+                    json.dumps(self.register([self.entry(**broken)])), encoding='utf-8')
+                code, output = self.tool(root, 'plan', '--out', str(root / 'sources.json'))
+                self.assertEqual(2, code)
+                self.assertIn(message, output)
+
+    def test_fetch_records_digests_and_refuses_or_records_what_it_cannot_read(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            self.write_tree(root, self.register(self.entries()))
+            bodies = self.records()
+            bodies['rfc9114'] = urllib.error.URLError('unreachable')
+            bodies['draft-ietf-quic-multipath'] = 'x' * 64
+            with patch.object(register_review, 'FETCH_LIMIT', 63):
+                plan = self.fetched(root, bodies)
+            manifest = json.loads((root / 'fetched' / 'manifest.json').read_text(encoding='utf-8'))
+            self.assertEqual(register_review.FETCH_SCHEMA, manifest['schema'])
+            self.assertEqual('2026-12-16', manifest['day'])
+            self.assertEqual(plan, manifest['plan'])
+            items = {item['id']: item for item in manifest['items']}
+            body = (root / 'fetched' / 'rfc9000.json').read_bytes()
+            self.assertEqual(hashlib.sha256(body).hexdigest(), items['rfc9000']['sha256'])
+            self.assertEqual(len(body), items['rfc9000']['bytes'])
+            self.assertIn('unreachable', items['rfc9114']['error'])
+            self.assertEqual('larger than 63 bytes', items['draft-ietf-quic-multipath']['error'])
+            insecure = dict(plan, sources=[dict(plan['sources'][0], url='http://www.rfc-editor.org/x.json')])
+            refused = register_review.fetch_sources(insecure, root / 'refused', opener=self.opener(bodies))
+            self.assertIn('refused', refused['items'][0]['error'])
+            with self.assertRaises(register_review.ReviewError):
+                register_review.fetch_sources({'schema': 'other'}, root / 'refused')
+
+    def test_compare_reports_changes_and_proposals_and_edits_no_row(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            self.write_tree(root, self.register(self.entries()))
+            roadmap = (root / 'docs' / 'ROADMAP.md').read_bytes()
+            before = (root / 'cmake' / 'standards-register.json').read_bytes()
+            obsoleted = json.dumps({'doc_id': 'RFC9000', 'obsoleted_by': ['RFC9999']})
+            tracker = json.loads(self.records()['draft-ietf-quic-multipath'])
+            newer = json.dumps(dict(tracker, rev='22', rev_history=[{'rev': '22', 'published': '2026-11-30T08:00:00Z'}],
+                                    iesg_state='IESG Evaluation'))
+            rfc = json.dumps(dict(json.loads(self.records()['draft-ietf-quic-reliable-stream-reset']), state='RFC',
+                                  aliases=['draft-ietf-quic-reliable-stream-reset', 'rfc9911']))
+            self.fetched(root, self.records(rfc9000=obsoleted, rfc9114='{"doc_id": "RFC9114"}', multipath=newer,
+                                            reset=rfc))
+            report = root / 'docs' / 'review.md'
+            code, output = self.tool(root, 'compare', '--fetched', str(root / 'fetched'), '--report', str(report))
+            self.assertEqual(0, code, output)
+            self.assertEqual(before, (root / 'cmake' / 'standards-register.json').read_bytes())
+            text = report.read_text(encoding='utf-8')
+            self.assertIn('proposed, not applied', text)
+            self.assertIn('quic.transport: RFC 9000 is obsoleted by RFC 9999', text)
+            self.assertIn('the pinned RFC 9000 is now obsoleted by RFC 9999 (was current)', text)
+            self.assertIn('quic.multipath: draft-ietf-quic-multipath-22 posted 2026-11-30 (was -21)', text)
+            self.assertIn('the watched draft-ietf-quic-multipath is now iesg (was active)', text)
+            self.assertIn('is now published as RFC 9911 (re-pin the entry to it', text)
+            self.assertIn('QUIC Versions QUIC = 0x00000001 confirmed by IANA', text)
+            self.assertIn('TLS ALPN Protocol IDs HTTP/3 = h3 confirmed by IANA', text)
+            self.assertIn('TLS ExtensionType Values compress_certificate = 27 confirmed by IANA', text)
+            self.assertIn("QUIC v2 = 0x6b3343cf: IANA names 0x6b3343cf ['quicversion2']", text)
+            self.assertIn('max_datagram_frame_size = 0x21: IANA assigns max_datagram_frame_size another value',
+                          text)
+            self.assertIn('ack_frequency = 0xff04de1b: IANA has neither', text)
+            self.assertNotIn('version_information', text)
+            self.assertIn("rfc9114: not an RFC Editor record ('obsoleted_by')", text)
+            self.assertIn('## Triggers a full re-research\n\n- quic.transport\n', text)
+            self.assertIn('the Object identifiers values', text)
+            self.assertIn('https://www.ietf.org/meeting/upcoming/', text)
+            self.assertIn('webtransport.h3: draft-ietf-webtrans-http3-16 posted 2026-07-01 (was -16)', text)
+            code, output = self.tool(root, 'compare', '--fetched', str(root / 'fetched'), '--report', str(report),
+                                     '--apply')
+            self.assertEqual(0, code, output)
+            self.assertIn('the next review is a full scan due on 2027-01-10', output)
+            register = json.loads((root / 'cmake' / 'standards-register.json').read_text(encoding='utf-8'))
+            entries = {entry['id']: entry for entry in register['entries']}
+            self.assertEqual({'type': 'rfc', 'ref': 'RFC 9000', 'status': 'obsoleted', 'obsoleted_by': ['RFC 9999']},
+                             entries['quic.transport']['spec'])
+            self.assertNotIn('verified', entries['quic.transport']['codepoints'][0])
+            self.assertFalse(entries['quic.transport']['codepoints'][1]['verified'])
+            self.assertEqual(('22', '2026-11-30', 'iesg'), tuple(entries['quic.multipath']['spec'][key]
+                                                                 for key in ('revision', 'posted', 'status')))
+            self.assertEqual('rfc-editor', entries['quic.reliable-reset']['spec']['status'])
+            self.assertEqual({'day': '2026-12-16', 'scan': 'light', 'ref': 'docs/review.md',
+                              'triggers': ['quic.transport']}, register['review']['runs'][-1])
+            self.assertEqual('2027-01-10', register['review']['next'])
+            self.assertEqual('2026-12-16', register['snapshot']['date'])
+            self.assertEqual(roadmap, (root / 'docs' / 'ROADMAP.md').read_bytes())
+            self.assertEqual(b'\n', (root / 'cmake' / 'standards-register.json').read_bytes()[-1:])
+            self.assertNotIn(b'\r', (root / 'cmake' / 'standards-register.json').read_bytes())
+            code, output = self.guard(root, '2026-12-16')
+            self.assertEqual(1, code, output)
+            self.assertEqual(['FAIL: standards entry quic.transport: pinned RFC 9000 is obsoleted by RFC 9999 in the '
+                              'snapshot; pin the replacement'], output.splitlines())
+
+    def test_a_clean_refresh_passes_the_guard_and_tampering_or_strays_are_refused(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            self.write_tree(root, self.register(self.entries()))
+            self.fetched(root, self.records())
+            outside = Path(scratch).parent / 'review-outside.md'
+            code, output = self.tool(root, 'compare', '--fetched', str(root / 'fetched'), '--report', str(outside),
+                                     '--apply')
+            outside.unlink()
+            self.assertEqual(2, code)
+            self.assertIn('outside the repository', output)
+            report = root / 'docs' / 'review.md'
+            code, output = self.tool(root, 'compare', '--fetched', str(root / 'fetched'), '--report', str(report),
+                                     '--apply')
+            self.assertEqual(0, code, output)
+            self.assertIn('the next review is a light scan due on 2027-04-20, after IETF 128 (2027-03-26)', output)
+            self.assertIn('Register changes', report.read_text(encoding='utf-8'))
+            self.assertIn('## Triggers a full re-research\n\nNone.', report.read_text(encoding='utf-8'))
+            code, output = self.guard(root, '2026-12-16')
+            self.assertEqual(0, code, output)
+            self.assertIn('next review 2027-04-20', output)
+            (root / 'fetched' / 'rfc9000.json').write_text('{"tampered": true}', encoding='utf-8')
+            code, output = self.tool(root, 'compare', '--fetched', str(root / 'fetched'), '--report', str(report))
+            self.assertEqual(2, code)
+            self.assertIn('does not match the SHA-256', output)
+            code, output = self.tool(root, 'compare', '--fetched', str(root / 'nothing'), '--report', str(report))
+            self.assertEqual(2, code)
+
+    def test_record_adds_a_run_by_hand_and_moves_the_due_day(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            self.write_tree(root, self.register(self.entries()))
+            code, output = self.tool(root, 'record', '--scan', 'light', '--ref', 'docs/research.md#n83', '--day',
+                                     '2026-11-01', today='2026-11-01')
+            self.assertEqual(0, code, output)
+            self.assertIn('the next review is a light scan due on 2026-12-15', output)
+            code, output = self.tool(root, 'record', '--scan', 'full', '--ref', 'docs/research.md', '--day',
+                                     '2026-11-25', today='2026-11-25')
+            self.assertIn('the next review is a light scan due on 2027-04-20', output)
+            register = json.loads((root / 'cmake' / 'standards-register.json').read_text(encoding='utf-8'))
+            self.assertEqual(['2026-10-27', '2026-11-01', '2026-11-25'],
+                             [run['day'] for run in register['review']['runs']])
+            self.assertEqual(('2026-11-25', 'full', 'docs/research.md'),
+                             tuple(register['review']['runs'][-1][key] for key in ('day', 'scan', 'ref')))
+            self.assertEqual('2027-04-20', register['review']['next'])
+            self.assertEqual(0, self.guard(root, '2026-11-25')[0])
+            self.assertEqual(2, self.tool(root, 'record', '--scan', 'full', '--ref', '../elsewhere.md')[0])
+            self.assertEqual(2, self.tool(root, 'record', '--scan', 'full', '--ref', 'docs/missing.md')[0])
+            self.assertEqual(2, self.tool(root, 'record', '--scan', 'full', '--ref', 'docs/research.md',
+                                          '--day', '2026-11')[0])
+
+    def test_record_readers_refuse_unexpected_shapes(self):
+        for body in ('[]', '{"obsoleted_by": "RFC 1"}', '{"obsoleted_by": ["errata"]}', 'not json'):
+            with self.assertRaises(register_review.Unreadable):
+                register_review.read_rfc_editor(body)
+        for body in ('{}', '{"rev": 1, "state": "Active"}', '{"rev": "01", "state": "Dormant"}'):
+            with self.assertRaises(register_review.Unreadable):
+                register_review.read_datatracker(body)
+        self.assertEqual({'status': 'expired', 'revision': '03', 'posted': '2026-01-02', 'rfc': None},
+                         register_review.read_datatracker('{"rev": "03", "state": "Expired", '
+                                                          '"time": "2026-01-02T00:00:00Z"}'))
+        self.assertEqual('replaced', register_review.read_datatracker('{"rev": "03", "state": "Replaced"}')['status'])
+        queued = '{"rev": "11", "state": "Active", "iesg_state": "RFC Ed Queue", "rfceditor_state": "AUTH48"}'
+        self.assertEqual('rfc-editor', register_review.read_datatracker(queued)['status'])
+        self.assertEqual('active', register_review.read_datatracker('{"rev": "11", "state": "Active", '
+                                                                    '"iesg_state": "I-D Exists"}')['status'])
+        with self.assertRaises(register_review.Unreadable):
+            register_review.read_iana('<registry', ['QUIC Versions'])
+        with self.assertRaises(register_review.Unreadable):
+            register_review.read_iana(self.QUIC_XML, ['QUIC Frame Types'])
+
 
 class RegisterIds(unittest.TestCase):
     """scripts/gen-register-ids.py: each owning module's header of the codepoints the standards register assigns to it,

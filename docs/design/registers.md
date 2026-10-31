@@ -28,9 +28,9 @@ dates against the UTC day (`--today YYYY-MM-DD` replays another day; the tests u
 
 ## Format (`cerid-register/1`)
 
-A register holds `schema`, `domain`, `about`, a `snapshot` (the day the register was assembled and the method), a
-`review` (the cadence and the next scheduled review), `governed_rows` (rows that must name at least one entry) and
-`entries`.
+A register holds `schema`, `domain`, `about`, a `snapshot` (the day the register was assembled or last refreshed and
+the method), a `review` schedule ([below](#snapshot-and-review)), `governed_rows` (rows that must name at least one
+entry) and `entries`.
 
 Every entry holds:
 
@@ -63,12 +63,15 @@ check that proves the obligation, effective and sunset dates and a counsel-revie
 - **Obsoleted pinned RFCs fail**; `obsoleted_by` names the replacement and is present exactly when the status is
   `obsoleted`.
 - **Overdue reviews fail**, per entry and for the register, as does a source read after the snapshot or after today.
+- **The schedule is computed, never typed.** `review.next` must be the day the schedule's calendar and runs owe; a
+  calendar with no event after the latest run fails, so the light scans cannot silently stop.
 - **Owners and rows exist.** An owner is registered or named in `cmake/capability-owners.json`, which alone records
   planned owners and the rows that create them; a governed row that no entry names fails, so the entries each networked row implements are on record.
 - **Finished work is proven.** An entry still `planned` when every one of its rows is Done fails; an `implemented`
   entry needs existing evidence and only verified codepoints; a checklist item whose rows are all Done needs evidence.
 - Unknown keys, malformed dates and references to missing files or anchors fail.
 
+<a id="snapshot-and-review"></a>
 ## Snapshot and review
 
 The first snapshot (2026-10-31) was assembled from the networking research read on 2026-10-27 (sources N01 to N124)
@@ -76,13 +79,49 @@ and the network foundation design; entries the research marks as knowledge or se
 Codepoints from knowledge are marked the same way, and an entry cannot become `implemented` until they are checked
 against the IANA registries.
 
-Refreshing the snapshot from the RFC Editor, the IETF datatracker and the IANA registries is a download the user
-approves first. The review cadence is a light scan after each IETF meeting (March, July and November) and a full
-re-research every year or when a pinned item changes status; each run proposes ROADMAP amendments for the user and
-never edits rows itself. NET-STD owns the scheduled re-research tooling; until it lands, the track working the
-NETCRASH window runs the review. The calendar points at which the guard fails without a refresh are the register's
-`review.next` (2026-12-15, after IETF 127) and the first pinned draft's expiry, which the guard prints
-(`webtransport.h3`, 2027-01-02, counted conservatively from July 2026).
+The review cadence is a light scan after each IETF meeting (March, July and November) and a full re-research every
+year or when a pinned item changes status; each run proposes ROADMAP amendments for the user and never edits rows
+itself. The register's `review` holds it as data:
+
+| Field | Meaning |
+|---|---|
+| `cadence` | The cadence in words |
+| `lag_days` | Days after a calendar event by which its scan is owed (25: minutes and revised drafts are out) |
+| `full_every_days` | Days after the latest full run by which the next full re-research is owed (365) |
+| `calendar` | The events that owe a scan, in day order: `event`, `day` (its last day), `scan` (`light` or `full`), `verified` (false for a day taken from knowledge, which the next review confirms) |
+| `runs` | Every run, in day order: `day`, `scan`, `ref` (its report or research document) and `triggers` (the pinned entries whose status it found changed) |
+| `next` | The due day `review_due` computes, which the guard holds |
+
+The due day is the earliest of: `lag_days` after each calendar event later than the latest run (a run covers the
+events up to its day); `full_every_days` after the latest full run; and `lag_days` after a light run with triggers
+that no full run has followed. The legal domain (COMPLY.0) fills the same calendar with its quarterly reviews and the
+yearly platform events, and records its Official Gazette and EUR-Lex triggers as runs.
+
+[scripts/register-review.py](../../scripts/register-review.py) runs a review:
+
+1. `due` prints the review owed, why, and the calendar events still unverified.
+2. `plan --out <file>` writes the primary sources a refresh reads: the RFC Editor record
+   (`rfc-editor.org/rfc/rfcNNNN.json`) of every RFC, the IETF datatracker record
+   (`datatracker.ietf.org/doc/<draft>/doc.json`) of every draft and the IANA registry files
+   (`iana.org/assignments/<name>/<name>.xml`) of the codepoints, plus the items read by hand: W3C and NIST documents, object identifiers (NIST CSOR) and the IETF meeting calendar.
+   **Reading them is a download the user approves first; the plan is what is approved.**
+3. `fetch --plan <file> --into <dir>` reads the approved sources (HTTPS only, at most 16 MiB each) with a manifest of
+   their SHA-256 digests; a source that fails is recorded, never retried silently.
+4. `compare --fetched <dir> --report <file> [--scan light|full] [--apply]` verifies the digests and judges each record:
+   a draft's new revision, posted day and status (active, IESG processing, RFC Editor queue, expired, replaced,
+   published as an RFC), an RFC obsoleted, and each IANA codepoint confirmed, named differently, assigned another value
+   or absent. The report lists the register changes, the **proposed ROADMAP amendments for the user**, the pinned
+   entries whose status changed (each triggers a full re-research), the sources not read and the items read by hand.
+   `--apply` writes the register changes (statuses, revisions, a confirmed codepoint loses `verified: false`, the
+   snapshot day), records the run with its triggers and moves `next`; it never opens the ROADMAP for writing. A
+   codepoint IANA contradicts is a proposal, never applied: the generated headers change only by review.
+5. `record --scan <scan> --ref <document#anchor> [--day <day>]` records a run made by hand (a full re-research
+   document) and moves `next`.
+
+The record shapes the readers expect were written from knowledge of the three services; a record without them is
+reported as unreadable and changes nothing, and the first approved refresh confirms them. The calendar points at which
+the guard fails without a refresh are the register's `review.next` (2026-12-15, after IETF 127) and the first pinned
+draft's expiry, which the guard prints (`webtransport.h3`, 2027-01-02, counted conservatively from July 2026).
 
 ## Cerid identifiers
 

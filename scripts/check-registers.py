@@ -14,8 +14,11 @@ The guard fails, among the format errors, on:
     year counts from the first day of that period;
   - a pinned RFC that the snapshot records as obsoleted;
   - an entry or the register past its review date, or a source read after the snapshot or after today;
-  - an owning module neither registered nor in the capability registry, an unknown ROADMAP row, a governed row no entry names, an entry still planned when every one of
-    its rows is Done, and an implemented entry without existing evidence or with an unverified codepoint.
+  - a review schedule whose `next` is not the day review_due computes from its calendar and recorded runs (the
+    scheduled re-research of scripts/register-review.py), or whose calendar names no event after the latest run;
+  - an owning module neither registered nor in the capability registry, an unknown ROADMAP row, a governed row no
+    entry names, an entry still planned when every one of its rows is Done, and an implemented entry without existing
+    evidence or with an unverified codepoint.
 
   python scripts/check-registers.py [--root <repository root>] [--today YYYY-MM-DD]
 """
@@ -34,6 +37,8 @@ DRAFT_LIFETIME = datetime.timedelta(days=185)
 ID = re.compile(r'^[a-z0-9]+(?:[.-][a-z0-9]+)*$')
 DATE = re.compile(r'^\d{4}(?:-\d{2}(?:-\d{2})?)?$')
 REGISTER_KEYS = {'schema', 'domain', 'about', 'snapshot', 'review', 'governed_rows', 'entries'}
+REVIEW_KEYS = {'cadence', 'next', 'lag_days', 'full_every_days', 'calendar', 'runs'}
+SCANS = {'light', 'full'}
 CAPABILITY_OWNERS = 'cmake/capability-owners.json'
 ENTRY_KEYS = {'id', 'title', 'kind', 'state', 'owner', 'rows', 'source', 'review', 'evidence', 'deprecation', 'note'}
 STATES = {'implemented', 'planned', 'watch', 'deprecated'}
@@ -75,6 +80,27 @@ def draft_expiry(posted):
     """The earliest day a draft posted in this period expires (185 days after posting), or None."""
     day = parse_day(posted)
     return day + DRAFT_LIFETIME if day else None
+
+
+def review_due(review):
+    """(day, scan, reason) of the next review a well-formed schedule owes, whichever comes first: a scan `lag_days`
+    after each calendar event no recorded run has covered yet (a run covers the events up to its day), a full
+    re-research `full_every_days` after the latest full run, and a full re-research `lag_days` after a light run
+    that found a pinned entry's status changed (its `triggers`) since then."""
+    lag = datetime.timedelta(days=review['lag_days'])
+    runs = [(parse_day(run['day']), run) for run in review['runs']]
+    latest = max(day for day, _ in runs)
+    latest_full = max(day for day, run in runs if run['scan'] == 'full')
+    candidates = [(latest_full + datetime.timedelta(days=review['full_every_days']), 'full',
+                   f'the yearly full re-research after {latest_full}')]
+    for event in review['calendar']:
+        if parse_day(event['day']) > latest:
+            candidates.append((parse_day(event['day']) + lag, event['scan'], f'{event["event"]} ({event["day"]})'))
+    for day, run in runs:
+        if run['scan'] == 'light' and run['triggers'] and day > latest_full:
+            candidates.append((day + lag, 'full', f'the status changes the {day} scan found '
+                               f'({", ".join(run["triggers"])})'))
+    return min(candidates, key=lambda candidate: candidate[0])
 
 
 class Context:
@@ -252,6 +278,66 @@ def checklist_errors(register, context):
     return errors
 
 
+def review_errors(where, review, entries, context):
+    """The schedule: a calendar of the events after which a scan is owed, the recorded runs (the first full
+    research included) and `next`, which must be the day review_due computes and not be past."""
+    if not isinstance(review, dict) or set(review) != REVIEW_KEYS:
+        return [f'{where}: review has {", ".join(sorted(REVIEW_KEYS))}']
+    errors = date_errors(where, 'review.next', review['next'])
+    for key in ('lag_days', 'full_every_days'):
+        if not isinstance(review[key], int) or isinstance(review[key], bool) or review[key] <= 0:
+            errors.append(f'{where}: review.{key} is a positive number of days')
+    calendar, runs = review['calendar'], review['runs']
+    if not isinstance(calendar, list) or not calendar or not isinstance(runs, list) or not runs:
+        return errors + [f'{where}: review.calendar and review.runs are non-empty lists']
+    previous = None
+    for event in calendar:
+        if not isinstance(event, dict) or set(event) != {'event', 'day', 'scan', 'verified'} or \
+                not isinstance(event.get('event'), str) or event.get('scan') not in SCANS or \
+                not isinstance(event.get('verified'), bool):
+            errors.append(f'{where}: a calendar event has event, day, scan (light or full) and verified')
+            continue
+        errors += date_errors(where, f'calendar {event["event"]} day', event['day'])
+        if previous and parse_day(event['day']) and parse_day(event['day']) <= previous:
+            errors.append(f'{where}: calendar events are in strictly increasing day order ({event["event"]})')
+        previous = parse_day(event['day']) or previous
+    ids = {entry.get('id') for entry in entries if isinstance(entry, dict)}
+    previous = None
+    for run in runs:
+        if not isinstance(run, dict) or set(run) != {'day', 'scan', 'ref', 'triggers'} or \
+                run.get('scan') not in SCANS or not isinstance(run.get('ref'), str) or \
+                not isinstance(run.get('triggers'), list):
+            errors.append(f'{where}: a run has day, scan (light or full), ref (its report) and triggers')
+            continue
+        errors += date_errors(where, 'run day', run['day'])
+        day = parse_day(run['day'])
+        if day and day > context.today:
+            errors.append(f'{where}: the run of {run["day"]} is after today')
+        if previous and day and day < previous:
+            errors.append(f'{where}: runs are recorded in day order ({run["day"]})')
+        previous = day or previous
+        errors += reference_errors(where, f'run {run["day"]} ref', run['ref'], context.root)
+        unknown = [trigger for trigger in run['triggers'] if trigger not in ids]
+        if unknown:
+            errors.append(f'{where}: the run of {run["day"]} names unknown triggering entries {unknown}')
+    if errors:
+        return errors
+    if not any(run['scan'] == 'full' for run in runs):
+        return [f'{where}: review.runs records the full research the register was assembled from']
+    latest = max(parse_day(run['day']) for run in runs)
+    if not any(parse_day(event['day']) > latest for event in calendar):
+        errors.append(f'{where}: the review calendar names no event after the latest run ({latest}); add the next '
+                      'meetings and events from their published schedules')
+    due, scan, reason = review_due(review)
+    if parse_day(review['next']) != due:
+        errors.append(f'{where}: review.next {review["next"]} is not the due day {due} ({scan} scan after {reason}); '
+                      'scripts/register-review.py due prints it')
+    elif due < context.today:
+        errors.append(f'{where}: the scheduled {scan} review was due on {review["next"]} ({reason}); '
+                      'run scripts/register-review.py')
+    return errors
+
+
 def register_errors(domain, register, context):
     where = f'{domain} register'
     if not isinstance(register, dict) or register.get('schema') != SCHEMA or register.get('domain') != domain:
@@ -267,14 +353,8 @@ def register_errors(domain, register, context):
         errors += date_errors(where, 'snapshot.date', snapshot['date'])
         if parse_day(snapshot['date']) and parse_day(snapshot['date']) > context.today:
             errors.append(f'{where}: snapshot.date {snapshot["date"]} is after today')
-    review = register.get('review')
-    if not isinstance(review, dict) or set(review) != {'cadence', 'next'}:
-        errors.append(f'{where}: review has cadence and next')
-    else:
-        errors += date_errors(where, 'review.next', review['next'])
-        if parse_day(review['next']) and parse_day(review['next']) < context.today:
-            errors.append(f'{where}: the scheduled review was due on {review["next"]}')
     entries = register.get('entries')
+    errors += review_errors(where, register.get('review'), entries if isinstance(entries, list) else [], context)
     if not isinstance(entries, list) or not entries:
         return errors + [f'{where}: entries is a non-empty list']
     seen = set()

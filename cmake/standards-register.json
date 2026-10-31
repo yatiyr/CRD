@@ -7,8 +7,26 @@
     "method": "Assembled on 2026-10-31 from the networking research read on 2026-10-27 (its source list N01-N124) and the network foundation design (2026-10-31); entries the research marks (K) or secondary carry verified false. A refresh from the RFC Editor and the IETF datatracker is a download the user approves first."
   },
   "review": {
-    "cadence": "A light scan after each IETF meeting (March, July and November) and a full re-research every year or when a pinned item changes status; each run proposes amendments for the user and never edits rows itself.",
-    "next": "2026-12-15"
+    "cadence": "A light scan after each IETF meeting (March, July and November) and a full re-research every year or when a light scan finds a pinned entry's status changed; scripts/register-review.py plans the source reads (a download the user approves), compares them with the register and proposes ROADMAP amendments for the user, never editing rows itself.",
+    "next": "2026-12-15",
+    "lag_days": 25,
+    "full_every_days": 365,
+    "calendar": [
+      {
+        "event": "IETF 127",
+        "day": "2026-11-20",
+        "scan": "light",
+        "verified": false
+      }
+    ],
+    "runs": [
+      {
+        "day": "2026-10-27",
+        "scan": "full",
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#staying-current",
+        "triggers": []
+      }
+    ]
   },
   "governed_rows": [
     "NET.2",
