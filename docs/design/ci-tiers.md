@@ -160,6 +160,7 @@ no lane needs that yet.
 |---|---|---|
 | `linux-clang-tsan` | 4 | TSan's per-case cost |
 | `win-asan` | 3 of 4 CPUs | e496d16c: 8,106 cases, 20,031 s serial, 7 min under the cap; floor 6,677 s; a core for the pools ([session](../sessions/2026-10-29-simd-dispatch-win-asan-bound.md)) |
+| `linux-gcc-asan` | 3 of 4 CPUs | c2645814: stopped at the cap after 6,811 of 8,766 cases in 20,331 s serial (about 26,000 s for all); a core for the pools ([session](../sessions/2026-11-01-hw-resilience-2-ci-hosted-identity.md)) |
 
 The other lanes stay serial; the host record in each bundle shows when one comes close.
 
