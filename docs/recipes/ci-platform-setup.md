@@ -67,7 +67,12 @@ Run from a checkout of this repository on the user's computer, in Git Bash (or a
 signed in as the user. Every block is idempotent: running it again changes nothing that is already right. Every
 block ends with a check whose expected output is stated.
 
+In Git Bash, export `MSYS_NO_PATHCONV=1` first. Git Bash otherwise rewrites every argument that starts with `/` into
+a Windows path: B3's IAM condition `"/instances/{name}"` was once stored as `"C:/Program Files/Git/instances/{name}"`,
+which never matches, so job machines could not delete themselves.
+
 ```bash
+export MSYS_NO_PATHCONV=1   # Git Bash only: keep arguments that start with / as they are
 export PROJECT=<project ID from A1>   # for example cerid-ci
 export REGION=us-central1 ZONE=us-central1-a
 export LAUNCHER_SA=cerid-ci-launcher@$PROJECT.iam.gserviceaccount.com
@@ -156,7 +161,8 @@ coordinator, and only in a trusted build. No service-account key is ever created
 identity, every job VM proves its own.
 
 *Check:* `gcloud projects get-iam-policy $PROJECT --flatten=bindings --filter="bindings.members:$RUNNER_SA"
---format='value(bindings.role)'` prints only `roles/compute.instanceAdmin.v1` (with the condition), and the same for
+--format='value(bindings.role,bindings.condition.expression)'` prints only `roles/compute.instanceAdmin.v1` with the
+expression `resource.name.extract("/instances/{name}").startsWith("cerid-ci-")` exactly, and the same for
 `user:$ACCOUNT` includes `roles/iap.tunnelResourceAccessor`.
 
 ### B4. Network: no public door
