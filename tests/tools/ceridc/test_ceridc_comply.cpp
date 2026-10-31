@@ -5,6 +5,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/environment.hpp>
+#include <crd/core/platform.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
@@ -18,6 +19,14 @@ namespace fs = crd::platform::fs;
 namespace cont = crd::containers;
 
 constexpr const char* kRules = CRD_REPO_DIR "/assets/comply";
+
+// cmd.exe drops the first and the last quote of a command line that holds more than two, so on Windows the whole
+// command is quoted once more and the quoted program and rules directory survive; sh takes the command as it is.
+#if CRD_OS_WINDOWS
+constexpr const char* kShellQuote = "\"";
+#else
+constexpr const char* kShellQuote = "";
+#endif
 
 cont::String comply(const char* rules, const char* scope, const char* jurisdictions, const char* day)
 {
@@ -116,9 +125,9 @@ TEST_CASE("comply verb: the real ceridc binary answers the same bytes", "[ceridc
     REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe)); // wired by CMake
     char cmd[1024];
     (void)std::snprintf(cmd, sizeof(cmd),
-                        "\"%s\" comply --rules \"%s\" --scope product.purchases --jurisdiction TR,EU,PLATFORM "
-                        "--day 2027-12-11 > ceridc_comply_out.json",
-                        exe.c_str(), kRules);
+                        "%s\"%s\" comply --rules \"%s\" --scope product.purchases --jurisdiction TR,EU,PLATFORM "
+                        "--day 2027-12-11 > ceridc_comply_out.json%s",
+                        kShellQuote, exe.c_str(), kRules, kShellQuote);
     REQUIRE(std::system(cmd) == 0);
     cont::String out;
     REQUIRE(fs::read_file_text(fs::Path("ceridc_comply_out.json"), out));
@@ -129,7 +138,7 @@ TEST_CASE("comply verb: the real ceridc binary answers the same bytes", "[ceridc
     const cont::String expected = comply(kRules, "product.purchases", "TR,EU,PLATFORM", "2027-12-11");
     CHECK(cont::StringView(out) == cont::StringView(expected));
 
-    (void)std::snprintf(cmd, sizeof(cmd), R"("%s" comply --rules "%s" --scope x > ceridc_comply_out.json)", exe.c_str(),
-                        kRules);
+    (void)std::snprintf(cmd, sizeof(cmd), R"(%s"%s" comply --rules "%s" --scope x > ceridc_comply_out.json%s)",
+                        kShellQuote, exe.c_str(), kRules, kShellQuote);
     CHECK(std::system(cmd) != 0);
 }
