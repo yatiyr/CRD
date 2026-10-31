@@ -40,7 +40,8 @@ checks.
    workflows exist, `check-pins.py`, `check-ci-tiers.py`, `test-ci-platform.py`), the mapping of the build to a
    ci-tier.py event (`schedule`; a manual build with `CERID_CI_TIER` as `workflow_dispatch`; a pull request against
    its merge base; a push against the commit of the branch's newest passing build, so a cancelled or failed build's changes stay in the next change set), the plan, `ci-plan.json` as an
-   artifact and the planned steps uploaded to the coordinator; it records the head for the next push.
+   artifact and the planned steps uploaded to the coordinator; the required step records a passing build's commit
+   for the next push.
 3. Every planned step runs `pipeline.py lane`, `pipeline.py run repository` or a device command on its cell's queue:
    `cerid-cloud` for launched machines, `cerid-owned` for owned agents.
 4. The coordinator's dispatcher turns each ready cloud step into a machine: routes it by its `device` tag to its
