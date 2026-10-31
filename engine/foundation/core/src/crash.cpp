@@ -1,6 +1,9 @@
 #include <crd/core/crash.hpp>
 
 #include <atomic>
+#include <cstring>
+#include <mutex>
+#include <thread>
 
 #if CRD_ENABLE_ASSERTS && (defined(_WIN32) || defined(__linux__))
 namespace
@@ -15,6 +18,104 @@ namespace crd::crash
 void test_inject_write_failure(WriteResult step) noexcept
 {
     s_inject_step.store(step, std::memory_order_relaxed);
+}
+} // namespace crd::crash
+#endif
+
+// ---- The machine stream (both backends) ------------------------------------
+#if defined(_WIN32) || defined(__linux__)
+namespace
+{
+// A Windows dump stores the bytes as they are; a Linux record writes its line as one write, so it is formatted here:
+// "machine ", two hex digits per byte, "\n".
+#if defined(_WIN32)
+constexpr std::size_t kMachineSlotBytes = crd::crash::kMaxMachineStreamBytes;
+#else
+constexpr std::size_t kMachineSlotBytes = 8U + 2U * crd::crash::kMaxMachineStreamBytes + 1U;
+#endif
+
+// Two slots, so a replacement never writes the bytes a dump is reading: set_machine_stream fills the slot no writer
+// holds and publishes it; a dump or record writer pins the published slot for its write (pin_machine). The default
+// sequentially consistent orders make the pin's increment and re-check, and the setter's wait and publication, one
+// order: a writer that pins a slot the setter is filling sees the old publication and lets go.
+struct MachineSlot
+{
+    std::atomic<unsigned> writers{0};
+    std::uint32_t         size{0};
+    char                  bytes[kMachineSlotBytes];
+};
+MachineSlot      s_machine[2];
+std::atomic<int> s_machine_published{-1}; // the slot dumps carry; -1 for none
+std::mutex       s_machine_setter;        // serializes set_machine_stream (never taken on a fatal path)
+
+// The published slot, held until unpin_machine, or -1. Bounded and lock-free: async-signal-safe, so the Linux record
+// writer calls it inside the fault handler; a setter that keeps republishing costs a dump its machine, never its write.
+int pin_machine() noexcept
+{
+    for (int attempt = 0; attempt < 64; ++attempt)
+    {
+        const int slot = s_machine_published.load();
+        if (slot < 0)
+        {
+            return -1;
+        }
+        s_machine[slot].writers.fetch_add(1U);
+        if (s_machine_published.load() == slot)
+        {
+            return slot;
+        }
+        s_machine[slot].writers.fetch_sub(1U);
+    }
+    return -1;
+}
+
+void unpin_machine(int slot) noexcept
+{
+    if (slot >= 0)
+    {
+        s_machine[slot].writers.fetch_sub(1U);
+    }
+}
+} // namespace
+
+namespace crd::crash
+{
+bool set_machine_stream(const void* bytes, std::uint32_t size) noexcept
+{
+    if (size > kMaxMachineStreamBytes || (bytes == nullptr && size != 0U))
+    {
+        return false;
+    }
+    const std::lock_guard<std::mutex> guard(s_machine_setter);
+    if (size == 0U)
+    {
+        s_machine_published.store(-1);
+        return true;
+    }
+    const int next = s_machine_published.load() == 0 ? 1 : 0;
+    while (s_machine[next].writers.load() != 0U)
+    {
+        std::this_thread::yield(); // a dump still writes the copy before last
+    }
+    MachineSlot&         slot = s_machine[next];
+    const unsigned char* in   = static_cast<const unsigned char*>(bytes);
+#if defined(_WIN32)
+    std::memcpy(slot.bytes, in, size);
+    slot.size = size;
+#else
+    constexpr char hex_digits[] = "0123456789abcdef";
+    std::memcpy(slot.bytes, "machine ", 8U);
+    std::size_t n = 8U;
+    for (std::uint32_t i = 0U; i < size; ++i)
+    {
+        slot.bytes[n++] = hex_digits[in[i] >> 4U];
+        slot.bytes[n++] = hex_digits[in[i] & 0x0FU];
+    }
+    slot.bytes[n++] = '\n';
+    slot.size       = static_cast<std::uint32_t>(n);
+#endif
+    s_machine_published.store(next);
+    return true;
 }
 } // namespace crd::crash
 #endif
@@ -339,19 +440,33 @@ crd::crash::WriteResult write_dump(MINIDUMP_EXCEPTION_INFORMATION* mei, crd::cra
     }
 #endif
 
-    // Embed the caller's evidence as one user stream (its bytes are copied into the dump during the call).
-    MINIDUMP_USER_STREAM             us{};
-    MINIDUMP_USER_STREAM_INFORMATION usi{};
+    // Embed the caller's evidence and the machine as user streams (their bytes are copied into the dump during the
+    // call; the machine's slot stays pinned until then).
+    MINIDUMP_USER_STREAM              us[2]{};
+    MINIDUMP_USER_STREAM_INFORMATION  usi{};
     PMINIDUMP_USER_STREAM_INFORMATION usi_ptr = nullptr;
+    ULONG                             streams = 0U;
     if (note != nullptr && note->evidence != nullptr && note->evidence_bytes > 0U)
     {
-        us.Type             = crd::crash::kEvidenceStreamType;
-        us.BufferSize       = note->evidence_bytes;
+        us[streams].Type       = crd::crash::kEvidenceStreamType;
+        us[streams].BufferSize = note->evidence_bytes;
         // MINIDUMP_USER_STREAM::Buffer is PVOID (non-const); MiniDumpWriteDump only reads it (the bytes are copied
         // into the dump during the call), so dropping const at this Win32 boundary is safe.
-        us.Buffer           = const_cast<void*>(note->evidence); // NOLINT(cppcoreguidelines-pro-type-const-cast)
-        usi.UserStreamCount = 1U;
-        usi.UserStreamArray = &us;
+        us[streams].Buffer = const_cast<void*>(note->evidence); // NOLINT(cppcoreguidelines-pro-type-const-cast)
+        ++streams;
+    }
+    const int machine = pin_machine();
+    if (machine >= 0)
+    {
+        us[streams].Type       = crd::crash::kMachineStreamType;
+        us[streams].BufferSize = s_machine[machine].size;
+        us[streams].Buffer     = s_machine[machine].bytes;
+        ++streams;
+    }
+    if (streams != 0U)
+    {
+        usi.UserStreamCount = streams;
+        usi.UserStreamArray = us;
         usi_ptr             = &usi;
     }
 
@@ -375,6 +490,7 @@ crd::crash::WriteResult write_dump(MINIDUMP_EXCEPTION_INFORMATION* mei, crd::cra
                                                            MiniDumpWithUnloadedModules),
                                 mei, usi_ptr, snapped ? &snapshot_callback : nullptr);
     DWORD dump_err = GetLastError(); // an HRESULT for MiniDumpWriteDump; stored raw
+    unpin_machine(machine);
     if (snapped)
     {
         (void)PssFreeSnapshot(GetCurrentProcess(), snapshot);
@@ -940,7 +1056,6 @@ CrashReport test_fatal_path(std::uint32_t exception_code) noexcept
 #include <cerrno>
 #include <csignal>
 #include <cstdint>
-#include <cstring> // memcpy/memcmp for the build-id note walk (DIAG.5d(c2))
 #include <ctime>
 #include <fcntl.h>
 #include <link.h> // dl_iterate_phdr, ElfW, struct dl_phdr_info, PT_NOTE/NT_GNU_BUILD_ID (via <elf.h>) -- DIAG.5d(c2)
@@ -1323,7 +1438,15 @@ crd::crash::WriteResult write_crash_record(int sig, void* ctx, long tid, std::ui
         n = ap_str(rec, sizeof(rec), n, "\n");
     }
 
-    bool ok = write_all(fd, rec, n) && (fsync(fd) == 0);
+    // HW-RESILIENCE.2: the machine line, formatted when it was set, last (one write, too long for `rec`).
+    bool      ok      = write_all(fd, rec, n);
+    const int machine = pin_machine();
+    if (ok && machine >= 0)
+    {
+        ok = write_all(fd, s_machine[machine].bytes, s_machine[machine].size);
+    }
+    unpin_machine(machine);
+    ok = ok && (fsync(fd) == 0);
     if (!ok)
     {
         err = errno; // capture the write/fsync errno before close() can change it
@@ -1699,6 +1822,7 @@ WriteResult   capture_dump(const DumpNote&, const char**) noexcept { return Writ
 WriteResult   capture_dump(const char**) noexcept { return WriteResult::Unsupported; }
 std::size_t   read_dump_stream(const char*, std::uint32_t, void*, std::size_t) noexcept { return 0; }
 void          guard_current_thread_stack(std::uint32_t) noexcept {}
+bool          set_machine_stream(const void*, std::uint32_t) noexcept { return false; }
 
 #if CRD_ENABLE_ASSERTS
 CrashReport test_fatal_path(std::uint32_t exception_code) noexcept

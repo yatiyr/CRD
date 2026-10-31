@@ -30,12 +30,13 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib> // strtoul
+#include <cstring> // memcmp
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <string_view>
 #if defined(__linux__)
-#include <fenv.h> // feenableexcept, fegetexcept, fedisableexcept (the FPU trap probe)
+#include <cfenv> // feenableexcept, fegetexcept, fedisableexcept (the FPU trap probe)
 #endif
 
 namespace cont = crd::containers;
@@ -98,6 +99,19 @@ int read_marker(const fs::path& dir)
     return v;
 }
 #endif // defined(_WIN32) || (defined(__linux__) && CRD_ENABLE_ASSERTS)
+
+#if defined(_WIN32) || defined(__linux__)
+// The machine stream every specimen mode sets (crash_capture_specimen.cpp's main): byte i = (i * 37 + 11) mod 256.
+cont::Array<unsigned char> specimen_machine()
+{
+    cont::Array<unsigned char> bytes;
+    for (std::uint32_t i = 0U; i < crd::crash::kMaxMachineStreamBytes; ++i)
+    {
+        bytes.push_back(static_cast<unsigned char>((i * 37U + 11U) & 0xFFU));
+    }
+    return bytes;
+}
+#endif
 } // namespace
 
 // Windows crash capture; the acceptance codes are NTSTATUS values. The Linux acceptance block (its own signal codes)
@@ -175,6 +189,14 @@ TEST_CASE("crash capture: a wild write terminates with the fault code and writes
         const crd_test_minidump::DumpModule module = crd_test_minidump::find_dump_module(dump, want.c_str());
         CHECK(module.named);
         CHECK(module.rsds == crd_test_minidump::image_has_rsds(fs::path{CRD_DIAG_CRASH_CAPTURE_SPECIMEN}.c_str()));
+        // HW-RESILIENCE.2: the fatal dump carries the whole machine stream the specimen set.
+        const cont::Array<unsigned char> want_machine = specimen_machine();
+        cont::Array<unsigned char>       machine;
+        machine.resize(want_machine.size() + 1U);
+        const std::size_t machine_bytes =
+            crd_test_minidump::read_stream(dump, crd::crash::kMachineStreamType, machine.data(), machine.size());
+        REQUIRE(machine_bytes == want_machine.size());
+        CHECK(std::memcmp(machine.data(), want_machine.data(), machine_bytes) == 0);
     }
 
     std::error_code ec;
@@ -706,6 +728,22 @@ TEST_CASE("crash capture (linux): a wild write terminates with SIGSEGV and write
         {
             CHECK(rf.has_cr2);        // the final register line was reached: the record is not truncated (cr2 == si_addr)
         }
+        // HW-RESILIENCE.2: the record ends with the whole machine stream the specimen set, as one hex line.
+        cont::String want_line{"\nmachine "};
+        for (const unsigned char b : specimen_machine())
+        {
+            constexpr char hex_digits[] = "0123456789abcdef";
+            want_line.push_back(hex_digits[b >> 4U]);
+            want_line.push_back(hex_digits[b & 0x0FU]);
+        }
+        want_line.push_back('\n');
+        std::ifstream f{first_crash_record(dir), std::ios::binary};
+        cont::String  record;
+        for (char c = 0; f.get(c);)
+        {
+            record.push_back(c);
+        }
+        CHECK(std::string_view{record}.ends_with(std::string_view{want_line}));
     }
     std::error_code ec;
     fs::remove_all(dir, ec);

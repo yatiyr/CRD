@@ -5,6 +5,7 @@
 #include <crd/core/fault_seam.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/perf/diag_assets.hpp>
+#include <crd/perf/hardware_identity.hpp>
 #include <crd/time/clocks.hpp>
 
 #include <cstdio>
@@ -361,6 +362,7 @@ DiagHostStart DiagnosticHost::start(const DiagnosticHostProfile& profile, cont::
         if (install_ok(modes.crash_install))
         {
             m_crash = true;
+            (void)attach_hardware_identity_to_crashes(); // HW-RESILIENCE.2: every native dump names the machine
         }
         else
         {

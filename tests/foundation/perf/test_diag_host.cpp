@@ -50,6 +50,7 @@
 #include <crd/perf/diagnostics.hpp>
 #include <crd/perf/fault_injection.hpp>
 #include <crd/perf/flight_recorder.hpp>
+#include <crd/perf/hardware_identity.hpp>
 #include <crd/perf/symbol_index.hpp>
 #include <crd/platform/filesystem.hpp>
 
@@ -1809,6 +1810,15 @@ TEST_CASE("diagnostic host: the application's wild write leaves one attributable
         }
         // Attribution: the faulting instruction lies in the application's module.
         CHECK(in_module(fault_pc, *app));
+        // HW-RESILIENCE.2: the capture names the machine the host attached at its crash handler's install.
+        const cp::HardwareIdentityRead machine =
+            cp::read_crash_hardware_identity({capture_bytes.data(), capture_bytes.size()});
+        INFO("machine: " << machine.error);
+        REQUIRE(machine.ok);
+        cont::String differing;
+        const bool   same = cp::same_hardware_identity(machine.identity, cp::host_hardware_identity(), differing);
+        INFO("differing: " << differing.c_str());
+        CHECK(same);
     }
 
     (void)check_repaired_run("crash");

@@ -394,8 +394,8 @@
       "edits": [
         {
           "file": "engine/foundation/core/src/crash.cpp",
-          "old": "    bool ok = write_all(fd, rec, n) && (fsync(fd) == 0);\n",
-          "new": "    bool ok = write_all(fd, rec, n < 32U ? n : 32U) && (fsync(fd) == 0);\n"
+          "old": "    bool      ok      = write_all(fd, rec, n);\n",
+          "new": "    bool      ok      = write_all(fd, rec, n < 32U ? n : 32U);\n"
         }
       ],
       "build": [

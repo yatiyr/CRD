@@ -3183,6 +3183,13 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   reads it once, at `FlightRecorder::init` (never on the fatal delivery); flight bundles carry it, the importer
   decodes it, `bundle.inspect` reports it last (after the symbols) with `same_as_host` and the differing fields, and
   `diag.capabilities` reports the host's.
+- Native crashes: `crd::crash::set_machine_stream` (crd-core) takes up to 20 KiB that every later dump and crash record
+  carries: a Windows dump's user stream `CRDM` (fatal and live, beside a hang's `CRDD` evidence), a Linux record's
+  last line `machine <hex>` (formatted at the call, written as one extra write in the handler). Two slots and a writer
+  pin make a replacement safe against a dump in progress. `attach_hardware_identity_to_crashes` hands it the encoded
+  identity (at most `kHardwareIdentityMaxBytes`, 16,438 bytes, held to the cap at compile time) where the crash
+  handler is installed (`DiagnosticHost::start`, `Application`); `read_crash_hardware_identity` reads it back from
+  either capture on any platform (`find_minidump_stream` walks a dump's directory without DbgHelp).
 
 ## Existing programme ownership after DIAG
 

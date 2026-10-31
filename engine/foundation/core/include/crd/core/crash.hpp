@@ -50,6 +50,19 @@ enum class DumpKind : std::uint8_t
 // never collides with a system stream). Read it back with read_dump_stream(path, kEvidenceStreamType, ...).
 inline constexpr std::uint32_t kEvidenceStreamType = 0x43524444U; // 'CRDD'
 
+// The machine stream (HW-RESILIENCE.2): bytes a host hands over once, before any fault, that every later dump and
+// crash record carries, so a native crash names the machine it happened on. crd-perf hands over its encoded hardware
+// identity. A Windows dump (fatal and live) stores them as the user stream kMachineStreamType; a Linux crash record
+// ends with the line `machine <lowercase hex of the bytes>`.
+inline constexpr std::uint32_t kMachineStreamType     = 0x4352444DU; // 'CRDM'
+inline constexpr std::uint32_t kMaxMachineStreamBytes = 20480U;
+
+// Copies `size` bytes for every later dump and record; size 0 removes them. Returns false, changing nothing, when
+// size exceeds kMaxMachineStreamBytes or bytes is null with a nonzero size, and on platforms without a crash backend.
+// A replacement never disturbs a dump being written (it waits for any writer reading the previous copy). Reads and
+// formats here, never on a fatal path; not async-signal-safe, so never call it from a fault handler.
+bool set_machine_stream(const void* bytes, std::uint32_t size) noexcept;
+
 // The exception code of an abort() dump on Windows (STATUS_FATAL_APP_EXIT, the code Windows itself records for abort).
 inline constexpr std::uint32_t kAbortExceptionCode = 0x40000015U;
 
@@ -89,13 +102,15 @@ void set_crash_report_handler(CrashReportHandler handler, void* user) noexcept;
 //          tick + a counter and is opened CREATE_NEW, so concurrent or same-second crashes never collide
 //          or overwrite. The write result is checked: a failed MiniDumpWriteDump deletes the partial file
 //          and never reports success. ExceptionCode/Address are printed to stderr as the emergency
-//          fallback regardless of whether the dump could be written. abort() never reaches that filter, so a SIGABRT
-//          handler dumps the aborting thread through the same path, with code kAbortExceptionCode; abort() then exits
-//          as it would have (exit 3, or a fail-fast when _CALL_REPORTFAULT is kept).
+//          fallback regardless of whether the dump could be written. Every dump carries the machine stream when one
+//          is set (set_machine_stream). abort() never reaches that filter, so a SIGABRT handler dumps the aborting
+//          thread through the same path, with code kAbortExceptionCode; abort() then exits as it would have (exit 3,
+//          or a fail-fast when _CALL_REPORTFAULT is kept).
 //
 // Linux:   sigaction(SIGSEGV | SIGBUS | SIGABRT | SIGFPE | SIGILL | SIGTRAP) on the alternate signal stack; writes one
-//          crash record, then restores the previous disposition; a kernel-raised fault re-executes under it, and a
-//          sent signal or a trap (SIGTRAP) is re-raised, so a default disposition lets the OS write its core.
+//          crash record (ending with the machine line when one is set), then restores the previous disposition; a
+//          kernel-raised fault re-executes under it, and a sent signal or a trap (SIGTRAP) is re-raised, so a default
+//          disposition lets the OS write its core.
 //
 // Safe to call multiple times; a re-install preserves the originally saved previous handler so
 // uninstall() restores it rather than restoring our own filter.

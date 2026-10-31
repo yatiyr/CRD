@@ -4,6 +4,7 @@
 #include <crd/app/events/window_events.hpp>
 #include <crd/perf/diagnostic_host.hpp>
 #include <crd/perf/diagnostics.hpp>
+#include <crd/perf/hardware_identity.hpp>
 
 #include <cstdio>
 
@@ -30,6 +31,10 @@ Application::Application(const ApplicationDesc& desc)
         {
             std::fprintf(stderr, "[crd] crash handler install failed (result %u); continuing without dumps\n",
                          static_cast<unsigned>(ir));
+        }
+        else
+        {
+            (void)crd::perf::attach_hardware_identity_to_crashes(); // HW-RESILIENCE.2: every dump names the machine
         }
     }
 

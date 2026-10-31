@@ -4,6 +4,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/cpu_features.hpp>
+#include <crd/core/crash.hpp>
 #include <crd/core/platform.hpp>
 #include <crd/perf/hardware_identity.hpp>
 
@@ -330,6 +331,151 @@ TEST_CASE("hardware identity: the comparison names every field that differs", "[
     cont::String differing;
     CHECK_FALSE(cp::same_hardware_identity(a, b, differing));
     CHECK(view(differing) == "microcode,bios_version,modules,gpus");
+}
+
+TEST_CASE("hardware identity: the largest identity is exactly kHardwareIdentityMaxBytes", "[perf][diag][hw-resilience]")
+{
+    cp::HardwareIdentity h;
+    const auto fill = [](cont::String& s)
+    {
+        s.clear();
+        for (u32 i = 0U; i < cp::kHardwareFieldBytes; ++i)
+        {
+            s.push_back('m');
+        }
+    };
+    for (cont::String* field : {&h.cpu_vendor, &h.cpu_model, &h.bios_vendor, &h.bios_version, &h.bios_date,
+                                &h.board_vendor, &h.board_name, &h.system_vendor, &h.system_name})
+    {
+        fill(*field);
+    }
+    for (u32 i = 0U; i < cp::kMaxMemoryModules; ++i)
+    {
+        cp::MemoryModule m;
+        fill(m.locator);
+        fill(m.manufacturer);
+        fill(m.part_number);
+        h.modules.push_back(static_cast<cp::MemoryModule&&>(m));
+    }
+    for (u32 i = 0U; i < cp::kMaxGpus; ++i)
+    {
+        cp::GpuIdentity g;
+        fill(g.name);
+        fill(g.driver);
+        h.gpus.push_back(static_cast<cp::GpuIdentity&&>(g));
+    }
+    CHECK(cp::encode_hardware_identity(h).size() == cp::kHardwareIdentityMaxBytes);
+}
+
+namespace
+{
+void put32(cont::Array<u8>& out, u32 v)
+{
+    for (u32 i = 0U; i < 4U; ++i)
+    {
+        out.push_back(static_cast<u8>((v >> (8U * i)) & 0xFFU));
+    }
+}
+
+// A minimal minidump: the header, a directory of a thread list (type 3) and `type`, then `stream`; `declared` is the
+// machine stream's declared size.
+cont::Array<u8> minidump_with(u32 type, const cont::Array<u8>& stream, u32 declared)
+{
+    cont::Array<u8> out;
+    put32(out, 0x504D444DU); // 'MDMP'
+    put32(out, 0xA793U);
+    put32(out, 2U);  // streams
+    put32(out, 32U); // the directory follows the header
+    for (u32 i = 0U; i < 4U; ++i)
+    {
+        put32(out, 0U); // checksum, time stamp, flags
+    }
+    put32(out, 3U); // a thread list of 4 bytes at 56
+    put32(out, 4U);
+    put32(out, 56U);
+    put32(out, type);
+    put32(out, declared);
+    put32(out, 60U);
+    put32(out, 0U); // no threads
+    for (const u8 b : stream)
+    {
+        out.push_back(b);
+    }
+    return out;
+}
+
+cont::String record_with(cont::StringView machine)
+{
+    cont::String out;
+    out.append("crd crash record\npid 7 tid 7\nsignal 11 code 1 addr 0x0\nexe /opt/app\nregs x86_64\nmodules 0\n");
+    out.append(machine);
+    return out;
+}
+
+cp::HardwareIdentityRead read_capture(const cont::String& capture)
+{
+    return cp::read_crash_hardware_identity({reinterpret_cast<const u8*>(capture.data()), capture.size()});
+}
+} // namespace
+
+TEST_CASE("hardware identity: a native crash's identity reads from a dump's stream or a record's line, and a damaged "
+          "one is refused",
+          "[perf][diag][hw-resilience]")
+{
+    const cp::HardwareIdentity h = sample_identity();
+    const cont::Array<u8> payload = cp::encode_hardware_identity(h);
+    cont::String differing;
+
+    const cont::Array<u8> dump =
+        minidump_with(crd::crash::kMachineStreamType, payload, static_cast<u32>(payload.size()));
+    const cp::HardwareIdentityRead from_dump = cp::read_crash_hardware_identity({dump.data(), dump.size()});
+    REQUIRE(from_dump.ok);
+    CHECK(cp::same_hardware_identity(from_dump.identity, h, differing));
+    const cont::Array<u8> other =
+        minidump_with(crd::crash::kEvidenceStreamType, payload, static_cast<u32>(payload.size()));
+    CHECK_FALSE(cp::read_crash_hardware_identity({other.data(), other.size()}).ok);
+    const cont::Array<u8> past =
+        minidump_with(crd::crash::kMachineStreamType, payload, static_cast<u32>(payload.size() + 1U));
+    CHECK_FALSE(cp::read_crash_hardware_identity({past.data(), past.size()}).ok);
+    cont::Array<u8> damaged = dump;
+    damaged[60U] = 0U; // the identity's magic
+    CHECK_FALSE(cp::read_crash_hardware_identity({damaged.data(), damaged.size()}).ok);
+
+    cont::String hex;
+    for (const u8 b : payload)
+    {
+        constexpr char hex_digits[] = "0123456789abcdef";
+        hex.push_back(hex_digits[b >> 4U]);
+        hex.push_back(hex_digits[b & 0x0FU]);
+    }
+    cont::String line{"machine "};
+    line.append(view(hex));
+    line.push_back('\n');
+    const cp::HardwareIdentityRead from_record = read_capture(record_with(view(line)));
+    REQUIRE(from_record.ok);
+    CHECK(cp::same_hardware_identity(from_record.identity, h, differing));
+    CHECK(differing.empty());
+
+    CHECK_FALSE(read_capture(record_with("")).ok); // no machine line
+    cont::String cut = line;
+    cut.pop_back();
+    CHECK_FALSE(read_capture(record_with(view(cut))).ok); // cut short before its newline
+    cont::String odd = cut;
+    odd.pop_back();
+    odd.push_back('\n');
+    CHECK_FALSE(read_capture(record_with(view(odd))).ok); // an odd digit count
+    cont::String upper = line;
+    const usize letter = view(upper).find_first_of("abcdef", 8U); // a decoder that reads 'B' as 'b' would pass
+    REQUIRE(letter != cont::StringView::npos);
+    upper.data()[letter] = static_cast<char>(upper.data()[letter] - 'a' + 'A');
+    CHECK_FALSE(read_capture(record_with(view(upper))).ok); // not a lowercase hex digit
+    cont::String short_payload{"machine "};
+    short_payload.append(cont::StringView{hex.data(), hex.size() - 2U});
+    short_payload.push_back('\n');
+    CHECK_FALSE(read_capture(record_with(view(short_payload))).ok); // whole digits, a payload one byte short
+    cont::String not_record{"crash record\n"};
+    not_record.append(view(line));
+    CHECK_FALSE(read_capture(not_record).ok);
 }
 
 TEST_CASE("hardware identity: this machine reads its CPU, memory and, where the OS allows, firmware and modules",

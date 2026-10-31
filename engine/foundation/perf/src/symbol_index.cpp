@@ -278,40 +278,62 @@ cont::String blob_slice(cont::ConstSpan<crd::u8> payload, crd::u64 blob_off, crd
 
 // ---- minidump parser ----------------------------------------------------
 
-cont::Array<ModuleIdentity> parse_minidump_modules(cont::ConstSpan<crd::u8> dump,
-                                                   crd::memory::IAllocator*  alloc) noexcept
+namespace
 {
-    cont::Array<ModuleIdentity> out(alloc);
+// The directory entry of the first stream of `type`, or false: not a minidump, no such stream, or a directory cut
+// short before it. Untrusted input: the directory is read only inside `dump`.
+bool find_md_stream(cont::ConstSpan<crd::u8> dump, crd::u32 type, MdDirectory& out) noexcept
+{
     if (dump.size() < sizeof(MdHeader))
     {
-        return out;
+        return false;
     }
-
     MdHeader hdr{};
     std::memcpy(&hdr, dump.data(), sizeof(hdr));
     if (hdr.signature != kMinidumpSignature)
     {
-        return out;
+        return false;
     }
-
     for (crd::u32 i = 0; i < hdr.number_of_streams; ++i)
     {
-        const crd::u64 doff = static_cast<crd::u64>(hdr.stream_directory_rva) + static_cast<crd::u64>(i) * sizeof(MdDirectory);
+        const crd::u64 doff =
+            static_cast<crd::u64>(hdr.stream_directory_rva) + static_cast<crd::u64>(i) * sizeof(MdDirectory);
         if (doff + sizeof(MdDirectory) > dump.size())
         {
-            break;
+            return false;
         }
-        MdDirectory dir{};
-        std::memcpy(&dir, dump.data() + doff, sizeof(dir));
-        if (dir.stream_type != kModuleListStream)
+        std::memcpy(&out, dump.data() + doff, sizeof(out));
+        if (out.stream_type == type)
         {
-            continue;
+            return true;
         }
+    }
+    return false;
+}
+} // namespace
 
+cont::ConstSpan<crd::u8> find_minidump_stream(cont::ConstSpan<crd::u8> dump, crd::u32 stream_type) noexcept
+{
+    MdDirectory dir{};
+    if (!find_md_stream(dump, stream_type, dir) || dir.location.rva > dump.size() ||
+        dir.location.data_size > dump.size() - dir.location.rva)
+    {
+        return {};
+    }
+    return {dump.data() + dir.location.rva, dir.location.data_size};
+}
+
+cont::Array<ModuleIdentity> parse_minidump_modules(cont::ConstSpan<crd::u8> dump,
+                                                   crd::memory::IAllocator*  alloc) noexcept
+{
+    cont::Array<ModuleIdentity> out(alloc);
+    MdDirectory dir{};
+    if (find_md_stream(dump, kModuleListStream, dir))
+    {
         const crd::u64 lrva = dir.location.rva;
         if (lrva + sizeof(crd::u32) > dump.size())
         {
-            break;
+            return out;
         }
         crd::u32 count = 0;
         std::memcpy(&count, dump.data() + lrva, sizeof(count));
@@ -357,7 +379,6 @@ cont::Array<ModuleIdentity> parse_minidump_modules(cont::ConstSpan<crd::u8> dump
             }
             out.push_back(std::move(id));
         }
-        break; // one ModuleListStream
     }
     return out;
 }
@@ -366,37 +387,13 @@ cont::Array<ModuleIdentity> parse_minidump_unloaded_modules(cont::ConstSpan<crd:
                                                            crd::memory::IAllocator*  alloc) noexcept
 {
     cont::Array<ModuleIdentity> out(alloc);
-    if (dump.size() < sizeof(MdHeader))
+    MdDirectory dir{};
+    if (find_md_stream(dump, kUnloadedModuleListStream, dir))
     {
-        return out;
-    }
-
-    MdHeader hdr{};
-    std::memcpy(&hdr, dump.data(), sizeof(hdr));
-    if (hdr.signature != kMinidumpSignature)
-    {
-        return out;
-    }
-
-    for (crd::u32 i = 0; i < hdr.number_of_streams; ++i)
-    {
-        const crd::u64 doff =
-            static_cast<crd::u64>(hdr.stream_directory_rva) + static_cast<crd::u64>(i) * sizeof(MdDirectory);
-        if (doff + sizeof(MdDirectory) > dump.size())
-        {
-            break;
-        }
-        MdDirectory dir{};
-        std::memcpy(&dir, dump.data() + doff, sizeof(dir));
-        if (dir.stream_type != kUnloadedModuleListStream)
-        {
-            continue;
-        }
-
         const crd::u64 lrva = dir.location.rva;
         if (lrva + sizeof(MdUnloadedModuleList) > dump.size())
         {
-            break;
+            return out;
         }
         MdUnloadedModuleList ul{};
         std::memcpy(&ul, dump.data() + lrva, sizeof(ul));
@@ -404,7 +401,7 @@ cont::Array<ModuleIdentity> parse_minidump_unloaded_modules(cont::ConstSpan<crd:
         // size_of_entry (forward-compat) by striding with it while reading only the fields we know.
         if (ul.size_of_header < sizeof(MdUnloadedModuleList) || ul.size_of_entry < sizeof(MdUnloadedModule))
         {
-            break;
+            return out;
         }
 
         crd::u64 entry_max = static_cast<crd::u64>(lrva) + dir.location.data_size; // bound by the declared stream...
@@ -434,7 +431,6 @@ cont::Array<ModuleIdentity> parse_minidump_unloaded_modules(cont::ConstSpan<crd:
             id.name      = read_md_string(dump, em.module_name_rva, alloc);
             out.push_back(std::move(id));
         }
-        break; // one UnloadedModuleListStream
     }
     return out;
 }

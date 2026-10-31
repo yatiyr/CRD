@@ -45,6 +45,9 @@
 //                              the other threads suspended through the write deadlocks here (harness -> Timeout).
 //   churn_av                -- (windows) the same contender, then a wild write: one dump, exit 0xC0000005, where such
 //                              a writer would leave the faulting thread to its 30 s HandlerTimeout.
+//
+// Every mode sets a machine stream of kMaxMachineStreamBytes bytes, byte i = (i * 37 + 11) mod 256 (HW-RESILIENCE.2;
+// the tests rebuild the same pattern), so each dump or record shows the whole stream reached the fatal path.
 #include "specimen_common.hpp"
 
 #include <crd/core/crash.hpp>
@@ -57,6 +60,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -66,9 +70,9 @@
 #include <intrin.h>  // __fastfail
 #include <windows.h> // RemoveDirectoryA, FAST_FAIL_FATAL_APP_EXIT, CreateFileA/WriteFile
 #elif defined(__linux__)
+#include <cfenv>      // feenableexcept, fegetexcept (fpe)
+#include <csignal>    // kill/SIGKILL (sigkill), sigaction/raise/SA_SIGINFO (chain)
 #include <fcntl.h>    // open, O_WRONLY/O_CREAT/O_TRUNC (chain.marker, report.marker)
-#include <fenv.h>     // feenableexcept, fegetexcept (fpe)
-#include <signal.h>   // kill/SIGKILL (sigkill), sigaction/raise/SA_SIGINFO (chain)
 #include <sys/mman.h> // memfd_create, mmap (bus)
 #include <unistd.h>   // rmdir (denied), getpid, write, close
 #endif
@@ -407,6 +411,17 @@ int main(int argc, char** argv)
         return 60;
     }
     crd::crash::set_crash_report_handler(&recording_hook, nullptr);
+    static unsigned char machine[crd::crash::kMaxMachineStreamBytes];
+    for (std::uint32_t i = 0U; i < crd::crash::kMaxMachineStreamBytes; ++i)
+    {
+        machine[i] = static_cast<unsigned char>((i * 37U + 11U) & 0xFFU);
+    }
+    if (!crd::crash::set_machine_stream(machine, crd::crash::kMaxMachineStreamBytes))
+    {
+        std::printf("set_machine_stream failed\n");
+        std::fflush(stdout);
+        return 60;
+    }
 
     // Each mode is a distinct entry point the tests select by name. On a given platform several reduce to the same
     // plain fault (av, chain and sigkill on Windows; unload_av too on Linux) by design, not by copy-paste.

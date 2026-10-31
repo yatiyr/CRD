@@ -3,8 +3,10 @@
 #include "payload_codec.hpp"
 
 #include <crd/core/cpu_features.hpp>
+#include <crd/core/crash.hpp>
 #include <crd/core/platform.hpp>
 #include <crd/perf/hardware_identity.hpp>
+#include <crd/perf/symbol_index.hpp>
 
 #include <cstdio>
 #include <initializer_list>
@@ -603,6 +605,72 @@ HardwareIdentityRead decode_hardware_identity(cont::ConstSpan<crd::u8> payload, 
     }
     r.ok = true;
     return r;
+}
+
+static_assert(kHardwareIdentityMaxBytes <= crd::crash::kMaxMachineStreamBytes,
+              "a native crash must carry the largest hardware identity whole");
+
+bool attach_hardware_identity_to_crashes()
+{
+    const cont::Array<crd::u8> bytes = encode_hardware_identity(host_hardware_identity());
+    return crd::crash::set_machine_stream(bytes.data(), static_cast<crd::u32>(bytes.size()));
+}
+
+HardwareIdentityRead read_crash_hardware_identity(cont::ConstSpan<crd::u8> capture, crd::memory::IAllocator* alloc)
+{
+    HardwareIdentityRead r;
+    const cont::ConstSpan<crd::u8> stream = find_minidump_stream(capture, crd::crash::kMachineStreamType);
+    if (!stream.empty())
+    {
+        return decode_hardware_identity(stream, alloc);
+    }
+    // A Linux crash record (crd::crash's text): the line `machine <two lowercase hex digits per byte>`.
+    const cont::StringView text{reinterpret_cast<const char*>(capture.data()), capture.size()};
+    if (!text.starts_with("crd crash record\n"))
+    {
+        return refuse(r, "the capture carries no hardware identity (no machine stream in a minidump, not a record)");
+    }
+    const crd::usize line = text.find("\nmachine ");
+    if (line == cont::StringView::npos)
+    {
+        return refuse(r, "the crash record carries no machine line");
+    }
+    const crd::usize begin = line + 9U;
+    const crd::usize end = text.find('\n', begin);
+    if (end == cont::StringView::npos)
+    {
+        return refuse(r, "the crash record's machine line is cut short");
+    }
+    const crd::usize digits = end - begin;
+    if (digits % 2U != 0U || digits / 2U > crd::crash::kMaxMachineStreamBytes)
+    {
+        return refuse(r, "the crash record's machine line has an odd or oversized digit count");
+    }
+    const auto nibble = [](char c) -> int
+    {
+        if (c >= '0' && c <= '9')
+        {
+            return c - '0';
+        }
+        if (c >= 'a' && c <= 'f')
+        {
+            return c - 'a' + 10;
+        }
+        return -1;
+    };
+    cont::Array<crd::u8> bytes(alloc);
+    bytes.reserve(digits / 2U);
+    for (crd::usize i = begin; i < end; i += 2U)
+    {
+        const int high = nibble(text[i]);
+        const int low = nibble(text[i + 1U]);
+        if (high < 0 || low < 0)
+        {
+            return refuse(r, "the crash record's machine line holds a character that is not a lowercase hex digit");
+        }
+        bytes.push_back(static_cast<crd::u8>((high << 4) | low));
+    }
+    return decode_hardware_identity({bytes.data(), bytes.size()}, alloc);
 }
 
 } // namespace crd::perf

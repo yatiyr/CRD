@@ -254,6 +254,52 @@ TEST_CASE("crash contract: a hang-kind live dump embeds and round-trips its evid
     fs::remove_all(dir, ec);
 }
 
+TEST_CASE("crash contract: every dump carries the machine stream set last, and none once it is removed",
+          "[core][diag][crash][hw-resilience]")
+{
+    crd::crash::uninstall();
+    const fs::path dir = fresh_temp_dir();
+    REQUIRE(InstallResult::Ok == crd::crash::install(dir.string().c_str()));
+
+    const cont::StaticArray<unsigned char, 5> first{0x43, 0x48, 0x57, 0x31, 0x01};
+    const cont::StaticArray<unsigned char, 3> second{0xFE, 0x00, 0x7A};
+    cont::StaticArray<unsigned char, 16>      read_back{};
+    // A refused stream changes nothing: the next dump still carries the one set before it.
+    REQUIRE(crd::crash::set_machine_stream(first.data(), static_cast<std::uint32_t>(first.size())));
+    CHECK_FALSE(crd::crash::set_machine_stream(nullptr, 1U));
+    CHECK_FALSE(crd::crash::set_machine_stream(read_back.data(), crd::crash::kMaxMachineStreamBytes + 1U));
+    const char* path = nullptr;
+    REQUIRE(WriteResult::Ok == crd::crash::capture_dump(&path));
+    std::size_t n =
+        crd::crash::read_dump_stream(path, crd::crash::kMachineStreamType, read_back.data(), read_back.size());
+    REQUIRE(n == first.size());
+    CHECK(std::memcmp(read_back.data(), first.data(), n) == 0);
+    CHECK(crd::crash::read_dump_stream(path, crd::crash::kEvidenceStreamType, read_back.data(), read_back.size()) ==
+          0U); // a plain capture carries no evidence stream
+
+    // A replacement reaches the next dump, an evidence note's included, beside its evidence.
+    REQUIRE(crd::crash::set_machine_stream(second.data(), static_cast<std::uint32_t>(second.size())));
+    crd::crash::DumpNote note{};
+    note.kind           = crd::crash::DumpKind::Hang;
+    note.evidence       = first.data();
+    note.evidence_bytes = static_cast<std::uint32_t>(first.size());
+    REQUIRE(WriteResult::Ok == crd::crash::capture_dump(note, &path));
+    n = crd::crash::read_dump_stream(path, crd::crash::kMachineStreamType, read_back.data(), read_back.size());
+    REQUIRE(n == second.size());
+    CHECK(std::memcmp(read_back.data(), second.data(), n) == 0);
+    CHECK(crd::crash::read_dump_stream(path, crd::crash::kEvidenceStreamType, read_back.data(), read_back.size()) ==
+          first.size());
+
+    // Removed: the next dump has no machine stream.
+    REQUIRE(crd::crash::set_machine_stream(nullptr, 0U));
+    REQUIRE(WriteResult::Ok == crd::crash::capture_dump(&path));
+    CHECK(crd::crash::read_dump_stream(path, crd::crash::kMachineStreamType, read_back.data(), read_back.size()) == 0U);
+
+    crd::crash::uninstall();
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("crash contract: a manual live dump uses the live_ prefix", "[core][diag][crash]")
 {
     crd::crash::uninstall();

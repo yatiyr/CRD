@@ -134,6 +134,12 @@ read_symbol_index(crd::containers::ConstSpan<crd::u8> payload,
 // .cpp pins it against the real <DbgHelp.h> layout on Windows.
 inline constexpr crd::u32 kMinidumpModuleRecordBytes = 108U;
 
+// The bytes of the first stream of `stream_type` (a system stream or a user stream such as crd::crash's
+// kMachineStreamType) in a Windows minidump held entirely in `dump`, on any platform. Empty for a non-minidump, a
+// missing stream, or one whose declared bytes run past `dump` (untrusted input: nothing is read outside it).
+[[nodiscard]] crd::containers::ConstSpan<crd::u8> find_minidump_stream(crd::containers::ConstSpan<crd::u8> dump,
+                                                                       crd::u32 stream_type) noexcept;
+
 // Parse the ModuleListStream of a Windows minidump held entirely in `dump`. Returns EVERY module's
 // identity (RSDS GUID/age where the module carries a CV record, else id_kind None). Untrusted input:
 // every RVA/length is bounds-checked; a truncated or corrupt dump yields the modules parsed so far.

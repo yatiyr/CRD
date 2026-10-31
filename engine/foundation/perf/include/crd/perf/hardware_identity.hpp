@@ -13,7 +13,8 @@
 //
 // Reading it touches the registry, sysfs and the firmware table, so it never runs on a fatal path:
 // host_hardware_identity() reads it once, FlightRecorder::init reads it before any capture can be delivered, and every
-// bundle copies that.
+// bundle copies that; attach_hardware_identity_to_crashes reads it when the crash handler is installed, and native
+// dumps and crash records carry that copy.
 //
 // On-disk payload (little-endian, versioned; the bundle section CRC covers it):
 //   u32 magic 'CHW1', u32 version, u32 flags (kHardware*Known, a closed set), u32 cpu signature, u32 microcode,
@@ -142,5 +143,25 @@ struct HardwareIdentityRead
 [[nodiscard]] HardwareIdentityRead
 decode_hardware_identity(crd::containers::ConstSpan<crd::u8> payload,
                          crd::memory::IAllocator* alloc = crd::memory::default_allocator());
+
+// The most bytes encode_hardware_identity writes: the fixed header, every text field at its bound, kMaxMemoryModules
+// modules and kMaxGpus GPUs. A native crash carries it whole (crd::crash::kMaxMachineStreamBytes holds it).
+inline constexpr crd::u32 kHardwareIdentityMaxBytes =
+    6U * 4U + 8U + 9U * (2U + kHardwareFieldBytes) + 2U +
+    kMaxMemoryModules * (3U * 4U + 2U + 3U * (2U + kHardwareFieldBytes)) + 2U +
+    kMaxGpus * (2U * 4U + 2U * (2U + kHardwareFieldBytes));
+
+// Hands host_hardware_identity(), encoded, to crd::crash, so every later Windows dump (its kMachineStreamType user
+// stream) and Linux crash record (its `machine` line) names the machine a native crash happened on. Whatever installs
+// the crash handler calls it right after the install (DiagnosticHost::start, Application), so the OS is read there,
+// never on the fatal path. False on a platform without a crash backend.
+bool attach_hardware_identity_to_crashes();
+
+// The hardware identity a native crash capture carries (a minidump's kMachineStreamType stream or a Linux crash
+// record's `machine` line), decoded as decode_hardware_identity does. Untrusted input, read on any platform; refused
+// (`error` says why) when the capture carries none or it does not decode.
+[[nodiscard]] HardwareIdentityRead
+read_crash_hardware_identity(crd::containers::ConstSpan<crd::u8> capture,
+                             crd::memory::IAllocator* alloc = crd::memory::default_allocator());
 
 } // namespace crd::perf
