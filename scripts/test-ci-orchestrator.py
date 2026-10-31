@@ -1408,6 +1408,18 @@ class AgentProgram(unittest.TestCase):
         with self.assertRaises(ValueError):
             resolve('https://ci', {'url': 'https://elsewhere/x.git', 'strategy': 'mirror'})
 
+    def test_the_mirror_token_reaches_the_mirror_and_no_other_git_host(self):
+        a = agent_module.Agent('http://10.128.0.2:8780', tempfile.gettempdir(), name='t', mode='one-shot')
+        checkout = agent_module.resolve_checkout(a.base, {'url': '/git/cerid.git', 'strategy': 'mirror'})
+        env = dict(os.environ, **{k: v for k, v in a.git_env(checkout, 'cjt_x').items() if k.startswith('GIT_')})
+
+        def header(url):
+            return subprocess.run(['git', 'config', '--get-urlmatch', 'http.extraHeader', url], env=env,
+                                  capture_output=True, text=True, check=False).stdout.strip()
+        self.assertEqual(header('http://10.128.0.2:8780/git/cerid.git'), 'Authorization: Bearer cjt_x')
+        self.assertEqual(header('https://github.com/KhronosGroup/Vulkan-Headers.git'), '',
+                         'a FetchContent clone from GitHub carried the job token and was refused with 401')
+
     def test_tokens_never_cross_the_internet_in_the_clear(self):
         self.assertEqual(agent_module.safe_url('https://ci.example/'), 'https://ci.example')
         for url in ('http://127.0.0.1:8780', 'http://10.128.0.2:8780', 'http://localhost:1'):

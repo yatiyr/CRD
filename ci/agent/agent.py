@@ -372,11 +372,14 @@ class Agent:
         return self.build_path / safe / assignment['job']['env'].get('CERID_CI_REPOSITORY', 'repository')
 
     def git_env(self, checkout, token):
+        """`checkout` is resolved (resolve_checkout): its mirror URL is absolute."""
         env = clean_environment({'env': {}}, {'GIT_TERMINAL_PROMPT': '0'})
         if checkout.get('strategy') == 'mirror':
             # The mirror authenticates with the job token, passed through the environment: never on a command
-            # line (process listings) and never in .git/config (the checkout outlives the token).
-            env.update({'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'http.extraHeader',
+            # line (process listings) and never in .git/config (the checkout outlives the token). The header is
+            # scoped to the mirror's URL: the job's own git requests to other hosts (a FetchContent clone from
+            # GitHub) must not carry it, and GitHub answers a foreign bearer token with 401.
+            env.update({'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'http.%s.extraHeader' % checkout['url'],
                         'GIT_CONFIG_VALUE_0': 'Authorization: Bearer %s' % token})
         return env
 
@@ -401,7 +404,7 @@ class Agent:
                                             checkout['commit'], checkout.get('branch', '')))
         if not (work / '.git').exists():
             git('init', '--quiet')
-        if git('remote', 'get-url', 'origin', check=False).returncode == 0:
+        if git('config', '--get', 'remote.origin.url', check=False).stdout:  # quiet when there is none yet
             git('remote', 'set-url', 'origin', checkout['url'])
         else:
             git('remote', 'add', 'origin', checkout['url'])
@@ -476,8 +479,8 @@ class Agent:
                      'CERID_AGENT_JOB_TOKEN': token, 'CERID_AGENT_SCRIPT': self.script,
                      'CERID_CI_CHECKOUT': str(work)}
             if assignment['checkout'].get('strategy') == 'mirror':
-                extra.update({k: v for k, v in self.git_env(assignment['checkout'], token).items()
-                              if k.startswith('GIT_CONFIG_')})
+                extra.update({k: v for k, v in self.git_env(resolve_checkout(self.base, assignment['checkout']),
+                                                            token).items() if k.startswith('GIT_CONFIG_')})
             env = clean_environment(job, extra)
             try:
                 client.call('POST', '/api/agent/jobs/%s/environment' % job['id'],
