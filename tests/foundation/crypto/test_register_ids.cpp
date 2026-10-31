@@ -63,12 +63,26 @@ TEST_CASE("Register ids: the class byte separates hybrids, traditional groups, s
     CHECK_FALSE(known_class(static_cast<AlgorithmId>(0x0001U)));
 }
 
-TEST_CASE("Register ids: IANA values taken from knowledge stay marked unverified", "[crypto][net-std]")
+TEST_CASE("Register ids: the IANA and NIST codepoints the first refresh confirmed", "[crypto][net-std]")
 {
-    namespace unverified = crd::crypto::iana::unverified;
-    CHECK(unverified::kGroupX25519mlkem768 == 0x11ECU);
-    CHECK(unverified::kGroupX25519 == 0x001DU);
-    CHECK(unverified::kSignatureSchemeEd25519 == 0x0807U);
-    CHECK(unverified::kAeadChacha20Poly1305 == 29U);
-    CHECK(unverified::kOidIdMlDsa87 == "2.16.840.1.101.3.4.3.19");
+    // Checked against the IANA registry files and the NIST object identifier register on 2026-10-31
+    // (docs/sessions/2026-10-31-standards-register-refresh.md).
+    namespace iana = crd::crypto::iana;
+    CHECK(iana::kGroupX25519mlkem768 == 0x11ECU);
+    CHECK(iana::kGroupSecp256r1mlkem768 == 0x11EBU);
+    CHECK(iana::kGroupSecp384r1mlkem1024 == 0x11EDU);
+    CHECK(iana::kGroupX25519 == 0x001DU);
+    CHECK(iana::kGroupSecp256r1 == 0x0017U);
+    CHECK(iana::kGroupSecp384r1 == 0x0018U);
+    CHECK(iana::kTlsExtensionEncryptedClientHello == 0xFE0DU);
+    CHECK(iana::kTlsExtensionCompressCertificate == 27U);
+    CHECK(iana::kOidIdMlDsa44 == "2.16.840.1.101.3.4.3.17");
+    CHECK(iana::kOidIdMlDsa65 == "2.16.840.1.101.3.4.3.18");
+    CHECK(iana::kOidIdMlDsa87 == "2.16.840.1.101.3.4.3.19");
+    CHECK(iana::kSignatureSchemeEd25519 == 0x0807U);
+    CHECK(iana::kSignatureSchemeEcdsaSecp256r1Sha256 == 0x0403U);
+    CHECK(iana::kSignatureSchemeEcdsaSecp384r1Sha384 == 0x0503U);
+    CHECK(iana::kAeadAes128Gcm == 1U);
+    CHECK(iana::kAeadAes256Gcm == 2U);
+    CHECK(iana::kAeadChacha20Poly1305 == 29U);
 }

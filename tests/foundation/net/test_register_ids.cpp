@@ -60,11 +60,15 @@ TEST_CASE("Register ids: GREASE values are exactly the RFC 8701 pattern 0x?A?A",
     static_assert(is_grease(0x0A0AU) && is_grease(0xFAFAU) && !is_grease(0x0A1AU), "usable in constant expressions");
 }
 
-TEST_CASE("Register ids: unverified IANA codepoints stay apart from verified ones", "[net][net-std]")
+TEST_CASE("Register ids: the IANA codepoints the first refresh confirmed", "[net][net-std]")
 {
-    // Taken from knowledge in the 2026-10-31 snapshot; they move to crd::net::iana once checked against IANA.
-    CHECK(crd::net::iana::unverified::kQuicVersion1 == 0x00000001U);
-    CHECK(crd::net::iana::unverified::kQuicVersion2 == 0x6B3343CFU);
-    CHECK(crd::net::iana::unverified::kQuicTpGreaseQuicBit == 0x2AB2U);
-    CHECK(crd::net::iana::unverified::kAlpnHttp3 == "h3");
+    // Checked against the IANA registry files on 2026-10-31 (docs/sessions/2026-10-31-standards-register-refresh.md);
+    // QUIC Versions carries no names, so its values are confirmed by the RFC each record cites.
+    namespace iana = crd::net::iana;
+    CHECK(iana::kQuicVersion1 == 0x00000001U);
+    CHECK(iana::kQuicVersion2 == 0x6B3343CFU);
+    CHECK(iana::kQuicTpMaxDatagramFrameSize == 0x20U);
+    CHECK(iana::kQuicTpGreaseQuicBit == 0x2AB2U);
+    CHECK(iana::kQuicTpVersionInformation == 0x11U);
+    CHECK(iana::kAlpnHttp3 == "h3");
 }

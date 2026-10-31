@@ -27,8 +27,8 @@ check-registers.review_due computes from them; the guard fails once that day pas
 
 --register cmake/legal-register.json selects the legal domain.
 
-docs/design/registers.md#snapshot-and-review is the contract. The record shapes below were written from knowledge
-of the three services; a record that does not have them is reported as unreadable and changes nothing.
+docs/design/registers.md#snapshot-and-review is the contract. The readers follow the records the first approved
+refresh read (2026-10-31); a record that does not have their shape is reported as unreadable and changes nothing.
 """
 import argparse
 import datetime
@@ -279,6 +279,10 @@ def local(tag):
     return tag.rsplit('}', 1)[-1]
 
 
+# An unassigned or reserved span of values (`3-255`, `0x00000002-0x0000ffff`), which names nothing.
+RANGE = re.compile(r'(?:0x[0-9a-fA-F]+|\d+)\s*-\s*(?:0x[0-9a-fA-F]+|\d+)')
+
+
 def number(text):
     """The integer a decimal or 0x-prefixed hexadecimal value spells, else None."""
     text = text.strip()
@@ -287,14 +291,29 @@ def number(text):
     return int(text, 10) if re.fullmatch(r'\d+', text) else None
 
 
-def value_of(text):
-    """An IANA record's value: its number, or the quoted string of an identification sequence (`0x68 0x33 ("h3")`)."""
-    quoted = re.search(r'"([^"]+)"', text)
-    return quoted.group(1) if quoted else number(text)
+def document_of(kind, ref):
+    """The register's spelling of a cited document (`RFC 9000`, a draft name without its revision), else None."""
+    if kind == 'rfc':
+        cited = rfc_number(ref)
+        return None if cited is None else f'RFC {cited}'
+    if kind == 'draft' and re.fullmatch(r'draft-[a-z0-9-]+', ref):
+        return re.sub(r'-\d{2}$', '', ref)
+    return None
+
+
+def sequence_of(text):
+    """The string an identification sequence spells (`0x68 0x33 ("h3")`, the ALPN registry's form), else None."""
+    match = re.fullmatch(r'(?:0x[0-9a-fA-F]{2}\s+)+\("([^"]+)"\)', text.strip())
+    return match.group(1) if match else None
 
 
 def read_iana(body, titles):
-    """{title: [(values, names)]} of the named registries of an IANA registry file."""
+    """{title: [(values, names, documents)]} of the named registries of an IANA registry file.
+
+    A record's `value` is its number, or its name where the registry keys records by name (ALPN's `HTTP/3`); its
+    `description` is its name, or the value an identification sequence spells; `documents` are the RFCs it cites
+    (`<xref type="rfc" data="rfc9000"/>`), which confirm a value in a registry whose records carry no name (QUIC
+    Versions)."""
     try:
         tree = ElementTree.fromstring(body)
     except ElementTree.ParseError as error:
@@ -310,16 +329,25 @@ def read_iana(body, titles):
         for record in registry:
             if local(record.tag) != 'record':
                 continue
-            values, names = set(), set()
+            values, names, documents = set(), set(), set()
             for field in record:
-                text = ''.join(field.itertext())
-                if local(field.tag) in {'value', 'id', 'protocol'}:
-                    value = value_of(text)
+                tag, text = local(field.tag), ''.join(field.itertext()).strip()
+                if tag == 'value':
+                    value = number(text)
                     if value is not None:
                         values.add(value)
-                if local(field.tag) in {'description', 'name', 'protocol'}:
-                    names.add(normal_name(text))
-            records.append((values, names))
+                    elif not RANGE.fullmatch(text):
+                        names.add(normal_name(text))
+                elif tag in {'description', 'name'} and text:
+                    sequence = sequence_of(text)
+                    if sequence is None:
+                        names.add(normal_name(text))
+                    else:
+                        values.add(sequence)
+                elif tag == 'xref':
+                    documents.add(document_of(field.get('type'), field.get('data', '')))
+            documents.discard(None)
+            records.append((values, names, documents))
         found[title] = records
     missing = set(titles) - set(found)
     if missing:
@@ -331,17 +359,23 @@ def normal_name(text):
     return re.sub(r'[^a-z0-9]', '', text.lower())
 
 
-def judge_codepoint(point, records):
-    """('verified' | 'mismatch' | 'name' | 'absent', detail) of a register codepoint against an IANA registry."""
+def judge_codepoint(point, records, document):
+    """('verified' | 'mismatch' | 'name' | 'absent', detail) of a register codepoint against an IANA registry.
+
+    A record that carries no name (QUIC Versions) confirms the value when it cites `document`, the entry's spec."""
     value = number(point['value'])
     value = point['value'] if value is None else value
     name = normal_name(point['name'])
-    by_value = [names for values, names in records if value in values]
+    by_value = [(names, documents) for values, names, documents in records if value in values]
     if by_value:
-        if any(name in names for names in by_value):
+        if any(name in names for names, _ in by_value):
             return 'verified', ''
-        return 'name', f'IANA names {point["value"]} {sorted(set().union(*by_value))}'
-    if any(name in names for _, names in records):
+        if any(not names and document in documents for names, documents in by_value):
+            return 'verified', f' (an unnamed record citing {document})'
+        named = sorted(set().union(*(names for names, _ in by_value)))
+        cited = sorted(set().union(*(documents for _, documents in by_value)))
+        return 'name', f'IANA names {point["value"]} {named} and cites {cited}'
+    if any(name in names for _, names, _ in records):
         return 'mismatch', f'IANA assigns {point["name"]} another value'
     return 'absent', f'IANA has neither {point["name"]} nor {point["value"]}'
 
@@ -411,8 +445,10 @@ class Review:
                 def apply(target, record=record):
                     target['spec']['revision'] = record['revision']
                     target['spec']['posted'] = record['posted']
-                self.change(entry, f'{spec["ref"]}-{record["revision"]} posted {record["posted"]} '
-                            f'(was -{spec.get("revision", "?")})', apply)
+                earlier = ' '.join(([f'-{spec["revision"]}'] if 'revision' in spec else []) +
+                                   ([f'posted {spec["posted"]}'] if 'posted' in spec else []))
+                was = f'was {earlier}' if earlier else 'no revision recorded'
+                self.change(entry, f'{spec["ref"]}-{record["revision"]} posted {record["posted"]} ({was})', apply)
         if record['status'] != spec['status']:
             def apply(target, record=record):
                 target['spec']['status'] = record['status']
@@ -420,6 +456,7 @@ class Review:
             self.status_changed(entry, spec['status'], record['status'])
 
     def judge_codepoints(self, entry, registries):
+        document = document_of(entry['spec'].get('type'), entry['spec'].get('ref', ''))
         for index, point in enumerate(entry.get('codepoints', [])):
             if point['registry'] not in IANA_REGISTRIES:
                 continue
@@ -427,11 +464,12 @@ class Review:
             records = registries.get(f'iana-{name}', {}).get(title)
             if records is None:
                 continue
-            verdict, detail = judge_codepoint(point, records)
+            verdict, detail = judge_codepoint(point, records, document)
             if verdict == 'verified' and point.get('verified') is False:
                 def apply(target, index=index):
                     target['codepoints'][index].pop('verified')
-                self.change(entry, f'{point["registry"]} {point["name"]} = {point["value"]} confirmed by IANA', apply)
+                self.change(entry, f'{point["registry"]} {point["name"]} = {point["value"]} confirmed by IANA{detail}',
+                            apply)
             elif verdict != 'verified':
                 self.proposals.append(f'{entry["id"]}: {point["registry"]} {point["name"]} = {point["value"]}: '
                                       f'{detail}; correct the register and regenerate scripts/gen-register-ids.py')
@@ -495,6 +533,12 @@ class Review:
             lines += [f'## {title}', '']
             lines += [f'- {item}' for item in items] or ['None.']
             lines.append('')
+        # The pin of every record read: the bodies stay outside the repository, re-fetched by the same plan.
+        lines += ['## Records read', '', f'Retrieved on {self.manifest["day"]} by `scripts/register-review.py fetch`.',
+                  '', '| Source | Bytes | SHA-256 |', '|---|---:|---|']
+        lines += [f'| [{item["id"]}]({item["url"]}) | {item["bytes"]} | `{item["sha256"]}` |'
+                  for item in self.manifest['items'] if 'error' not in item]
+        lines.append('')
         return '\n'.join(lines)
 
 

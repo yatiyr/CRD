@@ -78,7 +78,7 @@ inline constexpr u16 kGreaseIds[] = {
            ((value >> 12U) & 0x0FU) == ((value >> 4U) & 0x0FU);
 }
 
-namespace iana::unverified
+namespace iana
 {
 // quic.transport: QUIC Versions, QUIC version 1
 inline constexpr u32 kQuicVersion1 = 0x00000001U;
@@ -92,6 +92,6 @@ inline constexpr u64 kQuicTpVersionInformation = 0x0011ULL;
 inline constexpr u32 kQuicVersion2 = 0x6B3343CFU;
 // http.h3: TLS ALPN Protocol IDs, HTTP/3
 inline constexpr std::string_view kAlpnHttp3 = "h3";
-} // namespace iana::unverified
+} // namespace iana
 
 } // namespace crd::net

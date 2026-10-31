@@ -108,7 +108,7 @@ enum class AlgorithmClass : u8
     return static_cast<AlgorithmClass>(static_cast<u16>(id) >> 8U);
 }
 
-namespace iana::unverified
+namespace iana
 {
 // tls.hybrid-kex: TLS Supported Groups, X25519MLKEM768
 inline constexpr u16 kGroupX25519mlkem768 = 0x11ECU;
@@ -144,6 +144,6 @@ inline constexpr u16 kAeadAes128Gcm = 0x0001U;
 inline constexpr u16 kAeadAes256Gcm = 0x0002U;
 // crypto.chacha20-poly1305: AEAD Algorithms, AEAD_CHACHA20_POLY1305
 inline constexpr u16 kAeadChacha20Poly1305 = 0x001DU;
-} // namespace iana::unverified
+} // namespace iana
 
 } // namespace crd::crypto

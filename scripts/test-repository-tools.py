@@ -6426,24 +6426,33 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
     user to approve), reads them with digests, judges them against the register, proposes ROADMAP amendments without
     editing a row, applies register changes on request and records each run so the guard's due day moves."""
 
+    # The shapes of the IANA files the first refresh read (2026-10-31): QUIC Versions records carry no name, only the
+    # RFC they cite; an ALPN record keys its protocol by name and spells the identification sequence.
     QUIC_XML = ('<?xml version="1.0"?><registry xmlns="http://www.iana.org/assignments" id="quic">'
                 '<title>QUIC</title>'
-                '<registry id="quic-versions"><title>QUIC Versions</title>'
-                '<record><value>0x00000000</value><description>Reserved for Version Negotiation</description></record>'
-                '<record><value>0x00000001</value><description>QUIC</description></record>'
-                '<record><value>0x6b3343cf</value><description>QUIC Version 2</description></record>'
-                '<record><value>0x00000002-0x0000ffff</value><description>Unassigned</description></record>'
+                '<registry id="quic-versions"><title>QUIC Versions</title><xref type="rfc" data="rfc9000"/>'
+                '<range><value>value 0x?a?a?a?a</value><registration_rule>Reserved</registration_rule></range>'
+                '<record><value>0x00000000</value><status>permanent</status><xref type="rfc" data="rfc9000"/>'
+                '<notes>Reserved for Version Negotiation</notes></record>'
+                '<record><value>0x00000001</value><status>permanent</status><xref type="rfc" data="rfc9000"/>'
+                '<contact><xref type="person" data="QUIC_WG"/></contact><notes/></record>'
+                '<record><value>0x6b3343cf</value><status>permanent</status><xref type="rfc" data="rfc9369"/>'
+                '<notes/></record>'
                 '</registry>'
                 '<registry id="quic-transport"><title>QUIC Transport Parameters</title>'
                 '<record><value>0x20</value><description>max_datagram_frame_size</description></record>'
                 '<record><value>0x11</value><description>version_information</description></record>'
+                '<record><value>0x2ab2</value><description>grease_quic_bit</description>'
+                '<xref type="draft" data="draft-ietf-quic-bit-grease-04"/></record>'
                 '</registry></registry>')
     ALPN_XML = ('<?xml version="1.0"?><registry xmlns="http://www.iana.org/assignments" id="tls-extensiontype-values">'
                 '<registry id="alpn-protocol-ids">'
                 '<title>TLS Application-Layer Protocol Negotiation (ALPN) Protocol IDs</title>'
-                '<record><protocol>HTTP/3</protocol><id>0x68 0x33 ("h3")</id></record></registry>'
+                '<record><value>HTTP/3</value><description>0x68 0x33 ("h3")</description>'
+                '<xref type="rfc" data="rfc9114"/></record></registry>'
                 '<registry id="tls-extensiontype-values-1"><title>TLS ExtensionType Values</title>'
                 '<record><value>27</value><description>compress_certificate</description></record>'
+                '<record><value>3-255</value><description>Unassigned</description></record>'
                 '</registry></registry>')
 
     def register(self, entries, **changes):
@@ -6690,13 +6699,14 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             self.assertIn('proposed, not applied', text)
             self.assertIn('quic.transport: RFC 9000 is obsoleted by RFC 9999', text)
             self.assertIn('the pinned RFC 9000 is now obsoleted by RFC 9999 (was current)', text)
-            self.assertIn('quic.multipath: draft-ietf-quic-multipath-22 posted 2026-11-30 (was -21)', text)
+            self.assertIn('quic.multipath: draft-ietf-quic-multipath-22 posted 2026-11-30 (was -21 posted 2026-03-17)',
+                          text)
             self.assertIn('the watched draft-ietf-quic-multipath is now iesg (was active)', text)
             self.assertIn('is now published as RFC 9911 (re-pin the entry to it', text)
-            self.assertIn('QUIC Versions QUIC = 0x00000001 confirmed by IANA', text)
+            self.assertIn('QUIC Versions QUIC = 0x00000001 confirmed by IANA (an unnamed record citing RFC 9000)', text)
             self.assertIn('TLS ALPN Protocol IDs HTTP/3 = h3 confirmed by IANA', text)
             self.assertIn('TLS ExtensionType Values compress_certificate = 27 confirmed by IANA', text)
-            self.assertIn("QUIC v2 = 0x6b3343cf: IANA names 0x6b3343cf ['quicversion2']", text)
+            self.assertIn("QUIC v2 = 0x6b3343cf: IANA names 0x6b3343cf [] and cites ['RFC 9369']", text)
             self.assertIn('max_datagram_frame_size = 0x21: IANA assigns max_datagram_frame_size another value',
                           text)
             self.assertIn('ack_frequency = 0xff04de1b: IANA has neither', text)
@@ -6705,7 +6715,12 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             self.assertIn('## Triggers a full re-research\n\n- quic.transport\n', text)
             self.assertIn('the Object identifiers values', text)
             self.assertIn('https://www.ietf.org/meeting/upcoming/', text)
-            self.assertIn('webtransport.h3: draft-ietf-webtrans-http3-16 posted 2026-07-01 (was -16)', text)
+            self.assertIn('webtransport.h3: draft-ietf-webtrans-http3-16 posted 2026-07-01 (was -16 posted 2026-07)',
+                          text)
+            self.assertIn('Retrieved on 2026-12-16 by `scripts/register-review.py fetch`.', text)
+            quic = self.QUIC_XML.encode()
+            self.assertIn(f'| [iana-quic](https://www.iana.org/assignments/quic/quic.xml) | {len(quic)} | '
+                          f'`{hashlib.sha256(quic).hexdigest()}` |', text)
             code, output = self.tool(root, 'compare', '--fetched', str(root / 'fetched'), '--report', str(report),
                                      '--apply')
             self.assertEqual(0, code, output)
@@ -6749,6 +6764,8 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             self.assertEqual(0, code, output)
             self.assertIn('the next review is a light scan due on 2027-04-20, after IETF 128 (2027-03-26)', output)
             self.assertIn('Register changes', report.read_text(encoding='utf-8'))
+            self.assertIn('quic.reliable-reset: draft-ietf-quic-reliable-stream-reset-11 posted 2026-05-01 (was -11)\n',
+                          report.read_text(encoding='utf-8'))
             self.assertIn('## Triggers a full re-research\n\nNone.', report.read_text(encoding='utf-8'))
             code, output = self.guard(root, '2026-12-16')
             self.assertEqual(0, code, output)
@@ -6802,6 +6819,35 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             register_review.read_iana('<registry', ['QUIC Versions'])
         with self.assertRaises(register_review.Unreadable):
             register_review.read_iana(self.QUIC_XML, ['QUIC Frame Types'])
+
+    def test_iana_records_are_read_in_the_shapes_the_registry_files_have(self):
+        quic = register_review.read_iana(self.QUIC_XML, ['QUIC Versions', 'QUIC Transport Parameters'])
+        self.assertEqual([({0}, set(), {'RFC 9000'}), ({1}, set(), {'RFC 9000'}),
+                          ({0x6b3343cf}, set(), {'RFC 9369'})], quic['QUIC Versions'])
+        self.assertEqual(({0x2ab2}, {'greasequicbit'}, {'draft-ietf-quic-bit-grease'}),
+                         quic['QUIC Transport Parameters'][2])
+        alpn = register_review.read_iana(self.ALPN_XML, ['TLS Application-Layer Protocol Negotiation (ALPN) Protocol '
+                                                         'IDs', 'TLS ExtensionType Values'])
+        self.assertEqual([({'h3'}, {'http3'}, {'RFC 9114'})],
+                         alpn['TLS Application-Layer Protocol Negotiation (ALPN) Protocol IDs'])
+        self.assertEqual((set(), {'unassigned'}, set()), alpn['TLS ExtensionType Values'][1])
+        self.assertIsNone(register_review.sequence_of('0x68 0x33'))
+        self.assertIsNone(register_review.sequence_of('"h3"'))
+        self.assertEqual('h2', register_review.sequence_of('0x68 0x32 ("h2")'))
+        self.assertIsNone(register_review.document_of('uri', 'https://example.org'))
+        self.assertIsNone(register_review.document_of('rfc', 'errata'))
+        self.assertEqual('draft-ietf-moq-transport', register_review.document_of('draft', 'draft-ietf-moq-transport'))
+        versions = quic['QUIC Versions']
+        unnamed = {'registry': 'QUIC Versions', 'name': 'QUIC version 2', 'value': '0x6b3343cf'}
+        self.assertEqual(('verified', ' (an unnamed record citing RFC 9369)'),
+                         register_review.judge_codepoint(unnamed, versions, 'RFC 9369'))
+        self.assertEqual('name', register_review.judge_codepoint(unnamed, versions, None)[0])
+        grease = {'registry': 'QUIC Transport Parameters', 'name': 'grease_quic_bit', 'value': '0x2ab2'}
+        parameters = quic['QUIC Transport Parameters']
+        self.assertEqual(('verified', ''), register_review.judge_codepoint(grease, parameters, 'RFC 9000'))
+        # A named record confirms by its name alone: citing the entry's document never excuses another name.
+        self.assertEqual('name', register_review.judge_codepoint(dict(grease, name='quic_bit'), parameters,
+                                                                 'draft-ietf-quic-bit-grease')[0])
 
 
 class RegisterIds(unittest.TestCase):
