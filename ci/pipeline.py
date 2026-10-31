@@ -867,6 +867,10 @@ def plan(event, base='', head='HEAD', requested=None, paths=None, registry=None,
         missing = missing_accounts(device, registry, environ, secrets)
         if missing:
             return 'waiting: account %s' % ', '.join(missing)
+        family = device.get('executor_config', {}).get('image_family')
+        if family and not store.get_json('images/%s.json' % family):
+            # Its machine would boot from an empty image family and the step would fail at creation.
+            return 'waiting: image %s not baked (ops.py device bake %s)' % (family, device['id'])
         return None
 
     order = 0

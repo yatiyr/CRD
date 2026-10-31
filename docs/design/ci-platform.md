@@ -304,7 +304,8 @@ cell (kinds, levels, APIs, vendors, features, accounts, presets, the hosted jobs
 coverage) and refuses an invalid one without writing. For an owned machine it prints the agent's command line and the
 install steps (a pinned checkout, a registration token from `ops.py agent-token create` whose `device` tag the agent
 cannot override, the service). A gce_vm cell needs its image family baked once:
-`python ci/ops.py bake <device>`.
+`python ci/ops.py device bake <device>`; until the result store records that image, the plan keeps the cell waiting
+(`waiting: image <family> not baked`) instead of starting a machine from an empty image family.
 
 ## Parity with GitHub Actions (CI-4)
 

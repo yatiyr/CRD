@@ -308,8 +308,13 @@ class Budget(unittest.TestCase):
 
 
 class Plan(unittest.TestCase):
-    def plan(self, event='push', paths=None, requested=None, store=None, environ=None, registry=None, fresh=False):
+    def plan(self, event='push', paths=None, requested=None, store=None, environ=None, registry=None, fresh=False,
+             baked=True):
         store = store or pipeline.LocalStore(tempfile.mkdtemp(prefix='cerid-plan-'))
+        for device in (registry or REGISTRY)['devices'] if baked else ():
+            family = device.get('executor_config', {}).get('image_family')
+            if family and not store.get_json('images/%s.json' % family):
+                store.put_json('images/%s.json' % family, {'image': family + '-202610310900'})
         return pipeline.plan(event, 'base', 'head', requested, paths=paths, registry=registry or REGISTRY,
                              tiers=TIERS, modules=pipeline.parse_modules(
                                  (ROOT / 'CMakeLists.txt').read_text(encoding='utf-8')),
@@ -363,6 +368,18 @@ class Plan(unittest.TestCase):
         planned = self.plan(event='schedule', environ=pipeline.plan_environment(REGISTRY, ALL_ACCOUNTS))
         self.assertEqual([s['key'] for s in planned['steps']], [s['key'] for s in self.plan(event='schedule')['steps']])
         self.assertTrue(planned['steps'])
+
+    def test_a_device_whose_image_family_is_not_baked_waits(self):
+        store = pipeline.LocalStore(tempfile.mkdtemp(prefix='cerid-plan-'))
+        store.put_json('images/cerid-ci-ubuntu-2404-arm64.json', {'image': 'cerid-ci-ubuntu-2404-arm64-202610310401'})
+        planned = self.plan(event='schedule', store=store, baked=False)
+        devices = pipeline.devices_by_id(REGISTRY)
+        stepped = {s['device'] for s in planned['steps']}
+        self.assertIn('gce-linux-arm64-ampere', stepped)
+        self.assertFalse({d for d in stepped if devices[d].get('executor_config', {}).get('image_family')} -
+                         {'gce-linux-arm64-ampere', 'gce-linux-arm64-axion'})
+        reasons = {c['reason'] for c in planned['cells'] if c['device'] == 'gce-windows-x64'}
+        self.assertIn('waiting: image cerid-ci-windows-2025 not baked (ops.py device bake gce-windows-x64)', reasons)
 
     def test_budget_and_cache_states(self):
         store = pipeline.LocalStore(tempfile.mkdtemp(prefix='cerid-plan-'))
