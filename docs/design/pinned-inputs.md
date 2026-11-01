@@ -56,8 +56,10 @@ The Python helpers share [scripts/pins.py](../../scripts/pins.py): `fetch()` dow
 verifies, renames, and verifies an existing file before reuse; a transfer that fails in the network (a stalled
 read, a reset, a truncated body, a 5xx, 408 or 429 status) is tried again after 5, 15 and 45 s, never a 4xx or a
 checksum mismatch (hosted run 40649898318: a stalled read of the validation layer archive); `--archive` (or `--archive-dir`) verifies a handed-in
-copy instead. [install-vulkan-sdk.py](../../scripts/install-vulkan-sdk.py) runs the verified Windows installer and
-checks the installed layout; [install-vulkan-headers.py](../../scripts/install-vulkan-headers.py) assembles the
+copy instead. [install-vulkan-sdk.py](../../scripts/install-vulkan-sdk.py) runs the verified Windows installer with
+a local repository that lists no package as its only repository (`--set-temp-repository`; the installer carries
+every package it installs, so it reads no update metadata from LunarG's remote repository: host-check run
+41298875777, [session](../sessions/2026-11-01-repo-3-installer-verdict.md)) and checks the installed layout; [install-vulkan-headers.py](../../scripts/install-vulkan-headers.py) assembles the
 Linux header tree from the Vulkan-Headers archive (only its `include/` subtree, every member path validated) and the
 three SPIRV-Reflect files; [install-vulkan-validation.py](../../scripts/install-vulkan-validation.py) and
 [install-warp.py](../../scripts/install-warp.py) read their pins from the registry;

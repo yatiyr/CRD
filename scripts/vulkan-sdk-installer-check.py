@@ -34,12 +34,11 @@ sdk = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sdk)
 
 # The two local repositories an arm may make the only one the fetch uses: an empty directory, and one whose
-# Updates.xml lists no package.
+# Updates.xml lists no package (install-vulkan-sdk.py's, which the experiment's verdict made production).
 EMPTY, UPDATES = 'empty-repository', 'updates-repository'
-UPDATES_XML = ('<Updates>\n <ApplicationName>{AnyApplication}</ApplicationName>\n'
-               ' <ApplicationVersion>1.0.0</ApplicationVersion>\n <Checksum>true</Checksum>\n</Updates>\n')
 BASELINES = ('baseline', 'baseline-repeat')
-# Arm name -> the options added to sdk.INSTALL_ARGUMENTS (EMPTY and UPDATES stand for those repositories' URIs).
+# Arm name -> the options added to sdk.INSTALL_ARGUMENTS, the arguments before the verdict (EMPTY and UPDATES stand
+# for those repositories' URIs).
 ARMS = {
     'baseline': (),
     'baseline-repeat': (),
@@ -52,7 +51,9 @@ ARMS = {
     'offscreen-updates': ('--platform', 'offscreen', '--set-temp-repository', UPDATES),
 }
 QT_FONT = re.compile(r'QFont::setPixelSize')
-REMOTE = re.compile(r'Fetching latest update information|meta information from remote repository')
+# The framework prints `Fetching latest update information...` for any repository, a local one included (run
+# 41298875777); only this line marks the fetch from LunarG's remote repository.
+REMOTE = re.compile(r'meta information from remote repository')
 URL = re.compile(r'\b(?:https?|ftp)://[^\s"\'<>]+')
 TIMEOUT_SECONDS = 1500
 LISTED = 20
@@ -79,9 +80,14 @@ def manifest(root):
 def local_repositories(scratch):
     scratch = Path(scratch)
     (scratch / EMPTY).mkdir(parents=True, exist_ok=True)
-    (scratch / UPDATES).mkdir(parents=True, exist_ok=True)
-    (scratch / UPDATES / 'Updates.xml').write_text(UPDATES_XML, encoding='utf-8')
-    return {name: (scratch / name).resolve().as_uri() for name in (EMPTY, UPDATES)}
+    return {EMPTY: (scratch / EMPTY).resolve().as_uri(), UPDATES: sdk.local_repository(scratch / UPDATES)}
+
+
+def cached_repositories(cache):
+    """Relative path -> text of every repository.txt in the metadata cache: the repository each entry came from."""
+    cache = Path(cache)
+    return {relative: (cache / relative).read_text(encoding='utf-8', errors='replace').strip()
+            for relative in listing(cache) if relative.endswith('repository.txt')}
 
 
 def findings(output):
@@ -122,13 +128,15 @@ def run_arm(arm, download_dir, evidence, root=None, cache=None, archive=None, ru
     result = {'arm': arm, 'version': pin['version'], 'options': list(ARMS[arm]), 'arguments': options,
               'exit': exit_code, 'seconds': round(time.monotonic() - started, 1), **findings(output),
               'cache_before': cache_before, 'cache_after': listing(cache),
+              'cache_repositories': cached_repositories(cache),
               'layout_missing': [relative for relative in sdk.LAYOUT if relative not in tree],
               'tree': {'files': len(tree), 'bytes': sum(size for size, _ in tree.values()),
                        'digest': hashlib.sha256(canonical).hexdigest()}}
     (out / 'result.json').write_text(json.dumps(result, indent=1) + '\n', encoding='utf-8')
     print(output)
     print(json.dumps({key: result[key] for key in ('arm', 'arguments', 'exit', 'qt_font', 'remote', 'hosts',
-                                                   'cache_after', 'layout_missing', 'tree')}, indent=1))
+                                                   'cache_after', 'cache_repositories', 'layout_missing', 'tree')},
+                     indent=1))
     return result
 
 
@@ -140,10 +148,13 @@ def differences(base, other, variable):
 
 
 def load(evidence, arm):
+    """An arm's result, its findings read again from its log (so recorded evidence is judged by the current
+    patterns), and its manifest."""
     folder = Path(evidence) / arm
-    if not (folder / 'result.json').is_file() or not (folder / 'manifest.json').is_file():
+    if not all((folder / name).is_file() for name in ('result.json', 'manifest.json', 'log.txt')):
         return None, None
-    return (json.loads((folder / 'result.json').read_text(encoding='utf-8')),
+    result = json.loads((folder / 'result.json').read_text(encoding='utf-8'))
+    return ({**result, **findings((folder / 'log.txt').read_text(encoding='utf-8'))},
             json.loads((folder / 'manifest.json').read_text(encoding='utf-8')))
 
 

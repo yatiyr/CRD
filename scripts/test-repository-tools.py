@@ -1515,9 +1515,13 @@ class PinnedInputs(unittest.TestCase):
             installer = Path(temp) / 'installer.exe'
             installer.write_bytes(b'installer')
 
+            repository = (Path(temp) / sdk.REPOSITORY).resolve()
+
             def fake_run(command, check):
                 self.assertEqual(command[0], str(installer))
-                self.assertEqual(tuple(command[1:]), sdk.INSTALL_ARGUMENTS)
+                self.assertEqual(command[1:], [*sdk.INSTALL_ARGUMENTS, '--set-temp-repository', repository.as_uri()])
+                updates = (repository / 'Updates.xml').read_text(encoding='utf-8')
+                self.assertEqual((updates.count('<Updates>'), updates.count('<PackageUpdate>')), (1, 0))
                 for relative in sdk.LAYOUT:
                     (root / relative).parent.mkdir(parents=True, exist_ok=True)
                     (root / relative).write_bytes(b'x')
@@ -1561,14 +1565,13 @@ class PinnedInputs(unittest.TestCase):
                     (root / 'InstallationLog.txt').write_bytes(log)
                     if extra:
                         (root / extra).write_bytes(b'extra')
-                    lines = [b'Loading component scripts...']
+                    lines = [b'Fetching latest update information...', b'Loading component scripts...']
                     if warn:
                         lines.append(b'[1837] Warning: QFont::setPixelSize: Pixel size <= 0 (-1)')
                     if remote:
-                        lines.append(b'Fetching latest update information...')
                         lines.append(b'Retrieving meta information from remote repository... https://sdk.lunarg.com/x')
-                        (cache / 'item').parent.mkdir(parents=True, exist_ok=True)
-                        (cache / 'item').write_bytes(b'meta')
+                        (cache / 'entry').mkdir(parents=True, exist_ok=True)
+                        (cache / 'entry' / 'repository.txt').write_bytes(b'https://sdk.lunarg.com/x\n')
                     return subprocess.CompletedProcess(command, code, stdout=b'\n'.join(lines))
                 return fake_run
 
@@ -1597,9 +1600,10 @@ class PinnedInputs(unittest.TestCase):
             self.assertIn('<Checksum>true</Checksum>', (updates / 'Updates.xml').read_text(encoding='utf-8'))
             baseline = json.loads((evidence / 'baseline' / 'result.json').read_text(encoding='utf-8'))
             self.assertEqual(len(baseline['qt_font']), 1)
-            self.assertEqual(len(baseline['remote']), 2)
+            self.assertEqual(len(baseline['remote']), 1)
             self.assertEqual(baseline['hosts'], ['sdk.lunarg.com'])
-            self.assertEqual((baseline['cache_before'], baseline['cache_after']), ({}, {'item': 4}))
+            self.assertEqual((baseline['cache_before'], baseline['cache_after']), ({}, {'entry/repository.txt': 25}))
+            self.assertEqual(baseline['cache_repositories'], {'entry/repository.txt': 'https://sdk.lunarg.com/x'})
             self.assertEqual(baseline['layout_missing'], [])
             self.assertEqual(baseline['tree']['files'], len(check.sdk.LAYOUT) + 1)
             self.assertIn('QFont', (evidence / 'baseline' / 'log.txt').read_text(encoding='utf-8'))
@@ -1617,6 +1621,13 @@ class PinnedInputs(unittest.TestCase):
             self.assertIn('| minimal-updates | --platform minimal --set-temp-repository updates-repository | 0 | 0 | 0 '
                           '| none | 0 | same | removes both, same tree |', lines)
             self.assertIn('- temp-repository-updates, added: `Bin/extra.dll`', lines)
+
+            # Recorded evidence is judged by the current patterns: a result.json written by an older one that
+            # counted the framework's generic fetch line still judges from its log.
+            stale = evidence / 'minimal-updates' / 'result.json'
+            stale.write_text(json.dumps({**json.loads(stale.read_text(encoding='utf-8')),
+                                         'remote': ['Fetching latest update information...']}), encoding='utf-8')
+            self.assertEqual(check.judge(evidence)[1]['arms']['minimal-updates']['verdict'], 'removes both, same tree')
 
             summary = temp / 'summary.md'
             with contextlib.redirect_stdout(io.StringIO()):

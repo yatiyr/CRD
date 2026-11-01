@@ -294,10 +294,16 @@ machine per arm runs [vulkan-sdk-installer-check.py](../../scripts/vulkan-sdk-in
 the pinned installer through the registry and runs it with the production arguments plus the arm's options (none
 twice, `--verbose`, `--platform minimal` or `offscreen`, `--set-temp-repository` naming an empty local directory or
 a local repository whose `Updates.xml` lists no package, and each platform with the latter), and records the exit, every
-line of either finding, the hosts the output names, the framework's metadata cache before and after, and the path,
-size and SHA-256 of every installed file. The judge job compares each arm's tree with the baseline's, leaving out
-the paths on which the two baseline runs disagree, and names an arm that
-exits 0, prints neither finding and installs the same tree; it fails only when a baseline left no complete install.
+line of either finding, the hosts the output names, the framework's metadata cache before and after (with the
+repository each cached entry came from), and the path, size and SHA-256 of every installed file. The judge job
+compares each arm's tree with the baseline's, leaving out the paths on which the two baseline runs disagree, reads
+both findings again from each arm's log (so recorded evidence is judged by the current patterns), and names an arm
+that exits 0, prints neither finding and installs the same tree; it fails only when a baseline left no complete
+install. The remote finding is the framework's `Retrieving meta information from remote repository` line: its
+`Fetching latest update information` line is printed for a local repository too. Run 41298875777
+([verdict](../sessions/2026-11-01-repo-3-installer-verdict.md)): the local repository whose `Updates.xml` lists no
+package removes the remote fetch with the same tree and is now the production argument; no platform option touches
+the `QFont` line.
 
 ## The sanitizer audit
 
