@@ -14,9 +14,10 @@ Intel Xeon, Ubuntu 24.04, GCC 13.3, CMake 4.4.5; no GPU) in its `linux-gcc-debug
   (41291759660), a883e502 (41292341675) and 30a34cc3 (41292729183) were cancelled with no job started, and 41293138483
   at 71423138 was pending when this batch pushed.
 - **The dispatch run 41274380605 (de5e10b0).** win-debug-scalar (124764040380, MSVC at the SSE2 floor) and
-  win-public-checks (124764040379) finished their tests: every `ceridc`, MCP and protocol-stream case passed there (41
-  each, `crd-ceridc-mcp-conformance` and `platform: the protocol owns its output stream and stray writes go to stderr`
-  included). Their one failure, and win-asan shard 2's, win-shipping's and win-shipping-profile's, is
+  win-public-checks (124764040379) finished their tests: the 31 cases whose names carry `ceridc` or MCP, and
+  `platform: the protocol owns its output stream and stray writes go to stderr`, passed on each
+  (`crd-ceridc-mcp-conformance`, the 2026-07-28 and 2025-11-25 cases, the envelope, the agent gate and the diag tool's
+  native, verb, MCP and real-binary cases included). Their one failure, and win-asan shard 2's, win-shipping's and win-shipping-profile's, is
   `filesystem: the last write time converts exactly and orders files within one second` at `test_filesystem.cpp:145`
   (`REQUIRE( stamp(older, at) )`): the stamp `clock_cast` overflowed the Microsoft file clock, which track A's cc5ee9e9
   (after de5e10b0) fixes by narrowing to the file clock's tick first. win-debug was still testing at 09:35 UTC.
