@@ -13,6 +13,7 @@ and verification evidence in the linked note; its live status belongs only to th
 | Reference | Purpose |
 |---|---|
 | [Runtime diagnostics](runtime-diagnostics.md) | DIAG source owners, allocator/race/crash/trace/replay implementation contracts and detector acceptance |
+| [Agent MCP server](agent-mcp.md) | `ceridc mcp`: the dual-era 2026-07-28 and 2025-11-25 server, tool schemas, argument checks and the schema conformance oracle |
 | [Diagnostic runbooks](diagnostic-runbooks.md) | From a symptom to its command, artifact and discriminating test; adoption and cost per capability; held to the tree by a guard |
 | [Developer workflow](developer-workflow.md) | Conservative affected-target/CTest planning, scoped frontend and exact content evidence |
 | [Visual Studio configurations](visual-studio-configurations.md) | Full CMake preset selector, the native MSVC profiles and configuration-aware synchronization gates |

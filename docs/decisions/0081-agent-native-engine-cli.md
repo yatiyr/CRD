@@ -244,6 +244,14 @@ support and generates tools, resources and prompts from the command
 schemas. It owns the MCP clause of CMD.4. The capability boundary above
 is the DIAG.8c host grant, and an agent never raises its own grant.
 
+**Amendment (2026-11-01, MCP-ADAPT.0,
+[session](../sessions/2026-11-01-mcp-adapt-0-protocol-currency.md)).** `ceridc mcp` now
+serves revision `2026-07-28` (per-request `_meta`, `server/discover`, `resultType`,
+caching hints) and the `2025-11-25` handshake on the same connection. Every tool
+publishes an input and an output schema written from one declaration, answers its
+report as `structuredContent`, and refuses a bad argument as a tool error the model
+can read. Contract: [agent MCP server](../design/agent-mcp.md).
+
 ### 7. Module surface (registration pattern)
 
 Every Cerid module registers CLI commands via a static-init hook:

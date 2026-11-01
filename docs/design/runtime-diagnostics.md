@@ -1848,9 +1848,9 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-10a-run-records.md)):
 Settled (2026-10-10, [session](../sessions/2026-10-10-diag-10a-command-decoding.md)):
 - Command decoding is the fuzz target `crd-fuzz-ceridc-diag` (`tests/tools/ceridc/fuzz`, corpus replayed on every lane,
   libFuzzer on `linux-clang-fuzz`; the ceridc module owns `tests/support/fuzz`). Its ingress is the line ceridc's
-  stdio MCP transport reads: the owned JSON parser (crd-asset-io), `mcp_handle`, the diag tool's argument decoding and
-  `DiagCommandService::execute` with every command ceridc binds plus the sandbox's flight and fault commands, so every
-  registered argument check is reachable. An input's host line chooses the grant and whether there is a file root;
+  stdio MCP transport reads: the owned JSON parser (crd-asset-io), `McpServer` (since MCP-ADAPT.0), the diag tool's
+  argument check and `DiagCommandService::execute` with every command ceridc binds plus the sandbox's flight and fault
+  commands, so every registered argument check is reachable. An input's host line chooses the grant and whether there is a file root;
   the root is a directory that does not exist, so a path command reaches its argument check and handler and opens
   nothing. A line that could reach one of ceridc's file verbs (import, cook, query, instantiate, sequence, render,
   export) is not fed, because those read and write paths the input names; their argument decoding is covered in
