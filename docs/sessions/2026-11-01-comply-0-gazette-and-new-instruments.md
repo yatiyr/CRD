@@ -146,7 +146,7 @@ the generated-source manifest refreshed; every other jurisdiction's generation i
 - **On the real pages.** The reader gives `2025-12-25/33118/10767` for Decision No. 10767, `2025-12-31/33124-m5/10795`
   for the first item of the repeated issue of 31 December 2025, and `2017-10-28/30224` for the KVKK regulation's item.
 - **Guards.** `check-registers.py`, `gen-comply-rules.py --check` and `check-generated.py` pass after the reviews.
-- **C++.** On the track's machine (linux-gcc-debug, a5035c69) `crd-comply-tests`, `crd-ceridc-tests` and `ceridc`
+- **C++.** On the track's machine (linux-gcc-debug, a5035c69, the commit the rebase onto main made 57c1704c) `crd-comply-tests`, `crd-ceridc-tests` and `ceridc`
   built with no warning and the 158 scoped CTests passed, among them the committed generations decoding and binding
   the crash pool, `crd-comply-rules-drift`, `crd-check-registers`, `crd-generated-sources` and `crd-repository-tools`.
 - **A defect on the way.** `check-repository.py` imported `project_sync` inside the `try` whose `except` names its
