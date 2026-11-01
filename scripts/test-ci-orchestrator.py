@@ -144,6 +144,9 @@ class StateMachine(unittest.TestCase):
         self.assertEqual(state.build_outcome(build, [passed, hard]), 'failed')
         self.assertIsNone(state.build_outcome(build, [passed, {'state': 'running'}]))
         self.assertEqual(state.build_outcome({'cancel_requested': True}, [passed]), 'canceled')
+        self.assertIsNone(state.build_outcome(build, []), 'a build whose first step is not uploaded yet is not done')
+        self.assertIsNone(state.build_outcome(dict(build, jobs=['a', 'gone']), [passed]), 'an unread job is not done')
+        self.assertEqual(state.build_outcome({'cancel_requested': True}, []), 'canceled')
         by_key = {j['key']: j for j in (passed, soft, hard)}
         self.assertEqual(state.dependency_state({'depends_on': [{'step': 'a'}, {'step': 'b'}]}, by_key), 'ready')
         self.assertTrue(state.dependency_state({'depends_on': [{'step': 'd'}]}, by_key).startswith('broken'))
@@ -1086,6 +1089,31 @@ class Core(Base):
 # --------------------------------------------------------------------------------------------- fault injection
 
 class Faults(Base):
+    def test_a_watchdog_tick_before_the_first_upload_leaves_the_build_waiting(self):
+        upload = self.c.upload
+
+        def tick_then_upload(number, document, by_job=None):
+            self.c.tick()  # the window between the build's record and its plan step
+            return upload(number, document, by_job)
+        self.c.upload = tick_then_upload
+        build = self.build()
+        self.c.upload = upload
+        self.assertEqual(build['state'], 'scheduled')
+        self.assertIn(build['number'], self.c.active_builds())
+        self.assertEqual(self.c.poll(agent(self.c, name='l'))['job']['key'], 'plan')
+
+    def test_a_settle_decides_on_the_record_it_replaces(self):
+        build = self.build({'steps': [{'key': 'a', 'command': 'x', 'agents': {'queue': 'q'}}]})
+        self.run_job(agent(self.c, queue='q'))
+        self.assertEqual(self.c.build(build['number'])['state'], 'passed')
+        self.c.upload(build['number'], {'steps': [{'key': 'b', 'command': 'y', 'agents': {'queue': 'q'}}]})
+        read = self.c.build
+        self.c.build = lambda number: dict(read(number), jobs=read(number)['jobs'][:-1], state='running')
+        settled = self.c.settle(build['number'])  # its first read misses the step uploaded since
+        self.c.build = read
+        self.assertEqual(settled['state'], 'running')
+        self.assertIn(build['number'], self.c.active_builds())
+
     def test_lost_agent_is_retried_on_another_agent(self):
         build = self.build({'steps': [{'key': 'a', 'command': 'x', 'agents': {'queue': 'q'},
                                        'retry': {'automatic': [{'reason': 'agent_lost', 'limit': 2}]}}]})

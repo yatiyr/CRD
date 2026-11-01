@@ -932,12 +932,18 @@ class Coordinator:
     def settle(self, number):
         """Finish a build whose jobs are all terminal; report its commit status."""
         build = self.build(number)
-        outcome = state.build_outcome(build, self.jobs_of(build))
-        if outcome is None or build['state'] in state.BUILD_TERMINAL:
+        if build['state'] in state.BUILD_TERMINAL or state.build_outcome(build, self.jobs_of(build)) is None:
             return build
         now = self.clock()
-        build = self.update(self.build_name(number), lambda b: state.build_transition(b, outcome, 'finish', now)
-                            if b['state'] not in state.BUILD_TERMINAL else None)
+
+        def change(current):
+            # Decided again on the record being replaced: an upload since the read above may have added steps.
+            outcome = None if current['state'] in state.BUILD_TERMINAL else state.build_outcome(
+                current, self.jobs_of(current))
+            return None if outcome is None else state.build_transition(current, outcome, 'finish', now)
+        build = self.update(self.build_name(number), change)
+        if build['state'] not in state.BUILD_TERMINAL:
+            return build
         self._index_active(number, False)
         self._index_recent(build)
         self.report_status(build)

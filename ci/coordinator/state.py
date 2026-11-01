@@ -112,11 +112,15 @@ def soft_failed(job):
 
 def build_outcome(build, jobs):
     """The terminal state a build reaches once every job is terminal, else None. Cached and budget jobs never fail a
-    build by themselves: the planner's `required` step turns a budget step into a failed required result."""
-    if any(job['state'] not in TERMINAL for job in jobs):
+    build by themselves: the planner's `required` step turns a budget step into a failed required result. A job the
+    build lists but `jobs` lacks is not terminal, and a build with no job yet (its first upload is still coming) is
+    done only when canceled."""
+    if len(jobs) < len(build.get('jobs', [])) or any(job['state'] not in TERMINAL for job in jobs):
         return None
     if build.get('cancel_requested'):
         return 'canceled'
+    if not jobs:
+        return None
     for job in jobs:
         if job['state'] in ('failed', 'timed_out', 'expired') and not soft_failed(job):
             return 'failed'
