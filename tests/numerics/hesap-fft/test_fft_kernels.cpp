@@ -611,6 +611,54 @@ TEST_CASE("fft kernels: the in-place three passes give the same bits at every of
     }
 }
 
+// Pass 1 of the in-place three passes forms W_n^{t·ka} from the factored roots or loads it from the plan's table of
+// their products (build_in_place3, kInPlace3TabledTo): each entry is the product computed as a lane computes it from
+// the roots, bit for bit, and within a few f32 ulps of the root at its row and column.
+TEST_CASE("fft kernels: the in-place three passes' pass-1 table holds the factored roots' products", "[fft]")
+{
+    crd::memory::TlsfAllocator alloc(usize{1} << 24);
+    for (u32 lg = 11; lg <= 14; ++lg)
+    {
+        const usize n = usize{1} << lg;
+        const usize bc = n / 16U;
+        const usize hc = bc / 16U;
+        const fft::FftPlan<crd::f32> plan(&alloc, n, fft::FftAlgorithm::InPlace3);
+        const fft::FftPlanState<crd::f32>& s = plan.state();
+        REQUIRE(s.ip3_twr != nullptr);
+        REQUIRE(s.ip3_twi != nullptr);
+        REQUIRE(s.sh_msh == 4U);
+        usize differ = 0;
+        double worst = 0.0;
+        for (usize ka = 1; ka < 16U; ++ka)
+        {
+            for (usize t = 0; t < bc; ++t)
+            {
+                const crd::f32 lr = s.sh_twr[ka * 16U + (t & 15U)];
+                const crd::f32 li = s.sh_twi[ka * 16U + (t & 15U)];
+                const crd::f32 hr = s.sh_hir[ka * hc + (t >> 4U)];
+                const crd::f32 hm = s.sh_hii[ka * hc + (t >> 4U)];
+                const crd::f32 wr = crd::math::fma(-hm, li, hr * lr);
+                const crd::f32 wi = crd::math::fma(hm, lr, hr * li);
+                const crd::f32 tr = s.ip3_twr[(ka - 1U) * bc + t];
+                const crd::f32 ti = s.ip3_twi[(ka - 1U) * bc + t];
+                const bool same_re = std::bit_cast<u32>(tr) == std::bit_cast<u32>(wr);
+                if (!same_re || std::bit_cast<u32>(ti) != std::bit_cast<u32>(wi))
+                {
+                    ++differ;
+                }
+                const double th = 6.283185307179586476925286766559 * static_cast<double>((ka * t) % n) /
+                                  static_cast<double>(n);
+                const double re = static_cast<double>(tr) - crd::math::cos(th);
+                const double im = static_cast<double>(ti) + crd::math::sin(th);
+                worst = crd::math::max(worst, crd::math::max(crd::math::abs(re), crd::math::abs(im)));
+            }
+        }
+        INFO("n=" << n << " entries off the factored product " << differ << ", worst " << worst);
+        CHECK(differ == 0U);
+        CHECK(worst < 4.0 * 5.96e-8); // four f32 ulps at 1: two rounded roots, a rounded product, a fused operation
+    }
+}
+
 TEST_CASE("fft kernels: every level runs each f32 forward the planner offers from 128K to 1M", "[fft][kernels]")
 {
     check_forced_forwards<crd::f32>(17, 20);

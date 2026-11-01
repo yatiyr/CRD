@@ -82,6 +82,15 @@ template <typename T> using WideVec = std::conditional_t<std::is_same_v<T, crd::
 #else
 template <typename T> using WideVec = TileVec<T>;
 #endif
+// Whether the level's vector lanes fuse a multiply and an add in one instruction; the sse2 unit computes each fused
+// operation exactly from dozens of SSE2 ones (fma_exact.hpp), so the in-place forward's pass 1 loads its twiddles
+// there instead of forming them from the factored roots (kInPlace3TabledTo).
+#if CRD_SIMD_HAS_AVX2 || CRD_SIMD_HAS_NEON
+inline constexpr bool kInPlace3Fused = true;
+#else
+inline constexpr bool kInPlace3Fused = false;
+#endif
+
 // The columns a step on V computes.
 template <typename T, typename V> inline constexpr crd::usize kCols = sizeof(V) / sizeof(T);
 static_assert(kCols<crd::f64, TileVec<crd::f64>> == 4 && kCols<crd::f32, TileVec<crd::f32>> == 8);
@@ -1586,7 +1595,9 @@ template <typename T> struct Engine
     // boundary, where the data never leaves it. Off one every block straddles two cache lines, which from 8K, where
     // the data leaves the L1d, costs the passes more than a second buffer: there pass 1 reads the caller's buffer
     // once into the plan's aligned work buffer and pass 3 writes it once (at 4K the second buffer would double a
-    // working set the L1d holds). The same operations on the same values, so the same bits at every address.
+    // working set the L1d holds). The same operations on the same values, so the same bits at every address. Pass 1
+    // forms its W_n from the factored roots on a level with fused vector operations above kInPlace3TabledTo and loads
+    // the plan's table of their products elsewhere, which holds the same bits.
     void execute_in_place3(Complex<T>* data) const
     {
         T* const d = reinterpret_cast<T*>(data);
@@ -1608,15 +1619,26 @@ template <typename T> struct Engine
                 re.store(to);
                 im.store(to + 8);
             }
-            gen::codelet16_inplace_first_blocks(w, bc, plan.sh_twr, plan.sh_twi, plan.sh_hir, plan.sh_hii);
+            gen::codelet16_inplace_first_blocks_tw(w, bc, plan.ip3_twr, plan.ip3_twi);
         }
-        else if (w == d) // a step holds whole tiles, so pass 1 deinterleaves as it loads
+        else if (kInPlace3Fused && plan.n > kInPlace3TabledTo) // W_n from the factored roots
         {
-            gen::codelet16_inplace_first(d, bc, plan.sh_twr, plan.sh_twi, plan.sh_hir, plan.sh_hii);
+            if (w == d) // a step holds whole tiles, so pass 1 deinterleaves as it loads
+            {
+                gen::codelet16_inplace_first(d, bc, plan.sh_twr, plan.sh_twi, plan.sh_hir, plan.sh_hii);
+            }
+            else
+            {
+                gen::codelet16_inplace_first_to(d, w, bc, plan.sh_twr, plan.sh_twi, plan.sh_hir, plan.sh_hii);
+            }
+        }
+        else if (w == d)
+        {
+            gen::codelet16_inplace_first_tw(d, bc, plan.ip3_twr, plan.ip3_twi);
         }
         else
         {
-            gen::codelet16_inplace_first_to(d, w, bc, plan.sh_twr, plan.sh_twi, plan.sh_hir, plan.sh_hii);
+            gen::codelet16_inplace_first_to_tw(d, w, bc, plan.ip3_twr, plan.ip3_twi);
         }
         switch (plan.ds_b)
         {

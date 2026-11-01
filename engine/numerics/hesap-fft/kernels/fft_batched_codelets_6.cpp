@@ -21591,26 +21591,27 @@ void codelet256_batched_sc(const crd::f32* inb,
     }
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet16_inplace_first_blocks_part0([[maybe_unused]] crd::f32* d,
-    [[maybe_unused]] crd::usize bc, [[maybe_unused]] const crd::f32* lor, [[maybe_unused]] const crd::f32* loi,
-    [[maybe_unused]] const crd::f32* hir, [[maybe_unused]] const crd::f32* hii, [[maybe_unused]] crd::usize t) noexcept
+template <typename V> CRD_NOINLINE static void codelet16_inplace_first_to_part0([[maybe_unused]] const crd::f32* s,
+    [[maybe_unused]] crd::f32* d, [[maybe_unused]] crd::usize bc, [[maybe_unused]] const crd::f32* lor,
+    [[maybe_unused]] const crd::f32* loi, [[maybe_unused]] const crd::f32* hir, [[maybe_unused]] const crd::f32* hii,
+    [[maybe_unused]] crd::usize t) noexcept
 {
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize hc = bc >> 4;
     const crd::usize uh = t >> 4;
     const crd::usize ul = t & 15;
     V n0r;
-    V n0i; simd::load_block(d, t, n0r, n0i);
+    V n0i; simd::load_complex_deinterleaved(s + 2 * t, n0r, n0i);
     V n8r;
-    V n8i; simd::load_block(d, t + 8 * bc, n8r, n8i);
+    V n8i; simd::load_complex_deinterleaved(s + 2 * t + 16 * bc, n8r, n8i);
     V n1r;
-    V n1i; simd::load_block(d, t + bc, n1r, n1i);
+    V n1i; simd::load_complex_deinterleaved(s + 2 * t + 2 * bc, n1r, n1i);
     V n9r;
-    V n9i; simd::load_block(d, t + 9 * bc, n9r, n9i);
+    V n9i; simd::load_complex_deinterleaved(s + 2 * t + 18 * bc, n9r, n9i);
     V n2r;
-    V n2i; simd::load_block(d, t + 2 * bc, n2r, n2i);
+    V n2i; simd::load_complex_deinterleaved(s + 2 * t + 4 * bc, n2r, n2i);
     V n10r;
-    V n10i; simd::load_block(d, t + 10 * bc, n10r, n10i);
+    V n10i; simd::load_complex_deinterleaved(s + 2 * t + 20 * bc, n10r, n10i);
     const V n26r = n2r - n10r;
     const V n26i = n2i - n10i;
     const V n25r = n2r + n10r;
@@ -21618,13 +21619,13 @@ template <typename V> CRD_NOINLINE static void codelet16_inplace_first_blocks_pa
     const V n36r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n26i, V(static_cast<crd::f32>(0.7071067811865476)) * n26r);
     const V n36i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n26r, V(static_cast<crd::f32>(0.7071067811865476)) * n26i);
     V n3r;
-    V n3i; simd::load_block(d, t + 3 * bc, n3r, n3i);
+    V n3i; simd::load_complex_deinterleaved(s + 2 * t + 6 * bc, n3r, n3i);
     V n11r;
-    V n11i; simd::load_block(d, t + 11 * bc, n11r, n11i);
+    V n11i; simd::load_complex_deinterleaved(s + 2 * t + 22 * bc, n11r, n11i);
     V n4r;
-    V n4i; simd::load_block(d, t + 4 * bc, n4r, n4i);
+    V n4i; simd::load_complex_deinterleaved(s + 2 * t + 8 * bc, n4r, n4i);
     V n12r;
-    V n12i; simd::load_block(d, t + 12 * bc, n12r, n12i);
+    V n12i; simd::load_complex_deinterleaved(s + 2 * t + 24 * bc, n12r, n12i);
     const V n19r = n4r - n12r;
     const V n19i = n4i - n12i;
     const V n18r = n4r + n12r;
@@ -21636,9 +21637,9 @@ template <typename V> CRD_NOINLINE static void codelet16_inplace_first_blocks_pa
     const V n17r = n0r - n8r;
     const V n17i = n0i - n8i;
     V n5r;
-    V n5i; simd::load_block(d, t + 5 * bc, n5r, n5i);
+    V n5i; simd::load_complex_deinterleaved(s + 2 * t + 10 * bc, n5r, n5i);
     V n13r;
-    V n13i; simd::load_block(d, t + 13 * bc, n13r, n13i);
+    V n13i; simd::load_complex_deinterleaved(s + 2 * t + 26 * bc, n13r, n13i);
     const V n48r = n5r - n13r;
     const V n48i = n5i - n13i;
     const V n47r = n5r + n13r;
@@ -21664,9 +21665,9 @@ template <typename V> CRD_NOINLINE static void codelet16_inplace_first_blocks_pa
     const V n88r = simd::fnmadd(V(static_cast<crd::f32>(-0.9238795325112867)), n53i, V(static_cast<crd::f32>(0.38268343236508984)) * n53r);
     const V n88i = simd::fma(V(static_cast<crd::f32>(-0.9238795325112867)), n53r, V(static_cast<crd::f32>(0.38268343236508984)) * n53i);
     V n6r;
-    V n6i; simd::load_block(d, t + 6 * bc, n6r, n6i);
+    V n6i; simd::load_complex_deinterleaved(s + 2 * t + 12 * bc, n6r, n6i);
     V n14r;
-    V n14i; simd::load_block(d, t + 14 * bc, n14r, n14i);
+    V n14i; simd::load_complex_deinterleaved(s + 2 * t + 28 * bc, n14r, n14i);
     const V n27r = n6r + n14r;
     const V n27i = n6i + n14i;
     const V n28r = n6r - n14r;
@@ -21694,9 +21695,9 @@ template <typename V> CRD_NOINLINE static void codelet16_inplace_first_blocks_pa
     const V n24r = n17r - n20r;
     const V n24i = n17i - n20i;
     V n7r;
-    V n7i; simd::load_block(d, t + 7 * bc, n7r, n7i);
+    V n7i; simd::load_complex_deinterleaved(s + 2 * t + 14 * bc, n7r, n7i);
     V n15r;
-    V n15i; simd::load_block(d, t + 15 * bc, n15r, n15i);
+    V n15i; simd::load_complex_deinterleaved(s + 2 * t + 30 * bc, n15r, n15i);
     const V n57r = n7r - n15r;
     const V n57i = n7i - n15i;
     const V n56r = n7r + n15r;
@@ -21960,10 +21961,10 @@ template <typename V> CRD_NOINLINE static void codelet16_inplace_first_blocks_pa
         simd::store_block(d, 15 * bc + t, xr, xi);
     }
 }
-// In-place pass 1's edition for a column a step: AoSoA blocks in and out (f32). GENERATED.
+// In-place pass 1 out of place, W_n factored: interleaved in, blocks out to an aligned buffer (f32). GENERATED.
 // NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG; retain fused scope.
-void codelet16_inplace_first_blocks(crd::f32* d, crd::usize bc, const crd::f32* lor, const crd::f32* loi,
-    const crd::f32* hir, const crd::f32* hii) noexcept
+void codelet16_inplace_first_to(const crd::f32* s, crd::f32* d, crd::usize bc, const crd::f32* lor,
+    const crd::f32* loi, const crd::f32* hir, const crd::f32* hii) noexcept
 {
     namespace lanes = crd::hesap::fft::lanes;
     using V = lanes::Lane<crd::f32>;
@@ -21971,14 +21972,169 @@ void codelet16_inplace_first_blocks(crd::f32* d, crd::usize bc, const crd::f32* 
     const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
     for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
     {
-        codelet16_inplace_first_blocks_part0<V>(d, bc, lor, loi, hir, hii, t);
+        codelet16_inplace_first_to_part0<V>(s, d, bc, lor, loi, hir, hii, t);
     }
     if constexpr (lanes::kPairedTiles<crd::f32>)
     {
         using H = lanes::TileLane<crd::f32>;
         if (wide < tiles)
         {
-            codelet16_inplace_first_blocks_part0<H>(d, bc, lor, loi, hir, hii, wide);
+            codelet16_inplace_first_to_part0<H>(s, d, bc, lor, loi, hir, hii, wide);
+        }
+    }
+}
+// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
+template <typename V> CRD_NOINLINE static void codelet8_inplace_mid_part0([[maybe_unused]] crd::f32* d,
+    [[maybe_unused]] crd::usize w, [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi,
+    [[maybe_unused]] crd::usize t) noexcept
+{
+    namespace simd = crd::hesap::fft::lanes;
+    const crd::usize i1 = t & 15;
+    const crd::usize at = (t - i1) * 8 + i1;
+    V n0r;
+    V n0i; simd::load_block(d, at, n0r, n0i);
+    V n4r;
+    V n4i; simd::load_block(d, at + 64, n4r, n4i);
+    V n1r;
+    V n1i; simd::load_block(d, at + 16, n1r, n1i);
+    V n5r;
+    V n5i; simd::load_block(d, at + 80, n5r, n5i);
+    const V n18r = n1r - n5r;
+    const V n18i = n1i - n5i;
+    const V n17r = n1r + n5r;
+    const V n17i = n1i + n5i;
+    const V n28r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n18i, V(static_cast<crd::f32>(0.7071067811865476)) * n18r);
+    const V n28i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n18r, V(static_cast<crd::f32>(0.7071067811865476)) * n18i);
+    V n2r;
+    V n2i; simd::load_block(d, at + 32, n2r, n2i);
+    V n6r;
+    V n6i; simd::load_block(d, at + 96, n6r, n6i);
+    const V n11r = n2r - n6r;
+    const V n11i = n2i - n6i;
+    const V n10r = n2r + n6r;
+    const V n10i = n2i + n6i;
+    const V n12r = n11i;
+    const V n12i = V(0.0F) - n11r;
+    const V n8r = n0r + n4r;
+    const V n8i = n0i + n4i;
+    const V n9r = n0r - n4r;
+    const V n9i = n0i - n4i;
+    V n3r;
+    V n3i; simd::load_block(d, at + 48, n3r, n3i);
+    V n7r;
+    V n7i; simd::load_block(d, at + 112, n7r, n7i);
+    const V n19r = n3r + n7r;
+    const V n19i = n3i + n7i;
+    const V n20r = n3r - n7r;
+    const V n20i = n3i - n7i;
+    const V n29r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865476)), n20i, V(static_cast<crd::f32>(-0.7071067811865475)) * n20r);
+    const V n29i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865476)), n20r, V(static_cast<crd::f32>(-0.7071067811865475)) * n20i);
+    const V n22r = n17r - n19r;
+    const V n22i = n17i - n19i;
+    const V n21r = n17r + n19r;
+    const V n21i = n17i + n19i;
+    const V n23r = n22i;
+    const V n23i = V(0.0F) - n22r;
+    const V n13r = n8r + n10r;
+    const V n13i = n8i + n10i;
+    const V n14r = n8r - n10r;
+    const V n14i = n8i - n10i;
+    const V n24r = n13r + n21r;
+    const V n24i = n13i + n21i;
+    simd::store_block(d, at, n24r, n24i);
+    const V n25r = n13r - n21r;
+    const V n25i = n13i - n21i;
+    {
+        const V wr = simd::load<V>(twr + 64 + i1);
+        const V wi = simd::load<V>(twi + 64 + i1);
+        const V xr = simd::fnmadd(wi, n25i, n25r * wr);
+        const V xi = simd::fma(wi, n25r, n25i * wr);
+        simd::store_block(d, at + 64, xr, xi);
+    }
+    const V n26r = n14r + n23r;
+    const V n26i = n14i + n23i;
+    {
+        const V wr = simd::load<V>(twr + 32 + i1);
+        const V wi = simd::load<V>(twi + 32 + i1);
+        const V xr = simd::fnmadd(wi, n26i, n26r * wr);
+        const V xi = simd::fma(wi, n26r, n26i * wr);
+        simd::store_block(d, at + 32, xr, xi);
+    }
+    const V n27r = n14r - n23r;
+    const V n27i = n14i - n23i;
+    {
+        const V wr = simd::load<V>(twr + 96 + i1);
+        const V wi = simd::load<V>(twi + 96 + i1);
+        const V xr = simd::fnmadd(wi, n27i, n27r * wr);
+        const V xi = simd::fma(wi, n27r, n27i * wr);
+        simd::store_block(d, at + 96, xr, xi);
+    }
+    const V n31r = n28r - n29r;
+    const V n31i = n28i - n29i;
+    const V n30r = n28r + n29r;
+    const V n30i = n28i + n29i;
+    const V n32r = n31i;
+    const V n32i = V(0.0F) - n31r;
+    const V n15r = n9r + n12r;
+    const V n15i = n9i + n12i;
+    const V n16r = n9r - n12r;
+    const V n16i = n9i - n12i;
+    const V n33r = n15r + n30r;
+    const V n33i = n15i + n30i;
+    {
+        const V wr = simd::load<V>(twr + 16 + i1);
+        const V wi = simd::load<V>(twi + 16 + i1);
+        const V xr = simd::fnmadd(wi, n33i, n33r * wr);
+        const V xi = simd::fma(wi, n33r, n33i * wr);
+        simd::store_block(d, at + 16, xr, xi);
+    }
+    const V n34r = n15r - n30r;
+    const V n34i = n15i - n30i;
+    {
+        const V wr = simd::load<V>(twr + 80 + i1);
+        const V wi = simd::load<V>(twi + 80 + i1);
+        const V xr = simd::fnmadd(wi, n34i, n34r * wr);
+        const V xi = simd::fma(wi, n34r, n34i * wr);
+        simd::store_block(d, at + 80, xr, xi);
+    }
+    const V n35r = n16r + n32r;
+    const V n35i = n16i + n32i;
+    {
+        const V wr = simd::load<V>(twr + 48 + i1);
+        const V wi = simd::load<V>(twi + 48 + i1);
+        const V xr = simd::fnmadd(wi, n35i, n35r * wr);
+        const V xi = simd::fma(wi, n35r, n35i * wr);
+        simd::store_block(d, at + 48, xr, xi);
+    }
+    const V n36r = n16r - n32r;
+    const V n36i = n16i - n32i;
+    {
+        const V wr = simd::load<V>(twr + 112 + i1);
+        const V wi = simd::load<V>(twi + 112 + i1);
+        const V xr = simd::fnmadd(wi, n36i, n36r * wr);
+        const V xi = simd::fma(wi, n36r, n36i * wr);
+        simd::store_block(d, at + 112, xr, xi);
+    }
+}
+// In-place pass 2: the leaf over i2 (B = 8), twiddled, AoSoA blocks (f32). GENERATED.
+// NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG; retain fused scope.
+void codelet8_inplace_mid(crd::f32* d, crd::usize w, const crd::f32* twr,
+    const crd::f32* twi) noexcept
+{
+    namespace lanes = crd::hesap::fft::lanes;
+    using V = lanes::Lane<crd::f32>;
+    const crd::usize tiles = w - w % lanes::kTile<crd::f32>;
+    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
+    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
+    {
+        codelet8_inplace_mid_part0<V>(d, w, twr, twi, t);
+    }
+    if constexpr (lanes::kPairedTiles<crd::f32>)
+    {
+        using H = lanes::TileLane<crd::f32>;
+        if (wide < tiles)
+        {
+            codelet8_inplace_mid_part0<H>(d, w, twr, twi, wide);
         }
     }
 }
@@ -52321,27 +52477,27 @@ void codelet256_batched_sc(const crd::f32* inb,
     }
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet16_inplace_first_blocks_part0([[maybe_unused]] crd::f32* d,
-    [[maybe_unused]] crd::usize bc, [[maybe_unused]] const crd::f32* lor, [[maybe_unused]] const crd::f32* loi,
-    [[maybe_unused]] const crd::f32* hir, [[maybe_unused]] const crd::f32* hii, [[maybe_unused]] crd::usize t,
-    V* sp) noexcept
+template <typename V> CRD_NOINLINE static void codelet16_inplace_first_to_part0([[maybe_unused]] const crd::f32* s,
+    [[maybe_unused]] crd::f32* d, [[maybe_unused]] crd::usize bc, [[maybe_unused]] const crd::f32* lor,
+    [[maybe_unused]] const crd::f32* loi, [[maybe_unused]] const crd::f32* hir, [[maybe_unused]] const crd::f32* hii,
+    [[maybe_unused]] crd::usize t, V* sp) noexcept
 {
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize hc = bc >> 4;
     const crd::usize uh = t >> 4;
     const crd::usize ul = t & 15;
     V n0r;
-    V n0i; simd::load_block(d, t, n0r, n0i);
+    V n0i; simd::load_complex_deinterleaved(s + 2 * t, n0r, n0i);
     V n8r;
-    V n8i; simd::load_block(d, t + 8 * bc, n8r, n8i);
+    V n8i; simd::load_complex_deinterleaved(s + 2 * t + 16 * bc, n8r, n8i);
     V n1r;
-    V n1i; simd::load_block(d, t + bc, n1r, n1i);
+    V n1i; simd::load_complex_deinterleaved(s + 2 * t + 2 * bc, n1r, n1i);
     V n9r;
-    V n9i; simd::load_block(d, t + 9 * bc, n9r, n9i);
+    V n9i; simd::load_complex_deinterleaved(s + 2 * t + 18 * bc, n9r, n9i);
     V n2r;
-    V n2i; simd::load_block(d, t + 2 * bc, n2r, n2i);
+    V n2i; simd::load_complex_deinterleaved(s + 2 * t + 4 * bc, n2r, n2i);
     V n10r;
-    V n10i; simd::load_block(d, t + 10 * bc, n10r, n10i);
+    V n10i; simd::load_complex_deinterleaved(s + 2 * t + 20 * bc, n10r, n10i);
     const V n26r = n2r - n10r;
     const V n26i = n2i - n10i;
     const V n25r = n2r + n10r;
@@ -52349,13 +52505,13 @@ template <typename V> CRD_NOINLINE static void codelet16_inplace_first_blocks_pa
     const V n36r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n26i, V(static_cast<crd::f32>(0.7071067811865476)) * n26r);
     const V n36i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n26r, V(static_cast<crd::f32>(0.7071067811865476)) * n26i);
     V n3r;
-    V n3i; simd::load_block(d, t + 3 * bc, n3r, n3i);
+    V n3i; simd::load_complex_deinterleaved(s + 2 * t + 6 * bc, n3r, n3i);
     V n11r;
-    V n11i; simd::load_block(d, t + 11 * bc, n11r, n11i);
+    V n11i; simd::load_complex_deinterleaved(s + 2 * t + 22 * bc, n11r, n11i);
     V n4r;
-    V n4i; simd::load_block(d, t + 4 * bc, n4r, n4i);
+    V n4i; simd::load_complex_deinterleaved(s + 2 * t + 8 * bc, n4r, n4i);
     V n12r;
-    V n12i; simd::load_block(d, t + 12 * bc, n12r, n12i);
+    V n12i; simd::load_complex_deinterleaved(s + 2 * t + 24 * bc, n12r, n12i);
     const V n19r = n4r - n12r;
     const V n19i = n4i - n12i;
     const V n18r = n4r + n12r;
@@ -52367,9 +52523,9 @@ template <typename V> CRD_NOINLINE static void codelet16_inplace_first_blocks_pa
     const V n17r = n0r - n8r;
     const V n17i = n0i - n8i;
     V n5r;
-    V n5i; simd::load_block(d, t + 5 * bc, n5r, n5i);
+    V n5i; simd::load_complex_deinterleaved(s + 2 * t + 10 * bc, n5r, n5i);
     V n13r;
-    V n13i; simd::load_block(d, t + 13 * bc, n13r, n13i);
+    V n13i; simd::load_complex_deinterleaved(s + 2 * t + 26 * bc, n13r, n13i);
     const V n48r = n5r - n13r;
     const V n48i = n5i - n13i;
     const V n47r = n5r + n13r;
@@ -52395,9 +52551,9 @@ template <typename V> CRD_NOINLINE static void codelet16_inplace_first_blocks_pa
     const V n88r = simd::fnmadd(V(static_cast<crd::f32>(-0.9238795325112867)), n53i, V(static_cast<crd::f32>(0.38268343236508984)) * n53r);
     const V n88i = simd::fma(V(static_cast<crd::f32>(-0.9238795325112867)), n53r, V(static_cast<crd::f32>(0.38268343236508984)) * n53i);
     V n6r;
-    V n6i; simd::load_block(d, t + 6 * bc, n6r, n6i);
+    V n6i; simd::load_complex_deinterleaved(s + 2 * t + 12 * bc, n6r, n6i);
     V n14r;
-    V n14i; simd::load_block(d, t + 14 * bc, n14r, n14i);
+    V n14i; simd::load_complex_deinterleaved(s + 2 * t + 28 * bc, n14r, n14i);
     const V n27r = n6r + n14r;
     const V n27i = n6i + n14i;
     const V n28r = n6r - n14r;
@@ -52425,9 +52581,9 @@ template <typename V> CRD_NOINLINE static void codelet16_inplace_first_blocks_pa
     const V n24r = n17r - n20r;
     const V n24i = n17i - n20i;
     V n7r;
-    V n7i; simd::load_block(d, t + 7 * bc, n7r, n7i);
+    V n7i; simd::load_complex_deinterleaved(s + 2 * t + 14 * bc, n7r, n7i);
     V n15r;
-    V n15i; simd::load_block(d, t + 15 * bc, n15r, n15i);
+    V n15i; simd::load_complex_deinterleaved(s + 2 * t + 30 * bc, n15r, n15i);
     const V n57r = n7r - n15r;
     const V n57i = n7i - n15i;
     const V n56r = n7r + n15r;
@@ -52508,10 +52664,10 @@ template <typename V> CRD_NOINLINE static void codelet16_inplace_first_blocks_pa
     sp[27] = n89r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet16_inplace_first_blocks_part1([[maybe_unused]] crd::f32* d,
-    [[maybe_unused]] crd::usize bc, [[maybe_unused]] const crd::f32* lor, [[maybe_unused]] const crd::f32* loi,
-    [[maybe_unused]] const crd::f32* hir, [[maybe_unused]] const crd::f32* hii, [[maybe_unused]] crd::usize t,
-    const V* sp) noexcept
+template <typename V> CRD_NOINLINE static void codelet16_inplace_first_to_part1([[maybe_unused]] const crd::f32* s,
+    [[maybe_unused]] crd::f32* d, [[maybe_unused]] crd::usize bc, [[maybe_unused]] const crd::f32* lor,
+    [[maybe_unused]] const crd::f32* loi, [[maybe_unused]] const crd::f32* hir, [[maybe_unused]] const crd::f32* hii,
+    [[maybe_unused]] crd::usize t, const V* sp) noexcept
 {
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize hc = bc >> 4;
@@ -52689,10 +52845,10 @@ template <typename V> CRD_NOINLINE static void codelet16_inplace_first_blocks_pa
     }
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet16_inplace_first_blocks_part2([[maybe_unused]] crd::f32* d,
-    [[maybe_unused]] crd::usize bc, [[maybe_unused]] const crd::f32* lor, [[maybe_unused]] const crd::f32* loi,
-    [[maybe_unused]] const crd::f32* hir, [[maybe_unused]] const crd::f32* hii, [[maybe_unused]] crd::usize t,
-    const V* sp) noexcept
+template <typename V> CRD_NOINLINE static void codelet16_inplace_first_to_part2([[maybe_unused]] const crd::f32* s,
+    [[maybe_unused]] crd::f32* d, [[maybe_unused]] crd::usize bc, [[maybe_unused]] const crd::f32* lor,
+    [[maybe_unused]] const crd::f32* loi, [[maybe_unused]] const crd::f32* hir, [[maybe_unused]] const crd::f32* hii,
+    [[maybe_unused]] crd::usize t, const V* sp) noexcept
 {
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize hc = bc >> 4;
@@ -52769,10 +52925,10 @@ template <typename V> CRD_NOINLINE static void codelet16_inplace_first_blocks_pa
         simd::store_block(d, 15 * bc + t, xr, xi);
     }
 }
-// In-place pass 1's edition for a column a step: AoSoA blocks in and out (f32). GENERATED.
+// In-place pass 1 out of place, W_n factored: interleaved in, blocks out to an aligned buffer (f32). GENERATED.
 // NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG; retain fused scope.
-void codelet16_inplace_first_blocks(crd::f32* d, crd::usize bc, const crd::f32* lor, const crd::f32* loi,
-    const crd::f32* hir, const crd::f32* hii) noexcept
+void codelet16_inplace_first_to(const crd::f32* s, crd::f32* d, crd::usize bc, const crd::f32* lor,
+    const crd::f32* loi, const crd::f32* hir, const crd::f32* hii) noexcept
 {
     namespace lanes = crd::hesap::fft::lanes;
     using V = lanes::Lane<crd::f32>;
@@ -52781,9 +52937,9 @@ void codelet16_inplace_first_blocks(crd::f32* d, crd::usize bc, const crd::f32* 
     const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
     for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
     {
-        codelet16_inplace_first_blocks_part0<V>(d, bc, lor, loi, hir, hii, t, sp);
-        codelet16_inplace_first_blocks_part1<V>(d, bc, lor, loi, hir, hii, t, sp);
-        codelet16_inplace_first_blocks_part2<V>(d, bc, lor, loi, hir, hii, t, sp);
+        codelet16_inplace_first_to_part0<V>(s, d, bc, lor, loi, hir, hii, t, sp);
+        codelet16_inplace_first_to_part1<V>(s, d, bc, lor, loi, hir, hii, t, sp);
+        codelet16_inplace_first_to_part2<V>(s, d, bc, lor, loi, hir, hii, t, sp);
     }
     if constexpr (lanes::kPairedTiles<crd::f32>)
     {
@@ -52791,9 +52947,164 @@ void codelet16_inplace_first_blocks(crd::f32* d, crd::usize bc, const crd::f32* 
         alignas(64) H sh[28];
         if (wide < tiles)
         {
-            codelet16_inplace_first_blocks_part0<H>(d, bc, lor, loi, hir, hii, wide, sh);
-            codelet16_inplace_first_blocks_part1<H>(d, bc, lor, loi, hir, hii, wide, sh);
-            codelet16_inplace_first_blocks_part2<H>(d, bc, lor, loi, hir, hii, wide, sh);
+            codelet16_inplace_first_to_part0<H>(s, d, bc, lor, loi, hir, hii, wide, sh);
+            codelet16_inplace_first_to_part1<H>(s, d, bc, lor, loi, hir, hii, wide, sh);
+            codelet16_inplace_first_to_part2<H>(s, d, bc, lor, loi, hir, hii, wide, sh);
+        }
+    }
+}
+// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
+template <typename V> CRD_NOINLINE static void codelet8_inplace_mid_part0([[maybe_unused]] crd::f32* d,
+    [[maybe_unused]] crd::usize w, [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi,
+    [[maybe_unused]] crd::usize t) noexcept
+{
+    namespace simd = crd::hesap::fft::lanes;
+    const crd::usize i1 = t & 15;
+    const crd::usize at = (t - i1) * 8 + i1;
+    V n0r;
+    V n0i; simd::load_block(d, at, n0r, n0i);
+    V n4r;
+    V n4i; simd::load_block(d, at + 64, n4r, n4i);
+    V n1r;
+    V n1i; simd::load_block(d, at + 16, n1r, n1i);
+    V n5r;
+    V n5i; simd::load_block(d, at + 80, n5r, n5i);
+    const V n18r = n1r - n5r;
+    const V n18i = n1i - n5i;
+    const V n17r = n1r + n5r;
+    const V n17i = n1i + n5i;
+    const V n28r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n18i, V(static_cast<crd::f32>(0.7071067811865476)) * n18r);
+    const V n28i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n18r, V(static_cast<crd::f32>(0.7071067811865476)) * n18i);
+    V n2r;
+    V n2i; simd::load_block(d, at + 32, n2r, n2i);
+    V n6r;
+    V n6i; simd::load_block(d, at + 96, n6r, n6i);
+    const V n11r = n2r - n6r;
+    const V n11i = n2i - n6i;
+    const V n10r = n2r + n6r;
+    const V n10i = n2i + n6i;
+    const V n12r = n11i;
+    const V n12i = V(0.0F) - n11r;
+    const V n8r = n0r + n4r;
+    const V n8i = n0i + n4i;
+    const V n9r = n0r - n4r;
+    const V n9i = n0i - n4i;
+    V n3r;
+    V n3i; simd::load_block(d, at + 48, n3r, n3i);
+    V n7r;
+    V n7i; simd::load_block(d, at + 112, n7r, n7i);
+    const V n19r = n3r + n7r;
+    const V n19i = n3i + n7i;
+    const V n20r = n3r - n7r;
+    const V n20i = n3i - n7i;
+    const V n29r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865476)), n20i, V(static_cast<crd::f32>(-0.7071067811865475)) * n20r);
+    const V n29i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865476)), n20r, V(static_cast<crd::f32>(-0.7071067811865475)) * n20i);
+    const V n22r = n17r - n19r;
+    const V n22i = n17i - n19i;
+    const V n21r = n17r + n19r;
+    const V n21i = n17i + n19i;
+    const V n23r = n22i;
+    const V n23i = V(0.0F) - n22r;
+    const V n13r = n8r + n10r;
+    const V n13i = n8i + n10i;
+    const V n14r = n8r - n10r;
+    const V n14i = n8i - n10i;
+    const V n24r = n13r + n21r;
+    const V n24i = n13i + n21i;
+    simd::store_block(d, at, n24r, n24i);
+    const V n25r = n13r - n21r;
+    const V n25i = n13i - n21i;
+    {
+        const V wr = simd::load<V>(twr + 64 + i1);
+        const V wi = simd::load<V>(twi + 64 + i1);
+        const V xr = simd::fnmadd(wi, n25i, n25r * wr);
+        const V xi = simd::fma(wi, n25r, n25i * wr);
+        simd::store_block(d, at + 64, xr, xi);
+    }
+    const V n26r = n14r + n23r;
+    const V n26i = n14i + n23i;
+    {
+        const V wr = simd::load<V>(twr + 32 + i1);
+        const V wi = simd::load<V>(twi + 32 + i1);
+        const V xr = simd::fnmadd(wi, n26i, n26r * wr);
+        const V xi = simd::fma(wi, n26r, n26i * wr);
+        simd::store_block(d, at + 32, xr, xi);
+    }
+    const V n27r = n14r - n23r;
+    const V n27i = n14i - n23i;
+    {
+        const V wr = simd::load<V>(twr + 96 + i1);
+        const V wi = simd::load<V>(twi + 96 + i1);
+        const V xr = simd::fnmadd(wi, n27i, n27r * wr);
+        const V xi = simd::fma(wi, n27r, n27i * wr);
+        simd::store_block(d, at + 96, xr, xi);
+    }
+    const V n31r = n28r - n29r;
+    const V n31i = n28i - n29i;
+    const V n30r = n28r + n29r;
+    const V n30i = n28i + n29i;
+    const V n32r = n31i;
+    const V n32i = V(0.0F) - n31r;
+    const V n15r = n9r + n12r;
+    const V n15i = n9i + n12i;
+    const V n16r = n9r - n12r;
+    const V n16i = n9i - n12i;
+    const V n33r = n15r + n30r;
+    const V n33i = n15i + n30i;
+    {
+        const V wr = simd::load<V>(twr + 16 + i1);
+        const V wi = simd::load<V>(twi + 16 + i1);
+        const V xr = simd::fnmadd(wi, n33i, n33r * wr);
+        const V xi = simd::fma(wi, n33r, n33i * wr);
+        simd::store_block(d, at + 16, xr, xi);
+    }
+    const V n34r = n15r - n30r;
+    const V n34i = n15i - n30i;
+    {
+        const V wr = simd::load<V>(twr + 80 + i1);
+        const V wi = simd::load<V>(twi + 80 + i1);
+        const V xr = simd::fnmadd(wi, n34i, n34r * wr);
+        const V xi = simd::fma(wi, n34r, n34i * wr);
+        simd::store_block(d, at + 80, xr, xi);
+    }
+    const V n35r = n16r + n32r;
+    const V n35i = n16i + n32i;
+    {
+        const V wr = simd::load<V>(twr + 48 + i1);
+        const V wi = simd::load<V>(twi + 48 + i1);
+        const V xr = simd::fnmadd(wi, n35i, n35r * wr);
+        const V xi = simd::fma(wi, n35r, n35i * wr);
+        simd::store_block(d, at + 48, xr, xi);
+    }
+    const V n36r = n16r - n32r;
+    const V n36i = n16i - n32i;
+    {
+        const V wr = simd::load<V>(twr + 112 + i1);
+        const V wi = simd::load<V>(twi + 112 + i1);
+        const V xr = simd::fnmadd(wi, n36i, n36r * wr);
+        const V xi = simd::fma(wi, n36r, n36i * wr);
+        simd::store_block(d, at + 112, xr, xi);
+    }
+}
+// In-place pass 2: the leaf over i2 (B = 8), twiddled, AoSoA blocks (f32). GENERATED.
+// NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG; retain fused scope.
+void codelet8_inplace_mid(crd::f32* d, crd::usize w, const crd::f32* twr,
+    const crd::f32* twi) noexcept
+{
+    namespace lanes = crd::hesap::fft::lanes;
+    using V = lanes::Lane<crd::f32>;
+    const crd::usize tiles = w - w % lanes::kTile<crd::f32>;
+    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
+    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
+    {
+        codelet8_inplace_mid_part0<V>(d, w, twr, twi, t);
+    }
+    if constexpr (lanes::kPairedTiles<crd::f32>)
+    {
+        using H = lanes::TileLane<crd::f32>;
+        if (wide < tiles)
+        {
+            codelet8_inplace_mid_part0<H>(d, w, twr, twi, wide);
         }
     }
 }

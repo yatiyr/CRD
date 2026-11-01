@@ -132,9 +132,12 @@ template <typename T> struct FftPlanState
     T* tf_lnr = nullptr;
     T* tf_lni = nullptr;
     // The in-place three-pass f32 forward (FftAlgorithm::InPlace3, n = 16·B·16, B = ds_b; scripts/gen_fft_batched.py's
-    // in-place emitters) reads pass 1's factored W_n from sh_twr/sh_twi (lo, [ka·16 + (t & 15)]) and sh_hir/sh_hii
-    // (hi, [ka·B + (t >> 4)]), pass 2's W_{16B} from ds_twr/ds_twi ([kb·16 + i1]), pass 3's group from scratch and,
-    // from kInPlace3WorkFrom, for a buffer off a 64-byte boundary, the work buffer after it.
+    // in-place emitters) reads pass 1's W_n either as the factored roots, sh_twr/sh_twi (lo, [ka·16 + (t & 15)]) and
+    // sh_hir/sh_hii (hi, [ka·B + (t >> 4)]), or as their products, ip3_twr/ip3_twi ([(ka - 1)·16B + t], the same
+    // bits; kInPlace3Tabled says where), pass 2's W_{16B} from ds_twr/ds_twi ([kb·16 + i1]), pass 3's group from
+    // scratch and, from kInPlace3WorkFrom, for a buffer off a 64-byte boundary, the work buffer after it.
+    T* ip3_twr = nullptr;
+    T* ip3_twi = nullptr;
 };
 
 // The tiled intermediate's floats: 128 tile rows of eight i2, each 64 tiles of 8 by 16 complex and a 64-byte pad.
@@ -143,6 +146,13 @@ inline constexpr crd::usize kTiledFourStepNt = 128 * (64 * 256 + 16);
 // The smallest in-place three-pass forward that runs a buffer off a 64-byte boundary through its plan's aligned work
 // buffer (SIMD-PERF's 2026-11-01 board: the data leaves the L1d from 8K, while at 4K the second buffer cost 1.47x).
 inline constexpr crd::usize kInPlace3WorkFrom = 8192;
+
+// The largest in-place three-pass forward whose pass 1 loads its W_n as one table on a level with fused vector
+// operations (SIMD-PERF's 2026-11-01 board: 1.05x the factored roots at avx512 and 1.08x at avx2 at 2K, where the
+// table's 15 KiB and the data's 16 KiB share the L1d; at 4K avx512 lost 0.956x off a 64-byte boundary, and from 8K
+// the two were level). A level that emulates the fused operations (sse2) or runs a step a column at a time (portable)
+// loads the table at every size: 1.26x to 1.38x and 1.19x to 1.28x there.
+inline constexpr crd::usize kInPlace3TabledTo = 2048;
 
 // The twiddles of the f64 small-N lane-trick codelets (detail/small_n_codelets.hpp, N 8, 16 and 32), each entry the
 // four lanes of a Vec4d. small_n_twiddles() builds them once in general code.

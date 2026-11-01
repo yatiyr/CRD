@@ -339,6 +339,8 @@ public:
         release(m_s.tf_bsi);
         release(m_s.tf_lnr);
         release(m_s.tf_lni);
+        release(m_s.ip3_twr);
+        release(m_s.ip3_twi);
     }
     FftPlan(const FftPlan&) = delete;
     FftPlan& operator=(const FftPlan&) = delete;
@@ -651,15 +653,37 @@ private:
     }
 
     // The in-place three passes of the f32 forward, n = 16·B·16 (FftPlanState's InPlace3 tables, no intermediate):
-    // pass 1's W_n^{t·ka} factored at M = 16 (lo over t & 15, hi over t >> 4: 2 KiB and B/8 KiB), pass 2's
-    // W_{16B}^{i1·kb} (B/8 KiB), pass 3's 2 KiB scratch and, from kInPlace3WorkFrom, the work buffer of a caller's
-    // buffer off a 64-byte boundary (n complex after the scratch's 256).
+    // pass 1's W_n^{t·ka} as the factored roots at M = 16 (lo over t & 15, hi over t >> 4: 2 KiB and B/8 KiB) and as
+    // their products for ka = 1..15 at each of the 16B columns t (ip3_twr/ip3_twi [(ka - 1)·16B + t], 15 KiB at 2K
+    // to 120 KiB at 16K; each level's kernels load whichever kInPlace3TabledTo names), pass 2's W_{16B}^{i1·kb} (B/8
+    // KiB), pass 3's 2 KiB scratch and, from kInPlace3WorkFrom, the work buffer of a caller's buffer off a 64-byte
+    // boundary (n complex after the scratch's 256). A product is rounded as a lane computing it from the factored
+    // roots rounds (a rounded product, then one fused operation), so either table gives the same bits.
     void build_in_place3()
     {
+        const crd::usize n = m_s.n;
+        const crd::usize bc = n / 16U;
         m_s.sh_n1 = 16U;
         m_s.ds_c = 16U;
-        m_s.ds_b = m_s.n / 256U;
+        m_s.ds_b = n / 256U;
         build_factored_stage1(4U);
+        const crd::usize hc = bc >> 4U;
+        m_s.ip3_twr = plan_table<T>(15U * bc, 64);
+        m_s.ip3_twi = plan_table<T>(15U * bc, 64);
+        for (crd::usize ka = 1; ka < 16U; ++ka)
+        {
+            for (crd::usize t = 0; t < bc; ++t)
+            {
+                const T lr = m_s.sh_twr[ka * 16U + (t & 15U)];
+                const T li = m_s.sh_twi[ka * 16U + (t & 15U)];
+                const T hr = m_s.sh_hir[ka * hc + (t >> 4U)];
+                const T hm = m_s.sh_hii[ka * hc + (t >> 4U)];
+                const T pr = hr * lr;
+                const T pi = hr * li;
+                m_s.ip3_twr[(ka - 1U) * bc + t] = crd::math::fma(-hm, li, pr);
+                m_s.ip3_twi[(ka - 1U) * bc + t] = crd::math::fma(hm, lr, pi);
+            }
+        }
         build_notr_twiddles(m_s.ds_b);
         const crd::usize work = m_s.n >= kInPlace3WorkFrom ? m_s.n : 0U;
         m_s.scratch = plan_table<Complex<T>>(256 + work, 64); // pass 3's transposed group, then the work buffer

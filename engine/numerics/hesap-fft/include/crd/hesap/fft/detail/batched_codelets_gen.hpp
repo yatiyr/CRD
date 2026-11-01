@@ -211,15 +211,19 @@ void codelet32_tiled_p2_leaf(const crd::f32* nt,
 // Tiled four-step P2 final leaf: the stage into the output's 16 k1 columns (f32 1M). GENERATED.
 void codelet32_tiled_p2_final(const crd::f32* inb,
     crd::hesap::Complex<crd::f32>* out, crd::usize k0) noexcept;
-// In-place pass 1: the leaf over i3 of n = 16·B·16, twiddled, interleaved in, blocks out (f32). GENERATED.
+// In-place pass 1, W_n factored: the leaf over i3 of n = 16·B·16, interleaved in, blocks out (f32). GENERATED.
 void codelet16_inplace_first(crd::f32* d, crd::usize bc, const crd::f32* lor, const crd::f32* loi,
     const crd::f32* hir, const crd::f32* hii) noexcept;
-// In-place pass 1's edition for a column a step: AoSoA blocks in and out (f32). GENERATED.
-void codelet16_inplace_first_blocks(crd::f32* d, crd::usize bc, const crd::f32* lor, const crd::f32* loi,
-    const crd::f32* hir, const crd::f32* hii) noexcept;
-// In-place pass 1 out of place: interleaved in, blocks out to an aligned buffer (f32). GENERATED.
+// In-place pass 1 out of place, W_n factored: interleaved in, blocks out to an aligned buffer (f32). GENERATED.
 void codelet16_inplace_first_to(const crd::f32* s, crd::f32* d, crd::usize bc, const crd::f32* lor,
     const crd::f32* loi, const crd::f32* hir, const crd::f32* hii) noexcept;
+// In-place pass 1, W_n tabled: the leaf over i3 of n = 16·B·16, interleaved in, blocks out (f32). GENERATED.
+void codelet16_inplace_first_tw(crd::f32* d, crd::usize bc, const crd::f32* twr, const crd::f32* twi) noexcept;
+// In-place pass 1 out of place, W_n tabled: interleaved in, blocks out to an aligned buffer (f32). GENERATED.
+void codelet16_inplace_first_to_tw(const crd::f32* s, crd::f32* d, crd::usize bc,
+    const crd::f32* twr, const crd::f32* twi) noexcept;
+// In-place pass 1's edition for a column a step, W_n tabled: AoSoA blocks in and out (f32). GENERATED.
+void codelet16_inplace_first_blocks_tw(crd::f32* d, crd::usize bc, const crd::f32* twr, const crd::f32* twi) noexcept;
 // In-place pass 2: the leaf over i2 (B = 8), twiddled, AoSoA blocks (f32). GENERATED.
 void codelet8_inplace_mid(crd::f32* d, crd::usize w, const crd::f32* twr,
     const crd::f32* twi) noexcept;
