@@ -51,9 +51,10 @@ change the act's English text and the consolidated versions consolidating each:
   leaves the English text read unchanged: 32014R0833R(08) is Danish only);
 - a consolidated version lists only the acts it adds, so an act is in the version read when any version up to it
   consolidates it; one consolidated only by a later version (not yet applicable) is lacked;
-- an act CELLAR consolidates in no version is lacked when it is dated after the version read. Older ones are a gap of
-  CELLAR's metadata, not of the text: each sanctions regulation has 3 to 7 corrigenda of its amending acts, dated
-  2011-2025, that no version records as consolidated while the later versions carry the corrections.
+- an act CELLAR consolidates in no version is lacked when it is dated after the version read. Older ones are taken as
+  a gap of CELLAR's metadata: no version records as consolidated 3 corrigenda of 833/2014's amending acts, 5 of
+  765/2006's and 7 of 36/2012's, dated 2011-2025, years before the versions read (1412/2006 and 1352/2014 have
+  none).
 
 The query answers in 0.35 to 0.63 s for each act probed (833/2014, 765/2006, 36/2012, 2024/2847, 2016/679).
 
@@ -136,7 +137,7 @@ article change the EU rule file, reviewed as EU generation 10 (`gen-comply-rules
 - **Python.** `RegisterReview` (26 cases) and `SanctionsLists` (19) pass, and the nine mutations above were each
   caught.
 - **C++.** The EU rule file's consumers ran on the track's machine (08:19-08:23 UTC, linux-gcc-debug tree at
-  8caa00b0). `crd-comply-tests`, `crd-fuzz-comply-sanctions`, `ceridc` and `crd-ceridc-tests` built with no warning.
+  8caa00b0, which the rebase onto main replaced with 1cd71852). `crd-comply-tests`, `crd-fuzz-comply-sanctions`, `ceridc` and `crd-ceridc-tests` built with no warning.
   The 61 scoped CTests passed: comply, ceridc, and the `crd-no-` and `crd-check` guards without
   `crd-check-isa-isolation`, as in batch 25. Among them, the ceridc comply case reads the committed EU generation 10.
   The four `[.imported]` cases passed (600 assertions), and `[sanctions]` ran 4 538 assertions in 18 cases.

@@ -650,10 +650,11 @@ ISO_DAY = re.compile(r'(\d{4})-(\d{2})-(\d{2})')
 def read_cellar_versions(body, source, today):
     """The latest consolidated version of a CELEX act in force by `today` (the act itself when none is), and the acts
     changing its English text that this version lacks: those no consolidated version up to it consolidates, of which
-    CELLAR consolidates in no version at all only the acts dated after it are counted (CELLAR records no consolidation
-    of 3 to 7 older corrigenda of each sanctions regulation's amending acts whose correction the later versions carry,
-    2026-11-01). The version, or `(version, '<version> + <act> + ...', documents)` when it lacks an act: the version
-    named names each, and the fetch reads each document as published."""
+    CELLAR consolidates in no version at all only the acts dated after it are counted (on 2026-11-01 CELLAR recorded
+    no consolidation of 3 corrigenda of 833/2014's amending acts, 5 of 765/2006's and 7 of 36/2012's, dated 2011-2025,
+    years before the versions read, which are taken as a gap of its metadata). The version, or `(version, '<version> +
+    <act> + ...', documents)` when it lacks an act: the version named names each, and the fetch reads each document as
+    published."""
     try:
         rows = [{name: value['value'] for name, value in binding.items()}
                 for binding in json.loads(body)['results']['bindings']]
