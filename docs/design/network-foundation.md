@@ -402,8 +402,8 @@ tests):
   HelloRetryRequest (read from the ServerHello's random).
 - **S6. Limits.** 0-RTT is off: early data may carry only operations a schema declares idempotent (the TLS 1.3
   profile, T07), so it waits for NET.2's server-authorized message schemas and anti-replay windows. `close()` is for an
-  established session (a handshake is abandoned with `clear()`). The QUIC integration is [S11](#quic-handshake);
-  address-validation tokens and ECH are NET.2's next slices on this same interface.
+  established session (a handshake is abandoned with `clear()`). The QUIC integration is [S11](#quic-handshake)
+  and its address-validation tokens [S13](#address-validation); ECH is NET.2's next slice on this same interface.
 - **S7. Key usage limits and key updates.** A session counts the records protected under its sending key (the
   provider's write sequence, which a new key resets) and updates the key before `key_update_records()` records: the
   negotiated AEAD's limit (`tls_key_usage_limit`: floor(2^24.5) for AES-GCM, every 64-bit sequence number for
@@ -593,7 +593,8 @@ P-256 and P-384, and 7,580, 10,010 and 13,267 with ML-DSA-44, -65 and -87 (compr
 validates the client's address: with the two Initial datagrams a hybrid ClientHello takes, at least 7,200 bytes, or
 8,832 when both fill a 1,500-byte path. Every classical flight and every resumption fits in one round trip; an ML-DSA
 flight does not fit two minimum datagrams' limit, and ML-DSA-65 and -87 not even two full ones', so a post-quantum
-server validates its client's address first (Retry or NEW_TOKEN, NET.2's next slice) or resumes.
+server validates its client's address first ([address-validation tokens](#address-validation), measured there in
+round trips) or resumes.
 
 Evidence: `test_quic_handshake.cpp` (every group and AEAD, every signature algorithm with mutual authentication, each
 level's keys opening the other end's packets in both versions; the levels each message and secret arrives at; a
@@ -608,6 +609,79 @@ both ways, protocol selection and refusal both ways, an unpinned key, resumption
 with the hellos read off the wire and, for each of the four secrets, a packet sealed and a mask made under the keys
 each end derives (RFC 9001 section 5 through crd-crypto on one end and OpenSSL's HKDF and ciphers on the other)
 compared byte for byte.
+
+<a id="address-validation"></a>
+### Address validation tokens
+
+**S13. Address validation tokens** ([quic.hpp](../../engine/foundation/crypto/include/crd/crypto/quic.hpp), RFC
+9000 section 8.1). A QUIC server validates a client's address statelessly, before it sends more than three times what
+it received (threats T01 to T03): the tokens of a Retry packet and of NEW_TOKEN frames hold everything the server
+needs back, sealed under a key the servers of a fleet share. `crd-crypto` mints and checks the tokens
+(`QuicTokenKeys`, `QuicTokenReplay`, `quic_token_kind`); the transport (4.2a) builds the Retry
+packet around a token with `quic_retry_tag`, carries tokens in Initial packets and NEW_TOKEN frames, and puts the
+claims' original connection ID into `original_destination_connection_id` and the Retry's into
+`retry_source_connection_id` (RFC 9000 section 7.3).
+
+- **Format.** One clear byte names the format and the kind (0x11 Retry, 0x12 NEW_TOKEN; section 8.1.1 requires the two
+  to be told apart, and the clear kind decides, before anything is authenticated, between closing with INVALID_TOKEN
+  for a Retry token that does not validate, section 8.1.2, and proceeding as without a token for any other, section
+  8.1.3), then the sealing key's 4-byte public name, a 16-byte random salt (128 bits of entropy, section 8.1.4, and
+  what makes every token unique, section 8.1.3), then the sealed claims (the issue time, 8 bytes, and a Retry token's
+  original Destination Connection ID with its length) and the 16-byte AEAD tag: 45 bytes for a NEW_TOKEN token and 46
+  plus the original connection ID for a Retry token (54 for an 8-byte ID, at most 66).
+- **Sealing.** Each token is sealed with AES-256-GCM under its own key and nonce, HKDF-SHA256 of the fleet key
+  salted with the token's salt (the construction of TLS tickets, decision S9, shared with them through
+  `provider_internal`'s sealing keys). A random nonce under one long-lived key would bound a fleet to 2^32 tokens a
+  key it cannot count across servers; a derived key seals one token, so the servers share no count and no nonce ever
+  repeats. The cost is three HMAC-SHA256 computations and one AES key schedule per token, the same as a ticket's.
+- **Binding.** The associated data is the clear bytes, the QUIC version (a client uses a token with the version it
+  came from, section 8.1.3) and the client's IP address; a Retry token also binds the UDP port and both connection IDs
+  of the client's next Initial: the Retry's Source Connection ID, now its Destination, and the client's own Source,
+  which it may not change (section 17.2.5.2). A NEW_TOKEN token binds no port (section 8.1.3: it changes between
+  connections) and no connection ID. Nothing linkable is readable: the address and the original connection ID are
+  sealed or only authenticated (section 8.1.3).
+- **Time.** Tokens carry the fleet's clock (Unix seconds, passed in; no clock is read here). A Retry token is accepted
+  for 30 seconds (a client repeats it in every Initial, and four retransmissions from a one-second probe timeout fit),
+  a NEW_TOKEN token for a configured lifetime (one day unless set, at most seven), each from 10 seconds before it was
+  issued (servers' clocks differ); outside that it is `Expired`.
+- **Rotation.** The keys hold a sealing key and the one before the last rotation, which only opens: a fleet rotates
+  every server to the same next key, and tokens issued under the previous one stay valid until they expire. A token
+  under any other key, like any change to a token or anything it is bound to, is `Forged`: a server never tells a
+  stale key from a forgery.
+- **Replay.** A NEW_TOKEN token is accepted once (section 8.1.4) when the server checks it against a
+  `QuicTokenReplay`: a split-block Bloom filter (one cache-line block a token, one bit in each of its eight 64-bit
+  words, 16 bits a token) indexed by the token's authenticated random salt, so no keyed hash is needed and only valid
+  tokens enter it. Four slots by issue period: the last, this and the next period (a token may come from the future by
+  the clock skew) and the one after, which is cleared before it begins. A false positive (about 0.1% at capacity)
+  only costs its client the validation; one token checked on two threads at the same instant may be accepted by both,
+  and a check after either refuses it. A Retry token is limited by its 30-second lifetime and its port and connection
+  ID binding.
+
+Measured with real handshakes (`test_quic_handshake.cpp`, X25519MLKEM768, the flights packed into the Initial and
+Handshake packets and 1,200-byte datagrams a transport sends, 8-byte connection IDs, RFC 9002's 12,000-byte initial
+window): the client's first flight is two datagrams (2,400 bytes, so 7,200 bytes may come back unvalidated), with a
+Retry token or a NEW_TOKEN token as well. A Retry packet is 93 bytes (its 54-byte token), one datagram well inside the
+3,600 bytes the triggering datagram allows. The server's flight is 2,400 bytes with a classical key and 7,963, 10,484
+and 13,910 bytes with ML-DSA-44, -65 and -87. Round trips to the server's last handshake byte:
+
+| Server key | Unvalidated | After a Retry | With a NEW_TOKEN token |
+| --- | --- | --- | --- |
+| Ed25519, ECDSA P-256 and P-384 | 1 | 2 | 1 |
+| ML-DSA-44 and ML-DSA-65 | 2 (the amplification limit) | 2 | 1 |
+| ML-DSA-87 | 2 (the amplification limit) | 3 (the initial window) | 2 (the initial window) |
+
+A Retry buys a server statelessness under load for one round trip; it never saves one. A NEW_TOKEN token saves the
+post-quantum handshakes the round trip the amplification limit costs them, up to ML-DSA-65; ML-DSA-87's flight passes
+the initial congestion window itself, which is the transport's to size (4.2a).
+
+Evidence: `test_quic_token.cpp` (both kinds bound to exactly their address, port, connection IDs, version and kind;
+every changed bit and every other length; the lifetimes and the skew at their edges and the clock's extremes; a
+fleet's shared key and two rotations; every refusal; 512 unique tokens with nothing readable; single use, periods and
+slot reuse, a 2^18-token filter's false positives, 55 and 44 in 52,428 probes on two runs; four threads), the round
+trips above, the `crd-fuzz-crypto-quic` token mode (the verdict of every input against the format restated over the
+provider's HKDF and AEAD; seeds sealed by the restatement, each refused one traced to its reason), and nine source
+mutations, each caught. A token is the server's own: no peer reads one, so interoperability is the Retry packet's
+(the transport's, 4.2a, against the peers NET.5 names).
 
 <a id="negotiation"></a>
 ## Version and extension negotiation

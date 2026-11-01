@@ -504,6 +504,7 @@
       "owner": "net",
       "rows": [
         "4.2a",
+        "NET.2",
         "NET-PATH",
         "NET.5"
       ],
@@ -532,8 +533,12 @@
         "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
-      "deprecation": null
+      "evidence": [
+        "tests/foundation/crypto/test_quic_token.cpp",
+        "tests/foundation/crypto/test_quic_handshake.cpp"
+      ],
+      "deprecation": null,
+      "note": "Proven so far in crd-crypto (NET.2): the address-validation tokens of section 8.1 (quic.hpp, decision S13): Retry and NEW_TOKEN tokens told apart by their clear kind (8.1.1), sealed per token under a rotating fleet key and bound to the version, the client's address and, for a Retry token, its port and both connection IDs of its next Initial (8.1.2, 8.1.4, 17.2.5), their lifetimes and the clock skew, and NEW_TOKEN tokens accepted once (8.1.4); the round trips a Retry and a NEW_TOKEN token cost against the amplification limit (section 8) measured with real handshakes. RFC 9000 was read on 2026-11-02 for them. Remaining: the transport itself (4.2a), its paths (NET-PATH) and its qualification against real peers (NET.5)."
     },
     {
       "id": "quic.tls",
@@ -577,7 +582,7 @@
           "recommended": "Y"
         }
       ],
-      "note": "Proven so far in crd-crypto (NET.2): packet protection (section 5, quic.hpp, against the appendix A packets of RFC 9001 and RFC 9369) and the handshake over QUIC (section 4 and 8, QuicHandshake, decision S11): CRYPTO data per encryption level, each level's secrets into packet and header keys, the quic_transport_parameters extension both ways, application protocols required, alerts as CRYPTO_ERROR at their level, no TLS KeyUpdate, tickets under QUIC's own binding; against OpenSSL 3.5's QUIC TLS interface both ways in versions 1 and 2. The 57 codepoint was checked against IANA's TLS ExtensionType Values on 2026-11-01. Remaining: address validation (Retry and NEW_TOKEN) in NET.2, and the transport's use of the keys (key update protocol, discarding keys, the amplification limit) in 4.2a."
+      "note": "Proven so far in crd-crypto (NET.2): packet protection (section 5, quic.hpp, against the appendix A packets of RFC 9001 and RFC 9369) and the handshake over QUIC (section 4 and 8, QuicHandshake, decision S11): CRYPTO data per encryption level, each level's secrets into packet and header keys, the quic_transport_parameters extension both ways, application protocols required, alerts as CRYPTO_ERROR at their level, no TLS KeyUpdate, tickets under QUIC's own binding; against OpenSSL 3.5's QUIC TLS interface both ways in versions 1 and 2. The 57 codepoint was checked against IANA's TLS ExtensionType Values on 2026-11-01. Address validation (Retry and NEW_TOKEN tokens, RFC 9000 section 8.1) is quic.transport's. Remaining: the transport's use of the keys (key update protocol, discarding keys, the amplification limit) in 4.2a."
     },
     {
       "id": "quic.recovery",
