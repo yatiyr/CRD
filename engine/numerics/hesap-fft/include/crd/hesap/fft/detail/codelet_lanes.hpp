@@ -8,7 +8,8 @@
 // column, so the same bits, with a quarter or an eighth of the code. The portable vectors are arrays (a hierarchical
 // codelet unit took 10.9 GB at /O2, 2026-10-28), and unoptimized builds give every temporary its own stack slot (whole
 // SIMD bodies needed 1.2-1.4 MB frames, MSVC /Od /RTC1, 2026-07-03). __OPTIMIZE__ covers optimized GCC/Clang builds
-// without NDEBUG; MSVC's optimized configurations all define NDEBUG here. Only codelet units include this header.
+// without NDEBUG; MSVC's optimized configurations all define NDEBUG here. The codelet units include this header, and
+// the engine unit reads its tile lane's width (a step of whole tiles or a column) to pick in-place pass 1's edition.
 
 #pragma once
 
