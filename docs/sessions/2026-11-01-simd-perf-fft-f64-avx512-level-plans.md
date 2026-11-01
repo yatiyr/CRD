@@ -46,8 +46,8 @@ Row: [SIMD-PERF](../ROADMAP.md#slice-simd-perf), Left item 1 (the fft forwards w
 - **A heap for the 4M walk** (`test(fft)`): the cross-level case walks each size past 1M at which a level the host
   runs plans other than canonically; avx512's f64 2M and 4M rows took the f64 case to 4M, where seven 64 MiB buffers
   and three plans ran its 1 GiB heap out (`TlsfAllocator: out of memory`, reported by CTest as SIGILL from the fatal
-  handler, at the plain and the forced-avx512 arm). The heap now holds 32 transforms of the walk's largest size,
-  at least 1 GiB.
+  handler, at the plain and the forced-avx512 arm). The heap now holds 32 transforms of the largest size the walk
+  runs on the host, at least 1 GiB.
 - **The paired board's judgement** (`perf(fft)`): board 2 measured every row against the canonical arm at offsets
   0 and 16. It decided 8K to 32K, which the passes' overlapping ranges had left canonical (the deep-split-3 1.06x to
   1.23x faster at both offsets), and found the passes' 256K row 4.2% slower off a line. `gen_fft_level_plans.py
@@ -84,7 +84,10 @@ Row: [SIMD-PERF](../ROADMAP.md#slice-simd-perf), Left item 1 (the fft forwards w
   first candidate's run had failed only the two f64 cross-level arms, the heap above).
 - Locally: `gen_fft_level_plans.py --check`, the generated-sources record refreshed, the `FftLevelPlans` cases, the
   plan, repository and Allman checks.
-- The machine ran 1.70 h in one start and is stopped.
+- After the push, the heap followed the table's largest row on every host (2 GiB for the f64 case even where the
+  walk stops at 1M); it now follows the largest size the walk runs here, and the 102 `hesap-fft` cases (the forced
+  level arms among them) passed on the machine.
+- The machine ran 1.76 h in two starts (1.70 h, then 0.06 h for the heap's follow-up) and is stopped.
 
 ## Left
 
