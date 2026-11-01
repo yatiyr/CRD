@@ -53,14 +53,25 @@ constexpr cont::StringView kMeasureNames[] = {"comprehensive", "sectoral"};
     return !text.empty() && is_utf8(text);
 }
 
-// type:value, the type a dotted lower-case word, the value well-formed UTF-8 holding at least one ASCII letter or
-// digit; `out` receives type:value with the value reduced to its ASCII letters and digits in lower case, the form
-// identifiers are compared in (A 1234-567 and a1234567 are one passport number).
+// An ISO 3166-1 alpha-2 code in lower case: an identifier's issuing country.
+[[nodiscard]] bool is_lower_country(cont::StringView text) noexcept
+{
+    return text.size() == 2U && text[0] >= 'a' && text[0] <= 'z' && text[1] >= 'a' && text[1] <= 'z';
+}
+
+// kind[.cc]:value (sanctions.hpp's Party::identifiers): `out` receives it with the value reduced to its ASCII letters
+// and digits in lower case, the form identifiers are compared in (A 1234-567 and a1234567 are one passport number).
 [[nodiscard]] bool normalise_identifier(cont::StringView text, cont::String& out)
 {
     const usize colon = text.find(':');
-    if (colon == cont::StringView::npos || !is_dotted(text.substr(0U, colon), is_lower_alnum) ||
-        !is_utf8(text.substr(colon + 1U)))
+    if (colon == cont::StringView::npos || !is_utf8(text.substr(colon + 1U)))
+    {
+        return false;
+    }
+    const cont::StringView type = text.substr(0U, colon);
+    const usize dot = type.find('.');
+    if (!is_dotted(type.substr(0U, dot), is_lower_alnum) ||
+        (dot != cont::StringView::npos && !is_lower_country(type.substr(dot + 1U))))
     {
         return false;
     }
@@ -74,6 +85,25 @@ constexpr cont::StringView kMeasureNames[] = {"comprehensive", "sectoral"};
         }
     }
     return out.size() > prefix;
+}
+
+// Two identifiers in compared form agree when their kinds and values are equal and their issuing countries are equal
+// or one of them names none (a passport number the list prints without its country).
+[[nodiscard]] bool identifiers_agree(cont::StringView a, cont::StringView b) noexcept
+{
+    const usize a_colon = a.find(':');
+    const usize b_colon = b.find(':');
+    if (a.substr(a_colon) != b.substr(b_colon))
+    {
+        return false;
+    }
+    const cont::StringView a_type = a.substr(0U, a_colon);
+    const cont::StringView b_type = b.substr(0U, b_colon);
+    const usize a_dot = a_type.find('.');
+    const usize b_dot = b_type.find('.');
+    return a_type.substr(0U, a_dot) == b_type.substr(0U, b_dot) &&
+           (a_dot == cont::StringView::npos || b_dot == cont::StringView::npos ||
+            a_type.substr(a_dot) == b_type.substr(b_dot));
 }
 
 [[nodiscard]] std::chrono::sys_days days_of(Day day) noexcept
@@ -95,6 +125,31 @@ constexpr cont::StringView kMeasureNames[] = {"comprehensive", "sectoral"};
     const std::chrono::year_month_day civil{days};
     return (static_cast<u32>(static_cast<int>(civil.year())) * 10000U) + (static_cast<u32>(civil.month()) * 100U) +
            static_cast<u32>(civil.day());
+}
+
+// One YYYY, YYYY-MM or YYYY-MM-DD as the days it covers.
+[[nodiscard]] bool parse_one_period(cont::StringView text, Period& out) noexcept
+{
+    Day first = kNoDay;
+    if (!parse_day(text, first))
+    {
+        return false;
+    }
+    if (text.size() == 4U)
+    {
+        out = Period{first, ((first / 10000U) * 10000U) + 1231U};
+        return true;
+    }
+    if (text.size() == 7U)
+    {
+        const std::chrono::year_month_day_last last{
+            std::chrono::year{static_cast<int>(first / 10000U)},
+            std::chrono::month_day_last{std::chrono::month{(first / 100U) % 100U}}};
+        out = Period{first, day_of(std::chrono::sys_days{last})};
+        return true;
+    }
+    out = Period{first, first};
+    return true;
 }
 
 class Decoder : public detail::TomlDecoder
@@ -220,7 +275,7 @@ private:
         Party& party = m_out.parties.emplace_back();
         cont::StringView id;
         if (!string_at(table, "id", id) || !enumeration(table, "kind", kPartyKindNames, party.kind) ||
-            !day(table, "listed", party.listed, true))
+            !day(table, "listed", party.listed, false))
         {
             return false;
         }
@@ -300,7 +355,7 @@ private:
     bool read_identifiers(const node& table, Party& party)
     {
         cont::Array<cont::StringView> items;
-        if (!list(table, "identifiers", is_text, items, kMaxPartyItems, true))
+        if (!list(table, "identifiers", is_text, items, kMaxPartyIdentifiers, true))
         {
             return false;
         }
@@ -462,7 +517,7 @@ void screen_parties(const SanctionsList& list, const Prepared& subject, const Sc
         {
             for (const cont::String& theirs : party.identifiers)
             {
-                identifier_agrees = identifier_agrees || cont::StringView(mine) == cont::StringView(theirs);
+                identifier_agrees = identifier_agrees || identifiers_agree(mine, theirs);
             }
         }
         if (best < policy.review && !identifier_agrees)
@@ -537,26 +592,20 @@ void screen_parties(const SanctionsList& list, const Prepared& subject, const Sc
 
 bool parse_period(cont::StringView text, Period& out) noexcept
 {
-    Day first = kNoDay;
-    if (!parse_day(text, first))
+    const usize slash = text.find('/');
+    if (slash != cont::StringView::npos)
     {
-        return false;
-    }
-    if (text.size() == 4U)
-    {
-        out = Period{first, ((first / 10000U) * 10000U) + 1231U};
+        Period first;
+        Period last;
+        if (!parse_one_period(text.substr(0U, slash), first) || !parse_one_period(text.substr(slash + 1U), last) ||
+            first.first > last.last)
+        {
+            return false;
+        }
+        out = Period{first.first, last.last};
         return true;
     }
-    if (text.size() == 7U)
-    {
-        const std::chrono::year_month_day_last last{
-            std::chrono::year{static_cast<int>(first / 10000U)},
-            std::chrono::month_day_last{std::chrono::month{(first / 100U) % 100U}}};
-        out = Period{first, day_of(std::chrono::sys_days{last})};
-        return true;
-    }
-    out = Period{first, first};
-    return true;
+    return parse_one_period(text, out);
 }
 
 DecodeFailure decode_sanctions(cont::StringView text, SanctionsList& out)

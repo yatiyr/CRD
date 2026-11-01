@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review GB
 format = "cerid-rules/1"
 jurisdiction = "GB"
-generation = 3
+generation = 4
 register = "2026-11-01"
 
 [[scope]]
@@ -185,12 +185,12 @@ id = "gb.sanctions"
 kind = "obligation"
 topic = "export-control"
 state = "planned"
-title = "UK sanctions (OFSI)"
+title = "UK sanctions (the UK Sanctions List)"
 instrument = "Sanctions and Anti-Money Laundering Act 2018"
 article = "Regulations made under the act"
 primary = "https://www.legislation.gov.uk/ukpga/2018/13"
 read = false
-obligation = "Screen distribution, accounts and payments against the UK consolidated list."
+obligation = "Screen distribution, accounts and payments against the UK Sanctions List."
 applies_to = ["channel.cerid-store", "flow.account-data", "flow.payments"]
 check = "active"
 check_name = "crd-comply-tests [sanctions]: parties and destinations screened against each authority's list, failing closed on a missing or stale list"

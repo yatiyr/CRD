@@ -1,0 +1,8 @@
+{
+  "schema": "cerid-sanctions-fetch/1",
+  "authority": "us.ofac.sdn",
+  "url": "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN.XML",
+  "day": "2026-11-01",
+  "bytes": 36100,
+  "sha256": "4989e70c81fdfef8db045ad3e6fbc6a7dadcd70186b86ffcb91ef9606602ab7c"
+}

@@ -37,7 +37,12 @@ The guard fails, among the format errors, on:
     `key_bits`) and, in the legal domain (COMPLY.1), an export whose cryptography inventory (recomputed by
     scripts/gen-crypto-inventory.py from the build and the standards register) differs from the one its head
     classification record was reviewed against, a head record whose findings do not answer every export-control
-    obligation the classification checks, and a release classified before counsel reviewed it.
+    obligation the classification checks, and a release classified before counsel reviewed it;
+  - in the legal domain (COMPLY.1), `sanctions_lists`: an official list file that names no entry whose active check
+    is the screening, a URL off that entry's jurisdiction's official hosts, an unknown importer format of
+    scripts/import-sanctions.py, a malformed delivery host, a maximum age outside the decoder's bound, a record of the
+    file read that is incomplete, published after it was read or read after today, and a screening entry with neither
+    a list nor a pending reason (or with both).
 
   python scripts/check-registers.py [--root <repository root>] [--today YYYY-MM-DD]
 """
@@ -72,7 +77,7 @@ DOMAINS = {
     },
     'legal': {
         'register_keys': {'jurisdictions', 'scopes', 'rule_generations', 'crypto_classifications',
-                          'counsel_reviews'},
+                          'counsel_reviews', 'sanctions_lists'},
         'entry_keys': {'topic', 'instrument', 'obligation', 'applies_to', 'check', 'effective', 'sunset', 'counsel'},
         'kinds': {'obligation', 'user-action'},
     },
@@ -120,6 +125,15 @@ _spec = importlib.util.spec_from_file_location('gen_crypto_inventory', Path(__fi
 _inventory = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_inventory)
 _ids = _inventory._ids
+_spec = importlib.util.spec_from_file_location('import_sanctions', Path(__file__).resolve().parent /
+                                               'import-sanctions.py')
+_sanctions = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_sanctions)
+SANCTIONS_LIST_KEYS = {'entry', 'title', 'format', 'url', 'delivery', 'max_age_days', 'read'}
+SANCTIONS_READ_KEYS = {'day', 'published', 'bytes', 'sha256', 'parties'}
+SCREENING_CHECK = 'tests/foundation/comply/test_sanctions.cpp'
+PUBLISHED = re.compile(r'^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?$')
+MAX_LIST_AGE_DAYS = 366  # crd::comply::kMaxListAgeDays
 
 
 def parse_day(text):
@@ -701,6 +715,86 @@ def rule_generation_errors(register, context):
     return errors
 
 
+def screening_entries(register):
+    """{id: entry} of the legal entries whose active check is the sanctions screening."""
+    return {entry['id']: entry for entry in register.get('entries') or []
+            if isinstance(entry, dict) and isinstance(entry.get('check'), dict) and
+            entry['check'].get('ref') == SCREENING_CHECK and entry['check'].get('state') == 'active'}
+
+
+def sanctions_read_errors(where, read, context):
+    """The record of the official file read: null until it is read."""
+    if read is None:
+        return []
+    if not isinstance(read, dict) or set(read) != SANCTIONS_READ_KEYS or type(read['bytes']) is not int or \
+            read['bytes'] < 1 or type(read['parties']) is not int or read['parties'] < 0 or \
+            not isinstance(read['sha256'], str) or not SHA256.match(read['sha256']) or \
+            not isinstance(read['published'], str):
+        return [f'{where}: read is null or holds the day, publication, bytes, sha256 and parties of the file read']
+    errors = date_errors(where, 'read.day', read['day'])
+    published = parse_day(read['published'][:10])
+    read_day = parse_day(read['day'])
+    if not PUBLISHED.match(read['published']) or published is None:
+        errors.append(f'{where}: read.published is the publication day or UTC instant (YYYY-MM-DD[Thh:mm:ssZ])')
+    elif read_day and published > read_day:
+        errors.append(f'{where}: the file read on {read["day"]} was published after it, on {read["published"]}')
+    if read_day and read_day > context.today:
+        errors.append(f'{where}: read on {read["day"]}, after today')
+    return errors
+
+
+def sanctions_list_errors(register, context):
+    """Each authority's official list names a screening entry, an https URL on an official host of the entry's
+    jurisdiction, the hosts it may redirect to, an importer format, its maximum age and the file read; every
+    screening entry has a list or a pending reason, never both."""
+    where = 'legal register: sanctions_lists'
+    section = register.get('sanctions_lists')
+    if not isinstance(section, dict) or set(section) != {'about', 'lists', 'pending'} or \
+            not isinstance(section['lists'], dict) or not isinstance(section['pending'], dict):
+        return [f"{where} holds about, lists (each authority's official file) and pending (a reason per entry)"]
+    screening = screening_entries(register)
+    errors, served = [], set()
+    for authority, config in section['lists'].items():
+        at = f'{where}: {authority}'
+        if not ID.match(authority):
+            errors.append(f'{at}: an authority is a dotted lower-case id')
+        if not isinstance(config, dict) or set(config) != SANCTIONS_LIST_KEYS:
+            errors.append(f'{at} has {", ".join(sorted(SANCTIONS_LIST_KEYS))}')
+            continue
+        entry = screening.get(config['entry'])
+        if entry is None:
+            errors.append(f'{at}: entry {config["entry"]!r} is no entry whose active check is the screening '
+                          f'({SCREENING_CHECK})')
+        else:
+            served.add(config['entry'])
+            code = entry['instrument']['jurisdiction'] if isinstance(entry.get('instrument'), dict) else None
+            hosts = (register.get('jurisdictions') or {}).get(code, {}).get('hosts', [])
+            host = host_of(config['url'])
+            if host is None or not any(host == official or host.endswith('.' + official) for official in hosts):
+                errors.append(f'{at}: {config["url"]} is not an https URL on an official {code} host '
+                              f'({", ".join(hosts)})')
+        if not isinstance(config['title'], str) or not config['title']:
+            errors.append(f'{at}: title names the list')
+        if config['format'] not in _sanctions.READERS:
+            errors.append(f'{at}: format is one of {", ".join(sorted(_sanctions.READERS))} ({_sanctions.TOOL})')
+        if not isinstance(config['delivery'], list) or \
+                not all(isinstance(host, str) and HOST.match(host) for host in config['delivery']):
+            errors.append(f'{at}: delivery lists the hosts its URL may redirect to (lower case)')
+        if type(config['max_age_days']) is not int or not 1 <= config['max_age_days'] <= MAX_LIST_AGE_DAYS:
+            errors.append(f"{at}: max_age_days is 1 to {MAX_LIST_AGE_DAYS} (the decoder's bound)")
+        errors += sanctions_read_errors(at, config['read'], context)
+    for entry_id, reason in section['pending'].items():
+        if entry_id not in screening:
+            errors.append(f'{where}: pending names {entry_id!r}, which is no screening entry')
+        elif entry_id in served:
+            errors.append(f'{where}: {entry_id} has a list, so it is not pending')
+        if not isinstance(reason, str) or not reason:
+            errors.append(f'{where}: pending {entry_id} gives its reason')
+    for entry_id in sorted(set(screening) - served - set(section['pending'])):
+        errors.append(f'{where}: the screening entry {entry_id} has no list and no pending reason')
+    return errors
+
+
 def finding_errors(where, findings, entries, required):
     """A record's findings: one per export-control obligation it classifies against, each with its classification,
     authorization, whether a report is owed and its basis in plain words; a head record answers exactly `required`."""
@@ -944,7 +1038,7 @@ def register_errors(domain, register, context):
     elif domain == 'legal':
         errors += jurisdiction_errors(register) + scope_errors(register, context) + topic_errors(entries) + \
             rule_generation_errors(register, context) + classification_errors(register, context) + \
-            counsel_review_errors(register, context)
+            counsel_review_errors(register, context) + sanctions_list_errors(register, context)
     return errors
 
 

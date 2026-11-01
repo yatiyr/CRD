@@ -1,0 +1,8 @@
+{
+  "schema": "cerid-sanctions-fetch/1",
+  "authority": "un.sc",
+  "url": "https://scsanctions.un.org/resources/xml/en/consolidated.xml",
+  "day": "2026-11-01",
+  "bytes": 18582,
+  "sha256": "e7d3f6674964f9a47f4af4da32c3b2022085d788b6f783868883ef38d7ee63e7"
+}

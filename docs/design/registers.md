@@ -267,16 +267,60 @@ elsewhere).
   authority's publications in order), `published`, `max_age_days` (1 to 366), the official file's `source` URL and
   `source_sha256`, then `[[destination]]` tables (`region`: ISO 3166-1 alpha-2 or an ISO 3166-2 subdivision,
   `program`, `measure`: `comprehensive` or `sectoral`) and `[[party]]` tables (`id`, `kind`: individual, entity,
-  vessel or aircraft, `names`: the primary name then the aliases, well-formed UTF-8, `programs`, `listed`, `births`:
-  YYYY, YYYY-MM or YYYY-MM-DD, individuals only, `countries`: ISO 3166-1 alpha-2, `identifiers`: `type:value`). A list
-  is decoded whole within its bounds (64 MiB, 131 072 parties, 1 024 destinations, 512 names and 64 other items a
-  party) and `SanctionsStore` adopts it only above its authority's generation, swapping it under the store's lock;
-  rollbacks, conflicts and repeats are refused with the store unchanged, as rule generations are. Authenticity on
-  delivery is NET.2's signed envelope.
-- **Importers come with the first read.** The official formats (OFAC's SDN and consolidated lists, the EU's financial
-  sanctions file, the UN Security Council's consolidated list, the UK sanctions list and Turkey's asset-freeze
-  decisions) are read from the files themselves, never from memory; the importers that write `cerid-sanctions/1`
-  land with the first read, which is a download the user approves.
+  vessel or aircraft, `names`: the primary name then the aliases, well-formed UTF-8, `programs`, `listed`: the
+  designation day, empty when the list does not say (OFAC's files), `births`: YYYY, YYYY-MM or YYYY-MM-DD, or two of
+  them joined by `/` (an ISO 8601 interval, from the first's first day to the second's last), individuals only,
+  `countries`: ISO 3166-1 alpha-2, `identifiers`: `kind[.cc]:value`). An identifier's kind is lower-case words
+  joined by `-` (`passport`, `national-id`, `tax-id`, `registration`, `imo`, `mmsi`, `swift`, `lei`, `crypto-xbt`,
+  `email`, `website`, ...), `.cc` the issuing country of a document or registration in lower case when the list
+  names it, and the value is compared as its ASCII letters and digits in lower case; two identifiers agree when their
+  kinds and values are equal and their countries are equal or one of them names none, so a Turkish passport number
+  never agrees with the German passport of the same digits. A list is decoded whole within its bounds (64 MiB,
+  131 072 parties, 1 024 destinations, 512 names, 1 024 identifiers and 64 other items a party: OFAC lists 134
+  digital currency addresses on one party) and `SanctionsStore` adopts it only above its authority's generation,
+  swapping it under the store's lock; rollbacks, conflicts and repeats are refused with the store unchanged, as rule
+  generations are. Authenticity on delivery is NET.2's signed envelope.
+- **Importers read the official files** ([scripts/import-sanctions.py](../../scripts/import-sanctions.py)). The legal
+  register's `sanctions_lists` names each authority's official file: the screening entry it serves, the canonical
+  URL (on an official host of that entry's jurisdiction), the hosts the URL may redirect to (OFAC and the UN answer
+  with a signed link to their file stores; any other host is refused), the importer format, the generation's maximum
+  age and the record of the file read (day, publication, bytes, SHA-256, parties). `fetch` downloads each file over
+  https with the register-review client and says whether it is the file the register recorded; `import` writes
+  `<out>/<authority>.sanctions.toml`; `record` records a reviewed refresh. The raw files stay outside the repository
+  (re-fetched and verified by digest); real-byte excerpts of each format, entries cut whole, are the importer's test
+  inputs (`tests/foundation/comply/lists`). Authorities, formats and the first read (2026-11-01):
+
+  | Authority | List | Format | Maximum age |
+  |---|---|---|---|
+  | `us.ofac.sdn` | OFAC's SDN List | OFAC XML | 31 days |
+  | `us.ofac.cons` | OFAC's Consolidated (non-SDN) List | OFAC XML | 92 days: it changes rarely (the file read was 13 days old) |
+  | `eu.fsf` | the EU's financial sanctions file (FSF 1.1) | FSF XML | 31 days |
+  | `un.sc` | the UN Security Council Consolidated List | UN XML | 7 days: regenerated daily |
+  | `gb.fcdo` | the UK Sanctions List | UK XML | 31 days |
+
+  A generation's number is its publication instant as YYYYMMDDhhmmss (the EU's and the UN's files carry it); a file
+  stamped only with its day (OFAC's, the UK's) takes YYYYMMDD000000 and counts up from the previous generation for a
+  second publication that day; a file already imported is left as it is and an older publication is refused. Every
+  reader fails closed: an element, identifier type, country name, calendar or date shape it does not know refuses
+  the import with the party and the value, and a document type declaration is refused before the tree is built.
+  Names are the primary name, every alias (weak ones too: a hit is at most possible without an agreeing birth,
+  country or identifier) and the names in their own scripts; countries are nationality, citizenship, residence,
+  registration, an identifier's issuing country and a vessel's flag (an authority's "false" flag, a former state or a
+  disputed region records none); OFAC's descriptive idList items (sanctions information, dates, gender, a phone number
+  printed in fragments) are read and never compared. Births keep what the list says and never narrow it: a range
+  (OFAC's "1961 to 1962", the EU's year range with an open end running to 1900 or 9999, the UN's BETWEEN) is one
+  interval; an approximate date (circa, APPROXIMATELY) records no period, so it never contradicts a subject; a Hijri
+  date is its tabular Gregorian day two days either side (the observed and Umm al-Qura months start up to two days
+  from it: the UN's 24/06/1402 is 17 to 21 April 1982, the EU printing 19 April); an Islamic-calendar year without a
+  day is both its lunar and its Solar Hijri year (the EU prints Iranian births in the Solar Hijri year under
+  ISLAMIC); the UK's `dd/mm/19yy` is its century. Turkey's asset-freeze decisions (Laws No. 6415 and 7262) are
+  `pending`: MASAK publishes them through a web application with no list file at a stable address, so they are read
+  from the Official Gazette and MASAK next. A list's maximum age is a backstop measured from its publication day;
+  that a held list is still the authority's current one is the refresh's knowledge, carried with NET.2's signed
+  delivery. The embargoed destinations are none of these files: each authority's comprehensive and sectoral regimes
+  are authored generations of their own from the regulations read (31 CFR chapter V, the EU's Article 215
+  regulations, the UK's regime regulations, the UN resolutions). Until those generations land (a remaining clause of
+  COMPLY.1), a destination screened against the designation lists alone finds no embargo.
 - **Folding.** Names are compared in search-folded form (`text.search-folding`, crd-core's
   [text_fold.hpp](../../engine/foundation/core/include/crd/core/text_fold.hpp)): lower case; Latin letters with
   diacritics, ligatures and fullwidth forms to ASCII (Ş and ş to s, İ and ı to i, ø to o, ß to ss, æ to ae, the
@@ -320,9 +364,14 @@ elsewhere).
   serves the same screening once [MCP-ADAPT](../ROADMAP.md#slice-mcp-adapt) gives commands one declaration for
   every surface.
 - **Tests.** `crd-comply-tests` (`[names]` and `[sanctions]`: folding, both sides of the review threshold, every
-  refusal, the store, every disposition and verdict, a concurrent applier and screener, a list of 20 000 parties),
-  the `crd-fuzz-comply-sanctions` corpus and `crd-ceridc-tests` `[screen]` (every verdict and hit field, failing
-  closed, every refusal, the real binary's bytes).
+  refusal, the store, every disposition and verdict, identifiers with and without their issuing country, birth
+  intervals, the identifier bound, a concurrent applier and screener, a list of 20 000 parties), the
+  `crd-fuzz-comply-sanctions` corpus, `crd-ceridc-tests` `[screen]` (every verdict and hit field, failing closed,
+  every refusal, the real binary's bytes), the importer's Python cases (`SanctionsLists` in
+  `scripts/test-repository-tools.py`: every format on the excerpts, every refusal, generations, calendars, the
+  register's `sanctions_lists` guard) and the official formats end to end: `crd-comply-sanctions-import` imports the
+  excerpts into an emptied directory and `crd-comply-sanctions-imported` (the hidden `[.imported]` case) decodes,
+  adopts and screens what it wrote.
 
 <a id="snapshot-and-review"></a>
 ## Snapshot and review

@@ -161,7 +161,8 @@
         "enisa.europa.eu",
         "commission.europa.eu",
         "euipo.europa.eu",
-        "sanctionsmap.eu"
+        "sanctionsmap.eu",
+        "ec.europa.eu"
       ]
     },
     "GB": {
@@ -185,7 +186,8 @@
         "access-board.gov",
         "cisa.gov",
         "fcc.gov",
-        "treasury.gov"
+        "treasury.gov",
+        "treas.gov"
       ]
     },
     "US-CA": {
@@ -3656,7 +3658,7 @@
     },
     {
       "id": "gb.sanctions",
-      "title": "UK sanctions (OFSI)",
+      "title": "UK sanctions (the UK Sanctions List)",
       "kind": "obligation",
       "topic": "export-control",
       "state": "planned",
@@ -3674,7 +3676,7 @@
         "primary": "https://www.legislation.gov.uk/ukpga/2018/13",
         "consolidated": null
       },
-      "obligation": "Screen distribution, accounts and payments against the UK consolidated list.",
+      "obligation": "Screen distribution, accounts and payments against the UK Sanctions List.",
       "applies_to": [
         "channel.cerid-store",
         "flow.account-data",
@@ -5430,9 +5432,9 @@
       "sha256": "d21ebcf72cba3d82286cd5c41c7ddf08b6b26943203175c838ade5794201d6a3"
     },
     "GB": {
-      "generation": 3,
+      "generation": 4,
       "reviewed": "2026-11-01",
-      "sha256": "d15a9f569a8e46f52395e016997bf93ed20923923774391f6f91d84b4fc576a2"
+      "sha256": "df4b8ccc3ff37b1942b972d07454b2dc0067bb6dd53e12fa19c3cfff9a1d968b"
     },
     "INT": {
       "generation": 4,
@@ -6060,5 +6062,94 @@
         }
       ]
     }
-  ]
+  ],
+  "sanctions_lists": {
+    "about": "Each authority's official list file: the entry it serves, the canonical URL (its host among the jurisdiction's official hosts), the hosts that URL may redirect to, the importer format of scripts/import-sanctions.py, the maximum age of the imported generation and the record of the file read. Raw files stay outside the repository, re-fetched and verified by digest.",
+    "lists": {
+      "us.ofac.sdn": {
+        "entry": "us.sanctions",
+        "title": "OFAC Specially Designated Nationals and Blocked Persons List (SDN List)",
+        "format": "ofac-xml",
+        "url": "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN.XML",
+        "delivery": [
+          "wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com"
+        ],
+        "max_age_days": 31,
+        "read": {
+          "day": "2026-11-01",
+          "published": "2026-10-28",
+          "bytes": 29271441,
+          "sha256": "0213f3a07b569dabf643e7ea8fd23d81327f83a2ace023a41ef311796accf1a8",
+          "parties": 19484
+        }
+      },
+      "us.ofac.cons": {
+        "entry": "us.sanctions",
+        "title": "OFAC Consolidated Sanctions List (the non-SDN lists)",
+        "format": "ofac-xml",
+        "url": "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/CONSOLIDATED.XML",
+        "delivery": [
+          "wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com"
+        ],
+        "max_age_days": 92,
+        "read": {
+          "day": "2026-11-01",
+          "published": "2026-10-19",
+          "bytes": 1078267,
+          "sha256": "06323d16735a0461d9dc03332ce1fed74d8525244df8b27a47ef12174b8c38f1",
+          "parties": 486
+        }
+      },
+      "eu.fsf": {
+        "entry": "eu.restrictive-measures",
+        "title": "Consolidated list of persons, groups and entities subject to EU financial sanctions (FSF 1.1)",
+        "format": "eu-fsf-xml",
+        "url": "https://webgate.ec.europa.eu/fsd/fsf/public/files/xmlFullSanctionsList_1_1/content?token=dG9rZW4tMjAxNw",
+        "delivery": [],
+        "max_age_days": 31,
+        "read": {
+          "day": "2026-11-01",
+          "published": "2026-10-23T15:05:43Z",
+          "bytes": 25899600,
+          "sha256": "636800c3e494b2ef8934f51f5e23c914a6208a383ac850e674b1b35a7d49d34f",
+          "parties": 6269
+        }
+      },
+      "un.sc": {
+        "entry": "int.un-sanctions",
+        "title": "United Nations Security Council Consolidated List",
+        "format": "un-sc-xml",
+        "url": "https://scsanctions.un.org/resources/xml/en/consolidated.xml",
+        "delivery": [
+          "unsolprodfiles.blob.core.windows.net"
+        ],
+        "max_age_days": 7,
+        "read": {
+          "day": "2026-11-01",
+          "published": "2026-10-31T23:00:07Z",
+          "bytes": 2177571,
+          "sha256": "9104cf8495637693c0c05ec203fa45c8a50340f7127a0c5bd1616db92ea127cd",
+          "parties": 1007
+        }
+      },
+      "gb.fcdo": {
+        "entry": "gb.sanctions",
+        "title": "UK Sanctions List",
+        "format": "gb-uksl-xml",
+        "url": "https://sanctionslist.fcdo.gov.uk/docs/UK-Sanctions-List.xml",
+        "delivery": [],
+        "max_age_days": 31,
+        "read": {
+          "day": "2026-11-01",
+          "published": "2026-10-30",
+          "bytes": 22084189,
+          "sha256": "ed397aa9c89106c2615eee20ba249e364273c185c41245e7027659fce7d01086",
+          "parties": 6420
+        }
+      }
+    },
+    "pending": {
+      "tr.asset-freeze": "MASAK publishes the asset-freeze decisions under Laws No. 6415 and 7262 through a web application (masak.hmb.gov.tr) with no list file at a stable address; the decisions are read from the Official Gazette and MASAK next, then imported."
+    }
+  }
 }

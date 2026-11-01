@@ -19,6 +19,8 @@ import sys
 import tarfile
 import tempfile
 import time
+import tomllib
+import xml.etree.ElementTree as ET
 import unittest
 import urllib.error
 import urllib.parse
@@ -172,6 +174,9 @@ crypto_inventory_spec.loader.exec_module(crypto_inventory)
 text_fold_spec = importlib.util.spec_from_file_location('gen_text_fold', ROOT / 'scripts/gen-text-fold.py')
 text_fold = importlib.util.module_from_spec(text_fold_spec)
 text_fold_spec.loader.exec_module(text_fold)
+sanctions_spec = importlib.util.spec_from_file_location('import_sanctions', ROOT / 'scripts/import-sanctions.py')
+sanctions_import = importlib.util.module_from_spec(sanctions_spec)
+sanctions_spec.loader.exec_module(sanctions_import)
 review_spec = importlib.util.spec_from_file_location('register_review', ROOT / 'scripts/register-review.py')
 register_review = importlib.util.module_from_spec(review_spec)
 review_spec.loader.exec_module(register_review)
@@ -5594,6 +5599,8 @@ class RegisterFixture:
             legal = dict(legal, rule_generations=self.reviewed(root, legal))
         if 'counsel_reviews' not in legal:
             legal = dict(legal, counsel_reviews=self.counsel_reviews(legal))
+        if 'sanctions_lists' not in legal:
+            legal = dict(legal, sanctions_lists={'about': 'fixture', 'lists': {}, 'pending': {}})
         (root / 'cmake' / 'legal-register.json').write_text(json.dumps(legal), encoding='utf-8')
         capabilities = {'capabilities': [{'id': 'network.transport', 'owner': 'net', 'status': 'planned'},
                                          {'id': 'compliance.obligations', 'owner': 'comply', 'status': 'planned'}]}
@@ -6574,6 +6581,330 @@ class CryptoInventory(RegisterFixture, unittest.TestCase):
             self.set_classifications(root, classifications)
             self.assertIn("cerid-package's head record states no findings",
                           self.run_tool(root, '--review', 'cerid-package')[1])
+
+
+class SanctionsLists(RegisterFixture, unittest.TestCase):
+    """scripts/import-sanctions.py and the legal register's sanctions_lists (COMPLY.1): the official files are read
+    by format (OFAC, the EU's FSF, the UN Security Council, the UK Sanctions List) into cerid-sanctions/1 generations,
+    every unknown value refused; the guard holds each list to a screening entry, an official host, a format, a bound
+    age and the record of the file read."""
+
+    LISTS = ROOT / 'tests/foundation/comply/lists'
+    SCREENING = {'ref': 'tests/foundation/comply/test_sanctions.cpp', 'name': 'screening', 'state': 'active'}
+    URL = 'https://www.mevzuat.gov.tr/list.xml'
+
+    def screening_entry(self, **changes):
+        return self.legal_entry(id='tr.asset-freeze', topic='privacy', check=dict(self.SCREENING), **changes)
+
+    def sanctions(self, **changes):
+        config = {'entry': 'tr.asset-freeze', 'title': 'A list', 'format': 'ofac-xml', 'url': self.URL,
+                  'delivery': ['files.example.org'], 'max_age_days': 31,
+                  'read': {'day': '2026-11-01', 'published': '2026-10-28', 'bytes': 12, 'sha256': 'ab' * 32,
+                           'parties': 3}}
+        config.update(changes)
+        return {'about': 'fixture', 'lists': {'tr.masak': config}, 'pending': {}}
+
+    def run_lists(self, section, entries=None, today='2026-11-01'):
+        legal = self.legal_register(entries or [self.screening_entry()], sanctions_lists=section)
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            self.write_tree(root, self.register([self.entry()]), legal)
+            (root / 'tests/foundation/comply').mkdir(parents=True)
+            (root / 'tests/foundation/comply/test_sanctions.cpp').write_text('// screening\n', encoding='utf-8')
+            return self.guard(root, today)
+
+    def assert_lists_fail(self, section, message, entries=None, today='2026-11-01'):
+        code, output = self.run_lists(section, entries, today)
+        self.assertEqual(1, code, output)
+        self.assertIn(message, output)
+
+    def test_a_list_on_an_official_host_with_its_read_passes(self):
+        code, output = self.run_lists(self.sanctions())
+        self.assertEqual(0, code, output)
+        code, output = self.run_lists(self.sanctions(read=None, delivery=[]))
+        self.assertEqual(0, code, output)
+        instant = self.sanctions()
+        instant['lists']['tr.masak']['read']['published'] = '2026-10-31T23:00:07Z'
+        self.assertEqual(0, self.run_lists(instant)[0])
+        self.assertEqual(0, self.run_lists({'about': 'x', 'lists': {}, 'pending': {'tr.asset-freeze': 'later'}})[0])
+
+    def test_every_list_names_a_screening_entry_an_official_url_a_format_and_a_bounded_age(self):
+        where = 'legal register: sanctions_lists: tr.masak'
+        self.assert_lists_fail(None, 'legal register: sanctions_lists holds about, lists')
+        self.assert_lists_fail(self.sanctions(entry='tr.kvkk.processing'),
+                               f"{where}: entry 'tr.kvkk.processing' is no entry whose active check is the screening")
+        self.assert_lists_fail(self.sanctions(url='https://lists.example.org/x.xml'),
+                               f'{where}: https://lists.example.org/x.xml is not an https URL on an official TR host')
+        self.assert_lists_fail(self.sanctions(url='http://www.mevzuat.gov.tr/list.xml'), 'not an https URL')
+        self.assert_lists_fail(self.sanctions(format='csv'), f'{where}: format is one of eu-fsf-xml, gb-uksl-xml')
+        self.assert_lists_fail(self.sanctions(delivery=['Files.Example.org']), f'{where}: delivery lists the hosts')
+        for age in (0, 367, True, '31'):
+            with self.subTest(age=age):
+                self.assert_lists_fail(self.sanctions(max_age_days=age), f'{where}: max_age_days is 1 to 366')
+        self.assert_lists_fail(self.sanctions(title=''), f'{where}: title names the list')
+        unknown = self.sanctions()
+        unknown['lists']['tr.masak']['note'] = 'x'
+        self.assert_lists_fail(unknown, f'{where} has delivery, entry, format, max_age_days, read, title, url')
+        self.assert_lists_fail({'about': 'x', 'lists': {'TR.masak': self.sanctions()['lists']['tr.masak']},
+                                'pending': {}}, 'an authority is a dotted lower-case id')
+
+    def test_the_record_of_the_file_read_is_complete_and_in_order(self):
+        where = 'legal register: sanctions_lists: tr.masak'
+        for key, value in (('sha256', 'AB' * 32), ('bytes', 0), ('parties', -1), ('published', 7)):
+            with self.subTest(key=key):
+                section = self.sanctions()
+                section['lists']['tr.masak']['read'][key] = value
+                self.assert_lists_fail(section, f'{where}: read is null or holds the day, publication')
+        section = self.sanctions()
+        section['lists']['tr.masak']['read']['published'] = '2026-11-02'
+        self.assert_lists_fail(section, f'{where}: the file read on 2026-11-01 was published after it, on 2026-11-02',
+                               today='2026-11-03')
+        section['lists']['tr.masak']['read']['published'] = '28/10/2026'
+        self.assert_lists_fail(section, f'{where}: read.published is the publication day or UTC instant')
+        self.assert_lists_fail(self.sanctions(), f'{where}: read on 2026-11-01, after today', today='2026-10-31')
+
+    def test_every_screening_entry_has_a_list_or_a_pending_reason_never_both(self):
+        where = 'legal register: sanctions_lists'
+        empty = {'about': 'x', 'lists': {}, 'pending': {}}
+        self.assert_lists_fail(empty, f'{where}: the screening entry tr.asset-freeze has no list and no pending reason')
+        both = self.sanctions()
+        both['pending'] = {'tr.asset-freeze': 'later'}
+        self.assert_lists_fail(both, f'{where}: tr.asset-freeze has a list, so it is not pending')
+        self.assert_lists_fail({'about': 'x', 'lists': {}, 'pending': {'tr.asset-freeze': ''}},
+                               f'{where}: pending tr.asset-freeze gives its reason')
+        stray = self.sanctions()
+        stray['pending'] = {'tr.kvkk.processing': 'x'}
+        self.assert_lists_fail(stray, f"{where}: pending names 'tr.kvkk.processing', which is no screening entry")
+
+    # The importer, on the committed excerpts of the official files.
+
+    def imported(self, authority, out):
+        register = sanctions_import.load_register(ROOT)
+        config = register['sanctions_lists']['lists'][authority]
+        _, body = sanctions_import.fetched(self.LISTS, authority)
+        result = sanctions_import.import_list(authority, config, sanctions_import.jurisdiction_of(register, config),
+                                              body, out)
+        return result, tomllib.loads((Path(out) / f'{authority}.sanctions.toml').read_text(encoding='utf-8'))
+
+    @staticmethod
+    def party(document, party_id):
+        return next(party for party in document['party'] if party['id'] == party_id)
+
+    def test_each_official_format_imports_its_parties_births_countries_and_identifiers(self):
+        with tempfile.TemporaryDirectory() as out:
+            (generation, parties, published), sdn = self.imported('us.ofac.sdn', out)
+            self.assertEqual((20261028000000, 8, '2026-10-28'), (generation, parties, published))
+            self.assertEqual('cerid-sanctions/1', sdn['format'])
+            self.assertEqual(('us.ofac.sdn', 'US', 31), (sdn['authority'], sdn['jurisdiction'], sdn['max_age_days']))
+            self.assertEqual('https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN.XML',
+                             sdn['source'])
+            bank = self.party(sdn, 'us.ofac.sdn.306')
+            self.assertEqual(('entity', ['BANCO NACIONAL DE CUBA', 'BNC', 'NATIONAL BANK OF CUBA'], ['CUBA'], ''),
+                             (bank['kind'], bank['names'], bank['programs'], bank['listed']))
+            self.assertEqual(['CH', 'ES', 'JP', 'PA'], bank['countries'])
+            khorasan = self.party(sdn, 'us.ofac.sdn.18647')
+            self.assertEqual(134, len(khorasan['identifiers']))
+            self.assertTrue(all(item.startswith('crypto-') for item in khorasan['identifiers']))
+            vessel = self.party(sdn, 'us.ofac.sdn.4249')
+            self.assertEqual(('vessel', ['CU'], ['imo:7206512', 'call-sign:CL2059']),
+                             (vessel['kind'], vessel['countries'], vessel['identifiers']))
+            self.assertEqual(['1961-01-01/1962-12-31'], self.party(sdn, 'us.ofac.sdn.15962')['births'])
+            self.assertEqual([], self.party(sdn, 'us.ofac.sdn.7782')['births'])  # circa: no period
+            self.assertEqual(['passport.tr:315408', 'driving-licence.tr:11550'],
+                             self.party(sdn, 'us.ofac.sdn.10589')['identifiers'])
+            self.assertEqual(['UA'], self.party(sdn, 'us.ofac.sdn.18961')['countries'])  # Region: Crimea
+            self.assertEqual(['aircraft-serial:391', 'aircraft-tail:EP-MMH'],
+                             self.party(sdn, 'us.ofac.sdn.18150')['identifiers'])
+
+            (generation, parties, published), eu = self.imported('eu.fsf', out)
+            self.assertEqual((20261023150543, 7, '2026-10-23T15:05:43Z'), (generation, parties, published))
+            self.assertEqual('2026-10-23', eu['published'])
+            self.assertEqual(['1924-07-31/1925-07-23', '1964-03-18/1965-03-22', '1965', '1964'],
+                             self.party(eu, 'eu.fsf.127388')['births'])
+            self.assertEqual(['1900/1980'], self.party(eu, 'eu.fsf.117053')['births'])
+            asiri = self.party(eu, 'eu.fsf.6177')
+            self.assertEqual(['1982-04-19', '1982-04-18'], asiri['births'])
+            self.assertEqual(['national-id.sa:1028745097', 'passport.sa:F654645'], asiri['identifiers'])
+            self.assertEqual('2003-07-08', self.party(eu, 'eu.fsf.13')['listed'])
+
+            (generation, parties, published), un = self.imported('un.sc', out)
+            self.assertEqual((20261031230007, 7), (generation, parties))
+            hijri = self.party(un, 'un.sc.qdi.291')
+            self.assertIn('1982-04-17/1982-04-21', hijri['births'])
+            self.assertIn('Ibrahim Hassan Tali Asiri (إبراهيم حسن '
+                          'طالع عسيري)', hijri['names'])
+            self.assertEqual('2015-07-01', self.party(un, 'un.sc.ssi.001')['listed'])  # printed with an offset
+            self.assertEqual(['1973/1974'], self.party(un, 'un.sc.cdi.030')['births'])
+            self.assertEqual('entity', self.party(un, 'un.sc.kpe.001')['kind'])
+
+            (generation, parties, published), uk = self.imported('gb.fcdo', out)
+            self.assertEqual((20261030000000, 6), (generation, parties))
+            self.assertEqual(['1900/1999'], self.party(uk, 'gb.fcdo.rus2701')['births'])  # 15/08/19yy
+            self.assertEqual(['1975'], self.party(uk, 'gb.fcdo.rus1683')['births'])  # 00/00/1975
+            self.assertEqual(['email:S@synesis.y', 'website:https://synesis.partners', 'registration:190950894',
+                              'registration:7704734000', 'registration:770301001'],
+                             self.party(uk, 'gb.fcdo.bel0065')['identifiers'])
+            self.assertEqual(('vessel', ['KM'], ['imo:9562233']),
+                             tuple(self.party(uk, 'gb.fcdo.dpr0075')[key] for key in ('kind', 'countries',
+                                                                                       'identifiers')))
+
+    def test_generations_count_publications_and_refuse_older_ones(self):
+        generation_of = sanctions_import.generation_of
+        self.assertEqual(20261028000000, generation_of('2026-10-28', None, 'a', 'x'))
+        self.assertEqual(20261031230007, generation_of('2026-10-31T23:00:07Z', None, 'a', 'x'))
+        self.assertIsNone(generation_of('2026-10-28', (20261028000000, 'a'), 'a', 'x'))
+        self.assertEqual(20261028000001, generation_of('2026-10-28', (20261028000000, 'a'), 'b', 'x'))
+        self.assertEqual(20261028000002, generation_of('2026-10-28', (20261028000001, 'b'), 'c', 'x'))
+        self.assertEqual(20261029000000, generation_of('2026-10-29', (20261028000001, 'b'), 'c', 'x'))
+        for published, previous in (('2026-10-27', (20261028000000, 'a')),
+                                    ('2026-10-31T23:00:07Z', (20261031230007, 'a')),
+                                    ('2026-10-31T22:00:00Z', (20261031230007, 'a'))):
+            with self.subTest(published=published):
+                with self.assertRaisesRegex(sanctions_import.SanctionsError, 'older than the imported'):
+                    generation_of(published, previous, 'b', 'x')
+        with tempfile.TemporaryDirectory() as out:
+            (first, _, _), _ = self.imported('gb.fcdo', out)
+            before = (Path(out) / 'gb.fcdo.sanctions.toml').read_bytes()
+            (again, _, _), _ = self.imported('gb.fcdo', out)
+            self.assertIsNone(again)  # the same file: already imported, left as it is
+            self.assertEqual(before, (Path(out) / 'gb.fcdo.sanctions.toml').read_bytes())
+            (Path(out) / 'gb.fcdo.sanctions.toml').write_text('generation = 1\n', encoding='utf-8')
+            with self.assertRaisesRegex(sanctions_import.SanctionsError, 'not a generation'):
+                self.imported('gb.fcdo', out)
+            self.assertEqual(20261030000000, first)
+
+    def mutated(self, authority, old, new):
+        body = (self.LISTS / f'{authority}.xml').read_bytes()
+        self.assertIn(old, body)
+        return body.replace(old, new, 1)
+
+    def read(self, authority, body):
+        register = sanctions_import.load_register(ROOT)
+        config = register['sanctions_lists']['lists'][authority]
+        return sanctions_import.READERS[config['format']](sanctions_import.parse_xml(body, authority), authority)
+
+    def test_every_unknown_value_refuses_the_import(self):
+        cases = [
+            ('us.ofac.sdn', b'<idType>Passport</idType>', b'<idType>Ration Card</idType>',
+             "the identifier type 'Ration Card' is not in"),
+            ('us.ofac.sdn', b'<country>Switzerland</country>', b'<country>Atlantis</country>',
+             "the country 'Atlantis' is not in"),
+            ('us.ofac.sdn', b'<sdnType>Vessel</sdnType>', b'<sdnType>Submarine</sdnType>', "has the type 'Submarine'"),
+            ('us.ofac.sdn', b'<Record_Count>8</Record_Count>', b'<Record_Count>9</Record_Count>',
+             '8 entries, but the file says 9'),
+            ('us.ofac.sdn', b'<dateOfBirth>circa ', b'<dateOfBirth>about ', 'the date of birth'),
+            ('us.ofac.sdn', b'<Publish_Date>10/28/2026</Publish_Date>', b'<Publish_Date>2026-10-28</Publish_Date>',
+             'the publish date'),
+            ('eu.fsf', b'calendarType="ISLAMIC"', b'calendarType="HEBREW"', "the calendar 'HEBREW'"),
+            ('eu.fsf', b'identificationTypeCode="imo"', b'identificationTypeCode="vin"',
+             "the identification type 'vin' is not in"),
+            ('eu.fsf', b'countryIso2Code="IQ"', b'countryIso2Code="Iraq"', "the country code 'Iraq'"),
+            ('eu.fsf', b'<subjectType code="person"', b'<subjectType code="group"', 'has no known subject type'),
+            ('un.sc', b'<TYPE_OF_DATE>BETWEEN</TYPE_OF_DATE>', b'<TYPE_OF_DATE>CIRCA</TYPE_OF_DATE>',
+             "the birth type 'CIRCA'"),
+            ('un.sc', b'(Hijri Calendar)', b'(Coptic Calendar)', 'the birth note'),
+            ('un.sc', b'<TYPE_OF_DOCUMENT>Passport</TYPE_OF_DOCUMENT>',
+             b'<TYPE_OF_DOCUMENT>Library card</TYPE_OF_DOCUMENT>', "the document type 'Library card' is not in"),
+            ('gb.fcdo', b'<IndividualEntityShip>Ship</IndividualEntityShip>',
+             b'<IndividualEntityShip>Plane</IndividualEntityShip>', "is a 'Plane'"),
+            ('gb.fcdo', b'<DOB>dd/mm/', b'<DOB>12/mm/', 'the date of birth'),
+            ('gb.fcdo', b'<DateGenerated>30/10/2026</DateGenerated>', b'<DateGenerated>2026</DateGenerated>',
+             'the generation day'),
+        ]
+        for authority, old, new, message in cases:
+            with self.subTest(authority=authority, new=new):
+                with self.assertRaisesRegex(sanctions_import.SanctionsError, re.escape(message)):
+                    self.read(authority, self.mutated(authority, old, new))
+        for body, message in ((b'<!DOCTYPE x [<!ENTITY a "b">]><x/>', 'a document type declaration'),
+                              (b'<!-- padding -->' * 8192 + b'<!DOCTYPE x SYSTEM "https://e.example/x.dtd"><x/>',
+                               'a document type declaration'),
+                              (b'<sdnList><unclosed>', 'not well-formed XML'), (b'<other/>', "not OFAC's sdnList")):
+            with self.subTest(body=body):
+                with self.assertRaisesRegex(sanctions_import.SanctionsError, re.escape(message)):
+                    self.read('us.ofac.sdn', body)
+        # OFAC's dated directive and programme notes are a family of attributes, read and never compared.
+        for note in (b'Listing Date (EO 14024 Directive 9):', b'Executive Order 14999 information:'):
+            with self.subTest(note=note):
+                _, parties = self.read('us.ofac.sdn', self.mutated('us.ofac.sdn', b'<idType>Passport</idType>',
+                                                                   b'<idType>' + note + b'</idType>'))
+                duzcan = next(party for party in parties if party.id == 'us.ofac.sdn.10589')
+                self.assertEqual(['driving-licence.tr:11550'], duzcan.identifiers)
+        with patch.object(sanctions_import, 'MAX_IDENTIFIERS', 133):
+            with self.assertRaisesRegex(sanctions_import.SanctionsError, '134 identifiers, more than the 133'):
+                self.read('us.ofac.sdn', (self.LISTS / 'us.ofac.sdn.xml').read_bytes())
+        twice = self.mutated('us.ofac.sdn', b'<uid>4249</uid>', b'<uid>306</uid>')
+        register = sanctions_import.load_register(ROOT)
+        config = register['sanctions_lists']['lists']['us.ofac.sdn']
+        with tempfile.TemporaryDirectory() as out:
+            with self.assertRaisesRegex(sanctions_import.SanctionsError, 'us.ofac.sdn.306 is listed twice'):
+                sanctions_import.import_list('us.ofac.sdn', config, 'US', twice, out)
+
+    def test_calendars_and_periods(self):
+        self.assertEqual('1982-04-17/1982-04-21', sanctions_import.hijri_period(24, 6, 1402, 'x'))
+        self.assertEqual(['1924-07-31/1925-07-23', '1964-03-18/1965-03-22'],
+                         sanctions_import.hijri_year_periods(1343, 'x'))
+        self.assertEqual('1965-03/1965', sanctions_import.interval('1965-03', '1965', 'x'))
+        self.assertEqual('1965', sanctions_import.interval('1965', '1965', 'x'))
+        with self.assertRaisesRegex(sanctions_import.SanctionsError, 'ends before it starts'):
+            sanctions_import.interval('1966', '1965-12', 'x')
+        self.assertEqual((datetime.date(2024, 2, 1), datetime.date(2024, 2, 29)), sanctions_import.bounds('2024-02'))
+        self.assertEqual('1962-02-17', sanctions_import.ofac_birth('17 Feb 1962', 'x'))
+        self.assertEqual('1962-02', sanctions_import.ofac_birth('Feb 1962', 'x'))
+        self.assertEqual('1961-01-01/1962-12-31', sanctions_import.ofac_birth('01 Jan 1961 to 31 Dec 1962', 'x'))
+        self.assertIsNone(sanctions_import.ofac_birth('circa 1958', 'x'))
+        # An approximate date records no period, so no birth contradicts it.
+        approximate = ET.fromstring('<birthdate circa="true" calendarType="GREGORIAN" year="1960"/>')
+        self.assertEqual([], sanctions_import.eu_birth(approximate, 'x'))
+        approximate.set('circa', 'false')
+        self.assertEqual(['1960'], sanctions_import.eu_birth(approximate, 'x'))
+        about = ET.fromstring('<D><TYPE_OF_DATE>APPROXIMATELY</TYPE_OF_DATE><YEAR>1960</YEAR></D>')
+        self.assertIsNone(sanctions_import.un_birth(about, 'x'))
+        about.find('TYPE_OF_DATE').text = 'EXACT'
+        self.assertEqual('1960', sanctions_import.un_birth(about, 'x'))
+        self.assertEqual('1975', sanctions_import.uk_birth('00/00/1975', 'x'))
+        self.assertEqual('1968-11', sanctions_import.uk_birth('dd/11/1968', 'x'))
+        for bad in ('12/mm/1968', '31/02/1968', '1968-11-12'):
+            with self.subTest(bad=bad):
+                with self.assertRaises(sanctions_import.SanctionsError):
+                    sanctions_import.uk_birth(bad, 'x')
+
+    def test_a_fetched_file_must_be_the_one_its_record_names_and_record_writes_the_read(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root, fetched = Path(scratch) / 'root', Path(scratch) / 'fetched'
+            shutil.copytree(self.LISTS, fetched)
+            (root / 'cmake').mkdir(parents=True)
+            shutil.copy(ROOT / sanctions_import.REGISTER, root / sanctions_import.REGISTER)
+            with patch('sys.stdout', new_callable=io.StringIO):
+                self.assertEqual(0, sanctions_import.main(['--root', str(root), 'record', '--from', str(fetched),
+                                                           '--authority', 'un.sc']))
+            register = json.loads((root / sanctions_import.REGISTER).read_text(encoding='utf-8'))
+            read = register['sanctions_lists']['lists']['un.sc']['read']
+            self.assertEqual({'day': '2026-11-01', 'published': '2026-10-31T23:00:07Z', 'parties': 7},
+                             {key: read[key] for key in ('day', 'published', 'parties')})
+            self.assertEqual(hashlib.sha256((fetched / 'un.sc.xml').read_bytes()).hexdigest(), read['sha256'])
+            body = (fetched / 'un.sc.xml').read_bytes()
+            (fetched / 'un.sc.xml').write_bytes(body[:-1] + bytes([body[-1] ^ 1]))  # one bit, the same length
+            with patch('sys.stderr', new_callable=io.StringIO) as error:
+                self.assertEqual(1, sanctions_import.main(['--root', str(root), 'import', '--from', str(fetched),
+                                                           '--out', str(Path(scratch) / 'out'), '--authority',
+                                                           'un.sc']))
+            self.assertIn('is not the file its fetch record names; fetch it again', error.getvalue())
+            with patch('sys.stderr', new_callable=io.StringIO) as error:
+                self.assertEqual(1, sanctions_import.main(['--root', str(root), 'record', '--from', str(fetched),
+                                                           '--authority', 'xx.none']))
+            self.assertIn('sanctions_lists has no xx.none', error.getvalue())
+
+    def test_fetch_follows_redirects_only_to_the_delivery_hosts(self):
+        config = sanctions_import.load_register(ROOT)['sanctions_lists']['lists']['un.sc']
+        review, _ = sanctions_import.opener_for(config)
+        handler = review.SecureRedirects({'scsanctions.un.org', *config['delivery']})
+        request = urllib.request.Request(config['url'], headers={'User-Agent': 'u'})
+        signed = 'https://unsolprodfiles.blob.core.windows.net/publiclegacyxmlfiles/EN/x.xml?sig=s'
+        self.assertEqual(signed, handler.redirect_request(request, None, 302, 'Found', {}, signed).full_url)
+        for target in ('https://evil.example/x.xml', 'https://unsolprodfiles.blob.core.windows.net.evil.example/x'):
+            with self.subTest(target=target):
+                with self.assertRaises(urllib.error.URLError):
+                    handler.redirect_request(request, io.BytesIO(b'moved'), 302, 'Found', {}, target)
 
 
 class RegisterReview(RegisterFixture, unittest.TestCase):

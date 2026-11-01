@@ -37,7 +37,8 @@ inline constexpr usize kMaxSanctionsBytes = 67108864U; // one encoded list
 inline constexpr u32 kMaxParties = 131072U;            // designated parties in one list
 inline constexpr u32 kMaxDestinations = 1024U;         // embargoed destinations in one list
 inline constexpr u32 kMaxPartyNames = 512U;            // a party's name and aliases
-inline constexpr u32 kMaxPartyItems = 64U;             // a party's programmes, births, countries or identifiers
+inline constexpr u32 kMaxPartyItems = 64U;             // a party's programmes, births or countries
+inline constexpr u32 kMaxPartyIdentifiers = 1024U;     // a party's identifiers (OFAC lists 134 on one, 2026-10-28)
 inline constexpr u32 kMaxLists = 32U;                  // authorities one store holds
 inline constexpr u32 kMaxListAgeDays = 366U;           // the longest maximum age a list may declare
 inline constexpr u32 kMaxSubjectItems = 64U;           // a subject's names, countries or identifiers
@@ -56,7 +57,9 @@ enum class Measure : u8
     Sectoral,      // some goods, services or parties are restricted: a match needs review
 };
 
-// A YYYY, YYYY-MM or YYYY-MM-DD read as the days it covers.
+// A YYYY, YYYY-MM or YYYY-MM-DD read as the days it covers, or two of them joined by '/' (1960/1965, an ISO 8601
+// interval) read as the days from the first's first to the second's last; an interval that ends before it starts is
+// refused.
 struct Period
 {
     Day first = kNoDay;
@@ -72,10 +75,14 @@ struct Party
     cont::Array<cont::String> names; // the primary name first, then the aliases
     cont::Array<FoldedName> folded;  // fold_name() of each name
     cont::Array<cont::String> programs;
-    Day listed = kNoDay;
+    Day listed = kNoDay; // kNoDay when the list does not say (OFAC's files)
     cont::Array<Period> births;            // individuals only
     cont::Array<cont::String> countries;   // ISO 3166-1 alpha-2: nationality, residence, registration, flag
-    cont::Array<cont::String> identifiers; // type:value (passport:..., imo:..., registration:...)
+    // kind[.cc]:value: the kind is lower-case letters and digits in words joined by '-' (passport, national-id,
+    // imo, crypto-xbt), cc the issuing country of a document or registration in lower case when the list names it,
+    // and the value is held in compared form, its ASCII letters and digits in lower case. Two identifiers agree when
+    // their kinds and values are equal and their countries are equal or one of them names none.
+    cont::Array<cont::String> identifiers;
 };
 
 struct Destination
@@ -87,7 +94,7 @@ struct Destination
 
 struct SanctionsList
 {
-    cont::String authority;    // us.ofac, eu.fsf, un.sc, gb.ofsi, tr.asset-freeze, ...
+    cont::String authority;    // us.ofac.sdn, us.ofac.cons, eu.fsf, un.sc, gb.fcdo, ...
     cont::String jurisdiction; // US, EU, INT, GB, TR, ...
     u64 number = 0U;           // the generation: the authority's publications in order
     Day published = kNoDay;
@@ -109,7 +116,7 @@ struct Subject
     cont::ConstSpan<cont::StringView> names;       // at least one
     cont::StringView birth;                        // "" unknown, else YYYY, YYYY-MM or YYYY-MM-DD
     cont::ConstSpan<cont::StringView> countries;   // ISO 3166-1 alpha-2
-    cont::ConstSpan<cont::StringView> identifiers; // type:value
+    cont::ConstSpan<cont::StringView> identifiers; // kind[.cc]:value
 };
 
 // The thresholds of a name match, in thousandths (names.hpp's name_score).

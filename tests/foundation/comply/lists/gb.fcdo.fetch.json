@@ -1,0 +1,8 @@
+{
+  "schema": "cerid-sanctions-fetch/1",
+  "authority": "gb.fcdo",
+  "url": "https://sanctionslist.fcdo.gov.uk/docs/UK-Sanctions-List.xml",
+  "day": "2026-11-01",
+  "bytes": 25048,
+  "sha256": "25c63391e6921b84a329be874504a08ee6035ca0bb8133cfd36464e381080ff9"
+}

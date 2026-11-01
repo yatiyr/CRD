@@ -1,6 +1,7 @@
 // crd-comply -- sanctions and embargo screening (COMPLY.1; docs/design/registers.md#screening): the whole decoder
 // and every refusal with its key, periods, the monotonic live swap per authority, request validation, party
-// dispositions (match by birth, country or identifier, possible, discounted by kind or birth), destinations
+// dispositions (match by birth, country or identifier, an identifier's issuing country, possible, discounted by kind
+// or birth), birth intervals, an unknown listing day, the identifier bound, destinations
 // (comprehensive, sectoral, a region inside a country, a country holding a region), failing closed on a missing,
 // stale or future list, a concurrent applier and screener, and a list of 20 000 parties. Every name is invented.
 
@@ -63,7 +64,7 @@ programs = ["TEST-SDGT"]
 listed = "2021-01"
 births = []
 countries = ["TR", "AE"]
-identifiers = ["registration:998877"]
+identifiers = ["registration.tr:998877"]
 
 [[party]]
 id = "test.ofac.1003"
@@ -239,6 +240,24 @@ TEST_CASE("sanctions: periods cover their days", "[comply][sanctions]")
         INFO(bad);
         CHECK_FALSE(parse_period(bad, period));
     }
+    // ISO 8601 intervals: from the first period's first day to the second's last.
+    REQUIRE(parse_period("1960/1965", period));
+    CHECK(period.first == 19600101U);
+    CHECK(period.last == 19651231U);
+    REQUIRE(parse_period("1982-04-17/1982-04-21", period));
+    CHECK(period.first == 19820417U);
+    CHECK(period.last == 19820421U);
+    REQUIRE(parse_period("1965-03/1965", period));
+    CHECK(period.first == 19650301U);
+    CHECK(period.last == 19651231U);
+    REQUIRE(parse_period("1965/1965-01", period)); // the ends overlap: still the days from 1965-01-01 on
+    CHECK(period.last == 19650131U);
+    for (const cont::StringView bad : {"1965/1960", "1965-02/1965-01", "1960/", "/1960", "1960/1965/1970", "1960 /1965",
+                                       "1960/2023-02-29"})
+    {
+        INFO(bad);
+        CHECK_FALSE(parse_period(bad, period));
+    }
 }
 
 TEST_CASE("sanctions: format, syntax, size and empty-list refusals", "[comply][sanctions]")
@@ -310,7 +329,7 @@ TEST_CASE("sanctions: values, identifiers and enumerations are closed", "[comply
     check_refusal(with("program = \"TEST-CUBA\"", "program = \"\""), ComplyError::BadValue, "program");
     check_refusal(with("id = \"test.ofac.1003\"", "id = \"test ofac 1003\""), ComplyError::BadValue, "id");
     check_refusal(with("kind = \"vessel\"", "kind = \"ship\""), ComplyError::BadValue, "kind");
-    check_refusal(with("listed = \"2022\"", "listed = \"\""), ComplyError::BadDay, "listed");
+    check_refusal(with("listed = \"2022\"", "listed = \"2022-13\""), ComplyError::BadDay, "listed");
     check_refusal(with("names = [\"Sea Falcon\"]", "names = []"), ComplyError::BadValue, "names");
     check_refusal(with("names = [\"Sea Falcon\"]", "names = [\" - \"]"), ComplyError::BadValue, "names");
     // A byte that is no UTF-8 (0xFF): refused by the TOML reader or by the name check.
@@ -329,6 +348,82 @@ TEST_CASE("sanctions: values, identifiers and enumerations are closed", "[comply
     check_refusal(with("imo:9123456", "9123456"), ComplyError::BadValue, "identifiers");
     check_refusal(with("imo:9123456", "imo:-"), ComplyError::BadValue, "identifiers");
     check_refusal(with("imo:9123456", "IMO:9123456"), ComplyError::BadValue, "identifiers");
+    // kind[.cc]: the issuing country is two lower-case letters after the kind's only dot.
+    for (const cont::StringView bad : {"imo.TR:9123456", "imo.t:9123456", "imo.tur:9123456", "imo.t1:9123456",
+                                       "imo.tr.x:9123456", "imo.:9123456", ".tr:9123456", "im_o:9123456"})
+    {
+        INFO(bad);
+        check_refusal(with("imo:9123456", bad), ComplyError::BadValue, "identifiers");
+    }
+}
+
+TEST_CASE("sanctions: an unknown listing day, birth intervals and the identifier bound decode", "[comply][sanctions]")
+{
+    SanctionsList list;
+    REQUIRE(decode_sanctions(with("listed = \"2022\"", "listed = \"\""), list).error == ComplyError::None);
+    CHECK(list.parties[2].listed == kNoDay);
+    REQUIRE(decode_sanctions(with(R"(births = ["1971-03-14", "1972"])", R"(births = ["1960/1965", "2000-01-02"])"),
+                             list)
+                .error == ComplyError::None);
+    REQUIRE(list.parties[0].births.size() == 2U);
+    CHECK(list.parties[0].births[0].first == 19600101U);
+    CHECK(list.parties[0].births[0].last == 19651231U);
+    check_refusal(with(R"(births = ["1971-03-14", "1972"])", R"(births = ["1965/1960"])"), ComplyError::BadDay,
+                  "births");
+    REQUIRE(list.parties[1].identifiers.size() == 1U);
+    CHECK(list.parties[1].identifiers[0] == "registration.tr:998877");
+
+    // A party holds up to kMaxPartyIdentifiers identifiers (OFAC lists 134 digital currency addresses on one).
+    cont::String many("identifiers = [");
+    for (u32 i = 0U; i < kMaxPartyIdentifiers; ++i)
+    {
+        many.append(joined({i == 0U ? "" : ", ", "\"crypto-xbt:", digits(1000000U + i), "\""}));
+    }
+    REQUIRE(decode_sanctions(with("identifiers = [\"imo:9123456\"", many), list).error == ComplyError::None);
+    CHECK(list.parties[2].identifiers.size() == kMaxPartyIdentifiers);
+    many.append(", \"crypto-xbt:1\"");
+    check_refusal(with("identifiers = [\"imo:9123456\"", many), ComplyError::TooLarge, "identifiers");
+}
+
+TEST_CASE("sanctions: identifiers agree by kind and value, and by issuing country when both name one",
+          "[comply][sanctions]")
+{
+    SanctionsStore store;
+    loaded(store);
+    // The list prints registration.tr:998877; a subject naming no country, or Turkey, agrees with it.
+    for (const cont::StringView mine : {"registration:998877", "registration.tr:99-88-77"})
+    {
+        INFO(mine);
+        Request firm({"test.ofac"}, {"Kuzey Deniz Ticaret A.\xC5\x9E."}, PartyKind::Entity);
+        firm.identifiers.push_back(mine);
+        const Screening screening = screen(store, firm);
+        REQUIRE(hit_of(screening, "test.ofac.1002") != nullptr);
+        CHECK(hit_of(screening, "test.ofac.1002")->identifier_agrees);
+        CHECK(hit_of(screening, "test.ofac.1002")->disposition == Disposition::Match);
+    }
+    // Another issuing country, or another kind with the same value, is another identifier.
+    for (const cont::StringView mine : {"registration.ae:998877", "tax-id:998877", "tax-id.tr:998877"})
+    {
+        INFO(mine);
+        Request firm({"test.ofac"}, {"Kuzey Deniz Ticaret A.\xC5\x9E."}, PartyKind::Entity);
+        firm.identifiers.push_back(mine);
+        const Screening screening = screen(store, firm);
+        REQUIRE(hit_of(screening, "test.ofac.1002") != nullptr);
+        CHECK_FALSE(hit_of(screening, "test.ofac.1002")->identifier_agrees);
+    }
+    // The list prints passport:a1234567 with no country: a subject's Turkish passport of that number agrees.
+    Request person({"test.ofac"}, {"Kerem Sonmez"});
+    person.identifiers.push_back("passport.tr:A1234567");
+    const Screening screening = screen(store, person);
+    REQUIRE(hit_of(screening, "test.ofac.1001") != nullptr);
+    CHECK(hit_of(screening, "test.ofac.1001")->identifier_agrees);
+    Request bad({"test.ofac"}, {"Kerem Sonmez"});
+    bad.identifiers.push_back("passport.TR:A1234567");
+    bad.refresh();
+    Screening refused;
+    const DecodeFailure failure = store.screen(bad.request, refused);
+    CHECK(failure.error == ComplyError::BadValue);
+    CHECK(failure.key == "identifiers");
 }
 
 TEST_CASE("sanctions: parties and destinations are unique", "[comply][sanctions]")

@@ -1,0 +1,1096 @@
+<?xml version="1.0" standalone="yes"?>
+<sdnList xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/XML">
+  <publshInformation>
+    <Publish_Date>10/28/2026</Publish_Date>
+    <Record_Count>8</Record_Count>
+  </publshInformation>
+  <sdnEntry>
+    <uid>306</uid>
+    <lastName>BANCO NACIONAL DE CUBA</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>CUBA</program>
+    </programList>
+    <akaList>
+      <aka>
+        <uid>219</uid>
+        <type>a.k.a.</type>
+        <category>weak</category>
+        <lastName>BNC</lastName>
+      </aka>
+      <aka>
+        <uid>220</uid>
+        <type>a.k.a.</type>
+        <category>strong</category>
+        <lastName>NATIONAL BANK OF CUBA</lastName>
+      </aka>
+    </akaList>
+    <addressList>
+      <address>
+        <uid>199</uid>
+        <address1>Zweierstrasse 35</address1>
+        <city>Zurich</city>
+        <postalCode>CH-8022</postalCode>
+        <country>Switzerland</country>
+      </address>
+      <address>
+        <uid>200</uid>
+        <address1>Avenida de Concha Espina 8</address1>
+        <city>Madrid</city>
+        <postalCode>E-28036</postalCode>
+        <country>Spain</country>
+      </address>
+      <address>
+        <uid>201</uid>
+        <address1>Dai-Ichi Bldg. 6th Floor, 10-2 Nihombashi, 2-chome, Chuo-ku</address1>
+        <city>Tokyo</city>
+        <postalCode>103</postalCode>
+        <country>Japan</country>
+      </address>
+      <address>
+        <uid>202</uid>
+        <address1>Federico Boyd Avenue &amp; 51 Street</address1>
+        <city>Panama City</city>
+        <country>Panama</country>
+      </address>
+    </addressList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>4249</uid>
+    <lastName>TIFON</lastName>
+    <sdnType>Vessel</sdnType>
+    <programList>
+      <program>CUBA</program>
+    </programList>
+    <idList>
+      <id>
+        <uid>22033</uid>
+        <idType>Vessel Registration Identification</idType>
+        <idNumber>IMO 7206512</idNumber>
+      </id>
+    </idList>
+    <vesselInfo>
+      <callSign>CL2059</callSign>
+      <vesselType>Tug</vesselType>
+      <vesselFlag>Cuba</vesselFlag>
+      <grossRegisteredTonnage>189</grossRegisteredTonnage>
+    </vesselInfo>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>7782</uid>
+    <firstName>Senad</firstName>
+    <lastName>SAHINPASIC</lastName>
+    <sdnType>Individual</sdnType>
+    <programList>
+      <program>BALKANS</program>
+    </programList>
+    <dateOfBirthList>
+      <dateOfBirthItem>
+        <uid>1945</uid>
+        <dateOfBirth>circa 1951</dateOfBirth>
+        <mainEntry>false</mainEntry>
+      </dateOfBirthItem>
+    </dateOfBirthList>
+    <placeOfBirthList>
+      <placeOfBirthItem>
+        <uid>1944</uid>
+        <placeOfBirth>Foca, Bosnia-Herzegovina</placeOfBirth>
+        <mainEntry>true</mainEntry>
+      </placeOfBirthItem>
+    </placeOfBirthList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>10589</uid>
+    <firstName>Ceylan</firstName>
+    <lastName>DUZCAN</lastName>
+    <sdnType>Individual</sdnType>
+    <programList>
+      <program>SDNTK</program>
+    </programList>
+    <idList>
+      <id>
+        <uid>5141</uid>
+        <idType>Passport</idType>
+        <idNumber>315408</idNumber>
+        <idCountry>Turkey</idCountry>
+      </id>
+      <id>
+        <uid>5142</uid>
+        <idType>Driver's License No.</idType>
+        <idNumber>11550</idNumber>
+        <idCountry>Turkey</idCountry>
+      </id>
+    </idList>
+    <addressList>
+      <address>
+        <uid>14721</uid>
+        <country>United Arab Emirates</country>
+      </address>
+    </addressList>
+    <citizenshipList>
+      <citizenship>
+        <uid>5932</uid>
+        <country>Turkey</country>
+        <mainEntry>true</mainEntry>
+      </citizenship>
+    </citizenshipList>
+    <dateOfBirthList>
+      <dateOfBirthItem>
+        <uid>5930</uid>
+        <dateOfBirth>01 Mar 1975</dateOfBirth>
+        <mainEntry>true</mainEntry>
+      </dateOfBirthItem>
+    </dateOfBirthList>
+    <placeOfBirthList>
+      <placeOfBirthItem>
+        <uid>5931</uid>
+        <placeOfBirth>Savsat, Turkey</placeOfBirth>
+        <mainEntry>true</mainEntry>
+      </placeOfBirthItem>
+    </placeOfBirthList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>15962</uid>
+    <firstName>Mahmoud</firstName>
+    <lastName>NIKOUSOKHAN</lastName>
+    <title>Finance Director, National Iranian Oil Company; Director, Hong Kong Intertrade Company; Director, Petro Suisse Intertrade Company</title>
+    <sdnType>Individual</sdnType>
+    <programList>
+      <program>IRAN</program>
+    </programList>
+    <idList>
+      <id>
+        <uid>8686</uid>
+        <idType>Passport</idType>
+        <idNumber>U14624657</idNumber>
+        <idCountry>Iran</idCountry>
+      </id>
+      <id>
+        <uid>119072</uid>
+        <idType>Additional Sanctions Information -</idType>
+        <idNumber>Subject to Secondary Sanctions</idNumber>
+      </id>
+    </idList>
+    <nationalityList>
+      <nationality>
+        <uid>13541</uid>
+        <country>Iran</country>
+        <mainEntry>true</mainEntry>
+      </nationality>
+    </nationalityList>
+    <dateOfBirthList>
+      <dateOfBirthItem>
+        <uid>13537</uid>
+        <dateOfBirth>01 Jan 1961 to 31 Dec 1962</dateOfBirth>
+        <mainEntry>true</mainEntry>
+      </dateOfBirthItem>
+    </dateOfBirthList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>18150</uid>
+    <lastName>MSN 391</lastName>
+    <sdnType>Aircraft</sdnType>
+    <remarks>(Linked To: MAHAN AIR)</remarks>
+    <programList>
+      <program>IFSR</program>
+      <program>SDGT</program>
+      <program>NPWMD</program>
+    </programList>
+    <idList>
+      <id>
+        <uid>117318</uid>
+        <idType>Aircraft Manufacture Date</idType>
+        <idNumber>2002</idNumber>
+      </id>
+      <id>
+        <uid>117320</uid>
+        <idType>Aircraft Model</idType>
+        <idNumber>Airbus A340-642</idNumber>
+      </id>
+      <id>
+        <uid>117319</uid>
+        <idType>Aircraft Manufacturer's Serial Number (MSN)</idType>
+        <idNumber>391</idNumber>
+      </id>
+      <id>
+        <uid>117321</uid>
+        <idType>Aircraft Tail Number</idType>
+        <idNumber>EP-MMH</idNumber>
+      </id>
+      <id>
+        <uid>117313</uid>
+        <idType>Additional Sanctions Information -</idType>
+        <idNumber>Subject to Secondary Sanctions</idNumber>
+      </id>
+      <id>
+        <uid>186444</uid>
+        <idType>Secondary sanctions risk:</idType>
+        <idNumber>section 1(b) of Executive Order 13224, as amended by Executive Order 13886</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>18647</uid>
+    <lastName>ISIL KHORASAN</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>FTO</program>
+      <program>SDGT</program>
+    </programList>
+    <idList>
+      <id>
+        <uid>199189</uid>
+        <idType>Organization Established Date</idType>
+        <idNumber>10 Jan 2015</idNumber>
+      </id>
+      <id>
+        <uid>199188</uid>
+        <idType>Organization Type:</idType>
+        <idNumber>Transnational Terrorist Group</idNumber>
+      </id>
+      <id>
+        <uid>199011</uid>
+        <idType>Digital Currency Address - XMR</idType>
+        <idNumber>44dZUJ7w1T3fKAvFW8XyXUVoAGSbFvXef2wcbnsjNKGWYorpLJBjth5VKSFhLGkpYKJb2J341tdZHBnbpv72WL7e8zuxfR2</idNumber>
+      </id>
+      <id>
+        <uid>199062</uid>
+        <idType>Digital Currency Address - XMR</idType>
+        <idNumber>45ezvPejNsKYntjhyyeb7fbfzi1sxYQozc5Ffseh8jPGW4JZQQVXykNTfK5uGFiij7Hp3qPv3T5HCR7F3Fnmz2mzE1aKQwo</idNumber>
+      </id>
+      <id>
+        <uid>199063</uid>
+        <idType>Digital Currency Address - XMR</idType>
+        <idNumber>47FVhkRkWgnLs81UBqgY8ui6axAB1627HJjkY2qPnWxMbGfx7387kcY6RzScHgGMQAaH6CBxKXAS4862tS2fhs9BRdmuyav</idNumber>
+      </id>
+      <id>
+        <uid>147424</uid>
+        <idType>Secondary sanctions risk:</idType>
+        <idNumber>section 1(b) of Executive Order 13224, as amended by Executive Order 13886</idNumber>
+      </id>
+      <id>
+        <uid>198993</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TUoixKFaWVsHxGWgnYyMzpkrT22YqU7VvH</idNumber>
+      </id>
+      <id>
+        <uid>198994</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TBtRqkiFzyuwe8nSAGQghxygAfwAF5eERq</idNumber>
+      </id>
+      <id>
+        <uid>198995</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TTs7KRq39547ruAsxb9brAPuTLy7h3U6H1</idNumber>
+      </id>
+      <id>
+        <uid>198996</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TVttWTHTCU9kULP51m9BaHpmCW8H1BJJNQ</idNumber>
+      </id>
+      <id>
+        <uid>198997</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TCqKhk7MpPnGH3UfygE1TRzUo92a5tuVy6</idNumber>
+      </id>
+      <id>
+        <uid>198998</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TSbGiFzG9xFXUYgGA6RwbS3jvKNpeA4c3R</idNumber>
+      </id>
+      <id>
+        <uid>198999</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TVXHp8bMrpRd5HGy3w1yu9f87qwRrMHFp8</idNumber>
+      </id>
+      <id>
+        <uid>199000</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TQ8a74SiDig3EDSC14tosLACWLbvaNYwCJ</idNumber>
+      </id>
+      <id>
+        <uid>199001</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TWdqVcA3NyrNv71NgbMwKv3C5XMxj4XjSp</idNumber>
+      </id>
+      <id>
+        <uid>199002</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TX1zyMrYZNbtQx7yPZp4adZV5NbToGNrkS</idNumber>
+      </id>
+      <id>
+        <uid>199003</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TSSQDgExKUELagzAKTAcoLMviq4SZ1eTFm</idNumber>
+      </id>
+      <id>
+        <uid>199004</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TUfq9hfP7qUDMoJbzkjG4GPtNxhZewqk8Z</idNumber>
+      </id>
+      <id>
+        <uid>199005</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TCEe3McjK9FWby8YsNmtRDwJt1x2s5dFTL</idNumber>
+      </id>
+      <id>
+        <uid>199006</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TBJqexr1FfGxVKhDsKeou6FVLBW1aS1Ny7</idNumber>
+      </id>
+      <id>
+        <uid>199007</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TV6cvFEMcfxGsWqgxpBrXZ35MkhdtdhT3G</idNumber>
+      </id>
+      <id>
+        <uid>199008</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>THfLaNMBAMz7xXnHoz5BkRMmrwuHKqfAfR</idNumber>
+      </id>
+      <id>
+        <uid>199009</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TCudJgJ14kk3Ss2PEgsT15frztKpyG7HEh</idNumber>
+      </id>
+      <id>
+        <uid>199010</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TCk1g37N3x6PDda63waydNQwqTUzFNpsrR</idNumber>
+      </id>
+      <id>
+        <uid>199012</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TU8hJXgHdxWuj4DaaBKQFUwDeB8B5Xacke</idNumber>
+      </id>
+      <id>
+        <uid>199013</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TL5WqcFX7XkhVLLwaXrdr57gnjC4stBeSG</idNumber>
+      </id>
+      <id>
+        <uid>199014</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TSFCGGbR57b56c4MXdiW5gzpD8j6cmimgo</idNumber>
+      </id>
+      <id>
+        <uid>199015</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TXHb3BkGgYmygyS14MJKX8kTcFGT7dXN4r</idNumber>
+      </id>
+      <id>
+        <uid>199016</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TN56YaCBymut2xoiRvy3v2qZ2pYgmBAtSo</idNumber>
+      </id>
+      <id>
+        <uid>199017</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TPnUDsrLYZg1UXGkpXSmhFEY5J5etfzE9S</idNumber>
+      </id>
+      <id>
+        <uid>199018</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TVXP7Aj5KFUPKMQUrsU6F3wUsyiLiUaUje</idNumber>
+      </id>
+      <id>
+        <uid>199019</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TDxXXmCELgrb5VwYobDMyTKVTTdY9LjEjx</idNumber>
+      </id>
+      <id>
+        <uid>199020</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TXoVNrqm11FFVKcF1vEND64gibVkr1HwAR</idNumber>
+      </id>
+      <id>
+        <uid>199021</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TEKeY9i4CcVySJMmhuh2AxZhtgTmugYUMW</idNumber>
+      </id>
+      <id>
+        <uid>199022</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TW9mABkenngQyJBqce5khR9fNCBF5gsBFQ</idNumber>
+      </id>
+      <id>
+        <uid>199023</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TWumrtaEaPCv8Bs9mXqKkhY5sZVd78QAdS</idNumber>
+      </id>
+      <id>
+        <uid>199024</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TD7TXyvmjPfJkfhJuQ58NXA9dX9q81mqAp</idNumber>
+      </id>
+      <id>
+        <uid>199025</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TEtLieZwyjJTth7S5EJqUNjtSbM1ui9toK</idNumber>
+      </id>
+      <id>
+        <uid>199026</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TS729BUXeZWBhJGPKCdK75q7VU4nhkJkYT</idNumber>
+      </id>
+      <id>
+        <uid>199027</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TER8k4zWt3byuHyvyBkLstz3QVUUuBs9pt</idNumber>
+      </id>
+      <id>
+        <uid>199028</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TByksCkUtMaYwHCSaetmAGufpeyfdXBrJk</idNumber>
+      </id>
+      <id>
+        <uid>199029</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TNmKrdYLPtFwPNWJUjrXdkQw4gSwpszUJd</idNumber>
+      </id>
+      <id>
+        <uid>199030</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TTuDmNhu8A6koPJRUd8Q5RnsT1FMfrZnoj</idNumber>
+      </id>
+      <id>
+        <uid>199031</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TGLrjZc9c48iMFB4ZmDnSjSRMq27MXPg2k</idNumber>
+      </id>
+      <id>
+        <uid>199032</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TVgJTK9qPg7wGTyeTG2MYF8aKMEx883xYU</idNumber>
+      </id>
+      <id>
+        <uid>199034</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TPkNp2Z5KiA1sLWpPMWsfNErVo2dHxc4iy</idNumber>
+      </id>
+      <id>
+        <uid>199035</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TDSGtCciE9yFKYzDj1kBBc3F7gosguDqwC</idNumber>
+      </id>
+      <id>
+        <uid>199036</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TNVbVXAgUT83Sv7E9oZwWutXqzs13sr6xN</idNumber>
+      </id>
+      <id>
+        <uid>199037</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TAwNQN5tmzJJ694PPuoFUxQY13quBs8YgA</idNumber>
+      </id>
+      <id>
+        <uid>199038</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TGNwKzHjYvYP2SwsrmCYrRRvCRdxQgLq1w</idNumber>
+      </id>
+      <id>
+        <uid>199039</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TA3rH2A7iHnm6pKH8gr9cK1EZnShnmZdFg</idNumber>
+      </id>
+      <id>
+        <uid>199040</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TLj5ZRvem4DAdbZLTGU3qAbAdLQug57JVo</idNumber>
+      </id>
+      <id>
+        <uid>199041</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TMRxAJt87MVYnadWne53AxZFG1FPKGfoGz</idNumber>
+      </id>
+      <id>
+        <uid>199042</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TRmrnQiUY1ofMcTQUXvgeauKcZPnmwUeUR</idNumber>
+      </id>
+      <id>
+        <uid>199043</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TBKq3SzXigsGhQNzdCYocpt8RzoMh3uxAr</idNumber>
+      </id>
+      <id>
+        <uid>199044</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TYAiWf2KhXrGuWxmCPaJgC6zNYwFuKtioi</idNumber>
+      </id>
+      <id>
+        <uid>199045</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TYVveapkRkm5RHcDNPU9QnPk8N5RdsS4iY</idNumber>
+      </id>
+      <id>
+        <uid>199046</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TK7HUNru8YLMz7vv8kzWRPrE2ZSgZeCaHV</idNumber>
+      </id>
+      <id>
+        <uid>199047</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TAyyw6ZoTZexvTcN7WRR9t79JUFgSAvkL8</idNumber>
+      </id>
+      <id>
+        <uid>199048</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TJGVHmHVNuU1vsXGGALLoirPwoRZoMUuhg</idNumber>
+      </id>
+      <id>
+        <uid>199049</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TB1Bcv3x8mg7PVV4nVM48pgHJKcYboTypU</idNumber>
+      </id>
+      <id>
+        <uid>199050</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TWxoDF6qvjMUeTYRimaiARGsJTUnjrzZn3</idNumber>
+      </id>
+      <id>
+        <uid>199051</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TCXihiScsAodR942Xq45df9qQAdr5nhkjQ</idNumber>
+      </id>
+      <id>
+        <uid>199052</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TDhtVUnmYwWfzWVrnzryr3fbQo8VTvj4ji</idNumber>
+      </id>
+      <id>
+        <uid>199053</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TE6VgR7rAuY4kuzCjdSVCZFXPjjzSQYY7X</idNumber>
+      </id>
+      <id>
+        <uid>199054</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TV62LkiP1GiNdFCJEdY3xf6GdNLCCi6mfu</idNumber>
+      </id>
+      <id>
+        <uid>199055</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TWBqpQLDPCrXgRW1X9yFqR8NFfjyFSq5k4</idNumber>
+      </id>
+      <id>
+        <uid>199056</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TQetJ6xMqvv2Fu4ftD9UdBhuaKem5HbMou</idNumber>
+      </id>
+      <id>
+        <uid>199057</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TWAfC6htS1FyFv1r3aKENuD8DQGMzBbP8L</idNumber>
+      </id>
+      <id>
+        <uid>199058</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TMfDhpUqW5W6HcMPXFaJfaiY271CYa51Hs</idNumber>
+      </id>
+      <id>
+        <uid>199059</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TB5J8W166YTUmtpUsy4XnNTKLVtesuE9eV</idNumber>
+      </id>
+      <id>
+        <uid>199060</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TSE5NWTJckiN8hJCUzwB3RgsMbdF4uCrmr</idNumber>
+      </id>
+      <id>
+        <uid>199061</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TDi9s3GeAtFBbUvGxqXiZnxiaH9QpqjYFn</idNumber>
+      </id>
+      <id>
+        <uid>199064</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TCUTmWspsaJb3U5JUs5AhVcGwaftyK1qtp</idNumber>
+      </id>
+      <id>
+        <uid>199065</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TYvR9x3Dqx39s9rooaSAHwVwF8psBrcFBV</idNumber>
+      </id>
+      <id>
+        <uid>199066</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TUyo1Kfnnjr2iMQdZxLWPX1U8Xiy1Wz5z5</idNumber>
+      </id>
+      <id>
+        <uid>199067</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TBhR5MLrTsNZ8FUyKgzdrCjWkYD2orYLdx</idNumber>
+      </id>
+      <id>
+        <uid>199068</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>THstQuwNidzC4YeJ7uPowf55ZdVZtGcHJ5</idNumber>
+      </id>
+      <id>
+        <uid>199069</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TKX6rgpGpGrJWzf1qXUUSNL5cYHQt7Z9rY</idNumber>
+      </id>
+      <id>
+        <uid>199070</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TWoRwYzsifrD79DHDpTHC8fq787MvH9Qro</idNumber>
+      </id>
+      <id>
+        <uid>199071</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TDHJNJHosn6xNDxMecFZwXyTzE9bYGXp9L</idNumber>
+      </id>
+      <id>
+        <uid>199072</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TQVZEuLHacexyJX3nZStaPzxceS63C9bax</idNumber>
+      </id>
+      <id>
+        <uid>199073</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TQb6Pc4PmfUdUokLq5ygNioj4PnodNak9b</idNumber>
+      </id>
+      <id>
+        <uid>199074</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TR3yiEuFrbBnP8X5DKYFjRxCwbxcYyftD4</idNumber>
+      </id>
+      <id>
+        <uid>199075</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TEBHpD6iiAqhyS4w7zZFmD1rrv65a5HVTD</idNumber>
+      </id>
+      <id>
+        <uid>199076</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TMocScwSbSn2cqRCHVkzZSEar3Jk5AsXgo</idNumber>
+      </id>
+      <id>
+        <uid>199077</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TNKyDgjn2WHZwHhH2Mj5AGMnK4moBX9xQd</idNumber>
+      </id>
+      <id>
+        <uid>199078</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TPcwqbJ3ViWMUQMiKfMjDM7VTiCzdRu1cH</idNumber>
+      </id>
+      <id>
+        <uid>199079</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TVJ4B5R8c8dS65NtUXpZPMGUpCRq8BQUrC</idNumber>
+      </id>
+      <id>
+        <uid>199080</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TAgZxxuvfuKYJY5UPC1DXF8NPHbKtTzEGu</idNumber>
+      </id>
+      <id>
+        <uid>199081</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TCyAE8Lxa1rmTThhE5Z3X95PC9rgMrReMX</idNumber>
+      </id>
+      <id>
+        <uid>199082</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TSi1d66cgg3cPm9L6c2ZD8K1381XusSjkc</idNumber>
+      </id>
+      <id>
+        <uid>199083</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TR83KsDjUKeds62PcAgo7BfhPJPSpMk7Ba</idNumber>
+      </id>
+      <id>
+        <uid>199084</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TDX3dFNPvJeA9eVLLNqf1ixr4U2ktcDmoD</idNumber>
+      </id>
+      <id>
+        <uid>199085</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TJCUwt9EKeTyzDw42658h8aYxQXScLdCZR</idNumber>
+      </id>
+      <id>
+        <uid>199086</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TETfViHWf9ZNB6WJgZBRMB48pTaBFo5Rmd</idNumber>
+      </id>
+      <id>
+        <uid>199087</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TBhTMBAaEWiTtMgMdJ97ZmYotgHeY543cc</idNumber>
+      </id>
+      <id>
+        <uid>199088</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TFebC149jCDiow1MBphhfpHDLeMAKRNrqJ</idNumber>
+      </id>
+      <id>
+        <uid>199089</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TXw4d7BseHBn6sneMUzm4nEdfPVjuJGEH9</idNumber>
+      </id>
+      <id>
+        <uid>199090</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TQt3dWHiPdaKioG7nwovoTDUtxfimyuxYa</idNumber>
+      </id>
+      <id>
+        <uid>199091</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TE5R3hJ6REap6vh14YAqjXczKrYaiteTy3</idNumber>
+      </id>
+      <id>
+        <uid>199092</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TCCryMcQb5A5FSYkmcVy26Nd8J1FWHtfWh</idNumber>
+      </id>
+      <id>
+        <uid>199093</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TLC3piEQ5n4tcULKHqLTGhmYFUyHUVSxck</idNumber>
+      </id>
+      <id>
+        <uid>199094</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TLDtPq9PQsDuQunME8CSeVdYaLtRdrVgoJ</idNumber>
+      </id>
+      <id>
+        <uid>199095</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TRqbVMHWck3j2vKzA16L69v3cwuoyQSY8L</idNumber>
+      </id>
+      <id>
+        <uid>199096</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TA82wQ77kb9DieW4C8q7C4KwMfnCzfziqN</idNumber>
+      </id>
+      <id>
+        <uid>199097</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TUcjuVB6RFvsMgE352Kdc3VHvFvteti97B</idNumber>
+      </id>
+      <id>
+        <uid>199098</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TBfVDwNS6hC2Ln2qTLTRKMMPddscFEhhrU</idNumber>
+      </id>
+      <id>
+        <uid>199099</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TC7vaJsxZteEEnnm2EFm9BRSZvezvsuA86</idNumber>
+      </id>
+      <id>
+        <uid>199100</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TRWDtgCfXzTcMv8W6iJxh6umeqeF3zG7n5</idNumber>
+      </id>
+      <id>
+        <uid>199101</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TUa7BcRjT3eT7kPyNWPvHQkz4qF9v68D7A</idNumber>
+      </id>
+      <id>
+        <uid>199102</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TNHNySUf8LMzhzSiQnHCXCbgatscQbM4ZQ</idNumber>
+      </id>
+      <id>
+        <uid>199103</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TNzvDTvcQTaY9jFrv85JnqibnGcudePj1z</idNumber>
+      </id>
+      <id>
+        <uid>199104</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TUcNB6c22JmcwXbbbuv9HVPeVqv5HSiTwQ</idNumber>
+      </id>
+      <id>
+        <uid>199105</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TVUS1CVQnnzoJG8PBWkcWyf7DkLrS8yh5Z</idNumber>
+      </id>
+      <id>
+        <uid>199106</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TXR1nhqAek4c5Dq9EfjQLarcBWR9Jp6N7m</idNumber>
+      </id>
+      <id>
+        <uid>199107</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TFS2LHNcrffdAVRHpDUpNvnmCHs78cSNbz</idNumber>
+      </id>
+      <id>
+        <uid>199108</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TPTFrDhx5tntyp5mRX423DaAe8aLDMUs31</idNumber>
+      </id>
+      <id>
+        <uid>199109</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TCn9wM828B1GtsVn8kUaCvoE3RpfCAmtEB</idNumber>
+      </id>
+      <id>
+        <uid>199110</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TFtz6Ae6NNo9VvhnVrj6V1RyEFMtZQMh3r</idNumber>
+      </id>
+      <id>
+        <uid>199111</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TMoMat6oyJLKxSb6SfQWBWc7q5PSm3Gr6U</idNumber>
+      </id>
+      <id>
+        <uid>199112</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TNsMJKvAtqiWntAnrcS8jkugL37FGzoqss</idNumber>
+      </id>
+      <id>
+        <uid>199113</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TPCnxv28xNbvtAaEppddvnfkjQpaFeAkV3</idNumber>
+      </id>
+      <id>
+        <uid>199114</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TDXBEozXRJy7eBYNCoqrDMRCx5QBN4jCCt</idNumber>
+      </id>
+      <id>
+        <uid>199115</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TTrJwfL8SCSWBXWAPcZV8Pd5fZf1rznRhz</idNumber>
+      </id>
+      <id>
+        <uid>199116</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TFqo5f16FJfSKesPxtGN4VN5HNZJebqMQX</idNumber>
+      </id>
+      <id>
+        <uid>199117</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TPwjq8YuABThppKM5ppsuagBFwDhzpnY11</idNumber>
+      </id>
+      <id>
+        <uid>199118</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TXgm2Pej4dHzh6oAJvaxAVFDevgGJqfSKr</idNumber>
+      </id>
+      <id>
+        <uid>199119</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TUErmQ9GtRDGC4g4L5wjWS55Ju5hYfR3sa</idNumber>
+      </id>
+      <id>
+        <uid>199120</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>THPfLwEGvHVgRzi7EMnviAFy5WG1feDH1p</idNumber>
+      </id>
+      <id>
+        <uid>199121</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TPH1ehJuNY8cRuJgWTXoGuzkVpK5ckueLF</idNumber>
+      </id>
+      <id>
+        <uid>199122</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TRZvMk2D4fmjGjtuZHRVpgw6yjk8NcjsHV</idNumber>
+      </id>
+      <id>
+        <uid>199123</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TMuBvwcgrTj6JysMmutXWaPjk1kREK2BDe</idNumber>
+      </id>
+      <id>
+        <uid>199124</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TE5paMkU1hPr8BdjkSJLvEyUBxjKKSx1H6</idNumber>
+      </id>
+      <id>
+        <uid>199125</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TBmqXsFNYTMkyw9jVGBAecGaLyLwbxFTM1</idNumber>
+      </id>
+      <id>
+        <uid>199126</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TFh7Z4qmdiT7opAYYLmNVXQJtVCkAtg7Zh</idNumber>
+      </id>
+      <id>
+        <uid>199127</uid>
+        <idType>Digital Currency Address - TRX</idType>
+        <idNumber>TLFqEhiG7RUSZ9x5iph99Ke5782dkgRnWf</idNumber>
+      </id>
+    </idList>
+    <akaList>
+      <aka>
+        <uid>29149</uid>
+        <type>a.k.a.</type>
+        <category>strong</category>
+        <lastName>ISLAMIC STATE'S KHORASAN PROVINCE</lastName>
+      </aka>
+      <aka>
+        <uid>29150</uid>
+        <type>a.k.a.</type>
+        <category>strong</category>
+        <lastName>ISIS WILAYAT KHORASAN</lastName>
+      </aka>
+      <aka>
+        <uid>29151</uid>
+        <type>a.k.a.</type>
+        <category>strong</category>
+        <lastName>ISIL'S SOUTH ASIA BRANCH</lastName>
+      </aka>
+      <aka>
+        <uid>29152</uid>
+        <type>a.k.a.</type>
+        <category>strong</category>
+        <lastName>SOUTH ASIAN CHAPTER OF ISIL</lastName>
+      </aka>
+      <aka>
+        <uid>54626</uid>
+        <type>a.k.a.</type>
+        <category>strong</category>
+        <lastName>THE ISLAMIC STATE OF IRAQ AND ASH-SHAM - KHORASAN PROVINCE</lastName>
+      </aka>
+      <aka>
+        <uid>54627</uid>
+        <type>a.k.a.</type>
+        <category>strong</category>
+        <lastName>THE ISLAMIC STATE OF IRAQ AND SYRIA - KHORASAN</lastName>
+      </aka>
+      <aka>
+        <uid>54628</uid>
+        <type>a.k.a.</type>
+        <category>strong</category>
+        <lastName>ISLAMIC STATE OF IRAQ AND LEVANT IN KHORASAN PROVINCE</lastName>
+      </aka>
+      <aka>
+        <uid>54629</uid>
+        <type>a.k.a.</type>
+        <category>strong</category>
+        <lastName>ISLAMIC STATE KHURASAN</lastName>
+      </aka>
+      <aka>
+        <uid>54630</uid>
+        <type>a.k.a.</type>
+        <category>strong</category>
+        <lastName>ISISK</lastName>
+      </aka>
+      <aka>
+        <uid>54631</uid>
+        <type>a.k.a.</type>
+        <category>strong</category>
+        <lastName>ISIS-K</lastName>
+      </aka>
+      <aka>
+        <uid>54632</uid>
+        <type>a.k.a.</type>
+        <category>strong</category>
+        <lastName>IS-KHORASAN</lastName>
+      </aka>
+    </akaList>
+    <addressList>
+      <address>
+        <uid>28321</uid>
+        <country>Afghanistan</country>
+      </address>
+      <address>
+        <uid>28322</uid>
+        <country>Pakistan</country>
+      </address>
+    </addressList>
+  </sdnEntry>
+  <sdnEntry>
+    <uid>18961</uid>
+    <lastName>RESORT NIZHNYAYA OREANDA</lastName>
+    <sdnType>Entity</sdnType>
+    <programList>
+      <program>UKRAINE-EO13685</program>
+    </programList>
+    <idList>
+      <id>
+        <uid>11297</uid>
+        <idType>Registration ID</idType>
+        <idNumber>1149102054221</idNumber>
+      </id>
+      <id>
+        <uid>11298</uid>
+        <idType>Government Gazette Number</idType>
+        <idNumber>00705605</idNumber>
+      </id>
+      <id>
+        <uid>11299</uid>
+        <idType>Tax ID No.</idType>
+        <idNumber>9103006321</idNumber>
+      </id>
+      <id>
+        <uid>143620</uid>
+        <idType>Secondary sanctions risk:</idType>
+        <idNumber>Ukraine-/Russia-Related Sanctions Regulations, 31 CFR 589.201 and/or 589.209</idNumber>
+      </id>
+      <id>
+        <uid>118530</uid>
+        <idType>Website</idType>
+        <idNumber>http://www.oreanda.biz</idNumber>
+      </id>
+      <id>
+        <uid>118529</uid>
+        <idType>Email Address</idType>
+        <idNumber>info@oreanda.biz</idNumber>
+      </id>
+    </idList>
+    <akaList>
+      <aka>
+        <uid>29878</uid>
+        <type>a.k.a.</type>
+        <category>strong</category>
+        <lastName>FEDERALNOE GOSUDARSTVENNOE BYUDZHETNOE UCHREZHDENIE SANATORI NIZHNYAYA OREANDA UPRAVLENIYA DELAMI PREZIDENTA ROSSISKOI FE</lastName>
+      </aka>
+      <aka>
+        <uid>29879</uid>
+        <type>a.k.a.</type>
+        <category>strong</category>
+        <lastName>FGBU SANATORI NIZHNYAYA OREANDA</lastName>
+      </aka>
+      <aka>
+        <uid>29880</uid>
+        <type>a.k.a.</type>
+        <category>strong</category>
+        <lastName>SANATORIUM NIZHNYAYA OREANDA</lastName>
+      </aka>
+      <aka>
+        <uid>29881</uid>
+        <type>f.k.a.</type>
+        <category>strong</category>
+        <lastName>FEDERALNOE GOSUDARSTVENNOE BYUDZHETNOE UCHREZHDENIE SANATORI NIZHNYAYA OREANDA UPRAVLENIYA</lastName>
+      </aka>
+    </akaList>
+    <addressList>
+      <address>
+        <uid>28850</uid>
+        <address1>Pgt Oreanda, Dom 12</address1>
+        <city>Yalta</city>
+        <stateOrProvince>Crimea</stateOrProvince>
+        <postalCode>298658</postalCode>
+        <country>Ukraine</country>
+      </address>
+      <address>
+        <uid>28851</uid>
+        <address1>Resort Nizhnyaya Oreanda</address1>
+        <city>Oreanda, Yalta</city>
+        <postalCode>08655</postalCode>
+        <country>Region: Crimea</country>
+      </address>
+      <address>
+        <uid>28993</uid>
+        <address1>Oreanda - 12</address1>
+        <city>Yalta</city>
+        <postalCode>298658</postalCode>
+        <country>Region: Crimea</country>
+      </address>
+    </addressList>
+  </sdnEntry>
+</sdnList>

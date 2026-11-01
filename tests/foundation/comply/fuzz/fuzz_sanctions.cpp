@@ -9,12 +9,13 @@
 // Oracles, none of them the decoder's or the screener's own verdict:
 //   * an accepted list satisfies the contract's invariants (named authority, real days, a bounded age, a SHA-256,
 //     unique parties and destinations, ISO regions and countries, births only for individuals and in order, folded
-//     names within their bounds, identifiers in compared form) and decodes again to the same digest;
+//     names within their bounds, identifiers kind[.cc]:value in compared form) and decodes again to the same digest;
 //   * folding is idempotent (the folded words, written as UTF-8 and folded again, are the same words), a name scores
 //     1000 against itself, a name without words scores 0 and every score is at most 1000;
 //   * a screening's gaps, hits and verdict equal a model restated from the contract: the gap of each named authority
 //     from the day, a party hit exactly when the brute-force best score reaches the review threshold or an identifier
-//     agrees, its disposition from the agreements, the destinations by region, and the verdict's precedence.
+//     agrees (kind and value, and the issuing country when both name one), its disposition from the agreements,
+//     the destinations by region, and the verdict's precedence.
 #include <crd/comply/sanctions.hpp>
 #include <crd/core/text_fold.hpp>
 #include <crd/fuzz/harness.hpp>
@@ -61,7 +62,7 @@ kind = "individual"
 names = ["Deniz Kaya", "Denis Kaja"]
 programs = ["FUZZ"]
 listed = "2020"
-births = ["1980-05"]
+births = ["1980-05", "1975/1976-02"]
 countries = ["TR"]
 identifiers = ["passport:U1234"]
 
@@ -73,14 +74,14 @@ programs = ["FUZZ"]
 listed = "2021-02-03"
 births = []
 countries = ["AE"]
-identifiers = ["registration:55-66"]
+identifiers = ["registration.ae:55-66"]
 
 [[party]]
 id = "fuzz.3"
 kind = "vessel"
 names = ["Kuzey Yıldızı"]
 programs = ["FUZZ"]
-listed = "2022"
+listed = ""
 births = []
 countries = []
 identifiers = ["imo:7654321"]
@@ -99,6 +100,19 @@ identifiers = ["imo:7654321"]
 [[nodiscard]] bool upper_pair(cont::StringView text) noexcept
 {
     return text.size() >= 2U && text[0] >= 'A' && text[0] <= 'Z' && text[1] >= 'A' && text[1] <= 'Z';
+}
+
+// An identifier's kind and issuing country (empty when it names none).
+struct Split
+{
+    cont::StringView kind;
+    cont::StringView country;
+};
+
+[[nodiscard]] Split split(cont::StringView type) noexcept
+{
+    const usize dot = type.find('.');
+    return dot == cont::StringView::npos ? Split{type, {}} : Split{type.substr(0U, dot), type.substr(dot + 1U)};
 }
 
 void decode_checked(const u8* data, usize size)
@@ -149,6 +163,11 @@ void decode_checked(const u8* data, usize size)
         {
             const usize colon = cont::StringView(identifier).find(':');
             CRD_FUZZ_REQUIRE(colon != cont::StringView::npos && colon + 1U < identifier.size());
+            const Split type = split(cont::StringView(identifier).substr(0U, colon));
+            CRD_FUZZ_REQUIRE(!type.kind.empty() && type.kind.find('.') == cont::StringView::npos);
+            CRD_FUZZ_REQUIRE(type.country.empty() || (type.country.size() == 2U && type.country[0] >= 'a' &&
+                                                      type.country[0] <= 'z' && type.country[1] >= 'a' &&
+                                                      type.country[1] <= 'z'));
             for (const char c : cont::StringView(identifier).substr(colon + 1U))
             {
                 CRD_FUZZ_REQUIRE((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z'));
@@ -278,9 +297,13 @@ constexpr cont::StringView kAuthorities[] = {"fuzz.list", "fuzz.absent"};
 // Before the publication day, on it, inside the three days of freshness, on the last fresh day and after.
 constexpr Day kDays[] = {20261028U, 20261030U, 20261031U, 20261101U, 20261103U, 20261104U, 20261231U};
 constexpr cont::StringView kRegions[] = {"", "KP", "KP-01", "UA", "UA-43", "UA-30", "BY", "TR", "DE-BY"};
-constexpr cont::StringView kBirths[] = {"", "1980", "1980-05", "1980-05-17", "1979", "1981-12-31"};
+constexpr cont::StringView kBirths[] = {"",     "1980",         "1980-05",   "1980-05-17",
+                                        "1979", "1981-12-31",   "1976-03/1977", "1970/1974",
+                                        "1976-02-29/1976-03-01"};
 constexpr cont::StringView kCountries[] = {"TR", "AE", "IR", "DE"};
-constexpr cont::StringView kIdentifiers[] = {"passport:U-1234", "registration:5566", "imo:7654321", "imo:1"};
+constexpr cont::StringView kIdentifiers[] = {"passport:U-1234",       "registration:5566",   "imo:7654321",
+                                             "imo:1",                 "passport.tr:u1234",   "passport.de:U1234",
+                                             "registration.ae:5566",  "registration.tr:5566", "registration:55 66"};
 constexpr cont::StringView kNames[] = {"Deniz Kaya",
                                        "DEN\xC4\xB0Z KAYA",
                                        "Kaya Deniz",
@@ -334,12 +357,12 @@ void screening_checked(const u8* data, usize size)
     }
     for (u32 i = 0U; i < ((extras >> 2U) & 3U); ++i)
     {
-        identifiers.push_back(kIdentifiers[in.byte() % 4U]);
+        identifiers.push_back(kIdentifiers[in.byte() % (sizeof(kIdentifiers) / sizeof(kIdentifiers[0]))]);
     }
     Subject subject;
     subject.kind = static_cast<PartyKind>(in.byte() % 4U);
     subject.names = cont::ConstSpan<cont::StringView>(names.data(), names.size());
-    subject.birth = kBirths[in.byte() % 6U];
+    subject.birth = kBirths[in.byte() % (sizeof(kBirths) / sizeof(kBirths[0]))];
     subject.countries = cont::ConstSpan<cont::StringView>(countries.data(), countries.size());
     subject.identifiers = cont::ConstSpan<cont::StringView>(identifiers.data(), identifiers.size());
     ScreenRequest request;
@@ -400,24 +423,32 @@ void screening_checked(const u8* data, usize size)
                 best = score > best ? score : best;
             }
         }
+        // Identifiers agree on kind and compared value, and on the issuing country when both name one.
         bool identifier = false;
         for (const cont::StringView mine : identifiers)
         {
-            cont::String normal(mine.substr(0U, mine.find(':') + 1U));
-            for (const char c : mine.substr(mine.find(':') + 1U))
+            const usize colon = mine.find(':');
+            cont::String value;
+            for (const char c : mine.substr(colon + 1U))
             {
                 if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z'))
                 {
-                    normal.push_back(c);
+                    value.push_back(c);
                 }
                 else if (c >= 'A' && c <= 'Z')
                 {
-                    normal.push_back(static_cast<char>(c - 'A' + 'a'));
+                    value.push_back(static_cast<char>(c - 'A' + 'a'));
                 }
             }
+            const Split my = split(mine.substr(0U, colon));
             for (const cont::String& theirs : party.identifiers)
             {
-                identifier = identifier || cont::StringView(normal) == cont::StringView(theirs);
+                const cont::StringView printed(theirs);
+                const usize at = printed.find(':');
+                const Split their = split(printed.substr(0U, at));
+                const bool same_country =
+                    my.country.empty() || their.country.empty() || my.country == their.country;
+                identifier = identifier || (my.kind == their.kind && printed.substr(at + 1U) == value && same_country);
             }
         }
         if (best < request.policy.review && !identifier)
@@ -571,6 +602,8 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     add(sink, "list-bad-region", 0U, replaced("region = \"UA-43\"", "region = \"UA-\""));
     add(sink, "list-stale-age", 0U, replaced("max_age_days = 3", "max_age_days = 400"));
     add(sink, "list-bad-identifier", 0U, replaced("imo:7654321", "IMO:7654321"));
+    add(sink, "list-bad-identifier-country", 0U, replaced("imo:7654321", "imo.TR:7654321"));
+    add(sink, "list-reversed-birth", 0U, replaced("\"1975/1976-02\"", "\"1977/1976-02\""));
     add(sink, "list-wordless-name", 0U, replaced("\"Blue Harbour Trading\"", "\" .-, \""));
     add(sink, "list-future-format", 0U, replaced("cerid-sanctions/1", "cerid-sanctions/2"));
     add(sink, "names-turkish", 1U,
@@ -586,6 +619,9 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     // shape, authorities, names, extras, countries, identifiers, kind, birth, day, destination, review, match
     add_bytes(sink, "screen-match-birth", 2U, {0x04U, 0U, 0U, 0x00U, 0U, 2U, 3U, 0U, 0U});
     add_bytes(sink, "screen-identifier", 2U, {0x04U, 0U, 9U, 0x04U, 0U, 0U, 0U, 4U, 0U, 2U, 2U});
+    add_bytes(sink, "screen-identifier-any-country", 2U, {0x04U, 0U, 0U, 0x04U, 5U, 0U, 0U, 4U, 0U, 2U, 2U});
+    add_bytes(sink, "screen-identifier-other-country", 2U, {0x04U, 0U, 5U, 0x04U, 7U, 1U, 0U, 4U, 0U, 2U, 2U});
+    add_bytes(sink, "screen-birth-interval", 2U, {0x04U, 0U, 0U, 0x00U, 0U, 8U, 4U, 0U, 2U, 2U});
     add_bytes(sink, "screen-discounted", 2U, {0x04U, 0U, 1U, 0x00U, 1U, 4U, 3U, 0U, 1U, 1U});
     add_bytes(sink, "screen-entity", 2U, {0x08U, 0U, 5U, 6U, 0x01U, 1U, 1U, 0U, 3U, 7U, 3U, 0U});
     add_bytes(sink, "screen-missing-stale", 2U, {0x05U, 0U, 1U, 7U, 0x00U, 0U, 0U, 6U, 4U});

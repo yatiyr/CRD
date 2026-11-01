@@ -319,28 +319,34 @@ class Unreadable(Exception):
 
 
 class SecureRedirects(urllib.request.HTTPRedirectHandler):
-    """Follows a redirect on the same host only, over https: CELLAR answers a content request with an http Location
-    whose https form serves the same bytes (2026-11-01), so http is upgraded; another host or scheme is refused."""
+    """Follows a redirect on the same host, or to one of `hosts` when given, over https: CELLAR answers a content
+    request with an http Location whose https form serves the same bytes (2026-11-01), so http is upgraded; another
+    host or scheme is refused."""
+
+    def __init__(self, hosts=None):
+        super().__init__()
+        self.hosts = frozenset(hosts or ())
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         old = urllib.parse.urlsplit(req.full_url)
         new = urllib.parse.urlsplit(urllib.parse.urljoin(req.full_url, newurl))
-        if new.scheme not in {'http', 'https'} or new.hostname != old.hostname:
+        if new.scheme not in {'http', 'https'} or new.hostname not in (self.hosts or {old.hostname}):
             if fp is not None:
                 fp.close()
             raise urllib.error.URLError(f'refused a redirect to {newurl}')
         return super().redirect_request(req, fp, code, msg, headers, new._replace(scheme='https').geturl())
 
 
-def download(opener, url, headers):
-    """The body of an https URL, gzip decoded, at most FETCH_LIMIT bytes either way."""
+def download(opener, url, headers, limit=None):
+    """The body of an https URL, gzip decoded, at most `limit` (FETCH_LIMIT) bytes either way."""
+    limit = limit or FETCH_LIMIT
     request = urllib.request.Request(url, headers=dict(headers, **{'User-Agent': USER_AGENT,
                                                                   'Accept-Encoding': 'gzip'}))
     with opener(request, timeout=FETCH_TIMEOUT) as response:
-        body = response.read(FETCH_LIMIT + 1)
+        body = response.read(limit + 1)
         encoding = (getattr(response, 'headers', None) or {}).get('Content-Encoding') or 'identity'
-    if len(body) > FETCH_LIMIT:
-        raise Unreadable(f'larger than {FETCH_LIMIT} bytes')
+    if len(body) > limit:
+        raise Unreadable(f'larger than {limit} bytes')
     encoding = encoding.strip().lower()
     if encoding == 'identity':
         return body
@@ -348,11 +354,11 @@ def download(opener, url, headers):
         raise Unreadable(f'the unrequested content encoding {encoding!r}')
     stream = zlib.decompressobj(16 + zlib.MAX_WBITS)
     try:
-        body = stream.decompress(body, FETCH_LIMIT + 1)
+        body = stream.decompress(body, limit + 1)
     except zlib.error as error:
         raise Unreadable(f'a broken gzip body ({error})') from error
-    if len(body) > FETCH_LIMIT:
-        raise Unreadable(f'larger than {FETCH_LIMIT} bytes')
+    if len(body) > limit:
+        raise Unreadable(f'larger than {limit} bytes')
     if not stream.eof:
         raise Unreadable('a truncated gzip body')
     return body

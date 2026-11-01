@@ -38,3 +38,6 @@
 # Fuzz corpora are raw bytes: never normalized, never merged as text
 tests/**/fuzz/corpus/** -text -diff -merge
 tests/**/fuzz/pending/** -text -diff -merge
+
+# Official sanctions list excerpts are the authorities' bytes (CRLF included), held by their SHA-256
+tests/foundation/comply/lists/*.xml -text

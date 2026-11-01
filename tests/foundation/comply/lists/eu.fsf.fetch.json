@@ -1,0 +1,8 @@
+{
+  "schema": "cerid-sanctions-fetch/1",
+  "authority": "eu.fsf",
+  "url": "https://webgate.ec.europa.eu/fsd/fsf/public/files/xmlFullSanctionsList_1_1/content?token=dG9rZW4tMjAxNw",
+  "day": "2026-11-01",
+  "bytes": 44928,
+  "sha256": "0f9bc4ca52f0988543f1d2ac9c4bdda273b786588c76b054591d2c4160eaeaf9"
+}
