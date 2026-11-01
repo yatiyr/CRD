@@ -37,5 +37,11 @@ elseif(NOT CMAKE_BUILD_TYPE STREQUAL Cerid_BUILD_TYPE AND NOT Cerid_ALLOW_PROFIL
                         "or set Cerid_ALLOW_PROFILE_MISMATCH=ON to accept the installed build_config.hpp anyway")
 endif()
 
+# AWS-LC's libcrypto (behind Cerid::crypto) links the platform's threads library outside Windows.
+if("aws-lc-crypto" IN_LIST Cerid_DEPENDENCIES AND NOT WIN32)
+    include(CMakeFindDependencyMacro)
+    find_dependency(Threads)
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/CeridTargets.cmake")
 check_required_components(Cerid)

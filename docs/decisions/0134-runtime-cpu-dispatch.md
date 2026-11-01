@@ -129,7 +129,12 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    the words an LDR (literal) loads, the `__swt` switch tables and the compact ones (the address an ADR forms for an
    indexed load, to the next function) are data. `scripts/isa-isolation.json` holds the
    reviewed exceptions, each naming its runtime check (the MSVC STL's and the CRT's vector math `__isa_available`
-   tests, zstd's dynamic BMI2, XGETBV behind OSXSAVE).
+   tests, zstd's dynamic BMI2, XGETBV behind OSXSAVE). A provider (`CRD_ISA_ROLE provider`, amended 2026-11-01 for
+   NET.2: a vetted third-party library with its own CPU dispatch linked into Cerid images, today AWS-LC behind
+   `crd-crypto`, whose AES-NI, VAES, AVX2 and AVX-512 routines run only after its `OPENSSL_cpuid_setup` checks) is not
+   Cerid code: its objects are left out, the manifest lists its archive, a map image names that archive as a library
+   and an ELF image leaves out every function the archive defines (`nm`), so Cerid's own code in the same image is still
+   judged.
 7. **Determinism.** A kernel declared bit-exact (ADR-0063) produces the same bits on every level: the same operation
    order, and single-rounded FMA only where every level computes it single-rounded. The others declare tolerances
    against the portable reference. Each kernel's differential test runs every level the host executes, in one process.

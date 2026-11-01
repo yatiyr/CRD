@@ -162,7 +162,7 @@ def validate_cmake(pins, text):
     for token in FORBIDDEN_CMAKE:
         if token in text:
             problems.append('CMakeLists.txt acquires a package outside the registry (%s)' % token)
-    used = set(re.findall(r'crd_add_pinned_package\((\w+)', text))
+    used = set(re.findall(r'crd_add_pinned_package\(([\w-]+)', text))
     packages = set(pins.get('packages', {}))
     for name in sorted(used - packages):
         problems.append('CMakeLists.txt adds unpinned package %s' % name)

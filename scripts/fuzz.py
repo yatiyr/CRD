@@ -57,6 +57,8 @@ TARGETS = {
                         'executable': 'tests/net/fuzz/crd-fuzz-net-negotiation'},
     'crypto-policy': {'corpus': 'tests/foundation/crypto/fuzz/corpus',
                       'executable': 'tests/crypto/fuzz/crd-fuzz-crypto-policy'},
+    'crypto-provider': {'corpus': 'tests/foundation/crypto/fuzz/corpus-provider',
+                        'executable': 'tests/crypto/fuzz/crd-fuzz-crypto-provider'},
     'comply-rules': {'corpus': 'tests/foundation/comply/fuzz/corpus/rules',
                      'executable': 'tests/comply/fuzz/crd-fuzz-comply-rules'},
     'comply-sanctions': {'corpus': 'tests/foundation/comply/fuzz/corpus/sanctions',

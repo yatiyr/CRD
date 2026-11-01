@@ -11628,7 +11628,7 @@
     "cerid-package": [
       {
         "release": null,
-        "inventory": "a1d30844a3e75a663cbef6a72a406b039014ed79ee569d7e5bf40d347ef6f3f5",
+        "inventory": "ea819107c0d863a1f63f4d42d1f07a43666363d1de8e8fb0e80e1ce65db3aa61",
         "reviewed": "2026-11-01",
         "findings": [
           {
@@ -11636,35 +11636,35 @@
             "classification": "Not a cybersecurity product",
             "authorization": "None required",
             "report": false,
-            "basis": "Verifying the publisher's signed policy generations protects the engine's own configuration; it is no cybersecurity product or service offered to others. Counsel confirms this against Law No. 7545's definition once its text is read."
+            "basis": "crd-crypto now performs confidentiality as well as authentication: AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 (symmetric keys of 128 and 256 bits), X25519, P-256 and P-384 key agreement, HKDF, and ML-DSA, Ed25519 and ECDSA signatures, all published standards run by the pinned open-source AWS-LC provider behind Cerid's own interface (no proprietary algorithm, no open cryptographic interface for customer-supplied algorithms). It protects the engine's and its products' own communications and signed artefacts; the package is an engine library, not a cybersecurity product, system or service offered as such. Counsel confirms this against Law No. 7545's definition once its text is read."
           },
           {
             "entry": "tr.btk.encryption",
-            "classification": "Carries no encryption",
+            "classification": "Encryption in a software library; no Article 39 procedure proposed",
             "authorization": "None required",
             "report": false,
-            "basis": "Signature verification only; the export encrypts no communication, so the BTK encryption rules set it no duty."
+            "basis": "crd-crypto now performs confidentiality as well as authentication: AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 (symmetric keys of 128 and 256 bits), X25519, P-256 and P-384 key agreement, HKDF, and ML-DSA, Ed25519 and ECDSA signatures, all published standards run by the pinned open-source AWS-LC provider behind Cerid's own interface (no proprietary algorithm, no open cryptographic interface for customer-supplied algorithms). Article 39 governs coded or encrypted communication within an electronic communication service, which the publisher does not operate by shipping a library; products built with it that run such a service are classified when their exports join the inventory. No key escrow and no weakened end-to-end encryption exist. Counsel confirms that the BTK procedure sets the package no duty."
           },
           {
             "entry": "eu.dual-use",
-            "classification": "Not listed in Annex I",
-            "authorization": "None required",
+            "classification": "5D002, proposed released by Note 3 (the Cryptography Note)",
+            "authorization": "None required if Note 3 applies; otherwise an export authorisation",
             "report": false,
-            "basis": "Its only cryptographic function is authentication: crd-crypto verifies the publisher's signed policy generations (cerid.policy-generation) through a verifier the caller supplies and implements no algorithm. Cryptography limited to authentication, digital signature and data integrity is not cryptography for data confidentiality, which Category 5 Part 2 controls (from knowledge until the text is read)."
+            "basis": "crd-crypto now performs confidentiality as well as authentication: AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 (symmetric keys of 128 and 256 bits), X25519, P-256 and P-384 key agreement, HKDF, and ML-DSA, Ed25519 and ECDSA signatures, all published standards run by the pinned open-source AWS-LC provider behind Cerid's own interface (no proprietary algorithm, no open cryptographic interface for customer-supplied algorithms). Category 5 Part 2 describes software for data confidentiality with symmetric keys above 56 bits, so 5D002 describes the package unless the Cryptography Note releases it: the cryptography is not user-modifiable, needs no substantial support and is documented, but whether a developer package meets Note 3's general availability criteria is counsel's question. Russia and Belarus bans on mass-market encryption (Regulation 833/2014 Annex VII, 765/2006 Annex Va) stand beside this and are asked separately."
           },
           {
             "entry": "us.ear.encryption",
-            "classification": "EAR99 where the EAR applies",
-            "authorization": "NLR",
-            "report": false,
-            "basis": "Its only cryptographic function is authentication: crd-crypto verifies the publisher's signed policy generations (cerid.policy-generation) through a verifier the caller supplies and implements no algorithm. Cryptography limited to authentication, digital signature and data integrity is not cryptography for data confidentiality, which Category 5 Part 2 controls (from knowledge until the text is read). Whether the EAR reaches a Turkish publisher's software at all (US-origin content, export from US servers such as a store's) is part of the counsel review."
+            "classification": "5D002 under License Exception ENC section 740.17(b), or mass-market 5D992.c, where the EAR applies",
+            "authorization": "ENC",
+            "report": true,
+            "basis": "crd-crypto now performs confidentiality as well as authentication: AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 (symmetric keys of 128 and 256 bits), X25519, P-256 and P-384 key agreement, HKDF, and ML-DSA, Ed25519 and ECDSA signatures, all published standards run by the pinned open-source AWS-LC provider behind Cerid's own interface (no proprietary algorithm, no open cryptographic interface for customer-supplied algorithms). Where the EAR reaches the package, its standard algorithms with keys above 56 bits make it 5D002; as a component offering cryptographic functions to the products built with it, it may be a section 740.17(b)(2) cryptographic library needing a classification request and a semi-annual sales report, rather than a (b)(1) mass-market item with an annual self-classification report. Report owed until counsel decides; whether the EAR reaches a Turkish publisher's software at all is part of the same review."
           },
           {
             "entry": "int.wassenaar",
-            "classification": "Not on the Dual-Use List",
-            "authorization": "None required",
+            "classification": "5.D.2, proposed released by the Cryptography Note",
+            "authorization": "None required if the Note applies",
             "report": false,
-            "basis": "Its only cryptographic function is authentication: crd-crypto verifies the publisher's signed policy generations (cerid.policy-generation) through a verifier the caller supplies and implements no algorithm. Cryptography limited to authentication, digital signature and data integrity is not cryptography for data confidentiality, which Category 5 Part 2 controls (from knowledge until the text is read)."
+            "basis": "crd-crypto now performs confidentiality as well as authentication: AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 (symmetric keys of 128 and 256 bits), X25519, P-256 and P-384 key agreement, HKDF, and ML-DSA, Ed25519 and ECDSA signatures, all published standards run by the pinned open-source AWS-LC provider behind Cerid's own interface (no proprietary algorithm, no open cryptographic interface for customer-supplied algorithms). The Dual-Use List's Category 5 Part 2 describes it as for the EU; the national controls of Turkey, the EU members and the US implement the same Note, and counsel confirms it applies."
           }
         ],
         "counsel": {
@@ -12183,7 +12183,7 @@
         },
         {
           "classification": "cerid-package",
-          "question": "Is the classification of the cerid-package export right: its only cryptographic function verifies the publisher's signed policy generations (authentication and integrity, no confidentiality), so Category 5 Part 2 of Regulation (EU) 2021/821, the Wassenaar Dual-Use List and the EAR do not control it (EAR99, NLR), it carries no encryption under the BTK rules, and it is not a cybersecurity product or service under Law No. 7545?"
+          "question": "Is the classification of the cerid-package export right now that it encrypts (AES-GCM and ChaCha20-Poly1305 with 128- and 256-bit keys, X25519, P-256 and P-384 key agreement, HKDF, ML-DSA, Ed25519 and ECDSA through the open-source AWS-LC provider, with no customer-insertable cryptography): is it 5D002 released by the Cryptography Note under Regulation (EU) 2021/821 and the Wassenaar List, is it a section 740.17(b)(2) cryptographic library or a (b)(1) mass-market item under License Exception ENC with which report, does the EAR reach it at all, does Article 39 of Law No. 5809 set it any BTK duty, and is it a cybersecurity product under Law No. 7545?"
         },
         {
           "classification": "ceridc",

@@ -2,9 +2,10 @@
 # foundation owner that depends on no network code).
 #
 # Ships the algorithm identifiers generated from the NET-STD standards register (register_ids.hpp,
-# scripts/gen-register-ids.py), the signature verification interface providers implement and the signed, monotonic
-# crypto policy generations (NET-STD). The providers, the operating-system CSPRNG, the key store and the TLS and QUIC
-# handshake integration land with NET.2. Contract: docs/design/network-foundation.md#crypto and #agility.
+# scripts/gen-register-ids.py), the signature verification interface and the signed, monotonic crypto policy
+# generations (NET-STD), and the provider interface over the pinned AWS-LC (provider.hpp, NET.2): randomness, AEAD,
+# HKDF, signatures and key agreement. The key store and the TLS and QUIC handshake integration land with NET.2's later
+# slices. Contract: docs/design/network-foundation.md#crypto, #agility and #provider.
 
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -20,10 +21,15 @@ target_link_libraries(crd-crypto
     PUBLIC
         crd-core
         crd-containers
+    PRIVATE
+        crypto
 )
 
 target_compile_features(crd-crypto PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-crypto)
 
-# Cerid::crypto of the relocatable package.
+# Cerid::crypto of the relocatable package, with AWS-LC's libcrypto exported link-only beside it (Cerid::aws-lc-crypto):
+# its headers are private to this module, so the package installs none and a consumer reaches it only through
+# provider.hpp.
 crd_package_library(crd-crypto NAME crypto INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+crd_package_dependency(crypto NAME aws-lc-crypto)

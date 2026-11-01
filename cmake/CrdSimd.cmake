@@ -391,7 +391,9 @@ endfunction()
 # above the floor, no kernel object above its level, no symbol shared between the levels and general code
 # (scripts/check-isa-isolation.py). A built archive or program must have every object it lists. Where objects hold
 # link-time IL, the guard judges the linked images, which MSVC links therefore map (/MAP, root CMakeLists.txt). A
-# target with CRD_ISA_ROLE "peer" (a board's third-party peer, built at the host's ISA) is not Cerid code and is left out.
+# target with CRD_ISA_ROLE "peer" (a board's third-party peer, built at the host's ISA) is not Cerid code and is left out;
+# one with "provider" (a vetted third-party library with its own CPU dispatch linked into Cerid images: AWS-LC) is left
+# out too, and its archive is listed so the guard leaves its functions out of the images it judges.
 function(crd_add_isa_isolation_check)
     if(NOT CRD_BUILD_TESTS OR NOT (_crd_arch_x64 OR _crd_arch_arm64))
         return()
@@ -402,8 +404,11 @@ function(crd_add_isa_isolation_check)
     foreach(target IN LISTS targets)
         get_target_property(type ${target} TYPE)
         get_target_property(role ${target} CRD_ISA_ROLE)
+        if(role STREQUAL "provider" AND type STREQUAL "STATIC_LIBRARY")
+            string(APPEND content "provider\t${target}\t$<TARGET_FILE:${target}>\n")
+        endif()
         if(NOT type MATCHES "^(STATIC_LIBRARY|SHARED_LIBRARY|MODULE_LIBRARY|OBJECT_LIBRARY|EXECUTABLE)$"
-           OR role STREQUAL "peer")
+           OR role MATCHES "^(peer|provider)$")
             continue()
         endif()
         get_target_property(level ${target} CRD_KERNEL_LEVEL_NAME)

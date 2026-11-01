@@ -1410,8 +1410,8 @@ class PinnedInputs(unittest.TestCase):
         self.assertEqual(len(re.findall(r'uses:\s*actions/checkout@', self.workflow)),
                          self.workflow.count('persist-credentials: false'))
         self.assertEqual(self.workflow.count("python-version: '3.12'"), 13)
-        for package in ('Catch2', 'glfw', 'zstd', 'stb', 'cgltf', 'MikkTSpace', 'imgui', 'eigen', 'OpenBLAS',
-                        'boost', 'hptt', 'pocketfft', 'highway', 'tracy', 'nlopt'):
+        for package in ('Catch2', 'glfw', 'zstd', 'aws-lc', 'nasm', 'wycheproof', 'stb', 'cgltf', 'MikkTSpace',
+                        'imgui', 'eigen', 'OpenBLAS', 'boost', 'hptt', 'pocketfft', 'highway', 'tracy', 'nlopt'):
             self.assertIn('crd_add_pinned_package(%s' % package, self.cmake)
 
     def test_unpinned_references_fail_the_guard(self):
@@ -4066,7 +4066,8 @@ class TestInstruments(unittest.TestCase):
     def test_fuzz_driver_bounds_every_run_and_names_its_corpora(self):
         self.assertEqual(sorted(fuzz_driver.TARGETS), ['ceir-binary', 'ceir-differential', 'ceir-record', 'ceir-text',
                                                        'ceridc-diag', 'ckir-binary', 'ckir-text', 'comply-rules',
-                                                       'comply-sanctions', 'crypto-policy', 'memory-allocators',
+                                                       'comply-sanctions', 'crypto-policy', 'crypto-provider',
+                                                       'memory-allocators',
                                                        'net-negotiation', 'perf-assets',
                                                        'perf-bundle', 'perf-capture', 'perf-flight',
                                                        'resources-reload'])
@@ -5607,6 +5608,37 @@ class IsaIsolation(unittest.TestCase):
                '0000000000000010 <crd::g()>:\n  10:\tf0 48 0f c7 0e       \tlock cmpxchg16b OWORD PTR [rsi]\n')
         hits = [(function, kind) for function, _address, kind, _line in isa_isolation.scan_x64(elf, False)]
         self.assertEqual([('crd::f()', 'VEX'), ('crd::g()', 'cmpxchg16b')], hits)
+
+    def test_a_provider_is_left_out_of_elf_images(self):
+        # nm over a provider archive: member headers, defined functions (global and local) and data.
+        listing = ('\naesni-x86_64.S.o:\n0000000000000000 T aes_hw_encrypt\n0000000000000040 t _aesni_ctr32_6x\n'
+                   '\ncpu.c.o:\n0000000000000000 B OPENSSL_ia32cap_P\n')
+        with patch.object(isa_isolation, '_run', return_value=listing), \
+                patch.object(isa_isolation.os.path, 'exists', return_value=True):
+            provided = isa_isolation.provider_functions({'nm': 'nm'}, {'/b/libcrypto.a': 'crypto'})
+        self.assertEqual(frozenset({'aes_hw_encrypt', '_aesni_ctr32_6x'}), provided)
+        self.assertEqual(frozenset(), isa_isolation.provider_functions({'nm': 'nm'}, {'/b/missing.a': 'crypto'}))
+        with patch.object(isa_isolation, '_run', return_value='\n'), \
+                patch.object(isa_isolation.os.path, 'exists', return_value=True):
+            with self.assertRaisesRegex(isa_isolation.GuardError, 'listed no function'):
+                isa_isolation.provider_functions({'nm': 'nm'}, {'/b/libcrypto.a': 'crypto'})
+        # The provider's above-floor routine is left out; Cerid's own is still judged.
+        elf = ('0000000000000000 <aes_hw_encrypt>:\n   0:\tc5 fc 58 c1          \tvaddps ymm0,ymm0,ymm1\n'
+               '0000000000000010 <crd::g()>:\n  10:\tc5 fc 58 c1          \tvaddps ymm0,ymm0,ymm1\n')
+        exceptions = isa_isolation.Exceptions()
+        with patch.object(isa_isolation, '_stream', return_value=[elf]):
+            failures = isa_isolation.judge_elf_image({'objdump': 'objdump'}, 't', 'x64', exceptions, provided)
+            unprovided = isa_isolation.judge_elf_image({'objdump': 'objdump'}, 't', 'x64', exceptions)
+        self.assertEqual(1, len(failures))
+        self.assertIn('crd::g()', failures[0])
+        self.assertEqual(2, len(unprovided))
+        # The manifest names a provider's archive on its own line.
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / 'm.manifest'
+            manifest.write_text('kernel\tavx2\t\tx.a\tk.o\ngeneral\tcrd-x\tx.a\tg.o\n'
+                                'provider\tcrypto\t/b/libcrypto.a\n', encoding='utf-8')
+            providers = isa_isolation.read_manifest(str(manifest))[3]
+        self.assertEqual({os.path.normpath('/b/libcrypto.a'): 'crypto'}, providers)
 
     def test_general_symbols_hold_no_level(self):
         judge = isa_isolation.judge_general_symbols

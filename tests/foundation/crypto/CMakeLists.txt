@@ -1,16 +1,23 @@
-# crd-crypto tests (NET-STD): the algorithm identifiers generated from the standards register and the signed crypto
-# policy generations.
+# crd-crypto tests: the algorithm identifiers generated from the standards register and the signed crypto policy
+# generations (NET-STD), and the provider interface against Project Wycheproof's vectors (NET.2).
 add_executable(crd-crypto-tests
     test_policy.cpp
+    test_provider.cpp
     test_register_ids.cpp
 )
 
 target_link_libraries(crd-crypto-tests PRIVATE
+    crd-asset-io
     crd-core
     crd-containers
     crd-crypto
+    crd-memory
+    crd-platform
     Catch2::Catch2WithMain
 )
+
+# The pinned Wycheproof vectors are read from the package cache at run time (cmake/pins.json: wycheproof).
+target_compile_definitions(crd-crypto-tests PRIVATE CRD_WYCHEPROOF_DIR="${wycheproof_SOURCE_DIR}")
 
 crd_enable_default_pch(crd-crypto-tests)
 crd_discover_tests(crd-crypto-tests)

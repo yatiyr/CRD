@@ -17,8 +17,10 @@ with its level, each general object with its target and archive, and each image.
 Objects that hold link-time IL (MSVC /GL, clang ThinLTO bitcode, GCC slim LTO) are judged on the linked images: MSVC
 and clang-cl images through their /MAP map (each function's object, MSVC's jump tables in .text as data), ELF images
 through their symbol tables, while the symbols of GCC's IL objects come from gcc-nm. scripts/isa-isolation.json holds
-the reviewed exceptions, each naming the runtime check that guards it. Contract: docs/decisions/0134-runtime-cpu-
-dispatch.md §6.
+the reviewed exceptions, each naming the runtime check that guards it. A provider (CRD_ISA_ROLE provider: a vetted
+third-party library with its own CPU dispatch, AWS-LC behind crd-crypto) is not Cerid code: its objects are not judged,
+a map image names its archive as a library, and an ELF image leaves out the functions its archive defines (read with
+nm). Contract: docs/decisions/0134-runtime-cpu-dispatch.md §6.
 
     python scripts/check-isa-isolation.py --arch x64 --os windows
         --manifest build/win-debug/isa-isolation/Debug.manifest
@@ -674,7 +676,7 @@ class Exceptions:
 
 
 def read_manifest(path):
-    kernels, generals, images = {}, {}, {}
+    kernels, generals, images, providers = {}, {}, {}, {}
     text = Path(path).read_text(encoding='utf-8')
     for number, line in enumerate(text.splitlines(), 1):
         if not line.strip():
@@ -689,13 +691,31 @@ def read_manifest(path):
             generals.setdefault(os.path.normpath(fields[3]), (fields[1], fields[2]))
         elif fields[0] == 'image' and len(fields) == 3:
             images[os.path.normpath(fields[2])] = fields[1]
+        elif fields[0] == 'provider' and len(fields) == 3:
+            providers[os.path.normpath(fields[2])] = fields[1]
         else:
             raise GuardError(f'{path}:{number}: malformed line')
     for kernel in kernels:
         generals.pop(kernel, None)
     if not kernels or not generals:
         raise GuardError(f'{path}: the manifest lists no kernel or no general object')
-    return kernels, generals, images
+    return kernels, generals, images, providers
+
+
+def provider_functions(tools, archives):
+    """The functions the providers' built archives define (local ones included: an assembly routine's labels are local
+    symbols): an ELF image's code under these names is the provider's, not Cerid's."""
+    built = [archive for archive in archives if os.path.exists(archive)]
+    if not built:
+        return frozenset()
+    names = set()
+    for line in _run([tools['nm'], '-C', '--defined-only'] + built, empty_ok=True).splitlines():
+        match = re.match(r'^[0-9a-fA-F]* +([A-Za-z?]) (.+)$', line)
+        if match and match.group(1) in 'TtWw':
+            names.add(match.group(2))
+    if not names:
+        raise GuardError(f'{Path(tools["nm"]).name} listed no function of the providers {built}')
+    return frozenset(names)
 
 
 def _stem(name):
@@ -881,14 +901,15 @@ def judge_map_image(tools, image, map_path, owners, exceptions):
     return failures + code_failures(f'{image}: ', above)
 
 
-def judge_elf_image(tools, image, arch, exceptions):
-    """Failures of one ELF image: above-floor code outside the level namespaces."""
+def judge_elf_image(tools, image, arch, exceptions, provided=frozenset()):
+    """Failures of one ELF image: above-floor code outside the level namespaces and the providers' functions."""
     command = [tools['objdump'], '-d', '-w', '-C'] + (['-M', 'intel'] if arch == 'x64' else []) + [image]
     hits, decoded = [], 0
     for text in _stream(command, _LABEL_ELF):
         hits += scan_x64(text, False) if arch == 'x64' else scan_arm64(text, False)
         decoded += len(INSTRUCTION[(arch, False)].findall(text))
-    above = [hit for hit in hits if not (LEVEL_NS.search(hit[0]) or exceptions.allows(hit[2], hit[0], '', set()))]
+    above = [hit for hit in hits if not (LEVEL_NS.search(hit[0]) or hit[0] in provided
+                                         or exceptions.allows(hit[2], hit[0], '', set()))]
     return ([f'{image}: objdump decoded no instruction'] if not decoded else []) + code_failures(f'{image}: ', above)
 
 
@@ -979,7 +1000,7 @@ def _vswhere_dumpbin():
 
 def run(args):
     exceptions = Exceptions(args.exceptions)
-    kernels, generals, images = read_manifest(args.manifest)
+    kernels, generals, images, providers = read_manifest(args.manifest)
     failures, unbuilt = [], []
     present = {}
     # An object is judged when it exists; a built archive or program whose object is missing is a stale tree.
@@ -1042,6 +1063,7 @@ def run(args):
             if not linked:
                 failures.append(f'{len(il)} objects hold link-time IL and no image was built to judge their code')
             owners = Owners(kernels, generals) if coff else None
+            provided = frozenset() if coff else provider_functions(tools, providers)
             futures = []
             for image in linked:
                 if coff:
@@ -1051,7 +1073,7 @@ def run(args):
                         continue
                     futures.append(pool.submit(judge_map_image, tools, image, map_path, owners, exceptions))
                 else:
-                    futures.append(pool.submit(judge_elf_image, tools, image, args.arch, exceptions))
+                    futures.append(pool.submit(judge_elf_image, tools, image, args.arch, exceptions, provided))
             for future in futures:
                 counts['images'] += 1
                 failures += future.result()

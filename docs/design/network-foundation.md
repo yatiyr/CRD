@@ -29,12 +29,14 @@ entirely plan still holds. The foundation reuses these owned capabilities and du
 | Seeded channel models | `hesap-comms` (AWGN, fading on a seeded Philox stream) | The pattern NET-DEBUG's loss models follow; network math lands in [HESAP-NET](../ROADMAP.md#slice-hesap-net). |
 | File and async I/O | `crd-platform` | Crash pool and capture persistence; storage faults through the existing I/O seam. |
 
-Two capabilities have no owner yet and this design assigns them (decisions [D1](#d1) and [D2](#d2)): `crd-net` owns
+Two capabilities had no owner and this design assigns them (decisions [D1](#d1) and [D2](#d2)): `crd-net` owns
 sockets, transport, sessions, channels, admission, conditioning, NAT traversal and capture; `crd-crypto` owns the
 cryptographic provider interface, the key store, the CSPRNG and keyed pseudorandom functions. Both are OWN.1
-registry entries. Since 2026-10-31 `crd-net` exists (NET-STD's negotiation created it, and `network.transport` is a
-landed capability whose signatures refuse a socket call or socket header in any other module); `crd-crypto` stays
-planned until NET.2 creates it. The review above records the tree before that.
+registry entries. Since 2026-10-31 both modules exist (NET-STD's negotiation created `crd-net`, whose
+`network.transport` signatures refuse a socket call or socket header in any other module, and its policy generations
+created `crd-crypto`); since 2026-11-01 `crypto.providers` is landed with the [provider interface](#provider), whose
+signatures refuse a cryptographic library header or randomness call in any other module. The review above records the
+tree before both.
 
 ## Assets
 
@@ -252,7 +254,8 @@ Designed here, qualified under [WEB.5](../ROADMAP.md#slice-web.5):
 - **Defaults** (pinned by NET.2): X25519MLKEM768 key exchange, SecP384r1MLKEM1024 for high assurance, ML-DSA
   (RFC 9881) with a classical companion for Cerid-issued service and code-signing certificates, AES-GCM or
   ChaCha20-Poly1305 chosen by CPU capability, HKDF.
-- **Randomness** comes only from the operating system (BCryptGenRandom, getrandom) through `crd-crypto`.
+- **Randomness** comes only through `crd-crypto`: the provider's DRBG seeded from the operating system
+  (BCryptGenRandom, getrandom) with CPU jitter as a second source ([P2](#provider)).
 - **Keys.** Long-term keys live in hardware where available (TPM 2.0, Secure Enclave, Android Keystore, YubiKey-class
   keys), with a software fallback protected by the platform (DPAPI, the Keychain, the Secret Service). Keys and secrets
   are Restricted in every diagnostic record, zeroed on release and never logged.
@@ -260,6 +263,52 @@ Designed here, qualified under [WEB.5](../ROADMAP.md#slice-web.5):
   are refused at runtime when built in; a CI guard proves it (T22).
 - **Export control** of everything above is [COMPLY.1](../ROADMAP.md#slice-comply.1)'s: its inventory is generated
   from the provider registry and the NET-STD algorithm entries.
+
+<a id="provider"></a>
+### The provider interface
+
+`crd-crypto` implements the interface in [provider.hpp](../../engine/foundation/crypto/include/crd/crypto/provider.hpp)
+over the pinned AWS-LC (NET.2, 2026-11-01): randomness, constant-time equality and zeroing, key identifiers,
+AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305, HKDF with SHA-256 and SHA-384, ML-DSA-44/65/87, Ed25519 and ECDSA
+signatures (`ProviderVerifier` is the production `SignatureVerifier` of the policy generations) and X25519, P-256 and
+P-384 key agreement. Every operation names its algorithm by register identifier; the length tables
+(`aead_key_bytes`, `hkdf_hash_bytes`, `signature_sizes`, `agreement_sizes`) answer only for their own class; every
+buffer has its exact length; failures zero their secret outputs; key objects zero their material when cleared or
+destroyed and are read-only, so shared across threads, after `init`. `provider_algorithms()` is a policy's ceiling
+(`PolicyConfig::supported`). Decisions (numbered for the tests):
+
+- **P1. AWS-LC is the provider.** It is maintained, FIPS 140-3 validated in its FIPS branch, carries formally verified
+  pieces (mlkem-native and mldsa-native, s2n-bignum's proven assembly, fiat-crypto's field arithmetic), implements
+  every algorithm of the register's identifiers and holds the TLS 1.3 stack with QUIC integration, ECH and certificate
+  compression that the handshake slice needs, under Apache-2.0 and ISC terms. It is pinned as a package (5.12.0,
+  `cmake/pins.json`), built from its pregenerated sources without Perl or Go, linked privately into `crd-crypto` only,
+  and exported link-only beside `Cerid::crypto`. BoringSSL (no releases), OpenSSL 3.5 (a Perl-driven build) and the
+  verified libraries (HACL*, libcrux: no TLS stack) are the alternatives the provider interface keeps open.
+- **P2. Randomness** is the provider's NIST SP 800-90A CTR_DRBG, seeded from the operating system's source with CPU
+  jitter entropy as a second independent source and reseeded on fork; no other generator exists in the engine.
+- **P3. Assembly on every lane.** AWS-LC's own assembly (AES-NI, VAES, AVX2 and AVX-512 paths, ARMv8 crypto) runs on
+  Linux and Windows x64; Windows x64 assembles with the pinned NASM, acquired by the configure like every package.
+  Its Windows ARM64 assembly needs clang's assembler, so `cl.exe` ARM64 builds take the provider's portable C until
+  that lane assembles with clang (a named remainder of NET.2). Its above-floor code runs only behind its own CPU
+  capability checks, which the ISA isolation guard reviews ([ADR-0134](../decisions/0134-runtime-cpu-dispatch.md)).
+- **P4. Encodings.** ML-DSA keys and signatures as FIPS 204 encodes them, signed purely with an empty context and
+  hedged; Ed25519 as RFC 8032; ECDSA public keys as uncompressed SEC 1 points and signatures as strict DER
+  Ecdsa-Sig-Value (the TLS 1.3 and X.509 forms; BER and malleated forms are refused); X25519 as RFC 7748 with an
+  all-zero secret refused (`WeakSecret`); EC agreement peers and ECDSA keys as uncompressed points on the curve (the
+  invalid-curve defence; the form byte is checked by Cerid, because AWS-LC also decodes the hybrid form 0x06/0x07 at
+  that length). On a forged opening the provider zeroes the output (`EVP_AEAD_CTX_open` clears it on every failure,
+  and the tests hold any provider to it). Seeds: ML-DSA's 32-byte xi, Ed25519's private key, the ECDSA scalar in
+  [1, n - 1].
+- **P5. Symbols.** The package exports AWS-LC's libcrypto with its own symbol names, so a consumer that also links
+  OpenSSL or BoringSSL sees duplicate symbols; prefixing them (`BORINGSSL_PREFIX`) is a named remainder of NET.2.
+- **P6. The hybrid groups** (X25519MLKEM768, SecP256r1MLKEM768, SecP384r1MLKEM1024) run inside the provider's TLS
+  stack; `provider_algorithms()` lists them only once the handshake slice proves them against the TLS stack's own
+  key shares, so no generation can enable them earlier.
+
+The oracle is Project Wycheproof (C2SP/wycheproof, pinned as a test package and read at run time): every AES-GCM,
+ChaCha20-Poly1305, HKDF, X25519, ECDH P-256 and P-384, Ed25519, ECDSA and ML-DSA vector (keygen from seed, verify,
+sign-then-verify), with RFC 8032's deterministic signatures, FIPS 180-4's SHA-256 example and the refusal of every
+vector outside Cerid's profile (other nonce, tag and key lengths, compressed points, context strings).
 
 <a id="tls-13-profile"></a>
 ### The TLS 1.3 profile

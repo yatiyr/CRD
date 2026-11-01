@@ -569,7 +569,9 @@ crd_module(engine/foundation/config engine/config DEPENDS containers core log ma
 # OWN.1: the lossless compression codecs (raw DEFLATE, zlib, the zstd binding), below every module that compresses
 crd_module(engine/foundation/compression engine/compression DEPENDS containers core memory PACKAGES zstd
     TESTS foundation/compression)
-crd_module(engine/foundation/crypto engine/crypto DEPENDS containers core TESTS foundation/crypto support/fuzz)
+# NET.2: the vetted provider (AWS-LC) behind crd-crypto's interface; Wycheproof's vectors are the tests' oracle
+crd_module(engine/foundation/crypto engine/crypto DEPENDS containers core PACKAGES aws-lc
+    TESTS foundation/crypto support/fuzz TEST_DEPENDS asset-io memory platform TEST_PACKAGES wycheproof)
 crd_module(engine/foundation/net engine/net DEPENDS containers core TESTS foundation/net support/fuzz)
 crd_module(engine/foundation/comply engine/comply DEPENDS containers core toml TESTS foundation/comply support/fuzz
     TEST_DEPENDS platform)
@@ -947,6 +949,60 @@ if("zstd" IN_LIST CRD_SELECTED_PACKAGES)
     unset(_crd_zstd_count)
     unset(_crd_zstd_kept_count)
     unset(_crd_zstd_replaced)
+endif()
+
+if("aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
+    # AWS-LC: crd-crypto's provider (NET.2, docs/design/network-foundation.md#provider). Cerid writes no primitive; its
+    # libcrypto is linked privately into crd-crypto, whose public headers name no provider type, and only
+    # engine/foundation/crypto/src includes <openssl/...> (the crypto.providers signatures refuse it elsewhere).
+    # Its build reads the pregenerated assembly and error tables (no Perl, no Go) and never writes into the shared
+    # source cache. Windows x64 assembles with the pinned NASM, acquired like every package (cmake/pins.json);
+    # AWS-LC's Windows ARM64 assembly needs clang's assembler, so cl.exe builds there take the portable C (provider
+    # decision P3 of the contract), and every other lane runs AWS-LC's own assembly.
+    set(_crd_awslc_options
+        "BUILD_TESTING OFF" "BUILD_TOOL OFF" "BUILD_LIBSSL OFF" "DISABLE_GO ON" "DISABLE_PERL ON"
+        "ENABLE_SOURCE_MODIFICATION OFF" "BUILD_SHARED_LIBS OFF")
+    if(WIN32 AND _crd_arch_x64)
+        crd_add_pinned_package(nasm DOWNLOAD_ONLY YES)
+        set(NASM_EXECUTABLE "${nasm_SOURCE_DIR}/nasm.exe" CACHE FILEPATH "The pinned NASM (cmake/pins.json)" FORCE)
+    elseif(WIN32 AND _crd_arch_arm64 AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        list(APPEND _crd_awslc_options "OPENSSL_NO_ASM ON")
+    endif()
+    # As for zstd: AWS-LC's cmake_minimum_required leaves CMP0141 unset, so the MSVC debug-information form would
+    # never reach its objects. Its range starts at 3.5, which CMake 4 reports as deprecated on every configure, so the
+    # minimum is raised to 3.10 as for OpenBLAS (its range ends at 3.31, so no policy changes). AWS-LC warns on every
+    # configure after the first that ENABLE_PRE_SONAME_BUILD is deprecated, because its own option() caches that
+    # variable before the check runs again; the cached value is dropped so only an explicit setting would warn.
+    set(CMAKE_POLICY_DEFAULT_CMP0141 NEW)
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
+    unset(ENABLE_PRE_SONAME_BUILD CACHE)
+    crd_add_pinned_package(aws-lc SYSTEM YES EXCLUDE_FROM_ALL YES OPTIONS ${_crd_awslc_options})
+    unset(CMAKE_POLICY_VERSION_MINIMUM)
+    unset(CMAKE_POLICY_DEFAULT_CMP0141)
+    unset(_crd_awslc_options)
+    if(NOT TARGET crypto)
+        message(FATAL_ERROR "The pinned AWS-LC's CMake no longer defines its crypto library (cmake/pins.json)")
+    endif()
+    # No link-time IL in AWS-LC's objects: its static library mixes C with assembly, which link-time code generation
+    # cannot hold together, and its assembly keeps its own -Wa,--noexecstack. Its above-floor code runs only behind its
+    # own CPU capability checks (OPENSSL_cpuid_setup), so the ISA isolation guard treats it as a provider: its objects
+    # are not judged as Cerid code and its functions are left out of the images (ADR-0134 section 6, decision P3).
+    _crd_collect_build_targets("${aws-lc_SOURCE_DIR}" _crd_awslc_targets)
+    foreach(_crd_awslc_target IN LISTS _crd_awslc_targets)
+        get_target_property(_crd_awslc_type ${_crd_awslc_target} TYPE)
+        if(_crd_awslc_type MATCHES "^(STATIC_LIBRARY|OBJECT_LIBRARY)$")
+            set_target_properties(${_crd_awslc_target} PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF
+                                  CRD_ISA_ROLE provider)
+        endif()
+    endforeach()
+    unset(_crd_awslc_target)
+    unset(_crd_awslc_targets)
+    unset(_crd_awslc_type)
+endif()
+
+if("wycheproof" IN_LIST CRD_SELECTED_PACKAGES)
+    # Project Wycheproof's test vectors: the crypto tests' oracle for every provider operation (data only).
+    crd_add_pinned_package(wycheproof DOWNLOAD_ONLY YES)
 endif()
 
 if("stb" IN_LIST CRD_SELECTED_PACKAGES)

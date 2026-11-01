@@ -41,6 +41,40 @@
         "zstd-lazy-is-aligned-unused"
       ]
     },
+    "aws-lc": {
+      "version": "5.12.0",
+      "repository": "aws/aws-lc",
+      "ref": "v5.12.0",
+      "commit": "cd481c207e38f06aeb5766f4a1cdfce10a4c0af8",
+      "url": "https://github.com/aws/aws-lc/archive/cd481c207e38f06aeb5766f4a1cdfce10a4c0af8.tar.gz",
+      "file": "aws-lc-cd481c20.tar.gz",
+      "sha256": "1de549ad9ac709d08a7e26ac5aa77dc90d55811c5c5c54b4ec3e442b00e98e68",
+      "size": 154548427,
+      "license": "Apache-2.0 AND ISC AND MIT AND BSD-3-Clause",
+      "note": "AWS-LC 5.12.0 (released 2026-10-23), crd-crypto's provider (NET.2): libcrypto only, linked privately into crd-crypto, assembled from its pregenerated sources (no Perl, no Go). LICENSE read from the archive: AWS-LC's own code Apache-2.0 OR ISC, BoringSSL- and OpenSSL-derived code ISC and Apache-2.0, mlkem-native and mldsa-native Apache-2.0 OR ISC OR MIT, fiat-crypto MIT, s2n-bignum Apache-2.0 OR ISC OR MIT-0, jitterentropy BSD-3-Clause (dual-licensed with GPL-2.0, taken under BSD-3-Clause). Pinned under the user's download approval of 2026-11-01 (docs/sessions/2026-11-01-net-2-provider.md)."
+    },
+    "nasm": {
+      "version": "2.16.03",
+      "url": "https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/win64/nasm-2.16.03-win64.zip",
+      "file": "nasm-2.16.03-win64.zip",
+      "sha256": "3ee4782247bcb874378d02f7eab4e294a84d3d15f3f6ee2de2f47a46aa7226e6",
+      "size": 513543,
+      "provenance": "https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/win64/",
+      "license": "BSD-2-Clause",
+      "note": "The NASM project's Windows x64 release build of 2.16.03 (2024-04-17; nasm.exe SHA-256 a93276636266516421cc9b422f47476c21f7a2949f1ae251556b2f1d33a3be04): AWS-LC's Windows x64 assembler, acquired at configure time on Windows x64 only, through the same verified, cached path as the source packages. The 2.16 line is the one AWS-LC's own Windows CI assembles with. LICENSE read from the archive: BSD-2-Clause."
+    },
+    "wycheproof": {
+      "version": "d17cc89",
+      "repository": "C2SP/wycheproof",
+      "ref": "d17cc89fa5c8f4f4d378b5385ebf75da5d0926c9",
+      "commit": "d17cc89fa5c8f4f4d378b5385ebf75da5d0926c9",
+      "url": "https://github.com/C2SP/wycheproof/archive/d17cc89fa5c8f4f4d378b5385ebf75da5d0926c9.tar.gz",
+      "file": "wycheproof-d17cc89f.tar.gz",
+      "sha256": "88dcda078c6ff643cf95c676e781c595f76e768d66ad85c01e1704f26d062ddc",
+      "size": 26786397,
+      "license": "Apache-2.0",
+      "note": "Project Wycheproof's test vectors at main of 2026-10-23 (testvectors_v1: AEAD, HKDF, ECDH, ECDSA, EdDSA, ML-DSA and ML-KEM): data the crd-crypto tests read as their oracle; never compiled or shipped."
+    },
     "stb": {
       "version": "2c980bb",
       "repository": "nothings/stb",

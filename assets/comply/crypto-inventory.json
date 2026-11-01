@@ -7,12 +7,17 @@
       "kind": "package",
       "title": "The relocatable Cerid package: the engine libraries cmake --install exports as Cerid:: targets",
       "packages": [
+        "aws-lc",
         "zstd"
       ],
       "functions": [
-        "authentication"
+        "authentication",
+        "confidentiality",
+        "integrity",
+        "key-exchange",
+        "key-derivation"
       ],
-      "confidentiality": false,
+      "confidentiality": true,
       "entries": [
         {
           "id": "cerid.policy-generation",
@@ -23,9 +28,295 @@
           ],
           "spec": "docs/design/network-foundation.md#policy-wire",
           "standard": false
+        },
+        {
+          "id": "crypto.ecdh",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "key-exchange"
+          ],
+          "spec": "RFC 7748",
+          "standard": true
+        },
+        {
+          "id": "crypto.ml-dsa",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "authentication"
+          ],
+          "spec": "FIPS 204",
+          "standard": true
+        },
+        {
+          "id": "crypto.eddsa",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "authentication"
+          ],
+          "spec": "RFC 8032",
+          "standard": true
+        },
+        {
+          "id": "crypto.ecdsa",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "authentication"
+          ],
+          "spec": "FIPS 186-5",
+          "standard": true
+        },
+        {
+          "id": "crypto.aes-gcm",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "confidentiality",
+            "integrity"
+          ],
+          "spec": "RFC 5116",
+          "standard": true
+        },
+        {
+          "id": "crypto.chacha20-poly1305",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "confidentiality",
+            "integrity"
+          ],
+          "spec": "RFC 8439",
+          "standard": true
+        },
+        {
+          "id": "crypto.hkdf",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "key-derivation"
+          ],
+          "spec": "RFC 5869",
+          "standard": true
         }
       ],
-      "algorithms": []
+      "algorithms": [
+        {
+          "name": "x25519",
+          "value": "0x0201",
+          "class": "ClassicalKeyExchange",
+          "functions": [
+            "key-exchange"
+          ],
+          "key_bits": [
+            256
+          ],
+          "entry": "crypto.ecdh",
+          "spec": "RFC 7748",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "secp256r1",
+          "value": "0x0202",
+          "class": "ClassicalKeyExchange",
+          "functions": [
+            "key-exchange"
+          ],
+          "key_bits": [
+            256
+          ],
+          "entry": "crypto.ecdh",
+          "spec": "RFC 7748",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "secp384r1",
+          "value": "0x0203",
+          "class": "ClassicalKeyExchange",
+          "functions": [
+            "key-exchange"
+          ],
+          "key_bits": [
+            384
+          ],
+          "entry": "crypto.ecdh",
+          "spec": "RFC 7748",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "ml-dsa-44",
+          "value": "0x0301",
+          "class": "PostQuantumSignature",
+          "functions": [
+            "authentication"
+          ],
+          "key_bits": [
+            10496
+          ],
+          "entry": "crypto.ml-dsa",
+          "spec": "FIPS 204",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "ml-dsa-65",
+          "value": "0x0302",
+          "class": "PostQuantumSignature",
+          "functions": [
+            "authentication"
+          ],
+          "key_bits": [
+            15616
+          ],
+          "entry": "crypto.ml-dsa",
+          "spec": "FIPS 204",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "ml-dsa-87",
+          "value": "0x0303",
+          "class": "PostQuantumSignature",
+          "functions": [
+            "authentication"
+          ],
+          "key_bits": [
+            20736
+          ],
+          "entry": "crypto.ml-dsa",
+          "spec": "FIPS 204",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "ed25519",
+          "value": "0x0401",
+          "class": "ClassicalSignature",
+          "functions": [
+            "authentication"
+          ],
+          "key_bits": [
+            256
+          ],
+          "entry": "crypto.eddsa",
+          "spec": "RFC 8032",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "ecdsa-secp256r1-sha256",
+          "value": "0x0402",
+          "class": "ClassicalSignature",
+          "functions": [
+            "authentication"
+          ],
+          "key_bits": [
+            256
+          ],
+          "entry": "crypto.ecdsa",
+          "spec": "FIPS 186-5",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "ecdsa-secp384r1-sha384",
+          "value": "0x0403",
+          "class": "ClassicalSignature",
+          "functions": [
+            "authentication"
+          ],
+          "key_bits": [
+            384
+          ],
+          "entry": "crypto.ecdsa",
+          "spec": "FIPS 186-5",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "aes-128-gcm",
+          "value": "0x0501",
+          "class": "Aead",
+          "functions": [
+            "confidentiality",
+            "integrity"
+          ],
+          "key_bits": [
+            128
+          ],
+          "entry": "crypto.aes-gcm",
+          "spec": "RFC 5116",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "aes-256-gcm",
+          "value": "0x0502",
+          "class": "Aead",
+          "functions": [
+            "confidentiality",
+            "integrity"
+          ],
+          "key_bits": [
+            256
+          ],
+          "entry": "crypto.aes-gcm",
+          "spec": "RFC 5116",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "chacha20-poly1305",
+          "value": "0x0503",
+          "class": "Aead",
+          "functions": [
+            "confidentiality",
+            "integrity"
+          ],
+          "key_bits": [
+            256
+          ],
+          "entry": "crypto.chacha20-poly1305",
+          "spec": "RFC 8439",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "hkdf-sha256",
+          "value": "0x0601",
+          "class": "Kdf",
+          "functions": [
+            "key-derivation"
+          ],
+          "key_bits": [
+            256
+          ],
+          "entry": "crypto.hkdf",
+          "spec": "RFC 5869",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "hkdf-sha384",
+          "value": "0x0602",
+          "class": "Kdf",
+          "functions": [
+            "key-derivation"
+          ],
+          "key_bits": [
+            384
+          ],
+          "entry": "crypto.hkdf",
+          "spec": "RFC 5869",
+          "standard": true,
+          "owner": "crypto"
+        }
+      ]
     },
     {
       "id": "asset_cooker",
