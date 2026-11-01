@@ -136,9 +136,10 @@ TEST_CASE("filesystem: the last write time converts exactly and orders files wit
     const auto stamp = [](const fs::Path& path, sys_time<nanoseconds> time)
     {
         std::error_code ec;
-        // The Microsoft file clock counts 100 ns ticks: nanoseconds narrow to it only by an explicit cast (exact for
-        // the times below), where libstdc++'s nanosecond file clock takes them as they are.
-        const auto file_time = time_point_cast<std::filesystem::file_time_type::duration>(clock_cast<file_clock>(time));
+        // Narrow to the file clock's tick before clock_cast (exact for the times below): the Microsoft file clock
+        // counts 100 ns ticks from 1601, and shifting a nanosecond count by those 369 years overflows i64 (the cast
+        // then hands SetFileTime a negative time). libstdc++'s file clock counts nanoseconds itself.
+        const auto file_time = clock_cast<file_clock>(time_point_cast<std::filesystem::file_time_type::duration>(time));
         std::filesystem::last_write_time(std::filesystem::path{path.native().c_str()}, file_time, ec);
         return !ec;
     };
