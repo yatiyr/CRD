@@ -439,9 +439,10 @@ def download(opener, url, headers, limit=None):
 def fetch_sources(plan, into, opener=None, today=None):
     """Reads every planned source (HTTPS only, gzip decoded, at most FETCH_LIMIT bytes) into `into` with a manifest of
     the SHA-256 of each decoded body; a version index is read before the documents whose URL holds the version (or the
-    part of it) it names, and the documents an index names beside the version (the acts a consolidated text lacks) are
-    read after it, each once. A source that fails (a refused connection, a timeout, a body cut short) is recorded with
-    its error and read again by the next run."""
+    part of it) it names, and the documents an index names beside the version (the acts a consolidated text lacks; a
+    revised UK text is its own index of the acts in force it has not applied) are read after it, each once. A source
+    that fails (a refused connection, a timeout, a body cut short) is recorded with its error and read again by the
+    next run."""
     if not isinstance(plan, dict) or plan.get('schema') != PLAN_SCHEMA or not isinstance(plan.get('sources'), list):
         raise ReviewError(f'the plan is not a {PLAN_SCHEMA} document')
     today = today or datetime.datetime.now(datetime.timezone.utc).date()
@@ -488,13 +489,18 @@ def fetch_sources(plan, into, opener=None, today=None):
             item.update(url=source['url'].replace('{version}', path), version=version)
             if documents:
                 item['documents'] = [document['id'] for document in documents]
-        found = take(item, source.get('headers', {}), source if source['kind'] == 'index' else None)
+        indexed = source['kind'] == 'index' or source.get('reader') in INDEX_READERS
+        found = take(item, source.get('headers', {}), source if indexed else None)
         if found:
             versions[source['id']] = found
+            if source['kind'] != 'index':
+                item['version'] = found[1]
+                if found[2]:
+                    item['documents'] = [document['id'] for document in found[2]]
             for document in found[2]:
                 if document['id'] not in taken:
                     taken.add(document['id'])
-                    items.append({'id': document['id'], 'url': document['url'], 'act': document['act']})
+                    items.append({key: document[key] for key in ('id', 'url', 'act', 'reader')})
                     take(items[-1], document['headers'])
     manifest = {'schema': FETCH_SCHEMA, 'day': str(today), 'plan': plan, 'items': items}
     write_json(into / MANIFEST, manifest)
@@ -625,20 +631,90 @@ def read_mevzuat_instrument(text, source, published):
     return f'{published} at {day} ({by})'
 
 
-def read_legislation_gov_uk(body, source, version):
-    """The point-in-time day (`dct:valid`) of the act's Crown Legislation Markup."""
+def legislation_markup(body, source):
+    """The Crown Legislation Markup of the document of `source["act"]`, which its `dc:identifier` names."""
     try:
         tree = ElementTree.fromstring(body)
     except ElementTree.ParseError as error:
         raise Unreadable(f'not Crown Legislation Markup ({error})') from error
     identifier = tree.find('.//{http://purl.org/dc/elements/1.1/}identifier')
-    valid = tree.find('.//{http://purl.org/dc/terms/}valid')
     if identifier is None or not (identifier.text or '').strip().endswith(f'/{source["act"]}'):
         raise Unreadable(f'not the data of {source["act"]}')
+    return tree
+
+
+def legislation_day(tree):
+    valid = tree.find('.//{http://purl.org/dc/terms/}valid')
     day = (valid.text or '').strip() if valid is not None else ''
     if len(day) != 10 or _registers.parse_day(day) is None:
         raise Unreadable('no point-in-time day (dct:valid)')
     return day
+
+
+# The changes legislation.gov.uk has not applied to a revised text (`ukm:UnappliedEffects`, the 2026-11-01 reads): each
+# `ukm:UnappliedEffect` names its affecting act (`AffectingURI`, `http://www.legislation.gov.uk/id/<type>/<year>/
+# <number>`), whether its editors owe it (`RequiresApplied`: "false" for a conditional amendment that took no effect or
+# a commencement) and its `ukm:InForce` days (`Date`, or `Prospective="true"` before an order commences it). An act is
+# read as published in the form its type is published in: an Act as enacted, an instrument as made.
+LEGISLATION_METADATA = '{http://www.legislation.gov.uk/namespaces/metadata}'
+LEGISLATION_PUBLISHED = 'https://www.legislation.gov.uk/{act}/{form}/data.xml'
+AFFECTING_ACT = re.compile(r'http://www\.legislation\.gov\.uk/id/(?P<type>[a-z]+)/\d{4}/[1-9]\d*')
+PUBLISHED_FORMS = {'ukpga': 'enacted', 'asp': 'enacted', 'asc': 'enacted', 'anaw': 'enacted', 'nia': 'enacted',
+                   'uksi': 'made', 'ssi': 'made', 'wsi': 'made', 'nisr': 'made'}
+
+
+def read_legislation_gov_uk_effects(body, source, today):
+    """A revised text is its own version index: its point-in-time day, or `(day, '<day> + <act> + ...', documents)`
+    when its editors owe changes in force by `today` that it has not applied (on 2026-11-01 the seven texts read had
+    56 unapplied effects, 28 owed, none in force). The version names each affecting act once, and the fetch reads each
+    as published."""
+    tree = legislation_markup(body, source)
+    day, acts = legislation_day(tree), set()
+    for effect in tree.iter(f'{LEGISLATION_METADATA}UnappliedEffect'):
+        owed = effect.get('RequiresApplied')
+        if owed not in ('true', 'false'):
+            raise Unreadable(f'an unapplied effect whose RequiresApplied is {owed!r}')
+        if owed == 'false':
+            continue
+        in_force = list(effect.iter(f'{LEGISLATION_METADATA}InForce'))
+        if not in_force:
+            raise Unreadable(f'the unapplied effect {effect.get("EffectId")} has no in-force day')
+        dates = [ISO_DAY.fullmatch(entry.get('Date')) for entry in in_force if entry.get('Date') is not None]
+        if None in dates:
+            raise Unreadable(f'the unapplied effect {effect.get("EffectId")} has an in-force day that is not '
+                             'YYYY-MM-DD')
+        if not any(calendar_day(date[3], date[2], date[1]) <= today for date in dates):
+            continue
+        affecting = AFFECTING_ACT.fullmatch(effect.get('AffectingURI') or '')
+        if affecting is None or affecting['type'] not in PUBLISHED_FORMS:
+            raise Unreadable(f'the unapplied effect {effect.get("EffectId")} names {effect.get("AffectingURI")!r}, '
+                             'not an act whose published form is known')
+        acts.add(affecting[0].removeprefix('http://www.legislation.gov.uk/id/'))
+    if not acts:
+        return day
+    acts = sorted(acts)
+    forms = [PUBLISHED_FORMS[act.split('/')[0]] for act in acts]
+    return day, ' + '.join([day] + acts), [
+        {'id': f'legislation.gov.uk-{act.replace("/", "-")}-{form}', 'act': f'{act}/{form}', 'headers': {},
+         'reader': 'legislation-gov-uk-published', 'url': LEGISLATION_PUBLISHED.format(act=act, form=form)}
+        for act, form in zip(acts, forms)]
+
+
+def read_legislation_gov_uk(body, source, version):
+    """The point-in-time day (`dct:valid`) of the act's Crown Legislation Markup, with the owed changes in force its
+    fetch named (`2026-09-30 + ukpga/2026/20`)."""
+    day = legislation_day(legislation_markup(body, source))
+    if version is not None and version.split(' + ')[0] != day:
+        raise Unreadable(f'the version {version} is not of the text read, valid on {day}')
+    return version or day
+
+
+def read_legislation_gov_uk_published(body, source, version):
+    """An act as published (`ukpga/2026/20/enacted`, `uksi/2026/386/made`): its final text, which names it."""
+    status = legislation_markup(body, source).find(f'.//{LEGISLATION_METADATA}DocumentStatus')
+    if status is None or status.get('Value') != 'final':
+        raise Unreadable(f'not the final text of {source["act"]}')
+    return version
 
 
 # An act changing a CELEX act: a regulation, directive or decision of the CELEX sector of legislation, or one of its
@@ -696,8 +772,8 @@ def read_cellar_versions(body, source, today):
         return version
     return version, ' + '.join([version] + lacked), [
         {'id': f'celex-{re.sub(r"[^a-z0-9]+", "-", celex.lower()).strip("-")}-published', 'act': celex,
-         'url': CELLAR.format(version=urllib.parse.quote(celex, safe='')), 'headers': dict(CELLAR_HEADERS)}
-        for celex in lacked]
+         'url': CELLAR.format(version=urllib.parse.quote(celex, safe='')), 'headers': dict(CELLAR_HEADERS),
+         'reader': 'cellar'} for celex in lacked]
 
 
 def read_cellar(body, source, version):
@@ -939,15 +1015,18 @@ def sanctions_map_record(body, source):
 
 # reader(body, source, version) -> the version of an instrument's document; an index reader(body, source, today)
 # -> the version its document's URL holds, or (the part of the URL, the version) when the version says more.
-READERS = {'mevzuat': read_mevzuat, 'legislation-gov-uk': read_legislation_gov_uk, 'cellar': read_cellar,
+READERS = {'mevzuat': read_mevzuat, 'legislation-gov-uk': read_legislation_gov_uk,
+           'legislation-gov-uk-published': read_legislation_gov_uk_published, 'cellar': read_cellar,
            'ecfr': read_ecfr, 'pdf': read_pdf, 'gazette': read_gazette, 'federal-register': read_federal_register,
            'sanctions-map': read_sanctions_map}
 # record(body, source) -> the bytes of the instrument within its document, whose SHA-256 is the text read; the whole
 # document for a reader without one.
 RECORDS = {'ecfr': ecfr_record, 'sanctions-map': sanctions_map_record}
+# A document whose reader is here (a revised UK text, which names the changes it has not applied) is its own index.
 INDEX_READERS = {'cellar-versions': read_cellar_versions, 'ecfr-versions': read_ecfr_versions,
                  'wassenaar-lists': read_wassenaar_lists, 'mevzuat-gazette': read_mevzuat_gazette,
-                 'gazette-day': read_gazette_day, 'federal-register-record': read_federal_register_record}
+                 'gazette-day': read_gazette_day, 'federal-register-record': read_federal_register_record,
+                 'legislation-gov-uk': read_legislation_gov_uk_effects}
 
 
 def read_rfc_editor(body):
@@ -1421,6 +1500,9 @@ def command_plan(args, root):
         print(f'  {source["url"]}')
     if any(source.get('reader') == 'cellar-versions' for source in sources):
         print(f'  and, as published, each act a consolidated text lacks ({CELLAR.format(version="<CELEX>")})')
+    if any(source.get('reader') == 'legislation-gov-uk' for source in sources):
+        print('  and, as published, each act in force a revised UK text has not applied '
+              f'({LEGISLATION_PUBLISHED.format(act="<act>", form="<enacted|made>")})')
     return 0
 
 
@@ -1546,7 +1628,8 @@ def command_read(args, root):
                     if document not in review.bodies:
                         raise Unreadable(f'the act it lacks, {document}, was not read '
                                          f'({review.items[document].get("error")})')
-                    read_cellar(review.bodies[document], review.items[document], None)
+                    item = review.items[document]
+                    READERS[item['reader']](review.bodies[document], item, None)
             except Unreadable as error:
                 errors.append(f'{entry_id}: {source["id"]}: {error}')
     if errors:

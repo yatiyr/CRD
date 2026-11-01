@@ -7794,7 +7794,7 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
                              items['celex-32016r0679']['url'])
             self.assertEqual('02024R2847-20241120 + 32024R2847R(05) + 32025R0327',
                              items['celex-32024r2847']['version'])
-            self.assertEqual({'id': 'celex-32025r0327-published', 'act': '32025R0327',
+            self.assertEqual({'id': 'celex-32025r0327-published', 'act': '32025R0327', 'reader': 'cellar',
                               'url': 'https://publications.europa.eu/resource/celex/32025R0327', 'file':
                               'celex-32025r0327-published', 'bytes': 44,
                               'sha256': hashlib.sha256(b'<html><p>Regulation (EU) 2025/327</p></html>').hexdigest()},
@@ -7835,6 +7835,152 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
                              entries['eu.ai.literacy']['instrument']['consolidated'])
             checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 11, 1))}
             self.assertEqual([], checked['legal'])
+
+    @staticmethod
+    def uk_text(act, *effects):
+        """A revised UK text valid on 2026-09-30 with its unapplied effects: (affecting URI, RequiresApplied, in-force
+        days), a day None for a prospective one, as legislation.gov.uk's Crown Legislation Markup carries them."""
+        def effect(number, uri, owed, days):
+            in_force = ''.join('<ukm:InForce Prospective="true" Qualification=""/>' if day is None else
+                               f'<ukm:InForce Date="{day}" Qualification="wholly in force"/>' for day in days)
+            return (f'<ukm:UnappliedEffect EffectId="key-{number}" RequiresApplied="{owed}" AffectingURI="{uri}" '
+                    f'Type="words substituted"><ukm:InForceDates>{in_force}</ukm:InForceDates></ukm:UnappliedEffect>')
+        return ('<Legislation xmlns="http://www.legislation.gov.uk/namespaces/legislation"><ukm:Metadata '
+                'xmlns:ukm="http://www.legislation.gov.uk/namespaces/metadata" '
+                'xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dct="http://purl.org/dc/terms/">'
+                f'<dc:identifier>http://www.legislation.gov.uk/{act}</dc:identifier><dct:valid>2026-09-30</dct:valid>'
+                '<ukm:UnappliedEffects>' + ''.join(effect(number, *item) for number, item in enumerate(effects)) +
+                '</ukm:UnappliedEffects></ukm:Metadata></Legislation>')
+
+    @staticmethod
+    def uk_published(act, status='final'):
+        return ('<Legislation xmlns="http://www.legislation.gov.uk/namespaces/legislation"><ukm:Metadata '
+                'xmlns:ukm="http://www.legislation.gov.uk/namespaces/metadata" '
+                f'xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier>http://www.legislation.gov.uk/{act}'
+                f'</dc:identifier><ukm:DocumentStatus Value="{status}"/></ukm:Metadata></Legislation>')
+
+    def test_a_revised_uk_text_names_the_acts_in_force_it_has_not_applied(self):
+        effects = register_review.read_legislation_gov_uk_effects
+        uk, unreadable = {'act': 'ukpga/2023/50'}, register_review.Unreadable
+        crime = 'http://www.legislation.gov.uk/id/ukpga/2026/20'
+        # The Online Safety Act's owed effects of the Crime and Policing Act 2026, commenced from 2026-11-06 (the
+        # 2026-11-01 read), beside a conditional amendment its editors do not owe and a prospective one.
+        text = self.uk_text('ukpga/2023/50', (crime, 'true', (None, '2026-11-06')), (crime, 'true', ('2026-11-06',)),
+                            ('http://www.legislation.gov.uk/id/uksi/2026/386', 'false', ('2026-09-30',)),
+                            ('http://www.legislation.gov.uk/id/nia/2022/18', 'true', (None,))).encode()
+        self.assertEqual('2026-09-30', effects(text, uk, datetime.date(2026, 11, 5)))
+        self.assertEqual(('2026-09-30', '2026-09-30 + ukpga/2026/20', [
+            {'id': 'legislation.gov.uk-ukpga-2026-20-enacted', 'act': 'ukpga/2026/20/enacted', 'headers': {},
+             'reader': 'legislation-gov-uk-published',
+             'url': 'https://www.legislation.gov.uk/ukpga/2026/20/enacted/data.xml'}]),
+            effects(text, uk, datetime.date(2026, 11, 6)))
+        self.assertEqual('2026-09-30', effects(self.LEGISLATION_XML.encode(), {'act': 'ukpga/2018/12'},
+                                               datetime.date(2026, 11, 6)), 'a text without unapplied effects')
+        for uri, owed, days, message in (
+                (crime, 'yes', ('2026-11-06',), "an unapplied effect whose RequiresApplied is 'yes'"),
+                (crime, 'true', (), 'the unapplied effect key-0 has no in-force day'),
+                (crime, 'true', ('2026-11',), 'the unapplied effect key-0 has an in-force day that is not YYYY-MM-DD'),
+                (crime, 'true', ('2026-02-30',), 'the day 30/02/2026 does not exist'),
+                ('http://www.legislation.gov.uk/id/ukmo/2026/1', 'true', ('2026-01-01',),
+                 "the unapplied effect key-0 names 'http://www.legislation.gov.uk/id/ukmo/2026/1', not an act whose "
+                 'published form is known'),
+                ('https://www.legislation.gov.uk/ukpga/2026/20', 'true', ('2026-01-01',), 'not an act whose')):
+            with self.assertRaises(unreadable) as refused:
+                effects(self.uk_text('ukpga/2023/50', (uri, owed, days)).encode(), uk, datetime.date(2026, 11, 6))
+            self.assertIn(message, str(refused.exception))
+        read = register_review.read_legislation_gov_uk
+        self.assertEqual('2026-09-30 + ukpga/2026/20', read(text, uk, '2026-09-30 + ukpga/2026/20'))
+        with self.assertRaises(unreadable) as refused:
+            read(text, uk, '2026-10-01 + ukpga/2026/20')
+        self.assertIn('the version 2026-10-01 + ukpga/2026/20 is not of the text read, valid on 2026-09-30',
+                      str(refused.exception))
+        published = register_review.read_legislation_gov_uk_published
+        made = {'act': 'uksi/2026/386/made'}
+        self.assertIsNone(published(self.uk_published('uksi/2026/386/made').encode(), made, None))
+        for body, message in ((self.uk_published('uksi/2026/386/made', 'revised'), 'not the final text of uksi/'),
+                              (self.uk_published('uksi/2026/386'), 'not the data of uksi/2026/386/made'),
+                              (self.uk_published('uksi/2026/386/made').replace('ukm:DocumentStatus', 'ukm:Status'),
+                               'not the final text of uksi/2026/386/made')):
+            with self.assertRaises(unreadable) as refused:
+                published(body.encode(), made, None)
+            self.assertIn(message, str(refused.exception))
+
+    def test_the_acts_a_revised_uk_text_has_not_applied_are_read_as_published_before_it_is_recorded(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            legal = self.legal_register([
+                self.legal_entry(id=entry_id, instrument=self.instrument(
+                    jurisdiction='GB', primary=f'https://www.legislation.gov.uk/{act}')) for entry_id, act in (
+                    ('gb.dpa.rights', 'ukpga/2018/12'), ('gb.osa.duties', 'ukpga/2023/50'),
+                    ('gb.samla.screening', 'ukpga/2018/13'))],
+                jurisdictions={'GB': {'name': 'United Kingdom', 'hosts': ['legislation.gov.uk']}})
+            self.write_tree(root, self.register(self.entries()), legal)
+            (root / 'docs' / 'reading.md').write_text('<a id="uk"></a>Read.\n', encoding='utf-8')
+            argv = ('--register', 'cmake/legal-register.json')
+            code, output = self.tool(root, *argv, 'plan', '--out', str(root / 'sources.json'))
+            self.assertEqual(0, code, output)
+            self.assertIn('  and, as published, each act in force a revised UK text has not applied '
+                          '(https://www.legislation.gov.uk/<act>/<enacted|made>/data.xml)', output)
+            plan = json.loads((root / 'sources.json').read_text(encoding='utf-8'))
+            crime, regulations = ('http://www.legislation.gov.uk/id/ukpga/2026/20',
+                                  'http://www.legislation.gov.uk/id/uksi/2026/386')
+            scottish = 'http://www.legislation.gov.uk/id/asp/2025/1'
+            # Two texts lack the Crime and Policing Act 2026, fetched once; the DPA's instrument cannot be served and
+            # the Scottish act answers with another act's text.
+            routes = {'/ukpga/2018/12/data.xml': self.uk_text('ukpga/2018/12', (crime, 'true', ('2026-11-06',)),
+                                                              (regulations, 'true', ('2026-10-01',))),
+                      '/ukpga/2023/50/data.xml': self.uk_text('ukpga/2023/50', (crime, 'true', (None, '2026-11-06'))),
+                      '/ukpga/2018/13/data.xml': self.uk_text('ukpga/2018/13', (scottish, 'true', ('2025-04-01',))),
+                      '/ukpga/2026/20/enacted/data.xml': self.uk_published('ukpga/2026/20/enacted'),
+                      '/uksi/2026/386/made/data.xml': urllib.error.URLError('gone'),
+                      '/asp/2025/1/enacted/data.xml': self.uk_published('asp/2025/2/enacted')}
+            requests = []
+            manifest = register_review.fetch_sources(plan, root / 'fetched', opener=self.routed(routes, requests),
+                                                     today=datetime.date(2026, 11, 6))
+            self.assertEqual(1, sum(request.full_url.endswith('/ukpga/2026/20/enacted/data.xml')
+                                    for request in requests))
+            items = {item['id']: item for item in manifest['items']}
+            self.assertEqual(6, len(items))
+            dpa = items['legislation.gov.uk-ukpga-2018-12']
+            self.assertEqual('2026-09-30 + ukpga/2026/20 + uksi/2026/386', dpa['version'])
+            self.assertEqual(['legislation.gov.uk-ukpga-2026-20-enacted', 'legislation.gov.uk-uksi-2026-386-made'],
+                             dpa['documents'])
+            self.assertEqual('2026-09-30 + ukpga/2026/20', items['legislation.gov.uk-ukpga-2023-50']['version'])
+            self.assertEqual('URLError: <urlopen error gone>', items['legislation.gov.uk-uksi-2026-386-made']['error'])
+            self.assertEqual({'id', 'url', 'act', 'reader', 'file', 'bytes', 'sha256'},
+                             set(items['legislation.gov.uk-ukpga-2026-20-enacted']))
+            fetched = ('--fetched', str(root / 'fetched'))
+            report = root / 'docs' / 'legal-review.md'
+            code, output = self.tool(root, *argv, 'compare', *fetched, '--report', str(report), '--apply',
+                                     today='2026-11-06')
+            self.assertEqual(0, code, output)
+            text = report.read_text(encoding='utf-8')
+            self.assertIn('Sources: 3 planned and 3 acts their consolidated texts lack, 5 read on 2026-11-06;', text)
+            self.assertIn('- gb.osa.duties (NET.2): Law No. 6698, Articles 4-7: never read from its primary source; '
+                          'read https://www.legislation.gov.uk/ukpga/2023/50/data.xml (version 2026-09-30 + '
+                          'ukpga/2026/20, SHA-256 ', text)
+            self.assertIn('record it with `read`; read the acts its consolidated text lacks as published '
+                          '(legislation.gov.uk-ukpga-2026-20-enacted)\n', text)
+            path = root / 'cmake' / 'legal-register.json'
+            before = path.read_bytes()
+            for entry, message in (
+                    ('gb.dpa.rights', 'gb.dpa.rights: legislation.gov.uk-ukpga-2018-12: the act it lacks, '
+                                      'legislation.gov.uk-uksi-2026-386-made, was not read (URLError: <urlopen error '
+                                      'gone>)'),
+                    ('gb.samla.screening', 'gb.samla.screening: legislation.gov.uk-ukpga-2018-13: not the data of '
+                                           'asp/2025/1/enacted')):
+                code, output = self.tool(root, *argv, 'read', *fetched, '--ref', 'docs/reading.md#uk', '--entry',
+                                         'gb.osa.duties', '--entry', entry, today='2026-11-06')
+                self.assertEqual(2, code, entry)
+                self.assertIn(message, output)
+                self.assertEqual(before, path.read_bytes(), 'a refused read writes nothing')
+            code, output = self.tool(root, *argv, 'read', *fetched, '--ref', 'docs/reading.md#uk', '--entry',
+                                     'gb.osa.duties', today='2026-11-06')
+            self.assertEqual(0, code, output)
+            self.assertIn('gb.osa.duties: read Law No. 6698 at 2026-09-30 + ukpga/2026/20 on 2026-11-06', output)
+            entries = {entry['id']: entry for entry in json.loads(path.read_text(encoding='utf-8'))['entries']}
+            self.assertEqual('2026-09-30 + ukpga/2026/20',
+                             entries['gb.osa.duties']['instrument']['consolidated']['version'])
 
     def test_each_host_resolves_to_the_document_its_reader_reads(self):
         resolve = register_review.resolve_primary
@@ -8634,10 +8780,10 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
         self.assertEqual(('02021R0821-20260921', '02021R0821-20260921 + 32026D0003R(01) + 32026R0002', [
             {'id': 'celex-32026d0003r-01-published', 'act': '32026D0003R(01)',
              'url': 'https://publications.europa.eu/resource/celex/32026D0003R%2801%29',
-             'headers': {'Accept': 'application/xhtml+xml', 'Accept-Language': 'eng'}},
+             'headers': {'Accept': 'application/xhtml+xml', 'Accept-Language': 'eng'}, 'reader': 'cellar'},
             {'id': 'celex-32026r0002-published', 'act': '32026R0002',
              'url': 'https://publications.europa.eu/resource/celex/32026R0002',
-             'headers': {'Accept': 'application/xhtml+xml', 'Accept-Language': 'eng'}}]), lacks)
+             'headers': {'Accept': 'application/xhtml+xml', 'Accept-Language': 'eng'}, 'reader': 'cellar'}]), lacks)
         # The act read as adopted lacks every change no version up to today consolidates.
         path, version, documents = versions(self.sparql(
             '02021R0821-20261231', ('32026R0002', '2026-09-30', '02021R0821-20261231'),
