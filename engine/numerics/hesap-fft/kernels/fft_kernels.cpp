@@ -1610,7 +1610,7 @@ template <typename T> struct Engine
             }
             gen::codelet16_inplace_first_blocks(w, bc, plan.sh_twr, plan.sh_twi, plan.sh_hir, plan.sh_hii);
         }
-        else if (aligned) // a step holds whole tiles, so pass 1 deinterleaves as it loads
+        else if (w == d) // a step holds whole tiles, so pass 1 deinterleaves as it loads
         {
             gen::codelet16_inplace_first(d, bc, plan.sh_twr, plan.sh_twi, plan.sh_hir, plan.sh_hii);
         }
