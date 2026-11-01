@@ -1,4 +1,5 @@
-// The hesap-fft kernels of this archive and the level the process runs (SIMD-DISPATCH).
+// The hesap-fft kernels of this archive and the level the process runs (SIMD-DISPATCH), each table checked against
+// known answers before its first use (HW-RESILIENCE.3, fft_self_check.cpp).
 
 #include <crd/core/kernel_level.hpp>
 #include <crd/hesap/fft/fft_dispatch.hpp>
@@ -29,6 +30,14 @@ constexpr KernelLevel<FftKernels> kLevels[] = {
 #endif
 };
 
+void resolve_fft() noexcept
+{
+    (void)fft_kernels();
+}
+
+constinit crd::KernelFamily g_family{"hesap.fft", &resolve_fft, {}, nullptr};
+const crd::KernelFamilyListing kListing{g_family};
+
 } // namespace
 
 std::span<const KernelLevel<FftKernels>> fft_kernel_levels() noexcept
@@ -38,7 +47,8 @@ std::span<const KernelLevel<FftKernels>> fft_kernel_levels() noexcept
 
 const KernelLevel<FftKernels>& fft_kernels() noexcept
 {
-    static const KernelLevel<FftKernels>& selected = crd::process_kernel_level<FftKernels>(kLevels);
+    static const KernelLevel<FftKernels>& selected =
+        crd::process_checked_kernel_level<FftKernels>(kLevels, &fft_self_check, g_family);
     return selected;
 }
 

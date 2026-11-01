@@ -16,6 +16,10 @@ namespace crd::hesap::fft
 [[nodiscard]] std::span<const crd::KernelLevel<FftKernels>> fft_kernel_levels() noexcept;
 [[nodiscard]] const crd::KernelLevel<FftKernels>& fft_kernels() noexcept;
 
+// The family's known-answer self-check (HW-RESILIENCE.3, crd/core/kernel_dispatch.hpp), which its resolution runs:
+// nullptr when every f64 and f32 kernel of `table` gives its known answers, else the failing routine's name.
+[[nodiscard]] const char* fft_self_check(const FftKernels& table) noexcept;
+
 // The kernels of element type T (f64 or f32, the types FftPlan is built for) in a table, and in the one the process
 // runs.
 template <typename T> [[nodiscard]] constexpr const FftTypeKernels<T>& kernels_of(const FftKernels& k) noexcept

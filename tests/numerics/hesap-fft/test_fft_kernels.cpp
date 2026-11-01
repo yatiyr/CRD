@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <string_view>
 #include <type_traits>
 
 namespace fft = crd::hesap::fft;
@@ -868,4 +869,68 @@ TEST_CASE("fft kernels: the process runs the level its CPU selection resolves", 
           &crd::select_kernel_level<FftKernels>(levels, s.selected, s.kernel_features, crd::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
     CHECK(crd::cpu_level_includes(crd::kernel_level_cap(), chosen.level));
+    const crd::KernelFamily* family = crd::test::kernel_family("hesap.fft");
+    REQUIRE(family != nullptr);
+    CHECK(family->result.status == crd::KernelCheckStatus::Passed);
+    CHECK(family->result.level == chosen.level);
+}
+
+namespace
+{
+
+// Self-check stubs: the portable routine with one result bit off, in the last transform of a batch, and in an output
+// past the transform (the guard).
+template <typename T> T one_bit_off(T x) noexcept
+{
+    using Bits = std::conditional_t<sizeof(T) == 8U, u64, u32>;
+    return std::bit_cast<T>(static_cast<Bits>(std::bit_cast<Bits>(x) ^ 1U));
+}
+
+void execute_off(const fft::FftPlanState<crd::f64>& plan, Complex<crd::f64>* data, FftDirection dir) noexcept
+{
+    fft::kFftKernelsPortable.f64_kernels.execute(plan, data, dir);
+    data[plan.n - 1U].im = one_bit_off(data[plan.n - 1U].im);
+}
+
+void execute_batched_off(const fft::FftPlanState<crd::f32>& plan, Complex<crd::f32>* data, usize batch,
+                         FftDirection dir) noexcept
+{
+    fft::kFftKernelsPortable.f32_kernels.execute_batched(plan, data, batch, dir);
+    data[plan.n * batch - 1U].re = one_bit_off(data[plan.n * batch - 1U].re);
+}
+
+void execute_batched_past(const fft::FftPlanState<crd::f64>& plan, Complex<crd::f64>* data, usize batch,
+                          FftDirection dir) noexcept
+{
+    fft::kFftKernelsPortable.f64_kernels.execute_batched(plan, data, batch, dir);
+    data[plan.n * batch].re = 0.0;
+}
+
+std::string_view routine_of(const char* routine)
+{
+    return routine != nullptr ? routine : "";
+}
+
+} // namespace
+
+TEST_CASE("fft self-check: every table the host runs gives the known answers", "[fft][kernels]")
+{
+    const crd::test::SelfCheckRun run = crd::test::self_check_levels(fft::fft_kernel_levels(), &fft::fft_self_check);
+    INFO("first failure " << crd::cpu_level_name(run.level) << " " << routine_of(run.routine));
+    CHECK(run.failed == 0U);
+    CHECK(run.ran >= 1U);
+}
+
+TEST_CASE("fft self-check: a wrong routine fails the check", "[fft]")
+{
+    CHECK(fft::fft_self_check(fft::kFftKernelsPortable) == nullptr);
+    FftKernels w = fft::kFftKernelsPortable;
+    w.f64_kernels.execute = &execute_off;
+    CHECK(routine_of(fft::fft_self_check(w)) == "f64 execute");
+    w = fft::kFftKernelsPortable;
+    w.f32_kernels.execute_batched = &execute_batched_off;
+    CHECK(routine_of(fft::fft_self_check(w)) == "f32 execute_batched");
+    w = fft::kFftKernelsPortable;
+    w.f64_kernels.execute_batched = &execute_batched_past;
+    CHECK(routine_of(fft::fft_self_check(w)) == "f64 execute_batched");
 }
