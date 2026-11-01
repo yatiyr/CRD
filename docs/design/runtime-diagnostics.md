@@ -3249,7 +3249,12 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   every range, or of a kind it does not make, is `access-not-made`; a divide error on an instruction other than DIV
   or IDIV, or on one whose register divisor is nonzero and whose quotient fits (`x86_divide_faults`, by comparison,
   never by dividing), is `divide-without-cause`. Both are judged only on code whose image comparison matches over
-  the whole instruction, so code changed after the fault is never read. AArch64 instructions are not decoded yet (HW-RESILIENCE.2).
+  the whole instruction, so code changed after the fault is never read. AArch64: every A64 load and store (pairs,
+  exclusives, CAS, LSE, LSE128, RCW, LSUI and LSFE atomics, SIMD structures, literal, register-offset and RCpc forms,
+  LS64, MTE tag stores, GCS stores) and DC and IC maintenance (the aligned 2 KiB that bounds DCZID_EL0's block and
+  CTR_EL0's line) are decoded; SVE, SME, MOPS, pointer-authenticated loads, calls, returns and GCS operations (GCSPR is
+  not captured) and system instructions are refused. The top byte is ignored on both sides of the comparison
+  (`kAArch64AddressBits`): Linux clears a tag from a fault's address and Windows may keep it.
   `bundle.inspect` reports the instruction set, registers and access kind with the crash, and the check, its reason,
   length and access count with the classification.
 
