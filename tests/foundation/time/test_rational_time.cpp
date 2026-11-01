@@ -1,4 +1,4 @@
-﻿// test_rational_time.cpp — GEO-9: the EXACT editorial time gates. The doctrine under test: editorial STRUCTURE
+// test_rational_time.cpp — GEO-9: the EXACT editorial time gates. The doctrine under test: editorial STRUCTURE
 // never touches a float — a feature-length NTSC timeline must not drift by one tick, drop-frame timecode must
 // round-trip a full broadcast day, and every f64 the OTIO edge can produce must come back exact.
 

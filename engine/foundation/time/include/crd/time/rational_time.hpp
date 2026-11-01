@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 // ---------------------------------------------------------------------------
 // crd-time — RationalTime: EXACT editorial/media time (GEO-9, D-007 row 74).

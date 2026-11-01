@@ -1,4 +1,4 @@
-﻿add_executable(crd-audio-tests
+add_executable(crd-audio-tests
     test_audio_codecs.cpp  # GEO-10: WAV/AIFF/FLAC bit-exact round-trips, MD5 vectors, CRC refusals, transcode
     test_audio_graph.cpp   # GEO-10: ABUF/AGRF round-trips + THE 4-TRACK bit-stable offline render gate
     test_midi_realtime.cpp # GEO-10: SMF -> MIDI 2.0 exact events + SPSC ring + THE device SOAK

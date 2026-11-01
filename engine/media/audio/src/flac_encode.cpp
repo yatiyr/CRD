@@ -1,4 +1,4 @@
-﻿// flac_encode.cpp — GEO-10: the FLAC encoder — a COMPLIANT SUBSET writer (see flac.hpp): fixed 4096 blocking,
+// flac_encode.cpp — GEO-10: the FLAC encoder — a COMPLIANT SUBSET writer (see flac.hpp): fixed 4096 blocking,
 // per-frame stereo decorrelation by estimated bits, FIXED(0-4) + LPC(8, hesap-dsp aryule) predictors chosen by
 // estimated rice cost, rice method 1 with partition order 0, STREAMINFO stamped with the PCM MD5. Correctness
 // bar: decode(encode(x)) is BIT-EXACT with the MD5 verifying (gated); ratio grows at MED-6, not here.

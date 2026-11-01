@@ -1,4 +1,4 @@
-﻿// test_ceridc.cpp — GEO-11 (D-007 row 76): THE AGENT GATE. An agent, through the MCP protocol handler ALONE
+// test_ceridc.cpp — GEO-11 (D-007 row 76): THE AGENT GATE. An agent, through the MCP protocol handler ALONE
 // (server/discover → tools/list → tools/call), imports a model, cooks a pack, queries the resource graph, composes
 // a scene (transactionally — the malformed edit rejects atomically, dry-run applies nothing), sequences a
 // 2-shot timeline, renders it to EXR frames, and exports the interchange twin — every effect verified through

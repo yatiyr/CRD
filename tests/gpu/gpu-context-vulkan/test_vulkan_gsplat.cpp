@@ -378,7 +378,7 @@ TEST_CASE("B19-a3: on-device depth sort (project->depthkey->KV radix sort->gathe
 
     constexpr int n            = 4096;             // = nblocks(4) * epb(1024)
     constexpr int epb = 1024;
-    // REN-38 llvmpipe campaign: the KV-sort shape is DEVICE-DERIVED (subgroup width + shared budget) â€” see
+    // REN-38 llvmpipe campaign: the KV-sort shape is DEVICE-DERIVED (subgroup width + shared budget) — see
     // pick_sort_config. llvmpipe is 8-wide/32 KB, where the warp-32 8-bit shape is wrong AND unbuildable.
     const crd::u32 sg_lanes = compute.subgroup_size();
     if (sg_lanes == 0U || sg_lanes > 32U)

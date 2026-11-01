@@ -1,4 +1,4 @@
-﻿#include <crd/time/rational_time.hpp>
+#include <crd/time/rational_time.hpp>
 
 #include <cmath>   // std::isfinite / std::floor — classification + exact-integer split (not transcendental)
 #include <cstdio>  // snprintf — timecode text

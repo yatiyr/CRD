@@ -1,9 +1,9 @@
-﻿// CEIR-11b (Â§84 Â· Â§119 Â· Â§153): the COMPILED execution tier â€” a plan compiler (Module â†’ dense CompiledPlan) + executor +
+// CEIR-11b (§84 · §119 · §153): the COMPILED execution tier — a plan compiler (Module → dense CompiledPlan) + executor +
 // the DIFFERENTIAL harness (reference interpreter vs compiled plan, pin_values byte-compare). Stage 2 = STRAIGHT-LINE
-// arith (const/addi/muli/cmpi) + func.return. â›” The compiled thunks are INDEPENDENT of the reference EvalFns (the
-// differential's value IS that independence â€” a shared-code oracle would be bit-exact-blind). ASCII test names.
+// arith (const/addi/muli/cmpi) + func.return. ⛔ The compiled thunks are INDEPENDENT of the reference EvalFns (the
+// differential's value IS that independence — a shared-code oracle would be bit-exact-blind). ASCII test names.
 
-#include <crd/ceir/binary.hpp> // 4c/5: serialize/deserialize for the Â§121 plan-layer twin
+#include <crd/ceir/binary.hpp> // 4c/5: serialize/deserialize for the §121 plan-layer twin
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/exec.hpp>
 #include <crd/ceir/func.hpp>
@@ -55,7 +55,7 @@ Operation* bin(Context& ctx, OpId k, Value* a, Value* b2, Block* b)
     b->append(op);
     return op;
 }
-// â­ THE DIFFERENTIAL: run @entry(args) through the reference interpreter AND the compiled plan; assert pin_values
+// ⭐ THE DIFFERENTIAL: run @entry(args) through the reference interpreter AND the compiled plan; assert pin_values
 // byte-identical; return the (shared) result values.
 Array<i64> differential(Context& ctx, Module& m, StringView entry, ConstSpan<i64> args, memory::IAllocator* alloc)
 {
@@ -107,7 +107,7 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on straight-li
     i64 x5[1] = {5};
     const Array<i64> r = differential(ctx, *m, "main", ConstSpan<i64>(x5, 1U), &root);
     REQUIRE(r.size() == 1U);
-    CHECK(r[0] == 5 * 5 + 3); // 28 â€” both engines agree AND it's the right value
+    CHECK(r[0] == 5 * 5 + 3); // 28 — both engines agree AND it's the right value
 }
 
 TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on cmpi predicates", "[ceir][plan]")
@@ -162,7 +162,7 @@ TEST_CASE("ceir 11b: the compiler REJECTS a not-yet-supported op with a typed Co
     CHECK(ne.error == plan::CompileError::NoEntry);
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ CEIR-11b stage 3a: control flow (if / for / while / switch) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────── CEIR-11b stage 3a: control flow (if / for / while / switch) ───────────────────
 namespace
 {
 Operation* mkfunc(Context& ctx, Module& m, StringView name, crd::u32 nparams)
@@ -231,7 +231,7 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on a bounded c
     mb->append(forop);
     Value* rv[1] = {konst(ctx, o, mb, 42)->result(0U)};
     mb->append(func::create_return(ctx, ConstSpan<Value*>(rv, 1U)));
-    CHECK(differential(ctx, *m, "loop", ConstSpan<i64>(), &root)[0] == 42); // the for runs 3Ã— (no-op); returns 42
+    CHECK(differential(ctx, *m, "loop", ConstSpan<i64>(), &root)[0] == 42); // the for runs 3× (no-op); returns 42
 }
 
 TEST_CASE("ceir 11b: a runtime RunError (BadForStep / SelectorOutOfRange) agrees with the reference", "[ceir][plan]")
@@ -281,7 +281,7 @@ TEST_CASE("ceir 11b: a runtime RunError (BadForStep / SelectorOutOfRange) agrees
     }
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ CEIR-11b stage 3b: Â§20 state (dense cells + latch lists) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────── CEIR-11b stage 3b: §20 state (dense cells + latch lists) ───────────────────
 
 TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on a state cell read (returns init)", "[ceir][plan]")
 {
@@ -335,13 +335,13 @@ TEST_CASE("ceir 11b: a for+state accumulator's LATCHED cell agrees with the refe
     REQUIRE(in.cell_value(acc, ref_acc));
     CHECK(ref_acc == 0 + 1 + 2); // 3
 
-    // compiled: cell 0 (the only state op) latches the same value â€” the differential over CELL inspection (Â§118 parity).
+    // compiled: cell 0 (the only state op) latches the same value — the differential over CELL inspection (§118 parity).
     const plan::CompileResult cr = plan::compile(ctx, *m, "main", &root);
     REQUIRE(cr.ok());
     const plan::RunResult got = plan::run(cr.plan, ConstSpan<i64>(), &root);
     REQUIRE(got.ok());
     REQUIRE(got.cells.size() == 1U);
-    CHECK(got.cells[0] == ref_acc);      // â­ the compiled latch agrees with the reference (dense cells + latch lists)
+    CHECK(got.cells[0] == ref_acc);      // ⭐ the compiled latch agrees with the reference (dense cells + latch lists)
     CHECK(got.values[0] == ref.values[0]); // the return (0) also agrees
 }
 
@@ -367,7 +367,7 @@ TEST_CASE("ceir 11b: a depth-2 state ring wraps in lockstep with the reference (
     Operation* const initk = konst(ctx, o, forb, 0);
     Value* sops[2] = {initk->result(0U), forb->arg(0U)}; // state(init=0, next=iv)
     Operation* const d = ctx.create_operation(statek, ConstSpan<Value*>(sops, 2U), 1U, ctx.type_i32());
-    ctx.set_attr(d, "depth", ctx.attr_int(2)); // â­ depth-2 ring
+    ctx.set_attr(d, "depth", ctx.attr_int(2)); // ⭐ depth-2 ring
     forb->append(d);
     Value* rv[1] = {konst(ctx, o, mb, 0)->result(0U)};
     mb->append(func::create_return(ctx, ConstSpan<Value*>(rv, 1U)));
@@ -385,7 +385,7 @@ TEST_CASE("ceir 11b: a depth-2 state ring wraps in lockstep with the reference (
     const plan::RunResult got = plan::run(cr.plan, ConstSpan<i64>(), &root);
     REQUIRE(got.ok());
     REQUIRE(got.cells.size() == 1U);
-    CHECK(got.cells[0] == ref_cell); // â­ compiled depth-2 ring wraps identically (whole-ring init-fill + %-wrap)
+    CHECK(got.cells[0] == ref_cell); // ⭐ compiled depth-2 ring wraps identically (whole-ring init-fill + %-wrap)
 }
 
 TEST_CASE("ceir 11b: core.delay and core.history route to the same cell mechanism as core.state", "[ceir][plan]")
@@ -412,7 +412,7 @@ TEST_CASE("ceir 11b: core.delay and core.history route to the same cell mechanis
     CHECK(differential(ctx, *m, "main", ConstSpan<i64>(), &root)[0] == 7); // delay(3)+history(4), both engines agree
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ CEIR-11b stage 4a: func.call (compiled-function indices + arena frame windows) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────── CEIR-11b stage 4a: func.call (compiled-function indices + arena frame windows) ───────────────────
 
 TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on a basic func.call", "[ceir][plan]")
 {
@@ -584,7 +584,7 @@ TEST_CASE("ceir 11b: the compiler REJECTS an unresolved callee and a call/param 
     }
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ CEIR-11b stage 4b: async/task (run-global token store; SEQUENTIAL Â§37/Â§38 reference) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────── CEIR-11b stage 4b: async/task (run-global token store; SEQUENTIAL §37/§38 reference) ───────────────────
 namespace
 {
 // `<dialect>.<name> { yield const v } -> the token op (result(0) is the handle). launch-likes store the body's yields.
@@ -624,7 +624,7 @@ TEST_CASE("ceir 11b: a token launched in a CALLEE is awaited in the CALLER (run-
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
     // @producer(){ %t = launch { yield 7 }; return %t }  @main(){ %tok = call producer(); return await(tok) } -> 7
-    // â­ the launch runs in producer's frame (popped at return), but the TOKEN STORE is run-global, so the handle is
+    // ⭐ the launch runs in producer's frame (popped at return), but the TOKEN STORE is run-global, so the handle is
     // still live when the caller awaits it. A per-FRAME store would be discarded on the pop -> BadToken.
     Operation* const fp = mkfunc(ctx, *m, "producer", 0U);
     Block* const     pb = &func::func_body(*fp);
@@ -760,7 +760,7 @@ TEST_CASE("ceir 11b: await of an invalid token handle -> BadToken agrees with th
     exec::install_async_semantics(in);
     exec::install_task_semantics(in);
     const exec::ExecResult ref = in.invoke(*m, "main", {});
-    CHECK(ref.error == exec::ExecError::BadToken); // â›” the EXACT error (not merely !ok â€” else NoSemantics would pass too)
+    CHECK(ref.error == exec::ExecError::BadToken); // ⛔ the EXACT error (not merely !ok — else NoSemantics would pass too)
 
     const plan::CompileResult cr = plan::compile(ctx, *m, "main", &root);
     REQUIRE(cr.ok()); // it COMPILES (the token value is dynamic) -- the error is a RUNTIME agreement
@@ -805,7 +805,7 @@ TEST_CASE("ceir 11b: a continuation body-arity mismatch -> ContinuationArity agr
     CHECK(got.error == plan::RunError::ContinuationArity); // both engines reject the arity mismatch at run time
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ CEIR-11b stage 4c: data-parallel (isolated body fns + per-index run + index-order fold) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────── CEIR-11b stage 4c: data-parallel (isolated body fns + per-index run + index-order fold) ───────────────────
 namespace
 {
 // a task.parallel_for / map_reduce op over [lo,hi,step(,init)] with `nres` results and `nregions` body regions.
@@ -860,7 +860,7 @@ TEST_CASE("ceir 11b: a task.parallel_for's per-index map agrees with the referen
     const i64 expect[4] = {0, 1, 4, 9};
     for (crd::u32 i = 0; i < 4U; ++i)
     {
-        CHECK(got.map_outputs[0][i] == refmap[i]); // â­ compiled per-index map == reference map_output
+        CHECK(got.map_outputs[0][i] == refmap[i]); // ⭐ compiled per-index map == reference map_output
         CHECK(got.map_outputs[0][i] == expect[i]); // ... and it is the right value
     }
 }
@@ -944,7 +944,7 @@ TEST_CASE("ceir 11b: a STATEFUL parallel_for body rejects in both engines (compi
 
     const plan::CompileResult cr = plan::compile(ctx, *m, "main", &root);
     CHECK(!cr.ok());
-    CHECK(cr.error == plan::CompileError::ParallelStateful); // compiled: COMPILE reject (shared preflight, Â§4)
+    CHECK(cr.error == plan::CompileError::ParallelStateful); // compiled: COMPILE reject (shared preflight, §4)
 }
 
 TEST_CASE("ceir 11b: a parallel_for with step 0 -> BadForStep agrees with the reference (runtime)", "[ceir][plan]")
@@ -1019,8 +1019,8 @@ TEST_CASE("ceir 11b: a parallel_for body has a FRESH token store -> await of a p
     Module* const                m = ctx.create_module();
     // @main(){ %p = launch{yield 5}; parallel_for(0,2,1){ (iv): %r = await(const 0); yield r }; return 0 }
     // the parent launches handle 0, but the body runs on a FRESH per-phase store (the reference sub) -> await(0) is
-    // BadToken in BOTH. â›” Without the token swap the compiled body would resolve the PARENT's handle (accept what the
-    // reference rejects â€” the dangerous direction).
+    // BadToken in BOTH. ⛔ Without the token swap the compiled body would resolve the PARENT's handle (accept what the
+    // reference rejects — the dangerous direction).
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
     Block* const     mb = &func::func_body(*fm);
     (void)mktok(ctx, o, mb, "async", "launch", 5); // parent handle 0 (unused otherwise)
@@ -1056,7 +1056,7 @@ TEST_CASE("ceir 11b: a parallel_for body's launched-token handles number from 0 
     Module* const                m = ctx.create_module();
     // @main(){ %p = launch{yield 99}; parallel_for(0,2,1){ (iv): %t = launch{yield 7}; yield t }; return 0 }
     // the parent holds handle 0; the body (fresh per-phase store) numbers ITS launches from 0 -> map = [0, 1] in BOTH.
-    // â›” Without the swap the compiled body would number from the parent-global 1 -> [1, 2] (a value leak).
+    // ⛔ Without the swap the compiled body would number from the parent-global 1 -> [1, 2] (a value leak).
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
     Block* const     mb = &func::func_body(*fm);
     (void)mktok(ctx, o, mb, "async", "launch", 99); // parent handle 0
@@ -1094,14 +1094,14 @@ TEST_CASE("ceir 11b: a parallel_for body's launched-token handles number from 0 
     CHECK(got.map_outputs[0][1] == 1);
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ CEIR-11b stage 5 â€” the FULL-CORPUS differential (the shared builder, run through BOTH engines) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────── CEIR-11b stage 5 — the FULL-CORPUS differential (the shared builder, run through BOTH engines) ───────────────────
 //
-// â›” The differential contract (the Â§4 tier boundary + the accumulated watch items, stated ONCE here):
+// ⛔ The differential contract (the §4 tier boundary + the accumulated watch items, stated ONCE here):
 //   - VALUES: `pin_values` byte-identical (the reference interpreter vs the compiled plan).
-//   - CELLS (watch a): the builder declares its Â§20 state ops in COMPILE ORDER; `cell_value(op)` true â‡’ equals compiled
-//     `cells[i]`; false (never read â€” an untaken branch) â‡’ compiled `cells[i]` is 0. (b) a cell's `next` is block-local
+//   - CELLS (watch a): the builder declares its §20 state ops in COMPILE ORDER; `cell_value(op)` true ⇒ equals compiled
+//     `cells[i]`; false (never read — an untaken branch) ⇒ compiled `cells[i]` is 0. (b) a cell's `next` is block-local
 //     (the 5d verifier forbids escape). (c) a program whose reference run hits UndefinedValue (an over-declared call
-//     result / dead-branch capture) is OUTSIDE the contract â€” same as programs that don't compile.
+//     result / dead-branch capture) is OUTSIDE the contract — same as programs that don't compile.
 //   - MAP_OUTPUTS: handle-based per dp op, in compile order. (d) a dp op NESTED inside a parallel body has a sub-local
 //     (discarded) map_output in the reference, so the generic compare SKIPS nested dp ops (the corpus uses top-level dp).
 //   - The programs that COMPILE are the contract; a typed CompileError (UnsupportedOp / Bad* / Call* / Parallel* /
@@ -1124,7 +1124,7 @@ Array<i64> corpus_differential(Context& ctx, const corpus::Built& built, StringV
     const plan::RunResult got = plan::run(cr.plan, args, alloc);
     REQUIRE(got.ok());
 
-    // VALUES â€” byte-identical
+    // VALUES — byte-identical
     const Array<crd::u8> a = exec::pin_values(ConstSpan<i64>(ref.values.data(), ref.values.size()), alloc);
     const Array<crd::u8> b = exec::pin_values(ConstSpan<i64>(got.values.data(), got.values.size()), alloc);
     REQUIRE(a.size() == b.size());
@@ -1133,7 +1133,7 @@ Array<i64> corpus_differential(Context& ctx, const corpus::Built& built, StringV
         CHECK(a[i] == b[i]);
     }
 
-    // CELLS â€” handle-based, compile order (watch (a))
+    // CELLS — handle-based, compile order (watch (a))
     REQUIRE(got.cells.size() >= static_cast<crd::usize>(built.cells.size()));
     for (crd::u32 i = 0; i < static_cast<crd::u32>(built.cells.size()); ++i)
     {
@@ -1148,7 +1148,7 @@ Array<i64> corpus_differential(Context& ctx, const corpus::Built& built, StringV
         }
     }
 
-    // MAP_OUTPUTS â€” handle-based, compile order (top-level dp ops; watch (d))
+    // MAP_OUTPUTS — handle-based, compile order (top-level dp ops; watch (d))
     REQUIRE(got.map_outputs.size() >= static_cast<crd::usize>(built.maps.size()));
     for (crd::u32 j = 0; j < static_cast<crd::u32>(built.maps.size()); ++j)
     {
@@ -1221,8 +1221,8 @@ TEST_CASE("ceir 11b corpus: the COMPOSING program (all dialects: arith+cf+state+
 TEST_CASE("ceir 11b corpus: the sec-121 no-privileged-path property at the PLAN layer (cooked twin)", "[ceir][plan]")
 {
     crd::memory::GrowableTlsfAllocator root;
-    // â­ a cooked->loaded module compiles to BYTE-IDENTICAL results vs its builder-form twin. Compile BOTH twins, run both
-    // through the COMPILED tier, compare values + cells + map_outputs ARRAYS. â›” NO handles â€” the loaded module's ops are
+    // ⭐ a cooked->loaded module compiles to BYTE-IDENTICAL results vs its builder-form twin. Compile BOTH twins, run both
+    // through the COMPILED tier, compare values + cells + map_outputs ARRAYS. ⛔ NO handles — the loaded module's ops are
     // different pointers, but dense cell/map indices are assigned by COMPILE ORDER, so structurally-identical twins align.
     Context           ctx_a(&root);
     const corpus::Kit ka(ctx_a);
@@ -1230,7 +1230,7 @@ TEST_CASE("ceir 11b corpus: the sec-121 no-privileged-path property at the PLAN 
     const Array<crd::u8> blob = serialize(ctx_a, *g.m, &root);
 
     Context           ctx_b(&root);
-    const corpus::Kit kb(ctx_b); // â›” re-register the dialects in the loading context (the 5d trait-is-registry finding)
+    const corpus::Kit kb(ctx_b); // ⛔ re-register the dialects in the loading context (the 5d trait-is-registry finding)
     (void)kb;
     const ParseResult dr = deserialize(ctx_b, ConstSpan<crd::u8>(blob.data(), blob.size()));
     REQUIRE(dr.ok);

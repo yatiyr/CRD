@@ -1,4 +1,4 @@
-﻿// test_timeline.cpp — GEO-9 (D-007 row 74): the TIMELINE resource gates.
+// test_timeline.cpp — GEO-9 (D-007 row 74): the TIMELINE resource gates.
 //  · builder → loader round-trip (byte contracts; ONE validator refuses at both ends — every refusal class)
 //  · deterministic evaluation: hand-oracle item positions, THE TRANSITION WINDOW (weights sum to 1, media
 //    handles extend past trims), gaps, time warps, cross-rate audio (samples vs frames — exact)

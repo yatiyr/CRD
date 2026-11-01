@@ -1,4 +1,4 @@
-﻿// audio_graph.cpp — GEO-10: the offline graph renderer (see audio_graph.hpp).
+// audio_graph.cpp — GEO-10: the offline graph renderer (see audio_graph.hpp).
 
 #include <crd/audio/audio_graph.hpp>
 

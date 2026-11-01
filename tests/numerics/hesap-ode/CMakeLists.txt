@@ -1,4 +1,4 @@
-﻿add_executable(crd-hesap-ode-tests
+add_executable(crd-hesap-ode-tests
     test_ode_steppers.cpp
     test_ode_controller.cpp
     test_ode_integrate.cpp

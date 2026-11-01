@@ -1,4 +1,4 @@
-﻿// flac_decode.cpp — GEO-10: the FLAC decoder (see flac.hpp for the surface). Structure follows the spec's
+// flac_decode.cpp — GEO-10: the FLAC decoder (see flac.hpp for the surface). Structure follows the spec's
 // grammar: STREAMINFO → frames (header · subframes · footer). CRCs run over the RAW frame bytes; MD5 over the
 // decoded little-endian PCM. Every reserved code and size contradiction refuses — never a garbage sample.
 

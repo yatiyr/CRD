@@ -1,4 +1,4 @@
-﻿// crd-hesap-opt v7-h — trust-region framework + the subproblem ladder. Validates: (1) the SHARP exact-subproblem
+// crd-hesap-opt v7-h — trust-region framework + the subproblem ladder. Validates: (1) the SHARP exact-subproblem
 // gold-check — the Moré-Sorensen KKT certificate ((H+λI)p = −g, λ ≥ max(0,−λ₁), λ·(Δ−‖p‖) = 0) verified
 // DIRECTLY on interior / boundary / indefinite / HARD-CASE (g ⊥ the λ₁-eigenspace) / pure-saddle (g = 0)
 // instances with known spectra; (2) the driver converges with ALL SIX subproblems on an SPD quadratic (incl.
