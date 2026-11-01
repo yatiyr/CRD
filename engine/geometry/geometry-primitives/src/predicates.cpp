@@ -164,13 +164,19 @@ crd::usize linear_expansion_sum(crd::usize elen, const crd::f64* e, crd::usize f
     {
         g0 = enow;
         ++eindex;
-        enow = e[eindex];
+        if (eindex < elen)
+        {
+            enow = e[eindex];
+        }
     }
     else
     {
         g0 = fnow;
         ++findex;
-        fnow = f[findex];
+        if (findex < flen)
+        {
+            fnow = f[findex];
+        }
     }
 
     crd::usize hindex = 0;

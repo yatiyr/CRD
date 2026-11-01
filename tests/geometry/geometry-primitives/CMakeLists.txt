@@ -1,7 +1,7 @@
 # The predicates' differential test oracle (test_predicates_vs_shewchuk.cpp): Shewchuk's public-domain predicates.c,
-# kept verbatim in reference/. It is compiled as C17 with GNU extensions, since its definitions are K&R ones, which C23
-# removes. It takes the tree's floating-point contract (crd-simd-flags: no contraction, no fast-math, SSE2 arithmetic
-# on x64), because its expansions need each product and sum rounded once, and no warning set, since the code is
+# kept in reference/ verbatim but for its guarded look-ahead reads (reference/README.md). It is compiled as C17 with
+# GNU extensions, since its definitions are K&R ones, which C23 removes. It takes the tree's floating-point contract
+# (crd-simd-flags: no contraction, no fast-math, SSE2 arithmetic on x64), because its expansions need each product and sum rounded once, and no warning set, since the code is
 # Shewchuk's. The Windows SDK has no <sys/time.h>, which the source includes and never uses, and no random(), which
 # only its unused random-input generators call: reference/win32 supplies the header, and random() becomes rand().
 enable_language(C)
