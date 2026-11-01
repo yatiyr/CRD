@@ -41,7 +41,8 @@ derived from the work's position:
   divide recurrences on 16 lanes, every step folded into a checksum lane. No multiply feeds an add, so every level
   gives the compile-time bits. Each 64-step block is compared bit for bit, at every level the selection includes.
 - `memory`: moving inversions over each CPU's buffer (`memory_mib`, default 8). The pattern is
-  `crd::splitmix64_mix` of position and pass. The buffers are pages of one committed `crd::vm` range, refused past half
+  `crd::splitmix64_mix` of position and pass, every word stored and loaded through volatile so no optimizer
+  forwards a sweep's stores to the next. The buffers are pages of one committed `crd::vm` range, refused past half
   the machine's memory.
 - `shared`: one sequence-locked cache line per CPU, written by its CPU and read by the next pinned one. A read whose
   sequence held but whose payload is not that sequence's is an event. Each CPU runs on until it has checked one

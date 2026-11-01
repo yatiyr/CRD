@@ -43,7 +43,8 @@ constexpr crd::KernelLevel<HardwareCheckKernels> kComputeLevels[] = {
     {crd::CpuLevel::Neon, &kHardwareCheckKernelsNeon, {}},
 #endif
 };
-static_assert(std::size(kComputeLevels) + 3U <= kMaxHardwareArms, "every arm has a report slot");
+static_assert(sizeof(kComputeLevels) / sizeof(kComputeLevels[0]) + 3U <= kMaxHardwareArms,
+              "every arm has a report slot");
 
 // ---- compute: the recurrence of hardware_check_kernels.hpp evaluated at compile time --------------------------------
 
@@ -267,7 +268,8 @@ void compute_block(const HardwareCheckKernels& table, crd::u64 block, Injection&
 
 void memory_block(const Run& run, crd::u32 cpu, crd::u64 block, Injection& injection, HardwareArmResult& r) noexcept
 {
-    crd::u64* const words = run.memory + static_cast<crd::usize>(cpu) * run.memory_words;
+    // Every word is stored and loaded through volatile, so no optimizer forwards a sweep's stores to the next sweep.
+    volatile crd::u64* const words = run.memory + static_cast<crd::usize>(cpu) * run.memory_words;
     const crd::usize n = run.memory_words;
     const crd::u64 salt = crd::splitmix64_at(cpu, block); // each word's pattern: its position and the pass
     for (crd::u32 inverted = 0U; inverted < 2U; ++inverted)
@@ -553,7 +555,7 @@ HardwareCheckReport run_hardware_check(const HardwareCheckConfig& config, crd::m
     threads.reserve(cpus);
     for (crd::u32 c = 0U; c < cpus; ++c)
     {
-        threads.push_back(std::thread(&worker, std::cref(run), c));
+        threads.push_back(std::thread([&run, c] { worker(run, c); }));
     }
     for (std::thread& t : threads)
     {
