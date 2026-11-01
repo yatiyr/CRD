@@ -13,17 +13,26 @@ share without a downgrade, with mutual authentication, with a key that is not pi
 TLS 1.2 only. Key updates (RFC 9846 section 4.7.3) run both ways: a Cerid client updating its key before every record
 under a three-record budget, one asking OpenSSL for an update and one not asking, and an OpenSSL client asking a Cerid
 server, each end's count of KeyUpdate messages sent and received checked against the other's and the echoed data
-intact.
+intact. Resumption (RFC 9846 sections 2.2 and 4.6.1) runs both ways across processes, with each end's ticket or session
+kept in a file: a Cerid client resuming at OpenSSL servers that share a ticket key, and an OpenSSL client resuming at a
+second Cerid server of a fleet, after a rotation under the previous key, with a pinned client credential, and not at a
+server whose key sealed none of its tickets. On the wire the resumed ClientHello offers one identity in a
+pre_shared_key that is its last extension, psk_dhe_ke alone and a fresh hybrid key share; the ServerHello selects
+identity 0 beside its own share; and a Cerid server's ticket starts with its key's name (HKDF-SHA256 of the key, the
+format of tls.cpp).
 
 Usage: tls_interop.py --cerid <crd-tls-peer> --openssl <crd-openssl-tls-peer>
 """
 
 import argparse
 import hashlib
+import hmac
 import json
+import os
 import struct
 import subprocess
 import sys
+import tempfile
 
 SERVER_SEED = bytes(range(1, 33)).hex()
 CLIENT_SEED = bytes(range(33, 65)).hex()
@@ -44,6 +53,9 @@ PING = 'ping from cerid'
 OPENSSL_PING = 'ping from openssl'
 BAD_CERTIFICATE = 42
 PROTOCOL_VERSION = 70
+TICKET_KEYS = [bytes(range(seed, seed + 32)).hex() for seed in (100, 140, 180)]
+PRE_SHARED_KEY = 41
+PSK_KEY_EXCHANGE_MODES = 45
 
 
 class Failure(Exception):
@@ -198,11 +210,11 @@ def cerid(binary, role, groups, seed, pin=None, extra=()):
     return command + (['--pin', pin] if pin else []) + list(extra)
 
 
-def openssl(binary, role, groups, seed, pin=None, max_version=None, update=None):
+def openssl(binary, role, groups, seed, pin=None, max_version=None, update=None, extra=()):
     command = [binary, '--role', role, '--groups', groups, '--seed', seed]
     command += ['--pin', pin] if pin else []
     command += ['--update', update] if update else []
-    return command + (['--max-version', max_version] if max_version else [])
+    return command + (['--max-version', max_version] if max_version else []) + list(extra)
 
 
 def public_key(binary, seed):
@@ -252,6 +264,53 @@ def check_wire(flights, group, retry, offered, greased):
         expect(not again, 'a second HelloRetryRequest')
     expect(answer == [(GROUPS[group][0], GROUPS[group][2])],
            'the ServerHello share is %s, expected %d bytes of %s' % (answer, GROUPS[group][2], group))
+
+
+def ticket_name(key_hex):
+    """A Cerid ticket key's public name: HKDF-SHA256 (RFC 5869) of the key with an empty salt, 16 bytes expanded under
+    'cerid tls 1.3 ticket name'."""
+    prk = hmac.new(bytes(32), bytes.fromhex(key_hex), hashlib.sha256).digest()
+    return hmac.new(prk, b'cerid tls 1.3 ticket name' + b'\x01', hashlib.sha256).digest()[:16]
+
+
+def psk(flight):
+    """A hello's pre_shared_key: a ClientHello's (identities, last extension, psk_key_exchange_modes), a ServerHello's
+    selected identity (None when it has none)."""
+    kind, _, _, extensions = hello(flight)
+    found = {kind_of: data for kind_of, data in extensions}
+    if kind == 2:
+        data = found.get(PRE_SHARED_KEY)
+        return None if data is None else struct.unpack('>H', data)[0]
+    identities = []
+    data = found.get(PRE_SHARED_KEY, b'')
+    if data:
+        end = 2 + struct.unpack('>H', data[:2])[0]
+        at = 2
+        while at + 2 <= end:
+            size = struct.unpack('>H', data[at:at + 2])[0]
+            identities.append(data[at + 2:at + 2 + size])
+            at += 2 + size + 4
+    modes = found.get(PSK_KEY_EXCHANGE_MODES, b'')
+    last = bool(extensions) and extensions[-1][0] == PRE_SHARED_KEY
+    return identities, last, list(modes[1:1 + modes[0]]) if modes else []
+
+
+def check_resumed_wire(flights, group, name=None):
+    """A resumed handshake on the wire: one identity (led by `name`, a Cerid ticket key's), pre_shared_key last,
+    psk_dhe_ke alone and a fresh share of `group` each way, the ServerHello selecting identity 0."""
+    identities, last, modes = psk(flights[0][1])
+    expect(len(identities) == 1 and last, 'the ClientHello offers %d identities, pre_shared_key last: %s' % (
+        len(identities), last))
+    expect(modes == [1], 'the ClientHello allows the key exchange modes %s, not psk_dhe_ke alone' % modes)
+    if name is not None:
+        expect(identities[0][:16] == name and len(identities[0]) > 64,
+               'the ticket does not start with its key name: %s' % identities[0][:16].hex())
+    _, _, shares = key_shares(flights[0][1])
+    expect(any(CODEPOINTS.get(code) == group and length == GROUPS[group][1] for code, length in shares),
+           'the resumed ClientHello shares %s' % shares)
+    expect(psk(flights[1][1]) == 0, 'the ServerHello selected %s' % psk(flights[1][1]))
+    _, _, answer = key_shares(flights[1][1])
+    expect(answer == [(GROUPS[group][0], GROUPS[group][2])], 'the resumed ServerHello shares %s' % answer)
 
 
 def check_established(cerid_report, openssl_report, group, retry, ping):
@@ -368,6 +427,58 @@ def cases(cerid_peer, openssl_peer):
         expect(client.get('state') == 'failed' and client.get('alert_received') == PROTOCOL_VERSION,
                'openssl saw %s' % client)
     yield 'cerid server refuses a TLS 1.2 client with protocol_version', tls12
+
+    def cerid_resumes():
+        with tempfile.TemporaryDirectory() as scratch:
+            tickets = os.path.join(scratch, 'tickets')
+            store = ['--tickets', tickets]
+            server_key = ['--ticket-key', TICKET_KEYS[0]]
+            for again in (False, True, True):
+                client, server, flights = run(
+                    cerid(cerid_peer, 'client', ['x25519mlkem768'], CLIENT_SEED, server_public, store),
+                    openssl(openssl_peer, 'server', 'X25519MLKEM768', SERVER_SEED, extra=server_key))
+                check_established(client, server, 'x25519mlkem768', False, PING)
+                expect(client.get('resumed') is again and server.get('resumed') is again,
+                       'resumed: cerid %s, openssl %s, expected %s' % (client.get('resumed'), server.get('resumed'),
+                                                                     again))
+                expect(client.get('peer_key_id') == key_id(server_public), 'cerid pinned another key')
+                expect(os.path.exists(tickets), 'cerid kept no ticket of the openssl server')
+                if again:
+                    check_resumed_wire(flights, 'x25519mlkem768')
+                else:
+                    expect(not psk(flights[0][1])[0], 'a client with an empty store offered a ticket')
+    yield 'cerid client resumes with the tickets of openssl servers sharing a ticket key', cerid_resumes
+
+    def openssl_resumes(rounds, mutual=False):
+        """`rounds`: (server keys, whether the connection resumes), one server process each."""
+        with tempfile.TemporaryDirectory() as scratch:
+            session = ['--session', os.path.join(scratch, 'session')]
+            sealer = None  # the ticket key that sealed the ticket the client holds
+            for keys, again in rounds:
+                server_keys = ['--ticket-key', TICKET_KEYS[keys[0]]]
+                server_keys += ['--previous-ticket-key', TICKET_KEYS[keys[1]]] if len(keys) > 1 else []
+                client, server, flights = run(
+                    openssl(openssl_peer, 'client', 'X25519MLKEM768', CLIENT_SEED, server_public, extra=session),
+                    cerid(cerid_peer, 'server', ['x25519mlkem768'], SERVER_SEED, client_public if mutual else None,
+                          server_keys))
+                check_established(server, client, 'x25519mlkem768', False, OPENSSL_PING)
+                expect(server.get('resumed') is again and client.get('resumed') is again,
+                       'resumed: cerid %s, openssl %s, expected %s' % (server.get('resumed'), client.get('resumed'),
+                                                                     again))
+                expected = key_id(client_public) if mutual else '0' * 64
+                expect(server.get('peer_key_id') == expected, 'cerid server saw client key %s' % server.get(
+                    'peer_key_id'))
+                if again:
+                    check_resumed_wire(flights, 'x25519mlkem768', ticket_name(TICKET_KEYS[sealer]))
+                else:
+                    expect(client.get('peer_ok'), 'openssl did not find the pinned key in a full handshake')
+                sealer = keys[0]
+    yield 'openssl client resumes at a second cerid server of the fleet', lambda: openssl_resumes(
+        [((0,), False), ((0,), True), ((0,), True)])
+    yield 'openssl client resumes at a cerid server rotated to a new key under the previous one', lambda: (
+        openssl_resumes([((0,), False), ((1, 0), True), ((2, 1), True), ((0,), False)]))
+    yield 'openssl client with a pinned credential resumes, and the cerid server knows its key', lambda: (
+        openssl_resumes([((0,), False), ((0,), True)], mutual=True))
 
 
 def main():

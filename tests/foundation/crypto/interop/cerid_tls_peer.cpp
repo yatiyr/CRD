@@ -3,6 +3,7 @@
 //
 // Usage: crd-tls-peer --role client|server --groups g[,g...] --seed HEX [--pin HEX] [--name NAME]
 //                     [--key-update-records N] [--pings N] [--update requested|not-requested]
+//                     [--tickets FILE] [--ticket-key HEX] [--previous-ticket-key HEX]
 //        crd-tls-peer --public HEX     (prints the Ed25519 public key of a seed, for the pins)
 //   groups  register names: x25519mlkem768, secp256r1mlkem768, secp384r1mlkem1024, x25519, secp256r1, secp384r1
 //   seed    the 32-byte Ed25519 private key of this end's credential
@@ -11,12 +12,15 @@
 //   key-update-records  TlsConfig::key_update_records (the session updates its key before that many records)
 //   pings   how many times an established client sends its ping, each in its own record (1 to 16, default 1)
 //   update  an established client updates its key once after its pings, asking the server for an update or not
+//   tickets a client's ticket store: the ticket in FILE (its binding, then its bytes) is offered once when it is of
+//           this client's binding, and the newest ticket received replaces it
+//   ticket-key, previous-ticket-key  a server's 32-byte ticket keys (TlsConfig::ticket_key, previous_ticket_key)
 //
 // Frames on both streams are a 4-byte big-endian length and that many bytes of TLS records. A client writes its first
 // flight before reading; after that each end answers every frame it reads with exactly one frame (possibly empty).
 // Once established, a client sends "ping from cerid" (--pings times) and a server echoes every byte it reads. At the
-// end of input the end prints one JSON line on standard error with what it negotiated, the key updates each way and
-// what it read, and exits 0 (2 on a usage error).
+// end of input the end prints one JSON line on standard error with what it negotiated, whether it resumed, the key
+// updates each way and what it read, and exits 0 (2 on a usage error).
 
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/tls.hpp>
@@ -52,6 +56,43 @@ constexpr AlgorithmId kSignatures[] = {AlgorithmId::Ed25519};
 constexpr char        kPing[]       = "ping from cerid";
 
 u8 g_frame[kTlsMaxBufferedBytes];
+
+// A ticket store of one ticket kept in a file across processes: the binding's 32 bytes, then the ticket.
+class FileStore final : public TlsTicketStore
+{
+public:
+    explicit FileStore(const char* path) noexcept : m_path(path) {}
+
+    void keep(const TlsBinding& binding, ConstSpan<u8> ticket) noexcept override
+    {
+        std::FILE* file = std::fopen(m_path, "wb");
+        if (file != nullptr)
+        {
+            (void)std::fwrite(binding.bytes, 1U, sizeof(binding.bytes), file);
+            (void)std::fwrite(ticket.data(), 1U, ticket.size(), file);
+            (void)std::fclose(file);
+        }
+    }
+
+    ConstSpan<u8> take(const TlsBinding& binding) noexcept override
+    {
+        std::FILE* file = std::fopen(m_path, "rb");
+        if (file == nullptr)
+        {
+            return {};
+        }
+        TlsBinding  kept;
+        const usize bound = std::fread(kept.bytes, 1U, sizeof(kept.bytes), file);
+        const usize size  = std::fread(m_ticket, 1U, sizeof(m_ticket), file);
+        (void)std::fclose(file);
+        (void)std::remove(m_path); // a ticket is offered once
+        return bound == sizeof(kept.bytes) && kept == binding ? ConstSpan<u8>(m_ticket, size) : ConstSpan<u8>();
+    }
+
+private:
+    const char* m_path;
+    u8          m_ticket[kTlsMaxBufferedBytes] = {};
+};
 
 const char* group_name(AlgorithmId id)
 {
@@ -120,7 +161,8 @@ bool write_frame(TlsSession& session)
 int usage()
 {
     std::fputs("usage: crd-tls-peer --role client|server --groups g[,g...] --seed HEX [--pin HEX] [--name NAME] "
-               "[--key-update-records N] [--pings N] [--update requested|not-requested]\n",
+               "[--key-update-records N] [--pings N] [--update requested|not-requested] [--tickets FILE] "
+               "[--ticket-key HEX] [--previous-ticket-key HEX]\n",
                stderr);
     return 2;
 }
@@ -162,6 +204,9 @@ int main(int argc, char** argv)
     const char* pin   = nullptr;
     const char* name  = "game.cerid.test";
     const char* update             = nullptr;
+    const char* tickets            = nullptr;
+    const char* ticket_key         = nullptr;
+    const char* previous_key       = nullptr;
     u64         key_update_records = 0U;
     u64         pings              = 1U;
     for (int i = 1; i + 1 < argc; i += 2)
@@ -195,6 +240,18 @@ int main(int argc, char** argv)
         else if (std::strcmp(option, "--pings") == 0)
         {
             pings = std::strtoull(value, nullptr, 10);
+        }
+        else if (std::strcmp(option, "--tickets") == 0)
+        {
+            tickets = value;
+        }
+        else if (std::strcmp(option, "--ticket-key") == 0)
+        {
+            ticket_key = value;
+        }
+        else if (std::strcmp(option, "--previous-ticket-key") == 0)
+        {
+            previous_key = value;
         }
         else if (std::strcmp(option, "--update") == 0 &&
                  (std::strcmp(value, "requested") == 0 || std::strcmp(value, "not-requested") == 0))
@@ -235,8 +292,13 @@ int main(int argc, char** argv)
     }
     u8 seed_bytes[32];
     u8 pin_bytes[32];
+    u8 key_bytes[kTlsTicketKeyBytes];
+    u8 previous_bytes[kTlsTicketKeyBytes];
     if (!parse_hex(seed, seed_bytes, sizeof(seed_bytes)) ||
-        (pin != nullptr && !parse_hex(pin, pin_bytes, sizeof(pin_bytes))) || (client && pin == nullptr))
+        (pin != nullptr && !parse_hex(pin, pin_bytes, sizeof(pin_bytes))) || (client && pin == nullptr) ||
+        (ticket_key != nullptr && !parse_hex(ticket_key, key_bytes, sizeof(key_bytes))) ||
+        (previous_key != nullptr && !parse_hex(previous_key, previous_bytes, sizeof(previous_bytes))) ||
+        (client && (ticket_key != nullptr || previous_key != nullptr)) || (!client && tickets != nullptr))
     {
         return usage();
     }
@@ -257,6 +319,14 @@ int main(int argc, char** argv)
     config.credential  = &credential;
     config.server_name        = name;
     config.key_update_records = key_update_records;
+    if (ticket_key != nullptr)
+    {
+        config.ticket_key = ConstSpan<u8>(key_bytes, sizeof(key_bytes));
+    }
+    if (previous_key != nullptr)
+    {
+        config.previous_ticket_key = ConstSpan<u8>(previous_bytes, sizeof(previous_bytes));
+    }
     if (pin != nullptr)
     {
         config.signatures = kSignatures;
@@ -264,7 +334,9 @@ int main(int argc, char** argv)
     }
     TlsContext context;
     TlsSession session;
-    if (context.init(config) != TlsError::None || session.init(context) != TlsError::None)
+    FileStore  store(tickets != nullptr ? tickets : "");
+    if (context.init(config) != TlsError::None ||
+        session.init(context, tickets != nullptr ? &store : nullptr) != TlsError::None)
     {
         std::fputs("crd-tls-peer: the session could not be made\n", stderr);
         return 1;
@@ -321,9 +393,9 @@ int main(int argc, char** argv)
 
     const char* states[] = {"idle", "handshaking", "established", "closed", "failed"};
     const KeyId peer     = session.peer_key();
-    std::fprintf(stderr, R"({"state": "%s", "group": "%s", "hello_retry": %s, "peer_key_id": ")",
+    std::fprintf(stderr, R"({"state": "%s", "group": "%s", "hello_retry": %s, "resumed": %s, "peer_key_id": ")",
                  states[static_cast<int>(session.state())], group_name(session.group()),
-                 session.hello_retry() ? "true" : "false");
+                 session.hello_retry() ? "true" : "false", session.resumed() ? "true" : "false");
     for (const u8 byte : peer.bytes)
     {
         std::fprintf(stderr, "%02x", byte);

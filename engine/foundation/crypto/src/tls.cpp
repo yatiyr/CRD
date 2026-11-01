@@ -6,6 +6,11 @@
 // the register identifiers before the provider sees it, so a provider refusal past those checks is a provider failure.
 // The provider's callbacks (peer verification, the server name, the message observer) reach their session through the
 // connection's ex_data slot and touch only the session's own copy of the settings.
+//
+// Tickets (decision S9) are sealed by the context's ticket AEAD method, not the provider's built-in ticket keys (which
+// rotate inside one process and cannot be shared): each ticket is the key's public name, a random 32-byte salt and the
+// session state sealed with AES-256-GCM under a key and nonce derived from the ticket key and that salt (HKDF-SHA256),
+// so every derived key seals one ticket and no count of tickets has to be shared across the servers of a fleet.
 #include <crd/crypto/tls.hpp>
 
 #include "provider_internal.hpp"
@@ -15,6 +20,7 @@
 #include <openssl/bio.h>
 #include <openssl/bn.h>
 #include <openssl/evp.h>
+#include <openssl/mem.h>
 #include <openssl/nid.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
@@ -87,6 +93,14 @@ constexpr usize kMaxRecordPlaintext    = 16384U;  // 2^14 (RFC 9846 section 5.1)
 constexpr usize kRecordOverhead        = 22U;     // header (5), inner content type (1) and AEAD tag (16)
 constexpr usize kKeyUpdateRecordBytes  = 27U;     // the overhead, a handshake header (4) and request_update (1)
 constexpr usize kMaxSignaturePublicKey = 2592U;   // ML-DSA-87's, the longest signature public key
+constexpr usize kTicketNameBytes       = 16U;     // a ticket key's public name, which leads its tickets
+constexpr usize kTicketSaltBytes       = 32U;     // a ticket's own random salt
+constexpr usize kTicketHeaderBytes     = kTicketNameBytes + kTicketSaltBytes;
+constexpr usize kTicketOverhead        = kTicketHeaderBytes + kAeadTagBytes;
+
+constexpr char kTicketNameInfo[] = "cerid tls 1.3 ticket name";
+constexpr char kTicketSealInfo[] = "cerid tls 1.3 ticket seal";
+constexpr char kBindingLabel[]   = "cerid tls 1.3 binding";
 
 // floor(2^24.5): the full-size records one AES-GCM key may protect (RFC 9846 section 5.5).
 constexpr u64 kAesGcmRecordLimit = 23726566U;
@@ -204,6 +218,161 @@ bool valid_list(cont::ConstSpan<AlgorithmId> list, usize bound, AlgorithmClass f
     return true;
 }
 
+template <usize N>
+cont::ConstSpan<u8> label_of(const char (&text)[N]) noexcept
+{
+    return cont::ConstSpan<u8>(reinterpret_cast<const u8*>(text), N - 1U);
+}
+
+// A ticket key's public name: HKDF-SHA256 of the key with an empty salt, expanded under its own label.
+CryptoError ticket_key_name(cont::ConstSpan<u8> key, cont::Span<u8> name) noexcept
+{
+    u8          prk[32];
+    CryptoError error = hkdf_extract(AlgorithmId::HkdfSha256, {}, key, cont::Span<u8>(prk));
+    if (error == CryptoError::None)
+    {
+        error = hkdf_expand(AlgorithmId::HkdfSha256, cont::ConstSpan<u8>(prk), label_of(kTicketNameInfo), name);
+    }
+    secure_zero(cont::Span<u8>(prk));
+    return error;
+}
+
+// The AES-256-GCM key and nonce that seal one ticket: HKDF-SHA256 of the ticket key salted with the ticket's salt.
+CryptoError ticket_aead(cont::ConstSpan<u8> key, cont::ConstSpan<u8> salt, AeadKey& aead,
+                        u8 (&nonce)[kAeadNonceBytes]) noexcept
+{
+    u8          prk[32];
+    u8          okm[kTlsTicketKeyBytes + kAeadNonceBytes];
+    CryptoError error = hkdf_extract(AlgorithmId::HkdfSha256, salt, key, cont::Span<u8>(prk));
+    if (error == CryptoError::None)
+    {
+        error = hkdf_expand(AlgorithmId::HkdfSha256, cont::ConstSpan<u8>(prk), label_of(kTicketSealInfo),
+                            cont::Span<u8>(okm));
+    }
+    if (error == CryptoError::None)
+    {
+        error = aead.init(AlgorithmId::Aes256Gcm, cont::ConstSpan<u8>(okm, kTlsTicketKeyBytes));
+    }
+    std::memcpy(nonce, okm + kTlsTicketKeyBytes, kAeadNonceBytes);
+    secure_zero(cont::Span<u8>(prk));
+    secure_zero(cont::Span<u8>(okm));
+    return error;
+}
+
+// What a context's tickets are bound to (TlsBinding): the label, the role, the server name in lower case, the own key
+// (zero without a credential), then the pins and the accepted signature algorithms as sets (sorted), each after its
+// count. It is also the provider's session ID context, which both ends check before they resume a ticket.
+TlsBinding binding_of(const TlsConfig& config, const KeyId& own) noexcept
+{
+    KeyId pins[kTlsMaxPins];
+    std::copy(config.pinned.begin(), config.pinned.end(), pins);
+    std::sort(pins, pins + config.pinned.size(),
+              [](const KeyId& a, const KeyId& b) { return std::memcmp(a.bytes, b.bytes, sizeof(a.bytes)) < 0; });
+    u16 signatures[kTlsMaxSignatures];
+    for (usize i = 0U; i < config.signatures.size(); ++i)
+    {
+        signatures[i] = static_cast<u16>(config.signatures[i]);
+    }
+    std::sort(signatures, signatures + config.signatures.size());
+
+    u8    buffer[sizeof(kBindingLabel) + 2U + kTlsMaxNameBytes + kKeyIdBytes * (1U + kTlsMaxPins) + 1U +
+                 2U * kTlsMaxSignatures];
+    usize at = sizeof(kBindingLabel) - 1U;
+    std::memcpy(buffer, kBindingLabel, at);
+    buffer[at++] = static_cast<u8>(config.role);
+    buffer[at++] = static_cast<u8>(config.server_name.size());
+    for (const char c : config.server_name)
+    {
+        buffer[at++] = static_cast<u8>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+    }
+    std::memcpy(buffer + at, own.bytes, kKeyIdBytes);
+    at += kKeyIdBytes;
+    buffer[at++] = static_cast<u8>(config.pinned.size());
+    for (usize i = 0U; i < config.pinned.size(); ++i)
+    {
+        std::memcpy(buffer + at, pins[i].bytes, kKeyIdBytes);
+        at += kKeyIdBytes;
+    }
+    buffer[at++] = static_cast<u8>(config.signatures.size());
+    for (usize i = 0U; i < config.signatures.size(); ++i)
+    {
+        buffer[at++] = static_cast<u8>(signatures[i] >> 8U);
+        buffer[at++] = static_cast<u8>(signatures[i]);
+    }
+    const KeyId digest = key_id_of(cont::ConstSpan<u8>(buffer, at));
+    TlsBinding  binding;
+    std::memcpy(binding.bytes, digest.bytes, sizeof(binding.bytes));
+    return binding;
+}
+
+void zero_ticket_keys(TlsSettings& settings) noexcept
+{
+    secure_zero(cont::Span<u8>(&settings.ticket_keys[0][0], sizeof(settings.ticket_keys)));
+}
+
+// Offers a ticket the store handed back when it parses as a TLS 1.3 session of `binding` (the provider then also drops
+// one that expired); any other is dropped and the handshake runs in full. False only when the provider fails.
+bool offer_ticket(SSL* ssl, const TlsBinding& binding, cont::ConstSpan<u8> ticket) noexcept
+{
+    if (ticket.empty())
+    {
+        return true;
+    }
+    const bssl::UniquePtr<SSL_SESSION> session(
+        SSL_SESSION_from_bytes(ticket.data(), ticket.size(), SSL_get_SSL_CTX(ssl)));
+    unsigned       length  = 0U;
+    const uint8_t* context = session ? SSL_SESSION_get0_id_context(session.get(), &length) : nullptr;
+    if (!session || SSL_SESSION_get_protocol_version(session.get()) != TLS1_3_VERSION ||
+        length != sizeof(binding.bytes) || std::memcmp(context, binding.bytes, length) != 0)
+    {
+        return true;
+    }
+    return SSL_set_session(ssl, session.get()) == 1;
+}
+
+// Zeroes a local copy of the ticket keys on every way out of its scope.
+class TicketKeysGuard
+{
+public:
+    explicit TicketKeysGuard(TlsSettings& settings) noexcept : m_settings(settings) {}
+    ~TicketKeysGuard() noexcept { zero_ticket_keys(m_settings); }
+    TicketKeysGuard(const TicketKeysGuard&)            = delete;
+    TicketKeysGuard& operator=(const TicketKeysGuard&) = delete;
+    TicketKeysGuard(TicketKeysGuard&&)                 = delete;
+    TicketKeysGuard& operator=(TicketKeysGuard&&)      = delete;
+
+private:
+    TlsSettings& m_settings;
+};
+
+// A server's ticket keys: its configured key or one drawn now (which only this context then opens), and the key before
+// its last rotation, each with its name. False when the provider fails.
+bool ticket_keys_of(const TlsConfig& config, TlsSettings& settings) noexcept
+{
+    if (config.ticket_key.empty())
+    {
+        if (random_bytes(cont::Span<u8>(settings.ticket_keys[0])) != CryptoError::None)
+        {
+            return false;
+        }
+    }
+    else
+    {
+        std::copy(config.ticket_key.begin(), config.ticket_key.end(), settings.ticket_keys[0]);
+    }
+    std::copy(config.previous_ticket_key.begin(), config.previous_ticket_key.end(), settings.ticket_keys[1]);
+    settings.ticket_key_count = config.previous_ticket_key.empty() ? 1U : 2U;
+    for (u32 i = 0U; i < settings.ticket_key_count; ++i)
+    {
+        if (ticket_key_name(cont::ConstSpan<u8>(settings.ticket_keys[i]), cont::Span<u8>(settings.ticket_names[i])) !=
+            CryptoError::None)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 // The connection's slot for its session: one index for the process, taken on first use.
 int session_slot() noexcept
 {
@@ -220,6 +389,41 @@ struct TlsCallbacks
         return static_cast<TlsSession*>(SSL_get_ex_data(ssl, session_slot()));
     }
 
+    // Takes the peer's key from its leaf certificate when the key is of an accepted algorithm and pinned: during a
+    // full handshake (verify_peer) and after a resumed one, whose ticket carried the certificate.
+    static bool pinned_peer(const SSL* ssl, TlsSession& session) noexcept
+    {
+        const STACK_OF(CRYPTO_BUFFER)* chain = SSL_get0_peer_certificates(ssl);
+        if (chain == nullptr || sk_CRYPTO_BUFFER_num(chain) == 0U)
+        {
+            return false;
+        }
+        const bssl::UniquePtr<X509> leaf(X509_parse_from_buffer(sk_CRYPTO_BUFFER_value(chain, 0U)));
+        const EVP_PKEY*             pkey = leaf ? X509_get0_pubkey(leaf.get()) : nullptr;
+        const AlgorithmId algorithm = pkey != nullptr ? provider_internal::signature_algorithm_of(pkey) : AlgorithmId{};
+        const TlsSettings& settings = session.m_settings;
+        const AlgorithmId* accepted_end = settings.signatures + settings.signature_count;
+        if (algorithm == AlgorithmId{} || std::find(settings.signatures, accepted_end, algorithm) == accepted_end)
+        {
+            return false;
+        }
+        u8                   public_key[kMaxSignaturePublicKey];
+        const cont::Span<u8> bytes(public_key, signature_sizes(algorithm).public_key);
+        if (provider_internal::signature_public_bytes(pkey, algorithm, bytes) != CryptoError::None)
+        {
+            return false;
+        }
+        const KeyId  key      = key_id_of(bytes);
+        const KeyId* pins_end = settings.pinned + settings.pin_count;
+        if (std::find(settings.pinned, pins_end, key) == pins_end)
+        {
+            return false;
+        }
+        session.m_peer_algorithm = algorithm;
+        session.m_peer_key       = key;
+        return true;
+    }
+
     // Accepts the peer when its leaf certificate's key is of an accepted algorithm and pinned. The certificate's own
     // signature is not looked at: the handshake's CertificateVerify proves that the peer holds the pinned key.
     static ssl_verify_result_t verify_peer(SSL* ssl, uint8_t* out_alert) noexcept
@@ -230,36 +434,12 @@ struct TlsCallbacks
             *out_alert = SSL_AD_INTERNAL_ERROR;
             return ssl_verify_invalid;
         }
-        // A server does not tell an unauthenticated client whether a key is pinned (the TLS 1.3 profile).
-        const u8 refusal = session->m_settings.role == TlsRole::Server ? kTlsAlertGeneralError : kBadCertificate;
-        const STACK_OF(CRYPTO_BUFFER)* chain = SSL_get0_peer_certificates(ssl);
-        if (chain == nullptr || sk_CRYPTO_BUFFER_num(chain) == 0U)
+        if (!pinned_peer(ssl, *session))
         {
-            return refuse(*session, out_alert, refusal);
+            // A server does not tell an unauthenticated client whether a key is pinned (the TLS 1.3 profile).
+            return refuse(*session, out_alert,
+                          session->m_settings.role == TlsRole::Server ? kTlsAlertGeneralError : kBadCertificate);
         }
-        const bssl::UniquePtr<X509> leaf(X509_parse_from_buffer(sk_CRYPTO_BUFFER_value(chain, 0U)));
-        const EVP_PKEY*             pkey = leaf ? X509_get0_pubkey(leaf.get()) : nullptr;
-        const AlgorithmId algorithm = pkey != nullptr ? provider_internal::signature_algorithm_of(pkey) : AlgorithmId{};
-        const TlsSettings& settings = session->m_settings;
-        const AlgorithmId* accepted_end = settings.signatures + settings.signature_count;
-        if (algorithm == AlgorithmId{} || std::find(settings.signatures, accepted_end, algorithm) == accepted_end)
-        {
-            return refuse(*session, out_alert, refusal);
-        }
-        u8                   public_key[kMaxSignaturePublicKey];
-        const cont::Span<u8> bytes(public_key, signature_sizes(algorithm).public_key);
-        if (provider_internal::signature_public_bytes(pkey, algorithm, bytes) != CryptoError::None)
-        {
-            return refuse(*session, out_alert, refusal);
-        }
-        const KeyId  key      = key_id_of(bytes);
-        const KeyId* pins_end = settings.pinned + settings.pin_count;
-        if (std::find(settings.pinned, pins_end, key) == pins_end)
-        {
-            return refuse(*session, out_alert, refusal);
-        }
-        session->m_peer_algorithm = algorithm;
-        session->m_peer_key       = key;
         return ssl_verify_ok;
     }
 
@@ -294,6 +474,112 @@ struct TlsCallbacks
             return SSL_TLSEXT_ERR_ALERT_FATAL;
         }
         return SSL_TLSEXT_ERR_OK;
+    }
+
+    // A client hands each ticket its server issues to the session's store, serialized; without a store the ticket is
+    // ignored. The provider keeps its session object (0: no reference taken).
+    static int keep_ticket(SSL* ssl, SSL_SESSION* ticket) noexcept
+    {
+        const TlsSession* session = session_of(ssl);
+        if (session == nullptr || session->m_tickets == nullptr)
+        {
+            return 0;
+        }
+        uint8_t* bytes = nullptr;
+        size_t   size  = 0U;
+        if (SSL_SESSION_to_bytes(ticket, &bytes, &size) == 1)
+        {
+            session->m_tickets->keep(session->m_settings.binding, cont::ConstSpan<u8>(bytes, size));
+            secure_zero(cont::Span<u8>(bytes, size));
+            OPENSSL_free(bytes);
+        }
+        return 0;
+    }
+
+    static size_t ticket_overhead(SSL*) noexcept
+    {
+        return kTicketOverhead;
+    }
+
+    // Seals `in` (the session state) under the sealing key: the key's name, the salt, then the ciphertext and tag. The
+    // name only selects the key: any other name selects another key or none, and the salt derives the sealing key.
+    // `in` may be `out`, so the state moves into place before anything is written.
+    static int seal_ticket(SSL* ssl, uint8_t* out, size_t* out_len, size_t max_out_len, const uint8_t* in,
+                           size_t in_len) noexcept
+    {
+        const TlsSession* session = session_of(ssl);
+        if (session == nullptr || session->m_settings.ticket_key_count == 0U || max_out_len < kTicketOverhead ||
+            in_len > max_out_len - kTicketOverhead)
+        {
+            return 0;
+        }
+        const TlsSettings&        settings = session->m_settings;
+        u8* const                 body     = out + kTicketHeaderBytes;
+        const cont::ConstSpan<u8> salt(out + kTicketNameBytes, kTicketSaltBytes);
+        std::memmove(body, in, in_len);
+        std::memcpy(out, settings.ticket_names[0], kTicketNameBytes);
+        AeadKey key;
+        u8      nonce[kAeadNonceBytes];
+        if (random_bytes(cont::Span<u8>(out + kTicketNameBytes, kTicketSaltBytes)) != CryptoError::None ||
+            ticket_aead(cont::ConstSpan<u8>(settings.ticket_keys[0]), salt, key, nonce) != CryptoError::None ||
+            key.seal(cont::ConstSpan<u8>(nonce), cont::ConstSpan<u8>(body, in_len), {},
+                     cont::Span<u8>(body, in_len + kAeadTagBytes)) != CryptoError::None)
+        {
+            return 0;
+        }
+        *out_len = in_len + kTicketOverhead;
+        return 1;
+    }
+
+    // Opens a ticket sealed under the sealing key or the previous one. A ticket too short, under another key or forged
+    // is ignored (the handshake runs in full); only a provider failure fails the handshake.
+    static ssl_ticket_aead_result_t open_ticket(SSL* ssl, uint8_t* out, size_t* out_len, size_t max_out_len,
+                                                const uint8_t* in, size_t in_len) noexcept
+    {
+        const TlsSession* session = session_of(ssl);
+        if (session == nullptr)
+        {
+            return ssl_ticket_aead_error;
+        }
+        const TlsSettings& settings = session->m_settings;
+        if (in_len < kTicketOverhead || max_out_len < in_len - kTicketHeaderBytes)
+        {
+            return ssl_ticket_aead_ignore_ticket;
+        }
+        u32 index = 0U;
+        while (index < settings.ticket_key_count &&
+               std::memcmp(in, settings.ticket_names[index], kTicketNameBytes) != 0)
+        {
+            ++index;
+        }
+        if (index == settings.ticket_key_count)
+        {
+            return ssl_ticket_aead_ignore_ticket;
+        }
+        // `in` may be `out`: the salt is kept before the sealed bytes move to the front.
+        u8 salt[kTicketSaltBytes];
+        std::memcpy(salt, in + kTicketNameBytes, sizeof(salt));
+        const usize sealed = in_len - kTicketHeaderBytes;
+        std::memmove(out, in + kTicketHeaderBytes, sealed);
+        AeadKey key;
+        u8      nonce[kAeadNonceBytes];
+        if (ticket_aead(cont::ConstSpan<u8>(settings.ticket_keys[index]), cont::ConstSpan<u8>(salt), key, nonce) !=
+            CryptoError::None)
+        {
+            return ssl_ticket_aead_error;
+        }
+        const CryptoError opened = key.open(cont::ConstSpan<u8>(nonce), cont::ConstSpan<u8>(out, sealed), {},
+                                            cont::Span<u8>(out, sealed - kAeadTagBytes));
+        if (opened == CryptoError::Forged)
+        {
+            return ssl_ticket_aead_ignore_ticket;
+        }
+        if (opened != CryptoError::None)
+        {
+            return ssl_ticket_aead_error;
+        }
+        *out_len = sealed - kAeadTagBytes;
+        return ssl_ticket_aead_success;
     }
 
     // Records the first alert each way, notices a HelloRetryRequest (a ServerHello with the special random) and counts
@@ -339,6 +625,12 @@ struct TlsCallbacks
         }
     }
 };
+
+namespace
+{
+constexpr SSL_TICKET_AEAD_METHOD kTicketMethod = {&TlsCallbacks::ticket_overhead, &TlsCallbacks::seal_ticket,
+                                                  &TlsCallbacks::open_ticket};
+} // namespace
 
 cont::StringView tls_error_name(TlsError error) noexcept
 {
@@ -497,7 +789,8 @@ TlsContext::~TlsContext() noexcept
 void TlsContext::clear() noexcept
 {
     SSL_CTX_free(ctx_of(m_context));
-    m_context  = nullptr;
+    m_context = nullptr;
+    zero_ticket_keys(m_settings);
     m_settings = TlsSettings{};
 }
 
@@ -517,7 +810,13 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
         (!config.server_name.empty() && !valid_host_name(config.server_name)) ||
         (!server && config.server_name.empty()) ||
         (config.key_update_records != 0U && config.key_update_records < kTlsMinKeyUpdateRecords) ||
-        config.max_key_updates > kTlsMaxKeyUpdates)
+        config.max_key_updates > kTlsMaxKeyUpdates ||
+        (!server &&
+         (!config.ticket_key.empty() || !config.previous_ticket_key.empty() || config.ticket_lifetime != 0U)) ||
+        (!config.ticket_key.empty() && config.ticket_key.size() != kTlsTicketKeyBytes) ||
+        (!config.previous_ticket_key.empty() &&
+         (config.previous_ticket_key.size() != kTlsTicketKeyBytes || config.ticket_key.empty())) ||
+        config.ticket_lifetime > kTlsMaxTicketLifetime)
     {
         return TlsError::BadConfig;
     }
@@ -532,6 +831,12 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     settings.name_bytes         = static_cast<u32>(config.server_name.size());
     settings.key_update_records = config.key_update_records;
     settings.max_key_updates    = config.max_key_updates != 0U ? config.max_key_updates : kTlsMaxKeyUpdates;
+    settings.binding = binding_of(config, config.credential != nullptr ? config.credential->key_id() : KeyId{});
+    const TicketKeysGuard guard(settings);
+    if (server && !ticket_keys_of(config, settings))
+    {
+        return TlsError::ProviderFailure;
+    }
 
     u16 groups[kTlsMaxGroups];
     for (usize i = 0U; i < config.groups.size(); ++i)
@@ -571,15 +876,39 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     {
         return TlsError::ProviderFailure;
     }
-    // Resumption and tickets are a later slice of NET.2; until then every connection runs a full handshake. Server
-    // preference orders the groups (the provider's TLS 1.3 AEAD choice follows the client, see tls.hpp).
-    SSL_CTX_set_options(context.get(), SSL_OP_NO_TICKET | SSL_OP_CIPHER_SERVER_PREFERENCE);
-    SSL_CTX_set_session_cache_mode(context.get(), SSL_SESS_CACHE_OFF);
+    // Server preference orders the groups (the provider's TLS 1.3 AEAD choice follows the client, see tls.hpp).
+    SSL_CTX_set_options(context.get(), SSL_OP_CIPHER_SERVER_PREFERENCE);
+    // Tickets are stateless: a server keeps no session cache (no memory an unauthenticated peer could fill) and issues
+    // one ticket per connection through its ticket method, valid for the configured lifetime and never longer than
+    // seven days after the handshake that authenticated the peer (the provider's non-renewable authentication
+    // timeout); a client reports each ticket to keep_ticket. The binding is the session ID context, which both ends
+    // check before resuming.
+    SSL_CTX_set_session_cache_mode(context.get(), server ? SSL_SESS_CACHE_NO_INTERNAL : SSL_SESS_CACHE_CLIENT);
+    if (!SSL_CTX_set_session_id_context(context.get(), settings.binding.bytes, sizeof(settings.binding.bytes)))
+    {
+        return TlsError::ProviderFailure;
+    }
+    // A server's tickets live its configured lifetime; a client keeps each for the lifetime its server states (the
+    // provider caps a client's ticket at its own context's lifetime, here the profile's seven days).
+    u32 lifetime = kTlsMaxTicketLifetime;
+    if (server)
+    {
+        lifetime = config.ticket_lifetime != 0U ? config.ticket_lifetime : kTlsDefaultTicketLifetime;
+    }
+    SSL_CTX_set_session_psk_dhe_timeout(context.get(), lifetime);
+    if (server)
+    {
+        SSL_CTX_set_ticket_aead_method(context.get(), &kTicketMethod);
+    }
+    else
+    {
+        SSL_CTX_sess_set_new_cb(context.get(), &TlsCallbacks::keep_ticket);
+    }
     // GREASE (RFC 8701, ietf.grease) in every build: a client's hello carries reserved values, chosen per connection,
     // in its cipher suites, supported groups, supported versions, key shares and two extensions, so a peer or
     // middlebox that refuses an unknown value fails in testing rather than in the field.
     SSL_CTX_set_grease_enabled(context.get(), 1);
-    if (!SSL_CTX_set_num_tickets(context.get(), 0U))
+    if (!SSL_CTX_set_num_tickets(context.get(), server ? 1U : 0U))
     {
         return TlsError::ProviderFailure;
     }
@@ -627,7 +956,9 @@ void TlsSession::clear() noexcept
 {
     // SSL_free releases the connection, its keys (zeroed) and both memory buffers.
     SSL_free(ssl_of(m_session));
-    m_session            = nullptr;
+    m_session = nullptr;
+    m_tickets = nullptr;
+    zero_ticket_keys(m_settings);
     m_settings           = TlsSettings{};
     m_state              = TlsState::Idle;
     m_group              = AlgorithmId{};
@@ -638,18 +969,23 @@ void TlsSession::clear() noexcept
     m_updates_sent       = 0U;
     m_updates_received   = 0U;
     m_hello_retry        = false;
+    m_resumed            = false;
     m_refused            = false;
     m_update_requested   = false;
     m_alert_sent         = TlsAlert{};
     m_alert_received     = TlsAlert{};
 }
 
-TlsError TlsSession::init(const TlsContext& context) noexcept
+TlsError TlsSession::init(const TlsContext& context, TlsTicketStore* tickets) noexcept
 {
     clear();
     if (!context.ready())
     {
         return TlsError::NotReady;
+    }
+    if (tickets != nullptr && context.m_settings.role == TlsRole::Server)
+    {
+        return TlsError::BadConfig;
     }
     const ErrorScope     errors;
     bssl::UniquePtr<SSL> ssl(SSL_new(ctx_of(context.m_context)));
@@ -666,10 +1002,12 @@ TlsError TlsSession::init(const TlsContext& context) noexcept
     if (m_settings.role == TlsRole::Client)
     {
         SSL_set_connect_state(ssl.get());
-        if (!SSL_set_tlsext_host_name(ssl.get(), m_settings.server_name))
+        if (!SSL_set_tlsext_host_name(ssl.get(), m_settings.server_name) ||
+            (tickets != nullptr && !offer_ticket(ssl.get(), m_settings.binding, tickets->take(m_settings.binding))))
         {
             return TlsError::ProviderFailure;
         }
+        m_tickets = tickets;
     }
     else
     {
@@ -706,10 +1044,22 @@ TlsError TlsSession::advance() noexcept
         {
             return fail(TlsError::ProviderFailure);
         }
+        // A resumed handshake verified no certificate: the peer key is the one the ticket's handshake proved, which
+        // the binding (the same pins) keeps pinned.
+        m_resumed = SSL_session_reused(ssl) == 1;
+        if (m_resumed && m_settings.pin_count != 0U && !TlsCallbacks::pinned_peer(ssl, *this))
+        {
+            return fail(TlsError::PeerRefused);
+        }
         const u64 limit      = tls_key_usage_limit(m_aead);
         const u64 configured = m_settings.key_update_records;
         m_key_update_records = configured != 0U && configured < limit ? configured : limit;
         m_state              = TlsState::Established;
+        // A server's ticket waits in the provider until the server writes: it goes out with the handshake instead.
+        if (m_settings.role == TlsRole::Server)
+        {
+            flush();
+        }
         return TlsError::None;
     }
     switch (SSL_get_error(ssl, result))
@@ -832,13 +1182,18 @@ u64 TlsSession::records_under_key() const noexcept
     return m_state == TlsState::Established ? SSL_get_write_sequence(ssl_of(m_session)) : 0U;
 }
 
+void TlsSession::flush() noexcept
+{
+    // A zero-length write moves what the provider holds back (a queued KeyUpdate, a server's NewSessionTicket) into the
+    // outgoing bytes. Its result reads as an error either way.
+    (void)SSL_write(ssl_of(m_session), &m_state, 0);
+}
+
 bool TlsSession::flush_key_update() noexcept
 {
-    // A zero-length write moves the queued KeyUpdate into the outgoing bytes. Its result reads as an error either way,
-    // so success is the provider no longer holding an update back.
-    SSL* ssl = ssl_of(m_session);
-    (void)SSL_write(ssl, &m_state, 0);
-    return SSL_get_key_update_type(ssl) == SSL_KEY_UPDATE_NONE;
+    // Success is the provider no longer holding an update back.
+    flush();
+    return SSL_get_key_update_type(ssl_of(m_session)) == SSL_KEY_UPDATE_NONE;
 }
 
 TlsError TlsSession::rekey(bool request_peer) noexcept

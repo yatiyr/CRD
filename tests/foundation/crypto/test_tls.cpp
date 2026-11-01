@@ -3,8 +3,9 @@
 // signature algorithm negotiated, the key shares read off the wire and checked against the hybrid groups' layout with
 // the provider interface's own primitives, HelloRetryRequest, server preference, pinned keys both ways, server names,
 // alerts, bounds, close_notify, key updates against the usage limits and the update bound, a peer's user_canceled and
-// close_notify during the handshake, adversarial bytes, every configuration refusal and one context serving several
-// threads.
+// close_notify during the handshake, tickets and resumption (single use, bindings, a fleet's shared key and its
+// rotation, a client no longer pinned, tickets changed at rest or expired, a HelloRetryRequest), adversarial bytes,
+// every configuration refusal and one context serving several threads.
 //
 // The independent peer (OpenSSL 3.5's hybrid key exchange) is tests/foundation/crypto/interop/tls_interop.py's.
 
@@ -15,9 +16,11 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <openssl/aead.h> // EVP_has_aes_hardware: the test asks the provider what the preference must follow
+#include <openssl/ssl.h>  // SSL_SESSION_from_bytes: the provider reads back the lifetime a client keeps
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <thread>
 
@@ -77,6 +80,79 @@ struct Endpoint
     TlsSession    session;
 };
 
+// A client's tickets: at most four, the oldest dropped for a fifth, each handed out once with its binding. A `careless`
+// store hands out its oldest ticket whatever the binding (one the session must not trust), and `flip` changes a byte
+// of the copy it hands out (a ticket corrupted at rest; the mask 0 changes nothing).
+class Store final : public TlsTicketStore
+{
+public:
+    static constexpr usize kCapacity = 4U;
+
+    void keep(const TlsBinding& binding, ConstSpan<u8> ticket) noexcept override
+    {
+        if (m_count == kCapacity)
+        {
+            drop(0U);
+        }
+        m_bindings[m_count] = binding;
+        m_tickets[m_count].resize(ticket.size());
+        std::memcpy(m_tickets[m_count].data(), ticket.data(), ticket.size());
+        ++m_count;
+        ++kept;
+    }
+
+    ConstSpan<u8> take(const TlsBinding& binding) noexcept override
+    {
+        ++takes;
+        last_binding = binding;
+        secure_zero(Span<u8>(m_handed.data(), m_handed.size()));
+        m_handed.clear();
+        for (usize i = 0U; i < m_count; ++i)
+        {
+            if (careless || m_bindings[i] == binding)
+            {
+                m_handed = m_tickets[i];
+                drop(i);
+                if (flip_at < m_handed.size())
+                {
+                    m_handed[flip_at] ^= flip_mask;
+                }
+                return ConstSpan<u8>(m_handed.data(), m_handed.size());
+            }
+        }
+        return {};
+    }
+
+    [[nodiscard]] usize        size() const { return m_count; }
+    [[nodiscard]] const Bytes& ticket(usize i) const { return m_tickets[i]; }
+    [[nodiscard]] TlsBinding   binding(usize i) const { return m_bindings[i]; }
+
+    bool       careless  = false;
+    usize      flip_at   = 0U;
+    u8         flip_mask = 0U;
+    usize      kept      = 0U;
+    usize      takes     = 0U;
+    TlsBinding last_binding;
+
+private:
+    void drop(usize i)
+    {
+        secure_zero(Span<u8>(m_tickets[i].data(), m_tickets[i].size()));
+        for (usize j = i; j + 1U < m_count; ++j)
+        {
+            m_tickets[j]  = m_tickets[j + 1U];
+            m_bindings[j] = m_bindings[j + 1U];
+        }
+        --m_count;
+        m_tickets[m_count].clear();
+    }
+
+    Bytes      m_tickets[kCapacity];
+    TlsBinding m_bindings[kCapacity];
+    usize      m_count = 0U;
+    Bytes      m_handed;
+};
+
 struct Options
 {
     ConstSpan<AlgorithmId> client_groups  = kAllGroups;
@@ -94,6 +170,10 @@ struct Options
     u64                    server_key_records = 0U;
     u64                    client_max_updates = 0U; // TlsConfig::max_key_updates of each end
     u64                    server_max_updates = 0U;
+    Store*                 client_tickets     = nullptr; // the client session's ticket store
+    ConstSpan<u8>          ticket_key;                   // the server's TlsConfig ticket settings
+    ConstSpan<u8>          previous_ticket_key;
+    u32                    ticket_lifetime = 0U;
 };
 
 // Configures both ends; the client's first flight is pending when this returns.
@@ -133,13 +213,16 @@ void setup(Endpoint& client, Endpoint& server, const Options& options)
     server_config.server_name = options.server_names;
     server_config.key_update_records = options.server_key_records;
     server_config.max_key_updates    = options.server_max_updates;
+    server_config.ticket_key          = options.ticket_key;
+    server_config.previous_ticket_key = options.previous_ticket_key;
+    server_config.ticket_lifetime     = options.ticket_lifetime;
     if (options.server_pins_client)
     {
         server_config.signatures = kAllSignatures;
         server_config.pinned     = ConstSpan<KeyId>(&server_pin, 1U);
     }
     REQUIRE(server.context.init(server_config) == TlsError::None);
-    REQUIRE(client.session.init(client.context) == TlsError::None);
+    REQUIRE(client.session.init(client.context, options.client_tickets) == TlsError::None);
     REQUIRE(server.session.init(server.context) == TlsError::None);
     REQUIRE(client.session.pending() > 0U);
 }
@@ -1258,6 +1341,614 @@ TEST_CASE("TLS: a peer's user_canceled is ignored and its close_notify ends the 
     }
 }
 
+namespace
+{
+constexpr u16 kPreSharedKeyExtension  = 41U;
+constexpr u16 kPskKeyExchangeModes    = 45U;
+constexpr u8  kPskDheKe               = 1U;
+constexpr usize kTicketNameBytes      = 16U;
+constexpr usize kTicketOverheadBytes  = 16U + 32U + 16U; // the key's name, the salt and the AEAD tag
+
+void fill_key(u8 (&key)[kTlsTicketKeyBytes], u8 seed)
+{
+    for (usize i = 0U; i < sizeof(key); ++i)
+    {
+        key[i] = static_cast<u8>(seed + i * 13U);
+    }
+}
+
+bool same_bytes(const Bytes& a, const Bytes& b)
+{
+    return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size()) == 0;
+}
+
+// A ticket key's public name, restated from the tickets' format (tls.cpp): HKDF-SHA256 of the key with an empty salt,
+// expanded under "cerid tls 1.3 ticket name".
+void ticket_name(ConstSpan<u8> key, u8 (&name)[kTicketNameBytes])
+{
+    constexpr char info[] = "cerid tls 1.3 ticket name";
+    u8             prk[32];
+    REQUIRE(hkdf_extract(AlgorithmId::HkdfSha256, {}, key, Span<u8>(prk, sizeof(prk))) == CryptoError::None);
+    REQUIRE(hkdf_expand(AlgorithmId::HkdfSha256, ConstSpan<u8>(prk, sizeof(prk)),
+                        ConstSpan<u8>(reinterpret_cast<const u8*>(info), sizeof(info) - 1U),
+                        Span<u8>(name, sizeof(name))) == CryptoError::None);
+}
+
+// Where `name` starts in `bytes`; bytes.size() when it does not occur.
+usize find_name(const Bytes& bytes, const u8 (&name)[kTicketNameBytes])
+{
+    for (usize at = 0U; at + sizeof(name) <= bytes.size(); ++at)
+    {
+        if (std::memcmp(bytes.data() + at, name, sizeof(name)) == 0)
+        {
+            return at;
+        }
+    }
+    return bytes.size();
+}
+
+// The length of the DER OCTET STRING whose contents start at `at` (short or two-byte long form); 0 for neither.
+usize der_length_before(const Bytes& bytes, usize at)
+{
+    if (at >= 4U && at <= bytes.size() && bytes[at - 4U] == 0x04U && bytes[at - 3U] == 0x82U)
+    {
+        return be16(bytes.data() + at - 2U);
+    }
+    if (at >= 3U && at <= bytes.size() && bytes[at - 3U] == 0x04U && bytes[at - 2U] == 0x81U)
+    {
+        return bytes[at - 1U];
+    }
+    return 0U;
+}
+
+// The flights of one connection until both ends go quiet: the even ones the client's, the odd ones the server's (empty
+// when that end had nothing to send). Returns how many were run.
+usize run_flights(Endpoint& client, Endpoint& server, Bytes (&flights)[8])
+{
+    usize count = 0U;
+    while (count + 2U <= 8U && (client.session.pending() > 0U || server.session.pending() > 0U))
+    {
+        flights[count] = drain(client.session);
+        if (!flights[count].empty() && server.session.state() != TlsState::Failed)
+        {
+            (void)server.session.receive(ConstSpan<u8>(flights[count].data(), flights[count].size()));
+        }
+        flights[count + 1U] = drain(server.session);
+        if (!flights[count + 1U].empty() && client.session.state() != TlsState::Failed)
+        {
+            (void)client.session.receive(ConstSpan<u8>(flights[count + 1U].data(), flights[count + 1U].size()));
+        }
+        count += 2U;
+    }
+    REQUIRE(client.session.pending() == 0U);
+    REQUIRE(server.session.pending() == 0U);
+    return count;
+}
+
+// The client reads what arrived after its handshake: the server's NewSessionTicket, into its store when it has one.
+void read_tickets(TlsSession& client)
+{
+    u8    out[16];
+    usize written = 1U;
+    REQUIRE(client.read(Span<u8>(out, sizeof(out)), written) == TlsError::None);
+    REQUIRE(written == 0U);
+}
+
+// A new connection over the same contexts, the client taking a ticket from `store` when it holds one.
+void reconnect(Endpoint& client, Endpoint& server, Store* store)
+{
+    REQUIRE(client.session.init(client.context, store) == TlsError::None);
+    REQUIRE(server.session.init(server.context) == TlsError::None);
+}
+
+// Connects again and reads the new ticket; whether both ends resumed (they must agree).
+bool resume(Endpoint& client, Endpoint& server, Store& store)
+{
+    reconnect(client, server, &store);
+    establish(client, server);
+    CHECK(client.session.resumed() == server.session.resumed());
+    read_tickets(client.session);
+    return client.session.resumed();
+}
+
+// A hello's pre_shared_key and psk_key_exchange_modes (RFC 9846 sections 4.2.9 and 4.2.11): a ClientHello's
+// identities (the first one kept) and whether pre_shared_key is its last extension, a ServerHello's selected identity.
+struct Psk
+{
+    bool          offered    = false;
+    bool          last       = false;
+    usize         identities = 0U;
+    ConstSpan<u8> identity;
+    ConstSpan<u8> modes;
+    bool          selected          = false;
+    u16           selected_identity = 0U;
+};
+
+Psk read_psk(const Bytes& flight)
+{
+    const ConstSpan<u8> hello        = first_hello(flight);
+    const bool          client_hello = hello[0] == 1U;
+    Psk                 psk;
+    u16                 last_type = 0U;
+    for_each_extension(hello, [&](u16 type, ConstSpan<u8> body)
+    {
+        last_type = type;
+        if (type == kPskKeyExchangeModes)
+        {
+            psk.modes = body;
+        }
+        else if (type == kPreSharedKeyExtension && client_hello)
+        {
+            psk.offered       = true;
+            const usize end   = 2U + be16(body.data());
+            for (usize at = 2U; at + 2U <= end;)
+            {
+                const usize size = be16(body.data() + at);
+                if (psk.identities++ == 0U)
+                {
+                    psk.identity = body.subspan(at + 2U, size);
+                }
+                at += 2U + size + 4U; // the identity, then its obfuscated_ticket_age
+            }
+        }
+        else if (type == kPreSharedKeyExtension)
+        {
+            REQUIRE(body.size() == 2U);
+            psk.selected          = true;
+            psk.selected_identity = be16(body.data());
+        }
+    });
+    psk.last = psk.offered && last_type == kPreSharedKeyExtension;
+    return psk;
+}
+
+// A client context like setup()'s, pinning `pins` and accepting `signatures`, with `change` applied.
+template <typename Change>
+void client_context(TlsContext& context, ConstSpan<KeyId> pins, const Change& change)
+{
+    TlsConfig config;
+    config.role        = TlsRole::Client;
+    config.groups      = kAllGroups;
+    config.signatures  = kAllSignatures;
+    config.aeads       = kAllAeads;
+    config.pinned      = pins;
+    config.server_name = kServerName;
+    change(config);
+    REQUIRE(context.init(config) == TlsError::None);
+}
+
+// A server context like setup()'s for `credential`, with `change` applied.
+template <typename Change>
+void server_context(TlsContext& context, const TlsCredential& credential, const Change& change)
+{
+    TlsConfig config;
+    config.role        = TlsRole::Server;
+    config.groups      = kAllGroups;
+    config.aeads       = kAllAeads;
+    config.credential  = &credential;
+    config.server_name = kServerName;
+    change(config);
+    REQUIRE(context.init(config) == TlsError::None);
+}
+} // namespace
+
+// Decision S9 and the TLS 1.3 profile's tickets: a server issues one ticket with every connection; a client keeps them
+// only in its store and offers each once; resumption is psk_dhe_ke with a fresh hybrid share and takes the same round
+// trips as a full handshake, without the server's certificate.
+TEST_CASE("TLS: a client resumes once with its server's ticket, over a fresh hybrid share and without the certificate",
+          "[crypto][tls][net-2]")
+{
+    u8 key[kTlsTicketKeyBytes];
+    fill_key(key, 0x11U);
+    Store    store;
+    Endpoint client;
+    Endpoint server;
+    Options  options;
+    options.server_key     = AlgorithmId::MlDsa65;
+    options.client_tickets = &store;
+    options.ticket_key     = key;
+    setup(client, server, options);
+    CHECK(store.takes == 1U); // the empty store was asked, under the context's binding
+    const TlsBinding binding = store.last_binding;
+
+    Bytes       full[8];
+    const usize full_count = run_flights(client, server, full);
+    REQUIRE(client.session.state() == TlsState::Established);
+    REQUIRE(server.session.state() == TlsState::Established);
+    CHECK_FALSE(client.session.resumed());
+    CHECK_FALSE(server.session.resumed());
+    // ClientHello; ServerHello to Finished; the client's Finished; the NewSessionTicket, the one record under the
+    // server's key so far.
+    CHECK(full_count == 4U);
+    CHECK_FALSE(full[2].empty());
+    CHECK_FALSE(full[3].empty());
+    CHECK(server.session.records_under_key() == 1U);
+    const Psk first_offer = read_psk(full[0]);
+    CHECK_FALSE(first_offer.offered);
+    REQUIRE(first_offer.modes.size() == 2U); // psk_dhe_ke alone: a server may send tickets, never psk_ke
+    CHECK(first_offer.modes[0] == 1U);
+    CHECK(first_offer.modes[1] == kPskDheKe);
+    CHECK(store.size() == 0U);
+    read_tickets(client.session);
+    REQUIRE(store.size() == 1U);
+    CHECK(store.binding(0U) == binding);
+    const Bytes first_ticket = store.ticket(0U);
+
+    reconnect(client, server, &store);
+    CHECK(store.size() == 0U);
+    CHECK(store.takes == 2U);
+    Bytes       again[8];
+    const usize count = run_flights(client, server, again);
+    REQUIRE(client.session.state() == TlsState::Established);
+    REQUIRE(server.session.state() == TlsState::Established);
+    CHECK(client.session.resumed());
+    CHECK(server.session.resumed());
+    CHECK(count == full_count); // the same round trips
+    // No Certificate and CertificateVerify: an ML-DSA-65 key (1,952 bytes) and two signatures (3,309 bytes each).
+    CHECK(again[1].size() + 8000U < full[1].size());
+    CHECK(client.session.group() == AlgorithmId::X25519Mlkem768);
+    CHECK(server.session.group() == AlgorithmId::X25519Mlkem768);
+    CHECK(client.session.peer_key() == server.credential.key_id());
+    CHECK(client.session.peer_algorithm() == AlgorithmId::MlDsa65);
+
+    // On the wire: one identity, pre_shared_key last, the identity led by the ticket key's name and sealed with the
+    // overhead of the format, and a fresh hybrid share each way.
+    const Psk offer = read_psk(again[0]);
+    CHECK(offer.offered);
+    CHECK(offer.last);
+    CHECK(offer.identities == 1U);
+    u8 name[kTicketNameBytes];
+    ticket_name(ConstSpan<u8>(key), name);
+    REQUIRE(offer.identity.size() > kTicketOverheadBytes);
+    CHECK(std::memcmp(offer.identity.data(), name, sizeof(name)) == 0);
+    Share shares[4];
+    REQUIRE(read_shares(again[0], shares) >= 1U);
+    CHECK(shares[0].group == iana::kGroupX25519mlkem768);
+    check_share(AlgorithmId::X25519Mlkem768, shares[0].bytes, true);
+    const Psk accepted = read_psk(again[1]);
+    CHECK(accepted.selected);
+    CHECK(accepted.selected_identity == 0U);
+    REQUIRE(read_shares(again[1], shares) == 1U);
+    CHECK(shares[0].group == iana::kGroupX25519mlkem768);
+    check_share(AlgorithmId::X25519Mlkem768, shares[0].bytes, false);
+
+    // A resumed connection brings a new ticket, sealed under a salt of its own; the one used is gone.
+    read_tickets(client.session);
+    REQUIRE(store.size() == 1U);
+    CHECK_FALSE(same_bytes(store.ticket(0U), first_ticket));
+    const usize first_at = find_name(first_ticket, name);
+    const usize new_at   = find_name(store.ticket(0U), name);
+    REQUIRE(first_at + kTicketOverheadBytes < first_ticket.size());
+    REQUIRE(new_at + kTicketOverheadBytes < store.ticket(0U).size());
+    CHECK(std::memcmp(first_ticket.data() + first_at + kTicketNameBytes,
+                      store.ticket(0U).data() + new_at + kTicketNameBytes, 32U) != 0);
+    exchange(client, server, 100U);
+
+    // Without a store a client offers nothing and ignores the server's ticket.
+    reconnect(client, server, nullptr);
+    Bytes plain[8];
+    (void)run_flights(client, server, plain);
+    CHECK_FALSE(read_psk(plain[0]).offered);
+    CHECK_FALSE(client.session.resumed());
+    read_tickets(client.session);
+    CHECK(store.size() == 1U);
+    CHECK(store.takes == 2U);
+    CHECK(store.kept == 2U);
+}
+
+TEST_CASE("TLS: a ticket resumes only under the binding that received it", "[crypto][tls][net-2]")
+{
+    Store    store;
+    Endpoint client;
+    Endpoint server;
+    Options  options;
+    options.client_tickets = &store;
+    setup(client, server, options);
+    establish(client, server);
+    read_tickets(client.session);
+    REQUIRE(store.size() == 1U);
+    const KeyId pin = server.credential.key_id();
+
+    // Offers what the client context would offer: its first flight's pre_shared_key.
+    const auto offers = [&](TlsContext& context) {
+        TlsSession session;
+        REQUIRE(session.init(context, &store) == TlsError::None);
+        return read_psk(drain(session)).offered;
+    };
+    SECTION("other pins, other accepted algorithms, an own credential or another name: no ticket of this binding")
+    {
+        KeyId other = pin;
+        other.bytes[0] ^= 1U;
+        const KeyId both[] = {other, pin};
+        TlsContext  more_pins;
+        client_context(more_pins, ConstSpan<KeyId>(both), [](TlsConfig&) {});
+        CHECK_FALSE(offers(more_pins));
+        constexpr AlgorithmId ed25519[] = {AlgorithmId::Ed25519};
+        TlsContext            fewer_algorithms;
+        client_context(fewer_algorithms, ConstSpan<KeyId>(&pin, 1U), [&](TlsConfig& c) { c.signatures = ed25519; });
+        CHECK_FALSE(offers(fewer_algorithms));
+        SigningKey    own_key;
+        TlsCredential own;
+        make_key(own_key, AlgorithmId::Ed25519, 9U);
+        REQUIRE(own.init(own_key, "player.cerid.test") == TlsError::None);
+        TlsContext with_credential;
+        client_context(with_credential, ConstSpan<KeyId>(&pin, 1U), [&](TlsConfig& c) { c.credential = &own; });
+        CHECK_FALSE(offers(with_credential));
+        TlsContext other_name;
+        client_context(other_name, ConstSpan<KeyId>(&pin, 1U),
+                       [](TlsConfig& c) { c.server_name = "lobby.cerid.test"; });
+        CHECK_FALSE(offers(other_name));
+        CHECK(store.size() == 1U); // still there for its own binding
+        CHECK(resume(client, server, store));
+    }
+    SECTION("the server name binds without case, as names match")
+    {
+        TlsContext upper;
+        client_context(upper, ConstSpan<KeyId>(&pin, 1U), [](TlsConfig& c) { c.server_name = "GAME.Cerid.TEST"; });
+        REQUIRE(client.session.init(upper, &store) == TlsError::None);
+        REQUIRE(server.session.init(server.context) == TlsError::None);
+        establish(client, server);
+        CHECK(client.session.resumed());
+        CHECK(server.session.resumed());
+    }
+    SECTION("a careless store's ticket of another binding is dropped, not offered")
+    {
+        store.careless = true;
+        KeyId other    = pin;
+        other.bytes[1] ^= 1U;
+        const KeyId both[] = {pin, other};
+        TlsContext  more_pins;
+        client_context(more_pins, ConstSpan<KeyId>(both), [](TlsConfig&) {});
+        CHECK_FALSE(offers(more_pins));
+        CHECK(store.size() == 0U);
+    }
+    SECTION("a ticket that does not parse is dropped and the handshake runs in full")
+    {
+        store.flip_at   = 0U; // the DER SEQUENCE tag of the serialized session
+        store.flip_mask = 0xFFU;
+        reconnect(client, server, &store);
+        Bytes flights[8];
+        (void)run_flights(client, server, flights);
+        CHECK_FALSE(read_psk(flights[0]).offered);
+        CHECK(client.session.state() == TlsState::Established);
+        CHECK_FALSE(client.session.resumed());
+    }
+}
+
+TEST_CASE("TLS: a server resumes the tickets of its fleet and of its last rotation, and no other",
+          "[crypto][tls][net-2]")
+{
+    u8 key_a[kTlsTicketKeyBytes];
+    u8 key_b[kTlsTicketKeyBytes];
+    u8 key_c[kTlsTicketKeyBytes];
+    fill_key(key_a, 0x21U);
+    fill_key(key_b, 0x52U);
+    fill_key(key_c, 0x83U);
+    Store    store;
+    Endpoint client;
+    Endpoint server;
+    Options  options;
+    options.client_tickets = &store;
+    options.ticket_key     = key_a;
+    setup(client, server, options);
+    establish(client, server);
+    read_tickets(client.session);
+    const auto keys = [&](ConstSpan<u8> current, ConstSpan<u8> previous) {
+        server_context(server.context, server.credential, [&](TlsConfig& c) {
+            c.ticket_key          = current;
+            c.previous_ticket_key = previous;
+        });
+    };
+    u8 name[kTicketNameBytes];
+
+    keys(key_a, {}); // another server of the fleet: a context of its own, the same key
+    CHECK(resume(client, server, store));
+    keys(key_b, key_a); // rotated: the ticket under A opens, the new one is sealed under B
+    CHECK(resume(client, server, store));
+    ticket_name(ConstSpan<u8>(key_b), name);
+    CHECK(find_name(store.ticket(0U), name) < store.ticket(0U).size());
+    keys(key_c, key_b);
+    CHECK(resume(client, server, store));
+    keys(key_a, {}); // a key that sealed none of the tickets held: a full handshake that authenticates again
+    CHECK_FALSE(resume(client, server, store));
+    CHECK(client.session.peer_key() == server.credential.key_id());
+    CHECK(resume(client, server, store));
+
+    // A context that draws its own key opens only its own tickets.
+    keys({}, {});
+    CHECK_FALSE(resume(client, server, store));
+    CHECK(resume(client, server, store));
+    keys({}, {});
+    CHECK_FALSE(resume(client, server, store));
+
+    // Another credential under the same name and ticket key: its binding differs, so it authenticates in full.
+    Endpoint other;
+    make_key(other.key, AlgorithmId::MlDsa44, 3U);
+    REQUIRE(other.credential.init(other.key, kServerName) == TlsError::None);
+    const KeyId both[] = {server.credential.key_id(), other.credential.key_id()};
+    client_context(client.context, ConstSpan<KeyId>(both), [](TlsConfig&) {});
+    server_context(server.context, server.credential, [&](TlsConfig& c) { c.ticket_key = key_a; });
+    CHECK_FALSE(resume(client, server, store));
+    CHECK(resume(client, server, store));
+    server_context(server.context, other.credential, [&](TlsConfig& c) { c.ticket_key = key_a; });
+    CHECK_FALSE(resume(client, server, store));
+    CHECK(client.session.peer_key() == other.credential.key_id());
+    CHECK(client.session.peer_algorithm() == AlgorithmId::MlDsa44);
+}
+
+TEST_CASE("TLS: a resumed server knows its pinned client, and a client no longer pinned cannot resume",
+          "[crypto][tls][net-2]")
+{
+    u8 key[kTlsTicketKeyBytes];
+    fill_key(key, 0x35U);
+    Store    store;
+    Endpoint client;
+    Endpoint server;
+    Options  options;
+    options.client_key         = AlgorithmId::EcdsaSecp256r1Sha256;
+    options.server_pins_client = true;
+    options.client_tickets     = &store;
+    options.ticket_key         = key;
+    setup(client, server, options);
+    establish(client, server);
+    read_tickets(client.session);
+    CHECK(resume(client, server, store));
+    CHECK(server.session.peer_key() == client.credential.key_id());
+    CHECK(server.session.peer_algorithm() == AlgorithmId::EcdsaSecp256r1Sha256);
+    CHECK(client.session.peer_key() == server.credential.key_id());
+
+    // The server stops pinning the client's key: the ticket no longer opens under its binding, and the full handshake
+    // refuses the key without saying whether it is known.
+    KeyId other = client.credential.key_id();
+    other.bytes[2] ^= 1U;
+    server_context(server.context, server.credential, [&](TlsConfig& c) {
+        c.signatures = kAllSignatures;
+        c.pinned     = ConstSpan<KeyId>(&other, 1U);
+        c.ticket_key = ConstSpan<u8>(key);
+    });
+    reconnect(client, server, &store);
+    Bytes flights[8];
+    (void)run_flights(client, server, flights);
+    CHECK(read_psk(flights[0]).offered);
+    CHECK_FALSE(read_psk(flights[1]).selected);
+    CHECK(server.session.state() == TlsState::Failed);
+    CHECK(server.session.alert_sent().description == kTlsAlertGeneralError);
+    CHECK_FALSE(server.session.resumed());
+    CHECK_FALSE(client.session.resumed());
+    expect_failed_read(client.session, kTlsAlertGeneralError);
+}
+
+TEST_CASE("TLS: a ticket changed at rest or past its lifetime runs a full handshake", "[crypto][tls][net-2]")
+{
+    u8 key[kTlsTicketKeyBytes];
+    fill_key(key, 0x47U);
+    u8 name[kTicketNameBytes];
+    ticket_name(ConstSpan<u8>(key), name);
+    Store    store;
+    Endpoint client;
+    Endpoint server;
+    Options  options;
+    options.client_tickets = &store;
+    options.ticket_key     = key;
+    setup(client, server, options);
+    establish(client, server);
+    read_tickets(client.session);
+
+    SECTION("a byte of the key's name, the salt, the ciphertext or the tag")
+    {
+        // The serialized session holds the ticket as a DER OCTET STRING, whose length a clean resumption's identity
+        // confirms.
+        const usize at = find_name(store.ticket(0U), name);
+        const usize length = der_length_before(store.ticket(0U), at);
+        REQUIRE(length > kTicketOverheadBytes);
+        reconnect(client, server, &store);
+        Bytes flights[8];
+        (void)run_flights(client, server, flights);
+        REQUIRE(client.session.resumed());
+        REQUIRE(read_psk(flights[0]).identity.size() == length);
+        read_tickets(client.session);
+        const usize offsets[] = {0U, kTicketNameBytes + 5U, kTicketNameBytes + 32U + 3U, length - 1U};
+        for (const usize offset : offsets)
+        {
+            CAPTURE(offset);
+            const usize ticket_at = find_name(store.ticket(0U), name);
+            const usize size      = der_length_before(store.ticket(0U), ticket_at);
+            REQUIRE(ticket_at + size <= store.ticket(0U).size());
+            store.flip_at   = ticket_at + (offset == length - 1U ? size - 1U : offset);
+            store.flip_mask = 0x40U;
+            reconnect(client, server, &store);
+            (void)run_flights(client, server, flights);
+            CHECK(read_psk(flights[0]).offered);
+            CHECK_FALSE(read_psk(flights[1]).selected);
+            CHECK(client.session.state() == TlsState::Established);
+            CHECK(server.session.state() == TlsState::Established);
+            CHECK_FALSE(server.session.resumed());
+            read_tickets(client.session);
+        }
+        store.flip_mask = 0U;
+        CHECK(resume(client, server, store));
+    }
+    SECTION("a ticket past its lifetime is not offered")
+    {
+        // A resumption keeps the longer of the ticket's remaining lifetime and the configured one, so a new key
+        // forces the full handshake whose ticket lives one second.
+        u8 other_key[kTlsTicketKeyBytes];
+        fill_key(other_key, 0x99U);
+        server_context(server.context, server.credential, [&](TlsConfig& c) {
+            c.ticket_key      = ConstSpan<u8>(other_key);
+            c.ticket_lifetime = 1U;
+        });
+        CHECK_FALSE(resume(client, server, store));
+        REQUIRE(store.size() == 1U);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2100));
+        reconnect(client, server, &store);
+        Bytes flights[8];
+        (void)run_flights(client, server, flights);
+        CHECK_FALSE(read_psk(flights[0]).offered);
+        CHECK(client.session.state() == TlsState::Established);
+        CHECK_FALSE(client.session.resumed());
+    }
+}
+
+TEST_CASE("TLS: a client keeps a ticket for the lifetime its server states", "[crypto][tls][net-2]")
+{
+    // The lifetime the provider reads back from the store's bytes; up to a second has passed since the ticket came.
+    const auto kept_lifetime = [](const Bytes& ticket) {
+        const bssl::UniquePtr<SSL_CTX>     context(SSL_CTX_new(TLS_method()));
+        const bssl::UniquePtr<SSL_SESSION> session(
+            SSL_SESSION_from_bytes(ticket.data(), ticket.size(), context.get()));
+        REQUIRE(session);
+        return SSL_SESSION_get_timeout(session.get());
+    };
+    const u32 lifetimes[] = {0U, 60U, kTlsMaxTicketLifetime};
+    for (const u32 lifetime : lifetimes)
+    {
+        CAPTURE(lifetime);
+        const u32 stated = lifetime != 0U ? lifetime : kTlsDefaultTicketLifetime;
+        Store     store;
+        Endpoint  client;
+        Endpoint  server;
+        Options   options;
+        options.client_tickets  = &store;
+        options.ticket_lifetime = lifetime;
+        setup(client, server, options);
+        establish(client, server);
+        read_tickets(client.session);
+        REQUIRE(store.size() == 1U);
+        const u32 kept = kept_lifetime(store.ticket(0U));
+        CHECK(kept <= stated);
+        CHECK(kept + 1U >= stated);
+    }
+}
+
+TEST_CASE("TLS: a resumption keeps the server's hybrid preference through a HelloRetryRequest", "[crypto][tls][net-2]")
+{
+    constexpr AlgorithmId client_groups[] = {AlgorithmId::Secp256r1Mlkem768, AlgorithmId::X25519Mlkem768};
+    constexpr AlgorithmId server_groups[] = {AlgorithmId::X25519Mlkem768};
+    Store                 store;
+    Endpoint              client;
+    Endpoint              server;
+    Options               options;
+    options.client_groups  = client_groups;
+    options.server_groups  = server_groups;
+    options.client_tickets = &store;
+    setup(client, server, options);
+    establish(client, server);
+    read_tickets(client.session);
+    reconnect(client, server, &store);
+    Bytes       flights[8];
+    const usize count = run_flights(client, server, flights);
+    CHECK(count == 6U); // the retry adds its round trip
+    REQUIRE(client.session.state() == TlsState::Established);
+    CHECK(client.session.resumed());
+    CHECK(server.session.resumed());
+    CHECK(client.session.hello_retry());
+    CHECK(client.session.group() == AlgorithmId::X25519Mlkem768);
+    CHECK(read_psk(flights[0]).offered);
+    CHECK(read_psk(flights[2]).offered); // the retried ClientHello offers the ticket again, with a new binder
+    CHECK(read_psk(flights[3]).selected);
+}
+
 TEST_CASE("TLS: adversarial bytes fail the session with an alert and nothing else", "[crypto][tls][net-2]")
 {
     SECTION("a server fed garbage")
@@ -1377,12 +2068,57 @@ TEST_CASE("TLS: configurations outside the profile are refused", "[crypto][tls][
     CHECK(context.init(server_config) == TlsError::BadConfig); // no credential
     server_config.credential = &server.credential;
     CHECK(context.init(server_config) == TlsError::None);
+    // Ticket keys and lifetimes are a server's; a key is kTlsTicketKeyBytes long, a previous key needs a current one.
+    u8 ticket_key[kTlsTicketKeyBytes + 1U] = {};
+    CHECK(client_with([&](TlsConfig& c) { c.ticket_key = ConstSpan<u8>(ticket_key, kTlsTicketKeyBytes); }) ==
+          TlsError::BadConfig);
+    CHECK(client_with([&](TlsConfig& c) { c.previous_ticket_key = ConstSpan<u8>(ticket_key, kTlsTicketKeyBytes); }) ==
+          TlsError::BadConfig);
+    CHECK(client_with([](TlsConfig& c) { c.ticket_lifetime = 60U; }) == TlsError::BadConfig);
+    const auto server_with = [&](auto&& change) {
+        TlsConfig config;
+        config.role       = TlsRole::Server;
+        config.groups     = kAllGroups;
+        config.aeads      = kAllAeads;
+        config.credential = &server.credential;
+        change(config);
+        TlsContext ticketed;
+        return ticketed.init(config);
+    };
+    const ConstSpan<u8> key(ticket_key, kTlsTicketKeyBytes);
+    CHECK(server_with([&](TlsConfig& c) { c.ticket_key = key; }) == TlsError::None);
+    CHECK(server_with([&](TlsConfig& c) { c.ticket_key = key.first(kTlsTicketKeyBytes - 1U); }) ==
+          TlsError::BadConfig);
+    CHECK(server_with([&](TlsConfig& c) { c.ticket_key = ConstSpan<u8>(ticket_key, sizeof(ticket_key)); }) ==
+          TlsError::BadConfig);
+    CHECK(server_with([&](TlsConfig& c) { c.previous_ticket_key = key; }) == TlsError::BadConfig);
+    CHECK(server_with([&](TlsConfig& c) {
+              c.ticket_key          = key;
+              c.previous_ticket_key = key.first(1U);
+          }) == TlsError::BadConfig);
+    CHECK(server_with([&](TlsConfig& c) {
+              c.ticket_key          = key;
+              c.previous_ticket_key = key;
+          }) == TlsError::None);
+    CHECK(server_with([](TlsConfig& c) { c.ticket_lifetime = kTlsMaxTicketLifetime; }) == TlsError::None);
+    CHECK(server_with([](TlsConfig& c) { c.ticket_lifetime = kTlsMaxTicketLifetime + 1U; }) == TlsError::BadConfig);
+
     server_config.signatures = kAllSignatures; // signatures without pins
     CHECK(context.init(server_config) == TlsError::BadConfig);
     CHECK_FALSE(context.ready());
 
     TlsSession session;
     CHECK(session.init(context) == TlsError::NotReady);
+    {
+        // A server takes no ticket store: its tickets are sealed, not kept.
+        server_config.signatures = {};
+        TlsContext serving;
+        REQUIRE(serving.init(server_config) == TlsError::None);
+        Store store;
+        CHECK(session.init(serving, &store) == TlsError::BadConfig);
+        CHECK(session.state() == TlsState::Idle);
+        CHECK(store.takes == 0U);
+    }
     usize written = 0U;
     u8    out[4];
     CHECK(session.take(Span<u8>(out, sizeof(out)), written) == TlsError::NotReady);

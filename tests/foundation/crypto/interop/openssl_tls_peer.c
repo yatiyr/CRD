@@ -4,7 +4,8 @@
  * OpenSSL, never AWS-LC: the two libraries share symbol names and cannot share a process.
  *
  * Usage: crd-openssl-tls-peer --role client|server --groups LIST --seed HEX [--pin HEX] [--name NAME]
- *                             [--max-version 1.2] [--update requested|not-requested]
+ *                             [--max-version 1.2] [--update requested|not-requested] [--session FILE]
+ *                             [--ticket-key HEX]
  *   groups       OpenSSL's group list syntax (SSL_CTX_set1_groups_list; a '*' marks a group that gets a key share)
  *   seed         the 32-byte Ed25519 private key of this end's self-signed certificate
  *   pin          the peer's 32-byte Ed25519 public key: the peer's certificate must carry it (a server then asks for
@@ -12,15 +13,21 @@
  *   max-version  1.2 offers TLS 1.2 only (the refusal case)
  *   update       an established client updates its key once after its ping (SSL_key_update), asking the server for
  *                an update or not; either end sends a KeyUpdate it owes at once (a zero-length SSL_write)
+ *   session      a client's session store: the session in FILE (PEM) is offered once, and the newest one its server's
+ *                tickets make replaces it
+ *   ticket-key   a server's 32-byte ticket key, from which its 80 bytes of OpenSSL ticket key material are made (the
+ *                key three times over), so two server processes open each other's tickets
  *
  * A server prefers its own group order (SSL_OP_CIPHER_SERVER_PREFERENCE), as a Cerid server does. The framing and the
  * script are crd-tls-peer's: 4-byte big-endian frame lengths, a client's first flight unasked,
  * one frame per frame read, "ping from openssl" from an established client, an echo from an established server and one
- * JSON line on standard error at the end of input, the KeyUpdate messages sent and received among it. */
+ * JSON line on standard error at the end of input, the KeyUpdate messages sent and received and whether the handshake
+ * resumed among it. */
 
 #include <openssl/bio.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
+#include <openssl/pem.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 
@@ -42,6 +49,7 @@ static int           g_alert_sent     = -1;
 static int           g_alert_received = -1;
 static int           g_updates_sent;
 static int           g_updates_received;
+static const char*   g_session_path;
 
 /* SHA-256("HelloRetryRequest"), the random of a HelloRetryRequest (RFC 9846 section 4.1.3). */
 static const unsigned char k_hello_retry[32] = {
@@ -139,6 +147,32 @@ static void observe(int write_p, int version, int content_type, const void* buff
     }
 }
 
+/* Every session a server's ticket makes replaces the one in the session file. */
+static int keep_session(SSL* ssl, SSL_SESSION* session)
+{
+    FILE* file = fopen(g_session_path, "w");
+    (void)ssl;
+    if (file != NULL)
+    {
+        PEM_write_SSL_SESSION(file, session);
+        fclose(file);
+    }
+    return 0;
+}
+
+/* The session in the session file, removed as it is taken (a session is offered once); NULL when there is none. */
+static SSL_SESSION* take_session(void)
+{
+    FILE*        file    = fopen(g_session_path, "r");
+    SSL_SESSION* session = file != NULL ? PEM_read_SSL_SESSION(file, NULL, NULL, NULL) : NULL;
+    if (file != NULL)
+    {
+        fclose(file);
+        remove(g_session_path);
+    }
+    return session;
+}
+
 static X509* self_signed(EVP_PKEY* key, const char* name)
 {
     X509* certificate = X509_new();
@@ -160,7 +194,7 @@ static X509* self_signed(EVP_PKEY* key, const char* name)
 static int usage(void)
 {
     fputs("usage: crd-openssl-tls-peer --role client|server --groups LIST --seed HEX [--pin HEX] [--name NAME] "
-          "[--max-version 1.2] [--update requested|not-requested]\n",
+          "[--max-version 1.2] [--update requested|not-requested] [--session FILE] [--ticket-key HEX]\n",
           stderr);
     return 2;
 }
@@ -174,6 +208,7 @@ int main(int argc, char** argv)
     const char* name        = "game.cerid.test";
     const char* max_version = NULL;
     const char* update      = NULL;
+    const char* ticket_key  = NULL;
     for (int i = 1; i + 1 < argc; i += 2)
     {
         if (strcmp(argv[i], "--role") == 0)
@@ -200,6 +235,14 @@ int main(int argc, char** argv)
         {
             max_version = argv[i + 1];
         }
+        else if (strcmp(argv[i], "--session") == 0)
+        {
+            g_session_path = argv[i + 1];
+        }
+        else if (strcmp(argv[i], "--ticket-key") == 0)
+        {
+            ticket_key = argv[i + 1];
+        }
         else if (strcmp(argv[i], "--update") == 0 &&
                  (strcmp(argv[i + 1], "requested") == 0 || strcmp(argv[i + 1], "not-requested") == 0))
         {
@@ -211,9 +254,11 @@ int main(int argc, char** argv)
         }
     }
     unsigned char seed_bytes[32];
+    unsigned char key_bytes[32];
     if (argc % 2 == 0 || role == NULL || groups == NULL || seed == NULL ||
         !parse_hex(seed, seed_bytes, sizeof(seed_bytes)) || (pin != NULL && !parse_hex(pin, g_pin, sizeof(g_pin))) ||
-        (max_version != NULL && strcmp(max_version, "1.2") != 0))
+        (max_version != NULL && strcmp(max_version, "1.2") != 0) ||
+        (ticket_key != NULL && !parse_hex(ticket_key, key_bytes, sizeof(key_bytes))))
     {
         return usage();
     }
@@ -233,8 +278,34 @@ int main(int argc, char** argv)
     }
     if (!client)
     {
-        /* The server's group order decides, as on a Cerid server. */
+        /* The server's group order decides, as on a Cerid server. A server that pins its client resumes only within
+         * its session ID context. */
+        static const unsigned char k_context[] = "crd-openssl-tls-peer";
         SSL_CTX_set_options(context, SSL_OP_CIPHER_SERVER_PREFERENCE);
+        if (!SSL_CTX_set_session_id_context(context, k_context, sizeof(k_context) - 1))
+        {
+            return 1;
+        }
+    }
+    if (ticket_key != NULL)
+    {
+        unsigned char material[80];
+        memcpy(material, key_bytes, 32);
+        memcpy(material + 32, key_bytes, 32);
+        memcpy(material + 64, key_bytes, 16);
+        if (client || SSL_CTX_set_tlsext_ticket_keys(context, material, sizeof(material)) != 1)
+        {
+            return usage();
+        }
+    }
+    if (g_session_path != NULL)
+    {
+        if (!client)
+        {
+            return usage();
+        }
+        SSL_CTX_set_session_cache_mode(context, SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL_STORE);
+        SSL_CTX_sess_set_new_cb(context, keep_session);
     }
     if (g_has_pin)
     {
@@ -254,6 +325,12 @@ int main(int argc, char** argv)
     {
         SSL_set_connect_state(ssl);
         SSL_set_tlsext_host_name(ssl, name);
+        SSL_SESSION* offered = g_session_path != NULL ? take_session() : NULL;
+        if (offered != NULL)
+        {
+            SSL_set_session(ssl, offered);
+            SSL_SESSION_free(offered);
+        }
         SSL_do_handshake(ssl);
         if (!write_frame(outgoing))
         {
@@ -335,7 +412,8 @@ int main(int argc, char** argv)
     }
     fprintf(stderr, "\", \"hello_retry\": %s, \"peer_ok\": %s, \"alert_sent\": %d, \"alert_received\": %d, ",
             g_hello_retry ? "true" : "false", g_peer_ok ? "true" : "false", g_alert_sent, g_alert_received);
-    fprintf(stderr, "\"key_updates_sent\": %d, \"key_updates_received\": %d, ", g_updates_sent, g_updates_received);
+    fprintf(stderr, "\"key_updates_sent\": %d, \"key_updates_received\": %d, \"resumed\": %s, ", g_updates_sent,
+            g_updates_received, established && SSL_session_reused(ssl) ? "true" : "false");
     fprintf(stderr, "\"version\": \"%s\", \"received\": \"", SSL_get_version(ssl));
     for (size_t i = 0; i < received_size; ++i)
     {

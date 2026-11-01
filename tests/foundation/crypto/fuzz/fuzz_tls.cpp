@@ -2,7 +2,9 @@
 // hostile bytes under the bounded fuzz harness (REPO.DEV.9; docs/design/test-instruments.md).
 //
 // Input. Byte 0 picks the session (bit 0: 0 a server that has received nothing, 1 a client that has sent its
-// ClientHello), byte 1 the size of each delivery (0: all at once), the rest are the bytes the peer "sent".
+// ClientHello), byte 1 the size of each delivery (0: all at once), the rest are the bytes the peer "sent". With bit 1
+// set the rest is instead the ticket a client's store hands out (a ticket corrupted at rest), and nothing is received.
+// The server seals and opens tickets under a fixed key, so a seed can lead its identity with that key's name.
 //
 // Oracles, none of them the provider's verdict on one call:
 //   * neither session is ever established: a server needs a Finished under keys derived from its own fresh share, and
@@ -11,7 +13,8 @@
 //     failed and Closed once the peer closed it; a failed or closed session stays so, and a session closed by its
 //     peer (a close_notify, after a user_canceled or not) has sent no alert;
 //   * the session never holds more than kTlsMaxBufferedBytes of received bytes, and its outgoing bytes are bounded;
-//   * send(), read(), close() and update_keys() are refused outside an established session (Closed once closed).
+//   * send(), read(), close() and update_keys() are refused outside an established session (Closed once closed);
+//   * a client offered any ticket starts its handshake all the same, and keeps no ticket before it is established.
 #include <crd/fuzz/harness.hpp>
 
 #include <crd/crypto/provider.hpp>
@@ -37,6 +40,21 @@ constexpr AlgorithmId kSignatures[] = {AlgorithmId::MlDsa44, AlgorithmId::MlDsa6
                                        AlgorithmId::EcdsaSecp384r1Sha384};
 constexpr AlgorithmId kAeads[] = {AlgorithmId::Aes128Gcm, AlgorithmId::Aes256Gcm, AlgorithmId::Chacha20Poly1305};
 constexpr const char* kName    = "game.cerid.test";
+
+// The fuzz server's ticket key: the bytes 0x40, 0x41, ... 0x5F.
+struct TicketKey
+{
+    u8 bytes[kTlsTicketKeyBytes] = {};
+
+    constexpr TicketKey() noexcept
+    {
+        for (usize i = 0U; i < sizeof(bytes); ++i)
+        {
+            bytes[i] = static_cast<u8>(0x40U + i);
+        }
+    }
+};
+constexpr TicketKey kTicketKey;
 
 // The outgoing bytes a handshake can leave in a session: a server's first flight with an Ed25519 credential, or a
 // client's ClientHello, and an alert; far below the bound.
@@ -70,6 +88,7 @@ struct Contexts
         config.aeads       = kAeads;
         config.credential  = &credential;
         config.server_name = kName;
+        config.ticket_key  = ConstSpan<u8>(kTicketKey.bytes, sizeof(kTicketKey.bytes));
         if (server.init(config) != TlsError::None)
         {
             return;
@@ -77,10 +96,32 @@ struct Contexts
         const KeyId pin    = credential.key_id();
         config.role        = TlsRole::Client;
         config.credential  = nullptr;
+        config.ticket_key  = {};
         config.signatures  = kSignatures;
         config.pinned      = ConstSpan<KeyId>(&pin, 1U);
         ready              = client.init(config) == TlsError::None;
     }
+};
+
+// A client's store that hands out the input once as its ticket and counts the tickets it is given.
+class InputStore final : public TlsTicketStore
+{
+public:
+    explicit InputStore(ConstSpan<u8> ticket) noexcept : m_ticket(ticket) {}
+
+    void keep(const TlsBinding&, ConstSpan<u8>) noexcept override { ++kept; }
+
+    ConstSpan<u8> take(const TlsBinding&) noexcept override
+    {
+        ++takes;
+        return takes == 1U ? m_ticket : ConstSpan<u8>();
+    }
+
+    usize kept  = 0U;
+    usize takes = 0U;
+
+private:
+    ConstSpan<u8> m_ticket;
 };
 
 Contexts& contexts() noexcept
@@ -145,6 +186,17 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     CRD_FUZZ_REQUIRE(shared.ready);
     const bool client = (data[0] & 1U) != 0U;
     TlsSession session;
+    if ((data[0] & 2U) != 0U)
+    {
+        InputStore store(ConstSpan<u8>(data + 2U, size - 2U));
+        CRD_FUZZ_REQUIRE(session.init(shared.client, &store) == TlsError::None);
+        CRD_FUZZ_REQUIRE(store.takes == 1U);
+        CRD_FUZZ_REQUIRE(session.state() == TlsState::Handshaking && session.pending() > 0U);
+        drain(session);
+        feed(session, {}, 0U);
+        CRD_FUZZ_REQUIRE(store.kept == 0U && !session.resumed());
+        return 0;
+    }
     CRD_FUZZ_REQUIRE(session.init(client ? shared.client : shared.server) == TlsError::None);
     drain(session);
     feed(session, ConstSpan<u8>(data + 2U, size - 2U), data[1]);
@@ -187,8 +239,10 @@ struct Writer
 };
 
 // A TLS 1.3 ClientHello for the fuzz server: X25519 with RFC 7748's Alice's public key, Ed25519, the server's name and
-// TLS_AES_128_GCM_SHA256, in one handshake record (RFC 9846 section 4.1.2).
-void client_hello(Writer& out, u8 mode, u8 chunk) noexcept
+// TLS_AES_128_GCM_SHA256, in one handshake record (RFC 9846 section 4.1.2). With `ticket` it offers a ticket last
+// (psk_dhe_ke): an identity led by the server's ticket key name, a zero salt and a sealed state no key opens, and a
+// binder of the right length (RFC 9846 section 4.2.11).
+void client_hello(Writer& out, u8 mode, u8 chunk, bool ticket = false) noexcept
 {
     constexpr u8 alice[32] = {0x85U, 0x20U, 0xF0U, 0x09U, 0x89U, 0x30U, 0xA7U, 0x54U, 0x74U, 0x8BU, 0x7DU,
                                0xDCU, 0xB4U, 0x3EU, 0xF7U, 0x5AU, 0x0DU, 0xBFU, 0x3AU, 0x0DU, 0x26U, 0x38U,
@@ -239,6 +293,42 @@ void client_hello(Writer& out, u8 mode, u8 chunk) noexcept
     out.put16(0x001DU);
     out.put16(32U);
     out.put(alice, sizeof(alice));
+    if (ticket)
+    {
+        out.put16(0x002DU); // psk_key_exchange_modes: psk_dhe_ke
+        out.put16(2U);
+        out.put(1U);
+        out.put(1U);
+        constexpr char info[] = "cerid tls 1.3 ticket name";
+        u8             prk[32];
+        u8             name[16];
+        if (hkdf_extract(AlgorithmId::HkdfSha256, {}, ConstSpan<u8>(kTicketKey.bytes), Span<u8>(prk)) !=
+                CryptoError::None ||
+            hkdf_expand(AlgorithmId::HkdfSha256, ConstSpan<u8>(prk),
+                        ConstSpan<u8>(reinterpret_cast<const u8*>(info), sizeof(info) - 1U),
+                        Span<u8>(name)) != CryptoError::None)
+        {
+            return;
+        }
+        constexpr usize identity = 16U + 32U + 96U + 16U; // name, salt, a state's worth of bytes and the tag
+        out.put16(0x0029U);                                 // pre_shared_key
+        out.put16(2U + 2U + identity + 4U + 2U + 1U + 32U);
+        out.put16(2U + identity + 4U);
+        out.put16(identity);
+        out.put(name, sizeof(name));
+        for (usize i = sizeof(name); i < identity; ++i)
+        {
+            out.put(static_cast<u8>(i < 48U ? 0U : i));
+        }
+        out.put16(0x0001U); // obfuscated_ticket_age
+        out.put16(0x0203U);
+        out.put16(1U + 32U); // binders: one HMAC-SHA256
+        out.put(32U);
+        for (u8 i = 0U; i < 32U; ++i)
+        {
+            out.put(static_cast<u8>(0xB0U + i));
+        }
+    }
     out.patch16(extensions);
     out.patch24(message);
     out.patch16(record);
@@ -291,6 +381,15 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     sink.add("server-client-hello", hello.bytes, hello.size);
     hello.bytes[1] = 7U;
     sink.add("server-client-hello-in-7-byte-pieces", hello.bytes, hello.size);
+    Writer resuming;
+    client_hello(resuming, 0U, 0U, true);
+    sink.add("server-client-hello-with-a-forged-ticket", resuming.bytes, resuming.size);
+
+    // Tickets a client's store hands out: no serialized session, and one that ends early.
+    const u8 not_a_session[] = {3U, 0U, 0x30U, 0x82U, 0x01U, 0x00U, 0x02U, 0x01U, 0x01U};
+    sink.add("client-ticket-not-a-session", not_a_session, sizeof(not_a_session));
+    const u8 empty_ticket[] = {3U, 0U};
+    sink.add("client-empty-ticket", empty_ticket, sizeof(empty_ticket));
 
     Writer answer;
     server_hello(answer);

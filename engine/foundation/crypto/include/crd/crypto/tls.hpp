@@ -32,6 +32,10 @@
 //   closure     a session never sends user_canceled (the provider has no warning alert to send, and a handshake is
 //               abandoned with clear()); a peer's user_canceled is ignored and its close_notify, during the handshake
 //               too, closes the session.
+//   tickets     a server issues one ticket with every connection, resumed ones included, sealed under its ticket key;
+//               a client hands the tickets it receives to the caller's ticket store and offers one, at most once, only
+//               to a connection of the context that received it. Resumption is psk_dhe_ke (a fresh key share, the
+//               hybrid group included); 0-RTT is off.
 //   threads     a context is read-only after init() and serves sessions on any thread; a session is used by one
 //               thread at a time. Sessions copy what they need, so a context may be cleared while they live.
 //   allocation  contexts, credentials and sessions allocate inside the provider at init() and while records flow.
@@ -60,6 +64,12 @@ inline constexpr u8    kTlsAlertUserCanceled = 90U;    // RFC 9846 section 6.1
 // be configured for: one of data, its KeyUpdate and one alert.
 inline constexpr u64 kTlsMaxKeyUpdates       = (u64{1} << 48U) - 1U;
 inline constexpr u64 kTlsMinKeyUpdateRecords = 3U;
+
+// A server's ticket protection key, and its tickets' lifetime: two days unless configured, at most seven (RFC 9846
+// section 4.6.1).
+inline constexpr usize kTlsTicketKeyBytes        = 32U;
+inline constexpr u32   kTlsDefaultTicketLifetime = 172800U;
+inline constexpr u32   kTlsMaxTicketLifetime     = 604800U;
 
 enum class TlsRole : u8
 {
@@ -136,6 +146,38 @@ private:
     KeyId                     m_key_id;
 };
 
+// What a client's tickets are bound to: the SHA-256 of its role, the server name (in lower case), its own key, its
+// pins and the signature algorithms it accepts. A ticket resumes only under the binding that received it.
+struct TlsBinding
+{
+    u8 bytes[32] = {};
+
+    friend bool operator==(const TlsBinding&, const TlsBinding&) = default;
+};
+
+// A client's tickets (decision S9), kept by the caller: the session hands it each ticket it receives and takes one
+// when it starts. Tickets never leave the store they were kept in, so the caller keeps one store per correlation
+// domain and connections meant to be uncorrelated share none (T15). A ticket is a secret (its resumption key): the
+// store zeroes the tickets it drops and the bytes it handed out.
+class TlsTicketStore
+{
+public:
+    TlsTicketStore()                                 = default;
+    TlsTicketStore(const TlsTicketStore&)            = delete;
+    TlsTicketStore& operator=(const TlsTicketStore&) = delete;
+    TlsTicketStore(TlsTicketStore&&)                 = delete;
+    TlsTicketStore& operator=(TlsTicketStore&&)      = delete;
+    virtual ~TlsTicketStore()                        = default;
+
+    // Keeps a copy of `ticket`, received under `binding` (called from TlsSession::read()); a store without room drops a
+    // ticket, the oldest or this one.
+    virtual void keep(const TlsBinding& binding, cont::ConstSpan<u8> ticket) noexcept = 0;
+
+    // Removes a ticket kept under `binding` and returns its bytes, valid until the store's next call; empty when it
+    // holds none. A ticket is taken once: a client never offers one twice (T07).
+    [[nodiscard]] virtual cont::ConstSpan<u8> take(const TlsBinding& binding) noexcept = 0;
+};
+
 struct TlsConfig
 {
     TlsRole                      role = TlsRole::Client;
@@ -149,6 +191,11 @@ struct TlsConfig
                                  // it: 0 for the negotiated AEAD's usage limit, else at least kTlsMinKeyUpdateRecords
                                  // (lowered to that limit when above it)
     u64 max_key_updates    = 0U; // the session's own key updates: 0 for kTlsMaxKeyUpdates, else 1 to that bound
+    cont::ConstSpan<u8> ticket_key;          // a server's ticket key (kTlsTicketKeyBytes): servers sharing it resume
+                                             // each other's tickets; empty: init() draws one only this context opens
+    cont::ConstSpan<u8> previous_ticket_key; // a server's key before its last rotation: opens tickets, seals none
+    u32 ticket_lifetime = 0U; // a server's tickets' lifetime in seconds: 0 for kTlsDefaultTicketLifetime, at most
+                              // kTlsMaxTicketLifetime
 };
 
 // The settings a session copies from its context.
@@ -163,6 +210,10 @@ struct TlsSettings
     u32         name_bytes = 0U;
     u64         key_update_records = 0U;
     u64         max_key_updates    = kTlsMaxKeyUpdates;
+    TlsBinding  binding;
+    u8          ticket_keys[2][kTlsTicketKeyBytes] = {}; // a server's: the sealing key, then the previous one
+    u8          ticket_names[2][16]                = {}; // the keys' public names, which lead their tickets
+    u32         ticket_key_count                   = 0U;
 };
 
 struct ProviderTlsContext; // the provider's context object, defined only inside crd-crypto
@@ -210,8 +261,10 @@ public:
     TlsSession& operator=(TlsSession&&)      = delete;
 
     // A new session of `context`'s role, replacing any previous one. A client's first flight (its ClientHello) is
-    // ready to take() when init() returns.
-    [[nodiscard]] TlsError init(const TlsContext& context) noexcept;
+    // ready to take() when init() returns. A client with `tickets` offers a ticket it takes from them (when one parses
+    // and belongs to this context's binding) and keeps the tickets its server issues there; without a store it offers
+    // none and ignores NewSessionTicket. BadConfig for a server with a store.
+    [[nodiscard]] TlsError init(const TlsContext& context, TlsTicketStore* tickets = nullptr) noexcept;
     void                   clear() noexcept;
 
     [[nodiscard]] TlsState state() const noexcept { return m_state; }
@@ -252,6 +305,9 @@ public:
     [[nodiscard]] KeyId       peer_key() const noexcept { return m_peer_key; }
     [[nodiscard]] bool        hello_retry() const noexcept { return m_hello_retry; }
 
+    // After the handshake: whether it resumed a ticket (the peer key is then the one the ticket's handshake proved).
+    [[nodiscard]] bool resumed() const noexcept { return m_resumed; }
+
     // The key updates sent and received, the records (data and alerts) protected so far under the current sending
     // key and the records after which the session updates it (0 before the handshake ends).
     [[nodiscard]] u64 key_updates_sent() const noexcept { return m_updates_sent; }
@@ -269,9 +325,11 @@ private:
     [[nodiscard]] TlsError fail(TlsError error) noexcept;
     [[nodiscard]] TlsError rekey(bool request_peer) noexcept;
     [[nodiscard]] TlsError close_at_bound() noexcept;
+    void                   flush() noexcept;
     [[nodiscard]] bool     flush_key_update() noexcept;
 
     ProviderTlsSession* m_session = nullptr;
+    TlsTicketStore*     m_tickets = nullptr;
     TlsSettings         m_settings;
     TlsState            m_state = TlsState::Idle;
     AlgorithmId         m_group{};
@@ -282,6 +340,7 @@ private:
     u64                 m_updates_sent       = 0U;
     u64                 m_updates_received   = 0U;
     bool                m_hello_retry        = false;
+    bool                m_resumed            = false;
     bool                m_refused            = false; // the verify or name check refused the peer
     bool                m_update_requested   = false; // a KeyUpdate asked the peer for one, not answered yet
     TlsAlert            m_alert_sent;

@@ -17,8 +17,10 @@ target_link_libraries(crd-crypto-tests PRIVATE
     crd-platform
     Catch2::Catch2WithMain
     # The provider itself, for the ML-KEM encapsulation vectors only: their known answers fix the randomness m,
-    # which only the provider's deterministic encapsulation takes (test_kem_prf.cpp).
+    # which only the provider's deterministic encapsulation takes (test_kem_prf.cpp); its TLS stack, to read back the
+    # lifetime of a ticket a client keeps (test_tls.cpp).
     crypto
+    ssl
 )
 
 # The pinned Wycheproof vectors are read from the package cache at run time (cmake/pins.json: wycheproof).
