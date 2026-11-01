@@ -303,8 +303,9 @@ destroyed and are read-only, so shared across threads, after `init`. `provider_a
 - **P5. Symbols.** The package exports AWS-LC's libcrypto with its own symbol names, so a consumer that also links
   OpenSSL or BoringSSL sees duplicate symbols; prefixing them (`BORINGSSL_PREFIX`) is a named remainder of NET.2.
 - **P6. The hybrid groups** (X25519MLKEM768, SecP256r1MLKEM768, SecP384r1MLKEM1024) run inside the provider's TLS
-  stack; `provider_algorithms()` lists them only once the handshake slice proves them against the TLS stack's own
-  key shares, so no generation can enable them earlier.
+  stack ([TLS sessions](#tls-sessions)); `provider_algorithms()` lists them since 2026-11-01, when each key share was
+  read off the wire against the groups' layout with the provider interface's own primitives and every group
+  interoperated with OpenSSL 3.5 both ways, so no generation could enable them earlier.
 - **P7. ML-KEM** (FIPS 203; `crypto.ml-kem`, class `0x07`). Encapsulation keys and ciphertexts as FIPS 203 encodes
   them and 32-byte secrets; the private input is the 64-byte seed d || z (`KemKey::from_seed`, through the provider's
   deterministic key generation, its only route from a seed), never the expanded decapsulation key, so a malformed
@@ -362,6 +363,51 @@ record layers, never by trust:
   "Recommended" value recorded ([registers](registers.md#recommended-column)); a discouraged ("D") codepoint is never
   accepted. ML-DSA certificates sign with the `mldsa44`/`mldsa65`/`mldsa87` schemes (`tls.ml-dsa`); NET.2 decides
   the classical companion (a dual certificate, or a composite scheme once one is registered).
+
+<a id="tls-sessions"></a>
+### TLS sessions
+
+[tls.hpp](../../engine/foundation/crypto/include/crd/crypto/tls.hpp) runs TLS 1.3 over the provider's TLS stack
+(AWS-LC's libssl, linked privately into `crd-crypto` beside libcrypto; NET.2, 2026-11-01). Decisions (numbered for the
+tests):
+
+- **S1. Sans-I/O.** A `TlsSession` is fed the bytes its transport received (`receive`) and hands back the bytes to send
+  (`pending`, `take`); it never sees a socket, so TCP, QUIC's crypto stream, NET-SIM's virtual sockets and a session in
+  the same process drive it alike. At most `kTlsMaxBufferedBytes` (64 KiB) of received and of outgoing bytes wait in a
+  session; more is `Full` with nothing taken (bounded admission's per-session share).
+- **S2. Contexts and sessions.** A `TlsContext` is built once from a `TlsConfig` and is read-only, serving sessions on
+  any thread; each session copies the settings its callbacks read (pins, accepted signature algorithms, the server
+  name), so clearing a context never strands a live session.
+- **S3. Algorithms by identifier.** Groups, the peer's signature algorithms and AEADs are `AlgorithmId`s the provider
+  implements, checked by class before the provider sees them and mapped to the register's TLS codepoints. The
+  server's group order decides; a client shares its first group and its first group of the other kind (post-quantum
+  or classical), and a server whose preferred group has no share sends a HelloRetryRequest, so a hybrid group both
+  sides hold is never traded for a classical one. The AEAD is the client's first one the server accepts, or
+  ChaCha20-Poly1305 for a server without AES instructions (the provider's rule); `tls_aead_preference()` orders a
+  client's AEADs by its CPU.
+- **S4. Pinned keys, not authorities.** A peer is accepted when the SHA-256 of its certificate's public key in the
+  provider interface's encoding (`key_id_of`) is pinned and its algorithm accepted; the certificate is the key's
+  carrier, and the handshake's CertificateVerify proves possession. A `TlsCredential` issues the self-signed carrier
+  for a `SigningKey` (X.509 v3, the serial from the key identifier, the name as common name and DNS subjectAltName,
+  valid from the epoch with no expiry: trust and rotation come from the pins). A client always authenticates its
+  server; a server with pins asks every client for a credential (mutual authentication). AWS-LC implements no RFC
+  7250 raw public keys, so the carrier certificate stands in for them on the wire.
+- **S5. Names and alerts.** A client names the server it expects (`server_name`); a server with a name refuses any
+  other with `general_error`, and refuses an unpinned client key with `general_error` too, so an unauthenticated
+  client learns neither which names nor which keys exist. Every alert sent and received is reported, as is a
+  HelloRetryRequest (read from the ServerHello's random).
+- **S6. This slice's limits.** Tickets, resumption and 0-RTT are off (every connection runs a full handshake), and
+  `close()` is for an established session (a handshake is abandoned with `clear()`); resumption, address-validation
+  tokens, certificate compression, ECH, key-update scheduling against the usage limits and the QUIC integration are
+  NET.2's next slices on this same interface.
+
+Evidence: `test_tls.cpp` (every group and signature algorithm, each key share read off the wire and checked against
+its group's layout with the provider's own X25519, ECDH and ML-KEM modulus check, HelloRetryRequest, pins both ways,
+names, alerts, bounds, close_notify, adversarial records, every configuration refusal, one context on four threads),
+the `crd-fuzz-crypto-tls` target, and `tls_interop.py` against the pinned OpenSSL 3.5 (`CRD_BUILD_TLS_VS_OPENSSL`,
+Linux): every hybrid group both ways, a HelloRetryRequest both ways, hybrid kept beside a classical share both ways,
+mutual authentication, an unpinned key refused and a TLS 1.2 client refused with `protocol_version`, with the key
+shares checked on the wire by the driver.
 
 <a id="negotiation"></a>
 ## Version and extension negotiation
