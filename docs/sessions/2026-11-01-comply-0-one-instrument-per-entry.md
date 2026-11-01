@@ -61,7 +61,7 @@ Each primary on mevzuat.gov.tr was found by a search restricted to that host and
 site serves: its title, and its Official Gazette of publication (the day and issue above) from the document's closing
 table or, for a text never amended, the cited page. The decision's address is the gazette's own index of
 25 December 2025. A new entry is not read: its obligation is the one its composite carried,
-from the composite's source, `verified` false, until the document is read with `read`. The platform entries
+from the composite's source, `verified` false, until the document is read with `read`; the effective days of the entries outside Turkey (the EUIPO regulation, the DPA 2018, the Chinese law and regulations) are the days commonly cited, confirmed when each is read. The platform entries
 (Steam, Epic) stay single: a store's distribution agreement is a private contract signed in its partner portal, and
 the public instrument they cite is the store's documentation.
 
