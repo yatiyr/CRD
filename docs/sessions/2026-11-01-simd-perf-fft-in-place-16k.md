@@ -59,7 +59,10 @@ stream intermediates: deep-split-3 (32·32·16) 85,700 cycles, memory bound 51%,
   every repetition.
 - The codelets regenerated on WSL, the reference host (`gen_fft_batched.py hybrid2 --check`), and their manifest
   entries refreshed; `gen_fft_level_plans.py --check`; locally the plan, repository and Allman checks.
-- The machine ran 0.70 h in one start and is stopped.
+- A follow-up fix branches pass 1 on whether the work buffer is the caller's (a 2K or 4K buffer off a line had run
+  the out-of-place edition with its two buffers the same, which the shared schedule made safe but its contract did
+  not cover); the fft tests passed again, 95 of 95.
+- The machine ran 0.70 h in one start and 0.06 h in a second for the fix's tests, and is stopped.
 
 ## Left
 
