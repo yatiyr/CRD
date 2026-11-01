@@ -3277,7 +3277,10 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   so tests drive the demotion on a sound CPU. Families with checks: `containers.crc` (CRC-32 and CRC-32C of the
   checksum tests' 1025- and 63-byte streams, unaligned), `containers.hash` (XXH3-64 of the 1025 bytes),
   `math.float-convert` (every routine over 45 elements, the conversion tests' special patterns, against the scalar
-  converts evaluated at compile time) and `math.scalar` (each transcendental at two arguments against fixed bits).
+  converts evaluated at compile time), `math.scalar` (each transcendental at two arguments against fixed bits),
+  `geometry.primitives` (every batch routine over three bundles and the hull scan over 37 vertices) and
+  `geometry.mesh` (a two-leaf BVH raycast and a culled miss), the geometry answers closed forms of exact dyadic inputs
+  evaluated at compile time.
 
 ## Existing programme ownership after DIAG
 
