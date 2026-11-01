@@ -66,7 +66,7 @@ target_link_libraries(smoke_window PRIVATE
     crd-core
     crd-log
     crd-containers
-    crd-platform
+    crd-platform-window
 )
 crd_enable_default_pch(smoke_window)
 

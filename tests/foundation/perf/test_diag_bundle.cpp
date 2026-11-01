@@ -656,23 +656,31 @@ TEST_CASE("retention keeps only the newest bundles", "[perf][diag][bundle]")
         std::snprintf(name, sizeof(name), "bundle_%02d.cdb", i);
         cont::String path{(dir / name).string().c_str()};
         REQUIRE(write_bundle_atomic(path.c_str(), span_of(buf.data(), buf.size())));
-        // Strictly increasing mtimes (1s apart) so "oldest" is unambiguous on any filesystem.
+        // Write times one millisecond apart within one second, newest first by name, so only an ordering by time
+        // to the file system's resolution (not seconds, not names) finds the oldest.
         std::error_code ec;
-        fs::last_write_time(dir / name, fs::file_time_type{} + std::chrono::seconds(1'000'000 + i), ec);
+        const auto at = std::chrono::sys_seconds{std::chrono::seconds{1767225600}} +
+                        std::chrono::milliseconds{n_sections - 1 - i};
+        fs::last_write_time(dir / name, std::chrono::clock_cast<std::chrono::file_clock>(at), ec);
+        REQUIRE_FALSE(ec);
     }
+    // A directory and a file of another name are never counted or removed.
+    std::error_code ec;
+    fs::create_directories(dir / "bundle_dir.cdb", ec);
+    const cont::String notes{(dir / "notes.txt").string().c_str()};
+    REQUIRE(write_bundle_atomic(notes.c_str(), span_of(buf.data(), buf.size())));
 
     cont::String dirs{dir.string().c_str()};
     const crd::i64 deleted = enforce_bundle_retention(dirs.c_str(), "bundle_", ".cdb", 10U);
     CHECK(deleted == 3);
 
-    std::error_code ec;
-    // The three oldest (00,01,02) are gone; 03..12 remain.
+    // The three oldest (12, 11, 10) are gone; 00..09 remain.
     for (int i = 0; i < n_sections; ++i)
     {
         char name[32];
         std::snprintf(name, sizeof(name), "bundle_%02d.cdb", i);
         const bool present = fs::exists(dir / name, ec);
-        if (i < 3)
+        if (i >= n_sections - 3)
         {
             CHECK_FALSE(present);
         }
@@ -681,6 +689,63 @@ TEST_CASE("retention keeps only the newest bundles", "[perf][diag][bundle]")
             CHECK(present);
         }
     }
+    CHECK(fs::is_directory(dir / "bundle_dir.cdb", ec));
+    CHECK(fs::exists(dir / "notes.txt", ec));
+    CHECK(enforce_bundle_retention(dirs.c_str(), "bundle_", ".cdb", 10U) == 0);
 
     fs::remove_all(dir, ec);
+}
+
+TEST_CASE("bundle files take UTF-8 paths and refuse null, empty and missing ones", "[perf][diag][bundle]")
+{
+    // The scratch root is ASCII; the names below it are UTF-8, char8_t literals read as bytes.
+    const auto utf8 = [](const char8_t* text)
+    {
+        return reinterpret_cast<const char*>(text);
+    };
+    const fs::path root = fresh_dir("utf8");
+    const fs::path dir = root / fs::path{u8"çağrı_ışık"};
+    const fs::path out = dir / fs::path{u8"oturum_ş.cdb"};
+    std::error_code ec;
+    REQUIRE(fs::create_directories(dir, ec));
+    cont::String dir_utf8{root.string().c_str()};
+    dir_utf8.append("/");
+    dir_utf8.append(utf8(u8"çağrı_ışık"));
+    cont::String out_utf8{dir_utf8.c_str()};
+    out_utf8.append("/");
+    out_utf8.append(utf8(u8"oturum_ş.cdb"));
+    fs::path tmp = out;
+    tmp += ".tmp";
+
+    const cont::Array<crd::u8> a = pattern(9, 64);
+    BundleWriter               w;
+    w.add_section(BundleSectionTag::Manifest, span_of(a.data(), a.size()));
+    const cont::Array<crd::u8> buf = w.finish();
+
+    REQUIRE(write_bundle_atomic(out_utf8.c_str(), span_of(buf.data(), buf.size())));
+    CHECK(fs::file_size(out, ec) == buf.size());
+    CHECK_FALSE(fs::exists(tmp, ec));
+    CHECK(bundle_directory_exists(dir_utf8.c_str()));
+    CHECK(bundle_path_exists(out_utf8.c_str()));
+    CHECK(bundle_path_exists(dir_utf8.c_str()));
+    CHECK_FALSE(bundle_directory_exists(out_utf8.c_str()));
+    CHECK(enforce_bundle_retention(dir_utf8.c_str(), "oturum_", ".cdb", 0U) == 1);
+    CHECK_FALSE(fs::exists(out, ec));
+    CHECK_FALSE(bundle_path_exists(out_utf8.c_str()));
+
+    // A publish into a missing directory fails and leaves nothing; null and empty paths are refused.
+    const cont::String missing_dir{(root / "missing").string().c_str()};
+    const cont::String missing{(root / "missing" / "session.cdb").string().c_str()};
+    CHECK_FALSE(write_bundle_atomic(missing.c_str(), span_of(buf.data(), buf.size())));
+    CHECK_FALSE(fs::exists(root / "missing", ec));
+    CHECK_FALSE(write_bundle_atomic(nullptr, span_of(buf.data(), buf.size())));
+    CHECK_FALSE(write_bundle_atomic("", span_of(buf.data(), buf.size())));
+    CHECK_FALSE(bundle_directory_exists(nullptr));
+    CHECK_FALSE(bundle_directory_exists(""));
+    CHECK_FALSE(bundle_path_exists(nullptr));
+    CHECK_FALSE(bundle_path_exists(""));
+    CHECK(enforce_bundle_retention(nullptr, "oturum_", ".cdb", 0U) < 0);
+    CHECK(enforce_bundle_retention(missing_dir.c_str(), "oturum_", ".cdb", 0U) < 0);
+
+    fs::remove_all(root, ec);
 }

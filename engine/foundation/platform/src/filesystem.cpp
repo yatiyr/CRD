@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 
@@ -283,17 +284,52 @@ u64 file_size(const Path& path) noexcept
     return ec ? 0ULL : static_cast<u64>(size);
 }
 
-i64 last_modified_unix_seconds(const Path& path) noexcept
+namespace
 {
-    std::error_code ec;
-    const auto tp = stdfs::last_write_time(to_native_path(path), ec);
-    if (ec)
+// The last write time on the system clock, in `Duration` units since the Unix epoch, saturated where they do not fit
+// (nanoseconds span 1677 to 2262; a file clock reaches further). clock_cast is exact (through file_clock::to_sys on
+// libstdc++, to_utc on the Microsoft library), where shifting by the two clocks' now() (the earlier form) moved each
+// reading by the microseconds between the two calls, so one file could read as two different seconds. The Microsoft
+// library's UTC step reads its leap-second table, which can allocate, so a throw reads as an unreadable time.
+template <typename Duration>
+[[nodiscard]] i64 last_write_since_epoch(const Path& path) noexcept
+{
+    try
+    {
+        std::error_code ec;
+        const stdfs::file_time_type tp = stdfs::last_write_time(to_native_path(path), ec);
+        if (ec)
+        {
+            return 0;
+        }
+        const auto written = std::chrono::clock_cast<std::chrono::system_clock>(tp);
+        const auto whole = std::chrono::floor<std::chrono::seconds>(written);
+        constexpr i64 kPerSecond = Duration{std::chrono::seconds{1}}.count();
+        constexpr i64 kMax = std::numeric_limits<i64>::max();
+        constexpr i64 kMin = std::numeric_limits<i64>::min();
+        const i64 seconds = static_cast<i64>(whole.time_since_epoch().count());
+        const i64 part = static_cast<i64>(std::chrono::floor<Duration>(written - whole).count()); // [0, kPerSecond)
+        if (seconds > (kMax - part) / kPerSecond)
+        {
+            return kMax;
+        }
+        return seconds < kMin / kPerSecond ? kMin : seconds * kPerSecond + part;
+    }
+    catch (...)
     {
         return 0;
     }
-    const auto sys = std::chrono::time_point_cast<std::chrono::seconds>(tp - decltype(tp)::clock::now() +
-                                                                        std::chrono::system_clock::now());
-    return static_cast<i64>(sys.time_since_epoch().count());
+}
+} // namespace
+
+i64 last_modified_unix_seconds(const Path& path) noexcept
+{
+    return last_write_since_epoch<std::chrono::seconds>(path);
+}
+
+i64 last_modified_unix_ns(const Path& path) noexcept
+{
+    return last_write_since_epoch<std::chrono::nanoseconds>(path);
 }
 
 bool read_file_text(const Path& path, containers::String& out) noexcept

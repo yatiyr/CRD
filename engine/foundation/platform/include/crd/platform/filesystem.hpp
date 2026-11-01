@@ -48,7 +48,11 @@ private:
 [[nodiscard]] bool is_file(const Path& path) noexcept;
 [[nodiscard]] bool is_directory(const Path& path) noexcept;
 [[nodiscard]] u64 file_size(const Path& path) noexcept;
+// The last write time since the Unix epoch, converted exactly from the file system's clock (0 when unreadable). The
+// nanosecond form keeps the file system's own resolution (100 ns on NTFS, 1 ns on ext4), so files written within one
+// second still order by age; a time outside its range (1677 to 2262) saturates.
 [[nodiscard]] i64 last_modified_unix_seconds(const Path& path) noexcept;
+[[nodiscard]] i64 last_modified_unix_ns(const Path& path) noexcept;
 
 [[nodiscard]] bool read_file_text(const Path& path, containers::String& out) noexcept;
 [[nodiscard]] bool read_file_binary(const Path& path, containers::Array<u8>& out) noexcept;

@@ -3,6 +3,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <filesystem>
+#include <limits>
+#include <ratio>
 
 namespace fs = crd::platform::fs;
 
@@ -50,6 +53,7 @@ TEST_CASE("filesystem: text roundtrip + metadata", "[platform][fs]")
     REQUIRE(fs::is_file(file));
     REQUIRE(fs::file_size(file) == 11U);
     REQUIRE(fs::last_modified_unix_seconds(file) > 0);
+    REQUIRE(fs::last_modified_unix_ns(file) / 1000000000 == fs::last_modified_unix_seconds(file));
 
     crd::containers::String text;
     REQUIRE(fs::read_file_text(file, text));
@@ -112,6 +116,55 @@ TEST_CASE("filesystem: list_directory sees created entries", "[platform][fs]")
     }
     REQUIRE(saw_a);
     REQUIRE(saw_b);
+
+    REQUIRE(fs::remove_all(root));
+}
+
+TEST_CASE("filesystem: the last write time converts exactly and orders files within one second", "[platform][fs]")
+{
+    using namespace std::chrono;
+    const auto root = make_temp_root();
+    REQUIRE(fs::create_directories(root));
+    const auto older = root / "older.bin";
+    const auto newer = root / "newer.bin";
+    REQUIRE(fs::write_file_text(older, "o"));
+    REQUIRE(fs::write_file_text(newer, "n"));
+
+    // 2026-01-01T00:00:00.1234567Z, a whole number of NTFS's 100 ns ticks, and one millisecond later.
+    constexpr crd::i64 kUnixNs = 1767225600123456700;
+    const sys_time<nanoseconds> at{nanoseconds{kUnixNs}};
+    const auto stamp = [](const fs::Path& path, sys_time<nanoseconds> time)
+    {
+        std::error_code ec;
+        // The Microsoft file clock counts 100 ns ticks: nanoseconds narrow to it only by an explicit cast (exact for
+        // the times below), where libstdc++'s nanosecond file clock takes them as they are.
+        const auto file_time = time_point_cast<std::filesystem::file_time_type::duration>(clock_cast<file_clock>(time));
+        std::filesystem::last_write_time(std::filesystem::path{path.native().c_str()}, file_time, ec);
+        return !ec;
+    };
+    REQUIRE(stamp(older, at));
+    REQUIRE(stamp(newer, at + milliseconds{1}));
+
+    CHECK(fs::last_modified_unix_ns(older) == kUnixNs);
+    CHECK(fs::last_modified_unix_ns(newer) == kUnixNs + 1000000);
+    CHECK(fs::last_modified_unix_seconds(older) == 1767225600);
+    CHECK(fs::last_modified_unix_seconds(newer) == 1767225600);
+    CHECK(fs::last_modified_unix_ns(root / "missing.bin") == 0);
+    CHECK(fs::last_modified_unix_seconds(root / "missing.bin") == 0);
+
+    // A file clock coarser than nanoseconds (the Microsoft library's 100 ns ticks from 1601) reaches past 2262, where
+    // the nanosecond reading saturates and the seconds stay exact. libstdc++'s file clock counts nanoseconds itself, so
+    // it holds no such time.
+    if constexpr (std::ratio_greater_v<std::filesystem::file_time_type::period, std::nano>)
+    {
+        constexpr crd::i64 k2300 = 10413792000; // 2300-01-01T00:00:00Z
+        const auto far = clock_cast<file_clock>(sys_seconds{seconds{k2300}});
+        std::error_code ec;
+        std::filesystem::last_write_time(std::filesystem::path{older.native().c_str()}, far, ec);
+        REQUIRE_FALSE(ec);
+        CHECK(fs::last_modified_unix_seconds(older) == k2300);
+        CHECK(fs::last_modified_unix_ns(older) == std::numeric_limits<crd::i64>::max());
+    }
 
     REQUIRE(fs::remove_all(root));
 }

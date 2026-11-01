@@ -186,6 +186,22 @@
       "api": [
         "engine/foundation/platform/include/crd/platform/filesystem.hpp",
         "engine/foundation/platform/include/crd/platform/async_file.hpp"
+      ],
+      "signatures": [
+        {
+          "regex": "\\b(?:FindFirstFile(?:Ex)?[AW]?|GetFileAttributes(?:Ex)?[AW]?|opendir)\\s*\\(",
+          "what": "a directory walk or a file attribute read by hand"
+        }
+      ],
+      "allowed": [
+        {
+          "path": "engine/foundation/core/src/crash.cpp",
+          "why": "The crash handler's install confirms its output directory with the OS's own call: crd-core sits below crd-platform, and the crash-time writer uses only calls safe in a crashed process."
+        },
+        {
+          "path": "engine/foundation/core/src/os_resource_probe.cpp",
+          "why": "Counts the process's open descriptors through /proc/self/fd to judge an OS object's presence, a process probe rather than file access; crd-core sits below crd-platform."
+        }
       ]
     },
     {
@@ -230,13 +246,23 @@
           "what": "a durable replace or flush of a file"
         }
       ],
-      "pending": [
+      "decision": "crd-platform owns durable files with the rest of file I/O. crd-perf's bundle publish (write_bundle_atomic) is its atomic replace since 2026-11-01, when crd-platform joined the relocatable package (decision 9: its window backend split into crd-platform-window)."
+    },
+    {
+      "id": "platform.windowing",
+      "summary": "The window backend: the GLFW runtime (PlatformContext) and OS windows that feed crd-platform's input snapshot.",
+      "owner": "platform-window",
+      "api": [
+        "engine/foundation/platform-window/include/crd/platform/context.hpp",
+        "engine/foundation/platform-window/include/crd/platform/window.hpp"
+      ],
+      "signatures": [
         {
-          "path": "engine/foundation/perf/src/bundle.cpp",
-          "row": "OWN.1"
+          "regex": "\\bglfw(?:Init|Terminate|CreateWindow)\\s*\\(",
+          "what": "the window backend's runtime or a window created by hand"
         }
       ],
-      "decision": "crd-platform owns durable files with the rest of file I/O. crd-perf's bundle publish (write_bundle_atomic) moves onto it when crd-perf can link crd-platform: crd-perf is in the relocatable package and crd-platform is not yet."
+      "decision": "Split from crd-platform on 2026-11-01 (decision 9) so the OS boundary links no window library and joins the relocatable package; headers and namespace are unchanged."
     },
     {
       "id": "log.logging",

@@ -106,9 +106,10 @@ libraries). It passed on MSVC 19.51 (Ninja, `win-debug` profile) and GCC 13.3 (`
 Amended 2026-10-12 (DIAG.11a, [session](../sessions/2026-10-12-diag-11a-installed-consumer.md)): the package is no
 longer `core` alone. It exports the engine's diagnostic host and its closure, the family an external application needs
 to run, fail and be investigated: `Cerid::core`, `units`, `time`, `vm`, `log`, `containers`, `memory`, `jobs`,
-`toml`, `perf`, plus `math` and the interface target `simd-flags` (the baseline ISA, `CRD_SIMD_TARGET` and the ADR-0063
-floating-point options every consumer of the math headers must compile with). Every module's include directories are
-`$<BUILD_INTERFACE:...>`, so the installed targets carry only `<prefix>/include`.
+`toml`, `perf` (with `compression` and `platform` since 2026-11-01, below), plus `math` and the interface target
+`simd-flags` (the baseline ISA, `CRD_SIMD_TARGET` and the ADR-0063 floating-point options every consumer of the math
+headers must compile with). Every module's include directories are `$<BUILD_INTERFACE:...>`, so the installed targets
+carry only `<prefix>/include`.
 
 - Include-only edges are declared where the package needs them: `crd_package_library(... INCLUDE_ONLY <module>)`.
   The units headers include the header-only `crd/math` transcendental functions (no link edge, which would be a cycle)
@@ -151,6 +152,12 @@ floating-point options every consumer of the math headers must compile with). Ev
   archive per dependency under zstd's own platform name (`libzstd.a`, `zstd_static.lib`), and the application's
   `codecs` route round-trips DEFLATE and a zstd frame from the moved prefix; the capture example requires its flight
   record stored compressed and decoded to its size.
+- Amended 2026-11-01 ([session](../sessions/2026-11-01-own-bundle-files-on-platform.md), OWN.1): crd-perf publishes
+  its bundles, keeps their retention and checks their paths through crd-platform's files, so the family gains
+  `Cerid::platform`. Its window backend moved into crd-platform-window first (GLFW stays out of the package; an
+  exported crd-platform that still linked GLFW would fail the install, which names the target outside the export
+  set). The proof checks its archive and headers like every member's; the deliberate failure and the capture example
+  publish their bundles through it from the moved prefix.
 
 ## Not in scope
 

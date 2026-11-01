@@ -1,6 +1,6 @@
 // crd-perf -- cerid-diagnostics/1 post-mortem bundle container + writer (DIAG.5d(b)).
 // See bundle.hpp for the format and rationale. This TU packages bytes handed to it; it
-// captures no live process state and depends on no logging (crd-perf does not link crd-log).
+// captures no live process state and logs nothing. Its files go through crd-platform (OWN.1).
 
 #include <crd/perf/bundle.hpp>
 
@@ -8,30 +8,18 @@
 #include <crd/containers/checksum.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/perf/diagnostics.hpp> // diagnostic_now_ns(), kDiagnosticSchemaVersion
+#include <crd/platform/durable_file.hpp>
+#include <crd/platform/filesystem.hpp>
 
 #include <algorithm>
 #include <cstddef>
-#include <cstdio>
 #include <cstring>
-
-#if defined(_WIN32)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <io.h>      // _fileno, _get_osfhandle
-#include <windows.h> // FlushFileBuffers, MoveFileExA, FindFirstFileA
-#else
-#include <dirent.h>
-#include <sys/stat.h>
-#include <unistd.h> // fsync
-#endif
+#include <utility>
 
 namespace crd::perf
 {
 namespace cont = crd::containers;
+namespace fs = crd::platform::fs;
 
 namespace
 {
@@ -52,35 +40,17 @@ void append_bytes(cont::Array<crd::u8>& a, const void* src, crd::usize n) noexce
     std::memcpy(a.data() + old, src, n);
 }
 
-bool str_starts_with(const char* s, const char* pfx) noexcept
+// The last segment of a generic (forward-slash) path.
+cont::StringView file_name(cont::StringView path) noexcept
 {
-    if (pfx == nullptr)
-    {
-        return true;
-    }
-    for (; *pfx != '\0'; ++s, ++pfx)
-    {
-        if (*s != *pfx)
-        {
-            return false;
-        }
-    }
-    return true;
+    const crd::usize slash = path.rfind('/');
+    return slash == cont::StringView::npos ? path : path.substr(slash + 1U);
 }
 
-bool str_ends_with(const char* s, const char* sfx) noexcept
+// Whether `name` begins with `prefix` and ends with `suffix` (a null one matches anything).
+bool name_matches(cont::StringView name, const char* prefix, const char* suffix) noexcept
 {
-    if (sfx == nullptr || *sfx == '\0')
-    {
-        return true;
-    }
-    const crd::usize ls = std::strlen(s);
-    const crd::usize lf = std::strlen(sfx);
-    if (lf > ls)
-    {
-        return false;
-    }
-    return std::memcmp(s + (ls - lf), sfx, lf) == 0;
+    return (prefix == nullptr || name.starts_with(prefix)) && (suffix == nullptr || name.ends_with(suffix));
 }
 } // namespace
 
@@ -366,174 +336,62 @@ BundleReadResult read_bundle(cont::ConstSpan<crd::u8> buf, BundleLimits limits, 
     return r;
 }
 
-// ---- Atomic publish -----------------------------------------------------
+// ---- Publish, retention and existence: crd-platform's files (OWN.1, io.durable-saves and io.files) -----------
 
 bool write_bundle_atomic(const char* path, cont::ConstSpan<crd::u8> bundle) noexcept
 {
-    if (path == nullptr)
+    if (path == nullptr || path[0] == '\0')
     {
         return false;
     }
-
-    cont::String tmp{path};
-    tmp.append(".tmp");
-
-    std::FILE* f = nullptr;
-#if defined(_MSC_VER)
-    if (fopen_s(&f, tmp.c_str(), "wb") != 0)
-    {
-        f = nullptr;
-    }
-#else
-    f = std::fopen(tmp.c_str(), "wb");
-#endif
-    if (f == nullptr)
-    {
-        return false;
-    }
-
-    bool ok = bundle.empty() || std::fwrite(bundle.data(), 1, bundle.size(), f) == bundle.size();
-    if (ok)
-    {
-        ok = std::fflush(f) == 0;
-    }
-    if (ok)
-    {
-        // Flush to stable storage BEFORE the rename, so the published file is durable.
-#if defined(_WIN32)
-        const int fd = _fileno(f);
-        if (fd >= 0)
-        {
-            // _get_osfhandle returns the OS handle as an intptr_t by contract (same as console_sink.cpp).
-            HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(fd)); // NOLINT(performance-no-int-to-ptr)
-            if (h != INVALID_HANDLE_VALUE)
-            {
-                ok = FlushFileBuffers(h) != 0;
-            }
-        }
-#else
-        const int fd = fileno(f);
-        if (fd >= 0)
-        {
-            ok = fsync(fd) == 0;
-        }
-#endif
-    }
-    std::fclose(f); // must close before renaming over the destination on Windows
-
-    if (ok)
-    {
-#if defined(_WIN32)
-        ok = MoveFileExA(tmp.c_str(), path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
-#else
-        ok = std::rename(tmp.c_str(), path) == 0;
-#endif
-    }
-
-    if (!ok)
-    {
-        std::remove(tmp.c_str()); // best-effort: never leave a stale .tmp on failure
-    }
-    return ok;
+    return fs::write_file_atomic(fs::Path{path}, bundle);
 }
-
-// ---- Retention ----------------------------------------------------------
 
 crd::i64 enforce_bundle_retention(const char* dir, const char* prefix, const char* suffix,
                                   crd::u32 max_bundles) noexcept
 {
-    if (dir == nullptr)
+    if (dir == nullptr || !fs::is_directory(fs::Path{dir}))
     {
         return -1;
     }
 
     struct Entry
     {
-        cont::String name;
-        crd::u64     mtime; // platform-local units; only relative order within this dir is used
+        fs::Path path;
+        crd::i64 mtime_ns;
     };
+    cont::Array<fs::Path> listed;
+    fs::list_directory(fs::Path{dir}, listed);
     cont::Array<Entry> entries;
-
-#if defined(_WIN32)
-    cont::String pattern{dir};
-    pattern.append("\\*");
-    WIN32_FIND_DATAA fd{};
-    HANDLE           h = FindFirstFileA(pattern.c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE)
+    for (fs::Path& path : listed)
     {
-        return -1;
+        const cont::StringView name = file_name(path.generic());
+        if (name_matches(name, prefix, suffix) && fs::is_file(path))
+        {
+            const crd::i64 mtime_ns = fs::last_modified_unix_ns(path);
+            entries.push_back(Entry{std::move(path), mtime_ns});
+        }
     }
-    do
-    {
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-        {
-            continue;
-        }
-        if (!str_starts_with(fd.cFileName, prefix) || !str_ends_with(fd.cFileName, suffix))
-        {
-            continue;
-        }
-        const crd::u64 mt = (static_cast<crd::u64>(fd.ftLastWriteTime.dwHighDateTime) << 32) |
-                            static_cast<crd::u64>(fd.ftLastWriteTime.dwLowDateTime);
-        entries.push_back(Entry{cont::String{fd.cFileName}, mt});
-    } while (FindNextFileA(h, &fd) != 0);
-    FindClose(h);
-    const char sep = '\\';
-#else
-    DIR* d = ::opendir(dir);
-    if (d == nullptr)
-    {
-        return -1;
-    }
-    for (struct dirent* e = ::readdir(d); e != nullptr; e = ::readdir(d))
-    {
-        if (!str_starts_with(e->d_name, prefix) || !str_ends_with(e->d_name, suffix))
-        {
-            continue;
-        }
-        cont::String full{dir};
-        full.append("/");
-        full.append(e->d_name);
-        struct stat st{};
-        if (::stat(full.c_str(), &st) != 0)
-        {
-            continue;
-        }
-        if (S_ISDIR(st.st_mode))
-        {
-            continue;
-        }
-        const crd::u64 mt = static_cast<crd::u64>(st.st_mtim.tv_sec) * 1000000000ULL +
-                            static_cast<crd::u64>(st.st_mtim.tv_nsec);
-        entries.push_back(Entry{cont::String{e->d_name}, mt});
-    }
-    ::closedir(d);
-    const char sep = '/';
-#endif
-
     if (entries.size() <= static_cast<crd::usize>(max_bundles))
     {
         return 0;
     }
 
-    // Oldest first (ascending mtime); ties broken by name so eviction is deterministic even
-    // when a filesystem's mtime granularity coalesces same-second writes.
+    // Oldest first, ties broken by name, so eviction is deterministic when a file system's clock gives two writes
+    // one time.
     std::sort(entries.data(), entries.data() + entries.size(), [](const Entry& a, const Entry& b) noexcept {
-        if (a.mtime != b.mtime)
+        if (a.mtime_ns != b.mtime_ns)
         {
-            return a.mtime < b.mtime;
+            return a.mtime_ns < b.mtime_ns;
         }
-        return std::strcmp(a.name.c_str(), b.name.c_str()) < 0;
+        return file_name(a.path.generic()) < file_name(b.path.generic());
     });
 
     const crd::usize to_delete = entries.size() - static_cast<crd::usize>(max_bundles);
     crd::i64         deleted   = 0;
     for (crd::usize i = 0; i < to_delete; ++i)
     {
-        cont::String full{dir};
-        full.push_back(sep);
-        full.append(entries[i].name.c_str());
-        if (std::remove(full.c_str()) == 0)
+        if (fs::remove_file(entries[i].path))
         {
             ++deleted;
         }
@@ -543,31 +401,12 @@ crd::i64 enforce_bundle_retention(const char* dir, const char* prefix, const cha
 
 bool bundle_directory_exists(const char* path) noexcept
 {
-    if (path == nullptr || path[0] == '\0')
-    {
-        return false;
-    }
-#if defined(_WIN32)
-    const DWORD attributes = GetFileAttributesA(path);
-    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0U;
-#else
-    struct stat st{};
-    return ::stat(path, &st) == 0 && S_ISDIR(st.st_mode);
-#endif
+    return path != nullptr && path[0] != '\0' && fs::is_directory(fs::Path{path});
 }
 
 bool bundle_path_exists(const char* path) noexcept
 {
-    if (path == nullptr || path[0] == '\0')
-    {
-        return false;
-    }
-#if defined(_WIN32)
-    return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
-#else
-    struct stat st{};
-    return ::stat(path, &st) == 0;
-#endif
+    return path != nullptr && path[0] != '\0' && fs::exists(fs::Path{path});
 }
 
 } // namespace crd::perf

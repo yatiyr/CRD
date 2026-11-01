@@ -260,17 +260,18 @@ struct BundleReadResult
 
 // ---- Atomic publish + retention ----
 
-// Write `bundle` to `path` atomically: bytes go to "<path>.tmp", are flushed to
-// stable storage, then renamed over `path` (replace-existing). A crash mid-write
-// leaves only the .tmp, never a half-final bundle read as whole. Returns true on
-// success (on failure the .tmp is removed best-effort).
+// Write `bundle` to `path` (UTF-8) atomically through crd-platform's durable replace (fs::write_file_atomic): bytes
+// go to "<path>.tmp", are flushed to stable storage, then renamed over `path` (replace-existing; on POSIX the
+// directory is synced after the rename). A crash mid-write leaves only the .tmp, never a half-final bundle read as
+// whole. Returns true on success (on failure the .tmp is removed best-effort). A null or empty path is refused.
 [[nodiscard]] bool write_bundle_atomic(const char*                         path,
                                        crd::containers::ConstSpan<crd::u8> bundle) noexcept;
 
-// Enforce retention in `dir`: keep the newest `max_bundles` regular files whose
+// Enforce retention in `dir` (UTF-8): keep the newest `max_bundles` regular files whose
 // name begins with `prefix` and ends with `suffix`, deleting the rest oldest-first
-// (by last-write time). Returns the number deleted, or a negative value on a
-// directory-open error. Post-mortem hygiene, not a hot path.
+// (by last-write time to the file system's resolution, ties by name). Returns the
+// number deleted, or a negative value when `dir` is not a directory. Post-mortem
+// hygiene, not a hot path.
 [[nodiscard]] crd::i64 enforce_bundle_retention(const char* dir, const char* prefix, const char* suffix,
                                                 crd::u32 max_bundles = kDefaultMaxBundles) noexcept;
 

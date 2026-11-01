@@ -13,6 +13,7 @@ target_link_libraries(crd-app
         crd-core
         crd-containers
         crd-platform
+        crd-platform-window # the application's PlatformContext and Window
         crd-jobs
         crd-perf        # DIAG.11a: an Application composes the reusable diagnostic host when one is given
 )

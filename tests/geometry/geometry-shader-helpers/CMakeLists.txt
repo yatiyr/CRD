@@ -8,6 +8,7 @@ target_link_libraries(crd-geometry-shader-helpers-tests PRIVATE
     crd-memory
     crd-math
     crd-platform
+    crd-platform-window     # headless_requested: the device cases skip on a display-less runner
     crd-geometry-primitives
     crd-geometry-shader-helpers
     crd-gpu-context         # ADR-0103: ShaderStage + IComputeContext (RET-7: the ULP dispatch runs HERE, rhi is gone)

@@ -425,9 +425,9 @@ crd_module(engine/execution/ceir-gpu engine/ceir-gpu DEPENDS ceir containers cor
 crd_module(engine/execution/chir engine/chir DEPENDS ceir containers core log memory units TESTS execution/chir
     TEST_DEPENDS ceir-cook perf platform)
 crd_module(engine/foundation/time engine/time DEPENDS core units TESTS foundation/time)
-crd_module(engine/foundation/perf engine/perf DEPENDS compression containers core jobs memory time toml
+crd_module(engine/foundation/perf engine/perf DEPENDS compression containers core jobs memory platform time toml
     TESTS foundation/perf support/diag support/fuzz
-    TEST_DEPENDS ceir ceir-cook gpu-context gpu-context-vulkan platform)
+    TEST_DEPENDS ceir ceir-cook gpu-context gpu-context-vulkan)
 crd_module(engine/foundation/memory engine/memory DEPENDS core log vm TESTS foundation/memory support/diag support/fuzz TEST_DEPENDS jobs)
 crd_module(engine/foundation/math engine/math DEPENDS core units TESTS foundation/math)
 crd_module(engine/geometry/geometry-primitives engine/geometry-primitives DEPENDS containers core math
@@ -452,10 +452,12 @@ crd_module(engine/geometry/geometry-decomposition engine/geometry-decomposition
     TESTS support/test_helpers geometry/geometry-decomposition TEST_DEPENDS perf time)
 crd_module(engine/geometry/geometry-bvh-gpu engine/geometry-bvh-gpu
     DEPENDS containers core geometry-bvh geometry-primitives gpu-context jobs math memory units
-    TESTS support/test_helpers geometry/geometry-bvh-gpu TEST_DEPENDS gpu-context-vulkan perf platform time)
+    TESTS support/test_helpers geometry/geometry-bvh-gpu
+    TEST_DEPENDS gpu-context-vulkan perf platform platform-window time)
 crd_module(engine/geometry/geometry-shader-helpers engine/geometry-shader-helpers
     DEPENDS containers core geometry-primitives math memory platform
-    TESTS support/test_helpers geometry/geometry-shader-helpers TEST_DEPENDS gpu-context gpu-context-vulkan perf)
+    TESTS support/test_helpers geometry/geometry-shader-helpers
+    TEST_DEPENDS gpu-context gpu-context-vulkan perf platform-window)
 crd_module(engine/geometry/geometry-curves engine/geometry-curves
     DEPENDS containers core geometry-primitives math memory units TESTS support/test_helpers geometry/geometry-curves
     TEST_DEPENDS perf time)
@@ -511,9 +513,13 @@ crd_module(engine/rendering/render-graph engine/render-graph
     DEPENDS ceir-gpu containers core gpu-context memory render-asset-core render-pass TESTS rendering/render-graph
     TEST_DEPENDS gpu-context-dx12 gpu-context-vulkan)
 crd_module(engine/foundation/log engine/log DEPENDS containers core TESTS foundation/log)
-crd_module(engine/foundation/platform engine/platform DEPENDS containers core jobs log memory time PACKAGES glfw
+crd_module(engine/foundation/platform engine/platform DEPENDS containers core jobs log memory time
     TESTS foundation/platform)
-crd_module(engine/foundation/app engine/app DEPENDS containers core jobs perf platform TESTS foundation/app)
+# OWN.1: the platform layer's window backend (GLFW), split from crd-platform so the OS boundary links no window library
+crd_module(engine/foundation/platform-window engine/platform-window DEPENDS containers core log platform PACKAGES glfw
+    TESTS foundation/platform-window)
+crd_module(engine/foundation/app engine/app DEPENDS containers core jobs perf platform platform-window
+    TESTS foundation/app)
 crd_module(engine/foundation/config engine/config DEPENDS containers core log math platform toml
     TESTS foundation/config)
 # OWN.1: the lossless compression codecs (raw DEFLATE, zlib, the zstd binding), below every module that compresses
@@ -701,7 +707,8 @@ crd_module(runtime
     DEPENDS app audio config containers core geometry-mesh-processing geometry-primitives hesap hesap-amg hesap-autodiff
         hesap-comms hesap-dense hesap-direct hesap-dsp hesap-eigen hesap-fft hesap-interp hesap-iterative hesap-ode
         hesap-opt hesap-ordering hesap-preconditioners hesap-quadrature hesap-resources hesap-sched hesap-sparse
-        hesap-special hesap-stats hesap-tensor hesap-wavelet jobs log math memory meshgen perf platform resources vm
+        hesap-special hesap-stats hesap-tensor hesap-wavelet jobs log math memory meshgen perf platform platform-window
+        resources vm
     TESTS bench TEST_DEPENDS ceir ceir-cook geometry-bvh geometry-convex scene)
 
 if(CRD_BUILD_SANDBOX)

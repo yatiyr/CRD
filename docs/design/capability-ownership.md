@@ -91,6 +91,11 @@ OWN.1 records these owners (2026-10-31):
    a container of compressed members over the module's codecs, so it moved into crd-compression (`zip.hpp`) with a
    writer that takes each member's method and a reader whose STORED members stay views of the source, and both
    modules consume it ([below](#one-zip-container)).
+9. **The window backend** (2026-11-01) is its own module, crd-platform-window: the GLFW context, the window and the
+   `platform.hpp` umbrella moved out of crd-platform, which links no window library since and joins the relocatable
+   package, so crd-perf's bundle files reach their owner (registered as `platform.windowing`; include paths and the
+   `crd::platform` namespace unchanged, [ADR-0006's amendment](../decisions/0006-platform-v1.md)). The alternative,
+   packaging GLFW behind crd-platform, would have shipped a window library to every diagnostic consumer.
 
 ## Duplicate rows
 
@@ -116,7 +121,7 @@ each a `pending` entry or a listed review, all on OWN.1:
 | random.seed-generators → core | 11 files and core's own workload probe, **moved** 2026-10-31 | SplitMix64 in ceir, perf, core, hesap-eigen, three hesap-stats headers, containers' `hash_u64` finalizer and the sandbox; the MMIX LCG step in hesap-dense's SVD, hesap-fft's sparse FFT and hesap-iterative's IDR(s); bit-exact, see below. |
 | cpu.kernel-dispatch → core | `math/libm.hpp`, **moved** 2026-10-31 | read `__AVX2__` and `__FMA__` to choose the FMA instruction; it now reads crd-core's `CRD_TARGET_X64` and `CRD_TARGET_X64_FMA`, see below. |
 | math.fixed-size-linear-algebra → math | `geometry-primitives/transform.hpp`, `circumcenter.hpp`, mesh-processing's `quadric.hpp`, **moved** 2026-10-31 | `det3`, the inverse-transpose, the 2D attributes' determinant, the symmetric cofactor inverse and both circumcentres' Cramer's rule; crd-math gained Mat2/Mat3 `determinant`, `inverse`, `try_inverse`, `inverse_transpose`, `solve` and `try_solve`, see below. |
-| io.durable-saves → platform | `perf/bundle.cpp` | crd-perf's `write_bundle_atomic` replaces a file durably by hand; it moves onto `durable_file.hpp` once crd-perf, which ships in the relocatable package, can link crd-platform. |
+| io.durable-saves → platform | `perf/bundle.cpp`, **moved** 2026-11-01 | crd-perf's `write_bundle_atomic` replaced a file durably by hand, and its retention walk and existence checks read the directory by hand; all four are crd-platform's since, decision 9; see below. |
 | compression.codecs → compression | resources' `deflate`, `crdr`'s zstd calls and the resources fuzz target's, **moved** 2026-10-31; hesap-tensor's `io_zip.hpp` npz inflate, **merged** 2026-11-01; perf's bundle sections, **compressed through it** 2026-11-01 | decision 1: crd-compression created; one exact-size decoder; the bundle's compressed sections and the module in the package; see below. |
 | compression.zip-archives → compression | resources' `zip_archive.cpp`, hesap-tensor's npz reader and writer in `io.hpp`, **moved** 2026-11-01 | decision 8; the registry's signature is the ZIP record signatures. |
 | numerics.signal-processing → hesap-dsp | `audio/audio_kernels.hpp`, hesap-dsp's own `sosfilt_stream`, **moved** 2026-10-31 | the audio biquad designed with hesap-dsp's RBJ formulas but ran its own transposed direct-form II loop; both loops now run hesap-dsp's `biquad_step`, bit-exact, see below. |
@@ -335,3 +340,20 @@ bundle patched in one field), the importer's bomb cases, the fuzz target's oracl
 package consumer test from the moved prefix. The board is `bench_compression`'s `bundle-write` and `bundle-read`: the
 bundle is 5.6 times smaller, writing costs the encoder and reading the inflate
 ([session](../sessions/2026-11-01-own-bundle-compressed-sections.md#beforeafter-board)).
+
+### The bundle's files on crd-platform
+
+crd-perf's publish, retention walk and existence checks are crd-platform's since 2026-11-01 (decision 9): the durable
+replace `fs::write_file_atomic`, `fs::list_directory` with `is_file` and `last_modified_unix_ns`, `fs::is_directory`
+and `fs::exists`. Paths are UTF-8 on every platform (the hand-written copies called the Windows `A` functions, which
+read the ANSI code page), and the POSIX publish now syncs the directory after its rename. crd-platform gained the
+nanosecond reading because retention orders bundles written within one second; both readings now convert the file
+clock exactly (`clock_cast`). crd-platform joined the relocatable package once its window backend moved into
+crd-platform-window.
+
+The oracle is the bundle suite (a publish read back byte for byte with no temporary left, retention ordering by
+sub-second write times against name order, a directory and a foreign name never counted, UTF-8 directories and names,
+null, empty and missing paths refused), crd-platform's exact-conversion case, and the package consumer test, whose
+deliberate failure and capture example publish their bundles through `Cerid::platform` from the moved prefix. The
+board is `bench_compression`'s `bundle-publish` and `bundle-retain`
+([session](../sessions/2026-11-01-own-bundle-files-on-platform.md#beforeafter-board)).

@@ -5471,8 +5471,8 @@
     "asset_cooker": [
       {
         "release": null,
-        "inventory": "3062e76b39b81847adfb8177b43f257ed548c28ee86165706a856e6901e9bddf",
-        "reviewed": "2026-10-31",
+        "inventory": "99d8f4137dfad788b3b543033675cfae0c6bf1989df11307782a2c2c3851fc31",
+        "reviewed": "2026-11-01",
         "findings": [
           {
             "entry": "tr.cybersecurity.products",
@@ -5567,8 +5567,8 @@
     "ceridc": [
       {
         "release": null,
-        "inventory": "85626c2c61bb9a4646e8bc2e700b9c13b9320ca358a287df800a466615851d5e",
-        "reviewed": "2026-10-31",
+        "inventory": "ed010687e8cf757ae2b01457209e0dc6856f23e33e381c1db3055642a5d5736f",
+        "reviewed": "2026-11-01",
         "findings": [
           {
             "entry": "tr.cybersecurity.products",
@@ -5615,7 +5615,7 @@
     "cprof_export": [
       {
         "release": null,
-        "inventory": "88392d97af5472cd4ee22654536f192366ef7a80fe61582c1d27b9e44812c6f8",
+        "inventory": "f533dfaec5b10f1acd95f14d71c997f981f0be67f9f8554c922706d924905c94",
         "reviewed": "2026-11-01",
         "findings": [
           {
@@ -5663,8 +5663,8 @@
     "kir_autotune": [
       {
         "release": null,
-        "inventory": "3787a87f4c79f787eb13a99913ed347bc15a67d5886f0a8ff2115e3c24de1534",
-        "reviewed": "2026-10-31",
+        "inventory": "76b7a0e10aa13f7ed887b841fa549fb11851d030571050e08254d59a565e288f",
+        "reviewed": "2026-11-01",
         "findings": [
           {
             "entry": "tr.cybersecurity.products",
@@ -5807,8 +5807,8 @@
     "shader_cook": [
       {
         "release": null,
-        "inventory": "776a1df84f14db73a77f1ef100524051299ed9ca30b4829d08d8673cd3cca747",
-        "reviewed": "2026-10-31",
+        "inventory": "624fbfdbd9c93503417e9d868bd7137761f8c06da77ea973a7922931c2dc9787",
+        "reviewed": "2026-11-01",
         "findings": [
           {
             "entry": "tr.cybersecurity.products",

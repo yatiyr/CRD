@@ -61,10 +61,12 @@ DEBUG_TYPES = ('Debug', 'RelWithDebInfo')
 LEVELS = {'Trace': 0, 'Debug': 1, 'Info': 2, 'Warn': 3, 'Error': 4, 'Critical': 5}
 FALSE_VALUES = ('', '0', 'OFF', 'NO', 'FALSE', 'N', 'IGNORE', 'NOTFOUND')
 CORE_INCLUDE = ROOT / 'engine/foundation/core/include'
-# The packaged family (DIAG.11a): the diagnostic host (perf) and its closure, compression among it (OWN.1: the
-# bundle's sections), plus math, whose header-only transcendental functions the units headers include; crd-simd-flags
-# is the interface target math's consumers compile with. Each module installs its include/ tree and one archive.
-FAMILY = ('core', 'units', 'time', 'vm', 'log', 'containers', 'memory', 'jobs', 'toml', 'compression', 'math', 'perf')
+# The packaged family (DIAG.11a): the diagnostic host (perf) and its closure, compression (OWN.1: the bundle's
+# sections) and platform (OWN.1: the bundle's durable publish; its window backend, crd-platform-window, stays out)
+# among it, plus math, whose header-only transcendental functions the units headers include; crd-simd-flags is the
+# interface target math's consumers compile with. Each module installs its include/ tree and one archive.
+FAMILY = ('core', 'units', 'time', 'vm', 'log', 'containers', 'memory', 'jobs', 'toml', 'compression', 'platform',
+          'math', 'perf')
 INTERFACE_LIBRARIES = ('crd-simd-flags',)
 # The pinned third-party archives a packaged library links privately (cmake/CrdPackage.cmake,
 # crd_package_dependency): exported name -> (its CMake target, whose compile PDB is <target>.pdb, and the archive

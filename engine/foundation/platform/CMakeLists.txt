@@ -1,3 +1,8 @@
+# crd-platform -- the process's boundary with its OS (ADR-0006): files and durable saves, asynchronous reads, file
+# watching, dynamic libraries, threads, the program's arguments and the input snapshot types. It names no window
+# backend: the GLFW context and window are crd-platform-window (engine/foundation/platform-window), so this module
+# joins the relocatable package (OWN.1: crd-perf's bundle publish goes through its durable files).
+
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
@@ -5,7 +10,7 @@ add_library(crd-platform STATIC ${SOURCES} ${HEADERS})
 
 target_include_directories(crd-platform
     PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
 )
 
 target_link_libraries(crd-platform
@@ -16,10 +21,11 @@ target_link_libraries(crd-platform
         crd-memory
         crd-time   # crd::platform::Timer / FrameClock are aliases into crd::time::* (Detour D-006)
     PRIVATE
-        glfw
         crd-jobs
+        ${CMAKE_DL_LIBS} # dlopen (DynamicLibrary) before glibc 2.34; GLFW used to bring it
 )
 
 target_compile_features(crd-platform PUBLIC cxx_std_20)
-target_compile_definitions(crd-platform PRIVATE GLFW_INCLUDE_NONE)
 crd_enable_default_pch(crd-platform)
+
+crd_package_library(crd-platform NAME platform INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include")

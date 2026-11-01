@@ -3178,7 +3178,8 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
     one and the bytes lost after it; `open` cuts that tail; a journal of another snapshot is replaced.
   - `Autosave` says when to commit (the most work a crash can cost, 2 s by default) and when to fold the journal
     into a snapshot (age or size). Documents apply all of this through [DOC.2](../ROADMAP.md#slice-doc.2); the cook
-    database, artifacts, pack and journal use it now.
+    database, artifacts, pack and journal use it now, and crd-perf's diagnostic bundles are published with
+    `write_file_atomic` since 2026-11-01 (OWN.1).
 - Installer, patch and update chunks use the same family through [SHIP.2](../ROADMAP.md#slice-ship.2) and
   [SHIP.3](../ROADMAP.md#slice-ship.3); the network's plaintext hash and state hashes belong to
   [NET.3](../ROADMAP.md#slice-net.3) and [4.2c](../ROADMAP.md#slice-4.2c).

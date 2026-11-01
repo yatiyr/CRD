@@ -32,7 +32,6 @@
       "kind": "program",
       "title": "The asset_cooker program (tools/asset_cooker)",
       "packages": [
-        "glfw",
         "zstd"
       ],
       "functions": [],
@@ -45,7 +44,6 @@
       "kind": "program",
       "title": "The ceridc program (tools/ceridc)",
       "packages": [
-        "glfw",
         "zstd"
       ],
       "functions": [],
@@ -58,7 +56,6 @@
       "kind": "program",
       "title": "The shader_cook program (tools/shader-cook)",
       "packages": [
-        "glfw",
         "zstd"
       ],
       "functions": [],
@@ -70,9 +67,7 @@
       "id": "kir_autotune",
       "kind": "program",
       "title": "The kir_autotune program (tools/kir-autotune)",
-      "packages": [
-        "glfw"
-      ],
+      "packages": [],
       "functions": [],
       "confidentiality": false,
       "entries": [],
@@ -83,7 +78,6 @@
       "kind": "program",
       "title": "The cprof_export program (tools/cprof-export)",
       "packages": [
-        "glfw",
         "zstd"
       ],
       "functions": [],

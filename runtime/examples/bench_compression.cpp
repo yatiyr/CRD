@@ -11,7 +11,10 @@
 // archives of eight f32 members, written STORED as np.savez does (npz-write) and read through hesap-tensor's npz
 // reader, STORED and DEFLATE (npz-read-stored, npz-read-deflate). The diagnostic bundle's cases write the input as a
 // flight bundle's log tail beside a crash record and read every section back (bundle-write, bundle-read; `bytes
-// bundle` is the file's size): crd-perf's sections compress through crd-compression since 2026-11-01.
+// bundle` is the file's size): crd-perf's sections compress through crd-compression since 2026-11-01. Its file cases
+// publish that bundle over itself (bundle-publish: the atomic, durable replace, its bits the file read back) and run
+// the retention walk over a directory of sixteen bundles that it keeps (bundle-retain): crd-perf's files go through
+// crd-platform since 2026-11-01.
 
 #include <crd/compression/deflate.hpp>
 #include <crd/compression/zip.hpp>
@@ -22,6 +25,7 @@
 #include <crd/hesap/tensor/io.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/perf/bundle.hpp>
+#include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 
 #include <chrono>
@@ -35,6 +39,7 @@ using crd::usize;
 using crd::containers::Array;
 using crd::containers::ConstSpan;
 namespace codec = crd::compression;
+namespace fs = crd::platform::fs;
 namespace tensor = crd::hesap::tensor;
 
 namespace
@@ -386,7 +391,34 @@ int main()
     const u64 bundle_bits = bundle_read(view(bundle), true);
     report("bundle-read", ns_per_kib([&] { g_sink = g_sink + bundle_read(view(bundle), false); }), bundle_bits);
 
+    const fs::Path dir = fs::temp_directory() / "crd-bench-compression-bundles";
+    (void)fs::remove_all(dir);
+    bool files_ok = fs::create_directories(dir);
+    const fs::Path published = dir / "flight_00.cdb";
+    const auto publish = [&]
+    {
+        return crd::perf::write_bundle_atomic(published.native().c_str(), view(bundle));
+    };
+    Array<u8> on_disk(&alloc);
+    files_ok = files_ok && publish() && fs::read_file_binary(published, on_disk) && on_disk.size() == bundle.size();
+    report("bundle-publish", ns_per_kib([&] { g_sink = g_sink + (publish() ? 1U : 0U); }),
+           files_ok ? digest(on_disk) : 0U);
+    char name[] = "flight_00.cdb";
+    for (usize i = 1U; i < 16U && files_ok; ++i)
+    {
+        name[7] = static_cast<char>('0' + i / 10U);
+        name[8] = static_cast<char>('0' + i % 10U);
+        files_ok = crd::perf::write_bundle_atomic((dir / name).native().c_str(), view(bundle));
+    }
+    const auto retain = [&]
+    {
+        return crd::perf::enforce_bundle_retention(dir.native().c_str(), "flight_", ".cdb", 16U);
+    };
+    files_ok = files_ok && retain() == 0;
+    report("bundle-retain", ns_per_kib([&] { g_sink = g_sink + static_cast<u64>(retain()); }), files_ok ? 16U : 0U);
+    files_ok = fs::remove_all(dir) && files_ok;
+
     const bool zip_ok = !package.empty() && package_bits != 0U && !stored.empty() && stored_bits != 0U &&
                         !deflated.empty() && deflated_bits != 0U;
-    return raw_ok && exact_ok && zlib_ok && read_ok && zip_ok && bundle_bits != 0U ? 0 : 1;
+    return raw_ok && exact_ok && zlib_ok && read_ok && zip_ok && bundle_bits != 0U && files_ok ? 0 : 1;
 }

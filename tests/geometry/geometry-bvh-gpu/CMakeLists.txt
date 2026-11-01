@@ -33,6 +33,7 @@ target_link_libraries(crd-geometry-bvh-gpu-tests PRIVATE
     crd-math
     crd-units
     crd-platform
+    crd-platform-window     # headless_requested: the device cases skip on a display-less runner
     crd-geometry-primitives
     crd-geometry-bvh
     crd-geometry-bvh-gpu

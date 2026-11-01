@@ -246,6 +246,7 @@ crd_tests(numerics/hesap-motion hesap-motion)
 crd_tests(numerics/hesap-tensor hesap-tensor)
 crd_tests(foundation/containers containers)
 crd_tests(foundation/platform platform)
+crd_tests(foundation/platform-window platform-window)  # OWN.1: the window backend split from crd-platform
 crd_tests(foundation/app app)
 crd_tests(foundation/config config)
 crd_tests(foundation/compression compression)  # OWN.1: raw DEFLATE, zlib and the zstd binding

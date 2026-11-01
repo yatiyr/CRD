@@ -1,10 +1,11 @@
 #pragma once
 
-// Umbrella header for the currently shipped slice of crd-platform.
+// Umbrella header for the platform layer. It lives in crd-platform-window, the window backend, because it includes
+// the window; the rest is crd-platform's (OWN.1 split the two on 2026-11-01).
 //
 // Shipped today:
-//   - PlatformContext: GLFW init/shutdown, error -> log bridge            (v1a)
-//   - Window + WindowDesc: PIMPL'd OS window, GLFW_NO_API (Vulkan-ready)  (v1a)
+//   - PlatformContext: GLFW init/shutdown, error -> log bridge            (v1a, crd-platform-window)
+//   - Window + WindowDesc: PIMPL'd OS window, GLFW_NO_API (Vulkan-ready)  (v1a, crd-platform-window)
 //   - Timer + FrameClock: chrono-based monotonic timing                   (v1b — moved to crd-time per Detour D-006 2026-05-15;
 //                                                                              namespace aliases kept via <crd/time/platform_compat.hpp>)
 //   - Input: polling snapshot + opt-in event queue                        (v1c)
