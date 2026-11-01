@@ -145,16 +145,24 @@ Five questions join `counsel.2026-11-01` (82 open), each on its entry, none hold
 
 ## Verification
 
-- `python scripts/test-repository-tools.py SanctionsLists RegisterReview` on this PC; the C++ on the cloud machine
-  (linux-gcc-debug): `crd-comply-tests`, the import and the hidden `[.imported]` cases, and `ceridc screen` against the
-  written UN generation on the real binary. The results are in the [verification](#verification-results) below.
+- `python scripts/test-repository-tools.py SanctionsLists RegisterReview`: 57 cases pass; the UN case now imports the
+  real register and checks the written generation (15 destinations, the DPRK and Iran sectoral, nothing open, the
+  reapplied resolutions in force from 28 September 2025 and resolution 2231 (2015) with no end). Five register
+  mutations, each caught: the reading reopened (the Python case), the DPRK made comprehensive (the Python case),
+  resolution 2231 (2015) given a sunset of 2025-10-18 (the Python case and the guard twice), resolution 1929 (2010)'s
+  `effective` put back to its adoption (the Python case) and the DPRK destination resting on an entry that does not
+  exist (the Python case and the guard).
+- `gen-comply-rules.py --review INT`: generation 6; `check-generated.py --refresh` for the file.
+- The cloud machine (linux-gcc-debug, b87b36f0, 10:27 to 10:33 UTC): the comply and ceridc targets build with no
+  warning; `ctest -R "comply|ceridc|^crd-no-|^crd-check"` passes 61 of 61, the import writing the eight generations;
+  the hidden `[.imported]` cases pass (1267 assertions in 7 cases). Two C++ mutations through the importer, each
+  caught by `crd-comply-sanctions-imported`: the DPRK made comprehensive, and Iran's destination dropped; the
+  restored register passes again. `ceridc screen --authority un.sc.embargo` on the real binary answers review for KP
+  (S/RES/1718 (2006)), IR (S/RES/1737 (2006)), LY and SD-DN (a match), review for SD (the five Darfur states,
+  possible) and clear for TR; with the four embargo authorities, KP is blocked by 31 CFR 510 with the EU, UK (twice)
+  and UN programmes reported.
 - `check-master-plan.py`, `check-repository.py`, `check-allman-braces.py`, `check-generated.py` and
-  `check-registers.py`.
-
-<a id="verification-results"></a>
-## Verification results
-
-Recorded after the runs.
+  `check-registers.py` pass.
 
 ## Next
 
