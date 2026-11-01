@@ -3275,7 +3275,9 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   failed_routine, injected and tables_failed after a failure) report them. The kernel-check fault seam
   (`install_kernel_check_fault_hook`, compiled out of shipping) fails a named family's tables before its first use,
   so tests drive the demotion on a sound CPU. Families with checks: `containers.crc` (CRC-32 and CRC-32C of the
-  checksum tests' 1025- and 63-byte streams, unaligned) and `containers.hash` (XXH3-64 of the 1025 bytes).
+  checksum tests' 1025- and 63-byte streams, unaligned), `containers.hash` (XXH3-64 of the 1025 bytes),
+  `math.float-convert` (every routine over 45 elements, the conversion tests' special patterns, against the scalar
+  converts evaluated at compile time) and `math.scalar` (each transcendental at two arguments against fixed bits).
 
 ## Existing programme ownership after DIAG
 
