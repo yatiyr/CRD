@@ -166,7 +166,10 @@ Five questions join `counsel.2026-11-01` (82 open), each on its entry, none hold
 
 ## Next
 
-1. **COMPLY.1.** Read the Darfur renewal before 11 December 2026 (from that day the guard and the import fail until it
+1. **CI.** Complete-tier run 41298463221 (13453acb, dispatched on yatiyr/CRD) is the first hosted run of the UN
+   generation, its two hidden cases and the rewritten Python case on Windows, clang-cl and ARM64: audit it when it
+   ends.
+2. **COMPLY.1.** Read the Darfur renewal before 11 December 2026 (from that day the guard and the import fail until it
    is read). Then Turkey's asset-freeze decisions and their importer (Laws No. 6415 and 7262, from the Official
    Gazette and MASAK), and the Wassenaar Category 5 Part 2 and Turkey's dual-use communiqué for the classifications'
    bases.
