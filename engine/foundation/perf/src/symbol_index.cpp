@@ -664,17 +664,19 @@ cont::String image_file_path(const ModuleIdentity& m, cont::StringView store_roo
                              crd::memory::IAllocator* alloc) noexcept
 {
     cont::String s(alloc);
-    if (m.id_kind == SymbolIdKind::Rsds || m.id_kind == SymbolIdKind::PeImage)
+    if (m.id_kind == SymbolIdKind::GnuBuildId)
     {
-        const cont::StringView name = basename_view(m.name);
-        if (m.timestamp != 0U && basename_safe(name))
+        if (m.id_len != 0U)
         {
-            append_pe_image_key(s, m, name, store_root);
+            append_build_id_path(s, m, store_root);
         }
+        return s;
     }
-    else if (m.id_kind == SymbolIdKind::GnuBuildId && m.id_len != 0U)
+    // Every other kind is a PE module (or none, whose TimeDateStamp is zero): the key needs no CodeView record.
+    const cont::StringView name = basename_view(m.name);
+    if (m.timestamp != 0U && basename_safe(name))
     {
-        append_build_id_path(s, m, store_root);
+        append_pe_image_key(s, m, name, store_root);
     }
     return s;
 }

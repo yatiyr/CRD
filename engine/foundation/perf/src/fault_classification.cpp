@@ -928,10 +928,12 @@ void pe_relocate(const ImageReader& image, cont::ConstSpan<PeSection> sections, 
     }
 }
 
-// The PE file's bytes at the pc: its identity is the module's, and the pc's section maps it.
+// The PE file's bytes at the pc: its identity is the module's, and the pc's section maps it. A PE module's identity is
+// its TimeDateStamp, SizeOfImage and CheckSum, checked below, so a module without a CodeView record (a build with no
+// PDB, id_kind None) is compared as well; only a build-id names a module that is not a PE image.
 void pe_loaded_bytes(const CrashEvidence& e, const ModuleIdentity& m, const ImageReader& image, LoadedBytes& loaded)
 {
-    if (m.id_kind != SymbolIdKind::Rsds && m.id_kind != SymbolIdKind::PeImage)
+    if (m.id_kind == SymbolIdKind::GnuBuildId)
     {
         loaded.why = "the module is not a Windows image";
         return;

@@ -217,9 +217,10 @@ debug_file_path(const ModuleIdentity& m, crd::containers::StringView symstore_ro
 
 // The path of `m`'s own binary under `store_root`, where an analysis finds the image a capture's code is compared
 // with (fault_classification.hpp):
-//   Rsds, PeImage: <root>/<name>/<TimeDateStamp:08X><SizeOfImage:X>/<name>   (the symsrv key for a PE binary)
-//   GnuBuildId:    <root>/.build-id/<nn>/<rest>                              (the debuginfod layout's executable)
-// Empty for id_kind None, a PE module with no TimeDateStamp or an unsafe name, and a build-id of no bytes.
+//   PE module:  <root>/<name>/<TimeDateStamp:08X><SizeOfImage:X>/<name>   (the symsrv key for a PE binary)
+//   GnuBuildId: <root>/.build-id/<nn>/<rest>                              (the debuginfod layout's executable)
+// A PE module is any kind but GnuBuildId with a TimeDateStamp: Rsds, PeImage, or None for one without a CodeView
+// record (a build with no PDB). Empty for a module with no TimeDateStamp or an unsafe name, and a build-id of no bytes.
 [[nodiscard]] crd::containers::String
 image_file_path(const ModuleIdentity& m, crd::containers::StringView store_root,
                 crd::memory::IAllocator* alloc = crd::memory::default_allocator()) noexcept;

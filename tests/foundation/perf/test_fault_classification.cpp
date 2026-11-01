@@ -734,6 +734,18 @@ TEST_CASE("fault classification: the code matches its PE image through the base 
     CHECK(same.result == cp::CodeImageResult::Matches);
     CHECK(same.compared == 16U);
     CHECK(view(same.module) == "game.exe");
+    // A build with no PDB: its dump's module has no CodeView record, and its PE identity still decides.
+    cp::CrashEvidence no_pdb = pe_capture(loaded);
+    no_pdb.modules[0].id_kind = cp::SymbolIdKind::None;
+    const cp::CodeImageCheck bare = cp::compare_code_with_image(no_pdb, image_reader(image));
+    INFO("reason: " << cont::String{bare.reason}.c_str());
+    CHECK(bare.result == cp::CodeImageResult::Matches);
+    CHECK(bare.compared == 16U);
+    no_pdb.modules[0].timestamp = kPeStamp + 1U;
+    CHECK(cp::compare_code_with_image(no_pdb, image_reader(image)).result == cp::CodeImageResult::NotCompared);
+    no_pdb.modules[0].id_kind = cp::SymbolIdKind::GnuBuildId; // a build-id names an ELF module, never this image
+    no_pdb.modules[0].timestamp = kPeStamp;
+    CHECK(cp::compare_code_with_image(no_pdb, image_reader(image)).result == cp::CodeImageResult::NotCompared);
 
     u8 flipped[16];
     std::memcpy(flipped, loaded, sizeof(flipped));
@@ -868,6 +880,8 @@ TEST_CASE("fault classification: image files are found by identity, and bundle.i
 {
     cp::ModuleIdentity pe = module(kPeBase, kPeSize, cp::SymbolIdKind::Rsds, "C:\\game\\game.exe");
     pe.timestamp = kPeStamp;
+    CHECK(view(cp::image_file_path(pe, "store")) == "store/game.exe/6543210F3000/game.exe");
+    pe.id_kind = cp::SymbolIdKind::None; // no CodeView record: the same binary key
     CHECK(view(cp::image_file_path(pe, "store")) == "store/game.exe/6543210F3000/game.exe");
     pe.timestamp = 0U;
     CHECK(cp::image_file_path(pe, "store").empty());
