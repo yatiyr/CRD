@@ -135,6 +135,13 @@ article change the EU rule file, reviewed as EU generation 10 (`gen-comply-rules
 
 - **Python.** `RegisterReview` (26 cases) and `SanctionsLists` (19) pass, and the nine mutations above were each
   caught.
+- **C++.** The EU rule file's consumers ran on the track's machine (08:19-08:23 UTC, linux-gcc-debug tree at
+  8caa00b0). `crd-comply-tests`, `crd-fuzz-comply-sanctions`, `ceridc` and `crd-ceridc-tests` built with no warning.
+  The 61 scoped CTests passed: comply, ceridc, and the `crd-no-` and `crd-check` guards without
+  `crd-check-isa-isolation`, as in batch 25. Among them, the ceridc comply case reads the committed EU generation 10.
+  The four `[.imported]` cases passed (600 assertions), and `[sanctions]` ran 4 538 assertions in 18 cases.
+  `ceridc screen` gave the same answers at the same `eu.council.embargo` generation: IR and KP blocked; RU, VE, MM, HT
+  and CF review; IQ, YE and TR clear.
 - **Guards.** `check-registers.py`, `gen-comply-rules.py --check`, `check-generated.py` (the EU rule file refreshed),
   `check-master-plan.py`, `check-repository.py` and `check-allman-braces.py` pass.
 
