@@ -800,7 +800,7 @@ template <typename T> void check_own_plans_every_level()
     const auto levels = fft::fft_kernel_levels();
     const fft::FftTypeKernels<T>& portable = fft::kernels_of<T>(*levels[0].table);
     // 1K to 1M, and each larger size of the table at which a level the host runs plans other than canonically
-    // (avx512's f32 2M and 4M): the walk's cost past 1M is paid only where a row changes the plan.
+    // (avx512's f32 2M and 4M), where every level the host runs is then checked; elsewhere past 1M none is.
     u32 last = 20;
     for (const fft::detail::FftLevelPlan& row : fft::detail::kFftLevelPlans)
     {

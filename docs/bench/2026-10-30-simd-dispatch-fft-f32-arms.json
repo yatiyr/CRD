@@ -511,7 +511,7 @@
   {
    "level": "avx512",
    "machine": "the benchmark machine (Xeon Platinum 8581C)",
-   "commit": "1228a0b1",
+   "commit": "43963cb2 with the level board script",
    "board": "docs/bench/2026-11-01-simd-perf-fft-avx512-level-plans.md",
    "selections": [
     "cpu detected=avx512 selected=avx512 override=applied kernel_cap=avx512"

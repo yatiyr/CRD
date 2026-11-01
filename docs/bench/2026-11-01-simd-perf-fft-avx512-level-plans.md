@@ -12,8 +12,8 @@
   to CPU 3, the peers one thread; `build-bench.py host` before each board: 28.6 of 29.4 GiB available, others 0.0
   cores, idle. One start.
 - **Binaries:** `bench_fft_f32` from the linux-gcc-release lane tree (GCC 13.3, `-O3`, program LTO): HEAD
-  (`1228a0b1`, `~/ab/b20-head`; avx512 ran the canonical planner, no avx512 row) and the candidate (`f6230d8f`,
-  `~/ab/b20-cand`; the avx512 rows below). `CRD_CPU_LEVEL=avx512` selects the fft unit
+  (`43963cb2`'s engine with the session's board script, `~/ab/b20-head`; avx512 ran the canonical planner, no avx512
+  row) and the candidate (the session's `perf(fft)` commit, `~/ab/b20-cand`; the avx512 rows below). `CRD_CPU_LEVEL=avx512` selects the fft unit
   (`cpu detected=avx512 selected=avx512 override=applied kernel_cap=avx512`).
 - **Peer:** Intel MKL 2020.0.4 (one thread), timed in the same process; every arm gated against the FFTW f64 truth.
 

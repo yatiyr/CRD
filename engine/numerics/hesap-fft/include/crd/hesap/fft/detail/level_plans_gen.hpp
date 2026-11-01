@@ -2,7 +2,7 @@
 // Data: docs/bench/2026-10-30-simd-dispatch-fft-f32-arms.json (bench_fft_f32):
 //   portable, sse2, avx2: at 7cd38660 with the fft kernel level line on the i9-14900K (WSL2)
 //   (docs/bench/2026-10-30-simd-dispatch-fft-board.md#board-3-the-per-level-plans).
-//   avx512: at 1228a0b1 on the benchmark machine (Xeon Platinum 8581C)
+//   avx512: at 43963cb2 with the level board script on the benchmark machine (Xeon Platinum 8581C)
 //   (docs/bench/2026-11-01-simd-perf-fft-avx512-level-plans.md).
 // Data: docs/bench/2026-10-30-simd-dispatch-fft-f64-arms.json (bench_fft_vs_refs):
 //   portable, sse2, avx2: at e0c70766 with the f64 forward arms on the i9-14900K (WSL2)

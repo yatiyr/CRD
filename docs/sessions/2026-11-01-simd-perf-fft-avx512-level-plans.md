@@ -10,9 +10,9 @@ the whole-block stores had put the deep-splits ahead at avx512. Board:
 
 ## CI first
 
-- Manual dispatch 41295647725 (`43963cb2`, the first run covering `bcec86fd` and the previous batch) and scheduled
-  run 41295924613 were still queued at its preflight when the batch ended; every push run since was cancelled by the
-  next push or pending. No completed lane has built `bcec86fd` or later, so there is nothing of this track's to fix
+- Manual dispatch 41295647725 (`43963cb2`, the first run covering `bcec86fd` and the previous batch) had passed its
+  preflight and was running its first four lanes, 25 queued, when the batch ended; every push run since was
+  cancelled by the next push or pending. No completed lane has built `bcec86fd` or later, so there is nothing of this track's to fix
   yet; the next batch reads them first.
 
 ## Profile first
@@ -52,8 +52,9 @@ host), and §7 is amended to say so. The QUAL.1-HW row is not edited.
   every pass of the planned arm) gave the deep-split-4 at 32K, 64K, 2M and 4M and the deep-split-3 at 256K; 128K's
   deep-split-3 was faster in medians but its range overlapped the deep-split-4's, so it stays canonical.
 - **The test** (`test(fft)`): the cross-level case walked 1K to 1M; it now also runs each larger size of the table
-  at which a level the host runs plans other than canonically, so avx512's 2M and 4M rows are held to the class
-  (5.1 s on the avx512 arm in release, 1.1 to 1.6 s on the others, which skip those sizes).
+  at which a level the host runs plans other than canonically, so avx512's 2M and 4M rows are held to the class;
+  there it checks every level the host runs (5.1 s on the avx512 arm in release, 1.1 to 1.6 s on the forced arms
+  below avx512, which skip those sizes).
 
 ## Results
 
