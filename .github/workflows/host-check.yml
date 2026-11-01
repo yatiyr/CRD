@@ -8,14 +8,15 @@ name: Host check
 # to the committed corpora. Each fuzz leg runs its round under the default ASan options and then under the
 # container-overflow control for the same time; a leg fails on any event. The ARM64 sanitizer-cost legs (SIMD-DISPATCH)
 # time the cases linux-gcc-arm64-asan runs far slower than linux-clang-arm64-asan under each sanitizer and runtime
-# option, on both compilers. The x64 stack-alignment leg runs TP-7's control under Intel SDE.
+# option, on both compilers. The x64 stack-alignment leg runs TP-7's control under Intel SDE. The Vulkan SDK installer
+# legs (REPO.3) run the pinned Windows installer under candidate options, one fresh machine per arm, and judge them.
 on:
   workflow_dispatch:
     inputs:
       experiment:
         description: 'which experiment to run'
         type: choice
-        options: [all, fuzz, tsan, arm64-sanitizer-cost, x64-asan-stack-alignment]
+        options: [all, fuzz, tsan, arm64-sanitizer-cost, x64-asan-stack-alignment, vulkan-sdk-installer]
         default: all
       seconds:
         description: 'libFuzzer seconds per round and arm'
@@ -461,4 +462,81 @@ jobs:
         with:
           name: host-check-x64-asan-stack-alignment
           path: ${{ runner.temp }}/host-check/evidence
+          if-no-files-found: warn
+
+  vulkan-sdk-installer:
+    # REPO.3: the cold Windows lane's run of the pinned LunarG installer prints Qt's QFont::setPixelSize warning and
+    # fetches update metadata from LunarG's remote repository (docs/sessions/2026-11-01-repo-3d-scoped-checks.md).
+    # Each arm installs the SDK with candidate options on a fresh machine and records the exit, both findings, the
+    # metadata cache and the installed tree (scripts/vulkan-sdk-installer-check.py); the judge job compares them.
+    name: Host check (Vulkan SDK installer, ${{ matrix.arm }})
+    if: inputs.experiment == 'all' || inputs.experiment == 'vulkan-sdk-installer'
+    runs-on: windows-2025
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [baseline, baseline-repeat, verbose, platform-minimal, platform-offscreen, temp-repository-empty,
+              temp-repository-updates, minimal-updates, offscreen-updates]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Installer arm
+        run: >-
+          python scripts/vulkan-sdk-installer-check.py run --arm ${{ matrix.arm }}
+          --download-dir "${{ runner.temp }}" --evidence "${{ runner.temp }}/host-check/evidence"
+
+      - name: Preserve results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: host-check-vulkan-sdk-installer-${{ matrix.arm }}
+          path: ${{ runner.temp }}/host-check/evidence
+          if-no-files-found: warn
+
+  vulkan-sdk-installer-judge:
+    name: Host check (Vulkan SDK installer, judge)
+    needs: vulkan-sdk-installer
+    if: always() && (inputs.experiment == 'all' || inputs.experiment == 'vulkan-sdk-installer')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Collect the arms
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: host-check-vulkan-sdk-installer-*
+          path: ${{ runner.temp }}/evidence
+          merge-multiple: true
+
+      - name: Judge the arms
+        run: >-
+          python3 scripts/vulkan-sdk-installer-check.py judge --evidence "$RUNNER_TEMP/evidence"
+          --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve the judgement
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: host-check-vulkan-sdk-installer-judgement
+          path: ${{ runner.temp }}/evidence/judgement.json
           if-no-files-found: warn

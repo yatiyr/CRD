@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **17** · tools: **30** · workflow actions: **5** · runner images: **5** · unpinned apt packages: **21**
+- packages: **17** · tools: **30** · workflow actions: **6** · runner images: **5** · unpinned apt packages: **21**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -76,6 +76,7 @@
 | actions/setup-python | `v7.1.0` | `6d4fd22b20465ccc0f7354476588e8df7c9ca0e0` |
 | actions/cache | `v6.1.0` | `55cc8345863c7cc4c66a329aec7e433d2d1c52a9` |
 | actions/upload-artifact | `v7.0.2` | `cf430e030ddbb5b0abf93d22962f4752f3646cd9` |
+| actions/download-artifact | `v8.0.2` | `9000827ccba6bdab643e8b6fd33ac0654aef8333` |
 | actions/github-script | `v8` | `ed597411d8f924073f98dfc5c65a23a2325f34cd` |
 
 ## Runner images

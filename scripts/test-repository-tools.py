@@ -1402,8 +1402,10 @@ class PinnedInputs(unittest.TestCase):
     def test_registry_workflow_build_and_helpers_agree(self):
         self.assertEqual(check_pins.validate(self.pins, self.workflow, self.cmake, self.tiers), [])
         self.assertEqual(re.findall(r'uses:\s*\S+@v\d', self.workflow), [])
+        workflows = ''.join(path.read_text(encoding='utf-8')
+                            for path in sorted((ROOT / '.github/workflows').glob('*.yml')))
         for action, pin in self.pins['actions'].items():
-            self.assertIn('%s@%s # %s' % (action, pin['sha'], pin['ref']), self.workflow)
+            self.assertIn('%s@%s # %s' % (action, pin['sha'], pin['ref']), workflows)
         self.assertEqual(re.findall(r'runs-on:\s*\S*-latest', self.workflow), [])
         self.assertEqual(len(re.findall(r'uses:\s*actions/checkout@', self.workflow)),
                          self.workflow.count('persist-credentials: false'))
@@ -1532,6 +1534,99 @@ class PinnedInputs(unittest.TestCase):
                     sdk.install(Path(temp), None, root, run=lambda command, check: subprocess.CompletedProcess(command, 0))
                 with self.assertRaisesRegex(pins_registry.PinError, 'exited with 3'):
                     sdk.install(Path(temp), None, root, run=lambda command, check: subprocess.CompletedProcess(command, 3))
+
+    def test_vulkan_sdk_installer_arms_record_their_evidence_and_are_judged_against_two_baselines(self):
+        spec = importlib.util.spec_from_file_location('installer_check', ROOT / 'scripts/vulkan-sdk-installer-check.py')
+        check = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(check)
+        workflow = (ROOT / '.github/workflows/host-check.yml').read_text(encoding='utf-8')
+        matrix = re.search(r'arm: \[([^\]]*)\]', workflow).group(1)
+        self.assertEqual([arm.strip() for arm in matrix.split(',')], list(check.ARMS))
+        self.assertIn('x64-asan-stack-alignment, vulkan-sdk-installer]', workflow)
+        with tempfile.TemporaryDirectory() as temp:
+            temp = Path(temp)
+            installer = temp / 'installer.exe'
+            installer.write_bytes(b'installer')
+            evidence, cache = temp / 'evidence', temp / 'cache'
+            commands = []
+            layout = check.sdk.LAYOUT
+
+            def installing(warn, remote, extra=None, log=b'run 1', code=0):
+                def fake_run(command, stdout, stderr, timeout, check):
+                    commands.append(command)
+                    self.assertEqual((stdout, stderr, check), (subprocess.PIPE, subprocess.STDOUT, False))
+                    for relative in layout:
+                        (root / relative).parent.mkdir(parents=True, exist_ok=True)
+                        (root / relative).write_bytes(b'payload')
+                    (root / 'InstallationLog.txt').write_bytes(log)
+                    if extra:
+                        (root / extra).write_bytes(b'extra')
+                    lines = [b'Loading component scripts...']
+                    if warn:
+                        lines.append(b'[1837] Warning: QFont::setPixelSize: Pixel size <= 0 (-1)')
+                    if remote:
+                        lines.append(b'Fetching latest update information...')
+                        lines.append(b'Retrieving meta information from remote repository... https://sdk.lunarg.com/x')
+                        (cache / 'item').parent.mkdir(parents=True, exist_ok=True)
+                        (cache / 'item').write_bytes(b'meta')
+                    return subprocess.CompletedProcess(command, code, stdout=b'\n'.join(lines))
+                return fake_run
+
+            plan = {'baseline': installing(True, True, log=b'run 1'),
+                    'baseline-repeat': installing(True, True, log=b'run 22'),
+                    'platform-minimal': installing(False, True),
+                    'temp-repository-updates': installing(True, False, extra='Bin/extra.dll'),
+                    'minimal-updates': installing(False, False),
+                    'offscreen-updates': installing(False, False, code=4)}
+            for arm, fake_run in plan.items():
+                root = temp / 'machines' / arm / 'VulkanSDK'
+                shutil.rmtree(cache, ignore_errors=True)
+                with patch.object(check.pins, 'fetch', return_value=installer), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    result = check.run_arm(arm, temp / 'downloads', evidence, root=root, cache=cache, run=fake_run)
+                self.assertEqual(result['arm'], arm)
+            with self.assertRaisesRegex(check.pins.PinError, 'exists before'):
+                check.run_arm('baseline', temp / 'downloads', evidence, root=root, cache=cache, run=None)
+            with self.assertRaisesRegex(check.pins.PinError, 'unknown arm'):
+                check.run_arm('offline', temp / 'downloads', evidence, root=temp / 'none', cache=cache, run=None)
+
+            self.assertEqual(commands[0][1:], [*check.sdk.INSTALL_ARGUMENTS])
+            updates = (temp / 'downloads' / 'installer-repositories' / check.UPDATES).resolve()
+            self.assertEqual(commands[4][1:], [*check.sdk.INSTALL_ARGUMENTS, '--platform', 'minimal',
+                                               '--set-temp-repository', updates.as_uri()])
+            self.assertIn('<Checksum>true</Checksum>', (updates / 'Updates.xml').read_text(encoding='utf-8'))
+            baseline = json.loads((evidence / 'baseline' / 'result.json').read_text(encoding='utf-8'))
+            self.assertEqual(len(baseline['qt_font']), 1)
+            self.assertEqual(len(baseline['remote']), 2)
+            self.assertEqual(baseline['hosts'], ['sdk.lunarg.com'])
+            self.assertEqual((baseline['cache_before'], baseline['cache_after']), ({}, {'item': 4}))
+            self.assertEqual(baseline['layout_missing'], [])
+            self.assertEqual(baseline['tree']['files'], len(check.sdk.LAYOUT) + 1)
+            self.assertIn('QFont', (evidence / 'baseline' / 'log.txt').read_text(encoding='utf-8'))
+
+            lines, judgement = check.judge(evidence)
+            self.assertEqual(judgement['variable'], ['InstallationLog.txt'])
+            verdicts = {arm: entry['verdict'] for arm, entry in judgement['arms'].items()}
+            self.assertEqual(verdicts, {'baseline': 'findings remain', 'baseline-repeat': 'findings remain',
+                                        'verbose': 'no evidence', 'platform-minimal': 'findings remain',
+                                        'platform-offscreen': 'no evidence', 'temp-repository-empty': 'no evidence',
+                                        'temp-repository-updates': 'tree differs',
+                                        'minimal-updates': 'removes both, same tree',
+                                        'offscreen-updates': 'install failed'})
+            self.assertEqual(judgement['arms']['temp-repository-updates']['added'], ['Bin/extra.dll'])
+            self.assertIn('| minimal-updates | --platform minimal --set-temp-repository updates-repository | 0 | 0 | 0 '
+                          '| none | 0 | same | removes both, same tree |', lines)
+            self.assertIn('- temp-repository-updates, added: `Bin/extra.dll`', lines)
+
+            summary = temp / 'summary.md'
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(check.main(['judge', '--evidence', str(evidence), '--summary', str(summary)]), 0)
+            self.assertIn('removes both, same tree', summary.read_text(encoding='utf-8'))
+            self.assertTrue((evidence / 'judgement.json').is_file())
+            shutil.rmtree(evidence / 'baseline-repeat')
+            with contextlib.redirect_stderr(io.StringIO()) as error:
+                self.assertEqual(check.main(['judge', '--evidence', str(evidence)]), 1)
+            self.assertIn('baseline-repeat arm left no evidence', error.getvalue())
 
     def test_vulkan_headers_extract_only_the_include_subtree(self):
         spec = importlib.util.spec_from_file_location('headers', ROOT / 'scripts/install-vulkan-headers.py')

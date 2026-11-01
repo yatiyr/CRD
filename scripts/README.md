@@ -79,6 +79,8 @@ Run commands from the repository root. Build/test rules and exact quality requir
   `fuzz-host-check.py --build <dir> --target <name> --seed <n> [--repeat <unit>]` runs the DIAG.10a host
   separation on one machine (a round under the default ASan options and the container-overflow control, the
   repetitions of an adopted unit; every event with its stack head); the dispatch-only `host-check.yml` runs it.
+  `vulkan-sdk-installer-check.py run --arm <name>` installs the pinned Windows Vulkan SDK under one candidate set of
+  installer options and records its findings and installed tree; `judge` compares the arms (REPO.3's host-check legs).
 - Provenance and licenses ([routes](../docs/CONTRIBUTING.md#generated-sources-and-provenance)): `check-generated.py`
   holds every generated file to [generated-sources.json](generated-sources.json) (generator, status, SHA-256;
   `--scan` lists unlisted markers, `--regenerate` reruns the stdout generators on the current host and applies the

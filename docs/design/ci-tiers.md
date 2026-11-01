@@ -75,7 +75,8 @@ Every other workflow file is an *experiment*: `check-ci-tiers.py` requires it to
 `workflow_dispatch` and never to cancel a run in progress, so it cannot join a tier or the required result, and
 `check-pins.py` holds it to the same pinned actions, runners and credentials as `ci.yml`. Only an experiment may run a
 diagnostic preset on a hosted machine. The one experiment is the DIAG.10a
-[host check](test-instruments.md#host-separation-diag10a) (`host-check.yml`, `linux-clang-fuzz`).
+[host check](test-instruments.md#host-separation-diag10a) (`host-check.yml`, `linux-clang-fuzz`), whose later legs
+add the TSan, ARM64 sanitizer-cost, stack-alignment and Vulkan SDK installer questions.
 
 ## Resolution
 

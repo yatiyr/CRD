@@ -174,7 +174,7 @@ fail before anything is extracted, and a drifted anchor fails naming the patch.
 `permissions` stays `contents: read`; every checkout passes `persist-credentials: false`, so no step and no build
 product holds a token; every `uses:` names a commit with its tag in a comment; every job runs on an explicit image
 label. Only GitHub's own actions remain (checkout v7.0.1, setup-python v7.1.0, cache v6.1.0, upload-artifact v7.0.2,
-github-script v8), all on Node 24; the three third-party actions that had no Node 24 release were replaced on
+download-artifact v8.0.2 for the host check's Vulkan SDK installer judge, github-script v8), all on Node 24; the three third-party actions that had no Node 24 release were replaced on
 2026-10-26 by the repository's own steps: Ninja and clang-tidy by the pinned helpers above, and the Visual Studio
 developer environment by [msvc-dev-env.py](../../scripts/msvc-dev-env.py) (vswhere, `vcvars64.bat`, every changed
 variable to `$GITHUB_ENV`) ([session](../sessions/2026-10-26-actions-node24.md)). Pull-request caches are isolated by GitHub (a pull request may read the default branch's caches, never the
