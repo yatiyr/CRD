@@ -21,6 +21,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <limits>
+#include <string_view>
 #include <type_traits>
 
 namespace sp = crd::hesap::sparse;
@@ -904,6 +905,10 @@ TEST_CASE("sparse kernels: the process runs the level its CPU selection resolves
           &crd::select_kernel_level<SparseKernels>(levels, s.selected, s.kernel_features, crd::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
     CHECK(crd::cpu_level_includes(crd::kernel_level_cap(), chosen.level));
+    const crd::KernelFamily* family = crd::test::kernel_family("hesap.sparse");
+    REQUIRE(family != nullptr);
+    CHECK(family->result.status == crd::KernelCheckStatus::Passed);
+    CHECK(family->result.level == chosen.level);
 }
 
 TEST_CASE("sparse kernels: every level the host runs gives the SDDMM order's bits (f64)", "[sparse][kernels]")
@@ -920,4 +925,120 @@ TEST_CASE("sparse kernels: sddmm and sddmm_parallel run the selected level", "[s
 {
     check_sddmm_public<crd::f64>();
     check_sddmm_public<crd::f32>();
+}
+
+namespace
+{
+
+// Self-check stubs: each routine once, as the portable kernel with one answer a bit off (an spmv's in its second
+// range, which no later range overwrites).
+template <typename T> void one_bit_off(T& v) noexcept
+{
+    using Bits = std::conditional_t<sizeof(T) == 8U, u64, u32>;
+    v = std::bit_cast<T>(static_cast<Bits>(std::bit_cast<Bits>(v) ^ 1U));
+}
+
+const SparseKernels& portable_sparse() noexcept
+{
+    return sp::kSparseKernelsPortable;
+}
+
+bool sell_spmv_f64_off(const sp::SellSlices<crd::f64>& a, crd::f64 alpha, crd::f64 beta, const crd::f64* x, crd::f64* y,
+                       u32 s_begin, u32 s_end, sp::SellPick pick) noexcept
+{
+    const bool ran = portable_sparse().sell_spmv_f64(a, alpha, beta, x, y, s_begin, s_end, pick);
+    if (s_begin != 0U)
+    {
+        one_bit_off(y[0]);
+    }
+    return ran;
+}
+
+bool sell_spmv_f32_off(const sp::SellSlices<crd::f32>& a, crd::f32 alpha, crd::f32 beta, const crd::f32* x, crd::f32* y,
+                       u32 s_begin, u32 s_end, sp::SellPick pick) noexcept
+{
+    const bool ran = portable_sparse().sell_spmv_f32(a, alpha, beta, x, y, s_begin, s_end, pick);
+    if (s_begin != 0U)
+    {
+        one_bit_off(y[a.rows - 1U]);
+    }
+    return ran;
+}
+
+bool sell_spmv_c64_off(const sp::SellSlices<crd::f64>& a, const sp::SellComplexScales<crd::f64>& scales,
+                       const crd::f64* x, crd::f64* y, u32 s_begin, u32 s_end, sp::SellPick pick) noexcept
+{
+    const bool ran = portable_sparse().sell_spmv_c64(a, scales, x, y, s_begin, s_end, pick);
+    if (s_begin != 0U)
+    {
+        one_bit_off(y[1]);
+    }
+    return ran;
+}
+
+bool sell_spmv_c32_off(const sp::SellSlices<crd::f32>& a, const sp::SellComplexScales<crd::f32>& scales,
+                       const crd::f32* x, crd::f32* y, u32 s_begin, u32 s_end, sp::SellPick pick) noexcept
+{
+    const bool ran = portable_sparse().sell_spmv_c32(a, scales, x, y, s_begin, s_end, pick);
+    if (s_begin != 0U)
+    {
+        one_bit_off(y[2U * a.rows - 2U]);
+    }
+    return ran;
+}
+
+// The first range's first answer a bit off.
+template <typename T> void sddmm_rows_off(const sp::SddmmRows<T>& s, u32 i_begin, u32 i_end) noexcept
+{
+    if constexpr (std::is_same_v<T, crd::f64>)
+    {
+        portable_sparse().sddmm_rows_f64(s, i_begin, i_end);
+    }
+    else
+    {
+        portable_sparse().sddmm_rows_f32(s, i_begin, i_end);
+    }
+    if (i_begin == 0U && s.outer[i_end] != s.outer[i_begin])
+    {
+        one_bit_off(s.out[s.outer[i_begin]]);
+    }
+}
+
+std::string_view routine_of(const char* routine)
+{
+    return routine != nullptr ? routine : "";
+}
+
+} // namespace
+
+TEST_CASE("sparse self-check: every table the host runs gives the known answers", "[sparse][kernels]")
+{
+    const crd::test::SelfCheckRun run =
+        crd::test::self_check_levels(sp::sparse_kernel_levels(), &sp::sparse_self_check);
+    INFO("first failure " << crd::cpu_level_name(run.level) << " " << routine_of(run.routine));
+    CHECK(run.failed == 0U);
+    CHECK(run.ran >= 1U);
+}
+
+TEST_CASE("sparse self-check: a wrong routine fails the check", "[sparse]")
+{
+    CHECK(sp::sparse_self_check(portable_sparse()) == nullptr);
+    SparseKernels w = portable_sparse();
+    w.sell_spmv_f64 = &sell_spmv_f64_off;
+    CHECK(routine_of(sp::sparse_self_check(w)) == "sell_spmv_f64 resident");
+    w = portable_sparse();
+    w.sell_spmv_f32 = &sell_spmv_f32_off;
+    CHECK(routine_of(sp::sparse_self_check(w)) == "sell_spmv_f32 resident");
+    w = portable_sparse();
+    w.sell_spmv_c64 = &sell_spmv_c64_off;
+    CHECK(routine_of(sp::sparse_self_check(w)) == "sell_spmv_c64 resident");
+    w = portable_sparse();
+    w.sell_spmv_c32 = &sell_spmv_c32_off;
+    CHECK(routine_of(sp::sparse_self_check(w)) == "sell_spmv_c32 resident");
+    w = portable_sparse();
+    w.sddmm_rows_f64 = &sddmm_rows_off<crd::f64>;
+    CHECK(routine_of(sp::sparse_self_check(w)) == "sddmm_rows_f64");
+    w = portable_sparse();
+    w.sddmm_rows_f32 = &sddmm_rows_off<crd::f32>;
+    CHECK(routine_of(sp::sparse_self_check(w)) == "sddmm_rows_f32");
 }

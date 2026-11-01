@@ -15,6 +15,10 @@ namespace crd::hesap::sparse
 [[nodiscard]] std::span<const crd::KernelLevel<SparseKernels>> sparse_kernel_levels() noexcept;
 [[nodiscard]] const crd::KernelLevel<SparseKernels>& sparse_kernels() noexcept;
 
+// The family's known-answer self-check (HW-RESILIENCE.3, crd/core/kernel_dispatch.hpp), which its resolution runs:
+// nullptr when every spmv pick and SDDMM entry of `table` gives its known answers, else the failing routine's name.
+[[nodiscard]] const char* sparse_self_check(const SparseKernels& table) noexcept;
+
 // The working set a sparse product counts as cache resident: the smallest L2 of the process's CPUs
 // (crd/core/cpu_features.hpp: CPUID's, else the OS's), 2 MiB where neither describes one. It picks the SELL sweep and
 // the operators' serial-or-parallel threshold.
