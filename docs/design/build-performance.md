@@ -237,12 +237,16 @@ instead of `/mnt/d` (drvfs, where every file open costs milliseconds: 5,760 `lst
 every tracked file about 70 s). [source-mirror.py](../../scripts/source-mirror.py) keeps it exact and
 [wsl-lane.sh](../../scripts/wsl-lane.sh) is the only route:
 
-- `sync` copies the `.git` directory, then every path that `git status` reports as different on either side (the
+- `sync` makes the mirror's `.git` a standalone repository, then copies every path that `git status` reports as different on either side (the
   checkout's status comes from the Windows git through WSL interop, about 0.2 s; the mirror's from its own git, which
   compares content because the copied index carries the checkout's stat data), deletes mirror files git does not see
   (ignored ones included), and puts the checkout's index back. The first sync, and `--full`, compare and copy every
   file instead. Times are preserved, so Ninja sees what it would see on `/mnt/d` (a backup copied back keeps its old
-  time there too, so it is touched before the rebuild).
+  time there too, so it is touched before the rebuild). The repository is the checkout's common git directory
+  (resolved by `git rev-parse`) without its `worktrees` records; a linked worktree, whose `.git` is a file naming a
+  Windows path the Linux git cannot open, adds its own directory's HEAD, index, logs and refs over it and leaves out
+  its pointers back to the main repository. A worktree's lanes name their own mirror and trees
+  (`CRD_SOURCE_MIRROR`, `CRD_LANE_ROOT`), so they never touch the main checkout's.
 - `check` refuses (exit 3) unless both sides have the same HEAD, the same `git status` entries and identical bytes in
   every reported path; `--full` compares every file's bytes.
 - `wsl-lane.sh build|configure` sync, check, then build `~/cerid-mirror-build/<preset>` (configured from the mirror

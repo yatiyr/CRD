@@ -3,8 +3,10 @@
 
     source-mirror.py sync  [--source DIR] [--mirror DIR] [--full]
         makes the mirror hold exactly the files git sees in the checkout (tracked and untracked, never the ignored
-        ones) with the same bytes and times, and a copy of `.git` (the repository guards run git in the source
-        directory). An incremental sync copies only what git reports as different on either side; --full (and the
+        ones) with the same bytes and times, and a standalone repository in `.git` (the repository guards run git in
+        the source directory): the checkout's common git directory without its worktree records, and for a linked
+        worktree (whose `.git` is a file naming its own directory) that directory's HEAD, index, logs and refs over
+        it. An incremental sync copies only what git reports as different on either side; --full (and the
         first sync) compares the bytes of every file and copies those that differ. Then it runs the check.
     source-mirror.py check [--source DIR] [--mirror DIR] [--full]
         exit 0 when the mirror and the checkout have the same HEAD, the same `git status` (every modified, added,
@@ -30,6 +32,7 @@ import sys
 STALE = 3
 CHUNK = 1 << 20
 WINDOWS_GIT = ('git.exe', '/mnt/c/Program Files/Git/cmd/git.exe')
+WORKTREE_LINKS = {'commondir', 'gitdir', 'locked'}  # a linked worktree's pointers back to its main repository
 
 
 def default_source():
@@ -51,13 +54,15 @@ class Git:
     def __init__(self, root, windows=None):
         self.root = Path(root)
         self.command = ['git', '-C', str(self.root)]
+        self.windows = False
         if windows is None:
             windows = str(self.root).startswith('/mnt/')
         if windows:
             native = windows_git()
-            translated = to_windows_path(self.root) if native else None
+            translated = wslpath('-w', self.root) if native else None
             if native and translated:
                 self.command = [native, '-C', translated]
+                self.windows = True
 
     def run(self, *arguments):
         return subprocess.run(self.command + list(arguments), capture_output=True, check=True).stdout
@@ -74,6 +79,17 @@ class Git:
 
     def head(self):
         return self.run('rev-parse', 'HEAD').decode('ascii').strip()
+
+    def directories(self):
+        """(git directory, common directory) as local paths: one directory for a main checkout; for a linked
+        worktree its own (HEAD, index) and its main repository's (objects, refs, config). Resolved by git, because the
+        worktree's `.git` file names a Windows path that the Linux git cannot open."""
+        lines = self.run('rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir').decode(
+            'utf-8', errors='surrogateescape').splitlines()
+        if self.windows:
+            lines = [wslpath('-u', line) or line for line in lines]
+        git_dir, common = (Path(line).resolve() for line in lines)
+        return git_dir, common
 
     def files(self):
         listed = self.run('ls-files', '-z', '--cached', '--others', '--exclude-standard')
@@ -97,12 +113,36 @@ def windows_git():
     return None
 
 
-def to_windows_path(path):
+def wslpath(flag, path):
+    """The other side's spelling of a path (-w Windows, -u Linux), or None without WSL."""
     try:
-        return subprocess.run(['wslpath', '-w', str(path)], capture_output=True, text=True, check=True,
+        return subprocess.run(['wslpath', flag, str(path)], capture_output=True, text=True, check=True,
                               timeout=30).stdout.strip() or None
     except (OSError, subprocess.SubprocessError):
         return None
+
+
+def repository_tree(git_dir, common):
+    """({relative path: source file}, {relative directory}) of the standalone repository a mirror's `.git` holds: the
+    common directory without the worktree records of its checkouts, and a linked worktree's own directory over it
+    (its HEAD, index, logs and per-worktree refs win; its pointers back to the main repository stay out, or git would
+    read the mirror's `.git` as a worktree of a path it cannot open). Empty directories are kept: git recognises a
+    repository by its `refs` and `objects` directories."""
+    files, directories = {}, set()
+    layers = [(common, {'worktrees'})]
+    if git_dir != common:
+        layers.append((git_dir, WORKTREE_LINKS))
+    for root, skipped in layers:
+        for directory, subdirectories, names in os.walk(root):
+            relative = os.path.relpath(directory, root)
+            if relative == '.':
+                subdirectories[:] = [name for name in subdirectories if name not in skipped]
+                names = [name for name in names if name not in skipped]
+            else:
+                directories.add(os.path.normpath(relative))
+            for name in names:
+                files[os.path.normpath(os.path.join(relative, name))] = Path(directory) / name
+    return files, directories
 
 
 def mirror_files(mirror):
@@ -194,32 +234,31 @@ def remove_empty_directories(mirror):
             os.rmdir(directory)
 
 
-def mirror_directory(source, target):
-    """Make target a copy of the source directory (files compared by size and time, extras deleted)."""
-    source, target = Path(source), Path(target)
-    seen = set()
-    for directory, _, files in os.walk(source):
-        relative = os.path.relpath(directory, source)
+def mirror_directory(files, directories, target):
+    """Make target hold exactly `files` ({relative path: source file}, compared by size and time) and `directories`;
+    everything else in it is deleted."""
+    target = Path(target)
+    for relative in sorted(directories):
         os.makedirs(target / relative, exist_ok=True)
-        for name in files:
-            path = os.path.normpath(os.path.join(relative, name))
-            seen.add(path)
-            left, right = source / path, target / path
-            mine = os.lstat(left)
-            try:
-                other = os.lstat(right)
-                current = other.st_size == mine.st_size and other.st_mtime_ns == mine.st_mtime_ns
-            except FileNotFoundError:
-                current = False
-            if not current:
-                replace_file(left, right)
-    for directory, _, files in os.walk(target, topdown=False):
-        for name in files:
-            path = os.path.normpath(os.path.join(os.path.relpath(directory, target), name))
-            if path not in seen:
-                remove_file(target / path)
-        if directory != str(target) and not os.listdir(directory):
-            os.rmdir(directory)
+    for path, left in files.items():
+        right = target / path
+        mine = os.lstat(left)
+        try:
+            other = os.lstat(right)
+            current = other.st_size == mine.st_size and other.st_mtime_ns == mine.st_mtime_ns
+        except FileNotFoundError:
+            current = False
+        if not current:
+            right.parent.mkdir(parents=True, exist_ok=True)
+            replace_file(left, right)
+    for directory, subdirectories, names in os.walk(target, topdown=False):
+        relative = os.path.relpath(directory, target)
+        for name in names:
+            if os.path.normpath(os.path.join(relative, name)) not in files:
+                remove_file(Path(directory) / name)
+        for name in subdirectories:
+            if os.path.normpath(os.path.join(relative, name)) not in directories:
+                shutil.rmtree(Path(directory) / name)
 
 
 def sync(source, mirror, full=False, out=sys.stdout):
@@ -230,9 +269,11 @@ def sync(source, mirror, full=False, out=sys.stdout):
         raise SystemExit('source-mirror: the mirror must lie outside the checkout')
     first = not (mirror / '.git').exists()
     mirror.mkdir(parents=True, exist_ok=True)
+    checkout = Git(source)
+    git_dir, common = checkout.directories()
     # The repository first: the mirror's status is then taken against the checkout's index and HEAD.
-    mirror_directory(source / '.git', mirror / '.git')
-    checkout, copy = Git(source), Git(mirror, windows=False)
+    mirror_directory(*repository_tree(git_dir, common), mirror / '.git')
+    copy = Git(mirror, windows=False)
     counts = {'copied': 0, 'removed': 0}
     if first or full:
         files = checkout.files()
@@ -259,7 +300,7 @@ def sync(source, mirror, full=False, out=sys.stdout):
             counts['removed'] += 1
     # The statuses above may have refreshed either index; take the checkout's again, so the mirror's next status
     # compares content against it instead of trusting stat data its own git recorded before the copies.
-    replace_file(source / '.git' / 'index', mirror / '.git' / 'index')
+    replace_file(git_dir / 'index', mirror / '.git' / 'index')
     remove_empty_directories(mirror)
     out.write('source-mirror: %s sync of %s: %d copied, %d removed\n'
               % ('full' if first or full else 'incremental', mirror, counts['copied'], counts['removed']))

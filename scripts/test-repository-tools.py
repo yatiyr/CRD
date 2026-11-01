@@ -3438,6 +3438,52 @@ class SourceMirror(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 self.mirror('sync', source, source / 'inside')
 
+    def test_a_linked_worktree_mirrors_as_a_standalone_repository_of_its_own_branch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            main, worktree, mirror = Path(temp) / 'main', Path(temp) / 'track', Path(temp) / 'mirror'
+            main.mkdir()
+            self.git(main, 'init', '-q', '-b', 'main')
+            self.git(main, 'config', 'core.autocrlf', 'false')
+            (main / 'a.cpp').write_text('int a = 1;\n', encoding='utf-8')
+            self.git(main, 'add', '.')
+            self.git(main, 'commit', '-q', '-m', 'base')
+            self.git(main, 'worktree', 'add', '-q', '-b', 'track', str(worktree))
+            (worktree / 'b.cpp').write_text('int b;\n', encoding='utf-8')
+            self.git(worktree, 'add', '.')
+            self.git(worktree, 'commit', '-q', '-m', 'track work')
+            (main / 'a.cpp').write_text('int a = 2;\n', encoding='utf-8')
+            self.git(main, 'add', '.')  # the main checkout's index differs from the worktree's
+            self.assertTrue((worktree / '.git').is_file(), 'a linked worktree names its git directory in a file')
+
+            code, output = self.mirror('sync', worktree, mirror)
+            self.assertEqual(code, 0, output)
+            self.assertTrue((mirror / '.git').is_dir())
+            for link in ('commondir', 'gitdir', 'worktrees'):
+                self.assertFalse((mirror / '.git' / link).exists(), link)
+            head = self.git(worktree, 'rev-parse', 'HEAD').stdout
+            self.assertEqual(self.git(mirror, 'rev-parse', 'HEAD').stdout, head)
+            self.assertEqual(self.git(mirror, 'symbolic-ref', 'HEAD').stdout.strip(), b'refs/heads/track')
+            self.assertEqual(self.git(mirror, 'status', '--porcelain').stdout, b'', 'the worktree index, not main\'s')
+            self.assertEqual(source_mirror.mirror_files(mirror), ['a.cpp', 'b.cpp'])
+            self.assertEqual(self.mirror('check', worktree, mirror, '--full')[0], 0)
+
+            (worktree / 'b.cpp').write_text('int b = 3;\n', encoding='utf-8')
+            self.assertEqual(self.mirror('check', worktree, mirror)[0], source_mirror.STALE)
+            code, output = self.mirror('sync', worktree, mirror)
+            self.assertEqual(code, 0, output)
+            self.assertIn('incremental sync', output)
+            self.git(worktree, 'commit', '-q', '-am', 'second')
+            self.assertIn('HEAD differs', self.mirror('check', worktree, mirror)[1])
+            self.assertEqual(self.mirror('sync', worktree, mirror)[0], 0)
+            self.assertEqual(self.git(mirror, 'rev-parse', 'HEAD').stdout,
+                             self.git(worktree, 'rev-parse', 'HEAD').stdout)
+            self.assertEqual(self.mirror('check', worktree, mirror, '--full')[0], 0)
+
+            # The same mirror then synced from the main checkout drops the worktree's HEAD and index.
+            self.assertEqual(self.mirror('sync', main, mirror)[0], 0)
+            self.assertEqual(self.git(mirror, 'symbolic-ref', 'HEAD').stdout.strip(), b'refs/heads/main')
+            self.assertEqual(self.mirror('check', main, mirror, '--full')[0], 0)
+
 
 class WaitHelper(unittest.TestCase):
     """scripts/wait-for.py: bounded waits on files, logs, exit-code sentinels, processes and commands."""
