@@ -1,16 +1,32 @@
 {
- "schema": "cerid-fft-level-board/1",
- "note": "SIMD-DISPATCH fft board (f64 forward arms, ms per transform, best of each program's repetitions, one value per pass); scripts/gen_fft_level_plans.py derives detail/level_plans_gen.hpp from it.",
- "board": "docs/bench/2026-10-30-simd-dispatch-fft-board.md#board-4-the-f64-plans-and-the-avx2-re-run",
+ "schema": "cerid-fft-level-board/2",
+ "note": "SIMD-DISPATCH fft level boards (f64 forward arms, ms per transform, best of each program's repetitions, one value per pass; each level with the board that measured it); scripts/gen_fft_level_plans.py derives detail/level_plans_gen.hpp from it.",
  "program": "bench_fft_vs_refs",
  "element_bytes": 8,
- "commit": "e0c70766 with the f64 forward arms",
  "levels": [
   {
    "level": "portable",
+   "machine": "the i9-14900K (WSL2)",
+   "commit": "e0c70766 with the f64 forward arms",
+   "board": "docs/bench/2026-10-30-simd-dispatch-fft-board.md#board-4-the-f64-plans-and-the-avx2-re-run",
    "selections": [
     "cpu detected=avx2 selected=portable override=applied kernel_cap=avx512"
    ],
+   "canonical": {
+    "1024": "ip4",
+    "2048": "ip4",
+    "4096": "ip4",
+    "8192": "ip4",
+    "16384": "ip4",
+    "32768": "ip4",
+    "65536": "ip4",
+    "131072": "deep-split-4",
+    "262144": "deep-split-4",
+    "524288": "deep-split-4",
+    "1048576": "six-step",
+    "2097152": "four-step",
+    "4194304": "four-step"
+   },
    "sizes": [
     {
      "n": 1024,
@@ -157,9 +173,27 @@
   },
   {
    "level": "sse2",
+   "machine": "the i9-14900K (WSL2)",
+   "commit": "e0c70766 with the f64 forward arms",
+   "board": "docs/bench/2026-10-30-simd-dispatch-fft-board.md#board-4-the-f64-plans-and-the-avx2-re-run",
    "selections": [
     "cpu detected=avx2 selected=sse2 override=applied kernel_cap=avx512"
    ],
+   "canonical": {
+    "1024": "ip4",
+    "2048": "ip4",
+    "4096": "ip4",
+    "8192": "ip4",
+    "16384": "ip4",
+    "32768": "ip4",
+    "65536": "ip4",
+    "131072": "deep-split-4",
+    "262144": "deep-split-4",
+    "524288": "deep-split-4",
+    "1048576": "six-step",
+    "2097152": "four-step",
+    "4194304": "four-step"
+   },
    "sizes": [
     {
      "n": 1024,
@@ -306,9 +340,27 @@
   },
   {
    "level": "avx2",
+   "machine": "the i9-14900K (WSL2)",
+   "commit": "e0c70766 with the f64 forward arms",
+   "board": "docs/bench/2026-10-30-simd-dispatch-fft-board.md#board-4-the-f64-plans-and-the-avx2-re-run",
    "selections": [
     "cpu detected=avx2 selected=avx2 override=none extra=aes,pclmulqdq,xsave,sha,gfni,vaes,vpclmulqdq,avx-vnni,invariant-tsc kernel_cap=avx512"
    ],
+   "canonical": {
+    "1024": "ip4",
+    "2048": "ip4",
+    "4096": "ip4",
+    "8192": "ip4",
+    "16384": "ip4",
+    "32768": "ip4",
+    "65536": "ip4",
+    "131072": "deep-split-4",
+    "262144": "deep-split-4",
+    "524288": "deep-split-4",
+    "1048576": "six-step",
+    "2097152": "four-step",
+    "4194304": "four-step"
+   },
    "sizes": [
     {
      "n": 1024,

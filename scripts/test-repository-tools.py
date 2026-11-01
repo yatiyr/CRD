@@ -4797,26 +4797,33 @@ class PeerHeaders(unittest.TestCase):
 class FftLevelPlans(unittest.TestCase):
     """scripts/gen_fft_level_plans.py: a board's logs become a type's data file, and its rows the header's."""
 
+    PROBE = {'machine': 'probe machine', 'commit': 'probe', 'board': 'docs/bench/probe.md'}
+
     @staticmethod
-    def write_board(root, planned_2k, canonical_2k):
+    def write_board(root, planned_2k, canonical_2k, level='sse2'):
         """Two passes of one level: 1K and 2K, the planned arm first, each pass beating it with four-step at 2K."""
         for p, (ip4, four) in enumerate(((0.010, 0.008), (0.011, 0.009)), start=1):
-            (root / f'pass{p}-level-sse2.txt').write_text('cpu detected=avx2 selected=sse2\n', encoding='utf-8')
-            lines = ['fft kernel level: sse2',
+            (root / f'pass{p}-level-{level}.txt').write_text(f'cpu detected=avx512 selected={level}\n',
+                                                             encoding='utf-8')
+            lines = [f'fft kernel level: {level}',
                      f'1024      | ip4             |     {ip4:.3f} | 4.1e-16', 'n=1024 canonical: ip4',
                      f'2048      | {planned_2k:<15} |     {ip4:.3f} | 4.0e-16',
                      f'2048      | four-step       |     {four:.3f} | 8.7e-16',
                      f'n=2048 canonical: {canonical_2k[p - 1]}']
             if planned_2k != 'ip4':
                 lines.append('2048      | ip4             |     0.016 | 4.0e-16')
-            (root / f'pass{p}-f64-sse2.log').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+            (root / f'pass{p}-f64-{level}.log').write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
     def test_the_printed_canonical_forward_is_each_row_s_reference(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)
             self.write_board(root, 'standalone-hier', ('ip4', 'ip4'))
-            data = fft_plans.import_board(root, 'probe', 'f64')
-            self.assertEqual({'1024': 'ip4', '2048': 'ip4'}, data['canonical'])
+            levels = fft_plans.import_board(root, 'f64', self.PROBE)
+            self.assertEqual(['sse2'], [entry['level'] for entry in levels])
+            self.assertEqual({'1024': 'ip4', '2048': 'ip4'}, levels[0]['canonical'])
+            self.assertEqual(('probe machine', 'probe', 'docs/bench/probe.md'),
+                             tuple(levels[0][key] for key in fft_plans.PROVENANCE))
+            data = fft_plans.merge(None, levels, 'f64')
             self.assertEqual(('bench_fft_vs_refs', 8), (data['program'], data['element_bytes']))
             rows = fft_plans.rows_of(root, data)
             self.assertIn('FftAlgorithm::Ip4}', rows[0][0])
@@ -4828,7 +4835,42 @@ class FftLevelPlans(unittest.TestCase):
             root = Path(scratch)
             self.write_board(root, 'ip4', ('ip4', 'stockham'))
             with self.assertRaisesRegex(SystemExit, '2048 canonical stockham, another log ip4'):
-                fft_plans.import_board(root, 'probe', 'f64')
+                fft_plans.import_board(root, 'f64', self.PROBE)
+
+    def test_an_import_replaces_its_levels_and_keeps_another_machine_s(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            first, second = Path(scratch) / 'first', Path(scratch) / 'second'
+            first.mkdir()
+            second.mkdir()
+            self.write_board(first, 'standalone-hier', ('ip4', 'ip4'))
+            self.write_board(first, 'ip4', ('ip4', 'ip4'), level='avx512')
+            data = fft_plans.merge(None, fft_plans.import_board(first, 'f64', self.PROBE), 'f64')
+            # A later board of avx512 alone, on another machine whose binary's canonical 2K is four-step.
+            self.write_board(second, 'standalone-hier', ('four-step', 'four-step'), level='avx512')
+            other = {'machine': 'other machine', 'commit': 'later', 'board': 'docs/bench/later.md'}
+            data = fft_plans.merge(data, fft_plans.import_board(second, 'f64', other), 'f64')
+            self.assertEqual(['sse2', 'avx512'], [entry['level'] for entry in data['levels']])
+            self.assertEqual('probe machine', data['levels'][0]['machine'])
+            self.assertEqual(('other machine', 'later', {'1024': 'ip4', '2048': 'four-step'}),
+                             tuple(data['levels'][1][key] for key in ('machine', 'commit', 'canonical')))
+            rows = fft_plans.rows_of(second, data)
+            # sse2's note compares with its own board's canonical ip4; avx512's winner four-step is its canonical.
+            self.assertTrue(rows[1][1].endswith('; ip4 0.016'), rows[1][1])
+            self.assertIn('{8, crd::CpuLevel::Avx512, 11, FftAlgorithm::FourStep}', rows[3][0])
+            self.assertNotIn(';', rows[3][1])
+            lines = fft_plans.sources(ROOT / 'docs' / 'bench' / 'probe.json', data)
+            self.assertEqual(['//   sse2: at probe on probe machine', '//   (docs/bench/probe.md).',
+                              '//   avx512: at later on other machine', '//   (docs/bench/later.md).'], lines[1:])
+
+    def test_a_level_without_its_board_s_provenance_is_refused(self):
+        data = fft_plans.load('f32')
+        del data['levels'][0]['machine']
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch) / 'f32.json'
+            path.write_text(json.dumps(data), encoding='utf-8')
+            with patch.dict(fft_plans.TYPES, {'f32': (path, 'bench_fft_f32', 4)}):
+                with self.assertRaisesRegex(SystemExit, 'level portable has no machine'):
+                    fft_plans.load('f32')
 
     def test_this_checkout_s_header_matches_its_data_files(self):
         with patch('sys.argv', ['gen_fft_level_plans.py', '--check']):

@@ -1,16 +1,32 @@
 {
- "schema": "cerid-fft-level-board/1",
- "note": "SIMD-DISPATCH fft board (f32 forward arms, ms per transform, best of each program's repetitions, one value per pass); scripts/gen_fft_level_plans.py derives detail/level_plans_gen.hpp from it.",
- "board": "docs/bench/2026-10-30-simd-dispatch-fft-board.md#board-3-the-per-level-plans",
+ "schema": "cerid-fft-level-board/2",
+ "note": "SIMD-DISPATCH fft level boards (f32 forward arms, ms per transform, best of each program's repetitions, one value per pass; each level with the board that measured it); scripts/gen_fft_level_plans.py derives detail/level_plans_gen.hpp from it.",
  "program": "bench_fft_f32",
  "element_bytes": 4,
- "commit": "7cd38660 with the fft kernel level line",
  "levels": [
   {
    "level": "portable",
+   "machine": "the i9-14900K (WSL2)",
+   "commit": "7cd38660 with the fft kernel level line",
+   "board": "docs/bench/2026-10-30-simd-dispatch-fft-board.md#board-3-the-per-level-plans",
    "selections": [
     "cpu detected=avx2 selected=portable override=applied kernel_cap=avx512"
    ],
+   "canonical": {
+    "1024": "standalone-hier",
+    "2048": "ip4",
+    "4096": "standalone-hier",
+    "8192": "standalone-hier",
+    "16384": "ip4",
+    "32768": "ip4",
+    "65536": "ip4",
+    "131072": "deep-split-4",
+    "262144": "deep-split-4",
+    "524288": "deep-split-4",
+    "1048576": "tiled-four-step",
+    "2097152": "four-step",
+    "4194304": "four-step"
+   },
    "sizes": [
     {
      "n": 1024,
@@ -158,9 +174,27 @@
   },
   {
    "level": "sse2",
+   "machine": "the i9-14900K (WSL2)",
+   "commit": "7cd38660 with the fft kernel level line",
+   "board": "docs/bench/2026-10-30-simd-dispatch-fft-board.md#board-3-the-per-level-plans",
    "selections": [
     "cpu detected=avx2 selected=sse2 override=applied kernel_cap=avx512"
    ],
+   "canonical": {
+    "1024": "standalone-hier",
+    "2048": "ip4",
+    "4096": "standalone-hier",
+    "8192": "standalone-hier",
+    "16384": "ip4",
+    "32768": "ip4",
+    "65536": "ip4",
+    "131072": "deep-split-4",
+    "262144": "deep-split-4",
+    "524288": "deep-split-4",
+    "1048576": "tiled-four-step",
+    "2097152": "four-step",
+    "4194304": "four-step"
+   },
    "sizes": [
     {
      "n": 1024,
@@ -308,9 +342,27 @@
   },
   {
    "level": "avx2",
+   "machine": "the i9-14900K (WSL2)",
+   "commit": "7cd38660 with the fft kernel level line",
+   "board": "docs/bench/2026-10-30-simd-dispatch-fft-board.md#board-3-the-per-level-plans",
    "selections": [
     "cpu detected=avx2 selected=avx2 override=none extra=aes,pclmulqdq,xsave,sha,gfni,vaes,vpclmulqdq,avx-vnni,invariant-tsc kernel_cap=avx512"
    ],
+   "canonical": {
+    "1024": "standalone-hier",
+    "2048": "ip4",
+    "4096": "standalone-hier",
+    "8192": "standalone-hier",
+    "16384": "ip4",
+    "32768": "ip4",
+    "65536": "ip4",
+    "131072": "deep-split-4",
+    "262144": "deep-split-4",
+    "524288": "deep-split-4",
+    "1048576": "tiled-four-step",
+    "2097152": "four-step",
+    "4194304": "four-step"
+   },
    "sizes": [
     {
      "n": 1024,
