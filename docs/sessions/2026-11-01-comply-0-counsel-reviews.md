@@ -95,12 +95,36 @@ already reports an outstanding review in every `ceridc comply` answer, so no rul
   `check-generated.py` pass.
 - **Cloud machine.** Not started: only Python, JSON and docs changed, and no C++ test reads the register's new block.
 
+<a id="host-checks"></a>
+## Host checks for the first read
+
+The download is approved. Before any reader is written, one instrument per major host was fetched twice into
+`~/.cerid/downloads/probe-2026-11-01/` (outside the repository). Each body was checked for the instrument's text and
+the two digests compared. The planned primary URLs are not all readable as they stand:
+
+| Host | Planned URL | What serves the text | Version marker | Stable |
+|---|---|---|---|---|
+| mevzuat.gov.tr | `mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5` (71 619 bytes, a script shell that frames the text) | `anasayfa/MevzuatFihristDetayIframe?MevzuatTur=1&MevzuatNo=6698&MevzuatTertip=5` (207 245 bytes, the consolidated KVKK in HTML); `MevzuatMetin/1.5.6698.doc` (260 608 bytes) is the Word copy | The amendment notes in the text, such as "(Değişik:2/3/2024-7499/34 md.)", give the latest amending law and day | Yes: `83115349…5ad5c23ba6` twice |
+| eur-lex.europa.eu | `eli/reg/2016/679/oj` | Nothing: HTTP 202 with an empty body (a bot challenge, never bypassed) | — | — |
+| publications.europa.eu (CELLAR, the Publications Office) | — | `resource/celex/32016R0679` with `Accept: application/xhtml+xml` and `Accept-Language: eng` redirects to the http form of `resource/cellar/3e485e15-….0006.03/DOC_1` (806 864 bytes). Its https form serves the same bytes, so the fetcher must request https and refuse a downgrade | Consolidated versions are separate CELEX numbers (`02016R0679-<day>`) | Yes: `962539af…1b646b9d` over http and https |
+| legislation.gov.uk | `ukpga/2018/12` (5 512 194 bytes of HTML) | `ukpga/2018/12/data.xml` (5 919 263 bytes, CLML) | `dct:valid` 2026-09-30, the point-in-time version | One fetch |
+| ecfr.gov | `current/title-15/subtitle-B/chapter-VII/subchapter-C` (HTML) | `api/versioner/v1/versions/title-15.json?part=740` lists 281 section versions, the latest amended on 2026-08-14. `api/versioner/v1/full/2026-08-14/title-15.xml?part=740` holds the dated text, and refuses a request without `Accept-Encoding: gzip` (406) | The amendment day per part; `titles.json` gives each title's `latest_amended_on` | Yes: `9f92d95b…b862fe38` twice |
+
+What follows for the reader:
+
+- **A source URL beside the citation URL.** Each host gets a resolver from the primary URL a person cites to the
+  document the machine reads.
+- **The fetcher.** It sends `Accept-Encoding: gzip` and decompresses, and it refuses a redirect from https to http.
+- **The digest.** Each host's reader digests the instrument's text and takes its version from the host's own marker.
+  Fifteen planned URLs are home pages (btk, kvkk, gib, ticaret, tbmm, cac, npc, edpb, ico, esrb, pegi, sanctionsmap,
+  capitol.texas, le.utah, commission.europa). These are replaced by the instruments' own documents before they are
+  read.
+
 ## Next
 
-1. COMPLY.0's first read of the official texts (approved). Plan the 80 sources and check each host before editing any
-   entry. Fetch one URL, confirm the body holds the instrument's text, fetch it again and compare the digests. The
-   hosts to check are mevzuat.gov.tr's per-law document, the eCFR versioner API scoped to the cited parts, EUR-Lex's
-   consolidated CELEX forms and legislation.gov.uk's data variants.
+1. COMPLY.0's first read of the official texts (approved), on the [host checks](#host-checks) above. Check the
+   remaining hosts the same way: planalto.gov.br, legislation.gov.au, laws-lois.justice.gc.ca, leginfo, uscode,
+   elaws.e-gov.go.jp, resmigazete.gov.tr and the platform policy pages.
 2. Replace the 15 home-page URLs with the instruments' own documents.
 3. Add a `register-review.py` command that records a reading (`consolidated` version, day and SHA-256 from the fetch
    manifest). Read first what NET.2, CRASH-FIX.1 and the classifications depend on: Laws 6698, 7545 and 5809, the GDPR,
