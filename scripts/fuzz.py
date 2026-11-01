@@ -61,6 +61,8 @@ TARGETS = {
                         'executable': 'tests/crypto/fuzz/crd-fuzz-crypto-provider'},
     'crypto-tls': {'corpus': 'tests/foundation/crypto/fuzz/corpus-tls',
                    'executable': 'tests/crypto/fuzz/crd-fuzz-crypto-tls'},
+    'crypto-quic': {'corpus': 'tests/foundation/crypto/fuzz/corpus-quic',
+                    'executable': 'tests/crypto/fuzz/crd-fuzz-crypto-quic'},
     'comply-rules': {'corpus': 'tests/foundation/comply/fuzz/corpus/rules',
                      'executable': 'tests/comply/fuzz/crd-fuzz-comply-rules'},
     'comply-sanctions': {'corpus': 'tests/foundation/comply/fuzz/corpus/sanctions',
