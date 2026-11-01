@@ -179,6 +179,13 @@ int main()
         k_gbase<<<4, 256>>>(ax, gb);
         CRD_CUDA_CHECK(cudaGetLastError());
     });
+    // ghist_b's repeated calls added into histograms nothing cleared, so gbase's bases now point past the keys: build
+    // configuration B's histograms and bases once from a cleared state before a scatter reads them
+    k_clear<<<2049, 256>>>(ax);
+    k_ghist_b<<<4096, 256>>>(a, ax);
+    k_gbase<<<4, 256>>>(ax, gb);
+    CRD_CUDA_CHECK(cudaGetLastError());
+    CRD_CUDA_CHECK(cudaDeviceSynchronize());
     time_kernel("clr+sb0", [&]
     {
         k_clear<<<2049, 256>>>(ax);
