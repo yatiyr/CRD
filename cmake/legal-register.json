@@ -4,7 +4,7 @@
   "about": "COMPLY.0 legal register: every legal and platform obligation that applies to Cerid or to products built with it, one entry per instrument and article, with its jurisdiction, official primary source and the consolidated version read, the obligation in plain words, the products, data flows and channels it applies to, the check that proves it, its effective and sunset dates, a counsel-review flag, the owning rows and the next review. scripts/check-registers.py (the crd-check-registers CTest and repository step) fails a binding obligation without an active check, a lapsed review, an entry read from no primary source when its rows close and a topic without a Turkish entry. docs/design/registers.md is the contract; it shares the standards register's format, guard and review machinery.",
   "snapshot": {
     "date": "2026-11-01",
-    "method": "Refreshed on 2026-11-01 by scripts/register-review.py from the approved source plan (280 records; report docs/sessions/2026-11-01-legal-register-uk-regimes.md)."
+    "method": "Refreshed on 2026-11-01 by scripts/register-review.py from the approved source plan (337 records; report docs/sessions/2026-11-01-legal-register-un-resolutions.md)."
   },
   "review": {
     "cadence": "A light scan quarterly, after each yearly platform event (the April SDK rule, Google I/O, WWDC, the August target API rule) and after each dated effective day the register holds, and a full re-research every year or when a scan finds a pinned instrument amended; Official Gazette of Turkey, EUR-Lex and Steamworks announcements are recorded as runs with their triggering entries. Reviews propose ROADMAP amendments for the user and never edit rows.",
@@ -153,6 +153,12 @@
         "day": "2026-11-01",
         "scan": "light",
         "ref": "docs/sessions/2026-11-01-legal-register-uk-regimes.md",
+        "triggers": []
+      },
+      {
+        "day": "2026-11-01",
+        "scan": "light",
+        "ref": "docs/sessions/2026-11-01-legal-register-un-resolutions.md",
         "triggers": []
       }
     ]
@@ -8606,11 +8612,15 @@
       ],
       "instrument": {
         "name": "UN Security Council Consolidated List",
-        "article": "Charter Article 41 measures",
+        "article": "Charter Article 41 measures: the regimes whose persons the list names",
         "type": "treaty",
         "jurisdiction": "INT",
-        "primary": "https://www.un.org/securitycouncil/content/un-sc-consolidated-list",
-        "consolidated": null
+        "primary": "https://scsanctions.un.org/resources/xml/en/consolidated.xml",
+        "consolidated": {
+          "version": "14 regimes",
+          "read": "2026-11-01",
+          "sha256": "019e9f9669d1ecd11e3703eed61eac237fe981851cff25824431849b2f8b0c51"
+        }
       },
       "obligation": "Screen distribution, accounts and payments against the UN consolidated list.",
       "applies_to": [
@@ -8630,13 +8640,1470 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.1",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
-      "deprecation": null
+      "deprecation": null,
+      "note": "The list's regimes (the list types of its parties) index the Council's sanctions regimes with a list; register-review.py judges each against the resolution establishing it. A regime whose measure attaches to a place without listing anyone (Lebanon's, resolution 1701 (2006)) is read on its own."
+    },
+    {
+      "id": "un.res-1267-1999.isil-al-qaida",
+      "title": "UN sanctions: ISIL (Da'esh) and Al-Qaida (the 1267 regime)",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 1267 (1999)",
+        "article": "Paragraphs 4 and 6 (the Committee and its measures)",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/287334",
+        "consolidated": {
+          "version": "S/RES/1267 (1999) of 1999-10-15, English text of 16670 bytes",
+          "read": "2026-11-01",
+          "sha256": "b2f227be8b893a60e7776966e8fb22d22576531b17e521759fa4dcbebcfebe63"
+        }
+      },
+      "obligation": "Freeze the funds and economic resources of, and make none available to, the persons the ISIL (Da'esh) and Al-Qaida Sanctions List names; supply them no arms and related materiel and no technical advice, assistance or training related to military activities; admit none of them (the regime's measures as restated by resolution 2734 (2024), paragraph 1).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the UN Consolidated List lists its persons)",
+        "state": "active"
+      },
+      "effective": "1999-10-15",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The resolution establishes the Committee whose list the UN Consolidated List carries as Al-Qaida; its own measures (a flight ban and a funds freeze on the Taliban) were replaced as the regime grew (resolutions 1333 (2000), 1390 (2002), 1989 (2011) and 2253 (2015)). Resolution 2734 (2024), paragraph 1, read the same day, reaffirms the measures of resolution 2368 (2017): an asset freeze, a travel ban and an arms embargo, each on the persons listed, so the UN embargo names no destination for it."
+    },
+    {
+      "id": "un.res-1988-2011.taliban",
+      "title": "UN sanctions: the Taliban (the 1988 regime)",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 1988 (2011)",
+        "article": "Paragraph 1 (asset freeze, travel ban and arms embargo) and paragraph 30 (the Committee)",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/705598",
+        "consolidated": {
+          "version": "S/RES/1988 (2011) of 2011-06-17, English text of 64406 bytes",
+          "read": "2026-11-01",
+          "sha256": "5688f2d9505e904bfd7e93d380052f810f5f1eff71d1986848d97f3d81e9da0c"
+        }
+      },
+      "obligation": "Freeze the funds and economic resources of, and make none available to, the individuals, groups, undertakings and entities the 1988 Committee's list names as associated with the Taliban; admit none of the individuals; supply them no arms and related materiel and no technical advice, assistance or training related to military activities (paragraph 1).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the UN Consolidated List lists its persons)",
+        "state": "active"
+      },
+      "effective": "2011-06-17",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Every measure attaches to the persons listed, whom the UN Consolidated List carries as Taliban, so the UN embargo names no destination for it."
+    },
+    {
+      "id": "un.res-2048-2012.guinea-bissau",
+      "title": "UN sanctions: Guinea-Bissau",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 2048 (2012)",
+        "article": "Paragraphs 4 to 6 (travel ban) and 9 (the Committee)",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/727466",
+        "consolidated": {
+          "version": "S/RES/2048 (2012) of 2012-05-18, English text of 43960 bytes",
+          "read": "2026-11-01",
+          "sha256": "9e724f85e15b6aee033fb59b285793b5b1113397b1a522940bc2f0ea9a3dfae4"
+        }
+      },
+      "obligation": "Admit none of the individuals the resolution's annex lists or the Committee designates (paragraph 4), save the exemptions of paragraph 5.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the UN Consolidated List lists its persons)",
+        "state": "active"
+      },
+      "effective": "2012-05-18",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The only measure is a travel ban on the persons listed, whom the UN Consolidated List carries as GB, so the UN embargo names no destination for it."
+    },
+    {
+      "id": "un.res-2140-2014.yemen",
+      "title": "UN sanctions: Yemen",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 2140 (2014)",
+        "article": "Paragraphs 11 (asset freeze), 15 (travel ban) and 19 (the Committee)",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/766144",
+        "consolidated": {
+          "version": "S/RES/2140 (2014) of 2014-02-26, English text of 64675 bytes",
+          "read": "2026-11-01",
+          "sha256": "1d988584bf73f3689230339f3d3a23af6a497e90936af1b9b8675084d85ba7b3"
+        }
+      },
+      "obligation": "Freeze the funds and economic resources of, and make none available to, the individuals and entities the Committee designates (paragraph 11); admit none of the individuals (paragraph 15); supply them, and those acting on their behalf or at their direction in Yemen, no arms and related materiel and no military assistance (resolution 2216 (2015), paragraph 14).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the UN Consolidated List lists its persons)",
+        "state": "active"
+      },
+      "effective": "2014-02-26",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Every measure attaches to the persons designated, whom the UN Consolidated List carries as Yemen; the arms embargo of resolution 2216 (2015), paragraph 14, read the same day, reaches the persons listed and those acting for them, never a place, so the UN embargo names no destination for it. Resolution 2801 (2025) renewed the measures until 14 November 2026 (its title in the UN Digital Library)."
+    },
+    {
+      "id": "un.res-1518-2003.iraq",
+      "title": "UN sanctions: Iraq (the 1518 Committee)",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 1518 (2003)",
+        "article": "Paragraphs 1 and 2 (the Committee identifying the funds of resolution 1483 (2003), paragraph 19)",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/506966",
+        "consolidated": {
+          "version": "S/RES/1518 (2003) of 2003-11-24, English text of 21010 bytes",
+          "read": "2026-11-01",
+          "sha256": "d85e62e9913ce7149229d264a83f3d699a492d35b37d3c2112abb6d87f0c1aeb"
+        }
+      },
+      "obligation": "Freeze the funds and economic resources of the previous Government of Iraq and of the senior officials of the former regime that the Committee lists, and transfer them as resolution 1483 (2003), paragraph 23, directs.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the UN Consolidated List lists its persons)",
+        "state": "active"
+      },
+      "effective": "2003-11-24",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The Committee lists the persons whose funds resolution 1483 (2003), paragraph 23, freezes; the UN Consolidated List carries them as Iraq. The arms embargo on Iraq rests on resolution 687 (1991), paragraph 24 (un.res-687-1991.iraq-arms)."
+    },
+    {
+      "id": "un.res-687-1991.iraq-arms",
+      "title": "UN arms embargo: Iraq",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 687 (1991)",
+        "article": "Paragraph 24 (arms and related materiel, their technology and training)",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/110709",
+        "consolidated": {
+          "version": "S/RES/687 (1991) of 1991-04-03, English text of 413953 bytes",
+          "read": "2026-11-01",
+          "sha256": "aa1071ae97a8c2f061db26c59294fa19e943e989b65009cd6c5ebfb2dcca6e9b"
+        }
+      },
+      "obligation": "Sell or supply to Iraq no arms and related materiel of any type (conventional military equipment, paramilitary forces' equipment, spare parts, components and means of production), no technology for producing or using them, and no personnel or materials for training or technical support for them (paragraph 24(a), (c) and (d)), except arms and related materiel the Government of Iraq or the multinational force requires (resolution 1546 (2004), paragraph 21).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens Iraq as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "1991-04-03",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Resolution 1483 (2003), paragraph 10, lifted every other prohibition on trade with Iraq of resolution 661 (1990) and kept the arms prohibition; resolution 1546 (2004), paragraph 21, excepts what the Government of Iraq and the multinational force require; resolution 1957 (2010), paragraph 1, ended the weapons of mass destruction, missile and civil nuclear measures of paragraphs 8, 9, 10, 12 and 13, so paragraph 24(b) reaches nothing. Read with those three, each its own entry."
+    },
+    {
+      "id": "un.res-1483-2003.iraq-trade",
+      "title": "UN sanctions on Iraq lifted but for arms",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 1483 (2003)",
+        "article": "Paragraphs 10 (prohibitions lifted but for arms), 19 and 23 (funds of the former regime)",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/495555",
+        "consolidated": {
+          "version": "S/RES/1483 (2003) of 2003-05-22, English text of 58414 bytes",
+          "read": "2026-11-01",
+          "sha256": "7fb95eb84179f35cc4f8abf73780fd3548933044bbb8ec5b9960fbbd7ed43344"
+        }
+      },
+      "obligation": "Keep the prohibitions on selling or supplying arms and related materiel to Iraq of resolution 661 (1990) and the later resolutions; every other prohibition on trade with Iraq no longer applies (paragraph 10); freeze and transfer the funds of the previous Government and the former regime's senior officials (paragraph 23).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens Iraq as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2003-05-22",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "It narrows resolution 661 (1990), paragraph 3, to the arms prohibition of resolution 687 (1991), paragraph 24, on which the UN embargo's Iraq destination rests."
+    },
+    {
+      "id": "un.res-1546-2004.iraq-government",
+      "title": "UN arms embargo on Iraq: the Government's exception",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 1546 (2004)",
+        "article": "Paragraphs 21 and 22",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/523025",
+        "consolidated": {
+          "version": "S/RES/1546 (2004) of 2004-06-08, English text of 56321 bytes",
+          "read": "2026-11-01",
+          "sha256": "de23eaf2b212d7e668d92f277085c36be1ecfebceec4b8e51fd98952cf2b55ef"
+        }
+      },
+      "obligation": "Apply the prohibitions on selling or supplying arms and related materiel to Iraq to everyone but the Government of Iraq and the multinational force, whose required arms they do not reach (paragraph 21).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens Iraq as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2004-06-08",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Paragraph 22 kept the measures on the items of resolution 687 (1991), paragraphs 8 and 12, which resolution 1957 (2010) later ended."
+    },
+    {
+      "id": "un.res-1957-2010.iraq-wmd",
+      "title": "UN measures on Iraq's weapons of mass destruction ended",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 1957 (2010)",
+        "article": "Paragraph 1",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/695065",
+        "consolidated": {
+          "version": "S/RES/1957 (2010) of 2010-12-15, English text of 31372 bytes",
+          "read": "2026-11-01",
+          "sha256": "254f45861e1ebfd9544f5f9ac75e056b569c90b4ef865c50671876c1e947a51a"
+        }
+      },
+      "obligation": "Treat the weapons of mass destruction, missile and civil nuclear-related measures of resolution 687 (1991), paragraphs 8, 9, 10, 12 and 13, and resolution 707 (1991), paragraph 3(f), as ended.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens Iraq as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2010-12-15",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "With it, resolution 687 (1991), paragraph 24(b), names no item, and the Iraq destination rests on the arms of paragraph 24(a), (c) and (d)."
+    },
+    {
+      "id": "un.res-1533-2004.drc",
+      "title": "UN sanctions: the Democratic Republic of the Congo (the 1533 Committee)",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 1533 (2004)",
+        "article": "Paragraph 8 (the Committee)",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/517193",
+        "consolidated": {
+          "version": "S/RES/1533 (2004) of 2004-03-12, English text of 35997 bytes",
+          "read": "2026-11-01",
+          "sha256": "5450a0b362711b183b2aef02b8a5d895fb7e6275ee2d4b9512a82b7d236e35c6"
+        }
+      },
+      "obligation": "Apply the measures the Committee monitors: the arms embargo on the non-governmental entities and individuals operating in the Democratic Republic of the Congo (un.res-1807-2008.drc-arms) and the travel ban and asset freeze on the persons it designates.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the UN Consolidated List lists its persons)",
+        "state": "active"
+      },
+      "effective": "2004-03-12",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The Committee lists the persons the UN Consolidated List carries as DRC; the arms embargo rests on resolution 1807 (2008), paragraph 1, renewed by resolution 2825 (2026)."
+    },
+    {
+      "id": "un.res-1807-2008.drc-arms",
+      "title": "UN arms embargo: non-governmental entities in the DRC",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 1807 (2008)",
+        "article": "Paragraphs 1 to 3 (the arms embargo and its exemptions) and 5 (notification)",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/623667",
+        "consolidated": {
+          "version": "S/RES/1807 (2008) of 2008-03-31, English text of 48627 bytes",
+          "read": "2026-11-01",
+          "sha256": "8a39065cef03555ffb72af54236101749770caa61ecaed3aeba03119280ced67"
+        }
+      },
+      "obligation": "Supply no arms and related materiel and no assistance, advice or training related to military activities, financing included, to any non-governmental entity or individual operating in the territory of the Democratic Republic of the Congo (paragraph 1); the Government is not reached (paragraph 2).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens the Democratic Republic of the Congo as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2008-03-31",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Its own period ended on 31 December 2008; the Council renews the measure, most recently by resolution 2825 (2026) until 1 July 2027 (un.res-2825-2026.drc-renewal), which the destination rests on."
+    },
+    {
+      "id": "un.res-2825-2026.drc-renewal",
+      "title": "UN arms embargo on the DRC renewed until 1 July 2027",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 2825 (2026)",
+        "article": "Paragraphs 1 and 2",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/4119986",
+        "consolidated": {
+          "version": "S/RES/2825 (2026) of 2026-06-29, English text of 157825 bytes",
+          "read": "2026-11-01",
+          "sha256": "5dfac980ef15d5c6625214c03cef28de2e23f3ba4238470d2e78598c75e2bf67"
+        }
+      },
+      "obligation": "Supply no arms and related materiel and no military assistance to any non-governmental entity or individual operating in the territory of the Democratic Republic of the Congo until 1 July 2027: the measures of resolution 2783 (2025), paragraphs 1 and 3, renewed (paragraph 1), those of resolution 1807 (2008), paragraph 1, continuing to apply (paragraph 2).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens the Democratic Republic of the Congo as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2026-06-29",
+      "sunset": "2027-07-01",
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Resolution 2783 (2025), paragraph 1, read the same day, renewed the measures of resolution 2293 (2016), paragraphs 1 to 6, without the notification of resolution 1807 (2008), paragraph 5. The entry ends with the renewal, so the guard asks for the next one on that day."
+    },
+    {
+      "id": "un.res-1591-2005.sudan",
+      "title": "UN sanctions: Sudan (the 1591 Committee)",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 1591 (2005)",
+        "article": "Paragraphs 3 (the Committee, travel ban and asset freeze) and 7 (the Darfur arms embargo extended)",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/544566",
+        "consolidated": {
+          "version": "S/RES/1591 (2005) of 2005-03-29, English text of 42089 bytes",
+          "read": "2026-11-01",
+          "sha256": "06846378350730e52009de7309aaa0ff8728f8ad26e6cdaf3dc078cef72d765c"
+        }
+      },
+      "obligation": "Apply the arms embargo of resolution 1556 (2004), paragraphs 7 and 8, also to every party to the N'Djamena Ceasefire Agreement and any other belligerent in the states of North, South and West Darfur, with military equipment moved into Darfur only as the Committee approves (paragraph 7); admit none of, and freeze the funds of, the persons the Committee designates (paragraph 3(d) and (e)).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens the Darfur states as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2005-03-29",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The Committee lists the persons the UN Consolidated List carries as Sudan. Resolution 2035 (2012), paragraph 4, read the same day, ended the exemption for the Comprehensive Peace Agreement."
+    },
+    {
+      "id": "un.res-1556-2004.darfur-arms",
+      "title": "UN arms embargo: Darfur",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 1556 (2004)",
+        "article": "Paragraphs 7 to 9",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/527076",
+        "consolidated": {
+          "version": "S/RES/1556 (2004) of 2004-07-30, English text of 36201 bytes",
+          "read": "2026-11-01",
+          "sha256": "3ec85ecda5b46419c0c9e541204bf59b17d794bab08025548208892a8a2610f5"
+        }
+      },
+      "obligation": "Sell or supply no arms and related materiel of any type, and provide no technical training or assistance for them, to any non-governmental entity or individual, the Janjaweed included, operating in the states of North, South and West Darfur (paragraphs 7 and 8), save the supplies of paragraph 9.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens the Darfur states as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2004-07-30",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The three states of 2004 are today the five Darfur states (Central and East Darfur were formed from them in 2012), so the measure reaches ISO 3166-2 SD-DN, SD-DS, SD-DW, SD-DC and SD-DE. The Council renews it, most recently by resolution 2830 (2026) until 11 December 2026 (un.res-2830-2026.sudan-renewal)."
+    },
+    {
+      "id": "un.res-2830-2026.sudan-renewal",
+      "title": "UN sanctions on Sudan renewed until 11 December 2026",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 2830 (2026)",
+        "article": "Paragraph 1",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/4130024",
+        "consolidated": {
+          "version": "S/RES/2830 (2026) of 2026-10-08, English text of 158782 bytes",
+          "read": "2026-11-01",
+          "sha256": "da2c6a71e160f199380390d36fd55344893d8daa44ce2bde023f631d914147ea"
+        }
+      },
+      "obligation": "Keep the Darfur arms embargo of resolution 1556 (2004), paragraphs 7 and 8, as resolution 1591 (2005), paragraph 7, and resolution 2035 (2012), paragraph 4, modify it, and the travel ban and asset freeze of resolution 1591 (2005), paragraph 3(c) to (e), until 11 December 2026.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens the Darfur states as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2026-10-08",
+      "sunset": "2026-12-11",
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Resolutions 2750 (2024), 2791 (2025) and 2828 (2026), read the same day, renewed the measures before it (until 12 September 2025, 12 September 2026 and 9 October 2026). The entry ends with the renewal, so the guard asks for the next one on that day."
+    },
+    {
+      "id": "un.res-1970-2011.libya",
+      "title": "UN sanctions: Libya",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 1970 (2011)",
+        "article": "Paragraphs 9 (arms embargo), 15 and 17 (travel ban and asset freeze) and 24 (the Committee)",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/698927",
+        "consolidated": {
+          "version": "S/RES/1970 (2011) of 2011-02-26, English text of 54458 bytes",
+          "read": "2026-11-01",
+          "sha256": "480c33d2524ed243d2920c5b08d710e5db91d1931aa973670514f8f7a28ba87c"
+        }
+      },
+      "obligation": "Supply, sell or transfer to Libya no arms and related materiel of any type and no technical assistance, training, financial or other assistance related to military activities, armed mercenaries included, save what paragraph 9 and resolution 2009 (2011), paragraph 13, except (paragraph 9); admit none of, and freeze the funds of, the persons the Committee lists (paragraphs 15 and 17).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens Libya as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2011-02-26",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The measure has no period. Resolution 2009 (2011), paragraph 13, excepts arms for the Libyan authorities' security or disarmament notified to the Committee, and resolution 2095 (2013), paragraph 9, frees non-lethal equipment for humanitarian or protective use from approval (both read the same day); the measures of resolution 2146 (2014) on illicit petroleum exports, extended by resolution 2819 (2026), reach designated vessels, never a supply to Libya."
+    },
+    {
+      "id": "un.res-1701-2006.lebanon",
+      "title": "UN arms embargo: Lebanon",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 1701 (2006)",
+        "article": "Paragraph 15",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/581053",
+        "consolidated": {
+          "version": "S/RES/1701 (2006) of 2006-08-11, English text of 36873 bytes",
+          "read": "2026-11-01",
+          "sha256": "7b230357c1560cdc16069c4815a03c5aa4b182792d77105d8734f24fee02397b"
+        }
+      },
+      "obligation": "Sell or supply no arms and related materiel of any type, and provide no technical training or assistance for them, to any entity or individual in Lebanon, except as the Government of Lebanon or UNIFIL authorises (paragraph 15).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens Lebanon as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2006-08-11",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "No Committee lists anyone under it, so the UN Consolidated List carries no Lebanon regime; the measure has no period and outlasts UNIFIL's mandate."
+    },
+    {
+      "id": "un.res-2127-2013.central-african-republic",
+      "title": "UN sanctions: the Central African Republic",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 2127 (2013)",
+        "article": "Paragraphs 54 (the arms embargo, since lifted) and 57 (the Committee)",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/761853",
+        "consolidated": {
+          "version": "S/RES/2127 (2013) of 2013-12-05, English text of 73779 bytes",
+          "read": "2026-11-01",
+          "sha256": "4e83ba0051de9a88aa677632f90fd606a4ac3c1a17393a1a3e71dc22b802e389"
+        }
+      },
+      "obligation": "Apply the measures the Committee monitors: the arms embargo on armed groups and associated individuals operating in the Central African Republic (resolution 2745 (2024), paragraph 2) and the travel ban and asset freeze on the persons it designates.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the UN Consolidated List lists its persons)",
+        "state": "active"
+      },
+      "effective": "2013-12-05",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Resolution 2745 (2024), paragraph 1, lifted the arms embargo on the Central African Republic of paragraph 54; the Committee lists the persons the UN Consolidated List carries as CAR."
+    },
+    {
+      "id": "un.res-2745-2024.central-african-republic-armed-groups",
+      "title": "UN arms embargo: armed groups in the Central African Republic",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 2745 (2024)",
+        "article": "Paragraphs 1 to 5",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/4055582",
+        "consolidated": {
+          "version": "S/RES/2745 (2024) of 2024-07-30, English text of 191682 bytes",
+          "read": "2026-11-01",
+          "sha256": "da7dc8d0ae542cc9e32de13c03405b5601660d24bea87f86dfaacb48345d359d"
+        }
+      },
+      "obligation": "Supply no arms and related materiel of any type and no technical assistance, training, financial or other assistance related to military activities to armed groups and associated individuals operating in the Central African Republic (paragraph 2); the arms embargo on the country itself is lifted (paragraph 1).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens the Central African Republic as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2024-07-30",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Its own period ended on 31 July 2025; resolution 2827 (2026) extends the measures until 31 July 2027 (un.res-2827-2026.central-african-republic-renewal), which the destination rests on."
+    },
+    {
+      "id": "un.res-2827-2026.central-african-republic-renewal",
+      "title": "UN sanctions on the Central African Republic extended until 31 July 2027",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 2827 (2026)",
+        "article": "Paragraph 1",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/4123073",
+        "consolidated": {
+          "version": "S/RES/2827 (2026) of 2026-07-29, English text of 142402 bytes",
+          "read": "2026-11-01",
+          "sha256": "cf2de16cbaa419117d692c643ea24f27f029021491f4c4408d548af5914a6598"
+        }
+      },
+      "obligation": "Keep the arms embargo on armed groups and associated individuals operating in the Central African Republic and the measures on designated persons of resolution 2745 (2024), paragraphs 2 and 4, until 31 July 2027.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens the Central African Republic as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2026-07-29",
+      "sunset": "2027-07-31",
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The entry ends with the extension, so the guard asks for the next one on that day."
+    },
+    {
+      "id": "un.res-2653-2022.haiti",
+      "title": "UN sanctions: Haiti",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 2653 (2022)",
+        "article": "Paragraphs 3 to 9 (travel ban and asset freeze), 11 (the arms embargo, since replaced) and 19 (the Committee)",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/3992091",
+        "consolidated": {
+          "version": "S/RES/2653 (2022) of 2022-10-21, English text of 242948 bytes",
+          "read": "2026-11-01",
+          "sha256": "f45c350738c3fc95e5a21af01449261cb28ceffd252e89ef9f3f19c2f771ef7d"
+        }
+      },
+      "obligation": "Admit none of, and freeze the funds of, the persons the Committee designates (paragraphs 3 to 9); the arms embargo on Haiti is resolution 2794 (2025), paragraph 2.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the UN Consolidated List lists its persons)",
+        "state": "active"
+      },
+      "effective": "2022-10-21",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Paragraph 11 embargoed arms to the persons designated; resolution 2699 (2023), paragraph 14, replaced it with an embargo on small arms, light weapons and ammunition to Haiti, and resolutions 2752 (2024) and 2794 (2025), paragraph 2, with one on arms of every type (each read the same day)."
+    },
+    {
+      "id": "un.res-2794-2025.haiti-arms",
+      "title": "UN arms embargo: Haiti",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 2794 (2025)",
+        "article": "Paragraphs 1 to 3",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/4091121",
+        "consolidated": {
+          "version": "S/RES/2794 (2025) of 2025-10-17, English text of 200405 bytes",
+          "read": "2026-11-01",
+          "sha256": "177f751f1913b19dd23f43aa86703cccd7fc97c2207b0dcb682ad8f9305969b8"
+        }
+      },
+      "obligation": "Supply, sell or transfer to Haiti no arms and related materiel of any type and no technical assistance, training, financial or other assistance related to military activities, except to or by the UN, a UN-authorized mission or a security unit under the command of the Government of Haiti, as the Committee approves in advance, or non-lethal equipment for humanitarian or protective use (paragraph 2).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens Haiti as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2025-10-17",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Its own period was one year; resolution 2831 (2026), paragraph 1, extends it for one year from 14 October 2026 (un.res-2831-2026.haiti-renewal), which the destination rests on."
+    },
+    {
+      "id": "un.res-2831-2026.haiti-renewal",
+      "title": "UN sanctions on Haiti renewed for a year",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 2831 (2026)",
+        "article": "Paragraph 1",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/4130320",
+        "consolidated": {
+          "version": "S/RES/2831 (2026) of 2026-10-14, English text of 174962 bytes",
+          "read": "2026-11-01",
+          "sha256": "4f10c81d174189894c792f210014d4020ae6cfef0b128a70d232a6d77946d0d4"
+        }
+      },
+      "obligation": "Keep the arms embargo on Haiti of resolution 2794 (2025), paragraph 2, and the travel ban and asset freeze of resolution 2653 (2022), paragraphs 3 to 9, for one year from 14 October 2026.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens Haiti as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2026-10-14",
+      "sunset": "2027-10-14",
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The entry ends with the year, so the guard asks for the next renewal on that day."
+    },
+    {
+      "id": "un.res-2713-2023.al-shabaab",
+      "title": "UN sanctions: Al-Shabaab (the 2713 regime)",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 2713 (2023)",
+        "article": "Paragraphs 4 (deliveries of weapons to Somalia) and 31 (the Committee)",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/4029195",
+        "consolidated": {
+          "version": "S/RES/2713 (2023) of 2023-12-01, English text of 313415 bytes",
+          "read": "2026-11-01",
+          "sha256": "71d1e701a797ddea21d91543e2017dbe98aa6d566abd00d60427162971d3b2ce"
+        }
+      },
+      "obligation": "Prevent every delivery of weapons, ammunition and military equipment to Somalia, and its financing, save deliveries to the Federal Government of Somalia and its security forces (paragraph 4); freeze the funds of and admit none of the persons the Committee lists.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens Somalia as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2023-12-01",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Resolution 2714 (2023), read the same day, lifted the arms embargo of resolution 733 (1992); paragraph 4 here, repeated word for word by resolution 2776 (2025), paragraph 4, keeps Somalia a destination. The Committee lists the persons the UN Consolidated List carries as Somalia."
+    },
+    {
+      "id": "un.res-2806-2025.somalia",
+      "title": "UN measures on Somalia: weapons and IED components",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 2806 (2025)",
+        "article": "Paragraphs 14 (charcoal), 17 and 18 (IED components) and 36 to 45 (weapons, ammunition and military equipment)",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/4095915",
+        "consolidated": {
+          "version": "S/RES/2806 (2025) of 2025-12-12, English text of 277051 bytes",
+          "read": "2026-11-01",
+          "sha256": "6b5bb575d0eb6194cc28290080c815465c6827717ad1a3935bf360ad8b9c34a3"
+        }
+      },
+      "obligation": "Prevent every delivery of weapons, ammunition and military equipment to Somalia, save to the Federal Government and its security forces (paragraphs 36 and 39, reaffirming resolution 2776 (2025), paragraph 4), with deliveries to them notified as paragraphs 41 to 44 set out; sell or supply to Somalia none of the IED components of Annex B, Part I, where they will or may be used to make improvised explosive devices (paragraph 17); trade in no Somali charcoal (paragraph 14).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens Somalia as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2025-12-12",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The weapons measure has no period; paragraph 22 renews the inspection authorizations until 30 November 2026 and paragraph 26 the Panel until 31 December 2026."
+    },
+    {
+      "id": "un.res-2206-2015.south-sudan",
+      "title": "UN sanctions: South Sudan",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 2206 (2015)",
+        "article": "Paragraphs 9 and 12 (travel ban and asset freeze) and 16 (the Committee)",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/788847",
+        "consolidated": {
+          "version": "S/RES/2206 (2015) of 2015-03-03, English text of 209189 bytes",
+          "read": "2026-11-01",
+          "sha256": "4fe0d9a127741224c9f99b9229b80e54e77da98babc5da03eff8312bc73abb38"
+        }
+      },
+      "obligation": "Admit none of, and freeze the funds of, the persons the Committee designates (paragraphs 9 and 12); the arms embargo on the territory of South Sudan is resolution 2428 (2018), paragraph 4.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the UN Consolidated List lists its persons)",
+        "state": "active"
+      },
+      "effective": "2015-03-03",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The Committee lists the persons the UN Consolidated List carries as SouthSudan."
+    },
+    {
+      "id": "un.res-2428-2018.south-sudan-arms",
+      "title": "UN arms embargo: South Sudan",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 2428 (2018)",
+        "article": "Paragraphs 4 and 5",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/1634093",
+        "consolidated": {
+          "version": "S/RES/2428 (2018) of 2018-07-13, English text of 406773 bytes",
+          "read": "2026-11-01",
+          "sha256": "b4dfe72e2c260f3979719ee30bc652daf8036b8cd150d1d3b2bac701bff16227"
+        }
+      },
+      "obligation": "Supply, sell or transfer to the territory of South Sudan no arms and related materiel of any type and no technical assistance, training, financial or other assistance related to military activities, armed mercenaries included (paragraph 4), save the supplies of paragraph 5.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens South Sudan as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2018-07-13",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Its own period ended on 31 May 2019; resolution 2821 (2026) renews it until 31 May 2027 (un.res-2821-2026.south-sudan-renewal), which the destination rests on."
+    },
+    {
+      "id": "un.res-2821-2026.south-sudan-renewal",
+      "title": "UN sanctions on South Sudan renewed until 31 May 2027",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Security Council resolution 2821 (2026)",
+        "article": "Paragraphs 1 and 11",
+        "type": "resolution",
+        "jurisdiction": "INT",
+        "primary": "https://digitallibrary.un.org/record/4115073",
+        "consolidated": {
+          "version": "S/RES/2821 (2026) of 2026-05-29, English text of 215842 bytes",
+          "read": "2026-11-01",
+          "sha256": "918e13cb082ebdd6e6b332a27bd3d061631013c55cbf32e93e885c9de38bfc19"
+        }
+      },
+      "obligation": "Keep the arms embargo of resolution 2428 (2018), paragraph 4, and the travel ban and asset freeze of resolution 2206 (2015), paragraphs 9 and 12, until 31 May 2027.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens South Sudan as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2026-05-29",
+      "sunset": "2027-05-31",
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-un-resolutions.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The entry ends with the renewal, so the guard asks for the next one on that day."
     },
     {
       "id": "int.iarc",
@@ -9362,9 +10829,9 @@
       "sha256": "5e37dcb85f057d6ee6ce1514b646a03585f02d40ea2256262b10e06ce0dd26bb"
     },
     "INT": {
-      "generation": 4,
+      "generation": 5,
       "reviewed": "2026-11-01",
-      "sha256": "4e3899c373e8631580257cc3d858a85a0839a9ce970ca34cdcbbc0aabd61cb24"
+      "sha256": "da588a897e8a87dd8da6d8a7e8c6f2e049e8854f82dd99a23f1627c7b3f34cbc"
     },
     "JP": {
       "generation": 2,
@@ -10736,10 +12203,108 @@
             }
           ],
           "open": null
+        },
+        "un.sc.embargo": {
+          "entry": "int.un-sanctions",
+          "title": "The destinations the Security Council's resolutions restrict, each read in its own resolution",
+          "max_age_days": 92,
+          "open": "The DPRK regime (resolution 1718 (2006) and the resolutions after it) and the Iran regime (resolution 1737 (2006) and the resolutions after it, with resolution 2231 (2015) and the Council's record of its paragraphs 11 and 12 since August 2025) are read next; until then the generation is authored, never written, so a screening naming un.sc.embargo finds it missing.",
+          "destinations": [
+            {
+              "region": "CD",
+              "program": "S/RES/1807 (2008)",
+              "measure": "sectoral",
+              "basis": "Paragraph 1 (arms and military assistance to non-governmental entities and individuals operating in the DRC), renewed until 1 July 2027 by resolution 2825 (2026), paragraphs 1 and 2",
+              "entry": "un.res-2825-2026.drc-renewal"
+            },
+            {
+              "region": "CF",
+              "program": "S/RES/2745 (2024)",
+              "measure": "sectoral",
+              "basis": "Paragraph 2 (arms and military assistance to armed groups and associated individuals operating in the Central African Republic), extended until 31 July 2027 by resolution 2827 (2026), paragraph 1",
+              "entry": "un.res-2827-2026.central-african-republic-renewal"
+            },
+            {
+              "region": "HT",
+              "program": "S/RES/2794 (2025)",
+              "measure": "sectoral",
+              "basis": "Paragraph 2 (arms and military assistance to Haiti, except to the UN, UN-authorized missions and units under the Government's command), extended for one year from 14 October 2026 by resolution 2831 (2026), paragraph 1",
+              "entry": "un.res-2831-2026.haiti-renewal"
+            },
+            {
+              "region": "IQ",
+              "program": "S/RES/687 (1991)",
+              "measure": "sectoral",
+              "basis": "Paragraph 24(a), (c) and (d) (arms and related materiel, their technology and training to Iraq), kept by resolution 1483 (2003), paragraph 10, except for the Government of Iraq and the multinational force (resolution 1546 (2004), paragraph 21)",
+              "entry": "un.res-687-1991.iraq-arms"
+            },
+            {
+              "region": "LB",
+              "program": "S/RES/1701 (2006)",
+              "measure": "sectoral",
+              "basis": "Paragraph 15 (arms and related materiel and related training or assistance to any entity or individual in Lebanon, except as the Government or UNIFIL authorises)",
+              "entry": "un.res-1701-2006.lebanon"
+            },
+            {
+              "region": "LY",
+              "program": "S/RES/1970 (2011)",
+              "measure": "sectoral",
+              "basis": "Paragraph 9 (arms and related materiel and military assistance to Libya, save the exemptions of paragraph 9 and resolution 2009 (2011), paragraph 13)",
+              "entry": "un.res-1970-2011.libya"
+            },
+            {
+              "region": "SD-DC",
+              "program": "S/RES/1556 (2004)",
+              "measure": "sectoral",
+              "basis": "Paragraphs 7 and 8 (arms and related materiel and technical training or assistance to non-governmental entities and individuals operating in the 2004 states of North, South and West Darfur, today's five Darfur states: Central Darfur), extended by resolution 1591 (2005), paragraph 7, to every belligerent there and renewed until 11 December 2026 by resolution 2830 (2026), paragraph 1",
+              "entry": "un.res-2830-2026.sudan-renewal"
+            },
+            {
+              "region": "SD-DE",
+              "program": "S/RES/1556 (2004)",
+              "measure": "sectoral",
+              "basis": "Paragraphs 7 and 8 (arms and related materiel and technical training or assistance to non-governmental entities and individuals operating in the 2004 states of North, South and West Darfur, today's five Darfur states: East Darfur), extended by resolution 1591 (2005), paragraph 7, to every belligerent there and renewed until 11 December 2026 by resolution 2830 (2026), paragraph 1",
+              "entry": "un.res-2830-2026.sudan-renewal"
+            },
+            {
+              "region": "SD-DN",
+              "program": "S/RES/1556 (2004)",
+              "measure": "sectoral",
+              "basis": "Paragraphs 7 and 8 (arms and related materiel and technical training or assistance to non-governmental entities and individuals operating in the 2004 states of North, South and West Darfur, today's five Darfur states: North Darfur), extended by resolution 1591 (2005), paragraph 7, to every belligerent there and renewed until 11 December 2026 by resolution 2830 (2026), paragraph 1",
+              "entry": "un.res-2830-2026.sudan-renewal"
+            },
+            {
+              "region": "SD-DS",
+              "program": "S/RES/1556 (2004)",
+              "measure": "sectoral",
+              "basis": "Paragraphs 7 and 8 (arms and related materiel and technical training or assistance to non-governmental entities and individuals operating in the 2004 states of North, South and West Darfur, today's five Darfur states: South Darfur), extended by resolution 1591 (2005), paragraph 7, to every belligerent there and renewed until 11 December 2026 by resolution 2830 (2026), paragraph 1",
+              "entry": "un.res-2830-2026.sudan-renewal"
+            },
+            {
+              "region": "SD-DW",
+              "program": "S/RES/1556 (2004)",
+              "measure": "sectoral",
+              "basis": "Paragraphs 7 and 8 (arms and related materiel and technical training or assistance to non-governmental entities and individuals operating in the 2004 states of North, South and West Darfur, today's five Darfur states: West Darfur), extended by resolution 1591 (2005), paragraph 7, to every belligerent there and renewed until 11 December 2026 by resolution 2830 (2026), paragraph 1",
+              "entry": "un.res-2830-2026.sudan-renewal"
+            },
+            {
+              "region": "SO",
+              "program": "S/RES/2713 (2023)",
+              "measure": "sectoral",
+              "basis": "Paragraph 4 (weapons, ammunition and military equipment to Somalia, save to the Federal Government and its security forces), reaffirmed by resolution 2806 (2025), paragraph 36, with the IED components of its Annex B, Part I (paragraph 17)",
+              "entry": "un.res-2806-2025.somalia"
+            },
+            {
+              "region": "SS",
+              "program": "S/RES/2428 (2018)",
+              "measure": "sectoral",
+              "basis": "Paragraph 4 (arms and military assistance to the territory of South Sudan), renewed until 31 May 2027 by resolution 2821 (2026), paragraph 1",
+              "entry": "un.res-2821-2026.south-sudan-renewal"
+            }
+          ]
         }
       },
       "reasons": {
-        "int.un-sanctions": "Not yet read: the Security Council resolutions that impose its embargoes are read next.",
         "tr.asset-freeze": "Law No. 6415 freezes the assets of the parties decided under it; it embargoes no destination.",
         "tr.7262.proliferation-freeze": "Law No. 7262 freezes the assets of the parties decided under it; it embargoes no destination."
       }

@@ -90,7 +90,7 @@ publisher, the user's Turkish company, takes after implementation and qualificat
 | Field | Meaning |
 |---|---|
 | `topic` | `privacy`, `children`, `security`, `accessibility`, `export-control`, `ai`, `online-safety`, `consumer`, `age-rating`, `intellectual-property`, `communications`, `tax`, `payments`, `e-signature` or `platform` |
-| `instrument` | `name`, `article`, `type` (law, regulation, directive, by-law, decision, executive order, determination, code of practice, guidance, treaty, policy, licence), `jurisdiction`, `primary` (the https URL of the official text on one of the jurisdiction's official hosts) and `consolidated` (null until read; then the consolidated `version`, the day it was `read` and the `sha256` of the text read) |
+| `instrument` | `name`, `article`, `type` (law, regulation, directive, by-law, decision, executive order, determination, resolution (a Security Council resolution, named `Security Council resolution <number> (<year>)` and read as its symbol), code of practice, guidance, treaty, policy, licence), `jurisdiction`, `primary` (the https URL of the official text on one of the jurisdiction's official hosts) and `consolidated` (null until read; then the consolidated `version`, the day it was `read` and the `sha256` of the text read) |
 | `obligation` | The duty in plain words |
 | `applies_to` | The scopes (products, data flows, channels) it governs |
 | `check` | `ref`, `name` and `state`: `active` cites the test, script or CI step that proves it (it runs in every tree, so CI fails when it fails); `planned` cites the ROADMAP row that adds it |
@@ -333,7 +333,11 @@ elsewhere).
   `published` the day of the latest reading (the maximum age runs from it), `source` the screening entry's primary and
   `source_sha256` the digest of the reading (every pinned text's digest and the destinations), so a corrected reading of
   the same texts is the next generation. One rule set (`embargo_errors`) refuses a malformed generation in the importer
-  and the guard.
+  and the guard, and a destination whose entry has ended on the day (its `sunset` reached): a measure the authority
+  renews for a period (the Security Council's arms embargoes) rests on the renewal in force, whose sunset is the end of
+  the period, so the guard and the import ask for the next renewal on that day. A generation whose reading is still
+  `open` is authored and guarded but never written (`OpenReading`): a screening naming its authority finds the list
+  missing and fails closed, instead of clearing a place a text not yet read may restrict.
   `us.ofac.embargo` is 31 CFR chapter V and the Executive orders 589.201(e) and 587.201(b) incorporate, as read on
   2026-11-01 ([chapter V](../sessions/2026-11-01-comply-1-us-embargoes.md#embargoes),
   [the orders](../sessions/2026-11-01-comply-1-federal-register.md#embargo)): Cuba, Iran, North Korea and the Crimea
@@ -371,8 +375,19 @@ elsewhere).
   and Macao among them). The regimes listed by theme, and the country regimes whose measures attach only to designated
   persons (Afghanistan, Bosnia and Herzegovina, Guinea, Guinea-Bissau, Lebanon's Hariri regime, Mali, Nicaragua,
   Yemen) or restrict no supply to a place (Syria's cultural property), name no destination: the UK Sanctions List
-  screens their persons. The UN's regimes follow once their resolutions are read; until then a destination screened
-  against its designation list alone finds no embargo.
+  screens their persons. `un.sc.embargo` is the Security Council's resolutions whose measures attach to a place, each
+  destination read in the resolution in force on 2026-11-01
+  ([session](../sessions/2026-11-01-comply-1-un-resolutions.md#embargo)): 13 destinations, all sectoral. The arms
+  embargoes on Iraq (resolution 687 (1991), paragraph 24, kept by 1483 (2003), the Government excepted by 1546 (2004)),
+  Libya (1970 (2011)), Lebanon (1701 (2006)) and Somalia (2713 (2023), paragraph 4, reaffirmed by 2806 (2025), with its
+  IED components) have no period; those on the non-governmental entities in the DRC (1807 (2008), renewed by 2825
+  (2026) until 1 July 2027), the armed groups in the Central African Republic (2745 (2024), extended by 2827 (2026)
+  until 31 July 2027), Haiti (2794 (2025), extended by 2831 (2026) until 14 October 2027), South Sudan (2428 (2018),
+  renewed by 2821 (2026) until 31 May 2027) and Darfur (1556 (2004) and 1591 (2005), renewed by 2830 (2026) until
+  11 December 2026; the 2004 states are today's five Darfur states, SD-DN, SD-DS, SD-DW, SD-DC and SD-DE) rest on their
+  renewals. The regimes of ISIL and Al-Qaida, the Taliban, Guinea-Bissau and Yemen attach only to the persons listed,
+  whom the Consolidated List screens. The generation is `open` until the DPRK and Iran regimes are read, so it is not
+  written yet.
 - **Folding.** Names are compared in search-folded form (`text.search-folding`, crd-core's
   [text_fold.hpp](../../engine/foundation/core/include/crd/core/text_fold.hpp)): lower case; Latin letters with
   diacritics, ligatures and fullwidth forms to ASCII (Ş and ş to s, İ and ı to i, ø to o, ß to ss, æ to ae, the
@@ -516,6 +531,8 @@ host serves as data, read by the host's reader, which checks the document is the
 | resmigazete.gov.tr (`eskiler/<year>/<month>/<day>[M<n>]-<item>.pdf` or `.htm`), an item of the Official Gazette such as a Presidential decision | the item as published: a PDF (`%PDF-`, pinned by digest: its text is CID glyphs) or an HTML page | an index read first, for this item alone: the day page, in its declared charset (windows-1254), whose one heading must be the item's day and repeated issue and whose one link to the item gives its title; `2025-12-25/33118 No. 10767 as published`, the number when the title names one decision number ([session](../sessions/2026-11-01-comply-0-gazette-and-new-instruments.md#gazette-reader)) |
 | sanctionsmap.eu (`api/v1/regime`), the EU Sanctions Map's regime index, the text of the umbrella entry `eu.restrictive-measures` | the index (JSON, `meta.version` "1"), whose text read is the regimes' structure: each regime's id, country, measure titles and basic Council regulations (CELEX numbers from their CELEX or ELI links; implementing acts and the map's notes of amendments not yet consolidated left out: the notes lag CELLAR, which finds the acts a consolidated text lacks), so notes, descriptions and amendment times change nothing | `55 regimes, 26 attached to a place`: a regime with a country and a measure beyond asset freezes, admission bans and claims bans attaches to a place. Each scan also reports a basic regulation of a place regime that is no entry and a Council regulation entry no regime lists ([session](../sessions/2026-11-01-comply-1-eu-regime-index.md#the-regime-index-in-the-plan)) |
 | gov.uk (`government/collections/uk-sanctions-regimes-under-the-sanctions-act`), the FCDO's collection of the current UK sanctions regimes, the text of the umbrella entry `gb.sanctions` | gov.uk's content API record of the collection (`api/content/...`), whose text read is its regime groups: the published documents listed by country and by theme and the number of listed ids gov.uk publishes no record of (a page shown without them); its groups must be exactly "Regimes listed by country", "Regimes listed by theme" and "More information". The collection is its own index: the fetch reads each document of its regimes through the same API, each a record of its own page | `71 documents: 53 by country, 18 by theme, 1 listed unpublished`. A regime's document names the regulation it rests on by its first legislation.gov.uk link (later links are amending instruments, which the revised text applies or names as unapplied). Each scan reports a regulation of a regime listed by country that is no entry, and a GB entry of COMPLY.1 on legislation.gov.uk that no regime names any more, unless a regime document went unread ([session](../sessions/2026-11-01-comply-1-uk-regimes.md#the-index)) |
+| digitallibrary.un.org (`record/<number>`), a Security Council resolution by its record in the UN Digital Library | the English text the record names: a PDF (`%PDF-`) of the size the record gives, pinned by digest. A resolution is never consolidated: a later resolution renewing, modifying or lifting its measures is an entry of its own | an index read first: the record's MARC XML (`record/<number>?of=xm`), which must be the one record of that number, name one Security Council symbol (`191 $a`) and day (`269 $a`) and link exactly one English file (`856 $y English`) of that record with its size (`$s`); `S/RES/1718 (2006) of 2006-10-14, English text of 38780 bytes`, the symbol in its typographic form. The guard holds a `resolution` entry to its name and to the symbol it was read as ([session](../sessions/2026-11-01-comply-1-un-resolutions.md#the-readers)) |
+| scsanctions.un.org (`resources/xml/en/consolidated.xml`), the Security Council Consolidated List, the text of the umbrella entry `int.un-sanctions` | the list (XML, root `CONSOLIDATED_LIST`), fetched through the file store its `sanctions_lists` record names as a delivery host; the text read is its regimes, the sorted list types of its parties (`UN_LIST_TYPE`), so designations and the generation instant change nothing | `14 regimes`. Each regime is kept by the Committee a resolution establishes (`UN_REGIMES`: `DPRK` by 1718 (2006), `Iran` by 1737 (2006), ...); each scan reports a list type the reader does not know, a known regime whose resolution is no entry, and a regime the list no longer names whose entry has no sunset. A regime with no list (Lebanon's) is read on its own ([session](../sessions/2026-11-01-comply-1-un-resolutions.md#the-readers)) |
 
 A court's annulment note counts on its decision's day only, never on the days of the text it quotes. CELLAR's reader
 finds an act's year and number at number boundaries, and an act before 1999 also by its two-digit year (`No 3541/92`).
@@ -525,8 +542,9 @@ when the version says more), and that part is never a scheme, query or `..`. Eve
 SHA-256 of the decoded body, at most 16 MiB either way; any other content encoding is refused. An instrument's
 `consolidated.sha256` is that of the text read: the document, or an eCFR hierarchy's subtree, so an amendment elsewhere
 in the title does not read as a change. A redirect is followed on the same host
-only, with an http Location upgraded to https (CELLAR answers with http, and its https form serves the same bytes);
-another host or scheme is refused, so a moved document is a source not read until its `primary` is corrected. A host
+only, with an http Location upgraded to https (CELLAR answers with http, and its https form serves the same bytes), or
+to a delivery host the register's `sanctions_lists` names for an official list file read as an instrument's text (the
+UN's file store); another host or scheme is refused, so a moved document is a source not read until its `primary` is corrected. A host
 without a resolver is read as the cited page by its digest alone and cannot be recorded as read: its instrument is
 cited on a host with a reader first. A scan judges a read instrument twice: a new version is an amendment to read
 (`amended to <version>`), and a new digest under the same version is a change to the text.

@@ -187,8 +187,11 @@ WASSENAAR_LIST = 'List-of-Dual-Use-Goods-and-Technologies'
 SANCTIONS_MAP = 'https://www.sanctionsmap.eu/api/v1/regime'
 UK_REGIMES = '/government/collections/uk-sanctions-regimes-under-the-sanctions-act'
 GOV_UK_CONTENT = 'https://www.gov.uk/api/content{path}'
-# A version a document's URL holds: a CELEX number, a day or an upload path, never a scheme, query or `..`.
-VERSION = re.compile(r'(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._/-]*')
+UN_LIBRARY = 'https://digitallibrary.un.org/record/{record}'
+UN_LIST = 'https://scsanctions.un.org/resources/xml/en/consolidated.xml'
+# A version a document's URL holds: a CELEX number, a day or an upload path (a UN file name carries its symbol's
+# parentheses), never a scheme, query, escape or `..`.
+VERSION = re.compile(r'(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._/()-]*')
 
 
 def resolve_mevzuat(match):
@@ -277,6 +280,27 @@ def resolve_uk_regimes(match):
              'url': GOV_UK_CONTENT.format(path=UK_REGIMES), 'headers': {'Accept': 'application/json'}}]
 
 
+def resolve_un_library(match):
+    """A Security Council resolution by its record in the UN Digital Library (the Dag Hammarskjöld Library's catalogue
+    of UN documents): the record (MARC XML) is read first and names the symbol, the adoption day and the English
+    text's file and size; the text is that PDF. A resolution is never consolidated: a later resolution renewing,
+    modifying or lifting its measures is an instrument of its own."""
+    record = match['record']
+    document = f'un-library-{record}'
+    return [{'id': f'{document}-record', 'kind': 'index', 'reader': 'un-library-record', 'act': record,
+             'url': UN_LIBRARY.format(record=record) + '?of=xm'},
+            {'id': document, 'kind': 'primary', 'reader': 'un-resolution', 'act': record, 'index': f'{document}-record',
+             'url': UN_LIBRARY.format(record='{version}')}]
+
+
+def resolve_un_list(match):
+    """The UN Security Council Consolidated List, the text of the umbrella entry `int.un-sanctions`: its regimes (the
+    list types of its parties) index the Council's sanctions regimes. The official host answers with a signed link to
+    its file store, which the register's `sanctions_lists` names as the list's delivery host."""
+    return [{'id': 'un-sc-consolidated-list', 'kind': 'primary', 'reader': 'un-sc-list', 'act': 'CONSOLIDATED_LIST',
+             'url': match.string}]
+
+
 def resolve_gazette(match):
     """An item of the Official Gazette of Turkey (a Presidential decision is published there alone, as a PDF): its
     day's page, which names the gazette and the item's title, is read first, as an index of this item alone (the
@@ -303,6 +327,8 @@ RESOLVERS = (
     (re.compile(r'https://www\.wassenaar\.org/control-lists/'), resolve_wassenaar),
     (re.compile(re.escape(SANCTIONS_MAP)), resolve_sanctions_map),
     (re.compile(re.escape(f'https://www.gov.uk{UK_REGIMES}')), resolve_uk_regimes),
+    (re.compile(r'https://digitallibrary\.un\.org/record/(?P<record>[1-9]\d*)'), resolve_un_library),
+    (re.compile(re.escape(UN_LIST)), resolve_un_list),
     (re.compile(r'https://www\.resmigazete\.gov\.tr/eskiler/(?P<year>\d{4})/(?P<month>\d{2})/'
                 r'(?P<stem>(?P=year)(?P=month)\d{2}(?:M[1-9]\d*)?)-(?P<item>[1-9]\d*)\.(?P<format>pdf|htm)'),
      resolve_gazette),
@@ -338,9 +364,14 @@ def plan_sources(register, scan='light'):
         if entry and entry not in item['entries']:
             item['entries'].append(entry)
 
+    # An official list file read as an instrument's text keeps the delivery hosts its sanctions list names.
+    deliveries = {config['url']: sorted(config['delivery'])
+                  for config in register.get('sanctions_lists', {}).get('lists', {}).values()}
     for entry in register['entries']:
         if 'instrument' in entry:
             for source in resolve_primary(entry['instrument']['primary']):
+                if source['url'] in deliveries:
+                    source['delivery'] = deliveries[source['url']]
                 add(source.pop('id'), source.pop('kind'), source.pop('url'), entry['id'], **source)
             continue
         spec = entry.get('spec', {})
@@ -456,20 +487,20 @@ def fetch_sources(plan, into, opener=None, today=None):
     if not isinstance(plan, dict) or plan.get('schema') != PLAN_SCHEMA or not isinstance(plan.get('sources'), list):
         raise ReviewError(f'the plan is not a {PLAN_SCHEMA} document')
     today = today or datetime.datetime.now(datetime.timezone.utc).date()
-    opener = opener or urllib.request.build_opener(SecureRedirects).open
     into = Path(into)
     into.mkdir(parents=True, exist_ok=True)
     versions, items = {}, []
     taken = {source['id'] for source in plan['sources']}
 
-    def take(item, headers, index=None):
+    def take(item, headers, index=None, delivery=()):
         """The item's body written beside the manifest, with the version found when it is an index; the error is
-        recorded instead."""
+        recorded instead. A redirect stays on the item's host, or goes to one of its delivery hosts."""
         if not item['url'].startswith('https://') or not re.fullmatch(r'[a-z0-9.-]+', item['id']):
             item['error'] = 'refused: a source is an https URL with a plain identifier'
             return None
+        hosts = {urllib.parse.urlsplit(item['url']).hostname, *delivery} if delivery else None
         try:
-            body = download(opener, item['url'], headers)
+            body = download(opener or urllib.request.build_opener(SecureRedirects(hosts)).open, item['url'], headers)
             found = None
             if index is not None:
                 found = INDEX_READERS[index['reader']](body, index, today)
@@ -500,7 +531,7 @@ def fetch_sources(plan, into, opener=None, today=None):
             if documents:
                 item['documents'] = [document['id'] for document in documents]
         indexed = source['kind'] == 'index' or source.get('reader') in INDEX_READERS
-        found = take(item, source.get('headers', {}), source if indexed else None)
+        found = take(item, source.get('headers', {}), source if indexed else None, source.get('delivery', ()))
         if found:
             versions[source['id']] = found
             if source['kind'] != 'index':
@@ -1127,25 +1158,127 @@ def uk_regime_regulation(body, source):
     return found and found['act']
 
 
+# The UN Digital Library's MARC XML record of a document (2026-11-01): `001` its record number, `191 $a` its symbol
+# (`S/RES/1718(2006)`, or with a space before the year since 2014), `269 $a` its day and one `856` field per language
+# file with `$y` the language, `$u` the file's URL (`record/<n>/files/<name>`, its symbol percent-encoded) and `$s` its
+# size; the subfields come in no fixed order.
+MARC = '{http://www.loc.gov/MARC21/slim}'
+UN_RESOLUTION = re.compile(r'S/RES/([1-9]\d*) ?\((\d{4})\)')
+UN_TEXT = re.compile(r'https://digitallibrary\.un\.org/record/(?P<record>[1-9]\d*)/files/(?P<name>[A-Za-z0-9_.%-]+)')
+
+
+def un_library_record(body, source):
+    """(symbol, day, [(language, path, size)]) of the Security Council resolution whose record `source["act"]` names:
+    the symbol in its typographic form (`S/RES/1718 (2006)`), and each language file's record path and size."""
+    try:
+        records = _registers._sanctions.parse_xml(body, 'the UN Digital Library record').findall(MARC + 'record')
+    except _registers._sanctions.SanctionsError as error:
+        raise Unreadable(str(error)) from error
+    if len(records) != 1 or (records[0].findtext(MARC + 'controlfield[@tag="001"]') or '').strip() != source['act']:
+        raise Unreadable(f'not the one UN Digital Library record {source["act"]}')
+    fields = collections.defaultdict(list)
+    for field in records[0].iterfind(MARC + 'datafield'):
+        fields[field.get('tag')].append({code.get('code'): (code.text or '').strip()
+                                         for code in field.iterfind(MARC + 'subfield')})
+    symbols = {each.get('a') for each in fields['191']}
+    symbol = UN_RESOLUTION.fullmatch(symbols.pop()) if len(symbols) == 1 else None
+    days = {each.get('a') for each in fields['269']}
+    day = days.pop() if len(days) == 1 else None
+    if symbol is None or day is None or len(day) != 10 or _registers.parse_day(day) is None:
+        raise Unreadable(f'record {source["act"]} is no Security Council resolution with one symbol and day')
+    files = []
+    for each in fields['856']:
+        found = UN_TEXT.fullmatch(each.get('u', ''))
+        if found is None or found['record'] != source['act'] or not re.fullmatch(r'[1-9]\d*', each.get('s', '')):
+            raise Unreadable(f'record {source["act"]} links a file {each.get("u")!r} of another shape')
+        path = f'{found["record"]}/files/{urllib.parse.unquote(found["name"])}'
+        if not VERSION.fullmatch(path):
+            raise Unreadable(f'record {source["act"]} links a file whose name cannot be part of a URL: {path!r}')
+        files.append((each.get('y'), path, int(each['s'])))
+    return f'S/RES/{symbol[1]} ({symbol[2]})', day, files
+
+
+def read_un_library_record(body, source, today):
+    """The record is the index of its English text: (the text's record path, `S/RES/1718 (2006) of 2006-10-14,
+    English text of 38780 bytes`)."""
+    symbol, day, files = un_library_record(body, source)
+    english = [(path, size) for language, path, size in files if language == 'English']
+    if len(english) != 1:
+        raise Unreadable(f'record {source["act"]} ({symbol}) has {len(english)} English texts, not one')
+    path, size = english[0]
+    return path, f'{symbol} of {day}, English text of {size} bytes'
+
+
+UN_TEXT_VERSION = re.compile(r'S/RES/[1-9]\d* \(\d{4}\) of \d{4}-\d{2}-\d{2}, English text of ([1-9]\d*) bytes')
+
+
+def read_un_resolution(body, source, version):
+    """The English text of a resolution: a PDF of the size its record names (the text read is pinned by digest)."""
+    found = UN_TEXT_VERSION.fullmatch(version or '')
+    if found is None:
+        raise Unreadable(f'no record version of a resolution\'s English text: {version!r}')
+    if not body.startswith(b'%PDF-') or len(body) != int(found[1]):
+        raise Unreadable(f'not the {found[1]}-byte PDF its record names ({len(body)} bytes)')
+    return version
+
+
+# The Security Council Consolidated List (2026-11-01): `CONSOLIDATED_LIST` holds `INDIVIDUALS/INDIVIDUAL` and
+# `ENTITIES/ENTITY`, each with its regime's list type (`UN_LIST_TYPE`). The list types are the Council's sanctions
+# regimes with a list, each kept by the Committee the resolution named here establishes; a regime whose measures attach
+# to a place without listing anyone (Lebanon's, resolution 1701 (2006)) is no list type and is read on its own.
+UN_REGIMES = {'Al-Qaida': 'S/RES/1267 (1999)', 'CAR': 'S/RES/2127 (2013)', 'DPRK': 'S/RES/1718 (2006)',
+              'DRC': 'S/RES/1533 (2004)', 'GB': 'S/RES/2048 (2012)', 'Haiti': 'S/RES/2653 (2022)',
+              'Iran': 'S/RES/1737 (2006)', 'Iraq': 'S/RES/1518 (2003)', 'Libya': 'S/RES/1970 (2011)',
+              'Somalia': 'S/RES/2713 (2023)', 'SouthSudan': 'S/RES/2206 (2015)', 'Sudan': 'S/RES/1591 (2005)',
+              'Taliban': 'S/RES/1988 (2011)', 'Yemen': 'S/RES/2140 (2014)'}
+
+
+def un_list_regimes(body):
+    """The sorted list types of the Consolidated List's parties."""
+    try:
+        root = _registers._sanctions.parse_xml(body, 'the UN Consolidated List')
+    except _registers._sanctions.SanctionsError as error:
+        raise Unreadable(str(error)) from error
+    parties = [*root.iterfind('INDIVIDUALS/INDIVIDUAL'), *root.iterfind('ENTITIES/ENTITY')]
+    regimes = sorted({' '.join((party.findtext('UN_LIST_TYPE') or '').split()) for party in parties})
+    if root.tag != 'CONSOLIDATED_LIST' or not parties or '' in regimes:
+        raise Unreadable('not the UN Consolidated List, or a party without its list type')
+    return regimes
+
+
+def read_un_list(body, source, version):
+    """`<n> regimes`: the list is one document, never consolidated, so a new or ended regime is a new digest of the
+    regimes read."""
+    return f'{len(un_list_regimes(body))} regimes'
+
+
+def un_list_record(body, source):
+    """The regimes: designations change daily and are the imported list's (`un.sc`), not the text read here."""
+    return json.dumps(un_list_regimes(body), separators=(',', ':')).encode('utf-8')
+
+
 # reader(body, source, version) -> the version of an instrument's document; an index reader(body, source, today)
 # -> the version its document's URL holds, or (the part of the URL, the version) when the version says more.
 READERS = {'mevzuat': read_mevzuat, 'legislation-gov-uk': read_legislation_gov_uk,
            'legislation-gov-uk-published': read_legislation_gov_uk_published, 'cellar': read_cellar,
            'ecfr': read_ecfr, 'pdf': read_pdf, 'gazette': read_gazette, 'federal-register': read_federal_register,
            'sanctions-map': read_sanctions_map, 'gov-uk-regimes': read_uk_regimes,
-           'gov-uk-document': read_gov_uk_document}
+           'gov-uk-document': read_gov_uk_document, 'un-resolution': read_un_resolution, 'un-sc-list': read_un_list}
 # record(body, source) -> the bytes of the instrument within its document, whose SHA-256 is the text read; the whole
 # document for a reader without one.
-RECORDS = {'ecfr': ecfr_record, 'sanctions-map': sanctions_map_record, 'gov-uk-regimes': uk_regimes_record}
+RECORDS = {'ecfr': ecfr_record, 'sanctions-map': sanctions_map_record, 'gov-uk-regimes': uk_regimes_record,
+           'un-sc-list': un_list_record}
 # A document whose reader is here (a revised UK text, which names the changes it has not applied; the UK's regime
 # collection, which names its regimes' documents) is its own index.
 INDEX_READERS = {'cellar-versions': read_cellar_versions, 'ecfr-versions': read_ecfr_versions,
                  'wassenaar-lists': read_wassenaar_lists, 'mevzuat-gazette': read_mevzuat_gazette,
                  'gazette-day': read_gazette_day, 'federal-register-record': read_federal_register_record,
-                 'legislation-gov-uk': read_legislation_gov_uk_effects, 'gov-uk-regimes': read_uk_regimes_index}
+                 'legislation-gov-uk': read_legislation_gov_uk_effects, 'gov-uk-regimes': read_uk_regimes_index,
+                 'un-library-record': read_un_library_record}
 # The readers whose document indexes a class of instruments the register holds one by one, with the Review method
 # judging the class; the documents such an index names are its own, never acts a consolidated text lacks.
-CLASS_JUDGES = {'sanctions-map': 'judge_regimes', 'gov-uk-regimes': 'judge_uk_regimes'}
+CLASS_JUDGES = {'sanctions-map': 'judge_regimes', 'gov-uk-regimes': 'judge_uk_regimes',
+                'un-sc-list': 'judge_un_regimes'}
 
 
 def read_rfc_editor(body):
@@ -1547,6 +1680,36 @@ class Review:
                     other['sunset'] is None and act not in named:
                 self.readings.append(f'{what}: no regime names {other["id"]}\'s regulation {act} any more; read its '
                                      'revocation and record the entry\'s sunset')
+
+    def judge_un_regimes(self, entry, source):
+        """The Consolidated List's regimes against the register's Security Council resolutions: the resolution
+        establishing each regime is an entry (`Security Council resolution 1718 (2006)`), read and judged like any
+        other instrument (one read without a destination when its measures attach only to the persons listed); a list
+        type this reader does not know is a new regime, and a known regime the list no longer names may have ended."""
+        what = f'{entry["id"]} ({", ".join(entry["rows"])})'
+        regimes = un_list_regimes(self.bodies[source['id']])
+        resolutions = {}
+        for other in self.register['entries']:
+            instrument = other.get('instrument', {})
+            named = _registers.UN_RESOLUTION_NAME.match(instrument.get('name', ''))
+            if named and any(found.get('reader') == 'un-resolution'
+                             for found in resolve_primary(instrument['primary'])):
+                resolutions[f'S/RES/{named[1]} ({named[2]})'] = other
+        for regime in regimes:
+            symbol = UN_REGIMES.get(regime)
+            if symbol is None:
+                self.readings.append(f'{what}: the list names the regime {regime!r}, which UN_REGIMES does not know; '
+                                     'read the resolution establishing it, name it there and in the register, and '
+                                     'author what it restricts in the embargo generation')
+            elif symbol not in resolutions:
+                self.readings.append(f'{what}: the {regime} regime rests on {symbol}, which is no entry of the '
+                                     'register; add it, read it with `read` and author what it restricts in the '
+                                     'embargo generation')
+        for regime, symbol in sorted(UN_REGIMES.items()):
+            other = resolutions.get(symbol)
+            if regime not in regimes and other is not None and other['sunset'] is None:
+                self.readings.append(f'{what}: the list names no party of the {regime} regime any more; read whether '
+                                     f'a resolution ended {other["id"]}\'s {symbol} and record the entry\'s sunset')
 
     def run(self, plan):
         registries = {}

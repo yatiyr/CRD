@@ -7027,6 +7027,25 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
                                       entries=[self.screening_entry(), self.read_order()])
         self.assertEqual(0, code, output)
 
+    def test_a_destination_resting_on_an_ended_measure_is_refused_from_its_end(self):
+        # A measure renewed for a period rests on the renewal, whose sunset is the period's end: on that day the guard
+        # and the importer ask for the next renewal.
+        renewed = dict(self.read_order(), effective='2026-05-29', sunset='2026-11-02')
+        record = self.umbrella_embargo()
+        where = "legal register: sanctions_lists: embargoes: tr.masak.embargo: CU: entry 'tr.order' ended on 2026-11-02"
+        for today, ended in (('2026-11-01', False), ('2026-11-02', True), ('2026-12-01', True)):
+            code, output = self.run_lists(self.embargoes(record), entries=[self.screening_entry(), renewed],
+                                          today=today)
+            self.assertEqual((int(ended), ended), (code, where in output), output)
+        self.assertIn('read the resolution or act that renews or replaces its measure, or drop the destination',
+                      output)
+        register = {'entries': [self.screening_entry(), renewed]}
+        with tempfile.TemporaryDirectory() as out:
+            self.assertEqual(3, sanctions_import.import_embargo('tr.masak.embargo', record, register, out,
+                                                                '2026-11-01')[1])
+            with self.assertRaisesRegex(sanctions_import.SanctionsError, "'tr.order' ended on 2026-11-02"):
+                sanctions_import.import_embargo('tr.masak.embargo', record, register, out, '2026-11-02')
+
     def test_every_embargo_names_a_read_screening_entry_iso_regions_measures_and_provisions(self):
         where = 'legal register: sanctions_lists: embargoes: tr.masak.embargo'
         self.assert_lists_fail(self.embargoes(), f"{where}: CU: entry 'tr.asset-freeze' is not an instrument read "
@@ -7111,12 +7130,16 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
         section['extra'] = {}
         self.assert_embargo_fails(section, 'legal register: sanctions_lists holds about, lists')
 
+    @staticmethod
+    def import_masak(record, register, out):
+        return sanctions_import.import_embargo('tr.masak.embargo', record, register, out, '2026-11-01')
+
     def test_the_importer_writes_an_embargo_generation_dated_by_its_reading(self):
         entry = self.read_screening_entry()
         register = {'entries': [entry]}
         record = self.embargo()
         with tempfile.TemporaryDirectory() as out:
-            result = sanctions_import.import_embargo('tr.masak.embargo', record, register, out)
+            result = self.import_masak(record, register, out)
             self.assertEqual((20261031000000, 3, '2026-10-31'), result)
             path = Path(out) / 'tr.masak.embargo.sanctions.toml'
             text = path.read_text(encoding='utf-8')
@@ -7132,16 +7155,16 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
             self.assertNotIn('party', document)
             # The same reading is already written; a corrected one, or a new text read the same day, is the next
             # generation; a reading older than the written generation is refused.
-            self.assertIsNone(sanctions_import.import_embargo('tr.masak.embargo', record, register, out)[0])
+            self.assertIsNone(self.import_masak(record, register, out)[0])
             record['destinations'][2]['measure'] = 'comprehensive'
             self.assertEqual(20261031000001,
-                             sanctions_import.import_embargo('tr.masak.embargo', record, register, out)[0])
+                             self.import_masak(record, register, out)[0])
             entry['instrument']['consolidated']['sha256'] = 'ef' * 32
             self.assertEqual(20261031000002,
-                             sanctions_import.import_embargo('tr.masak.embargo', record, register, out)[0])
+                             self.import_masak(record, register, out)[0])
             entry['instrument']['consolidated']['read'] = '2026-10-30'
             with self.assertRaisesRegex(sanctions_import.SanctionsError, 'older than the imported 20261031000002'):
-                sanctions_import.import_embargo('tr.masak.embargo', record, register, out)
+                self.import_masak(record, register, out)
             # A destination read in an incorporated order: the generation is published on the latest reading, and a
             # new text of the order is a new reading.
             order = self.read_order()
@@ -7150,19 +7173,19 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
             record['destinations'].append({'region': 'UA-14', 'program': 'Order 1', 'measure': 'partial',
                                            'basis': 'Section 1', 'entry': 'tr.order'})
             self.assertEqual((20261101000000, 4, '2026-11-01'),
-                             sanctions_import.import_embargo('tr.masak.embargo', record, register, out))
+                             self.import_masak(record, register, out))
             document = tomllib.loads(path.read_text(encoding='utf-8'))
             self.assertEqual((primary, 'partial'), (document['source'], document['destination'][3]['measure']))
             reading = sanctions_import.embargo_reading(record, register)
             order['instrument']['consolidated']['sha256'] = '12' * 32
             self.assertNotEqual(reading, sanctions_import.embargo_reading(record, register))
             self.assertEqual(20261101000001,
-                             sanctions_import.import_embargo('tr.masak.embargo', record, register, out)[0])
+                             self.import_masak(record, register, out)[0])
             unverified = self.read_screening_entry()
             unverified['source']['verified'] = False  # a consolidated text not read from its primary source
             for unread in (self.screening_entry(), unverified):
                 with self.assertRaisesRegex(sanctions_import.SanctionsError, 'is not an instrument read from'):
-                    sanctions_import.import_embargo('tr.masak.embargo', record, {'entries': [unread]}, out)
+                    self.import_masak(record, {'entries': [unread]}, out)
 
     def test_an_umbrella_embargo_is_read_in_its_destinations_acts_alone(self):
         screening, order = self.screening_entry(), self.read_order()
@@ -7172,20 +7195,20 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
         self.assertEqual(['tr.order'], list(sanctions_import.embargo_texts(record, register)))
         with tempfile.TemporaryDirectory() as out:
             self.assertEqual((20261031000000, 3, '2026-10-31'),
-                             sanctions_import.import_embargo('tr.masak.embargo', record, register, out))
+                             self.import_masak(record, register, out))
             document = tomllib.loads((Path(out) / 'tr.masak.embargo.sanctions.toml').read_text(encoding='utf-8'))
             self.assertEqual(('TR', screening['instrument']['primary'], reading),
                              (document['jurisdiction'], document['source'], document['source_sha256']))
             # Reading the screening entry's own text (were it one) changes nothing the destinations rest on.
             screening['instrument']['consolidated'] = dict(self.READ)
             self.assertEqual(reading, sanctions_import.embargo_reading(record, register))
-            self.assertIsNone(sanctions_import.import_embargo('tr.masak.embargo', record, register, out)[0])
+            self.assertIsNone(self.import_masak(record, register, out)[0])
             order['instrument']['jurisdiction'] = 'EU'
             with self.assertRaisesRegex(sanctions_import.SanctionsError,
                                         "'tr.order' is an instrument of EU, not of TR"):
-                sanctions_import.import_embargo('tr.masak.embargo', record, register, out)
+                self.import_masak(record, register, out)
             with self.assertRaisesRegex(sanctions_import.SanctionsError, "entry 'tr.none' is no entry of the register"):
-                sanctions_import.import_embargo('tr.masak.embargo', dict(record, entry='tr.none'), register, out)
+                self.import_masak(dict(record, entry='tr.none'), register, out)
 
     def test_the_us_embargo_is_written_from_31_cfr_chapter_v(self):
         register = sanctions_import.load_register(ROOT)
@@ -7321,6 +7344,72 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
         embargoed = [(region, 'S.I. 2008/3231', 'sectoral') for region in (
             'KP', 'IR', 'BY', 'MM', 'CF', 'CN', 'CD', 'HK', 'LB', 'LY', 'MO', 'RU', 'SS', 'SD', 'VE', 'ZW')]
         self.assertEqual(regulations + embargoed, destinations)
+
+    def test_the_un_embargo_is_authored_from_the_resolutions_and_not_written_while_open(self):
+        register = sanctions_import.load_register(ROOT)
+        record = register['sanctions_lists']['embargoes']['generations']['un.sc.embargo']
+        # The screening entry's own text is the Consolidated List, whose regimes index the resolutions to read; each
+        # destination is read in the resolution in force, a renewal (whose sunset ends the period) where the Council
+        # renews the measure for one.
+        self.assertEqual('14 regimes', sanctions_import.read_instrument(register, 'int.un-sanctions')['consolidated'][
+            'version'])
+        texts = sanctions_import.embargo_texts(record, register)
+        self.assertEqual(['un.res-1701-2006.lebanon', 'un.res-1970-2011.libya', 'un.res-2806-2025.somalia',
+                          'un.res-2821-2026.south-sudan-renewal', 'un.res-2825-2026.drc-renewal',
+                          'un.res-2827-2026.central-african-republic-renewal', 'un.res-2830-2026.sudan-renewal',
+                          'un.res-2831-2026.haiti-renewal', 'un.res-687-1991.iraq-arms'], sorted(texts))
+        sunsets = {entry_id: sanctions_import.entry_of(register, entry_id)['sunset'] for entry_id in texts}
+        self.assertEqual({'un.res-2821-2026.south-sudan-renewal': '2027-05-31',
+                          'un.res-2825-2026.drc-renewal': '2027-07-01',
+                          'un.res-2827-2026.central-african-republic-renewal': '2027-07-31',
+                          'un.res-2830-2026.sudan-renewal': '2026-12-11',
+                          'un.res-2831-2026.haiti-renewal': '2027-10-14'},
+                         {entry_id: sunset for entry_id, sunset in sunsets.items() if sunset})
+        self.assertEqual([('CD', 'S/RES/1807 (2008)'), ('CF', 'S/RES/2745 (2024)'), ('HT', 'S/RES/2794 (2025)'),
+                          ('IQ', 'S/RES/687 (1991)'), ('LB', 'S/RES/1701 (2006)'), ('LY', 'S/RES/1970 (2011)'),
+                          ('SD-DC', 'S/RES/1556 (2004)'), ('SD-DE', 'S/RES/1556 (2004)'),
+                          ('SD-DN', 'S/RES/1556 (2004)'), ('SD-DS', 'S/RES/1556 (2004)'),
+                          ('SD-DW', 'S/RES/1556 (2004)'), ('SO', 'S/RES/2713 (2023)'), ('SS', 'S/RES/2428 (2018)')],
+                         [(item['region'], item['program']) for item in record['destinations']])
+        self.assertEqual({'sectoral'}, {item['measure'] for item in record['destinations']})
+        # A resolution read whose measures attach only to the persons listed (the Consolidated List screens them), or
+        # whose text the destinations rest on beside the one in force, is read without a destination of its own.
+        for no_destination in ('un.res-1267-1999.isil-al-qaida', 'un.res-1988-2011.taliban',
+                               'un.res-2048-2012.guinea-bissau', 'un.res-2140-2014.yemen', 'un.res-1518-2003.iraq',
+                               'un.res-1483-2003.iraq-trade', 'un.res-1546-2004.iraq-government',
+                               'un.res-1957-2010.iraq-wmd', 'un.res-1533-2004.drc', 'un.res-1807-2008.drc-arms',
+                               'un.res-1591-2005.sudan', 'un.res-1556-2004.darfur-arms',
+                               'un.res-2127-2013.central-african-republic',
+                               'un.res-2745-2024.central-african-republic-armed-groups', 'un.res-2653-2022.haiti',
+                               'un.res-2794-2025.haiti-arms', 'un.res-2713-2023.al-shabaab',
+                               'un.res-2206-2015.south-sudan', 'un.res-2428-2018.south-sudan-arms'):
+            self.assertIsNotNone(sanctions_import.read_instrument(register, no_destination))
+            self.assertNotIn(no_destination, texts)
+        self.assertNotIn('int.un-sanctions', register['sanctions_lists']['embargoes']['reasons'])
+        # The DPRK and Iran regimes are still to be read, so nothing is written: a screening naming un.sc.embargo
+        # finds the list missing and fails closed instead of clearing those places.
+        self.assertIn('The DPRK regime', record['open'])
+        with tempfile.TemporaryDirectory() as out:
+            with patch('sys.stdout', new_callable=io.StringIO) as printed:
+                self.assertEqual(0, sanctions_import.main(['import', '--from', str(self.LISTS), '--out', out,
+                                                           '--authority', 'un.sc.embargo']))
+            self.assertIn('un.sc.embargo: 13 embargoed destinations authored, not written while the reading is open: '
+                          'The DPRK regime', printed.getvalue())
+            self.assertEqual([], list(Path(out).iterdir()))
+
+    def test_an_open_reading_is_never_written(self):
+        register = {'entries': [self.screening_entry(), self.read_order()]}
+        record = dict(self.umbrella_embargo(), open='The regimes read next.')
+        with tempfile.TemporaryDirectory() as out:
+            with self.assertRaisesRegex(sanctions_import.OpenReading, '^3 embargoed destinations authored, not written '
+                                        'while the reading is open: The regimes read next.$'):
+                self.import_masak(record, register, out)
+            self.assertEqual([], list(Path(out).iterdir()))
+            # A malformed open reading is refused for what it is first.
+            with self.assertRaisesRegex(sanctions_import.SanctionsError, 'max_age_days is 1 to'):
+                self.import_masak(dict(record, max_age_days=0), register, out)
+            # Closed, the same reading is written.
+            self.assertEqual(3, self.import_masak(dict(record, open=None), register, out)[1])
 
     # The importer, on the committed excerpts of the official files.
 
@@ -9151,6 +9240,254 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
                 ('{}', 'not a gov.uk content record')):
             with self.assertRaises(unreadable) as refused:
                 regulation(refused_body.encode(), guidance)
+            self.assertIn(message, str(refused.exception))
+
+    # The UN Digital Library's MARC XML record of a resolution and the Security Council Consolidated List (2026-11-01):
+    # a record names its symbol (with or without a space before the year), its day and one 856 field per language file,
+    # whose subfields come in any order; the list's parties carry their regime's list type.
+    UN_RECORD = '584729'
+    UN_PDF = b'%PDF-1.4\n' + b'0' * 91
+
+    def un_record(self, record=UN_RECORD, symbol='S/RES/1718(2006)', day='2006-10-14', files=None):
+        files = [('English', 'S_RES_1718%282006%29-EN.pdf', len(self.UN_PDF)),
+                 ('Français', 'S_RES_1718%282006%29-FR.pdf', 48639)] if files is None else files
+        fields = ''.join(
+            ('<datafield tag="856" ind1="4" ind2=" "><subfield code="u">https://digitallibrary.un.org/record/'
+             f'{record}/files/{name}</subfield><subfield code="y">{language}</subfield><subfield code="s">{size}'
+             '</subfield></datafield>') if index % 2 == 0 else
+            (f'<datafield tag="856" ind1="4" ind2=" "><subfield code="y">{language}</subfield><subfield code="s">{size}'
+             f'</subfield><subfield code="u">https://digitallibrary.un.org/record/{record}/files/{name}</subfield>'
+             '</datafield>') for index, (language, name, size) in enumerate(files))
+        return ('<?xml version="1.0" encoding="UTF-8"?><collection xmlns="http://www.loc.gov/MARC21/slim"><record>'
+                f'<controlfield tag="001">{record}</controlfield><datafield tag="191" ind1=" " ind2=" ">'
+                f'<subfield code="a">{symbol}</subfield><subfield code="b">S/</subfield></datafield>'
+                f'<datafield tag="269" ind1=" " ind2=" "><subfield code="a">{day}</subfield></datafield>{fields}'
+                '</record></collection>')
+
+    @staticmethod
+    def un_list(*regimes, generated='2026-10-31T23:00:07.052Z'):
+        """The Consolidated List with one individual per regime and one entity of the first."""
+        people = ''.join(f'<INDIVIDUAL><DATAID>{index}</DATAID><UN_LIST_TYPE>{regime}</UN_LIST_TYPE></INDIVIDUAL>'
+                         for index, regime in enumerate(regimes))
+        return (f'<?xml version="1.0" encoding="UTF-8"?><CONSOLIDATED_LIST dateGenerated="{generated}">'
+                f'<INDIVIDUALS>{people}</INDIVIDUALS><ENTITIES><ENTITY><UN_LIST_TYPE> {regimes[0]} </UN_LIST_TYPE>'
+                '</ENTITY></ENTITIES></CONSOLIDATED_LIST>')
+
+    def resolution(self, entry_id, number, year, record, **changes):
+        return self.legal_entry(id=entry_id, **changes, instrument=self.instrument(
+            name=f'Security Council resolution {number} ({year})', article='Paragraph 8', type='resolution',
+            jurisdiction='INT', primary=f'https://digitallibrary.un.org/record/{record}'))
+
+    def un_tree(self, root, *entries):
+        legal = self.legal_register([self.legal_entry(), *entries])
+        legal['jurisdictions']['INT'] = {'name': 'International bodies', 'hosts': ['un.org']}
+        self.write_tree(root, self.register(self.entries()), legal)
+        (root / 'docs' / 'reading.md').write_text('<a id="r"></a>Read.\n', encoding='utf-8')
+        self.assertEqual(0, self.tool(root, '--register', 'cmake/legal-register.json', 'plan', '--out',
+                                      str(root / 'sources.json'))[0])
+        return json.loads((root / 'sources.json').read_text(encoding='utf-8'))
+
+    def test_a_security_council_resolution_is_read_by_its_library_record_and_english_text(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            plan = self.un_tree(root, self.resolution('un.dprk', 1718, 2006, self.UN_RECORD))
+            sources = {source['id']: source for source in plan['sources'] if source['id'].startswith('un-')}
+            library = f'https://digitallibrary.un.org/record/{self.UN_RECORD}'
+            self.assertEqual({'un-library-584729-record': ('index', f'{library}?of=xm', 'un-library-record', None),
+                              'un-library-584729': ('primary', 'https://digitallibrary.un.org/record/{version}',
+                                                    'un-resolution', 'un-library-584729-record')},
+                             {key: (source['kind'], source['url'], source['reader'], source.get('index'))
+                              for key, source in sources.items()})
+            text = f'{library}/files/S_RES_1718(2006)-EN.pdf'
+            routes = {f'{library}?of=xm': self.un_record(), text: self.UN_PDF, 'MevzuatNo=6698': self.MEVZUAT_HTML}
+            requests = []
+            manifest = register_review.fetch_sources(plan, root / 'fetched', opener=self.routed(routes, requests),
+                                                     today=datetime.date(2026, 12, 16))
+            items = {item['id']: item for item in manifest['items']}
+            version = 'S/RES/1718 (2006) of 2006-10-14, English text of 100 bytes'
+            item = items['un-library-584729']
+            self.assertEqual((text, version), (item['url'], item['version']))
+            self.assertIn(text, [request.full_url for request in requests])
+            argv, fetched = ('--register', 'cmake/legal-register.json'), ('--fetched', str(root / 'fetched'))
+            report = root / 'docs' / 'review.md'
+            self.assertEqual(0, self.tool(root, *argv, 'compare', *fetched, '--report', str(report), '--apply')[0])
+            digest = hashlib.sha256(self.UN_PDF).hexdigest()
+            self.assertIn(f'- un.dprk (NET.2): Security Council resolution 1718 (2006), Paragraph 8: never read from '
+                          f'its primary source; read {text} (version {version}, SHA-256 {digest}) in its consolidated '
+                          'text and record it with `read`\n', report.read_text(encoding='utf-8'))
+            code, output = self.tool(root, *argv, 'read', *fetched, '--ref', 'docs/reading.md#r', '--entry', 'un.dprk')
+            self.assertEqual(0, code, output)
+            path = root / 'cmake' / 'legal-register.json'
+            legal = json.loads(path.read_text(encoding='utf-8'))
+            entries = {entry['id']: entry for entry in legal['entries']}
+            self.assertEqual({'version': version, 'read': '2026-12-16', 'sha256': digest},
+                             entries['un.dprk']['instrument']['consolidated'])
+            checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
+            self.assertEqual([], checked['legal'])
+            # The guard holds a resolution to its name and to the symbol it was read as.
+            entries['un.dprk']['instrument']['name'] = 'Security Council resolution 1874 (2009)'
+            path.write_text(json.dumps(legal), encoding='utf-8')
+            checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
+            self.assertEqual([f"legal entry un.dprk: read as '{version}', which is not Security Council resolution "
+                              '1874 (2009)'], checked['legal'])
+            entries['un.dprk']['instrument']['name'] = 'Resolution 1718'
+            path.write_text(json.dumps(legal), encoding='utf-8')
+            checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
+            self.assertEqual(['legal entry un.dprk: a resolution is named "Security Council resolution <number> '
+                              '(<year>)"'], checked['legal'])
+            entries['un.dprk']['instrument']['name'] = 'Security Council resolution 1718 (2006)'
+            path.write_text(json.dumps(legal), encoding='utf-8')
+
+            def judged(day, record, pdf):
+                """The report of a scan on `day` with the record and English text given."""
+                routes.update({f'{library}?of=xm': record, text: pdf})
+                register_review.fetch_sources(plan, root / day, opener=self.routed(routes),
+                                              today=datetime.date.fromisoformat(day))
+                code, output = self.tool(root, *argv, 'compare', '--fetched', str(root / day), '--report',
+                                         str(root / 'docs' / f'{day}.md'), today=day)
+                self.assertEqual(0, code, output)
+                return (root / 'docs' / f'{day}.md').read_text(encoding='utf-8')
+            self.assertNotIn('- un.dprk', judged('2026-12-17', self.un_record(), self.UN_PDF))
+            # A text other than the record's size is not read; a reissued text is a new version to read.
+            text_report = judged('2026-12-18', self.un_record(), self.UN_PDF[:-1])
+            self.assertIn('- un-library-584729: not the 100-byte PDF its record names (99 bytes)', text_report)
+            reissued = self.UN_PDF + b'1'
+            files = [('English', 'S_RES_1718%282006%29-EN.pdf', len(reissued))]
+            text_report = judged('2026-12-19', self.un_record(files=files), reissued)
+            self.assertIn('- un.dprk (NET.2): Security Council resolution 1718 (2006), Paragraph 8: amended to '
+                          'S/RES/1718 (2006) of 2006-10-14, English text of 101 bytes since it was read on 2026-12-16 '
+                          f'({version})', text_report)
+
+    def test_the_un_list_is_read_by_its_regimes_and_judges_the_regime_resolutions(self):
+        list_url = register_review.UN_LIST
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            umbrella = self.legal_entry(id='int.un-sanctions', instrument=self.instrument(
+                name='UN Security Council Consolidated List', type='treaty', jurisdiction='INT', primary=list_url))
+            plan = self.un_tree(root, umbrella, self.resolution('un.dprk', 1718, 2006, 584729),
+                                self.resolution('un.libya', 1970, 2011, 698927),
+                                self.resolution('un.guinea-bissau', 2048, 2012, 727466),
+                                self.resolution('un.ended', 1267, 1999, 287334, effective='1999-10-15',
+                                                sunset='2026-01-01', state='deprecated', deprecation='2026-01-01'),
+                                self.resolution('un.lebanon', 1701, 2006, 581053))
+            source = next(source for source in plan['sources'] if source['id'] == 'un-sc-consolidated-list')
+            self.assertEqual((['int.un-sanctions'], list_url, 'un-sc-list'),
+                             (source['entries'], source['url'], source['reader']))
+            listed = self.un_list('DPRK', 'Libya', 'Iran', 'Cyber')
+            routes = {list_url: listed, 'MevzuatNo=6698': self.MEVZUAT_HTML,
+                      'digitallibrary': urllib.error.URLError('not this case')}
+            register_review.fetch_sources(plan, root / 'fetched', opener=self.routed(routes),
+                                          today=datetime.date(2026, 12, 16))
+            argv, fetched = ('--register', 'cmake/legal-register.json'), ('--fetched', str(root / 'fetched'))
+            report = root / 'docs' / 'review.md'
+            self.assertEqual(0, self.tool(root, *argv, 'compare', *fetched, '--report', str(report), '--apply')[0])
+            record = register_review.un_list_record(listed.encode(), source)
+            self.assertEqual(b'["Cyber","DPRK","Iran","Libya"]', record)
+            text = report.read_text(encoding='utf-8')
+            what = '- int.un-sanctions (NET.2)'
+            self.assertIn(f'{what}: UN Security Council Consolidated List, Articles 4-7: never read from its primary '
+                          f'source; read {list_url} (version 4 regimes, SHA-256 {hashlib.sha256(record).hexdigest()})',
+                          text)
+            # Iran's establishing resolution is no entry and Cyber is no regime the reader knows; Guinea-Bissau's
+            # regime lists no one any more. The DPRK and Libya owe nothing; the ended 1267 entry and Lebanon's
+            # resolution (no list) are not judged.
+            self.assertIn(f'{what}: the Iran regime rests on S/RES/1737 (2006), which is no entry of the register; add '
+                          'it, read it with `read` and author what it restricts in the embargo generation', text)
+            self.assertIn(f"{what}: the list names the regime 'Cyber', which UN_REGIMES does not know; read the "
+                          'resolution establishing it', text)
+            self.assertIn(f"{what}: the list names no party of the GB regime any more; read whether a resolution "
+                          "ended un.guinea-bissau's S/RES/2048 (2012) and record the entry's sunset", text)
+            judged = '\n'.join(line for line in text.splitlines() if line.startswith(what))
+            for absent in ('DPRK regime', 'Libya regime', 'un.ended', 'Al-Qaida', 'un.lebanon', '1701'):
+                self.assertNotIn(absent, judged, absent)
+            self.assertEqual(4, judged.count(f'{what}: '))
+            code, output = self.tool(root, *argv, 'read', *fetched, '--ref', 'docs/reading.md#r', '--entry',
+                                     'int.un-sanctions')
+            self.assertEqual(0, code, output)
+            # Designations, their order and the generation instant are not the text read; a regime is.
+            self.assertEqual(record, register_review.un_list_record(self.un_list(
+                'Libya', 'DPRK', 'Cyber', 'Iran', 'Iran', generated='2026-12-17T23:00:00Z').encode(), source))
+            self.assertNotEqual(record, register_review.un_list_record(self.un_list('DPRK', 'Libya', 'Iran').encode(),
+                                                                       source))
+
+    def test_the_un_list_is_fetched_through_its_delivery_hosts(self):
+        list_url = register_review.UN_LIST
+        umbrella = self.legal_entry(id='int.un-sanctions', instrument=self.instrument(
+            name='UN Security Council Consolidated List', type='treaty', jurisdiction='INT', primary=list_url))
+        register = {'domain': 'legal', 'entries': [umbrella], 'sanctions_lists': {'lists': {'un.sc': {
+            'url': list_url, 'delivery': ['files.example.net', 'b.example.net']}}}}
+        sources, _ = register_review.plan_sources(register)
+        self.assertEqual(['b.example.net', 'files.example.net'], sources[0]['delivery'])
+        self.assertNotIn('delivery', register_review.plan_sources({'domain': 'legal', 'entries': [umbrella]})[0][0])
+        plan = {'schema': register_review.PLAN_SCHEMA, 'sources': sources}
+        handlers = []
+
+        def build_opener(handler):
+            handlers.append(handler)
+            return SimpleNamespace(open=self.routed({list_url: self.un_list('DPRK')}))
+        with tempfile.TemporaryDirectory() as scratch, \
+                patch.object(register_review.urllib.request, 'build_opener', build_opener):
+            manifest = register_review.fetch_sources(plan, scratch, today=datetime.date(2026, 12, 16))
+        self.assertNotIn('error', manifest['items'][0])
+        self.assertEqual([frozenset({'scsanctions.un.org', 'b.example.net', 'files.example.net'})],
+                         [handler.hosts for handler in handlers])
+
+    def test_the_un_readers_refuse_other_shapes(self):
+        unreadable, source = register_review.Unreadable, {'act': self.UN_RECORD}
+        index = register_review.read_un_library_record
+        today = datetime.date(2026, 11, 1)
+        self.assertEqual(('584729/files/S_RES_1718(2006)-EN.pdf',
+                          'S/RES/1718 (2006) of 2006-10-14, English text of 100 bytes'),
+                         index(self.un_record().encode(), source, today))
+        spaced = self.un_record(symbol='S/RES/2821 (2026)', files=[('English', 'S_RES_2821_%282026%29-EN.pdf', 7)])
+        self.assertEqual(('584729/files/S_RES_2821_(2026)-EN.pdf', 'S/RES/2821 (2026) of 2006-10-14, English text of '
+                          '7 bytes'), index(spaced.encode(), source, today))
+        self.assertEqual('S/RES/1718 (2006) of 2006-10-14, English text of 100 bytes',
+                         register_review.read_un_resolution(self.UN_PDF, source, index(self.un_record().encode(),
+                                                                                      source, today)[1]))
+        two = self.un_record().replace('</record></collection>', '</record><record/></collection>')
+        for body, message in (
+                (self.un_record(record='584730'), 'not the one UN Digital Library record 584729'),
+                (two, 'not the one UN Digital Library record 584729'),
+                (self.un_record(symbol='A/RES/61/1'), 'record 584729 is no Security Council resolution'),
+                (self.un_record(symbol='S/RES/1718(06)'), 'is no Security Council resolution'),
+                (self.un_record(day='2006-02-30'), 'is no Security Council resolution'),
+                (self.un_record(day='2006-10'), 'is no Security Council resolution'),
+                (self.un_record().replace('<datafield tag="191"', '<datafield tag="191" ind1=" " ind2=" "><subfield '
+                                          'code="a">S/RES/1(1946)</subfield></datafield><datafield tag="191"'),
+                 'is no Security Council resolution'),
+                (self.un_record(files=[('English', '../x-EN.pdf', 5)]), 'links a file'),
+                (self.un_record(files=[('English', 'S_RES_1718%282006%29-EN.pdf', 0)]), 'of another shape'),
+                (self.un_record(files=[('English', 'a%3Fb-EN.pdf', 5)]), 'cannot be part of a URL'),
+                (self.un_record(files=[('English', 'a%2F..%2Fb-EN.pdf', 5)]), 'cannot be part of a URL'),
+                (self.un_record(files=[('Français', 'x-FR.pdf', 5)]), 'has 0 English texts, not one'),
+                (self.un_record(files=[('English', 'x-EN.pdf', 5), ('English', 'y-EN.pdf', 5)]), 'has 2 English'),
+                (self.un_record().replace('584729/files', '584730/files', 1), 'links a file'),
+                ('<!DOCTYPE x [<!ENTITY a "b">]>' + self.un_record()[38:], 'a document type declaration'),
+                ('<collection', 'not well-formed XML')):
+            with self.assertRaises(unreadable) as refused:
+                index(body.encode(), source, today)
+            self.assertIn(message, str(refused.exception), body)
+        for body, version, message in (
+                (self.UN_PDF, None, 'no record version'), (self.UN_PDF, 'S/RES/1718 (2006)', 'no record version'),
+                (b'<html>' + self.UN_PDF[6:], 'S/RES/1718 (2006) of 2006-10-14, English text of 100 bytes',
+                 'not the 100-byte PDF'),
+                (self.UN_PDF + b'0', 'S/RES/1718 (2006) of 2006-10-14, English text of 100 bytes',
+                 'not the 100-byte PDF its record names (101 bytes)')):
+            with self.assertRaises(unreadable) as refused:
+                register_review.read_un_resolution(body, source, version)
+            self.assertIn(message, str(refused.exception))
+        self.assertEqual('2 regimes', register_review.read_un_list(self.un_list('DPRK', 'Iraq').encode(), {}, None))
+        entity = self.un_list('DPRK').replace('<ENTITY><UN_LIST_TYPE> DPRK ', '<ENTITY><UN_LIST_TYPE> Iraq ')
+        self.assertEqual(['DPRK', 'Iraq'], register_review.un_list_regimes(entity.encode()))
+        for body, message in (
+                (self.un_list('DPRK').replace('CONSOLIDATED_LIST', 'LIST'), 'not the UN Consolidated List'),
+                (self.un_list('DPRK', '  '), 'a party without its list type'),
+                ('<CONSOLIDATED_LIST><INDIVIDUALS/></CONSOLIDATED_LIST>', 'not the UN Consolidated List'),
+                ('<!DOCTYPE CONSOLIDATED_LIST><CONSOLIDATED_LIST/>', 'a document type declaration'),
+                ('<CONSOLIDATED_LIST>', 'not well-formed XML')):
+            with self.assertRaises(unreadable) as refused:
+                register_review.read_un_list(body.encode(), {}, None)
             self.assertIn(message, str(refused.exception))
 
     def test_readers_find_each_hosts_version_and_refuse_other_shapes(self):

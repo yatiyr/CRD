@@ -62,6 +62,11 @@ class SanctionsError(Exception):
     pass
 
 
+class OpenReading(SanctionsError):
+    """An authored embargo whose reading still owes texts: never written, so a screening naming its authority finds
+    the list missing and fails closed instead of clearing a place the texts not yet read may restrict."""
+
+
 # Country names as the lists print them (OFAC, the UN and the UK; the EU prints ISO codes), case-insensitive, to
 # ISO 3166-1 alpha-2. None marks a name that is no single current country (a former state, a disputed or
 # multinational region, a flag the authority calls false): it is read and records no country.
@@ -809,10 +814,11 @@ def read_instrument(register, entry_id):
     return None
 
 
-def embargo_errors(authority, record, register):
-    """What keeps an authored embargo generation from being written: its shape, a text read from its primary source,
-    and destinations the decoder accepts (ISO regions of known countries, unique per programme, each with its
-    provision)."""
+def embargo_errors(authority, record, register, today):
+    """What keeps an authored embargo generation from being written on `today` (an ISO day): its shape, a text read
+    from its primary source and in force (a measure renewed for a period rests on the renewal, whose sunset is the
+    period's end), and destinations the decoder accepts (ISO regions of known countries, unique per programme, each
+    with its provision)."""
     at = authority
     if not AUTHORITY.fullmatch(authority):
         return [f'{at}: an authority is a dotted lower-case id']
@@ -851,6 +857,10 @@ def embargo_errors(authority, record, register):
         elif jurisdiction is not None and instrument.get('jurisdiction') != jurisdiction:
             errors.append(f'{where}: entry {destination["entry"]!r} is an instrument of '
                           f'{instrument.get("jurisdiction")}, not of {jurisdiction}')
+        sunset = (entry_of(register, destination['entry']) or {}).get('sunset')
+        if instrument is not None and isinstance(sunset, str) and sunset <= today:
+            errors.append(f'{where}: entry {destination["entry"]!r} ended on {sunset}; read the resolution or act '
+                          'that renews or replaces its measure, or drop the destination')
         if any(len(destination[key].encode('utf-8')) > MAX_TEXT for key in DESTINATION_KEYS):
             errors.append(f'{where}: a value longer than {MAX_TEXT} bytes')
         if (destination['region'], destination['program']) in seen:
@@ -874,12 +884,15 @@ def embargo_reading(record, register):
     return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
 
 
-def import_embargo(authority, record, register, out_dir):
-    """Writes OUT/<authority>.sanctions.toml; returns (generation or None when already current, destinations, the day
-    its texts were last read)."""
-    errors = embargo_errors(authority, record, register)
+def import_embargo(authority, record, register, out_dir, today):
+    """Writes OUT/<authority>.sanctions.toml as of `today` (an ISO day); returns (generation or None when already
+    current, destinations, the day its texts were last read). A reading still open raises OpenReading."""
+    errors = embargo_errors(authority, record, register, today)
     if errors:
         raise SanctionsError('; '.join(errors))
+    if record['open'] is not None:
+        raise OpenReading(f'{len(record["destinations"])} embargoed destinations authored, not written while the '
+                          f'reading is open: {record["open"]}')
     instrument = entry_of(register, record['entry'])['instrument']
     published = max(text['read'] for text in embargo_texts(record, register).values())
     sha256 = embargo_reading(record, register)
@@ -970,9 +983,15 @@ def command_import(args, root):
     unknown = sorted(set(chosen) - set(lists) - set(embargoes))
     if unknown:
         raise SanctionsError(f'{REGISTER} sanctions_lists has no {", ".join(unknown)}')
+    today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
     for authority in dict.fromkeys(chosen):
         if authority in embargoes:
-            generation, destinations, read = import_embargo(authority, embargoes[authority], register, args.out)
+            try:
+                generation, destinations, read = import_embargo(authority, embargoes[authority], register, args.out,
+                                                                today)
+            except OpenReading as reading:
+                print(f'{authority}: {reading}')
+                continue
             state = 'already written' if generation is None else f'generation {generation}'
             print(f'{authority}: {destinations} embargoed destinations read {read}: {state}')
             continue

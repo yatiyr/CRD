@@ -104,7 +104,9 @@ TURKEY = 'TR'
 TOPICS_WITHOUT_JURISDICTION = {'platform'}
 INSTRUMENT_KEYS = {'name', 'article', 'type', 'jurisdiction', 'primary', 'consolidated'}
 INSTRUMENT_TYPES = {'law', 'regulation', 'directive', 'by-law', 'decision', 'executive-order', 'determination',
-                    'code-of-practice', 'guidance', 'treaty', 'policy', 'licence'}
+                    'resolution', 'code-of-practice', 'guidance', 'treaty', 'policy', 'licence'}
+# A resolution is the Security Council's, named by its number and year; read, its version names its symbol.
+UN_RESOLUTION_NAME = re.compile(r'Security Council resolution ([1-9]\d*) \((\d{4})\)')
 JURISDICTION = re.compile(r'^(?:[A-Z]{2}(?:-[A-Z0-9]{1,3})?|INT|PLATFORM)$')
 HOST = re.compile(r'^[a-z0-9-]+(?:\.[a-z0-9-]+)+$')
 SHA256 = re.compile(r'^[0-9a-f]{64}$')
@@ -376,6 +378,12 @@ def instrument_errors(where, entry, register, context):
         errors.append(f'{where}: primary source host {host} is not an official host of {instrument["jurisdiction"]} '
                       f'({", ".join(jurisdiction.get("hosts", []))}); cite the official journal or regulator')
     consolidated = instrument['consolidated']
+    named = UN_RESOLUTION_NAME.match(instrument['name']) if isinstance(instrument['name'], str) else None
+    if instrument['type'] == 'resolution' and named is None:
+        errors.append(f'{where}: a resolution is named "Security Council resolution <number> (<year>)"')
+    elif named and isinstance(consolidated, dict) and isinstance(consolidated.get('version'), str) and \
+            not consolidated['version'].startswith(f'S/RES/{named[1]} ({named[2]}) '):
+        errors.append(f'{where}: read as {consolidated["version"]!r}, which is not {named[0]}')
     if consolidated is not None:
         if not isinstance(consolidated, dict) or set(consolidated) != {'version', 'read', 'sha256'} or \
                 not isinstance(consolidated.get('version'), str) or not consolidated['version'] or \
@@ -795,10 +803,10 @@ def sanctions_list_errors(register, context):
             errors.append(f'{where}: pending {entry_id} gives its reason')
     for entry_id in sorted(set(screening) - served - set(section['pending'])):
         errors.append(f'{where}: the screening entry {entry_id} has no list and no pending reason')
-    return errors + embargo_errors(register, section, screening)
+    return errors + embargo_errors(register, section, screening, context.today)
 
 
-def embargo_errors(register, section, screening):
+def embargo_errors(register, section, screening, today):
     """The embargoed destinations authored per authority (scripts/import-sanctions.py's rules for each generation),
     each serving a screening entry and no authority of an official file; every screening entry has an embargo
     generation or a reason it has none (not yet read, or an instrument that embargoes no destination)."""
@@ -810,7 +818,8 @@ def embargo_errors(register, section, screening):
                 'screening entry has none)']
     errors, served = [], set()
     for authority, record in embargoes['generations'].items():
-        errors += [f'{where}: {error}' for error in _sanctions.embargo_errors(authority, record, register)]
+        errors += [f'{where}: {error}' for error in _sanctions.embargo_errors(authority, record, register,
+                                                                               today.isoformat())]
         if authority in section['lists']:
             errors.append(f'{where}: {authority} is the authority of an official file')
         entry_id = record.get('entry') if isinstance(record, dict) else None
