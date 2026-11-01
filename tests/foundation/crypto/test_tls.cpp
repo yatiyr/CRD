@@ -2065,10 +2065,12 @@ TEST_CASE("TLS: a server sends its Certificate compressed when that is smaller, 
     // The server's first flight with the client offering zstd and zlib and with it offering nothing, from the same
     // credential. Ed25519 signs deterministically, so its bytes are exact; an ML-DSA signature is hedged (random bytes,
     // compressed differently each time) and an ECDSA signature varies in length too, so theirs save within a range.
+    // An ECDSA certificate's zstd and zlib forms lie within a few bytes of each other, so its random signature decides
+    // which is smaller from run to run (the choice of the smaller form is exact in the Ed25519 row and the next case).
     struct Expected
     {
         AlgorithmId key;
-        u16         algorithm; // what the server compresses with: the smaller form
+        u16         algorithm; // what the server compresses with: the smaller form; 0 where either can be
         usize       plain;     // the flight with the Certificate uncompressed, 0 where it varies
         usize       least;     // the bytes compression saves, at least and at most
         usize       most;
@@ -2078,8 +2080,8 @@ TEST_CASE("TLS: a server sends its Certificate compressed when that is smaller, 
         {AlgorithmId::MlDsa44, kZstd, 7668U, 30U, 80U},
         {AlgorithmId::MlDsa65, kZstd, 10086U, 30U, 80U},
         {AlgorithmId::MlDsa87, kZstd, 13362U, 30U, 80U},
-        {AlgorithmId::EcdsaSecp256r1Sha256, kZlib, 0U, 10U, 80U},
-        {AlgorithmId::EcdsaSecp384r1Sha384, kZlib, 0U, 10U, 80U},
+        {AlgorithmId::EcdsaSecp256r1Sha256, 0U, 0U, 10U, 80U},
+        {AlgorithmId::EcdsaSecp384r1Sha384, 0U, 0U, 10U, 80U},
     };
     for (const Expected& row : expected)
     {
@@ -2093,8 +2095,9 @@ TEST_CASE("TLS: a server sends its Certificate compressed when that is smaller, 
         REQUIRE(compressed.offers == 2U);
         CHECK(compressed.offered[0] == kZstd);
         CHECK(compressed.offered[1] == kZlib);
-        CHECK(server.session.certificate_compression() == row.algorithm);
-        CHECK(client.session.certificate_compression() == row.algorithm);
+        const u16 chosen = server.session.certificate_compression();
+        CHECK((row.algorithm != 0U ? chosen == row.algorithm : (chosen == kZstd || chosen == kZlib)));
+        CHECK(client.session.certificate_compression() == chosen);
 
         // The same server context and a client that decodes nothing: no extension, the Certificate as it is.
         Endpoint plain_client;
