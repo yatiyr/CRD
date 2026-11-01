@@ -53,6 +53,7 @@
     },
     {
       "paths": [
+        "runtime/examples/bench_batched.cpp",
         "runtime/examples/bench_biquad_and_orient.cpp",
         "runtime/examples/bench_comms_vs_refs.cpp",
         "runtime/examples/bench_compression.cpp",
@@ -214,19 +215,15 @@
       "why": "The GenMC model of the jobs counter protocol is compiled by GenMC itself on the DIAG.4b model-checking lane."
     },
     {
-      "paths": ["runtime/examples/bench_comms_liquid.c"],
-      "built_by": "scripts/run_bench_comms.sh",
-      "why": "The liquid-dsp peer of the comms bench."
-    },
-    {
-      "paths": ["runtime/examples/bench_dsp_adaptive_liquid.c"],
-      "built_by": "scripts/run_bench_dsp_adaptive.sh",
-      "why": "The liquid-dsp peer of the adaptive-filter bench."
-    },
-    {
-      "paths": ["runtime/examples/bench_dsp_multirate_liquid.c"],
-      "built_by": "scripts/run_bench_dsp_multirate.sh",
-      "why": "The liquid-dsp peer of the multirate bench."
+      "paths": [
+        "runtime/examples/bench_comms_liquid.c",
+        "runtime/examples/bench_dsp_adaptive_liquid.c",
+        "runtime/examples/bench_dsp_multirate_liquid.c",
+        "runtime/examples/bench_dsp_sosfilt_vs_liquid.c",
+        "runtime/examples/bench_dsp_windows_vs_liquid.c"
+      ],
+      "built_when": {"option": "CRD_BUILD_HESAP_VS_LIQUID"},
+      "why": "The liquid-dsp peers of the comms, adaptive-filter, multirate, sosfilt and window boards, against liquid-dsp installed on the measuring host (scripts/bench-host-setup.sh); their run_bench_*.sh scripts build and run them."
     },
     {
       "paths": [
@@ -290,14 +287,10 @@
     {
       "paths": [
         "bench/",
-        "scripts/bench_gemm_v0d.cpp",
-        "scripts/v14m_ggml_q8_bench.c",
-        "runtime/examples/bench_batched.cpp",
-        "runtime/examples/bench_dsp_sosfilt_vs_liquid.c",
-        "runtime/examples/bench_dsp_windows_vs_liquid.c"
+        "scripts/v14m_ggml_q8_bench.c"
       ],
       "unrouted": "REPO.3",
-      "why": "Peer and GPU-vendor measurement programs (CUDA, CUB, cuBLAS, cuFFT, VkFFT, MKL, liquid-dsp, ggml) and the Shewchuk predicates reference that no script or option builds; REPO.3 owns giving each a checked route or retiring it with its board as the record."
+      "why": "GPU-vendor and peer measurement programs (CUDA, CUB, cuBLAS, cuFFT, VkFFT, ggml) that no script or option builds; REPO.3 owns giving each a checked route or retiring it with its board as the record."
     }
   ]
 }

@@ -1,5 +1,6 @@
 // liquid-dsp peer for the v11c comms benchmark (modem + eqlms + firinterp + fft/ofdm). f32. Built by
-// scripts/run_bench_comms.sh. Throughput-only (correctness gated by the Cerid test suite).
+// CRD_BUILD_HESAP_VS_LIQUID (runtime/CMakeLists.txt), run by scripts/run_bench_comms.sh. Throughput-only
+// (correctness gated by the Cerid test suite).
 #include <complex.h>
 #include <math.h>
 #include <stdio.h>
@@ -7,7 +8,12 @@
 #include <time.h>
 #include <liquid/liquid.h>
 
-static double now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec*1e9 + t.tv_nsec; }
+static double now_ns(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)t.tv_sec * 1e9 + (double)t.tv_nsec;
+}
 static float frand(void){ return 2.0f*((float)rand()/(float)RAND_MAX) - 1.0f; }
 
 int main(void)
@@ -22,7 +28,7 @@ int main(void)
         liquid_float_complex *x = malloc(sizeof(liquid_float_complex)*n);
         for (unsigned i=0;i<n;++i)
         {
-            sy[i] = rand() % 64;
+            sy[i] = (unsigned)(rand() % 64);
         }
         double t0=now_ns();
         for (unsigned i=0;i<n;++i)

@@ -32,7 +32,7 @@ int main(void)
             eqlms_rrrf_execute(eq, &y);
             eqlms_rrrf_step(eq, x[i], y); /* desired = x[i] (identity), error = d - y */
         }
-        chk += y;
+        chk += (double)y;
         eqlms_rrrf_destroy(eq);
     }
     clock_gettime(CLOCK_MONOTONIC, &t1);

@@ -51,6 +51,14 @@ option(CRD_BUILD_RETAINED_BENCHES "Build the peer-free retained benchmark progra
 # or a shipped build; scripts/run-lane-bench.sh builds and runs them per CPU level.
 option(CRD_BUILD_HESAP_VS_FFT_REFS "Build the FFT and DCT benches against FFTW, MKL and pocketfft (local-only)" OFF)
 option(CRD_BUILD_HESAP_VS_FINUFFT "Build the NUFFT bench against FINUFFT (local-only)" OFF)
+# The batched linear-algebra board's MKL rows in bench_batched (cblas_dgemm_batch_strided and LAPACKE loops), against
+# Intel MKL installed on the measuring host (scripts/bench-host-setup.sh); needs CRD_BUILD_RETAINED_BENCHES. Local only,
+# never in CI or a shipped build; scripts/run_bench_batched.sh builds and runs it per CPU level.
+option(CRD_BUILD_HESAP_VS_MKL "Build bench_batched's rows against MKL's batched GEMM and LAPACKE (local-only)" OFF)
+# The liquid-dsp peers of the dsp and comms boards (runtime/examples/*liquid*.c), against liquid-dsp installed on the
+# measuring host (libliquid-dev: scripts/bench-host-setup.sh). Local only, never in CI or a shipped build; their
+# run_bench_*.sh boards build and run them after the Cerid benches.
+option(CRD_BUILD_HESAP_VS_LIQUID "Build the dsp and comms boards' liquid-dsp peer programs (local-only)" OFF)
 # The hesap-ode boards against SUNDIALS 6 from the system (libsundials-dev): CVODE's SPGMR Krylov path, CVODES's forward
 # sensitivities and ARKODE's IMEX steppers. Local only, never in CI or a shipped build; their run_bench_*.sh scripts
 # build and run them per CPU level through scripts/run-lane-bench.sh.
@@ -1012,6 +1020,9 @@ if(CRD_BUILD_HESAP_VS_BOOST)
 endif()
 
 # ----- The permute board's peer: HPTT's sources, built by runtime/CMakeLists.txt as crd-hptt (bench-only) -----
+if(CRD_BUILD_HESAP_VS_MKL AND NOT CRD_BUILD_RETAINED_BENCHES)
+    message(FATAL_ERROR "[hesap-vs-mkl] needs CRD_BUILD_RETAINED_BENCHES (bench_batched)")
+endif()
 if(CRD_BUILD_HESAP_VS_HPTT)
     if(NOT CRD_BUILD_RETAINED_BENCHES OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT _crd_arch_x64)
         message(FATAL_ERROR "[hesap-vs-hptt] needs x64 Linux and CRD_BUILD_RETAINED_BENCHES (bench_permute)")
@@ -1020,7 +1031,7 @@ if(CRD_BUILD_HESAP_VS_HPTT)
 endif()
 
 # ----- The Powell-method differential tests' oracle: NLopt, built by tests/numerics/hesap-opt (test-only) -----
-# The oracle units are C, the only first-party C units of the tree, so C is enabled here.
+# The oracle units are C, so C is enabled here (the predicates' Shewchuk oracle enables it in its own test directory).
 if(CRD_BUILD_HESAP_VS_NLOPT)
     if(NOT CRD_BUILD_TESTS)
         message(FATAL_ERROR "[hesap-vs-nlopt] the differential tests need CRD_BUILD_TESTS")

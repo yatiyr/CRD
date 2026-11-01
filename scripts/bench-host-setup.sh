@@ -7,13 +7,13 @@
 #   /etc/sysctl.d, so perf stat, top-down metrics and perf record work for the user after every boot;
 # - the pinned Ninja on /usr/local/bin and the pinned Vulkan headers as the lanes' VULKAN_SDK (~/cerid-deps/vulkan-sdk,
 #   the wsl-lane.sh default), as the hosted Linux lanes install them;
-# - the peers the boards find on the system (the apt packages below: FFTW 3 and Intel MKL for the fft boards); the
-#   pinned peers (pocketfft, Eigen, OpenBLAS, Boost, HPTT, Highway) come from cmake/pins.json at configure time;
+# - the peers the boards find on the system (the apt packages below: FFTW 3 and Intel MKL for the fft boards, MKL for
+#   bench_batched too, liquid-dsp for the dsp and comms boards' peer programs); the pinned peers (pocketfft, Eigen, OpenBLAS, Boost, HPTT, Highway) come from cmake/pins.json at configure time;
 # - then the census a board records: the CPU and its vector features, the kernel, the tools and each peer's package
 #   version (also written to ~/bench-host.txt).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-PACKAGES=("linux-tools-$(uname -r)" linux-tools-common libfftw3-dev libmkl-dev)
+PACKAGES=("linux-tools-$(uname -r)" linux-tools-common libfftw3-dev libmkl-dev libliquid-dev)
 missing=()
 for package in "${PACKAGES[@]}"; do
     if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'install ok installed'; then
@@ -46,5 +46,5 @@ fi
     echo "kernel: $(uname -r); perf_event_paranoid: $(cat /proc/sys/kernel/perf_event_paranoid)"
     echo "perf: $(perf --version)"
     echo "gcc: $(gcc --version | head -n 1); cmake: $(cmake --version | head -n 1); ninja: $(ninja --version)"
-    dpkg-query -W -f='package: ${Package} ${Version}\n' libfftw3-dev libmkl-dev
+    dpkg-query -W -f='package: ${Package} ${Version}\n' libfftw3-dev libmkl-dev libliquid-dev
 } | tee "$HOME/bench-host.txt"

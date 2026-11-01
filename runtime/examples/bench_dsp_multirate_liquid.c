@@ -30,7 +30,7 @@ static void run(unsigned int n, unsigned int P, unsigned int Q, int reps)
         {
             rresamp_rrrf_execute(q, x + b * Q, y + b * P);
         }
-        chk += y[(nblocks * P) / 2];
+        chk += (double)y[(nblocks * P) / 2];
     }
     clock_gettime(CLOCK_MONOTONIC, &t1);
     double ms = ((double)(t1.tv_sec - t0.tv_sec) * 1e3 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6) / reps;

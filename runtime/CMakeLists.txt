@@ -1067,6 +1067,17 @@ function(crd_add_fft_peer_bench name)
     add_executable(${name} examples/${name}.cpp)
     target_link_libraries(${name} PRIVATE crd-core crd-memory crd-containers crd-math crd-hesap crd-hesap-fft ${ARGN})
 endfunction()
+# Intel MKL from the measuring host's system (libmkl-dev: scripts/bench-host-setup.sh), for the fft boards and the rows
+# of bench_batched. mkl_rt selects its own code path on the host's CPUID.
+if(CRD_BUILD_HESAP_VS_FFT_REFS OR CRD_BUILD_HESAP_VS_MKL)
+    find_path(CRD_MKL_INCLUDE mkl.h PATH_SUFFIXES mkl)
+    find_library(CRD_MKL_LIB mkl_rt)
+    foreach(found IN ITEMS CRD_MKL_INCLUDE CRD_MKL_LIB)
+        if(NOT ${found})
+            message(FATAL_ERROR "[hesap-vs-mkl] ${found} not found (Intel MKL: scripts/bench-host-setup.sh)")
+        endif()
+    endforeach()
+endif()
 if(CRD_BUILD_HESAP_VS_FFT_REFS OR CRD_BUILD_HESAP_VS_FINUFFT)
     find_library(CRD_FFTW_LIB fftw3)
     if(NOT CRD_FFTW_LIB)
@@ -1075,14 +1086,9 @@ if(CRD_BUILD_HESAP_VS_FFT_REFS OR CRD_BUILD_HESAP_VS_FINUFFT)
 endif()
 if(CRD_BUILD_HESAP_VS_FFT_REFS)
     find_path(CRD_FFTW_INCLUDE fftw3.h)
-    find_path(CRD_MKL_INCLUDE mkl_dfti.h PATH_SUFFIXES mkl)
-    find_library(CRD_MKL_LIB mkl_rt)
-    foreach(found IN ITEMS CRD_FFTW_INCLUDE CRD_MKL_INCLUDE CRD_MKL_LIB)
-        if(NOT ${found})
-            message(FATAL_ERROR "[hesap-vs-fft-refs] ${found} not found (FFTW 3 and Intel MKL: "
-                                "scripts/bench-host-setup.sh)")
-        endif()
-    endforeach()
+    if(NOT CRD_FFTW_INCLUDE)
+        message(FATAL_ERROR "[hesap-vs-fft-refs] fftw3.h not found (FFTW 3: scripts/bench-host-setup.sh)")
+    endif()
     # The pocketfft header reaches only its peer library, built without its thread pool (every board is one thread),
     # whose version line names the pinned commit.
     crd_pin(pocketfft_commit packages pocketfft commit)
@@ -1205,6 +1211,7 @@ if(CRD_BUILD_RETAINED_BENCHES)
             crd-core crd-memory crd-containers crd-math crd-jobs crd-hesap crd-hesap-dense ${ARGN})
         crd_enable_default_pch(${name})
     endfunction()
+    crd_add_retained_bench(bench_batched crd-hesap-stats crd-hesap-tensor)
     crd_add_retained_bench(bench_biquad_and_orient crd-audio crd-hesap-dsp) # OWN.1
     crd_add_retained_bench(bench_comms_vs_refs crd-hesap-comms crd-hesap-stats)
     crd_add_retained_bench(bench_compression crd-resources crd-hesap-tensor crd-perf) # OWN.1
@@ -1246,6 +1253,56 @@ if(CRD_BUILD_RETAINED_BENCHES)
     crd_add_retained_bench(bench_wavelet_vs_refs crd-hesap-wavelet)
     crd_add_retained_bench(opt_scoreboard crd-hesap-opt)
     crd_add_retained_bench(prof_fft_kernel crd-hesap-fft)
+endif()
+
+# --- bench_batched's MKL rows (CRD_BUILD_HESAP_VS_MKL; local only, never in CI or a shipped build) ---
+# The batched linear-algebra board (docs/bench/2026-07-05-v14h-batched-la.md) times MKL's cblas_dgemm_batch_strided and
+# its LAPACKE potrf, getrf and gesdd loops beside Cerid's batched kernels when CRD_BENCH_MKL is defined; MKL's
+# declarations come in as system headers, so the bench keeps the tree's warnings as errors. The root CMakeLists.txt
+# requires CRD_BUILD_RETAINED_BENCHES; scripts/run_bench_batched.sh builds and runs it per CPU level.
+if(CRD_BUILD_HESAP_VS_MKL)
+    target_include_directories(bench_batched SYSTEM PRIVATE "${CRD_MKL_INCLUDE}")
+    target_link_libraries(bench_batched PRIVATE "${CRD_MKL_LIB}")
+    target_compile_definitions(bench_batched PRIVATE CRD_BENCH_MKL)
+    message(STATUS "[hesap-vs-mkl] bench_batched's MKL rows: ${CRD_MKL_LIB}")
+endif()
+
+# --- The liquid-dsp peers of the dsp and comms boards (CRD_BUILD_HESAP_VS_LIQUID; local only, never in CI) ---
+# Each is a C program that runs a board's workload through liquid-dsp's f32 routines, from the measuring host's system
+# (libliquid-dev: scripts/bench-host-setup.sh). They build with the tree's warnings at the host's ISA (the boards built
+# them with gcc -O3 -march=native) and link no Cerid library, so the ISA isolation guard leaves them out. Their
+# run_bench_*.sh boards build and run each once after the Cerid bench (scripts/run-lane-bench.sh).
+if(CRD_BUILD_HESAP_VS_LIQUID)
+    enable_language(C)
+    find_path(CRD_LIQUID_INCLUDE liquid/liquid.h)
+    find_library(CRD_LIQUID_LIB liquid)
+    foreach(found IN ITEMS CRD_LIQUID_INCLUDE CRD_LIQUID_LIB)
+        if(NOT ${found})
+            message(FATAL_ERROR "[hesap-vs-liquid] ${found} not found (liquid-dsp: scripts/bench-host-setup.sh)")
+        endif()
+    endforeach()
+    find_library(CRD_LIBM_LIB m)
+    set(liquid_libraries "${CRD_LIQUID_LIB}")
+    if(CRD_LIBM_LIB)
+        list(APPEND liquid_libraries "${CRD_LIBM_LIB}")
+    endif()
+    crd_peer_isa_flags(liquid_flags)
+    foreach(peer IN ITEMS bench_comms_liquid bench_dsp_adaptive_liquid bench_dsp_multirate_liquid
+                          bench_dsp_sosfilt_vs_liquid bench_dsp_windows_vs_liquid)
+        add_executable(${peer} examples/${peer}.c)
+        target_include_directories(${peer} SYSTEM PRIVATE "${CRD_LIQUID_INCLUDE}")
+        target_compile_options(${peer} PRIVATE ${liquid_flags})
+        target_link_libraries(${peer} PRIVATE crd-warnings ${liquid_libraries})
+        set_target_properties(${peer} PROPERTIES C_STANDARD 17 C_STANDARD_REQUIRED ON C_EXTENSIONS ON
+                              INTERPROCEDURAL_OPTIMIZATION OFF CRD_ISA_ROLE peer)
+    endforeach()
+    # liquid-dsp 1.6.0's DEPRECATED(MSG, X) macro expands to X followed by the attribute, after X's semicolon, so each
+    # deprecation lands on the next declaration of liquid.h: eqlms_*_get_weights' on eqlms_*_push, eqlms_rrrf_train's
+    # on the eqlms_cccf type. The peers use neither deprecated function; GCC's report of the two they do use is
+    # liquid's header defect, not theirs.
+    set_source_files_properties(examples/bench_comms_liquid.c examples/bench_dsp_adaptive_liquid.c PROPERTIES
+                                COMPILE_OPTIONS -Wno-deprecated-declarations)
+    message(STATUS "[hesap-vs-liquid] liquid-dsp ${CRD_LIQUID_LIB}")
 endif()
 
 # --- The permute board's HPTT peer (CRD_BUILD_HESAP_VS_HPTT; local only, never in CI or a shipped build) ---
