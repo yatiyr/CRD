@@ -270,9 +270,10 @@ Designed here, qualified under [WEB.5](../ROADMAP.md#slice-web.5):
 `crd-crypto` implements the interface in [provider.hpp](../../engine/foundation/crypto/include/crd/crypto/provider.hpp)
 over the pinned AWS-LC (NET.2, 2026-11-01): randomness, constant-time equality and zeroing, key identifiers,
 AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305, HKDF with SHA-256 and SHA-384, ML-DSA-44/65/87, Ed25519 and ECDSA
-signatures (`ProviderVerifier` is the production `SignatureVerifier` of the policy generations) and X25519, P-256 and
-P-384 key agreement. Every operation names its algorithm by register identifier; the length tables
-(`aead_key_bytes`, `hkdf_hash_bytes`, `signature_sizes`, `agreement_sizes`) answer only for their own class; every
+signatures (`ProviderVerifier` is the production `SignatureVerifier` of the policy generations), X25519, P-256 and
+P-384 key agreement, ML-KEM-768 and ML-KEM-1024 key encapsulation and the SipHash-2-4 table PRF. Every operation
+names its algorithm by register identifier; the length tables (`aead_key_bytes`, `hkdf_hash_bytes`,
+`signature_sizes`, `agreement_sizes`, `kem_sizes`) answer only for their own class; every
 buffer has its exact length; failures zero their secret outputs; key objects zero their material when cleared or
 destroyed and are read-only, so shared across threads, after `init`. `provider_algorithms()` is a policy's ceiling
 (`PolicyConfig::supported`). Decisions (numbered for the tests):
@@ -304,11 +305,30 @@ destroyed and are read-only, so shared across threads, after `init`. `provider_a
 - **P6. The hybrid groups** (X25519MLKEM768, SecP256r1MLKEM768, SecP384r1MLKEM1024) run inside the provider's TLS
   stack; `provider_algorithms()` lists them only once the handshake slice proves them against the TLS stack's own
   key shares, so no generation can enable them earlier.
+- **P7. ML-KEM** (FIPS 203; `crypto.ml-kem`, class `0x07`). Encapsulation keys and ciphertexts as FIPS 203 encodes
+  them and 32-byte secrets; the private input is the 64-byte seed d || z (`KemKey::from_seed`, through the provider's
+  deterministic key generation, its only route from a seed), never the expanded decapsulation key, so a malformed
+  private key cannot exist and Wycheproof's expanded-key vectors are outside the profile. `kem_encapsulate` checks the
+  encapsulation key as section 7.2 requires (every coefficient below q; AWS-LC's import only copies the bytes, so the
+  provider's own key check runs before encapsulating and a failing key is `BadKey`, told apart from a provider
+  failure). Decapsulation of a
+  ciphertext of the right length never fails: a ciphertext not made for the key yields the implicit-rejection secret
+  in the same time (section 6.3), and the protocol notices only when keys derived from it fail to authenticate.
+  ML-KEM.Encaps_internal, which takes the randomness m, stays out of the interface (section 6.2); the encapsulation
+  vectors' known answers are checked through the provider's own deterministic encapsulation, the encapsulation
+  `kem_encapsulate` runs with a fresh m.
+- **P8. The table PRF** is SipHash-2-4 (`crypto.siphash`, class `0x08`, the provider's `SIPHASH_24`): every table an
+  adversary can fill (connection identifiers, address buckets, object tables) is indexed by `PrfKey::hash` under a
+  128-bit secret key (T10). A table generates its key (`PrfKey::generate`); processes that must agree, such as the
+  servers behind one load balancer, share one (`PrfKey::init`, k0 then k1 little-endian, the paper's byte order). A key
+  that holds none answers `NotReady`, never a hash under a public key. The key and the hash allocate nothing.
 
 The oracle is Project Wycheproof (C2SP/wycheproof, pinned as a test package and read at run time): every AES-GCM,
 ChaCha20-Poly1305, HKDF, X25519, ECDH P-256 and P-384, Ed25519, ECDSA and ML-DSA vector (keygen from seed, verify,
-sign-then-verify), with RFC 8032's deterministic signatures, FIPS 180-4's SHA-256 example and the refusal of every
-vector outside Cerid's profile (other nonce, tag and key lengths, compressed points, context strings).
+sign-then-verify), every ML-KEM-768 and ML-KEM-1024 vector (keys from seeds, decapsulation with implicit rejection,
+encapsulation with the modulus check) and every SipHash-2-4 vector, with RFC 8032's deterministic signatures, FIPS
+180-4's SHA-256 example and the refusal of every vector outside Cerid's profile (other nonce, tag and key lengths,
+compressed points, context strings, expanded ML-KEM decapsulation keys).
 
 <a id="tls-13-profile"></a>
 ### The TLS 1.3 profile

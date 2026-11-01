@@ -47,7 +47,9 @@ Every entry holds:
 | `deprecation` | The day Cerid stops accepting it; required when deprecated |
 | `note` | Optional |
 
-The standards domain adds `spec` (the document: `type` `rfc`, `draft`, `w3c`, `nist` or `cerid`; `ref`; for a draft
+The standards domain adds `spec` (the document: `type` `rfc`, `draft`, `w3c`, `nist`, `paper` (a peer-reviewed
+publication that defines an algorithm no standards body publishes, such as SipHash; `ref` is its DOI link, `status`
+`published` or `withdrawn`) or `cerid`; `ref`; for a draft
 its `revision` and `posted` day, month or year; `status` in the snapshot; `obsoleted_by` for an obsoleted RFC),
 `codepoints` (IANA or Cerid registry, name, value; `verified: false` marks a value taken from knowledge;
 `recommended`, IANA's "Recommended" value, [below](#recommended-column)),
@@ -63,6 +65,7 @@ adds the fields [below](#legal-domain).
   fails while pinned. Watched drafts never fail on expiry.
 - **Obsoleted pinned RFCs fail**; `obsoleted_by` names the replacement and is present exactly when the status is
   `obsoleted`.
+- **Withdrawn pinned documents fail**: a NIST publication or a paper that is `withdrawn` stays only as a watch entry.
 - **Overdue reviews fail**, per entry and for the register, as does a source read after the snapshot or after today.
 - **The schedule is computed, never typed.** `review.next` must be the day the schedule's calendar and runs owe; a
   calendar with no event after the latest run fails, so the light scans cannot silently stop.
@@ -211,8 +214,8 @@ standards register, never typed, and a change to them reaches no release without
   performs, each once in the order `authentication`, `confidentiality`, `integrity`, `key-exchange`,
   `key-derivation` (empty when none; a protocol whose packets are protected, such as QUIC or TLS, names all five, and
   a protocol riding on one names only what it adds). The class byte of a Cerid algorithm identifier fixes functions
-  its entry must name (key exchange for 0x01 and 0x02, authentication for 0x03 and 0x04, confidentiality and
-  integrity for 0x05, key derivation for 0x06; `ALGORITHM_CLASSES` in
+  its entry must name (key exchange for 0x01, 0x02 and 0x07, authentication for 0x03 and 0x04, confidentiality and
+  integrity for 0x05, key derivation for 0x06, integrity for 0x08; `ALGORITHM_CLASSES` in
   [gen-register-ids.py](../../scripts/gen-register-ids.py) is the one table), and each of its codepoints carries
   `key_bits`: one length per component, in the order the name gives. A symmetric or elliptic-curve key states its
   length as its specification encodes it (AES-128 128, ChaCha20 and the 32-byte X25519 and Ed25519 keys 256, P-384
@@ -517,8 +520,8 @@ EUR-Lex or Steamworks change found between them is recorded as a run with its tr
 2. `plan --out <file>` writes the primary sources a refresh reads: the RFC Editor record
    (`rfc-editor.org/rfc/rfcNNNN.json`) of every RFC, the IETF datatracker record
    (`datatracker.ietf.org/doc/<draft>/doc.json`) of every draft and the IANA registry files
-   (`iana.org/assignments/<name>/<name>.xml`) of the codepoints, plus the items read by hand: W3C and NIST documents,
-   object identifiers (NIST CSOR) and the IETF meeting calendar. For the legal register
+   (`iana.org/assignments/<name>/<name>.xml`) of the codepoints, plus the items read by hand: W3C, NIST and paper
+   documents, object identifiers (NIST CSOR) and the IETF meeting calendar. For the legal register
    (`--register cmake/legal-register.json`) it lists the official primary text of every instrument, once per URL,
    and the Official Gazette, EUR-Lex and platform announcements read by hand since the latest run.
    `--scan full` adds the full text of every document the owed full re-research reads: the documents the triggering
@@ -627,6 +630,8 @@ byte is the class and the low byte (never 0) numbers the algorithm within it:
 | `0x04` | Traditional signature | Ed25519 `0x0401`, ECDSA P-256 with SHA-256 `0x0402`, ECDSA P-384 with SHA-384 `0x0403` |
 | `0x05` | Authenticated encryption | AES-128-GCM `0x0501`, AES-256-GCM `0x0502`, ChaCha20-Poly1305 `0x0503` |
 | `0x06` | Key derivation | HKDF-SHA256 `0x0601`, HKDF-SHA384 `0x0602` |
+| `0x07` | Post-quantum key encapsulation | ML-KEM-768 `0x0701`, ML-KEM-1024 `0x0702` |
+| `0x08` | Keyed pseudorandom function | SipHash-2-4 `0x0801` |
 
 The class is what the trust set's hybrid rule and a provider's dispatch read; an identifier is never reused.
 
