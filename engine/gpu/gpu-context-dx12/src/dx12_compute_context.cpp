@@ -4,6 +4,7 @@
 // Vulkan backend's recorder shape (copy / barrier / dispatch → submit_and_wait). D3D12 helpers mirror crd-kir-dx12.
 
 #include "dx12_adapter.hpp" // DIAG.9a: the adapter
+#include "dx12_device_check.hpp" // HW-RESILIENCE.3: the probe adapter
 #include "dx12_device_scope.hpp"
 #include "dx12_execution.hpp"
 #include "dx12_identity_naming.hpp" // DIAG.7a(d2b-dx12-b) batch 3b: mint/name a Cerid Program identity on a compute pipeline
@@ -315,9 +316,19 @@ struct Dx12ComputeContext::Impl final : ComputeRecorder
 
 Dx12ComputeContext::Dx12ComputeContext(crd::memory::IAllocator* alloc) : m_impl(std::make_unique<Impl>(alloc))
 {
+    init(nullptr);
+}
+
+Dx12ComputeContext::Dx12ComputeContext(crd::memory::IAllocator* alloc, const detail::Dx12ProbeAdapter& adapter)
+    : m_impl(std::make_unique<Impl>(alloc))
+{
+    init(&adapter);
+}
+
+void Dx12ComputeContext::init(const detail::Dx12ProbeAdapter* probe)
+{
     auto& impl = *m_impl;
-    impl.alloc = alloc;
-    if (FAILED(impl.validation.create(impl.device)))
+    if (FAILED(impl.validation.create(impl.device, probe != nullptr ? probe->adapter : nullptr)))
     {
         return;
     }

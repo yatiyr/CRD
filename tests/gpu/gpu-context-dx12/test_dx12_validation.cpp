@@ -125,6 +125,16 @@ void print_messages(const g::Dx12ValidationCapture& capture)
                   << ", truncated=" << report.truncated << ", contexts=" << report.contexts_started
                   << "/" << report.contexts_finished);
 }
+
+// The process's first device with no named adapter runs the adapter's device check on a probe device of its own
+// (HW-RESILIENCE.3), which a capture counts as a context: a capture that counts only the devices under test starts
+// after one has come and gone. test_dx12_device_check.cpp counts the probe under a capture.
+void check_the_adapter_first()
+{
+    g::detail::Dx12DeviceScope scope;
+    ComPtr<ID3D12Device> device;
+    REQUIRE(SUCCEEDED(scope.create(device)));
+}
 } // namespace
 
 TEST_CASE("DX12 validation rejects invalid capacity and allocation failure", "[dx12][validation]")
@@ -143,6 +153,7 @@ TEST_CASE("DX12 validation rejects invalid capacity and allocation failure", "[d
 
 TEST_CASE("DX12 validation captures invalid command close without submitting it", "[dx12][validation]")
 {
+    check_the_adapter_first();
     crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "DX12 validation test");
     g::Dx12ValidationCapture capture(&allocator);
     REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
@@ -253,6 +264,7 @@ TEST_CASE("DX12 validation rejects timeout and premature fence wakeup", "[dx12][
 
 TEST_CASE("DX12 validation bounds concurrent callbacks and observer lifetimes", "[dx12][validation]")
 {
+    check_the_adapter_first();
     crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "DX12 concurrent validation test");
     g::Dx12ValidationCapture bounded(&allocator, 2U);
     g::Dx12ValidationCapture complete(&allocator, 1024U);
@@ -313,6 +325,7 @@ TEST_CASE("DX12 validation bounds concurrent callbacks and observer lifetimes", 
 
 TEST_CASE("DX12 validation covers separate default and WARP devices", "[dx12][validation]")
 {
+    check_the_adapter_first();
     crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "DX12 device validation test");
     g::Dx12ValidationCapture capture(&allocator);
     REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
@@ -343,6 +356,7 @@ TEST_CASE("DX12 validation covers separate default and WARP devices", "[dx12][va
 
 TEST_CASE("DX12 validation qualifies production compute copy and context teardown", "[dx12][validation]")
 {
+    check_the_adapter_first();
     crd::memory::TlsfAllocator allocator(64U << 20U, nullptr, "DX12 production validation test");
     g::Dx12ValidationCapture capture(&allocator);
     REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);

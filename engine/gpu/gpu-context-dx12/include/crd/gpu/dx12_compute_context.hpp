@@ -31,10 +31,18 @@ struct KEntry;
 namespace crd::gpu
 {
 
+namespace detail
+{
+struct Dx12ProbeAdapter; // the device check's probe adapter (provider-private)
+} // namespace detail
+
 class Dx12ComputeContext final : public IComputeContext
 {
 public:
+    // A context on the adapter the device check chose (HW-RESILIENCE.3: the preferred adapter that passed).
     explicit Dx12ComputeContext(crd::memory::IAllocator* alloc);
+    // The device check's probe: a context on that one adapter, opened as named and not itself checked.
+    Dx12ComputeContext(crd::memory::IAllocator* alloc, const detail::Dx12ProbeAdapter& adapter);
     ~Dx12ComputeContext() override;
     Dx12ComputeContext(const Dx12ComputeContext&)            = delete;
     Dx12ComputeContext& operator=(const Dx12ComputeContext&) = delete;
@@ -90,6 +98,8 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> m_impl;
+
+    void init(const detail::Dx12ProbeAdapter* probe); // nullptr: the checked choice
 };
 
 } // namespace crd::gpu

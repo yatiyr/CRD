@@ -9,20 +9,11 @@
 
 namespace crd::gpu::detail
 {
-GpuAdapter dx12_adapter(ID3D12Device* device) noexcept
+GpuAdapter dx12_adapter(IDXGIAdapter1* dxgi) noexcept
 {
-    using Microsoft::WRL::ComPtr;
     GpuAdapter a{};
-    if (device == nullptr)
-    {
-        return a;
-    }
-    ComPtr<IDXGIFactory4> factory;
-    ComPtr<IDXGIAdapter1> dxgi;
     DXGI_ADAPTER_DESC1 desc{};
-    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) ||
-        FAILED(factory->EnumAdapterByLuid(device->GetAdapterLuid(), IID_PPV_ARGS(&dxgi))) ||
-        FAILED(dxgi->GetDesc1(&desc)))
+    if (dxgi == nullptr || FAILED(dxgi->GetDesc1(&desc)))
     {
         return a;
     }
@@ -41,5 +32,22 @@ GpuAdapter dx12_adapter(ID3D12Device* device) noexcept
     }
     a.known = true;
     return a;
+}
+
+GpuAdapter dx12_adapter(ID3D12Device* device) noexcept
+{
+    using Microsoft::WRL::ComPtr;
+    if (device == nullptr)
+    {
+        return GpuAdapter{};
+    }
+    ComPtr<IDXGIFactory4> factory;
+    ComPtr<IDXGIAdapter1> dxgi;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) ||
+        FAILED(factory->EnumAdapterByLuid(device->GetAdapterLuid(), IID_PPV_ARGS(&dxgi))))
+    {
+        return GpuAdapter{};
+    }
+    return dx12_adapter(dxgi.Get());
 }
 } // namespace crd::gpu::detail

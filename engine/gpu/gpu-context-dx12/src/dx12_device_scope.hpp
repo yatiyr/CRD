@@ -52,6 +52,8 @@ public:
     ~Dx12DeviceScope() noexcept;
     Dx12DeviceScope(const Dx12DeviceScope&) = delete;
     Dx12DeviceScope& operator=(const Dx12DeviceScope&) = delete;
+    // HW-RESILIENCE.3: with no `adapter`, the device opens the preferred adapter that passed its device check
+    // (dx12_device_check.hpp), and DXGI_ERROR_NOT_FOUND when none did; a named adapter is opened unchecked.
     [[nodiscard]] HRESULT create(Microsoft::WRL::ComPtr<ID3D12Device>& output, IUnknown* adapter = nullptr) noexcept;
     // DIAG.7a(f-3): record requested validation modes BEFORE create(); create() applies the process-global debug
     // layer + GPU-based-validation transition (under devices_mutex) and fills the activation report read here after.

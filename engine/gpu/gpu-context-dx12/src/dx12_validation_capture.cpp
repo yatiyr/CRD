@@ -1,5 +1,6 @@
 #include "dx12_device_scope.hpp"
 #include "dx12_adapter.hpp" // HW-RESILIENCE.2: every device's adapter joins opened_adapters()
+#include "dx12_device_check.hpp" // HW-RESILIENCE.3: a device with no named adapter opens the checked one
 #include "dx12_execution.hpp"
 
 #include <crd/gpu/driver_witness.hpp> // DIAG.10c: driver and compiler calls under the mode witness
@@ -383,6 +384,18 @@ HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* 
     if (m_created || output != nullptr)
     {
         return E_UNEXPECTED;
+    }
+    // HW-RESILIENCE.3: no named adapter opens the preferred one that passed its device check. The check's probe opens
+    // its adapter by name, through this function, so the choice runs before devices_mutex is held.
+    Microsoft::WRL::ComPtr<IDXGIAdapter1> checked;
+    if (adapter == nullptr)
+    {
+        checked = dx12_checked_adapter();
+        if (checked == nullptr)
+        {
+            return DXGI_ERROR_NOT_FOUND; // no adapter passed: no device, the consumers' CPU path
+        }
+        adapter = checked.Get();
     }
     auto& state = registry();
     const std::lock_guard device_lock(state.devices_mutex);

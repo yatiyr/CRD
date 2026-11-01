@@ -3302,9 +3302,11 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   adapters failed)` at a host's start (the sandbox calls it), and `gpu.resources` lists `device-check` and
   `device-selection` items with `device_checks` and `device_demotions` in its summary. The device-check fault seam
   (`install_device_check_fault_hook`) fails a named adapter. Vulkan orders its adapters discrete, integrated, virtual,
-  other, CPU and checks in `create_vulkan_gpu_context`, the one place a Vulkan device is created. DX12 creates
-  devices in three places (`Dx12GpuContext`, `Dx12ComputeContext` and the raster context): all three go through one
-  checked chooser ending at WARP; CUDA checks each device it opens; both are the row's next items.
+  other, CPU and checks in `create_vulkan_gpu_context`, the one place a Vulkan device is created. DX12 checks in
+  `Dx12DeviceScope::create`, which every context (GPU, compute, raster, ray tracing, work graph) and default-device
+  query calls with no named adapter: hardware adapters first in DXGI's high-performance order, then unclassified,
+  then software, and WARP last unless DXGI lists it; a named adapter (the probe's own route) opens unchecked. CUDA
+  checks each device it opens, the row's next item.
 - State-hash divergence: HW-RESILIENCE.3 owns the local primitive only, a per-step state-hash ledger over the
   checksum family's XXH3-64, the first divergent step and the culprit named by HW-RESILIENCE.2's hardware identity
   against a reference (the recorded run, or the majority of three or more); the lockstep and rollback exchange of
