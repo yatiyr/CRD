@@ -6839,6 +6839,21 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
             with self.assertRaisesRegex(sanctions_import.SanctionsError, 'us.ofac.sdn.306 is listed twice'):
                 sanctions_import.import_list('us.ofac.sdn', config, 'US', twice, out)
 
+    def test_the_bounds_are_the_decoders(self):
+        """A file the decoder would refuse is refused by the importer, naming the party, never written."""
+        source = ''.join((ROOT / f'engine/foundation/comply/include/crd/comply/{name}.hpp').read_text(encoding='utf-8')
+                         for name in ('sanctions', 'generation'))
+        constants = {name: int(value) for name, value in
+                     re.findall(r'inline constexpr \w+ (kMax\w+) = (\d+)U;', source)}
+        self.assertEqual({'kMaxSanctionsBytes': sanctions_import.FILE_LIMIT,
+                          'kMaxParties': sanctions_import.MAX_PARTIES,
+                          'kMaxPartyNames': sanctions_import.MAX_NAMES, 'kMaxPartyItems': sanctions_import.MAX_ITEMS,
+                          'kMaxPartyIdentifiers': sanctions_import.MAX_IDENTIFIERS,
+                          'kMaxTextBytes': sanctions_import.MAX_TEXT, 'kMaxListAgeDays': registers.MAX_LIST_AGE_DAYS},
+                         {name: constants[name] for name in ('kMaxSanctionsBytes', 'kMaxParties', 'kMaxPartyNames',
+                                                             'kMaxPartyItems', 'kMaxPartyIdentifiers', 'kMaxTextBytes',
+                                                             'kMaxListAgeDays')})
+
     def test_calendars_and_periods(self):
         self.assertEqual('1982-04-17/1982-04-21', sanctions_import.hijri_period(24, 6, 1402, 'x'))
         self.assertEqual(['1924-07-31/1925-07-23', '1964-03-18/1965-03-22'],

@@ -39,12 +39,14 @@ TOOL = 'scripts/import-sanctions.py'
 FORMAT = 'cerid-sanctions/1'
 SUFFIX = '.sanctions.toml'
 FETCH_SCHEMA = 'cerid-sanctions-fetch/1'
-FILE_LIMIT = 64 * 1024 * 1024  # an official file, and the decoder's bound on one generation (kMaxSanctionsBytes)
-MAX_PARTIES = 131072
-MAX_NAMES = 512
-MAX_ITEMS = 64
-MAX_IDENTIFIERS = 4096
-MAX_TEXT = 4096
+# The decoder's bounds (crd/comply/sanctions.hpp and generation.hpp; a Python case holds them equal), so a file the
+# decoder would refuse is refused here, naming the party.
+FILE_LIMIT = 64 * 1024 * 1024  # kMaxSanctionsBytes: an official file, and one generation
+MAX_PARTIES = 131072  # kMaxParties
+MAX_NAMES = 512  # kMaxPartyNames
+MAX_ITEMS = 64  # kMaxPartyItems: programmes, births, countries
+MAX_IDENTIFIERS = 1024  # kMaxPartyIdentifiers
+MAX_TEXT = 4096  # kMaxTextBytes
 AUTHORITY = re.compile(r'^[a-z0-9]+(?:[.-][a-z0-9]+)*$')
 
 _spec = importlib.util.spec_from_file_location('gen_comply_rules', Path(__file__).resolve().parent /

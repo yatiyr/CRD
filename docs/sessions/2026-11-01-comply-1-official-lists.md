@@ -88,8 +88,8 @@ No failure comes from a track C change that main has not already fixed.
     scripts and identifiers.
   - **Fuzz.** The fixed list carries an interval birth, an issuing country and an unknown listing day. The model
     restates the new agreement rule. The corpus is regenerated with five new seeds, 28 in all.
-  - **Python.** 10 `SanctionsLists` cases: every format on the excerpts, every refusal, generations, calendars, fetch
-    records, redirects and the guard.
+  - **Python.** 11 `SanctionsLists` cases: every format on the excerpts, every refusal, generations, calendars, fetch
+    records, redirects, the guard, and the importer's bounds held equal to the decoder's.
 
 ## The first read
 
@@ -119,7 +119,8 @@ address, so the decisions are read from the Official Gazette and MASAK next.
 
 ## Verification
 
-- **The track's machine** (linux-gcc-debug, c3c96db4 and 823bf1db):
+- **The track's machine** (linux-gcc-debug). The build and tests ran on the content of 2f47c517 before it was
+  rebased onto c93abf76, whose new commits touch no comply file:
   - `crd-comply-tests`, `crd-fuzz-comply-sanctions`, `crd-ceridc-tests` and `ceridc` built with no warning.
   - 158 scoped CTests passed, among them the import chain, the regenerated corpus (28 inputs, none rejected),
     `crd-check-registers`, `crd-generated-sources` and `crd-repository-tools`.
@@ -141,6 +142,14 @@ address, so the decisions are read from the Official Gazette and MASAK next.
   - One Allman run hit the host's known misexecution, an impossible `TypeError`, and passed when run again.
   - The whole `test-repository-tools.py` passes except `test_generated_target_folders`, which needs Ninja and fails
     the same way without this change on this PC.
+
+## Follow-up fix
+
+The review after the push found the importer's identifier bound still at the exploratory 4 096. The decoder's
+bound is 1 024, so a party with 1 025 to 4 096 identifiers would have passed the importer and then been refused by
+the decoder, failing the whole list instead of naming the party. The bound is now 1 024. A new case reads
+`sanctions.hpp` and `generation.hpp` and holds every importer bound, and the guard's maximum list age, equal to the
+decoder's constants; restoring 4 096 fails it.
 
 ## Next
 
