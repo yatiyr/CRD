@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <new>
 
 namespace crd::crypto
@@ -206,9 +207,9 @@ bssl::UniquePtr<EVP_PKEY> ec_generated_key(int curve) noexcept
     return ec_pkey(key.get());
 }
 
-// A peer's uncompressed SEC 1 point on `group`; null for another form, a wrong length or a point off the curve. The form
-// byte is Cerid's to check: AWS-LC also decodes the hybrid form (0x06, 0x07) at the uncompressed length, which TLS 1.3
-// forbids.
+// A peer's uncompressed SEC 1 point on `group`; null for another form, a wrong length or a point off the curve. The
+// form byte is Cerid's to check: AWS-LC also decodes the hybrid form (0x06, 0x07) at the uncompressed length, which
+// TLS 1.3 forbids.
 bssl::UniquePtr<EC_POINT> ec_point(const EC_GROUP* group, cont::ConstSpan<u8> encoded, usize length) noexcept
 {
     if (encoded.size() != length || encoded[0] != POINT_CONVERSION_UNCOMPRESSED)
@@ -386,6 +387,10 @@ cont::StringView crypto_error_name(CryptoError error) noexcept
         return "exhausted";
     case CryptoError::ProviderFailure:
         return "provider-failure";
+    case CryptoError::Expired:
+        return "expired";
+    case CryptoError::Replayed:
+        return "replayed";
     }
     return "unknown";
 }
@@ -596,6 +601,43 @@ CryptoError hkdf_expand(AlgorithmId algorithm, cont::ConstSpan<u8> prk, cont::Co
     }
     return CryptoError::None;
 }
+
+// ---- Sealing keys ----
+
+namespace provider_internal
+{
+CryptoError sealing_key_name(cont::ConstSpan<u8> key, cont::ConstSpan<u8> label, cont::Span<u8> name) noexcept
+{
+    u8          prk[32];
+    CryptoError error = hkdf_extract(AlgorithmId::HkdfSha256, {}, key, cont::Span<u8>(prk));
+    if (error == CryptoError::None)
+    {
+        error = hkdf_expand(AlgorithmId::HkdfSha256, cont::ConstSpan<u8>(prk), label, name);
+    }
+    secure_zero(cont::Span<u8>(prk));
+    return error;
+}
+
+CryptoError salted_aead(cont::ConstSpan<u8> key, cont::ConstSpan<u8> salt, cont::ConstSpan<u8> label, AeadKey& aead,
+                        u8 (&nonce)[kAeadNonceBytes]) noexcept
+{
+    u8          prk[32];
+    u8          okm[kSealingKeyBytes + kAeadNonceBytes];
+    CryptoError error = hkdf_extract(AlgorithmId::HkdfSha256, salt, key, cont::Span<u8>(prk));
+    if (error == CryptoError::None)
+    {
+        error = hkdf_expand(AlgorithmId::HkdfSha256, cont::ConstSpan<u8>(prk), label, cont::Span<u8>(okm));
+    }
+    if (error == CryptoError::None)
+    {
+        error = aead.init(AlgorithmId::Aes256Gcm, cont::ConstSpan<u8>(okm, kSealingKeyBytes));
+    }
+    std::memcpy(nonce, okm + kSealingKeyBytes, kAeadNonceBytes);
+    secure_zero(cont::Span<u8>(prk));
+    secure_zero(cont::Span<u8>(okm));
+    return error;
+}
+} // namespace provider_internal
 
 // ---- Provider key handles ----
 

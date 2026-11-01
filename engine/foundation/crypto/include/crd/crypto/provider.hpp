@@ -42,10 +42,12 @@ enum class CryptoError : u8
     WeakSecret,      // key agreement produced the all-zero secret (an X25519 peer key of small order)
     Exhausted,       // the key reached its usage limit: update it (quic.hpp's packet keys)
     ProviderFailure, // the provider failed (no randomness, no memory)
+    Expired,         // an authentic token outside its lifetime (quic.hpp's address-validation tokens)
+    Replayed,        // an authentic single-use token presented again (quic.hpp's address-validation tokens)
 };
 
 // "none", "unsupported", "not-ready", "bad-length", "overlap", "bad-key", "forged", "weak-secret", "exhausted",
-// "provider-failure".
+// "provider-failure", "expired", "replayed".
 [[nodiscard]] cont::StringView crypto_error_name(CryptoError error) noexcept;
 
 // The provider and its version ("AWS-LC 5.12.0").

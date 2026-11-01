@@ -45,6 +45,7 @@ namespace crd::crypto
 {
 using provider_internal::ErrorScope;
 using provider_internal::key_of;
+using provider_internal::label_of;
 using provider_internal::pkey_of;
 
 namespace
@@ -121,6 +122,7 @@ constexpr char kTicketNameInfo[] = "cerid tls 1.3 ticket name";
 constexpr char kTicketSealInfo[] = "cerid tls 1.3 ticket seal";
 constexpr char kBindingLabel[]   = "cerid tls 1.3 binding";
 constexpr char kQuicBindingLabel[] = "cerid quic binding";
+static_assert(kTlsTicketKeyBytes == provider_internal::kSealingKeyBytes, "a ticket key is a sealing key");
 
 // floor(2^24.5): the full-size records one AES-GCM key may protect (RFC 9846 section 5.5).
 constexpr u64 kAesGcmRecordLimit = 23726566U;
@@ -331,45 +333,17 @@ bool valid_list(cont::ConstSpan<AlgorithmId> list, usize bound, AlgorithmClass f
     return true;
 }
 
-template <usize N>
-cont::ConstSpan<u8> label_of(const char (&text)[N]) noexcept
-{
-    return cont::ConstSpan<u8>(reinterpret_cast<const u8*>(text), N - 1U);
-}
-
-// A ticket key's public name: HKDF-SHA256 of the key with an empty salt, expanded under its own label.
+// A ticket key's public name, which leads its tickets.
 CryptoError ticket_key_name(cont::ConstSpan<u8> key, cont::Span<u8> name) noexcept
 {
-    u8          prk[32];
-    CryptoError error = hkdf_extract(AlgorithmId::HkdfSha256, {}, key, cont::Span<u8>(prk));
-    if (error == CryptoError::None)
-    {
-        error = hkdf_expand(AlgorithmId::HkdfSha256, cont::ConstSpan<u8>(prk), label_of(kTicketNameInfo), name);
-    }
-    secure_zero(cont::Span<u8>(prk));
-    return error;
+    return provider_internal::sealing_key_name(key, label_of(kTicketNameInfo), name);
 }
 
-// The AES-256-GCM key and nonce that seal one ticket: HKDF-SHA256 of the ticket key salted with the ticket's salt.
+// The AES-256-GCM key and nonce that seal one ticket: derived from the ticket key and the ticket's own salt.
 CryptoError ticket_aead(cont::ConstSpan<u8> key, cont::ConstSpan<u8> salt, AeadKey& aead,
                         u8 (&nonce)[kAeadNonceBytes]) noexcept
 {
-    u8          prk[32];
-    u8          okm[kTlsTicketKeyBytes + kAeadNonceBytes];
-    CryptoError error = hkdf_extract(AlgorithmId::HkdfSha256, salt, key, cont::Span<u8>(prk));
-    if (error == CryptoError::None)
-    {
-        error = hkdf_expand(AlgorithmId::HkdfSha256, cont::ConstSpan<u8>(prk), label_of(kTicketSealInfo),
-                            cont::Span<u8>(okm));
-    }
-    if (error == CryptoError::None)
-    {
-        error = aead.init(AlgorithmId::Aes256Gcm, cont::ConstSpan<u8>(okm, kTlsTicketKeyBytes));
-    }
-    std::memcpy(nonce, okm + kTlsTicketKeyBytes, kAeadNonceBytes);
-    secure_zero(cont::Span<u8>(prk));
-    secure_zero(cont::Span<u8>(okm));
-    return error;
+    return provider_internal::salted_aead(key, salt, label_of(kTicketSealInfo), aead, nonce);
 }
 
 // What a context's tickets are bound to (TlsBinding): the label, the role, the server name in lower case, the own key

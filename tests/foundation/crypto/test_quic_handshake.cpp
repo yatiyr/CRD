@@ -4,8 +4,9 @@
 // the order in which the levels' secrets arrive, a HelloRetryRequest, pinned keys both ways and their alerts at their
 // levels, application protocols (and the same rules for stream sessions), transport parameters both ways and a
 // ClientHello without them, certificate compression, tickets and resumption under QUIC's own binding, the flights'
-// sizes against QUIC's amplification limit, a forbidden TLS KeyUpdate, data at levels the handshake does not read,
-// the receive limit, refusals and one context on several threads.
+// sizes against QUIC's amplification limit and the round trips of address validation (a Retry and a NEW_TOKEN token,
+// quic.hpp), a forbidden TLS KeyUpdate, data at levels the handshake does not read, the receive limit, refusals and
+// one context on several threads.
 //
 // The independent peer (OpenSSL 3.5's QUIC TLS interface) is tests/foundation/crypto/interop/tls_interop.py's.
 
@@ -726,6 +727,178 @@ TEST_CASE("QUIC handshake: certificate compression and the flights against the a
         {
             CHECK(full > two_full);
         }
+    }
+}
+
+namespace
+{
+// The packets around CRYPTO data as a transport sends them (RFC 9000 sections 12.2, 14.1, 17.2 and 19.6), for the
+// round trips of address validation: 8-byte connection IDs, 2-byte packet numbers and Length fields, datagrams of the
+// size every path carries, and RFC 9002's initial congestion window for that size.
+constexpr usize kDatagram      = 1200U;
+constexpr usize kIdBytes       = 8U;
+constexpr usize kCryptoFrame   = 1U + 2U + 2U;    // type, offset and length
+constexpr usize kAckFrame      = 5U;              // a server's first Initial acknowledges the client's
+constexpr usize kInitialWindow = 10U * kDatagram; // min(10 * 1200, max(14720, 2 * 1200)), RFC 9002 section 7.2
+
+usize varint_bytes(usize value)
+{
+    return value < 64U ? 1U : value < 16384U ? 2U : 4U;
+}
+
+// A long header packet's bytes besides its frames: the first byte, the version, both connection IDs with their
+// lengths, an Initial's token with its length, the Length field, the packet number and the AEAD tag.
+usize long_overhead(bool initial, usize token)
+{
+    return 1U + 4U + 2U * (1U + kIdBytes) + (initial ? varint_bytes(token) + token : 0U) + 2U + 2U + kQuicTagBytes;
+}
+
+// The UDP payload bytes of a flight: `initial` bytes of CRYPTO data in Initial packets (the server's first one with an
+// acknowledgement), then `handshake` bytes in Handshake packets, coalesced into datagrams of at most kDatagram bytes;
+// a datagram that carries an Initial packet is padded to kDatagram (a client's always, a server's when the Initial is
+// ack-eliciting, as a ServerHello's is).
+usize flight_bytes(usize initial, usize handshake, usize token, bool server)
+{
+    usize total   = 0U;
+    usize left[2] = {initial, handshake};
+    bool  acked   = !server;
+    for (;;)
+    {
+        usize used        = 0U;
+        bool  has_initial = false;
+        for (usize level = 0U; level < 2U; ++level)
+        {
+            const usize ack      = level == 0U && !acked ? kAckFrame : 0U;
+            const usize overhead = long_overhead(level == 0U, token) + kCryptoFrame + ack;
+            if (left[level] == 0U || used + overhead >= kDatagram)
+            {
+                continue;
+            }
+            const usize take = left[level] < kDatagram - used - overhead ? left[level] : kDatagram - used - overhead;
+            used += overhead + take;
+            left[level] -= take;
+            has_initial = has_initial || level == 0U;
+            acked       = acked || level == 0U;
+        }
+        total += has_initial && used < kDatagram ? kDatagram : used;
+        if (left[0] == 0U && left[1] == 0U)
+        {
+            return total;
+        }
+        if (used == 0U)
+        {
+            FAIL("a datagram took no CRYPTO data");
+        }
+    }
+}
+
+// The round trips a server's first flight of `sent` bytes takes when its client's first flight was `received` bytes:
+// one when the first window carries it, otherwise two (the client's Handshake packets validate its address and
+// acknowledge the first window, which slow start then doubles, RFC 9002 section 7.3.1).
+crd::u32 flight_round_trips(usize received, usize sent, bool validated)
+{
+    const usize limit = validated || 3U * received > kInitialWindow ? kInitialWindow : 3U * received;
+    REQUIRE(sent <= limit + 2U * kInitialWindow);
+    return sent <= limit ? 1U : 2U;
+}
+} // namespace
+
+TEST_CASE("QUIC handshake: address validation in round trips, Retry within the amplification limit",
+          "[crypto][quic-handshake][quic-token][net-2]")
+{
+    // The client at 192.0.2.7:4433 opens with Destination Connection ID kOriginal; a server under load answers with a
+    // Retry from connection ID kRetrySource, with nothing kept, and validates the token the client's next Initial
+    // carries; a later connection carries a NEW_TOKEN token from this one.
+    constexpr u8  kOriginal[]    = {0x83, 0x94, 0xC8, 0xF0, 0x3E, 0x51, 0x57, 0x08};
+    constexpr u8  kClientId[]    = {0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8};
+    constexpr u8  kRetrySource[] = {0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F, 0x60, 0x61};
+    constexpr u8  kAddress[]     = {192, 0, 2, 7};
+    constexpr u64 kNow           = 1793577600U;
+    u8            fleet_key[kQuicTokenKeyBytes];
+    for (usize i = 0U; i < sizeof(fleet_key); ++i)
+    {
+        fleet_key[i] = static_cast<u8>(0x90U + i);
+    }
+    QuicTokenKeys keys;
+    REQUIRE(keys.init(ConstSpan<u8>(fleet_key), {}) == CryptoError::None);
+    QuicTokenPeer peer;
+    peer.address = ConstSpan<u8>(kAddress);
+    peer.port    = 4433U;
+
+    // The Retry (RFC 9000 section 17.2.5) with its token and integrity tag, as the client checks it.
+    u8    retry[kQuicMaxRetryBytes];
+    usize retry_bytes = 0U;
+    retry[retry_bytes++] = 0xF0U; // long header, Retry, unused bits 0
+    const u8 version[] = {0x00U, 0x00U, 0x00U, 0x01U};
+    std::memcpy(retry + retry_bytes, version, sizeof(version));
+    retry_bytes += sizeof(version);
+    retry[retry_bytes++] = sizeof(kClientId);
+    std::memcpy(retry + retry_bytes, kClientId, sizeof(kClientId));
+    retry_bytes += sizeof(kClientId);
+    retry[retry_bytes++] = sizeof(kRetrySource);
+    std::memcpy(retry + retry_bytes, kRetrySource, sizeof(kRetrySource));
+    retry_bytes += sizeof(kRetrySource);
+    usize token_bytes = 0U;
+    REQUIRE(keys.mint_retry(QuicVersion::V1, peer, ConstSpan<u8>(kOriginal), ConstSpan<u8>(kClientId),
+                            ConstSpan<u8>(kRetrySource), kNow, Span<u8>(retry + retry_bytes, kQuicMaxTokenBytes),
+                            token_bytes) == CryptoError::None);
+    const ConstSpan<u8> token(retry + retry_bytes, token_bytes);
+    retry_bytes += token_bytes;
+    REQUIRE(quic_retry_tag(QuicVersion::V1, ConstSpan<u8>(kOriginal), ConstSpan<u8>(retry, retry_bytes),
+                           Span<u8>(retry + retry_bytes, kQuicTagBytes)) == CryptoError::None);
+    retry_bytes += kQuicTagBytes;
+    REQUIRE(quic_retry_verify(QuicVersion::V1, ConstSpan<u8>(kOriginal), ConstSpan<u8>(retry, retry_bytes)) ==
+            CryptoError::None);
+    QuicTokenClaims claims;
+    REQUIRE(keys.validate(QuicVersion::V1, token, peer, ConstSpan<u8>(kRetrySource), ConstSpan<u8>(kClientId),
+                          kNow + 1U, claims) == CryptoError::None);
+    CHECK(claims.original_dcid_bytes == sizeof(kOriginal)); // the original_destination_connection_id to send
+    CHECK(std::memcmp(claims.original_dcid, kOriginal, sizeof(kOriginal)) == 0);
+    usize new_token_bytes = 0U;
+    u8    new_token[kQuicMaxTokenBytes];
+    REQUIRE(keys.mint_new_token(QuicVersion::V1, peer, kNow, Span<u8>(new_token), new_token_bytes) ==
+            CryptoError::None);
+
+    for (const AlgorithmId signature : kAllSignatures)
+    {
+        End     client;
+        End     server;
+        Options options;
+        options.server_key = signature;
+        configure(client, server, options);
+        start(client, server);
+        const usize hello            = deliver(client.handshake, server.handshake);
+        const usize server_initial   = server.handshake.pending(QuicLevel::Initial);
+        const usize server_handshake = server.handshake.pending(QuicLevel::Handshake);
+        establish(client, server);
+
+        const usize first      = flight_bytes(hello, 0U, 0U, false);
+        const usize with_retry = flight_bytes(hello, 0U, token_bytes, false);
+        const usize with_token = flight_bytes(hello, 0U, new_token_bytes, false);
+        const usize sent       = flight_bytes(server_initial, server_handshake, 0U, true);
+        // The Retry answers the client's first datagram alone, within three times its bytes, in one datagram.
+        CHECK(retry_bytes <= 3U * kDatagram);
+        CHECK(retry_bytes <= kDatagram);
+        // Neither token costs the ClientHello a datagram.
+        CHECK(with_retry == first);
+        CHECK(with_token == first);
+
+        const crd::u32 unvalidated = flight_round_trips(first, sent, false);
+        const crd::u32 retried     = 1U + flight_round_trips(with_retry, sent, true);
+        const crd::u32 returning   = flight_round_trips(with_token, sent, true);
+        CAPTURE(signature, hello, server_initial, server_handshake, first, sent, retry_bytes, token_bytes,
+                new_token_bytes, unvalidated, retried, returning);
+        const bool post_quantum = signature == AlgorithmId::MlDsa44 || signature == AlgorithmId::MlDsa65 ||
+                                  signature == AlgorithmId::MlDsa87;
+        // A classical flight fits the amplification limit: a Retry only costs it a round trip, and buys the server
+        // no state before the client proves its address. An ML-DSA flight does not fit: unvalidated it waits a round
+        // trip for the client's Handshake packets, and a Retry costs it nothing more. A NEW_TOKEN token validates at
+        // once, which saves ML-DSA-44 and -65 their round trip; ML-DSA-87's flight passes the initial congestion
+        // window itself, so only a larger window (the transport's, 4.2a) saves it that round trip.
+        CHECK(unvalidated == (post_quantum ? 2U : 1U));
+        CHECK(retried == (signature == AlgorithmId::MlDsa87 ? 3U : 2U));
+        CHECK(returning == (signature == AlgorithmId::MlDsa87 ? 2U : 1U));
+        CHECK((sent > 3U * first) == post_quantum);
     }
 }
 

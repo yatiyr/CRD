@@ -43,4 +43,26 @@ inline ProviderKey* key_of(EVP_PKEY* pkey) noexcept
 
 // The digest an ECDSA identifier names; null for ML-DSA and Ed25519, which sign the message itself.
 [[nodiscard]] const EVP_MD* signature_digest(AlgorithmId algorithm) noexcept;
+
+// A string literal's bytes without its terminator: an HKDF label.
+template <usize N>
+[[nodiscard]] cont::ConstSpan<u8> label_of(const char (&text)[N]) noexcept
+{
+    return cont::ConstSpan<u8>(reinterpret_cast<const u8*>(text), N - 1U);
+}
+
+// ---- Sealing keys: what a server seals for itself alone (tls.cpp's tickets, quic.cpp's address tokens) ----
+
+inline constexpr usize kSealingKeyBytes = 32U; // a sealing key and the AES-256-GCM key derived from it
+
+// A sealing key's public name, which leads what it seals: HKDF-SHA256 of the key with an empty salt, expanded under
+// `label` into `name` (1 to 32 bytes).
+[[nodiscard]] CryptoError sealing_key_name(cont::ConstSpan<u8> key, cont::ConstSpan<u8> label,
+                                           cont::Span<u8> name) noexcept;
+
+// The AES-256-GCM key and nonce that seal one item: HKDF-SHA256 of the sealing key (kSealingKeyBytes) salted with the
+// item's own random salt, expanded under `label`. Every derived key seals one item, so no count of items has to be
+// shared across the servers of a fleet that share the sealing key.
+[[nodiscard]] CryptoError salted_aead(cont::ConstSpan<u8> key, cont::ConstSpan<u8> salt, cont::ConstSpan<u8> label,
+                                      AeadKey& aead, u8 (&nonce)[kAeadNonceBytes]) noexcept;
 } // namespace crd::crypto::provider_internal

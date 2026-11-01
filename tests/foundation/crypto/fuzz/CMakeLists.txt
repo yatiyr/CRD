@@ -7,10 +7,11 @@
 #   crd-fuzz-crypto-provider   the provider interface on hostile input: AEAD openings that must re-seal to their input,
 #                              verdicts and refusals by length, key agreement with arbitrary peers, HKDF's prefix
 #                              property and sign-then-verify from arbitrary seeds.
-#   crd-fuzz-crypto-quic       QUIC packet protection on hostile packets, Retries and packet numbers: header protection
-#                              refuses exactly the unsampleable packets and round-trips, an opened packet re-seals to
-#                              its input, a Retry verifies exactly when its tag is the computed one, and packet numbers
-#                              decode to the closest candidate.
+#   crd-fuzz-crypto-quic       QUIC packet protection on hostile packets, Retries, packet numbers and address-validation
+#                              tokens: header protection refuses exactly the unsampleable packets and round-trips, an
+#                              opened packet re-seals to its input, a Retry verifies exactly when its tag is the
+#                              computed one, packet numbers decode to the closest candidate, and a token's verdict is
+#                              the one its restated format, binding and lifetime give.
 #   crd-fuzz-crypto-tls        TLS 1.3 sessions and QUIC handshakes fed hostile bytes (records, or CRYPTO data per
 #                              level) as a server and as a client: never established, only the documented answers,
 #                              failure is final, every buffer stays bounded and no client Application secret is

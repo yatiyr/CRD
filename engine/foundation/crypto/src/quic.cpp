@@ -1,13 +1,18 @@
 // crd-crypto -- QUIC packet protection (NET.2; contract: docs/design/network-foundation.md#quic-protection).
 //
 // RFC 9001 section 5 and RFC 9369 section 3.3 over the provider interface (HKDF and the AEAD keys of provider.hpp);
-// only header protection reaches the provider directly, for its AES block and ChaCha20 stream functions.
+// only header protection reaches the provider directly, for its AES block and ChaCha20 stream functions. The
+// address-validation tokens of RFC 9000 section 8.1 (contract: network-foundation.md#address-validation) are sealed
+// as tls.cpp seals its tickets, through the sealing keys of provider_internal.hpp.
 
 #include <crd/crypto/quic.hpp>
+
+#include "provider_internal.hpp"
 
 #include <openssl/aes.h>
 #include <openssl/chacha.h>
 
+#include <atomic>
 #include <cstring>
 #include <new>
 
@@ -575,5 +580,414 @@ CryptoError quic_retry_verify(QuicVersion version, cont::ConstSpan<u8> original_
         return error;
     }
     return constant_time_equal(expected, retry.subspan(body)) ? CryptoError::None : CryptoError::Forged;
+}
+// ---- Address validation tokens ----
+
+namespace
+{
+using provider_internal::label_of;
+
+constexpr char  kTokenNameInfo[]    = "cerid quic token name";
+constexpr char  kTokenSealInfo[]    = "cerid quic token seal";
+constexpr usize kTokenNameAt        = 1U;
+constexpr usize kTokenSaltAt        = kTokenNameAt + kQuicTokenNameBytes;
+constexpr usize kTokenTimeBytes     = 8U;
+constexpr usize kMaxTokenBodyBytes  = kTokenTimeBytes + 1U + kQuicMaxConnectionIdBytes;
+// The clear bytes, the version, an IPv6 address with its length, the port and two connection IDs with their lengths.
+constexpr usize kMaxTokenAssociated =
+    kQuicTokenHeaderBytes + 4U + 1U + 16U + 2U + 2U * (1U + kQuicMaxConnectionIdBytes);
+constexpr usize kTokensPerBlock     = 32U; // two bytes a token in 64-byte blocks
+constexpr u64   kSlotPreparing      = ~u64{0};
+static_assert(kQuicTokenKeyBytes == provider_internal::kSealingKeyBytes, "a token key is a sealing key");
+static_assert(kQuicNewTokenBytes == kQuicTokenHeaderBytes + kTokenTimeBytes + kQuicTagBytes);
+
+bool address_ok(const QuicTokenPeer& peer) noexcept
+{
+    return peer.address.size() == 4U || peer.address.size() == 16U;
+}
+
+bool same_bytes(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
+{
+    return a.size() == b.size() && (a.empty() || std::memcmp(a.data(), b.data(), a.size()) == 0);
+}
+
+void put_u64(u8* out, u64 value) noexcept
+{
+    for (usize i = 0U; i < 8U; ++i)
+    {
+        out[i] = static_cast<u8>(value >> (56U - 8U * i));
+    }
+}
+
+u64 get_u64(const u8* in) noexcept
+{
+    u64 value = 0U;
+    for (usize i = 0U; i < 8U; ++i)
+    {
+        value = (value << 8U) | in[i];
+    }
+    return value;
+}
+
+// Writes a connection ID after its length byte; the bytes written.
+usize put_connection_id(u8* out, cont::ConstSpan<u8> id) noexcept
+{
+    out[0] = static_cast<u8>(id.size());
+    if (!id.empty())
+    {
+        std::memcpy(out + 1, id.data(), id.size());
+    }
+    return 1U + id.size();
+}
+
+// A token's associated data: its clear bytes, the version and the client's address; for a Retry token also the port
+// and the client's next Initial's connection IDs (`dcid`, the Retry's Source Connection ID, and `scid`, the client's).
+usize token_associated(cont::ConstSpan<u8> header, QuicVersion version, QuicTokenKind kind, const QuicTokenPeer& peer,
+                       cont::ConstSpan<u8> dcid, cont::ConstSpan<u8> scid, u8 (&out)[kMaxTokenAssociated]) noexcept
+{
+    usize n = kQuicTokenHeaderBytes;
+    std::memcpy(out, header.data(), kQuicTokenHeaderBytes);
+    const u32 wire = static_cast<u32>(version);
+    for (usize i = 0U; i < 4U; ++i)
+    {
+        out[n++] = static_cast<u8>(wire >> (24U - 8U * i));
+    }
+    out[n++] = static_cast<u8>(peer.address.size());
+    std::memcpy(out + n, peer.address.data(), peer.address.size());
+    n += peer.address.size();
+    if (kind == QuicTokenKind::Retry)
+    {
+        out[n++] = static_cast<u8>(peer.port >> 8U);
+        out[n++] = static_cast<u8>(peer.port & 0xFFU);
+        n += put_connection_id(out + n, dcid);
+        n += put_connection_id(out + n, scid);
+    }
+    return n;
+}
+} // namespace
+
+QuicTokenKind quic_token_kind(cont::ConstSpan<u8> token) noexcept
+{
+    if (token.empty())
+    {
+        return QuicTokenKind::None;
+    }
+    switch (static_cast<QuicTokenKind>(token[0]))
+    {
+    case QuicTokenKind::Retry:
+        return QuicTokenKind::Retry;
+    case QuicTokenKind::NewToken:
+        return QuicTokenKind::NewToken;
+    default:
+        return QuicTokenKind::None;
+    }
+}
+
+QuicTokenKeys::~QuicTokenKeys() noexcept
+{
+    clear();
+}
+
+CryptoError QuicTokenKeys::init(cont::ConstSpan<u8> key, cont::ConstSpan<u8> previous, u64 new_token_lifetime) noexcept
+{
+    clear();
+    if (key.size() != kQuicTokenKeyBytes || (!previous.empty() && previous.size() != kQuicTokenKeyBytes) ||
+        new_token_lifetime == 0U || new_token_lifetime > kQuicMaxNewTokenLifetime)
+    {
+        return CryptoError::BadLength;
+    }
+    if (!previous.empty() && constant_time_equal(key, previous))
+    {
+        return CryptoError::BadKey;
+    }
+    std::memcpy(m_keys[0], key.data(), kQuicTokenKeyBytes);
+    u32 count = 1U;
+    if (!previous.empty())
+    {
+        std::memcpy(m_keys[1], previous.data(), kQuicTokenKeyBytes);
+        count = 2U;
+    }
+    for (u32 i = 0U; i < count; ++i)
+    {
+        const CryptoError error = provider_internal::sealing_key_name(
+            cont::ConstSpan<u8>(m_keys[i]), label_of(kTokenNameInfo), cont::Span<u8>(m_names[i]));
+        if (error != CryptoError::None)
+        {
+            clear();
+            return error;
+        }
+    }
+    if (count == 2U && std::memcmp(m_names[0], m_names[1], kQuicTokenNameBytes) == 0)
+    {
+        clear();
+        return CryptoError::BadKey;
+    }
+    m_count              = count;
+    m_new_token_lifetime = new_token_lifetime;
+    return CryptoError::None;
+}
+
+void QuicTokenKeys::clear() noexcept
+{
+    secure_zero(cont::Span<u8>(&m_keys[0][0], sizeof(m_keys)));
+    secure_zero(cont::Span<u8>(&m_names[0][0], sizeof(m_names)));
+    m_count              = 0U;
+    m_new_token_lifetime = 0U;
+}
+
+CryptoError QuicTokenKeys::mint_retry(QuicVersion version, const QuicTokenPeer& peer, cont::ConstSpan<u8> original_dcid,
+                                      cont::ConstSpan<u8> client_scid, cont::ConstSpan<u8> retry_scid, u64 now,
+                                      cont::Span<u8> out, usize& written) const noexcept
+{
+    return mint(version, QuicTokenKind::Retry, peer, original_dcid, client_scid, retry_scid, now, out, written);
+}
+
+CryptoError QuicTokenKeys::mint_new_token(QuicVersion version, const QuicTokenPeer& peer, u64 now, cont::Span<u8> out,
+                                          usize& written) const noexcept
+{
+    return mint(version, QuicTokenKind::NewToken, peer, {}, {}, {}, now, out, written);
+}
+
+CryptoError QuicTokenKeys::mint(QuicVersion version, QuicTokenKind kind, const QuicTokenPeer& peer,
+                                cont::ConstSpan<u8> original_dcid, cont::ConstSpan<u8> client_scid,
+                                cont::ConstSpan<u8> retry_scid, u64 now, cont::Span<u8> out,
+                                usize& written) const noexcept
+{
+    written = 0U;
+    if (!ready())
+    {
+        return CryptoError::NotReady;
+    }
+    if (!quic_version_supported(static_cast<u32>(version)))
+    {
+        return CryptoError::Unsupported;
+    }
+    const bool  retry = kind == QuicTokenKind::Retry;
+    const usize body  = kTokenTimeBytes + (retry ? 1U + original_dcid.size() : 0U);
+    const usize total = kQuicTokenHeaderBytes + body + kQuicTagBytes;
+    if (!address_ok(peer) || original_dcid.size() > kQuicMaxConnectionIdBytes ||
+        client_scid.size() > kQuicMaxConnectionIdBytes || retry_scid.size() > kQuicMaxConnectionIdBytes ||
+        out.size() < total)
+    {
+        return CryptoError::BadLength;
+    }
+    if (retry && same_bytes(retry_scid, original_dcid))
+    {
+        return CryptoError::Overlap;
+    }
+    u8* const token = out.data();
+    token[0]        = static_cast<u8>(kind);
+    std::memcpy(token + kTokenNameAt, m_names[0], kQuicTokenNameBytes);
+    CryptoError error  = random_bytes(cont::Span<u8>(token + kTokenSaltAt, kQuicTokenSaltBytes));
+    u8* const   sealed = token + kQuicTokenHeaderBytes;
+    put_u64(sealed, now);
+    if (retry)
+    {
+        static_cast<void>(put_connection_id(sealed + kTokenTimeBytes, original_dcid));
+    }
+    u8          associated[kMaxTokenAssociated];
+    const usize associated_bytes = token_associated(cont::ConstSpan<u8>(token, kQuicTokenHeaderBytes), version, kind,
+                                                    peer, retry_scid, client_scid, associated);
+    AeadKey     key;
+    u8          nonce[kAeadNonceBytes];
+    if (error == CryptoError::None)
+    {
+        error = provider_internal::salted_aead(cont::ConstSpan<u8>(m_keys[0]),
+                                               cont::ConstSpan<u8>(token + kTokenSaltAt, kQuicTokenSaltBytes),
+                                               label_of(kTokenSealInfo), key, nonce);
+    }
+    if (error == CryptoError::None)
+    {
+        error = key.seal(cont::ConstSpan<u8>(nonce), cont::ConstSpan<u8>(sealed, body),
+                         cont::ConstSpan<u8>(associated, associated_bytes),
+                         cont::Span<u8>(sealed, body + kQuicTagBytes));
+    }
+    secure_zero(cont::Span<u8>(nonce));
+    if (error != CryptoError::None)
+    {
+        secure_zero(out.first(total));
+        return error;
+    }
+    written = total;
+    return CryptoError::None;
+}
+
+CryptoError QuicTokenKeys::validate(QuicVersion version, cont::ConstSpan<u8> token, const QuicTokenPeer& peer,
+                                    cont::ConstSpan<u8> dcid, cont::ConstSpan<u8> scid, u64 now,
+                                    QuicTokenClaims& claims, QuicTokenReplay* replay) const noexcept
+{
+    if (!ready() || (replay != nullptr && (!replay->ready() || replay->period() < m_new_token_lifetime)))
+    {
+        return CryptoError::NotReady;
+    }
+    if (!quic_version_supported(static_cast<u32>(version)))
+    {
+        return CryptoError::Unsupported;
+    }
+    if (token.size() < kQuicNewTokenBytes || token.size() > kQuicMaxTokenBytes || !address_ok(peer) ||
+        dcid.size() > kQuicMaxConnectionIdBytes || scid.size() > kQuicMaxConnectionIdBytes)
+    {
+        return CryptoError::BadLength;
+    }
+    const QuicTokenKind kind   = quic_token_kind(token);
+    const usize         body   = token.size() - kQuicTokenHeaderBytes - kQuicTagBytes;
+    const bool          shaped = (kind == QuicTokenKind::NewToken && body == kTokenTimeBytes) ||
+                        (kind == QuicTokenKind::Retry && body > kTokenTimeBytes);
+    u32 index = 0U;
+    while (index < m_count && std::memcmp(token.data() + kTokenNameAt, m_names[index], kQuicTokenNameBytes) != 0)
+    {
+        ++index;
+    }
+    if (!shaped || index == m_count)
+    {
+        return CryptoError::Forged;
+    }
+    const cont::ConstSpan<u8> salt = token.subspan(kTokenSaltAt, kQuicTokenSaltBytes);
+    u8                        associated[kMaxTokenAssociated];
+    const usize               associated_bytes =
+        token_associated(token.first(kQuicTokenHeaderBytes), version, kind, peer, dcid, scid, associated);
+    AeadKey     key;
+    u8          nonce[kAeadNonceBytes];
+    u8          plain[kMaxTokenBodyBytes];
+    CryptoError error = provider_internal::salted_aead(cont::ConstSpan<u8>(m_keys[index]), salt,
+                                                       label_of(kTokenSealInfo), key, nonce);
+    if (error == CryptoError::None)
+    {
+        error = key.open(cont::ConstSpan<u8>(nonce), token.subspan(kQuicTokenHeaderBytes),
+                         cont::ConstSpan<u8>(associated, associated_bytes), cont::Span<u8>(plain, body));
+    }
+    secure_zero(cont::Span<u8>(nonce));
+    // An authentic Retry body whose length byte disagrees with its length was never sealed by these keys' mint.
+    if (error == CryptoError::None && kind == QuicTokenKind::Retry &&
+        static_cast<usize>(plain[kTokenTimeBytes]) != body - kTokenTimeBytes - 1U)
+    {
+        error = CryptoError::Forged;
+    }
+    const u64 issued   = error == CryptoError::None ? get_u64(plain) : 0U;
+    const u64 lifetime = kind == QuicTokenKind::Retry ? kQuicRetryTokenLifetime : m_new_token_lifetime;
+    if (error == CryptoError::None &&
+        ((issued > now && issued - now > kQuicTokenClockSkew) || (now > issued && now - issued > lifetime)))
+    {
+        error = CryptoError::Expired;
+    }
+    if (error == CryptoError::None && kind == QuicTokenKind::NewToken && replay != nullptr &&
+        !replay->first_use(salt, issued, now))
+    {
+        error = CryptoError::Replayed;
+    }
+    if (error == CryptoError::None)
+    {
+        claims.kind                = kind;
+        claims.issued              = issued;
+        claims.original_dcid_bytes = 0U;
+        secure_zero(cont::Span<u8>(claims.original_dcid));
+        if (kind == QuicTokenKind::Retry)
+        {
+            claims.original_dcid_bytes = plain[kTokenTimeBytes];
+            std::memcpy(claims.original_dcid, plain + kTokenTimeBytes + 1U, claims.original_dcid_bytes);
+        }
+    }
+    secure_zero(cont::Span<u8>(plain));
+    return error;
+}
+
+// ---- Token replay ----
+
+CryptoError QuicTokenReplay::init(usize tokens, u64 period, u64 now)
+{
+    clear();
+    if (tokens == 0U || period < kQuicTokenClockSkew)
+    {
+        return CryptoError::BadLength;
+    }
+    const u64 blocks = static_cast<u64>(tokens / kTokensPerBlock) + (tokens % kTokensPerBlock != 0U ? 1U : 0U);
+    if (blocks > (u64{1} << 32U))
+    {
+        return CryptoError::BadLength;
+    }
+    m_bits.resize(static_cast<usize>(blocks) * kSlots);
+    m_blocks        = static_cast<usize>(blocks);
+    m_period        = period;
+    const u64 epoch = now / period;
+    for (u64 e = epoch == 0U ? 0U : epoch - 1U; e <= epoch + 2U; ++e)
+    {
+        m_tags[e % kSlots] = e + 1U;
+    }
+    return CryptoError::None;
+}
+
+void QuicTokenReplay::clear() noexcept
+{
+    m_bits   = cont::Array<Block>();
+    m_blocks = 0U;
+    m_period = 0U;
+    for (u64& tag : m_tags)
+    {
+        tag = 0U;
+    }
+}
+
+// Readies the slot of `epoch` when it holds an older period, every token of which has expired: one thread claims it,
+// clears its bits and publishes it. A slot already ready, newer or being cleared is left as it is.
+void QuicTokenReplay::prepare(u64 epoch) noexcept
+{
+    const usize          slot = static_cast<usize>(epoch % kSlots);
+    std::atomic_ref<u64> tag(m_tags[slot]);
+    u64                  held = tag.load(std::memory_order_acquire);
+    if (held == kSlotPreparing || held >= epoch + 1U ||
+        !tag.compare_exchange_strong(held, kSlotPreparing, std::memory_order_acq_rel))
+    {
+        return;
+    }
+    Block* const first = m_bits.data() + slot * m_blocks;
+    for (usize b = 0U; b < m_blocks; ++b)
+    {
+        for (u64& word : first[b].words)
+        {
+            std::atomic_ref<u64>(word).store(0U, std::memory_order_relaxed);
+        }
+    }
+    tag.store(epoch + 1U, std::memory_order_release);
+}
+
+bool QuicTokenReplay::first_use(cont::ConstSpan<u8> salt, u64 issued, u64 now) noexcept
+{
+    if (!ready() || salt.size() != kQuicTokenSaltBytes)
+    {
+        return false;
+    }
+    prepare(now / m_period + 2U);
+    const u64            epoch = issued / m_period;
+    const usize          slot  = static_cast<usize>(epoch % kSlots);
+    std::atomic_ref<u64> tag(m_tags[slot]);
+    u64                  held = tag.load(std::memory_order_acquire);
+    if (held != kSlotPreparing && held < epoch + 1U)
+    {
+        prepare(epoch); // a whole period passed without a check
+        held = tag.load(std::memory_order_acquire);
+    }
+    if (held != epoch + 1U)
+    {
+        return held == kSlotPreparing; // being cleared: accepted unrecorded; a newer period: too old for any slot
+    }
+    u64 low  = 0U;
+    u64 high = 0U;
+    for (usize i = 0U; i < 8U; ++i)
+    {
+        low |= static_cast<u64>(salt[i]) << (8U * i);
+        high |= static_cast<u64>(salt[8U + i]) << (8U * i);
+    }
+    // The salt is random and authenticated, so its bits index the filter directly: the top 32 bits of its first half
+    // pick the block (a multiply-shift onto at most 2^32 blocks), 48 bits of its second half one bit in each word.
+    const usize block = static_cast<usize>(((low >> 32U) * static_cast<u64>(m_blocks)) >> 32U);
+    Block&      bits  = m_bits[slot * m_blocks + block];
+    bool        fresh = false;
+    for (usize i = 0U; i < 8U; ++i)
+    {
+        const u64 bit = u64{1} << ((high >> (6U * i)) & 63U);
+        const u64 old = std::atomic_ref<u64>(bits.words[i]).fetch_or(bit, std::memory_order_relaxed);
+        fresh         = fresh || (old & bit) == 0U;
+    }
+    return fresh;
 }
 } // namespace crd::crypto

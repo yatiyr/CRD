@@ -3,9 +3,10 @@
 // crd-crypto -- QUIC packet protection (NET.2; contract: docs/design/network-foundation.md#quic-protection).
 //
 // The cryptography of RFC 9001 section 5 for QUIC versions 1 and 2 (RFC 9369), over the provider interface: the
-// Initial secrets, packet protection keys and their key updates, header protection, packet number encoding, and the
-// Retry integrity tag. Which secrets exist and when is the TLS handshake's (the QUIC integration of tls.hpp); framing,
-// connection IDs and loss recovery are the transport's (crd-net, 4.2a). Rules:
+// Initial secrets, packet protection keys and their key updates, header protection, packet number encoding and the
+// Retry integrity tag; and the address-validation tokens of RFC 9000 section 8.1. Which secrets exist and when is the
+// TLS handshake's (the QUIC integration of tls.hpp); framing, connection IDs and loss recovery are the transport's
+// (crd-net, 4.2a). Rules:
 //
 //   packets   a packet is one buffer: the header (its packet number already encoded in it) and then the payload, with
 //             the AEAD tag's kQuicTagBytes at its end. Sealing and opening run in place; header protection reads its
@@ -20,8 +21,10 @@
 //             and the Retry tag are read-only and run on several threads at once.
 //   secrets   a packet key keeps its secret for the next key phase and zeroes it, with every derived key, when cleared
 //             or destroyed; secrets the caller passes in remain the caller's to zero (secure_zero).
-//   allocation nothing here allocates: every key is held inline and the Retry pseudo-packet is built on the stack.
+//   allocation nothing here allocates but a token replay filter's init: every key is held inline and the Retry
+//             pseudo-packet and every token's associated data are built on the stack.
 
+#include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
 #include <crd/crypto/provider.hpp>
@@ -187,4 +190,186 @@ private:
 // authenticates it for `original_dcid`, Forged when not, BadLength for a packet too short to hold a tag or too long.
 [[nodiscard]] CryptoError quic_retry_verify(QuicVersion version, cont::ConstSpan<u8> original_dcid,
                                             cont::ConstSpan<u8> retry) noexcept;
+
+// ---- Address validation tokens (RFC 9000 section 8.1; contract: network-foundation.md#address-validation) ----
+//
+// A server validates a client's address before it sends more than three times what it received, statelessly: the
+// token it hands out holds everything it needs back. Tokens are minted and checked here; the transport (crd-net, 4.2a)
+// builds the Retry packet around a token (quic_retry_tag), carries tokens in Initial packets and NEW_TOKEN frames,
+// and puts the claims' original connection ID and the Retry's connection ID into its transport parameters (RFC 9000
+// section 7.3). Rules:
+//
+//   format    kind (one byte, in the clear: RFC 9000 section 8.1.1), the sealing key's 4-byte public name, a 16-byte
+//             random salt, then the sealed claims (the issue time, and a Retry token's original Destination
+//             Connection ID) and the AEAD tag. Each token is sealed with AES-256-GCM under its own key and nonce,
+//             HKDF-SHA256 of the fleet key and the token's salt, so the servers of a fleet that share the key share
+//             no count of tokens and no nonce ever repeats; the salt also makes every token unique (section 8.1.3).
+//   binding   the associated data binds the clear bytes, the QUIC version and the client's IP address; a Retry token
+//             also its UDP port and both connection IDs of the client's next Initial (the Retry's Source Connection ID,
+//             now its Destination, and the client's own Source, which it may not change, section 17.2.5.2). A
+//             NEW_TOKEN token binds no port: a client's port changes between connections (section 8.1.3).
+//   time      `now` and the issue time are seconds of the fleet's clock (Unix time). A Retry token is accepted for
+//             kQuicRetryTokenLifetime, a NEW_TOKEN token for the keys' configured lifetime, each up to
+//             kQuicTokenClockSkew before it was issued (servers' clocks differ); outside that it is Expired.
+//   rotation  the keys hold a sealing key and the key before its last rotation, which only opens: every server of a
+//             fleet rotates to the same next key, and tokens issued under the previous one stay valid until they
+//             expire. A token under any other key is Forged, never told apart from a forgery.
+//   replay    a NEW_TOKEN token is accepted once (section 8.1.4) when the server checks it against a QuicTokenReplay;
+//             a Retry token is limited by its short lifetime and its port and connection ID binding.
+//   threads   minting and validation are read-only on the keys and run on several threads at once; a replay filter's
+//             check runs on several threads too. init and clear need the caller's exclusive access.
+//   allocation minting and validation allocate nothing; a replay filter allocates its bits once, at init.
+
+enum class QuicTokenKind : u8
+{
+    None     = 0x00U, // not a token this build mints
+    Retry    = 0x11U, // format 1, sent in a Retry packet
+    NewToken = 0x12U, // format 1, sent in a NEW_TOKEN frame
+};
+
+inline constexpr usize kQuicTokenKeyBytes       = 32U;
+inline constexpr usize kQuicTokenNameBytes      = 4U;
+inline constexpr usize kQuicTokenSaltBytes      = 16U; // 128 bits of entropy (RFC 9000 section 8.1.4)
+inline constexpr usize kQuicTokenHeaderBytes    = 1U + kQuicTokenNameBytes + kQuicTokenSaltBytes;
+inline constexpr usize kQuicNewTokenBytes       = kQuicTokenHeaderBytes + 8U + kQuicTagBytes;
+inline constexpr usize kQuicMaxRetryTokenBytes  = kQuicNewTokenBytes + 1U + kQuicMaxConnectionIdBytes;
+inline constexpr usize kQuicMaxTokenBytes       = kQuicMaxRetryTokenBytes;
+inline constexpr u64   kQuicRetryTokenLifetime  = 30U; // seconds: four Initial retransmissions from a 1 s PTO
+inline constexpr u64   kQuicNewTokenLifetime    = 86400U;      // seconds, unless configured
+inline constexpr u64   kQuicMaxNewTokenLifetime = 7U * 86400U; // seconds
+inline constexpr u64   kQuicTokenClockSkew      = 10U;         // seconds a token may come from the future
+
+// Who a token is bound to: the client's IP address as the transport canonicalises it (4 bytes for IPv4, an IPv4-mapped
+// IPv6 address included, 16 for IPv6) and its UDP port, which only a Retry token binds.
+struct QuicTokenPeer
+{
+    cont::ConstSpan<u8> address;
+    u16                 port = 0U;
+};
+
+// What a valid token carried.
+struct QuicTokenClaims
+{
+    QuicTokenKind kind   = QuicTokenKind::None;
+    u64           issued = 0U;
+    u8            original_dcid_bytes                     = 0U; // a Retry token's; 0 for a NEW_TOKEN token
+    u8            original_dcid[kQuicMaxConnectionIdBytes] = {};
+
+    [[nodiscard]] cont::ConstSpan<u8> original_dcid_view() const noexcept
+    {
+        return cont::ConstSpan<u8>(original_dcid, original_dcid_bytes);
+    }
+};
+
+// The kind a token claims, read from its first byte and not authenticated: what tells a server whether an invalid
+// token came from a Retry, so that it closes with INVALID_TOKEN (RFC 9000 section 8.1.2), or from anything else, so
+// that it proceeds as if the client had none (section 8.1.3). None for an empty token or one of another format.
+[[nodiscard]] QuicTokenKind quic_token_kind(cont::ConstSpan<u8> token) noexcept;
+
+class QuicTokenReplay;
+
+class QuicTokenKeys
+{
+public:
+    QuicTokenKeys() noexcept = default;
+    ~QuicTokenKeys() noexcept;
+    QuicTokenKeys(const QuicTokenKeys&)            = delete;
+    QuicTokenKeys& operator=(const QuicTokenKeys&) = delete;
+    QuicTokenKeys(QuicTokenKeys&&)                 = delete;
+    QuicTokenKeys& operator=(QuicTokenKeys&&)      = delete;
+
+    // `key` (kQuicTokenKeyBytes) seals and opens; `previous` (empty, or the key before the last rotation) only opens.
+    // `new_token_lifetime` is 1 second to kQuicMaxNewTokenLifetime. BadLength for a key of another length or a
+    // lifetime out of range, BadKey when the two keys are equal or their names collide.
+    [[nodiscard]] CryptoError init(cont::ConstSpan<u8> key, cont::ConstSpan<u8> previous,
+                                   u64 new_token_lifetime = kQuicNewTokenLifetime) noexcept;
+    void                      clear() noexcept;
+
+    [[nodiscard]] bool ready() const noexcept { return m_count != 0U; }
+    [[nodiscard]] u64  new_token_lifetime() const noexcept { return m_new_token_lifetime; }
+
+    // A Retry token for the client Initial whose Destination Connection ID was `original_dcid` and whose Source
+    // Connection ID was `client_scid`, from `peer`, answered by a Retry whose Source Connection ID is `retry_scid`:
+    // kQuicNewTokenBytes + 1 + original_dcid.size() bytes into `out`, `written` set. BadLength when `out` is too small,
+    // an address is not 4 or 16 bytes or a connection ID is longer than kQuicMaxConnectionIdBytes; Overlap when
+    // `retry_scid` equals `original_dcid` (RFC 9000 section 17.2.5.1); NotReady without keys; Unsupported for a
+    // version quic_version_supported() refuses.
+    [[nodiscard]] CryptoError mint_retry(QuicVersion version, const QuicTokenPeer& peer,
+                                         cont::ConstSpan<u8> original_dcid, cont::ConstSpan<u8> client_scid,
+                                         cont::ConstSpan<u8> retry_scid, u64 now, cont::Span<u8> out,
+                                         usize& written) const noexcept;
+
+    // A NEW_TOKEN token for the client at `peer`'s address (its port is not bound): kQuicNewTokenBytes into `out`.
+    [[nodiscard]] CryptoError mint_new_token(QuicVersion version, const QuicTokenPeer& peer, u64 now,
+                                             cont::Span<u8> out, usize& written) const noexcept;
+
+    // Validates the token of a client Initial from `peer` whose connection IDs are `dcid` and `scid`: None with
+    // `claims` filled when it is authentic, bound to all of them and within its lifetime; Forged when it is not
+    // authentic or bound to anything else (another address, port, connection ID or version, another kind, a key
+    // these keys do not hold, a malformed body), Expired outside its lifetime, Replayed for a NEW_TOKEN token
+    // `replay` saw before, BadLength for a token too short or too long to be one or an address not 4 or 16 bytes,
+    // NotReady without keys or with a replay filter whose period is shorter than the NEW_TOKEN lifetime, Unsupported
+    // for a version quic_version_supported() refuses. `claims` is only written on None.
+    [[nodiscard]] CryptoError validate(QuicVersion version, cont::ConstSpan<u8> token, const QuicTokenPeer& peer,
+                                       cont::ConstSpan<u8> dcid, cont::ConstSpan<u8> scid, u64 now,
+                                       QuicTokenClaims& claims, QuicTokenReplay* replay = nullptr) const noexcept;
+
+private:
+    [[nodiscard]] CryptoError mint(QuicVersion version, QuicTokenKind kind, const QuicTokenPeer& peer,
+                                   cont::ConstSpan<u8> original_dcid, cont::ConstSpan<u8> client_scid,
+                                   cont::ConstSpan<u8> retry_scid, u64 now, cont::Span<u8> out,
+                                   usize& written) const noexcept;
+
+    u8  m_keys[2][kQuicTokenKeyBytes]   = {};
+    u8  m_names[2][kQuicTokenNameBytes] = {};
+    u32 m_count                         = 0U;
+    u64 m_new_token_lifetime            = 0U;
+};
+
+// The NEW_TOKEN tokens a server has accepted, so that each is accepted once (RFC 9000 section 8.1.4). A token's
+// authenticated random salt sets one bit in each of the eight 64-bit words of one cache-line block (a split-block Bloom
+// filter), in one of four slots by the period its token was issued in: the periods a valid token can come from (the
+// last, this and, by the clock skew, the next) and the one after, which is cleared before it begins. Two bytes a token
+// keep false positives near 0.1% at the configured capacity; a false positive only costs its client the address
+// validation (the server proceeds as without a token), never a connection. A token checked while its slot is being
+// cleared, after a whole period without checks, is accepted without being recorded, and one token checked on two
+// threads at the same instant may be accepted by both; a check after either returned refuses it.
+class QuicTokenReplay
+{
+public:
+    QuicTokenReplay() noexcept = default;
+    QuicTokenReplay(const QuicTokenReplay&)            = delete;
+    QuicTokenReplay& operator=(const QuicTokenReplay&) = delete;
+    QuicTokenReplay(QuicTokenReplay&&)                 = delete;
+    QuicTokenReplay& operator=(QuicTokenReplay&&)      = delete;
+
+    // Room for `tokens` first uses each `period` seconds (at least the keys' NEW_TOKEN lifetime), from `now`: two
+    // bytes a token in each of the four slots. BadLength when `tokens` is 0, more than 2^37 (2^32 blocks) or
+    // `period` shorter than kQuicTokenClockSkew.
+    [[nodiscard]] CryptoError init(usize tokens, u64 period, u64 now);
+    void                      clear() noexcept;
+
+    [[nodiscard]] bool ready() const noexcept { return m_blocks != 0U; }
+    [[nodiscard]] u64  period() const noexcept { return m_period; }
+    [[nodiscard]] usize bytes() const noexcept { return m_bits.size() * sizeof(Block); }
+
+    // True the first time the token with this kQuicTokenSaltBytes `salt`, issued at `issued`, is seen; false when it
+    // was seen before (or for a false positive, or a token too old for any slot). `issued` and `now` are those of a
+    // token validate() accepted.
+    [[nodiscard]] bool first_use(cont::ConstSpan<u8> salt, u64 issued, u64 now) noexcept;
+
+private:
+    static constexpr usize kSlots = 4U;
+    struct alignas(64) Block
+    {
+        u64 words[8];
+    };
+
+    void prepare(u64 epoch) noexcept;
+
+    cont::Array<Block> m_bits;
+    usize              m_blocks = 0U;
+    u64                m_period = 0U;
+    u64                m_tags[kSlots] = {}; // each slot's period + 1 (0: none), read and written atomically
+};
 } // namespace crd::crypto
