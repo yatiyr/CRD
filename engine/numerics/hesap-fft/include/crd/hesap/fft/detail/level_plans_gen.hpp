@@ -7,6 +7,8 @@
 // Data: docs/bench/2026-10-30-simd-dispatch-fft-f64-arms.json (bench_fft_vs_refs):
 //   portable, sse2, avx2: at e0c70766 with the f64 forward arms on the i9-14900K (WSL2)
 //   (docs/bench/2026-10-30-simd-dispatch-fft-board.md#board-4-the-f64-plans-and-the-avx2-re-run).
+//   avx512: at d5a58201 with the warm f64 board on the benchmark machine (Xeon Platinum 8581C)
+//   (docs/bench/2026-11-01-simd-perf-fft-f64-avx512-level-plans.md).
 //
 // Each CPU level's forward of a type and size as its fft level board measured it (ADR-0134 §7): the
 // board's fastest arm (the lowest median of its passes) where its every pass beat every pass of the
@@ -125,6 +127,19 @@ inline constexpr FftLevelPlan kFftLevelPlans[] = {
     {8, crd::CpuLevel::Avx2, 20, FftAlgorithm::SixStep},          // 5.878
     {8, crd::CpuLevel::Avx2, 21, FftAlgorithm::FourStep},         // 11.948
     {8, crd::CpuLevel::Avx2, 22, FftAlgorithm::FourStep},         // 26.89
+    {8, crd::CpuLevel::Avx512, 10, FftAlgorithm::StandaloneHier}, // 0.00147; ip4 0.00161
+    {8, crd::CpuLevel::Avx512, 11, FftAlgorithm::StandaloneHier}, // 0.00365; ip4 0.00441
+    {8, crd::CpuLevel::Avx512, 12, FftAlgorithm::StandaloneHier}, // 0.00859; ip4 0.00915
+    {8, crd::CpuLevel::Avx512, 13, FftAlgorithm::Ip4},            // 0.02181
+    {8, crd::CpuLevel::Avx512, 14, FftAlgorithm::Ip4},            // 0.0417
+    {8, crd::CpuLevel::Avx512, 15, FftAlgorithm::Ip4},            // 0.10471
+    {8, crd::CpuLevel::Avx512, 16, FftAlgorithm::DeepSplit3},     // 0.22732; ip4 0.25573
+    {8, crd::CpuLevel::Avx512, 17, FftAlgorithm::DeepSplit3},     // 0.57477; deep-split-4 0.60706
+    {8, crd::CpuLevel::Avx512, 18, FftAlgorithm::DeepSplit3},     // 1.26342; deep-split-4 1.30551
+    {8, crd::CpuLevel::Avx512, 19, FftAlgorithm::DeepSplit4},     // 2.76399
+    {8, crd::CpuLevel::Avx512, 20, FftAlgorithm::DeepSplit4},     // 5.77978; six-step 6.65298
+    {8, crd::CpuLevel::Avx512, 21, FftAlgorithm::DeepSplit4},     // 13.3117; four-step 18.7659
+    {8, crd::CpuLevel::Avx512, 22, FftAlgorithm::SixStep},        // 32.6484; four-step 39.3226
 };
 
 } // namespace crd::hesap::fft::detail
