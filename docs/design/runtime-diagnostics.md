@@ -2986,6 +2986,10 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   only on the out-of-line diagnostic code off runs (none, within 2%), the two binaries' gap staying with the
   instruction count. The 2026-10-25 capture, recorded before these repairs at eight jobs threads, agrees on ten
   rows; jobs basic is unresolved and jobs full disagrees because its frame there is the fiber pool's contention.
+  A cell's processes must agree within 2% on the quantity the row compares (CPU per frame, else the median frame), and
+  an unresolved or disagreeing row names the other processes' load the trace shows beside each process (pinned
+  processors' share, logical processors busy, the busiest); the 2026-11-01 recording proves the jobs rows and was taken
+  beside three to five busy processors ([session](../sessions/2026-11-01-diag-11b-third-recording.md)).
 - The peer on comparable features (2026-10-26, [session](../sessions/2026-10-26-diag-11b-tracy-peer.md),
   [board](../bench/2026-10-26-diag-11b-tracy-peer.md)): Tracy Profiler 0.14.1, pinned and gated by
   `CRD_DIAG_PEER_TRACY` (never an engine module or a default build). `crd-diag-overhead-tracy` holds the Cerid modes and
@@ -3008,7 +3012,7 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   re-anchor (a reader stepped back at the hand-off until 2026-10-26, the shape of the hosted failure,
   [session](../sessions/2026-10-26-tick-clock-cross-thread.md)), not an order that agrees with happens-before across
   threads: the recorder's order is its claim word's.
-- Not settled here: the repairs and the measurement gaps above; a recording of the repaired sampling; follow-ups (q)
+- Not settled here: the repairs and the measurement gaps above; a recording of the repaired sampling on an unloaded machine; follow-ups (q)
   and (r), each awaiting the user's decision;
   the cost of device validation and of the generation checks, recording and probes, and the hosted audit's per-label
   counts on a run of the current head.
