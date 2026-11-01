@@ -534,6 +534,10 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     // preference orders the groups (the provider's TLS 1.3 AEAD choice follows the client, see tls.hpp).
     SSL_CTX_set_options(context.get(), SSL_OP_NO_TICKET | SSL_OP_CIPHER_SERVER_PREFERENCE);
     SSL_CTX_set_session_cache_mode(context.get(), SSL_SESS_CACHE_OFF);
+    // GREASE (RFC 8701, ietf.grease) in every build: a client's hello carries reserved values, chosen per connection,
+    // in its cipher suites, supported groups, supported versions, key shares and two extensions, so a peer or
+    // middlebox that refuses an unknown value fails in testing rather than in the field.
+    SSL_CTX_set_grease_enabled(context.get(), 1);
     if (!SSL_CTX_set_num_tickets(context.get(), 0U))
     {
         return TlsError::ProviderFailure;

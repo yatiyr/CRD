@@ -7,9 +7,10 @@ reports (state, negotiated group, HelloRetryRequest, the pinned peer key, alerts
 reads the handshake off the wire independently of both libraries: the key share groups and lengths of the ClientHello,
 the ServerHello or HelloRetryRequest and a retried ClientHello against the hybrid groups' layout (RFC 10024 and
 draft-ietf-tls-ecdhe-mlkem: ML-KEM-768 encapsulation key 1184 bytes and ciphertext 1088, ML-KEM-1024 1568 and 1568,
-X25519 32, uncompressed P-256 65 and P-384 97). The three hybrid groups run both ways, through a HelloRetryRequest both
-ways, beside a classical share without a downgrade, with mutual authentication, with a key that is not pinned and
-against a peer that offers TLS 1.2 only.
+X25519 32, uncompressed P-256 65 and P-384 97), and the GREASE values (RFC 8701) of Cerid's ClientHellos, which a
+retried one keeps. The three hybrid groups run both ways, through a HelloRetryRequest both ways, beside a classical
+share without a downgrade, with mutual authentication, with a key that is not pinned and against a peer that offers
+TLS 1.2 only.
 
 Usage: tls_interop.py --cerid <crd-tls-peer> --openssl <crd-openssl-tls-peer>
 """
@@ -84,8 +85,13 @@ def first_handshake(flight):
     raise Failure('the flight holds no handshake record')
 
 
-def key_shares(flight):
-    """(message, hello_retry, [(group codepoint, share length)]) from a ClientHello or a ServerHello (RFC 9846 4.1)."""
+def is_grease(value):
+    """RFC 8701's reserved values: 0x?A?A with the same digit in each ?."""
+    return value & 0x0F0F == 0x0A0A and value >> 12 == (value >> 4) & 0x0F
+
+
+def hello(flight):
+    """(kind, random, cipher suite bytes, [(extension type, data)]) of a ClientHello or ServerHello (RFC 9846 4.1)."""
     kind, body = first_handshake(flight)
     if kind not in (1, 2):
         raise Failure('expected a hello, found handshake type %d' % kind)
@@ -93,17 +99,30 @@ def key_shares(flight):
     at = 34
     at += 1 + body[at]  # legacy_session_id
     if kind == 1:
-        at += 2 + struct.unpack('>H', body[at:at + 2])[0]  # cipher_suites
+        size = struct.unpack('>H', body[at:at + 2])[0]
+        suites = body[at + 2:at + 2 + size]
+        at += 2 + size
         at += 1 + body[at]  # legacy_compression_methods
     else:
+        suites = body[at:at + 2]
         at += 3  # cipher_suite, legacy_compression_method
     end = at + 2 + struct.unpack('>H', body[at:at + 2])[0]
     at += 2
-    shares = []
+    extensions = []
     while at + 4 <= end:
         kind_of, size = struct.unpack('>HH', body[at:at + 4])
-        data = body[at + 4:at + 4 + size]
+        extensions.append((kind_of, body[at + 4:at + 4 + size]))
         at += 4 + size
+    if at != end:
+        raise Failure('the extensions do not end where their length says')
+    return kind, random, suites, extensions
+
+
+def key_shares(flight):
+    """(message, hello_retry, [(group codepoint, share length)]) from a ClientHello or a ServerHello."""
+    kind, random, _, extensions = hello(flight)
+    shares = []
+    for kind_of, data in extensions:
         if kind_of != 51:
             continue
         if kind == 1:
@@ -112,14 +131,30 @@ def key_shares(flight):
                 group, length = struct.unpack('>HH', data[inner:inner + 4])
                 shares.append((group, length))
                 inner += 4 + length
-        elif size == 2:
+        elif len(data) == 2:
             shares.append((struct.unpack('>H', data)[0], 0))
         else:
             group, length = struct.unpack('>HH', data[:4])
             shares.append((group, length))
-    if at != end:
-        raise Failure('the extensions do not end where their length says')
     return ('client_hello' if kind == 1 else 'server_hello'), (kind == 2 and random == HELLO_RETRY_RANDOM), shares
+
+
+def grease(flight):
+    """A ClientHello's GREASE values by field: cipher suites, supported groups (10), supported versions (43) and the
+    reserved extensions with their lengths."""
+    _, _, suites, extensions = hello(flight)
+
+    def values(data):
+        return [value for (value,) in struct.iter_unpack('>H', data) if is_grease(value)]
+    found = {'suites': values(suites), 'groups': [], 'versions': [], 'extensions': []}
+    for kind_of, data in extensions:
+        if is_grease(kind_of):
+            found['extensions'].append((kind_of, len(data)))
+        elif kind_of == 10:
+            found['groups'] = values(data[2:])
+        elif kind_of == 43:
+            found['versions'] = values(data[1:])
+    return found
 
 
 def run(client_command, server_command):
@@ -176,10 +211,24 @@ def expect(condition, message):
         raise Failure(message)
 
 
-def check_wire(flights, group, retry, offered):
-    """The hello flights on the wire: `offered` shares first, then (after a retry) one share of `group`."""
+def check_grease(found):
+    expect(all(len(found[field]) == 1 for field in ('suites', 'groups', 'versions')),
+           'the ClientHello lacks a GREASE suite, group or version: %s' % found)
+    expect(len(found['extensions']) == 2 and found['extensions'][0][0] != found['extensions'][1][0] and
+           [size for _, size in found['extensions']] == [0, 1], 'the GREASE extensions are %s' % found['extensions'])
+
+
+def check_wire(flights, group, retry, offered, greased):
+    """The hello flights on the wire: `offered` shares first, then (after a retry) one share of `group`. A greased
+    ClientHello (RFC 8701, Cerid's) leads its shares with a one-byte GREASE share and carries GREASE values, which a
+    retried ClientHello repeats without the share."""
     hello_kind, _, shares = key_shares(flights[0][1])
     expect(hello_kind == 'client_hello', 'the first flight is not a ClientHello')
+    if greased:
+        first = grease(flights[0][1])
+        check_grease(first)
+        expect(shares and is_grease(shares[0][0]) and shares[0][1] == 1, 'no GREASE key share leads %s' % shares)
+        shares = shares[1:]
     expect([CODEPOINTS.get(code) for code, _ in shares] == list(offered),
            'ClientHello shares %s, expected %s' % (shares, offered))
     for code, length in shares:
@@ -193,6 +242,8 @@ def check_wire(flights, group, retry, offered):
         expect(answer[0][1] == 0, 'a HelloRetryRequest carries a share')
         _, _, second = key_shares(flights[2][1])
         expect(second == [(GROUPS[group][0], GROUPS[group][1])], 'the retried ClientHello shares %s' % second)
+        if greased:
+            expect(grease(flights[2][1]) == first, 'the retried ClientHello changed its GREASE values')
         _, again, answer = key_shares(flights[3][1])
         expect(not again, 'a second HelloRetryRequest')
     expect(answer == [(GROUPS[group][0], GROUPS[group][2])],
@@ -222,7 +273,7 @@ def cases(cerid_peer, openssl_peer):
     def cerid_client(groups, server_groups, group, retry, offered):
         client, server, flights = run(cerid(cerid_peer, 'client', groups, CLIENT_SEED, server_public),
                                       openssl(openssl_peer, 'server', server_groups, SERVER_SEED))
-        check_wire(flights, group, retry, offered)
+        check_wire(flights, group, retry, offered, True)
         check_established(client, server, group, retry, PING)
         expect(client.get('peer_key_id') == key_id(server_public), 'cerid pinned another key')
 
@@ -230,7 +281,7 @@ def cases(cerid_peer, openssl_peer):
         client, server, flights = run(
             openssl(openssl_peer, 'client', groups, CLIENT_SEED, server_public),
             cerid(cerid_peer, 'server', server_groups, SERVER_SEED, client_public if mutual else None))
-        check_wire(flights, group, retry, offered)
+        check_wire(flights, group, retry, offered, False)
         check_established(server, client, group, retry, OPENSSL_PING)
         expect(client.get('peer_ok'), 'openssl did not find the pinned key')
         expected = key_id(client_public) if mutual else '0' * 64

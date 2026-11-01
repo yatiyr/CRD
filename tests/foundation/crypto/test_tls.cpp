@@ -51,6 +51,8 @@ constexpr u8 kCertificateRequired   = 116U;
 constexpr u8 kRecordChangeCipherSpec = 20U;
 constexpr u8 kRecordHandshake       = 22U;
 constexpr u16 kKeyShareExtension    = 51U;
+constexpr u16 kSupportedGroupsExtension   = 10U;
+constexpr u16 kSupportedVersionsExtension = 43U;
 
 // A signing key from a fixed seed (an ECDSA scalar of 1..n-1: the bytes 1, 2, 3, ...).
 void make_key(SigningKey& key, AlgorithmId algorithm, u8 salt)
@@ -205,6 +207,12 @@ void exchange(Endpoint& client, Endpoint& server, usize size)
     CHECK(std::memcmp(at_client.data(), message.data(), size) == 0);
 }
 
+// RFC 8701 section 2's reserved values, read independently of the provider: 0x0A0A, 0x1A1A ... 0xFAFA.
+constexpr bool is_grease(u16 value)
+{
+    return (value & 0x0F0FU) == 0x0A0AU && (value >> 12U) == ((value >> 4U) & 0x0FU);
+}
+
 u16 be16(const u8* p)
 {
     return static_cast<u16>((p[0] << 8U) | p[1]);
@@ -222,11 +230,10 @@ struct Share
     ConstSpan<u8>    bytes;
 };
 
-// The key shares of the first handshake message of a flight (a ClientHello, a ServerHello or a HelloRetryRequest),
-// read with the RFC 9846 section 4 layout. A HelloRetryRequest's key_share holds only the selected group (empty bytes).
-usize read_shares(const Bytes& flight, Share (&out)[4])
+// The first handshake message of a flight (a ClientHello, a ServerHello or a HelloRetryRequest), header included; a
+// change_cipher_spec record (middlebox compatibility, RFC 9846 appendix D.4) may come first.
+ConstSpan<u8> first_hello(const Bytes& flight)
 {
-    // A change_cipher_spec record (middlebox compatibility, RFC 9846 appendix D.4) may come first.
     usize record = 0U;
     while (record + 5U <= flight.size() && flight[record] == kRecordChangeCipherSpec)
     {
@@ -237,47 +244,139 @@ usize read_shares(const Bytes& flight, Share (&out)[4])
     const u8*   message = flight.data() + record + 5U;
     const usize length  = be24(message + 1U);
     REQUIRE(record + 5U + 4U + length <= flight.size());
-    const bool client_hello = message[0] == 1U;
-    REQUIRE((client_hello || message[0] == 2U));
-    usize at = 4U + 2U + 32U;             // header, legacy_version, random
-    at += 1U + message[at];               // legacy_session_id
-    if (client_hello)
+    REQUIRE((message[0] == 1U || message[0] == 2U));
+    return ConstSpan<u8>(message, 4U + length);
+}
+
+// Where a hello's cipher_suites (a ClientHello's list, a ServerHello's one suite) start, after the header,
+// legacy_version, random and legacy_session_id (RFC 9846 section 4.1).
+usize cipher_suites_at(ConstSpan<u8> hello)
+{
+    const usize at = 4U + 2U + 32U;
+    return at + 1U + hello[at];
+}
+
+// Calls `visit(type, body)` for each extension of a hello, read with the RFC 9846 section 4.1 layout.
+template <typename Visit>
+void for_each_extension(ConstSpan<u8> hello, const Visit& visit)
+{
+    usize at = cipher_suites_at(hello);
+    if (hello[0] == 1U)
     {
-        at += 2U + be16(message + at);    // cipher_suites
-        at += 1U + message[at];           // legacy_compression_methods
+        at += 2U + be16(hello.data() + at);  // cipher_suites
+        at += 1U + hello[at];                // legacy_compression_methods
     }
     else
     {
-        at += 2U + 1U;                    // cipher_suite, legacy_compression_method
+        at += 2U + 1U;                       // cipher_suite, legacy_compression_method
     }
-    const usize end   = 4U + length;
-    usize       count = 0U;
-    at += 2U;                             // extensions length
-    while (at + 4U <= end)
+    at += 2U;                                // extensions length
+    while (at + 4U <= hello.size())
     {
-        const u16   type = be16(message + at);
-        const usize size = be16(message + at + 2U);
-        const u8*   body = message + at + 4U;
+        const u16   type = be16(hello.data() + at);
+        const usize size = be16(hello.data() + at + 2U);
+        REQUIRE(at + 4U + size <= hello.size());
+        visit(type, hello.subspan(at + 4U, size));
         at += 4U + size;
+    }
+    REQUIRE(at == hello.size());
+}
+
+// The key shares of a flight's hello. A HelloRetryRequest's key_share holds only the selected group (empty bytes). A
+// ClientHello's GREASE share (RFC 8701) is left to read_grease.
+usize read_shares(const Bytes& flight, Share (&out)[4])
+{
+    const ConstSpan<u8> hello        = first_hello(flight);
+    const bool          client_hello = hello[0] == 1U;
+    usize               count        = 0U;
+    for_each_extension(hello, [&](u16 type, ConstSpan<u8> body)
+    {
         if (type != kKeyShareExtension)
         {
-            continue;
+            return;
         }
         if (!client_hello)
         {
-            const bool retry = size == 2U;
-            out[count++]     = Share{be16(body), retry ? ConstSpan<u8>() : ConstSpan<u8>(body + 4U, be16(body + 2U))};
-            continue;
+            const bool retry = body.size() == 2U;
+            out[count++] = Share{be16(body.data()), retry ? ConstSpan<u8>() : body.subspan(4U, be16(body.data() + 2U))};
+            return;
         }
-        for (usize share = 2U; share + 4U <= size && count < 4U; )
+        for (usize share = 2U; share + 4U <= body.size() && count < 4U;)
         {
-            const usize bytes = be16(body + share + 2U);
-            out[count++]      = Share{be16(body + share), ConstSpan<u8>(body + share + 4U, bytes)};
+            const u16   group = be16(body.data() + share);
+            const usize bytes = be16(body.data() + share + 2U);
+            if (!is_grease(group))
+            {
+                out[count++] = Share{group, body.subspan(share + 4U, bytes)};
+            }
             share += 4U + bytes;
         }
-    }
-    REQUIRE(at == end);
+    });
     return count;
+}
+
+// The GREASE values (RFC 8701) of a ClientHello, field by field: the first one in each list, 0 where there is none.
+struct Grease
+{
+    u16   cipher_suite    = 0U;
+    u16   group           = 0U;  // supported_groups
+    u16   version         = 0U;  // supported_versions
+    u16   key_share       = 0U;  // a key share's group
+    usize key_share_bytes = 0U;
+    u16   extensions[4]   = {};  // extension types, in hello order
+    usize extension_bytes[4] = {};
+    usize extension_count = 0U;
+};
+
+// The first GREASE value of a list of 16-bit values.
+u16 grease_in(ConstSpan<u8> values)
+{
+    for (usize at = 0U; at + 2U <= values.size(); at += 2U)
+    {
+        if (is_grease(be16(values.data() + at)))
+        {
+            return be16(values.data() + at);
+        }
+    }
+    return 0U;
+}
+
+Grease read_grease(const Bytes& flight)
+{
+    const ConstSpan<u8> hello = first_hello(flight);
+    REQUIRE(hello[0] == 1U);
+    Grease      grease;
+    const usize suites   = cipher_suites_at(hello);
+    grease.cipher_suite  = grease_in(hello.subspan(suites + 2U, be16(hello.data() + suites)));
+    for_each_extension(hello, [&](u16 type, ConstSpan<u8> body)
+    {
+        if (is_grease(type))
+        {
+            REQUIRE(grease.extension_count < 4U);
+            grease.extension_bytes[grease.extension_count] = body.size();
+            grease.extensions[grease.extension_count++]    = type;
+        }
+        else if (type == kSupportedGroupsExtension)
+        {
+            grease.group = grease_in(body.subspan(2U));
+        }
+        else if (type == kSupportedVersionsExtension)
+        {
+            grease.version = grease_in(body.subspan(1U));
+        }
+        else if (type == kKeyShareExtension)
+        {
+            for (usize share = 2U; share + 4U <= body.size(); share += 4U + be16(body.data() + share + 2U))
+            {
+                if (grease.key_share == 0U && is_grease(be16(body.data() + share)))
+                {
+                    grease.key_share       = be16(body.data() + share);
+                    grease.key_share_bytes = be16(body.data() + share + 2U);
+                }
+            }
+        }
+    });
+    return grease;
 }
 
 // The hybrid groups' layout (draft-ietf-tls-ecdhe-mlkem, RFC 10024): X25519MLKEM768 puts ML-KEM first, the SecP groups
@@ -461,6 +560,78 @@ TEST_CASE("TLS: a server whose preferred group has no share asks for one", "[cry
         CHECK(client.session.group() == retry.wanted);
         CHECK(server.session.group() == retry.wanted);
     }
+}
+
+// RFC 8701 (ietf.grease): every build's ClientHello carries a reserved value in its cipher suites, supported groups,
+// supported versions and key shares (a one-byte share) and two reserved extensions (the first empty, the second one
+// byte), chosen per connection; a server ignores them and never negotiates one. A ClientHello sent again after a
+// HelloRetryRequest keeps the first one's values (RFC 9846 section 4.1.2 allows only the listed changes) and shares
+// only the group asked for.
+TEST_CASE("TLS: a client GREASEs every hello, a retried hello keeps its values and a server ignores them",
+          "[crypto][tls][net-2]")
+{
+    const auto check_hello = [](const Grease& grease)
+    {
+        CHECK(is_grease(grease.cipher_suite));
+        CHECK(is_grease(grease.group));
+        CHECK(is_grease(grease.version));
+        REQUIRE(grease.extension_count == 2U);
+        CHECK(grease.extensions[0] != grease.extensions[1]);
+        CHECK(grease.extension_bytes[0] == 0U);
+        CHECK(grease.extension_bytes[1] == 1U);
+    };
+
+    constexpr usize connections = 8U;
+    u16             suites[connections];
+    for (usize i = 0U; i < connections; ++i)
+    {
+        Endpoint client;
+        Endpoint server;
+        setup(client, server, Options{});
+        const Bytes  hello  = drain(client.session);
+        const Grease grease = read_grease(hello);
+        check_hello(grease);
+        CHECK(is_grease(grease.key_share));
+        CHECK(grease.key_share_bytes == 1U);
+        suites[i] = grease.cipher_suite;
+        REQUIRE(server.session.receive(ConstSpan<u8>(hello.data(), hello.size())) == TlsError::None);
+        establish(client, server);
+        CHECK(client.session.group() == AlgorithmId::X25519Mlkem768);
+        CHECK_FALSE(server.session.alert_sent().present);
+        exchange(client, server, 100U);
+    }
+    // Eight connections drawing the same one of sixteen values: 16^-7.
+    CHECK(std::any_of(suites + 1, suites + connections, [&](u16 suite) { return suite != suites[0]; }));
+
+    constexpr AlgorithmId client_groups[] = {AlgorithmId::Secp256r1Mlkem768, AlgorithmId::X25519Mlkem768};
+    constexpr AlgorithmId server_groups[] = {AlgorithmId::X25519Mlkem768};
+    Endpoint              client;
+    Endpoint              server;
+    Options               options;
+    options.client_groups = client_groups;
+    options.server_groups = server_groups;
+    setup(client, server, options);
+    const Bytes  hello = drain(client.session);
+    const Grease first = read_grease(hello);
+    REQUIRE(server.session.receive(ConstSpan<u8>(hello.data(), hello.size())) == TlsError::None);
+    const Bytes request = drain(server.session);
+    REQUIRE(client.session.receive(ConstSpan<u8>(request.data(), request.size())) == TlsError::None);
+    const Bytes  again  = drain(client.session);
+    const Grease second = read_grease(again);
+    check_hello(second);
+    CHECK(second.cipher_suite == first.cipher_suite);
+    CHECK(second.group == first.group);
+    CHECK(second.version == first.version);
+    CHECK(second.extensions[0] == first.extensions[0]);
+    CHECK(second.extensions[1] == first.extensions[1]);
+    CHECK(second.key_share == 0U);
+    Share shares[4];
+    REQUIRE(read_shares(again, shares) == 1U);
+    CHECK(shares[0].group == iana::kGroupX25519mlkem768);
+    REQUIRE(server.session.receive(ConstSpan<u8>(again.data(), again.size())) == TlsError::None);
+    establish(client, server);
+    CHECK(client.session.hello_retry());
+    CHECK(server.session.group() == AlgorithmId::X25519Mlkem768);
 }
 
 TEST_CASE("TLS: no common group fails with handshake_failure", "[crypto][tls][net-2]")
