@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review INT
 format = "cerid-rules/1"
 jurisdiction = "INT"
-generation = 6
+generation = 7
 register = "2026-11-01"
 
 [[scope]]
@@ -49,7 +49,7 @@ state = "planned"
 id = "int.wassenaar"
 kind = "obligation"
 topic = "export-control"
-state = "planned"
+state = "implemented"
 title = "Wassenaar Arrangement dual-use list"
 instrument = "Wassenaar Arrangement List of Dual-Use Goods and Technologies"
 article = "Category 5 Part 2"

@@ -5,7 +5,8 @@ A register's `review` holds a calendar (the IETF meetings for the standards doma
 events and dated effective days for the legal domain), the runs recorded so far and `next`, the day
 check-registers.review_due computes from them; the guard fails once that day passes. A review run:
 
-  due      prints the next review the register owes, why, and the calendar events still unconfirmed.
+  due      prints the next review the register owes, why, the calendar events still unconfirmed and the instruments
+           the scans still owed read.
   plan     writes the list of primary sources a refresh reads: the RFC Editor record of every RFC, the IETF datatracker
            record of every draft and the IANA registry files holding the register's codepoints, or, for the legal
            domain, the official primary text of every instrument, plus the items that are read by hand. With
@@ -25,7 +26,7 @@ check-registers.review_due computes from them; the guard fails once that day pas
            the entries it changed) and moves `next`.
   read     records the consolidated version, day and SHA-256 of the instruments a person read from a fetch the run
            compared (legal domain): the entries' articles were read against their obligations, which the --ref
-           document records.
+           document records; each is dropped from the calendar events that schedule its reading.
 
   python scripts/register-review.py due [--register R] [--today YYYY-MM-DD]
   python scripts/register-review.py plan --out sources.json [--scan full]
@@ -1806,6 +1807,11 @@ def command_due(args, root):
     for event in review['calendar']:
         if not event['verified']:
             print(f'  calendar: {event["event"]} on {event["day"]} is unverified; the next review confirms it')
+    latest = max(_registers.parse_day(run['day']) for run in review['runs'])
+    for event in review['calendar']:
+        if event.get('reads') and _registers.parse_day(event['day']) > latest:
+            print(f'  calendar: the scan after {event["event"]} ({event["day"]}) reads {len(event["reads"])} '
+                  'instruments not yet read')
     if due < today_of(args):
         print('  the review is overdue: plan, fetch and compare now')
     return 0
@@ -1962,6 +1968,12 @@ def command_read(args, root):
         entry['instrument']['consolidated'] = {'version': version, 'read': manifest['day'], 'sha256': digest}
         entry['source'] = {'ref': ref, 'read': manifest['day'], 'verified': True}
         print(f'{entry["id"]}: read {entry["instrument"]["name"]} at {version} on {manifest["day"]}')
+    recorded = {entry['id'] for entry, _, _ in readings}
+    for event in register['review']['calendar']:
+        if 'reads' in event:
+            event['reads'] = [entry_id for entry_id in event['reads'] if entry_id not in recorded]
+            if not event['reads']:
+                del event['reads']
     write_json(path, register)
     return 0
 

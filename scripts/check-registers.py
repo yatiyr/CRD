@@ -18,14 +18,17 @@ The guard fails, among the format errors, on:
   - a pinned RFC that the snapshot records as obsoleted;
   - an entry or the register past its review date, or a source read after the snapshot or after today;
   - a review schedule whose `next` is not the day review_due computes from its calendar and recorded runs (the
-    scheduled re-research of scripts/register-review.py), or whose calendar names no event after the latest run;
+    scheduled re-research of scripts/register-review.py), or whose calendar names no event after the latest run, and
+    in the legal domain a calendar event whose `reads` (the instruments its scan reads) names an unknown entry, one
+    twice or one already read;
   - an owning module neither registered nor in the capability registry, an unknown ROADMAP row, a governed row no
     entry names, an entry still planned when every one of its rows is Done, an implemented entry without existing
     evidence or with an unverified codepoint, a verified codepoint of a registry with a "Recommended" column
     (RFC 9847) that does not record IANA's value, and a pinned entry with a codepoint IANA discourages ("D");
   - in the legal domain: a binding obligation (in force, not past its sunset, and applying to a live scope) without an
     active check; a primary source outside its jurisdiction's official hosts; an entry whose rows are all Done, or
-    which is implemented, before its instrument was read in its consolidated text; a scope still planned when its
+    which is implemented, before its instrument was read in its consolidated text, unless a scan the schedule still
+    owes reads it (user decision 2026-11-01: reading follows the review cadence); a scope still planned when its
     rows are Done; a topic without a Turkish entry; an outstanding counsel item (an entry or an export's head
     classification whose counsel is needed and not yet reviewed) that no open counsel review asks about, an open
     review asking about an item whose counsel is not outstanding, and a counsel answer that no answered review records
@@ -67,6 +70,7 @@ ID = re.compile(r'^[a-z0-9]+(?:[.-][a-z0-9]+)*$')
 DATE = re.compile(r'^\d{4}(?:-\d{2}(?:-\d{2})?)?$')
 REGISTER_KEYS = {'schema', 'domain', 'about', 'snapshot', 'review', 'governed_rows', 'entries'}
 REVIEW_KEYS = {'cadence', 'next', 'lag_days', 'full_every_days', 'calendar', 'runs'}
+EVENT_KEYS = {'event', 'day', 'scan', 'verified'}
 SCANS = {'light', 'full'}
 CAPABILITY_OWNERS = 'cmake/capability-owners.json'
 ENTRY_KEYS = {'id', 'title', 'kind', 'state', 'owner', 'rows', 'source', 'review', 'evidence', 'deprecation', 'note'}
@@ -184,6 +188,18 @@ def owed_runs(review):
     runs = [(parse_day(run['day']), run) for run in review['runs']]
     latest_full = max(day for day, run in runs if run['scan'] == 'full')
     return [(day, run) for day, run in runs if run['scan'] == 'light' and run['triggers'] and day > latest_full]
+
+
+def scheduled_reads(review):
+    """The entries whose instruments a scan the schedule still owes reads: the `reads` of every calendar event after
+    the latest run (a run covers the events up to its day). Empty for a malformed schedule, which review_errors
+    names."""
+    try:
+        latest = max(parse_day(run['day']) for run in review['runs'])
+        return {entry_id for event in review['calendar'] if parse_day(event['day']) > latest
+                for entry_id in event.get('reads', [])}
+    except (KeyError, TypeError, ValueError):
+        return set()
 
 
 class Context:
@@ -462,6 +478,7 @@ def legal_entry_errors(where, entry, register, context):
         return errors
     check = entry['check']
     read = entry['instrument']['consolidated'] is not None
+    owed = not read and entry.get('id') in scheduled_reads(register.get('review'))
     if state in PINNED and sunset and sunset <= context.today:
         errors.append(f'{where}: {entry["instrument"]["name"]} ended on {entry["sunset"]}; mark the entry deprecated')
     live = live_scopes(entry, register)
@@ -471,13 +488,13 @@ def legal_entry_errors(where, entry, register, context):
     if state == 'implemented':
         if check['state'] != 'active':
             errors.append(f'{where}: implemented, so its check is active')
-        if not read:
+        if not read and not owed:
             errors.append(f'{where}: implemented before {entry["instrument"]["name"]} was read in its consolidated '
-                          'text from the primary source')
+                          'text from the primary source, and no scan still owed reads it')
     rows = entry.get('rows') or []
-    if not read and rows and all(context.row_state(row) == 'Done' for row in rows):
+    if not read and not owed and rows and all(context.row_state(row) == 'Done' for row in rows):
         errors.append(f'{where}: every row ({", ".join(rows)}) is Done, but {entry["instrument"]["name"]} was never '
-                      'read in its consolidated text from the primary source')
+                      'read in its consolidated text from the primary source, and no scan still owed reads it')
     return errors
 
 
@@ -632,9 +649,31 @@ def topic_errors(entries):
     return [f'legal register: topic {topic} has no Turkish ({TURKEY}) entry' for topic in missing]
 
 
-def review_errors(where, review, entries, context):
-    """The schedule: a calendar of the events after which a scan is owed, the recorded runs (the first full
-    research included) and `next`, which must be the day review_due computes and not be past."""
+def calendar_read_errors(where, domain, event, entries):
+    """An event's `reads`: the legal instruments not yet read in their consolidated text that its scan reads, each
+    once; recording a reading drops the entry (scripts/register-review.py read)."""
+    name = f'{where}: calendar {event["event"]}'
+    reads = event['reads']
+    if domain != 'legal':
+        return [f'{name}: reads names the instruments a legal scan reads; a standards scan reads every record']
+    if not isinstance(reads, list) or not reads or not all(isinstance(entry_id, str) for entry_id in reads) or \
+            len(set(reads)) != len(reads):
+        return [f'{name}: reads lists the entries whose instruments the scan reads, each once']
+    instruments = {entry.get('id'): entry.get('instrument') for entry in entries if isinstance(entry, dict)}
+    errors = []
+    for entry_id in reads:
+        instrument = instruments.get(entry_id)
+        if not isinstance(instrument, dict):
+            errors.append(f'{name}: reads {entry_id}, which is no instrument of the register')
+        elif instrument.get('consolidated') is not None:
+            errors.append(f'{name}: reads {entry_id}, whose text was read; drop it')
+    return errors
+
+
+def review_errors(where, domain, review, entries, context):
+    """The schedule: a calendar of the events after which a scan is owed (in the legal domain, with the instruments
+    its scan reads), the recorded runs (the first full research included) and `next`, which must be the day
+    review_due computes and not be past."""
     if not isinstance(review, dict) or set(review) != REVIEW_KEYS:
         return [f'{where}: review has {", ".join(sorted(REVIEW_KEYS))}']
     errors = date_errors(where, 'review.next', review['next'])
@@ -646,11 +685,14 @@ def review_errors(where, review, entries, context):
         return errors + [f'{where}: review.calendar and review.runs are non-empty lists']
     previous = None
     for event in calendar:
-        if not isinstance(event, dict) or set(event) != {'event', 'day', 'scan', 'verified'} or \
+        if not isinstance(event, dict) or set(event) - {'reads'} != EVENT_KEYS or \
                 not isinstance(event.get('event'), str) or event.get('scan') not in SCANS or \
                 not isinstance(event.get('verified'), bool):
-            errors.append(f'{where}: a calendar event has event, day, scan (light or full) and verified')
+            errors.append(f'{where}: a calendar event has event, day, scan (light or full) and verified, and in the '
+                          'legal domain may name the instruments its scan reads')
             continue
+        if 'reads' in event:
+            errors += calendar_read_errors(where, domain, event, entries)
         errors += date_errors(where, f'calendar {event["event"]} day', event['day'])
         if previous and parse_day(event['day']) and parse_day(event['day']) <= previous:
             errors.append(f'{where}: calendar events are in strictly increasing day order ({event["event"]})')
@@ -1066,7 +1108,8 @@ def register_errors(domain, register, context):
         if parse_day(snapshot['date']) and parse_day(snapshot['date']) > context.today:
             errors.append(f'{where}: snapshot.date {snapshot["date"]} is after today')
     entries = register.get('entries')
-    errors += review_errors(where, register.get('review'), entries if isinstance(entries, list) else [], context)
+    errors += review_errors(where, domain, register.get('review'), entries if isinstance(entries, list) else [],
+                            context)
     if not isinstance(entries, list) or not entries:
         return errors + [f'{where}: entries is a non-empty list']
     seen = set()

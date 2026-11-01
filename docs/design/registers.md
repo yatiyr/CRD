@@ -114,9 +114,13 @@ Rules of the legal domain, beside the common ones:
   its own), so a planned scope with a Done row fails, and a live scope names its evidence.
 - **Primary sources are official.** `primary` is https on one of the jurisdiction's hosts (or a subdomain); a law
   firm's or a news summary is a research source (`source`), never the primary.
-- **Reading precedes closing.** An entry whose rows are all Done, or which is implemented, has its consolidated text
-  read (its version, day and digest); a read entry is verified and cites the instrument's own document, not the home
-  page of its journal or regulator.
+- **Reading precedes closing, or is scheduled.** An entry whose rows are all Done, or which is implemented, has its
+  consolidated text read (its version, day and digest), unless a scan the schedule still owes reads it: a calendar
+  event after the latest run names it in `reads`, so the reading follows the review cadence and fails the guard once
+  that scan is recorded without it. A read entry is verified and cites the instrument's own document, not the home
+  page of its journal or regulator. The user decided on 2026-11-01 that COMPLY.0 and COMPLY.1 close at engineering
+  depth: every instrument then not yet read is read by the fourth-quarter review of 2026, the register's one dated
+  refresh ([session](../sessions/2026-11-01-comply-engineering-close.md)).
 - **Counsel never blocks, and is never guessed.** An entry is implemented, and its rows close, once its engineering
   is proven; an outstanding counsel item is an open question in a [counsel review](#counsel-reviews), never a missing
   clause (user decision 2026-11-01). Nothing in the register claims legal sign-off: a rule whose counsel is outstanding
@@ -182,8 +186,9 @@ engine.
   CHIR projection then lowers to the same generation.
 - **Swapped live.** `crd::comply::RuleStore` holds one generation per jurisdiction. `apply` decodes and validates
   the whole text before anything changes (bounded sizes, every key known and typed, days real calendar days, scopes
-  unique and every `applies_to` naming one, the enumerations closed) and adopts it only above the current number:
-  a lower number is a rollback, the same number with other bytes (XXH3-64) a conflict and the same bytes already
+  unique and every `applies_to` naming one, the enumerations closed, an implemented rule's check active, while its
+  text may wait on a scheduled reading and its counsel be outstanding) and adopts it only above the current number: a
+  lower number is a rollback, the same number with other bytes (XXH3-64) a conflict and the same bytes already
   current, all refused with the store unchanged. A query runs under the store's lock, so it sees one whole generation
   of each jurisdiction, never a mix. Authenticity on delivery (a signed generation from the publisher) is the
   envelope NET.2 gives every signed artefact, through `crd-crypto`.
@@ -494,7 +499,7 @@ itself. The register's `review` holds it as data:
 | `cadence` | The cadence in words |
 | `lag_days` | Days after a calendar event by which its scan is owed (25: minutes and revised drafts are out) |
 | `full_every_days` | Days after the latest full run by which the next full re-research is owed (365) |
-| `calendar` | The events that owe a scan, in day order: `event`, `day` (its last day), `scan` (`light` or `full`), `verified` (false for a day taken from knowledge, which the next review confirms) |
+| `calendar` | The events that owe a scan, in day order: `event`, `day` (its last day), `scan` (`light` or `full`), `verified` (false for a day taken from knowledge, which the next review confirms) and, in the legal domain, `reads` (the entries whose instruments not yet read its scan reads, each once; recording a reading drops one) |
 | `runs` | Every run, in day order: `day`, `scan`, `ref` (its report or research document) and `triggers` (the pinned entries whose status it found changed) |
 | `next` | The due day `review_due` computes, which the guard holds |
 
@@ -507,7 +512,8 @@ EUR-Lex or Steamworks change found between them is recorded as a run with its tr
 
 [scripts/register-review.py](../../scripts/register-review.py) runs a review:
 
-1. `due` prints the review owed, why, and the calendar events still unverified.
+1. `due` prints the review owed, why, the calendar events still unverified and how many instruments each scan still
+   owed reads.
 2. `plan --out <file>` writes the primary sources a refresh reads: the RFC Editor record
    (`rfc-editor.org/rfc/rfcNNNN.json`) of every RFC, the IETF datatracker record
    (`datatracker.ietf.org/doc/<draft>/doc.json`) of every draft and the IANA registry files
@@ -540,7 +546,8 @@ EUR-Lex or Steamworks change found between them is recorded as a run with its tr
 6. `read --fetched <dir> --ref <document#anchor> --entry <id> ...` (legal register) records the instruments a person
    read from the fetch the applied run compared (the register's snapshot day): each entry's `consolidated` version
    (its host's reader), the fetch day and the document's SHA-256, and its `source` verified and cited by `--ref`, the
-   document recording what was read against each obligation. An entry whose document was not read, is unreadable or
+   document recording what was read against each obligation; each entry recorded leaves the calendar's `reads`.
+   An entry whose document was not read, is unreadable or
    sits on a host without a reader is refused, as is one whose version names an act the consolidated text lacks that
    was not read as published, and a refusal writes nothing.
 

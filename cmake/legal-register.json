@@ -31,10 +31,81 @@
         "verified": false
       },
       {
-        "event": "Quarterly review, fourth quarter of 2026",
-        "day": "2026-12-31",
+        "event": "UN Darfur measures end unless the Security Council renews them (resolution 2830 (2026))",
+        "day": "2026-12-11",
         "scan": "light",
         "verified": true
+      },
+      {
+        "event": "Quarterly review, fourth quarter of 2026, with the refresh of every instrument not yet read (user order of 2026-11-01: COMPLY.0 and COMPLY.1 close at engineering depth)",
+        "day": "2026-12-31",
+        "scan": "light",
+        "verified": true,
+        "reads": [
+          "tr.dual-use-export",
+          "tr.5651.content",
+          "tr.5651.game-platforms",
+          "tr.5651.game-platform-ratings",
+          "tr.5651.icta-rules",
+          "tr.5651.under-15",
+          "tr.btk.personal-data",
+          "tr.kvkk.ai-recommendations",
+          "tr.ai-bill",
+          "eu.edpb.pseudonymisation",
+          "eu.nis2",
+          "eu.pld",
+          "eu.ai-act.transparency",
+          "eu.ai-act.literacy-and-prohibitions",
+          "eu.ai-act.gpai",
+          "eu.dsa",
+          "eu.dsm-copyright",
+          "eu.eaa",
+          "eu.cpc.virtual-currencies",
+          "eu.consumer-rights",
+          "eu.digital-fairness-act",
+          "eu.eecc",
+          "eu.avmsd",
+          "gb.aadc",
+          "gb.osa",
+          "gb.ofcom-codes",
+          "gb.psti",
+          "gb.equality-act",
+          "us.coppa",
+          "us-ca.ccpa",
+          "us.section-508",
+          "us.ada",
+          "us.cvaa",
+          "us.secure-software-attestation",
+          "us.dmca",
+          "us-tx.app-store-accountability",
+          "us-ut.app-store-accountability",
+          "br.lgpd",
+          "br.eca-digital",
+          "cn.pipl",
+          "cn.synthetic-content-labelling",
+          "cn.cryptography-law",
+          "cn.commercial-cryptography",
+          "jp.appi",
+          "ca.pipeda",
+          "au.online-safety",
+          "int.wassenaar",
+          "int.iarc",
+          "int.pegi",
+          "int.esrb",
+          "int.open-source-licences",
+          "platform.apple-sdk-minimum",
+          "platform.apple-privacy-manifest",
+          "platform.apple-age-rating",
+          "platform.apple-accessibility-labels",
+          "platform.play-target-api",
+          "platform.play-16kb-pages",
+          "platform.android-developer-verification",
+          "platform.play-data-safety",
+          "platform.cab-code-signing",
+          "platform.steamworks",
+          "platform.epic",
+          "platform.microsoft-store"
+        ]
       },
       {
         "event": "Quarterly review, first quarter of 2027",
@@ -8568,7 +8639,7 @@
       "title": "Wassenaar Arrangement dual-use list",
       "kind": "obligation",
       "topic": "export-control",
-      "state": "planned",
+      "state": "implemented",
       "owner": "crypto",
       "rows": [
         "COMPLY.1"
@@ -8602,7 +8673,10 @@
         "verified": false
       },
       "review": "2027-01-25",
-      "evidence": [],
+      "evidence": [
+        "scripts/gen-crypto-inventory.py",
+        "scripts/test-repository-tools.py"
+      ],
       "deprecation": null
     },
     {
@@ -11472,9 +11546,9 @@
       "sha256": "5e37dcb85f057d6ee6ce1514b646a03585f02d40ea2256262b10e06ce0dd26bb"
     },
     "INT": {
-      "generation": 6,
+      "generation": 7,
       "reviewed": "2026-11-01",
-      "sha256": "2ecb4a27522698e8848c40dc714717d7d545bea748ff2758d356d5f5f6263d2e"
+      "sha256": "05e0d83220de1ff65d8515d205b8471d62a9485d5d97d0f1f24b22063df6f60b"
     },
     "JP": {
       "generation": 2,

@@ -8,7 +8,7 @@
 //
 // Oracles, none of them the decoder's or the store's own verdict:
 //   * an accepted generation satisfies the contract's invariants (named scopes, unique ids, real and ordered days, no
-//     claimed proof without an active check, a read text and answered counsel) and, printed again in the canonical
+//     claimed proof without an active check) and, printed again in the canonical
 //     layout restated here from scripts/gen-comply-rules.py, decodes to the same generation;
 //   * a model of monotonic adoption that compares whole texts (not digests) decides every apply's exact result and
 //     every jurisdiction's number after it;
@@ -224,8 +224,7 @@ void check_invariants(const RuleGeneration& generation)
         CRD_FUZZ_REQUIRE(rule.sunset == kNoDay || (real_day(rule.sunset) && rule.sunset > rule.effective));
         CRD_FUZZ_REQUIRE((rule.counsel == Counsel::Reviewed) == (rule.counsel_reviewed != kNoDay));
         CRD_FUZZ_REQUIRE(rule.counsel_reviewed == kNoDay || real_day(rule.counsel_reviewed));
-        CRD_FUZZ_REQUIRE(rule.state == RuleState::Planned ||
-                         (rule.check == CheckState::Active && rule.read && rule.counsel != Counsel::Needed));
+        CRD_FUZZ_REQUIRE(rule.state == RuleState::Planned || rule.check == CheckState::Active);
         CRD_FUZZ_REQUIRE(cont::StringView(rule.primary).starts_with("https://"));
     }
 }
@@ -303,7 +302,7 @@ RuleGeneration drawn(Reader& in)
     {
         rule.state = RuleState::Implemented;
         rule.check = CheckState::Active;
-        rule.read = true;
+        rule.read = (shape & 0x01U) == 0U; // a reading the register's schedule still owes leaves it unread
     }
     const u8 scopes = in.next() % 3U;
     if (scopes != 1U)

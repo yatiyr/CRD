@@ -6400,6 +6400,54 @@ class LegalRegister(RegisterFixture, unittest.TestCase):
                                                                                'reviewed': '2026-11-05'})]),
                                 'counsel.reviewed 2026-11-05 is after today')
 
+    def test_a_scan_still_owed_reads_what_a_closed_row_left_unread(self):
+        """User decision 2026-11-01: an instrument not yet read is read at the review cadence, by the scan a calendar
+        event owes, never as a clause of the row that implements its obligation."""
+        active = {'ref': 'tests/test_quic.cpp', 'name': 'crd-inventory-tests', 'state': 'active'}
+        proven = self.legal_entry(state='implemented', evidence=['tests/test_quic.cpp'], check=active)
+        closed = self.legal_entry(id='tr.kvkk.rights', rows=['DONE'], state='watch', effective=None)
+        quarterly = {'event': 'Quarterly review', 'day': '2027-09-30', 'scan': 'light', 'verified': True}
+
+        def owing(reads, earlier=None):
+            calendar = [dict(quarterly, reads=reads)] if earlier is None else \
+                [{'event': 'Covered', 'day': '2026-10-01', 'scan': 'light', 'verified': True, 'reads': earlier},
+                 quarterly]
+            return self.legal_register([proven, closed], review=self.schedule(next='2027-10-25', calendar=calendar))
+
+        code, output = self.run_legal(owing(['tr.kvkk.processing', 'tr.kvkk.rights']))
+        self.assertEqual(0, code, output)
+        self.assert_legal_fails(owing(['tr.kvkk.processing']),
+                                'tr.kvkk.rights: every row (DONE) is Done, but Law No. 6698 was never read in its '
+                                'consolidated text from the primary source, and no scan still owed reads it')
+        self.assert_legal_fails(owing(['tr.kvkk.rights']),
+                                'tr.kvkk.processing: implemented before Law No. 6698 was read in its consolidated text '
+                                'from the primary source, and no scan still owed reads it')
+        covered = owing(None, earlier=['tr.kvkk.processing', 'tr.kvkk.rights'])
+        self.assert_legal_fails(covered, 'tr.kvkk.rights: every row (DONE) is Done')
+        self.assert_legal_fails(covered, 'tr.kvkk.processing: implemented before Law No. 6698 was read')
+        verified = {'ref': 'docs/research.md#n83', 'read': '2026-10-27', 'verified': True}
+        read = self.legal_entry(id='tr.kvkk.read', instrument=self.instrument(consolidated=self.READ), source=verified)
+        cases = (
+            ([], 'calendar Quarterly review: reads lists the entries whose instruments the scan reads, each once'),
+            ('tr.kvkk.rights', 'reads lists the entries whose instruments the scan reads, each once'),
+            ([7], 'reads lists the entries whose instruments the scan reads, each once'),
+            (['tr.kvkk.rights', 'tr.kvkk.rights'], 'reads lists the entries whose instruments the scan reads, each'),
+            (['tr.nowhere'], 'calendar Quarterly review: reads tr.nowhere, which is no instrument of the register'),
+            (['tr.kvkk.read'], 'calendar Quarterly review: reads tr.kvkk.read, whose text was read; drop it'),
+        )
+        for reads, message in cases:
+            with self.subTest(message=message):
+                self.assert_legal_fails(self.legal_register([self.legal_entry(), read], review=self.schedule(
+                    next='2027-10-25', calendar=[dict(quarterly, reads=reads)])), message)
+        ietf = {'event': 'IETF 127', 'day': '2026-11-20', 'scan': 'light', 'verified': False,
+                'reads': ['quic.transport']}
+        self.assert_fails(self.register([self.entry()], review=self.schedule(calendar=[ietf])),
+                          'calendar IETF 127: reads names the instruments a legal scan reads; a standards scan reads '
+                          'every record')
+        self.assert_fails(self.register([self.entry()], review=self.schedule(calendar=[dict(ietf, note='x')])),
+                          'a calendar event has event, day, scan (light or full) and verified, and in the legal '
+                          'domain may name the instruments its scan reads')
+
     def test_every_outstanding_counsel_item_is_asked_about_in_one_open_review(self):
         question = {'entry': 'tr.kvkk.processing', 'question': 'Which Article 5 condition applies?'}
         review = {'id': 'counsel.2026-11-01', 'title': 'First review', 'opened': '2026-11-01', 'answered': None,
@@ -8355,13 +8403,22 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)
             apple = self.instrument(jurisdiction='PLATFORM', primary='https://developer.apple.com/news/')
+            calendar = [{'event': 'Second quarter', 'day': '2027-06-30', 'scan': 'light', 'verified': True,
+                         'reads': ['tr.kvkk.processing']},
+                        {'event': 'Third quarter', 'day': '2027-09-30', 'scan': 'light', 'verified': True,
+                         'reads': ['tr.kvkk.rights', 'platform.apple']}]
             legal = self.legal_register([
                 self.legal_entry(),
                 self.legal_entry(id='tr.kvkk.rights', instrument=self.instrument(article='Article 11')),
-                self.legal_entry(id='platform.apple', instrument=apple)])
+                self.legal_entry(id='platform.apple', instrument=apple)],
+                review=self.schedule(next='2027-07-25', calendar=calendar))
             self.write_tree(root, self.register(self.entries()), legal)
             (root / 'docs' / 'reading.md').write_text('<a id="kvkk"></a>Read 6698.\n', encoding='utf-8')
             argv = ('--register', 'cmake/legal-register.json')
+            code, output = self.tool(root, *argv, 'due', today='2026-11-01')
+            self.assertEqual(0, code, output)
+            self.assertIn('the scan after Second quarter (2027-06-30) reads 1 instruments not yet read', output)
+            self.assertIn('the scan after Third quarter (2027-09-30) reads 2 instruments not yet read', output)
             self.assertEqual(0, self.tool(root, *argv, 'plan', '--out', str(root / 'sources.json'))[0])
             plan = json.loads((root / 'sources.json').read_text(encoding='utf-8'))
             routes = {'MevzuatNo=6698': self.MEVZUAT_HTML, 'developer.apple.com': '<html>news</html>'}
@@ -8402,6 +8459,9 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
                 self.assertEqual({'ref': 'docs/reading.md#kvkk', 'read': '2026-12-16', 'verified': True},
                                  entries[entry_id]['source'])
             self.assertIsNone(entries['platform.apple']['instrument']['consolidated'])
+            self.assertEqual([{'event': 'Second quarter', 'day': '2027-06-30', 'scan': 'light', 'verified': True},
+                              dict(calendar[1], reads=['platform.apple'])], register['review']['calendar'],
+                             'a reading recorded leaves the scans that scheduled it')
             checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
             self.assertEqual([], checked['legal'])
             code, output = self.tool(root, *argv, 'compare', *fetched, '--report', str(report))

@@ -403,15 +403,21 @@ TEST_CASE("comply: days, sunsets and counsel days are consistent", "[comply]")
 TEST_CASE("comply: an implemented rule cannot claim a proof the register would refuse", "[comply]")
 {
     check_refusal(with("check = \"active\"", "check = \"planned\""), ComplyError::BadValue, "state");
-    check_refusal(with("read = true", "read = false"), ComplyError::BadValue, "state");
-    check_refusal(with("counsel = \"reviewed\"\ncounsel_reviewed = \"2026-10-30\"",
-                       "counsel = \"needed\"\ncounsel_reviewed = \"\""),
-                  ComplyError::BadValue, "state");
     // A planned rule may already have an active check: it is still unproven.
     RuleGeneration generation;
     REQUIRE(decode_rules(with("check = \"planned\"", "check = \"active\""), generation).error == ComplyError::None);
     CHECK(proof_of(generation.rules[0]) == Proof::Unproven);
     CHECK(proof_of(generation.rules[1]) == Proof::Proven);
+    // Its engineering proven, an implemented rule whose text a scheduled scan still reads, with counsel outstanding,
+    // is proven: counsel never blocks, and every answer reports the unread text and the open counsel item.
+    const cont::String unread = with("read = true", "read = false");
+    const cont::String pending = with("counsel = \"reviewed\"\ncounsel_reviewed = \"2026-10-30\"",
+                                      "counsel = \"needed\"\ncounsel_reviewed = \"\"", unread);
+    RuleGeneration open;
+    REQUIRE(decode_rules(pending, open).error == ComplyError::None);
+    CHECK_FALSE(open.rules[1].read);
+    CHECK(open.rules[1].counsel == Counsel::Needed);
+    CHECK(proof_of(open.rules[1]) == Proof::Proven);
 }
 
 TEST_CASE("comply: the store adopts only newer generations, unchanged on every refusal", "[comply]")
@@ -633,8 +639,8 @@ TEST_CASE("comply: the committed generations decode, and Turkish law binds the c
         ++loaded;
     }
     CHECK(loaded == 11U);
-    // Nothing leaves a machine yet: every rule is planned, so every binding is unproven, and KVKK binds the crash
-    // pool in Turkey.
+    // Nothing leaves a machine yet: no rule of the crash pool is implemented, so every binding is unproven, and KVKK
+    // binds the crash pool in Turkey.
     const cont::Array<Binding> crash = query(store, "flow.crash-reports", "2026-11-01", {"TR", "EU"});
     bool kvkk = false;
     for (const Binding& binding : crash)
@@ -644,4 +650,17 @@ TEST_CASE("comply: the committed generations decode, and Turkish law binds the c
         kvkk = kvkk || cont::StringView(binding.rule.id) == "tr.kvkk.processing";
     }
     CHECK(kvkk);
+    // The Wassenaar classification is implemented with an active check (COMPLY.1), so distribution answers it as
+    // proven; its text is read by the scan its calendar event owes.
+    const cont::Array<Binding> exports = query(store, "channel.distribution", "2026-11-01", {"INT"});
+    u32 wassenaar = 0U;
+    for (const Binding& binding : exports)
+    {
+        if (cont::StringView(binding.rule.id) == "int.wassenaar")
+        {
+            CHECK(binding.proof == Proof::Proven);
+            ++wassenaar;
+        }
+    }
+    CHECK(wassenaar == 1U);
 }

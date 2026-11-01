@@ -220,12 +220,12 @@ private:
         return true;
     }
 
-    // An implemented rule is the register guard's implemented entry: an active check, its text read, and counsel
-    // answered when it was needed. A generation cannot claim a proof the register would refuse.
+    // An implemented rule is the register guard's implemented entry, whose check is active: a generation cannot claim
+    // a proof the register would refuse. Its text may still be read by a scan the register's schedule owes, and its
+    // counsel may be outstanding (counsel never blocks); every answer reports both.
     bool rule_proof(const node& table, const Rule& rule) noexcept
     {
-        if (rule.state == RuleState::Implemented &&
-            (rule.check != CheckState::Active || !rule.read || rule.counsel == Counsel::Needed))
+        if (rule.state == RuleState::Implemented && rule.check != CheckState::Active)
         {
             return refuse(ComplyError::BadValue, table.get("state"), "state");
         }
