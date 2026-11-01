@@ -1446,8 +1446,8 @@ TEST_CASE("D-007 B10: NEURAL MATERIAL -- CPU-trained 2D neural field rendered pe
             fclose(f);
         }
     };
-    write_bmp("D:/Dev/cerid/build/neural_material.bmp", false);
-    write_bmp("D:/Dev/cerid/build/neural_target.bmp", true);
+    write_bmp(CRD_REPO_DIR "/build/neural_material.bmp", false);
+    write_bmp(CRD_REPO_DIR "/build/neural_target.bmp", true);
     rb->unmap();
     std::printf("[neural-material] trained %d->32->32->3 field, %dx%d render on tensor path -> PSNR %.2f dB (neural_material.bmp)\n", mlp.in_dim, dim, dim, psnr);
     CHECK(psnr > 32.0); // the neural field reproduces the target faithfully (Adam-trained; fp16 tensor render tracks the fp32 net)
@@ -10920,7 +10920,7 @@ TEST_CASE("B16-a-4: water_shade RENDERS on Vulkan (bluish body + sun glint)", "[
 }
 
 // B16-a-4: RENDER real ocean frames to BMP files you can open. A perspective sea to the horizon (build_ocean_frame_fs) at a
-// few animation times, drawn on Vulkan and written to D:/Dev/cerid/build/ocean_frame_*.bmp. Hidden ([.ocean-frame]) — run it,
+// few animation times, drawn on Vulkan and written to <repo>/build/ocean_frame_*.bmp. Hidden ([.ocean-frame]) — run it,
 // then open the BMPs. Prints per-frame mean RGB + peak luminance so the render is sanity-checked even without eyes on it.
 TEST_CASE("B16-a-4: RENDER ocean frames to BMP (open them!)", "[.ocean-frame]")
 {
@@ -11466,9 +11466,12 @@ TEST_CASE("B16-a-4: RENDER ocean frames to BMP (open them!)", "[.ocean-frame]")
         }
     };
 
-    frame(0.0, "D:/Dev/cerid/build/ocean_frame_0.bmp", "D:/Dev/cerid/build/ocean_geo_0.bmp", "D:/Dev/cerid/build/ocean_mesh_0.bmp");
-    frame(2.5, "D:/Dev/cerid/build/ocean_frame_1.bmp", "D:/Dev/cerid/build/ocean_geo_1.bmp", "D:/Dev/cerid/build/ocean_mesh_1.bmp");
-    frame(5.0, "D:/Dev/cerid/build/ocean_frame_2.bmp", "D:/Dev/cerid/build/ocean_geo_2.bmp", "D:/Dev/cerid/build/ocean_mesh_2.bmp");
+    frame(0.0, CRD_REPO_DIR "/build/ocean_frame_0.bmp", CRD_REPO_DIR "/build/ocean_geo_0.bmp",
+          CRD_REPO_DIR "/build/ocean_mesh_0.bmp");
+    frame(2.5, CRD_REPO_DIR "/build/ocean_frame_1.bmp", CRD_REPO_DIR "/build/ocean_geo_1.bmp",
+          CRD_REPO_DIR "/build/ocean_mesh_1.bmp");
+    frame(5.0, CRD_REPO_DIR "/build/ocean_frame_2.bmp", CRD_REPO_DIR "/build/ocean_geo_2.bmp",
+          CRD_REPO_DIR "/build/ocean_mesh_2.bmp");
     CHECK(true); // visual deliverable — ocean_frame_* = fragment · ocean_geo_* = vertex-pull geometry · ocean_mesh_* = mesh shaders
 }
 

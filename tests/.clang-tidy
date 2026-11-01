@@ -1,4 +1,4 @@
-# Inherit the repo-wide policy from D:/Dev/cerid/.clang-tidy and disable two
+# Inherit the repo-wide policy from the repository root's .clang-tidy and disable two
 # checks that produce systemic false positives in the test suite.
 #
 # 1. `bugprone-unchecked-optional-access` is flow-sensitive and stops at the
