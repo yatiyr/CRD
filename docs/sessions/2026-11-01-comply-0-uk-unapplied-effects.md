@@ -81,7 +81,8 @@ The reader ran on the seven UK texts of batch 26's fetch (`~/.cerid/downloads/le
 | Online Safety Act 2023 (`ukpga/2023/50`) | 24 | 10 | 0 | 2026-09-30 | 2026-09-30 + ukpga/2026/20 |
 | PSTI regulations (`uksi/2023/1007`) | 0 | 0 | 0 | 2025-12-04 | 2025-12-04 |
 
-Batch 26 counted one more effect per text: its count included the `ukm:UnappliedEffects` container.
+Each of batch 26's five counts is one above this reader's; counting the `ukm:UnappliedEffects` container is the likely
+cause.
 
 None of the 56 effects is owed and in force on 2026-11-01. Every owed effect is prospective, and the Equality Act's
 s. 104(7) repeal is due on 2030-12-31. So the versions recorded for `gb.uk-gdpr`, `gb.dpa-2018` and
@@ -95,7 +96,7 @@ Ofcom's codes, will read the Act at that version with the Crime and Policing Act
 
 ## Verification
 
-- **Python.** `RegisterReview` (30 cases) and `SanctionsLists` (19) pass. Two cases are new:
+- **Python.** `RegisterReview` (28 cases) and `SanctionsLists` (19) pass. Two cases are new:
   - a reader case: the fetch day before and on commencement, a conditional effect, a prospective effect, a text with
     no unapplied effects, six refusals, the version check, and the published reader's three refusals;
   - an end-to-end case: two texts lacking one act read it once. A failed act and a mismatched act each refuse
