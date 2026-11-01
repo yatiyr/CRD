@@ -63,26 +63,26 @@ bool FlightCommandHost::retained(FlightCapture& out) const
     return true;
 }
 
-// Holds m_modules_mutex and records the holding thread, so try_modules() on that same thread (a forward sink reached
+// Holds m_snapshot_mutex and records the holding thread, so try_modules() on that same thread (a forward sink reached
 // from an assertion inside the merge) refuses instead of locking a mutex its thread already owns.
-class FlightCommandHost::ModulesLock
+class FlightCommandHost::SnapshotLock
 {
 public:
-    explicit ModulesLock(const FlightCommandHost& host) : m_host(host)
+    explicit SnapshotLock(const FlightCommandHost& host) : m_host(host)
     {
-        m_host.m_modules_mutex.lock();
-        m_host.m_modules_owner.store(std::this_thread::get_id(), std::memory_order_release);
+        m_host.m_snapshot_mutex.lock();
+        m_host.m_snapshot_owner.store(std::this_thread::get_id(), std::memory_order_release);
     }
-    ~ModulesLock()
+    ~SnapshotLock()
     {
-        m_host.m_modules_owner.store(std::thread::id{}, std::memory_order_release);
-        m_host.m_modules_mutex.unlock();
+        m_host.m_snapshot_owner.store(std::thread::id{}, std::memory_order_release);
+        m_host.m_snapshot_mutex.unlock();
     }
 
-    ModulesLock(const ModulesLock&)            = delete;
-    ModulesLock& operator=(const ModulesLock&) = delete;
-    ModulesLock(ModulesLock&&)                 = delete;
-    ModulesLock& operator=(ModulesLock&&)      = delete;
+    SnapshotLock(const SnapshotLock&)            = delete;
+    SnapshotLock& operator=(const SnapshotLock&) = delete;
+    SnapshotLock(SnapshotLock&&)                 = delete;
+    SnapshotLock& operator=(SnapshotLock&&)      = delete;
 
 private:
     const FlightCommandHost& m_host;
@@ -95,7 +95,7 @@ bool FlightCommandHost::refresh_modules()
     {
         return false;
     }
-    const ModulesLock guard(*this);
+    const SnapshotLock guard(*this);
     bool              overflow = live.overflow;
     (void)merge_module_snapshot(m_modules, cont::ConstSpan<ModuleIdentity>{live.modules.data(), live.modules.size()},
                                 overflow);
@@ -105,46 +105,91 @@ bool FlightCommandHost::refresh_modules()
 
 cont::Array<ModuleIdentity> FlightCommandHost::modules() const
 {
-    const ModulesLock guard(*this);
+    const SnapshotLock guard(*this);
     return m_modules;
 }
 
 bool FlightCommandHost::modules_overflow() const
 {
-    const ModulesLock guard(*this);
+    const SnapshotLock guard(*this);
     return m_modules_overflow;
 }
 
 namespace
 {
 // Bounded attempts at the snapshot's lock from a forward sink (the recorder's fatal-path ring lock takes the same).
-constexpr crd::u32 kModulesLockAttempts = 2000U;
+constexpr crd::u32 kSnapshotLockAttempts = 2000U;
 } // namespace
 
-bool FlightCommandHost::try_modules(cont::Array<ModuleIdentity>& out, bool& overflow) const
+bool FlightCommandHost::try_lock_snapshot() const
 {
-    out.clear();
-    overflow = false;
-    if (m_modules_owner.load(std::memory_order_acquire) == std::this_thread::get_id())
+    if (m_snapshot_owner.load(std::memory_order_acquire) == std::this_thread::get_id())
     {
         return false; // this thread holds the lock: the sink was reached from inside a snapshot update
     }
     bool locked = false;
-    for (crd::u32 attempt = 0U; attempt < kModulesLockAttempts && !locked; ++attempt)
+    for (crd::u32 attempt = 0U; attempt < kSnapshotLockAttempts && !locked; ++attempt)
     {
-        locked = m_modules_mutex.try_lock();
+        locked = m_snapshot_mutex.try_lock();
         if (!locked)
         {
             std::this_thread::yield();
         }
     }
-    if (!locked)
+    return locked;
+}
+
+bool FlightCommandHost::try_modules(cont::Array<ModuleIdentity>& out, bool& overflow) const
+{
+    out.clear();
+    overflow = false;
+    if (!try_lock_snapshot())
     {
         return false;
     }
-    const std::lock_guard<std::mutex> guard(m_modules_mutex, std::adopt_lock);
+    const std::lock_guard<std::mutex> guard(m_snapshot_mutex, std::adopt_lock);
     out      = m_modules;
     overflow = m_modules_overflow;
+    return true;
+}
+
+void FlightCommandHost::attach_state_ledger(const StateHashLedger* ledger)
+{
+    const SnapshotLock guard(*this);
+    m_ledger.store(ledger, std::memory_order_release);
+}
+
+bool FlightCommandHost::state_ledger(cont::Array<crd::u8>& out) const
+{
+    out.clear();
+    const SnapshotLock guard(*this);
+    const StateHashLedger* const ledger = m_ledger.load(std::memory_order_acquire);
+    if (ledger == nullptr)
+    {
+        return false;
+    }
+    out = encode_state_hash_ledger(*ledger);
+    return true;
+}
+
+bool FlightCommandHost::try_state_ledger(cont::Array<crd::u8>& out) const
+{
+    out.clear();
+    if (m_ledger.load(std::memory_order_acquire) == nullptr)
+    {
+        return false;
+    }
+    if (!try_lock_snapshot())
+    {
+        return true; // attached, and unread within the bound
+    }
+    const std::lock_guard<std::mutex> guard(m_snapshot_mutex, std::adopt_lock);
+    const StateHashLedger* const ledger = m_ledger.load(std::memory_order_acquire);
+    if (ledger == nullptr)
+    {
+        return false; // detached while the lock was tried
+    }
+    (void)try_encode_state_hash_ledger(*ledger, out);
     return true;
 }
 
@@ -376,8 +421,11 @@ DiagStatus run_flight_write(void* context, const DiagCall& call, DiagSnapshot& o
     // The module snapshot is refreshed first, outside any recorder lock: this is a request, never a fatal path.
     (void)host->refresh_modules();
     const cont::Array<ModuleIdentity> modules = host->modules();
-    const cont::Array<crd::u8>        bundle =
-        write_flight_bundle(capture, cont::ConstSpan<ModuleIdentity>{modules.data(), modules.size()});
+    cont::Array<crd::u8> ledger;
+    const bool attached = host->state_ledger(ledger);
+    const cont::Array<crd::u8> bundle =
+        write_flight_bundle(capture, cont::ConstSpan<ModuleIdentity>{modules.data(), modules.size()},
+                            FlightStateLedger{attached, cont::ConstSpan<crd::u8>{ledger.data(), ledger.size()}});
     if (bundle.empty() || !write_bundle_atomic(path.c_str(), cont::ConstSpan<crd::u8>{bundle.data(), bundle.size()}))
     {
         out.reason.append("the flight bundle could not be written");

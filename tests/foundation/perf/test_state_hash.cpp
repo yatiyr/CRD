@@ -1,13 +1,23 @@
 // HW-RESILIENCE.3: state-hash ledgers and the divergence check (crd/perf/state_hash.hpp) -- the hash and chain bits,
-// the bounded ledger, the payload and its refusals, and the monitor's verdicts, culprits and causes, online and over
-// decoded ledgers.
+// the bounded ledger, the payload and its refusals, the monitor's verdicts, culprits and causes, online and over
+// decoded ledgers, and the ledger in flight bundles, bundle.inspect and state.divergence.
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/checksum.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/perf/bundle.hpp>
+#include <crd/perf/bundle_import.hpp>
+#include <crd/perf/diag_commands.hpp>
+#include <crd/perf/flight_commands.hpp>
+#include <crd/perf/flight_recorder.hpp>
+#include <crd/perf/hardware_identity.hpp>
 #include <crd/perf/state_hash.hpp>
+#include <crd/platform/filesystem.hpp>
 
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <cstring>
+#include <thread>
 
 namespace cont = crd::containers;
 namespace cp = crd::perf;
@@ -402,4 +412,280 @@ TEST_CASE("decoded ledgers are judged as the live ones", "[perf][state-hash]")
     CHECK(r.step == 27U);
     CHECK_FALSE(r.before);
     CHECK(r.compared == 8U); // steps 23 to 30; the first divergence stays latched
+}
+
+// ---- the ledger in flight bundles, bundle.inspect and state.divergence ----------------------------------------------
+
+namespace
+{
+
+bool same_bytes(const cont::Array<u8>& a, const cont::Array<u8>& b)
+{
+    return a.size() == b.size() && (a.empty() || std::memcmp(a.data(), b.data(), a.size()) == 0);
+}
+
+const cp::ImportedSection* ledger_section(const cp::BundleImport& imp)
+{
+    for (const cp::ImportedSection& s : imp.sections)
+    {
+        if (s.tag == cp::BundleSectionTag::StateHashLedger)
+        {
+            return &s;
+        }
+    }
+    return nullptr;
+}
+
+cont::Array<u8> bundle_with(const cont::Array<u8>* payload)
+{
+    const cp::FlightCapture capture;
+    if (payload == nullptr)
+    {
+        return cp::write_flight_bundle(capture);
+    }
+    return cp::write_flight_bundle(capture, {}, cp::FlightStateLedger{true, {payload->data(), payload->size()}});
+}
+
+bool contains_json(const cp::DiagResult& r, const char* part)
+{
+    return std::strstr(r.json.c_str(), part) != nullptr;
+}
+
+} // namespace
+
+TEST_CASE("state-hash ledger: a flight bundle carries the attached ledger, or declares it absent", "[perf][state-hash]")
+{
+    cp::StateHashLedger ledger("alpha", 8U);
+    record_run(ledger, 1U, 20U);
+    cp::FlightRecorder recorder;
+    cp::FlightCommandHost host(recorder);
+    cont::Array<u8> payload;
+    CHECK_FALSE(host.state_ledger(payload));
+    CHECK_FALSE(host.try_state_ledger(payload));
+
+    // No ledger attached: the bundle has no ledger section and declares none absent.
+    const cont::Array<u8> bare = bundle_with(nullptr);
+    const cp::BundleImport none = cp::import_bundle({bare.data(), bare.size()});
+    REQUIRE(none.status == cp::ImportStatus::Ok);
+    CHECK(ledger_section(none) == nullptr);
+    CHECK_FALSE(none.has_state_ledger);
+    CHECK_FALSE(none.state_ledger_refused);
+
+    // Attached: both readers give the encoder's payload, and the bundle round-trips it.
+    host.attach_state_ledger(&ledger);
+    REQUIRE(host.try_state_ledger(payload));
+    cont::Array<u8> waited;
+    REQUIRE(host.state_ledger(waited));
+    const cont::Array<u8> encoded = cp::encode_state_hash_ledger(ledger);
+    CHECK(same_bytes(payload, encoded));
+    CHECK(same_bytes(waited, encoded));
+    const cont::Array<u8> carried = bundle_with(&payload);
+    const cp::BundleImport imp = cp::import_bundle({carried.data(), carried.size()});
+    REQUIRE(imp.status == cp::ImportStatus::Ok);
+    REQUIRE(imp.has_state_ledger);
+    CHECK(imp.state_ledger.name() == cont::StringView{"alpha"});
+    CHECK(imp.state_ledger.recorded() == 20U);
+    CHECK(imp.state_ledger.size() == 8U);
+    CHECK(imp.state_ledger.first_step() == 1U);
+    CHECK(imp.state_ledger.base_chain() == ledger.base_chain());
+    CHECK(imp.state_ledger.chain() == ledger.chain());
+    CHECK(imp.manifest_absent_mismatches == 0U);
+
+    // Attached but unread on the writer's path: an explicit absent section the manifest declares.
+    const cont::Array<u8> empty;
+    const cont::Array<u8> unread = bundle_with(&empty);
+    const cp::BundleImport absent = cp::import_bundle({unread.data(), unread.size()});
+    REQUIRE(absent.status == cp::ImportStatus::Ok);
+    const cp::ImportedSection* section = ledger_section(absent);
+    REQUIRE(section != nullptr);
+    CHECK((section->section_flags & cp::kSectionFlagAbsent) != 0U);
+    REQUIRE(absent.has_manifest);
+    bool declared = false;
+    for (const u32 tag : absent.manifest.absent_tags)
+    {
+        declared = declared || tag == static_cast<u32>(cp::BundleSectionTag::StateHashLedger);
+    }
+    CHECK(declared);
+    CHECK(absent.manifest_absent_mismatches == 0U);
+    CHECK_FALSE(absent.has_state_ledger);
+    CHECK_FALSE(absent.state_ledger_refused);
+
+    // A damaged ledger is reported refused with its decoder's reason, never read as a ledger.
+    cont::Array<u8> damaged = cp::encode_state_hash_ledger(ledger);
+    damaged[0] ^= 1U;
+    const cont::Array<u8> bad = bundle_with(&damaged);
+    const cp::BundleImport refused = cp::import_bundle({bad.data(), bad.size()});
+    CHECK_FALSE(refused.has_state_ledger);
+    CHECK(refused.state_ledger_refused);
+    CHECK(refused.state_ledger_error == cont::StringView{"not a state-hash ledger"});
+
+    host.attach_state_ledger(nullptr);
+    CHECK_FALSE(host.try_state_ledger(payload));
+    CHECK(payload.empty());
+}
+
+TEST_CASE("state-hash ledger: a bundle writer reads whole ledgers while the loop records", "[perf][state-hash]")
+{
+    // The loop has recorded past its window before the first read and records until the last, so every read overlaps
+    // it; a torn read would decode to steps out of order, a count that disagrees or a hash its step never had.
+    constexpr u32 read_count = 300U;
+    cp::StateHashLedger ledger("live", 64U);
+    std::atomic<u32> reads{0U};
+    std::atomic<u64> steps{0U};
+    bool recorded = true;
+    std::thread loop(
+        [&ledger, &reads, &steps, &recorded]()
+        {
+            for (u64 s = 1U; reads.load(std::memory_order_acquire) < read_count; ++s)
+            {
+                recorded = ledger.record_hash(s, good_hash(s)) && recorded;
+                steps.store(s, std::memory_order_release);
+            }
+        });
+    while (steps.load(std::memory_order_acquire) < 1000U)
+    {
+        std::this_thread::yield();
+    }
+    u32 torn = 0U;
+    u64 seen = 0U;
+    cont::Array<u8> payload;
+    for (u32 i = 0U; i < read_count; ++i)
+    {
+        bool read = true;
+        if (i % 2U == 0U)
+        {
+            read = cp::try_encode_state_hash_ledger(ledger, payload);
+        }
+        else
+        {
+            payload = cp::encode_state_hash_ledger(ledger);
+        }
+        if (read)
+        {
+            const cp::StateHashLedgerRead r = cp::decode_state_hash_ledger({payload.data(), payload.size()});
+            bool whole = r.ok && r.ledger.size() == (r.ledger.recorded() < 64U ? r.ledger.recorded() : 64U);
+            for (u32 k = 0U; whole && k < r.ledger.size(); ++k)
+            {
+                const cp::StateHashEntry& e = r.ledger.entry(k);
+                whole = e.step == r.ledger.recorded() - r.ledger.size() + 1U + k && e.hash == good_hash(e.step);
+            }
+            torn += whole ? 0U : 1U;
+            seen = r.ok ? r.ledger.recorded() : seen;
+        }
+        reads.fetch_add(1U, std::memory_order_acq_rel);
+    }
+    loop.join();
+    CHECK(recorded);
+    CHECK(torn == 0U);
+    CHECK(seen >= 1000U);
+    CHECK(ledger.recorded() >= seen);
+}
+
+TEST_CASE("state-hash ledger: state.divergence judges a directory's bundles and bundle.inspect reports the ledger",
+          "[perf][state-hash]")
+{
+    namespace fs = crd::platform::fs;
+    const fs::Path dir = fs::Path{CRD_DIAG_COMMANDS_SCRATCH} / "state_divergence_session";
+    (void)fs::remove_all(dir);
+    REQUIRE(fs::create_directories(dir));
+    const auto write = [&dir](cont::StringView name, const cont::Array<u8>& bytes)
+    {
+        REQUIRE(fs::write_file_binary(dir / name, cont::ConstSpan<u8>{bytes.data(), bytes.size()}));
+    };
+    // Three machines of one session (this machine's identity in each bundle); gamma diverges from step 7.
+    const char* const names[] = {"alpha", "beta", "gamma"};
+    for (u32 i = 0U; i < 3U; ++i)
+    {
+        cp::StateHashLedger l(cont::StringView{names[i]}, 16U);
+        record_run(l, 1U, 12U, i == 2U ? 7U : ~u64{0});
+        const cont::Array<u8> payload = cp::encode_state_hash_ledger(l);
+        cont::String file;
+        file.append(cont::StringView{names[i]});
+        file.append(".cdb");
+        write(cont::StringView{file.data(), file.size()}, bundle_with(&payload));
+    }
+    const cont::Array<u8> empty;
+    write("none.cdb", bundle_with(nullptr));
+    write("unread.cdb", bundle_with(&empty));
+    cont::Array<u8> junk;
+    junk.resize(64U, u8{0x5A});
+    write("junk.cdb", junk);
+    write("notes.txt", junk); // not a bundle: never read
+
+    cp::DiagServiceConfig config;
+    config.root = cont::StringView{CRD_DIAG_COMMANDS_SCRATCH};
+    cp::DiagCommandService svc{cp::authority_bit(cp::DiagAuthority::Read), config, crd::memory::default_allocator()};
+    cp::DiagRequest req;
+    req.command = "state.divergence";
+    req.path = "state_divergence_session";
+    req.page_items = 64U;
+    const cp::DiagResult majority = svc.execute(req);
+    REQUIRE(majority.status == cp::DiagStatus::Ok);
+    const bool cpu_known = (cp::host_hardware_identity().flags & cp::kHardwareCpuKnown) != 0U;
+    CHECK(contains_json(majority, R"("bundles":6,"participants":3,"refused":3,"verdict":"diverged",)"));
+    CHECK(contains_json(majority, R"("step":7,"before":false,"chains_compared":true,"reference":"",)"));
+    // Every bundle came from this machine, so an agreeing machine shares the diverging one's processor.
+    CHECK(contains_json(majority, cpu_known ? R"("cause":"machine")" : R"("cause":"unknown")"));
+    CHECK(contains_json(majority, R"("message":"The states diverged at step 7: gamma ()"));
+    CHECK(contains_json(majority, R"({"kind":"participant","file":"alpha.cdb","ledger":"alpha","first_step":1,)"
+                                  R"("recorded":12,"kept":12,)"));
+    CHECK(contains_json(majority, R"("reference":false,"present":true,"hash":"0x9015","chain":")"));
+    CHECK(contains_json(majority, R"("hash":"0x9016","chain":")"));
+    CHECK(contains_json(majority, R"({"kind":"refused","file":"junk.cdb","reason":"bad-magic"})"));
+    CHECK(contains_json(majority,
+                        R"({"kind":"refused","file":"none.cdb","reason":"the bundle carries no state-hash ledger"})"));
+    CHECK(contains_json(majority,
+                        R"({"kind":"refused","file":"unread.cdb","reason":"its writer could not read the ledger"})"));
+    CHECK(std::strstr(majority.json.c_str(), "notes.txt") == nullptr);
+    CHECK(majority.total == 6U);
+
+    // Against a recorded run: gamma as the reference makes alpha and beta the diverging ones.
+    const cp::DiagArg gamma[] = {{"reference", "gamma"}};
+    req.args = cont::ConstSpan<cp::DiagArg>{gamma, 1U};
+    const cp::DiagResult recorded = svc.execute(req);
+    REQUIRE(recorded.status == cp::DiagStatus::Ok);
+    CHECK(contains_json(recorded, R"("verdict":"diverged",)"));
+    CHECK(contains_json(recorded, R"("reference":"gamma",)"));
+    CHECK(contains_json(recorded, R"("ledger":"alpha",)"));
+    CHECK(contains_json(recorded, R"("ledger":"gamma","first_step":1,"recorded":12,"kept":12,"cpu_model":)"));
+    CHECK(contains_json(recorded, R"("reference":true,"present":true,"hash":"0x9016",)"));
+    CHECK(contains_json(recorded, R"("message":"The states diverged at step 7: alpha ()"));
+
+    // Refusals: a reference no ledger has, another argument, a file for the directory, bundles past the host's limit.
+    const cp::DiagArg delta[] = {{"reference", "delta"}};
+    req.args = cont::ConstSpan<cp::DiagArg>{delta, 1U};
+    const cp::DiagResult unknown = svc.execute(req);
+    CHECK(unknown.status == cp::DiagStatus::Failed);
+    CHECK(view(unknown.reason) == cont::StringView{"no bundle's ledger is named delta"});
+    const cp::DiagArg other[] = {{"other", "1"}};
+    req.args = cont::ConstSpan<cp::DiagArg>{other, 1U};
+    CHECK(svc.execute(req).status == cp::DiagStatus::BadArgument);
+    req.args = {};
+    req.path = "state_divergence_session/alpha.cdb";
+    CHECK(svc.execute(req).status == cp::DiagStatus::Failed);
+    cp::DiagServiceConfig small = config;
+    small.max_bundle_bytes = 1024U;
+    cp::DiagCommandService bounded{cp::authority_bit(cp::DiagAuthority::Read), small, crd::memory::default_allocator()};
+    req.path = "state_divergence_session";
+    const cp::DiagResult over = bounded.execute(req);
+    CHECK(over.status == cp::DiagStatus::Oversized);
+    CHECK(bounded.file_bytes_read() == 0U);
+
+    // bundle.inspect reports the section and the ledger's shape.
+    req.command = "bundle.inspect";
+    req.path = "state_divergence_session/gamma.cdb";
+    const cp::DiagResult inspected = svc.execute(req);
+    REQUIRE(inspected.status == cp::DiagStatus::Ok);
+    CHECK(contains_json(inspected, R"("tag_name":"state-hash-ledger","absent":false)"));
+    CHECK(contains_json(inspected, R"("state_ledger":true,"state_ledger_refused":false,"state_ledger_error":"")"));
+    CHECK(contains_json(inspected, R"({"kind":"state-ledger","name":"gamma","capacity":16,"first_step":1,)"
+                                   R"("recorded":12,"kept":12,"oldest_kept_step":1,"last_step":12,)"
+                                   R"("last_hash":"0x9025","base_chain":"0x0","chain":"0x)"));
+    req.path = "state_divergence_session/unread.cdb";
+    const cp::DiagResult unread_inspected = svc.execute(req);
+    REQUIRE(unread_inspected.status == cp::DiagStatus::Ok);
+    CHECK(contains_json(unread_inspected, R"("tag_name":"state-hash-ledger","absent":true)"));
+    CHECK(contains_json(unread_inspected, R"("state_ledger":false,"state_ledger_refused":false,)"));
+    CHECK(contains_json(unread_inspected, R"("manifest_absent_mismatches":0,)"));
+    (void)fs::remove_all(dir);
 }

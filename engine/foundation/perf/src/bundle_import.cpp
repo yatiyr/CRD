@@ -103,7 +103,8 @@ BundleImport import_bundle(cont::ConstSpan<crd::u8> buf, BundleLimits limits, cr
 
     r.total_len_mismatch = (rb.header.total_len != buf.size());
 
-    // 6. Per-section: cap, duplicate detection, decode Manifest/SymbolIndex/BuildIdentity.
+    // 6. Per-section: cap, duplicate detection, decode Manifest/SymbolIndex/BuildIdentity/HardwareIdentity/
+    //    StateHashLedger.
     for (crd::usize i = 0; i < rb.sections.size(); ++i)
     {
         const BundleSectionView& sv = rb.sections[i];
@@ -163,6 +164,17 @@ BundleImport import_bundle(cont::ConstSpan<crd::u8> buf, BundleLimits limits, cr
                 if (hardware.ok)
                 {
                     r.hardware = static_cast<HardwareIdentity&&>(hardware.identity);
+                }
+            }
+            else if (sv.tag == BundleSectionTag::StateHashLedger && (is.section_flags & kSectionFlagAbsent) == 0U)
+            {
+                StateHashLedgerRead ledger = decode_state_hash_ledger(sv.payload, alloc);
+                r.has_state_ledger = ledger.ok;
+                r.state_ledger_refused = !ledger.ok;
+                r.state_ledger_error = ledger.error;
+                if (ledger.ok)
+                {
+                    r.state_ledger = static_cast<StateHashLedger&&>(ledger.ledger);
                 }
             }
             else if (sv.tag == BundleSectionTag::SymbolIndex && !r.has_symbols &&

@@ -1,0 +1,6 @@
+#host read root
+@{"command":"state.divergence","path":"session"}
+@{"command":"state.divergence","path":"session","args":{"reference":"alpha"}}
+@{"command":"state.divergence","path":"session","args":{"reference":""}}
+@{"command":"state.divergence","path":"session","args":{"other":"1"}}
+@{"command":"state.divergence","path":"../session"}

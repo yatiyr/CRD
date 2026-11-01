@@ -26,6 +26,7 @@
 #include <crd/perf/bundle.hpp>
 #include <crd/perf/bundle_manifest.hpp>
 #include <crd/perf/hardware_identity.hpp>
+#include <crd/perf/state_hash.hpp>
 #include <crd/perf/symbol_index.hpp>
 
 namespace crd::perf
@@ -87,6 +88,11 @@ struct BundleImport
     bool               has_hardware     = false; // a HardwareIdentity section (tag 8) decoded into `hardware`
     bool               hardware_refused = false; // a HardwareIdentity section was present and its decoder refused it
     HardwareIdentity   hardware;
+
+    bool has_state_ledger = false;                  // a StateHashLedger section (tag 9) decoded into `state_ledger`
+    bool state_ledger_refused = false;              // a StateHashLedger section was present and its decoder refused it
+    crd::containers::StringView state_ledger_error; // why (static text)
+    StateHashLedger state_ledger{crd::containers::StringView{}, 1U};
 
     crd::containers::Array<ModuleIdentity>  symbols;
     crd::containers::Array<ImportedSection> sections;

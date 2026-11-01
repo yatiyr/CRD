@@ -716,7 +716,7 @@ struct Spec
 
 // The commands registered with an argument check, as their modules declare them.
 constexpr const char* kCheckedCommands[] = {"bundle.inspect",  "fault.arm",     "flight.trigger", "hardware.check",
-                                            "program.inspect", "replay.record", "replay.run"};
+                                            "program.inspect", "replay.record", "replay.run",     "state.divergence"};
 
 enum class Stage : u8
 {
@@ -2018,6 +2018,13 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& out)
                   "@{\"command\":\"bundle.inspect\",\"path\":\"none.cdb\",\"args\":{\"replay\":\"reproduced\"}}\n"
                   "@{\"command\":\"bundle.inspect\",\"path\":\"none.cdb\",\"args\":{\"replay\":\"sometimes\"}}\n"
                   "@{\"command\":\"bundle.inspect\",\"path\":\"none.cdb\",\"args\":{\"other\":\"1\"}}\n");
+    sink.add_text("diag-state-divergence", // state.divergence's directory and its one argument (HW-RESILIENCE.3)
+                  "#host read root\n"
+                  "@{\"command\":\"state.divergence\",\"path\":\"session\"}\n"
+                  "@{\"command\":\"state.divergence\",\"path\":\"session\",\"args\":{\"reference\":\"alpha\"}}\n"
+                  "@{\"command\":\"state.divergence\",\"path\":\"session\",\"args\":{\"reference\":\"\"}}\n"
+                  "@{\"command\":\"state.divergence\",\"path\":\"session\",\"args\":{\"other\":\"1\"}}\n"
+                  "@{\"command\":\"state.divergence\",\"path\":\"../session\"}\n");
     sink.add_text("diag-cursors",
                   "@{\"command\":\"diag.commands\",\"cursor\":1048576}\n"
                   "@{\"command\":\"diag.commands\"}\n"

@@ -1765,13 +1765,19 @@ FlightRecordRead decode_flight_record(cont::ConstSpan<crd::u8> payload)
     return r;
 }
 
-cont::Array<crd::u8> write_flight_bundle(const FlightCapture& capture, cont::ConstSpan<ModuleIdentity> modules)
+cont::Array<crd::u8> write_flight_bundle(const FlightCapture& capture, cont::ConstSpan<ModuleIdentity> modules,
+                                         FlightStateLedger ledger)
 {
+    const bool ledger_absent = ledger.attached && ledger.payload.empty();
     BundleManifest manifest;
     manifest.schema_version = kDiagnosticSchemaVersion;
     if (modules.empty())
     {
         manifest.absent_tags.push_back(static_cast<crd::u32>(BundleSectionTag::SymbolIndex));
+    }
+    if (ledger_absent)
+    {
+        manifest.absent_tags.push_back(static_cast<crd::u32>(BundleSectionTag::StateHashLedger));
     }
     const cont::Array<crd::u8> manifest_bytes = serialize_manifest(manifest);
     const cont::Array<crd::u8> record_bytes   = encode_flight_record(capture);
@@ -1796,6 +1802,14 @@ cont::Array<crd::u8> write_flight_bundle(const FlightCapture& capture, cont::Con
         const cont::Array<crd::u8> symbol_bytes = serialize_symbol_index(modules);
         (void)writer.add_section(BundleSectionTag::SymbolIndex,
                                  cont::ConstSpan<crd::u8>{symbol_bytes.data(), symbol_bytes.size()});
+    }
+    if (ledger_absent)
+    {
+        (void)writer.add_absent(BundleSectionTag::StateHashLedger);
+    }
+    else if (ledger.attached)
+    {
+        (void)writer.add_section(BundleSectionTag::StateHashLedger, ledger.payload);
     }
     return writer.finish();
 }

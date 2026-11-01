@@ -235,7 +235,7 @@
     },
     {
       "id": "diagnostics.state-divergence",
-      "summary": "State-hash ledgers of deterministic runs (per-step XXH3-64 hashes and their chain, bounded, with their payload) and the divergence check: the first divergent step against a reference or the majority, and the diverging machine named by its hardware identity (HW-RESILIENCE.3).",
+      "summary": "State-hash ledgers of deterministic runs (per-step XXH3-64 hashes and their chain, bounded, with their payload) and the divergence check: the first divergent step against a reference or the majority, and the diverging machine named by its hardware identity; the ledger as a flight-bundle section and the state.divergence command over a directory of bundles (HW-RESILIENCE.3).",
       "owner": "perf",
       "api": [
         "engine/foundation/perf/include/crd/perf/state_hash.hpp"

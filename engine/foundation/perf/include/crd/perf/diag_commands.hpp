@@ -293,7 +293,14 @@ struct DiagServiceConfig
 //                              crash (the bundle's or the capture's) on its machine (fault_classification.hpp);
 //                              replay=<not-run|reproduced|not-reproduced> says what the capture's replay did, and
 //                              the faulting instruction's bytes are compared with its module's image when the root's
-//                              image store holds it (<root>/images, laid out as image_file_path names it)
+//                              image store holds it (<root>/images, laid out as image_file_path names it); a carried
+//                              state-hash ledger is reported by its name, window and chains
+//   state.divergence   Read    the state-hash ledgers (state_hash.hpp) of the bundles (*.cdb) in a directory under
+//                              the root, each with its bundle's machine, judged for the first divergent step against
+//                              the majority or reference=<a ledger's name> (the recorded run): the verdict, step,
+//                              cause and sentence, one item per participant with its value at that step and one per
+//                              bundle that takes no part with why; at most 64 bundles, together within the host's
+//                              bundle limit
 //   capture.start     Record  open a capture window (the profiler's sample rings are cleared)
 //   capture.stop       Record  write the open window as a CPROF capture file under the root (never overwriting)
 //   hardware.check     Execute the hardware check (hardware_check.hpp) on every logical CPU at once, a load no read
@@ -347,6 +354,7 @@ private:
     static DiagStatus run_jobs_waits(void* self, const DiagCall& call, DiagSnapshot& out);
     static DiagStatus run_allocators(void* self, const DiagCall& call, DiagSnapshot& out);
     static DiagStatus run_bundle_inspect(void* self, const DiagCall& call, DiagSnapshot& out);
+    static DiagStatus run_state_divergence(void* self, const DiagCall& call, DiagSnapshot& out);
     static DiagStatus run_capture_start(void* self, const DiagCall& call, DiagSnapshot& out);
     static DiagStatus run_capture_stop(void* self, const DiagCall& call, DiagSnapshot& out);
     static DiagStatus check_hardware(void* self, cont::ConstSpan<DiagArg> args, cont::String& reason);

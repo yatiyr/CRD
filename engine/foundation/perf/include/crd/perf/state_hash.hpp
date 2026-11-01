@@ -27,7 +27,9 @@
 //   kept step's u64 step and u64 hash, oldest first. The decoder refuses a wrong magic or version, unknown flags, a
 //   name or count over its bound, steps out of order, counts that disagree, and trailing bytes.
 //
-// Not thread-safe: one simulation loop records a ledger and updates its monitor.
+// Threads: one simulation loop records a ledger and updates its monitors. Another thread may encode the ledger while
+// it records (a flight bundle written by a host's poll, a request or a fatal path): record() and the encoders hold the
+// ledger's lock, which the bundle writer of a fatal path only tries (try_encode_state_hash_ledger).
 // Contract: docs/design/runtime-diagnostics.md (HW-RESILIENCE.3); ADR-0133.
 
 #include <crd/containers/array.hpp>
@@ -39,6 +41,8 @@
 #include <crd/perf/fault_classification.hpp>
 #include <crd/perf/hardware_identity.hpp>
 
+#include <atomic>
+
 namespace crd::perf
 {
 
@@ -46,7 +50,8 @@ inline constexpr crd::u32 kStateLedgerMagic = 0x314C5343U; // bytes 'C','S','L',
 inline constexpr crd::u32 kStateLedgerVersion = 1U;
 inline constexpr crd::u32 kStateLedgerNameBytes = 64U;
 inline constexpr crd::u32 kDefaultStateLedgerSteps = 1U << 16U; // about 18 minutes at 60 steps a second
-inline constexpr crd::u32 kMaxStateLedgerSteps = 1U << 22U;     // a ledger's and a payload's bound (64 MiB of steps)
+inline constexpr crd::u32 kMaxStateLedgerSteps = 1U << 21U;     // a ledger's and a payload's bound (32 MiB of steps),
+                                                                // so a full ledger fits one bundle section
 
 struct StateHashEntry
 {
@@ -75,6 +80,13 @@ public:
     explicit StateHashLedger(crd::containers::StringView name, crd::u32 capacity = kDefaultStateLedgerSteps,
                              crd::memory::IAllocator* alloc = crd::memory::default_allocator());
 
+    // A move takes the steps, never the lock: move a ledger only while no other thread reads it.
+    StateHashLedger(StateHashLedger&& other) noexcept;
+    StateHashLedger& operator=(StateHashLedger&& other) noexcept;
+    StateHashLedger(const StateHashLedger&) = delete;
+    StateHashLedger& operator=(const StateHashLedger&) = delete;
+    ~StateHashLedger() = default;
+
     // Record the state of `step`. False, and nothing recorded, when `step` is not after the last recorded step.
     bool record(crd::u64 step, crd::containers::ConstSpan<crd::u8> state);
     bool record_hash(crd::u64 step, crd::u64 hash);
@@ -96,6 +108,9 @@ public:
 private:
     friend StateHashLedgerRead decode_state_hash_ledger(crd::containers::ConstSpan<crd::u8> payload,
                                                         crd::memory::IAllocator* alloc);
+    friend class StateLedgerLock;
+
+    mutable std::atomic<bool> m_locked{false}; // record() and the encoders (StateLedgerLock)
 
     crd::containers::String m_name;
     crd::containers::Array<StateHashEntry> m_ring;
@@ -108,9 +123,14 @@ private:
     crd::u64 m_chain = 0U;
 };
 
+// The ledger's payload, waiting for its lock (a request or the recording thread, never a fatal path).
 [[nodiscard]] crd::containers::Array<crd::u8>
 encode_state_hash_ledger(const StateHashLedger& ledger,
                          crd::memory::IAllocator* alloc = crd::memory::default_allocator());
+
+// The ledger's payload for a fatal path: its lock is tried a bounded number of times and never waited on, so a thread
+// that holds it (an assertion inside record()) gets false, and `out` is empty.
+[[nodiscard]] bool try_encode_state_hash_ledger(const StateHashLedger& ledger, crd::containers::Array<crd::u8>& out);
 
 struct StateHashLedgerRead
 {

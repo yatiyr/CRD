@@ -4,7 +4,10 @@
 #include "payload_codec.hpp"
 
 #include <crd/containers/checksum.hpp>
+#include <crd/perf/bundle.hpp>
 #include <crd/perf/state_hash.hpp>
+
+#include <thread>
 
 namespace crd::perf
 {
@@ -13,6 +16,15 @@ namespace
 namespace cont = crd::containers;
 using detail::append_hex;
 using detail::append_u64;
+
+// The payload's fixed fields: magic, version, flags, the name's length and its longest name, capacity, first step,
+// steps recorded, base chain and kept steps. A full ledger's payload fits one bundle section.
+constexpr crd::u64 kLedgerPayloadFixedBytes = 3U * 4U + 2U + kStateLedgerNameBytes + 4U + 3U * 8U + 4U;
+static_assert(kLedgerPayloadFixedBytes + crd::u64{kMaxStateLedgerSteps} * 16U <= kDefaultMaxSectionBytes,
+              "a full state-hash ledger must fit one bundle section");
+
+// Tries at a ledger's lock from a fatal path, as the flight command host's module snapshot takes its own.
+constexpr crd::u32 kLedgerLockAttempts = 2000U;
 
 [[nodiscard]] crd::u32 clamp_capacity(crd::u32 capacity) noexcept
 {
@@ -104,10 +116,92 @@ crd::u64 chain_state_hash(crd::u64 chain, crd::u64 step, crd::u64 hash) noexcept
 
 // ---- the ledger ---------------------------------------------------------------------------------------------------
 
+// Holds a ledger's lock: waiting for it, or within a bounded number of tries.
+class StateLedgerLock
+{
+public:
+    explicit StateLedgerLock(const StateHashLedger& ledger) noexcept : m_flag(ledger.m_locked)
+    {
+        while (m_flag.exchange(true, std::memory_order_acquire))
+        {
+            std::this_thread::yield();
+        }
+        m_held = true;
+    }
+
+    StateLedgerLock(const StateHashLedger& ledger, crd::u32 attempts) noexcept : m_flag(ledger.m_locked)
+    {
+        for (crd::u32 attempt = 0U; attempt < attempts && !m_held; ++attempt)
+        {
+            m_held = !m_flag.exchange(true, std::memory_order_acquire);
+            if (!m_held)
+            {
+                std::this_thread::yield();
+            }
+        }
+    }
+
+    ~StateLedgerLock()
+    {
+        if (m_held)
+        {
+            m_flag.store(false, std::memory_order_release);
+        }
+    }
+
+    StateLedgerLock(const StateLedgerLock&) = delete;
+    StateLedgerLock& operator=(const StateLedgerLock&) = delete;
+    StateLedgerLock(StateLedgerLock&&) = delete;
+    StateLedgerLock& operator=(StateLedgerLock&&) = delete;
+
+    [[nodiscard]] bool held() const noexcept { return m_held; }
+
+private:
+    std::atomic<bool>& m_flag;
+    bool m_held = false;
+};
+
 StateHashLedger::StateHashLedger(cont::StringView name, crd::u32 capacity, crd::memory::IAllocator* alloc)
     : m_name(alloc), m_ring(alloc), m_capacity(clamp_capacity(capacity))
 {
     m_name.append(name.size() <= kStateLedgerNameBytes ? name : name.substr(0U, kStateLedgerNameBytes));
+}
+
+StateHashLedger::StateHashLedger(StateHashLedger&& other) noexcept
+    : m_name(static_cast<cont::String&&>(other.m_name)),
+      m_ring(static_cast<cont::Array<StateHashEntry>&&>(other.m_ring)), m_capacity(other.m_capacity),
+      m_start(other.m_start), m_size(other.m_size), m_recorded(other.m_recorded), m_first_step(other.m_first_step),
+      m_base_chain(other.m_base_chain), m_chain(other.m_chain)
+{
+    other.m_start = 0U;
+    other.m_size = 0U;
+    other.m_recorded = 0U;
+    other.m_first_step = 0U;
+    other.m_base_chain = 0U;
+    other.m_chain = 0U;
+}
+
+StateHashLedger& StateHashLedger::operator=(StateHashLedger&& other) noexcept
+{
+    if (this != &other)
+    {
+        m_name = static_cast<cont::String&&>(other.m_name);
+        m_ring = static_cast<cont::Array<StateHashEntry>&&>(other.m_ring);
+        m_capacity = other.m_capacity;
+        m_start = other.m_start;
+        m_size = other.m_size;
+        m_recorded = other.m_recorded;
+        m_first_step = other.m_first_step;
+        m_base_chain = other.m_base_chain;
+        m_chain = other.m_chain;
+        other.m_start = 0U;
+        other.m_size = 0U;
+        other.m_recorded = 0U;
+        other.m_first_step = 0U;
+        other.m_base_chain = 0U;
+        other.m_chain = 0U;
+    }
+    return *this;
 }
 
 bool StateHashLedger::record(crd::u64 step, cont::ConstSpan<crd::u8> state)
@@ -117,6 +211,7 @@ bool StateHashLedger::record(crd::u64 step, cont::ConstSpan<crd::u8> state)
 
 bool StateHashLedger::record_hash(crd::u64 step, crd::u64 hash)
 {
+    const StateLedgerLock lock(*this);
     if (m_recorded > 0U && step <= entry(m_size - 1U).step)
     {
         return false;
@@ -175,10 +270,11 @@ const StateHashEntry* StateHashLedger::find(crd::u64 step) const noexcept
 
 // ---- the payload --------------------------------------------------------------------------------------------------
 
-cont::Array<crd::u8> encode_state_hash_ledger(const StateHashLedger& ledger, crd::memory::IAllocator* alloc)
+namespace
 {
-    cont::Array<crd::u8> out(alloc);
-    out.reserve(4U * 4U + 2U + kStateLedgerNameBytes + 3U * 8U + 4U + static_cast<crd::usize>(ledger.size()) * 16U);
+void put_ledger(cont::Array<crd::u8>& out, const StateHashLedger& ledger)
+{
+    out.reserve(static_cast<crd::usize>(kLedgerPayloadFixedBytes) + static_cast<crd::usize>(ledger.size()) * 16U);
     detail::put_u32(out, kStateLedgerMagic);
     detail::put_u32(out, kStateLedgerVersion);
     detail::put_u32(out, 0U);
@@ -193,7 +289,27 @@ cont::Array<crd::u8> encode_state_hash_ledger(const StateHashLedger& ledger, crd
         detail::put_u64(out, ledger.entry(i).step);
         detail::put_u64(out, ledger.entry(i).hash);
     }
+}
+} // namespace
+
+cont::Array<crd::u8> encode_state_hash_ledger(const StateHashLedger& ledger, crd::memory::IAllocator* alloc)
+{
+    cont::Array<crd::u8> out(alloc);
+    const StateLedgerLock lock(ledger);
+    put_ledger(out, ledger);
     return out;
+}
+
+bool try_encode_state_hash_ledger(const StateHashLedger& ledger, cont::Array<crd::u8>& out)
+{
+    out.clear();
+    const StateLedgerLock lock(ledger, kLedgerLockAttempts);
+    if (!lock.held())
+    {
+        return false;
+    }
+    put_ledger(out, ledger);
+    return true;
 }
 
 StateHashLedgerRead decode_state_hash_ledger(cont::ConstSpan<crd::u8> payload, crd::memory::IAllocator* alloc)

@@ -16,6 +16,8 @@
 #include <crd/perf/hardware_identity.hpp>
 #include <crd/perf/memory.hpp>
 #include <crd/perf/profiler.hpp>
+#include <crd/perf/state_hash.hpp>
+#include <crd/platform/filesystem.hpp>
 
 #include "json_writer.hpp"
 
@@ -208,6 +210,8 @@ void append_hex(cont::String& out, const crd::u8* bytes, crd::usize n)
             return "build-identity";
         case BundleSectionTag::HardwareIdentity:
             return "hardware-identity";
+        case BundleSectionTag::StateHashLedger:
+            return "state-hash-ledger";
         case BundleSectionTag::Invalid:
             return "invalid";
     }
@@ -399,6 +403,48 @@ DiagStatus check_bundle_inspect(void* /*context*/, cont::ConstSpan<DiagArg> args
     }
     reason.append("bundle.inspect takes at most one argument, replay=<not-run|reproduced|not-reproduced>");
     return DiagStatus::BadArgument;
+}
+
+// The most bundles state.divergence judges at once (a lockstep session's machines and a recorded run).
+constexpr crd::u32 kMaxDivergenceBundles = 64U;
+
+// state.divergence's one argument: the ledger judged as the recorded run, by its name.
+DiagStatus check_state_divergence(void* /*context*/, cont::ConstSpan<DiagArg> args, cont::String& reason)
+{
+    if (args.empty() || (args.size() == 1U && args[0].name == cont::StringView{"reference"} && !args[0].value.empty() &&
+                         args[0].value.size() <= kStateLedgerNameBytes))
+    {
+        return DiagStatus::Ok;
+    }
+    reason.append("state.divergence takes at most one argument, reference=<a ledger's name>");
+    return DiagStatus::BadArgument;
+}
+
+// A decoded ledger's shape: its name, window and history (no item per step).
+void add_state_ledger_item(const StateHashLedger& l, DiagFields& item, DiagSnapshot& out)
+{
+    cont::String base(out.allocator());
+    cont::String chain(out.allocator());
+    cont::String last(out.allocator());
+    detail::append_hex(base, l.base_chain());
+    detail::append_hex(chain, l.chain());
+    if (l.size() > 0U)
+    {
+        detail::append_hex(last, l.entry(l.size() - 1U).hash);
+    }
+    item.clear();
+    item.str("kind", "state-ledger")
+        .str("name", l.name())
+        .u64("capacity", l.capacity())
+        .u64("first_step", l.first_step())
+        .u64("recorded", l.recorded())
+        .u64("kept", l.size())
+        .u64("oldest_kept_step", l.size() > 0U ? l.entry(0U).step : 0U)
+        .u64("last_step", l.size() > 0U ? l.entry(l.size() - 1U).step : 0U)
+        .str("last_hash", cont::StringView{last.data(), last.size()})
+        .str("base_chain", cont::StringView{base.data(), base.size()})
+        .str("chain", cont::StringView{chain.data(), chain.size()});
+    (void)out.add_item(item);
 }
 
 [[nodiscard]] ReplayOutcome requested_replay(const DiagRequest& request) noexcept
@@ -998,6 +1044,12 @@ DiagCommandService::DiagCommandService(DiagAuthoritySet grant, const DiagService
          &DiagCommandService::run_bundle_inspect,
          this,
          &check_bundle_inspect},
+        {{"state.divergence", "perf",
+          "the first divergent step and machine across the state-hash ledgers of a directory's bundles",
+          DiagAuthority::Read, true},
+         &DiagCommandService::run_state_divergence,
+         this,
+         &check_state_divergence},
         {{"capture.start", "perf", "open a capture window (clears the profiler's sample rings)", DiagAuthority::Record,
           false},
          &DiagCommandService::run_capture_start, this},
@@ -1821,6 +1873,9 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
         .boolean("build_refused", imp.build_refused)
         .boolean("hardware_identity", imp.has_hardware)
         .boolean("hardware_refused", imp.hardware_refused)
+        .boolean("state_ledger", imp.has_state_ledger)
+        .boolean("state_ledger_refused", imp.state_ledger_refused)
+        .str("state_ledger_error", imp.state_ledger_error)
         .boolean("flight_record", flight.ok)
         .boolean("flight_refused", flight_present && !flight.ok)
         .str("flight_error", flight_error);
@@ -1874,6 +1929,10 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
     {
         add_flight_items(flight.capture, item, out);
     }
+    if (imp.has_state_ledger)
+    {
+        add_state_ledger_item(imp.state_ledger, item, out);
+    }
     if (imp.status != ImportStatus::Rejected)
     {
         add_classification_items(crash_present ? &bundled : nullptr, imp.has_hardware ? &imp.hardware : nullptr, replay,
@@ -1901,6 +1960,226 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
         cont::String differing(out.allocator());
         (void)same_machine(imp.hardware, host_hardware_identity(), differing);
         add_hardware_items(imp.hardware, &differing, item, out);
+    }
+    return DiagStatus::Ok;
+}
+
+namespace
+{
+// One bundle state.divergence read: its ledger and its machine, or why it takes no part.
+struct DivergenceBundle
+{
+    explicit DivergenceBundle(crd::memory::IAllocator* alloc) : file(alloc), ledger({}, 1U, alloc) {}
+
+    cont::String file;        // the name in the directory
+    cont::StringView refused; // why it takes no part (static text); empty for a participant
+    StateHashLedger ledger;
+    bool has_machine = false;
+    HardwareIdentity machine;
+};
+
+constexpr cont::StringView kBundleSuffix{".cdb"};
+
+[[nodiscard]] bool has_bundle_suffix(cont::StringView name) noexcept
+{
+    return name.size() > kBundleSuffix.size() && name.substr(name.size() - kBundleSuffix.size()) == kBundleSuffix;
+}
+
+[[nodiscard]] cont::StringView file_name(const crd::platform::fs::Path& p) noexcept
+{
+    const cont::StringView g = p.generic();
+    return g.substr(g.rfind('/') + 1U);
+}
+} // namespace
+
+DiagStatus DiagCommandService::run_state_divergence(void* self, const DiagCall& call, DiagSnapshot& out)
+{
+    namespace fs = crd::platform::fs;
+    auto* svc = static_cast<DiagCommandService*>(self);
+
+    const fs::Path dir{call.file};
+    if (!fs::is_directory(dir))
+    {
+        out.reason.append("the path is not a directory of bundles");
+        return DiagStatus::Failed;
+    }
+    // The directory's bundles in name order, each measured before any is read: together they are bounded by the
+    // host's bundle limit, so the ledgers held at once are too.
+    cont::Array<fs::Path> listed(out.allocator());
+    fs::list_directory(dir, listed);
+    cont::Array<fs::Path> files(out.allocator());
+    crd::u64 total = 0U;
+    for (const fs::Path& p : listed)
+    {
+        if (has_bundle_suffix(file_name(p)) && fs::is_file(p))
+        {
+            files.push_back(p);
+            total += fs::file_size(p);
+        }
+    }
+    std::sort(files.begin(), files.end(),
+              [](const fs::Path& a, const fs::Path& b) { return a.generic() < b.generic(); });
+    if (files.size() > kMaxDivergenceBundles)
+    {
+        out.reason.append("the directory holds ");
+        append_u64(out.reason, files.size());
+        out.reason.append(" bundles; at most ");
+        append_u64(out.reason, kMaxDivergenceBundles);
+        out.reason.append(" are judged at once");
+        return DiagStatus::Oversized;
+    }
+    if (total > svc->m_config.max_bundle_bytes)
+    {
+        out.reason.append("the bundles are ");
+        append_u64(out.reason, total);
+        out.reason.append(" bytes together; the host's limit is ");
+        append_u64(out.reason, svc->m_config.max_bundle_bytes);
+        return DiagStatus::Oversized;
+    }
+
+    BundleLimits limits;
+    limits.max_total_bytes = svc->m_config.max_bundle_bytes;
+    cont::Array<DivergenceBundle> bundles(out.allocator());
+    cont::Array<crd::u8> bytes(out.allocator());
+    for (const fs::Path& p : files)
+    {
+        if (call.cancelled())
+        {
+            out.reason.append("cancelled while the bundles were read");
+            return DiagStatus::Cancelled;
+        }
+        DivergenceBundle b(out.allocator());
+        b.file.append(file_name(p));
+        // No more than was measured is read: a file that grew since is read as the prefix the bound allows.
+        bytes.clear();
+        if (!fs::read_file_range(p, 0U, fs::file_size(p), bytes))
+        {
+            b.refused = "the bundle could not be read";
+            bundles.push_back(static_cast<DivergenceBundle&&>(b));
+            continue;
+        }
+        svc->m_file_bytes_read += bytes.size();
+        BundleImport imp = import_bundle({bytes.data(), bytes.size()}, limits, out.allocator());
+        if (imp.status == ImportStatus::Rejected)
+        {
+            b.refused = import_reject_name(imp.reject);
+        }
+        else if (imp.state_ledger_refused)
+        {
+            b.refused = imp.state_ledger_error;
+        }
+        else if (!imp.has_state_ledger)
+        {
+            bool declared_absent = false;
+            for (const ImportedSection& sec : imp.sections)
+            {
+                declared_absent = declared_absent || (sec.tag == BundleSectionTag::StateHashLedger &&
+                                                      (sec.section_flags & kSectionFlagAbsent) != 0U);
+            }
+            b.refused = declared_absent ? cont::StringView{"its writer could not read the ledger"}
+                                        : cont::StringView{"the bundle carries no state-hash ledger"};
+        }
+        else
+        {
+            b.ledger = static_cast<StateHashLedger&&>(imp.state_ledger);
+            b.has_machine = imp.has_hardware;
+            b.machine = static_cast<HardwareIdentity&&>(imp.hardware);
+        }
+        bundles.push_back(static_cast<DivergenceBundle&&>(b));
+    }
+
+    // The participants in name order; the reference, when named, is the recorded run.
+    const DiagRequest& request = *call.request;
+    cont::StringView reference = {};
+    for (const DiagArg& a : request.args)
+    {
+        reference = a.name == cont::StringView{"reference"} ? a.value : reference;
+    }
+    StateDivergenceMonitor monitor(out.allocator());
+    cont::Array<crd::u32> index_of(out.allocator()); // the monitor's index per bundle (kNoStateParticipant: none)
+    crd::u32 references = 0U;
+    crd::u32 refused = 0U;
+    for (const DivergenceBundle& b : bundles)
+    {
+        if (!b.refused.empty())
+        {
+            index_of.push_back(kNoStateParticipant);
+            ++refused;
+            continue;
+        }
+        const crd::u32 index = monitor.add(b.ledger, b.has_machine ? &b.machine : nullptr);
+        index_of.push_back(index);
+        if (!reference.empty() && b.ledger.name() == reference)
+        {
+            ++references;
+            (void)monitor.set_reference(index);
+        }
+    }
+    if (!reference.empty() && references != 1U)
+    {
+        out.reason.append(references == 0U ? "no bundle's ledger is named " : "more than one ledger is named ");
+        out.reason.append(reference);
+        return DiagStatus::Failed;
+    }
+    const StateDivergence& r = monitor.update();
+    const cont::String message = state_divergence_message(monitor, out.allocator());
+    const bool judged = r.verdict != StateDivergenceVerdict::Waiting && r.verdict != StateDivergenceVerdict::Agree;
+
+    out.summary.str("path", request.path)
+        .u64("bundles", bundles.size())
+        .u64("participants", monitor.participants())
+        .u64("refused", refused)
+        .str("verdict", state_divergence_verdict_name(r.verdict))
+        .u64("compared", r.compared)
+        .u64("skipped", r.skipped)
+        .u64("last_step", r.last_step)
+        .u64("step", judged ? r.step : 0U)
+        .boolean("before", judged && r.before)
+        .boolean("chains_compared", !judged || r.chains_compared)
+        .str("reference", reference)
+        .str("cause", state_divergence_cause_name(r.cause))
+        .str("message", cont::StringView{message.data(), message.size()});
+
+    DiagFields item(out.allocator());
+    cont::String hash(out.allocator());
+    cont::String chain(out.allocator());
+    for (crd::usize i = 0U; i < bundles.size(); ++i)
+    {
+        const DivergenceBundle& b = bundles[i];
+        const cont::StringView file = cont::StringView{b.file.data(), b.file.size()};
+        item.clear();
+        if (!b.refused.empty())
+        {
+            item.str("kind", "refused").str("file", file).str("reason", b.refused);
+            (void)out.add_item(item);
+            continue;
+        }
+        const crd::u32 index = index_of[i];
+        item.str("kind", "participant")
+            .str("file", file)
+            .str("ledger", b.ledger.name())
+            .u64("first_step", b.ledger.first_step())
+            .u64("recorded", b.ledger.recorded())
+            .u64("kept", b.ledger.size())
+            .str("cpu_model", b.has_machine ? cont::StringView{b.machine.cpu_model.data(), b.machine.cpu_model.size()}
+                                            : cont::StringView{})
+            .boolean("reference", r.has_reference && r.reference == index);
+        if (judged)
+        {
+            // Its value at the first divergent step.
+            const StateParticipantValue& v = r.values[index];
+            hash.clear();
+            chain.clear();
+            detail::append_hex(hash, v.hash);
+            detail::append_hex(chain, v.chain);
+            item.boolean("present", v.present)
+                .str("hash", v.present ? cont::StringView{hash.data(), hash.size()} : cont::StringView{})
+                .str("chain", cont::StringView{chain.data(), chain.size()})
+                .boolean("agrees", v.agrees)
+                .str("cpu_advisory", v.advisory != nullptr ? v.advisory->id : cont::StringView{})
+                .str("microcode_state", microcode_state_name(v.microcode));
+        }
+        (void)out.add_item(item);
     }
     return DiagStatus::Ok;
 }

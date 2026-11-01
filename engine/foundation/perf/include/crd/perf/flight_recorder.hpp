@@ -443,12 +443,22 @@ struct FlightRecordRead
 // anything is copied; a wrong magic or version, a short or over-long payload, or an inconsistent count is refused.
 [[nodiscard]] FlightRecordRead decode_flight_record(cont::ConstSpan<crd::u8> payload);
 
+// The state-hash ledger a flight bundle carries (crd/perf/state_hash.hpp), as its host read it.
+struct FlightStateLedger
+{
+    bool attached = false;            // the host has a ledger; without one the bundle has no ledger section
+    cont::ConstSpan<crd::u8> payload; // its encoded payload; empty when it could not be read on this path
+};
+
 // A complete flight bundle: a Manifest, the FlightRecord, the BuildIdentity of this build
-// (crd/perf/build_identity.hpp) and a SymbolIndex of `modules` (the host's module snapshot, crd/perf/symbol_index.hpp).
-// With no modules the SymbolIndex is an explicit absent section the manifest declares, never a silently missing one.
-// Nothing here enumerates modules or touches the loader, so the fatal path may call it with a snapshot taken earlier.
+// (crd/perf/build_identity.hpp), the HardwareIdentity of this machine, a SymbolIndex of `modules` (the host's module
+// snapshot, crd/perf/symbol_index.hpp) and the host's StateHashLedger. With no modules the SymbolIndex, and with an
+// attached ledger it could not read the StateHashLedger, is an explicit absent section the manifest declares, never a
+// silently missing one. Nothing here enumerates modules, touches the loader or reads a ledger, so the fatal path may
+// call it with a snapshot taken earlier.
 [[nodiscard]] cont::Array<crd::u8> write_flight_bundle(const FlightCapture&           capture,
-                                                       cont::ConstSpan<ModuleIdentity> modules = {});
+                                                       cont::ConstSpan<ModuleIdentity> modules = {},
+                                                       FlightStateLedger ledger = {});
 
 // A one-line JSON summary of a capture (trigger, end, loss, replay; not the events).
 void flight_capture_summary_json(const FlightCapture& capture, cont::String& out);

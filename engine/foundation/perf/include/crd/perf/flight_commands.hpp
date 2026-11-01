@@ -14,12 +14,13 @@
 //   flight.policy   Record  load the flight-policy asset at the request path (crd/perf/diag_assets.hpp) and reload
 //                           the recorder's policy; a refused document or a refused reload keeps the active policy
 //   flight.write    Record  write the retained capture as a flight bundle at the request path (never overwriting),
-//                           with this build's identity and the host's refreshed module snapshot
+//                           with this build's identity, the host's refreshed module snapshot and its attached ledger
 //
 // Contract: docs/design/runtime-diagnostics.md (DIAG.9b); ADR-0133.
 
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/flight_recorder.hpp>
+#include <crd/perf/state_hash.hpp>
 
 #include <crd/core/types.hpp>
 
@@ -81,17 +82,34 @@ public:
     // refresh_modules(), modules(), the recorder or a command service.
     [[nodiscard]] bool try_modules(cont::Array<ModuleIdentity>& out, bool& overflow) const;
 
+    // The state-hash ledger every bundle of this host carries (crd/perf/state_hash.hpp; nullptr detaches it). Its loop
+    // keeps recording it; the ledger must stay alive until it is detached, which waits for a bundle writer reading it.
+    // Never call it from a fatal path or a forward sink.
+    void attach_state_ledger(const StateHashLedger* ledger);
+
+    // The attached ledger's payload, for a request or the host's own thread: false when none is attached.
+    [[nodiscard]] bool state_ledger(cont::Array<crd::u8>& out) const;
+
+    // The attached ledger's payload for a forward sink, which can run on a fatal path: the attachment's lock and the
+    // ledger's are tried a bounded number of times, never waited on. Returns whether a ledger is attached; `out` is
+    // empty when it could not be read, and the sink's bundle declares the ledger absent.
+    [[nodiscard]] bool try_state_ledger(cont::Array<crd::u8>& out) const;
+
 private:
-    class ModulesLock; // m_modules_mutex held, with its owner recorded for try_modules()
+    class SnapshotLock; // m_snapshot_mutex held, with its owner recorded for the try_ readers
+
+    // m_snapshot_mutex within the try_ readers' bound; false on the thread that holds it.
+    [[nodiscard]] bool try_lock_snapshot() const;
 
     FlightRecorder&                m_recorder;
     mutable std::mutex             m_mutex; // the retained capture
     FlightCapture                  m_last;
     bool                           m_has_last = false;
-    mutable std::mutex             m_modules_mutex; // the module snapshot
-    mutable std::atomic<std::thread::id> m_modules_owner{}; // the thread holding m_modules_mutex (default: none)
+    mutable std::mutex             m_snapshot_mutex; // the module snapshot and the attached ledger
+    mutable std::atomic<std::thread::id> m_snapshot_owner{}; // the thread holding m_snapshot_mutex (default: none)
     cont::Array<ModuleIdentity>    m_modules;
     bool                           m_modules_overflow = false;
+    std::atomic<const StateHashLedger*> m_ledger{nullptr}; // set under m_snapshot_mutex, dereferenced under it
     std::atomic<crd::u64>          m_received{0U};
     std::atomic<bool>              m_installed{false};
     std::atomic<FlightCaptureSink> m_forward{nullptr};

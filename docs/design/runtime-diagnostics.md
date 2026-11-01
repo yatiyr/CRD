@@ -3321,7 +3321,18 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   or `undecided` for two without a reference. The diverging participants are named with their hardware identity, the
   cause is `machine` when an agreeing machine has the same processor and `processor-difference` when no agreeing
   machine has any diverging machine's processor, each diverging processor's advisory and microcode state are judged
-  as `classify_fault` judges them, and `state_divergence_message` says it in one sentence.
+  as `classify_fault` judges them, and `state_divergence_message` says it in one sentence. A host carries its
+  process's ledger in every flight bundle (section 9, `StateHashLedger`): `FlightCommandHost::attach_state_ledger`
+  names it while its loop keeps recording (`record` and the encoders share the ledger's lock, so a bundle writer on
+  another thread reads whole steps), `flight.write` encodes it waiting and a fatal-path writer only tries both locks
+  a bounded number of times, declaring the section absent in the manifest when it cannot read it; a full ledger
+  (`kMaxStateLedgerSteps`, 2^21 steps) fits one section. The importer decodes the section through the untrusted
+  decoder, `bundle.inspect` reports its name, window and chains, and the `state.divergence` command (Read, a path)
+  judges the bundles (`*.cdb`) of a directory under the root, each ledger with its own bundle's hardware identity,
+  against the majority or `reference=<ledger name>`: the verdict, step, cause and sentence, one item per participant
+  with its value at that step and one per bundle that takes no part with why (rejected, a refused or absent ledger,
+  none carried); at most 64 bundles, together within the host's bundle limit, measured before any is read and each
+  read through crd-platform's ranged read, which the I/O fault seam observes.
 - The hardware check (`crd/perf/hardware_check.hpp`), which `ceridc doctor --hardware` and the `hardware.check`
   command run: one thread pinned to each logical CPU (`crd::pin_current_thread`, the walk the CPU selection uses) runs
   each arm for the same time on every CPU at once. The arms are Cerid-free, each result checked against an answer

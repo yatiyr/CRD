@@ -12,8 +12,9 @@
 //   - a FlightCommandHost as the recorder's sink, its module snapshot taken at start and refreshed after the host
 //     loads modules; with a capture directory every delivered capture is also written there as a flight bundle
 //     (flight-<n>.cdb, the first free n, never overwriting, the newest `max_bundles` kept). The writer runs wherever
-//     a capture is delivered, a fatal path included: it reads the snapshot with try_modules(), logs nothing and never
-//     calls back into the recorder or a service;
+//     a capture is delivered, a fatal path included: it reads the snapshot with try_modules() and the state-hash
+//     ledger a deterministic simulation attaches (command_host().attach_state_ledger) with try_state_ledger(), logs
+//     nothing and never calls back into the recorder or a service;
 //   - a FaultInjector attached to the recorder, consulted by the wrapped allocator and, with the I/O and GPU fault
 //     seams' hooks the host installs at start, by every read site and device-loss seam. A shipping build compiles
 //     the seams out, so there fault injection is Unavailable;

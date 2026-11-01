@@ -632,8 +632,12 @@ void DiagnosticHost::write_capture(const FlightCapture& capture, void* host)
     cont::Array<ModuleIdentity> modules;
     bool                        overflow = false;
     (void)self->m_command_host.try_modules(modules, overflow);
+    // The attached ledger likewise: unread within the bound, the bundle declares it absent.
+    cont::Array<crd::u8> ledger;
+    const bool attached = self->m_command_host.try_state_ledger(ledger);
     const cont::Array<crd::u8> bundle =
-        write_flight_bundle(capture, cont::ConstSpan<ModuleIdentity>{modules.data(), modules.size()});
+        write_flight_bundle(capture, cont::ConstSpan<ModuleIdentity>{modules.data(), modules.size()},
+                            FlightStateLedger{attached, cont::ConstSpan<crd::u8>{ledger.data(), ledger.size()}});
 
     bool         written = false;
     cont::String path;
