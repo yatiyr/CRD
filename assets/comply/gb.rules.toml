@@ -2,8 +2,13 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review GB
 format = "cerid-rules/1"
 jurisdiction = "GB"
-generation = 7
+generation = 8
 register = "2026-11-01"
+
+[[scope]]
+id = "channel.distribution"
+kind = "channel"
+state = "planned"
 
 [[scope]]
 id = "channel.cerid-store"
@@ -13,6 +18,11 @@ state = "planned"
 [[scope]]
 id = "channel.mods-and-ugc"
 kind = "channel"
+state = "planned"
+
+[[scope]]
+id = "product.online-sessions"
+kind = "product"
 state = "planned"
 
 [[scope]]
@@ -250,15 +260,603 @@ topic = "export-control"
 state = "planned"
 title = "UK sanctions (the UK Sanctions List)"
 instrument = "Sanctions and Anti-Money Laundering Act 2018"
-article = "Regulations made under the act"
-primary = "https://www.legislation.gov.uk/ukpga/2018/13"
-read = false
+article = "The regimes made under section 1, as the FCDO's collection of current UK sanctions regimes lists them"
+primary = "https://www.gov.uk/government/collections/uk-sanctions-regimes-under-the-sanctions-act"
+read = true
 obligation = "Screen distribution, accounts and payments against the UK Sanctions List."
 applies_to = ["channel.cerid-store", "flow.account-data", "flow.payments"]
 check = "active"
 check_name = "crd-comply-tests [sanctions]: parties and destinations screened against each authority's list, failing closed on a missing or stale list"
 check_ref = "tests/foundation/comply/test_sanctions.cpp"
 effective = "2018-05-23"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2020-948.afghanistan"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Afghanistan"
+instrument = "The Afghanistan (Sanctions) (EU Exit) Regulations 2020 (S.I. 2020/948)"
+article = "Regulations 8 to 12 (asset freeze) and 15 to 22 (military goods to designated persons)"
+primary = "https://www.legislation.gov.uk/uksi/2020/948"
+read = true
+obligation = "Make no funds or economic resources available to a person the regime designates (regulations 8 to 12), and supply no military goods or technology and no related technical assistance, financial services or brokering to such a person (regulations 15 to 22)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the UK Sanctions List lists its persons)"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2019-600.belarus"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: the Republic of Belarus"
+instrument = "The Republic of Belarus (Sanctions) (EU Exit) Regulations 2019 (S.I. 2019/600)"
+article = "Regulations 21 to 27 (critical-industry goods of Schedule 2A, 5D992 mass-market encryption software among them; dual-use, interception and monitoring and luxury goods) and 24A"
+primary = "https://www.legislation.gov.uk/uksi/2019/600"
+read = true
+obligation = "Export, supply, make available or transfer to no person connected with Belarus, and for no use in Belarus, the restricted goods and technology of regulations 21 to 27, which include critical-industry goods: Schedule 2A names 5D992 information security software classified under the Cryptography Note (mass-market encryption), with consumer communication devices and software updates for civilian use excepted (regulation 31E), and dual-use, interception and monitoring, internal repression, luxury and military goods, nor the related technical assistance, financial services or brokering; provide no interception and monitoring services to the Government of Belarus (regulation 24A)."
+applies_to = ["channel.cerid-store", "channel.distribution", "product.collaboration", "product.online-sessions", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UK embargo screens Belarus as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "NET.2", "STORE.1", "STORE.3", "NET-SERVER", "COLLAB.1"]
+
+[[rule]]
+id = "gb.si-2020-608.bosnia-and-herzegovina"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Bosnia and Herzegovina"
+instrument = "The Bosnia and Herzegovina (Sanctions) (EU Exit) Regulations 2020 (S.I. 2020/608)"
+article = "Regulations 11 to 15 (asset freeze)"
+primary = "https://www.legislation.gov.uk/uksi/2020/608"
+read = true
+obligation = "Make no funds or economic resources available to a person the regime designates (regulations 11 to 15)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the UK Sanctions List lists its persons)"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2020-616.central-african-republic"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: the Central African Republic"
+instrument = "The Central African Republic (Sanctions) (EU Exit) Regulations 2020 (S.I. 2020/616)"
+article = "Regulations 21 to 28 (military goods to armed groups operating in the Central African Republic)"
+primary = "https://www.legislation.gov.uk/uksi/2020/616"
+read = true
+obligation = "Supply no military goods or technology, and no related technical assistance, financial services, brokering or armed personnel, to an armed group operating in the Central African Republic or an associated individual (regulations 21 to 28)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UK embargo screens the Central African Republic as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2008-3231.export-control-order"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK export controls: the embargoed destinations (the arms embargo on mainland China and Hong Kong among them)"
+instrument = "The Export Control Order 2008 (S.I. 2008/3231)"
+article = "Article 20 with Schedule 4 Parts 1 and 2 (embargoed destinations)"
+primary = "https://www.legislation.gov.uk/uksi/2008/3231"
+read = true
+obligation = "Supply or deliver no goods subject to trade controls (category A, B and C goods: the military goods of Schedule 2) from one third country to another that is an embargoed destination (article 20): the Democratic People's Republic of Korea and Iran (Part 1), Belarus, Burma (Myanmar), the Central African Republic, China (other than its Special Administrative Regions), the Democratic Republic of the Congo, Hong Kong, Lebanon, Libya, Macao, Russia, South Sudan, Sudan, Venezuela and Zimbabwe (Part 2); exporting military goods anywhere needs a licence (article 3)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UK embargo screens China, Hong Kong and Macao as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2009-04-06"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2019-433.drc"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: the Democratic Republic of the Congo"
+instrument = "The Democratic Republic of the Congo (Sanctions) (EU Exit) Regulations 2019 (S.I. 2019/433)"
+article = "Regulations 21 to 28 (military goods to non-governmental persons operating in the Democratic Republic of the Congo)"
+primary = "https://www.legislation.gov.uk/uksi/2019/433"
+read = true
+obligation = "Supply no military goods or technology, and no related technical assistance, financial services, brokering or armed personnel, to a non-governmental person operating in the Democratic Republic of the Congo (regulations 21 to 28)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UK embargo screens the Democratic Republic of the Congo as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2019-411.dprk"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: the Democratic People's Republic of Korea"
+instrument = "The Democratic People's Republic of Korea (Sanctions) (EU Exit) Regulations 2019 (S.I. 2019/411)"
+article = "Regulations 28 (transfers of funds to or from the DPRK), 35 to 47 (restricted goods: military and dual-use goods; luxury and other goods), 56(1)(e) (computer and related services) and 57 (financial support for trade)"
+primary = "https://www.legislation.gov.uk/uksi/2019/411"
+read = true
+obligation = "Export, make available or transfer to no person connected with the DPRK, and for no use there, military, dual-use and other arms- and WMD-related goods and technology (regulations 35 to 38), goods for its armed forces (43, 44) and the goods of regulations 45 and 47, luxury goods among them; provide no computer and related services to or for the benefit of a person connected with the DPRK (56(1)(e)), and no financial services or funds for the purpose of trade with the DPRK (57); make or receive no transfer of funds to or from the DPRK (28)."
+applies_to = ["channel.cerid-store", "channel.distribution", "product.collaboration", "product.online-sessions", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UK embargo screens the DPRK as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "NET.2", "STORE.1", "STORE.3", "NET-SERVER", "COLLAB.1"]
+
+[[rule]]
+id = "gb.si-2019-1145.guinea"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Guinea"
+instrument = "The Guinea (Sanctions) (EU Exit) Regulations 2019 (S.I. 2019/1145)"
+article = "Regulations 11 to 15 (asset freeze)"
+primary = "https://www.legislation.gov.uk/uksi/2019/1145"
+read = true
+obligation = "Make no funds or economic resources available to a person the regime designates (regulations 11 to 15)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the UK Sanctions List lists its persons)"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2019-554.guinea-bissau"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: the Republic of Guinea-Bissau"
+instrument = "The Republic of Guinea-Bissau (Sanctions) (EU Exit) Regulations 2019 (S.I. 2019/554)"
+article = "Regulations 11 to 15 (asset freeze)"
+primary = "https://www.legislation.gov.uk/uksi/2019/554"
+read = true
+obligation = "Make no funds or economic resources available to a person the regime designates (regulations 11 to 15)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the UK Sanctions List lists its persons)"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2022-1281.haiti"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Haiti"
+instrument = "The Haiti (Sanctions) Regulations 2022 (S.I. 2022/1281)"
+article = "Regulations 15 to 22 (military goods)"
+primary = "https://www.legislation.gov.uk/uksi/2022/1281"
+read = true
+obligation = "Export, supply, make available or transfer no military goods or technology to a person connected with Haiti or for use in Haiti, and no related technical assistance, financial services or brokering (regulations 15 to 22)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UK embargo screens Haiti as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2022-12-28"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2023-1314.iran"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Iran"
+instrument = "The Iran (Sanctions) Regulations 2023 (S.I. 2023/1314)"
+article = "Regulations 28 to 35 (internal repression and interception and monitoring goods and services) and 37 to 43 (goods and technology of strategic concern)"
+primary = "https://www.legislation.gov.uk/uksi/2023/1314"
+read = true
+obligation = "Export, supply, make available or transfer to no person connected with Iran, and for no use in Iran, internal repression and interception and monitoring goods and technology (regulations 28 to 34) or goods and technology of strategic concern (37 to 43), nor the related technical assistance, financial services or brokering; provide no interception and monitoring services to the Government of Iran (35)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UK embargo screens Iran as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2023-12-14"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2019-461.iran-nuclear"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Iran (nuclear)"
+instrument = "The Iran (Sanctions) (Nuclear) (EU Exit) Regulations 2019 (S.I. 2019/461)"
+article = "Regulations 21 to 27 (military, missile-list, nuclear-list and other restricted goods), 27A to 27O (gold, energy-related goods and services) and 27P to 27V with Schedule 1I (sectoral software: business enterprise and industrial design software)"
+primary = "https://www.legislation.gov.uk/uksi/2019/461"
+read = true
+obligation = "Export, supply, make available or transfer to no person connected with Iran, and for no use in Iran, the restricted goods and technology of regulations 21 to 27 and the gold, precious metals, diamonds and energy-related goods of regulations 27A to 27N; provide no relevant energy services (27O); export, make available, transfer or support no sectoral software and technology for a person connected with Iran or use there (27P to 27V): Schedule 1I names enterprise resource planning, customer relationship management, business intelligence, supply chain, data warehouse, maintenance, project management, product lifecycle management, data services and access control software and building information modelling, computer aided design and manufacture and engineer to order software, unless in the public domain or used for basic scientific research, with software of a non-commercial nature or for personal use excepted (37D(3))."
+applies_to = ["channel.cerid-store", "channel.distribution", "product.collaboration", "product.online-sessions", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UK embargo screens Iran as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "NET.2", "STORE.1", "STORE.3", "NET-SERVER", "COLLAB.1"]
+
+[[rule]]
+id = "gb.si-2020-707.iraq"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Iraq"
+instrument = "The Iraq (Sanctions) (EU Exit) Regulations 2020 (S.I. 2020/707)"
+article = "Regulations 17 to 21 (military goods) and 22 to 27 (illegally removed Iraqi cultural property)"
+primary = "https://www.legislation.gov.uk/uksi/2020/707"
+read = true
+obligation = "Export, supply, make available or transfer no military goods or technology to a person connected with Iraq or for use in Iraq, and no related brokering (regulations 17 to 21); trade in no illegally removed Iraqi cultural property (22 to 27)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UK embargo screens Iraq as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2020-612.lebanon"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Lebanon"
+instrument = "The Lebanon (Sanctions) (EU Exit) Regulations 2020 (S.I. 2020/612)"
+article = "Regulations 7 to 13 (military goods)"
+primary = "https://www.legislation.gov.uk/uksi/2020/612"
+read = true
+obligation = "Export, supply, make available or transfer no military goods or technology to a person connected with Lebanon or for use in Lebanon, and no related technical assistance, financial services or brokering (regulations 7 to 13), except as Part 3 provides."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UK embargo screens Lebanon as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2020-617.lebanon-hariri"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Lebanon (assassination of Rafiq Hariri and others)"
+instrument = "The Lebanon (Sanctions) (Assassination of Rafiq Hariri and others) (EU Exit) Regulations 2020 (S.I. 2020/617)"
+article = "Regulations 8 to 12 (asset freeze)"
+primary = "https://www.legislation.gov.uk/uksi/2020/617"
+read = true
+obligation = "Make no funds or economic resources available to a person the regime designates (regulations 8 to 12)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the UK Sanctions List lists its persons)"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2020-1665.libya"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Libya"
+instrument = "The Libya (Sanctions) (EU Exit) Regulations 2020 (S.I. 2020/1665)"
+article = "Regulations 23 to 31 (restricted goods: military, internal repression and migrant smuggling goods)"
+primary = "https://www.legislation.gov.uk/uksi/2020/1665"
+read = true
+obligation = "Export, supply, make available or transfer to no person connected with Libya, and for no use in Libya, military goods, internal repression goods and goods which could be used for migrant smuggling and human trafficking, nor the related technical assistance, financial services, brokering or armed personnel (regulations 23 to 31)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UK embargo screens Libya as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2020-705.mali"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Mali"
+instrument = "The Mali (Sanctions) (EU Exit) Regulations 2020 (S.I. 2020/705)"
+article = "Regulations 12 to 16 (asset freeze)"
+primary = "https://www.legislation.gov.uk/uksi/2020/705"
+read = true
+obligation = "Make no funds or economic resources available to a person the regime designates (regulations 12 to 16)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the UK Sanctions List lists its persons)"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2021-496.myanmar"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Myanmar"
+instrument = "The Myanmar (Sanctions) Regulations 2021 (S.I. 2021/496)"
+article = "Regulations 22 to 28 (military, internal repression and interception and monitoring goods), 30 to 36 (dual-use goods for military use) and 37 (interception and monitoring services)"
+primary = "https://www.legislation.gov.uk/uksi/2021/496"
+read = true
+obligation = "Export, supply, make available or transfer to no person connected with Myanmar, and for no use in Myanmar, military, internal repression and interception and monitoring goods and technology (regulations 22 to 28) or dual-use goods and technology for military use (30 to 36), nor the related technical assistance, financial services or brokering; provide no interception and monitoring services to the Government of Myanmar (37)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UK embargo screens Myanmar as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2021-04-29"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2020-610.nicaragua"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Nicaragua"
+instrument = "The Nicaragua (Sanctions) (EU Exit) Regulations 2020 (S.I. 2020/610)"
+article = "Regulations 11 to 15 (asset freeze)"
+primary = "https://www.legislation.gov.uk/uksi/2020/610"
+read = true
+obligation = "Make no funds or economic resources available to a person the regime designates (regulations 11 to 15)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the UK Sanctions List lists its persons)"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2019-855.russia"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Russia"
+instrument = "The Russia (Sanctions) (EU Exit) Regulations 2019 (S.I. 2019/855)"
+article = "Regulations 22 to 29 (critical-industry goods of Schedule 2A, 5D992 mass-market encryption software among them), 46K (interception and monitoring services), 46Z34 to 46Z38 with Schedule 3IA (sectoral software and technology), 54C (IT consultancy and design services), 30A to 30H and 47 to 54 (non-government controlled Ukrainian territory)"
+primary = "https://www.legislation.gov.uk/uksi/2019/855"
+read = true
+obligation = "Export, supply, make available or transfer to no person connected with Russia, and for no use in Russia, the restricted goods and technology of regulations 22 to 29, which include critical-industry goods: Schedule 2A names 5D992 information security software classified under the Cryptography Note (mass-market encryption), with software updates and consumer communication devices for civilian use excepted (regulation 60B); make available, transfer or support no sectoral software and technology for a person connected with Russia or use there (46Z34 to 46Z38): Schedule 3IA names enterprise resource planning, customer relationship management, business intelligence, supply chain, data warehouse, maintenance, project management and product lifecycle management software and building information modelling, computer aided design and manufacture and engineer to order software, with software of a non-commercial nature or for personal use excepted (60DZA(3)); provide no accounting, advertising, architectural, auditing, consulting, construction, engineering, IT consultancy and design (CPC 83131 and 83141) or public relations services to a person connected with Russia (54C), and no interception and monitoring services to the Government of Russia (46K); for Crimea and the non-government controlled areas of the Donetsk, Kherson, Luhansk and Zaporizhzhia oblasts, export no military or infrastructure-related goods, import nothing, and provide no infrastructure or tourism services (30A to 30H, 47 to 54)."
+applies_to = ["channel.cerid-store", "channel.distribution", "product.collaboration", "product.online-sessions", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UK embargo screens the Russian Federation as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "NET.2", "STORE.1", "STORE.3", "NET-SERVER", "COLLAB.1"]
+
+[[rule]]
+id = "gb.si-2020-642.somalia"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Somalia"
+instrument = "The Somalia (Sanctions) (EU Exit) Regulations 2020 (S.I. 2020/642)"
+article = "Regulations 21 to 27 (military and IED component goods), 28 to 36 (designated persons) and 37 to 40 (charcoal)"
+primary = "https://www.legislation.gov.uk/uksi/2020/642"
+read = true
+obligation = "Export, supply, make available or transfer no military goods or technology and no IED component goods or technology to a person connected with Somalia or for use in Somalia, and no related technical assistance, financial services or brokering (regulations 21 to 27, 36); import or acquire no Somali charcoal (37 to 40)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UK embargo screens Somalia as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2019-438.south-sudan"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: South Sudan"
+instrument = "The South Sudan (Sanctions) (EU Exit) Regulations 2019 (S.I. 2019/438)"
+article = "Regulations 21 to 28 (military goods)"
+primary = "https://www.legislation.gov.uk/uksi/2019/438"
+read = true
+obligation = "Export, supply, make available or transfer no military goods or technology to a person connected with South Sudan or for use there, and no related technical assistance, financial services, brokering or armed personnel (regulations 21 to 28)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UK embargo screens South Sudan as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2020-753.sudan"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Sudan"
+instrument = "The Sudan (Sanctions) (EU Exit) Regulations 2020 (S.I. 2020/753)"
+article = "Regulations 21 to 28 (military goods)"
+primary = "https://www.legislation.gov.uk/uksi/2020/753"
+read = true
+obligation = "Export, supply, make available or transfer no military goods or technology to a person connected with Sudan or for use in Sudan, and no related technical assistance, financial services, brokering or armed personnel (regulations 21 to 28)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UK embargo screens Sudan as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2019-792.syria"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Syria"
+instrument = "The Syria (Sanctions) (EU Exit) Regulations 2019 (S.I. 2019/792)"
+article = "Regulations 28 to 35 (the goods and technology of regulation 28: military, chemical and biological weapons, internal repression and interception and monitoring) and 48 (interception and monitoring services)"
+primary = "https://www.legislation.gov.uk/uksi/2019/792"
+read = true
+obligation = "Export, supply, make available or transfer to no person connected with Syria, and for no use in Syria, the goods and technology regulation 28 names, nor the related technical assistance, financial services or brokering (regulations 29 to 35); provide no interception and monitoring services to the Government of Syria (48)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UK embargo screens Syria as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2020-1233.syria-cultural-property"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Syria (cultural property)"
+instrument = "The Syria (United Nations Sanctions) (Cultural Property) (EU Exit) Regulations 2020 (S.I. 2020/1233)"
+article = "Regulations 7 to 12 (illegally removed Syrian cultural property)"
+primary = "https://www.legislation.gov.uk/uksi/2020/1233"
+read = true
+obligation = "Trade in no illegally removed Syrian cultural property (regulations 7 to 12)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the UK Sanctions List lists its persons)"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2019-135.venezuela"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Venezuela"
+instrument = "The Venezuela (Sanctions) (EU Exit) Regulations 2019 (S.I. 2019/135)"
+article = "Regulations 22 to 28 (military, internal repression and interception and monitoring goods), 29 (interception and monitoring services) and 30 (military-related services)"
+primary = "https://www.legislation.gov.uk/uksi/2019/135"
+read = true
+obligation = "Export, supply, make available or transfer to no person connected with Venezuela, and for no use in Venezuela, military, internal repression and interception and monitoring goods and technology, nor the related technical assistance, financial services or brokering (regulations 22 to 28); provide no interception and monitoring services to the Government of Venezuela (29)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UK embargo screens Venezuela as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2020-1278.yemen"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Yemen"
+instrument = "The Yemen (Sanctions) (EU Exit) (No. 2) Regulations 2020 (S.I. 2020/1278)"
+article = "Regulations 12 to 16 (asset freeze) and 20 to 27 (military goods to designated persons)"
+primary = "https://www.legislation.gov.uk/uksi/2020/1278"
+read = true
+obligation = "Make no funds or economic resources available to a person the regime designates (regulations 12 to 16), and supply no military goods or technology and no related technical assistance, financial services or brokering to such a person (regulations 20 to 27)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the UK Sanctions List lists its persons)"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "gb.si-2019-604.zimbabwe"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UK sanctions: Zimbabwe"
+instrument = "The Zimbabwe (Sanctions) (EU Exit) Regulations 2019 (S.I. 2019/604)"
+article = "Regulations 21 to 28 (military and internal repression goods; military-related services)"
+primary = "https://www.legislation.gov.uk/uksi/2019/604"
+read = true
+obligation = "Export, supply, make available or transfer to no person connected with Zimbabwe, and for no use in Zimbabwe, military and internal repression goods and technology, nor the related technical assistance, financial services or brokering (regulations 21 to 27); provide no military-related services to the Zimbabwe Defence Forces (28)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UK embargo screens Zimbabwe as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2020-12-31"
 sunset = ""
 counsel = "none"
 counsel_reviewed = ""

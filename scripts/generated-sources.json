@@ -1938,7 +1938,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "be0400b920bf8b5f47ea6d7371b9bf6987cb265ae37a62dc4761b0aeccfd8059"
+      "sha256": "5e37dcb85f057d6ee6ce1514b646a03585f02d40ea2256262b10e06ce0dd26bb"
     },
     {
       "path": "assets/comply/int.rules.toml",

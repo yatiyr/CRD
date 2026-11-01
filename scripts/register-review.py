@@ -185,6 +185,8 @@ FEDERAL_REGISTER = 'https://www.federalregister.gov/api/v1/documents/{number}.js
 FEDERAL_REGISTER_TEXT = 'https://www.federalregister.gov/documents/full_text/text/{version}.txt'
 WASSENAAR_LIST = 'List-of-Dual-Use-Goods-and-Technologies'
 SANCTIONS_MAP = 'https://www.sanctionsmap.eu/api/v1/regime'
+UK_REGIMES = '/government/collections/uk-sanctions-regimes-under-the-sanctions-act'
+GOV_UK_CONTENT = 'https://www.gov.uk/api/content{path}'
 # A version a document's URL holds: a CELEX number, a day or an upload path, never a scheme, query or `..`.
 VERSION = re.compile(r'(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._/-]*')
 
@@ -268,6 +270,13 @@ def resolve_sanctions_map(match):
              'url': match.string, 'headers': {'Accept': 'application/json'}}]
 
 
+def resolve_uk_regimes(match):
+    """The FCDO's collection of the current UK sanctions regimes, read through gov.uk's content API: it names each
+    regime's documents, read after it."""
+    return [{'id': 'gov.uk-uk-sanctions-regimes', 'kind': 'primary', 'reader': 'gov-uk-regimes', 'act': UK_REGIMES,
+             'url': GOV_UK_CONTENT.format(path=UK_REGIMES), 'headers': {'Accept': 'application/json'}}]
+
+
 def resolve_gazette(match):
     """An item of the Official Gazette of Turkey (a Presidential decision is published there alone, as a PDF): its
     day's page, which names the gazette and the item's title, is read first, as an index of this item alone (the
@@ -293,6 +302,7 @@ RESOLVERS = (
      resolve_federal_register),
     (re.compile(r'https://www\.wassenaar\.org/control-lists/'), resolve_wassenaar),
     (re.compile(re.escape(SANCTIONS_MAP)), resolve_sanctions_map),
+    (re.compile(re.escape(f'https://www.gov.uk{UK_REGIMES}')), resolve_uk_regimes),
     (re.compile(r'https://www\.resmigazete\.gov\.tr/eskiler/(?P<year>\d{4})/(?P<month>\d{2})/'
                 r'(?P<stem>(?P=year)(?P=month)\d{2}(?:M[1-9]\d*)?)-(?P<item>[1-9]\d*)\.(?P<format>pdf|htm)'),
      resolve_gazette),
@@ -1013,20 +1023,129 @@ def sanctions_map_record(body, source):
     return json.dumps(sanctions_map_regimes(body), sort_keys=True, separators=(',', ':')).encode('utf-8')
 
 
+# The FCDO's collection of the current UK sanctions regimes, the UK's regime index (read 2026-11-01): gov.uk serves the
+# page a person reads as data from its content API. `details.collection_groups` lists content ids by group, of which
+# "Regimes listed by country" and "Regimes listed by theme" hold each regime's guidance and its list of designations;
+# `links.documents` holds the record of each document gov.uk publishes (a listed id without one is not shown on the
+# page: one of the country group on 2026-11-01). A document's `details.body` names the regulation its regime rests on
+# by its first legislation.gov.uk link, the summary's opening sentence; a later link is an amending instrument, which
+# the revised text applies or names among its unapplied effects, and a list of designations links none or the same.
+UK_REGIME_GROUPS = {'Regimes listed by country': 'country', 'Regimes listed by theme': 'theme',
+                    'More information': None}
+LEGISLATION_LINK = re.compile(r'href="https?://www\.legislation\.gov\.uk/'
+                              r'(?P<act>(?:ukpga|uksi|asp|ssi|nia|nisr|asc|wsi)/\d{4}/[1-9]\d*)(?![0-9])')
+
+
+def gov_uk_record(body, source, document_type=None):
+    """The content API record of the gov.uk page `source["act"]` names."""
+    try:
+        record = json.loads(body)
+        found = record['base_path'], record['document_type'], record['details']
+    except (ValueError, KeyError, TypeError) as error:
+        raise Unreadable(f'not a gov.uk content record ({error!r})') from error
+    if found[0] != source['act'] or not isinstance(found[2], dict) or \
+            document_type is not None and found[1] != document_type:
+        raise Unreadable(f'not the gov.uk {document_type or "page"} {source["act"]}')
+    return record
+
+
+def uk_regime_documents(body, source):
+    """(day, {'country': [path, ...], 'theme': [...]}, unpublished) of the regime collection: its public update day,
+    the base paths of the documents each regime group lists that gov.uk publishes, sorted, and the number of ids those
+    groups list without a published record."""
+    collection = gov_uk_record(body, source, 'document_collection')
+    try:
+        records = {document['content_id']: document['base_path'] for document in collection['links']['documents']}
+        groups = {group['title']: group['documents'] for group in collection['details']['collection_groups']}
+        day = collection['public_updated_at'][:10]
+    except (KeyError, TypeError, AttributeError) as error:
+        raise Unreadable(f'not the UK sanctions regimes collection ({error!r})') from error
+    if set(groups) != set(UK_REGIME_GROUPS):
+        raise Unreadable(f'the collection groups {sorted(groups)}, not {sorted(UK_REGIME_GROUPS)}')
+    if not all(isinstance(path, str) and re.fullmatch(r'(?:/[a-z0-9-]+)+', path) for path in records.values()) or \
+            not all(isinstance(ids, list) and all(isinstance(each, str) for each in ids) for ids in groups.values()):
+        raise Unreadable('a collection document with another shape')
+    if _registers.parse_day(day) is None:
+        raise Unreadable(f'no public update day ({day!r})')
+    regimes, unpublished = {}, 0
+    for title, ids in groups.items():
+        if UK_REGIME_GROUPS[title] is None:
+            continue
+        regimes[UK_REGIME_GROUPS[title]] = sorted(records[each] for each in ids if each in records)
+        unpublished += sum(each not in records for each in ids)
+    if not regimes['country'] or set(regimes['country']) & set(regimes['theme']):
+        raise Unreadable('a collection without regimes by country, or with a document in both regime groups')
+    return day, regimes, unpublished
+
+
+def gov_uk_id(path):
+    return 'gov.uk' + path.replace('/', '-')
+
+
+def uk_regimes_version(regimes, unpublished):
+    version = (f'{sum(map(len, regimes.values()))} documents: {len(regimes["country"])} by country, '
+               f'{len(regimes["theme"])} by theme')
+    return version + (f', {unpublished} listed unpublished' if unpublished else '')
+
+
+def read_uk_regimes_index(body, source, today):
+    """The collection is its own index: its public update day, its version and the documents of its regimes, each
+    read after it."""
+    day, regimes, unpublished = uk_regime_documents(body, source)
+    return day, uk_regimes_version(regimes, unpublished), [
+        {'id': gov_uk_id(path), 'act': path, 'reader': 'gov-uk-document', 'headers': {'Accept': 'application/json'},
+         'url': GOV_UK_CONTENT.format(path=path)} for group in regimes.values() for path in group]
+
+
+def read_uk_regimes(body, source, version):
+    """`<n> documents: <c> by country, <t> by theme`: any other change is a new digest of the regimes read."""
+    _, regimes, unpublished = uk_regime_documents(body, source)
+    found = uk_regimes_version(regimes, unpublished)
+    if version is not None and version != found:
+        raise Unreadable(f'the version {version} is not of the collection read, {found}')
+    return found
+
+
+def uk_regimes_record(body, source):
+    _, regimes, unpublished = uk_regime_documents(body, source)
+    return json.dumps({'regimes': regimes, 'unpublished': unpublished}, sort_keys=True,
+                      separators=(',', ':')).encode('utf-8')
+
+
+def read_gov_uk_document(body, source, version):
+    """A regime's document, which names its page."""
+    gov_uk_record(body, source)
+    return version
+
+
+def uk_regime_regulation(body, source):
+    """The legislation.gov.uk act (`uksi/2019/855`) a regime's document names first, else None."""
+    text = gov_uk_record(body, source)['details'].get('body', '')
+    if not isinstance(text, str):
+        raise Unreadable(f'the gov.uk page {source["act"]} has a body that is no text')
+    found = LEGISLATION_LINK.search(text)
+    return found and found['act']
+
+
 # reader(body, source, version) -> the version of an instrument's document; an index reader(body, source, today)
 # -> the version its document's URL holds, or (the part of the URL, the version) when the version says more.
 READERS = {'mevzuat': read_mevzuat, 'legislation-gov-uk': read_legislation_gov_uk,
            'legislation-gov-uk-published': read_legislation_gov_uk_published, 'cellar': read_cellar,
            'ecfr': read_ecfr, 'pdf': read_pdf, 'gazette': read_gazette, 'federal-register': read_federal_register,
-           'sanctions-map': read_sanctions_map}
+           'sanctions-map': read_sanctions_map, 'gov-uk-regimes': read_uk_regimes,
+           'gov-uk-document': read_gov_uk_document}
 # record(body, source) -> the bytes of the instrument within its document, whose SHA-256 is the text read; the whole
 # document for a reader without one.
-RECORDS = {'ecfr': ecfr_record, 'sanctions-map': sanctions_map_record}
-# A document whose reader is here (a revised UK text, which names the changes it has not applied) is its own index.
+RECORDS = {'ecfr': ecfr_record, 'sanctions-map': sanctions_map_record, 'gov-uk-regimes': uk_regimes_record}
+# A document whose reader is here (a revised UK text, which names the changes it has not applied; the UK's regime
+# collection, which names its regimes' documents) is its own index.
 INDEX_READERS = {'cellar-versions': read_cellar_versions, 'ecfr-versions': read_ecfr_versions,
                  'wassenaar-lists': read_wassenaar_lists, 'mevzuat-gazette': read_mevzuat_gazette,
                  'gazette-day': read_gazette_day, 'federal-register-record': read_federal_register_record,
-                 'legislation-gov-uk': read_legislation_gov_uk_effects}
+                 'legislation-gov-uk': read_legislation_gov_uk_effects, 'gov-uk-regimes': read_uk_regimes_index}
+# The readers whose document indexes a class of instruments the register holds one by one, with the Review method
+# judging the class; the documents such an index names are its own, never acts a consolidated text lacks.
+CLASS_JUDGES = {'sanctions-map': 'judge_regimes', 'gov-uk-regimes': 'judge_uk_regimes'}
 
 
 def read_rfc_editor(body):
@@ -1345,7 +1464,7 @@ class Review:
         instrument = entry['instrument']
         what = f'{entry["id"]} ({", ".join(entry["rows"])}): {instrument["name"]}, {instrument["article"]}'
         found = f'version {version}, ' if version else ''
-        lacked = self.items[source['id']].get('documents', [])
+        lacked = [] if source.get('reader') in CLASS_JUDGES else self.items[source['id']].get('documents', [])
         lacks = f'; read the acts its consolidated text lacks as published ({", ".join(lacked)})' if lacked else ''
         consolidated = instrument['consolidated']
         if consolidated is None:
@@ -1388,6 +1507,47 @@ class Review:
                 self.readings.append(f'{what}: no regime lists {entry_id}\'s regulation {act} any more; read its '
                                      'repeal and record the entry\'s sunset')
 
+    def judge_uk_regimes(self, entry, source):
+        """The FCDO's regimes against the register's UK regulations: the regulation each regime listed by country
+        rests on is an entry, read and judged like any other instrument (one read without a destination when it
+        restricts no supply to a place); a regime listed by theme reaches the persons it lists, whom the UK Sanctions
+        List names. A GB entry of COMPLY.1 on legislation.gov.uk that no regime names any more has ended; none is
+        judged ended while a regime document is unread."""
+        what = f'{entry["id"]} ({", ".join(entry["rows"])})'
+        _, regimes, _ = uk_regime_documents(self.bodies[source['id']], source)
+        named, unread = {}, 0
+        for group, paths in regimes.items():
+            for path in paths:
+                body = self.bodies.get(gov_uk_id(path))
+                try:
+                    act = None if body is None else uk_regime_regulation(body, {'act': path})
+                except Unreadable as error:
+                    self.unread.append(f'{gov_uk_id(path)}: {error}')
+                    body = None
+                unread += body is None
+                if body is not None and act:
+                    named.setdefault(act, set()).add((group, path))
+        entries = {}
+        for other in self.register['entries']:
+            instrument = other.get('instrument', {})
+            for found in resolve_primary(instrument.get('primary', '')):
+                if found.get('reader') == 'legislation-gov-uk':
+                    entries[found['act']] = other
+        for act, documents in sorted(named.items()):
+            country = sorted(path for group, path in documents if group == 'country')
+            if country and act not in entries:
+                self.readings.append(f'{what}: the regime of {country[0]} rests on {act}, which is no entry of the '
+                                     'register; add it, read it with `read` and author what it restricts in the '
+                                     'embargo generation')
+        if unread:
+            self.unread.append(f'{what}: {unread} regime documents were not read, so no regulation is judged ended')
+            return
+        for act, other in sorted(entries.items()):
+            if other['instrument']['jurisdiction'] == 'GB' and 'COMPLY.1' in other['rows'] and \
+                    other['sunset'] is None and act not in named:
+                self.readings.append(f'{what}: no regime names {other["id"]}\'s regulation {act} any more; read its '
+                                     'revocation and record the entry\'s sunset')
+
     def run(self, plan):
         registries = {}
         for source in plan['sources']:
@@ -1399,14 +1559,12 @@ class Review:
                     self.unread.append(f'{source["id"]}: {error}')
         sources = {(source['kind'], entry_id): source for source in plan['sources'] for entry_id in source['entries']}
         judges = {'rfc': ('rfc-editor', self.judge_rfc), 'draft': ('datatracker', self.judge_draft)}
-        # The readers whose document indexes a class of instruments the register holds one by one.
-        classes = {'sanctions-map': self.judge_regimes}
         for entry in self.register['entries']:
             if 'instrument' in entry:
                 source = sources.get(('primary', entry['id']))
                 if source is not None and source['id'] in self.bodies and self.judge_primary(entry, source) and \
-                        source.get('reader') in classes:
-                    classes[source['reader']](entry, source)
+                        source.get('reader') in CLASS_JUDGES:
+                    getattr(self, CLASS_JUDGES[source['reader']])(entry, source)
                 continue
             source_kind, judge = judges.get(entry['spec'].get('type'), (None, None))
             source_id = sources.get((source_kind, entry['id']), {}).get('id')
@@ -1422,7 +1580,7 @@ class Review:
         lacked = len(self.manifest['items']) - planned
         lines = [f'# Register review of {day} ({scan} scan, {self.register["domain"]} register)', '',
                  '<!-- doc-role: record -->', '',
-                 f'Sources: {planned} planned' + (f' and {lacked} acts their consolidated texts lack' if lacked else '')
+                 f'Sources: {planned} planned' + (f' and {lacked} documents their indexes name' if lacked else '')
                  + f', {len(self.bodies)} read on {self.manifest["day"]}; the register changes below were '
                  f'{"applied" if applied else "proposed, not applied"}. '
                  'This review edits no ROADMAP row: the amendments are proposals for the user.', '']
@@ -1503,6 +1661,8 @@ def command_plan(args, root):
     if any(source.get('reader') == 'legislation-gov-uk' for source in sources):
         print('  and, as published, each act in force a revised UK text has not applied '
               f'({LEGISLATION_PUBLISHED.format(act="<act>", form="<enacted|made>")})')
+    if any(source.get('reader') == 'gov-uk-regimes' for source in sources):
+        print(f'  and each document of the regimes the UK\'s collection lists ({GOV_UK_CONTENT.format(path="<page>")})')
     return 0
 
 
@@ -1626,7 +1786,7 @@ def command_read(args, root):
                 readings.append((entry, *review.reading(source)))
                 for document in review.items[source['id']].get('documents', []):
                     if document not in review.bodies:
-                        raise Unreadable(f'the act it lacks, {document}, was not read '
+                        raise Unreadable(f'the document it names, {document}, was not read '
                                          f'({review.items[document].get("error")})')
                     item = review.items[document]
                     READERS[item['reader']](review.bodies[document], item, None)

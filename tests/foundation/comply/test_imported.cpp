@@ -4,8 +4,9 @@
 // cerid-sanctions/1 generations this case decodes, adopts and screens: the official formats end to end, the birth
 // periods the importer derives (ranges, circa, the Hijri and Solar Hijri calendars, an unknown century), identifiers
 // with their issuing country, and names in their own scripts; and the embargoed destinations the importer writes from
-// the register's authored readings: 31 CFR chapter V with the Executive orders it incorporates, and the EU's Article
-// 215 regulations, each destination read in its own regulation. The CTest
+// the register's authored readings: 31 CFR chapter V with the Executive orders it incorporates, the EU's Article 215
+// regulations and the UK's sanctions regulations with the Export Control Order 2008, each destination read in its own
+// instrument. The CTest
 // crd-comply-sanctions-import writes the generations first (a CTest fixture), so the cases are hidden from discovery
 // and run as crd-comply-sanctions-imported.
 
@@ -38,11 +39,13 @@ constexpr Imported kImported[] = {
     {"gb.fcdo", "GB", 20261030000000ULL, 6U},
 };
 
-// The destinations 31 CFR chapter V embargoes with the Executive orders it incorporates, and those the EU's Article 215
-// regulations restrict, authored in cmake/legal-register.json from the texts read on 2026-11-01.
+// The destinations 31 CFR chapter V embargoes with the Executive orders it incorporates, those the EU's Article 215
+// regulations restrict and those the UK's sanctions regulations and Export Control Order 2008 restrict, authored in
+// cmake/legal-register.json from the texts read on 2026-11-01.
 constexpr Imported kUsEmbargo = {"us.ofac.embargo", "US", 20261101000000ULL, 0U};
 constexpr Imported kEuEmbargo = {"eu.council.embargo", "EU", 20261101000000ULL, 0U};
-constexpr Day kEmbargoFresh = 20270201U; // both readings are fresh for 92 days
+constexpr Imported kGbEmbargo = {"gb.fcdo.embargo", "GB", 20261101000000ULL, 0U};
+constexpr Day kEmbargoFresh = 20270201U; // every reading is fresh for 92 days
 
 // Reads the generation the importer wrote for `expected`, checks its header and adopts it.
 SanctionsList adopt(SanctionsStore& store, const Imported& expected)
@@ -341,4 +344,72 @@ TEST_CASE("sanctions: a destination screened against the US and EU embargoes tog
     CHECK(both("MM", 1U, Disposition::Match) == Verdict::Review);
     CHECK(both("RU", 4U, Disposition::Match) == Verdict::Review);
     CHECK(both("TR", 0U, Disposition::Match) == Verdict::Clear);
+}
+
+TEST_CASE("sanctions: the authored UK embargo decodes, adopts and screens destinations", "[.imported]")
+{
+    SanctionsStore store;
+    const SanctionsList list = adopt(store, kGbEmbargo);
+    CHECK(list.destinations.size() == 40U);
+    CHECK(list.published == 20261101U);
+    CHECK(list.max_age_days == 92U);
+
+    const auto screened_gb = [&store](cont::StringView region, Day day, crd::usize hits, Disposition disposition)
+    {
+        return screened(store, {&kGbEmbargo}, region, day, hits, disposition);
+    };
+    // No UK instrument embargoes a place outright: every place a regulation restricts a supply to is sectoral, so a
+    // match needs review and nothing blocks. The places the Export Control Order 2008 embargoes are hit twice (their
+    // own regulations and the order's article 20); China, Hong Kong and Macao only by the order.
+    for (const cont::StringView region : {"BY", "KP", "MM", "VE", "LY", "LB", "SS", "SD", "CF", "CD", "ZW"})
+    {
+        CHECK(screened_gb(region, kDay, 2U, Disposition::Match) == Verdict::Review);
+    }
+    for (const cont::StringView region : {"IQ", "SO", "SY", "HT", "UA-43", "UA-40", "CN", "HK", "MO"})
+    {
+        CHECK(screened_gb(region, kDay, 1U, Disposition::Match) == Verdict::Review);
+    }
+    // Iran by both its regimes and the order, Russia by its regulations and the order, a place inside Russia too.
+    CHECK(screened_gb("IR", kDay, 3U, Disposition::Match) == Verdict::Review);
+    CHECK(screened_gb("RU", kDay, 2U, Disposition::Match) == Verdict::Review);
+    CHECK(screened_gb("RU-MOW", kDay, 2U, Disposition::Match) == Verdict::Review);
+    // The non-government controlled areas lie in four oblasts, their boundary drawn by no subdivision: a place in any
+    // of them needs review.
+    for (const cont::StringView region : {"UA-14", "UA-65", "UA-09", "UA-23"})
+    {
+        CHECK(screened_gb(region, kDay, 1U, Disposition::Match) == Verdict::Review);
+    }
+    // Ukraine as a whole names the country six restricted regions belong to. Afghanistan, Yemen, Mali, Nicaragua,
+    // Guinea and Bosnia and Herzegovina (their measures attach only to designated persons), Cuba (no UK regime),
+    // another region of Ukraine and Turkey are clear.
+    CHECK(screened_gb("UA", kDay, 6U, Disposition::Possible) == Verdict::Review);
+    for (const cont::StringView region : {"AF", "YE", "ML", "NI", "GN", "BA", "CU", "UA-30", "TR"})
+    {
+        CHECK(screened_gb(region, kDay, 0U, Disposition::Match) == Verdict::Clear);
+    }
+    // Past its maximum age the reading is a gap that keeps even a listed destination from a settled answer.
+    CHECK(screened_gb("RU", 20270202U, 2U, Disposition::Match) == Verdict::Unavailable);
+}
+
+TEST_CASE("sanctions: a destination screened against the US, EU and UK embargoes together", "[.imported]")
+{
+    SanctionsStore store;
+    adopt(store, kUsEmbargo);
+    adopt(store, kEuEmbargo);
+    adopt(store, kGbEmbargo);
+    const auto all = [&store](cont::StringView region, crd::usize hits)
+    {
+        return screened(store, {&kUsEmbargo, &kEuEmbargo, &kGbEmbargo}, region, kDay, hits, Disposition::Match);
+    };
+    // The comprehensive US embargo still blocks; each authority's programmes are reported (Iran once under chapter V,
+    // three times under the EU's regulations and three times under the UK's instruments).
+    CHECK(all("IR", 7U) == Verdict::Blocked);
+    CHECK(all("UA-43", 3U) == Verdict::Blocked);
+    // The Russian Federation six times (two programmes under each authority); Iraq and China only under the UK, and
+    // Kherson under the EU and the UK.
+    CHECK(all("RU", 6U) == Verdict::Review);
+    CHECK(all("IQ", 1U) == Verdict::Review);
+    CHECK(all("CN", 1U) == Verdict::Review);
+    CHECK(all("UA-65", 2U) == Verdict::Review);
+    CHECK(all("TR", 0U) == Verdict::Clear);
 }

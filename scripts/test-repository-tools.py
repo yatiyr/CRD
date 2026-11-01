@@ -7217,6 +7217,61 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
                           ('HT', 'Regulation (EU) 2022/2309', 'sectoral')],
                          [(item['region'], item['program'], item['measure']) for item in document['destination']])
 
+    def test_the_uk_embargo_is_written_from_the_regime_regulations(self):
+        register = sanctions_import.load_register(ROOT)
+        record = register['sanctions_lists']['embargoes']['generations']['gb.fcdo.embargo']
+        with tempfile.TemporaryDirectory() as out:
+            with patch('sys.stdout', new_callable=io.StringIO) as printed:
+                self.assertEqual(0, sanctions_import.main(['import', '--from', str(self.LISTS), '--out', out,
+                                                           '--authority', 'gb.fcdo.embargo']))
+            self.assertIn('gb.fcdo.embargo: 40 embargoed destinations read 2026-11-01: generation 20261101000000',
+                          printed.getvalue())
+            document = tomllib.loads((Path(out) / 'gb.fcdo.embargo.sanctions.toml').read_text(encoding='utf-8'))
+        # The screening entry is the class of regulations made under the Sanctions and Anti-Money Laundering Act 2018.
+        # Its own text, the FCDO's collection of the current regimes, enumerates the regulations to read; the reading
+        # is the 20 instruments its destinations are read in, the Export Control Order 2008 among them.
+        collection = 'https://www.gov.uk/government/collections/uk-sanctions-regimes-under-the-sanctions-act'
+        self.assertEqual(('GB', collection), (document['jurisdiction'], document['source']))
+        umbrella = sanctions_import.read_instrument(register, 'gb.sanctions')
+        self.assertEqual('71 documents: 53 by country, 18 by theme, 1 listed unpublished',
+                         umbrella['consolidated']['version'])
+        texts = list(sanctions_import.embargo_texts(record, register))
+        self.assertEqual(['gb.si-2008-3231.export-control-order', 'gb.si-2019-135.venezuela',
+                          'gb.si-2019-411.dprk', 'gb.si-2019-433.drc', 'gb.si-2019-438.south-sudan',
+                          'gb.si-2019-461.iran-nuclear', 'gb.si-2019-600.belarus', 'gb.si-2019-604.zimbabwe',
+                          'gb.si-2019-792.syria', 'gb.si-2019-855.russia', 'gb.si-2020-1665.libya',
+                          'gb.si-2020-612.lebanon', 'gb.si-2020-616.central-african-republic', 'gb.si-2020-642.somalia',
+                          'gb.si-2020-707.iraq', 'gb.si-2020-753.sudan', 'gb.si-2021-496.myanmar',
+                          'gb.si-2022-1281.haiti', 'gb.si-2023-1314.iran'], texts)
+        # A regulation read whose measures attach only to designated persons (the UK Sanctions List screens them) or
+        # restrict no supply to a place (Syria's cultural property) is a text read without a destination.
+        for no_destination in ('gb.si-2020-948.afghanistan', 'gb.si-2020-608.bosnia-and-herzegovina',
+                               'gb.si-2019-1145.guinea', 'gb.si-2019-554.guinea-bissau',
+                               'gb.si-2020-617.lebanon-hariri', 'gb.si-2020-705.mali', 'gb.si-2020-610.nicaragua', 'gb.si-2020-1278.yemen',
+                               'gb.si-2020-1233.syria-cultural-property'):
+            self.assertIsNotNone(sanctions_import.read_instrument(register, no_destination))
+            self.assertNotIn(no_destination, texts)
+        self.assertIsNone(record['open'])
+        self.assertNotIn('gb.sanctions', register['sanctions_lists']['embargoes']['reasons'])
+        destinations = [(item['region'], item['program'], item['measure']) for item in document['destination']]
+        regulations = [('RU', 'S.I. 2019/855', 'sectoral'), ('UA-43', 'S.I. 2019/855', 'sectoral'),
+                       ('UA-40', 'S.I. 2019/855', 'sectoral'), ('UA-14', 'S.I. 2019/855', 'partial'),
+                       ('UA-65', 'S.I. 2019/855', 'partial'), ('UA-09', 'S.I. 2019/855', 'partial'),
+                       ('UA-23', 'S.I. 2019/855', 'partial'), ('BY', 'S.I. 2019/600', 'sectoral'),
+                       ('KP', 'S.I. 2019/411', 'sectoral'), ('IR', 'S.I. 2023/1314', 'sectoral'),
+                       ('IR', 'S.I. 2019/461', 'sectoral'), ('IQ', 'S.I. 2020/707', 'sectoral'),
+                       ('LB', 'S.I. 2020/612', 'sectoral'), ('LY', 'S.I. 2020/1665', 'sectoral'),
+                       ('MM', 'S.I. 2021/496', 'sectoral'), ('SO', 'S.I. 2020/642', 'sectoral'),
+                       ('SS', 'S.I. 2019/438', 'sectoral'), ('SD', 'S.I. 2020/753', 'sectoral'),
+                       ('SY', 'S.I. 2019/792', 'sectoral'), ('VE', 'S.I. 2019/135', 'sectoral'),
+                       ('ZW', 'S.I. 2019/604', 'sectoral'), ('HT', 'S.I. 2022/1281', 'sectoral'),
+                       ('CF', 'S.I. 2020/616', 'sectoral'), ('CD', 'S.I. 2019/433', 'sectoral')]
+        # The Export Control Order's embargoed destinations (Schedule 4 Parts 1 and 2) restrict the supply of goods
+        # subject to trade controls to each, China, Hong Kong and Macao included.
+        embargoed = [(region, 'S.I. 2008/3231', 'sectoral') for region in (
+            'KP', 'IR', 'BY', 'MM', 'CF', 'CN', 'CD', 'HK', 'LB', 'LY', 'MO', 'RU', 'SS', 'SD', 'VE', 'ZW')]
+        self.assertEqual(regulations + embargoed, destinations)
+
     # The importer, on the committed excerpts of the official files.
 
     def imported(self, authority, out):
@@ -7884,7 +7939,7 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
                                      today='2026-11-01')
             self.assertEqual(0, code, output)
             text = report.read_text(encoding='utf-8')
-            self.assertIn('Sources: 7 planned and 3 acts their consolidated texts lack, 9 read on 2026-11-01;', text)
+            self.assertIn('Sources: 7 planned and 3 documents their indexes name, 9 read on 2026-11-01;', text)
             self.assertIn('- eu.ai.literacy (NET.2): Law No. 6698, Articles 4-7: never read from its primary source; '
                           'read https://publications.europa.eu/resource/celex/02024R1689-20260727 (version '
                           '02024R1689-20260727 + 32025R0327, SHA-256 ', text)
@@ -7895,7 +7950,7 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             path = root / 'cmake' / 'legal-register.json'
             before = path.read_bytes()
             for entry, message in (
-                    ('eu.gdpr.rights', 'eu.gdpr.rights: celex-32016r0679: the act it lacks, '
+                    ('eu.gdpr.rights', 'eu.gdpr.rights: celex-32016r0679: the document it names, '
                                        'celex-32016r0679r-02-published, was not read (URLError: <urlopen error gone>)'),
                     ('eu.cra.reporting', 'eu.cra.reporting: celex-32024r2847: not the XHTML of 32024R2847R(05)')):
                 code, output = self.tool(root, *argv, 'read', *fetched, '--ref', 'docs/reading.md#acts', '--entry',
@@ -8033,7 +8088,7 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
                                      today='2026-11-06')
             self.assertEqual(0, code, output)
             text = report.read_text(encoding='utf-8')
-            self.assertIn('Sources: 3 planned and 3 acts their consolidated texts lack, 5 read on 2026-11-06;', text)
+            self.assertIn('Sources: 3 planned and 3 documents their indexes name, 5 read on 2026-11-06;', text)
             self.assertIn('- gb.osa.duties (NET.2): Law No. 6698, Articles 4-7: never read from its primary source; '
                           'read https://www.legislation.gov.uk/ukpga/2023/50/data.xml (version 2026-09-30 + '
                           'ukpga/2026/20, SHA-256 ', text)
@@ -8042,7 +8097,7 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             path = root / 'cmake' / 'legal-register.json'
             before = path.read_bytes()
             for entry, message in (
-                    ('gb.dpa.rights', 'gb.dpa.rights: legislation.gov.uk-ukpga-2018-12: the act it lacks, '
+                    ('gb.dpa.rights', 'gb.dpa.rights: legislation.gov.uk-ukpga-2018-12: the document it names, '
                                       'legislation.gov.uk-uksi-2026-386-made, was not read (URLError: <urlopen error '
                                       'gone>)'),
                     ('gb.samla.screening', 'gb.samla.screening: legislation.gov.uk-ukpga-2018-13: not the data of '
@@ -8799,6 +8854,253 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
                 (b'[]', 'not the EU Sanctions Map regime index'), (b'\xff', 'not the EU Sanctions Map regime index')):
             with self.assertRaises(unreadable) as refused:
                 read(body, {}, None)
+            self.assertIn(message, str(refused.exception))
+
+    # The shape of gov.uk's content API for the FCDO's regime collection and a regime's documents (2026-11-01): the
+    # groups list content ids, `links.documents` the record of each published one; a regime's guidance names its
+    # regulation by its first legislation.gov.uk link (as `/contents`, made or revised, or a provision), an amending
+    # instrument after it.
+    UK_REGIMES_PATH = '/government/collections/uk-sanctions-regimes-under-the-sanctions-act'
+
+    def uk_regimes(self, country=None, theme=None, unpublished=('gone-1',)):
+        """The collection: Russia's and Guinea's guidance and Russia's designations by country, cyber's guidance by
+        theme, an unpublished id in the country group and another under More information."""
+        country = country or ['/government/publications/russia-sanctions-guidance',
+                              '/guidance/russia-list-of-designations-and-sanctions-notices',
+                              '/government/publications/guinea-sanctions-guidance']
+        theme = theme or ['/government/publications/cyber-sanctions-guidance']
+        records = [{'content_id': f'id{index}', 'base_path': path, 'document_type': 'statutory_guidance',
+                    'title': path, 'withdrawn': False} for index, path in enumerate(country + theme)]
+        ids = [record['content_id'] for record in records]
+        return json.dumps({
+            'base_path': self.UK_REGIMES_PATH, 'document_type': 'document_collection',
+            'public_updated_at': '2026-03-25T12:03:32+00:00', 'title': 'Current UK sanctions regimes',
+            'details': {'body': '<p>A regime</p>', 'collection_groups': [
+                {'title': 'Regimes listed by country', 'documents': ids[:len(country)] + list(unpublished)},
+                {'title': 'Regimes listed by theme', 'documents': ids[len(country):]},
+                {'title': 'More information', 'documents': ['gone-2']}]},
+            'links': {'documents': records}})
+
+    @staticmethod
+    def uk_document(path, *acts):
+        links = ''.join(f'<a href="https://www.legislation.gov.uk/{act}">The act</a> ' for act in acts)
+        return json.dumps({'base_path': path, 'document_type': 'statutory_guidance', 'public_updated_at': '2026-03-25',
+                           'details': {'body': f'<p>{links}are in force.</p>'}})
+
+    def uk_routes(self, **acts):
+        """The documents of the collection by path: Russia's guidance names its regulations and then an amending
+        instrument, its designations page the same regulations, Guinea's guidance its regulations as made and cyber's
+        guidance its own; `acts` replaces a slug's links (None drops the document's route)."""
+        links = {'russia-sanctions-guidance': ('uksi/2019/855/contents', 'uksi/2022/195/contents/made'),
+                 'russia-list-of-designations-and-sanctions-notices': ('uksi/2019/855/regulation/51',),
+                 'guinea-sanctions-guidance': ('uksi/2019/1145/contents/made',),
+                 'cyber-sanctions-guidance': ('uksi/2020/597/contents',)}
+        links.update(acts)
+        routes = {}
+        for slug, found in links.items():
+            path = ('/guidance/' if 'list-of' in slug else '/government/publications/') + slug
+            routes[f'/api/content{path}'] = (urllib.error.URLError('gone') if found is None else
+                                             self.uk_document(path, *found))
+        return routes
+
+    def test_the_uk_regime_collection_is_read_with_its_documents_and_judges_the_country_regimes(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+
+            def regulation(entry_id, path, **changes):
+                return self.legal_entry(id=entry_id, **{'rows': ['COMPLY.1'], **changes},
+                                        instrument=self.instrument(name=f'The {path} regulations', type='regulation',
+                                                                   jurisdiction='GB',
+                                                                   primary=f'https://www.legislation.gov.uk/{path}'))
+            umbrella = self.legal_entry(id='gb.sanctions', rows=['COMPLY.1'], instrument=self.instrument(
+                name='Sanctions and Anti-Money Laundering Act 2018', article='Regulations made under section 1',
+                type='law', jurisdiction='GB', primary=f'https://www.gov.uk{self.UK_REGIMES_PATH}'))
+            legal = self.legal_register([
+                self.legal_entry(), umbrella,
+                regulation('gb.russia', 'uksi/2019/855'),
+                regulation('gb.burundi', 'uksi/2019/1142'),
+                regulation('gb.ended', 'uksi/2019/604', effective='2019-12-31', sunset='2026-01-01',
+                           state='deprecated', deprecation='2026-01-01'),
+                regulation('gb.data', 'ukpga/2018/12', rows=['NET.2'])])
+            legal['jurisdictions']['GB'] = {'name': 'United Kingdom', 'hosts': ['legislation.gov.uk', 'gov.uk']}
+            self.write_tree(root, self.register(self.entries()), legal)
+            (root / 'docs' / 'reading.md').write_text('<a id="r"></a>Read.\n', encoding='utf-8')
+            argv = ('--register', 'cmake/legal-register.json')
+            code, output = self.tool(root, *argv, 'plan', '--out', str(root / 'sources.json'))
+            self.assertEqual(0, code, output)
+            self.assertIn("  and each document of the regimes the UK's collection lists "
+                          '(https://www.gov.uk/api/content<page>)\n', output)
+            plan = json.loads((root / 'sources.json').read_text(encoding='utf-8'))
+            source = next(source for source in plan['sources'] if source['id'] == 'gov.uk-uk-sanctions-regimes')
+            self.assertEqual((['gb.sanctions'], f'https://www.gov.uk/api/content{self.UK_REGIMES_PATH}',
+                              'gov-uk-regimes', {'Accept': 'application/json'}),
+                             (source['entries'], source['url'], source['reader'], source['headers']))
+            requests = []
+            routes = {**self.uk_routes(), '/api/content' + self.UK_REGIMES_PATH: self.uk_regimes(),
+                      'MevzuatNo=6698': self.MEVZUAT_HTML,
+                      **{f'legislation.gov.uk/{act}/': self.LEGISLATION_XML.replace('ukpga/2018/12', act)
+                         for act in ('uksi/2019/855', 'uksi/2019/1142', 'uksi/2019/604', 'ukpga/2018/12')}}
+            manifest = register_review.fetch_sources(plan, root / 'fetched', opener=self.routed(routes, requests),
+                                                     today=datetime.date(2026, 12, 16))
+            items = {item['id']: item for item in manifest['items']}
+            documents = ['gov.uk-government-publications-russia-sanctions-guidance',
+                         'gov.uk-guidance-russia-list-of-designations-and-sanctions-notices',
+                         'gov.uk-government-publications-guinea-sanctions-guidance',
+                         'gov.uk-government-publications-cyber-sanctions-guidance']
+            version = '4 documents: 3 by country, 1 by theme, 1 listed unpublished'
+            self.assertEqual(version, items['gov.uk-uk-sanctions-regimes']['version'])
+            self.assertEqual(sorted(documents), sorted(items['gov.uk-uk-sanctions-regimes']['documents']))
+            self.assertTrue(all('error' not in items[document] for document in documents))
+            self.assertTrue(all(request.get_header('Accept') == 'application/json' for request in requests
+                                if 'gov.uk/api' in request.full_url))
+            fetched = ('--fetched', str(root / 'fetched'))
+            report = root / 'docs' / 'review.md'
+            code, output = self.tool(root, *argv, 'compare', *fetched, '--report', str(report), '--apply')
+            self.assertEqual(0, code, output)
+            record = register_review.uk_regimes_record(self.uk_regimes().encode(), source)
+            digest = hashlib.sha256(record).hexdigest()
+            text = report.read_text(encoding='utf-8')
+            self.assertIn('Sources: 6 planned and 4 documents their indexes name, 10 read on 2026-12-16;', text)
+            what = '- gb.sanctions (COMPLY.1)'
+            self.assertIn(f'{what}: Sanctions and Anti-Money Laundering Act 2018, Regulations made under section 1: '
+                          f'never read from its primary source; read https://www.gov.uk/api/content'
+                          f'{self.UK_REGIMES_PATH} (version {version}, SHA-256 {digest}) in its consolidated text and '
+                          'record it with `read`\n', text)
+            # Guinea's regulations are no entry; Russia's are, its amending instrument and the cyber regime owe
+            # nothing; Burundi's regulations are named by no regime, the ended and the NET.2 entry are not judged.
+            self.assertIn(f'{what}: the regime of /government/publications/guinea-sanctions-guidance rests on '
+                          'uksi/2019/1145, which is no entry of the register; add it, read it with `read` and author '
+                          'what it restricts in the embargo generation', text)
+            self.assertIn(f"{what}: no regime names gb.burundi's regulation uksi/2019/1142 any more; read its "
+                          "revocation and record the entry's sunset", text)
+            judged = '\n'.join(line for line in text.splitlines() if line.startswith(what))
+            for absent in ('uksi/2022/195', 'uksi/2020/597', 'uksi/2019/855', 'gb.ended', 'gb.data',
+                           'consolidated text lacks'):
+                self.assertNotIn(absent, judged, absent)
+            code, output = self.tool(root, *argv, 'read', *fetched, '--ref', 'docs/reading.md#r', '--entry',
+                                     'gb.sanctions')
+            self.assertEqual(0, code, output)
+            path = root / 'cmake' / 'legal-register.json'
+            entries = {entry['id']: entry for entry in json.loads(path.read_text(encoding='utf-8'))['entries']}
+            self.assertEqual({'version': version, 'read': '2026-12-16', 'sha256': digest},
+                             entries['gb.sanctions']['instrument']['consolidated'])
+
+            def judged(day, collection=None, **acts):
+                """The report of a scan on `day` of the register as read, its unread and judged lines."""
+                routes.update(self.uk_routes(**acts))
+                routes['/api/content' + self.UK_REGIMES_PATH] = collection or self.uk_regimes()
+                register_review.fetch_sources(plan, root / day, opener=self.routed(routes),
+                                              today=datetime.date.fromisoformat(day))
+                code, output = self.tool(root, *argv, 'compare', '--fetched', str(root / day), '--report',
+                                         str(root / 'docs' / f'{day}.md'), today=day)
+                self.assertEqual(0, code, output)
+                return (root / 'docs' / f'{day}.md').read_text(encoding='utf-8')
+            self.assertEqual(2, judged('2026-12-17').count(f'{what}: '))
+            # Russia's guidance gone: its designations still name the regulations; Guinea's: nothing is judged ended.
+            text = judged('2026-12-18', **{'guinea-sanctions-guidance': None})
+            self.assertIn(f'{what}: 1 regime documents were not read, so no regulation is judged ended', text)
+            self.assertNotIn("gb.burundi's", text)
+            self.assertNotIn('uksi/2019/1145', text.partition('## Sources not read')[0])
+            # Guinea's regulations as an entry, then cyber moved to the country regimes: its regulations are owed, a
+            # new version of the text read; Russia's guidance linking another regulation first owes that one.
+            legal = json.loads(path.read_text(encoding='utf-8'))
+            legal['entries'].append(regulation('gb.guinea', 'uksi/2019/1145'))
+            path.write_text(json.dumps(legal), encoding='utf-8')
+            self.assertEqual(1, judged('2026-12-19', **{'guinea-sanctions-guidance': ('uksi/2019/1145',)}).count(
+                f'{what}: '))
+            moved = self.uk_regimes(country=['/government/publications/russia-sanctions-guidance',
+                                             '/guidance/russia-list-of-designations-and-sanctions-notices',
+                                             '/government/publications/guinea-sanctions-guidance',
+                                             '/government/publications/cyber-sanctions-guidance'], theme=['/x'])
+            text = judged('2026-12-20', moved, **{'russia-list-of-designations-and-sanctions-notices': (
+                'uksi/2026/1/contents', 'uksi/2019/855')})
+            self.assertIn(f'{what}: Sanctions and Anti-Money Laundering Act 2018, Regulations made under section 1: '
+                          'amended to 5 documents: 4 by country, 1 by theme, 1 listed unpublished since it was read on '
+                          f'2026-12-16 ({version})', text)
+            self.assertIn('the regime of /government/publications/cyber-sanctions-guidance rests on uksi/2020/597, '
+                          'which is no entry', text)
+            self.assertIn('the regime of /guidance/russia-list-of-designations-and-sanctions-notices rests on '
+                          'uksi/2026/1, which is no entry', text)
+            self.assertIn('- gov.uk-x (https://www.gov.uk/api/content/x): URLError', text)
+            # Guinea's guidance replaced by Mali's under the same counts is a new digest of the text read, and Mali's
+            # unread document holds every ending back.
+            replaced = self.uk_regimes(country=['/government/publications/russia-sanctions-guidance',
+                                                '/guidance/russia-list-of-designations-and-sanctions-notices',
+                                                '/government/publications/mali-sanctions-guidance'])
+            text = judged('2026-12-21', replaced)
+            self.assertIn(f'{what}: Sanctions and Anti-Money Laundering Act 2018, Regulations made under section 1: '
+                          f'the primary text changed since it was read on 2026-12-16 ({version})', text)
+            self.assertIn(f'{what}: 1 regime documents were not read, so no regulation is judged ended', text)
+            self.assertNotIn("gb.guinea's", text)
+
+    def test_the_uk_regime_readers_refuse_other_shapes(self):
+        unreadable, source = register_review.Unreadable, {'act': self.UK_REGIMES_PATH}
+        body = self.uk_regimes().encode()
+        self.assertEqual('4 documents: 3 by country, 1 by theme, 1 listed unpublished',
+                         register_review.read_uk_regimes(body, source, None))
+        day, version, documents = register_review.read_uk_regimes_index(body, source, datetime.date(2026, 11, 1))
+        self.assertEqual(('2026-03-25', 4), (day, len(documents)))
+        self.assertEqual({'id': 'gov.uk-government-publications-cyber-sanctions-guidance',
+                          'act': '/government/publications/cyber-sanctions-guidance', 'reader': 'gov-uk-document',
+                          'headers': {'Accept': 'application/json'},
+                          'url': 'https://www.gov.uk/api/content/government/publications/cyber-sanctions-guidance'},
+                         documents[-1])
+        with self.assertRaises(unreadable) as refused:
+            register_review.read_uk_regimes(body, source, '5 documents: 4 by country, 1 by theme')
+        self.assertIn('is not of the collection read, 4 documents', str(refused.exception))
+        collection = json.loads(body)
+
+        def changed(change):
+            document = copy.deepcopy(collection)
+            change(document)
+            return json.dumps(document).encode()
+        groups = collection['details']['collection_groups']
+        for refused_body, message in (
+                (changed(lambda document: document.update(base_path='/government/collections/other')),
+                 f'not the gov.uk document_collection {self.UK_REGIMES_PATH}'),
+                (changed(lambda document: document.update(document_type='guide')), 'not the gov.uk document_coll'),
+                (changed(lambda document: document['details']['collection_groups'].append(
+                    {'title': 'Regimes listed by region', 'documents': []})), 'the collection groups'),
+                (changed(lambda document: document['details']['collection_groups'].pop()), 'the collection groups'),
+                (changed(lambda document: document['links']['documents'][0].update(base_path='russia')),
+                 'a collection document with another shape'),
+                (changed(lambda document: document['details']['collection_groups'][0].update(documents='id0')),
+                 'a collection document with another shape'),
+                (changed(lambda document: document.update(public_updated_at='2026-02-30T00:00:00Z')),
+                 'no public update day'),
+                (changed(lambda document: document['details']['collection_groups'][0].update(documents=['gone-1'])),
+                 'without regimes by country'),
+                (changed(lambda document: document['details']['collection_groups'][1].update(
+                    documents=groups[0]['documents'][:1])), 'with a document in both regime groups'),
+                (changed(lambda document: document['links'].pop('documents')), 'not the UK sanctions regimes'),
+                (changed(lambda document: document.pop('details')), 'not a gov.uk content record'),
+                (b'[]', 'not a gov.uk content record'), (b'\xff', 'not a gov.uk content record')):
+            with self.assertRaises(unreadable) as refused:
+                register_review.read_uk_regimes_index(refused_body, source, datetime.date(2026, 11, 1))
+            self.assertIn(message, str(refused.exception))
+        guidance = {'act': '/government/publications/syria-sanctions-guidance'}
+        regulation = register_review.uk_regime_regulation
+        for links, act in ((('uksi/2019/792/contents', 'uksi/2025/507/contents/made'), 'uksi/2019/792'),
+                           (('uksi/2008/3231/schedule/4/part/4/made',), 'uksi/2008/3231'),
+                           (('uksi/2023/1314/regulation/51',), 'uksi/2023/1314'), (('uksi/2020/948',), 'uksi/2020/948'),
+                           ((), None), (('ukpga/2018/13/section/1',), 'ukpga/2018/13'),
+                           (('id/uksi/2019/792',), None), (('uksi/2019/0792',), None)):
+            found = regulation(self.uk_document(guidance['act'], *links).encode(), guidance)
+            self.assertEqual(act, found, links)
+        self.assertEqual('uksi/2020/680', regulation(self.uk_document(guidance['act']).replace(
+            '<p>', '<p><a href=\\"http://www.legislation.gov.uk/uksi/2020/680/contents\\">').encode(), guidance))
+        self.assertIsNone(register_review.read_gov_uk_document(self.uk_document(guidance['act']).encode(), guidance,
+                                                               None))
+        for refused_body, message in (
+                (self.uk_document('/government/publications/iran-sanctions-guidance', 'uksi/2023/1314'),
+                 'not the gov.uk page /government/publications/syria'),
+                (json.dumps({'base_path': guidance['act'], 'document_type': 'x', 'details': []}),
+                 'not the gov.uk page'),
+                (json.dumps({'base_path': guidance['act'], 'document_type': 'x', 'details': {'body': 7}}),
+                 'has a body that is no text'),
+                ('{}', 'not a gov.uk content record')):
+            with self.assertRaises(unreadable) as refused:
+                regulation(refused_body.encode(), guidance)
             self.assertIn(message, str(refused.exception))
 
     def test_readers_find_each_hosts_version_and_refuse_other_shapes(self):
