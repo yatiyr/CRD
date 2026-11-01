@@ -4,7 +4,7 @@
   "about": "COMPLY.0 legal register: every legal and platform obligation that applies to Cerid or to products built with it, one entry per instrument and article, with its jurisdiction, official primary source and the consolidated version read, the obligation in plain words, the products, data flows and channels it applies to, the check that proves it, its effective and sunset dates, a counsel-review flag, the owning rows and the next review. scripts/check-registers.py (the crd-check-registers CTest and repository step) fails a binding obligation without an active check, a lapsed review, an entry read from no primary source when its rows close and a topic without a Turkish entry. docs/design/registers.md is the contract; it shares the standards register's format, guard and review machinery.",
   "snapshot": {
     "date": "2026-11-01",
-    "method": "Refreshed on 2026-11-01 by scripts/register-review.py from the approved source plan (86 records; report docs/sessions/2026-11-01-legal-register-first-read.md)."
+    "method": "Refreshed on 2026-11-01 by scripts/register-review.py from the approved source plan (112 records; report docs/sessions/2026-11-01-legal-register-new-instruments.md)."
   },
   "review": {
     "cadence": "A light scan quarterly, after each yearly platform event (the April SDK rule, Google I/O, WWDC, the August target API rule) and after each dated effective day the register holds, and a full re-research every year or when a scan finds a pinned instrument amended; Official Gazette of Turkey, EUR-Lex and Steamworks announcements are recorded as runs with their triggering entries. Reviews propose ROADMAP amendments for the user and never edit rows.",
@@ -112,6 +112,12 @@
           "tr.5651.game-platforms",
           "tr.5651.under-15"
         ]
+      },
+      {
+        "day": "2026-11-01",
+        "scan": "light",
+        "ref": "docs/sessions/2026-11-01-legal-register-new-instruments.md",
+        "triggers": []
       }
     ]
   },
@@ -936,7 +942,7 @@
         "article": "Articles 5-12",
         "type": "regulation",
         "jurisdiction": "TR",
-        "primary": "https://www.resmigazete.gov.tr/eskiler/2017/10/20171028.htm",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=24038&MevzuatTur=7&MevzuatTertip=5",
         "consolidated": null
       },
       "obligation": "Keep a retention and destruction policy, destroy personal data at the first periodic destruction after its purpose ends (at most every six months) and keep destruction records for three years.",

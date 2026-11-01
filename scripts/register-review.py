@@ -227,16 +227,31 @@ def resolve_wassenaar(match):
              'index': 'wassenaar-control-lists', 'url': 'https://www.wassenaar.org/wp-content/uploads/{version}'}]
 
 
+def resolve_gazette(match):
+    """An item of the Official Gazette of Turkey (a Presidential decision is published there alone, as a PDF): its
+    day's page, which names the gazette and the item's title, is read first, as an index of this item alone (the
+    index carries the item it looks for, so two items of one day never share one)."""
+    stem, item = match['stem'], f'{match["stem"]}-{match["item"]}.{match["format"]}'
+    document = f'resmigazete-{stem.lower()}-{match["item"]}'
+    return [{'id': f'{document}-day', 'kind': 'index', 'reader': 'gazette-day', 'act': item,
+             'url': f'https://www.resmigazete.gov.tr/eskiler/{match["year"]}/{match["month"]}/{stem}.htm'},
+            {'id': document, 'kind': 'primary', 'reader': 'gazette', 'act': item, 'index': f'{document}-day',
+             'url': match.string}]
+
+
 RESOLVERS = (
     (re.compile(r'https://www\.mevzuat\.gov\.tr/mevzuat\?MevzuatNo=(?P<number>\d+)&MevzuatTur=(?P<kind>\d+)'
                 r'&MevzuatTertip=(?P<tertip>\d+)'), resolve_mevzuat),
     (re.compile(r'https://eur-lex\.europa\.eu/eli/(?P<sector>reg|dir|dec)/(?P<year>\d{4})/(?P<number>\d+)/oj'),
      resolve_eur_lex),
-    (re.compile(r'https://www\.legislation\.gov\.uk/(?P<path>(?:ukpga|uksi|asp|ssi|nia|nisr|asc|wsi)/\d{4}/\d+)'),
+    (re.compile(r'https://www\.legislation\.gov\.uk/(?P<path>(?:ukpga|uksi|asp|ssi|nia|nisr|asc|wsi|eur)/\d{4}/\d+)'),
      resolve_legislation_gov_uk),
     (re.compile(r'https://www\.ecfr\.gov/current/title-(?P<title>\d+)(?P<path>(?:/(?:subtitle|chapter|subchapter|part)'
                 r'-[A-Za-z0-9]+)+)'), resolve_ecfr),
     (re.compile(r'https://www\.wassenaar\.org/control-lists/'), resolve_wassenaar),
+    (re.compile(r'https://www\.resmigazete\.gov\.tr/eskiler/(?P<year>\d{4})/(?P<month>\d{2})/'
+                r'(?P<stem>(?P=year)(?P=month)\d{2}(?:M[1-9]\d*)?)-(?P<item>[1-9]\d*)\.(?P<format>pdf|htm)'),
+     resolve_gazette),
 )
 
 
@@ -421,14 +436,22 @@ def fetch_sources(plan, into, opener=None, today=None):
     return manifest
 
 
-def text_of(body):
-    """The visible text of an HTML page: scripts and styles dropped, tags removed, entities decoded, spaces folded."""
+def decoded(body, encoding):
     try:
-        text = body.decode('utf-8')
-    except UnicodeDecodeError as error:
-        raise Unreadable(f'not UTF-8 ({error})') from error
-    text = re.sub(r'(?is)<(script|style)\b.*?</\1\s*>', ' ', text)
-    return re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]*>', ' ', text)))
+        return body.decode(encoding)
+    except (UnicodeDecodeError, LookupError) as error:
+        raise Unreadable(f'not {encoding} ({error})') from error
+
+
+def visible(markup):
+    """The visible text of HTML: scripts and styles dropped, tags removed, entities decoded, spaces folded."""
+    markup = re.sub(r'(?is)<(script|style)\b.*?</\1\s*>', ' ', markup)
+    return re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]*>', ' ', markup))).strip()
+
+
+def text_of(body):
+    """The visible text of a UTF-8 HTML page."""
+    return visible(decoded(body, 'UTF-8'))
 
 
 def calendar_day(day, month, year):
@@ -640,15 +663,72 @@ def read_pdf(body, source, version):
     return version
 
 
+# The Official Gazette's day page (the pages of 2017 and 2025, 2026-11-01): in the charset its meta tag declares
+# (windows-1254), headed "25 Aralık 2025 Tarihli ve 33118 Sayılı Resmî Gazete", with "- 5. Mükerrer" on a repeated
+# issue, and one link to each item whose text is its title; a decision's title names its number, "(Karar Sayısı:
+# 10767)" or "(Kararname Numarası: 191)", its closing parenthesis sometimes missing. An item's file is named by its day,
+# its repeated issue and its place: `20251225-21.pdf`, `20251231M5-1.pdf`.
+TURKISH_MONTHS = ('Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım',
+                  'Aralık')
+PAGE_CHARSET = re.compile(rb'(?i)<meta\b[^>]*\bcharset\s*=\s*["\']?([A-Za-z0-9_-]+)')
+GAZETTE_HEADER = re.compile(r'(\d{1,2}) (\w+) (\d{4}) Tarihli ve (\d+) Sayılı Resm[îi] Gazete'
+                            r'(?:\s*-\s*(\d+)\s*\.\s*Mükerrer)?')
+GAZETTE_ITEM = re.compile(r'(\d{4})(\d{2})(\d{2})(?:M(\d+))?-\d+\.(?:pdf|htm)')
+GAZETTE_LINK = re.compile(r'(?is)<a\b[^>]*?\bhref\s*=\s*"([^"]*)"[^>]*>(.*?)</a\s*>')
+GAZETTE_NUMBER = re.compile(r'(?:Karar Sayısı|Kararname Numarası)\s*:\s*(\d+)')
+
+
+def read_gazette_day(body, source, today):
+    """`<day>/<issue>` of the gazette whose day page links the item, and `/<number>` when the item's title names a
+    decision's: the page must be the item's day and repeated issue, and link the item once."""
+    charsets = set(PAGE_CHARSET.findall(body[:4096]))
+    if len(charsets) != 1:
+        raise Unreadable(f'{len(charsets)} declared charsets on the Official Gazette\'s day page, not one')
+    markup = decoded(body, charsets.pop().decode('ascii'))
+    headers = set(GAZETTE_HEADER.findall(visible(markup)))
+    if len(headers) != 1:
+        raise Unreadable(f'{len(headers)} Official Gazette headings on the day page, not one')
+    day, month, year, issue, repeated = headers.pop()
+    if month not in TURKISH_MONTHS:
+        raise Unreadable(f'{month!r} is not a Turkish month')
+    published = calendar_day(day, TURKISH_MONTHS.index(month) + 1, year)
+    item = GAZETTE_ITEM.fullmatch(source['act'])
+    if item is None or calendar_day(*item.group(3, 2, 1)) != published or (item[4] or '') != repeated:
+        raise Unreadable(f'the day page of the Official Gazette {gazette_issue(issue, repeated)} of {published}, not '
+                         f'of {source["act"]}')
+    titles = [visible(title) for href, title in GAZETTE_LINK.findall(markup)
+              if href.rsplit('/', 1)[-1] == source['act']]
+    if len(titles) != 1:
+        raise Unreadable(f'{len(titles)} links to {source["act"]} on its day page, not one')
+    numbers = set(GAZETTE_NUMBER.findall(titles[0]))
+    if len(numbers) > 1:
+        raise Unreadable(f'the title of {source["act"]} names {len(numbers)} decision numbers')
+    return '/'.join([str(published), gazette_issue(issue, repeated), *numbers])
+
+
+def read_gazette(body, source, version):
+    """`<day>/<issue> No. <number> as published`: an item of the gazette is never consolidated, so a change is a new
+    item, which the review's reading of the gazette finds."""
+    if source['act'].endswith('.pdf'):
+        read_pdf(body, source, version)
+    elif '<html' not in body[:4096].decode('ascii', 'replace').lower():
+        raise Unreadable('not an HTML page')
+    if not version:
+        raise Unreadable(f'the Official Gazette of {source["act"]} is unknown; its day page is read first')
+    published, issue, *number = version.split('/')
+    return f'{published}/{issue}' + ''.join(f' No. {value}' for value in number) + ' as published'
+
+
 # reader(body, source, version) -> the version of an instrument's document; an index reader(body, source, today)
 # -> the version its document's URL holds.
 READERS = {'mevzuat': read_mevzuat, 'legislation-gov-uk': read_legislation_gov_uk, 'cellar': read_cellar,
-           'ecfr': read_ecfr, 'pdf': read_pdf}
+           'ecfr': read_ecfr, 'pdf': read_pdf, 'gazette': read_gazette}
 # record(body, source) -> the bytes of the instrument within its document, whose SHA-256 is the text read; the whole
 # document for a reader without one.
 RECORDS = {'ecfr': ecfr_record}
 INDEX_READERS = {'cellar-versions': read_cellar_versions, 'ecfr-versions': read_ecfr_versions,
-                 'wassenaar-lists': read_wassenaar_lists, 'mevzuat-gazette': read_mevzuat_gazette}
+                 'wassenaar-lists': read_wassenaar_lists, 'mevzuat-gazette': read_mevzuat_gazette,
+                 'gazette-day': read_gazette_day}
 
 
 def read_rfc_editor(body):

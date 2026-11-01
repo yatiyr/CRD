@@ -7288,6 +7288,9 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
                            'reader': 'legislation-gov-uk', 'act': 'ukpga/2018/12',
                            'url': 'https://www.legislation.gov.uk/ukpga/2018/12/data.xml'}],
                          resolve('https://www.legislation.gov.uk/ukpga/2018/12'))
+        self.assertEqual([{'id': 'legislation.gov.uk-eur-2016-679', 'kind': 'primary', 'reader': 'legislation-gov-uk',
+                           'act': 'eur/2016/679', 'url': 'https://www.legislation.gov.uk/eur/2016/679/data.xml'}],
+                         resolve('https://www.legislation.gov.uk/eur/2016/679'))
         index, document = resolve('https://www.ecfr.gov/current/title-15/subtitle-B/chapter-VII/subchapter-C')
         self.assertEqual({'id': 'ecfr-title-15-subtitle-b-chapter-vii-subchapter-c-versions', 'kind': 'index',
                           'reader': 'ecfr-versions', 'act': 'title=15&subtitle=B&chapter=VII&subchapter=C',
@@ -7304,7 +7307,12 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
         for url in ('https://developer.apple.com/news/', 'https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698',
                     'https://eur-lex.europa.eu/eli/reg/2016/679/oj/eng', 'https://www.ecfr.gov/current/title-15',
                     'https://www.legislation.gov.uk/ukpga/2018/12/contents',
-                    'http://www.legislation.gov.uk/ukpga/2018/12'):
+                    'http://www.legislation.gov.uk/ukpga/2018/12', 'https://www.legislation.gov.uk/eudr/2019/790',
+                    'https://www.resmigazete.gov.tr/eskiler/2025/12/20251225.htm',
+                    'https://www.resmigazete.gov.tr/eskiler/2025/12/20251125-21.pdf',
+                    'https://www.resmigazete.gov.tr/eskiler/2025/12/20251225-0.pdf',
+                    'https://www.resmigazete.gov.tr/eskiler/2025/12/20251225-21.doc',
+                    'http://www.resmigazete.gov.tr/eskiler/2025/12/20251225-21.pdf'):
             self.assertEqual([{'id': register_review.source_id(url), 'kind': 'primary', 'url': url}], resolve(url),
                              url)
 
@@ -7527,6 +7535,136 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             self.assertEqual({'version': '2014-11-27/29188 at 2022-08-23 (RG 31932)', 'read': '2026-12-16',
                               'sha256': hashlib.sha256(routes['Iframe?MevzuatTur=7&MevzuatNo=20237']).hexdigest()},
                              entries['tr.6502.distance-contracts-regulation']['instrument']['consolidated'])
+            checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
+            self.assertEqual([], checked['legal'])
+
+    # The Official Gazette's day page (the pages of 2017 and 2025, 2026-11-01): windows-1254, its heading, and one link
+    # per item whose title names a decision's number, the closing parenthesis sometimes missing.
+    GAZETTE_DAY = ('<html><head><meta http-equiv="Content-Type" content="text/html; charset=windows-1254"></head>'
+                   '<body><p>T.C. Resmî Gazete</p><p>25 Aralık 2025 Tarihli ve 33118 Sayılı Resmî Gazete</p>'
+                   '<p><a href="20251225-12.pdf">–– Bazı Cumhurbaşkanlığı Kararnamelerinde Değişiklik Yapılmasına Dair '
+                   'Cumhurbaşkanlığı Kararnamesi (Kararname Numarası: 191)</a></p>'
+                   '<p><a href="20251225-21.pdf">–– 7194 Sayılı Dijital Hizmet Vergisi ... Oranının Yeniden '
+                   'Belirlenmesi Hakkında Karar (Karar Sayısı: 10767</a></p>'
+                   '<p><a href="20251225-1.htm">–– Genel Aydınlatma Yönetmeliğinde Değişiklik Yapılmasına Dair '
+                   'Yönetmelik</a></p><a href="http://www.resmigazete.gov.tr/eskiler/2025/12/20251224.htm">ÖNCEKİ</a>'
+                   '</body></html>')
+
+    def test_gazette_items_are_known_by_their_day_page(self):
+        resolve = register_review.resolve_primary
+        index, document = resolve('https://www.resmigazete.gov.tr/eskiler/2025/12/20251225-21.pdf')
+        self.assertEqual({'id': 'resmigazete-20251225-21-day', 'kind': 'index', 'reader': 'gazette-day',
+                          'act': '20251225-21.pdf', 'url': 'https://www.resmigazete.gov.tr/eskiler/2025/12/20251225.htm'},
+                         index)
+        self.assertEqual({'id': 'resmigazete-20251225-21', 'kind': 'primary', 'reader': 'gazette',
+                          'act': '20251225-21.pdf', 'index': 'resmigazete-20251225-21-day',
+                          'url': 'https://www.resmigazete.gov.tr/eskiler/2025/12/20251225-21.pdf'}, document)
+        index, document = resolve('https://www.resmigazete.gov.tr/eskiler/2025/12/20251231M5-1.htm')
+        self.assertEqual(('resmigazete-20251231m5-1-day', 'https://www.resmigazete.gov.tr/eskiler/2025/12/20251231M5.htm',
+                          'resmigazete-20251231m5-1', '20251231M5-1.htm'),
+                         (index['id'], index['url'], document['id'], document['act']))
+        day = register_review.read_gazette_day
+        page = self.GAZETTE_DAY.encode('cp1254')
+        decision = {'act': '20251225-21.pdf'}
+        self.assertEqual('2025-12-25/33118/10767', day(page, decision, None))
+        self.assertEqual('2025-12-25/33118/191', day(page, {'act': '20251225-12.pdf'}, None))
+        self.assertEqual('2025-12-25/33118', day(page, {'act': '20251225-1.htm'}, None))
+        repeated = self.GAZETTE_DAY.replace('25 Aralık', '31 Aralık').replace('33118 Sayılı Resmî Gazete',
+                                                                                '33124 Sayılı Resmî Gazete - 5. Mükerrer')
+        self.assertEqual('2025-12-31/33124-m5/10767', day(repeated.replace('20251225-21', '20251231M5-1').encode(
+            'cp1254'), {'act': '20251231M5-1.pdf'}, None))
+        unreadable = register_review.Unreadable
+        for body, source, message in (
+                (self.GAZETTE_DAY.encode(), decision, '0 Official Gazette headings'),
+                (self.GAZETTE_DAY.replace('; charset=windows-1254', '').encode('cp1254'), decision,
+                 '0 declared charsets'),
+                (self.GAZETTE_DAY.replace('</head>', '<meta charset="utf-8"></head>').encode('cp1254'), decision,
+                 '2 declared charsets'),
+                (self.GAZETTE_DAY.replace('windows-1254', 'no-such-codec').encode('cp1254'), decision,
+                 'not no-such-codec'),
+                (page.replace(b'Tarihli ve', b'Tarihli'), decision, '0 Official Gazette headings'),
+                (page + self.GAZETTE_DAY.replace('33118', '33119').encode('cp1254'), decision, '2 Official Gazette'),
+                (self.GAZETTE_DAY.replace('Aralık', 'December').encode('cp1254'), decision,
+                 "'December' is not a Turkish month"),
+                (self.GAZETTE_DAY.replace('25 Aralık', '31 Şubat').encode('cp1254'), decision,
+                 'the day 31/2/2025 does not exist'),
+                (self.GAZETTE_DAY.replace('25 Aralık', '24 Aralık').encode('cp1254'), decision,
+                 'the day page of the Official Gazette 33118 of 2025-12-24, not of 20251225-21.pdf'),
+                (repeated.encode('cp1254'), {'act': '20251231-21.pdf'}, 'the day page of the Official Gazette 33124-m5'),
+                (page, {'act': '20251225-22.pdf'}, '0 links to 20251225-22.pdf on its day page, not one'),
+                (page + b'<a href="20251225-21.pdf">again</a>', decision, '2 links to 20251225-21.pdf'),
+                (page.replace(b'10767', b'10767) (Karar Say\xfds\xfd: 10768'), decision,
+                 'the title of 20251225-21.pdf names 2 decision numbers')):
+            with self.assertRaises(unreadable) as refused:
+                day(body, source, None)
+            self.assertIn(message, str(refused.exception))
+        read = register_review.read_gazette
+        self.assertEqual('2025-12-25/33118 No. 10767 as published', read(b'%PDF-1.4', decision, '2025-12-25/33118/10767'))
+        self.assertEqual('2025-12-31/33124-m5 as published', read(b'<HTML><body>Yonetmelik</body></HTML>',
+                                                                   {'act': '20251231M5-1.htm'}, '2025-12-31/33124-m5'))
+        for body, source, version, message in ((b'<html>', decision, '2025-12-25/33118', 'not a PDF'),
+                                               (b'%PDF-1.4', {'act': '20251225-1.htm'}, '2025-12-25/33118',
+                                                'not an HTML page'),
+                                               (b'%PDF-1.4', decision, None, 'the Official Gazette of 20251225-21.pdf '
+                                                                             'is unknown; its day page is read first')):
+            with self.assertRaises(unreadable) as refused:
+                read(body, source, version)
+            self.assertIn(message, str(refused.exception))
+
+    def test_read_records_a_gazette_decision_by_its_day_page(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            cited = 'https://www.resmigazete.gov.tr/eskiler/2025/12/20251225-21.pdf'
+            other = 'https://www.resmigazete.gov.tr/eskiler/2025/12/20251225-22.pdf'
+            hosts = {'TR': {'name': 'Türkiye', 'hosts': ['mevzuat.gov.tr', 'resmigazete.gov.tr']}}
+            legal = self.legal_register([
+                self.legal_entry(),
+                self.legal_entry(id='tr.7194.rate-decision', instrument=self.instrument(
+                    name='Presidential Decision No. 10767', type='decision', primary=cited)),
+                self.legal_entry(id='tr.other-decision', instrument=self.instrument(
+                    name='Presidential Decision No. 10768', type='decision', primary=other))])
+            legal['jurisdictions'].update(hosts)
+            self.write_tree(root, self.register(self.entries()), legal)
+            (root / 'docs' / 'reading.md').write_text('<a id="r"></a>Read.\n', encoding='utf-8')
+            argv = ('--register', 'cmake/legal-register.json')
+            self.assertEqual(0, self.tool(root, *argv, 'plan', '--out', str(root / 'sources.json'))[0])
+            plan = json.loads((root / 'sources.json').read_text(encoding='utf-8'))
+            sources = {source['id']: source for source in plan['sources']}
+            # Two items of one day: each reads the day page for itself.
+            self.assertEqual(['20251225-21.pdf', '20251225-22.pdf'], [sources[f'resmigazete-20251225-{item}-day']['act']
+                                                                      for item in (21, 22)])
+            pdf = b'%PDF-1.4\n%decision'
+            routes = {'MevzuatNo=6698': self.MEVZUAT_HTML, '20251225.htm': self.GAZETTE_DAY.encode('cp1254'),
+                      '20251225-21.pdf': pdf, '20251225-22.pdf': pdf}
+            manifest = register_review.fetch_sources(plan, root / 'fetched', opener=self.routed(routes),
+                                                     today=datetime.date(2026, 12, 16))
+            items = {item['id']: item for item in manifest['items']}
+            self.assertEqual('2025-12-25/33118/10767', items['resmigazete-20251225-21']['version'])
+            self.assertEqual('0 links to 20251225-22.pdf on its day page, not one',
+                             items['resmigazete-20251225-22-day']['error'])
+            self.assertEqual('its version index resmigazete-20251225-22-day was not read',
+                             items['resmigazete-20251225-22']['error'])
+            fetched = ('--fetched', str(root / 'fetched'))
+            report = root / 'docs' / 'legal-review.md'
+            code, output = self.tool(root, *argv, 'compare', *fetched, '--report', str(report), '--apply')
+            self.assertEqual(0, code, output)
+            self.assertIn('Presidential Decision No. 10767, Articles 4-7: never read from its primary source; read '
+                          f'{cited} (version 2025-12-25/33118 No. 10767 as published, SHA-256 '
+                          f'{hashlib.sha256(pdf).hexdigest()})', report.read_text(encoding='utf-8'))
+            path = root / 'cmake' / 'legal-register.json'
+            before = path.read_bytes()
+            code, output = self.tool(root, *argv, 'read', *fetched, '--ref', 'docs/reading.md#r', '--entry',
+                                     'tr.7194.rate-decision', '--entry', 'tr.other-decision')
+            self.assertEqual(2, code)
+            self.assertIn('tr.other-decision: resmigazete-20251225-22 was not read (its version index', output)
+            self.assertEqual(before, path.read_bytes(), 'a refused read writes nothing')
+            code, output = self.tool(root, *argv, 'read', *fetched, '--ref', 'docs/reading.md#r', '--entry',
+                                     'tr.7194.rate-decision')
+            self.assertEqual(0, code, output)
+            entries = {entry['id']: entry for entry in json.loads(path.read_text(encoding='utf-8'))['entries']}
+            self.assertEqual({'version': '2025-12-25/33118 No. 10767 as published', 'read': '2026-12-16',
+                              'sha256': hashlib.sha256(pdf).hexdigest()},
+                             entries['tr.7194.rate-decision']['instrument']['consolidated'])
             checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
             self.assertEqual([], checked['legal'])
 
