@@ -321,15 +321,19 @@ elsewhere).
   delivery.
 - **Embargoed destinations are authored.** No designation file carries them, so each authority's comprehensive and
   sectoral regimes are a generation of their own, authored in the register's `sanctions_lists.embargoes` from the
-  instruments read: per authority the screening entry it serves (read from its primary source by
-  `register-review.py read`), a title, the maximum age, `open` (what the reading still owes, or null) and the
-  destinations, each a region, a programme, a measure, the provision it rests on and the entry it is read in (the
-  screening entry, or an Executive order or determination the entry's regulations incorporate, read from its primary
-  source too); `reasons` says why a screening entry has no generation (not yet read, or an instrument that embargoes no
-  destination). `import-sanctions.py import` writes each beside the imported lists with no fetch: `published` is the day
-  of the latest reading (the maximum age runs from it), `source` the screening entry's primary and `source_sha256` the
-  digest of the reading (every pinned text's digest and the destinations), so a corrected reading of the same texts is
-  the next generation. One rule set (`embargo_errors`) refuses a malformed generation in the importer and the guard.
+  instruments read: per authority the screening entry it serves (its instrument names the jurisdiction and its primary
+  is the generation's source), a title, the maximum age, `open` (what the reading still owes, or null) and the
+  destinations, each a region, a programme, a measure, the provision it rests on and the entry it is read in, an
+  instrument of the screening entry's jurisdiction read from its primary source by `register-review.py read`: the
+  screening entry itself when its instrument is one text (31 CFR chapter V), else the act the provision is in (an
+  Executive order or determination the regulations incorporate, or one of the EU's Article 215 regulations, which no
+  single text consolidates, so the EU's screening entry is a class of acts and never read itself). `reasons` says why a
+  screening entry has no generation (not yet read, or an instrument that embargoes no destination). The reading is the
+  destinations' texts: `import-sanctions.py import` writes each generation beside the imported lists with no fetch,
+  `published` the day of the latest reading (the maximum age runs from it), `source` the screening entry's primary and
+  `source_sha256` the digest of the reading (every pinned text's digest and the destinations), so a corrected reading of
+  the same texts is the next generation. One rule set (`embargo_errors`) refuses a malformed generation in the importer
+  and the guard.
   `us.ofac.embargo` is 31 CFR chapter V and the Executive orders 589.201(e) and 587.201(b) incorporate, as read on
   2026-11-01 ([chapter V](../sessions/2026-11-01-comply-1-us-embargoes.md#embargoes),
   [the orders](../sessions/2026-11-01-comply-1-federal-register.md#embargo)): Cuba, Iran, North Korea and the Crimea
@@ -337,8 +341,16 @@ elsewhere).
   UA-09), since the order names the so-called republics and draws no boundary; the Russian Federation sectoral twice
   (chapter V's directives and E.O. 14071's determined services) and Venezuela sectoral; 92 days' maximum age, nothing
   open. Part 596 embargoes no destination (596.503 and 596.504 leave only a donation from a Terrorism List Government
-  and a transfer furthering terrorism prohibited). The EU, UK and UN regimes follow once their regulations and
-  resolutions are read; until then a destination screened against their designation lists alone finds no embargo.
+  and a transfer furthering terrorism prohibited). `eu.council.embargo` is the Article 215 regulations whose measures
+  attach to a place, each destination read in its own regulation on 2026-11-01
+  ([session](../sessions/2026-11-01-comply-1-eu-restrictive-measures.md#embargo)): no regulation read embargoes a
+  place outright, so the Russian Federation (Regulation (EU) No 833/2014), Belarus (No 765/2006), Crimea and Sevastopol
+  (No 692/2014, UA-43 and UA-40), Iran (No 267/2012), the DPRK (2017/1509) and Syria (No 36/2012) are sectoral, and
+  Regulation (EU) 2022/263's non-government controlled areas are partial in the Donetsk, Kherson, Luhansk and
+  Zaporizhzhia oblasts (UA-14, UA-65, UA-09, UA-23); every territorial measure is a destination whatever its sector,
+  whether a sale falls in it being the review's question. Its `open` names the arms, internal-repression and
+  monitoring regimes read next. The UK and UN regimes follow once their regulations and resolutions are read; until
+  then a destination screened against their designation lists alone finds no embargo.
 - **Folding.** Names are compared in search-folded form (`text.search-folding`, crd-core's
   [text_fold.hpp](../../engine/foundation/core/include/crd/core/text_fold.hpp)): lower case; Latin letters with
   diacritics, ligatures and fullwidth forms to ASCII (Ş and ş to s, İ and ı to i, ø to o, ß to ss, æ to ae, the
@@ -388,9 +400,9 @@ elsewhere).
   every refusal, the real binary's bytes), the importer's Python cases (`SanctionsLists` in
   `scripts/test-repository-tools.py`: every format on the excerpts, every refusal, generations, calendars, the
   register's `sanctions_lists` guard, every authored embargo rule and generation) and the official formats end to
-  end: `crd-comply-sanctions-import` imports the excerpts and writes the US embargo into an emptied directory and
-  `crd-comply-sanctions-imported` (the hidden `[.imported]` cases) decodes, adopts and screens what it wrote, the
-  embargo's destinations by region, measure and age included.
+  end: `crd-comply-sanctions-import` imports the excerpts and writes the US and EU embargoes into an emptied directory
+  and `crd-comply-sanctions-imported` (the hidden `[.imported]` cases) decodes, adopts and screens what it wrote, each
+  embargo's destinations by region, measure and age, and both together, included.
 
 <a id="snapshot-and-review"></a>
 ## Snapshot and review
