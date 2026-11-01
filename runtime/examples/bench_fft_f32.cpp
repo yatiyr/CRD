@@ -2,11 +2,11 @@
 // level). Every power of two from 2^10 to 2^22 on identical data, each plan built once outside timing. At each size
 // every forward algorithm the planner offers there (fft::detail::forward_builds: the one this level runs first,
 // fft::detail::level_forward, then the Stockham passes, the standalone-hier, IP4-AoS, the three- and four-pass
-// deep-split, the four-step, the six-step and the f32 1M tiled four-step) runs in this one binary, interleaved with MKL
-// every rep, so all share the host's state; a level's winners become its plans (scripts/gen_fft_level_plans.py reads
-// the boards' logs). The input is copied in before each timed transform, never inside the timing (as
-// the pre-SIMD-DISPATCH board did). Each Cerid arm and MKL is measured against an FFTW f64 transform of the same f32
-// input values and fails above the ADR-0092 §5 f32 class (2e-4, 1e-3 from the four-step band): a fast wrong answer is
+// deep-split, the four-step, the six-step, the f32 1M tiled four-step and the f32 2K to 8K in-place three passes) runs
+// in this one binary, interleaved with MKL every rep, so all share the host's state; a level's winners become its plans
+// (scripts/gen_fft_level_plans.py reads the boards' logs). The input is copied in before each timed transform, never
+// inside the timing (as the pre-SIMD-DISPATCH board did). Each Cerid arm and MKL is measured against an FFTW f64
+// transform of the same f32 input values and fails above the ADR-0092 §5 f32 class (2e-4, 1e-3 from the four-step band): a fast wrong answer is
 // not a win, for either side. Each Cerid row ends with the FNV-1a digest of that gated transform's output (`bits`), so
 // a board of two builds shows they compute the same bits (ab_fft_f32.sh). Cerid's Complex<f32> shares MKL's
 // interleaved {re, im} layout.

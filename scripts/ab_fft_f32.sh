@@ -4,15 +4,19 @@
 # pinned CPU. With CRD_AB_CANDIDATE (another build's bench_fft_f32) the candidate's planned forward is a third arm and
 # HEAD's planned forward the reference, so one board answers both "did the change win" and "where does it stand
 # against MKL"; the two builds must print the same bits at every size (ab-board.py --same), or the board stops.
+# With CRD_AB_ARMS (algorithm names) the program times every forward the planner offers at each size (no --planned)
+# and each named algorithm is an arm beside MKL, all from one process a repetition: one build's algorithms against
+# each other and against MKL (their bits differ by design; each is gated against the FFTW f64 truth in the program).
 # Speed ratios above 1 mean the arm is faster than the reference.
 #   bash scripts/ab_fft_f32.sh <out dir> [--sizes A-B] [ab-board.py options ...]
 # Environment: CRD_CPU_LEVEL (the level, as the boards select it), CRD_BENCH_CPUS (the taskset CPU, default 3),
 # CRD_AB_CANDIDATE (the candidate program), CRD_AB_HEAD (HEAD's program, such as a copy saved before the candidate
-# was built into the lane tree; default the lane tree's).
+# was built into the lane tree; default the lane tree's), CRD_AB_ARMS (space-separated algorithm names, such as
+# "in-place-3 standalone-hier"), CRD_AB_REFERENCE (the named arms' reference: mkl, the default, or one of them).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 if [[ $# -lt 1 || $1 == -* ]]; then
-    sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 2
 fi
 out=$1
@@ -30,7 +34,16 @@ mkl='^(?P<key>\d+) +\| +\S+ +\| +[\d.]+ +\| +(?P<value>[\d.]+) +\|'
 bits='^(?P<key>\d+) +\|.*\| (?P<value>[0-9a-f]{16})$'
 arguments=(--cmd "head=$program --planned --sizes $sizes" --arm "cerid=head:$cerid" --arm "mkl=head:$mkl")
 reference=mkl
-if [[ -n ${CRD_AB_CANDIDATE:-} ]]; then
+if [[ -n ${CRD_AB_ARMS:-} ]]; then
+    read -r -a names <<< "$CRD_AB_ARMS"
+    # MKL is timed beside every arm of a size; the first named arm's row carries it.
+    arguments=(--cmd "head=$program --sizes $sizes"
+               --arm "mkl=head:^(?P<key>\d+) +\| +${names[0]} +\| +[\d.]+ +\| +(?P<value>[\d.]+) +\|")
+    for name in "${names[@]}"; do
+        arguments+=(--arm "$name=head:^(?P<key>\d+) +\| +$name +\| +(?P<value>[\d.]+) +\|")
+    done
+    reference=${CRD_AB_REFERENCE:-mkl}
+elif [[ -n ${CRD_AB_CANDIDATE:-} ]]; then
     arguments+=(--cmd "candidate=$CRD_AB_CANDIDATE --planned --sizes $sizes" --arm "candidate=candidate:$cerid")
     arguments+=(--same "head,candidate:$bits")
     reference=cerid
