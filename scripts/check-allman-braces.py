@@ -12,7 +12,7 @@ not rewrite; fix it by hand). Analysis runs on a mask of each file (strings, com
 lines blanked), so braces inside literals and macros never count. An `else` / `#endif` / `if (...)` chain split by
 the preprocessor is accepted.
 
-  python scripts/check-allman-braces.py               # every tracked C/C++ source; nonzero on any violation
+  python scripts/check-allman-braces.py               # every tracked C/C++/CUDA source; nonzero on any violation
   python scripts/check-allman-braces.py <paths...>    # only these files
   python scripts/check-allman-braces.py --fix [paths] # rewrite violations in place (mechanical, token-preserving)
 
@@ -642,7 +642,7 @@ def fix_lines(lines, max_passes=60):
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXTENSIONS = (".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".inl", ".ipp")
+EXTENSIONS = (".c", ".cc", ".cpp", ".cxx", ".cu", ".cuh", ".h", ".hpp", ".inl", ".ipp")
 VENDORED = (
     # Shewchuk's public-domain predicates, kept verbatim as the predicates' differential-test oracle
     "tests/geometry/geometry-primitives/reference/shewchuk-predicates.c",

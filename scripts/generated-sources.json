@@ -2016,6 +2016,62 @@
         "--check"
       ],
       "sha256": "a22a7e974985e35940e2bca3a6b45c5feb06c58765e5a32517afb90970097669"
+    },
+    {
+      "path": "bench/gpu-compute/ckir_mlp_bwd_gen.cu",
+      "generator": "tests/gpu/kir/test_ckir_mlp.cpp",
+      "status": "reproducible",
+      "sha256": "4bd2038c77bbcadf8ac51c13cde959c3305d1565d38a214bcc88ebefbbb1f35e",
+      "note": "Written by the hidden Catch2 case [.emit-cuda-mlp-bwd] of crd-kir-tests (test_ckir_mlp.cpp) into CRD_REPO_DIR; run it from a scratch directory. On 2026-11-01 (REPO.3) a run on the reference host reproduced the committed bytes; bench/gpu-compute/ckir_mlp_bwd_bench.cu includes it."
+    },
+    {
+      "path": "bench/gpu-compute/ckir_mlp_fwd_gen.cu",
+      "generator": "tests/gpu/kir/test_ckir_mlp.cpp",
+      "status": "reproducible",
+      "sha256": "ee8ce55baca7c30cb7ee39d2746ba03f604fd00dd553fde23afce2fff7b9f120",
+      "note": "Written by the hidden Catch2 case [.emit-cuda-mlp] of crd-kir-tests (test_ckir_mlp.cpp) into CRD_REPO_DIR; run it from a scratch directory. On 2026-11-01 (REPO.3) a run on the reference host reproduced the committed bytes; bench/gpu-compute/ckir_mlp_bench.cu includes it."
+    },
+    {
+      "path": "bench/gpu-compute/ckir_onesweep_gen.cu",
+      "generator": "tests/gpu/kir/test_ckir_subgroup.cpp",
+      "status": "reproducible",
+      "sha256": "7a8de5917f7a7145ca1766da4f388ed5726334d1a126354700e762845ccf2624",
+      "note": "Written by the hidden Catch2 case [.emit-cuda-sort] of crd-kir-tests (test_ckir_subgroup.cpp) into CRD_REPO_DIR; run it from a scratch directory. Regenerated on 2026-11-01 (REPO.3): the case passed `true` where build_sort_scatter_onesweep had since gained its `lanes` parameter, so the scatter lowered with one-lane subgroups (256 KiB of shared memory, which ptxas refuses) and without __match_any_sync; with 32 lanes and the hardware match the current emitter's output (configurations A, B and C) compiles with nvcc 13.3.1 for sm_89 into bench/gpu-compute/ckir_onesweep_bench.cu. Two runs on the reference host wrote the same bytes."
+    },
+    {
+      "path": "bench/gpu-fft/generated/conv1024_fused.cu",
+      "generator": "tests/gpu/kir/test_ckir_kernel_emit.cpp",
+      "status": "reproducible",
+      "sha256": "dea2986b111ba877b6b145e5c4a7be2c84525d7c88e6c41bebf9357b30e2a3f5",
+      "note": "Written by the hidden Catch2 case [.emit-fft-cuda] of crd-kir-tests (test_ckir_kernel_emit.cpp) into CRD_REPO_DIR; run it from a scratch directory. Regenerated on 2026-11-01 (REPO.3) by the current CUDA emitter, which names every value once; the earlier bytes predated that and carried no marker. Two runs on the reference host wrote the same bytes, and nvcc 13.3.1 compiles them into bench/gpu-fft/ckir_fft_profilee.cu for sm_89."
+    },
+    {
+      "path": "bench/gpu-fft/generated/conv1024_r16_fused.cu",
+      "generator": "tests/gpu/kir/test_ckir_kernel_emit.cpp",
+      "status": "reproducible",
+      "sha256": "a5eabe48de1246b8df1be4522635d3a1be4fc12945804389a5fbb498783cb788",
+      "note": "Written by the hidden Catch2 case [.emit-fft-cuda] of crd-kir-tests (test_ckir_kernel_emit.cpp) into CRD_REPO_DIR; run it from a scratch directory. Regenerated on 2026-11-01 (REPO.3) by the current CUDA emitter, which names every value once; the earlier bytes predated that and carried no marker. Two runs on the reference host wrote the same bytes, and nvcc 13.3.1 compiles them into bench/gpu-fft/ckir_fft_profilee.cu for sm_89."
+    },
+    {
+      "path": "bench/gpu-fft/generated/fft1024_r16_batched.cu",
+      "generator": "tests/gpu/kir/test_ckir_kernel_emit.cpp",
+      "status": "reproducible",
+      "sha256": "d40cf8e112483cd8045cd18cf70a039b443004e295b89a24dd37ac59bd9b85a4",
+      "note": "Written by the hidden Catch2 case [.emit-fft-cuda] of crd-kir-tests (test_ckir_kernel_emit.cpp) into CRD_REPO_DIR; run it from a scratch directory. Regenerated on 2026-11-01 (REPO.3) by the current CUDA emitter, which names every value once; the earlier bytes predated that and carried no marker. Two runs on the reference host wrote the same bytes, and nvcc 13.3.1 compiles them into bench/gpu-fft/ckir_fft_profilee.cu for sm_89."
+    },
+    {
+      "path": "bench/gpu-fft/generated/fft1024_r4_batched.cu",
+      "generator": "tests/gpu/kir/test_ckir_kernel_emit.cpp",
+      "status": "reproducible",
+      "sha256": "4e00b128d22d0ff7e55da2e836842c496072240eb8184fa033af329b2b95f075",
+      "note": "Written by the hidden Catch2 case [.emit-fft-cuda] of crd-kir-tests (test_ckir_kernel_emit.cpp) into CRD_REPO_DIR; run it from a scratch directory. Regenerated on 2026-11-01 (REPO.3) by the current CUDA emitter, which names every value once; the earlier bytes predated that and carried no marker. Two runs on the reference host wrote the same bytes, and nvcc 13.3.1 compiles them into bench/gpu-fft/ckir_fft_profilee.cu for sm_89."
+    },
+    {
+      "path": "bench/gpu-fft/generated/transpose1024_t32.cu",
+      "generator": "tests/gpu/kir/test_ckir_kernel_emit.cpp",
+      "status": "reproducible",
+      "sha256": "e141b0fda410c604ccdc124ba0002593767848a7991e8c19445168006002572c",
+      "note": "Written by the hidden Catch2 case [.emit-fft-cuda] of crd-kir-tests (test_ckir_kernel_emit.cpp) into CRD_REPO_DIR; run it from a scratch directory. Regenerated on 2026-11-01 (REPO.3) by the current CUDA emitter, which names every value once; the earlier bytes predated that and carried no marker. Two runs on the reference host wrote the same bytes, and nvcc 13.3.1 compiles them into bench/gpu-fft/ckir_fft_profilee.cu for sm_89."
     }
   ]
 }
