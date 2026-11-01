@@ -366,14 +366,14 @@ endif()
 add_library(crd-warnings INTERFACE)
 
 if(MSVC)
-    # Gate flags on CXX/C only — MASM (ASM_MASM) does not accept these options.
+    # Gate flags on CXX/C only — MASM (ASM_MASM) does not accept these options; the C++ ones on CXX alone.
     target_compile_options(crd-warnings INTERFACE
         $<$<COMPILE_LANGUAGE:CXX,C>:/W4>
         $<$<AND:$<COMPILE_LANGUAGE:CXX,C>,$<BOOL:${CRD_WARNINGS_AS_ERRORS}>>:/WX>
-        $<$<COMPILE_LANGUAGE:CXX,C>:/permissive->
-        $<$<COMPILE_LANGUAGE:CXX,C>:/Zc:__cplusplus>
+        $<$<COMPILE_LANGUAGE:CXX>:/permissive->
+        $<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>
         $<$<COMPILE_LANGUAGE:CXX,C>:/utf-8>
-        $<$<COMPILE_LANGUAGE:CXX,C>:/EHsc>
+        $<$<COMPILE_LANGUAGE:CXX>:/EHsc>
         # /wd4714 — silence "__forceinline function not inlined". MSVC LTCG
         # decides inlining at link time based on the whole-program TU mix; when
         # the cost model declines to inline a hot helper (e.g. crd-log's
@@ -418,6 +418,10 @@ else()
         $<$<COMPILE_LANGUAGE:CXX>:-Woverloaded-virtual>
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wnull-dereference>
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wformat=2>
+        # C: every definition and declaration is a prototype. Clang warns on a K&R definition by default and GCC
+        # never does, so these keep one contract on both (MSVC's /W4 holds it as C4131).
+        $<$<COMPILE_LANGUAGE:C>:-Wold-style-definition>
+        $<$<COMPILE_LANGUAGE:C>:-Wstrict-prototypes>
     )
     # Link-time optimization compiles again at the link, and GCC judges those diagnostics by the link line alone: a
     # compile line's -Werror does not reach them, so without this a link-time warning lands green (the hosted

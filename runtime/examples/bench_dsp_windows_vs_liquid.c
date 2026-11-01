@@ -6,8 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-static double now_ms(){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (double)t.tv_sec*1e3 + (double)t.tv_nsec*1e-6; }
-int main(){
+static double now_ms(void){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (double)t.tv_sec*1e3 + (double)t.tv_nsec*1e-6; }
+int main(void){
   unsigned int N=1u<<20; int reps=50;
   float* w=malloc(N*sizeof(float));
   #define BENCH(name, expr) do{ for(unsigned i=0;i<N;++i) w[i]=expr; double t0=now_ms(); double chk=0; \

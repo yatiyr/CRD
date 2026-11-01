@@ -1,14 +1,15 @@
 # The predicates' differential test oracle (test_predicates_vs_shewchuk.cpp): Shewchuk's public-domain predicates.c,
-# kept in reference/ verbatim but for its guarded look-ahead reads (reference/README.md). It is compiled as C17 with
-# GNU extensions, since its definitions are K&R ones, which C23 removes. It takes the tree's floating-point contract
-# (crd-simd-flags: no contraction, no fast-math, SSE2 arithmetic on x64), because its expansions need each product and sum rounded once, and no warning set, since the code is
-# Shewchuk's. The Windows SDK has no <sys/time.h>, which the source includes and never uses, and no random(), which
-# only its unused random-input generators call: reference/win32 supplies the header, and random() becomes rand().
+# kept in reference/ verbatim but for two repairs (reference/README.md): its look-ahead reads are guarded and its K&R
+# definitions are prototyped. It is compiled as C17 with GNU extensions (glibc declares random() only with them) under
+# the tree's floating-point contract (crd-simd-flags: no contraction, no fast-math, SSE2 arithmetic on x64), because
+# its expansions need each product and sum rounded once, and with the tree's warnings, as errors. The Windows SDK has
+# no <sys/time.h>, which the source includes and never uses, and no random(), which only its unused random-input
+# generators call: reference/win32 supplies the header, and random() becomes rand().
 enable_language(C)
 add_library(crd-geometry-shewchuk-oracle OBJECT reference/shewchuk-predicates.c)
 set_target_properties(crd-geometry-shewchuk-oracle PROPERTIES
     C_STANDARD 17 C_STANDARD_REQUIRED ON C_EXTENSIONS ON INTERPROCEDURAL_OPTIMIZATION OFF)
-target_link_libraries(crd-geometry-shewchuk-oracle PRIVATE crd-simd-flags)
+target_link_libraries(crd-geometry-shewchuk-oracle PRIVATE crd-simd-flags crd-warnings)
 if(MSVC)
     target_include_directories(crd-geometry-shewchuk-oracle PRIVATE reference/win32)
     target_compile_definitions(crd-geometry-shewchuk-oracle PRIVATE random=rand)
