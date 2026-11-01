@@ -37,6 +37,9 @@ failing step, file and commit:
   among the omitted modules). So the ARM64 lanes hold no evidence for this row, and the row asks for none: its
   evidence lanes are the Windows ones (MSVC, clang-cl) and the scalar ones. win-debug and win-debug-scalar were still
   testing when this note was written; clang-cl's tests did not run (its build stopped at track A's link failure).
+- **Later commits.** Each newer push replaces the push group's pending run, so no run yet covers e519b77d or this
+  batch's commits (the pending run is at 5c7142a7, which precedes them); win-debug (job 124764040316), win-debug-scalar
+  (124764040380) and win-public-checks (124764040379) of run 41274380605 were still testing.
 
 ## ggml: the nn board's same-format peer
 
