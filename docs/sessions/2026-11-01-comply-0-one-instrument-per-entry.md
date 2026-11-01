@@ -110,10 +110,42 @@ covers most of their articles; what this batch read again, and what the obligati
 `read` recorded the nine entries from the fetch, all or nothing, with this section as their verified source; the guard
 then held each one's source to this note.
 
+<a id="by-law-reader"></a>
+## A reader for by-laws, regulations and communiqués
+
+The reader of mevzuat.gov.tr knew a law by the number its text names. A by-law, regulation or communiqué names no
+number, and the site's `MevzuatNo` for it is an opaque record number; what identifies it is the Official Gazette that
+published it. The pages this batch fetched (ten by-laws, regulations and communiqués, four of their cited pages) show
+where that is written: the cited page always names it (`Resmî Gazete Tarihi: 27.11.2014 Resmî Gazete Sayısı: 29188`),
+and an amended text closes with a table of its own gazette and the amending ones; a text never amended (the By-Law on
+transfers abroad, the BTK personal data regulation) has neither notes nor table.
+
+- **Resolver.** A `MevzuatTur=7` (by-law or regulation) or `9` (communiqué) primary resolves to an index, the cited
+  page itself (reader `mevzuat-gazette`), and the framed text with its `form` (`YÖNETMELİ`, `TEBLİĞ`). Another kind is
+  read by digest alone until its shape is known; a law resolves as before.
+- **Index.** `read_mevzuat_gazette` reads exactly one gazette from the cited page: `<day>/<issue>`, `-m<n>` for a
+  repeated issue (`33124 (5.Mükerrer)`), an impossible day refused.
+- **Document.** The title must name the form; an amended text's table must repeat the cited page's gazette (a
+  different one is refused: the site served another instrument); the version is the gazette and the latest change of
+  the amending gazettes' notes (`(Değişik ibare:RG-23/8/2022-31932)`), the table's rows (empty trailing rows skipped)
+  and court annulments, as `2014-11-27/29188 at 2026-05-06 (Danıştay)`, or `2014-11-27/29188 as published`.
+- **Courts, laws included.** A Council of State annulment (`(Danıştay Onuncu Dairesinin 6/5/2026 tarihli ... iptal
+  bent: <the text annulled>)`) was not a note the reader knew, and an annulment's quoted text may hold other days, so a
+  court's note counts on its decision's day only, for laws too; "Tarihli" is capitalised in some (Law No. 5378).
+
+On the fetched pages the readers give: the Regulation on Distance Contracts `2014-11-27/29188 at 2026-05-06
+(Danıştay)` (the Council of State annulled three exceptions to the withdrawal right in Article 15(1) on 6 May 2026), Communiqué No. 509
+`2019-10-19/30923 at 2025-12-31 (RG 33124-m5)`, the RTÜK regulation `2019-08-01/30849 at 2026-05-07 (RG 33246)`, the
+By-Law on transfers abroad `2024-07-10/32598 as published`. Every law the first read fetched (16, and Laws No. 7262
+and 213) reads the same version as before the change.
+
 ## What changed
 
 - `cmake/legal-register.json`: 121 entries (15 new), the nine law halves recorded, the counsel questions following
   their instruments, the proliferation freezes pending.
+- `scripts/register-review.py`: the resolver, the cited-gazette index reader and the by-law, regulation and communiqué
+  reading of `read_mevzuat`; court notes counted on their decision's day. `docs/design/registers.md`'s official-texts
+  table has the row.
 - `assets/comply/tr.rules.toml` (generation 6), `eu.rules.toml` and `gb.rules.toml` (generation 5): regenerated and
   reviewed, their `rule_generations` records and the generated-source manifest refreshed.
 
@@ -123,4 +155,24 @@ then held each one's source to this note.
   `gen-comply-rules.py --check` finds all 11 generations current after the TR, EU and GB reviews; `check-generated.py`
   passes with the refreshed manifest.
 - **Python.** `Registers`, `LegalRegister`, `ComplyRules`, `CryptoInventory`, `SanctionsLists`, `RegisterReview` and
-  `RegisterIds` pass: 64 cases.
+  `RegisterIds` pass: 66 cases, 2 of them new (the readers and resolver with every refusal; plan, fetch, compare and
+  `read` of a regulation and a communiqué end to end, the communiqué whose table contradicts its cited page refused
+  and nothing written). Twelve mutations of the new reader were each caught (the table's gazette unchecked, court notes
+  counted whole, courts ignored, the table's rows ignored, the form unchecked, the repeated issue dropped, no cited
+  gazette accepted, the index dropped, two cited gazettes accepted, the `RG` label dropped, an unknown kind read,
+  "Tarihli" missed); the first run let "court notes counted whole" survive, so a case now quotes a later day in an
+  annulment note.
+- **C++.** On the track's machine (linux-gcc-debug, 4f5b6995) `crd-comply-tests`, `crd-ceridc-tests` and `ceridc`
+  built with no warning and the 158 scoped CTests passed, among them the committed generations decoding and binding
+  the crash pool, `crd-comply-rules-drift`, `crd-check-registers`, `crd-generated-sources` and `crd-repository-tools`.
+
+## Next
+
+1. COMPLY.0: `plan`, `fetch`, `compare --apply` and the reading of the 15 new entries' instruments: the twelve on
+   mevzuat.gov.tr through the new reader, Regulation (EU) 2017/1001 through CELLAR, SI 2023/1007 and the UK GDPR on
+   legislation.gov.uk (the resolver gains `eur/` once its `data.xml` is checked), and an Official Gazette reader for
+   Decision No. 10767 (`eskiler/YYYY/MM/YYYYMMDD-N`, its PDF and decision number); `tr.kvkk.deletion`'s primary moved
+   from the gazette's day index to the regulation.
+2. COMPLY.0, host by host: the CELLAR acts not yet read, the UK acts, COPPA, Section 508, the CVAA, OFAC's chapter V
+   and the Wassenaar Category 5 Part 2; the full re-research of Law No. 5651 (due 2026-11-26).
+3. COMPLY.1: Law No. 7262 read, then both freeze regimes' decisions from the Official Gazette and MASAK.
