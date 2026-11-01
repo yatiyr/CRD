@@ -304,7 +304,9 @@ void exchange(Endpoint& client, Endpoint& server, usize size)
 // RFC 8701 section 2's reserved values, read independently of the provider: 0x0A0A, 0x1A1A ... 0xFAFA.
 constexpr bool is_grease(u16 value)
 {
-    return (value & 0x0F0FU) == 0x0A0AU && (value >> 12U) == ((value >> 4U) & 0x0FU);
+    // u16 promotes to int, so widen to unsigned first and compare unsigned with unsigned (MSVC C4389 on /WX)
+    const u32 bits = value;
+    return (bits & 0x0F0FU) == 0x0A0AU && (bits >> 12U) == ((bits >> 4U) & 0x0FU);
 }
 
 u16 be16(const u8* p)
