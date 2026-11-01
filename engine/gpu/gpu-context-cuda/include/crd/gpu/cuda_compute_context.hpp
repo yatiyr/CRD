@@ -96,6 +96,9 @@ public:
 // Create the CUDA compute context. Returns a context whose valid() is false if there is no CUDA driver/device (a clean,
 // inspectable skip — no hidden fallback). `alloc` backs the context's own small host-side allocations. Returned as the
 // concrete CudaComputeContext so callers reach create_pipeline_from_cuda + last_gpu_ms; it IS an IComputeContext.
+// HW-RESILIENCE.3: it opens the first device, in CUDA's enumeration order, that passes the GPU device check
+// (crd/gpu/device_check.hpp; once per device per process, on a probe context of its own); valid() is also false when
+// none passes. kir-cuda's test backend still opens device 0, so the two share a context only while device 0 passes.
 [[nodiscard]] std::unique_ptr<CudaComputeContext> create_cuda_compute_context(crd::memory::IAllocator& alloc);
 
 } // namespace crd::gpu

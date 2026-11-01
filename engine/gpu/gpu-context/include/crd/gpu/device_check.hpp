@@ -15,7 +15,8 @@
 // named adapter's check, so tests drive the fallback on a sound GPU. A host prints the demotions where it starts its
 // diagnostics (report_device_demotions) and `gpu.resources` (crd-perf-gpu-bridge) reports every check and selection.
 //
-// Backends with the check: Vulkan (create_vulkan_gpu_context) and DX12 (Dx12DeviceScope::create).
+// Backends with the check: Vulkan (create_vulkan_gpu_context), DX12 (Dx12DeviceScope::create) and CUDA
+// (create_cuda_compute_context).
 // Contract: docs/design/runtime-diagnostics.md.
 
 #include <crd/containers/span.hpp>

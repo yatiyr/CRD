@@ -594,8 +594,8 @@ crd_module(engine/gpu/gpu-context-vulkan engine/gpu-context-vulkan
 crd_module(engine/gpu/gpu-context-dx12 engine/gpu-context-dx12 DEPENDS containers core gpu-context kir memory
     TESTS gpu/gpu-context-dx12 TEST_DEPENDS ceir ceir-gpu frame-cook perf perf-gpu-bridge shader-cook vertex-cook)
 # ADR-0100 (2026-08-07, user-directed): third IComputeContext backend (CUDA); self-skips without CUDAToolkit
-crd_module(engine/gpu/gpu-context-cuda engine/gpu-context-cuda DEPENDS containers core gpu-context memory
-    TESTS gpu/gpu-context-cuda execution/ceir-gpu-cuda TEST_DEPENDS ceir ceir-gpu kir)
+crd_module(engine/gpu/gpu-context-cuda engine/gpu-context-cuda DEPENDS containers core gpu-context kir memory
+    TESTS gpu/gpu-context-cuda execution/ceir-gpu-cuda TEST_DEPENDS ceir ceir-gpu)
 # DIAG.6b(i): the frame-graph -> crd-perf GPU-timing bridge. The one module that names BOTH perf and gpu-context,
 # keeping their mutual independence intact (no engine module depends back on it). It also owns the gpu.resources
 # diagnostic command, which hosts such as ceridc bind into their command service.

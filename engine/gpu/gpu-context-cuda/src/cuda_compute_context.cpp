@@ -6,6 +6,10 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>
+#include <crd/gpu/device_check.hpp>
+#include <crd/kir/ckir.hpp>
+#include <crd/kir/ckir_cuda.hpp>
+#include <crd/kir/ckir_device_check.hpp>
 #include <crd/memory/allocator.hpp>
 
 #include <cuda.h>
@@ -18,6 +22,52 @@ namespace crd::gpu
 {
 namespace
 {
+// The NVRTC target of `device`, "sm_<major><minor>" (no context needed).
+void cuda_arch(CUdevice device, char (&arch)[16]) noexcept
+{
+    int major = 0;
+    int minor = 0;
+    if (cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device) != CUDA_SUCCESS ||
+        cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device) != CUDA_SUCCESS)
+    {
+        major = 5;
+        minor = 2;
+    }
+    (void)std::snprintf(arch, sizeof(arch), "sm_%d%d", major, minor);
+}
+
+// The identity of `device` (no context needed): its name and the driver's CUDA version ("13.0"); CUDA reports no PCI
+// device id.
+[[nodiscard]] GpuAdapter cuda_adapter(CUdevice device) noexcept
+{
+    GpuAdapter adapter{};
+    std::memcpy(adapter.backend, "cuda", sizeof("cuda"));
+    if (cuDeviceGetName(adapter.name, static_cast<int>(sizeof(adapter.name)), device) != CUDA_SUCCESS)
+    {
+        adapter.name[0] = '\0';
+    }
+    adapter.name[sizeof(adapter.name) - 1U] = '\0';
+    adapter.vendor = 0x10DEU;
+    int version = 0;
+    if (cuDriverGetVersion(&version) == CUDA_SUCCESS && version > 0)
+    {
+        adapter.driver = static_cast<crd::u64>(version);
+        (void)std::snprintf(adapter.driver_version, sizeof(adapter.driver_version), "%d.%d", version / 1000,
+                            (version % 1000) / 10);
+    }
+    adapter.known = true;
+    return adapter;
+}
+
+// A context of its own on `device` (not the shared primary one), pushed current on this thread; cuCtxDestroy pops it.
+[[nodiscard]] bool create_own_context(CUdevice device, CUcontext& ctx) noexcept
+{
+#if CUDA_VERSION >= 13000
+    return cuCtxCreate(&ctx, nullptr, 0U, device) == CUDA_SUCCESS; // 13.x: cuCtxCreate_v4, null parameters
+#else
+    return cuCtxCreate(&ctx, 0U, device) == CUDA_SUCCESS;
+#endif
+}
 // NVRTC: compile CUDA C (`src`, null-terminated) → a CUBIN for the device's exact `arch` (e.g. "sm_89"). CUBIN, not PTX:
 // newer NVRTC emits a PTX version the driver JIT rejects (cuModuleLoadData error 222). ⭐ `fmad` is the PER-PIPELINE
 // FP-contraction choice: `--fmad=false` yields bit-exact (oracle-matched, the CUDA-fan-out convention), `--fmad=true` fuses
@@ -172,6 +222,8 @@ private:
     crd::u32    m_nodes = 0U;
 };
 
+[[nodiscard]] bool cuda_checked_device(CUdevice& out);
+
 class CudaContextImpl final : public CudaComputeContext
 {
     // The recorder issues copies/dispatches straight onto the context's stream (async); submit_and_wait synchronises.
@@ -226,50 +278,35 @@ class CudaContextImpl final : public CudaComputeContext
     };
 
 public:
+    // The device the check chooses (cuda_checked_device), on its PRIMARY context: the refcounted singleton kir-cuda
+    // also retains, so a shared device and no duplicate init.
     explicit CudaContextImpl(crd::memory::IAllocator& alloc) noexcept : m_alloc(alloc), m_rec(*this)
     {
-        if (cuInit(0) != CUDA_SUCCESS)
+        if (cuInit(0) != CUDA_SUCCESS || !cuda_checked_device(m_device))
         {
             return;
         }
-        int count = 0;
-        if (cuDeviceGetCount(&count) != CUDA_SUCCESS || count <= 0)
-        {
-            return;
-        }
-        if (cuDeviceGet(&m_device, 0) != CUDA_SUCCESS)
-        {
-            return;
-        }
-        // Retain the device PRIMARY context — the refcounted singleton kir-cuda also retains ⇒ shared device, no dup init.
         if (cuDevicePrimaryCtxRetain(&m_ctx, m_device) != CUDA_SUCCESS)
         {
             return;
         }
+        m_retained = true;
         if (cuCtxSetCurrent(m_ctx) != CUDA_SUCCESS)
         {
             return;
         }
-        if (cuStreamCreate(&m_stream, CU_STREAM_DEFAULT) != CUDA_SUCCESS)
+        open();
+    }
+
+    // HW-RESILIENCE.3: the device check's probe, on a context of its own on `device` that stays current on this thread
+    // until the probe is destroyed, so the primary context a caller receives carries none of the check's work.
+    CudaContextImpl(crd::memory::IAllocator& alloc, CUdevice device) noexcept : m_alloc(alloc), m_rec(*this)
+    {
+        m_device = device;
+        if (create_own_context(m_device, m_ctx))
         {
-            return;
+            open();
         }
-        cuEventCreate(&m_ev0, CU_EVENT_DEFAULT);
-        cuEventCreate(&m_ev1, CU_EVENT_DEFAULT);
-        int major = 0;
-        int minor = 0;
-        cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, m_device);
-        cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, m_device);
-        std::snprintf(m_arch, sizeof(m_arch), "sm_%d%d", major, minor);
-        int warp = 0;
-        int shmem = 0;
-        cuDeviceGetAttribute(&warp, CU_DEVICE_ATTRIBUTE_WARP_SIZE, m_device);
-        cuDeviceGetAttribute(&shmem, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK, m_device);
-        m_warp  = warp > 0 ? static_cast<crd::u32>(warp) : 32U;
-        m_shmem = shmem > 0 ? static_cast<crd::u32>(shmem) : 49152U;
-        m_ok    = true;
-        read_adapter();
-        (void)opened_adapters().note(m_adapter); // HW-RESILIENCE.2: the machine's identity names this GPU
     }
 
     ~CudaContextImpl() override
@@ -286,9 +323,13 @@ public:
         {
             cuStreamDestroy(m_stream);
         }
-        if (m_ctx != nullptr) // release our refcount on the shared primary ctx
+        if (m_retained) // release our refcount on the shared primary ctx
         {
             cuDevicePrimaryCtxRelease(m_device);
+        }
+        else if (m_ctx != nullptr) // the probe's own context, popped from this thread
+        {
+            cuCtxDestroy(m_ctx);
         }
     }
     CudaContextImpl(const CudaContextImpl&)            = delete;
@@ -365,13 +406,22 @@ public:
         {
             return nullptr;
         }
+        return load_cubin(cubin, name.data(), n_bindings, local_size, push_size);
+    }
+
+    // Load a CUBIN built for this device and cache a pipeline of its kernel `entry` (null-terminated); nullptr when the
+    // driver refuses the module or the module has no such kernel.
+    [[nodiscard]] std::unique_ptr<ComputePipeline> load_cubin(const crd::containers::Array<char>& cubin,
+                                                              const char* entry, int n_bindings, crd::u32 local_size,
+                                                              crd::u32 push_size)
+    {
         CUmodule mod = nullptr;
-        if (cuModuleLoadData(&mod, cubin.data()) != CUDA_SUCCESS)
+        if (!m_ok || cuModuleLoadData(&mod, cubin.data()) != CUDA_SUCCESS)
         {
             return nullptr;
         }
         CUfunction fn = nullptr;
-        if (cuModuleGetFunction(&fn, mod, name.data()) != CUDA_SUCCESS)
+        if (cuModuleGetFunction(&fn, mod, entry) != CUDA_SUCCESS)
         {
             cuModuleUnload(mod);
             return nullptr;
@@ -476,24 +526,25 @@ public:
     }
 
 private:
-    // The device's name and the driver's CUDA version ("13.0"); CUDA reports no PCI device id.
-    void read_adapter() noexcept
+    // With m_ctx current: the stream, the timing events, the device's limits and identity.
+    void open() noexcept
     {
-        std::memcpy(m_adapter.backend, "cuda", sizeof("cuda"));
-        if (cuDeviceGetName(m_adapter.name, static_cast<int>(sizeof(m_adapter.name)), m_device) != CUDA_SUCCESS)
+        if (cuStreamCreate(&m_stream, CU_STREAM_DEFAULT) != CUDA_SUCCESS)
         {
-            m_adapter.name[0] = '\0';
+            return;
         }
-        m_adapter.name[sizeof(m_adapter.name) - 1U] = '\0';
-        m_adapter.vendor = 0x10DEU;
-        int version = 0;
-        if (cuDriverGetVersion(&version) == CUDA_SUCCESS && version > 0)
-        {
-            m_adapter.driver = static_cast<crd::u64>(version);
-            (void)std::snprintf(m_adapter.driver_version, sizeof(m_adapter.driver_version), "%d.%d", version / 1000,
-                                (version % 1000) / 10);
-        }
-        m_adapter.known = true;
+        cuEventCreate(&m_ev0, CU_EVENT_DEFAULT);
+        cuEventCreate(&m_ev1, CU_EVENT_DEFAULT);
+        cuda_arch(m_device, m_arch);
+        int warp = 0;
+        int shmem = 0;
+        cuDeviceGetAttribute(&warp, CU_DEVICE_ATTRIBUTE_WARP_SIZE, m_device);
+        cuDeviceGetAttribute(&shmem, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK, m_device);
+        m_warp = warp > 0 ? static_cast<crd::u32>(warp) : 32U;
+        m_shmem = shmem > 0 ? static_cast<crd::u32>(shmem) : 49152U;
+        m_ok = true;
+        m_adapter = cuda_adapter(m_device);
+        (void)opened_adapters().note(m_adapter); // HW-RESILIENCE.2: the machine's identity names this GPU
     }
 
     crd::memory::IAllocator& m_alloc;
@@ -509,8 +560,105 @@ private:
     crd::u32                 m_shmem  = 49152U;
     double                   m_last_ms = 0.0;
     bool                     m_ok     = false;
+    bool m_retained = false;  // m_ctx is the device's primary context, retained
     bool                     m_capturing = false; // CEIR-29b-2a: true between a SUCCESSFUL begin_capture and its end_capture
 };
+
+// HW-RESILIENCE.3: the device check of the device `*user` (a CUdevice). The kernel is lowered on the host first (one
+// that does not lower leaves the device unchecked) and compiled by NVRTC for the device's own architecture. NVRTC is
+// linked into this backend, so a compile that fails means the backend can build no kernel for that device: it fails as
+// "build" and is passed over, unlike a host without a shader compiler on Vulkan or DX12. The CUBIN then runs on a
+// probe context of its own, destroyed before the caller's primary context is retained.
+DeviceCheckOutcome check_cuda_device(void* user)
+{
+    const CUdevice device = *static_cast<const CUdevice*>(user);
+    crd::memory::IAllocator* const alloc = crd::memory::default_allocator();
+    crd::kir::KGraph graph(alloc);
+    const crd::kir::KEntry entry = crd::kir::build_device_check_kernel(graph);
+    crd::kir::GlslKernel kernel(alloc);
+    if (!crd::kir::emit_compute_kernel_cuda(graph, entry, alloc, kernel))
+    {
+        return DeviceCheckOutcome{nullptr, "the kernel does not lower to CUDA C"};
+    }
+    char arch[16] = {};
+    cuda_arch(device, arch);
+    crd::containers::Array<char> cubin(alloc);
+    if (!compile_cubin(kernel.source.c_str(), arch, false, cubin))
+    {
+        return DeviceCheckOutcome{"build", nullptr};
+    }
+    CudaContextImpl probe(*alloc, device);
+    if (!probe.valid())
+    {
+        return DeviceCheckOutcome{"device", nullptr};
+    }
+    float input[crd::kir::kDeviceCheckLanes] = {};
+    for (crd::u32 i = 0U; i < crd::kir::kDeviceCheckLanes; ++i)
+    {
+        input[i] = crd::kir::device_check_input(i);
+    }
+    const std::unique_ptr<ComputePipeline> pipeline =
+        probe.load_cubin(cubin, "ckir", crd::kir::kDeviceCheckBindings, entry.local_size[0], 0U);
+    DeviceCheckProgram program;
+    program.input = crd::containers::ConstSpan<float>(input, crd::kir::kDeviceCheckLanes);
+    program.floats = crd::kir::kDeviceCheckFloats;
+    program.words = crd::kir::kDeviceCheckWords;
+    program.workgroups = crd::kir::kDeviceCheckGroups;
+    program.verify = &crd::kir::device_check_mismatch;
+    return DeviceCheckOutcome{run_device_check(probe, pipeline.get(), program), nullptr};
+}
+
+// The device a context opens: CUDA's devices in its own enumeration order (fastest first, or PCI bus order under
+// CUDA_DEVICE_ORDER; CUDA_VISIBLE_DEVICES applies), each checked once per process; one that fails is passed over for
+// the next. False when CUDA lists no device (nothing was chosen) or none passes (no device: the consumers' CPU path).
+bool cuda_checked_device(CUdevice& out)
+{
+    int count = 0;
+    if (cuDeviceGetCount(&count) != CUDA_SUCCESS || count <= 0)
+    {
+        return false;
+    }
+    DeviceSelection selection;
+    for (int i = 0; i < count; ++i)
+    {
+        CUdevice device = 0;
+        DeviceCheck check;
+        if (cuDeviceGet(&device, i) == CUDA_SUCCESS)
+        {
+            check = check_device_once(cuda_adapter(device), static_cast<crd::u32>(i), &check_cuda_device, &device);
+        }
+        else
+        {
+            std::memcpy(check.adapter.backend, "cuda", sizeof("cuda")); // listed but not opened: an unknown device
+            check.failed = "device";
+        }
+        if (i == 0)
+        {
+            selection.selected = check.adapter;
+        }
+        if (check.failed != nullptr)
+        {
+            if (i == 0)
+            {
+                selection.failed = check.failed;
+                selection.injected = check.injected;
+            }
+            ++selection.adapters_failed;
+            continue;
+        }
+        const DeviceCheckStatus first =
+            check.unchecked != nullptr ? DeviceCheckStatus::Unchecked : DeviceCheckStatus::Passed;
+        selection.status = i == 0 ? first : DeviceCheckStatus::Demoted;
+        selection.runs = check.adapter;
+        selection.unchecked = check.unchecked;
+        device_checks().note_selection(selection);
+        out = device;
+        return true;
+    }
+    selection.status = DeviceCheckStatus::NoDevicePassed;
+    device_checks().note_selection(selection);
+    return false;
+}
 
 } // namespace
 

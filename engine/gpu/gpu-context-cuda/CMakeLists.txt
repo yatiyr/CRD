@@ -29,6 +29,7 @@ target_link_libraries(crd-gpu-context-cuda
     PRIVATE
         crd-core
         crd-memory
+        crd-kir             # HW-RESILIENCE.3: the device check's CKIR kernel through the CUDA C emitter (acyclic)
 )
 
 target_compile_features(crd-gpu-context-cuda PUBLIC cxx_std_20)

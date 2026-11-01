@@ -4,7 +4,7 @@ if(NOT TARGET crd-gpu-context-cuda)
     return()
 endif()
 
-add_executable(crd-gpu-context-cuda-tests test_cuda_compute.cpp)
+add_executable(crd-gpu-context-cuda-tests test_cuda_compute.cpp test_cuda_device_check.cpp)
 
 target_link_libraries(crd-gpu-context-cuda-tests PRIVATE
     crd-core
