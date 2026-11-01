@@ -3212,6 +3212,16 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   stops the damage, never repairs it), a memory test for a machine check. `bundle.inspect` reads a crash capture as
   it is or the first one a bundle carries, adds a `classification` item before the symbols, and takes
   `replay=<not-run|reproduced|not-reproduced>`.
+- Code no store wrote: every fault's dump and record carries up to `crd::crash::kCodeWindowBytes` (16) bytes from the
+  faulting address, read by a call that fails instead of faulting (`ReadProcessMemory` on Windows, `/proc/self/mem`
+  on Linux) and ending at the first unreadable page: a range of the dump's memory list, where a debugger reads code,
+  and the record's line `code <pc> <hex>`. `compare_code_with_image` compares them with the file of the module
+  holding the pc, a PE file (TimeDateStamp, SizeOfImage and CheckSum checked; the pc's section mapped; the base
+  relocations in the window applied for the load address) or an ELF file (GNU build-id and PT_LOAD span checked; a
+  module with text relocations not compared). Exactly one differing bit is `code-bit-flip`; more is a patch (a hook,
+  a breakpoint) and never judged. `bundle.inspect` finds the image in the root's store, `<root>/images` laid out as
+  `image_file_path` names it (the symsrv key of a PE binary, `.build-id/<nn>/<rest>` for ELF), and reports the
+  comparison or why it was not made.
 
 ## Existing programme ownership after DIAG
 
