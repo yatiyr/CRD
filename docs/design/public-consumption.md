@@ -140,6 +140,17 @@ floating-point options every consumer of the math headers must compile with). Ev
   use the installed site form (`CRD_FLIGHT_RECORD`), and the proof runs the deliberate failure twice, at the installed
   flight policy's full detail and at a basic copy of it, holding the messages the sites formatted to the events the
   recorder kept ([DIAG.11b](runtime-diagnostics.md#diag-11b)).
+- Amended 2026-11-01 ([session](../sessions/2026-11-01-own-bundle-compressed-sections.md), OWN.1): crd-perf's bundle
+  sections compress through crd-compression, so the family gains `Cerid::compression` and the first pinned
+  third-party archive, zstd, which crd-compression links privately. `crd_package_dependency()` exports such an archive
+  link-only as `Cerid::zstd`, with its compile PDB under `pdb` and no header: zstd's header is private to
+  crd-compression, so a consumer reaches zstd only through `crd/compression/zstd.hpp` and cannot swap it for another
+  build. `CeridConfig.cmake` lists it in `Cerid_DEPENDENCIES`. zstd's own install rules (its headers, pkg-config file
+  and `zstd::` export) are kept out by adding it `EXCLUDE_FROM_ALL`; until then every full `cmake --install` installed
+  them. Its MSVC debug information follows the engine's (policy CMP0141 is NEW for its directory). The proof checks one
+  archive per dependency under zstd's own platform name (`libzstd.a`, `zstd_static.lib`), and the application's
+  `codecs` route round-trips DEFLATE and a zstd frame from the moved prefix; the capture example requires its flight
+  record stored compressed and decoded to its size.
 
 ## Not in scope
 

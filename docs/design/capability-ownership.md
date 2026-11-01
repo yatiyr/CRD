@@ -62,7 +62,7 @@ OWN.1 records these owners (2026-10-31):
    [P-4](../research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#p-4)). Raw DEFLATE and
    inflate, the zstd binding (crdr v2's
    chunk codec, with trained dictionaries) and the GDeflate CPU paths live there; resources, perf and shader-cook
-   consume it.
+   consume it (perf since 2026-11-01, [below](#the-bundles-compressed-sections)).
 2. **The perceptual image metric** ([IMG-ORACLE](../ROADMAP.md#slice-img-oracle)) is a new `hesap-image` module beside
    hesap-dsp, on hesap-fft and hesap-stats, as the row recommends: tooling owns no numerics.
 3. **Seed generators** (SplitMix64 and the 64-bit MMIX LCG step) live in crd-core: crd-core's workload probe,
@@ -117,7 +117,7 @@ each a `pending` entry or a listed review, all on OWN.1:
 | cpu.kernel-dispatch → core | `math/libm.hpp`, **moved** 2026-10-31 | read `__AVX2__` and `__FMA__` to choose the FMA instruction; it now reads crd-core's `CRD_TARGET_X64` and `CRD_TARGET_X64_FMA`, see below. |
 | math.fixed-size-linear-algebra → math | `geometry-primitives/transform.hpp`, `circumcenter.hpp`, mesh-processing's `quadric.hpp`, **moved** 2026-10-31 | `det3`, the inverse-transpose, the 2D attributes' determinant, the symmetric cofactor inverse and both circumcentres' Cramer's rule; crd-math gained Mat2/Mat3 `determinant`, `inverse`, `try_inverse`, `inverse_transpose`, `solve` and `try_solve`, see below. |
 | io.durable-saves → platform | `perf/bundle.cpp` | crd-perf's `write_bundle_atomic` replaces a file durably by hand; it moves onto `durable_file.hpp` once crd-perf, which ships in the relocatable package, can link crd-platform. |
-| compression.codecs → compression | resources' `deflate`, `crdr`'s zstd calls and the resources fuzz target's, **moved** 2026-10-31; hesap-tensor's `io_zip.hpp` npz inflate, **merged** 2026-11-01 | decision 1: crd-compression created; one exact-size decoder; see below. |
+| compression.codecs → compression | resources' `deflate`, `crdr`'s zstd calls and the resources fuzz target's, **moved** 2026-10-31; hesap-tensor's `io_zip.hpp` npz inflate, **merged** 2026-11-01; perf's bundle sections, **compressed through it** 2026-11-01 | decision 1: crd-compression created; one exact-size decoder; the bundle's compressed sections and the module in the package; see below. |
 | compression.zip-archives → compression | resources' `zip_archive.cpp`, hesap-tensor's npz reader and writer in `io.hpp`, **moved** 2026-11-01 | decision 8; the registry's signature is the ZIP record signatures. |
 | numerics.signal-processing → hesap-dsp | `audio/audio_kernels.hpp`, hesap-dsp's own `sosfilt_stream`, **moved** 2026-10-31 | the audio biquad designed with hesap-dsp's RBJ formulas but ran its own transposed direct-form II loop; both loops now run hesap-dsp's `biquad_step`, bit-exact, see below. |
 | geometry.robust-predicates | `hesap-interp/clough_tocher.hpp` `fast_orient`, **moved** 2026-10-31 | a deliberate non-robust orientation for the walk with an exact fallback; it is now crd-math's 2D `cross`, not a second predicate, bit-exact, see below. |
@@ -286,8 +286,8 @@ same flip as the unchanged encoder's: placement, not the code. Inside a block th
 output position in locals: behind references every byte store, which may alias anything, sent both through memory and
 cost 30%.
 
-crd-perf's bundle reads and writes compressed sections through the module once crd-compression and its zstd are in the
-relocatable package that ships crd-perf. The two ZIP containers move into the module (decision 8).
+crd-perf's bundle reads and writes compressed sections through the module
+([below](#the-bundles-compressed-sections)). The two ZIP containers move into the module (decision 8).
 
 ### One ZIP container
 
@@ -318,3 +318,20 @@ The oracle is the container's own suite (`test_zip.cpp`: the written bytes again
 every refusal class, allocation refusals on a small pool), the 3MF reference fixtures (lib3mf's and PrusaSlicer's
 Zip64 archives) and NumPy's npz corpus, unchanged; the before/after board is in the
 [session](../sessions/2026-11-01-own-one-zip-container.md).
+
+### The bundle's compressed sections
+
+crd-perf's bundle compresses through crd-compression (2026-11-01). The writer stores a whole section as raw DEFLATE
+when that is smaller, the meaning format v1 gave `kSectionFlagCompressed` from the start, so the format is not bumped;
+a section cut to a cap stays raw, and the caps bound the decoded bundle. `read_bundle` bounds every claim before it
+allocates (what DEFLATE reaches from the stored bytes, the section cap, the total cap) and decodes the sections that
+pass into one exact-size allocation with `inflate_raw`; the contract is
+[DIAG.5d's amendment](runtime-diagnostics.md#diag-5d). crd-compression and the pinned zstd archive joined the
+relocatable package for it: zstd link-only behind `Cerid::compression` with no header, its own install rules kept out
+([public consumption](public-consumption.md#the-diagnostic-family-diag11a)).
+
+The oracle is the bundle suite (each stored section is the owner's DEFLATE byte for byte, every refusal from a valid
+bundle patched in one field), the importer's bomb cases, the fuzz target's oracle with a compressed seed, and the
+package consumer test from the moved prefix. The board is `bench_compression`'s `bundle-write` and `bundle-read`: the
+bundle is 5.6 times smaller, writing costs the encoder and reading the inflate
+([session](../sessions/2026-11-01-own-bundle-compressed-sections.md#beforeafter-board)).

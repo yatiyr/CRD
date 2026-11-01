@@ -404,6 +404,20 @@ Acceptance: symbolize an optimized fresh-machine crash, reject wrong symbols ins
 recover truncated bundles, reject traversal/oversized/decompression-bomb inputs, retain old DLL symbols after reload.
 Golden manifests preserve schema migration and explicit absent sections. Raw dumps are never declared fully redacted.
 
+Amended 2026-11-01 ([session](../sessions/2026-11-01-own-bundle-compressed-sections.md), OWN.1): the bundle's
+sections compress. `kSectionFlagCompressed` meant raw DEFLATE from the start of format v1, so the format stays v1 and
+a reader from before refuses such a section as it was built to, keeping the prefix. `BundleWriter` (default
+`BundleCompression::Deflate`) stores a whole section compressed through crd-compression when DEFLATE shrinks it, with
+`original_length` its decoded size and the CRC-32 over the stored bytes; a section cut to a cap stays raw, so
+Compressed and Truncated never meet. The caps bound the decoded bundle, so compression shrinks the file and admits no
+more content. `read_bundle(buf, limits, alloc)` decodes into one allocation of exactly the claims that passed the
+bounds: a claim past what DEFLATE reaches from the stored bytes, both flags together, a stream that does not decode to
+its claim or decoded bytes that cannot be allocated stop the read (`RefusedCompressed`, the prefix kept), and a claim
+past the section or total cap is listed undecoded (an empty payload), which the importer flags oversized. The
+importer owns the decoded bytes (`BundleImport::decoded`), `bundle.inspect` reports each section's `stored_length`
+and `compressed_refused`, and it reads a flight record or crash capture from a compressed section like any other
+(it refused one before).
+
 <a id="diag-6a"></a>
 ## DIAG.6a — profiler self-correctness and application lifecycle
 
