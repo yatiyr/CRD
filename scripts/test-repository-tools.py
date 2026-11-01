@@ -6102,6 +6102,12 @@ class IsaIsolation(unittest.TestCase):
         self.assertEqual('kernel', owners.classify('t.exe.lto.crd-hesap-tensor.libtensor_kernels.cpp.obj', image)[0])
         self.assertEqual('library', owners.classify('libvcruntime:ehhelpers.obj', image)[0])
         self.assertEqual('library', owners.classify('<linker defined>', image)[0])
+        # A provider's archive (AWS-LC behind crd-crypto) is neither Cerid's code nor a judged library.
+        self.assertEqual('library', owners.classify('crypto:x86_64-mont5.asm.obj', image)[0])
+        providing = isa_isolation.Owners(kernels, generals, {os.path.normpath('/b/_deps/crypto.lib'): 'crypto'})
+        self.assertEqual('provider', providing.classify('crypto:x86_64-mont5.asm.obj', image)[0])
+        self.assertEqual('provider', providing.classify('t.exe.lto.crypto.libx86_64-mont5.asm.obj', image)[0])
+        self.assertEqual('general', providing.classify('crd-hesap-tensor:einsum.cpp.obj', image)[0])
         clash = dict(generals, **{os.path.normpath('/b/y.dir/tensor_kernels.cpp.obj'): ('crd-y', '')})
         with self.assertRaisesRegex(isa_isolation.GuardError, 'shares its name'):
             isa_isolation.Owners(kernels, clash)
@@ -6167,6 +6173,25 @@ class IsaIsolation(unittest.TestCase):
         self.assertEqual(['g first at 0x140001009', 'h first at 0x140001010'],
                          sorted(re.sub(r'^.* in (\w+) \(.*, (first at 0x[0-9a-f]+):.*$', r'\1 \2', failure)
                                 for failure in failures))
+
+    def test_map_image_leaves_out_a_providers_code(self):
+        # AWS-LC's Montgomery multiplication uses MULX behind its own CPU check; in a general object it is a failure.
+        code = [(0x140001000, 'mulx4x_internal', 'crypto:x86_64-mont5.asm.obj'), (0x140001010, 'f', 'a.obj')]
+        sweep = ('  0000000140001000: C4 E2 BB F6 06     mulx        rax,r8,qword ptr [rsi]\n'
+                 '  0000000140001005: C3                 ret\n'
+                 '  0000000140001010: C3                 ret\n')
+        generals = {os.path.normpath('/b/t.dir/a.obj'): ('crd-t', '/b/t.exe')}
+
+        def judge(owners):
+            with patch.object(isa_isolation, 'read_map', lambda path: (0x140000000, code, [])), \
+                    patch.object(isa_isolation, 'pe_reader', lambda path: lambda address, size: b''), \
+                    patch.object(isa_isolation, '_stream', lambda command, label: iter([sweep])):
+                return isa_isolation.judge_map_image({'dumpbin': 'dumpbin'}, '/b/t.exe', '/b/t.map', owners,
+                                                     self.exceptions)
+        failures = judge(isa_isolation.Owners({}, generals))
+        self.assertEqual(1, len(failures), failures)
+        self.assertIn('mulx4x_internal (crypto:x86_64-mont5.asm.obj)', failures[0])
+        self.assertEqual([], judge(isa_isolation.Owners({}, generals, {os.path.normpath('/b/crypto.lib'): 'crypto'})))
 
     def test_map_judges_an_asan_descriptor_as_its_global(self):
         # win-asan's cpu_features.obj names its level strings ("sse2") through ASan descriptors of the literals.

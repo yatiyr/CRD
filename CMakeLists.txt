@@ -992,7 +992,41 @@ if("aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
     # (crd_package_dependency in engine/foundation/crypto), and AWS-LC's export of libssl apart from libcrypto cannot
     # coexist with that (an exported target may not depend on one exported in several sets).
     set(CMAKE_SKIP_INSTALL_RULES ON)
+    # jitterentropy compiles unoptimized on purpose (its sources carry /Od: the library's timing measurements need it),
+    # which after the configuration's own level put two levels on one MSVC-style command (cl.exe D9025, clang-cl keeps
+    # the last one silently; crd-check-compile-commands). So AWS-LC's directories inherit the configuration flags
+    # without their optimization level, and below every AWS-LC target whose sources name no level of their own gets
+    # the configuration's level back as a compile option: one level per command, the same code as before.
+    set(_crd_awslc_levels "")
+    if(MSVC)
+        foreach(_crd_awslc_lang C CXX)
+            foreach(_crd_awslc_config IN LISTS CMAKE_CONFIGURATION_TYPES CMAKE_BUILD_TYPE)
+                string(TOUPPER "${_crd_awslc_config}" _crd_awslc_upper)
+                set(_crd_awslc_var CMAKE_${_crd_awslc_lang}_FLAGS_${_crd_awslc_upper})
+                set(_crd_awslc_saved_${_crd_awslc_var} "${${_crd_awslc_var}}")
+                string(REPLACE " " ";" _crd_awslc_flags "${${_crd_awslc_var}}")
+                set(_crd_awslc_level ${_crd_awslc_flags})
+                list(FILTER _crd_awslc_level INCLUDE REGEX "^[/-]O[12xd]$")
+                list(FILTER _crd_awslc_flags EXCLUDE REGEX "^[/-]O[12xd]$")
+                list(JOIN _crd_awslc_flags " " ${_crd_awslc_var})
+                set(_crd_awslc_when "$<AND:$<COMPILE_LANGUAGE:${_crd_awslc_lang}>,$<CONFIG:${_crd_awslc_config}>>")
+                foreach(_crd_awslc_flag IN LISTS _crd_awslc_level)
+                    list(APPEND _crd_awslc_levels "$<${_crd_awslc_when}:${_crd_awslc_flag}>")
+                endforeach()
+            endforeach()
+        endforeach()
+    endif()
     crd_add_pinned_package(aws-lc SYSTEM YES EXCLUDE_FROM_ALL YES OPTIONS ${_crd_awslc_options})
+    if(MSVC)
+        foreach(_crd_awslc_lang C CXX)
+            foreach(_crd_awslc_config IN LISTS CMAKE_CONFIGURATION_TYPES CMAKE_BUILD_TYPE)
+                string(TOUPPER "${_crd_awslc_config}" _crd_awslc_upper)
+                set(_crd_awslc_var CMAKE_${_crd_awslc_lang}_FLAGS_${_crd_awslc_upper})
+                set(${_crd_awslc_var} "${_crd_awslc_saved_${_crd_awslc_var}}")
+                unset(_crd_awslc_saved_${_crd_awslc_var})
+            endforeach()
+        endforeach()
+    endif()
     unset(CMAKE_SKIP_INSTALL_RULES)
     unset(CMAKE_POLICY_VERSION_MINIMUM)
     unset(CMAKE_POLICY_DEFAULT_CMP0141)
@@ -1007,41 +1041,59 @@ if("aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
     _crd_collect_build_targets("${aws-lc_SOURCE_DIR}" _crd_awslc_targets)
     foreach(_crd_awslc_target IN LISTS _crd_awslc_targets)
         get_target_property(_crd_awslc_type ${_crd_awslc_target} TYPE)
-        if(_crd_awslc_type MATCHES "^(STATIC_LIBRARY|OBJECT_LIBRARY)$")
-            set_target_properties(${_crd_awslc_target} PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF
-                                  CRD_ISA_ROLE provider)
+        if(NOT _crd_awslc_type MATCHES "^(STATIC_LIBRARY|OBJECT_LIBRARY)$")
+            continue()
         endif()
-        # An assembler extension belongs to whichever assembler language a configure enabled last, in every directory
-        # (zstd's ASM claims .asm, .s and .S; crd-jobs' ASM_MASM and AWS-LC's ASM_NASM claim .asm), so on Windows x64
-        # AWS-LC's sources would be assembled as languages its directories never enabled and the generate step fails.
-        # Its .asm files are NASM. The one .S file such a configure lists holds Linux-only code (hrss/asm/poly_rq_mul.S,
-        # guarded to __linux__) and, as in AWS-LC's own MSVC build, where NASM claims no .S or .s, is never assembled.
-        if(WIN32 AND _crd_arch_x64)
-            get_target_property(_crd_awslc_sources ${_crd_awslc_target} SOURCES)
-            get_target_property(_crd_awslc_dir ${_crd_awslc_target} SOURCE_DIR)
-            get_target_property(_crd_awslc_binary_dir ${_crd_awslc_target} BINARY_DIR)
-            foreach(_crd_awslc_source IN LISTS _crd_awslc_sources)
-                if(NOT _crd_awslc_source MATCHES "\\.(asm|s|S)$")
-                    continue()
+        set_target_properties(${_crd_awslc_target} PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF CRD_ISA_ROLE provider)
+        get_target_property(_crd_awslc_sources ${_crd_awslc_target} SOURCES)
+        get_target_property(_crd_awslc_dir ${_crd_awslc_target} SOURCE_DIR)
+        get_target_property(_crd_awslc_binary_dir ${_crd_awslc_target} BINARY_DIR)
+        set(_crd_awslc_own_level OFF)
+        foreach(_crd_awslc_source IN LISTS _crd_awslc_sources)
+            # libcrypto holds the objects of AWS-LC's object libraries (crypto_objects, fipsmodule, jitterentropy),
+            # whose debug types CMake would write to a vc140.pdb of their own: they go to the archive's compile PDB
+            # instead, as the engine's object libraries do (cmake/CrdSimd.cmake), the one the relocatable package
+            # installs beside it.
+            if(_crd_awslc_source MATCHES "^\\$<TARGET_OBJECTS:([^>]+)>$")
+                if(NOT CMAKE_CONFIGURATION_TYPES)
+                    set_target_properties(${CMAKE_MATCH_1} PROPERTIES COMPILE_PDB_NAME ${_crd_awslc_target}
+                        COMPILE_PDB_OUTPUT_DIRECTORY "${_crd_awslc_binary_dir}/CMakeFiles/${_crd_awslc_target}.dir")
                 endif()
-                # A relative name is the source directory's file, else the build directory's (AWS-LC copies its
-                # pregenerated assembly there), as add_library resolved it.
-                set(_crd_awslc_path "${_crd_awslc_source}")
-                if(NOT IS_ABSOLUTE "${_crd_awslc_path}")
-                    if(EXISTS "${_crd_awslc_dir}/${_crd_awslc_path}")
-                        set(_crd_awslc_path "${_crd_awslc_dir}/${_crd_awslc_path}")
-                    else()
-                        set(_crd_awslc_path "${_crd_awslc_binary_dir}/${_crd_awslc_path}")
-                    endif()
-                endif()
-                if(_crd_awslc_source MATCHES "\\.asm$")
-                    set_source_files_properties("${_crd_awslc_path}" TARGET_DIRECTORY ${_crd_awslc_target}
-                                                PROPERTIES LANGUAGE ASM_NASM)
+                continue()
+            endif()
+            # A relative name is the source directory's file, else the build directory's (AWS-LC copies its
+            # pregenerated assembly and writes its error tables there), as add_library resolved it.
+            set(_crd_awslc_path "${_crd_awslc_source}")
+            if(NOT IS_ABSOLUTE "${_crd_awslc_path}")
+                if(EXISTS "${_crd_awslc_dir}/${_crd_awslc_path}")
+                    set(_crd_awslc_path "${_crd_awslc_dir}/${_crd_awslc_path}")
                 else()
-                    set_source_files_properties("${_crd_awslc_path}" TARGET_DIRECTORY ${_crd_awslc_target}
-                                                PROPERTIES HEADER_FILE_ONLY ON)
+                    set(_crd_awslc_path "${_crd_awslc_binary_dir}/${_crd_awslc_path}")
                 endif()
-            endforeach()
+            endif()
+            get_source_file_property(_crd_awslc_flags "${_crd_awslc_path}" TARGET_DIRECTORY ${_crd_awslc_target}
+                                     COMPILE_FLAGS)
+            if(_crd_awslc_flags MATCHES "(^| )[/-]O[12xd]( |$)")
+                set(_crd_awslc_own_level ON)
+            endif()
+            # An assembler extension belongs to whichever assembler language a configure enabled last, in every
+            # directory (zstd's ASM claims .asm, .s and .S; crd-jobs' ASM_MASM and AWS-LC's ASM_NASM claim .asm), so on
+            # Windows x64 AWS-LC's sources would be assembled as languages its directories never enabled and the
+            # generate step fails. Its .asm files are NASM. The one .S file such a configure lists holds Linux-only
+            # code (hrss/asm/poly_rq_mul.S, guarded to __linux__) and, as in AWS-LC's own MSVC build, where NASM
+            # claims no .S or .s, is never assembled.
+            if(WIN32 AND _crd_arch_x64 AND _crd_awslc_source MATCHES "\\.asm$")
+                set_source_files_properties("${_crd_awslc_path}" TARGET_DIRECTORY ${_crd_awslc_target}
+                                            PROPERTIES LANGUAGE ASM_NASM)
+            elseif(WIN32 AND _crd_arch_x64 AND _crd_awslc_source MATCHES "\\.(s|S)$")
+                set_source_files_properties("${_crd_awslc_path}" TARGET_DIRECTORY ${_crd_awslc_target}
+                                            PROPERTIES HEADER_FILE_ONLY ON)
+            endif()
+        endforeach()
+        # The configuration's optimization level, taken from AWS-LC's flags above, unless the target's sources name
+        # their own (jitterentropy's /Od).
+        if(_crd_awslc_levels AND NOT _crd_awslc_own_level)
+            target_compile_options(${_crd_awslc_target} PRIVATE ${_crd_awslc_levels})
         endif()
     endforeach()
     unset(_crd_awslc_sources)
@@ -1052,6 +1104,16 @@ if("aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
     unset(_crd_awslc_target)
     unset(_crd_awslc_targets)
     unset(_crd_awslc_type)
+    unset(_crd_awslc_own_level)
+    unset(_crd_awslc_levels)
+    unset(_crd_awslc_level)
+    unset(_crd_awslc_flags)
+    unset(_crd_awslc_flag)
+    unset(_crd_awslc_when)
+    unset(_crd_awslc_var)
+    unset(_crd_awslc_lang)
+    unset(_crd_awslc_config)
+    unset(_crd_awslc_upper)
 endif()
 
 if("wycheproof" IN_LIST CRD_SELECTED_PACKAGES)

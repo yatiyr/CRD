@@ -132,9 +132,10 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    tests, zstd's dynamic BMI2, XGETBV behind OSXSAVE). A provider (`CRD_ISA_ROLE provider`, amended 2026-11-01 for
    NET.2: a vetted third-party library with its own CPU dispatch linked into Cerid images, today AWS-LC behind
    `crd-crypto`, whose AES-NI, VAES, AVX2 and AVX-512 routines run only after its `OPENSSL_cpuid_setup` checks) is not
-   Cerid code: its objects are left out, the manifest lists its archive, a map image names that archive as a library
-   and an ELF image leaves out every function the archive defines (`nm`), so Cerid's own code in the same image is still
-   judged.
+   Cerid code: its objects are left out, the manifest lists its archive, a map image leaves out the code its object
+   column assigns to that archive (amended 2026-11-02: it had judged it as another library's against the reviewed
+   exceptions, and AWS-LC's MULX Montgomery multiplication failed the first link-time-IL Windows images) and an ELF
+   image leaves out every function the archive defines (`nm`), so Cerid's own code in the same image is still judged.
 7. **Determinism.** A kernel declared bit-exact (ADR-0063) produces the same bits on every level: the same operation
    order, and single-rounded FMA only where every level computes it single-rounded. The others declare tolerances
    against the portable reference. Each kernel's differential test runs every level the host executes, in one process.

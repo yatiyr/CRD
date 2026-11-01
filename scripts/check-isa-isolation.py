@@ -19,8 +19,8 @@ and clang-cl images through their /MAP map (each function's object, MSVC's jump 
 through their symbol tables, while the symbols of GCC's IL objects come from gcc-nm. scripts/isa-isolation.json holds
 the reviewed exceptions, each naming the runtime check that guards it. A provider (CRD_ISA_ROLE provider: a vetted
 third-party library with its own CPU dispatch, AWS-LC behind crd-crypto) is not Cerid code: its objects are not judged,
-a map image names its archive as a library, and an ELF image leaves out the functions its archive defines (read with
-nm). Contract: docs/decisions/0134-runtime-cpu-dispatch.md §6.
+a map image leaves out the code its object column assigns to the provider's archive, and an ELF image leaves out the
+functions its archive defines (read with nm). Contract: docs/decisions/0134-runtime-cpu-dispatch.md §6.
 
     python scripts/check-isa-isolation.py --arch x64 --os windows
         --manifest build/win-debug/isa-isolation/Debug.manifest
@@ -723,9 +723,10 @@ def _stem(name):
 
 
 class Owners:
-    """Which code a map's object column names: a kernel object, general code, or a library outside the build."""
+    """Which code a map's object column names: a kernel object, general code, a provider's archive (`providers`, the
+    manifest's archive paths) or another library outside the build."""
 
-    def __init__(self, kernels, generals):
+    def __init__(self, kernels, generals, providers=()):
         self.kernel_members = {Path(path).name.lower() for path in kernels}
         self.general_members = {Path(path).name.lower() for path in generals}
         clash = sorted(self.kernel_members & self.general_members)
@@ -734,9 +735,10 @@ class Owners:
                              f'source: a map names objects by file name)')
         self.archives = ({_stem(archive) for _, archive in kernels.values()}
                          | {_stem(artifact) for _, artifact in generals.values()}) - {''}
+        self.providers = {_stem(archive) for archive in providers} - {''}
 
     def classify(self, column, image):
-        """(kind, owner) for a map's object column: kind is kernel, general or library."""
+        """(kind, owner) for a map's object column: kind is kernel, general, provider or library."""
         if column.startswith('<'):
             return 'library', column
         prefix = f'{Path(image).name}.lto.'
@@ -748,6 +750,8 @@ class Owners:
         elif lto and '.lib' in rest.lower():
             cut = rest.lower().rfind('.lib')
             archive, member = rest[:cut], rest[cut + 4:].strip('()')
+        if archive is not None and _stem(archive + '.lib') in self.providers:
+            return 'provider', column
         if archive is not None and _stem(archive + '.lib') not in self.archives:
             return 'library', column
         kind = 'kernel' if member.lower() in self.kernel_members else 'general'
@@ -895,7 +899,7 @@ def judge_map_image(tools, image, map_path, owners, exceptions):
             continue
         name, column = names[0]
         kind_of, owner = owners.classify(column, image)
-        if kind_of == 'kernel' or exceptions.allows(kind, name, owner, guarded):
+        if kind_of in ('kernel', 'provider') or exceptions.allows(kind, name, owner, guarded):
             continue
         above.append((f'{name} ({owner})', address, kind, line))
     return failures + code_failures(f'{image}: ', above)
@@ -1062,7 +1066,7 @@ def run(args):
             linked = sorted(path for path in images if os.path.exists(path))
             if not linked:
                 failures.append(f'{len(il)} objects hold link-time IL and no image was built to judge their code')
-            owners = Owners(kernels, generals) if coff else None
+            owners = Owners(kernels, generals, providers) if coff else None
             provided = frozenset() if coff else provider_functions(tools, providers)
             futures = []
             for image in linked:
