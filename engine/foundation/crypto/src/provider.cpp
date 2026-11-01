@@ -704,13 +704,13 @@ CryptoError SigningKey::public_key(cont::Span<u8> out) const noexcept
 
 CryptoError SigningKey::sign(cont::ConstSpan<u8> message, cont::Span<u8> out, usize& written) const noexcept
 {
-    written = 0U;
-    if (!ready())
+    written                         = 0U;
+    const SignatureAlgorithm* entry = ready() ? find_entry(kSignatures, algorithm()) : nullptr;
+    if (entry == nullptr)
     {
         return CryptoError::NotReady;
     }
-    const SignatureAlgorithm& entry = *find_entry(kSignatures, algorithm());
-    if (out.size() < entry.sizes.signature)
+    if (out.size() < entry->sizes.signature)
     {
         return CryptoError::BadLength;
     }
@@ -719,7 +719,7 @@ CryptoError SigningKey::sign(cont::ConstSpan<u8> message, cont::Span<u8> out, us
     usize                  length = out.size();
     if (!EVP_DigestSignInit(context.get(), nullptr, signature_digest(algorithm()), nullptr, pkey_of(m_key.get())) ||
         !EVP_DigestSign(context.get(), out.data(), &length, message.data(), message.size()) ||
-        length > entry.sizes.signature)
+        length > entry->sizes.signature)
     {
         secure_zero(out);
         return CryptoError::ProviderFailure;
@@ -816,17 +816,17 @@ CryptoError AgreementKey::from_private(AlgorithmId algorithm, cont::ConstSpan<u8
 
 CryptoError AgreementKey::public_key(cont::Span<u8> out) const noexcept
 {
-    if (!ready())
+    const AgreementAlgorithm* entry = ready() ? find_entry(kAgreements, algorithm()) : nullptr;
+    if (entry == nullptr)
     {
         return CryptoError::NotReady;
     }
-    const AgreementAlgorithm& entry = *find_entry(kAgreements, algorithm());
-    if (out.size() != entry.sizes.public_key)
+    if (out.size() != entry->sizes.public_key)
     {
         return CryptoError::BadLength;
     }
     const ErrorScope errors;
-    if (entry.nid != 0)
+    if (entry->nid != 0)
     {
         return ec_public_bytes(pkey_of(m_key.get()), out);
     }
@@ -838,12 +838,12 @@ CryptoError AgreementKey::public_key(cont::Span<u8> out) const noexcept
 
 CryptoError AgreementKey::derive(cont::ConstSpan<u8> peer_public, cont::Span<u8> secret) const noexcept
 {
-    if (!ready())
+    const AgreementAlgorithm* entry = ready() ? find_entry(kAgreements, algorithm()) : nullptr;
+    if (entry == nullptr)
     {
         return CryptoError::NotReady;
     }
-    const AgreementAlgorithm& entry = *find_entry(kAgreements, algorithm());
-    if (peer_public.size() != entry.sizes.public_key || secret.size() != entry.sizes.secret)
+    if (peer_public.size() != entry->sizes.public_key || secret.size() != entry->sizes.secret)
     {
         return refuse(CryptoError::BadLength, secret);
     }
@@ -852,7 +852,7 @@ CryptoError AgreementKey::derive(cont::ConstSpan<u8> peer_public, cont::Span<u8>
         return CryptoError::Overlap;
     }
     const ErrorScope errors;
-    if (entry.nid == 0)
+    if (entry->nid == 0)
     {
         u8    own[32];
         usize length = sizeof(own);
@@ -867,7 +867,7 @@ CryptoError AgreementKey::derive(cont::ConstSpan<u8> peer_public, cont::Span<u8>
         return contributory ? CryptoError::None : CryptoError::WeakSecret;
     }
     const EC_KEY*                   key   = EVP_PKEY_get0_EC_KEY(pkey_of(m_key.get()));
-    const bssl::UniquePtr<EC_POINT> point = ec_point(EC_KEY_get0_group(key), peer_public, entry.sizes.public_key);
+    const bssl::UniquePtr<EC_POINT> point = ec_point(EC_KEY_get0_group(key), peer_public, entry->sizes.public_key);
     if (!point)
     {
         return refuse(CryptoError::BadKey, secret);
@@ -976,11 +976,12 @@ CryptoError KemKey::from_seed(AlgorithmId algorithm, cont::ConstSpan<u8> seed) n
 
 CryptoError KemKey::public_key(cont::Span<u8> out) const noexcept
 {
-    if (!ready())
+    const KemAlgorithm* entry = ready() ? find_entry(kKems, algorithm()) : nullptr;
+    if (entry == nullptr)
     {
         return CryptoError::NotReady;
     }
-    if (out.size() != find_entry(kKems, algorithm())->sizes.public_key)
+    if (out.size() != entry->sizes.public_key)
     {
         return CryptoError::BadLength;
     }
@@ -993,12 +994,12 @@ CryptoError KemKey::public_key(cont::Span<u8> out) const noexcept
 
 CryptoError KemKey::decapsulate(cont::ConstSpan<u8> ciphertext, cont::Span<u8> secret) const noexcept
 {
-    if (!ready())
+    const KemAlgorithm* entry = ready() ? find_entry(kKems, algorithm()) : nullptr;
+    if (entry == nullptr)
     {
         return CryptoError::NotReady;
     }
-    const KemAlgorithm& entry = *find_entry(kKems, algorithm());
-    if (ciphertext.size() != entry.sizes.ciphertext || secret.size() != entry.sizes.secret)
+    if (ciphertext.size() != entry->sizes.ciphertext || secret.size() != entry->sizes.secret)
     {
         return refuse(CryptoError::BadLength, secret);
     }

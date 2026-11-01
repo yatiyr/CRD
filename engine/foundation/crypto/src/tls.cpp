@@ -78,6 +78,7 @@ constexpr u8 kHelloRetryRandom[32] = {
     0xC2U, 0xA2U, 0x11U, 0x16U, 0x7AU, 0xBBU, 0x8CU, 0x5EU, 0x07U, 0x9EU, 0x09U, 0xE2U, 0xC8U, 0xA8U, 0x33U, 0x9CU,
 };
 
+constexpr u8    kBadCertificate        = SSL_AD_BAD_CERTIFICATE; // a client's refusal of an unpinned server key
 constexpr u8    kServerHello           = 2U;      // HandshakeType server_hello
 constexpr usize kServerHelloRandomAt   = 6U;      // type (1), length (3), legacy_version (2)
 constexpr usize kMaxRecordPlaintext    = 16384U;  // 2^14 (RFC 9846 section 5.1)
@@ -224,7 +225,7 @@ struct TlsCallbacks
             return ssl_verify_invalid;
         }
         // A server does not tell an unauthenticated client whether a key is pinned (the TLS 1.3 profile).
-        const u8 refusal = session->m_settings.role == TlsRole::Server ? kTlsAlertGeneralError : SSL_AD_BAD_CERTIFICATE;
+        const u8 refusal = session->m_settings.role == TlsRole::Server ? kTlsAlertGeneralError : kBadCertificate;
         const STACK_OF(CRYPTO_BUFFER)* chain = SSL_get0_peer_certificates(ssl);
         if (chain == nullptr || sk_CRYPTO_BUFFER_num(chain) == 0U)
         {
@@ -506,7 +507,12 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     usize length     = 0U;
     for (const AlgorithmId aead : config.aeads)
     {
-        const cont::StringView name = cipher_suite_of(aead)->name;
+        const CipherSuite* suite = cipher_suite_of(aead);
+        if (suite == nullptr)
+        {
+            return TlsError::BadConfig;
+        }
+        const cont::StringView name = suite->name;
         if (length != 0U)
         {
             suites[length++] = ':';
