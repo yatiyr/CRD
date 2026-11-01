@@ -3259,6 +3259,24 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   `bundle.inspect` reports the instruction set, registers and access kind with the crash, and the check, its reason,
   length and access count with the classification.
 
+[HW-RESILIENCE.3](../ROADMAP.md#slice-hw-resilience.3) checks the machine's arithmetic before it is trusted.
+
+- Kernel self-checks (`crd/core/kernel_dispatch.hpp`): each kernel family's accessor resolves its table once through
+  `process_checked_kernel_level`, which runs the family's known-answer check (every routine through the table's
+  pointers on fixed inputs, each result compared bit for bit; microseconds, no allocation) on the table the
+  selection names. A failing table is passed over for the next eligible one below it (a variant for its level's
+  plain table) down to portable; if portable fails too the family runs portable, `floor-failed`. The family's
+  `KernelCheckResult` keeps the selected and running tables, the first failing routine and how many failed. Each
+  family is a `constinit` `KernelFamily` with a `KernelFamilyListing` beside it, so `run_kernel_self_checks`
+  reaches every family the image links. `report_kernel_self_checks` (crd-perf) runs them at a diagnostic host's
+  start and an Application's, printing one `[crd] kernel family <name> failed its known answers on <table> in
+  <routine>; it runs <table> (<status>, <n> tables failed)` line per demotion; the doctor (`kernel_families`,
+  `kernel_demotions`) and `diag.capabilities` (`kernel-check` items: name, status, selected, runs, and
+  failed_routine, injected and tables_failed after a failure) report them. The kernel-check fault seam
+  (`install_kernel_check_fault_hook`, compiled out of shipping) fails a named family's tables before its first use,
+  so tests drive the demotion on a sound CPU. Families with checks: `containers.crc` (CRC-32 and CRC-32C of the
+  checksum tests' 1025- and 63-byte streams, unaligned) and `containers.hash` (XXH3-64 of the 1025 bytes).
+
 ## Existing programme ownership after DIAG
 
 CORE-USE revalidates renderer-specific allocation/task/retirement consumers using DIAG; DG05's immediate repair is

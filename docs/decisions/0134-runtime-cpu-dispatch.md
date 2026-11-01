@@ -99,7 +99,11 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    Dispatch is one indirect call per kernel invocation at the routine level (a whole GEMM panel loop), never per
    microkernel (ADR-0088's measured loss). Each table is resolved
    once from `cpu_selection()` (the last whose level the selection and the build's cap include and whose features
-   `kernel_features` holds), and every table stays callable for the differential tests. A unit compiles to machine
+   `kernel_features` holds), and every table stays callable for the differential tests. The resolution checks the
+   table first (amended 2026-11-01, HW-RESILIENCE.3,
+   [session](../sessions/2026-11-01-hw-resilience-3-kernel-self-checks.md)): `process_checked_kernel_level`
+   runs the family's known-answer check and passes a failing table over for the next eligible one below it, down to
+   portable, and every family is listed at image start for the doctor. A unit compiles to machine
    code on every lane, never to link-time IL (amended 2026-10-28): entered only through its table, it has no call for
    link-time code generation to inline across, and IL made every image that links the archive generate the unit's
    code again. A wide type is aligned to min(its size, the level's widest register) (amended 2026-10-28): split into
