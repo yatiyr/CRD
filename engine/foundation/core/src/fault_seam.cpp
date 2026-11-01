@@ -1,5 +1,5 @@
-// crd-core -- the process-wide fault seams (file reads, GPU submissions, kernel self-checks, the hardware check). See
-// crd/core/fault_seam.hpp.
+// crd-core -- the process-wide fault seams (file reads, GPU submissions, kernel self-checks, the hardware check, the
+// GPU device checks). See crd/core/fault_seam.hpp.
 
 #include <crd/core/fault_seam.hpp>
 
@@ -67,6 +67,7 @@ HookSlot<IoFaultHook> g_io;
 HookSlot<GpuFaultHook> g_gpu;
 HookSlot<KernelCheckFaultHook> g_kernel;
 HookSlot<HardwareCheckFaultHook> g_hardware;
+HookSlot<DeviceCheckFaultHook> g_device;
 } // namespace
 
 bool fault_seams_compiled() noexcept
@@ -134,6 +135,21 @@ bool consult_hardware_check_fault(u32 cpu, const char* arm) noexcept
     return g_hardware.consult(false, cpu, arm);
 }
 
+bool install_device_check_fault_hook(DeviceCheckFaultHook hook, void* user) noexcept
+{
+    return g_device.install(hook, user);
+}
+
+void uninstall_device_check_fault_hook() noexcept
+{
+    g_device.uninstall();
+}
+
+bool consult_device_check_fault(const char* backend, const char* adapter) noexcept
+{
+    return g_device.consult(false, backend, adapter);
+}
+
 #else
 
 bool fault_seams_compiled() noexcept
@@ -186,6 +202,18 @@ bool install_hardware_check_fault_hook(HardwareCheckFaultHook /*hook*/, void* /*
 void uninstall_hardware_check_fault_hook() noexcept {}
 
 bool consult_hardware_check_fault(u32 /*cpu*/, const char* /*arm*/) noexcept
+{
+    return false;
+}
+
+bool install_device_check_fault_hook(DeviceCheckFaultHook /*hook*/, void* /*user*/) noexcept
+{
+    return false;
+}
+
+void uninstall_device_check_fault_hook() noexcept {}
+
+bool consult_device_check_fault(const char* /*backend*/, const char* /*adapter*/) noexcept
 {
     return false;
 }

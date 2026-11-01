@@ -2,6 +2,7 @@
 
 #include <crd/core/budget_pressure.hpp>
 #include <crd/gpu/context.hpp>
+#include <crd/gpu/device_check.hpp>
 #include <crd/gpu/device_pressure.hpp>
 #include <crd/gpu/frame_graph.hpp>
 #include <crd/gpu/identity_registry.hpp>
@@ -40,6 +41,16 @@ using crd::perf::DiagStatus;
         return cont::StringView{"active"};
     }
     return cont::StringView{crd::gpu::to_string(a.unsupported_reason(m))};
+}
+
+// HW-RESILIENCE.3: a device check's result as the command names it.
+[[nodiscard]] cont::StringView check_result(const crd::gpu::DeviceCheck& c) noexcept
+{
+    if (c.failed != nullptr)
+    {
+        return cont::StringView{"failed"};
+    }
+    return cont::StringView{c.unchecked != nullptr ? "unchecked" : "passed"};
 }
 
 void add_unavailable(DiagFields& item, crd::perf::DiagSnapshot& out, cont::StringView kind, cont::StringView reason)
@@ -187,13 +198,29 @@ DiagStatus GpuResourcesCommand::run(void* self, const crd::perf::DiagCall& call,
         }
     }
 
+    // HW-RESILIENCE.3: the process's device checks and each backend's selection, read once for the items and summary.
+    crd::gpu::DeviceChecks& checks = crd::gpu::device_checks();
+    const crd::u32 check_n = checks.check_count();
+    const crd::u32 selected_n = checks.selection_count();
+    crd::u64 demotions = 0U;
+    for (crd::u32 i = 0U; i < selected_n; ++i)
+    {
+        const crd::gpu::DeviceCheckStatus s = checks.selection_at(i).status;
+        if (s == crd::gpu::DeviceCheckStatus::Demoted || s == crd::gpu::DeviceCheckStatus::NoDevicePassed)
+        {
+            ++demotions;
+        }
+    }
+
     out.summary.u64("live_resources", live_res)
         .u64("live_programs", live_prog)
         .u64("live_passes", live_pass)
         .u64("contexts", cmd->m_context_count)
         .u64("frame_graphs", cmd->m_graph_count)
         .u64("device_memory_read", memory_read)
-        .u64("queue_depth_read", queue_read);
+        .u64("queue_depth_read", queue_read)
+        .u64("device_checks", check_n)
+        .u64("device_demotions", demotions);
 
     DiagFields item(out.allocator());
 
@@ -208,6 +235,47 @@ DiagStatus GpuResourcesCommand::run(void* self, const crd::perf::DiagCall& call,
             .str("object", cont::StringView{crd::gpu::to_string(kinds[k])})
             .str("scope", "process")
             .u64("live", counts[k]);
+        (void)out.add_item(item);
+    }
+
+    for (crd::u32 i = 0U; i < check_n; ++i)
+    {
+        const crd::gpu::DeviceCheck c = checks.check_at(i);
+        item.clear();
+        item.str("kind", "device-check")
+            .str("backend", cont::StringView{c.adapter.backend})
+            .str("adapter", cont::StringView{c.adapter.name})
+            .u64("ordinal", c.ordinal)
+            .str("result", check_result(c))
+            .u64("nanoseconds", c.nanoseconds);
+        if (c.failed != nullptr)
+        {
+            item.str("failed_part", cont::StringView{c.failed}).boolean("injected", c.injected);
+        }
+        if (c.unchecked != nullptr)
+        {
+            item.str("unchecked", cont::StringView{c.unchecked});
+        }
+        (void)out.add_item(item);
+    }
+    for (crd::u32 i = 0U; i < selected_n; ++i)
+    {
+        const crd::gpu::DeviceSelection s = checks.selection_at(i);
+        item.clear();
+        item.str("kind", "device-selection")
+            .str("backend", cont::StringView{s.selected.backend})
+            .str("status", cont::StringView{crd::gpu::device_check_status_name(s.status)})
+            .str("selected", cont::StringView{s.selected.name})
+            .str("runs", s.runs.known ? cont::StringView{s.runs.name} : cont::StringView{"no device"})
+            .u64("adapters_failed", s.adapters_failed);
+        if (s.failed != nullptr)
+        {
+            item.str("failed_part", cont::StringView{s.failed}).boolean("injected", s.injected);
+        }
+        if (s.unchecked != nullptr)
+        {
+            item.str("unchecked", cont::StringView{s.unchecked});
+        }
         (void)out.add_item(item);
     }
 

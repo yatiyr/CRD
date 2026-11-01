@@ -1,7 +1,7 @@
 #pragma once
 
 // crd-core -- the process-wide fault seams (DIAG.9b): one for file reads, one for GPU queue submissions, one for the
-// kernel self-checks and one for the hardware check (HW-RESILIENCE.3).
+// kernel self-checks, one for the hardware check and one for the GPU device checks (HW-RESILIENCE.3).
 //
 // The file reads every engine module shares (crd-platform's read_file_binary, read_file_text, read_file_range and
 // AsyncFile's completion jobs, and crd-perf's read_diag_asset_file) consult the I/O seam before they touch the file.
@@ -25,6 +25,11 @@
 // Each arm of the hardware check (crd/perf/hardware_check.hpp) consults the hardware-check seam once on each CPU when
 // it starts there. Its hook can corrupt one value the arm reads on that CPU, as a CPU that misexecutes a load would,
 // so a test can drive the arm's detection and the report of the event on a sound machine.
+//
+// A GPU backend's device check (crd/gpu/device_check.hpp) consults the device-check seam before it runs the
+// known-answer kernel on an adapter. Its hook can fail the adapter as a GPU that misexecutes the kernel would, so a
+// test can drive the fallback to the next adapter, and its report, on a sound GPU. An adapter is checked once per
+// process, so the hook is installed before the backend's first device on it.
 //
 // The seams are a build capability. A shipping build (CRD_SHIPPING) compiles them out: installing is refused and
 // every consult answers Proceed, so no request, authored asset or host can inject a fault there.
@@ -147,5 +152,19 @@ void uninstall_hardware_check_fault_hook() noexcept;
 // Whether the arm must corrupt a value it reads on that CPU (false when no hook is installed or the seam is compiled
 // out).
 [[nodiscard]] bool consult_hardware_check_fault(u32 cpu, const char* arm) noexcept;
+
+// True fails the device check of the adapter named `adapter` (crd::gpu::GpuAdapter::name) on backend `backend`
+// ("vulkan", "dx12", "cuda").
+using DeviceCheckFaultHook = bool (*)(void* user, const char* backend, const char* adapter) noexcept;
+
+// Install `hook`. Returns false, changing nothing, when the seam is compiled out, `hook` is null or a hook is
+// already installed.
+[[nodiscard]] bool install_device_check_fault_hook(DeviceCheckFaultHook hook, void* user) noexcept;
+
+// Remove the hook. When it returns, no call of the old hook is in progress.
+void uninstall_device_check_fault_hook() noexcept;
+
+// Whether that adapter's device check must fail (false when no hook is installed or the seam is compiled out).
+[[nodiscard]] bool consult_device_check_fault(const char* backend, const char* adapter) noexcept;
 
 } // namespace crd

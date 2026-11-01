@@ -11,6 +11,9 @@
 //     budget, a usage and the pressure level of the usage (DIAG.10c); and the depth of its device's queues as the
 //     completion seams see it (IGpuContext::queue_pressure: in flight, high water, submitted, retired and abandoned
 //     steps, and the live queues; DIAG.10c);
+//   - every GPU device check this process ran (HW-RESILIENCE.3, crd/gpu/device_check.hpp: backend, adapter, ordinal,
+//     result, time and the failing part) and each backend's selection (status, the adapter it prefers, the one it
+//     runs, how many it passed over), with the demotions counted in the summary;
 //   - for each frame graph the host registered: its last build's transient footprint after and before aliasing, and
 //     its last execute's barrier, submit, pass, async-pass and present counts, budget refusal and timing support, and
 //     its transient budget as a reading (bound, high water, refusals, level; DIAG.10c).

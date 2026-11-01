@@ -20,6 +20,7 @@ add_executable(crd-kir-tests
     test_ckir_variant.cpp   # REN-37.7: the DECLARED variant matrix + content-hash dedup + the dual mode
     test_ckir_lighting.cpp
     test_ckir_kernel.cpp
+    test_ckir_device_check.cpp # HW-RESILIENCE.3: the GPU device check's known-answer kernel on the CPU oracle
     test_ckir_kernel_emit.cpp
     test_ckir_viz.cpp       # CEIR-22c-3b: the authored viz-prep .ckir kernels (magnitude / normalize) device-free oracle
     test_ckir_fft.cpp

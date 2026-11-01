@@ -8,6 +8,7 @@
 // objects (the hosted Windows lanes); runs on lavapipe and on a real GPU.
 
 #include <crd/assetio/json.hpp>
+#include <crd/gpu/device_check.hpp>
 #include <crd/gpu/frame_graph.hpp>
 #include <crd/gpu/identity_registry.hpp>
 #include <crd/gpu/queue_pressure.hpp>
@@ -125,6 +126,18 @@ TEST_CASE("diag gpu.resources: a real Vulkan context, its identities and a real 
         CHECK(text_is(a, c, "core", expected_mode(act, g::ValidationMode::Core)));
         CHECK(text_is(a, c, "synchronization", expected_mode(act, g::ValidationMode::Synchronization)));
         CHECK(text_is(a, c, "gpu_assisted", expected_mode(act, g::ValidationMode::GpuAssisted)));
+        // HW-RESILIENCE.3: the adapter's device check and the backend's selection, as the process's log has them.
+        const crd::u32 check = item_of(a, "device-check");
+        REQUIRE(check != json::kInvalid);
+        CHECK(text_is(a, check, "backend", "vulkan"));
+        CHECK(text_is(a, check, "adapter", ctx->adapter_name()));
+        CHECK(text_is(a, check, "result", "passed"));
+        const crd::u32 chosen = item_of(a, "device-selection");
+        REQUIRE(chosen != json::kInvalid);
+        CHECK(text_is(a, chosen, "status", "passed"));
+        CHECK(text_is(a, chosen, "runs", ctx->adapter_name()));
+        CHECK(num(a, a.summary, "device_checks") == static_cast<crd::i64>(g::device_checks().check_count()));
+        CHECK(num(a, a.summary, "device_demotions") == 0);
         // DIAG.10c: the heap item is the context's own device memory reading: read through VK_EXT_memory_budget when
         // the device enabled it (usage moves between reads, so only the shape is compared), else unavailable.
         const crd::u32                h      = item_of(a, "heap");

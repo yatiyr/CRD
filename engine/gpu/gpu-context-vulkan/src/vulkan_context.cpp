@@ -12,9 +12,12 @@
 
 #include <crd/core/lifetime_ledger.hpp> // DIAG.10c: the instance and device in the lifetime ledger
 #include <crd/core/platform.hpp> // CRD_OS_* for the platform surface extension (C2-a)
+#include <crd/gpu/device_check.hpp>           // HW-RESILIENCE.3: each adapter checked before it is used
 #include <crd/gpu/driver_witness.hpp> // DIAG.10c: instance and device creation under the mode witness
+#include <crd/gpu/vulkan_compute_context.hpp> // HW-RESILIENCE.3: the device check's dispatch
 
 #include <crd/kir/ckir.hpp>      // KGraph / KEntry / KStage (ADR-0103 IR currency)
+#include <crd/kir/ckir_device_check.hpp> // HW-RESILIENCE.3: the device check's known-answer kernel
 #include <crd/kir/ckir_glsl.hpp> // the crd-kir GLSL emitter: emit_(vec|elementwise)_glsl + graph_uses_vec
 
 #include <crd/containers/array.hpp>
@@ -235,10 +238,82 @@ void resolve_gpu_assisted(VkPhysicalDevice physical, const VkPhysicalDeviceFeatu
     }
 }
 
+// HW-RESILIENCE.3: the adapter a context opens. Adapters go in order of preference (discrete, integrated, virtual,
+// other, CPU; the enumeration's order within a kind), and one whose device check failed in this process is passed over.
+constexpr crd::u32 kAnyAdapter = UINT32_MAX; // the context picks; otherwise the ordinal to open (the check's probe)
+constexpr crd::u32 kMaxVulkanAdapters = 16U;
+
+struct AdapterPick
+{
+    GpuAdapter preferred; // the first adapter in order of preference
+    crd::u32 preferred_ordinal = kAnyAdapter;
+    crd::u32 ordinal = kAnyAdapter; // the adapter opened: the first in order not passed over
+    crd::u32 passed_over = 0U;      // adapters ahead of it whose device check failed
+};
+
+[[nodiscard]] crd::u32 adapter_rank(VkPhysicalDevice physical) noexcept
+{
+    VkPhysicalDeviceProperties pr{};
+    vkGetPhysicalDeviceProperties(physical, &pr);
+    switch (pr.deviceType)
+    {
+        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+            return 0U;
+        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+            return 1U;
+        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
+            return 2U;
+        case VK_PHYSICAL_DEVICE_TYPE_CPU:
+            return 4U;
+        default:
+            return 3U;
+    }
+}
+
+[[nodiscard]] AdapterPick pick_adapter(const VkPhysicalDevice* physical, crd::u32 count, crd::u32 forced) noexcept
+{
+    AdapterPick pick;
+    if (forced != kAnyAdapter)
+    {
+        if (forced < count)
+        {
+            pick.preferred = detail::vk_adapter(physical[forced]);
+            pick.preferred_ordinal = forced;
+            pick.ordinal = forced;
+        }
+        return pick;
+    }
+    for (crd::u32 rank = 0U; rank <= 4U; ++rank)
+    {
+        for (crd::u32 i = 0U; i < count; ++i)
+        {
+            if (adapter_rank(physical[i]) != rank)
+            {
+                continue;
+            }
+            const GpuAdapter adapter = detail::vk_adapter(physical[i]);
+            if (pick.preferred_ordinal == kAnyAdapter)
+            {
+                pick.preferred = adapter;
+                pick.preferred_ordinal = i;
+            }
+            DeviceCheck check;
+            if (device_checks().find(adapter, i, check) && check.failed != nullptr)
+            {
+                ++pick.passed_over;
+                continue;
+            }
+            pick.ordinal = i;
+            return pick;
+        }
+    }
+    return pick;
+}
+
 class VulkanGpuContextImpl final : public VulkanGpuContext
 {
 public:
-    explicit VulkanGpuContextImpl(const GpuContextConfig& config) { init(config); }
+    VulkanGpuContextImpl(const GpuContextConfig& config, crd::u32 ordinal) { init(config, ordinal); }
     ~VulkanGpuContextImpl() override
     {
         if (m_device != VK_NULL_HANDLE)
@@ -258,6 +333,7 @@ public:
     [[nodiscard]] GpuBackend       backend() const noexcept override { return GpuBackend::Vulkan; }
     [[nodiscard]] const char*      adapter_name() const noexcept override { return m_adapter.name; }
     [[nodiscard]] GpuAdapter       adapter() const noexcept override { return m_adapter; } // HW-RESILIENCE.2
+    [[nodiscard]] const AdapterPick& pick() const noexcept { return m_pick; } // HW-RESILIENCE.3
     [[nodiscard]] ValidationActivation validation_activation() const noexcept override { return m_validation_activation; } // DIAG.7a(f)
     [[nodiscard]] VulkanValidationLayer validation_layer() const noexcept override { return m_validation_layer; } // DIAG.7c(b)
     [[nodiscard]] VkInstance       vk_instance() const noexcept override { return m_instance; }
@@ -535,7 +611,7 @@ public:
     }
 
 private:
-    void init(const GpuContextConfig& config)
+    void init(const GpuContextConfig& config, crd::u32 ordinal)
     {
         VkApplicationInfo app{};
         app.sType         = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -718,23 +794,19 @@ private:
         // DIAG.7a(f) + 7c(b): the creation-time activation report (GPU-assisted is resolved against device features below).
         m_validation_activation = initial_activation(config, layer_ok, has_valfeat, m_validation_layer.gpu_assisted_guarded);
 
-        std::uint32_t    npd = 16;
-        VkPhysicalDevice pds[16];
-        if (vkEnumeratePhysicalDevices(m_instance, &npd, pds) != VK_SUCCESS || npd == 0)
+        std::uint32_t npd = kMaxVulkanAdapters;
+        VkPhysicalDevice pds[kMaxVulkanAdapters];
+        const VkResult listed = vkEnumeratePhysicalDevices(m_instance, &npd, pds);
+        if ((listed != VK_SUCCESS && listed != VK_INCOMPLETE) || npd == 0)
         {
             return;
         }
-        m_physical = pds[0];
-        for (std::uint32_t i = 0; i < npd; ++i)
+        m_pick = pick_adapter(pds, npd, ordinal); // HW-RESILIENCE.3: past every adapter that failed its check
+        if (m_pick.ordinal == kAnyAdapter)
         {
-            VkPhysicalDeviceProperties pr{};
-            vkGetPhysicalDeviceProperties(pds[i], &pr);
-            if (pr.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
-            {
-                m_physical = pds[i];
-                break;
-            }
+            return;
         }
+        m_physical = pds[m_pick.ordinal];
         m_adapter = detail::vk_adapter(m_physical); // HW-RESILIENCE.2: read once, before the device exists
 
         // Compute queue family — prefer a DEDICATED compute family (async vs a renderer), else any compute-capable one.
@@ -1686,7 +1758,56 @@ private:
     bool             m_tessellation          = false; // B4-tess: tessellationShader + EDS2 patch-control-points enabled
     bool             m_valid           = false;
     GpuAdapter       m_adapter{};
+    AdapterPick      m_pick{};
 };
+
+// HW-RESILIENCE.3: the device check of the adapter at `*user` (its ordinal), on a probe device of its own (headless, no
+// validation) that is gone before the caller's device is returned, so that device carries none of the check's work.
+// The kernel is lowered and compiled on the host first: a host that cannot (no shaderc) leaves the adapter unchecked,
+// while a pipeline the driver refuses is the device's failure ("build").
+DeviceCheckOutcome check_vulkan_adapter(void* user)
+{
+    crd::memory::IAllocator* const alloc = crd::memory::default_allocator();
+    crd::kir::KGraph graph(alloc);
+    const crd::kir::KEntry entry = crd::kir::build_device_check_kernel(graph);
+    crd::kir::GlslKernel kernel(alloc);
+    if (!crd::kir::emit_compute_kernel_glsl(graph, entry, alloc, kernel))
+    {
+        return DeviceCheckOutcome{nullptr, "the kernel does not lower to GLSL"};
+    }
+    const ShaderCompileResult spirv = compile_glsl_to_spirv(
+        ShaderStage::Compute, crd::containers::to_view(kernel.source), "ckir_device_check", alloc);
+    if (!spirv.ok)
+    {
+        return DeviceCheckOutcome{nullptr, "no GLSL to SPIR-V compile"};
+    }
+    const GpuContextConfig probe_config{};
+    VulkanGpuContextImpl probe(probe_config, *static_cast<const crd::u32*>(user));
+    if (!probe.valid())
+    {
+        return DeviceCheckOutcome{"device", nullptr};
+    }
+    VulkanComputeContext compute(probe, alloc);
+    if (!compute.valid())
+    {
+        return DeviceCheckOutcome{"device", nullptr};
+    }
+    float input[crd::kir::kDeviceCheckLanes] = {};
+    for (crd::u32 i = 0U; i < crd::kir::kDeviceCheckLanes; ++i)
+    {
+        input[i] = crd::kir::device_check_input(i);
+    }
+    const std::unique_ptr<ComputePipeline> pipeline =
+        compute.create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spirv.spirv.data(), spirv.spirv.size()),
+                                           crd::kir::kDeviceCheckBindings, 0U);
+    DeviceCheckProgram program;
+    program.input = crd::containers::ConstSpan<float>(input, crd::kir::kDeviceCheckLanes);
+    program.floats = crd::kir::kDeviceCheckFloats;
+    program.words = crd::kir::kDeviceCheckWords;
+    program.workgroups = crd::kir::kDeviceCheckGroups;
+    program.verify = &crd::kir::device_check_mismatch;
+    return DeviceCheckOutcome{run_device_check(compute, pipeline.get(), program), nullptr};
+}
 
 } // namespace
 
@@ -1696,12 +1817,48 @@ std::unique_ptr<IGpuContext> create_vulkan_gpu_context(const GpuContextConfig& c
     {
         return nullptr;
     }
-    auto ctx = std::make_unique<VulkanGpuContextImpl>(config);
-    if (!ctx->valid())
+    // HW-RESILIENCE.3: each attempt opens the preferred adapter that has not failed its device check in this process
+    // and checks it (once per process); one that fails is passed over by the next attempt.
+    for (crd::u32 attempt = 0U; attempt < kMaxVulkanAdapters; ++attempt)
     {
-        return nullptr;
+        auto ctx = std::make_unique<VulkanGpuContextImpl>(config, kAnyAdapter);
+        const AdapterPick pick = ctx->pick();
+        if (pick.preferred_ordinal == kAnyAdapter)
+        {
+            return nullptr; // no instance or no adapter: nothing was chosen
+        }
+        DeviceSelection selection;
+        selection.selected = pick.preferred;
+        selection.adapters_failed = pick.passed_over;
+        DeviceCheck preferred;
+        if (pick.passed_over != 0U && device_checks().find(pick.preferred, pick.preferred_ordinal, preferred))
+        {
+            selection.failed = preferred.failed;
+            selection.injected = preferred.injected;
+        }
+        if (!ctx->valid())
+        {
+            if (pick.passed_over != 0U)
+            {
+                selection.status = DeviceCheckStatus::NoDevicePassed;
+                device_checks().note_selection(selection);
+            }
+            return nullptr;
+        }
+        crd::u32 ordinal = pick.ordinal;
+        const DeviceCheck check = check_device_once(ctx->adapter(), ordinal, &check_vulkan_adapter, &ordinal);
+        if (check.failed == nullptr)
+        {
+            const DeviceCheckStatus first =
+                check.unchecked != nullptr ? DeviceCheckStatus::Unchecked : DeviceCheckStatus::Passed;
+            selection.status = pick.passed_over == 0U ? first : DeviceCheckStatus::Demoted;
+            selection.runs = ctx->adapter();
+            selection.unchecked = check.unchecked;
+            device_checks().note_selection(selection);
+            return ctx;
+        }
     }
-    return ctx;
+    return nullptr;
 }
 
 // D-008 C2-d4 — the ONE program constructor (see header). Cooked bytecode is SPIR-V: a stream of 32-bit words; reject

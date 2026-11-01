@@ -53,6 +53,13 @@ std::unique_ptr<g::IGpuContext> make_context()
     return g::create_vulkan_gpu_context(cfg);
 }
 
+// The process's first Vulkan context runs the adapter's device check (HW-RESILIENCE.3), which loads the GLSL compiler
+// for the rest of the process: a window that is to hold only the context under test opens after one has come and gone.
+void check_the_adapter_first()
+{
+    (void)make_context();
+}
+
 crd::LifetimeReport since(const crd::LifetimeSnapshot& start)
 {
     return crd::lifetime_report(start, crd::lifetime_ledger().snapshot());
@@ -156,6 +163,7 @@ void vulkan_teardown(void* user, crd::u32 /*cycle*/) noexcept
 TEST_CASE("diag10c: a Vulkan context holds its instance and device, a compute context its fence, until they end",
           "[vulkan][gpu][lifetime][queue][diag10c]")
 {
+    check_the_adapter_first();
     const crd::LifetimeSnapshot start = crd::lifetime_ledger().snapshot();
     auto                        ctx   = make_context();
     if (!usable_or_balanced(ctx, start, "the instance, device and fence holds"))
@@ -199,6 +207,7 @@ TEST_CASE("diag10c: a Vulkan context holds its instance and device, a compute co
 TEST_CASE("diag10c: Vulkan one-shot and deferred frame-graph submissions are in flight until a seam observes them",
           "[vulkan][gpu][frame-graph][queue][diag10c]")
 {
+    check_the_adapter_first();
     const crd::LifetimeSnapshot start = crd::lifetime_ledger().snapshot();
     auto                        ctx   = make_context();
     if (!usable_or_balanced(ctx, start, "the frame-graph depth half"))
@@ -304,6 +313,7 @@ TEST_CASE("diag10c: Vulkan shutdown workload: contexts created, used and destroy
 TEST_CASE("diag10c: an injected Vulkan loss abandons the pending submissions and the depth reads as lost",
           "[vulkan][gpu][device-loss][queue][diag10c]")
 {
+    check_the_adapter_first();
     const crd::LifetimeSnapshot start = crd::lifetime_ledger().snapshot();
     auto                        ctx   = make_context();
     if (!usable_or_balanced(ctx, start, "the lost-queue half"))
@@ -362,6 +372,7 @@ TEST_CASE("diag10c: an injected Vulkan loss abandons the pending submissions and
 TEST_CASE("diag10c: a Vulkan present surface holds its swapchain and fence ring until it ends",
           "[vulkan][gpu][present][lifetime][diag10c]")
 {
+    check_the_adapter_first();
     const crd::LifetimeSnapshot start = crd::lifetime_ledger().snapshot();
     g::GpuContextConfig         cfg;
     cfg.backend  = g::GpuBackend::Vulkan;

@@ -79,6 +79,7 @@
 #include <crd/draw/renderer.hpp>
 #include <crd/draw/shapes.hpp>
 #include <crd/gpu/context.hpp>
+#include <crd/gpu/device_check.hpp> // HW-RESILIENCE.3: report_device_demotions
 #ifdef _WIN32                              // REN-39-D2: `--backend dx12` — the D3D12 backend is Windows-only
 #include <crd/gpu/dx12_context.hpp>
 #include <crd/gpu/dx12_raster_context.hpp>
@@ -993,6 +994,8 @@ int main(int argc, char** argv)
         }
         // HW-RESILIENCE.2: every GPU device opened from here on names its adapter in bundles and native crashes.
         crd::perf::gpu::attach_gpus_to_hardware_identity();
+        // HW-RESILIENCE.3: a GPU adapter that fails its device check, and what runs instead, is said at startup.
+        crd::gpu::report_device_demotions(stderr);
     }
     // ⭐⭐ DIAG.8c: the sandbox's diagnostic service, built before the window and the device so that a refused flag
     // exits before anything needs undoing. Its grant is fixed here. A started command must be one it serves (the
