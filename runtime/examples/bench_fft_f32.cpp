@@ -5,11 +5,13 @@
 // deep-split, the four-step, the six-step, the f32 1M tiled four-step and the f32 2K to 8K in-place three passes) runs
 // in this one binary, interleaved with MKL every rep, so all share the host's state; a level's winners become its plans
 // (scripts/gen_fft_level_plans.py reads the boards' logs). The input is copied in before each timed transform, never
-// inside the timing (as the pre-SIMD-DISPATCH board did). Each Cerid arm and MKL is measured against an FFTW f64
-// transform of the same f32 input values and fails above the ADR-0092 §5 f32 class (2e-4, 1e-3 from the four-step band): a fast wrong answer is
+// inside the timing (as the pre-SIMD-DISPATCH board did), and each timed transform follows an untimed one of the same
+// side, so it runs warm, as in a stream of transforms (a cold transform after the other sides ranked the arms apart
+// from the profile loop: 2026-11-01). Each Cerid arm and MKL is measured against an FFTW f64 transform of the same f32
+// input values and fails above the ADR-0092 §5 f32 class (2e-4, 1e-3 from the four-step band): a fast wrong answer is
 // not a win, for either side. Each Cerid row ends with the FNV-1a digest of that gated transform's output (`bits`), so
-// a board of two builds shows they compute the same bits (ab_fft_f32.sh). Cerid's Complex<f32> shares MKL's
-// interleaved {re, im} layout.
+// a board of two builds shows they compute the same bits (ab_fft_f32.sh). Cerid's Complex<f32> shares MKL's interleaved
+// {re, im} layout.
 //
 //   bench_fft_f32 [--sizes A-B] [--planned]
 //       the board over 2^A to 2^B (default 10-22); --planned times only the level's planned forward beside MKL (the
@@ -182,18 +184,25 @@ bool board(crd::memory::IAllocator* alloc, int lg, const Arm* arms, usize arm_co
 
     double best[kMaxArms + 1] = {};
     std::fill(best, best + arm_count + 1, 1e300);
+    // Each timed transform runs warm: an untimed transform of the same side precedes it, so its tables and code are
+    // where a stream of its transforms keeps them (the --loop profile's state), not where the other sides left them.
+    const auto forward = [&](usize a)
+    {
+        arms[a].plan->execute(cont::Span<Complex<f32>>(work.data(), n), fft::FftDirection::Forward);
+    };
     for (int r = 0; r < reps; ++r)
     {
         for (usize a = 0; a < arm_count; ++a)
         {
             reset();
-            const double ms = time_ms(
-                [&] { arms[a].plan->execute(cont::Span<Complex<f32>>(work.data(), n), fft::FftDirection::Forward); });
-            best[a] = std::min(best[a], ms);
+            forward(a);
+            reset();
+            best[a] = std::min(best[a], time_ms([&] { forward(a); }));
         }
         reset();
-        const double ms = time_ms([&] { DftiComputeForward(h, work.data()); });
-        best[arm_count] = std::min(best[arm_count], ms);
+        DftiComputeForward(h, work.data());
+        reset();
+        best[arm_count] = std::min(best[arm_count], time_ms([&] { DftiComputeForward(h, work.data()); }));
     }
     DftiFreeDescriptor(&h);
 
@@ -304,7 +313,7 @@ int loop(crd::memory::TlsfAllocator& alloc, int lg, const char* side, long itera
                 transform();
             }
         });
-    std::printf("loop n=%zu side=%s forward=%s iterations=%ld: %.4f ms per transform (with its copy), err %.1e "
+    std::printf("loop n=%zu side=%s forward=%s iterations=%ld: %.6f ms per transform (with its copy), err %.1e "
                 "bits=%016llx\n",
                 n, side, mkl || copy ? side : fft::fft_algorithm_name(forward), iterations,
                 ms / static_cast<double>(iterations), err, static_cast<unsigned long long>(bits));
