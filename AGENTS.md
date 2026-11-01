@@ -42,9 +42,9 @@ unresolved or a design gate is unaccepted. Never invent approval or tool results
   A shipped algorithm hidden in a C++ graph builder violates the purpose even if the pixels look correct.
 - Reuse first: search APIs, implementations, users. Extend the [owner](docs/design/capability-ownership.md);
   never duplicate a helper or add dependency cycles. Same path for tests, sandbox and real apps.
-- **Defer nothing.** Fix every verified failure and finding on the spot (warnings, flakes, weak tests, stale docs,
-  third-party defects via the register). An open failure blocks its slice; "pre-existing" or a retry-pass closes
-  nothing. Only physical user actions (elevation, absent hardware, accounts) stay with the user, as one command.
+- **Defer nothing.** Fix every verified Cerid failure and finding at once (warnings, flakes, weak tests, stale docs);
+  third-party defects are [registered and let be](docs/third-party-defects.md#policy). An open failure blocks its
+  slice; "pre-existing" or a retry-pass closes nothing. Only physical user actions stay with the user.
 - Preserve uncommitted work; HEAD is not this session's baseline. Back up files before large moves; never reset
   unrelated files to simplify a diff.
 - Work directly; do not delegate on your own initiative. Workflows and parallel agents run only by user order, each

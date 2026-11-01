@@ -6,6 +6,12 @@
 
 ## Policy
 
+**Let it be** (user, 2026-11-01: "we are never going to fix any third party stuff and we don't need it. if cerid code
+is ok and we are sure of it then we let it be"). A warning, failure or defect proven to come from a provider, runtime
+or tool and not from Cerid code is recorded here once and then left alone: no patches to it, no tracing through its
+upstream source, no upstream bug reports and no account actions asked of the user. It never holds a row open. The work
+goes into proving Cerid's own side correct; the admission rules below are that proof.
+
 An entry is admitted only with, in this order: a reproduction that contains no Cerid code, or a faulting stack with
 no Cerid frame on memory the engine did not allocate; the exact affected tests and lanes; the engine handling that
 keeps every oracle intact; and a retirement trigger. Registered failures are never suppressed, filtered or skipped.
@@ -137,7 +143,7 @@ Lane keys are the CI preset names; test names are exact CTest names. The gate re
 | Reproduction outside Cerid | The installer alone under `cdb` on a fresh `windows-2025` runner, no Cerid code ([run 41312886689](https://github.com/yatiyr/CRD/actions/runs/41312886689), `vulkan-sdk-installer-emitter`): one call, `edx = -1`, returning to RVA 0x91def1, in the function that looks up property 0x2002 (`FontSizeAdjustment`), clamps it plus 2 to `[0, 6]`, scales by the table {0.7, 0.8, 1.0, 1.2, 1.5, 2, 2.4} and branches on `pointSize() > 0`: Qt 6.7.2's `resolveFont` line for line. The installer's own resources (both `LICENSE.txt`, `Updates.xml`, `config.xml`, the scripts) carry no heading or size markup, so the formatted text is the framework's |
 | Affected | The Windows lanes that run the installer cold (`win-debug-scalar` on every run; the others on a cache miss): one log line in the Vulkan SDK step. No test, exit code or installed file |
 | Engine handling | None is possible in the tree: the line comes from the installer's binary. It stays in the lane log, unfiltered; [install-vulkan-sdk.py](../scripts/install-vulkan-sdk.py) already installs with the arguments the [option experiment](sessions/2026-11-01-repo-3-installer-verdict.md) chose, and no platform plugin or repository removes the line |
-| Retirement | Upstream: Qt's `resolveFont` guards neither size through 6.7.2 and on `dev` (2026-11-01), and the Qt tracker (QTBUG, QTIFW) holds no report of it; the report is drafted in the [session](sessions/2026-11-01-repo-3-qfont-resolvefont.md#the-upstream-report). When the Vulkan SDK pin changes, `vulkan-sdk-installer-check.py trace` refuses the new digest until the census is taken again; the entry is removed when a cold install of the pin prints no QFont line |
+| Retirement | Upstream: Qt's `resolveFont` guards neither size through 6.7.2 and on `dev` (2026-11-01), and the Qt tracker (QTBUG, QTIFW) holds no report of it. Per the policy above, none is filed (the draft stays in the [session](sessions/2026-11-01-repo-3-qfont-resolvefont.md#the-upstream-report) as evidence only). When the Vulkan SDK pin changes, `vulkan-sdk-installer-check.py trace` refuses the new digest until the census is taken again; the entry is removed when a cold install of the pin prints no QFont line |
 | Row | [REPO.3](ROADMAP.md#slice-repo.3); evidence [the emitter named](sessions/2026-11-01-repo-3-qfont-resolvefont.md) |
 
 ## The registered-failure gate
