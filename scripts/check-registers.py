@@ -25,8 +25,11 @@ The guard fails, among the format errors, on:
     (RFC 9847) that does not record IANA's value, and a pinned entry with a codepoint IANA discourages ("D");
   - in the legal domain: a binding obligation (in force, not past its sunset, and applying to a live scope) without an
     active check; a primary source outside its jurisdiction's official hosts; an entry whose rows are all Done, or
-    which is implemented, before its instrument was read in its consolidated text; an implemented entry whose counsel
-    review is outstanding; a scope still planned when its rows are Done; a topic without a Turkish entry; and a rule
+    which is implemented, before its instrument was read in its consolidated text; a scope still planned when its
+    rows are Done; a topic without a Turkish entry; an outstanding counsel item (an entry or an export's head
+    classification whose counsel is needed and not yet reviewed) that no open counsel review asks about, an open
+    review asking about an item whose counsel is not outstanding, and a counsel answer that no answered review records
+    (counsel never blocks implementation or a row: it is a dated, named review in `counsel_reviews`); and a rule
     generation (assets/comply/<code>.rules.toml, scripts/gen-comply-rules.py) whose bytes differ from the digest its
     review recorded in `rule_generations`, a jurisdiction with rules and no reviewed generation, or a record for a
     jurisdiction without rules;
@@ -39,6 +42,7 @@ The guard fails, among the format errors, on:
   python scripts/check-registers.py [--root <repository root>] [--today YYYY-MM-DD]
 """
 import argparse
+import collections
 import datetime
 import hashlib
 import importlib.util
@@ -67,7 +71,8 @@ DOMAINS = {
         'kinds': {'protocol', 'extension', 'algorithm', 'format', 'guidance'},
     },
     'legal': {
-        'register_keys': {'jurisdictions', 'scopes', 'rule_generations', 'crypto_classifications'},
+        'register_keys': {'jurisdictions', 'scopes', 'rule_generations', 'crypto_classifications',
+                          'counsel_reviews'},
         'entry_keys': {'topic', 'instrument', 'obligation', 'applies_to', 'check', 'effective', 'sunset', 'counsel'},
         'kinds': {'obligation', 'user-action'},
     },
@@ -99,6 +104,8 @@ SHA256 = re.compile(r'^[0-9a-f]{64}$')
 SCOPE_KINDS = {'product', 'flow', 'channel'}
 SCOPE_STATES = {'planned', 'live'}
 CHECK_STATES = {'active', 'planned'}
+COUNSEL_REVIEW_KEYS = {'id', 'title', 'opened', 'answered', 'questions'}
+COUNSEL_TARGETS = ('entry', 'classification')
 
 _spec = importlib.util.spec_from_file_location('check_master_plan', Path(__file__).resolve().parent /
                                                'check-master-plan.py')
@@ -442,8 +449,6 @@ def legal_entry_errors(where, entry, register, context):
         if not read:
             errors.append(f'{where}: implemented before {entry["instrument"]["name"]} was read in its consolidated '
                           'text from the primary source')
-        if counsel['needed'] and not counsel['reviewed']:
-            errors.append(f'{where}: implemented while its counsel review is outstanding (a user action)')
     rows = entry.get('rows') or []
     if not read and rows and all(context.row_state(row) == 'Done' for row in rows):
         errors.append(f'{where}: every row ({", ".join(rows)}) is Done, but {entry["instrument"]["name"]} was never '
@@ -807,6 +812,98 @@ def classification_errors(register, context):
     return errors
 
 
+def counsel_states(register):
+    """{(target, id): counsel} of everything that can need counsel: each entry, and each export's head classification
+    record (released records are frozen history). Malformed items are left to the entry and classification errors."""
+    states = {('entry', entry.get('id')): entry.get('counsel') for entry in register.get('entries') or []
+              if isinstance(entry, dict)}
+    classifications = register.get('crypto_classifications')
+    for export_id, records in (classifications.items() if isinstance(classifications, dict) else []):
+        if isinstance(records, list) and records and isinstance(records[-1], dict) and \
+                records[-1].get('release') is None:
+            states[('classification', export_id)] = records[-1].get('counsel')
+    return {item: counsel for item, counsel in states.items() if isinstance(counsel, dict)}
+
+
+def outstanding(counsel):
+    return counsel.get('needed') is True and counsel.get('reviewed') is None
+
+
+def counsel_question_errors(where, questions, states):
+    """([(target, id)] asked, errors) of one review's questions: each names one entry or one export's head
+    classification, once, with the exact question for counsel."""
+    if not isinstance(questions, list) or not questions:
+        return [], [f'{where}: questions lists what counsel is asked, one item each']
+    asked, errors = [], []
+    for question in questions:
+        targets = [target for target in COUNSEL_TARGETS if isinstance(question, dict) and target in question]
+        if len(targets) != 1 or set(question) != {targets[0], 'question'} or \
+                not isinstance(question['question'], str) or not question['question'].strip().endswith('?'):
+            errors.append(f'{where}: a question names one entry or classification and asks its question (ending '
+                          'with "?")')
+            continue
+        item = (targets[0], question[targets[0]])
+        if item not in states:
+            errors.append(f'{where}: asks about the {item[0]} {item[1]}, which the register does not hold')
+        elif item in asked:
+            errors.append(f'{where}: asks about the {item[0]} {item[1]} twice')
+        asked.append(item)
+    return asked, errors
+
+
+def counsel_review_errors(register, context):
+    """Counsel never blocks implementation or a row (user decision 2026-11-01): every outstanding counsel item is asked
+    about in exactly one open review with its exact question, an open review asks only about outstanding items, and
+    every counsel answer an item records is the answer day of a review that asked about it
+    (docs/design/registers.md#counsel-reviews)."""
+    where = 'legal register: counsel_reviews'
+    reviews = register.get('counsel_reviews')
+    if not isinstance(reviews, list):
+        return [f'{where} lists the dated, named counsel reviews and their questions']
+    states = counsel_states(register)
+    errors, seen, open_items, answered = [], set(), {}, collections.defaultdict(set)
+    for review in reviews:
+        if not isinstance(review, dict) or set(review) != COUNSEL_REVIEW_KEYS or \
+                not isinstance(review['id'], str) or not ID.match(review['id']) or \
+                not isinstance(review['title'], str) or not review['title']:
+            errors.append(f'{where}: a review has an id, a title, the day it was opened, the day counsel answered '
+                          '(null while open) and its questions')
+            continue
+        name = f'{where}: {review["id"]}'
+        if review['id'] in seen:
+            errors.append(f'{name} is named twice')
+        seen.add(review['id'])
+        errors += date_errors(name, 'opened', review['opened'])
+        errors += date_errors(name, 'answered', review['answered'], required=False)
+        opened, answer = parse_day(review['opened']), parse_day(review['answered'])
+        if opened and (opened > context.today or (answer and not opened <= answer <= context.today)):
+            errors.append(f'{name}: opened {review["opened"]} and answered {review["answered"]} are not in order '
+                          'up to today')
+        asked, question_errors = counsel_question_errors(name, review['questions'], states)
+        errors += question_errors
+        for item in asked:
+            if item not in states:
+                continue
+            if review['answered'] is not None:
+                answered[item].add(review['answered'])
+            elif item in open_items:
+                errors.append(f'{name}: the {item[0]} {item[1]} is already asked about in the open review '
+                              f'{open_items[item]}')
+            elif not outstanding(states[item]):
+                errors.append(f'{name}: asks about the {item[0]} {item[1]}, whose counsel is not outstanding; drop '
+                              'the question or record the answer')
+            else:
+                open_items[item] = review['id']
+    for item, counsel in sorted(states.items()):
+        if outstanding(counsel) and item not in open_items:
+            errors.append(f'{where}: the {item[0]} {item[1]} needs counsel, but no open review asks about it; add '
+                          'its exact question to an open review')
+        elif isinstance(counsel.get('reviewed'), str) and counsel['reviewed'] not in answered[item]:
+            errors.append(f'{where}: the {item[0]} {item[1]} records counsel\'s answer of {counsel["reviewed"]}, '
+                          'but no review answered that day asked about it')
+    return errors
+
+
 def register_errors(domain, register, context):
     where = f'{domain} register'
     if not isinstance(register, dict) or register.get('schema') != SCHEMA or register.get('domain') != domain:
@@ -846,7 +943,8 @@ def register_errors(domain, register, context):
         errors += checklist_errors(register, context)
     elif domain == 'legal':
         errors += jurisdiction_errors(register) + scope_errors(register, context) + topic_errors(entries) + \
-            rule_generation_errors(register, context) + classification_errors(register, context)
+            rule_generation_errors(register, context) + classification_errors(register, context) + \
+            counsel_review_errors(register, context)
     return errors
 
 
@@ -869,7 +967,10 @@ def legal_summary(register, today):
     upcoming = min(((parse_day(entry['effective']), entry['id']) for entry in entries
                     if parse_day(entry['effective']) and parse_day(entry['effective']) > today), default=None)
     live = sum(scope['state'] == 'live' for scope in register['scopes'])
-    tail = f'; {binding} binding on {live} live scopes'
+    reviews = [review for review in register['counsel_reviews'] if review['answered'] is None]
+    asked = sum(len(review['questions']) for review in reviews)
+    tail = f'; {binding} binding on {live} live scopes; open counsel questions: {asked} in {len(reviews)} ' + \
+        ('review' if len(reviews) == 1 else 'reviews')
     return tail + (f'; the next to take effect is {upcoming[1]} on {upcoming[0]}' if upcoming else '')
 
 

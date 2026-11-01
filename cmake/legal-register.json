@@ -5755,5 +5755,215 @@
         }
       }
     ]
-  }
+  },
+  "counsel_reviews": [
+    {
+      "id": "counsel.2026-11-01",
+      "title": "First counsel review: every interpretation the legal register and the export classifications owe",
+      "opened": "2026-11-01",
+      "answered": null,
+      "questions": [
+        {
+          "entry": "tr.kvkk.processing",
+          "question": "For each data flow Cerid products run (crash reports, telemetry, network identity, anti-cheat signals, accounts, payments, user content and communications), which processing condition of Article 5 of Law No. 6698 may the publisher rely on, which flows need explicit consent, and does any of them process special categories of personal data under Article 6 (for example voice recordings, or anti-cheat signals that could reveal health or biometric data)?"
+        },
+        {
+          "entry": "tr.kvkk.notice-and-consent",
+          "question": "Does a layered in-product notice shown before the first upload, with explicit consent asked in a separate step and a refusal leaving the product fully usable, meet Articles 3, 5 and 10 of Law No. 6698 and the communiqué on the obligation to inform, and which items must the first layer of the notice carry?"
+        },
+        {
+          "entry": "tr.kvkk.security-and-breach",
+          "question": "Which technical and administrative measures does the Board expect under Article 12 of Law No. 6698 for crash dumps that may hold memory contents, and from which moment does the 72-hour breach notification run when a processor (the cloud host) detects the breach?"
+        },
+        {
+          "entry": "tr.kvkk.transfer-abroad",
+          "question": "Which mechanism of Article 9 of Law No. 6698, as amended by Law No. 7499, covers transfers to the cloud regions outside Turkey that the crash pool, accounts and store use, which standard contract applies when the publisher is the controller and the cloud host its processor, and what must the notification to the Authority within five business days contain?"
+        },
+        {
+          "entry": "tr.kvkk.verbis",
+          "question": "Is the publisher exempt from VERBIS registration under the Board's thresholds (employees and annual balance sheet total) when its main activity includes processing players' personal data, and by when must it register relative to the first release that sends data off a machine?"
+        },
+        {
+          "entry": "tr.cybersecurity.reporting",
+          "question": "Which reporting duties of Cybersecurity Law No. 7545 and its secondary rules apply to a software publisher that operates no critical infrastructure, to whom and within what time must a vulnerability or incident in a released product or an operated service (the store, game servers, the crash pool) be reported, and do they cover vulnerabilities that third parties report to the publisher?"
+        },
+        {
+          "entry": "tr.cybersecurity.products",
+          "question": "Does any Cerid export (the engine package, its tools and the products built on it) meet the definition of a cybersecurity product or service in Law No. 7545, in particular an engine that verifies signed configuration, a sandbox that isolates untrusted code or an anti-cheat component, and if so which permit, certification or export authorisation does it need?"
+        },
+        {
+          "entry": "tr.tck.information-system-offences",
+          "question": "Does a coordinated vulnerability disclosure policy whose safe harbour covers only the publisher's own products and test environments protect researchers and the publisher under Articles 243 to 245 of the Turkish Penal Code No. 5237, and what wording must the policy use?"
+        },
+        {
+          "entry": "tr.btk.encryption",
+          "question": "Do the BTK encryption rules under Electronic Communications Law No. 5809 set any notification, authorisation or key-disclosure duty for end-to-end encrypted voice, video and text inside games and collaborative products distributed or operated in Turkey, and do they allow TLS 1.3 and QUIC with the X25519MLKEM768 hybrid key exchange without key escrow?"
+        },
+        {
+          "entry": "tr.dual-use-export",
+          "question": "Which Ministry of Trade communiqué currently lists the dual-use goods subject to export control from Turkey, does its Category 5 Part 2 list with the cryptography note follow the Wassenaar Dual-Use List, and does making software available for download from Turkey count as an export under it?"
+        },
+        {
+          "entry": "tr.5651.content",
+          "question": "Which roles of Law No. 5651 (content provider, hosting provider, access provider or social network provider) does the publisher take for user content in games, the store and mod hubs, and which deadlines and record-keeping duties follow from each role?"
+        },
+        {
+          "entry": "tr.5651.game-platforms",
+          "question": "Do the 2026 game-platform provisions of Law No. 5651 apply to a storefront or launcher that sells only the publisher's own games, or only to platforms that also offer third-party games, how are the 100,000 daily accesses from Turkey counted, and what must the record of a parent's approval of a paid transaction hold?"
+        },
+        {
+          "entry": "tr.5651.under-15",
+          "question": "Does a game with in-game chat, friend lists or user-generated content meet the social network provider definition of Law No. 5651 as amended in 2026, and which age signal meets the duty to keep children under 15 from accounts?"
+        },
+        {
+          "entry": "tr.5809.authorisation",
+          "question": "Do voice, video and text features carried over the internet inside a game or collaborative product, with no telephone numbers and no network the publisher operates, need a BTK authorisation under Articles 9 and 10 of Law No. 5809 and the authorisation regulation?"
+        },
+        {
+          "entry": "tr.btk.personal-data",
+          "question": "Does the BTK regulation on processing and protecting personal data in the electronic communications sector apply to an over-the-top communication feature of a game or collaborative product that needs no BTK authorisation, and if so which retention and localisation rules follow?"
+        },
+        {
+          "entry": "tr.6112.internet-broadcasting",
+          "question": "Does a live stream of gameplay or of a collaborative session offered through a Cerid product to viewers in Turkey need an RTÜK internet broadcasting licence under Article 29/A of Law No. 6112, and does the answer change when users, not the publisher, broadcast?"
+        },
+        {
+          "entry": "tr.6502.distance-contracts",
+          "question": "For digital content delivered at once after purchase, which express consent and acknowledgement wording lawfully ends the right of withdrawal under the Regulation on Distance Contracts, and what must the confirmation on a durable medium contain?"
+        },
+        {
+          "entry": "tr.5846.software-works",
+          "question": "Which form must licences and assignments of rights in software and assets take under Articles 48 to 52 of Law No. 5846 (written, each right named) for contributors, contractors and purchased assets, and does a click-through end-user licence meet it?"
+        },
+        {
+          "entry": "tr.6769.industrial-property",
+          "question": "Which trademark clearance searches (TURKPATENT, EUIPO, WIPO Madrid) are enough before a product is named, and do the patents on the media codecs Cerid decodes need licences for distribution in Turkey?"
+        },
+        {
+          "entry": "tr.3065.vat",
+          "question": "Does the publisher, a Turkish company selling digital games and items to consumers in Turkey, fall under the ordinary VAT regime of Law No. 3065, and when does the VAT-3 regime for electronic services by non-residents apply to sales the store makes for foreign developers?"
+        },
+        {
+          "entry": "tr.7194.digital-service-tax",
+          "question": "Does the store's revenue from third-party games, in-game items or subscriptions fall within the digital services of Law No. 7194, how are the worldwide and Turkish revenue thresholds measured for a group, and which rate applies for 2026 and 2027?"
+        },
+        {
+          "entry": "tr.213.e-archive",
+          "question": "Which e-archive or e-invoice duties apply to each store sale to consumers and to businesses, from which revenue threshold, and for how long and where must the electronic records be kept?"
+        },
+        {
+          "entry": "tr.6493.payment-institutions",
+          "question": "Does the store collecting payments for third-party developers' games and paying the developers make the publisher a payment service provider under Law No. 6493, or does a merchant-of-record model (the publisher sells as the seller and buys from the developers) avoid the licence?"
+        },
+        {
+          "entry": "eu.gdpr.principles",
+          "question": "Which legal basis of Article 6 GDPR (legitimate interests after a balancing test, or consent) may the publisher rely on for crash reports, telemetry and anti-cheat signals of users in the Union, and does any of them process data of the categories of Article 9?"
+        },
+        {
+          "entry": "eu.gdpr.dpia",
+          "question": "Do crash pools that may hold memory contents, anti-cheat signals and children's data each need a data protection impact assessment under Article 35 GDPR and the supervisory authorities' lists, and must the publisher consult an authority before the processing starts?"
+        },
+        {
+          "entry": "eu.gdpr.transfers",
+          "question": "Which transfer tool of Chapter V GDPR lets personal data of users in the Union reach a publisher established in Turkey (which has no adequacy decision), which module of the standard contractual clauses applies, and must the publisher appoint a representative in the Union under Article 27?"
+        },
+        {
+          "entry": "eu.nis2",
+          "question": "Do the store, the game servers or the crash pool bring the publisher, established outside the Union, into the scope of Directive (EU) 2022/2555 in any member state (for example as an online marketplace or a cloud or data centre provider), and if so under which member state's law?"
+        },
+        {
+          "entry": "eu.pld",
+          "question": "For how long must security updates be provided so that software placed on the market in the Union is not defective under Directive (EU) 2024/2853, and is the publisher, a manufacturer established outside the Union, liable directly or through an importer or authorised representative?"
+        },
+        {
+          "entry": "eu.ai-act.gpai",
+          "question": "If Cerid fine-tunes or distributes an open-weight general-purpose model in its agent features, does the publisher become a provider of a general-purpose AI model under Articles 53 to 55 of Regulation (EU) 2024/1689, and does the exemption for models released under a free and open-source licence apply?"
+        },
+        {
+          "entry": "eu.dsa",
+          "question": "Which tier of Regulation (EU) 2022/2065 (hosting service, online platform or marketplace) do in-game user content, mod hubs and the store each fall under, does the micro and small enterprise exemption apply, and must the publisher, established outside the Union, designate a legal representative under Article 13?"
+        },
+        {
+          "entry": "eu.dsm-copyright",
+          "question": "Does a machine-readable reservation of text and data mining rights under Article 4 of Directive (EU) 2019/790 bind the publisher's training of agent models, and is a mod hub where users upload works an online content-sharing service provider under Article 17?"
+        },
+        {
+          "entry": "eu.dual-use",
+          "question": "Does Regulation (EU) 2021/821 reach the publisher when its software is downloaded from servers in the Union, and is each export's classification against Annex I Category 5 Part 2 and the cryptography note correct, in particular that cryptography limited to authentication and integrity is not controlled?"
+        },
+        {
+          "entry": "eu.eecc",
+          "question": "Are voice, video and text features inside games and collaborative products number-independent interpersonal communication services under Directive (EU) 2018/1972, or minor ancillary features that recital 17 excludes, and which duties follow if they are services?"
+        },
+        {
+          "entry": "eu.avmsd",
+          "question": "Is a feature that lets users share gameplay videos or live streams a video-sharing platform service under Directive 2010/13/EU as amended by Directive (EU) 2018/1808, or an ancillary feature outside it, and which member state's law applies to a publisher established outside the Union?"
+        },
+        {
+          "entry": "gb.uk-gdpr",
+          "question": "Must the publisher appoint a representative in the United Kingdom under Article 27 UK GDPR, which transfer tool covers personal data of UK users sent to Turkey (the International Data Transfer Agreement or the Addendum to the EU clauses), and do the answers for the GDPR otherwise apply unchanged?"
+        },
+        {
+          "entry": "gb.osa",
+          "question": "Do in-game chat, voice and user content make a product a regulated user-to-user service under the Online Safety Act 2023, is it likely to be accessed by children, and which measures of Ofcom's codes and which age assurance does that require?"
+        },
+        {
+          "entry": "us.ear.encryption",
+          "question": "Does the EAR reach the publisher's software at all (a Turkish company, no US-origin encryption content, but downloads served from US servers such as a store's), and where it does, is mass-market 5D992.c under section 740.17(b)(1) the right classification for an export that performs confidentiality, and is the annual self-classification report then owed?"
+        },
+        {
+          "entry": "us-ca.ccpa",
+          "question": "Does the publisher meet a threshold of the CCPA as amended by the CPRA for users in California (annual revenue, consumers whose data it buys, sells or shares, or revenue share from selling or sharing), and does sending crash reports or telemetry to a service provider count as selling or sharing?"
+        },
+        {
+          "entry": "us.ada",
+          "question": "Do the US courts that matter treat an online store or a game launcher as a place of public accommodation under Title III of the ADA, and against which technical standard (WCAG 2.2 level AA) should its accessibility be measured?"
+        },
+        {
+          "entry": "br.eca-digital",
+          "question": "Do the duties of Law No. 15.211/2025 (age verification, parental supervision, no paid random items for minors) apply to a foreign publisher's games and store offered in Brazil, from which day, and which age verification methods meet them?"
+        },
+        {
+          "entry": "cn.pipl",
+          "question": "If a product enters China, must the publisher designate a representative under Article 53 of the Personal Information Protection Law, which cross-border route (security assessment, standard contract or certification) applies to crash reports and accounts, and must the data stay in China?"
+        },
+        {
+          "entry": "cn.commercial-cryptography",
+          "question": "If a product that uses TLS 1.3 and QUIC with internationally standard algorithms enters China, does it need an import licence, export control or commercial cryptography product certification under the Cryptography Law and the 2023 Commercial Cryptography Administration Regulations, or does the treatment of mass-market consumer products cover it?"
+        },
+        {
+          "classification": "asset_cooker",
+          "question": "Is the classification of the asset_cooker export right: it performs no cryptographic function, so it is not a cybersecurity product or service under Law No. 7545, carries no encryption under the BTK rules, is not listed in Annex I of Regulation (EU) 2021/821 or on the Wassenaar Dual-Use List, and is EAR99 shipped under NLR where the EAR applies?"
+        },
+        {
+          "classification": "cerid-package",
+          "question": "Is the classification of the cerid-package export right: its only cryptographic function verifies the publisher's signed policy generations (authentication and integrity, no confidentiality), so Category 5 Part 2 of Regulation (EU) 2021/821, the Wassenaar Dual-Use List and the EAR do not control it (EAR99, NLR), it carries no encryption under the BTK rules, and it is not a cybersecurity product or service under Law No. 7545?"
+        },
+        {
+          "classification": "ceridc",
+          "question": "Is the classification of the ceridc export right: it performs no cryptographic function, so it is not a cybersecurity product or service under Law No. 7545, carries no encryption under the BTK rules, is not listed in Annex I of Regulation (EU) 2021/821 or on the Wassenaar Dual-Use List, and is EAR99 shipped under NLR where the EAR applies?"
+        },
+        {
+          "classification": "cprof_export",
+          "question": "Is the classification of the cprof_export export right: it performs no cryptographic function, so it is not a cybersecurity product or service under Law No. 7545, carries no encryption under the BTK rules, is not listed in Annex I of Regulation (EU) 2021/821 or on the Wassenaar Dual-Use List, and is EAR99 shipped under NLR where the EAR applies?"
+        },
+        {
+          "classification": "kir_autotune",
+          "question": "Is the classification of the kir_autotune export right: it performs no cryptographic function, so it is not a cybersecurity product or service under Law No. 7545, carries no encryption under the BTK rules, is not listed in Annex I of Regulation (EU) 2021/821 or on the Wassenaar Dual-Use List, and is EAR99 shipped under NLR where the EAR applies?"
+        },
+        {
+          "classification": "runtime",
+          "question": "Is the classification of the runtime export right: it performs no cryptographic function, so it is not a cybersecurity product or service under Law No. 7545, carries no encryption under the BTK rules, is not listed in Annex I of Regulation (EU) 2021/821 or on the Wassenaar Dual-Use List, and is EAR99 shipped under NLR where the EAR applies?"
+        },
+        {
+          "classification": "sandbox",
+          "question": "Is the classification of the sandbox export right: it isolates untrusted code but performs no cryptographic function, so it is not a cybersecurity product or service under Law No. 7545, carries no encryption under the BTK rules, is not listed in Annex I of Regulation (EU) 2021/821 or on the Wassenaar Dual-Use List, and is EAR99 shipped under NLR where the EAR applies?"
+        },
+        {
+          "classification": "shader_cook",
+          "question": "Is the classification of the shader_cook export right: it performs no cryptographic function, so it is not a cybersecurity product or service under Law No. 7545, carries no encryption under the BTK rules, is not listed in Annex I of Regulation (EU) 2021/821 or on the Wassenaar Dual-Use List, and is EAR99 shipped under NLR where the EAR applies?"
+        }
+      ]
+    }
+  ]
 }

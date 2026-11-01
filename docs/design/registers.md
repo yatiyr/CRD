@@ -95,7 +95,7 @@ publisher, the user's Turkish company, takes after implementation and qualificat
 | `applies_to` | The scopes (products, data flows, channels) it governs |
 | `check` | `ref`, `name` and `state`: `active` cites the test, script or CI step that proves it (it runs in every tree, so CI fails when it fails); `planned` cites the ROADMAP row that adds it |
 | `effective`, `sunset` | The day the instrument applies (a month or year counts from its first day, so the guard is never later than the truth) and the day it ends (null when open) |
-| `counsel` | `needed` (interpretation needs counsel; never guessed) and `reviewed` (the day counsel answered) |
+| `counsel` | `needed` (interpretation needs counsel; never guessed) and `reviewed` (the day counsel answered; a [counsel review](#counsel-reviews) answered that day asked about it) |
 
 At the register level, `jurisdictions` maps each code (ISO 3166 with an optional subdivision such as `US-CA`, `INT`
 for treaties, international bodies and licences, `PLATFORM` for platform and store policies) to its name and official
@@ -117,9 +117,41 @@ Rules of the legal domain, beside the common ones:
 - **Reading precedes closing.** An entry whose rows are all Done, or which is implemented, has its consolidated text
   read (its version, day and digest); a read entry is verified and cites the instrument's own document, not the home
   page of its journal or regulator.
-- **Counsel precedes implementation.** An implemented entry whose counsel review is needed carries its review day,
-  and an agent never marks an obligation satisfied without an active check and evidence.
+- **Counsel never blocks, and is never guessed.** An entry is implemented, and its rows close, once its engineering
+  is proven; an outstanding counsel item is an open question in a [counsel review](#counsel-reviews), never a missing
+  clause (user decision 2026-11-01). Nothing in the register claims legal sign-off: a rule whose counsel is outstanding
+  says so in every answer, and an agent never marks an obligation satisfied without an active check and evidence.
 - **Turkish law is never omitted.** Every topic the register holds, the platform policies aside, has a Turkish entry.
+
+<a id="counsel-reviews"></a>
+### Counsel reviews
+
+The user decided on 2026-11-01 that counsel review never blocks a row: the publisher (the user's Turkish company)
+consults counsel later, and every item that needs counsel is recorded as a dated, named review with the exact question
+counsel is asked. `counsel_reviews` lists the reviews:
+
+| Field | Meaning |
+|---|---|
+| `id`, `title` | The review's name (for example `counsel.2026-11-01`) and what it covers |
+| `opened` | The day the review was opened |
+| `answered` | The day counsel answered every question (null while open) |
+| `questions` | One item each: `entry` (an entry's id) or `classification` (an export whose head classification record needs counsel) and the exact `question`, ending with "?" |
+
+The guard (`crd-check-registers`) holds the reviews to the items' `counsel` fields:
+
+- **Every outstanding item is asked about.** An entry or a head classification record whose counsel is needed and not
+  yet reviewed is asked about in exactly one open review.
+- **An open review asks only what is outstanding.** A question about an item whose counsel is not needed, or already
+  answered, fails until it is dropped or its answer recorded.
+- **Every answer has its review.** An item's `counsel.reviewed` day is the `answered` day of a review that asked about
+  it; answering a review records that day on each item it asked about, in the same change.
+- **Dates are in order.** A review opens on or before today and is answered between its opening and today; ids are
+  unique and an item is asked about once per review.
+
+A changed cryptography inventory clears its head record's answer (`gen-crypto-inventory.py --review`), so its question
+goes into an open review again. Releasing a classification still needs counsel's answer
+([below](#crypto-classification)): a release is the publisher's act, never a row's clause. The guard's summary line
+counts the open questions.
 
 The JSON register is the guarded source of truth. The rules products consume at run time are generated from it,
 swapped live per jurisdiction as reviewed generations and queryable over `ceridc` and MCP; the generator, the store
@@ -211,7 +243,8 @@ standards register, never typed, and a change to them reaches no release without
   counsel reviewed it, and a head record kept for something that is no longer an export (its released records stay).
 - **The review.** When an inventory changes, the reviewer restates the head record's findings and runs
   `--review <export> [--day D]`, which records the new digest and day and clears `counsel.reviewed` (a changed
-  inventory goes back to counsel); it refuses an unchanged inventory and a head record without findings.
+  inventory goes back to counsel: its question joins an open [counsel review](#counsel-reviews)); it refuses an
+  unchanged inventory and a head record without findings.
   `--release <export> <version>` freezes the current, counsel-reviewed head record for a release.
 - **Facts for stores.** `--facts <export>` prints what the store compliance kit ([COMPLY.8](../ROADMAP.md#slice-comply.8))
   turns into the Apple export compliance answer and the EAR self-classification report: the inventory digest, review

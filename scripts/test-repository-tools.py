@@ -5542,10 +5542,31 @@ class RegisterFixture:
         legal = legal or self.legal_register()
         if 'rule_generations' not in legal:
             legal = dict(legal, rule_generations=self.reviewed(root, legal))
+        if 'counsel_reviews' not in legal:
+            legal = dict(legal, counsel_reviews=self.counsel_reviews(legal))
         (root / 'cmake' / 'legal-register.json').write_text(json.dumps(legal), encoding='utf-8')
         capabilities = {'capabilities': [{'id': 'network.transport', 'owner': 'net', 'status': 'planned'},
                                          {'id': 'compliance.obligations', 'owner': 'comply', 'status': 'planned'}]}
         (root / 'cmake' / 'capability-owners.json').write_text(json.dumps(capabilities), encoding='utf-8')
+
+    @staticmethod
+    def ask(items):
+        return [{target: item_id, 'question': f'Is {item_id} right?'} for target, item_id in items]
+
+    @classmethod
+    def counsel_reviews(cls, legal):
+        """The reviews of a consistent register: one answered review per answer day its items record, and one open
+        review asking about every outstanding item."""
+        states = registers.counsel_states(legal)
+        days = sorted({counsel['reviewed'] for counsel in states.values() if isinstance(counsel.get('reviewed'), str)})
+        reviews = [{'id': f'counsel.answered-{day}', 'title': 'Answered', 'opened': '2026-10-27', 'answered': day,
+                    'questions': cls.ask(sorted(item for item, counsel in states.items()
+                                                if counsel.get('reviewed') == day))} for day in days]
+        asked = sorted(item for item, counsel in states.items() if registers.outstanding(counsel))
+        if asked:
+            reviews.append({'id': 'counsel.open', 'title': 'Open', 'opened': '2026-10-31', 'answered': None,
+                            'questions': cls.ask(asked)})
+        return reviews
 
     @staticmethod
     def reviewed(root, legal):
@@ -5741,8 +5762,8 @@ class Registers(RegisterFixture, unittest.TestCase):
 
 class LegalRegister(RegisterFixture, unittest.TestCase):
     """scripts/check-registers.py, legal domain (COMPLY.0): a binding obligation needs an active check, primary sources
-    are official, reading precedes closing, counsel review precedes implementation, scopes turn live with their rows
-    and Turkish law is never omitted."""
+    are official, reading precedes closing, counsel never blocks implementation but every outstanding item is asked
+    about in an open review, scopes turn live with their rows and Turkish law is never omitted."""
 
     def live(self, **changes):
         return self.scope(state='live', evidence=['tests/test_quic.cpp'], **changes)
@@ -5750,8 +5771,8 @@ class LegalRegister(RegisterFixture, unittest.TestCase):
     def test_a_complete_legal_register_passes_and_names_the_next_effective_day(self):
         code, output = self.run_legal(self.legal_register())
         self.assertEqual(0, code, output)
-        self.assertIn('PASS: legal register: 1 entries, 1 pinned, next review 2027-10-25; 0 binding on 0 live scopes',
-                      output)
+        self.assertIn('PASS: legal register: 1 entries, 1 pinned, next review 2027-10-25; 0 binding on 0 live scopes; '
+                      'open counsel questions: 1 in 1 review', output)
         later = self.legal_entry(id='tr.5651.game-platforms', topic='privacy', effective='2026-11-01')
         code, output = self.run_legal(self.legal_register([self.legal_entry(), later]), today='2026-10-31')
         self.assertEqual(0, code, output)
@@ -5813,7 +5834,7 @@ class LegalRegister(RegisterFixture, unittest.TestCase):
         self.assert_legal_fails(self.legal_register([self.legal_entry(instrument={'name': 'x'})]),
                                 'instrument has article, consolidated, jurisdiction, name, primary, type')
 
-    def test_reading_and_counsel_precede_closing_and_implementing(self):
+    def test_reading_precedes_closing_and_counsel_never_blocks_implementing(self):
         read = self.instrument(consolidated=self.READ)
         verified = {'ref': 'docs/research.md#n83', 'read': '2026-10-27', 'verified': True}
         self.assert_legal_fails(self.legal_register([self.legal_entry(instrument=read)]),
@@ -5834,8 +5855,9 @@ class LegalRegister(RegisterFixture, unittest.TestCase):
         proven = dict(state='implemented', evidence=['tests/test_quic.cpp'], check=active)
         self.assert_legal_fails(self.legal_register([self.legal_entry(**proven)]),
                                 'implemented before Law No. 6698 was read in its consolidated text')
-        self.assert_legal_fails(self.legal_register([self.legal_entry(**proven, instrument=read, source=verified)]),
-                                'implemented while its counsel review is outstanding (a user action)')
+        code, output = self.run_legal(self.legal_register([self.legal_entry(**proven, instrument=read,
+                                                                            source=verified)]))
+        self.assertEqual(0, code, output)  # the open review asks about it; implementation never waits for counsel
         reviewed = {'needed': True, 'reviewed': '2026-10-30'}
         self.assertEqual(0, self.run_legal(self.legal_register([self.legal_entry(
             **proven, instrument=read, source=verified, counsel=reviewed)]))[0])
@@ -5850,6 +5872,63 @@ class LegalRegister(RegisterFixture, unittest.TestCase):
         self.assert_legal_fails(self.legal_register([self.legal_entry(counsel={'needed': True,
                                                                                'reviewed': '2026-11-05'})]),
                                 'counsel.reviewed 2026-11-05 is after today')
+
+    def test_every_outstanding_counsel_item_is_asked_about_in_one_open_review(self):
+        question = {'entry': 'tr.kvkk.processing', 'question': 'Which Article 5 condition applies?'}
+        review = {'id': 'counsel.2026-11-01', 'title': 'First review', 'opened': '2026-11-01', 'answered': None,
+                  'questions': [question]}
+
+        def reviews(*items):
+            return self.legal_register(counsel_reviews=list(items))
+
+        code, output = self.run_legal(reviews(review))
+        self.assertEqual(0, code, output)
+        cases = (
+            ('none', 'counsel_reviews lists the dated, named counsel reviews and their questions'),
+            ([], 'the entry tr.kvkk.processing needs counsel, but no open review asks about it; add its exact question '
+                 'to an open review'),
+            ([dict(review, answered='2026-11-01')], 'the entry tr.kvkk.processing needs counsel, but no open review'),
+            ([{'id': 'counsel.x'}], 'a review has an id, a title, the day it was opened'),
+            ([dict(review, id='Counsel 1')], 'a review has an id, a title'),
+            ([dict(review, title='')], 'a review has an id, a title'),
+            ([review, review], 'counsel_reviews: counsel.2026-11-01 is named twice'),
+            ([dict(review, opened='soon')], "opened must be a YYYY-MM-DD date, not 'soon'"),
+            ([dict(review, opened='2026-11-02')], 'opened 2026-11-02 and answered None are not in order up to today'),
+            ([dict(review, questions=[])], 'questions lists what counsel is asked, one item each'),
+            ([dict(review, questions=[dict(question, question='Which condition applies.')])],
+             'a question names one entry or classification and asks its question (ending with "?")'),
+            ([dict(review, questions=[dict(question, classification='tool')])], 'a question names one entry or'),
+            ([dict(review, questions=[{'entry': 'tr.kvkk.processing'}])], 'a question names one entry or'),
+            ([dict(review, questions=[question, dict(question, entry='tr.nowhere')])],
+             'asks about the entry tr.nowhere, which the register does not hold'),
+            ([dict(review, questions=[question, question])], 'asks about the entry tr.kvkk.processing twice'),
+            ([review, dict(review, id='counsel.again')],
+             'counsel.again: the entry tr.kvkk.processing is already asked about in the open review '
+             'counsel.2026-11-01'),
+        )
+        for items, message in cases:
+            with self.subTest(message=message):
+                self.assert_legal_fails(self.legal_register(counsel_reviews=items), message)
+        answered = {'needed': True, 'reviewed': '2026-10-30'}
+        settled = dict(review, opened='2026-10-27', answered='2026-10-30')
+        self.assertEqual(0, self.run_legal(self.legal_register([self.legal_entry(counsel=answered)],
+                                                               counsel_reviews=[settled]))[0])
+        self.assert_legal_fails(self.legal_register([self.legal_entry(counsel=answered)], counsel_reviews=[]),
+                                "the entry tr.kvkk.processing records counsel's answer of 2026-10-30, but no review "
+                                'answered that day asked about it')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(counsel=answered)], counsel_reviews=[
+            dict(settled, answered='2026-10-29')]), "records counsel's answer of 2026-10-30, but no review")
+        self.assert_legal_fails(self.legal_register([self.legal_entry(counsel=answered)], counsel_reviews=[
+            dict(settled, answered='2026-10-26')]), 'opened 2026-10-27 and answered 2026-10-26 are not in order')
+        self.assert_legal_fails(self.legal_register([self.legal_entry(counsel=answered)], counsel_reviews=[
+            settled, review]), 'counsel.2026-11-01: asks about the entry tr.kvkk.processing, whose counsel is not '
+                               'outstanding; drop the question or record the answer')
+        none = {'needed': False, 'reviewed': None}
+        self.assert_legal_fails(self.legal_register([self.legal_entry(counsel=none)], counsel_reviews=[review]),
+                                'whose counsel is not outstanding')
+        code, output = self.run_legal(self.legal_register([self.legal_entry(counsel=none)], counsel_reviews=[]))
+        self.assertEqual(0, code, output)
+        self.assertIn('open counsel questions: 0 in 0 reviews', output)
 
     def test_turkish_law_is_never_omitted(self):
         eu = self.legal_entry(id='eu.ai-act.transparency', topic='ai', instrument=self.instrument(
@@ -6198,9 +6277,10 @@ class CryptoInventory(RegisterFixture, unittest.TestCase):
     def legal_of(root):
         return json.loads((root / 'cmake/legal-register.json').read_text(encoding='utf-8'))
 
-    def set_classifications(self, root, classifications):
+    def set_classifications(self, root, classifications, counsel_reviews=None):
         legal = self.legal_of(root)
         legal['crypto_classifications'] = classifications
+        legal['counsel_reviews'] = self.counsel_reviews(legal) if counsel_reviews is None else counsel_reviews
         (root / 'cmake/legal-register.json').write_text(json.dumps(legal), encoding='utf-8')
 
     @staticmethod
@@ -6360,6 +6440,13 @@ class CryptoInventory(RegisterFixture, unittest.TestCase):
             classifications['tool'][-1]['counsel']['reviewed'] = '2026-11-01'
             self.set_classifications(root, classifications)
             self.assertEqual(0, self.guard(root, '2026-11-01')[0])
+            unanswered = [review for review in self.counsel_reviews(self.legal_of(root)) if review['answered'] is None]
+            self.set_classifications(root, classifications, counsel_reviews=unanswered)
+            self.assert_guard_fails(root, "the classification tool records counsel's answer of 2026-11-01, but no "
+                                          'review answered that day asked about it')
+            classifications['tool'][-1]['counsel']['reviewed'] = None
+            self.set_classifications(root, classifications, counsel_reviews=[])
+            self.assert_guard_fails(root, 'the classification tool needs counsel, but no open review asks about it')
 
     def test_records_end_with_one_head_and_releases_are_frozen(self):
         with tempfile.TemporaryDirectory() as scratch:
