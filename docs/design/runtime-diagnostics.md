@@ -3284,7 +3284,23 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   converts evaluated at compile time), `math.scalar` (each transcendental at two arguments against fixed bits),
   `geometry.primitives` (every batch routine over three bundles and the hull scan over 37 vertices) and
   `geometry.mesh` (a two-leaf BVH raycast and a culled miss), the geometry answers closed forms of exact dyadic inputs
-  evaluated at compile time.
+  evaluated at compile time; `hesap.autodiff`, `hesap.stats`, `hesap.special`, `hesap.direct`, `hesap.sparse`,
+  `hesap.dense`, `hesap.fft`, `hesap.tensor` and `eylem.rigid3d` (each row's session in
+  [HW-RESILIENCE.3](../ROADMAP.md#slice-hw-resilience.3)). Every dispatched family resolves through its check.
+- The hardware check (`crd/perf/hardware_check.hpp`), which `ceridc doctor --hardware` and the `hardware.check`
+  command run: one thread pinned to each logical CPU (`crd::pin_current_thread`, the walk the CPU selection uses) runs
+  each arm for the same time on every CPU at once. The arms are Cerid-free, each result checked against an answer
+  evaluated at compile time or derived from the work's position, so an event is the machine's (the 2026-10-26 host
+  check's reasoning): `reload` (the control's getter-chain shape: 4,096 nodes whose links, owners and indices are
+  reloaded through volatile getters, each link compared with the node an integer division names), `compute-<level>`
+  (integer multiply-shift-xor, logistic-map and divide recurrences on 16 lanes, `crd/perf/hardware_check_kernels.hpp`,
+  at every dispatch level the process runs), `memory` (moving inversions over each CPU's committed buffer, within half
+  the machine's memory) and `shared` (a sequence-locked slot per CPU read by the next pinned CPU). The report names,
+  per CPU (group, number, core type) and arm, the blocks, time, events and the first event's block, place, value and
+  expected value; a CPU the OS refuses is listed unpinned. `hardware.check` needs the Execute grant (a load no read
+  grant may start); `seconds=` and `memory_mib=` stay within the host's bounds (`DiagServiceConfig`); the verdict is
+  `no-event-seen` or `events-seen`, never "healthy", and the doctor verb exits 1 on an event. The hardware-check fault
+  seam corrupts one value an arm reads on a named CPU, so tests drive each arm's detection on a sound machine.
 
 ## Existing programme ownership after DIAG
 
