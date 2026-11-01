@@ -998,7 +998,44 @@ if("aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
             set_target_properties(${_crd_awslc_target} PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF
                                   CRD_ISA_ROLE provider)
         endif()
+        # An assembler extension belongs to whichever assembler language a configure enabled last, in every directory
+        # (zstd's ASM claims .asm, .s and .S; crd-jobs' ASM_MASM and AWS-LC's ASM_NASM claim .asm), so on Windows x64
+        # AWS-LC's sources would be assembled as languages its directories never enabled and the generate step fails.
+        # Its .asm files are NASM. The one .S file such a configure lists holds Linux-only code (hrss/asm/poly_rq_mul.S,
+        # guarded to __linux__) and, as in AWS-LC's own MSVC build, where NASM claims no .S or .s, is never assembled.
+        if(WIN32 AND _crd_arch_x64)
+            get_target_property(_crd_awslc_sources ${_crd_awslc_target} SOURCES)
+            get_target_property(_crd_awslc_dir ${_crd_awslc_target} SOURCE_DIR)
+            get_target_property(_crd_awslc_binary_dir ${_crd_awslc_target} BINARY_DIR)
+            foreach(_crd_awslc_source IN LISTS _crd_awslc_sources)
+                if(NOT _crd_awslc_source MATCHES "\\.(asm|s|S)$")
+                    continue()
+                endif()
+                # A relative name is the source directory's file, else the build directory's (AWS-LC copies its
+                # pregenerated assembly there), as add_library resolved it.
+                set(_crd_awslc_path "${_crd_awslc_source}")
+                if(NOT IS_ABSOLUTE "${_crd_awslc_path}")
+                    if(EXISTS "${_crd_awslc_dir}/${_crd_awslc_path}")
+                        set(_crd_awslc_path "${_crd_awslc_dir}/${_crd_awslc_path}")
+                    else()
+                        set(_crd_awslc_path "${_crd_awslc_binary_dir}/${_crd_awslc_path}")
+                    endif()
+                endif()
+                if(_crd_awslc_source MATCHES "\\.asm$")
+                    set_source_files_properties("${_crd_awslc_path}" TARGET_DIRECTORY ${_crd_awslc_target}
+                                                PROPERTIES LANGUAGE ASM_NASM)
+                else()
+                    set_source_files_properties("${_crd_awslc_path}" TARGET_DIRECTORY ${_crd_awslc_target}
+                                                PROPERTIES HEADER_FILE_ONLY ON)
+                endif()
+            endforeach()
+        endif()
     endforeach()
+    unset(_crd_awslc_sources)
+    unset(_crd_awslc_source)
+    unset(_crd_awslc_path)
+    unset(_crd_awslc_dir)
+    unset(_crd_awslc_binary_dir)
     unset(_crd_awslc_target)
     unset(_crd_awslc_targets)
     unset(_crd_awslc_type)

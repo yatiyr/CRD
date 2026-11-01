@@ -3,6 +3,8 @@
 if(WIN32)
     enable_language(ASM_MASM)
     set(CRD_JOBS_ASM_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/fiber_switch_win64.asm")
+    # .asm belongs to the assembler language enabled last in the configure (AWS-LC enables NASM): this one is MASM.
+    set_source_files_properties("${CRD_JOBS_ASM_SRC}" PROPERTIES LANGUAGE ASM_MASM)
 else()
     enable_language(ASM)
     set(CRD_JOBS_ASM_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/fiber_switch_lin64.S")
