@@ -16,6 +16,10 @@ namespace crd::hesap::dense
 [[nodiscard]] std::span<const crd::KernelLevel<DenseKernels>> dense_kernel_levels() noexcept;
 [[nodiscard]] const crd::KernelLevel<DenseKernels>& dense_kernels() noexcept;
 
+// The family's known-answer self-check (HW-RESILIENCE.3, crd/core/kernel_dispatch.hpp), which its resolution runs:
+// nullptr when every f64 and f32 kernel of `table` gives its known answers, else the failing routine's name.
+[[nodiscard]] const char* dense_self_check(const DenseKernels& table) noexcept;
+
 // The element types with dense kernels; the others run their scalar loops.
 template <typename T>
 inline constexpr bool kHasDenseKernels = std::is_same_v<T, crd::f64> || std::is_same_v<T, crd::f32>;

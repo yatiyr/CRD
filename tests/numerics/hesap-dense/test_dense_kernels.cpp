@@ -26,6 +26,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <limits>
+#include <string_view>
 #include <type_traits>
 
 namespace dn = crd::hesap::dense;
@@ -712,4 +713,198 @@ TEST_CASE("dense kernels: the process runs the level its CPU selection resolves"
           &crd::select_kernel_level<DenseKernels>(levels, s.selected, s.kernel_features, crd::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
     CHECK(crd::cpu_level_includes(crd::kernel_level_cap(), chosen.level));
+    const crd::KernelFamily* family = crd::test::kernel_family("hesap.dense");
+    REQUIRE(family != nullptr);
+    CHECK(family->result.status == crd::KernelCheckStatus::Passed);
+    CHECK(family->result.level == chosen.level);
+}
+
+namespace
+{
+
+// Self-check stubs: each routine once, over both element types, as the portable kernel with one answer a bit off.
+template <typename T> void one_bit_off(T& v) noexcept
+{
+    using Bits = std::conditional_t<sizeof(T) == 8U, u64, u32>;
+    v = std::bit_cast<T>(static_cast<Bits>(std::bit_cast<Bits>(v) ^ 1U));
+}
+
+const dn::DenseTypeKernels<crd::f64>& portable64() noexcept
+{
+    return dn::kDenseKernelsPortable.f64_kernels;
+}
+
+const dn::DenseTypeKernels<crd::f32>& portable32() noexcept
+{
+    return dn::kDenseKernelsPortable.f32_kernels;
+}
+
+void pack_a_off(const dn::GemmSource<crd::f64>& s, usize rows, usize depth, crd::f64* out) noexcept
+{
+    portable64().gemm.pack_a(s, rows, depth, out);
+    one_bit_off(out[0]);
+}
+
+void pack_b_off(const dn::GemmSource<crd::f32>& s, usize depth, usize cols, crd::f32* out) noexcept
+{
+    portable32().gemm.pack_b(s, depth, cols, out);
+    one_bit_off(out[depth * cols - 1U]);
+}
+
+void block_off(const GemmBlock<crd::f64>& g) noexcept
+{
+    portable64().gemm.block(g);
+    one_bit_off(g.c[0]);
+}
+
+crd::f32 dot_off(const crd::f32* x, const crd::f32* y, usize n) noexcept
+{
+    crd::f32 d = portable32().dot(x, y, n);
+    one_bit_off(d);
+    return d;
+}
+
+void axpy_off(crd::f64* y, const crd::f64* x, crd::f64 alpha, usize n) noexcept
+{
+    portable64().axpy(y, x, alpha, n);
+    one_bit_off(y[n - 1U]);
+}
+
+void gemv_off(const dn::GemvRows<crd::f32>& g) noexcept
+{
+    portable32().gemv(g);
+    one_bit_off(g.y[g.rows - 1U]);
+}
+
+void gemvt_off(const dn::GemvtRows<crd::f64>& g) noexcept
+{
+    portable64().gemvt(g);
+    one_bit_off(g.y[0]);
+}
+
+void ger_off(const dn::GerRows<crd::f32>& g) noexcept
+{
+    portable32().ger(g);
+    one_bit_off(g.a[0]);
+}
+
+void symv_off(const dn::SymvLower<crd::f64>& v) noexcept
+{
+    portable64().symv(v);
+    one_bit_off(v.y[v.n - 1U]);
+}
+
+void trsv_off(const dn::TrsvRows<crd::f32>& t) noexcept
+{
+    portable32().trsv(t);
+    one_bit_off(t.x[0]);
+}
+
+void rot_off(crd::f64* x, crd::f64* y, crd::f64 c, crd::f64 s, usize n) noexcept
+{
+    portable64().rot(x, y, c, s, n);
+    one_bit_off(y[n - 1U]);
+}
+
+void reflect_off(const dn::ReflectorRows<crd::f32>& r) noexcept
+{
+    portable32().reflect(r);
+    one_bit_off(r.c[0]);
+}
+
+void ldlt_update_off(const dn::LdltUpdate<crd::f64>& u) noexcept
+{
+    portable64().ldlt_update(u);
+    one_bit_off(u.a[0]);
+}
+
+void creflect_off(const dn::SplitReflectorRows<crd::f32>& r) noexcept
+{
+    portable32().creflect(r);
+    one_bit_off(r.im[0]);
+}
+
+void cgemvt_off(const dn::SplitGemvtRows<crd::f64>& g) noexcept
+{
+    portable64().cgemvt(g);
+    one_bit_off(g.yr[g.cols - 1U]);
+}
+
+void cger_off(const dn::SplitGerRows<crd::f32>& g) noexcept
+{
+    portable32().cger(g);
+    one_bit_off(g.im[(g.rows - 1U) * g.ld + g.cols - 1U]);
+}
+
+void chemv_off(const dn::SplitHemvLower<crd::f64>& h) noexcept
+{
+    portable64().chemv(h);
+    one_bit_off(h.xi[0]);
+}
+
+void cher2_off(const dn::SplitHer2Lower<crd::f32>& h) noexcept
+{
+    portable32().cher2(h);
+    one_bit_off(h.re[0]);
+}
+
+usize cholesky_off(crd::f64* a, usize n, usize ld) noexcept
+{
+    const usize failed = portable64().cholesky(a, n, ld);
+    one_bit_off(a[0]);
+    return failed;
+}
+
+void cholesky_trsm_off(crd::f32* a, usize ld, usize k, usize nb, usize first, usize end) noexcept
+{
+    portable32().cholesky_trsm(a, ld, k, nb, first, end);
+    one_bit_off(a[(end - 1U) * ld + k]);
+}
+
+std::string_view routine_of(const char* routine)
+{
+    return routine != nullptr ? routine : "";
+}
+
+} // namespace
+
+TEST_CASE("dense self-check: every table the host runs gives the known answers", "[dense][kernels]")
+{
+    const crd::test::SelfCheckRun run = crd::test::self_check_levels(dn::dense_kernel_levels(), &dn::dense_self_check);
+    INFO("first failure " << crd::cpu_level_name(run.level) << " " << routine_of(run.routine));
+    CHECK(run.failed == 0U);
+    CHECK(run.ran >= 1U);
+}
+
+TEST_CASE("dense self-check: a wrong routine fails the check", "[dense]")
+{
+    CHECK(dn::dense_self_check(dn::kDenseKernelsPortable) == nullptr);
+    const auto fails_as = [](auto wrong, std::string_view routine)
+    {
+        DenseKernels w = dn::kDenseKernelsPortable;
+        wrong(w);
+        INFO(routine);
+        CHECK(routine_of(dn::dense_self_check(w)) == routine);
+    };
+    fails_as([](DenseKernels& w) { w.f32_kernels.gemm.shape.mr = 0U; }, "f32 gemm shape");
+    fails_as([](DenseKernels& w) { w.f64_kernels.gemm.pack_a = &pack_a_off; }, "f64 gemm.pack_a");
+    fails_as([](DenseKernels& w) { w.f32_kernels.gemm.pack_b = &pack_b_off; }, "f32 gemm.pack_b");
+    fails_as([](DenseKernels& w) { w.f64_kernels.gemm.block = &block_off; }, "f64 gemm.block");
+    fails_as([](DenseKernels& w) { w.f32_kernels.dot = &dot_off; }, "f32 dot");
+    fails_as([](DenseKernels& w) { w.f64_kernels.axpy = &axpy_off; }, "f64 axpy");
+    fails_as([](DenseKernels& w) { w.f32_kernels.gemv = &gemv_off; }, "f32 gemv");
+    fails_as([](DenseKernels& w) { w.f64_kernels.gemvt = &gemvt_off; }, "f64 gemvt");
+    fails_as([](DenseKernels& w) { w.f32_kernels.ger = &ger_off; }, "f32 ger");
+    fails_as([](DenseKernels& w) { w.f64_kernels.symv = &symv_off; }, "f64 symv");
+    fails_as([](DenseKernels& w) { w.f32_kernels.trsv = &trsv_off; }, "f32 trsv");
+    fails_as([](DenseKernels& w) { w.f64_kernels.rot = &rot_off; }, "f64 rot");
+    fails_as([](DenseKernels& w) { w.f32_kernels.reflect = &reflect_off; }, "f32 reflect");
+    fails_as([](DenseKernels& w) { w.f64_kernels.ldlt_update = &ldlt_update_off; }, "f64 ldlt_update");
+    fails_as([](DenseKernels& w) { w.f32_kernels.creflect = &creflect_off; }, "f32 creflect");
+    fails_as([](DenseKernels& w) { w.f64_kernels.cgemvt = &cgemvt_off; }, "f64 cgemvt");
+    fails_as([](DenseKernels& w) { w.f32_kernels.cger = &cger_off; }, "f32 cger");
+    fails_as([](DenseKernels& w) { w.f64_kernels.chemv = &chemv_off; }, "f64 chemv");
+    fails_as([](DenseKernels& w) { w.f32_kernels.cher2 = &cher2_off; }, "f32 cher2");
+    fails_as([](DenseKernels& w) { w.f64_kernels.cholesky = &cholesky_off; }, "f64 cholesky");
+    fails_as([](DenseKernels& w) { w.f32_kernels.cholesky_trsm = &cholesky_trsm_off; }, "f32 cholesky_trsm");
 }

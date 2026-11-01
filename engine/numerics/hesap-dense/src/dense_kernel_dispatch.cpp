@@ -1,4 +1,5 @@
-// The hesap-dense kernels of this archive and the level the process runs (SIMD-DISPATCH).
+// The hesap-dense kernels of this archive and the level the process runs (SIMD-DISPATCH), each table checked against
+// known answers before its first use (HW-RESILIENCE.3, dense_self_check.cpp).
 
 #include <crd/core/kernel_level.hpp>
 #include <crd/hesap/dense/dense_dispatch.hpp>
@@ -29,6 +30,14 @@ constexpr KernelLevel<DenseKernels> kLevels[] = {
 #endif
 };
 
+void resolve_dense() noexcept
+{
+    (void)dense_kernels();
+}
+
+constinit crd::KernelFamily g_family{"hesap.dense", &resolve_dense, {}, nullptr};
+const crd::KernelFamilyListing kListing{g_family};
+
 } // namespace
 
 std::span<const KernelLevel<DenseKernels>> dense_kernel_levels() noexcept
@@ -38,7 +47,8 @@ std::span<const KernelLevel<DenseKernels>> dense_kernel_levels() noexcept
 
 const KernelLevel<DenseKernels>& dense_kernels() noexcept
 {
-    static const KernelLevel<DenseKernels>& selected = crd::process_kernel_level<DenseKernels>(kLevels);
+    static const KernelLevel<DenseKernels>& selected =
+        crd::process_checked_kernel_level<DenseKernels>(kLevels, &dense_self_check, g_family);
     return selected;
 }
 
