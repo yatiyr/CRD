@@ -243,4 +243,6 @@ complex and its block are the same 64 bytes, so a step of whole tiles may change
 reads blocks. The generator asserts that no in-place step stores before its last load. It is the canonical f32 4K
 forward: 1.38x the standalone-hier at avx512 and level with MKL on the benchmark machine
 ([board](../bench/2026-11-01-simd-perf-fft-in-place-4k.md)), the standalone-hier's 96 KiB working set having left the
-48 KiB L1d.
+48 KiB L1d. It is the canonical f32 2K forward too since the board timed each transform warm (an untimed transform of
+the same arm first; the cold transform after the other arms had ranked the standalone-hier first): 1.40x IP4-AoS at
+avx512 and 1.30x at avx2 ([board](../bench/2026-11-01-simd-perf-fft-warm-board-2k.md)); the 2K inverse stays IP4-AoS.

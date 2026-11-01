@@ -83,7 +83,8 @@ template <typename T> [[nodiscard]] constexpr crd::usize four_step_split(crd::us
 }
 
 // IP4-AoS, both directions: f64 wins every row 1K..64K; f32 only at 2K and 16K..64K (the matched-state A/B of
-// 2026-07-04: the Vec8f standalone-hier wins 1K, 4K and 8K).
+// 2026-07-04: the Vec8f standalone-hier wins 1K, 4K and 8K). The f32 2K forward has since gone to the in-place three
+// passes (planned_forward); its inverse stays here.
 template <typename T> [[nodiscard]] constexpr bool ip4_planned(crd::usize n) noexcept
 {
     if constexpr (std::is_same_v<T, crd::f64>)
@@ -99,9 +100,10 @@ template <typename T> [[nodiscard]] constexpr bool ip4_planned(crd::usize n) noe
 // The forward algorithm of a size. The deep-split runs 8K..1M as four passes (the 2026-07-04 K-stage sweep; its 4096
 // = 16x16x16 lost, f32 8K lost 10% at eight lanes, and f64 1M takes the six-step, 5.38 against 5.88 ms); f32 1M takes
 // the tiled four-step (SIMD-DISPATCH's fft board of 2026-10-30: 2.10 against the deep-split's 2.55 ms at avx2, level
-// with it at sse4.2, sse2 and portable); f32 4K takes the in-place three passes (SIMD-PERF's board of 2026-11-01 on
-// the benchmark machine: 1.38x the standalone-hier at avx512, level with MKL, and 1.17x at avx2; the out-of-place
-// passes' 96 KiB working set had left the 48 KiB L1d); past L3 the four-step's blocked structure wins (2M flat, 4M and
+// with it at sse4.2, sse2 and portable); f32 2K and 4K take the in-place three passes (SIMD-PERF's boards of
+// 2026-11-01 on the benchmark machine, each timed transform warm: at 4K 1.38x the standalone-hier at avx512, level
+// with MKL, and 1.17x at avx2, the out-of-place passes' 96 KiB working set having left the 48 KiB L1d; at 2K 1.40x
+// IP4-AoS at avx512 and 1.30x at avx2, and 1.24x and 1.13x the standalone-hier); past L3 the four-step's blocked structure wins (2M flat, 4M and
 // 8M large losses under the deep-split).
 template <typename T> [[nodiscard]] constexpr FftAlgorithm planned_forward(crd::usize n) noexcept
 {
@@ -109,6 +111,10 @@ template <typename T> [[nodiscard]] constexpr FftAlgorithm planned_forward(crd::
     if (n < 1024)
     {
         return FftAlgorithm::Stockham;
+    }
+    if (is_f32 && (n == 2048 || n == 4096))
+    {
+        return FftAlgorithm::InPlace3;
     }
     if (ip4_planned<T>(n))
     {
@@ -129,10 +135,6 @@ template <typename T> [[nodiscard]] constexpr FftAlgorithm planned_forward(crd::
     if (four_step_planned(n))
     {
         return FftAlgorithm::FourStep;
-    }
-    if (is_f32 && n == 4096)
-    {
-        return FftAlgorithm::InPlace3;
     }
     return FftAlgorithm::StandaloneHier; // f32 1K and 8K
 }
