@@ -54,6 +54,7 @@ add_executable(crd-perf-tests
     test_fault_classification.cpp # HW-RESILIENCE.2: impossible-state signatures and the unstable-CPU table
     test_instruction_access.cpp   # HW-RESILIENCE.2: the faulting instruction's accesses and divide operands
     test_hardware_check.cpp       # HW-RESILIENCE.3: the Cerid-free stress check on every CPU and its arms' events
+    test_state_hash.cpp           # HW-RESILIENCE.3: state-hash ledgers and the divergence check
 )
 
 target_link_libraries(crd-perf-tests PRIVATE

@@ -84,6 +84,24 @@ inline void append_u64(cont::String& out, crd::u64 v)
     }
 }
 
+// Lowercase hexadecimal with a 0x prefix and no leading zeros.
+inline void append_hex(cont::String& out, crd::u64 v)
+{
+    constexpr char hex_digits[] = "0123456789abcdef";
+    char digits[16];
+    crd::u32 n = 0U;
+    do
+    {
+        digits[n++] = hex_digits[v & 0xFU];
+        v >>= 4U;
+    } while (v != 0U);
+    out.append("0x");
+    while (n != 0U)
+    {
+        out.push_back(digits[--n]);
+    }
+}
+
 // Signed decimal.
 inline void append_i64(cont::String& out, crd::i64 v)
 {

@@ -1,5 +1,6 @@
 // crd-perf -- hardware fault classification (HW-RESILIENCE.2). See fault_classification.hpp.
 
+#include "json_writer.hpp"
 #include "payload_codec.hpp"
 
 #include <crd/perf/fault_classification.hpp>
@@ -11,6 +12,7 @@ namespace crd::perf
 namespace
 {
 namespace cont = crd::containers;
+using detail::append_hex;
 
 // Windows minidump: the exception stream and the access-fault codes whose parameters name the data address.
 constexpr crd::u32 kExceptionStream = 6U;
@@ -63,23 +65,6 @@ constexpr crd::i32 kBusMceErrAo = 5; // BUS_MCEERR_AO: memory error found in the
 [[nodiscard]] cont::StringView view(const cont::String& s) noexcept
 {
     return cont::StringView{s.data(), s.size()};
-}
-
-void append_hex(cont::String& out, crd::u64 v)
-{
-    constexpr char hex_digits[] = "0123456789abcdef";
-    char digits[16];
-    crd::u32 n = 0U;
-    do
-    {
-        digits[n++] = hex_digits[v & 0xFU];
-        v >>= 4U;
-    } while (v != 0U);
-    out.append("0x");
-    while (n != 0U)
-    {
-        out.push_back(digits[--n]);
-    }
 }
 
 // ---- reading a capture ----------------------------------------------------------------------------------------------
