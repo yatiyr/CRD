@@ -390,6 +390,35 @@ EUR-Lex or Steamworks change found between them is recorded as a run with its tr
 5. `record --scan <scan> --ref <document#anchor> [--day <day>] [--trigger <entry>]` records a run made by hand (a
    full re-research document, or a gazette change with the pinned entries it changed, which owe a full re-research)
    and moves `next`.
+6. `read --fetched <dir> --ref <document#anchor> --entry <id> ...` (legal register) records the instruments a person
+   read from the fetch the applied run compared (the register's snapshot day): each entry's `consolidated` version
+   (its host's reader), the fetch day and the document's SHA-256, and its `source` verified and cited by `--ref`, the
+   document recording what was read against each obligation. An entry whose document was not read, is unreadable or
+   sits on a host without a reader is refused, and a refusal writes nothing.
+
+<a id="official-texts"></a>
+**Official texts.** A legal instrument's `primary` is the page a person cites; the plan resolves it to the document its
+host serves as data, read by the host's reader, which checks the document is the act cited and finds its version
+(host checks of 2026-11-01, [session](../sessions/2026-11-01-comply-0-counsel-reviews.md#host-checks)):
+
+| Host | Document read | Version |
+|---|---|---|
+| mevzuat.gov.tr (`mevzuat?MevzuatNo=..`) | the consolidated text the page frames (`anasayfa/MevzuatFihristDetayIframe`) | the latest day of its amendment notes, with the amending act (`2024-03-02 (7499)`), a Constitutional Court annulment's decision day, or the day of enactment |
+| eur-lex.europa.eu (`eli/<reg\|dir\|dec>/<year>/<number>/oj`) | CELLAR (publications.europa.eu, which serves EUR-Lex's acts; eur-lex.europa.eu answers a machine with a challenge): the English XHTML of the version | an index read first: CELLAR's SPARQL endpoint lists the act's consolidated versions with an English XHTML text, and the latest in force on the fetch day is read (`02016R0679-20160504`), else the act as adopted (`32019L0790`) |
+| legislation.gov.uk (`ukpga/<year>/<number>`) | the act's Crown Legislation Markup (`data.xml`) | its point-in-time day (`dct:valid`) |
+| ecfr.gov (`current/title-N/...`) | the eCFR versioner's full XML on the hierarchy's latest amendment day: the part itself, or the whole title above a part (the versioner ignores subtitle, chapter and subchapter), of which the cited hierarchy's subtree is the text read | an index read first: the versioner's `meta.latest_amendment_date` of the hierarchy, which must echo the hierarchy asked for |
+| wassenaar.org (`control-lists/`) | the List of Dual-Use Goods and Technologies (PDF) | an index read first: the control-lists page's one link to the list, whose upload path names its edition |
+
+A version index is fetched before the documents whose URL holds the `{version}` it names, and a version is never a
+scheme, query or `..`. Every request asks for gzip (eCFR refuses one that does not), and the manifest pins the
+SHA-256 of the decoded body, at most 16 MiB either way; any other content encoding is refused. An instrument's
+`consolidated.sha256` is that of the text read: the document, or an eCFR hierarchy's subtree, so an amendment elsewhere
+in the title does not read as a change. A redirect is followed on the same host
+only, with an http Location upgraded to https (CELLAR answers with http, and its https form serves the same bytes);
+another host or scheme is refused, so a moved document is a source not read until its `primary` is corrected. A host
+without a resolver is read as the cited page by its digest alone and cannot be recorded as read: its instrument is
+cited on a host with a reader first. A scan judges a read instrument twice: a new version is an amendment to read
+(`amended to <version>`), and a new digest under the same version is a change to the text.
 
 The readers follow the records the first approved refresh read (2026-10-31,
 [report](../sessions/2026-10-31-standards-register-refresh.md)); a record without their shape is reported as unreadable

@@ -2,8 +2,8 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review US
 format = "cerid-rules/1"
 jurisdiction = "US"
-generation = 3
-register = "2026-10-31"
+generation = 4
+register = "2026-11-01"
 
 [[scope]]
 id = "channel.distribution"
@@ -85,7 +85,7 @@ title = "EAR: encryption classification and License Exception ENC"
 instrument = "Export Administration Regulations (15 CFR 730-774)"
 article = "Category 5 Part 2; 5D002, 5D992.c; Section 740.17"
 primary = "https://www.ecfr.gov/current/title-15/subtitle-B/chapter-VII/subchapter-C"
-read = false
+read = true
 obligation = "Classify every export's cryptography (5D002 or mass-market 5D992.c), apply License Exception ENC with its self-classification where it applies, and give stores the export-compliance answer the record supports."
 applies_to = ["channel.distribution", "channel.third-party-stores", "channel.cerid-store"]
 check = "active"
@@ -104,10 +104,10 @@ topic = "export-control"
 state = "planned"
 title = "EAR: annual self-classification report"
 instrument = "Export Administration Regulations (15 CFR 730-774)"
-article = "Section 740.17(b)(1) and Supplement 8 to Part 742"
+article = "Section 740.17(b)(1) and (e)(3) and Supplement No. 8 to Part 742"
 primary = "https://www.ecfr.gov/current/title-15/subtitle-B/chapter-VII/subchapter-C"
-read = false
-obligation = "File the self-classification report for mass-market encryption items by 1 February each year."
+read = true
+obligation = "File the self-classification report (Supplement No. 8 to Part 742) by 1 February for the previous calendar year's exports of items exported under Section 740.17(b)(1) that stay in 5A002, 5B002 or 5D002 and of mass-market components and executable software in 5A992 or 5D992; mass-market end items are not reported."
 applies_to = ["channel.distribution", "channel.third-party-stores", "channel.cerid-store"]
 check = "planned"
 check_name = "report filing record"

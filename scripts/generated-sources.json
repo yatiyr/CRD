@@ -1894,7 +1894,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "670ede4cfb4a6f030a146be164865c06c3a3b4c14accb0a7ef2ee58c9bc074ed"
+      "sha256": "c27bfec2aedbef497e3e4ead87fa1f916ac7fd4d2594be0c345edc534779b06a"
     },
     {
       "path": "assets/comply/br.rules.toml",
@@ -1905,7 +1905,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "24765fc13ce5bafefa5ff46ab5a4df0027674c0454e60db282cd34dd132a2e8d"
+      "sha256": "bb246f54baa904a8c4cc42d2a88a4177f1f4b7a923d47408befe1ff4596dc8d4"
     },
     {
       "path": "assets/comply/ca.rules.toml",
@@ -1916,7 +1916,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "767b32a0266f64352d531fc9a190e536e4c520918853eb31d853f59aa39c5605"
+      "sha256": "425623c09ba0917afbba2a92ae58714ac8c2fb2e606655ab42025055fe4e798d"
     },
     {
       "path": "assets/comply/eu.rules.toml",
@@ -1927,7 +1927,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "314edebef386bdba06d42bd55703993c6e24998ece74df96db11e0105a74b61e"
+      "sha256": "d21ebcf72cba3d82286cd5c41c7ddf08b6b26943203175c838ade5794201d6a3"
     },
     {
       "path": "assets/comply/gb.rules.toml",
@@ -1938,7 +1938,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "04b7da3accca408c90f2f66c1413cad56434cb8ebcac3e21f95b347800ca2fac"
+      "sha256": "d15a9f569a8e46f52395e016997bf93ed20923923774391f6f91d84b4fc576a2"
     },
     {
       "path": "assets/comply/int.rules.toml",
@@ -1949,7 +1949,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "a95da3ec17cc1f87f9082c50d1f214b210cd94056e666ee36ceda02809ac1535"
+      "sha256": "4e3899c373e8631580257cc3d858a85a0839a9ce970ca34cdcbbc0aabd61cb24"
     },
     {
       "path": "assets/comply/jp.rules.toml",
@@ -1960,7 +1960,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "73b27daf95d3381d80bca546214a4077bc28dfeb5d9344151cec910dc19cbefd"
+      "sha256": "e7e38d7105a5417b8651032a6905005c6053b9d3556c1dde6a0976dd1b365c06"
     },
     {
       "path": "assets/comply/platform.rules.toml",
@@ -1971,7 +1971,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "21377a60378504ff4a0d108eef26ea0665a22382a5698d67a9012c0f8b665809"
+      "sha256": "ea94c28021b59ef7c71dc3fda4242ff72389de9d60f0f28b6e56a9922bba9313"
     },
     {
       "path": "assets/comply/tr.rules.toml",
@@ -1982,7 +1982,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "a5c6b13385c4e4234c84b354a44aac4a2c885e63a65be44b7c2275387c455e60"
+      "sha256": "076a8c84a0dfb516405759916357f3966e081d01535216baa303f19bfbe78cd3"
     },
     {
       "path": "assets/comply/us-ca.rules.toml",
@@ -1993,7 +1993,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "1bf52c737e702845ae574f17482aa72b4aa497e9d70f6a83bdf1b932557ce071"
+      "sha256": "8866d33a16e6aa2b3829f541ba5fcae13016582f87302d48f7dcba8092af95e2"
     },
     {
       "path": "assets/comply/us.rules.toml",
@@ -2004,7 +2004,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "ace2908f82e114c8967b2eb7709eb9c709b4b1e0660c79007485a7c5948ee011"
+      "sha256": "5b47060eae50227f692c8801d37088772a8b84afa0dbdc76ccbebefa15502c35"
     },
     {
       "path": "assets/comply/crypto-inventory.json",

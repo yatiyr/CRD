@@ -2,8 +2,8 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review TR
 format = "cerid-rules/1"
 jurisdiction = "TR"
-generation = 3
-register = "2026-10-31"
+generation = 4
+register = "2026-11-01"
 
 [[scope]]
 id = "channel.distribution"
@@ -99,7 +99,7 @@ title = "KVKK: processing conditions and special categories"
 instrument = "Law No. 6698 on the Protection of Personal Data (KVKK)"
 article = "Articles 4-7"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5"
-read = false
+read = true
 obligation = "Process personal data only lawfully, for specified purposes, minimised and kept no longer than needed, on a condition of Article 5 (explicit consent or a listed ground) and the stricter Article 6 rules for special categories; delete, destroy or anonymise it when the purpose ends."
 applies_to = ["flow.crash-reports", "flow.telemetry", "flow.network-identity", "flow.anticheat", "flow.account-data", "flow.payments", "flow.user-content", "flow.communications"]
 check = "planned"
@@ -120,7 +120,7 @@ title = "KVKK: the aydınlatma notice kept separate from explicit consent"
 instrument = "Law No. 6698 on the Protection of Personal Data (KVKK)"
 article = "Articles 3, 5 and 10"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5"
-read = false
+read = true
 obligation = "Inform the data subject (aydınlatma) when data is collected, in a notice separate from any request for explicit consent; consent is specific, informed and freely given and is never bundled with the notice or a service condition."
 applies_to = ["flow.crash-reports", "flow.telemetry", "flow.network-identity", "flow.anticheat", "flow.account-data", "flow.payments", "flow.user-content", "flow.communications"]
 check = "planned"
@@ -141,8 +141,8 @@ title = "KVKK: data subject rights and the 30-day answer"
 instrument = "Law No. 6698 on the Protection of Personal Data (KVKK)"
 article = "Articles 11 and 13"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5"
-read = false
-obligation = "Answer access, correction, deletion and objection requests free of charge within 30 days; deletion reaches every store and backup window."
+read = true
+obligation = "Answer access, correction, deletion and objection requests within 30 days at the latest, free of charge (a fee on the Board's tariff only where answering has its own cost), accepting or refusing each with reasons in writing or electronically; deletion reaches every store and backup window."
 applies_to = ["flow.crash-reports", "flow.telemetry", "flow.network-identity", "flow.anticheat", "flow.account-data", "flow.payments", "flow.user-content", "flow.communications"]
 check = "planned"
 check_name = "data subject request service tests (deletion reaches every store)"
@@ -162,7 +162,7 @@ title = "KVKK: data security and breach notification to the Board"
 instrument = "Law No. 6698 on the Protection of Personal Data (KVKK)"
 article = "Article 12"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5"
-read = false
+read = true
 obligation = "Take the technical and administrative measures that keep personal data secure; notify the data subject and the Board of a breach as soon as possible (the Board set 72 hours)."
 applies_to = ["flow.crash-reports", "flow.telemetry", "flow.network-identity", "flow.anticheat", "flow.account-data", "flow.payments", "flow.user-content", "flow.communications"]
 check = "planned"
@@ -204,7 +204,7 @@ title = "KVKK: VERBIS registration of the data controller"
 instrument = "Law No. 6698 on the Protection of Personal Data (KVKK)"
 article = "Article 16"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5"
-read = false
+read = true
 obligation = "Register the publisher in the Data Controllers Registry (VERBIS) when the Board's thresholds or the foreign controller rule require it, before processing starts."
 applies_to = ["flow.crash-reports", "flow.telemetry", "flow.network-identity", "flow.anticheat", "flow.account-data", "flow.payments", "flow.user-content", "flow.communications"]
 check = "planned"
@@ -265,10 +265,10 @@ topic = "security"
 state = "planned"
 title = "Cybersecurity Law No. 7545: incident and vulnerability reporting"
 instrument = "Cybersecurity Law No. 7545"
-article = "Reporting duties and secondary rules"
+article = "Articles 7 and 8"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=7545&MevzuatTur=1&MevzuatTertip=5"
-read = false
-obligation = "Report vulnerabilities and cyber incidents to the Cybersecurity Presidency without delay, keep the records the secondary rules require and cooperate with audits."
+read = true
+obligation = "Report the vulnerabilities and cyber incidents found in the services a product offers to the Cybersecurity Presidency without delay, hand over the data and documents it requests in time, take the measures the legislation sets and keep systems, software and records open to its audits."
 applies_to = ["channel.distribution", "flow.crash-reports", "product.online-sessions"]
 check = "planned"
 check_name = "reporting workflow rehearsed against seeded incidents"
@@ -286,10 +286,10 @@ topic = "export-control"
 state = "planned"
 title = "Cybersecurity Law No. 7545: permits for cybersecurity products"
 instrument = "Cybersecurity Law No. 7545"
-article = "Permit, certification and export provisions"
+article = "Articles 7(1)(ç) and 18"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=7545&MevzuatTur=1&MevzuatTertip=5"
-read = false
-obligation = "Obtain the regulator's permit or certification before offering or exporting a cybersecurity product or service the law covers; classify every Cerid product against that definition first."
+read = true
+obligation = "Obtain the Cybersecurity Presidency's approval before operating as a cybersecurity company subject to certification or authorisation, and before exporting a cybersecurity product, system or service its procedures make subject to permit; notify it of a merger, division or share transfer of a company producing them, which needs its approval where control changes; classify every Cerid product against that definition first."
 applies_to = ["channel.distribution", "channel.third-party-stores"]
 check = "active"
 check_name = "crd-check-registers: every export's cryptography inventory against its reviewed classification"
@@ -391,10 +391,10 @@ topic = "children"
 state = "planned"
 title = "Law No. 5651: game-platform duties"
 instrument = "Law No. 5651 on the Regulation of Publications on the Internet, as amended in 2026"
-article = "Game-platform provisions"
+article = "Additional Article 5 (Law No. 7578, Article 23)"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5651&MevzuatTur=1&MevzuatTertip=5"
 read = false
-obligation = "A game platform (a storefront, launcher with licence management or mod hub) shows age ratings, gives parents tools that control account settings and approve paid transactions, answers ICTA requests within 15 days and appoints a local representative above 100,000 daily accesses from Turkey."
+obligation = "A game platform (infrastructure that exhibits, sells, distributes or runs digital games, manages licences or connects users) offers no game without its due age rating (an unrated game only at the highest age criterion) and removes unrated content, gives parents clear tools that control account settings and approve paid transactions, and gives the Authority the explanations it requests at once and within the period it sets of at most 15 days; a foreign-based platform above 100,000 daily accesses from Turkey also appoints and publishes a representative in Turkey."
 applies_to = ["channel.cerid-store", "channel.mods-and-ugc", "product.purchases"]
 check = "planned"
 check_name = "5651 game-platform kit CTests (parental payment approval, representative threshold monitoring)"
@@ -412,10 +412,10 @@ topic = "age-rating"
 state = "planned"
 title = "Law No. 5651: age ratings on game platforms"
 instrument = "Law No. 5651 on the Regulation of Publications on the Internet, as amended in 2026"
-article = "Game-platform provisions (age rating)"
+article = "Additional Article 5(1) and (5) (Law No. 7578, Article 23)"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5651&MevzuatTur=1&MevzuatTertip=5"
 read = false
-obligation = "Show an age rating for every game a platform offers and produce the Turkish rating once ICTA publishes its scheme."
+obligation = "Offer no game without its due age rating (an unrated game only at the highest age criterion) and produce the Turkish rating under the by-law the Authority issues on the rating criteria."
 applies_to = ["channel.cerid-store", "channel.mods-and-ugc"]
 check = "planned"
 check_name = "rating answers authored once generate every submission"
@@ -433,15 +433,15 @@ topic = "children"
 state = "planned"
 title = "Law No. 5651: the under-15 restriction on social networks"
 instrument = "Law No. 5651 on the Regulation of Publications on the Internet, as amended in 2026"
-article = "Social network provider provisions"
+article = "Additional Article 4(7) and (20)-(23) (Law No. 7578, Article 22)"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5651&MevzuatTur=1&MevzuatTertip=5"
 read = false
-obligation = "Keep children under 15 from social network accounts where a product meets the social network provider definition, with age signals and parental controls."
+obligation = "Where a product meets the social network provider definition, serve no child under 15 (with age verification), serve children of 15 and over a separate service, publish the measures taken, give parents clear tools over account settings, paid transactions and usage time, and block deceptive advertising."
 applies_to = ["product.communications", "channel.mods-and-ugc", "flow.account-data"]
 check = "planned"
 check_name = "age-signal and parental-control interface tests"
 check_ref = "docs/ROADMAP.md#slice-comply.5"
-effective = "2026"
+effective = "2026-11-01"
 sunset = ""
 counsel = "needed"
 counsel_reviewed = ""

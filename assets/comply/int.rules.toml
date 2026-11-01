@@ -2,8 +2,8 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review INT
 format = "cerid-rules/1"
 jurisdiction = "INT"
-generation = 3
-register = "2026-10-31"
+generation = 4
+register = "2026-11-01"
 
 [[scope]]
 id = "channel.distribution"

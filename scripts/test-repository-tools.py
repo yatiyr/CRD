@@ -3,6 +3,7 @@
 from pathlib import Path
 import contextlib
 import datetime
+import gzip
 import importlib.util
 import hashlib
 import http.client
@@ -20,6 +21,8 @@ import tempfile
 import time
 import unittest
 import urllib.error
+import urllib.parse
+import urllib.request
 import zipfile
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -6705,54 +6708,103 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
                                       today=datetime.date(2026, 12, 16))
         return plan
 
-    def test_the_legal_domain_plans_primary_texts_and_reads_them_by_digest(self):
+    # The shapes of the official texts the legal register's first read fetched (2026-11-01): mevzuat.gov.tr's
+    # consolidated HTML with its amendment notes, CELLAR's SPARQL listing and English XHTML, legislation.gov.uk's
+    # Crown Legislation Markup and the eCFR versioner.
+    MEVZUAT_HTML = ('<html><head><style>p { margin: 0 }</style><script>window.av = {}</script></head><body>'
+                    '<p>KİŞİSEL VERİLERİN KORUNMASI KANUNU</p><p>Kanun Numarası : 6698</p>'
+                    '<p>Kabul Tarihi : 24/3/2016</p><p>MADDE 9- (Değişik:2/3/2024-7499/34 md.) (1) ...</p>'
+                    '<p>MADDE 18- (Mülga: 2/7/2018-KHK-703/163 md.) ...</p></body></html>')
+    CELLAR_XHTML = ('<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml"><body>'
+                    '<p>Regulation (EU) 2016/679 of the European Parliament and of the Council</p></body></html>')
+    LEGISLATION_XML = ('<Legislation xmlns="http://www.legislation.gov.uk/namespaces/legislation"><ukm:Metadata '
+                       'xmlns:ukm="http://www.legislation.gov.uk/namespaces/metadata" '
+                       'xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dct="http://purl.org/dc/terms/">'
+                       '<dc:identifier>http://www.legislation.gov.uk/ukpga/2018/12</dc:identifier>'
+                       '<dct:valid>2026-09-30</dct:valid></ukm:Metadata></Legislation>')
+
+    @staticmethod
+    def sparql(*values):
+        return json.dumps({'head': {'vars': ['celex']}, 'results': {'bindings': [
+            {'celex': {'type': 'literal', 'value': value}} for value in values]}})
+
+    def routed(self, routes, requests=None):
+        """An opener answering each request with the body of the first route its URL contains: text, bytes, an
+        exception to raise, or (body, headers)."""
+        def urlopen(request, timeout):
+            self.assertEqual(register_review.USER_AGENT, request.get_header('User-agent'))
+            self.assertEqual('gzip', request.get_header('Accept-encoding'))
+            if requests is not None:
+                requests.append(request)
+            for part, body in routes.items():
+                if part in request.full_url:
+                    body, headers = body if isinstance(body, tuple) else (body, {})
+                    if isinstance(body, Exception):
+                        raise body
+                    data = body.encode() if isinstance(body, str) else body
+                    return contextlib.closing(SimpleNamespace(read=lambda limit, data=data: data[:limit],
+                                                              headers=headers, close=lambda: None))
+            raise urllib.error.URLError(f'no route for {request.full_url}')
+        return urlopen
+
+    def test_the_legal_domain_reads_each_hosts_document_and_judges_version_and_digest(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)
             gdpr = 'https://eur-lex.europa.eu/eli/reg/2016/679/oj'
             eu = {'jurisdiction': 'EU', 'primary': gdpr}
             verified = {'ref': 'docs/research.md#n83', 'read': '2026-10-27', 'verified': True}
-            text = 'Regulation (EU) 2016/679'
-            read = dict(self.READ, sha256=hashlib.sha256(text.encode()).hexdigest())
+            read = dict(self.READ, version='02016R0679-20160504',
+                        sha256=hashlib.sha256(self.CELLAR_XHTML.encode()).hexdigest())
             legal = self.legal_register([
                 self.legal_entry(),
                 self.legal_entry(id='eu.gdpr.principles', instrument=self.instrument(**eu, consolidated=read),
                                  source=verified),
                 self.legal_entry(id='eu.gdpr.rights', instrument=self.instrument(**eu, consolidated=dict(
-                    read, sha256='cd' * 32)), source=verified)])
+                    read, sha256='cd' * 32)), source=verified),
+                self.legal_entry(id='eu.gdpr.breach', instrument=self.instrument(**eu, consolidated=dict(
+                    read, version='32016R0679')), source=verified)])
             self.write_tree(root, self.register(self.entries()), legal)
             argv = ('--register', 'cmake/legal-register.json')
             code, output = self.tool(root, *argv, 'plan', '--out', str(root / 'sources.json'))
             self.assertEqual(0, code, output)
-            self.assertIn('2 sources to download once the user approves them, 1 items read by hand', output)
+            self.assertIn('3 sources to download once the user approves them, 1 items read by hand', output)
             plan = json.loads((root / 'sources.json').read_text(encoding='utf-8'))
             sources = {source['id']: source for source in plan['sources']}
-            self.assertEqual(['eu.gdpr.principles', 'eu.gdpr.rights'],
-                             sources['eur-lex.europa.eu-eli-reg-2016-679-oj']['entries'])
-            kvkk = 'mevzuat.gov.tr-mevzuat-mevzuatno-6698-mevzuattur-1-mevzuattertip-5'
-            self.assertEqual(self.KVKK, sources[kvkk]['url'])
-            self.assertEqual('primary', sources[kvkk]['kind'])
+            self.assertEqual(['eu.gdpr.principles', 'eu.gdpr.rights', 'eu.gdpr.breach'],
+                             sources['celex-32016r0679']['entries'])
+            self.assertEqual('celex-32016r0679-versions', sources['celex-32016r0679']['index'])
+            self.assertEqual('index', sources['celex-32016r0679-versions']['kind'])
+            self.assertEqual('primary', sources['mevzuat-1-5-6698']['kind'])
             self.assertIn('https://www.resmigazete.gov.tr/', {item['url'] for item in plan['manual']})
-            bodies = {'/mevzuat?MevzuatNo=6698': 'Kanun 6698', '/eli/reg/2016/679/oj': text}
-
-            def urlopen(request, timeout):
-                body = next(body for path, body in bodies.items() if path in request.full_url)
-                return contextlib.closing(SimpleNamespace(read=lambda limit: body.encode()[:limit],
-                                                          close=lambda: None))
-            manifest = register_review.fetch_sources(plan, root / 'fetched', opener=urlopen,
+            requests = []
+            routes = {'MevzuatNo=6698': self.MEVZUAT_HTML,
+                      'webapi/rdf/sparql': self.sparql('02016R0679-20160504', '02016R0679-20991231'),
+                      '/resource/celex/02016R0679-20160504': self.CELLAR_XHTML}
+            manifest = register_review.fetch_sources(plan, root / 'fetched', opener=self.routed(routes, requests),
                                                      today=datetime.date(2026, 12, 16))
-            self.assertEqual({kvkk, 'eur-lex.europa.eu-eli-reg-2016-679-oj'},
-                             {item['file'] for item in manifest['items']})
+            self.assertEqual('index', next(source['kind'] for source in plan['sources']
+                                          if source['id'] == manifest['items'][0]['id']))
+            items = {item['id']: item for item in manifest['items']}
+            self.assertEqual('02016R0679-20160504', items['celex-32016r0679']['version'])
+            self.assertEqual('https://publications.europa.eu/resource/celex/02016R0679-20160504',
+                             items['celex-32016r0679']['url'])
+            cellar = next(request for request in requests if '/resource/celex/' in request.full_url)
+            self.assertEqual('application/xhtml+xml', cellar.get_header('Accept'))
+            self.assertEqual('eng', cellar.get_header('Accept-language'))
             report = root / 'docs' / 'legal-review.md'
             code, output = self.tool(root, *argv, 'compare', '--fetched', str(root / 'fetched'), '--report',
                                      str(report), '--apply')
             self.assertEqual(0, code, output)
-            self.assertIn('0 register changes, 2 instruments to read', output)
+            self.assertIn('0 register changes, 3 instruments to read', output)
             text = report.read_text(encoding='utf-8')
             self.assertIn('legal register', text)
             self.assertIn('- tr.kvkk.processing (NET.2): Law No. 6698, Articles 4-7: never read from its primary '
-                          'source', text)
+                          'source; read https://www.mevzuat.gov.tr/anasayfa/MevzuatFihristDetayIframe?MevzuatTur=1&'
+                          'MevzuatNo=6698&MevzuatTertip=5 (version 2024-03-02 (7499), SHA-256 ', text)
             self.assertIn('- eu.gdpr.rights (NET.2): Law No. 6698, Articles 4-7: the primary text changed since it '
                           'was read on 2026-10-30', text)
+            self.assertIn('- eu.gdpr.breach (NET.2): Law No. 6698, Articles 4-7: amended to 02016R0679-20160504 since '
+                          'it was read on 2026-10-30 (32016R0679)', text)
             self.assertNotIn('eu.gdpr.principles', text)
             register = json.loads((root / 'cmake' / 'legal-register.json').read_text(encoding='utf-8'))
             self.assertEqual('docs/legal-review.md', register['review']['runs'][-1]['ref'])
@@ -6767,6 +6819,336 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
                                      '--trigger', 'eu.nothing', today='2026-12-17')
             self.assertEqual(2, code)
             self.assertIn("unknown triggering entries ['eu.nothing']", output)
+
+    def test_read_records_what_a_person_read_and_refuses_anything_it_cannot_prove(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            apple = self.instrument(jurisdiction='PLATFORM', primary='https://developer.apple.com/news/')
+            legal = self.legal_register([
+                self.legal_entry(),
+                self.legal_entry(id='tr.kvkk.rights', instrument=self.instrument(article='Article 11')),
+                self.legal_entry(id='platform.apple', instrument=apple)])
+            self.write_tree(root, self.register(self.entries()), legal)
+            (root / 'docs' / 'reading.md').write_text('<a id="kvkk"></a>Read 6698.\n', encoding='utf-8')
+            argv = ('--register', 'cmake/legal-register.json')
+            self.assertEqual(0, self.tool(root, *argv, 'plan', '--out', str(root / 'sources.json'))[0])
+            plan = json.loads((root / 'sources.json').read_text(encoding='utf-8'))
+            routes = {'MevzuatNo=6698': self.MEVZUAT_HTML, 'developer.apple.com': '<html>news</html>'}
+            register_review.fetch_sources(plan, root / 'fetched', opener=self.routed(routes),
+                                          today=datetime.date(2026, 12, 16))
+            fetched = ('--fetched', str(root / 'fetched'))
+            path = root / 'cmake' / 'legal-register.json'
+            before = path.read_bytes()
+            code, output = self.tool(root, *argv, 'read', *fetched, '--ref', 'docs/reading.md#kvkk',
+                                     '--entry', 'tr.kvkk.processing')
+            self.assertEqual(2, code)
+            self.assertIn("the fetch of 2026-12-16 is not the register's snapshot (2026-10-31); compare --apply it "
+                          'first', output)
+            report = root / 'docs' / 'legal-review.md'
+            self.assertEqual(0, self.tool(root, *argv, 'compare', *fetched, '--report', str(report), '--apply')[0])
+            before = path.read_bytes()
+            for entries, ref, message in (
+                    (['tr.kvkk.processing', 'platform.apple'], 'docs/reading.md',
+                     'platform.apple: https://developer.apple.com/news/ has no reader of its host'),
+                    (['tr.kvkk.processing', 'eu.nothing'], 'docs/reading.md', 'eu.nothing: not an instrument'),
+                    (['quic.transport'], 'docs/reading.md', 'quic.transport: not an instrument'),
+                    (['tr.kvkk.processing'], 'docs/unwritten.md', 'docs/unwritten.md does not exist')):
+                code, output = self.tool(root, *argv, 'read', *fetched, '--ref', ref,
+                                         *[part for entry in entries for part in ('--entry', entry)])
+                self.assertEqual(2, code, entries)
+                self.assertIn(message, output)
+                self.assertEqual(before, path.read_bytes(), 'a refused read writes nothing')
+            code, output = self.tool(root, *argv, 'read', *fetched, '--ref', 'docs/reading.md#kvkk', '--entry',
+                                     'tr.kvkk.processing', '--entry', 'tr.kvkk.rights', '--entry', 'tr.kvkk.rights')
+            self.assertEqual(0, code, output)
+            self.assertIn('tr.kvkk.processing: read Law No. 6698 at 2024-03-02 (7499) on 2026-12-16', output)
+            register = json.loads(path.read_text(encoding='utf-8'))
+            entries = {entry['id']: entry for entry in register['entries']}
+            digest = hashlib.sha256(self.MEVZUAT_HTML.encode()).hexdigest()
+            for entry_id in ('tr.kvkk.processing', 'tr.kvkk.rights'):
+                self.assertEqual({'version': '2024-03-02 (7499)', 'read': '2026-12-16', 'sha256': digest},
+                                 entries[entry_id]['instrument']['consolidated'])
+                self.assertEqual({'ref': 'docs/reading.md#kvkk', 'read': '2026-12-16', 'verified': True},
+                                 entries[entry_id]['source'])
+            self.assertIsNone(entries['platform.apple']['instrument']['consolidated'])
+            checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
+            self.assertEqual([], checked['legal'])
+            code, output = self.tool(root, *argv, 'compare', *fetched, '--report', str(report))
+            self.assertEqual(0, code, output)
+            self.assertIn('0 register changes, 1 instruments to read', output)
+            (root / 'fetched' / 'mevzuat-1-5-6698').write_text('tampered', encoding='utf-8')
+            code, output = self.tool(root, *argv, 'read', *fetched, '--ref', 'docs/reading.md',
+                                     '--entry', 'tr.kvkk.rights')
+            self.assertEqual(2, code)
+            self.assertIn('does not match the SHA-256 the manifest recorded', output)
+            plan['register'] = 'cmake/standards-register.json'
+            register_review.fetch_sources(plan, root / 'standards', opener=self.routed(routes),
+                                          today=datetime.date(2026, 12, 16))
+            code, output = self.tool(root, 'read', '--fetched', str(root / 'standards'), '--ref', 'docs/reading.md',
+                                     '--entry', 'quic.transport')
+            self.assertEqual(2, code)
+            self.assertIn('read records the instruments of the legal register', output)
+
+    def test_read_refuses_an_entry_whose_document_was_not_read_or_is_unreadable(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            gdpr = self.instrument(jurisdiction='EU', primary='https://eur-lex.europa.eu/eli/reg/2016/679/oj')
+            self.write_tree(root, self.register(self.entries()), self.legal_register([
+                self.legal_entry(), self.legal_entry(id='eu.gdpr.rights', instrument=gdpr)]))
+            argv = ('--register', 'cmake/legal-register.json')
+            self.assertEqual(0, self.tool(root, *argv, 'plan', '--out', str(root / 'sources.json'))[0])
+            plan = json.loads((root / 'sources.json').read_text(encoding='utf-8'))
+            routes = {'MevzuatNo=6698': self.MEVZUAT_HTML.replace('6698', '6699'),
+                      'webapi/rdf/sparql': urllib.error.URLError('down\r\n  for now')}
+            register_review.fetch_sources(plan, root / 'fetched', opener=self.routed(routes),
+                                          today=datetime.date(2026, 12, 16))
+            fetched = ('--fetched', str(root / 'fetched'))
+            code, output = self.tool(root, *argv, 'compare', *fetched, '--report', str(root / 'docs' / 'r.md'),
+                                     '--apply')
+            self.assertEqual(0, code, output)
+            text = (root / 'docs' / 'r.md').read_text(encoding='utf-8')
+            self.assertIn('- mevzuat-1-5-6698: not the consolidated text of No. 6698', text)
+            self.assertIn('- celex-32016r0679 (https://publications.europa.eu/resource/celex/{version}): its version '
+                          'index celex-32016r0679-versions was not read', text)
+            self.assertIn('- celex-32016r0679-versions (https://publications.europa.eu/webapi/', text)
+            self.assertIn('): URLError: <urlopen error down for now>\n', text)
+            code, output = self.tool(root, *argv, 'read', *fetched, '--ref', 'docs/research.md', '--entry',
+                                     'tr.kvkk.processing', '--entry', 'eu.gdpr.rights')
+            self.assertEqual(2, code)
+            self.assertIn('tr.kvkk.processing: mevzuat-1-5-6698: not the consolidated text of No. 6698', output)
+            self.assertIn('eu.gdpr.rights: celex-32016r0679 was not read (its version index '
+                          'celex-32016r0679-versions was not read)', output)
+
+    def test_each_host_resolves_to_the_document_its_reader_reads(self):
+        resolve = register_review.resolve_primary
+        self.assertEqual([{'id': 'mevzuat-1-3-5846', 'kind': 'primary', 'reader': 'mevzuat', 'act': '5846',
+                           'url': 'https://www.mevzuat.gov.tr/anasayfa/MevzuatFihristDetayIframe?MevzuatTur=1&'
+                                  'MevzuatNo=5846&MevzuatTertip=3'}],
+                         resolve('https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5846&MevzuatTur=1&MevzuatTertip=3'))
+        index, document = resolve('https://eur-lex.europa.eu/eli/dir/2002/58/oj')
+        self.assertEqual(('celex-32002l0058-versions', 'index', 'cellar-versions', '32002L0058'),
+                         (index['id'], index['kind'], index['reader'], index['act']))
+        query = urllib.parse.unquote(index['url'].partition('&query=')[2])
+        self.assertIn('?act cdm:resource_legal_id_celex "32002L0058"^^<http://www.w3.org/2001/XMLSchema#string> . '
+                      '?work cdm:act_consolidated_based_on_resource_legal ?act', query)
+        self.assertIn('<http://publications.europa.eu/resource/authority/language/ENG>', query)
+        self.assertIn('FILTER(STR(?type) = "xhtml")', query)
+        self.assertEqual({'id': 'celex-32002l0058', 'kind': 'primary', 'reader': 'cellar', 'act': '32002L0058',
+                          'index': 'celex-32002l0058-versions', 'url': register_review.CELLAR,
+                          'headers': {'Accept': 'application/xhtml+xml', 'Accept-Language': 'eng'}}, document)
+        self.assertEqual('32024R2847', resolve('https://eur-lex.europa.eu/eli/reg/2024/2847/oj')[0]['act'])
+        self.assertEqual('32022D0001', resolve('https://eur-lex.europa.eu/eli/dec/2022/1/oj')[0]['act'])
+        self.assertEqual([{'id': 'legislation.gov.uk-ukpga-2018-12', 'kind': 'primary',
+                           'reader': 'legislation-gov-uk', 'act': 'ukpga/2018/12',
+                           'url': 'https://www.legislation.gov.uk/ukpga/2018/12/data.xml'}],
+                         resolve('https://www.legislation.gov.uk/ukpga/2018/12'))
+        index, document = resolve('https://www.ecfr.gov/current/title-15/subtitle-B/chapter-VII/subchapter-C')
+        self.assertEqual({'id': 'ecfr-title-15-subtitle-b-chapter-vii-subchapter-c-versions', 'kind': 'index',
+                          'reader': 'ecfr-versions', 'act': 'title=15&subtitle=B&chapter=VII&subchapter=C',
+                          'url': 'https://www.ecfr.gov/api/versioner/v1/versions/title-15.json?subtitle=B&'
+                                 'chapter=VII&subchapter=C'}, index)
+        self.assertEqual('https://www.ecfr.gov/api/versioner/v1/full/{version}/title-15.xml?subtitle=B&chapter=VII&'
+                         'subchapter=C', document['url'])
+        self.assertEqual(index['id'], document['index'])
+        index, document = resolve('https://www.wassenaar.org/control-lists/')
+        self.assertEqual(('wassenaar-control-lists', 'https://www.wassenaar.org/control-lists/'),
+                         (index['id'], index['url']))
+        self.assertEqual(('pdf', 'https://www.wassenaar.org/wp-content/uploads/{version}'),
+                         (document['reader'], document['url']))
+        for url in ('https://developer.apple.com/news/', 'https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698',
+                    'https://eur-lex.europa.eu/eli/reg/2016/679/oj/eng', 'https://www.ecfr.gov/current/title-15',
+                    'https://www.legislation.gov.uk/ukpga/2018/12/contents',
+                    'http://www.legislation.gov.uk/ukpga/2018/12'):
+            self.assertEqual([{'id': register_review.source_id(url), 'kind': 'primary', 'url': url}], resolve(url),
+                             url)
+
+    def test_fetch_reads_the_index_first_decodes_gzip_and_bounds_every_body(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            sources = [dict(source, entries=['e'], registries=[])
+                       for url in ('https://eur-lex.europa.eu/eli/reg/2016/679/oj',
+                                   'https://www.ecfr.gov/current/title-16/chapter-I/subchapter-C/part-312',
+                                   'https://www.wassenaar.org/control-lists/')
+                       for source in register_review.resolve_primary(url)]
+            plan = {'schema': register_review.PLAN_SCHEMA, 'register': 'cmake/legal-register.json',
+                    'sources': sources, 'manual': []}
+            xhtml = gzip.compress(self.CELLAR_XHTML.encode())
+            ecfr = json.dumps({'meta': {'title': '16', 'chapter': 'I', 'subchapter': 'C', 'part': '312',
+                                        'latest_amendment_date': '2025-06-23'}})
+            routes = {'webapi/rdf/sparql': (gzip.compress(self.sparql().encode()), {'Content-Encoding': 'gzip'}),
+                      '/resource/celex/32016R0679': (xhtml, {'Content-Encoding': 'GZIP '}),
+                      'versions/title-16.json': ecfr,
+                      'full/2025-06-23/title-16.xml': ('<DIV5 N="312"/>', {'Content-Encoding': 'br'}),
+                      'control-lists': 'https://www.wassenaar.org/wp-content/uploads/2026/07/'
+                                       'List-of-Dual-Use-Goods-and-Technologies-and-ML-2025-Corr.pdf',
+                      '-Corr.pdf': (gzip.compress(b'%PDF-1.7')[:-6], {'Content-Encoding': 'gzip'})}
+            manifest = register_review.fetch_sources(plan, root / 'fetched', opener=self.routed(routes),
+                                                     today=datetime.date(2026, 12, 16))
+            items = {item['id']: item for item in manifest['items']}
+            self.assertEqual(['index'] * 3, [source['kind'] for source in sources
+                                             for item in manifest['items'][:3] if item['id'] == source['id']])
+            self.assertEqual('32016R0679', items['celex-32016r0679']['version'])
+            self.assertEqual(hashlib.sha256(self.CELLAR_XHTML.encode()).hexdigest(),
+                             items['celex-32016r0679']['sha256'])
+            self.assertEqual(self.CELLAR_XHTML.encode(), (root / 'fetched' / 'celex-32016r0679').read_bytes())
+            self.assertEqual("the unrequested content encoding 'br'",
+                             items['ecfr-title-16-chapter-i-subchapter-c-part-312']['error'])
+            self.assertEqual('a truncated gzip body', items['wassenaar-dual-use-list']['error'])
+            self.assertEqual('2026/07/List-of-Dual-Use-Goods-and-Technologies-and-ML-2025-Corr.pdf',
+                             items['wassenaar-dual-use-list']['version'])
+            routes.update({'webapi/rdf/sparql': ('not gzip', {'Content-Encoding': 'gzip'}),
+                           'versions/title-16.json': ecfr.replace('2025-06-23', '../2025'),
+                           'control-lists': '<html>no list</html>'})
+            manifest = register_review.fetch_sources(plan, root / 'unreadable', opener=self.routed(routes),
+                                                     today=datetime.date(2026, 12, 16))
+            items = {item['id']: item for item in manifest['items']}
+            self.assertIn('a broken gzip body', items['celex-32016r0679-versions']['error'])
+            self.assertEqual("the latest amendment day '../2025' is not YYYY-MM-DD",
+                             items['ecfr-title-16-chapter-i-subchapter-c-part-312-versions']['error'])
+            self.assertEqual('0 links to the List-of-Dual-Use-Goods-and-Technologies PDF, not one',
+                             items['wassenaar-control-lists']['error'])
+            for document, index in (('celex-32016r0679', 'celex-32016r0679-versions'),
+                                    ('wassenaar-dual-use-list', 'wassenaar-control-lists')):
+                self.assertEqual(f'its version index {index} was not read', items[document]['error'])
+                self.assertNotIn('file', items[document])
+            routes['webapi/rdf/sparql'] = (gzip.compress(b'x' * 65), {'Content-Encoding': 'gzip'})
+            with patch.object(register_review, 'FETCH_LIMIT', 64):
+                manifest = register_review.fetch_sources(plan, root / 'bomb', opener=self.routed(routes),
+                                                         today=datetime.date(2026, 12, 16))
+            self.assertEqual('larger than 64 bytes', manifest['items'][0]['error'])
+            with patch.object(register_review, 'INDEX_READERS', dict(register_review.INDEX_READERS,
+                                                                     **{'wassenaar-lists': lambda *_: 'a/../b'})):
+                manifest = register_review.fetch_sources(plan, root / 'escape', opener=self.routed(routes),
+                                                         today=datetime.date(2026, 12, 16))
+            items = {item['id']: item for item in manifest['items']}
+            self.assertEqual("the version 'a/../b' cannot be part of a URL", items['wassenaar-control-lists']['error'])
+
+    def test_redirects_stay_on_the_host_and_are_upgraded_to_https(self):
+        handler = register_review.SecureRedirects()
+        request = urllib.request.Request('https://publications.europa.eu/resource/celex/32016R0679',
+                                         headers={'Accept': 'application/xhtml+xml', 'User-Agent': 'u'})
+        upgraded = handler.redirect_request(request, None, 303, 'See Other', {},
+                                            'http://publications.europa.eu/resource/cellar/abc/DOC_1')
+        self.assertEqual('https://publications.europa.eu/resource/cellar/abc/DOC_1', upgraded.full_url)
+        self.assertEqual('application/xhtml+xml', upgraded.get_header('Accept'))
+        self.assertEqual('https://publications.europa.eu/resource/x',
+                         handler.redirect_request(request, None, 302, 'Found', {}, '/resource/x').full_url)
+        for target in ('https://main.un.org/securitycouncil/', 'http://evil.example/resource', 'ftp://publications.'
+                       'europa.eu/x', 'https://publications.europa.eu.evil.example/x'):
+            response = io.BytesIO(b'moved')
+            with self.assertRaises(urllib.error.URLError) as refused:
+                handler.redirect_request(request, response, 301, 'Moved', {}, target)
+            self.assertIn(f'refused a redirect to {target}', str(refused.exception))
+            self.assertTrue(response.closed)
+
+    def test_readers_find_each_hosts_version_and_refuse_other_shapes(self):
+        unreadable = register_review.Unreadable
+        mevzuat = {'act': '6698'}
+
+        def law(*notes, number='6698', enacted='Kabul Tarihi : 24/3/2016'):
+            return (f'<p>Kanun Numarası : {number}</p><p>{enacted}</p>' + ''.join(f'<p>{note}</p>' for note in notes)
+                    ).encode()
+        read = register_review.read_mevzuat
+        self.assertEqual('2016-03-24 (as enacted)', read(law(), mevzuat, None))
+        self.assertEqual('2024-03-02 (7499)', read(law('(Değişik:2/3/2024-7499/34 md.)',
+                                                       '(Ek: 28/11/2017 - 7061/120 md.)'), mevzuat, None))
+        for note, version in (('(Ek cümle: 1/2/2025 – 7530/3 md.)', '2025-02-01 (7530)'),
+                              ('(Başlığı ile Birlikte Değişik:5/5/2025-7540/1 md.)', '2025-05-05 (7540)'),
+                              ('(Mülga: 2/7/2018-KHK-703/163 md.; Aynen kabul: 5/7/2025-7541/2 md.)',
+                               '2025-07-05 (7541)'),
+                              ('(Değişik: 1/1/2025-KHK/690-12 md.)', '2025-01-01 (KHK-690)'),
+                              ('(Yeniden düzenleme: 9/9/2025-7550/4 md.)', '2025-09-09 (7550)'),
+                              ('(9/10/2025-7551/1 md.)', '2025-10-09 (7551)'),
+                              ('(İptal birinci cümle: Anayasa Mahkemesinin 11/12/2025 tarihli ve E.: 2024/1, K.: '
+                               '2025/2 sayılı Kararı ile.)', '2025-12-11 (Anayasa Mahkemesi)'),
+                              ('(Ek fıkra: 3/3/2025)', '2025-03-03')):
+            self.assertEqual(version, read(law('(Değişik:2/3/2024-7499/34 md.)', note), mevzuat, None), note)
+        self.assertEqual('2024-03-02 (7499)', read(law('(Değişik:2/3/2024-7499/34 md.)', '(1/1/2030 tarihinde)',
+                                                       '(Ekim 2030)'), mevzuat, None))
+        for body, message in ((law(number='66980'), 'not the consolidated text of No. 6698'),
+                              (law('(Değişik:31/2/2024-7499/34 md.)'), 'the day 31/2/2024 does not exist'),
+                              (law(enacted=''), 'neither an amendment note nor the day of enactment'),
+                              (b'\xff', 'not UTF-8')):
+            with self.assertRaises(unreadable) as refused:
+                read(body, mevzuat, None)
+            self.assertIn(message, str(refused.exception))
+        uk = {'act': 'ukpga/2018/12'}
+        self.assertEqual('2026-09-30', register_review.read_legislation_gov_uk(self.LEGISLATION_XML.encode(), uk, None))
+        for body, message in ((self.LEGISLATION_XML.replace('2018/12<', '2018/120<'), 'not the data of ukpga/2018/12'),
+                              (self.LEGISLATION_XML.replace('2026-09-30', '2026-9-30'), 'no point-in-time day'),
+                              (self.LEGISLATION_XML.replace('dct:valid', 'dct:modified'), 'no point-in-time day'),
+                              ('<Legislation', 'not Crown Legislation Markup')):
+            with self.assertRaises(unreadable) as refused:
+                register_review.read_legislation_gov_uk(body.encode(), uk, None)
+            self.assertIn(message, str(refused.exception))
+        celex = {'act': '32021R0821'}
+        versions = register_review.read_cellar_versions
+        today = datetime.date(2026, 9, 21)
+        self.assertEqual('02021R0821-20260921', versions(self.sparql(
+            '02021R0821-20251115', '02021R0821-20260921', '02021R0821-20261231').encode(), celex, today))
+        self.assertEqual('32021R0821', versions(self.sparql('02021R0821-20261231').encode(), celex, today))
+        for body, message in ((self.sparql('02021R08210-20251115'), "'02021R08210-20251115' is not a consolidated "
+                                                                     'version of 32021R0821'),
+                              (self.sparql('02021R0821-20250231'), 'the day 31/02/2025 does not exist'),
+                              ('{"results": {}}', 'not a SPARQL result of CELEX numbers')):
+            with self.assertRaises(unreadable) as refused:
+                versions(body.encode(), celex, today)
+            self.assertIn(message, str(refused.exception))
+        cellar = register_review.read_cellar
+        self.assertEqual('v', cellar(self.CELLAR_XHTML.encode(), {'act': '32016R0679'}, 'v'))
+        self.assertEqual('v', cellar(b'<html><p>Directive 2002/58/EC</p></html>', {'act': '32002L0058'}, 'v'))
+        self.assertEqual('v', cellar(b'<html><p>Regulation (EC) No 1907/2006</p></html>', {'act': '32006R1907'}, 'v'))
+        for body in (self.CELLAR_XHTML.replace('2016/679', '2016/678'), '<p>Regulation (EU) 2016/679</p>'):
+            with self.assertRaises(unreadable):
+                cellar(body.encode(), {'act': '32016R0679'}, 'v')
+        ecfr = {'act': 'title=15&subtitle=B&chapter=VII&subchapter=C'}
+        meta = {'title': '15', 'subtitle': 'B', 'chapter': 'VII', 'subchapter': 'C',
+                'latest_amendment_date': '2026-10-26'}
+        self.assertEqual('2026-10-26', register_review.read_ecfr_versions(json.dumps({'meta': meta}).encode(), ecfr,
+                                                                          today))
+        for changed, message in (({'subtitle': 'A'}, 'the versions of another hierarchy'),
+                                 ({'latest_amendment_date': None}, 'is not YYYY-MM-DD')):
+            with self.assertRaises(unreadable) as refused:
+                register_review.read_ecfr_versions(json.dumps({'meta': dict(meta, **changed)}).encode(), ecfr, today)
+            self.assertIn(message, str(refused.exception))
+        with self.assertRaises(unreadable):
+            register_review.read_ecfr_versions(b'{"content_versions": []}', ecfr, today)
+        title = ('<ECFR><DIV1 N="15" TYPE="TITLE"><DIV2 N="A" TYPE="SUBTITLE"><DIV3 N="VII" TYPE="CHAPTER">'
+                 '<DIV4 N="C" TYPE="SUBCHAP"><P>subtitle A</P></DIV4></DIV3></DIV2><DIV2 N="B" TYPE="SUBTITLE">'
+                 '<DIV3 N="I" TYPE="CHAPTER"><P>chapter I</P></DIV3><DIV3 N="VII" TYPE="CHAPTER">'
+                 '<DIV4 N="C" TYPE="SUBCHAP"><DIV5 N="740" TYPE="PART"><P>ENC</P></DIV5></DIV4></DIV3></DIV2>'
+                 '</DIV1></ECFR>')
+        record = register_review.ecfr_record(title.encode(), ecfr)
+        self.assertEqual(b'<DIV4 N="C" TYPE="SUBCHAP"><DIV5 N="740" TYPE="PART"><P>ENC</P></DIV5></DIV4>', record)
+        self.assertEqual(record, register_review.ecfr_record(title.replace('chapter I', 'amended').encode(), ecfr))
+        self.assertEqual('v', register_review.read_ecfr(title.encode(), ecfr, 'v'))
+        part = {'act': 'title=15&subtitle=B&chapter=VII&subchapter=C&part=740'}
+        self.assertEqual(b'<DIV5 N="740" TYPE="PART"><P>ENC</P></DIV5>',
+                         register_review.ecfr_record(b'<DIV5 N="740" TYPE="PART"><P>ENC</P></DIV5>', part))
+        self.assertEqual(b'<DIV5 N="740" TYPE="PART"><P>ENC</P></DIV5>', register_review.ecfr_record(title.encode(),
+                                                                                                    part))
+        for body, act, message in ((title.replace('N="740"', 'N="742"'), part, 'no part 740'),
+                                   (title.replace('N="B"', 'N="Z"'), ecfr, 'no subtitle B'),
+                                   ('<DIV5 N="742" TYPE="PART"/>', part, 'no part 740'),
+                                   ('<DIV5', part, 'not eCFR XML')):
+            with self.assertRaises(unreadable) as refused:
+                register_review.read_ecfr(body.encode(), act, 'v')
+            self.assertIn(message, str(refused.exception))
+        with tempfile.TemporaryDirectory() as scratch:
+            (Path(scratch) / 'title.xml').write_bytes(title.encode())
+            manifest = {'items': [{'id': 'ecfr', 'file': 'title.xml', 'version': '2026-10-26',
+                                   'sha256': hashlib.sha256(title.encode()).hexdigest()}]}
+            reading = register_review.Review({}, manifest, scratch).reading(dict(ecfr, id='ecfr', reader='ecfr'))
+            self.assertEqual(('2026-10-26', hashlib.sha256(record).hexdigest()), reading)
+        lists = {'act': register_review.WASSENAAR_LIST}
+        link = 'https://www.wassenaar.org/wp-content/uploads/2026/07/List-of-Dual-Use-Goods-and-Technologies-2025.pdf'
+        self.assertEqual('2026/07/List-of-Dual-Use-Goods-and-Technologies-2025.pdf',
+                         register_review.read_wassenaar_lists(f'<a href="{link}">{link}</a>'.encode(), lists, today))
+        with self.assertRaises(unreadable):
+            register_review.read_wassenaar_lists(f'{link} {link.replace("2025", "2024")}'.encode(), lists, today)
+        self.assertEqual('v', register_review.read_pdf(b'%PDF-1.7', {}, 'v'))
+        with self.assertRaises(unreadable):
+            register_review.read_pdf(b'<html>', {}, 'v')
 
     def test_due_prints_the_computed_review_and_unverified_events(self):
         with tempfile.TemporaryDirectory() as scratch:

@@ -3,8 +3,8 @@
   "domain": "legal",
   "about": "COMPLY.0 legal register: every legal and platform obligation that applies to Cerid or to products built with it, one entry per instrument and article, with its jurisdiction, official primary source and the consolidated version read, the obligation in plain words, the products, data flows and channels it applies to, the check that proves it, its effective and sunset dates, a counsel-review flag, the owning rows and the next review. scripts/check-registers.py (the crd-check-registers CTest and repository step) fails a binding obligation without an active check, a lapsed review, an entry read from no primary source when its rows close and a topic without a Turkish entry. docs/design/registers.md is the contract; it shares the standards register's format, guard and review machinery.",
   "snapshot": {
-    "date": "2026-10-31",
-    "method": "Assembled on 2026-10-31 from the obligations the COMPLY rows name (user decision 2026-10-27) and the publishing and networking research read on 2026-10-27 (sources S02-S54, N21, N120); those sources are law-firm, regulator-news and secondary summaries, so every entry carries verified false and a null consolidated version, and the primary URLs are taken from knowledge. Reading each instrument from its primary source is a download the user approves first; scripts/register-review.py plans it."
+    "date": "2026-11-01",
+    "method": "Refreshed on 2026-11-01 by scripts/register-review.py from the approved source plan (86 records; report docs/sessions/2026-11-01-legal-register-first-read.md)."
   },
   "review": {
     "cadence": "A light scan quarterly, after each yearly platform event (the April SDK rule, Google I/O, WWDC, the August target API rule) and after each dated effective day the register holds, and a full re-research every year or when a scan finds a pinned instrument amended; Official Gazette of Turkey, EUR-Lex and Steamworks announcements are recorded as runs with their triggering entries. Reviews propose ROADMAP amendments for the user and never edit rows.",
@@ -16,7 +16,7 @@
         "event": "Law No. 5651 game-platform duties take effect",
         "day": "2026-11-01",
         "scan": "light",
-        "verified": false
+        "verified": true
       },
       {
         "event": "AI Act Article 50 marking for systems already on the market",
@@ -97,6 +97,21 @@
         "scan": "full",
         "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#area-7-compliance-legal",
         "triggers": []
+      },
+      {
+        "day": "2026-11-01",
+        "scan": "light",
+        "ref": "docs/sessions/2026-11-01-legal-register-first-read.md",
+        "triggers": []
+      },
+      {
+        "day": "2026-11-01",
+        "scan": "light",
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#gazette-reading",
+        "triggers": [
+          "tr.5651.game-platforms",
+          "tr.5651.under-15"
+        ]
       }
     ]
   },
@@ -482,7 +497,11 @@
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2024-03-02 (7499)",
+          "read": "2026-11-01",
+          "sha256": "83115349f89e9f99529fcbf7390f30ffbd6161d34ffbddfb4168935ad5c23ba6"
+        }
       },
       "obligation": "Process personal data only lawfully, for specified purposes, minimised and kept no longer than needed, on a condition of Article 5 (explicit consent or a listed ground) and the stricter Article 6 rules for special categories; delete, destroy or anonymise it when the purpose ends.",
       "applies_to": [
@@ -507,9 +526,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.2",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -535,7 +554,11 @@
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2024-03-02 (7499)",
+          "read": "2026-11-01",
+          "sha256": "83115349f89e9f99529fcbf7390f30ffbd6161d34ffbddfb4168935ad5c23ba6"
+        }
       },
       "obligation": "Inform the data subject (aydınlatma) when data is collected, in a notice separate from any request for explicit consent; consent is specific, informed and freely given and is never bundled with the notice or a service condition.",
       "applies_to": [
@@ -560,9 +583,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.2",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -587,9 +610,13 @@
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2024-03-02 (7499)",
+          "read": "2026-11-01",
+          "sha256": "83115349f89e9f99529fcbf7390f30ffbd6161d34ffbddfb4168935ad5c23ba6"
+        }
       },
-      "obligation": "Answer access, correction, deletion and objection requests free of charge within 30 days; deletion reaches every store and backup window.",
+      "obligation": "Answer access, correction, deletion and objection requests within 30 days at the latest, free of charge (a fee on the Board's tariff only where answering has its own cost), accepting or refusing each with reasons in writing or electronically; deletion reaches every store and backup window.",
       "applies_to": [
         "flow.crash-reports",
         "flow.telemetry",
@@ -612,9 +639,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.2",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -638,7 +665,11 @@
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2024-03-02 (7499)",
+          "read": "2026-11-01",
+          "sha256": "83115349f89e9f99529fcbf7390f30ffbd6161d34ffbddfb4168935ad5c23ba6"
+        }
       },
       "obligation": "Take the technical and administrative measures that keep personal data secure; notify the data subject and the Board of a breach as soon as possible (the Board set 72 hours).",
       "applies_to": [
@@ -663,9 +694,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.2",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -740,7 +771,11 @@
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2024-03-02 (7499)",
+          "read": "2026-11-01",
+          "sha256": "83115349f89e9f99529fcbf7390f30ffbd6161d34ffbddfb4168935ad5c23ba6"
+        }
       },
       "obligation": "Register the publisher in the Data Controllers Registry (VERBIS) when the Board's thresholds or the foreign controller rule require it, before processing starts.",
       "applies_to": [
@@ -765,9 +800,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.2",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -887,13 +922,17 @@
       ],
       "instrument": {
         "name": "Cybersecurity Law No. 7545",
-        "article": "Reporting duties and secondary rules",
+        "article": "Articles 7 and 8",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=7545&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2026-07-24 (7590)",
+          "read": "2026-11-01",
+          "sha256": "92dee5771d029de353346e6ff2e3787c8f236373d7f7759576e428bed4c12e0f"
+        }
       },
-      "obligation": "Report vulnerabilities and cyber incidents to the Cybersecurity Presidency without delay, keep the records the secondary rules require and cooperate with audits.",
+      "obligation": "Report the vulnerabilities and cyber incidents found in the services a product offers to the Cybersecurity Presidency without delay, hand over the data and documents it requests in time, take the measures the legislation sets and keep systems, software and records open to its audits.",
       "applies_to": [
         "channel.distribution",
         "flow.crash-reports",
@@ -911,9 +950,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s38",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -932,13 +971,17 @@
       ],
       "instrument": {
         "name": "Cybersecurity Law No. 7545",
-        "article": "Permit, certification and export provisions",
+        "article": "Articles 7(1)(ç) and 18",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=7545&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2026-07-24 (7590)",
+          "read": "2026-11-01",
+          "sha256": "92dee5771d029de353346e6ff2e3787c8f236373d7f7759576e428bed4c12e0f"
+        }
       },
-      "obligation": "Obtain the regulator's permit or certification before offering or exporting a cybersecurity product or service the law covers; classify every Cerid product against that definition first.",
+      "obligation": "Obtain the Cybersecurity Presidency's approval before operating as a cybersecurity company subject to certification or authorisation, and before exporting a cybersecurity product, system or service its procedures make subject to permit; notify it of a merger, division or share transfer of a company producing them, which needs its approval where control changes; classify every Cerid product against that definition first.",
       "applies_to": [
         "channel.distribution",
         "channel.third-party-stores"
@@ -955,9 +998,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s38",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -1208,13 +1251,13 @@
       ],
       "instrument": {
         "name": "Law No. 5651 on the Regulation of Publications on the Internet, as amended in 2026",
-        "article": "Game-platform provisions",
+        "article": "Additional Article 5 (Law No. 7578, Article 23)",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5651&MevzuatTur=1&MevzuatTertip=5",
         "consolidated": null
       },
-      "obligation": "A game platform (a storefront, launcher with licence management or mod hub) shows age ratings, gives parents tools that control account settings and approve paid transactions, answers ICTA requests within 15 days and appoints a local representative above 100,000 daily accesses from Turkey.",
+      "obligation": "A game platform (infrastructure that exhibits, sells, distributes or runs digital games, manages licences or connects users) offers no game without its due age rating (an unrated game only at the highest age criterion) and removes unrated content, gives parents clear tools that control account settings and approve paid transactions, and gives the Authority the explanations it requests at once and within the period it sets of at most 15 days; a foreign-based platform above 100,000 daily accesses from Turkey also appoints and publishes a representative in Turkey.",
       "applies_to": [
         "channel.cerid-store",
         "channel.mods-and-ugc",
@@ -1253,13 +1296,13 @@
       ],
       "instrument": {
         "name": "Law No. 5651 on the Regulation of Publications on the Internet, as amended in 2026",
-        "article": "Game-platform provisions (age rating)",
+        "article": "Additional Article 5(1) and (5) (Law No. 7578, Article 23)",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5651&MevzuatTur=1&MevzuatTertip=5",
         "consolidated": null
       },
-      "obligation": "Show an age rating for every game a platform offers and produce the Turkish rating once ICTA publishes its scheme.",
+      "obligation": "Offer no game without its due age rating (an unrated game only at the highest age criterion) and produce the Turkish rating under the by-law the Authority issues on the rating criteria.",
       "applies_to": [
         "channel.cerid-store",
         "channel.mods-and-ugc"
@@ -1342,13 +1385,13 @@
       ],
       "instrument": {
         "name": "Law No. 5651 on the Regulation of Publications on the Internet, as amended in 2026",
-        "article": "Social network provider provisions",
+        "article": "Additional Article 4(7) and (20)-(23) (Law No. 7578, Article 22)",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5651&MevzuatTur=1&MevzuatTertip=5",
         "consolidated": null
       },
-      "obligation": "Keep children under 15 from social network accounts where a product meets the social network provider definition, with age signals and parental controls.",
+      "obligation": "Where a product meets the social network provider definition, serve no child under 15 (with age verification), serve children of 15 and over a separate service, publish the measures taken, give parents clear tools over account settings, paid transactions and usage time, and block deceptive advertising.",
       "applies_to": [
         "product.communications",
         "channel.mods-and-ugc",
@@ -1359,7 +1402,7 @@
         "name": "age-signal and parental-control interface tests",
         "state": "planned"
       },
-      "effective": "2026",
+      "effective": "2026-11-01",
       "sunset": null,
       "counsel": {
         "needed": true,
@@ -2149,7 +2192,11 @@
         "type": "regulation",
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2016/679/oj",
-        "consolidated": null
+        "consolidated": {
+          "version": "02016R0679-20160504",
+          "read": "2026-11-01",
+          "sha256": "a681ff22f32f125749af6e96947224369efc132edb8a95b12637e357df1056de"
+        }
       },
       "obligation": "Process personal data lawfully on an Article 6 basis (Article 9 for special categories), minimised and purpose-bound, with data protection by design and by default and a record of processing activities.",
       "applies_to": [
@@ -2174,9 +2221,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.2",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -2200,7 +2247,11 @@
         "type": "regulation",
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2016/679/oj",
-        "consolidated": null
+        "consolidated": {
+          "version": "02016R0679-20160504",
+          "read": "2026-11-01",
+          "sha256": "a681ff22f32f125749af6e96947224369efc132edb8a95b12637e357df1056de"
+        }
       },
       "obligation": "Where consent is the basis for an information society service offered to a child, obtain the holder of parental responsibility's consent below the member state's age (13 to 16) with reasonable verification.",
       "applies_to": [
@@ -2220,9 +2271,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.5",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -2247,7 +2298,11 @@
         "type": "regulation",
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2016/679/oj",
-        "consolidated": null
+        "consolidated": {
+          "version": "02016R0679-20160504",
+          "read": "2026-11-01",
+          "sha256": "a681ff22f32f125749af6e96947224369efc132edb8a95b12637e357df1056de"
+        }
       },
       "obligation": "Give transparent notices and honour access, rectification, erasure, restriction, portability and objection within one month.",
       "applies_to": [
@@ -2272,9 +2327,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.2",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -2298,7 +2353,11 @@
         "type": "regulation",
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2016/679/oj",
-        "consolidated": null
+        "consolidated": {
+          "version": "02016R0679-20160504",
+          "read": "2026-11-01",
+          "sha256": "a681ff22f32f125749af6e96947224369efc132edb8a95b12637e357df1056de"
+        }
       },
       "obligation": "Secure processing appropriately and notify the supervisory authority within 72 hours of becoming aware of a breach, and the data subjects when the risk is high.",
       "applies_to": [
@@ -2323,9 +2382,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.2",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -2349,7 +2408,11 @@
         "type": "regulation",
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2016/679/oj",
-        "consolidated": null
+        "consolidated": {
+          "version": "02016R0679-20160504",
+          "read": "2026-11-01",
+          "sha256": "a681ff22f32f125749af6e96947224369efc132edb8a95b12637e357df1056de"
+        }
       },
       "obligation": "Assess high-risk processing (crash pools with memory contents, anti-cheat signals, children's data) before it starts.",
       "applies_to": [
@@ -2369,9 +2432,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.2",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -2395,7 +2458,11 @@
         "type": "regulation",
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2016/679/oj",
-        "consolidated": null
+        "consolidated": {
+          "version": "02016R0679-20160504",
+          "read": "2026-11-01",
+          "sha256": "a681ff22f32f125749af6e96947224369efc132edb8a95b12637e357df1056de"
+        }
       },
       "obligation": "Transfer personal data outside the EEA only on an adequacy decision or appropriate safeguards, recorded per flow, and choose server regions accordingly.",
       "applies_to": [
@@ -2420,9 +2487,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.2",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -2492,7 +2559,11 @@
         "type": "directive",
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/dir/2002/58/oj",
-        "consolidated": null
+        "consolidated": {
+          "version": "02002L0058-20091219",
+          "read": "2026-11-01",
+          "sha256": "c2924162f0a6faf98ed18dda78655a2b0ce8c4e80403e1b5db08e76f6915f502"
+        }
       },
       "obligation": "Store or read identifiers on a user's device only with consent unless strictly necessary for the service the user asked for.",
       "applies_to": [
@@ -2512,9 +2583,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#area-9-crash-pipeline",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -2538,9 +2609,13 @@
         "type": "regulation",
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj",
-        "consolidated": null
+        "consolidated": {
+          "version": "02024R2847-20241120",
+          "read": "2026-11-01",
+          "sha256": "55e0efc4c6451553c7d440d45691bf49fbd2ea57406c88fb631ec84a88e4b8c3"
+        }
       },
-      "obligation": "Through ENISA's single reporting platform, send an early warning within 24 hours, a notification within 72 hours and a final report after a fix, for every actively exploited vulnerability and severe incident in a product with digital elements on the EU market.",
+      "obligation": "Through ENISA's single reporting platform, notify the coordinating CSIRT and ENISA at once of every actively exploited vulnerability and severe incident in a product with digital elements on the EU market: an early warning within 24 hours, a notification within 72 hours and a final report (14 days after a corrective measure for a vulnerability, one month after the notification for an incident).",
       "applies_to": [
         "channel.distribution",
         "channel.third-party-stores",
@@ -2559,9 +2634,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n21",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -2585,7 +2660,11 @@
         "type": "regulation",
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj",
-        "consolidated": null
+        "consolidated": {
+          "version": "02024R2847-20241120",
+          "read": "2026-11-01",
+          "sha256": "55e0efc4c6451553c7d440d45691bf49fbd2ea57406c88fb631ec84a88e4b8c3"
+        }
       },
       "obligation": "Meet the essential cybersecurity requirements, declare a support period, keep an SBOM, handle vulnerabilities with coordinated disclosure and ship security updates for every product with digital elements.",
       "applies_to": [
@@ -2605,9 +2684,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s49",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -2629,9 +2708,13 @@
         "type": "regulation",
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj",
-        "consolidated": null
+        "consolidated": {
+          "version": "02024R2847-20241120",
+          "read": "2026-11-01",
+          "sha256": "55e0efc4c6451553c7d440d45691bf49fbd2ea57406c88fb631ec84a88e4b8c3"
+        }
       },
-      "obligation": "Name the single point of contact for vulnerability reports and open the ENISA single reporting platform account for products on the EU market.",
+      "obligation": "Hold the account on ENISA's single reporting platform the Article 14 notifications go through before 11 September 2026, and designate the single point of contact users report vulnerabilities to, easily identifiable, named in the user information and not limited to automated tools (Article 13(17), applying from 11 December 2027).",
       "applies_to": [
         "channel.distribution",
         "channel.third-party-stores",
@@ -2649,9 +2732,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s49",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -3039,7 +3122,11 @@
         "type": "regulation",
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2021/821/oj",
-        "consolidated": null
+        "consolidated": {
+          "version": "02021R0821-20260921",
+          "read": "2026-11-01",
+          "sha256": "d29358c49f93a8672f10d1a32ae561a6a83934ab2a130652be29abba7ce6f1ea"
+        }
       },
       "obligation": "Classify every export's cryptography against Category 5 Part 2 and its cryptography note and hold the record.",
       "applies_to": [
@@ -3059,9 +3146,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.1",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -3677,7 +3764,11 @@
         "type": "regulation",
         "jurisdiction": "US",
         "primary": "https://www.ecfr.gov/current/title-15/subtitle-B/chapter-VII/subchapter-C",
-        "consolidated": null
+        "consolidated": {
+          "version": "2026-10-26",
+          "read": "2026-11-01",
+          "sha256": "57c6e6748826cdeedecc3030f72b2bb492ba1fbcc04f20c99d9a44eaf10bcea3"
+        }
       },
       "obligation": "Classify every export's cryptography (5D002 or mass-market 5D992.c), apply License Exception ENC with its self-classification where it applies, and give stores the export-compliance answer the record supports.",
       "applies_to": [
@@ -3697,9 +3788,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s54",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -3718,13 +3809,17 @@
       ],
       "instrument": {
         "name": "Export Administration Regulations (15 CFR 730-774)",
-        "article": "Section 740.17(b)(1) and Supplement 8 to Part 742",
+        "article": "Section 740.17(b)(1) and (e)(3) and Supplement No. 8 to Part 742",
         "type": "regulation",
         "jurisdiction": "US",
         "primary": "https://www.ecfr.gov/current/title-15/subtitle-B/chapter-VII/subchapter-C",
-        "consolidated": null
+        "consolidated": {
+          "version": "2026-10-26",
+          "read": "2026-11-01",
+          "sha256": "57c6e6748826cdeedecc3030f72b2bb492ba1fbcc04f20c99d9a44eaf10bcea3"
+        }
       },
-      "obligation": "File the self-classification report for mass-market encryption items by 1 February each year.",
+      "obligation": "File the self-classification report (Supplement No. 8 to Part 742) by 1 February for the previous calendar year's exports of items exported under Section 740.17(b)(1) that stay in 5A002, 5B002 or 5D002 and of mass-market components and executable software in 5A992 or 5D992; mass-market end items are not reported.",
       "applies_to": [
         "channel.distribution",
         "channel.third-party-stores",
@@ -3742,9 +3837,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s54",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -5315,59 +5410,59 @@
   ],
   "rule_generations": {
     "AU": {
-      "generation": 1,
-      "reviewed": "2026-10-31",
-      "sha256": "670ede4cfb4a6f030a146be164865c06c3a3b4c14accb0a7ef2ee58c9bc074ed"
+      "generation": 2,
+      "reviewed": "2026-11-01",
+      "sha256": "c27bfec2aedbef497e3e4ead87fa1f916ac7fd4d2594be0c345edc534779b06a"
     },
     "BR": {
-      "generation": 1,
-      "reviewed": "2026-10-31",
-      "sha256": "24765fc13ce5bafefa5ff46ab5a4df0027674c0454e60db282cd34dd132a2e8d"
+      "generation": 2,
+      "reviewed": "2026-11-01",
+      "sha256": "bb246f54baa904a8c4cc42d2a88a4177f1f4b7a923d47408befe1ff4596dc8d4"
     },
     "CA": {
-      "generation": 1,
-      "reviewed": "2026-10-31",
-      "sha256": "767b32a0266f64352d531fc9a190e536e4c520918853eb31d853f59aa39c5605"
+      "generation": 2,
+      "reviewed": "2026-11-01",
+      "sha256": "425623c09ba0917afbba2a92ae58714ac8c2fb2e606655ab42025055fe4e798d"
     },
     "EU": {
-      "generation": 3,
-      "reviewed": "2026-10-31",
-      "sha256": "314edebef386bdba06d42bd55703993c6e24998ece74df96db11e0105a74b61e"
+      "generation": 4,
+      "reviewed": "2026-11-01",
+      "sha256": "d21ebcf72cba3d82286cd5c41c7ddf08b6b26943203175c838ade5794201d6a3"
     },
     "GB": {
-      "generation": 2,
-      "reviewed": "2026-10-31",
-      "sha256": "04b7da3accca408c90f2f66c1413cad56434cb8ebcac3e21f95b347800ca2fac"
+      "generation": 3,
+      "reviewed": "2026-11-01",
+      "sha256": "d15a9f569a8e46f52395e016997bf93ed20923923774391f6f91d84b4fc576a2"
     },
     "INT": {
-      "generation": 3,
-      "reviewed": "2026-10-31",
-      "sha256": "a95da3ec17cc1f87f9082c50d1f214b210cd94056e666ee36ceda02809ac1535"
+      "generation": 4,
+      "reviewed": "2026-11-01",
+      "sha256": "4e3899c373e8631580257cc3d858a85a0839a9ce970ca34cdcbbc0aabd61cb24"
     },
     "JP": {
-      "generation": 1,
-      "reviewed": "2026-10-31",
-      "sha256": "73b27daf95d3381d80bca546214a4077bc28dfeb5d9344151cec910dc19cbefd"
+      "generation": 2,
+      "reviewed": "2026-11-01",
+      "sha256": "e7e38d7105a5417b8651032a6905005c6053b9d3556c1dde6a0976dd1b365c06"
     },
     "PLATFORM": {
-      "generation": 1,
-      "reviewed": "2026-10-31",
-      "sha256": "21377a60378504ff4a0d108eef26ea0665a22382a5698d67a9012c0f8b665809"
+      "generation": 2,
+      "reviewed": "2026-11-01",
+      "sha256": "ea94c28021b59ef7c71dc3fda4242ff72389de9d60f0f28b6e56a9922bba9313"
     },
     "TR": {
-      "generation": 3,
-      "reviewed": "2026-10-31",
-      "sha256": "a5c6b13385c4e4234c84b354a44aac4a2c885e63a65be44b7c2275387c455e60"
+      "generation": 4,
+      "reviewed": "2026-11-01",
+      "sha256": "076a8c84a0dfb516405759916357f3966e081d01535216baa303f19bfbe78cd3"
     },
     "US": {
-      "generation": 3,
-      "reviewed": "2026-10-31",
-      "sha256": "ace2908f82e114c8967b2eb7709eb9c709b4b1e0660c79007485a7c5948ee011"
+      "generation": 4,
+      "reviewed": "2026-11-01",
+      "sha256": "5b47060eae50227f692c8801d37088772a8b84afa0dbdc76ccbebefa15502c35"
     },
     "US-CA": {
-      "generation": 1,
-      "reviewed": "2026-10-31",
-      "sha256": "1bf52c737e702845ae574f17482aa72b4aa497e9d70f6a83bdf1b932557ce071"
+      "generation": 2,
+      "reviewed": "2026-11-01",
+      "sha256": "8866d33a16e6aa2b3829f541ba5fcae13016582f87302d48f7dcba8092af95e2"
     }
   },
   "crypto_classifications": {
@@ -5809,7 +5904,7 @@
         },
         {
           "entry": "tr.5651.game-platforms",
-          "question": "Do the 2026 game-platform provisions of Law No. 5651 apply to a storefront or launcher that sells only the publisher's own games, or only to platforms that also offer third-party games, how are the 100,000 daily accesses from Turkey counted, and what must the record of a parent's approval of a paid transaction hold?"
+          "question": "Do the 2026 game-platform provisions of Law No. 5651 (Additional Article 5, added by Law No. 7578) apply to a storefront or launcher that sells only the publisher's own games, or only to platforms that also offer third-party games; which authority do they refer to as the Authority once Law No. 7590 moved the law's other provisions from the ICTA to the Cybersecurity Presidency; how are the 100,000 daily accesses from Turkey counted; and what must the record of a parent's approval of a paid transaction hold?"
         },
         {
           "entry": "tr.5651.under-15",

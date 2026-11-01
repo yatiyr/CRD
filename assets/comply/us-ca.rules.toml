@@ -2,8 +2,8 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review US-CA
 format = "cerid-rules/1"
 jurisdiction = "US-CA"
-generation = 1
-register = "2026-10-31"
+generation = 2
+register = "2026-11-01"
 
 [[scope]]
 id = "flow.crash-reports"

@@ -23,6 +23,9 @@ check-registers.review_due computes from them; the guard fails once that day pas
            cites the report.
   record   records a run made by hand (a full re-research document, or an Official Gazette or EUR-Lex trigger with
            the entries it changed) and moves `next`.
+  read     records the consolidated version, day and SHA-256 of the instruments a person read from a fetch the run
+           compared (legal domain): the entries' articles were read against their obligations, which the --ref
+           document records.
 
   python scripts/register-review.py due [--register R] [--today YYYY-MM-DD]
   python scripts/register-review.py plan --out sources.json [--scan full]
@@ -30,6 +33,8 @@ check-registers.review_due computes from them; the guard fails once that day pas
   python scripts/register-review.py compare --fetched DIR --report docs/sessions/<day>-register-review.md [--apply]
   python scripts/register-review.py compare --scan full --fetched DIR --report R --apply --ref <document#anchor>
   python scripts/register-review.py record --scan full --ref <document#anchor> [--day YYYY-MM-DD] [--trigger ID]
+  python scripts/register-review.py --register cmake/legal-register.json read --fetched DIR --ref <document#anchor>
+         --entry ID [--entry ID ...]
 
 --register cmake/legal-register.json selects the legal domain.
 
@@ -40,13 +45,16 @@ import argparse
 import collections
 import datetime
 import hashlib
+import html
 import importlib.util
 import json
 import re
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ElementTree
+import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,6 +63,7 @@ FETCH_SCHEMA = 'cerid-register-fetch/1'
 MANIFEST = 'manifest.json'
 FETCH_LIMIT = 16 * 1024 * 1024
 FETCH_TIMEOUT = 60
+USER_AGENT = 'cerid-register-review/1'
 RFC_EDITOR = 'https://www.rfc-editor.org/rfc/rfc{number}.json'
 DATATRACKER = 'https://datatracker.ietf.org/doc/{name}/doc.json'
 # The full texts a full re-research reads.
@@ -136,15 +145,107 @@ def source_id(url):
     return re.sub(r'[^a-z0-9.]+', '-', f'{host}{parts.path}?{parts.query}'.lower()).strip('-.')
 
 
+# The official texts the machine reads (COMPLY.0; the host checks of 2026-11-01): a cited `primary` URL, the page a
+# person reads, resolves to the document its host serves as data, read by the host's reader. Where the document's own
+# bytes cannot show a later amendment (a dated consolidated version), a version index is read first and the document's
+# URL holds the `{version}` it names. A host without a resolver is read as the cited page, by its digest alone.
+CELLAR = 'https://publications.europa.eu/resource/celex/{version}'
+CELLAR_VERSIONS = 'https://publications.europa.eu/webapi/rdf/sparql?format=application%2Fsparql-results%2Bjson&query='
+# The consolidated versions based on the act that have an English XHTML text (a version published with its act has
+# none, and CELLAR answers 404 for it). Bound to the act's CELEX number, the query answers in under a second; matching
+# CELEX prefixes instead scans the whole store (40 to 120 s, 2026-11-01).
+CELLAR_QUERY = ('PREFIX cdm: <http://publications.europa.eu/ontology/cdm#> SELECT DISTINCT ?celex WHERE {{ ?act '
+                'cdm:resource_legal_id_celex "{celex}"^^<http://www.w3.org/2001/XMLSchema#string> . ?work '
+                'cdm:act_consolidated_based_on_resource_legal ?act ; cdm:resource_legal_id_celex ?celex . ?expression '
+                'cdm:expression_belongs_to_work ?work ; cdm:expression_uses_language '
+                '<http://publications.europa.eu/resource/authority/language/ENG> . ?manifestation '
+                'cdm:manifestation_manifests_expression ?expression ; cdm:manifestation_type ?type . '
+                'FILTER(STR(?type) = "xhtml") }}')
+EUR_LEX_SECTORS = {'reg': 'R', 'dir': 'L', 'dec': 'D'}
+ECFR = 'https://www.ecfr.gov/api/versioner/v1/{endpoint}/title-{title}.{suffix}?{hierarchy}'
+MEVZUAT = 'https://www.mevzuat.gov.tr/anasayfa/MevzuatFihristDetayIframe?MevzuatTur={kind}&MevzuatNo={number}' \
+          '&MevzuatTertip={tertip}'
+WASSENAAR_LIST = 'List-of-Dual-Use-Goods-and-Technologies'
+# A version a document's URL holds: a CELEX number, a day or an upload path, never a scheme, query or `..`.
+VERSION = re.compile(r'(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._/-]*')
+
+
+def resolve_mevzuat(match):
+    kind, number, tertip = match['kind'], match['number'], match['tertip']
+    return [{'id': f'mevzuat-{kind}-{tertip}-{number}', 'kind': 'primary', 'reader': 'mevzuat', 'act': number,
+             'url': MEVZUAT.format(kind=kind, number=number, tertip=tertip)}]
+
+
+def resolve_eur_lex(match):
+    """The Publications Office's CELLAR serves EUR-Lex's acts (eur-lex.europa.eu answers a machine with a challenge):
+    the consolidated versions of the act's CELEX number, then the latest one in English XHTML."""
+    celex = f'3{match["year"]}{EUR_LEX_SECTORS[match["sector"]]}{int(match["number"]):04d}'
+    query = urllib.parse.quote(CELLAR_QUERY.format(celex=celex), safe='')
+    index = f'celex-{celex.lower()}-versions'
+    return [{'id': index, 'kind': 'index', 'reader': 'cellar-versions', 'act': celex, 'url': CELLAR_VERSIONS + query},
+            {'id': f'celex-{celex.lower()}', 'kind': 'primary', 'reader': 'cellar', 'act': celex, 'index': index,
+             'url': CELLAR, 'headers': {'Accept': 'application/xhtml+xml', 'Accept-Language': 'eng'}}]
+
+
+def resolve_legislation_gov_uk(match):
+    """The point-in-time Crown Legislation Markup of an act (`data.xml`)."""
+    path = match['path']
+    return [{'id': f'legislation.gov.uk-{path.replace("/", "-")}', 'kind': 'primary', 'reader': 'legislation-gov-uk',
+             'act': path, 'url': f'https://www.legislation.gov.uk/{path}/data.xml'}]
+
+
+def resolve_ecfr(match):
+    """The eCFR versioner: the hierarchy's latest amendment day, then its full XML on that day."""
+    title, levels = match['title'], match['path'].strip('/').split('/')
+    hierarchy = '&'.join(level.replace('-', '=', 1) for level in levels)
+    slug = f'ecfr-title-{title}-{"-".join(levels).lower()}'
+    act = f'title={title}&{hierarchy}'
+    return [{'id': f'{slug}-versions', 'kind': 'index', 'reader': 'ecfr-versions', 'act': act,
+             'url': ECFR.format(endpoint='versions', title=title, suffix='json', hierarchy=hierarchy)},
+            {'id': slug, 'kind': 'primary', 'reader': 'ecfr', 'act': act, 'index': f'{slug}-versions',
+             'url': ECFR.format(endpoint='full/{version}', title=title, suffix='xml', hierarchy=hierarchy)}]
+
+
+def resolve_wassenaar(match):
+    """The control-lists page links the current List of Dual-Use Goods and Technologies, a PDF named by its edition."""
+    return [{'id': 'wassenaar-control-lists', 'kind': 'index', 'reader': 'wassenaar-lists', 'act': WASSENAAR_LIST,
+             'url': match.string},
+            {'id': 'wassenaar-dual-use-list', 'kind': 'primary', 'reader': 'pdf', 'act': WASSENAAR_LIST,
+             'index': 'wassenaar-control-lists', 'url': 'https://www.wassenaar.org/wp-content/uploads/{version}'}]
+
+
+RESOLVERS = (
+    (re.compile(r'https://www\.mevzuat\.gov\.tr/mevzuat\?MevzuatNo=(?P<number>\d+)&MevzuatTur=(?P<kind>\d+)'
+                r'&MevzuatTertip=(?P<tertip>\d+)'), resolve_mevzuat),
+    (re.compile(r'https://eur-lex\.europa\.eu/eli/(?P<sector>reg|dir|dec)/(?P<year>\d{4})/(?P<number>\d+)/oj'),
+     resolve_eur_lex),
+    (re.compile(r'https://www\.legislation\.gov\.uk/(?P<path>(?:ukpga|uksi|asp|ssi|nia|nisr|asc|wsi)/\d{4}/\d+)'),
+     resolve_legislation_gov_uk),
+    (re.compile(r'https://www\.ecfr\.gov/current/title-(?P<title>\d+)(?P<path>(?:/(?:subtitle|chapter|subchapter|part)'
+                r'-[A-Za-z0-9]+)+)'), resolve_ecfr),
+    (re.compile(r'https://www\.wassenaar\.org/control-lists/'), resolve_wassenaar),
+)
+
+
+def resolve_primary(url):
+    """The sources the machine reads for an instrument's primary URL, its version index first."""
+    for pattern, resolve in RESOLVERS:
+        match = pattern.fullmatch(url)
+        if match:
+            return resolve(match)
+    return [{'id': source_id(url), 'kind': 'primary', 'url': url}]
+
+
 def plan_sources(register, scan='light'):
     """The sources a refresh of this register reads: [{id, kind, url, entries, registries}] and the manual items; a
-    full scan adds the full text of every document the owed full re-research reads (`text` sources)."""
+    full scan adds the full text of every document the owed full re-research reads (`text` sources). A legal
+    instrument's sources also carry their reader, the act it expects, the request headers and the version index."""
     sources = {}
     manual = {}
 
-    def add(source_id, kind, url, entry, registry=None):
-        source = sources.setdefault(source_id, {'id': source_id, 'kind': kind, 'url': url, 'entries': [],
-                                                'registries': []})
+    def add(source_id, kind, url, entry, registry=None, **extra):
+        source = sources.setdefault(source_id, dict({'id': source_id, 'kind': kind, 'url': url, 'entries': [],
+                                                     'registries': []}, **extra))
         if entry not in source['entries']:
             source['entries'].append(entry)
         if registry and registry not in source['registries']:
@@ -157,8 +258,8 @@ def plan_sources(register, scan='light'):
 
     for entry in register['entries']:
         if 'instrument' in entry:
-            url = entry['instrument']['primary']
-            add(source_id(url), 'primary', url, entry['id'])
+            for source in resolve_primary(entry['instrument']['primary']):
+                add(source.pop('id'), source.pop('kind'), source.pop('url'), entry['id'], **source)
             continue
         spec = entry.get('spec', {})
         kind, ref = spec.get('type'), spec.get('ref', '')
@@ -213,44 +314,253 @@ def owed_triggers(review):
     return sorted({entry_id for _, run in _registers.owed_runs(review) for entry_id in run['triggers']})
 
 
-def fetch_sources(plan, into, opener=urllib.request.urlopen, today=None):
-    """Reads every planned source (HTTPS only, at most FETCH_LIMIT bytes) into `into` with a manifest; a source that
-    fails is recorded with its error and read again by the next run."""
+class Unreadable(Exception):
+    """A fetched record without the shape this tool reads."""
+
+
+class SecureRedirects(urllib.request.HTTPRedirectHandler):
+    """Follows a redirect on the same host only, over https: CELLAR answers a content request with an http Location
+    whose https form serves the same bytes (2026-11-01), so http is upgraded; another host or scheme is refused."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        old = urllib.parse.urlsplit(req.full_url)
+        new = urllib.parse.urlsplit(urllib.parse.urljoin(req.full_url, newurl))
+        if new.scheme not in {'http', 'https'} or new.hostname != old.hostname:
+            if fp is not None:
+                fp.close()
+            raise urllib.error.URLError(f'refused a redirect to {newurl}')
+        return super().redirect_request(req, fp, code, msg, headers, new._replace(scheme='https').geturl())
+
+
+def download(opener, url, headers):
+    """The body of an https URL, gzip decoded, at most FETCH_LIMIT bytes either way."""
+    request = urllib.request.Request(url, headers=dict(headers, **{'User-Agent': USER_AGENT,
+                                                                  'Accept-Encoding': 'gzip'}))
+    with opener(request, timeout=FETCH_TIMEOUT) as response:
+        body = response.read(FETCH_LIMIT + 1)
+        encoding = (getattr(response, 'headers', None) or {}).get('Content-Encoding') or 'identity'
+    if len(body) > FETCH_LIMIT:
+        raise Unreadable(f'larger than {FETCH_LIMIT} bytes')
+    encoding = encoding.strip().lower()
+    if encoding == 'identity':
+        return body
+    if encoding != 'gzip':
+        raise Unreadable(f'the unrequested content encoding {encoding!r}')
+    stream = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    try:
+        body = stream.decompress(body, FETCH_LIMIT + 1)
+    except zlib.error as error:
+        raise Unreadable(f'a broken gzip body ({error})') from error
+    if len(body) > FETCH_LIMIT:
+        raise Unreadable(f'larger than {FETCH_LIMIT} bytes')
+    if not stream.eof:
+        raise Unreadable('a truncated gzip body')
+    return body
+
+
+def fetch_sources(plan, into, opener=None, today=None):
+    """Reads every planned source (HTTPS only, gzip decoded, at most FETCH_LIMIT bytes) into `into` with a manifest of
+    the SHA-256 of each decoded body; a version index is read before the documents whose URL holds the version it
+    names. A source that fails is recorded with its error and read again by the next run."""
     if not isinstance(plan, dict) or plan.get('schema') != PLAN_SCHEMA or not isinstance(plan.get('sources'), list):
         raise ReviewError(f'the plan is not a {PLAN_SCHEMA} document')
+    today = today or datetime.datetime.now(datetime.timezone.utc).date()
+    opener = opener or urllib.request.build_opener(SecureRedirects).open
     into = Path(into)
     into.mkdir(parents=True, exist_ok=True)
-    items = []
-    for source in plan['sources']:
+    versions, items = {}, []
+    for source in sorted(plan['sources'], key=lambda source: source['kind'] != 'index'):
         item = {'id': source['id'], 'url': source['url']}
-        if not source['url'].startswith('https://') or not re.fullmatch(r'[a-z0-9.-]+', source['id']):
+        items.append(item)
+        if 'index' in source:
+            if source['index'] not in versions:
+                item['error'] = f'its version index {source["index"]} was not read'
+                continue
+            item.update(url=source['url'].replace('{version}', versions[source['index']]),
+                        version=versions[source['index']])
+        if not item['url'].startswith('https://') or not re.fullmatch(r'[a-z0-9.-]+', source['id']):
             item['error'] = 'refused: a source is an https URL with a plain identifier'
-            items.append(item)
             continue
-        request = urllib.request.Request(source['url'], headers={'User-Agent': 'cerid-register-review/1'})
         try:
-            with opener(request, timeout=FETCH_TIMEOUT) as response:
-                body = response.read(FETCH_LIMIT + 1)
+            body = download(opener, item['url'], source.get('headers', {}))
+            if source['kind'] == 'index':
+                version = INDEX_READERS[source['reader']](body, source, today)
+                if not VERSION.fullmatch(version):
+                    raise Unreadable(f'the version {version!r} cannot be part of a URL')
+                versions[source['id']] = version
         except OSError as error:
-            item['error'] = f'{type(error).__name__}: {error}'
-            items.append(item)
+            item['error'] = ' '.join(f'{type(error).__name__}: {error}'.split())
             continue
-        if len(body) > FETCH_LIMIT:
-            item['error'] = f'larger than {FETCH_LIMIT} bytes'
-            items.append(item)
+        except Unreadable as error:
+            item['error'] = str(error)
             continue
-        name = source['id'] + Path(urllib.parse.urlsplit(source['url']).path).suffix
+        name = source['id'] + Path(urllib.parse.urlsplit(item['url']).path).suffix
         (into / name).write_bytes(body)
         item.update(file=name, bytes=len(body), sha256=hashlib.sha256(body).hexdigest())
-        items.append(item)
-    manifest = {'schema': FETCH_SCHEMA, 'day': str(today or datetime.datetime.now(datetime.timezone.utc).date()),
-                'plan': plan, 'items': items}
+    manifest = {'schema': FETCH_SCHEMA, 'day': str(today), 'plan': plan, 'items': items}
     write_json(into / MANIFEST, manifest)
     return manifest
 
 
-class Unreadable(Exception):
-    """A fetched record without the shape this tool reads."""
+def text_of(body):
+    """The visible text of an HTML page: scripts and styles dropped, tags removed, entities decoded, spaces folded."""
+    try:
+        text = body.decode('utf-8')
+    except UnicodeDecodeError as error:
+        raise Unreadable(f'not UTF-8 ({error})') from error
+    text = re.sub(r'(?is)<(script|style)\b.*?</\1\s*>', ' ', text)
+    return re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]*>', ' ', text)))
+
+
+def calendar_day(day, month, year):
+    try:
+        return datetime.date(int(year), int(month), int(day))
+    except ValueError as error:
+        raise Unreadable(f'the day {day}/{month}/{year} does not exist') from error
+
+
+# An amendment note of mevzuat.gov.tr's consolidated text (every shape the 2026-11-01 read found): "(Değişik:2/3/2024-
+# 7499/34 md.)", "(Ek cümle: 1/2/2020 – 7226/3 md.)", "(Başlığı ile Birlikte Değişik:...)", "(Mülga: 2/7/2018-KHK-
+# 703/163 md.; Aynen kabul: ...)", "(Yeniden düzenleme: ...)", a bare "(1/2/2020-7226/3 md.)", and a Constitutional
+# Court annulment "(İptal: Anayasa Mahkemesinin 1/2/2020 tarihli ve E.: ..., K.: ... sayılı Kararı ile.)". Each day
+# in a note counts, with the act amending on it.
+MEVZUAT_NOTE = re.compile(r'\(\s*(?:[^():;]{0,40}?\b(?:Değişik|Ek|Mülga|İptal|Yeniden düzenleme)\b[^()]*|'
+                          r'\d{1,2}/\d{1,2}/\d{4}\s*[-–][^()]*md\.)\)')
+MEVZUAT_DAY = re.compile(r'(\d{1,2})/(\d{1,2})/(\d{4})(?:\s*[-–]\s*(KHK[-/]\d+|\d+))?')
+
+
+def read_mevzuat(body, source, version):
+    """`<day> (<amending act>)` of the latest amendment note, or `<day> (as enacted)` of a text never amended."""
+    text = text_of(body)
+    if not re.search(rf'Numarası\s*:\s*{source["act"]}\b', text):
+        raise Unreadable(f'not the consolidated text of No. {source["act"]}')
+    notes = []
+    for note in MEVZUAT_NOTE.finditer(text):
+        court = 'Anayasa Mahkemesi' in note.group(0)
+        for match in MEVZUAT_DAY.finditer(note.group(0)):
+            act = match.group(4) and match.group(4).replace('/', '-')
+            notes.append((calendar_day(*match.group(1, 2, 3)), act or ('Anayasa Mahkemesi' if court else '')))
+    if notes:
+        day, act = max(notes)
+        return f'{day} ({act})' if act else str(day)
+    enacted = re.search(r'Kabul Tarihi\s*:\s*(\d{1,2})/(\d{1,2})/(\d{4})', text)
+    if enacted is None:
+        raise Unreadable('neither an amendment note nor the day of enactment')
+    return f'{calendar_day(*enacted.groups())} (as enacted)'
+
+
+def read_legislation_gov_uk(body, source, version):
+    """The point-in-time day (`dct:valid`) of the act's Crown Legislation Markup."""
+    try:
+        tree = ElementTree.fromstring(body)
+    except ElementTree.ParseError as error:
+        raise Unreadable(f'not Crown Legislation Markup ({error})') from error
+    identifier = tree.find('.//{http://purl.org/dc/elements/1.1/}identifier')
+    valid = tree.find('.//{http://purl.org/dc/terms/}valid')
+    if identifier is None or not (identifier.text or '').strip().endswith(f'/{source["act"]}'):
+        raise Unreadable(f'not the data of {source["act"]}')
+    day = (valid.text or '').strip() if valid is not None else ''
+    if len(day) != 10 or _registers.parse_day(day) is None:
+        raise Unreadable('no point-in-time day (dct:valid)')
+    return day
+
+
+def read_cellar_versions(body, source, today):
+    """The latest consolidated version of a CELEX act in force by `today`, or the act itself when none is."""
+    try:
+        values = [binding['celex']['value'] for binding in json.loads(body)['results']['bindings']]
+    except (ValueError, KeyError, TypeError) as error:
+        raise Unreadable(f'not a SPARQL result of CELEX numbers ({error})') from error
+    pattern = re.compile(re.escape(f'0{source["act"][1:]}') + r'-(\d{4})(\d{2})(\d{2})')
+    versions = []
+    for value in values:
+        match = pattern.fullmatch(value) if isinstance(value, str) else None
+        if match is None:
+            raise Unreadable(f'{value!r} is not a consolidated version of {source["act"]}')
+        day = calendar_day(match[3], match[2], match[1])
+        if day <= today:
+            versions.append((day, value))
+    return max(versions)[1] if versions else source['act']
+
+
+def read_cellar(body, source, version):
+    """The XHTML of an act names it by year and number (`2016/679`, `2002/58/EC`)."""
+    year, number = source['act'][1:5], int(source['act'][6:10])
+    text = text_of(body)
+    if '<html' not in body[:4096].decode('utf-8', 'replace').lower() or \
+            f'{year}/{number}' not in text and f'{number}/{year}' not in text:
+        raise Unreadable(f'not the XHTML of {source["act"]}')
+    return version
+
+
+def read_ecfr_versions(body, source, today):
+    """The latest amendment day of an eCFR hierarchy, whose `meta` echoes the hierarchy asked for."""
+    try:
+        meta = json.loads(body)['meta']
+        day = meta['latest_amendment_date']
+    except (ValueError, KeyError, TypeError) as error:
+        raise Unreadable(f'not an eCFR versions record ({error})') from error
+    asked = dict(urllib.parse.parse_qsl(source['act']))
+    if any(str(meta.get(level)) != value for level, value in asked.items()):
+        raise Unreadable(f'the versions of another hierarchy than {source["act"]}')
+    if not isinstance(day, str) or len(day) != 10 or _registers.parse_day(day) is None:
+        raise Unreadable(f'the latest amendment day {day!r} is not YYYY-MM-DD')
+    return day
+
+
+ECFR_LEVELS = {'title': 'TITLE', 'subtitle': 'SUBTITLE', 'chapter': 'CHAPTER', 'subchapter': 'SUBCHAP', 'part': 'PART'}
+
+
+def ecfr_record(body, source):
+    """The cited hierarchy's subtree of an eCFR document: the versioner's full XML is the part itself for a part, but
+    the whole title above one (it ignores subtitle, chapter and subchapter, 2026-11-01), so an amendment elsewhere in
+    the title must not change the digest of the text read."""
+    try:
+        root = ElementTree.fromstring(body)
+    except ElementTree.ParseError as error:
+        raise Unreadable(f'not eCFR XML ({error})') from error
+    levels = urllib.parse.parse_qsl(source['act'])
+    node = root
+    for index, (level, value) in enumerate(levels):
+        wanted = (ECFR_LEVELS.get(level), value)
+        found = next((element for element in node.iter() if (element.get('TYPE'), element.get('N')) == wanted), None)
+        if found is None and node is root and index + 1 < len(levels):
+            continue  # a part's document starts below the title and chapter that hold it
+        if found is None:
+            raise Unreadable(f'no {level} {value} in the eCFR document')
+        node = found
+    return ElementTree.tostring(node)
+
+
+def read_ecfr(body, source, version):
+    ecfr_record(body, source)
+    return version
+
+
+def read_wassenaar_lists(body, source, today):
+    """The upload path of the one current list the control-lists page links."""
+    links = set(re.findall(r'https://www\.wassenaar\.org/wp-content/uploads/(\d{4}/\d{2}/' + re.escape(source['act']) +
+                           r'[A-Za-z0-9-]*\.pdf)', body.decode('utf-8', 'replace')))
+    if len(links) != 1:
+        raise Unreadable(f'{len(links)} links to the {source["act"]} PDF, not one')
+    return links.pop()
+
+
+def read_pdf(body, source, version):
+    if not body.startswith(b'%PDF-'):
+        raise Unreadable('not a PDF')
+    return version
+
+
+# reader(body, source, version) -> the version of an instrument's document; an index reader(body, source, today)
+# -> the version its document's URL holds.
+READERS = {'mevzuat': read_mevzuat, 'legislation-gov-uk': read_legislation_gov_uk, 'cellar': read_cellar,
+           'ecfr': read_ecfr, 'pdf': read_pdf}
+# record(body, source) -> the bytes of the instrument within its document, whose SHA-256 is the text read; the whole
+# document for a reader without one.
+RECORDS = {'ecfr': ecfr_record}
+INDEX_READERS = {'cellar-versions': read_cellar_versions, 'ecfr-versions': read_ecfr_versions,
+                 'wassenaar-lists': read_wassenaar_lists}
 
 
 def read_rfc_editor(body):
@@ -439,9 +749,10 @@ class Review:
         self.readings = []
         self.triggers = []
         self.bodies = {}
+        self.items = {item['id']: item for item in manifest['items']}
         for item in manifest['items']:
             if 'error' in item:
-                self.unread.append(f'{item["id"]} ({item["url"]}): {item["error"]}')
+                self.unread.append(' '.join(f'{item["id"]} ({item["url"]}): {item["error"]}'.split()))
                 continue
             body = (self.fetched / item['file']).read_bytes()
             if hashlib.sha256(body).hexdigest() != item['sha256']:
@@ -546,18 +857,38 @@ class Review:
                                   '(Recommended "D"); drop it from the accepted policy and the entry before the full '
                                   're-research this triggers')
 
-    def judge_primary(self, entry, source_id):
-        """An instrument's primary text against the digest recorded when it was last read in its consolidated form."""
-        digest = hashlib.sha256(self.bodies[source_id]).hexdigest()
+    def reading(self, source):
+        """(version, SHA-256 of the text read) of a fetched instrument's document: the version its host's reader finds
+        (None for a host without one) and the digest of the instrument within the document."""
+        body = self.bodies[source['id']]
+        if 'reader' not in source:
+            return None, hashlib.sha256(body).hexdigest()
+        version = READERS[source['reader']](body, source, self.items[source['id']].get('version'))
+        record = RECORDS[source['reader']](body, source) if source['reader'] in RECORDS else body
+        return version, hashlib.sha256(record).hexdigest()
+
+    def judge_primary(self, entry, source):
+        """An instrument's document against the version and digest recorded when it was last read in its consolidated
+        form: an amendment shows as a new version, a change under the same version as a new digest."""
+        try:
+            version, digest = self.reading(source)
+        except Unreadable as error:
+            self.unread.append(f'{source["id"]}: {error}')
+            return
         instrument = entry['instrument']
         what = f'{entry["id"]} ({", ".join(entry["rows"])}): {instrument["name"]}, {instrument["article"]}'
+        found = f'version {version}, ' if version else ''
         consolidated = instrument['consolidated']
         if consolidated is None:
-            self.readings.append(f'{what}: never read from its primary source; read {instrument["primary"]} in its '
-                                 f'consolidated text and record the version, the day and the SHA-256 {digest}')
+            self.readings.append(f'{what}: never read from its primary source; read {self.items[source["id"]]["url"]} '
+                                 f'({found}SHA-256 {digest}) in its consolidated text and record it with `read`')
+        elif version is not None and consolidated['version'] != version:
+            self.readings.append(f'{what}: amended to {version} since it was read on {consolidated["read"]} '
+                                 f'({consolidated["version"]}); read the amendment, record it with `read` (SHA-256 '
+                                 f'{digest}) and record a trigger if it changes a pinned obligation')
         elif consolidated['sha256'] != digest:
             self.readings.append(f'{what}: the primary text changed since it was read on {consolidated["read"]} '
-                                 f'({consolidated["version"]}); read the amendment, record the new version and '
+                                 f'({consolidated["version"]}); read the change, record the new version and '
                                  f'SHA-256 {digest}, and record a trigger if it changes a pinned obligation')
 
     def run(self, plan):
@@ -569,17 +900,16 @@ class Review:
                     registries[source['id']] = read_iana(self.bodies[source['id']], titles)
                 except Unreadable as error:
                     self.unread.append(f'{source["id"]}: {error}')
-        sources = {(source['kind'], entry_id): source['id'] for source in plan['sources']
-                   for entry_id in source['entries']}
+        sources = {(source['kind'], entry_id): source for source in plan['sources'] for entry_id in source['entries']}
         judges = {'rfc': ('rfc-editor', self.judge_rfc), 'draft': ('datatracker', self.judge_draft)}
         for entry in self.register['entries']:
             if 'instrument' in entry:
-                source_id = sources.get(('primary', entry['id']))
-                if source_id in self.bodies:
-                    self.judge_primary(entry, source_id)
+                source = sources.get(('primary', entry['id']))
+                if source is not None and source['id'] in self.bodies:
+                    self.judge_primary(entry, source)
                 continue
             source_kind, judge = judges.get(entry['spec'].get('type'), (None, None))
-            source_id = sources.get((source_kind, entry['id']))
+            source_id = sources.get((source_kind, entry['id']), {}).get('id')
             if source_id in self.bodies:
                 try:
                     judge(entry, source_id)
@@ -677,10 +1007,15 @@ def command_fetch(args, root):
     return 0
 
 
-def command_compare(args, root):
-    manifest = load_json(Path(args.fetched) / MANIFEST)
+def load_manifest(fetched):
+    manifest = load_json(Path(fetched) / MANIFEST)
     if not isinstance(manifest, dict) or manifest.get('schema') != FETCH_SCHEMA:
-        raise ReviewError(f'{args.fetched}: no {FETCH_SCHEMA} manifest')
+        raise ReviewError(f'{fetched}: no {FETCH_SCHEMA} manifest')
+    return manifest
+
+
+def command_compare(args, root):
+    manifest = load_manifest(args.fetched)
     plan = manifest['plan']
     if args.scan == 'full' and plan.get('scan') != 'full':
         raise ReviewError('a full scan compares a plan made with `plan --scan full`, which reads the triggering '
@@ -749,6 +1084,49 @@ def command_record(args, root):
     return 0
 
 
+def command_read(args, root):
+    """Records the instruments a person read from a fetch the applied run compared: each entry's consolidated version
+    (its host's reader), the fetch day and the SHA-256 of the text read, its source verified and cited by --ref.
+    Nothing is written unless every entry can be recorded."""
+    manifest = load_manifest(args.fetched)
+    plan = manifest['plan']
+    path = root / plan['register']
+    register = load_register(path)
+    if register['domain'] != 'legal':
+        raise ReviewError('read records the instruments of the legal register')
+    if register['snapshot']['date'] != manifest['day']:
+        raise ReviewError(f'the fetch of {manifest["day"]} is not the register\'s snapshot '
+                          f'({register["snapshot"]["date"]}); compare --apply it first')
+    ref, _ = document_ref(root, args.ref)
+    review = Review(register, manifest, args.fetched)
+    sources = {entry_id: source for source in plan['sources'] if source['kind'] == 'primary'
+               for entry_id in source['entries']}
+    entries = {entry['id']: entry for entry in register['entries']}
+    errors, readings = [], []
+    for entry_id in dict.fromkeys(args.entry):
+        entry, source = entries.get(entry_id), sources.get(entry_id)
+        if entry is None or 'instrument' not in entry or source is None:
+            errors.append(f'{entry_id}: not an instrument this fetch planned')
+        elif source['id'] not in review.bodies:
+            errors.append(f'{entry_id}: {source["id"]} was not read ({review.items[source["id"]].get("error")})')
+        elif 'reader' not in source:
+            errors.append(f'{entry_id}: {entry["instrument"]["primary"]} has no reader of its host, so its version is '
+                          'unknown; cite the instrument\'s own document on a host with a reader')
+        else:
+            try:
+                readings.append((entry, *review.reading(source)))
+            except Unreadable as error:
+                errors.append(f'{entry_id}: {source["id"]}: {error}')
+    if errors:
+        raise ReviewError('nothing recorded: ' + '; '.join(errors))
+    for entry, version, digest in readings:
+        entry['instrument']['consolidated'] = {'version': version, 'read': manifest['day'], 'sha256': digest}
+        entry['source'] = {'ref': ref, 'read': manifest['day'], 'verified': True}
+        print(f'{entry["id"]}: read {entry["instrument"]["name"]} at {version} on {manifest["day"]}')
+    write_json(path, register)
+    return 0
+
+
 def main(argv=None):
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
@@ -778,9 +1156,15 @@ def main(argv=None):
     record.add_argument('--day', help='the day of the run (default today)')
     record.add_argument('--trigger', action='append', default=[],
                         help='an entry whose status or instrument the run found changed (repeatable)')
+    read = commands.add_parser('read', help='record the instruments a person read from the applied fetch')
+    read.add_argument('--fetched', required=True)
+    read.add_argument('--ref', required=True, help='the document recording the reading, relative to root, with an '
+                      'optional #anchor')
+    read.add_argument('--entry', action='append', required=True, help='a legal entry whose articles were read '
+                      '(repeatable)')
     args = parser.parse_args(argv)
     handlers = {'due': command_due, 'plan': command_plan, 'fetch': command_fetch, 'compare': command_compare,
-                'record': command_record}
+                'record': command_record, 'read': command_read}
     try:
         return handlers[args.command](args, Path(args.root).resolve())
     except ReviewError as error:
