@@ -11,18 +11,24 @@
 // input values and fails above the ADR-0092 §5 f32 class (2e-4, 1e-3 from the four-step band): a fast wrong answer is
 // not a win, for either side. Each Cerid row ends with the FNV-1a digest of that gated transform's output (`bits`), so
 // a board of two builds shows they compute the same bits (ab_fft_f32.sh). Cerid's Complex<f32> shares MKL's interleaved
-// {re, im} layout.
+// {re, im} layout. Every side transforms one buffer at a declared alignment (--offset), never at the one the
+// allocator's history gave.
 //
-//   bench_fft_f32 [--sizes A-B] [--planned]
+//   bench_fft_f32 [--sizes A-B] [--planned] [--offset B]
 //       the board over 2^A to 2^B (default 10-22); --planned times only the level's planned forward beside MKL (the
 //       fast A/B board's arms, scripts/ab-board.py)
-//   bench_fft_f32 --loop <side> --sizes A-A --iterations K
+//   bench_fft_f32 --loop <side> --sizes A-A --iterations K [--distribution] [--offset B]
 //       the profile loop: one side's forward at 2^A, K times, nothing else in the loop but the input copy each
 //       transform starts from (as the board's); <side> is planned, an algorithm name the planner offers there, mkl,
 //       or copy (the input copy alone: the control whose counters perf stat subtracts). The side is gated against the
 //       FFTW f64 truth first, and its line ends with the FNV-1a digest of that transform's output (`bits`: two builds
 //       of one side compute the same bits when they match); a CRD_HESAP_FFT_PROFILE tree adds the phase counters.
-//       docs/bench/README.md#fast-ab-boards.
+//       --distribution also times each forward alone (its copy untimed, as the board's) and prints the stream's
+//       per-transform minimum, 10th percentile, median, 90th percentile, mean and maximum: the board's statistic
+//       (the best warm transform) and the loop's (the mean of a stream) side by side, from one stream.
+//   --offset B starts the transformed buffer B bytes past a 64-byte boundary (whole complex values, below 4096;
+//   default 0, a cache-line-aligned buffer), on the board and in the loop: a side's sensitivity to its caller's
+//   alignment (16 is a malloc'd buffer's) and placement. docs/bench/README.md#fast-ab-boards.
 
 #include <crd/containers/array.hpp>
 #include <crd/core/cpu_features.hpp>
@@ -35,6 +41,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -56,6 +63,8 @@ constexpr usize kMaxArms = sizeof(fft::detail::kFftAlgorithms) / sizeof(fft::det
 constexpr const char* kPlanOutOfMemory = "bench_fft_f32: out of memory for a plan";
 constexpr int kFirstLg = 10;
 constexpr int kLastLg = 22;
+constexpr usize kMaxOffset = 4096; // --offset: below one page, in whole complex values past a cache line
+constexpr usize kLine = 64;
 
 struct Arm
 {
@@ -70,6 +79,8 @@ struct Options
     bool planned_only = false;
     const char* loop_side = nullptr;
     long iterations = 0;
+    bool distribution = false;
+    usize offset = 0;
 };
 
 template <typename Fn> double time_ms(const Fn& fn)
@@ -143,9 +154,20 @@ DFTI_DESCRIPTOR_HANDLE mkl_plan(usize n)
     return h;
 }
 
+// The transformed buffer of n values in `work`, `offset` bytes past a 64-byte boundary (--offset): the board and the
+// loop time every side at one declared alignment, not at the one the allocator's history gave (a 16-byte-aligned
+// buffer ran the 8K forward 1.2x to 1.6x slower than a 64-byte-aligned one on the benchmark machine, MKL's 1.3x:
+// 2026-11-01).
+Complex<f32>* place(cont::Array<Complex<f32>>& work, usize n, usize offset)
+{
+    work.resize(n + (kMaxOffset + kLine) / sizeof(Complex<f32>));
+    const auto start = reinterpret_cast<std::uintptr_t>(work.data());
+    return work.data() + ((kLine - start % kLine) % kLine + offset) / sizeof(Complex<f32>);
+}
+
 // One size: every arm and MKL timed best of `reps`, interleaved per rep, and gated against the f64 truth. Returns
 // false when an error is above the bound.
-bool board(crd::memory::IAllocator* alloc, int lg, const Arm* arms, usize arm_count)
+bool board(crd::memory::IAllocator* alloc, int lg, const Arm* arms, usize arm_count, usize offset)
 {
     const usize n = usize{1} << lg;
     int reps = 8;
@@ -160,10 +182,10 @@ bool board(crd::memory::IAllocator* alloc, int lg, const Arm* arms, usize arm_co
 
     const Data data(alloc, n);
     cont::Array<Complex<f32>> work(alloc);
-    work.resize(n);
+    Complex<f32>* const x = place(work, n, offset);
     auto reset = [&]
     {
-        std::memcpy(work.data(), data.base.data(), n * sizeof(Complex<f32>));
+        std::memcpy(x, data.base.data(), n * sizeof(Complex<f32>));
     };
 
     DFTI_DESCRIPTOR_HANDLE h = mkl_plan(n);
@@ -174,13 +196,13 @@ bool board(crd::memory::IAllocator* alloc, int lg, const Arm* arms, usize arm_co
     for (usize a = 0; a < arm_count; ++a)
     {
         reset();
-        arms[a].plan->execute(cont::Span<Complex<f32>>(work.data(), n), fft::FftDirection::Forward);
-        err[a] = max_rel(work.data(), data.truth.data(), n);
-        bits[a] = crd::fnv1a_64(work.data(), n * sizeof(Complex<f32>));
+        arms[a].plan->execute(cont::Span<Complex<f32>>(x, n), fft::FftDirection::Forward);
+        err[a] = max_rel(x, data.truth.data(), n);
+        bits[a] = crd::fnv1a_64(x, n * sizeof(Complex<f32>));
     }
     reset();
-    DftiComputeForward(h, work.data());
-    err[arm_count] = max_rel(work.data(), data.truth.data(), n);
+    DftiComputeForward(h, x);
+    err[arm_count] = max_rel(x, data.truth.data(), n);
 
     double best[kMaxArms + 1] = {};
     std::fill(best, best + arm_count + 1, 1e300);
@@ -188,7 +210,7 @@ bool board(crd::memory::IAllocator* alloc, int lg, const Arm* arms, usize arm_co
     // where a stream of its transforms keeps them (the --loop profile's state), not where the other sides left them.
     const auto forward = [&](usize a)
     {
-        arms[a].plan->execute(cont::Span<Complex<f32>>(work.data(), n), fft::FftDirection::Forward);
+        arms[a].plan->execute(cont::Span<Complex<f32>>(x, n), fft::FftDirection::Forward);
     };
     for (int r = 0; r < reps; ++r)
     {
@@ -200,9 +222,9 @@ bool board(crd::memory::IAllocator* alloc, int lg, const Arm* arms, usize arm_co
             best[a] = std::min(best[a], time_ms([&] { forward(a); }));
         }
         reset();
-        DftiComputeForward(h, work.data());
+        DftiComputeForward(h, x);
         reset();
-        best[arm_count] = std::min(best[arm_count], time_ms([&] { DftiComputeForward(h, work.data()); }));
+        best[arm_count] = std::min(best[arm_count], time_ms([&] { DftiComputeForward(h, x); }));
     }
     DftiFreeDescriptor(&h);
 
@@ -256,11 +278,34 @@ bool find_algorithm(const char* side, usize n, fft::FftAlgorithm* out)
     return true;
 }
 
-// The profile loop (--loop): `iterations` forwards of one side at 2^lg, each from a fresh copy of the input. Returns
-// the exit status.
-int loop(crd::memory::TlsfAllocator& alloc, int lg, const char* side, long iterations)
+// The stream's per-transform times (ms, sorted in place): its minimum, percentiles, mean and maximum in microseconds.
+void print_distribution(cont::Array<double>& each)
 {
-    const usize n = usize{1} << lg;
+    std::ranges::sort(each);
+    const usize count = each.size();
+    const auto at = [&](usize percent)
+    {
+        return each[(count - 1) * percent / 100] * 1000.0;
+    };
+    double sum = 0.0;
+    for (const double ms : each)
+    {
+        sum += ms;
+    }
+    std::printf("each transform (without its copy, us): min %.4f p10 %.4f median %.4f p90 %.4f mean %.4f max %.4f\n",
+                at(0), at(10), at(50), at(90), sum / static_cast<double>(count) * 1000.0, at(100));
+}
+
+// The profile loop (--loop): `iterations` forwards of one side at 2^lg, each from a fresh copy of the input in a
+// buffer `offset` bytes past a cache line; with `distribution`, each forward is also timed alone. Returns the exit
+// status.
+int loop(crd::memory::TlsfAllocator& alloc, const Options& options)
+{
+    const char* const side = options.loop_side;
+    const long iterations = options.iterations;
+    const bool distribution = options.distribution;
+    const usize offset = options.offset;
+    const usize n = usize{1} << options.lg_first;
     const bool mkl = std::strcmp(side, "mkl") == 0;
     const bool copy = std::strcmp(side, "copy") == 0;
     fft::FftAlgorithm forward = fft::FftAlgorithm{};
@@ -272,7 +317,7 @@ int loop(crd::memory::TlsfAllocator& alloc, int lg, const char* side, long itera
     }
     const Data data(&alloc, n);
     cont::Array<Complex<f32>> work(&alloc);
-    work.resize(n);
+    Complex<f32>* const x = place(work, n, offset);
     fft::FftPlan<f32>* plan = nullptr;
     DFTI_DESCRIPTOR_HANDLE h = nullptr;
     if (mkl)
@@ -283,21 +328,25 @@ int loop(crd::memory::TlsfAllocator& alloc, int lg, const char* side, long itera
     {
         plan = crd::memory::construct_or_fatal<fft::FftPlan<f32>>(alloc, kPlanOutOfMemory, &alloc, n, forward);
     }
-    const auto transform = [&]
+    const auto execute = [&]
     {
-        std::memcpy(work.data(), data.base.data(), n * sizeof(Complex<f32>));
         if (mkl)
         {
-            DftiComputeForward(h, work.data());
+            DftiComputeForward(h, x);
         }
         else if (plan != nullptr)
         {
-            plan->execute(cont::Span<Complex<f32>>(work.data(), n), fft::FftDirection::Forward);
+            plan->execute(cont::Span<Complex<f32>>(x, n), fft::FftDirection::Forward);
         }
     };
+    const auto transform = [&]
+    {
+        std::memcpy(x, data.base.data(), n * sizeof(Complex<f32>));
+        execute();
+    };
     transform();
-    const double err = copy ? 0.0 : max_rel(work.data(), data.truth.data(), n);
-    const crd::u64 bits = crd::fnv1a_64(work.data(), n * sizeof(Complex<f32>));
+    const double err = copy ? 0.0 : max_rel(x, data.truth.data(), n);
+    const crd::u64 bits = crd::fnv1a_64(x, n * sizeof(Complex<f32>));
     int status = 0;
     if (err > bound(n))
     {
@@ -305,18 +354,32 @@ int loop(crd::memory::TlsfAllocator& alloc, int lg, const char* side, long itera
                      bound(n));
         status = 1;
     }
+    cont::Array<double> each(&alloc);
+    each.resize(distribution ? static_cast<usize>(iterations) : 0);
     const double ms = time_ms(
         [&]
         {
             for (long i = 0; i < iterations; ++i)
             {
-                transform();
+                if (distribution)
+                {
+                    std::memcpy(x, data.base.data(), n * sizeof(Complex<f32>));
+                    each[static_cast<usize>(i)] = time_ms(execute);
+                }
+                else
+                {
+                    transform();
+                }
             }
         });
     std::printf("loop n=%zu side=%s forward=%s iterations=%ld: %.6f ms per transform (with its copy), err %.1e "
                 "bits=%016llx\n",
                 n, side, mkl || copy ? side : fft::fft_algorithm_name(forward), iterations,
                 ms / static_cast<double>(iterations), err, static_cast<unsigned long long>(bits));
+    if (distribution)
+    {
+        print_distribution(each);
+    }
 #ifdef CRD_FFT_PROFILE
     fft::prof::dump_four_step();
 #endif
@@ -351,6 +414,18 @@ bool parse_options(int argc, char** argv, Options* options)
         {
             options->loop_side = argv[++i];
         }
+        else if (std::strcmp(argv[i], "--distribution") == 0)
+        {
+            options->distribution = true;
+        }
+        else if (std::strcmp(argv[i], "--offset") == 0 && has_value)
+        {
+            options->offset = static_cast<usize>(std::strtoul(argv[++i], nullptr, 10));
+            if (options->offset >= kMaxOffset || options->offset % sizeof(Complex<f32>) != 0)
+            {
+                return false;
+            }
+        }
         else if (std::strcmp(argv[i], "--iterations") == 0 && has_value)
         {
             options->iterations = std::strtol(argv[++i], nullptr, 10);
@@ -366,7 +441,7 @@ bool parse_options(int argc, char** argv, Options* options)
     {
         return sizes && options->lg_first == options->lg_last && options->iterations > 0 && !options->planned_only;
     }
-    return sizes && options->iterations == 0;
+    return sizes && options->iterations == 0 && !options->distribution;
 }
 } // namespace
 
@@ -375,8 +450,9 @@ int main(int argc, char** argv)
     Options options;
     if (!parse_options(argc, argv, &options))
     {
-        std::fprintf(stderr, "usage: bench_fft_f32 [--sizes A-B] [--planned]\n"
-                             "       bench_fft_f32 --loop <planned|algorithm|mkl|copy> --sizes A-A --iterations K\n"
+        std::fprintf(stderr, "usage: bench_fft_f32 [--sizes A-B] [--planned] [--offset B]\n"
+                             "       bench_fft_f32 --loop <planned|algorithm|mkl|copy> --sizes A-A --iterations K "
+                             "[--distribution] [--offset B]\n"
                              "       (10 <= A <= B <= 22)\n");
         return 2;
     }
@@ -387,7 +463,7 @@ int main(int argc, char** argv)
     std::printf("fft kernel level: %s\n", crd::cpu_level_name(fft::fft_kernels().level)); // the level's own plans
     if (options.loop_side != nullptr)
     {
-        return loop(alloc, options.lg_first, options.loop_side, options.iterations);
+        return loop(alloc, options);
     }
     std::printf("=== complex-f32 forward FFT, best of reps (ms); ratio = MKL / Cerid; errors against FFTW f64 ===\n");
     std::printf("%-9s | %-15s | %10s | %10s | %7s | %-7s | %-7s | %s\n", "n", "Cerid arm", "Cerid", "MKL", "ratio",
@@ -416,7 +492,7 @@ int main(int argc, char** argv)
                 add(forward);
             }
         }
-        ok = board(&alloc, lg, arms, arm_count) && ok;
+        ok = board(&alloc, lg, arms, arm_count, options.offset) && ok;
         for (usize a = arm_count; a-- > 0;)
         {
             crd::memory::destroy(alloc, plans[a]);

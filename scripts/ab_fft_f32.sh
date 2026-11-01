@@ -12,11 +12,13 @@
 # Environment: CRD_CPU_LEVEL (the level, as the boards select it), CRD_BENCH_CPUS (the taskset CPU, default 3),
 # CRD_AB_CANDIDATE (the candidate program), CRD_AB_HEAD (HEAD's program, such as a copy saved before the candidate
 # was built into the lane tree; default the lane tree's), CRD_AB_ARMS (space-separated algorithm names, such as
-# "in-place-3 standalone-hier"), CRD_AB_REFERENCE (the named arms' reference: mkl, the default, or one of them).
+# "in-place-3 standalone-hier"), CRD_AB_REFERENCE (the named arms' reference: mkl, the default, or one of them),
+# CRD_AB_OFFSET (the transformed buffer's bytes past a 64-byte boundary, bench_fft_f32 --offset; 16 is a malloc'd
+# buffer's alignment, which slows the 8K to 64K forwards of Cerid and MKL alike).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 if [[ $# -lt 1 || $1 == -* ]]; then
-    sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 2
 fi
 out=$1
@@ -27,24 +29,28 @@ if [[ ${1:-} == --sizes ]]; then
     shift 2
 fi
 mkdir -p "$out"
+flags="--sizes $sizes"
+if [[ -n ${CRD_AB_OFFSET:-} ]]; then # only when set: a build before the option refuses it
+    flags+=" --offset $CRD_AB_OFFSET"
+fi
 program=${CRD_AB_HEAD:-$(bash scripts/wsl-lane.sh tree linux-gcc-release)/runtime/bench_fft_f32}
 # A board row: n | arm | Cerid ms | MKL ms | ratio | errors | bits.
 cerid='^(?P<key>\d+) +\| +\S+ +\| +(?P<value>[\d.]+) +\|'
 mkl='^(?P<key>\d+) +\| +\S+ +\| +[\d.]+ +\| +(?P<value>[\d.]+) +\|'
 bits='^(?P<key>\d+) +\|.*\| (?P<value>[0-9a-f]{16})$'
-arguments=(--cmd "head=$program --planned --sizes $sizes" --arm "cerid=head:$cerid" --arm "mkl=head:$mkl")
+arguments=(--cmd "head=$program --planned $flags" --arm "cerid=head:$cerid" --arm "mkl=head:$mkl")
 reference=mkl
 if [[ -n ${CRD_AB_ARMS:-} ]]; then
     read -r -a names <<< "$CRD_AB_ARMS"
     # MKL is timed beside every arm of a size; the first named arm's row carries it.
-    arguments=(--cmd "head=$program --sizes $sizes"
+    arguments=(--cmd "head=$program $flags"
                --arm "mkl=head:^(?P<key>\d+) +\| +${names[0]} +\| +[\d.]+ +\| +(?P<value>[\d.]+) +\|")
     for name in "${names[@]}"; do
         arguments+=(--arm "$name=head:^(?P<key>\d+) +\| +$name +\| +(?P<value>[\d.]+) +\|")
     done
     reference=${CRD_AB_REFERENCE:-mkl}
 elif [[ -n ${CRD_AB_CANDIDATE:-} ]]; then
-    arguments+=(--cmd "candidate=$CRD_AB_CANDIDATE --planned --sizes $sizes" --arm "candidate=candidate:$cerid")
+    arguments+=(--cmd "candidate=$CRD_AB_CANDIDATE --planned $flags" --arm "candidate=candidate:$cerid")
     arguments+=(--same "head,candidate:$bits")
     reference=cerid
 fi
