@@ -382,6 +382,8 @@ cont::StringView crypto_error_name(CryptoError error) noexcept
         return "forged";
     case CryptoError::WeakSecret:
         return "weak-secret";
+    case CryptoError::Exhausted:
+        return "exhausted";
     case CryptoError::ProviderFailure:
         return "provider-failure";
     }

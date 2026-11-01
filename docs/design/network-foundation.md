@@ -502,6 +502,47 @@ OpenSSL servers installing hostile forms (a claim one byte off either way, claim
 claim) and seeded corruptions of real forms; the driver checks the key shares, Cerid's GREASE values and each
 compress_certificate offer on the wire and each end's KeyUpdate counts and compressed Certificates against the other's.
 
+<a id="quic-protection"></a>
+### QUIC packet protection
+
+[quic.hpp](../../engine/foundation/crypto/include/crd/crypto/quic.hpp) is RFC 9001 section 5 for QUIC versions 1
+and 2 (RFC 9369) over the provider interface: HKDF-Expand-Label and the AEAD keys of `provider.hpp`, and for header
+protection only the provider's AES block and ChaCha20 stream functions. The handshake decides which secrets exist
+(the QUIC integration of `tls.hpp`); framing, connection IDs and recovery are `crd-net`'s (4.2a).
+
+- **Initial secrets** for the client-chosen Destination Connection ID (0 to 20 bytes) under each version's salt.
+- **Packet keys** (`QuicPacketKey`): the AEAD key and IV from a traffic secret with "quic key" and "quic iv"
+  ("quicv2 ..." for version 2), the suite named by its AEAD (AES-128-GCM and ChaCha20-Poly1305 with SHA-256,
+  AES-256-GCM with SHA-384). A packet is one buffer, the header (associated data, its packet number encoded) then the
+  payload and room for the tag, sealed and opened in place under the IV exclusive-or the packet number; a failed
+  open zeroes the payload. `update()` derives the next key phase with "quic ku" and leaves the current key intact for
+  reordered packets.
+- **Usage limits** (RFC 9001 section 6.6) are enforced in code: a key counts what it seals and refuses (`Exhausted`)
+  at 2^23 packets for AES-GCM (ChaCha20-Poly1305's limit lies beyond every packet number), or at a lower limit the
+  transport sets; `update_due()` turns true at three quarters so a key update completes first.
+  `quic_integrity_limit` (2^52 AES-GCM, 2^36 ChaCha20-Poly1305) is counted by the connection across all its keys,
+  so a key counts nothing on open and a receiver never enforces its peer's limit.
+- **Header protection** (`QuicHeaderKey`, "quic hp", kept across key updates): the mask from AES-ECB or ChaCha20 over
+  the 16-byte sample 4 bytes past the packet number's start; a packet too short to sample is `BadLength`, never
+  partly protected. Removal reports the packet number's length and truncated value; nothing it exposes (key phase,
+  reserved bits) may change connection state before the AEAD opens.
+- **Packet numbers**: the encoder's length covers twice the unacknowledged range (RFC 9000 appendix A.2, 0 when no
+  4-byte encoding reaches it) and the decoder takes the candidate closest to the expected number within [0, 2^62)
+  (appendix A.3).
+- **Retry integrity tags**: AES-128-GCM under each version's fixed key and nonce over the pseudo-packet, built on the
+  stack; a Retry is at most 1,472 bytes (the UDP payload of a 1,500-byte IPv4 path, as ngtcp2 bounds its pseudo-packet)
+  and its tag is compared in constant time.
+
+Nothing allocates; open, header protection and the Retry functions are read-only and run on several threads, while
+init, update and seal take the sender's exclusive access. Evidence: `test_quic.cpp` (RFC 9001 and RFC 9369 appendix A
+byte for byte: both Initial secrets, the client's 1,200-byte and the server's Initial packets sealed, protected and read
+back, both Retry tags with every bit of the packet and the original connection ID authenticated, the ChaCha20-Poly1305
+short header packet and its key update against the "ku" secret; RFC 9000's packet number examples and every window
+edge; refusals, limits, a changed byte anywhere in a packet, random round trips in every suite and version, and four
+threads on one key) and the `crd-fuzz-crypto-quic` target (header protection refused exactly when unsampleable and
+restored by a round trip, an opened packet re-sealing to its input, Retry verdicts against the computed tag, packet
+numbers against a restatement of appendix A.3, and seeds whose verdicts the harness checks).
+
 <a id="negotiation"></a>
 ## Version and extension negotiation
 

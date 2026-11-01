@@ -7,6 +7,10 @@
 #   crd-fuzz-crypto-provider   the provider interface on hostile input: AEAD openings that must re-seal to their input,
 #                              verdicts and refusals by length, key agreement with arbitrary peers, HKDF's prefix
 #                              property and sign-then-verify from arbitrary seeds.
+#   crd-fuzz-crypto-quic       QUIC packet protection on hostile packets, Retries and packet numbers: header protection
+#                              refuses exactly the unsampleable packets and round-trips, an opened packet re-seals to
+#                              its input, a Retry verifies exactly when its tag is the computed one, and packet numbers
+#                              decode to the closest candidate.
 #   crd-fuzz-crypto-tls        TLS 1.3 sessions fed hostile bytes as a server and as a client: never established, only
 #                              the documented answers, failure is final and every buffer stays bounded; and compressed
 #                              Certificates decoded only to reachable claims within the bound.
@@ -16,3 +20,5 @@ crd_fuzz_target(crd-fuzz-crypto-provider
     SOURCES fuzz_provider.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-provider")
 crd_fuzz_target(crd-fuzz-crypto-tls
     SOURCES fuzz_tls.cpp LIBRARIES crd-crypto crd-compression CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-tls")
+crd_fuzz_target(crd-fuzz-crypto-quic
+    SOURCES fuzz_quic.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-quic")

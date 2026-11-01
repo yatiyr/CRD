@@ -40,10 +40,11 @@ enum class CryptoError : u8
     BadKey,          // a key, own or the peer's, is malformed or invalid for the algorithm
     Forged,          // AEAD open: the tag does not authenticate the ciphertext, nonce and associated data
     WeakSecret,      // key agreement produced the all-zero secret (an X25519 peer key of small order)
+    Exhausted,       // the key reached its usage limit: update it (quic.hpp's packet keys)
     ProviderFailure, // the provider failed (no randomness, no memory)
 };
 
-// "none", "unsupported", "not-ready", "bad-length", "overlap", "bad-key", "forged", "weak-secret",
+// "none", "unsupported", "not-ready", "bad-length", "overlap", "bad-key", "forged", "weak-secret", "exhausted",
 // "provider-failure".
 [[nodiscard]] cont::StringView crypto_error_name(CryptoError error) noexcept;
 
