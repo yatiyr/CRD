@@ -1,10 +1,13 @@
-// cuda_bench.hpp — what the GPU boards' CUDA programs share (bench/CMakeLists.txt): one failure path and one event
-// timer.
+// cuda_bench.hpp — what the GPU boards' CUDA programs share (bench/CMakeLists.txt): one failure path, owned device
+// arrays and two timers.
 //
 // CRD_CUDA_CHECK(call) runs a CUDA runtime, cuFFT or cuBLASLt call and, unless it returns its success status (0 in each
 // library), prints the call, its file and line and the status, and exits 1, so a failed allocation, plan, launch or
 // transfer fails the board run instead of timing nothing or printing a wrong row. A kernel launch is checked by
 // CRD_CUDA_CHECK(cudaGetLastError()) after it; an asynchronous fault surfaces at the next checked synchronisation.
+//
+// device_array<T>(count) allocates `count` elements on the device (a failed allocation fails the run); the returned
+// owner frees them.
 //
 // best_event_ms(runs, body) times `body` (work queued on the default stream) between two CUDA events `runs` times and
 // returns the least GPU time in milliseconds: the peer's strongest number, the most conservative bar for Cerid's rows.
@@ -17,7 +20,9 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstddef>
 #include <cstdlib>
+#include <memory>
 #include <type_traits>
 
 namespace crd_bench
@@ -47,6 +52,25 @@ void cuda_check(Status status, const char* call, const char* file, int line)
 
 namespace crd_bench
 {
+struct DeviceFree
+{
+    void operator()(void* pointer) const
+    {
+        CRD_CUDA_CHECK(cudaFree(pointer));
+    }
+};
+
+template <typename T>
+using DeviceArray = std::unique_ptr<T[], DeviceFree>;
+
+template <typename T>
+DeviceArray<T> device_array(size_t count)
+{
+    T* pointer = nullptr;
+    CRD_CUDA_CHECK(cudaMalloc(&pointer, sizeof(T) * count));
+    return DeviceArray<T>(pointer);
+}
+
 template <typename Body>
 float best_event_ms(int runs, Body&& body)
 {

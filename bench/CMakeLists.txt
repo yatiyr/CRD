@@ -4,10 +4,10 @@
 # 2026-07-14-fused-mlp-cublas-gold.md, 2026-07-15-fft-ocean-batched-ifft.md, 2026-07-23-as4-flash-attention-fusion.md).
 # nvcc compiles them for CMAKE_CUDA_ARCHITECTURES (default 89, the measuring PC's RTX 4070 Ti SUPER) with the tree's
 # C++ compiler as its host compiler, against the toolkit crd_find_cuda_toolkit finds (CUDAToolkit_ROOT: the pinned one
-# from scripts/install-cuda.py). The cuFFT, CUB, CKIR FFT and attention programs exit 1 at their first failed CUDA or
-# cuFFT call (cuda_bench.hpp's CRD_CUDA_CHECK); the MLP and onesweep programs still check through their own helpers
-# (REPO.3). They link no Cerid library, so the ISA isolation guard leaves them out. The list of built
-# programs goes to <tree>/bench/cuda-programs.txt, which scripts/run_bench_gpu_cuda.sh runs.
+# from scripts/install-cuda.py). Every program exits 1 at its first failed CUDA, cuFFT or cuBLASLt call
+# (cuda_bench.hpp's CRD_CUDA_CHECK) and at a result its judge refuses; the four MLP programs share
+# gpu-compute/mlp_bench.hpp. They link no Cerid library, so the ISA isolation guard leaves them out. The list of built programs goes to
+# <tree>/bench/cuda-programs.txt, which scripts/run_bench_gpu_cuda.sh runs.
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(FATAL_ERROR "[gpu-vs-cuda] the CUDA programs build on Linux (a Windows NVIDIA host runs them under WSL2)")
 endif()
