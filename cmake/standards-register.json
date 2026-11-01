@@ -422,10 +422,11 @@
       "id": "ietf.grease",
       "title": "Applying GREASE to TLS extensibility",
       "kind": "guidance",
-      "state": "planned",
-      "owner": "net",
+      "state": "implemented",
+      "owner": "crypto",
       "rows": [
-        "NET-STD"
+        "NET-STD",
+        "NET.2"
       ],
       "spec": {
         "type": "rfc",
@@ -439,8 +440,12 @@
         "verified": false
       },
       "review": "2027-10-27",
-      "evidence": [],
-      "deprecation": null
+      "evidence": [
+        "tests/foundation/crypto/test_tls.cpp",
+        "tests/foundation/crypto/interop/tls_interop.py"
+      ],
+      "deprecation": null,
+      "note": "Every build's TLS ClientHello (crd-crypto tls.hpp, the provider's GREASE switched on for every context) carries a reserved value in its cipher suites, supported groups, supported versions and key shares and two reserved extensions, chosen per connection and kept by a ClientHello sent again after a HelloRetryRequest; OpenSSL 3.5 servers ignore them. Cerid's own negotiation sends the same sixteen values (cerid.negotiation)."
     },
     {
       "id": "ietf.algorithm-agility",
@@ -623,7 +628,8 @@
       "state": "planned",
       "owner": "net",
       "rows": [
-        "NET-STD"
+        "NET-STD",
+        "4.2a"
       ],
       "spec": {
         "type": "rfc",
@@ -645,7 +651,8 @@
       },
       "review": "2027-10-27",
       "evidence": [],
-      "deprecation": null
+      "deprecation": null,
+      "note": "A QUIC transport parameter: NET-STD fixes the contract (every Cerid wire protocol negotiates its version and sends GREASE) and the verified codepoint; 4.2a's QUIC transport implements it."
     },
     {
       "id": "quic.version-negotiation",
@@ -654,7 +661,8 @@
       "state": "planned",
       "owner": "net",
       "rows": [
-        "NET-STD"
+        "NET-STD",
+        "4.2a"
       ],
       "spec": {
         "type": "rfc",
@@ -676,7 +684,8 @@
       },
       "review": "2027-10-27",
       "evidence": [],
-      "deprecation": null
+      "deprecation": null,
+      "note": "A QUIC transport parameter: NET-STD fixes the contract (every Cerid wire protocol negotiates its version and sends GREASE) and the verified codepoint; 4.2a's QUIC transport implements it."
     },
     {
       "id": "quic.v2",

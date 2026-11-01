@@ -359,6 +359,9 @@ record layers, never by trust:
   server treats an unknown identity and a wrong binder alike. Authenticated peers receive the specific alert.
 - **Raw public keys and pinned credentials** are bound out of band; the server checks that `server_name` names its
   identity, or both sides use `external_id_hash` (RFC 8844), against misbinding.
+- **GREASE.** Every build's ClientHello carries RFC 8701's reserved values (`ietf.grease`), chosen per connection, in
+  its cipher suites, supported groups, supported versions and key shares and as two extensions; a ClientHello sent
+  again after a HelloRetryRequest keeps them, and a server ignores them and never negotiates one.
 - **Registered values.** Groups, signature schemes and extensions are the register's codepoints, with IANA's
   "Recommended" value recorded ([registers](registers.md#recommended-column)); a discouraged ("D") codepoint is never
   accepted. ML-DSA certificates sign with the `mldsa44`/`mldsa65`/`mldsa87` schemes (`tls.ml-dsa`); NET.2 decides
@@ -402,12 +405,13 @@ tests):
   NET.2's next slices on this same interface.
 
 Evidence: `test_tls.cpp` (every group and signature algorithm, each key share read off the wire and checked against
-its group's layout with the provider's own X25519, ECDH and ML-KEM modulus check, HelloRetryRequest, pins both ways,
+its group's layout with the provider's own X25519, ECDH and ML-KEM modulus check, the hellos' GREASE values read off
+the wire, HelloRetryRequest, pins both ways,
 names, alerts, bounds, close_notify, adversarial records, every configuration refusal, one context on four threads),
 the `crd-fuzz-crypto-tls` target, and `tls_interop.py` against the pinned OpenSSL 3.5 (`CRD_BUILD_TLS_VS_OPENSSL`,
 Linux): every hybrid group both ways, a HelloRetryRequest both ways, hybrid kept beside a classical share both ways,
 mutual authentication, an unpinned key refused and a TLS 1.2 client refused with `protocol_version`, with the key
-shares checked on the wire by the driver.
+shares and Cerid's GREASE values checked on the wire by the driver.
 
 <a id="negotiation"></a>
 ## Version and extension negotiation
@@ -417,8 +421,9 @@ allocation) carries in its handshake:
 
 - a protocol identifier and a version (major: incompatible; minor: compatible additions);
 - an extension list of (identifier, length, value) entries; an unknown extension is ignored, never fatal;
-- GREASE identifiers from a reserved pattern, sent by every build including shipping (RFC 8701 practice), with the
-  QUIC bit greased per RFC 9287 and compatible version negotiation per RFC 9368;
+- GREASE identifiers from a reserved pattern, sent by every build including shipping (RFC 8701 practice; every TLS
+  ClientHello too), with the QUIC bit greased per RFC 9287 and compatible version negotiation per RFC 9368 in
+  [4.2a](../ROADMAP.md#slice-4.2a)'s QUIC transport;
 - transcript binding: the negotiated version, extensions and algorithms are covered by the handshake transcript, so
   a downgrade is detected (T05).
 
@@ -592,7 +597,7 @@ reviewed releases, removals may be pushed at once.
 | Network math (FEC, estimators, quantisation) | [HESAP-NET](../ROADMAP.md#slice-hesap-net) |
 | Schemas, wire format, admission stages S6 and S7, padding policies | [NET.3](../ROADMAP.md#slice-net.3) |
 | Adversarial and load evidence, fuzzing, interop, admission budgets | [NET.4](../ROADMAP.md#slice-net.4) |
-| `crd-net` transport, paths, browser-facing server, stages S0 to S5 | [4.2a](../ROADMAP.md#slice-4.2a) |
+| `crd-net` transport, paths, browser-facing server, stages S0 to S5, the QUIC bit greased (RFC 9287) and compatible version negotiation (RFC 9368) | [4.2a](../ROADMAP.md#slice-4.2a) |
 | PMTU, ECN, pacing, congestion control, migration, offloads | [NET-PATH](../ROADMAP.md#slice-net-path) |
 | ICE, STUN, TURN, MASQUE, relays, IPv6-only and NAT64 | [NET-REACH](../ROADMAP.md#slice-net-reach) |
 | Determinism substrate | [4.2b](../ROADMAP.md#slice-4.2b) |
