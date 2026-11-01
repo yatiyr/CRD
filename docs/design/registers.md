@@ -317,10 +317,22 @@ elsewhere).
   `pending`: MASAK publishes them through a web application with no list file at a stable address, so they are read
   from the Official Gazette and MASAK next. A list's maximum age is a backstop measured from its publication day;
   that a held list is still the authority's current one is the refresh's knowledge, carried with NET.2's signed
-  delivery. The embargoed destinations are none of these files: each authority's comprehensive and sectoral regimes
-  are authored generations of their own from the regulations read (31 CFR chapter V, the EU's Article 215
-  regulations, the UK's regime regulations, the UN resolutions). Until those generations land (a remaining clause of
-  COMPLY.1), a destination screened against the designation lists alone finds no embargo.
+  delivery.
+- **Embargoed destinations are authored.** No designation file carries them, so each authority's comprehensive and
+  sectoral regimes are a generation of their own, authored in the register's `sanctions_lists.embargoes` from the
+  regulations read: per authority the screening entry it serves (read from its primary source by
+  `register-review.py read`), a title, the maximum age, `open` (what the reading still owes, or null) and the
+  destinations, each a region, a programme, a measure and the provision it rests on; `reasons` says why a screening
+  entry has no generation (not yet read, or an instrument that embargoes no destination). `import-sanctions.py import`
+  writes each beside the imported lists with no fetch: `published` is the day the text was read (the maximum age runs
+  from the reading), `source` the entry's primary and `source_sha256` the digest of the reading (the pinned text's
+  digest and the destinations), so a corrected reading of the same text is the next generation. One rule set
+  (`embargo_errors`) refuses a malformed generation in the importer and the guard. `us.ofac.embargo` is 31 CFR chapter
+  V as read on 2026-11-01 ([session](../sessions/2026-11-01-comply-1-us-embargoes.md#embargoes)): Cuba, Iran, North
+  Korea and the Crimea region (UA-43, UA-40) comprehensive, the Russian Federation and Venezuela sectoral, 92 days'
+  maximum age; the regions and prohibitions it incorporates from Executive orders are its `open` reading. The EU, UK
+  and UN regimes follow once their regulations and resolutions are read; until then a destination screened against
+  their designation lists alone finds no embargo.
 - **Folding.** Names are compared in search-folded form (`text.search-folding`, crd-core's
   [text_fold.hpp](../../engine/foundation/core/include/crd/core/text_fold.hpp)): lower case; Latin letters with
   diacritics, ligatures and fullwidth forms to ASCII (Ş and ş to s, İ and ı to i, ø to o, ß to ss, æ to ae, the
@@ -369,9 +381,10 @@ elsewhere).
   `crd-fuzz-comply-sanctions` corpus, `crd-ceridc-tests` `[screen]` (every verdict and hit field, failing closed,
   every refusal, the real binary's bytes), the importer's Python cases (`SanctionsLists` in
   `scripts/test-repository-tools.py`: every format on the excerpts, every refusal, generations, calendars, the
-  register's `sanctions_lists` guard) and the official formats end to end: `crd-comply-sanctions-import` imports the
-  excerpts into an emptied directory and `crd-comply-sanctions-imported` (the hidden `[.imported]` case) decodes,
-  adopts and screens what it wrote.
+  register's `sanctions_lists` guard, every authored embargo rule and generation) and the official formats end to
+  end: `crd-comply-sanctions-import` imports the excerpts and writes the US embargo into an emptied directory and
+  `crd-comply-sanctions-imported` (the hidden `[.imported]` cases) decodes, adopts and screens what it wrote, the
+  embargo's destinations by region, measure and age included.
 
 <a id="snapshot-and-review"></a>
 ## Snapshot and review

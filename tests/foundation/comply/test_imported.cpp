@@ -3,8 +3,9 @@
 // the UN Security Council Consolidated List and the UK Sanctions List (tests/foundation/comply/lists), the
 // cerid-sanctions/1 generations this case decodes, adopts and screens: the official formats end to end, the birth
 // periods the importer derives (ranges, circa, the Hijri and Solar Hijri calendars, an unknown century), identifiers
-// with their issuing country, and names in their own scripts. The CTest crd-comply-sanctions-import writes the
-// generations first (a CTest fixture), so the case is hidden from discovery and runs as crd-comply-sanctions-imported.
+// with their issuing country, and names in their own scripts; and the US embargoed destinations the importer writes
+// from the register's authored reading of 31 CFR chapter V. The CTest crd-comply-sanctions-import writes the
+// generations first (a CTest fixture), so the cases are hidden from discovery and run as crd-comply-sanctions-imported.
 
 #include <crd/comply/sanctions.hpp>
 #include <crd/platform/filesystem.hpp>
@@ -34,6 +35,32 @@ constexpr Imported kImported[] = {
     {"un.sc", "INT", 20261031230007ULL, 7U},
     {"gb.fcdo", "GB", 20261030000000ULL, 6U},
 };
+
+// The destinations 31 CFR chapter V embargoes, authored in cmake/legal-register.json from the text read on 2026-11-01.
+constexpr Imported kEmbargo = {"us.ofac.embargo", "US", 20261101000000ULL, 0U};
+
+// Reads the generation the importer wrote for `expected`, checks its header and adopts it.
+SanctionsList adopt(SanctionsStore& store, const Imported& expected)
+{
+    cont::String path(CRD_COMPLY_IMPORTED_DIR "/");
+    path.append(expected.authority);
+    path.append(".sanctions.toml");
+    INFO(path.c_str());
+    cont::Array<crd::u8> bytes;
+    REQUIRE(fs::read_file_binary(fs::Path(cont::StringView(path)), bytes));
+    const cont::StringView text(reinterpret_cast<const char*>(bytes.data()), bytes.size()); // NOLINT
+    SanctionsList list;
+    const DecodeFailure failure = decode_sanctions(text, list);
+    INFO(comply_error_name(failure.error) << " line " << failure.line << " key " << failure.key);
+    REQUIRE(failure.error == ComplyError::None);
+    CHECK(list.authority == cont::StringView(expected.authority));
+    CHECK(list.jurisdiction == cont::StringView(expected.jurisdiction));
+    CHECK(list.number == expected.generation);
+    CHECK(list.parties.size() == expected.parties);
+    REQUIRE(store.apply(text).error == ComplyError::None);
+    CHECK(store.generation(expected.authority) == expected.generation);
+    return list;
+}
 
 // One subject screened against every imported list.
 struct Check
@@ -105,24 +132,8 @@ TEST_CASE("sanctions: the imported official lists decode, adopt and screen", "[.
     SanctionsStore store;
     for (const Imported& expected : kImported)
     {
-        cont::String path(CRD_COMPLY_IMPORTED_DIR "/");
-        path.append(expected.authority);
-        path.append(".sanctions.toml");
-        INFO(path.c_str());
-        cont::Array<crd::u8> bytes;
-        REQUIRE(fs::read_file_binary(fs::Path(cont::StringView(path)), bytes));
-        const cont::StringView text(reinterpret_cast<const char*>(bytes.data()), bytes.size()); // NOLINT
-        SanctionsList list;
-        const DecodeFailure failure = decode_sanctions(text, list);
-        INFO(comply_error_name(failure.error) << " line " << failure.line << " key " << failure.key);
-        REQUIRE(failure.error == ComplyError::None);
-        CHECK(list.authority == cont::StringView(expected.authority));
-        CHECK(list.jurisdiction == cont::StringView(expected.jurisdiction));
-        CHECK(list.number == expected.generation);
-        CHECK(list.parties.size() == expected.parties);
-        CHECK(list.destinations.empty()); // designation lists: the embargoed destinations are other generations
-        REQUIRE(store.apply(text).error == ComplyError::None);
-        CHECK(store.generation(expected.authority) == expected.generation);
+        // Designation lists: the embargoed destinations are other generations.
+        CHECK(adopt(store, expected).destinations.empty());
     }
 
     // OFAC: an exact name alone is possible, with its IMO number or a listed digital currency address a match.
@@ -184,4 +195,53 @@ TEST_CASE("sanctions: the imported official lists decode, adopt and screen", "[.
                       "gb.fcdo.rus2701") == Disposition::Match);
     CHECK(disposition(store, Check("Petrel 8", PartyKind::Vessel, {}, {}, {"imo:9562233"}), "gb.fcdo.dpr0075") ==
           Disposition::Match);
+}
+
+TEST_CASE("sanctions: the authored US embargo decodes, adopts and screens destinations", "[.imported]")
+{
+    SanctionsStore store;
+    const SanctionsList list = adopt(store, kEmbargo);
+    CHECK(list.destinations.size() == 7U);
+    CHECK(list.published == 20261101U);
+    CHECK(list.max_age_days == 92U);
+
+    const auto screened = [&store](cont::StringView region, Day day, crd::usize hits, Disposition disposition)
+    {
+        INFO(region << " on " << day);
+        const cont::StringView authorities[] = {kEmbargo.authority};
+        ScreenRequest request;
+        request.authorities = cont::ConstSpan<cont::StringView>(authorities, 1U);
+        request.day = day;
+        request.destination = region;
+        Screening out;
+        REQUIRE(store.screen(request, out).error == ComplyError::None);
+        REQUIRE(out.destinations.size() == hits);
+        for (const DestinationHit& each : out.destinations)
+        {
+            CHECK(each.disposition == disposition);
+            CHECK(each.generation == kEmbargo.generation);
+        }
+        CHECK(out.gaps.size() == (day > 20270201U ? 1U : 0U));
+        return out.verdict;
+    };
+    // Cuba, Iran and North Korea and the Crimea region (the Autonomous Republic and Sevastopol) block, a place inside
+    // an embargoed country too; Ukraine as a whole names the country the region belongs to, which needs review.
+    for (const cont::StringView region : {"CU", "IR", "KP", "UA-43", "UA-40", "CU-03"})
+    {
+        CHECK(screened(region, kDay, 1U, Disposition::Match) == Verdict::Blocked);
+    }
+    CHECK(screened("UA", kDay, 2U, Disposition::Possible) == Verdict::Review);
+    // The Russian Federation and Venezuela are sectoral: a match needs review.
+    CHECK(screened("RU", kDay, 1U, Disposition::Match) == Verdict::Review);
+    CHECK(screened("VE", kDay, 1U, Disposition::Match) == Verdict::Review);
+    // No comprehensive Syria programme is in the text read; another region of Ukraine and Turkey are clear.
+    for (const cont::StringView region : {"SY", "UA-30", "TR"})
+    {
+        CHECK(screened(region, kDay, 0U, Disposition::Match) == Verdict::Clear);
+    }
+    // The reading is fresh for 92 days (to 2027-02-01); after that it is stale, still blocks what it lists and keeps
+    // every other destination from clear.
+    CHECK(screened("TR", 20270201U, 0U, Disposition::Match) == Verdict::Clear);
+    CHECK(screened("CU", 20270202U, 1U, Disposition::Match) == Verdict::Blocked);
+    CHECK(screened("TR", 20270202U, 0U, Disposition::Match) == Verdict::Unavailable);
 }

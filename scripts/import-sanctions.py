@@ -13,7 +13,9 @@ parties). The raw files stay outside the repository: they are re-fetched from th
       write OUT/<authority>.sanctions.toml from the fetched file (ceridc screen --lists OUT reads it). The generation
       is the publication instant as YYYYMMDDhhmmss; a list stamped only with its day takes YYYYMMDD000000 and counts
       up from the previous generation in OUT for a second publication that day. A file already imported is left as
-      it is, and an older publication than OUT's is refused.
+      it is, and an older publication than OUT's is refused. The embargoed destinations authored in the register's
+      `sanctions_lists.embargoes` are written beside them (no fetch: the regulations they were read from are pinned
+      by the register entry they cite), each generation dated by the day its text was read.
   python scripts/import-sanctions.py record --from DIR [--authority A ...]
       record the fetched file in the register as the list read (the first read, then each reviewed refresh).
 
@@ -716,9 +718,11 @@ def previous_of(path):
     return int(number.group(1)), digest.group(1)
 
 
-def render(authority, config, jurisdiction, generation, published, sha256, parties):
+def render(authority, config, jurisdiction, generation, published, sha256, parties, destinations=()):
     quote, strings = _rules.quote, _rules.strings
-    lines = [f'# Imported by {TOOL} from {config["url"]}; never edit by hand.',
+    origin = f'Authored in {REGISTER} from {config["url"]}, written by {TOOL}' if destinations else \
+        f'Imported by {TOOL} from {config["url"]}'
+    lines = [f'# {origin}; never edit by hand.',
              f'format = {quote(FORMAT)}',
              f'authority = {quote(authority)}',
              f'jurisdiction = {quote(jurisdiction)}',
@@ -727,6 +731,9 @@ def render(authority, config, jurisdiction, generation, published, sha256, parti
              f'max_age_days = {config["max_age_days"]}',
              f'source = {quote(config["url"])}',
              f'source_sha256 = {quote(sha256)}']
+    for destination in destinations:
+        lines += ['', '[[destination]]', f'region = {quote(destination["region"])}',
+                  f'program = {quote(destination["program"])}', f'measure = {quote(destination["measure"])}']
     for party in parties:
         lines += ['', '[[party]]', f'id = {quote(party.id)}', f'kind = {quote(party.kind)}',
                   f'names = {strings(party.names)}', f'programs = {strings(party.programs)}',
@@ -756,6 +763,100 @@ def import_list(authority, config, jurisdiction, body, out_dir):
         text = render(authority, config, jurisdiction, generation, published, sha256, parties)
         out.write_bytes(text.encode('utf-8'))
     return generation, len(parties), published
+
+
+# Embargoed destinations ----------------------------------------------------------------------------------------------
+#
+# No designation file carries the destinations an authority embargoes: each authority's are authored in the register's
+# sanctions_lists.embargoes from the regulations read (the entry's consolidated text, recorded by register-review.py
+# read), one destination per region and programme with the provision it rests on. The generation is published on the
+# day the text was read, so its maximum age runs from the reading; its source is the entry's primary and its
+# source_sha256 the digest of the reading (the text's digest and the destinations), so a corrected reading of the same
+# text is a new generation.
+
+EMBARGO_KEYS = {'entry', 'title', 'max_age_days', 'destinations', 'open'}
+DESTINATION_KEYS = {'region', 'program', 'measure', 'basis'}
+MEASURES = ('comprehensive', 'sectoral')
+REGION = re.compile(r'([A-Z]{2})(?:-[A-Z0-9]{1,3})?')  # crd::comply's is_region: ISO 3166-1, or a subdivision
+MAX_DESTINATIONS = 1024  # kMaxDestinations
+MAX_LIST_AGE_DAYS = 366  # kMaxListAgeDays
+
+
+def entry_of(register, entry_id):
+    return next((entry for entry in register.get('entries') or [] if entry.get('id') == entry_id), None)
+
+
+def embargo_errors(authority, record, register):
+    """What keeps an authored embargo generation from being written: its shape, a text read from its primary source,
+    and destinations the decoder accepts (ISO regions of known countries, unique per programme, each with its
+    provision)."""
+    at = authority
+    if not AUTHORITY.fullmatch(authority):
+        return [f'{at}: an authority is a dotted lower-case id']
+    if not isinstance(record, dict) or set(record) != EMBARGO_KEYS:
+        return [f'{at} has {", ".join(sorted(EMBARGO_KEYS))}']
+    errors = []
+    entry = entry_of(register, record['entry'])
+    instrument = entry.get('instrument') if isinstance(entry, dict) else None
+    if not isinstance(instrument, dict) or not instrument.get('consolidated') or \
+            not (entry.get('source') or {}).get('verified'):
+        errors.append(f'{at}: entry {record["entry"]!r} is not an instrument read from its primary source '
+                      '(scripts/register-review.py read records it)')
+    if not isinstance(record['title'], str) or not record['title']:
+        errors.append(f'{at}: title names the embargoes')
+    if type(record['max_age_days']) is not int or not 1 <= record['max_age_days'] <= MAX_LIST_AGE_DAYS:
+        errors.append(f"{at}: max_age_days is 1 to {MAX_LIST_AGE_DAYS} (the decoder's bound)")
+    if record['open'] is not None and (not isinstance(record['open'], str) or not record['open']):
+        errors.append(f'{at}: open is null or says what the reading still owes')
+    destinations = record['destinations']
+    if not isinstance(destinations, list) or not 1 <= len(destinations) <= MAX_DESTINATIONS:
+        return errors + [f'{at}: destinations lists 1 to {MAX_DESTINATIONS} embargoed regions']
+    countries, seen = set(COUNTRIES) - {None}, set()
+    for destination in destinations:
+        if not isinstance(destination, dict) or set(destination) != DESTINATION_KEYS or \
+                not all(isinstance(destination[key], str) and destination[key] for key in DESTINATION_KEYS):
+            errors.append(f'{at}: a destination has {", ".join(sorted(DESTINATION_KEYS))}, each a text')
+            continue
+        region = REGION.fullmatch(destination['region'])
+        where = f'{at}: {destination["region"]}'
+        if region is None or region.group(1) not in countries:
+            errors.append(f'{where} is no ISO 3166-1 country or ISO 3166-2 subdivision of one {TOOL} knows')
+        if destination['measure'] not in MEASURES:
+            errors.append(f'{where}: measure is {" or ".join(MEASURES)}')
+        if any(len(destination[key].encode('utf-8')) > MAX_TEXT for key in DESTINATION_KEYS):
+            errors.append(f'{where}: a value longer than {MAX_TEXT} bytes')
+        if (destination['region'], destination['program']) in seen:
+            errors.append(f'{where} is embargoed twice under {destination["program"]}')
+        seen.add((destination['region'], destination['program']))
+    return errors
+
+
+def embargo_reading(record, entry):
+    """The SHA-256 of an authored generation's reading: the text it was read from and its destinations."""
+    reading = {'text': dict(entry['instrument']['consolidated'], url=entry['instrument']['primary']),
+               'destinations': record['destinations']}
+    canonical = json.dumps(reading, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
+def import_embargo(authority, record, register, out_dir):
+    """Writes OUT/<authority>.sanctions.toml; returns (generation or None when already current, destinations, the day
+    the text was read)."""
+    errors = embargo_errors(authority, record, register)
+    if errors:
+        raise SanctionsError('; '.join(errors))
+    entry = entry_of(register, record['entry'])
+    instrument = entry['instrument']
+    published, sha256 = instrument['consolidated']['read'], embargo_reading(record, entry)
+    out = Path(out_dir) / f'{authority}{SUFFIX}'
+    generation = generation_of(published, previous_of(out), sha256, authority)
+    if generation is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        config = {'url': instrument['primary'], 'max_age_days': record['max_age_days']}
+        text = render(authority, config, instrument['jurisdiction'], generation, published, sha256, [],
+                      record['destinations'])
+        out.write_bytes(text.encode('utf-8'))
+    return generation, len(record['destinations']), published
 
 
 # The register and the commands ---------------------------------------------------------------------------------------
@@ -823,9 +924,24 @@ def command_fetch(args, root):
     return 0
 
 
+def embargoes_of(register):
+    return ((register.get('sanctions_lists') or {}).get('embargoes') or {}).get('generations') or {}
+
+
 def command_import(args, root):
     register = load_register(root)
-    for authority, config in lists_of(register, args.authority).items():
+    lists, embargoes = lists_of(register, None), embargoes_of(register)
+    chosen = args.authority or [*lists, *embargoes]
+    unknown = sorted(set(chosen) - set(lists) - set(embargoes))
+    if unknown:
+        raise SanctionsError(f'{REGISTER} sanctions_lists has no {", ".join(unknown)}')
+    for authority in dict.fromkeys(chosen):
+        if authority in embargoes:
+            generation, destinations, read = import_embargo(authority, embargoes[authority], register, args.out)
+            state = 'already written' if generation is None else f'generation {generation}'
+            print(f'{authority}: {destinations} embargoed destinations read {read}: {state}')
+            continue
+        config = lists[authority]
         _, body = fetched(args.source, authority)
         generation, parties, published = import_list(authority, config, jurisdiction_of(register, config), body,
                                                      args.out)

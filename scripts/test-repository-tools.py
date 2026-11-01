@@ -5659,7 +5659,8 @@ class RegisterFixture:
         if 'counsel_reviews' not in legal:
             legal = dict(legal, counsel_reviews=self.counsel_reviews(legal))
         if 'sanctions_lists' not in legal:
-            legal = dict(legal, sanctions_lists={'about': 'fixture', 'lists': {}, 'pending': {}})
+            legal = dict(legal, sanctions_lists={'about': 'fixture', 'lists': {}, 'pending': {},
+                                                 'embargoes': {'about': 'fixture', 'generations': {}, 'reasons': {}}})
         (root / 'cmake' / 'legal-register.json').write_text(json.dumps(legal), encoding='utf-8')
         capabilities = {'capabilities': [{'id': 'network.transport', 'owner': 'net', 'status': 'planned'},
                                          {'id': 'compliance.obligations', 'owner': 'comply', 'status': 'planned'}]}
@@ -6664,7 +6665,11 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
         return {'about': 'fixture', 'lists': {'tr.masak': config}, 'pending': {}}
 
     def run_lists(self, section, entries=None, today='2026-11-01'):
-        legal = self.legal_register(entries or [self.screening_entry()], sanctions_lists=section)
+        entries = entries or [self.screening_entry()]
+        if isinstance(section, dict) and 'embargoes' not in section:  # the list cases: no destination embargoed
+            reasons = {entry['id']: 'no embargo' for entry in entries if entry.get('check') == self.SCREENING}
+            section = dict(section, embargoes={'about': 'fixture', 'generations': {}, 'reasons': reasons})
+        legal = self.legal_register(entries, sanctions_lists=section)
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)
             self.write_tree(root, self.register([self.entry()]), legal)
@@ -6734,6 +6739,160 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
         stray = self.sanctions()
         stray['pending'] = {'tr.kvkk.processing': 'x'}
         self.assert_lists_fail(stray, f"{where}: pending names 'tr.kvkk.processing', which is no screening entry")
+
+    # The embargoed destinations, authored per authority.
+
+    READ = {'version': '2026-10-15', 'read': '2026-10-31', 'sha256': 'cd' * 32}
+
+    def read_screening_entry(self):
+        return self.screening_entry(instrument=self.instrument(consolidated=dict(self.READ)),
+                                    source={'ref': 'docs/research.md#n83', 'read': '2026-10-31', 'verified': True})
+
+    @staticmethod
+    def embargo(**changes):
+        record = {'entry': 'tr.asset-freeze', 'title': 'Embargoes', 'max_age_days': 92,
+                  'destinations': [{'region': 'CU', 'program': 'P 515', 'measure': 'comprehensive', 'basis': '515.201'},
+                                   {'region': 'UA-43', 'program': 'P 589', 'measure': 'comprehensive',
+                                    'basis': '589.207'},
+                                   {'region': 'RU', 'program': 'P 589', 'measure': 'sectoral', 'basis': '589.202'}],
+                  'open': None}
+        record.update(changes)
+        return record
+
+    def embargoes(self, record=None, reasons=None, **lists):
+        section = {'about': 'fixture', 'lists': {}, 'pending': {'tr.asset-freeze': 'later'}}
+        section.update(lists)
+        section['embargoes'] = {'about': 'fixture', 'generations': {'tr.masak.embargo': record or self.embargo()},
+                                'reasons': reasons or {}}
+        return section
+
+    def assert_embargo_fails(self, section, message):
+        self.assert_lists_fail(section, message, entries=[self.read_screening_entry()])
+
+    def test_an_authored_embargo_on_a_read_screening_entry_passes(self):
+        code, output = self.run_lists(self.embargoes(), entries=[self.read_screening_entry()])
+        self.assertEqual(0, code, output)
+        code, output = self.run_lists(self.embargoes(self.embargo(open='The regimes read next.')),
+                                      entries=[self.read_screening_entry()])
+        self.assertEqual(0, code, output)
+
+    def test_every_embargo_names_a_read_screening_entry_iso_regions_measures_and_provisions(self):
+        where = 'legal register: sanctions_lists: embargoes: tr.masak.embargo'
+        self.assert_lists_fail(self.embargoes(), f"{where}: entry 'tr.asset-freeze' is not an instrument read from "
+                                                 'its primary source')
+        self.assert_embargo_fails(self.embargoes(self.embargo(entry='tr.kvkk.processing')),
+                                  f"{where}: entry 'tr.kvkk.processing' is no entry whose active check is the "
+                                  'screening')
+        unknown = self.embargo()
+        unknown['note'] = 'x'
+        self.assert_embargo_fails(self.embargoes(unknown), f'{where} has destinations, entry, max_age_days, open')
+        self.assert_embargo_fails(self.embargoes(self.embargo(title='')), f'{where}: title names the embargoes')
+        for age in (0, 367, True):
+            with self.subTest(age=age):
+                self.assert_embargo_fails(self.embargoes(self.embargo(max_age_days=age)),
+                                          f'{where}: max_age_days is 1 to 366')
+        self.assert_embargo_fails(self.embargoes(self.embargo(open='')), f'{where}: open is null or says what')
+        self.assert_embargo_fails(self.embargoes(self.embargo(destinations=[])),
+                                  f'{where}: destinations lists 1 to 1024 embargoed regions')
+        for region in ('XX', 'Cuba', 'cu', 'UA-4321', 'UA43', 'ZZ-43'):
+            with self.subTest(region=region):
+                bad = self.embargo()
+                bad['destinations'][0]['region'] = region
+                self.assert_embargo_fails(self.embargoes(bad), f'{where}: {region} is no ISO 3166-1 country')
+        bad = self.embargo()
+        bad['destinations'][0]['measure'] = 'partial'
+        self.assert_embargo_fails(self.embargoes(bad), f'{where}: CU: measure is comprehensive or sectoral')
+        bad = self.embargo()
+        bad['destinations'][0]['basis'] = ''
+        self.assert_embargo_fails(self.embargoes(bad), f'{where}: a destination has basis, measure, program, region')
+        bad = self.embargo()
+        bad['destinations'][0]['program'] = 'p' * 4097
+        self.assert_embargo_fails(self.embargoes(bad), f'{where}: CU: a value longer than 4096 bytes')
+        twice = self.embargo()
+        twice['destinations'].append(dict(twice['destinations'][1], measure='sectoral'))
+        self.assert_embargo_fails(self.embargoes(twice), f'{where}: UA-43 is embargoed twice under P 589')
+        other = self.embargo()
+        other['destinations'].append(dict(other['destinations'][1], program='P 14065'))  # two programmes: allowed
+        self.assertEqual(0, self.run_lists(self.embargoes(other), entries=[self.read_screening_entry()])[0])
+        self.assert_embargo_fails(self.embargoes(lists={'tr.masak.embargo': self.sanctions()['lists']['tr.masak']},
+                                                 pending={}),
+                                  f'{where} is the authority of an official file')
+        section = self.embargoes()
+        section['embargoes']['generations'] = {'TR.embargo': self.embargo()}
+        self.assert_embargo_fails(section, 'embargoes: TR.embargo: an authority is a dotted lower-case id')
+
+    def test_every_screening_entry_has_an_embargo_or_a_reason_never_both(self):
+        where = 'legal register: sanctions_lists: embargoes'
+        section = self.embargoes()
+        section['embargoes']['generations'] = {}
+        self.assert_embargo_fails(section, f'{where}: the screening entry tr.asset-freeze has no embargo generation '
+                                           'and no reason')
+        self.assert_embargo_fails(self.embargoes(reasons={'tr.asset-freeze': 'none'}),
+                                  f'{where}: tr.asset-freeze has an embargo generation, so it needs no reason')
+        section['embargoes']['reasons'] = {'tr.asset-freeze': ''}
+        self.assert_embargo_fails(section, f'{where}: reasons tr.asset-freeze gives its reason')
+        self.assert_embargo_fails(self.embargoes(reasons={'tr.kvkk.processing': 'x'}),
+                                  f"{where}: reasons names 'tr.kvkk.processing', which is no screening entry")
+        section = self.embargoes()
+        del section['embargoes']['reasons']
+        self.assert_embargo_fails(section, f'{where} holds about, generations')
+        section = self.embargoes()
+        del section['embargoes']
+        section['extra'] = {}
+        self.assert_embargo_fails(section, 'legal register: sanctions_lists holds about, lists')
+
+    def test_the_importer_writes_an_embargo_generation_dated_by_its_reading(self):
+        entry = self.read_screening_entry()
+        register = {'entries': [entry]}
+        record = self.embargo()
+        with tempfile.TemporaryDirectory() as out:
+            result = sanctions_import.import_embargo('tr.masak.embargo', record, register, out)
+            self.assertEqual((20261031000000, 3, '2026-10-31'), result)
+            path = Path(out) / 'tr.masak.embargo.sanctions.toml'
+            text = path.read_text(encoding='utf-8')
+            self.assertTrue(text.startswith('# Authored in cmake/legal-register.json from '))
+            document = tomllib.loads(text)
+            primary = entry['instrument']['primary']
+            self.assertEqual(('tr.masak.embargo', 'TR', 20261031000000, '2026-10-31', 92, primary),
+                             (document['authority'], document['jurisdiction'], document['generation'],
+                              document['published'], document['max_age_days'], document['source']))
+            self.assertEqual(sanctions_import.embargo_reading(record, entry), document['source_sha256'])
+            self.assertEqual([{key: item[key] for key in ('region', 'program', 'measure')}
+                              for item in record['destinations']], document['destination'])
+            self.assertNotIn('party', document)
+            # The same reading is already written; a corrected one, or a new text read the same day, is the next
+            # generation; a reading older than the written generation is refused.
+            self.assertIsNone(sanctions_import.import_embargo('tr.masak.embargo', record, register, out)[0])
+            record['destinations'][2]['measure'] = 'comprehensive'
+            self.assertEqual(20261031000001,
+                             sanctions_import.import_embargo('tr.masak.embargo', record, register, out)[0])
+            entry['instrument']['consolidated']['sha256'] = 'ef' * 32
+            self.assertEqual(20261031000002,
+                             sanctions_import.import_embargo('tr.masak.embargo', record, register, out)[0])
+            entry['instrument']['consolidated']['read'] = '2026-10-30'
+            with self.assertRaisesRegex(sanctions_import.SanctionsError, 'older than the imported 20261031000002'):
+                sanctions_import.import_embargo('tr.masak.embargo', record, register, out)
+            unverified = self.read_screening_entry()
+            unverified['source']['verified'] = False  # a consolidated text not read from its primary source
+            for unread in (self.screening_entry(), unverified):
+                with self.assertRaisesRegex(sanctions_import.SanctionsError, 'is not an instrument read from'):
+                    sanctions_import.import_embargo('tr.masak.embargo', record, {'entries': [unread]}, out)
+
+    def test_the_us_embargo_is_written_from_31_cfr_chapter_v(self):
+        register = sanctions_import.load_register(ROOT)
+        with tempfile.TemporaryDirectory() as out:
+            with patch('sys.stdout', new_callable=io.StringIO) as printed:
+                self.assertEqual(0, sanctions_import.main(['import', '--from', str(self.LISTS), '--out', out,
+                                                           '--authority', 'us.ofac.embargo']))
+            self.assertIn('us.ofac.embargo: 7 embargoed destinations read 2026-11-01: generation 20261101000000',
+                          printed.getvalue())
+            document = tomllib.loads((Path(out) / 'us.ofac.embargo.sanctions.toml').read_text(encoding='utf-8'))
+        self.assertEqual(('US', register['entries'][[e['id'] for e in register['entries']].index('us.sanctions')]
+                          ['instrument']['primary']), (document['jurisdiction'], document['source']))
+        measures = {item['region']: item['measure'] for item in document['destination']}
+        self.assertEqual({'CU': 'comprehensive', 'IR': 'comprehensive', 'KP': 'comprehensive',
+                          'UA-43': 'comprehensive', 'UA-40': 'comprehensive', 'RU': 'sectoral', 'VE': 'sectoral'},
+                         measures)
 
     # The importer, on the committed excerpts of the official files.
 

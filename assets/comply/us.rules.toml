@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review US
 format = "cerid-rules/1"
 jurisdiction = "US"
-generation = 4
+generation = 5
 register = "2026-11-01"
 
 [[scope]]
@@ -125,17 +125,17 @@ topic = "export-control"
 state = "planned"
 title = "US sanctions (OFAC)"
 instrument = "International Emergency Economic Powers Act and the OFAC regulations"
-article = "31 CFR Chapter V"
+article = "31 CFR Chapter V: Parts 501, 510, 515, 560, 587, 589, 591 and 596 (the programme parts read for their destinations)"
 primary = "https://www.ecfr.gov/current/title-31/subtitle-B/chapter-V"
-read = false
-obligation = "Screen distribution, accounts and payments against the OFAC lists and embargoed destinations."
+read = true
+obligation = "Screen distribution, accounts and payments against OFAC's SDN and Consolidated lists and the destinations chapter V embargoes (Cuba, Iran, North Korea and the Crimea region of Ukraine comprehensively, the Russian Federation and Venezuela sectorally); report blocked property within 10 business days and yearly by 30 September, report each rejected transaction (a sale of goods or services included) within 10 business days, and keep a full record of each transaction for 10 years (Part 501)."
 applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
 check = "active"
 check_name = "crd-comply-tests [sanctions]: parties and destinations screened against each authority's list, failing closed on a missing or stale list"
 check_ref = "tests/foundation/comply/test_sanctions.cpp"
 effective = "1977-10-28"
 sunset = ""
-counsel = "none"
+counsel = "needed"
 counsel_reviewed = ""
 rows = ["COMPLY.1", "STORE.1", "STORE.3"]
 

@@ -4650,13 +4650,17 @@
       ],
       "instrument": {
         "name": "International Emergency Economic Powers Act and the OFAC regulations",
-        "article": "31 CFR Chapter V",
+        "article": "31 CFR Chapter V: Parts 501, 510, 515, 560, 587, 589, 591 and 596 (the programme parts read for their destinations)",
         "type": "regulation",
         "jurisdiction": "US",
         "primary": "https://www.ecfr.gov/current/title-31/subtitle-B/chapter-V",
-        "consolidated": null
+        "consolidated": {
+          "version": "2026-10-15",
+          "read": "2026-11-01",
+          "sha256": "241a3fc4890107387814449e39b44d9000991eaeddeb8c932699307711d88da7"
+        }
       },
-      "obligation": "Screen distribution, accounts and payments against the OFAC lists and embargoed destinations.",
+      "obligation": "Screen distribution, accounts and payments against OFAC's SDN and Consolidated lists and the destinations chapter V embargoes (Cuba, Iran, North Korea and the Crimea region of Ukraine comprehensively, the Russian Federation and Venezuela sectorally); report blocked property within 10 business days and yearly by 30 September, report each rejected transaction (a sale of goods or services included) within 10 business days, and keep a full record of each transaction for 10 years (Part 501).",
       "applies_to": [
         "channel.cerid-store",
         "channel.distribution",
@@ -4671,17 +4675,18 @@
       "effective": "1977-10-28",
       "sunset": null,
       "counsel": {
-        "needed": false,
+        "needed": true,
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.1",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-1-us-embargoes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
-      "deprecation": null
+      "deprecation": null,
+      "note": "The prohibitions bind dealings subject to U.S. jurisdiction (a U.S. person, the United States' financial system, items exported from the United States). The general licences of 31 CFR 515.578, 560.540 and 589.517 authorise services and software incident to internet communications, e-gaming and collaboration platforms included, to Cuba, Iran and the Crimea region on conditions; the screen still reports those destinations Blocked and the store decides whether a product relies on a licence."
     },
     {
       "id": "us-ca.ccpa",
@@ -6290,9 +6295,9 @@
       "sha256": "56596c9421414c1b40f92b34d622b93f03eb092e6010aa11ea2613b86b299fde"
     },
     "US": {
-      "generation": 4,
+      "generation": 5,
       "reviewed": "2026-11-01",
-      "sha256": "5b47060eae50227f692c8801d37088772a8b84afa0dbdc76ccbebefa15502c35"
+      "sha256": "9129c6219bcebe6d12a972e643ece01e11b0c5a9413c1c036d9ecdc6d16e8f50"
     },
     "US-CA": {
       "generation": 2,
@@ -6932,6 +6937,10 @@
         {
           "classification": "shader_cook",
           "question": "Is the classification of the shader_cook export right: it performs no cryptographic function, so it is not a cybersecurity product or service under Law No. 7545, carries no encryption under the BTK rules, is not listed in Annex I of Regulation (EU) 2021/821 or on the Wassenaar Dual-Use List, and is EAR99 shipped under NLR where the EAR applies?"
+        },
+        {
+          "entry": "us.sanctions",
+          "question": "May Cerid make its e-gaming and collaboration products, their downloads and paid features available to persons in Cuba, Iran and the Crimea region of Ukraine under the general licences of 31 CFR 515.578, 560.540 and 589.517, and on which conditions (fees, the exclusion of the governments and of blocked persons, the EAR licensing of the software), or must the store refuse those destinations outright?"
         }
       ]
     }
@@ -7024,6 +7033,68 @@
     "pending": {
       "tr.asset-freeze": "MASAK publishes the asset-freeze decisions under Law No. 6415 through a web application (masak.hmb.gov.tr) with no list file at a stable address; the decisions are read from the Official Gazette and MASAK next, then imported.",
       "tr.7262.proliferation-freeze": "MASAK publishes the freezing decisions under Law No. 7262 through the same web application with no list file at a stable address; they are read from the Official Gazette and MASAK next, then imported."
+    },
+    "embargoes": {
+      "about": "The destinations each authority embargoes, which no designation file carries: authored from the regulations read (the entry's consolidated text), one destination per region and programme with the provision it rests on, and written by scripts/import-sanctions.py import as the authority's cerid-sanctions/1 generation (published on the day the text was read, its source_sha256 the digest of the reading). open says what the reading still owes; reasons says why a screening entry has no generation.",
+      "generations": {
+        "us.ofac.embargo": {
+          "entry": "us.sanctions",
+          "title": "The destinations 31 CFR chapter V embargoes",
+          "max_age_days": 92,
+          "destinations": [
+            {
+              "region": "CU",
+              "program": "31 CFR 515",
+              "measure": "comprehensive",
+              "basis": "515.201 (every transaction in property of Cuba or a Cuban national, 515.302), 515.204"
+            },
+            {
+              "region": "IR",
+              "program": "31 CFR 560",
+              "measure": "comprehensive",
+              "basis": "560.204 (any goods, technology or services to Iran or its Government), 560.201, 560.206"
+            },
+            {
+              "region": "KP",
+              "program": "31 CFR 510",
+              "measure": "comprehensive",
+              "basis": "510.206 (any goods, services or technology to North Korea), 510.205, 510.209"
+            },
+            {
+              "region": "UA-43",
+              "program": "31 CFR 589",
+              "measure": "comprehensive",
+              "basis": "589.207 and 589.206 (the Crimea region of Ukraine, 589.306: the Autonomous Republic of Crimea)"
+            },
+            {
+              "region": "UA-40",
+              "program": "31 CFR 589",
+              "measure": "comprehensive",
+              "basis": "589.207 and 589.206 (the Crimea region of Ukraine, 589.306: Sevastopol)"
+            },
+            {
+              "region": "RU",
+              "program": "31 CFR 589",
+              "measure": "sectoral",
+              "basis": "589.202 to 589.205 (Directives 1 to 4: the financial services, energy and defense sectors of the Russian Federation economy)"
+            },
+            {
+              "region": "VE",
+              "program": "31 CFR 591",
+              "measure": "sectoral",
+              "basis": "591.201 (E.O. 13884: the Government of Venezuela blocked) and 591.406(b) (blocked persons the SDN List does not name)"
+            }
+          ],
+          "open": "The regions and prohibitions that 589.201(e) and 587.201(b) incorporate from Executive orders under E.O. 13660's and E.O. 14024's emergencies (E.O. 14065's regions of Ukraine; E.O. 14066, 14068 and 14071 and the services determinations under them), read from the Federal Register, and the State Department's designations that 596.201 relies on."
+        }
+      },
+      "reasons": {
+        "eu.restrictive-measures": "Not yet read: the EU regimes embargo destinations in their own Council regulations under Article 215 TFEU, which the entry does not yet cite (its primary is the sanctions map).",
+        "gb.sanctions": "Not yet read: the UK's destinations are in the regime regulations made under the Sanctions and Anti-Money Laundering Act 2018, not in the Act.",
+        "int.un-sanctions": "Not yet read: the Security Council resolutions that impose its embargoes are read next.",
+        "tr.asset-freeze": "Law No. 6415 freezes the assets of the parties decided under it; it embargoes no destination.",
+        "tr.7262.proliferation-freeze": "Law No. 7262 freezes the assets of the parties decided under it; it embargoes no destination."
+      }
     }
   }
 }

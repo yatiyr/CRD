@@ -42,7 +42,9 @@ The guard fails, among the format errors, on:
     is the screening, a URL off that entry's jurisdiction's official hosts, an unknown importer format of
     scripts/import-sanctions.py, a malformed delivery host, a maximum age outside the decoder's bound, a record of the
     file read that is incomplete, published after it was read or read after today, and a screening entry with neither
-    a list nor a pending reason (or with both).
+    a list nor a pending reason (or with both); an authored embargo generation whose entry is no screening entry or was
+    not read from its primary source, whose destinations are no ISO regions, measures or provisions, or repeat a
+    region under one programme, and a screening entry with neither an embargo generation nor a reason (or with both).
 
   python scripts/check-registers.py [--root <repository root>] [--today YYYY-MM-DD]
 """
@@ -133,7 +135,7 @@ SANCTIONS_LIST_KEYS = {'entry', 'title', 'format', 'url', 'delivery', 'max_age_d
 SANCTIONS_READ_KEYS = {'day', 'published', 'bytes', 'sha256', 'parties'}
 SCREENING_CHECK = 'tests/foundation/comply/test_sanctions.cpp'
 PUBLISHED = re.compile(r'^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?$')
-MAX_LIST_AGE_DAYS = 366  # crd::comply::kMaxListAgeDays
+MAX_LIST_AGE_DAYS = _sanctions.MAX_LIST_AGE_DAYS  # crd::comply::kMaxListAgeDays
 
 
 def parse_day(text):
@@ -749,9 +751,10 @@ def sanctions_list_errors(register, context):
     screening entry has a list or a pending reason, never both."""
     where = 'legal register: sanctions_lists'
     section = register.get('sanctions_lists')
-    if not isinstance(section, dict) or set(section) != {'about', 'lists', 'pending'} or \
+    if not isinstance(section, dict) or set(section) != {'about', 'lists', 'pending', 'embargoes'} or \
             not isinstance(section['lists'], dict) or not isinstance(section['pending'], dict):
-        return [f"{where} holds about, lists (each authority's official file) and pending (a reason per entry)"]
+        return [f"{where} holds about, lists (each authority's official file), pending (a reason per entry) and "
+                "embargoes"]
     screening = screening_entries(register)
     errors, served = [], set()
     for authority, config in section['lists'].items():
@@ -792,6 +795,39 @@ def sanctions_list_errors(register, context):
             errors.append(f'{where}: pending {entry_id} gives its reason')
     for entry_id in sorted(set(screening) - served - set(section['pending'])):
         errors.append(f'{where}: the screening entry {entry_id} has no list and no pending reason')
+    return errors + embargo_errors(register, section, screening)
+
+
+def embargo_errors(register, section, screening):
+    """The embargoed destinations authored per authority (scripts/import-sanctions.py's rules for each generation),
+    each serving a screening entry and no authority of an official file; every screening entry has an embargo
+    generation or a reason it has none (not yet read, or an instrument that embargoes no destination)."""
+    where = 'legal register: sanctions_lists: embargoes'
+    embargoes = section['embargoes']
+    if not isinstance(embargoes, dict) or set(embargoes) != {'about', 'generations', 'reasons'} or \
+            not isinstance(embargoes['generations'], dict) or not isinstance(embargoes['reasons'], dict):
+        return [f'{where} holds about, generations (the destinations each authority embargoes) and reasons (why a '
+                'screening entry has none)']
+    errors, served = [], set()
+    for authority, record in embargoes['generations'].items():
+        errors += [f'{where}: {error}' for error in _sanctions.embargo_errors(authority, record, register)]
+        if authority in section['lists']:
+            errors.append(f'{where}: {authority} is the authority of an official file')
+        entry_id = record.get('entry') if isinstance(record, dict) else None
+        if entry_id in screening:
+            served.add(entry_id)
+        elif isinstance(record, dict):
+            errors.append(f'{where}: {authority}: entry {entry_id!r} is no entry whose active check is the screening '
+                          f'({SCREENING_CHECK})')
+    for entry_id, reason in embargoes['reasons'].items():
+        if entry_id not in screening:
+            errors.append(f'{where}: reasons names {entry_id!r}, which is no screening entry')
+        elif entry_id in served:
+            errors.append(f'{where}: {entry_id} has an embargo generation, so it needs no reason')
+        if not isinstance(reason, str) or not reason:
+            errors.append(f'{where}: reasons {entry_id} gives its reason')
+    for entry_id in sorted(set(screening) - served - set(embargoes['reasons'])):
+        errors.append(f'{where}: the screening entry {entry_id} has no embargo generation and no reason')
     return errors
 
 
