@@ -11,9 +11,10 @@ Row: [HW-RESILIENCE.3](../ROADMAP.md#slice-hw-resilience.3), now Done. Before:
 - No completed run has a failed job; push runs 41310778561 to 41311748202 were cancelled by concurrency.
 - Complete-tier run 41295647725 (`43963cb2`, in progress) failed linux-gcc-arm64-asan, linux-clang-arm64-asan,
   linux-gcc-asan 2 of 2 and win-asan 1 of 2 on the Shewchuk oracle cases (fixed by a0c9d534); TP-5's mikktspace
-  case is the registered failure. Run 41311293265 (`dac5d27e`, queued) is the first complete-tier run that contains
-  a0c9d534, so it is the one to audit for [DIAG.11c](../ROADMAP.md#slice-diag.11c) and
-  [DIAG.12](../ROADMAP.md#slice-diag.12); with three queued or running, none was dispatched.
+  case is the registered failure. The queued complete-tier runs cannot be green: 41298463221 (`13453acb`) and
+  41302856153 (`92af745a`) predate a0c9d534, and 41311293265 (`dac5d27e`) contains 01159147, whose Windows x64
+  configure fails (below). [DIAG.11c](../ROADMAP.md#slice-diag.11c) and [DIAG.12](../ROADMAP.md#slice-diag.12) need
+  a complete-tier run at f0f6f4a4 or later; with three queued or running, none was dispatched.
 - Actions names: the three `FTL_*` secrets; no `AMD_CLOUD_*` or `MAC_CLOUD_*`.
 
 ## Windows configure after AWS-LC
