@@ -585,4 +585,13 @@ systems for every preset, test, guard, sanitizer, SDE arm and ARM64 lane) is CI-
 | `host-check/x64-asan-stack-alignment` | Install pinned Intel SDE | `experiment-x64-asan-stack-alignment` | open (CI-4): not yet carried |
 | `host-check/x64-asan-stack-alignment` | Stack-alignment control | `experiment-x64-asan-stack-alignment` | open (CI-4): not yet carried |
 | `host-check/x64-asan-stack-alignment` | Preserve results | `experiment-x64-asan-stack-alignment` | open (CI-4): not yet carried |
+| `host-check/vulkan-sdk-installer` | Checkout | `experiment-vulkan-sdk-installer` | open (CI-4): not yet carried |
+| `host-check/vulkan-sdk-installer` | Setup Python 3.12 | `experiment-vulkan-sdk-installer` | open (CI-4): not yet carried |
+| `host-check/vulkan-sdk-installer` | Installer arm | `experiment-vulkan-sdk-installer` | open (CI-4): not yet carried |
+| `host-check/vulkan-sdk-installer` | Preserve results | `experiment-vulkan-sdk-installer` | open (CI-4): not yet carried |
+| `host-check/vulkan-sdk-installer-judge` | Checkout | `experiment-vulkan-sdk-installer-judge` | open (CI-4): not yet carried |
+| `host-check/vulkan-sdk-installer-judge` | Setup Python 3.12 | `experiment-vulkan-sdk-installer-judge` | open (CI-4): not yet carried |
+| `host-check/vulkan-sdk-installer-judge` | Collect the arms | `experiment-vulkan-sdk-installer-judge` | open (CI-4): not yet carried |
+| `host-check/vulkan-sdk-installer-judge` | Judge the arms | `experiment-vulkan-sdk-installer-judge` | open (CI-4): not yet carried |
+| `host-check/vulkan-sdk-installer-judge` | Preserve the judgement | `experiment-vulkan-sdk-installer-judge` | open (CI-4): not yet carried |
 <!-- parity:end -->
