@@ -118,7 +118,7 @@ TEST_CASE("multivariate: sampled-moment sanity (rvs)", "[v12-k][stats][mv]")
     for (int s = 0; s < n; ++s)
     {
         st::ThreefryRng g(7777U, static_cast<crd::u64>(s));
-        double o[3];
+        double o[3] = {}; // rvs writes all k; GCC 13's LTO cannot see k == 3 (-Wmaybe-uninitialized)
         mvn.rvs(g, S(o, 3));
         for (int j = 0; j < 3; ++j)
         {
@@ -136,7 +136,7 @@ TEST_CASE("multivariate: sampled-moment sanity (rvs)", "[v12-k][stats][mv]")
     for (int s = 0; s < n; ++s)
     {
         st::ThreefryRng g(4242U, static_cast<crd::u64>(s));
-        double o[4];
+        double o[4] = {};
         wis.rvs(g, S(o, 4));
         for (int j = 0; j < 4; ++j)
         {
