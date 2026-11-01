@@ -185,6 +185,32 @@
       "license": "MIT",
       "gated": "CRD_BUILD_HESAP_VS_NLOPT",
       "note": "NLopt, the reference oracle of hesap-opt's COBYLA, NEWUOA and BOBYQA ports (the release current when they were ported, 2026-06-10). Its library builds by its own CMake as a separate project, static, without its C++, Luksan and binding parts, linked only into cobyla_difftest, newuoa_difftest and bobyqa_difftest with each algorithm's source compiled again (tests/numerics/hesap-opt/nlopt); never into an engine module or a default build. COPYRIGHT and the three algorithms' COPYRIGHT files read from the archive: MIT, (c) 2007-2020 Massachusetts Institute of Technology and contributors; COBYLA (c) 1992 M. J. D. Powell, 2004 Jean-Sebastien Roy, 2008 Steven G. Johnson; NEWUOA (c) 2004 and BOBYQA (c) 2009 M. J. D. Powell, with MIT's modifications. The Luksan solvers (LGPL) are not built."
+    },
+    "ggml": {
+      "version": "0.28.0",
+      "repository": "ggml-org/ggml",
+      "ref": "v0.28.0",
+      "commit": "facdc44a67da17df4433adcc468b424f48e9ded2",
+      "url": "https://github.com/ggml-org/ggml/archive/facdc44a67da17df4433adcc468b424f48e9ded2.tar.gz",
+      "file": "ggml-facdc44a.tar.gz",
+      "sha256": "fe81fbbfdfe89a7e11c7dd646acbbf586825e9f5cdc434ac2f9703ed3f48f10c",
+      "size": 4418466,
+      "license": "MIT",
+      "gated": "CRD_BUILD_HESAP_VS_GGML",
+      "note": "ggml, the reference implementation of the Q8_0 block format, the nn board's same-format peer (docs/bench/2026-07-05-v14m-nn.md, which ran an unversioned llama.cpp master; this is the newest ggml release on 2026-11-01). Its library builds by its own CMake as a separate project (runtime/CMakeLists.txt), static, CPU backend only, at the host's ISA (GGML_NATIVE) with OpenMP as llama.cpp's defaults build it, linked only into bench_nn_q8_vs_ggml; never into an engine module or a default build. LICENSE read from the archive: MIT, (c) 2023-2026 The ggml authors."
+    },
+    "vkfft": {
+      "version": "1.3.4",
+      "repository": "DTolm/VkFFT",
+      "ref": "v1.3.4",
+      "commit": "066a17c17068c0f11c9298d848c2976c71fad1c1",
+      "url": "https://github.com/DTolm/VkFFT/archive/066a17c17068c0f11c9298d848c2976c71fad1c1.tar.gz",
+      "file": "VkFFT-066a17c1.tar.gz",
+      "sha256": "9b6a03cce4a9aab758b4bb57357cb5e2cc15f4ab6cd00f2e35c37edf03ec2424",
+      "size": 6136473,
+      "license": "MIT",
+      "gated": "CRD_BUILD_GPU_VS_VKFFT",
+      "note": "VkFFT, the GPU FFT board's specialized Vulkan peer (docs/bench/2026-07-13-gpu-fft-cufft-gold.md, which built an unversioned clone; v1.3.4 is the newest release on 2026-11-01). Its header library (vkFFT/) and its benchmark utilities (benchmark_scripts/vkFFT_scripts: utils_VkFFT.cpp, the Vulkan device, fence, pool and buffer helpers) build only into bench_gpu_fft_vkfft (runtime/CMakeLists.txt) with the Vulkan backend against the host's glslang; never into an engine module or a default build. LICENSE read from the archive: MIT, (c) 2020-present Dmitrii Tolmachev. The archive's metal-cpp copy (Apache-2.0) is not used."
     }
   },
   "tools": {

@@ -1,6 +1,8 @@
 // Same-format peer row: ggml (llama.cpp) Q8_0 x Q8_0 matmul on the v14-m MLP
 // linear shapes at batch 4096, 1 thread. ggml quantizes the f32 activations to
 // q8_0 internally for q8_0 weights (vec_dot_type) — the same scheme as ours.
+// Built by CRD_BUILD_HESAP_VS_GGML (runtime/CMakeLists.txt) against the pinned
+// ggml (cmake/pins.json), run by scripts/run_bench_nn.sh.
 #include "ggml.h"
 #include "ggml-cpu.h"
 

@@ -285,12 +285,52 @@
       "why": "Generated kernels the CKIR FFT profile program includes."
     },
     {
+      "paths": ["bench/gpu-compute/ckir_mlp_fwd_gen.cu"],
+      "included_by": "bench/gpu-compute/ckir_mlp_bench.cu",
+      "why": "The CKIR-emitted CUDA fused-MLP forward kernels its duel program includes."
+    },
+    {
+      "paths": ["bench/gpu-compute/ckir_mlp_bwd_gen.cu"],
+      "included_by": "bench/gpu-compute/ckir_mlp_bwd_bench.cu",
+      "why": "The CKIR-emitted CUDA fused-MLP backward kernels its duel program includes."
+    },
+    {
+      "paths": ["bench/gpu-compute/ckir_onesweep_gen.cu"],
+      "included_by": "bench/gpu-compute/ckir_onesweep_bench.cu",
+      "why": "The CKIR-emitted CUDA onesweep radix sort kernels its duel program includes."
+    },
+    {
+      "paths": ["runtime/examples/bench_nn_q8_vs_ggml.c"],
+      "built_when": {"option": "CRD_BUILD_HESAP_VS_GGML"},
+      "why": "The nn board's same-format peer, ggml's Q8_0 linears, against the pinned ggml release (cmake/pins.json ggml) built by its own CMake; scripts/run_bench_nn.sh builds and runs it."
+    },
+    {
+      "paths": ["runtime/examples/bench_gpu_fft_vkfft.cpp"],
+      "built_when": {"option": "CRD_BUILD_GPU_VS_VKFFT"},
+      "why": "The GPU FFT board's specialized Vulkan peer, VkFFT's batched C2C forward, against the pinned VkFFT release (cmake/pins.json vkfft) and the host's glslang; scripts/run_bench_gpu_fft_vkfft.sh builds and runs it."
+    },
+    {
       "paths": [
-        "bench/",
-        "scripts/v14m_ggml_q8_bench.c"
+        "bench/gpu-compute/ckir_mlp_bench.cu",
+        "bench/gpu-compute/ckir_mlp_bwd_bench.cu",
+        "bench/gpu-compute/ckir_onesweep_bench.cu",
+        "bench/gpu-compute/cub_radixsort_bench.cu",
+        "bench/gpu-compute/cub_reduce_bench.cu",
+        "bench/gpu-compute/cub_scan_bench.cu",
+        "bench/gpu-compute/flash_attention_bench.cu",
+        "bench/gpu-compute/mlp_backward_bench.cu",
+        "bench/gpu-compute/mlp_fused_bench.cu",
+        "bench/gpu-fft/ckir_fft_profilee.cu",
+        "bench/gpu-fft/cufft_1024_profilee.cu",
+        "bench/gpu-fft/cufft_2d_c2c_batched_bench.cu",
+        "bench/gpu-fft/cufft_2d_conv_batched_bench.cu",
+        "bench/gpu-fft/cufft_2d_conv_bench.cu",
+        "bench/gpu-fft/cufft_2d_conv_r2c_batched_bench.cu",
+        "bench/gpu-fft/cufft_bench.cu",
+        "bench/gpu-fft/cufft_conv_bench.cu"
       ],
       "unrouted": "REPO.3",
-      "why": "GPU-vendor and peer measurement programs (CUDA, CUB, cuBLAS, cuFFT, VkFFT, ggml) that no script or option builds; REPO.3 owns giving each a checked route or retiring it with its board as the record."
+      "why": "The CUDA programs of the GPU compute and FFT boards (cuFFT, CUB and cuBLASLt peers, and the CKIR kernels' CUDA duels and Nsight Compute targets) that no script or option builds; REPO.3 owns giving each a checked route or retiring it with its board as the record."
     }
   ]
 }

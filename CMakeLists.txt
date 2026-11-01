@@ -81,6 +81,14 @@ option(CRD_BUILD_DISPATCH_VS_HIGHWAY "Build the dispatch-cost bench against High
 # compiled again with its file-scope functions external (tests/numerics/hesap-opt/nlopt). Local only, never in CI or a
 # shipped build; registered as the crd-nlopt-*-difftest CTests of the tree that turns it on.
 option(CRD_BUILD_HESAP_VS_NLOPT "Build the COBYLA, NEWUOA and BOBYQA differential tests against NLopt (local-only)" OFF)
+# The nn board's same-format peer: ggml's Q8_0 linears (runtime/examples/bench_nn_q8_vs_ggml.c) against the pinned ggml
+# release (cmake/pins.json ggml, fetched on demand into build/_deps) built by its own CMake as a separate project at the
+# host's ISA. Local only on Linux, never in CI or a shipped build; scripts/run_bench_nn.sh builds and runs it.
+option(CRD_BUILD_HESAP_VS_GGML "Build the nn board's ggml Q8_0 peer program (local-only, Linux)" OFF)
+# The GPU FFT board's specialized Vulkan peer: VkFFT's batched C2C forward (runtime/examples/bench_gpu_fft_vkfft.cpp) from the
+# pinned release (cmake/pins.json vkfft, fetched on demand into build/_deps) on the host's Vulkan loader and glslang.
+# Local only, never in CI or a shipped build; scripts/run_bench_gpu_fft_vkfft.sh builds and runs it.
+option(CRD_BUILD_GPU_VS_VKFFT "Build the GPU FFT board's VkFFT peer program (local-only)" OFF)
 # The hesap-fft and NUFFT phase counters (CRD_FFT_PROFILE, CRD_NUFFT_PROFILE) in the library, its kernel units and its
 # consumers; a tree of its own (scripts/prof_fft_kernel.sh), since the counters change the measured code.
 option(CRD_HESAP_FFT_PROFILE "Build hesap-fft with its per-phase cycle counters (measurement trees only)" OFF)
@@ -1019,10 +1027,12 @@ if(CRD_BUILD_HESAP_VS_BOOST)
     target_compile_definitions(boost_headers INTERFACE BOOST_ALL_NO_LIB)
 endif()
 
-# ----- The permute board's peer: HPTT's sources, built by runtime/CMakeLists.txt as crd-hptt (bench-only) -----
+# ----- bench_batched's MKL rows: MKL from the measuring host, read by runtime/CMakeLists.txt (bench-only) -----
 if(CRD_BUILD_HESAP_VS_MKL AND NOT CRD_BUILD_RETAINED_BENCHES)
     message(FATAL_ERROR "[hesap-vs-mkl] needs CRD_BUILD_RETAINED_BENCHES (bench_batched)")
 endif()
+
+# ----- The permute board's peer: HPTT's sources, built by runtime/CMakeLists.txt as crd-hptt (bench-only) -----
 if(CRD_BUILD_HESAP_VS_HPTT)
     if(NOT CRD_BUILD_RETAINED_BENCHES OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT _crd_arch_x64)
         message(FATAL_ERROR "[hesap-vs-hptt] needs x64 Linux and CRD_BUILD_RETAINED_BENCHES (bench_permute)")
@@ -1038,6 +1048,21 @@ if(CRD_BUILD_HESAP_VS_NLOPT)
     endif()
     enable_language(C)
     crd_add_pinned_package(nlopt DOWNLOAD_ONLY YES)
+endif()
+
+# ----- The nn board's ggml peer: the pinned release, built by runtime/CMakeLists.txt (bench-only) -----
+# The peer program is C on POSIX's monotonic clock, as the board measured it on Linux.
+if(CRD_BUILD_HESAP_VS_GGML)
+    if(NOT CRD_BUILD_RETAINED_BENCHES OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(FATAL_ERROR "[hesap-vs-ggml] needs Linux and CRD_BUILD_RETAINED_BENCHES (bench_nn's board)")
+    endif()
+    enable_language(C)
+    crd_add_pinned_package(ggml DOWNLOAD_ONLY YES)
+endif()
+
+# ----- The GPU FFT board's VkFFT peer: the pinned release, built by runtime/CMakeLists.txt (bench-only) -----
+if(CRD_BUILD_GPU_VS_VKFFT)
+    crd_add_pinned_package(vkfft DOWNLOAD_ONLY YES)
 endif()
 
 # ----- The FFT and DCT boards' pocketfft peer: the pinned header, built by runtime/CMakeLists.txt (bench-only) -----

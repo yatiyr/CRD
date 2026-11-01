@@ -1305,6 +1305,82 @@ if(CRD_BUILD_HESAP_VS_LIQUID)
     message(STATUS "[hesap-vs-liquid] liquid-dsp ${CRD_LIQUID_LIB}")
 endif()
 
+# --- The nn board's ggml Q8_0 peer (CRD_BUILD_HESAP_VS_GGML; local only on Linux, never in CI or a shipped build) ---
+# bench_nn_q8_vs_ggml runs the board's three MLP linears through ggml_mul_mat on Q8_0 weights at batch 4096 on one
+# thread, ggml quantizing the f32 activations to Q8_0 as Cerid's tier does (docs/bench/2026-07-05-v14m-nn.md). ggml
+# builds by its own CMake as a separate project (its options and install rules stay out of this tree), static, CPU
+# backend only, with llama.cpp's defaults: the host's ISA (GGML_NATIVE) and OpenMP. Its C++ objects make the program
+# link as C++. The program builds with the tree's warnings at the host's ISA and links no Cerid library, so the ISA
+# isolation guard leaves it out; scripts/run_bench_nn.sh runs it after the Cerid bench.
+if(CRD_BUILD_HESAP_VS_GGML)
+    include(ExternalProject)
+    find_package(OpenMP REQUIRED COMPONENTS C CXX)
+    find_package(Threads REQUIRED)
+    crd_pin(ggml_version packages ggml version)
+    set(ggml_prefix "${CMAKE_BINARY_DIR}/_deps/ggml-peer")
+    set(ggml_libraries "")
+    foreach(library IN ITEMS ggml ggml-cpu ggml-base)
+        list(APPEND ggml_libraries
+             "${ggml_prefix}/install/lib/${CMAKE_STATIC_LIBRARY_PREFIX}${library}${CMAKE_STATIC_LIBRARY_SUFFIX}")
+    endforeach()
+    ExternalProject_Add(crd-ggml-peer-build
+        SOURCE_DIR "${ggml_SOURCE_DIR}"
+        PREFIX "${ggml_prefix}"
+        BINARY_DIR "${ggml_prefix}/build"
+        INSTALL_DIR "${ggml_prefix}/install"
+        CMAKE_ARGS
+            "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
+            "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
+            -DCMAKE_INSTALL_LIBDIR=lib
+            -DBUILD_SHARED_LIBS=OFF -DGGML_BACKEND_DL=OFF
+            -DGGML_NATIVE=ON -DGGML_OPENMP=ON
+            -DGGML_BUILD_TESTS=OFF -DGGML_BUILD_EXAMPLES=OFF
+        BUILD_BYPRODUCTS ${ggml_libraries})
+    crd_peer_isa_flags(ggml_flags)
+    add_executable(bench_nn_q8_vs_ggml examples/bench_nn_q8_vs_ggml.c)
+    add_dependencies(bench_nn_q8_vs_ggml crd-ggml-peer-build)
+    target_include_directories(bench_nn_q8_vs_ggml SYSTEM PRIVATE "${ggml_SOURCE_DIR}/include")
+    target_compile_options(bench_nn_q8_vs_ggml PRIVATE ${ggml_flags})
+    target_link_libraries(bench_nn_q8_vs_ggml PRIVATE crd-warnings ${ggml_libraries} OpenMP::OpenMP_CXX
+                          OpenMP::OpenMP_C Threads::Threads m)
+    set_target_properties(bench_nn_q8_vs_ggml PROPERTIES C_STANDARD 17 C_STANDARD_REQUIRED ON C_EXTENSIONS ON
+                          LINKER_LANGUAGE CXX INTERPROCEDURAL_OPTIMIZATION OFF CRD_ISA_ROLE peer)
+    message(STATUS "[hesap-vs-ggml] ggml ${ggml_version}")
+endif()
+
+# --- The GPU FFT board's VkFFT peer (CRD_BUILD_GPU_VS_VKFFT; local only, never in CI or a shipped build) ---
+# bench_gpu_fft_vkfft times VkFFT's batched C2C forward f32 FFT at the board's sizes on the first Vulkan device
+# (docs/bench/2026-07-13-gpu-fft-cufft-gold.md), from the pinned release: its header library and its benchmark
+# utilities (utils_VkFFT.cpp: instance, device, fence, pool and buffer helpers), on VkFFT's Vulkan backend, which
+# compiles its kernels at run time through the host's glslang C interface (glslang-dev, or the Vulkan SDK's). The
+# utilities are VkFFT's code and build without the tree's warnings; the program keeps them.
+if(CRD_BUILD_GPU_VS_VKFFT)
+    find_package(Vulkan REQUIRED)
+    # glslang's exported targets link SPIRV-Tools-opt by name, and its package file does not find that package: found
+    # first, the name is SPIRV-Tools' imported target with its own dependencies (else a bare -lSPIRV-Tools-opt that
+    # leaves SPIRV-Tools' symbols undefined).
+    find_package(SPIRV-Tools-opt CONFIG REQUIRED)
+    find_package(glslang CONFIG REQUIRED)
+    crd_pin(vkfft_version packages vkfft version)
+    # VkFFT includes glslang_c_interface.h by its bare name, from glslang's Include directory.
+    get_target_property(vkfft_glslang_includes glslang::glslang INTERFACE_INCLUDE_DIRECTORIES)
+    list(TRANSFORM vkfft_glslang_includes APPEND /glslang/Include)
+    set(vkfft_scripts "${vkfft_SOURCE_DIR}/benchmark_scripts/vkFFT_scripts")
+    add_library(crd-vkfft-utils STATIC EXCLUDE_FROM_ALL "${vkfft_scripts}/src/utils_VkFFT.cpp")
+    target_include_directories(crd-vkfft-utils SYSTEM PUBLIC "${vkfft_SOURCE_DIR}/vkFFT" "${vkfft_scripts}/include"
+                               ${vkfft_glslang_includes})
+    target_compile_definitions(crd-vkfft-utils PUBLIC VKFFT_BACKEND=0)
+    target_link_libraries(crd-vkfft-utils PUBLIC Vulkan::Vulkan glslang::glslang)
+    set_target_properties(crd-vkfft-utils PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF CRD_ISA_ROLE peer)
+    add_executable(bench_gpu_fft_vkfft examples/bench_gpu_fft_vkfft.cpp)
+    target_link_libraries(bench_gpu_fft_vkfft PRIVATE crd-warnings crd-vkfft-utils)
+    set_target_properties(bench_gpu_fft_vkfft PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF CRD_ISA_ROLE peer)
+    message(STATUS "[gpu-vs-vkfft] VkFFT ${vkfft_version}, glslang ${glslang_VERSION}")
+endif()
+
 # --- The permute board's HPTT peer (CRD_BUILD_HESAP_VS_HPTT; local only, never in CI or a shipped build) ---
 # HPTT's four sources build as crd-hptt at the measuring host's ISA with OpenMP, its AVX kernels when that ISA has AVX
 # and its portable one otherwise, not through its own CMakeLists (-march=native and -mavx whatever the host), inside
