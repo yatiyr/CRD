@@ -52,7 +52,7 @@ TEST_CASE("hw-resilience 3: the device check kernel reproduces its known answers
     crd::f64 words[kir::kDeviceCheckWords];
     for (crd::u32 i = 0U; i < kir::kDeviceCheckLanes; ++i)
     {
-        in[i] = kir::device_check_input(i);
+        in[i] = static_cast<crd::f64>(kir::device_check_input(i));
     }
     for (crd::f64& f : floats)
     {
