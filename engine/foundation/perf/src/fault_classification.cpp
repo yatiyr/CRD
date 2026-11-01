@@ -700,6 +700,11 @@ InstructionCheck check_instruction(const CrashEvidence& e, const CodeImageCheck*
         k.reason = a.reason;
         return k;
     }
+    if (code_image->compared < a.length)
+    {
+        k.reason = "the image comparison covers fewer bytes than the instruction";
+        return k;
+    }
     k.length = a.length;
     k.accesses = a.count;
     k.result = InstructionCheckResult::Consistent;

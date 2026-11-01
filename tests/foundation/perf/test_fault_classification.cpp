@@ -966,10 +966,12 @@ cont::String full_record(cont::StringView signal, u64 rip, u64 rdi, u32 trapno, 
     return out;
 }
 
+// A comparison that matched over the whole window.
 cp::CodeImageCheck matching()
 {
     cp::CodeImageCheck k;
     k.result = cp::CodeImageResult::Matches;
+    k.compared = crd::crash::kCodeWindowBytes;
     return k;
 }
 
@@ -1143,6 +1145,14 @@ TEST_CASE("fault classification: a fault on an access the instruction does not m
     CHECK(judge(rdi + 8U, 13U, 0x0U, 1, &same).instruction.result == cp::InstructionCheckResult::NotJudged);
     CHECK(judge(rdi + 8U, 14U, 0x4U, 128, &same).instruction.result == cp::InstructionCheckResult::NotJudged);
     CHECK(judge(rdi + 8U, 14U, 0x4U, 1, nullptr).signals == 0U);
+    // A match that ends inside the instruction (the image's file data stops there) does not prove its bytes.
+    cp::CodeImageCheck short_match = matching();
+    short_match.compared = 2U;
+    const cp::FaultClassification part = judge(rdi + 8U, 14U, 0x4U, 1, &short_match);
+    CHECK(part.instruction.result == cp::InstructionCheckResult::NotJudged);
+    CHECK(part.instruction.reason == cont::StringView{"the image comparison covers fewer bytes than the instruction"});
+    short_match.compared = 3U;
+    CHECK(judge(rdi + 8U, 14U, 0x4U, 1, &short_match).instruction.result == cp::InstructionCheckResult::AccessNotMade);
     for (const cp::CodeImageResult r :
          {cp::CodeImageResult::NotCompared, cp::CodeImageResult::Modified, cp::CodeImageResult::OneBitFlipped})
     {
