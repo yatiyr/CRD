@@ -30,5 +30,7 @@ a None module) failed on the old engine with the hosted reason and pass with the
 pass.
 
 Local guards: the ISA-isolation guard's Python process ended with a segmentation fault on this host (the known
-misexecution of native Windows Python validators); its pool workers were left holding ctest's pipe until they were
-stopped. It was rerun once.
+misexecution of native Windows Python validators); the rerun passed in 22 s. Its pool workers had outlived it and held
+ctest's pipe for 20 minutes until stopped: a parent that dies skips the pool's shutdown. Each worker now exits with
+its parent (`_exit_with_parent`: a wait on the parent's handle on Windows, a reparenting check elsewhere); the
+tooling case kills a pool's parent and needs every worker gone within 30 s, and failed with one alive without it.

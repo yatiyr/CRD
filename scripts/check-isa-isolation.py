@@ -35,6 +35,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -904,6 +905,28 @@ def _batches(items):
     return batches + ([batch] if batch else [])
 
 
+def _exit_with_parent():
+    """Pool initializer: the worker exits when the process that started it ends. A parent that dies without shutting
+    the pool down (a crash) otherwise leaves its idle workers holding the caller's output pipe, so ctest waits out
+    the whole timeout. Windows waits on the parent's handle (a pid can be reused); elsewhere a worker reparents."""
+    parent = os.getppid()
+
+    def watch():
+        if os.name == 'nt':
+            import ctypes
+            kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+            kernel.OpenProcess.restype = ctypes.c_void_p
+            kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            handle = kernel.OpenProcess(0x00100000, False, parent)  # SYNCHRONIZE
+            if handle:
+                kernel.WaitForSingleObject(handle, 0xFFFFFFFF)
+        else:
+            while os.getppid() == parent:
+                threading.Event().wait(0.5)
+        os._exit(1)
+    threading.Thread(target=watch, daemon=True).start()
+
+
 def _object_work(args):
     """One batch of machine-code objects: symbols and disassembly."""
     tools, paths, arch, coff = args
@@ -977,7 +1000,7 @@ def run(args):
     counts = {'kernel': 0, 'general': 0, 'il': len(il), 'images': 0}
     # Per family level (one object library, all its sources): its tables and the encodings its code holds.
     families = {}
-    with concurrent.futures.ProcessPoolExecutor(max_workers=jobs) as pool:
+    with concurrent.futures.ProcessPoolExecutor(max_workers=jobs, initializer=_exit_with_parent) as pool:
         work = [(tools, batch, args.arch, coff) for batch in _batches(machine)]
         for defined, code, disassembly in pool.map(_object_work, work):
             for path, names in defined.items():

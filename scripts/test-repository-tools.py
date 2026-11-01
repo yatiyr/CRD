@@ -5497,6 +5497,57 @@ class IsaIsolation(unittest.TestCase):
     def setUp(self):
         self.exceptions = isa_isolation.Exceptions()
 
+    def test_pool_workers_end_with_a_parent_that_crashed(self):
+        # A parent that ends without shutting its pool down: its workers exit instead of holding ctest's pipe.
+        parent = ('import concurrent.futures, importlib.util, json, os, sys\n'
+                  'spec = importlib.util.spec_from_file_location("guard", sys.argv[1])\n'
+                  'guard = sys.modules["guard"] = importlib.util.module_from_spec(spec)\n'
+                  'spec.loader.exec_module(guard)\n'
+                  'if __name__ == "__main__":\n'
+                  '    pool = concurrent.futures.ProcessPoolExecutor(2, initializer=guard._exit_with_parent)\n'
+                  '    print(json.dumps(sorted({pool.submit(os.getpid).result() for _ in range(8)})), flush=True)\n'
+                  '    os._exit(3)\n')
+
+        def alive(pid):
+            if os.name != 'nt':
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    return False
+                return True
+            import ctypes
+            kernel = ctypes.WinDLL('kernel32')
+            kernel.OpenProcess.restype = ctypes.c_void_p
+            kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+            handle = kernel.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+            if not handle:
+                return False
+            running = kernel.WaitForSingleObject(handle, 0) == 0x102  # WAIT_TIMEOUT
+            kernel.CloseHandle(handle)
+            return running
+
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp, 'parent.py')
+            script.write_text(parent, encoding='utf-8')
+            out = Path(tmp, 'pids.json')
+            with out.open('w', encoding='utf-8') as stream:  # a file, not a pipe the workers could hold open
+                done = subprocess.run([sys.executable, str(script), str(ROOT / 'scripts/check-isa-isolation.py')],
+                                      stdout=stream, timeout=120, check=False)
+            self.assertEqual(3, done.returncode)
+            workers = json.loads(out.read_text(encoding='utf-8'))
+            self.assertTrue(workers)
+            deadline = time.monotonic() + 30.0
+            try:
+                while workers and time.monotonic() < deadline:
+                    workers = [pid for pid in workers if alive(pid)]
+                    time.sleep(0.1)
+                self.assertEqual([], workers)
+            finally:
+                for pid in workers:
+                    with contextlib.suppress(OSError):
+                        os.kill(pid, 9)
+
     def test_encodings_in_64_bit_mode(self):
         cases = {'C5 F8 77': 'VEX', 'C4 E2 79 18': 'VEX', '64 C5 F9 7E': 'VEX', '67 62 F1 7C 48': 'EVEX',
                  'D5 10 89 C0': 'REX2', '8F E8 78 C2': 'XOP', '8F 00': None, '66 0F 38 00 C1': None,
