@@ -11,20 +11,23 @@ machine was preempted once (08:47 UTC) and restarted from the same disk.
 
 ## CI first
 
-- **GitHub main** is at 2ec91dd8 (08:14 UTC), this track's last push; no run covers it yet (the newest pending push
-  run is at cc5ee9e9). The dispatch run 41274380605 (de5e10b0) is still running: win-debug, win-debug-scalar and
-  win-public-checks were in their Test step at 09:01 UTC.
+- **No push run has read this track's commits since 03571fa3.** The push runs at cb0c04ab (41290152491), b64d02a5
+  (41290558970) and cc5ee9e9 (41291103424), which contain 2c41d89c..2ec91dd8, were each cancelled when the next push
+  superseded them; this batch's push queued 41291759660 at cacd6547, the first to cover them. The dispatch run
+  41274380605 (de5e10b0) is still running: win-debug, win-debug-scalar and win-public-checks were in their Test step at
+  09:01 UTC.
 - **Its finished failures are not this track's**: win-tidy's `test_filesystem.cpp` name (fixed by 4b9bc837), win-clang-cl
   and win-clang-cl-shipping at track A's 128-bit division in `test_instruction_access.cpp` (`__udivti3`, `__divti3`;
-  unchanged on main, left to track A, which owns the file), linux-gcc-release and linux-gcc-shipping at
-  `test_multivariate.cpp:125` (`-Wmaybe-uninitialized` under LTO, fixed by 76330344 after de5e10b0).
+  fixed by track A's 7cfed26c, which links clang's builtins library on clang-cl), linux-gcc-release and
+  linux-gcc-shipping at `test_multivariate.cpp:125` (`-Wmaybe-uninitialized` under LTO, fixed by 76330344 after
+  de5e10b0).
 - **MCP-ADAPT.0.** Since de5e10b0 the row's paths changed only by `test_filesystem.cpp`'s rename and the byte order mark
   removed from `test_ceridc.cpp`, so de5e10b0's win-debug and win-debug-scalar results are the row's MSVC and SSE2-floor
-  evidence once they finish; clang-cl's waits for track A's fix.
+  evidence once they finish; clang-cl's tests first run in 41291759660 (7cfed26c is in cacd6547).
 - **Found and fixed here, this track's**: `docs/generated/dependency-licenses.md` did not list the ggml and VkFFT pins
   that 2c41d89c added (15 packages rendered where the registry has 17), which the Repository checks jobs'
-  `test_this_checkout_passes_every_provenance_guard` would have failed on the first run covering 2c41d89c. Regenerated
-  with this batch's CUDA pin and its `generated-sources.json` digest refreshed.
+  `test_this_checkout_passes_every_provenance_guard` would fail on the first run reading 2c41d89c (none ran: all were
+  cancelled). Regenerated with this batch's CUDA pin and its `generated-sources.json` digest refreshed.
 
 ## The pinned CUDA Toolkit
 
