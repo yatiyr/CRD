@@ -6830,14 +6830,16 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             self.assertEqual(0, code, output)
             self.assertIn('the next review is a full scan due on 2027-01-10', output)
             text = report.read_text(encoding='utf-8')
-            self.assertIn('- crypto.groups: TLS Supported Groups secp224r1 is Recommended "D" by IANA (was "Y")\n', text)
-            self.assertIn('- crypto.groups (NET-STD): IANA now discourages secp224r1 (Recommended "D"); drop it from the '
-                          'accepted policy and the entry before the full re-research this triggers', text)
+            self.assertIn('- crypto.groups: TLS Supported Groups secp224r1 is Recommended "D" by IANA (was "Y")\n',
+                          text)
+            self.assertIn('- crypto.groups (NET-STD): IANA now discourages secp224r1 (Recommended "D"); drop it from '
+                          'the accepted policy and the entry before the full re-research this triggers', text)
             self.assertIn('## Triggers a full re-research\n\n- crypto.groups\n\n', text)
             self.assertIn('- crypto.groups: TLS Supported Groups x25519 has no single Recommended value in the IANA '
                           'file (None)', text)
             self.assertIn('- crypto.groups: TLS SignatureScheme ed25519 = 0x0807 confirmed by IANA\n', text)
-            self.assertIn('- crypto.groups: TLS SignatureScheme ed25519 is Recommended "Y" by IANA (not recorded)', text)
+            self.assertIn('- crypto.groups: TLS SignatureScheme ed25519 is Recommended "Y" by IANA (not recorded)',
+                          text)
             self.assertIn('- crypto.legacy: TLS Supported Groups secp224r1 is Recommended "D" by IANA (was "N")', text)
             self.assertNotIn('crypto.legacy (', text)
             self.assertIn('- http.h3: TLS ExtensionType Values compress_certificate is Recommended "Y" by IANA (not '

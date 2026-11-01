@@ -199,8 +199,8 @@ def plan_sources(register, scan='light'):
                 add(f'rfc{number}-text', 'text', RFC_TEXT.format(number=number), entry_id)
             elif kind == 'draft':
                 if 'revision' not in spec:
-                    raise ReviewError(f'entry {entry_id}: the full re-research reads {ref} at its revision; refresh the '
-                                      'register first')
+                    raise ReviewError(f'entry {entry_id}: the full re-research reads {ref} at its revision; refresh '
+                                      'the register first')
                 add(f'{ref}-{spec["revision"]}-text', 'text', DRAFT_TEXT.format(name=ref, revision=spec['revision']),
                     entry_id)
             elif kind in MANUAL_SPECS:

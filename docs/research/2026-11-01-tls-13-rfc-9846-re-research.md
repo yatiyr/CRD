@@ -80,8 +80,16 @@ the TLS registries:
 - "N": the IETF has not evaluated the item, or its applicability is limited. This is not a flaw.
 - "D": the item should not or must not be used, as its references explain.
 
-Setting or leaving "Y" or "D" requires Standards Action with Expert Review or IESG Approval. The first "D" entries
-are the weak elliptic curves in Supported Groups (values 1-8 and 15-21).
+Setting a value to "Y" or "D", or moving it away from "Y" or "D", requires Standards Action with Expert Review or
+IESG Approval. RFC 9847 itself marks these entries "D":
+
+- in ExtensionType Values, `truncated_hmac`, `connection_id (deprecated)` and two reserved values;
+- in Cipher Suites, the Kerberos, NULL, RC4 and export suites and the two integrity-only TLS 1.3 suites;
+- in Supported Groups, the binary and small prime curves (values 1-8 and 15-21);
+- in HashAlgorithm, md5, sha1 and sha224;
+- in ClientCertificateType Identifiers, three reserved values.
+
+None of them is a codepoint Cerid uses.
 
 The column is now register data. Every verified codepoint of the TLS Supported Groups, SignatureScheme and
 ExtensionType registries records IANA's value. The review reads it (`<rec>` in the Supported Groups and ExtensionType
@@ -138,11 +146,14 @@ and a composite scheme (proposal 4 below).
 
 ## Register changes of this run
 
-The report lists the changes of this run, which were applied:
+The report lists the 18 changes the scan applied:
 
 - the Recommended values above;
-- `tls.ml-dsa` confirmed and revision -06 recorded;
-- `tls.registry-recommended` (RFC 9847, implemented by the guard and the review);
-- `tls.v13`'s source, note and review date moved to this document.
+- `tls.ml-dsa`'s three codepoints confirmed and its revision -06 recorded.
+
+These were made by hand, before the scan, so that it would read their sources:
+
+- the new entries `tls.ml-dsa` and `tls.registry-recommended` (RFC 9847, implemented by the guard and the review);
+- `tls.v13`'s source, note and review date, moved to this document.
 
 The run is recorded as the register's second full run. The next review is the light scan after IETF 127.
