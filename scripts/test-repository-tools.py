@@ -6799,11 +6799,19 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
         return self.screening_entry(instrument=self.instrument(consolidated=dict(self.READ)),
                                     source={'ref': 'docs/research.md#n83', 'read': '2026-10-31', 'verified': True})
 
-    def read_order(self):
+    def read_order(self, **instrument):
         """An order the screening entry's regulations incorporate, read with them."""
         return self.legal_entry(id='tr.order', instrument=self.instrument(
-            name='Order 1', primary=self.KVKK.replace('6698', '6699'), consolidated=dict(self.READ, sha256='ab' * 32)),
-            source={'ref': 'docs/research.md#n83', 'read': '2026-10-31', 'verified': True})
+            name='Order 1', primary=self.KVKK.replace('6698', '6699'), consolidated=dict(self.READ, sha256='ab' * 32),
+            **instrument), source={'ref': 'docs/research.md#n83', 'read': '2026-10-31', 'verified': True})
+
+    def umbrella_embargo(self):
+        """Destinations each read in its own act, under a screening entry whose instrument is a class of acts that no
+        single text consolidates (the EU's Article 215 regulations)."""
+        record = self.embargo()
+        for destination in record['destinations']:
+            destination['entry'] = 'tr.order'
+        return record
 
     @staticmethod
     def embargo(**changes):
@@ -6842,14 +6850,26 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
         code, output = self.run_lists(self.embargoes(incorporated), entries=[self.read_screening_entry(),
                                                                              self.read_order()])
         self.assertEqual(0, code, output)
+        # A screening entry whose instrument is a class of acts is never read itself: each destination is read in its
+        # own act.
+        code, output = self.run_lists(self.embargoes(self.umbrella_embargo()),
+                                      entries=[self.screening_entry(), self.read_order()])
+        self.assertEqual(0, code, output)
 
     def test_every_embargo_names_a_read_screening_entry_iso_regions_measures_and_provisions(self):
         where = 'legal register: sanctions_lists: embargoes: tr.masak.embargo'
-        self.assert_lists_fail(self.embargoes(), f"{where}: entry 'tr.asset-freeze' is not an instrument read from "
-                                                 'its primary source')
+        self.assert_lists_fail(self.embargoes(), f"{where}: CU: entry 'tr.asset-freeze' is not an instrument read "
+                                                 'from its primary source')
         self.assert_embargo_fails(self.embargoes(self.embargo(entry='tr.kvkk.processing')),
                                   f"{where}: entry 'tr.kvkk.processing' is no entry whose active check is the "
                                   'screening')
+        self.assert_embargo_fails(self.embargoes(self.embargo(entry='tr.none')),
+                                  f"{where}: entry 'tr.none' is no entry of the register with an instrument and its "
+                                  'jurisdiction')
+        foreign = self.umbrella_embargo()
+        self.assert_lists_fail(self.embargoes(foreign),
+                               f"{where}: RU: entry 'tr.order' is an instrument of EU, not of TR",
+                               entries=[self.screening_entry(), self.read_order(jurisdiction='EU')])
         unknown = self.embargo()
         unknown['note'] = 'x'
         self.assert_embargo_fails(self.embargoes(unknown), f'{where} has destinations, entry, max_age_days, open')
@@ -6973,6 +6993,29 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
                 with self.assertRaisesRegex(sanctions_import.SanctionsError, 'is not an instrument read from'):
                     sanctions_import.import_embargo('tr.masak.embargo', record, {'entries': [unread]}, out)
 
+    def test_an_umbrella_embargo_is_read_in_its_destinations_acts_alone(self):
+        screening, order = self.screening_entry(), self.read_order()
+        register = {'entries': [screening, order]}
+        record = self.umbrella_embargo()
+        reading = sanctions_import.embargo_reading(record, register)
+        self.assertEqual(['tr.order'], list(sanctions_import.embargo_texts(record, register)))
+        with tempfile.TemporaryDirectory() as out:
+            self.assertEqual((20261031000000, 3, '2026-10-31'),
+                             sanctions_import.import_embargo('tr.masak.embargo', record, register, out))
+            document = tomllib.loads((Path(out) / 'tr.masak.embargo.sanctions.toml').read_text(encoding='utf-8'))
+            self.assertEqual(('TR', screening['instrument']['primary'], reading),
+                             (document['jurisdiction'], document['source'], document['source_sha256']))
+            # Reading the screening entry's own text (were it one) changes nothing the destinations rest on.
+            screening['instrument']['consolidated'] = dict(self.READ)
+            self.assertEqual(reading, sanctions_import.embargo_reading(record, register))
+            self.assertIsNone(sanctions_import.import_embargo('tr.masak.embargo', record, register, out)[0])
+            order['instrument']['jurisdiction'] = 'EU'
+            with self.assertRaisesRegex(sanctions_import.SanctionsError,
+                                        "'tr.order' is an instrument of EU, not of TR"):
+                sanctions_import.import_embargo('tr.masak.embargo', record, register, out)
+            with self.assertRaisesRegex(sanctions_import.SanctionsError, "entry 'tr.none' is no entry of the register"):
+                sanctions_import.import_embargo('tr.masak.embargo', dict(record, entry='tr.none'), register, out)
+
     def test_the_us_embargo_is_written_from_31_cfr_chapter_v(self):
         register = sanctions_import.load_register(ROOT)
         with tempfile.TemporaryDirectory() as out:
@@ -6989,6 +7032,37 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
                           ('UA-40', '31 CFR 589', 'comprehensive'), ('UA-14', 'E.O. 14065', 'partial'),
                           ('UA-09', 'E.O. 14065', 'partial'), ('RU', '31 CFR 589', 'sectoral'),
                           ('RU', 'E.O. 14071', 'sectoral'), ('VE', '31 CFR 591', 'sectoral')],
+                         [(item['region'], item['program'], item['measure']) for item in document['destination']])
+
+    def test_the_eu_embargo_is_written_from_the_article_215_regulations(self):
+        register = sanctions_import.load_register(ROOT)
+        record = register['sanctions_lists']['embargoes']['generations']['eu.council.embargo']
+        with tempfile.TemporaryDirectory() as out:
+            with patch('sys.stdout', new_callable=io.StringIO) as printed:
+                self.assertEqual(0, sanctions_import.main(['import', '--from', str(self.LISTS), '--out', out,
+                                                           '--authority', 'eu.council.embargo']))
+            self.assertIn('eu.council.embargo: 11 embargoed destinations read 2026-11-01: generation 20261101000000',
+                          printed.getvalue())
+            document = tomllib.loads((Path(out) / 'eu.council.embargo.sanctions.toml').read_text(encoding='utf-8'))
+        # The screening entry is the class of Article 215 regulations (its primary the sanctions map), never read
+        # itself: the reading is the seven regulations its destinations are read in.
+        self.assertEqual(('EU', 'https://www.sanctionsmap.eu/'), (document['jurisdiction'], document['source']))
+        self.assertIsNone(sanctions_import.read_instrument(register, 'eu.restrictive-measures'))
+        self.assertEqual(['eu.reg-2017-1509.dprk', 'eu.reg-2022-263.occupied-oblasts', 'eu.reg-267-2012.iran',
+                          'eu.reg-36-2012.syria', 'eu.reg-692-2014.crimea', 'eu.reg-765-2006.belarus',
+                          'eu.reg-833-2014.russia'], list(sanctions_import.embargo_texts(record, register)))
+        self.assertIsNotNone(record['open'])
+        self.assertEqual([('RU', 'Regulation (EU) No 833/2014', 'sectoral'),
+                          ('BY', 'Regulation (EC) No 765/2006', 'sectoral'),
+                          ('UA-43', 'Regulation (EU) No 692/2014', 'sectoral'),
+                          ('UA-40', 'Regulation (EU) No 692/2014', 'sectoral'),
+                          ('UA-14', 'Regulation (EU) 2022/263', 'partial'),
+                          ('UA-65', 'Regulation (EU) 2022/263', 'partial'),
+                          ('UA-09', 'Regulation (EU) 2022/263', 'partial'),
+                          ('UA-23', 'Regulation (EU) 2022/263', 'partial'),
+                          ('IR', 'Regulation (EU) No 267/2012', 'sectoral'),
+                          ('KP', 'Regulation (EU) 2017/1509', 'sectoral'),
+                          ('SY', 'Regulation (EU) No 36/2012', 'sectoral')],
                          [(item['region'], item['program'], item['measure']) for item in document['destination']])
 
     # The importer, on the committed excerpts of the official files.

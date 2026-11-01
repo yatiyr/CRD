@@ -3,8 +3,9 @@
 // the UN Security Council Consolidated List and the UK Sanctions List (tests/foundation/comply/lists), the
 // cerid-sanctions/1 generations this case decodes, adopts and screens: the official formats end to end, the birth
 // periods the importer derives (ranges, circa, the Hijri and Solar Hijri calendars, an unknown century), identifiers
-// with their issuing country, and names in their own scripts; and the US embargoed destinations the importer writes
-// from the register's authored reading of 31 CFR chapter V and the Executive orders it incorporates. The CTest
+// with their issuing country, and names in their own scripts; and the embargoed destinations the importer writes from
+// the register's authored readings: 31 CFR chapter V with the Executive orders it incorporates, and the EU's Article
+// 215 regulations, each destination read in its own regulation. The CTest
 // crd-comply-sanctions-import writes the generations first (a CTest fixture), so the cases are hidden from discovery
 // and run as crd-comply-sanctions-imported.
 
@@ -37,9 +38,11 @@ constexpr Imported kImported[] = {
     {"gb.fcdo", "GB", 20261030000000ULL, 6U},
 };
 
-// The destinations 31 CFR chapter V embargoes with the Executive orders it incorporates, authored in
-// cmake/legal-register.json from the texts read on 2026-11-01.
-constexpr Imported kEmbargo = {"us.ofac.embargo", "US", 20261101000000ULL, 0U};
+// The destinations 31 CFR chapter V embargoes with the Executive orders it incorporates, and those the EU's Article 215
+// regulations restrict, authored in cmake/legal-register.json from the texts read on 2026-11-01.
+constexpr Imported kUsEmbargo = {"us.ofac.embargo", "US", 20261101000000ULL, 0U};
+constexpr Imported kEuEmbargo = {"eu.council.embargo", "EU", 20261101000000ULL, 0U};
+constexpr Day kEmbargoFresh = 20270201U; // both readings are fresh for 92 days
 
 // Reads the generation the importer wrote for `expected`, checks its header and adopts it.
 SanctionsList adopt(SanctionsStore& store, const Imported& expected)
@@ -127,6 +130,39 @@ Disposition disposition(const SanctionsStore& store, const Check& check, cont::S
     Screening out;
     return hit(store, check, party, out).disposition;
 }
+
+// One destination screened against the authored embargoes named: the verdict, after checking that each of the `hits`
+// destinations has the disposition and its embargo's generation, and that a reading past its maximum age is a gap.
+Verdict screened(const SanctionsStore& store, std::initializer_list<const Imported*> embargoes, cont::StringView region,
+                 Day day, crd::usize hits, Disposition disposition)
+{
+    INFO(region << " on " << day);
+    cont::Array<cont::StringView> authorities;
+    for (const Imported* embargo : embargoes)
+    {
+        authorities.push_back(embargo->authority);
+    }
+    ScreenRequest request;
+    request.authorities = cont::ConstSpan<cont::StringView>(authorities.data(), authorities.size());
+    request.day = day;
+    request.destination = region;
+    Screening out;
+    REQUIRE(store.screen(request, out).error == ComplyError::None);
+    REQUIRE(out.destinations.size() == hits);
+    for (const DestinationHit& each : out.destinations)
+    {
+        CHECK(each.disposition == disposition);
+        const Imported* const* named = embargoes.begin();
+        while (named != embargoes.end() && !(cont::StringView(each.authority) == (*named)->authority))
+        {
+            ++named;
+        }
+        REQUIRE(named != embargoes.end());
+        CHECK(each.generation == (*named)->generation);
+    }
+    CHECK(out.gaps.size() == (day > kEmbargoFresh ? embargoes.size() : 0U));
+    return out.verdict;
+}
 } // namespace
 
 TEST_CASE("sanctions: the imported official lists decode, adopt and screen", "[.imported]")
@@ -202,53 +238,94 @@ TEST_CASE("sanctions: the imported official lists decode, adopt and screen", "[.
 TEST_CASE("sanctions: the authored US embargo decodes, adopts and screens destinations", "[.imported]")
 {
     SanctionsStore store;
-    const SanctionsList list = adopt(store, kEmbargo);
+    const SanctionsList list = adopt(store, kUsEmbargo);
     CHECK(list.destinations.size() == 10U);
     CHECK(list.published == 20261101U);
     CHECK(list.max_age_days == 92U);
 
-    const auto screened = [&store](cont::StringView region, Day day, crd::usize hits, Disposition disposition)
+    const auto screened_us = [&store](cont::StringView region, Day day, crd::usize hits, Disposition disposition)
     {
-        INFO(region << " on " << day);
-        const cont::StringView authorities[] = {kEmbargo.authority};
-        ScreenRequest request;
-        request.authorities = cont::ConstSpan<cont::StringView>(authorities, 1U);
-        request.day = day;
-        request.destination = region;
-        Screening out;
-        REQUIRE(store.screen(request, out).error == ComplyError::None);
-        REQUIRE(out.destinations.size() == hits);
-        for (const DestinationHit& each : out.destinations)
-        {
-            CHECK(each.disposition == disposition);
-            CHECK(each.generation == kEmbargo.generation);
-        }
-        CHECK(out.gaps.size() == (day > 20270201U ? 1U : 0U));
-        return out.verdict;
+        return screened(store, {&kUsEmbargo}, region, day, hits, disposition);
     };
     // Cuba, Iran and North Korea and the Crimea region (the Autonomous Republic and Sevastopol) block, a place inside
     // an embargoed country too; Ukraine as a whole names the country the region belongs to, which needs review.
     for (const cont::StringView region : {"CU", "IR", "KP", "UA-43", "UA-40", "CU-03"})
     {
-        CHECK(screened(region, kDay, 1U, Disposition::Match) == Verdict::Blocked);
+        CHECK(screened_us(region, kDay, 1U, Disposition::Match) == Verdict::Blocked);
     }
-    CHECK(screened("UA", kDay, 4U, Disposition::Possible) == Verdict::Review);
+    CHECK(screened_us("UA", kDay, 4U, Disposition::Possible) == Verdict::Review);
     // E.O. 14065's Covered Regions lie in the Donetsk and Luhansk oblasts, their boundary drawn by no subdivision: a
     // place in either needs review.
-    CHECK(screened("UA-14", kDay, 1U, Disposition::Match) == Verdict::Review);
-    CHECK(screened("UA-09", kDay, 1U, Disposition::Match) == Verdict::Review);
+    CHECK(screened_us("UA-14", kDay, 1U, Disposition::Match) == Verdict::Review);
+    CHECK(screened_us("UA-09", kDay, 1U, Disposition::Match) == Verdict::Review);
     // The Russian Federation (chapter V's directives and E.O. 14071's services) and Venezuela are sectoral: a match
     // needs review.
-    CHECK(screened("RU", kDay, 2U, Disposition::Match) == Verdict::Review);
-    CHECK(screened("VE", kDay, 1U, Disposition::Match) == Verdict::Review);
+    CHECK(screened_us("RU", kDay, 2U, Disposition::Match) == Verdict::Review);
+    CHECK(screened_us("VE", kDay, 1U, Disposition::Match) == Verdict::Review);
     // No comprehensive Syria programme is in the text read; another region of Ukraine and Turkey are clear.
     for (const cont::StringView region : {"SY", "UA-30", "TR"})
     {
-        CHECK(screened(region, kDay, 0U, Disposition::Match) == Verdict::Clear);
+        CHECK(screened_us(region, kDay, 0U, Disposition::Match) == Verdict::Clear);
     }
     // The reading is fresh for 92 days (to 2027-02-01); after that it is stale, still blocks what it lists and keeps
     // every other destination from clear.
-    CHECK(screened("TR", 20270201U, 0U, Disposition::Match) == Verdict::Clear);
-    CHECK(screened("CU", 20270202U, 1U, Disposition::Match) == Verdict::Blocked);
-    CHECK(screened("TR", 20270202U, 0U, Disposition::Match) == Verdict::Unavailable);
+    CHECK(screened_us("TR", kEmbargoFresh, 0U, Disposition::Match) == Verdict::Clear);
+    CHECK(screened_us("CU", 20270202U, 1U, Disposition::Match) == Verdict::Blocked);
+    CHECK(screened_us("TR", 20270202U, 0U, Disposition::Match) == Verdict::Unavailable);
+}
+
+TEST_CASE("sanctions: the authored EU embargo decodes, adopts and screens destinations", "[.imported]")
+{
+    SanctionsStore store;
+    const SanctionsList list = adopt(store, kEuEmbargo);
+    CHECK(list.destinations.size() == 11U);
+    CHECK(list.published == 20261101U);
+    CHECK(list.max_age_days == 92U);
+
+    const auto screened_eu = [&store](cont::StringView region, Day day, crd::usize hits, Disposition disposition)
+    {
+        return screened(store, {&kEuEmbargo}, region, day, hits, disposition);
+    };
+    // No Article 215 regulation read embargoes a place outright: Russia, Belarus, Crimea and Sevastopol, Iran, the
+    // DPRK and Syria are sectoral, so a match needs review and nothing blocks; a place inside Russia matches too.
+    for (const cont::StringView region : {"RU", "BY", "UA-43", "UA-40", "IR", "KP", "SY", "RU-MOW"})
+    {
+        CHECK(screened_eu(region, kDay, 1U, Disposition::Match) == Verdict::Review);
+    }
+    // Regulation (EU) 2022/263's specified territories lie in four oblasts, their boundary drawn by no subdivision: a
+    // place in any of them needs review.
+    for (const cont::StringView region : {"UA-14", "UA-65", "UA-09", "UA-23"})
+    {
+        CHECK(screened_eu(region, kDay, 1U, Disposition::Match) == Verdict::Review);
+    }
+    // Ukraine as a whole names the country six restricted regions belong to; Cuba (no EU regime), Venezuela (whose
+    // regime is read next), another region of Ukraine and Turkey are clear.
+    CHECK(screened_eu("UA", kDay, 6U, Disposition::Possible) == Verdict::Review);
+    for (const cont::StringView region : {"CU", "VE", "UA-30", "TR"})
+    {
+        CHECK(screened_eu(region, kDay, 0U, Disposition::Match) == Verdict::Clear);
+    }
+    // Past its maximum age the reading is a gap that keeps even a listed destination from a settled answer.
+    CHECK(screened_eu("RU", 20270202U, 1U, Disposition::Match) == Verdict::Unavailable);
+}
+
+TEST_CASE("sanctions: a destination screened against the US and EU embargoes together", "[.imported]")
+{
+    SanctionsStore store;
+    adopt(store, kUsEmbargo);
+    adopt(store, kEuEmbargo);
+    const auto both = [&store](cont::StringView region, crd::usize hits, Disposition disposition)
+    {
+        return screened(store, {&kUsEmbargo, &kEuEmbargo}, region, kDay, hits, disposition);
+    };
+    // The comprehensive US embargo blocks whatever the EU's sectoral one says; each authority's hit is reported.
+    CHECK(both("IR", 2U, Disposition::Match) == Verdict::Blocked);
+    CHECK(both("UA-43", 2U, Disposition::Match) == Verdict::Blocked);
+    CHECK(both("CU", 1U, Disposition::Match) == Verdict::Blocked);
+    // Donetsk is partial under both; Kherson and Belarus only under the EU; the Russian Federation three times.
+    CHECK(both("UA-14", 2U, Disposition::Match) == Verdict::Review);
+    CHECK(both("UA-65", 1U, Disposition::Match) == Verdict::Review);
+    CHECK(both("BY", 1U, Disposition::Match) == Verdict::Review);
+    CHECK(both("RU", 3U, Disposition::Match) == Verdict::Review);
+    CHECK(both("TR", 0U, Disposition::Match) == Verdict::Clear);
 }

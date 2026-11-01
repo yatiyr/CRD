@@ -769,11 +769,13 @@ def import_list(authority, config, jurisdiction, body, out_dir):
 #
 # No designation file carries the destinations an authority embargoes: each authority's are authored in the register's
 # sanctions_lists.embargoes from the instruments read (each entry's text, recorded by register-review.py read), one
-# destination per region and programme with the provision it rests on and the entry it is read in: the screening entry,
-# or an order or determination the entry's regulations incorporate. The generation is published on the day of its
-# latest reading, so its maximum age runs from the reading; its source is the screening entry's primary and its
-# source_sha256 the digest of the reading (every text's digest and the destinations), so a corrected reading of the
-# same texts is a new generation.
+# destination per region and programme with the provision it rests on and the entry it is read in, of the screening
+# entry's jurisdiction: the screening entry itself when its instrument is one text (31 CFR chapter V), else the act the
+# provision is in (an order the regulations incorporate, or one of the EU's Article 215 regulations, which no single
+# text consolidates). The reading is those texts: the generation is published on the day of its latest one, so its
+# maximum age runs from the reading; its source is the screening entry's primary and its source_sha256 the digest of
+# the reading (every text's digest and the destinations), so a corrected reading of the same texts is a new
+# generation.
 
 EMBARGO_KEYS = {'entry', 'title', 'max_age_days', 'destinations', 'open'}
 DESTINATION_KEYS = {'region', 'program', 'measure', 'basis', 'entry'}
@@ -787,6 +789,14 @@ MAX_LIST_AGE_DAYS = 366  # kMaxListAgeDays
 
 def entry_of(register, entry_id):
     return next((entry for entry in register.get('entries') or [] if entry.get('id') == entry_id), None)
+
+
+def jurisdiction_of_entry(register, entry_id):
+    """The jurisdiction of the entry's instrument, else None."""
+    entry = entry_of(register, entry_id)
+    instrument = entry.get('instrument') if isinstance(entry, dict) else None
+    jurisdiction = instrument.get('jurisdiction') if isinstance(instrument, dict) else None
+    return jurisdiction if isinstance(jurisdiction, str) and jurisdiction else None
 
 
 def read_instrument(register, entry_id):
@@ -808,9 +818,10 @@ def embargo_errors(authority, record, register):
     if not isinstance(record, dict) or set(record) != EMBARGO_KEYS:
         return [f'{at} has {", ".join(sorted(EMBARGO_KEYS))}']
     errors = []
-    if read_instrument(register, record['entry']) is None:
-        errors.append(f'{at}: entry {record["entry"]!r} is not an instrument read from its primary source '
-                      '(scripts/register-review.py read records it)')
+    jurisdiction = jurisdiction_of_entry(register, record['entry'])
+    if jurisdiction is None:
+        errors.append(f'{at}: entry {record["entry"]!r} is no entry of the register with an instrument and its '
+                      'jurisdiction')
     if not isinstance(record['title'], str) or not record['title']:
         errors.append(f'{at}: title names the embargoes')
     if type(record['max_age_days']) is not int or not 1 <= record['max_age_days'] <= MAX_LIST_AGE_DAYS:
@@ -832,8 +843,13 @@ def embargo_errors(authority, record, register):
             errors.append(f'{where} is no ISO 3166-1 country or ISO 3166-2 subdivision of one {TOOL} knows')
         if destination['measure'] not in MEASURES:
             errors.append(f'{where}: measure is {", ".join(MEASURES[:-1])} or {MEASURES[-1]}')
-        if read_instrument(register, destination['entry']) is None:
-            errors.append(f'{where}: entry {destination["entry"]!r} is not an instrument read from its primary source')
+        instrument = read_instrument(register, destination['entry'])
+        if instrument is None:
+            errors.append(f'{where}: entry {destination["entry"]!r} is not an instrument read from its primary source '
+                          '(scripts/register-review.py read records it)')
+        elif jurisdiction is not None and instrument.get('jurisdiction') != jurisdiction:
+            errors.append(f'{where}: entry {destination["entry"]!r} is an instrument of '
+                          f'{instrument.get("jurisdiction")}, not of {jurisdiction}')
         if any(len(destination[key].encode('utf-8')) > MAX_TEXT for key in DESTINATION_KEYS):
             errors.append(f'{where}: a value longer than {MAX_TEXT} bytes')
         if (destination['region'], destination['program']) in seen:
@@ -843,8 +859,8 @@ def embargo_errors(authority, record, register):
 
 
 def embargo_texts(record, register):
-    """{entry id: the text read} of every instrument a generation rests on: its entry's and each destination's."""
-    ids = sorted({record['entry'], *(destination['entry'] for destination in record['destinations'])})
+    """{entry id: the text read} of every instrument a generation rests on: each destination's."""
+    ids = sorted({destination['entry'] for destination in record['destinations']})
     instruments = {entry_id: read_instrument(register, entry_id) for entry_id in ids}
     return {entry_id: dict(instrument['consolidated'], url=instrument['primary'])
             for entry_id, instrument in instruments.items()}
@@ -863,7 +879,7 @@ def import_embargo(authority, record, register, out_dir):
     errors = embargo_errors(authority, record, register)
     if errors:
         raise SanctionsError('; '.join(errors))
-    instrument = read_instrument(register, record['entry'])
+    instrument = entry_of(register, record['entry'])['instrument']
     published = max(text['read'] for text in embargo_texts(record, register).values())
     sha256 = embargo_reading(record, register)
     out = Path(out_dir) / f'{authority}{SUFFIX}'
@@ -892,10 +908,10 @@ def lists_of(register, chosen):
 
 
 def jurisdiction_of(register, config):
-    entry = next((entry for entry in register['entries'] if entry['id'] == config['entry']), None)
-    if entry is None:
-        raise SanctionsError(f'{REGISTER} has no entry {config["entry"]}')
-    return entry['instrument']['jurisdiction']
+    jurisdiction = jurisdiction_of_entry(register, config['entry'])
+    if jurisdiction is None:
+        raise SanctionsError(f'{REGISTER} has no entry {config["entry"]} with an instrument and its jurisdiction')
+    return jurisdiction
 
 
 def fetched(directory, authority):

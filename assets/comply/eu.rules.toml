@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review EU
 format = "cerid-rules/1"
 jurisdiction = "EU"
-generation = 6
+generation = 7
 register = "2026-11-01"
 
 [[scope]]
@@ -526,6 +526,153 @@ check = "active"
 check_name = "crd-comply-tests [sanctions]: parties and destinations screened against each authority's list, failing closed on a missing or stale list"
 check_ref = "tests/foundation/comply/test_sanctions.cpp"
 effective = "2026-10-27"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-833-2014.russia"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures in view of Russia's actions destabilising the situation in Ukraine"
+instrument = "Council Regulation (EU) No 833/2014 (restrictive measures in view of Russia's actions destabilising the situation in Ukraine)"
+article = "Articles 2a and 2b with Annex VII (X.D.III.201.c: mass-market encryption software), 3h with Annex XVIII and 5n(1), (3) and (3a) with Annex XXXIX (design and manufacturing software used in media and entertainment)"
+primary = "https://eur-lex.europa.eu/eli/reg/2014/833/oj"
+read = true
+obligation = "Sell, supply, transfer or export to no person in Russia or for use in Russia, directly or indirectly, the goods and technology of Annex VII, which include software classified as mass-market encryption software under the Cryptography Note (X.D.III.201.c; the category does not control goods for the personal use of natural persons, and authorisations may be granted for software updates and consumer communication devices), nor the technical assistance, financing or intellectual property rights related to them (Article 2a); provide to the Government of Russia or a legal person, entity or body established in Russia no IT consultancy, artificial intelligence services (access to models or platforms for training, fine-tuning and inference), high-performance computing including access to GPU-accelerated computing, or managed security services (Article 5n(1)), and sell, supply, transfer, export or provide to them no software for the management of enterprises or for industrial design and manufacture listed in Annex XXXIX, which names design and manufacturing software used in media, education and entertainment, nor licence its intellectual property (Article 5n(3) and (3a)); sell no video game consoles to Russia (Article 3h, Annex XVIII)."
+applies_to = ["channel.cerid-store", "channel.distribution", "product.collaboration", "product.online-sessions", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens the Russian Federation as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2014-08-01"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "NET.2", "STORE.1", "STORE.3", "NET-SERVER", "COLLAB.1"]
+
+[[rule]]
+id = "eu.reg-692-2014.crimea"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures in response to the illegal annexation of Crimea and Sevastopol"
+instrument = "Council Regulation (EU) No 692/2014 (restrictive measures in response to the illegal annexation of Crimea and Sevastopol)"
+article = "Articles 2b and 2c (IT consultancy; Annex IV software, design and manufacturing software used in media and entertainment) and 2d"
+primary = "https://eur-lex.europa.eu/eli/reg/2014/692/oj"
+read = true
+obligation = "Supply to no person in Crimea or Sevastopol, or for use there, the transport, telecommunications, energy and resource goods and technology of Annex II, nor related technical assistance or financing (Article 2b); provide to no legal person, entity or body in Crimea or Sevastopol IT consultancy, advertising or market research services (Article 2c(2) and (2a)) and sell, supply, transfer, export or provide to them no software for the management of enterprises or for industrial design and manufacture listed in Annex IV, which names design and manufacturing software used in media, education and entertainment, nor licence its intellectual property (Article 2c(2b) and (3)); provide no services directly related to tourism there (Article 2d)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Crimea and Sevastopol (UA-43, UA-40) as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2014-06-25"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3", "NET-SERVER", "COLLAB.1"]
+
+[[rule]]
+id = "eu.reg-2022-263.occupied-oblasts"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures on the non-government-controlled areas of Ukraine"
+instrument = "Council Regulation (EU) 2022/263 (restrictive measures in response to the recognition, occupation or annexation of certain non-government controlled areas of Ukraine)"
+article = "Articles 1(d), 4, 5 (IT consultancy; Annex III software, design and manufacturing software used in media and entertainment) and 6"
+primary = "https://eur-lex.europa.eu/eli/reg/2022/263/oj"
+read = true
+obligation = "Supply to no person in the specified territories (the non-government controlled areas of the Donetsk, Kherson, Luhansk and Zaporizhzhia oblasts), or for use there, the goods and technology of Annex II, nor related technical assistance or financing (Article 4); provide to no legal person, entity or body there IT consultancy, advertising or market research services (Article 5(2) and (2a)) and sell, supply, transfer, export or provide to them no software for the management of enterprises or for industrial design and manufacture listed in Annex III, which names design and manufacturing software used in media, education and entertainment, nor licence its intellectual property (Article 5(2b) and (3)); provide no services directly related to tourism there (Article 6)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens the Donetsk, Kherson, Luhansk and Zaporizhzhia oblasts (UA-14, UA-65, UA-09, UA-23) as partial, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2022-02-24"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3", "NET-SERVER", "COLLAB.1"]
+
+[[rule]]
+id = "eu.reg-765-2006.belarus"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures in view of the situation in Belarus"
+instrument = "Council Regulation (EC) No 765/2006 (restrictive measures in view of the situation in Belarus and the involvement of Belarus in the Russian aggression against Ukraine)"
+article = "Articles 1f with Annex Va (X.D.III.201.c: mass-market encryption software) and 1jc(1)-(5) with Annex XXVI (design and manufacturing software used in media and entertainment)"
+primary = "https://eur-lex.europa.eu/eli/reg/2006/765/oj"
+read = true
+obligation = "Sell, supply, transfer or export to no person in Belarus or for use in Belarus, directly or indirectly, the goods and technology of Annex Va, which include mass-market encryption software (X.D.III.201.c; goods for the personal use of natural persons are not controlled, and authorisations may be granted for software updates and consumer communication devices), nor the technical assistance, financing or intellectual property rights related to them (Article 1f); provide to the Republic of Belarus, its Government, public bodies, corporations or agencies, or anyone acting on their behalf or at their direction, no IT consultancy, artificial intelligence, high-performance or GPU-accelerated computing or managed security services, and no software for the management of enterprises or for industrial design and manufacture listed in Annex XXVI, which names design and manufacturing software used in media, education and entertainment (Article 1jc)."
+applies_to = ["channel.cerid-store", "channel.distribution", "product.collaboration", "product.online-sessions", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Belarus as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2006-05-20"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "NET.2", "STORE.1", "STORE.3", "NET-SERVER", "COLLAB.1"]
+
+[[rule]]
+id = "eu.reg-267-2012.iran"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures against Iran (non-proliferation)"
+instrument = "Council Regulation (EU) No 267/2012 (restrictive measures against Iran)"
+article = "Articles 2, 3, 4a, 8, 10a, 10d with Annex VIIA, 15, 30 and 30a"
+primary = "https://eur-lex.europa.eu/eli/reg/2012/267/oj"
+read = true
+obligation = "Supply to no Iranian person or for use in Iran the dual-use goods, technology and software of Annex I (the items Regulation (EU) 2021/821 lists, those of its Part A needing an authorisation under it) and the goods of Annexes II, III, VI, VIA and VIB, without authorisation those of Annex IIA (Articles 2, 3, 4a, 8 and 10a), nor the software for integrating industrial processes of Annex VIIA (Article 10d); transfer funds to or from an Iranian person of EUR 10 000 or more only with the prior authorisation of the competent authority, and none with credit or financial institutions domiciled in Iran except as authorised (Articles 30 and 30a)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Iran as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2012-03-24"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-2017-1509.dprk"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures against the Democratic People's Republic of Korea"
+instrument = "Council Regulation (EU) 2017/1509 (restrictive measures against the Democratic People's Republic of Korea)"
+article = "Articles 3, 5, 7, 10 with Annex VIII and 21"
+primary = "https://eur-lex.europa.eu/eli/reg/2017/1509/oj"
+read = true
+obligation = "Supply to no person in the DPRK or for use there the goods, technology and software of Annex II (every item the dual-use regulation lists, and items that could contribute to its weapons programmes) or any item destined for its armed forces, nor related technical assistance (Articles 3, 5 and 7); supply no luxury goods of Annex VIII, which include video game consoles and electronic items for domestic use worth more than EUR 50 (Article 10); transfer no funds to or from the DPRK except the transfers of up to EUR 15 000 Article 21(4) and (5) allow (Article 21)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens the DPRK as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2017-09-01"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-36-2012.syria"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures in view of the situation in Syria"
+instrument = "Council Regulation (EU) No 36/2012 (restrictive measures in view of the situation in Syria)"
+article = "Articles 2a, 2b, 3, 4 with Annex V and 11c"
+primary = "https://eur-lex.europa.eu/eli/reg/2012/36/oj"
+read = true
+obligation = "Supply to no person in Syria or for use there the equipment for internal repression of Annex IA, without authorisation that of Annex IX, nor military goods (Articles 2a, 2b and 3); supply without authorisation none of the equipment, technology or software for monitoring or intercepting internet or telephone communications of Annex V, and provide no such monitoring or interception services to the Syrian State (Article 4); trade in no Syrian cultural property (Article 11c)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Syria as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2012-01-19"
 sunset = ""
 counsel = "none"
 counsel_reviewed = ""
