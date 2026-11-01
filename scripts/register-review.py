@@ -152,16 +152,28 @@ def source_id(url):
 # URL holds the `{version}` it names. A host without a resolver is read as the cited page, by its digest alone.
 CELLAR = 'https://publications.europa.eu/resource/celex/{version}'
 CELLAR_VERSIONS = 'https://publications.europa.eu/webapi/rdf/sparql?format=application%2Fsparql-results%2Bjson&query='
+CELLAR_HEADERS = {'Accept': 'application/xhtml+xml', 'Accept-Language': 'eng'}
+CELLAR_ENGLISH = '<http://publications.europa.eu/resource/authority/language/ENG>'
 # The consolidated versions based on the act that have an English XHTML text (a version published with its act has
-# none, and CELLAR answers 404 for it). Bound to the act's CELEX number, the query answers in under a second; matching
-# CELEX prefixes instead scans the whole store (40 to 120 s, 2026-11-01).
-CELLAR_QUERY = ('PREFIX cdm: <http://publications.europa.eu/ontology/cdm#> SELECT DISTINCT ?celex WHERE {{ ?act '
-                'cdm:resource_legal_id_celex "{celex}"^^<http://www.w3.org/2001/XMLSchema#string> . ?work '
+# none, and CELLAR answers 404 for it), then the acts that change its English text, each with its day and the
+# consolidated versions of the act that consolidate it: an act amending it, correcting it, or correcting an act that
+# amends it (a corrigendum of an amending regulation), with an English text (a corrigendum of another language leaves
+# the English text read unchanged). A consolidated version lists only the acts it adds, so an act is in the version
+# read when any version up to it consolidates it. Bound to the act's CELEX number, the query answers in under a
+# second; matching CELEX prefixes instead scans the whole store (40 to 120 s, 2026-11-01).
+CELLAR_QUERY = ('PREFIX cdm: <http://publications.europa.eu/ontology/cdm#> SELECT DISTINCT ?celex ?day ?by WHERE {{ '
+                '?act cdm:resource_legal_id_celex "{celex}"^^<http://www.w3.org/2001/XMLSchema#string> . {{ ?work '
                 'cdm:act_consolidated_based_on_resource_legal ?act ; cdm:resource_legal_id_celex ?celex . ?expression '
-                'cdm:expression_belongs_to_work ?work ; cdm:expression_uses_language '
-                '<http://publications.europa.eu/resource/authority/language/ENG> . ?manifestation '
-                'cdm:manifestation_manifests_expression ?expression ; cdm:manifestation_type ?type . '
-                'FILTER(STR(?type) = "xhtml") }}')
+                'cdm:expression_belongs_to_work ?work ; cdm:expression_uses_language ' + CELLAR_ENGLISH + ' . '
+                '?manifestation cdm:manifestation_manifests_expression ?expression ; cdm:manifestation_type ?type . '
+                'FILTER(STR(?type) = "xhtml") }} UNION {{ {{ ?change cdm:resource_legal_amends_resource_legal ?act }} '
+                'UNION {{ ?change cdm:resource_legal_corrects_resource_legal ?act }} UNION {{ ?change '
+                'cdm:resource_legal_corrects_resource_legal ?amending . ?amending '
+                'cdm:resource_legal_amends_resource_legal ?act }} ?change cdm:resource_legal_id_celex ?celex ; '
+                'cdm:work_date_document ?day . ?text cdm:expression_belongs_to_work ?change ; '
+                'cdm:expression_uses_language ' + CELLAR_ENGLISH + ' . OPTIONAL {{ ?consolidation '
+                'cdm:act_consolidated_based_on_resource_legal ?act ; cdm:act_consolidated_consolidates_resource_legal '
+                '?change ; cdm:resource_legal_id_celex ?by }} }} }}')
 EUR_LEX_SECTORS = {'reg': 'R', 'dir': 'L', 'dec': 'D'}
 ECFR = 'https://www.ecfr.gov/api/versioner/v1/{endpoint}/title-{title}.{suffix}?{hierarchy}'
 MEVZUAT = 'https://www.mevzuat.gov.tr/anasayfa/MevzuatFihristDetayIframe?MevzuatTur={kind}&MevzuatNo={number}' \
@@ -200,13 +212,14 @@ def celex_of(sector, year, number):
 
 def resolve_eur_lex(match):
     """The Publications Office's CELLAR serves EUR-Lex's acts (eur-lex.europa.eu answers a machine with a challenge):
-    the consolidated versions of the act's CELEX number, then the latest one in English XHTML."""
+    the consolidated versions of the act's CELEX number and the acts changing it, then the latest version in English
+    XHTML, and each act that version lacks as published."""
     celex = celex_of(match['sector'], match['year'], match['number'])
     query = urllib.parse.quote(CELLAR_QUERY.format(celex=celex), safe='')
     index = f'celex-{celex.lower()}-versions'
     return [{'id': index, 'kind': 'index', 'reader': 'cellar-versions', 'act': celex, 'url': CELLAR_VERSIONS + query},
             {'id': f'celex-{celex.lower()}', 'kind': 'primary', 'reader': 'cellar', 'act': celex, 'index': index,
-             'url': CELLAR, 'headers': {'Accept': 'application/xhtml+xml', 'Accept-Language': 'eng'}}]
+             'url': CELLAR, 'headers': dict(CELLAR_HEADERS)}]
 
 
 def resolve_legislation_gov_uk(match):
@@ -426,8 +439,9 @@ def download(opener, url, headers, limit=None):
 def fetch_sources(plan, into, opener=None, today=None):
     """Reads every planned source (HTTPS only, gzip decoded, at most FETCH_LIMIT bytes) into `into` with a manifest of
     the SHA-256 of each decoded body; a version index is read before the documents whose URL holds the version (or the
-    part of it) it names. A source that fails (a refused connection, a timeout, a body cut short) is recorded with its
-    error and read again by the next run."""
+    part of it) it names, and the documents an index names beside the version (the acts a consolidated text lacks) are
+    read after it, each once. A source that fails (a refused connection, a timeout, a body cut short) is recorded with
+    its error and read again by the next run."""
     if not isinstance(plan, dict) or plan.get('schema') != PLAN_SCHEMA or not isinstance(plan.get('sources'), list):
         raise ReviewError(f'the plan is not a {PLAN_SCHEMA} document')
     today = today or datetime.datetime.now(datetime.timezone.utc).date()
@@ -435,6 +449,34 @@ def fetch_sources(plan, into, opener=None, today=None):
     into = Path(into)
     into.mkdir(parents=True, exist_ok=True)
     versions, items = {}, []
+    taken = {source['id'] for source in plan['sources']}
+
+    def take(item, headers, index=None):
+        """The item's body written beside the manifest, with the version found when it is an index; the error is
+        recorded instead."""
+        if not item['url'].startswith('https://') or not re.fullmatch(r'[a-z0-9.-]+', item['id']):
+            item['error'] = 'refused: a source is an https URL with a plain identifier'
+            return None
+        try:
+            body = download(opener, item['url'], headers)
+            found = None
+            if index is not None:
+                found = INDEX_READERS[index['reader']](body, index, today)
+                path, version, *documents = (found, found) if isinstance(found, str) else found
+                if not VERSION.fullmatch(path):
+                    raise Unreadable(f'the version {path!r} cannot be part of a URL')
+                found = path, version, documents[0] if documents else []
+        except (OSError, http.client.HTTPException) as error:
+            item['error'] = ' '.join(f'{type(error).__name__}: {error}'.split())
+            return None
+        except Unreadable as error:
+            item['error'] = str(error)
+            return None
+        name = item['id'] + Path(urllib.parse.urlsplit(item['url']).path).suffix
+        (into / name).write_bytes(body)
+        item.update(file=name, bytes=len(body), sha256=hashlib.sha256(body).hexdigest())
+        return found
+
     for source in sorted(plan['sources'], key=lambda source: source['kind'] != 'index'):
         item = {'id': source['id'], 'url': source['url']}
         items.append(item)
@@ -442,28 +484,18 @@ def fetch_sources(plan, into, opener=None, today=None):
             if source['index'] not in versions:
                 item['error'] = f'its version index {source["index"]} was not read'
                 continue
-            path, version = versions[source['index']]
+            path, version, documents = versions[source['index']]
             item.update(url=source['url'].replace('{version}', path), version=version)
-        if not item['url'].startswith('https://') or not re.fullmatch(r'[a-z0-9.-]+', source['id']):
-            item['error'] = 'refused: a source is an https URL with a plain identifier'
-            continue
-        try:
-            body = download(opener, item['url'], source.get('headers', {}))
-            if source['kind'] == 'index':
-                found = INDEX_READERS[source['reader']](body, source, today)
-                path, version = found if isinstance(found, tuple) else (found, found)
-                if not VERSION.fullmatch(path):
-                    raise Unreadable(f'the version {path!r} cannot be part of a URL')
-                versions[source['id']] = path, version
-        except (OSError, http.client.HTTPException) as error:
-            item['error'] = ' '.join(f'{type(error).__name__}: {error}'.split())
-            continue
-        except Unreadable as error:
-            item['error'] = str(error)
-            continue
-        name = source['id'] + Path(urllib.parse.urlsplit(item['url']).path).suffix
-        (into / name).write_bytes(body)
-        item.update(file=name, bytes=len(body), sha256=hashlib.sha256(body).hexdigest())
+            if documents:
+                item['documents'] = [document['id'] for document in documents]
+        found = take(item, source.get('headers', {}), source if source['kind'] == 'index' else None)
+        if found:
+            versions[source['id']] = found
+            for document in found[2]:
+                if document['id'] not in taken:
+                    taken.add(document['id'])
+                    items.append({'id': document['id'], 'url': document['url'], 'act': document['act']})
+                    take(items[-1], document['headers'])
     manifest = {'schema': FETCH_SCHEMA, 'day': str(today), 'plan': plan, 'items': items}
     write_json(into / MANIFEST, manifest)
     return manifest
@@ -609,22 +641,62 @@ def read_legislation_gov_uk(body, source, version):
     return day
 
 
+# An act changing a CELEX act: a regulation, directive or decision of the CELEX sector of legislation, or one of its
+# corrigenda (`32026R0506R(03)`).
+CELLAR_CHANGE = re.compile(r'3\d{4}[RLD]\d{4}(?:R\(\d{2}\))?')
+ISO_DAY = re.compile(r'(\d{4})-(\d{2})-(\d{2})')
+
+
 def read_cellar_versions(body, source, today):
-    """The latest consolidated version of a CELEX act in force by `today`, or the act itself when none is."""
+    """The latest consolidated version of a CELEX act in force by `today` (the act itself when none is), and the acts
+    changing its English text that this version lacks: those no consolidated version up to it consolidates, of which
+    CELLAR consolidates in no version at all only the acts dated after it are counted (CELLAR records no consolidation
+    of 3 to 7 older corrigenda of each sanctions regulation's amending acts whose correction the later versions carry,
+    2026-11-01). The version, or `(version, '<version> + <act> + ...', documents)` when it lacks an act: the version
+    named names each, and the fetch reads each document as published."""
     try:
-        values = [binding['celex']['value'] for binding in json.loads(body)['results']['bindings']]
-    except (ValueError, KeyError, TypeError) as error:
+        rows = [{name: value['value'] for name, value in binding.items()}
+                for binding in json.loads(body)['results']['bindings']]
+    except (ValueError, KeyError, TypeError, AttributeError) as error:
         raise Unreadable(f'not a SPARQL result of CELEX numbers ({error})') from error
     pattern = re.compile(re.escape(f'0{source["act"][1:]}') + r'-(\d{4})(\d{2})(\d{2})')
-    versions = []
-    for value in values:
+
+    def consolidated(value):
         match = pattern.fullmatch(value) if isinstance(value, str) else None
         if match is None:
             raise Unreadable(f'{value!r} is not a consolidated version of {source["act"]}')
-        day = calendar_day(match[3], match[2], match[1])
-        if day <= today:
-            versions.append((day, value))
-    return max(versions)[1] if versions else source['act']
+        return calendar_day(match[3], match[2], match[1])
+
+    versions, changes = [], {}
+    for row in rows:
+        if 'day' not in row:
+            if set(row) != {'celex'}:
+                raise Unreadable(f'a consolidated version with {sorted(row)}')
+            day = consolidated(row['celex'])
+            if day <= today:
+                versions.append((day, row['celex']))
+            continue
+        celex, day = row.get('celex'), ISO_DAY.fullmatch(row['day']) if isinstance(row['day'], str) else None
+        if not isinstance(celex, str) or not CELLAR_CHANGE.fullmatch(celex) or celex == source['act']:
+            raise Unreadable(f'{celex!r} is not an act changing {source["act"]}')
+        if day is None:
+            raise Unreadable(f'{celex} is dated {row["day"]!r}, not YYYY-MM-DD')
+        day = calendar_day(day[3], day[2], day[1])
+        change = changes.setdefault(celex, (day, []))
+        if change[0] != day:
+            raise Unreadable(f'{celex} is dated both {change[0]} and {day}')
+        if 'by' in row:
+            change[1].append(consolidated(row['by']))
+    read, version = max(versions) if versions else (None, source['act'])
+    lacked = sorted(celex for celex, (day, by) in changes.items()
+                    if not any(read and consolidation <= read for consolidation in by) and
+                    (by or read is None or day > read))
+    if not lacked:
+        return version
+    return version, ' + '.join([version] + lacked), [
+        {'id': f'celex-{re.sub(r"[^a-z0-9]+", "-", celex.lower()).strip("-")}-published', 'act': celex,
+         'url': CELLAR.format(version=urllib.parse.quote(celex, safe='')), 'headers': dict(CELLAR_HEADERS)}
+        for celex in lacked]
 
 
 def read_cellar(body, source, version):
@@ -1193,14 +1265,16 @@ class Review:
         instrument = entry['instrument']
         what = f'{entry["id"]} ({", ".join(entry["rows"])}): {instrument["name"]}, {instrument["article"]}'
         found = f'version {version}, ' if version else ''
+        lacked = self.items[source['id']].get('documents', [])
+        lacks = f'; read the acts its consolidated text lacks as published ({", ".join(lacked)})' if lacked else ''
         consolidated = instrument['consolidated']
         if consolidated is None:
             self.readings.append(f'{what}: never read from its primary source; read {self.items[source["id"]]["url"]} '
-                                 f'({found}SHA-256 {digest}) in its consolidated text and record it with `read`')
+                                 f'({found}SHA-256 {digest}) in its consolidated text and record it with `read`{lacks}')
         elif version is not None and consolidated['version'] != version:
             self.readings.append(f'{what}: amended to {version} since it was read on {consolidated["read"]} '
                                  f'({consolidated["version"]}); read the amendment, record it with `read` (SHA-256 '
-                                 f'{digest}) and record a trigger if it changes a pinned obligation')
+                                 f'{digest}) and record a trigger if it changes a pinned obligation{lacks}')
         elif consolidated['sha256'] != digest:
             self.readings.append(f'{what}: the primary text changed since it was read on {consolidated["read"]} '
                                  f'({consolidated["version"]}); read the change, record the new version and '
@@ -1264,10 +1338,13 @@ class Review:
             self.judge_codepoints(entry, registries)
 
     def report(self, day, scan, applied, plan):
+        planned = len(self.manifest['plan']['sources'])
+        lacked = len(self.manifest['items']) - planned
         lines = [f'# Register review of {day} ({scan} scan, {self.register["domain"]} register)', '',
                  '<!-- doc-role: record -->', '',
-                 f'Sources: {len(self.manifest["items"])} planned, {len(self.bodies)} read on {self.manifest["day"]}; '
-                 f'the register changes below were {"applied" if applied else "proposed, not applied"}. '
+                 f'Sources: {planned} planned' + (f' and {lacked} acts their consolidated texts lack' if lacked else '')
+                 + f', {len(self.bodies)} read on {self.manifest["day"]}; the register changes below were '
+                 f'{"applied" if applied else "proposed, not applied"}. '
                  'This review edits no ROADMAP row: the amendments are proposals for the user.', '']
         sections = [('Register changes', [f'{entry}: {text}' for entry, text, _ in self.changes]),
                     ('Read in the consolidated text', self.readings),
@@ -1341,6 +1418,8 @@ def command_plan(args, root):
     print(f'{len(sources)} sources to download once the user approves them, {len(manual)} items read by hand:')
     for source in sources:
         print(f'  {source["url"]}')
+    if any(source.get('reader') == 'cellar-versions' for source in sources):
+        print(f'  and, as published, each act a consolidated text lacks ({CELLAR.format(version="<CELEX>")})')
     return 0
 
 
@@ -1432,8 +1511,9 @@ def command_record(args, root):
 
 def command_read(args, root):
     """Records the instruments a person read from a fetch the applied run compared: each entry's consolidated version
-    (its host's reader), the fetch day and the SHA-256 of the text read, its source verified and cited by --ref.
-    Nothing is written unless every entry can be recorded."""
+    (its host's reader, naming the acts the consolidated text lacks, each of which must have been read as
+    published), the fetch day and the SHA-256 of the text read, its source verified and cited by --ref. Nothing is
+    written unless every entry can be recorded."""
     manifest = load_manifest(args.fetched)
     plan = manifest['plan']
     path = root / plan['register']
@@ -1461,6 +1541,11 @@ def command_read(args, root):
         else:
             try:
                 readings.append((entry, *review.reading(source)))
+                for document in review.items[source['id']].get('documents', []):
+                    if document not in review.bodies:
+                        raise Unreadable(f'the act it lacks, {document}, was not read '
+                                         f'({review.items[document].get("error")})')
+                    read_cellar(review.bodies[document], review.items[document], None)
             except Unreadable as error:
                 errors.append(f'{entry_id}: {source["id"]}: {error}')
     if errors:

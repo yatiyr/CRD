@@ -7546,9 +7546,13 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
                        '<dct:valid>2026-09-30</dct:valid></ukm:Metadata></Legislation>')
 
     @staticmethod
-    def sparql(*values):
-        return json.dumps({'head': {'vars': ['celex']}, 'results': {'bindings': [
-            {'celex': {'type': 'literal', 'value': value}} for value in values]}})
+    def sparql(*rows):
+        """CELLAR's answer to the version index: a consolidated version's CELEX number, or an act changing the act as
+        (CELEX number, day[, a consolidated version consolidating it])."""
+        names = ('celex', 'day', 'by')
+        return json.dumps({'head': {'vars': list(names)}, 'results': {'bindings': [
+            {name: {'type': 'literal', 'value': value}
+             for name, value in zip(names, (row,) if isinstance(row, str) else row)} for row in rows]}})
 
     def routed(self, routes, requests=None):
         """An opener answering each request with the body of the first route its URL contains: text, bytes, an
@@ -7741,6 +7745,97 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             self.assertIn('eu.gdpr.rights: celex-32016r0679 was not read (its version index '
                           'celex-32016r0679-versions was not read)', output)
 
+    def test_the_acts_a_consolidated_text_lacks_are_read_as_published_before_it_is_recorded(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            eur_lex = 'https://eur-lex.europa.eu/eli/reg/{}/oj'
+            legal = self.legal_register([self.legal_entry()] + [
+                self.legal_entry(id=entry_id,
+                                 instrument=self.instrument(jurisdiction='EU', primary=eur_lex.format(act)))
+                for entry_id, act in (('eu.gdpr.rights', '2016/679'), ('eu.cra.reporting', '2024/2847'),
+                                      ('eu.ai.literacy', '2024/1689'))])
+            self.write_tree(root, self.register(self.entries()), legal)
+            (root / 'docs' / 'reading.md').write_text('<a id="acts"></a>Read.\n', encoding='utf-8')
+            argv = ('--register', 'cmake/legal-register.json')
+            code, output = self.tool(root, *argv, 'plan', '--out', str(root / 'sources.json'))
+            self.assertEqual(0, code, output)
+            self.assertIn('7 sources to download once the user approves them', output)
+            self.assertIn('  and, as published, each act a consolidated text lacks '
+                          '(https://publications.europa.eu/resource/celex/<CELEX>)', output)
+            plan = json.loads((root / 'sources.json').read_text(encoding='utf-8'))
+            # Each act's index answers by its CELEX number: GDPR lacks a corrigendum CELLAR cannot serve, the CRA one
+            # that does not name its act, and all three the regulation amending them (consolidated in the AI Act only
+            # by a version not yet in force), fetched once.
+            ehds = ('32025R0327', '2025-02-11')
+            routes = {'MevzuatNo=6698': self.MEVZUAT_HTML,
+                      '%2232016R0679%22': self.sparql('02016R0679-20160504', ('32016R0679R(02)', '2018-05-23'), ehds),
+                      '%2232024R2847%22': self.sparql('02024R2847-20241120', ('32024R2847R(05)', '2026-10-01'), ehds,
+                                                      ('32024R2847R(01)', '2024-12-05', '02024R2847-20241120')),
+                      '%2232024R1689%22': self.sparql('02024R1689-20260727', (*ehds, '02024R1689-20270802')),
+                      '/resource/celex/32016R0679R%2802%29': urllib.error.URLError('gone'),
+                      '/resource/celex/32024R2847R%2805%29': '<html><p>Corrigendum to (EU) 2024/2846</p></html>',
+                      '/resource/celex/32025R0327': '<html><p>Regulation (EU) 2025/327</p></html>',
+                      '/resource/celex/02016R0679-20160504': self.CELLAR_XHTML,
+                      '/resource/celex/02024R2847-20241120': '<html><p>Regulation (EU) 2024/2847</p></html>',
+                      '/resource/celex/02024R1689-20260727': '<html><p>Regulation (EU) 2024/1689</p></html>'}
+            requests = []
+            manifest = register_review.fetch_sources(plan, root / 'fetched', opener=self.routed(routes, requests),
+                                                     today=datetime.date(2026, 11, 1))
+            self.assertEqual(1, sum(request.full_url.endswith('/32025R0327') for request in requests))
+            published = next(request for request in requests if request.full_url.endswith('/32025R0327'))
+            self.assertEqual(('application/xhtml+xml', 'eng'),
+                             (published.get_header('Accept'), published.get_header('Accept-language')))
+            items = {item['id']: item for item in manifest['items']}
+            self.assertEqual(10, len(items))
+            self.assertEqual('02016R0679-20160504 + 32016R0679R(02) + 32025R0327', items['celex-32016r0679']['version'])
+            self.assertEqual(['celex-32016r0679r-02-published', 'celex-32025r0327-published'],
+                             items['celex-32016r0679']['documents'])
+            self.assertEqual('https://publications.europa.eu/resource/celex/02016R0679-20160504',
+                             items['celex-32016r0679']['url'])
+            self.assertEqual('02024R2847-20241120 + 32024R2847R(05) + 32025R0327',
+                             items['celex-32024r2847']['version'])
+            self.assertEqual({'id': 'celex-32025r0327-published', 'act': '32025R0327',
+                              'url': 'https://publications.europa.eu/resource/celex/32025R0327', 'file':
+                              'celex-32025r0327-published', 'bytes': 44,
+                              'sha256': hashlib.sha256(b'<html><p>Regulation (EU) 2025/327</p></html>').hexdigest()},
+                             items['celex-32025r0327-published'])
+            self.assertEqual('URLError: <urlopen error gone>', items['celex-32016r0679r-02-published']['error'])
+            fetched = ('--fetched', str(root / 'fetched'))
+            report = root / 'docs' / 'legal-review.md'
+            code, output = self.tool(root, *argv, 'compare', *fetched, '--report', str(report), '--apply',
+                                     today='2026-11-01')
+            self.assertEqual(0, code, output)
+            text = report.read_text(encoding='utf-8')
+            self.assertIn('Sources: 7 planned and 3 acts their consolidated texts lack, 9 read on 2026-11-01;', text)
+            self.assertIn('- eu.ai.literacy (NET.2): Law No. 6698, Articles 4-7: never read from its primary source; '
+                          'read https://publications.europa.eu/resource/celex/02024R1689-20260727 (version '
+                          '02024R1689-20260727 + 32025R0327, SHA-256 ', text)
+            self.assertIn(') in its consolidated text and record it with `read`; read the acts its consolidated text '
+                          'lacks as published (celex-32025r0327-published)\n', text)
+            self.assertIn('- celex-32016r0679r-02-published (https://publications.europa.eu/resource/celex/'
+                          '32016R0679R%2802%29): URLError: <urlopen error gone>', text)
+            path = root / 'cmake' / 'legal-register.json'
+            before = path.read_bytes()
+            for entry, message in (
+                    ('eu.gdpr.rights', 'eu.gdpr.rights: celex-32016r0679: the act it lacks, '
+                                       'celex-32016r0679r-02-published, was not read (URLError: <urlopen error gone>)'),
+                    ('eu.cra.reporting', 'eu.cra.reporting: celex-32024r2847: not the XHTML of 32024R2847R(05)')):
+                code, output = self.tool(root, *argv, 'read', *fetched, '--ref', 'docs/reading.md#acts', '--entry',
+                                         'eu.ai.literacy', '--entry', entry, today='2026-11-01')
+                self.assertEqual(2, code, entry)
+                self.assertIn(message, output)
+                self.assertEqual(before, path.read_bytes(), 'a refused read writes nothing')
+            code, output = self.tool(root, *argv, 'read', *fetched, '--ref', 'docs/reading.md#acts', '--entry',
+                                     'eu.ai.literacy', today='2026-11-01')
+            self.assertEqual(0, code, output)
+            self.assertIn('eu.ai.literacy: read Law No. 6698 at 02024R1689-20260727 + 32025R0327 on 2026-11-01', output)
+            entries = {entry['id']: entry for entry in json.loads(path.read_text(encoding='utf-8'))['entries']}
+            self.assertEqual({'version': '02024R1689-20260727 + 32025R0327', 'read': '2026-11-01', 'sha256':
+                              hashlib.sha256(b'<html><p>Regulation (EU) 2024/1689</p></html>').hexdigest()},
+                             entries['eu.ai.literacy']['instrument']['consolidated'])
+            checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 11, 1))}
+            self.assertEqual([], checked['legal'])
+
     def test_each_host_resolves_to_the_document_its_reader_reads(self):
         resolve = register_review.resolve_primary
         self.assertEqual([{'id': 'mevzuat-1-3-5846', 'kind': 'primary', 'reader': 'mevzuat', 'act': '5846',
@@ -7751,10 +7846,21 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
         self.assertEqual(('celex-32002l0058-versions', 'index', 'cellar-versions', '32002L0058'),
                          (index['id'], index['kind'], index['reader'], index['act']))
         query = urllib.parse.unquote(index['url'].partition('&query=')[2])
+        english = 'cdm:expression_uses_language <http://publications.europa.eu/resource/authority/language/ENG>'
         self.assertIn('?act cdm:resource_legal_id_celex "32002L0058"^^<http://www.w3.org/2001/XMLSchema#string> . '
-                      '?work cdm:act_consolidated_based_on_resource_legal ?act', query)
-        self.assertIn('<http://publications.europa.eu/resource/authority/language/ENG>', query)
+                      '{ ?work cdm:act_consolidated_based_on_resource_legal ?act', query)
+        self.assertIn(f'?expression cdm:expression_belongs_to_work ?work ; {english}', query)
         self.assertIn('FILTER(STR(?type) = "xhtml")', query)
+        # The acts changing its English text: amending it, correcting it or correcting an act amending it, with an
+        # English text, and every consolidated version of the act that consolidates each.
+        self.assertIn('{ ?change cdm:resource_legal_amends_resource_legal ?act } UNION { ?change '
+                      'cdm:resource_legal_corrects_resource_legal ?act } UNION { ?change '
+                      'cdm:resource_legal_corrects_resource_legal ?amending . ?amending '
+                      'cdm:resource_legal_amends_resource_legal ?act }', query)
+        self.assertIn(f'?text cdm:expression_belongs_to_work ?change ; {english}', query)
+        self.assertIn('OPTIONAL { ?consolidation cdm:act_consolidated_based_on_resource_legal ?act ; '
+                      'cdm:act_consolidated_consolidates_resource_legal ?change ; cdm:resource_legal_id_celex ?by }',
+                      query)
         self.assertEqual({'id': 'celex-32002l0058', 'kind': 'primary', 'reader': 'cellar', 'act': '32002L0058',
                           'index': 'celex-32002l0058-versions', 'url': register_review.CELLAR,
                           'headers': {'Accept': 'application/xhtml+xml', 'Accept-Language': 'eng'}}, document)
@@ -8517,10 +8623,46 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
         self.assertEqual('02021R0821-20260921', versions(self.sparql(
             '02021R0821-20251115', '02021R0821-20260921', '02021R0821-20261231').encode(), celex, today))
         self.assertEqual('32021R0821', versions(self.sparql('02021R0821-20261231').encode(), celex, today))
+        # The acts the version read lacks: none consolidated by a version up to it (one consolidated only by a later
+        # version included), and of those CELLAR consolidates nowhere only the ones dated after it.
+        lacks = versions(self.sparql(
+            '02021R0821-20251115', '02021R0821-20260921', '02021R0821-20261231',
+            ('32025R0001', '2025-01-10', '02021R0821-20251115'), ('32025R0006', '2025-02-01', '02021R0821-20261231'),
+            ('32025R0006', '2025-02-01', '02021R0821-20260921'), ('32026R0002', '2026-09-30', '02021R0821-20261231'),
+            ('32026D0003R(01)', '2026-09-22'), ('32024R0004R(02)', '2024-03-01'),
+            ('32026L0005', '2026-09-21')).encode(), celex, today)
+        self.assertEqual(('02021R0821-20260921', '02021R0821-20260921 + 32026D0003R(01) + 32026R0002', [
+            {'id': 'celex-32026d0003r-01-published', 'act': '32026D0003R(01)',
+             'url': 'https://publications.europa.eu/resource/celex/32026D0003R%2801%29',
+             'headers': {'Accept': 'application/xhtml+xml', 'Accept-Language': 'eng'}},
+            {'id': 'celex-32026r0002-published', 'act': '32026R0002',
+             'url': 'https://publications.europa.eu/resource/celex/32026R0002',
+             'headers': {'Accept': 'application/xhtml+xml', 'Accept-Language': 'eng'}}]), lacks)
+        # The act read as adopted lacks every change no version up to today consolidates.
+        path, version, documents = versions(self.sparql(
+            '02021R0821-20261231', ('32026R0002', '2026-09-30', '02021R0821-20261231'),
+            ('32024R0004R(02)', '2024-03-01')).encode(), celex, today)
+        self.assertEqual(('32021R0821', '32021R0821 + 32024R0004R(02) + 32026R0002'), (path, version))
+        self.assertEqual(['32024R0004R(02)', '32026R0002'], [document['act'] for document in documents])
         for body, message in ((self.sparql('02021R08210-20251115'), "'02021R08210-20251115' is not a consolidated "
                                                                      'version of 32021R0821'),
                               (self.sparql('02021R0821-20250231'), 'the day 31/02/2025 does not exist'),
-                              ('{"results": {}}', 'not a SPARQL result of CELEX numbers')):
+                              ('{"results": {}}', 'not a SPARQL result of CELEX numbers'),
+                              ('{"results": {"bindings": [1]}}', 'not a SPARQL result of CELEX numbers'),
+                              (self.sparql(('32021R0821', '2026-01-01')), "'32021R0821' is not an act changing "
+                                                                          '32021R0821'),
+                              (self.sparql(('C2026/123/01', '2026-01-01')), "'C2026/123/01' is not an act changing"),
+                              (self.sparql(('32026R0002R(1)', '2026-01-01')), "'32026R0002R(1)' is not an act"),
+                              (self.sparql(('32026R0002', '2026-1-30')), "32026R0002 is dated '2026-1-30', not "
+                                                                          'YYYY-MM-DD'),
+                              (self.sparql(('32026R0002', '2026-02-30')), 'the day 30/02/2026 does not exist'),
+                              (self.sparql(('32026R0002', '2026-01-30'), ('32026R0002', '2026-01-31')),
+                               '32026R0002 is dated both 2026-01-30 and 2026-01-31'),
+                              (self.sparql(('32026R0002', '2026-01-30', '02021R0822-20260101')),
+                               "'02021R0822-20260101' is not a consolidated version of 32021R0821"),
+                              (json.dumps({'results': {'bindings': [{'celex': {'value': '02021R0821-20251115'},
+                                                                     'by': {'value': '02021R0821-20251115'}}]}}),
+                               "a consolidated version with ['by', 'celex']")):
             with self.assertRaises(unreadable) as refused:
                 versions(body.encode(), celex, today)
             self.assertIn(message, str(refused.exception))
