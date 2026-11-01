@@ -151,7 +151,7 @@ template <typename T> [[nodiscard]] constexpr FftAlgorithm planned_inverse(crd::
 
 // Whether a plan of n can run `forward`, the sizes each algorithm's generated codelets cover: the standalone-hier's
 // splits and IP4-AoS 1K..64K, the deep-split's factor tables (three passes 8K..512K, four 8K..8M), the six-step's
-// square blocks of 64 rows, the tiled four-step's f32 1M, the in-place three passes' f32 16·B·16 (2K to 8K).
+// square blocks of 64 rows, the tiled four-step's f32 1M, the in-place three passes' f32 16·B·16 (2K to 16K).
 template <typename T> [[nodiscard]] constexpr bool forward_builds(crd::usize n, FftAlgorithm forward) noexcept
 {
     const bool even = is_pow2(n) && (n & crd::usize{0x5555555555555555ULL}) != 0;
@@ -173,7 +173,7 @@ template <typename T> [[nodiscard]] constexpr bool forward_builds(crd::usize n, 
         case FftAlgorithm::TiledFourStep:
             return std::is_same_v<T, crd::f32> && n == (crd::usize{1} << 20);
         case FftAlgorithm::InPlace3:
-            return std::is_same_v<T, crd::f32> && n >= 2048 && n <= 8192;
+            return std::is_same_v<T, crd::f32> && n >= 2048 && n <= 16384;
     }
     return false;
 }
@@ -651,7 +651,8 @@ private:
 
     // The in-place three passes of the f32 forward, n = 16·B·16 (FftPlanState's InPlace3 tables, no intermediate):
     // pass 1's W_n^{t·ka} factored at M = 16 (lo over t & 15, hi over t >> 4: 2 KiB and B/8 KiB), pass 2's
-    // W_{16B}^{i1·kb} (B/8 KiB) and pass 3's 2 KiB scratch.
+    // W_{16B}^{i1·kb} (B/8 KiB), pass 3's 2 KiB scratch and, from kInPlace3WorkFrom, the work buffer of a caller's
+    // buffer off a 64-byte boundary (n complex after the scratch's 256).
     void build_in_place3()
     {
         m_s.sh_n1 = 16U;
@@ -659,7 +660,8 @@ private:
         m_s.ds_b = m_s.n / 256U;
         build_factored_stage1(4U);
         build_notr_twiddles(m_s.ds_b);
-        m_s.scratch = plan_table<Complex<T>>(256, 64); // pass 3's transposed group
+        const crd::usize work = m_s.n >= kInPlace3WorkFrom ? m_s.n : 0U;
+        m_s.scratch = plan_table<Complex<T>>(256 + work, 64); // pass 3's transposed group, then the work buffer
     }
 
     // The standalone-hier's and the deep-split's stage-1 twiddle W_n^{k1·i2}, in the stage-1-output layout. Where n2

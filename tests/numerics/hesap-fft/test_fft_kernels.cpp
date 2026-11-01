@@ -21,6 +21,7 @@
 #include <bit>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include <type_traits>
@@ -557,6 +558,57 @@ template <typename T> void check_forced_forwards(u32 lg_lo, u32 lg_hi)
 TEST_CASE("fft kernels: every level runs each f32 forward the planner offers from 1K to 64K", "[fft][kernels]")
 {
     check_forced_forwards<crd::f32>(10, 16);
+}
+
+// The in-place three passes run in the caller's buffer on a 64-byte boundary and, from 8K, through the plan's aligned
+// work buffer off one (execute_in_place3). At every 4-byte offset of a cache line, on every level, each forward stays
+// within the bound with its guards kept and gives the bits of the one offset on the line.
+TEST_CASE("fft kernels: the in-place three passes give the same bits at every offset of the buffer", "[fft][kernels]")
+{
+    crd::memory::TlsfAllocator alloc(usize{1} << 26);
+    for (u32 lg = 11; lg <= 14; ++lg)
+    {
+        const usize n = usize{1} << lg;
+        const fft::FftPlan<crd::f32> plan(&alloc, n, fft::FftAlgorithm::InPlace3);
+        REQUIRE(plan.state().forward == fft::FftAlgorithm::InPlace3);
+        Buffer<crd::f32> want(&alloc, n, 0);
+        fill_input(want.values(), 2 * n, 0xA11CEULL + n, false);
+        plan.execute_reference(Span<Complex<crd::f32>>(want.data(), n), FftDirection::Forward);
+        for (const KernelLevel<FftKernels>& level : fft::fft_kernel_levels())
+        {
+            if (!kernel_level_runs_here(level))
+            {
+                continue;
+            }
+            const fft::FftTypeKernels<crd::f32>& k = fft::kernels_of<crd::f32>(*level.table);
+            Array<crd::f32> results(&alloc); // each offset's 2n floats in turn
+            results.resize(16U * 2U * n);
+            usize on_line = 16U;
+            for (usize shift = 0; shift < 16U; ++shift) // 16 floats: every 4-byte offset of a 64-byte line
+            {
+                Buffer<crd::f32> run(&alloc, n, shift);
+                fill_input(run.values(), 2 * n, 0xA11CEULL + n, false);
+                k.execute(plan.state(), run.data(), FftDirection::Forward);
+                if ((reinterpret_cast<std::uintptr_t>(run.values()) & 63U) == 0U)
+                {
+                    on_line = shift;
+                }
+                std::memcpy(results.data() + shift * 2U * n, run.values(), 2 * n * sizeof(crd::f32));
+                const double rel = rel_error(run.data(), want.data(), n);
+                INFO(crd::cpu_level_name(level.level) << " n=" << n << " shift=" << shift << " rel=" << rel);
+                CHECK(rel < tolerance<crd::f32>(n));
+                CHECK(run.guards_kept());
+            }
+            REQUIRE(on_line < 16U); // the allocator's buffers are 4-byte aligned, so one offset is on the line
+            const crd::f32* const line = results.data() + on_line * 2U * n;
+            for (usize shift = 0; shift < 16U; ++shift)
+            {
+                INFO(crd::cpu_level_name(level.level) << " n=" << n << " shift=" << shift << " on the line "
+                                                      << on_line);
+                CHECK(std::memcmp(results.data() + shift * 2U * n, line, 2 * n * sizeof(crd::f32)) == 0);
+            }
+        }
+    }
 }
 
 TEST_CASE("fft kernels: every level runs each f32 forward the planner offers from 128K to 1M", "[fft][kernels]")

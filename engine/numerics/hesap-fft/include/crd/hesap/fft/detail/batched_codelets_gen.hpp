@@ -217,6 +217,9 @@ void codelet16_inplace_first(crd::f32* d, crd::usize bc, const crd::f32* lor, co
 // In-place pass 1's edition for a column a step: AoSoA blocks in and out (f32). GENERATED.
 void codelet16_inplace_first_blocks(crd::f32* d, crd::usize bc, const crd::f32* lor, const crd::f32* loi,
     const crd::f32* hir, const crd::f32* hii) noexcept;
+// In-place pass 1 out of place: interleaved in, blocks out to an aligned buffer (f32). GENERATED.
+void codelet16_inplace_first_to(const crd::f32* s, crd::f32* d, crd::usize bc, const crd::f32* lor,
+    const crd::f32* loi, const crd::f32* hir, const crd::f32* hii) noexcept;
 // In-place pass 2: the leaf over i2 (B = 8), twiddled, AoSoA blocks (f32). GENERATED.
 void codelet8_inplace_mid(crd::f32* d, crd::usize w, const crd::f32* twr,
     const crd::f32* twi) noexcept;
@@ -225,6 +228,9 @@ void codelet16_inplace_mid(crd::f32* d, crd::usize w, const crd::f32* twr,
     const crd::f32* twi) noexcept;
 // In-place pass 2: the leaf over i2 (B = 32), twiddled, AoSoA blocks (f32). GENERATED.
 void codelet32_inplace_mid(crd::f32* d, crd::usize w, const crd::f32* twr,
+    const crd::f32* twi) noexcept;
+// In-place pass 2: the leaf over i2 (B = 64), twiddled, AoSoA blocks (f32). GENERATED.
+void codelet64_inplace_mid(crd::f32* d, crd::usize w, const crd::f32* twr,
     const crd::f32* twi) noexcept;
 // In-place pass 3: the leaf over i1 of a transposed 16 x 16 group into the buffer (f32). GENERATED.
 void codelet16_inplace_last(const crd::f32* s, crd::f32* out, crd::usize rs) noexcept;

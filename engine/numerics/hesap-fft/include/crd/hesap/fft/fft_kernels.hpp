@@ -35,7 +35,7 @@ enum class FftAlgorithm : crd::u8
     FourStep,       // Bailey's four-step over hoisted batched sub-plans
     SixStep,        // the square in-place six-step (forward)
     TiledFourStep,  // the f32 1M forward's tiled four-step (forward)
-    InPlace3,       // three passes in the caller's buffer, n = 16·B·16 (the f32 2K to 8K forward)
+    InPlace3,       // three passes in the caller's buffer, n = 16·B·16 (the f32 2K to 16K forward)
 };
 
 [[nodiscard]] constexpr const char* fft_algorithm_name(FftAlgorithm algorithm) noexcept
@@ -99,7 +99,7 @@ template <typename T> struct FftPlanState
     const FftPlanState* p1 = nullptr; // four-step: the length-n1 sub-plan
     const FftPlanState* p2 = nullptr; // four-step: the length-n2 sub-plan
     Complex<T>* tbuf = nullptr;       // four-step: transpose intermediate, 64B-aligned (NT-store target)
-    Complex<T>* scratch = nullptr;    // four-step: cache-resident block scratch; InPlace3: 256 complex, 64B-aligned
+    Complex<T>* scratch = nullptr;    // four-step: cache-resident block scratch; InPlace3: 256 (+ n) complex, aligned
     const T* tw_re = nullptr;         // W_n^k, k < n
     const T* tw_im = nullptr;
     const crd::usize* rev = nullptr; // bit reversal of k < n
@@ -133,11 +133,16 @@ template <typename T> struct FftPlanState
     T* tf_lni = nullptr;
     // The in-place three-pass f32 forward (FftAlgorithm::InPlace3, n = 16·B·16, B = ds_b; scripts/gen_fft_batched.py's
     // in-place emitters) reads pass 1's factored W_n from sh_twr/sh_twi (lo, [ka·16 + (t & 15)]) and sh_hir/sh_hii
-    // (hi, [ka·B + (t >> 4)]), pass 2's W_{16B} from ds_twr/ds_twi ([kb·16 + i1]) and pass 3's group from scratch.
+    // (hi, [ka·B + (t >> 4)]), pass 2's W_{16B} from ds_twr/ds_twi ([kb·16 + i1]), pass 3's group from scratch and,
+    // from kInPlace3WorkFrom, for a buffer off a 64-byte boundary, the work buffer after it.
 };
 
 // The tiled intermediate's floats: 128 tile rows of eight i2, each 64 tiles of 8 by 16 complex and a 64-byte pad.
 inline constexpr crd::usize kTiledFourStepNt = 128 * (64 * 256 + 16);
+
+// The smallest in-place three-pass forward that runs a buffer off a 64-byte boundary through its plan's aligned work
+// buffer (SIMD-PERF's 2026-11-01 board: the data leaves the L1d from 8K, while at 4K the second buffer cost 1.47x).
+inline constexpr crd::usize kInPlace3WorkFrom = 8192;
 
 // The twiddles of the f64 small-N lane-trick codelets (detail/small_n_codelets.hpp, N 8, 16 and 32), each entry the
 // four lanes of a Vec4d. small_n_twiddles() builds them once in general code.

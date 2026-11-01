@@ -618,7 +618,7 @@ def emit_tiled_p2_final():
     return _emit_tiled(sig, 512, [], tile_locals, load, store)
 
 
-# ---- the in-place three-pass f32 forward, n = 16·B·16 (B 8, 16 or 32: 2K, 4K and 8K) ----
+# ---- the in-place three-pass f32 forward, n = 16·B·16 (B 8, 16, 32 or 64: 2K, 4K, 8K and 16K) ----
 # The caller's buffer holds the data throughout: x[i1 + 16*i2 + 16B*i3] -> X[ka + 16*kb + 16B*kc], with i1, kc < 16
 # (C), i2, kb < B and i3, ka < 16 (A). Pass 1 takes the leaf over i3 at column t = i1 + 16*i2 of the whole buffer
 # (16B columns), twiddles output ka by W_n^{t*ka} = hi[ka*B + (t >> 4)] * lo[ka*16 + (t & 15)] and stores it as an
@@ -629,18 +629,24 @@ def emit_tiled_p2_final():
 # 16*i2), twiddled by W_{16B}^{i1*kb} = tw[kb*16 + i1], blocks in and out. Pass 3 takes, for each kb, its
 # 16 x 16 group (rows ka at element 16*kb + 16B*ka), which the engine transposes into a 2 KiB scratch of 16 rows i1
 # of the 16 ka, and stores the leaf over i1 at column ka as X[ka + 16*kb + 16B*kc], interleaved: the group's own
-# elements. Every table is a few KiB.
-INPLACE_MIDS = (8, 16, 32)
+# elements. Every table is a few KiB. On a buffer off a 64-byte boundary each block straddles two cache lines, so the
+# engine runs pass 1 out of place (the `to` edition: the same leaf, interleaved in from the caller's buffer, blocks
+# out to the plan's aligned work buffer), passes 2 and 3 read the work buffer, and pass 3 stores into the caller's:
+# the same operations on the same values, so the same bits at every address.
+INPLACE_MIDS = (8, 16, 32, 64)
 
 
-def emit_inplace_first(blocks):
+def emit_inplace_first(blocks, to=False):
     """Pass 1: the 16-point leaf over i3, the factored W_n^{t*ka}, AoSoA blocks out, in place: interleaved in (a
-    step of whole tiles only) or, with `blocks`, AoSoA blocks in (any step)."""
+    step of whole tiles only) or, with `blocks`, AoSoA blocks in (any step); with `to`, interleaved in from `s` and
+    blocks out to `d` (any step: the buffers are disjoint)."""
+    src = "s" if to else "d"
+
     def load(v, j):
         if blocks:
             return [f"V {v}r, {v}i; simd::load_block(d, {_plus('t', _times(j, 'bc'))}, {v}r, {v}i);"]
-        return [f"V {v}r, {v}i; simd::load_complex_deinterleaved({_plus('d + 2 * t', _times(2 * j, 'bc'))}, {v}r, "
-                f"{v}i);"]
+        return [f"V {v}r, {v}i; simd::load_complex_deinterleaved({_plus(src + ' + 2 * t', _times(2 * j, 'bc'))}, "
+                f"{v}r, {v}i);"]
 
     def store(k, outs):
         n = f"n{outs[k].id}"
@@ -652,12 +658,16 @@ def emit_inplace_first(blocks):
                 *["    " + line for line in _tf_scaled("x", "w", n)],
                 f"    simd::store_block(d, {k} * bc + t, xr, xi);", "}"]
 
-    name = "codelet16_inplace_first_blocks" if blocks else "codelet16_inplace_first"
-    sig = [f"void {name}(crd::f32* d, crd::usize bc, const crd::f32* lor, const crd::f32* loi,",
-           "    const crd::f32* hir, const crd::f32* hii) noexcept"]
+    if to:
+        sig = ["void codelet16_inplace_first_to(const crd::f32* s, crd::f32* d, crd::usize bc, const crd::f32* lor,",
+               "    const crd::f32* loi, const crd::f32* hir, const crd::f32* hii) noexcept"]
+    else:
+        name = "codelet16_inplace_first_blocks" if blocks else "codelet16_inplace_first"
+        sig = [f"void {name}(crd::f32* d, crd::usize bc, const crd::f32* lor, const crd::f32* loi,",
+               "    const crd::f32* hir, const crd::f32* hii) noexcept"]
     tile_locals = ["const crd::usize uh = t >> 4;", "const crd::usize ul = t & 15;"]
     return _emit_leaf(16, 9107, sig, "bc", ["const crd::usize hc = bc >> 4;"], tile_locals, load, store,
-                      in_place=True)
+                      in_place=not to)
 
 
 def emit_inplace_mid(B):
@@ -770,6 +780,8 @@ def main(mode="hybrid"):
     print(emit_inplace_first(blocks=False))
     print("// In-place pass 1's edition for a column a step: AoSoA blocks in and out (f32). GENERATED.")
     print(emit_inplace_first(blocks=True))
+    print("// In-place pass 1 out of place: interleaved in, blocks out to an aligned buffer (f32). GENERATED.")
+    print(emit_inplace_first(blocks=False, to=True))
     for b in INPLACE_MIDS:
         print(f"// In-place pass 2: the leaf over i2 (B = {b}), twiddled, AoSoA blocks (f32). GENERATED.")
         print(emit_inplace_mid(b))

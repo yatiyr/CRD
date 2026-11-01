@@ -1579,52 +1579,64 @@ template <typename T> struct Engine
         }
     }
 
-    // The in-place three passes of the f32 2K to 8K forward (FftAlgorithm::InPlace3, n = 16·B·16; the derivation at
+    // The in-place three passes of the f32 2K to 16K forward (FftAlgorithm::InPlace3, n = 16·B·16; the derivation at
     // gen_fft_batched.py's in-place emitters): pass 1, which leaves each tile of 8 complex as its AoSoA block where it
-    // lies, and pass 2 over the whole buffer, then for each kb its 16 x 16 group transposed into the plan's 2 KiB
-    // scratch and pass 3's leaf from there back into the group. The data never leaves the caller's buffer, and every
-    // table is a few KiB.
+    // lies, and pass 2 over the whole work buffer, then for each kb its 16 x 16 group transposed into the plan's 2 KiB
+    // scratch and pass 3's leaf from there into the caller's group. The work buffer is the caller's on a 64-byte
+    // boundary, where the data never leaves it. Off one every block straddles two cache lines, which from 8K, where
+    // the data leaves the L1d, costs the passes more than a second buffer: there pass 1 reads the caller's buffer
+    // once into the plan's aligned work buffer and pass 3 writes it once (at 4K the second buffer would double a
+    // working set the L1d holds). The same operations on the same values, so the same bits at every address.
     void execute_in_place3(Complex<T>* data) const
     {
         T* const d = reinterpret_cast<T*>(data);
+        T* const rows = reinterpret_cast<T*>(plan.scratch);
+        const bool aligned = (reinterpret_cast<std::uintptr_t>(d) & 63U) == 0U;
+        T* const w = (aligned || plan.n < kInPlace3WorkFrom) ? d : rows + 512; // after the scratch's 256 rows
         const crd::usize bc = plan.ds_b * 16U;
         if constexpr (lanes::kWidth<lanes::TileLane<crd::f32>> == 1)
         {
             // A codelet step is one column here, whose block floats are other columns' interleaved ones: each tile is
-            // deinterleaved first, then pass 1 reads blocks.
-            T* const end = d + 2 * plan.n; // n is a multiple of the tile's 8 complex
-            for (T* tile = d; tile != end; tile += 16)
+            // deinterleaved into the work buffer first, then pass 1 reads blocks.
+            const T* const end = d + 2 * plan.n; // n is a multiple of the tile's 8 complex
+            T* to = w;
+            for (const T* tile = d; tile != end; tile += 16, to += 16)
             {
                 simd::Vec8f re;
                 simd::Vec8f im;
                 simd::load_complex_deinterleaved(tile, re, im);
-                re.store(tile);
-                im.store(tile + 8);
+                re.store(to);
+                im.store(to + 8);
             }
-            gen::codelet16_inplace_first_blocks(d, bc, plan.sh_twr, plan.sh_twi, plan.sh_hir, plan.sh_hii);
+            gen::codelet16_inplace_first_blocks(w, bc, plan.sh_twr, plan.sh_twi, plan.sh_hir, plan.sh_hii);
         }
-        else // a step holds whole tiles, so pass 1 deinterleaves as it loads
+        else if (aligned) // a step holds whole tiles, so pass 1 deinterleaves as it loads
         {
             gen::codelet16_inplace_first(d, bc, plan.sh_twr, plan.sh_twi, plan.sh_hir, plan.sh_hii);
+        }
+        else
+        {
+            gen::codelet16_inplace_first_to(d, w, bc, plan.sh_twr, plan.sh_twi, plan.sh_hir, plan.sh_hii);
         }
         switch (plan.ds_b)
         {
             case 8U:
-                gen::codelet8_inplace_mid(d, 256U, plan.ds_twr, plan.ds_twi);
+                gen::codelet8_inplace_mid(w, 256U, plan.ds_twr, plan.ds_twi);
                 break;
             case 16U:
-                gen::codelet16_inplace_mid(d, 256U, plan.ds_twr, plan.ds_twi);
+                gen::codelet16_inplace_mid(w, 256U, plan.ds_twr, plan.ds_twi);
                 break;
-            default:
-                gen::codelet32_inplace_mid(d, 256U, plan.ds_twr, plan.ds_twi);
+            case 32U:
+                gen::codelet32_inplace_mid(w, 256U, plan.ds_twr, plan.ds_twi);
+                break;
+            default: // 64 (forward_builds offers no other B)
+                gen::codelet64_inplace_mid(w, 256U, plan.ds_twr, plan.ds_twi);
                 break;
         }
-        T* const rows = reinterpret_cast<T*>(plan.scratch);
         for (crd::usize kb = 0; kb < plan.ds_b; ++kb)
         {
-            T* const group = d + 32U * kb;
-            transpose_group16(group, bc, rows);
-            gen::codelet16_inplace_last(rows, group, bc);
+            transpose_group16(w + 32U * kb, bc, rows);
+            gen::codelet16_inplace_last(rows, d + 32U * kb, bc);
         }
     }
 
