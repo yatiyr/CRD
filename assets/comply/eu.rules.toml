@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review EU
 format = "cerid-rules/1"
 jurisdiction = "EU"
-generation = 8
+generation = 9
 register = "2026-11-01"
 
 [[scope]]
@@ -518,8 +518,8 @@ state = "planned"
 title = "EU restrictive measures"
 instrument = "Council regulations adopted under Article 215 TFEU (EU sanctions)"
 article = "Asset freezes and prohibitions"
-primary = "https://www.sanctionsmap.eu/"
-read = false
+primary = "https://www.sanctionsmap.eu/api/v1/regime"
+read = true
 obligation = "Screen distribution, accounts and payments against the EU sanctions lists."
 applies_to = ["channel.cerid-store", "flow.account-data", "flow.payments"]
 check = "active"
@@ -799,6 +799,27 @@ check = "active"
 check_name = "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the EU financial sanctions file lists its persons)"
 check_ref = "tests/foundation/comply/test_imported.cpp"
 effective = "2003-07-09"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-3541-92.iraq-claims"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU prohibition on satisfying Iraqi claims affected by the UN embargo"
+instrument = "Council Regulation (EEC) No 3541/92 (prohibiting the satisfying of Iraqi claims with regard to contracts and transactions the performance of which was affected by United Nations Security Council Resolution 661 (1990) and related resolutions)"
+article = "Articles 1 to 4"
+primary = "https://eur-lex.europa.eu/eli/reg/1992/3541/oj"
+read = true
+obligation = "Satisfy, or take any step to satisfy, no claim made by or on behalf of a person or body in Iraq under a contract or transaction whose performance the measures under UN Security Council Resolution 661 (1990) affected (Article 2), save the claims Article 3 excepts, the person seeking enforcement bearing the proof (Article 4)."
+applies_to = ["channel.cerid-store", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the EU financial sanctions file lists its persons)"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "1992-12-10"
 sunset = ""
 counsel = "none"
 counsel_reviewed = ""

@@ -172,6 +172,7 @@ MEVZUAT_FORMS = {'7': 'YÖNETMELİ', '9': 'TEBLİĞ'}
 FEDERAL_REGISTER = 'https://www.federalregister.gov/api/v1/documents/{number}.json'
 FEDERAL_REGISTER_TEXT = 'https://www.federalregister.gov/documents/full_text/text/{version}.txt'
 WASSENAAR_LIST = 'List-of-Dual-Use-Goods-and-Technologies'
+SANCTIONS_MAP = 'https://www.sanctionsmap.eu/api/v1/regime'
 # A version a document's URL holds: a CELEX number, a day or an upload path, never a scheme, query or `..`.
 VERSION = re.compile(r'(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._/-]*')
 
@@ -192,10 +193,15 @@ def resolve_mevzuat(match):
             dict(document, form=MEVZUAT_FORMS[kind], index=index)]
 
 
+def celex_of(sector, year, number):
+    """The CELEX number of an act an ELI names: `reg`, 2014, 833 -> `32014R0833`."""
+    return f'3{year}{EUR_LEX_SECTORS[sector]}{int(number):04d}'
+
+
 def resolve_eur_lex(match):
     """The Publications Office's CELLAR serves EUR-Lex's acts (eur-lex.europa.eu answers a machine with a challenge):
     the consolidated versions of the act's CELEX number, then the latest one in English XHTML."""
-    celex = f'3{match["year"]}{EUR_LEX_SECTORS[match["sector"]]}{int(match["number"]):04d}'
+    celex = celex_of(match['sector'], match['year'], match['number'])
     query = urllib.parse.quote(CELLAR_QUERY.format(celex=celex), safe='')
     index = f'celex-{celex.lower()}-versions'
     return [{'id': index, 'kind': 'index', 'reader': 'cellar-versions', 'act': celex, 'url': CELLAR_VERSIONS + query},
@@ -242,6 +248,13 @@ def resolve_wassenaar(match):
              'index': 'wassenaar-control-lists', 'url': 'https://www.wassenaar.org/wp-content/uploads/{version}'}]
 
 
+def resolve_sanctions_map(match):
+    """The EU Sanctions Map's regime index, the data behind the map's page (a script shell): every regime of EU
+    restrictive measures with its country, legal acts and measures."""
+    return [{'id': 'sanctionsmap-regimes', 'kind': 'primary', 'reader': 'sanctions-map', 'act': 'regime',
+             'url': match.string, 'headers': {'Accept': 'application/json'}}]
+
+
 def resolve_gazette(match):
     """An item of the Official Gazette of Turkey (a Presidential decision is published there alone, as a PDF): its
     day's page, which names the gazette and the item's title, is read first, as an index of this item alone (the
@@ -266,6 +279,7 @@ RESOLVERS = (
     (re.compile(r'https://www\.federalregister\.gov/d/(?P<number>(?:\d{2}|\d{4}|E\d)-\d{3,5})'),
      resolve_federal_register),
     (re.compile(r'https://www\.wassenaar\.org/control-lists/'), resolve_wassenaar),
+    (re.compile(re.escape(SANCTIONS_MAP)), resolve_sanctions_map),
     (re.compile(r'https://www\.resmigazete\.gov\.tr/eskiler/(?P<year>\d{4})/(?P<month>\d{2})/'
                 r'(?P<stem>(?P=year)(?P=month)\d{2}(?:M[1-9]\d*)?)-(?P<item>[1-9]\d*)\.(?P<format>pdf|htm)'),
      resolve_gazette),
@@ -614,11 +628,12 @@ def read_cellar_versions(body, source, today):
 
 
 def read_cellar(body, source, version):
-    """The XHTML of an act names it by year and number (`2016/679`, `2002/58/EC`)."""
+    """The XHTML of an act names it by year and number (`2016/679`, `2002/58/EC`, `No 833/2014`), an act before 1999
+    by a two-digit year (`No 3541/92`)."""
     year, number = source['act'][1:5], int(source['act'][6:10])
-    text = text_of(body)
-    if '<html' not in body[:4096].decode('utf-8', 'replace').lower() or \
-            f'{year}/{number}' not in text and f'{number}/{year}' not in text:
+    names = [f'{year}/{number}', f'{number}/{year}'] + ([f'{number}/{year[2:]}'] if year < '1999' else [])
+    named = re.compile(r'(?<![0-9])(?:' + '|'.join(map(re.escape, names)) + r')(?![0-9])')
+    if '<html' not in body[:4096].decode('utf-8', 'replace').lower() or not named.search(text_of(body)):
         raise Unreadable(f'not the XHTML of {source["act"]}')
     return version
 
@@ -783,13 +798,80 @@ def read_gazette(body, source, version):
     return f'{published}/{issue}' + ''.join(f' No. {value}' for value in number) + ' as published'
 
 
+# The EU Sanctions Map's regime index (`meta.version` "1", read 2026-11-01): `data`, one record per regime with its
+# `id`, `country.data` (`{code, title}`, empty for a thematic regime), `legal_acts.data` (each act's `type.data.title`,
+# `number` and `url`) and `measures.data` (each measure's `type.data.title`). A Council regulation's basic act is
+# numbered "<day> consolidated basic legal act - (EU) No 833/2014" and links its CELEX number or ELI; an act its
+# consolidated text lacks says "amendments not yet included". Notes, guidance, icons, descriptions and amendment times
+# change without changing which acts carry which measures, so the text read is the regimes' structure alone.
+SANCTIONS_MAP_SCHEMA = '1'
+BASIC_REGULATION = re.compile(r'E[CU] Council Regulation')
+REGULATION_CELEX = re.compile(r'CELEX(?:%3A|:)[03](\d{4})R(\d{4})(?![0-9])|data\.europa\.eu/eli/reg/(\d{4})/(\d{1,4})/')
+# The measures that attach to the persons a regime lists or to their claims, which the EU financial sanctions file and
+# the regulations' annexes name: a regime with a country and any other measure restricts a supply to a place.
+PERSON_MEASURES = frozenset({'Asset freeze and prohibition to make funds available', 'Restrictions on admission',
+                             'Prohibition to satisfy claims'})
+
+
+def sanctions_map_regimes(body):
+    """[{id, country, measures, regulations}] of the regime index, by id: the country's code (None for a thematic
+    regime), the sorted measure titles and the sorted CELEX numbers of its basic Council regulations."""
+    try:
+        document = json.loads(body)
+        if document['meta']['version'] != SANCTIONS_MAP_SCHEMA:
+            raise Unreadable(f'regime index version {document["meta"]["version"]!r}, not {SANCTIONS_MAP_SCHEMA!r}')
+        regimes = [{'id': regime['id'], 'country': regime['country']['data'] or None,
+                    'measures': sorted({measure['type']['data']['title'] for measure in regime['measures']['data']}),
+                    'acts': [(act['type']['data']['title'], act['number'], act['url'])
+                             for act in regime['legal_acts']['data']]} for regime in document['data']]
+    except (ValueError, KeyError, TypeError, AttributeError) as error:
+        raise Unreadable(f'not the EU Sanctions Map regime index ({error!r})') from error
+    if not regimes or len({regime['id'] for regime in regimes}) != len(regimes):
+        raise Unreadable('a regime index without regimes or with a regime twice')
+    for regime in regimes:
+        country = regime['country']
+        if not isinstance(regime['id'], int) or country is not None and not (
+                isinstance(country, dict) and isinstance(country.get('code'), str) and
+                re.fullmatch(r'[A-Z]{2}', country['code'])) or \
+                not all(isinstance(title, str) and title for title in regime['measures']) or \
+                not all(isinstance(part, str) for act in regime['acts'] for part in act):
+            raise Unreadable(f'regime {regime["id"]!r} has another shape')
+        regime['country'] = country and country['code']
+        regulations = set()
+        for title, number, url in regime.pop('acts'):
+            if not BASIC_REGULATION.fullmatch(title) or 'amendments' in number.lower():
+                continue
+            match = REGULATION_CELEX.search(url)
+            if match is None:
+                raise Unreadable(f'regime {regime["id"]}: the regulation {number!r} links no CELEX number or ELI')
+            regulations.add(f'3{match[1]}R{match[2]}' if match[1] else celex_of('reg', match[3], match[4]))
+        regime['regulations'] = sorted(regulations)
+    return sorted(regimes, key=lambda regime: regime['id'])
+
+
+def place_regime(regime):
+    return regime['country'] is not None and not set(regime['measures']) <= PERSON_MEASURES
+
+
+def read_sanctions_map(body, source, version):
+    """`<n> regimes, <m> attached to a place`: the index is one document, never consolidated, so any other change is
+    a new digest of the regimes read."""
+    regimes = sanctions_map_regimes(body)
+    return f'{len(regimes)} regimes, {sum(map(place_regime, regimes))} attached to a place'
+
+
+def sanctions_map_record(body, source):
+    return json.dumps(sanctions_map_regimes(body), sort_keys=True, separators=(',', ':')).encode('utf-8')
+
+
 # reader(body, source, version) -> the version of an instrument's document; an index reader(body, source, today)
 # -> the version its document's URL holds, or (the part of the URL, the version) when the version says more.
 READERS = {'mevzuat': read_mevzuat, 'legislation-gov-uk': read_legislation_gov_uk, 'cellar': read_cellar,
-           'ecfr': read_ecfr, 'pdf': read_pdf, 'gazette': read_gazette, 'federal-register': read_federal_register}
+           'ecfr': read_ecfr, 'pdf': read_pdf, 'gazette': read_gazette, 'federal-register': read_federal_register,
+           'sanctions-map': read_sanctions_map}
 # record(body, source) -> the bytes of the instrument within its document, whose SHA-256 is the text read; the whole
 # document for a reader without one.
-RECORDS = {'ecfr': ecfr_record}
+RECORDS = {'ecfr': ecfr_record, 'sanctions-map': sanctions_map_record}
 INDEX_READERS = {'cellar-versions': read_cellar_versions, 'ecfr-versions': read_ecfr_versions,
                  'wassenaar-lists': read_wassenaar_lists, 'mevzuat-gazette': read_mevzuat_gazette,
                  'gazette-day': read_gazette_day, 'federal-register-record': read_federal_register_record}
@@ -1101,12 +1183,13 @@ class Review:
 
     def judge_primary(self, entry, source):
         """An instrument's document against the version and digest recorded when it was last read in its consolidated
-        form: an amendment shows as a new version, a change under the same version as a new digest."""
+        form: an amendment shows as a new version, a change under the same version as a new digest. False when the
+        document is unreadable."""
         try:
             version, digest = self.reading(source)
         except Unreadable as error:
             self.unread.append(f'{source["id"]}: {error}')
-            return
+            return False
         instrument = entry['instrument']
         what = f'{entry["id"]} ({", ".join(entry["rows"])}): {instrument["name"]}, {instrument["article"]}'
         found = f'version {version}, ' if version else ''
@@ -1122,6 +1205,34 @@ class Review:
             self.readings.append(f'{what}: the primary text changed since it was read on {consolidated["read"]} '
                                  f'({consolidated["version"]}); read the change, record the new version and '
                                  f'SHA-256 {digest}, and record a trigger if it changes a pinned obligation')
+        return True
+
+    def judge_regimes(self, entry, source):
+        """The EU Sanctions Map's regimes against the register's Council regulations: every basic regulation of a
+        regime attached to a place is an entry, read and judged like any other instrument (one read without a
+        destination when it restricts no supply to the place), and a Council regulation entry no regime lists any more
+        has ended."""
+        what = f'{entry["id"]} ({", ".join(entry["rows"])})'
+        entries, council = {}, {}
+        for other in self.register['entries']:
+            instrument = other.get('instrument', {})
+            for act in [found['act'] for found in resolve_primary(instrument.get('primary', ''))
+                        if found.get('reader') == 'cellar' and found['act'][5] == 'R']:
+                entries[act] = other['id']
+                if instrument['name'].startswith('Council Regulation ') and other['sunset'] is None:
+                    council[act] = other['id']
+        regimes = sanctions_map_regimes(self.bodies[source['id']])
+        for regime in filter(place_regime, regimes):
+            for act in regime['regulations']:
+                if act not in entries:
+                    self.readings.append(f'{what}: regime {regime["id"]} ({regime["country"]}) restricts a supply to a '
+                                         f'place, and its regulation {act} is no entry of the register; add it, read '
+                                         'it with `read` and author what it restricts in the embargo generation')
+        listed = {act for regime in regimes for act in regime['regulations']}
+        for act, entry_id in sorted(council.items()):
+            if act not in listed:
+                self.readings.append(f'{what}: no regime lists {entry_id}\'s regulation {act} any more; read its '
+                                     'repeal and record the entry\'s sunset')
 
     def run(self, plan):
         registries = {}
@@ -1134,11 +1245,14 @@ class Review:
                     self.unread.append(f'{source["id"]}: {error}')
         sources = {(source['kind'], entry_id): source for source in plan['sources'] for entry_id in source['entries']}
         judges = {'rfc': ('rfc-editor', self.judge_rfc), 'draft': ('datatracker', self.judge_draft)}
+        # The readers whose document indexes a class of instruments the register holds one by one.
+        classes = {'sanctions-map': self.judge_regimes}
         for entry in self.register['entries']:
             if 'instrument' in entry:
                 source = sources.get(('primary', entry['id']))
-                if source is not None and source['id'] in self.bodies:
-                    self.judge_primary(entry, source)
+                if source is not None and source['id'] in self.bodies and self.judge_primary(entry, source) and \
+                        source.get('reader') in classes:
+                    classes[source['reader']](entry, source)
                 continue
             source_kind, judge = judges.get(entry['spec'].get('type'), (None, None))
             source_id = sources.get((source_kind, entry['id']), {}).get('id')

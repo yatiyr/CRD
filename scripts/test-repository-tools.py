@@ -3,6 +3,7 @@
 from pathlib import Path
 import base64
 import contextlib
+import copy
 import datetime
 import gzip
 import importlib.util
@@ -7086,10 +7087,13 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
             self.assertIn('eu.council.embargo: 25 embargoed destinations read 2026-11-01: generation 20261101000000',
                           printed.getvalue())
             document = tomllib.loads((Path(out) / 'eu.council.embargo.sanctions.toml').read_text(encoding='utf-8'))
-        # The screening entry is the class of Article 215 regulations (its primary the sanctions map), never read
-        # itself: the reading is the 21 regulations its destinations are read in.
-        self.assertEqual(('EU', 'https://www.sanctionsmap.eu/'), (document['jurisdiction'], document['source']))
-        self.assertIsNone(sanctions_import.read_instrument(register, 'eu.restrictive-measures'))
+        # The screening entry is the class of Article 215 regulations. Its own text, the EU Sanctions Map's regime
+        # index, enumerates the regulations to read and is not part of the reading: the reading is the 21 regulations
+        # its destinations are read in.
+        self.assertEqual(('EU', 'https://www.sanctionsmap.eu/api/v1/regime'),
+                         (document['jurisdiction'], document['source']))
+        umbrella = sanctions_import.read_instrument(register, 'eu.restrictive-measures')
+        self.assertEqual('55 regimes, 26 attached to a place', umbrella['consolidated']['version'])
         texts = list(sanctions_import.embargo_texts(record, register))
         self.assertEqual(['eu.reg-1183-2005.drc', 'eu.reg-1412-2006.lebanon', 'eu.reg-147-2003.somalia',
                           'eu.reg-2015-735.south-sudan', 'eu.reg-2016-44.libya', 'eu.reg-2017-1509.dprk',
@@ -7100,10 +7104,11 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
                           'eu.reg-36-2012.syria', 'eu.reg-401-2013.myanmar', 'eu.reg-692-2014.crimea',
                           'eu.reg-747-2014.sudan', 'eu.reg-765-2006.belarus', 'eu.reg-833-2014.russia'], texts)
         # A regulation read whose measures attach only to listed persons (the EU financial sanctions file screens
-        # them) or restrict no supply to a place (Iraq's cultural property, the blocking statute) is a text read
-        # without a destination, so not in the reading.
-        for no_destination in ('eu.reg-1210-2003.iraq', 'eu.reg-356-2010.somalia', 'eu.reg-1352-2014.yemen',
-                            'eu.reg-753-2011.afghanistan', 'eu.reg-2271-96.blocking-statute'):
+        # them) or restrict no supply to a place (Iraq's cultural property and claims, the blocking statute) is a text
+        # read without a destination, so not in the reading.
+        for no_destination in ('eu.reg-1210-2003.iraq', 'eu.reg-3541-92.iraq-claims', 'eu.reg-356-2010.somalia',
+                               'eu.reg-1352-2014.yemen', 'eu.reg-753-2011.afghanistan',
+                               'eu.reg-2271-96.blocking-statute'):
             self.assertIsNotNone(sanctions_import.read_instrument(register, no_destination))
             self.assertNotIn(no_destination, texts)
         self.assertIsNone(record['open'])
@@ -7775,7 +7780,13 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
                          (index['id'], index['url']))
         self.assertEqual(('pdf', 'https://www.wassenaar.org/wp-content/uploads/{version}'),
                          (document['reader'], document['url']))
-        for url in ('https://developer.apple.com/news/', 'https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698',
+        self.assertEqual([{'id': 'sanctionsmap-regimes', 'kind': 'primary', 'reader': 'sanctions-map', 'act': 'regime',
+                           'url': 'https://www.sanctionsmap.eu/api/v1/regime',
+                           'headers': {'Accept': 'application/json'}}],
+                         resolve('https://www.sanctionsmap.eu/api/v1/regime'))
+        for url in ('https://developer.apple.com/news/', 'https://www.sanctionsmap.eu/',
+                    'http://www.sanctionsmap.eu/api/v1/regime', 'https://www.sanctionsmap.eu/api/v1/regime/26',
+                    'https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698',
                     'https://eur-lex.europa.eu/eli/reg/2016/679/oj/eng', 'https://www.ecfr.gov/current/title-15',
                     'https://www.legislation.gov.uk/ukpga/2018/12/contents',
                     'http://www.legislation.gov.uk/ukpga/2018/12', 'https://www.legislation.gov.uk/eudr/2019/790',
@@ -8255,6 +8266,211 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             self.assertIn(f'Executive Order 14068, Articles 4-7: amended to {version}; Amended by: EO 15001, June 1, '
                           '2027 since it was read on 2026-12-16', (root / 'docs' / 'again.md').read_text(encoding='utf-8'))
 
+    # The shape of the EU Sanctions Map's regime index (`/api/v1/regime`, 2026-11-01): a regime's country is empty for
+    # a thematic regime; its acts mix decisions, resolutions, basic Council regulations (linked by CELEX number or ELI,
+    # with a `qid` that changes), their implementing regulations and amendments not yet consolidated.
+    @staticmethod
+    def regime(regime_id, country, measures, *acts, notes='', amendment=1792969200):
+        return {'id': regime_id, 'type': 0, 'specification': f'Regime {regime_id}', 'notes': notes,
+                'amendment': amendment, 'country': {'data': {'code': country, 'title': country} if country else []},
+                'legal_acts': {'data': [{'id': index, 'title': 'An act', 'number': number, 'url': url,
+                                         'type': {'data': {'id': 1, 'title': title}}}
+                                        for index, (title, number, url) in enumerate(acts)]},
+                'measures': {'data': [{'id': index, 'description': f'{title}.', 'suspend': False,
+                                       'type': {'data': {'id': index, 'title': title,
+                                                         'icon': f'https://icons/{index}'}}}
+                                      for index, title in enumerate(measures)]}}
+
+    def regime_index(self, *changed):
+        """Russia (a regulation by CELEX, its implementing act and an amendment not yet consolidated), Iraq (two
+        regulations by ELI and by an old CELEX link), Burundi (claims and freezes only), a thematic regime with an arms
+        export and China (no regulation), with `changed` regimes replacing those of their id."""
+        freeze, claims = 'Asset freeze and prohibition to make funds available', 'Prohibition to satisfy claims'
+        index = {regime['id']: regime for regime in (
+            self.regime(26, 'RU', ['Arms export', freeze, claims],
+                        ('EU Council Decision', '2014/512/CFSP', 'https://eur-lex.europa.eu/eli/dec/2014/512/oj'),
+                        ('EU Council Regulation', '24.07.2026 consolidated basic legal act - (EU) No 833/2014',
+                         'https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX%3A02014R0833-20260724&qid=1'),
+                        ('EU Council Implementing Regulation', '2026/1817',
+                         'https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=OJ:L_202601817'),
+                        ('EC Council Regulation', '11.08.2026 amendments not yet included in consolidated legal act '
+                         '- (EU) 2026/506', 'https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX%3A32026R0506R'
+                         '%2803%29')),
+            self.regime(19, 'IQ', ['Arms embargo', 'Cultural property', freeze],
+                        ('EC Council Regulation', '24.12.2025 consolidated basic legal act - (EC) No 1210/2003',
+                         'http://data.europa.eu/eli/reg/2003/1210/2025-12-24'),
+                        ('EC Council Regulation', '07.12.1992 consolidated basic legal act - (EEC) No 3541/92',
+                         'http://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:31992R3541'),
+                        ('UN Security Council Resolution', 'S/RES/661 (1990)', 'https://undocs.org/S/RES/661(1990)')),
+            self.regime(7, 'BI', [freeze, claims, 'Restrictions on admission'],
+                        ('EU Council Regulation', '24.09.2025 consolidated basic legal act - (EU) 2015/1755',
+                         'https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX%3A02015R1755-20250924')),
+            self.regime(5, None, ['Arms export', freeze],
+                        ('EU Council Regulation', '24.11.2025 consolidated basic legal act - (EU) 2016/1686',
+                         'http://data.europa.eu/eli/reg/2016/1686/2025-11-24')),
+            self.regime(10, 'CN', ['Arms embargo']))}
+        index.update({regime['id']: regime for regime in changed})
+        return json.dumps({'data': list(index.values()), 'meta': {'version': '1'}})
+
+    def test_the_sanctions_map_is_read_by_its_regime_index_and_judges_the_place_regimes(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+
+            def regulation(entry_id, name, year, number, **changes):
+                return self.legal_entry(id=entry_id, **changes, instrument=self.instrument(
+                    name=name, type='regulation', jurisdiction='EU',
+                    primary=f'https://eur-lex.europa.eu/eli/reg/{year}/{number}/oj'))
+            umbrella = self.legal_entry(id='eu.restrictive-measures', instrument=self.instrument(
+                name='Council regulations adopted under Article 215 TFEU', type='regulation', jurisdiction='EU',
+                primary='https://www.sanctionsmap.eu/api/v1/regime'))
+            legal = self.legal_register([
+                self.legal_entry(), umbrella,
+                regulation('eu.russia', 'Council Regulation (EU) No 833/2014', 2014, 833),
+                regulation('eu.iraq', 'Council Regulation (EC) No 1210/2003', 2003, 1210),
+                regulation('eu.libya', 'Council Regulation (EU) 2016/44', 2016, 44),
+                regulation('eu.ended', 'Council Regulation (EU) No 204/2011', 2011, 204, effective='2011-03-03',
+                           sunset='2016-01-19', state='deprecated', deprecation='2016-01-19'),
+                regulation('eu.dual-use', 'Regulation (EU) 2021/821', 2021, 821)])
+            legal['jurisdictions']['EU']['hosts'].append('sanctionsmap.eu')
+            self.write_tree(root, self.register(self.entries()), legal)
+            (root / 'docs' / 'reading.md').write_text('<a id="r"></a>Read.\n', encoding='utf-8')
+            argv = ('--register', 'cmake/legal-register.json')
+            self.assertEqual(0, self.tool(root, *argv, 'plan', '--out', str(root / 'sources.json'))[0])
+            plan = json.loads((root / 'sources.json').read_text(encoding='utf-8'))
+            source = next(source for source in plan['sources'] if source['id'] == 'sanctionsmap-regimes')
+            self.assertEqual((['eu.restrictive-measures'], 'https://www.sanctionsmap.eu/api/v1/regime'),
+                             (source['entries'], source['url']))
+            requests = []
+            routes = {'MevzuatNo=6698': self.MEVZUAT_HTML, 'sanctionsmap.eu/api/v1/regime': self.regime_index(),
+                      'webapi/rdf/sparql': urllib.error.URLError('not this case')}
+            register_review.fetch_sources(plan, root / 'fetched', opener=self.routed(routes, requests),
+                                          today=datetime.date(2026, 12, 16))
+            self.assertEqual('application/json', next(request for request in requests
+                                                      if 'sanctionsmap' in request.full_url).get_header('Accept'))
+            fetched = ('--fetched', str(root / 'fetched'))
+            report = root / 'docs' / 'review.md'
+            code, output = self.tool(root, *argv, 'compare', *fetched, '--report', str(report), '--apply')
+            self.assertEqual(0, code, output)
+            record = register_review.sanctions_map_record(self.regime_index().encode(), source)
+            digest = hashlib.sha256(record).hexdigest()
+            version = '5 regimes, 3 attached to a place'
+            text = report.read_text(encoding='utf-8')
+            what = '- eu.restrictive-measures (NET.2)'
+            self.assertIn(f'{what}: Council regulations adopted under Article 215 TFEU, Articles 4-7: never read from '
+                          'its primary source; read https://www.sanctionsmap.eu/api/v1/regime (version '
+                          f'{version}, SHA-256 {digest})', text)
+            # Iraq's second regulation is no entry; Burundi's freezes and claims, the thematic regime's arms export to
+            # listed persons, China's regime without a regulation and the implementing and unconsolidated acts owe
+            # nothing; Libya's regulation is listed by no regime, the ended one and the dual-use regulation are not
+            # judged.
+            self.assertIn(f'{what}: regime 19 (IQ) restricts a supply to a place, and its regulation 31992R3541 is no '
+                          'entry of the register; add it, read it with `read` and author what it restricts in the '
+                          'embargo generation', text)
+            self.assertIn(f"{what}: no regime lists eu.libya's regulation 32016R0044 any more; read its repeal and "
+                          "record the entry's sunset", text)
+            for absent in ('32015R1755', '32016R1686', 'regime 10', '32026R0506', '2026/1817', 'eu.ended',
+                           'eu.dual-use', '32003R1210', '32014R0833'):
+                self.assertNotIn(absent, text.partition('## Proposed ROADMAP amendments')[0], absent)
+            code, output = self.tool(root, *argv, 'read', *fetched, '--ref', 'docs/reading.md#r', '--entry',
+                                     'eu.restrictive-measures')
+            self.assertEqual(0, code, output)
+            path = root / 'cmake' / 'legal-register.json'
+            entries = {entry['id']: entry for entry in json.loads(path.read_text(encoding='utf-8'))['entries']}
+            self.assertEqual({'version': version, 'read': '2026-12-16', 'sha256': digest},
+                             entries['eu.restrictive-measures']['instrument']['consolidated'])
+            checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
+            self.assertEqual([], checked['legal'])
+
+            def judged(index, day):
+                """The report lines of a scan of `index` on `day`, the register as read."""
+                routes['sanctionsmap.eu/api/v1/regime'] = index
+                register_review.fetch_sources(plan, root / day, opener=self.routed(routes),
+                                              today=datetime.date.fromisoformat(day))
+                code, output = self.tool(root, *argv, 'compare', '--fetched', str(root / day), '--report',
+                                         str(root / 'docs' / f'{day}.md'), today=day)
+                self.assertEqual(0, code, output)
+                lines = (root / 'docs' / f'{day}.md').read_text(encoding='utf-8').splitlines()
+                return [line for line in lines if line.startswith(f'{what}: ')]
+            regulations = [line for line in judged(self.regime_index(), '2026-12-17')]
+            self.assertEqual(2, len(regulations), regulations)
+            # Notes, amendment times, icons, descriptions, a link's query and the order of regimes and measures are
+            # not the text read; a regime's measures, country and regulations are.
+            noisy = json.loads(self.regime_index())
+            noisy['data'].reverse()
+            for regime in noisy['data']:
+                regime.update(notes='Amended.', amendment=1800000000)
+                regime['measures']['data'].reverse()
+                for measure in regime['measures']['data']:
+                    measure['description'] += ' Reworded.'
+                    measure['type']['data']['icon'] = 'https://icons/new'
+                for act in regime['legal_acts']['data']:
+                    act['url'] = act['url'].replace('qid=1', 'qid=2')
+            self.assertEqual(record, register_review.sanctions_map_record(json.dumps(noisy).encode(), source))
+            self.assertEqual(regulations, judged(json.dumps(noisy), '2026-12-18'))
+            # Burundi gains an arms embargo: a place regime whose regulation the register lacks, under a new version.
+            armed = self.regime(7, 'BI', ['Arms export', 'Prohibition to satisfy claims'],
+                                ('EU Council Regulation', '24.09.2025 consolidated basic legal act - (EU) 2015/1755',
+                                 'https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX%3A02015R1755-20250924'))
+            lines = judged(self.regime_index(armed), '2026-12-19')
+            self.assertIn(f'{what}: Council regulations adopted under Article 215 TFEU, Articles 4-7: amended to 5 '
+                          'regimes, 4 attached to a place since it was read on 2026-12-16 (5 regimes, 3 attached to a '
+                          'place); read the amendment', '\n'.join(lines))
+            self.assertIn(f'{what}: regime 7 (BI) restricts a supply to a place, and its regulation 32015R1755 is no '
+                          'entry', '\n'.join(lines))
+            # A regulation replaced under the same counts is a new digest of the text read.
+            replaced = self.regime(10, 'CN', ['Arms embargo'], ('EU Council Regulation', '(EU) 2027/1',
+                                                                'http://data.europa.eu/eli/reg/2027/1/2027-01-01'))
+            lines = judged(self.regime_index(replaced), '2026-12-20')
+            self.assertIn(f'{what}: Council regulations adopted under Article 215 TFEU, Articles 4-7: the primary text '
+                          'changed since it was read on 2026-12-16 (5 regimes, 3 attached to a place)',
+                          '\n'.join(lines))
+            self.assertIn('regime 10 (CN) restricts a supply to a place, and its regulation 32027R0001 is no entry',
+                          '\n'.join(lines))
+            # An index the reader cannot read judges nothing and is reported once, as a source not read.
+            routes['sanctionsmap.eu/api/v1/regime'] = self.regime_index().replace('"version": "1"', '"version": "2"')
+            register_review.fetch_sources(plan, root / 'unread', opener=self.routed(routes),
+                                          today=datetime.date(2026, 12, 21))
+            code, output = self.tool(root, *argv, 'compare', '--fetched', str(root / 'unread'), '--report',
+                                     str(root / 'docs' / 'unread.md'), today='2026-12-21')
+            self.assertEqual(0, code, output)
+            text = (root / 'docs' / 'unread.md').read_text(encoding='utf-8')
+            self.assertIn("- sanctionsmap-regimes: regime index version '2', not '1'\n", text)
+            self.assertNotIn(what, text)
+
+    def test_the_regime_index_reader_refuses_other_shapes(self):
+        unreadable, read = register_review.Unreadable, register_review.read_sanctions_map
+        self.assertEqual('5 regimes, 3 attached to a place', read(self.regime_index().encode(), {}, None))
+        regimes = register_review.sanctions_map_regimes(self.regime_index().encode())
+        self.assertEqual([(5, None, ['32016R1686']), (7, 'BI', ['32015R1755']), (10, 'CN', []),
+                          (19, 'IQ', ['31992R3541', '32003R1210']), (26, 'RU', ['32014R0833'])],
+                         [(regime['id'], regime['country'], regime['regulations']) for regime in regimes])
+        index = json.loads(self.regime_index())
+
+        def changed(change):
+            document = copy.deepcopy(index)
+            change(document)
+            return json.dumps(document).encode()
+        unlinked = self.regime(8, 'MM', ['Arms export'], ('EU Council Regulation', '(EU) No 401/2013',
+                                                          'https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=OJ:L_1'))
+        for body, message in (
+                (changed(lambda document: document['meta'].update(version='2')), "regime index version '2'"),
+                (changed(lambda document: document.update(data=[])), 'without regimes'),
+                (changed(lambda document: document['data'].append(document['data'][0])), 'with a regime twice'),
+                (changed(lambda document: document['data'][0].pop('measures')), 'not the EU Sanctions Map regime'),
+                (changed(lambda document: document['data'][0].update(country={'data': {'code': 'RUS'}})),
+                 'regime 26 has another shape'),
+                (changed(lambda document: document['data'][0].update(id='26')), "regime '26' has another shape"),
+                (changed(lambda document: document['data'][0]['legal_acts']['data'][0].update(url=None)),
+                 'regime 26 has another shape'),
+                (changed(lambda document: document['data'][0]['measures']['data'][0]['type']['data'].update(
+                    title='')), 'regime 26 has another shape'),
+                (changed(lambda document: document['data'].append(unlinked)),
+                 "regime 8: the regulation '(EU) No 401/2013' links no CELEX number or ELI"),
+                (b'[]', 'not the EU Sanctions Map regime index'), (b'\xff', 'not the EU Sanctions Map regime index')):
+            with self.assertRaises(unreadable) as refused:
+                read(body, {}, None)
+            self.assertIn(message, str(refused.exception))
+
     def test_readers_find_each_hosts_version_and_refuse_other_shapes(self):
         unreadable = register_review.Unreadable
         mevzuat = {'act': '6698'}
@@ -8312,9 +8528,17 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
         self.assertEqual('v', cellar(self.CELLAR_XHTML.encode(), {'act': '32016R0679'}, 'v'))
         self.assertEqual('v', cellar(b'<html><p>Directive 2002/58/EC</p></html>', {'act': '32002L0058'}, 'v'))
         self.assertEqual('v', cellar(b'<html><p>Regulation (EC) No 1907/2006</p></html>', {'act': '32006R1907'}, 'v'))
-        for body in (self.CELLAR_XHTML.replace('2016/679', '2016/678'), '<p>Regulation (EU) 2016/679</p>'):
-            with self.assertRaises(unreadable):
-                cellar(body.encode(), {'act': '32016R0679'}, 'v')
+        self.assertEqual('v', cellar(b'<html><p>COUNCIL REGULATION (EEC) NO 3541/92</p></html>', {'act': '31992R3541'},
+                                     'v'))
+        self.assertEqual('v', cellar(b'<html><p>Regulation (EC) No 2271/96</p></html>', {'act': '31996R2271'}, 'v'))
+        for body, act in ((self.CELLAR_XHTML.replace('2016/679', '2016/678'), '32016R0679'),
+                          ('<p>Regulation (EU) 2016/679</p>', '32016R0679'),
+                          ('<html><p>Regulation (EU) 2016/6790</p></html>', '32016R0679'),
+                          ('<html><p>Regulation (EEC) No 13541/92</p></html>', '31992R3541'),
+                          ('<html><p>Regulation (EEC) No 3541/921</p></html>', '31992R3541'),
+                          ('<html><p>Regulation (EU) 44/16</p></html>', '32016R0044')):
+            with self.assertRaises(unreadable, msg=body):
+                cellar(body.encode(), {'act': act}, 'v')
         ecfr = {'act': 'title=15&subtitle=B&chapter=VII&subchapter=C'}
         meta = {'title': '15', 'subtitle': 'B', 'chapter': 'VII', 'subchapter': 'C',
                 'latest_amendment_date': '2026-10-26'}
