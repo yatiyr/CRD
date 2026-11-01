@@ -194,9 +194,9 @@ part:
 
 ## Next
 
-1. **CI.** Audit complete run 41298463221 (13453acb) when it ends. Then audit the first hosted run that includes this
-   batch: the first Windows, clang-cl and ARM64 compile of `PartyKind::Unknown`, and the first Windows run of the MASAK
-   import and of the 7 new Python cases.
+1. **CI.** Audit complete run 41298463221 (13453acb) when it ends. Then audit complete-tier run 41302856153
+   (92af745a, dispatched on yatiyr/CRD): the first Windows, clang-cl and ARM64 compile of `PartyKind::Unknown`, and the
+   first Windows run of the MASAK import and of the 7 new Python cases.
 2. **COMPLY.1.** Three items remain:
    - Read the Darfur renewal before 11 December 2026.
    - Read the Wassenaar Category 5 Part 2 and Turkey's dual-use communiqué for the classifications' bases.
