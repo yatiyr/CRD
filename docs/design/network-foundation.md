@@ -399,10 +399,10 @@ tests):
   other with `general_error`, and refuses an unpinned client key with `general_error` too, so an unauthenticated
   client learns neither which names nor which keys exist. Every alert sent and received is reported, as is a
   HelloRetryRequest (read from the ServerHello's random).
-- **S6. This slice's limits.** Tickets, resumption and 0-RTT are off (every connection runs a full handshake), and
-  `close()` is for an established session (a handshake is abandoned with `clear()`); resumption with its ticket
-  hygiene, address-validation tokens, certificate compression, ECH and the QUIC integration are NET.2's next slices on
-  this same interface.
+- **S6. Limits.** 0-RTT is off: early data may carry only operations a schema declares idempotent (the TLS 1.3
+  profile, T07), so it waits for NET.2's server-authorized message schemas and anti-replay windows. `close()` is for an
+  established session (a handshake is abandoned with `clear()`). Address-validation tokens, certificate compression,
+  ECH and the QUIC integration are NET.2's next slices on this same interface.
 - **S7. Key usage limits and key updates.** A session counts the records protected under its sending key (the
   provider's write sequence, which a new key resets) and updates the key before `key_update_records()` records: the
   negotiated AEAD's limit (`tls_key_usage_limit`: floor(2^24.5) for AES-GCM, every 64-bit sequence number for
@@ -424,13 +424,46 @@ tests):
   `alert_received()`), and its `close_notify`, during the handshake too, makes the session `Closed`, never `Failed`;
   `close()` of a session its peer closed during the handshake answers `Closed` and sends nothing. More than four
   warning alerts in a row fail the session with `unexpected_message` (the provider's bound).
+- **S9. Tickets and resumption.** A server issues one ticket with every connection, a resumed one included, and sends it
+  with the handshake's last flight (the provider holds a ticket until its server writes, so the session releases it with
+  a zero-length write). The context's ticket method seals it, not the provider's built-in keys (which rotate inside one
+  process and cannot be shared): the ticket key's 16-byte name (HKDF-SHA256 of the key with an empty salt, expanded
+  under "cerid tls 1.3 ticket name"), a random 32-byte salt, then the provider's serialized session sealed with
+  AES-256-GCM under the key and nonce HKDF-SHA256 derives from the ticket key and that salt ("cerid tls 1.3 ticket
+  seal"). Every derived key seals one ticket, so no count of tickets has to be shared across the servers of a fleet; the
+  name only selects the key. Servers given the same `ticket_key` resume each other's tickets; a rotation keeps the
+  former key as `previous_ticket_key`, which opens and never seals; a server without a key draws one at `init()` that
+  only its context opens. A ticket under an unknown name, too short or forged is ignored and the handshake runs in full;
+  only a provider failure fails it. A server keeps no session cache, so no unauthenticated peer fills its memory.
+  Tickets live `ticket_lifetime` (two days unless configured, at most seven: RFC 9846 section 4.6.1); a resumption's
+  ticket keeps the longer of its remaining lifetime and the configured one, and never outlives the seven days after the
+  full handshake that authenticated the peer (the provider's non-renewable authentication timeout). A client keeps each
+  ticket for the lifetime its server states.
+
+  A client session started with a `TlsTicketStore` hands it every ticket it reads, serialized, with its context's
+  `TlsBinding`, and takes one when it starts: the store hands a ticket out once (single use, T07), and the session
+  offers it only when it parses as a TLS 1.3 session of this binding that has not expired; anything else is dropped
+  and the handshake runs in full. Without a store a client offers nothing and ignores NewSessionTicket. The caller keeps
+  one store per correlation domain, so connections meant to be uncorrelated share no ticket (T15). The binding is the
+  SHA-256 of the role, the server name in lower case, the own key, the pins and the accepted signature algorithms
+  (sets), and it is the provider's session ID context, which both ends check: a server whose pins, name, credential or
+  algorithms changed resumes no ticket it issued before, so a client key no longer pinned authenticates in full and is
+  refused (`general_error`), and another credential never answers for the key a ticket proved. Resumption is
+  psk_dhe_ke only: a fresh key share and the same group negotiation (a HelloRetryRequest included, the ticket offered
+  again with a new binder), so a hybrid group both sides hold is kept. A resumed session reports `resumed()`, its group
+  and AEAD and the peer key the ticket's handshake proved; it takes the round trips of a full handshake, and its
+  server's flight carries no Certificate or CertificateVerify (over 8,000 bytes fewer with an ML-DSA-65 key).
 
 Evidence: `test_tls.cpp` (every group and signature algorithm, each key share read off the wire and checked against
 its group's layout with the provider's own X25519, ECDH and ML-KEM modulus check, the hellos' GREASE values read off
 the wire, HelloRetryRequest, pins both ways,
 names, alerts, bounds, close_notify, key updates under record budgets, on demand, with one request outstanding and at
-the update bound, a peer's `user_canceled` and `close_notify` during the handshake, adversarial records, every
-configuration refusal, one context on four threads), the `crd-fuzz-crypto-tls` target, and `tls_interop.py` against
+the update bound, a peer's `user_canceled` and `close_notify` during the handshake, tickets and resumption (one ticket
+per connection, single use, the wire's pre_shared_key and psk_key_exchange_modes and the ticket format, bindings, a
+careless store, a fleet's shared key and its rotation, a drawn key, another credential, a client no longer pinned,
+tickets changed at rest in each field and past their lifetime, the lifetime a client keeps, a HelloRetryRequest), adversarial records, every
+configuration refusal, one context on four threads), the `crd-fuzz-crypto-tls` target (a fixed ticket key, a forged
+ticket in a ClientHello, tickets a client's store hands out), and `tls_interop.py` against
 the pinned OpenSSL 3.5 (`CRD_BUILD_TLS_VS_OPENSSL`, Linux): every hybrid group both ways, a HelloRetryRequest both
 ways, hybrid kept beside a classical share both ways, mutual authentication, an unpinned key refused, a TLS 1.2 client
 refused with `protocol_version`, and key updates both ways (a Cerid client updating before every record under a
