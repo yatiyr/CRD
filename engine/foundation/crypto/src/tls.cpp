@@ -11,23 +11,34 @@
 // rotate inside one process and cannot be shared): each ticket is the key's public name, a random 32-byte salt and the
 // session state sealed with AES-256-GCM under a key and nonce derived from the ticket key and that salt (HKDF-SHA256),
 // so every derived key seals one ticket and no count of tickets has to be shared across the servers of a fleet.
+//
+// Certificate compression (decision S10, RFC 8879) runs through the engine's codecs (crd-compression): a server's
+// compressed Certificate messages are made once at init() and held in the provider context's ex_data, so its sessions
+// copy bytes instead of compressing per handshake; a client decodes into a buffer of exactly the claimed length.
 #include <crd/crypto/tls.hpp>
 
 #include "provider_internal.hpp"
+
+#include <crd/compression/deflate.hpp>
+#include <crd/compression/zstd.hpp>
 
 #include <openssl/aead.h>
 #include <openssl/asn1.h>
 #include <openssl/bio.h>
 #include <openssl/bn.h>
+#include <openssl/bytestring.h>
 #include <openssl/evp.h>
 #include <openssl/mem.h>
 #include <openssl/nid.h>
+#include <openssl/pool.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 
 #include <algorithm>
 #include <climits>
 #include <cstring>
+#include <iterator>
+#include <new>
 #include <utility>
 
 namespace crd::crypto
@@ -87,16 +98,24 @@ constexpr u8 kHelloRetryRandom[32] = {
 constexpr u8    kBadCertificate        = SSL_AD_BAD_CERTIFICATE; // a client's refusal of an unpinned server key
 constexpr u8    kServerHello           = 2U;      // HandshakeType server_hello
 constexpr u8    kKeyUpdate             = 24U;     // HandshakeType key_update
+constexpr u8    kCompressedCertificate = 25U;     // HandshakeType compressed_certificate (RFC 8879)
+constexpr usize kCompressionAlgorithmAt = 4U;     // type (1), length (3), then the algorithm (2)
 constexpr usize kKeyUpdateRequestAt    = 4U;      // type (1), length (3), then request_update
 constexpr usize kServerHelloRandomAt   = 6U;      // type (1), length (3), legacy_version (2)
 constexpr usize kMaxRecordPlaintext    = 16384U;  // 2^14 (RFC 9846 section 5.1)
 constexpr usize kRecordOverhead        = 22U;     // header (5), inner content type (1) and AEAD tag (16)
 constexpr usize kKeyUpdateRecordBytes  = 27U;     // the overhead, a handshake header (4) and request_update (1)
 constexpr usize kMaxSignaturePublicKey = 2592U;   // ML-DSA-87's, the longest signature public key
+constexpr usize kMaxCommonName         = 64U;     // ub-common-name (RFC 5280 appendix A)
 constexpr usize kTicketNameBytes       = 16U;     // a ticket key's public name, which leads its tickets
 constexpr usize kTicketSaltBytes       = 32U;     // a ticket's own random salt
 constexpr usize kTicketHeaderBytes     = kTicketNameBytes + kTicketSaltBytes;
 constexpr usize kTicketOverhead        = kTicketHeaderBytes + kAeadTagBytes;
+constexpr usize kCertificateEntryOverhead = 9U;   // request context (1), list (3), entry (3), extensions (2)
+constexpr usize kMinCertificateBytes   = 4U;      // an empty request context and an empty list
+constexpr usize kCompressedOverhead    = 8U;      // algorithm (2), uncompressed_length (3), compressed length (3)
+constexpr usize kZlibFrameBytes        = 6U;      // the zlib header (2) and Adler-32 (4) around raw DEFLATE
+constexpr int   kCertificateZstdLevel  = 22;      // zstd's highest: a server compresses its Certificate once
 
 constexpr char kTicketNameInfo[] = "cerid tls 1.3 ticket name";
 constexpr char kTicketSealInfo[] = "cerid tls 1.3 ticket seal";
@@ -379,7 +398,83 @@ int session_slot() noexcept
     static const int kSlot = SSL_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
     return kSlot;
 }
+
+// RFC 8879 algorithms Cerid decodes and compresses with, each at most once.
+bool valid_compression(cont::ConstSpan<u16> algorithms) noexcept
+{
+    const u16* known_end = std::end(kTlsCertificateCompression);
+    for (usize i = 0U; i < algorithms.size(); ++i)
+    {
+        const cont::ConstSpan<u16> earlier = algorithms.first(i);
+        if (std::find(std::begin(kTlsCertificateCompression), known_end, algorithms[i]) == known_end ||
+            std::find(earlier.begin(), earlier.end(), algorithms[i]) != earlier.end())
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Whether `compressed_bytes` of `algorithm` can decode to a Certificate of `length` bytes: within the limit a plain
+// Certificate has (RFC 8879 section 5) and, for zlib, no longer than DEFLATE's 1032:1 can make them, so a claim is
+// refused before anything is reserved for it. A zstd block of 3 header bytes already decodes to 128 KiB, past the
+// limit, so the limit alone bounds a zstd claim.
+bool certificate_claim_fits(u16 algorithm, usize compressed_bytes, usize length) noexcept
+{
+    if (length < kMinCertificateBytes || length > kTlsMaxCertificateBytes)
+    {
+        return false;
+    }
+    return algorithm == iana::kCertCompressionZstd ||
+           (algorithm == iana::kCertCompressionZlib && compressed_bytes > kZlibFrameBytes &&
+            length <= compression::deflate_max_inflated_size(compressed_bytes - kZlibFrameBytes));
+}
+
+// A server context's Certificate (decision S10): the plain message the provider writes for its credential and its
+// compressed forms, smallest first, made once at init(). The provider context's ex_data holds it, so it lives exactly
+// as long as the provider context its sessions share.
+struct CompressedCertificates
+{
+    CRYPTO_BUFFER* message = nullptr;
+    u16            algorithms[std::size(kTlsCertificateCompression)] = {};
+    CRYPTO_BUFFER* compressed[std::size(kTlsCertificateCompression)] = {};
+    u32            count = 0U;
+};
+
+void free_compressed_certificates(void*, void* pointer, CRYPTO_EX_DATA*, int, long, void*) noexcept
+{
+    auto* certificates = static_cast<CompressedCertificates*>(pointer);
+    if (certificates == nullptr)
+    {
+        return;
+    }
+    CRYPTO_BUFFER_free(certificates->message);
+    for (CRYPTO_BUFFER* compressed : certificates->compressed)
+    {
+        CRYPTO_BUFFER_free(compressed);
+    }
+    certificates->~CompressedCertificates();
+    OPENSSL_free(certificates);
+}
+
+// The provider context's slot for its compressed Certificate, freed with the provider context.
+int context_slot() noexcept
+{
+    static const int kSlot = SSL_CTX_get_ex_new_index(0, nullptr, nullptr, nullptr, &free_compressed_certificates);
+    return kSlot;
+}
 } // namespace
+
+bool detail::tls_decompress_certificate(u16 algorithm, cont::ConstSpan<u8> compressed,
+                                        cont::Span<u8> certificate) noexcept
+{
+    if (!certificate_claim_fits(algorithm, compressed.size(), certificate.size()))
+    {
+        return false;
+    }
+    return algorithm == iana::kCertCompressionZstd ? compression::zstd_decompress_exact(compressed, certificate)
+                                                   : compression::zlib_inflate(compressed, certificate);
+}
 
 // The provider's callbacks, with access to the session they serve.
 struct TlsCallbacks
@@ -582,8 +677,72 @@ struct TlsCallbacks
         return ssl_ticket_aead_success;
     }
 
-    // Records the first alert each way, notices a HelloRetryRequest (a ServerHello with the special random) and counts
-    // the KeyUpdates each way. The provider reports a KeyUpdate it writes when it queues it, sealed under the old key.
+    // A server's compressed Certificate: the form made at init() for `algorithm`, copied. The provider asks only for
+    // its own Certificate of the context's credential; any other message fails the handshake (internal_error).
+    static int send_compressed(SSL* ssl, u16 algorithm, CBB* out, const uint8_t* in, size_t in_len) noexcept
+    {
+        const auto* certificates =
+            static_cast<const CompressedCertificates*>(SSL_CTX_get_ex_data(SSL_get_SSL_CTX(ssl), context_slot()));
+        if (certificates == nullptr || CRYPTO_BUFFER_len(certificates->message) != in_len ||
+            std::memcmp(CRYPTO_BUFFER_data(certificates->message), in, in_len) != 0)
+        {
+            return 0;
+        }
+        for (u32 i = 0U; i < certificates->count; ++i)
+        {
+            if (certificates->algorithms[i] == algorithm)
+            {
+                const CRYPTO_BUFFER* compressed = certificates->compressed[i];
+                return CBB_add_bytes(out, CRYPTO_BUFFER_data(compressed), CRYPTO_BUFFER_len(compressed));
+            }
+        }
+        return 0;
+    }
+
+    static int send_zstd(SSL* ssl, CBB* out, const uint8_t* in, size_t in_len) noexcept
+    {
+        return send_compressed(ssl, iana::kCertCompressionZstd, out, in, in_len);
+    }
+
+    static int send_zlib(SSL* ssl, CBB* out, const uint8_t* in, size_t in_len) noexcept
+    {
+        return send_compressed(ssl, iana::kCertCompressionZlib, out, in, in_len);
+    }
+
+    // A client decodes its server's compressed Certificate into a buffer of exactly the claimed length, reserved only
+    // for a claim the compressed bytes can reach; the provider caps the claim at kTlsMaxCertificateBytes first
+    // (max_cert_list, the limit of a plain Certificate). The provider takes the buffer.
+    static int receive_compressed(u16 algorithm, CRYPTO_BUFFER** out, size_t length, const uint8_t* in,
+                                  size_t in_len) noexcept
+    {
+        if (!certificate_claim_fits(algorithm, in_len, length))
+        {
+            return 0;
+        }
+        uint8_t*                       data = nullptr;
+        bssl::UniquePtr<CRYPTO_BUFFER> buffer(CRYPTO_BUFFER_alloc(&data, length));
+        if (!buffer || !detail::tls_decompress_certificate(algorithm, cont::ConstSpan<u8>(in, in_len),
+                                                           cont::Span<u8>(data, length)))
+        {
+            return 0;
+        }
+        *out = buffer.release();
+        return 1;
+    }
+
+    static int receive_zstd(SSL*, CRYPTO_BUFFER** out, size_t length, const uint8_t* in, size_t in_len) noexcept
+    {
+        return receive_compressed(iana::kCertCompressionZstd, out, length, in, in_len);
+    }
+
+    static int receive_zlib(SSL*, CRYPTO_BUFFER** out, size_t length, const uint8_t* in, size_t in_len) noexcept
+    {
+        return receive_compressed(iana::kCertCompressionZlib, out, length, in, in_len);
+    }
+
+    // Records the first alert each way, notices a HelloRetryRequest (a ServerHello with the special random), counts
+    // the KeyUpdates each way and notes the algorithm of a compressed Certificate sent or received. The provider
+    // reports a KeyUpdate it writes when it queues it, sealed under the old key.
     static void observe(int is_write, int, int content_type, const void* buffer, size_t length, SSL* ssl,
                         void*) noexcept
     {
@@ -606,6 +765,12 @@ struct TlsCallbacks
                  std::memcmp(bytes + kServerHelloRandomAt, kHelloRetryRandom, sizeof(kHelloRetryRandom)) == 0)
         {
             session->m_hello_retry = true;
+        }
+        else if (content_type == SSL3_RT_HANDSHAKE && length >= kCompressionAlgorithmAt + 2U &&
+                 bytes[0] == kCompressedCertificate)
+        {
+            session->m_certificate_compression =
+                static_cast<u16>((bytes[kCompressionAlgorithmAt] << 8U) | bytes[kCompressionAlgorithmAt + 1U]);
         }
         else if (content_type == SSL3_RT_HANDSHAKE && length > kKeyUpdateRequestAt && bytes[0] == kKeyUpdate)
         {
@@ -630,6 +795,87 @@ namespace
 {
 constexpr SSL_TICKET_AEAD_METHOD kTicketMethod = {&TlsCallbacks::ticket_overhead, &TlsCallbacks::seal_ticket,
                                                   &TlsCallbacks::open_ticket};
+
+// One compressed form of a Certificate: false when the codec fails.
+bool compress_with(u16 algorithm, cont::ConstSpan<u8> plain, cont::Array<u8>& form) noexcept
+{
+    if (algorithm == iana::kCertCompressionZstd)
+    {
+        return compression::zstd_compress(plain, kCertificateZstdLevel, form);
+    }
+    form = compression::zlib_deflate(plain, crd::memory::default_allocator());
+    return !form.empty();
+}
+
+// Makes a server context's compressed Certificate (decision S10): the plain message the provider writes for `der` (an
+// empty request context and one entry without extensions, RFC 9846 section 4.4.2), compressed once with each algorithm
+// of `allowed` and kept when its CompressedCertificate is smaller than the plain message. The provider context
+// compresses with the kept forms, smallest first, and with none when none is kept.
+TlsError compress_certificate(SSL_CTX* context, cont::ConstSpan<u8> der, cont::ConstSpan<u16> allowed) noexcept
+{
+    constexpr usize most  = std::size(kTlsCertificateCompression);
+    const usize     size  = der.size() + kCertificateEntryOverhead;
+    cont::Array<u8> message;
+    message.resize(size);
+    u8* at = message.data();
+    *at++  = 0U; // the request context, empty
+    for (const usize length : {der.size() + 5U, der.size()})
+    {
+        *at++ = static_cast<u8>(length >> 16U);
+        *at++ = static_cast<u8>(length >> 8U);
+        *at++ = static_cast<u8>(length);
+    }
+    std::memcpy(at, der.data(), der.size());
+    at[der.size()]      = 0U; // the entry's extensions, none
+    at[der.size() + 1U] = 0U;
+
+    cont::Array<u8> forms[most];
+    u16             algorithms[most] = {};
+    usize           count             = 0U;
+    for (const u16 algorithm : allowed)
+    {
+        if (!compress_with(algorithm, cont::ConstSpan<u8>(message.data(), size), forms[count]))
+        {
+            return TlsError::ProviderFailure;
+        }
+        if (forms[count].size() + kCompressedOverhead < size)
+        {
+            algorithms[count++] = algorithm;
+        }
+    }
+    if (count == 0U)
+    {
+        return TlsError::None;
+    }
+    if (count == most && forms[1].size() < forms[0].size())
+    {
+        std::swap(forms[0], forms[1]);
+        std::swap(algorithms[0], algorithms[1]);
+    }
+    // The ex_data slot owns what is kept from here on: the provider context frees it, however init() ends.
+    void* storage = OPENSSL_zalloc(sizeof(CompressedCertificates));
+    auto* kept    = storage != nullptr ? new (storage) CompressedCertificates() : nullptr;
+    if (kept == nullptr || !SSL_CTX_set_ex_data(context, context_slot(), kept))
+    {
+        free_compressed_certificates(nullptr, kept, nullptr, 0, 0, nullptr);
+        return TlsError::ProviderFailure;
+    }
+    kept->message = CRYPTO_BUFFER_new(message.data(), size, nullptr);
+    for (usize i = 0U; i < count && kept->message != nullptr; ++i)
+    {
+        kept->compressed[i] = CRYPTO_BUFFER_new(forms[i].data(), forms[i].size(), nullptr);
+        kept->algorithms[i] = algorithms[i];
+        kept->count         = static_cast<u32>(i + 1U);
+        const bool zstd     = algorithms[i] == iana::kCertCompressionZstd;
+        if (kept->compressed[i] == nullptr ||
+            !SSL_CTX_add_cert_compression_alg(context, algorithms[i],
+                                              zstd ? &TlsCallbacks::send_zstd : &TlsCallbacks::send_zlib, nullptr))
+        {
+            return TlsError::ProviderFailure;
+        }
+    }
+    return kept->message != nullptr ? TlsError::None : TlsError::ProviderFailure;
+}
 } // namespace
 
 cont::StringView tls_error_name(TlsError error) noexcept
@@ -746,13 +992,16 @@ TlsError TlsCredential::init(const SigningKey& key, cont::StringView name) noexc
         return TlsError::ProviderFailure;
     }
     // The dates carry nothing: trust comes from the pin, so the certificate is valid from the epoch and has no
-    // well-defined expiration date (RFC 5280 section 4.1.2.5).
-    const auto*  name_bytes = reinterpret_cast<const unsigned char*>(name.data());
-    const auto   name_size  = static_cast<int>(name.size());
-    X509_NAME*   subject    = X509_get_subject_name(certificate.get());
+    // well-defined expiration date (RFC 5280 section 4.1.2.5). The name is the subjectAltName's; the common name
+    // repeats it when it fits (64 characters, RFC 5280 appendix A's ub-common-name), and a longer name leaves the
+    // subject empty and the subjectAltName critical (RFC 5280 section 4.1.2.6).
+    const auto* name_bytes = reinterpret_cast<const unsigned char*>(name.data());
+    const auto  name_size  = static_cast<int>(name.size());
+    const bool  common     = name.size() <= kMaxCommonName;
+    X509_NAME*  subject    = X509_get_subject_name(certificate.get());
     if (!X509_set_version(certificate.get(), X509_VERSION_3) ||
         !X509_set_serialNumber(certificate.get(), serial_field.get()) ||
-        !X509_NAME_add_entry_by_NID(subject, NID_commonName, MBSTRING_ASC, name_bytes, name_size, -1, 0) ||
+        (common && !X509_NAME_add_entry_by_NID(subject, NID_commonName, MBSTRING_ASC, name_bytes, name_size, -1, 0)) ||
         !X509_set_issuer_name(certificate.get(), subject) ||
         !ASN1_TIME_set_string_X509(not_before.get(), "19700101000000Z") ||
         !ASN1_TIME_set_string_X509(not_after.get(), "99991231235959Z") ||
@@ -764,7 +1013,8 @@ TlsError TlsCredential::init(const SigningKey& key, cont::StringView name) noexc
     }
     GENERAL_NAME_set0_value(dns_name.get(), GEN_DNS, dns_text.release());
     if (!bssl::PushToStack(alt_names.get(), std::move(dns_name)) ||
-        !X509_add1_ext_i2d(certificate.get(), NID_subject_alt_name, alt_names.get(), 0, X509V3_ADD_DEFAULT) ||
+        !X509_add1_ext_i2d(certificate.get(), NID_subject_alt_name, alt_names.get(), common ? 0 : 1,
+                           X509V3_ADD_DEFAULT) ||
         !X509_sign(certificate.get(), pkey, provider_internal::signature_digest(algorithm)))
     {
         return TlsError::ProviderFailure;
@@ -816,7 +1066,7 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
         (!config.ticket_key.empty() && config.ticket_key.size() != kTlsTicketKeyBytes) ||
         (!config.previous_ticket_key.empty() &&
          (config.previous_ticket_key.size() != kTlsTicketKeyBytes || config.ticket_key.empty())) ||
-        config.ticket_lifetime > kTlsMaxTicketLifetime)
+        config.ticket_lifetime > kTlsMaxTicketLifetime || !valid_compression(config.certificate_compression))
     {
         return TlsError::BadConfig;
     }
@@ -908,6 +1158,9 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     // in its cipher suites, supported groups, supported versions, key shares and two extensions, so a peer or
     // middlebox that refuses an unknown value fails in testing rather than in the field.
     SSL_CTX_set_grease_enabled(context.get(), 1);
+    // A peer's Certificate, compressed or not, is at most kTlsMaxCertificateBytes (RFC 8879 section 5: the same limit
+    // either way); the provider refuses a longer one, and a compressed one claiming more, before decoding it.
+    SSL_CTX_set_max_cert_list(context.get(), kTlsMaxCertificateBytes);
     if (!SSL_CTX_set_num_tickets(context.get(), server ? 1U : 0U))
     {
         return TlsError::ProviderFailure;
@@ -934,6 +1187,33 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     if (server)
     {
         SSL_CTX_set_tlsext_servername_callback(context.get(), &TlsCallbacks::check_name);
+        uint8_t*                       der       = nullptr;
+        const int                      der_bytes = i2d_X509(x509_of(config.credential->m_certificate), &der);
+        const bssl::UniquePtr<uint8_t> owner(der);
+        if (der_bytes <= 0)
+        {
+            return TlsError::ProviderFailure;
+        }
+        const TlsError compressed = compress_certificate(
+            context.get(), cont::ConstSpan<u8>(der, static_cast<usize>(der_bytes)), config.certificate_compression);
+        if (compressed != TlsError::None)
+        {
+            return compressed;
+        }
+    }
+    else
+    {
+        // A client offers the algorithms it decodes in its order; the provider's server never asks for a client's
+        // Certificate compressed, so a client compresses nothing.
+        for (const u16 algorithm : config.certificate_compression)
+        {
+            const bool zstd = algorithm == iana::kCertCompressionZstd;
+            if (!SSL_CTX_add_cert_compression_alg(context.get(), algorithm, nullptr,
+                                                  zstd ? &TlsCallbacks::receive_zstd : &TlsCallbacks::receive_zlib))
+            {
+                return TlsError::ProviderFailure;
+            }
+        }
     }
     SSL_CTX_set_msg_callback(context.get(), &TlsCallbacks::observe);
     if (session_slot() < 0)
@@ -968,6 +1248,7 @@ void TlsSession::clear() noexcept
     m_key_update_records = 0U;
     m_updates_sent       = 0U;
     m_updates_received   = 0U;
+    m_certificate_compression = 0U;
     m_hello_retry        = false;
     m_resumed            = false;
     m_refused            = false;

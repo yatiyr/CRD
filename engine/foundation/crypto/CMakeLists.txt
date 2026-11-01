@@ -5,8 +5,8 @@
 # scripts/gen-register-ids.py), the signature verification interface and the signed, monotonic crypto policy
 # generations (NET-STD), and the provider interface over the pinned AWS-LC (provider.hpp, NET.2): randomness, AEAD,
 # HKDF, signatures, key agreement, key encapsulation and the table PRF, and TLS 1.3 sessions over its TLS stack
-# (tls.hpp). The key store and the QUIC handshake integration land with NET.2's later slices. Contract:
-# docs/design/network-foundation.md#crypto, #agility, #provider and #tls-sessions.
+# (tls.hpp), whose certificates compress through crd-compression. The key store and the QUIC handshake integration land
+# with NET.2's later slices. Contract: docs/design/network-foundation.md#crypto, #agility, #provider and #tls-sessions.
 
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -23,6 +23,7 @@ target_link_libraries(crd-crypto
         crd-core
         crd-containers
     PRIVATE
+        crd-compression # NET.2 decision S10: TLS certificate compression (RFC 8879) through the engine's zstd and zlib
         ssl
         crypto
 )

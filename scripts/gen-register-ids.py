@@ -70,6 +70,7 @@ REGISTRIES = {
     'TLS Supported Groups': ('Group', 'u16', 'integer'),
     'TLS SignatureScheme': ('SignatureScheme', 'u16', 'integer'),
     'TLS ExtensionType Values': ('TlsExtension', 'u16', 'integer'),
+    'TLS Certificate Compression Algorithm IDs': ('CertCompression', 'u16', 'integer'),
     'AEAD Algorithms': ('', 'u16', 'integer'),  # names start AEAD_
     'Object identifiers': ('Oid', 'std::string_view', 'oid'),
 }

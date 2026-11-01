@@ -79,6 +79,8 @@ IANA_REGISTRIES = {
     'TLS Supported Groups': ('tls-parameters', 'TLS Supported Groups'),
     'TLS SignatureScheme': ('tls-parameters', 'TLS SignatureScheme'),
     'TLS ExtensionType Values': ('tls-extensiontype-values', 'TLS ExtensionType Values'),
+    'TLS Certificate Compression Algorithm IDs': ('tls-extensiontype-values',
+                                                  'TLS Certificate Compression Algorithm IDs'),
     'TLS ALPN Protocol IDs': ('tls-extensiontype-values',
                               'TLS Application-Layer Protocol Negotiation (ALPN) Protocol IDs'),
     'AEAD Algorithms': ('aead-parameters', 'AEAD Algorithms'),

@@ -139,6 +139,10 @@ inline constexpr u16 kGroupSecp384r1 = 0x0018U;
 inline constexpr u16 kTlsExtensionEncryptedClientHello = 0xFE0DU;
 // tls.certificate-compression: TLS ExtensionType Values, compress_certificate
 inline constexpr u16 kTlsExtensionCompressCertificate = 0x001BU;
+// tls.certificate-compression: TLS Certificate Compression Algorithm IDs, zlib
+inline constexpr u16 kCertCompressionZlib = 0x0001U;
+// tls.certificate-compression: TLS Certificate Compression Algorithm IDs, zstd
+inline constexpr u16 kCertCompressionZstd = 0x0003U;
 // pki.ml-dsa: Object identifiers, id-ml-dsa-44
 inline constexpr std::string_view kOidIdMlDsa44 = "2.16.840.1.101.3.4.3.17";
 // pki.ml-dsa: Object identifiers, id-ml-dsa-65

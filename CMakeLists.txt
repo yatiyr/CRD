@@ -579,9 +579,10 @@ crd_module(engine/foundation/config engine/config DEPENDS containers core log ma
 # OWN.1: the lossless compression codecs (raw DEFLATE, zlib, the zstd binding), below every module that compresses
 crd_module(engine/foundation/compression engine/compression DEPENDS containers core memory PACKAGES zstd
     TESTS foundation/compression)
-# NET.2: the vetted provider (AWS-LC) behind crd-crypto's interface; Wycheproof's vectors are the tests' oracle
-crd_module(engine/foundation/crypto engine/crypto DEPENDS containers core PACKAGES aws-lc
-    TESTS foundation/crypto support/fuzz TEST_DEPENDS asset-io memory platform TEST_PACKAGES wycheproof)
+# NET.2: the vetted provider (AWS-LC) behind crd-crypto's interface, TLS certificates compressed through the engine's
+# codecs; Wycheproof's vectors are the tests' oracle, and the OpenSSL peer decodes certificates with the pinned zstd
+crd_module(engine/foundation/crypto engine/crypto DEPENDS compression containers core PACKAGES aws-lc
+    TESTS foundation/crypto support/fuzz TEST_DEPENDS asset-io memory platform TEST_PACKAGES wycheproof zstd)
 crd_module(engine/foundation/net engine/net DEPENDS containers core TESTS foundation/net support/fuzz)
 crd_module(engine/foundation/comply engine/comply DEPENDS containers core toml TESTS foundation/comply support/fuzz
     TEST_DEPENDS platform)

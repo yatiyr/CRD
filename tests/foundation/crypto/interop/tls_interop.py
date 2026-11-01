@@ -19,7 +19,12 @@ second Cerid server of a fleet, after a rotation under the previous key, with a 
 server whose key sealed none of its tickets. On the wire the resumed ClientHello offers one identity in a
 pre_shared_key that is its last extension, psk_dhe_ke alone and a fresh hybrid key share; the ServerHello selects
 identity 0 beside its own share; and a Cerid server's ticket starts with its key's name (HKDF-SHA256 of the key, the
-format of tls.cpp).
+format of tls.cpp). Certificate compression (RFC 8879) runs both ways with zstd and with zlib (OpenSSL's zstd and
+zlib decoding Cerid's forms, Cerid decoding OpenSSL's), with the offer read off each ClientHello and each end's report
+of the CompressedCertificate it sent or received; an end that decodes nothing is sent its certificate as it is; and a
+Cerid client refuses OpenSSL servers that install hostile forms (a claimed length one byte off, claims over the bound,
+a zlib claim no DEFLATE can reach) and survives seeded corruptions of real forms, establishing only when a zlib form
+still decodes.
 
 Usage: tls_interop.py --cerid <crd-tls-peer> --openssl <crd-openssl-tls-peer>
 """
@@ -29,10 +34,12 @@ import hashlib
 import hmac
 import json
 import os
+import random
 import struct
 import subprocess
 import sys
 import tempfile
+import zlib
 
 SERVER_SEED = bytes(range(1, 33)).hex()
 CLIENT_SEED = bytes(range(33, 65)).hex()
@@ -56,6 +63,17 @@ PROTOCOL_VERSION = 70
 TICKET_KEYS = [bytes(range(seed, seed + 32)).hex() for seed in (100, 140, 180)]
 PRE_SHARED_KEY = 41
 PSK_KEY_EXCHANGE_MODES = 45
+COMPRESS_CERTIFICATE = 27
+ZLIB = 1
+ZSTD = 3
+DECODE_ERROR = 50
+ILLEGAL_PARAMETER = 47
+MAX_CERTIFICATE = 65536  # kTlsMaxCertificateBytes
+# A certificate carrying this name twice or three times (subject, issuer, a Cerid subjectAltName) shrinks under zstd and
+# zlib alike; past 64 characters (ub-common-name) a Cerid credential carries its name in the subjectAltName alone.
+NAME = 'a1234567890123456789012345678901234567890123456789.cerid.test'
+LONG_NAME = ('a1234567890123456789012345678901234567890123456789012345678.'
+             'b12345678901234567890123456789012345678901234567890.cerid.test')
 
 
 class Failure(Exception):
@@ -295,6 +313,17 @@ def psk(flight):
     return identities, last, list(modes[1:1 + modes[0]]) if modes else []
 
 
+def compression_offer(flight):
+    """The algorithms a ClientHello offers in compress_certificate (RFC 8879 section 3), in order; [] without it."""
+    _, _, _, extensions = hello(flight)
+    for kind_of, data in extensions:
+        if kind_of == COMPRESS_CERTIFICATE:
+            expect(len(data) >= 3 and data[0] + 1 == len(data) and data[0] % 2 == 0,
+                   'a malformed compress_certificate: %s' % data.hex())
+            return [value for (value,) in struct.iter_unpack('>H', data[1:])]
+    return []
+
+
 def check_resumed_wire(flights, group, name=None):
     """A resumed handshake on the wire: one identity (led by `name`, a Cerid ticket key's), pre_shared_key last,
     psk_dhe_ke alone and a fresh share of `group` each way, the ServerHello selecting identity 0."""
@@ -479,6 +508,119 @@ def cases(cerid_peer, openssl_peer):
         openssl_resumes([((0,), False), ((1, 0), True), ((2, 1), True), ((0,), False)]))
     yield 'openssl client with a pinned credential resumes, and the cerid server knows its key', lambda: (
         openssl_resumes([((0,), False), ((0,), True)], mutual=True))
+
+    names = {ZSTD: 'zstd', ZLIB: 'zlib'}
+
+    def cerid_decodes(algorithm, offered=('both', [ZSTD, ZLIB])):
+        """A Cerid client offering `offered` against an OpenSSL server compressing with `algorithm`."""
+        client, server, flights = run(
+            cerid(cerid_peer, 'client', ['x25519mlkem768'], CLIENT_SEED, server_public, ['--compression', offered[0]]),
+            openssl(openssl_peer, 'server', 'X25519MLKEM768', SERVER_SEED,
+                    extra=['--name', NAME, '--compression', names[algorithm]]))
+        check_established(client, server, 'x25519mlkem768', False, PING)
+        expect(compression_offer(flights[0][1]) == offered[1], 'cerid offered %s' % compression_offer(flights[0][1]))
+        used = algorithm if algorithm in offered[1] else 0
+        expect(client.get('certificate_compression') == used and server.get('compressed_sent') == used,
+               'cerid received %s, openssl sent %s, expected %d' % (client.get('certificate_compression'),
+                                                                   server.get('compressed_sent'), used))
+        expect(client.get('peer_key_id') == key_id(server_public), 'cerid pinned another key')
+
+    def openssl_decodes(algorithm, name=NAME):
+        """An OpenSSL client decoding `algorithm` (or nothing) against a Cerid server named `name`, allowed both."""
+        client, server, flights = run(
+            openssl(openssl_peer, 'client', 'X25519MLKEM768', CLIENT_SEED, server_public,
+                    extra=['--name', name, '--compression', names.get(algorithm, 'none')]),
+            cerid(cerid_peer, 'server', ['x25519mlkem768'], SERVER_SEED, extra=['--name', name]))
+        check_established(server, client, 'x25519mlkem768', False, OPENSSL_PING)
+        offered = [algorithm] if algorithm else []
+        expect(compression_offer(flights[0][1]) == offered, 'openssl offered %s' % compression_offer(flights[0][1]))
+        expect(server.get('certificate_compression') == algorithm and client.get('compressed_received') == algorithm,
+               'cerid sent %s, openssl received %s, expected %d' % (server.get('certificate_compression'),
+                                                                   client.get('compressed_received'), algorithm))
+        expect(client.get('peer_ok'), 'openssl did not find the pinned key')
+
+    for algorithm in (ZSTD, ZLIB):
+        yield 'cerid client decodes an openssl server\'s %s certificate' % names[algorithm], (
+            lambda a=algorithm: cerid_decodes(a))
+        yield 'openssl client decodes a cerid server\'s %s certificate' % names[algorithm], (
+            lambda a=algorithm: openssl_decodes(a))
+    yield 'cerid server sends its certificate as it is to an openssl client that decodes none', (
+        lambda: openssl_decodes(0))
+    yield 'cerid client that decodes none is sent the openssl server\'s certificate as it is', (
+        lambda: cerid_decodes(ZSTD, ('none', [])))
+    yield 'cerid client that decodes zstd alone is sent no zlib', lambda: cerid_decodes(ZLIB, ('zstd', [ZSTD]))
+    yield 'openssl client takes a cerid credential named past 64 characters, compressed', (
+        lambda: openssl_decodes(ZSTD, LONG_NAME))
+
+    def installed(algorithm, form, claim):
+        """A Cerid client against an OpenSSL server that installs `form` claiming `claim` bytes."""
+        with tempfile.TemporaryDirectory() as scratch:
+            path = os.path.join(scratch, 'form')
+            with open(path, 'wb') as file:
+                file.write(struct.pack('>I', claim) + form)
+            client, server, _ = run(
+                cerid(cerid_peer, 'client', ['x25519mlkem768'], CLIENT_SEED, server_public),
+                openssl(openssl_peer, 'server', 'X25519MLKEM768', SERVER_SEED,
+                        extra=['--name', NAME, '--compression', names[algorithm], '--compressed-cert', path]))
+        return client, server
+
+    def dumped(algorithm):
+        """(the form an OpenSSL server compresses its certificate to, its uncompressed length)."""
+        with tempfile.TemporaryDirectory() as scratch:
+            path = os.path.join(scratch, 'form')
+            client, server, _ = run(
+                cerid(cerid_peer, 'client', ['x25519mlkem768'], CLIENT_SEED, server_public),
+                openssl(openssl_peer, 'server', 'X25519MLKEM768', SERVER_SEED,
+                        extra=['--name', NAME, '--compression', names[algorithm], '--dump-compressed', path]))
+            check_established(client, server, 'x25519mlkem768', False, PING)
+            with open(path, 'rb') as file:
+                data = file.read()
+        return data[4:], struct.unpack('>I', data[:4])[0]
+
+    def refused(client, server, alert):
+        expect(client.get('state') == 'failed' and client.get('alert_sent') == alert,
+               'cerid answered with %s, expected alert %d' % (client, alert))
+        expect(server.get('state') == 'failed' and server.get('alert_received') == alert, 'openssl saw %s' % server)
+        expect(client.get('peer_key_id') == '0' * 64, 'cerid took a key from a refused certificate')
+
+    def hostile_forms():
+        for algorithm in (ZSTD, ZLIB):
+            form, length = dumped(algorithm)
+            if algorithm == ZLIB:
+                expect(len(zlib.decompress(form)) == length, 'openssl\'s zlib form does not decode to its length')
+            client, server = installed(algorithm, form, length)  # the honest form, installed: the control
+            check_established(client, server, 'x25519mlkem768', False, PING)
+            expect(client.get('certificate_compression') == algorithm, 'cerid received %s' % client)
+            for claim in (length + 1, length - 1):
+                refused(*installed(algorithm, form, claim), DECODE_ERROR)  # decodes to another length
+            for claim in (MAX_CERTIFICATE + 1, 1 << 20):
+                refused(*installed(algorithm, form, claim), ILLEGAL_PARAMETER)  # over the bound: the provider's check
+        # 9 bytes of zlib hold 3 bytes of DEFLATE, at most 3096 decoded bytes: a longer claim is refused undecoded.
+        refused(*installed(ZLIB, zlib.compress(b'a'), 3 * 1032 + 1), DECODE_ERROR)
+    yield 'cerid client refuses openssl servers installing compressed certificates of a false length', hostile_forms
+
+    def corrupted_forms():
+        shuffle = random.Random(8879)
+        for algorithm in (ZSTD, ZLIB):
+            form, length = dumped(algorithm)
+            for _ in range(12):
+                changed = bytearray(form)
+                at = shuffle.randrange(len(changed))
+                changed[at] ^= 1 << shuffle.randrange(8)
+                client, server = installed(algorithm, bytes(changed), length)
+                expect(client.get('state') in ('established', 'failed'), 'cerid ended %s' % client)
+                if client.get('state') == 'failed':
+                    expect(client.get('alert_sent') in (DECODE_ERROR, BAD_CERTIFICATE, ILLEGAL_PARAMETER),
+                           'cerid answered a corrupted form with %s' % client)
+                    continue
+                expect(client.get('peer_key_id') == key_id(server_public), 'cerid established with another key')
+                if algorithm == ZLIB:
+                    try:
+                        decodes = len(zlib.decompress(bytes(changed))) == length
+                    except zlib.error:
+                        decodes = False
+                    expect(decodes, 'cerid accepted a zlib form that does not decode (byte %d)' % at)
+    yield 'cerid client survives seeded corruptions of openssl\'s zstd and zlib forms', corrupted_forms
 
 
 def main():

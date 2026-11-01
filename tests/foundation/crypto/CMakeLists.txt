@@ -10,6 +10,7 @@ add_executable(crd-crypto-tests
 
 target_link_libraries(crd-crypto-tests PRIVATE
     crd-asset-io
+    crd-compression
     crd-core
     crd-containers
     crd-crypto
@@ -18,7 +19,7 @@ target_link_libraries(crd-crypto-tests PRIVATE
     Catch2::Catch2WithMain
     # The provider itself, for the ML-KEM encapsulation vectors only: their known answers fix the randomness m,
     # which only the provider's deterministic encapsulation takes (test_kem_prf.cpp); its TLS stack, to read back the
-    # lifetime of a ticket a client keeps (test_tls.cpp).
+    # lifetime of a ticket a client keeps and to run a server with a hostile certificate compressor (test_tls.cpp).
     crypto
     ssl
 )
@@ -44,13 +45,15 @@ endif()
 add_subdirectory(fuzz)
 
 # The TLS 1.3 interoperability test against the pinned OpenSSL 3.5 (CRD_BUILD_TLS_VS_OPENSSL; Linux, local only).
-# OpenSSL builds by its own Configure in a separate project, static, libraries only; crd-openssl-tls-peer links nothing
-# else, and the two peers meet only through tls_interop.py, which relays their records between two processes.
+# OpenSSL builds by its own Configure in a separate project, static, libraries only, with zstd (the pinned one the
+# engine uses) and zlib (the system's) for certificate compression (RFC 8879); crd-openssl-tls-peer links nothing else,
+# and the two peers meet only through tls_interop.py, which relays their records between two processes.
 if(CRD_BUILD_TLS_VS_OPENSSL)
     include(ExternalProject)
     find_package(Perl REQUIRED)
     find_program(CRD_MAKE_PROGRAM NAMES make gmake REQUIRED)
     find_package(Threads REQUIRED)
+    find_package(ZLIB REQUIRED)
     cmake_host_system_information(RESULT openssl_jobs QUERY NUMBER_OF_LOGICAL_CORES)
     crd_pin(openssl_version packages openssl version)
     set(openssl_prefix "${CMAKE_BINARY_DIR}/_deps/openssl-peer")
@@ -61,14 +64,16 @@ if(CRD_BUILD_TLS_VS_OPENSSL)
         BINARY_DIR "${openssl_prefix}/build"
         INSTALL_DIR "${openssl_prefix}/install"
         CONFIGURE_COMMAND "${PERL_EXECUTABLE}" "<SOURCE_DIR>/Configure" "CC=${CMAKE_C_COMPILER}" --prefix=<INSTALL_DIR>
-                          --libdir=lib no-shared no-tests no-docs no-apps
+                          --libdir=lib no-shared no-tests no-docs no-apps enable-zstd zlib
+                          "--with-zstd-include=${zstd_SOURCE_DIR}/lib" "--with-zlib-include=${ZLIB_INCLUDE_DIRS}"
         BUILD_COMMAND "${CRD_MAKE_PROGRAM}" -j${openssl_jobs} build_libs
         INSTALL_COMMAND "${CRD_MAKE_PROGRAM}" install_dev
         BUILD_BYPRODUCTS ${openssl_libraries})
     add_executable(crd-openssl-tls-peer interop/openssl_tls_peer.c)
     add_dependencies(crd-openssl-tls-peer crd-openssl-peer-build)
     target_include_directories(crd-openssl-tls-peer SYSTEM PRIVATE "${openssl_prefix}/install/include")
-    target_link_libraries(crd-openssl-tls-peer PRIVATE ${openssl_libraries} Threads::Threads ${CMAKE_DL_LIBS})
+    target_link_libraries(crd-openssl-tls-peer PRIVATE ${openssl_libraries} libzstd_static ZLIB::ZLIB Threads::Threads
+                                                       ${CMAKE_DL_LIBS})
     set_target_properties(crd-openssl-tls-peer PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
 
     add_executable(crd-tls-peer interop/cerid_tls_peer.cpp)

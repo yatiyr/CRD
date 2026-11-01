@@ -4,7 +4,9 @@
 // Input. Byte 0 picks the session (bit 0: 0 a server that has received nothing, 1 a client that has sent its
 // ClientHello), byte 1 the size of each delivery (0: all at once), the rest are the bytes the peer "sent". With bit 1
 // set the rest is instead the ticket a client's store hands out (a ticket corrupted at rest), and nothing is received.
-// The server seals and opens tickets under a fixed key, so a seed can lead its identity with that key's name.
+// The server seals and opens tickets under a fixed key, so a seed can lead its identity with that key's name. With bit
+// 2 set the input is instead a compressed Certificate (RFC 8879) for the client's decoder: byte 1 its algorithm, three
+// bytes its claimed length, then the compressed bytes.
 //
 // Oracles, none of them the provider's verdict on one call:
 //   * neither session is ever established: a server needs a Finished under keys derived from its own fresh share, and
@@ -14,13 +16,20 @@
 //     peer (a close_notify, after a user_canceled or not) has sent no alert;
 //   * the session never holds more than kTlsMaxBufferedBytes of received bytes, and its outgoing bytes are bounded;
 //   * send(), read(), close() and update_keys() are refused outside an established session (Closed once closed);
-//   * a client offered any ticket starts its handshake all the same, and keeps no ticket before it is established.
+//   * a client offered any ticket starts its handshake all the same, and keeps no ticket before it is established;
+//   * a compressed Certificate decodes only for zstd or zlib, to a claim within [4, kTlsMaxCertificateBytes] that, for
+//     zlib, its bytes can reach (restated here: DEFLATE's 1032 bytes per byte between zlib's 6 framing bytes), and a
+//     refused claim leaves the output untouched; a zlib decoding carries the Adler-32 of its output (restated) and a
+//     decoding is the same twice.
 #include <crd/fuzz/harness.hpp>
 
+#include <crd/compression/deflate.hpp>
+#include <crd/compression/zstd.hpp>
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/tls.hpp>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 namespace
@@ -59,6 +68,10 @@ constexpr TicketKey kTicketKey;
 // The outgoing bytes a handshake can leave in a session: a server's first flight with an Ed25519 credential, or a
 // client's ClientHello, and an alert; far below the bound.
 constexpr usize kMaxFlight = 8192U;
+
+constexpr u8    kUntouched      = 0xA5U; // what a refused decoding leaves in the output
+constexpr usize kClaimLimit     = kTlsMaxCertificateBytes + 1U; // claims above the bound are cut to this
+constexpr usize kCompressedHead = 5U;    // mode, algorithm and the 24-bit claim
 
 // One server and one client context, built once: an Ed25519 credential from a fixed seed, every group, signature and
 // AEAD, the client pinning the server's key.
@@ -174,12 +187,74 @@ void feed(TlsSession& session, ConstSpan<u8> bytes, usize chunk) noexcept
     CRD_FUZZ_REQUIRE(session.key_updates_sent() == 0U && session.key_updates_received() == 0U);
     CRD_FUZZ_REQUIRE(session.group() == AlgorithmId{} && session.peer_key() == KeyId{});
 }
+// Adler-32 (RFC 1950 section 8.2), restated.
+crd::u32 adler32_of(ConstSpan<u8> bytes) noexcept
+{
+    crd::u32 a = 1U;
+    crd::u32 b = 0U;
+    for (const u8 byte : bytes)
+    {
+        a = (a + byte) % 65521U;
+        b = (b + a) % 65521U;
+    }
+    return (b << 16U) | a;
+}
+
+// Whether `compressed` can decode to `claim` bytes of `algorithm`, restated from RFC 1951 (zstd: the bound alone).
+bool claim_reachable(u8 algorithm, usize compressed, usize claim) noexcept
+{
+    if (claim < 4U || claim > kTlsMaxCertificateBytes)
+    {
+        return false;
+    }
+    return algorithm == iana::kCertCompressionZstd ||
+           (algorithm == iana::kCertCompressionZlib && compressed > 6U && claim <= (compressed - 6U) * 1032U);
+}
+
+void decode_certificate(const u8* data, usize size) noexcept
+{
+    static u8           out[kClaimLimit];
+    static u8           again[kClaimLimit];
+    const u8            algorithm = data[1];
+    const usize         claimed   = (usize{data[2]} << 16U) | (usize{data[3]} << 8U) | data[4];
+    const usize         claim     = std::min(claimed, kClaimLimit);
+    const ConstSpan<u8> compressed(data + kCompressedHead, size - kCompressedHead);
+    std::memset(out, kUntouched, claim);
+    const bool decoded = detail::tls_decompress_certificate(algorithm, compressed, Span<u8>(out, claim));
+    if (!claim_reachable(algorithm, compressed.size(), claim))
+    {
+        CRD_FUZZ_REQUIRE(!decoded);
+        CRD_FUZZ_REQUIRE(std::all_of(out, out + claim, [](u8 byte) { return byte == kUntouched; }));
+        return;
+    }
+    if (!decoded)
+    {
+        return;
+    }
+    if (algorithm == iana::kCertCompressionZlib)
+    {
+        const u8* trailer = compressed.data() + compressed.size() - 4U;
+        CRD_FUZZ_REQUIRE(adler32_of(ConstSpan<u8>(out, claim)) ==
+                         ((crd::u32{trailer[0]} << 24U) | (crd::u32{trailer[1]} << 16U) |
+                          (crd::u32{trailer[2]} << 8U) | trailer[3]));
+    }
+    CRD_FUZZ_REQUIRE(detail::tls_decompress_certificate(algorithm, compressed, Span<u8>(again, claim)));
+    CRD_FUZZ_REQUIRE(std::memcmp(out, again, claim) == 0);
+}
 } // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size)
 {
     if (size < 2U || size > crd::fuzz::kMaxInputBytes)
     {
+        return 0;
+    }
+    if ((data[0] & 4U) != 0U)
+    {
+        if (size >= kCompressedHead)
+        {
+            decode_certificate(data, size);
+        }
         return 0;
     }
     Contexts& shared = contexts();
@@ -425,4 +500,47 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     client_hello(second, 0U, 0U);
     late.put(second.bytes + 2U, second.size - 2U);
     sink.add("server-user-canceled-then-client-hello", late.bytes, late.size);
+
+    // Compressed Certificates: a Certificate-shaped message (an empty context, one 600-byte entry, no extensions) as
+    // zstd and as zlib, each claiming its length, one byte more, and far more than the bound; and a brotli claim.
+    u8 certificate[609] = {0U, 0U, 0x02U, 0x5DU, 0U, 0x02U, 0x58U};
+    for (usize i = 7U; i + 2U < sizeof(certificate); ++i)
+    {
+        certificate[i] = static_cast<u8>(i % 61U == 0U ? i : 0x30U + i % 7U);
+    }
+    const ConstSpan<u8>        plain(certificate, sizeof(certificate));
+    crd::containers::Array<u8> zstd_form;
+    if (!crd::compression::zstd_compress(plain, crd::compression::kZstdDefaultLevel, zstd_form))
+    {
+        return;
+    }
+    const crd::containers::Array<u8> zlib_form =
+        crd::compression::zlib_deflate(plain, crd::memory::default_allocator());
+    struct Form
+    {
+        const char*                       name;
+        u8                                algorithm;
+        const crd::containers::Array<u8>* bytes;
+    };
+    const Form forms[] = {{"zstd", static_cast<u8>(iana::kCertCompressionZstd), &zstd_form},
+                          {"zlib", static_cast<u8>(iana::kCertCompressionZlib), &zlib_form}};
+    for (const Form& form : forms)
+    {
+        const usize claims[] = {sizeof(certificate), sizeof(certificate) + 1U, 0xFFFFFFU};
+        const char* labels[] = {"exact", "one-more", "bomb"};
+        for (usize i = 0U; i < 3U; ++i)
+        {
+            Writer seed;
+            seed.put(4U);
+            seed.put(form.algorithm);
+            seed.put(static_cast<u8>(claims[i] >> 16U));
+            seed.put16(claims[i] & 0xFFFFU);
+            seed.put(form.bytes->data(), form.bytes->size());
+            char name[64];
+            std::snprintf(name, sizeof(name), "compressed-certificate-%s-%s", form.name, labels[i]);
+            sink.add(name, seed.bytes, seed.size);
+        }
+    }
+    const u8 brotli[] = {4U, 2U, 0U, 0U, 16U, 0x0BU, 0x07U, 0x80U, 0x61U, 0x62U, 0x63U, 0x03U};
+    sink.add("compressed-certificate-brotli", brotli, sizeof(brotli));
 }

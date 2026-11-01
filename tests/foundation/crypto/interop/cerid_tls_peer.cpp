@@ -4,6 +4,7 @@
 // Usage: crd-tls-peer --role client|server --groups g[,g...] --seed HEX [--pin HEX] [--name NAME]
 //                     [--key-update-records N] [--pings N] [--update requested|not-requested]
 //                     [--tickets FILE] [--ticket-key HEX] [--previous-ticket-key HEX]
+//                     [--compression zstd|zlib|both|none]
 //        crd-tls-peer --public HEX     (prints the Ed25519 public key of a seed, for the pins)
 //   groups  register names: x25519mlkem768, secp256r1mlkem768, secp384r1mlkem1024, x25519, secp256r1, secp384r1
 //   seed    the 32-byte Ed25519 private key of this end's credential
@@ -15,12 +16,14 @@
 //   tickets a client's ticket store: the ticket in FILE (its binding, then its bytes) is offered once when it is of
 //           this client's binding, and the newest ticket received replaces it
 //   ticket-key, previous-ticket-key  a server's 32-byte ticket keys (TlsConfig::ticket_key, previous_ticket_key)
+//   compression  TlsConfig::certificate_compression: zstd or zlib alone, both (the default) or none
 //
 // Frames on both streams are a 4-byte big-endian length and that many bytes of TLS records. A client writes its first
 // flight before reading; after that each end answers every frame it reads with exactly one frame (possibly empty).
 // Once established, a client sends "ping from cerid" (--pings times) and a server echoes every byte it reads. At the
 // end of input the end prints one JSON line on standard error with what it negotiated, whether it resumed, the key
-// updates each way and what it read, and exits 0 (2 on a usage error).
+// updates each way, the algorithm of its compressed Certificate sent or received and what it read, and exits 0 (2 on
+// a usage error).
 
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/tls.hpp>
@@ -162,7 +165,7 @@ int usage()
 {
     std::fputs("usage: crd-tls-peer --role client|server --groups g[,g...] --seed HEX [--pin HEX] [--name NAME] "
                "[--key-update-records N] [--pings N] [--update requested|not-requested] [--tickets FILE] "
-               "[--ticket-key HEX] [--previous-ticket-key HEX]\n",
+               "[--ticket-key HEX] [--previous-ticket-key HEX] [--compression zstd|zlib|both|none]\n",
                stderr);
     return 2;
 }
@@ -209,6 +212,9 @@ int main(int argc, char** argv)
     const char* previous_key       = nullptr;
     u64         key_update_records = 0U;
     u64         pings              = 1U;
+    constexpr u16  zstd_only[]     = {iana::kCertCompressionZstd};
+    constexpr u16  zlib_only[]     = {iana::kCertCompressionZlib};
+    ConstSpan<u16> compression     = kTlsCertificateCompression;
     for (int i = 1; i + 1 < argc; i += 2)
     {
         const char* option = argv[i];
@@ -252,6 +258,22 @@ int main(int argc, char** argv)
         else if (std::strcmp(option, "--previous-ticket-key") == 0)
         {
             previous_key = value;
+        }
+        else if (std::strcmp(option, "--compression") == 0 && std::strcmp(value, "zstd") == 0)
+        {
+            compression = zstd_only;
+        }
+        else if (std::strcmp(option, "--compression") == 0 && std::strcmp(value, "zlib") == 0)
+        {
+            compression = zlib_only;
+        }
+        else if (std::strcmp(option, "--compression") == 0 && std::strcmp(value, "none") == 0)
+        {
+            compression = {};
+        }
+        else if (std::strcmp(option, "--compression") == 0 && std::strcmp(value, "both") == 0)
+        {
+            compression = kTlsCertificateCompression;
         }
         else if (std::strcmp(option, "--update") == 0 &&
                  (std::strcmp(value, "requested") == 0 || std::strcmp(value, "not-requested") == 0))
@@ -319,6 +341,7 @@ int main(int argc, char** argv)
     config.credential  = &credential;
     config.server_name        = name;
     config.key_update_records = key_update_records;
+    config.certificate_compression = compression;
     if (ticket_key != nullptr)
     {
         config.ticket_key = ConstSpan<u8>(key_bytes, sizeof(key_bytes));
@@ -408,7 +431,8 @@ int main(int argc, char** argv)
     print_alert("alert_sent", session.alert_sent());
     std::fputs(", ", stderr);
     print_alert("alert_received", session.alert_received());
-    std::fputs(R"(, "received": ")", stderr);
+    std::fprintf(stderr, R"(, "certificate_compression": %u, "received": ")",
+                 static_cast<unsigned>(session.certificate_compression()));
     for (usize i = 0U; i < received_size; ++i)
     {
         const char c = received[i];

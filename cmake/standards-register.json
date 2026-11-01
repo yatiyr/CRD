@@ -1629,7 +1629,7 @@
       "id": "tls.certificate-compression",
       "title": "TLS certificate compression",
       "kind": "extension",
-      "state": "planned",
+      "state": "implemented",
       "owner": "crypto",
       "rows": [
         "NET.2"
@@ -1646,16 +1646,31 @@
           "name": "compress_certificate",
           "value": "27",
           "recommended": "Y"
+        },
+        {
+          "registry": "TLS Certificate Compression Algorithm IDs",
+          "name": "zlib",
+          "value": "1"
+        },
+        {
+          "registry": "TLS Certificate Compression Algorithm IDs",
+          "name": "zstd",
+          "value": "3"
         }
       ],
       "source": {
-        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n92",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-net-2-certificate-compression.md#rfc-8879",
+        "read": "2026-11-01",
+        "verified": true
       },
-      "review": "2027-10-27",
-      "evidence": [],
-      "deprecation": null
+      "review": "2027-11-01",
+      "evidence": [
+        "tests/foundation/crypto/test_tls.cpp",
+        "tests/foundation/crypto/fuzz/fuzz_tls.cpp",
+        "tests/foundation/crypto/interop/tls_interop.py"
+      ],
+      "deprecation": null,
+      "note": "NET.2 decision S10 (docs/design/network-foundation.md#certificate-compression): a client decodes zstd and zlib through crd-compression into exactly the claimed length, within the 64 KiB a plain Certificate has; a server compresses its Certificate once per context and sends the smallest form only when it is smaller. Brotli (2) is not offered: the engine has no brotli codec."
     },
     {
       "id": "tls.keylog",

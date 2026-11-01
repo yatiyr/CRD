@@ -4,11 +4,15 @@
 // the provider interface's own primitives, HelloRetryRequest, server preference, pinned keys both ways, server names,
 // alerts, bounds, close_notify, key updates against the usage limits and the update bound, a peer's user_canceled and
 // close_notify during the handshake, tickets and resumption (single use, bindings, a fleet's shared key and its
-// rotation, a client no longer pinned, tickets changed at rest or expired, a HelloRetryRequest), adversarial bytes,
-// every configuration refusal and one context serving several threads.
+// rotation, a client no longer pinned, tickets changed at rest or expired, a HelloRetryRequest), certificate
+// compression (the forms a server sends and their sizes, the algorithm both ends allow, the bounded decoder, and a
+// hostile server of the provider's own stack whose compressed Certificates a client refuses), adversarial bytes, every
+// configuration refusal and one context serving several threads.
 //
 // The independent peer (OpenSSL 3.5's hybrid key exchange) is tests/foundation/crypto/interop/tls_interop.py's.
 
+#include <crd/compression/deflate.hpp>
+#include <crd/compression/zstd.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/tls.hpp>
@@ -16,13 +20,18 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <openssl/aead.h> // EVP_has_aes_hardware: the test asks the provider what the preference must follow
-#include <openssl/ssl.h>  // SSL_SESSION_from_bytes: the provider reads back the lifetime a client keeps
+#include <openssl/bio.h>  // a server of the provider's own stack with a hostile certificate compressor
+#include <openssl/bytestring.h>
+#include <openssl/evp.h>
+#include <openssl/ssl.h> // SSL_SESSION_from_bytes: the provider reads back the lifetime a client keeps
+#include <openssl/x509.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstring>
 #include <thread>
+#include <utility>
 
 namespace
 {
@@ -59,6 +68,8 @@ constexpr u8 kRecordHandshake       = 22U;
 constexpr u16 kKeyShareExtension    = 51U;
 constexpr u16 kSupportedGroupsExtension   = 10U;
 constexpr u16 kSupportedVersionsExtension = 43U;
+constexpr u16 kZstd = iana::kCertCompressionZstd;
+constexpr u16 kZlib = iana::kCertCompressionZlib;
 
 // A signing key from a fixed seed (an ECDSA scalar of 1..n-1: the bytes 1, 2, 3, ...).
 void make_key(SigningKey& key, AlgorithmId algorithm, u8 salt)
@@ -174,13 +185,16 @@ struct Options
     ConstSpan<u8>          ticket_key;                   // the server's TlsConfig ticket settings
     ConstSpan<u8>          previous_ticket_key;
     u32                    ticket_lifetime = 0U;
+    ConstSpan<u16>         client_compression = kTlsCertificateCompression; // TlsConfig::certificate_compression
+    ConstSpan<u16>         server_compression = kTlsCertificateCompression;
+    StringView             credential_name    = kServerName; // the name the server's certificate carries
 };
 
 // Configures both ends; the client's first flight is pending when this returns.
 void setup(Endpoint& client, Endpoint& server, const Options& options)
 {
     make_key(server.key, options.server_key, 0U);
-    REQUIRE(server.credential.init(server.key, kServerName) == TlsError::None);
+    REQUIRE(server.credential.init(server.key, options.credential_name) == TlsError::None);
     KeyId client_pin = server.credential.key_id();
     if (!options.client_pins_server)
     {
@@ -195,6 +209,7 @@ void setup(Endpoint& client, Endpoint& server, const Options& options)
     client_config.server_name = options.client_names;
     client_config.key_update_records = options.client_key_records;
     client_config.max_key_updates    = options.client_max_updates;
+    client_config.certificate_compression = options.client_compression;
     KeyId server_pin;
     if (options.client_key != AlgorithmId{})
     {
@@ -216,6 +231,7 @@ void setup(Endpoint& client, Endpoint& server, const Options& options)
     server_config.ticket_key          = options.ticket_key;
     server_config.previous_ticket_key = options.previous_ticket_key;
     server_config.ticket_lifetime     = options.ticket_lifetime;
+    server_config.certificate_compression = options.server_compression;
     if (options.server_pins_client)
     {
         server_config.signatures = kAllSignatures;
@@ -1989,6 +2005,468 @@ TEST_CASE("TLS: adversarial bytes fail the session with an alert and nothing els
     }
 }
 
+namespace
+{
+constexpr u8 kDecodeError = 50U;
+
+// The algorithms a ClientHello offers in compress_certificate (RFC 8879 section 3), in order; 0 without the extension.
+usize offered_compression(const Bytes& flight, u16 (&out)[4])
+{
+    usize count = 0U;
+    for_each_extension(first_hello(flight), [&](u16 type, ConstSpan<u8> body)
+    {
+        if (type != iana::kTlsExtensionCompressCertificate)
+        {
+            return;
+        }
+        REQUIRE(body.size() >= 3U);
+        REQUIRE(usize{body[0]} + 1U == body.size());
+        for (usize at = 1U; at + 2U <= body.size() && count < 4U; at += 2U)
+        {
+            out[count++] = be16(body.data() + at);
+        }
+    });
+    return count;
+}
+
+// A full handshake between fresh sessions of the endpoints' contexts: the algorithms the ClientHello offers and the
+// bytes of the server's first flight (ServerHello to Finished).
+struct Measured
+{
+    u16   offered[4] = {};
+    usize offers     = 0U;
+    usize flight     = 0U;
+};
+
+Measured handshake(Endpoint& client, Endpoint& server)
+{
+    Measured    measured;
+    const Bytes hello = drain(client.session);
+    measured.offers   = offered_compression(hello, measured.offered);
+    REQUIRE(server.session.receive(ConstSpan<u8>(hello.data(), hello.size())) == TlsError::None);
+    const Bytes flight = drain(server.session);
+    measured.flight    = flight.size();
+    REQUIRE(client.session.receive(ConstSpan<u8>(flight.data(), flight.size())) == TlsError::None);
+    pump(client, server);
+    REQUIRE(client.session.state() == TlsState::Established);
+    REQUIRE(server.session.state() == TlsState::Established);
+    exchange(client, server, 1000U);
+    return measured;
+}
+
+// A 122-byte DNS name: a certificate carrying it three times (subject, issuer, subjectAltName) shrinks under zlib too.
+constexpr const char* kLongName = "a1234567890123456789012345678901234567890123456789012345678."
+                                  "b12345678901234567890123456789012345678901234567890.cerid.test";
+} // namespace
+
+TEST_CASE("TLS: a server sends its Certificate compressed when that is smaller, in the form its client decodes",
+          "[crypto][tls][net-2]")
+{
+    // The server's first flight with the client offering zstd and zlib and with it offering nothing, from the same
+    // credential. Ed25519 signs deterministically, so its bytes are exact; an ML-DSA signature is hedged (random bytes,
+    // compressed differently each time) and an ECDSA signature varies in length too, so theirs save within a range.
+    struct Expected
+    {
+        AlgorithmId key;
+        u16         algorithm; // what the server compresses with: the smaller form
+        usize       plain;     // the flight with the Certificate uncompressed, 0 where it varies
+        usize       least;     // the bytes compression saves, at least and at most
+        usize       most;
+    };
+    constexpr Expected expected[] = {
+        {AlgorithmId::Ed25519, kZlib, 1651U, 39U, 39U},
+        {AlgorithmId::MlDsa44, kZstd, 7668U, 30U, 80U},
+        {AlgorithmId::MlDsa65, kZstd, 10086U, 30U, 80U},
+        {AlgorithmId::MlDsa87, kZstd, 13362U, 30U, 80U},
+        {AlgorithmId::EcdsaSecp256r1Sha256, kZlib, 0U, 10U, 80U},
+        {AlgorithmId::EcdsaSecp384r1Sha384, kZlib, 0U, 10U, 80U},
+    };
+    for (const Expected& row : expected)
+    {
+        CAPTURE(algorithm_register_id(row.key));
+        Endpoint client;
+        Endpoint server;
+        Options  options;
+        options.server_key = row.key;
+        setup(client, server, options);
+        const Measured compressed = handshake(client, server);
+        REQUIRE(compressed.offers == 2U);
+        CHECK(compressed.offered[0] == kZstd);
+        CHECK(compressed.offered[1] == kZlib);
+        CHECK(server.session.certificate_compression() == row.algorithm);
+        CHECK(client.session.certificate_compression() == row.algorithm);
+
+        // The same server context and a client that decodes nothing: no extension, the Certificate as it is.
+        Endpoint plain_client;
+        TlsConfig config;
+        config.role                    = TlsRole::Client;
+        config.groups                  = kAllGroups;
+        config.signatures              = kAllSignatures;
+        config.aeads                   = kAllAeads;
+        const KeyId pin                = server.credential.key_id();
+        config.pinned                  = ConstSpan<KeyId>(&pin, 1U);
+        config.server_name             = kServerName;
+        config.certificate_compression = {};
+        REQUIRE(plain_client.context.init(config) == TlsError::None);
+        REQUIRE(plain_client.session.init(plain_client.context) == TlsError::None);
+        REQUIRE(server.session.init(server.context) == TlsError::None);
+        const Measured plain = handshake(plain_client, server);
+        CHECK(plain.offers == 0U);
+        CHECK(server.session.certificate_compression() == 0U);
+        CHECK(plain_client.session.certificate_compression() == 0U);
+
+        CAPTURE(plain.flight, compressed.flight);
+        CHECK((row.plain == 0U || plain.flight == row.plain));
+        REQUIRE(compressed.flight < plain.flight);
+        CHECK(plain.flight - compressed.flight >= row.least);
+        CHECK(plain.flight - compressed.flight <= row.most);
+    }
+}
+
+TEST_CASE("TLS: the algorithm is the smallest form both ends allow, and none is a choice", "[crypto][tls][net-2]")
+{
+    constexpr u16 zstd_only[] = {kZstd};
+    constexpr u16 zlib_only[] = {kZlib};
+    struct Case
+    {
+        ConstSpan<u16> client;
+        ConstSpan<u16> server;
+        u16            expected;
+    };
+    const Case cases[] = {
+        {kTlsCertificateCompression, kTlsCertificateCompression, kZlib},
+        {zlib_only, kTlsCertificateCompression, kZlib},
+        {zstd_only, kTlsCertificateCompression, kZstd},
+        {kTlsCertificateCompression, zlib_only, kZlib},
+        {kTlsCertificateCompression, {}, 0U},
+        {{}, kTlsCertificateCompression, 0U},
+        {zlib_only, zstd_only, 0U},
+    };
+    for (const Case& test : cases)
+    {
+        CAPTURE(test.client.size(), test.server.size(), test.expected);
+        Endpoint client;
+        Endpoint server;
+        Options  options;
+        options.credential_name    = kLongName;
+        options.client_compression = test.client;
+        options.server_compression = test.server;
+        setup(client, server, options);
+        const Measured measured = handshake(client, server);
+        CHECK(measured.offers == test.client.size());
+        CHECK(server.session.certificate_compression() == test.expected);
+        CHECK(client.session.certificate_compression() == test.expected);
+    }
+
+    {
+        // The engine's zlib (fixed Huffman) makes an ML-DSA-65 certificate larger, so a client that decodes only zlib
+        // is sent the plain Certificate.
+        Endpoint client;
+        Endpoint server;
+        Options  options;
+        options.server_key         = AlgorithmId::MlDsa65;
+        options.client_compression = zlib_only;
+        setup(client, server, options);
+        (void)handshake(client, server);
+        CHECK(server.session.certificate_compression() == 0U);
+        CHECK(client.session.certificate_compression() == 0U);
+    }
+
+    // A resumption sends no Certificate, so nothing is compressed.
+    Store    store;
+    Endpoint client;
+    Endpoint server;
+    Options  options;
+    options.client_tickets = &store;
+    setup(client, server, options);
+    (void)handshake(client, server);
+    CHECK(client.session.certificate_compression() == kZlib);
+    REQUIRE(store.size() == 1U);
+    REQUIRE(client.session.init(client.context, &store) == TlsError::None);
+    REQUIRE(server.session.init(server.context) == TlsError::None);
+    (void)handshake(client, server);
+    CHECK(client.session.resumed());
+    CHECK(client.session.certificate_compression() == 0U);
+    CHECK(server.session.certificate_compression() == 0U);
+}
+
+TEST_CASE("TLS: a compressed Certificate decodes only to exactly the length it claims, within the bounds",
+          "[crypto][tls][net-2]")
+{
+    Bytes message;
+    message.resize(600U);
+    for (usize i = 0U; i < message.size(); ++i)
+    {
+        message[i] = static_cast<u8>(i % 53U == 0U ? i * 7U : 0x40U + i % 5U);
+    }
+    const ConstSpan<u8> plain(message.data(), message.size());
+    Bytes               zstd_form;
+    REQUIRE(crd::compression::zstd_compress(plain, crd::compression::kZstdDefaultLevel, zstd_form));
+    const Bytes zlib_form = crd::compression::zlib_deflate(plain, crd::memory::default_allocator());
+    REQUIRE(!zlib_form.empty());
+
+    Bytes out;
+    out.resize(kTlsMaxCertificateBytes + 1U);
+    const auto decode = [&](u16 algorithm, const Bytes& form, usize claim) {
+        std::memset(out.data(), 0xA5, out.size());
+        return detail::tls_decompress_certificate(algorithm, ConstSpan<u8>(form.data(), form.size()),
+                                                  Span<u8>(out.data(), claim));
+    };
+    const auto untouched = [&] { return std::all_of(out.begin(), out.end(), [](u8 b) { return b == u8{0xA5U}; }); };
+
+    const std::pair<u16, const Bytes*> forms[] = {{kZstd, &zstd_form}, {kZlib, &zlib_form}};
+    for (const auto& [algorithm, form] : forms)
+    {
+        CAPTURE(algorithm);
+        CHECK(decode(algorithm, *form, message.size()));
+        CHECK(std::memcmp(out.data(), message.data(), message.size()) == 0);
+        CHECK_FALSE(decode(algorithm, *form, message.size() - 1U)); // decodes to more than the claim
+        CHECK_FALSE(decode(algorithm, *form, message.size() + 1U)); // to less
+        Bytes cut = *form;
+        cut.resize(cut.size() - 1U);
+        CHECK_FALSE(decode(algorithm, cut, message.size()));
+        // A claim outside [4, kTlsMaxCertificateBytes] is refused before a byte is written.
+        CHECK_FALSE(decode(algorithm, *form, kTlsMaxCertificateBytes + 1U));
+        CHECK(untouched());
+        CHECK_FALSE(decode(algorithm, *form, 3U));
+        CHECK(untouched());
+    }
+    // zlib's Adler-32 catches a changed byte (zstd frames carry no checksum here; the Certificate is then parsed and
+    // its key pinned like any other).
+    Bytes changed = zlib_form;
+    changed[changed.size() / 2U] ^= 0x10U;
+    CHECK_FALSE(decode(kZlib, changed, message.size()));
+
+    // A zlib claim its bytes cannot reach is refused untouched: 9 bytes of zlib hold at most 3 * 1032 bytes of DEFLATE.
+    // Two bytes are no zstd frame.
+    const u8    tiny_zlib[] = {0x78U, 0x9CU, 0x4BU, 0x04U, 0x00U, 0x00U, 0x62U, 0x00U, 0x62U};
+    const Bytes tiny(tiny_zlib, tiny_zlib + sizeof(tiny_zlib));
+    CHECK_FALSE(decode(kZlib, tiny, 3U * 1032U + 1U));
+    CHECK(untouched());
+    const Bytes two(zstd_form.begin(), zstd_form.begin() + 2);
+    CHECK_FALSE(decode(kZstd, two, 4U));
+    CHECK(untouched());
+    // Only zstd and zlib: brotli, the reserved 0 and an unassigned value decode nothing.
+    for (const u16 algorithm : {u16{2U}, u16{0U}, u16{4U}})
+    {
+        CHECK_FALSE(decode(algorithm, zstd_form, message.size()));
+        CHECK(untouched());
+    }
+}
+
+namespace
+{
+// A server of the provider's own TLS stack, outside Cerid's sessions, whose compressor the test chooses: it sends a
+// Cerid client a CompressedCertificate that a Cerid server never would. Its certificate carries the Ed25519 key of
+// make_key(.., 0), which the client pins.
+enum class Hostile : u8
+{
+    Honest,      // zstd of the message
+    Stored,      // zlib with stored blocks: valid, and larger than the message
+    Longer,      // zstd of the message and one byte more
+    Shorter,     // zstd of the message without its last byte
+    Garbage,     // bytes no zstd frame starts with
+    BadChecksum, // zlib whose Adler-32 is changed
+};
+
+Hostile g_hostile = Hostile::Honest;
+
+// The provider calls this from C: it reports a failure by its result, never by a test macro.
+int hostile_compress(SSL*, CBB* out, const uint8_t* in, size_t in_len)
+{
+    Bytes message(in, in + in_len);
+    if (g_hostile == Hostile::Longer)
+    {
+        message.push_back(0U);
+    }
+    else if (g_hostile == Hostile::Shorter)
+    {
+        message.resize(in_len - 1U);
+    }
+    Bytes form;
+    switch (g_hostile)
+    {
+    case Hostile::Honest:
+    case Hostile::Longer:
+    case Hostile::Shorter:
+        if (!crd::compression::zstd_compress(ConstSpan<u8>(message.data(), message.size()), 3, form))
+        {
+            return 0;
+        }
+        break;
+    case Hostile::Garbage:
+        form.resize(32U);
+        std::memset(form.data(), 0xFF, form.size());
+        break;
+    case Hostile::Stored:
+    case Hostile::BadChecksum:
+    {
+        // RFC 1950 and RFC 1951 section 3.2.4: the header, one final stored block, the Adler-32.
+        if (in_len > 0xFFFFU)
+        {
+            return 0;
+        }
+        form = {0x78U, 0x01U, 0x01U, static_cast<u8>(in_len), static_cast<u8>(in_len >> 8U),
+                static_cast<u8>(~in_len), static_cast<u8>(~in_len >> 8U)};
+        for (const u8 byte : message)
+        {
+            form.push_back(byte);
+        }
+        u32 adler = crd::compression::adler32(ConstSpan<u8>(message.data(), message.size()));
+        if (g_hostile == Hostile::BadChecksum)
+        {
+            adler ^= 1U;
+        }
+        for (const u32 shift : {24U, 16U, 8U, 0U})
+        {
+            form.push_back(static_cast<u8>(adler >> shift));
+        }
+        break;
+    }
+    }
+    return CBB_add_bytes(out, form.data(), form.size());
+}
+
+struct RawServer
+{
+    bssl::UniquePtr<SSL_CTX> context;
+    bssl::UniquePtr<SSL>     ssl;
+    BIO*                     incoming = nullptr;
+    BIO*                     outgoing = nullptr;
+
+    explicit RawServer(u16 algorithm)
+    {
+        u8 seed[32];
+        for (usize i = 0U; i < sizeof(seed); ++i)
+        {
+            seed[i] = static_cast<u8>(i + 1U);
+        }
+        const bssl::UniquePtr<EVP_PKEY> key(EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, nullptr, seed,
+                                                                         sizeof(seed)));
+        const bssl::UniquePtr<X509> certificate(X509_new());
+        REQUIRE(key);
+        REQUIRE(certificate);
+        X509_NAME* name = X509_get_subject_name(certificate.get());
+        REQUIRE(X509_set_version(certificate.get(), X509_VERSION_3));
+        REQUIRE(ASN1_INTEGER_set(X509_get_serialNumber(certificate.get()), 1));
+        REQUIRE(X509_NAME_add_entry_by_NID(name, NID_commonName, MBSTRING_ASC,
+                                           reinterpret_cast<const unsigned char*>(kServerName), -1, -1, 0));
+        REQUIRE(X509_set_issuer_name(certificate.get(), name));
+        REQUIRE(X509_gmtime_adj(X509_getm_notBefore(certificate.get()), -3600) != nullptr);
+        REQUIRE(X509_gmtime_adj(X509_getm_notAfter(certificate.get()), 3600) != nullptr);
+        REQUIRE(X509_set_pubkey(certificate.get(), key.get()));
+        REQUIRE(X509_sign(certificate.get(), key.get(), nullptr) > 0);
+        context.reset(SSL_CTX_new(TLS_method()));
+        REQUIRE(context);
+        REQUIRE(SSL_CTX_set_min_proto_version(context.get(), TLS1_3_VERSION));
+        REQUIRE(SSL_CTX_use_certificate(context.get(), certificate.get()));
+        REQUIRE(SSL_CTX_use_PrivateKey(context.get(), key.get()));
+        REQUIRE(SSL_CTX_add_cert_compression_alg(context.get(), algorithm, &hostile_compress, nullptr));
+        ssl.reset(SSL_new(context.get()));
+        REQUIRE(ssl);
+        incoming = BIO_new(BIO_s_mem());
+        outgoing = BIO_new(BIO_s_mem());
+        REQUIRE(incoming != nullptr);
+        REQUIRE(outgoing != nullptr);
+        BIO_set_mem_eof_return(incoming, -1);
+        SSL_set_bio(ssl.get(), incoming, outgoing);
+        SSL_set_accept_state(ssl.get());
+    }
+
+    // Takes the client's bytes, runs the handshake and returns what the server sends.
+    Bytes answer(const Bytes& received)
+    {
+        if (!received.empty())
+        {
+            REQUIRE(BIO_write(incoming, received.data(), static_cast<int>(received.size())) ==
+                    static_cast<int>(received.size()));
+        }
+        (void)SSL_do_handshake(ssl.get());
+        Bytes      sent;
+        const auto size = static_cast<usize>(BIO_pending(outgoing));
+        sent.resize(size);
+        if (size != 0U)
+        {
+            REQUIRE(BIO_read(outgoing, sent.data(), static_cast<int>(size)) == static_cast<int>(size));
+        }
+        return sent;
+    }
+};
+
+// A Cerid client decoding `offered` against a hostile server compressing with `algorithm`; the client's state when the
+// exchange ends.
+TlsState against_hostile(Hostile hostile, u16 algorithm, Endpoint& client,
+                         ConstSpan<u16> offered = kTlsCertificateCompression)
+{
+    g_hostile = hostile;
+    SigningKey key;
+    make_key(key, AlgorithmId::Ed25519, 0U);
+    u8 public_key[32];
+    REQUIRE(key.public_key(Span<u8>(public_key)) == CryptoError::None);
+    const KeyId pin = key_id_of(ConstSpan<u8>(public_key));
+    TlsConfig   config;
+    config.role        = TlsRole::Client;
+    config.groups      = kAllGroups;
+    config.signatures  = kAllSignatures;
+    config.aeads       = kAllAeads;
+    config.pinned      = ConstSpan<KeyId>(&pin, 1U);
+    config.server_name = kServerName;
+    config.certificate_compression = offered;
+    REQUIRE(client.context.init(config) == TlsError::None);
+    REQUIRE(client.session.init(client.context) == TlsError::None);
+    RawServer server(algorithm);
+    for (int round = 0; round < 8; ++round)
+    {
+        const Bytes sent   = drain(client.session);
+        const Bytes answer = server.answer(sent);
+        if (answer.empty() && sent.empty())
+        {
+            break;
+        }
+        if (!answer.empty() && client.session.state() == TlsState::Handshaking)
+        {
+            (void)client.session.receive(ConstSpan<u8>(answer.data(), answer.size()));
+        }
+    }
+    return client.session.state();
+}
+} // namespace
+
+TEST_CASE("TLS: a client decodes any valid compressed Certificate and refuses every other with decode_error",
+          "[crypto][tls][net-2]")
+{
+    {
+        Endpoint client;
+        CHECK(against_hostile(Hostile::Honest, kZstd, client) == TlsState::Established);
+        CHECK(client.session.certificate_compression() == kZstd);
+    }
+    {
+        // Larger than the message, and still accepted: the client checks the decoding, not the gain.
+        Endpoint client;
+        CHECK(against_hostile(Hostile::Stored, kZlib, client) == TlsState::Established);
+        CHECK(client.session.certificate_compression() == kZlib);
+    }
+    // A decoding of another length, bytes that decode to nothing and a changed checksum fail the handshake; the
+    // provider answers with decode_error where RFC 8879 section 4 names bad_certificate.
+    const std::pair<Hostile, u16> refused[] = {{Hostile::Longer, kZstd}, {Hostile::Shorter, kZstd},
+                                               {Hostile::Garbage, kZstd}, {Hostile::BadChecksum, kZlib}};
+    for (const auto& [hostile, algorithm] : refused)
+    {
+        CAPTURE(static_cast<int>(hostile));
+        Endpoint client;
+        CHECK(against_hostile(hostile, algorithm, client) == TlsState::Failed);
+        CHECK(client.session.alert_sent().description == kDecodeError);
+        CHECK(client.session.certificate_compression() == algorithm);
+        CHECK(client.session.peer_key() == KeyId{});
+    }
+    // A client that offers only zstd is never sent zlib: the server finds no algorithm in common and sends the
+    // Certificate as it is.
+    constexpr u16 zstd_only[] = {kZstd};
+    Endpoint      client;
+    CHECK(against_hostile(Hostile::Stored, kZlib, client, zstd_only) == TlsState::Established);
+    CHECK(client.session.certificate_compression() == 0U);
+}
+
 TEST_CASE("TLS: configurations outside the profile are refused", "[crypto][tls][net-2]")
 {
     Endpoint server;
@@ -2105,6 +2583,25 @@ TEST_CASE("TLS: configurations outside the profile are refused", "[crypto][tls][
     CHECK(server_with([](TlsConfig& c) { c.ticket_lifetime = kTlsMaxTicketLifetime; }) == TlsError::None);
     CHECK(server_with([](TlsConfig& c) { c.ticket_lifetime = kTlsMaxTicketLifetime + 1U; }) == TlsError::BadConfig);
 
+    // Certificate compression: RFC 8879 algorithms Cerid speaks, each once, either way; none at all is a choice.
+    constexpr u16 zlib_only[]  = {kZlib};
+    constexpr u16 zlib_first[] = {kZlib, kZstd};
+    constexpr u16 brotli[]     = {2U};
+    constexpr u16 reserved[]   = {0U};
+    constexpr u16 repeated[]   = {kZstd, kZstd};
+    constexpr u16 three[]      = {kZstd, kZlib, kZstd};
+    for (const ConstSpan<u16> fine : {ConstSpan<u16>(), ConstSpan<u16>(zlib_only), ConstSpan<u16>(zlib_first)})
+    {
+        CHECK(client_with([&](TlsConfig& c) { c.certificate_compression = fine; }) == TlsError::None);
+        CHECK(server_with([&](TlsConfig& c) { c.certificate_compression = fine; }) == TlsError::None);
+    }
+    for (const ConstSpan<u16> wrong : {ConstSpan<u16>(brotli), ConstSpan<u16>(reserved), ConstSpan<u16>(repeated),
+                                       ConstSpan<u16>(three)})
+    {
+        CHECK(client_with([&](TlsConfig& c) { c.certificate_compression = wrong; }) == TlsError::BadConfig);
+        CHECK(server_with([&](TlsConfig& c) { c.certificate_compression = wrong; }) == TlsError::BadConfig);
+    }
+
     server_config.signatures = kAllSignatures; // signatures without pins
     CHECK(context.init(server_config) == TlsError::BadConfig);
     CHECK_FALSE(context.ready());
@@ -2132,6 +2629,18 @@ TEST_CASE("TLS: configurations outside the profile are refused", "[crypto][tls][
     CHECK(credential.init(empty, kServerName) == TlsError::NotReady);
     CHECK(credential.init(server.key, "not a name") == TlsError::BadConfig);
     CHECK_FALSE(credential.ready());
+    // Every DNS name makes a credential: past 64 characters (ub-common-name) the subjectAltName alone carries it.
+    char dotted[kTlsMaxNameBytes] = {};
+    for (usize i = 0U; i < sizeof(dotted); ++i)
+    {
+        dotted[i] = i % 2U == 0U ? 'a' : '.';
+    }
+    for (const usize size : {usize{63U}, usize{65U}, kTlsMaxNameBytes})
+    {
+        CAPTURE(size);
+        CHECK(credential.init(server.key, StringView(dotted, size)) == TlsError::None);
+        CHECK(credential.ready());
+    }
 
     CHECK(tls_group_codepoint(AlgorithmId::Aes128Gcm) == 0U);
     CHECK(tls_signature_codepoint(AlgorithmId::X25519) == 0U);

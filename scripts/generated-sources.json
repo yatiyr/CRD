@@ -1872,7 +1872,7 @@
         "scripts/gen-register-ids.py",
         "--check"
       ],
-      "sha256": "8c6640cdc1c56f66b0c35d46df88c7232687da6a63628915b120c13359e23599"
+      "sha256": "1e24cae9d5f00d4915bff5b6c5f0028aa95994ed172b5c934be78edc55a31ce5"
     },
     {
       "path": "engine/foundation/core/src/text_fold_table.inc",

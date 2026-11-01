@@ -5,7 +5,8 @@
  *
  * Usage: crd-openssl-tls-peer --role client|server --groups LIST --seed HEX [--pin HEX] [--name NAME]
  *                             [--max-version 1.2] [--update requested|not-requested] [--session FILE]
- *                             [--ticket-key HEX]
+ *                             [--ticket-key HEX] [--compression zstd|zlib|none] [--compressed-cert FILE]
+ *                             [--dump-compressed FILE]
  *   groups       OpenSSL's group list syntax (SSL_CTX_set1_groups_list; a '*' marks a group that gets a key share)
  *   seed         the 32-byte Ed25519 private key of this end's self-signed certificate
  *   pin          the peer's 32-byte Ed25519 public key: the peer's certificate must carry it (a server then asks for
@@ -17,12 +18,17 @@
  *                tickets make replaces it
  *   ticket-key   a server's 32-byte ticket key, from which its 80 bytes of OpenSSL ticket key material are made (the
  *                key three times over), so two server processes open each other's tickets
+ *   compression  the one RFC 8879 algorithm a client decodes or a server compresses its certificate with (a server
+ *                compresses it at start-up, and keeps the form only when it is smaller); none turns it off
+ *   compressed-cert  a server's compressed certificate in FILE (a 4-byte big-endian uncompressed length, then the
+ *                compressed bytes), installed as it is under --compression's algorithm, whatever it decodes to
+ *   dump-compressed  a server writes the form it compressed to FILE in the same layout
  *
  * A server prefers its own group order (SSL_OP_CIPHER_SERVER_PREFERENCE), as a Cerid server does. The framing and the
  * script are crd-tls-peer's: 4-byte big-endian frame lengths, a client's first flight unasked,
  * one frame per frame read, "ping from openssl" from an established client, an echo from an established server and one
- * JSON line on standard error at the end of input, the KeyUpdate messages sent and received and whether the handshake
- * resumed among it. */
+ * JSON line on standard error at the end of input, the KeyUpdate messages sent and received, the algorithm of a
+ * CompressedCertificate sent and received (handshake type 25, RFC 8879) and whether the handshake resumed among it. */
 
 #include <openssl/bio.h>
 #include <openssl/err.h>
@@ -30,6 +36,7 @@
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
+#include <openssl/x509v3.h>
 
 #include <ctype.h>
 #include <stdio.h>
@@ -49,6 +56,8 @@ static int           g_alert_sent     = -1;
 static int           g_alert_received = -1;
 static int           g_updates_sent;
 static int           g_updates_received;
+static int           g_compressed_sent;
+static int           g_compressed_received;
 static const char*   g_session_path;
 
 /* SHA-256("HelloRetryRequest"), the random of a HelloRetryRequest (RFC 9846 section 4.1.3). */
@@ -140,6 +149,10 @@ static void observe(int write_p, int version, int content_type, const void* buff
     {
         *(write_p ? &g_updates_sent : &g_updates_received) += 1;
     }
+    else if (content_type == 22 && length >= 6 && bytes[0] == 25)
+    {
+        *(write_p ? &g_compressed_sent : &g_compressed_received) = (bytes[4] << 8) | bytes[5];
+    }
     else if (content_type == 22 && length >= 38 && bytes[0] == 2 &&
              memcmp(bytes + 6, k_hello_retry, sizeof(k_hello_retry)) == 0)
     {
@@ -173,30 +186,100 @@ static SSL_SESSION* take_session(void)
     return session;
 }
 
+/* The name is the subject's common name when it fits (64 characters, RFC 5280's ub-common-name) and the
+ * subjectAltName's always, critical when the subject is empty, as on a Cerid credential. */
 static X509* self_signed(EVP_PKEY* key, const char* name)
 {
-    X509* certificate = X509_new();
-    if (certificate == NULL || !X509_set_version(certificate, 2) ||
-        !ASN1_INTEGER_set(X509_get_serialNumber(certificate), 1) ||
-        X509_gmtime_adj(X509_getm_notBefore(certificate), -3600) == NULL ||
-        X509_gmtime_adj(X509_getm_notAfter(certificate), 86400) == NULL || !X509_set_pubkey(certificate, key) ||
-        !X509_NAME_add_entry_by_txt(X509_get_subject_name(certificate), "CN", MBSTRING_ASC,
-                                    (const unsigned char*)name, -1, -1, 0) ||
-        !X509_set_issuer_name(certificate, X509_get_subject_name(certificate)) ||
-        X509_sign(certificate, key, NULL) <= 0)
+    char            alt[300];
+    const int       common      = strlen(name) <= 64;
+    X509*           certificate = X509_new();
+    X509_EXTENSION* extension   = NULL;
+    if (snprintf(alt, sizeof(alt), "%sDNS:%s", common ? "" : "critical,", name) >= (int)sizeof(alt))
     {
         X509_free(certificate);
         return NULL;
     }
+    extension = X509V3_EXT_conf_nid(NULL, NULL, NID_subject_alt_name, alt);
+    if (certificate == NULL || extension == NULL || !X509_set_version(certificate, 2) ||
+        !ASN1_INTEGER_set(X509_get_serialNumber(certificate), 1) ||
+        X509_gmtime_adj(X509_getm_notBefore(certificate), -3600) == NULL ||
+        X509_gmtime_adj(X509_getm_notAfter(certificate), 86400) == NULL || !X509_set_pubkey(certificate, key) ||
+        (common && !X509_NAME_add_entry_by_txt(X509_get_subject_name(certificate), "CN", MBSTRING_ASC,
+                                               (const unsigned char*)name, -1, -1, 0)) ||
+        !X509_set_issuer_name(certificate, X509_get_subject_name(certificate)) ||
+        !X509_add_ext(certificate, extension, -1) || X509_sign(certificate, key, NULL) <= 0)
+    {
+        X509_EXTENSION_free(extension);
+        X509_free(certificate);
+        return NULL;
+    }
+    X509_EXTENSION_free(extension);
     return certificate;
 }
 
 static int usage(void)
 {
     fputs("usage: crd-openssl-tls-peer --role client|server --groups LIST --seed HEX [--pin HEX] [--name NAME] "
-          "[--max-version 1.2] [--update requested|not-requested] [--session FILE] [--ticket-key HEX]\n",
+          "[--max-version 1.2] [--update requested|not-requested] [--session FILE] [--ticket-key HEX] "
+          "[--compression zstd|zlib|none] [--compressed-cert FILE] [--dump-compressed FILE]\n",
           stderr);
     return 2;
+}
+
+/* The algorithm --compression names: TLSEXT_comp_cert_none for "none", -1 for anything else. */
+static int compression_of(const char* name)
+{
+    if (strcmp(name, "zstd") == 0)
+    {
+        return TLSEXT_comp_cert_zstd;
+    }
+    if (strcmp(name, "zlib") == 0)
+    {
+        return TLSEXT_comp_cert_zlib;
+    }
+    return strcmp(name, "none") == 0 ? TLSEXT_comp_cert_none : -1;
+}
+
+/* Installs the compressed certificate in `path` (a 4-byte big-endian uncompressed length, then the bytes). */
+static int install_compressed(SSL_CTX* context, int algorithm, const char* path)
+{
+    FILE*         file   = fopen(path, "rb");
+    unsigned char header[4];
+    size_t        size   = 0;
+    int           result = 0;
+    if (file != NULL && fread(header, 1, 4, file) == 4)
+    {
+        size = fread(g_frame, 1, sizeof(g_frame), file);
+        result = size > 0 && size < sizeof(g_frame) &&
+                 SSL_CTX_set1_compressed_cert(context, algorithm, g_frame, size,
+                                              ((size_t)header[0] << 24) | ((size_t)header[1] << 16) |
+                                                  ((size_t)header[2] << 8) | header[3]) == 1;
+    }
+    if (file != NULL)
+    {
+        fclose(file);
+    }
+    return result;
+}
+
+/* Writes the form the server compressed its certificate to under `algorithm` to `path`, in install_compressed's
+ * layout. */
+static int dump_compressed(SSL_CTX* context, int algorithm, const char* path)
+{
+    unsigned char* data   = NULL;
+    size_t         length = 0;
+    const size_t   size   = SSL_CTX_get1_compressed_cert(context, algorithm, &data, &length);
+    FILE*          file   = size > 0 ? fopen(path, "wb") : NULL;
+    int            result = 0;
+    if (file != NULL)
+    {
+        const unsigned char header[4] = {(unsigned char)(length >> 24), (unsigned char)(length >> 16),
+                                         (unsigned char)(length >> 8), (unsigned char)length};
+        result = fwrite(header, 1, 4, file) == 4 && fwrite(data, 1, size, file) == size;
+        fclose(file);
+    }
+    OPENSSL_free(data);
+    return result;
 }
 
 int main(int argc, char** argv)
@@ -209,6 +292,9 @@ int main(int argc, char** argv)
     const char* max_version = NULL;
     const char* update      = NULL;
     const char* ticket_key  = NULL;
+    const char* compression = NULL;
+    const char* compressed  = NULL;
+    const char* dump        = NULL;
     for (int i = 1; i + 1 < argc; i += 2)
     {
         if (strcmp(argv[i], "--role") == 0)
@@ -242,6 +328,18 @@ int main(int argc, char** argv)
         else if (strcmp(argv[i], "--ticket-key") == 0)
         {
             ticket_key = argv[i + 1];
+        }
+        else if (strcmp(argv[i], "--compression") == 0 && compression_of(argv[i + 1]) >= 0)
+        {
+            compression = argv[i + 1];
+        }
+        else if (strcmp(argv[i], "--compressed-cert") == 0)
+        {
+            compressed = argv[i + 1];
+        }
+        else if (strcmp(argv[i], "--dump-compressed") == 0)
+        {
+            dump = argv[i + 1];
         }
         else if (strcmp(argv[i], "--update") == 0 &&
                  (strcmp(argv[i + 1], "requested") == 0 || strcmp(argv[i + 1], "not-requested") == 0))
@@ -297,6 +395,33 @@ int main(int argc, char** argv)
         {
             return usage();
         }
+    }
+    if (compression != NULL)
+    {
+        /* One algorithm, or none: a client offers it alone, a server compresses its certificate with it alone. */
+        int       algorithm = compression_of(compression);
+        const int off       = algorithm == TLSEXT_comp_cert_none;
+        if (off)
+        {
+            SSL_CTX_set_options(context, client ? SSL_OP_NO_RX_CERTIFICATE_COMPRESSION
+                                                : SSL_OP_NO_TX_CERTIFICATE_COMPRESSION);
+        }
+        else if (!SSL_CTX_set1_cert_comp_preference(context, &algorithm, 1) ||
+                 (!client && compressed == NULL && !SSL_CTX_compress_certs(context, algorithm)) ||
+                 (!client && compressed != NULL && !install_compressed(context, algorithm, compressed)) ||
+                 (!client && dump != NULL && !dump_compressed(context, algorithm, dump)))
+        {
+            ERR_print_errors_fp(stderr);
+            return 1;
+        }
+        if (client && (compressed != NULL || dump != NULL))
+        {
+            return usage();
+        }
+    }
+    else if (compressed != NULL || dump != NULL)
+    {
+        return usage();
     }
     if (g_session_path != NULL)
     {
@@ -414,6 +539,8 @@ int main(int argc, char** argv)
             g_hello_retry ? "true" : "false", g_peer_ok ? "true" : "false", g_alert_sent, g_alert_received);
     fprintf(stderr, "\"key_updates_sent\": %d, \"key_updates_received\": %d, \"resumed\": %s, ", g_updates_sent,
             g_updates_received, established && SSL_session_reused(ssl) ? "true" : "false");
+    fprintf(stderr, "\"compressed_sent\": %d, \"compressed_received\": %d, ", g_compressed_sent,
+            g_compressed_received);
     fprintf(stderr, "\"version\": \"%s\", \"received\": \"", SSL_get_version(ssl));
     for (size_t i = 0; i < received_size; ++i)
     {

@@ -36,6 +36,11 @@
 //               a client hands the tickets it receives to the caller's ticket store and offers one, at most once, only
 //               to a connection of the context that received it. Resumption is psk_dhe_ke (a fresh key share, the
 //               hybrid group included); 0-RTT is off.
+//   certificates a client accepts its server's Certificate compressed (RFC 8879) with zstd or zlib; a server compresses
+//               its own once, at init(), with each algorithm it may use, and sends the smallest form its client
+//               accepts only when it is smaller than the plain message. A compressed Certificate is decoded into
+//               exactly the length it claims, at most kTlsMaxCertificateBytes, the limit of a plain one too, and a
+//               claim its compressed bytes cannot reach is refused before anything is reserved for it.
 //   threads     a context is read-only after init() and serves sessions on any thread; a session is used by one
 //               thread at a time. Sessions copy what they need, so a context may be cleared while they live.
 //   allocation  contexts, credentials and sessions allocate inside the provider at init() and while records flow.
@@ -57,6 +62,7 @@ inline constexpr usize kTlsMaxAeads          = 3U;     // record protection algo
 inline constexpr usize kTlsMaxPins           = 16U;    // pinned peer keys
 inline constexpr usize kTlsMaxNameBytes      = 253U;   // a DNS name (RFC 1035), the server_name's longest host name
 inline constexpr usize kTlsMaxBufferedBytes  = 65536U; // received or outgoing bytes waiting in one session
+inline constexpr usize kTlsMaxCertificateBytes = kTlsMaxBufferedBytes; // a peer's Certificate, compressed or not
 inline constexpr u8    kTlsAlertGeneralError = 117U;   // RFC 9846 section 6.2
 inline constexpr u8    kTlsAlertUserCanceled = 90U;    // RFC 9846 section 6.1
 
@@ -64,6 +70,10 @@ inline constexpr u8    kTlsAlertUserCanceled = 90U;    // RFC 9846 section 6.1
 // be configured for: one of data, its KeyUpdate and one alert.
 inline constexpr u64 kTlsMaxKeyUpdates       = (u64{1} << 48U) - 1U;
 inline constexpr u64 kTlsMinKeyUpdateRecords = 3U;
+
+// The RFC 8879 certificate compression algorithms Cerid speaks, in a client's default order: zstd compresses
+// certificates best, zlib is what peers without zstd decode. Brotli (2) is not offered: the engine has no brotli codec.
+inline constexpr u16 kTlsCertificateCompression[] = {iana::kCertCompressionZstd, iana::kCertCompressionZlib};
 
 // A server's ticket protection key, and its tickets' lifetime: two days unless configured, at most seven (RFC 9846
 // section 4.6.1).
@@ -196,6 +206,10 @@ struct TlsConfig
     cont::ConstSpan<u8> previous_ticket_key; // a server's key before its last rotation: opens tickets, seals none
     u32 ticket_lifetime = 0U; // a server's tickets' lifetime in seconds: 0 for kTlsDefaultTicketLifetime, at most
                               // kTlsMaxTicketLifetime
+    // RFC 8879 algorithms of kTlsCertificateCompression, each once: those a client decodes (offered in this order) or
+    // a server may compress its Certificate with (it sends the smallest that is smaller than the plain message); empty:
+    // none, for a context whose record padding must not depend on the credential (RFC 8879 section 5).
+    cont::ConstSpan<u16> certificate_compression = kTlsCertificateCompression;
 };
 
 // The settings a session copies from its context.
@@ -215,6 +229,16 @@ struct TlsSettings
     u8          ticket_names[2][16]                = {}; // the keys' public names, which lead their tickets
     u32         ticket_key_count                   = 0U;
 };
+
+namespace detail
+{
+// The decoding the provider runs for a compressed Certificate of RFC 8879 `algorithm` (zstd or zlib): true only when
+// `compressed` decodes to exactly certificate.size() bytes, at most kTlsMaxCertificateBytes. A length outside that
+// bound, or beyond what DEFLATE's 1032:1 lets a zlib `compressed` decode to, is refused before `certificate` is
+// written. Exposed for the tests and the fuzz target, which cannot reach it through a handshake.
+[[nodiscard]] bool tls_decompress_certificate(u16 algorithm, cont::ConstSpan<u8> compressed,
+                                              cont::Span<u8> certificate) noexcept;
+} // namespace detail
 
 struct ProviderTlsContext; // the provider's context object, defined only inside crd-crypto
 struct ProviderTlsSession; // the provider's connection object, defined only inside crd-crypto
@@ -308,6 +332,10 @@ public:
     // After the handshake: whether it resumed a ticket (the peer key is then the one the ticket's handshake proved).
     [[nodiscard]] bool resumed() const noexcept { return m_resumed; }
 
+    // The RFC 8879 algorithm of the compressed Certificate this session sent or received (a server's own, a client's
+    // server's); 0 when the Certificate went uncompressed or none was sent (a resumption).
+    [[nodiscard]] u16 certificate_compression() const noexcept { return m_certificate_compression; }
+
     // The key updates sent and received, the records (data and alerts) protected so far under the current sending
     // key and the records after which the session updates it (0 before the handshake ends).
     [[nodiscard]] u64 key_updates_sent() const noexcept { return m_updates_sent; }
@@ -339,6 +367,7 @@ private:
     u64                 m_key_update_records = 0U;
     u64                 m_updates_sent       = 0U;
     u64                 m_updates_received   = 0U;
+    u16                 m_certificate_compression = 0U;
     bool                m_hello_retry        = false;
     bool                m_resumed            = false;
     bool                m_refused            = false; // the verify or name check refused the peer
