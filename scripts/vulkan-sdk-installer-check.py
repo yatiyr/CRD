@@ -231,4 +231,6 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
+    # The installer's output is echoed after its evidence is written; a console code page must not fail the arm.
+    sys.stdout.reconfigure(errors='replace')
     sys.exit(main())

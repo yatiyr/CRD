@@ -75,6 +75,9 @@ without the baseline calibration fails it (`[] != ['InstallationLog.txt']`).
 - Hosted: GitHub's mirror held 72f9696f at 10:45 UTC; `host-check.yml` dispatched with
   `experiment=vulkan-sdk-installer` is run 41298875777, whose nine arms were queued at 10:50 UTC behind the CI runs.
   Its judge summary is the next batch's first read.
+- After the dispatch the driver's entry point echoes with `errors='replace'`, so a byte the runner's console code page
+  cannot print never fails an arm whose evidence is already written; run 41298875777 runs 72f9696f, without it, and
+  an arm failing at that echo is that, not the installer (its evidence and the judge are unaffected).
 
 ## The measuring PC's CUDA run
 
