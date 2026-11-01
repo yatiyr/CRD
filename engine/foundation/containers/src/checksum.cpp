@@ -298,14 +298,18 @@ crd::u64 xxh3_long(const HashKernels& kernels, const crd::u8* in, crd::usize len
 // The checksum tests' reference stream (tests/foundation/containers/test_checksum.cpp): byte i is the top byte of
 // 0x9E3779B97F4A7C15 * (i + 1) mod 2^64. Its answers there come from zlib, a bit-serial CRC-32C and libxxhash 0.8.2.
 // 1025 bytes reach every level's widest fold or stripe loop and a tail; 63 bytes stay below the folds. The stream
-// starts one byte into its aligned storage, so the loads are unaligned.
+// starts one byte into its aligned storage, so the loads are unaligned. The storage is a whole number of lines, so
+// the alignment pads nothing (ARM64 MSVC warns C4324 on padding an alignment specifier adds).
 constexpr crd::usize kCheckLong = 1025U;
 constexpr crd::usize kCheckShort = 63U;
+constexpr crd::usize kCheckStorage = (kCheckLong + 1U + 63U) & ~crd::usize{63U};
 
 struct CheckStream
 {
-    alignas(64) crd::u8 bytes[kCheckLong + 1U]; // NOLINT(modernize-avoid-c-arrays): the stream at bytes + 1
+    alignas(64) crd::u8 bytes[kCheckStorage]; // NOLINT(modernize-avoid-c-arrays): the stream at bytes + 1
 };
+
+static_assert(sizeof(CheckStream) == kCheckStorage, "the alignment must add no padding");
 
 constexpr CheckStream make_check_stream() noexcept
 {
