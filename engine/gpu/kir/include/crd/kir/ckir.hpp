@@ -307,7 +307,7 @@ enum class KStage : crd::u8
     Miss,
     Callable,
 };
-constexpr int kStageCount = 14;
+inline constexpr int kStageCount = 14;
 
 [[nodiscard]] constexpr crd::u32 stage_bit(KStage s) noexcept { return 1U << static_cast<crd::u32>(s); }
 
