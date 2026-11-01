@@ -211,6 +211,20 @@ CRD_FORCEINLINE void store_transposed(T* p, crd::usize stride, V x0, R... rest) 
             x[c].store(p + c * stride);
         }
     }
+#if defined(CRD_FFT_GEN_SIMD_BODY) && CRD_SIMD_HAS_AVX512
+    else if constexpr (sizeof(T) == 4)
+    {
+        // A Vec16f a row: both tiles' 8x8 transposes at once on whole registers (24 shuffles, where splitting the rows
+        // into halves first took 56 with the extracts), then each row's halves stored as its two columns (the high
+        // half's extract folds into its store).
+        crd::math::simd::transpose8x8_halves(x);
+        for (crd::usize c = 0; c < w; ++c)
+        {
+            low_half(x[c]).store(p + c * stride);
+            high_half(x[c]).store(p + (w + c) * stride);
+        }
+    }
+#endif
     else
     {
         TileLane<T> lo[w];
