@@ -7,13 +7,14 @@
 # thread, a forced level's glibc features hidden): bench_fft_f32 (every arm beside MKL) for f32, bench_fft_vs_refs
 # (its f64 arms beside FFTW, pocketfft and MKL) for f64.
 #   bash scripts/board_fft_level_plans.sh <out dir> [--type f32|f64] [--passes N] [--sizes A-B]
-# --sizes (f32 only, default 10-22) is bench_fft_f32's; --passes defaults to 5. Environment: CRD_BENCH_LEVELS (the
-# level entries, as run-lane-bench.sh takes them; default detected), CRD_BENCH_CPUS (the taskset list, default 4).
+# --sizes is the program's (default 10-22 for bench_fft_f32, 10-23 for bench_fft_vs_refs, whose arms run to 22);
+# --passes defaults to 5. Environment: CRD_BENCH_LEVELS (the level entries, as run-lane-bench.sh takes them; default
+# detected), CRD_BENCH_CPUS (the taskset list, default 4).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 usage()
 {
-    sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 2
 }
 if [[ $# -lt 1 || $1 == -* ]]; then
@@ -40,11 +41,7 @@ case $kind in
         ;;
     f64)
         program=bench_fft_vs_refs
-        arguments=()
-        if [[ -n $sizes ]]; then
-            echo "board_fft_level_plans.sh: bench_fft_vs_refs times its own sizes; --sizes is f32's" >&2
-            exit 2
-        fi
+        arguments=(--sizes "${sizes:-10-23}")
         ;;
     *) usage ;;
 esac

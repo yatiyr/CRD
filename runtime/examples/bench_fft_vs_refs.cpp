@@ -9,12 +9,24 @@
 // From 2^10 to 2^22 every forward the planner offers at the size (fft::detail::forward_builds: the one this level
 // runs first, fft::detail::level_forward, then the others) runs in this one binary too, interleaved every rep and
 // gated against FFTW the same way; a level's winners become its f64 plans (scripts/gen_fft_level_plans.py reads the
-// boards' logs under the "fft kernel level" this program prints, the unit FftPlan keys on).
+// boards' logs under the "fft kernel level" this program prints, the unit FftPlan keys on). Each arm's row ends with
+// the FNV-1a digest of its gated transform's output (`bits`), so a board of two builds shows they compute the same
+// bits (scripts/ab-board.py --same).
+// The method is bench_fft_f32's (2026-11-01): every time is printed to 10 ns (the f64 arms below 64K are a few
+// microseconds), each timed transform follows an untimed one of the same contender, so it runs warm, as in a stream of
+// transforms, and every contender transforms one buffer at a declared alignment (--offset), never at the one the
+// allocator's history gave.
+//
+//   bench_fft_vs_refs [--sizes A-B] [--offset B]
+//       2^A to 2^B (default 10-23, at most 23; the arms run to 22); --offset B starts every contender's buffer B bytes
+//       past a 64-byte boundary (whole complex values, below 4096; default 0, a cache-line-aligned buffer; 16 is a
+//       malloc'd buffer's). docs/bench/README.md#fast-ab-boards.
 
 #include "pocketfft_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/core/cpu_features.hpp>
+#include <crd/core/fnv1a.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/fft/fft.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -23,7 +35,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fftw3.h>
 #include <limits>
@@ -38,18 +52,40 @@ using crd::hesap::Complex;
 
 namespace
 {
-// Best of `reps` timed runs of `fn`, each after an untimed `prepare` (the in-place contenders' input copy).
+constexpr int kFirstLg = 10;
+constexpr int kLastLg = 23;
+constexpr int kArmsMaxLog2 = 22;
+constexpr usize kMaxArms = sizeof(fft::detail::kFftAlgorithms) / sizeof(fft::detail::kFftAlgorithms[0]);
+constexpr const char* kPlanOutOfMemory = "bench_fft_vs_refs: out of memory for a plan";
+constexpr usize kMaxOffset = 4096; // --offset: below one page, in whole complex values past a cache line
+constexpr usize kLine = 64;
+
+struct Options
+{
+    int lg_first = kFirstLg;
+    int lg_last = kLastLg;
+    usize offset = 0;
+};
+
+template <typename Fn> double time_ms(const Fn& fn)
+{
+    const auto t0 = std::chrono::steady_clock::now();
+    fn();
+    const auto t1 = std::chrono::steady_clock::now();
+    return std::chrono::duration<double, std::milli>(t1 - t0).count();
+}
+
+// Best of `reps` timed runs of `fn`, each warm: an untimed `prepare` (the in-place contenders' input copy) and `fn`,
+// then `prepare` again and the timed `fn`.
 template <typename Prepare, typename Fn> double time_best_ms(int reps, const Prepare& prepare, const Fn& fn)
 {
     double best = 1e300;
     for (int r = 0; r < reps; ++r)
     {
         prepare();
-        const auto t0 = std::chrono::steady_clock::now();
         fn();
-        const auto t1 = std::chrono::steady_clock::now();
-        const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-        best = ms < best ? ms : best;
+        prepare();
+        best = std::min(best, time_ms(fn));
     }
     return best;
 }
@@ -73,15 +109,19 @@ double max_rel(const Complex<f64>* x, const Complex<f64>* ref, usize n)
     return maxdiff / (1.0 + maxmag);
 }
 
-constexpr int kArmsMaxLog2 = 22;
-constexpr usize kMaxArms = sizeof(fft::detail::kFftAlgorithms) / sizeof(fft::detail::kFftAlgorithms[0]);
-constexpr const char* kPlanOutOfMemory = "bench_fft_vs_refs: out of memory for a plan";
+// The n values of `buffer` `offset` bytes past a 64-byte boundary (--offset; bench_fft_f32's placement).
+Complex<f64>* place(cont::Array<Complex<f64>>& buffer, usize n, usize offset)
+{
+    buffer.resize(n + (kMaxOffset + kLine) / sizeof(Complex<f64>));
+    const auto start = reinterpret_cast<std::uintptr_t>(buffer.data());
+    return buffer.data() + ((kLine - start % kLine) % kLine + offset) / sizeof(Complex<f64>);
+}
 
-// Every forward the planner offers at n, the level's own first, each timed best of `reps` with the arms interleaved
-// per rep and the input copied in untimed, and gated against FFTW's output. Returns false when an error is above
-// `bound`.
-bool forward_arms(crd::memory::IAllocator* alloc, const Complex<f64>* base, const Complex<f64>* fftw_out, usize n,
-                  int reps, double bound)
+// Every forward the planner offers at n, the level's own first, each timed best of `reps` warm with the arms
+// interleaved per rep and the input copied in untimed, in the buffer `x` (at the board's declared alignment), and
+// gated against FFTW's output. Returns false when an error is above `bound`.
+bool forward_arms(crd::memory::IAllocator* alloc, const Complex<f64>* base, const Complex<f64>* fftw_out,
+                  Complex<f64>* x, usize n, int reps, double bound)
 {
     fft::FftPlan<f64>* plans[kMaxArms] = {};
     usize count = 0;
@@ -101,18 +141,22 @@ bool forward_arms(crd::memory::IAllocator* alloc, const Complex<f64>* base, cons
         }
     }
 
-    cont::Array<Complex<f64>> work(alloc);
-    work.resize(n);
+    const auto reset = [&]
+    {
+        std::memcpy(x, base, n * sizeof(Complex<f64>));
+    };
     const auto run = [&](usize a)
     {
-        plans[a]->execute(cont::Span<Complex<f64>>(work.data(), n), fft::FftDirection::Forward);
+        plans[a]->execute(cont::Span<Complex<f64>>(x, n), fft::FftDirection::Forward);
     };
     double err[kMaxArms] = {};
+    crd::u64 bits[kMaxArms] = {};
     for (usize a = 0; a < count; ++a)
     {
-        std::memcpy(work.data(), base, n * sizeof(Complex<f64>));
+        reset();
         run(a);
-        err[a] = max_rel(work.data(), fftw_out, n);
+        err[a] = max_rel(x, fftw_out, n);
+        bits[a] = crd::fnv1a_64(x, n * sizeof(Complex<f64>));
     }
     double best[kMaxArms] = {};
     std::fill(best, best + count, 1e300);
@@ -120,11 +164,10 @@ bool forward_arms(crd::memory::IAllocator* alloc, const Complex<f64>* base, cons
     {
         for (usize a = 0; a < count; ++a)
         {
-            std::memcpy(work.data(), base, n * sizeof(Complex<f64>));
-            const auto t0 = std::chrono::steady_clock::now();
+            reset();
             run(a);
-            const auto t1 = std::chrono::steady_clock::now();
-            best[a] = std::min(best[a], std::chrono::duration<double, std::milli>(t1 - t0).count());
+            reset();
+            best[a] = std::min(best[a], time_ms([&] { run(a); }));
         }
     }
 
@@ -132,8 +175,8 @@ bool forward_arms(crd::memory::IAllocator* alloc, const Complex<f64>* base, cons
     usize winner = 0;
     for (usize a = 0; a < count; ++a)
     {
-        std::printf("%-9zu | %-15s | %9.3f | %.1e\n", n, fft::fft_algorithm_name(plans[a]->state().forward), best[a],
-                    err[a]);
+        std::printf("%-9zu | %-15s | %10.5f | %.1e | %016llx\n", n, fft::fft_algorithm_name(plans[a]->state().forward),
+                    best[a], err[a], static_cast<unsigned long long>(bits[a]));
         ok = ok && err[a] <= bound;
         winner = best[a] < best[winner] ? a : winner;
     }
@@ -146,19 +189,55 @@ bool forward_arms(crd::memory::IAllocator* alloc, const Complex<f64>* base, cons
     }
     return ok;
 }
+
+bool parse_options(int argc, char** argv, Options* options)
+{
+    for (int i = 1; i < argc; ++i)
+    {
+        const bool has_value = i + 1 < argc;
+        if (std::strcmp(argv[i], "--sizes") == 0 && has_value)
+        {
+            if (std::sscanf(argv[++i], "%d-%d", &options->lg_first, &options->lg_last) != 2)
+            {
+                return false;
+            }
+        }
+        else if (std::strcmp(argv[i], "--offset") == 0 && has_value)
+        {
+            options->offset = static_cast<usize>(std::strtoul(argv[++i], nullptr, 10));
+            if (options->offset >= kMaxOffset || options->offset % sizeof(Complex<f64>) != 0)
+            {
+                return false;
+            }
+        }
+        else
+        {
+            return false;
+        }
+    }
+    return kFirstLg <= options->lg_first && options->lg_first <= options->lg_last && options->lg_last <= kLastLg;
+}
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
+    Options options;
+    if (!parse_options(argc, argv, &options))
+    {
+        std::fprintf(stderr, "usage: bench_fft_vs_refs [--sizes A-B] [--offset B]   (10 <= A <= B <= 23; B a multiple "
+                             "of 16 below 4096)\n");
+        return 2;
+    }
     crd::memory::TlsfAllocator alloc(4ULL << 30);
     std::printf("pocketfft peer: %s\n", pocket::isa());
     std::printf("fft kernel level: %s\n", crd::cpu_level_name(fft::fft_kernels().level)); // the level's own plans
-    std::printf("=== complex-f64 forward FFT, power-of-2 (best of reps). GFLOPS = 5 n log2(n)/t ===\n");
-    std::printf("%-9s | %-22s | %-20s | %-20s | %-20s | Cerid err | pocket err\n", "n", "Cerid (ms / GFLOPS)",
-                "FFTW (ms/GFLOPS)", "pocketfft (ms/GFLOPS)", "MKL (ms/GFLOPS)");
+    std::printf("buffer offset: %zu bytes past a 64-byte boundary\n", options.offset);
+    std::printf("=== complex-f64 forward FFT, power-of-2 (best of warm reps). GFLOPS = 5 n log2(n)/t ===\n");
+    std::printf("%-9s | %-21s | %-21s | %-21s | %-21s | Cerid err | pocket err\n", "n", "Cerid (ms / GFLOPS)",
+                "FFTW (ms / GFLOPS)", "pocketfft (ms / GFLOPS)", "MKL (ms / GFLOPS)");
 
     bool wrong = false;
-    for (int lg = 10; lg <= 23; ++lg)
+    for (int lg = options.lg_first; lg <= options.lg_last; ++lg)
     {
         const usize n = usize{1} << lg;
         int reps = 8;
@@ -185,35 +264,35 @@ int main()
         }
 
         cont::Array<Complex<f64>> work(&alloc);
-        work.resize(n);
+        Complex<f64>* const x = place(work, n, options.offset);
         auto reset = [&]
         {
-            std::memcpy(work.data(), base.data(), n * sizeof(Complex<f64>));
+            std::memcpy(x, base.data(), n * sizeof(Complex<f64>));
         };
 
         // ---- Cerid ----
         const fft::FftPlan<f64> plan(&alloc, n);
-        const double cms = time_best_ms(
-            reps, reset, [&] { plan.execute(cont::Span<Complex<f64>>(work.data(), n), fft::FftDirection::Forward); });
+        const double cms = time_best_ms(reps, reset, [&]
+                                        { plan.execute(cont::Span<Complex<f64>>(x, n), fft::FftDirection::Forward); });
         cont::Array<Complex<f64>> cerid_out(&alloc);
         cerid_out.resize(n);
-        std::memcpy(cerid_out.data(), work.data(), n * sizeof(Complex<f64>));
+        std::memcpy(cerid_out.data(), x, n * sizeof(Complex<f64>));
 
-        // ---- FFTW (MEASURE) ----
-        auto* fin = reinterpret_cast<fftw_complex*>(work.data());
+        // ---- FFTW (MEASURE, planned on the declared buffer: its plan keys on the alignment) ----
+        auto* fin = reinterpret_cast<fftw_complex*>(x);
         fftw_plan fp = fftw_plan_dft_1d(static_cast<int>(n), fin, fin, FFTW_FORWARD, FFTW_MEASURE);
         const double fms = time_best_ms(reps, reset, [&] { fftw_execute(fp); });
         cont::Array<Complex<f64>> fftw_out(&alloc);
         fftw_out.resize(n);
-        std::memcpy(fftw_out.data(), work.data(), n * sizeof(Complex<f64>));
+        std::memcpy(fftw_out.data(), x, n * sizeof(Complex<f64>));
         fftw_destroy_plan(fp);
 
-        // ---- pocketfft (out of place from the reference input, as its c2c) ----
-        cont::Array<Complex<f64>> pout(&alloc);
-        pout.resize(n);
+        // ---- pocketfft (out of place from the reference input, as its c2c, into a buffer at the same alignment) ----
+        cont::Array<Complex<f64>> pout_buffer(&alloc);
+        Complex<f64>* const pout = place(pout_buffer, n, options.offset);
         const pocket::Owned pplan{pocket::c2c_plan(static_cast<pocket::Index>(n))};
         const auto* pin = reinterpret_cast<const f64*>(base.data());
-        auto* pdst = reinterpret_cast<f64*>(pout.data());
+        auto* pdst = reinterpret_cast<f64*>(pout);
         const double pms = time_best_ms(reps, [] {}, [&] { pocket::forward(pplan.get(), pin, pdst); });
 
         // ---- MKL DFTI ----
@@ -221,16 +300,15 @@ int main()
         DftiCreateDescriptor(&h, DFTI_DOUBLE, DFTI_COMPLEX, 1, static_cast<MKL_LONG>(n));
         DftiSetValue(h, DFTI_PLACEMENT, DFTI_INPLACE);
         DftiCommitDescriptor(h);
-        const double mms = time_best_ms(reps, reset, [&] { DftiComputeForward(h, work.data()); });
+        const double mms = time_best_ms(reps, reset, [&] { DftiComputeForward(h, x); });
         DftiFreeDescriptor(&h);
 
         // Correctness cross-check against FFTW.
         const double cerid_err = max_rel(cerid_out.data(), fftw_out.data(), n);
-        const double pocket_err = max_rel(pout.data(), fftw_out.data(), n);
+        const double pocket_err = max_rel(pout, fftw_out.data(), n);
         const double bound = 32.0 * std::numeric_limits<double>::epsilon() * static_cast<double>(lg);
 
-        std::printf("%-9zu | %8.3f / %7.2f      | %7.3f / %7.2f    | %7.3f / %7.2f    | %7.3f / %7.2f    | %.1e   | "
-                    "%.1e\n",
+        std::printf("%-9zu | %10.5f / %7.2f  | %10.5f / %7.2f  | %10.5f / %7.2f  | %10.5f / %7.2f  | %.1e   | %.1e\n",
                     n, cms, gflops(n, cms), fms, gflops(n, fms), pms, gflops(n, pms), mms, gflops(n, mms), cerid_err,
                     pocket_err);
         if (!(cerid_err <= bound) || !(pocket_err <= bound))
@@ -238,7 +316,7 @@ int main()
             std::fprintf(stderr, "n=%zu: an error against FFTW is above the bound %.1e\n", n, bound);
             wrong = true;
         }
-        if (lg <= kArmsMaxLog2 && !forward_arms(&alloc, base.data(), fftw_out.data(), n, reps, bound))
+        if (lg <= kArmsMaxLog2 && !forward_arms(&alloc, base.data(), fftw_out.data(), x, n, reps, bound))
         {
             std::fprintf(stderr, "n=%zu: a forward arm's error against FFTW is above the bound %.1e\n", n, bound);
             wrong = true;
