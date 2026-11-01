@@ -589,7 +589,9 @@ int cmd_cook(const char* root_cstr, const char* out_cstr)
         return 1;
     }
 
-    std::printf("cook: wrote %zu artifacts to %s\n", artifacts.size(), out_cstr);
+    // A progress note, on stderr with the cook's other notes: a caller's stdout carries its own output (ceridc's JSON
+    // report, its MCP messages), never this library's.
+    std::fprintf(stderr, "cook: wrote %zu artifacts to %s\n", artifacts.size(), out_cstr);
     return 0;
 }
 
