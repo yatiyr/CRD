@@ -1982,7 +1982,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "076a8c84a0dfb516405759916357f3966e081d01535216baa303f19bfbe78cd3"
+      "sha256": "214c675ded5bc923303ad5873e44577d33ec1eb96c51d468834d3c15def6fe58"
     },
     {
       "path": "assets/comply/us-ca.rules.toml",

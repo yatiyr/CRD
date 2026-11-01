@@ -877,9 +877,13 @@
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5237&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2026-08-08 (7593)",
+          "read": "2026-11-01",
+          "sha256": "21372497dcf68b6608d1e9031d5759b48d4d0062c5b6b8d7395168bada92bc2d"
+        }
       },
-      "obligation": "Never record, transfer, obtain or fail to destroy personal data unlawfully; the data inventory and deletion service make every processing step lawful and auditable.",
+      "obligation": "Never record personal data unlawfully (Article 135, half as much again for the special categories), give, disseminate or obtain it unlawfully (Article 136) or fail to destroy it when the legal periods end (Article 138); a company gets the security measures of Article 140, so the data inventory and deletion service make every processing step lawful and auditable.",
       "applies_to": [
         "flow.crash-reports",
         "flow.telemetry",
@@ -902,9 +906,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.2",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-mevzuat-reading.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -1021,13 +1025,17 @@
       ],
       "instrument": {
         "name": "Turkish Penal Code No. 5237",
-        "article": "Articles 243-245",
+        "article": "Articles 243, 244, 245/A and 246",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5237&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2026-08-08 (7593)",
+          "read": "2026-11-01",
+          "sha256": "21372497dcf68b6608d1e9031d5759b48d4d0062c5b6b8d7395168bada92bc2d"
+        }
       },
-      "obligation": "The coordinated disclosure policy and its researcher safe harbour respect the offences of unauthorised access, system interference and data interference; Cerid never asks a researcher to commit one.",
+      "obligation": "The coordinated disclosure policy and its researcher safe harbour respect the offences of unauthorised access or remaining in a system and unlawful monitoring of its data transfers (Article 243), hindering or disrupting a system and altering, deleting or inserting its data (Article 244) and making, selling or holding a device, program or code made exclusively for these offences (Article 245/A); Cerid never asks a researcher to commit one, and its security tools are not made exclusively for them.",
       "applies_to": [
         "channel.distribution",
         "product.online-sessions"
@@ -1044,9 +1052,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.3",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-mevzuat-reading.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -1065,14 +1073,14 @@
         "NET.2"
       ],
       "instrument": {
-        "name": "Electronic Communications Law No. 5809 and the BTK rules on encryption",
-        "article": "Article 5 and the BTK regulations",
+        "name": "Electronic Communications Law No. 5809 and the BTK rules on coded and encrypted communication",
+        "article": "Article 39 and the BTK rules on coded and encrypted communication",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5809&MevzuatTur=1&MevzuatTertip=5",
         "consolidated": null
       },
-      "obligation": "Classify encryption in communication products against the BTK encryption rules and meet any notification or authorisation duty they set, without key escrow or weakened end-to-end encryption.",
+      "obligation": "Classify encryption in communication products against Article 39, under which the BTK sets the procedure for coded or encrypted communication within an electronic communication service (breaching it is an offence, Article 63(6)), and meet any notification or authorisation duty its rules set, without key escrow or weakened end-to-end encryption.",
       "applies_to": [
         "product.communications",
         "channel.distribution"
@@ -1154,13 +1162,13 @@
       ],
       "instrument": {
         "name": "Law No. 6415 on the Prevention of the Financing of Terrorism and Law No. 7262 on preventing the financing of the proliferation of weapons of mass destruction",
-        "article": "Asset-freeze decisions",
+        "article": "Law No. 6415 Articles 5-7, 11-13 and 15; Law No. 7262's proliferation freezes",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6415&MevzuatTur=1&MevzuatTertip=5",
         "consolidated": null
       },
-      "obligation": "Screen distribution, accounts and payments against Turkey's asset-freeze decisions.",
+      "obligation": "Screen distribution, accounts and payments against Turkey's asset-freeze decisions: the President's decisions implementing the UN Security Council lists (Article 5), foreign states' requests (Article 6) and domestic freezes (Article 7), each binding on its publication in the Official Gazette (Articles 11-12); make no transaction for a designated person and facilitate none (Article 13), report receivables and debts toward one to MASAK within 30 days (Article 12(3)), and never provide funds or financial services to one (Article 15).",
       "applies_to": [
         "channel.cerid-store",
         "flow.account-data",
@@ -1439,7 +1447,7 @@
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5809&MevzuatTur=1&MevzuatTertip=5",
         "consolidated": null
       },
-      "obligation": "Classify each communication product (voice, video, text) and obtain a BTK authorisation where the regulation requires one before operating it in Turkey.",
+      "obligation": "Classify each communication product (voice, video, text) as an electronic communication service or not and, where it is one, notify the BTK before operating it in Turkey, with a usage right where it needs numbers or frequencies (Article 9; operating without notification is an offence, Article 63(1)), under the BTK authorisation regulation.",
       "applies_to": [
         "product.communications",
         "flow.communications"
@@ -1449,7 +1457,7 @@
         "name": "classification record CTest per communication surface",
         "state": "planned"
       },
-      "effective": "2008-11-10",
+      "effective": "2009-05-10",
       "sunset": null,
       "counsel": {
         "needed": true,
@@ -1528,7 +1536,7 @@
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6112&MevzuatTur=1&MevzuatTertip=5",
         "consolidated": null
       },
-      "obligation": "Classify live streaming against RTÜK's internet broadcasting licence duty before offering it in Turkey.",
+      "obligation": "Classify live streaming against Article 29/A before offering it in Turkey: a media service provider offering radio, television or on-demand services only on the internet needs an RTÜK broadcast licence and a platform operator transmitting them a transmission authorisation, while individual communication, platforms not dedicated to transmitting such services and pure hosts are outside it (29/A(4)); the joint RTÜK and BTK regulation sets the procedure.",
       "applies_to": [
         "product.communications"
       ],
@@ -1537,7 +1545,7 @@
         "name": "classification record CTest",
         "state": "planned"
       },
-      "effective": "2011-03-03",
+      "effective": "2018-03-27",
       "sunset": null,
       "counsel": {
         "needed": true,
@@ -1565,13 +1573,17 @@
       ],
       "instrument": {
         "name": "Law No. 6563 on the Regulation of Electronic Commerce",
-        "article": "Articles 6-8",
+        "article": "Articles 6-8 and 11(5)",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6563&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2024-10-24 (7529)",
+          "read": "2026-11-01",
+          "sha256": "4fe79e0e03f652c6a75185a3f3571066cd98fd88e7455af62e1c52ed6b8a8ad7"
+        }
       },
-      "obligation": "Send commercial electronic messages only with prior consent recorded in the message management system (IYS), with an opt-out in every message.",
+      "obligation": "Send commercial electronic messages only with the recipient's prior consent, written or electronic (Article 6), recorded in the message management system (IYS), where a consent not transferred is invalid (Article 11(5)); each message matches its consent and identifies the sender with its contact details (Article 7), and carries an easy, free opt-out honoured within three business days (Article 8).",
       "applies_to": [
         "channel.cerid-store",
         "flow.account-data"
@@ -1588,9 +1600,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s40",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-mevzuat-reading.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -1609,7 +1621,7 @@
       ],
       "instrument": {
         "name": "Law No. 6563 on the Regulation of Electronic Commerce and its intermediary service provider regulation",
-        "article": "ETBIS registration",
+        "article": "Articles 2(1)(ı) and 11(4); the regulation on service providers and intermediary service providers",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6563&MevzuatTur=1&MevzuatTertip=5",
@@ -1653,13 +1665,13 @@
       ],
       "instrument": {
         "name": "Consumer Protection Law No. 6502 and the Regulation on Distance Contracts",
-        "article": "Articles 48-49; Regulation",
+        "article": "Article 48; the Regulation on Distance Contracts",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6502&MevzuatTur=1&MevzuatTertip=5",
         "consolidated": null
       },
-      "obligation": "Give pre-contract information, confirm the contract on a durable medium and honour the withdrawal right, with its lawful waiver for digital content delivered at once.",
+      "obligation": "Give the pre-contract information the regulation lists and say that confirming the order creates a payment duty (the burden of proof is the seller's), confirm the contract on a durable medium and honour the fourteen-day withdrawal right (Article 48(4): extended up to a year when its information was missing), with the regulation's lawful waiver for digital content delivered at once; a marketplace intermediary shares the seller's liability for the pre-contract information and its records (Article 48(6)).",
       "applies_to": [
         "channel.cerid-store",
         "product.purchases",
@@ -1702,9 +1714,13 @@
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5070&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2021-01-28 (7263)",
+          "read": "2026-11-01",
+          "sha256": "f02e029b53bbf8961193a1f147f7548ba4e6e77fbc1188985f0ea3621eb3e815"
+        }
       },
-      "obligation": "Where a contract, invoice or developer agreement needs a written form, use a qualified electronic signature that the law equates with a handwritten one.",
+      "obligation": "Where a contract, invoice or developer agreement needs a written form, use a secure electronic signature (made with a secure signature-creation device on a qualified electronic certificate, Article 4), which Article 5 gives the legal effect of a handwritten one; a transaction the law subjects to an official form or ceremony, and a guarantee contract other than a bank letter of guarantee or a surety bond of an insurer established in Turkey, cannot be made with it.",
       "applies_to": [
         "channel.cerid-store",
         "product.purchases"
@@ -1721,9 +1737,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.8",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-mevzuat-reading.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -1743,13 +1759,17 @@
       ],
       "instrument": {
         "name": "Law No. 5846 on Intellectual and Artistic Works",
-        "article": "Articles 2, 48-52",
+        "article": "Articles 2, 18 and 48-52",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5846&MevzuatTur=1&MevzuatTertip=3",
-        "consolidated": null
+        "consolidated": {
+          "version": "2021-12-21 (7346)",
+          "read": "2026-11-01",
+          "sha256": "4cc6d64814ffacb5592aa3a786be76e03ab8ca593321c71216b44701b946037c"
+        }
       },
-      "obligation": "Treat software and assets as works; licences and transfers are written and name the rights granted; third-party works are used only within their licence.",
+      "obligation": "Treat software (with its preparatory design) and assets as works, though the ideas and principles under a program and its interfaces are not (Article 2); an employee's work made on duty is exercised by the employer unless a contract says otherwise (Article 18); licences and transfers are written and name each right granted (Article 52), a licensee passes a right on only with the author's written consent (Article 49), and third-party works are used only within their licence.",
       "applies_to": [
         "channel.distribution",
         "channel.mods-and-ugc",
@@ -1767,9 +1787,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.4",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-mevzuat-reading.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -1787,13 +1807,17 @@
       ],
       "instrument": {
         "name": "Industrial Property Law No. 6769",
-        "article": "Trademarks and patents",
+        "article": "Articles 7 and 29 (trademarks); 82 and 85 (patents)",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6769&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2020-07-22 (7251)",
+          "read": "2026-11-01",
+          "sha256": "8e574aec08bcbdb5ba25c9a5ca9133513755db758fcbb9d37d97db3be7a57208"
+        }
       },
-      "obligation": "Clear product names against registered trademarks and respect patents, including codec patents, before release.",
+      "obligation": "Clear product names against registered trademarks, whose holder can stop an identical or confusingly similar sign on the same or similar goods and services and the unfair use of a well-known mark (Articles 7 and 29), and respect patents before release, including codec patents: a computer program as such is no invention, but a patented product or process is used only with the holder's consent (Articles 82(2)(c) and 85).",
       "applies_to": [
         "channel.distribution",
         "channel.cerid-store"
@@ -1810,9 +1834,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.4",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-mevzuat-reading.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -1831,13 +1855,13 @@
       ],
       "instrument": {
         "name": "Industrial Property Law No. 6769",
-        "article": "Trademark registration",
+        "article": "Articles 7(1), 11 and 23; EUIPO filings under Regulation (EU) 2017/1001",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6769&MevzuatTur=1&MevzuatTertip=5",
         "consolidated": null
       },
-      "obligation": "File trademarks for product names with TURKPATENT and the EUIPO before launch.",
+      "obligation": "File trademarks for product names with TURKPATENT (protection comes only by registration, Article 7(1); one mark per application with its goods and services list, Article 11; ten years from the application, renewed in the six months before the term ends, Article 23) and with the EUIPO before launch.",
       "applies_to": [
         "channel.cerid-store",
         "channel.distribution"
@@ -1876,13 +1900,17 @@
       ],
       "instrument": {
         "name": "Law No. 5378 on Persons with Disabilities",
-        "article": "Accessibility of information and communication services",
+        "article": "Articles 3(1)(f)-(g), 4/A and 7",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5378&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2023-06-22 (Anayasa Mahkemesi)",
+          "read": "2026-11-01",
+          "sha256": "7f358542de48201b3e65f0acd90df3c85c3c29a1a6039989c0f6fda89d8075de"
+        }
       },
-      "obligation": "Make information and communication services, storefronts and purchase flows accessible under the law and its accessibility rules.",
+      "obligation": "Make information services and information and communication technology accessible to persons with disabilities (Article 7) against the TSE accessibility standards (Article 3(1)(g)), and make the reasonable accommodations that keep storefronts and purchase flows free of discrimination (Article 4/A).",
       "applies_to": [
         "channel.cerid-store",
         "product.purchases",
@@ -1893,16 +1921,16 @@
         "name": "conformance matrix CTest",
         "state": "planned"
       },
-      "effective": "2005-07-07",
+      "effective": "2014-02-19",
       "sunset": null,
       "counsel": {
         "needed": false,
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.7",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-mevzuat-reading.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -1920,13 +1948,17 @@
       ],
       "instrument": {
         "name": "Value Added Tax Law No. 3065",
-        "article": "Taxable events and the electronic services regime",
+        "article": "Articles 1, 6, 9(1) and 28",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=3065&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2026-07-24 (7590)",
+          "read": "2026-11-01",
+          "sha256": "cf6225b48785a4aeb528c41e805ff5fb18d1143bcdf45c9a5966905e6b3f90b1"
+        }
       },
-      "obligation": "Charge, invoice and declare VAT on store sales, including the VAT-3 regime for non-resident electronic service providers selling into Turkey.",
+      "obligation": "Charge and declare VAT on store sales of goods and services performed or used in Turkey (Articles 1 and 6), at the rate the President sets under Article 28; as a provider without a residence, office or seat in Turkey selling electronic services to natural persons not registered for VAT, declare and pay it itself (Article 9(1), from 1 January 2018) under the Ministry's scope and procedure (the VAT No. 3 return).",
       "applies_to": [
         "channel.cerid-store",
         "product.purchases",
@@ -1944,9 +1976,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s36",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-mevzuat-reading.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -1964,13 +1996,13 @@
       ],
       "instrument": {
         "name": "Law No. 7194 on the Digital Service Tax",
-        "article": "Articles 1-8 and the 2026-2027 rate decision",
+        "article": "Articles 1-7 and Presidential Decision No. 10767",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=7194&MevzuatTur=1&MevzuatTertip=5",
         "consolidated": null
       },
-      "obligation": "Monitor the revenue thresholds and declare the digital service tax on in-scope store revenue at the current rate.",
+      "obligation": "Monitor the thresholds (exempt while the previous year's revenue from in-scope services was below TRY 20 million in Turkey or EUR 750 million worldwide, counted for the consolidated group, Article 4) and declare the tax monthly, by the end of the following month (Article 6), on revenue from digital content sales including games and in-game purchases, platforms where users interact and intermediation (Article 1), at the rate in force: Article 5 sets 7.5 % and Decision No. 10767 (Official Gazette of 25 December 2025, No. 33118) 5 % from 2026 and 2.5 % from 2027.",
       "applies_to": [
         "channel.cerid-store",
         "product.purchases",
@@ -2053,13 +2085,17 @@
       ],
       "instrument": {
         "name": "Law No. 6493 on Payment and Security Settlement Systems, Payment Services and Electronic Money Institutions",
-        "article": "Payment service licensing",
+        "article": "Articles 12-14, 18 and 28",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6493&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2020-06-18 (7247)",
+          "read": "2026-11-01",
+          "sha256": "b25983c8859d2843834cbad6de32e31c711560767f940cbaf0f123e2cbe534ee"
+        }
       },
-      "obligation": "Collect payments only through a licensed payment institution and decide the merchant-of-record role so the store never provides an unlicensed payment service.",
+      "obligation": "Collect payments only through a bank or a payment or electronic money institution licensed by the Central Bank (Articles 13(2), 14 and 18; acting without a licence is an offence, Article 28) and decide the merchant-of-record role so the store never provides an unlicensed payment service; a store credit or wallet usable only in the store's own network stays outside the law until the Central Bank brings it in by volume (Articles 12(2)(h) and 18(5)).",
       "applies_to": [
         "channel.cerid-store",
         "product.purchases",
@@ -2077,9 +2113,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-store.0",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-mevzuat-reading.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -5452,9 +5488,9 @@
       "sha256": "ea94c28021b59ef7c71dc3fda4242ff72389de9d60f0f28b6e56a9922bba9313"
     },
     "TR": {
-      "generation": 4,
+      "generation": 5,
       "reviewed": "2026-11-01",
-      "sha256": "076a8c84a0dfb516405759916357f3966e081d01535216baa303f19bfbe78cd3"
+      "sha256": "214c675ded5bc923303ad5873e44577d33ec1eb96c51d468834d3c15def6fe58"
     },
     "US": {
       "generation": 4,
