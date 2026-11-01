@@ -1,7 +1,13 @@
-import re, timeit
+import os
+import re
+import timeit
+
 import opt_einsum as oe
 
-inc = open("/mnt/d/Dev/cerid/tests/numerics/hesap-tensor/ref_einsum_paths.inc").read()
+PATHS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                                      "tests", "numerics", "hesap-tensor", "ref_einsum_paths.inc"))
+with open(PATHS, encoding="utf-8") as handle:
+    inc = handle.read()
 cases = re.findall(r'\{"([^"]+)", "([^"]+)", kEinSizes(\d+), (\d+)U, (\d+)ULL, (\d+)ULL\},', inc)
 sizes_arrays = {int(m.group(1)): [int(x) for x in m.group(2).replace("ULL", "").split(",")]
                 for m in re.finditer(r'kEinSizes(\d+)\[\] = \{([^}]+)\};', inc)}

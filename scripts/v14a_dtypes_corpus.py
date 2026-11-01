@@ -7,10 +7,13 @@
 #   3. ggml Q8_0 / Q4_0 block-quant parity vectors — the quantize_row_*_ref algorithms
 #      transcribed EXACTLY from ggml-org/ggml src/ggml-quants.c (fetched 2026-07-02).
 # Emits tests/numerics/hesap-tensor/ref_dtypes.inc as plain C arrays (no std containers in refs).
+import os
+
 import numpy as np
 import ml_dtypes
 
-OUT = "/mnt/d/Dev/cerid/tests/numerics/hesap-tensor/ref_dtypes.inc"
+OUT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                                    "tests", "numerics", "hesap-tensor", "ref_dtypes.inc"))
 
 f32 = np.float32
 
@@ -162,7 +165,7 @@ for i in range(0, 64, 16):
 lines.append("};")
 lines.append("")
 
-with open(OUT, "w") as f:
+with open(OUT, "w", newline="\n") as f:
     f.write("\n".join(l for l in lines if l is not None))
 print("wrote", OUT, "src corpus", len(src), "values")
 

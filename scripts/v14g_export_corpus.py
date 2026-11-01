@@ -30,7 +30,8 @@ def _serial_init(self, *a, **k):
 
 pb.RandomGreedyOptimizer.__init__ = _serial_init
 
-OUT = "/mnt/d/Dev/cerid/tests/numerics/hesap-tensor/ref_hyperopt.inc"
+OUT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                                    "tests", "numerics", "hesap-tensor", "ref_hyperopt.inc"))
 
 
 def main():
@@ -95,7 +96,7 @@ def main():
         lines.append(f"inline constexpr double kHy_{c}_ctg_log10 = {ctg_l10!r};")
         lines.append(f"inline constexpr double kHy_{c}_ctg_log2size = {ctg_l2sz!r};")
         print(f"[{tag:9s}] greedy {greedy_l10:.4f}  ctg-hq {ctg_l10:.4f}  log2sz {ctg_l2sz:.2f}", flush=True)
-    with open(OUT, "w") as f:
+    with open(OUT, "w", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
     print(f"wrote {OUT}: {len(nets)} networks, {total_terms} terms, {total_ids} ids", flush=True)
 

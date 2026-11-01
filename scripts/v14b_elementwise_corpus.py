@@ -4,9 +4,12 @@
 # broadcast/stride-adversarial cases across add/sub/mul/div/min/max, neg/abs,
 # compare(lt), where, and f32<->f64 casts. Emits plain C arrays to
 # tests/numerics/hesap-tensor/ref_elementwise.inc (no std containers in refs).
+import os
+
 import numpy as np
 
-OUT = "/mnt/d/Dev/cerid/tests/numerics/hesap-tensor/ref_elementwise.inc"
+OUT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                                    "tests", "numerics", "hesap-tensor", "ref_elementwise.inc"))
 rng = np.random.default_rng(1407)
 
 lines = [
@@ -88,6 +91,6 @@ a5f = a5.astype(np.float32)
 emit_u64("kEwR5Cast64", a5f.astype(np.float64))  # exact widening
 
 lines.append("")
-with open(OUT, "w") as f:
+with open(OUT, "w", newline="\n") as f:
     f.write("\n".join(lines))
 print("wrote", OUT)

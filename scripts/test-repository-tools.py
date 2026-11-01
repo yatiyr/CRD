@@ -474,7 +474,7 @@ class RepositoryTools(unittest.TestCase):
 
             def errors(data):
                 fixture.write_bytes(data)
-                return hygiene.text_encoding_errors(root, ['note.md'])
+                return hygiene.text_file_errors(root, ['note.md'])
 
             clean = 'em dash \u2014, section \u00a7, \u00e9, \u011f, star \u2b50, 1.2\u00d7\u20133\u00d7, ODT\u00dc\u2019de\n'
             self.assertEqual(errors(clean.encode('utf-8')), [])
@@ -496,6 +496,32 @@ class RepositoryTools(unittest.TestCase):
             with patch.dict(hygiene.MOJIBAKE_EXCEPTIONS, {'note.md': {'\u00c2\u00b7': 'A-hat times m'}}):
                 self.assertEqual(errors(notation), [])
                 self.assertEqual(len(errors(corrupt('\u2014\n'))), 1)
+
+    def test_checkout_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            def errors(name, text):
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text(text, encoding='utf-8')
+                return hygiene.text_file_errors(root, [name])
+
+            spellings = ('D:/Dev/cerid/tests/a.inc', 'd:\\Dev\\cerid\\scripts', 'D:\\\\Dev\\\\cerid-track-b',
+                         '/mnt/d/Dev/cerid/scripts/x.sh', 'C://dev//Cerid-perf', '/mnt/e/dev/CERID')
+            for spelling in spellings:
+                found = errors('scripts/gen.py', f'import os\nOUT = "{spelling}"\n')
+                self.assertEqual(len(found), 1, spelling)
+                self.assertIn('scripts/gen.py:2 (1 in the file, the first ', found[0])
+                self.assertIn(repr(spelling[:spelling.lower().index('cerid') + 5]), found[0])
+            self.assertIn('scripts/gen.py:1 (2 in the file, the first ',
+                          errors('scripts/gen.py', 'a = "D:/Dev/cerid"\nb = "/mnt/d/Dev/cerid"\n')[0])
+            self.assertEqual(len(errors('engine/a.cpp', '// run D:/Dev/cerid/build/x\n')), 1)
+            # Records and the tool tests' sample text name checkouts; other paths are not checkouts.
+            for name in ('docs/sessions/note.txt', 'MEMORY.md', 'tools/README.md', 'scripts/test-tool.py'):
+                self.assertEqual(errors(name, 'ran in D:\\Dev\\cerid and /mnt/d/Dev/cerid\n'), [], name)
+            for text in ('/home/u/cerid-src', '~/cerid-mirror-build', 'D:/Dev/nav/cerid', '/dev/cerid',
+                         'C:/Users/u/Dev', 'scripts/cerid/dev/x'):
+                self.assertEqual(errors('scripts/gen.py', text + '\n'), [], text)
 
     def test_text_names_follow_git_text_detection(self):
         listing = ('i/lf    w/lf    attr/text eol=lf      \tsrc/a.cpp\0'

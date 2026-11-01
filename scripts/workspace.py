@@ -126,7 +126,8 @@ def claude_project_key(path):
     """Directory name Claude Code uses under <config>/projects for a project folder.
 
     Observed behaviour (not source-verified): every character outside [A-Za-z0-9] becomes '-', case is preserved.
-    `D:\\Dev\\cerid` -> `D--Dev-cerid`, `/home/u/cerid` -> `-home-u-cerid`. Names longer than 200 characters are
+    `D:\\Dev\\navpower\\navpower_scenario` -> `D--Dev-navpower-navpower-scenario`,
+    `/home/user/cerid` -> `-home-user-cerid`. Names longer than 200 characters are
     shortened by Claude Code with a suffix this tool does not reproduce; `claude_memory_dir` handles that case.
     """
     return re.sub(r'[^A-Za-z0-9]', '-', str(path))

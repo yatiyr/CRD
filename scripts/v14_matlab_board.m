@@ -3,8 +3,8 @@
 % sessions work — so this ONE script batches every pending MATLAB row
 % (the 44.5 s startup lesson: never one call per ref).
 %
-% RUN INSIDE YOUR OPEN MATLAB:
-%   run('D:/Dev/cerid/scripts/v14_matlab_board.m')
+% RUN INSIDE YOUR OPEN MATLAB, naming the checkout's copy:
+%   run('<checkout>/scripts/v14_matlab_board.m')
 %
 % It prints the board AND writes scripts/v14_matlab_board_results.txt for
 % ingestion. Protocol: maxNumCompThreads(1) (matched 1T), best-of-5 wall
@@ -12,7 +12,8 @@
 % bit-identical for wall-clock rows; fit parity is already gated
 % elementwise-exact vs TensorLy on the C++ side).
 
-out = fopen('D:/Dev/cerid/scripts/v14_matlab_board_results.txt', 'w');
+results = fullfile(fileparts(mfilename('fullpath')), 'v14_matlab_board_results.txt');
+out = fopen(results, 'w');
 prev_threads = maxNumCompThreads(1); %#ok<NASGU>
 fprintf(out, 'MATLAB %s | maxNumCompThreads(1) | best-of-5\n', version);
 fprintf('MATLAB %s | 1 thread | best-of-5\n', version);
@@ -77,7 +78,7 @@ else
 end
 
 fclose(out);
-fprintf('\nDONE -> D:/Dev/cerid/scripts/v14_matlab_board_results.txt\n');
+fprintf('\nDONE -> %s\n', results);
 
 function t = timeit_once(f)
     tic; f(); t = toc;

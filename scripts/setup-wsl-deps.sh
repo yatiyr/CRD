@@ -6,8 +6,8 @@
 # list as `.github/workflows/ci.yml` and fetches SPIRV-Reflect (which Ubuntu's
 # libvulkan-dev does not ship). Idempotent — safe to re-run.
 #
-# Usage (from inside WSL):
-#     bash /mnt/d/Dev/cerid/scripts/setup-wsl-deps.sh
+# Usage (from inside WSL, in the checkout as WSL mounts it):
+#     bash scripts/setup-wsl-deps.sh
 #
 # After it finishes, drive builds from PowerShell on Windows via:
 #     ./scripts/wsl-build.ps1 linux-gcc-debug

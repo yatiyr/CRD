@@ -7,7 +7,7 @@ Cerid `Dual`/`Jet` rules are verified against BEFORE porting a single C++ line
 v15-b extends it per crd::math rule (sin/cos/exp/log/pow/erf/...), v15-d for the
 SIMD vector (multi-direction) mode, v15-g for Taylor-mode jets (jax.experimental.jet).
 
-Run (WSL): ~/.venvs/crd-ad/bin/python /mnt/d/Dev/cerid/scripts/v15_ad_oracle.py
+Run (WSL, from the checkout): ~/.venvs/crd-ad/bin/python scripts/v15_ad_oracle.py
 
 Everything prints to full f64 precision so the C++ gate can compare to 0/1 ULP.
 """

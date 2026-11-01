@@ -7,7 +7,7 @@
 #
 # Prereqs (one-time):
 #   - WSL2 with Ubuntu 24.04 (verify: `wsl -l -v`)
-#   - Inside WSL: `bash /mnt/d/Dev/cerid/scripts/setup-wsl-deps.sh`
+#   - Inside WSL, in the checkout as WSL mounts it: `bash scripts/setup-wsl-deps.sh`
 #
 # Usage:
 #   ./scripts/wsl-build.ps1 linux-gcc-debug              # configure + build + test
@@ -15,7 +15,7 @@
 #   ./scripts/wsl-build.ps1 linux-gcc-release -Reconfigure
 #   ./scripts/wsl-build.ps1 linux-gcc-debug -BuildJobs 8   # cap Ninja to 8 threads
 #
-# The Windows path D:\Dev\cerid is accessed via /mnt/d/Dev/cerid from WSL.
+# WSL reaches the Windows checkout through its drive mount (X:\path to /mnt/x/path).
 # That mount (drvfs) costs milliseconds per file open and stat, which a
 # header-heavy build pays on every unit. Since 2026-10-18 the script runs
 # scripts/wsl-lane.sh, which builds and tests from the ext4 source mirror
@@ -66,7 +66,7 @@ $ErrorActionPreference = 'Stop'
 # regardless of where you invoke it from.
 $repoRootWin = (Resolve-Path "$PSScriptRoot/..").Path
 
-# Convert D:\Dev\cerid → /mnt/d/Dev/cerid (lowercase drive, forward slashes).
+# Convert X:\path\to\checkout → /mnt/x/path/to/checkout (lowercase drive, forward slashes).
 $drive = $repoRootWin.Substring(0, 1).ToLower()
 $tail  = $repoRootWin.Substring(2).Replace('\', '/')
 $repoRootWsl = "/mnt/$drive$tail"

@@ -4,10 +4,12 @@
 # and the optimal path FLOPs (their own cost model: prod(union) x (1+inner)
 # per pairwise step). The C++ gate: our greedy <= their greedy (parity-or-
 # better), our optimal == their optimal. Plain C arrays out.
+import os
 import random
 import opt_einsum as oe
 
-OUT = "/mnt/d/Dev/cerid/tests/numerics/hesap-tensor/ref_einsum_paths.inc"
+OUT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                                    "tests", "numerics", "hesap-tensor", "ref_einsum_paths.inc"))
 rng = random.Random(1407)
 
 cases = []
@@ -88,6 +90,6 @@ lines.extend(rows)
 lines.append("};")
 lines.append("inline constexpr crd::u32 kEinsumPathCaseCount = %dU;" % len(rows))
 lines.append("")
-with open(OUT, "w") as f:
+with open(OUT, "w", newline="\n") as f:
     f.write("\n".join(lines))
 print("wrote", OUT, len(rows), "cases")

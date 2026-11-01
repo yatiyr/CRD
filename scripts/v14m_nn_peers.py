@@ -6,6 +6,7 @@
 # The corpus .onnx twins are batch-1 (frozen export); this script exports
 # DYNAMIC-batch twins from the SAME frozen weights to /tmp for the ort rows
 # (corpus untouched) and cross-checks ort vs torch before timing.
+import os
 import time
 
 import numpy as np
@@ -14,7 +15,8 @@ import torch
 import torch.nn as nn
 from safetensors.torch import load_file
 
-CORPUS = "/mnt/d/Dev/cerid/tests/numerics/hesap-tensor/nn_corpus"
+CORPUS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                                       "tests", "numerics", "hesap-tensor", "nn_corpus"))
 torch.set_num_threads(1)
 
 

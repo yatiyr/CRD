@@ -1,7 +1,16 @@
 % v14 TTB rows (Sandia Tensor Toolbox, cloned 2026-07-05): cp_als/tucker_als
-% (v14-j) + sptensor mttkrp (v14-i). Appends to the results file.
-addpath('C:/Users/abici/tools/tensor_toolbox');
-out = fopen('D:/Dev/cerid/scripts/v14_matlab_board_results.txt', 'a');
+% (v14-j) + sptensor mttkrp (v14-i). Appends to the results file beside this script.
+% The toolbox is the one on the path, or the folder CRD_TENSOR_TOOLBOX names.
+toolbox = getenv('CRD_TENSOR_TOOLBOX');
+if ~isempty(toolbox)
+    addpath(toolbox);
+end
+if ~(exist('sptensor', 'file') && exist('cp_als', 'file'))
+    error(['[TTB] Tensor Toolbox (Sandia) not on path: set CRD_TENSOR_TOOLBOX to its folder ', ...
+           '(https://www.tensortoolbox.org).']);
+end
+results = fullfile(fileparts(mfilename('fullpath')), 'v14_matlab_board_results.txt');
+out = fopen(results, 'a');
 maxNumCompThreads(1);
 best5 = @(f) min(arrayfun(@(k) timeit_once(f), 1:5));
 

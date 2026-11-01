@@ -16,11 +16,14 @@
 #    (NO std containers in refs — the house rule).
 #
 # Run (WSL): python3 scripts/v14j_decomp_oracle.py
+import os
+
 import numpy as np
 import tensorly as tl
 from tensorly.decomposition import parafac, tucker
 
-OUT = "/mnt/d/Dev/cerid/tests/numerics/hesap-tensor/ref_decomp.inc"
+OUT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                                    "tests", "numerics", "hesap-tensor", "ref_decomp.inc"))
 
 
 # ---------------------------------------------------------------- helpers
@@ -363,7 +366,7 @@ def main():
 
     lines.append("} // namespace refdecomp")
     lines.append("// clang-format on")
-    with open(OUT, "w") as f:
+    with open(OUT, "w", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
     print(f"wrote {OUT}: {offs[-1]} tensor elements, {len(cp_out)} CP rows, "
           f"{len(tk_out)} Tucker rows, {len(rd_out)} randomized rows")

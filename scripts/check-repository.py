@@ -39,6 +39,11 @@ MOJIBAKE_EXCEPTIONS = {
     'docs/sessions/2026-05-26-hesap-v4i-1-spai-fspai.md':
         {'\u00c2\u00b7': 'A-hat (the column block A(I, J_k)) times m-hat'},
 }
+# A developer's checkout spelled literally (`<drive>:/Dev/cerid`, its backslash forms, a `cerid-*` worktree beside it,
+# WSL's `/mnt/<drive>/Dev/cerid`) opens only on that machine; code finds the repository from its own location. Markdown is the record (session notes and the
+# memory name the checkouts they ran in) and the tool tests' fixtures are sample text, never a path they open.
+CHECKOUT_PATH = re.compile(r'(?:/mnt/[a-z]|[a-z]:)[\\/]+dev[\\/]+cerid', re.I)
+CHECKOUT_PATH_RECORDS = re.compile(r'docs/.*|.*\.md|scripts/test-[^/]+\.py')
 
 
 def git(*args, data=None):
@@ -76,8 +81,8 @@ def mojibake(text):
                 continue
 
 
-def text_encoding_errors(root, names):
-    """Authored text is UTF-8 without a byte order mark and holds no double-encoded UTF-8."""
+def text_file_errors(root, names):
+    """Authored text is UTF-8 without a byte order mark and holds no double-encoded UTF-8; code names no checkout."""
     errors = []
     for name in names:
         raw = (root / name).read_bytes()
@@ -94,6 +99,11 @@ def text_encoding_errors(root, names):
             sequence, character = found[0]
             errors.append(f'Double-encoded UTF-8 in {name}: {len(found)} sequences, the first {ascii(sequence)} '
                           f'for {ascii(character)}')
+        first = None if CHECKOUT_PATH_RECORDS.fullmatch(name) else CHECKOUT_PATH.search(text)
+        if first:
+            errors.append(f'Literal checkout path in {name}:{text.count(chr(10), 0, first.start()) + 1} '
+                          f'({len(CHECKOUT_PATH.findall(text))} in the file, the first {first[0]!r}); find the '
+                          "repository from the file's own location")
     return errors
 
 
@@ -156,8 +166,8 @@ def check(root=ROOT):
                 errors.append(f'Generated binary/capture in source: {name}')
             if re.search(r'(?:^|/)[^/]*[-_]tmp\.(?:bat|ps1)$', name):
                 errors.append(f'One-shot temporary script in source: {name}')
-        errors.extend(text_encoding_errors(root, [name for name in text_names(git('ls-files', '--eol', '-z'))
-                                                  if (root / name).is_file()]))
+        errors.extend(text_file_errors(root, [name for name in text_names(git('ls-files', '--eol', '-z'))
+                                              if (root / name).is_file()]))
         visible = ['AGENTS.md', 'context.md', 'MEMORY.md', 'START_HERE.md', 'docs/README.md',
                    'assets/example.sdf', 'assets/example.ckir', 'assets/example.ceir',
                    'tests/example/reference.glb', 'docs/bench/example.md']
