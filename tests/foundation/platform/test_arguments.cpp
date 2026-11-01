@@ -34,7 +34,7 @@ TEST_CASE("arguments: the C runtime's documented examples split the same way", "
 {
     check_split(u"p \"a b c\" d e", {"p", "a b c", "d", "e"});
     check_split(u"p \"ab\\\"c\" \"\\\\\" d", {"p", "ab\"c", "\\", "d"});
-    check_split(u"p a\\\\\\b d\"e f\"g h", {"p", "a\\\\\\b", "de fg", "h"});
+    check_split(uR"(p a\\\b d"e f"g h)", {"p", R"(a\\\b)", "de fg", "h"});
     check_split(u"p a\\\\\\\"b c d", {"p", "a\\\"b", "c", "d"});
     check_split(u"p a\\\\\\\\\"b c\" d e", {"p", "a\\\\b c", "d", "e"});
     check_split(u"p a\"b\"\" c d", {"p", "ab\" c d"});
@@ -53,8 +53,8 @@ TEST_CASE("arguments: blanks, empty arguments, quotes and trailing backslashes",
 
 TEST_CASE("arguments: the program name keeps its backslashes and drops its quotes", "[platform][arguments]")
 {
-    check_split(u"\"C:\\Program Files\\Cerid\\ceridc.exe\" screen", {"C:\\Program Files\\Cerid\\ceridc.exe", "screen"});
-    check_split(u"C:\\tools\\ceridc.exe\\\"x y\" z", {"C:\\tools\\ceridc.exe\\x y", "z"});
+    check_split(uR"("C:\Program Files\Cerid\ceridc.exe" screen)", {R"(C:\Program Files\Cerid\ceridc.exe)", "screen"});
+    check_split(uR"(C:\tools\ceridc.exe\"x y" z)", {R"(C:\tools\ceridc.exe\x y)", "z"});
     check_split(u"", {""});
     check_split(u"ceridc", {"ceridc"});
     check_split(u"  leading", {"", "leading"}); // a line that starts blank has an empty program name
@@ -62,12 +62,13 @@ TEST_CASE("arguments: the program name keeps its backslashes and drops its quote
 
 TEST_CASE("arguments: characters outside ASCII arrive as UTF-8, a best-fit quote as itself", "[platform][arguments]")
 {
+    // \103 and \143 spell 'C' and 'c' after a hex escape: an octal escape stops at three digits, a hex one runs on.
     check_split(u"ceridc screen --name \"KUZEY DEN\u0130Z T\u0130CARET A.\u015E.\" --name \u011F\u00FC\u015F\u0131",
-                {"ceridc", "screen", "--name", "KUZEY DEN\xC4\xB0Z T\xC4\xB0" "CARET A.\xC5\x9E.", "--name",
+                {"ceridc", "screen", "--name", "KUZEY DEN\xC4\xB0Z T\xC4\xB0\103ARET A.\xC5\x9E.", "--name",
                  "\xC4\x9F\xC3\xBC\xC5\x9F\xC4\xB1"});
     // U+FF02 FULLWIDTH QUOTATION MARK, which the ANSI code pages' best-fit mapping turns into '"': here it neither
     // opens a quoted run nor ends an argument.
-    check_split(u"p a\uFF02 b\uFF02c", {"p", "a\xEF\xBC\x82", "b\xEF\xBC\x82" "c"});
+    check_split(u"p a\uFF02 b\uFF02c", {"p", "a\xEF\xBC\x82", "b\xEF\xBC\x82\143"});
     check_split(u"p \U0001D538\U0001D539", {"p", "\xF0\x9D\x94\xB8\xF0\x9D\x94\xB9"});
     const char16_t unpaired[] = {u'p', u' ', 0xD800U, u'x', 0xDC00U, 0U};
     check_split(unpaired, {"p", "\xEF\xBF\xBDx\xEF\xBF\xBD"});
@@ -84,9 +85,9 @@ TEST_CASE("arguments: a moved object keeps its arguments", "[platform][arguments
 #if !CRD_OS_WINDOWS
 TEST_CASE("arguments: POSIX hands main's arguments on as they are", "[platform][arguments]")
 {
-    char  name[]  = "p";
-    char  value[] = "DEN\xC4\xB0Z";
-    char* argv[]  = {name, value, nullptr};
+    char name[] = "p";
+    char value[] = "DEN\xC4\xB0Z";
+    char* argv[] = {name, value, nullptr};
     const Arguments arguments(2, argv);
     CHECK(arguments.count() == 2);
     CHECK(arguments.values() == argv);
