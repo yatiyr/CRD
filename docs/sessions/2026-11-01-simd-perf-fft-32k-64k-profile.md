@@ -17,7 +17,7 @@ avx512 gaps after the 1K change: 64K (0.76x MKL aligned) and 32K (0.83x), both p
   linux-gcc-release fails `test_multivariate.cpp:125`'s `-Wmaybe-uninitialized`, fixed on main at `76330344`, which
   the dispatch predates. Its win-tidy was still running; no completed lane has built `bcec86fd`'s avx512 stage-1
   store yet.
-- The earlier dispatch 41269105413 (`b0b1b245`) finished win-tidy failed on `filesystem.cpp`'s macro collision (fixed
+- The earlier dispatch 41269105413 (`b0b1b245`): its finished win-tidy failed on `filesystem.cpp`'s macro collision (fixed
   on main) and on `test_filesystem.cpp`'s local constant `kUnixNs`, which the tidy rule names in lower case and main
   still carried: renamed `unix_ns` (`fix(tests)`), the platform tests' file cases passing on the machine (219
   assertions in 18 cases, linux-gcc-release).
@@ -47,7 +47,7 @@ avx512 gaps after the 1K change: 64K (0.76x MKL aligned) and 32K (0.83x), both p
 - No engine change landed: the candidate (`INPLACE_MIDS` with 128, `forward_builds` and `planned_forward` to 32K,
   `execute_in_place3`'s 128-point case and the tests' 32K expectations) was built on the machine and reverted.
 - Locally the plan, repository and Allman checks.
-- The machine ran 0.35 h in two starts and is stopped.
+- The machine ran 0.40 h in three starts (the third for the platform tests) and is stopped.
 
 ## Left
 
