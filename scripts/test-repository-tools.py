@@ -459,6 +459,48 @@ class RepositoryTools(unittest.TestCase):
             fixture.write_bytes(b'program example {}\n')
             self.assertEqual(hygiene.canonical_asset_errors(root), [])
 
+    def test_text_encoding(self):
+        def corrupt(text):
+            # UTF-8 read as Windows-1252 (its five unassigned bytes as the C1 controls Windows gives them), saved as UTF-8.
+            return ''.join(bytes([b]).decode('cp1252', errors='ignore') or chr(b) for b in text.encode('utf-8')).encode()
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            fixture = root / 'note.md'
+
+            def errors(data):
+                fixture.write_bytes(data)
+                return hygiene.text_encoding_errors(root, ['note.md'])
+
+            clean = 'em dash \u2014, section \u00a7, \u00e9, \u011f, star \u2b50, 1.2\u00d7\u20133\u00d7, ODT\u00dc\u2019de\n'
+            self.assertEqual(errors(clean.encode('utf-8')), [])
+            self.assertEqual(errors(b'\xef\xbb\xbf' + clean.encode('utf-8')),
+                             ['Text file starts with a UTF-8 byte order mark: note.md'])
+            self.assertEqual(errors(b'caf\xe9\n'), ['Text file is not valid UTF-8 (byte 3): note.md'])
+            # Three-byte (an em dash, and a star whose last byte 0x90 has no Windows-1252 character), two-byte Latin-1
+            # and Latin Extended-A (a section sign, e acute, g breve) and a four-byte character, each double-encoded.
+            for character in ('\u2014', '\u2b50', '\u00a7', '\u00e9', '\u011f', '\U0001f600'):
+                found = errors(corrupt(f'x {character} y\n'))
+                self.assertEqual(len(found), 1, ascii(character))
+                self.assertIn(f'for {ascii(character)}', found[0])
+            self.assertIn('2 sequences', errors(corrupt('\u2014 and \u2192\n'))[0])
+            # A lead with too few tail characters, or whose bytes are no UTF-8 character (E0 80 80 is overlong), is text.
+            self.assertEqual(errors('\u00e2\u20acA \u00e0\u20ac\u20ac\n'.encode('utf-8')), [])
+            # Per-file exceptions: the sequence is accepted in that file only.
+            notation = 'where \u00c2\u00b7m = e\n'.encode('utf-8')
+            self.assertEqual(len(errors(notation)), 1)
+            with patch.dict(hygiene.MOJIBAKE_EXCEPTIONS, {'note.md': {'\u00c2\u00b7': 'A-hat times m'}}):
+                self.assertEqual(errors(notation), [])
+                self.assertEqual(len(errors(corrupt('\u2014\n'))), 1)
+
+    def test_text_names_follow_git_text_detection(self):
+        listing = ('i/lf    w/lf    attr/text eol=lf      \tsrc/a.cpp\0'
+                   'i/-text w/-text attr/text=auto        \tdata/b.npy\0'
+                   'i/lf    w/lf    attr/-text            \ttests/fuzz/corpus/seed\0'
+                   'i/none  w/none  attr/text=auto        \tdocs/with space.md\0'
+                   'i/lf    w/crlf  attr/text eol=crlf    \tscripts/run.bat\0')
+        self.assertEqual(hygiene.text_names(listing), ['src/a.cpp', 'docs/with space.md', 'scripts/run.bat'])
+
     def test_generated_target_folders(self):
         cmake = shutil.which('cmake')
         self.assertIsNotNone(cmake, 'CMake is required for the build-tool regression gate')

@@ -72,7 +72,11 @@ and [logical project filters](https://learn.microsoft.com/en-us/cpp/build/refere
 
 Keep authored code/assets, reproducible generators and peer harnesses, documentation and portable shared settings.
 Canonical CEIR/CKIR/CHIR source text uses UTF-8 without BOM and LF on every checkout; Git attributes and the
-repository guard enforce that byte-stable authoring contract. Write scratch experiments, captures and cleanup recovery bundles beneath ignored `build/<task>/`; keep reusable
+repository guard enforce that byte-stable authoring contract. Every other tracked text file (each one Git treats as
+text: not unset by `.gitattributes`, not detected as binary; binary data formats are declared `binary` there) is
+UTF-8 without BOM and holds no double-encoded UTF-8 (UTF-8 read as Windows-1252 and saved again);
+`check-repository.py` refuses both, and a legitimate sequence the rule matches is listed with its reason in the
+checker's per-file exceptions. Write scratch experiments, captures and cleanup recovery bundles beneath ignored `build/<task>/`; keep reusable
 scripts in `scripts/` and measurement evidence in `docs/bench/`. The CI platform (device registry, planner,
 executors, operator command and dashboard; [ADR-0135](../decisions/0135-cerid-ci-platform.md)) lives in `ci/`; its
 contract tests stay with the other tooling tests in `scripts/`. Do not delete a harness because its name is old.

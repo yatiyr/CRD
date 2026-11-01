@@ -34,6 +34,16 @@
 *.jpg binary
 *.spv binary
 *.ttf binary
+*.glb binary
+*.3mf binary
+# Tensor and model test data: raw bytes, read as text by Git's detection when they hold no NUL byte
+*.bin binary
+*.npy binary
+*.npz binary
+*.safetensors binary
+*.onnx binary
+*.q8 binary
+*.q8s binary
 
 # Fuzz corpora are raw bytes: never normalized, never merged as text
 tests/**/fuzz/corpus/** -text -diff -merge
