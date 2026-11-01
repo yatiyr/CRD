@@ -615,13 +615,17 @@
       ],
       "instrument": {
         "name": "Communiqué on the Procedures and Principles to be Followed in Fulfilling the Obligation to Inform",
-        "article": "Whole communiqué",
+        "article": "Articles 4-6",
         "type": "by-law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=24454&MevzuatTur=9&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2018-03-10/30356 at 2019-04-28 (RG 30758)",
+          "read": "2026-11-01",
+          "sha256": "90632217a2a49745d60755109bee244b6ed37d135f3a514653276c7df1c09748"
+        }
       },
-      "obligation": "Keep the notice separate from any request for explicit consent and never bundle the two or make consent a service condition; word the notice clearly and plainly, without misleading or incomplete information, and be able to prove it was given.",
+      "obligation": "Inform the data subject when the data is obtained, in every processing whatever its legal basis, without waiting for a request and again before a new purpose: the controller and its representative, a specific and explicit purpose, the recipient groups and the purpose of a transfer, the collection method (automated or not) and the legal basis among Articles 5-6 of Law No. 6698, and the rights of Article 11; in clear and plain language, without general, vague, incomplete or misleading statements, consistent with the Registry, and separately from any request for explicit consent; for data not obtained from the data subject, within a reasonable time, at the first contact or at the latest at the first transfer; and keep the proof that it was given.",
       "applies_to": [
         "flow.crash-reports",
         "flow.telemetry",
@@ -644,9 +648,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "ref": "docs/sessions/2026-11-01-comply-0-gazette-and-new-instruments.md#reading",
         "read": "2026-11-01",
-        "verified": false
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -834,13 +838,17 @@
       ],
       "instrument": {
         "name": "By-Law on the Procedures and Principles for the Transfer of Personal Data Abroad",
-        "article": "Articles 13-14",
+        "article": "Article 14",
         "type": "by-law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=40863&MevzuatTur=7&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2024-07-10/32598 as published",
+          "read": "2026-11-01",
+          "sha256": "058643c56dd862ea199e550012dea4cf7019371cf444554417cc59ef03ca224a"
+        }
       },
-      "obligation": "Use the Board's standard contract unmodified and notify it to the Authority within five business days of its signature, as the By-Law sets for Article 9 of Law No. 6698.",
+      "obligation": "Where personal data goes abroad on a standard contract, use the contract the Board announced unmodified (its Turkish text prevails), signed by the parties or their authorised signatories, and notify it to the Authority within five business days of the last signature, physically, by KEP or as the Board sets, with proof of the signatories' authority and notarised translations of documents in another language; the exporter notifies unless the contract names the party; a change of parties or contents, or the contract's end, is notified the same way.",
       "applies_to": [
         "flow.crash-reports",
         "flow.telemetry",
@@ -863,9 +871,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s37",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-gazette-and-new-instruments.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -943,9 +951,13 @@
         "type": "regulation",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=24038&MevzuatTur=7&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2017-10-28/30224 at 2019-04-28 (RG 30758)",
+          "read": "2026-11-01",
+          "sha256": "75f888949932e9b50d7250a34f77b3be1362d46483d6e2ed85b716632cdb77be"
+        }
       },
-      "obligation": "Keep a retention and destruction policy, destroy personal data at the first periodic destruction after its purpose ends (at most every six months) and keep destruction records for three years.",
+      "obligation": "A controller that registers under Article 16 of Law No. 6698 keeps a retention and destruction policy with the contents Article 6 lists, in line with its processing inventory; once every processing condition of Articles 5-6 has ended, delete, destroy or anonymise the data at the first periodic destruction after that day (at most every six months; within three months for a controller without a policy) or, on the data subject's request, within thirty days, informing a third party it was transferred to; state the methods in the policy, record every destruction and keep the records for at least three years.",
       "applies_to": [
         "flow.crash-reports",
         "flow.telemetry",
@@ -968,9 +980,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.2",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-gazette-and-new-instruments.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -1238,13 +1250,17 @@
       ],
       "instrument": {
         "name": "Regulation on the Procedures and Principles for Coded or Encrypted Communication within an Electronic Communication Service by Public Bodies and Natural and Legal Persons",
-        "article": "Whole regulation",
+        "article": "Articles 5-8 and 11",
         "type": "regulation",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=14387&MevzuatTur=7&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2010-10-23/27738 at 2018-01-12 (RG 30299)",
+          "read": "2026-11-01",
+          "sha256": "6a2cb03116b4a74d8adb86207af9a3c1c4a91238dfd2ddd73e406da2305fb69f"
+        }
       },
-      "obligation": "Meet the permit, notification and safekeeping duties the regulation sets for producing, importing or operating coded or encrypted communication systems within an electronic communication service, without key escrow or weakened end-to-end encryption.",
+      "obligation": "Before producing or importing a coded or encrypted communication device or system used within an electronic communication service, the producer applies to the BTK for a permit with the documents Article 5(2) lists (the crypto algorithm and keys, the key generation, distribution and loading modules and, where needed, the software or hardware that decrypts, and two samples), delivers the code or crypto to the BTK when the permit is granted (Article 7(1)), changes no hardware or software characteristic without approval (Article 7(3)), keeps the systems from unauthorised use (Article 8(1)) and reports the devices placed on the market by the last working day of the next month (Article 11); a system in a local area not using an operator's infrastructure needs no permit (Article 7(2)). Cerid's end-to-end encryption delivers no keys, so whether a product falls within the regulation is settled before a communication product operates in Turkey.",
       "applies_to": [
         "product.communications",
         "channel.distribution"
@@ -1261,9 +1277,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.1",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-gazette-and-new-instruments.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -1380,9 +1396,13 @@
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=7262&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2024-01-18 (Anayasa Mahkemesi)",
+          "read": "2026-11-01",
+          "sha256": "4c96e734bbef39be4ea88a0fca7027d72ae88a0041c18cdf82fb192a58a2d7a4"
+        }
       },
-      "obligation": "Screen distribution, accounts and payments against the President's decisions implementing the UN Security Council's proliferation-financing sanctions, binding on their publication in the Official Gazette, and make no transaction for a designated person.",
+      "obligation": "Make no funds available to, and enter no business relationship in Turkey with, a person or entity the UN Security Council's proliferation-financing resolutions designate, or one it controls or that acts for it (Article 2(1)); apply each freeze, prohibition and lifting from the President's decision published in the Official Gazette, effective without delay (Article 3(1)-(2)), screening distribution, accounts and payments against the final lists the public bodies publish (Article 3(3)), the execution following Law No. 6415 (Article 3(4)).",
       "applies_to": [
         "channel.cerid-store",
         "flow.account-data",
@@ -1400,9 +1420,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.1",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-gazette-and-new-instruments.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -1704,13 +1724,17 @@
       ],
       "instrument": {
         "name": "Authorisation Regulation for the Electronic Communications Sector",
-        "article": "Whole regulation",
+        "article": "Articles 5-8 and 22",
         "type": "regulation",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=13078&MevzuatTur=7&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2009-05-28/27241 at 2021-05-01 (RG 31471)",
+          "read": "2026-11-01",
+          "sha256": "b1707967458853257c7e55afa167e0ba04532a06de4ce74056806b6e299f1457"
+        }
       },
-      "obligation": "Where a communication product is an electronic communication service, make the notification or obtain the usage right in the form and with the content the regulation sets before operating it in Turkey.",
+      "obligation": "Where a communication product is an electronic communication service in Turkey, offer it only through a company the BTK authorised: a joint-stock or limited company under Turkish law founded for that activity, its articles naming it, with the minimum paid-in capital and clean records of its shareholders and managers (Article 7); notify the BTK on its form before starting, in writing or with a secure electronic signature, and start once the BTK confirms the conditions are met (Article 8(1)-(2)), with a usage right as well where numbers, frequencies or satellite positions are needed (Article 5(3)); an unauthorised service is shut down (Article 22). A network for one's own premises and needs, offered to no third party and for no commercial purpose, needs no authorisation (Article 6).",
       "applies_to": [
         "product.communications",
         "flow.communications"
@@ -1727,9 +1751,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.9",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-gazette-and-new-instruments.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -1840,13 +1864,17 @@
       ],
       "instrument": {
         "name": "Regulation on the Provision of Radio, Television and On-Demand Broadcasts on the Internet",
-        "article": "Whole regulation",
+        "article": "Articles 2, 5-8, 16-17 and 21",
         "type": "regulation",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=32695&MevzuatTur=7&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2019-08-01/30849 at 2026-05-07 (RG 33246)",
+          "read": "2026-11-01",
+          "sha256": "3cdb2d6dce295da359181ba2af442ee1c6b390065796578a783a4e6ea29df475"
+        }
       },
-      "obligation": "Where a streaming feature is in Article 29/A's scope, obtain the internet broadcast licence or transmission authorisation the regulation sets, with its procedure and term.",
+      "obligation": "Where a feature offers radio, television or on-demand broadcasting online under editorial responsibility (individual communication, platforms not dedicated to transmitting broadcasts and hosting providers are outside the regulation, Article 2(2)), the media service provider holds an RTÜK internet broadcast licence (INTERNET-RD, INTERNET-TV or INTERNET-İBYH, a joint-stock company, ten years, Articles 5, 7 and 14) and a platform transmitting such services an internet transmission authorisation (a limited or joint-stock company, Articles 5(6) and 8), each meeting the duties of Articles 16-17 and the parental controls of Article 21.",
       "applies_to": [
         "product.communications"
       ],
@@ -1862,9 +1890,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.9",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-gazette-and-new-instruments.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -1978,13 +2006,17 @@
       ],
       "instrument": {
         "name": "Communiqué on the Electronic Commerce Information System and Notification Obligations",
-        "article": "Whole communiqué",
+        "article": "Articles 5-8",
         "type": "by-law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=23842&MevzuatTur=9&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2017-08-11/30151 at 2019-02-15 (RG 30687)",
+          "read": "2026-11-01",
+          "sha256": "524db528d2cc3256c92044c484c56ab35d88e2415bad8bc0f942d159b4312ada"
+        }
       },
-      "obligation": "Register the store and its sellers in the e-commerce information system (ETBIS) before trading.",
+      "obligation": "Before trading, register the store in ETBIS through e-Devlet (its MERSİS and tax numbers, the domain and mobile application) as an intermediary service provider or a provider on its own platform (Article 5); within thirty days of registering, notify the Article 6 items (the KEP address, the kind of e-commerce, the goods and services, the payment methods and payment institutions, the infrastructure providers and the country and address of the databases holding personal and customer data); the annual cross-border volume by the end of each March, every change within thirty days and the end of the activity within thirty days (Article 7); as an intermediary, the Ministry's anonymised monthly statistics by the last day of the next month (Article 6(3)).",
       "applies_to": [
         "channel.cerid-store"
       ],
@@ -2000,9 +2032,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s40",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-gazette-and-new-instruments.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -2072,13 +2104,17 @@
       ],
       "instrument": {
         "name": "Regulation on Distance Contracts",
-        "article": "Whole regulation",
+        "article": "Articles 5-9 and 15",
         "type": "regulation",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=20237&MevzuatTur=7&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2014-11-27/29188 at 2026-05-06 (Danıştay)",
+          "read": "2026-11-01",
+          "sha256": "7304421c442933856300b86b3c16ca27812003b33930f4b40256d1e62e0c05a5"
+        }
       },
-      "obligation": "Give the pre-contract information the regulation lists, confirm the contract on a durable medium, and apply the regulation's lawful waiver of the withdrawal right for digital content delivered at once.",
+      "obligation": "Before the consumer is bound, give every item of Article 5(1) (the seller's and the platform's identity, MERSİS or tax number and contact details, the total price with taxes, the withdrawal conditions or, for digital content delivered at once, that Article 15(1)(ğ) excludes the withdrawal right, the technical protection measures and the hardware and software the content works with) in writing or on a durable medium, in at least 12-point clear and plain language (Article 6(1)); show items (a), (d), (g) and (h) together immediately before the payment commitment and the delivery restrictions and accepted payment means before the order (Article 6(2)); have the consumer confirm receiving that information, or no contract is formed (Article 7); and state immediately before the order that it is an obligation to pay, or the consumer is not bound (Article 8(1)). The platform is jointly liable with the seller (Articles 5(7) and 6(6)); the withdrawal right otherwise lasts fourteen days (Article 9).",
       "applies_to": [
         "channel.cerid-store",
         "product.purchases",
@@ -2096,9 +2132,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s39",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-gazette-and-new-instruments.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -2499,13 +2535,17 @@
       ],
       "instrument": {
         "name": "Presidential Decision No. 10767 on the digital service tax rate",
-        "article": "Whole decision",
+        "article": "Article 1",
         "type": "decision",
         "jurisdiction": "TR",
         "primary": "https://www.resmigazete.gov.tr/eskiler/2025/12/20251225-21.pdf",
-        "consolidated": null
+        "consolidated": {
+          "version": "2025-12-25/33118 No. 10767 as published",
+          "read": "2026-11-01",
+          "sha256": "9d3865660affdce15f7935bc69ee8af1f1ef1f5ba788d05a034fab08be56f4d8"
+        }
       },
-      "obligation": "Apply the digital service tax at 5 % from 2026 and 2.5 % from 2027, as Decision No. 10767 (Official Gazette of 25 December 2025, No. 33118) sets under Article 5 of Law No. 7194.",
+      "obligation": "Apply the digital service tax of Article 5(3) of Law No. 7194 at 5 % from 1 January 2026 and 2.5 % from 1 January 2027, on the revenue earned from 1 January 2026, as Presidential Decision No. 10767 (Official Gazette of 25 December 2025, No. 33118) sets.",
       "applies_to": [
         "channel.cerid-store",
         "product.purchases",
@@ -2523,9 +2563,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s35",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-gazette-and-new-instruments.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -4311,9 +4351,13 @@
         "type": "regulation",
         "jurisdiction": "GB",
         "primary": "https://www.legislation.gov.uk/uksi/2023/1007",
-        "consolidated": null
+        "consolidated": {
+          "version": "2025-12-04",
+          "read": "2026-11-01",
+          "sha256": "882edf61d0576c3b55584dfd183cbbf8b0bfc6db10b6f6734b9df7a48745f4c7"
+        }
       },
-      "obligation": "Connectable products ban universal default passwords, publish a vulnerability reporting policy and state the minimum security update period.",
+      "obligation": "A manufacturer of a UK consumer connectable product gives it passwords, outside the factory default state, that are unique per product (not incremental, not derived from public information or product identifiers except by good-practice encryption or keyed hashing, not guessable) or defined by the user (paragraph 1); publishes at least one point of contact for reporting security issues and when the reporter receives an acknowledgement and status updates until resolution (paragraph 2); and publishes the defined support period understandably without technical knowledge, alongside the price where its own website invites purchase, publishing an extension as soon as practicable and never shortening it (paragraph 3); each accessibly, in English, free of charge and without asking for personal information.",
       "applies_to": [
         "product.connectable-devices"
       ],
@@ -4329,9 +4373,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.3",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-gazette-and-new-instruments.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -6201,9 +6245,9 @@
       "sha256": "f82e255e017e20fa5bf49b9307bf8871da5a23e9d6528f0c9d036528a7278eb5"
     },
     "GB": {
-      "generation": 5,
+      "generation": 6,
       "reviewed": "2026-11-01",
-      "sha256": "cb5d3925f0748923eb287001baf4c1a89ca66d297fd67d196699b6e6e2f95967"
+      "sha256": "12d98ac46a49a6764adef8de996cca17f01e0fb45f9a8505f4359f2cdff3a309"
     },
     "INT": {
       "generation": 4,
@@ -6221,9 +6265,9 @@
       "sha256": "ea94c28021b59ef7c71dc3fda4242ff72389de9d60f0f28b6e56a9922bba9313"
     },
     "TR": {
-      "generation": 6,
+      "generation": 7,
       "reviewed": "2026-11-01",
-      "sha256": "bbf1c21e8f357607b2ea21dd04fe5d8c0a0bca3c995d35a22c57ce89d1a7e8fd"
+      "sha256": "f26147a532af99b838cc86ed9988e51f2ffbbe74fb4ca31fa27d4ed14882e301"
     },
     "US": {
       "generation": 4,
@@ -6651,7 +6695,7 @@
         },
         {
           "entry": "tr.kvkk.transfer-abroad-bylaw",
-          "question": "Which standard contract of the By-Law applies when the publisher is the controller and the cloud host its processor, and what must the notification to the Authority within five business days contain?"
+          "question": "Which standard contract of Article 14 of the By-Law applies when the publisher is the controller and the cloud host its processor, and which party notifies it to the Authority within five business days?"
         },
         {
           "entry": "tr.kvkk.verbis",
@@ -6675,7 +6719,7 @@
         },
         {
           "entry": "tr.btk.encryption-regulation",
-          "question": "Does a game or collaborative product that encrypts its own voice, video and text end to end, carried over the internet without the publisher operating an electronic communication service, fall within the BTK regulation on coded or encrypted communication, and if it does, which permit does the producer or importer need?"
+          "question": "The regulation's permit has the producer deliver the crypto algorithm and keys, and where needed the means to decrypt, to the BTK (Articles 5(2) and 7(1)). Does a game or collaborative product that encrypts its own voice, video and text end to end, carried over the internet without the publisher operating an electronic communication service or a local network outside Article 7(2), fall within the regulation as a producer or importer of a coded or encrypted communication system, and if it does, may it be offered in Turkey without delivering keys?"
         },
         {
           "entry": "tr.dual-use-export",
@@ -6719,7 +6763,7 @@
         },
         {
           "entry": "tr.6502.distance-contracts-regulation",
-          "question": "For digital content delivered at once after purchase, which express consent and acknowledgement wording lawfully ends the right of withdrawal under the Regulation on Distance Contracts, and what must the confirmation on a durable medium contain?"
+          "question": "Is a game or application delivered by download at once an intangible good delivered at once under Article 15(1)(ğ) of the Regulation on Distance Contracts (no withdrawal right), and what must the Article 5(1)(h) information and the order confirmation say for it and for in-game purchases?"
         },
         {
           "entry": "tr.5846.software-works",
@@ -6739,7 +6783,7 @@
         },
         {
           "entry": "tr.7194.rate-decision",
-          "question": "Which digital service tax rate applies to each month of 2026 and 2027 under Presidential Decision No. 10767, and does a later decision change it?"
+          "question": "Is the Cerid store a digital service provider under Articles 1-2 of Law No. 7194, above its revenue thresholds, so that Decision No. 10767's rates apply to its revenue, and on which revenue base?"
         },
         {
           "entry": "tr.213.e-archive",

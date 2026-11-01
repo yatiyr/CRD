@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review GB
 format = "cerid-rules/1"
 jurisdiction = "GB"
-generation = 5
+generation = 6
 register = "2026-11-01"
 
 [[scope]]
@@ -210,8 +210,8 @@ title = "PSTI security requirements regulations"
 instrument = "The Product Security and Telecommunications Infrastructure (Security Requirements for Relevant Connectable Products) Regulations 2023"
 article = "Schedule 1"
 primary = "https://www.legislation.gov.uk/uksi/2023/1007"
-read = false
-obligation = "Connectable products ban universal default passwords, publish a vulnerability reporting policy and state the minimum security update period."
+read = true
+obligation = "A manufacturer of a UK consumer connectable product gives it passwords, outside the factory default state, that are unique per product (not incremental, not derived from public information or product identifiers except by good-practice encryption or keyed hashing, not guessable) or defined by the user (paragraph 1); publishes at least one point of contact for reporting security issues and when the reporter receives an acknowledgement and status updates until resolution (paragraph 2); and publishes the defined support period understandably without technical knowledge, alongside the price where its own website invites purchase, publishing an extension as soon as practicable and never shortening it (paragraph 3); each accessibly, in English, free of charge and without asking for personal information."
 applies_to = ["product.connectable-devices"]
 check = "planned"
 check_name = "release CTests: reporting contact and support period"

@@ -1938,7 +1938,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "cb5d3925f0748923eb287001baf4c1a89ca66d297fd67d196699b6e6e2f95967"
+      "sha256": "12d98ac46a49a6764adef8de996cca17f01e0fb45f9a8505f4359f2cdff3a309"
     },
     {
       "path": "assets/comply/int.rules.toml",
@@ -1982,7 +1982,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "bbf1c21e8f357607b2ea21dd04fe5d8c0a0bca3c995d35a22c57ce89d1a7e8fd"
+      "sha256": "f26147a532af99b838cc86ed9988e51f2ffbbe74fb4ca31fa27d4ed14882e301"
     },
     {
       "path": "assets/comply/us-ca.rules.toml",
