@@ -1,9 +1,10 @@
 // crd-comply -- the official sanctions lists as imported (COMPLY.1; docs/design/registers.md#screening):
 // scripts/import-sanctions.py writes, from real-byte excerpts of the OFAC SDN List, the EU financial sanctions file,
-// the UN Security Council Consolidated List and the UK Sanctions List (tests/foundation/comply/lists), the
-// cerid-sanctions/1 generations this case decodes, adopts and screens: the official formats end to end, the birth
-// periods the importer derives (ranges, circa, the Hijri and Solar Hijri calendars, an unknown century), identifiers
-// with their issuing country, and names in their own scripts; and the embargoed destinations the importer writes from
+// the UN Security Council Consolidated List, the UK Sanctions List and MASAK's answers for Turkey's asset freezes
+// (tests/foundation/comply/lists), the cerid-sanctions/1 generations this case decodes, adopts and screens: the
+// official formats end to end, the birth periods the importer derives (ranges, circa, the Hijri and Solar Hijri
+// calendars, an unknown century, a numeric day read both ways), identifiers with their issuing country, parties of
+// unknown kind and names in their own scripts; and the embargoed destinations the importer writes from
 // the register's authored readings: 31 CFR chapter V with the Executive orders it incorporates, the EU's Article 215
 // regulations, the UK's sanctions regulations with the Export Control Order 2008 and the Security Council's
 // resolutions, each destination read in its own instrument. The CTest
@@ -37,6 +38,15 @@ constexpr Imported kImported[] = {
     {"eu.fsf", "EU", 20261023150543ULL, 7U},
     {"un.sc", "INT", 20261031230007ULL, 7U},
     {"gb.fcdo", "GB", 20261030000000ULL, 6U},
+};
+
+// Turkey's asset freezes, MASAK's table posted by sanction type: Law No. 6415's Articles 5 (the UN's lists), 6
+// (foreign requests) and 7 (domestic freezes), and Law No. 7262; each published the instant it was read.
+constexpr Imported kTurkish[] = {
+    {"tr.masak.un", "TR", 20261101110457ULL, 6U},
+    {"tr.masak.foreign", "TR", 20261101110457ULL, 2U},
+    {"tr.masak.domestic", "TR", 20261101110458ULL, 6U},
+    {"tr.masak.7262", "TR", 20261101110458ULL, 6U},
 };
 
 // The destinations 31 CFR chapter V embargoes with the Executive orders it incorporates, those the EU's Article 215
@@ -84,8 +94,17 @@ struct Check
     Check(cont::StringView name, PartyKind kind, cont::StringView birth = {},
           std::initializer_list<cont::StringView> subject_countries = {},
           std::initializer_list<cont::StringView> subject_identifiers = {})
+        : Check(kImported, name, kind, birth, subject_countries, subject_identifiers)
     {
-        for (const Imported& list : kImported)
+    }
+
+    // Screened against `lists` instead of the designation lists of kImported.
+    template <crd::usize N>
+    Check(const Imported (&lists)[N], cont::StringView name, PartyKind kind, cont::StringView birth = {},
+          std::initializer_list<cont::StringView> subject_countries = {},
+          std::initializer_list<cont::StringView> subject_identifiers = {})
+    {
+        for (const Imported& list : lists)
         {
             authorities.push_back(list.authority);
         }
@@ -237,6 +256,63 @@ TEST_CASE("sanctions: the imported official lists decode, adopt and screen", "[.
                       "gb.fcdo.rus2701") == Disposition::Match);
     CHECK(disposition(store, Check("Petrel 8", PartyKind::Vessel, {}, {}, {"imo:9562233"}), "gb.fcdo.dpr0075") ==
           Disposition::Match);
+}
+
+TEST_CASE("sanctions: Turkey's asset freezes from MASAK's table decode, adopt and screen", "[.imported]")
+{
+    SanctionsStore store;
+    for (const Imported& expected : kTurkish)
+    {
+        CHECK(adopt(store, expected).destinations.empty());
+    }
+
+    // A Turkish citizen: the TCKN agrees, the birth (4/13/1978, month first) agrees, a later birth discounts.
+    Screening screening;
+    const Check yildirim(kTurkish, "Abdi Yildirim", PartyKind::Individual, {}, {}, {"national-id.tr:55771274198"});
+    CHECK(hit(store, yildirim, "tr.masak.domestic.24", screening).disposition == Disposition::Match);
+    CHECK(screening.verdict == Verdict::Blocked);
+    const Check born_then(kTurkish, "Abdi Yildirim", PartyKind::Individual, "1978-04", {"TR"});
+    CHECK(disposition(store, born_then, "tr.masak.domestic.24") == Disposition::Match);
+    const Check born_later(kTurkish, "Abdi Yildirim", PartyKind::Individual, "1990");
+    CHECK(disposition(store, born_later, "tr.masak.domestic.24") == Disposition::Discounted);
+
+    // 7/2/1966 reads both ways: either day agrees, another day of 1966 does not.
+    for (const cont::StringView born : {"1966-02-07", "1966-07-02"})
+    {
+        INFO(born);
+        const Check azzouz(kTurkish, "Abd al-Baset Azzouz", PartyKind::Individual, born);
+        CHECK(disposition(store, azzouz, "tr.masak.un.5") == Disposition::Match);
+    }
+    const Check march(kTurkish, "Abd al-Baset Azzouz", PartyKind::Individual, "1966-03");
+    CHECK(disposition(store, march, "tr.masak.un.5") == Disposition::Discounted);
+
+    // The table names no kind: an entity's name is never discounted by the subject's kind.
+    for (const PartyKind kind : {PartyKind::Entity, PartyKind::Individual})
+    {
+        const Check brigades(kTurkish, "Abdallah Azzam Brigades", kind);
+        CHECK(disposition(store, brigades, "tr.masak.un.7") == Disposition::Possible);
+    }
+
+    // Identifiers: an IMO number, a TCKN and a VKN typed together, a VKN whose leading zero the table lost, an
+    // Afghan passport written out in Turkish ("D 000857").
+    const Check vessel(kTurkish, "Chonmyong Shipping Co", PartyKind::Vessel, {}, {}, {"imo:5571322"});
+    CHECK(disposition(store, vessel, "tr.masak.7262.529") == Disposition::Match);
+    const Check glued(kTurkish, "Arzu Pesmen", PartyKind::Individual, {}, {}, {"tax-id.tr:7291094811"});
+    CHECK(disposition(store, glued, "tr.masak.domestic.347") == Disposition::Match);
+    const Check company(kTurkish, "Almjd Land Trading Dis Ticaret Limited Sirketi", PartyKind::Entity, {}, {},
+                        {"tax-id.tr:0551606028"});
+    CHECK(disposition(store, company, "tr.masak.domestic.292") == Disposition::Match);
+    const Check afghan(kTurkish, "Abdullah Hamad Mohammad Karim", PartyKind::Individual, {}, {}, {"passport:D000857"});
+    CHECK(disposition(store, afghan, "tr.masak.un.64") == Disposition::Match);
+
+    // An alias in its own script, an alias numbered "3-" glued to the one before it.
+    const Check cyrillic(kTurkish,
+                         "\xD0\x90\xD0\xA5\xD0\x9C\xD0\x90\xD0\x94 "
+                         "\xD0\xA8\xD0\x98\xD0\xA8\xD0\x90\xD0\x9D\xD0\x98",
+                         PartyKind::Individual, {}, {"RU"});
+    CHECK(disposition(store, cyrillic, "tr.masak.un.211") == Disposition::Match);
+    const Check numbered(kTurkish, "Walid Ayssa", PartyKind::Individual, "1996-01-21");
+    CHECK(disposition(store, numbered, "tr.masak.domestic.1505") == Disposition::Match);
 }
 
 TEST_CASE("sanctions: the authored US embargo decodes, adopts and screens destinations", "[.imported]")

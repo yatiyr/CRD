@@ -14,8 +14,9 @@
 //     1000 against itself, a name without words scores 0 and every score is at most 1000;
 //   * a screening's gaps, hits and verdict equal a model restated from the contract: the gap of each named authority
 //     from the day, a party hit exactly when the brute-force best score reaches the review threshold or an identifier
-//     agrees (kind and value, and the issuing country when both name one), its disposition from the agreements,
-//     the destinations by region, and the verdict's precedence.
+//     agrees (kind and value, and the issuing country when both name one), its disposition from the agreements
+//     (a party of unknown kind contradicted by no subject's kind), the destinations by region, and the verdict's
+//     precedence.
 #include <crd/comply/sanctions.hpp>
 #include <crd/core/text_fold.hpp>
 #include <crd/fuzz/harness.hpp>
@@ -85,6 +86,16 @@ listed = ""
 births = []
 countries = []
 identifiers = ["imo:7654321"]
+
+[[party]]
+id = "fuzz.4"
+kind = "unknown"
+names = ["Ali Veli"]
+programs = ["FUZZ"]
+listed = "2019-12-31"
+births = []
+countries = ["IR"]
+identifiers = ["registration.tr:5566"]
 )toml";
 
 [[nodiscard]] bool hex_digest(cont::StringView text) noexcept
@@ -468,7 +479,8 @@ void screening_checked(const u8* data, usize size)
                 country = country || mine == cont::StringView(theirs);
             }
         }
-        const bool contradicts = subject.kind != party.kind || (has_birth && !party.births.empty() && !birth_agrees);
+        const bool contradicts = (party.kind != PartyKind::Unknown && subject.kind != party.kind) ||
+                                 (has_birth && !party.births.empty() && !birth_agrees);
         Disposition expected = Disposition::Possible;
         if (best >= request.policy.review && contradicts)
         {
@@ -599,6 +611,8 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
         replaced("region = \"BY\"\nprogram = \"FUZZ-SECTORAL\"", "region = \"KP\"\nprogram = \"FUZZ-DPRK\""));
     add(sink, "list-entity-birth", 0U,
         replaced("listed = \"2021-02-03\"\nbirths = []", "listed = \"2021-02-03\"\nbirths = [\"1999\"]"));
+    add(sink, "list-unknown-birth", 0U,
+        replaced("listed = \"2019-12-31\"\nbirths = []", "listed = \"2019-12-31\"\nbirths = [\"1999\"]"));
     add(sink, "list-bad-region", 0U, replaced("region = \"UA-43\"", "region = \"UA-\""));
     add(sink, "list-stale-age", 0U, replaced("max_age_days = 3", "max_age_days = 400"));
     add(sink, "list-bad-identifier", 0U, replaced("imo:7654321", "IMO:7654321"));
@@ -624,6 +638,9 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     add_bytes(sink, "screen-birth-interval", 2U, {0x04U, 0U, 0U, 0x00U, 0U, 8U, 4U, 0U, 2U, 2U});
     add_bytes(sink, "screen-discounted", 2U, {0x04U, 0U, 1U, 0x00U, 1U, 4U, 3U, 0U, 1U, 1U});
     add_bytes(sink, "screen-entity", 2U, {0x08U, 0U, 5U, 6U, 0x01U, 1U, 1U, 0U, 3U, 7U, 3U, 0U});
+    // "Ali Veli", a party of unknown kind: an entity with the registration that agrees, and a vessel.
+    add_bytes(sink, "screen-unknown-kind", 2U, {0x04U, 0U, 9U, 0x04U, 7U, 1U, 0U, 4U, 0U, 2U, 2U});
+    add_bytes(sink, "screen-unknown-kind-vessel", 2U, {0x04U, 0U, 9U, 0x00U, 2U, 0U, 3U, 0U, 1U});
     add_bytes(sink, "screen-missing-stale", 2U, {0x05U, 0U, 1U, 7U, 0x00U, 0U, 0U, 6U, 4U});
     add_bytes(sink, "screen-destinations", 2U, {0x01U, 0U, 1U, 0x00U, 0U, 0U, 3U, 3U});
     add_bytes(sink, "screen-early", 2U, {0x00U, 0U, 0x00U, 0U, 0U, 0U, 2U});

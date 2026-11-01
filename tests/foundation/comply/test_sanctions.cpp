@@ -515,6 +515,10 @@ TEST_CASE("sanctions: a malformed request is refused with its key and an empty s
     Request identifier({"test.ofac"}, {"Aras Demirkol"});
     identifier.identifiers.push_back("A1234567");
     refused(identifier, ComplyError::BadValue, "identifiers");
+    Request unknown({"test.ofac"}, {"Aras Demirkol"}, PartyKind::Unknown);
+    refused(unknown, ComplyError::BadValue, "kind");
+    Request beyond({"test.ofac"}, {"Aras Demirkol"}, static_cast<PartyKind>(5U));
+    refused(beyond, ComplyError::BadValue, "kind");
 }
 
 TEST_CASE("sanctions: a name match is a match only with a birth, country or identifier that agrees",
@@ -608,6 +612,42 @@ TEST_CASE("sanctions: a contradicting kind or birth discounts a name match witho
     Request stranger({"test.ofac"}, {"Mehmet Yildiz"});
     screening = screen(store, stranger);
     CHECK(screening.parties.empty());
+    CHECK(screening.verdict == Verdict::Clear);
+}
+
+TEST_CASE("sanctions: a party whose list names no kind is never discounted by kind", "[comply][sanctions]")
+{
+    // Turkey's MASAK table names no kind: the party is unknown, which no subject's kind contradicts.
+    const cont::String text = with("kind = \"entity\"", "kind = \"unknown\"");
+    SanctionsList list;
+    REQUIRE(decode_sanctions(text, list).error == ComplyError::None);
+    CHECK(list.parties[1].kind == PartyKind::Unknown);
+    // A birth is a natural person's: a party with one is an individual, never unknown.
+    check_refusal(with("listed = \"2021-01\"\nbirths = []", "listed = \"2021-01\"\nbirths = [\"1990\"]", text),
+                  ComplyError::BadValue, "births");
+
+    SanctionsStore store;
+    REQUIRE(store.apply(text).error == ComplyError::None);
+    for (const PartyKind kind : {PartyKind::Individual, PartyKind::Entity, PartyKind::Vessel, PartyKind::Aircraft})
+    {
+        INFO(party_kind_name(kind));
+        Request named({"test.ofac"}, {"Kuzey Deniz Ticaret A.\xC5\x9E."}, kind);
+        Screening screening = screen(store, named);
+        REQUIRE(hit_of(screening, "test.ofac.1002") != nullptr);
+        CHECK(hit_of(screening, "test.ofac.1002")->disposition == Disposition::Possible);
+        CHECK(screening.verdict == Verdict::Review);
+        named.identifiers.push_back("registration.tr:998877");
+        screening = screen(store, named);
+        CHECK(hit_of(screening, "test.ofac.1002")->disposition == Disposition::Match);
+        CHECK(screening.verdict == Verdict::Blocked);
+    }
+    // The same entity, its kind named: a person of that name is discounted.
+    SanctionsStore named_kind;
+    loaded(named_kind);
+    Request person({"test.ofac"}, {"Kuzey Deniz Ticaret A.\xC5\x9E."});
+    const Screening screening = screen(named_kind, person);
+    REQUIRE(hit_of(screening, "test.ofac.1002") != nullptr);
+    CHECK(hit_of(screening, "test.ofac.1002")->disposition == Disposition::Discounted);
     CHECK(screening.verdict == Verdict::Clear);
 }
 
@@ -789,7 +829,10 @@ TEST_CASE("sanctions: names of verdicts, dispositions, gaps, kinds and measures"
         REQUIRE(parse_party_kind(name, kind));
         CHECK(party_kind_name(kind) == name);
     }
+    CHECK(party_kind_name(PartyKind::Unknown) == "unknown");
+    CHECK(party_kind_name(static_cast<PartyKind>(5U)) == "unknown");
     PartyKind kind = PartyKind::Vessel;
     CHECK_FALSE(parse_party_kind("ship", kind));
+    CHECK_FALSE(parse_party_kind("unknown", kind)); // a subject's kind is always known
     CHECK(kind == PartyKind::Vessel);
 }

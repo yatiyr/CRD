@@ -1,0 +1,55 @@
+{
+ "columnNames": [
+  "sira_no",
+  "ad_soyad_unvan",
+  "tckn_vkn",
+  "uyrugu",
+  "yaptirim_turu",
+  "anne_adı",
+  "baba_adı",
+  "dogum_tarihi",
+  "dogum_yeri",
+  "orgutu",
+  "karar_sayisi",
+  "diger_adlari",
+  "diger_uyruk"
+ ],
+ "data": [
+  {
+   "ad_soyad_unvan": "ABDULLAEV ILKHOM AKHMADZHANOVICH",
+   "anne_adı": "",
+   "baba_adı": "",
+   "diger_adlari": "",
+   "diger_uyruk": "",
+   "dogum_tarihi": "06.06.1987",
+   "dogum_yeri": "ÖZBEKİSTAN",
+   "karar_sayisi": "2022-03-26 / 31790",
+   "orgutu": "DEAŞ ",
+   "sira_no": 56,
+   "tckn_vkn": "CT4156839 VE CH1457591",
+   "uyrugu": "",
+   "yaptirim_turu": "Yabancı ülke talebi (6415 sayılı kanun 6. Maddesine istinaden)"
+  },
+  {
+   "ad_soyad_unvan": "BATURIN ALEKSANDR ALEKSANDROVICH",
+   "anne_adı": "",
+   "baba_adı": "",
+   "diger_adlari": "",
+   "diger_uyruk": "USSR, AZERBAIDJAN REPUBLIC",
+   "dogum_tarihi": "9/11/1982",
+   "dogum_yeri": "AZERBAYCAN",
+   "karar_sayisi": "2021-10-02 / 31616",
+   "orgutu": "DEAŞ ve EL-KAİDE BAĞLANTILI GERÇEK KİŞİ",
+   "sira_no": 425,
+   "tckn_vkn": "",
+   "uyrugu": "USSR, AZERBAIDJAN REPUBLIC",
+   "yaptirim_turu": "Yabancı ülke talebi (6415 sayılı kanun 6. Maddesine istinaden)"
+  }
+ ],
+ "errors": [],
+ "message": null,
+ "numRows": 2,
+ "result": null,
+ "statusCode": 200,
+ "statusDescription": "OK"
+}

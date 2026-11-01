@@ -341,6 +341,8 @@ TEST_CASE("screen verb: malformed requests are refused before a list is read", "
     refused({.destination = "CU", .identifiers = {"imo:1"}}, "describe a subject --name names");
     refused({.names = {"Aras Demirkol"}}, "--name needs --kind");
     refused({.kind = "person", .names = {"Aras Demirkol"}}, "--name needs --kind");
+    // A list may name no kind; a subject always has one.
+    refused({.kind = "unknown", .names = {"Aras Demirkol"}}, "--name needs --kind");
     for (const char* threshold : {"", "9x", "-1", "12345"})
     {
         refused({.destination = "CU", .review = threshold}, "--review and --match are thresholds");

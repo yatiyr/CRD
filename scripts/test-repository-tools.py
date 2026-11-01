@@ -7067,7 +7067,7 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
         return self.legal_entry(id='tr.asset-freeze', topic='privacy', check=dict(self.SCREENING), **changes)
 
     def sanctions(self, **changes):
-        config = {'entry': 'tr.asset-freeze', 'title': 'A list', 'format': 'ofac-xml', 'url': self.URL,
+        config = {'entry': 'tr.asset-freeze', 'title': 'A list', 'format': 'ofac-xml', 'url': self.URL, 'post': None,
                   'delivery': ['files.example.org'], 'max_age_days': 31,
                   'read': {'day': '2026-11-01', 'published': '2026-10-28', 'bytes': 12, 'sha256': 'ab' * 32,
                            'parties': 3}}
@@ -7118,7 +7118,7 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
         self.assert_lists_fail(self.sanctions(title=''), f'{where}: title names the list')
         unknown = self.sanctions()
         unknown['lists']['tr.masak']['note'] = 'x'
-        self.assert_lists_fail(unknown, f'{where} has delivery, entry, format, max_age_days, read, title, url')
+        self.assert_lists_fail(unknown, f'{where} has delivery, entry, format, max_age_days, post, read, title, url')
         self.assert_lists_fail({'about': 'x', 'lists': {'TR.masak': self.sanctions()['lists']['tr.masak']},
                                 'pending': {}}, 'an authority is a dotted lower-case id')
 
@@ -7620,9 +7620,9 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
     def imported(self, authority, out):
         register = sanctions_import.load_register(ROOT)
         config = register['sanctions_lists']['lists'][authority]
-        _, body = sanctions_import.fetched(self.LISTS, authority)
+        record, body = sanctions_import.fetched(self.LISTS, authority, config)
         result = sanctions_import.import_list(authority, config, sanctions_import.jurisdiction_of(register, config),
-                                              body, out)
+                                              record, body, out)
         return result, tomllib.loads((Path(out) / f'{authority}.sanctions.toml').read_text(encoding='utf-8'))
 
     @staticmethod
@@ -7720,7 +7720,7 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
     def read(self, authority, body):
         register = sanctions_import.load_register(ROOT)
         config = register['sanctions_lists']['lists'][authority]
-        return sanctions_import.READERS[config['format']](sanctions_import.parse_xml(body, authority), authority)
+        return sanctions_import.READERS[config['format']].read(body, authority, None, config)
 
     def test_every_unknown_value_refuses_the_import(self):
         cases = [
@@ -7776,7 +7776,7 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
         config = register['sanctions_lists']['lists']['us.ofac.sdn']
         with tempfile.TemporaryDirectory() as out:
             with self.assertRaisesRegex(sanctions_import.SanctionsError, 'us.ofac.sdn.306 is listed twice'):
-                sanctions_import.import_list('us.ofac.sdn', config, 'US', twice, out)
+                sanctions_import.import_list('us.ofac.sdn', config, 'US', None, twice, out)
 
     def test_the_bounds_are_the_decoders(self):
         """A file the decoder would refuse is refused by the importer, naming the party, never written."""
@@ -7805,14 +7805,15 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
         self.assertEqual('1962-02-17', sanctions_import.ofac_birth('17 Feb 1962', 'x'))
         self.assertEqual('1962-02', sanctions_import.ofac_birth('Feb 1962', 'x'))
         self.assertEqual('1961-01-01/1962-12-31', sanctions_import.ofac_birth('01 Jan 1961 to 31 Dec 1962', 'x'))
-        self.assertIsNone(sanctions_import.ofac_birth('circa 1958', 'x'))
-        # An approximate date records no period, so no birth contradicts it.
-        approximate = ET.fromstring('<birthdate circa="true" calendarType="GREGORIAN" year="1960"/>')
-        self.assertEqual([], sanctions_import.eu_birth(approximate, 'x'))
-        approximate.set('circa', 'false')
-        self.assertEqual(['1960'], sanctions_import.eu_birth(approximate, 'x'))
+        approximate = sanctions_import.APPROXIMATE
+        self.assertEqual(approximate, sanctions_import.ofac_birth('circa 1958', 'x'))
+        # An approximate date (circa) is APPROXIMATE: the party then records no period, so no birth contradicts it.
+        circa = ET.fromstring('<birthdate circa="true" calendarType="GREGORIAN" year="1960"/>')
+        self.assertEqual(approximate, sanctions_import.eu_birth(circa, 'x'))
+        circa.set('circa', 'false')
+        self.assertEqual(['1960'], sanctions_import.eu_birth(circa, 'x'))
         about = ET.fromstring('<D><TYPE_OF_DATE>APPROXIMATELY</TYPE_OF_DATE><YEAR>1960</YEAR></D>')
-        self.assertIsNone(sanctions_import.un_birth(about, 'x'))
+        self.assertEqual(approximate, sanctions_import.un_birth(about, 'x'))
         about.find('TYPE_OF_DATE').text = 'EXACT'
         self.assertEqual('1960', sanctions_import.un_birth(about, 'x'))
         self.assertEqual('1975', sanctions_import.uk_birth('00/00/1975', 'x'))
@@ -7872,6 +7873,234 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
                 self.assertEqual(1, sanctions_import.main(['fetch', '--into', into, '--authority', 'us.ofac.sdn']))
             self.assertEqual('import-sanctions: IncompleteRead(8 bytes read, 4096 more expected)\n', error.getvalue())
             self.assertEqual([], os.listdir(into))
+
+    # Turkey's asset freezes: MASAK's application answers a search per sanction type, kept in canonical form.
+
+    MASAK = ('tr.masak.un', 'tr.masak.foreign', 'tr.masak.domestic', 'tr.masak.7262')
+
+    def test_masak_answers_import_kinds_births_identifiers_names_and_countries(self):
+        with tempfile.TemporaryDirectory() as out:
+            documents = {}
+            for authority in self.MASAK:
+                (generation, parties, published), documents[authority] = self.imported(authority, out)
+                self.assertEqual(('TR', 31), (documents[authority]['jurisdiction'],
+                                              documents[authority]['max_age_days']))
+            self.assertEqual((20261101110458, 6, '2026-11-01T11:04:58Z'), (generation, parties, published))
+            un, foreign = documents['tr.masak.un'], documents['tr.masak.foreign']
+            domestic, proliferation = documents['tr.masak.domestic'], documents['tr.masak.7262']
+            # A natural person's birth or parent makes an individual, an IMO number a vessel; the rest name no kind.
+            yildirim = self.party(domestic, 'tr.masak.domestic.24')
+            self.assertEqual(('individual', ['1978-04-13'], ['TR'], ['national-id.tr:55771274198'], '2021-04-07'),
+                             tuple(yildirim[key] for key in ('kind', 'births', 'countries', 'identifiers', 'listed')))
+            self.assertEqual(['İç Dondurma (6415 sayılı kanun 7. Maddesine istinaden)', 'DEAŞ'], yildirim['programs'])
+            self.assertEqual('unknown', self.party(un, 'tr.masak.un.7')['kind'])
+            self.assertEqual(('vessel', ['imo:5571322']), tuple(self.party(proliferation, 'tr.masak.7262.529')[key]
+                                                                for key in ('kind', 'identifiers')))
+            # 7/2/1966 reads both ways; 23/4/1966 and 4/13/1978 one way; glued a) b) e) give three days.
+            self.assertEqual(['1966-02-07', '1966-07-02'], self.party(un, 'tr.masak.un.5')['births'])
+            self.assertEqual(['1964-06-25', '1969-12-05', '1965-05-12'], self.party(un, 'tr.masak.un.1904')['births'])
+            self.assertEqual(['DZ'], self.party(un, 'tr.masak.un.1904')['countries'])  # "ORAN, CEZAYİR"
+            self.assertEqual(['AZ'], self.party(foreign, 'tr.masak.foreign.425')['countries'])  # "USSR, AZERBAIDJAN"
+            # Identifiers: two passports joined by VE, a TCKN and a VKN typed as one number or glued to their words,
+            # a VKN without its leading zero, a passport and a national id written out in Turkish, SWIFT, e-mail.
+            self.assertEqual(['passport:ct4156839', 'passport:ch1457591'],
+                             self.party(foreign, 'tr.masak.foreign.56')['identifiers'])
+            self.assertEqual(['national-id.tr:15170270542', 'tax-id.tr:7291094811'],
+                             self.party(domestic, 'tr.masak.domestic.347')['identifiers'])
+            self.assertEqual(['national-id.tr:31849452040', 'tax-id.tr:5980156465'],
+                             self.party(domestic, 'tr.masak.domestic.475')['identifiers'])
+            self.assertEqual(['passport:551606028', 'tax-id.tr:0551606028'],
+                             self.party(domestic, 'tr.masak.domestic.292')['identifiers'])
+            self.assertEqual(['passport:d000857', 'national-id:300786'],
+                             self.party(un, 'tr.masak.un.64')['identifiers'])
+            self.assertEqual(['swift:ftbdkppy'], self.party(proliferation, 'tr.masak.7262.576')['identifiers'])
+            self.assertEqual(['email:daesong@star-co.net.kp'],
+                             self.party(proliferation, 'tr.masak.7262.1204')['identifiers'])
+            # Names: parentheses as aliases less notes, a) b) glued to a name, 1- 2- 3-, an original script.
+            self.assertEqual(['ABD AL-BASET AZZOUZ', 'ABDELBASSED AZOUZ', 'AA', 'ABDUL BASET AZOUZ'],
+                             self.party(un, 'tr.masak.un.5')['names'])
+            self.assertEqual(['ABU RUSDAN', 'Abu Thorjq', 'Rusdjan', 'Rusjan', 'Rusydan', 'Thoriquddin',
+                              'Thoriquiddin', 'Thoriquidmîı', 'Toriquddin'], self.party(un, 'tr.masak.un.117')['names'])
+            self.assertEqual(['39. ODA', 'OFFICE 39', 'Office #39', 'Office No. 39', 'Bureau 39',
+                              'Central Committee Bureau 39', 'Third FloorDivision 39'],
+                             self.party(proliferation, 'tr.masak.7262.1')['names'])
+            chonmyong = self.party(proliferation, 'tr.masak.7262.529')['names']
+            self.assertNotIn('Kore Demokratik Halk Cumhuriyeti', chonmyong)  # a country in an address is no name
+            self.assertEqual(['MUHAMMED AL VAKİ', 'MOHAMAD ALSAİED ALHMİDAN', 'MOHAMAD ALUOALİ', 'WALİD AYSSA'],
+                             self.party(domestic, 'tr.masak.domestic.1505')['names'])
+            self.assertEqual('', self.party(domestic, 'tr.masak.domestic.1505')['listed'])  # "/ 32153": no day
+            self.assertIn('АХМАД ШИШАНИ', self.party(un, 'tr.masak.un.211')['names'])
+
+    def test_masak_births_identifiers_and_check_digits(self):
+        births = sanctions_import.masak_births
+        cases = [('', ([], False)), ('7/2/1966', (['1966-02-07', '1966-07-02'], True)),
+                 ('23/4/1966', (['1966-04-23'], True)), ('10.08..1948', (['1948-08-10', '1948-10-08'], True)),
+                 ('"a) 1974   \nb) 1975 \n"\n', (['1974', '1975'], True)), ('1969-1971  Arası', (['1969/1971'], True)),
+                 ('1977 -1982 Arası', (['1977/1982'], True)),
+                 ('1961 veya 20 Temmuz 1962', (['1961', '1962-07-20'], True)),
+                 ('a)17 Aug 1972\n b) 1 Jan 1972', (['1972-08-17', '1972-01-01'], True)),
+                 ('16 KASIM 1977 - 16 KASIM 1974', (['1977-11-16', '1974-11-16'], True)),
+                 ('Tahmini olarak 1953', (None, True)), ('1977 (Tahmini)', (None, True)),
+                 ('a) 15 Ekim 1963 b) Tahmini olarak 1957', (None, True)),
+                 ('WİJİJOKO SANTOSO, 14 TEMMUZ 1975', (None, True)), ('TEXAS/ABD', (None, False)),
+                 ('31/31/1966', (None, True)), ('1899', (None, True)), ('21.03.199613.11.1977', (None, True))]
+        for text, expected in cases:
+            with self.subTest(text=text):
+                self.assertEqual(expected, births(text))
+        self.assertTrue(sanctions_import.tckn_valid('55771274198'))
+        # The last digit wrong; the tenth wrong with the last still their sum's; a leading zero; short; a letter.
+        for bad in ('55771274199', '55771274109', '05771274198', '5577127419', '5577127419a'):
+            self.assertFalse(sanctions_import.tckn_valid(bad), bad)
+        self.assertTrue(sanctions_import.vkn_valid('0680925635'))
+        self.assertFalse(sanctions_import.vkn_valid('0680925636'))
+        self.assertFalse(sanctions_import.vkn_valid('068092563'))
+
+        def identifiers(text):
+            party = sanctions_import.Party('tr.x', 1, 'unknown')
+            sanctions_import.masak_identifiers(party, text)
+            return party.identifiers
+
+        self.assertEqual(['national-id.tr:36113043528', 'tax-id.tr:9611118807'], identifiers('36113043528-9611118807'))
+        self.assertEqual(['passport:27082171', 'national-id:156-92-9858'],
+                         identifiers('": 27082171 (Amerika, 21 Haziran 1992)\n'
+                                     'Ulusal Kimlik Numarası : SSN 156-92-9858'))
+        self.assertEqual(['passport:653225197110100533'], identifiers('Çin 653225197110100533'))
+        self.assertEqual(['national-id.tr:99637657350', 'tax-id.tr:5240949089'],
+                         identifiers('TCK:99637657350YKN:5240949089'))  # check digits outrank the word
+        self.assertEqual([], identifiers('Telephone: +850-2-181118208.Fax: +850-2-381-4432'))
+        self.assertEqual(['tax-id:32084989741'], identifiers('Yabancı Ülke VKN: 32084989741'))
+        self.assertEqual(['passport:d0009724'],
+                         identifiers('Afganistan pasaport numarası u No:D0009724, 13 Ekim 2021’de. Son: 13 Ekim2026'))
+        self.assertEqual(['passport:tr-p614166'], identifiers('pasaport numarası TR-P 614166 (22 Mart 2006)'))
+        self.assertEqual([], identifiers('Afgan ulusal kimlik kartı (tazkira) numarası 4414'))
+
+    def test_masak_answers_refuse_other_shapes(self):
+        register = sanctions_import.load_register(ROOT)
+        config = register['sanctions_lists']['lists']['tr.masak.domestic']
+        record, body = sanctions_import.fetched(self.LISTS, 'tr.masak.domestic', config)
+        read = sanctions_import.READERS['tr-masak-json'].read
+
+        def refused(message, document=None, record=record, config=config, raw=None):
+            text = raw if raw is not None else \
+                json.dumps(document, ensure_ascii=False).encode('utf-8')
+            with self.assertRaisesRegex(sanctions_import.SanctionsError, re.escape(message)):
+                read(text, 'tr.masak.domestic', record, config)
+
+        def changed(change):
+            document = json.loads(body.decode('utf-8'))
+            change(document)
+            return document
+
+        refused('the answer holds', changed(lambda d: d.update(elapsedTime=4)))
+        refused('the answer holds', changed(lambda d: d.pop('errors')))
+        refused('the answer is no success', changed(lambda d: d.update(statusCode=500)))
+        refused('the answer is no success', changed(lambda d: d.update(errors=['x'])))
+        refused('the columns are', changed(lambda d: d['columnNames'].reverse()))
+        refused('numRows is not the number of rows', changed(lambda d: d.update(numRows=7)))
+        refused('a row without exactly the columns', changed(lambda d: d['data'][0].pop('orgutu')))
+        refused("row 24 has the dogum_tarihi 1978", changed(lambda d: d['data'][0].update(dogum_tarihi=1978)))
+        refused("row '24' has the sira_no '24'", changed(lambda d: d['data'][0].update(sira_no='24')))
+        refused('row 24 is a', changed(lambda d: d['data'][0].update(yaptirim_turu='Yeni')))
+        refused("the country 'Atlantis' is not in", changed(lambda d: d['data'][0].update(uyrugu='Atlantis')))
+        refused("the decision '2021 / 31447' is no Official Gazette day",
+                changed(lambda d: d['data'][0].update(karar_sayisi='2021 / 31447')))
+        refused('the JSON constant NaN', raw=body.replace(b'"numRows": 6', b'"numRows": NaN'))
+        refused('not a JSON answer in UTF-8', raw=b'\xff' + body)
+        refused('the generation time', changed(lambda d: None), record=dict(record, instant=None))
+        refused('post names the sanction type', changed(lambda d: None), config=dict(config, post=None))
+        with patch.object(sanctions_import, 'FILE_LIMIT', len(body) - 1):
+            refused('larger than', raw=body)
+
+    def test_masak_fetch_posts_the_type_keeps_the_canonical_answer_and_refuses_an_unread_type(self):
+        register = sanctions_import.load_register(ROOT)
+        lists = register['sanctions_lists']['lists']
+        types = [lists[authority]['post']['yaptirim'] for authority in self.MASAK]
+        rows = json.loads((self.LISTS / 'tr.masak.domestic.json').read_text(encoding='utf-8'))['data']
+        answers = iter(range(1, 1000))
+        posted = []
+
+        def envelope(columns, data):
+            return {'statusCode': 200, 'statusDescription': 'OK', 'message': None, 'columnNames': columns,
+                    'numRows': len(data), 'data': data, 'result': None, 'errors': [], 'elapsedTime': next(answers)}
+
+        def opener(offered):
+            def answer(request, timeout):
+                if request.full_url == sanctions_import.MASAK_TYPES:
+                    document = envelope(['yaptirim_turu'], [{'yaptirim_turu': kind} for kind in offered])
+                else:
+                    sent = json.loads(request.data)
+                    posted.append((request.get_method(), request.get_header('Content-type'), sent))
+                    kept = [dict(row, yaptirim_turu=sent['yaptirim']) for row in rows]
+                    document = envelope(sanctions_import.MASAK_COLUMNS, kept)
+                return io.BytesIO(json.dumps(document, ensure_ascii=False).encode('utf-8'))
+            return answer
+
+        review, _ = sanctions_import.opener_for(lists['tr.masak.domestic'])
+        with tempfile.TemporaryDirectory() as scratch:
+            first, second = Path(scratch) / 'first', Path(scratch) / 'second'
+            for into in (first, second):
+                with patch.object(sanctions_import, 'opener_for', lambda config: (review, opener(types))), \
+                        patch('sys.stdout', new_callable=io.StringIO):
+                    self.assertEqual(0, sanctions_import.main(['fetch', '--into', str(into), '--authority',
+                                                               'tr.masak.domestic']))
+            self.assertEqual(('POST', 'application/json', lists['tr.masak.domestic']['post']), posted[0])
+            kept = (first / 'tr.masak.domestic.json').read_bytes()
+            self.assertNotIn(b'elapsedTime', kept)
+            self.assertEqual(kept, (second / 'tr.masak.domestic.json').read_bytes())  # another elapsedTime
+            record = json.loads((first / 'tr.masak.domestic.fetch.json').read_text(encoding='utf-8'))
+            self.assertRegex(record['instant'], r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
+            self.assertEqual(record['day'], record['instant'][:10])
+            # A sanction type no list of the register posts refuses the fetch, and so does one withdrawn.
+            for offered in (types + ['Yeni Yaptırım'], types[1:]):
+                with self.subTest(offered=len(offered)), \
+                        patch.object(sanctions_import, 'opener_for', lambda config: (review, opener(offered))), \
+                        patch('sys.stderr', new_callable=io.StringIO) as error:
+                    self.assertEqual(1, sanctions_import.main(['fetch', '--into', str(Path(scratch) / 'third'),
+                                                               '--authority', 'tr.masak.un']))
+                self.assertIn('read the new type and add or retire its list', error.getvalue())
+                self.assertFalse((Path(scratch) / 'third' / 'tr.masak.un.json').exists())
+
+    def test_an_answer_read_again_later_is_a_new_generation(self):
+        generation_of = sanctions_import.generation_of
+        self.assertEqual(20261101120000, generation_of('2026-11-01T12:00:00Z', (20261101110458, 'a'), 'a', 'x'))
+        self.assertIsNone(generation_of('2026-11-01T11:04:58Z', (20261101110458, 'a'), 'a', 'x'))
+        self.assertIsNone(generation_of('2026-11-01T10:00:00Z', (20261101110458, 'a'), 'a', 'x'))
+        with tempfile.TemporaryDirectory() as scratch:
+            register = sanctions_import.load_register(ROOT)
+            config = register['sanctions_lists']['lists']['tr.masak.7262']
+            record, body = sanctions_import.fetched(self.LISTS, 'tr.masak.7262', config)
+            self.assertEqual(20261101110458, sanctions_import.import_list('tr.masak.7262', config, 'TR', record, body,
+                                                                         scratch)[0])
+            later = dict(record, instant='2026-11-20T08:00:00Z')
+            self.assertEqual(20261120080000, sanctions_import.import_list('tr.masak.7262', config, 'TR', later, body,
+                                                                         scratch)[0])
+            text = (Path(scratch) / 'tr.masak.7262.sanctions.toml').read_text(encoding='utf-8')
+            self.assertIn('published = "2026-11-20"', text)
+
+    def test_an_approximate_birth_leaves_the_party_no_period(self):
+        party = sanctions_import.Party('x', 1, 'individual')
+        party.birth('1968')
+        party.birth(sanctions_import.APPROXIMATE)
+        party.name('A B')
+        party.program('P')
+        self.assertEqual([], party.finished().births)
+        exact = sanctions_import.Party('x', 2, 'individual')
+        exact.birth(['1968', '1970'])
+        exact.name('A B')
+        exact.program('P')
+        self.assertEqual(['1968', '1970'], exact.finished().births)
+        with self.assertRaisesRegex(sanctions_import.SanctionsError, 'a birth on a entity'):
+            sanctions_import.Party('x', 3, 'entity').birth(sanctions_import.APPROXIMATE)
+
+    def test_a_list_posts_its_search_only_when_its_format_is_an_applications_answer(self):
+        where = 'legal register: sanctions_lists: tr.masak'
+        message = f"{where}: post is null for a file, the search posted (an object of texts)"
+        self.assert_lists_fail(self.sanctions(post={'yaptirim': 'x'}), message)
+        masak = {'format': 'tr-masak-json', 'delivery': [], 'read': None}
+        self.assertEqual(0, self.run_lists(self.sanctions(post={'ad': '', 'yaptirim': 'x'}, **masak))[0])
+        for post in (None, {}, {'yaptirim': 7}, ['yaptirim']):
+            with self.subTest(post=post):
+                self.assert_lists_fail(self.sanctions(post=post, **masak), message)
 
 
 class RegisterReview(RegisterFixture, unittest.TestCase):

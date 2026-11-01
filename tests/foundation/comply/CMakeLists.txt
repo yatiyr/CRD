@@ -36,8 +36,8 @@ if(Python3_FOUND)
                      --root "${CMAKE_SOURCE_DIR}")
     set_tests_properties(crd-comply-crypto-inventory-drift PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
     # The official sanctions lists end to end (COMPLY.1): scripts/import-sanctions.py imports the real-byte excerpts
-    # in lists/ (entries cut whole from the files read on 2026-11-01; OFAC's Record_Count set to the entries kept)
-    # into an emptied directory, with the US, EU, UK and UN embargoed destinations authored in
+    # in lists/ (entries cut whole from the files read on 2026-11-01; OFAC's Record_Count and MASAK's numRows set to
+    # the entries kept) into an emptied directory, with the US, EU, UK and UN embargoed destinations authored in
     # cmake/legal-register.json, whose first generations the hidden [.imported] cases decode, adopt and screen.
     set(_crd_imported "${CMAKE_CURRENT_BINARY_DIR}/sanctions-lists")
     add_test(NAME crd-comply-sanctions-clean COMMAND ${CMAKE_COMMAND} -E rm -rf "${_crd_imported}")
@@ -46,6 +46,8 @@ if(Python3_FOUND)
              COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/import-sanctions.py" --root "${CMAKE_SOURCE_DIR}"
                      import --from "${CMAKE_CURRENT_SOURCE_DIR}/lists" --out "${_crd_imported}"
                      --authority us.ofac.sdn --authority eu.fsf --authority un.sc --authority gb.fcdo
+                     --authority tr.masak.un --authority tr.masak.foreign --authority tr.masak.domestic
+                     --authority tr.masak.7262
                      --authority us.ofac.embargo --authority eu.council.embargo --authority gb.fcdo.embargo
                      --authority un.sc.embargo)
     set_tests_properties(crd-comply-sanctions-import PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1"

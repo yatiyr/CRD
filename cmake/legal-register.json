@@ -204,7 +204,8 @@
         "ticaret.gov.tr",
         "rtuk.gov.tr",
         "tbmm.gov.tr",
-        "turkpatent.gov.tr"
+        "turkpatent.gov.tr",
+        "hmb.gov.tr"
       ]
     },
     "EU": {
@@ -12226,13 +12227,14 @@
     }
   ],
   "sanctions_lists": {
-    "about": "Each authority's official list file: the entry it serves, the canonical URL (its host among the jurisdiction's official hosts), the hosts that URL may redirect to, the importer format of scripts/import-sanctions.py, the maximum age of the imported generation and the record of the file read. Raw files stay outside the repository, re-fetched and verified by digest.",
+    "about": "Each authority's official list: the entry it serves, the canonical URL (its host among the jurisdiction's official hosts), the search posted to it when the authority serves an application's answer rather than a file (null for a file), the hosts that URL may redirect to, the importer format of scripts/import-sanctions.py, the maximum age of the imported generation and the record of the file read. Raw files stay outside the repository, re-fetched and verified by digest.",
     "lists": {
       "us.ofac.sdn": {
         "entry": "us.sanctions",
         "title": "OFAC Specially Designated Nationals and Blocked Persons List (SDN List)",
         "format": "ofac-xml",
         "url": "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN.XML",
+        "post": null,
         "delivery": [
           "wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com"
         ],
@@ -12250,6 +12252,7 @@
         "title": "OFAC Consolidated Sanctions List (the non-SDN lists)",
         "format": "ofac-xml",
         "url": "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/CONSOLIDATED.XML",
+        "post": null,
         "delivery": [
           "wc2h-sls-prod-public-published.s3.us-gov-west-1.amazonaws.com"
         ],
@@ -12267,6 +12270,7 @@
         "title": "Consolidated list of persons, groups and entities subject to EU financial sanctions (FSF 1.1)",
         "format": "eu-fsf-xml",
         "url": "https://webgate.ec.europa.eu/fsd/fsf/public/files/xmlFullSanctionsList_1_1/content?token=dG9rZW4tMjAxNw",
+        "post": null,
         "delivery": [],
         "max_age_days": 31,
         "read": {
@@ -12282,6 +12286,7 @@
         "title": "United Nations Security Council Consolidated List",
         "format": "un-sc-xml",
         "url": "https://scsanctions.un.org/resources/xml/en/consolidated.xml",
+        "post": null,
         "delivery": [
           "unsolprodfiles.blob.core.windows.net"
         ],
@@ -12299,6 +12304,7 @@
         "title": "UK Sanctions List",
         "format": "gb-uksl-xml",
         "url": "https://sanctionslist.fcdo.gov.uk/docs/UK-Sanctions-List.xml",
+        "post": null,
         "delivery": [],
         "max_age_days": 31,
         "read": {
@@ -12308,12 +12314,93 @@
           "sha256": "ed397aa9c89106c2615eee20ba249e364273c185c41245e7027659fce7d01086",
           "parties": 6420
         }
+      },
+      "tr.masak.un": {
+        "entry": "tr.asset-freeze",
+        "title": "MASAK's asset freezes implementing the UN Security Council's lists (Law No. 6415, Article 5)",
+        "format": "tr-masak-json",
+        "url": "https://masak.hmb.gov.tr/portal/v2/masak/mvd/malvarligi-dondurulanlar",
+        "post": {
+          "ad": "",
+          "uyruk": "",
+          "orgut": "",
+          "yaptirim": "BMGK Yaptırımları Kapsamında (6415 sayılı kanun 5. Maddesine istinaden)"
+        },
+        "delivery": [],
+        "max_age_days": 31,
+        "read": {
+          "day": "2026-11-01",
+          "published": "2026-11-01T11:04:57Z",
+          "bytes": 296936,
+          "sha256": "2176c7ef7461b548facfa87a8f263ff4c1a7f7cf64f8eb410ff895f55857d95a",
+          "parties": 476
+        }
+      },
+      "tr.masak.foreign": {
+        "entry": "tr.asset-freeze",
+        "title": "MASAK's asset freezes on foreign states' requests (Law No. 6415, Article 6)",
+        "format": "tr-masak-json",
+        "url": "https://masak.hmb.gov.tr/portal/v2/masak/mvd/malvarligi-dondurulanlar",
+        "post": {
+          "ad": "",
+          "uyruk": "",
+          "orgut": "",
+          "yaptirim": "Yabancı ülke talebi (6415 sayılı kanun 6. Maddesine istinaden)"
+        },
+        "delivery": [],
+        "max_age_days": 31,
+        "read": {
+          "day": "2026-11-01",
+          "published": "2026-11-01T11:04:57Z",
+          "bytes": 52410,
+          "sha256": "a28c07dcc2269b42c6a155cda1979a59bca3bd57d5661b9e51024fcff1600e36",
+          "parties": 109
+        }
+      },
+      "tr.masak.domestic": {
+        "entry": "tr.asset-freeze",
+        "title": "MASAK's domestic asset freezes (Law No. 6415, Article 7)",
+        "format": "tr-masak-json",
+        "url": "https://masak.hmb.gov.tr/portal/v2/masak/mvd/malvarligi-dondurulanlar",
+        "post": {
+          "ad": "",
+          "uyruk": "",
+          "orgut": "",
+          "yaptirim": "İç Dondurma (6415 sayılı kanun 7. Maddesine istinaden)"
+        },
+        "delivery": [],
+        "max_age_days": 31,
+        "read": {
+          "day": "2026-11-01",
+          "published": "2026-11-01T11:04:58Z",
+          "bytes": 683899,
+          "sha256": "a800895e9f3f65fc538424572b3731acd7c81d728d1b5f9bfe7c9523659d93f7",
+          "parties": 1442
+        }
+      },
+      "tr.masak.7262": {
+        "entry": "tr.7262.proliferation-freeze",
+        "title": "MASAK's proliferation-financing asset freezes (Law No. 7262)",
+        "format": "tr-masak-json",
+        "url": "https://masak.hmb.gov.tr/portal/v2/masak/mvd/malvarligi-dondurulanlar",
+        "post": {
+          "ad": "",
+          "uyruk": "",
+          "orgut": "",
+          "yaptirim": "7262 Sayılı Kanun Kapsamında"
+        },
+        "delivery": [],
+        "max_age_days": 31,
+        "read": {
+          "day": "2026-11-01",
+          "published": "2026-11-01T11:04:58Z",
+          "bytes": 120032,
+          "sha256": "3889c1a621bfb43ab26529c8f260c1d8692ff3c20d758f339b3f694de8349772",
+          "parties": 277
+        }
       }
     },
-    "pending": {
-      "tr.asset-freeze": "MASAK publishes the asset-freeze decisions under Law No. 6415 through a web application (masak.hmb.gov.tr) with no list file at a stable address; the decisions are read from the Official Gazette and MASAK next, then imported.",
-      "tr.7262.proliferation-freeze": "MASAK publishes the freezing decisions under Law No. 7262 through the same web application with no list file at a stable address; they are read from the Official Gazette and MASAK next, then imported."
-    },
+    "pending": {},
     "embargoes": {
       "about": "The destinations each authority embargoes, which no designation file carries: authored from the regulations read (the entry's consolidated text), one destination per region and programme with the provision it rests on, and written by scripts/import-sanctions.py import as the authority's cerid-sanctions/1 generation (published on the day the text was read, its source_sha256 the digest of the reading). open says what the reading still owes (an umbrella entry's own text, such as the EU's regime index, enumerates the regulations to read and is not part of the reading); reasons says why a screening entry has no generation.",
       "generations": {

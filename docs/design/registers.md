@@ -258,7 +258,7 @@ standards register, never typed, and a change to them reaches no release without
 
 Distribution, accounts and payments are screened against every list the product's jurisdictions require (the
 `us.sanctions`, `eu.restrictive-measures`, `int.un-sanctions`, `gb.sanctions` and `tr.asset-freeze` entries, whose
-active check is the screening tests). The `comply` owner holds the lists, the matcher and the screening; the STORE
+active check is the screening tests, and `tr.7262.proliferation-freeze`). The `comply` owner holds the lists, the matcher and the screening; the STORE
 rows call it and write no second matcher (`compliance.obligations`, whose signatures refuse a Jaro-Winkler
 elsewhere).
 
@@ -268,7 +268,8 @@ elsewhere).
   `source_sha256`, then `[[destination]]` tables (`region`: ISO 3166-1 alpha-2 or an ISO 3166-2 subdivision,
   `program`, `measure`: `comprehensive`, `sectoral` or `partial`, part of the region whose boundary no subdivision
   draws) and `[[party]]` tables (`id`, `kind`: individual, entity,
-  vessel or aircraft, `names`: the primary name then the aliases, well-formed UTF-8, `programs`, `listed`: the
+  vessel, aircraft or unknown, a list that names no kind (Turkey's MASAK table), which no subject's kind contradicts
+  and which a subject never has, `names`: the primary name then the aliases, well-formed UTF-8, `programs`, `listed`: the
   designation day, empty when the list does not say (OFAC's files), `births`: YYYY, YYYY-MM or YYYY-MM-DD, or two of
   them joined by `/` (an ISO 8601 interval, from the first's first day to the second's last), individuals only,
   `countries`: ISO 3166-1 alpha-2, `identifiers`: `kind[.cc]:value`). An identifier's kind is lower-case words
@@ -283,10 +284,12 @@ elsewhere).
   generations are. Authenticity on delivery is NET.2's signed envelope.
 - **Importers read the official files** ([scripts/import-sanctions.py](../../scripts/import-sanctions.py)). The legal
   register's `sanctions_lists` names each authority's official file: the screening entry it serves, the canonical
-  URL (on an official host of that entry's jurisdiction), the hosts the URL may redirect to (OFAC and the UN answer
-  with a signed link to their file stores; any other host is refused), the importer format, the generation's maximum
-  age and the record of the file read (day, publication, bytes, SHA-256, parties). `fetch` downloads each file over
-  https with the register-review client and says whether it is the file the register recorded; `import` writes
+  URL (on an official host of that entry's jurisdiction), the search `post`ed to it when the authority serves an
+  application's answer instead of a file (null for a file; required by such a format), the hosts the URL may redirect
+  to (OFAC and the UN answer with a signed link to their file stores; any other host is refused), the importer
+  format, the generation's maximum age and the record of the file read (day, publication, bytes, SHA-256, parties).
+  `fetch` downloads each file over https with the register-review client (posting the search as JSON) and says whether
+  it is the file the register recorded, its fetch record holding the instant read beside the day; `import` writes
   `<out>/<authority>.sanctions.toml`; `record` records a reviewed refresh. The raw files stay outside the repository
   (re-fetched and verified by digest); real-byte excerpts of each format, entries cut whole, are the importer's test
   inputs (`tests/foundation/comply/lists`). Authorities, formats and the first read (2026-11-01):
@@ -298,10 +301,16 @@ elsewhere).
   | `eu.fsf` | the EU's financial sanctions file (FSF 1.1) | FSF XML | 31 days |
   | `un.sc` | the UN Security Council Consolidated List | UN XML | 7 days: regenerated daily |
   | `gb.fcdo` | the UK Sanctions List | UK XML | 31 days |
+  | `tr.masak.un` | MASAK's asset freezes implementing the UN's lists (Law No. 6415, Article 5) | MASAK JSON | 31 days |
+  | `tr.masak.foreign` | MASAK's asset freezes on foreign states' requests (Law No. 6415, Article 6) | MASAK JSON | 31 days |
+  | `tr.masak.domestic` | MASAK's domestic asset freezes (Law No. 6415, Article 7) | MASAK JSON | 31 days |
+  | `tr.masak.7262` | MASAK's proliferation-financing asset freezes (Law No. 7262) | MASAK JSON | 31 days |
 
   A generation's number is its publication instant as YYYYMMDDhhmmss (the EU's and the UN's files carry it); a file
   stamped only with its day (OFAC's, the UK's) takes YYYYMMDD000000 and counts up from the previous generation for a
-  second publication that day; a file already imported is left as it is and an older publication is refused. Every
+  second publication that day; a file already imported is left as it is unless published again later (an
+  application's answer read again: the next generation, so a list re-read stays fresh) and an older publication is
+  refused. Every
   reader fails closed: an element, identifier type, country name, calendar or date shape it does not know refuses
   the import with the party and the value, and a document type declaration is refused before the tree is built.
   Names are the primary name, every alias (weak ones too: a hit is at most possible without an agreeing birth,
@@ -310,13 +319,29 @@ elsewhere).
   disputed region records none); OFAC's descriptive idList items (sanctions information, dates, gender, a phone number
   printed in fragments) are read and never compared. Births keep what the list says and never narrow it: a range
   (OFAC's "1961 to 1962", the EU's year range with an open end running to 1900 or 9999, the UN's BETWEEN) is one
-  interval; an approximate date (circa, APPROXIMATELY) records no period, so it never contradicts a subject; a Hijri
+  interval; an approximate date (circa, APPROXIMATELY) leaves the party no period at all, its exact births beside it
+  included, so no birth contradicts it (59 parties of the files read on 2026-11-01 carry both; before, a subject born
+  near the approximate year was discounted by the exact ones); a Hijri
   date is its tabular Gregorian day two days either side (the observed and Umm al-Qura months start up to two days
   from it: the UN's 24/06/1402 is 17 to 21 April 1982, the EU printing 19 April); an Islamic-calendar year without a
   day is both its lunar and its Solar Hijri year (the EU prints Iranian births in the Solar Hijri year under
-  ISLAMIC); the UK's `dd/mm/19yy` is its century. Turkey's asset-freeze decisions (Laws No. 6415 and 7262) are
-  `pending`: MASAK publishes them through a web application with no list file at a stable address, so they are read
-  from the Official Gazette and MASAK next. A list's maximum age is a backstop measured from its publication day;
+  ISLAMIC); the UK's `dd/mm/19yy` is its century. Turkey's asset freezes (Laws No. 6415 and 7262) are MASAK's
+  one numbered table, served by its web application's search (masak.hmb.gov.tr's `portal/v2/masak/mvd` routes) and
+  by no file: each list posts its sanction type; the answer's envelope is read exactly (status, the 13 columns, the
+  row count) and kept in canonical form, its `elapsedTime` (different on every answer) dropped and its keys sorted,
+  so an unchanged table is the same bytes; it carries no stamp, so the instant read is its publication; `fetch` first
+  reads the application's sanction types and refuses one no list posts, or a list's type withdrawn. The table is
+  typed by hand: a party is an individual when its row gives a birth year or a parent's name, a vessel with an IMO
+  number, else of unknown kind (a third of the parties; even its organisation column calls persons legal entities);
+  day.month.year and month/day/year sit side by side, so a numeric date read both ways records both days; Turkish and
+  English month names, year spans and alternatives are read, and a birth read only in part (a name, a place, a note,
+  a Hijri date) or approximate ("Tahmini olarak") records no period; a number after a word naming its kind
+  ("pasaport", "ulusal kimlik", "VKN:", "IMO number:") is of that kind, any other a TCKN or GKN (`national-id.tr`) or
+  VKN (`tax-id.tr`) by its check digits (a TCKN and a VKN typed as one 21-digit number are both, a Turkish number's
+  check digits outrank its word) or a passport, also a VKN when 9 digits pass the VKN check with the leading zero the
+  table drops; aliases split at commas, semicolons, a) b) c) (glued to a name or not, in order) and 1- 2- 3-, each
+  parenthesis an alias unless a note or a country; the Official Gazette day is the listing day. On 2026-11-01 the
+  four lists held 476, 109, 1 442 and 277 parties. A list's maximum age is a backstop measured from its publication day;
   that a held list is still the authority's current one is the refresh's knowledge, carried with NET.2's signed
   delivery.
 - **Embargoed destinations are authored.** No designation file carries them, so each authority's comprehensive and

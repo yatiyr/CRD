@@ -450,11 +450,12 @@ class SecureRedirects(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, new._replace(scheme='https').geturl())
 
 
-def download(opener, url, headers, limit=None):
-    """The body of an https URL, gzip decoded, at most `limit` (FETCH_LIMIT) bytes either way."""
+def download(opener, url, headers, limit=None, data=None):
+    """The body of an https URL (posted `data` when given), gzip decoded, at most `limit` (FETCH_LIMIT) bytes either
+    way."""
     limit = limit or FETCH_LIMIT
-    request = urllib.request.Request(url, headers=dict(headers, **{'User-Agent': USER_AGENT,
-                                                                  'Accept-Encoding': 'gzip'}))
+    request = urllib.request.Request(url, data=data, headers=dict(headers, **{'User-Agent': USER_AGENT,
+                                                                             'Accept-Encoding': 'gzip'}))
     with opener(request, timeout=FETCH_TIMEOUT) as response:
         body = response.read(limit + 1)
         encoding = (getattr(response, 'headers', None) or {}).get('Content-Encoding') or 'identity'

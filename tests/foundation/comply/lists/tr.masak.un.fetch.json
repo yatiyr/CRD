@@ -1,0 +1,9 @@
+{
+  "schema": "cerid-sanctions-fetch/1",
+  "authority": "tr.masak.un",
+  "url": "https://masak.hmb.gov.tr/portal/v2/masak/mvd/malvarligi-dondurulanlar",
+  "day": "2026-11-01",
+  "instant": "2026-11-01T11:04:57Z",
+  "bytes": 4400,
+  "sha256": "2c6f60aec6d0f4de06e19d5f928160a687ebec7cc8152bea554d7290466243fb"
+}

@@ -7,8 +7,9 @@ importer's format, the list's maximum age and the record of the file read (day, 
 parties). The raw files stay outside the repository: they are re-fetched from the authority and verified by digest.
 
   python scripts/import-sanctions.py fetch --into DIR [--authority A ...]
-      download each official file to DIR/<authority>.xml with DIR/<authority>.fetch.json (URL, day, bytes, SHA-256)
-      and say whether it is the file the register recorded or a newer publication.
+      download each official file to DIR/<authority>.xml (.json for an application's answer, posted its `post` and
+      kept in canonical form) with DIR/<authority>.fetch.json (URL, day, instant, bytes, SHA-256) and say whether it
+      is the file the register recorded or a newer publication.
   python scripts/import-sanctions.py import --from DIR --out DIR [--authority A ...]
       write OUT/<authority>.sanctions.toml from the fetched file (ceridc screen --lists OUT reads it). The generation
       is the publication instant as YYYYMMDDhhmmss; a list stamped only with its day takes YYYYMMDD000000 and counts
@@ -20,7 +21,10 @@ parties). The raw files stay outside the repository: they are re-fetched from th
       record the fetched file in the register as the list read (the first read, then each reviewed refresh).
 
 Every reader fails closed: an element, identifier type, country name or date it does not know refuses the import
-with the party and the value, so a change in an authority's format is read, never guessed.
+with the party and the value, so a change in an authority's format is read, never guessed. Turkey's MASAK table is
+typed by hand: its free-text births and identifiers are read only as far as each value is understood, a birth not
+read whole recording no period (so it never discounts a hit) and a fragment that identifies nothing recording no
+identifier (see the MASAK section).
 """
 import argparse
 import datetime
@@ -35,6 +39,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 import xml.parsers.expat
 from pathlib import Path
+from typing import Callable, NamedTuple, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 REGISTER = 'cmake/legal-register.json'
@@ -215,6 +220,10 @@ MONTHS = {name: number for number, names in enumerate(
      ('dec', 'december')], 1) for name in names}
 
 
+# A birth the list gives as approximate (circa): a reader returns it for Party.birth.
+APPROXIMATE = 'approximate'
+
+
 class Party:
     def __init__(self, authority, reference, kind):
         if not AUTHORITY.match(str(reference)):
@@ -223,6 +232,7 @@ class Party:
         self.kind = kind
         self.names, self.programs, self.births, self.countries, self.identifiers = [], [], [], [], []
         self.listed = ''
+        self.approximate = False
 
     def where(self):
         return f'party {self.id}'
@@ -238,9 +248,13 @@ class Party:
             self.programs.append(text)
 
     def birth(self, periods):
-        """One period, a list of them, or None (no period)."""
+        """One period, a list of them, None (no period) or APPROXIMATE. An approximate birth leaves the party with no
+        period at all: its exact births beside it would otherwise discount a subject born near the approximate one."""
+        if periods == APPROXIMATE:
+            self.approximate = True
+            periods = None
         periods = [periods] if isinstance(periods, str) else periods or []
-        if periods and self.kind != 'individual':
+        if (periods or self.approximate) and self.kind != 'individual':
             raise SanctionsError(f'{self.where()}: a birth on a {self.kind}')
         for period in periods:
             if period not in self.births:
@@ -268,6 +282,8 @@ class Party:
             raise SanctionsError(f'{self.where()}: no name')
         if not self.programs:
             raise SanctionsError(f'{self.where()}: no programme')
+        if self.approximate:
+            self.births = []
         self.countries.sort()
         for key, items, bound in (('names', self.names, MAX_NAMES), ('programs', self.programs, MAX_ITEMS),
                                   ('births', self.births, MAX_ITEMS), ('countries', self.countries, MAX_ITEMS),
@@ -372,11 +388,10 @@ def ofac_period(text, where):
 
 
 def ofac_birth(text, where):
-    """OFAC's dateOfBirth: [DD ]Mon YYYY, YYYY, A to B, or circa A (approximate: no birth is recorded, so it never
-    contradicts a subject)."""
+    """OFAC's dateOfBirth: [DD ]Mon YYYY, YYYY, A to B, or circa A (APPROXIMATE)."""
     if text.startswith('circa '):
         ofac_period(text[len('circa '):], where)
-        return None
+        return APPROXIMATE
     first, _, last = text.partition(' to ')
     first = ofac_period(first, where)
     if not last:
@@ -442,12 +457,12 @@ EU_KINDS = {'person': 'individual', 'enterprise': 'entity'}
 def eu_birth(element, where):
     """The periods of an FSF birthdate: a Gregorian date or year, a year range (an open end runs to the decoder's
     first or last year: wider, never narrower), or an Islamic-calendar date (the file's own Gregorian day when it
-    gives one); circa marks an approximate date, which records no period."""
+    gives one); circa marks an approximate date (APPROXIMATE)."""
     calendar = element.get('calendarType') or 'GREGORIAN'
     if calendar not in ('GREGORIAN', 'ISLAMIC'):
         raise SanctionsError(f'{where}: the calendar {calendar!r}')
     if element.get('circa') == 'true':
-        return []
+        return APPROXIMATE
     if element.get('birthdate'):
         match = re.fullmatch(r'(\d{4})-(\d{2})-(\d{2})', element.get('birthdate'))
         if not match:
@@ -564,7 +579,7 @@ def un_birth(element, where):
     date, year = text_of(element, 'DATE'), text_of(element, 'YEAR')
     first, last, note = text_of(element, 'FROM_YEAR'), text_of(element, 'TO_YEAR'), text_of(element, 'NOTE')
     if kind == 'APPROXIMATELY':
-        return None
+        return APPROXIMATE
     if kind == 'BETWEEN':
         if not first or not last:
             raise SanctionsError(f'{where}: a BETWEEN birth without both years')
@@ -694,17 +709,398 @@ def read_uk(root, authority):
     return published, parties
 
 
-READERS = {'ofac-xml': read_ofac, 'eu-fsf-xml': read_eu, 'un-sc-xml': read_un, 'gb-uksl-xml': read_uk}
+# Turkey (MASAK's asset-freeze table) --------------------------------------------------------------------------------
+#
+# MASAK publishes Turkey's asset freezes (Law No. 6415 Articles 5, 6 and 7, Law No. 7262) as one numbered table in its
+# web application (masak.hmb.gov.tr), served by the application's search and by no file: each list of the register
+# posts its sanction type to the search (`post`) and keeps the answer. The answer carries no publication stamp and an
+# elapsedTime that changes on every request, so the fetch keeps it in canonical form (that field dropped, keys sorted)
+# and the instant it was read is its publication; the fetch also reads the application's sanction types first and
+# refuses a type no list of the register posts, so a new regime is read, never missed.
+#
+# The table is typed by hand and names no kind: a party is an individual when its row gives a birth year or a
+# parent's name (a natural person's), a vessel when it gives an IMO number, else of unknown kind (crd::comply's
+# Unknown, which no subject's kind contradicts). Births are free text in which day.month.year and month/day/year sit
+# side by side, so a numeric date read both ways records both days; a birth read only in part, or approximate,
+# records no period (it never discounts a hit). The identifier column holds a TCKN, VKN, GKN or passport number, or
+# for the UN's parties the UN's documents written out in Turkish: a number after a word naming its kind ("pasaport",
+# "ulusal kimlik", "VKN:", "IMO number:") is of that kind; any other has 11 digits with the TCKN check digits (a
+# national-id.tr; a GKN shares the algorithm), 10 with the VKN check digit (a tax-id.tr; a TCKN and a VKN typed
+# together are both) or is a passport; telephone and fax numbers, dates and notes are never compared. Countries are
+# Turkish names, each known or the import is refused.
+
+MASAK_TYPES = 'https://masak.hmb.gov.tr/portal/v2/masak/mvd/yaptirim'
+MASAK_COLUMNS = ['sira_no', 'ad_soyad_unvan', 'tckn_vkn', 'uyrugu', 'yaptirim_turu', 'anne_adı', 'baba_adı',
+                 'dogum_tarihi', 'dogum_yeri', 'orgutu', 'karar_sayisi', 'diger_adlari', 'diger_uyruk']
+MASAK_ENVELOPE = {'statusCode', 'statusDescription', 'message', 'columnNames', 'numRows', 'data', 'result', 'errors'}
+MASAK_TIMING = 'elapsedTime'  # the server's milliseconds, different on every answer
+TR_FOLD = str.maketrans('ÇĞİIÖŞÜÂÎÛçğıöşüâîû', 'cgiiosuaiucgiosuaiu')
+TR_COUNTRIES = {
+    'AF': ['Afganistan'], 'AL': ['Arnavutluk'], 'AT': ['Avusturya'], 'AU': ['Avustralya'],
+    'AZ': ['Azerbaycan', 'Azerbaidjan Republic'], 'BA': ['Bosna Hersek'], 'BD': ['Bangladeş'], 'BE': ['Belçika'],
+    'CH': ['İsviçre'], 'CN': ['Çin'], 'DE': ['Almanya'], 'DK': ['Danimarka'], 'DZ': ['Cezayir'], 'EG': ['Mısır'],
+    'ET': ['Etiyopya'], 'FR': ['Fransa', 'Fransız'],
+    'GB': ['Birleşik Krallık', 'Büyük Britanya', 'İngiltere', 'Kuzey İrlanda', 'Kuzey İrlanda Birleşik Krallığı'],
+    'GE': ['Gürcistan'], 'GR': ['Yunanistan'], 'ID': ['Endonezya'], 'IN': ['Hindistan'], 'IQ': ['Irak'],
+    'IR': ['İran'], 'IT': ['İtalya'], 'JO': ['Ürdün'], 'JP': ['Japonya'], 'KE': ['Kenya'], 'KM': ['Komor Adaları'],
+    'KP': ['Kore Demokratik Halk Cumhuriyeti'], 'KW': ['Kuveyt'], 'LB': ['Lübnan'], 'LY': ['Libya'], 'MA': ['Fas'],
+    'MH': ['Marshall Adaları'], 'ML': ['Mali'], 'MR': ['Moritanya'], 'MY': ['Malezya'], 'NE': ['Nijer'],
+    'NG': ['Nijerya'], 'NL': ['Hollanda'], 'NO': ['Norveç'], 'NZ': ['Yeni Zelanda'], 'PA': ['Panama'],
+    'PH': ['Filipinler'], 'PK': ['Pakistan'], 'PS': ['Filistin'], 'QA': ['Katar'], 'RO': ['Romanya'],
+    # The Russian Federation (RF) and the federal subjects the table prints in its place.
+    'RU': ['Rusya', 'RF', 'Bashkortostan', 'Chechen Region', 'Dagestan Region', 'Kabardono-Balkaria Region',
+           'Tatarstan Region', 'Voronezh Region'],
+    'SA': ['Suudi Arabistan'], 'SE': ['İsveç'], 'SG': ['Singapur'], 'SN': ['Senegal'], 'SO': ['Somali'],
+    'SY': ['Suriye'], 'TJ': ['Tacikistan'], 'TN': ['Tunus'],
+    'TR': ['Türkiye Cumhuriyeti', 'Türkiye Cumhuriyeti Devleti'],
+    'TT': ['Trinidad ve Tobago', 'Trnidad ve Tobago'], 'TZ': ['Tanzanya'], 'UG': ['Uganda'],
+    'US': ['ABD', 'United States of America'], 'UZ': ['Özbekistan'], 'YE': ['Yemen'],
+    # The Soviet Union, and Oran (an Algerian city the table prints beside Algeria): no current country.
+    None: ['USSR', 'Oran'],
+}
+# Month names, folded: Turkish, and the English the UN's entries keep (MONTHS).
+TR_MONTHS = dict(MONTHS, **{name: number for number, name in enumerate(
+    ('ocak', 'subat', 'mart', 'nisan', 'mayis', 'haziran', 'temmuz', 'agustos', 'eylul', 'ekim', 'kasim', 'aralik'),
+    1)})
+# Dates in a folded birth field: a numeric day and month in either order, a day and month name, a span of years, a
+# year; each standing alone (no digit before or after it).
+MASAK_MONTH = '|'.join(sorted(TR_MONTHS, key=len, reverse=True))
+MASAK_DATE = re.compile(r'(?<!\d)(?:(?P<a>\d{1,2})\s*[./]+\s*(?P<b>\d{1,2})\s*[./]+\s*(?P<y>\d{4})'
+                        rf'|(?P<day>\d{{1,2}})\s+(?P<month>{MASAK_MONTH})\.?\s*(?P<named>\d{{4}})'
+                        r'|(?P<first>\d{4})\s*-\s*(?P<last>\d{4})|(?P<year>\d{4}))(?!\d)')
+MASAK_APPROXIMATE = {'tahmini', 'tahminen', 'yaklasik', 'muhtemelen', 'civari', 'olarak'}
+MASAK_FILLER = {'arasi', 'veya', 've'}  # "1969-1971 arası" (between), "1961 veya 1962" (or)
+MASAK_ENUMERATION = re.compile(r'(?<![a-z])[a-z]\)')  # a) b) c), glued to a number before them or not
+# The words of the identifier column (folded) that say what the numbers after them are, longest first; None: numbers
+# never compared (a telephone, a fax, a prison register, a ration book). Numbers before any of them are typed by
+# their check digits.
+MASAK_KINDS = {
+    'tckn': 'national-id.tr', 'tck': 'national-id.tr', 'gkn': 'national-id.tr', 'ykn': 'national-id.tr',
+    'vkn': 'tax-id.tr', 'yabanci ulke vkn': 'tax-id',
+    'imo number': 'imo', 'swift/bic': 'swift', 'email': 'email', 'e-mail': 'email',
+    'pasaport': 'passport', 'pasaportu': 'passport', 'pasaprot': 'passport', 'passport': 'passport', 'pn': 'passport',
+    'seyahat belge': 'passport', 'seyahat belgesi': 'passport', 'reiseausweis': 'passport',
+    'kimlik': 'national-id', 'tazkira': 'national-id', 'ssn': 'national-id', 'ehliyet': 'driving-licence',
+    'mali kodu': 'tax-id', 'telephone': None, 'fax': None, 'kayit numarasi': None, 'karne': None,
+}
+MASAK_KIND = re.compile(r'(?<![a-z])(' + '|'.join(sorted(map(re.escape, MASAK_KINDS), key=len, reverse=True)) +
+                        r')(?![a-z0-9])')  # glued to a number before it or not ("TCKN:31849452040VKN:5980156465")
+# Words that are no passport series, though one to three letters before a number ("pasaport no 123456"); nor is a
+# country ("Çin 653225197110100533").
+MASAK_NOT_SERIES = {'no', 'nr', 've', 'de', 'da', 'ile', 'the', 'and'}
+# Notes the table prints in parentheses beside a name: the earlier listed name, the name's initials, "third".
+MASAK_NAME_NOTES = {'daha once listelenen isim', 'isminin ilk harfleri', 'ucuncu'}
+MASAK_NAME_LABEL = re.compile(r'(?:ori?jinal yazimi?|eski adi)\s*:')  # in folded text
+MASAK_LEGAL_TAILS = {'ltd', 'co', 'inc', 'llc', 'sti', 'ltd sti', 'as', 'co ltd'}
+MASAK_NO_ORGANISATION = {'', 'bilinmiyor', 'orgutu yoktur'}  # unknown, none
+
+
+def tr_fold(text):
+    """Lower case without Turkish or circumflexed letters, spaces collapsed: the form names and notes are compared
+    in."""
+    return ' '.join(text.translate(TR_FOLD).lower().split())
+
+
+TR_COUNTRY_NAMES = {tr_fold(name): code for code, names in TR_COUNTRIES.items() for name in names}
+
+
+def tckn_valid(digits):
+    """The check digits of a Turkish identity number (TCKN) or a foreigner's (GKN)."""
+    if len(digits) != 11 or not digits.isdigit() or digits[0] == '0':
+        return False
+    d = [int(char) for char in digits]
+    return (sum(d[0:9:2]) * 7 - sum(d[1:8:2])) % 10 == d[9] and sum(d[:10]) % 10 == d[10]
+
+
+def vkn_valid(digits):
+    """The check digit of a Turkish tax number (VKN)."""
+    if len(digits) != 10 or not digits.isdigit():
+        return False
+    total = 0
+    for i, digit in enumerate(int(char) for char in digits[:9]):
+        shifted = (digit + 9 - i) % 10
+        value = shifted * 2 ** (9 - i) % 9
+        total += 9 if shifted and value == 0 else value
+    return (10 - total % 10) % 10 == int(digits[9])
+
+
+def masak_answer(body, where, columns, timed):
+    """The rows of an answer of MASAK's application, its envelope exactly as served (with elapsedTime when `timed`,
+    the raw answer, else canonical) and every row holding exactly `columns` (the number a positive integer, every
+    other column text)."""
+    if len(body) > FILE_LIMIT:
+        raise SanctionsError(f'{where}: larger than {FILE_LIMIT} bytes')
+
+    def refuse_constant(name):
+        raise SanctionsError(f'{where}: the JSON constant {name}')
+
+    try:
+        document = json.loads(body.decode('utf-8'), parse_constant=refuse_constant)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SanctionsError(f'{where}: not a JSON answer in UTF-8 ({error})') from error
+    envelope = MASAK_ENVELOPE | ({MASAK_TIMING} if timed else set())
+    if not isinstance(document, dict) or set(document) != envelope:
+        raise SanctionsError(f'{where}: the answer holds {", ".join(sorted(envelope))}')
+    if (document['statusCode'], document['statusDescription'], document['message'], document['result'],
+            document['errors']) != (200, 'OK', None, None, []):
+        raise SanctionsError(f'{where}: the answer is no success ({document["statusCode"]!r}, '
+                             f'{document["statusDescription"]!r}, {document["errors"]!r})')
+    if document['columnNames'] != columns:
+        raise SanctionsError(f'{where}: the columns are {document["columnNames"]!r}, not {columns!r}')
+    rows = document['data']
+    if not isinstance(rows, list) or type(document['numRows']) is not int or document['numRows'] != len(rows):
+        raise SanctionsError(f'{where}: numRows is not the number of rows')
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != set(columns):
+            raise SanctionsError(f'{where}: a row without exactly the columns {", ".join(columns)}')
+        for column in columns:
+            number = column == 'sira_no'
+            if (type(row[column]) is not int or row[column] < 1) if number else not isinstance(row[column], str):
+                raise SanctionsError(f'{where}: row {row.get("sira_no")!r} has the {column} {row[column]!r}')
+    return rows
+
+
+def masak_canonical(body, where):
+    """The answer as kept: elapsedTime dropped, keys sorted, UTF-8, so a later answer with the same rows is the same
+    bytes."""
+    document = json.loads(body.decode('utf-8'))
+    masak_answer(body, where, MASAK_COLUMNS, timed=True)
+    del document[MASAK_TIMING]
+    return (json.dumps(document, ensure_ascii=False, sort_keys=True, indent=1) + '\n').encode('utf-8')
+
+
+def masak_census(download, configs):
+    """Refuses when the sanction types MASAK's application offers are not the types the register's lists post."""
+    offered = {row['yaptirim_turu'] for row in masak_answer(download(MASAK_TYPES), MASAK_TYPES, ['yaptirim_turu'],
+                                                            timed=True)}
+    posted = {(config.get('post') or {}).get('yaptirim') for config in configs}
+    if offered != posted:
+        raise SanctionsError(f'{MASAK_TYPES} offers the sanction types {sorted(offered)!r}, the register posts '
+                             f'{sorted(posted, key=str)!r}: read the new type and add or retire its list')
+
+
+def try_day(year, month=None, day=None):
+    try:
+        return day_text(year, month, day)
+    except SanctionsError:
+        return None
+
+
+def masak_births(text):
+    """(periods, has a year) of a birth field. The periods are every day a numeric date can be read as, each named
+    date, span of years and year, or None when the field holds anything else (a name, a place, a note) or is
+    approximate."""
+    folded = tr_fold(text.replace('"', ' '))
+    periods, rest, at = [], [], 0
+    for match in MASAK_DATE.finditer(folded):
+        rest.append(folded[at:match.start()])
+        at = match.end()
+        if match.group('y'):
+            first, second, year = (int(match.group(key)) for key in ('a', 'b', 'y'))
+            found = [day for day in (try_day(year, second, first), try_day(year, first, second)) if day]
+        elif match.group('named'):
+            found = [try_day(match.group('named'), TR_MONTHS[match.group('month')], match.group('day'))]
+        elif match.group('first'):
+            first, last = sorted((match.group('first'), match.group('last')))
+            found = [interval(first, last, '') if try_day(first) and try_day(last) else None]
+        else:
+            found = [try_day(match.group('year'))]
+        if not found or None in found:
+            return None, True
+        periods += [period for period in found if period not in periods]
+    rest.append(folded[at:])
+    words = re.sub(r"[\s,;.:/()'\-]+", ' ', MASAK_ENUMERATION.sub(' ', ' '.join(rest))).split()
+    has_year = bool(periods)
+    if any(word in MASAK_APPROXIMATE for word in words) or any(word not in MASAK_FILLER for word in words):
+        return None, has_year or bool(re.search(r'(?<!\d)\d{4}(?!\d)', folded))
+    return periods, has_year
+
+
+def masak_identifiers(party, text):
+    """Each identifier of the identifier column, its days dropped: the numbers after a word naming a kind of that kind
+    (the kinds above), a series of one to three letters joined to the number after it ("D 000857"), two numbers
+    joined by a dash both read ("36113043528-9611118807"), numbers of fewer than 6 characters dropped as notes."""
+    folded = re.sub(r'[()]', ' ', MASAK_ENUMERATION.sub(' ', tr_fold(text)))
+    days = MASAK_DATE.sub(lambda date: ' ' if date.group('y') or date.group('named') else date.group(0), folded)
+    parts = MASAK_KIND.split(days)
+    for word, segment in zip([None, *parts[1::2]], parts[0::2]):
+        kind = MASAK_KINDS[word] if word else ''
+        if kind == 'email':
+            for address in re.findall(r'[\w.+-]+@[\w-]+(?:\.[\w-]+)+', segment):
+                party.identifier('email', address)
+            continue
+        if kind is None:
+            continue
+        tokens = re.findall(r'[a-z0-9]+(?:-[a-z0-9]+)*', segment)
+        for at, token in enumerate(tokens):
+            series = token not in MASAK_NOT_SERIES and token not in TR_COUNTRY_NAMES
+            if series and re.fullmatch(r'[a-z]{1,3}(?:-[a-z])?', token) and at + 1 < len(tokens) and \
+                    tokens[at + 1][0].isdigit():
+                tokens[at + 1] = token + tokens[at + 1]
+        for token in tokens:
+            parts = token.split('-')
+            for part in parts if len(parts) > 1 and all(len(part) >= 6 for part in parts) else [token]:
+                compact = part.replace('-', '')
+                if kind == 'swift' and re.fullmatch(r'[a-z0-9]{8}(?:[a-z0-9]{3})?', compact):
+                    party.identifier('swift', part)
+                elif len(compact) >= 6 and re.search(r'\d', compact):
+                    masak_number(party, kind, part)
+
+
+def masak_number(party, kind, token):
+    """A number the column's word names the kind of (`kind`), or one typed by its check digits (`kind` empty): a TCKN
+    or GKN, a VKN, both typed together (21 digits), else a passport, and also a VKN when 9 digits with a leading zero
+    pass its check (the table drops a VKN's leading zero in 11 of the domestic list's 14 such numbers, 2026-11-01). A
+    Turkish number's check digits outrank its word ("YKN: 5240949089" is a VKN)."""
+    if kind.endswith('.tr') and (tckn_valid(token) or vkn_valid(token)):
+        kind = ''
+    if kind:
+        kind, _, country = kind.partition('.')
+        if kind == 'national-id' and tckn_valid(token):
+            country = 'tr'
+        party.identifier(kind, token, country.upper() or None)
+        return
+    glued = [(token[:11], token[11:]), (token[:10], token[10:])] if len(token) == 21 else []
+    pair = next((pair for pair in glued if {tckn_valid(part) or vkn_valid(part) for part in pair} == {True}), None)
+    for part in pair or (token,):
+        if tckn_valid(part):
+            party.identifier('national-id', part, 'TR')
+        elif vkn_valid(part):
+            party.identifier('tax-id', part, 'TR')
+        else:
+            party.identifier('passport', part)
+            if len(part) == 9 and vkn_valid(f'0{part}'):
+                party.identifier('tax-id', f'0{part}', 'TR')  # a VKN whose leading zero the table lost, or not
+
+
+def masak_names(text):
+    """The names of a name or alias field: split at commas, semicolons, line ends, spaced dashes, a) b) c), 1- 2- 3-
+    and the labels "ORJİNAL YAZIM:" (original script) and "ESKİ ADI:" (former name) outside parentheses; each with
+    its parentheses dropped, and each parenthesis an alias of its own unless it is a note or a country."""
+    text = text.replace('<', ' ').replace('>', ' ')
+    for label in reversed(list(MASAK_NAME_LABEL.finditer(text.translate(TR_FOLD).lower()))):
+        text = f'{text[:label.start()]},{text[label.end():]}'  # translate and lower() keep each index here
+    # A list numbered 1-, 2-, 3-, a number glued to the name before it or not ("2- MOHAMAD ALUOALİ3-WALİD AYSSA").
+    number, cut = 1, []
+    for match in re.finditer(r'(?<!\d)(\d{1,2})-\s*', text):
+        if int(match.group(1)) == number:
+            cut.append(match.span())
+            number += 1
+    for start, end in reversed(cut):
+        text = f'{text[:start]},{text[end:]}'
+    pieces, current, notes, depth, marker = [], [], [], 0, 'a'
+    for char in text:
+        if char == '(':
+            depth += 1
+            if depth == 1:
+                notes.append([])
+                continue
+        elif char == ')' and depth:
+            depth -= 1
+            if not depth:
+                continue
+        if depth:
+            notes[-1].append(char)
+        elif char in '),;\n':
+            piece = ''.join(current)
+            # A ')' outside parentheses closes an enumeration's letter, which is no part of the name: the letter
+            # next in order, even glued to a name ("a) Abu Thorjqb) Rusdjan"), or any letter standing alone.
+            if char == ')' and piece[-1:].lower() == marker:
+                piece, marker = piece[:-1], chr(ord(marker) + 1)
+            elif char == ')':
+                piece = re.sub(r'(?<![^\W\d_])[^\W\d_]$', '', piece)
+            pieces.append(piece)
+            current = []
+        else:
+            current.append(char)
+    pieces.append(''.join(current))
+    names = []
+    for name in (name.strip(' .:') for piece in pieces for name in re.split(r'\s[-–]\s', piece)):
+        if names and re.sub(r'[^a-z ]', '', tr_fold(name)).strip() in MASAK_LEGAL_TAILS:
+            names[-1] = f'{names[-1]}, {name}'  # "CO., LTD": a legal form after a comma ends the name before it
+        else:
+            names.append(name)
+    for note in (' '.join(''.join(chars).split()) for chars in notes):
+        if tr_fold(note) not in MASAK_NAME_NOTES:
+            names += masak_names(note)
+    # A lone letter is no name, nor is a country (a place beside a name, "(PAKISTAN)", or in an address).
+    return [name for name in names if len(re.sub(r'\W', '', name)) > 1 and tr_fold(name) not in TR_COUNTRY_NAMES and
+            name.casefold() not in COUNTRY_NAMES]
+
+
+def masak_country(party, text):
+    for name in re.split(r'[,\n]', text):
+        key = tr_fold(name)
+        if not key:
+            continue
+        if key not in TR_COUNTRY_NAMES:
+            raise SanctionsError(f'{party.where()}: the country {name.strip()!r} is not in {TOOL} TR_COUNTRIES; add it')
+        code = TR_COUNTRY_NAMES[key]
+        if code and code not in party.countries:
+            party.countries.append(code)
+
+
+def read_masak(body, authority, record, config):
+    sanction = (config.get('post') or {}).get('yaptirim')
+    if not isinstance(sanction, str) or not sanction:
+        raise SanctionsError(f'{authority}: post names the sanction type (yaptirim) the list is')
+    rows = masak_answer(body, authority, MASAK_COLUMNS, timed=False)
+    published = instant_text((record or {}).get('instant') or '', authority)
+    parties = []
+    for row in rows:
+        if row['yaptirim_turu'] != sanction:
+            raise SanctionsError(f'{authority}: row {row["sira_no"]} is a {row["yaptirim_turu"]!r}, not {sanction!r}')
+        births, has_year = masak_births(row['dogum_tarihi'])
+        parents = (row['anne_adı'] + row['baba_adı']).strip()
+        kind = 'individual' if has_year or parents else \
+            'vessel' if re.search(r'imo number\s*:', row['tckn_vkn'], re.IGNORECASE) else 'unknown'
+        party = Party(authority, row['sira_no'], kind)
+        for name in masak_names(row['ad_soyad_unvan']) + masak_names(row['diger_adlari']):
+            party.name(name)
+        party.program(row['yaptirim_turu'])
+        if tr_fold(row['orgutu']) not in MASAK_NO_ORGANISATION:
+            party.program(row['orgutu'])
+        # The Official Gazette's day and issue ("2024-06-14 / 32576 (Mükerrer)"), or its issue alone: no listing day.
+        decision = ' '.join(row['karar_sayisi'].split())
+        listed = re.match(r'(?:(\d{4})-(\d{2})-(\d{2}) )?/ ?\S', decision)
+        if decision and not listed:
+            raise SanctionsError(f'{party.where()}: the decision {decision!r} is no Official Gazette day and number')
+        party.listed = day_text(*listed.groups(), where=party.where()) if listed and listed.group(1) else ''
+        party.birth(births)
+        masak_country(party, row['uyrugu'])
+        masak_country(party, row['diger_uyruk'])
+        masak_identifiers(party, row['tckn_vkn'])
+        parties.append(party.finished())
+    return published, parties
+
+
+class Format(NamedTuple):
+    suffix: str  # the fetched file's: <authority>.<suffix>
+    read: Callable  # (body, authority, fetch record, list config) -> (publication, parties)
+    canonical: Optional[Callable] = None  # (answer, authority) -> the bytes kept, for an answer that varies
+    census: Optional[Callable] = None  # (download, the register's lists of the format): refuses an unread type
+    posts: bool = False  # the URL is an application's search, posted the list's `post`
+
+
+def xml_format(reader):
+    return Format('xml', lambda body, authority, record, config: reader(parse_xml(body, authority), authority))
+
+
+READERS = {'ofac-xml': xml_format(read_ofac), 'eu-fsf-xml': xml_format(read_eu), 'un-sc-xml': xml_format(read_un),
+           'gb-uksl-xml': xml_format(read_uk),
+           'tr-masak-json': Format('json', read_masak, masak_canonical, masak_census, posts=True)}
 
 
 # Generations --------------------------------------------------------------------------------------------------------
 
 def generation_of(published, previous, sha256, authority):
-    """The generation number of a publication, or None when `previous` (number, sha256) already holds it."""
-    if previous is not None and previous[1] == sha256:
-        return None
+    """The generation number of a publication, or None when `previous` (number, sha256) already holds it. The same
+    file published again later (an application's answer, published when it is read) is a new generation, so a list
+    read again stays fresh."""
     digits = re.sub(r'\D', '', published)
     number = int(digits) if len(digits) == 14 else int(digits) * 1000000
+    if previous is not None and previous[1] == sha256 and number <= previous[0]:
+        return None
     if previous is not None and previous[0] >= number:
         if len(digits) == 8 and previous[0] // 1000000 == int(digits):
             return previous[0] + 1  # a second publication stamped with the same day
@@ -751,11 +1147,12 @@ def render(authority, config, jurisdiction, generation, published, sha256, parti
     return text
 
 
-def import_list(authority, config, jurisdiction, body, out_dir):
-    """Writes OUT/<authority>.sanctions.toml; returns (generation or None when already current, parties, published)."""
+def import_list(authority, config, jurisdiction, record, body, out_dir):
+    """Writes OUT/<authority>.sanctions.toml from the fetched file and its fetch record; returns (generation or None
+    when already current, parties, published)."""
     if len(body) > FILE_LIMIT:
         raise SanctionsError(f'{authority}: larger than {FILE_LIMIT} bytes')
-    published, parties = READERS[config['format']](parse_xml(body, authority), authority)
+    published, parties = READERS[config['format']].read(body, authority, record, config)
     if len(parties) > MAX_PARTIES:
         raise SanctionsError(f'{authority}: {len(parties)} parties, more than {MAX_PARTIES}')
     ids = [party.id for party in parties]
@@ -928,14 +1325,14 @@ def jurisdiction_of(register, config):
     return jurisdiction
 
 
-def fetched(directory, authority):
+def fetched(directory, authority, config):
     """The fetched file's body, checked against its fetch record."""
-    directory = Path(directory)
-    record = json.loads((directory / f'{authority}.fetch.json').read_text(encoding='utf-8'))
-    body = (directory / f'{authority}.xml').read_bytes()
+    path = Path(directory) / f'{authority}.{READERS[config["format"]].suffix}'
+    record = json.loads(path.with_name(f'{authority}.fetch.json').read_text(encoding='utf-8'))
+    body = path.read_bytes()
     if record.get('schema') != FETCH_SCHEMA or record.get('authority') != authority or \
             hashlib.sha256(body).hexdigest() != record.get('sha256') or len(body) != record.get('bytes'):
-        raise SanctionsError(f'{directory / authority}.xml is not the file its fetch record names; fetch it again')
+        raise SanctionsError(f'{path} is not the file its fetch record names; fetch it again')
     return record, body
 
 
@@ -949,21 +1346,40 @@ def opener_for(config):
     return review, urllib.request.build_opener(review.SecureRedirects(hosts)).open
 
 
+def download(config, url, post=None):
+    """The body of `url` read through the list's opener, posted `post` as JSON when it is given."""
+    review, opener = opener_for(config)
+    headers, data = {}, None
+    if post is not None:
+        headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+        data = json.dumps(post).encode('utf-8')
+    try:
+        return review, review.download(opener, url, headers, FILE_LIMIT, data)
+    except review.Unreadable as error:
+        raise SanctionsError(f'{url} is {error}') from error
+
+
 def command_fetch(args, root):
     register = load_register(root)
     into = Path(args.into)
     into.mkdir(parents=True, exist_ok=True)
-    today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
-    for authority, config in lists_of(register, args.authority).items():
-        review, opener = opener_for(config)
-        try:
-            body = review.download(opener, config['url'], {}, FILE_LIMIT)
-        except review.Unreadable as error:
-            raise SanctionsError(f'{authority}: {config["url"]} is {error}') from error
+    chosen, every = lists_of(register, args.authority), lists_of(register, None)
+    for name in sorted({config['format'] for config in chosen.values()}):
+        census = READERS[name].census
+        configs = [config for config in every.values() if config['format'] == name]
+        if census is not None:
+            census(lambda url: download(configs[0], url)[1], configs)
+    for authority, config in chosen.items():
+        form = READERS[config['format']]
+        review, body = download(config, config['url'], config['post'])
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if form.canonical is not None:
+            body = form.canonical(body, authority)
         sha256 = hashlib.sha256(body).hexdigest()
-        (into / f'{authority}.xml').write_bytes(body)
-        record = {'schema': FETCH_SCHEMA, 'authority': authority, 'url': config['url'], 'day': today,
-                  'bytes': len(body), 'sha256': sha256}
+        (into / f'{authority}.{form.suffix}').write_bytes(body)
+        record = {'schema': FETCH_SCHEMA, 'authority': authority, 'url': config['url'],
+                  'day': now.date().isoformat(), 'instant': now.strftime('%Y-%m-%dT%H:%M:%SZ'), 'bytes': len(body),
+                  'sha256': sha256}
         review.write_json(into / f'{authority}.fetch.json', record)
         read = config.get('read')
         state = 'the file the register recorded' if read and read['sha256'] == sha256 else \
@@ -996,9 +1412,9 @@ def command_import(args, root):
             print(f'{authority}: {destinations} embargoed destinations read {read}: {state}')
             continue
         config = lists[authority]
-        _, body = fetched(args.source, authority)
-        generation, parties, published = import_list(authority, config, jurisdiction_of(register, config), body,
-                                                     args.out)
+        record, body = fetched(args.source, authority, config)
+        generation, parties, published = import_list(authority, config, jurisdiction_of(register, config), record,
+                                                     body, args.out)
         state = 'already imported' if generation is None else f'generation {generation}'
         print(f'{authority}: {parties} parties published {published}: {state}')
     return 0
@@ -1008,8 +1424,8 @@ def command_record(args, root):
     path = Path(root) / REGISTER
     register = load_register(root)
     for authority, config in lists_of(register, args.authority).items():
-        record, body = fetched(args.source, authority)
-        published, parties = READERS[config['format']](parse_xml(body, authority), authority)
+        record, body = fetched(args.source, authority, config)
+        published, parties = READERS[config['format']].read(body, authority, record, config)
         config['read'] = {'day': record['day'], 'published': published, 'bytes': record['bytes'],
                           'sha256': record['sha256'], 'parties': len(parties)}
         print(f'{authority}: recorded the file read on {record["day"]} ({len(parties)} parties, published '

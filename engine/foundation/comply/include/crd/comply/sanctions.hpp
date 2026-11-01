@@ -15,7 +15,8 @@
 //   fail closed     a list the request names that the store does not hold, or holds stale (screened after its
 //                   publication day plus its maximum age, or before its publication day), makes the verdict
 //                   Unavailable unless a certain match already blocks: a missing list never reads as clear.
-//   no silent drop  a name match that the subject's kind or birth contradicts is reported Discounted, not dropped.
+//   no silent drop  a name match that the subject's kind or birth contradicts is reported Discounted, not dropped;
+//                   a party whose list names no kind (Unknown) is never contradicted by the subject's kind.
 //
 // Verdicts: Blocked (a party match, or a destination inside a comprehensive embargo), else Unavailable, else Review
 // (a possible party match, a sectoral or partial embargo, or a country whose embargoed region the request does not
@@ -49,6 +50,7 @@ enum class PartyKind : u8
     Entity,
     Vessel,
     Aircraft,
+    Unknown, // a party only: the list names no kind (Turkey's MASAK table), so no subject's kind contradicts it
 };
 
 enum class Measure : u8
@@ -113,7 +115,7 @@ struct SanctionsList
 // Who is screened: a customer, a payee, a publisher's counterparty.
 struct Subject
 {
-    PartyKind kind = PartyKind::Individual;
+    PartyKind kind = PartyKind::Individual;        // never Unknown: a subject's kind is always known
     cont::ConstSpan<cont::StringView> names;       // at least one
     cont::StringView birth;                        // "" unknown, else YYYY, YYYY-MM or YYYY-MM-DD
     cont::ConstSpan<cont::StringView> countries;   // ISO 3166-1 alpha-2
@@ -196,8 +198,9 @@ struct Screening
 [[nodiscard]] cont::StringView verdict_name(Verdict verdict) noexcept;       // clear, review, unavailable, blocked
 [[nodiscard]] cont::StringView disposition_name(Disposition value) noexcept; // match, possible, discounted
 [[nodiscard]] cont::StringView gap_name(Gap gap) noexcept;                   // missing, stale, not-yet-published
-[[nodiscard]] cont::StringView party_kind_name(PartyKind kind) noexcept;     // individual, entity, vessel, aircraft
+[[nodiscard]] cont::StringView party_kind_name(PartyKind kind) noexcept;     // individual, ..., aircraft, unknown
 [[nodiscard]] cont::StringView measure_name(Measure measure) noexcept;       // comprehensive, sectoral, partial
+// A subject's kind: individual, entity, vessel or aircraft (never unknown).
 [[nodiscard]] bool parse_party_kind(cont::StringView text, PartyKind& out) noexcept;
 
 // The installation's lists: one generation per authority. apply() and screen() may run on different threads.

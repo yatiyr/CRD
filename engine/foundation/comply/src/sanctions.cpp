@@ -22,7 +22,9 @@ constexpr cont::StringView kDestinationKeys[] = {"region", "program", "measure"}
 constexpr cont::StringView kPartyKeys[] = {"id",     "kind",   "names",     "programs",
                                            "listed", "births", "countries", "identifiers"};
 
-constexpr cont::StringView kPartyKindNames[] = {"individual", "entity", "vessel", "aircraft"};
+// PartyKind in order; the last, unknown, is a list party's only (a subject's kind is one of the others).
+constexpr cont::StringView kPartyKindNames[] = {"individual", "entity", "vessel", "aircraft", "unknown"};
+constexpr usize kSubjectKinds = 4U;
 constexpr cont::StringView kMeasureNames[] = {"comprehensive", "sectoral", "partial"};
 
 [[nodiscard]] bool is_country(cont::StringView text) noexcept
@@ -433,6 +435,10 @@ struct Prepared
         }
         out.names.push_back(static_cast<FoldedName&&>(folded));
     }
+    if (static_cast<usize>(subject->kind) >= kSubjectKinds)
+    {
+        return DecodeFailure{ComplyError::BadValue, 0U, "kind"};
+    }
     out.kind = subject->kind;
     out.has_birth = !subject->birth.empty();
     if (out.has_birth && !parse_period(subject->birth, out.birth))
@@ -539,7 +545,7 @@ void screen_parties(const SanctionsList& list, const Prepared& subject, const Sc
                 country_agrees = country_agrees || mine == cont::StringView(theirs);
             }
         }
-        const bool kind_contradicts = subject.kind != party.kind;
+        const bool kind_contradicts = party.kind != PartyKind::Unknown && subject.kind != party.kind;
         Disposition disposition = Disposition::Possible;
         if (best >= policy.review && (kind_contradicts || birth_contradicts))
         {
@@ -661,7 +667,8 @@ cont::StringView gap_name(Gap gap) noexcept
 cont::StringView party_kind_name(PartyKind kind) noexcept
 {
     const auto index = static_cast<usize>(kind);
-    return index < 4U ? kPartyKindNames[index] : cont::StringView("unknown");
+    return index < sizeof(kPartyKindNames) / sizeof(kPartyKindNames[0]) ? kPartyKindNames[index]
+                                                                          : cont::StringView("unknown");
 }
 
 cont::StringView measure_name(Measure measure) noexcept
@@ -672,7 +679,7 @@ cont::StringView measure_name(Measure measure) noexcept
 
 bool parse_party_kind(cont::StringView text, PartyKind& out) noexcept
 {
-    for (usize i = 0U; i < 4U; ++i)
+    for (usize i = 0U; i < kSubjectKinds; ++i)
     {
         if (kPartyKindNames[i] == text)
         {

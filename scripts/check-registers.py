@@ -40,7 +40,8 @@ The guard fails, among the format errors, on:
     obligation the classification checks, and a release classified before counsel reviewed it;
   - in the legal domain (COMPLY.1), `sanctions_lists`: an official list file that names no entry whose active check
     is the screening, a URL off that entry's jurisdiction's official hosts, an unknown importer format of
-    scripts/import-sanctions.py, a malformed delivery host, a maximum age outside the decoder's bound, a record of the
+    scripts/import-sanctions.py, a search posted to a file's URL or missing from an application's (`post`), a
+    malformed delivery host, a maximum age outside the decoder's bound, a record of the
     file read that is incomplete, published after it was read or read after today, and a screening entry with neither
     a list nor a pending reason (or with both); an authored embargo generation whose entry is no screening entry or was
     not read from its primary source, whose destinations are no ISO regions, measures or provisions, or repeat a
@@ -133,7 +134,7 @@ _spec = importlib.util.spec_from_file_location('import_sanctions', Path(__file__
                                                'import-sanctions.py')
 _sanctions = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_sanctions)
-SANCTIONS_LIST_KEYS = {'entry', 'title', 'format', 'url', 'delivery', 'max_age_days', 'read'}
+SANCTIONS_LIST_KEYS = {'entry', 'title', 'format', 'url', 'post', 'delivery', 'max_age_days', 'read'}
 SANCTIONS_READ_KEYS = {'day', 'published', 'bytes', 'sha256', 'parties'}
 SCREENING_CHECK = 'tests/foundation/comply/test_sanctions.cpp'
 PUBLISHED = re.compile(r'^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?$')
@@ -786,8 +787,14 @@ def sanctions_list_errors(register, context):
                               f'({", ".join(hosts)})')
         if not isinstance(config['title'], str) or not config['title']:
             errors.append(f'{at}: title names the list')
-        if config['format'] not in _sanctions.READERS:
+        form = _sanctions.READERS.get(config['format'])
+        if form is None:
             errors.append(f'{at}: format is one of {", ".join(sorted(_sanctions.READERS))} ({_sanctions.TOOL})')
+        elif form.posts != (config['post'] is not None) or (form.posts and (
+                not isinstance(config['post'], dict) or not config['post'] or
+                not all(isinstance(key, str) and isinstance(value, str) for key, value in config['post'].items()))):
+            errors.append(f'{at}: post is null for a file, the search posted (an object of texts) for an '
+                          f"application's answer ({config['format']})")
         if not isinstance(config['delivery'], list) or \
                 not all(isinstance(host, str) and HOST.match(host) for host in config['delivery']):
             errors.append(f'{at}: delivery lists the hosts its URL may redirect to (lower case)')
