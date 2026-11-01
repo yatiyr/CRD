@@ -26,6 +26,7 @@
 #include <cstddef>
 #include <cstring>
 #include <limits>
+#include <string_view>
 
 namespace er = crd::eylem_rigid3d;
 using crd::f32;
@@ -426,4 +427,62 @@ TEST_CASE("rigid3d kernels: EylemSystem steps the whole pool once a substep on t
     CHECK(std::bit_cast<u32>(first->translation.y.value) == std::bit_cast<u32>(pose.position.y.value));
     CHECK(std::bit_cast<u32>(second->translation.y.value) == std::bit_cast<u32>(pose.position.y.value));
     CHECK(std::bit_cast<u32>(first->rotation.w) == std::bit_cast<u32>(second->rotation.w));
+}
+
+TEST_CASE("rigid3d kernels: the process runs the level its CPU selection resolves", "[eylem][kernels]")
+{
+    const crd::CpuSelection& s = crd::cpu_selection();
+    const KernelLevel<Rigid3dKernels>& chosen = er::rigid3d_kernels();
+    INFO("selected " << crd::cpu_level_name(s.selected) << ", running " << crd::cpu_level_name(chosen.level));
+    CHECK(&chosen == &crd::select_kernel_level<Rigid3dKernels>(er::rigid3d_kernel_levels(), s.selected,
+                                                               s.kernel_features, crd::kernel_level_cap()));
+    CHECK(crd::cpu_level_includes(s.selected, chosen.level));
+    const crd::KernelFamily* family = crd::test::kernel_family("eylem.rigid3d");
+    REQUIRE(family != nullptr);
+    CHECK(family->result.status == crd::KernelCheckStatus::Passed);
+    CHECK(family->result.level == chosen.level);
+}
+
+namespace
+{
+
+// Self-check stubs: the portable step with the last lane's rotation one bit off, and one that skips a free lane's
+// snapshot.
+void last_lane_off(BodyChunk* chunks, usize count, const f32 gravity[3], f32 dt) noexcept
+{
+    er::kRigid3dKernelsPortable.step_bodies(chunks, count, gravity, dt);
+    f32& w = chunks[count - 1U].rot_w[kChunkLanes - 1U];
+    w = std::bit_cast<f32>(std::bit_cast<u32>(w) ^ 1U);
+}
+
+void free_lane_unsnapshot(BodyChunk* chunks, usize count, const f32 gravity[3], f32 dt) noexcept
+{
+    er::kRigid3dKernelsPortable.step_bodies(chunks, count, gravity, dt);
+    chunks[0].prev_pos_x[3] = 0.0F;
+}
+
+std::string_view routine_of(const char* routine)
+{
+    return routine != nullptr ? routine : "";
+}
+
+} // namespace
+
+TEST_CASE("rigid3d self-check: every table the host runs gives the known answers", "[eylem][kernels]")
+{
+    const crd::test::SelfCheckRun run =
+        crd::test::self_check_levels(er::rigid3d_kernel_levels(), &er::rigid3d_self_check);
+    INFO("first failure " << crd::cpu_level_name(run.level) << " " << routine_of(run.routine));
+    CHECK(run.failed == 0U);
+    CHECK(run.ran >= 1U);
+}
+
+TEST_CASE("rigid3d self-check: a wrong body step fails the check", "[eylem]")
+{
+    CHECK(er::rigid3d_self_check(er::kRigid3dKernelsPortable) == nullptr);
+    Rigid3dKernels w = er::kRigid3dKernelsPortable;
+    w.step_bodies = &last_lane_off;
+    CHECK(routine_of(er::rigid3d_self_check(w)) == "step_bodies");
+    w.step_bodies = &free_lane_unsnapshot;
+    CHECK(routine_of(er::rigid3d_self_check(w)) == "step_bodies");
 }

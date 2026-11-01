@@ -17,6 +17,10 @@ namespace crd::hesap::direct
 [[nodiscard]] std::span<const crd::KernelLevel<DirectKernels>> direct_kernel_levels() noexcept;
 [[nodiscard]] const crd::KernelLevel<DirectKernels>& direct_kernels() noexcept;
 
+// The family's known-answer self-check (HW-RESILIENCE.3, crd/core/kernel_dispatch.hpp), which its resolution runs:
+// nullptr when every f64 and f32 kernel of `table` gives its known answers, else the failing routine's name.
+[[nodiscard]] const char* direct_self_check(const DirectKernels& table) noexcept;
+
 // The kernels of element type T in a table, and in the one the process runs.
 template <typename T> [[nodiscard]] constexpr const DirectTypeKernels<T>& kernels_of(const DirectKernels& k) noexcept
 {

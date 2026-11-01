@@ -19,6 +19,7 @@
 #include <cmath>
 #include <initializer_list>
 #include <limits>
+#include <string_view>
 #include <type_traits>
 
 namespace dn = crd::hesap::dense;
@@ -648,4 +649,108 @@ TEST_CASE("direct kernels: the backward below-update's gemv gives the bits of y 
 {
     expect(run(check_backward_below_gemv<crd::f64>));
     expect(run(check_backward_below_gemv<crd::f32>));
+}
+
+TEST_CASE("direct kernels: the process runs the level its CPU selection resolves", "[direct][kernels]")
+{
+    const crd::CpuSelection& s = crd::cpu_selection();
+    const crd::KernelLevel<dr::DirectKernels>& chosen = dr::direct_kernels();
+    INFO("selected " << crd::cpu_level_name(s.selected) << ", running " << crd::cpu_level_name(chosen.level));
+    CHECK(&chosen == &crd::select_kernel_level<dr::DirectKernels>(dr::direct_kernel_levels(), s.selected,
+                                                                  s.kernel_features, crd::kernel_level_cap()));
+    CHECK(crd::cpu_level_includes(s.selected, chosen.level));
+    const crd::KernelFamily* family = crd::test::kernel_family("hesap.direct");
+    REQUIRE(family != nullptr);
+    CHECK(family->result.status == crd::KernelCheckStatus::Passed);
+    CHECK(family->result.level == chosen.level);
+}
+
+namespace
+{
+
+// Self-check stubs: each routine once, over both element types, as the portable kernel with one answer a bit off.
+template <typename T> void one_bit_off(T& v) noexcept
+{
+    using Bits = std::conditional_t<sizeof(T) == 8U, u64, u32>;
+    v = std::bit_cast<T>(static_cast<Bits>(std::bit_cast<Bits>(v) ^ 1U));
+}
+
+const dr::DirectKernels& portable_direct() noexcept
+{
+    return dr::kDirectKernelsPortable;
+}
+
+void forward_below_off(const dn::GemvtRows<crd::f64>& g) noexcept
+{
+    portable_direct().f64_kernels.forward_below(g);
+    one_bit_off(g.y[g.cols - 1U]);
+}
+
+void forward_diagonal_off(crd::f32* x, const crd::f32* panel, usize ld, usize nc) noexcept
+{
+    portable_direct().f32_kernels.forward_diagonal(x, panel, ld, nc);
+    one_bit_off(x[nc - 1U]);
+}
+
+void block_forward_below_off(const dr::PanelProduct<crd::f64>& p) noexcept
+{
+    portable_direct().f64_kernels.block_forward_below(p);
+    one_bit_off(p.out[p.rows * p.nrhs - 1U]);
+}
+
+void block_backward_below_off(const dr::PanelReduce<crd::f32>& p) noexcept
+{
+    portable_direct().f32_kernels.block_backward_below(p);
+    one_bit_off(p.y[0]);
+}
+
+void block_forward_diagonal_off(crd::f64* d, usize nrhs, const crd::f64* panel, usize ld, usize nc) noexcept
+{
+    portable_direct().f64_kernels.block_forward_diagonal(d, nrhs, panel, ld, nc);
+    one_bit_off(d[nc * nrhs - 1U]);
+}
+
+void block_backward_diagonal_off(crd::f32* d, usize nrhs, const crd::f32* panel, usize ld, usize nc) noexcept
+{
+    portable_direct().f32_kernels.block_backward_diagonal(d, nrhs, panel, ld, nc);
+    one_bit_off(d[0]);
+}
+
+std::string_view routine_of(const char* routine)
+{
+    return routine != nullptr ? routine : "";
+}
+
+} // namespace
+
+TEST_CASE("direct self-check: every table the host runs gives the known answers", "[direct][kernels]")
+{
+    const crd::test::SelfCheckRun run =
+        crd::test::self_check_levels(dr::direct_kernel_levels(), &dr::direct_self_check);
+    INFO("first failure " << crd::cpu_level_name(run.level) << " " << routine_of(run.routine));
+    CHECK(run.failed == 0U);
+    CHECK(run.ran >= 1U);
+}
+
+TEST_CASE("direct self-check: a wrong routine fails the check", "[direct]")
+{
+    CHECK(dr::direct_self_check(portable_direct()) == nullptr);
+    dr::DirectKernels w = portable_direct();
+    w.f64_kernels.forward_below = &forward_below_off;
+    CHECK(routine_of(dr::direct_self_check(w)) == "f64 forward_below");
+    w = portable_direct();
+    w.f32_kernels.forward_diagonal = &forward_diagonal_off;
+    CHECK(routine_of(dr::direct_self_check(w)) == "f32 forward_diagonal");
+    w = portable_direct();
+    w.f64_kernels.block_forward_below = &block_forward_below_off;
+    CHECK(routine_of(dr::direct_self_check(w)) == "f64 block_forward_below");
+    w = portable_direct();
+    w.f32_kernels.block_backward_below = &block_backward_below_off;
+    CHECK(routine_of(dr::direct_self_check(w)) == "f32 block_backward_below");
+    w = portable_direct();
+    w.f64_kernels.block_forward_diagonal = &block_forward_diagonal_off;
+    CHECK(routine_of(dr::direct_self_check(w)) == "f64 block_forward_diagonal");
+    w = portable_direct();
+    w.f32_kernels.block_backward_diagonal = &block_backward_diagonal_off;
+    CHECK(routine_of(dr::direct_self_check(w)) == "f32 block_backward_diagonal");
 }

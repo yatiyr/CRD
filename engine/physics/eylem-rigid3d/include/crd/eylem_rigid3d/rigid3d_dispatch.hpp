@@ -15,4 +15,8 @@ namespace crd::eylem_rigid3d
 [[nodiscard]] std::span<const crd::KernelLevel<Rigid3dKernels>> rigid3d_kernel_levels() noexcept;
 [[nodiscard]] const crd::KernelLevel<Rigid3dKernels>& rigid3d_kernels() noexcept;
 
+// The family's known-answer self-check (HW-RESILIENCE.3, crd/core/kernel_dispatch.hpp), which its resolution runs:
+// nullptr when the body step of `table` gives its known answers, else the failing routine's name.
+[[nodiscard]] const char* rigid3d_self_check(const Rigid3dKernels& table) noexcept;
+
 } // namespace crd::eylem_rigid3d
