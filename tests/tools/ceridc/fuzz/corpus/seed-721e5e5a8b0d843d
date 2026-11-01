@@ -1,0 +1,6 @@
+#host read,execute
+@{"command":"hardware.check"}
+@{"command":"hardware.check","args":{"seconds":"0.000000001","memory_mib":"1"}}
+@{"command":"hardware.check","args":{"seconds":"0.5"}}
+@{"command":"hardware.check","args":{"memory_mib":"2"}}
+@{"command":"hardware.check","args":{"cpus":"1"}}

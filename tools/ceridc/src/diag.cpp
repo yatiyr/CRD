@@ -111,4 +111,49 @@ crd::containers::String verb_diag_host(const DiagHostOptions& host, const crd::p
     return verb_diag(service, request, alloc);
 }
 
+crd::containers::String verb_doctor(const DoctorOptions& options, bool& passed, crd::memory::IAllocator* alloc)
+{
+    crd::perf::DiagAuthoritySet grant = crd::perf::authority_bit(crd::perf::DiagAuthority::Read);
+    crd::containers::Array<crd::perf::DiagArg> args(alloc);
+    crd::perf::DiagRequest request;
+    request.command = "diag.capabilities";
+    if (options.hardware)
+    {
+        grant |= crd::perf::authority_bit(crd::perf::DiagAuthority::Execute);
+        request.command = "hardware.check";
+        if (options.seconds != nullptr)
+        {
+            args.push_back(crd::perf::DiagArg{"seconds", options.seconds});
+        }
+        if (options.memory_mib != nullptr)
+        {
+            args.push_back(crd::perf::DiagArg{"memory_mib", options.memory_mib});
+        }
+    }
+    request.args = crd::containers::as_const_span(args);
+    request.page_items = crd::perf::kDiagMaxPageItems;
+    request.page_bytes = crd::perf::kDiagMaxPageBytes;
+    crd::perf::DiagCommandService service(grant, crd::perf::DiagServiceConfig{}, alloc);
+    crd::containers::String report(alloc);
+    passed = bind_diag_commands(service);
+    while (passed)
+    {
+        const crd::perf::DiagResult page = service.execute(request);
+        const crd::containers::StringView json{page.json.data(), page.json.size()};
+        report.append(json);
+        report.append("\n");
+        passed = page.status == crd::perf::DiagStatus::Ok;
+        if (options.hardware && request.cursor == 0U)
+        {
+            passed = passed && json.find(R"("verdict":"no-event-seen")") != crd::containers::StringView::npos;
+        }
+        if (page.next_cursor == 0U)
+        {
+            break;
+        }
+        request.cursor = page.next_cursor;
+    }
+    return report;
+}
+
 } // namespace crd::ceridc

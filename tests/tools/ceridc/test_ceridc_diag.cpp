@@ -25,6 +25,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/environment.hpp>
+#include <crd/core/fault_seam.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/perf/bundle.hpp>
@@ -1773,4 +1774,64 @@ TEST_CASE("diag 11a: the real ceridc binary hosts the diagnostic host from an au
     (void)fs::remove_file(fs::Path(StringView("ceridc_host_out.json")));
     (void)fs::remove_all(captures);
     (void)fs::remove_all(crashes);
+}
+
+namespace
+{
+bool corrupt_every_cpu(void* /*user*/, crd::u32 /*cpu*/, const char* arm) noexcept
+{
+    return std::strcmp(arm, "reload") == 0;
+}
+} // namespace
+
+// HW-RESILIENCE.3: `ceridc doctor` answers diag.capabilities, and `--hardware` runs hardware.check on every CPU (its
+// Execute grant is the verb's own), one report line per page; the verb passes only when no arm saw an event.
+TEST_CASE("doctor: the real ceridc binary reports its diagnostics and runs the hardware check", "[ceridc][diag]")
+{
+    crd::containers::String exe_text;
+    REQUIRE(crd::read_environment_text("CRD_CERIDC_EXE", exe_text)); // wired by CMake
+    char cmd[1024];
+    (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" doctor > ceridc_doctor_out.json", exe_text.c_str());
+    REQUIRE(std::system(cmd) == 0);
+    String out(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_doctor_out.json")), out));
+    CHECK(has(out, "\"command\":\"diag.capabilities\""));
+    CHECK(has(out, "\"grant\":\"read\""));
+
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" doctor --hardware --seconds 0.005 --memory-mib 1 > ceridc_doctor_out.json",
+                        exe_text.c_str());
+    REQUIRE(std::system(cmd) == 0);
+    out.clear();
+    REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_doctor_out.json")), out));
+    CHECK(has(out, "\"command\":\"hardware.check\""));
+    CHECK(has(out, "\"grant\":\"read,execute\""));
+    CHECK(has(out, "\"verdict\":\"no-event-seen\""));
+    CHECK(has(out, "\"arm\":\"shared\""));
+
+    // A bound the check refuses is a failed doctor.
+    (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" doctor --hardware --seconds 0 > ceridc_doctor_out.json",
+                        exe_text.c_str());
+    CHECK(std::system(cmd) != 0);
+    out.clear();
+    REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_doctor_out.json")), out));
+    CHECK(has(out, "\"status\":\"bad-argument\""));
+    (void)fs::remove_file(fs::Path(StringView("ceridc_doctor_out.json")));
+
+    // In process, with the reload arm's first value corrupted on every CPU: events-seen, and the doctor fails.
+    if (crd::fault_seams_compiled())
+    {
+        REQUIRE(crd::install_hardware_check_fault_hook(&corrupt_every_cpu, nullptr));
+        crd::ceridc::DoctorOptions options;
+        options.hardware = true;
+        options.seconds = "0.005";
+        options.memory_mib = "1";
+        bool passed = true;
+        const String report = crd::ceridc::verb_doctor(options, passed, &g_alloc);
+        crd::uninstall_hardware_check_fault_hook();
+        INFO(report.c_str());
+        CHECK_FALSE(passed);
+        CHECK(has(report, "\"verdict\":\"events-seen\""));
+        CHECK(has(report, "\"arm\":\"reload\",\"blocks\""));
+    }
 }

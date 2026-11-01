@@ -517,8 +517,10 @@ TEST_CASE("diag commands: authority classes are distinct and registered commands
     // The listing reports each command's authority and whether this host granted it.
     const DiagResult listing = svc.execute(request("diag.commands"));
     REQUIRE(listing.status == DiagStatus::Ok);
-    CHECK(listing.total == 8U); // seven built-ins and test.inject
+    CHECK(listing.total == 9U); // eight built-ins and test.inject
     CHECK(contains(listing.json, "{\"name\":\"capture.start\",\"owner\":\"perf\",\"authority\":\"record\","
+                                 "\"granted\":true,"));
+    CHECK(contains(listing.json, "{\"name\":\"hardware.check\",\"owner\":\"perf\",\"authority\":\"execute\","
                                  "\"granted\":true,"));
     CHECK(contains(listing.json, "{\"name\":\"test.inject\",\"owner\":\"test\",\"authority\":\"inject\","
                                  "\"granted\":false,"));
@@ -534,7 +536,7 @@ TEST_CASE("diag commands: authority classes are distinct and registered commands
         added += full.register_command({names[i], "test", "x", DiagAuthority::Read, false}, &run_never, &upload) ? 1U
                                                                                                                  : 0U;
     }
-    CHECK(added == crd::perf::kDiagMaxCommands - 7U);
+    CHECK(added == crd::perf::kDiagMaxCommands - 8U);
     CHECK(full.command_count() == crd::perf::kDiagMaxCommands);
 }
 

@@ -30,6 +30,10 @@ target_link_libraries(crd-perf
 target_compile_features(crd-perf PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-perf)
 
+# HW-RESILIENCE.3: the hardware check's compute arm (crd/perf/hardware_check_kernels.hpp), one unit per CPU level.
+crd_add_cpu_kernels(crd-perf NAME hwcheck LEVELS portable sse2 avx2 avx512 neon
+                    SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/hardware_check_kernels.cpp")
+
 # Cerid::perf of the relocatable package (DIAG.11a: the diagnostic host's family), with the authored diagnostic assets
 # its host reads at run time (assets/diag: diagnostic-host profiles, flight policies, fault plans) under
 # <prefix>/share/cerid/diag, found through Cerid_ASSET_DIR.

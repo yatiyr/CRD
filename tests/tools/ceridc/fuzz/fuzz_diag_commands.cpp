@@ -715,7 +715,7 @@ struct Spec
 };
 
 // The commands registered with an argument check, as their modules declare them.
-constexpr const char* kCheckedCommands[] = {"bundle.inspect",  "fault.arm",     "flight.trigger",
+constexpr const char* kCheckedCommands[] = {"bundle.inspect",  "fault.arm",     "flight.trigger", "hardware.check",
                                             "program.inspect", "replay.record", "replay.run"};
 
 enum class Stage : u8
@@ -1127,6 +1127,9 @@ private:
         c.root            = host.root ? kAbsentRoot : StringView{};
         c.flight_recorder = &m_recorder;
         c.fault_injector  = &m_injector;
+        // hardware.check loads every CPU for its arms' time: an input bounds it to one block an arm.
+        c.max_hardware_check_ns = 1U;
+        c.max_hardware_check_mib = 1U;
         return c;
     }
 
@@ -2122,4 +2125,13 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& out)
                   "@{\"command\":\"memory.allocators\"}\n"
                   "@{\"command\":\"diag.commands\",\"page_items\":1,\"page_bytes\":1024}\n");
     sink.add_text("grant-none", "#host none\n@{\"command\":\"diag.commands\"}\n");
+    // hardware.check under its Execute grant and this host's bounds (one nanosecond, 1 MiB): the defaults lowered to
+    // them, both arguments at them, and the check's refusals.
+    sink.add_text("hardware-check",
+                  "#host read,execute\n"
+                  "@{\"command\":\"hardware.check\"}\n"
+                  "@{\"command\":\"hardware.check\",\"args\":{\"seconds\":\"0.000000001\",\"memory_mib\":\"1\"}}\n"
+                  "@{\"command\":\"hardware.check\",\"args\":{\"seconds\":\"0.5\"}}\n"
+                  "@{\"command\":\"hardware.check\",\"args\":{\"memory_mib\":\"2\"}}\n"
+                  "@{\"command\":\"hardware.check\",\"args\":{\"cpus\":\"1\"}}\n");
 }

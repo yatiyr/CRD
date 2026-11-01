@@ -1,4 +1,4 @@
-// crd-core -- the process-wide fault seams (file reads, GPU submissions, kernel self-checks). See
+// crd-core -- the process-wide fault seams (file reads, GPU submissions, kernel self-checks, the hardware check). See
 // crd/core/fault_seam.hpp.
 
 #include <crd/core/fault_seam.hpp>
@@ -18,21 +18,55 @@ namespace crd
 
 namespace
 {
-// The installed flag is the hot path's only cost: a read with no hook never takes the mutex.
-std::atomic<bool> g_io_hook_installed{false};
-std::mutex        g_io_hook_mutex;
-IoFaultHook       g_io_hook      = nullptr;
-void*             g_io_hook_user = nullptr;
+// One seam's hook. The installed flag is the hot path's only cost: a consult with no hook never takes the mutex.
+template <typename Hook> struct HookSlot
+{
+    std::atomic<bool> installed{false};
+    std::mutex mutex;
+    Hook hook = nullptr;
+    void* user = nullptr;
 
-std::atomic<bool> g_gpu_hook_installed{false};
-std::mutex        g_gpu_hook_mutex;
-GpuFaultHook      g_gpu_hook      = nullptr;
-void*             g_gpu_hook_user = nullptr;
+    bool install(Hook h, void* u) noexcept
+    {
+        if (h == nullptr)
+        {
+            return false;
+        }
+        const std::lock_guard<std::mutex> guard(mutex);
+        if (hook != nullptr)
+        {
+            return false;
+        }
+        hook = h;
+        user = u;
+        installed.store(true, std::memory_order_release);
+        return true;
+    }
 
-std::atomic<bool> g_kernel_hook_installed{false};
-std::mutex g_kernel_hook_mutex;
-KernelCheckFaultHook g_kernel_hook = nullptr;
-void* g_kernel_hook_user = nullptr;
+    void uninstall() noexcept
+    {
+        const std::lock_guard<std::mutex> guard(mutex);
+        installed.store(false, std::memory_order_release);
+        hook = nullptr;
+        user = nullptr;
+    }
+
+    // The hook's answer to `args`, or `none` when no hook is installed.
+    template <typename Result, typename... Args> Result consult(Result none, Args... args) noexcept
+    {
+        if (!installed.load(std::memory_order_acquire))
+        {
+            return none;
+        }
+        const std::lock_guard<std::mutex> guard(mutex);
+        return hook != nullptr ? hook(user, args...) : none;
+    }
+};
+
+HookSlot<IoFaultHook> g_io;
+HookSlot<GpuFaultHook> g_gpu;
+HookSlot<KernelCheckFaultHook> g_kernel;
+HookSlot<HardwareCheckFaultHook> g_hardware;
 } // namespace
 
 bool fault_seams_compiled() noexcept
@@ -42,119 +76,62 @@ bool fault_seams_compiled() noexcept
 
 bool install_io_fault_hook(IoFaultHook hook, void* user) noexcept
 {
-    if (hook == nullptr)
-    {
-        return false;
-    }
-    const std::lock_guard<std::mutex> guard(g_io_hook_mutex);
-    if (g_io_hook != nullptr)
-    {
-        return false;
-    }
-    g_io_hook      = hook;
-    g_io_hook_user = user;
-    g_io_hook_installed.store(true, std::memory_order_release);
-    return true;
+    return g_io.install(hook, user);
 }
 
 void uninstall_io_fault_hook() noexcept
 {
-    const std::lock_guard<std::mutex> guard(g_io_hook_mutex);
-    g_io_hook_installed.store(false, std::memory_order_release);
-    g_io_hook      = nullptr;
-    g_io_hook_user = nullptr;
+    g_io.uninstall();
 }
 
 IoFault consult_io_fault(IoFaultOp op, const char* path, usize path_bytes, u64 offset, u64 size) noexcept
 {
-    if (!g_io_hook_installed.load(std::memory_order_acquire))
-    {
-        return IoFault{};
-    }
-    const std::lock_guard<std::mutex> guard(g_io_hook_mutex);
-    if (g_io_hook == nullptr)
-    {
-        return IoFault{};
-    }
-    return g_io_hook(g_io_hook_user, op, path, path_bytes, offset, size);
+    return g_io.consult(IoFault{}, op, path, path_bytes, offset, size);
 }
 
 bool install_gpu_fault_hook(GpuFaultHook hook, void* user) noexcept
 {
-    if (hook == nullptr)
-    {
-        return false;
-    }
-    const std::lock_guard<std::mutex> guard(g_gpu_hook_mutex);
-    if (g_gpu_hook != nullptr)
-    {
-        return false;
-    }
-    g_gpu_hook      = hook;
-    g_gpu_hook_user = user;
-    g_gpu_hook_installed.store(true, std::memory_order_release);
-    return true;
+    return g_gpu.install(hook, user);
 }
 
 void uninstall_gpu_fault_hook() noexcept
 {
-    const std::lock_guard<std::mutex> guard(g_gpu_hook_mutex);
-    g_gpu_hook_installed.store(false, std::memory_order_release);
-    g_gpu_hook      = nullptr;
-    g_gpu_hook_user = nullptr;
+    g_gpu.uninstall();
 }
 
 GpuFaultAction consult_gpu_fault(GpuFaultOp op, const char* operation) noexcept
 {
-    if (!g_gpu_hook_installed.load(std::memory_order_acquire))
-    {
-        return GpuFaultAction::Proceed;
-    }
-    const std::lock_guard<std::mutex> guard(g_gpu_hook_mutex);
-    if (g_gpu_hook == nullptr)
-    {
-        return GpuFaultAction::Proceed;
-    }
-    return g_gpu_hook(g_gpu_hook_user, op, operation);
+    return g_gpu.consult(GpuFaultAction::Proceed, op, operation);
 }
 
 bool install_kernel_check_fault_hook(KernelCheckFaultHook hook, void* user) noexcept
 {
-    if (hook == nullptr)
-    {
-        return false;
-    }
-    const std::lock_guard<std::mutex> guard(g_kernel_hook_mutex);
-    if (g_kernel_hook != nullptr)
-    {
-        return false;
-    }
-    g_kernel_hook = hook;
-    g_kernel_hook_user = user;
-    g_kernel_hook_installed.store(true, std::memory_order_release);
-    return true;
+    return g_kernel.install(hook, user);
 }
 
 void uninstall_kernel_check_fault_hook() noexcept
 {
-    const std::lock_guard<std::mutex> guard(g_kernel_hook_mutex);
-    g_kernel_hook_installed.store(false, std::memory_order_release);
-    g_kernel_hook = nullptr;
-    g_kernel_hook_user = nullptr;
+    g_kernel.uninstall();
 }
 
 bool consult_kernel_check_fault(const char* family, CpuLevel level, CpuFeatureSet features) noexcept
 {
-    if (!g_kernel_hook_installed.load(std::memory_order_acquire))
-    {
-        return false;
-    }
-    const std::lock_guard<std::mutex> guard(g_kernel_hook_mutex);
-    if (g_kernel_hook == nullptr)
-    {
-        return false;
-    }
-    return g_kernel_hook(g_kernel_hook_user, family, level, features);
+    return g_kernel.consult(false, family, level, features);
+}
+
+bool install_hardware_check_fault_hook(HardwareCheckFaultHook hook, void* user) noexcept
+{
+    return g_hardware.install(hook, user);
+}
+
+void uninstall_hardware_check_fault_hook() noexcept
+{
+    g_hardware.uninstall();
+}
+
+bool consult_hardware_check_fault(u32 cpu, const char* arm) noexcept
+{
+    return g_hardware.consult(false, cpu, arm);
 }
 
 #else
@@ -197,6 +174,18 @@ bool install_kernel_check_fault_hook(KernelCheckFaultHook /*hook*/, void* /*user
 void uninstall_kernel_check_fault_hook() noexcept {}
 
 bool consult_kernel_check_fault(const char* /*family*/, CpuLevel /*level*/, CpuFeatureSet /*features*/) noexcept
+{
+    return false;
+}
+
+bool install_hardware_check_fault_hook(HardwareCheckFaultHook /*hook*/, void* /*user*/) noexcept
+{
+    return false;
+}
+
+void uninstall_hardware_check_fault_hook() noexcept {}
+
+bool consult_hardware_check_fault(u32 /*cpu*/, const char* /*arm*/) noexcept
 {
     return false;
 }

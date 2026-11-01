@@ -8,7 +8,7 @@
 //
 // Authority is granted by the host when it constructs the service and never travels in a request, so neither a request
 // payload nor an authored asset can raise it. Each command declares the authority it needs, and optionally a second
-// class it also needs (both must be granted). Read and Record are the only classes a built-in command uses; Inject,
+// class it also needs (both must be granted). A built-in command uses Read, Record or Execute (hardware.check); Inject,
 // RemoteEnable, Upload, ProcessMemory and Execute are distinct bits no other grant implies, so a host that grants Read
 // and Record still refuses a command declaring any of them.
 //
@@ -269,6 +269,10 @@ struct DiagServiceConfig
     crd::u64         max_bundle_bytes  = 256ULL * 1024ULL * 1024ULL; // bundle.inspect refuses a larger file unread
     crd::u64         max_capture_bytes = 256ULL * 1024ULL * 1024ULL; // capture.stop refuses a larger capture unwritten
     crd::u32         worker_timeout_ms = 20U;                        // jobs.waits' bound on the worker poll
+    // hardware.check's bounds on a request, so a host bounds the load a request can start: each arm's time and the
+    // memory arm's buffer per CPU (BadArgument above them; the defaults, 2 s and 8 MiB, are lowered to them).
+    crd::u64 max_hardware_check_ns = 3'600'000'000'000ULL;
+    crd::u32 max_hardware_check_mib = 1024U;
     // The host's live instances, reported by diag.capabilities through the doctor (nullptr: not installed). They must
     // outlive the service.
     const FlightRecorder* flight_recorder = nullptr;
@@ -292,6 +296,10 @@ struct DiagServiceConfig
 //                              image store holds it (<root>/images, laid out as image_file_path names it)
 //   capture.start     Record  open a capture window (the profiler's sample rings are cleared)
 //   capture.stop       Record  write the open window as a CPROF capture file under the root (never overwriting)
+//   hardware.check     Execute the hardware check (hardware_check.hpp) on every logical CPU at once, a load no read
+//                              grant may start: seconds=<each arm's time, default 2> and memory_mib=<the memory arm's
+//                              buffer per CPU, default 8>; the verdict (no-event-seen or events-seen) and one item per
+//                              pinned CPU and arm (blocks, time, events, the first event) and per refused CPU
 // Calls are serialized; handlers run on the calling thread.
 class DiagCommandService
 {
@@ -341,6 +349,8 @@ private:
     static DiagStatus run_bundle_inspect(void* self, const DiagCall& call, DiagSnapshot& out);
     static DiagStatus run_capture_start(void* self, const DiagCall& call, DiagSnapshot& out);
     static DiagStatus run_capture_stop(void* self, const DiagCall& call, DiagSnapshot& out);
+    static DiagStatus check_hardware(void* self, cont::ConstSpan<DiagArg> args, cont::String& reason);
+    static DiagStatus run_hardware(void* self, const DiagCall& call, DiagSnapshot& out);
 
     static constexpr crd::u32 kNone = 0xFFFFFFFFU;
 

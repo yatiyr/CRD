@@ -95,6 +95,9 @@ void print_usage()
         "              [--page-items <n>] [--page-bytes <n>] [--schema <n>] [--grant <list>] [--root <dir>]\n"
         "              (grant defaults to read; program.inspect needs execute; replay.record needs execute,record\n"
         "              and runs on the host provider with --param executor=host)\n"
+        "  ceridc doctor [--hardware [--seconds <per arm>] [--memory-mib <per CPU>]]\n"
+        "              (this build's diagnostics; --hardware runs the Cerid-free stress check on every CPU at\n"
+        "              once and exits 1 when any arm saw an event; one report line per page)\n"
         "  ceridc mcp [--diag-grant <list>] [--diag-root <dir>] [--diag-host <profile.host.toml>]\n"
         "             (JSON-RPC 2.0 over stdio, one message per line; the diag tool serves the grant, default read;\n"
         "             with --diag-host the engine's diagnostic host starts from the authored profile first: its crash\n"
@@ -288,6 +291,17 @@ int main(int argc, char* argv[])
         host.grant = flag_of(argc, argv, "--grant", nullptr);
         host.root  = flag_of(argc, argv, "--root", nullptr);
         return emit(crd::ceridc::verb_diag_host(host, request, &g_alloc));
+    }
+    if (std::strcmp(verb, "doctor") == 0)
+    {
+        crd::ceridc::DoctorOptions options;
+        options.hardware = has_flag(argc, argv, "--hardware");
+        options.seconds = flag_of(argc, argv, "--seconds", nullptr);
+        options.memory_mib = flag_of(argc, argv, "--memory-mib", nullptr);
+        bool passed = false;
+        const crd::containers::String report = crd::ceridc::verb_doctor(options, passed, &g_alloc);
+        std::printf("%s", report.c_str());
+        return passed ? 0 : 1;
     }
     if (std::strcmp(verb, "import") == 0 && argc >= 3)
     {

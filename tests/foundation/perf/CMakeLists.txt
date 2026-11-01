@@ -53,6 +53,7 @@ add_executable(crd-perf-tests
     test_hardware_identity.cpp # HW-RESILIENCE.2: the machine a bundle was written on
     test_fault_classification.cpp # HW-RESILIENCE.2: impossible-state signatures and the unstable-CPU table
     test_instruction_access.cpp   # HW-RESILIENCE.2: the faulting instruction's accesses and divide operands
+    test_hardware_check.cpp       # HW-RESILIENCE.3: the Cerid-free stress check on every CPU and its arms' events
 )
 
 target_link_libraries(crd-perf-tests PRIVATE
@@ -104,6 +105,8 @@ target_compile_definitions(crd-perf-tests PRIVATE
 crd_discover_tests(crd-perf-tests TEST_SPEC "~[diag-workflow]~[vulkan]")
 crd_discover_tests(crd-perf-tests TEST_SPEC "[vulkan]" PROPERTIES RESOURCE_LOCK crd_gpu_device)
 crd_discover_tests(crd-perf-tests TEST_SPEC "[diag-workflow]" PROPERTIES LABELS "diag;diag-workflow")
+# HW-RESILIENCE.3: the hardware check's compute arm at every forced level.
+crd_add_kernel_level_tests(crd-perf-tests "[kernels]")
 
 # REPO.DEV.9 / DIAG.5d(e2): the bounded diagnostic-bundle ingestion fuzz target + its committed corpus replay.
 add_subdirectory(fuzz)

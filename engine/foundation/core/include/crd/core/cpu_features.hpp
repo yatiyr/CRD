@@ -291,6 +291,24 @@ extern bool libc_fma_fused; // NOLINT(cppcoreguidelines-avoid-non-const-global-v
 // returns the full length.
 [[nodiscard]] crd::usize format_kernel_table(CpuLevel level, CpuFeatureSet features, char* out,
                                              crd::usize capacity) noexcept;
+// A logical CPU the OS schedules: its processor group (Windows; 0 elsewhere) and its number in the group (Linux: the
+// CPU number).
+struct LogicalCpu
+{
+    crd::u16 group = 0U;
+    crd::u16 number = 0U;
+};
+
+// The machine's logical CPUs, in order: Windows' active processors of every group (at most 64 a group), Linux's
+// configured CPUs (at most 8,192; offline ones and ones outside the process's set included, which
+// pin_current_thread refuses). 0 where the OS offers no affinity.
+[[nodiscard]] crd::u32 logical_cpu_count() noexcept;
+// The index-th of them (index < logical_cpu_count()).
+[[nodiscard]] LogicalCpu logical_cpu_at(crd::u32 index) noexcept;
+// Pins the calling thread to `cpu` alone and confirms it runs there. False when the OS refuses the CPU (offline,
+// outside the process's set) or offers no affinity; the thread's affinity is then unspecified.
+[[nodiscard]] bool pin_current_thread(LogicalCpu cpu) noexcept;
+
 // The CPU's identity for diagnostics and hardware-fault classification (HW-RESILIENCE.2): the part and the microcode
 // it runs, never its features. The CPUID words come from the CPU the calling thread runs on, the OS's values from its
 // first CPU. Text is NUL-terminated, cut to its buffer, leading and trailing spaces trimmed.

@@ -12,6 +12,7 @@
 #include <crd/perf/doctor.hpp>
 #include <crd/perf/fault_classification.hpp>
 #include <crd/perf/flight_recorder.hpp>
+#include <crd/perf/hardware_check.hpp>
 #include <crd/perf/hardware_identity.hpp>
 #include <crd/perf/memory.hpp>
 #include <crd/perf/profiler.hpp>
@@ -543,6 +544,188 @@ constexpr DiagAuthority kAuthorityOrder[kDiagAuthorityCount] = {
     DiagAuthority::Upload, DiagAuthority::ProcessMemory, DiagAuthority::Execute,
 };
 
+// hardware.check's seconds=: a decimal above 0 with at most 9 fraction digits, in nanoseconds; false when it is not
+// one or exceeds the per-arm bound.
+[[nodiscard]] bool parse_seconds(cont::StringView text, crd::u64& out) noexcept
+{
+    crd::u64 whole = 0U;
+    crd::u64 fraction = 0U;
+    crd::u32 fraction_digits = 0U;
+    bool point = false;
+    bool digits = false;
+    for (const char ch : text)
+    {
+        const bool digit = ch >= '0' && ch <= '9';
+        if (ch == '.' && !point)
+        {
+            point = true;
+        }
+        else if (digit && !point && whole <= kHardwareCheckMaxNanosecondsPerArm / 1'000'000'000U)
+        {
+            whole = whole * 10U + static_cast<crd::u64>(ch - '0');
+            digits = true;
+        }
+        else if (digit && point && fraction_digits < 9U)
+        {
+            fraction = fraction * 10U + static_cast<crd::u64>(ch - '0');
+            ++fraction_digits;
+            digits = true;
+        }
+        else
+        {
+            return false;
+        }
+    }
+    for (crd::u32 d = fraction_digits; d < 9U; ++d)
+    {
+        fraction *= 10U;
+    }
+    const crd::u64 ns = whole * 1'000'000'000U + fraction;
+    if (!digits || ns == 0U || ns > kHardwareCheckMaxNanosecondsPerArm)
+    {
+        return false;
+    }
+    out = ns;
+    return true;
+}
+
+// hardware.check's arguments within the host's bounds (at most run_hardware_check's): seconds=<each arm's time> and
+// memory_mib=<the memory arm's buffer per CPU>; the defaults are lowered to the bounds.
+[[nodiscard]] bool parse_hardware_args(cont::ConstSpan<DiagArg> args, const DiagServiceConfig& host,
+                                       HardwareCheckConfig& out, cont::String& reason)
+{
+    const crd::u64 max_ns = host.max_hardware_check_ns < kHardwareCheckMaxNanosecondsPerArm
+                                ? host.max_hardware_check_ns
+                                : kHardwareCheckMaxNanosecondsPerArm;
+    const crd::u32 max_mib = host.max_hardware_check_mib < kHardwareCheckMaxMemoryMib ? host.max_hardware_check_mib
+                                                                                      : kHardwareCheckMaxMemoryMib;
+    out.nanoseconds_per_arm = out.nanoseconds_per_arm < max_ns ? out.nanoseconds_per_arm : max_ns;
+    out.memory_mib = out.memory_mib < max_mib ? out.memory_mib : max_mib;
+    for (const DiagArg& a : args)
+    {
+        if (a.name == cont::StringView{"seconds"})
+        {
+            if (!parse_seconds(a.value, out.nanoseconds_per_arm) || out.nanoseconds_per_arm > max_ns)
+            {
+                reason.append("seconds must be a decimal above 0 with at most 9 fraction digits, within this host's "
+                              "bound of ");
+                append_u64(reason, max_ns);
+                reason.append(" ns");
+                return false;
+            }
+        }
+        else if (a.name == cont::StringView{"memory_mib"})
+        {
+            crd::u64 mib = 0U;
+            bool valid = !a.value.empty() && a.value.size() <= 4U;
+            for (const char ch : a.value)
+            {
+                valid = valid && ch >= '0' && ch <= '9';
+                mib = mib * 10U + static_cast<crd::u64>(ch - '0');
+            }
+            if (!valid || mib == 0U || mib > max_mib)
+            {
+                reason.append("memory_mib must be a whole number of MiB from 1 to this host's bound of ");
+                append_u64(reason, max_mib);
+                return false;
+            }
+            out.memory_mib = static_cast<crd::u32>(mib);
+        }
+        else
+        {
+            reason.append("hardware.check takes seconds=<per arm> and memory_mib=<per CPU>");
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] cont::StringView core_type_name(crd::u8 core_type) noexcept
+{
+    switch (core_type)
+    {
+        case 0U:
+            return "";
+        case 0x20U:
+            return "efficiency";
+        case 0x40U:
+            return "performance";
+        default:
+            return "other";
+    }
+}
+
+// hardware.check: the hardware check on every logical CPU (crd/perf/hardware_check.hpp).
+DiagStatus hardware_check_items(const DiagServiceConfig& host, const DiagCall& call, DiagSnapshot& out)
+{
+    HardwareCheckConfig config;
+    (void)parse_hardware_args(call.request->args, host, config, out.reason); // check_hardware accepted them
+    config.cancel = call.cancel;
+    const HardwareCheckReport report = run_hardware_check(config, out.allocator());
+    if (!report.ran)
+    {
+        out.reason.append(cont::StringView{report.reason.data(), report.reason.size()});
+        return DiagStatus::Unavailable;
+    }
+    if (report.cancelled)
+    {
+        out.reason.append("cancelled while the arms ran");
+        return DiagStatus::Cancelled;
+    }
+    cont::String arms(out.allocator());
+    for (crd::u32 a = 0U; a < report.arm_count; ++a)
+    {
+        arms.append(a == 0U ? "" : ",");
+        arms.append(hardware_arm_name(report.arms[a]));
+    }
+    // No event over a run proves only that none was seen in that time on those CPUs.
+    out.summary.str("verdict", report.events == 0U ? "no-event-seen" : "events-seen")
+        .u64("events", report.events)
+        .u64("cpus", report.cpus.size())
+        .u64("cpus_pinned", report.cpus_pinned)
+        .str("arms", cont::StringView{arms.data(), arms.size()})
+        .u64("nanoseconds_per_arm", config.nanoseconds_per_arm)
+        .u64("memory_mib", config.memory_mib)
+        .str("cpu_selected", crd::cpu_level_name(crd::cpu_selection().selected));
+    DiagFields item(out.allocator());
+    for (const HardwareCpuResult& c : report.cpus)
+    {
+        if (!c.pinned)
+        {
+            item.clear();
+            item.str("kind", "cpu").u64("group", c.cpu.group).u64("number", c.cpu.number).boolean("pinned", false);
+            (void)out.add_item(item);
+            continue;
+        }
+        for (crd::u32 a = 0U; a < report.arm_count; ++a)
+        {
+            const HardwareArmResult& r = c.arms[a];
+            item.clear();
+            item.str("kind", "cpu-arm")
+                .u64("group", c.cpu.group)
+                .u64("number", c.cpu.number)
+                .str("core", core_type_name(c.core_type))
+                .str("arm", hardware_arm_name(report.arms[a]))
+                .u64("blocks", r.blocks)
+                .u64("nanoseconds", r.nanoseconds)
+                .u64("events", r.events);
+            if (r.events != 0U)
+            {
+                item.u64("first_block", r.first_block)
+                    .u64("first_where", r.first_where)
+                    .u64("first_got", r.first_got)
+                    .u64("first_want", r.first_want);
+            }
+            if (r.injected)
+            {
+                item.boolean("injected", true);
+            }
+            (void)out.add_item(item);
+        }
+    }
+    return DiagStatus::Ok;
+}
+
 } // namespace
 
 bool diag_path_is_safe(cont::StringView path) noexcept
@@ -821,6 +1004,11 @@ DiagCommandService::DiagCommandService(DiagAuthoritySet grant, const DiagService
         {{"capture.stop", "perf", "write the open window as a CPROF capture under the root, never overwriting",
           DiagAuthority::Record, true},
          &DiagCommandService::run_capture_stop, this},
+        {{"hardware.check", "perf", "the Cerid-free stress check on every logical CPU, each arm's events per CPU",
+          DiagAuthority::Execute, false},
+         &DiagCommandService::run_hardware,
+         this,
+         &DiagCommandService::check_hardware},
     };
     for (const Entry& e : builtins)
     {
@@ -1823,6 +2011,19 @@ DiagStatus DiagCommandService::run_capture_stop(void* self, const DiagCall& call
         .boolean("samples_complete", contended == 0U);
     return DiagStatus::Ok;
 #endif
+}
+
+DiagStatus DiagCommandService::check_hardware(void* self, cont::ConstSpan<DiagArg> args, cont::String& reason)
+{
+    HardwareCheckConfig config;
+    return parse_hardware_args(args, static_cast<const DiagCommandService*>(self)->m_config, config, reason)
+               ? DiagStatus::Ok
+               : DiagStatus::BadArgument;
+}
+
+DiagStatus DiagCommandService::run_hardware(void* self, const DiagCall& call, DiagSnapshot& out)
+{
+    return hardware_check_items(static_cast<const DiagCommandService*>(self)->m_config, call, out);
 }
 
 } // namespace crd::perf

@@ -153,6 +153,19 @@ struct DiagHostOptions
 [[nodiscard]] crd::containers::String verb_diag_host(const DiagHostOptions& host, const crd::perf::DiagRequest& request,
                                                      crd::memory::IAllocator* alloc);
 
+// `ceridc doctor`: diag.capabilities, or with `hardware` the hardware.check command (an Execute command, so this
+// service grants read and execute; `seconds` and `memory_mib`, nullptr for their defaults, are its arguments), through
+// a service bound as every ceridc service is. The report is every page of the answer, one response document a line.
+// `passed` is false when a page is not ok or the hardware check saw an event.
+struct DoctorOptions
+{
+    bool hardware = false;
+    const char* seconds = nullptr;
+    const char* memory_mib = nullptr;
+};
+[[nodiscard]] crd::containers::String verb_doctor(const DoctorOptions& options, bool& passed,
+                                                  crd::memory::IAllocator* alloc);
+
 // ── MCP ────────────────────────────────────────────────────────────────────────────────────────────────────────
 // MCP-ADAPT.0: the MCP server of one connection (the stdio process; main.cpp reads a line, hands it to handle and
 // writes the reply line). Each tool is one verb above, listed in name order with an input schema, an output schema

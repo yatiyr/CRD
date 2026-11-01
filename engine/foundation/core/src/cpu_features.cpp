@@ -63,6 +63,10 @@ namespace crd
 namespace
 {
 
+#if CRD_OS_LINUX
+constexpr crd::usize kAffinityWords = 8U; // cpu_set_t words: 8,192 CPUs (logical_cpu_count's bound)
+#endif
+
 // The word a feature bit lives in: a CPUID word, or ARM64's hwcap word (decode_arm64_hwcap).
 enum class Word : crd::u8
 {
@@ -290,72 +294,36 @@ bool walk_every_cpu(CpuSelection& s) noexcept
     {
         return false;
     }
-    const WORD groups = ::GetActiveProcessorGroupCount();
-    for (WORD g = 0U; g < groups; ++g)
-    {
-        const DWORD count = ::GetActiveProcessorCount(g);
-        for (DWORD i = 0U; i < count && i < 64U; ++i)
-        {
-            GROUP_AFFINITY one = {};
-            one.Group = g;
-            one.Mask = KAFFINITY{1} << i;
-            if (::SetThreadGroupAffinity(thread, &one, nullptr) == 0)
-            {
-                ++s.cpus_refused;
-                continue;
-            }
-            PROCESSOR_NUMBER at = {};
-            ::GetCurrentProcessorNumberEx(&at);
-            if (at.Group != g || at.Number != i)
-            {
-                ::SwitchToThread();
-                ::GetCurrentProcessorNumberEx(&at);
-            }
-            if (at.Group != g || at.Number != i)
-            {
-                ++s.cpus_refused;
-                continue;
-            }
-            visit_here(s);
-        }
-    }
-    ::SetThreadGroupAffinity(thread, &original, nullptr);
-    return true;
 #elif CRD_OS_LINUX
-    cpu_set_t original[8]; // NOLINT(modernize-avoid-c-arrays): 8,192 CPUs without the heap of CPU_ALLOC
-    cpu_set_t one[8];      // NOLINT(modernize-avoid-c-arrays)
-    constexpr crd::usize bytes = sizeof(original);
-    if (::sched_getaffinity(0, bytes, original) != 0)
+    cpu_set_t original[kAffinityWords]; // NOLINT(modernize-avoid-c-arrays): 8,192 CPUs without CPU_ALLOC's heap
+    if (::sched_getaffinity(0, sizeof(original), original) != 0)
     {
         return false;
     }
-    const long configured = ::sysconf(_SC_NPROCESSORS_CONF);
-    const int count = configured > 0 ? static_cast<int>(configured < 8192 ? configured : 8192) : 0;
-    for (int cpu = 0; cpu < count; ++cpu)
-    {
-        CPU_ZERO_S(bytes, one);
-        CPU_SET_S(static_cast<crd::usize>(cpu), bytes, one);
-        if (::sched_setaffinity(0, bytes, one) != 0)
-        {
-            ++s.cpus_refused;
-            continue;
-        }
-        if (::sched_getcpu() != cpu)
-        {
-            ::sched_yield();
-        }
-        if (::sched_getcpu() != cpu)
-        {
-            ++s.cpus_refused;
-            continue;
-        }
-        visit_here(s);
-    }
-    ::sched_setaffinity(0, bytes, original);
-    return true;
 #else
     (void)s;
     return false;
+#endif
+#if CRD_OS_WINDOWS || CRD_OS_LINUX
+    const crd::u32 count = logical_cpu_count();
+    for (crd::u32 i = 0U; i < count; ++i)
+    {
+        if (pin_current_thread(logical_cpu_at(i)))
+        {
+            visit_here(s);
+        }
+        else
+        {
+            ++s.cpus_refused;
+        }
+    }
+#endif
+#if CRD_OS_WINDOWS
+    ::SetThreadGroupAffinity(thread, &original, nullptr);
+    return true;
+#elif CRD_OS_LINUX
+    ::sched_setaffinity(0, sizeof(original), original);
+    return true;
 #endif
 }
 
@@ -644,6 +612,95 @@ CpuCaches decode_caches(const CpuidWords& words) noexcept
 }
 
 } // namespace
+
+crd::u32 logical_cpu_count() noexcept
+{
+#if CRD_OS_WINDOWS
+    crd::u32 count = 0U;
+    const WORD groups = ::GetActiveProcessorGroupCount();
+    for (WORD g = 0U; g < groups; ++g)
+    {
+        const DWORD in_group = ::GetActiveProcessorCount(g);
+        count += in_group < 64U ? static_cast<crd::u32>(in_group) : 64U;
+    }
+    return count;
+#elif CRD_OS_LINUX
+    const long configured = ::sysconf(_SC_NPROCESSORS_CONF);
+    const long bound = static_cast<long>(kAffinityWords * sizeof(cpu_set_t) * 8U);
+    return configured > 0 ? static_cast<crd::u32>(configured < bound ? configured : bound) : 0U;
+#else
+    return 0U;
+#endif
+}
+
+LogicalCpu logical_cpu_at(crd::u32 index) noexcept
+{
+    LogicalCpu cpu;
+#if CRD_OS_WINDOWS
+    const WORD groups = ::GetActiveProcessorGroupCount();
+    for (WORD g = 0U; g < groups; ++g)
+    {
+        const DWORD in_group = ::GetActiveProcessorCount(g);
+        const crd::u32 count = in_group < 64U ? static_cast<crd::u32>(in_group) : 64U;
+        if (index < count)
+        {
+            cpu.group = g;
+            cpu.number = static_cast<crd::u16>(index);
+            return cpu;
+        }
+        index -= count;
+    }
+#else
+    cpu.number = static_cast<crd::u16>(index);
+#endif
+    return cpu;
+}
+
+bool pin_current_thread(LogicalCpu cpu) noexcept
+{
+#if CRD_OS_WINDOWS
+    if (cpu.number >= 64U)
+    {
+        return false;
+    }
+    GROUP_AFFINITY one = {};
+    one.Group = cpu.group;
+    one.Mask = KAFFINITY{1} << cpu.number;
+    if (::SetThreadGroupAffinity(::GetCurrentThread(), &one, nullptr) == 0)
+    {
+        return false;
+    }
+    PROCESSOR_NUMBER at = {};
+    ::GetCurrentProcessorNumberEx(&at);
+    if (at.Group != cpu.group || at.Number != cpu.number)
+    {
+        ::SwitchToThread();
+        ::GetCurrentProcessorNumberEx(&at);
+    }
+    return at.Group == cpu.group && at.Number == cpu.number;
+#elif CRD_OS_LINUX
+    cpu_set_t one[kAffinityWords]; // NOLINT(modernize-avoid-c-arrays): 8,192 CPUs without CPU_ALLOC's heap
+    constexpr crd::usize bytes = sizeof(one);
+    if (cpu.group != 0U || cpu.number >= bytes * 8U)
+    {
+        return false;
+    }
+    CPU_ZERO_S(bytes, one);
+    CPU_SET_S(static_cast<crd::usize>(cpu.number), bytes, one);
+    if (::sched_setaffinity(0, bytes, one) != 0)
+    {
+        return false;
+    }
+    if (::sched_getcpu() != static_cast<int>(cpu.number))
+    {
+        ::sched_yield();
+    }
+    return ::sched_getcpu() == static_cast<int>(cpu.number);
+#else
+    (void)cpu;
+    return false;
+#endif
+}
 
 CpuReport decode_cpuid(const CpuidWords& words) noexcept
 {
