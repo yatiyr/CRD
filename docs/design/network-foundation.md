@@ -305,7 +305,8 @@ destroyed and are read-only, so shared across threads, after `init`. `provider_a
 - **P6. The hybrid groups** (X25519MLKEM768, SecP256r1MLKEM768, SecP384r1MLKEM1024) run inside the provider's TLS
   stack ([TLS sessions](#tls-sessions)); `provider_algorithms()` lists them since 2026-11-01, when each key share was
   read off the wire against the groups' layout with the provider interface's own primitives and every group
-  interoperated with OpenSSL 3.5 both ways, so no generation could enable them earlier.
+  interoperated with OpenSSL both ways (3.5.9, and since 2026-11-02 4.0.3), so no generation could enable them
+  earlier.
 - **P7. ML-KEM** (FIPS 203; `crypto.ml-kem`, class `0x07`). Encapsulation keys and ciphertexts as FIPS 203 encodes
   them and 32-byte secrets; the private input is the 64-byte seed d || z (`KemKey::from_seed`, through the provider's
   deterministic key generation, its only route from a seed), never the expanded decapsulation key, so a malformed
@@ -403,7 +404,7 @@ tests):
 - **S6. Limits.** 0-RTT is off: early data may carry only operations a schema declares idempotent (the TLS 1.3
   profile, T07), so it waits for NET.2's server-authorized message schemas and anti-replay windows. `close()` is for an
   established session (a handshake is abandoned with `clear()`). The QUIC integration is [S11](#quic-handshake)
-  and its address-validation tokens [S13](#address-validation); ECH is NET.2's next slice on this same interface.
+  and its address-validation tokens [S13](#address-validation); Encrypted Client Hello is [S14](#ech).
 - **S7. Key usage limits and key updates.** A session counts the records protected under its sending key (the
   provider's write sequence, which a new key resets) and updates the key before `key_update_records()` records: the
   negotiated AEAD's limit (`tls_key_usage_limit`: floor(2^24.5) for AES-GCM, every 64-bit sequence number for
@@ -492,7 +493,7 @@ the bounded decoder, and a server of the provider's own stack sending a valid fo
 another length, one that is no zstd frame and one with a wrong Adler-32), credentials named up to 253 bytes,
 adversarial records, every configuration refusal, one context on four threads), the `crd-fuzz-crypto-tls` target (a
 fixed ticket key, a forged ticket in a ClientHello, tickets a client's store hands out, compressed Certificates against
-restated claim bounds and Adler-32), and `tls_interop.py` against the pinned OpenSSL 3.5 (`CRD_BUILD_TLS_VS_OPENSSL`,
+restated claim bounds and Adler-32), and `tls_interop.py` against the pinned OpenSSL (`CRD_BUILD_TLS_VS_OPENSSL`,
 Linux; built with the pinned zstd and the system's zlib): every hybrid group both ways, a HelloRetryRequest both ways,
 hybrid kept beside a classical share both ways, mutual authentication, an unpinned key refused, a TLS 1.2 client
 refused with `protocol_version`, key updates both ways (a Cerid client updating before every record under a
@@ -603,7 +604,7 @@ over QUIC and over a stream, agreed, refused both ways and required; a ClientHel
 flights against the amplification limit; tickets under the QUIC binding that never cross transports; a TLS
 KeyUpdate, data at levels not read and garbage; the receive limit; refusals; four threads), the `crd-fuzz-crypto-tls`
 target's QUIC mode (CRYPTO data per level, never established, no client Application secret, every held secret
-derived once), and `tls_interop.py` against OpenSSL 3.5's QUIC TLS interface (`SSL_set_quic_tls_cbs`): the hybrid
+derived once), and `tls_interop.py` against OpenSSL's QUIC TLS interface (`SSL_set_quic_tls_cbs`): the hybrid
 groups both ways in versions 1 and 2, each of the three cipher suites, a HelloRetryRequest and mutual authentication
 both ways, protocol selection and refusal both ways, an unpinned key, resumption and certificate compression both ways,
 with the hellos read off the wire and, for each of the four secrets, a packet sealed and a mask made under the keys
@@ -682,6 +683,73 @@ trips above, the `crd-fuzz-crypto-quic` token mode (the verdict of every input a
 provider's HKDF and AEAD; seeds sealed by the restatement, each refused one traced to its reason), and nine source
 mutations, each caught. A token is the server's own: no peer reads one, so interoperability is the Retry packet's
 (the transport's, 4.2a, against the peers NET.5 names).
+
+<a id="ech"></a>
+### Encrypted Client Hello
+
+**S14. Encrypted Client Hello** ([tls.hpp](../../engine/foundation/crypto/include/crd/crypto/tls.hpp), RFC 9849,
+`tls.ech`; threat T15). A client encrypts its true ClientHello to its server's ECH key, so the server name, the
+tickets it offers and its credential cross the wire only inside it; the outer ClientHello names the configuration's
+public name. The provider runs the protocol (AWS-LC's ECH, shared mode: one server decrypts and serves); Cerid
+decides who holds which key, what a client may send, and what a rejection lets it do.
+
+- **Keys.** A `TlsEchKey` is a DHKEM(X25519, HKDF-SHA256) private key (RFC 9180) and the ECHConfig that publishes it:
+  version 0xfe0d, a config_id, HKDF-SHA256 with AES-128-GCM or ChaCha20-Poly1305 (the client picks by its CPU), a
+  maximum_name_length and the public name, a DNS name that no IPv4 parser reads as an address (section 6.1.7).
+  `tls_ech_config_list` makes the ECHConfigList a service publishes (its DNS HTTPS record, RFC 9848, or Cerid's
+  service discovery). Servers of a fleet share the private key, as they share a ticket key.
+- **Rotation.** A server context holds its current keys, which it sends as retry configurations, and the keys before
+  its last rotation, which it still decrypts with and no longer sends (RFC 9849 section 4.1); at most four, with
+  distinct config_ids, so the provider tries one key per offer.
+- **A client never leaks the name it was told to hide.** A client given a list offers ECH with its first usable
+  configuration. The provider proceeds without ECH when none is usable (another KEM, a mandatory extension, an
+  IPv4-like public name); Cerid's context refuses a list without a configuration of version 0xfe0d, and its session
+  refuses to start (BadConfig, nothing sent) unless the provider reported encrypting an inner ClientHello, which it
+  does only when the outer one offers ECH.
+- **Rejection.** A server that cannot decrypt an offer (a stale configuration) completes the handshake under the
+  public name and sends its retry configurations; the client authenticates that handshake by its pins (Cerid trusts
+  pinned keys, not certificate names: the pins are its reference identity for the public name too), sends no
+  credential, aborts with `ech_required` and reports `EchRejected` with `ech()`: `Retry` (retry once, with
+  `ech_retry_configs()` passed to the next `TlsSession::init` or `QuicHandshake::init`, never stored: section 6.1.6),
+  `Disabled` (the server sent no configuration of this version: whether to reconnect without ECH, revealing the name,
+  is only the caller's decision) or `Refused` (a retried connection rejected again: the server's configurations
+  disagree). A rejection a pinned key does not authenticate is `PeerRefused` and its configurations are never used.
+- **The public name is not a destination.** A server with a name answers its keys' public names only for that
+  recovery: a handshake that completes under a public name alone (a client without ECH naming it) is refused with
+  `general_error`. A rejected client's own Finished ends that way too, behind which its `ech_required` arrives.
+- **GREASE.** A client without a list sends a GREASE ECH extension (`ech_grease`, on by default; section 6.2), so its
+  hellos look like ECH offers; a server ignores it and serves its own name.
+- **Padding.** The provider pads the inner ClientHello's server name to the configuration's maximum_name_length and
+  the whole to 32 bytes (section 6.1.3): two names 48 bytes apart give equal hellos under a maximum that covers both.
+- **What the outer hello still shows.** The public name, the key shares (compressed into the inner hello by
+  ech_outer_extensions) and, from AWS-LC, the application protocols (ALPN), which it treats as public; Cerid's
+  protocol identifiers name a protocol family, never a service. AWS-LC adds no GREASE `pre_shared_key` beside a
+  resuming inner hello (section 6.1.2's SHOULD): every outer hello lacks one, so resumption stays hidden among ECH
+  offers but not among hellos without ECH. The ECH key exchange is classical X25519 (the only KEM
+  RFC 9849 and both providers define for it): a harvest-now-decrypt-later adversary could later read an inner
+  ClientHello's metadata, never the session, whose keys come from the hybrid groups. The register tracks post-quantum
+  HPKE for ECH (`tls.ech`).
+
+Measured (`test_tls_ech.cpp`, X25519MLKEM768, the ClientHello's CRYPTO bytes over QUIC): 1,444 without ECH, 1,666 with
+GREASE and 1,635 with ECH under a 32-byte maximum_name_length; a 12-byte and a 58-byte name give 1,606 and 1,670
+bytes without a maximum and 1,670 each under 64. Every form stays within the two 1,200-byte datagrams a hybrid
+ClientHello already takes, so ECH costs no round trip; a rejection costs one new connection.
+
+Evidence: `test_tls_ech.cpp` (the ECHConfig layout and every refused key, name and list; every group; a
+HelloRetryRequest that keeps encrypting; resumption inside the inner hello with no PSK outside; a stale configuration
+rejected and retried with and without mutual authentication; a second rejection refused; the previous key; an
+unpinned rejection; a server without ECH; the public name refused without ECH; GREASE; the padding; lists the client
+skips or cannot use; QUIC accepted, rejected and retried; the server name absent from every byte a client sends), the
+`crd-fuzz-crypto-tls` ECH mode (any list: the context's verdict against the restated list shape, and a session that
+either refuses to start or sends an outer ECH offer without the server name, over records and QUIC; hostile outer
+hellos to a server holding two keys), five source mutations (four caught; the fifth, GREASE left on beside a list, is
+equivalent: the inner-hello report, not the wire, decides), and `tls_interop.py` against OpenSSL 4.0's ECH: offers
+both ways over records and from a Cerid client over QUIC versions 1 and 2, a HelloRetryRequest both ways, stale
+configurations rejected and retried with the configurations each library sent, both servers' previous keys, a server
+without ECH, and GREASE both ways, with the outer hello read off the wire and the server name absent from every
+visible byte. OpenSSL 4.0.3's client cannot offer ECH over its QUIC TLS interface (its transport parameters are a
+custom extension its ECH cannot copy, internal_error before it sends anything), so a Cerid server's QUIC ECH is proven
+against Cerid clients.
 
 <a id="negotiation"></a>
 ## Version and extension negotiation
