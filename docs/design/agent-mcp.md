@@ -129,6 +129,21 @@ for the keywords the published schemas and the tool schemas use (`type`, `enum`,
 refusing any other keyword and any network reference, so nothing it does not understand reads as valid. Its own cases
 are in `scripts/test-repository-tools.py` (`JsonSchemaSubset`).
 
+**A third-party client.** `tests/tools/ceridc/mcp_inspector.py` drives the real binary with the MCP Inspector, the
+specification's reference client, pinned with its npm lockfile (every transitive package by SHA-512 integrity) in
+`tests/tools/ceridc/mcp/inspector/` and installed with `npm ci --ignore-scripts` on the pinned Node
+(`scripts/install-node.py`), outside the checkout. Its command line client runs in each protocol era it offers:
+`legacy` (the 2025-11-25 handshake), `modern` (2026-07-28 with per-request `_meta`) and `auto` (which must find
+2026-07-28 through discovery): it connects, lists the tools under its schema portability check (`--strict`, which
+must report nothing) and calls tools that run and tools it must refuse (a tool error exits 5). The Inspector spawns
+the script's `relay` as its server, which starts `ceridc mcp` and copies each line through unchanged while recording
+it, so the check reads what crossed the pipe: every line one JSON message ending in LF alone, each request in the
+revision its era must use, every request, notification and reply against its method's definition in the pinned
+schema, each structured result against the tool's output schema, and the Inspector's printed payload equal to the
+server's. Its home, catalog and secrets live in the scratch directory (memory secret store, no browser). The pinned
+Node is a Linux x64 build, so the run is recorded on the Linux debug lane; the Windows byte streams are held by
+`crd-platform-tests` `[streams]` and the conformance run on every lane.
+
 The in-process cases in `tests/tools/ceridc/test_ceridc.cpp` hold the protocol byte for byte (discovery, the version
 error, every malformed `_meta`, the handshake, both eras on one connection, the envelope and every argument refusal),
 `test_ceridc_diag.cpp` the `diag` tool, and `crd-fuzz-ceridc-diag` models the dual-era protocol as its oracle.

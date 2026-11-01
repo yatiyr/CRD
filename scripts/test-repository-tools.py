@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Regression checks for hygiene rejection and CMake's generated IDE model."""
 from pathlib import Path
+import base64
 import contextlib
 import datetime
 import gzip
@@ -8600,6 +8601,137 @@ class JsonSchemaSubset(unittest.TestCase):
         self.assertEqual([], modern.ref_errors(reply, '#/$defs/UnsupportedProtocolVersionError'))
         reply['id'] = None  # MCP leaves an id it cannot read out; null is not a request id
         self.assertTrue(modern.ref_errors(reply, '#/$defs/UnsupportedProtocolVersionError'))
+
+
+class McpInspector(unittest.TestCase):
+    """tests/tools/ceridc/mcp_inspector.py: the pinned MCP Inspector's lock, its recording relay and the transcript
+    check that holds every recorded message to the pinned schemas (MCP-ADAPT.0)."""
+
+    TOOL = {'name': 'echo', 'inputSchema': {'type': 'object'},
+            'outputSchema': {'type': 'object', 'properties': {'ok': {'type': 'boolean'}}, 'required': ['ok'],
+                             'additionalProperties': False}}
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location('mcp_inspector', ROOT / 'tests/tools/ceridc/mcp_inspector.py')
+        cls.inspector = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.inspector)
+        conformance = cls.inspector.conformance
+        cls.schemas = {conformance.MODERN: conformance.load_schema(conformance.MODERN),
+                       conformance.LEGACY: conformance.load_schema(conformance.LEGACY)}
+
+    def connection(self, modern, report=None):
+        """A recorded connection of `modern` or legacy era: discovery or the handshake, tools/list, one call."""
+        meta = {'_meta': self.inspector.conformance.META} if modern else {}
+        complete = {'resultType': 'complete'} if modern else {}
+        cached = dict(complete, ttlMs=1, cacheScope='public') if modern else {}
+        report = {'ok': True} if report is None else report
+        call = {'content': [{'type': 'text', 'text': json.dumps(report)}], 'structuredContent': report,
+                'isError': report.get('ok') is not True}
+        if modern:
+            opening = [('client', {'jsonrpc': '2.0', 'id': 0, 'method': 'server/discover', 'params': dict(meta)}),
+                       ('server', {'jsonrpc': '2.0', 'id': 0, 'result': dict(
+                           cached, supportedVersions=['2026-07-28', '2025-11-25'],
+                           capabilities={'tools': {'listChanged': False}}, serverInfo={'name': 's', 'version': '1'})})]
+        else:
+            opening = [('client', {'jsonrpc': '2.0', 'id': 0, 'method': 'initialize', 'params': {
+                           'protocolVersion': '2025-11-25', 'capabilities': {},
+                           'clientInfo': {'name': 'c', 'version': '1'}}}),
+                       ('server', {'jsonrpc': '2.0', 'id': 0, 'result': {
+                           'protocolVersion': '2025-11-25', 'capabilities': {'tools': {'listChanged': False}},
+                           'serverInfo': {'name': 's', 'version': '1'}}}),
+                       ('client', {'jsonrpc': '2.0', 'method': 'notifications/initialized'})]
+        return opening + [
+            ('client', {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list', 'params': dict(meta)}),
+            ('server', {'jsonrpc': '2.0', 'id': 1, 'result': dict(cached, tools=[self.TOOL])}),
+            ('client', {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call',
+                        'params': dict(meta, name='echo', arguments={})}),
+            ('server', {'jsonrpc': '2.0', 'id': 2, 'result': dict(complete, **call)})]
+
+    def check(self, entries, era, raw=None):
+        """The Transcript of `entries` (or of `raw` lines, verbatim) recorded as the relay writes them."""
+        with tempfile.TemporaryDirectory() as temp:
+            log = Path(temp, 'transcript.jsonl')
+            lines = raw or [(source, json.dumps(message).encode('utf-8') + b'\n') for source, message in entries]
+            log.write_text(''.join(json.dumps({'source': source, 'data': base64.b64encode(data).decode('ascii')}) +
+                                   '\n' for source, data in lines) + '{"exit": 0}\n', encoding='utf-8')
+            return self.inspector.Transcript(log, self.schemas, {}, era)
+
+    def test_a_valid_connection_of_each_era_passes(self):
+        legacy = self.check(self.connection(False), 'legacy')
+        self.assertEqual((legacy.methods, legacy.revisions, legacy.messages, legacy.exit),
+                         (['initialize', 'tools/list', 'tools/call'], {'2025-11-25'}, 7, 0))
+        for era in ('modern', 'auto'):
+            modern = self.check(self.connection(True), era)
+            self.assertEqual((modern.methods, modern.revisions, modern.messages),
+                             (['server/discover', 'tools/list', 'tools/call'], {'2026-07-28'}, 6))
+
+    def test_every_departure_fails_the_run(self):
+        failure = self.inspector.Failure
+        valid = self.connection(True)
+        cases = {
+            'the wrong era': (self.connection(False), 'modern', 'was sent in revision 2025-11-25'),
+            'a modern request in the legacy era': (valid, 'legacy', 'was sent in revision 2026-07-28'),
+            'no resultType': ([(s, {k: v for k, v in m.items()} if 'result' not in m else
+                                dict(m, result={k: v for k, v in m['result'].items() if k != 'resultType'}))
+                               for s, m in valid], 'modern', "'resultType' is required"),
+            'an unknown method': ([valid[0], ('client', {'jsonrpc': '2.0', 'id': 7, 'method': 'resources/list',
+                                                         'params': valid[0][1]['params']})], 'modern',
+                                  'a method this run does not know'),
+            'an unknown notification': ([('client', {'jsonrpc': '2.0', 'method': 'notifications/progress'})],
+                                        'legacy', 'which this run does not know'),
+            'a reply to no request': ([valid[1]], 'modern', 'a reply to no request'),
+            'a request without its reply': (valid[:1], 'modern', 'requests without a reply'),
+            'a report outside the output schema': (self.connection(True, {'ok': True, 'extra': 1}), 'modern',
+                                                   'does not fit its outputSchema'),
+            'a call before its tool was listed': (valid[:2] + valid[4:], 'modern', 'before its output schema'),
+            'a text other than the report': ([*valid[:5], ('server', dict(valid[5][1], result=dict(
+                valid[5][1]['result'], content=[{'type': 'text', 'text': '{}'}])))], 'modern',
+                                             'the text content is the structured result'),
+            'two content blocks': ([*valid[:5], ('server', dict(valid[5][1], result=dict(
+                valid[5][1]['result'], content=valid[5][1]['result']['content'] * 2)))], 'modern',
+                                   'one text content block'),
+            'isError against the report': ([*valid[:5], ('server', dict(valid[5][1], result=dict(
+                valid[5][1]['result'], isError=True)))], 'modern', 'isError follows'),
+        }
+        for name, (entries, era, message) in cases.items():
+            with self.subTest(name), self.assertRaisesRegex(failure, message):
+                self.check(entries, era)
+        lines = [(source, json.dumps(message).encode('utf-8') + b'\n') for source, message in valid]
+        for name, data in (('a CRLF line', lines[1][1][:-1] + b'\r\n'), ('a line without its LF', lines[1][1][:-1])):
+            with self.subTest(name), self.assertRaisesRegex(failure, 'ending in LF alone'):
+                self.check(None, 'modern', [lines[0], ('server', data)])
+
+    def test_the_relay_copies_every_line_unchanged_and_records_it(self):
+        server = 'import sys\nfor line in sys.stdin.buffer:\n    sys.stdout.buffer.write(line.upper())\nsys.exit(3)\n'
+        with tempfile.TemporaryDirectory() as temp:
+            log = Path(temp, 'relay.jsonl')
+            done = subprocess.run([sys.executable, str(ROOT / 'tests/tools/ceridc/mcp_inspector.py'), 'relay', '--log',
+                                   str(log), '--', sys.executable, '-c', server], input=b'a\r\nb\n\x1ac',
+                                  capture_output=True, timeout=60)
+            self.assertEqual((done.returncode, done.stdout), (3, b'A\r\nB\n\x1aC'))
+            entries = [json.loads(line) for line in log.read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(entries[-1], {'exit': 3})
+        recorded = {source: [base64.b64decode(e['data']) for e in entries if e.get('source') == source]
+                    for source in ('client', 'server')}
+        self.assertEqual(recorded, {'client': [b'a\r\n', b'b\n', b'\x1ac'], 'server': [b'A\r\n', b'B\n', b'\x1aC']})
+
+    def test_the_inspector_is_locked_with_every_package_integrity(self):
+        package = ROOT / 'tests/tools/ceridc/mcp/inspector'
+        manifest = json.loads((package / 'package.json').read_text(encoding='utf-8'))
+        lock = json.loads((package / 'package-lock.json').read_text(encoding='utf-8'))
+        version = manifest['devDependencies'][self.inspector.INSPECTOR]
+        self.assertRegex(version, r'^\d+\.\d+\.\d+$')
+        self.assertEqual(version, self.inspector.pinned_version())
+        self.assertEqual(lock['lockfileVersion'], 3)
+        self.assertEqual(lock['packages']['']['devDependencies'], manifest['devDependencies'])
+        self.assertEqual(lock['packages']['node_modules/' + self.inspector.INSPECTOR]['version'], version)
+        for name, entry in lock['packages'].items():
+            if name:
+                self.assertTrue(entry.get('integrity', '').startswith('sha512-'), name)
+                self.assertTrue(entry['resolved'].startswith('https://registry.npmjs.org/'), name)
+        self.assertEqual(self.inspector.launcher(Path('x')).as_posix(),
+                         'x/node_modules/@modelcontextprotocol/inspector/clients/launcher/build/index.js')
 
 
 if __name__ == '__main__':

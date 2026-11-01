@@ -1,0 +1,9 @@
+{
+  "name": "cerid-mcp-inspector-evidence",
+  "private": true,
+  "description": "The pinned MCP Inspector that drives ceridc mcp for MCP-ADAPT.0's evidence (tests/tools/ceridc/mcp_inspector.py).",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "@modelcontextprotocol/inspector": "2.13.0"
+  }
+}

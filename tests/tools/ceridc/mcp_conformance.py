@@ -34,6 +34,7 @@ MODERN = '2026-07-28'
 LEGACY = '2025-11-25'
 META = {'io.modelcontextprotocol/protocolVersion': MODERN, 'io.modelcontextprotocol/clientCapabilities': {},
         'io.modelcontextprotocol/clientInfo': {'name': 'mcp-conformance', 'version': '1'}}
+MESH_UUID = '00112233-4455-6677-8899-aabbccddeeff'
 TOOLS = ['cook', 'diag', 'export', 'import', 'instantiate', 'query', 'render', 'sequence']
 
 
@@ -56,10 +57,12 @@ def load_schema(revision):
     return subset.Validator(json.loads(data))
 
 
-def binary_stl(path):
-    """A one-triangle binary STL."""
+def write_sources(source):
+    """A source root holding a one-triangle binary STL and its .meta, which fixes the asset's id at MESH_UUID."""
+    source.mkdir()
     triangle = struct.pack('<12f', 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0) + b'\0\0'
-    path.write_bytes(b'\0' * 80 + struct.pack('<I', 1) + triangle)
+    (source / 'tri.stl').write_bytes(b'\0' * 80 + struct.pack('<I', 1) + triangle)
+    (source / 'tri.stl.meta').write_text('[id]\nuuid = "%s"\n' % MESH_UUID, encoding='utf-8')
 
 
 class Session:
@@ -155,10 +158,7 @@ class Session:
 
 def drive_tools(session, modern, scratch, tag):
     """Every tool, run and refused, on files under `scratch`."""
-    source = scratch / ('src-%s' % tag)
-    source.mkdir()
-    binary_stl(source / 'tri.stl')
-    (source / 'tri.stl.meta').write_text('[id]\nuuid = "00112233445566770011223344556677"\n', encoding='utf-8')
+    write_sources(scratch / ('src-%s' % tag))
     pack, scene, timl, otio = ('%s.pack.crdr' % tag, '%s.scen' % tag, '%s.timl.crdr' % tag, '%s.otio' % tag)
     call = lambda tool, arguments, ok=None: session.call(tool, arguments, modern=modern, expect_ok=ok)
     call('import', {'path': 'src-%s/tri.stl' % tag}, True)
@@ -166,7 +166,9 @@ def drive_tools(session, modern, scratch, tag):
     call('import', {'path': ''}, False)
     call('cook', {'root': 'src-%s' % tag, 'out': pack}, True)
     call('cook', {'root': 'src-%s' % tag}, False)
-    call('query', {'pack': pack}, True)
+    listed = call('query', {'pack': pack}, True)
+    require([entry['uuid'] for entry in listed['entries']] == [MESH_UUID], 'the cook kept the .meta\'s id: %r' %
+            listed['entries'])
     call('query', {'pack': pack, 'extra': 1}, False)
     call('instantiate', {'pack': pack, 'asset': 'tri.stl', 'x': 1, 'out': scene, 'dry_run': True}, True)
     call('instantiate', {'pack': pack, 'asset': 'tri.stl', 'x': 1, 'y': 2.5, 'z': -3, 'out': scene}, True)
