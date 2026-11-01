@@ -2346,13 +2346,17 @@
       ],
       "instrument": {
         "name": "Regulation (EU) 2017/1001 on the European Union trade mark",
-        "article": "Whole regulation",
+        "article": "Articles 6, 18, 30-32, 46, 52-53 and 58",
         "type": "regulation",
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2017/1001/oj",
-        "consolidated": null
+        "consolidated": {
+          "version": "02017R1001-20251201",
+          "read": "2026-11-01",
+          "sha256": "4bc331ae6c633154e452869a52fec9f4e8bdda861bba6b13bcef23a01b857cb9"
+        }
       },
-      "obligation": "File EU trade marks for product names with the EUIPO before launch.",
+      "obligation": "An EU trade mark exists only by registration (Article 6): file each product name's application at the EUIPO with the request, the applicant, the list of goods and services and a representation of the mark, paying the application fee within one month, which fixes the filing date (Articles 30-32), after clearing it against earlier marks, whose owners may oppose within three months of the application's publication (Article 46); put the mark to genuine use in the Union for the registered goods and services within five years of registration and never suspend it for five years, or it may be revoked (Articles 18 and 58(1)(a)); renew every 10 years from the filing date within the six months before expiry, or the six months after it with the late fee (Articles 52-53).",
       "applies_to": [
         "channel.cerid-store",
         "channel.distribution"
@@ -2369,9 +2373,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.4",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-tax-trademark-uk-data.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -2583,13 +2587,17 @@
       ],
       "instrument": {
         "name": "Tax Procedure Law No. 213",
-        "article": "Invoice and record-keeping provisions",
+        "article": "Articles 227, 229-232, Repeated Article 242, 253 and 256",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=213&MevzuatTur=1&MevzuatTertip=4",
-        "consolidated": null
+        "consolidated": {
+          "version": "2026-06-24 (7587)",
+          "read": "2026-11-01",
+          "sha256": "0cdebab20e117f54372e547ca5be9b05b70716fee475123cb931fbc278951840"
+        }
       },
-      "obligation": "Issue an invoice for every store sale and keep the records for the statutory period.",
+      "obligation": "Document every record of a dealing with a third party, a document missing a compulsory particular counting as never issued (Article 227); give an invoice for every sale or service to a merchant, a professional, a book-keeping farmer or an exempt tradesman, and to anyone else when the price exceeds the amount of Article 232 (revalued each year under Repeated Article 414) or the buyer asks (Article 232); the invoice carries its date and serial number, the issuer's name, business address, tax office and number, the customer's name and address (its tax office and number where it has them) and the goods or service with quantity, price and amount (Article 230), numbered in sequence, signed and issued within seven days of the delivery or service or the shorter time the Ministry sets, or it counts as never issued (Article 231); the Law's rules on books and documents bind electronic books, records and documents (Repeated Article 242); keep the documents for five years from the calendar year after the one they concern (Article 253) and produce them during that time on request, with every piece of information and password needed to read electronic records (Article 256).",
       "applies_to": [
         "channel.cerid-store",
         "product.purchases",
@@ -2600,16 +2608,16 @@
         "name": "invoice generation tests",
         "state": "planned"
       },
-      "effective": "1961",
+      "effective": "1961-01-01",
       "sunset": null,
       "counsel": {
         "needed": true,
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-store.3",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-tax-trademark-uk-data.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -2627,13 +2635,17 @@
       ],
       "instrument": {
         "name": "Tax Procedure Law General Communiqué No. 509",
-        "article": "Whole communiqué",
+        "article": "Sections IV.1.4, IV.2, V.5.2, V.6-V.8 and VI",
         "type": "by-law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=33905&MevzuatTur=9&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2019-10-19/30923 at 2025-12-31 (RG 33124-m5)",
+          "read": "2026-11-01",
+          "sha256": "9881822be85093b35473f716355d6cd7dc0d0b6761ca6924629ba08e5307d033"
+        }
       },
-      "obligation": "Issue e-archive or e-invoices for every store sale and keep them for the statutory period.",
+      "obligation": "Issue every store invoice as an e-Invoice to a buyer registered for e-Invoice and as an e-Archive Invoice to everyone else (section IV.2.1): a seller over the internet whose gross sales reach 500 thousand TL in a period from 2022 joins e-Invoice and, by the start of the seventh month after that period, e-Archive (sections IV.1.4(a)(4) and IV.2.4.2), and since 1 January 2026 a taxpayer outside e-Archive issues every invoice, whatever its amount, as an e-Archive Invoice through the Administration's portal or a licensed special integrator (section IV.2.4.3; 1 January 2027 for simple-procedure and business-account taxpayers). An internet sale's e-Archive Invoice carries the particulars of section IV.2.3, the issue time in hours and minutes (section V.5.2), the web address, payment method and day, the day the goods were sent or the service performed, a carrier for goods and the statement \"Bu satış internet üzerinden yapılmıştır.\", and is delivered electronically (section IV.2.4.5); report the e-Archive Invoices to the Administration signed and time-stamped in its published format (section V.8); issue on paper only in the failures section V.7 lists, each paper or missing invoice drawing the special irregularity fine of Article 353 of Law No. 213 (section V.6); keep the e-documents with their financial seal or electronic signature for the statutory period in electronic form inside Turkey (a secondary archive abroad allowed, a third-party archive only one the Administration licenses), able to display and print them on request (section VI).",
       "applies_to": [
         "channel.cerid-store",
         "product.purchases",
@@ -2651,9 +2663,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-store.3",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-tax-trademark-uk-data.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -4062,13 +4074,17 @@
       ],
       "instrument": {
         "name": "UK GDPR (retained Regulation (EU) 2016/679)",
-        "article": "Whole regulation, as amended",
+        "article": "Articles 3, 5-6, 8, 12-12A, 21, 27, 32-34, 44A, 45A-46 and 49",
         "type": "regulation",
         "jurisdiction": "GB",
         "primary": "https://www.legislation.gov.uk/eur/2016/679",
-        "consolidated": null
+        "consolidated": {
+          "version": "2026-09-30",
+          "read": "2026-11-01",
+          "sha256": "79ece673c10aa7f446081da9d7046795b65e0c27dc7b051e99923323dbdc62b6"
+        }
       },
-      "obligation": "Meet the UK GDPR's principles, rights, breach and transfer duties for UK users, as the GDPR entries do for the EU.",
+      "obligation": "The UK GDPR binds a controller outside the UK that offers goods or services to people in the UK or monitors their behaviour there (Article 3(2)), which designates a representative in the UK in writing unless its processing is occasional and unlikely to risk their rights (Article 27); process under the Article 5 principles and be able to show it, on an Article 6(1) basis (the recognised legitimate interests of Annex 1 included); where consent is the basis for an information society service offered directly to a child under 13, the holder of parental responsibility gives or authorises it, with reasonable efforts to verify (Article 8); act on a rights request without undue delay and within one month of the relevant time, extendable by two months by a reasoned notice inside the first month (Articles 12-12A), and present the right to object clearly and separately at the first communication (Article 21(4)); secure processing appropriately to the risk (Article 32); notify the Information Commission of a breach within 72 hours unless it is unlikely to risk people's rights, tell the data subjects of a high-risk one and document every breach (Articles 33-34); transfer outside the UK only under the Secretary of State's approval regulations, appropriate safeguards whose data protection test the controller reasonably judges met, or an Article 49 derogation (Articles 44A, 45A-46 and 49).",
       "applies_to": [
         "flow.crash-reports",
         "flow.telemetry",
@@ -4091,9 +4107,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.2",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-tax-trademark-uk-data.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -4113,13 +4129,17 @@
       ],
       "instrument": {
         "name": "Data Protection Act 2018",
-        "article": "Whole act, as amended",
+        "article": "Sections 1, 4, 123, 137, 164A and 171",
         "type": "law",
         "jurisdiction": "GB",
         "primary": "https://www.legislation.gov.uk/ukpga/2018/12",
-        "consolidated": null
+        "consolidated": {
+          "version": "2026-09-30",
+          "read": "2026-11-01",
+          "sha256": "48ee20f7a1ead0e11c41cb818a5c8ace3800d7b716fbb5b6be77de35273ea91d"
+        }
       },
-      "obligation": "Meet the Data Protection Act 2018's provisions supplementing the UK GDPR for UK users.",
+      "obligation": "Part 2 supplements the UK GDPR and is read with it (sections 1 and 4); let a data subject complain to the controller about an infringement through a complaint form that can be completed electronically, acknowledge each complaint within 30 days of receipt and, without undue delay, look into it and tell the complainant of its progress and outcome (section 164A); pay the Information Commission the charge set by the regulations made under section 137; re-identifying de-identified personal data without the consent of the controller that de-identified it is an offence (section 171), so a pseudonymised crash pack or telemetry record is never re-identified outside the controller's consent; and services likely to be accessed by children follow the Commission's age-appropriate design code (section 123, gb.aadc).",
       "applies_to": [
         "flow.crash-reports",
         "flow.telemetry",
@@ -4142,9 +4162,9 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/ROADMAP.md#slice-comply.2",
-        "read": "2026-10-27",
-        "verified": false
+        "ref": "docs/sessions/2026-11-01-comply-0-tax-trademark-uk-data.md#reading",
+        "read": "2026-11-01",
+        "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -6240,14 +6260,14 @@
       "sha256": "425623c09ba0917afbba2a92ae58714ac8c2fb2e606655ab42025055fe4e798d"
     },
     "EU": {
-      "generation": 5,
-      "reviewed": "2026-11-01",
-      "sha256": "f82e255e017e20fa5bf49b9307bf8871da5a23e9d6528f0c9d036528a7278eb5"
-    },
-    "GB": {
       "generation": 6,
       "reviewed": "2026-11-01",
-      "sha256": "12d98ac46a49a6764adef8de996cca17f01e0fb45f9a8505f4359f2cdff3a309"
+      "sha256": "1c570155bce3bc1e7d164ab6744e4858b5078383f15541d9375ad8792d95e316"
+    },
+    "GB": {
+      "generation": 7,
+      "reviewed": "2026-11-01",
+      "sha256": "be0400b920bf8b5f47ea6d7371b9bf6987cb265ae37a62dc4761b0aeccfd8059"
     },
     "INT": {
       "generation": 4,
@@ -6265,9 +6285,9 @@
       "sha256": "ea94c28021b59ef7c71dc3fda4242ff72389de9d60f0f28b6e56a9922bba9313"
     },
     "TR": {
-      "generation": 7,
+      "generation": 8,
       "reviewed": "2026-11-01",
-      "sha256": "f26147a532af99b838cc86ed9988e51f2ffbbe74fb4ca31fa27d4ed14882e301"
+      "sha256": "56596c9421414c1b40f92b34d622b93f03eb092e6010aa11ea2613b86b299fde"
     },
     "US": {
       "generation": 4,

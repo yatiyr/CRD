@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review EU
 format = "cerid-rules/1"
 jurisdiction = "EU"
-generation = 5
+generation = 6
 register = "2026-11-01"
 
 [[scope]]
@@ -97,10 +97,10 @@ topic = "intellectual-property"
 state = "planned"
 title = "EU trademark filings for product names (EUIPO)"
 instrument = "Regulation (EU) 2017/1001 on the European Union trade mark"
-article = "Whole regulation"
+article = "Articles 6, 18, 30-32, 46, 52-53 and 58"
 primary = "https://eur-lex.europa.eu/eli/reg/2017/1001/oj"
-read = false
-obligation = "File EU trade marks for product names with the EUIPO before launch."
+read = true
+obligation = "An EU trade mark exists only by registration (Article 6): file each product name's application at the EUIPO with the request, the applicant, the list of goods and services and a representation of the mark, paying the application fee within one month, which fixes the filing date (Articles 30-32), after clearing it against earlier marks, whose owners may oppose within three months of the application's publication (Article 46); put the mark to genuine use in the Union for the registered goods and services within five years of registration and never suspend it for five years, or it may be revoked (Articles 18 and 58(1)(a)); renew every 10 years from the filing date within the six months before expiry, or the six months after it with the late fee (Articles 52-53)."
 applies_to = ["channel.cerid-store", "channel.distribution"]
 check = "planned"
 check_name = "filing records"

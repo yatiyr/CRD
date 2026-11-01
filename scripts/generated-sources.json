@@ -1927,7 +1927,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "f82e255e017e20fa5bf49b9307bf8871da5a23e9d6528f0c9d036528a7278eb5"
+      "sha256": "1c570155bce3bc1e7d164ab6744e4858b5078383f15541d9375ad8792d95e316"
     },
     {
       "path": "assets/comply/gb.rules.toml",
@@ -1938,7 +1938,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "12d98ac46a49a6764adef8de996cca17f01e0fb45f9a8505f4359f2cdff3a309"
+      "sha256": "be0400b920bf8b5f47ea6d7371b9bf6987cb265ae37a62dc4761b0aeccfd8059"
     },
     {
       "path": "assets/comply/int.rules.toml",
@@ -1982,7 +1982,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "f26147a532af99b838cc86ed9988e51f2ffbbe74fb4ca31fa27d4ed14882e301"
+      "sha256": "56596c9421414c1b40f92b34d622b93f03eb092e6010aa11ea2613b86b299fde"
     },
     {
       "path": "assets/comply/us-ca.rules.toml",

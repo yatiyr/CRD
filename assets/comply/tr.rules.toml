@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review TR
 format = "cerid-rules/1"
 jurisdiction = "TR"
-generation = 7
+generation = 8
 register = "2026-11-01"
 
 [[scope]]
@@ -916,15 +916,15 @@ topic = "tax"
 state = "planned"
 title = "Tax Procedure Law No. 213: invoices and records"
 instrument = "Tax Procedure Law No. 213"
-article = "Invoice and record-keeping provisions"
+article = "Articles 227, 229-232, Repeated Article 242, 253 and 256"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=213&MevzuatTur=1&MevzuatTertip=4"
-read = false
-obligation = "Issue an invoice for every store sale and keep the records for the statutory period."
+read = true
+obligation = "Document every record of a dealing with a third party, a document missing a compulsory particular counting as never issued (Article 227); give an invoice for every sale or service to a merchant, a professional, a book-keeping farmer or an exempt tradesman, and to anyone else when the price exceeds the amount of Article 232 (revalued each year under Repeated Article 414) or the buyer asks (Article 232); the invoice carries its date and serial number, the issuer's name, business address, tax office and number, the customer's name and address (its tax office and number where it has them) and the goods or service with quantity, price and amount (Article 230), numbered in sequence, signed and issued within seven days of the delivery or service or the shorter time the Ministry sets, or it counts as never issued (Article 231); the Law's rules on books and documents bind electronic books, records and documents (Repeated Article 242); keep the documents for five years from the calendar year after the one they concern (Article 253) and produce them during that time on request, with every piece of information and password needed to read electronic records (Article 256)."
 applies_to = ["channel.cerid-store", "product.purchases", "flow.payments"]
 check = "planned"
 check_name = "invoice generation tests"
 check_ref = "docs/ROADMAP.md#slice-store.3"
-effective = "1961"
+effective = "1961-01-01"
 sunset = ""
 counsel = "needed"
 counsel_reviewed = ""
@@ -937,10 +937,10 @@ topic = "tax"
 state = "planned"
 title = "Tax Procedure Law General Communiqué No. 509: e-invoice and e-archive"
 instrument = "Tax Procedure Law General Communiqué No. 509"
-article = "Whole communiqué"
+article = "Sections IV.1.4, IV.2, V.5.2, V.6-V.8 and VI"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=33905&MevzuatTur=9&MevzuatTertip=5"
-read = false
-obligation = "Issue e-archive or e-invoices for every store sale and keep them for the statutory period."
+read = true
+obligation = "Issue every store invoice as an e-Invoice to a buyer registered for e-Invoice and as an e-Archive Invoice to everyone else (section IV.2.1): a seller over the internet whose gross sales reach 500 thousand TL in a period from 2022 joins e-Invoice and, by the start of the seventh month after that period, e-Archive (sections IV.1.4(a)(4) and IV.2.4.2), and since 1 January 2026 a taxpayer outside e-Archive issues every invoice, whatever its amount, as an e-Archive Invoice through the Administration's portal or a licensed special integrator (section IV.2.4.3; 1 January 2027 for simple-procedure and business-account taxpayers). An internet sale's e-Archive Invoice carries the particulars of section IV.2.3, the issue time in hours and minutes (section V.5.2), the web address, payment method and day, the day the goods were sent or the service performed, a carrier for goods and the statement \"Bu satış internet üzerinden yapılmıştır.\", and is delivered electronically (section IV.2.4.5); report the e-Archive Invoices to the Administration signed and time-stamped in its published format (section V.8); issue on paper only in the failures section V.7 lists, each paper or missing invoice drawing the special irregularity fine of Article 353 of Law No. 213 (section V.6); keep the e-documents with their financial seal or electronic signature for the statutory period in electronic form inside Turkey (a secondary archive abroad allowed, a third-party archive only one the Administration licenses), able to display and print them on request (section VI)."
 applies_to = ["channel.cerid-store", "product.purchases", "flow.payments"]
 check = "planned"
 check_name = "invoice generation tests"
