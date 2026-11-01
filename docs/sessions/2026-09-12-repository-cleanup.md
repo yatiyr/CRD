@@ -26,7 +26,7 @@ Three verified scratch fragments were deleted. Ambiguous diagnostics, dumps, coo
 were preserved intact under ignored `build/repo-cleanup-20260912/recovered/` (46 files with hashes). Automatic
 approval review rejected the initial broad deletion; the narrower preservation/move operation was approved.
 Optional local research books moved to `external/research-papers/docs-books/`; the reusable public-domain
-Shewchuk reference moved to [bench/reference](../../bench/reference/README.md).
+Shewchuk reference moved to [bench/reference](../../tests/geometry/geometry-primitives/reference/README.md) (since 2026-11-01 under `tests/geometry/geometry-primitives/reference`, the predicates' differential-test oracle).
 
 The ignore policy now keeps agent entry documents and source formats visible, while excluding generated output,
 SDKs and personal settings. New repository/layout tests join the documentation and architecture guards in CTest

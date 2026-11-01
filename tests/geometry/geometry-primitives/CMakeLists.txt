@@ -1,3 +1,19 @@
+# The predicates' differential test oracle (test_predicates_vs_shewchuk.cpp): Shewchuk's public-domain predicates.c,
+# kept verbatim in reference/. It is compiled as C17 with GNU extensions, since its definitions are K&R ones, which C23
+# removes. It takes the tree's floating-point contract (crd-simd-flags: no contraction, no fast-math, SSE2 arithmetic
+# on x64), because its expansions need each product and sum rounded once, and no warning set, since the code is
+# Shewchuk's. The Windows SDK has no <sys/time.h>, which the source includes and never uses, and no random(), which
+# only its unused random-input generators call: reference/win32 supplies the header, and random() becomes rand().
+enable_language(C)
+add_library(crd-geometry-shewchuk-oracle OBJECT reference/shewchuk-predicates.c)
+set_target_properties(crd-geometry-shewchuk-oracle PROPERTIES
+    C_STANDARD 17 C_STANDARD_REQUIRED ON C_EXTENSIONS ON INTERPROCEDURAL_OPTIMIZATION OFF)
+target_link_libraries(crd-geometry-shewchuk-oracle PRIVATE crd-simd-flags)
+if(MSVC)
+    target_include_directories(crd-geometry-shewchuk-oracle PRIVATE reference/win32)
+    target_compile_definitions(crd-geometry-shewchuk-oracle PRIVATE random=rand)
+endif()
+
 add_executable(crd-geometry-primitives-tests
     test_primitives.cpp
     test_closest_point.cpp
@@ -13,6 +29,7 @@ add_executable(crd-geometry-primitives-tests
     test_convex_hull_view.cpp
     test_validation.cpp
     test_predicates.cpp
+    test_predicates_vs_shewchuk.cpp
     test_queries_typed.cpp  # v0d-2
     test_transform.cpp      # v11
     test_circumcenter.cpp
@@ -27,6 +44,7 @@ target_link_libraries(crd-geometry-primitives-tests PRIVATE
     crd-math                  # Vec3f/Mat3f/Mat4f + approx_equal_abs etc.
     crd-units                 # v0d-2 typed queries
     crd-geometry-primitives
+    crd-geometry-shewchuk-oracle
     Catch2::Catch2WithMain
 )
 

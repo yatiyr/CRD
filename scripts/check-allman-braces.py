@@ -644,7 +644,8 @@ def fix_lines(lines, max_passes=60):
 ROOT = Path(__file__).resolve().parents[1]
 EXTENSIONS = (".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".inl", ".ipp")
 VENDORED = (
-    "bench/reference/shewchuk-predicates.c",  # Shewchuk's public-domain predicates, kept verbatim as a reference
+    # Shewchuk's public-domain predicates, kept verbatim as the predicates' differential-test oracle
+    "tests/geometry/geometry-primitives/reference/shewchuk-predicates.c",
     "engine/numerics/hesap-tensor/include/crd/hesap/tensor/detail/dlpack.h",  # upstream DLPack header
 )
 

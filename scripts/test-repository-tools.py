@@ -5007,7 +5007,7 @@ class AllmanBraces(unittest.TestCase):
     def test_the_tree_is_clean(self):
         files = allman.tracked_sources()
         self.assertGreater(len(files), 1000)
-        self.assertNotIn('bench/reference/shewchuk-predicates.c', files)  # vendored
+        self.assertNotIn('tests/geometry/geometry-primitives/reference/shewchuk-predicates.c', files)  # vendored
         self.assertNotIn('engine/execution/ceir/generated/crd/ceir/gen/arith_ops.cpp', files)  # generated
 
     def test_each_violation_kind_is_found(self):
