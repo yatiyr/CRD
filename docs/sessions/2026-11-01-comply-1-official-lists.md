@@ -143,6 +143,18 @@ address, so the decisions are read from the Official Gazette and MASAK next.
   - The whole `test-repository-tools.py` passes except `test_generated_target_folders`, which needs Ninja and fails
     the same way without this change on this PC.
 
+## OWN closed
+
+Track B closed OWN.1, OWN.2 and OWN on main (60e5ee51) during this batch. NET.1 waited only on OWN, so this batch
+tried to flip NET.1 and NET-STD to Done. `check-master-plan.py` refused both: "Done after unfinished SIMD-PERF; retain
+evidence as Partial until its turn". A row closes in table order, and on 2026-11-01 these earlier rows were still
+unfinished: SIMD-PERF, CI-1 to CI-4, the HW-RESILIENCE, DIAG and REPO rows, MCP-ADAPT.0 and HESAP-JOBS-RETUNE. The
+registers guard also showed what the NET-STD flip will require: the standards entries whose only row is NET-STD
+(`ietf.grease`, `quic.grease-bit`, `quic.version-negotiation`) must be marked implemented with their evidence.
+
+The rows stay Partial, and their Remaining text now names the table order as the gate. COMPLY.0's text no longer
+waits on OWN.
+
 ## Follow-up fix
 
 The review after the push found the importer's identifier bound still at the exploratory 4 096. The decoder's
