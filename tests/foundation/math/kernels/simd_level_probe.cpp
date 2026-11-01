@@ -572,6 +572,29 @@ usize v16_transpose(const Input& in, u64* out) noexcept
     }
     return n;
 }
+// Eight rows of sixteen lanes from a, b and c in turn, each half transposed as its own 8 x 8.
+usize v16_transpose_halves(const Input& in, u64* out) noexcept
+{
+    Vec16f r[8];
+    for (usize i = 0; i < 8; ++i)
+    {
+        alignas(64) f32 t[16];
+        for (usize j = 0; j < 16; ++j)
+        {
+            const usize k = (16 * i + j + 7) % (3 * kLanes);
+            const f32* const source[3] = {in.a, in.b, in.c};
+            t[j] = source[k / kLanes][k % kLanes];
+        }
+        r[i] = Vec16f::load_aligned(t);
+    }
+    s::transpose8x8_halves(r);
+    usize n = 0;
+    for (const Vec16f& v : r)
+    {
+        n += put(v, out + n);
+    }
+    return n;
+}
 
 // ---- the operations both f64 widths have ----
 
@@ -1175,6 +1198,7 @@ constexpr Op kVectorOps[] = {
     {"vec16f partial load/store", Compare::F32Value, &v16_partial},
     {"vec16f halves", Compare::Bits, &v16_halves},
     {"vec16f transpose16x16", Compare::Bits, &v16_transpose},
+    {"vec16f transpose8x8 halves", Compare::Bits, &v16_transpose_halves},
     {"vec16f fmaddsub", Compare::F32Value, &v16_fmaddsub},
     {"vec16f addsub", Compare::F32Value, &v16_addsub},
     {"vec16f complex shuffles", Compare::Bits, &v16_shuffles},

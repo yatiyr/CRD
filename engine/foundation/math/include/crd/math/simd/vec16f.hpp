@@ -705,4 +705,40 @@ CRD_FORCEINLINE void transpose16x16(Vec16f (&r)[16]) noexcept
 #endif
 }
 
+// Two in-register 8x8 transposes at once, one in each half (lane j of row i's low half becomes lane i of row j's low
+// half, and the same for the high halves): Vec8f's transpose8x8 on both halves, at avx512 its unpack and shuffle stages
+// on whole registers and its 128-bit lane stage as one merge-masked lane shuffle a row (24 ops for both). An AoSoA
+// block row of 8 real parts then 8 imaginary parts transposes as one register. Pure data movement, so every level
+// gives the same bits.
+CRD_FORCEINLINE void transpose8x8_halves(Vec16f (&r)[8]) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    __m512 t[8];
+    for (usize i = 0; i < 8; i += 2)
+    {
+        t[i] = _mm512_unpacklo_ps(r[i].v, r[i + 1].v); // a0 b0 a1 b1 in each 128-bit lane
+        t[i + 1] = _mm512_unpackhi_ps(r[i].v, r[i + 1].v);
+    }
+    // 128-bit lane k of u[4g + m] holds column 4(k & 1) + m of rows 4g..4g+3 in its half.
+    __m512 u[8];
+    for (usize g = 0; g < 8; g += 4)
+    {
+        u[g] = _mm512_shuffle_ps(t[g], t[g + 2], _MM_SHUFFLE(1, 0, 1, 0));
+        u[g + 1] = _mm512_shuffle_ps(t[g], t[g + 2], _MM_SHUFFLE(3, 2, 3, 2));
+        u[g + 2] = _mm512_shuffle_ps(t[g + 1], t[g + 3], _MM_SHUFFLE(1, 0, 1, 0));
+        u[g + 3] = _mm512_shuffle_ps(t[g + 1], t[g + 3], _MM_SHUFFLE(3, 2, 3, 2));
+    }
+    // Row m takes the even 128-bit lanes of u[m] and u[4 + m] in turn, row 4 + m the odd ones: [a0 b0 a2 b2] and
+    // [a1 b1 a3 b3], each the lane shuffle of one row merged into the other under a mask of the lanes it gives.
+    for (usize m = 0; m < 4; ++m)
+    {
+        r[m].v = _mm512_mask_shuffle_f32x4(u[m], 0xF0F0, u[4 + m], u[4 + m], _MM_SHUFFLE(2, 2, 0, 0));
+        r[4 + m].v = _mm512_mask_shuffle_f32x4(u[4 + m], 0x0F0F, u[m], u[m], _MM_SHUFFLE(3, 3, 1, 1));
+    }
+#else
+    transpose8x8(r[0].lo, r[1].lo, r[2].lo, r[3].lo, r[4].lo, r[5].lo, r[6].lo, r[7].lo);
+    transpose8x8(r[0].hi, r[1].hi, r[2].hi, r[3].hi, r[4].hi, r[5].hi, r[6].hi, r[7].hi);
+#endif
+}
+
 } // namespace crd::math::simd::inline CRD_MATH_LEVEL_NS
