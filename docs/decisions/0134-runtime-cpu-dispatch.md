@@ -158,8 +158,13 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    runs (`fft_kernels().level`; fft builds portable, sse2, avx2 and avx512, so an sse4.2 selection runs the sse2 unit
    and its plans), and the board's logs name that unit. The 2026-10-30 boards measured the f32 and f64 forwards at
    portable, sse2 and avx2 (avx2 runs the canonical planner at every size but f64 2K, the standalone-hier); every
-   inverse runs the canonical plan, and so do avx512 and neon until a board on such a host measures them (QUAL.1-HW;
-   this host has neither, and SDE emulates avx512 without its timing). The geometry
+   inverse runs the canonical plan, and so does neon until a board on such a host measures it (QUAL.1-HW; SDE
+   emulates avx512 without its timing). Amended 2026-11-01: a level's rows record the machine, commit and board that
+   measured them, and an import replaces only its own levels; avx512's f32 rows come from SIMD-PERF's benchmark
+   machine (an Intel Xeon Platinum 8581C, real AVX-512 hardware,
+   [board](../bench/2026-11-01-simd-perf-fft-avx512-level-plans.md)), its f64 forwards run the canonical planner until
+   a board measures them, and an AMD AVX-512 board stays QUAL.1-HW's (one Intel microarchitecture does not stand for
+   every AVX-512 host). The geometry
    families are bit-exact the same way: two roundings a step, the IEEE min/max ordering and scalar lane decisions; so
    is the eylem-rigid3d body step, with true divisions and square roots. The forward jets are bit-exact too:
    per-lane chains in which only the product rule fuses (one fma), the quotient and scale steps round each operation
