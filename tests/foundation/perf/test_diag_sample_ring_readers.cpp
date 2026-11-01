@@ -177,9 +177,17 @@ TEST_CASE("sample ring: a copy never straddles a clear (clear/copy serialization
 
     // Producer + clearer, both on this thread: alternate homogeneous batches separated by a clear. With the flag, a
     // copier's [tail, head) snapshot can never span the tail move, so no copy sees both names; without it, a torn tail
-    // read would let a copy straddle the boundary and mix them.
+    // read would let a copy straddle the boundary and mix them. The producer makes at least 3000 rounds, then keeps
+    // going until a copier has seen a sample or the deadline passes: the fixed rounds take about 0.1 s, which on a
+    // loaded host can end before any copier thread is first scheduled (observed under win-asan at ctest -j3).
+    const auto keep_producing =
+        [&, deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10)](crd::u32 round)
+    {
+        return round < 3000U ||
+               (samples_seen.load(std::memory_order_relaxed) == 0U && std::chrono::steady_clock::now() < deadline);
+    };
     go.store(true, std::memory_order_release);
-    for (crd::u32 round = 0U; round < 3000U; ++round)
+    for (crd::u32 round = 0U; keep_producing(round); ++round)
     {
         for (int i = 0; i < 8; ++i)
         {
