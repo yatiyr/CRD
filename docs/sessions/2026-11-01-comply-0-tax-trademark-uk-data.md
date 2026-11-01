@@ -33,7 +33,9 @@ No failure comes from a track C change.
   still unchanged on main, so it is named for its owner.
 - b0b1b245 predates batch 19, and every push run since (41273181833 for 092a2726 among them) was cancelled by a newer
   push, so the gazette reader, the `eur/` resolver and the `project_sync` fix still have no hosted run. This batch
-  dispatches a complete-tier run at its checkpoint.
+  dispatched complete-tier run 41274380605 at 04:46 UTC on de5e10b0, the mirror's head: the first hosted run of those
+  and of this batch's three rule generations (the communiqué's quoted statement a new string shape for the decoder).
+  Its win-arm64-debug lane will fail on the `checksum.cpp` C4324 above until track A repairs it.
 
 ## The gate of NET.1
 
