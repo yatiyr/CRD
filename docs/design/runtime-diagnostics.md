@@ -3306,7 +3306,9 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   `Dx12DeviceScope::create`, which every context (GPU, compute, raster, ray tracing, work graph) and default-device
   query calls with no named adapter: hardware adapters first in DXGI's high-performance order, then unclassified,
   then software, and WARP last unless DXGI lists it; a named adapter (the probe's own route) opens unchecked. CUDA
-  checks each device it opens, the row's next item.
+  checks in `create_cuda_compute_context`: its devices in CUDA's enumeration order, each kernel compiled by NVRTC for
+  the device's architecture (a refused compile is `build`, since NVRTC is linked in and no kernel could run there)
+  and run on a probe context of its own (`cuCtxCreate`), destroyed before the device's primary context is retained.
 - State-hash divergence: HW-RESILIENCE.3 owns the local primitive only, a per-step state-hash ledger over the
   checksum family's XXH3-64, the first divergent step and the culprit named by HW-RESILIENCE.2's hardware identity
   against a reference (the recorded run, or the majority of three or more); the lockstep and rollback exchange of

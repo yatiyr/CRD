@@ -4,8 +4,8 @@
 > Current-work pointer. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
 
 <!-- current-slice: HW-RESILIENCE.3 -->
-**Current work:** [HW-RESILIENCE.3](docs/ROADMAP.md#slice-hw-resilience.3) (user order 2026-10-31): device check
-on CUDA, state hashes. Beside it:
+**Current work:** [HW-RESILIENCE.3](docs/ROADMAP.md#slice-hw-resilience.3) (user order 2026-10-31): the
+state-hash divergence check. Beside it:
 [SIMD-PERF](docs/ROADMAP.md#slice-simd-perf) on a cloud bench; CI-1 to CI-4: launcher. [DIAG.11b](docs/ROADMAP.md#slice-diag.11b): user re-record (8). [DIAG.11c](docs/ROADMAP.md#slice-diag.11c),
 [DIAG.12](docs/ROADMAP.md#slice-diag.12): final complete-tier run.
 Local routes: [build performance](docs/design/build-performance.md).
