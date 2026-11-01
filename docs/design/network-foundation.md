@@ -400,18 +400,43 @@ tests):
   client learns neither which names nor which keys exist. Every alert sent and received is reported, as is a
   HelloRetryRequest (read from the ServerHello's random).
 - **S6. This slice's limits.** Tickets, resumption and 0-RTT are off (every connection runs a full handshake), and
-  `close()` is for an established session (a handshake is abandoned with `clear()`); resumption, address-validation
-  tokens, certificate compression, ECH, key-update scheduling against the usage limits and the QUIC integration are
-  NET.2's next slices on this same interface.
+  `close()` is for an established session (a handshake is abandoned with `clear()`); resumption with its ticket
+  hygiene, address-validation tokens, certificate compression, ECH and the QUIC integration are NET.2's next slices on
+  this same interface.
+- **S7. Key usage limits and key updates.** A session counts the records protected under its sending key (the
+  provider's write sequence, which a new key resets) and updates the key before `key_update_records()` records: the
+  negotiated AEAD's limit (`tls_key_usage_limit`: floor(2^24.5) for AES-GCM, every 64-bit sequence number for
+  ChaCha20-Poly1305), or a lower `TlsConfig::key_update_records` of at least 3. Each key keeps room for its own
+  KeyUpdate and one alert, so data takes at most `key_update_records() - 2` records; `send()` updates the key between
+  records and counts the updates' bytes against the outgoing bound, and a message is sent whole or not at all.
+  `update_keys(request_peer)` updates on demand; while a request is outstanding (sent, not yet answered by a peer
+  KeyUpdate) a second one updates only the session's own key (RFC 9846 section 4.7.3). The provider answers a peer's
+  request by itself; `read()` moves the answer into the outgoing bytes at once when they have room, else ahead of the
+  next record or update, and every bound counts it. KeyUpdates are counted each way (`key_updates_sent`,
+  `key_updates_received`); a receiver never enforces its peer's limits. The session's own count never passes
+  `max_key_updates` (2^48-1, or lower by configuration): an update of its own that would reach it, by `send()` or on
+  demand, sends `close_notify` instead and returns `Closed` (the last update is kept for a peer's request, which the
+  provider would answer unasked), and an answer that reaches it closes the session after it; the session resumes on a
+  new connection.
+- **S8. Closure.** The provider can send `close_notify` only after the handshake and no warning alert at all, so a
+  Cerid session never sends `user_canceled`: a handshake is abandoned with `clear()`, which RFC 9846 section 6.1
+  allows (the alert's `close_notify` rule binds only a sender). A peer's `user_canceled` is ignored (reported in
+  `alert_received()`), and its `close_notify`, during the handshake too, makes the session `Closed`, never `Failed`;
+  `close()` of a session its peer closed during the handshake answers `Closed` and sends nothing. More than four
+  warning alerts in a row fail the session with `unexpected_message` (the provider's bound).
 
 Evidence: `test_tls.cpp` (every group and signature algorithm, each key share read off the wire and checked against
 its group's layout with the provider's own X25519, ECDH and ML-KEM modulus check, the hellos' GREASE values read off
 the wire, HelloRetryRequest, pins both ways,
-names, alerts, bounds, close_notify, adversarial records, every configuration refusal, one context on four threads),
-the `crd-fuzz-crypto-tls` target, and `tls_interop.py` against the pinned OpenSSL 3.5 (`CRD_BUILD_TLS_VS_OPENSSL`,
-Linux): every hybrid group both ways, a HelloRetryRequest both ways, hybrid kept beside a classical share both ways,
-mutual authentication, an unpinned key refused and a TLS 1.2 client refused with `protocol_version`, with the key
-shares and Cerid's GREASE values checked on the wire by the driver.
+names, alerts, bounds, close_notify, key updates under record budgets, on demand, with one request outstanding and at
+the update bound, a peer's `user_canceled` and `close_notify` during the handshake, adversarial records, every
+configuration refusal, one context on four threads), the `crd-fuzz-crypto-tls` target, and `tls_interop.py` against
+the pinned OpenSSL 3.5 (`CRD_BUILD_TLS_VS_OPENSSL`, Linux): every hybrid group both ways, a HelloRetryRequest both
+ways, hybrid kept beside a classical share both ways, mutual authentication, an unpinned key refused, a TLS 1.2 client
+refused with `protocol_version`, and key updates both ways (a Cerid client updating before every record under a
+three-record budget, asking for an update and not asking, and an OpenSSL client asking a Cerid server), with the key
+shares and Cerid's GREASE values checked on the wire by the driver and each end's KeyUpdate counts against the
+other's.
 
 <a id="negotiation"></a>
 ## Version and extension negotiation

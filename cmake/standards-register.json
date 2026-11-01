@@ -1401,9 +1401,12 @@
         "verified": true
       },
       "review": "2027-11-01",
-      "evidence": [],
+      "evidence": [
+        "tests/foundation/crypto/test_tls.cpp",
+        "tests/foundation/crypto/interop/tls_interop.py"
+      ],
       "deprecation": null,
-      "note": "RFC 9846 obsoletes RFC 8446 and keeps version 0x0304 and the wire format; the full re-research of 2026-11-01 maps its technical changes onto NET.2's TLS 1.3 profile (fresh key shares, mandatory key updates before the usage limits, the 2^48-1 epoch bound, general_error, TLS 1.3 only)."
+      "note": "RFC 9846 obsoletes RFC 8446 and keeps version 0x0304 and the wire format; the full re-research of 2026-11-01 maps its technical changes onto NET.2's TLS 1.3 profile (fresh key shares, mandatory key updates before the usage limits, the 2^48-1 epoch bound, general_error, TLS 1.3 only). Proven so far on crd-crypto's TLS records (tls.hpp, decisions S1 to S8): TLS 1.3 only, fresh key shares, general_error toward unauthenticated peers, key updates before the AEAD's usage limit with one request outstanding and the 2^48-1 bound, a peer's user_canceled ignored and its close_notify honoured, against OpenSSL 3.5 both ways. Ticket hygiene, resumption and the QUIC and raw UDP record layers remain NET.2's."
     },
     {
       "id": "tls.registry-recommended",
