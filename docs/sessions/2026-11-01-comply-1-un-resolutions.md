@@ -62,8 +62,9 @@ No failure comes from a track C change.
   refused.
 - **A renewed measure ends with its renewal.** The Council renews most arms embargoes for a period. A destination rests
   on the renewal in force, whose `sunset` is the period's end, and the import and the guard now refuse a destination
-  whose entry has ended on the day: the Darfur renewal (resolution 2830 (2026)) ends on 11 December 2026, so on that
-  day the guard and `crd-comply-sanctions-import` fail until its successor is read.
+  whose entry has ended on the day: the Darfur renewal (resolution 2830 (2026)) ends on 11 December 2026, so from that
+  day the guard (`crd-check-registers` and the repository step of CI) fails until its successor is read, and the
+  import will too once the generation is written.
 
 <a id="reading"></a>
 ## What was read
@@ -148,7 +149,8 @@ Cerid flow supplies.
   sides of the open reading.
 - `gen-comply-rules.py --review INT`: generation 5 (34 rules); `check-generated.py --refresh` for the file.
 - `check-master-plan.py`, `check-repository.py`, `check-allman-braces.py`, `check-generated.py` and
-  `check-registers.py` pass.
+  `check-registers.py` pass. The whole of `test-repository-tools.py` (293 cases) fails only
+  `test_generated_target_folders`, which needs Ninja on this PC and fails the same at the parent commit.
 - No C++ changed: the comply suite decodes the new INT generation on CI (`test_rules.cpp`), whose sunsets the decoder
   and its tests already cover, so the cloud machine was not started.
 
