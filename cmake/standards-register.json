@@ -563,8 +563,21 @@
         "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
-      "deprecation": null
+      "evidence": [
+        "tests/foundation/crypto/test_quic.cpp",
+        "tests/foundation/crypto/test_quic_handshake.cpp",
+        "tests/foundation/crypto/interop/tls_interop.py"
+      ],
+      "deprecation": null,
+      "codepoints": [
+        {
+          "registry": "TLS ExtensionType Values",
+          "name": "quic_transport_parameters",
+          "value": "57",
+          "recommended": "Y"
+        }
+      ],
+      "note": "Proven so far in crd-crypto (NET.2): packet protection (section 5, quic.hpp, against the appendix A packets of RFC 9001 and RFC 9369) and the handshake over QUIC (section 4 and 8, QuicHandshake, decision S11): CRYPTO data per encryption level, each level's secrets into packet and header keys, the quic_transport_parameters extension both ways, application protocols required, alerts as CRYPTO_ERROR at their level, no TLS KeyUpdate, tickets under QUIC's own binding; against OpenSSL 3.5's QUIC TLS interface both ways in versions 1 and 2. The 57 codepoint was checked against IANA's TLS ExtensionType Values on 2026-11-01. Remaining: address validation (Retry and NEW_TOKEN) in NET.2, and the transport's use of the keys (key update protocol, discarding keys, the amplification limit) in 4.2a."
     },
     {
       "id": "quic.recovery",
@@ -1671,6 +1684,42 @@
       ],
       "deprecation": null,
       "note": "NET.2 decision S10 (docs/design/network-foundation.md#certificate-compression): a client decodes zstd and zlib through crd-compression into exactly the claimed length, within the 64 KiB a plain Certificate has; a server compresses its Certificate once per context and sends the smallest form only when it is smaller. Brotli (2) is not offered: the engine has no brotli codec."
+    },
+    {
+      "id": "tls.alpn",
+      "title": "Transport Layer Security (TLS) Application-Layer Protocol Negotiation Extension",
+      "kind": "extension",
+      "state": "implemented",
+      "owner": "crypto",
+      "rows": [
+        "NET.2"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 7301",
+        "status": "current"
+      },
+      "cryptography": [],
+      "codepoints": [
+        {
+          "registry": "TLS ExtensionType Values",
+          "name": "application_layer_protocol_negotiation",
+          "value": "16",
+          "recommended": "Y"
+        }
+      ],
+      "source": {
+        "ref": "docs/sessions/2026-11-01-net-2-quic-handshake.md#rfc-7301",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-11-01",
+      "evidence": [
+        "tests/foundation/crypto/test_quic_handshake.cpp",
+        "tests/foundation/crypto/interop/tls_interop.py"
+      ],
+      "deprecation": null,
+      "note": "NET.2 decision S12 (docs/design/network-foundation.md#quic-handshake): a client offers its protocols in its order, a server selects the first of its own that the client offers (section 3.2), and with protocols on either end the two agree or the handshake fails with no_application_protocol (120): a server refuses a client that offers none, a client refuses a server that selects none. Required over QUIC (RFC 9001 section 8.1). A property of the connection, not of the session: tickets do not bind it."
     },
     {
       "id": "tls.keylog",

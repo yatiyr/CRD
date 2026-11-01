@@ -41,6 +41,12 @@
 //               accepts only when it is smaller than the plain message. A compressed Certificate is decoded into
 //               exactly the length it claims, at most kTlsMaxCertificateBytes, the limit of a plain one too, and a
 //               claim its compressed bytes cannot reach is refused before anything is reserved for it.
+//   protocols   a context may name application protocols (ALPN, RFC 7301): a client offers them in its order, a server
+//               selects the first of its own that the client offers, and with protocols configured on either end the
+//               two agree on one or the handshake fails with no_application_protocol.
+//   QUIC        a QuicHandshake runs the same handshake over QUIC (RFC 9001): CRYPTO data per encryption level instead
+//               of records, each level's secrets turned into QuicPacketKey and QuicHeaderKey, the transport parameters
+//               carried both ways and an application protocol required.
 //   threads     a context is read-only after init() and serves sessions on any thread; a session is used by one
 //               thread at a time. Sessions copy what they need, so a context may be cleared while they live.
 //   allocation  contexts, credentials and sessions allocate inside the provider at init() and while records flow.
@@ -50,6 +56,7 @@
 #include <crd/core/types.hpp>
 #include <crd/crypto/policy.hpp>
 #include <crd/crypto/provider.hpp>
+#include <crd/crypto/quic.hpp>
 #include <crd/crypto/register_ids.hpp>
 
 namespace crd::crypto
@@ -63,8 +70,11 @@ inline constexpr usize kTlsMaxPins           = 16U;    // pinned peer keys
 inline constexpr usize kTlsMaxNameBytes      = 253U;   // a DNS name (RFC 1035), the server_name's longest host name
 inline constexpr usize kTlsMaxBufferedBytes  = 65536U; // received or outgoing bytes waiting in one session
 inline constexpr usize kTlsMaxCertificateBytes = kTlsMaxBufferedBytes; // a peer's Certificate, compressed or not
+inline constexpr usize kTlsMaxProtocols     = 8U;     // application protocols (ALPN) in one configuration
+inline constexpr usize kTlsMaxProtocolListBytes = 256U; // their wire list: a length byte and 1 to 255 bytes each
 inline constexpr u8    kTlsAlertGeneralError = 117U;   // RFC 9846 section 6.2
 inline constexpr u8    kTlsAlertUserCanceled = 90U;    // RFC 9846 section 6.1
+inline constexpr u8    kTlsAlertNoApplicationProtocol = 120U; // RFC 7301 section 3.2
 
 // The bound on a session's own key updates, 2^48-1 (RFC 9846 section 4.7.3), and the fewest records a sending key may
 // be configured for: one of data, its KeyUpdate and one alert.
@@ -100,10 +110,12 @@ enum class TlsError : u8
 {
     None,
     BadConfig,       // an algorithm outside its class or the provider, no group, a client without pins, a server
-                     // without a credential, a name that is not a DNS name, a list above its bound
+                     // without a credential, a name that is not a DNS name, a list above its bound, a QUIC handshake
+                     // without an application protocol or transport parameters
     NotReady,        // the context or session holds nothing, or the call does not fit the session's state
     Full,            // the bytes would exceed kTlsMaxBufferedBytes; nothing was taken
-    PeerRefused,     // the peer's key is not pinned or its algorithm not accepted, or it names another server
+    PeerRefused,     // the peer's key is not pinned or its algorithm not accepted, it names another server, or it
+                     // agrees on no application protocol
     Failed,          // the handshake or a record failed; alert_sent() and alert_received() tell which
     Closed,          // the session is closed (close_notify)
     ProviderFailure, // the provider failed (no memory, no randomness)
@@ -168,7 +180,8 @@ struct TlsBinding
 // A client's tickets (decision S9), kept by the caller: the session hands it each ticket it receives and takes one
 // when it starts. Tickets never leave the store they were kept in, so the caller keeps one store per correlation
 // domain and connections meant to be uncorrelated share none (T15). A ticket is a secret (its resumption key): the
-// store zeroes the tickets it drops and the bytes it handed out.
+// store zeroes the tickets it drops and the bytes it handed out. A QUIC handshake keeps and takes its tickets under
+// its own binding, so a ticket of one transport is never offered on the other (the provider would not resume it).
 class TlsTicketStore
 {
 public:
@@ -210,6 +223,10 @@ struct TlsConfig
     // a server may compress its Certificate with (it sends the smallest that is smaller than the plain message); empty:
     // none, for a context whose record padding must not depend on the credential (RFC 8879 section 5).
     cont::ConstSpan<u16> certificate_compression = kTlsCertificateCompression;
+    // Application protocol identifiers (ALPN), each 1 to 255 bytes and listed once, at most kTlsMaxProtocols and
+    // kTlsMaxProtocolListBytes on the wire: a client's offer in its order, a server's in its preference. Empty: none
+    // (a stream session then negotiates none; a QUIC handshake needs at least one).
+    cont::ConstSpan<cont::StringView> application_protocols;
 };
 
 // The settings a session copies from its context.
@@ -222,6 +239,8 @@ struct TlsSettings
     u32         pin_count = 0U;
     char        server_name[kTlsMaxNameBytes + 1U] = {};
     u32         name_bytes = 0U;
+    u8          protocols[kTlsMaxProtocolListBytes] = {}; // the application protocols in ALPN's wire form
+    u32         protocol_bytes = 0U;
     u64         key_update_records = 0U;
     u64         max_key_updates    = kTlsMaxKeyUpdates;
     TlsBinding  binding;
@@ -242,6 +261,8 @@ namespace detail
 
 struct ProviderTlsContext; // the provider's context object, defined only inside crd-crypto
 struct ProviderTlsSession; // the provider's connection object, defined only inside crd-crypto
+struct ProviderBuffer;     // the provider's memory buffer, defined only inside crd-crypto
+struct TlsCallbacks;       // the provider's callbacks, defined only inside crd-crypto
 
 class TlsContext
 {
@@ -261,7 +282,7 @@ public:
     [[nodiscard]] TlsRole role() const noexcept { return m_settings.role; }
 
 private:
-    friend class TlsSession;
+    friend struct TlsCallbacks;
 
     ProviderTlsContext* m_context = nullptr;
     TlsSettings         m_settings;
@@ -274,7 +295,75 @@ struct TlsAlert
     u8   description = 0U;
 };
 
-class TlsSession
+namespace detail
+{
+// What a stream session and a QUIC handshake share: the provider's connection, the settings copied from the context
+// and what the provider's callbacks learn about the handshake (tls.cpp's TlsCallbacks write it).
+class TlsHandshakeState
+{
+public:
+    TlsHandshakeState(const TlsHandshakeState&)            = delete;
+    TlsHandshakeState& operator=(const TlsHandshakeState&) = delete;
+    TlsHandshakeState(TlsHandshakeState&&)                 = delete;
+    TlsHandshakeState& operator=(TlsHandshakeState&&)      = delete;
+
+    [[nodiscard]] TlsState state() const noexcept { return m_state; }
+
+    // After the handshake: the negotiated group and AEAD, the peer key's algorithm and identifier (a server without
+    // pins learns none: AlgorithmId{} and a zero KeyId), and whether the server asked for another key share.
+    [[nodiscard]] AlgorithmId group() const noexcept { return m_group; }
+    [[nodiscard]] AlgorithmId aead() const noexcept { return m_aead; }
+    [[nodiscard]] AlgorithmId peer_algorithm() const noexcept { return m_peer_algorithm; }
+    [[nodiscard]] KeyId       peer_key() const noexcept { return m_peer_key; }
+    [[nodiscard]] bool        hello_retry() const noexcept { return m_hello_retry; }
+
+    // After the handshake: whether it resumed a ticket (the peer key is then the one the ticket's handshake proved).
+    [[nodiscard]] bool resumed() const noexcept { return m_resumed; }
+
+    // The RFC 8879 algorithm of the compressed Certificate this session sent or received (a server's own, a client's
+    // server's); 0 when the Certificate went uncompressed or none was sent (a resumption).
+    [[nodiscard]] u16 certificate_compression() const noexcept { return m_certificate_compression; }
+
+    // The application protocol both ends agreed on (ALPN); empty before the handshake ends and when neither end
+    // configured one. Valid while the session lives.
+    [[nodiscard]] cont::StringView application_protocol() const noexcept;
+
+    [[nodiscard]] TlsAlert alert_sent() const noexcept { return m_alert_sent; }
+    [[nodiscard]] TlsAlert alert_received() const noexcept { return m_alert_received; }
+
+protected:
+    TlsHandshakeState() noexcept  = default;
+    ~TlsHandshakeState() noexcept = default;
+
+    // Frees the provider's connection (its keys zeroed) and resets everything to Idle.
+    void release() noexcept;
+    [[nodiscard]] TlsError fail(TlsError error) noexcept;
+
+    friend struct crd::crypto::TlsCallbacks;
+
+    ProviderTlsSession* m_session = nullptr;
+    TlsTicketStore*     m_tickets = nullptr;
+    TlsSettings         m_settings;
+    TlsState            m_state = TlsState::Idle;
+    AlgorithmId         m_group{};
+    AlgorithmId         m_aead{};
+    AlgorithmId         m_peer_algorithm{};
+    KeyId               m_peer_key;
+    u64                 m_updates_sent     = 0U;
+    u64                 m_updates_received = 0U;
+    u16                 m_certificate_compression = 0U;
+    bool                m_hello_retry       = false;
+    bool                m_resumed           = false;
+    bool                m_refused           = false; // the verify, name or protocol check refused the peer
+    bool                m_update_requested  = false; // a KeyUpdate asked the peer for one, not answered yet
+    bool                m_protocol_offered  = false; // a server's client offered application protocols
+    TlsAlert            m_alert_sent;
+    TlsAlert            m_alert_received;
+};
+} // namespace detail
+
+// TLS 1.3 over a byte stream (TCP, NET-SIM's virtual sockets, a session in the same process): records in, records out.
+class TlsSession : public detail::TlsHandshakeState
 {
 public:
     TlsSession() noexcept = default;
@@ -290,8 +379,6 @@ public:
     // none and ignores NewSessionTicket. BadConfig for a server with a store.
     [[nodiscard]] TlsError init(const TlsContext& context, TlsTicketStore* tickets = nullptr) noexcept;
     void                   clear() noexcept;
-
-    [[nodiscard]] TlsState state() const noexcept { return m_state; }
 
     // Takes all of `bytes` (received from the peer) and runs the handshake as far as they allow. While the session
     // handshakes, an error moves it to Failed (PeerRefused or Failed) with the alert waiting in the outgoing bytes.
@@ -321,21 +408,6 @@ public:
     // itself before key_update_records() records, and read() answers a peer's request.
     [[nodiscard]] TlsError update_keys(bool request_peer) noexcept;
 
-    // After the handshake: the negotiated group and AEAD, the peer key's algorithm and identifier (a server without
-    // pins learns none: AlgorithmId{} and a zero KeyId), and whether the server asked for another key share.
-    [[nodiscard]] AlgorithmId group() const noexcept { return m_group; }
-    [[nodiscard]] AlgorithmId aead() const noexcept { return m_aead; }
-    [[nodiscard]] AlgorithmId peer_algorithm() const noexcept { return m_peer_algorithm; }
-    [[nodiscard]] KeyId       peer_key() const noexcept { return m_peer_key; }
-    [[nodiscard]] bool        hello_retry() const noexcept { return m_hello_retry; }
-
-    // After the handshake: whether it resumed a ticket (the peer key is then the one the ticket's handshake proved).
-    [[nodiscard]] bool resumed() const noexcept { return m_resumed; }
-
-    // The RFC 8879 algorithm of the compressed Certificate this session sent or received (a server's own, a client's
-    // server's); 0 when the Certificate went uncompressed or none was sent (a resumption).
-    [[nodiscard]] u16 certificate_compression() const noexcept { return m_certificate_compression; }
-
     // The key updates sent and received, the records (data and alerts) protected so far under the current sending
     // key and the records after which the session updates it (0 before the handshake ends).
     [[nodiscard]] u64 key_updates_sent() const noexcept { return m_updates_sent; }
@@ -343,36 +415,123 @@ public:
     [[nodiscard]] u64 records_under_key() const noexcept;
     [[nodiscard]] u64 key_update_records() const noexcept { return m_key_update_records; }
 
-    [[nodiscard]] TlsAlert alert_sent() const noexcept { return m_alert_sent; }
-    [[nodiscard]] TlsAlert alert_received() const noexcept { return m_alert_received; }
-
 private:
     friend struct TlsCallbacks;
 
     [[nodiscard]] TlsError advance() noexcept;
-    [[nodiscard]] TlsError fail(TlsError error) noexcept;
     [[nodiscard]] TlsError rekey(bool request_peer) noexcept;
     [[nodiscard]] TlsError close_at_bound() noexcept;
     void                   flush() noexcept;
     [[nodiscard]] bool     flush_key_update() noexcept;
 
-    ProviderTlsSession* m_session = nullptr;
-    TlsTicketStore*     m_tickets = nullptr;
-    TlsSettings         m_settings;
-    TlsState            m_state = TlsState::Idle;
-    AlgorithmId         m_group{};
-    AlgorithmId         m_aead{};
-    AlgorithmId         m_peer_algorithm{};
-    KeyId               m_peer_key;
-    u64                 m_key_update_records = 0U;
-    u64                 m_updates_sent       = 0U;
-    u64                 m_updates_received   = 0U;
-    u16                 m_certificate_compression = 0U;
-    bool                m_hello_retry        = false;
-    bool                m_resumed            = false;
-    bool                m_refused            = false; // the verify or name check refused the peer
-    bool                m_update_requested   = false; // a KeyUpdate asked the peer for one, not answered yet
-    TlsAlert            m_alert_sent;
-    TlsAlert            m_alert_received;
+    u64 m_key_update_records = 0U;
+};
+
+// The encryption levels whose CRYPTO data a QUIC handshake carries (RFC 9001 section 4.1.3). Initial packets are
+// protected by quic_initial_secret's keys, the others by the handshake's own secrets; 0-RTT is off (decision S6), so
+// the early data level never exists.
+enum class QuicLevel : u8
+{
+    Initial,
+    Handshake,
+    Application,
+};
+
+inline constexpr usize kQuicLevels = 3U;
+
+// The bytes of transport parameters a QUIC handshake sends (RFC 9000 section 18): far above any real set, whose
+// parameters encode in a few hundred bytes. Their encoding and checks are the transport's (crd-net, 4.2a); the
+// handshake carries them, authenticated, as the quic_transport_parameters extension (57).
+inline constexpr usize kQuicMaxTransportParameterBytes = 4096U;
+
+// The QUIC error code of a TLS alert sent during a QUIC handshake (RFC 9001 section 4.8): CRYPTO_ERROR, 0x0100 plus the
+// alert, which the transport sends in a CONNECTION_CLOSE frame at the alert's level.
+[[nodiscard]] constexpr u64 quic_crypto_error(u8 alert) noexcept
+{
+    return 0x0100U + alert;
+}
+
+// The TLS 1.3 handshake over QUIC (RFC 9001; contract: docs/design/network-foundation.md#quic-handshake), sans-I/O
+// like TlsSession: the transport provides the CRYPTO data it received at each level, in order, and takes the CRYPTO
+// data to send at each level; it turns each level's secrets into packet and header keys with derive_keys(). Over the
+// same contexts as TlsSession (pins, names, groups, tickets, certificate compression), with these differences: no
+// records, no close_notify and no TLS KeyUpdate (a QUIC connection closes with CONNECTION_CLOSE and updates its keys
+// with QuicPacketKey::update; a peer's KeyUpdate fails the handshake), an application protocol is required, and the
+// transport parameters travel in the hellos. A server's NewSessionTicket goes out at the Application level with its
+// last flight; a client provides it there after the handshake.
+class QuicHandshake : public detail::TlsHandshakeState
+{
+public:
+    QuicHandshake() noexcept = default;
+    ~QuicHandshake() noexcept;
+    QuicHandshake(const QuicHandshake&)            = delete;
+    QuicHandshake& operator=(const QuicHandshake&) = delete;
+    QuicHandshake(QuicHandshake&&)                 = delete;
+    QuicHandshake& operator=(QuicHandshake&&)      = delete;
+
+    // A new handshake of `context`'s role sending `transport_parameters` (1 to kQuicMaxTransportParameterBytes, the
+    // encoded parameters of this connection: a server's include the connection IDs RFC 9000 section 7.3
+    // authenticates), replacing any previous one. A client's ClientHello is pending at the Initial level when init()
+    // returns. Tickets as TlsSession::init, kept under this transport's binding. BadConfig for a context without an
+    // application protocol, missing or oversized parameters and a server with a store.
+    [[nodiscard]] TlsError init(const TlsContext& context, cont::ConstSpan<u8> transport_parameters,
+                                TlsTicketStore* tickets = nullptr) noexcept;
+    void                   clear() noexcept;
+
+    // Takes all of `bytes`, the CRYPTO data received at `level` continuing what was provided there before (the
+    // transport reassembles CRYPTO frames by offset), and runs the handshake, or after it the post-handshake messages
+    // (a client's tickets), as far as they allow. Full when the level's unprocessed bytes would exceed receive_limit()
+    // (nothing taken; the transport closes with CRYPTO_BUFFER_EXCEEDED). An error moves the handshake to Failed:
+    // PeerRefused or Failed, with alert_sent() and alert_level() telling the CRYPTO_ERROR to close with when an alert
+    // was sent, and none when the data came at a level the handshake did not expect (a PROTOCOL_VIOLATION). NotReady in
+    // Idle and Failed.
+    [[nodiscard]] TlsError provide(QuicLevel level, cont::ConstSpan<u8> bytes) noexcept;
+
+    // The CRYPTO data waiting to be sent at `level` (at most kTlsMaxBufferedBytes across the levels; a flight beyond it
+    // fails the handshake); take() moves up to out.size() bytes of it into `out`.
+    [[nodiscard]] usize    pending(QuicLevel level) const noexcept;
+    [[nodiscard]] TlsError take(QuicLevel level, cont::Span<u8> out, usize& written) noexcept;
+
+    // The most CRYPTO data the handshake buffers unprocessed at `level` (RFC 9000 section 7.5): at least 4096 bytes,
+    // more where the peer's Certificate may be long. 0 before init().
+    [[nodiscard]] usize receive_limit(QuicLevel level) const noexcept;
+
+    // Whether the secret of `side`'s packets at `level` (Handshake or Application) is ready. A level's secret for
+    // writing comes before the peer's for reading, so a packet can always be acknowledged at its own level; a
+    // server's Application secret for writing comes before the client's Finished (half-RTT data: the client is not yet
+    // authenticated).
+    [[nodiscard]] bool has_keys(QuicLevel level, QuicSide side) const noexcept;
+
+    // Derives `side`'s packet and header protection keys at `level` for `version` (the connection's negotiated
+    // version) from that secret, and zeroes the secret: each is handed out once, and QuicPacketKey::update derives
+    // every later key phase. NotReady when it is not ready (or was handed out), BadConfig for the Initial level (whose
+    // keys quic_initial_secret gives) and an unknown version.
+    [[nodiscard]] TlsError derive_keys(QuicLevel level, QuicSide side, QuicVersion version, QuicPacketKey& packet,
+                                       QuicHeaderKey& header) noexcept;
+
+    // The peer's transport parameters as received (the transport decodes and checks them); empty until they arrive
+    // (a server's with the ClientHello, a client's with EncryptedExtensions). Valid while the handshake lives.
+    [[nodiscard]] cont::ConstSpan<u8> peer_transport_parameters() const noexcept;
+
+    // The level alert_sent() was written at (the handshake's write level then): the transport's CONNECTION_CLOSE goes
+    // at it (RFC 9001 section 4.8) and, before the handshake is confirmed, also at the lower levels its peer may still
+    // read only (RFC 9000 section 10.2.3).
+    [[nodiscard]] QuicLevel alert_level() const noexcept { return m_alert_level; }
+
+private:
+    friend struct TlsCallbacks;
+
+    [[nodiscard]] TlsError advance() noexcept;
+
+    struct Secret
+    {
+        u8          bytes[kQuicMaxSecretBytes] = {};
+        u8          size                       = 0U;
+        AlgorithmId aead{};
+    };
+
+    ProviderBuffer* m_outgoing[kQuicLevels] = {};
+    Secret          m_secrets[2][2]; // [Handshake, Application][Client, Server]
+    QuicLevel       m_alert_level = QuicLevel::Initial;
 };
 } // namespace crd::crypto

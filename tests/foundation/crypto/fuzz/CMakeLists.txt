@@ -11,9 +11,11 @@
 #                              refuses exactly the unsampleable packets and round-trips, an opened packet re-seals to
 #                              its input, a Retry verifies exactly when its tag is the computed one, and packet numbers
 #                              decode to the closest candidate.
-#   crd-fuzz-crypto-tls        TLS 1.3 sessions fed hostile bytes as a server and as a client: never established, only
-#                              the documented answers, failure is final and every buffer stays bounded; and compressed
-#                              Certificates decoded only to reachable claims within the bound.
+#   crd-fuzz-crypto-tls        TLS 1.3 sessions and QUIC handshakes fed hostile bytes (records, or CRYPTO data per
+#                              level) as a server and as a client: never established, only the documented answers,
+#                              failure is final, every buffer stays bounded and no client Application secret is
+#                              reached; and
+#                              compressed Certificates decoded only to reachable claims within the bound.
 crd_fuzz_target(crd-fuzz-crypto-policy
     SOURCES fuzz_policy.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 crd_fuzz_target(crd-fuzz-crypto-provider

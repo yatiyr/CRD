@@ -1861,7 +1861,7 @@
         "scripts/gen-register-ids.py",
         "--check"
       ],
-      "sha256": "e9662b864618985229515e0d6451ebb63023e06b3e6195d52442f30eff58601b"
+      "sha256": "ca4bb3fdabdb7ab9f5b085cdd5000995248946d78eac09f2681c3ffacf55eef4"
     },
     {
       "path": "engine/foundation/crypto/include/crd/crypto/register_ids.hpp",
@@ -1872,7 +1872,7 @@
         "scripts/gen-register-ids.py",
         "--check"
       ],
-      "sha256": "1e24cae9d5f00d4915bff5b6c5f0028aa95994ed172b5c934be78edc55a31ce5"
+      "sha256": "3fa012d7b7b75d5c2408e8e8738ba9f9122644227099143692834cc925b0f34d"
     },
     {
       "path": "engine/foundation/core/src/text_fold_table.inc",

@@ -1,11 +1,12 @@
 # crd-crypto tests: the algorithm identifiers generated from the standards register and the signed crypto policy
-# generations (NET-STD), the provider interface against Project Wycheproof's vectors, the TLS 1.3 sessions and QUIC packet
-# protection against RFC 9001's and RFC 9369's sample packets (NET.2).
+# generations (NET-STD), the provider interface against Project Wycheproof's vectors, the TLS 1.3 sessions, QUIC packet
+# protection against RFC 9001's and RFC 9369's sample packets and the TLS handshake over QUIC (NET.2).
 add_executable(crd-crypto-tests
     test_kem_prf.cpp
     test_policy.cpp
     test_provider.cpp
     test_quic.cpp
+    test_quic_handshake.cpp
     test_register_ids.cpp
     test_tls.cpp
 )
@@ -49,7 +50,8 @@ add_subdirectory(fuzz)
 # The TLS 1.3 interoperability test against the pinned OpenSSL 3.5 (CRD_BUILD_TLS_VS_OPENSSL; Linux, local only).
 # OpenSSL builds by its own Configure in a separate project, static, libraries only, with zstd (the pinned one the
 # engine uses) and zlib (the system's) for certificate compression (RFC 8879); crd-openssl-tls-peer links nothing else,
-# and the two peers meet only through tls_interop.py, which relays their records between two processes.
+# and the two peers meet only through tls_interop.py, which relays their records between two processes, or their CRYPTO
+# data per encryption level for the handshake over QUIC (OpenSSL's QUIC TLS interface against QuicHandshake).
 if(CRD_BUILD_TLS_VS_OPENSSL)
     include(ExternalProject)
     find_package(Perl REQUIRED)

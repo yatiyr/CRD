@@ -26,6 +26,17 @@ Cerid client refuses OpenSSL servers that install hostile forms (a claimed lengt
 a zlib claim no DEFLATE can reach) and survives seeded corruptions of real forms, establishing only when a zlib form
 still decodes.
 
+The handshake over QUIC (RFC 9001) runs crd-tls-peer's QuicHandshake against OpenSSL's QUIC TLS interface
+(SSL_set_quic_tls_cbs), the frames carrying CRYPTO data per encryption level: the three hybrid groups both ways in
+QUIC versions 1 and 2, a HelloRetryRequest both ways, mutual authentication both ways, the application protocol
+selected in each server's order, no common protocol refused with no_application_protocol at the Initial level both
+ways, an unpinned server key refused at the Handshake level, resumption both ways across processes and compressed
+certificates both ways. Each ClientHello is read off the wire for its transport parameters, its protocols and an empty
+legacy_session_id, beside the key share and GREASE checks above; each end reports the other's transport parameters,
+and for each of the four Handshake and Application secrets a probe: a fixed packet sealed and a fixed sample's header
+protection mask under the keys RFC 9001 section 5 derives from it, through crd-crypto on one end and OpenSSL's HKDF and
+ciphers on the other, which must be equal.
+
 Usage: tls_interop.py --cerid <crd-tls-peer> --openssl <crd-openssl-tls-peer>
 """
 
@@ -71,6 +82,14 @@ ILLEGAL_PARAMETER = 47
 MAX_CERTIFICATE = 65536  # kTlsMaxCertificateBytes
 # A certificate carrying this name twice or three times (subject, issuer, a Cerid subjectAltName) shrinks under zstd and
 # zlib alike; past 64 characters (ub-common-name) a Cerid credential carries its name in the subjectAltName alone.
+APPLICATION_LAYER_PROTOCOL_NEGOTIATION = 16
+QUIC_TRANSPORT_PARAMETERS = 57
+NO_APPLICATION_PROTOCOL = 120
+GAME = 'cerid-game/1'
+# Transport parameters as transports encode them (RFC 9000 section 18): the handshake carries them as bytes.
+QUIC_CLIENT_PARAMETERS = '0f04c1c2c3c40480100000'
+QUIC_SERVER_PARAMETERS = '0004aabbccdd0f02d1d2'
+QUIC_PROBES = ('handshake-client', 'handshake-server', 'application-client', 'application-server')
 NAME = 'a1234567890123456789012345678901234567890123456789.cerid.test'
 LONG_NAME = ('a1234567890123456789012345678901234567890123456789012345678.'
              'b12345678901234567890123456789012345678901234567890.cerid.test')
@@ -621,6 +640,233 @@ def cases(cerid_peer, openssl_peer):
                         decodes = False
                     expect(decodes, 'cerid accepted a zlib form that does not decode (byte %d)' % at)
     yield 'cerid client survives seeded corruptions of openssl\'s zstd and zlib forms', corrupted_forms
+    yield from quic_cases(cerid_peer, openssl_peer, server_public, client_public, other_public)
+
+
+def quic_pieces(frame):
+    """A QUIC frame's CRYPTO data pieces: (level, bytes), a level byte and a 24-bit length each."""
+    pieces = []
+    at = 0
+    while at + 4 <= len(frame):
+        size = int.from_bytes(frame[at + 1:at + 4], 'big')
+        pieces.append((frame[at], frame[at + 4:at + 4 + size]))
+        at += 4 + size
+    expect(at == len(frame), 'a QUIC frame ends inside a piece')
+    return pieces
+
+
+def quic_initial(frame):
+    """A QUIC frame's Initial CRYPTO data as one handshake record, so the record checks read its hellos."""
+    data = b''.join(data for level, data in quic_pieces(frame) if level == 0)
+    return bytes([22, 3, 3]) + struct.pack('>H', len(data)) + data
+
+
+def check_quic_hello(frame, parameters, protocols):
+    """A QUIC ClientHello: its transport parameters (57) as sent, its application protocols (16) in order, and an
+    empty legacy_session_id (RFC 9001 section 8.4)."""
+    record = quic_initial(frame)
+    _, body = first_handshake(record)
+    expect(body[34] == 0, 'a QUIC ClientHello carries a legacy_session_id')
+    found = dict(hello(record)[3])
+    expect(found.get(QUIC_TRANSPORT_PARAMETERS) == bytes.fromhex(parameters),
+           'the ClientHello carries transport parameters %s' % found.get(QUIC_TRANSPORT_PARAMETERS))
+    offered = []
+    data = found.get(APPLICATION_LAYER_PROTOCOL_NEGOTIATION, b'')
+    at = 2
+    while at < len(data):
+        offered.append(data[at + 1:at + 1 + data[at]].decode())
+        at += 1 + data[at]
+    expect(offered == list(protocols), 'the ClientHello offers the protocols %s' % offered)
+
+
+def check_quic(cerid_report, openssl_report, cerid_client, group, retry, protocol=GAME,
+               suite='TLS_AES_256_GCM_SHA384'):
+    """Both ends established over QUIC with `group`, the same application protocol, each other's transport
+    parameters, and the same probe for each of the four secrets: one end's keys open the other's packets."""
+    for side, report in (('cerid', cerid_report), ('openssl', openssl_report)):
+        expect(report.get('state') == 'established', '%s ended %s' % (side, report))
+        expect(report.get('hello_retry') == retry, '%s saw hello_retry %s' % (side, report.get('hello_retry')))
+        expect(report.get('alert_sent') == -1, '%s sent alert %s' % (side, report.get('alert_sent')))
+        expect(report.get('alpn') == protocol, '%s agreed on %r' % (side, report.get('alpn')))
+        expect(report.get('suite') == suite, '%s negotiated %r, expected %s' % (side, report.get('suite'), suite))
+    expect(cerid_report.get('group') == group, 'cerid negotiated %r' % cerid_report.get('group'))
+    expect(openssl_report.get('group') in openssl_names(group), 'openssl negotiated %r' % openssl_report.get('group'))
+    expect(openssl_report.get('version') == 'TLSv1.3', 'openssl ran %r' % openssl_report.get('version'))
+    client_parameters, server_parameters = QUIC_CLIENT_PARAMETERS, QUIC_SERVER_PARAMETERS
+    cerid_sent, openssl_sent = ((client_parameters, server_parameters) if cerid_client
+                                else (server_parameters, client_parameters))
+    expect(openssl_report.get('peer_parameters') == cerid_sent and cerid_report.get('peer_parameters') == openssl_sent,
+           'transport parameters received: cerid %s, openssl %s' % (cerid_report.get('peer_parameters'),
+                                                                    openssl_report.get('peer_parameters')))
+    probes = cerid_report.get('probes', {})
+    expect(sorted(probes) == sorted(QUIC_PROBES) and probes == openssl_report.get('probes'),
+           'the secrets disagree: cerid %s, openssl %s' % (probes, openssl_report.get('probes')))
+
+
+def quic_cases(cerid_peer, openssl_peer, server_public, client_public, other_public):
+    """The TLS 1.3 handshake over QUIC (RFC 9001) against OpenSSL's QUIC TLS interface."""
+
+    def quic(version, parameters, protocols=(GAME,)):
+        return ['--quic', str(version), '--parameters', parameters, '--alpn', ','.join(protocols)]
+
+    def cerid_client(groups, server_groups, group, retry, offered, version, mutual=False, extra=(), openssl_extra=(),
+                     suite='TLS_AES_256_GCM_SHA384'):
+        client, server, flights = run(
+            cerid(cerid_peer, 'client', groups, CLIENT_SEED, server_public,
+                  quic(version, QUIC_CLIENT_PARAMETERS) + list(extra)),
+            openssl(openssl_peer, 'server', server_groups, SERVER_SEED, client_public if mutual else None,
+                    extra=quic(version, QUIC_SERVER_PARAMETERS) + list(openssl_extra)))
+        check_quic_hello(flights[0][1], QUIC_CLIENT_PARAMETERS, [GAME])
+        check_wire([(who, quic_initial(frame)) for who, frame in flights], group, retry, offered, True)
+        check_quic(client, server, True, group, retry, suite=suite)
+        expect(client.get('peer_key_id') == key_id(server_public), 'cerid pinned another key')
+        expect(not mutual or server.get('peer_ok'), 'openssl did not find the pinned cerid client key')
+        return client, server, flights
+
+    def openssl_client(groups, server_groups, group, retry, offered, version, mutual=False, extra=(),
+                       openssl_extra=(), suite='TLS_AES_256_GCM_SHA384'):
+        client, server, flights = run(
+            openssl(openssl_peer, 'client', groups, CLIENT_SEED, server_public,
+                    extra=quic(version, QUIC_CLIENT_PARAMETERS) + list(openssl_extra)),
+            cerid(cerid_peer, 'server', server_groups, SERVER_SEED, client_public if mutual else None,
+                  quic(version, QUIC_SERVER_PARAMETERS) + list(extra)))
+        check_quic_hello(flights[0][1], QUIC_CLIENT_PARAMETERS, [GAME])
+        check_wire([(who, quic_initial(frame)) for who, frame in flights], group, retry, offered, False)
+        check_quic(server, client, False, group, retry, suite=suite)
+        expect(client.get('peer_ok') or client.get('resumed'), 'openssl did not find the pinned key')
+        expected = key_id(client_public) if mutual else '0' * 64
+        expect(server.get('peer_key_id') == expected, 'cerid server saw client key %s' % server.get('peer_key_id'))
+        return client, server, flights
+
+    hybrids = ('x25519mlkem768', 'secp256r1mlkem768', 'secp384r1mlkem1024')
+    for index, name in enumerate(hybrids):
+        openssl_name = GROUPS[name][3][0]
+        version = 1 + index % 2
+        yield 'QUIC v%d: cerid client, openssl server, %s' % (version, name), (
+            lambda n=name, o=openssl_name, v=version: cerid_client([n], o, n, False, [n], v))
+        yield 'QUIC v%d: openssl client, cerid server, %s' % (3 - version, name), (
+            lambda n=name, o=openssl_name, v=3 - version: openssl_client(o, [n], n, False, [n], v))
+    # OpenSSL lists TLS_AES_256_GCM_SHA384 first (SHA-384 secrets of 48 bytes); the other suites, AES-128-GCM and
+    # ChaCha20-Poly1305 with its ChaCha20 header protection, are chosen here. An OpenSSL server's order decides; a Cerid
+    # server takes its client's first suite.
+    for suite, version in (('TLS_AES_128_GCM_SHA256', 2), ('TLS_CHACHA20_POLY1305_SHA256', 1)):
+        yield 'QUIC v%d: cerid client, openssl server preferring %s' % (version, suite), (
+            lambda s=suite, v=version: cerid_client(['x25519mlkem768'], 'X25519MLKEM768', 'x25519mlkem768', False,
+                                                    ['x25519mlkem768'], v, openssl_extra=['--suites', s], suite=s))
+        yield 'QUIC v%d: openssl client offering %s, cerid server' % (3 - version, suite), (
+            lambda s=suite, v=3 - version: openssl_client('X25519MLKEM768', ['x25519mlkem768'], 'x25519mlkem768',
+                                                          False, ['x25519mlkem768'], v,
+                                                          openssl_extra=['--suites', s], suite=s))
+    yield 'QUIC: cerid client retries for openssl server, x25519mlkem768', lambda: cerid_client(
+        ['secp256r1mlkem768', 'x25519mlkem768'], 'X25519MLKEM768', 'x25519mlkem768', True, ['secp256r1mlkem768'], 1)
+    yield 'QUIC: openssl client retries for cerid server, secp384r1mlkem1024', lambda: openssl_client(
+        '*X25519MLKEM768:SecP384r1MLKEM1024', ['secp384r1mlkem1024'], 'secp384r1mlkem1024', True, ['x25519mlkem768'],
+        2)
+    yield 'QUIC: openssl client with a pinned credential, cerid server', lambda: openssl_client(
+        'X25519MLKEM768', ['x25519mlkem768'], 'x25519mlkem768', False, ['x25519mlkem768'], 1, mutual=True)
+    yield 'QUIC: cerid client with a pinned credential, openssl server', lambda: cerid_client(
+        ['x25519mlkem768'], 'X25519MLKEM768', 'x25519mlkem768', False, ['x25519mlkem768'], 2, mutual=True)
+
+    def selects(cerid_server):
+        """The server's order decides the application protocol both ways."""
+        offer = ('cerid-project/1', GAME)
+        order = (GAME, 'cerid-project/1')
+        if cerid_server:
+            client, server, flights = run(
+                openssl(openssl_peer, 'client', 'X25519MLKEM768', CLIENT_SEED, server_public,
+                        extra=quic(1, QUIC_CLIENT_PARAMETERS, offer)),
+                cerid(cerid_peer, 'server', ['x25519mlkem768'], SERVER_SEED,
+                      extra=quic(1, QUIC_SERVER_PARAMETERS, order)))
+            check_quic(server, client, False, 'x25519mlkem768', False)
+        else:
+            client, server, flights = run(
+                cerid(cerid_peer, 'client', ['x25519mlkem768'], CLIENT_SEED, server_public,
+                      quic(1, QUIC_CLIENT_PARAMETERS, offer)),
+                openssl(openssl_peer, 'server', 'X25519MLKEM768', SERVER_SEED,
+                        extra=quic(1, QUIC_SERVER_PARAMETERS, order)))
+            check_quic(client, server, True, 'x25519mlkem768', False)
+        check_quic_hello(flights[0][1], QUIC_CLIENT_PARAMETERS, offer)
+    yield 'QUIC: a cerid server selects the application protocol in its own order', lambda: selects(True)
+    yield 'QUIC: an openssl server selects the application protocol in its own order', lambda: selects(False)
+
+    def no_protocol(cerid_server):
+        """No common application protocol: the server refuses with no_application_protocol at the Initial level."""
+        other = ('cerid-agent/1',)
+        if cerid_server:
+            client, server, _ = run(
+                openssl(openssl_peer, 'client', 'X25519MLKEM768', CLIENT_SEED, server_public,
+                        extra=quic(1, QUIC_CLIENT_PARAMETERS, other)),
+                cerid(cerid_peer, 'server', ['x25519mlkem768'], SERVER_SEED, extra=quic(1, QUIC_SERVER_PARAMETERS)))
+            expect(server.get('state') == 'failed' and server.get('alert_sent') == NO_APPLICATION_PROTOCOL and
+                   server.get('alert_level') == 0, 'cerid answered with %s' % server)
+            expect(client.get('state') != 'established', 'openssl established without a protocol')
+        else:
+            client, server, _ = run(
+                cerid(cerid_peer, 'client', ['x25519mlkem768'], CLIENT_SEED, server_public,
+                      quic(1, QUIC_CLIENT_PARAMETERS, other)),
+                openssl(openssl_peer, 'server', 'X25519MLKEM768', SERVER_SEED, extra=quic(1, QUIC_SERVER_PARAMETERS)))
+            expect(server.get('state') == 'failed' and server.get('alert_sent') == NO_APPLICATION_PROTOCOL and
+                   server.get('alert_level') == 0, 'openssl answered with %s' % server)
+            expect(client.get('state') == 'handshaking' and client.get('peer_key_id') == '0' * 64,
+                   'cerid went on with %s' % client)
+    yield 'QUIC: a cerid server refuses an openssl client without a common protocol', lambda: no_protocol(True)
+    yield 'QUIC: an openssl server refuses a cerid client without a common protocol', lambda: no_protocol(False)
+
+    def unpinned():
+        client, server, _ = run(
+            cerid(cerid_peer, 'client', ['x25519mlkem768'], CLIENT_SEED, other_public, quic(1, QUIC_CLIENT_PARAMETERS)),
+            openssl(openssl_peer, 'server', 'X25519MLKEM768', SERVER_SEED, extra=quic(1, QUIC_SERVER_PARAMETERS)))
+        expect(client.get('state') == 'failed' and client.get('alert_sent') == BAD_CERTIFICATE and
+               client.get('alert_level') == 1, 'cerid accepted or misreported an unpinned key: %s' % client)
+        expect(client.get('peer_key_id') == '0' * 64, 'cerid took the unpinned key')
+    yield 'QUIC: cerid client refuses an openssl server key that is not pinned at the Handshake level', unpinned
+
+    def cerid_resumes():
+        with tempfile.TemporaryDirectory() as scratch:
+            store = ['--tickets', os.path.join(scratch, 'tickets')]
+            for again in (False, True, True):
+                client, server, flights = cerid_client(
+                    ['x25519mlkem768'], 'X25519MLKEM768', 'x25519mlkem768', False, ['x25519mlkem768'], 1,
+                    extra=store, openssl_extra=['--ticket-key', TICKET_KEYS[0]])
+                expect(client.get('resumed') is again and server.get('resumed') is again,
+                       'resumed: cerid %s, openssl %s, expected %s' % (client.get('resumed'), server.get('resumed'),
+                                                                     again))
+                if again:
+                    check_resumed_wire([(who, quic_initial(frame)) for who, frame in flights], 'x25519mlkem768')
+    yield 'QUIC: cerid client resumes with the tickets of openssl servers sharing a ticket key', cerid_resumes
+
+    def openssl_resumes():
+        with tempfile.TemporaryDirectory() as scratch:
+            session = ['--session', os.path.join(scratch, 'session')]
+            for again in (False, True, True):
+                client, server, flights = openssl_client(
+                    'X25519MLKEM768', ['x25519mlkem768'], 'x25519mlkem768', False, ['x25519mlkem768'], 2,
+                    extra=['--ticket-key', TICKET_KEYS[1]], openssl_extra=session)
+                expect(client.get('resumed') is again and server.get('resumed') is again,
+                       'resumed: cerid %s, openssl %s, expected %s' % (server.get('resumed'), client.get('resumed'),
+                                                                     again))
+                if again:
+                    check_resumed_wire([(who, quic_initial(frame)) for who, frame in flights], 'x25519mlkem768',
+                                       ticket_name(TICKET_KEYS[1]))
+    yield 'QUIC: openssl client resumes at a second cerid server of the fleet', openssl_resumes
+
+    def compressed(cerid_server):
+        if cerid_server:
+            client, server, _ = openssl_client('X25519MLKEM768', ['x25519mlkem768'], 'x25519mlkem768', False,
+                                               ['x25519mlkem768'], 1, extra=['--name', NAME],
+                                               openssl_extra=['--name', NAME, '--compression', 'zstd'])
+            expect(server.get('certificate_compression') == ZSTD and client.get('compressed_received') == ZSTD,
+                   'cerid sent %s, openssl received %s' % (server.get('certificate_compression'),
+                                                          client.get('compressed_received')))
+        else:
+            client, server, _ = cerid_client(['x25519mlkem768'], 'X25519MLKEM768', 'x25519mlkem768', False,
+                                             ['x25519mlkem768'], 2,
+                                             openssl_extra=['--name', NAME, '--compression', 'zlib'])
+            expect(client.get('certificate_compression') == ZLIB and server.get('compressed_sent') == ZLIB,
+                   'cerid received %s, openssl sent %s' % (client.get('certificate_compression'),
+                                                          server.get('compressed_sent')))
+    yield 'QUIC: openssl client decodes a cerid server\'s zstd certificate', lambda: compressed(True)
+    yield 'QUIC: cerid client decodes an openssl server\'s zlib certificate', lambda: compressed(False)
 
 
 def main():

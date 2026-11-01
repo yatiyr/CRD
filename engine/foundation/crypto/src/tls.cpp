@@ -120,6 +120,7 @@ constexpr int   kCertificateZstdLevel  = 22;      // zstd's highest: a server co
 constexpr char kTicketNameInfo[] = "cerid tls 1.3 ticket name";
 constexpr char kTicketSealInfo[] = "cerid tls 1.3 ticket seal";
 constexpr char kBindingLabel[]   = "cerid tls 1.3 binding";
+constexpr char kQuicBindingLabel[] = "cerid quic binding";
 
 // floor(2^24.5): the full-size records one AES-GCM key may protect (RFC 9846 section 5.5).
 constexpr u64 kAesGcmRecordLimit = 23726566U;
@@ -137,6 +138,43 @@ SSL* ssl_of(ProviderTlsSession* session) noexcept
 X509* x509_of(ProviderCertificate* certificate) noexcept
 {
     return reinterpret_cast<X509*>(certificate);
+}
+
+BIO* bio_of(ProviderBuffer* buffer) noexcept
+{
+    return reinterpret_cast<BIO*>(buffer);
+}
+
+// The provider's encryption level of a QUIC level, and the index of a provider level among QuicLevel (kQuicLevels for
+// the early data level, which never carries Cerid's CRYPTO data).
+ssl_encryption_level_t encryption_level_of(QuicLevel level) noexcept
+{
+    switch (level)
+    {
+    case QuicLevel::Initial:
+        return ssl_encryption_initial;
+    case QuicLevel::Handshake:
+        return ssl_encryption_handshake;
+    case QuicLevel::Application:
+        break;
+    }
+    return ssl_encryption_application;
+}
+
+usize quic_index_of(ssl_encryption_level_t level) noexcept
+{
+    switch (level)
+    {
+    case ssl_encryption_initial:
+        return static_cast<usize>(QuicLevel::Initial);
+    case ssl_encryption_handshake:
+        return static_cast<usize>(QuicLevel::Handshake);
+    case ssl_encryption_application:
+        return static_cast<usize>(QuicLevel::Application);
+    case ssl_encryption_early_data:
+        break;
+    }
+    return kQuicLevels;
 }
 
 u16 codepoint_of(const Codepoint (&table)[6], AlgorithmId algorithm) noexcept
@@ -173,6 +211,62 @@ const CipherSuite* cipher_suite_of(AlgorithmId algorithm) noexcept
         }
     }
     return nullptr;
+}
+
+// The AEAD of a negotiated cipher suite; AlgorithmId{} for none or another.
+AlgorithmId aead_of(const SSL_CIPHER* cipher) noexcept
+{
+    for (const CipherSuite& suite : kCipherSuites)
+    {
+        if (cipher != nullptr && SSL_CIPHER_get_cipher_nid(cipher) == suite.nid)
+        {
+            return suite.id;
+        }
+    }
+    return AlgorithmId{};
+}
+
+// Where `name` starts in an ALPN wire list (each name after its length byte); null when it is not listed. A list that
+// runs past its end lists nothing more.
+const u8* find_protocol(cont::ConstSpan<u8> list, cont::ConstSpan<u8> name) noexcept
+{
+    usize at = 0U;
+    while (at < list.size() && list[at] <= list.size() - at - 1U)
+    {
+        const usize length = list[at];
+        if (length == name.size() && std::memcmp(list.data() + at + 1U, name.data(), length) == 0)
+        {
+            return list.data() + at + 1U;
+        }
+        at += 1U + length;
+    }
+    return nullptr;
+}
+
+// The application protocols in ALPN's wire form: each 1 to 255 bytes, listed once, at most kTlsMaxProtocols and
+// kTlsMaxProtocolListBytes in all. False, with nothing kept, otherwise.
+bool protocols_of(cont::ConstSpan<cont::StringView> protocols, TlsSettings& settings) noexcept
+{
+    if (protocols.size() > kTlsMaxProtocols)
+    {
+        return false;
+    }
+    usize length = 0U;
+    for (const cont::StringView protocol : protocols)
+    {
+        const cont::ConstSpan<u8> name(reinterpret_cast<const u8*>(protocol.data()), protocol.size());
+        if (protocol.empty() || protocol.size() > 255U || 1U + protocol.size() > kTlsMaxProtocolListBytes - length ||
+            find_protocol(cont::ConstSpan<u8>(settings.protocols, length), name) != nullptr)
+        {
+            settings.protocol_bytes = 0U;
+            return false;
+        }
+        settings.protocols[length] = static_cast<u8>(protocol.size());
+        std::memcpy(settings.protocols + length + 1U, protocol.data(), protocol.size());
+        length += 1U + protocol.size();
+    }
+    settings.protocol_bytes = static_cast<u32>(length);
+    return true;
 }
 
 // A host name as the server_name extension carries it (RFC 6066 section 3, RFC 1035 section 2.3.1): dot-separated
@@ -322,6 +416,21 @@ TlsBinding binding_of(const TlsConfig& config, const KeyId& own) noexcept
     TlsBinding  binding;
     std::memcpy(binding.bytes, digest.bytes, sizeof(binding.bytes));
     return binding;
+}
+
+// A QUIC handshake's binding: SHA-256 of its label and the context's binding, so the tickets of a context's QUIC
+// handshakes and of its stream sessions never meet (the provider resumes a ticket only on the transport that issued
+// it). Both ends use it as the session ID context, as they use the context's.
+TlsBinding quic_binding_of(const TlsBinding& binding) noexcept
+{
+    u8          buffer[sizeof(kQuicBindingLabel) - 1U + sizeof(binding.bytes)];
+    const usize label = sizeof(kQuicBindingLabel) - 1U;
+    std::memcpy(buffer, kQuicBindingLabel, label);
+    std::memcpy(buffer + label, binding.bytes, sizeof(binding.bytes));
+    const KeyId digest = key_id_of(cont::ConstSpan<u8>(buffer));
+    TlsBinding  quic;
+    std::memcpy(quic.bytes, digest.bytes, sizeof(quic.bytes));
+    return quic;
 }
 
 void zero_ticket_keys(TlsSettings& settings) noexcept
@@ -479,14 +588,14 @@ bool detail::tls_decompress_certificate(u16 algorithm, cont::ConstSpan<u8> compr
 // The provider's callbacks, with access to the session they serve.
 struct TlsCallbacks
 {
-    static TlsSession* session_of(const SSL* ssl) noexcept
+    static detail::TlsHandshakeState* session_of(const SSL* ssl) noexcept
     {
-        return static_cast<TlsSession*>(SSL_get_ex_data(ssl, session_slot()));
+        return static_cast<detail::TlsHandshakeState*>(SSL_get_ex_data(ssl, session_slot()));
     }
 
     // Takes the peer's key from its leaf certificate when the key is of an accepted algorithm and pinned: during a
     // full handshake (verify_peer) and after a resumed one, whose ticket carried the certificate.
-    static bool pinned_peer(const SSL* ssl, TlsSession& session) noexcept
+    static bool pinned_peer(const SSL* ssl, detail::TlsHandshakeState& session) noexcept
     {
         const STACK_OF(CRYPTO_BUFFER)* chain = SSL_get0_peer_certificates(ssl);
         if (chain == nullptr || sk_CRYPTO_BUFFER_num(chain) == 0U)
@@ -534,7 +643,7 @@ struct TlsCallbacks
     // signature is not looked at: the handshake's CertificateVerify proves that the peer holds the pinned key.
     static ssl_verify_result_t verify_peer(SSL* ssl, uint8_t* out_alert) noexcept
     {
-        TlsSession* session = session_of(ssl);
+        detail::TlsHandshakeState* session = session_of(ssl);
         if (session == nullptr)
         {
             *out_alert = SSL_AD_INTERNAL_ERROR;
@@ -549,7 +658,7 @@ struct TlsCallbacks
         return ssl_verify_ok;
     }
 
-    static ssl_verify_result_t refuse(TlsSession& session, uint8_t* out_alert, u8 alert) noexcept
+    static ssl_verify_result_t refuse(detail::TlsHandshakeState& session, uint8_t* out_alert, u8 alert) noexcept
     {
         session.m_refused = true;
         *out_alert        = alert;
@@ -557,16 +666,23 @@ struct TlsCallbacks
     }
 
     // A server with a name refuses a client that names another server or none, with general_error: the alert does not
-    // tell the client which names the server holds.
+    // tell the client which names the server holds. A server with application protocols refuses a client that offers
+    // none with no_application_protocol (one that offers some meets select_protocol).
     static int check_name(SSL* ssl, int* out_alert, void*) noexcept
     {
-        TlsSession* session = session_of(ssl);
+        detail::TlsHandshakeState* session = session_of(ssl);
         if (session == nullptr)
         {
             *out_alert = SSL_AD_INTERNAL_ERROR;
             return SSL_TLSEXT_ERR_ALERT_FATAL;
         }
         const TlsSettings& settings = session->m_settings;
+        if (settings.protocol_bytes != 0U && !session->m_protocol_offered)
+        {
+            session->m_refused = true;
+            *out_alert         = kTlsAlertNoApplicationProtocol;
+            return SSL_TLSEXT_ERR_ALERT_FATAL;
+        }
         if (settings.name_bytes == 0U)
         {
             return SSL_TLSEXT_ERR_OK;
@@ -586,7 +702,7 @@ struct TlsCallbacks
     // ignored. The provider keeps its session object (0: no reference taken).
     static int keep_ticket(SSL* ssl, SSL_SESSION* ticket) noexcept
     {
-        const TlsSession* session = session_of(ssl);
+        const detail::TlsHandshakeState* session = session_of(ssl);
         if (session == nullptr || session->m_tickets == nullptr)
         {
             return 0;
@@ -613,7 +729,7 @@ struct TlsCallbacks
     static int seal_ticket(SSL* ssl, uint8_t* out, size_t* out_len, size_t max_out_len, const uint8_t* in,
                            size_t in_len) noexcept
     {
-        const TlsSession* session = session_of(ssl);
+        const detail::TlsHandshakeState* session = session_of(ssl);
         if (session == nullptr || session->m_settings.ticket_key_count == 0U || max_out_len < kTicketOverhead ||
             in_len > max_out_len - kTicketOverhead)
         {
@@ -642,7 +758,7 @@ struct TlsCallbacks
     static ssl_ticket_aead_result_t open_ticket(SSL* ssl, uint8_t* out, size_t* out_len, size_t max_out_len,
                                                 const uint8_t* in, size_t in_len) noexcept
     {
-        const TlsSession* session = session_of(ssl);
+        const detail::TlsHandshakeState* session = session_of(ssl);
         if (session == nullptr)
         {
             return ssl_ticket_aead_error;
@@ -757,7 +873,7 @@ struct TlsCallbacks
     static void observe(int is_write, int, int content_type, const void* buffer, size_t length, SSL* ssl,
                         void*) noexcept
     {
-        TlsSession* session = session_of(ssl);
+        detail::TlsHandshakeState* session = session_of(ssl);
         if (session == nullptr)
         {
             return;
@@ -800,7 +916,215 @@ struct TlsCallbacks
             }
         }
     }
+
+    // A server notes whether its client offers application protocols, before the name check reads it.
+    static ssl_select_cert_result_t note_protocols(const SSL_CLIENT_HELLO* hello) noexcept
+    {
+        detail::TlsHandshakeState* session = session_of(hello->ssl);
+        const uint8_t*             data    = nullptr;
+        size_t                     length  = 0U;
+        if (session != nullptr)
+        {
+            session->m_protocol_offered = SSL_early_callback_ctx_extension_get(
+                                              hello, TLSEXT_TYPE_application_layer_protocol_negotiation, &data,
+                                              &length) == 1;
+        }
+        return ssl_select_cert_success;
+    }
+
+    // A server selects the first of its own application protocols that its client offers (`offered`, a wire list the
+    // provider checked); none is no_application_protocol.
+    static int select_protocol(SSL* ssl, const uint8_t** out, uint8_t* out_length, const uint8_t* offered,
+                               unsigned offered_length, void*) noexcept
+    {
+        detail::TlsHandshakeState* session = session_of(ssl);
+        if (session == nullptr)
+        {
+            return SSL_TLSEXT_ERR_ALERT_FATAL;
+        }
+        const TlsSettings&        settings = session->m_settings;
+        const cont::ConstSpan<u8> client(offered, offered_length);
+        for (usize at = 0U; at < settings.protocol_bytes; at += 1U + settings.protocols[at])
+        {
+            const cont::ConstSpan<u8> name(settings.protocols + at + 1U, settings.protocols[at]);
+            const u8*                 found = find_protocol(client, name);
+            if (found != nullptr)
+            {
+                *out        = found;
+                *out_length = static_cast<uint8_t>(name.size());
+                return SSL_TLSEXT_ERR_OK;
+            }
+        }
+        session->m_refused = true;
+        return SSL_TLSEXT_ERR_ALERT_FATAL;
+    }
+
+    // Starts a connection of `context` for `state`: the provider's connection with the state in its slot, the
+    // context's settings copied, a client's server name set. NotReady for a context that holds none; BadConfig for a
+    // server with a ticket store and, with `needs_protocol`, a context without application protocols.
+    static TlsError begin(const TlsContext& context, TlsTicketStore* tickets, bool needs_protocol,
+                          detail::TlsHandshakeState& state, bssl::UniquePtr<SSL>& ssl) noexcept
+    {
+        if (!context.ready())
+        {
+            return TlsError::NotReady;
+        }
+        const TlsSettings& settings = context.m_settings;
+        if ((tickets != nullptr && settings.role == TlsRole::Server) ||
+            (needs_protocol && settings.protocol_bytes == 0U))
+        {
+            return TlsError::BadConfig;
+        }
+        ssl.reset(SSL_new(ctx_of(context.m_context)));
+        if (!ssl || !SSL_set_ex_data(ssl.get(), session_slot(), &state))
+        {
+            return TlsError::ProviderFailure;
+        }
+        state.m_settings = settings;
+        if (settings.role == TlsRole::Server)
+        {
+            SSL_set_accept_state(ssl.get());
+            return TlsError::None;
+        }
+        SSL_set_connect_state(ssl.get());
+        state.m_tickets = tickets;
+        return SSL_set_tlsext_host_name(ssl.get(), state.m_settings.server_name) == 1 ? TlsError::None
+                                                                                      : TlsError::ProviderFailure;
+    }
+
+    // A client offers a ticket from its store under the connection's binding (offer_ticket); false when the provider
+    // fails.
+    static bool offer(SSL* ssl, const detail::TlsHandshakeState& state) noexcept
+    {
+        return state.m_tickets == nullptr ||
+               offer_ticket(ssl, state.m_settings.binding, state.m_tickets->take(state.m_settings.binding));
+    }
+
+    // What a finished handshake settled: its group and AEAD, a resumption and its peer key, and the application
+    // protocol a client asked for. A client with protocols whose server selected none sends no_application_protocol
+    // (a QUIC provider refuses it earlier, RFC 9001 section 8.1).
+    static TlsError complete(SSL* ssl, detail::TlsHandshakeState& state) noexcept
+    {
+        state.m_group = algorithm_of(kGroups, SSL_get_group_id(ssl));
+        state.m_aead  = aead_of(SSL_get_current_cipher(ssl));
+        if (state.m_group == AlgorithmId{} || state.m_aead == AlgorithmId{})
+        {
+            return TlsError::ProviderFailure;
+        }
+        // A resumed handshake verified no certificate: the peer key is the one the ticket's handshake proved, which
+        // the binding (the same pins) keeps pinned.
+        state.m_resumed = SSL_session_reused(ssl) == 1;
+        if (state.m_resumed && state.m_settings.pin_count != 0U && !pinned_peer(ssl, state))
+        {
+            return TlsError::PeerRefused;
+        }
+        const uint8_t* protocol = nullptr;
+        unsigned       length   = 0U;
+        SSL_get0_alpn_selected(ssl, &protocol, &length);
+        if (state.m_settings.protocol_bytes != 0U && length == 0U)
+        {
+            state.m_refused = true;
+            (void)SSL_send_fatal_alert(ssl, kTlsAlertNoApplicationProtocol);
+            return TlsError::PeerRefused;
+        }
+        return TlsError::None;
+    }
+
+    // ---- The QUIC method (RFC 9001 section 4): the provider's hooks into a QuicHandshake ----
+
+    static QuicHandshake* quic_of(const SSL* ssl) noexcept
+    {
+        // Only a QuicHandshake's connections carry the QUIC method.
+        return static_cast<QuicHandshake*>(session_of(ssl));
+    }
+
+    // Keeps the secret of a Handshake or Application level, the peer's (read) or the handshake's own (write), for
+    // derive_keys(). The provider never yields an Initial secret, and 0-RTT is off (S6): an early data secret fails
+    // the handshake.
+    static int keep_secret(SSL* ssl, ssl_encryption_level_t level, const SSL_CIPHER* cipher, const uint8_t* secret,
+                           size_t length, bool own) noexcept
+    {
+        QuicHandshake*    handshake = quic_of(ssl);
+        const AlgorithmId aead      = aead_of(cipher);
+        if (handshake == nullptr || aead == AlgorithmId{} || length == 0U || length > kQuicMaxSecretBytes ||
+            (level != ssl_encryption_handshake && level != ssl_encryption_application))
+        {
+            return 0;
+        }
+        const bool client = (handshake->m_settings.role == TlsRole::Client) == own;
+        QuicHandshake::Secret& kept =
+            handshake->m_secrets[level == ssl_encryption_handshake ? 0U : 1U][client ? 0U : 1U];
+        std::memcpy(kept.bytes, secret, length);
+        kept.size = static_cast<u8>(length);
+        kept.aead = aead;
+        return 1;
+    }
+
+    static int set_read_secret(SSL* ssl, ssl_encryption_level_t level, const SSL_CIPHER* cipher,
+                               const uint8_t* secret, size_t length) noexcept
+    {
+        return keep_secret(ssl, level, cipher, secret, length, false);
+    }
+
+    static int set_write_secret(SSL* ssl, ssl_encryption_level_t level, const SSL_CIPHER* cipher,
+                                const uint8_t* secret, size_t length) noexcept
+    {
+        return keep_secret(ssl, level, cipher, secret, length, true);
+    }
+
+    // Queues CRYPTO data at its level; more than kTlsMaxBufferedBytes waiting across the levels fails the handshake.
+    static int add_handshake_data(SSL* ssl, ssl_encryption_level_t level, const uint8_t* data, size_t length) noexcept
+    {
+        QuicHandshake* handshake = quic_of(ssl);
+        const usize    index     = quic_index_of(level);
+        if (handshake == nullptr || index == kQuicLevels || length > kTlsMaxBufferedBytes)
+        {
+            return 0;
+        }
+        usize waiting = 0U;
+        for (usize i = 0U; i < kQuicLevels; ++i)
+        {
+            waiting += handshake->pending(static_cast<QuicLevel>(i));
+        }
+        BIO* outgoing = bio_of(handshake->m_outgoing[index]);
+        return waiting + length <= kTlsMaxBufferedBytes &&
+                       BIO_write(outgoing, data, static_cast<int>(length)) == static_cast<int>(length)
+                   ? 1
+                   : 0;
+    }
+
+    // The data is already queued per level; the transport packs it when it takes it.
+    static int flush_flight(SSL*) noexcept
+    {
+        return 1;
+    }
+
+    // Records the first fatal alert and its level: the transport closes the connection with CRYPTO_ERROR (0x0100 plus
+    // the alert) at that level (RFC 9001 section 4.8).
+    static int send_alert(SSL* ssl, ssl_encryption_level_t level, uint8_t alert) noexcept
+    {
+        QuicHandshake* handshake = quic_of(ssl);
+        const usize    index     = quic_index_of(level);
+        if (handshake == nullptr || index == kQuicLevels)
+        {
+            return 0;
+        }
+        if (!handshake->m_alert_sent.present)
+        {
+            handshake->m_alert_sent  = TlsAlert{true, alert};
+            handshake->m_alert_level = static_cast<QuicLevel>(index);
+        }
+        return 1;
+    }
 };
+
+namespace
+{
+constexpr SSL_QUIC_METHOD kQuicMethod = {
+    &TlsCallbacks::set_read_secret, &TlsCallbacks::set_write_secret, &TlsCallbacks::add_handshake_data,
+    &TlsCallbacks::flush_flight,    &TlsCallbacks::send_alert,
+};
+} // namespace
 
 namespace
 {
@@ -1093,6 +1417,10 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     settings.key_update_records = config.key_update_records;
     settings.max_key_updates    = config.max_key_updates != 0U ? config.max_key_updates : kTlsMaxKeyUpdates;
     settings.binding = binding_of(config, config.credential != nullptr ? config.credential->key_id() : KeyId{});
+    if (!protocols_of(config.application_protocols, settings))
+    {
+        return TlsError::BadConfig;
+    }
     const TicketKeysGuard guard(settings);
     if (server && !ticket_keys_of(config, settings))
     {
@@ -1226,6 +1554,20 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
             }
         }
     }
+    // Application protocols (RFC 7301): a client offers its list, a server selects from it in its own order and,
+    // through the name check, refuses a client that offers none.
+    if (settings.protocol_bytes != 0U)
+    {
+        if (!server && SSL_CTX_set_alpn_protos(context.get(), settings.protocols, settings.protocol_bytes) != 0)
+        {
+            return TlsError::ProviderFailure;
+        }
+        if (server)
+        {
+            SSL_CTX_set_select_certificate_cb(context.get(), &TlsCallbacks::note_protocols);
+            SSL_CTX_set_alpn_select_cb(context.get(), &TlsCallbacks::select_protocol, nullptr);
+        }
+    }
     SSL_CTX_set_msg_callback(context.get(), &TlsCallbacks::observe);
     if (session_slot() < 0)
     {
@@ -1234,6 +1576,51 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     m_context  = reinterpret_cast<ProviderTlsContext*>(context.release());
     m_settings = settings;
     return TlsError::None;
+}
+
+// ---- What sessions and QUIC handshakes share ----
+
+void detail::TlsHandshakeState::release() noexcept
+{
+    // SSL_free releases the connection and its keys (zeroed).
+    SSL_free(ssl_of(m_session));
+    m_session = nullptr;
+    m_tickets = nullptr;
+    zero_ticket_keys(m_settings);
+    m_settings                = TlsSettings{};
+    m_state                   = TlsState::Idle;
+    m_group                   = AlgorithmId{};
+    m_aead                    = AlgorithmId{};
+    m_peer_algorithm          = AlgorithmId{};
+    m_peer_key                = KeyId{};
+    m_updates_sent            = 0U;
+    m_updates_received        = 0U;
+    m_certificate_compression = 0U;
+    m_hello_retry             = false;
+    m_resumed                 = false;
+    m_refused                 = false;
+    m_update_requested        = false;
+    m_protocol_offered        = false;
+    m_alert_sent              = TlsAlert{};
+    m_alert_received          = TlsAlert{};
+}
+
+TlsError detail::TlsHandshakeState::fail(TlsError error) noexcept
+{
+    m_state = TlsState::Failed;
+    return error;
+}
+
+cont::StringView detail::TlsHandshakeState::application_protocol() const noexcept
+{
+    if (m_session == nullptr)
+    {
+        return {};
+    }
+    const uint8_t* protocol = nullptr;
+    unsigned       length   = 0U;
+    SSL_get0_alpn_selected(ssl_of(m_session), &protocol, &length);
+    return cont::StringView(reinterpret_cast<const char*>(protocol), length);
 }
 
 // ---- Sessions ----
@@ -1245,75 +1632,35 @@ TlsSession::~TlsSession() noexcept
 
 void TlsSession::clear() noexcept
 {
-    // SSL_free releases the connection, its keys (zeroed) and both memory buffers.
-    SSL_free(ssl_of(m_session));
-    m_session = nullptr;
-    m_tickets = nullptr;
-    zero_ticket_keys(m_settings);
-    m_settings           = TlsSettings{};
-    m_state              = TlsState::Idle;
-    m_group              = AlgorithmId{};
-    m_aead               = AlgorithmId{};
-    m_peer_algorithm     = AlgorithmId{};
-    m_peer_key           = KeyId{};
+    // The connection frees both memory buffers with itself.
+    release();
     m_key_update_records = 0U;
-    m_updates_sent       = 0U;
-    m_updates_received   = 0U;
-    m_certificate_compression = 0U;
-    m_hello_retry        = false;
-    m_resumed            = false;
-    m_refused            = false;
-    m_update_requested   = false;
-    m_alert_sent         = TlsAlert{};
-    m_alert_received     = TlsAlert{};
 }
 
 TlsError TlsSession::init(const TlsContext& context, TlsTicketStore* tickets) noexcept
 {
     clear();
-    if (!context.ready())
-    {
-        return TlsError::NotReady;
-    }
-    if (tickets != nullptr && context.m_settings.role == TlsRole::Server)
-    {
-        return TlsError::BadConfig;
-    }
     const ErrorScope     errors;
-    bssl::UniquePtr<SSL> ssl(SSL_new(ctx_of(context.m_context)));
-    bssl::UniquePtr<BIO> incoming(BIO_new(BIO_s_mem()));
-    bssl::UniquePtr<BIO> outgoing(BIO_new(BIO_s_mem()));
-    if (!ssl || !incoming || !outgoing || !SSL_set_ex_data(ssl.get(), session_slot(), this))
+    bssl::UniquePtr<SSL> ssl;
+    const TlsError       begun = TlsCallbacks::begin(context, tickets, false, *this, ssl);
+    bssl::UniquePtr<BIO> incoming(begun == TlsError::None ? BIO_new(BIO_s_mem()) : nullptr);
+    bssl::UniquePtr<BIO> outgoing(begun == TlsError::None ? BIO_new(BIO_s_mem()) : nullptr);
+    if (begun != TlsError::None || !incoming || !outgoing)
     {
-        return TlsError::ProviderFailure;
+        clear();
+        return begun != TlsError::None ? begun : TlsError::ProviderFailure;
     }
     // An empty incoming buffer means "more bytes later", never the end of the stream.
     BIO_set_mem_eof_return(incoming.get(), -1);
     SSL_set_bio(ssl.get(), incoming.release(), outgoing.release());
-    m_settings = context.m_settings;
-    if (m_settings.role == TlsRole::Client)
+    if (!TlsCallbacks::offer(ssl.get(), *this))
     {
-        SSL_set_connect_state(ssl.get());
-        if (!SSL_set_tlsext_host_name(ssl.get(), m_settings.server_name) ||
-            (tickets != nullptr && !offer_ticket(ssl.get(), m_settings.binding, tickets->take(m_settings.binding))))
-        {
-            return TlsError::ProviderFailure;
-        }
-        m_tickets = tickets;
-    }
-    else
-    {
-        SSL_set_accept_state(ssl.get());
+        clear();
+        return TlsError::ProviderFailure;
     }
     m_session = reinterpret_cast<ProviderTlsSession*>(ssl.release());
     m_state   = TlsState::Handshaking;
     return m_settings.role == TlsRole::Client ? advance() : TlsError::None;
-}
-
-TlsError TlsSession::fail(TlsError error) noexcept
-{
-    m_state = TlsState::Failed;
-    return error;
 }
 
 TlsError TlsSession::advance() noexcept
@@ -1322,26 +1669,10 @@ TlsError TlsSession::advance() noexcept
     const int result = SSL_do_handshake(ssl);
     if (result == 1)
     {
-        const SSL_CIPHER* cipher = SSL_get_current_cipher(ssl);
-        m_group                  = algorithm_of(kGroups, SSL_get_group_id(ssl));
-        m_aead                   = AlgorithmId{};
-        for (const CipherSuite& suite : kCipherSuites)
+        const TlsError completed = TlsCallbacks::complete(ssl, *this);
+        if (completed != TlsError::None)
         {
-            if (cipher != nullptr && SSL_CIPHER_get_cipher_nid(cipher) == suite.nid)
-            {
-                m_aead = suite.id;
-            }
-        }
-        if (m_group == AlgorithmId{} || m_aead == AlgorithmId{})
-        {
-            return fail(TlsError::ProviderFailure);
-        }
-        // A resumed handshake verified no certificate: the peer key is the one the ticket's handshake proved, which
-        // the binding (the same pins) keeps pinned.
-        m_resumed = SSL_session_reused(ssl) == 1;
-        if (m_resumed && m_settings.pin_count != 0U && !TlsCallbacks::pinned_peer(ssl, *this))
-        {
-            return fail(TlsError::PeerRefused);
+            return fail(completed);
         }
         const u64 limit      = tls_key_usage_limit(m_aead);
         const u64 configured = m_settings.key_update_records;
@@ -1594,5 +1925,195 @@ TlsError TlsSession::close() noexcept
     }
     m_state = TlsState::Closed;
     return TlsError::None;
+}
+
+// ---- QUIC handshakes (RFC 9001) ----
+
+QuicHandshake::~QuicHandshake() noexcept
+{
+    clear();
+}
+
+void QuicHandshake::clear() noexcept
+{
+    release();
+    for (ProviderBuffer*& outgoing : m_outgoing)
+    {
+        BIO_free(bio_of(outgoing));
+        outgoing = nullptr;
+    }
+    for (auto& level : m_secrets)
+    {
+        for (Secret& secret : level)
+        {
+            secure_zero(cont::Span<u8>(secret.bytes));
+            secret = Secret{};
+        }
+    }
+    m_alert_level = QuicLevel::Initial;
+}
+
+TlsError QuicHandshake::init(const TlsContext& context, cont::ConstSpan<u8> transport_parameters,
+                             TlsTicketStore* tickets) noexcept
+{
+    clear();
+    const ErrorScope     errors;
+    bssl::UniquePtr<SSL> ssl;
+    const TlsError       begun = TlsCallbacks::begin(context, tickets, true, *this, ssl);
+    if (begun != TlsError::None || transport_parameters.empty() ||
+        transport_parameters.size() > kQuicMaxTransportParameterBytes)
+    {
+        clear();
+        return begun != TlsError::None ? begun : TlsError::BadConfig;
+    }
+    for (ProviderBuffer*& outgoing : m_outgoing)
+    {
+        outgoing = reinterpret_cast<ProviderBuffer*>(BIO_new(BIO_s_mem()));
+    }
+    // Tickets and the session ID context under the QUIC binding; the provider takes the quic_transport_parameters
+    // extension's standard codepoint (57), never the drafts' 0xffa5.
+    m_settings.binding = quic_binding_of(m_settings.binding);
+    if (m_outgoing[0] == nullptr || m_outgoing[1] == nullptr || m_outgoing[2] == nullptr ||
+        !SSL_set_quic_method(ssl.get(), &kQuicMethod) ||
+        !SSL_set_quic_transport_params(ssl.get(), transport_parameters.data(), transport_parameters.size()) ||
+        !SSL_set_session_id_context(ssl.get(), m_settings.binding.bytes, sizeof(m_settings.binding.bytes)) ||
+        !TlsCallbacks::offer(ssl.get(), *this))
+    {
+        clear();
+        return TlsError::ProviderFailure;
+    }
+    m_session = reinterpret_cast<ProviderTlsSession*>(ssl.release());
+    m_state   = TlsState::Handshaking;
+    return m_settings.role == TlsRole::Client ? advance() : TlsError::None;
+}
+
+TlsError QuicHandshake::advance() noexcept
+{
+    SSL*      ssl    = ssl_of(m_session);
+    const int result = SSL_do_handshake(ssl);
+    if (result == 1)
+    {
+        const TlsError completed = TlsCallbacks::complete(ssl, *this);
+        if (completed != TlsError::None)
+        {
+            return fail(completed);
+        }
+        m_state = TlsState::Established;
+        return TlsError::None;
+    }
+    return SSL_get_error(ssl, result) == SSL_ERROR_WANT_READ
+               ? TlsError::None
+               : fail(m_refused ? TlsError::PeerRefused : TlsError::Failed);
+}
+
+TlsError QuicHandshake::provide(QuicLevel level, cont::ConstSpan<u8> bytes) noexcept
+{
+    if (m_state != TlsState::Handshaking && m_state != TlsState::Established)
+    {
+        return TlsError::NotReady;
+    }
+    if (bytes.empty())
+    {
+        return TlsError::None;
+    }
+    const ErrorScope errors;
+    SSL*             ssl = ssl_of(m_session);
+    if (!SSL_provide_quic_data(ssl, encryption_level_of(level), bytes.data(), bytes.size()))
+    {
+        // Past the level's limit nothing was taken; a level the handshake does not read at now is a violation.
+        return ERR_GET_REASON(ERR_peek_last_error()) == SSL_R_EXCESSIVE_MESSAGE_SIZE ? TlsError::Full
+                                                                                    : fail(TlsError::Failed);
+    }
+    if (m_state == TlsState::Handshaking)
+    {
+        return advance();
+    }
+    // After the handshake only a client's tickets may come (at the Application level); a TLS KeyUpdate, which QUIC
+    // forbids (RFC 9001 section 6), and anything else fail the handshake.
+    return SSL_process_quic_post_handshake(ssl) == 1 ? TlsError::None
+                                                     : fail(m_refused ? TlsError::PeerRefused : TlsError::Failed);
+}
+
+usize QuicHandshake::pending(QuicLevel level) const noexcept
+{
+    const usize index = static_cast<usize>(level);
+    return index < kQuicLevels && m_outgoing[index] != nullptr ? BIO_pending(bio_of(m_outgoing[index])) : 0U;
+}
+
+TlsError QuicHandshake::take(QuicLevel level, cont::Span<u8> out, usize& written) noexcept
+{
+    written           = 0U;
+    const usize index = static_cast<usize>(level);
+    if (index >= kQuicLevels || m_outgoing[index] == nullptr)
+    {
+        return TlsError::NotReady;
+    }
+    const usize count = std::min(out.size(), pending(level));
+    if (count == 0U)
+    {
+        return TlsError::None;
+    }
+    if (BIO_read(bio_of(m_outgoing[index]), out.data(), static_cast<int>(count)) != static_cast<int>(count))
+    {
+        return TlsError::ProviderFailure;
+    }
+    written = count;
+    return TlsError::None;
+}
+
+usize QuicHandshake::receive_limit(QuicLevel level) const noexcept
+{
+    return m_session != nullptr && static_cast<usize>(level) < kQuicLevels
+               ? SSL_quic_max_handshake_flight_len(ssl_of(m_session), encryption_level_of(level))
+               : 0U;
+}
+
+bool QuicHandshake::has_keys(QuicLevel level, QuicSide side) const noexcept
+{
+    if (level != QuicLevel::Handshake && level != QuicLevel::Application)
+    {
+        return false;
+    }
+    const usize at = level == QuicLevel::Handshake ? 0U : 1U;
+    return m_secrets[at][side == QuicSide::Client ? 0U : 1U].size != 0U;
+}
+
+TlsError QuicHandshake::derive_keys(QuicLevel level, QuicSide side, QuicVersion version, QuicPacketKey& packet,
+                                    QuicHeaderKey& header) noexcept
+{
+    if ((level != QuicLevel::Handshake && level != QuicLevel::Application) ||
+        !quic_version_supported(static_cast<u32>(version)))
+    {
+        return TlsError::BadConfig;
+    }
+    if (!has_keys(level, side))
+    {
+        return TlsError::NotReady;
+    }
+    const usize               at     = level == QuicLevel::Handshake ? 0U : 1U;
+    Secret&                   secret = m_secrets[at][side == QuicSide::Client ? 0U : 1U];
+    const cont::ConstSpan<u8> bytes(secret.bytes, secret.size);
+    if (packet.init(version, secret.aead, bytes) != CryptoError::None ||
+        header.init(version, secret.aead, bytes) != CryptoError::None)
+    {
+        packet.clear();
+        header.clear();
+        return TlsError::ProviderFailure;
+    }
+    secure_zero(cont::Span<u8>(secret.bytes));
+    secret = Secret{};
+    return TlsError::None;
+}
+
+cont::ConstSpan<u8> QuicHandshake::peer_transport_parameters() const noexcept
+{
+    if (m_session == nullptr)
+    {
+        return {};
+    }
+    const uint8_t* parameters = nullptr;
+    size_t         length     = 0U;
+    SSL_get_peer_quic_transport_params(ssl_of(m_session), &parameters, &length);
+    return cont::ConstSpan<u8>(parameters, length);
 }
 } // namespace crd::crypto

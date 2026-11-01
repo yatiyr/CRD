@@ -82,6 +82,8 @@ namespace iana
 {
 // quic.transport: QUIC Versions, QUIC version 1
 inline constexpr u32 kQuicVersion1 = 0x00000001U;
+// quic.tls: TLS ExtensionType Values, quic_transport_parameters
+inline constexpr u16 kTlsExtensionQuicTransportParameters = 0x0039U;
 // quic.datagram: QUIC Transport Parameters, max_datagram_frame_size
 inline constexpr u64 kQuicTpMaxDatagramFrameSize = 0x0020ULL;
 // quic.grease-bit: QUIC Transport Parameters, grease_quic_bit

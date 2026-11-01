@@ -6,7 +6,9 @@
 // set the rest is instead the ticket a client's store hands out (a ticket corrupted at rest), and nothing is received.
 // The server seals and opens tickets under a fixed key, so a seed can lead its identity with that key's name. With bit
 // 2 set the input is instead a compressed Certificate (RFC 8879) for the client's decoder: byte 1 its algorithm, three
-// bytes its claimed length, then the compressed bytes.
+// bytes its claimed length, then the compressed bytes. With bit 3 set the session is instead a QUIC handshake (RFC
+// 9001; bit 0 as above) and the rest is CRYPTO data: pieces of a level byte (taken modulo three), a 16-bit length and
+// that many bytes, each provided at its level.
 //
 // Oracles, none of them the provider's verdict on one call:
 //   * neither session is ever established: a server needs a Finished under keys derived from its own fresh share, and
@@ -17,6 +19,11 @@
 //   * the session never holds more than kTlsMaxBufferedBytes of received bytes, and its outgoing bytes are bounded;
 //   * send(), read(), close() and update_keys() are refused outside an established session (Closed once closed);
 //   * a client offered any ticket starts its handshake all the same, and keeps no ticket before it is established;
+//   * a QUIC handshake is never established either; provide() answers only None, Failed, PeerRefused or Full while it
+//     handshakes and NotReady once it failed, which is final; its CRYPTO data waiting to be sent stays bounded; a
+//     client never holds an Application secret and a server never its client's (each needs a Finished under keys
+//     from the handshake's own share); every secret it holds derives keys once; a sent alert names a level; and the
+//     transport parameters it received are at most what the input carried;
 //   * a compressed Certificate decodes only for zstd or zlib, to a claim within [4, kTlsMaxCertificateBytes] that, for
 //     zlib, its bytes can reach (restated here: DEFLATE's 1032 bytes per byte between zlib's 6 framing bytes), and a
 //     refused claim leaves the output untouched; a zlib decoding carries the Adler-32 of its output (restated) and a
@@ -31,6 +38,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 
 namespace
 {
@@ -49,6 +57,9 @@ constexpr AlgorithmId kSignatures[] = {AlgorithmId::MlDsa44, AlgorithmId::MlDsa6
                                        AlgorithmId::EcdsaSecp384r1Sha384};
 constexpr AlgorithmId kAeads[] = {AlgorithmId::Aes128Gcm, AlgorithmId::Aes256Gcm, AlgorithmId::Chacha20Poly1305};
 constexpr const char* kName    = "game.cerid.test";
+constexpr crd::containers::StringView kProtocols[] = {"cerid-game/1"};
+constexpr u8 kParameters[] = {0x04U, 0x04U, 0x80U, 0x10U, 0x00U, 0x00U}; // initial_max_data, as a transport sends it
+constexpr usize kQuicPiece = 3U; // a CRYPTO piece's level byte and 16-bit length
 
 // The fuzz server's ticket key: the bytes 0x40, 0x41, ... 0x5F.
 struct TicketKey
@@ -74,13 +85,15 @@ constexpr usize kClaimLimit     = kTlsMaxCertificateBytes + 1U; // claims above 
 constexpr usize kCompressedHead = 5U;    // mode, algorithm and the 24-bit claim
 
 // One server and one client context, built once: an Ed25519 credential from a fixed seed, every group, signature and
-// AEAD, the client pinning the server's key.
+// AEAD, the client pinning the server's key; and the same pair naming an application protocol, for QUIC.
 struct Contexts
 {
     SigningKey    key;
     TlsCredential credential;
     TlsContext    server;
     TlsContext    client;
+    TlsContext    quic_server;
+    TlsContext    quic_client;
     bool          ready = false;
 
     Contexts() noexcept
@@ -106,13 +119,20 @@ struct Contexts
         {
             return;
         }
+        config.application_protocols = kProtocols;
+        if (quic_server.init(config) != TlsError::None)
+        {
+            return;
+        }
         const KeyId pin    = credential.key_id();
         config.role        = TlsRole::Client;
         config.credential  = nullptr;
         config.ticket_key  = {};
         config.signatures  = kSignatures;
         config.pinned      = ConstSpan<KeyId>(&pin, 1U);
-        ready              = client.init(config) == TlsError::None;
+        ready              = quic_client.init(config) == TlsError::None;
+        config.application_protocols = {};
+        ready              = ready && client.init(config) == TlsError::None;
     }
 };
 
@@ -187,6 +207,64 @@ void feed(TlsSession& session, ConstSpan<u8> bytes, usize chunk) noexcept
     CRD_FUZZ_REQUIRE(session.key_updates_sent() == 0U && session.key_updates_received() == 0U);
     CRD_FUZZ_REQUIRE(session.group() == AlgorithmId{} && session.peer_key() == KeyId{});
 }
+// The CRYPTO data a QUIC handshake waits to send, taken level by level; bounded like a session's outgoing bytes.
+void drain(QuicHandshake& handshake) noexcept
+{
+    usize total = 0U;
+    for (const QuicLevel level : {QuicLevel::Initial, QuicLevel::Handshake, QuicLevel::Application})
+    {
+        u8    out[kMaxFlight];
+        usize written = 0U;
+        total += handshake.pending(level);
+        CRD_FUZZ_REQUIRE(handshake.pending(level) <= kMaxFlight);
+        CRD_FUZZ_REQUIRE(handshake.take(level, Span<u8>(out, sizeof(out)), written) == TlsError::None);
+        CRD_FUZZ_REQUIRE(handshake.pending(level) == 0U);
+    }
+    CRD_FUZZ_REQUIRE(total <= kTlsMaxBufferedBytes);
+}
+
+// Provides `data`'s CRYPTO pieces to a QUIC handshake of `client`'s role, checking every answer.
+void feed_quic(QuicHandshake& handshake, bool client, ConstSpan<u8> data) noexcept
+{
+    for (usize at = 0U; at + kQuicPiece <= data.size();)
+    {
+        const auto  level  = static_cast<QuicLevel>(data[at] % 3U);
+        const usize length = std::min((usize{data[at + 1U]} << 8U) | data[at + 2U], data.size() - at - kQuicPiece);
+        const TlsState before = handshake.state();
+        const TlsError result = handshake.provide(level, data.subspan(at + kQuicPiece, length));
+        at += kQuicPiece + length;
+        if (before == TlsState::Failed)
+        {
+            CRD_FUZZ_REQUIRE(result == TlsError::NotReady && handshake.state() == TlsState::Failed);
+            continue;
+        }
+        CRD_FUZZ_REQUIRE(result == TlsError::None || result == TlsError::Failed || result == TlsError::PeerRefused ||
+                         result == TlsError::Full);
+        CRD_FUZZ_REQUIRE((result == TlsError::Failed || result == TlsError::PeerRefused) ==
+                         (handshake.state() == TlsState::Failed));
+        CRD_FUZZ_REQUIRE(handshake.state() == TlsState::Handshaking || handshake.state() == TlsState::Failed);
+        CRD_FUZZ_REQUIRE(!handshake.alert_sent().present ||
+                         static_cast<usize>(handshake.alert_level()) < kQuicLevels);
+        CRD_FUZZ_REQUIRE(handshake.peer_transport_parameters().size() <= data.size());
+        drain(handshake);
+    }
+    CRD_FUZZ_REQUIRE(!handshake.has_keys(QuicLevel::Application, client ? QuicSide::Server : QuicSide::Client));
+    CRD_FUZZ_REQUIRE(!client || !handshake.has_keys(QuicLevel::Application, QuicSide::Client));
+    CRD_FUZZ_REQUIRE(handshake.group() == AlgorithmId{} && handshake.peer_key() == KeyId{});
+    for (const QuicLevel level : {QuicLevel::Handshake, QuicLevel::Application})
+    {
+        for (const QuicSide side : {QuicSide::Client, QuicSide::Server})
+        {
+            QuicPacketKey packet;
+            QuicHeaderKey header;
+            const bool    held = handshake.has_keys(level, side);
+            CRD_FUZZ_REQUIRE((handshake.derive_keys(level, side, QuicVersion::V1, packet, header) == TlsError::None) ==
+                             held);
+            CRD_FUZZ_REQUIRE(packet.ready() == held && header.ready() == held && !handshake.has_keys(level, side));
+        }
+    }
+}
+
 // Adler-32 (RFC 1950 section 8.2), restated.
 crd::u32 adler32_of(ConstSpan<u8> bytes) noexcept
 {
@@ -260,6 +338,16 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     Contexts& shared = contexts();
     CRD_FUZZ_REQUIRE(shared.ready);
     const bool client = (data[0] & 1U) != 0U;
+    if ((data[0] & 8U) != 0U)
+    {
+        QuicHandshake handshake;
+        CRD_FUZZ_REQUIRE(handshake.init(client ? shared.quic_client : shared.quic_server,
+                                        ConstSpan<u8>(kParameters)) == TlsError::None);
+        CRD_FUZZ_REQUIRE(handshake.pending(QuicLevel::Initial) > 0U || !client);
+        drain(handshake);
+        feed_quic(handshake, client, ConstSpan<u8>(data + 2U, size - 2U));
+        return 0;
+    }
     TlsSession session;
     if ((data[0] & 2U) != 0U)
     {
@@ -313,11 +401,25 @@ struct Writer
     }
 };
 
+// The extensions a QUIC hello carries: the application protocol (16) and the transport parameters (57).
+void protocol_and_parameters(Writer& out) noexcept
+{
+    const crd::containers::StringView protocol = kProtocols[0];
+    out.put16(iana::kTlsExtensionApplicationLayerProtocolNegotiation);
+    out.put16(2U + 1U + protocol.size());
+    out.put16(1U + protocol.size());
+    out.put(static_cast<u8>(protocol.size()));
+    out.put(reinterpret_cast<const u8*>(protocol.data()), protocol.size());
+    out.put16(0x0039U); // quic_transport_parameters (crd-net's iana::kTlsExtensionQuicTransportParameters)
+    out.put16(sizeof(kParameters));
+    out.put(kParameters, sizeof(kParameters));
+}
+
 // A TLS 1.3 ClientHello for the fuzz server: X25519 with RFC 7748's Alice's public key, Ed25519, the server's name and
 // TLS_AES_128_GCM_SHA256, in one handshake record (RFC 9846 section 4.1.2). With `ticket` it offers a ticket last
 // (psk_dhe_ke): an identity led by the server's ticket key name, a zero salt and a sealed state no key opens, and a
 // binder of the right length (RFC 9846 section 4.2.11).
-void client_hello(Writer& out, u8 mode, u8 chunk, bool ticket = false) noexcept
+void client_hello(Writer& out, u8 mode, u8 chunk, bool ticket = false, bool quic = false) noexcept
 {
     constexpr u8 alice[32] = {0x85U, 0x20U, 0xF0U, 0x09U, 0x89U, 0x30U, 0xA7U, 0x54U, 0x74U, 0x8BU, 0x7DU,
                                0xDCU, 0xB4U, 0x3EU, 0xF7U, 0x5AU, 0x0DU, 0xBFU, 0x3AU, 0x0DU, 0x26U, 0x38U,
@@ -368,6 +470,10 @@ void client_hello(Writer& out, u8 mode, u8 chunk, bool ticket = false) noexcept
     out.put16(0x001DU);
     out.put16(32U);
     out.put(alice, sizeof(alice));
+    if (quic)
+    {
+        protocol_and_parameters(out);
+    }
     if (ticket)
     {
         out.put16(0x002DU); // psk_key_exchange_modes: psk_dhe_ke
@@ -543,4 +649,50 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     }
     const u8 brotli[] = {4U, 2U, 0U, 0U, 16U, 0x0BU, 0x07U, 0x80U, 0x61U, 0x62U, 0x63U, 0x03U};
     sink.add("compressed-certificate-brotli", brotli, sizeof(brotli));
+
+    // QUIC handshakes: the hellos above as CRYPTO data at the Initial level (their messages out of their records), a
+    // QUIC ClientHello with its protocol and transport parameters, a ServerHello followed by EncryptedExtensions at the
+    // Handshake level (which a client reads under keys from Bob's share), data at a level not read yet, a TLS
+    // KeyUpdate, and a piece longer than the input.
+    const auto quic = [&sink](const char* name, u8 mode, std::initializer_list<ConstSpan<u8>> pieces, u8 level) {
+        Writer seed;
+        seed.put(static_cast<u8>(8U | mode));
+        seed.put(0U);
+        for (const ConstSpan<u8> piece : pieces)
+        {
+            seed.put(level);
+            seed.put16(piece.size());
+            seed.put(piece.data(), piece.size());
+            level = 1U;
+        }
+        sink.add(name, seed.bytes, seed.size);
+    };
+    Writer quic_hello;
+    client_hello(quic_hello, 0U, 0U, false, true);
+    const ConstSpan<u8> quic_hello_message(quic_hello.bytes + 7U, quic_hello.size - 7U);
+    quic("quic-server-client-hello", 0U, {quic_hello_message}, 0U);
+    quic("quic-server-stream-client-hello", 0U, {ConstSpan<u8>(hello.bytes + 7U, hello.size - 7U)}, 0U);
+    Writer ticket_hello;
+    client_hello(ticket_hello, 0U, 0U, true, true);
+    quic("quic-server-client-hello-with-a-forged-ticket", 0U,
+         {ConstSpan<u8>(ticket_hello.bytes + 7U, ticket_hello.size - 7U)}, 0U);
+    Writer encrypted;
+    encrypted.put(8U); // encrypted_extensions
+    const usize encrypted_message = encrypted.size;
+    encrypted.put(0U);
+    encrypted.put16(0U);
+    const usize encrypted_extensions = encrypted.size;
+    encrypted.put16(0U);
+    protocol_and_parameters(encrypted);
+    encrypted.patch16(encrypted_extensions);
+    encrypted.patch24(encrypted_message);
+    const ConstSpan<u8> server_hello_message(answer.bytes + 7U, answer.size - 7U);
+    quic("quic-client-server-hello", 1U, {server_hello_message}, 0U);
+    quic("quic-client-server-hello-encrypted-extensions", 1U,
+         {server_hello_message, ConstSpan<u8>(encrypted.bytes, encrypted.size)}, 0U);
+    constexpr u8 key_update[] = {24U, 0U, 0U, 1U, 0U};
+    quic("quic-server-handshake-level-first", 0U, {quic_hello_message}, 1U);
+    quic("quic-client-key-update", 1U, {ConstSpan<u8>(key_update)}, 0U);
+    const u8 overlong[] = {8U, 0U, 0U, 0xFFU, 0xFFU, 1U, 0U, 0U, 9U};
+    sink.add("quic-server-overlong-piece", overlong, sizeof(overlong));
 }

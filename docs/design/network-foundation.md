@@ -402,8 +402,8 @@ tests):
   HelloRetryRequest (read from the ServerHello's random).
 - **S6. Limits.** 0-RTT is off: early data may carry only operations a schema declares idempotent (the TLS 1.3
   profile, T07), so it waits for NET.2's server-authorized message schemas and anti-replay windows. `close()` is for an
-  established session (a handshake is abandoned with `clear()`). Address-validation tokens, ECH and the QUIC
-  integration are NET.2's next slices on this same interface.
+  established session (a handshake is abandoned with `clear()`). The QUIC integration is [S11](#quic-handshake);
+  address-validation tokens and ECH are NET.2's next slices on this same interface.
 - **S7. Key usage limits and key updates.** A session counts the records protected under its sending key (the
   provider's write sequence, which a new key resets) and updates the key before `key_update_records()` records: the
   negotiated AEAD's limit (`tls_key_usage_limit`: floor(2^24.5) for AES-GCM, every 64-bit sequence number for
@@ -508,7 +508,7 @@ compress_certificate offer on the wire and each end's KeyUpdate counts and compr
 [quic.hpp](../../engine/foundation/crypto/include/crd/crypto/quic.hpp) is RFC 9001 section 5 for QUIC versions 1
 and 2 (RFC 9369) over the provider interface: HKDF-Expand-Label and the AEAD keys of `provider.hpp`, and for header
 protection only the provider's AES block and ChaCha20 stream functions. The handshake decides which secrets exist
-(the QUIC integration of `tls.hpp`); framing, connection IDs and recovery are `crd-net`'s (4.2a).
+([the QUIC handshake](#quic-handshake) of `tls.hpp`); framing, connection IDs and recovery are `crd-net`'s (4.2a).
 
 - **Initial secrets** for the client-chosen Destination Connection ID (0 to 20 bytes) under each version's salt.
 - **Packet keys** (`QuicPacketKey`): the AEAD key and IV from a traffic secret with "quic key" and "quic iv"
@@ -542,6 +542,72 @@ edge; refusals, limits, a changed byte anywhere in a packet, random round trips 
 threads on one key) and the `crd-fuzz-crypto-quic` target (header protection refused exactly when unsampleable and
 restored by a round trip, an opened packet re-sealing to its input, Retry verdicts against the computed tag, packet
 numbers against a restatement of appendix A.3, and seeds whose verdicts the harness checks).
+
+<a id="quic-handshake"></a>
+### The TLS handshake over QUIC
+
+`QuicHandshake` ([tls.hpp](../../engine/foundation/crypto/include/crd/crypto/tls.hpp)) runs the TLS 1.3 handshake of
+the same contexts over QUIC (RFC 9001 sections 4 and 8, `quic.tls`) through the provider's QUIC method; a stream
+session and a QUIC handshake derive from one handshake state, so pins, names, groups and HelloRetryRequest, tickets,
+certificate compression and every provider callback are shared code. Decisions:
+
+- **S11. The QUIC handshake.** Sans-I/O as S1: `provide(level, bytes)` takes the CRYPTO data the transport received
+  at an encryption level, in order (the transport reassembles CRYPTO frames by offset), and `pending(level)` and
+  `take(level, ...)` hand back the CRYPTO data to send per level, at most `kTlsMaxBufferedBytes` across the levels (a
+  flight beyond it fails the handshake). The levels are Initial, Handshake and Application; 0-RTT is off (S6), so an
+  early data secret fails the handshake. Each level's secret of each side (`has_keys`) becomes the `QuicPacketKey`
+  and `QuicHeaderKey` of the connection's version through `derive_keys`, once: the secret is zeroed as it is handed
+  out, so no raw secret leaves `crd-crypto`, and `QuicPacketKey::update` derives every later key phase; Initial keys
+  are `quic_initial_secret`'s. A level's write secret comes before the peer's read secret, so a packet can always be
+  acknowledged at its own level, and a server's Application write secret comes before its client's Finished
+  (half-RTT; the client is not yet authenticated). The transport parameters (1 to `kQuicMaxTransportParameterBytes`,
+  the connection's own) are set at `init()` and travel in `quic_transport_parameters` (57, never the drafts' 0xffa5);
+  `peer_transport_parameters()` gives the peer's as received, and their encoding and checks are the transport's
+  ([4.2a](../ROADMAP.md#slice-4.2a)); a hello without them fails with `missing_extension`. Data at a level the
+  handshake does not read now fails it without an alert (the transport's PROTOCOL_VIOLATION); data past the level's
+  `receive_limit()` (at least 4096 bytes, RFC 9000 section 7.5) is `Full` with nothing taken (CRYPTO_BUFFER_EXCEEDED).
+  A sent alert is reported with the level it was written at (`alert_level`); the transport closes with CRYPTO_ERROR,
+  `quic_crypto_error(alert)` = 0x0100 plus the alert, at that level and, before the handshake is confirmed, at the
+  lower levels its peer may still read only (RFC 9000 section 10.2.3). There is no TLS KeyUpdate in QUIC (RFC 9001
+  section 6): a peer's fails the handshake with `unexpected_message`, and stream-only calls (`send`, `read`, `close`,
+  `update_keys`) do not exist on a QUIC handshake. A server's NewSessionTicket goes out at the Application level with
+  its last flight (the provider flushes it), and a client provides it there after the handshake. Tickets are kept and
+  offered under a QUIC binding (SHA-256 of "cerid quic binding" and the context's binding), which is also the session
+  ID context, so tickets of a context's stream sessions and QUIC handshakes never meet (the provider would not resume
+  one on the other transport).
+- **S12. Application protocols** (RFC 7301, `tls.alpn`). `TlsConfig::application_protocols` (at most
+  `kTlsMaxProtocols`, each 1 to 255 bytes and listed once, at most `kTlsMaxProtocolListBytes` on the wire) is a
+  client's offer in its order and a server's list in its preference; the server selects its first protocol that the
+  client offers (section 3.2). With protocols on either end the two agree or the handshake fails with
+  `no_application_protocol` (120) and `PeerRefused`: a server refuses a client that offers none or none of its own, and
+  a client refuses a server that selects none (over a stream, after its Finished, so the server reads the alert). A
+  QUIC handshake needs at least one (RFC 9001 section 8.1). `application_protocol()` reports the agreement. Like the
+  extension itself, a ticket does not bind the protocol: every handshake negotiates it afresh. The game and project
+  channels of D3 are separate protocol identifiers.
+
+Measured (CRYPTO bytes, X25519MLKEM768, the server's Initial and Handshake data): the ClientHello is 1,450 bytes, so
+with its packet header and tag it exceeds the 1,200-byte minimum Initial datagram and needs two Initial packets, the
+transport's to send (4.2a); a full server flight is 1,580 bytes with an Ed25519 key, 1,648 and 1,746 with ECDSA
+P-256 and P-384, and 7,580, 10,010 and 13,267 with ML-DSA-44, -65 and -87 (compressed certificates); a resumed one is
+1,259 bytes after a 1,704-byte ClientHello. A server sends at most three times what its client sent before it
+validates the client's address: with the two Initial datagrams a hybrid ClientHello takes, at least 7,200 bytes, or
+8,832 when both fill a 1,500-byte path. Every classical flight and every resumption fits in one round trip; an ML-DSA
+flight does not fit two minimum datagrams' limit, and ML-DSA-65 and -87 not even two full ones', so a post-quantum
+server validates its client's address first (Retry or NEW_TOKEN, NET.2's next slice) or resumes.
+
+Evidence: `test_quic_handshake.cpp` (every group and AEAD, every signature algorithm with mutual authentication, each
+level's keys opening the other end's packets in both versions; the levels each message and secret arrives at; a
+HelloRetryRequest at the Initial level; unpinned keys refused with their alerts at their levels; application protocols
+over QUIC and over a stream, agreed, refused both ways and required; a ClientHello without transport parameters; the
+flights against the amplification limit; tickets under the QUIC binding that never cross transports; a TLS
+KeyUpdate, data at levels not read and garbage; the receive limit; refusals; four threads), the `crd-fuzz-crypto-tls`
+target's QUIC mode (CRYPTO data per level, never established, no client Application secret, every held secret
+derived once), and `tls_interop.py` against OpenSSL 3.5's QUIC TLS interface (`SSL_set_quic_tls_cbs`): the hybrid
+groups both ways in versions 1 and 2, each of the three cipher suites, a HelloRetryRequest and mutual authentication
+both ways, protocol selection and refusal both ways, an unpinned key, resumption and certificate compression both ways,
+with the hellos read off the wire and, for each of the four secrets, a packet sealed and a mask made under the keys
+each end derives (RFC 9001 section 5 through crd-crypto on one end and OpenSSL's HKDF and ciphers on the other)
+compared byte for byte.
 
 <a id="negotiation"></a>
 ## Version and extension negotiation

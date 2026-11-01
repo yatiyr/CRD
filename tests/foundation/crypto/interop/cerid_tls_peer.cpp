@@ -4,7 +4,7 @@
 // Usage: crd-tls-peer --role client|server --groups g[,g...] --seed HEX [--pin HEX] [--name NAME]
 //                     [--key-update-records N] [--pings N] [--update requested|not-requested]
 //                     [--tickets FILE] [--ticket-key HEX] [--previous-ticket-key HEX]
-//                     [--compression zstd|zlib|both|none]
+//                     [--compression zstd|zlib|both|none] [--alpn LIST] [--quic 1|2] [--parameters HEX]
 //        crd-tls-peer --public HEX     (prints the Ed25519 public key of a seed, for the pins)
 //   groups  register names: x25519mlkem768, secp256r1mlkem768, secp384r1mlkem1024, x25519, secp256r1, secp384r1
 //   seed    the 32-byte Ed25519 private key of this end's credential
@@ -17,6 +17,9 @@
 //           this client's binding, and the newest ticket received replaces it
 //   ticket-key, previous-ticket-key  a server's 32-byte ticket keys (TlsConfig::ticket_key, previous_ticket_key)
 //   compression  TlsConfig::certificate_compression: zstd or zlib alone, both (the default) or none
+//   alpn    TlsConfig::application_protocols, comma-separated
+//   quic    a QuicHandshake (RFC 9001) instead of a TlsSession, its probes made for QUIC version 1 or 2
+//   parameters  the transport parameters a QUIC end sends (hex, at most 256 bytes)
 //
 // Frames on both streams are a 4-byte big-endian length and that many bytes of TLS records. A client writes its first
 // flight before reading; after that each end answers every frame it reads with exactly one frame (possibly empty).
@@ -24,6 +27,12 @@
 // end of input the end prints one JSON line on standard error with what it negotiated, whether it resumed, the key
 // updates each way, the algorithm of its compressed Certificate sent or received and what it read, and exits 0 (2 on
 // a usage error).
+//
+// Over QUIC a frame carries CRYPTO data as pieces: a level byte (0 Initial, 1 Handshake, 2 Application), a 24-bit
+// big-endian length and that many bytes. No application data flows; the JSON line adds the application protocol, the
+// level of the alert sent, the peer's transport parameters and one probe per secret: a fixed packet sealed and a fixed
+// sample masked under the keys QuicHandshake::derive_keys makes from it, which crd-openssl-tls-peer computes through
+// OpenSSL.
 
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/tls.hpp>
@@ -41,6 +50,7 @@ using crd::u8;
 using crd::usize;
 using crd::containers::ConstSpan;
 using crd::containers::Span;
+using crd::containers::StringView;
 using namespace crd::crypto;
 
 struct GroupName
@@ -57,8 +67,17 @@ constexpr GroupName kGroupNames[] = {
 constexpr AlgorithmId kAeads[]      = {AlgorithmId::Aes128Gcm, AlgorithmId::Aes256Gcm, AlgorithmId::Chacha20Poly1305};
 constexpr AlgorithmId kSignatures[] = {AlgorithmId::Ed25519};
 constexpr char        kPing[]       = "ping from cerid";
+constexpr usize       kPieceHeader  = 4U; // a QUIC frame piece's level byte and 24-bit length
 
-u8 g_frame[kTlsMaxBufferedBytes];
+// The probe's packet header (the associated data), payload, packet number and header protection sample: the same in
+// crd-openssl-tls-peer.
+constexpr u8  kProbeHeader[]  = {0x41U, 0xAAU, 0xBBU, 0xCCU};
+constexpr u8  kProbeSample[]  = {0x5AU, 0x5BU, 0x5CU, 0x5DU, 0x5EU, 0x5FU, 0x60U, 0x61U,
+                                 0x62U, 0x63U, 0x64U, 0x65U, 0x66U, 0x67U, 0x68U, 0x69U};
+constexpr u64 kProbeNumber    = 0x2AU;
+constexpr usize kProbePayload = 16U;
+
+u8 g_frame[kTlsMaxBufferedBytes + kQuicLevels * kPieceHeader];
 
 // A ticket store of one ticket kept in a file across processes: the binding's 32 bytes, then the ticket.
 class FileStore final : public TlsTicketStore
@@ -96,6 +115,22 @@ private:
     const char* m_path;
     u8          m_ticket[kTlsMaxBufferedBytes] = {};
 };
+
+// The TLS 1.3 cipher suite of a negotiated AEAD, by its standard name (RFC 9846 appendix B.4).
+const char* suite_name(AlgorithmId aead)
+{
+    switch (aead)
+    {
+    case AlgorithmId::Aes128Gcm:
+        return "TLS_AES_128_GCM_SHA256";
+    case AlgorithmId::Aes256Gcm:
+        return "TLS_AES_256_GCM_SHA384";
+    case AlgorithmId::Chacha20Poly1305:
+        return "TLS_CHACHA20_POLY1305_SHA256";
+    default:
+        return "";
+    }
+}
 
 const char* group_name(AlgorithmId id)
 {
@@ -161,18 +196,172 @@ bool write_frame(TlsSession& session)
            std::fflush(stdout) == 0;
 }
 
+void print_alert(const char* key, TlsAlert alert)
+{
+    std::fprintf(stderr, "\"%s\": %d", key, alert.present ? static_cast<int>(alert.description) : -1);
+}
+
+// Writes the CRYPTO data waiting at each level as one frame of pieces.
+bool write_frame(QuicHandshake& handshake)
+{
+    usize size = 0U;
+    for (usize level = 0U; level < kQuicLevels; ++level)
+    {
+        usize written = 0U;
+        if (handshake.take(static_cast<QuicLevel>(level),
+                           Span<u8>(g_frame + size + kPieceHeader, sizeof(g_frame) - size - kPieceHeader),
+                           written) != TlsError::None)
+        {
+            return false;
+        }
+        if (written != 0U)
+        {
+            g_frame[size]      = static_cast<u8>(level);
+            g_frame[size + 1U] = static_cast<u8>(written >> 16U);
+            g_frame[size + 2U] = static_cast<u8>(written >> 8U);
+            g_frame[size + 3U] = static_cast<u8>(written);
+            size += kPieceHeader + written;
+        }
+    }
+    const u8 header[4] = {static_cast<u8>(size >> 24U), static_cast<u8>(size >> 16U), static_cast<u8>(size >> 8U),
+                          static_cast<u8>(size)};
+    return std::fwrite(header, 1U, 4U, stdout) == 4U && std::fwrite(g_frame, 1U, size, stdout) == size &&
+           std::fflush(stdout) == 0;
+}
+
+// Provides a frame's pieces at their levels while the handshake lives; false for a malformed frame.
+bool provide_frame(QuicHandshake& handshake, usize size)
+{
+    usize at = 0U;
+    while (at + kPieceHeader <= size)
+    {
+        const usize length = (static_cast<usize>(g_frame[at + 1U]) << 16U) |
+                             (static_cast<usize>(g_frame[at + 2U]) << 8U) | g_frame[at + 3U];
+        if (g_frame[at] >= kQuicLevels || length > size - at - kPieceHeader)
+        {
+            return false;
+        }
+        if (handshake.state() == TlsState::Handshaking || handshake.state() == TlsState::Established)
+        {
+            (void)handshake.provide(static_cast<QuicLevel>(g_frame[at]),
+                                    ConstSpan<u8>(g_frame + at + kPieceHeader, length));
+        }
+        at += kPieceHeader + length;
+    }
+    return at == size;
+}
+
+// The probe of every secret still held, named by level and by whose packets it protects: the probe packet sealed
+// and the probe sample's mask under the keys derive_keys makes, as hex.
+void print_probes(QuicHandshake& handshake, QuicVersion version)
+{
+    constexpr QuicLevel   levels[]      = {QuicLevel::Handshake, QuicLevel::Application};
+    constexpr const char* level_names[] = {"handshake", "application"};
+    constexpr QuicSide    sides[]       = {QuicSide::Client, QuicSide::Server};
+    constexpr const char* side_names[]  = {"client", "server"};
+    bool                  first         = true;
+    std::fputs("\"probes\": {", stderr);
+    for (usize i = 0U; i < 2U; ++i)
+    {
+        for (usize j = 0U; j < 2U; ++j)
+        {
+            QuicPacketKey packet;
+            QuicHeaderKey header;
+            u8            bytes[sizeof(kProbeHeader) + kProbePayload + kQuicTagBytes] = {};
+            u8            mask[kQuicMaskBytes]                                       = {};
+            std::memcpy(bytes, kProbeHeader, sizeof(kProbeHeader));
+            for (usize k = 0U; k < kProbePayload; ++k)
+            {
+                bytes[sizeof(kProbeHeader) + k] = static_cast<u8>(k);
+            }
+            if (handshake.derive_keys(levels[i], sides[j], version, packet, header) != TlsError::None ||
+                packet.seal(kProbeNumber, Span<u8>(bytes), sizeof(kProbeHeader)) != CryptoError::None ||
+                header.mask(ConstSpan<u8>(kProbeSample), Span<u8>(mask)) != CryptoError::None)
+            {
+                continue;
+            }
+            std::fprintf(stderr, R"(%s"%s-%s": ")", first ? "" : ", ", level_names[i], side_names[j]);
+            for (usize k = sizeof(kProbeHeader); k < sizeof(bytes); ++k)
+            {
+                std::fprintf(stderr, "%02x", bytes[k]);
+            }
+            for (const u8 byte : mask)
+            {
+                std::fprintf(stderr, "%02x", byte);
+            }
+            std::fputc('"', stderr);
+            first = false;
+        }
+    }
+    std::fputs("}, ", stderr);
+}
+
+// What every report carries, a stream session's or a QUIC handshake's.
+void print_common(const detail::TlsHandshakeState& state)
+{
+    const char*      states[] = {"idle", "handshaking", "established", "closed", "failed"};
+    const KeyId      peer     = state.peer_key();
+    const StringView protocol = state.application_protocol();
+    std::fprintf(stderr, R"({"state": "%s", "group": "%s", "hello_retry": %s, "resumed": %s, "alpn": "%.*s", )",
+                 states[static_cast<int>(state.state())], group_name(state.group()),
+                 state.hello_retry() ? "true" : "false", state.resumed() ? "true" : "false",
+                 static_cast<int>(protocol.size()), protocol.data() != nullptr ? protocol.data() : "");
+    std::fputs(R"("peer_key_id": ")", stderr);
+    for (const u8 byte : peer.bytes)
+    {
+        std::fprintf(stderr, "%02x", byte);
+    }
+    std::fputs("\", ", stderr);
+    print_alert("alert_sent", state.alert_sent());
+    std::fputs(", ", stderr);
+    print_alert("alert_received", state.alert_received());
+    std::fprintf(stderr, R"(, "certificate_compression": %u, "suite": "%s", )",
+                 static_cast<unsigned>(state.certificate_compression()), suite_name(state.aead()));
+}
+
+// A QUIC handshake over the frames: a client's first flight unasked, then one frame answering each frame read.
+int run_quic(const TlsContext& context, TlsTicketStore* tickets, bool client, QuicVersion version,
+             ConstSpan<u8> parameters)
+{
+    QuicHandshake handshake;
+    if (handshake.init(context, parameters, tickets) != TlsError::None)
+    {
+        std::fputs("crd-tls-peer: the QUIC handshake could not be made\n", stderr);
+        return 1;
+    }
+    if (client && !write_frame(handshake))
+    {
+        return 1;
+    }
+    usize size = 0U;
+    while (read_frame(size))
+    {
+        if (!provide_frame(handshake, size) || !write_frame(handshake))
+        {
+            return 1;
+        }
+    }
+    print_common(handshake);
+    std::fprintf(stderr, R"("alert_level": %d, "peer_parameters": ")",
+                 handshake.alert_sent().present ? static_cast<int>(handshake.alert_level()) : -1);
+    for (const u8 byte : handshake.peer_transport_parameters())
+    {
+        std::fprintf(stderr, "%02x", byte);
+    }
+    std::fputs("\", ", stderr);
+    print_probes(handshake, version);
+    std::fputs("\"received\": \"\"}\n", stderr);
+    return 0;
+}
+
 int usage()
 {
     std::fputs("usage: crd-tls-peer --role client|server --groups g[,g...] --seed HEX [--pin HEX] [--name NAME] "
                "[--key-update-records N] [--pings N] [--update requested|not-requested] [--tickets FILE] "
-               "[--ticket-key HEX] [--previous-ticket-key HEX] [--compression zstd|zlib|both|none]\n",
+               "[--ticket-key HEX] [--previous-ticket-key HEX] [--compression zstd|zlib|both|none] [--alpn LIST] "
+               "[--quic 1|2] [--parameters HEX]\n",
                stderr);
     return 2;
-}
-
-void print_alert(const char* key, TlsAlert alert)
-{
-    std::fprintf(stderr, "\"%s\": %d", key, alert.present ? static_cast<int>(alert.description) : -1);
 }
 
 int print_public(const char* seed)
@@ -215,6 +404,11 @@ int main(int argc, char** argv)
     constexpr u16  zstd_only[]     = {iana::kCertCompressionZstd};
     constexpr u16  zlib_only[]     = {iana::kCertCompressionZlib};
     ConstSpan<u16> compression     = kTlsCertificateCompression;
+    StringView     protocols[kTlsMaxProtocols];
+    usize          protocol_count  = 0U;
+    u32            quic            = 0U;
+    u8             parameters[256] = {};
+    usize          parameter_bytes = 0U;
     for (int i = 1; i + 1 < argc; i += 2)
     {
         const char* option = argv[i];
@@ -274,6 +468,27 @@ int main(int argc, char** argv)
         else if (std::strcmp(option, "--compression") == 0 && std::strcmp(value, "both") == 0)
         {
             compression = kTlsCertificateCompression;
+        }
+        else if (std::strcmp(option, "--alpn") == 0)
+        {
+            protocol_count = 0U; // the last list given counts, as in crd-openssl-tls-peer
+            for (const char* at = value; *at != '\0' && protocol_count < kTlsMaxProtocols;)
+            {
+                const char* end    = std::strchr(at, ',');
+                const usize length = end != nullptr ? static_cast<usize>(end - at) : std::strlen(at);
+                protocols[protocol_count++] = StringView(at, length);
+                at += length + (end != nullptr ? 1U : 0U);
+            }
+        }
+        else if (std::strcmp(option, "--quic") == 0 && (std::strcmp(value, "1") == 0 || std::strcmp(value, "2") == 0))
+        {
+            quic = static_cast<u32>(value[0] - '0');
+        }
+        else if (std::strcmp(option, "--parameters") == 0 && std::strlen(value) % 2U == 0U &&
+                 std::strlen(value) / 2U <= sizeof(parameters) &&
+                 parse_hex(value, parameters, std::strlen(value) / 2U))
+        {
+            parameter_bytes = std::strlen(value) / 2U;
         }
         else if (std::strcmp(option, "--update") == 0 &&
                  (std::strcmp(value, "requested") == 0 || std::strcmp(value, "not-requested") == 0))
@@ -342,6 +557,7 @@ int main(int argc, char** argv)
     config.server_name        = name;
     config.key_update_records = key_update_records;
     config.certificate_compression = compression;
+    config.application_protocols   = ConstSpan<StringView>(protocols, protocol_count);
     if (ticket_key != nullptr)
     {
         config.ticket_key = ConstSpan<u8>(key_bytes, sizeof(key_bytes));
@@ -358,6 +574,16 @@ int main(int argc, char** argv)
     TlsContext context;
     TlsSession session;
     FileStore  store(tickets != nullptr ? tickets : "");
+    if (quic != 0U)
+    {
+        if (context.init(config) != TlsError::None)
+        {
+            std::fputs("crd-tls-peer: the context could not be made\n", stderr);
+            return 1;
+        }
+        return run_quic(context, tickets != nullptr ? &store : nullptr, client,
+                        quic == 1U ? QuicVersion::V1 : QuicVersion::V2, ConstSpan<u8>(parameters, parameter_bytes));
+    }
     if (context.init(config) != TlsError::None ||
         session.init(context, tickets != nullptr ? &store : nullptr) != TlsError::None)
     {
@@ -414,25 +640,12 @@ int main(int argc, char** argv)
         }
     }
 
-    const char* states[] = {"idle", "handshaking", "established", "closed", "failed"};
-    const KeyId peer     = session.peer_key();
-    std::fprintf(stderr, R"({"state": "%s", "group": "%s", "hello_retry": %s, "resumed": %s, "peer_key_id": ")",
-                 states[static_cast<int>(session.state())], group_name(session.group()),
-                 session.hello_retry() ? "true" : "false", session.resumed() ? "true" : "false");
-    for (const u8 byte : peer.bytes)
-    {
-        std::fprintf(stderr, "%02x", byte);
-    }
-    std::fputs("\", ", stderr);
+    print_common(session);
     std::fprintf(stderr, R"("key_updates_sent": %llu, "key_updates_received": %llu, "key_update_records": %llu, )",
                  static_cast<unsigned long long>(session.key_updates_sent()),
                  static_cast<unsigned long long>(session.key_updates_received()),
                  static_cast<unsigned long long>(session.key_update_records()));
-    print_alert("alert_sent", session.alert_sent());
-    std::fputs(", ", stderr);
-    print_alert("alert_received", session.alert_received());
-    std::fprintf(stderr, R"(, "certificate_compression": %u, "received": ")",
-                 static_cast<unsigned>(session.certificate_compression()));
+    std::fputs(R"("received": ")", stderr);
     for (usize i = 0U; i < received_size; ++i)
     {
         const char c = received[i];

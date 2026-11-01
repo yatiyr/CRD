@@ -6,7 +6,8 @@
  * Usage: crd-openssl-tls-peer --role client|server --groups LIST --seed HEX [--pin HEX] [--name NAME]
  *                             [--max-version 1.2] [--update requested|not-requested] [--session FILE]
  *                             [--ticket-key HEX] [--compression zstd|zlib|none] [--compressed-cert FILE]
- *                             [--dump-compressed FILE]
+ *                             [--dump-compressed FILE] [--alpn LIST] [--quic 1|2] [--parameters HEX]
+ *                             [--suites LIST]
  *   groups       OpenSSL's group list syntax (SSL_CTX_set1_groups_list; a '*' marks a group that gets a key share)
  *   seed         the 32-byte Ed25519 private key of this end's self-signed certificate
  *   pin          the peer's 32-byte Ed25519 public key: the peer's certificate must carry it (a server then asks for
@@ -23,22 +24,37 @@
  *   compressed-cert  a server's compressed certificate in FILE (a 4-byte big-endian uncompressed length, then the
  *                compressed bytes), installed as it is under --compression's algorithm, whatever it decodes to
  *   dump-compressed  a server writes the form it compressed to FILE in the same layout
+ *   alpn         application protocols, comma-separated: a client offers them, a server selects the first of its own
+ *                that its client offers and refuses one that offers none of them (no_application_protocol)
+ *   quic         the handshake runs over QUIC (RFC 9001) through OpenSSL's QUIC TLS interface instead of records, and
+ *                the probes are made for QUIC version 1 or 2; frames then carry CRYPTO data pieces (see below)
+ *   parameters   the transport parameters a QUIC end sends (hex, at most 256 bytes)
+ *   suites       the TLS 1.3 cipher suites, in OpenSSL's syntax and this end's order (SSL_CTX_set_ciphersuites)
  *
  * A server prefers its own group order (SSL_OP_CIPHER_SERVER_PREFERENCE), as a Cerid server does. The framing and the
  * script are crd-tls-peer's: 4-byte big-endian frame lengths, a client's first flight unasked,
  * one frame per frame read, "ping from openssl" from an established client, an echo from an established server and one
  * JSON line on standard error at the end of input, the KeyUpdate messages sent and received, the algorithm of a
- * CompressedCertificate sent and received (handshake type 25, RFC 8879) and whether the handshake resumed among it. */
+ * CompressedCertificate sent and received (handshake type 25, RFC 8879) and whether the handshake resumed among it.
+ * Over QUIC no application data flows (an established client reads post-handshake messages only), and the JSON line
+ * adds the level of the alert sent, the application protocol, the peer's transport parameters and one probe per
+ * secret: a fixed packet sealed and a fixed sample masked under the keys RFC 9001 section 5 derives from it, computed
+ * here through OpenSSL's HKDF and ciphers, which crd-tls-peer computes through crd-crypto. */
 
 #include <openssl/bio.h>
+#include <openssl/core_dispatch.h>
+#include <openssl/core_names.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
+#include <openssl/kdf.h>
+#include <openssl/params.h>
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 
 #include <ctype.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -160,6 +176,324 @@ static void observe(int write_p, int version, int content_type, const void* buff
     }
 }
 
+/* ---- QUIC (--quic): the handshake over OpenSSL's QUIC TLS interface (SSL_set_quic_tls_cbs, OpenSSL 3.5) ----
+ *
+ * A frame carries CRYPTO data as pieces: a level byte (0 Initial, 1 Handshake, 2 Application), a 24-bit big-endian
+ * length and that many bytes. OpenSSL sends at its latest write level and reads at its latest read level, so received
+ * pieces wait in one queue per level until it reads there. The secrets it yields are kept for the probes. */
+
+#define QUIC_LEVELS 4 /* OpenSSL's protection levels: none (Initial), early, handshake, application */
+#define PROBE_NUMBER 0x2A
+
+static int           g_quic_version;
+static unsigned char g_quic_in[QUIC_LEVELS][FRAME_BYTES];
+static size_t        g_quic_in_size[QUIC_LEVELS];
+static size_t        g_quic_in_read[QUIC_LEVELS];
+static uint32_t      g_read_level;
+static uint32_t      g_write_level;
+static uint32_t      g_record_level;
+static unsigned char g_quic_out[FRAME_BYTES];
+static size_t        g_quic_out_size;
+static unsigned char g_secrets[QUIC_LEVELS][2][48];
+static size_t        g_secret_size[QUIC_LEVELS][2];
+static unsigned char g_peer_parameters[1024];
+static size_t        g_peer_parameters_size;
+static unsigned char g_parameters[256];
+static size_t        g_parameters_size;
+static int           g_alert_level = -1;
+static unsigned char g_protocols[256];
+static size_t        g_protocols_size;
+
+/* The probe's packet: a 4-byte header (the associated data), 16 bytes of payload, and the sample its mask is made of
+ * (tests/foundation/crypto/interop/cerid_tls_peer.cpp computes the same through crd-crypto). */
+static const unsigned char k_probe_header[4]   = {0x41, 0xAA, 0xBB, 0xCC};
+static const unsigned char k_probe_payload[16] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+static const unsigned char k_probe_sample[16]  = {0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F, 0x60, 0x61,
+                                                  0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69};
+
+/* The frame's level of an OpenSSL protection level, and back; -1 for the early level, which Cerid never uses. */
+static int frame_level(uint32_t level)
+{
+    return level == OSSL_RECORD_PROTECTION_LEVEL_NONE        ? 0
+           : level == OSSL_RECORD_PROTECTION_LEVEL_HANDSHAKE   ? 1
+           : level == OSSL_RECORD_PROTECTION_LEVEL_APPLICATION ? 2
+                                                               : -1;
+}
+
+static const uint32_t k_protection_level[3] = {OSSL_RECORD_PROTECTION_LEVEL_NONE,
+                                               OSSL_RECORD_PROTECTION_LEVEL_HANDSHAKE,
+                                               OSSL_RECORD_PROTECTION_LEVEL_APPLICATION};
+
+static int quic_send(SSL* s, const unsigned char* buf, size_t buf_len, size_t* consumed, void* arg)
+{
+    const int level = frame_level(g_write_level);
+    (void)s;
+    (void)arg;
+    if (level < 0 || buf_len > sizeof(g_quic_out) - g_quic_out_size - 4)
+    {
+        return 0;
+    }
+    g_quic_out[g_quic_out_size]     = (unsigned char)level;
+    g_quic_out[g_quic_out_size + 1] = (unsigned char)(buf_len >> 16);
+    g_quic_out[g_quic_out_size + 2] = (unsigned char)(buf_len >> 8);
+    g_quic_out[g_quic_out_size + 3] = (unsigned char)buf_len;
+    memcpy(g_quic_out + g_quic_out_size + 4, buf, buf_len);
+    g_quic_out_size += 4 + buf_len;
+    *consumed = buf_len;
+    return 1;
+}
+
+static int quic_receive(SSL* s, const unsigned char** buf, size_t* bytes_read, void* arg)
+{
+    (void)s;
+    (void)arg;
+    g_record_level = g_read_level;
+    *buf           = g_quic_in[g_record_level] + g_quic_in_read[g_record_level];
+    *bytes_read    = g_quic_in_size[g_record_level] - g_quic_in_read[g_record_level];
+    return 1;
+}
+
+static int quic_release(SSL* s, size_t bytes_read, void* arg)
+{
+    (void)s;
+    (void)arg;
+    g_quic_in_read[g_record_level] += bytes_read;
+    return 1;
+}
+
+static int quic_secret(SSL* s, uint32_t level, int direction, const unsigned char* secret, size_t secret_len,
+                       void* arg)
+{
+    (void)s;
+    (void)arg;
+    if (frame_level(level) < 0 || secret_len > sizeof(g_secrets[0][0]) || direction < 0 || direction > 1)
+    {
+        return 0;
+    }
+    memcpy(g_secrets[level][direction], secret, secret_len);
+    g_secret_size[level][direction] = secret_len;
+    *(direction == 1 ? &g_write_level : &g_read_level) = level;
+    return 1;
+}
+
+static int quic_parameters(SSL* s, const unsigned char* params, size_t params_len, void* arg)
+{
+    (void)s;
+    (void)arg;
+    if (params_len > sizeof(g_peer_parameters))
+    {
+        return 0;
+    }
+    memcpy(g_peer_parameters, params, params_len);
+    g_peer_parameters_size = params_len;
+    return 1;
+}
+
+static int quic_alert(SSL* s, unsigned char alert_code, void* arg)
+{
+    (void)s;
+    (void)arg;
+    if (g_alert_sent < 0)
+    {
+        g_alert_sent  = alert_code;
+        g_alert_level = frame_level(g_write_level);
+    }
+    return 1;
+}
+
+static const OSSL_DISPATCH k_quic_callbacks[] = {
+    {OSSL_FUNC_SSL_QUIC_TLS_CRYPTO_SEND, (void (*)(void))quic_send},
+    {OSSL_FUNC_SSL_QUIC_TLS_CRYPTO_RECV_RCD, (void (*)(void))quic_receive},
+    {OSSL_FUNC_SSL_QUIC_TLS_CRYPTO_RELEASE_RCD, (void (*)(void))quic_release},
+    {OSSL_FUNC_SSL_QUIC_TLS_YIELD_SECRET, (void (*)(void))quic_secret},
+    {OSSL_FUNC_SSL_QUIC_TLS_GOT_TRANSPORT_PARAMS, (void (*)(void))quic_parameters},
+    {OSSL_FUNC_SSL_QUIC_TLS_ALERT, (void (*)(void))quic_alert},
+    {0, NULL},
+};
+
+/* Queues a received frame's pieces at their levels. */
+static int quic_take_frame(size_t size)
+{
+    size_t at = 0;
+    while (at + 4 <= size)
+    {
+        const size_t length = ((size_t)g_frame[at + 1] << 16) | ((size_t)g_frame[at + 2] << 8) | g_frame[at + 3];
+        if (g_frame[at] > 2 || length > size - at - 4)
+        {
+            return 0;
+        }
+        const uint32_t level = k_protection_level[g_frame[at]];
+        if (length > sizeof(g_quic_in[0]) - g_quic_in_size[level])
+        {
+            return 0;
+        }
+        memcpy(g_quic_in[level] + g_quic_in_size[level], g_frame + at + 4, length);
+        g_quic_in_size[level] += length;
+        at += 4 + length;
+    }
+    return at == size;
+}
+
+static int quic_write_frame(void)
+{
+    const unsigned char header[4] = {(unsigned char)(g_quic_out_size >> 24), (unsigned char)(g_quic_out_size >> 16),
+                                     (unsigned char)(g_quic_out_size >> 8), (unsigned char)g_quic_out_size};
+    const int written = fwrite(header, 1, 4, stdout) == 4 &&
+                        fwrite(g_quic_out, 1, g_quic_out_size, stdout) == g_quic_out_size && fflush(stdout) == 0;
+    g_quic_out_size = 0;
+    return written;
+}
+
+/* HKDF-Expand-Label (RFC 8446 section 7.1) with an empty context, through OpenSSL's HKDF. */
+static int expand_label(const EVP_MD* digest, const unsigned char* secret, size_t secret_size, const char* label,
+                        unsigned char* out, size_t out_size)
+{
+    unsigned char info[2 + 1 + 6 + 32 + 1];
+    const size_t  label_size = strlen(label);
+    size_t        at         = 0;
+    int           mode       = EVP_KDF_HKDF_MODE_EXPAND_ONLY;
+    if (label_size > 32)
+    {
+        return 0;
+    }
+    info[at++] = (unsigned char)(out_size >> 8);
+    info[at++] = (unsigned char)out_size;
+    info[at++] = (unsigned char)(6 + label_size);
+    memcpy(info + at, "tls13 ", 6);
+    at += 6;
+    memcpy(info + at, label, label_size);
+    at += label_size;
+    info[at++] = 0;
+    EVP_KDF*     kdf     = EVP_KDF_fetch(NULL, "HKDF", NULL);
+    EVP_KDF_CTX* context = kdf != NULL ? EVP_KDF_CTX_new(kdf) : NULL;
+    OSSL_PARAM   params[] = {
+        OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_DIGEST, (char*)EVP_MD_get0_name(digest), 0),
+        OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_KEY, (void*)secret, secret_size),
+        OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_INFO, info, at),
+        OSSL_PARAM_construct_int(OSSL_KDF_PARAM_MODE, &mode),
+        OSSL_PARAM_construct_end(),
+    };
+    const int derived = context != NULL && EVP_KDF_derive(context, out, out_size, params) > 0;
+    EVP_KDF_CTX_free(context);
+    EVP_KDF_free(kdf);
+    return derived;
+}
+
+/* RFC 9001 section 5 restated over OpenSSL: the probe packet sealed under the packet key and IV the secret derives
+ * (the nonce the IV exclusive-or the packet number) and the 5-byte header protection mask of the probe sample, as
+ * hex into `out` (2 * (16 + 16 + 5) + 1 bytes). */
+static int quic_probe(const SSL_CIPHER* cipher, const unsigned char* secret, size_t secret_size, char* out)
+{
+    const uint32_t     suite    = SSL_CIPHER_get_id(cipher) & 0xFFFF;
+    const EVP_MD*      digest   = suite == 0x1302 ? EVP_sha384() : EVP_sha256();
+    const EVP_CIPHER*  aead     = suite == 0x1301   ? EVP_aes_128_gcm()
+                                  : suite == 0x1302 ? EVP_aes_256_gcm()
+                                                    : EVP_chacha20_poly1305();
+    const EVP_CIPHER*  hp       = suite == 0x1301   ? EVP_aes_128_ecb()
+                                  : suite == 0x1302 ? EVP_aes_256_ecb()
+                                                    : EVP_chacha20();
+    const size_t       key_size = suite == 0x1301 ? 16 : 32;
+    const char*        prefix   = g_quic_version == 2 ? "quicv2 " : "quic ";
+    char               label[16];
+    unsigned char      key[32], iv[12], hp_key[32], sealed[32], mask[16];
+    int                length = 0;
+    EVP_CIPHER_CTX*    context = EVP_CIPHER_CTX_new();
+    int                ok      = context != NULL && (suite == 0x1301 || suite == 0x1302 || suite == 0x1303);
+    snprintf(label, sizeof(label), "%skey", prefix);
+    ok = ok && expand_label(digest, secret, secret_size, label, key, key_size);
+    snprintf(label, sizeof(label), "%siv", prefix);
+    ok = ok && expand_label(digest, secret, secret_size, label, iv, sizeof(iv));
+    snprintf(label, sizeof(label), "%shp", prefix);
+    ok = ok && expand_label(digest, secret, secret_size, label, hp_key, key_size);
+    iv[11] ^= PROBE_NUMBER;
+    ok = ok && EVP_EncryptInit_ex(context, aead, NULL, NULL, NULL) == 1 &&
+         EVP_CIPHER_CTX_ctrl(context, EVP_CTRL_AEAD_SET_IVLEN, sizeof(iv), NULL) == 1 &&
+         EVP_EncryptInit_ex(context, NULL, NULL, key, iv) == 1 &&
+         EVP_EncryptUpdate(context, NULL, &length, k_probe_header, sizeof(k_probe_header)) == 1 &&
+         EVP_EncryptUpdate(context, sealed, &length, k_probe_payload, sizeof(k_probe_payload)) == 1 &&
+         EVP_EncryptFinal_ex(context, sealed + length, &length) == 1 &&
+         EVP_CIPHER_CTX_ctrl(context, EVP_CTRL_AEAD_GET_TAG, 16, sealed + 16) == 1;
+    /* AES-ECB of the sample, or ChaCha20 keyed by the header key with the sample as its counter and nonce (OpenSSL's
+     * 16-byte ChaCha20 IV is exactly that), over zeros. */
+    memset(mask, 0, sizeof(mask));
+    ok = ok && EVP_CIPHER_CTX_reset(context) == 1 &&
+         EVP_EncryptInit_ex(context, hp, NULL, hp_key, suite == 0x1303 ? k_probe_sample : NULL) == 1 &&
+         EVP_CIPHER_CTX_set_padding(context, 0) == 1 &&
+         EVP_EncryptUpdate(context, mask, &length, suite == 0x1303 ? mask : k_probe_sample, 16) == 1;
+    EVP_CIPHER_CTX_free(context);
+    for (size_t i = 0; ok && i < 32 + 5; ++i)
+    {
+        snprintf(out + 2 * i, 3, "%02x", i < 32 ? sealed[i] : mask[i - 32]);
+    }
+    return ok;
+}
+
+/* The probes of every secret held, named by level and by whose packets it protects. */
+static void quic_print_probes(SSL* ssl, int client)
+{
+    static const char* const k_levels[] = {"handshake", "application"};
+    static const uint32_t    k_levels_of[] = {OSSL_RECORD_PROTECTION_LEVEL_HANDSHAKE,
+                                              OSSL_RECORD_PROTECTION_LEVEL_APPLICATION};
+    const SSL_CIPHER*        cipher = SSL_get_current_cipher(ssl);
+    int                      first  = 1;
+    fputs("\"probes\": {", stderr);
+    for (int i = 0; i < 2 && cipher != NULL; ++i)
+    {
+        for (int direction = 0; direction < 2; ++direction)
+        {
+            const uint32_t level = k_levels_of[i];
+            char           probe[2 * 37 + 1];
+            if (g_secret_size[level][direction] == 0 ||
+                !quic_probe(cipher, g_secrets[level][direction], g_secret_size[level][direction], probe))
+            {
+                continue;
+            }
+            /* A write secret protects this end's packets, a read secret its peer's. */
+            const int client_side = (direction == 1) == client;
+            fprintf(stderr, "%s\"%s-%s\": \"%s\"", first ? "" : ", ", k_levels[i], client_side ? "client" : "server",
+                    probe);
+            first = 0;
+        }
+    }
+    fputs("}, ", stderr);
+}
+
+/* A comma-separated protocol list in ALPN's wire form. */
+static int parse_protocols(const char* list)
+{
+    g_protocols_size = 0;
+    for (const char* at = list; *at != '\0';)
+    {
+        const char*  end    = strchr(at, ',');
+        const size_t length = end != NULL ? (size_t)(end - at) : strlen(at);
+        if (length == 0 || length > 255 || length + 1 > sizeof(g_protocols) - g_protocols_size)
+        {
+            return 0;
+        }
+        g_protocols[g_protocols_size] = (unsigned char)length;
+        memcpy(g_protocols + g_protocols_size + 1, at, length);
+        g_protocols_size += 1 + length;
+        at += length + (end != NULL ? 1 : 0);
+    }
+    return g_protocols_size > 0;
+}
+
+/* A server selects the first of its protocols its client offers; none is no_application_protocol. */
+static int select_protocol(SSL* ssl, const unsigned char** out, unsigned char* out_len, const unsigned char* in,
+                           unsigned int in_len, void* arg)
+{
+    unsigned char* selected = NULL;
+    (void)ssl;
+    (void)arg;
+    if (SSL_select_next_proto(&selected, out_len, g_protocols, (unsigned int)g_protocols_size, in, in_len) !=
+        OPENSSL_NPN_NEGOTIATED)
+    {
+        return SSL_TLSEXT_ERR_ALERT_FATAL;
+    }
+    *out = selected;
+    return SSL_TLSEXT_ERR_OK;
+}
+
 /* Every session a server's ticket makes replaces the one in the session file. */
 static int keep_session(SSL* ssl, SSL_SESSION* session)
 {
@@ -221,7 +555,8 @@ static int usage(void)
 {
     fputs("usage: crd-openssl-tls-peer --role client|server --groups LIST --seed HEX [--pin HEX] [--name NAME] "
           "[--max-version 1.2] [--update requested|not-requested] [--session FILE] [--ticket-key HEX] "
-          "[--compression zstd|zlib|none] [--compressed-cert FILE] [--dump-compressed FILE]\n",
+          "[--compression zstd|zlib|none] [--compressed-cert FILE] [--dump-compressed FILE] [--alpn LIST] "
+          "[--quic 1|2] [--parameters HEX] [--suites LIST]\n",
           stderr);
     return 2;
 }
@@ -295,6 +630,7 @@ int main(int argc, char** argv)
     const char* compression = NULL;
     const char* compressed  = NULL;
     const char* dump        = NULL;
+    const char* suites      = NULL;
     for (int i = 1; i + 1 < argc; i += 2)
     {
         if (strcmp(argv[i], "--role") == 0)
@@ -321,6 +657,10 @@ int main(int argc, char** argv)
         {
             max_version = argv[i + 1];
         }
+        else if (strcmp(argv[i], "--suites") == 0)
+        {
+            suites = argv[i + 1];
+        }
         else if (strcmp(argv[i], "--session") == 0)
         {
             g_session_path = argv[i + 1];
@@ -340,6 +680,23 @@ int main(int argc, char** argv)
         else if (strcmp(argv[i], "--dump-compressed") == 0)
         {
             dump = argv[i + 1];
+        }
+        else if (strcmp(argv[i], "--alpn") == 0)
+        {
+            if (!parse_protocols(argv[i + 1]))
+            {
+                return usage();
+            }
+        }
+        else if (strcmp(argv[i], "--quic") == 0 && (strcmp(argv[i + 1], "1") == 0 || strcmp(argv[i + 1], "2") == 0))
+        {
+            g_quic_version = argv[i + 1][0] - '0';
+        }
+        else if (strcmp(argv[i], "--parameters") == 0 && strlen(argv[i + 1]) % 2 == 0 &&
+                 strlen(argv[i + 1]) / 2 <= sizeof(g_parameters) &&
+                 parse_hex(argv[i + 1], g_parameters, strlen(argv[i + 1]) / 2))
+        {
+            g_parameters_size = strlen(argv[i + 1]) / 2;
         }
         else if (strcmp(argv[i], "--update") == 0 &&
                  (strcmp(argv[i + 1], "requested") == 0 || strcmp(argv[i + 1], "not-requested") == 0))
@@ -369,6 +726,7 @@ int main(int argc, char** argv)
     SSL_CTX*  context     = SSL_CTX_new(TLS_method());
     if (certificate == NULL || context == NULL || !SSL_CTX_set_min_proto_version(context, version) ||
         !SSL_CTX_set_max_proto_version(context, version) || !SSL_CTX_set1_groups_list(context, groups) ||
+        (suites != NULL && !SSL_CTX_set_ciphersuites(context, suites)) ||
         !SSL_CTX_use_certificate(context, certificate) || !SSL_CTX_use_PrivateKey(context, key))
     {
         ERR_print_errors_fp(stderr);
@@ -436,12 +794,26 @@ int main(int argc, char** argv)
     {
         SSL_CTX_set_verify(context, SSL_VERIFY_PEER | (client ? 0 : SSL_VERIFY_FAIL_IF_NO_PEER_CERT), verify_pin);
     }
+    if (g_protocols_size > 0)
+    {
+        if (client && SSL_CTX_set_alpn_protos(context, g_protocols, (unsigned int)g_protocols_size) != 0)
+        {
+            return 1;
+        }
+        if (!client)
+        {
+            SSL_CTX_set_alpn_select_cb(context, select_protocol, NULL);
+        }
+    }
     SSL_CTX_set_msg_callback(context, observe);
     SSL* ssl      = SSL_new(context);
     BIO* incoming = BIO_new(BIO_s_mem());
     BIO* outgoing = BIO_new(BIO_s_mem());
-    if (ssl == NULL || incoming == NULL || outgoing == NULL)
+    if (ssl == NULL || incoming == NULL || outgoing == NULL || (g_quic_version != 0) != (g_parameters_size > 0) ||
+        (g_quic_version != 0 && (!SSL_set_quic_tls_cbs(ssl, k_quic_callbacks, NULL) ||
+                                 !SSL_set_quic_tls_transport_params(ssl, g_parameters, g_parameters_size))))
     {
+        ERR_print_errors_fp(stderr);
         return 1;
     }
     BIO_set_mem_eof_return(incoming, -1);
@@ -457,7 +829,7 @@ int main(int argc, char** argv)
             SSL_SESSION_free(offered);
         }
         SSL_do_handshake(ssl);
-        if (!write_frame(outgoing))
+        if (!(g_quic_version != 0 ? quic_write_frame() : write_frame(outgoing)))
         {
             return 1;
         }
@@ -474,7 +846,8 @@ int main(int argc, char** argv)
     size_t size          = 0;
     while (read_frame(&size))
     {
-        if (!failed && size > 0 && BIO_write(incoming, g_frame, (int)size) != (int)size)
+        if (g_quic_version != 0 ? !quic_take_frame(size)
+                                : !failed && size > 0 && BIO_write(incoming, g_frame, (int)size) != (int)size)
         {
             return 1;
         }
@@ -483,7 +856,18 @@ int main(int argc, char** argv)
             const int result = SSL_do_handshake(ssl);
             failed           = result <= 0 && SSL_get_error(ssl, result) != SSL_ERROR_WANT_READ;
         }
-        if (!failed && SSL_is_init_finished(ssl))
+        if (!failed && SSL_is_init_finished(ssl) && g_quic_version != 0)
+        {
+            /* Post-handshake messages (a client's tickets) are read through SSL_read; no application data comes. */
+            unsigned char plain[16];
+            size_t        got = 0;
+            if (!SSL_read_ex(ssl, plain, sizeof(plain), &got))
+            {
+                const int reason = SSL_get_error(ssl, 0);
+                failed           = reason != SSL_ERROR_WANT_READ && reason != SSL_ERROR_ZERO_RETURN;
+            }
+        }
+        else if (!failed && SSL_is_init_finished(ssl))
         {
             unsigned char plain[4096];
             for (;;)
@@ -522,7 +906,7 @@ int main(int argc, char** argv)
                 failed = SSL_write(ssl, k_ping, 0) < 0;
             }
         }
-        if (!write_frame(outgoing))
+        if (!(g_quic_version != 0 ? quic_write_frame() : write_frame(outgoing)))
         {
             return 1;
         }
@@ -541,6 +925,22 @@ int main(int argc, char** argv)
             g_updates_received, established && SSL_session_reused(ssl) ? "true" : "false");
     fprintf(stderr, "\"compressed_sent\": %d, \"compressed_received\": %d, ", g_compressed_sent,
             g_compressed_received);
+    const unsigned char* protocol        = NULL;
+    unsigned int         protocol_length = 0;
+    SSL_get0_alpn_selected(ssl, &protocol, &protocol_length);
+    const SSL_CIPHER*    cipher          = established ? SSL_get_current_cipher(ssl) : NULL;
+    fprintf(stderr, "\"alpn\": \"%.*s\", \"suite\": \"%s\", ", (int)protocol_length,
+            protocol != NULL ? (const char*)protocol : "", cipher != NULL ? SSL_CIPHER_get_name(cipher) : "");
+    if (g_quic_version != 0)
+    {
+        fprintf(stderr, "\"alert_level\": %d, \"peer_parameters\": \"", g_alert_level);
+        for (size_t i = 0; i < g_peer_parameters_size; ++i)
+        {
+            fprintf(stderr, "%02x", g_peer_parameters[i]);
+        }
+        fputs("\", ", stderr);
+        quic_print_probes(ssl, client);
+    }
     fprintf(stderr, "\"version\": \"%s\", \"received\": \"", SSL_get_version(ssl));
     for (size_t i = 0; i < received_size; ++i)
     {
