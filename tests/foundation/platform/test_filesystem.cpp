@@ -131,8 +131,8 @@ TEST_CASE("filesystem: the last write time converts exactly and orders files wit
     REQUIRE(fs::write_file_text(newer, "n"));
 
     // 2026-01-01T00:00:00.1234567Z, a whole number of NTFS's 100 ns ticks, and one millisecond later.
-    constexpr crd::i64 kUnixNs = 1767225600123456700;
-    const sys_time<nanoseconds> at{nanoseconds{kUnixNs}};
+    constexpr crd::i64 unix_ns = 1767225600123456700;
+    const sys_time<nanoseconds> at{nanoseconds{unix_ns}};
     const auto stamp = [](const fs::Path& path, sys_time<nanoseconds> time)
     {
         std::error_code ec;
@@ -145,8 +145,8 @@ TEST_CASE("filesystem: the last write time converts exactly and orders files wit
     REQUIRE(stamp(older, at));
     REQUIRE(stamp(newer, at + milliseconds{1}));
 
-    CHECK(fs::last_modified_unix_ns(older) == kUnixNs);
-    CHECK(fs::last_modified_unix_ns(newer) == kUnixNs + 1000000);
+    CHECK(fs::last_modified_unix_ns(older) == unix_ns);
+    CHECK(fs::last_modified_unix_ns(newer) == unix_ns + 1000000);
     CHECK(fs::last_modified_unix_seconds(older) == 1767225600);
     CHECK(fs::last_modified_unix_seconds(newer) == 1767225600);
     CHECK(fs::last_modified_unix_ns(root / "missing.bin") == 0);

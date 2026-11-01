@@ -15,7 +15,12 @@ avx512 gaps after the 1K change: 64K (0.76x MKL aligned) and 32K (0.83x), both p
   win-clang-cl-shipping fail to link `crd-perf-tests` on `__udivti3` and `__divti3` (128-bit division in
   `tests/foundation/perf/test_instruction_access.cpp`, the serial workflow's open HW-RESILIENCE file), and
   linux-gcc-release fails `test_multivariate.cpp:125`'s `-Wmaybe-uninitialized`, fixed on main at `76330344`, which
-  the dispatch predates. win-tidy was still running; no completed lane has built `bcec86fd`'s avx512 stage-1 store yet.
+  the dispatch predates. Its win-tidy was still running; no completed lane has built `bcec86fd`'s avx512 stage-1
+  store yet.
+- The earlier dispatch 41269105413 (`b0b1b245`) finished win-tidy failed on `filesystem.cpp`'s macro collision (fixed
+  on main) and on `test_filesystem.cpp`'s local constant `kUnixNs`, which the tidy rule names in lower case and main
+  still carried: renamed `unix_ns` (`fix(tests)`), the platform tests' file cases passing on the machine (219
+  assertions in 18 cases, linux-gcc-release).
 
 ## Profile first
 
