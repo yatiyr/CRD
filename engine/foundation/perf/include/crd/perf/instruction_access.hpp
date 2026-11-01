@@ -13,8 +13,14 @@
 // and any opcode not listed. An EVEX instruction's 8-bit displacement is scaled by a factor its tuple type sets; each
 // factor (1 to 64) gives one candidate range.
 //
-// x86-64 is decoded here. AArch64 has no divide trap (a zero divisor gives zero; Windows' INT_DIVIDE_BY_ZERO on
-// ARM64 comes from a `brk` the compiler inserts) and its decoder is HW-RESILIENCE.2's remaining item.
+// AArch64: every A64 load and store (pairs, exclusives, compare and swaps, atomics including LSE128, RCW, LSUI and
+// LSFE, SIMD structures, literal, register-offset and RCpc forms, LS64, MTE tag stores), DC and IC maintenance (the
+// 2 KiB bound around the address, since DCZID_EL0 and CTR_EL0 are not in the capture), and the branches, hints and
+// data processing that make none. Refused: SVE and SME, FEAT_MOPS copies and sets, pointer-authenticated loads,
+// calls, returns and GCS operations (their Guarded Control Stack access at GCSPR_EL0 is not in the capture), system
+// instructions and anything not listed. Top Byte Ignore: an AArch64 range's address keeps bits 55:0 only, and a fault
+// address is compared in the same 56 bits (`kAArch64AddressBits`). AArch64 has no divide trap (a zero divisor gives
+// zero; Windows' INT_DIVIDE_BY_ZERO on ARM64 comes from a `brk` the compiler inserts).
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
@@ -55,6 +61,9 @@ struct MemoryAccess
 };
 
 inline constexpr crd::u32 kMaxInstructionAccesses = 8U;
+
+// The address bits an AArch64 access uses: its top byte is ignored.
+inline constexpr crd::u64 kAArch64AddressBits = (crd::u64{1} << 56U) - 1U;
 
 struct InstructionAccess
 {

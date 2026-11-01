@@ -727,7 +727,9 @@ InstructionCheck check_instruction(const CrashEvidence& e, const CodeImageCheck*
         }
         return k;
     }
-    if (e.address - e.pc < a.length)
+    // AArch64 ignores an address's top byte, which Linux clears from a fault's address and Windows may keep.
+    const crd::u64 bits = e.instruction_set == InstructionSet::AArch64 ? kAArch64AddressBits : ~crd::u64{0};
+    if (((e.address - e.pc) & bits) < a.length)
     {
         return k; // fetching its own bytes
     }
@@ -735,7 +737,7 @@ InstructionCheck check_instruction(const CrashEvidence& e, const CodeImageCheck*
     for (crd::u32 i = 0U; i < a.count; ++i)
     {
         const MemoryAccess& m = a.accesses[i];
-        if (e.address - m.address < m.size)
+        if (((e.address - m.address) & bits) < m.size)
         {
             address_made = true;
             if (kind_made(m.kinds, e.access))

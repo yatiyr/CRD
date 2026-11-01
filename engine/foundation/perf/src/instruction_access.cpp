@@ -1,6 +1,6 @@
 // crd-perf -- the memory accesses a faulting instruction makes (HW-RESILIENCE.2). See instruction_access.hpp.
 
-#include <crd/perf/instruction_access.hpp>
+#include "instruction_access_detail.hpp"
 
 namespace crd::perf
 {
@@ -230,13 +230,7 @@ struct X86
                       : cont::StringView{"the capture holds fewer bytes than the instruction"};
 }
 
-void add(InstructionAccess& out, crd::u64 address, crd::u64 size, crd::u8 kinds) noexcept
-{
-    if (out.count < kMaxInstructionAccesses && size != 0U)
-    {
-        out.accesses[out.count++] = MemoryAccess{address, size, kinds};
-    }
-}
+using detail::add_access;
 
 // ---- forms ----------------------------------------------------------------------------------------------------------
 
@@ -750,7 +744,7 @@ void string_operand(InstructionAccess& out, const X86& d, crd::u64 pointer, crd:
     }
     const crd::u64 span = count > ~crd::u64{0} / size ? ~crd::u64{0} : count * size;
     const bool down = (d.regs.flags & kDirectionFlag) != 0U;
-    add(out, down ? pointer - (span - size) : pointer, span, kinds);
+    add_access(out, down ? pointer - (span - size) : pointer, span, kinds);
 }
 
 // Adds the accesses of `f` (decoded) to `out`; false, with `why`, when one cannot be placed.
@@ -775,21 +769,21 @@ bool place(X86& d, const Form& f, crd::u8 op, InstructionAccess& out, cont::Stri
         case Implicit::None:
             break;
         case Implicit::Push:
-            add(out, rsp - n, n, kWrite);
+            add_access(out, rsp - n, n, kWrite);
             break;
         case Implicit::Pop:
-            add(out, rsp, n, kRead);
+            add_access(out, rsp, n, kRead);
             break;
         case Implicit::PushRm:
-            add(out, d.effective(d.disp, 0U), n, kRead);
-            add(out, rsp - n, n, kWrite);
+            add_access(out, d.effective(d.disp, 0U), n, kRead);
+            add_access(out, rsp - n, n, kWrite);
             return true;
         case Implicit::PopRm:
-            add(out, rsp, n, kRead);
-            add(out, d.effective(d.disp, n), n, kWrite);
+            add_access(out, rsp, n, kRead);
+            add_access(out, d.effective(d.disp, n), n, kWrite);
             return true;
         case Implicit::Leave:
-            add(out, d.gpr(kRbp), n, kRead);
+            add_access(out, d.gpr(kRbp), n, kRead);
             break;
         case Implicit::String:
         {
@@ -821,7 +815,7 @@ bool place(X86& d, const Form& f, crd::u8 op, InstructionAccess& out, cont::Stri
             break;
         }
         case Implicit::Xlat:
-            add(out, d.address(d.gpr(kRbx) + (d.gpr(kRax) & 0xFFU)), 1U, kRead);
+            add_access(out, d.address(d.gpr(kRbx) + (d.gpr(kRax) & 0xFFU)), 1U, kRead);
             break;
         case Implicit::Moffs:
         {
@@ -831,7 +825,7 @@ bool place(X86& d, const Form& f, crd::u8 op, InstructionAccess& out, cont::Stri
             {
                 at |= crd::u64{d.code[d.at - width + i]} << (8U * i);
             }
-            add(out, at, n, op <= 0xA1U ? kRead : kWrite);
+            add_access(out, at, n, op <= 0xA1U ? kRead : kWrite);
             break;
         }
         case Implicit::MaskMove:
@@ -840,7 +834,7 @@ bool place(X86& d, const Form& f, crd::u8 op, InstructionAccess& out, cont::Stri
                 why = "a masked move with a memory operand, which is invalid";
                 return false;
             }
-            add(out, d.address(d.gpr(kRdi)), n, kWrite);
+            add_access(out, d.address(d.gpr(kRdi)), n, kWrite);
             break;
         case Implicit::BitOffset:
         {
@@ -864,18 +858,18 @@ bool place(X86& d, const Form& f, crd::u8 op, InstructionAccess& out, cont::Stri
                 offset = (offset ^ sign) - sign;
             }
             const crd::u64 byte = d.effective(d.disp, 0U) + static_cast<crd::u64>(static_cast<crd::i64>(offset) >> 3);
-            add(out, byte - (d.osz() - 1U), 2U * d.osz() - 1U, f.kinds);
+            add_access(out, byte - (d.osz() - 1U), 2U * d.osz() - 1U, f.kinds);
             return true;
         }
         case Implicit::CacheLine:
-            add(out, d.effective(d.disp, 0U) & ~crd::u64{63}, 64U, kEither);
+            add_access(out, d.effective(d.disp, 0U) & ~crd::u64{63}, 64U, kEither);
             return true;
         case Implicit::Divide:
         {
             out.divides = true;
             if (d.memory)
             {
-                add(out, d.effective(d.disp, 0U), n, kRead);
+                add_access(out, d.effective(d.disp, 0U), n, kRead);
                 return true;
             }
             const crd::u64 rax = d.gpr(kRax);
@@ -903,13 +897,13 @@ bool place(X86& d, const Form& f, crd::u8 op, InstructionAccess& out, cont::Stri
             const crd::i64 disp8 = static_cast<crd::i64>(d.disp);
             for (crd::u64 factor = 1U; factor <= d.vector_bytes; factor <<= 1U)
             {
-                add(out, d.effective(static_cast<crd::u64>(disp8 * static_cast<crd::i64>(factor)), 0U), f.size,
-                    f.kinds);
+                add_access(out, d.effective(static_cast<crd::u64>(disp8 * static_cast<crd::i64>(factor)), 0U), f.size,
+                           f.kinds);
             }
         }
         else
         {
-            add(out, d.effective(d.disp, 0U), f.size, f.kinds);
+            add_access(out, d.effective(d.disp, 0U), f.size, f.kinds);
         }
     }
     return true;
@@ -1181,9 +1175,12 @@ InstructionAccess decode_instruction_access(InstructionSet set, cont::ConstSpan<
     {
         return decode_x86(code, regs);
     }
+    if (set == InstructionSet::AArch64)
+    {
+        return detail::decode_a64(code, regs);
+    }
     InstructionAccess out;
-    out.reason = set == InstructionSet::AArch64 ? cont::StringView{"AArch64 instructions are not decoded"}
-                                                : cont::StringView{"the capture names no instruction set"};
+    out.reason = "the capture names no instruction set";
     return out;
 }
 

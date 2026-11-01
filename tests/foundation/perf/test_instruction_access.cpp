@@ -1,7 +1,9 @@
 // HW-RESILIENCE.2: the memory accesses of a faulting instruction (crd/perf/instruction_access.hpp) -- x86-64 lengths
 // and accesses for every addressing form, the stack, string, bit-offset, absolute and vector forms, EVEX's scaled
-// displacement, the refused forms, cuts, and the divide error's operands against plain wide arithmetic. Every encoding
-// below was cross-checked once with LLVM 20's llvm-mc disassembler (2026-11-01 session).
+// displacement, the refused forms, cuts, and the divide error's operands against plain wide arithmetic; AArch64's
+// loads, stores, pairs, exclusives, atomics, structures, literal, register-offset and RCpc forms, cache maintenance,
+// the top byte, the forms that make no access and the refused ones. Every encoding below was cross-checked once with
+// LLVM 20's llvm-mc (2026-11-01 sessions).
 
 #include <crd/core/seed_generators.hpp>
 #include <crd/perf/fault_classification.hpp>
@@ -194,6 +196,119 @@ TEST_CASE("instruction access: x86-64 lengths and accesses for every addressing,
         CHECK_FALSE(a.divides);
     }
 }
+
+// ---- AArch64 ----------------------------------------------------------------------------------------------------
+
+namespace
+{
+
+constexpr u64 kA64Pc = 0x400000U;
+constexpr u64 kA64Sp = 0x7FF000U;
+constexpr u64 kA64Tagged = 0x3400'0000'0000'8000ULL; // x7: tag 0x34, address 0x8000
+
+cp::FaultRegisters a64_registers()
+{
+    cp::FaultRegisters r;
+    r.known = true;
+    r.pc = kA64Pc;
+    for (u32 i = 0U; i < 31U; ++i)
+    {
+        r.gpr[i] = 0x10000U + 0x1000U * i; // x1 = 0x11000, x2 = 0x12000, x4 = 0x14000
+    }
+    r.gpr[5] = ~u64{0xF};        // UXTW reads 0xFFFFFFF0
+    r.gpr[6] = 0x1'8000'0000ULL; // SXTW reads -2^31
+    r.gpr[7] = kA64Tagged;
+    r.gpr[9] = 0x12345U;
+    r.gpr[31] = kA64Sp;
+    return r;
+}
+
+cp::InstructionAccess decode_a64(u32 word, u32 bytes = 4U)
+{
+    const u8 code[4] = {static_cast<u8>(word), static_cast<u8>(word >> 8U), static_cast<u8>(word >> 16U),
+                        static_cast<u8>(word >> 24U)};
+    return cp::decode_instruction_access(cp::InstructionSet::AArch64, {code, bytes}, a64_registers());
+}
+
+struct A64Case
+{
+    u32 word;
+    u64 address;
+    u64 size;
+    u8 kinds;
+};
+
+constexpr u64 kSxtw = (0x11000U - 0x2'0000'0000ULL) & cp::kAArch64AddressBits; // x1 + 4 * -2^31, top byte cleared
+
+const A64Case kA64Cases[] = {
+    {0xB9400020U, 0x11000U, 4U, kRd},                 // ldr w0, [x1]
+    {0xF9000BE0U, kA64Sp + 16U, 8U, kWr},             // str x0, [sp, #16]
+    {0x397FFC20U, 0x11FFFU, 1U, kRd},                 // ldrb w0, [x1, #4095]
+    {0xF85F8020U, 0x10FF8U, 8U, kRd},                 // ldur x0, [x1, #-8]
+    {0xF8410420U, 0x11000U, 8U, kRd},                 // ldr x0, [x1], #16
+    {0x3C9E0C20U, 0x10FE0U, 16U, kWr},                // str q0, [x1, #-32]!
+    {0xF8627820U, 0x11000U + 0x12000U * 8U, 8U, kRd}, // ldr x0, [x1, x2, lsl #3]
+    {0xB866D820U, kSxtw, 4U, kRd},                    // ldr w0, [x1, w6, sxtw #2]
+    {0x78654820U, 0x11000U + 0xFFFFFFF0ULL, 2U, kRd}, // ldrh w0, [x1, w5, uxtw]
+    {0xF87F6820U, 0x11000U, 8U, kRd},                 // ldr x0, [x1, xzr]
+    {0x58000800U, kA64Pc + 256U, 8U, kRd},            // ldr x0, .+256
+    {0x98FFFFE0U, kA64Pc - 4U, 4U, kRd},              // ldrsw x0, .-4
+    {0x9C000080U, kA64Pc + 16U, 16U, kRd},            // ldr q0, .+16
+    {0xA9BF7BFDU, kA64Sp - 16U, 16U, kWr},            // stp x29, x30, [sp, #-16]!
+    {0xACC10420U, 0x11000U, 32U, kRd},                // ldp q0, q1, [x1], #32
+    {0x69410420U, 0x11008U, 8U, kRd},                 // ldpsw x0, x1, [x1, #8]
+    {0x6C3F8420U, 0x10FF8U, 16U, kWr},                // stnp d0, d1, [x1, #-8]
+    {0x69010420U, 0x11020U, 16U, kWr},                // stgp x0, x1, [x1, #32]
+    {0x885F7C20U, 0x11000U, 4U, kRd},                 // ldxr w0, [x1]
+    {0xC802FC20U, 0x11000U, 8U, kWr},                 // stlxr w2, x0, [x1]
+    {0xC87F8440U, 0x12000U, 16U, kRd},                // ldaxp x0, x1, [x2]
+    {0x089FFC20U, 0x11000U, 1U, kWr},                 // stlrb w0, [x1]
+    {0xC8E0FC41U, 0x12000U, 8U, kRw},                 // casal x0, x1, [x2]
+    {0x4860FC82U, 0x14000U, 16U, kRw},                // caspal x0, x1, x2, x3, [x4]
+    {0x08A07FE1U, kA64Sp, 1U, kRw},                   // casb w0, w1, [sp]
+    {0xB8E00041U, 0x12000U, 4U, kRw},                 // ldaddal w0, w1, [x2]
+    {0xF820003FU, 0x11000U, 8U, kRw},                 // stadd x0, [x1]
+    {0x38208041U, 0x12000U, 1U, kRw},                 // swpb w0, w1, [x2]
+    {0xF8BFC020U, 0x11000U, 8U, kRd},                 // ldapr x0, [x1]
+    {0x19211040U, 0x12000U, 16U, kRw},                // ldclrp x0, x1, [x2]
+    {0x19200841U, 0x12000U, 8U, kRw},                 // rcwcas x0, x1, [x2]
+    {0x19219040U, 0x12000U, 16U, kRw},                // rcwclrp x0, x1, [x2]
+    {0x38209041U, 0x12000U, 8U, kRw},                 // rcwclr x0, x1, [x2]
+    {0x19200441U, 0x12000U, 4U, kRw},                 // ldtadd w0, w1, [x2]
+    {0xC9807C41U, 0x12000U, 8U, kRw},                 // cast x0, x1, [x2]
+    {0x49807C82U, 0x14000U, 16U, kRw},                // caspt x0, x1, x2, x3, [x4]
+    {0x895F7C20U, 0x11000U, 4U, kRd},                 // ldtxr w0, [x1]
+    {0xEDC10440U, 0x12020U, 32U, kRd},                // ldtp q0, q1, [x2, #32]!
+    {0xF83FD020U, 0x11000U, 64U, kRd},                // ld64b x0, [x1]
+    {0xF822B020U, 0x11000U, 64U, kWr},                // st64bv x2, x0, [x1]
+    {0x7C200041U, 0x12000U, 2U, kRw},                 // ldfadd h0, h1, [x2]
+    {0x3C200041U, 0x12000U, 2U, kRw},                 // ldbfadd h0, h1, [x2]
+    {0xFC206041U, 0x12000U, 8U, kRw},                 // ldfmaxnm d0, d1, [x2]
+    {0xD9411840U, 0x12000U, 16U, kRd},                // ldiapp x0, x1, [x2]
+    {0xD9010840U, 0x11FF0U, 16U, kWr},                // stilp x0, x1, [x2, #-16]!
+    {0xD9800820U, 0x10FF8U, 8U, kWr},                 // stlr x0, [x1, #-8]!
+    {0x99C00820U, 0x11000U, 4U, kRd},                 // ldapr w0, [x1], #4
+    {0x1DDFD820U, 0x10FFDU, 16U, kRd},                // ldapur q0, [x1, #-3]
+    {0x19801020U, 0x11001U, 1U, kRd},                 // ldapursb x0, [x1, #1]
+    {0x591FE020U, 0x10FFEU, 2U, kWr},                 // stlurh w0, [x1, #-2]
+    {0x4C400020U, 0x11000U, 64U, kRd},                // ld4 {v0.16b - v3.16b}, [x1]
+    {0x0C9FA020U, 0x11000U, 16U, kWr},                // st1 {v0.8b, v1.8b}, [x1], #16
+    {0x0D40B020U, 0x11000U, 12U, kRd},                // ld3 {v0.s - v2.s}[1], [x1]
+    {0x4D60EC20U, 0x11000U, 32U, kRd},                // ld4r {v0.2d - v3.2d}, [x1]
+    {0x4D418420U, 0x11000U, 8U, kRd},                 // ldap1 {v0.d}[1], [x1]
+    {0x0DC25820U, 0x11000U, 2U, kRd},                 // ld1 {v0.h}[3], [x1], x2
+    {0xD93FFC20U, 0x10FF0U, 16U, kWr},                // stg x0, [x1, #-16]!
+    {0xD9A02820U, 0x11020U, 32U, kWr},                // st2g x0, [x1, #32]
+    {0xD9602020U, 0x11020U, 16U, kRd},                // ldg x0, [x1, #32]
+    {0xD91F0C20U, 0x11000U, 8U, kWr},                 // gcsstr x0, [x1]
+    {0xD50B7429U, 0x12000U, 2048U, kWr},              // dc zva, x9: the 2 KiB bound
+    {0xD50B7E29U, 0x12000U, 2048U, kRw},              // dc civac, x9
+    {0xD50B7529U, 0x12000U, 2048U, kRw},              // ic ivau, x9
+    {0xF94000E0U, 0x8000U, 8U, kRd},                  // ldr x0, [x7]: the top byte ignored
+    {0xB90008E0U, 0x8008U, 4U, kWr},                  // str w0, [x7, #8]
+};
+
+} // namespace
 
 TEST_CASE("instruction access: REP counts, the direction flag and the 15-byte limit", "[perf][diag][hw-resilience]")
 {
@@ -413,6 +528,69 @@ TEST_CASE("instruction access: the divide error's operands match wide arithmetic
         CHECK(agree);
     }
 #endif
+}
+
+TEST_CASE("instruction access: AArch64 loads, stores, pairs, exclusives, atomics, structures and cache maintenance",
+          "[perf][diag][hw-resilience]")
+{
+    for (const A64Case& c : kA64Cases)
+    {
+        const cp::InstructionAccess a = decode_a64(c.word);
+        INFO(std::hex << c.word << " -> " << cont::String{a.reason}.c_str());
+        REQUIRE(a.decoded);
+        CHECK(a.length == 4U);
+        REQUIRE(a.count == 1U);
+        CHECK(a.accesses[0].address == c.address);
+        CHECK(a.accesses[0].size == c.size);
+        CHECK(a.accesses[0].kinds == c.kinds);
+        CHECK_FALSE(a.divides);
+        CHECK_FALSE(decode_a64(c.word, 3U).decoded); // a cut word is never decoded
+    }
+    // No data access: data processing, branches, hints, system register moves, PRFM, UDF, SVC and BRK.
+    const u32 none[] = {0x8B020020U, 0x14000010U, 0xB4000041U, 0x54000040U, 0xD503201FU, 0xD53BD040U, 0xD61F0020U,
+                        0xD4000001U, 0xF9800020U, 0x00000000U, 0xD4200000U, 0x1E204020U, 0x4E208400U};
+    for (const u32 word : none)
+    {
+        const cp::InstructionAccess a = decode_a64(word);
+        INFO(std::hex << word << " -> " << cont::String{a.reason}.c_str());
+        CHECK(a.decoded);
+        CHECK(a.length == 4U);
+        CHECK(a.count == 0U);
+    }
+}
+
+TEST_CASE("instruction access: AArch64 refuses SVE, SME, MOPS, authenticated loads, GCS users and system instructions",
+          "[perf][diag][hw-resilience]")
+{
+    struct Refusal
+    {
+        u32 word;
+        u32 bytes;
+        const char* reason;
+    };
+    const Refusal refusals[] = {
+        {0xA5404020U, 4U, "an SVE instruction"},                                 // ld1w {z0.s}, p0/z, [x1, x0, lsl #2]
+        {0xE1000020U, 4U, "an SME instruction"},                                 // ldr za[w12, 0], [x1]
+        {0x19010440U, 4U, "a memory copy or set (FEAT_MOPS)"},                   // cpyfp [x0]!, [x1]!, x2!
+        {0xF8200420U, 4U, "a pointer-authenticated load"},                       // ldraa x0, [x1]
+        {0x94000010U, 4U, "a call, a return or a Guarded Control Stack"},        // bl
+        {0xD63F0020U, 4U, "a call, a return or a Guarded Control Stack"},        // blr x1
+        {0xD65F03C0U, 4U, "a call, a return or a Guarded Control Stack"},        // ret
+        {0xD50B7700U, 4U, "a call, a return or a Guarded Control Stack"},        // gcspushm x0
+        {0xD69F03E0U, 4U, "an exception return or a system instruction"},        // eret
+        {0xD508871FU, 4U, "an exception return or a system instruction"},        // tlbi vmalle1
+        {0xB9C00020U, 4U, "an encoding this decoder does not list"},             // unallocated
+        {0xB9400020U, 3U, "the capture holds fewer bytes than the instruction"}, // ldr w0, [x1], cut
+    };
+    for (const Refusal& r : refusals)
+    {
+        const cp::InstructionAccess a = decode_a64(r.word, r.bytes);
+        const cont::String reason{a.reason};
+        INFO(std::hex << r.word << " -> " << reason.c_str());
+        CHECK_FALSE(a.decoded);
+        CHECK(a.count == 0U);
+        CHECK(std::strstr(reason.c_str(), r.reason) == reason.c_str());
+    }
 }
 
 #if defined(_WIN32)

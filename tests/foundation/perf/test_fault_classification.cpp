@@ -1176,6 +1176,29 @@ TEST_CASE("fault classification: a fault on an access the instruction does not m
     w.address = ~u64{0};
     CHECK(cp::classify_fault(&w, nullptr, cp::ReplayOutcome::NotRun, &same).instruction.result ==
           cp::InstructionCheckResult::NotJudged);
+
+    // AArch64 ignores an address's top byte: a fault reported with x7's tag (as Windows may) or without it (as Linux
+    // does) is the load's own access, and one byte past it is not.
+    cont::Array<u8> arm;
+    arm.resize(0x390U);
+    std::memset(arm.data(), 0, arm.size());
+    put_at(arm, 0U, 0x00400003U, 4U);
+    put_at(arm, 8U + 8U * 7U, 0x3400'0000'0000'8000ULL, 8U); // x7
+    put_at(arm, 0x108U, pc, 8U);
+    const auto arm_judge = [&](u64 address)
+    {
+        cp::CrashEvidence e = read_dump(context_dump(0xC0000005U, pc, 0U, address, 12U, arm));
+        const u8 load[] = {0xE0U, 0x00U, 0x40U, 0xF9U}; // ldr x0, [x7]
+        std::memcpy(e.code_bytes, load, sizeof(load));
+        e.code_size = sizeof(load);
+        CHECK(e.instruction_set == cp::InstructionSet::AArch64);
+        return cp::classify_fault(&e, nullptr, cp::ReplayOutcome::NotRun, &same).instruction;
+    };
+    CHECK(arm_judge(0x3400'0000'0000'8007ULL).result == cp::InstructionCheckResult::Consistent);
+    CHECK(arm_judge(0x8007U).result == cp::InstructionCheckResult::Consistent);
+    CHECK(arm_judge(0x8008U).result == cp::InstructionCheckResult::AccessNotMade);
+    CHECK(arm_judge(0x3400'0000'0000'8008ULL).reason == cont::StringView{"an address it does not access"});
+    CHECK(arm_judge(pc + 3U).result == cp::InstructionCheckResult::Consistent); // its own four bytes
 }
 
 TEST_CASE("fault classification: a divide error its operands cannot raise is a signature",

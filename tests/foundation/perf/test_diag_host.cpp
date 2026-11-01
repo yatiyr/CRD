@@ -1847,6 +1847,9 @@ TEST_CASE("diagnostic host: the application's wild write leaves one attributable
         INFO("instruction: " << cont::String{judged.instruction.reason}.c_str());
 #if defined(__x86_64__) || defined(_M_X64)
         CHECK(evidence.instruction_set == cp::InstructionSet::X64);
+#else
+        CHECK(evidence.instruction_set == cp::InstructionSet::AArch64);
+#endif
         CHECK(judged.instruction.result == cp::InstructionCheckResult::Consistent);
         cp::CrashEvidence moved = cp::read_crash_evidence({capture_bytes.data(), capture_bytes.size()});
         moved.address += 0x1000U;
@@ -1854,10 +1857,6 @@ TEST_CASE("diagnostic host: the application's wild write leaves one attributable
             cp::classify_fault(&moved, &machine.identity, cp::ReplayOutcome::NotRun, &code);
         CHECK(elsewhere.instruction.result == cp::InstructionCheckResult::AccessNotMade);
         CHECK(elsewhere.signals == cp::kFaultSignalAccessNotMade);
-#else
-        CHECK(evidence.instruction_set == cp::InstructionSet::AArch64);
-        CHECK(judged.instruction.result == cp::InstructionCheckResult::NotJudged);
-#endif
     }
 
     (void)check_repaired_run("crash");
