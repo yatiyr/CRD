@@ -75,6 +75,10 @@ return outside the image and a call with no return line; teeth: the old single-s
 return line, the emitter left out of the census and a pass rule that ignores unnamed calls each fail it. Parsed with
 the new code, the hosted log gives the call's 18 frames.
 
+Dispatched again at 1c213aab (run 41316882885, job 124878701863): exit 0, the layout complete, one call,
+`edx=ffffffff` and `$t0=000000000091def1`, `emitters` holding `resolveFont` and `unnamed` empty; the leg passed with
+the caller named.
+
 [TP-8](../third-party-defects.md#tp-8) registers the line: Qt's code inside the pinned installer, one log line, no
 effect on the installed tree, nothing the tree can change.
 
@@ -98,8 +102,6 @@ No report exists (the Qt tracker's QTBUG and QTIFW projects, searched for the wa
 
 ## Remaining on REPO.3
 
-- Dispatch the emitter leg again at this batch's revision: the leg passes only with the caller named
-  (`emitters` holds `resolveFont`, `unnamed` is empty).
 - The Qt report above (the user's, with a Qt account).
 - The first complete run at a0c9d534 or later: the ASan lanes' `[shewchuk]` cases, the cold `win-debug-scalar`
   install with the local repository, and the oracle with the tree's warnings on MSVC, clang-cl and the Linux Clang
