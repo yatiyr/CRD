@@ -22,6 +22,8 @@ target_link_libraries(crd-perf
         crd-memory      # v0e allocator registry: profiler reads IAllocator::stats() snapshots into the FrameRecord ring
         crd-containers  # v0f CPROF capture: Array<u8> for buffer storage, ConstSpan<u8> for reader
         crd-toml        # DIAG.9b authored diagnostic assets: the flight policy and fault plans are TOML documents
+    PRIVATE
+        crd-compression # OWN.1 the bundle's compressed sections: raw DEFLATE, decoded into exact, bounded sizes
 )
 
 target_compile_features(crd-perf PUBLIC cxx_std_20)

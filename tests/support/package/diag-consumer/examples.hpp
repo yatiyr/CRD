@@ -19,4 +19,7 @@ int example_reload(const char* profile_path, const char* limits_path, const char
 // example_capture.cpp: diag-consumer capture <profile.host.toml>
 int example_capture(const char* profile_path);
 
+// example_codecs.cpp: diag-consumer codecs
+int example_codecs();
+
 } // namespace diag_consumer

@@ -61,6 +61,7 @@ target_link_libraries(crd-perf-tests PRIVATE
     crd-jobs
     crd-memory
     crd-perf
+    crd-compression # OWN.1: the compressed bundle sections' oracle is the owner's own DEFLATE
     crd-platform    # DIAG.11a: the diagnostic host cases read and write files through the I/O fault seam
     crd-diag-harness
     Catch2::Catch2WithMain

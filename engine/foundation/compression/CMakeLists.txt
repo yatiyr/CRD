@@ -30,3 +30,9 @@ target_link_libraries(crd-compression
 
 target_compile_features(crd-compression PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-compression)
+
+# Cerid::compression of the relocatable package (OWN.1: crd-perf's bundle sections compress through it), with the
+# pinned zstd archive exported link-only beside it (Cerid::zstd): its header is private to this module, so the package
+# installs no zstd header and a consumer reaches zstd only through zstd.hpp.
+crd_package_library(crd-compression NAME compression INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+crd_package_dependency(libzstd_static NAME zstd)

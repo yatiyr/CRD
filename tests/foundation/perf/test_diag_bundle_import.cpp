@@ -1,10 +1,12 @@
 // DIAG.5d(e1): the trustworthy bundle importer + Manifest format + golden bundles. Verifies the acceptance clauses
-// this slice owns: reject oversized / version-mismatch / decompression-bomb (compressed flag) / too-many-sections,
+// this slice owns: reject oversized / version-mismatch / decompression-bomb (a compressed claim past the bounds,
+// OWN.1) / too-many-sections,
 // recover truncated bundles, and "golden manifests preserve schema migration and explicit absent sections". The
 // manifest is redaction-honest by construction (no field can claim the raw dump is redacted). Traversal rejection is
 // exercised in test_diag_symbol_index.cpp (debug_file_path / is_safe_lookup_name); here the importer COUNTS unsafe
 // names. Adversarial corpus + libFuzzer is DIAG.5d(e2).
 
+#include <crd/compression/deflate.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/checksum.hpp>
 #include <crd/containers/string.hpp>
@@ -33,7 +35,8 @@ template <typename T> cont::ConstSpan<T> span_of(const T* p, crd::usize n) noexc
 const crd::u8 kCrashBytes[16] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
 
 // A deterministic golden bundle: Manifest (section 0, declaring LogTail+SymbolIndex absent) + a known CrashRecord +
-// the two absent sections. finish(0) stamps a fixed timestamp so the bytes are reproducible.
+// the two absent sections. finish(0) stamps a fixed timestamp so the bytes are reproducible. Its sections are stored
+// raw: the frozen bytes below are the v1 form that every reader keeps reading, whatever the writer's encoder emits.
 cont::Array<crd::u8> build_golden()
 {
     BundleManifest man;
@@ -43,7 +46,7 @@ cont::Array<crd::u8> build_golden()
     man.absent_tags.push_back(static_cast<crd::u32>(BundleSectionTag::SymbolIndex));
     const cont::Array<crd::u8> mpayload = serialize_manifest(man);
 
-    BundleWriter w;
+    BundleWriter w{crd::memory::default_allocator(), BundleLimits{}, BundleCompression::None};
     REQUIRE(w.add_section(BundleSectionTag::Manifest, span_of(mpayload.data(), mpayload.size())) ==
             BundleWriter::AddStatus::Ok);
     REQUIRE(w.add_section(BundleSectionTag::CrashRecord, span_of(kCrashBytes, sizeof(kCrashBytes))) ==
@@ -234,21 +237,63 @@ TEST_CASE("importer flags an oversized section but keeps the rest", "[perf][diag
     CHECK(imp.sections[1].payload.size() == sizeof(kCrashBytes)); // the sibling survives
 }
 
-TEST_CASE("importer refuses a compressed section (v1 decompression-bomb defence)", "[perf][diag][import]")
+TEST_CASE("importer decodes compressed sections and refuses a decompression bomb", "[perf][diag][import]")
 {
+    // A log tail DEFLATE shrinks, between the crash bytes and an identity the writer keeps raw.
+    cont::Array<crd::u8> tail;
+    for (crd::u32 line = 0; line < 64U; ++line)
+    {
+        const char text[] = "frame complete, nothing to report\n";
+        for (crd::usize i = 0; i + 1U < sizeof(text); ++i)
+        {
+            tail.push_back(static_cast<crd::u8>(text[i]));
+        }
+    }
     BundleWriter w;
-    w.add_section(BundleSectionTag::CrashRecord, span_of(kCrashBytes, sizeof(kCrashBytes)));
-    w.add_section(BundleSectionTag::RawDump, span_of(kCrashBytes, sizeof(kCrashBytes)));
-    cont::Array<crd::u8> b = w.finish(0U);
+    REQUIRE(w.add_section(BundleSectionTag::CrashRecord, span_of(kCrashBytes, sizeof(kCrashBytes))) ==
+            BundleWriter::AddStatus::Ok);
+    REQUIRE(w.add_section(BundleSectionTag::LogTail, span_of(tail.data(), tail.size())) == BundleWriter::AddStatus::Ok);
+    const cont::Array<crd::u8> b = w.finish(0U);
 
-    // Set the compressed flag on section 1 (flags field is at section-header offset 4; header + section0 payload).
-    const crd::usize f1 = sizeof(BundleHeader) + sizeof(BundleSectionHeader) + sizeof(kCrashBytes) + 4U;
-    std::memcpy(&b[f1], &kSectionFlagCompressed, 4U);
-
+    // The import owns the decoded bytes: its sections view them after the read's own result is gone.
     const BundleImport imp = import_bundle(span_of(b.data(), b.size()));
-    CHECK(imp.compressed_unsupported);              // a compressed section is refused (no codec edge in v1)
-    CHECK(imp.status == ImportStatus::RecoveredTruncated);
-    CHECK(imp.sections.size() == 1U);               // section 0 recovered before the refusal
+    REQUIRE(imp.status == ImportStatus::Ok);
+    CHECK_FALSE(imp.compressed_refused);
+    REQUIRE(imp.sections.size() == 2U);
+    CHECK(imp.sections[0].section_flags == 0U);
+    CHECK(imp.sections[1].section_flags == kSectionFlagCompressed);
+    CHECK(imp.sections[1].stored_length < tail.size());
+    REQUIRE(imp.sections[1].payload.size() == tail.size());
+    CHECK(std::memcmp(imp.sections[1].payload.data(), tail.data(), tail.size()) == 0);
+    CHECK(imp.decoded.size() == tail.size());
+
+    // A bomb: the compressed section claims the most its bytes could reach, within the format but past the
+    // importer's section bound. Nothing is allocated for it: it is flagged oversized and not exposed, and the import
+    // goes on.
+    cont::Array<crd::u8> bomb = b;
+    const crd::usize s1 = sizeof(BundleHeader) + sizeof(BundleSectionHeader) + sizeof(kCrashBytes);
+    const crd::u64 claim = crd::compression::deflate_max_inflated_size(imp.sections[1].stored_length);
+    std::memcpy(&bomb[s1 + 16U], &claim, sizeof(claim)); // BundleSectionHeader::original_length @ +16
+    BundleLimits limits;
+    limits.max_section_bytes = claim - 1U;
+    const BundleImport capped = import_bundle(span_of(bomb.data(), bomb.size()), limits);
+    CHECK(capped.status == ImportStatus::Ok);
+    CHECK_FALSE(capped.compressed_refused);
+    REQUIRE(capped.sections.size() == 2U);
+    CHECK((capped.sections[1].import_flags & kImportSectionOversized) != 0U);
+    CHECK(capped.sections[1].payload.empty());
+    CHECK(capped.sections[1].original_length == claim);
+    CHECK(capped.decoded.empty());
+
+    // A lying claim, one byte past what the stored bytes can reach: refused, the crash bytes survive.
+    const crd::u64 lie = claim + 1U;
+    std::memcpy(&bomb[s1 + 16U], &lie, sizeof(lie));
+    const BundleImport refused = import_bundle(span_of(bomb.data(), bomb.size()));
+    CHECK(refused.compressed_refused);
+    CHECK(refused.status == ImportStatus::RecoveredTruncated);
+    REQUIRE(refused.sections.size() == 1U); // section 0 recovered before the refusal
+    CHECK(refused.sections[0].tag == BundleSectionTag::CrashRecord);
+    CHECK(refused.decoded.empty());
 }
 
 TEST_CASE("importer reports duplicate tags, unsafe symbol names, and manifest/section disagreement",

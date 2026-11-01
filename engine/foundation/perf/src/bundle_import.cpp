@@ -31,6 +31,7 @@ BundleImport import_bundle(cont::ConstSpan<crd::u8> buf, BundleLimits limits, cr
     BundleImport r;
     r.symbols  = cont::Array<ModuleIdentity>(alloc);
     r.sections = cont::Array<ImportedSection>(alloc);
+    r.decoded  = cont::Array<crd::u8>(alloc);
     r.status   = ImportStatus::Rejected;
 
     // 1. Oversized -- refuse before reading a single byte.
@@ -55,7 +56,7 @@ BundleImport import_bundle(cont::ConstSpan<crd::u8> buf, BundleLimits limits, cr
     }
 
     // 3. Structural read.
-    BundleReadResult rb = read_bundle(buf, alloc);
+    BundleReadResult rb = read_bundle(buf, limits, alloc);
     if (rb.status == BundleReadStatus::BadMagic)
     {
         r.reject = ImportReject::BadMagic;
@@ -74,7 +75,7 @@ BundleImport import_bundle(cont::ConstSpan<crd::u8> buf, BundleLimits limits, cr
         return r;
     }
 
-    // Header is valid from here (Ok / RecoveredTruncated / UnsupportedFeature).
+    // Header is valid from here (Ok / RecoveredTruncated / RefusedCompressed).
     r.header                 = rb.header;
     r.declared_section_count = rb.declared_section_count;
     r.stop_offset            = rb.stop_offset;
@@ -95,10 +96,10 @@ BundleImport import_bundle(cont::ConstSpan<crd::u8> buf, BundleLimits limits, cr
         return r;
     }
 
-    if (rb.status == BundleReadStatus::UnsupportedFeature)
-    {
-        r.compressed_unsupported = true; // a compressed section was refused; the prefix is kept (v1 bomb defence)
-    }
+    // A compressed section was refused (a claim past the limits, or a stream that does not decode to it); the prefix
+    // is kept, and its decoded sections move with their bytes (moving the array keeps the views valid).
+    r.compressed_refused = rb.status == BundleReadStatus::RefusedCompressed;
+    r.decoded = static_cast<cont::Array<crd::u8>&&>(rb.decoded);
 
     r.total_len_mismatch = (rb.header.total_len != buf.size());
 
@@ -112,9 +113,12 @@ BundleImport import_bundle(cont::ConstSpan<crd::u8> buf, BundleLimits limits, cr
         is.section_flags   = sv.flags;
         is.import_flags    = 0U;
         is.original_length = sv.original_length;
+        is.stored_length   = sv.stored_length;
         is.payload         = sv.payload;
 
-        if (sv.payload.size() > limits.max_section_bytes)
+        const bool undecoded =
+            (sv.flags & kSectionFlagCompressed) != 0U && sv.payload.empty() && sv.original_length != 0U;
+        if (sv.payload.size() > limits.max_section_bytes || undecoded)
         {
             is.import_flags |= kImportSectionOversized;
             is.payload = cont::ConstSpan<crd::u8>{}; // never decode an oversized section

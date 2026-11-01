@@ -533,11 +533,19 @@ TEST_CASE("flight record: a restricted event or trigger keeps its class and scal
     CHECK(c.events[2].redaction == crd::RedactionClass::Public);
     CHECK(c.events[2].message_view() == "public order");
 
-    // The bundle holds the public text (the control) and never the restricted one; decoding keeps every class.
+    // The bundle holds the public text (the control) and never the restricted one, in any section as it reads back (the
+    // flight record is stored compressed, OWN.1); decoding keeps every class.
     const cont::Array<crd::u8> bundle = cp::write_flight_bundle(c);
-    const cont::StringView     bytes{reinterpret_cast<const char*>(bundle.data()), bundle.size()};
-    CHECK(bytes.find("public order") != cont::StringView::npos);
-    CHECK(bytes.find(secret) == cont::StringView::npos);
+    const cp::BundleReadResult read = cp::read_bundle(cont::ConstSpan<crd::u8>{bundle.data(), bundle.size()});
+    REQUIRE(read.status == cp::BundleReadStatus::Ok);
+    bool public_found = false;
+    for (const cp::BundleSectionView& section : read.sections)
+    {
+        const cont::StringView bytes{reinterpret_cast<const char*>(section.payload.data()), section.payload.size()};
+        public_found = public_found || bytes.find("public order") != cont::StringView::npos;
+        CHECK(bytes.find(secret) == cont::StringView::npos);
+    }
+    CHECK(public_found);
     const cont::Array<crd::u8> payload = cp::encode_flight_record(c);
     const cp::FlightRecordRead back =
         cp::decode_flight_record(cont::ConstSpan<crd::u8>{payload.data(), payload.size()});

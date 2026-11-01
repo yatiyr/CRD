@@ -21,6 +21,8 @@
 //                                                       fault seam (example_reload.cpp)
 //   diag-consumer capture <profile>                     captures requested through the host's service while the
 //                                                       application keeps running (example_capture.cpp)
+//   diag-consumer codecs                                DEFLATE and zstd round trips through Cerid::compression, the
+//                                                       zstd archive linked from the prefix (example_codecs.cpp)
 //
 // scripts/test-package-consumer.py builds it against the moved prefix of every profile it packages and judges the
 // output: the host's modes, the bundles, the trigger at this file's failing line, the events before it, this build,
@@ -161,8 +163,12 @@ int main(int argc, char** argv)
     {
         return dc::example_capture(argv[2]);
     }
+    if (argc == 2 && std::strcmp(route, "codecs") == 0)
+    {
+        return dc::example_codecs();
+    }
     std::printf("usage: diag-consumer fail <profile.host.toml> | inspect <directory> <bundle name> | allocator "
                 "<profile> <tlsf|diagnostic> | jobs <profile> | reload <profile> <limits.toml> <directory> | "
-                "capture <profile>\n");
+                "capture <profile> | codecs\n");
     return 2;
 }

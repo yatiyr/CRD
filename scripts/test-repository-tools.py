@@ -3214,18 +3214,45 @@ class PublicConsumption(unittest.TestCase):
                 (cmake_dir / name).write_text('get_filename_component(_IMPORT_PREFIX "${CMAKE_CURRENT_LIST_FILE}" PATH)\n',
                                               encoding='utf-8')
             (prefix / 'lib/crd-core.lib').write_bytes(b'!<arch>\n')
-            problems, libraries = package_consumer.check_layout(prefix, modules=('core',), assets={})
+            # The core-only layout of these cases: no pinned dependency and no assets unless a case names them.
+            def layout(modules=('core',), **options):
+                options.setdefault('dependencies', {})
+                options.setdefault('assets', {})
+                return package_consumer.check_layout(prefix, modules=modules, **options)
+
+            problems, libraries = layout(modules=('core',), assets={})
             self.assertEqual((problems, libraries), ([], ['crd-core.lib']))
             # Debug information as declared: pdb needs each archive's compile PDB beside it, the others none.
-            problems, _ = package_consumer.check_layout(prefix, modules=('core',), debug_information='pdb', assets={})
+            problems, _ = layout(modules=('core',), debug_information='pdb', assets={})
             self.assertEqual(problems, ['debug information is pdb but crd-core.pdb is not installed beside its archive'])
             (prefix / 'lib/crd-core.pdb').write_bytes(b'pdb')
-            self.assertEqual(package_consumer.check_layout(prefix, modules=('core',), debug_information='pdb',
-                                                           assets={})[0], [])
-            self.assertEqual(package_consumer.check_layout(prefix, modules=('core',), debug_information='dwarf',
-                                                           assets={})[0],
+            self.assertEqual(layout(modules=('core',), debug_information='pdb', assets={})[0], [])
+            self.assertEqual(layout(modules=('core',), debug_information='dwarf', assets={})[0],
                              ['debug information is dwarf but PDBs are installed: crd-core.pdb'])
             (prefix / 'lib/crd-core.pdb').unlink()
+            # A pinned dependency (zstd behind compression): exactly one of its archive names, its compile PDB under
+            # pdb (named after its CMake target), and neither when the package does not link it.
+            zstd = {'zstd': ('libzstd_static', ('libzstd.a', 'zstd_static.lib'))}
+            self.assertEqual(package_consumer.DEPENDENCIES, zstd)
+            self.assertIn('crd_package_dependency(libzstd_static NAME zstd)',
+                          (ROOT / 'engine/foundation/compression/CMakeLists.txt').read_text(encoding='utf-8'))
+            self.assertEqual(layout(dependencies=zstd)[0], ['the zstd dependency needs exactly one of libzstd.a, '
+                                                            'zstd_static.lib under lib/, found []'])
+            (prefix / 'lib/zstd_static.lib').write_bytes(b'!<arch>\n')
+            self.assertEqual(layout(dependencies=zstd), ([], ['crd-core.lib', 'zstd_static.lib']))
+            self.assertEqual(layout(dependencies=zstd, debug_information='pdb')[0],
+                             ['debug information is pdb but crd-core.pdb is not installed beside its archive',
+                              'debug information is pdb but libzstd_static.pdb is not installed beside its archive'])
+            (prefix / 'lib/crd-core.pdb').write_bytes(b'pdb')
+            (prefix / 'lib/libzstd_static.pdb').write_bytes(b'pdb')
+            self.assertEqual(layout(dependencies=zstd, debug_information='pdb')[0], [])
+            self.assertEqual(layout(debug_information='pdb')[0], ['unexpected archive under lib/: zstd_static.lib',
+                                                                  'unexpected PDB under lib/: libzstd_static.pdb'])
+            (prefix / 'lib/libzstd.a').write_bytes(b'!<arch>\n')
+            self.assertIn("the zstd dependency needs exactly one of libzstd.a, zstd_static.lib under lib/, found "
+                          "['libzstd.a', 'zstd_static.lib']", layout(dependencies=zstd)[0])
+            for name in ('crd-core.pdb', 'libzstd_static.pdb', 'zstd_static.lib', 'libzstd.a'):
+                (prefix / 'lib' / name).unlink()
             # One archive per packaged module and no other; the assets byte for byte.
             (prefix / 'lib/libcrd-extra.a').write_bytes(b'!<arch>\n')
             source_assets = Path(temp) / 'assets'
@@ -3235,7 +3262,7 @@ class PublicConsumption(unittest.TestCase):
             (prefix / 'share/cerid/diag').mkdir(parents=True)
             (prefix / 'share/cerid/diag/a.host.toml').write_text('kind = "edited"\n', encoding='utf-8')
             (prefix / 'share/cerid/diag/stray.toml').write_text('', encoding='utf-8')
-            problems, _ = package_consumer.check_layout(prefix, modules=('core', 'perf'), assets={'diag': source_assets})
+            problems, _ = layout(modules=('core', 'perf'), assets={'diag': source_assets})
             self.assertIn('no crd-perf archive under lib/', problems)
             self.assertIn('unexpected archive under lib/: libcrd-extra.a', problems)
             self.assertIn('asset not installed: share/cerid/diag/b.flight.toml', problems)
@@ -3262,7 +3289,7 @@ class PublicConsumption(unittest.TestCase):
             self.assertIn('CeridTargets.cmake names', problems[0])
             (prefix / 'include/crd/core/build_config.hpp.in').write_text('', encoding='utf-8')
             (prefix / 'include/crd/core/core.hpp').unlink()
-            problems, _ = package_consumer.check_layout(prefix, modules=('core',), assets={})
+            problems, _ = layout(modules=('core',), assets={})
             self.assertEqual(problems, ['missing include/crd/core/core.hpp',
                                         'installed include/crd/core/build_config.hpp.in',
                                         'public header not installed: crd/core/core.hpp'])
@@ -3431,7 +3458,7 @@ class PublicConsumption(unittest.TestCase):
                           pc.CODE_SLICE_SUMMED, pc.CODE_LIMITS_KEPT, pc.CODE_FRAME_WORK))
         sources = {path.name for path in pc.DIAG_CONSUMER.glob('example_*.cpp')}
         self.assertEqual(sources, {'example_allocator.cpp', 'example_jobs.cpp', 'example_reload.cpp',
-                                   'example_capture.cpp'})
+                                   'example_capture.cpp', 'example_codecs.cpp'})
         self.assertEqual({name.partition('-')[0] for name in pc.EXAMPLES}, {'allocator', 'jobs', 'reload', 'capture'})
         self.assertEqual(pc.author_assignments('a = 1\nb = "x"\n', {'b': '"y"'}, 'asset'), 'a = 1\nb = "y"\n')
         with self.assertRaises(pc.ConsumerError):
@@ -3544,17 +3571,37 @@ class PublicConsumption(unittest.TestCase):
         window = {'kind': 'flight', 'end': 'post-events-full', 'post_retained': 16}
         frames = [event(i, 'before', pc.CODE_FRAME_WORK, 98 + i) for i in range(3)]
         frames += [event(3 + i, 'after', pc.CODE_FRAME_WORK, 101 + i) for i in range(4)]
+        # The flight record (tag 6, kept in step with the engine's enum) stored compressed, decoded to its size.
+        tags = (ROOT / 'engine/foundation/perf/include/crd/perf/bundle.hpp').read_text(encoding='utf-8')
+        self.assertEqual(re.search(r'FlightRecord\s*=\s*(\d+)', tags).group(1), str(pc.FLIGHT_RECORD_TAG))
+        record = {'kind': 'section', 'tag': pc.FLIGHT_RECORD_TAG, 'compressed': True, 'stored_length': 300,
+                  'original_length': 900, 'payload_length': 900}
+        frames += [record]
         kept = ['flight-1.cdb', 'flight-2.cdb']
         self.assertEqual(pc.capture_problems(output, page([manual, window] + frames), kept), [])
+        raw = dict(record, compressed=False, stored_length=900)
+        self.assertIn(f'the flight-record section is not stored compressed and decoded to its size: {raw}',
+                      pc.capture_problems(output, page([manual, window] + frames[:-1] + [raw]), kept))
+        self.assertIn('the bundle has no flight-record section',
+                      pc.capture_problems(output, page([manual, window] + frames[:-1]), kept))
         self.assertIn("the capture directory keeps ['flight-0.cdb', 'flight-1.cdb', 'flight-2.cdb']; the newest 2 "
                       "are ['flight-1.cdb', 'flight-2.cdb']",
                       pc.capture_problems(output, page([manual, window] + frames), ['flight-0.cdb'] + kept))
-        gap = frames[:3] + frames[4:]
+        gap = frames[:3] + frames[4:]  # the record stays at the end
         self.assertEqual(pc.capture_problems(output, page([manual, window] + gap), kept),
                          ['the frames after the request do not follow frame 100: [102, 103, 104]'])
         one_fewer = output.replace('CONSUMER_COMMAND command=flight.trigger status=ok {}\n', '', 1)
         self.assertIn("flight.trigger answered ['ok', 'ok']",
                       pc.capture_problems(one_fewer, page([manual, window] + frames), kept))
+
+        # Codecs: both round trips, each codec smaller than the text.
+        codecs = 'CONSUMER_CODECS bytes=7000 deflate=900 zstd=400 deflate_round_trip=1 zstd_round_trip=1'
+        self.assertEqual(pc.codecs_problems(codecs), [])
+        self.assertEqual(pc.codecs_problems(codecs.replace('zstd_round_trip=1', 'zstd_round_trip=0')),
+                         ["CONSUMER_CODECS zstd_round_trip: expected '1', got '0'"])
+        self.assertEqual(pc.codecs_problems(codecs.replace('deflate=900', 'deflate=7000')),
+                         ['CONSUMER_CODECS deflate: 7000 bytes from 7000'])
+        self.assertEqual(pc.codecs_problems(''), ['CONSUMER_CODECS: line missing'])
 
     def test_header_check_commands_write_only_into_the_scratch_directory(self):
         build = 'D:/repo/build' if os.name == 'nt' else '/repo/build'

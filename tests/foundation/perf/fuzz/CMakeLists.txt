@@ -10,7 +10,8 @@
 #   crd-fuzz-perf-capture  validate_capture_buffer and CaptureView, the CPROF capture reader (DIAG.10a): every view
 #                          accessor stays inside the buffer and every name it hands out is terminated there.
 crd_fuzz_target(crd-fuzz-perf-bundle
-    SOURCES fuzz_bundle_import.cpp LIBRARIES crd-perf CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus/bundle")
+    SOURCES fuzz_bundle_import.cpp LIBRARIES crd-perf crd-compression
+    CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus/bundle")
 crd_fuzz_target(crd-fuzz-perf-flight
     SOURCES fuzz_flight_record.cpp LIBRARIES crd-perf CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus/flight")
 crd_fuzz_target(crd-fuzz-perf-assets

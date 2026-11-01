@@ -425,7 +425,7 @@ crd_module(engine/execution/ceir-gpu engine/ceir-gpu DEPENDS ceir containers cor
 crd_module(engine/execution/chir engine/chir DEPENDS ceir containers core log memory units TESTS execution/chir
     TEST_DEPENDS ceir-cook perf platform)
 crd_module(engine/foundation/time engine/time DEPENDS core units TESTS foundation/time)
-crd_module(engine/foundation/perf engine/perf DEPENDS containers core jobs memory time toml
+crd_module(engine/foundation/perf engine/perf DEPENDS compression containers core jobs memory time toml
     TESTS foundation/perf support/diag support/fuzz
     TEST_DEPENDS ceir ceir-cook gpu-context gpu-context-vulkan platform)
 crd_module(engine/foundation/memory engine/memory DEPENDS core log vm TESTS foundation/memory support/diag support/fuzz TEST_DEPENDS jobs)
@@ -701,7 +701,7 @@ crd_module(runtime
     DEPENDS app audio config containers core geometry-mesh-processing geometry-primitives hesap hesap-amg hesap-autodiff
         hesap-comms hesap-dense hesap-direct hesap-dsp hesap-eigen hesap-fft hesap-interp hesap-iterative hesap-ode
         hesap-opt hesap-ordering hesap-preconditioners hesap-quadrature hesap-resources hesap-sched hesap-sparse
-        hesap-special hesap-stats hesap-tensor hesap-wavelet jobs log math memory meshgen platform resources vm
+        hesap-special hesap-stats hesap-tensor hesap-wavelet jobs log math memory meshgen perf platform resources vm
     TESTS bench TEST_DEPENDS ceir ceir-cook geometry-bvh geometry-convex scene)
 
 if(CRD_BUILD_SANDBOX)
@@ -822,7 +822,15 @@ if("zstd" IN_LIST CRD_SELECTED_PACKAGES)
     # spelling; 4.4 corrected it to CMP0194. Both names are set so every CMake that knows the policy reads OLD.
     set(CMAKE_POLICY_DEFAULT_CMP0194 OLD)
     set(CMAKE_POLICY_DEFAULT_CMP194 OLD)
+    # zstd's cmake_policy(VERSION 3.13) leaves CMP0141 (3.25) unset, so CMAKE_MSVC_DEBUG_INFORMATION_FORMAT never
+    # reached its objects. NEW gives them the engine's form: embedded under the compiler launcher, a compile PDB
+    # otherwise, which the package installs beside zstd's archive as it does for every engine archive.
+    set(CMAKE_POLICY_DEFAULT_CMP0141 NEW)
+    # EXCLUDE_FROM_ALL drops zstd's own install rules (its headers, pkg-config file and zstd:: export), which every
+    # `cmake --install` otherwise ran: the archive travels in the Cerid export set instead, link-only behind
+    # Cerid::compression, because zstd's header is private to crd-compression (engine/foundation/compression).
     crd_add_pinned_package(zstd
+        EXCLUDE_FROM_ALL YES
         SOURCE_SUBDIR build/cmake
         OPTIONS
             "ZSTD_BUILD_PROGRAMS OFF"
@@ -837,6 +845,7 @@ if("zstd" IN_LIST CRD_SELECTED_PACKAGES)
     )
     unset(CMAKE_POLICY_DEFAULT_CMP0194)
     unset(CMAKE_POLICY_DEFAULT_CMP194)
+    unset(CMAKE_POLICY_DEFAULT_CMP0141)
     if(NOT TARGET libzstd_static)
         message(FATAL_ERROR "The pinned zstd's CMake no longer defines libzstd_static (cmake/pins.json)")
     endif()

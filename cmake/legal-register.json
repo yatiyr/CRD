@@ -5422,8 +5422,8 @@
     "cerid-package": [
       {
         "release": null,
-        "inventory": "a90904cfb64491878f3872818f2eeb778df4fec5e1dd11cb4d51338136b99d53",
-        "reviewed": "2026-10-31",
+        "inventory": "a1d30844a3e75a663cbef6a72a406b039014ed79ee569d7e5bf40d347ef6f3f5",
+        "reviewed": "2026-11-01",
         "findings": [
           {
             "entry": "tr.cybersecurity.products",
@@ -5518,8 +5518,8 @@
     "cprof_export": [
       {
         "release": null,
-        "inventory": "bd10a76a22ca52be583d9fd0a764fb869cf6f2bf66678b279cc51102cc0ac62b",
-        "reviewed": "2026-10-31",
+        "inventory": "88392d97af5472cd4ee22654536f192366ef7a80fe61582c1d27b9e44812c6f8",
+        "reviewed": "2026-11-01",
         "findings": [
           {
             "entry": "tr.cybersecurity.products",

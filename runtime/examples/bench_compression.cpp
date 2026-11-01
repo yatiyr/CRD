@@ -9,7 +9,9 @@
 // members deflated alone, deflate-members, are the codec's share of zip-write, the control that leaves the
 // container's own cost), and NumPy
 // archives of eight f32 members, written STORED as np.savez does (npz-write) and read through hesap-tensor's npz
-// reader, STORED and DEFLATE (npz-read-stored, npz-read-deflate).
+// reader, STORED and DEFLATE (npz-read-stored, npz-read-deflate). The diagnostic bundle's cases write the input as a
+// flight bundle's log tail beside a crash record and read every section back (bundle-write, bundle-read; `bytes
+// bundle` is the file's size): crd-perf's sections compress through crd-compression since 2026-11-01.
 
 #include <crd/compression/deflate.hpp>
 #include <crd/compression/zip.hpp>
@@ -19,9 +21,11 @@
 #include <crd/core/seed_generators.hpp>
 #include <crd/hesap/tensor/io.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/perf/bundle.hpp>
 #include <crd/resources/crdr.hpp>
 
 #include <chrono>
+#include <cstddef>
 #include <cstdio>
 
 using crd::u32;
@@ -260,6 +264,33 @@ Array<u8> crdr_compressed(crd::memory::IAllocator* alloc, ConstSpan<u8> input)
     writer.add_chunk_compressed(kChunk, input, 3);
     return writer.finish();
 }
+
+// A diagnostic bundle as the flight recorder writes one: the input as its log tail, its first member as the crash
+// record and an explicit absent symbol index, stamped at time 0 so the bytes are reproducible.
+Array<u8> bundle_of(ConstSpan<u8> input)
+{
+    crd::perf::BundleWriter writer;
+    (void)writer.add_section(crd::perf::BundleSectionTag::CrashRecord, member(input, 0U));
+    (void)writer.add_section(crd::perf::BundleSectionTag::LogTail, input);
+    (void)writer.add_absent(crd::perf::BundleSectionTag::SymbolIndex);
+    return writer.finish(0U);
+}
+
+// Every section of a bundle as read back; the payloads' digests folded in order, or 0 when the read fails.
+u64 bundle_read(ConstSpan<u8> bundle, bool digest)
+{
+    const crd::perf::BundleReadResult read = crd::perf::read_bundle(bundle);
+    if (read.status != crd::perf::BundleReadStatus::Ok)
+    {
+        return 0U;
+    }
+    u64 bits = read.sections.size();
+    for (const crd::perf::BundleSectionView& v : read.sections)
+    {
+        bits = digest ? crd::hash_combine(bits, crd::containers::xxh3_64(v.payload)) : bits + v.payload.size();
+    }
+    return bits;
+}
 } // namespace
 
 int main()
@@ -349,7 +380,13 @@ int main()
     report("npz-read-deflate", ns_per_kib([&] { g_sink = g_sink + npz_read(&alloc, view(deflated), false); }),
            deflated_bits);
 
+    const Array<u8> bundle = bundle_of(in);
+    report("bundle-write", ns_per_kib([&] { g_sink = g_sink + bundle_of(in).size(); }), digest(bundle));
+    std::printf("bytes bundle %zu\n", static_cast<std::size_t>(bundle.size()));
+    const u64 bundle_bits = bundle_read(view(bundle), true);
+    report("bundle-read", ns_per_kib([&] { g_sink = g_sink + bundle_read(view(bundle), false); }), bundle_bits);
+
     const bool zip_ok = !package.empty() && package_bits != 0U && !stored.empty() && stored_bits != 0U &&
                         !deflated.empty() && deflated_bits != 0U;
-    return raw_ok && exact_ok && zlib_ok && read_ok && zip_ok ? 0 : 1;
+    return raw_ok && exact_ok && zlib_ok && read_ok && zip_ok && bundle_bits != 0U ? 0 : 1;
 }

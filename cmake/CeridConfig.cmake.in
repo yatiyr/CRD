@@ -11,6 +11,9 @@ set(Cerid_SIMD_LEVEL "@CRD_SIMD_LEVEL@")
 set(Cerid_COMPILER "@CMAKE_CXX_COMPILER_ID@ @CMAKE_CXX_COMPILER_VERSION@")
 set(Cerid_PROFILE "@CRD_PACKAGE_PROFILE@")
 set(Cerid_LIBRARIES "@CRD_PACKAGE_LIBRARY_LIST@")
+# Pinned third-party archives the libraries link privately (zstd behind Cerid::compression): exported link-only, with
+# no headers.
+set(Cerid_DEPENDENCIES "@CRD_PACKAGE_DEPENDENCY_LIST@")
 # How the archives carry their debug information: pdb (each archive's compile PDB is installed beside it), embedded
 # (CodeView in the objects), dwarf (in the archive members), none, or not-installed (multi-configuration install).
 set(Cerid_DEBUG_INFORMATION "@CRD_PACKAGE_DEBUG_INFORMATION@")

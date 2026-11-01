@@ -6,7 +6,8 @@ Contract: docs/design/public-consumption.md (the package) and docs/design/runtim
 installed external consumer). One run proves, for one profile (generator, compiler, build type, profile switches):
 
 - the installed tree is complete: every public header of every packaged module (the diagnostic host's closure, perf,
-  and math, whose header-only functions the units headers include), one archive per module and nothing else, no
+  and math, whose header-only functions the units headers include), one archive per module and per pinned
+  third-party dependency (zstd, link-only behind compression, with no header of its own) and nothing else, no
   template (`build_config.hpp.in`), the authored diagnostic assets byte for byte under share/cerid, and the archives'
   debug information as `CeridConfig.cmake` declares it (`pdb`: each archive's compile PDB beside it);
 - the generated `<crd/core/build_config.hpp>` says what the packaging configuration said (asserts, profiling,
@@ -60,11 +61,15 @@ DEBUG_TYPES = ('Debug', 'RelWithDebInfo')
 LEVELS = {'Trace': 0, 'Debug': 1, 'Info': 2, 'Warn': 3, 'Error': 4, 'Critical': 5}
 FALSE_VALUES = ('', '0', 'OFF', 'NO', 'FALSE', 'N', 'IGNORE', 'NOTFOUND')
 CORE_INCLUDE = ROOT / 'engine/foundation/core/include'
-# The packaged family (DIAG.11a): the diagnostic host (perf) and its closure, plus math, whose header-only
-# transcendental functions the units headers include; crd-simd-flags is the interface target math's consumers compile
-# with. Each module installs its include/ tree and one archive.
-FAMILY = ('core', 'units', 'time', 'vm', 'log', 'containers', 'memory', 'jobs', 'toml', 'math', 'perf')
+# The packaged family (DIAG.11a): the diagnostic host (perf) and its closure, compression among it (OWN.1: the
+# bundle's sections), plus math, whose header-only transcendental functions the units headers include; crd-simd-flags
+# is the interface target math's consumers compile with. Each module installs its include/ tree and one archive.
+FAMILY = ('core', 'units', 'time', 'vm', 'log', 'containers', 'memory', 'jobs', 'toml', 'compression', 'math', 'perf')
 INTERFACE_LIBRARIES = ('crd-simd-flags',)
+# The pinned third-party archives a packaged library links privately (cmake/CrdPackage.cmake,
+# crd_package_dependency): exported name -> (its CMake target, whose compile PDB is <target>.pdb, and the archive
+# names its own CMake gives it: zstd names its static archive zstd_static on MSVC-compatible compilers).
+DEPENDENCIES = {'zstd': ('libzstd_static', ('libzstd.a', 'zstd_static.lib'))}
 MODULE_INCLUDES = {name: ROOT / 'engine/foundation' / name / 'include' for name in FAMILY}
 # Authored assets the packaged libraries read at run time: installed directory under share/cerid -> source.
 ASSETS = {'diag': ROOT / 'assets/diag'}
@@ -98,6 +103,7 @@ CODE_SLICE_SUMMED = 0x00A10020
 CODE_LIMITS_KEPT = 0x00A10031
 CODE_FRAME_WORK = 0x00A10040
 CODE_FAULT_INJECTED = 0x0908  # kFlightCodeFaultInjected
+FLIGHT_RECORD_TAG = 6  # BundleSectionTag::FlightRecord (crd/perf/bundle.hpp)
 # The examples' profile is the installed investigation profile with a short watchdog window; their flight policy is
 # the installed default with sixteen post events, a one-second post window (a capture with no later events closes
 # by time; a busy one closes by its events long before) and a hitch threshold no frame reaches, so only the example's
@@ -255,11 +261,13 @@ def archive_module(path):
     return match.group(1) if match else None
 
 
-def check_layout(prefix, modules=FAMILY, debug_information=None, assets=None):
+def check_layout(prefix, modules=FAMILY, debug_information=None, assets=None, dependencies=None):
     """Problems of an installed prefix and its archives. Every public header of `modules` and nothing else, one archive
-    per module and no other, the debug information `CeridConfig.cmake` declares (None: not judged) and the `assets`
-    (installed directory under share/cerid -> source directory) byte for byte."""
+    per module and per pinned dependency (`dependencies`, as DEPENDENCIES) and no other, the debug information
+    `CeridConfig.cmake` declares (None: not judged) and the `assets` (installed directory under share/cerid -> source
+    directory) byte for byte."""
     assets = ASSETS if assets is None else assets
+    dependencies = DEPENDENCIES if dependencies is None else dependencies
     problems = []
     for name in REQUIRED_FILES:
         if not (prefix / name).is_file():
@@ -286,19 +294,27 @@ def check_layout(prefix, modules=FAMILY, debug_information=None, assets=None):
     archives = sorted(path for path in lib.iterdir() if path.suffix in ('.lib', '.a')) if lib.is_dir() else []
     libraries = [path.name for path in archives]
     found = {archive_module(path): path for path in archives}
+    third_party = {}  # an installed dependency archive -> its CMake target
+    for name, (target, files) in dependencies.items():
+        present = [path.name for path in archives if path.name in files]
+        if len(present) != 1:
+            problems.append(f'the {name} dependency needs exactly one of {", ".join(files)} under lib/, '
+                            f'found {present}')
+        third_party.update({file: target for file in present})
     for module in modules:
         if module not in found:
             problems.append(f'no crd-{module} archive under lib/')
     for path in archives:
-        if archive_module(path) not in modules:
+        if archive_module(path) not in modules and path.name not in third_party:
             problems.append(f'unexpected archive under lib/: {path.name}')
     pdbs = sorted(path.name for path in lib.glob('*.pdb')) if lib.is_dir() else []
     if debug_information == 'pdb':
-        for module in modules:
-            if module in found and not (lib / f'crd-{module}.pdb').is_file():
-                problems.append(f'debug information is pdb but crd-{module}.pdb is not installed beside its archive')
+        for stem in [f'crd-{module}' for module in modules if module in found] + sorted(third_party.values()):
+            if not (lib / f'{stem}.pdb').is_file():
+                problems.append(f'debug information is pdb but {stem}.pdb is not installed beside its archive')
+        stems = {f'crd-{module}' for module in modules} | {target for target, _ in dependencies.values()}
         for name in pdbs:
-            if Path(name).stem.removeprefix('crd-') not in modules:
+            if Path(name).stem not in stems:
                 problems.append(f'unexpected PDB under lib/: {name}')
     elif debug_information is not None and pdbs:
         problems.append(f'debug information is {debug_information} but PDBs are installed: {", ".join(pdbs)}')
@@ -676,6 +692,26 @@ def capture_problems(output, pages, bundles):
         problems.append(f'the frames before the request do not end at frame {frame}: {before[-3:]}')
     if not after or after[0] != frame + 1 or after != list(range(frame + 1, frame + 1 + len(after))):
         problems.append(f'the frames after the request do not follow frame {frame}: {after}')
+    # The flight record is stored compressed through Cerid::compression and decodes to its claim (OWN.1).
+    sections = [item for page in pages or [] for item in page.get('items', []) if item.get('kind') == 'section']
+    record = next((item for item in sections if item.get('tag') == FLIGHT_RECORD_TAG), None)
+    if record is None:
+        problems.append('the bundle has no flight-record section')
+    elif not record.get('compressed') or not record.get('stored_length', 0) < record.get('original_length', 0) or \
+            record.get('payload_length') != record.get('original_length'):
+        problems.append(f'the flight-record section is not stored compressed and decoded to its size: {record}')
+    return problems
+
+
+def codecs_problems(output):
+    """What the codecs route must show: both codecs shrink its text and decode it back exactly, as problems."""
+    fields = single(output, 'CONSUMER_CODECS')
+    problems = field_problems('CONSUMER_CODECS', fields, {'deflate_round_trip': '1', 'zstd_round_trip': '1'})
+    if fields is not None:
+        size = int(fields.get('bytes', '0'))
+        for codec in ('deflate', 'zstd'):
+            if not 0 < int(fields.get(codec, '0')) < size:
+                problems.append(f'CONSUMER_CODECS {codec}: {fields.get(codec)} bytes from {size}')
     return problems
 
 
@@ -749,6 +785,9 @@ class Session:
                                 f'has {expected_debug_information(self.profile)!r}')
         if sorted(record.get('Cerid_ASSETS', '').split()) != sorted(ASSETS):
             raise ConsumerError(f'CeridConfig.cmake lists assets {record.get("Cerid_ASSETS")!r}')
+        if sorted(record.get('Cerid_DEPENDENCIES', '').split()) != sorted(DEPENDENCIES):
+            raise ConsumerError(f'CeridConfig.cmake lists dependencies {record.get("Cerid_DEPENDENCIES")!r}; the '
+                                f'package links {sorted(DEPENDENCIES)}')
         return debug_information
 
     def execute(self):
@@ -881,6 +920,14 @@ class Session:
         for detail in FAILURE_DETAILS:
             self.failure(executable, asset_dir, detail, fault_seams)
         self.examples(executable, asset_dir, fault_seams)
+        result = self.step('run the codecs route', [executable, 'codecs'], self.scratch, timeout=RUN_TIMEOUT)
+        output = result.stdout + result.stderr
+        self.report['codecs'] = output.splitlines()[-10:]
+        problems = codecs_problems(output)
+        if problems:
+            raise ConsumerError('the codecs route did not show what it must:\n  ' + '\n  '.join(problems))
+        print('[package-consumer] DEFLATE and zstd round-tripped through Cerid::compression from the moved prefix',
+              flush=True)
 
     def failure(self, executable, asset_dir, detail, fault_seams):
         """Run the application to its deliberate failure with its flight recorder at `detail`, and investigate the

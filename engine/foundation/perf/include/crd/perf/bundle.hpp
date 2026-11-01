@@ -28,14 +28,23 @@
 // (default total 256 MiB) with HONEST truncation markers -- a section too large
 // for the remaining room is stored truncated, kSectionFlagTruncated is set and
 // original_length records the pre-truncation size; nothing silently grows or
-// drops. Retention keeps at most kDefaultMaxBundles (10) bundles in a directory.
+// drops. The caps bound the DECODED bundle (what a reader holds), so compression
+// shrinks the file and never admits more content. Retention keeps at most
+// kDefaultMaxBundles (10) bundles in a directory.
 //
-// Compression: kSectionFlagCompressed is DEFINED but NOT produced by v1 (every
-// section is written uncompressed -- the deflate codec lives downstream in
-// crd-resources, which crd-perf must not depend on). The v1 reader REJECTS a
-// section that carries the flag (UnsupportedFeature), so the decompression-bomb
-// defence (e) owns is already inherited here: a compressed section is refused
-// until a codec edge is deliberately added.
+// Compression (OWN.1, through crd-compression's own DEFLATE): v1 defined
+// kSectionFlagCompressed from the start as "the payload is raw DEFLATE", and the
+// writer now produces it. A section stored whole is compressed when DEFLATE makes
+// it smaller (else it is stored raw, the ZIP container's rule); its
+// original_length is then the decoded size and payload_crc32 covers the stored,
+// compressed bytes. A section cut to a cap is stored raw: Compressed and
+// Truncated never meet. The reader decodes a compressed section into an
+// exact-size buffer only after bounding its claim (what DEFLATE can reach from
+// its bytes, the section cap and the total cap), so a decompression bomb is
+// refused or left undecoded before anything is allocated (read_bundle). The
+// container layout is unchanged, so the format stays v1: a reader
+// from before the codec edge refuses such a section, as it was built to, and
+// keeps the prefix.
 //
 // Contract: docs/design/runtime-diagnostics.md (DIAG.5d); ADR-0133 ID-1.
 // ---------------------------------------------------------------------------
@@ -80,7 +89,7 @@ enum class BundleSectionTag : crd::u32
 // Per-section flags (bitset in BundleSectionHeader::flags).
 inline constexpr crd::u32 kSectionFlagAbsent     = 1U << 0; // tag present, payload_length 0 (explicit absent section)
 inline constexpr crd::u32 kSectionFlagTruncated  = 1U << 1; // payload cut to a cap; original_length = pre-cut size
-inline constexpr crd::u32 kSectionFlagCompressed = 1U << 2; // payload is deflate_raw -- DEFINED, not produced by v1
+inline constexpr crd::u32 kSectionFlagCompressed = 1U << 2; // payload is raw DEFLATE; original_length = decoded size
 
 // ---- On-disk POD layouts (little-endian, explicit padding, pinned sizes) ----
 
@@ -105,8 +114,8 @@ struct BundleSectionHeader
     crd::u32 tag;             // 4  BundleSectionTag
     crd::u32 flags;           // 4  kSectionFlag*
     crd::u64 payload_length;  // 8  bytes of payload stored immediately after this header
-    crd::u64 original_length; // 8  logical size before truncation (== payload_length when not truncated)
-    crd::u32 payload_crc32;   // 4  crc32 of the payload bytes (0 when payload_length == 0)
+    crd::u64 original_length; // 8  logical size: before truncation, or decoded when compressed (else payload_length)
+    crd::u32 payload_crc32;   // 4  crc32 of the stored payload bytes (0 when payload_length == 0)
     crd::u32 _pad_a;          // 4  reserved (0) NOLINT(readability-identifier-naming): pinned on-disk spare slot
 };
 
@@ -127,6 +136,13 @@ struct BundleLimits
     crd::u32 max_sections      = kDefaultMaxSections;
 };
 
+// How the writer stores a section it keeps whole.
+enum class BundleCompression : crd::u8
+{
+    None,    // every section raw
+    Deflate, // raw DEFLATE when it makes the section smaller (kSectionFlagCompressed), else raw
+};
+
 // ---- Writer ----
 //
 // Accumulates sections into an in-memory buffer, then serialises a self-contained
@@ -144,12 +160,14 @@ public:
         RejectedNoRoom,  // no room even for the section header within max_total_bytes; nothing stored
     };
 
-    explicit BundleWriter(crd::memory::IAllocator* alloc = crd::memory::default_allocator(),
-                          BundleLimits             limits = {}) noexcept;
+    explicit BundleWriter(crd::memory::IAllocator* alloc = crd::memory::default_allocator(), BundleLimits limits = {},
+                          BundleCompression compression = BundleCompression::Deflate) noexcept;
 
     // Append a section. `bytes` beyond the per-section cap OR the remaining total
-    // room is stored truncated (kSectionFlagTruncated + original_length =
-    // bytes.size()). An empty span records an explicit absent section.
+    // room is stored truncated and raw (kSectionFlagTruncated + original_length =
+    // bytes.size()); a section that fits is stored whole, compressed when the
+    // writer's BundleCompression makes it smaller. An empty span records an
+    // explicit absent section.
     AddStatus add_section(BundleSectionTag tag, crd::containers::ConstSpan<crd::u8> bytes) noexcept;
 
     // Record an explicit absent section (tag present, payload_length 0).
@@ -165,7 +183,9 @@ public:
     [[nodiscard]] crd::containers::Array<crd::u8> finish(crd::u64 created_at_ns) noexcept;
 
     [[nodiscard]] crd::u32 section_count() const noexcept { return m_section_count; }
+    // The serialised size so far (what finish() returns), and the decoded size a reader holds, which the caps bound.
     [[nodiscard]] crd::u64 total_bytes() const noexcept { return m_total; }
+    [[nodiscard]] crd::u64 decoded_bytes() const noexcept { return m_decoded; }
 
 private:
     // Append one section header + payload (already clamped) to m_sections.
@@ -174,9 +194,11 @@ private:
 
     crd::memory::IAllocator*        m_alloc;
     BundleLimits                    m_limits;
+    BundleCompression               m_compression;
     crd::containers::Array<crd::u8> m_sections;                         // concatenated [hdr][payload]... (no file header)
     crd::u32                        m_section_count = 0;
     crd::u64                        m_total         = sizeof(BundleHeader); // running serialised size
+    crd::u64                        m_decoded       = sizeof(BundleHeader); // running decoded size (the caps bound it)
     bool                            m_finished      = false;
 };
 
@@ -194,32 +216,46 @@ enum class BundleReadStatus : crd::u8
     BadMagic,           // not a cerid-diagnostics bundle
     HeaderTooSmall,     // fewer than sizeof(BundleHeader) bytes, or the header crc mismatched
     UnsupportedVersion, // format_version != kBundleFormatVersion
-    UnsupportedFeature, // a section carried kSectionFlagCompressed (no codec edge in v1)
+    RefusedCompressed,  // a compressed section refused, the valid prefix kept: it claimed more than DEFLATE reaches
+                        // from its bytes, it was flagged truncated too, its stream did not decode to the claim, or
+                        // the decoded bytes could not be allocated
 };
 
 struct BundleSectionView
 {
     BundleSectionTag                    tag;
     crd::u32                            flags;
-    crd::u64                            original_length; // pre-truncation logical size
-    crd::containers::ConstSpan<crd::u8> payload;         // borrowed view into the input buffer
+    crd::u64                            original_length; // pre-truncation logical size (decoded size when compressed)
+    crd::u64                            stored_length;   // bytes stored in the bundle (compressed when compressed)
+    crd::containers::ConstSpan<crd::u8> payload;         // the section's decoded bytes: borrowed from the input
+                                                         // buffer, or from BundleReadResult::decoded when compressed;
+                                                         // empty for a compressed section left undecoded (a cap)
 };
 
 struct BundleReadResult
 {
-    BundleReadStatus                          status;
-    BundleHeader                              header;                 // valid iff status not BadMagic/HeaderTooSmall
-    crd::u32                                  declared_section_count; // header.section_count as read
-    crd::u64                                  stop_offset;            // byte offset where parsing stopped
+    explicit BundleReadResult(crd::memory::IAllocator* alloc) noexcept : sections(alloc), decoded(alloc) {}
+
+    BundleReadStatus                          status = BundleReadStatus::Ok;
+    BundleHeader                              header{};                   // valid iff not BadMagic/HeaderTooSmall
+    crd::u32                                  declared_section_count = 0; // header.section_count as read
+    crd::u64                                  stop_offset            = 0; // byte offset where parsing stopped
     crd::containers::Array<BundleSectionView> sections;               // the recovered (valid, crc-checked) prefix
+    crd::containers::Array<crd::u8>           decoded;                // the compressed sections' decoded bytes
 };
 
-// Parse `buf`. Never executes or allocates from the payload; the returned views
-// borrow into `buf`, which must outlive the result. Stops at the first
+// Parse `buf`. Never executes anything; the returned views borrow into `buf`,
+// which must outlive the result, and into the result's `decoded` (moving the
+// result or its `decoded` keeps them valid). Stops at the first
 // structurally-invalid section (short header, short payload, crc mismatch) and
 // returns the recovered prefix (RecoveredTruncated) rather than failing the whole
-// read. A compressed-flagged section stops the read with UnsupportedFeature.
-[[nodiscard]] BundleReadResult read_bundle(crd::containers::ConstSpan<crd::u8> buf,
+// read. The compressed sections decode into one allocation of exactly their
+// claims, bounded before it is made (the decompression-bomb defence): a claim
+// past what DEFLATE reaches from the stored bytes stops the read with
+// RefusedCompressed, and a section whose decoded size would pass
+// max_section_bytes, or take the decoded bundle past max_total_bytes, is listed
+// undecoded (an empty payload, original_length its claim) and the walk goes on.
+[[nodiscard]] BundleReadResult read_bundle(crd::containers::ConstSpan<crd::u8> buf, BundleLimits limits = {},
                                            crd::memory::IAllocator* alloc = crd::memory::default_allocator()) noexcept;
 
 // ---- Atomic publish + retention ----

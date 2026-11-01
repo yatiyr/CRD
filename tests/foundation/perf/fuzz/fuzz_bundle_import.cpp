@@ -3,8 +3,10 @@
 // acceptance clause "reject traversal / oversized / decompression-bomb inputs" (and "recover truncated bundles").
 //
 // Oracle (import_bundle is a bounded, non-executing READER, so the oracle is self-consistency, not a round-trip):
-//   * it never crashes, never reads outside the input buffer (every non-empty section payload is a borrowed view
-//     that lies strictly inside [data, data+size));
+//   * it never crashes, never reads outside the input buffer (every non-empty raw section payload is a borrowed view
+//     that lies strictly inside [data, data+size)); a compressed section is never also truncated, claims no more
+//     than DEFLATE reaches from its stored bytes, and decodes to exactly its claim inside the import's own decoded
+//     bytes, which hold nothing else, unless its claim passed a cap and it is flagged oversized instead (OWN.1);
 //   * a reject code is set iff the status is Rejected;
 //   * a non-rejected import carries the cerid-diagnostics schema (a schema mismatch always rejects);
 //   * unsafe_names and manifest_absent_mismatches are bounded by what the input actually declared;
@@ -12,11 +14,13 @@
 // Seeds: the golden v1 bundle plus the adversarial corpus the acceptance names -- truncated (after the manifest and
 // mid-section), a traversal SymbolIndex (debug_file ".."), an oversized section length, a decompression bomb (the
 // compressed flag with a ~4 GiB original_length), a wrong cerid-diagnostics schema, and a hostile section_count (the
-// pre-walk peek path added in (e1)), plus a DIAG.9b BuildIdentity section and one with a trailing byte. crc32s are
+// pre-walk peek path added in (e1)), plus a DIAG.9b BuildIdentity section and one with a trailing byte, and a
+// compressed section as the writer stores it and with its claim one byte long (OWN.1). crc32s are
 // recomputed where a case must reach a deep check rather than BadHeader. A decoded build identity stays within its
 // bounds and is never also reported refused.
 #include <crd/fuzz/harness.hpp>
 
+#include <crd/compression/deflate.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/checksum.hpp>
 #include <crd/containers/string.hpp>
@@ -60,6 +64,13 @@ void refresh_header_crc(Array<u8>& b) noexcept
 
 const u8 kCrash[16] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
 
+// The seeds from before the bundle compressed its sections keep their committed bytes: they are written raw, and the
+// compressed seeds are written by the default writer.
+BundleWriter raw_writer() noexcept
+{
+    return BundleWriter{crd::memory::default_allocator(), BundleLimits{}, BundleCompression::None};
+}
+
 Array<u8> build_golden()
 {
     BundleManifest man;
@@ -68,7 +79,7 @@ Array<u8> build_golden()
     man.absent_tags.push_back(static_cast<u32>(BundleSectionTag::SymbolIndex));
     const Array<u8> mp = serialize_manifest(man);
 
-    BundleWriter w;
+    BundleWriter w = raw_writer();
     w.add_section(BundleSectionTag::Manifest, span_of(mp.data(), mp.size()));
     w.add_section(BundleSectionTag::CrashRecord, span_of(kCrash, sizeof(kCrash)));
     w.add_absent(BundleSectionTag::LogTail);
@@ -87,7 +98,7 @@ Array<u8> build_symbol_bundle_traversal()
     mods.push_back(std::move(m));
     const Array<u8> payload = serialize_symbol_index(ConstSpan<ModuleIdentity>{mods.data(), mods.size()});
 
-    BundleWriter w;
+    BundleWriter w = raw_writer();
     w.add_section(BundleSectionTag::SymbolIndex, span_of(payload.data(), payload.size()));
     return w.finish(0U);
 }
@@ -114,7 +125,7 @@ Array<u8> build_identity_bundle(bool trailing_byte)
     man.absent_tags.push_back(static_cast<u32>(BundleSectionTag::SymbolIndex));
     const Array<u8> mp = serialize_manifest(man);
 
-    BundleWriter w;
+    BundleWriter w = raw_writer();
     w.add_section(BundleSectionTag::Manifest, span_of(mp.data(), mp.size()));
     w.add_section(BundleSectionTag::BuildIdentity, span_of(payload.data(), payload.size()));
     w.add_absent(BundleSectionTag::SymbolIndex);
@@ -146,14 +157,29 @@ void check_result(const BundleImport& r, const u8* data, usize size) noexcept
     {
         CRD_FUZZ_REQUIRE(r.manifest_absent_mismatches <= r.manifest.absent_tags.size());
     }
+    usize decoded = 0U;
     for (usize i = 0; i < r.sections.size(); ++i)
     {
-        const ConstSpan<u8>& p = r.sections[i].payload;
-        if (p.size() != 0U) // a borrowed view -- it must lie strictly inside the input buffer
+        const ImportedSection& s = r.sections[i];
+        const ConstSpan<u8>& p = s.payload;
+        if ((s.section_flags & kSectionFlagCompressed) != 0U)
+        {
+            // Decoded into the import's own bytes, exactly its bounded claim; one whose claim passed a cap is left
+            // undecoded and flagged oversized, and holds nothing.
+            CRD_FUZZ_REQUIRE((s.section_flags & kSectionFlagTruncated) == 0U);
+            CRD_FUZZ_REQUIRE(s.original_length <= crd::compression::deflate_max_inflated_size(s.stored_length));
+            const bool hidden = (s.import_flags & kImportSectionOversized) != 0U || s.original_length == 0U;
+            CRD_FUZZ_REQUIRE(p.empty() == hidden);
+            CRD_FUZZ_REQUIRE(p.empty() || (p.size() == s.original_length && p.data() >= r.decoded.data() &&
+                                           p.data() + p.size() <= r.decoded.data() + r.decoded.size()));
+            decoded += p.size();
+        }
+        else if (p.size() != 0U) // a borrowed view -- it must lie strictly inside the input buffer
         {
             CRD_FUZZ_REQUIRE(p.data() >= data && p.data() + p.size() <= data + size);
         }
     }
+    CRD_FUZZ_REQUIRE(decoded == r.decoded.size());
 }
 } // namespace
 
@@ -255,7 +281,7 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
 
     // Decompression bomb: a section flagged compressed with a ~4 GiB original_length and a tiny stored payload.
     {
-        BundleWriter w;
+        BundleWriter w = raw_writer();
         w.add_section(BundleSectionTag::CrashRecord, span_of(kCrash, sizeof(kCrash)));
         w.add_section(BundleSectionTag::RawDump, span_of(kCrash, sizeof(kCrash)));
         Array<u8>   b    = w.finish(0U);
@@ -264,5 +290,27 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
         const u64 bomb = 4ULL * 1024 * 1024 * 1024;
         std::memcpy(&b[s1 + 16], &bomb, sizeof(bomb)); // BundleSectionHeader::original_length @ +16
         sink.add("bomb-compressed", b.data(), b.size());
+    }
+
+    // A compressed section the writer stored (a repetitive log tail after the raw crash bytes), and the same with its
+    // claim one byte long: the decoder's exact-size refusal (OWN.1).
+    {
+        Array<u8> tail;
+        for (u32 line = 0; line < 32U; ++line)
+        {
+            for (const char c : "frame complete, nothing to report")
+            {
+                tail.push_back(static_cast<u8>(c));
+            }
+        }
+        BundleWriter w;
+        w.add_section(BundleSectionTag::CrashRecord, span_of(kCrash, sizeof(kCrash)));
+        w.add_section(BundleSectionTag::LogTail, span_of(tail.data(), tail.size()));
+        Array<u8> b = w.finish(0U);
+        sink.add("compressed", b.data(), b.size());
+        const usize s1 = sizeof(BundleHeader) + sizeof(BundleSectionHeader) + sizeof(kCrash);
+        const u64 claim = tail.size() + 1U;
+        std::memcpy(&b[s1 + 16], &claim, sizeof(claim)); // BundleSectionHeader::original_length @ +16
+        sink.add("compressed-claim-long", b.data(), b.size());
     }
 }

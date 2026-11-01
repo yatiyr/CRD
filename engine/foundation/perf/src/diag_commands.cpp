@@ -1554,10 +1554,6 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
         {
             flight_error = "the flight-record section is over the importer's section bound";
         }
-        else if ((s.section_flags & kSectionFlagCompressed) != 0U)
-        {
-            flight_error = "the flight-record section is compressed, which the importer does not decode";
-        }
         else
         {
             flight = decode_flight_record(s.payload);
@@ -1575,7 +1571,7 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
     for (const ImportedSection& s : imp.sections)
     {
         if ((s.tag != BundleSectionTag::CrashRecord && s.tag != BundleSectionTag::RawDump) ||
-            (s.section_flags & (kSectionFlagAbsent | kSectionFlagCompressed)) != 0U ||
+            (s.section_flags & kSectionFlagAbsent) != 0U ||
             (s.import_flags & (kImportSectionDuplicate | kImportSectionOversized)) != 0U)
         {
             continue;
@@ -1598,7 +1594,7 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
         .u64("declared_sections", imp.declared_section_count)
         .u64("sections", imp.sections.size())
         .boolean("total_len_mismatch", imp.total_len_mismatch)
-        .boolean("compressed_unsupported", imp.compressed_unsupported)
+        .boolean("compressed_refused", imp.compressed_refused)
         .boolean("manifest", imp.has_manifest && imp.manifest.ok)
         .u64("manifest_absent_mismatches", imp.manifest_absent_mismatches)
         .u64("symbols", imp.symbols.size())
@@ -1627,6 +1623,7 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
             .boolean("oversized", (s.import_flags & kImportSectionOversized) != 0U)
             .boolean("duplicate", (s.import_flags & kImportSectionDuplicate) != 0U)
             .u64("original_length", s.original_length)
+            .u64("stored_length", s.stored_length)
             .u64("payload_length", s.payload.size());
         (void)out.add_item(item);
     }

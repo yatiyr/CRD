@@ -6,7 +6,9 @@
       "id": "cerid-package",
       "kind": "package",
       "title": "The relocatable Cerid package: the engine libraries cmake --install exports as Cerid:: targets",
-      "packages": [],
+      "packages": [
+        "zstd"
+      ],
       "functions": [
         "authentication"
       ],
@@ -81,7 +83,8 @@
       "kind": "program",
       "title": "The cprof_export program (tools/cprof-export)",
       "packages": [
-        "glfw"
+        "glfw",
+        "zstd"
       ],
       "functions": [],
       "confidentiality": false,

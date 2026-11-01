@@ -7,9 +7,11 @@
 // oldest beyond the cap. The bounded, non-executing ADVERSARIAL importer (traversal / oversized / bomb /
 // version-mismatch, golden manifests, fuzz corpus) is DIAG.5d(e) and builds on read_bundle().
 
+#include <crd/compression/deflate.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/checksum.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/memory/allocator.hpp>
 #include <crd/perf/bundle.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -324,15 +326,289 @@ TEST_CASE("bundle reader flags corruption and bad framing", "[perf][diag][bundle
         CHECK(r.status == BundleReadStatus::RecoveredTruncated);
         CHECK(r.sections.size() == 1U); // section 0 survives, section 1's crc fails
     }
-    SECTION("compressed flag is rejected (no codec edge in v1)")
+    SECTION("raw bytes flagged compressed do not decode to their claim and are refused")
     {
         cont::Array<crd::u8> bad = buf;
         // Section 1's flags field: header + section0(hdr+payload) + offsetof(flags)=4.
         const crd::usize f1 = sizeof(BundleHeader) + sizeof(BundleSectionHeader) + s0.size() + 4;
         std::memcpy(&bad[f1], &kSectionFlagCompressed, 4); // set exactly the compressed bit
         const BundleReadResult r = read_bundle(span_of(bad.data(), bad.size()));
-        CHECK(r.status == BundleReadStatus::UnsupportedFeature);
-        CHECK(r.sections.size() == 1U); // section 0 recovered before the rejection
+        CHECK(r.status == BundleReadStatus::RefusedCompressed);
+        CHECK(r.sections.size() == 1U); // section 0 recovered before the refusal
+        CHECK(r.stop_offset == f1 - 4U);
+        CHECK(r.decoded.empty());
+    }
+}
+
+namespace
+{
+// A section DEFLATE shrinks (a 256-byte period) and one it does not (xorshift bytes).
+cont::Array<crd::u8> noise(crd::usize n)
+{
+    cont::Array<crd::u8> a;
+    a.resize_uninitialized(n);
+    crd::u32 x = 0x9E3779B9U;
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        x ^= x << 13U;
+        x ^= x >> 17U;
+        x ^= x << 5U;
+        a[i] = static_cast<crd::u8>(x >> 24U);
+    }
+    return a;
+}
+
+// Grants every request below `limit` bytes from the default allocator, refuses the rest and counts the refusals.
+class RefusingFrom final : public crd::memory::IAllocator
+{
+public:
+    explicit RefusingFrom(crd::usize limit) noexcept : m_limit(limit) {}
+
+    void* allocate(crd::usize size, crd::usize alignment) override { return try_allocate(size, alignment); }
+    [[nodiscard]] void* try_allocate(crd::usize size, crd::usize alignment) override
+    {
+        if (size >= m_limit)
+        {
+            ++m_refusals;
+            return nullptr;
+        }
+        return crd::memory::default_allocator()->try_allocate(size, alignment);
+    }
+    void deallocate(void* p) noexcept override { crd::memory::default_allocator()->deallocate(p); }
+    [[nodiscard]] bool owns(const void* p) const noexcept override { return p != nullptr; }
+    [[nodiscard]] crd::usize refusals() const noexcept { return m_refusals; }
+
+private:
+    crd::usize m_limit;
+    crd::usize m_refusals = 0U;
+};
+
+// The offset of section `index`'s header in a bundle whose earlier sections store `stored` bytes each.
+crd::usize section_at(crd::usize index, const crd::usize* stored) noexcept
+{
+    crd::usize at = sizeof(BundleHeader);
+    for (crd::usize i = 0; i < index; ++i)
+    {
+        at += sizeof(BundleSectionHeader) + stored[i];
+    }
+    return at;
+}
+
+void put_u64(cont::Array<crd::u8>& b, crd::usize at, crd::u64 v) noexcept
+{
+    std::memcpy(&b[at], &v, sizeof(v));
+}
+
+void put_u32(cont::Array<crd::u8>& b, crd::usize at, crd::u32 v) noexcept
+{
+    std::memcpy(&b[at], &v, sizeof(v));
+}
+} // namespace
+
+TEST_CASE("bundle stores a section DEFLATE shrinks compressed and the rest raw", "[perf][diag][bundle]")
+{
+    const cont::Array<crd::u8> dump = pattern(7, 4096);
+    const cont::Array<crd::u8> crash = noise(512);
+
+    BundleWriter w;
+    REQUIRE(w.add_section(BundleSectionTag::RawDump, span_of(dump.data(), dump.size())) == BundleWriter::AddStatus::Ok);
+    REQUIRE(w.add_section(BundleSectionTag::CrashRecord, span_of(crash.data(), crash.size())) ==
+            BundleWriter::AddStatus::Ok);
+    const cont::Array<crd::u8> buf = w.finish(0U);
+
+    // The stored payload is the owner's DEFLATE of the section, byte for byte; the noise is stored raw.
+    const cont::Array<crd::u8> packed =
+        crd::compression::deflate_raw(span_of(dump.data(), dump.size()), crd::memory::default_allocator());
+    REQUIRE(packed.size() < dump.size());
+    BundleSectionHeader sh{};
+    std::memcpy(&sh, buf.data() + sizeof(BundleHeader), sizeof(sh));
+    CHECK(sh.flags == kSectionFlagCompressed);
+    CHECK(sh.payload_length == packed.size());
+    CHECK(sh.original_length == dump.size());
+    CHECK(sh.payload_crc32 == cont::crc32(span_of(packed.data(), packed.size())));
+    CHECK(std::memcmp(buf.data() + sizeof(BundleHeader) + sizeof(sh), packed.data(), packed.size()) == 0);
+
+    CHECK(w.total_bytes() == buf.size());
+    CHECK(w.decoded_bytes() == sizeof(BundleHeader) + 2U * sizeof(BundleSectionHeader) + dump.size() + crash.size());
+    CHECK(w.total_bytes() < w.decoded_bytes());
+
+    BundleReadResult r = read_bundle(span_of(buf.data(), buf.size()));
+    REQUIRE(r.status == BundleReadStatus::Ok);
+    REQUIRE(r.sections.size() == 2U);
+    CHECK(r.sections[0].flags == kSectionFlagCompressed);
+    CHECK(r.sections[0].stored_length == packed.size());
+    CHECK(r.sections[0].original_length == dump.size());
+    REQUIRE(r.sections[0].payload.size() == dump.size());
+    CHECK(std::memcmp(r.sections[0].payload.data(), dump.data(), dump.size()) == 0);
+    CHECK(r.sections[1].flags == 0U);
+    CHECK(r.sections[1].stored_length == crash.size());
+    const crd::usize stored[1] = {packed.size()};
+    CHECK(r.sections[1].payload.data() == buf.data() + section_at(1, stored) + sizeof(BundleSectionHeader));
+    CHECK(r.decoded.size() == dump.size());
+
+    // Moving the result keeps the decoded view valid (its bytes live in `decoded`).
+    const BundleReadResult moved = static_cast<BundleReadResult&&>(r);
+    CHECK(std::memcmp(moved.sections[0].payload.data(), dump.data(), dump.size()) == 0);
+
+    // Without compression the same sections are stored raw, and the decoded bundle is the same size.
+    BundleWriter raw{crd::memory::default_allocator(), BundleLimits{}, BundleCompression::None};
+    (void)raw.add_section(BundleSectionTag::RawDump, span_of(dump.data(), dump.size()));
+    (void)raw.add_section(BundleSectionTag::CrashRecord, span_of(crash.data(), crash.size()));
+    CHECK(raw.total_bytes() == raw.decoded_bytes());
+    CHECK(raw.decoded_bytes() == w.decoded_bytes());
+    const cont::Array<crd::u8> plain = raw.finish(0U);
+    const BundleReadResult pr = read_bundle(span_of(plain.data(), plain.size()));
+    REQUIRE(pr.status == BundleReadStatus::Ok);
+    CHECK(pr.sections[0].flags == 0U);
+    CHECK(pr.decoded.empty());
+}
+
+TEST_CASE("bundle caps bound the decoded bundle, and a cut section stays raw", "[perf][diag][bundle]")
+{
+    const cont::Array<crd::u8> dump = pattern(7, 4096);
+
+    SECTION("a section over the per-section cap is cut and stored raw, never compressed")
+    {
+        BundleLimits limits;
+        limits.max_section_bytes = 1024U;
+        BundleWriter w{crd::memory::default_allocator(), limits};
+        REQUIRE(w.add_section(BundleSectionTag::RawDump, span_of(dump.data(), dump.size())) ==
+                BundleWriter::AddStatus::StoredTruncated);
+        const cont::Array<crd::u8> buf = w.finish(0U);
+        const BundleReadResult r = read_bundle(span_of(buf.data(), buf.size()));
+        REQUIRE(r.status == BundleReadStatus::Ok);
+        CHECK(r.sections[0].flags == kSectionFlagTruncated);
+        CHECK(r.sections[0].stored_length == 1024U);
+        CHECK(r.sections[0].original_length == dump.size());
+    }
+    SECTION("the total cap counts decoded bytes: compression never admits more content")
+    {
+        BundleLimits limits;
+        limits.max_total_bytes = sizeof(BundleHeader) + sizeof(BundleSectionHeader) + dump.size();
+        BundleWriter w{crd::memory::default_allocator(), limits};
+        REQUIRE(w.add_section(BundleSectionTag::RawDump, span_of(dump.data(), dump.size())) ==
+                BundleWriter::AddStatus::Ok);
+        CHECK(w.total_bytes() < limits.max_total_bytes);
+        CHECK(w.decoded_bytes() == limits.max_total_bytes);
+        CHECK(w.add_absent(BundleSectionTag::LogTail) == BundleWriter::AddStatus::RejectedNoRoom);
+        const cont::Array<crd::u8> buf = w.finish(0U);
+        // The reader holds the same bound: exactly the cap decodes, one byte less leaves the section undecoded.
+        CHECK(read_bundle(span_of(buf.data(), buf.size()), limits).decoded.size() == dump.size());
+        BundleLimits tighter = limits;
+        tighter.max_total_bytes -= 1U;
+        const BundleReadResult r = read_bundle(span_of(buf.data(), buf.size()), tighter);
+        CHECK(r.status == BundleReadStatus::Ok);
+        REQUIRE(r.sections.size() == 1U);
+        CHECK(r.sections[0].payload.empty());
+        CHECK(r.sections[0].original_length == dump.size());
+        CHECK(r.decoded.empty());
+    }
+    SECTION("a section that fits only part of the remaining room is cut raw to it")
+    {
+        BundleLimits limits;
+        limits.max_total_bytes = sizeof(BundleHeader) + sizeof(BundleSectionHeader) + dump.size() - 1U;
+        BundleWriter w{crd::memory::default_allocator(), limits};
+        REQUIRE(w.add_section(BundleSectionTag::RawDump, span_of(dump.data(), dump.size())) ==
+                BundleWriter::AddStatus::StoredTruncated);
+        CHECK(w.total_bytes() == limits.max_total_bytes);
+    }
+}
+
+TEST_CASE("bundle reader refuses a compressed section it cannot bound or decode", "[perf][diag][bundle]")
+{
+    // A raw section, then a compressed one: each refusal keeps the raw prefix and stops at the compressed section.
+    const cont::Array<crd::u8> crash = noise(64);
+    const cont::Array<crd::u8> dump = pattern(7, 4096);
+    BundleWriter w;
+    REQUIRE(w.add_section(BundleSectionTag::CrashRecord, span_of(crash.data(), crash.size())) ==
+            BundleWriter::AddStatus::Ok);
+    REQUIRE(w.add_section(BundleSectionTag::RawDump, span_of(dump.data(), dump.size())) == BundleWriter::AddStatus::Ok);
+    const cont::Array<crd::u8> good = w.finish(0U);
+
+    const crd::usize stored[1] = {crash.size()};
+    const crd::usize s1 = section_at(1, stored);
+    BundleSectionHeader sh{};
+    std::memcpy(&sh, good.data() + s1, sizeof(sh));
+    REQUIRE(sh.flags == kSectionFlagCompressed);
+    const crd::usize payload = s1 + sizeof(BundleSectionHeader);
+
+    const auto refused = [&](const cont::Array<crd::u8>& b, BundleLimits limits = {})
+    {
+        const BundleReadResult r = read_bundle(span_of(b.data(), b.size()), limits);
+        CHECK(r.status == BundleReadStatus::RefusedCompressed);
+        REQUIRE(r.sections.size() == 1U);
+        CHECK(std::memcmp(r.sections[0].payload.data(), crash.data(), crash.size()) == 0);
+        CHECK(r.stop_offset == s1);
+        CHECK(r.decoded.empty());
+    };
+
+    SECTION("the valid bundle reads")
+    {
+        CHECK(read_bundle(span_of(good.data(), good.size())).status == BundleReadStatus::Ok);
+    }
+    SECTION("a claim past the section cap is listed undecoded and the walk goes on")
+    {
+        BundleLimits limits;
+        limits.max_section_bytes = dump.size() - 1U;
+        const BundleReadResult r = read_bundle(span_of(good.data(), good.size()), limits);
+        CHECK(r.status == BundleReadStatus::Ok);
+        REQUIRE(r.sections.size() == 2U);
+        CHECK(r.sections[1].flags == kSectionFlagCompressed);
+        CHECK(r.sections[1].payload.empty());
+        CHECK(r.sections[1].original_length == dump.size());
+        CHECK(r.sections[1].stored_length == sh.payload_length);
+        CHECK(r.decoded.empty()); // nothing was allocated for it
+    }
+    SECTION("a claim past what DEFLATE reaches from the stored bytes (a bomb within the caps)")
+    {
+        cont::Array<crd::u8> b = good;
+        const crd::u64 claim = crd::compression::deflate_max_inflated_size(sh.payload_length) + 1U;
+        put_u64(b, s1 + 16U, claim);
+        BundleLimits limits;
+        limits.max_section_bytes = ~crd::u64{0};
+        limits.max_total_bytes = ~crd::u64{0};
+        refused(b, limits);
+        // Refused before anything is asked for it: an allocator that refuses the claim's size sees no request.
+        RefusingFrom alloc{static_cast<crd::usize>(claim)};
+        CHECK(read_bundle(span_of(b.data(), b.size()), limits, &alloc).status == BundleReadStatus::RefusedCompressed);
+        CHECK(alloc.refusals() == 0U);
+    }
+    SECTION("a claim that DEFLATE could reach but the stream does not decode to, one byte either side")
+    {
+        cont::Array<crd::u8> b = good;
+        put_u64(b, s1 + 16U, dump.size() + 1U);
+        refused(b);
+        put_u64(b, s1 + 16U, dump.size() - 1U);
+        refused(b);
+    }
+    SECTION("compressed and truncated together")
+    {
+        cont::Array<crd::u8> b = good;
+        put_u32(b, s1 + 4U, kSectionFlagCompressed | kSectionFlagTruncated);
+        refused(b);
+    }
+    SECTION("a corrupt stream whose crc was recomputed to match")
+    {
+        cont::Array<crd::u8> b = good;
+        b[payload] ^= 0x04U; // BTYPE (bits 1-2, LSB first): fixed Huffman (01) becomes the reserved type (11)
+        put_u32(b, s1 + 24U, cont::crc32(span_of(b.data() + payload, static_cast<crd::usize>(sh.payload_length))));
+        refused(b);
+    }
+    SECTION("decoded bytes that cannot be allocated")
+    {
+        RefusingFrom alloc{dump.size()};
+        const BundleReadResult r = read_bundle(span_of(good.data(), good.size()), BundleLimits{}, &alloc);
+        CHECK(r.status == BundleReadStatus::RefusedCompressed);
+        CHECK(r.sections.size() == 1U);
+        CHECK(r.stop_offset == s1);
+    }
+    SECTION("a corrupt stored byte is caught by the crc before any decoding")
+    {
+        cont::Array<crd::u8> b = good;
+        b[payload + 1U] ^= 0x01U;
+        const BundleReadResult r = read_bundle(span_of(b.data(), b.size()));
+        CHECK(r.status == BundleReadStatus::RecoveredTruncated);
+        CHECK(r.sections.size() == 1U);
     }
 }
 

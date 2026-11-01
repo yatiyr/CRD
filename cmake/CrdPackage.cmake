@@ -1,5 +1,6 @@
 # Relocatable package export (REPO.DEV.8, widened by DIAG.11a). Contract: docs/design/public-consumption.md.
 # crd_package_library() registers the install rules of one module library under the Cerid export set,
+# crd_package_dependency() those of a pinned third-party archive a packaged library links privately,
 # crd_package_assets() installs authored assets a packaged library reads at run time, and crd_package_config() writes
 # the package files (CeridConfig.cmake, its version file, the exported targets).
 # Install rules add no build statement, so the build graph is unchanged; `cmake --install` produces the prefix.
@@ -48,6 +49,27 @@ function(_crd_package_debug_information out_var)
     endif()
 endfunction()
 
+# _crd_package_target(<target> <exported name> [<further install(TARGETS) arguments>...])
+# Exports <target> as Cerid::<name> with its archive under lib/ and, under the `pdb` debug-information form, the
+# archive's compile PDB beside it (CMake's default /Fd for a static library under Ninja and Makefiles, in the
+# directory that defined the target).
+function(_crd_package_target target name)
+    set_target_properties("${target}" PROPERTIES EXPORT_NAME "${name}")
+    install(TARGETS "${target}" EXPORT ${CRD_PACKAGE_EXPORT}
+            ARCHIVE DESTINATION lib
+            LIBRARY DESTINATION lib
+            RUNTIME DESTINATION bin
+            ${ARGN})
+    get_target_property(type "${target}" TYPE)
+    if(type STREQUAL "STATIC_LIBRARY")
+        _crd_package_debug_information(debug_information)
+        if(debug_information STREQUAL "pdb")
+            get_target_property(binary_dir "${target}" BINARY_DIR)
+            install(FILES "${binary_dir}/CMakeFiles/${target}.dir/${target}.pdb" DESTINATION lib)
+        endif()
+    endif()
+endfunction()
+
 # crd_package_library(<target> NAME <exported name> [INCLUDE <public include dir>]
 #                     [GENERATED <file> DESTINATION <dir>] [INCLUDE_ONLY <module>...])
 # Exports <target> as Cerid::<name>, installs the public headers (templates *.in stay out) and, when given, the
@@ -69,29 +91,32 @@ function(crd_package_library target)
     if(ARG_GENERATED AND NOT ARG_DESTINATION)
         message(FATAL_ERROR "crd_package_library(${target}) GENERATED needs DESTINATION <directory under include/>")
     endif()
-    set_target_properties("${target}" PROPERTIES EXPORT_NAME "${ARG_NAME}")
-    install(TARGETS "${target}" EXPORT ${CRD_PACKAGE_EXPORT}
-            ARCHIVE DESTINATION lib
-            LIBRARY DESTINATION lib
-            RUNTIME DESTINATION bin
-            INCLUDES DESTINATION include)
+    _crd_package_target("${target}" "${ARG_NAME}" INCLUDES DESTINATION include)
     if(ARG_INCLUDE)
         install(DIRECTORY "${ARG_INCLUDE}/" DESTINATION include PATTERN "*.in" EXCLUDE)
     endif()
     if(ARG_GENERATED)
         install(FILES "${ARG_GENERATED}" DESTINATION "include/${ARG_DESTINATION}")
     endif()
-    if(type STREQUAL "STATIC_LIBRARY")
-        _crd_package_debug_information(debug_information)
-        if(debug_information STREQUAL "pdb")
-            # The compile PDB of a static library under Ninja and Makefiles (CMake's default /Fd for the target).
-            install(FILES "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${target}.dir/${target}.pdb" DESTINATION lib)
-        endif()
-    endif()
     foreach(partner IN LISTS ARG_INCLUDE_ONLY)
         set_property(GLOBAL APPEND PROPERTY CRD_PACKAGE_INCLUDE_ONLY "${target}:${partner}")
     endforeach()
     set_property(GLOBAL APPEND PROPERTY CRD_PACKAGE_LIBRARIES "${target}")
+endfunction()
+
+# crd_package_dependency(<target> NAME <exported name>)
+# Exports a pinned third-party static library that a packaged library links privately: its archive (and compile PDB)
+# only, link-only behind the library that names it, with no headers, so a consumer can neither include it nor swap it
+# for another build. The pinned package's own install rules stay out (EXCLUDE_FROM_ALL), or its archive would be
+# installed twice and its headers with it. CeridConfig.cmake lists the dependencies in Cerid_DEPENDENCIES.
+function(crd_package_dependency target)
+    cmake_parse_arguments(ARG "" "NAME" "" ${ARGN})
+    get_target_property(type "${target}" TYPE)
+    if(NOT ARG_NAME OR NOT type STREQUAL "STATIC_LIBRARY")
+        message(FATAL_ERROR "crd_package_dependency(${target}) needs a static library and NAME <exported name>")
+    endif()
+    _crd_package_target("${target}" "${ARG_NAME}")
+    set_property(GLOBAL APPEND PROPERTY CRD_PACKAGE_DEPENDENCIES "${ARG_NAME}")
 endfunction()
 
 # crd_package_assets(<source dir> DESTINATION <dir under share/cerid>)
@@ -153,7 +178,9 @@ function(crd_package_config)
     else()
         set(CRD_PACKAGE_HAS_ASSETS OFF)
     endif()
+    get_property(dependencies GLOBAL PROPERTY CRD_PACKAGE_DEPENDENCIES)
     list(JOIN libraries " " CRD_PACKAGE_LIBRARY_LIST)
+    list(JOIN dependencies " " CRD_PACKAGE_DEPENDENCY_LIST)
     list(JOIN assets " " CRD_PACKAGE_ASSET_LIST)
     set(package_dir "${CMAKE_BINARY_DIR}/package")
     configure_package_config_file("${CMAKE_SOURCE_DIR}/cmake/CeridConfig.cmake.in"
