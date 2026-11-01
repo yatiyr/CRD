@@ -509,8 +509,19 @@ struct TlsCallbacks
             return false;
         }
         const KeyId  key      = key_id_of(bytes);
+        // A loop, not std::find: MSVC's STL routes a trivially comparable 32-byte element to its vectorized find,
+        // which static_asserts on the size under clang-cl.
         const KeyId* pins_end = settings.pinned + settings.pin_count;
-        if (std::find(settings.pinned, pins_end, key) == pins_end)
+        bool         pinned   = false;
+        for (const KeyId* pin = settings.pinned; pin != pins_end; ++pin)
+        {
+            if (*pin == key)
+            {
+                pinned = true;
+                break;
+            }
+        }
+        if (!pinned)
         {
             return false;
         }
