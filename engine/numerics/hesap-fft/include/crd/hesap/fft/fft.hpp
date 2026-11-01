@@ -100,12 +100,15 @@ template <typename T> [[nodiscard]] constexpr bool ip4_planned(crd::usize n) noe
 // The forward algorithm of a size. The deep-split runs 8K..1M as four passes (the 2026-07-04 K-stage sweep; its 4096
 // = 16x16x16 lost, f32 8K lost 10% at eight lanes, and f64 1M takes the six-step, 5.38 against 5.88 ms); f32 1M takes
 // the tiled four-step (SIMD-DISPATCH's fft board of 2026-10-30: 2.10 against the deep-split's 2.55 ms at avx2, level
-// with it at sse4.2, sse2 and portable); f32 2K, 4K and 16K take the in-place three passes (SIMD-PERF's boards of
+// with it at sse4.2, sse2 and portable); f32 2K to 16K take the in-place three passes (SIMD-PERF's boards of
 // 2026-11-01 on the benchmark machine, each timed transform warm: at 4K 1.38x the standalone-hier at avx512, level
 // with MKL, and 1.17x at avx2, the out-of-place passes' 96 KiB working set having left the 48 KiB L1d; at 2K 1.40x
 // IP4-AoS at avx512 and 1.30x at avx2, and 1.24x and 1.13x the standalone-hier; at 16K, n = 16·64·16, 1.26x IP4-AoS
-// at avx512 on and off a 64-byte boundary and 1.08x at avx2 on one, level off one); past L3 the four-step's blocked
-// structure wins (2M flat, 4M and 8M large losses under the deep-split).
+// at avx512 on and off a 64-byte boundary and 1.08x at avx2 on one, level off one; at 8K 1.06x the standalone-hier
+// at avx512 and 1.08x at avx2 on a 64-byte boundary, level off one, 1.14x at sse2 and 1.40x at portable once pass 1
+// loads its twiddles there; with that, the in-place passes lead every other arm from 2K to 16K at sse2 and portable,
+// where the canonical plan runs under the deterministic modes); past L3 the four-step's blocked structure wins (2M
+// flat, 4M and 8M large losses under the deep-split).
 template <typename T> [[nodiscard]] constexpr FftAlgorithm planned_forward(crd::usize n) noexcept
 {
     constexpr bool is_f32 = std::is_same_v<T, crd::f32>;
@@ -113,7 +116,7 @@ template <typename T> [[nodiscard]] constexpr FftAlgorithm planned_forward(crd::
     {
         return FftAlgorithm::Stockham;
     }
-    if (is_f32 && (n == 2048 || n == 4096 || n == 16384))
+    if (is_f32 && n >= 2048 && n <= 16384)
     {
         return FftAlgorithm::InPlace3;
     }
@@ -125,7 +128,7 @@ template <typename T> [[nodiscard]] constexpr FftAlgorithm planned_forward(crd::
     {
         return FftAlgorithm::TiledFourStep;
     }
-    if (n >= (crd::usize{1} << 13) && n <= (crd::usize{1} << 20) && n != (crd::usize{1} << (is_f32 ? 13 : 20)))
+    if (n >= (crd::usize{1} << 13) && n < (crd::usize{1} << 20))
     {
         return FftAlgorithm::DeepSplit4;
     }
@@ -137,7 +140,7 @@ template <typename T> [[nodiscard]] constexpr FftAlgorithm planned_forward(crd::
     {
         return FftAlgorithm::FourStep;
     }
-    return FftAlgorithm::StandaloneHier; // f32 1K and 8K
+    return FftAlgorithm::StandaloneHier; // f32 1K
 }
 
 // The inverse algorithm of a size: IP4-AoS where it takes the forward, the four-step at its sizes, Stockham below.
