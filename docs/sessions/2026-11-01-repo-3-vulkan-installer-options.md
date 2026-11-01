@@ -72,7 +72,9 @@ without the baseline calibration fails it (`[] != ['InstallationLog.txt']`).
   action in all workflow files, since `download-artifact` serves only the host check. `check-pins.py`,
   `check-ci-tiers.py`, `check-master-plan.py`, `check-repository.py`, `check-allman-braces.py`, `check-generated.py`
   (the licence manifest refreshed) pass.
-- Hosted: the dispatch is recorded on [REPO.3](../ROADMAP.md#slice-repo.3) once GitHub's mirror holds this commit.
+- Hosted: GitHub's mirror held 72f9696f at 10:45 UTC; `host-check.yml` dispatched with
+  `experiment=vulkan-sdk-installer` is run 41298875777, whose nine arms were queued at 10:50 UTC behind the CI runs.
+  Its judge summary is the next batch's first read.
 
 ## The measuring PC's CUDA run
 
