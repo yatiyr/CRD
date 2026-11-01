@@ -464,7 +464,7 @@ CodeImageCheck check_code_image(const CrashEvidence& crash, cont::StringView roo
 
 // The fault a native crash capture records ("crash", when there is one) and the judgement of it on its machine
 // ("classification": the verdict, each signature with its evidence, the code's comparison with its module's image,
-// the processor advisory and the user's sentence).
+// the faulting instruction's check against the fault, the processor advisory and the user's sentence).
 void add_classification_items(const CrashEvidence* crash, const HardwareIdentity* machine, ReplayOutcome replay,
                               cont::StringView root, DiagFields& item, DiagSnapshot& out)
 {
@@ -483,7 +483,10 @@ void add_classification_items(const CrashEvidence* crash, const HardwareIdentity
             .boolean("address_known", crash->address_known)
             .u64("address", crash->address)
             .u64("modules", crash->modules.size())
-            .u64("code_bytes", crash->code_size);
+            .u64("code_bytes", crash->code_size)
+            .str("instruction_set", instruction_set_name(crash->instruction_set))
+            .boolean("registers", crash->registers.known)
+            .str("access", fault_access_name(crash->access));
         (void)out.add_item(item);
     }
     const CodeImageCheck code_image =
@@ -523,6 +526,10 @@ void add_classification_items(const CrashEvidence* crash, const HardwareIdentity
         {
             item.u64("code_offset", k.offset).u64("code_recorded", k.recorded).u64("code_image_byte", k.image);
         }
+        item.str("instruction", instruction_check_result_name(c.instruction.result))
+            .str("instruction_reason", c.instruction.reason)
+            .u64("instruction_length", c.instruction.length)
+            .u64("instruction_accesses", c.instruction.accesses);
     }
     item.str("cpu_advisory", c.advisory != nullptr ? c.advisory->id : cont::StringView{})
         .str("microcode_state", microcode_state_name(c.microcode))

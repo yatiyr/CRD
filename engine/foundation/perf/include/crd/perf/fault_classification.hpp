@@ -16,6 +16,12 @@
 //   code-bit-flip          the faulting instruction's bytes differ from the module's image in exactly one bit: code
 //                          no store wrote (compare_code_with_image; more than one differing bit is a patch, such as a
 //                          hook or a breakpoint, and never judged)
+//   access-not-made        an access fault on an address, or of a kind, that the faulting instruction (decoded with
+//                          its registers, instruction_access.hpp) does not access: code that cannot fault there
+//   divide-without-cause   an x86-64 divide error on an instruction that does not divide, or on a DIV or IDIV whose
+//                          register divisor is nonzero and whose quotient fits
+// The last two are judged only on code proven to be its module's (its image comparison matches), so code that changed
+// after the fault (JIT code, a hook) is never read for them.
 // Addresses below kNullRegionBytes (a null pointer plus an offset, a common software bug) are never judged.
 //
 // Verdict: likely on a machine check, on two signatures, or on one with a listed processor; possible on one
@@ -29,6 +35,7 @@
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/perf/hardware_identity.hpp>
+#include <crd/perf/instruction_access.hpp>
 #include <crd/perf/symbol_index.hpp>
 
 namespace crd::perf
@@ -46,6 +53,19 @@ enum class CrashCaptureKind : crd::u8
 
 // "none", "minidump", "record".
 [[nodiscard]] crd::containers::StringView crash_capture_kind_name(CrashCaptureKind k) noexcept;
+
+// The faulting access's kind, as the capture states it (a Windows access violation's first parameter; on x86-64 Linux
+// the page fault's error code).
+enum class FaultAccess : crd::u8
+{
+    Unknown = 0U,
+    Read = 1U,
+    Write = 2U,
+    Execute = 3U,
+};
+
+// "unknown", "read", "write", "execute".
+[[nodiscard]] crd::containers::StringView fault_access_name(FaultAccess a) noexcept;
 
 // What a native crash capture says about its fault.
 struct CrashEvidence
@@ -66,11 +86,18 @@ struct CrashEvidence
     crd::containers::Array<ModuleIdentity> modules; // loaded, then unloaded (a minidump's), as the capture lists them
     crd::u32 code_size = 0U;                        // bytes of `code_bytes` the capture holds from pc (0: none)
     crd::u8 code_bytes[crd::crash::kCodeWindowBytes] = {};
+    InstructionSet instruction_set = InstructionSet::Unknown;
+    FaultRegisters registers; // the faulting thread's; known only when they name the capture's pc
+    FaultAccess access = FaultAccess::Unknown;
+    bool trap_known = false;
+    crd::u32 trap = 0U; // x86-64 Linux: the processor's exception vector (14 page fault, 13 protection, 0 divide)
 };
 
-// Reads a minidump (Windows' exception stream, type 6, its module lists and the range of its memory lists, types 5
-// and 9, that holds the pc) or a Linux crash record (its `code` line). Untrusted input on any platform: nothing is
-// read outside `capture`; a capture that is neither, or whose fault cannot be read, is refused with `error`.
+// Reads a minidump (Windows' exception stream, type 6, with its thread context, the processor architecture of its
+// system information, type 7, its module lists and the range of its memory lists, types 5 and 9, that holds the pc) or
+// a Linux crash record (its registers, with x86-64's trap number and error code, and its `code` line). Untrusted input
+// on any platform: nothing is read outside `capture`; a capture that is neither, or whose fault cannot be read, is
+// refused with `error`.
 [[nodiscard]] CrashEvidence read_crash_evidence(crd::containers::ConstSpan<crd::u8> capture,
                                                 crd::memory::IAllocator* alloc = crd::memory::default_allocator());
 
@@ -143,9 +170,11 @@ inline constexpr crd::u32 kFaultSignalCodeAddressBitFlip = 1U << 1;
 inline constexpr crd::u32 kFaultSignalDataAddressBitFlip = 1U << 2;
 inline constexpr crd::u32 kFaultSignalReplayNotReproduced = 1U << 3;
 inline constexpr crd::u32 kFaultSignalCodeBitFlip = 1U << 4;
+inline constexpr crd::u32 kFaultSignalAccessNotMade = 1U << 5;
+inline constexpr crd::u32 kFaultSignalDivideWithoutCause = 1U << 6;
 
 // Appends the names of `signals` ("machine-check", "code-address-bit-flip", "data-address-bit-flip",
-// "replay-not-reproduced", "code-bit-flip"), comma separated, in bit order.
+// "replay-not-reproduced", "code-bit-flip", "access-not-made", "divide-without-cause"), comma separated, in bit order.
 void append_fault_signal_names(crd::u32 signals, crd::containers::String& out);
 
 enum class HardwareVerdict : crd::u8
@@ -201,6 +230,27 @@ struct BitFlipEvidence
     crd::containers::String module;
 };
 
+enum class InstructionCheckResult : crd::u8
+{
+    NotJudged = 0U,          // `reason` says why
+    Consistent = 1U,         // the instruction makes the faulting access, or its operands raise its divide error
+    AccessNotMade = 2U,      // the access-not-made signature
+    DivideWithoutCause = 3U, // the divide-without-cause signature
+};
+
+// "not-judged", "consistent", "access-not-made", "divide-without-cause".
+[[nodiscard]] crd::containers::StringView instruction_check_result_name(InstructionCheckResult r) noexcept;
+
+// The faulting instruction, decoded with the capture's registers, against the fault the operating system reported.
+struct InstructionCheck
+{
+    InstructionCheckResult result = InstructionCheckResult::NotJudged;
+    crd::containers::StringView reason; // why not judged, or what the instruction does not do (static text)
+    crd::u64 pc = 0U;
+    crd::u32 length = 0U;   // the decoded instruction's bytes
+    crd::u32 accesses = 0U; // its data accesses
+};
+
 struct FaultClassification
 {
     FaultClassification() = default;
@@ -215,14 +265,15 @@ struct FaultClassification
     BitFlipEvidence code_flip;
     BitFlipEvidence data_flip;
     CodeImageCheck code_image; // the comparison judged (NotCompared when none was given)
+    InstructionCheck instruction;
     const CpuAdvisory* advisory = nullptr;
     MicrocodeState microcode = MicrocodeState::NotListed;
     ReplayOutcome replay = ReplayOutcome::NotRun;
 };
 
 // Judges a crash (null: none, as for a flight bundle without one) on `machine` (null: not recorded) with what its
-// replay did and its code's comparison with the module's image (null: not compared). Pure: reads nothing but its
-// arguments.
+// replay did and its code's comparison with the module's image (null: not compared, so the instruction is not judged).
+// Pure: reads nothing but its arguments.
 [[nodiscard]] FaultClassification classify_fault(const CrashEvidence* crash, const HardwareIdentity* machine,
                                                  ReplayOutcome replay, const CodeImageCheck* code_image = nullptr,
                                                  crd::memory::IAllocator* alloc = crd::memory::default_allocator());

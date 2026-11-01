@@ -1841,6 +1841,23 @@ TEST_CASE("diagnostic host: the application's wild write leaves one attributable
             cp::classify_fault(&evidence, &machine.identity, cp::ReplayOutcome::NotRun, &code);
         CHECK(judged.signals == 0U);
         CHECK(judged.verdict == cp::HardwareVerdict::None);
+        // The faulting instruction, decoded with the capture's registers, makes the access the OS reported; the same
+        // capture reporting another address is an access the instruction does not make.
+        CHECK(evidence.registers.known);
+        INFO("instruction: " << cont::String{judged.instruction.reason}.c_str());
+#if defined(__x86_64__) || defined(_M_X64)
+        CHECK(evidence.instruction_set == cp::InstructionSet::X64);
+        CHECK(judged.instruction.result == cp::InstructionCheckResult::Consistent);
+        cp::CrashEvidence moved = cp::read_crash_evidence({capture_bytes.data(), capture_bytes.size()});
+        moved.address += 0x1000U;
+        const cp::FaultClassification elsewhere =
+            cp::classify_fault(&moved, &machine.identity, cp::ReplayOutcome::NotRun, &code);
+        CHECK(elsewhere.instruction.result == cp::InstructionCheckResult::AccessNotMade);
+        CHECK(elsewhere.signals == cp::kFaultSignalAccessNotMade);
+#else
+        CHECK(evidence.instruction_set == cp::InstructionSet::AArch64);
+        CHECK(judged.instruction.result == cp::InstructionCheckResult::NotJudged);
+#endif
     }
 
     (void)check_repaired_run("crash");

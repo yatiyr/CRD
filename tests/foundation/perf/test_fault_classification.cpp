@@ -1,7 +1,8 @@
 // HW-RESILIENCE.2: hardware fault classification (crd/perf/fault_classification.hpp) -- reading a minidump's and a
 // Linux crash record's fault and code bytes, each impossible-state signature and its guards, the code's comparison
-// with PE and ELF images, the processor advisory table, the verdict and its sentence, and bundle.inspect's judgement
-// of a capture and of a bundle that carries one.
+// with PE and ELF images, the faulting instruction's registers and its check against the fault, the processor
+// advisory table, the verdict and its sentence, and bundle.inspect's judgement of a capture and of a bundle that
+// carries one.
 
 #include "module_file_identity.hpp"
 
@@ -921,6 +922,333 @@ TEST_CASE("fault classification: image files are found by identity, and bundle.i
     REQUIRE(missing.status == cp::DiagStatus::Ok);
     CHECK(std::strstr(missing.json.c_str(), R"("code_image":"not-compared","code_image_reason":"the module's image is )"
                                             R"(not in the image store")") != nullptr);
+    CHECK(std::strstr(missing.json.c_str(), R"("verdict":"none")") != nullptr);
+    (void)std::remove(path);
+}
+
+namespace
+{
+
+// A crash record with every register crd::crash writes for x86-64: rdi and the page fault's trap number and error
+// code as given, `code` (hex, or empty) on its code line; its modules are those of record().
+cont::String full_record(cont::StringView signal, u64 rip, u64 rdi, u32 trapno, u64 err, const char* code)
+{
+    cont::String out;
+    out.append("crd crash record\npid 7 tid 7\n");
+    out.append(signal);
+    out.append("\nexe /opt/game/game\nregs x86_64\nr8 0x8 r9 0x9 r10 0xa r11 0xb\nr12 0xc r13 0xd r14 0xe r15 0xf\n"
+               "rdi ");
+    append_hex(out, rdi);
+    out.append(" rsi 0x6000 rbp 0x5000 rbx 0x4000\nrdx 0x0 rax 0x1000 rcx 0x2000 rsp 0x7ff000\nrip ");
+    append_hex(out, rip);
+    out.append(" efl 0x246 csgsfs 0x33 err ");
+    append_hex(out, err);
+    out.append("\ntrapno ");
+    append_hex(out, trapno);
+    out.append(" oldmask 0x0 cr2 0x0\n\n");
+    if (code[0] != '\0')
+    {
+        out.append("code ");
+        append_hex(out, rip);
+        out.push_back(' ');
+        out.append(code);
+        out.push_back('\n');
+    }
+    out.append("build_id 0102\nmodules 2\nmodule ");
+    append_hex(out, kExeBase);
+    out.push_back(' ');
+    append_hex(out, kExeSize);
+    out.append(" 0102 (exe)\nmodule ");
+    append_hex(out, kLibBase);
+    out.push_back(' ');
+    append_hex(out, kLibSize);
+    out.append(" 0304 libcerid.so\n");
+    return out;
+}
+
+cp::CodeImageCheck matching()
+{
+    cp::CodeImageCheck k;
+    k.result = cp::CodeImageResult::Matches;
+    return k;
+}
+
+// A minidump of an exception stream with a thread context and a system information stream naming `architecture`.
+cont::Array<u8> context_dump(u32 code, u64 pc, u64 access, u64 address, crd::u16 architecture,
+                             const cont::Array<u8>& context)
+{
+    cont::Array<u8> exception;
+    put32(exception, 1U);
+    put32(exception, 0U);
+    put32(exception, code);
+    put32(exception, 0U);
+    put64(exception, 0U);
+    put64(exception, pc);
+    put32(exception, 2U);
+    put32(exception, 0U);
+    put64(exception, access);
+    put64(exception, address);
+    for (u32 i = 2U; i < 15U; ++i)
+    {
+        put64(exception, 0U);
+    }
+    cont::Array<u8> system;
+    system.push_back(static_cast<u8>(architecture));
+    system.push_back(static_cast<u8>(architecture >> 8U));
+    for (u32 i = 2U; i < 56U; ++i)
+    {
+        system.push_back(0U);
+    }
+    // The context follows the header, a three-entry directory and both streams (the exception's 8 more bytes).
+    const u32 at = static_cast<u32>(32U + 3U * 12U + exception.size() + 8U + system.size());
+    put32(exception, static_cast<u32>(context.size()));
+    put32(exception, at);
+    const u32 types[] = {6U, 7U, 0xFFFFU};
+    const cont::Array<u8>* streams[] = {&exception, &system, &context};
+    return assemble(types, streams, 3U);
+}
+
+// An AMD64 CONTEXT: rax to r15 at 0x1000 times their number plus one, `rcx` and `rip` as given.
+cont::Array<u8> amd64_context(u32 flags, u64 rip, u64 rcx)
+{
+    cont::Array<u8> c;
+    c.resize(0x4D0U);
+    std::memset(c.data(), 0, c.size());
+    put_at(c, 0x30U, flags, 4U);
+    put_at(c, 0x44U, 0x246U, 4U);
+    for (u32 i = 0U; i < 16U; ++i)
+    {
+        put_at(c, 0x78U + 8U * i, 0x1000U * (i + 1U), 8U);
+    }
+    put_at(c, 0x80U, rcx, 8U);
+    put_at(c, 0xF8U, rip, 8U);
+    return c;
+}
+
+cp::CrashEvidence read_dump(const cont::Array<u8>& dump)
+{
+    return cp::read_crash_evidence({dump.data(), dump.size()});
+}
+
+constexpr u32 kAmd64Full = 0x0010001FU;
+
+} // namespace
+
+TEST_CASE("fault classification: a minidump's thread context and a record's registers read back",
+          "[perf][diag][hw-resilience]")
+{
+    const u64 pc = kExeBase + 0x10U;
+    const cont::Array<u8> dump = context_dump(0xC0000005U, pc, 1U, 0x2000U, 9U, amd64_context(kAmd64Full, pc, 0x2000U));
+    const cp::CrashEvidence e = read_dump(dump);
+    REQUIRE(e.ok);
+    CHECK(e.instruction_set == cp::InstructionSet::X64);
+    CHECK(e.access == cp::FaultAccess::Write);
+    REQUIRE(e.registers.known);
+    CHECK(e.registers.gpr[0] == 0x1000U); // rax
+    CHECK(e.registers.gpr[1] == 0x2000U); // rcx
+    CHECK(e.registers.gpr[15] == 0x10000U);
+    CHECK(e.registers.flags == 0x246U);
+    // A context without the integer registers, or one for another pc, is no register state.
+    CHECK_FALSE(
+        read_dump(context_dump(0xC0000005U, pc, 0U, 0x2000U, 9U, amd64_context(0x00100001U, pc, 0U))).registers.known);
+    CHECK_FALSE(read_dump(context_dump(0xC0000005U, pc, 0U, 0x2000U, 9U, amd64_context(kAmd64Full, pc + 1U, 0U)))
+                    .registers.known);
+    // ARM64: X0 to X30, SP and PC.
+    cont::Array<u8> arm;
+    arm.resize(0x390U);
+    std::memset(arm.data(), 0, arm.size());
+    put_at(arm, 0U, 0x00400003U, 4U);
+    for (u32 i = 0U; i < 31U; ++i)
+    {
+        put_at(arm, 8U + 8U * i, 0x100U + i, 8U);
+    }
+    put_at(arm, 0x100U, 0x7FF0000U, 8U);
+    put_at(arm, 0x108U, pc, 8U);
+    const cp::CrashEvidence a = read_dump(context_dump(0xC0000005U, pc, 8U, pc, 12U, arm));
+    CHECK(a.instruction_set == cp::InstructionSet::AArch64);
+    CHECK(a.access == cp::FaultAccess::Execute);
+    REQUIRE(a.registers.known);
+    CHECK(a.registers.gpr[30] == 0x100U + 30U);
+    CHECK(a.registers.gpr[31] == 0x7FF0000U);
+    // Every cut of the dump reads safely.
+    for (usize n = 0U; n < dump.size(); ++n)
+    {
+        (void)cp::read_crash_evidence({dump.data(), n});
+    }
+
+    // A record: every register, the trap number and the page fault's error code (W: a write, I/D: an execution).
+    const cp::CrashEvidence r = read(full_record(view(signal_line(11U, 1, 0x1234U)), pc, 0x1234U, 14U, 0x6U, ""));
+    REQUIRE(r.ok);
+    CHECK(r.instruction_set == cp::InstructionSet::X64);
+    REQUIRE(r.registers.known);
+    CHECK(r.registers.gpr[7] == 0x1234U); // rdi
+    CHECK(r.registers.gpr[4] == 0x7FF000U);
+    CHECK(r.registers.gpr[12] == 0xCU);
+    CHECK(r.trap_known);
+    CHECK(r.trap == 14U);
+    CHECK(r.access == cp::FaultAccess::Write);
+    CHECK(read(full_record(view(signal_line(11U, 1, 0x1234U)), pc, 0U, 14U, 0x14U, "")).access ==
+          cp::FaultAccess::Execute);
+    CHECK(read(full_record(view(signal_line(11U, 1, 0x1234U)), pc, 0U, 14U, 0x4U, "")).access == cp::FaultAccess::Read);
+    CHECK(read(full_record(view(signal_line(11U, 1, 0x1234U)), pc, 0U, 13U, 0x0U, "")).access ==
+          cp::FaultAccess::Unknown);
+    // The short record of the tests above names some registers only: no register state.
+    CHECK_FALSE(read(record(view(signal_line(11U, 1, 0x1234U)), pc)).registers.known);
+}
+
+TEST_CASE("fault classification: a fault on an access the instruction does not make is a signature, never on code "
+          "not proven to be its module's",
+          "[perf][diag][hw-resilience]")
+{
+    const u64 pc = kExeBase + 0x10U;
+    const u64 rdi = 0x00007f00'12345000ULL;
+    const auto judge = [&](u64 address, u32 trapno, u64 err, crd::i32 si_code, const cp::CodeImageCheck* image)
+    {
+        const cp::CrashEvidence e =
+            read(full_record(view(signal_line(11U, si_code, address)), pc, rdi, trapno, err, "488b07c3"));
+        CHECK(e.registers.known);
+        return cp::classify_fault(&e, nullptr, cp::ReplayOutcome::NotRun, image);
+    };
+    const cp::CodeImageCheck same = matching();
+    // mov rax, [rdi]: a read of [rdi, rdi + 8).
+    const cp::FaultClassification made = judge(rdi + 7U, 14U, 0x4U, 1, &same);
+    CHECK(made.instruction.result == cp::InstructionCheckResult::Consistent);
+    CHECK(made.instruction.length == 3U);
+    CHECK(made.instruction.accesses == 1U);
+    CHECK(made.signals == 0U);
+    CHECK(judge(pc + 2U, 14U, 0x14U, 2, &same).instruction.result == cp::InstructionCheckResult::Consistent);
+
+    const cp::FaultClassification elsewhere = judge(rdi + 8U, 14U, 0x4U, 1, &same);
+    CHECK(elsewhere.instruction.result == cp::InstructionCheckResult::AccessNotMade);
+    CHECK(elsewhere.instruction.pc == pc);
+    CHECK(elsewhere.signals == cp::kFaultSignalAccessNotMade);
+    CHECK(elsewhere.verdict == cp::HardwareVerdict::Possible);
+    cont::String names;
+    cp::append_fault_signal_names(elsewhere.signals, names);
+    CHECK(view(names) == "access-not-made");
+    CHECK(view(cp::fault_message(elsewhere, nullptr)) ==
+          "This failure shows one sign of a hardware fault, which alone is not proof: the instruction at "
+          "0x555555554010 faulted on an address it does not access. If failures like it repeat in different places, "
+          "test the machine's memory and processor.");
+    CHECK(judge(rdi, 14U, 0x6U, 2, &same).instruction.reason == cont::StringView{"a write it does not make"});
+    CHECK(judge(rdi + 0x100U, 14U, 0x14U, 2, &same).instruction.reason ==
+          cont::StringView{"an execution outside its own bytes"});
+    // Two signatures are likely.
+    const cp::CrashEvidence twice =
+        read(full_record(view(signal_line(11U, 1, rdi + 8U)), pc, rdi, 14U, 0x4U, "488b07c3"));
+    CHECK(cp::classify_fault(&twice, nullptr, cp::ReplayOutcome::NotReproduced, &same).verdict ==
+          cp::HardwareVerdict::Likely);
+
+    // Never judged: a protection fault (no address), a kernel-sent code, code not proven to be its image's.
+    CHECK(judge(rdi + 8U, 13U, 0x0U, 1, &same).instruction.result == cp::InstructionCheckResult::NotJudged);
+    CHECK(judge(rdi + 8U, 14U, 0x4U, 128, &same).instruction.result == cp::InstructionCheckResult::NotJudged);
+    CHECK(judge(rdi + 8U, 14U, 0x4U, 1, nullptr).signals == 0U);
+    for (const cp::CodeImageResult r :
+         {cp::CodeImageResult::NotCompared, cp::CodeImageResult::Modified, cp::CodeImageResult::OneBitFlipped})
+    {
+        cp::CodeImageCheck k;
+        k.result = r;
+        const cp::FaultClassification c = judge(rdi + 8U, 14U, 0x4U, 1, &k);
+        CHECK(c.instruction.result == cp::InstructionCheckResult::NotJudged);
+        CHECK((c.signals & cp::kFaultSignalAccessNotMade) == 0U);
+    }
+    // A Windows dump: its access kind, and its protection faults' all-ones address.
+    cp::CrashEvidence w =
+        read_dump(context_dump(0xC0000005U, pc, 1U, 0x2000U, 9U, amd64_context(kAmd64Full, pc, 0x2000U)));
+    const u8 store[] = {0x89U, 0x01U}; // mov [rcx], eax
+    std::memcpy(w.code_bytes, store, sizeof(store));
+    w.code_size = sizeof(store);
+    CHECK(cp::classify_fault(&w, nullptr, cp::ReplayOutcome::NotRun, &same).instruction.result ==
+          cp::InstructionCheckResult::Consistent);
+    w.access = cp::FaultAccess::Read;
+    CHECK(cp::classify_fault(&w, nullptr, cp::ReplayOutcome::NotRun, &same).instruction.reason ==
+          cont::StringView{"a read it does not make"});
+    w.address = ~u64{0};
+    CHECK(cp::classify_fault(&w, nullptr, cp::ReplayOutcome::NotRun, &same).instruction.result ==
+          cp::InstructionCheckResult::NotJudged);
+}
+
+TEST_CASE("fault classification: a divide error its operands cannot raise is a signature",
+          "[perf][diag][hw-resilience]")
+{
+    const u64 pc = kExeBase + 0x10U;
+    const cp::CodeImageCheck same = matching();
+    const auto judge = [&](u32 code, u64 rcx, const u8* bytes, u32 n)
+    {
+        cp::CrashEvidence e = read_dump(context_dump(code, pc, 0U, 0U, 9U, amd64_context(kAmd64Full, pc, rcx)));
+        std::memcpy(e.code_bytes, bytes, n);
+        e.code_size = n;
+        return cp::classify_fault(&e, nullptr, cp::ReplayOutcome::NotRun, &same);
+    };
+    const u8 idiv[] = {0x48U, 0xF7U, 0xF9U};   // idiv rcx; rdx:rax = 0x3000:0x1000
+    const u8 idiv_m[] = {0x48U, 0xF7U, 0x39U}; // idiv qword [rcx]
+    const u8 load[] = {0x8BU, 0x01U};          // mov eax, [rcx]
+    CHECK(judge(0xC0000094U, 0U, idiv, 3U).instruction.result == cp::InstructionCheckResult::Consistent);
+    CHECK(judge(0xC0000095U, 0x2000U, idiv, 3U).instruction.result == cp::InstructionCheckResult::Consistent);
+    const cp::FaultClassification fits = judge(0xC0000094U, ~u64{0} >> 1U, idiv, 3U); // by 2^63 - 1
+    CHECK(fits.instruction.result == cp::InstructionCheckResult::DivideWithoutCause);
+    CHECK(fits.signals == cp::kFaultSignalDivideWithoutCause);
+    CHECK(
+        view(cp::fault_message(fits, nullptr)) ==
+        "This failure shows one sign of a hardware fault, which alone is not proof: the instruction at "
+        "0x555555554010 raised a divide error, but its divisor is not zero and its quotient fits. If failures like it "
+        "repeat in different places, test the machine's memory and processor.");
+    const cp::FaultClassification not_divide = judge(0xC0000094U, 5U, load, 2U);
+    CHECK(not_divide.instruction.result == cp::InstructionCheckResult::DivideWithoutCause);
+    CHECK(not_divide.instruction.reason == cont::StringView{"it does not divide"});
+    const cp::FaultClassification memory = judge(0xC0000094U, 0x2000U, idiv_m, 3U);
+    CHECK(memory.instruction.result == cp::InstructionCheckResult::NotJudged);
+    CHECK(memory.signals == 0U);
+    // A Linux record's divide error: SIGFPE FPE_INTDIV with the divide error's trap number (rdx:rax 0:0x1000 by rcx
+    // 0x2000 fits); a sent SIGFPE is never judged.
+    const u64 rip = kExeBase + 0x20U;
+    const cp::CrashEvidence r = read(full_record(view(signal_line(8U, 1, rip)), rip, 0U, 0U, 0U, "48f7f9"));
+    CHECK(cp::classify_fault(&r, nullptr, cp::ReplayOutcome::NotRun, &same).instruction.result ==
+          cp::InstructionCheckResult::DivideWithoutCause);
+    const cp::CrashEvidence sent = read(full_record(view(signal_line(8U, -6, rip)), rip, 0U, 0U, 0U, "48f7f9"));
+    CHECK(cp::classify_fault(&sent, nullptr, cp::ReplayOutcome::NotRun, &same).instruction.result ==
+          cp::InstructionCheckResult::NotJudged);
+}
+
+TEST_CASE("fault classification: bundle.inspect reports the instruction check of a capture whose code is its image's",
+          "[perf][diag][hw-resilience]")
+{
+    const u8 id[] = {0x03U, 0x04U};
+    const cont::Array<u8> image = elf_image({id, sizeof(id)}, kLibSize, false);
+    char dir[512];
+    (void)std::snprintf(dir, sizeof(dir), "%s/images/.build-id/03", CRD_DIAG_COMMANDS_SCRATCH);
+    REQUIRE(crd::platform::fs::create_directories(crd::platform::fs::Path{cont::StringView{dir}}));
+    char image_path[600];
+    (void)std::snprintf(image_path, sizeof(image_path), "%s/04", dir);
+    REQUIRE(cp::write_bundle_atomic(image_path, cont::ConstSpan<u8>{image.data(), image.size()}));
+    const u64 pc = kLibBase + 0x1010U;
+    const u64 rdi = 0x00007f00'12345000ULL;
+    const cont::String capture =
+        full_record(view(signal_line(11U, 1, rdi + 0x40U)), pc, rdi, 14U, 0x4U, "488b07c3"); // reads [rdi]
+    char path[512];
+    (void)std::snprintf(path, sizeof(path), "%s/fault_classification_access.log", CRD_DIAG_COMMANDS_SCRATCH);
+    REQUIRE(cp::write_bundle_atomic(path,
+                                    cont::ConstSpan<u8>{reinterpret_cast<const u8*>(capture.data()), capture.size()}));
+    cp::DiagServiceConfig config;
+    config.root = cont::StringView{CRD_DIAG_COMMANDS_SCRATCH};
+    cp::DiagCommandService svc{cp::authority_bit(cp::DiagAuthority::Read), config, crd::memory::default_allocator()};
+    cp::DiagRequest req;
+    req.command = "bundle.inspect";
+    req.page_items = 64U;
+    req.path = "fault_classification_access.log";
+    const cp::DiagResult result = svc.execute(req);
+    REQUIRE(result.status == cp::DiagStatus::Ok);
+    INFO(result.json.c_str());
+    CHECK(std::strstr(result.json.c_str(), R"("instruction_set":"x86-64","registers":true,"access":"read")") !=
+          nullptr);
+    CHECK(std::strstr(result.json.c_str(), R"("verdict":"possible","signals":"access-not-made")") != nullptr);
+    CHECK(std::strstr(result.json.c_str(),
+                      R"("instruction":"access-not-made","instruction_reason":"an address it )"
+                      R"(does not access","instruction_length":3,"instruction_accesses":1)") != nullptr);
+    (void)std::remove(image_path);
+    const cp::DiagResult missing = svc.execute(req);
+    REQUIRE(missing.status == cp::DiagStatus::Ok);
+    CHECK(std::strstr(missing.json.c_str(), R"("instruction":"not-judged")") != nullptr);
     CHECK(std::strstr(missing.json.c_str(), R"("verdict":"none")") != nullptr);
     (void)std::remove(path);
 }

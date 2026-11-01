@@ -17,6 +17,26 @@ constexpr crd::u32 kExceptionStream = 6U;
 constexpr crd::u32 kStatusAccessViolation = 0xC0000005U;
 constexpr crd::u32 kStatusInPageError = 0xC0000006U;
 constexpr crd::u32 kExceptionParametersRead = 2U; // the access kind, then the address
+constexpr crd::u32 kStatusIntegerDivideByZero = 0xC0000094U;
+constexpr crd::u32 kStatusIntegerOverflow = 0xC0000095U; // how x86-64 Windows reports a divide error's overflow
+// The exception stream's thread context (a MINIDUMP_LOCATION_DESCRIPTOR after the 152-byte MINIDUMP_EXCEPTION), the
+// system information's processor architecture and the CONTEXT layouts it names (AMD64 and ARM64, winnt.h; the Windows
+// tests pin each offset against the SDK's own structure).
+constexpr crd::usize kExceptionContextOffset = 160U;
+constexpr crd::u32 kSystemInfoStream = 7U;
+constexpr crd::u16 kArchitectureAmd64 = 9U;
+constexpr crd::u16 kArchitectureArm64 = 12U;
+constexpr crd::u32 kAmd64Flags = 0x30U;  // ContextFlags
+constexpr crd::u32 kAmd64EFlags = 0x44U; // EFlags (32 bits)
+constexpr crd::u32 kAmd64Rax = 0x78U;    // Rax to R15 in the encoding's order
+constexpr crd::u32 kAmd64Rip = 0xF8U;
+constexpr crd::u32 kAmd64Needed = 0x100U;
+constexpr crd::u32 kAmd64Integer = 0x00100003U; // CONTEXT_AMD64 | CONTEXT_CONTROL | CONTEXT_INTEGER
+constexpr crd::u32 kArm64X0 = 0x08U;            // X0 to X28, Fp (X29) and Lr (X30)
+constexpr crd::u32 kArm64Sp = 0x100U;
+constexpr crd::u32 kArm64Pc = 0x108U;
+constexpr crd::u32 kArm64Needed = 0x110U;
+constexpr crd::u32 kArm64Integer = 0x00400003U; // CONTEXT_ARM64 | CONTEXT_CONTROL | CONTEXT_INTEGER
 // Its memory lists: MINIDUMP_MEMORY_LIST (a count, then {start, size, rva} per range) and MINIDUMP_MEMORY64_LIST (a
 // count and the base rva, then {start, size} per range, their bytes back to back from the base).
 constexpr crd::u32 kMemoryListStream = 5U;
@@ -24,7 +44,19 @@ constexpr crd::u32 kMemory64ListStream = 9U;
 
 // Linux signal numbers (x86-64 and AArch64 agree) and SIGBUS's machine-check codes.
 constexpr crd::u32 kSigBus = 7U;
+constexpr crd::u32 kSigFpe = 8U;
 constexpr crd::u32 kSigSegv = 11U;
+constexpr crd::i32 kSegvMapErr = 1; // SEGV_MAPERR, SEGV_ACCERR and SEGV_PKUERR: a page fault on an address
+constexpr crd::i32 kSegvAccErr = 2;
+constexpr crd::i32 kSegvPkuErr = 4;
+constexpr crd::i32 kBusAdrAln = 1; // BUS_ADRALN: an AArch64 alignment fault on an address
+constexpr crd::i32 kBusAdrErr = 2; // BUS_ADRERR: a page fault past a mapped file's end
+constexpr crd::i32 kFpeIntDiv = 1; // FPE_INTDIV and FPE_INTOVF
+constexpr crd::i32 kFpeIntOvf = 2;
+constexpr crd::u32 kTrapPageFault = 14U; // x86-64 exception vectors
+constexpr crd::u32 kTrapDivideError = 0U;
+constexpr crd::u64 kPageFaultWrite = 1U << 1U; // the page fault error code's W and I/D bits
+constexpr crd::u64 kPageFaultFetch = 1U << 4U;
 constexpr crd::i32 kBusMceErrAr = 4; // BUS_MCEERR_AR: memory error consumed by the faulting access
 constexpr crd::i32 kBusMceErrAo = 5; // BUS_MCEERR_AO: memory error found in the process, not yet consumed
 
@@ -102,6 +134,86 @@ void read_minidump_code(cont::ConstSpan<crd::u8> dump, CrashEvidence& e) noexcep
     }
 }
 
+// An access violation's first parameter: read (0), write (1) or execute (8, a DEP fault).
+[[nodiscard]] FaultAccess fault_access_of(crd::u64 kind) noexcept
+{
+    switch (kind)
+    {
+        case 0U:
+            return FaultAccess::Read;
+        case 1U:
+            return FaultAccess::Write;
+        case 8U:
+            return FaultAccess::Execute;
+        default:
+            return FaultAccess::Unknown;
+    }
+}
+
+[[nodiscard]] crd::u64 load(cont::ConstSpan<crd::u8> bytes, crd::usize at, crd::u32 width) noexcept
+{
+    crd::u64 v = 0U;
+    for (crd::u32 i = 0U; i < width; ++i)
+    {
+        v |= crd::u64{bytes[at + i]} << (8U * i);
+    }
+    return v;
+}
+
+// The processor architecture and the faulting thread's registers, from the exception stream's thread context.
+void read_minidump_context(cont::ConstSpan<crd::u8> dump, cont::ConstSpan<crd::u8> exception, CrashEvidence& e) noexcept
+{
+    detail::Cursor system{find_minidump_stream(dump, kSystemInfoStream)};
+    const crd::u16 architecture = system.u16();
+    if (!system.ok)
+    {
+        return;
+    }
+    if (architecture == kArchitectureAmd64)
+    {
+        e.instruction_set = InstructionSet::X64;
+    }
+    else if (architecture == kArchitectureArm64)
+    {
+        e.instruction_set = InstructionSet::AArch64;
+    }
+    if (exception.size() < kExceptionContextOffset + 8U)
+    {
+        return;
+    }
+    const crd::u64 size = load(exception, kExceptionContextOffset, 4U);
+    const crd::u64 rva = load(exception, kExceptionContextOffset + 4U, 4U);
+    if (rva > dump.size() || size > dump.size() - rva)
+    {
+        return;
+    }
+    const cont::ConstSpan<crd::u8> context = dump.subspan(static_cast<crd::usize>(rva), static_cast<crd::usize>(size));
+    FaultRegisters& r = e.registers;
+    if (e.instruction_set == InstructionSet::X64 && context.size() >= kAmd64Needed &&
+        (load(context, kAmd64Flags, 4U) & kAmd64Integer) == kAmd64Integer)
+    {
+        for (crd::u32 i = 0U; i < 16U; ++i)
+        {
+            r.gpr[i] = load(context, kAmd64Rax + 8U * i, 8U);
+        }
+        r.pc = load(context, kAmd64Rip, 8U);
+        r.flags = load(context, kAmd64EFlags, 4U);
+        r.known = e.pc_known && r.pc == e.pc;
+    }
+    else if (e.instruction_set == InstructionSet::AArch64 && context.size() >= kArm64Needed &&
+             (load(context, 0U, 4U) & kArm64Integer) == kArm64Integer)
+    {
+        for (crd::u32 i = 0U; i < 31U; ++i)
+        {
+            r.gpr[i] = load(context, kArm64X0 + 8U * i, 8U);
+        }
+        r.gpr[31] = load(context, kArm64Sp, 8U);
+        r.pc = load(context, kArm64Pc, 8U);
+        r.flags = load(context, 4U, 4U);
+        r.known = e.pc_known && r.pc == e.pc;
+    }
+}
+
 CrashEvidence read_minidump(cont::ConstSpan<crd::u8> dump, crd::memory::IAllocator* alloc)
 {
     CrashEvidence e(alloc);
@@ -117,7 +229,7 @@ CrashEvidence read_minidump(cont::ConstSpan<crd::u8> dump, crd::memory::IAllocat
     e.pc = in.u64();
     const crd::u32 count = in.u32();
     (void)in.u32();
-    (void)in.u64(); // ExceptionInformation[0]: read, write or execute
+    const crd::u64 kind = in.u64(); // ExceptionInformation[0]: read (0), write (1) or execute (8)
     const crd::u64 address = in.u64();
     if (!in.ok)
     {
@@ -128,7 +240,9 @@ CrashEvidence read_minidump(cont::ConstSpan<crd::u8> dump, crd::memory::IAllocat
     {
         e.address_known = true;
         e.address = address;
+        e.access = fault_access_of(kind);
     }
+    read_minidump_context(dump, find_minidump_stream(dump, kExceptionStream), e);
     e.modules = parse_minidump_modules(dump, alloc);
     for (ModuleIdentity& m : parse_minidump_unloaded_modules(dump, alloc))
     {
@@ -252,6 +366,41 @@ void read_record_code(cont::StringView text, CrashEvidence& e) noexcept
     std::memcpy(e.code_bytes, code, e.code_size);
 }
 
+// The record's registers (each a named hex value); x86-64's also carry the trap number and the page fault's error code.
+void read_record_registers(cont::StringView block, CrashEvidence& e) noexcept
+{
+    constexpr cont::StringView x86[] = {"rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
+                                        "r8",  "r9",  "r10", "r11", "r12", "r13", "r14", "r15"};
+    constexpr cont::StringView arm[] = {"x0",  "x1",  "x2",  "x3",  "x4",  "x5",  "x6",  "x7",  "x8",  "x9",  "x10",
+                                        "x11", "x12", "x13", "x14", "x15", "x16", "x17", "x18", "x19", "x20", "x21",
+                                        "x22", "x23", "x24", "x25", "x26", "x27", "x28", "x29", "x30", "sp"};
+    const bool is_x86 = e.instruction_set == InstructionSet::X64;
+    const cont::StringView* names = is_x86 ? x86 : arm;
+    const crd::u32 count = is_x86 ? 16U : 32U;
+    FaultRegisters& r = e.registers;
+    bool negative = false;
+    bool all = e.pc_known;
+    for (crd::u32 i = 0U; all && i < count; ++i)
+    {
+        all = record_value(block, names[i], true, r.gpr[i], negative);
+    }
+    r.pc = e.pc;
+    if (is_x86)
+    {
+        crd::u64 trap = 0U;
+        crd::u64 error = 0U;
+        all = all && record_value(block, "efl", true, r.flags, negative);
+        e.trap_known = record_value(block, "trapno", true, trap, negative) && trap <= 0xFFU;
+        e.trap = static_cast<crd::u32>(trap);
+        if (e.trap_known && e.trap == kTrapPageFault && record_value(block, "err", true, error, negative))
+        {
+            e.access = (error & kPageFaultWrite) != 0U ? FaultAccess::Write : FaultAccess::Read;
+            e.access = (error & kPageFaultFetch) != 0U ? FaultAccess::Execute : e.access;
+        }
+    }
+    r.known = all;
+}
+
 CrashEvidence read_record(cont::StringView text, cont::ConstSpan<crd::u8> bytes, crd::memory::IAllocator* alloc)
 {
     CrashEvidence e(alloc);
@@ -298,11 +447,15 @@ CrashEvidence read_record(cont::StringView text, cont::ConstSpan<crd::u8> bytes,
             text.substr(regs + 1U, stop == cont::StringView::npos ? text.size() - regs - 1U : stop - regs);
         if (block.starts_with("regs x86_64\n"))
         {
+            e.instruction_set = InstructionSet::X64;
             e.pc_known = record_value(block, "rip", true, e.pc, unused);
+            read_record_registers(block, e);
         }
         else if (block.starts_with("regs aarch64\n"))
         {
+            e.instruction_set = InstructionSet::AArch64;
             e.pc_known = record_value(block, "pc", true, e.pc, unused);
+            read_record_registers(block, e);
         }
     }
     e.modules = parse_crash_record_modules(bytes, alloc);
@@ -440,6 +593,15 @@ void append_evidence(cont::String& out, const FaultClassification& c)
         next();
         out.append("replaying it on the same build did not reproduce it");
     }
+    if ((c.signals & (kFaultSignalAccessNotMade | kFaultSignalDivideWithoutCause)) != 0U)
+    {
+        next();
+        out.append("the instruction at ");
+        append_hex(out, c.instruction.pc);
+        out.append((c.signals & kFaultSignalAccessNotMade) != 0U ? cont::StringView{" faulted on "}
+                                                                 : cont::StringView{" raised a divide error, but "});
+        out.append(c.instruction.reason);
+    }
     if ((c.signals & kFaultSignalCodeBitFlip) != 0U)
     {
         next();
@@ -466,6 +628,129 @@ void append_processor(cont::String& out, const FaultClassification& c, const Har
     }
     out.append(" has a known instability, ");
     out.append(c.advisory->name);
+}
+
+// Whether the reported fault is one the instruction check judges: a page fault on an address, or an x86-64 divide
+// error. A sent signal, a protection fault (Windows reports its address as all ones, Linux sends no address) and the
+// rest are never judged.
+void judged_fault(const CrashEvidence& e, bool& access, bool& divide) noexcept
+{
+    const bool x86 = e.instruction_set == InstructionSet::X64;
+    access = false;
+    divide = false;
+    if (e.kind == CrashCaptureKind::Minidump)
+    {
+        access = (e.code == kStatusAccessViolation || e.code == kStatusInPageError) && e.address_known &&
+                 e.address != ~crd::u64{0};
+        divide = x86 && (e.code == kStatusIntegerDivideByZero || e.code == kStatusIntegerOverflow);
+    }
+    else if (e.kind == CrashCaptureKind::Record && !e.sent)
+    {
+        const crd::i32 sc = e.signal_code;
+        const bool page_fault = !x86 || (e.trap_known && e.trap == kTrapPageFault);
+        access = e.address_known && page_fault &&
+                 ((e.code == kSigSegv && (sc == kSegvMapErr || sc == kSegvAccErr || sc == kSegvPkuErr)) ||
+                  (e.code == kSigBus && (sc == kBusAdrErr || (!x86 && sc == kBusAdrAln))));
+        divide = x86 && e.code == kSigFpe && (sc == kFpeIntDiv || sc == kFpeIntOvf) && e.trap_known &&
+                 e.trap == kTrapDivideError;
+    }
+}
+
+[[nodiscard]] bool kind_made(crd::u8 kinds, FaultAccess access) noexcept
+{
+    switch (access)
+    {
+        case FaultAccess::Read:
+            return (kinds & kAccessRead) != 0U;
+        case FaultAccess::Write:
+            return (kinds & kAccessWrite) != 0U;
+        case FaultAccess::Execute:
+            return false; // only the instruction's own bytes are executed
+        case FaultAccess::Unknown:
+            break;
+    }
+    return true;
+}
+
+InstructionCheck check_instruction(const CrashEvidence& e, const CodeImageCheck* code_image) noexcept
+{
+    InstructionCheck k;
+    k.pc = e.pc;
+    bool access = false;
+    bool divide = false;
+    judged_fault(e, access, divide);
+    if (!access && !divide)
+    {
+        k.reason = "the fault is neither a page fault on an address nor a divide error";
+        return k;
+    }
+    if (!e.registers.known)
+    {
+        k.reason = "the capture holds no registers for its pc";
+        return k;
+    }
+    if (code_image == nullptr || code_image->result != CodeImageResult::Matches)
+    {
+        k.reason = "the instruction's bytes are not proven to be its module's (its image comparison does not match)";
+        return k;
+    }
+    const InstructionAccess a = decode_instruction_access(e.instruction_set, {e.code_bytes, e.code_size}, e.registers);
+    if (!a.decoded)
+    {
+        k.reason = a.reason;
+        return k;
+    }
+    k.length = a.length;
+    k.accesses = a.count;
+    k.result = InstructionCheckResult::Consistent;
+    if (divide)
+    {
+        if (!a.divides)
+        {
+            k.result = InstructionCheckResult::DivideWithoutCause;
+            k.reason = "it does not divide";
+        }
+        else if (!a.divisor_known)
+        {
+            k.result = InstructionCheckResult::NotJudged;
+            k.reason = "its divisor is in memory, which the capture does not hold";
+        }
+        else if (!a.divide_faults)
+        {
+            k.result = InstructionCheckResult::DivideWithoutCause;
+            k.reason = "its divisor is not zero and its quotient fits";
+        }
+        return k;
+    }
+    if (e.address - e.pc < a.length)
+    {
+        return k; // fetching its own bytes
+    }
+    bool address_made = false;
+    for (crd::u32 i = 0U; i < a.count; ++i)
+    {
+        const MemoryAccess& m = a.accesses[i];
+        if (e.address - m.address < m.size)
+        {
+            address_made = true;
+            if (kind_made(m.kinds, e.access))
+            {
+                return k;
+            }
+        }
+    }
+    k.result = InstructionCheckResult::AccessNotMade;
+    if (!address_made)
+    {
+        k.reason = e.access == FaultAccess::Execute ? cont::StringView{"an execution outside its own bytes"}
+                                                    : cont::StringView{"an address it does not access"};
+    }
+    else
+    {
+        k.reason = e.access == FaultAccess::Write ? cont::StringView{"a write it does not make"}
+                                                  : cont::StringView{"a read it does not make"};
+    }
+    return k;
 }
 
 // ---- the code against the module's image ----------------------------------------------------------------------------
@@ -1056,8 +1341,9 @@ bool parse_replay_outcome(cont::StringView text, ReplayOutcome& out) noexcept
 
 void append_fault_signal_names(crd::u32 signals, cont::String& out)
 {
-    constexpr cont::StringView names[] = {"machine-check", "code-address-bit-flip", "data-address-bit-flip",
-                                          "replay-not-reproduced", "code-bit-flip"};
+    constexpr cont::StringView names[] = {"machine-check",         "code-address-bit-flip", "data-address-bit-flip",
+                                          "replay-not-reproduced", "code-bit-flip",         "access-not-made",
+                                          "divide-without-cause"};
     bool first = true;
     for (crd::u32 bit = 0U; bit < sizeof(names) / sizeof(names[0]); ++bit)
     {
@@ -1071,6 +1357,38 @@ void append_fault_signal_names(crd::u32 signals, cont::String& out)
             first = false;
         }
     }
+}
+
+cont::StringView fault_access_name(FaultAccess a) noexcept
+{
+    switch (a)
+    {
+        case FaultAccess::Unknown:
+            return "unknown";
+        case FaultAccess::Read:
+            return "read";
+        case FaultAccess::Write:
+            return "write";
+        case FaultAccess::Execute:
+            return "execute";
+    }
+    return "unknown";
+}
+
+cont::StringView instruction_check_result_name(InstructionCheckResult r) noexcept
+{
+    switch (r)
+    {
+        case InstructionCheckResult::NotJudged:
+            return "not-judged";
+        case InstructionCheckResult::Consistent:
+            return "consistent";
+        case InstructionCheckResult::AccessNotMade:
+            return "access-not-made";
+        case InstructionCheckResult::DivideWithoutCause:
+            return "divide-without-cause";
+    }
+    return "not-judged";
 }
 
 cont::StringView hardware_verdict_name(HardwareVerdict v) noexcept
@@ -1161,6 +1479,10 @@ FaultClassification classify_fault(const CrashEvidence* crash, const HardwareIde
             c.code_image.module.append(view(code_image->module));
             c.signals |= code_image->result == CodeImageResult::OneBitFlipped ? kFaultSignalCodeBitFlip : 0U;
         }
+        c.instruction = check_instruction(*crash, code_image);
+        c.signals |= c.instruction.result == InstructionCheckResult::AccessNotMade ? kFaultSignalAccessNotMade : 0U;
+        c.signals |=
+            c.instruction.result == InstructionCheckResult::DivideWithoutCause ? kFaultSignalDivideWithoutCause : 0U;
     }
     if (replay == ReplayOutcome::NotReproduced)
     {

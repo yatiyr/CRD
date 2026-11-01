@@ -52,6 +52,7 @@ add_executable(crd-perf-tests
     test_diag_flight_rings.cpp # DIAG.11b (q1): per-thread rings under one global sequence: order, window, lifetime
     test_hardware_identity.cpp # HW-RESILIENCE.2: the machine a bundle was written on
     test_fault_classification.cpp # HW-RESILIENCE.2: impossible-state signatures and the unstable-CPU table
+    test_instruction_access.cpp   # HW-RESILIENCE.2: the faulting instruction's accesses and divide operands
 )
 
 target_link_libraries(crd-perf-tests PRIVATE
