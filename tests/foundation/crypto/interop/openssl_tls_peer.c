@@ -4,17 +4,19 @@
  * OpenSSL, never AWS-LC: the two libraries share symbol names and cannot share a process.
  *
  * Usage: crd-openssl-tls-peer --role client|server --groups LIST --seed HEX [--pin HEX] [--name NAME]
- *                             [--max-version 1.2]
+ *                             [--max-version 1.2] [--update requested|not-requested]
  *   groups       OpenSSL's group list syntax (SSL_CTX_set1_groups_list; a '*' marks a group that gets a key share)
  *   seed         the 32-byte Ed25519 private key of this end's self-signed certificate
  *   pin          the peer's 32-byte Ed25519 public key: the peer's certificate must carry it (a server then asks for
  *                one)
  *   max-version  1.2 offers TLS 1.2 only (the refusal case)
+ *   update       an established client updates its key once after its ping (SSL_key_update), asking the server for
+ *                an update or not; either end sends a KeyUpdate it owes at once (a zero-length SSL_write)
  *
  * A server prefers its own group order (SSL_OP_CIPHER_SERVER_PREFERENCE), as a Cerid server does. The framing and the
  * script are crd-tls-peer's: 4-byte big-endian frame lengths, a client's first flight unasked,
  * one frame per frame read, "ping from openssl" from an established client, an echo from an established server and one
- * JSON line on standard error at the end of input. */
+ * JSON line on standard error at the end of input, the KeyUpdate messages sent and received among it. */
 
 #include <openssl/bio.h>
 #include <openssl/err.h>
@@ -38,6 +40,8 @@ static int           g_peer_ok;
 static int           g_hello_retry;
 static int           g_alert_sent     = -1;
 static int           g_alert_received = -1;
+static int           g_updates_sent;
+static int           g_updates_received;
 
 /* SHA-256("HelloRetryRequest"), the random of a HelloRetryRequest (RFC 9846 section 4.1.3). */
 static const unsigned char k_hello_retry[32] = {
@@ -124,6 +128,10 @@ static void observe(int write_p, int version, int content_type, const void* buff
             *alert = bytes[1];
         }
     }
+    else if (content_type == 22 && length == 5 && bytes[0] == 24)
+    {
+        *(write_p ? &g_updates_sent : &g_updates_received) += 1;
+    }
     else if (content_type == 22 && length >= 38 && bytes[0] == 2 &&
              memcmp(bytes + 6, k_hello_retry, sizeof(k_hello_retry)) == 0)
     {
@@ -152,7 +160,7 @@ static X509* self_signed(EVP_PKEY* key, const char* name)
 static int usage(void)
 {
     fputs("usage: crd-openssl-tls-peer --role client|server --groups LIST --seed HEX [--pin HEX] [--name NAME] "
-          "[--max-version 1.2]\n",
+          "[--max-version 1.2] [--update requested|not-requested]\n",
           stderr);
     return 2;
 }
@@ -165,6 +173,7 @@ int main(int argc, char** argv)
     const char* pin         = NULL;
     const char* name        = "game.cerid.test";
     const char* max_version = NULL;
+    const char* update      = NULL;
     for (int i = 1; i + 1 < argc; i += 2)
     {
         if (strcmp(argv[i], "--role") == 0)
@@ -190,6 +199,11 @@ int main(int argc, char** argv)
         else if (strcmp(argv[i], "--max-version") == 0)
         {
             max_version = argv[i + 1];
+        }
+        else if (strcmp(argv[i], "--update") == 0 &&
+                 (strcmp(argv[i + 1], "requested") == 0 || strcmp(argv[i + 1], "not-requested") == 0))
+        {
+            update = argv[i + 1];
         }
         else
         {
@@ -292,6 +306,18 @@ int main(int argc, char** argv)
             if (client && !pinged && !failed)
             {
                 pinged = SSL_write(ssl, k_ping, (int)(sizeof(k_ping) - 1)) > 0;
+                if (pinged && update != NULL)
+                {
+                    const int type = strcmp(update, "requested") == 0 ? SSL_KEY_UPDATE_REQUESTED
+                                                                       : SSL_KEY_UPDATE_NOT_REQUESTED;
+                    failed = !SSL_key_update(ssl, type);
+                }
+            }
+            /* A KeyUpdate owed (the client's own, or the answer to the peer's request, which OpenSSL otherwise holds
+             * until its next record) goes out now: a zero-length write runs the state machine. */
+            if (!failed && SSL_get_key_update_type(ssl) != SSL_KEY_UPDATE_NONE)
+            {
+                failed = SSL_write(ssl, k_ping, 0) < 0;
             }
         }
         if (!write_frame(outgoing))
@@ -309,6 +335,7 @@ int main(int argc, char** argv)
     }
     fprintf(stderr, "\", \"hello_retry\": %s, \"peer_ok\": %s, \"alert_sent\": %d, \"alert_received\": %d, ",
             g_hello_retry ? "true" : "false", g_peer_ok ? "true" : "false", g_alert_sent, g_alert_received);
+    fprintf(stderr, "\"key_updates_sent\": %d, \"key_updates_received\": %d, ", g_updates_sent, g_updates_received);
     fprintf(stderr, "\"version\": \"%s\", \"received\": \"", SSL_get_version(ssl));
     for (size_t i = 0; i < received_size; ++i)
     {

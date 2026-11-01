@@ -2,27 +2,34 @@
 // tests/foundation/crypto/interop/tls_interop.py (NET.2; docs/design/network-foundation.md#tls-sessions).
 //
 // Usage: crd-tls-peer --role client|server --groups g[,g...] --seed HEX [--pin HEX] [--name NAME]
+//                     [--key-update-records N] [--pings N] [--update requested|not-requested]
 //        crd-tls-peer --public HEX     (prints the Ed25519 public key of a seed, for the pins)
 //   groups  register names: x25519mlkem768, secp256r1mlkem768, secp384r1mlkem1024, x25519, secp256r1, secp384r1
 //   seed    the 32-byte Ed25519 private key of this end's credential
 //   pin     the peer's 32-byte Ed25519 public key (a client's server; a server that pins its client)
 //   name    the server's name (default game.cerid.test)
+//   key-update-records  TlsConfig::key_update_records (the session updates its key before that many records)
+//   pings   how many times an established client sends its ping, each in its own record (1 to 16, default 1)
+//   update  an established client updates its key once after its pings, asking the server for an update or not
 //
 // Frames on both streams are a 4-byte big-endian length and that many bytes of TLS records. A client writes its first
 // flight before reading; after that each end answers every frame it reads with exactly one frame (possibly empty).
-// Once established, a client sends "ping from cerid" once and a server echoes every byte it reads. At the end of
-// input the end prints one JSON line on standard error with what it negotiated and exits 0 (2 on a usage error).
+// Once established, a client sends "ping from cerid" (--pings times) and a server echoes every byte it reads. At the
+// end of input the end prints one JSON line on standard error with what it negotiated, the key updates each way and
+// what it read, and exits 0 (2 on a usage error).
 
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/tls.hpp>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace
 {
 using crd::u16;
 using crd::u32;
+using crd::u64;
 using crd::u8;
 using crd::usize;
 using crd::containers::ConstSpan;
@@ -112,7 +119,8 @@ bool write_frame(TlsSession& session)
 
 int usage()
 {
-    std::fputs("usage: crd-tls-peer --role client|server --groups g[,g...] --seed HEX [--pin HEX] [--name NAME]\n",
+    std::fputs("usage: crd-tls-peer --role client|server --groups g[,g...] --seed HEX [--pin HEX] [--name NAME] "
+               "[--key-update-records N] [--pings N] [--update requested|not-requested]\n",
                stderr);
     return 2;
 }
@@ -153,6 +161,9 @@ int main(int argc, char** argv)
     const char* seed  = nullptr;
     const char* pin   = nullptr;
     const char* name  = "game.cerid.test";
+    const char* update             = nullptr;
+    u64         key_update_records = 0U;
+    u64         pings              = 1U;
     for (int i = 1; i + 1 < argc; i += 2)
     {
         const char* option = argv[i];
@@ -177,12 +188,25 @@ int main(int argc, char** argv)
         {
             name = value;
         }
+        else if (std::strcmp(option, "--key-update-records") == 0)
+        {
+            key_update_records = std::strtoull(value, nullptr, 10);
+        }
+        else if (std::strcmp(option, "--pings") == 0)
+        {
+            pings = std::strtoull(value, nullptr, 10);
+        }
+        else if (std::strcmp(option, "--update") == 0 &&
+                 (std::strcmp(value, "requested") == 0 || std::strcmp(value, "not-requested") == 0))
+        {
+            update = value;
+        }
         else
         {
             return usage();
         }
     }
-    if (argc % 2 == 0 || role == nullptr || list == nullptr || seed == nullptr)
+    if (argc % 2 == 0 || role == nullptr || list == nullptr || seed == nullptr || pings == 0U || pings > 16U)
     {
         return usage();
     }
@@ -231,7 +255,8 @@ int main(int argc, char** argv)
     config.groups      = ConstSpan<AlgorithmId>(groups, group_count);
     config.aeads       = kAeads;
     config.credential  = &credential;
-    config.server_name = name;
+    config.server_name        = name;
+    config.key_update_records = key_update_records;
     if (pin != nullptr)
     {
         config.signatures = kSignatures;
@@ -276,8 +301,16 @@ int main(int argc, char** argv)
             }
             if (client && !pinged && session.state() == TlsState::Established)
             {
-                pinged = session.send(ConstSpan<u8>(reinterpret_cast<const u8*>(kPing), sizeof(kPing) - 1U)) ==
-                         TlsError::None;
+                pinged = true;
+                for (u64 i = 0U; i < pings && pinged; ++i)
+                {
+                    pinged = session.send(ConstSpan<u8>(reinterpret_cast<const u8*>(kPing), sizeof(kPing) - 1U)) ==
+                             TlsError::None;
+                }
+                if (pinged && update != nullptr)
+                {
+                    pinged = session.update_keys(std::strcmp(update, "requested") == 0) == TlsError::None;
+                }
             }
         }
         if (!write_frame(session))
@@ -296,6 +329,10 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "%02x", byte);
     }
     std::fputs("\", ", stderr);
+    std::fprintf(stderr, R"("key_updates_sent": %llu, "key_updates_received": %llu, "key_update_records": %llu, )",
+                 static_cast<unsigned long long>(session.key_updates_sent()),
+                 static_cast<unsigned long long>(session.key_updates_received()),
+                 static_cast<unsigned long long>(session.key_update_records()));
     print_alert("alert_sent", session.alert_sent());
     std::fputs(", ", stderr);
     print_alert("alert_received", session.alert_received());

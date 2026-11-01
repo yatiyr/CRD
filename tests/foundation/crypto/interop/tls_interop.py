@@ -10,7 +10,10 @@ draft-ietf-tls-ecdhe-mlkem: ML-KEM-768 encapsulation key 1184 bytes and cipherte
 X25519 32, uncompressed P-256 65 and P-384 97), and the GREASE values (RFC 8701) of Cerid's ClientHellos, which a
 retried one keeps. The three hybrid groups run both ways, through a HelloRetryRequest both ways, beside a classical
 share without a downgrade, with mutual authentication, with a key that is not pinned and against a peer that offers
-TLS 1.2 only.
+TLS 1.2 only. Key updates (RFC 9846 section 4.7.3) run both ways: a Cerid client updating its key before every record
+under a three-record budget, one asking OpenSSL for an update and one not asking, and an OpenSSL client asking a Cerid
+server, each end's count of KeyUpdate messages sent and received checked against the other's and the echoed data
+intact.
 
 Usage: tls_interop.py --cerid <crd-tls-peer> --openssl <crd-openssl-tls-peer>
 """
@@ -190,14 +193,15 @@ def run(client_command, server_command):
     return reports[0], reports[1], flights
 
 
-def cerid(binary, role, groups, seed, pin=None):
+def cerid(binary, role, groups, seed, pin=None, extra=()):
     command = [binary, '--role', role, '--groups', ','.join(groups), '--seed', seed]
-    return command + (['--pin', pin] if pin else [])
+    return command + (['--pin', pin] if pin else []) + list(extra)
 
 
-def openssl(binary, role, groups, seed, pin=None, max_version=None):
+def openssl(binary, role, groups, seed, pin=None, max_version=None, update=None):
     command = [binary, '--role', role, '--groups', groups, '--seed', seed]
     command += ['--pin', pin] if pin else []
+    command += ['--update', update] if update else []
     return command + (['--max-version', max_version] if max_version else [])
 
 
@@ -261,6 +265,18 @@ def check_established(cerid_report, openssl_report, group, retry, ping):
     expect(openssl_report.get('version') == 'TLSv1.3', 'openssl ran %r' % openssl_report.get('version'))
 
 
+def check_updates(cerid_report, openssl_report, cerid_sent, cerid_received):
+    """Each end's KeyUpdate counts: what one sent, the other received."""
+    expect(cerid_report.get('key_updates_sent') == cerid_sent and
+           openssl_report.get('key_updates_received') == cerid_sent,
+           'cerid sent %s key updates, openssl received %s, expected %d' % (
+               cerid_report.get('key_updates_sent'), openssl_report.get('key_updates_received'), cerid_sent))
+    expect(cerid_report.get('key_updates_received') == cerid_received and
+           openssl_report.get('key_updates_sent') == cerid_received,
+           'openssl sent %s key updates, cerid received %s, expected %d' % (
+               openssl_report.get('key_updates_sent'), cerid_report.get('key_updates_received'), cerid_received))
+
+
 def key_id(public_hex):
     return hashlib.sha256(bytes.fromhex(public_hex)).hexdigest()
 
@@ -309,6 +325,31 @@ def cases(cerid_peer, openssl_peer):
                                                                             False, ['secp384r1'])
     yield 'openssl client with a pinned credential, cerid server', lambda: openssl_client(
         'X25519MLKEM768', ['x25519mlkem768'], 'x25519mlkem768', False, ['x25519mlkem768'], mutual=True)
+
+    def cerid_updates(extra, pings, sent, received, records):
+        client, server, _ = run(cerid(cerid_peer, 'client', ['x25519mlkem768'], CLIENT_SEED, server_public, extra),
+                                openssl(openssl_peer, 'server', 'X25519MLKEM768', SERVER_SEED))
+        check_established(client, server, 'x25519mlkem768', False, PING * pings)
+        check_updates(client, server, sent, received)
+        expect(client.get('key_update_records') == records, 'cerid kept %s records per key, expected %d' % (
+            client.get('key_update_records'), records))
+    aes_limit = 23726566
+    yield 'cerid client updates its key before every record under a three-record budget, openssl reads on', (
+        lambda: cerid_updates(['--key-update-records', '3', '--pings', '6'], 6, 5, 0, 3))
+    yield 'cerid client asks openssl for a key update and gets one', lambda: cerid_updates(
+        ['--update', 'requested'], 1, 1, 1, aes_limit)
+    yield 'cerid client updates its key without asking, openssl answers nothing', lambda: cerid_updates(
+        ['--update', 'not-requested'], 1, 1, 0, aes_limit)
+    yield 'cerid client under a three-record budget asks for an update after six records', lambda: cerid_updates(
+        ['--key-update-records', '3', '--pings', '6', '--update', 'requested'], 6, 6, 1, 3)
+
+    def openssl_asks():
+        client, server, _ = run(openssl(openssl_peer, 'client', 'X25519MLKEM768', CLIENT_SEED, server_public,
+                                        update='requested'),
+                                cerid(cerid_peer, 'server', ['x25519mlkem768'], SERVER_SEED))
+        check_established(server, client, 'x25519mlkem768', False, OPENSSL_PING)
+        check_updates(server, client, 1, 1)
+    yield 'openssl client asks a cerid server for a key update and gets one', openssl_asks
 
     def unpinned():
         client, server, _ = run(cerid(cerid_peer, 'client', ['x25519mlkem768'], CLIENT_SEED, other_public),

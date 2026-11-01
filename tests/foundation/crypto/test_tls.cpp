@@ -2,7 +2,9 @@
 // and #tls-13-profile): pairs of sessions in one process, every group (the three hybrid groups included) and every
 // signature algorithm negotiated, the key shares read off the wire and checked against the hybrid groups' layout with
 // the provider interface's own primitives, HelloRetryRequest, server preference, pinned keys both ways, server names,
-// alerts, bounds, close_notify, adversarial bytes, every configuration refusal and one context serving several threads.
+// alerts, bounds, close_notify, key updates against the usage limits and the update bound, a peer's user_canceled and
+// close_notify during the handshake, adversarial bytes, every configuration refusal and one context serving several
+// threads.
 //
 // The independent peer (OpenSSL 3.5's hybrid key exchange) is tests/foundation/crypto/interop/tls_interop.py's.
 
@@ -23,6 +25,7 @@ namespace
 {
 using crd::u16;
 using crd::u32;
+using crd::u64;
 using crd::u8;
 using crd::usize;
 using crd::containers::ConstSpan;
@@ -87,6 +90,10 @@ struct Options
     bool                   client_pins_server = true;  // false: the client pins another key
     StringView             client_names       = kServerName;
     StringView             server_names       = kServerName;
+    u64                    client_key_records = 0U; // TlsConfig::key_update_records of each end
+    u64                    server_key_records = 0U;
+    u64                    client_max_updates = 0U; // TlsConfig::max_key_updates of each end
+    u64                    server_max_updates = 0U;
 };
 
 // Configures both ends; the client's first flight is pending when this returns.
@@ -106,6 +113,8 @@ void setup(Endpoint& client, Endpoint& server, const Options& options)
     client_config.aeads       = options.client_aeads;
     client_config.pinned      = ConstSpan<KeyId>(&client_pin, 1U);
     client_config.server_name = options.client_names;
+    client_config.key_update_records = options.client_key_records;
+    client_config.max_key_updates    = options.client_max_updates;
     KeyId server_pin;
     if (options.client_key != AlgorithmId{})
     {
@@ -122,6 +131,8 @@ void setup(Endpoint& client, Endpoint& server, const Options& options)
     server_config.aeads       = options.server_aeads;
     server_config.credential  = &server.credential;
     server_config.server_name = options.server_names;
+    server_config.key_update_records = options.server_key_records;
+    server_config.max_key_updates    = options.server_max_updates;
     if (options.server_pins_client)
     {
         server_config.signatures = kAllSignatures;
@@ -882,6 +893,371 @@ TEST_CASE("TLS: large messages, bounds and close_notify", "[crypto][tls][net-2]"
     CHECK(client.session.receive(ConstSpan<u8>(scratch, 1U)) == TlsError::Closed);
 }
 
+// A KeyUpdate's record (RFC 9846 sections 4.7.3 and 5.2): header (5), handshake header (4), request_update (1), inner
+// content type (1) and the AEAD tag (16); and an application data record's overhead without its plaintext.
+constexpr usize kKeyUpdateRecord   = 27U;
+constexpr usize kRecordOverhead    = 22U;
+constexpr u8    kUnexpectedMessage = 10U;
+
+// Sends `count` one-byte messages, each its own record, checking the budget after every one.
+void send_bytes(TlsSession& session, usize count)
+{
+    for (usize i = 0U; i < count; ++i)
+    {
+        const u8 byte = static_cast<u8>(i);
+        REQUIRE(session.send(ConstSpan<u8>(&byte, 1U)) == TlsError::None);
+        CHECK(session.records_under_key() <= session.key_update_records() - 2U);
+    }
+}
+
+TEST_CASE("TLS: a session updates its sending key before its record budget, and its peer reads on",
+          "[crypto][tls][net-2]")
+{
+    CHECK(tls_key_usage_limit(AlgorithmId::Aes128Gcm) == 23726566U); // floor(2^24.5)
+    CHECK(tls_key_usage_limit(AlgorithmId::Aes256Gcm) == 23726566U);
+    CHECK(tls_key_usage_limit(AlgorithmId::Chacha20Poly1305) == ~u64{0});
+    CHECK(tls_key_usage_limit(AlgorithmId::X25519) == 0U);
+    CHECK(kTlsMaxKeyUpdates == 281474976710655U); // 2^48-1
+    for (const AlgorithmId aead : kAllAeads)
+    {
+        CAPTURE(static_cast<u32>(aead));
+        const AlgorithmId only[] = {aead};
+        Options           options;
+        options.client_aeads       = only;
+        options.client_key_records = kTlsMinKeyUpdateRecords; // one data record per key
+        options.server_key_records = kTlsMinKeyUpdateRecords; // the server only receives: it never enforces its peer
+        Endpoint client;
+        Endpoint server;
+        setup(client, server, options);
+        CHECK(client.session.key_update_records() == 0U);
+        establish(client, server);
+        CHECK(client.session.aead() == aead);
+        CHECK(client.session.key_update_records() == kTlsMinKeyUpdateRecords);
+        CHECK(client.session.records_under_key() == 0U);
+
+        send_bytes(client.session, 10U);
+        CHECK(client.session.key_updates_sent() == 9U);
+        CHECK(client.session.records_under_key() == 1U);
+        CHECK(client.session.pending() == 10U * (1U + kRecordOverhead) + 9U * kKeyUpdateRecord);
+        REQUIRE(deliver(client.session, server.session) == TlsError::None);
+        const Bytes received = read_all(server.session);
+        REQUIRE(received.size() == 10U);
+        for (usize i = 0U; i < received.size(); ++i)
+        {
+            CHECK(received[i] == i);
+        }
+        CHECK(server.session.key_updates_received() == 9U);
+        CHECK(server.session.key_updates_sent() == 0U);
+        CHECK(server.session.pending() == 0U);
+        CHECK(client.session.key_updates_received() == 0U);
+        exchange(client, server, 100U);
+    }
+
+    SECTION("a message of several records updates the key between them, and the outgoing bound counts the updates")
+    {
+        Options options;
+        options.client_key_records = kTlsMinKeyUpdateRecords;
+        Endpoint client;
+        Endpoint server;
+        setup(client, server, options);
+        establish(client, server);
+        Bytes message;
+        message.resize(60000U); // four records: three key updates between them
+        for (usize i = 0U; i < message.size(); ++i)
+        {
+            message[i] = static_cast<u8>(i * 13U + 1U);
+        }
+        REQUIRE(client.session.send(ConstSpan<u8>(message.data(), message.size())) == TlsError::None);
+        CHECK(client.session.key_updates_sent() == 3U);
+        CHECK(client.session.pending() == 60000U + 4U * kRecordOverhead + 3U * kKeyUpdateRecord);
+        // 65536 - 60169 = 5367 bytes are left: a record of 5318 bytes behind its key update (5318 + 22 + 27) fits,
+        // one byte more does not, and a refused message leaves the session as it was.
+        const u64 updates = client.session.key_updates_sent();
+        CHECK(client.session.send(ConstSpan<u8>(message.data(), 5319U)) == TlsError::Full);
+        CHECK(client.session.key_updates_sent() == updates);
+        REQUIRE(client.session.send(ConstSpan<u8>(message.data(), 5318U)) == TlsError::None);
+        CHECK(client.session.pending() == kTlsMaxBufferedBytes);
+        REQUIRE(deliver(client.session, server.session) == TlsError::None);
+        const Bytes received = read_all(server.session);
+        REQUIRE(received.size() == 60000U + 5318U);
+        CHECK(std::memcmp(received.data(), message.data(), 60000U) == 0);
+        CHECK(std::memcmp(received.data() + 60000U, message.data(), 5318U) == 0);
+        CHECK(server.session.key_updates_received() == 4U);
+    }
+    SECTION("a budget of four records keeps two data records under each key")
+    {
+        Options options;
+        options.client_key_records = 4U;
+        Endpoint client;
+        Endpoint server;
+        setup(client, server, options);
+        establish(client, server);
+        send_bytes(client.session, 7U);
+        CHECK(client.session.key_updates_sent() == 3U);
+        CHECK(client.session.records_under_key() == 1U);
+        REQUIRE(deliver(client.session, server.session) == TlsError::None);
+        CHECK(read_all(server.session).size() == 7U);
+    }
+    SECTION("a budget above the negotiated AEAD's limit is lowered to it")
+    {
+        const AlgorithmId aes[] = {AlgorithmId::Aes128Gcm};
+        Options           options;
+        options.client_aeads       = aes;
+        options.client_key_records = ~u64{0};
+        Endpoint client;
+        Endpoint server;
+        setup(client, server, options);
+        establish(client, server);
+        CHECK(client.session.key_update_records() == tls_key_usage_limit(AlgorithmId::Aes128Gcm));
+        CHECK(server.session.key_update_records() == tls_key_usage_limit(AlgorithmId::Aes128Gcm));
+    }
+}
+
+TEST_CASE("TLS: key updates on demand, the peer's answer and one request outstanding at a time",
+          "[crypto][tls][net-2]")
+{
+    Endpoint client;
+    Endpoint server;
+    setup(client, server, Options{});
+    CHECK(client.session.update_keys(false) == TlsError::NotReady);
+    establish(client, server);
+    u8    out[16];
+    usize written = 0U;
+
+    // Not requested: the server updates its receiving key and answers nothing.
+    REQUIRE(client.session.update_keys(false) == TlsError::None);
+    CHECK(client.session.key_updates_sent() == 1U);
+    CHECK(client.session.pending() == kKeyUpdateRecord);
+    CHECK(client.session.records_under_key() == 0U);
+    REQUIRE(deliver(client.session, server.session) == TlsError::None);
+    REQUIRE(server.session.read(Span<u8>(out, sizeof(out)), written) == TlsError::None);
+    CHECK(written == 0U);
+    CHECK(server.session.key_updates_received() == 1U);
+    CHECK(server.session.pending() == 0U);
+
+    // Requested: reading the request answers it at once.
+    REQUIRE(client.session.update_keys(true) == TlsError::None);
+    REQUIRE(deliver(client.session, server.session) == TlsError::None);
+    REQUIRE(server.session.read(Span<u8>(out, sizeof(out)), written) == TlsError::None);
+    CHECK(server.session.key_updates_sent() == 1U);
+    CHECK(server.session.pending() == kKeyUpdateRecord);
+    REQUIRE(deliver(server.session, client.session) == TlsError::None);
+    REQUIRE(client.session.read(Span<u8>(out, sizeof(out)), written) == TlsError::None);
+    CHECK(client.session.key_updates_received() == 1U);
+    CHECK(client.session.pending() == 0U); // an answer asks for nothing
+
+    // While a request is outstanding a second one only updates the client's own key: the server answers once.
+    REQUIRE(client.session.update_keys(true) == TlsError::None);
+    REQUIRE(deliver(client.session, server.session) == TlsError::None);
+    REQUIRE(server.session.read(Span<u8>(out, sizeof(out)), written) == TlsError::None);
+    CHECK(server.session.key_updates_sent() == 2U);
+    const Bytes answer = drain(server.session); // held back: the client's request stays outstanding
+    REQUIRE(client.session.update_keys(true) == TlsError::None);
+    CHECK(client.session.key_updates_sent() == 4U);
+    REQUIRE(deliver(client.session, server.session) == TlsError::None);
+    REQUIRE(server.session.read(Span<u8>(out, sizeof(out)), written) == TlsError::None);
+    CHECK(server.session.key_updates_received() == 4U);
+    CHECK(server.session.key_updates_sent() == 2U);
+    CHECK(server.session.pending() == 0U);
+    REQUIRE(client.session.receive(ConstSpan<u8>(answer.data(), answer.size())) == TlsError::None);
+    REQUIRE(client.session.read(Span<u8>(out, sizeof(out)), written) == TlsError::None);
+    CHECK(client.session.key_updates_received() == 2U);
+
+    // The answer arrived, so the next request is one again.
+    REQUIRE(client.session.update_keys(true) == TlsError::None);
+    REQUIRE(deliver(client.session, server.session) == TlsError::None);
+    REQUIRE(server.session.read(Span<u8>(out, sizeof(out)), written) == TlsError::None);
+    CHECK(server.session.key_updates_sent() == 3U);
+    pump(client, server);
+    exchange(client, server, 20000U);
+
+    // An answer the outgoing bytes have no room for waits inside the provider, counted when queued, and goes out
+    // ahead of the next record or update; send() and update_keys() count it against the bound.
+    Bytes filler;
+    filler.resize(60000U);
+    REQUIRE(server.session.send(ConstSpan<u8>(filler.data(), filler.size())) == TlsError::None);
+    REQUIRE(server.session.send(ConstSpan<u8>(filler.data(), 5400U)) == TlsError::None);
+    const usize full = server.session.pending();
+    CHECK(full == 65400U + 5U * kRecordOverhead);
+    REQUIRE(client.session.update_keys(true) == TlsError::None);
+    REQUIRE(deliver(client.session, server.session) == TlsError::None);
+    const u64 sent = server.session.key_updates_sent();
+    REQUIRE(server.session.read(Span<u8>(out, sizeof(out)), written) == TlsError::None);
+    CHECK(server.session.key_updates_sent() == sent + 1U);
+    CHECK(server.session.pending() == full);
+    const u8 ping[] = {'p'};
+    CHECK(server.session.send(ConstSpan<u8>(ping, sizeof(ping))) == TlsError::Full); // 1 + 22 + 27 > 26
+    CHECK(server.session.update_keys(false) == TlsError::Full);
+    const Bytes data = drain(server.session);
+    REQUIRE(server.session.update_keys(false) == TlsError::None);
+    CHECK(server.session.pending() == 2U * kKeyUpdateRecord);
+    CHECK(server.session.key_updates_sent() == sent + 2U);
+    const u64 received = client.session.key_updates_received();
+    REQUIRE(client.session.receive(ConstSpan<u8>(data.data(), data.size())) == TlsError::None);
+    CHECK(read_all(client.session).size() == 65400U);
+    REQUIRE(deliver(server.session, client.session) == TlsError::None);
+    CHECK(read_all(client.session).empty());
+    CHECK(client.session.key_updates_received() == received + 2U);
+    exchange(client, server, 10U);
+
+    // No room for an update in the outgoing bytes: Full, nothing queued.
+    REQUIRE(client.session.send(ConstSpan<u8>(filler.data(), filler.size())) == TlsError::None);
+    REQUIRE(client.session.send(ConstSpan<u8>(filler.data(), 5400U)) == TlsError::None);
+    const usize held = client.session.pending();
+    CHECK(client.session.update_keys(false) == TlsError::Full);
+    CHECK(client.session.pending() == held);
+    pump(client, server);
+    REQUIRE(client.session.close() == TlsError::None);
+    CHECK(client.session.update_keys(false) == TlsError::Closed);
+}
+
+TEST_CASE("TLS: a session never passes its key update bound and closes cleanly at it", "[crypto][tls][net-2]")
+{
+    u8    out[16];
+    usize written = 0U;
+    SECTION("updates of its own")
+    {
+        Options options;
+        options.client_max_updates = 3U;
+        Endpoint client;
+        Endpoint server;
+        setup(client, server, options);
+        establish(client, server);
+        REQUIRE(client.session.update_keys(false) == TlsError::None);
+        REQUIRE(client.session.update_keys(true) == TlsError::None);
+        CHECK(client.session.update_keys(false) == TlsError::Closed);
+        CHECK(client.session.key_updates_sent() == 2U);
+        CHECK(client.session.state() == TlsState::Closed);
+        REQUIRE(deliver(client.session, server.session) == TlsError::None);
+        CHECK(server.session.read(Span<u8>(out, sizeof(out)), written) == TlsError::Closed);
+        CHECK(server.session.key_updates_received() == 2U);
+        CHECK(server.session.alert_received().description == 0U); // close_notify
+    }
+    SECTION("the record budget reaching the bound closes before a byte of the message is sent")
+    {
+        Options options;
+        options.client_key_records = kTlsMinKeyUpdateRecords;
+        options.client_max_updates = 2U;
+        Endpoint client;
+        Endpoint server;
+        setup(client, server, options);
+        establish(client, server);
+        send_bytes(client.session, 2U);
+        CHECK(client.session.key_updates_sent() == 1U);
+        const u8 last[] = {'x', 'y'};
+        CHECK(client.session.send(ConstSpan<u8>(last, 1U)) == TlsError::Closed);
+        CHECK(client.session.key_updates_sent() == 1U);
+        REQUIRE(deliver(client.session, server.session) == TlsError::None);
+        for (int i = 0; i < 2; ++i)
+        {
+            REQUIRE(server.session.read(Span<u8>(out, sizeof(out)), written) == TlsError::None);
+            CHECK(written == 1U);
+        }
+        CHECK(server.session.read(Span<u8>(out, sizeof(out)), written) == TlsError::Closed);
+        CHECK(server.session.key_updates_received() == 1U);
+    }
+    SECTION("a message whose key updates would reach the bound is not sent in part")
+    {
+        Options options;
+        options.client_key_records = kTlsMinKeyUpdateRecords;
+        options.client_max_updates = 2U;
+        Endpoint client;
+        Endpoint server;
+        setup(client, server, options);
+        establish(client, server);
+        Bytes message;
+        message.resize(40000U); // three records, two key updates
+        CHECK(client.session.send(ConstSpan<u8>(message.data(), message.size())) == TlsError::Closed);
+        CHECK(client.session.key_updates_sent() == 0U);
+        REQUIRE(deliver(client.session, server.session) == TlsError::None);
+        CHECK(server.session.read(Span<u8>(out, sizeof(out)), written) == TlsError::Closed);
+        CHECK(written == 0U);
+    }
+    SECTION("the peer's request takes the last update, then the session closes")
+    {
+        Options options;
+        options.client_max_updates = 2U;
+        Endpoint client;
+        Endpoint server;
+        setup(client, server, options);
+        establish(client, server);
+        REQUIRE(client.session.update_keys(false) == TlsError::None);
+        REQUIRE(server.session.update_keys(true) == TlsError::None);
+        const u8 data[] = {'d'};
+        REQUIRE(server.session.send(ConstSpan<u8>(data, sizeof(data))) == TlsError::None);
+        REQUIRE(deliver(server.session, client.session) == TlsError::None);
+        REQUIRE(client.session.read(Span<u8>(out, sizeof(out)), written) == TlsError::None);
+        CHECK(written == 1U); // the data read with the request; the session closed after answering
+        CHECK(client.session.key_updates_sent() == 2U);
+        CHECK(client.session.state() == TlsState::Closed);
+        CHECK(client.session.read(Span<u8>(out, sizeof(out)), written) == TlsError::Closed);
+        REQUIRE(deliver(client.session, server.session) == TlsError::None);
+        CHECK(server.session.read(Span<u8>(out, sizeof(out)), written) == TlsError::Closed);
+        CHECK(server.session.key_updates_received() == 2U);
+    }
+}
+
+TEST_CASE("TLS: a peer's user_canceled is ignored and its close_notify ends the handshake cleanly",
+          "[crypto][tls][net-2]")
+{
+    // Before the first flight both alerts travel in plaintext records (RFC 9846 sections 5.1 and 6.1).
+    const u8 user_canceled[] = {21U, 0x03U, 0x03U, 0x00U, 0x02U, 0x01U, kTlsAlertUserCanceled};
+    const u8 close_notify[]  = {21U, 0x03U, 0x03U, 0x00U, 0x02U, 0x01U, 0x00U};
+    SECTION("a server: user_canceled alone changes nothing, and the handshake goes on")
+    {
+        Endpoint client;
+        Endpoint server;
+        setup(client, server, Options{});
+        REQUIRE(server.session.receive(ConstSpan<u8>(user_canceled, sizeof(user_canceled))) == TlsError::None);
+        CHECK(server.session.state() == TlsState::Handshaking);
+        CHECK(server.session.alert_received().description == kTlsAlertUserCanceled);
+        CHECK(server.session.pending() == 0U);
+        establish(client, server);
+        exchange(client, server, 10U);
+    }
+    SECTION("a server: user_canceled, then close_notify")
+    {
+        Endpoint client;
+        Endpoint server;
+        setup(client, server, Options{});
+        REQUIRE(server.session.receive(ConstSpan<u8>(user_canceled, sizeof(user_canceled))) == TlsError::None);
+        CHECK(server.session.receive(ConstSpan<u8>(close_notify, sizeof(close_notify))) == TlsError::Closed);
+        CHECK(server.session.state() == TlsState::Closed);
+        CHECK_FALSE(server.session.alert_sent().present);
+        CHECK(server.session.pending() == 0U);
+        CHECK(server.session.close() == TlsError::Closed);
+        CHECK(server.session.pending() == 0U);
+        CHECK(server.session.update_keys(false) == TlsError::Closed);
+        CHECK(server.session.receive(ConstSpan<u8>(close_notify, sizeof(close_notify))) == TlsError::Closed);
+    }
+    SECTION("a client that sent its ClientHello: both alerts in one delivery")
+    {
+        Endpoint client;
+        Endpoint server;
+        setup(client, server, Options{});
+        (void)drain(client.session);
+        u8 both[sizeof(user_canceled) + sizeof(close_notify)];
+        std::memcpy(both, user_canceled, sizeof(user_canceled));
+        std::memcpy(both + sizeof(user_canceled), close_notify, sizeof(close_notify));
+        CHECK(client.session.receive(ConstSpan<u8>(both, sizeof(both))) == TlsError::Closed);
+        CHECK(client.session.state() == TlsState::Closed);
+        CHECK(client.session.alert_received().description == kTlsAlertUserCanceled);
+        CHECK(client.session.pending() == 0U);
+    }
+    SECTION("more warnings in a row than the provider tolerates fail with unexpected_message")
+    {
+        Endpoint client;
+        Endpoint server;
+        setup(client, server, Options{});
+        for (int i = 0; i < 4; ++i)
+        {
+            REQUIRE(server.session.receive(ConstSpan<u8>(user_canceled, sizeof(user_canceled))) == TlsError::None);
+        }
+        CHECK(server.session.receive(ConstSpan<u8>(user_canceled, sizeof(user_canceled))) == TlsError::Failed);
+        CHECK(server.session.alert_sent().description == kUnexpectedMessage);
+    }
+}
+
 TEST_CASE("TLS: adversarial bytes fail the session with an alert and nothing else", "[crypto][tls][net-2]")
 {
     SECTION("a server fed garbage")
@@ -962,6 +1338,13 @@ TEST_CASE("TLS: configurations outside the profile are refused", "[crypto][tls][
     CHECK(client_with([&](TlsConfig& c) { c.pinned = ConstSpan<KeyId>(many, kTlsMaxPins); }) == TlsError::None);
     TlsCredential unready;
     CHECK(client_with([&](TlsConfig& c) { c.credential = &unready; }) == TlsError::BadConfig);
+    CHECK(client_with([](TlsConfig& c) { c.key_update_records = kTlsMinKeyUpdateRecords - 1U; }) ==
+          TlsError::BadConfig);
+    CHECK(client_with([](TlsConfig& c) { c.key_update_records = 1U; }) == TlsError::BadConfig);
+    CHECK(client_with([](TlsConfig& c) { c.key_update_records = kTlsMinKeyUpdateRecords; }) == TlsError::None);
+    CHECK(client_with([](TlsConfig& c) { c.max_key_updates = kTlsMaxKeyUpdates + 1U; }) == TlsError::BadConfig);
+    CHECK(client_with([](TlsConfig& c) { c.max_key_updates = kTlsMaxKeyUpdates; }) == TlsError::None);
+    CHECK(client_with([](TlsConfig& c) { c.max_key_updates = 1U; }) == TlsError::None);
 
     const char* const bad_names[] = {"-game.cerid.test", "game-.cerid.test", "game..cerid.test", "game.cerid.test.",
                                      ".game", "game_1.test", "g\xC3\xA4me.test", "game cerid"};

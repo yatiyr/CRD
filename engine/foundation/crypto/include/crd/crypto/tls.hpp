@@ -24,6 +24,14 @@
 //   alerts      toward a peer not yet authenticated a server answers general_error where a specific alert would tell
 //               whether a name or a key exists (the TLS 1.3 profile); every alert sent or received is reported.
 //   bounds      at most kTlsMaxBufferedBytes of received and of outgoing bytes wait in a session; more is Full.
+//   key updates a session counts the records protected under its sending key and updates the key (KeyUpdate) before
+//               the negotiated AEAD's usage limit (RFC 9846 section 5.5), or sooner when configured; it counts the
+//               key updates each way, has at most one update_requested outstanding and never lets its own count pass
+//               max_key_updates (at most 2^48-1, RFC 9846 section 4.7.3): an update that would reach the bound closes
+//               the session instead. A receiver never enforces its peer's limits.
+//   closure     a session never sends user_canceled (the provider has no warning alert to send, and a handshake is
+//               abandoned with clear()); a peer's user_canceled is ignored and its close_notify, during the handshake
+//               too, closes the session.
 //   threads     a context is read-only after init() and serves sessions on any thread; a session is used by one
 //               thread at a time. Sessions copy what they need, so a context may be cleared while they live.
 //   allocation  contexts, credentials and sessions allocate inside the provider at init() and while records flow.
@@ -39,13 +47,19 @@ namespace crd::crypto
 {
 namespace cont = crd::containers;
 
-inline constexpr usize kTlsMaxGroups        = 8U;      // key exchange groups in one configuration
-inline constexpr usize kTlsMaxSignatures    = 8U;      // accepted peer signature algorithms
-inline constexpr usize kTlsMaxAeads         = 3U;      // record protection algorithms
-inline constexpr usize kTlsMaxPins          = 16U;     // pinned peer keys
-inline constexpr usize kTlsMaxNameBytes     = 253U;    // a DNS name (RFC 1035), the server_name's longest host name
-inline constexpr usize kTlsMaxBufferedBytes = 65536U;  // received or outgoing bytes waiting in one session
+inline constexpr usize kTlsMaxGroups         = 8U;     // key exchange groups in one configuration
+inline constexpr usize kTlsMaxSignatures     = 8U;     // accepted peer signature algorithms
+inline constexpr usize kTlsMaxAeads          = 3U;     // record protection algorithms
+inline constexpr usize kTlsMaxPins           = 16U;    // pinned peer keys
+inline constexpr usize kTlsMaxNameBytes      = 253U;   // a DNS name (RFC 1035), the server_name's longest host name
+inline constexpr usize kTlsMaxBufferedBytes  = 65536U; // received or outgoing bytes waiting in one session
 inline constexpr u8    kTlsAlertGeneralError = 117U;   // RFC 9846 section 6.2
+inline constexpr u8    kTlsAlertUserCanceled = 90U;    // RFC 9846 section 6.1
+
+// The bound on a session's own key updates, 2^48-1 (RFC 9846 section 4.7.3), and the fewest records a sending key may
+// be configured for: one of data, its KeyUpdate and one alert.
+inline constexpr u64 kTlsMaxKeyUpdates       = (u64{1} << 48U) - 1U;
+inline constexpr u64 kTlsMinKeyUpdateRecords = 3U;
 
 enum class TlsRole : u8
 {
@@ -81,6 +95,10 @@ enum class TlsError : u8
 // The AEADs in this CPU's order: AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 with AES instructions,
 // ChaCha20-Poly1305 first without them (the "chosen by CPU capability" default of the provider policy).
 [[nodiscard]] cont::ConstSpan<AlgorithmId> tls_aead_preference() noexcept;
+
+// The records one sending key of `aead` may protect (RFC 9846 section 5.5): floor(2^24.5) for AES-GCM, every
+// sequence number (2^64-1) for ChaCha20-Poly1305, whose own limit lies beyond them; 0 for any other algorithm.
+[[nodiscard]] u64 tls_key_usage_limit(AlgorithmId aead) noexcept;
 
 // The TLS codepoints of a group or a signature algorithm (the register's TLS Supported Groups and TLS
 // SignatureScheme values); 0 for any other algorithm.
@@ -127,6 +145,10 @@ struct TlsConfig
     const TlsCredential*         credential = nullptr; // a server's, or a client's for mutual authentication
     cont::ConstSpan<KeyId>       pinned;       // the peer keys accepted (a server without pins asks for none)
     cont::StringView             server_name;  // a client's expected server, a server's own name (empty: any)
+    u64 key_update_records = 0U; // records under one sending key, its KeyUpdate included, before the session updates
+                                 // it: 0 for the negotiated AEAD's usage limit, else at least kTlsMinKeyUpdateRecords
+                                 // (lowered to that limit when above it)
+    u64 max_key_updates    = 0U; // the session's own key updates: 0 for kTlsMaxKeyUpdates, else 1 to that bound
 };
 
 // The settings a session copies from its context.
@@ -139,6 +161,8 @@ struct TlsSettings
     u32         pin_count = 0U;
     char        server_name[kTlsMaxNameBytes + 1U] = {};
     u32         name_bytes = 0U;
+    u64         key_update_records = 0U;
+    u64         max_key_updates    = kTlsMaxKeyUpdates;
 };
 
 struct ProviderTlsContext; // the provider's context object, defined only inside crd-crypto
@@ -208,9 +232,17 @@ public:
     [[nodiscard]] TlsError send(cont::ConstSpan<u8> plaintext) noexcept;
     [[nodiscard]] TlsError read(cont::Span<u8> out, usize& written) noexcept;
 
-    // Queues close_notify once the handshake is done; the session is Closed (Closed again when it was sent before).
-    // NotReady before the handshake ends and after a failure: such a session is abandoned with clear().
+    // Queues close_notify once the handshake is done; the session is Closed (Closed again when it was sent before, or
+    // when the peer closed it during the handshake). NotReady before the handshake ends and after a failure: such a
+    // session is abandoned with clear().
     [[nodiscard]] TlsError close() noexcept;
+
+    // Established only: updates the sending key now (a KeyUpdate in the outgoing bytes) and, with `request_peer`, asks
+    // the peer to update its own, unless a request is already outstanding (RFC 9846 section 4.7.3: the peer has not
+    // answered it yet; the session's own key still updates). Full when the outgoing bytes have no room for it; Closed
+    // when the update would reach max_key_updates, after close_notify was queued instead. send() updates the key by
+    // itself before key_update_records() records, and read() answers a peer's request.
+    [[nodiscard]] TlsError update_keys(bool request_peer) noexcept;
 
     // After the handshake: the negotiated group and AEAD, the peer key's algorithm and identifier (a server without
     // pins learns none: AlgorithmId{} and a zero KeyId), and whether the server asked for another key share.
@@ -220,6 +252,13 @@ public:
     [[nodiscard]] KeyId       peer_key() const noexcept { return m_peer_key; }
     [[nodiscard]] bool        hello_retry() const noexcept { return m_hello_retry; }
 
+    // The key updates sent and received, the records (data and alerts) protected so far under the current sending
+    // key and the records after which the session updates it (0 before the handshake ends).
+    [[nodiscard]] u64 key_updates_sent() const noexcept { return m_updates_sent; }
+    [[nodiscard]] u64 key_updates_received() const noexcept { return m_updates_received; }
+    [[nodiscard]] u64 records_under_key() const noexcept;
+    [[nodiscard]] u64 key_update_records() const noexcept { return m_key_update_records; }
+
     [[nodiscard]] TlsAlert alert_sent() const noexcept { return m_alert_sent; }
     [[nodiscard]] TlsAlert alert_received() const noexcept { return m_alert_received; }
 
@@ -228,6 +267,9 @@ private:
 
     [[nodiscard]] TlsError advance() noexcept;
     [[nodiscard]] TlsError fail(TlsError error) noexcept;
+    [[nodiscard]] TlsError rekey(bool request_peer) noexcept;
+    [[nodiscard]] TlsError close_at_bound() noexcept;
+    [[nodiscard]] bool     flush_key_update() noexcept;
 
     ProviderTlsSession* m_session = nullptr;
     TlsSettings         m_settings;
@@ -236,8 +278,12 @@ private:
     AlgorithmId         m_aead{};
     AlgorithmId         m_peer_algorithm{};
     KeyId               m_peer_key;
-    bool                m_hello_retry = false;
-    bool                m_refused     = false; // the verify or name check refused the peer
+    u64                 m_key_update_records = 0U;
+    u64                 m_updates_sent       = 0U;
+    u64                 m_updates_received   = 0U;
+    bool                m_hello_retry        = false;
+    bool                m_refused            = false; // the verify or name check refused the peer
+    bool                m_update_requested   = false; // a KeyUpdate asked the peer for one, not answered yet
     TlsAlert            m_alert_sent;
     TlsAlert            m_alert_received;
 };

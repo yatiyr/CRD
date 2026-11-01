@@ -80,10 +80,16 @@ constexpr u8 kHelloRetryRandom[32] = {
 
 constexpr u8    kBadCertificate        = SSL_AD_BAD_CERTIFICATE; // a client's refusal of an unpinned server key
 constexpr u8    kServerHello           = 2U;      // HandshakeType server_hello
+constexpr u8    kKeyUpdate             = 24U;     // HandshakeType key_update
+constexpr usize kKeyUpdateRequestAt    = 4U;      // type (1), length (3), then request_update
 constexpr usize kServerHelloRandomAt   = 6U;      // type (1), length (3), legacy_version (2)
 constexpr usize kMaxRecordPlaintext    = 16384U;  // 2^14 (RFC 9846 section 5.1)
 constexpr usize kRecordOverhead        = 22U;     // header (5), inner content type (1) and AEAD tag (16)
+constexpr usize kKeyUpdateRecordBytes  = 27U;     // the overhead, a handshake header (4) and request_update (1)
 constexpr usize kMaxSignaturePublicKey = 2592U;   // ML-DSA-87's, the longest signature public key
+
+// floor(2^24.5): the full-size records one AES-GCM key may protect (RFC 9846 section 5.5).
+constexpr u64 kAesGcmRecordLimit = 23726566U;
 
 SSL_CTX* ctx_of(ProviderTlsContext* context) noexcept
 {
@@ -290,7 +296,8 @@ struct TlsCallbacks
         return SSL_TLSEXT_ERR_OK;
     }
 
-    // Records the first alert each way and notices a HelloRetryRequest (a ServerHello with the special random).
+    // Records the first alert each way, notices a HelloRetryRequest (a ServerHello with the special random) and counts
+    // the KeyUpdates each way. The provider reports a KeyUpdate it writes when it queues it, sealed under the old key.
     static void observe(int is_write, int, int content_type, const void* buffer, size_t length, SSL* ssl,
                         void*) noexcept
     {
@@ -313,6 +320,22 @@ struct TlsCallbacks
                  std::memcmp(bytes + kServerHelloRandomAt, kHelloRetryRandom, sizeof(kHelloRetryRandom)) == 0)
         {
             session->m_hello_retry = true;
+        }
+        else if (content_type == SSL3_RT_HANDSHAKE && length > kKeyUpdateRequestAt && bytes[0] == kKeyUpdate)
+        {
+            if (is_write != 0)
+            {
+                ++session->m_updates_sent;
+                if (bytes[kKeyUpdateRequestAt] == SSL_KEY_UPDATE_REQUESTED)
+                {
+                    session->m_update_requested = true;
+                }
+            }
+            else
+            {
+                ++session->m_updates_received;
+                session->m_update_requested = false;
+            }
         }
     }
 };
@@ -348,6 +371,20 @@ cont::ConstSpan<AlgorithmId> tls_aead_preference() noexcept
     static constexpr AlgorithmId kWithoutAes[] = {AlgorithmId::Chacha20Poly1305, AlgorithmId::Aes128Gcm,
                                                   AlgorithmId::Aes256Gcm};
     return EVP_has_aes_hardware() ? cont::ConstSpan<AlgorithmId>(kWithAes) : cont::ConstSpan<AlgorithmId>(kWithoutAes);
+}
+
+u64 tls_key_usage_limit(AlgorithmId aead) noexcept
+{
+    switch (aead)
+    {
+    case AlgorithmId::Aes128Gcm:
+    case AlgorithmId::Aes256Gcm:
+        return kAesGcmRecordLimit;
+    case AlgorithmId::Chacha20Poly1305:
+        return ~u64{0};
+    default:
+        return 0U;
+    }
 }
 
 u16 tls_group_codepoint(AlgorithmId group) noexcept
@@ -478,7 +515,9 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
         (!server && config.pinned.empty()) || (server && config.credential == nullptr) ||
         (config.credential != nullptr && !config.credential->ready()) ||
         (!config.server_name.empty() && !valid_host_name(config.server_name)) ||
-        (!server && config.server_name.empty()))
+        (!server && config.server_name.empty()) ||
+        (config.key_update_records != 0U && config.key_update_records < kTlsMinKeyUpdateRecords) ||
+        config.max_key_updates > kTlsMaxKeyUpdates)
     {
         return TlsError::BadConfig;
     }
@@ -490,7 +529,9 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     std::copy(config.pinned.begin(), config.pinned.end(), settings.pinned);
     settings.pin_count = static_cast<u32>(config.pinned.size());
     std::copy(config.server_name.begin(), config.server_name.end(), settings.server_name);
-    settings.name_bytes = static_cast<u32>(config.server_name.size());
+    settings.name_bytes         = static_cast<u32>(config.server_name.size());
+    settings.key_update_records = config.key_update_records;
+    settings.max_key_updates    = config.max_key_updates != 0U ? config.max_key_updates : kTlsMaxKeyUpdates;
 
     u16 groups[kTlsMaxGroups];
     for (usize i = 0U; i < config.groups.size(); ++i)
@@ -586,17 +627,21 @@ void TlsSession::clear() noexcept
 {
     // SSL_free releases the connection, its keys (zeroed) and both memory buffers.
     SSL_free(ssl_of(m_session));
-    m_session        = nullptr;
-    m_settings       = TlsSettings{};
-    m_state          = TlsState::Idle;
-    m_group          = AlgorithmId{};
-    m_aead           = AlgorithmId{};
-    m_peer_algorithm = AlgorithmId{};
-    m_peer_key       = KeyId{};
-    m_hello_retry    = false;
-    m_refused        = false;
-    m_alert_sent     = TlsAlert{};
-    m_alert_received = TlsAlert{};
+    m_session            = nullptr;
+    m_settings           = TlsSettings{};
+    m_state              = TlsState::Idle;
+    m_group              = AlgorithmId{};
+    m_aead               = AlgorithmId{};
+    m_peer_algorithm     = AlgorithmId{};
+    m_peer_key           = KeyId{};
+    m_key_update_records = 0U;
+    m_updates_sent       = 0U;
+    m_updates_received   = 0U;
+    m_hello_retry        = false;
+    m_refused            = false;
+    m_update_requested   = false;
+    m_alert_sent         = TlsAlert{};
+    m_alert_received     = TlsAlert{};
 }
 
 TlsError TlsSession::init(const TlsContext& context) noexcept
@@ -661,14 +706,23 @@ TlsError TlsSession::advance() noexcept
         {
             return fail(TlsError::ProviderFailure);
         }
-        m_state = TlsState::Established;
+        const u64 limit      = tls_key_usage_limit(m_aead);
+        const u64 configured = m_settings.key_update_records;
+        m_key_update_records = configured != 0U && configured < limit ? configured : limit;
+        m_state              = TlsState::Established;
         return TlsError::None;
     }
-    if (SSL_get_error(ssl, result) == SSL_ERROR_WANT_READ)
+    switch (SSL_get_error(ssl, result))
     {
+    case SSL_ERROR_WANT_READ:
         return TlsError::None;
+    case SSL_ERROR_ZERO_RETURN:
+        // The peer's close_notify, after a user_canceled or not: it ended the handshake without a protocol failure.
+        m_state = TlsState::Closed;
+        return TlsError::Closed;
+    default:
+        return fail(m_refused ? TlsError::PeerRefused : TlsError::Failed);
     }
-    return fail(m_refused ? TlsError::PeerRefused : TlsError::Failed);
 }
 
 TlsError TlsSession::receive(cont::ConstSpan<u8> bytes) noexcept
@@ -731,21 +785,107 @@ TlsError TlsSession::send(cont::ConstSpan<u8> plaintext) noexcept
     {
         return TlsError::None;
     }
-    const usize records = (plaintext.size() + kMaxRecordPlaintext - 1U) / kMaxRecordPlaintext;
-    const usize pending_bytes = pending();
-    if (plaintext.size() > kTlsMaxBufferedBytes ||
-        plaintext.size() + records * kRecordOverhead > kTlsMaxBufferedBytes - std::min(pending_bytes,
-                                                                                        kTlsMaxBufferedBytes))
+    if (plaintext.size() > kTlsMaxBufferedBytes)
+    {
+        return TlsError::Full;
+    }
+    // Each record goes under a key with room left for it, a KeyUpdate and an alert; the key updates first when not.
+    SSL*        ssl         = ssl_of(m_session);
+    const usize records     = (plaintext.size() + kMaxRecordPlaintext - 1U) / kMaxRecordPlaintext;
+    const u64   per_key     = m_key_update_records - 2U;
+    const u64   used        = records_under_key();
+    const u64   on_this_key = per_key > used ? per_key - used : 0U;
+    const u64   updates     = records > on_this_key ? 1U + (records - on_this_key - 1U) / per_key : 0U;
+    const usize queued      = SSL_get_key_update_type(ssl) != SSL_KEY_UPDATE_NONE ? 1U : 0U;
+    const usize needed      = plaintext.size() + records * kRecordOverhead +
+                              (static_cast<usize>(updates) + queued) * kKeyUpdateRecordBytes;
+    if (needed > kTlsMaxBufferedBytes - std::min(pending(), kTlsMaxBufferedBytes))
     {
         return TlsError::Full;
     }
     const ErrorScope errors;
-    const int        size = static_cast<int>(plaintext.size());
-    if (SSL_write(ssl_of(m_session), plaintext.data(), size) != size)
+    if (updates != 0U && m_updates_sent + updates >= m_settings.max_key_updates)
+    {
+        return close_at_bound();
+    }
+    for (usize at = 0U; at < plaintext.size(); at += kMaxRecordPlaintext)
+    {
+        if (records_under_key() >= per_key)
+        {
+            const TlsError rotated = rekey(false);
+            if (rotated != TlsError::None)
+            {
+                return rotated;
+            }
+        }
+        const int size = static_cast<int>(std::min(kMaxRecordPlaintext, plaintext.size() - at));
+        if (SSL_write(ssl, plaintext.data() + at, size) != size)
+        {
+            return fail(TlsError::Failed);
+        }
+    }
+    return TlsError::None;
+}
+
+u64 TlsSession::records_under_key() const noexcept
+{
+    return m_state == TlsState::Established ? SSL_get_write_sequence(ssl_of(m_session)) : 0U;
+}
+
+bool TlsSession::flush_key_update() noexcept
+{
+    // A zero-length write moves the queued KeyUpdate into the outgoing bytes. Its result reads as an error either way,
+    // so success is the provider no longer holding an update back.
+    SSL* ssl = ssl_of(m_session);
+    (void)SSL_write(ssl, &m_state, 0);
+    return SSL_get_key_update_type(ssl) == SSL_KEY_UPDATE_NONE;
+}
+
+TlsError TlsSession::rekey(bool request_peer) noexcept
+{
+    if (m_updates_sent + 1U >= m_settings.max_key_updates)
+    {
+        return close_at_bound();
+    }
+    SSL* ssl = ssl_of(m_session);
+    // A queued answer to the peer goes out first, or the provider would take this update for it.
+    if (SSL_get_key_update_type(ssl) != SSL_KEY_UPDATE_NONE && !flush_key_update())
+    {
+        return fail(TlsError::Failed);
+    }
+    const int request = request_peer && !m_update_requested ? SSL_KEY_UPDATE_REQUESTED : SSL_KEY_UPDATE_NOT_REQUESTED;
+    if (!SSL_key_update(ssl, request) || !flush_key_update())
     {
         return fail(TlsError::Failed);
     }
     return TlsError::None;
+}
+
+TlsError TlsSession::close_at_bound() noexcept
+{
+    // The last permitted key update is kept for a peer's request, which the provider answers by itself: the session
+    // ends cleanly rather than update past the bound (RFC 9846 section 4.7.3).
+    if (SSL_shutdown(ssl_of(m_session)) < 0)
+    {
+        return fail(TlsError::Failed);
+    }
+    m_state = TlsState::Closed;
+    return TlsError::Closed;
+}
+
+TlsError TlsSession::update_keys(bool request_peer) noexcept
+{
+    if (m_state != TlsState::Established)
+    {
+        return m_state == TlsState::Closed ? TlsError::Closed : TlsError::NotReady;
+    }
+    // Room for a queued answer to the peer and this update.
+    if (2U * kKeyUpdateRecordBytes > kTlsMaxBufferedBytes - std::min(pending(), kTlsMaxBufferedBytes))
+    {
+        return TlsError::Full;
+    }
+    const ErrorScope errors;
+    return rekey(request_peer);
 }
 
 TlsError TlsSession::read(cont::Span<u8> out, usize& written) noexcept
@@ -762,21 +902,30 @@ TlsError TlsSession::read(cont::Span<u8> out, usize& written) noexcept
     const ErrorScope errors;
     SSL*             ssl    = ssl_of(m_session);
     const int        result = SSL_read(ssl, out.data(), static_cast<int>(std::min<usize>(out.size(), INT_MAX)));
-    if (result > 0)
+    const int        reason = result > 0 ? SSL_ERROR_NONE : SSL_get_error(ssl, result);
+    if (reason != SSL_ERROR_NONE && reason != SSL_ERROR_WANT_READ && reason != SSL_ERROR_ZERO_RETURN)
     {
-        written = static_cast<usize>(result);
-        return TlsError::None;
-    }
-    switch (SSL_get_error(ssl, result))
-    {
-    case SSL_ERROR_WANT_READ:
-        return TlsError::None;
-    case SSL_ERROR_ZERO_RETURN:
-        m_state = TlsState::Closed;
-        return TlsError::Closed;
-    default:
         return fail(TlsError::Failed);
     }
+    written = result > 0 ? static_cast<usize>(result) : 0U;
+    // The provider queued its answer to a peer's update request: it goes out now when the outgoing bytes have room for
+    // it, else ahead of the next record. An answer that reached max_key_updates ends the session after it.
+    if (SSL_get_key_update_type(ssl) != SSL_KEY_UPDATE_NONE &&
+        pending() + kKeyUpdateRecordBytes <= kTlsMaxBufferedBytes && !flush_key_update())
+    {
+        return fail(TlsError::Failed);
+    }
+    if (reason == SSL_ERROR_ZERO_RETURN)
+    {
+        m_state = TlsState::Closed;
+        return TlsError::Closed;
+    }
+    if (m_updates_sent >= m_settings.max_key_updates)
+    {
+        const TlsError closed = close_at_bound();
+        return written != 0U && closed == TlsError::Closed ? TlsError::None : closed;
+    }
+    return TlsError::None;
 }
 
 TlsError TlsSession::close() noexcept
@@ -786,7 +935,7 @@ TlsError TlsSession::close() noexcept
         return TlsError::NotReady;
     }
     SSL* ssl = ssl_of(m_session);
-    if ((SSL_get_shutdown(ssl) & SSL_SENT_SHUTDOWN) != 0)
+    if ((SSL_get_shutdown(ssl) & SSL_SENT_SHUTDOWN) != 0 || SSL_in_init(ssl))
     {
         return TlsError::Closed;
     }

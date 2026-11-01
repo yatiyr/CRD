@@ -7,10 +7,11 @@
 // Oracles, none of them the provider's verdict on one call:
 //   * neither session is ever established: a server needs a Finished under keys derived from its own fresh share, and
 //     a client a CertificateVerify by its pinned key, which no fixed input can hold;
-//   * receive() answers only None, Failed, PeerRefused or Full while the session handshakes, NotReady once it failed,
-//     and a failed session stays failed;
+//   * receive() answers only None, Failed, PeerRefused, Full or Closed while the session handshakes, NotReady once it
+//     failed and Closed once the peer closed it; a failed or closed session stays so, and a session closed by its
+//     peer (a close_notify, after a user_canceled or not) has sent no alert;
 //   * the session never holds more than kTlsMaxBufferedBytes of received bytes, and its outgoing bytes are bounded;
-//   * send(), read() and close() are refused outside an established session.
+//   * send(), read(), close() and update_keys() are refused outside an established session (Closed once closed).
 #include <crd/fuzz/harness.hpp>
 
 #include <crd/crypto/provider.hpp>
@@ -105,25 +106,31 @@ void feed(TlsSession& session, ConstSpan<u8> bytes, usize chunk) noexcept
         const TlsState before = session.state();
         const TlsError result = session.receive(bytes.subspan(at, size));
         at += size;
-        if (before == TlsState::Failed)
+        if (before == TlsState::Failed || before == TlsState::Closed)
         {
-            CRD_FUZZ_REQUIRE(result == TlsError::NotReady);
-            CRD_FUZZ_REQUIRE(session.state() == TlsState::Failed);
+            CRD_FUZZ_REQUIRE(result == (before == TlsState::Failed ? TlsError::NotReady : TlsError::Closed));
+            CRD_FUZZ_REQUIRE(session.state() == before);
             continue;
         }
         CRD_FUZZ_REQUIRE(result == TlsError::None || result == TlsError::Failed || result == TlsError::PeerRefused ||
-                         result == TlsError::Full);
+                         result == TlsError::Full || result == TlsError::Closed);
         CRD_FUZZ_REQUIRE((result == TlsError::Failed || result == TlsError::PeerRefused) ==
                          (session.state() == TlsState::Failed));
-        CRD_FUZZ_REQUIRE(session.state() == TlsState::Handshaking || session.state() == TlsState::Failed);
+        CRD_FUZZ_REQUIRE((result == TlsError::Closed) == (session.state() == TlsState::Closed));
+        CRD_FUZZ_REQUIRE(session.state() != TlsState::Closed || !session.alert_sent().present);
+        CRD_FUZZ_REQUIRE(session.state() != TlsState::Established && session.state() != TlsState::Idle);
         drain(session);
     }
-    u8    scratch[16] = {};
-    usize written     = 0U;
-    CRD_FUZZ_REQUIRE(session.send(ConstSpan<u8>(scratch, sizeof(scratch))) == TlsError::NotReady);
-    CRD_FUZZ_REQUIRE(session.read(Span<u8>(scratch, sizeof(scratch)), written) == TlsError::NotReady);
+    const TlsError refused     = session.state() == TlsState::Closed ? TlsError::Closed : TlsError::NotReady;
+    u8             scratch[16] = {};
+    usize          written     = 0U;
+    CRD_FUZZ_REQUIRE(session.send(ConstSpan<u8>(scratch, sizeof(scratch))) == refused);
+    CRD_FUZZ_REQUIRE(session.read(Span<u8>(scratch, sizeof(scratch)), written) == refused);
     CRD_FUZZ_REQUIRE(written == 0U);
-    CRD_FUZZ_REQUIRE(session.close() == TlsError::NotReady);
+    CRD_FUZZ_REQUIRE(session.close() == refused);
+    CRD_FUZZ_REQUIRE(session.update_keys(true) == refused);
+    CRD_FUZZ_REQUIRE(session.pending() == 0U || session.state() == TlsState::Failed);
+    CRD_FUZZ_REQUIRE(session.key_updates_sent() == 0U && session.key_updates_received() == 0U);
     CRD_FUZZ_REQUIRE(session.group() == AlgorithmId{} && session.peer_key() == KeyId{});
 }
 } // namespace
@@ -299,4 +306,24 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     sink.add("client-handshake-failure-alert", alert, sizeof(alert));
     const u8 nothing[] = {0U, 0U};
     sink.add("server-nothing", nothing, sizeof(nothing));
+
+    // A peer that cancels: user_canceled, which is ignored, then close_notify, which closes the session; five warnings
+    // in a row, past what the provider tolerates; and a user_canceled ahead of an honest ClientHello.
+    const u8 canceled[] = {1U, 0U, 21U, 0x03U, 0x03U, 0x00U, 0x02U, 0x01U, 0x5AU,
+                           21U, 0x03U, 0x03U, 0x00U, 0x02U, 0x01U, 0x00U};
+    sink.add("client-user-canceled-close-notify", canceled, sizeof(canceled));
+    u8 warnings[2U + 5U * 7U] = {0U, 0U};
+    for (usize i = 0U; i < 5U; ++i)
+    {
+        std::memcpy(warnings + 2U + i * 7U, canceled + 2U, 7U);
+    }
+    sink.add("server-five-user-canceled", warnings, sizeof(warnings));
+    Writer late;
+    late.put(0U);
+    late.put(0U);
+    late.put(canceled + 2U, 7U);
+    Writer second;
+    client_hello(second, 0U, 0U);
+    late.put(second.bytes + 2U, second.size - 2U);
+    sink.add("server-user-canceled-then-client-hello", late.bytes, late.size);
 }
