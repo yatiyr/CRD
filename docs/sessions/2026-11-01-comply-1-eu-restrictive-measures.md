@@ -20,10 +20,11 @@ official legal texts that decision approved. Their bodies stay outside the repos
 
 No failure comes from a track C change.
 
-- **Run 41269105413 (b0b1b245).** Its nine failed Windows jobs all failed to build. Seven of them failed on
-  `engine/foundation/platform/src/filesystem.cpp:308-309`, where `windows.h`'s `min` and `max` macros break
-  `std::numeric_limits<i64>::max()`. The MSVC lanes report C4003 and C2589, and clang-cl reports "too few
-  arguments". win-arm64-debug failed on `checksum.cpp` (C4324). The fixes are 9723ac75 (track B's file units) and
+- **Run 41269105413 (b0b1b245).** Its nine failed Windows jobs all failed to build; every log was read. Eight failed
+  on `engine/foundation/platform/src/filesystem.cpp:308-309`, where `windows.h`'s `min` and `max` macros break
+  `std::numeric_limits<i64>::max()`. These are win-debug, win-debug-scalar, both win-asan shards, win-public-checks,
+  win-vs, win-clang-cl and win-clang-cl-shipping. The MSVC lanes report C4003, C2589 and C2760, and clang-cl reports
+  "too few arguments". win-arm64-debug failed on `checksum.cpp` (C4324). The fixes are 9723ac75 (track B's file units) and
   921e19cc (track A). Both are ancestors of de5e10b0.
 - **Run 41274380605 (de5e10b0)**, the first complete run with both fixes, had started only win-vs (passed),
   linux-gcc-arm64-asan and one linux-gcc-asan shard at 06:00 UTC. The other 26 jobs were queued.
