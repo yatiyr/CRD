@@ -8,21 +8,27 @@ check-registers.review_due computes from them; the guard fails once that day pas
   due      prints the next review the register owes, why, and the calendar events still unconfirmed.
   plan     writes the list of primary sources a refresh reads: the RFC Editor record of every RFC, the IETF datatracker
            record of every draft and the IANA registry files holding the register's codepoints, or, for the legal
-           domain, the official primary text of every instrument, plus the items that are read by hand. Reading them
-           is a download the user approves first: the plan is what is approved.
+           domain, the official primary text of every instrument, plus the items that are read by hand. With
+           --scan full it adds the full text of every document a full re-research owes a reading of (the documents the
+           triggering entries of the light runs since the latest full run pin). Reading them is a download the user
+           approves first: the plan is what is approved.
   fetch    reads an approved plan's sources into a directory with a manifest of their SHA-256 digests.
   compare  judges the fetched records against the register and writes a report: the register changes (revisions,
-           statuses, codepoints confirmed against IANA), the instruments to read in their consolidated text (never
-           read, or changed since the digest recorded when they were read), the ROADMAP amendments it proposes for the
-           user and the sources it could not read. With --apply it writes the register changes, records the run and
-           moves `next`; it never edits a ROADMAP row. A pinned entry whose status changed triggers a full re-research.
+           statuses, codepoints confirmed against IANA with their "Recommended" value), the instruments to read in
+           their consolidated text (never read, or changed since the digest recorded when they were read), the
+           documents read in full, the ROADMAP amendments it proposes for the user and the sources it could not read.
+           With --apply it writes the register changes, records the run and moves `next`; it never edits a ROADMAP
+           row. A pinned entry whose status changed, or whose codepoint IANA came to discourage, triggers a full
+           re-research. A full scan compares a full plan and, applied, records the re-research document (--ref) that
+           cites the report.
   record   records a run made by hand (a full re-research document, or an Official Gazette or EUR-Lex trigger with
            the entries it changed) and moves `next`.
 
   python scripts/register-review.py due [--register R] [--today YYYY-MM-DD]
-  python scripts/register-review.py plan --out sources.json
+  python scripts/register-review.py plan --out sources.json [--scan full]
   python scripts/register-review.py fetch --plan sources.json --into DIR
   python scripts/register-review.py compare --fetched DIR --report docs/sessions/<day>-register-review.md [--apply]
+  python scripts/register-review.py compare --scan full --fetched DIR --report R --apply --ref <document#anchor>
   python scripts/register-review.py record --scan full --ref <document#anchor> [--day YYYY-MM-DD] [--trigger ID]
 
 --register cmake/legal-register.json selects the legal domain.
@@ -31,6 +37,7 @@ docs/design/registers.md#snapshot-and-review is the contract. The readers follow
 refresh read (2026-10-31); a record that does not have their shape is reported as unreadable and changes nothing.
 """
 import argparse
+import collections
 import datetime
 import hashlib
 import importlib.util
@@ -50,6 +57,9 @@ FETCH_LIMIT = 16 * 1024 * 1024
 FETCH_TIMEOUT = 60
 RFC_EDITOR = 'https://www.rfc-editor.org/rfc/rfc{number}.json'
 DATATRACKER = 'https://datatracker.ietf.org/doc/{name}/doc.json'
+# The full texts a full re-research reads.
+RFC_TEXT = 'https://www.rfc-editor.org/rfc/rfc{number}.txt'
+DRAFT_TEXT = 'https://www.ietf.org/archive/id/{name}-{revision}.txt'
 IANA = 'https://www.iana.org/assignments/{name}/{name}.xml'
 # The register's registry names, the IANA file holding each and the registry title inside it.
 IANA_REGISTRIES = {
@@ -126,8 +136,9 @@ def source_id(url):
     return re.sub(r'[^a-z0-9.]+', '-', f'{host}{parts.path}?{parts.query}'.lower()).strip('-.')
 
 
-def plan_sources(register):
-    """The sources a refresh of this register reads: [{id, kind, url, entries, registries}] and the manual items."""
+def plan_sources(register, scan='light'):
+    """The sources a refresh of this register reads: [{id, kind, url, entries, registries}] and the manual items; a
+    full scan adds the full text of every document the owed full re-research reads (`text` sources)."""
     sources = {}
     manual = {}
 
@@ -176,7 +187,30 @@ def plan_sources(register):
     if register['domain'] in CALENDAR_SOURCE:
         url, read = CALENDAR_SOURCE[register['domain']]
         by_hand(read, url)
+    if scan == 'full':
+        entries = {entry['id']: entry for entry in register['entries']}
+        for entry_id in owed_triggers(register['review']):
+            if entry_id not in entries:
+                raise ReviewError(f'a recorded run names the triggering entry {entry_id}, which the register lacks')
+            spec = entries[entry_id].get('spec', {})
+            kind, ref = spec.get('type'), spec.get('ref', '')
+            if kind == 'rfc':
+                number = rfc_number(ref)
+                add(f'rfc{number}-text', 'text', RFC_TEXT.format(number=number), entry_id)
+            elif kind == 'draft':
+                if 'revision' not in spec:
+                    raise ReviewError(f'entry {entry_id}: the full re-research reads {ref} at its revision; refresh the '
+                                      'register first')
+                add(f'{ref}-{spec["revision"]}-text', 'text', DRAFT_TEXT.format(name=ref, revision=spec['revision']),
+                    entry_id)
+            elif kind in MANUAL_SPECS:
+                by_hand(f'the full text of {ref}', MANUAL_SPECS[kind][1].format(ref=ref), entry_id)
     return sorted(sources.values(), key=lambda source: source['id']), list(manual.values())
+
+
+def owed_triggers(review):
+    """The entries the owed full re-research reads: the triggers of the light runs no full run has followed."""
+    return sorted({entry_id for _, run in _registers.owed_runs(review) for entry_id in run['triggers']})
 
 
 def fetch_sources(plan, into, opener=urllib.request.urlopen, today=None):
@@ -307,13 +341,18 @@ def sequence_of(text):
     return match.group(1) if match else None
 
 
+# One record of an IANA registry: its values, names, cited documents and "Recommended" value (None without one).
+IanaRecord = collections.namedtuple('IanaRecord', 'values names documents recommended')
+
+
 def read_iana(body, titles):
-    """{title: [(values, names, documents)]} of the named registries of an IANA registry file.
+    """{title: [IanaRecord]} of the named registries of an IANA registry file.
 
     A record's `value` is its number, or its name where the registry keys records by name (ALPN's `HTTP/3`); its
     `description` is its name, or the value an identification sequence spells; `documents` are the RFCs it cites
     (`<xref type="rfc" data="rfc9000"/>`), which confirm a value in a registry whose records carry no name (QUIC
-    Versions)."""
+    Versions); `recommended` is the "Recommended" column (RFC 9847), spelled `<rec>` in the TLS Supported Groups and
+    ExtensionType files and `<recommended>` in the SignatureScheme file."""
     try:
         tree = ElementTree.fromstring(body)
     except ElementTree.ParseError as error:
@@ -329,7 +368,7 @@ def read_iana(body, titles):
         for record in registry:
             if local(record.tag) != 'record':
                 continue
-            values, names, documents = set(), set(), set()
+            values, names, documents, recommended = set(), set(), set(), None
             for field in record:
                 tag, text = local(field.tag), ''.join(field.itertext()).strip()
                 if tag == 'value':
@@ -346,8 +385,10 @@ def read_iana(body, titles):
                         values.add(sequence)
                 elif tag == 'xref':
                     documents.add(document_of(field.get('type'), field.get('data', '')))
+                elif tag in {'rec', 'recommended'} and text:
+                    recommended = text
             documents.discard(None)
-            records.append((values, names, documents))
+            records.append(IanaRecord(values, names, documents, recommended))
         found[title] = records
     missing = set(titles) - set(found)
     if missing:
@@ -359,14 +400,19 @@ def normal_name(text):
     return re.sub(r'[^a-z0-9]', '', text.lower())
 
 
+def point_value(point):
+    """The value a register codepoint spells: its number, else its text (an ALPN identifier)."""
+    value = number(point['value'])
+    return point['value'] if value is None else value
+
+
 def judge_codepoint(point, records, document):
     """('verified' | 'mismatch' | 'name' | 'absent', detail) of a register codepoint against an IANA registry.
 
     A record that carries no name (QUIC Versions) confirms the value when it cites `document`, the entry's spec."""
-    value = number(point['value'])
-    value = point['value'] if value is None else value
+    value = point_value(point)
     name = normal_name(point['name'])
-    by_value = [(names, documents) for values, names, documents in records if value in values]
+    by_value = [(record.names, record.documents) for record in records if value in record.values]
     if by_value:
         if any(name in names for names, _ in by_value):
             return 'verified', ''
@@ -375,7 +421,7 @@ def judge_codepoint(point, records, document):
         named = sorted(set().union(*(names for names, _ in by_value)))
         cited = sorted(set().union(*(documents for _, documents in by_value)))
         return 'name', f'IANA names {point["value"]} {named} and cites {cited}'
-    if any(name in names for _, names, _ in records):
+    if any(name in record.names for record in records):
         return 'mismatch', f'IANA assigns {point["name"]} another value'
     return 'absent', f'IANA has neither {point["name"]} nor {point["value"]}'
 
@@ -470,9 +516,35 @@ class Review:
                     target['codepoints'][index].pop('verified')
                 self.change(entry, f'{point["registry"]} {point["name"]} = {point["value"]} confirmed by IANA{detail}',
                             apply)
+            if verdict == 'verified' and point['registry'] in _registers.RECOMMENDED_REGISTRIES:
+                self.judge_recommended(entry, index, point, records)
             elif verdict != 'verified':
                 self.proposals.append(f'{entry["id"]}: {point["registry"]} {point["name"]} = {point["value"]}: '
                                       f'{detail}; correct the register and regenerate scripts/gen-register-ids.py')
+
+    def judge_recommended(self, entry, index, point, records):
+        """IANA's "Recommended" value of a confirmed codepoint (RFC 9847): recorded, and a pinned entry whose
+        codepoint IANA came to discourage ("D") triggers a full re-research."""
+        value = point_value(point)
+        found = {record.recommended for record in records if value in record.values}
+        what = f'{point["registry"]} {point["name"]}'
+        if len(found) != 1 or found - _registers.RECOMMENDED:
+            self.unread.append(f'{entry["id"]}: {what} has no single Recommended value in the IANA file '
+                               f'({", ".join(sorted(str(item) for item in found))})')
+            return
+        recommended, old = found.pop(), point.get('recommended')
+        if recommended == old:
+            return
+
+        def apply(target, index=index, recommended=recommended):
+            target['codepoints'][index]['recommended'] = recommended
+        was = f'was "{old}"' if old else 'not recorded'
+        self.change(entry, f'{what} is Recommended "{recommended}" by IANA ({was})', apply)
+        if recommended == 'D' and entry['state'] in _registers.PINNED:
+            self.triggers.append(entry['id'])
+            self.proposals.append(f'{entry["id"]} ({", ".join(entry["rows"])}): IANA now discourages {point["name"]} '
+                                  '(Recommended "D"); drop it from the accepted policy and the entry before the full '
+                                  're-research this triggers')
 
     def judge_primary(self, entry, source_id):
         """An instrument's primary text against the digest recorded when it was last read in its consolidated form."""
@@ -525,6 +597,8 @@ class Review:
                     ('Read in the consolidated text', self.readings),
                     ('Proposed ROADMAP amendments', self.proposals),
                     ('Triggers a full re-research', self.triggers),
+                    ('Read in full', [f'{", ".join(source["entries"])}: {source["url"]}' for source in plan['sources']
+                                      if source['kind'] == 'text']),
                     ('Sources not read', self.unread),
                     ('Read by hand', [f'{item["read"]} ({item["url"]})' +
                                       (f' for {", ".join(item["entries"])}' if item['entries'] else '')
@@ -584,9 +658,9 @@ def command_due(args, root):
 
 def command_plan(args, root):
     register = load_register(root / args.register)
-    sources, manual = plan_sources(register)
-    plan = {'schema': PLAN_SCHEMA, 'register': args.register, 'planned': str(today_of(args)), 'sources': sources,
-            'manual': manual}
+    sources, manual = plan_sources(register, args.scan)
+    plan = {'schema': PLAN_SCHEMA, 'register': args.register, 'planned': str(today_of(args)), 'scan': args.scan,
+            'sources': sources, 'manual': manual}
     write_json(args.out, plan)
     print(f'{len(sources)} sources to download once the user approves them, {len(manual)} items read by hand:')
     for source in sources:
@@ -608,6 +682,13 @@ def command_compare(args, root):
     if not isinstance(manifest, dict) or manifest.get('schema') != FETCH_SCHEMA:
         raise ReviewError(f'{args.fetched}: no {FETCH_SCHEMA} manifest')
     plan = manifest['plan']
+    if args.scan == 'full' and plan.get('scan') != 'full':
+        raise ReviewError('a full scan compares a plan made with `plan --scan full`, which reads the triggering '
+                          'documents in full')
+    if args.ref is not None and (args.scan != 'full' or not args.apply):
+        raise ReviewError('--ref names the re-research document of an applied full scan; a light run cites its report')
+    if args.apply and args.scan == 'full' and args.ref is None:
+        raise ReviewError('an applied full scan records its re-research document: --ref <document#anchor>')
     path = root / plan['register']
     register = load_register(path)
     review = Review(register, manifest, args.fetched)
@@ -620,16 +701,34 @@ def command_compare(args, root):
           f'{len(review.proposals)} proposed amendments, {len(review.unread)} sources not read; report {report}')
     if args.apply:
         ref = repository_ref(report, root)
+        run_ref = ref if args.ref is None else cited_document(root, args.ref, report)
         entries = {entry['id']: entry for entry in register['entries']}
         for entry_id, _, apply in review.changes:
             apply(entries[entry_id])
         register['snapshot'] = {'date': manifest['day'],
                                 'method': f'Refreshed on {manifest["day"]} by scripts/register-review.py from the '
                                           f'approved source plan ({len(review.bodies)} records; report {ref}).'}
-        due, scan, reason = record_run(register, day, args.scan, ref, review.triggers)
+        due, scan, reason = record_run(register, day, args.scan, run_ref, review.triggers)
         write_json(path, register)
         print(f'applied; the next review is a {scan} scan due on {due}, after {reason}')
     return 0
+
+
+def document_ref(root, text):
+    """(ref, path) of a run's document named relative to the root with an optional #anchor; it must exist."""
+    target, _, anchor = text.partition('#')
+    ref = repository_ref(root / target, root) + (f'#{anchor}' if anchor else '')
+    if not (root / target).is_file():
+        raise ReviewError(f'{target} does not exist; a run cites its document')
+    return ref, root / target
+
+
+def cited_document(root, text, report):
+    """The ref of a full re-research document, which must cite the report of the scan it records."""
+    ref, path = document_ref(root, text)
+    if report.name not in path.read_text(encoding='utf-8'):
+        raise ReviewError(f'{ref} does not cite the report {report.name}; the re-research document cites its scan')
+    return ref
 
 
 def command_record(args, root):
@@ -638,10 +737,7 @@ def command_record(args, root):
     day = _registers.parse_day(args.day) if args.day else today_of(args)
     if day is None or (args.day and len(args.day) != 10):
         raise ReviewError(f'--day must be YYYY-MM-DD, not {args.day!r}')
-    target, _, anchor = args.ref.partition('#')
-    ref = repository_ref(root / target, root) + (f'#{anchor}' if anchor else '')
-    if not (root / target).is_file():
-        raise ReviewError(f'{target} does not exist; a run cites its document')
+    ref, _ = document_ref(root, args.ref)
     unknown = sorted(set(args.trigger) - {entry['id'] for entry in register['entries']})
     if unknown:
         raise ReviewError(f'unknown triggering entries {unknown}')
@@ -664,6 +760,8 @@ def main(argv=None):
     commands.add_parser('due', help='print the next review the register owes')
     plan = commands.add_parser('plan', help='write the sources a refresh reads, for the user to approve')
     plan.add_argument('--out', required=True)
+    plan.add_argument('--scan', choices=sorted(_registers.SCANS), default='light',
+                      help='full adds the documents the owed full re-research reads in full')
     fetch = commands.add_parser('fetch', help='read an approved plan\'s sources (a download)')
     fetch.add_argument('--plan', required=True)
     fetch.add_argument('--into', required=True)
@@ -672,6 +770,8 @@ def main(argv=None):
     compare.add_argument('--report', required=True)
     compare.add_argument('--scan', choices=sorted(_registers.SCANS), default='light')
     compare.add_argument('--apply', action='store_true', help='write the register changes and record the run')
+    compare.add_argument('--ref', help='an applied full scan\'s re-research document (citing the report), relative to '
+                         'root, with an optional #anchor')
     record = commands.add_parser('record', help='record a run made by hand')
     record.add_argument('--scan', choices=sorted(_registers.SCANS), required=True)
     record.add_argument('--ref', required=True, help='the run\'s document, relative to root, with an optional #anchor')

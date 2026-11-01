@@ -49,7 +49,8 @@ Every entry holds:
 
 The standards domain adds `spec` (the document: `type` `rfc`, `draft`, `w3c`, `nist` or `cerid`; `ref`; for a draft
 its `revision` and `posted` day, month or year; `status` in the snapshot; `obsoleted_by` for an obsoleted RFC),
-`codepoints` (IANA or Cerid registry, name, value; `verified: false` marks a value taken from knowledge),
+`codepoints` (IANA or Cerid registry, name, value; `verified: false` marks a value taken from knowledge;
+`recommended`, IANA's "Recommended" value, [below](#recommended-column)),
 `cryptography` (the cryptographic functions the entry performs, [below](#crypto-classification)) and, at the
 register level, the RFC 7696 `checklist` (section, item, the Cerid mechanism, its rows and evidence). The legal domain
 adds the fields [below](#legal-domain).
@@ -69,6 +70,12 @@ adds the fields [below](#legal-domain).
   planned owners and the rows that create them; a governed row that no entry names fails, so the entries each networked row implements are on record.
 - **Finished work is proven.** An entry still `planned` when every one of its rows is Done fails; an `implemented`
   entry needs existing evidence and only verified codepoints; a checklist item whose rows are all Done needs evidence.
+- <a id="recommended-column"></a>**IANA's recommendation is recorded.** The TLS Supported Groups, SignatureScheme
+  and ExtensionType registries carry a "Recommended" column (RFC 9847): `Y` (recommended for its purpose), `N` (not
+  evaluated, or of limited applicability) or `D` (discouraged). Every verified codepoint of those registries records
+  IANA's value as `recommended`; no other codepoint carries one; a pinned entry with a `D` codepoint fails until the
+  codepoint is dropped or the entry deprecated. The review reads the column and keeps it current
+  (`tls.registry-recommended`).
 - Unknown keys, malformed dates and references to missing files or anchors fail.
 
 <a id="legal-domain"></a>
@@ -328,19 +335,25 @@ EUR-Lex or Steamworks change found between them is recorded as a run with its tr
    object identifiers (NIST CSOR) and the IETF meeting calendar. For the legal register
    (`--register cmake/legal-register.json`) it lists the official primary text of every instrument, once per URL,
    and the Official Gazette, EUR-Lex and platform announcements read by hand since the latest run.
+   `--scan full` adds the full text of every document the owed full re-research reads: the documents the triggering
+   entries of the light runs since the latest full run pin (`rfc-editor.org/rfc/rfcNNNN.txt`, a draft's
+   `ietf.org/archive/id/<draft>-<revision>.txt`, or a W3C or NIST document read by hand); the plan records its scan.
    **Reading them is a download the user approves first; the plan is what is approved.**
 3. `fetch --plan <file> --into <dir>` reads the approved sources (HTTPS only, at most 16 MiB each) with a manifest of
    their SHA-256 digests; a source that fails is recorded, never retried silently.
 4. `compare --fetched <dir> --report <file> [--scan light|full] [--apply]` verifies the digests and judges each record:
    a draft's new revision, posted day and status (active, IESG processing, RFC Editor queue, expired, replaced,
    published as an RFC), an RFC obsoleted, and each IANA codepoint confirmed, named differently, assigned another value
-   or absent; for a legal instrument, its text's SHA-256 against the digest recorded when it was read in its
+   or absent, with its "Recommended" value where the registry has the column (a pinned codepoint that becomes `D`
+   triggers a full re-research); for a legal instrument, its text's SHA-256 against the digest recorded when it was read in its
    consolidated form (never read, or changed since). The report lists the register changes, the instruments to read
    in their consolidated text, the **proposed ROADMAP amendments for the user**, the pinned
    entries whose status changed (each triggers a full re-research), the sources not read and the items read by hand.
    `--apply` writes the register changes (statuses, revisions, a confirmed codepoint loses `verified: false`, the
-   snapshot day), records the run with its triggers and moves `next`; it never opens the ROADMAP for writing. A
-   codepoint IANA contradicts is a proposal, never applied: the generated headers change only by review.
+   Recommended values, the snapshot day), records the run with its triggers and moves `next`; it never opens the
+   ROADMAP for writing. A codepoint IANA contradicts is a proposal, never applied: the generated headers change only
+   by review. `--scan full` compares only a full plan, and applied it records `--ref`, the re-research document,
+   which must cite the report; the report lists the documents read in full.
 5. `record --scan <scan> --ref <document#anchor> [--day <day>] [--trigger <entry>]` records a run made by hand (a
    full re-research document, or a gazette change with the pinned entries it changed, which owe a full re-research)
    and moves `next`.
@@ -351,13 +364,18 @@ and changes nothing. An IANA record's `value` is a number, or the record's name 
 `HTTP/3`); its `description` is a name, or the value an identification sequence spells (`0x68 0x33 ("h3")`); a range
 names nothing. A registry whose records carry no name (QUIC Versions) confirms a value only when the record cites the
 entry's own document (`<xref type="rfc">`, or a draft without its revision); a named record confirms by its name alone.
+The "Recommended" column is `<rec>` in the TLS Supported Groups and ExtensionType files and `<recommended>` in the
+SignatureScheme file; a confirmed codepoint whose record has no single value of it is reported as not read.
 The report pins every record read (source, URL, bytes, SHA-256, retrieval day); the bodies stay outside the
 repository, under `~/.cerid/downloads/register-review/`, and the same plan fetches them again.
 
 The first refresh confirmed every IANA codepoint (the generated headers lost their `iana::unverified` namespaces), read
 the NIST object identifiers, the FIPS and W3C statuses and the IETF meeting calendar by hand, and found RFC 8446
-obsoleted by RFC 9846: `tls.v13` is re-pinned to RFC 9846, and the run's trigger owes the full re-research by
-2026-11-25, which `review.next` holds. The calendar's other point is the first pinned draft's expiry, which the guard
+obsoleted by RFC 9846: `tls.v13` is re-pinned to RFC 9846, and the run's trigger owed the full re-research by
+2026-11-25. The full run of 2026-11-01 read RFC 9846 in full
+([re-research](../research/2026-11-01-tls-13-rfc-9846-re-research.md), [report](../sessions/2026-11-01-standards-register-full-review.md)):
+it recorded the Recommended column for the first time, added the ML-DSA signature schemes for TLS 1.3
+(`tls.ml-dsa`) and RFC 9847 (`tls.registry-recommended`), and moved `next` to the light scan after IETF 127. The calendar's other point is the first pinned draft's expiry, which the guard
 prints (`webtransport.h3`, posted 2026-07-06).
 
 ## Cerid identifiers

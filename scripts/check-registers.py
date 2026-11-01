@@ -20,8 +20,9 @@ The guard fails, among the format errors, on:
   - a review schedule whose `next` is not the day review_due computes from its calendar and recorded runs (the
     scheduled re-research of scripts/register-review.py), or whose calendar names no event after the latest run;
   - an owning module neither registered nor in the capability registry, an unknown ROADMAP row, a governed row no
-    entry names, an entry still planned when every one of its rows is Done, and an implemented entry without existing
-    evidence or with an unverified codepoint;
+    entry names, an entry still planned when every one of its rows is Done, an implemented entry without existing
+    evidence or with an unverified codepoint, a verified codepoint of a registry with a "Recommended" column
+    (RFC 9847) that does not record IANA's value, and a pinned entry with a codepoint IANA discourages ("D");
   - in the legal domain: a binding obligation (in force, not past its sunset, and applying to a live scope) without an
     active check; a primary source outside its jurisdiction's official hosts; an entry whose rows are all Done, or
     which is implemented, before its instrument was read in its consolidated text; an implemented entry whose counsel
@@ -79,6 +80,10 @@ SPEC_STATUS = {
     'cerid': {'design', 'stable'},
 }
 HELD_DRAFT = {'iesg', 'rfc-editor'}
+# The IANA registries with a "Recommended" column that the register holds codepoints of (RFC 9847, section 3): Y
+# (recommended), N (not evaluated or of limited applicability) or D (discouraged).
+RECOMMENDED_REGISTRIES = {'TLS Supported Groups', 'TLS SignatureScheme', 'TLS ExtensionType Values'}
+RECOMMENDED = {'Y', 'N', 'D'}
 # The legal domain: every topic but the platform and store policies holds a Turkish entry (Turkish law is a
 # first-class jurisdiction, never omitted).
 TOPICS = {'privacy', 'children', 'security', 'accessibility', 'export-control', 'ai', 'online-safety', 'consumer',
@@ -141,11 +146,18 @@ def review_due(review):
     for event in review['calendar']:
         if parse_day(event['day']) > latest:
             candidates.append((parse_day(event['day']) + lag, event['scan'], f'{event["event"]} ({event["day"]})'))
-    for day, run in runs:
-        if run['scan'] == 'light' and run['triggers'] and day > latest_full:
-            candidates.append((day + lag, 'full', f'the status changes the {day} scan found '
-                               f'({", ".join(run["triggers"])})'))
+    for day, run in owed_runs(review):
+        candidates.append((day + lag, 'full', f'the status changes the {day} scan found '
+                           f'({", ".join(run["triggers"])})'))
     return min(candidates, key=lambda candidate: candidate[0])
+
+
+def owed_runs(review):
+    """[(day, run)] of the light runs with triggers that no full run has followed: each owes a full re-research,
+    which reads the documents its triggering entries pin (scripts/register-review.py plan --scan full)."""
+    runs = [(parse_day(run['day']), run) for run in review['runs']]
+    latest_full = max(day for day, run in runs if run['scan'] == 'full')
+    return [(day, run) for day, run in runs if run['scan'] == 'light' and run['triggers'] and day > latest_full]
 
 
 class Context:
@@ -230,13 +242,15 @@ def codepoint_errors(where, entry):
         return [f'{where}: codepoints must be a list']
     errors = []
     for index, point in enumerate(codepoints):
-        if not isinstance(point, dict) or set(point) - {'registry', 'name', 'value', 'verified', 'key_bits'} or \
+        if not isinstance(point, dict) or \
+                set(point) - {'registry', 'name', 'value', 'verified', 'key_bits', 'recommended'} or \
                 not all(isinstance(point.get(key), str) and point[key] for key in ('registry', 'name', 'value')):
             errors.append(f'{where}: codepoint {index} has a registry, a name, a value and an optional verified flag')
             continue
         if entry.get('state') == 'implemented' and point.get('verified') is False:
             errors.append(f'{where}: implemented with the unverified codepoint {point["name"]} = {point["value"]}; '
                           'verify it against the IANA registry first')
+        errors += recommended_errors(where, entry, point)
         key_bits = point.get('key_bits')
         if point['registry'] != _ids.ALGORITHMS:
             if key_bits is not None:
@@ -247,6 +261,28 @@ def codepoint_errors(where, entry):
             errors.append(f'{where}: algorithm {point["name"]} names key_bits, the key length of each component in '
                           'bits (the cryptography inventory states them)')
     return errors
+
+
+def recommended_errors(where, entry, point):
+    """IANA's "Recommended" value of a codepoint (RFC 9847): recorded for every verified codepoint of a registry
+    with the column and never elsewhere, and never "D" (discouraged) for an entry Cerid implements or plans."""
+    recommended = point.get('recommended')
+    if point['registry'] not in RECOMMENDED_REGISTRIES:
+        if recommended is None:
+            return []
+        return [f'{where}: codepoint {point["name"]} records a Recommended value, which the {point["registry"]} '
+                'registry has no column for']
+    if recommended is None:
+        if point.get('verified') is False:
+            return []
+        return [f'{where}: the verified codepoint {point["name"]} does not record IANA\'s Recommended value (Y, N or '
+                'D, RFC 9847); scripts/register-review.py records it']
+    if recommended not in RECOMMENDED:
+        return [f'{where}: codepoint {point["name"]} has Recommended {recommended!r}, not Y, N or D']
+    if recommended == 'D' and entry.get('state') in PINNED:
+        return [f'{where}: IANA discourages {point["name"]} (Recommended "D"); drop it from the entry or deprecate '
+                'the entry']
+    return []
 
 
 def cryptography_errors(where, entry):

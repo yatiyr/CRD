@@ -5644,6 +5644,24 @@ class Registers(RegisterFixture, unittest.TestCase):
         self.assert_fails(self.register([self.entry(source=anchorless)]), "has no anchor 'n99'")
         self.assert_fails(self.register([self.entry(), self.entry()]), 'duplicate entry quic.transport')
 
+    def test_tls_codepoints_record_the_iana_recommended_column(self):
+        group = {'registry': 'TLS Supported Groups', 'name': 'x25519', 'value': '0x001D', 'recommended': 'Y'}
+        self.assertEqual(0, self.run_guard(self.register([self.entry(codepoints=[group])]))[0])
+        unrecorded = {key: value for key, value in group.items() if key != 'recommended'}
+        self.assertEqual(0, self.run_guard(self.register([self.entry(codepoints=[dict(unrecorded,
+                                                                                       verified=False)])]))[0])
+        self.assert_fails(self.register([self.entry(codepoints=[unrecorded])]),
+                          "the verified codepoint x25519 does not record IANA's Recommended value")
+        self.assert_fails(self.register([self.entry(codepoints=[dict(group, recommended='y')])]),
+                          "codepoint x25519 has Recommended 'y', not Y, N or D")
+        quic = dict(self.entry()['codepoints'][0], recommended='Y')
+        self.assert_fails(self.register([self.entry(codepoints=[quic])]),
+                          'codepoint v1 records a Recommended value, which the QUIC Versions registry has no column')
+        discouraged = dict(group, name='secp224r1', value='21', recommended='D')
+        self.assert_fails(self.register([self.entry(codepoints=[discouraged])]),
+                          'IANA discourages secp224r1 (Recommended "D"); drop it from the entry or deprecate')
+        self.assertEqual(0, self.run_guard(self.register([self.entry(state='watch', codepoints=[discouraged])]))[0])
+
     def test_finished_rows_require_implemented_entries_with_evidence_and_verified_codepoints(self):
         self.assert_fails(self.register([self.entry(rows=['DONE'])], governed_rows=[]),
                           'every row (DONE) is Done; mark it implemented')
@@ -6451,9 +6469,21 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
                 '<record><value>HTTP/3</value><description>0x68 0x33 ("h3")</description>'
                 '<xref type="rfc" data="rfc9114"/></record></registry>'
                 '<registry id="tls-extensiontype-values-1"><title>TLS ExtensionType Values</title>'
-                '<record><value>27</value><description>compress_certificate</description></record>'
+                '<record><value>27</value><description>compress_certificate</description><rec>Y</rec></record>'
                 '<record><value>3-255</value><description>Unassigned</description></record>'
                 '</registry></registry>')
+
+    # The Recommended column (RFC 9847) as the TLS parameters file spells it: `<rec>` in Supported Groups, where
+    # RFC 9847 discourages secp224r1, and `<recommended>` in SignatureScheme; x25519's record lacks the column here.
+    TLS_XML = ('<?xml version="1.0"?><registry xmlns="http://www.iana.org/assignments" id="tls-parameters">'
+               '<registry id="tls-parameters-8"><title>TLS Supported Groups</title>'
+               '<record><value>21</value><description>secp224r1</description><dtls>Y</dtls><rec>D</rec>'
+               '<xref type="rfc" data="rfc9847"/></record>'
+               '<record><value>29</value><description>x25519</description><dtls>Y</dtls>'
+               '<xref type="rfc" data="rfc9846"/></record></registry>'
+               '<registry id="tls-signaturescheme"><title>TLS SignatureScheme</title>'
+               '<record><value>0x0807</value><description>ed25519</description><recommended>Y</recommended>'
+               '<xref type="rfc" data="rfc9846"/></record></registry></registry>')
 
     def register(self, entries, **changes):
         """The fixture register with IETF 128 on its calendar, so a run on the fixture's day still owes a scan."""
@@ -6777,6 +6807,128 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             code, output = self.tool(root, 'compare', '--fetched', str(root / 'nothing'), '--report', str(report))
             self.assertEqual(2, code)
 
+    def test_the_recommended_column_is_recorded_and_a_discouraged_pinned_codepoint_triggers(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            tls = {'type': 'rfc', 'ref': 'RFC 9846', 'status': 'current'}
+            groups = self.entry(id='crypto.groups', spec=tls, review='2027-06-01', codepoints=[
+                {'registry': 'TLS Supported Groups', 'name': 'secp224r1', 'value': '21', 'recommended': 'Y'},
+                {'registry': 'TLS Supported Groups', 'name': 'x25519', 'value': '0x001D', 'recommended': 'Y'},
+                {'registry': 'TLS SignatureScheme', 'name': 'ed25519', 'value': '0x0807', 'verified': False}])
+            legacy = self.entry(id='crypto.legacy', state='watch', review='2027-06-01',
+                                spec={'type': 'rfc', 'ref': 'RFC 9847', 'status': 'current'},
+                                codepoints=[{'registry': 'TLS Supported Groups', 'name': 'secp224r1', 'value': '21',
+                                             'recommended': 'N'}])
+            self.write_tree(root, self.register(self.entries() + [groups, legacy]))
+            bodies = dict(self.records(), **{'iana-tls-parameters': self.TLS_XML,
+                                             'rfc9846': json.dumps({'doc_id': 'RFC9846', 'obsoleted_by': []}),
+                                             'rfc9847': json.dumps({'doc_id': 'RFC9847', 'obsoleted_by': []})})
+            self.fetched(root, bodies)
+            report = root / 'docs' / 'review.md'
+            code, output = self.tool(root, 'compare', '--fetched', str(root / 'fetched'), '--report', str(report),
+                                     '--apply')
+            self.assertEqual(0, code, output)
+            self.assertIn('the next review is a full scan due on 2027-01-10', output)
+            text = report.read_text(encoding='utf-8')
+            self.assertIn('- crypto.groups: TLS Supported Groups secp224r1 is Recommended "D" by IANA (was "Y")\n', text)
+            self.assertIn('- crypto.groups (NET-STD): IANA now discourages secp224r1 (Recommended "D"); drop it from the '
+                          'accepted policy and the entry before the full re-research this triggers', text)
+            self.assertIn('## Triggers a full re-research\n\n- crypto.groups\n\n', text)
+            self.assertIn('- crypto.groups: TLS Supported Groups x25519 has no single Recommended value in the IANA '
+                          'file (None)', text)
+            self.assertIn('- crypto.groups: TLS SignatureScheme ed25519 = 0x0807 confirmed by IANA\n', text)
+            self.assertIn('- crypto.groups: TLS SignatureScheme ed25519 is Recommended "Y" by IANA (not recorded)', text)
+            self.assertIn('- crypto.legacy: TLS Supported Groups secp224r1 is Recommended "D" by IANA (was "N")', text)
+            self.assertNotIn('crypto.legacy (', text)
+            self.assertIn('- http.h3: TLS ExtensionType Values compress_certificate is Recommended "Y" by IANA (not '
+                          'recorded)', text)
+            register = json.loads((root / 'cmake' / 'standards-register.json').read_text(encoding='utf-8'))
+            entries = {entry['id']: entry for entry in register['entries']}
+            self.assertEqual(['D', 'Y', 'Y'], [point.get('recommended')
+                                               for point in entries['crypto.groups']['codepoints']])
+            self.assertNotIn('verified', entries['crypto.groups']['codepoints'][2])
+            self.assertEqual('D', entries['crypto.legacy']['codepoints'][0]['recommended'])
+            self.assertEqual(['crypto.groups'], register['review']['runs'][-1]['triggers'])
+            code, output = self.guard(root, '2026-12-16')
+            self.assertEqual(1, code, output)
+            self.assertIn('IANA discourages secp224r1', output)
+            self.assertNotIn('crypto.legacy', output)
+
+    def test_a_full_scan_reads_the_triggering_documents_and_records_its_re_research(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            entries = self.entries()
+            review = self.register(entries)['review']
+            review['runs'].append({'day': '2026-11-02', 'scan': 'light', 'ref': 'docs/research.md',
+                                   'triggers': ['ops.trace-context', 'quic.transport', 'webtransport.h3']})
+            review['next'] = '2026-11-27'
+            self.write_tree(root, self.register(entries, review=review))
+            self.assertIn('full review is due on 2026-11-27', self.tool(root, 'due')[1])
+            plan = self.fetched(root, self.records())
+            self.assertEqual('light', plan['scan'])
+            self.assertNotIn('text', {source['kind'] for source in plan['sources']})
+            code, output = self.tool(root, 'plan', '--scan', 'full', '--out', str(root / 'full.json'))
+            self.assertEqual(0, code, output)
+            self.assertIn('9 sources to download once the user approves them, 4 items read by hand', output)
+            full = json.loads((root / 'full.json').read_text(encoding='utf-8'))
+            self.assertEqual('full', full['scan'])
+            texts = {source['id']: (source['url'], source['entries']) for source in full['sources']
+                     if source['kind'] == 'text'}
+            self.assertEqual({'rfc9000-text': ('https://www.rfc-editor.org/rfc/rfc9000.txt', ['quic.transport']),
+                              'draft-ietf-webtrans-http3-16-text': (
+                                  'https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-16.txt',
+                                  ['webtransport.h3'])}, texts)
+            manual = {item['read']: item['entries'] for item in full['manual']}
+            self.assertEqual(['ops.trace-context'], manual['the full text of https://www.w3.org/TR/trace-context/'])
+            manifest = register_review.fetch_sources(full, root / 'full', opener=self.opener(self.records()),
+                                                     today=datetime.date(2026, 12, 16))
+            self.assertIn('draft-ietf-webtrans-http3-16-text.txt', {item['file'] for item in manifest['items']})
+            report = root / 'docs' / 'full-review.md'
+            argv = ('compare', '--scan', 'full', '--report', str(report))
+            for fetched, extra, message in (
+                    ('fetched', (), 'a full scan compares a plan made with `plan --scan full`'),
+                    ('full', ('--apply',), 'an applied full scan records its re-research document'),
+                    ('full', ('--ref', 'docs/research.md'), '--ref names the re-research document of an applied full'),
+                    ('full', ('--apply', '--ref', 'docs/research.md#n83'), 'docs/research.md#n83 does not cite the '
+                                                                          'report full-review.md'),
+                    ('full', ('--apply', '--ref', 'docs/missing.md'), 'docs/missing.md does not exist')):
+                with self.subTest(extra=extra):
+                    code, output = self.tool(root, *argv, '--fetched', str(root / fetched), *extra)
+                    self.assertEqual(2, code, output)
+                    self.assertIn(message, output)
+            code, output = self.tool(root, 'compare', '--ref', 'docs/research.md', '--fetched', str(root / 'full'),
+                                     '--report', str(report), '--apply')
+            self.assertEqual(2, code, output)
+            self.assertIn('a light run cites its report', output)
+            (root / 'docs' / 're-research.md').write_text('<a id="delta"></a>Pins: [scan](full-review.md).\n',
+                                                          encoding='utf-8')
+            code, output = self.tool(root, *argv, '--fetched', str(root / 'full'), '--apply', '--ref',
+                                     'docs/re-research.md#delta')
+            self.assertEqual(0, code, output)
+            self.assertIn('the next review is a light scan due on 2027-04-20, after IETF 128 (2027-03-26)', output)
+            text = report.read_text(encoding='utf-8')
+            self.assertIn('(full scan, standards register)', text)
+            self.assertIn('## Read in full\n\n'
+                          '- webtransport.h3: https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-16.txt\n'
+                          '- quic.transport: https://www.rfc-editor.org/rfc/rfc9000.txt\n', text)
+            register = json.loads((root / 'cmake' / 'standards-register.json').read_text(encoding='utf-8'))
+            self.assertEqual({'day': '2026-12-16', 'scan': 'full', 'ref': 'docs/re-research.md#delta',
+                              'triggers': []}, register['review']['runs'][-1])
+            self.assertIn('report docs/full-review.md', register['snapshot']['method'])
+            self.assertEqual(0, self.tool(root, 'plan', '--scan', 'full', '--out', str(root / 'again.json'))[0])
+            again = json.loads((root / 'again.json').read_text(encoding='utf-8'))
+            self.assertNotIn('text', {source['kind'] for source in again['sources']})
+            for trigger, message in (('quic.gone', 'names the triggering entry quic.gone, which the register lacks'),
+                                     ('webtransport.h3', 'reads draft-ietf-webtrans-http3 at its revision')):
+                with self.subTest(trigger=trigger):
+                    owed = dict(review, runs=review['runs'][:1] + [dict(review['runs'][1], triggers=[trigger])])
+                    bare = [dict(entry, spec={key: value for key, value in entry['spec'].items()
+                                              if key != 'revision'}) for entry in entries]
+                    self.write_tree(root, self.register(bare, review=owed))
+                    code, output = self.tool(root, 'plan', '--scan', 'full', '--out', str(root / 'refused.json'))
+                    self.assertEqual(2, code, output)
+                    self.assertIn(message, output)
+
     def test_record_adds_a_run_by_hand_and_moves_the_due_day(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)
@@ -6822,15 +6974,19 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
 
     def test_iana_records_are_read_in_the_shapes_the_registry_files_have(self):
         quic = register_review.read_iana(self.QUIC_XML, ['QUIC Versions', 'QUIC Transport Parameters'])
-        self.assertEqual([({0}, set(), {'RFC 9000'}), ({1}, set(), {'RFC 9000'}),
-                          ({0x6b3343cf}, set(), {'RFC 9369'})], quic['QUIC Versions'])
-        self.assertEqual(({0x2ab2}, {'greasequicbit'}, {'draft-ietf-quic-bit-grease'}),
+        self.assertEqual([({0}, set(), {'RFC 9000'}, None), ({1}, set(), {'RFC 9000'}, None),
+                          ({0x6b3343cf}, set(), {'RFC 9369'}, None)], quic['QUIC Versions'])
+        self.assertEqual(({0x2ab2}, {'greasequicbit'}, {'draft-ietf-quic-bit-grease'}, None),
                          quic['QUIC Transport Parameters'][2])
+        tls = register_review.read_iana(self.TLS_XML, ['TLS Supported Groups', 'TLS SignatureScheme'])
+        self.assertEqual(['D', None], [record.recommended for record in tls['TLS Supported Groups']])
+        self.assertEqual(({0x0807}, {'ed25519'}, {'RFC 9846'}, 'Y'), tls['TLS SignatureScheme'][0])
         alpn = register_review.read_iana(self.ALPN_XML, ['TLS Application-Layer Protocol Negotiation (ALPN) Protocol '
                                                          'IDs', 'TLS ExtensionType Values'])
-        self.assertEqual([({'h3'}, {'http3'}, {'RFC 9114'})],
+        self.assertEqual([({'h3'}, {'http3'}, {'RFC 9114'}, None)],
                          alpn['TLS Application-Layer Protocol Negotiation (ALPN) Protocol IDs'])
-        self.assertEqual((set(), {'unassigned'}, set()), alpn['TLS ExtensionType Values'][1])
+        self.assertEqual(({27}, {'compresscertificate'}, set(), 'Y'), alpn['TLS ExtensionType Values'][0])
+        self.assertEqual((set(), {'unassigned'}, set(), None), alpn['TLS ExtensionType Values'][1])
         self.assertIsNone(register_review.sequence_of('0x68 0x33'))
         self.assertIsNone(register_review.sequence_of('"h3"'))
         self.assertEqual('h2', register_review.sequence_of('0x68 0x32 ("h2")'))

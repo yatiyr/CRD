@@ -86,3 +86,13 @@ TEST_CASE("Register ids: the IANA and NIST codepoints the first refresh confirme
     CHECK(iana::kAeadAes256Gcm == 2U);
     CHECK(iana::kAeadChacha20Poly1305 == 29U);
 }
+
+TEST_CASE("Register ids: the ML-DSA signature schemes the full re-research confirmed", "[crypto][net-std]")
+{
+    // Checked against the IANA TLS SignatureScheme registry on 2026-11-01
+    // (docs/research/2026-11-01-tls-13-rfc-9846-re-research.md#ml-dsa-in-tls).
+    namespace iana = crd::crypto::iana;
+    CHECK(iana::kSignatureSchemeMldsa44 == 0x0904U);
+    CHECK(iana::kSignatureSchemeMldsa65 == 0x0905U);
+    CHECK(iana::kSignatureSchemeMldsa87 == 0x0906U);
+}

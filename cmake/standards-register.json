@@ -3,12 +3,12 @@
   "domain": "standards",
   "about": "NET-STD standards register: every protocol, extension, algorithm and format Cerid implements, plans or watches, with its specification and revision, its status in the committed snapshot, its IANA or Cerid codepoints, its owning module and the ROADMAP rows that implement it. A pinned entry (implemented or planned) fails scripts/check-registers.py (the crd-check-registers CTest and repository step) when its draft has expired or its RFC is obsoleted in the snapshot, and every entry fails past its review date. docs/design/registers.md is the contract; COMPLY.0 adds the legal domain in the same format.",
   "snapshot": {
-    "date": "2026-10-31",
-    "method": "Refreshed on 2026-10-31 by scripts/register-review.py from the approved source plan (63 records; report docs/sessions/2026-10-31-standards-register-refresh.md)."
+    "date": "2026-11-01",
+    "method": "Refreshed on 2026-11-01 by scripts/register-review.py from the approved source plan (66 records; report docs/sessions/2026-11-01-standards-register-full-review.md)."
   },
   "review": {
     "cadence": "A light scan after each IETF meeting (March, July and November) and a full re-research every year or when a light scan finds a pinned entry's status changed; scripts/register-review.py plans the source reads (a download the user approves), compares them with the register and proposes ROADMAP amendments for the user, never editing rows itself.",
-    "next": "2026-11-25",
+    "next": "2026-12-15",
     "lag_days": 25,
     "full_every_days": 365,
     "calendar": [
@@ -51,6 +51,12 @@
         "triggers": [
           "tls.v13"
         ]
+      },
+      {
+        "day": "2026-11-01",
+        "scan": "full",
+        "ref": "docs/research/2026-11-01-tls-13-rfc-9846-re-research.md#delta",
+        "triggers": []
       }
     ]
   },
@@ -1381,14 +1387,44 @@
         "key-derivation"
       ],
       "source": {
-        "ref": "docs/sessions/2026-11-01-net-std-first-refresh.md#tls-13-re-pinned",
-        "read": "2026-10-31",
+        "ref": "docs/research/2026-11-01-tls-13-rfc-9846-re-research.md#delta",
+        "read": "2026-11-01",
         "verified": true
       },
-      "review": "2026-12-15",
+      "review": "2027-11-01",
       "evidence": [],
       "deprecation": null,
-      "note": "RFC 9846 obsoletes RFC 8446 (the RFC Editor records, read on 2026-10-31); the full re-research this change triggers reviews what the revision changes for NET.2."
+      "note": "RFC 9846 obsoletes RFC 8446 and keeps version 0x0304 and the wire format; the full re-research of 2026-11-01 maps its technical changes onto NET.2's TLS 1.3 profile (fresh key shares, mandatory key updates before the usage limits, the 2^48-1 epoch bound, general_error, TLS 1.3 only)."
+    },
+    {
+      "id": "tls.registry-recommended",
+      "title": "IANA registry updates for TLS and DTLS: the Recommended column and its discouraged value",
+      "kind": "guidance",
+      "state": "implemented",
+      "owner": "crypto",
+      "rows": [
+        "NET-STD",
+        "NET.2"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9847",
+        "status": "current"
+      },
+      "cryptography": [],
+      "source": {
+        "ref": "docs/research/2026-11-01-tls-13-rfc-9846-re-research.md#recommended-column",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-11-01",
+      "evidence": [
+        "scripts/check-registers.py",
+        "scripts/register-review.py",
+        "scripts/test-repository-tools.py"
+      ],
+      "deprecation": null,
+      "note": "Every verified codepoint of a TLS registry with the column records IANA's Recommended value (Y, N or D); the review keeps it current and the guard refuses a pinned entry IANA discourages."
     },
     {
       "id": "tls.hybrid-kex",
@@ -1439,17 +1475,20 @@
         {
           "registry": "TLS Supported Groups",
           "name": "X25519MLKEM768",
-          "value": "0x11EC"
+          "value": "0x11EC",
+          "recommended": "Y"
         },
         {
           "registry": "TLS Supported Groups",
           "name": "SecP256r1MLKEM768",
-          "value": "0x11EB"
+          "value": "0x11EB",
+          "recommended": "N"
         },
         {
           "registry": "TLS Supported Groups",
           "name": "SecP384r1MLKEM1024",
-          "value": "0x11ED"
+          "value": "0x11ED",
+          "recommended": "N"
         }
       ],
       "source": {
@@ -1508,17 +1547,20 @@
         {
           "registry": "TLS Supported Groups",
           "name": "x25519",
-          "value": "0x001D"
+          "value": "0x001D",
+          "recommended": "Y"
         },
         {
           "registry": "TLS Supported Groups",
           "name": "secp256r1",
-          "value": "0x0017"
+          "value": "0x0017",
+          "recommended": "Y"
         },
         {
           "registry": "TLS Supported Groups",
           "name": "secp384r1",
-          "value": "0x0018"
+          "value": "0x0018",
+          "recommended": "Y"
         }
       ],
       "source": {
@@ -1553,7 +1595,8 @@
         {
           "registry": "TLS ExtensionType Values",
           "name": "encrypted_client_hello",
-          "value": "0xfe0d"
+          "value": "0xfe0d",
+          "recommended": "Y"
         }
       ],
       "source": {
@@ -1584,7 +1627,8 @@
         {
           "registry": "TLS ExtensionType Values",
           "name": "compress_certificate",
-          "value": "27"
+          "value": "27",
+          "recommended": "Y"
         }
       ],
       "source": {
@@ -1663,6 +1707,55 @@
       "review": "2027-10-27",
       "evidence": [],
       "deprecation": null
+    },
+    {
+      "id": "tls.ml-dsa",
+      "title": "ML-DSA signature schemes for TLS 1.3",
+      "kind": "algorithm",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "NET.2"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-tls-mldsa",
+        "status": "rfc-editor",
+        "revision": "06",
+        "posted": "2026-09-11"
+      },
+      "cryptography": [
+        "authentication"
+      ],
+      "codepoints": [
+        {
+          "registry": "TLS SignatureScheme",
+          "name": "mldsa44",
+          "value": "0x0904",
+          "recommended": "N"
+        },
+        {
+          "registry": "TLS SignatureScheme",
+          "name": "mldsa65",
+          "value": "0x0905",
+          "recommended": "N"
+        },
+        {
+          "registry": "TLS SignatureScheme",
+          "name": "mldsa87",
+          "value": "0x0906",
+          "recommended": "N"
+        }
+      ],
+      "source": {
+        "ref": "docs/research/2026-11-01-tls-13-rfc-9846-re-research.md#ml-dsa-in-tls",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-11-01",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The TLS 1.3 signature schemes of the ML-DSA service certificates the crypto policy pins (pki.ml-dsa, RFC 9881); the 2026-11-01 full re-research found the gap."
     },
     {
       "id": "crypto.ml-dsa",
@@ -1749,7 +1842,8 @@
         {
           "registry": "TLS SignatureScheme",
           "name": "ed25519",
-          "value": "0x0807"
+          "value": "0x0807",
+          "recommended": "Y"
         }
       ],
       "source": {
@@ -1801,12 +1895,14 @@
         {
           "registry": "TLS SignatureScheme",
           "name": "ecdsa_secp256r1_sha256",
-          "value": "0x0403"
+          "value": "0x0403",
+          "recommended": "Y"
         },
         {
           "registry": "TLS SignatureScheme",
           "name": "ecdsa_secp384r1_sha384",
-          "value": "0x0503"
+          "value": "0x0503",
+          "recommended": "Y"
         }
       ],
       "source": {

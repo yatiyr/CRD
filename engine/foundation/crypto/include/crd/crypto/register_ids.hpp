@@ -132,6 +132,12 @@ inline constexpr std::string_view kOidIdMlDsa44 = "2.16.840.1.101.3.4.3.17";
 inline constexpr std::string_view kOidIdMlDsa65 = "2.16.840.1.101.3.4.3.18";
 // pki.ml-dsa: Object identifiers, id-ml-dsa-87
 inline constexpr std::string_view kOidIdMlDsa87 = "2.16.840.1.101.3.4.3.19";
+// tls.ml-dsa: TLS SignatureScheme, mldsa44
+inline constexpr u16 kSignatureSchemeMldsa44 = 0x0904U;
+// tls.ml-dsa: TLS SignatureScheme, mldsa65
+inline constexpr u16 kSignatureSchemeMldsa65 = 0x0905U;
+// tls.ml-dsa: TLS SignatureScheme, mldsa87
+inline constexpr u16 kSignatureSchemeMldsa87 = 0x0906U;
 // crypto.eddsa: TLS SignatureScheme, ed25519
 inline constexpr u16 kSignatureSchemeEd25519 = 0x0807U;
 // crypto.ecdsa: TLS SignatureScheme, ecdsa_secp256r1_sha256

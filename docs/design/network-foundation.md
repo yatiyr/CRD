@@ -86,7 +86,7 @@ Each threat names its mitigation and the row that implements and proves it. "Pro
 |---|---|---|---|
 | T01 | Spoofed handshakes exhaust server state (V1, V7) | Stateless Retry under load, address-validation tokens, no per-source allocation before validation | [NET.2](../ROADMAP.md#slice-net.2), [NET.4](../ROADMAP.md#slice-net.4) |
 | T02 | Reflection and amplification (V1, V7) | Three-times limit before address validation; version negotiation and resets only for datagrams large enough | NET.2, NET.4 |
-| T03 | Post-quantum handshakes exceed the amplification limit (V1, V7) | Certificate compression (RFC 8879), raw public keys or pinned Cerid credentials for game and session servers, resumption, Retry; measured in round trips | NET.2 |
+| T03 | Post-quantum handshakes exceed the amplification limit (V1, V7) | Certificate compression (RFC 8879), raw public keys or pinned Cerid credentials for game and session servers (bound out of band, with the misbinding defence of the [TLS 1.3 profile](#tls-13-profile)), resumption, Retry; measured in round trips | NET.2 |
 | T04 | Harvest now, decrypt later (V2) | Hybrid key exchange (X25519MLKEM768 by default) on every link; classical-only refused by a dated policy | NET.2 |
 | T05 | Downgrade of version, extension or algorithm (V3) | Negotiated parameters bound to the handshake transcript; policy generations are monotonic ([agility](#agility)) | [NET-STD](../ROADMAP.md#slice-net-std), NET.2 |
 | T06 | Ossification: middleboxes or peers break on unknown values (V3) | GREASE in every build, ignore-unknown semantics, QUIC bit greasing (RFC 9287) | NET-STD |
@@ -260,6 +260,39 @@ Designed here, qualified under [WEB.5](../ROADMAP.md#slice-web.5):
   are refused at runtime when built in; a CI guard proves it (T22).
 - **Export control** of everything above is [COMPLY.1](../ROADMAP.md#slice-comply.1)'s: its inventory is generated
   from the provider registry and the NET-STD algorithm entries.
+
+<a id="tls-13-profile"></a>
+### The TLS 1.3 profile
+
+TLS 1.3 is RFC 9846, which obsoletes RFC 8446 and keeps its version and wire format (`tls.v13`; the
+[full re-research](../research/2026-11-01-tls-13-rfc-9846-re-research.md#delta) of 2026-11-01 maps each change). The
+provider implements it; NET.2's conformance tests prove each point below of every allowed provider and of Cerid's own
+record layers, never by trust:
+
+- **TLS 1.3 only.** No Cerid endpoint negotiates an earlier version; a ClientHello without TLS 1.3 is refused with
+  `protocol_version`.
+- **Fresh key shares.** Every connection generates its own share, the ML-KEM half of a hybrid share included; a
+  peer that reuses one is tolerated (RFC 8446 allowed it), never relied on.
+- **Key usage limits.** Every record layer Cerid runs (TLS records, QUIC packets under RFC 9001's confidentiality and
+  integrity limits, and the authenticated raw UDP path) counts the records protected under each key and updates the
+  key before the limit (for AES-GCM, 2^24.5 full-size records); 0-RTT data, which cannot be rekeyed, stays below it.
+  A receiver never enforces its peer's limit.
+- **Key updates.** The epoch never exceeds 2^48-1; a sender has at most one `update_requested` outstanding; a
+  KeyUpdate is protected with the old keys, and records under the new keys are accepted only after it. A key update
+  is also where a session adopts a new policy generation ([agility](#agility)), so swaps count in the same epoch.
+- **Tickets.** A client without a ticket store ignores NewSessionTicket; a server issues a new ticket with every
+  connection; a client never reuses a ticket and never offers one across connections meant to be uncorrelated (T07,
+  T15). External PSK identity labels are random; a PSK is shared by one client and one server only, or through an
+  importer (RFC 9258).
+- **Alerts.** `user_canceled` is followed by `close_notify`. Toward a peer not yet authenticated, a server answers
+  with `general_error` where a specific alert would reveal whether an identity or capability exists; a PSK-only
+  server treats an unknown identity and a wrong binder alike. Authenticated peers receive the specific alert.
+- **Raw public keys and pinned credentials** are bound out of band; the server checks that `server_name` names its
+  identity, or both sides use `external_id_hash` (RFC 8844), against misbinding.
+- **Registered values.** Groups, signature schemes and extensions are the register's codepoints, with IANA's
+  "Recommended" value recorded ([registers](registers.md#recommended-column)); a discouraged ("D") codepoint is never
+  accepted. ML-DSA certificates sign with the `mldsa44`/`mldsa65`/`mldsa87` schemes (`tls.ml-dsa`); NET.2 decides
+  the classical companion (a dual certificate, or a composite scheme once one is registered).
 
 <a id="negotiation"></a>
 ## Version and extension negotiation
