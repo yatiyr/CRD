@@ -20,8 +20,18 @@ decision [S10](../design/network-foundation.md#certificate-compression).
 
 ## CI first
 
-Nothing to fix from this track. Dispatch run 41319531955 (3cb696ef) ended "failure" with every job cancelled before it
-ran. Push run 41333397427 (59f64219) was still pending, and complete-tier run 41323535550 (54f062f2) was queued.
+At the start, dispatch run 41319531955 (3cb696ef) had ended "failure" with every job cancelled before it ran, push run
+41333397427 (59f64219) was pending and complete-tier run 41323535550 (54f062f2) was queued. That run's first jobs
+finished during the batch, and two of its failures came from this track's earlier commits; both were already fixed on
+main when this batch rebased:
+
+- win-public-checks, win-asan and win-debug-scalar: MSVC C4389 (signed/unsigned `==`, an error under `/WX`) in
+  `test_tls.cpp`'s `is_grease`, where `u16` promotes to `int`; fixed by 9ef40e7e. This batch's new code had one more
+  such comparison (a `u8` against `0xA5U` in the decoder test), now compared as `u8`.
+- win-vs, win-arm64-debug and the Windows repository checks: `crd-module-selection` expected the full configuration's
+  packages without aws-lc and wycheproof; fixed by 47474b0b. This batch's new crypto dependencies (compression, and
+  zstd for the OpenSSL peer) add no package to the full configuration.
+- win-arm64-debug's other failure, `crd-ci-platform`'s generated table, is the CI platform's, not this track's.
 
 <a id="rfc-8879"></a>
 ## Reading: RFC 8879 and IANA's registry

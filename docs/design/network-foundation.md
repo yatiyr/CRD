@@ -391,7 +391,8 @@ tests):
 - **S4. Pinned keys, not authorities.** A peer is accepted when the SHA-256 of its certificate's public key in the
   provider interface's encoding (`key_id_of`) is pinned and its algorithm accepted; the certificate is the key's
   carrier, and the handshake's CertificateVerify proves possession. A `TlsCredential` issues the self-signed carrier
-  for a `SigningKey` (X.509 v3, the serial from the key identifier, the name as common name and DNS subjectAltName,
+  for a `SigningKey` (X.509 v3, the serial from the key identifier, the name as DNS subjectAltName and, when it fits
+  RFC 5280's 64-character ub-common-name, as common name too, else with an empty subject and a critical subjectAltName;
   valid from the epoch with no expiry: trust and rotation come from the pins). A client always authenticates its
   server; a server with pins asks every client for a credential (mutual authentication). AWS-LC implements no RFC
   7250 raw public keys, so the carrier certificate stands in for them on the wire.
@@ -401,8 +402,8 @@ tests):
   HelloRetryRequest (read from the ServerHello's random).
 - **S6. Limits.** 0-RTT is off: early data may carry only operations a schema declares idempotent (the TLS 1.3
   profile, T07), so it waits for NET.2's server-authorized message schemas and anti-replay windows. `close()` is for an
-  established session (a handshake is abandoned with `clear()`). Address-validation tokens, certificate compression,
-  ECH and the QUIC integration are NET.2's next slices on this same interface.
+  established session (a handshake is abandoned with `clear()`). Address-validation tokens, ECH and the QUIC
+  integration are NET.2's next slices on this same interface.
 - **S7. Key usage limits and key updates.** A session counts the records protected under its sending key (the
   provider's write sequence, which a new key resets) and updates the key before `key_update_records()` records: the
   negotiated AEAD's limit (`tls_key_usage_limit`: floor(2^24.5) for AES-GCM, every 64-bit sequence number for
@@ -453,23 +454,53 @@ tests):
   again with a new binder), so a hybrid group both sides hold is kept. A resumed session reports `resumed()`, its group
   and AEAD and the peer key the ticket's handshake proved; it takes the round trips of a full handshake, and its
   server's flight carries no Certificate or CertificateVerify (over 8,000 bytes fewer with an ML-DSA-65 key).
+- <a id="certificate-compression"></a>**S10. Certificate compression** (RFC 8879, `tls.certificate-compression`). A
+  client decodes its server's Certificate compressed with zstd or zlib (`TlsConfig::certificate_compression`, offered
+  in that order by default); a server may compress its own with them. The codecs are the engine's (crd-compression:
+  the pinned zstd, the engine's own zlib); brotli is not offered, since the engine has no brotli codec. A server makes
+  its Certificate message once at `init()` (an empty request context and one entry without extensions, the bytes the
+  provider writes for the credential), compresses it with each algorithm it may use (zstd at its highest level) and
+  keeps a form only when its CompressedCertificate (the form and 8 bytes of header) is smaller than the plain message;
+  the kept forms, smallest first, live in the provider context and are copied into each handshake, so no handshake
+  compresses and a client never receives a form larger than the plain message. A client decodes into a buffer of
+  exactly the claimed length: a claim above `kTlsMaxCertificateBytes` (64 KiB, the limit a plain Certificate has too,
+  RFC 8879 section 5) is refused by the provider, a zlib claim DEFLATE's 1032:1 cannot reach before anything is
+  reserved (one 3-byte zstd block header already reaches the bound), and a decoding of any other length, a corrupt frame
+  and a wrong Adler-32 fail the handshake; any valid form is accepted, even one larger than the plain message. The
+  provider answers a refused form with `decode_error` where RFC 8879 section 4 names `bad_certificate` (its alert, not
+  Cerid's choice; the handshake fails either way). The provider's server never asks for a client's Certificate
+  compressed, so clients compress nothing. `certificate_compression()` reports the algorithm a session sent or
+  received (0 for a plain Certificate and a resumption). An empty list turns compression off, for a context whose
+  record padding must not depend on the credential (RFC 8879 section 5). Measured (the server's first flight,
+  ServerHello to Finished, the client offering both against offering none): Ed25519 1,651 to 1,612 bytes (zlib),
+  ML-DSA-44 7,668 to 7,615, ML-DSA-65 10,086 to 10,044 and ML-DSA-87 13,362 to 13,297 (zstd), ECDSA P-256 and P-384 by
+  zlib. A pinned
+  carrier saves tens of bytes: its key and signature are random and only the names and the DER structure compress. So
+  certificate compression does not bring a post-quantum flight under QUIC's amplification limit (three times the
+  client's bytes); address-validation tokens and resumption do, and are measured with the QUIC integration.
 
 Evidence: `test_tls.cpp` (every group and signature algorithm, each key share read off the wire and checked against
 its group's layout with the provider's own X25519, ECDH and ML-KEM modulus check, the hellos' GREASE values read off
-the wire, HelloRetryRequest, pins both ways,
-names, alerts, bounds, close_notify, key updates under record budgets, on demand, with one request outstanding and at
-the update bound, a peer's `user_canceled` and `close_notify` during the handshake, tickets and resumption (one ticket
-per connection, single use, the wire's pre_shared_key and psk_key_exchange_modes and the ticket format, bindings, a
-careless store, a fleet's shared key and its rotation, a drawn key, another credential, a client no longer pinned,
-tickets changed at rest in each field and past their lifetime, the lifetime a client keeps, a HelloRetryRequest), adversarial records, every
-configuration refusal, one context on four threads), the `crd-fuzz-crypto-tls` target (a fixed ticket key, a forged
-ticket in a ClientHello, tickets a client's store hands out), and `tls_interop.py` against
-the pinned OpenSSL 3.5 (`CRD_BUILD_TLS_VS_OPENSSL`, Linux): every hybrid group both ways, a HelloRetryRequest both
-ways, hybrid kept beside a classical share both ways, mutual authentication, an unpinned key refused, a TLS 1.2 client
-refused with `protocol_version`, and key updates both ways (a Cerid client updating before every record under a
-three-record budget, asking for an update and not asking, and an OpenSSL client asking a Cerid server), with the key
-shares and Cerid's GREASE values checked on the wire by the driver and each end's KeyUpdate counts against the
-other's.
+the wire, HelloRetryRequest, pins both ways, names, alerts, bounds, close_notify, key updates under record budgets, on
+demand, with one request outstanding and at the update bound, a peer's `user_canceled` and `close_notify` during the
+handshake, tickets and resumption (one ticket per connection, single use, the wire's pre_shared_key and
+psk_key_exchange_modes and the ticket format, bindings, a careless store, a fleet's shared key and its rotation, a
+drawn key, another credential, a client no longer pinned, tickets changed at rest in each field and past their
+lifetime, the lifetime a client keeps, a HelloRetryRequest), certificate compression (the offer read off the
+ClientHello, the forms and flight sizes per signature algorithm, the algorithm both ends allow, none, a resumption,
+the bounded decoder, and a server of the provider's own stack sending a valid form larger than the message, a form of
+another length, one that is no zstd frame and one with a wrong Adler-32), credentials named up to 253 bytes,
+adversarial records, every configuration refusal, one context on four threads), the `crd-fuzz-crypto-tls` target (a
+fixed ticket key, a forged ticket in a ClientHello, tickets a client's store hands out, compressed Certificates against
+restated claim bounds and Adler-32), and `tls_interop.py` against the pinned OpenSSL 3.5 (`CRD_BUILD_TLS_VS_OPENSSL`,
+Linux; built with the pinned zstd and the system's zlib): every hybrid group both ways, a HelloRetryRequest both ways,
+hybrid kept beside a classical share both ways, mutual authentication, an unpinned key refused, a TLS 1.2 client
+refused with `protocol_version`, key updates both ways (a Cerid client updating before every record under a
+three-record budget, asking for an update and not asking, and an OpenSSL client asking a Cerid server), resumption both
+ways across processes, and certificate compression both ways with zstd and with zlib, an end that decodes none, and
+OpenSSL servers installing hostile forms (a claim one byte off either way, claims over the bound, an unreachable zlib
+claim) and seeded corruptions of real forms; the driver checks the key shares, Cerid's GREASE values and each
+compress_certificate offer on the wire and each end's KeyUpdate counts and compressed Certificates against the other's.
 
 <a id="negotiation"></a>
 ## Version and extension negotiation
