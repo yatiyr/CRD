@@ -39,7 +39,6 @@ ALLOWED = {
     'engine/foundation/platform/include/crd/platform/input.hpp': (1, 'alloc is default_allocator(), fatal when out'),
     'engine/numerics/hesap-tensor/include/crd/hesap/tensor/sparse.hpp': (1, 'ScratchBlock keeps the result in m_ptr; '
                                                                           'every caller tests it, AllocFailed if null'),
-    'tools/ceridc/src/main.cpp': (1, 'g_alloc is a GrowableTlsfAllocator, a heap allocator fatal on exhaustion'),
     'runtime/examples/smoke_resources.cpp': (1, 'm_alloc is a TlsfAllocator, a heap allocator fatal on exhaustion'),
     'runtime/examples/smoke_resources_async.cpp': (1, 'm_alloc is a TlsfAllocator, fatal on exhaustion'),
     'runtime/examples/smoke_resources_reload.cpp': (1, 'm_alloc is a TlsfAllocator, fatal on exhaustion'),

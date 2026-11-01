@@ -1,7 +1,7 @@
 #pragma once
 
 // verbs.hpp — GEO-11 (D-007 row 76): the AGENT SURFACE — every engine operation as a headless verb emitting a
-// MACHINE-READABLE JSON report, and `mcp_handle` exposing the SAME verbs over MCP (JSON-RPC 2.0, the stdio
+// MACHINE-READABLE JSON report, and `McpServer` exposing the SAME verbs over MCP (JSON-RPC 2.0, the stdio
 // transport's per-line payload). ⛔ agent edits are TRANSACTIONAL: every verb validates COMPLETELY before its
 // first side effect — an invalid request changes NOTHING on disk (and `dry_run` stops a valid one before the
 // write). The CLI (main.cpp) and the MCP loop are thin shells over these functions — one implementation, two
@@ -154,22 +154,41 @@ struct DiagHostOptions
                                                      crd::memory::IAllocator* alloc);
 
 // ── MCP ────────────────────────────────────────────────────────────────────────────────────────────────────────
-// One JSON-RPC 2.0 request line → the response line ("" for notifications). Handles initialize · ping ·
-// tools/list · tools/call (each tool = one verb above; errors surface as isError content, protocol faults as
-// JSON-RPC errors). The stdio loop in main.cpp is read-line → mcp_handle → write-line.
-// DIAG.10a: the reply echoes the request's id exactly (a string or an integer within +-(2^53 - 1)); a request that is
-// not an object, has another id or a method that is not a string is answered -32600 (with a null id when the id cannot
-// be echoed). Method and tool names are compared whole. A tool argument is used as sent or refused as -32602: a string
-// too long for its verb or holding a NUL, a number of the wrong type or range, a flag that is not a boolean.
-[[nodiscard]] crd::containers::String mcp_handle(crd::containers::ConstSpan<crd::u8> request,
-                                                 crd::memory::IAllocator* alloc);
+// MCP-ADAPT.0: the MCP server of one connection (the stdio process; main.cpp reads a line, hands it to handle and
+// writes the reply line). Each tool is one verb above, listed in name order with an input schema, an output schema
+// and annotations; its report is the structured result and also its text content, and a report with ok false is a
+// tool error. A dual-era server (contract: docs/design/agent-mcp.md):
+//   * revision 2026-07-28 serves every request whose params._meta carries io.modelcontextprotocol/protocolVersion and
+//     clientCapabilities: server/discover, tools/list and tools/call, each result with resultType and the server's
+//     info in _meta, discovery and the list with ttlMs and cacheScope. Another version answers -32022 naming the
+//     supported ones; a request without the fields is malformed (-32602) unless the handshake below came first;
+//   * an initialize handshake selects revision 2025-11-25 for the rest of the connection (ping, tools/list,
+//     tools/call without _meta); its results carry neither resultType nor caching hints.
+// DIAG.10a: the reply echoes the request's id exactly (a string or an integer within +-(2^53 - 1)); a message that is
+// not an object, has another id, no jsonrpc "2.0" or a method that is not a string is answered -32600 (without an id
+// when the id cannot be echoed). Method and tool names are compared whole. An unknown tool or arguments that are not
+// an object are protocol errors (-32602); every argument is checked against the tool's declaration before anything
+// runs, and a refused one (absent when required, unknown, given twice, of the wrong type, out of range, a string too
+// long for its verb or holding a NUL) answers the tool's refusal report, {ok:false, verb, reason}, as a tool error.
+class McpServer
+{
+public:
+    // `diag` (null: none) is the host's diagnostic command service: with it, the `diag` tool is listed and runs through
+    // verb_diag. The tool's arguments are the request's fields only (command, path, cursor, page_items, page_bytes,
+    // schema, and `args`: an object of the command's named arguments, each a string), so a call cannot raise the
+    // host's grant.
+    explicit McpServer(crd::memory::IAllocator* alloc, crd::perf::DiagCommandService* diag = nullptr) noexcept;
 
-// The same, with the host's diagnostic command service bound: tools/list adds the `diag` tool and tools/call runs it
-// through verb_diag. The tool's arguments are the request's fields only (command, path, cursor, page_items,
-// page_bytes, schema, and `args`: an object of the command's named arguments, each a string); anything else in
-// `arguments` is ignored, so a call cannot raise the host's grant. With `diag` null this is exactly the two-argument
-// form.
-[[nodiscard]] crd::containers::String mcp_handle(crd::containers::ConstSpan<crd::u8> request,
-                                                 crd::memory::IAllocator* alloc, crd::perf::DiagCommandService* diag);
+    // One JSON-RPC 2.0 message: its reply ("" for a notification).
+    [[nodiscard]] crd::containers::String handle(crd::containers::ConstSpan<crd::u8> message);
+
+    // Whether an initialize handshake selected revision 2025-11-25 for this connection.
+    [[nodiscard]] bool legacy() const noexcept { return m_legacy; }
+
+private:
+    crd::memory::IAllocator*       m_alloc;
+    crd::perf::DiagCommandService* m_diag;
+    bool                           m_legacy = false;
+};
 
 } // namespace crd::ceridc

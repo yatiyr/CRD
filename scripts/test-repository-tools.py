@@ -8308,5 +8308,103 @@ class AbBoard(unittest.TestCase):
             with self.assertRaisesRegex(ab_board.BoardError, message):
                 board.run()
 
+class JsonSchemaSubset(unittest.TestCase):
+    """scripts/json-schema-subset.py: the MCP conformance oracle's JSON Schema 2020-12 subset (MCP-ADAPT.0)."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location('json_schema_subset', ROOT / 'scripts/json-schema-subset.py')
+        cls.subset = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.subset)
+
+    def test_types_follow_json_not_python(self):
+        v = self.subset.Validator({})
+        self.assertTrue(v.valid(1.0, {'type': 'integer'}))  # 2020-12: a zero fraction is an integer
+        self.assertFalse(v.valid(1.5, {'type': 'integer'}))
+        self.assertFalse(v.valid(True, {'type': 'integer'}))  # a boolean is never a number
+        self.assertFalse(v.valid(True, {'const': 1}))
+        self.assertFalse(v.valid(0, {'enum': [False]}))
+        self.assertTrue(v.valid(1, {'const': 1.0}))
+        self.assertTrue(v.valid('x', {'type': ['integer', 'string']}))
+        self.assertFalse(v.valid(None, {'type': ['integer', 'string']}))
+        self.assertTrue(v.valid({'a': [1, {'b': None}]}, {'const': {'a': [1, {'b': None}]}}))
+        self.assertFalse(v.valid({'a': [1]}, {'const': {'a': [True]}}))
+
+    def test_objects_arrays_and_bounds(self):
+        v = self.subset.Validator({})
+        schema = {'type': 'object', 'properties': {'n': {'type': 'integer', 'minimum': 0, 'maximum': 9}},
+                  'required': ['n'], 'additionalProperties': False}
+        self.assertEqual([], v.errors({'n': 3}, schema))
+        self.assertIn("$: the member 'n' is required", v.errors({}, schema))
+        self.assertEqual(['$.n: -1 is below the minimum 0'], v.errors({'n': -1}, schema))
+        self.assertEqual(['$.x: no value is allowed here'], v.errors({'n': 1, 'x': 0}, schema))
+        self.assertTrue(v.valid({'a': 'b'}, {'type': 'object', 'additionalProperties': {'type': 'string'}}))
+        self.assertFalse(v.valid({'a': 1}, {'type': 'object', 'additionalProperties': {'type': 'string'}}))
+        self.assertFalse(v.valid([1, 'x'], {'type': 'array', 'items': {'type': 'integer'}}))
+        self.assertFalse(v.valid([1, 2], {'maxItems': 1}))
+        self.assertTrue(v.valid('éé', {'maxLength': 2}))  # characters, not UTF-8 bytes
+        self.assertFalse(v.valid('', {'minLength': 1}))
+
+    def test_composition(self):
+        v = self.subset.Validator({})
+        any_of = {'anyOf': [{'type': 'string'}, {'type': 'integer'}]}
+        self.assertTrue(v.valid(3, any_of))
+        self.assertFalse(v.valid(None, any_of))
+        self.assertFalse(v.valid(5, {'allOf': [{'minimum': 0}, {'maximum': 4}]}))
+        self.assertFalse(v.valid(3, {'oneOf': [{'type': 'integer'}, {'minimum': 0}]}))  # both match
+        self.assertTrue(v.valid('x', {'not': {'type': 'integer'}}))
+
+    def test_references_resolve_inside_the_document_only(self):
+        document = {'$defs': {'Id': {'type': ['string', 'integer']},
+                              'Message': {'type': 'object', 'properties': {'id': {'$ref': '#/$defs/Id'}},
+                                          'required': ['id']}}}
+        v = self.subset.Validator(document)
+        self.assertEqual([], v.ref_errors({'id': 'a'}, '#/$defs/Message'))
+        self.assertEqual(['$.id: null is not of type string/integer'], v.ref_errors({'id': None}, '#/$defs/Message'))
+        with self.assertRaises(self.subset.SchemaError):
+            v.ref_errors({}, '#/$defs/Missing')
+        with self.assertRaises(self.subset.SchemaError):
+            self.subset.Validator({'$ref': 'https://example.com/schema.json'})
+        loop = self.subset.Validator({'$defs': {'A': {'$ref': '#/$defs/B'}, 'B': {'$ref': '#/$defs/A'}}})
+        with self.assertRaises(self.subset.SchemaError):
+            loop.ref_errors(1, '#/$defs/A')
+
+    def test_an_unknown_keyword_refuses_the_schema(self):
+        for schema in ({'type': 'object', 'patternProperties': {}}, {'unevaluatedProperties': False},
+                       {'properties': {'a': {'dependentRequired': {}}}}, {'type': 'decimal'}, {'anyOf': []},
+                       {'required': [1]}, {'minLength': -1}):
+            with self.subTest(schema=schema), self.assertRaises(self.subset.SchemaError):
+                self.subset.check_schema(schema)
+        self.subset.check_schema({'type': 'string', 'format': 'uri', 'description': 'an annotation'})
+
+    def test_the_command_line(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            schema = Path(scratch, 's.json')
+            schema.write_text(json.dumps({'$defs': {'N': {'type': 'integer'}}}), encoding='utf-8')
+            good, bad = Path(scratch, 'good.json'), Path(scratch, 'bad.json')
+            good.write_text('3', encoding='utf-8')
+            bad.write_text('"3"', encoding='utf-8')
+            with patch('sys.stdout', new_callable=io.StringIO):
+                self.assertEqual(0, self.subset.main([str(schema), str(good), '--ref', '#/$defs/N']))
+                self.assertEqual(1, self.subset.main([str(schema), str(bad), '--ref', '#/$defs/N']))
+            with patch('sys.stderr', new_callable=io.StringIO) as err:
+                self.assertEqual(2, self.subset.main([str(schema), str(Path(scratch, 'none.json'))]))
+            self.assertIn('json-schema-subset:', err.getvalue())
+
+    def test_the_pinned_mcp_schemas_match_their_fetch_records_and_load(self):
+        spec = importlib.util.spec_from_file_location('mcp_conformance', ROOT / 'tests/tools/ceridc/mcp_conformance.py')
+        conformance = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(conformance)
+        for revision in ('2026-07-28', '2025-11-25'):
+            validator = conformance.load_schema(revision)
+            self.assertIn('CallToolResult', validator.document['$defs'])
+        modern = conformance.load_schema('2026-07-28')
+        reply = {'jsonrpc': '2.0', 'id': 1, 'error': {'code': -32022, 'message': 'Unsupported protocol version',
+                                                      'data': {'supported': ['2026-07-28'], 'requested': 'x'}}}
+        self.assertEqual([], modern.ref_errors(reply, '#/$defs/UnsupportedProtocolVersionError'))
+        reply['id'] = None  # MCP leaves an id it cannot read out; null is not a request id
+        self.assertTrue(modern.ref_errors(reply, '#/$defs/UnsupportedProtocolVersionError'))
+
+
 if __name__ == '__main__':
     unittest.main()

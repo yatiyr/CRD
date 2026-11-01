@@ -28,6 +28,8 @@
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
+#include "mcp_test_support.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdio>
@@ -312,8 +314,10 @@ TEST_CASE("diag 8b: the real ceridc binary inspects from the command line", "[ce
     (void)fs::remove_file(fs::Path(crd::containers::StringView("ceridc_inspect_out.json")));
 
     // The MCP transport does not offer the verb: its agent form is the diag tool's program.inspect under Execute.
-    const char*  list = R"({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}})";
-    const String tools = crd::ceridc::mcp_handle({reinterpret_cast<const crd::u8*>(list), std::strlen(list)}, &g_alloc);
+    const String list =
+        crd::ceridc::test::modern(R"({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}})", &g_alloc);
+    crd::ceridc::McpServer server(&g_alloc);
+    const String           tools = server.handle({reinterpret_cast<const crd::u8*>(list.data()), list.size()});
     CHECK(has(tools, "import")); // the list answered
     CHECK_FALSE(has(tools, "inspect"));
 }

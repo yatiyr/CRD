@@ -728,6 +728,14 @@ crd::containers::String verb_render(const char* otio_path, const char* out_dir, 
     w.kv("ok", done == frames && !sink.failed);
     w.kv("frames", static_cast<crd::i64>(done));
     w.kv("dir", out_dir);
+    if (sink.failed)
+    {
+        w.kv("reason", "a frame could not be written");
+    }
+    else if (done != frames)
+    {
+        w.kv("reason", "the renderer stopped before the last frame");
+    }
     w.end_object();
     return crd::containers::String(w.str());
 }

@@ -34,5 +34,12 @@ crd_discover_tests(crd-ceridc-tests CASE_DIRECTORIES
     PROPERTIES ENVIRONMENT "CRD_CERIDC_EXE=$<TARGET_FILE:ceridc>"
 )
 
+# MCP-ADAPT.0: the conformance oracle. The real binary's replies in both revisions against the published MCP schemas
+# pinned in mcp/ (with their fetch records), and each tool's structured result against its own output schema
+# (docs/design/agent-mcp.md). It writes only under its own temporary directory.
+add_test(NAME crd-ceridc-mcp-conformance
+    COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/mcp_conformance.py" --ceridc "$<TARGET_FILE:ceridc>")
+set_tests_properties(crd-ceridc-mcp-conformance PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONUTF8=1")
+
 # DIAG.10a: the command-decoding fuzz target and its committed corpus replay.
 add_subdirectory(fuzz)

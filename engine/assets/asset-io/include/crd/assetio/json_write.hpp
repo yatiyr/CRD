@@ -49,6 +49,9 @@ public:
     void value_string(const char* s) { comma(); append_escaped(s); }
     void value_bool(bool b) { comma(); m_out.append(b ? "true" : "false"); }
     void value_null() { comma(); m_out.append("null"); }
+    // One complete JSON text another writer produced (a verb's report, a schema), appended as the value unchanged. The
+    // caller vouches for it: nothing here parses or escapes it.
+    void value_raw(crd::containers::StringView json) { comma(); m_out.append(json); }
     void value_u64(crd::u64 v)
     {
         comma();

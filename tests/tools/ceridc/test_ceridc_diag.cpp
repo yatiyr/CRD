@@ -2,8 +2,8 @@
 // transports. A native call, the in-process verb, the in-process MCP tool and the real ceridc binary (from the
 // command line and over MCP stdio) return the same response bytes for the same service state, including pagination
 // and refusals; the MCP tool's arguments cannot raise the grant the process started with; and malformed numeric
-// arguments are protocol faults, while out-of-range counts reach the service and are refused there. MCP replies are
-// parsed with the JSON reader and the tool text compared byte for byte. Every service here binds ceridc's own commands
+// arguments are the tool's refusal (MCP-ADAPT.0), while out-of-range counts reach the service and are refused there.
+// MCP replies are parsed with the JSON reader and the tool text compared byte for byte. Every service here binds ceridc's own commands
 // (bind_diag_commands), so the comparison covers program.provenance and replay.prepare over the committed authored
 // CEIR program, gpu.resources (no GPU context in ceridc, so its context and frame-graph evidence answer unavailable)
 // and program.inspect: the authored program run to a script given as named arguments, which needs the Execute grant
@@ -17,6 +17,7 @@
 // them all, so another process reproduces it after a kernel file is edited and names the edit at its dispatch.
 
 #include "../../execution/ceir-cook/device_replay_fixture.hpp"
+#include "mcp_test_support.hpp"
 
 #include <crd/assetio/json.hpp>
 #include <crd/ceir/input.hpp>
@@ -197,15 +198,21 @@ void bind(DiagCommandService& service)
     REQUIRE(crd::ceridc::bind_diag_commands(service));
 }
 
-// One tools/call of the diag tool with `arguments` (a JSON object text), through the real protocol handler.
+// One revision 2026-07-28 request through a real MCP server bound to `service` (null: none).
+[[nodiscard]] String serve(DiagCommandService* service, const String& request)
+{
+    crd::ceridc::McpServer server(&g_alloc, service);
+    return server.handle({reinterpret_cast<const crd::u8*>(request.data()), request.size()});
+}
+
+// One tools/call of the diag tool with `arguments` (a JSON object text), through the real MCP server.
 [[nodiscard]] String call(DiagCommandService* service, const char* arguments, crd::i64 id = 7)
 {
-    char request[1024];
-    (void)std::snprintf(request, sizeof(request),
-                        R"({"jsonrpc":"2.0","id":%lld,"method":"tools/call","params":{"name":"diag","arguments":%s}})",
-                        static_cast<long long>(id), arguments);
-    return crd::ceridc::mcp_handle({reinterpret_cast<const crd::u8*>(request), std::strlen(request)}, &g_alloc,
-                                   service);
+    String request(&g_alloc);
+    crd::ceridc::test::append_call_head(request, id, "diag");
+    request.append(arguments);
+    request.append("}}");
+    return serve(service, request);
 }
 
 struct ToolReply
@@ -437,7 +444,7 @@ TEST_CASE("diag: program.inspect answers the same bytes natively, through the ve
         CHECK(mcp.handler_runs() == native.handler_runs());
     }
 
-    // The named arguments are an object of strings; anything else is a protocol fault that reaches nothing.
+    // The named arguments are an object of strings; anything else is the tool's refusal, and nothing runs.
     DiagCommandService svc(execute, rooted(), &g_alloc);
     bind(svc);
     for (const char* bad : {R"({"command":"program.inspect","path":"x.ceir","args":["3"]})",
@@ -446,7 +453,9 @@ TEST_CASE("diag: program.inspect answers the same bytes natively, through the ve
         INFO(bad);
         const ToolReply r = reply_of(view(call(&svc, bad)));
         REQUIRE(r.parsed);
-        CHECK(r.protocol_error);
+        CHECK(r.is_error);
+        CHECK(view(r.text) == StringView{R"({"ok":false,"verb":"diag","reason":"argument 'args' must be an object )"
+                                         R"(whose members are strings"})"});
     }
     CHECK(svc.handler_runs() == 0U);
     (void)fs::remove_file(fs::Path(StringView(kInspectProgram)));
@@ -457,13 +466,18 @@ TEST_CASE("diag: the MCP tool cannot raise the host's grant and rejects malforme
     DiagCommandService svc(crd::perf::authority_bit(DiagAuthority::Read), DiagServiceConfig{}, &g_alloc);
     bind(svc);
 
-    // Authority smuggled into the arguments is ignored: the process's grant decides, before any work.
+    // Authority smuggled into the arguments is refused as an unknown argument before the service sees the call, and
+    // without it the process's grant decides, before any work.
     const ToolReply smuggled = reply_of(view(
         call(&svc, R"({"command":"capture.start","grant":"read,record","authority":"record","granted":63})")));
     REQUIRE(smuggled.parsed);
     CHECK(smuggled.is_error);
-    CHECK(has(smuggled.text, "\"status\":\"unauthorized\""));
-    CHECK(has(smuggled.text, "\"grant\":\"read\""));
+    CHECK(view(smuggled.text) == StringView{R"({"ok":false,"verb":"diag","reason":"unknown argument 'grant'"})"});
+    const ToolReply plain = reply_of(view(call(&svc, R"({"command":"capture.start"})")));
+    REQUIRE(plain.parsed);
+    CHECK(plain.is_error);
+    CHECK(has(plain.text, "\"status\":\"unauthorized\""));
+    CHECK(has(plain.text, "\"grant\":\"read\""));
     CHECK(svc.handler_runs() == 0U);
     CHECK_FALSE(svc.capture_open());
 
@@ -473,28 +487,48 @@ TEST_CASE("diag: the MCP tool cannot raise the host's grant and rejects malforme
     CHECK(has(huge.text, "\"status\":\"oversized\""));
     CHECK(svc.handler_runs() == 0U);
 
-    // Negative, fractional, non-numeric and missing values are protocol faults; nothing reaches the service.
-    for (const char* bad : {R"({"command":"diag.commands","cursor":-1})", R"({"command":"diag.commands","cursor":1.5})",
-                            R"({"command":"diag.commands","page_items":"3"})", R"({"path":"x"})",
-                            R"({"command":"bundle.inspect","path":7})"})
+    // Negative, fractional, non-numeric and missing values are the tool's refusal naming the argument; nothing
+    // reaches the service.
+    struct Refusal
     {
-        INFO(bad);
-        const ToolReply r = reply_of(view(call(&svc, bad)));
+        const char* arguments;
+        const char* reason;
+    };
+    for (const Refusal& bad : {
+             Refusal{R"({"command":"diag.commands","cursor":-1})",
+                     "argument 'cursor' must be a whole number from 0 to 2^53 - 1"},
+             Refusal{R"({"command":"diag.commands","cursor":1.5})",
+                     "argument 'cursor' must be a whole number from 0 to 2^53 - 1"},
+             Refusal{R"({"command":"diag.commands","page_items":"3"})",
+                     "argument 'page_items' must be a whole number from 0 to 2^53 - 1"},
+             Refusal{R"({"path":"x"})", "argument 'command' is required"},
+             Refusal{R"({"command":"bundle.inspect","path":7})", "argument 'path' must be a string"},
+         })
+    {
+        INFO(bad.arguments);
+        const ToolReply r = reply_of(view(call(&svc, bad.arguments)));
         REQUIRE(r.parsed);
-        CHECK(r.protocol_error);
+        CHECK(r.is_error);
+        CHECK(has(r.text, bad.reason));
     }
     CHECK(svc.handler_runs() == 0U);
 
     // The tool is listed only when a service is bound, and its schema has no authority field.
-    const char*  list  = R"({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}})";
-    const String bound = crd::ceridc::mcp_handle({reinterpret_cast<const crd::u8*>(list), std::strlen(list)},
-                                                 &g_alloc, &svc);
+    const String list  = crd::ceridc::test::modern(R"({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}})",
+                                                   &g_alloc);
+    const String bound = serve(&svc, list);
     CHECK(has(bound, "\"name\":\"diag\""));
-    CHECK(has(bound, "\"page_bytes\":{\"type\":\"number\"}"));
-    CHECK_FALSE(has(bound, "grant"));
-    CHECK_FALSE(has(bound, "authority"));
-    const String unbound =
-        crd::ceridc::mcp_handle({reinterpret_cast<const crd::u8*>(list), std::strlen(list)}, &g_alloc);
+    CHECK(has(bound, R"("page_bytes":{"type":"integer","minimum":0,"maximum":9007199254740991,)"));
+    CHECK(has(bound, R"("status":{"enum":["ok","unsupported-schema",)")); // the report's schema
+    // The request's schema names no authority field (the report's schema names the grant the host gave).
+    const StringView tools    = view(bound);
+    const crd::usize input_at = tools.find(R"("inputSchema":)", tools.find(R"("name":"diag")"));
+    const crd::usize output_at = tools.find(R"("outputSchema":)", input_at);
+    REQUIRE(output_at != StringView::npos);
+    const StringView input = tools.substr(input_at, output_at - input_at);
+    CHECK(input.find("grant") == StringView::npos);
+    CHECK(input.find("authority") == StringView::npos);
+    const String unbound = serve(nullptr, list);
     CHECK(has(unbound, "\"name\":\"import\""));
     CHECK_FALSE(has(unbound, "\"name\":\"diag\""));
     CHECK(reply_of(view(call(nullptr, R"({"command":"diag.commands"})"))).protocol_error);
@@ -602,16 +636,16 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
         const crd::perf::DiagResult replay   = native.execute(r);
         REQUIRE(replay.status == crd::perf::DiagStatus::Ok);
         String script(&g_alloc);
-        script.append(R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"diag","arguments":)");
+        crd::ceridc::test::append_call_head(script, 1, "diag");
         script.append(R"({"command":"bundle.inspect","path":"ceridc_diag_bundle_binary.cdb","page_items":2}}})");
         script.push_back('\n');
-        script.append(R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"diag","arguments":)");
+        crd::ceridc::test::append_call_head(script, 2, "diag");
         script.append(R"({"command":"capture.stop","path":"x.cprof","grant":"record"}}})");
         script.push_back('\n');
-        script.append(R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"diag","arguments":)");
+        crd::ceridc::test::append_call_head(script, 3, "diag");
         script.append(R"({"command":"program.provenance","path":"ceridc_diag_program_binary.ceir","page_items":4}}})");
         script.push_back('\n');
-        script.append(R"({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"diag","arguments":)");
+        crd::ceridc::test::append_call_head(script, 4, "diag");
         script.append(R"({"command":"replay.prepare","path":"ceridc_diag_program_binary.ceir","page_items":4}}})");
         script.push_back('\n');
         REQUIRE(fs::write_file_text(fs::Path(StringView("ceridc_diag_in.jsonl")), view(script)));
@@ -632,7 +666,7 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
         const ToolReply second = reply_of(all.substr(eol + 1U, eol2 - eol - 1U));
         REQUIRE(second.parsed);
         CHECK(second.is_error);
-        CHECK(has(second.text, "\"status\":\"unauthorized\""));
+        CHECK(view(second.text) == StringView{R"({"ok":false,"verb":"diag","reason":"unknown argument 'grant'"})"});
         CHECK_FALSE(fs::exists(fs::Path(StringView("x.cprof"))));
         const crd::usize eol3 = all.find('\n', eol2 + 1U);
         REQUIRE(eol3 != StringView::npos);
@@ -710,7 +744,7 @@ TEST_CASE("diag: the real ceridc binary runs program.inspect only under its exec
 
     // MCP stdio under an execute grant: the tool text is the native document.
     String line(&g_alloc);
-    line.append(R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"diag","arguments":)");
+    crd::ceridc::test::append_call_head(line, 1, "diag");
     line.append(arguments_of(r).c_str());
     line.append("}}\n");
     REQUIRE(fs::write_file_text(fs::Path(StringView("ceridc_diag_inspect_in.jsonl")), view(line)));
@@ -829,7 +863,7 @@ TEST_CASE("diag: a run record made by one ceridc process reproduces in another a
     r.command = "replay.run";
     r.path    = kReplayRecord;
     String line(&g_alloc);
-    line.append(R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"diag","arguments":)");
+    crd::ceridc::test::append_call_head(line, 1, "diag");
     line.append(arguments_of(r).c_str());
     line.append("}}\n");
     REQUIRE(fs::write_file_text(fs::Path(StringView("ceridc_diag_replay_in.jsonl")), view(line)));
@@ -999,7 +1033,7 @@ TEST_CASE("diag: a seeded random failure recorded by one ceridc process reproduc
     r.command = "replay.run";
     r.path    = kRandomRecord;
     String line(&g_alloc);
-    line.append(R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"diag","arguments":)");
+    crd::ceridc::test::append_call_head(line, 1, "diag");
     line.append(arguments_of(r).c_str());
     line.append("}}\n");
     REQUIRE(fs::write_file_text(fs::Path(StringView(kRandomIn)), view(line)));
@@ -1151,7 +1185,7 @@ TEST_CASE("diag: a host record made by one ceridc process reproduces in another 
     r.path                          = kHostRecord;
     r.args                          = {jobs, 1U};
     String line(&g_alloc);
-    line.append(R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"diag","arguments":)");
+    crd::ceridc::test::append_call_head(line, 1, "diag");
     line.append(arguments_of(r).c_str());
     line.append("}}\n");
     REQUIRE(fs::write_file_text(fs::Path(StringView(kHostIn)), view(line)));
@@ -1330,7 +1364,7 @@ TEST_CASE("diag: a time-step failure recorded by one ceridc process reproduces i
     r.command = "replay.run";
     r.path    = kClockRecord;
     String line(&g_alloc);
-    line.append(R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"diag","arguments":)");
+    crd::ceridc::test::append_call_head(line, 1, "diag");
     line.append(arguments_of(r).c_str());
     line.append("}}\n");
     REQUIRE(fs::write_file_text(fs::Path(StringView(kClockIn)), view(line)));
@@ -1497,7 +1531,7 @@ TEST_CASE("diag: an unhandled event recorded by one ceridc process reproduces in
     r.command = "replay.run";
     r.path    = kEventRecord;
     String line(&g_alloc);
-    line.append(R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"diag","arguments":)");
+    crd::ceridc::test::append_call_head(line, 1, "diag");
     line.append(arguments_of(r).c_str());
     line.append("}}\n");
     REQUIRE(fs::write_file_text(fs::Path(StringView(kEventIn)), view(line)));
@@ -1636,7 +1670,7 @@ TEST_CASE("diag: a device record made by one ceridc process reproduces in anothe
     r.path                             = "device.crpl";
     r.args                             = {kernels, 1U};
     String line(&g_alloc);
-    line.append(R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"diag","arguments":)");
+    crd::ceridc::test::append_call_head(line, 1, "diag");
     line.append(arguments_of(r).c_str());
     line.append("}}\n");
     REQUIRE(fs::write_file_text(fs::Path(StringView(kDeviceIn)), view(line)));
@@ -1677,10 +1711,10 @@ TEST_CASE("diag 11a: the real ceridc binary hosts the diagnostic host from an au
                                            "command_grant = [\"read\", \"record\"]\n")));
 
     String script(&g_alloc);
-    script.append(R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"diag","arguments":)");
+    crd::ceridc::test::append_call_head(script, 1, "diag");
     script.append(R"({"command":"flight.trigger","args":{"message":"the agent saw a wrong total"}}}})");
     script.push_back('\n');
-    script.append(R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"diag","arguments":)");
+    crd::ceridc::test::append_call_head(script, 2, "diag");
     script.append(R"({"command":"diag.capabilities"}}})");
     script.push_back('\n');
     REQUIRE(fs::write_file_text(fs::Path(StringView("ceridc_host_in.jsonl")), view(script)));

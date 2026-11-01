@@ -1,6 +1,6 @@
 // main.cpp — GEO-11: `ceridc` — the agent-facing CLI (every verb prints its JSON report to stdout, exit code
 // mirrors the report's `ok`) and the MCP stdio loop (`ceridc mcp`: newline-delimited JSON-RPC, one line in →
-// one line out — the transport shell over mcp_handle).
+// one line out — the transport shell over McpServer).
 
 #include <crd/ceridc/verbs.hpp>
 #include <crd/containers/array.hpp>
@@ -11,6 +11,7 @@
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/diagnostic_host.hpp>
 #include <crd/platform/arguments.hpp>
+#include <crd/platform/standard_streams.hpp>
 
 #include <cstdio>
 #include <cstdlib>
@@ -100,28 +101,57 @@ void print_usage()
         "             handler, its flight recorder (flight.* served, bundles to its capture_dir) and its grant)\n");
 }
 
-int run_mcp_loop(crd::perf::DiagCommandService& diag, crd::perf::DiagnosticHost& host)
+// The stdio transport: one JSON-RPC message per line in, its reply as one line out. One server serves the process, so
+// an initialize handshake selects revision 2025-11-25 for every later line. A line is read whole with its length (a
+// NUL byte in it is the parser's to refuse, not the message's end); one longer than the bound is answered once as an
+// invalid request and dropped, never cut into pieces that would each be read as a message. Replies go to `out`, the
+// stream the protocol claimed (crd/platform/standard_streams.hpp).
+int run_mcp_loop(crd::perf::DiagCommandService& diag, crd::perf::DiagnosticHost& host, std::FILE* out)
 {
-    // newline-delimited JSON-RPC: read a line, handle, answer (a growing buffer — requests can be long)
-    constexpr crd::usize k_cap = 1U << 20U;
-    auto* line = static_cast<char*>(g_alloc.allocate(k_cap, 16));
-    while (std::fgets(line, static_cast<int>(k_cap), stdin) != nullptr)
+    constexpr crd::usize            k_cap = crd::usize{1} << 20U;
+    crd::ceridc::McpServer          server(&g_alloc, &diag);
+    crd::containers::Array<crd::u8> line(&g_alloc);
+    line.reserve(k_cap);
+    bool overlong = false;
+    const auto answer = [&]
     {
-        const crd::usize len = std::strlen(line);
-        if (len == 0)
+        if (overlong)
         {
-            continue;
+            (void)std::fprintf(out,
+                               "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32600,\"message\":\"invalid request: a "
+                               "message is at most %zu bytes\"}}\n",
+                               static_cast<std::size_t>(k_cap));
+            (void)std::fflush(out);
         }
-        const crd::containers::String response = crd::ceridc::mcp_handle(
-            {reinterpret_cast<const crd::u8*>(line), len}, &g_alloc, &diag);
-        (void)host.poll();        // DIAG.11a: a capture whose post window closed is delivered (and written) here
-        if (!response.empty())
+        else if (!line.empty())
         {
-            std::printf("%s\n", response.c_str());
-            (void)std::fflush(stdout);
+            const crd::containers::String response = server.handle(crd::containers::as_const_span(line));
+            (void)host.poll(); // DIAG.11a: a capture whose post window closed is delivered (and written) here
+            if (!response.empty())
+            {
+                (void)std::fprintf(out, "%s\n", response.c_str());
+                (void)std::fflush(out);
+            }
+        }
+        line.clear();
+        overlong = false;
+    };
+    for (int c = std::getc(stdin); c != EOF; c = std::getc(stdin))
+    {
+        if (c == '\n')
+        {
+            answer();
+        }
+        else if (line.size() < k_cap)
+        {
+            line.push_back(static_cast<crd::u8>(c));
+        }
+        else
+        {
+            overlong = true;
         }
     }
-    g_alloc.deallocate(line);
+    answer(); // a last message without its newline is still a message
     return 0;
 }
 
@@ -211,7 +241,17 @@ int main(int argc, char* argv[])
             std::fprintf(stderr, "ceridc mcp: the diagnostic commands could not be registered\n");
             return 2;
         }
-        return run_mcp_loop(diag, host);
+        // The protocol owns stdout: its bytes exactly (no CRLF, no 0x1A end of input), and a verb's stray print goes
+        // to stderr instead of corrupting a message.
+        std::FILE* const protocol = crd::platform::claim_protocol_streams();
+        if (protocol == nullptr)
+        {
+            std::fprintf(stderr, "ceridc mcp: the standard streams could not be claimed for the protocol\n");
+            return 2;
+        }
+        const int rc = run_mcp_loop(diag, host, protocol);
+        (void)std::fclose(protocol);
+        return rc;
     }
     if (std::strcmp(verb, "diag") == 0)
     {

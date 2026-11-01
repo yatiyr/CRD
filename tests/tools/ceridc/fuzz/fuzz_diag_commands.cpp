@@ -1,19 +1,22 @@
-// crd-fuzz-ceridc-diag: command decoding -- the MCP transport ceridc serves (mcp_handle: JSON-RPC 2.0 over the owned
-// JSON parser), its diag tool's argument decoding (call_diag) and the typed diagnostic command service beneath it
-// (DiagCommandService::execute and every registered command's argument check) -- under the bounded fuzz harness
-// (DIAG.10a; docs/design/test-instruments.md).
+// crd-fuzz-ceridc-diag: command decoding -- the MCP server ceridc serves (McpServer: JSON-RPC 2.0 over the owned JSON
+// parser, the dual-era protocol of MCP-ADAPT.0), its diag tool's argument check and the typed diagnostic command
+// service beneath it (DiagCommandService::execute and every registered command's argument check) -- under the bounded
+// fuzz harness (DIAG.10a; docs/design/test-instruments.md).
 //
 // An input is a host line and up to 64 request lines:
 //   #host <grant>[ root]   optional first line: the host's grant (a parse_authority_list text; "read" otherwise) and
 //                          whether it has a file root. The root is a directory that does not exist, so every path
 //                          command passes the service's path checks and reaches its argument check and handler, and
 //                          every file it opens fails: nothing is read or written.
-//   @<json>                the diag tool's `arguments` value, spliced into a tools/call request with a fixed envelope
+//   @<json>                the diag tool's `arguments` value, spliced into a revision 2026-07-28 tools/call request with
+//                          a fixed envelope
 //   !<fields>              a native request, '|'-separated: command|path|cursor|page_items|page_bytes|schema|name=value
 //                          ... (raw bytes; an empty number field is the default, digits saturate)
-//   <json>                 one JSON-RPC line, fed to mcp_handle as the stdio transport would
-// One service per input: the host's grant and root, ceridc's commands (bind_diag_commands) and the flight and fault
-// commands of a small recorder and an injector (the sandbox's), so every argument check of both hosts is reachable.
+//   <json>                 one JSON-RPC line, fed to the server as the stdio transport would
+// One service and one server per input (the server of one stdio process, so an initialize line selects revision
+// 2025-11-25 for the input's later lines): the host's grant and root, ceridc's commands (bind_diag_commands) and the
+// flight and fault commands of a small recorder and an injector (the sandbox's), so every argument check of both hosts
+// is reachable.
 // A line whose method could be tools/call and whose tool could be one of ceridc's file verbs (import, cook, query,
 // instantiate, sequence, render, export) is never fed: they read and write paths the input names.
 //
@@ -21,12 +24,19 @@
 //   * every line the owned parser accepts is RFC 8259 text with well-formed UTF-8 and within its documented limits
 //     (64 levels of nesting, numbers a double holds), and every such text is accepted: an independent validator below;
 //   * every reply is one line of valid UTF-8 JSON, -32700 for an unparsed line, -32600 for a request that is not an
-//     object or whose id cannot be echoed (null id) or whose method is not a string, no reply to a notification, and
-//     otherwise the request's own id, a string as the same string and an integer as the same integer;
+//     object, whose id cannot be echoed (the error then has no id) or that lacks jsonrpc "2.0" or a string method, no
+//     reply to a notification, and otherwise the request's own id, a string as the same string and an integer as the
+//     same integer;
+//   * the protocol model (docs/design/agent-mcp.md): params an object; initialize with its three fields answers
+//     2025-11-25 and selects it; a params._meta version of 2026-07-28 with valid client capabilities, info and log
+//     level is served with resultType and the server's info, 2025-11-25 there is -32602, any other version -32022
+//     naming the request's and the supported versions; without a version only ping (or, after the handshake, the
+//     2025-11-25 methods) is served; a tools/list cursor is -32602; an unknown method -32601;
 //   * the diag tool decodes exactly the documented fields (command a string; path a string; cursor, page_items,
-//     page_bytes and schema whole numbers to 2^53 - 1, clamped to u32 where the field is; args an object of strings)
-//     or answers -32602 without the service running anything, and the report it returns is the service's document
-//     byte for byte: the same request sent natively for the page the report names returns the same bytes;
+//     page_bytes and schema whole numbers to 2^53 - 1, clamped to u32 where the field is; args an object of strings;
+//     no other member, none given twice) or answers its refusal ({ok:false, verb, reason} as a tool error) without
+//     the service running anything, and the report it returns is the service's document byte for byte, also as the
+//     structured result: the same request sent natively for the page the report names returns the same bytes;
 //   * the service refuses in the documented order (schema, command, authority, request bounds, arguments, path, root,
 //     argument names, the command's own check, cursor) before any work, a refusal leaves its handler unrun, and an
 //     argument check answers only bad-argument or unavailable;
@@ -48,6 +58,8 @@
 #include <crd/perf/fault_injection.hpp>
 #include <crd/perf/flight_commands.hpp>
 #include <crd/perf/flight_recorder.hpp>
+
+#include <initializer_list>
 
 #include <algorithm>
 #include <charconv>
@@ -82,6 +94,11 @@ constexpr usize      kMaxNativeArgs = 16U;
 constexpr u32        kMaxWalkPages = 512U;
 constexpr u32        kMaxDepth     = 64U; // the owned parser's documented nesting limit
 constexpr double     kMaxExact     = 9007199254740991.0;
+// The fixed envelope an '@' line's arguments are spliced into: a revision 2026-07-28 tools/call of the diag tool.
+constexpr const char* kDiagEnvelope =
+    R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"_meta":{)"
+    R"("io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},)"
+    R"("name":"diag","arguments":)";
 constexpr u32        kNone         = 0xFFFFFFFFU;
 
 [[nodiscard]] ConstSpan<u8> bytes_of(StringView s) noexcept
@@ -1047,7 +1064,8 @@ public:
         : m_alloc(alloc),
           m_model(alloc),
           m_host_sink(m_recorder),
-          m_service(host.grant, config(host), alloc)
+          m_service(host.grant, config(host), alloc),
+          m_server(alloc, &m_service)
     {
         perf::FlightPolicy policy;
         policy.capacity    = 16U;
@@ -1092,8 +1110,7 @@ public:
         if (text[0] == '@')
         {
             String spliced(m_alloc);
-            spliced.append(StringView{R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"diag",)"
-                                      R"("arguments":)"});
+            spliced.append(StringView{kDiagEnvelope});
             spliced.append(text.substr(1U));
             spliced.append(StringView{"}}"});
             transport(view(spliced));
@@ -1284,17 +1301,38 @@ private:
                                    });
     }
 
-    // The diag tool's documented decoding of `arguments`. False: the call is a protocol error (-32602).
+    // The diag tool's documented decoding of `arguments` (an object, or absent: none). False: the tool's refusal (a
+    // tool error naming the argument; nothing runs).
     [[nodiscard]] static bool decode_diag(const json::JsonDoc& doc, u32 args, DiagRequest& r, Array<DiagArg>& named)
     {
-        if (args == json::kInvalid || doc.nodes[args].type != json::JsonType::Object)
-        {
-            return false;
-        }
         const auto text = [&doc](u32 node)
         {
             return StringView{doc.strings.data() + doc.nodes[node].str_off, doc.nodes[node].str_len};
         };
+        const auto key = [&doc](u32 member)
+        {
+            return StringView{doc.strings.data() + doc.nodes[member].key_off, doc.nodes[member].key_len};
+        };
+        constexpr const char* fields[] = {"command", "path", "cursor", "page_items", "page_bytes", "schema", "args"};
+        for (u32 m = args == json::kInvalid ? json::kInvalid : doc.nodes[args].child; m != json::kInvalid;
+             m = doc.nodes[m].next)
+        {
+            if (std::ranges::none_of(fields,
+                                     [&](const char* f)
+                                     {
+                                         return key(m) == StringView{f};
+                                     }))
+            {
+                return false; // an unknown argument
+            }
+            for (u32 e = doc.nodes[args].child; e != m; e = doc.nodes[e].next)
+            {
+                if (key(e) == key(m))
+                {
+                    return false; // given twice
+                }
+            }
+        }
         const u32 command = json::find(doc, args, "command");
         if (command == json::kInvalid || doc.nodes[command].type != json::JsonType::String)
         {
@@ -1368,7 +1406,8 @@ private:
         u32      result = json::kInvalid;
     };
 
-    // Read a reply: one line of valid JSON, "jsonrpc":"2.0", and the expected id (`id` kInvalid: null).
+    // Read a reply: one line of valid JSON, "jsonrpc":"2.0", and the expected id (`id` kInvalid: none, as MCP leaves an
+    // id it cannot read out of the error).
     [[nodiscard]] Reply read_reply(StringView reply, json::JsonDoc& out, const json::JsonDoc& request, u32 id)
     {
         const Validation v = validate(reply, m_alloc);
@@ -1377,14 +1416,10 @@ private:
         CRD_FUZZ_REQUIRE(out.nodes[out.root].type == json::JsonType::Object);
         CRD_FUZZ_REQUIRE(string_of(out, out.root, "jsonrpc") == StringView{"2.0"});
         const u32 echoed = json::find(out, out.root, "id");
-        CRD_FUZZ_REQUIRE(echoed != json::kInvalid);
-        const json::JsonNode& e = out.nodes[echoed];
-        if (id == json::kInvalid)
+        CRD_FUZZ_REQUIRE((echoed == json::kInvalid) == (id == json::kInvalid));
+        if (id != json::kInvalid)
         {
-            CRD_FUZZ_REQUIRE(e.type == json::JsonType::Null);
-        }
-        else
-        {
+            const json::JsonNode& e = out.nodes[echoed];
             const json::JsonNode& want = request.nodes[id];
             CRD_FUZZ_REQUIRE(e.type == want.type);
             if (want.type == json::JsonType::String)
@@ -1421,6 +1456,55 @@ private:
         CRD_FUZZ_REQUIRE(r.error && r.code == code);
     }
 
+    [[nodiscard]] static bool is_object(const json::JsonDoc& doc, u32 node)
+    {
+        return node != json::kInvalid && doc.nodes[node].type == json::JsonType::Object;
+    }
+
+    [[nodiscard]] static bool is_string(const json::JsonDoc& doc, u32 node)
+    {
+        return node != json::kInvalid && doc.nodes[node].type == json::JsonType::String;
+    }
+
+    [[nodiscard]] static bool is_implementation(const json::JsonDoc& doc, u32 node)
+    {
+        return is_object(doc, node) && is_string(doc, json::find(doc, node, "name")) &&
+               is_string(doc, json::find(doc, node, "version"));
+    }
+
+    // A 2026-07-28 request's _meta beyond its version: the client's capabilities an object, its info (when sent) a
+    // name and a version, its log level (when sent) one of the eight levels.
+    [[nodiscard]] static bool modern_meta(const json::JsonDoc& doc, u32 meta)
+    {
+        const u32 info  = json::find(doc, meta, "io.modelcontextprotocol/clientInfo");
+        const u32 level = json::find(doc, meta, "io.modelcontextprotocol/logLevel");
+        bool      known = false;
+        for (const char* l : {"debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"})
+        {
+            known = known || json::str_value_eq(doc, level, l);
+        }
+        return is_object(doc, json::find(doc, meta, "io.modelcontextprotocol/clientCapabilities")) &&
+               (info == json::kInvalid || is_implementation(doc, info)) && (level == json::kInvalid || known);
+    }
+
+    // A result's framing: resultType and the server's info exactly in revision 2026-07-28.
+    void expect_framing(const json::JsonDoc& out, u32 result, bool modern)
+    {
+        const u32 type = json::find(out, result, "resultType");
+        const u32 meta = json::find(out, result, "_meta");
+        CRD_FUZZ_REQUIRE((type != json::kInvalid) == modern && (meta != json::kInvalid) == modern);
+        if (modern)
+        {
+            CRD_FUZZ_REQUIRE(string_of(out, result, "resultType") == StringView{"complete"});
+            CRD_FUZZ_REQUIRE(
+                string_of(out, json::find(out, meta, "io.modelcontextprotocol/serverInfo"), "name") ==
+                StringView{"ceridc"});
+        }
+    }
+
+    // The MCP model (docs/design/agent-mcp.md): a dual-era server. A request whose params._meta names its protocol
+    // version is served by revision 2026-07-28 (2025-11-25 there is refused, any other version answers -32022); an
+    // initialize handshake selects 2025-11-25 for the rest of the input; ping is served before it.
     void transport(StringView line)
     {
         json::JsonDoc    doc(m_alloc);
@@ -1431,10 +1515,10 @@ private:
         {
             return;
         }
-        const u64    before = m_service.handler_runs();
-        const String reply  = crd::ceridc::mcp_handle(bytes_of(line), m_alloc, &m_service);
-        const u64    delta  = m_service.handler_runs() - before;
-        const StringView text = view(reply);
+        const u64        before = m_service.handler_runs();
+        const String     reply  = m_server.handle(bytes_of(line));
+        const u64        delta  = m_service.handler_runs() - before;
+        const StringView text   = view(reply);
         if (!parsed)
         {
             expect_error(text, doc, json::kInvalid, -32700);
@@ -1463,61 +1547,161 @@ private:
             CRD_FUZZ_REQUIRE(delta == 0U);
             return;
         }
-        const u32 method = json::find(doc, doc.root, "method");
-        if (method == json::kInvalid || doc.nodes[method].type != json::JsonType::String)
+        CRD_FUZZ_REQUIRE(delta == 0U || json::str_value_eq(doc, json::find(doc, doc.root, "method"), "tools/call"));
+        const auto refuse = [&](crd::i64 code)
         {
-            expect_error(text, doc, id, -32600);
-            CRD_FUZZ_REQUIRE(delta == 0U);
+            expect_error(text, doc, id, code);
+            CRD_FUZZ_REQUIRE(delta == 0U); // a protocol error runs nothing
+        };
+        const u32 method = json::find(doc, doc.root, "method");
+        if (!json::str_value_eq(doc, json::find(doc, doc.root, "jsonrpc"), "2.0") || !is_string(doc, method))
+        {
+            refuse(-32600);
             return;
         }
-        if (json::str_value_eq(doc, method, "initialize") || json::str_value_eq(doc, method, "ping") ||
-            json::str_value_eq(doc, method, "tools/list"))
+        const auto method_is = [&doc, method](const char* m)
         {
+            return json::str_value_eq(doc, method, m);
+        };
+        const u32 params = json::find(doc, doc.root, "params");
+        if (params != json::kInvalid && !is_object(doc, params))
+        {
+            refuse(-32602);
+            return;
+        }
+        if (method_is("initialize"))
+        {
+            if (!is_string(doc, json::find(doc, params, "protocolVersion")) ||
+                !is_object(doc, json::find(doc, params, "capabilities")) ||
+                !is_implementation(doc, json::find(doc, params, "clientInfo")))
+            {
+                refuse(-32602);
+                return;
+            }
             json::JsonDoc out(m_alloc);
             const Reply   r = read_reply(text, out, doc, id);
-            CRD_FUZZ_REQUIRE(!r.error && delta == 0U);
-            if (json::str_value_eq(doc, method, "tools/list"))
-            {
-                const u32 tools = json::find(out, r.result, "tools");
-                CRD_FUZZ_REQUIRE(tools != json::kInvalid && out.nodes[tools].type == json::JsonType::Array);
-                bool diag = false;
-                for (u32 t = out.nodes[tools].child; t != json::kInvalid; t = out.nodes[t].next)
-                {
-                    diag = diag || json::str_value_eq(out, json::find(out, t, "name"), "diag");
-                }
-                CRD_FUZZ_REQUIRE(diag);
-            }
+            CRD_FUZZ_REQUIRE(!r.error && string_of(out, r.result, "protocolVersion") == StringView{"2025-11-25"});
+            expect_framing(out, r.result, false);
+            m_legacy = true;
             return;
         }
-        if (!json::str_value_eq(doc, method, "tools/call"))
+        const u32 meta = json::find(doc, params, "_meta");
+        if (meta != json::kInvalid && !is_object(doc, meta))
         {
-            expect_error(text, doc, id, -32601);
-            CRD_FUZZ_REQUIRE(delta == 0U);
+            refuse(-32602);
             return;
         }
-        const u32 params = json::find(doc, doc.root, "params");
+        const u32  version = json::find(doc, meta, "io.modelcontextprotocol/protocolVersion");
+        const bool modern  = version != json::kInvalid;
+        if (!modern && (method_is("ping") || !m_legacy))
+        {
+            if (!method_is("ping"))
+            {
+                refuse(-32602);
+                return;
+            }
+            json::JsonDoc out(m_alloc);
+            const Reply   r = read_reply(text, out, doc, id);
+            CRD_FUZZ_REQUIRE(!r.error && out.nodes[r.result].count == 0U);
+            return;
+        }
+        if (modern)
+        {
+            if (!is_string(doc, version) || json::str_value_eq(doc, version, "2025-11-25"))
+            {
+                refuse(-32602);
+                return;
+            }
+            if (!json::str_value_eq(doc, version, "2026-07-28"))
+            {
+                json::JsonDoc out(m_alloc);
+                const Reply   r = read_reply(text, out, doc, id);
+                CRD_FUZZ_REQUIRE(r.error && r.code == -32022);
+                const u32 data = json::find(out, json::find(out, out.root, "error"), "data");
+                const StringView requested(doc.strings.data() + doc.nodes[version].str_off,
+                                           doc.nodes[version].str_len);
+                CRD_FUZZ_REQUIRE(string_of(out, data, "requested") == requested);
+                const u32 supported = json::find(out, data, "supported");
+                CRD_FUZZ_REQUIRE(supported != json::kInvalid && out.nodes[supported].count == 2U &&
+                                 json::str_value_eq(out, json::at(out, supported, 0U), "2026-07-28") &&
+                                 json::str_value_eq(out, json::at(out, supported, 1U), "2025-11-25"));
+                return;
+            }
+            if (!modern_meta(doc, meta))
+            {
+                refuse(-32602);
+                return;
+            }
+            if (method_is("server/discover"))
+            {
+                json::JsonDoc out(m_alloc);
+                const Reply   r = read_reply(text, out, doc, id);
+                CRD_FUZZ_REQUIRE(!r.error && string_of(out, r.result, "cacheScope") == StringView{"public"});
+                expect_framing(out, r.result, true);
+                return;
+            }
+        }
+        if (method_is("tools/list"))
+        {
+            if (json::find(doc, params, "cursor") != json::kInvalid) // the list is one page; it issues no cursor
+            {
+                refuse(-32602);
+                return;
+            }
+            json::JsonDoc out(m_alloc);
+            const Reply   r = read_reply(text, out, doc, id);
+            CRD_FUZZ_REQUIRE(!r.error);
+            expect_framing(out, r.result, modern);
+            const u32 tools = json::find(out, r.result, "tools");
+            CRD_FUZZ_REQUIRE(tools != json::kInvalid && out.nodes[tools].type == json::JsonType::Array);
+            bool diag = false;
+            for (u32 t = out.nodes[tools].child; t != json::kInvalid; t = out.nodes[t].next)
+            {
+                diag = diag || json::str_value_eq(out, json::find(out, t, "name"), "diag");
+            }
+            CRD_FUZZ_REQUIRE(diag);
+            return;
+        }
+        if (!method_is("tools/call"))
+        {
+            refuse(-32601);
+            return;
+        }
+        const u32 args = json::find(doc, params, "arguments");
+        if (!json::str_value_eq(doc, json::find(doc, params, "name"), "diag") ||
+            (args != json::kInvalid && !is_object(doc, args)))
+        {
+            refuse(-32602); // an unknown tool (the file verbs are never fed) or bad arguments
+            return;
+        }
         DiagRequest    request;
         Array<DiagArg> named(m_alloc);
-        if (!json::str_value_eq(doc, json::find(doc, params, "name"), "diag") ||
-            !decode_diag(doc, json::find(doc, params, "arguments"), request, named))
-        {
-            expect_error(text, doc, id, -32602);
-            CRD_FUZZ_REQUIRE(delta == 0U);
-            return;
-        }
-        json::JsonDoc out(m_alloc);
-        const Reply   r = read_reply(text, out, doc, id);
+        json::JsonDoc  out(m_alloc);
+        const Reply    r = read_reply(text, out, doc, id);
         CRD_FUZZ_REQUIRE(!r.error);
+        expect_framing(out, r.result, modern);
         const u32 content = json::find(out, r.result, "content");
         CRD_FUZZ_REQUIRE(content != json::kInvalid && out.nodes[content].type == json::JsonType::Array &&
                          out.nodes[content].count == 1U);
         const u32 item = out.nodes[content].child;
         CRD_FUZZ_REQUIRE(string_of(out, item, "type") == StringView{"text"});
-        const StringView report = string_of(out, item, "text");
-        const Document   d      = read_document(report, request, m_model, m_alloc);
-        const u32        is_err = json::find(out, r.result, "isError");
-        CRD_FUZZ_REQUIRE(is_err != json::kInvalid && out.nodes[is_err].type == json::JsonType::Bool &&
-                         out.nodes[is_err].boolean == (d.status != DiagStatus::Ok));
+        const StringView report     = string_of(out, item, "text");
+        const u32        structured = json::find(out, r.result, "structuredContent");
+        CRD_FUZZ_REQUIRE(is_object(out, structured)); // the report again, as the structured result
+        const u32 is_err = json::find(out, r.result, "isError");
+        CRD_FUZZ_REQUIRE(is_err != json::kInvalid && out.nodes[is_err].type == json::JsonType::Bool);
+        if (!decode_diag(doc, args, request, named))
+        {
+            // The tool's refusal: {ok:false, verb:"diag", reason}, a tool error, and nothing ran.
+            CRD_FUZZ_REQUIRE(out.nodes[is_err].boolean && delta == 0U);
+            CRD_FUZZ_REQUIRE(out.nodes[structured].count == 3U &&
+                             string_of(out, structured, "verb") == StringView{"diag"});
+            CRD_FUZZ_REQUIRE(!json::as_bool(out, json::find(out, structured, "ok"), true));
+            CRD_FUZZ_REQUIRE(!string_of(out, structured, "reason").empty());
+            return;
+        }
+        const Document d = read_document(report, request, m_model, m_alloc);
+        CRD_FUZZ_REQUIRE(out.nodes[is_err].boolean == (d.status != DiagStatus::Ok));
         against_model(request, d, delta);
 
         // The same request sent natively, for the page the report names, returns the report byte for byte. A refusal
@@ -1544,6 +1728,8 @@ private:
     perf::FlightCommandHost  m_host_sink;
     perf::FaultInjector      m_injector;
     perf::DiagCommandService m_service;
+    crd::ceridc::McpServer   m_server;
+    bool                     m_legacy = false; // an initialize handshake selected revision 2025-11-25
 };
 
 void run_input(StringView input)
@@ -1595,8 +1781,7 @@ bool lines_parse(const u8* data, usize size)
         String text(&alloc);
         if (line[0] == '@')
         {
-            text.append(StringView{R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"diag",)"
-                                   R"("arguments":)"});
+            text.append(StringView{kDiagEnvelope});
             text.append(line.substr(1U));
             text.append(StringView{"}}"});
         }
@@ -1703,10 +1888,62 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& out)
 
     // The JSON-RPC envelope.
     sink.add_text("lifecycle",
-                  "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n"
+                  "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}\n"
+                  "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"initialize\",\"params\":{}}\n"
+                  "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"initialize\",\"params\":{"
+                  "\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},"
+                  "\"clientInfo\":{\"name\":\"c\",\"version\":\"1\"}}}\n"
                   "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n"
-                  "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n"
-                  "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ping\"}\n");
+                  "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/list\",\"params\":{}}\n"
+                  "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"ping\"}\n"
+                  "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"server/discover\",\"params\":{}}\n"
+                  "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"diag\","
+                  "\"arguments\":{\"command\":\"diag.commands\",\"page_items\":2}}}\n");
+    // Revision 2026-07-28: the per-request _meta, the version error and the malformed forms (MCP-ADAPT.0).
+    const char* const meta = R"("_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28",)"
+                             R"("io.modelcontextprotocol/clientCapabilities":{})";
+    String modern;
+    const auto request = [&modern, meta](const char* head, const char* meta_tail, const char* rest)
+    {
+        modern.append(head);
+        modern.append(meta);
+        modern.append(meta_tail);
+        modern.append(rest);
+        modern.push_back('\n');
+    };
+    request(R"({"jsonrpc":"2.0","id":1,"method":"server/discover","params":{)", "}", "}}");
+    request(R"({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{)", "}", "}}");
+    request(R"({"jsonrpc":"2.0","id":3,"method":"tools/list","params":{)", "}", R"(,"cursor":"1"}})");
+    request(R"({"jsonrpc":"2.0","id":4,"method":"ping","params":{)", "}", "}}");
+    request(R"({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{)",
+            R"(,"io.modelcontextprotocol/clientInfo":{"name":"c","version":"1"},)"
+            R"("io.modelcontextprotocol/logLevel":"debug",)"
+            R"("traceparent":"00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01"})",
+            R"(,"name":"diag","arguments":{"command":"diag.capabilities"}}})");
+    request(R"({"jsonrpc":"2.0","id":6,"method":"tools/list","params":{)",
+            R"(,"io.modelcontextprotocol/logLevel":"loud"})", "}}");
+    request(R"({"jsonrpc":"2.0","id":7,"method":"tools/list","params":{)",
+            R"(,"io.modelcontextprotocol/clientInfo":{"name":"c"}})", "}}");
+    request(R"({"jsonrpc":"2.0","id":8,"method":"initialize","params":{)", "}", "}}");
+    sink.add("modern-requests", reinterpret_cast<const u8*>(modern.data()), modern.size());
+    sink.add_text("modern-version-forms",
+                  "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{\"_meta\":{"
+                  "\"io.modelcontextprotocol/protocolVersion\":\"2099-01-01\"}}}\n"
+                  "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{\"_meta\":{"
+                  "\"io.modelcontextprotocol/protocolVersion\":\"2025-11-25\","
+                  "\"io.modelcontextprotocol/clientCapabilities\":{}}}}\n"
+                  "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\",\"params\":{\"_meta\":{"
+                  "\"io.modelcontextprotocol/protocolVersion\":7}}}\n"
+                  "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/list\",\"params\":{\"_meta\":{"
+                  "\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}\n"
+                  "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/list\",\"params\":{\"_meta\":[]}}\n"
+                  "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/list\",\"params\":{\"_meta\":{"
+                  "\"io.modelcontextprotocol/protocolVersion\":\"2099-01-01\\u0000\"}}}\n");
+    sink.add_text("envelope-jsonrpc",
+                  "{\"id\":1,\"method\":\"ping\"}\n"
+                  "{\"jsonrpc\":\"1.0\",\"id\":2,\"method\":\"ping\"}\n"
+                  "{\"jsonrpc\":2,\"id\":3,\"method\":\"ping\"}\n"
+                  "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"ping\",\"params\":7}\n");
     sink.add_text("id-string", "{\"jsonrpc\":\"2.0\",\"id\":\"req-\\u00e9\\\"1\",\"method\":\"ping\"}\n");
     sink.add_text("id-negative", "{\"jsonrpc\":\"2.0\",\"id\":-9007199254740991,\"method\":\"ping\"}\n");
     sink.add_text("id-null", "{\"jsonrpc\":\"2.0\",\"id\":null,\"method\":\"ping\"}\n");
@@ -1796,7 +2033,10 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& out)
                   "@{\"command\":\"diag.commands\",\"args\":[]}\n"
                   "@{\"command\":\"diag.commands\",\"args\":{\"a\":1}}\n"
                   "@[]\n"
-                  "@\"diag.commands\"\n");
+                  "@\"diag.commands\"\n"
+                  "@{}\n"
+                  "@{\"command\":\"capture.start\",\"grant\":\"record\"}\n"
+                  "@{\"command\":\"diag.commands\",\"cursor\":0,\"cursor\":1}\n");
     sink.add_text("diag-command-utf8",
                   "@{\"command\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\xC3\xA9\"}\n"
                   "@{\"command\":\"\\u0000diag.commands\"}\n"

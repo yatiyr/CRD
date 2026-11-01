@@ -1,0 +1,12 @@
+{
+  "schema": "cerid-mcp-schema-fetch/1",
+  "revision": "2026-07-28",
+  "tag": "2026-07-28",
+  "commit": "5f5440bb26a62e2cf3440b92da5a667efa03b267",
+  "url": "https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/5f5440bb26a62e2cf3440b92da5a667efa03b267/schema/2026-07-28/schema.json",
+  "day": "2026-11-01",
+  "bytes": 181474,
+  "sha256": "ef70b61f99b6d2e5e3b46863822eab08dff6a45bedc7a08914e0e5b133f40203",
+  "license": "Apache-2.0 (MIT for contributions not yet relicensed); the specification repository's LICENSE at commit 5f5440bb is MCP-LICENSE.txt beside this record",
+  "use": "the conformance oracle of MCP-ADAPT.0: tests/tools/ceridc/mcp_conformance.py validates ceridc's replies against it (docs/design/agent-mcp.md)"
+}
