@@ -53,3 +53,5 @@ and closes Done. [OWN](../ROADMAP.md#slice-own), the prerequisite of NET.1 and C
   case that reads a Cerid ClientHello). Restoring it passes both again.
 - Validators: master-plan, repository, Allman braces, generated sources and registers (77 standards entries, 61
   pinned).
+- Hosted: complete-tier run [41323535550](https://github.com/yatiyr/CRD/actions/runs/41323535550), dispatched on
+  yatiyr/CRD at 54f062f2, is the first Windows, clang-cl and ARM64 compile of the GREASE case.
