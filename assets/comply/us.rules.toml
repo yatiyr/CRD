@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review US
 format = "cerid-rules/1"
 jurisdiction = "US"
-generation = 5
+generation = 6
 register = "2026-11-01"
 
 [[scope]]
@@ -26,7 +26,17 @@ kind = "channel"
 state = "planned"
 
 [[scope]]
+id = "product.online-sessions"
+kind = "product"
+state = "planned"
+
+[[scope]]
 id = "product.communications"
+kind = "product"
+state = "planned"
+
+[[scope]]
+id = "product.collaboration"
 kind = "product"
 state = "planned"
 
@@ -125,10 +135,10 @@ topic = "export-control"
 state = "planned"
 title = "US sanctions (OFAC)"
 instrument = "International Emergency Economic Powers Act and the OFAC regulations"
-article = "31 CFR Chapter V: Parts 501, 510, 515, 560, 587, 589, 591 and 596 (the programme parts read for their destinations)"
+article = "31 CFR Chapter V: Parts 501, 510, 515, 560, 587, 589, 591 and 596 (the programme parts read for their destinations; the Executive orders 589.201(e) and 587.201(b) incorporate are us.eo-14065.covered-regions and us.eo-14071.services)"
 primary = "https://www.ecfr.gov/current/title-31/subtitle-B/chapter-V"
 read = true
-obligation = "Screen distribution, accounts and payments against OFAC's SDN and Consolidated lists and the destinations chapter V embargoes (Cuba, Iran, North Korea and the Crimea region of Ukraine comprehensively, the Russian Federation and Venezuela sectorally); report blocked property within 10 business days and yearly by 30 September, report each rejected transaction (a sale of goods or services included) within 10 business days, and keep a full record of each transaction for 10 years (Part 501)."
+obligation = "Screen distribution, accounts and payments against OFAC's SDN and Consolidated lists and the destinations chapter V embargoes (Cuba, Iran, North Korea and the Crimea region of Ukraine comprehensively, part of the Donetsk and Luhansk oblasts of Ukraine, the Covered Regions of E.O. 14065 that 589.201(e) applies, and the Russian Federation and Venezuela sectorally); accept no donation from a Terrorism List Government (596.504: the government of a country the Secretary of State designates, Cuba, Iran and North Korea on 2026-11-01); report blocked property within 10 business days and yearly by 30 September, report each rejected transaction (a sale of goods or services included) within 10 business days, and keep a full record of each transaction for 10 years (Part 501)."
 applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
 check = "active"
 check_name = "crd-comply-tests [sanctions]: parties and destinations screened against each authority's list, failing closed on a missing or stale list"
@@ -138,6 +148,69 @@ sunset = ""
 counsel = "needed"
 counsel_reviewed = ""
 rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "us.eo-14065.covered-regions"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "The Covered Regions of Ukraine under E.O. 14065"
+instrument = "Executive Order 14065 (Blocking Property of Certain Persons and Prohibiting Certain Transactions With Respect to Continued Russian Efforts To Undermine the Sovereignty and Territorial Integrity of Ukraine)"
+article = "Section 1(a): new investment in, imports from and exports to the Covered Regions"
+primary = "https://www.federalregister.gov/d/2022-04020"
+read = true
+obligation = "Supply no goods, services or technology, directly or indirectly, from the United States or as a United States person, to the so-called Donetsk People's Republic or Luhansk People's Republic regions of Ukraine or another region of Ukraine the Secretary of the Treasury determines (the Covered Regions), import none from them and make no new investment in them (Section 1(a)); 31 CFR 589.201(e) applies the order under chapter V."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored US embargo screens the Covered Regions (UA-14, UA-09) as partial, each needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2022-02-21"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "us.eo-14071.services"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "New investment in and services to the Russian Federation under E.O. 14071"
+instrument = "Executive Order 14071 (Prohibiting New Investment in and Certain Services to the Russian Federation in Response to Continued Russian Federation Aggression)"
+article = "Section 1(a)(i)-(iii): new investment in the Russian Federation and the categories of services the Secretary of the Treasury determines"
+primary = "https://www.federalregister.gov/d/2022-07757"
+read = true
+obligation = "Make no new investment in the Russian Federation, and supply from the United States or as a United States person no category of services the Secretary of the Treasury determines under Section 1(a)(ii) to any person located in the Russian Federation, nor approve, finance or facilitate a foreign person's doing so (Section 1(a)(iii)); 31 CFR 587.201(b) applies the order under chapter V. The categories determined by 2026-11-01: accounting, trust and corporate formation, and management consulting; quantum computing; trading, financing, shipping, insurance, flagging and customs brokering for the maritime transport of crude oil and of petroleum products above the price caps; architecture and engineering; the Covered Metals Acquisition Services; IT consultancy and design, and IT support and cloud-based services for enterprise management and design and manufacturing software; and petroleum services."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored US embargo screens the Russian Federation under E.O. 14071 as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2022-04-06"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "us.eo-14071.it-services"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "The E.O. 14071 IT and software services determination"
+instrument = "OFAC Determination Pursuant to Section 1(a)(ii) of Executive Order 14071: Prohibition on Certain Information Technology and Software Services"
+article = "The two categories of services and the three exclusions"
+primary = "https://www.federalregister.gov/d/2024-15709"
+read = true
+obligation = "Supply from the United States or as a United States person no IT consultancy and design services, and no IT support services or cloud-based services for enterprise management software or design and manufacturing software (the Covered Software), to any person located in the Russian Federation, except a service to an entity there owned or controlled by a United States person, a service for winding down or divesting an entity there that no Russian person owns or controls, and a service for software whose export to the Russian Federation the Department of Commerce licenses or otherwise authorises (or would, were the software subject to the EAR)."
+applies_to = ["channel.cerid-store", "product.collaboration", "product.online-sessions", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored US embargo screens the Russian Federation under E.O. 14071, whose services include these, as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2024-09-12"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "NET-SERVER", "COLLAB.1"]
 
 [[rule]]
 id = "us.ada"

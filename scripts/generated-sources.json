@@ -2004,7 +2004,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "9129c6219bcebe6d12a972e643ece01e11b0c5a9413c1c036d9ecdc6d16e8f50"
+      "sha256": "58651a6bb28feeb2022c454aaf80427253e08fa12b79dcc63a56f7bce13e238f"
     },
     {
       "path": "assets/comply/crypto-inventory.json",

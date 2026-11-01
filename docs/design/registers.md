@@ -90,7 +90,7 @@ publisher, the user's Turkish company, takes after implementation and qualificat
 | Field | Meaning |
 |---|---|
 | `topic` | `privacy`, `children`, `security`, `accessibility`, `export-control`, `ai`, `online-safety`, `consumer`, `age-rating`, `intellectual-property`, `communications`, `tax`, `payments`, `e-signature` or `platform` |
-| `instrument` | `name`, `article`, `type` (law, regulation, directive, by-law, decision, code of practice, guidance, treaty, policy, licence), `jurisdiction`, `primary` (the https URL of the official text on one of the jurisdiction's official hosts) and `consolidated` (null until read; then the consolidated `version`, the day it was `read` and the `sha256` of the text read) |
+| `instrument` | `name`, `article`, `type` (law, regulation, directive, by-law, decision, executive order, determination, code of practice, guidance, treaty, policy, licence), `jurisdiction`, `primary` (the https URL of the official text on one of the jurisdiction's official hosts) and `consolidated` (null until read; then the consolidated `version`, the day it was `read` and the `sha256` of the text read) |
 | `obligation` | The duty in plain words |
 | `applies_to` | The scopes (products, data flows, channels) it governs |
 | `check` | `ref`, `name` and `state`: `active` cites the test, script or CI step that proves it (it runs in every tree, so CI fails when it fails); `planned` cites the ROADMAP row that adds it |
@@ -266,7 +266,8 @@ elsewhere).
   authority's own publication: `authority` (dotted, such as `us.ofac`), `jurisdiction`, `generation` (the
   authority's publications in order), `published`, `max_age_days` (1 to 366), the official file's `source` URL and
   `source_sha256`, then `[[destination]]` tables (`region`: ISO 3166-1 alpha-2 or an ISO 3166-2 subdivision,
-  `program`, `measure`: `comprehensive` or `sectoral`) and `[[party]]` tables (`id`, `kind`: individual, entity,
+  `program`, `measure`: `comprehensive`, `sectoral` or `partial`, part of the region whose boundary no subdivision
+  draws) and `[[party]]` tables (`id`, `kind`: individual, entity,
   vessel or aircraft, `names`: the primary name then the aliases, well-formed UTF-8, `programs`, `listed`: the
   designation day, empty when the list does not say (OFAC's files), `births`: YYYY, YYYY-MM or YYYY-MM-DD, or two of
   them joined by `/` (an ISO 8601 interval, from the first's first day to the second's last), individuals only,
@@ -320,19 +321,24 @@ elsewhere).
   delivery.
 - **Embargoed destinations are authored.** No designation file carries them, so each authority's comprehensive and
   sectoral regimes are a generation of their own, authored in the register's `sanctions_lists.embargoes` from the
-  regulations read: per authority the screening entry it serves (read from its primary source by
+  instruments read: per authority the screening entry it serves (read from its primary source by
   `register-review.py read`), a title, the maximum age, `open` (what the reading still owes, or null) and the
-  destinations, each a region, a programme, a measure and the provision it rests on; `reasons` says why a screening
-  entry has no generation (not yet read, or an instrument that embargoes no destination). `import-sanctions.py import`
-  writes each beside the imported lists with no fetch: `published` is the day the text was read (the maximum age runs
-  from the reading), `source` the entry's primary and `source_sha256` the digest of the reading (the pinned text's
-  digest and the destinations), so a corrected reading of the same text is the next generation. One rule set
-  (`embargo_errors`) refuses a malformed generation in the importer and the guard. `us.ofac.embargo` is 31 CFR chapter
-  V as read on 2026-11-01 ([session](../sessions/2026-11-01-comply-1-us-embargoes.md#embargoes)): Cuba, Iran, North
-  Korea and the Crimea region (UA-43, UA-40) comprehensive, the Russian Federation and Venezuela sectoral, 92 days'
-  maximum age; the regions and prohibitions it incorporates from Executive orders are its `open` reading. The EU, UK
-  and UN regimes follow once their regulations and resolutions are read; until then a destination screened against
-  their designation lists alone finds no embargo.
+  destinations, each a region, a programme, a measure, the provision it rests on and the entry it is read in (the
+  screening entry, or an Executive order or determination the entry's regulations incorporate, read from its primary
+  source too); `reasons` says why a screening entry has no generation (not yet read, or an instrument that embargoes no
+  destination). `import-sanctions.py import` writes each beside the imported lists with no fetch: `published` is the day
+  of the latest reading (the maximum age runs from it), `source` the screening entry's primary and `source_sha256` the
+  digest of the reading (every pinned text's digest and the destinations), so a corrected reading of the same texts is
+  the next generation. One rule set (`embargo_errors`) refuses a malformed generation in the importer and the guard.
+  `us.ofac.embargo` is 31 CFR chapter V and the Executive orders 589.201(e) and 587.201(b) incorporate, as read on
+  2026-11-01 ([chapter V](../sessions/2026-11-01-comply-1-us-embargoes.md#embargoes),
+  [the orders](../sessions/2026-11-01-comply-1-federal-register.md#embargo)): Cuba, Iran, North Korea and the Crimea
+  region (UA-43, UA-40) comprehensive; E.O. 14065's Covered Regions partial in the Donetsk and Luhansk oblasts (UA-14,
+  UA-09), since the order names the so-called republics and draws no boundary; the Russian Federation sectoral twice
+  (chapter V's directives and E.O. 14071's determined services) and Venezuela sectoral; 92 days' maximum age, nothing
+  open. Part 596 embargoes no destination (596.503 and 596.504 leave only a donation from a Terrorism List Government
+  and a transfer furthering terrorism prohibited). The EU, UK and UN regimes follow once their regulations and
+  resolutions are read; until then a destination screened against their designation lists alone finds no embargo.
 - **Folding.** Names are compared in search-folded form (`text.search-folding`, crd-core's
   [text_fold.hpp](../../engine/foundation/core/include/crd/core/text_fold.hpp)): lower case; Latin letters with
   diacritics, ligatures and fullwidth forms to ASCII (Ş and ş to s, İ and ı to i, ø to o, ß to ss, æ to ae, the
@@ -359,8 +365,8 @@ elsewhere).
   publication day plus its maximum age is **stale**, and one screened before its publication day is **not yet
   published**. A stale list is still screened (what it lists blocks), and any gap keeps the verdict from Clear.
 - **Verdict.** **Blocked** when a party matches or a destination lies in a comprehensive embargo; else
-  **Unavailable** when a list has a gap; else **Review** for a possible party, a sectoral embargo or a country whose
-  embargoed region the request does not exclude; else **Clear**. A malformed request (no authority, an impossible day,
+  **Unavailable** when a list has a gap; else **Review** for a possible party, a sectoral or partial embargo or a
+  country whose embargoed region the request does not exclude; else **Clear**. A malformed request (no authority, an impossible day,
   thresholds out of order, a subject without words or with a bad birth, country or identifier, a bad region) is
   refused with its key.
 - **Served.** `ceridc screen --lists <dir> --authority <id,...> --day <YYYY-MM-DD>` screens a destination
@@ -471,11 +477,12 @@ host serves as data, read by the host's reader, which checks the document is the
 | legislation.gov.uk (`ukpga/<year>/<number>`, and retained EU law `eur/<year>/<number>`) | the act's Crown Legislation Markup (`data.xml`) | its point-in-time day (`dct:valid`) |
 | ecfr.gov (`current/title-N/...`) | the eCFR versioner's full XML on the hierarchy's latest amendment day: the part itself, or the whole title above a part (the versioner ignores subtitle, chapter and subchapter), of which the cited hierarchy's subtree is the text read | an index read first: the versioner's `meta.latest_amendment_date` of the hierarchy, which must echo the hierarchy asked for |
 | wassenaar.org (`control-lists/`) | the List of Dual-Use Goods and Technologies (PDF) | an index read first: the control-lists page's one link to the list, whose upload path names its edition |
+| federalregister.gov (`d/<document number>`), an Executive order, a determination, a rule or a notice | the document's raw text (`documents/full_text/text/<year>/<month>/<day>/<number>.txt`), which must name the document (`[FR Doc No: <number>]`): a published document is never consolidated, an amendment being a document of its own | an index read first: the API record (`api/v1/documents/<number>.json`), which must be the document's and name its raw text on its publication day; `2022-03-15 (87 FR 14381) as published`, then each change the record names (an Executive order's "Amended by", "Revoked by", "Superseded by" or "Modified by" note, a correction's number), so a later order or correction reads as a new version ([session](../sessions/2026-11-01-comply-1-federal-register.md#reader)) |
 | resmigazete.gov.tr (`eskiler/<year>/<month>/<day>[M<n>]-<item>.pdf` or `.htm`), an item of the Official Gazette such as a Presidential decision | the item as published: a PDF (`%PDF-`, pinned by digest: its text is CID glyphs) or an HTML page | an index read first, for this item alone: the day page, in its declared charset (windows-1254), whose one heading must be the item's day and repeated issue and whose one link to the item gives its title; `2025-12-25/33118 No. 10767 as published`, the number when the title names one decision number ([session](../sessions/2026-11-01-comply-0-gazette-and-new-instruments.md#gazette-reader)) |
 
 A court's annulment note counts on its decision's day only, never on the days of the text it quotes. A version index
-is fetched before the documents whose URL holds the `{version}` it names, and a version is never a scheme, query or
-`..`. Every request asks for gzip (eCFR refuses one that does not), and the manifest pins the
+is fetched before the documents whose URL holds the `{version}` it names (or the part of the version that is a path,
+when the version says more), and that part is never a scheme, query or `..`. Every request asks for gzip (eCFR refuses one that does not), and the manifest pins the
 SHA-256 of the decoded body, at most 16 MiB either way; any other content encoding is refused. An instrument's
 `consolidated.sha256` is that of the text read: the document, or an eCFR hierarchy's subtree, so an amendment elsewhere
 in the title does not read as a change. A redirect is followed on the same host

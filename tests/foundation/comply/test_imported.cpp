@@ -4,8 +4,9 @@
 // cerid-sanctions/1 generations this case decodes, adopts and screens: the official formats end to end, the birth
 // periods the importer derives (ranges, circa, the Hijri and Solar Hijri calendars, an unknown century), identifiers
 // with their issuing country, and names in their own scripts; and the US embargoed destinations the importer writes
-// from the register's authored reading of 31 CFR chapter V. The CTest crd-comply-sanctions-import writes the
-// generations first (a CTest fixture), so the cases are hidden from discovery and run as crd-comply-sanctions-imported.
+// from the register's authored reading of 31 CFR chapter V and the Executive orders it incorporates. The CTest
+// crd-comply-sanctions-import writes the generations first (a CTest fixture), so the cases are hidden from discovery
+// and run as crd-comply-sanctions-imported.
 
 #include <crd/comply/sanctions.hpp>
 #include <crd/platform/filesystem.hpp>
@@ -36,7 +37,8 @@ constexpr Imported kImported[] = {
     {"gb.fcdo", "GB", 20261030000000ULL, 6U},
 };
 
-// The destinations 31 CFR chapter V embargoes, authored in cmake/legal-register.json from the text read on 2026-11-01.
+// The destinations 31 CFR chapter V embargoes with the Executive orders it incorporates, authored in
+// cmake/legal-register.json from the texts read on 2026-11-01.
 constexpr Imported kEmbargo = {"us.ofac.embargo", "US", 20261101000000ULL, 0U};
 
 // Reads the generation the importer wrote for `expected`, checks its header and adopts it.
@@ -201,7 +203,7 @@ TEST_CASE("sanctions: the authored US embargo decodes, adopts and screens destin
 {
     SanctionsStore store;
     const SanctionsList list = adopt(store, kEmbargo);
-    CHECK(list.destinations.size() == 7U);
+    CHECK(list.destinations.size() == 10U);
     CHECK(list.published == 20261101U);
     CHECK(list.max_age_days == 92U);
 
@@ -230,9 +232,14 @@ TEST_CASE("sanctions: the authored US embargo decodes, adopts and screens destin
     {
         CHECK(screened(region, kDay, 1U, Disposition::Match) == Verdict::Blocked);
     }
-    CHECK(screened("UA", kDay, 2U, Disposition::Possible) == Verdict::Review);
-    // The Russian Federation and Venezuela are sectoral: a match needs review.
-    CHECK(screened("RU", kDay, 1U, Disposition::Match) == Verdict::Review);
+    CHECK(screened("UA", kDay, 4U, Disposition::Possible) == Verdict::Review);
+    // E.O. 14065's Covered Regions lie in the Donetsk and Luhansk oblasts, their boundary drawn by no subdivision: a
+    // place in either needs review.
+    CHECK(screened("UA-14", kDay, 1U, Disposition::Match) == Verdict::Review);
+    CHECK(screened("UA-09", kDay, 1U, Disposition::Match) == Verdict::Review);
+    // The Russian Federation (chapter V's directives and E.O. 14071's services) and Venezuela are sectoral: a match
+    // needs review.
+    CHECK(screened("RU", kDay, 2U, Disposition::Match) == Verdict::Review);
     CHECK(screened("VE", kDay, 1U, Disposition::Match) == Verdict::Review);
     // No comprehensive Syria programme is in the text read; another region of Ukraine and Turkey are clear.
     for (const cont::StringView region : {"SY", "UA-30", "TR"})

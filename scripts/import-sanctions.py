@@ -768,15 +768,18 @@ def import_list(authority, config, jurisdiction, body, out_dir):
 # Embargoed destinations ----------------------------------------------------------------------------------------------
 #
 # No designation file carries the destinations an authority embargoes: each authority's are authored in the register's
-# sanctions_lists.embargoes from the regulations read (the entry's consolidated text, recorded by register-review.py
-# read), one destination per region and programme with the provision it rests on. The generation is published on the
-# day the text was read, so its maximum age runs from the reading; its source is the entry's primary and its
-# source_sha256 the digest of the reading (the text's digest and the destinations), so a corrected reading of the same
-# text is a new generation.
+# sanctions_lists.embargoes from the instruments read (each entry's text, recorded by register-review.py read), one
+# destination per region and programme with the provision it rests on and the entry it is read in: the screening entry,
+# or an order or determination the entry's regulations incorporate. The generation is published on the day of its
+# latest reading, so its maximum age runs from the reading; its source is the screening entry's primary and its
+# source_sha256 the digest of the reading (every text's digest and the destinations), so a corrected reading of the
+# same texts is a new generation.
 
 EMBARGO_KEYS = {'entry', 'title', 'max_age_days', 'destinations', 'open'}
-DESTINATION_KEYS = {'region', 'program', 'measure', 'basis'}
-MEASURES = ('comprehensive', 'sectoral')
+DESTINATION_KEYS = {'region', 'program', 'measure', 'basis', 'entry'}
+# A destination's measure (crd::comply's Measure): comprehensive blocks a match; sectoral (some goods, services or
+# parties restricted) and partial (part of the region, its boundary drawn by no subdivision) need review.
+MEASURES = ('comprehensive', 'sectoral', 'partial')
 REGION = re.compile(r'([A-Z]{2})(?:-[A-Z0-9]{1,3})?')  # crd::comply's is_region: ISO 3166-1, or a subdivision
 MAX_DESTINATIONS = 1024  # kMaxDestinations
 MAX_LIST_AGE_DAYS = 366  # kMaxListAgeDays
@@ -784,6 +787,15 @@ MAX_LIST_AGE_DAYS = 366  # kMaxListAgeDays
 
 def entry_of(register, entry_id):
     return next((entry for entry in register.get('entries') or [] if entry.get('id') == entry_id), None)
+
+
+def read_instrument(register, entry_id):
+    """The entry's instrument when it was read from its primary source, else None."""
+    entry = entry_of(register, entry_id)
+    instrument = entry.get('instrument') if isinstance(entry, dict) else None
+    if isinstance(instrument, dict) and instrument.get('consolidated') and (entry.get('source') or {}).get('verified'):
+        return instrument
+    return None
 
 
 def embargo_errors(authority, record, register):
@@ -796,10 +808,7 @@ def embargo_errors(authority, record, register):
     if not isinstance(record, dict) or set(record) != EMBARGO_KEYS:
         return [f'{at} has {", ".join(sorted(EMBARGO_KEYS))}']
     errors = []
-    entry = entry_of(register, record['entry'])
-    instrument = entry.get('instrument') if isinstance(entry, dict) else None
-    if not isinstance(instrument, dict) or not instrument.get('consolidated') or \
-            not (entry.get('source') or {}).get('verified'):
+    if read_instrument(register, record['entry']) is None:
         errors.append(f'{at}: entry {record["entry"]!r} is not an instrument read from its primary source '
                       '(scripts/register-review.py read records it)')
     if not isinstance(record['title'], str) or not record['title']:
@@ -822,7 +831,9 @@ def embargo_errors(authority, record, register):
         if region is None or region.group(1) not in countries:
             errors.append(f'{where} is no ISO 3166-1 country or ISO 3166-2 subdivision of one {TOOL} knows')
         if destination['measure'] not in MEASURES:
-            errors.append(f'{where}: measure is {" or ".join(MEASURES)}')
+            errors.append(f'{where}: measure is {", ".join(MEASURES[:-1])} or {MEASURES[-1]}')
+        if read_instrument(register, destination['entry']) is None:
+            errors.append(f'{where}: entry {destination["entry"]!r} is not an instrument read from its primary source')
         if any(len(destination[key].encode('utf-8')) > MAX_TEXT for key in DESTINATION_KEYS):
             errors.append(f'{where}: a value longer than {MAX_TEXT} bytes')
         if (destination['region'], destination['program']) in seen:
@@ -831,23 +842,30 @@ def embargo_errors(authority, record, register):
     return errors
 
 
-def embargo_reading(record, entry):
-    """The SHA-256 of an authored generation's reading: the text it was read from and its destinations."""
-    reading = {'text': dict(entry['instrument']['consolidated'], url=entry['instrument']['primary']),
-               'destinations': record['destinations']}
+def embargo_texts(record, register):
+    """{entry id: the text read} of every instrument a generation rests on: its entry's and each destination's."""
+    ids = sorted({record['entry'], *(destination['entry'] for destination in record['destinations'])})
+    instruments = {entry_id: read_instrument(register, entry_id) for entry_id in ids}
+    return {entry_id: dict(instrument['consolidated'], url=instrument['primary'])
+            for entry_id, instrument in instruments.items()}
+
+
+def embargo_reading(record, register):
+    """The SHA-256 of an authored generation's reading: the texts it was read from and its destinations."""
+    reading = {'texts': embargo_texts(record, register), 'destinations': record['destinations']}
     canonical = json.dumps(reading, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
 
 
 def import_embargo(authority, record, register, out_dir):
     """Writes OUT/<authority>.sanctions.toml; returns (generation or None when already current, destinations, the day
-    the text was read)."""
+    its texts were last read)."""
     errors = embargo_errors(authority, record, register)
     if errors:
         raise SanctionsError('; '.join(errors))
-    entry = entry_of(register, record['entry'])
-    instrument = entry['instrument']
-    published, sha256 = instrument['consolidated']['read'], embargo_reading(record, entry)
+    instrument = read_instrument(register, record['entry'])
+    published = max(text['read'] for text in embargo_texts(record, register).values())
+    sha256 = embargo_reading(record, register)
     out = Path(out_dir) / f'{authority}{SUFFIX}'
     generation = generation_of(published, previous_of(out), sha256, authority)
     if generation is not None:

@@ -18,8 +18,8 @@
 //   no silent drop  a name match that the subject's kind or birth contradicts is reported Discounted, not dropped.
 //
 // Verdicts: Blocked (a party match, or a destination inside a comprehensive embargo), else Unavailable, else Review
-// (a possible party match, a sectoral embargo, or a country whose embargoed region the request does not exclude),
-// else Clear. Authenticity on delivery is NET.2's signed envelope; this module judges content only.
+// (a possible party match, a sectoral or partial embargo, or a country whose embargoed region the request does not
+// exclude), else Clear. Authenticity on delivery is NET.2's signed envelope; this module judges content only.
 
 #include <crd/comply/generation.hpp>
 #include <crd/comply/names.hpp>
@@ -55,6 +55,7 @@ enum class Measure : u8
 {
     Comprehensive, // nothing may be supplied to the destination: a match blocks
     Sectoral,      // some goods, services or parties are restricted: a match needs review
+    Partial,       // part of the region, whose boundary no ISO 3166 subdivision draws: a match needs review
 };
 
 // A YYYY, YYYY-MM or YYYY-MM-DD read as the days it covers, or two of them joined by '/' (1960/1965, an ISO 8601
@@ -196,7 +197,7 @@ struct Screening
 [[nodiscard]] cont::StringView disposition_name(Disposition value) noexcept; // match, possible, discounted
 [[nodiscard]] cont::StringView gap_name(Gap gap) noexcept;                   // missing, stale, not-yet-published
 [[nodiscard]] cont::StringView party_kind_name(PartyKind kind) noexcept;     // individual, entity, vessel, aircraft
-[[nodiscard]] cont::StringView measure_name(Measure measure) noexcept;       // comprehensive, sectoral
+[[nodiscard]] cont::StringView measure_name(Measure measure) noexcept;       // comprehensive, sectoral, partial
 [[nodiscard]] bool parse_party_kind(cont::StringView text, PartyKind& out) noexcept;
 
 // The installation's lists: one generation per authority. apply() and screen() may run on different threads.

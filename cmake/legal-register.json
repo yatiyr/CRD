@@ -4,7 +4,7 @@
   "about": "COMPLY.0 legal register: every legal and platform obligation that applies to Cerid or to products built with it, one entry per instrument and article, with its jurisdiction, official primary source and the consolidated version read, the obligation in plain words, the products, data flows and channels it applies to, the check that proves it, its effective and sunset dates, a counsel-review flag, the owning rows and the next review. scripts/check-registers.py (the crd-check-registers CTest and repository step) fails a binding obligation without an active check, a lapsed review, an entry read from no primary source when its rows close and a topic without a Turkish entry. docs/design/registers.md is the contract; it shares the standards register's format, guard and review machinery.",
   "snapshot": {
     "date": "2026-11-01",
-    "method": "Refreshed on 2026-11-01 by scripts/register-review.py from the approved source plan (112 records; report docs/sessions/2026-11-01-legal-register-new-instruments.md)."
+    "method": "Refreshed on 2026-11-01 by scripts/register-review.py from the approved source plan (118 records; report docs/sessions/2026-11-01-legal-register-federal-register.md)."
   },
   "review": {
     "cadence": "A light scan quarterly, after each yearly platform event (the April SDK rule, Google I/O, WWDC, the August target API rule) and after each dated effective day the register holds, and a full re-research every year or when a scan finds a pinned instrument amended; Official Gazette of Turkey, EUR-Lex and Steamworks announcements are recorded as runs with their triggering entries. Reviews propose ROADMAP amendments for the user and never edit rows.",
@@ -117,6 +117,12 @@
         "day": "2026-11-01",
         "scan": "light",
         "ref": "docs/sessions/2026-11-01-legal-register-new-instruments.md",
+        "triggers": []
+      },
+      {
+        "day": "2026-11-01",
+        "scan": "light",
+        "ref": "docs/sessions/2026-11-01-legal-register-federal-register.md",
         "triggers": []
       }
     ]
@@ -4650,7 +4656,7 @@
       ],
       "instrument": {
         "name": "International Emergency Economic Powers Act and the OFAC regulations",
-        "article": "31 CFR Chapter V: Parts 501, 510, 515, 560, 587, 589, 591 and 596 (the programme parts read for their destinations)",
+        "article": "31 CFR Chapter V: Parts 501, 510, 515, 560, 587, 589, 591 and 596 (the programme parts read for their destinations; the Executive orders 589.201(e) and 587.201(b) incorporate are us.eo-14065.covered-regions and us.eo-14071.services)",
         "type": "regulation",
         "jurisdiction": "US",
         "primary": "https://www.ecfr.gov/current/title-31/subtitle-B/chapter-V",
@@ -4660,7 +4666,7 @@
           "sha256": "241a3fc4890107387814449e39b44d9000991eaeddeb8c932699307711d88da7"
         }
       },
-      "obligation": "Screen distribution, accounts and payments against OFAC's SDN and Consolidated lists and the destinations chapter V embargoes (Cuba, Iran, North Korea and the Crimea region of Ukraine comprehensively, the Russian Federation and Venezuela sectorally); report blocked property within 10 business days and yearly by 30 September, report each rejected transaction (a sale of goods or services included) within 10 business days, and keep a full record of each transaction for 10 years (Part 501).",
+      "obligation": "Screen distribution, accounts and payments against OFAC's SDN and Consolidated lists and the destinations chapter V embargoes (Cuba, Iran, North Korea and the Crimea region of Ukraine comprehensively, part of the Donetsk and Luhansk oblasts of Ukraine, the Covered Regions of E.O. 14065 that 589.201(e) applies, and the Russian Federation and Venezuela sectorally); accept no donation from a Terrorism List Government (596.504: the government of a country the Secretary of State designates, Cuba, Iran and North Korea on 2026-11-01); report blocked property within 10 business days and yearly by 30 September, report each rejected transaction (a sale of goods or services included) within 10 business days, and keep a full record of each transaction for 10 years (Part 501).",
       "applies_to": [
         "channel.cerid-store",
         "channel.distribution",
@@ -4679,14 +4685,171 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/sessions/2026-11-01-comply-1-us-embargoes.md#reading",
+        "ref": "docs/sessions/2026-11-01-comply-1-federal-register.md#reading",
         "read": "2026-11-01",
         "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
       "deprecation": null,
-      "note": "The prohibitions bind dealings subject to U.S. jurisdiction (a U.S. person, the United States' financial system, items exported from the United States). The general licences of 31 CFR 515.578, 560.540 and 589.517 authorise services and software incident to internet communications, e-gaming and collaboration platforms included, to Cuba, Iran and the Crimea region on conditions; the screen still reports those destinations Blocked and the store decides whether a product relies on a licence."
+      "note": "The prohibitions bind dealings subject to U.S. jurisdiction (a U.S. person, the United States' financial system, items exported from the United States). The general licences of 31 CFR 515.578, 560.540 and 589.517 authorise services and software incident to internet communications, e-gaming and collaboration platforms included, to Cuba, Iran and the Crimea region on conditions; the screen still reports those destinations Blocked and the store decides whether a product relies on a licence. Part 596 embargoes no destination: 596.504 authorises every financial transaction with a Terrorism List Government except a donation to a United States person and a transfer that risks furthering terrorism in the United States, and 596.503 leaves a government another part governs to that part; Syria's designation was rescinded effective 24 August 2026 (91 FR 55965)."
+    },
+    {
+      "id": "us.eo-14065.covered-regions",
+      "title": "The Covered Regions of Ukraine under E.O. 14065",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Executive Order 14065 (Blocking Property of Certain Persons and Prohibiting Certain Transactions With Respect to Continued Russian Efforts To Undermine the Sovereignty and Territorial Integrity of Ukraine)",
+        "article": "Section 1(a): new investment in, imports from and exports to the Covered Regions",
+        "type": "executive-order",
+        "jurisdiction": "US",
+        "primary": "https://www.federalregister.gov/d/2022-04020",
+        "consolidated": {
+          "version": "2022-02-23 (87 FR 10293) as published",
+          "read": "2026-11-01",
+          "sha256": "c6c26bcb7d1ae9c711b8c36ef533f3054346109e7a02be2c61353f14a51300ad"
+        }
+      },
+      "obligation": "Supply no goods, services or technology, directly or indirectly, from the United States or as a United States person, to the so-called Donetsk People's Republic or Luhansk People's Republic regions of Ukraine or another region of Ukraine the Secretary of the Treasury determines (the Covered Regions), import none from them and make no new investment in them (Section 1(a)); 31 CFR 589.201(e) applies the order under chapter V.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored US embargo screens the Covered Regions (UA-14, UA-09) as partial, each needing review",
+        "state": "active"
+      },
+      "effective": "2022-02-21",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-federal-register.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The order names the Covered Regions by the so-called republics and draws no boundary, and ISO 3166-2 has none for them, so the US embargo screens the Donetsk (UA-14) and Luhansk (UA-09) oblasts as partial: a place in either needs review. Neither the Federal Register nor OFAC's Ukraine-/Russia-related programme page holds a determination of another region (searched 2026-11-01)."
+    },
+    {
+      "id": "us.eo-14071.services",
+      "title": "New investment in and services to the Russian Federation under E.O. 14071",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Executive Order 14071 (Prohibiting New Investment in and Certain Services to the Russian Federation in Response to Continued Russian Federation Aggression)",
+        "article": "Section 1(a)(i)-(iii): new investment in the Russian Federation and the categories of services the Secretary of the Treasury determines",
+        "type": "executive-order",
+        "jurisdiction": "US",
+        "primary": "https://www.federalregister.gov/d/2022-07757",
+        "consolidated": {
+          "version": "2022-04-08 (87 FR 20999) as published",
+          "read": "2026-11-01",
+          "sha256": "d2423bf7e416e4d5b6d3da99cf83e620cf6643bffd9215d77ed420dd70754044"
+        }
+      },
+      "obligation": "Make no new investment in the Russian Federation, and supply from the United States or as a United States person no category of services the Secretary of the Treasury determines under Section 1(a)(ii) to any person located in the Russian Federation, nor approve, finance or facilitate a foreign person's doing so (Section 1(a)(iii)); 31 CFR 587.201(b) applies the order under chapter V. The categories determined by 2026-11-01: accounting, trust and corporate formation, and management consulting; quantum computing; trading, financing, shipping, insurance, flagging and customs brokering for the maritime transport of crude oil and of petroleum products above the price caps; architecture and engineering; the Covered Metals Acquisition Services; IT consultancy and design, and IT support and cloud-based services for enterprise management and design and manufacturing software; and petroleum services.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored US embargo screens the Russian Federation under E.O. 14071 as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2022-04-06",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-federal-register.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The determinations read: 87 FR 32307 (accounting, trust and corporate formation, management consulting), 87 FR 62006 (quantum computing), 87 FR 76931 and 87 FR 79255 (crude oil's covered services and price cap), 88 FR 36645 (architecture and engineering), 89 FR 48324 (Covered Metals Acquisition Services) and 89 FR 58286 (IT and software services, us.eo-14071.it-services) from the Federal Register; the petroleum products' covered services and price caps and the petroleum services determination of 10 January 2025 only on OFAC's website. Executive Orders 14066 and 14068 (with E.O. 14114's amendments) bar imports of Russian goods, new investment in determined sectors and exports of luxury goods and dollar banknotes, which no Cerid flow makes; they add no destination."
+    },
+    {
+      "id": "us.eo-14071.it-services",
+      "title": "The E.O. 14071 IT and software services determination",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "NET-SERVER",
+        "COLLAB.1"
+      ],
+      "instrument": {
+        "name": "OFAC Determination Pursuant to Section 1(a)(ii) of Executive Order 14071: Prohibition on Certain Information Technology and Software Services",
+        "article": "The two categories of services and the three exclusions",
+        "type": "determination",
+        "jurisdiction": "US",
+        "primary": "https://www.federalregister.gov/d/2024-15709",
+        "consolidated": {
+          "version": "2024-07-18 (89 FR 58286) as published",
+          "read": "2026-11-01",
+          "sha256": "b9119458e160c8479391e1fc85d126ca28b26ddc959b2067dde41878349fcd62"
+        }
+      },
+      "obligation": "Supply from the United States or as a United States person no IT consultancy and design services, and no IT support services or cloud-based services for enterprise management software or design and manufacturing software (the Covered Software), to any person located in the Russian Federation, except a service to an entity there owned or controlled by a United States person, a service for winding down or divesting an entity there that no Russian person owns or controls, and a service for software whose export to the Russian Federation the Department of Commerce licenses or otherwise authorises (or would, were the software subject to the EAR).",
+      "applies_to": [
+        "channel.cerid-store",
+        "product.collaboration",
+        "product.online-sessions",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored US embargo screens the Russian Federation under E.O. 14071, whose services include these, as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2024-09-12",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-federal-register.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
     },
     {
       "id": "us-ca.ccpa",
@@ -6295,9 +6458,9 @@
       "sha256": "56596c9421414c1b40f92b34d622b93f03eb092e6010aa11ea2613b86b299fde"
     },
     "US": {
-      "generation": 5,
+      "generation": 6,
       "reviewed": "2026-11-01",
-      "sha256": "9129c6219bcebe6d12a972e643ece01e11b0c5a9413c1c036d9ecdc6d16e8f50"
+      "sha256": "58651a6bb28feeb2022c454aaf80427253e08fa12b79dcc63a56f7bce13e238f"
     },
     "US-CA": {
       "generation": 2,
@@ -6941,6 +7104,14 @@
         {
           "entry": "us.sanctions",
           "question": "May Cerid make its e-gaming and collaboration products, their downloads and paid features available to persons in Cuba, Iran and the Crimea region of Ukraine under the general licences of 31 CFR 515.578, 560.540 and 589.517, and on which conditions (fees, the exclusion of the governments and of blocked persons, the EAR licensing of the software), or must the store refuse those destinations outright?"
+        },
+        {
+          "entry": "us.eo-14065.covered-regions",
+          "question": "E.O. 14065 names the Covered Regions by the so-called Donetsk and Luhansk People's Republics and draws no boundary. Must Cerid treat the whole of the Donetsk and Luhansk oblasts (UA-14, UA-09) as the Covered Regions, or how does the store establish that a person or payment in either oblast lies outside them?"
+        },
+        {
+          "entry": "us.eo-14071.it-services",
+          "question": "Are any of Cerid's hosted services (the store, cloud builds, collaboration and session servers, crash collection, the editor's online features) 'IT support services or cloud-based services' for 'design and manufacturing software' or 'enterprise management software', or 'IT consultancy and design services', under the determination, and may Cerid rely on its third exclusion for software whose export to the Russian Federation the EAR authorises (mass-market encryption items classified 5D992.c)?"
         }
       ]
     }
@@ -7039,53 +7210,81 @@
       "generations": {
         "us.ofac.embargo": {
           "entry": "us.sanctions",
-          "title": "The destinations 31 CFR chapter V embargoes",
+          "title": "The destinations 31 CFR chapter V embargoes, with the Executive orders it incorporates",
           "max_age_days": 92,
           "destinations": [
             {
               "region": "CU",
               "program": "31 CFR 515",
               "measure": "comprehensive",
-              "basis": "515.201 (every transaction in property of Cuba or a Cuban national, 515.302), 515.204"
+              "basis": "515.201 (every transaction in property of Cuba or a Cuban national, 515.302), 515.204",
+              "entry": "us.sanctions"
             },
             {
               "region": "IR",
               "program": "31 CFR 560",
               "measure": "comprehensive",
-              "basis": "560.204 (any goods, technology or services to Iran or its Government), 560.201, 560.206"
+              "basis": "560.204 (any goods, technology or services to Iran or its Government), 560.201, 560.206",
+              "entry": "us.sanctions"
             },
             {
               "region": "KP",
               "program": "31 CFR 510",
               "measure": "comprehensive",
-              "basis": "510.206 (any goods, services or technology to North Korea), 510.205, 510.209"
+              "basis": "510.206 (any goods, services or technology to North Korea), 510.205, 510.209",
+              "entry": "us.sanctions"
             },
             {
               "region": "UA-43",
               "program": "31 CFR 589",
               "measure": "comprehensive",
-              "basis": "589.207 and 589.206 (the Crimea region of Ukraine, 589.306: the Autonomous Republic of Crimea)"
+              "basis": "589.207 and 589.206 (the Crimea region of Ukraine, 589.306: the Autonomous Republic of Crimea)",
+              "entry": "us.sanctions"
             },
             {
               "region": "UA-40",
               "program": "31 CFR 589",
               "measure": "comprehensive",
-              "basis": "589.207 and 589.206 (the Crimea region of Ukraine, 589.306: Sevastopol)"
+              "basis": "589.207 and 589.206 (the Crimea region of Ukraine, 589.306: Sevastopol)",
+              "entry": "us.sanctions"
+            },
+            {
+              "region": "UA-14",
+              "program": "E.O. 14065",
+              "measure": "partial",
+              "basis": "Section 1(a) (the so-called Donetsk People's Republic region of Ukraine, a Covered Region whose boundary the order does not draw), applied by 31 CFR 589.201(e)",
+              "entry": "us.eo-14065.covered-regions"
+            },
+            {
+              "region": "UA-09",
+              "program": "E.O. 14065",
+              "measure": "partial",
+              "basis": "Section 1(a) (the so-called Luhansk People's Republic region of Ukraine, a Covered Region whose boundary the order does not draw), applied by 31 CFR 589.201(e)",
+              "entry": "us.eo-14065.covered-regions"
             },
             {
               "region": "RU",
               "program": "31 CFR 589",
               "measure": "sectoral",
-              "basis": "589.202 to 589.205 (Directives 1 to 4: the financial services, energy and defense sectors of the Russian Federation economy)"
+              "basis": "589.202 to 589.205 (Directives 1 to 4: the financial services, energy and defense sectors of the Russian Federation economy)",
+              "entry": "us.sanctions"
+            },
+            {
+              "region": "RU",
+              "program": "E.O. 14071",
+              "measure": "sectoral",
+              "basis": "Section 1(a)(ii) (the categories of services the Secretary of the Treasury determines, IT consultancy and design and IT support and cloud-based services for enterprise management and design and manufacturing software among them) and 1(a)(i) (new investment), applied by 31 CFR 587.201(b)",
+              "entry": "us.eo-14071.services"
             },
             {
               "region": "VE",
               "program": "31 CFR 591",
               "measure": "sectoral",
-              "basis": "591.201 (E.O. 13884: the Government of Venezuela blocked) and 591.406(b) (blocked persons the SDN List does not name)"
+              "basis": "591.201 (E.O. 13884: the Government of Venezuela blocked) and 591.406(b) (blocked persons the SDN List does not name)",
+              "entry": "us.sanctions"
             }
           ],
-          "open": "The regions and prohibitions that 589.201(e) and 587.201(b) incorporate from Executive orders under E.O. 13660's and E.O. 14024's emergencies (E.O. 14065's regions of Ukraine; E.O. 14066, 14068 and 14071 and the services determinations under them), read from the Federal Register, and the State Department's designations that 596.201 relies on."
+          "open": null
         }
       },
       "reasons": {

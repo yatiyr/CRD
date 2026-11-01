@@ -93,9 +93,9 @@ CALENDAR_SOURCE = {
     'standards': ('https://www.ietf.org/meeting/upcoming/',
                   'confirm the calendar events marked unverified and add the next IETF meetings'),
     'legal': ('https://www.resmigazete.gov.tr/',
-              'read the Official Gazette of Turkey, the EUR-Lex Official Journal and the platform announcements since '
-              'the latest run for amendments to the registered instruments, and confirm the calendar events marked '
-              'unverified'),
+              'read the Official Gazette of Turkey, the EUR-Lex Official Journal, the Federal Register (new Executive '
+              'orders and OFAC determinations under the orders read) and the platform announcements since the latest '
+              'run for amendments to the registered instruments, and confirm the calendar events marked unverified'),
 }
 # The IETF datatracker's IESG states while a draft is being processed, and the RFC Editor's queue.
 IESG_PROCESSING = {'publication requested', 'ad evaluation', 'ad evaluation::revised i-d needed', 'in last call',
@@ -168,6 +168,8 @@ MEVZUAT = 'https://www.mevzuat.gov.tr/anasayfa/MevzuatFihristDetayIframe?Mevzuat
 # The kinds of mevzuat.gov.tr read besides laws (MevzuatTur=1), with the word their title carries (2026-11-01): an
 # institution's by-law or regulation (7, "YÖNETMELİK" or "YÖNETMELİĞİ") and a communiqué (9, "TEBLİĞ").
 MEVZUAT_FORMS = {'7': 'YÖNETMELİ', '9': 'TEBLİĞ'}
+FEDERAL_REGISTER = 'https://www.federalregister.gov/api/v1/documents/{number}.json'
+FEDERAL_REGISTER_TEXT = 'https://www.federalregister.gov/documents/full_text/text/{version}.txt'
 WASSENAAR_LIST = 'List-of-Dual-Use-Goods-and-Technologies'
 # A version a document's URL holds: a CELEX number, a day or an upload path, never a scheme, query or `..`.
 VERSION = re.compile(r'(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._/-]*')
@@ -219,6 +221,18 @@ def resolve_ecfr(match):
              'url': ECFR.format(endpoint='full/{version}', title=title, suffix='xml', hierarchy=hierarchy)}]
 
 
+def resolve_federal_register(match):
+    """A Federal Register document (an Executive order, an agency's determination, rule or notice) is never
+    consolidated: an amendment is a document of its own. Its API record is read first: it names the document's raw
+    text, and an Executive order's notes name the orders amending or revoking it."""
+    number = match['number']
+    document = f'federalregister-{number.lower()}'
+    return [{'id': f'{document}-record', 'kind': 'index', 'reader': 'federal-register-record', 'act': number,
+             'url': FEDERAL_REGISTER.format(number=number)},
+            {'id': document, 'kind': 'primary', 'reader': 'federal-register', 'act': number,
+             'index': f'{document}-record', 'url': FEDERAL_REGISTER_TEXT}]
+
+
 def resolve_wassenaar(match):
     """The control-lists page links the current List of Dual-Use Goods and Technologies, a PDF named by its edition."""
     return [{'id': 'wassenaar-control-lists', 'kind': 'index', 'reader': 'wassenaar-lists', 'act': WASSENAAR_LIST,
@@ -248,6 +262,8 @@ RESOLVERS = (
      resolve_legislation_gov_uk),
     (re.compile(r'https://www\.ecfr\.gov/current/title-(?P<title>\d+)(?P<path>(?:/(?:subtitle|chapter|subchapter|part)'
                 r'-[A-Za-z0-9]+)+)'), resolve_ecfr),
+    (re.compile(r'https://www\.federalregister\.gov/d/(?P<number>(?:\d{2}|\d{4}|E\d)-\d{3,5})'),
+     resolve_federal_register),
     (re.compile(r'https://www\.wassenaar\.org/control-lists/'), resolve_wassenaar),
     (re.compile(r'https://www\.resmigazete\.gov\.tr/eskiler/(?P<year>\d{4})/(?P<month>\d{2})/'
                 r'(?P<stem>(?P=year)(?P=month)\d{2}(?:M[1-9]\d*)?)-(?P<item>[1-9]\d*)\.(?P<format>pdf|htm)'),
@@ -394,8 +410,8 @@ def download(opener, url, headers, limit=None):
 
 def fetch_sources(plan, into, opener=None, today=None):
     """Reads every planned source (HTTPS only, gzip decoded, at most FETCH_LIMIT bytes) into `into` with a manifest of
-    the SHA-256 of each decoded body; a version index is read before the documents whose URL holds the version it
-    names. A source that fails is recorded with its error and read again by the next run."""
+    the SHA-256 of each decoded body; a version index is read before the documents whose URL holds the version (or the
+    part of it) it names. A source that fails is recorded with its error and read again by the next run."""
     if not isinstance(plan, dict) or plan.get('schema') != PLAN_SCHEMA or not isinstance(plan.get('sources'), list):
         raise ReviewError(f'the plan is not a {PLAN_SCHEMA} document')
     today = today or datetime.datetime.now(datetime.timezone.utc).date()
@@ -410,18 +426,19 @@ def fetch_sources(plan, into, opener=None, today=None):
             if source['index'] not in versions:
                 item['error'] = f'its version index {source["index"]} was not read'
                 continue
-            item.update(url=source['url'].replace('{version}', versions[source['index']]),
-                        version=versions[source['index']])
+            path, version = versions[source['index']]
+            item.update(url=source['url'].replace('{version}', path), version=version)
         if not item['url'].startswith('https://') or not re.fullmatch(r'[a-z0-9.-]+', source['id']):
             item['error'] = 'refused: a source is an https URL with a plain identifier'
             continue
         try:
             body = download(opener, item['url'], source.get('headers', {}))
             if source['kind'] == 'index':
-                version = INDEX_READERS[source['reader']](body, source, today)
-                if not VERSION.fullmatch(version):
-                    raise Unreadable(f'the version {version!r} cannot be part of a URL')
-                versions[source['id']] = version
+                found = INDEX_READERS[source['reader']](body, source, today)
+                path, version = found if isinstance(found, tuple) else (found, found)
+                if not VERSION.fullmatch(path):
+                    raise Unreadable(f'the version {path!r} cannot be part of a URL')
+                versions[source['id']] = path, version
         except OSError as error:
             item['error'] = ' '.join(f'{type(error).__name__}: {error}'.split())
             continue
@@ -648,6 +665,51 @@ def read_ecfr(body, source, version):
     return version
 
 
+# The Federal Register's API record of a document (the 2026-11-01 reads): `document_number`, `publication_date`,
+# `citation` (`87 FR 10293`), `raw_text_url` (`.../full_text/text/<year>/<month>/<day>/<number>.txt`), `corrections`
+# (the API URLs of the correcting documents, `C1-2023-00593`) and, for an Executive order, `executive_order_notes`,
+# whose lines name the orders amending or revoking it ("Amended by: EO 14114, December 12, 2023").
+FEDERAL_REGISTER_CHANGE = re.compile(r'^[ \t]*((?:Amended|Revoked|Superseded|Modified) by:.*?)[ \t\r]*$',
+                                     re.MULTILINE)
+FEDERAL_REGISTER_CORRECTION = 'https://www.federalregister.gov/api/v1/documents/'
+
+
+def read_federal_register_record(body, source, today):
+    """(the raw text's path, the document's version): `<publication day> (<citation>) as published`, then each change
+    the record names, an order amending or revoking an Executive order and a correction, so a change reads as a new
+    version."""
+    try:
+        record = json.loads(body)
+        number, day, citation = record['document_number'], record['publication_date'], record['citation']
+        text, notes, corrections = record['raw_text_url'], record['executive_order_notes'], record['corrections']
+    except (ValueError, KeyError, TypeError) as error:
+        raise Unreadable(f'not a Federal Register document record ({error})') from error
+    if number != source['act']:
+        raise Unreadable(f'the record of document {number!r}, not of {source["act"]}')
+    if not isinstance(day, str) or len(day) != 10 or _registers.parse_day(day) is None:
+        raise Unreadable(f'the publication day {day!r} is not YYYY-MM-DD')
+    path = f'{day.replace("-", "/")}/{number}'
+    if text != FEDERAL_REGISTER_TEXT.format(version=path):
+        raise Unreadable(f'its raw text {text!r} is not the document published on {day}')
+    if not isinstance(citation, str) or not re.fullmatch(r'\d+ FR \d+', citation):
+        raise Unreadable(f'the citation {citation!r} is not "<volume> FR <page>"')
+    if not isinstance(notes, (str, type(None))) or not isinstance(corrections, list) or \
+            not all(isinstance(url, str) and url.startswith(FEDERAL_REGISTER_CORRECTION) for url in corrections):
+        raise Unreadable('its notes or corrections have another shape')
+    changes = [' '.join(change.split()) for change in FEDERAL_REGISTER_CHANGE.findall(notes or '')]
+    changes += [f'Corrected by: {url.removeprefix(FEDERAL_REGISTER_CORRECTION)}' for url in corrections]
+    return path, '; '.join([f'{day} ({citation}) as published', *changes])
+
+
+def read_federal_register(body, source, version):
+    """The raw text names its document (`[FR Doc No: 2022-04020]`); its version is the record's."""
+    if f'[FR Doc No: {source["act"]}]' not in decoded(body, 'UTF-8')[:4096]:
+        raise Unreadable(f'not the raw text of Federal Register document {source["act"]}')
+    if not version:
+        raise Unreadable(f'the record of {source["act"]} is unknown; it is read first')
+    return version
+
+
 def read_wassenaar_lists(body, source, today):
     """The upload path of the one current list the control-lists page links."""
     links = set(re.findall(r'https://www\.wassenaar\.org/wp-content/uploads/(\d{4}/\d{2}/' + re.escape(source['act']) +
@@ -720,15 +782,15 @@ def read_gazette(body, source, version):
 
 
 # reader(body, source, version) -> the version of an instrument's document; an index reader(body, source, today)
-# -> the version its document's URL holds.
+# -> the version its document's URL holds, or (the part of the URL, the version) when the version says more.
 READERS = {'mevzuat': read_mevzuat, 'legislation-gov-uk': read_legislation_gov_uk, 'cellar': read_cellar,
-           'ecfr': read_ecfr, 'pdf': read_pdf, 'gazette': read_gazette}
+           'ecfr': read_ecfr, 'pdf': read_pdf, 'gazette': read_gazette, 'federal-register': read_federal_register}
 # record(body, source) -> the bytes of the instrument within its document, whose SHA-256 is the text read; the whole
 # document for a reader without one.
 RECORDS = {'ecfr': ecfr_record}
 INDEX_READERS = {'cellar-versions': read_cellar_versions, 'ecfr-versions': read_ecfr_versions,
                  'wassenaar-lists': read_wassenaar_lists, 'mevzuat-gazette': read_mevzuat_gazette,
-                 'gazette-day': read_gazette_day}
+                 'gazette-day': read_gazette_day, 'federal-register-record': read_federal_register_record}
 
 
 def read_rfc_editor(body):

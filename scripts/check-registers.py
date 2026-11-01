@@ -103,8 +103,8 @@ TOPICS = {'privacy', 'children', 'security', 'accessibility', 'export-control', 
 TURKEY = 'TR'
 TOPICS_WITHOUT_JURISDICTION = {'platform'}
 INSTRUMENT_KEYS = {'name', 'article', 'type', 'jurisdiction', 'primary', 'consolidated'}
-INSTRUMENT_TYPES = {'law', 'regulation', 'directive', 'by-law', 'decision', 'code-of-practice', 'guidance', 'treaty',
-                    'policy', 'licence'}
+INSTRUMENT_TYPES = {'law', 'regulation', 'directive', 'by-law', 'decision', 'executive-order', 'determination',
+                    'code-of-practice', 'guidance', 'treaty', 'policy', 'licence'}
 JURISDICTION = re.compile(r'^(?:[A-Z]{2}(?:-[A-Z0-9]{1,3})?|INT|PLATFORM)$')
 HOST = re.compile(r'^[a-z0-9-]+(?:\.[a-z0-9-]+)+$')
 SHA256 = re.compile(r'^[0-9a-f]{64}$')

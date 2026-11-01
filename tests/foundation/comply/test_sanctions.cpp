@@ -641,6 +641,32 @@ TEST_CASE("sanctions: destinations block, review or pass by region and measure",
     CHECK(verdict("TR") == Verdict::Clear);
 }
 
+TEST_CASE("sanctions: a partial embargo needs review in its region and its country", "[comply][sanctions]")
+{
+    // E.O. 14065's Covered Regions lie in the Donetsk and Luhansk oblasts but no subdivision draws their boundary.
+    SanctionsStore store;
+    const cont::String list =
+        with("measure = \"sectoral\"\n", "measure = \"sectoral\"\n\n[[destination]]\nregion = \"UA-14\"\n"
+                                         "program = \"TEST-COVERED-REGIONS\"\nmeasure = \"partial\"\n");
+    REQUIRE(store.apply(list).error == ComplyError::None);
+    const auto screened = [&store](cont::StringView region)
+    {
+        Request request({"test.ofac"}, {});
+        request.request.destination = region;
+        return screen(store, request);
+    };
+    Screening screening = screened("UA-14");
+    REQUIRE(screening.destinations.size() == 1U);
+    CHECK(screening.destinations[0].destination.measure == Measure::Partial);
+    CHECK(screening.destinations[0].disposition == Disposition::Match);
+    CHECK(screening.verdict == Verdict::Review); // a match in part of the region: never blocked, never clear
+    screening = screened("UA");
+    CHECK(screening.destinations.size() == 2U); // the country holds the Crimean and the partial region
+    CHECK(screening.verdict == Verdict::Review);
+    CHECK(screened("UA-09").verdict == Verdict::Clear);
+    CHECK(screened("UA-43").verdict == Verdict::Blocked);
+}
+
 TEST_CASE("sanctions: a missing, stale or future list fails closed unless a match blocks", "[comply][sanctions]")
 {
     SanctionsStore store;
@@ -755,6 +781,8 @@ TEST_CASE("sanctions: names of verdicts, dispositions, gaps, kinds and measures"
     CHECK(gap_name(Gap::NotYetPublished) == "not-yet-published");
     CHECK(measure_name(Measure::Comprehensive) == "comprehensive");
     CHECK(measure_name(Measure::Sectoral) == "sectoral");
+    CHECK(measure_name(Measure::Partial) == "partial");
+    CHECK(measure_name(static_cast<Measure>(3U)) == "unknown");
     for (const cont::StringView name : {"individual", "entity", "vessel", "aircraft"})
     {
         PartyKind kind = PartyKind::Individual;

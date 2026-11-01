@@ -23,7 +23,7 @@ constexpr cont::StringView kPartyKeys[] = {"id",     "kind",   "names",     "pro
                                            "listed", "births", "countries", "identifiers"};
 
 constexpr cont::StringView kPartyKindNames[] = {"individual", "entity", "vessel", "aircraft"};
-constexpr cont::StringView kMeasureNames[] = {"comprehensive", "sectoral"};
+constexpr cont::StringView kMeasureNames[] = {"comprehensive", "sectoral", "partial"};
 
 [[nodiscard]] bool is_country(cont::StringView text) noexcept
 {
@@ -667,7 +667,7 @@ cont::StringView party_kind_name(PartyKind kind) noexcept
 cont::StringView measure_name(Measure measure) noexcept
 {
     const auto index = static_cast<usize>(measure);
-    return index < 2U ? kMeasureNames[index] : cont::StringView("unknown");
+    return index < 3U ? kMeasureNames[index] : cont::StringView("unknown");
 }
 
 bool parse_party_kind(cont::StringView text, PartyKind& out) noexcept

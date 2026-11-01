@@ -6748,13 +6748,21 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
         return self.screening_entry(instrument=self.instrument(consolidated=dict(self.READ)),
                                     source={'ref': 'docs/research.md#n83', 'read': '2026-10-31', 'verified': True})
 
+    def read_order(self):
+        """An order the screening entry's regulations incorporate, read with them."""
+        return self.legal_entry(id='tr.order', instrument=self.instrument(
+            name='Order 1', primary=self.KVKK.replace('6698', '6699'), consolidated=dict(self.READ, sha256='ab' * 32)),
+            source={'ref': 'docs/research.md#n83', 'read': '2026-10-31', 'verified': True})
+
     @staticmethod
     def embargo(**changes):
+        def destination(region, program, measure, basis):
+            return {'region': region, 'program': program, 'measure': measure, 'basis': basis,
+                    'entry': 'tr.asset-freeze'}
         record = {'entry': 'tr.asset-freeze', 'title': 'Embargoes', 'max_age_days': 92,
-                  'destinations': [{'region': 'CU', 'program': 'P 515', 'measure': 'comprehensive', 'basis': '515.201'},
-                                   {'region': 'UA-43', 'program': 'P 589', 'measure': 'comprehensive',
-                                    'basis': '589.207'},
-                                   {'region': 'RU', 'program': 'P 589', 'measure': 'sectoral', 'basis': '589.202'}],
+                  'destinations': [destination('CU', 'P 515', 'comprehensive', '515.201'),
+                                   destination('UA-43', 'P 589', 'comprehensive', '589.207'),
+                                   destination('RU', 'P 589', 'sectoral', '589.202')],
                   'open': None}
         record.update(changes)
         return record
@@ -6774,6 +6782,14 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
         self.assertEqual(0, code, output)
         code, output = self.run_lists(self.embargoes(self.embargo(open='The regimes read next.')),
                                       entries=[self.read_screening_entry()])
+        self.assertEqual(0, code, output)
+        # A destination read in an order the regulations incorporate, part of a region whose boundary no subdivision
+        # draws.
+        incorporated = self.embargo()
+        incorporated['destinations'].append({'region': 'UA-14', 'program': 'Order 1', 'measure': 'partial',
+                                             'basis': 'Section 1', 'entry': 'tr.order'})
+        code, output = self.run_lists(self.embargoes(incorporated), entries=[self.read_screening_entry(),
+                                                                             self.read_order()])
         self.assertEqual(0, code, output)
 
     def test_every_embargo_names_a_read_screening_entry_iso_regions_measures_and_provisions(self):
@@ -6800,11 +6816,23 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
                 bad['destinations'][0]['region'] = region
                 self.assert_embargo_fails(self.embargoes(bad), f'{where}: {region} is no ISO 3166-1 country')
         bad = self.embargo()
-        bad['destinations'][0]['measure'] = 'partial'
-        self.assert_embargo_fails(self.embargoes(bad), f'{where}: CU: measure is comprehensive or sectoral')
-        bad = self.embargo()
-        bad['destinations'][0]['basis'] = ''
-        self.assert_embargo_fails(self.embargoes(bad), f'{where}: a destination has basis, measure, program, region')
+        bad['destinations'][0]['measure'] = 'regional'
+        self.assert_embargo_fails(self.embargoes(bad), f'{where}: CU: measure is comprehensive, sectoral or partial')
+        for key in ('basis', 'entry'):
+            with self.subTest(key=key):
+                bad = self.embargo()
+                bad['destinations'][0][key] = ''
+                self.assert_embargo_fails(self.embargoes(bad), f'{where}: a destination has basis, entry, measure, '
+                                                               'program, region')
+        for entry in ('tr.order', 'tr.kvkk.processing', 'us.none'):
+            with self.subTest(entry=entry):
+                bad = self.embargo()
+                bad['destinations'][0]['entry'] = entry
+                unread = self.read_order()
+                unread['source']['verified'] = False
+                self.assert_lists_fail(self.embargoes(bad), f"{where}: CU: entry '{entry}' is not an instrument read "
+                                                            'from its primary source',
+                                       entries=[self.read_screening_entry(), unread])
         bad = self.embargo()
         bad['destinations'][0]['program'] = 'p' * 4097
         self.assert_embargo_fails(self.embargoes(bad), f'{where}: CU: a value longer than 4096 bytes')
@@ -6856,7 +6884,7 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
             self.assertEqual(('tr.masak.embargo', 'TR', 20261031000000, '2026-10-31', 92, primary),
                              (document['authority'], document['jurisdiction'], document['generation'],
                               document['published'], document['max_age_days'], document['source']))
-            self.assertEqual(sanctions_import.embargo_reading(record, entry), document['source_sha256'])
+            self.assertEqual(sanctions_import.embargo_reading(record, register), document['source_sha256'])
             self.assertEqual([{key: item[key] for key in ('region', 'program', 'measure')}
                               for item in record['destinations']], document['destination'])
             self.assertNotIn('party', document)
@@ -6872,6 +6900,22 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
             entry['instrument']['consolidated']['read'] = '2026-10-30'
             with self.assertRaisesRegex(sanctions_import.SanctionsError, 'older than the imported 20261031000002'):
                 sanctions_import.import_embargo('tr.masak.embargo', record, register, out)
+            # A destination read in an incorporated order: the generation is published on the latest reading, and a
+            # new text of the order is a new reading.
+            order = self.read_order()
+            order['instrument']['consolidated']['read'] = '2026-11-01'
+            register['entries'].append(order)
+            record['destinations'].append({'region': 'UA-14', 'program': 'Order 1', 'measure': 'partial',
+                                           'basis': 'Section 1', 'entry': 'tr.order'})
+            self.assertEqual((20261101000000, 4, '2026-11-01'),
+                             sanctions_import.import_embargo('tr.masak.embargo', record, register, out))
+            document = tomllib.loads(path.read_text(encoding='utf-8'))
+            self.assertEqual((primary, 'partial'), (document['source'], document['destination'][3]['measure']))
+            reading = sanctions_import.embargo_reading(record, register)
+            order['instrument']['consolidated']['sha256'] = '12' * 32
+            self.assertNotEqual(reading, sanctions_import.embargo_reading(record, register))
+            self.assertEqual(20261101000001,
+                             sanctions_import.import_embargo('tr.masak.embargo', record, register, out)[0])
             unverified = self.read_screening_entry()
             unverified['source']['verified'] = False  # a consolidated text not read from its primary source
             for unread in (self.screening_entry(), unverified):
@@ -6884,15 +6928,17 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
             with patch('sys.stdout', new_callable=io.StringIO) as printed:
                 self.assertEqual(0, sanctions_import.main(['import', '--from', str(self.LISTS), '--out', out,
                                                            '--authority', 'us.ofac.embargo']))
-            self.assertIn('us.ofac.embargo: 7 embargoed destinations read 2026-11-01: generation 20261101000000',
+            self.assertIn('us.ofac.embargo: 10 embargoed destinations read 2026-11-01: generation 20261101000000',
                           printed.getvalue())
             document = tomllib.loads((Path(out) / 'us.ofac.embargo.sanctions.toml').read_text(encoding='utf-8'))
         self.assertEqual(('US', register['entries'][[e['id'] for e in register['entries']].index('us.sanctions')]
                           ['instrument']['primary']), (document['jurisdiction'], document['source']))
-        measures = {item['region']: item['measure'] for item in document['destination']}
-        self.assertEqual({'CU': 'comprehensive', 'IR': 'comprehensive', 'KP': 'comprehensive',
-                          'UA-43': 'comprehensive', 'UA-40': 'comprehensive', 'RU': 'sectoral', 'VE': 'sectoral'},
-                         measures)
+        self.assertEqual([('CU', '31 CFR 515', 'comprehensive'), ('IR', '31 CFR 560', 'comprehensive'),
+                          ('KP', '31 CFR 510', 'comprehensive'), ('UA-43', '31 CFR 589', 'comprehensive'),
+                          ('UA-40', '31 CFR 589', 'comprehensive'), ('UA-14', 'E.O. 14065', 'partial'),
+                          ('UA-09', 'E.O. 14065', 'partial'), ('RU', '31 CFR 589', 'sectoral'),
+                          ('RU', 'E.O. 14071', 'sectoral'), ('VE', '31 CFR 591', 'sectoral')],
+                         [(item['region'], item['program'], item['measure']) for item in document['destination']])
 
     # The importer, on the committed excerpts of the official files.
 
@@ -7885,6 +7931,122 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
                              entries['tr.7194.rate-decision']['instrument']['consolidated'])
             checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
             self.assertEqual([], checked['legal'])
+
+    # The Federal Register's record and raw text of an Executive order (the 2026-11-01 reads, cut to the fields read).
+    FR_RECORD = {'document_number': '2022-05554', 'publication_date': '2022-03-15', 'citation': '87 FR 14381',
+                 'raw_text_url': 'https://www.federalregister.gov/documents/full_text/text/2022/03/15/2022-05554.txt',
+                 'executive_order_notes': 'See: EO 14024, April 15, 2021; Notice of March 24, 2026 (91 FR 15515)\r\n'
+                                          'Amended by: EO 14114, December 12, 2023',
+                 'corrections': [], 'type': 'Presidential Document'}
+    FR_TEXT = ('<html><head><title>Federal Register, Volume 87 Issue 50</title></head><body><pre>\n'
+               '[Federal Register Volume 87, Number 50 (Tuesday, March 15, 2022)]\n[Presidential Documents]\n'
+               '[Pages 14381-14384]\n[FR Doc No: 2022-05554]\n\n Executive Order 14068 of March 11, 2022\n</pre>')
+
+    def test_federal_register_documents_are_known_by_their_record(self):
+        index, document = register_review.resolve_primary('https://www.federalregister.gov/d/2022-05554')
+        self.assertEqual({'id': 'federalregister-2022-05554-record', 'kind': 'index',
+                          'reader': 'federal-register-record', 'act': '2022-05554',
+                          'url': 'https://www.federalregister.gov/api/v1/documents/2022-05554.json'}, index)
+        self.assertEqual({'id': 'federalregister-2022-05554', 'kind': 'primary', 'reader': 'federal-register',
+                          'act': '2022-05554', 'index': 'federalregister-2022-05554-record',
+                          'url': 'https://www.federalregister.gov/documents/full_text/text/{version}.txt'}, document)
+        self.assertEqual('federalregister-e7-2034', register_review.resolve_primary(
+            'https://www.federalregister.gov/d/E7-2034')[1]['id'])
+        for url in ('https://www.federalregister.gov/d/2022-05554/x', 'http://www.federalregister.gov/d/2022-05554',
+                    'https://www.federalregister.gov/documents/2022/03/15/2022-05554/prohibiting',
+                    'https://www.federalregister.gov/d/2022-5'):
+            self.assertEqual([{'id': register_review.source_id(url), 'kind': 'primary', 'url': url}],
+                             register_review.resolve_primary(url), url)
+        record = register_review.read_federal_register_record
+        source = {'act': '2022-05554'}
+        self.assertEqual(('2022/03/15/2022-05554',
+                          '2022-03-15 (87 FR 14381) as published; Amended by: EO 14114, December 12, 2023'),
+                         record(json.dumps(self.FR_RECORD).encode(), source, None))
+        determination = dict(self.FR_RECORD, executive_order_notes=None, corrections=[
+            'https://www.federalregister.gov/api/v1/documents/C1-2022-05554'])
+        self.assertEqual('2022-03-15 (87 FR 14381) as published; Corrected by: C1-2022-05554',
+                         record(json.dumps(determination).encode(), source, None)[1])
+        revoked = dict(self.FR_RECORD, executive_order_notes='See: EO 13660\nRevoked by:  EO 15000,\tMay 1, 2027 ')
+        self.assertEqual('2022-03-15 (87 FR 14381) as published; Revoked by: EO 15000, May 1, 2027',
+                         record(json.dumps(revoked).encode(), source, None)[1])
+        unreadable = register_review.Unreadable
+        for changes, message in (({'document_number': '2022-05555'}, "the record of document '2022-05555', not of"),
+                                 ({'publication_date': '2022-02-30'}, "the publication day '2022-02-30' is not"),
+                                 ({'publication_date': '2022-03-16'}, 'is not the document published on 2022-03-16'),
+                                 ({'raw_text_url': 'https://evil.example/2022-05554.txt'}, 'is not the document'),
+                                 ({'citation': '87 FR'}, "the citation '87 FR' is not"),
+                                 ({'executive_order_notes': ['Amended by: x']}, 'notes or corrections have another'),
+                                 ({'corrections': ['https://evil.example/C1']}, 'notes or corrections have another'),
+                                 ({'corrections': None}, 'notes or corrections have another')):
+            with self.assertRaises(unreadable) as refused:
+                record(json.dumps(dict(self.FR_RECORD, **changes)).encode(), source, None)
+            self.assertIn(message, str(refused.exception))
+        for body in (b'[]', b'{"document_number": "2022-05554"}', b'not json'):
+            with self.assertRaises(unreadable) as refused:
+                record(body, source, None)
+            self.assertIn('not a Federal Register document record', str(refused.exception))
+        read = register_review.read_federal_register
+        version = '2022-03-15 (87 FR 14381) as published'
+        self.assertEqual(version, read(self.FR_TEXT.encode(), source, version))
+        for body, version_read, message in (
+                (self.FR_TEXT.replace('2022-05554', '2022-05555').encode(), version,
+                 'not the raw text of Federal Register document 2022-05554'),
+                (b'\xff' + self.FR_TEXT.encode(), version, 'not UTF-8'),
+                (self.FR_TEXT.encode(), None, 'the record of 2022-05554 is unknown')):
+            with self.assertRaises(unreadable) as refused:
+                read(body, source, version_read)
+            self.assertIn(message, str(refused.exception))
+
+    def test_read_records_a_federal_register_document_by_its_record(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            legal = self.legal_register([
+                self.legal_entry(),
+                self.legal_entry(id='us.eo-14068', instrument=self.instrument(
+                    name='Executive Order 14068', type='executive-order', jurisdiction='US',
+                    primary='https://www.federalregister.gov/d/2022-05554'))])
+            legal['jurisdictions']['US'] = {'name': 'United States', 'hosts': ['federalregister.gov']}
+            self.write_tree(root, self.register(self.entries()), legal)
+            (root / 'docs' / 'reading.md').write_text('<a id="r"></a>Read.\n', encoding='utf-8')
+            argv = ('--register', 'cmake/legal-register.json')
+            self.assertEqual(0, self.tool(root, *argv, 'plan', '--out', str(root / 'sources.json'))[0])
+            plan = json.loads((root / 'sources.json').read_text(encoding='utf-8'))
+            requests = []
+            routes = {'MevzuatNo=6698': self.MEVZUAT_HTML, 'api/v1/documents/2022-05554.json': json.dumps(self.FR_RECORD),
+                      'full_text/text/2022/03/15/2022-05554.txt': self.FR_TEXT}
+            manifest = register_review.fetch_sources(plan, root / 'fetched', opener=self.routed(routes, requests),
+                                                     today=datetime.date(2026, 12, 16))
+            items = {item['id']: item for item in manifest['items']}
+            version = '2022-03-15 (87 FR 14381) as published; Amended by: EO 14114, December 12, 2023'
+            self.assertEqual(('https://www.federalregister.gov/documents/full_text/text/2022/03/15/2022-05554.txt',
+                              version), (items['federalregister-2022-05554']['url'],
+                                         items['federalregister-2022-05554']['version']))
+            self.assertEqual('federalregister-2022-05554.txt', items['federalregister-2022-05554']['file'])
+            fetched = ('--fetched', str(root / 'fetched'))
+            code, output = self.tool(root, *argv, 'compare', *fetched, '--report', str(root / 'docs' / 'review.md'),
+                                     '--apply')
+            self.assertEqual(0, code, output)
+            code, output = self.tool(root, *argv, 'read', *fetched, '--ref', 'docs/reading.md#r', '--entry',
+                                     'us.eo-14068')
+            self.assertEqual(0, code, output)
+            path = root / 'cmake' / 'legal-register.json'
+            entries = {entry['id']: entry for entry in json.loads(path.read_text(encoding='utf-8'))['entries']}
+            self.assertEqual({'version': version, 'read': '2026-12-16',
+                              'sha256': hashlib.sha256(self.FR_TEXT.encode()).hexdigest()},
+                             entries['us.eo-14068']['instrument']['consolidated'])
+            checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
+            self.assertEqual([], checked['legal'])
+            # A later order amending it is a new version: the next scan reads the amendment.
+            routes['api/v1/documents/2022-05554.json'] = json.dumps(dict(
+                self.FR_RECORD, executive_order_notes=self.FR_RECORD['executive_order_notes'] +
+                '\nAmended by: EO 15001, June 1, 2027'))
+            register_review.fetch_sources(plan, root / 'again', opener=self.routed(routes),
+                                          today=datetime.date(2026, 12, 17))
+            code, output = self.tool(root, *argv, 'compare', '--fetched', str(root / 'again'), '--report',
+                                     str(root / 'docs' / 'again.md'), today='2026-12-17')
+            self.assertEqual(0, code, output)
+            self.assertIn(f'Executive Order 14068, Articles 4-7: amended to {version}; Amended by: EO 15001, June 1, '
+                          '2027 since it was read on 2026-12-16', (root / 'docs' / 'again.md').read_text(encoding='utf-8'))
 
     def test_readers_find_each_hosts_version_and_refuse_other_shapes(self):
         unreadable = register_review.Unreadable
