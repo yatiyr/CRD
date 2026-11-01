@@ -3236,6 +3236,22 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   a breakpoint) and never judged. `bundle.inspect` finds the image in the root's store, `<root>/images` laid out as
   `image_file_path` names it (the symsrv key of a PE binary, `.build-id/<nn>/<rest>` for ELF), and reports the
   comparison or why it was not made.
+- Code that cannot fault: the capture's registers (a dump's exception context, AMD64 or ARM64 by its system
+  information; a record's named registers, with x86-64's `trapno` and page fault `err`) and the access kind (an access
+  violation's first parameter; `err`'s W and I/D bits) are read with the fault. `decode_instruction_access`
+  (`crd/perf/instruction_access.hpp`) decodes the x86-64 instruction at the pc into every range it can touch: ModRM,
+  SIB and RIP-relative operands with exact lengths, stack, string (REP by rcx and the direction flag), XLAT, absolute,
+  bit-offset, cache-line and masked-move forms, x87, SSE, VEX and EVEX (a scaled 8-bit displacement gives one range
+  per factor), each an upper bound. FS and GS bases, VSIB, APX registers, near calls and returns (the CET shadow
+  stack is not in the capture), XSAVE areas, system and I/O instructions, vendor-dependent lengths and unlisted
+  opcodes are refused with their reason. A page fault on an address (a dump's access violation other than the
+  all-ones address of a protection fault; a record's SEGV or BUS on trap 14) outside the instruction's own bytes and
+  every range, or of a kind it does not make, is `access-not-made`; a divide error on an instruction other than DIV
+  or IDIV, or on one whose register divisor is nonzero and whose quotient fits (`x86_divide_faults`, by comparison,
+  never by dividing), is `divide-without-cause`. Both are judged only on code whose image comparison matches, so
+  code changed after the fault is never read. AArch64 instructions are not decoded yet (HW-RESILIENCE.2).
+  `bundle.inspect` reports the instruction set, registers and access kind with the crash, and the check, its reason,
+  length and access count with the classification.
 
 ## Existing programme ownership after DIAG
 
