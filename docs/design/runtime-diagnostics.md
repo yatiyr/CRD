@@ -3287,6 +3287,28 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   evaluated at compile time; `hesap.autodiff`, `hesap.stats`, `hesap.special`, `hesap.direct`, `hesap.sparse`,
   `hesap.dense`, `hesap.fft`, `hesap.tensor` and `eylem.rigid3d` (each row's session in
   [HW-RESILIENCE.3](../ROADMAP.md#slice-hw-resilience.3)). Every dispatched family resolves through its check.
+- GPU device checks (`crd/gpu/device_check.hpp`): before a backend hands out a device on an adapter it runs the
+  known-answer kernel `crd/kir/ckir_device_check.hpp` (one CKIR compute kernel, two workgroups of 64: f32 multiply,
+  add and subtract, a workgroup-memory exchange across a barrier, a barrier-separated tree sum and a u32
+  multiply-shift-xor chain, all on exact values so any reduction order or contraction gives the same bits) through
+  its own emitter and compiler, on a probe device of that adapter that is gone before the caller's device is
+  returned. An adapter whose outputs differ is passed over for the next in order of preference; when none passes the
+  factory returns no device, the "no GPU" path every consumer already takes to the CPU. Each adapter is checked once
+  per process (`check_device_once`; the ordinal tells identical GPUs apart). `device_checks()` keeps every check
+  (adapter, ordinal, time, first failing part: `device`, `build`, `buffers`, `injected`, `arithmetic`,
+  `shared-exchange`, `workgroup-sum`, `integer-chain`) and each backend's selection (`passed`, `demoted`,
+  `no-device-passed`, the adapter it prefers and the one it runs); `report_device_demotions` prints `[crd] GPU device
+  path <backend> on <adapter> failed its known answers in <part>; it runs <adapter | no device> (<status>, <n>
+  adapters failed)` at a host's start (the sandbox calls it), and `gpu.resources` lists `device-check` and
+  `device-selection` items with `device_checks` and `device_demotions` in its summary. The device-check fault seam
+  (`install_device_check_fault_hook`) fails a named adapter. Vulkan orders its adapters discrete, integrated, virtual,
+  other, CPU and checks in `create_vulkan_gpu_context`, the one place a Vulkan device is created. DX12 creates
+  devices in three places (`Dx12GpuContext`, `Dx12ComputeContext` and the raster context): all three go through one
+  checked chooser ending at WARP; CUDA checks each device it opens; both are the row's next items.
+- State-hash divergence: HW-RESILIENCE.3 owns the local primitive only, a per-step state-hash ledger over the
+  checksum family's XXH3-64, the first divergent step and the culprit named by HW-RESILIENCE.2's hardware identity
+  against a reference (the recorded run, or the majority of three or more); the lockstep and rollback exchange of
+  those hashes on the wire belongs to [NET.3](../ROADMAP.md#slice-net.3) and [4.2c](../ROADMAP.md#slice-4.2c).
 - The hardware check (`crd/perf/hardware_check.hpp`), which `ceridc doctor --hardware` and the `hardware.check`
   command run: one thread pinned to each logical CPU (`crd::pin_current_thread`, the walk the CPU selection uses) runs
   each arm for the same time on every CPU at once. The arms are Cerid-free, each result checked against an answer
