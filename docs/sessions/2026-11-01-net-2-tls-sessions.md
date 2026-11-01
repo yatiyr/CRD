@@ -71,9 +71,31 @@ Apache-2.0. Gated by `CRD_BUILD_TLS_VS_OPENSSL` (Linux), built by its own Perl C
   check dropped, the HelloRetryRequest unnoticed, TLS 1.2 allowed (by the interop), each bound dropped, the client's
   group order winning, two hybrid codepoints swapped, a refusal reported as a plain failure and a server ignoring the
   client credential.
-- The scoped CTests (18: the crypto suites and corpora, `crd-crypto-tls-interop-openssl`, the register, capability,
-  source-route and include-budget guards, the inventory drift) pass; the build prints no warning; LLVM 20.1.0 strict
-  analysis of the changed C++ is clean after renaming four constants, a raw string and two nested conditionals.
+- `crd-crypto-tests` run whole: 56 cases, 93,418 assertions. One assertion changed because the build's ceiling now
+  holds the hybrid groups: the policy test's rule "above the ceiling" (`test_provider.cpp`) names an unregistered
+  hybrid identifier, and X25519MLKEM768 under the signed generation is now Preferred.
+- The 18 scoped CTests (the fuzz corpora, `crd-crypto-tls-interop-openssl`, the register-identifier and inventory
+  drift, the register, capability, source-route and include-budget guards and the `crd-no-*` guards; the Catch2 cases
+  are not among them, hence the whole run above) pass; the build prints no warning; LLVM 20.1.0 strict analysis of
+  the changed C++ is clean after renaming four constants, a raw string and two nested conditionals.
+- The linux-gcc-release preset (Release, link-time optimisation): `crd-crypto-tests` 56 cases, 93,418 assertions,
+  and the three crypto corpora replay clean; the build prints no warning.
+- The relocatable package with crd-crypto: a Release tree of `CRD_MODULES=crypto` installs, the prefix is moved, and a
+  downstream project that only calls `find_package(Cerid CONFIG REQUIRED)` and links `Cerid::crypto` builds and runs
+  (a credential issued, three AEADs, the hybrid groups implemented); `Cerid::aws-lc-ssl` and `Cerid::aws-lc-crypto` are
+  exported link-only and no installed CMake file names the source, build or pre-move prefix.
+
+## Defects found and fixed on the way
+
+- **A release build of `provider.cpp` did not compile.** GCC at -O3 reports `-Wnull-dereference` (an error under the
+  tree's warnings) at four `*find_entry(...)` lookups in the signature, agreement and KEM key methods, written by the
+  provider batches and never compiled by a hosted run. Each method now looks its entry up once, checked, and answers
+  `NotReady` without one; `tls.cpp`'s cipher suite lookup is checked the same way.
+- **The package's Threads dependency was never found.** `CeridConfig.cmake` tested `"aws-lc-crypto" IN_LIST
+  Cerid_DEPENDENCIES`, but the list is written space-separated, so the test held only while AWS-LC's libcrypto was the
+  sole dependency; with libssl beside it a consumer failed on `Threads::Threads`. The config now splits the list first.
+- **An `int` alert in a `u8` conditional** (`SSL_AD_BAD_CERTIFICATE`), which MSVC's level-4 conversion warning would
+  stop under `/WX`, is a named `u8` constant.
 
 ## Remaining on NET.2
 
