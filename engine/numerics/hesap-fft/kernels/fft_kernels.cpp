@@ -1630,29 +1630,45 @@ template <typename T> struct Engine
 
     // The 16 x 16 group of AoSoA rows at g, rows `rs` complex apart (column c of row r at element r·rs + c, in blocks
     // of 8 real parts then 8 imaginary parts), transposed into `rows`: 16 AoSoA rows of 16 columns (row c holds column
-    // c of every row of g). Four 8 x 8 tiles of each part; pure data movement, so every level gives the same bits.
+    // c of every row of g). Four 8 x 8 tiles of each part: at avx512 a tile's 8 real and 8 imaginary rows are one
+    // register a row, both parts transposed at once and stored as one block pair (a 512-bit shuffle costs port 5 what
+    // a 256-bit one does there, as port 1 takes no vector operation beside 512-bit ones, and pass 3's half loads
+    // forward from a whole store). Pure data movement, so every level gives the same bits.
     static void transpose_group16(const T* g, crd::usize rs, T* rows) noexcept
     {
-        using V = simd::Vec8f;
         const crd::usize r2 = 2 * rs;
-        for (crd::usize part = 0; part < 16U; part += 8U) // the real blocks, then the imaginary ones
+        for (crd::usize p = 0; p < 2U; ++p) // the tile of rows 8p.. and columns 8q..
         {
-            for (crd::usize p = 0; p < 2U; ++p) // the tile of rows 8p.. and columns 8q..
+            for (crd::usize q = 0; q < 2U; ++q)
             {
-                for (crd::usize q = 0; q < 2U; ++q)
+                const T* const tile = g + 8U * p * r2 + 16U * q;
+                T* const to = rows + 8U * q * 32U + 16U * p;
+#if CRD_SIMD_HAS_AVX512
+                simd::Vec16f x[8];
+                for (crd::usize r = 0; r < 8U; ++r)
                 {
-                    const T* const tile = g + part + 8U * p * r2 + 16U * q;
-                    V x[8];
+                    x[r] = simd::Vec16f::load(tile + r * r2);
+                }
+                simd::transpose8x8_halves(x);
+                for (crd::usize c = 0; c < 8U; ++c)
+                {
+                    x[c].store(to + c * 32U);
+                }
+#else
+                for (crd::usize part = 0; part < 16U; part += 8U) // the real blocks, then the imaginary ones
+                {
+                    simd::Vec8f x[8];
                     for (crd::usize r = 0; r < 8U; ++r)
                     {
-                        x[r] = V::load(tile + r * r2);
+                        x[r] = simd::Vec8f::load(tile + part + r * r2);
                     }
                     simd::transpose8x8(x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7]);
                     for (crd::usize c = 0; c < 8U; ++c)
                     {
-                        x[c].store(rows + (8U * q + c) * 32U + 16U * p + part);
+                        x[c].store(to + c * 32U + part);
                     }
                 }
+#endif
             }
         }
     }
