@@ -8,8 +8,9 @@
 // without the IDZ sign partition — BOBYQA keeps DENOM positive).
 //
 // ⚠ FAITHFUL PORT of the NLopt C reference (`nlopt/src/algs/bobyqa/bobyqa.c`, MIT) — f2c idiom (1-based
-// pointer adjustments, original goto flow, exact literal artifacts) per the L-BFGS-B/COBYLA/NEWUOA playbook;
-// the differential harness vs the compiled oracle adjudicates (runtime/examples/bobyqa_difftest.cpp).
+// subscripts through detail::F2cView, original goto flow, exact literal artifacts) per the L-BFGS-B/COBYLA/NEWUOA
+// playbook; the differential harness vs the compiled oracle adjudicates
+// (tests/numerics/hesap-opt/nlopt/bobyqa_difftest.cpp).
 // Bounds are NATIVE here (no nested-solver variant to exclude — this IS Powell's bounded method, the reason
 // the NEWUOA port could pin the classic unconstrained scope). Stop semantics shared with the COBYLA port
 // (detail::cobyla_impl — relstop/Stop verbatim from nlopt stop.c); force/time stops not carried; the NLopt
@@ -23,11 +24,12 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/opt/cobyla.hpp> // detail::cobyla_impl::{Rc, Stop, relstop, stop_ftol, stop_evals}
+#include <crd/hesap/opt/f2c_view.hpp>
 #include <crd/hesap/opt/objective.hpp>
 #include <crd/hesap/opt/opt_types.hpp>
+#include <crd/math/cmath.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -55,8 +57,8 @@ using cobyla_impl::stop_ftol;
 // BMAT/ZMAT rank-2 update for moving point KNEW (Powell 2006 eq. 4.11 form; ZMAT entries below ZTEST are
 // treated as zero). No IDZ here — BOBYQA's DENOM stays positive.
 template <typename T>
-inline void update(const int* n, const int* npt, T* bmat, T* zmat, const int* ndim, T* vlag, const T* beta,
-                   const T* denom, const int* knew, T* w)
+inline void update(const int* n, const int* npt, T* bmat_base, T* zmat_base, const int* ndim, T* vlag_base,
+                   const T* beta, const T* denom, const int* knew, T* w_base)
 {
     /* System generated locals */
     int bmat_dim1, bmat_offset, zmat_dim1, zmat_offset, i__1, i__2;
@@ -71,12 +73,12 @@ inline void update(const int* n, const int* npt, T* bmat, T* zmat, const int* nd
     /* Parameter adjustments */
     zmat_dim1 = *npt;
     zmat_offset = 1 + zmat_dim1;
-    zmat -= zmat_offset;
+    const detail::F2cView zmat{zmat_base, zmat_offset};
     bmat_dim1 = *ndim;
     bmat_offset = 1 + bmat_dim1;
-    bmat -= bmat_offset;
-    --vlag;
-    --w;
+    const detail::F2cView bmat{bmat_base, bmat_offset};
+    const detail::F2cView vlag{vlag_base, 1};
+    const detail::F2cView w{w_base, 1};
 
     /* Function Body */
     one = static_cast<T>(1.);
@@ -165,9 +167,10 @@ inline void update(const int* n, const int* npt, T* bmat, T* zmat, const int* nd
 // shifted bounds SL/SU (steps flip or shrink at active bounds — the bound-aware analog of NEWUOA's init).
 // `Calfun` is `T calfun(int n, const T* x)` over the 0-based x.
 template <typename T, typename Calfun>
-[[nodiscard]] inline Rc prelim(const int* n, const int* npt, T* x, const T* xl, const T* xu, const T* rhobeg,
-                               Stop<T>* stop, Calfun&& calfun, T* xbase, T* xpt, T* fval, T* gopt, T* hq, T* pq,
-                               T* bmat, T* zmat, const int* ndim, T* sl, T* su, int* kopt)
+[[nodiscard]] inline Rc prelim(const int* n, const int* npt, T* x_base, const T* xl_base, const T* xu_base,
+                               const T* rhobeg, Stop<T>* stop, Calfun&& calfun, T* xbase_base, T* xpt_base,
+                               T* fval_base, T* gopt_base, T* hq_base, T* pq_base, T* bmat_base, T* zmat_base,
+                               const int* ndim, T* sl_base, T* su_base, int* kopt)
 {
     /* System generated locals */
     int xpt_dim1, xpt_offset, bmat_dim1, bmat_offset, zmat_dim1, zmat_offset, i__1, i__2;
@@ -187,23 +190,23 @@ template <typename T, typename Calfun>
     /* Parameter adjustments */
     zmat_dim1 = *npt;
     zmat_offset = 1 + zmat_dim1;
-    zmat -= zmat_offset;
+    const detail::F2cView zmat{zmat_base, zmat_offset};
     xpt_dim1 = *npt;
     xpt_offset = 1 + xpt_dim1;
-    xpt -= xpt_offset;
-    --x;
-    --xl;
-    --xu;
-    --xbase;
-    --fval;
-    --gopt;
-    --hq;
-    --pq;
+    const detail::F2cView xpt{xpt_base, xpt_offset};
+    const detail::F2cView x{x_base, 1};
+    const detail::F2cView xl{xl_base, 1};
+    const detail::F2cView xu{xu_base, 1};
+    const detail::F2cView xbase{xbase_base, 1};
+    const detail::F2cView fval{fval_base, 1};
+    const detail::F2cView gopt{gopt_base, 1};
+    const detail::F2cView hq{hq_base, 1};
+    const detail::F2cView pq{pq_base, 1};
     bmat_dim1 = *ndim;
     bmat_offset = 1 + bmat_dim1;
-    bmat -= bmat_offset;
-    --sl;
-    --su;
+    const detail::F2cView bmat{bmat_base, bmat_offset};
+    const detail::F2cView sl{sl_base, 1};
+    const detail::F2cView su{su_base, 1};
 
     /* Function Body */
     half = static_cast<T>(.5);
@@ -402,9 +405,9 @@ L50:
 // step of the KNEW-th Lagrange function tried with both gradient signs (the larger CAUCHY wins). ALPHA ←
 // H's KNEW-th diagonal.
 template <typename T>
-inline void altmov(const int* n, const int* npt, T* xpt, T* xopt, T* bmat, T* zmat, const int* ndim, T* sl, T* su,
-                   const int* kopt, const int* knew, const T* adelt, T* xnew, T* xalt, T* alpha, T* cauchy, T* glag,
-                   T* hcol, T* w)
+inline void altmov(const int* n, const int* npt, T* xpt_base, T* xopt_base, T* bmat_base, T* zmat_base, const int* ndim,
+                   T* sl_base, T* su_base, const int* kopt, const int* knew, const T* adelt, T* xnew_base, T* xalt_base,
+                   T* alpha, T* cauchy, T* glag_base, T* hcol_base, T* w_base)
 {
     /* System generated locals */
     int xpt_dim1, xpt_offset, bmat_dim1, bmat_offset, zmat_dim1, zmat_offset, i__1, i__2;
@@ -427,21 +430,21 @@ inline void altmov(const int* n, const int* npt, T* xpt, T* xopt, T* bmat, T* zm
     /* Parameter adjustments */
     zmat_dim1 = *npt;
     zmat_offset = 1 + zmat_dim1;
-    zmat -= zmat_offset;
+    const detail::F2cView zmat{zmat_base, zmat_offset};
     xpt_dim1 = *npt;
     xpt_offset = 1 + xpt_dim1;
-    xpt -= xpt_offset;
-    --xopt;
+    const detail::F2cView xpt{xpt_base, xpt_offset};
+    const detail::F2cView xopt{xopt_base, 1};
     bmat_dim1 = *ndim;
     bmat_offset = 1 + bmat_dim1;
-    bmat -= bmat_offset;
-    --sl;
-    --su;
-    --xnew;
-    --xalt;
-    --glag;
-    --hcol;
-    --w;
+    const detail::F2cView bmat{bmat_base, bmat_offset};
+    const detail::F2cView sl{sl_base, 1};
+    const detail::F2cView su{su_base, 1};
+    const detail::F2cView xnew{xnew_base, 1};
+    const detail::F2cView xalt{xalt_base, 1};
+    const detail::F2cView glag{glag_base, 1};
+    const detail::F2cView hcol{hcol_base, 1};
+    const detail::F2cView w{w_base, 1};
 
     /* Function Body */
     half = static_cast<T>(.5);
@@ -802,8 +805,9 @@ L200:
 // −1 if every CG search was constrained, else the least free curvature. The L210 block is the inline
 // HS = H·S "subroutine" dispatched by CRVMIN/ITERC.
 template <typename T>
-inline void trsbox(const int* n, const int* npt, T* xpt, T* xopt, T* gopt, T* hq, T* pq, T* sl, T* su, const T* delta,
-                   T* xnew, T* d__, T* gnew, T* xbdi, T* s, T* hs, T* hred, T* dsq, T* crvmin)
+inline void trsbox(const int* n, const int* npt, T* xpt_base, T* xopt_base, T* gopt_base, T* hq_base, T* pq_base,
+                   T* sl_base, T* su_base, const T* delta, T* xnew_base, T* d___base, T* gnew_base, T* xbdi_base,
+                   T* s_base, T* hs_base, T* hred_base, T* dsq, T* crvmin)
 {
     /* System generated locals */
     int xpt_dim1, xpt_offset, i__1, i__2;
@@ -829,20 +833,20 @@ inline void trsbox(const int* n, const int* npt, T* xpt, T* xopt, T* gopt, T* hq
     /* Parameter adjustments */
     xpt_dim1 = *npt;
     xpt_offset = 1 + xpt_dim1;
-    xpt -= xpt_offset;
-    --xopt;
-    --gopt;
-    --hq;
-    --pq;
-    --sl;
-    --su;
-    --xnew;
-    --d__;
-    --gnew;
-    --xbdi;
-    --s;
-    --hs;
-    --hred;
+    const detail::F2cView xpt{xpt_base, xpt_offset};
+    const detail::F2cView xopt{xopt_base, 1};
+    const detail::F2cView gopt{gopt_base, 1};
+    const detail::F2cView hq{hq_base, 1};
+    const detail::F2cView pq{pq_base, 1};
+    const detail::F2cView sl{sl_base, 1};
+    const detail::F2cView su{su_base, 1};
+    const detail::F2cView xnew{xnew_base, 1};
+    const detail::F2cView d__{d___base, 1};
+    const detail::F2cView gnew{gnew_base, 1};
+    const detail::F2cView xbdi{xbdi_base, 1};
+    const detail::F2cView s{s_base, 1};
+    const detail::F2cView hs{hs_base, 1};
+    const detail::F2cView hred{hred_base, 1};
 
     /* Function Body */
     half = static_cast<T>(.5);
@@ -1325,10 +1329,11 @@ L210:
 // original points one by one through `update` (KOLD chosen to keep the denominator large), evaluating F at
 // whatever provisional points remain. `Calfun` is `T calfun(int n, const T* x)`.
 template <typename T, typename Calfun>
-[[nodiscard]] inline Rc rescue(const int* n, const int* npt, const T* xl, const T* xu, Stop<T>* stop, Calfun&& calfun,
-                               T* xbase, T* xpt, T* fval, T* xopt, T* gopt, T* hq, T* pq, T* bmat, T* zmat,
-                               const int* ndim, T* sl, T* su, const T* delta, int* kopt, T* vlag, T* ptsaux, T* ptsid,
-                               T* w)
+[[nodiscard]] inline Rc rescue(const int* n, const int* npt, const T* xl_base, const T* xu_base, Stop<T>* stop,
+                               Calfun&& calfun, T* xbase_base, T* xpt_base, T* fval_base, T* xopt_base, T* gopt_base,
+                               T* hq_base, T* pq_base, T* bmat_base, T* zmat_base, const int* ndim, T* sl_base,
+                               T* su_base, const T* delta, int* kopt, T* vlag_base, T* ptsaux_base, T* ptsid_base,
+                               T* w_base)
 {
     /* System generated locals */
     int xpt_dim1, xpt_offset, bmat_dim1, bmat_offset, zmat_dim1, zmat_offset, i__1, i__2, i__3;
@@ -1341,39 +1346,42 @@ template <typename T, typename Calfun>
     int ihp = 0;
     T one;
     int ihq, jpn, kpt;
-    T sum, diff, half, beta;
+    // beta and denom are set before every read: the first pass through L80 has knew == *kopt and skips the update
+    // that reads them, and every later pass comes from the goto that follows their computation. GCC cannot follow
+    // the goto, so they start at zero (the reference leaves them unset).
+    T sum, diff, half, beta = static_cast<T>(0);
     int kold;
     T winc;
     int nrem, knew;
     T temp, bsum;
     int nptm;
-    T zero, hdiag, fbase, sfrac, denom, vquad, sumpq;
+    T zero, hdiag, fbase, sfrac, denom = static_cast<T>(0), vquad, sumpq;
     T dsqmin, distsq, vlmxsq;
 
     /* Parameter adjustments */
     zmat_dim1 = *npt;
     zmat_offset = 1 + zmat_dim1;
-    zmat -= zmat_offset;
+    const detail::F2cView zmat{zmat_base, zmat_offset};
     xpt_dim1 = *npt;
     xpt_offset = 1 + xpt_dim1;
-    xpt -= xpt_offset;
-    --xl;
-    --xu;
-    --xbase;
-    --fval;
-    --xopt;
-    --gopt;
-    --hq;
-    --pq;
+    const detail::F2cView xpt{xpt_base, xpt_offset};
+    const detail::F2cView xl{xl_base, 1};
+    const detail::F2cView xu{xu_base, 1};
+    const detail::F2cView xbase{xbase_base, 1};
+    const detail::F2cView fval{fval_base, 1};
+    const detail::F2cView xopt{xopt_base, 1};
+    const detail::F2cView gopt{gopt_base, 1};
+    const detail::F2cView hq{hq_base, 1};
+    const detail::F2cView pq{pq_base, 1};
     bmat_dim1 = *ndim;
     bmat_offset = 1 + bmat_dim1;
-    bmat -= bmat_offset;
-    --sl;
-    --su;
-    --vlag;
-    ptsaux -= 3;
-    --ptsid;
-    --w;
+    const detail::F2cView bmat{bmat_base, bmat_offset};
+    const detail::F2cView sl{sl_base, 1};
+    const detail::F2cView su{su_base, 1};
+    const detail::F2cView vlag{vlag_base, 1};
+    const detail::F2cView ptsaux{ptsaux_base, 3};
+    const detail::F2cView ptsid{ptsid_base, 1};
+    const detail::F2cView w{w_base, 1};
 
     /* Function Body */
     half = static_cast<T>(.5);
@@ -1879,10 +1887,11 @@ L350:
 // cancellation, the least-Frobenius-norm ITEST swap, and Powell's ρ schedule. rhoend is computed by the
 // CALLER (the public driver passes it like the reference's bobyqa() computes it from xtol_rel·rhobeg).
 template <typename T, typename Calfun>
-[[nodiscard]] inline Rc bobyqb(const int* n, const int* npt, T* x, const T* xl, const T* xu, const T* rhobeg,
-                               const T* rhoend, Stop<T>* stop, Calfun&& calfun, T* minf, T* xbase, T* xpt, T* fval,
-                               T* xopt, T* gopt, T* hq, T* pq, T* bmat, T* zmat, const int* ndim, T* sl, T* su, T* xnew,
-                               T* xalt, T* d__, T* vlag, T* w)
+[[nodiscard]] inline Rc bobyqb(const int* n, const int* npt, T* x_base, const T* xl_base, const T* xu_base,
+                               const T* rhobeg, const T* rhoend, Stop<T>* stop, Calfun&& calfun, T* minf, T* xbase_base,
+                               T* xpt_base, T* fval_base, T* xopt_base, T* gopt_base, T* hq_base, T* pq_base,
+                               T* bmat_base, T* zmat_base, const int* ndim, T* sl_base, T* su_base, T* xnew_base,
+                               T* xalt_base, T* d___base, T* vlag_base, T* w_base)
 {
     /* System generated locals */
     int xpt_dim1, xpt_offset, bmat_dim1, bmat_offset, zmat_dim1, zmat_offset, i__1, i__2, i__3;
@@ -1917,29 +1926,29 @@ template <typename T, typename Calfun>
     /* Parameter adjustments */
     zmat_dim1 = *npt;
     zmat_offset = 1 + zmat_dim1;
-    zmat -= zmat_offset;
+    const detail::F2cView zmat{zmat_base, zmat_offset};
     xpt_dim1 = *npt;
     xpt_offset = 1 + xpt_dim1;
-    xpt -= xpt_offset;
-    --x;
-    --xl;
-    --xu;
-    --xbase;
-    --fval;
-    --xopt;
-    --gopt;
-    --hq;
-    --pq;
+    const detail::F2cView xpt{xpt_base, xpt_offset};
+    const detail::F2cView x{x_base, 1};
+    const detail::F2cView xl{xl_base, 1};
+    const detail::F2cView xu{xu_base, 1};
+    const detail::F2cView xbase{xbase_base, 1};
+    const detail::F2cView fval{fval_base, 1};
+    const detail::F2cView xopt{xopt_base, 1};
+    const detail::F2cView gopt{gopt_base, 1};
+    const detail::F2cView hq{hq_base, 1};
+    const detail::F2cView pq{pq_base, 1};
     bmat_dim1 = *ndim;
     bmat_offset = 1 + bmat_dim1;
-    bmat -= bmat_offset;
-    --sl;
-    --su;
-    --xnew;
-    --xalt;
-    --d__;
-    --vlag;
-    --w;
+    const detail::F2cView bmat{bmat_base, bmat_offset};
+    const detail::F2cView sl{sl_base, 1};
+    const detail::F2cView su{su_base, 1};
+    const detail::F2cView xnew{xnew_base, 1};
+    const detail::F2cView xalt{xalt_base, 1};
+    const detail::F2cView d__{d___base, 1};
+    const detail::F2cView vlag{vlag_base, 1};
+    const detail::F2cView w{w_base, 1};
 
     /* Function Body */
     half = static_cast<T>(.5);
@@ -2928,7 +2937,7 @@ template <typename T>
     // The reference w-partition from bobyqa().
     crd::containers::Array<T> w(alloc);
     w.resize(static_cast<crd::usize>((npt + 5) * (npt + n) + 3 * n * (n + 5) / 2));
-    T* wp = w.data() - 1; // 1-based view
+    const detail::F2cView wp{w.data(), 1}; // 1-based view
     const int ixb = 1;
     const int ixp = ixb + n;
     const int ifv = ixp + n * npt;

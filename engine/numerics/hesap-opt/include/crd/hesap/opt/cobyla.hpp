@@ -8,10 +8,11 @@
 // ⚠ FAITHFUL PORT of the NLopt C reference (`nlopt/src/algs/cobyla/cobyla.c`, MIT; itself Jean-Sebastien Roy's
 // C translation of Powell's Fortran COBYLA2 with Steven G. Johnson's documented modifications: explicit bound
 // handling [ENFORCE_BOUNDS], the deterministic-LCG simplex perturbation, the SAS-suggested ρ-increase rule, and
-// the nlopt_stopping convergence plumbing). Ported line-for-line in the f2c idiom — 1-BASED pointer
-// adjustments, the original goto control flow, the EXACT float-literal artifacts (`.1f`/`.2f`/`1e-6f` keep
-// their float-then-promote values) — per the L-BFGS-B playbook: re-deriving is the bug farm; the differential
-// harness vs the compiled reference adjudicates (runtime/examples/cobyla_difftest.cpp, CRD_BUILD_HESAP_VS_COBYLA).
+// the nlopt_stopping convergence plumbing). Ported line-for-line in the f2c idiom — 1-BASED subscripts (through
+// detail::F2cView, f2c_view.hpp), the original goto control flow, the EXACT float-literal artifacts
+// (`.1f`/`.2f`/`1e-6f` keep their float-then-promote values) — per the L-BFGS-B playbook: re-deriving is the bug
+// farm; the differential harness vs the compiled reference adjudicates (tests/numerics/hesap-opt/nlopt/
+// cobyla_difftest.cpp, CRD_BUILD_HESAP_VS_NLOPT).
 // Stop semantics mirrored from nlopt stop.c (relstop with the inf guard); force-stop and wall-clock stops are
 // NOT carried (no async stop in Cerid; named delta). iprint output stripped (no numerics in it). ADR-0090.
 //
@@ -23,11 +24,12 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/opt/constraints.hpp>
+#include <crd/hesap/opt/f2c_view.hpp>
 #include <crd/hesap/opt/objective.hpp>
 #include <crd/hesap/opt/opt_types.hpp>
+#include <crd/math/cmath.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -74,7 +76,8 @@ template <typename T> [[nodiscard]] inline bool relstop(T vold, T vnew, T reltol
         return false;
     }
     return crd::math::fabs(vnew - vold) < abstol ||
-           crd::math::fabs(vnew - vold) < reltol * (crd::math::fabs(vnew) + crd::math::fabs(vold)) * static_cast<T>(0.5) ||
+           crd::math::fabs(vnew - vold) <
+               reltol * (crd::math::fabs(vnew) + crd::math::fabs(vold)) * static_cast<T>(0.5) ||
            (reltol > static_cast<T>(0) && vnew == vold);
 }
 
@@ -103,10 +106,11 @@ template <typename T> [[nodiscard]] inline T lcg_urand(crd::u32* seed, T a, T b)
 // Stage 1: DX = the shortest vector minimizing the greatest violation of A(:,k)ᵀDX ≥ B(k) within ‖DX‖ ≤ ρ;
 // stage 2 (mcon > m): spend any remaining freedom minimizing −A(:,m+1)ᵀDX without increasing the violation.
 // Active set via an orthogonal Z (Gram-Schmidt/Givens); IFULL=0 iff degeneracy stopped DX short of ρ.
-// Signature and 1-based adjustments mirror the reference exactly (the per-routine diff-harness target).
+// Signature and 1-based subscripts mirror the reference exactly (the per-routine diff-harness target).
 template <typename T>
-[[nodiscard]] inline Rc trstlp(const int* n, const int* m, const T* a, const T* b, const T* rho, T* dx, int* ifull,
-                               int* iact, T* z__, T* zdota, T* vmultc, T* sdirn, T* dxnew, T* vmultd)
+[[nodiscard]] inline Rc trstlp(const int* n, const int* m, const T* a_base, const T* b_base, const T* rho, T* dx_base,
+                               int* ifull, int* iact_base, T* z___base, T* zdota_base, T* vmultc_base, T* sdirn_base,
+                               T* dxnew_base, T* vmultd_base)
 {
     /* System generated locals */
     int a_dim1, a_offset, z_dim1, z_offset, i__1, i__2;
@@ -132,18 +136,18 @@ template <typename T>
     /* Parameter adjustments */
     z_dim1 = *n;
     z_offset = 1 + z_dim1 * 1;
-    z__ -= z_offset;
+    const detail::F2cView z__{z___base, z_offset};
     a_dim1 = *n;
     a_offset = 1 + a_dim1 * 1;
-    a -= a_offset;
-    --b;
-    --dx;
-    --iact;
-    --zdota;
-    --vmultc;
-    --sdirn;
-    --dxnew;
-    --vmultd;
+    const detail::F2cView a{a_base, a_offset};
+    const detail::F2cView b{b_base, 1};
+    const detail::F2cView dx{dx_base, 1};
+    const detail::F2cView iact{iact_base, 1};
+    const detail::F2cView zdota{zdota_base, 1};
+    const detail::F2cView vmultc{vmultc_base, 1};
+    const detail::F2cView sdirn{sdirn_base, 1};
+    const detail::F2cView dxnew{dxnew_base, 1};
+    const detail::F2cView vmultd{vmultd_base, 1};
 
     /* Function Body */
     *ifull = 1;
@@ -730,9 +734,10 @@ L500:
 // IS the bug farm — reference comment included). `Calcfc` is `bool calcfc(int n, int m, const T* x, T& f,
 // T* con)` over 0-based arrays, returning true to request a stop (never, in Cerid).
 template <typename T, typename Calcfc>
-[[nodiscard]] inline Rc cobylb(const int* n, const int* m, const int* mpp, T* x, T* minf, const T* rhobeg, T rhoend,
-                               Stop<T>* stop, const T* lb, const T* ub, T* con, T* sim, T* simi, T* datmat, T* a,
-                               T* vsig, T* veta, T* sigbar, T* dx, T* w, int* iact, const T* con_tol, Calcfc&& calcfc)
+[[nodiscard]] inline Rc cobylb(const int* n, const int* m, const int* mpp, T* x_base, T* minf, const T* rhobeg,
+                               T rhoend, Stop<T>* stop, const T* lb_base, const T* ub_base, T* con_base, T* sim_base,
+                               T* simi_base, T* datmat_base, T* a_base, T* vsig_base, T* veta_base, T* sigbar_base,
+                               T* dx_base, T* w_base, int* iact_base, const T* con_tol, Calcfc&& calcfc)
 {
     /* System generated locals */
     int sim_dim1, sim_offset, simi_dim1, simi_offset, datmat_dim1, datmat_offset, a_dim1, a_offset, i__1, i__2, i__3;
@@ -769,26 +774,26 @@ template <typename T, typename Calcfc>
        the other vertices; SIMI = the inverse of SIM's leading N×N block). */
     a_dim1 = *n;
     a_offset = 1 + a_dim1 * 1;
-    a -= a_offset;
+    const detail::F2cView a{a_base, a_offset};
     simi_dim1 = *n;
     simi_offset = 1 + simi_dim1 * 1;
-    simi -= simi_offset;
+    const detail::F2cView simi{simi_base, simi_offset};
     sim_dim1 = *n;
     sim_offset = 1 + sim_dim1 * 1;
-    sim -= sim_offset;
+    const detail::F2cView sim{sim_base, sim_offset};
     datmat_dim1 = *mpp;
     datmat_offset = 1 + datmat_dim1 * 1;
-    datmat -= datmat_offset;
-    --x;
-    --con;
-    --vsig;
-    --veta;
-    --sigbar;
-    --dx;
-    --w;
-    --iact;
-    --lb;
-    --ub;
+    const detail::F2cView datmat{datmat_base, datmat_offset};
+    const detail::F2cView x{x_base, 1};
+    const detail::F2cView con{con_base, 1};
+    const detail::F2cView vsig{vsig_base, 1};
+    const detail::F2cView veta{veta_base, 1};
+    const detail::F2cView sigbar{sigbar_base, 1};
+    const detail::F2cView dx{dx_base, 1};
+    const detail::F2cView w{w_base, 1};
+    const detail::F2cView iact{iact_base, 1};
+    const detail::F2cView lb{lb_base, 1};
+    const detail::F2cView ub{ub_base, 1};
 
     /* Function Body */
     np = *n + 1;
@@ -1585,7 +1590,7 @@ template <typename T>
     };
 
     // The reference w-partition from cobyla().
-    T* wp = w.data() - 1; // 1-based view
+    const detail::F2cView wp{w.data(), 1}; // 1-based view
     const int icon = 1;
     const int isim = icon + mpp;
     const int isimi = isim + n * n + n;

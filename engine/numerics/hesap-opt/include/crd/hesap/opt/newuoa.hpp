@@ -7,8 +7,9 @@
 // Ω = ZDZᵀ form with the IDZ sign partition).
 //
 // ⚠ FAITHFUL PORT of the NLopt C reference (`nlopt/src/algs/newuoa/newuoa.c`, MIT) — the f2c idiom kept
-// (1-based pointer adjustments, original goto flow, exact literal artifacts) per the L-BFGS-B/COBYLA playbook;
-// the differential harness vs the compiled oracle adjudicates (runtime/examples/newuoa_difftest.cpp).
+// (1-based subscripts through detail::F2cView, original goto flow, exact literal artifacts) per the L-BFGS-B/COBYLA
+// playbook; the differential harness vs the compiled oracle adjudicates
+// (tests/numerics/hesap-opt/nlopt/newuoa_difftest.cpp).
 // SCOPE PINNED (phase doc): **Powell's CLASSIC UNCONSTRAINED NEWUOA** — the reference's NEWUOA_BOUND variant
 // (`if (lb && ub)` blocks nesting an NLopt MMA solve inside trsapp_/biglag_) is NOT ported (bounds are
 // BOBYQA's job — Powell's own position); the port takes the NULL-bounds paths verbatim, and the e2e diff
@@ -22,11 +23,12 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/opt/cobyla.hpp> // detail::cobyla_impl::{Rc, Stop, relstop, stop_ftol, stop_evals}
+#include <crd/hesap/opt/f2c_view.hpp>
 #include <crd/hesap/opt/objective.hpp>
 #include <crd/hesap/opt/opt_types.hpp>
+#include <crd/math/cmath.hpp>
 #include <crd/memory/allocator.hpp>
 
-#include <crd/math/cmath.hpp>
 #include <limits>
 
 namespace crd::hesap::opt
@@ -56,8 +58,9 @@ using cobyla_impl::stop_ftol;
 // (0 if STEP reaches the boundary). The L170 block is the reference's inline "subroutine" computing HD = H·D,
 // dispatched by ITERC. The reference's NEWUOA_BOUND branch is NOT ported (scope pinned in the header).
 template <typename T>
-[[nodiscard]] inline Rc trsapp(const int* n, const int* npt, T* xopt, T* xpt, T* gq, T* hq, T* pq, const T* delta,
-                               T* step, T* d__, T* g, T* hd, T* hs, T* crvmin)
+[[nodiscard]] inline Rc trsapp(const int* n, const int* npt, T* xopt_base, T* xpt_base, T* gq_base, T* hq_base,
+                               T* pq_base, const T* delta, T* step_base, T* d___base, T* g_base, T* hd_base, T* hs_base,
+                               T* crvmin)
 {
     /* System generated locals */
     int xpt_dim1, xpt_offset, i__1, i__2;
@@ -82,16 +85,16 @@ template <typename T>
     /* Parameter adjustments */
     xpt_dim1 = *npt;
     xpt_offset = 1 + xpt_dim1;
-    xpt -= xpt_offset;
-    --xopt;
-    --gq;
-    --hq;
-    --pq;
-    --step;
-    --d__;
-    --g;
-    --hd;
-    --hs;
+    const detail::F2cView xpt{xpt_base, xpt_offset};
+    const detail::F2cView xopt{xopt_base, 1};
+    const detail::F2cView gq{gq_base, 1};
+    const detail::F2cView hq{hq_base, 1};
+    const detail::F2cView pq{pq_base, 1};
+    const detail::F2cView step{step_base, 1};
+    const detail::F2cView d__{d___base, 1};
+    const detail::F2cView g{g_base, 1};
+    const detail::F2cView hd{hd_base, 1};
+    const detail::F2cView hs{hs_base, 1};
 
     /* Function Body */
     half = static_cast<T>(.5);
@@ -380,8 +383,8 @@ L170:
 // Shift interpolation point KNEW: rank-2 update of BMAT and the ZMAT factor of Powell's Ω = Z·D·Zᵀ (IDZ
 // partitions D's signs). VLAG carries Θ·Wcheck + e_b of formula (6.11); BETA its parameter; W is workspace.
 template <typename T>
-inline void update(const int* n, const int* npt, T* bmat, T* zmat, int* idz, const int* ndim, T* vlag, const T* beta,
-                   const int* knew, T* w)
+inline void update(const int* n, const int* npt, T* bmat_base, T* zmat_base, int* idz, const int* ndim, T* vlag_base,
+                   const T* beta, const int* knew, T* w_base)
 {
     /* System generated locals */
     int bmat_dim1, bmat_offset, zmat_dim1, zmat_offset, i__1, i__2;
@@ -398,12 +401,12 @@ inline void update(const int* n, const int* npt, T* bmat, T* zmat, int* idz, con
     /* Parameter adjustments */
     zmat_dim1 = *npt;
     zmat_offset = 1 + zmat_dim1;
-    zmat -= zmat_offset;
+    const detail::F2cView zmat{zmat_base, zmat_offset};
     bmat_dim1 = *ndim;
     bmat_offset = 1 + bmat_dim1;
-    bmat -= bmat_offset;
-    --vlag;
-    --w;
+    const detail::F2cView bmat{bmat_base, bmat_offset};
+    const detail::F2cView vlag{vlag_base, 1};
+    const detail::F2cView w{w_base, 1};
 
     /* Function Body */
     one = static_cast<T>(1.);
@@ -557,9 +560,9 @@ inline void update(const int* n, const int* npt, T* bmat, T* zmat, int* idz, con
 // angle-sweep iteration in span{D, S}. ALPHA ← H's KNEW-th diagonal. The reference's `if (lb && ub)` MMA
 // branch is NOT ported (scope pinned in the header). SGJ's isinf guard on HCOL kept.
 template <typename T>
-[[nodiscard]] inline Rc biglag(const int* n, const int* npt, T* xopt, T* xpt, T* bmat, T* zmat, const int* idz,
-                               const int* ndim, const int* knew, const T* delta, T* d__, T* alpha, T* hcol, T* gc,
-                               T* gd, T* s, T* w)
+[[nodiscard]] inline Rc biglag(const int* n, const int* npt, T* xopt_base, T* xpt_base, T* bmat_base, T* zmat_base,
+                               const int* idz, const int* ndim, const int* knew, const T* delta, T* d___base, T* alpha,
+                               T* hcol_base, T* gc_base, T* gd_base, T* s_base, T* w_base)
 {
     /* System generated locals */
     int xpt_dim1, xpt_offset, bmat_dim1, bmat_offset, zmat_dim1, zmat_offset, i__1, i__2;
@@ -578,20 +581,20 @@ template <typename T>
     /* Parameter adjustments */
     zmat_dim1 = *npt;
     zmat_offset = 1 + zmat_dim1;
-    zmat -= zmat_offset;
+    const detail::F2cView zmat{zmat_base, zmat_offset};
     xpt_dim1 = *npt;
     xpt_offset = 1 + xpt_dim1;
-    xpt -= xpt_offset;
-    --xopt;
+    const detail::F2cView xpt{xpt_base, xpt_offset};
+    const detail::F2cView xopt{xopt_base, 1};
     bmat_dim1 = *ndim;
     bmat_offset = 1 + bmat_dim1;
-    bmat -= bmat_offset;
-    --d__;
-    --hcol;
-    --gc;
-    --gd;
-    --s;
-    --w;
+    const detail::F2cView bmat{bmat_base, bmat_offset};
+    const detail::F2cView d__{d___base, 1};
+    const detail::F2cView hcol{hcol_base, 1};
+    const detail::F2cView gc{gc_base, 1};
+    const detail::F2cView gd{gd_base, 1};
+    const detail::F2cView s{s_base, 1};
+    const detail::F2cView w{w_base, 1};
 
     /* Function Body */
     half = static_cast<T>(.5);
@@ -830,9 +833,9 @@ L160:
 // coefficients. W ← Wcheck, VLAG ← Θ·Wcheck + e_b, BETA ← the formula parameter. SGJ's isinf guards kept;
 // the `if (lb && ub)` truncation hack is NOT ported (scope pinned).
 template <typename T>
-[[nodiscard]] inline Rc bigden(const int* n, const int* npt, T* xopt, T* xpt, T* bmat, T* zmat, const int* idz,
-                               const int* ndim, const int* kopt, const int* knew, T* d__, T* w, T* vlag, T* beta, T* s,
-                               T* wvec, T* prod)
+[[nodiscard]] inline Rc bigden(const int* n, const int* npt, T* xopt_base, T* xpt_base, T* bmat_base, T* zmat_base,
+                               const int* idz, const int* ndim, const int* kopt, const int* knew, T* d___base,
+                               T* w_base, T* vlag_base, T* beta, T* s_base, T* wvec_base, T* prod_base)
 {
     /* System generated locals */
     int xpt_dim1, xpt_offset, bmat_dim1, bmat_offset, zmat_dim1, zmat_offset, wvec_dim1, wvec_offset, prod_dim1,
@@ -858,24 +861,24 @@ template <typename T>
     /* Parameter adjustments */
     zmat_dim1 = *npt;
     zmat_offset = 1 + zmat_dim1;
-    zmat -= zmat_offset;
+    const detail::F2cView zmat{zmat_base, zmat_offset};
     xpt_dim1 = *npt;
     xpt_offset = 1 + xpt_dim1;
-    xpt -= xpt_offset;
-    --xopt;
+    const detail::F2cView xpt{xpt_base, xpt_offset};
+    const detail::F2cView xopt{xopt_base, 1};
     prod_dim1 = *ndim;
     prod_offset = 1 + prod_dim1;
-    prod -= prod_offset;
+    const detail::F2cView prod{prod_base, prod_offset};
     wvec_dim1 = *ndim;
     wvec_offset = 1 + wvec_dim1;
-    wvec -= wvec_offset;
+    const detail::F2cView wvec{wvec_base, wvec_offset};
     bmat_dim1 = *ndim;
     bmat_offset = 1 + bmat_dim1;
-    bmat -= bmat_offset;
-    --d__;
-    --w;
-    --vlag;
-    --s;
+    const detail::F2cView bmat{bmat_base, bmat_offset};
+    const detail::F2cView d__{d___base, 1};
+    const detail::F2cView w{w_base, 1};
+    const detail::F2cView vlag{vlag_base, 1};
+    const detail::F2cView s{s_base, 1};
 
     /* Function Body */
     half = static_cast<T>(.5);
@@ -1326,9 +1329,10 @@ L340:
 // xtol_rel·rhobeg EXACTLY like the reference (the e2e diff passes the same xtol_rel both sides). The
 // reference's `if (lb && ub)` clamps are NOT ported (scope pinned); force/time stops not carried.
 template <typename T, typename Calfun>
-[[nodiscard]] inline Rc newuob(const int* n, const int* npt, T* x, const T* rhobeg, T xtol_rel, Stop<T>* stop, T* minf,
-                               Calfun&& calfun, T* xbase, T* xopt, T* xnew, T* xpt, T* fval, T* gq, T* hq, T* pq,
-                               T* bmat, T* zmat, const int* ndim, T* d__, T* vlag, T* w)
+[[nodiscard]] inline Rc newuob(const int* n, const int* npt, T* x_base, const T* rhobeg, T xtol_rel, Stop<T>* stop,
+                               T* minf, Calfun&& calfun, T* xbase_base, T* xopt_base, T* xnew_base, T* xpt_base,
+                               T* fval_base, T* gq_base, T* hq_base, T* pq_base, T* bmat_base, T* zmat_base,
+                               const int* ndim, T* d___base, T* vlag_base, T* w_base)
 {
     /* System generated locals */
     int xpt_dim1, xpt_offset, bmat_dim1, bmat_offset, zmat_dim1, zmat_offset, i__1, i__2, i__3;
@@ -1370,24 +1374,24 @@ template <typename T, typename Calfun>
     /* Parameter adjustments */
     zmat_dim1 = *npt;
     zmat_offset = 1 + zmat_dim1;
-    zmat -= zmat_offset;
+    const detail::F2cView zmat{zmat_base, zmat_offset};
     xpt_dim1 = *npt;
     xpt_offset = 1 + xpt_dim1;
-    xpt -= xpt_offset;
-    --x;
-    --xbase;
-    --xopt;
-    --xnew;
-    --fval;
-    --gq;
-    --hq;
-    --pq;
+    const detail::F2cView xpt{xpt_base, xpt_offset};
+    const detail::F2cView x{x_base, 1};
+    const detail::F2cView xbase{xbase_base, 1};
+    const detail::F2cView xopt{xopt_base, 1};
+    const detail::F2cView xnew{xnew_base, 1};
+    const detail::F2cView fval{fval_base, 1};
+    const detail::F2cView gq{gq_base, 1};
+    const detail::F2cView hq{hq_base, 1};
+    const detail::F2cView pq{pq_base, 1};
     bmat_dim1 = *ndim;
     bmat_offset = 1 + bmat_dim1;
-    bmat -= bmat_offset;
-    --d__;
-    --vlag;
-    --w;
+    const detail::F2cView bmat{bmat_base, bmat_offset};
+    const detail::F2cView d__{d___base, 1};
+    const detail::F2cView vlag{vlag_base, 1};
+    const detail::F2cView w{w_base, 1};
 
     /* Function Body */
     half = static_cast<T>(.5);
@@ -2248,7 +2252,7 @@ template <typename T>
     // The reference w-partition from newuoa().
     crd::containers::Array<T> w(alloc);
     w.resize(static_cast<crd::usize>((npt + 13) * (npt + n) + 3 * (n * (n + 3)) / 2));
-    T* wp = w.data() - 1; // 1-based view
+    const detail::F2cView wp{w.data(), 1}; // 1-based view
     const int ixb = 1;
     const int ixo = ixb + n;
     const int ixn = ixo + n;
