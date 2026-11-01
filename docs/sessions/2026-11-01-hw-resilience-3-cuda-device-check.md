@@ -37,9 +37,10 @@ Row: [HW-RESILIENCE.3](../ROADMAP.md#slice-hw-resilience.3). Before:
   cannot target is one this backend can run nothing on, and passing it over is the right outcome.
 - The CUBIN runs on a `CudaContextImpl` probe built on a context of its own (`cuCtxCreate`: the four-argument v4
   form on CUDA 13, the three-argument form before). It is pushed current on the thread and destroyed (popped) before
-  the chosen device's primary context is retained. A sticky error in the probe stays in the probe's context and
-  never reaches the primary one the caller shares with kir-cuda. The probe never retains the primary context, so
-  it cannot drop the primary context's refcount to zero and reset it.
+  the chosen device's primary context is retained. No module, stream or allocation of the check ever lives in the
+  primary context the caller shares with kir-cuda. The probe never retains the primary context, so it cannot drop
+  that context's refcount to zero and reset it. A sticky CUDA error (an illegal address, say) is process-wide by
+  NVIDIA's definition, so a separate context does not contain one.
 - `create_pipeline_from_cuda` now compiles and then calls `load_cubin`, which the probe also uses, so the module
   load is one routine.
 
