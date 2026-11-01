@@ -61,9 +61,9 @@ def root_artifact_errors(root):
 def check(root=ROOT):
     errors = canonical_asset_errors(root)
     structure_file = root / 'cmake/project-structure.json'
+    from project_sync.model import load_manifest
+    from project_sync.storage import Workspace, Conflict
     try:
-        from project_sync.model import load_manifest
-        from project_sync.storage import Workspace, Conflict
         structure = load_manifest(Workspace(root)) if structure_file.exists() else {}
     except (Conflict, ValueError, TypeError, OSError) as error:
         errors.append(f'Invalid project structure manifest: {error}')
