@@ -157,8 +157,13 @@ What it changes in the register:
 - **The register.** The guard passes. Every jurisdiction's rule generation was reviewed as a new one on 2026-11-01:
   the register's snapshot day is in each file, and the TR, EU and US rules changed (their `read` flags, articles and
   obligations). The generated-source manifest was refreshed for the eleven files.
-- **C++.** The comply suite and the `ceridc comply` cases decode and query the committed generations; they ran on the
-  track's machine against the new files (below).
+- **C++.** On the track's machine (linux-gcc-debug, 0920905e), `crd-comply-tests`, `crd-ceridc-tests` and `ceridc`
+  built with no warning, and 155 scoped CTests passed, among them the committed generations decoding and binding the
+  crash pool, the `ceridc comply` verb with the real binary, `crd-comply-rules-drift`, `crd-check-registers`,
+  `crd-generated-sources` and `crd-repository-tools`. The machine ran 0.11 h and is stopped.
+- **Validators.** `check-registers.py`, `check-master-plan.py`, `check-repository.py`, `check-allman-braces.py` and
+  `check-generated.py` pass. The whole `test-repository-tools.py` passes except `test_generated_target_folders`, which
+  needs Ninja and fails the same way without this change on this PC, where nothing is built.
 
 ## Next
 
