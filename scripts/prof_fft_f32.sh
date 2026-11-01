@@ -14,11 +14,12 @@
 # CRD_PROF_ROUNDS (K: after the passes, K rounds that run every side's loop in turn with --distribution under perf
 # stat's clock events, so the sides alternate and share the host's state; each line is one side's stream: its
 # per-transform minimum, median and mean beside its clock), CRD_PROF_PASSES (0: the distribution rounds only),
-# CRD_PROF_OFFSET (the transformed buffer's bytes past a 64-byte boundary, bench_fft_f32 --offset).
+# CRD_PROF_OFFSET (the transformed buffer's bytes past a 64-byte boundary, bench_fft_f32 --offset; the files then
+# carry -off<bytes>, so two offsets' runs keep their own).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 if [[ $# -lt 3 ]]; then
-    sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 2
 fi
 lg=$1
@@ -39,7 +40,7 @@ if [[ ${CRD_PROF_PASSES:-1} != 0 ]]; then
     passes=("$@")
 fi
 for side in "${passes[@]}"; do
-    stem=$out/n$lg-${CRD_CPU_LEVEL:-detected}-$side
+    stem=$out/n$lg-${CRD_CPU_LEVEL:-detected}${CRD_PROF_OFFSET:+-off$CRD_PROF_OFFSET}-$side
     loop=(taskset -c "$cpu" "$program" --loop "$side" --sizes "$lg-$lg" --iterations "$iterations"
           "${offset[@]}")
     echo "=== $side (2^$lg, $iterations iterations, CPU $cpu, level ${CRD_CPU_LEVEL:-detected}) ==="
@@ -61,7 +62,7 @@ done
 # untimed) and its clock (GHz: cycles over task-clock; the cycles to ref-cycles ratio against the nominal rate).
 for ((round = 1; round <= ${CRD_PROF_ROUNDS:-0}; ++round)); do
     for side in "$@"; do
-        stem=$out/n$lg-${CRD_CPU_LEVEL:-detected}-$side-round$round
+        stem=$out/n$lg-${CRD_CPU_LEVEL:-detected}${CRD_PROF_OFFSET:+-off$CRD_PROF_OFFSET}-$side-round$round
         perf stat -x, -o "$stem.clock.txt" -e "$clock" taskset -c "$cpu" "$program" --loop "$side" \
             --sizes "$lg-$lg" --iterations "$iterations" "${offset[@]}" --distribution > "$stem.txt"
         each=$(grep '^each transform' "$stem.txt" | sed 's/^each transform (without its copy, us): //')
