@@ -113,7 +113,15 @@ f64 nudge(f64 v, i64 ulps) noexcept
 
 int sign_of(f64 v) noexcept
 {
-    return (v > 0.0) - (v < 0.0);
+    if (v > 0.0)
+    {
+        return 1;
+    }
+    if (v < 0.0)
+    {
+        return -1;
+    }
+    return 0;
 }
 
 // The signs one family produced, and the cases where the engine or Shewchuk's adaptive predicate left the exact sign.
