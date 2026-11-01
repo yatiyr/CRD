@@ -452,14 +452,16 @@ host serves as data, read by the host's reader, which checks the document is the
 
 | Host | Document read | Version |
 |---|---|---|
-| mevzuat.gov.tr (`mevzuat?MevzuatNo=..`) | the consolidated text the page frames (`anasayfa/MevzuatFihristDetayIframe`) | the latest day of its amendment notes, with the amending act (`2024-03-02 (7499)`), a Constitutional Court annulment's decision day, or the day of enactment |
+| mevzuat.gov.tr, a law (`mevzuat?MevzuatNo=..&MevzuatTur=1`) | the consolidated text the page frames (`anasayfa/MevzuatFihristDetayIframe`), which names the law's number | the latest day of its amendment notes, with the amending act (`2024-03-02 (7499)`), a Constitutional Court annulment's decision day, or the day of enactment |
+| mevzuat.gov.tr, a by-law or regulation (`MevzuatTur=7`) or communiqué (`MevzuatTur=9`) | an index read first: the cited page, which names the Official Gazette that published it; then the framed text, whose title names its form and whose closing table, once amended, repeats that gazette | the gazette and the latest change, from the amending gazettes' notes and the closing table or a court's annulment (`2014-11-27/29188 at 2026-05-06 (Danıştay)`), or `as published`; any other kind is read by digest alone |
 | eur-lex.europa.eu (`eli/<reg\|dir\|dec>/<year>/<number>/oj`) | CELLAR (publications.europa.eu, which serves EUR-Lex's acts; eur-lex.europa.eu answers a machine with a challenge): the English XHTML of the version | an index read first: CELLAR's SPARQL endpoint lists the act's consolidated versions with an English XHTML text, and the latest in force on the fetch day is read (`02016R0679-20160504`), else the act as adopted (`32019L0790`) |
 | legislation.gov.uk (`ukpga/<year>/<number>`) | the act's Crown Legislation Markup (`data.xml`) | its point-in-time day (`dct:valid`) |
 | ecfr.gov (`current/title-N/...`) | the eCFR versioner's full XML on the hierarchy's latest amendment day: the part itself, or the whole title above a part (the versioner ignores subtitle, chapter and subchapter), of which the cited hierarchy's subtree is the text read | an index read first: the versioner's `meta.latest_amendment_date` of the hierarchy, which must echo the hierarchy asked for |
 | wassenaar.org (`control-lists/`) | the List of Dual-Use Goods and Technologies (PDF) | an index read first: the control-lists page's one link to the list, whose upload path names its edition |
 
-A version index is fetched before the documents whose URL holds the `{version}` it names, and a version is never a
-scheme, query or `..`. Every request asks for gzip (eCFR refuses one that does not), and the manifest pins the
+A court's annulment note counts on its decision's day only, never on the days of the text it quotes. A version index
+is fetched before the documents whose URL holds the `{version}` it names, and a version is never a scheme, query or
+`..`. Every request asks for gzip (eCFR refuses one that does not), and the manifest pins the
 SHA-256 of the decoded body, at most 16 MiB either way; any other content encoding is refused. An instrument's
 `consolidated.sha256` is that of the text read: the document, or an eCFR hierarchy's subtree, so an amendment elsewhere
 in the title does not read as a change. A redirect is followed on the same host

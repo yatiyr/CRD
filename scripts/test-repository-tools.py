@@ -7387,6 +7387,149 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             self.assertIn(f'refused a redirect to {target}', str(refused.exception))
             self.assertTrue(response.closed)
 
+    # A by-law, regulation or communiqué on mevzuat.gov.tr (the 2026-11-01 reads): the cited page names its Official
+    # Gazette; the consolidated text has its title, the amending gazettes' notes and, once amended, a closing table of
+    # its own gazette and the amending ones (empty trailing rows included).
+    BYLAW_CITED = ('<html><body><div>Anasayfa</div><span>Resmî Gazete Tarihi: 27.11.2014</span>'
+                   '<span>Resmî Gazete Sayısı: 29188</span><p>* Kanunlar Fihristinde ...</p></body></html>')
+
+    @staticmethod
+    def bylaw(*notes, form='YÖNETMELİĞİ', table=('27/11/2014 29188', '1. 9/2/2019 30681 2. 23/8/2022 31932 3.')):
+        title = f'<p>MESAFELİ SÖZLEŞMELER {form}</p><p>MADDE 1 – (1) Bu Yönetmeliğin amacı ...</p>'
+        body = ''.join(f'<p>{note}</p>' for note in notes)
+        closing = (f'<table><tr><td>Yönetmeliğin Yayımlandığı Resmî Gazete’nin</td><td>Tarihi</td><td>Sayısı</td></tr>'
+                   f'<tr><td>{table[0]}</td></tr><tr><td>Yönetmelikte Değişiklik Yapan Yönetmeliklerin Yayımlandığı '
+                   f'Resmî Gazetelerin</td><td>Tarihi</td><td>Sayısı</td></tr><tr><td>{table[1]}</td></tr></table>'
+                   '<p>EK ÖRNEK CAYMA FORMU</p>') if table else ''
+        return (title + body + closing).encode()
+
+    def test_mevzuat_by_laws_are_known_by_the_gazette_that_published_them(self):
+        resolve = register_review.resolve_primary
+        index, document = resolve('https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=20237&MevzuatTur=7&MevzuatTertip=5')
+        self.assertEqual({'id': 'mevzuat-7-5-20237-gazette', 'kind': 'index', 'reader': 'mevzuat-gazette',
+                          'act': '20237',
+                          'url': 'https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=20237&MevzuatTur=7&MevzuatTertip=5'},
+                         index)
+        self.assertEqual({'id': 'mevzuat-7-5-20237', 'kind': 'primary', 'reader': 'mevzuat', 'act': '20237',
+                          'url': 'https://www.mevzuat.gov.tr/anasayfa/MevzuatFihristDetayIframe?MevzuatTur=7&'
+                                 'MevzuatNo=20237&MevzuatTertip=5', 'form': 'YÖNETMELİ',
+                          'index': 'mevzuat-7-5-20237-gazette'}, document)
+        self.assertEqual('TEBLİĞ', resolve('https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=24454&MevzuatTur=9&'
+                                           'MevzuatTertip=5')[1]['form'])
+        self.assertEqual([{'id': 'mevzuat-21-5-2837', 'kind': 'primary',
+                           'url': 'https://www.mevzuat.gov.tr/anasayfa/MevzuatFihristDetayIframe?MevzuatTur=21&'
+                                  'MevzuatNo=2837&MevzuatTertip=5'}],
+                         resolve('https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=2837&MevzuatTur=21&MevzuatTertip=5'))
+        unreadable = register_review.Unreadable
+        cited = register_review.read_mevzuat_gazette
+        source = {'act': '20237'}
+        self.assertEqual('2014-11-27/29188', cited(self.BYLAW_CITED.encode(), source, None))
+        self.assertEqual('2020-12-31/31351-m5', cited(self.BYLAW_CITED.replace('27.11.2014', '31.12.2020').replace(
+            '29188', '31351 (5. Mükerrer)').encode(), source, None))
+        for body, message in ((b'<html>Anasayfa</html>', '0 Official Gazettes of publication on the cited page of '
+                                                         'No. 20237, not one'),
+                              ((self.BYLAW_CITED + self.BYLAW_CITED.replace('29188', '29189')).encode(), '2 Official'),
+                              (self.BYLAW_CITED.replace('27.11.2014', '31.11.2014').encode(),
+                               'the day 31/11/2014 does not exist')):
+            with self.assertRaises(unreadable) as refused:
+                cited(body, source, None)
+            self.assertIn(message, str(refused.exception))
+        read = register_review.read_mevzuat
+        regulation = {'act': '20237', 'form': 'YÖNETMELİ'}
+        published = '2014-11-27/29188'
+        self.assertEqual('2014-11-27/29188 as published', read(self.bylaw(table=None), regulation, published))
+        self.assertEqual('2014-11-27/29188 at 2022-08-23 (RG 31932)', read(self.bylaw(), regulation, published))
+        self.assertEqual('2014-11-27/29188 at 2024-05-24 (RG 32909)', read(self.bylaw(
+            '(Değişik ibare:RG-24/5/2024-32909)', '(Ek:RG-23/8/2022-31932)'), regulation, published))
+        # The table lists an amendment no note shows; a repeated issue keeps its number.
+        self.assertEqual('2014-11-27/29188 at 2025-12-31 (RG 33124-m5)', read(self.bylaw(table=(
+            '27/11/2014 29188', '1 9/2/2019 30681 2 31/12/2025 33124 (5.Mükerrer) 3')), regulation, published))
+        # A court annulment counts on its decision's day, whatever days the annulled text it quotes holds.
+        council = ('(Danıştay Onuncu Dairesinin 6/5/2026 tarihli ve E.:2022/5534; K.:2026/2753 sayılı kararı ile iptal '
+                   'bent: 1/1/2030 tarihinden sonra kurulan sözleşmeler. )')
+        self.assertEqual('2014-11-27/29188 at 2026-05-06 (Danıştay)', read(self.bylaw(council), regulation, published))
+        communique = {'act': '24454', 'form': 'TEBLİĞ'}
+        self.assertEqual('2014-11-27/29188 at 2022-08-23 (RG 31932)', read(self.bylaw(form='TEBLİĞİ'), communique,
+                                                                            published))
+        for body, source, gazette, message in (
+                (self.bylaw(), regulation, '2014-11-27/29189', 'published in the Official Gazette 2014-11-27/29188, '
+                                                               'not 2014-11-27/29189 as its cited page says'),
+                (self.bylaw(), communique, published, 'not a TEBLİĞ text: its title does not name one'),
+                (self.bylaw(table=None), regulation, None, 'the Official Gazette of No. 20237 is unknown; its cited '
+                                                           'page is read first'),
+                (self.bylaw('(Değişik:RG-29/2/2023-32000)'), regulation, published,
+                 'the day 29/2/2023 does not exist')):
+            with self.assertRaises(unreadable) as refused:
+                read(body, source, gazette)
+            self.assertIn(message, str(refused.exception))
+        law = '<p>Kanun Numarası : 5378</p><p>Kabul Tarihi : 1/7/2005</p><p>{}</p>'
+        court = ('(İptal üçüncü cümle: Anayasa Mahkemesinin 22/6/2023 Tarihli ve E: 2022/110, K: 2023/115 Sayılı '
+                 'Kararı ile.)')
+        for note, version in ((court, '2023-06-22 (Anayasa Mahkemesi)'),
+                              (court.replace('ile.)', 'ile; 1/1/2030 tarihinde yürürlüğe girer.)'),
+                               '2023-06-22 (Anayasa Mahkemesi)'),
+                              ('(Anayasa Mahkemesinin 18/1/2024 tarihli ve E.: 2021/28, K.: 2024/11 sayılı Kararı ile '
+                               'iptal: 1/3/2030 tarihine kadar uygulanır.)', '2024-01-18 (Anayasa Mahkemesi)')):
+            self.assertEqual(version, read(law.format('(Ek fıkra: 4/7/2012-6353/34 md.) ' + note).encode(),
+                                           {'act': '5378'}, None), note)
+
+    def test_read_records_a_by_law_by_its_gazette_and_refuses_one_its_cited_page_contradicts(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            cited = 'https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=20237&MevzuatTur=7&MevzuatTertip=5'
+            other = 'https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=24454&MevzuatTur=9&MevzuatTertip=5'
+            self.write_tree(root, self.register(self.entries()), self.legal_register([
+                self.legal_entry(),
+                self.legal_entry(id='tr.6502.distance-contracts-regulation', instrument=self.instrument(
+                    name='Regulation on Distance Contracts', type='regulation', primary=cited)),
+                self.legal_entry(id='tr.kvkk.notice-communique', instrument=self.instrument(
+                    name='Communiqué on the obligation to inform', type='by-law', primary=other))]))
+            (root / 'docs' / 'reading.md').write_text('<a id="r"></a>Read.\n', encoding='utf-8')
+            argv = ('--register', 'cmake/legal-register.json')
+            self.assertEqual(0, self.tool(root, *argv, 'plan', '--out', str(root / 'sources.json'))[0])
+            plan = json.loads((root / 'sources.json').read_text(encoding='utf-8'))
+            sources = {source['id']: source for source in plan['sources']}
+            self.assertEqual('mevzuat-7-5-20237-gazette', sources['mevzuat-7-5-20237']['index'])
+            self.assertEqual(['tr.6502.distance-contracts-regulation'], sources['mevzuat-7-5-20237']['entries'])
+            routes = {'MevzuatNo=6698': self.MEVZUAT_HTML,
+                      'mevzuat?MevzuatNo=20237': self.BYLAW_CITED,
+                      'Iframe?MevzuatTur=7&MevzuatNo=20237': self.bylaw(),
+                      'mevzuat?MevzuatNo=24454': self.BYLAW_CITED.replace('29188', '30356'),
+                      'Iframe?MevzuatTur=9&MevzuatNo=24454': self.bylaw(form='TEBLİĞ')}
+            manifest = register_review.fetch_sources(plan, root / 'fetched', opener=self.routed(routes),
+                                                     today=datetime.date(2026, 12, 16))
+            items = {item['id']: item for item in manifest['items']}
+            self.assertEqual('2014-11-27/29188', items['mevzuat-7-5-20237']['version'])
+            self.assertEqual(routes['Iframe?MevzuatTur=7&MevzuatNo=20237'],
+                             (root / 'fetched' / items['mevzuat-7-5-20237']['file']).read_bytes())
+            fetched = ('--fetched', str(root / 'fetched'))
+            report = root / 'docs' / 'legal-review.md'
+            code, output = self.tool(root, *argv, 'compare', *fetched, '--report', str(report), '--apply')
+            self.assertEqual(0, code, output)
+            text = report.read_text(encoding='utf-8')
+            self.assertIn('Regulation on Distance Contracts, Articles 4-7: never read from its primary source; read '
+                          'https://www.mevzuat.gov.tr/anasayfa/MevzuatFihristDetayIframe?MevzuatTur=7&MevzuatNo=20237&'
+                          'MevzuatTertip=5 (version 2014-11-27/29188 at 2022-08-23 (RG 31932), SHA-256 ', text)
+            self.assertIn('- mevzuat-9-5-24454: published in the Official Gazette 2014-11-27/29188, not '
+                          '2014-11-27/30356 as its cited page says', text)
+            path = root / 'cmake' / 'legal-register.json'
+            before = path.read_bytes()
+            code, output = self.tool(root, *argv, 'read', *fetched, '--ref', 'docs/reading.md#r', '--entry',
+                                     'tr.6502.distance-contracts-regulation', '--entry', 'tr.kvkk.notice-communique')
+            self.assertEqual(2, code)
+            self.assertIn('tr.kvkk.notice-communique: mevzuat-9-5-24454: published in the Official Gazette '
+                          '2014-11-27/29188, not 2014-11-27/30356', output)
+            self.assertEqual(before, path.read_bytes(), 'a refused read writes nothing')
+            code, output = self.tool(root, *argv, 'read', *fetched, '--ref', 'docs/reading.md#r', '--entry',
+                                     'tr.6502.distance-contracts-regulation')
+            self.assertEqual(0, code, output)
+            entries = {entry['id']: entry for entry in json.loads(path.read_text(encoding='utf-8'))['entries']}
+            self.assertEqual({'version': '2014-11-27/29188 at 2022-08-23 (RG 31932)', 'read': '2026-12-16',
+                              'sha256': hashlib.sha256(routes['Iframe?MevzuatTur=7&MevzuatNo=20237']).hexdigest()},
+                             entries['tr.6502.distance-contracts-regulation']['instrument']['consolidated'])
+            checked = {domain: errors for domain, _, errors in registers.check(root, datetime.date(2026, 12, 16))}
+            self.assertEqual([], checked['legal'])
+
     def test_readers_find_each_hosts_version_and_refuse_other_shapes(self):
         unreadable = register_review.Unreadable
         mevzuat = {'act': '6698'}

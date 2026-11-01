@@ -165,15 +165,28 @@ EUR_LEX_SECTORS = {'reg': 'R', 'dir': 'L', 'dec': 'D'}
 ECFR = 'https://www.ecfr.gov/api/versioner/v1/{endpoint}/title-{title}.{suffix}?{hierarchy}'
 MEVZUAT = 'https://www.mevzuat.gov.tr/anasayfa/MevzuatFihristDetayIframe?MevzuatTur={kind}&MevzuatNo={number}' \
           '&MevzuatTertip={tertip}'
+# The kinds of mevzuat.gov.tr read besides laws (MevzuatTur=1), with the word their title carries (2026-11-01): an
+# institution's by-law or regulation (7, "YÖNETMELİK" or "YÖNETMELİĞİ") and a communiqué (9, "TEBLİĞ").
+MEVZUAT_FORMS = {'7': 'YÖNETMELİ', '9': 'TEBLİĞ'}
 WASSENAAR_LIST = 'List-of-Dual-Use-Goods-and-Technologies'
 # A version a document's URL holds: a CELEX number, a day or an upload path, never a scheme, query or `..`.
 VERSION = re.compile(r'(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._/-]*')
 
 
 def resolve_mevzuat(match):
+    """A law's consolidated text, which names its number. A by-law, regulation or communiqué is known by the Official
+    Gazette that published it, which the cited page names (an index read first) and an amended text's closing table
+    repeats; any other kind is read by its digest alone."""
     kind, number, tertip = match['kind'], match['number'], match['tertip']
-    return [{'id': f'mevzuat-{kind}-{tertip}-{number}', 'kind': 'primary', 'reader': 'mevzuat', 'act': number,
-             'url': MEVZUAT.format(kind=kind, number=number, tertip=tertip)}]
+    document = {'id': f'mevzuat-{kind}-{tertip}-{number}', 'kind': 'primary', 'reader': 'mevzuat', 'act': number,
+                'url': MEVZUAT.format(kind=kind, number=number, tertip=tertip)}
+    if kind == '1':
+        return [document]
+    if kind not in MEVZUAT_FORMS:
+        return [{'id': document['id'], 'kind': 'primary', 'url': document['url']}]
+    index = f'{document["id"]}-gazette'
+    return [{'id': index, 'kind': 'index', 'reader': 'mevzuat-gazette', 'act': number, 'url': match.string},
+            dict(document, form=MEVZUAT_FORMS[kind], index=index)]
 
 
 def resolve_eur_lex(match):
@@ -425,34 +438,103 @@ def calendar_day(day, month, year):
         raise Unreadable(f'the day {day}/{month}/{year} does not exist') from error
 
 
-# An amendment note of mevzuat.gov.tr's consolidated text (every shape the 2026-11-01 read found): "(Değişik:2/3/2024-
+# An amendment note of mevzuat.gov.tr's consolidated text (every shape the 2026-11-01 reads found): "(Değişik:2/3/2024-
 # 7499/34 md.)", "(Ek cümle: 1/2/2020 – 7226/3 md.)", "(Başlığı ile Birlikte Değişik:...)", "(Mülga: 2/7/2018-KHK-
-# 703/163 md.; Aynen kabul: ...)", "(Yeniden düzenleme: ...)", a bare "(1/2/2020-7226/3 md.)", and a Constitutional
-# Court annulment "(İptal: Anayasa Mahkemesinin 1/2/2020 tarihli ve E.: ..., K.: ... sayılı Kararı ile.)". Each day
-# in a note counts, with the act amending on it.
+# 703/163 md.; Aynen kabul: ...)", "(Yeniden düzenleme: ...)", a bare "(1/2/2020-7226/3 md.)", and in a by-law,
+# regulation or communiqué the amending instrument's Official Gazette, "(Değişik ibare:RG-23/8/2022-31932)". Each
+# day in a note counts, with the act amending on it (`RG <issue>` for a gazette).
 MEVZUAT_NOTE = re.compile(r'\(\s*(?:[^():;]{0,40}?\b(?:Değişik|Ek|Mülga|İptal|Yeniden düzenleme)\b[^()]*|'
                           r'\d{1,2}/\d{1,2}/\d{4}\s*[-–][^()]*md\.)\)')
-MEVZUAT_DAY = re.compile(r'(\d{1,2})/(\d{1,2})/(\d{4})(?:\s*[-–]\s*(KHK[-/]\d+|\d+))?')
+MEVZUAT_DAY = re.compile(r'(?:(RG)\s*-\s*)?(\d{1,2})/(\d{1,2})/(\d{4})(?:\s*[-–]\s*(KHK[-/]\d+|\d+))?')
+# A court's annulment, "(İptal: Anayasa Mahkemesinin 1/2/2020 tarihli ve E.: ..., K.: ... sayılı Kararı ile.)" or
+# "(Danıştay Onuncu Dairesinin 6/5/2026 tarihli ve E.: ...; K.: ... sayılı kararı ile iptal bent: <the text
+# annulled>)", "Tarihli" capitalised in some: only the decision's day counts, since the annulled text it quotes may
+# hold other days.
+MEVZUAT_COURT = re.compile(r'\(\s*(?:İptal[^:()]*:\s*)?(Anayasa Mahkemesi|Danıştay)\w*\b[^()]*?'
+                           r'(\d{1,2})/(\d{1,2})/(\d{4})\s*[Tt]arihli')
+# An Official Gazette as mevzuat.gov.tr writes it: the day, the issue and a repeated issue ("33124 (5.Mükerrer)").
+GAZETTE_ISSUE = r'(\d+)(?:\s*\(\s*(\d+)\s*\.\s*Mükerrer\s*\))?'
+MEVZUAT_CITED_GAZETTE = re.compile(r'Resmî Gazete Tarihi\s*:\s*(\d{1,2})\.(\d{1,2})\.(\d{4})\s*'
+                                   r'Resmî Gazete Sayısı\s*:\s*' + GAZETTE_ISSUE)
+# The closing table of an amended by-law, regulation or communiqué: its own gazette, then the amending instruments'
+# in numbered rows, of which the trailing ones may be empty.
+MEVZUAT_PUBLISHED = re.compile(r'Yayımlandığı Resmî Gazete.nin Tarihi Sayısı\s*(\d{1,2})/(\d{1,2})/(\d{4})\s+'
+                               + GAZETTE_ISSUE)
+MEVZUAT_AMENDING = re.compile(r'Yayımlandığı Resmî Gazetelerin Tarihi Sayısı')
+MEVZUAT_ROW = re.compile(r'\s*\d+\s*\.?(?:\s+(\d{1,2})/(\d{1,2})/(\d{4})\s+' + GAZETTE_ISSUE + r')?(?=\s|$)')
+
+
+def gazette_issue(issue, repeated):
+    """An Official Gazette's issue, `-m<n>` for the n-th repeated issue of its day."""
+    return issue + (f'-m{repeated}' if repeated else '')
+
+
+def gazette(day, month, year, issue, repeated):
+    """`<day>/<issue>` of an Official Gazette."""
+    return f'{calendar_day(day, month, year)}/{gazette_issue(issue, repeated)}'
+
+
+def mevzuat_changes(text):
+    """(day, by) of each change a consolidated text notes: the amending act, `RG <issue>`, or the annulling court."""
+    changes = [(calendar_day(*court.group(2, 3, 4)), court.group(1)) for court in MEVZUAT_COURT.finditer(text)]
+    for note in MEVZUAT_NOTE.finditer(text):
+        if MEVZUAT_COURT.match(note.group(0)):
+            continue
+        for match in MEVZUAT_DAY.finditer(note.group(0)):
+            act = match.group(5) and match.group(5).replace('/', '-')
+            changes.append((calendar_day(*match.group(2, 3, 4)), f'RG {act}' if match.group(1) and act else act or ''))
+    return changes
+
+
+def read_mevzuat_gazette(body, source, today):
+    """The Official Gazette that published a by-law, regulation or communiqué, which its cited page names."""
+    found = {gazette(*match.groups()) for match in MEVZUAT_CITED_GAZETTE.finditer(text_of(body))}
+    if len(found) != 1:
+        raise Unreadable(f'{len(found)} Official Gazettes of publication on the cited page of No. {source["act"]}, '
+                         'not one')
+    return found.pop()
 
 
 def read_mevzuat(body, source, version):
-    """`<day> (<amending act>)` of the latest amendment note, or `<day> (as enacted)` of a text never amended."""
+    """A law's version is `<day> (<amending act>)` of its latest change, or `<day> (as enacted)`. A by-law, regulation
+    or communiqué (its `form`) is known by its gazette, the `version` its cited page gave."""
     text = text_of(body)
+    if 'form' in source:
+        return read_mevzuat_instrument(text, source, version)
     if not re.search(rf'Numarası\s*:\s*{source["act"]}\b', text):
         raise Unreadable(f'not the consolidated text of No. {source["act"]}')
-    notes = []
-    for note in MEVZUAT_NOTE.finditer(text):
-        court = 'Anayasa Mahkemesi' in note.group(0)
-        for match in MEVZUAT_DAY.finditer(note.group(0)):
-            act = match.group(4) and match.group(4).replace('/', '-')
-            notes.append((calendar_day(*match.group(1, 2, 3)), act or ('Anayasa Mahkemesi' if court else '')))
-    if notes:
-        day, act = max(notes)
+    changes = mevzuat_changes(text)
+    if changes:
+        day, act = max(changes)
         return f'{day} ({act})' if act else str(day)
     enacted = re.search(r'Kabul Tarihi\s*:\s*(\d{1,2})/(\d{1,2})/(\d{4})', text)
     if enacted is None:
         raise Unreadable('neither an amendment note nor the day of enactment')
     return f'{calendar_day(*enacted.groups())} (as enacted)'
+
+
+def read_mevzuat_instrument(text, source, published):
+    """`<gazette> at <day> (<by>)` of the latest change, noted or in the closing table, or `<gazette> as published`;
+    the title names the instrument's form, and an amended text's table repeats the gazette of its cited page."""
+    if source['form'] not in text[:600]:
+        raise Unreadable(f'not a {source["form"]} text: its title does not name one')
+    if not published:
+        raise Unreadable(f'the Official Gazette of No. {source["act"]} is unknown; its cited page is read first')
+    table = MEVZUAT_PUBLISHED.search(text)
+    if table and gazette(*table.groups()) != published:
+        raise Unreadable(f'published in the Official Gazette {gazette(*table.groups())}, not {published} as its cited '
+                         'page says')
+    changes = mevzuat_changes(text)
+    amending = MEVZUAT_AMENDING.search(text, table.end()) if table else None
+    position = amending.end() if amending else None
+    while position is not None and (row := MEVZUAT_ROW.match(text, position)) and row.end() > position:
+        if row.group(1):
+            changes.append((calendar_day(*row.group(1, 2, 3)), f'RG {gazette_issue(*row.group(4, 5))}'))
+        position = row.end()
+    if not changes:
+        return f'{published} as published'
+    day, by = max(changes)
+    return f'{published} at {day} ({by})'
 
 
 def read_legislation_gov_uk(body, source, version):
@@ -566,7 +648,7 @@ READERS = {'mevzuat': read_mevzuat, 'legislation-gov-uk': read_legislation_gov_u
 # document for a reader without one.
 RECORDS = {'ecfr': ecfr_record}
 INDEX_READERS = {'cellar-versions': read_cellar_versions, 'ecfr-versions': read_ecfr_versions,
-                 'wassenaar-lists': read_wassenaar_lists}
+                 'wassenaar-lists': read_wassenaar_lists, 'mevzuat-gazette': read_mevzuat_gazette}
 
 
 def read_rfc_editor(body):
