@@ -336,6 +336,21 @@ if(MSVC)
     add_link_options($<${_crd_ipo}:/MAP>)
 endif()
 
+# clang-cl defines __SIZEOF_INT128__ but, unlike clang's other drivers, links no compiler runtime, so a 128-bit
+# division (__udivti3, __divti3) is left unresolved. Every image links clang's own builtins library, as clang does
+# on every other target.
+if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    execute_process(COMMAND "${CMAKE_CXX_COMPILER}" /clang:-print-libgcc-file-name /clang:--rtlib=compiler-rt
+                    OUTPUT_VARIABLE _crd_clang_builtins OUTPUT_STRIP_TRAILING_WHITESPACE
+                    RESULT_VARIABLE _crd_clang_builtins_result)
+    if(NOT _crd_clang_builtins_result EQUAL 0 OR NOT EXISTS "${_crd_clang_builtins}")
+        message(FATAL_ERROR "[crd] clang-cl names no builtins library ('${_crd_clang_builtins}'); "
+                            "128-bit division would not link")
+    endif()
+    add_link_options("${_crd_clang_builtins}")
+    unset(_crd_clang_builtins_result)
+endif()
+
 # ----- Compiler Warnings (Cerid targets only — propagates via crd-core) -----
 # Third-party CPM packages never see these flags; they inherit them only
 # if they transitively link crd-core, which they don't.
