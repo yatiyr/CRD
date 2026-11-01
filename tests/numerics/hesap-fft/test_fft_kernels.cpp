@@ -796,16 +796,18 @@ namespace
 // under the deterministic modes every level runs the canonical plan and gives portable's bits.
 template <typename T> void check_own_plans_every_level()
 {
-    crd::memory::TlsfAllocator alloc(usize{1} << 30);
     const auto levels = fft::fft_kernel_levels();
     const fft::FftTypeKernels<T>& portable = fft::kernels_of<T>(*levels[0].table);
     // 1K to 1M, and each larger size of the table at which a level the host runs plans other than canonically
-    // (avx512's f32 2M and 4M), where every level the host runs is then checked; elsewhere past 1M none is.
+    // (avx512's 2M and 4M), where every level the host runs is then checked; elsewhere past 1M none is.
     u32 last = 20;
     for (const fft::detail::FftLevelPlan& row : fft::detail::kFftLevelPlans)
     {
         last = row.element_bytes == sizeof(T) && row.log2 > last ? row.log2 : last;
     }
+    // The heap holds 32 transforms of the walk's largest size: seven buffers and three plans live at once, each plan
+    // a few transforms of tables and scratch (1 GiB ran out at the f64 4M walk).
+    crd::memory::TlsfAllocator alloc(std::max(usize{1} << 30, (usize{32} * sizeof(Complex<T>)) << last));
     const auto off_canonical_here = [&](usize n)
     {
         for (const KernelLevel<FftKernels>& level : levels)
