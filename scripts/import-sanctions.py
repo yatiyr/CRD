@@ -25,6 +25,7 @@ with the party and the value, so a change in an authority's format is read, neve
 import argparse
 import datetime
 import hashlib
+import http.client
 import importlib.util
 import json
 import re
@@ -1015,7 +1016,7 @@ def main(argv=None):
     handlers = {'fetch': command_fetch, 'import': command_import, 'record': command_record}
     try:
         return handlers[args.command](args, Path(args.root))
-    except (SanctionsError, OSError, ValueError) as error:
+    except (SanctionsError, OSError, http.client.HTTPException, ValueError) as error:
         print(f'import-sanctions: {error}', file=sys.stderr)
         return 1
 

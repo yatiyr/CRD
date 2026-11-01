@@ -4,7 +4,7 @@
   "about": "COMPLY.0 legal register: every legal and platform obligation that applies to Cerid or to products built with it, one entry per instrument and article, with its jurisdiction, official primary source and the consolidated version read, the obligation in plain words, the products, data flows and channels it applies to, the check that proves it, its effective and sunset dates, a counsel-review flag, the owning rows and the next review. scripts/check-registers.py (the crd-check-registers CTest and repository step) fails a binding obligation without an active check, a lapsed review, an entry read from no primary source when its rows close and a topic without a Turkish entry. docs/design/registers.md is the contract; it shares the standards register's format, guard and review machinery.",
   "snapshot": {
     "date": "2026-11-01",
-    "method": "Refreshed on 2026-11-01 by scripts/register-review.py from the approved source plan (133 records; report docs/sessions/2026-11-01-legal-register-eu-restrictive-measures.md)."
+    "method": "Refreshed on 2026-11-01 by scripts/register-review.py from the approved source plan (170 records; report docs/sessions/2026-11-01-legal-register-eu-arms-and-repression-regimes.md)."
   },
   "review": {
     "cadence": "A light scan quarterly, after each yearly platform event (the April SDK rule, Google I/O, WWDC, the August target API rule) and after each dated effective day the register holds, and a full re-research every year or when a scan finds a pinned instrument amended; Official Gazette of Turkey, EUR-Lex and Steamworks announcements are recorded as runs with their triggering entries. Reviews propose ROADMAP amendments for the user and never edit rows.",
@@ -129,6 +129,12 @@
         "day": "2026-11-01",
         "scan": "light",
         "ref": "docs/sessions/2026-11-01-legal-register-eu-restrictive-measures.md",
+        "triggers": []
+      },
+      {
+        "day": "2026-11-01",
+        "scan": "light",
+        "ref": "docs/sessions/2026-11-01-legal-register-eu-arms-and-repression-regimes.md",
         "triggers": []
       }
     ]
@@ -4229,6 +4235,995 @@
       "note": "The text read is the consolidated version of 20 May 2026 (CELLAR 02012R0036-20260520), after the economic measures lifted in 2025; what remains restricts military, internal-repression and monitoring items, chemical-weapons-related items and cultural property."
     },
     {
+      "id": "eu.reg-359-2011.iran-human-rights",
+      "title": "EU restrictive measures in view of the situation in Iran (human rights)",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council Regulation (EU) No 359/2011 (restrictive measures directed against certain persons, entities and bodies in view of the situation in Iran)",
+        "article": "Articles 1a with Annex III (equipment for internal repression), 1b and 1c with Annex IV (monitoring and interception equipment, technology and software)",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2011/359/oj",
+        "consolidated": {
+          "version": "02011R0359-20260724",
+          "read": "2026-11-01",
+          "sha256": "eaece86a939c132c4073f7f35c2dcb17f77e390c10513f2cee0cf7ec4dd1d07b"
+        }
+      },
+      "obligation": "Supply to no person in Iran or for use in Iran the equipment for internal repression of Annex III, nor technical assistance, brokering or financing related to it (Article 1a); without the prior authorisation of the competent authority supply none of the equipment, technology or software of Annex IV for monitoring or intercepting internet or telephone communications to any person in Iran or for use in Iran, nor technical assistance, brokering or financing related to it or the installation, operation or updating of such software (Articles 1b and 1c(1)(a) and (b)); provide no telecommunication or internet monitoring or interception service to Iran's government, public bodies, corporations and agencies or those acting for them (Article 1c(1)(c)).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Iran as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2011-04-14",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The text read is the consolidated version of 24 July 2026 (CELLAR 02011R0359-20260724). Annex IV reaches only internet, telephone and satellite communications interception and monitoring systems, and its General Note excludes mass-market software sold from stock for installation without further substantial support and software in the public domain; the freezes attach to the persons of Annex I, which the EU financial sanctions file lists."
+    },
+    {
+      "id": "eu.reg-2023-1529.iran-military-support",
+      "title": "EU restrictive measures in view of Iran's military support to Russia and to armed groups in the Middle East",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council Regulation (EU) 2023/1529 (restrictive measures in view of Iran's military support to Russia's war of aggression against Ukraine and to armed groups and entities in the Middle East and the Red Sea region as well as Iran's actions undermining freedom of navigation in the Middle East)",
+        "article": "Articles 2 with Annex II (goods and technology contributing to the manufacture of UAVs and missiles) and 2a with Annex IV (ports and locks)",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2023/1529/oj",
+        "consolidated": {
+          "version": "02023R1529-20260801",
+          "read": "2026-11-01",
+          "sha256": "4535f01372b2245a0b47ff8af84c310626a9b3fb28f82af303b6ddfee1efda8f"
+        }
+      },
+      "obligation": "Supply to no person in Iran or for use in Iran the goods and technology of Annex II that might contribute to Iran's capability to manufacture UAVs or missiles (the software it lists is specially designed for the controlled machine tools, printed circuit boards and sensors), nor technical assistance, brokering, financing or intellectual property rights related to them, and transit none of them via Iran (Article 2(1) and (2)); engage in no transaction with the ports and locks of Annex IV (Article 2a).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Iran as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2023-07-26",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The text read is the consolidated version of 1 August 2026 (CELLAR 02023R1529-20260801); the freezes attach to the persons of Annex III, which the EU financial sanctions file lists."
+    },
+    {
+      "id": "eu.reg-401-2013.myanmar",
+      "title": "EU restrictive measures in view of the situation in Myanmar/Burma",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council Regulation (EU) No 401/2013 (restrictive measures in view of the situation in Myanmar/Burma)",
+        "article": "Articles 2 and 3 with Annex I (equipment for internal repression; military activities), 3a (dual-use items for military use) and 3b and 3c with Annex III (monitoring and interception equipment, technology and software)",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2013/401/oj",
+        "consolidated": {
+          "version": "02013R0401-20260429",
+          "read": "2026-11-01",
+          "sha256": "10cf455e2330eabc91c4750f47ab94d566e3aae07ca545b6b18d8485a405ea44"
+        }
+      },
+      "obligation": "Supply to no person in Myanmar/Burma or for use there the equipment for internal repression of Annex I, nor technical assistance or financing related to it or to military activities and arms (Articles 2 and 3); supply no dual-use item of Annex I to Regulation (EC) No 428/2009 (now Regulation (EU) 2021/821) to any person there if it is or may be intended for military use, a military end-user or the Border Guard Police, nor related services or financing (Article 3a); without the prior authorisation of the competent authority supply none of the monitoring and interception equipment, technology or software of Annex III, nor related technical assistance, brokering or financing, and provide no monitoring or interception service to the State (Articles 3b and 3c).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Myanmar/Burma as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2013-05-03",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The text read is the consolidated version of 29 April 2026 (CELLAR 02013R0401-20260429). Annex III is Annex IV to Regulation (EU) No 359/2011 with the same General Note; the freezes attach to the persons of Annex IV, which the EU financial sanctions file lists."
+    },
+    {
+      "id": "eu.reg-2017-2063.venezuela",
+      "title": "EU restrictive measures in view of the situation in Venezuela",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council Regulation (EU) 2017/2063 (restrictive measures in view of the situation in Venezuela)",
+        "article": "Articles 2 (the Common Military List), 3 with Annex I (equipment for internal repression) and 6 and 7 with Annex II (monitoring and interception equipment, technology and software)",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2017/2063/oj",
+        "consolidated": {
+          "version": "02017R2063-20251217",
+          "read": "2026-11-01",
+          "sha256": "2959633c446c7cc3aaa1a787d14f0f1845ae9fed26a1bee833f5e6f24a994ddb"
+        }
+      },
+      "obligation": "Provide to no person in Venezuela or for use there technical assistance, brokering or other services or financing related to the goods and technology of the Common Military List (Article 2); supply none of the equipment for internal repression of Annex I, nor related services or financing (Article 3); without the prior authorisation of the competent authority supply none of the monitoring and interception equipment, technology or software of Annex II, nor related technical assistance, brokering or financing, and provide no telecommunication or internet monitoring or interception service to Venezuela's government or those acting for it (Articles 6 and 7).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Venezuela as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2017-11-14",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The text read is the consolidated version of 17 December 2025 (CELLAR 02017R2063-20251217). Annex II is Annex IV to Regulation (EU) No 359/2011 with the same General Note; the freezes attach to the persons of Annexes IV and V, which the EU financial sanctions file lists."
+    },
+    {
+      "id": "eu.reg-2016-44.libya",
+      "title": "EU restrictive measures in view of the situation in Libya",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council Regulation (EU) 2016/44 (restrictive measures in view of the situation in Libya)",
+        "article": "Articles 2 and 3 with Annex I and the Common Military List, 2a with Annex VII and 3a",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2016/44/oj",
+        "consolidated": {
+          "version": "02016R0044-20261013",
+          "read": "2026-11-01",
+          "sha256": "29cc25eac8f0e37a778c6454a7c4a85fa52ecad9616f7aeba4161864ef2907ba"
+        }
+      },
+      "obligation": "Supply to no person in Libya or for use there the equipment for internal repression of Annex I, the goods and technology of the Common Military List or firearms and ammunition, nor related technical assistance, brokering or financing, and procure none of them from Libya (Articles 2, 3 and 3a); supply the items of Annex VII that could be used for smuggling migrants and trafficking in human beings to any person in Libya or for use there only with prior authorisation (Article 2a).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Libya as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2016-01-20",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The text read is the consolidated version of 13 October 2026 (CELLAR 02016R0044-20261013); Article 15 restricts the designated vessels of Annex V; the freezes attach to the persons of Annexes II, III and VI, which the EU financial sanctions file lists."
+    },
+    {
+      "id": "eu.reg-1210-2003.iraq",
+      "title": "EU restrictions on economic and financial relations with Iraq",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council Regulation (EC) No 1210/2003 (certain specific restrictions on economic and financial relations with Iraq)",
+        "article": "Articles 3 with Annex II (Iraqi cultural property) and 4 with Annexes III and IV",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2003/1210/oj",
+        "consolidated": {
+          "version": "02003R1210-20251224",
+          "read": "2026-11-01",
+          "sha256": "e731c5a87f7d9253caf8cb3677d12ddc64c729f2b6e73cbb7e1f69f93b989e3b"
+        }
+      },
+      "obligation": "Import, export or deal in no Iraqi cultural property or other item of Annex II illegally removed from locations in Iraq (Article 3); freeze the funds and economic resources of the previous Government of Iraq and of the persons of Annexes III and IV, and make none available to them (Article 4).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the EU financial sanctions file lists its persons)",
+        "state": "active"
+      },
+      "effective": "2003-07-09",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The text read is the consolidated version of 24 December 2025 (CELLAR 02003R1210-20251224). No provision restricts a supply to Iraq: Article 3 restricts trade in cultural property removed from it, so the EU embargo names no Iraqi destination; the arms embargo of Common Position 2003/495/CFSP is applied through the Member States' licensing of military goods."
+    },
+    {
+      "id": "eu.reg-1412-2006.lebanon",
+      "title": "EU restrictive measures in respect of Lebanon",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council Regulation (EC) No 1412/2006 (certain restrictive measures in respect of Lebanon)",
+        "article": "Article 2",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2006/1412/oj",
+        "consolidated": {
+          "version": "02006R1412-20240913",
+          "read": "2026-11-01",
+          "sha256": "b08f9e34b55c7cade29665cb0c3d33b1601487452547d203911d24f5103ba051"
+        }
+      },
+      "obligation": "Provide to no person in Lebanon or for use there technical assistance or financing related to military activities and to the provision, manufacture, maintenance and use of arms and related matériel (Article 2), except as Article 3 authorises.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Lebanon as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2006-09-27",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The text read is the consolidated version of 13 September 2024 (CELLAR 02006R1412-20240913)."
+    },
+    {
+      "id": "eu.reg-356-2010.somalia",
+      "title": "EU restrictive measures against persons in view of the situation in Somalia",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council Regulation (EU) No 356/2010 (certain specific restrictive measures directed against certain natural or legal persons, entities or bodies, in view of the situation in Somalia)",
+        "article": "Articles 2 and 8 with Annex I",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2010/356/oj",
+        "consolidated": {
+          "version": "02010R0356-20240913",
+          "read": "2026-11-01",
+          "sha256": "96281efcd51a8abaa160a3ff27406bde356ae1821792e73a0850d5821f80b032"
+        }
+      },
+      "obligation": "Freeze the funds and economic resources of the persons of Annex I and make none available to them (Article 2); provide them no technical assistance, financing or investment services related to military activities or the goods and technology of the Common Military List (Article 8).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the EU financial sanctions file lists its persons)",
+        "state": "active"
+      },
+      "effective": "2010-04-28",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The text read is the consolidated version of 13 September 2024 (CELLAR 02010R0356-20240913). Every measure attaches to the persons of Annex I, which the EU financial sanctions file lists; the measures attached to Somalia are those of Regulation (EC) No 147/2003."
+    },
+    {
+      "id": "eu.reg-147-2003.somalia",
+      "title": "EU restrictive measures in view of the situation in Somalia",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council Regulation (EC) No 147/2003 (restrictive measures in view of the situation in Somalia)",
+        "article": "Articles 1, 3b and 3c with Annexes II and III",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2003/147/oj",
+        "consolidated": {
+          "version": "02003R0147-20240913",
+          "read": "2026-11-01",
+          "sha256": "951c127dbea177770741747d2de933825adc4e0d5d0467e23ef2394c2e6dce39"
+        }
+      },
+      "obligation": "Provide to no person in Somalia financing or technical assistance related to military activities or to the goods and technology of the Common Military List (Article 1), except as Article 3 allows; supply the improvised explosive device components of Annex III to Somalia only with prior authorisation (Article 3c); import, purchase or transport no Somali charcoal (Article 3b).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Somalia as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2003-01-30",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The text read is the consolidated version of 13 September 2024 (CELLAR 02003R0147-20240913)."
+    },
+    {
+      "id": "eu.reg-2015-735.south-sudan",
+      "title": "EU restrictive measures in respect of the situation in South Sudan",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council Regulation (EU) 2015/735 (restrictive measures in respect of the situation in South Sudan)",
+        "article": "Article 2",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2015/735/oj",
+        "consolidated": {
+          "version": "02015R0735-20260624",
+          "read": "2026-11-01",
+          "sha256": "fe96864d488b6c69452ad4fe6f86bb385e86ec2c65e3f61b90e577f069d4a938"
+        }
+      },
+      "obligation": "Provide to no person in South Sudan or for use there technical assistance, brokering or other services or financing related to military activities and arms and related materiel, nor any related to armed mercenary personnel (Article 2), except as Articles 3 and 4 allow.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens South Sudan as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2015-05-09",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The text read is the consolidated version of 24 June 2026 (CELLAR 02015R0735-20260624); the freezes attach to the persons of Annexes I and II, which the EU financial sanctions file lists."
+    },
+    {
+      "id": "eu.reg-747-2014.sudan",
+      "title": "EU restrictive measures in view of the situation in Sudan",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council Regulation (EU) No 747/2014 (restrictive measures in view of the situation in Sudan)",
+        "article": "Article 2",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2014/747/oj",
+        "consolidated": {
+          "version": "02014R0747-20260622",
+          "read": "2026-11-01",
+          "sha256": "5fd48ebe4f94520232f9d4a1d52f1a554c2030b7ea8c963d05a86af0d8cffe61"
+        }
+      },
+      "obligation": "Provide to no person in Sudan or for use there technical assistance, brokering or financing related to military activities and arms and related materiel (Article 2), except as Article 3 allows.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Sudan as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2014-07-11",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The text read is the consolidated version of 22 June 2026 (CELLAR 02014R0747-20260622); the freezes attach to the persons of Annex I, which the EU financial sanctions file lists."
+    },
+    {
+      "id": "eu.reg-224-2014.central-african-republic",
+      "title": "EU restrictive measures in view of the situation in the Central African Republic",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council Regulation (EU) No 224/2014 (restrictive measures in view of the situation in the Central African Republic)",
+        "article": "Article 2",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2014/224/oj",
+        "consolidated": {
+          "version": "02014R0224-20250326",
+          "read": "2026-11-01",
+          "sha256": "055b8371fbc78bfc866151565871444b71bd7bc9ed4e28d8f3e501fafa30a2ed"
+        }
+      },
+      "obligation": "Supply the goods and technology of the Common Military List, firearms and ammunition to no armed group or associated individual operating in the Central African Republic, nor technical assistance, brokering or financing related to them (Article 2).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens the Central African Republic as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2014-03-11",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The text read is the consolidated version of 26 March 2025 (CELLAR 02014R0224-20250326); the prohibitions no longer reach the Government; the freezes attach to the persons of Annex I, which the EU financial sanctions file lists."
+    },
+    {
+      "id": "eu.reg-1183-2005.drc",
+      "title": "EU restrictive measures in view of the situation in the Democratic Republic of the Congo",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council Regulation (EC) No 1183/2005 (restrictive measures in view of the situation in the Democratic Republic of the Congo)",
+        "article": "Article 1a",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2005/1183/oj",
+        "consolidated": {
+          "version": "02005R1183-20251210",
+          "read": "2026-11-01",
+          "sha256": "cc7d03c8fab79f6fe73cf9da0d45354c316677482d42335fc09cd41c9321c910"
+        }
+      },
+      "obligation": "Provide to no non-governmental entity or person operating in the territory of the Democratic Republic of the Congo technical assistance, brokering or financing related to the goods and technology of the Common Military List (Article 1a(1)); military assistance to any other person there is notified to the Sanctions Committee in advance (Article 1a(2)).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens the Democratic Republic of the Congo as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2005-07-23",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The text read is the consolidated version of 10 December 2025 (CELLAR 02005R1183-20251210); the freezes attach to the persons of Annexes I and Ia, which the EU financial sanctions file lists."
+    },
+    {
+      "id": "eu.reg-314-2004.zimbabwe",
+      "title": "EU arms embargo in view of the situation in Zimbabwe",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council Regulation (EC) No 314/2004 (an arms embargo in view of the situation in Zimbabwe)",
+        "article": "Articles 2 and 3 with Annex I",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2004/314/oj",
+        "consolidated": {
+          "version": "02004R0314-20260219",
+          "read": "2026-11-01",
+          "sha256": "ddd63f19cefcfbbb4559be1309c25eeebb9a45fada97e7e53d946fe718647047"
+        }
+      },
+      "obligation": "Supply to no person in Zimbabwe or for use there the goods and technology of the Common Military List, firearms and ammunition, nor related technical assistance or financing (Article 2); supply none of the equipment for internal repression of Annex I there, nor related technical assistance or financing (Article 3).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Zimbabwe as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2004-02-21",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The text read is the consolidated version of 19 February 2026 (CELLAR 02004R0314-20260219); the asset freezes have been repealed, so the regulation lists no persons."
+    },
+    {
+      "id": "eu.reg-2022-2309.haiti",
+      "title": "EU restrictive measures in view of the situation in Haiti",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council Regulation (EU) 2022/2309 (restrictive measures in view of the situation in Haiti)",
+        "article": "Article 2",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2022/2309/oj",
+        "consolidated": {
+          "version": "02022R2309-20251215",
+          "read": "2026-11-01",
+          "sha256": "125b706a84006bf7e407c3ee1bb0fb32807879bede3b7cef6b1d3f35d2a3cd26"
+        }
+      },
+      "obligation": "Supply to no person in Haiti or for use there the goods and technology of the Common Military List, firearms and ammunition, nor related technical assistance, brokering or financing (Article 2), except as its paragraphs 3 to 5 authorise.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Haiti as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2022-11-28",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The text read is the consolidated version of 15 December 2025 (CELLAR 02022R2309-20251215); the arms embargo now reaches every person in Haiti, not only the listed ones; the freezes attach to the persons of Annexes I and Ia, which the EU financial sanctions file lists."
+    },
+    {
+      "id": "eu.reg-1352-2014.yemen",
+      "title": "EU restrictive measures in view of the situation in Yemen",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council Regulation (EU) No 1352/2014 (restrictive measures in view of the situation in Yemen)",
+        "article": "Articles 1a and 2 with Annex I",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2014/1352/oj",
+        "consolidated": {
+          "version": "02014R1352-20240913",
+          "read": "2026-11-01",
+          "sha256": "6c9d5f663830e39c29d17fae5a04c6b11e3994141f20e45063dc1529c0880ea9"
+        }
+      },
+      "obligation": "Provide the persons of Annex I no technical assistance or financing related to military activities and arms (Article 1a); freeze their funds and economic resources and make none available to them (Article 2).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the EU financial sanctions file lists its persons)",
+        "state": "active"
+      },
+      "effective": "2014-12-19",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The text read is the consolidated version of 13 September 2024 (CELLAR 02014R1352-20240913). Every measure attaches to the persons of Annex I, which the EU financial sanctions file lists, so the EU embargo names no Yemeni destination."
+    },
+    {
+      "id": "eu.reg-753-2011.afghanistan",
+      "title": "EU restrictive measures in view of the situation in Afghanistan",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council Regulation (EU) No 753/2011 (restrictive measures directed against certain individuals, groups, undertakings and entities in view of the situation in Afghanistan)",
+        "article": "Articles 2 and 3 with Annex I",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2011/753/oj",
+        "consolidated": {
+          "version": "02011R0753-20240913",
+          "read": "2026-11-01",
+          "sha256": "5207a74aa089b4873b6f749452e640f3e08414c8c637749548be3a45e86dc604"
+        }
+      },
+      "obligation": "Provide the persons of Annex I no technical assistance related to the goods and technology of the Common Military List (Article 2); freeze their funds and economic resources and make none available to them (Article 3).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the EU financial sanctions file lists its persons)",
+        "state": "active"
+      },
+      "effective": "2011-08-02",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The text read is the consolidated version of 13 September 2024 (CELLAR 02011R0753-20240913). Every measure attaches to the persons of Annex I, which the EU financial sanctions file lists, so the EU embargo names no Afghan destination."
+    },
+    {
+      "id": "eu.reg-2024-1485.russia-human-rights",
+      "title": "EU restrictive measures in view of the situation in Russia (human rights)",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council Regulation (EU) 2024/1485 (restrictive measures in view of the situation in Russia)",
+        "article": "Articles 2 with Annex I (equipment for internal repression), 3 and 4 with Annex II (monitoring and interception equipment, technology and software)",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2024/1485/oj",
+        "consolidated": {
+          "version": "02024R1485-20260928",
+          "read": "2026-11-01",
+          "sha256": "ede1e1649057cb6159cc83fe625e4639eb5f19ae3ae7399e024d1b4c60f1aa49"
+        }
+      },
+      "obligation": "Supply to no person in Russia or for use in Russia the equipment for internal repression of Annex I, nor technical assistance, brokering or financing related to it (Article 2); without the prior authorisation of the competent authority supply none of the monitoring and interception equipment, technology or software of Annex II to any person in Russia or for use in Russia, nor technical assistance, brokering or financing related to it or the installation, operation or updating of such software (Articles 3 and 4(1)(a) and (b)); provide no telecommunication or internet monitoring or interception service to Russia's government, public bodies, corporations and agencies or those acting for them (Article 4(1)(c)).",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_imported.cpp",
+        "name": "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens the Russian Federation as sectoral, needing review",
+        "state": "active"
+      },
+      "effective": "2024-05-27",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The text read is the consolidated version of 28 September 2026 (CELLAR 02024R1485-20260928). Annex II is Annex IV to Regulation (EU) No 359/2011 with the same General Note, which also excludes what Article 2a of Regulation (EU) No 833/2014 covers; the freezes attach to the persons of Annex IV, which the EU financial sanctions file lists."
+    },
+    {
+      "id": "eu.reg-2271-96.blocking-statute",
+      "title": "EU blocking statute against the extra-territorial application of third-country legislation",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "COMPLY.8",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Council Regulation (EC) No 2271/96 (protecting against the effects of the extra-territorial application of legislation adopted by a third country)",
+        "article": "Articles 2, 5 and 11 with the Annex (31 CFR 515, the Iranian Transactions and Sanctions Regulations and the US Cuba and Iran acts)",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/1996/2271/oj",
+        "consolidated": {
+          "version": "01996R2271-20180807",
+          "read": "2026-11-01",
+          "sha256": "ba1543e80f7bd6bffa4ef3cdc9743531be8f0f334656e52ec9741608910f1c89"
+        }
+      },
+      "obligation": "A person the Regulation covers (an EU national resident in the Union, a legal person incorporated in the Union, any person acting in a professional capacity within it) complies with no requirement or prohibition based on the laws of the Annex, among them the Cuban Assets Control Regulations (31 CFR 515) and the Iranian Transactions and Sanctions Regulations, unless the Commission authorises it (Articles 5 and 11), and informs the Commission within 30 days when those laws affect its economic or financial interests (Article 2): so the US embargo screening applies to such an operator only where the laws of the Annex are not what requires it.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "name": "the store compliance kit selects the screening authorities from the operator's establishment, applying no authority the blocking statute bars",
+        "state": "planned"
+      },
+      "effective": "1996-11-29",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The text read is the consolidated version of 7 August 2018 (CELLAR 01996R2271-20180807), its Annex as Commission Delegated Regulation (EU) 2018/1100 replaced it. A screening applies only the authorities its request names (crd-comply's ScreenRequest, ceridc screen --authority), so the operator's establishment decides whether us.ofac.embargo is among them."
+    },
+    {
       "id": "eu.cpc.virtual-currencies",
       "title": "CPC key principles on in-game virtual currencies",
       "kind": "obligation",
@@ -6812,9 +7807,9 @@
       "sha256": "425623c09ba0917afbba2a92ae58714ac8c2fb2e606655ab42025055fe4e798d"
     },
     "EU": {
-      "generation": 7,
+      "generation": 8,
       "reviewed": "2026-11-01",
-      "sha256": "2887076770cdca412db1591b113b7eea271bbbbd1f9e31a429862131c40f61b1"
+      "sha256": "ccaf408a059f5b1b949d7ec63ea8b4d4e0b45e2a82f93f0d1f8b58d2ee97bbfd"
     },
     "GB": {
       "generation": 7,
@@ -7512,6 +8507,30 @@
         {
           "entry": "eu.reg-2022-263.occupied-oblasts",
           "question": "How does the store establish that a person or payment in the Donetsk, Kherson, Luhansk or Zaporizhzhia oblasts lies outside the non-government controlled areas Regulation (EU) 2022/263 names without drawing them, and is Cerid (or its editor) design and manufacturing software used in media, education and entertainment under its Annex III?"
+        },
+        {
+          "entry": "eu.reg-359-2011.iran-human-rights",
+          "question": "Is any Cerid component (the network diagnostics NET-DEBUG adds: packet capture to pcapng, qlog traces and session recording of a product's own traffic; the crash collector; the operational telemetry of OPS.1) equipment, technology or software of Annex IV to Regulation (EU) No 359/2011, which reaches only 'internet, telephone and satellite communications interception and monitoring systems', so that Articles 1b and 1c require prior authorisation to supply it to any person in Iran, or does its General Note exclude it as software generally available to the public, sold from stock for installation without further substantial support, or as software in the public domain?"
+        },
+        {
+          "entry": "eu.reg-401-2013.myanmar",
+          "question": "Is any Cerid component the equipment, technology or software of Annex III to Regulation (EU) No 401/2013 (the same list and General Note as Annex IV to Regulation (EU) No 359/2011), and if a Cerid export carries cryptography classified as a dual-use item of Annex I to Regulation (EU) 2021/821 (5D002 rather than mass-market), how does the store establish under Article 3a that a buyer in Myanmar/Burma does not intend it for military use, is not a military end-user and is not the Border Guard Police?"
+        },
+        {
+          "entry": "eu.reg-2017-2063.venezuela",
+          "question": "Is any Cerid component the equipment, technology or software of Annex II to Regulation (EU) 2017/2063 (the same list and General Note as Annex IV to Regulation (EU) No 359/2011), so that Articles 6 and 7 require prior authorisation to supply it to any person in Venezuela, and could supporting the Venezuelan State's use of a product built with Cerid be a 'telecommunication or internet monitoring or interception service' under Article 7(1)(c)?"
+        },
+        {
+          "entry": "eu.reg-1412-2006.lebanon",
+          "question": "Is licensing Cerid or supporting a customer (onboarding, consulting, bug fixes) 'technical assistance related to military activities' when the customer in Lebanon develops a military training simulation or another product for armed forces, and does the same answer hold for the like provisions of Regulations (EU) 2015/735 (South Sudan), (EU) No 747/2014 (Sudan), (EC) No 147/2003 (Somalia), (EC) No 1183/2005 (the Democratic Republic of the Congo), (EU) No 224/2014 (the Central African Republic), (EC) No 314/2004 (Zimbabwe), (EU) 2022/2309 (Haiti), (EU) 2016/44 (Libya), (EU) 2017/2063 (Venezuela) and (EU) No 401/2013 (Myanmar/Burma)? Must the store ask a buyer in these places for its end use?"
+        },
+        {
+          "entry": "eu.reg-2024-1485.russia-human-rights",
+          "question": "Is any Cerid component the equipment, technology or software of Annex II to Regulation (EU) 2024/1485 (the list and General Note of Annex IV to Regulation (EU) No 359/2011), so that Articles 3 and 4 require prior authorisation to supply it to any person in Russia, or does the General Note exclude it, including where Article 2a of Regulation (EU) No 833/2014 already applies to its encryption?"
+        },
+        {
+          "entry": "eu.reg-2271-96.blocking-statute",
+          "question": "If the publisher (the user's Turkish company) establishes a store operator, subsidiary or employee in the Union, or a developer incorporated in the Union screens its customers with Cerid, does Article 5 of Regulation (EC) No 2271/96 forbid refusing a customer in Cuba or Iran because 31 CFR 515 or the Iranian Transactions and Sanctions Regulations (both in its Annex, both in the us.ofac.embargo generation) require it, so that such an operator must leave us.ofac.embargo out of its screening, apply it only where US jurisdiction attaches (US persons, US-origin items under the EAR), or seek the Commission's authorisation; and does Article 2's 30-day duty to inform the Commission apply?"
         }
       ]
     }
@@ -7699,6 +8718,13 @@
               "entry": "eu.reg-833-2014.russia"
             },
             {
+              "region": "RU",
+              "program": "Regulation (EU) 2024/1485",
+              "measure": "sectoral",
+              "basis": "Articles 2 (Annex I equipment for internal repression), 3 and 4 (Annex II monitoring and interception equipment, technology and software under prior authorisation; no monitoring or interception service to the Russian State)",
+              "entry": "eu.reg-2024-1485.russia-human-rights"
+            },
+            {
               "region": "BY",
               "program": "Regulation (EC) No 765/2006",
               "measure": "sectoral",
@@ -7755,6 +8781,20 @@
               "entry": "eu.reg-267-2012.iran"
             },
             {
+              "region": "IR",
+              "program": "Regulation (EU) No 359/2011",
+              "measure": "sectoral",
+              "basis": "Articles 1a (Annex III equipment for internal repression), 1b and 1c (Annex IV monitoring and interception equipment, technology and software under prior authorisation; no monitoring or interception service to the Iranian State)",
+              "entry": "eu.reg-359-2011.iran-human-rights"
+            },
+            {
+              "region": "IR",
+              "program": "Regulation (EU) 2023/1529",
+              "measure": "sectoral",
+              "basis": "Articles 2 (Annex II goods and technology contributing to the manufacture of UAVs and missiles, with related services and intellectual property) and 2a (Annex IV ports and locks)",
+              "entry": "eu.reg-2023-1529.iran-military-support"
+            },
+            {
               "region": "KP",
               "program": "Regulation (EU) 2017/1509",
               "measure": "sectoral",
@@ -7767,9 +8807,86 @@
               "measure": "sectoral",
               "basis": "Articles 2a, 2b, 3, 4 and 11c (internal-repression and military items, Annex V monitoring and interception software, cultural property)",
               "entry": "eu.reg-36-2012.syria"
+            },
+            {
+              "region": "MM",
+              "program": "Regulation (EU) No 401/2013",
+              "measure": "sectoral",
+              "basis": "Articles 2 and 3 (Annex I equipment for internal repression; technical assistance and financing related to military activities), 3a (dual-use items for military use, military end-users or the Border Guard Police) and 3b and 3c (Annex III monitoring and interception equipment, technology and software under prior authorisation)",
+              "entry": "eu.reg-401-2013.myanmar"
+            },
+            {
+              "region": "VE",
+              "program": "Regulation (EU) 2017/2063",
+              "measure": "sectoral",
+              "basis": "Articles 2 (services and financing related to the Common Military List), 3 (Annex I equipment for internal repression) and 6 and 7 (Annex II monitoring and interception equipment, technology and software under prior authorisation; no monitoring or interception service to the Venezuelan State)",
+              "entry": "eu.reg-2017-2063.venezuela"
+            },
+            {
+              "region": "LY",
+              "program": "Regulation (EU) 2016/44",
+              "measure": "sectoral",
+              "basis": "Articles 2 and 3 (Annex I equipment for internal repression and the Common Military List, with related services and financing), 2a (Annex VII items under prior authorisation) and 3a (no arms procured from Libya)",
+              "entry": "eu.reg-2016-44.libya"
+            },
+            {
+              "region": "LB",
+              "program": "Regulation (EC) No 1412/2006",
+              "measure": "sectoral",
+              "basis": "Article 2 (technical assistance and financing related to military activities and arms to any person in, or for use in, Lebanon)",
+              "entry": "eu.reg-1412-2006.lebanon"
+            },
+            {
+              "region": "SO",
+              "program": "Regulation (EC) No 147/2003",
+              "measure": "sectoral",
+              "basis": "Articles 1 (financing and technical assistance related to military activities and the Common Military List to any person in Somalia) and 3c (Annex III improvised explosive device components under prior authorisation)",
+              "entry": "eu.reg-147-2003.somalia"
+            },
+            {
+              "region": "SS",
+              "program": "Regulation (EU) 2015/735",
+              "measure": "sectoral",
+              "basis": "Article 2 (technical assistance, brokering and other services and financing related to military activities, arms and armed mercenary personnel to any person in, or for use in, South Sudan)",
+              "entry": "eu.reg-2015-735.south-sudan"
+            },
+            {
+              "region": "SD",
+              "program": "Regulation (EU) No 747/2014",
+              "measure": "sectoral",
+              "basis": "Article 2 (technical assistance, brokering and financing related to military activities and arms to any person in, or for use in, Sudan)",
+              "entry": "eu.reg-747-2014.sudan"
+            },
+            {
+              "region": "CF",
+              "program": "Regulation (EU) No 224/2014",
+              "measure": "sectoral",
+              "basis": "Article 2 (the Common Military List, firearms and ammunition, with related technical assistance, brokering and financing, to armed groups and associated individuals operating in the Central African Republic)",
+              "entry": "eu.reg-224-2014.central-african-republic"
+            },
+            {
+              "region": "CD",
+              "program": "Regulation (EC) No 1183/2005",
+              "measure": "sectoral",
+              "basis": "Article 1a (technical assistance, brokering and financing related to the Common Military List to any non-governmental entity or person operating in the territory of the Democratic Republic of the Congo)",
+              "entry": "eu.reg-1183-2005.drc"
+            },
+            {
+              "region": "ZW",
+              "program": "Regulation (EC) No 314/2004",
+              "measure": "sectoral",
+              "basis": "Articles 2 (the Common Military List, firearms and ammunition, with related technical assistance and financing) and 3 (Annex I equipment for internal repression)",
+              "entry": "eu.reg-314-2004.zimbabwe"
+            },
+            {
+              "region": "HT",
+              "program": "Regulation (EU) 2022/2309",
+              "measure": "sectoral",
+              "basis": "Article 2 (the Common Military List, firearms and ammunition, with related technical assistance, brokering and financing, to any person in, or for use in, Haiti)",
+              "entry": "eu.reg-2022-2309.haiti"
             }
           ],
-          "open": "The other Article 215 regulations whose measures attach to a place are read next: the arms, internal-repression and monitoring regimes (Iran's Regulation (EU) No 359/2011 and Regulation (EU) 2023/1529, Myanmar, Venezuela, Libya, Iraq, Lebanon, Somalia, South Sudan, Sudan, the Central African Republic, the Democratic Republic of the Congo, Zimbabwe, Haiti, Yemen and Afghanistan), each a destination once its measures are read."
+          "open": null
         }
       },
       "reasons": {

@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review EU
 format = "cerid-rules/1"
 jurisdiction = "EU"
-generation = 7
+generation = 8
 register = "2026-11-01"
 
 [[scope]]
@@ -677,6 +677,405 @@ sunset = ""
 counsel = "none"
 counsel_reviewed = ""
 rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-359-2011.iran-human-rights"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures in view of the situation in Iran (human rights)"
+instrument = "Council Regulation (EU) No 359/2011 (restrictive measures directed against certain persons, entities and bodies in view of the situation in Iran)"
+article = "Articles 1a with Annex III (equipment for internal repression), 1b and 1c with Annex IV (monitoring and interception equipment, technology and software)"
+primary = "https://eur-lex.europa.eu/eli/reg/2011/359/oj"
+read = true
+obligation = "Supply to no person in Iran or for use in Iran the equipment for internal repression of Annex III, nor technical assistance, brokering or financing related to it (Article 1a); without the prior authorisation of the competent authority supply none of the equipment, technology or software of Annex IV for monitoring or intercepting internet or telephone communications to any person in Iran or for use in Iran, nor technical assistance, brokering or financing related to it or the installation, operation or updating of such software (Articles 1b and 1c(1)(a) and (b)); provide no telecommunication or internet monitoring or interception service to Iran's government, public bodies, corporations and agencies or those acting for them (Article 1c(1)(c))."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Iran as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2011-04-14"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-2023-1529.iran-military-support"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures in view of Iran's military support to Russia and to armed groups in the Middle East"
+instrument = "Council Regulation (EU) 2023/1529 (restrictive measures in view of Iran's military support to Russia's war of aggression against Ukraine and to armed groups and entities in the Middle East and the Red Sea region as well as Iran's actions undermining freedom of navigation in the Middle East)"
+article = "Articles 2 with Annex II (goods and technology contributing to the manufacture of UAVs and missiles) and 2a with Annex IV (ports and locks)"
+primary = "https://eur-lex.europa.eu/eli/reg/2023/1529/oj"
+read = true
+obligation = "Supply to no person in Iran or for use in Iran the goods and technology of Annex II that might contribute to Iran's capability to manufacture UAVs or missiles (the software it lists is specially designed for the controlled machine tools, printed circuit boards and sensors), nor technical assistance, brokering, financing or intellectual property rights related to them, and transit none of them via Iran (Article 2(1) and (2)); engage in no transaction with the ports and locks of Annex IV (Article 2a)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Iran as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2023-07-26"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-401-2013.myanmar"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures in view of the situation in Myanmar/Burma"
+instrument = "Council Regulation (EU) No 401/2013 (restrictive measures in view of the situation in Myanmar/Burma)"
+article = "Articles 2 and 3 with Annex I (equipment for internal repression; military activities), 3a (dual-use items for military use) and 3b and 3c with Annex III (monitoring and interception equipment, technology and software)"
+primary = "https://eur-lex.europa.eu/eli/reg/2013/401/oj"
+read = true
+obligation = "Supply to no person in Myanmar/Burma or for use there the equipment for internal repression of Annex I, nor technical assistance or financing related to it or to military activities and arms (Articles 2 and 3); supply no dual-use item of Annex I to Regulation (EC) No 428/2009 (now Regulation (EU) 2021/821) to any person there if it is or may be intended for military use, a military end-user or the Border Guard Police, nor related services or financing (Article 3a); without the prior authorisation of the competent authority supply none of the monitoring and interception equipment, technology or software of Annex III, nor related technical assistance, brokering or financing, and provide no monitoring or interception service to the State (Articles 3b and 3c)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Myanmar/Burma as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2013-05-03"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-2017-2063.venezuela"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures in view of the situation in Venezuela"
+instrument = "Council Regulation (EU) 2017/2063 (restrictive measures in view of the situation in Venezuela)"
+article = "Articles 2 (the Common Military List), 3 with Annex I (equipment for internal repression) and 6 and 7 with Annex II (monitoring and interception equipment, technology and software)"
+primary = "https://eur-lex.europa.eu/eli/reg/2017/2063/oj"
+read = true
+obligation = "Provide to no person in Venezuela or for use there technical assistance, brokering or other services or financing related to the goods and technology of the Common Military List (Article 2); supply none of the equipment for internal repression of Annex I, nor related services or financing (Article 3); without the prior authorisation of the competent authority supply none of the monitoring and interception equipment, technology or software of Annex II, nor related technical assistance, brokering or financing, and provide no telecommunication or internet monitoring or interception service to Venezuela's government or those acting for it (Articles 6 and 7)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Venezuela as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2017-11-14"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-2016-44.libya"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures in view of the situation in Libya"
+instrument = "Council Regulation (EU) 2016/44 (restrictive measures in view of the situation in Libya)"
+article = "Articles 2 and 3 with Annex I and the Common Military List, 2a with Annex VII and 3a"
+primary = "https://eur-lex.europa.eu/eli/reg/2016/44/oj"
+read = true
+obligation = "Supply to no person in Libya or for use there the equipment for internal repression of Annex I, the goods and technology of the Common Military List or firearms and ammunition, nor related technical assistance, brokering or financing, and procure none of them from Libya (Articles 2, 3 and 3a); supply the items of Annex VII that could be used for smuggling migrants and trafficking in human beings to any person in Libya or for use there only with prior authorisation (Article 2a)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Libya as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2016-01-20"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-1210-2003.iraq"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictions on economic and financial relations with Iraq"
+instrument = "Council Regulation (EC) No 1210/2003 (certain specific restrictions on economic and financial relations with Iraq)"
+article = "Articles 3 with Annex II (Iraqi cultural property) and 4 with Annexes III and IV"
+primary = "https://eur-lex.europa.eu/eli/reg/2003/1210/oj"
+read = true
+obligation = "Import, export or deal in no Iraqi cultural property or other item of Annex II illegally removed from locations in Iraq (Article 3); freeze the funds and economic resources of the previous Government of Iraq and of the persons of Annexes III and IV, and make none available to them (Article 4)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the EU financial sanctions file lists its persons)"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2003-07-09"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-1412-2006.lebanon"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures in respect of Lebanon"
+instrument = "Council Regulation (EC) No 1412/2006 (certain restrictive measures in respect of Lebanon)"
+article = "Article 2"
+primary = "https://eur-lex.europa.eu/eli/reg/2006/1412/oj"
+read = true
+obligation = "Provide to no person in Lebanon or for use there technical assistance or financing related to military activities and to the provision, manufacture, maintenance and use of arms and related matériel (Article 2), except as Article 3 authorises."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Lebanon as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2006-09-27"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-356-2010.somalia"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures against persons in view of the situation in Somalia"
+instrument = "Council Regulation (EU) No 356/2010 (certain specific restrictive measures directed against certain natural or legal persons, entities or bodies, in view of the situation in Somalia)"
+article = "Articles 2 and 8 with Annex I"
+primary = "https://eur-lex.europa.eu/eli/reg/2010/356/oj"
+read = true
+obligation = "Freeze the funds and economic resources of the persons of Annex I and make none available to them (Article 2); provide them no technical assistance, financing or investment services related to military activities or the goods and technology of the Common Military List (Article 8)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the EU financial sanctions file lists its persons)"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2010-04-28"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-147-2003.somalia"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures in view of the situation in Somalia"
+instrument = "Council Regulation (EC) No 147/2003 (restrictive measures in view of the situation in Somalia)"
+article = "Articles 1, 3b and 3c with Annexes II and III"
+primary = "https://eur-lex.europa.eu/eli/reg/2003/147/oj"
+read = true
+obligation = "Provide to no person in Somalia financing or technical assistance related to military activities or to the goods and technology of the Common Military List (Article 1), except as Article 3 allows; supply the improvised explosive device components of Annex III to Somalia only with prior authorisation (Article 3c); import, purchase or transport no Somali charcoal (Article 3b)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Somalia as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2003-01-30"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-2015-735.south-sudan"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures in respect of the situation in South Sudan"
+instrument = "Council Regulation (EU) 2015/735 (restrictive measures in respect of the situation in South Sudan)"
+article = "Article 2"
+primary = "https://eur-lex.europa.eu/eli/reg/2015/735/oj"
+read = true
+obligation = "Provide to no person in South Sudan or for use there technical assistance, brokering or other services or financing related to military activities and arms and related materiel, nor any related to armed mercenary personnel (Article 2), except as Articles 3 and 4 allow."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens South Sudan as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2015-05-09"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-747-2014.sudan"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures in view of the situation in Sudan"
+instrument = "Council Regulation (EU) No 747/2014 (restrictive measures in view of the situation in Sudan)"
+article = "Article 2"
+primary = "https://eur-lex.europa.eu/eli/reg/2014/747/oj"
+read = true
+obligation = "Provide to no person in Sudan or for use there technical assistance, brokering or financing related to military activities and arms and related materiel (Article 2), except as Article 3 allows."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Sudan as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2014-07-11"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-224-2014.central-african-republic"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures in view of the situation in the Central African Republic"
+instrument = "Council Regulation (EU) No 224/2014 (restrictive measures in view of the situation in the Central African Republic)"
+article = "Article 2"
+primary = "https://eur-lex.europa.eu/eli/reg/2014/224/oj"
+read = true
+obligation = "Supply the goods and technology of the Common Military List, firearms and ammunition to no armed group or associated individual operating in the Central African Republic, nor technical assistance, brokering or financing related to them (Article 2)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens the Central African Republic as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2014-03-11"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-1183-2005.drc"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures in view of the situation in the Democratic Republic of the Congo"
+instrument = "Council Regulation (EC) No 1183/2005 (restrictive measures in view of the situation in the Democratic Republic of the Congo)"
+article = "Article 1a"
+primary = "https://eur-lex.europa.eu/eli/reg/2005/1183/oj"
+read = true
+obligation = "Provide to no non-governmental entity or person operating in the territory of the Democratic Republic of the Congo technical assistance, brokering or financing related to the goods and technology of the Common Military List (Article 1a(1)); military assistance to any other person there is notified to the Sanctions Committee in advance (Article 1a(2))."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens the Democratic Republic of the Congo as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2005-07-23"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-314-2004.zimbabwe"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU arms embargo in view of the situation in Zimbabwe"
+instrument = "Council Regulation (EC) No 314/2004 (an arms embargo in view of the situation in Zimbabwe)"
+article = "Articles 2 and 3 with Annex I"
+primary = "https://eur-lex.europa.eu/eli/reg/2004/314/oj"
+read = true
+obligation = "Supply to no person in Zimbabwe or for use there the goods and technology of the Common Military List, firearms and ammunition, nor related technical assistance or financing (Article 2); supply none of the equipment for internal repression of Annex I there, nor related technical assistance or financing (Article 3)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Zimbabwe as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2004-02-21"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-2022-2309.haiti"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures in view of the situation in Haiti"
+instrument = "Council Regulation (EU) 2022/2309 (restrictive measures in view of the situation in Haiti)"
+article = "Article 2"
+primary = "https://eur-lex.europa.eu/eli/reg/2022/2309/oj"
+read = true
+obligation = "Supply to no person in Haiti or for use there the goods and technology of the Common Military List, firearms and ammunition, nor related technical assistance, brokering or financing (Article 2), except as its paragraphs 3 to 5 authorise."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens Haiti as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2022-11-28"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-1352-2014.yemen"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures in view of the situation in Yemen"
+instrument = "Council Regulation (EU) No 1352/2014 (restrictive measures in view of the situation in Yemen)"
+article = "Articles 1a and 2 with Annex I"
+primary = "https://eur-lex.europa.eu/eli/reg/2014/1352/oj"
+read = true
+obligation = "Provide the persons of Annex I no technical assistance or financing related to military activities and arms (Article 1a); freeze their funds and economic resources and make none available to them (Article 2)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the EU financial sanctions file lists its persons)"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2014-12-19"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-753-2011.afghanistan"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures in view of the situation in Afghanistan"
+instrument = "Council Regulation (EU) No 753/2011 (restrictive measures directed against certain individuals, groups, undertakings and entities in view of the situation in Afghanistan)"
+article = "Articles 2 and 3 with Annex I"
+primary = "https://eur-lex.europa.eu/eli/reg/2011/753/oj"
+read = true
+obligation = "Provide the persons of Annex I no technical assistance related to the goods and technology of the Common Military List (Article 2); freeze their funds and economic resources and make none available to them (Article 3)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the imported official lists decode, adopt and screen (the EU financial sanctions file lists its persons)"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2011-08-02"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-2024-1485.russia-human-rights"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU restrictive measures in view of the situation in Russia (human rights)"
+instrument = "Council Regulation (EU) 2024/1485 (restrictive measures in view of the situation in Russia)"
+article = "Articles 2 with Annex I (equipment for internal repression), 3 and 4 with Annex II (monitoring and interception equipment, technology and software)"
+primary = "https://eur-lex.europa.eu/eli/reg/2024/1485/oj"
+read = true
+obligation = "Supply to no person in Russia or for use in Russia the equipment for internal repression of Annex I, nor technical assistance, brokering or financing related to it (Article 2); without the prior authorisation of the competent authority supply none of the monitoring and interception equipment, technology or software of Annex II to any person in Russia or for use in Russia, nor technical assistance, brokering or financing related to it or the installation, operation or updating of such software (Articles 3 and 4(1)(a) and (b)); provide no telecommunication or internet monitoring or interception service to Russia's government, public bodies, corporations and agencies or those acting for them (Article 4(1)(c))."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens the Russian Federation as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2024-05-27"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "eu.reg-2271-96.blocking-statute"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "EU blocking statute against the extra-territorial application of third-country legislation"
+instrument = "Council Regulation (EC) No 2271/96 (protecting against the effects of the extra-territorial application of legislation adopted by a third country)"
+article = "Articles 2, 5 and 11 with the Annex (31 CFR 515, the Iranian Transactions and Sanctions Regulations and the US Cuba and Iran acts)"
+primary = "https://eur-lex.europa.eu/eli/reg/1996/2271/oj"
+read = true
+obligation = "A person the Regulation covers (an EU national resident in the Union, a legal person incorporated in the Union, any person acting in a professional capacity within it) complies with no requirement or prohibition based on the laws of the Annex, among them the Cuban Assets Control Regulations (31 CFR 515) and the Iranian Transactions and Sanctions Regulations, unless the Commission authorises it (Articles 5 and 11), and informs the Commission within 30 days when those laws affect its economic or financial interests (Article 2): so the US embargo screening applies to such an operator only where the laws of the Annex are not what requires it."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "planned"
+check_name = "the store compliance kit selects the screening authorities from the operator's establishment, applying no authority the blocking statute bars"
+check_ref = "docs/ROADMAP.md#slice-comply.8"
+effective = "1996-11-29"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "COMPLY.8", "STORE.1", "STORE.3"]
 
 [[rule]]
 id = "eu.cpc.virtual-currencies"

@@ -278,7 +278,7 @@ TEST_CASE("sanctions: the authored EU embargo decodes, adopts and screens destin
 {
     SanctionsStore store;
     const SanctionsList list = adopt(store, kEuEmbargo);
-    CHECK(list.destinations.size() == 11U);
+    CHECK(list.destinations.size() == 25U);
     CHECK(list.published == 20261101U);
     CHECK(list.max_age_days == 92U);
 
@@ -286,27 +286,35 @@ TEST_CASE("sanctions: the authored EU embargo decodes, adopts and screens destin
     {
         return screened(store, {&kEuEmbargo}, region, day, hits, disposition);
     };
-    // No Article 215 regulation read embargoes a place outright: Russia, Belarus, Crimea and Sevastopol, Iran, the
-    // DPRK and Syria are sectoral, so a match needs review and nothing blocks; a place inside Russia matches too.
-    for (const cont::StringView region : {"RU", "BY", "UA-43", "UA-40", "IR", "KP", "SY", "RU-MOW"})
+    // No Article 215 regulation embargoes a place outright: Belarus, Crimea and Sevastopol, the DPRK and Syria, and
+    // every place an arms, internal-repression or monitoring regime restricts supply to, are sectoral, so a match needs
+    // review and nothing blocks.
+    for (const cont::StringView region : {"BY", "UA-43", "UA-40", "KP", "SY", "MM", "VE", "LY", "LB", "SO", "SS", "SD",
+                                          "CF", "CD", "ZW", "HT"})
     {
         CHECK(screened_eu(region, kDay, 1U, Disposition::Match) == Verdict::Review);
     }
+    // Russia is restricted by two regulations (No 833/2014 and the internal-repression regime 2024/1485), a place
+    // inside it too, and Iran by three (non-proliferation, human rights, military support): one hit each.
+    CHECK(screened_eu("RU", kDay, 2U, Disposition::Match) == Verdict::Review);
+    CHECK(screened_eu("RU-MOW", kDay, 2U, Disposition::Match) == Verdict::Review);
+    CHECK(screened_eu("IR", kDay, 3U, Disposition::Match) == Verdict::Review);
     // Regulation (EU) 2022/263's specified territories lie in four oblasts, their boundary drawn by no subdivision: a
     // place in any of them needs review.
     for (const cont::StringView region : {"UA-14", "UA-65", "UA-09", "UA-23"})
     {
         CHECK(screened_eu(region, kDay, 1U, Disposition::Match) == Verdict::Review);
     }
-    // Ukraine as a whole names the country six restricted regions belong to; Cuba (no EU regime), Venezuela (whose
-    // regime is read next), another region of Ukraine and Turkey are clear.
+    // Ukraine as a whole names the country six restricted regions belong to. Cuba (no EU regime), Iraq (its
+    // regulation restricts trade in cultural property removed from it, no supply to it), Yemen and Afghanistan (their
+    // measures attach only to listed persons), another region of Ukraine and Turkey are clear.
     CHECK(screened_eu("UA", kDay, 6U, Disposition::Possible) == Verdict::Review);
-    for (const cont::StringView region : {"CU", "VE", "UA-30", "TR"})
+    for (const cont::StringView region : {"CU", "IQ", "YE", "AF", "UA-30", "TR"})
     {
         CHECK(screened_eu(region, kDay, 0U, Disposition::Match) == Verdict::Clear);
     }
     // Past its maximum age the reading is a gap that keeps even a listed destination from a settled answer.
-    CHECK(screened_eu("RU", 20270202U, 1U, Disposition::Match) == Verdict::Unavailable);
+    CHECK(screened_eu("RU", 20270202U, 2U, Disposition::Match) == Verdict::Unavailable);
 }
 
 TEST_CASE("sanctions: a destination screened against the US and EU embargoes together", "[.imported]")
@@ -318,14 +326,19 @@ TEST_CASE("sanctions: a destination screened against the US and EU embargoes tog
     {
         return screened(store, {&kUsEmbargo, &kEuEmbargo}, region, kDay, hits, disposition);
     };
-    // The comprehensive US embargo blocks whatever the EU's sectoral one says; each authority's hit is reported.
-    CHECK(both("IR", 2U, Disposition::Match) == Verdict::Blocked);
+    // The comprehensive US embargo blocks whatever the EU's sectoral ones say; each programme's hit is reported (Iran
+    // once under chapter V and three times under the EU's regulations).
+    CHECK(both("IR", 4U, Disposition::Match) == Verdict::Blocked);
+    CHECK(both("KP", 2U, Disposition::Match) == Verdict::Blocked);
     CHECK(both("UA-43", 2U, Disposition::Match) == Verdict::Blocked);
     CHECK(both("CU", 1U, Disposition::Match) == Verdict::Blocked);
-    // Donetsk is partial under both; Kherson and Belarus only under the EU; the Russian Federation three times.
+    // Donetsk is partial under both; Venezuela sectoral under both; Kherson, Belarus and Myanmar only under the EU;
+    // the Russian Federation four times (chapter V's directives, E.O. 14071 and two EU regulations).
     CHECK(both("UA-14", 2U, Disposition::Match) == Verdict::Review);
+    CHECK(both("VE", 2U, Disposition::Match) == Verdict::Review);
     CHECK(both("UA-65", 1U, Disposition::Match) == Verdict::Review);
     CHECK(both("BY", 1U, Disposition::Match) == Verdict::Review);
-    CHECK(both("RU", 3U, Disposition::Match) == Verdict::Review);
+    CHECK(both("MM", 1U, Disposition::Match) == Verdict::Review);
+    CHECK(both("RU", 4U, Disposition::Match) == Verdict::Review);
     CHECK(both("TR", 0U, Disposition::Match) == Verdict::Clear);
 }

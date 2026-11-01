@@ -46,6 +46,7 @@ import collections
 import datetime
 import hashlib
 import html
+import http.client
 import importlib.util
 import json
 import re
@@ -411,7 +412,8 @@ def download(opener, url, headers, limit=None):
 def fetch_sources(plan, into, opener=None, today=None):
     """Reads every planned source (HTTPS only, gzip decoded, at most FETCH_LIMIT bytes) into `into` with a manifest of
     the SHA-256 of each decoded body; a version index is read before the documents whose URL holds the version (or the
-    part of it) it names. A source that fails is recorded with its error and read again by the next run."""
+    part of it) it names. A source that fails (a refused connection, a timeout, a body cut short) is recorded with its
+    error and read again by the next run."""
     if not isinstance(plan, dict) or plan.get('schema') != PLAN_SCHEMA or not isinstance(plan.get('sources'), list):
         raise ReviewError(f'the plan is not a {PLAN_SCHEMA} document')
     today = today or datetime.datetime.now(datetime.timezone.utc).date()
@@ -439,7 +441,7 @@ def fetch_sources(plan, into, opener=None, today=None):
                 if not VERSION.fullmatch(path):
                     raise Unreadable(f'the version {path!r} cannot be part of a URL')
                 versions[source['id']] = path, version
-        except OSError as error:
+        except (OSError, http.client.HTTPException) as error:
             item['error'] = ' '.join(f'{type(error).__name__}: {error}'.split())
             continue
         except Unreadable as error:

@@ -7083,18 +7083,32 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
             with patch('sys.stdout', new_callable=io.StringIO) as printed:
                 self.assertEqual(0, sanctions_import.main(['import', '--from', str(self.LISTS), '--out', out,
                                                            '--authority', 'eu.council.embargo']))
-            self.assertIn('eu.council.embargo: 11 embargoed destinations read 2026-11-01: generation 20261101000000',
+            self.assertIn('eu.council.embargo: 25 embargoed destinations read 2026-11-01: generation 20261101000000',
                           printed.getvalue())
             document = tomllib.loads((Path(out) / 'eu.council.embargo.sanctions.toml').read_text(encoding='utf-8'))
         # The screening entry is the class of Article 215 regulations (its primary the sanctions map), never read
-        # itself: the reading is the seven regulations its destinations are read in.
+        # itself: the reading is the 21 regulations its destinations are read in.
         self.assertEqual(('EU', 'https://www.sanctionsmap.eu/'), (document['jurisdiction'], document['source']))
         self.assertIsNone(sanctions_import.read_instrument(register, 'eu.restrictive-measures'))
-        self.assertEqual(['eu.reg-2017-1509.dprk', 'eu.reg-2022-263.occupied-oblasts', 'eu.reg-267-2012.iran',
-                          'eu.reg-36-2012.syria', 'eu.reg-692-2014.crimea', 'eu.reg-765-2006.belarus',
-                          'eu.reg-833-2014.russia'], list(sanctions_import.embargo_texts(record, register)))
-        self.assertIsNotNone(record['open'])
+        texts = list(sanctions_import.embargo_texts(record, register))
+        self.assertEqual(['eu.reg-1183-2005.drc', 'eu.reg-1412-2006.lebanon', 'eu.reg-147-2003.somalia',
+                          'eu.reg-2015-735.south-sudan', 'eu.reg-2016-44.libya', 'eu.reg-2017-1509.dprk',
+                          'eu.reg-2017-2063.venezuela', 'eu.reg-2022-2309.haiti', 'eu.reg-2022-263.occupied-oblasts',
+                          'eu.reg-2023-1529.iran-military-support', 'eu.reg-2024-1485.russia-human-rights',
+                          'eu.reg-224-2014.central-african-republic',
+                          'eu.reg-267-2012.iran', 'eu.reg-314-2004.zimbabwe', 'eu.reg-359-2011.iran-human-rights',
+                          'eu.reg-36-2012.syria', 'eu.reg-401-2013.myanmar', 'eu.reg-692-2014.crimea',
+                          'eu.reg-747-2014.sudan', 'eu.reg-765-2006.belarus', 'eu.reg-833-2014.russia'], texts)
+        # A regulation read whose measures attach only to listed persons (the EU financial sanctions file screens
+        # them) or restrict no supply to a place (Iraq's cultural property, the blocking statute) is a text read
+        # without a destination, so not in the reading.
+        for no_destination in ('eu.reg-1210-2003.iraq', 'eu.reg-356-2010.somalia', 'eu.reg-1352-2014.yemen',
+                            'eu.reg-753-2011.afghanistan', 'eu.reg-2271-96.blocking-statute'):
+            self.assertIsNotNone(sanctions_import.read_instrument(register, no_destination))
+            self.assertNotIn(no_destination, texts)
+        self.assertIsNone(record['open'])
         self.assertEqual([('RU', 'Regulation (EU) No 833/2014', 'sectoral'),
+                          ('RU', 'Regulation (EU) 2024/1485', 'sectoral'),
                           ('BY', 'Regulation (EC) No 765/2006', 'sectoral'),
                           ('UA-43', 'Regulation (EU) No 692/2014', 'sectoral'),
                           ('UA-40', 'Regulation (EU) No 692/2014', 'sectoral'),
@@ -7103,8 +7117,21 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
                           ('UA-09', 'Regulation (EU) 2022/263', 'partial'),
                           ('UA-23', 'Regulation (EU) 2022/263', 'partial'),
                           ('IR', 'Regulation (EU) No 267/2012', 'sectoral'),
+                          ('IR', 'Regulation (EU) No 359/2011', 'sectoral'),
+                          ('IR', 'Regulation (EU) 2023/1529', 'sectoral'),
                           ('KP', 'Regulation (EU) 2017/1509', 'sectoral'),
-                          ('SY', 'Regulation (EU) No 36/2012', 'sectoral')],
+                          ('SY', 'Regulation (EU) No 36/2012', 'sectoral'),
+                          ('MM', 'Regulation (EU) No 401/2013', 'sectoral'),
+                          ('VE', 'Regulation (EU) 2017/2063', 'sectoral'),
+                          ('LY', 'Regulation (EU) 2016/44', 'sectoral'),
+                          ('LB', 'Regulation (EC) No 1412/2006', 'sectoral'),
+                          ('SO', 'Regulation (EC) No 147/2003', 'sectoral'),
+                          ('SS', 'Regulation (EU) 2015/735', 'sectoral'),
+                          ('SD', 'Regulation (EU) No 747/2014', 'sectoral'),
+                          ('CF', 'Regulation (EU) No 224/2014', 'sectoral'),
+                          ('CD', 'Regulation (EC) No 1183/2005', 'sectoral'),
+                          ('ZW', 'Regulation (EC) No 314/2004', 'sectoral'),
+                          ('HT', 'Regulation (EU) 2022/2309', 'sectoral')],
                          [(item['region'], item['program'], item['measure']) for item in document['destination']])
 
     # The importer, on the committed excerpts of the official files.
@@ -7351,6 +7378,19 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
             with self.subTest(target=target):
                 with self.assertRaises(urllib.error.URLError):
                     handler.redirect_request(request, io.BytesIO(b'moved'), 302, 'Found', {}, target)
+
+    def test_fetch_fails_cleanly_on_a_file_cut_short(self):
+        review, _ = sanctions_import.opener_for({'url': 'https://sanctionslist.ofac.treas.gov/x.xml', 'delivery': []})
+
+        def truncated(request, timeout):
+            raise http.client.IncompleteRead(b'<sdnList', 4096)
+
+        with tempfile.TemporaryDirectory() as into:
+            with patch.object(sanctions_import, 'opener_for', lambda config: (review, truncated)), \
+                    patch('sys.stderr', new_callable=io.StringIO) as error:
+                self.assertEqual(1, sanctions_import.main(['fetch', '--into', into, '--authority', 'us.ofac.sdn']))
+            self.assertEqual('import-sanctions: IncompleteRead(8 bytes read, 4096 more expected)\n', error.getvalue())
+            self.assertEqual([], os.listdir(into))
 
 
 class RegisterReview(RegisterFixture, unittest.TestCase):
@@ -8378,6 +8418,7 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             self.write_tree(root, self.register(self.entries()))
             bodies = self.records()
             bodies['rfc9114'] = urllib.error.URLError('unreachable')
+            bodies['iana-quic'] = http.client.IncompleteRead(b'part')  # a body cut short is no OSError
             bodies['draft-ietf-quic-multipath'] = 'x' * 64
             with patch.object(register_review, 'FETCH_LIMIT', 63):
                 plan = self.fetched(root, bodies)
@@ -8390,6 +8431,7 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             self.assertEqual(hashlib.sha256(body).hexdigest(), items['rfc9000']['sha256'])
             self.assertEqual(len(body), items['rfc9000']['bytes'])
             self.assertIn('unreachable', items['rfc9114']['error'])
+            self.assertEqual('IncompleteRead: IncompleteRead(4 bytes read)', items['iana-quic']['error'])
             self.assertEqual('larger than 63 bytes', items['draft-ietf-quic-multipath']['error'])
             insecure = dict(plan, sources=[dict(plan['sources'][0], url='http://www.rfc-editor.org/x.json')])
             refused = register_review.fetch_sources(insecure, root / 'refused', opener=self.opener(bodies))
