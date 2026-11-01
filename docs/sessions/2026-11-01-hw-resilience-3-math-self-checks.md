@@ -59,7 +59,8 @@ Row: [HW-RESILIENCE.3](../ROADMAP.md#slice-hw-resilience.3). Before:
 
 - win-debug: crd-math-tests passes (196 cases), forced portable, sse2, sse4.2 and avx2 `[kernels]` arms pass, and
   SDE 10.13.1 `-icx` with `CRD_CPU_LEVEL=avx512` passes the self-check cases; the doctor and checksum cases pass.
-  GCC 13 and Clang compile the new units and the test (syntax only, the checkout against the WSL mirror's commands).
+  GCC 13 compiles both new units and the test, and Clang the conversion unit with its compile-time answers (syntax
+  only, the checkout against the WSL mirror trees' commands; the Clang tree lists neither of the other two).
 - mpmath: 42 of the 46 transcendental answers are correctly rounded; four (atan, asin and acos at 0.3, sinh at 0.2)
   are one ulp off.
 - Teeth: one bit of exp's first answer wrong made every scalar table fail (`portable exp`) and the selection case
