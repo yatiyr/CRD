@@ -230,3 +230,17 @@ default for every size**. Honest
 32×32 (1024) decomposition, so 2M falls back to gather (correct, ~0.65× MKL). Extending to 2M = a new 64×32 fused
 chain. **The remaining ~15% to MKL is genuine kernel/bandwidth, not a removable stage boundary.** No engine
 default change; not committed.
+
+## 19. The in-place three passes, f32 2K to 8K (2026-11-01, SIMD-PERF)
+
+`fft::FftAlgorithm::InPlace3` (`in-place-3`) runs the f32 forward of n = 16·B·16 (B 8, 16, 32) as three passes in the
+caller's buffer, on `gen_fft_batched.py`'s in-place codelets (the derivation is the generator's comment): pass 1 the
+16-point leaf over the high index with the factored W_n twiddle (lo and hi tables at M = 16), pass 2 the B-point
+leaf with W_{16B}, both storing AoSoA blocks where they loaded, and pass 3 each 16 x 16 group transposed by the
+engine into a 2 KiB scratch and its 16-point leaf stored interleaved into the group's own elements. A tile of 8
+complex and its block are the same 64 bytes, so a step of whole tiles may change the layout in place; a column step
+(the portable level, unoptimized builds) may not, and there the engine deinterleaves the buffer first and pass 1
+reads blocks. The generator asserts that no in-place step stores before its last load. It is the canonical f32 4K
+forward: 1.38x the standalone-hier at avx512 and level with MKL on the benchmark machine
+([board](../bench/2026-11-01-simd-perf-fft-in-place-4k.md)), the standalone-hier's 96 KiB working set having left the
+48 KiB L1d.
