@@ -222,6 +222,9 @@ void codelet16_inplace_first_tw(crd::f32* d, crd::usize bc, const crd::f32* twr,
 // In-place pass 1 out of place, W_n tabled: interleaved in, blocks out to an aligned buffer (f32). GENERATED.
 void codelet16_inplace_first_to_tw(const crd::f32* s, crd::f32* d, crd::usize bc,
     const crd::f32* twr, const crd::f32* twi) noexcept;
+// In-place pass 1, W_n factored, blocks stored a half at a time: n = 4K, in the L1d (f32). GENERATED.
+void codelet16_inplace_first_halves(crd::f32* d, crd::usize bc, const crd::f32* lor, const crd::f32* loi,
+    const crd::f32* hir, const crd::f32* hii) noexcept;
 // In-place pass 1's edition for a column a step, W_n tabled: AoSoA blocks in and out (f32). GENERATED.
 void codelet16_inplace_first_blocks_tw(crd::f32* d, crd::usize bc, const crd::f32* twr, const crd::f32* twi) noexcept;
 // In-place pass 2: the leaf over i2 (B = 8), twiddled, AoSoA blocks (f32). GENERATED.

@@ -131,6 +131,12 @@ template <typename T> inline constexpr bool kPairedTiles = kWidth<Lane<T>> != kW
 // The batched pipelines' AoSoA rows hold blocks of kTile real parts, then kTile imaginary parts: column c of a row sits
 // at c / kTile * 2 * kTile + c % kTile and its imaginary part kTile further on. A step starts on a tile, so a TileLane
 // is one block and a Lane of two tiles two adjacent blocks. The layout is the same on every level.
+//
+// At avx512 a block is one register's halves. store_block stores a Lane's two blocks whole, the parts' halves joined
+// by an insert and a lane shuffle; store_block_halves stores each half itself, twice the stores and no shuffle. Where
+// the data leaves the L1d (from 8K f32) the stores fill the store buffer and the whole blocks win; below it port 5
+// bounds the passes, and the halves win (2026-11-01 SIMD-PERF board). The generator picks the form a codelet stores.
+// The loads keep their halves (a load and an insert from memory each): a whole load's lane shuffle adds to port 5.
 template <typename V, typename T> CRD_FORCEINLINE void load_block(const T* row, crd::usize t, V& re, V& im) noexcept
 {
     constexpr crd::usize w = kTile<T>;
@@ -168,10 +174,23 @@ template <typename V, typename T> CRD_FORCEINLINE void store_block(T* row, crd::
     }
     else
     {
+        join_low_halves(re, im).store(row + 2 * t);
+        join_high_halves(re, im).store(row + 2 * t + 2 * w);
+    }
+}
+template <typename V, typename T> CRD_FORCEINLINE void store_block_halves(T* row, crd::usize t, V re, V im) noexcept
+{
+    constexpr crd::usize w = kTile<T>;
+    if constexpr (kWidth<V> == 2 * w)
+    {
         low_half(re).store(row + 2 * t);
         high_half(re).store(row + 2 * t + 2 * w);
         low_half(im).store(row + 2 * t + w);
         high_half(im).store(row + 2 * t + 3 * w);
+    }
+    else
+    {
+        store_block(row, t, re, im);
     }
 }
 
@@ -187,59 +206,98 @@ template <typename H, crd::usize N> CRD_FORCEINLINE void transpose_tile(H (&x)[N
     }
 }
 
-// Stores a step's group of kTile outputs transposed: column t + c of the step takes the group's values at
-// p + c * stride, as an AoSoA block row of the pipelines' first stage. On scalars a step is one column and p[l] takes
-// output l.
-template <typename T, typename V, typename... R>
+// Stores a step's group of kTile outputs transposed: column t + c of the step takes the group's real parts at
+// p + c * stride and its imaginary parts kTile further on, an AoSoA block of a row of the pipelines' first stage. The
+// arguments are the group's kTile real parts, then its kTile imaginary parts. On scalars a step is one column and p[l]
+// and p[kTile + l] take output l. At avx512 each column's block is stored whole, its halves joined, when Whole is true
+// and a half at a time otherwise (store_block's two forms).
+template <bool Whole, typename T, typename V, typename... R>
 CRD_FORCEINLINE void store_transposed(T* p, crd::usize stride, V x0, R... rest) noexcept
 {
     constexpr crd::usize w = kTile<T>;
-    static_assert(sizeof...(R) + 1 == w, "A group holds one tile of outputs");
-    V x[w] = {x0, rest...};
+    static_assert(sizeof...(R) + 1 == 2 * w, "A group holds one tile of outputs, real parts then imaginary parts");
+    const V x[2 * w] = {x0, rest...};
+    V re[w];
+    V im[w];
+    for (crd::usize l = 0; l < w; ++l)
+    {
+        re[l] = x[l];
+        im[l] = x[w + l];
+    }
     if constexpr (kWidth<V> == 1)
     {
         for (crd::usize l = 0; l < w; ++l)
         {
-            p[l] = x[l];
+            p[l] = re[l];
+            p[w + l] = im[l];
         }
     }
     else if constexpr (kWidth<V> == w)
     {
-        transpose_tile(x);
+        transpose_tile(re);
+        transpose_tile(im);
         for (crd::usize c = 0; c < w; ++c)
         {
-            x[c].store(p + c * stride);
+            re[c].store(p + c * stride);
+            im[c].store(p + c * stride + w);
         }
     }
 #if defined(CRD_FFT_GEN_SIMD_BODY) && CRD_SIMD_HAS_AVX512
     else if constexpr (sizeof(T) == 4)
     {
         // A Vec16f a row: both tiles' 8x8 transposes at once on whole registers (24 shuffles, where splitting the rows
-        // into halves first took 56 with the extracts), then each row's halves stored as its two columns (the high
-        // half's extract folds into its store).
-        crd::math::simd::transpose8x8_halves(x);
+        // into halves first took 56 with the extracts).
+        crd::math::simd::transpose8x8_halves(re);
+        crd::math::simd::transpose8x8_halves(im);
         for (crd::usize c = 0; c < w; ++c)
         {
-            low_half(x[c]).store(p + c * stride);
-            high_half(x[c]).store(p + (w + c) * stride);
+            if constexpr (Whole)
+            {
+                join_low_halves(re[c], im[c]).store(p + c * stride);
+                join_high_halves(re[c], im[c]).store(p + (w + c) * stride);
+            }
+            else
+            {
+                low_half(re[c]).store(p + c * stride);
+                low_half(im[c]).store(p + c * stride + w);
+                high_half(re[c]).store(p + (w + c) * stride);
+                high_half(im[c]).store(p + (w + c) * stride + w);
+            }
         }
     }
 #endif
     else
     {
-        TileLane<T> lo[w];
-        TileLane<T> hi[w];
+        using H = TileLane<T>;
+        H lo_re[w];
+        H hi_re[w];
+        H lo_im[w];
+        H hi_im[w];
         for (crd::usize l = 0; l < w; ++l)
         {
-            lo[l] = low_half(x[l]);
-            hi[l] = high_half(x[l]);
+            lo_re[l] = low_half(re[l]);
+            hi_re[l] = high_half(re[l]);
+            lo_im[l] = low_half(im[l]);
+            hi_im[l] = high_half(im[l]);
         }
-        transpose_tile(lo);
-        transpose_tile(hi);
+        transpose_tile(lo_re);
+        transpose_tile(hi_re);
+        transpose_tile(lo_im);
+        transpose_tile(hi_im);
         for (crd::usize c = 0; c < w; ++c)
         {
-            lo[c].store(p + c * stride);
-            hi[c].store(p + (w + c) * stride);
+            if constexpr (Whole)
+            {
+                V(lo_re[c], lo_im[c]).store(p + c * stride);
+                V(hi_re[c], hi_im[c]).store(p + (w + c) * stride);
+            }
+            else
+            {
+                lo_re[c].store(p + c * stride);
+                lo_im[c].store(p + c * stride + w);
+                hi_re[c].store(p + (w + c) * stride);
+                hi_im[c].store(p + (w + c) * stride + w);
+            }
         }
     }
 }

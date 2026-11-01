@@ -5,310 +5,6 @@
 namespace crd::hesap::fft::gen::inline CRD_MATH_LEVEL_NS {
 #ifdef CRD_FFT_GEN_WHOLE_BODY
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet16_stage1_fused_sh_cs_part0([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
-    [[maybe_unused]] crd::f64* outb, [[maybe_unused]] crd::usize n2, [[maybe_unused]] const crd::f64* twr,
-    [[maybe_unused]] const crd::f64* twi, [[maybe_unused]] crd::usize t) noexcept
-{
-    namespace simd = crd::hesap::fft::lanes;
-    V n0r;
-    V n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 0 * n2 + t), n0r, n0i);
-    V n1r;
-    V n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 1 * n2 + t), n1r, n1i);
-    V n2r;
-    V n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 2 * n2 + t), n2r, n2i);
-    V n3r;
-    V n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 3 * n2 + t), n3r, n3i);
-    V n4r;
-    V n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 4 * n2 + t), n4r, n4i);
-    V n5r;
-    V n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 5 * n2 + t), n5r, n5i);
-    V n6r;
-    V n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 6 * n2 + t), n6r, n6i);
-    V n7r;
-    V n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 7 * n2 + t), n7r, n7i);
-    V n8r;
-    V n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 8 * n2 + t), n8r, n8i);
-    V n9r;
-    V n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 9 * n2 + t), n9r, n9i);
-    V n10r;
-    V n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 10 * n2 + t), n10r, n10i);
-    V n11r;
-    V n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 11 * n2 + t), n11r, n11i);
-    V n12r;
-    V n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 12 * n2 + t), n12r, n12i);
-    V n13r;
-    V n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 13 * n2 + t), n13r, n13i);
-    V n14r;
-    V n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 14 * n2 + t), n14r, n14i);
-    V n15r;
-    V n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 15 * n2 + t), n15r, n15i);
-    const V n16r = n0r + n8r;
-    const V n16i = n0i + n8i;
-    const V n17r = n0r - n8r;
-    const V n17i = n0i - n8i;
-    const V n18r = n4r + n12r;
-    const V n18i = n4i + n12i;
-    const V n19r = n4r - n12r;
-    const V n19i = n4i - n12i;
-    const V n20r = n19i;
-    const V n20i = V(0.0) - n19r;
-    const V n21r = n16r + n18r;
-    const V n21i = n16i + n18i;
-    const V n22r = n16r - n18r;
-    const V n22i = n16i - n18i;
-    const V n23r = n17r + n20r;
-    const V n23i = n17i + n20i;
-    const V n24r = n17r - n20r;
-    const V n24i = n17i - n20i;
-    const V n25r = n2r + n10r;
-    const V n25i = n2i + n10i;
-    const V n26r = n2r - n10r;
-    const V n26i = n2i - n10i;
-    const V n36r = simd::fnmadd(V(-0.7071067811865475), n26i, V(0.7071067811865476) * n26r);
-    const V n36i = simd::fma(V(-0.7071067811865475), n26r, V(0.7071067811865476) * n26i);
-    const V n27r = n6r + n14r;
-    const V n27i = n6i + n14i;
-    const V n28r = n6r - n14r;
-    const V n28i = n6i - n14i;
-    const V n37r = simd::fnmadd(V(-0.7071067811865476), n28i, V(-0.7071067811865475) * n28r);
-    const V n37i = simd::fma(V(-0.7071067811865476), n28r, V(-0.7071067811865475) * n28i);
-    const V n29r = n25r + n27r;
-    const V n29i = n25i + n27i;
-    const V n30r = n25r - n27r;
-    const V n30i = n25i - n27i;
-    const V n31r = n30i;
-    const V n31i = V(0.0) - n30r;
-    const V n32r = n21r + n29r;
-    const V n32i = n21i + n29i;
-    const V n33r = n21r - n29r;
-    const V n33i = n21i - n29i;
-    const V n34r = n22r + n31r;
-    const V n34i = n22i + n31i;
-    const V n35r = n22r - n31r;
-    const V n35i = n22i - n31i;
-    const V n38r = n36r + n37r;
-    const V n38i = n36i + n37i;
-    const V n39r = n36r - n37r;
-    const V n39i = n36i - n37i;
-    const V n40r = n39i;
-    const V n40i = V(0.0) - n39r;
-    const V n41r = n23r + n38r;
-    const V n41i = n23i + n38i;
-    const V n42r = n23r - n38r;
-    const V n42i = n23i - n38i;
-    const V n43r = n24r + n40r;
-    const V n43i = n24i + n40i;
-    const V n44r = n24r - n40r;
-    const V n44i = n24i - n40i;
-    const V n45r = n1r + n9r;
-    const V n45i = n1i + n9i;
-    const V n46r = n1r - n9r;
-    const V n46i = n1i - n9i;
-    const V n47r = n5r + n13r;
-    const V n47i = n5i + n13i;
-    const V n48r = n5r - n13r;
-    const V n48i = n5i - n13i;
-    const V n49r = n48i;
-    const V n49i = V(0.0) - n48r;
-    const V n50r = n45r + n47r;
-    const V n50i = n45i + n47i;
-    const V n51r = n45r - n47r;
-    const V n51i = n45i - n47i;
-    const V n79r = simd::fnmadd(V(-0.7071067811865475), n51i, V(0.7071067811865476) * n51r);
-    const V n79i = simd::fma(V(-0.7071067811865475), n51r, V(0.7071067811865476) * n51i);
-    const V n52r = n46r + n49r;
-    const V n52i = n46i + n49i;
-    const V n53r = n46r - n49r;
-    const V n53i = n46i - n49i;
-    const V n70r = simd::fnmadd(V(-0.3826834323650898), n52i, V(0.9238795325112867) * n52r);
-    const V n70i = simd::fma(V(-0.3826834323650898), n52r, V(0.9238795325112867) * n52i);
-    const V n88r = simd::fnmadd(V(-0.9238795325112867), n53i, V(0.38268343236508984) * n53r);
-    const V n88i = simd::fma(V(-0.9238795325112867), n53r, V(0.38268343236508984) * n53i);
-    const V n54r = n3r + n11r;
-    const V n54i = n3i + n11i;
-    const V n55r = n3r - n11r;
-    const V n55i = n3i - n11i;
-    const V n56r = n7r + n15r;
-    const V n56i = n7i + n15i;
-    const V n57r = n7r - n15r;
-    const V n57i = n7i - n15i;
-    const V n58r = n57i;
-    const V n58i = V(0.0) - n57r;
-    const V n59r = n54r + n56r;
-    const V n59i = n54i + n56i;
-    const V n60r = n54r - n56r;
-    const V n60i = n54i - n56i;
-    const V n80r = simd::fnmadd(V(-0.7071067811865476), n60i, V(-0.7071067811865475) * n60r);
-    const V n80i = simd::fma(V(-0.7071067811865476), n60r, V(-0.7071067811865475) * n60i);
-    const V n61r = n55r + n58r;
-    const V n61i = n55i + n58i;
-    const V n62r = n55r - n58r;
-    const V n62i = n55i - n58i;
-    const V n71r = simd::fnmadd(V(-0.9238795325112867), n61i, V(0.38268343236508984) * n61r);
-    const V n71i = simd::fma(V(-0.9238795325112867), n61r, V(0.38268343236508984) * n61i);
-    const V n89r = simd::fnmadd(V(0.38268343236508967), n62i, V(-0.9238795325112868) * n62r);
-    const V n89i = simd::fma(V(0.38268343236508967), n62r, V(-0.9238795325112868) * n62i);
-    const V n63r = n50r + n59r;
-    const V n63i = n50i + n59i;
-    const V n64r = n50r - n59r;
-    const V n64i = n50i - n59i;
-    const V n65r = n64i;
-    const V n65i = V(0.0) - n64r;
-    const V n66r = n32r + n63r;
-    const V n66i = n32i + n63i;
-    const V n67r = n32r - n63r;
-    const V n67i = n32i - n63i;
-    const V n68r = n33r + n65r;
-    const V n68i = n33i + n65i;
-    const V n69r = n33r - n65r;
-    const V n69i = n33i - n65i;
-    const V n72r = n70r + n71r;
-    const V n72i = n70i + n71i;
-    const V n73r = n70r - n71r;
-    const V n73i = n70i - n71i;
-    const V n74r = n73i;
-    const V n74i = V(0.0) - n73r;
-    const V n75r = n41r + n72r;
-    const V n75i = n41i + n72i;
-    const V n76r = n41r - n72r;
-    const V n76i = n41i - n72i;
-    const V n77r = n42r + n74r;
-    const V n77i = n42i + n74i;
-    const V n78r = n42r - n74r;
-    const V n78i = n42i - n74i;
-    const V n81r = n79r + n80r;
-    const V n81i = n79i + n80i;
-    const V n82r = n79r - n80r;
-    const V n82i = n79i - n80i;
-    const V n83r = n82i;
-    const V n83i = V(0.0) - n82r;
-    const V n84r = n34r + n81r;
-    const V n84i = n34i + n81i;
-    const V n85r = n34r - n81r;
-    const V n85i = n34i - n81i;
-    const V n86r = n35r + n83r;
-    const V n86i = n35i + n83i;
-    const V n87r = n35r - n83r;
-    const V n87i = n35i - n83i;
-    const V n90r = n88r + n89r;
-    const V n90i = n88i + n89i;
-    const V n91r = n88r - n89r;
-    const V n91i = n88i - n89i;
-    const V n92r = n91i;
-    const V n92i = V(0.0) - n91r;
-    const V n93r = n43r + n90r;
-    const V n93i = n43i + n90i;
-    {
-        const V w0r = simd::load<V>(twr + 0 * n2 + t);
-        const V w0i = simd::load<V>(twi + 0 * n2 + t);
-        const V w1r = simd::load<V>(twr + 1 * n2 + t);
-        const V w1i = simd::load<V>(twi + 1 * n2 + t);
-        const V w2r = simd::load<V>(twr + 2 * n2 + t);
-        const V w2i = simd::load<V>(twi + 2 * n2 + t);
-        const V w3r = simd::load<V>(twr + 3 * n2 + t);
-        const V w3i = simd::load<V>(twi + 3 * n2 + t);
-        const V x0r = simd::fnmadd(w0i, n66i, n66r * w0r);
-        const V x0i = simd::fma(w0i, n66r, n66i * w0r);
-        const V x1r = simd::fnmadd(w1i, n75i, n75r * w1r);
-        const V x1i = simd::fma(w1i, n75r, n75i * w1r);
-        const V x2r = simd::fnmadd(w2i, n84i, n84r * w2r);
-        const V x2i = simd::fma(w2i, n84r, n84i * w2r);
-        const V x3r = simd::fnmadd(w3i, n93i, n93r * w3r);
-        const V x3i = simd::fma(w3i, n93r, n93i * w3r);
-        simd::store_transposed(outb + t * 32 + 0, 32, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 32 + 4, 32, x0i, x1i, x2i, x3i);
-    }
-    const V n94r = n43r - n90r;
-    const V n94i = n43i - n90i;
-    {
-        const V w0r = simd::load<V>(twr + 8 * n2 + t);
-        const V w0i = simd::load<V>(twi + 8 * n2 + t);
-        const V w1r = simd::load<V>(twr + 9 * n2 + t);
-        const V w1i = simd::load<V>(twi + 9 * n2 + t);
-        const V w2r = simd::load<V>(twr + 10 * n2 + t);
-        const V w2i = simd::load<V>(twi + 10 * n2 + t);
-        const V w3r = simd::load<V>(twr + 11 * n2 + t);
-        const V w3i = simd::load<V>(twi + 11 * n2 + t);
-        const V x0r = simd::fnmadd(w0i, n67i, n67r * w0r);
-        const V x0i = simd::fma(w0i, n67r, n67i * w0r);
-        const V x1r = simd::fnmadd(w1i, n76i, n76r * w1r);
-        const V x1i = simd::fma(w1i, n76r, n76i * w1r);
-        const V x2r = simd::fnmadd(w2i, n85i, n85r * w2r);
-        const V x2i = simd::fma(w2i, n85r, n85i * w2r);
-        const V x3r = simd::fnmadd(w3i, n94i, n94r * w3r);
-        const V x3i = simd::fma(w3i, n94r, n94i * w3r);
-        simd::store_transposed(outb + t * 32 + 16, 32, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 32 + 20, 32, x0i, x1i, x2i, x3i);
-    }
-    const V n95r = n44r + n92r;
-    const V n95i = n44i + n92i;
-    {
-        const V w0r = simd::load<V>(twr + 4 * n2 + t);
-        const V w0i = simd::load<V>(twi + 4 * n2 + t);
-        const V w1r = simd::load<V>(twr + 5 * n2 + t);
-        const V w1i = simd::load<V>(twi + 5 * n2 + t);
-        const V w2r = simd::load<V>(twr + 6 * n2 + t);
-        const V w2i = simd::load<V>(twi + 6 * n2 + t);
-        const V w3r = simd::load<V>(twr + 7 * n2 + t);
-        const V w3i = simd::load<V>(twi + 7 * n2 + t);
-        const V x0r = simd::fnmadd(w0i, n68i, n68r * w0r);
-        const V x0i = simd::fma(w0i, n68r, n68i * w0r);
-        const V x1r = simd::fnmadd(w1i, n77i, n77r * w1r);
-        const V x1i = simd::fma(w1i, n77r, n77i * w1r);
-        const V x2r = simd::fnmadd(w2i, n86i, n86r * w2r);
-        const V x2i = simd::fma(w2i, n86r, n86i * w2r);
-        const V x3r = simd::fnmadd(w3i, n95i, n95r * w3r);
-        const V x3i = simd::fma(w3i, n95r, n95i * w3r);
-        simd::store_transposed(outb + t * 32 + 8, 32, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 32 + 12, 32, x0i, x1i, x2i, x3i);
-    }
-    const V n96r = n44r - n92r;
-    const V n96i = n44i - n92i;
-    {
-        const V w0r = simd::load<V>(twr + 12 * n2 + t);
-        const V w0i = simd::load<V>(twi + 12 * n2 + t);
-        const V w1r = simd::load<V>(twr + 13 * n2 + t);
-        const V w1i = simd::load<V>(twi + 13 * n2 + t);
-        const V w2r = simd::load<V>(twr + 14 * n2 + t);
-        const V w2i = simd::load<V>(twi + 14 * n2 + t);
-        const V w3r = simd::load<V>(twr + 15 * n2 + t);
-        const V w3i = simd::load<V>(twi + 15 * n2 + t);
-        const V x0r = simd::fnmadd(w0i, n69i, n69r * w0r);
-        const V x0i = simd::fma(w0i, n69r, n69i * w0r);
-        const V x1r = simd::fnmadd(w1i, n78i, n78r * w1r);
-        const V x1i = simd::fma(w1i, n78r, n78i * w1r);
-        const V x2r = simd::fnmadd(w2i, n87i, n87r * w2r);
-        const V x2i = simd::fma(w2i, n87r, n87i * w2r);
-        const V x3r = simd::fnmadd(w3i, n96i, n96r * w3r);
-        const V x3i = simd::fma(w3i, n96r, n96i * w3r);
-        simd::store_transposed(outb + t * 32 + 24, 32, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 32 + 28, 32, x0i, x1i, x2i, x3i);
-    }
-}
-// N1=16 SPLIT-LAYOUT stage-1 (complex in, plane out) (f64). GENERATED.
-// NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG; retain fused scope.
-void codelet16_stage1_fused_sh_cs(const crd::hesap::Complex<crd::f64>* in,
-    crd::f64* outb, crd::usize n2, const crd::f64* twr,
-    const crd::f64* twi) noexcept
-{
-    namespace lanes = crd::hesap::fft::lanes;
-    using V = lanes::Lane<crd::f64>;
-    const crd::usize tiles = n2 - n2 % lanes::kTile<crd::f64>;
-    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
-    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
-    {
-        codelet16_stage1_fused_sh_cs_part0<V>(in, outb, n2, twr, twi, t);
-    }
-    if constexpr (lanes::kPairedTiles<crd::f64>)
-    {
-        using H = lanes::TileLane<crd::f64>;
-        if (wide < tiles)
-        {
-            codelet16_stage1_fused_sh_cs_part0<H>(in, outb, n2, twr, twi, wide);
-        }
-    }
-}
-// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
 template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_part0([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
     [[maybe_unused]] crd::f64* outb, [[maybe_unused]] crd::usize n2, [[maybe_unused]] const crd::f64* lor,
     [[maybe_unused]] const crd::f64* loi, [[maybe_unused]] const crd::f64* hir, [[maybe_unused]] const crd::f64* hii,
@@ -7171,8 +6867,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2520r, n2520i * w2r);
         const V x3r = simd::fnmadd(w3i, n2529i, n2529r * w3r);
         const V x3i = simd::fma(w3i, n2529r, n2529i * w3r);
-        simd::store_transposed(outb + t * 512 + 0, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 4, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 0, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2530r = n1217r - n2526r;
     const V n2530i = n1217i - n2526i;
@@ -7209,8 +6904,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2521r, n2521i * w2r);
         const V x3r = simd::fnmadd(w3i, n2530i, n2530r * w3r);
         const V x3i = simd::fma(w3i, n2530r, n2530i * w3r);
-        simd::store_transposed(outb + t * 512 + 256, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 260, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 256, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2531r = n1218r + n2528r;
     const V n2531i = n1218i + n2528i;
@@ -7247,8 +6941,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2522r, n2522i * w2r);
         const V x3r = simd::fnmadd(w3i, n2531i, n2531r * w3r);
         const V x3i = simd::fma(w3i, n2531r, n2531i * w3r);
-        simd::store_transposed(outb + t * 512 + 128, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 132, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 128, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2532r = n1218r - n2528r;
     const V n2532i = n1218i - n2528i;
@@ -7285,8 +6978,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2523r, n2523i * w2r);
         const V x3r = simd::fnmadd(w3i, n2532i, n2532r * w3r);
         const V x3i = simd::fma(w3i, n2532r, n2532i * w3r);
-        simd::store_transposed(outb + t * 512 + 384, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 388, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 384, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2536r = n2533r - n2534r;
     const V n2536i = n2533i - n2534i;
@@ -7387,8 +7079,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2556r, n2556i * w2r);
         const V x3r = simd::fnmadd(w3i, n2565i, n2565r * w3r);
         const V x3i = simd::fma(w3i, n2565r, n2565i * w3r);
-        simd::store_transposed(outb + t * 512 + 8, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 12, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 8, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2566r = n1253r - n2562r;
     const V n2566i = n1253i - n2562i;
@@ -7425,8 +7116,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2557r, n2557i * w2r);
         const V x3r = simd::fnmadd(w3i, n2566i, n2566r * w3r);
         const V x3i = simd::fma(w3i, n2566r, n2566i * w3r);
-        simd::store_transposed(outb + t * 512 + 264, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 268, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 264, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2567r = n1254r + n2564r;
     const V n2567i = n1254i + n2564i;
@@ -7463,8 +7153,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2558r, n2558i * w2r);
         const V x3r = simd::fnmadd(w3i, n2567i, n2567r * w3r);
         const V x3i = simd::fma(w3i, n2567r, n2567i * w3r);
-        simd::store_transposed(outb + t * 512 + 136, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 140, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 136, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2568r = n1254r - n2564r;
     const V n2568i = n1254i - n2564i;
@@ -7501,8 +7190,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2559r, n2559i * w2r);
         const V x3r = simd::fnmadd(w3i, n2568i, n2568r * w3r);
         const V x3i = simd::fma(w3i, n2568r, n2568i * w3r);
-        simd::store_transposed(outb + t * 512 + 392, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 396, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 392, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2572r = n2569r - n2570r;
     const V n2572i = n2569i - n2570i;
@@ -7603,8 +7291,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2592r, n2592i * w2r);
         const V x3r = simd::fnmadd(w3i, n2601i, n2601r * w3r);
         const V x3i = simd::fma(w3i, n2601r, n2601i * w3r);
-        simd::store_transposed(outb + t * 512 + 16, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 20, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 16, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2602r = n1289r - n2598r;
     const V n2602i = n1289i - n2598i;
@@ -7641,8 +7328,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2593r, n2593i * w2r);
         const V x3r = simd::fnmadd(w3i, n2602i, n2602r * w3r);
         const V x3i = simd::fma(w3i, n2602r, n2602i * w3r);
-        simd::store_transposed(outb + t * 512 + 272, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 276, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 272, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2603r = n1290r + n2600r;
     const V n2603i = n1290i + n2600i;
@@ -7679,8 +7365,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2594r, n2594i * w2r);
         const V x3r = simd::fnmadd(w3i, n2603i, n2603r * w3r);
         const V x3i = simd::fma(w3i, n2603r, n2603i * w3r);
-        simd::store_transposed(outb + t * 512 + 144, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 148, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 144, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2604r = n1290r - n2600r;
     const V n2604i = n1290i - n2600i;
@@ -7717,8 +7402,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2595r, n2595i * w2r);
         const V x3r = simd::fnmadd(w3i, n2604i, n2604r * w3r);
         const V x3i = simd::fma(w3i, n2604r, n2604i * w3r);
-        simd::store_transposed(outb + t * 512 + 400, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 404, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 400, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2608r = n2605r - n2606r;
     const V n2608i = n2605i - n2606i;
@@ -7819,8 +7503,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2628r, n2628i * w2r);
         const V x3r = simd::fnmadd(w3i, n2637i, n2637r * w3r);
         const V x3i = simd::fma(w3i, n2637r, n2637i * w3r);
-        simd::store_transposed(outb + t * 512 + 24, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 28, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 24, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2638r = n1325r - n2634r;
     const V n2638i = n1325i - n2634i;
@@ -7857,8 +7540,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2629r, n2629i * w2r);
         const V x3r = simd::fnmadd(w3i, n2638i, n2638r * w3r);
         const V x3i = simd::fma(w3i, n2638r, n2638i * w3r);
-        simd::store_transposed(outb + t * 512 + 280, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 284, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 280, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2639r = n1326r + n2636r;
     const V n2639i = n1326i + n2636i;
@@ -7895,8 +7577,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2630r, n2630i * w2r);
         const V x3r = simd::fnmadd(w3i, n2639i, n2639r * w3r);
         const V x3i = simd::fma(w3i, n2639r, n2639i * w3r);
-        simd::store_transposed(outb + t * 512 + 152, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 156, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 152, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2640r = n1326r - n2636r;
     const V n2640i = n1326i - n2636i;
@@ -7933,8 +7614,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2631r, n2631i * w2r);
         const V x3r = simd::fnmadd(w3i, n2640i, n2640r * w3r);
         const V x3i = simd::fma(w3i, n2640r, n2640i * w3r);
-        simd::store_transposed(outb + t * 512 + 408, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 412, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 408, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2644r = n2641r - n2642r;
     const V n2644i = n2641i - n2642i;
@@ -8035,11 +7715,45 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2664r, n2664i * w2r);
         const V x3r = simd::fnmadd(w3i, n2673i, n2673r * w3r);
         const V x3i = simd::fma(w3i, n2673r, n2673i * w3r);
-        simd::store_transposed(outb + t * 512 + 32, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 36, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 32, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2674r = n1361r - n2670r;
     const V n2674i = n1361i - n2670i;
+    {
+        const V h0r = V(hir[144 * uhc + uh]);
+        const V h0i = V(hii[144 * uhc + uh]);
+        const V g0r = simd::load<V>(lor + ((crd::usize{144} << msh) + ul));
+        const V g0i = simd::load<V>(loi + ((crd::usize{144} << msh) + ul));
+        const V w0r = simd::fnmadd(h0i, g0i, h0r * g0r);
+        const V w0i = simd::fma(h0i, g0r, h0r * g0i);
+        const V h1r = V(hir[145 * uhc + uh]);
+        const V h1i = V(hii[145 * uhc + uh]);
+        const V g1r = simd::load<V>(lor + ((crd::usize{145} << msh) + ul));
+        const V g1i = simd::load<V>(loi + ((crd::usize{145} << msh) + ul));
+        const V w1r = simd::fnmadd(h1i, g1i, h1r * g1r);
+        const V w1i = simd::fma(h1i, g1r, h1r * g1i);
+        const V h2r = V(hir[146 * uhc + uh]);
+        const V h2i = V(hii[146 * uhc + uh]);
+        const V g2r = simd::load<V>(lor + ((crd::usize{146} << msh) + ul));
+        const V g2i = simd::load<V>(loi + ((crd::usize{146} << msh) + ul));
+        const V w2r = simd::fnmadd(h2i, g2i, h2r * g2r);
+        const V w2i = simd::fma(h2i, g2r, h2r * g2i);
+        const V h3r = V(hir[147 * uhc + uh]);
+        const V h3i = V(hii[147 * uhc + uh]);
+        const V g3r = simd::load<V>(lor + ((crd::usize{147} << msh) + ul));
+        const V g3i = simd::load<V>(loi + ((crd::usize{147} << msh) + ul));
+        const V w3r = simd::fnmadd(h3i, g3i, h3r * g3r);
+        const V w3i = simd::fma(h3i, g3r, h3r * g3i);
+        const V x0r = simd::fnmadd(w0i, n2647i, n2647r * w0r);
+        const V x0i = simd::fma(w0i, n2647r, n2647i * w0r);
+        const V x1r = simd::fnmadd(w1i, n2656i, n2656r * w1r);
+        const V x1i = simd::fma(w1i, n2656r, n2656i * w1r);
+        const V x2r = simd::fnmadd(w2i, n2665i, n2665r * w2r);
+        const V x2i = simd::fma(w2i, n2665r, n2665i * w2r);
+        const V x3r = simd::fnmadd(w3i, n2674i, n2674r * w3r);
+        const V x3i = simd::fma(w3i, n2674r, n2674i * w3r);
+        simd::store_transposed<true>(outb + t * 512 + 288, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
+    }
     sp[0] = n1189i;
     sp[1] = n1189r;
     sp[2] = n1198i;
@@ -8130,204 +7844,196 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     sp[87] = n1466r;
     sp[88] = n1468i;
     sp[89] = n1468r;
-    sp[90] = n2647i;
-    sp[91] = n2647r;
-    sp[92] = n2648i;
-    sp[93] = n2648r;
-    sp[94] = n2649i;
-    sp[95] = n2649r;
-    sp[96] = n2656i;
-    sp[97] = n2656r;
-    sp[98] = n2657i;
-    sp[99] = n2657r;
-    sp[100] = n2658i;
-    sp[101] = n2658r;
-    sp[102] = n2665i;
-    sp[103] = n2665r;
-    sp[104] = n2666i;
-    sp[105] = n2666r;
-    sp[106] = n2667i;
-    sp[107] = n2667r;
-    sp[108] = n2672i;
-    sp[109] = n2672r;
-    sp[110] = n2674i;
-    sp[111] = n2674r;
-    sp[112] = n2678i;
-    sp[113] = n2678r;
-    sp[114] = n2687i;
-    sp[115] = n2687r;
-    sp[116] = n2696i;
-    sp[117] = n2696r;
-    sp[118] = n2705i;
-    sp[119] = n2705r;
-    sp[120] = n2714i;
-    sp[121] = n2714r;
-    sp[122] = n2723i;
-    sp[123] = n2723r;
-    sp[124] = n2732i;
-    sp[125] = n2732r;
-    sp[126] = n2741i;
-    sp[127] = n2741r;
-    sp[128] = n2750i;
-    sp[129] = n2750r;
-    sp[130] = n2759i;
-    sp[131] = n2759r;
-    sp[132] = n2768i;
-    sp[133] = n2768r;
-    sp[134] = n2777i;
-    sp[135] = n2777r;
-    sp[136] = n2786i;
-    sp[137] = n2786r;
-    sp[138] = n2795i;
-    sp[139] = n2795r;
-    sp[140] = n2804i;
-    sp[141] = n2804r;
-    sp[142] = n2813i;
-    sp[143] = n2813r;
-    sp[144] = n2822i;
-    sp[145] = n2822r;
-    sp[146] = n2831i;
-    sp[147] = n2831r;
-    sp[148] = n2840i;
-    sp[149] = n2840r;
-    sp[150] = n2849i;
-    sp[151] = n2849r;
-    sp[152] = n2858i;
-    sp[153] = n2858r;
-    sp[154] = n2867i;
-    sp[155] = n2867r;
-    sp[156] = n2876i;
-    sp[157] = n2876r;
-    sp[158] = n2885i;
-    sp[159] = n2885r;
-    sp[160] = n2894i;
-    sp[161] = n2894r;
-    sp[162] = n2903i;
-    sp[163] = n2903r;
-    sp[164] = n2912i;
-    sp[165] = n2912r;
-    sp[166] = n2921i;
-    sp[167] = n2921r;
-    sp[168] = n2930i;
-    sp[169] = n2930r;
-    sp[170] = n2939i;
-    sp[171] = n2939r;
-    sp[172] = n2948i;
-    sp[173] = n2948r;
-    sp[174] = n2957i;
-    sp[175] = n2957r;
-    sp[176] = n2966i;
-    sp[177] = n2966r;
-    sp[178] = n2975i;
-    sp[179] = n2975r;
-    sp[180] = n2984i;
-    sp[181] = n2984r;
-    sp[182] = n2993i;
-    sp[183] = n2993r;
-    sp[184] = n3002i;
-    sp[185] = n3002r;
-    sp[186] = n3011i;
-    sp[187] = n3011r;
-    sp[188] = n3020i;
-    sp[189] = n3020r;
-    sp[190] = n3029i;
-    sp[191] = n3029r;
-    sp[192] = n3038i;
-    sp[193] = n3038r;
-    sp[194] = n3047i;
-    sp[195] = n3047r;
-    sp[196] = n3056i;
-    sp[197] = n3056r;
-    sp[198] = n3065i;
-    sp[199] = n3065r;
-    sp[200] = n631i;
-    sp[201] = n631r;
-    sp[202] = n633i;
-    sp[203] = n633r;
-    sp[204] = n640i;
-    sp[205] = n640r;
-    sp[206] = n642i;
-    sp[207] = n642r;
-    sp[208] = n649i;
-    sp[209] = n649r;
-    sp[210] = n651i;
-    sp[211] = n651r;
-    sp[212] = n658i;
-    sp[213] = n658r;
-    sp[214] = n660i;
-    sp[215] = n660r;
-    sp[216] = n667i;
-    sp[217] = n667r;
-    sp[218] = n668i;
-    sp[219] = n668r;
-    sp[220] = n669i;
-    sp[221] = n669r;
-    sp[222] = n676i;
-    sp[223] = n676r;
-    sp[224] = n677i;
-    sp[225] = n677r;
-    sp[226] = n678i;
-    sp[227] = n678r;
-    sp[228] = n685i;
-    sp[229] = n685r;
-    sp[230] = n686i;
-    sp[231] = n686r;
-    sp[232] = n687i;
-    sp[233] = n687r;
-    sp[234] = n694i;
-    sp[235] = n694r;
-    sp[236] = n695i;
-    sp[237] = n695r;
-    sp[238] = n696i;
-    sp[239] = n696r;
-    sp[240] = n703i;
-    sp[241] = n703r;
-    sp[242] = n704i;
-    sp[243] = n704r;
-    sp[244] = n705i;
-    sp[245] = n705r;
-    sp[246] = n712i;
-    sp[247] = n712r;
-    sp[248] = n713i;
-    sp[249] = n713r;
-    sp[250] = n714i;
-    sp[251] = n714r;
-    sp[252] = n721i;
-    sp[253] = n721r;
-    sp[254] = n722i;
-    sp[255] = n722r;
-    sp[256] = n723i;
-    sp[257] = n723r;
-    sp[258] = n730i;
-    sp[259] = n730r;
-    sp[260] = n731i;
-    sp[261] = n731r;
-    sp[262] = n732i;
-    sp[263] = n732r;
-    sp[264] = n739i;
-    sp[265] = n739r;
-    sp[266] = n740i;
-    sp[267] = n740r;
-    sp[268] = n741i;
-    sp[269] = n741r;
-    sp[270] = n748i;
-    sp[271] = n748r;
-    sp[272] = n749i;
-    sp[273] = n749r;
-    sp[274] = n750i;
-    sp[275] = n750r;
-    sp[276] = n757i;
-    sp[277] = n757r;
-    sp[278] = n758i;
-    sp[279] = n758r;
-    sp[280] = n759i;
-    sp[281] = n759r;
-    sp[282] = n766i;
-    sp[283] = n766r;
-    sp[284] = n767i;
-    sp[285] = n767r;
-    sp[286] = n768i;
-    sp[287] = n768r;
+    sp[90] = n2648i;
+    sp[91] = n2648r;
+    sp[92] = n2649i;
+    sp[93] = n2649r;
+    sp[94] = n2657i;
+    sp[95] = n2657r;
+    sp[96] = n2658i;
+    sp[97] = n2658r;
+    sp[98] = n2666i;
+    sp[99] = n2666r;
+    sp[100] = n2667i;
+    sp[101] = n2667r;
+    sp[102] = n2672i;
+    sp[103] = n2672r;
+    sp[104] = n2678i;
+    sp[105] = n2678r;
+    sp[106] = n2687i;
+    sp[107] = n2687r;
+    sp[108] = n2696i;
+    sp[109] = n2696r;
+    sp[110] = n2705i;
+    sp[111] = n2705r;
+    sp[112] = n2714i;
+    sp[113] = n2714r;
+    sp[114] = n2723i;
+    sp[115] = n2723r;
+    sp[116] = n2732i;
+    sp[117] = n2732r;
+    sp[118] = n2741i;
+    sp[119] = n2741r;
+    sp[120] = n2750i;
+    sp[121] = n2750r;
+    sp[122] = n2759i;
+    sp[123] = n2759r;
+    sp[124] = n2768i;
+    sp[125] = n2768r;
+    sp[126] = n2777i;
+    sp[127] = n2777r;
+    sp[128] = n2786i;
+    sp[129] = n2786r;
+    sp[130] = n2795i;
+    sp[131] = n2795r;
+    sp[132] = n2804i;
+    sp[133] = n2804r;
+    sp[134] = n2813i;
+    sp[135] = n2813r;
+    sp[136] = n2822i;
+    sp[137] = n2822r;
+    sp[138] = n2831i;
+    sp[139] = n2831r;
+    sp[140] = n2840i;
+    sp[141] = n2840r;
+    sp[142] = n2849i;
+    sp[143] = n2849r;
+    sp[144] = n2858i;
+    sp[145] = n2858r;
+    sp[146] = n2867i;
+    sp[147] = n2867r;
+    sp[148] = n2876i;
+    sp[149] = n2876r;
+    sp[150] = n2885i;
+    sp[151] = n2885r;
+    sp[152] = n2894i;
+    sp[153] = n2894r;
+    sp[154] = n2903i;
+    sp[155] = n2903r;
+    sp[156] = n2912i;
+    sp[157] = n2912r;
+    sp[158] = n2921i;
+    sp[159] = n2921r;
+    sp[160] = n2930i;
+    sp[161] = n2930r;
+    sp[162] = n2939i;
+    sp[163] = n2939r;
+    sp[164] = n2948i;
+    sp[165] = n2948r;
+    sp[166] = n2957i;
+    sp[167] = n2957r;
+    sp[168] = n2966i;
+    sp[169] = n2966r;
+    sp[170] = n2975i;
+    sp[171] = n2975r;
+    sp[172] = n2984i;
+    sp[173] = n2984r;
+    sp[174] = n2993i;
+    sp[175] = n2993r;
+    sp[176] = n3002i;
+    sp[177] = n3002r;
+    sp[178] = n3011i;
+    sp[179] = n3011r;
+    sp[180] = n3020i;
+    sp[181] = n3020r;
+    sp[182] = n3029i;
+    sp[183] = n3029r;
+    sp[184] = n3038i;
+    sp[185] = n3038r;
+    sp[186] = n3047i;
+    sp[187] = n3047r;
+    sp[188] = n3056i;
+    sp[189] = n3056r;
+    sp[190] = n3065i;
+    sp[191] = n3065r;
+    sp[192] = n631i;
+    sp[193] = n631r;
+    sp[194] = n633i;
+    sp[195] = n633r;
+    sp[196] = n640i;
+    sp[197] = n640r;
+    sp[198] = n642i;
+    sp[199] = n642r;
+    sp[200] = n649i;
+    sp[201] = n649r;
+    sp[202] = n651i;
+    sp[203] = n651r;
+    sp[204] = n658i;
+    sp[205] = n658r;
+    sp[206] = n660i;
+    sp[207] = n660r;
+    sp[208] = n667i;
+    sp[209] = n667r;
+    sp[210] = n668i;
+    sp[211] = n668r;
+    sp[212] = n669i;
+    sp[213] = n669r;
+    sp[214] = n676i;
+    sp[215] = n676r;
+    sp[216] = n677i;
+    sp[217] = n677r;
+    sp[218] = n678i;
+    sp[219] = n678r;
+    sp[220] = n685i;
+    sp[221] = n685r;
+    sp[222] = n686i;
+    sp[223] = n686r;
+    sp[224] = n687i;
+    sp[225] = n687r;
+    sp[226] = n694i;
+    sp[227] = n694r;
+    sp[228] = n695i;
+    sp[229] = n695r;
+    sp[230] = n696i;
+    sp[231] = n696r;
+    sp[232] = n703i;
+    sp[233] = n703r;
+    sp[234] = n704i;
+    sp[235] = n704r;
+    sp[236] = n705i;
+    sp[237] = n705r;
+    sp[238] = n712i;
+    sp[239] = n712r;
+    sp[240] = n713i;
+    sp[241] = n713r;
+    sp[242] = n714i;
+    sp[243] = n714r;
+    sp[244] = n721i;
+    sp[245] = n721r;
+    sp[246] = n722i;
+    sp[247] = n722r;
+    sp[248] = n723i;
+    sp[249] = n723r;
+    sp[250] = n730i;
+    sp[251] = n730r;
+    sp[252] = n731i;
+    sp[253] = n731r;
+    sp[254] = n732i;
+    sp[255] = n732r;
+    sp[256] = n739i;
+    sp[257] = n739r;
+    sp[258] = n740i;
+    sp[259] = n740r;
+    sp[260] = n741i;
+    sp[261] = n741r;
+    sp[262] = n748i;
+    sp[263] = n748r;
+    sp[264] = n749i;
+    sp[265] = n749r;
+    sp[266] = n750i;
+    sp[267] = n750r;
+    sp[268] = n757i;
+    sp[269] = n757r;
+    sp[270] = n758i;
+    sp[271] = n758r;
+    sp[272] = n759i;
+    sp[273] = n759r;
+    sp[274] = n766i;
+    sp[275] = n766r;
+    sp[276] = n767i;
+    sp[277] = n767r;
+    sp[278] = n768i;
+    sp[279] = n768r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
 template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_part3([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
@@ -8429,204 +8135,196 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n1466r = sp[87];
     const V n1468i = sp[88];
     const V n1468r = sp[89];
-    const V n2647i = sp[90];
-    const V n2647r = sp[91];
-    const V n2648i = sp[92];
-    const V n2648r = sp[93];
-    const V n2649i = sp[94];
-    const V n2649r = sp[95];
-    const V n2656i = sp[96];
-    const V n2656r = sp[97];
-    const V n2657i = sp[98];
-    const V n2657r = sp[99];
-    const V n2658i = sp[100];
-    const V n2658r = sp[101];
-    const V n2665i = sp[102];
-    const V n2665r = sp[103];
-    const V n2666i = sp[104];
-    const V n2666r = sp[105];
-    const V n2667i = sp[106];
-    const V n2667r = sp[107];
-    const V n2672i = sp[108];
-    const V n2672r = sp[109];
-    const V n2674i = sp[110];
-    const V n2674r = sp[111];
-    const V n2678i = sp[112];
-    const V n2678r = sp[113];
-    const V n2687i = sp[114];
-    const V n2687r = sp[115];
-    const V n2696i = sp[116];
-    const V n2696r = sp[117];
-    const V n2705i = sp[118];
-    const V n2705r = sp[119];
-    const V n2714i = sp[120];
-    const V n2714r = sp[121];
-    const V n2723i = sp[122];
-    const V n2723r = sp[123];
-    const V n2732i = sp[124];
-    const V n2732r = sp[125];
-    const V n2741i = sp[126];
-    const V n2741r = sp[127];
-    const V n2750i = sp[128];
-    const V n2750r = sp[129];
-    const V n2759i = sp[130];
-    const V n2759r = sp[131];
-    const V n2768i = sp[132];
-    const V n2768r = sp[133];
-    const V n2777i = sp[134];
-    const V n2777r = sp[135];
-    const V n2786i = sp[136];
-    const V n2786r = sp[137];
-    const V n2795i = sp[138];
-    const V n2795r = sp[139];
-    const V n2804i = sp[140];
-    const V n2804r = sp[141];
-    const V n2813i = sp[142];
-    const V n2813r = sp[143];
-    const V n2822i = sp[144];
-    const V n2822r = sp[145];
-    const V n2831i = sp[146];
-    const V n2831r = sp[147];
-    const V n2840i = sp[148];
-    const V n2840r = sp[149];
-    const V n2849i = sp[150];
-    const V n2849r = sp[151];
-    const V n2858i = sp[152];
-    const V n2858r = sp[153];
-    const V n2867i = sp[154];
-    const V n2867r = sp[155];
-    const V n2876i = sp[156];
-    const V n2876r = sp[157];
-    const V n2885i = sp[158];
-    const V n2885r = sp[159];
-    const V n2894i = sp[160];
-    const V n2894r = sp[161];
-    const V n2903i = sp[162];
-    const V n2903r = sp[163];
-    const V n2912i = sp[164];
-    const V n2912r = sp[165];
-    const V n2921i = sp[166];
-    const V n2921r = sp[167];
-    const V n2930i = sp[168];
-    const V n2930r = sp[169];
-    const V n2939i = sp[170];
-    const V n2939r = sp[171];
-    const V n2948i = sp[172];
-    const V n2948r = sp[173];
-    const V n2957i = sp[174];
-    const V n2957r = sp[175];
-    const V n2966i = sp[176];
-    const V n2966r = sp[177];
-    const V n2975i = sp[178];
-    const V n2975r = sp[179];
-    const V n2984i = sp[180];
-    const V n2984r = sp[181];
-    const V n2993i = sp[182];
-    const V n2993r = sp[183];
-    const V n3002i = sp[184];
-    const V n3002r = sp[185];
-    const V n3011i = sp[186];
-    const V n3011r = sp[187];
-    const V n3020i = sp[188];
-    const V n3020r = sp[189];
-    const V n3029i = sp[190];
-    const V n3029r = sp[191];
-    const V n3038i = sp[192];
-    const V n3038r = sp[193];
-    const V n3047i = sp[194];
-    const V n3047r = sp[195];
-    const V n3056i = sp[196];
-    const V n3056r = sp[197];
-    const V n3065i = sp[198];
-    const V n3065r = sp[199];
-    const V n631i = sp[200];
-    const V n631r = sp[201];
-    const V n633i = sp[202];
-    const V n633r = sp[203];
-    const V n640i = sp[204];
-    const V n640r = sp[205];
-    const V n642i = sp[206];
-    const V n642r = sp[207];
-    const V n649i = sp[208];
-    const V n649r = sp[209];
-    const V n651i = sp[210];
-    const V n651r = sp[211];
-    const V n658i = sp[212];
-    const V n658r = sp[213];
-    const V n660i = sp[214];
-    const V n660r = sp[215];
-    const V n667i = sp[216];
-    const V n667r = sp[217];
-    const V n668i = sp[218];
-    const V n668r = sp[219];
-    const V n669i = sp[220];
-    const V n669r = sp[221];
-    const V n676i = sp[222];
-    const V n676r = sp[223];
-    const V n677i = sp[224];
-    const V n677r = sp[225];
-    const V n678i = sp[226];
-    const V n678r = sp[227];
-    const V n685i = sp[228];
-    const V n685r = sp[229];
-    const V n686i = sp[230];
-    const V n686r = sp[231];
-    const V n687i = sp[232];
-    const V n687r = sp[233];
-    const V n694i = sp[234];
-    const V n694r = sp[235];
-    const V n695i = sp[236];
-    const V n695r = sp[237];
-    const V n696i = sp[238];
-    const V n696r = sp[239];
-    const V n703i = sp[240];
-    const V n703r = sp[241];
-    const V n704i = sp[242];
-    const V n704r = sp[243];
-    const V n705i = sp[244];
-    const V n705r = sp[245];
-    const V n712i = sp[246];
-    const V n712r = sp[247];
-    const V n713i = sp[248];
-    const V n713r = sp[249];
-    const V n714i = sp[250];
-    const V n714r = sp[251];
-    const V n721i = sp[252];
-    const V n721r = sp[253];
-    const V n722i = sp[254];
-    const V n722r = sp[255];
-    const V n723i = sp[256];
-    const V n723r = sp[257];
-    const V n730i = sp[258];
-    const V n730r = sp[259];
-    const V n731i = sp[260];
-    const V n731r = sp[261];
-    const V n732i = sp[262];
-    const V n732r = sp[263];
-    const V n739i = sp[264];
-    const V n739r = sp[265];
-    const V n740i = sp[266];
-    const V n740r = sp[267];
-    const V n741i = sp[268];
-    const V n741r = sp[269];
-    const V n748i = sp[270];
-    const V n748r = sp[271];
-    const V n749i = sp[272];
-    const V n749r = sp[273];
-    const V n750i = sp[274];
-    const V n750r = sp[275];
-    const V n757i = sp[276];
-    const V n757r = sp[277];
-    const V n758i = sp[278];
-    const V n758r = sp[279];
-    const V n759i = sp[280];
-    const V n759r = sp[281];
-    const V n766i = sp[282];
-    const V n766r = sp[283];
-    const V n767i = sp[284];
-    const V n767r = sp[285];
-    const V n768i = sp[286];
-    const V n768r = sp[287];
+    const V n2648i = sp[90];
+    const V n2648r = sp[91];
+    const V n2649i = sp[92];
+    const V n2649r = sp[93];
+    const V n2657i = sp[94];
+    const V n2657r = sp[95];
+    const V n2658i = sp[96];
+    const V n2658r = sp[97];
+    const V n2666i = sp[98];
+    const V n2666r = sp[99];
+    const V n2667i = sp[100];
+    const V n2667r = sp[101];
+    const V n2672i = sp[102];
+    const V n2672r = sp[103];
+    const V n2678i = sp[104];
+    const V n2678r = sp[105];
+    const V n2687i = sp[106];
+    const V n2687r = sp[107];
+    const V n2696i = sp[108];
+    const V n2696r = sp[109];
+    const V n2705i = sp[110];
+    const V n2705r = sp[111];
+    const V n2714i = sp[112];
+    const V n2714r = sp[113];
+    const V n2723i = sp[114];
+    const V n2723r = sp[115];
+    const V n2732i = sp[116];
+    const V n2732r = sp[117];
+    const V n2741i = sp[118];
+    const V n2741r = sp[119];
+    const V n2750i = sp[120];
+    const V n2750r = sp[121];
+    const V n2759i = sp[122];
+    const V n2759r = sp[123];
+    const V n2768i = sp[124];
+    const V n2768r = sp[125];
+    const V n2777i = sp[126];
+    const V n2777r = sp[127];
+    const V n2786i = sp[128];
+    const V n2786r = sp[129];
+    const V n2795i = sp[130];
+    const V n2795r = sp[131];
+    const V n2804i = sp[132];
+    const V n2804r = sp[133];
+    const V n2813i = sp[134];
+    const V n2813r = sp[135];
+    const V n2822i = sp[136];
+    const V n2822r = sp[137];
+    const V n2831i = sp[138];
+    const V n2831r = sp[139];
+    const V n2840i = sp[140];
+    const V n2840r = sp[141];
+    const V n2849i = sp[142];
+    const V n2849r = sp[143];
+    const V n2858i = sp[144];
+    const V n2858r = sp[145];
+    const V n2867i = sp[146];
+    const V n2867r = sp[147];
+    const V n2876i = sp[148];
+    const V n2876r = sp[149];
+    const V n2885i = sp[150];
+    const V n2885r = sp[151];
+    const V n2894i = sp[152];
+    const V n2894r = sp[153];
+    const V n2903i = sp[154];
+    const V n2903r = sp[155];
+    const V n2912i = sp[156];
+    const V n2912r = sp[157];
+    const V n2921i = sp[158];
+    const V n2921r = sp[159];
+    const V n2930i = sp[160];
+    const V n2930r = sp[161];
+    const V n2939i = sp[162];
+    const V n2939r = sp[163];
+    const V n2948i = sp[164];
+    const V n2948r = sp[165];
+    const V n2957i = sp[166];
+    const V n2957r = sp[167];
+    const V n2966i = sp[168];
+    const V n2966r = sp[169];
+    const V n2975i = sp[170];
+    const V n2975r = sp[171];
+    const V n2984i = sp[172];
+    const V n2984r = sp[173];
+    const V n2993i = sp[174];
+    const V n2993r = sp[175];
+    const V n3002i = sp[176];
+    const V n3002r = sp[177];
+    const V n3011i = sp[178];
+    const V n3011r = sp[179];
+    const V n3020i = sp[180];
+    const V n3020r = sp[181];
+    const V n3029i = sp[182];
+    const V n3029r = sp[183];
+    const V n3038i = sp[184];
+    const V n3038r = sp[185];
+    const V n3047i = sp[186];
+    const V n3047r = sp[187];
+    const V n3056i = sp[188];
+    const V n3056r = sp[189];
+    const V n3065i = sp[190];
+    const V n3065r = sp[191];
+    const V n631i = sp[192];
+    const V n631r = sp[193];
+    const V n633i = sp[194];
+    const V n633r = sp[195];
+    const V n640i = sp[196];
+    const V n640r = sp[197];
+    const V n642i = sp[198];
+    const V n642r = sp[199];
+    const V n649i = sp[200];
+    const V n649r = sp[201];
+    const V n651i = sp[202];
+    const V n651r = sp[203];
+    const V n658i = sp[204];
+    const V n658r = sp[205];
+    const V n660i = sp[206];
+    const V n660r = sp[207];
+    const V n667i = sp[208];
+    const V n667r = sp[209];
+    const V n668i = sp[210];
+    const V n668r = sp[211];
+    const V n669i = sp[212];
+    const V n669r = sp[213];
+    const V n676i = sp[214];
+    const V n676r = sp[215];
+    const V n677i = sp[216];
+    const V n677r = sp[217];
+    const V n678i = sp[218];
+    const V n678r = sp[219];
+    const V n685i = sp[220];
+    const V n685r = sp[221];
+    const V n686i = sp[222];
+    const V n686r = sp[223];
+    const V n687i = sp[224];
+    const V n687r = sp[225];
+    const V n694i = sp[226];
+    const V n694r = sp[227];
+    const V n695i = sp[228];
+    const V n695r = sp[229];
+    const V n696i = sp[230];
+    const V n696r = sp[231];
+    const V n703i = sp[232];
+    const V n703r = sp[233];
+    const V n704i = sp[234];
+    const V n704r = sp[235];
+    const V n705i = sp[236];
+    const V n705r = sp[237];
+    const V n712i = sp[238];
+    const V n712r = sp[239];
+    const V n713i = sp[240];
+    const V n713r = sp[241];
+    const V n714i = sp[242];
+    const V n714r = sp[243];
+    const V n721i = sp[244];
+    const V n721r = sp[245];
+    const V n722i = sp[246];
+    const V n722r = sp[247];
+    const V n723i = sp[248];
+    const V n723r = sp[249];
+    const V n730i = sp[250];
+    const V n730r = sp[251];
+    const V n731i = sp[252];
+    const V n731r = sp[253];
+    const V n732i = sp[254];
+    const V n732r = sp[255];
+    const V n739i = sp[256];
+    const V n739r = sp[257];
+    const V n740i = sp[258];
+    const V n740r = sp[259];
+    const V n741i = sp[260];
+    const V n741r = sp[261];
+    const V n748i = sp[262];
+    const V n748r = sp[263];
+    const V n749i = sp[264];
+    const V n749r = sp[265];
+    const V n750i = sp[266];
+    const V n750r = sp[267];
+    const V n757i = sp[268];
+    const V n757r = sp[269];
+    const V n758i = sp[270];
+    const V n758r = sp[271];
+    const V n759i = sp[272];
+    const V n759r = sp[273];
+    const V n766i = sp[274];
+    const V n766r = sp[275];
+    const V n767i = sp[276];
+    const V n767r = sp[277];
+    const V n768i = sp[278];
+    const V n768r = sp[279];
     const V n2677i = sp[360];
     const V n2677r = sp[361];
     const V n2686i = sp[362];
@@ -8715,42 +8413,6 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n3055r = sp[501];
     const V n3064i = sp[502];
     const V n3064r = sp[503];
-    {
-        const V h0r = V(hir[144 * uhc + uh]);
-        const V h0i = V(hii[144 * uhc + uh]);
-        const V g0r = simd::load<V>(lor + ((crd::usize{144} << msh) + ul));
-        const V g0i = simd::load<V>(loi + ((crd::usize{144} << msh) + ul));
-        const V w0r = simd::fnmadd(h0i, g0i, h0r * g0r);
-        const V w0i = simd::fma(h0i, g0r, h0r * g0i);
-        const V h1r = V(hir[145 * uhc + uh]);
-        const V h1i = V(hii[145 * uhc + uh]);
-        const V g1r = simd::load<V>(lor + ((crd::usize{145} << msh) + ul));
-        const V g1i = simd::load<V>(loi + ((crd::usize{145} << msh) + ul));
-        const V w1r = simd::fnmadd(h1i, g1i, h1r * g1r);
-        const V w1i = simd::fma(h1i, g1r, h1r * g1i);
-        const V h2r = V(hir[146 * uhc + uh]);
-        const V h2i = V(hii[146 * uhc + uh]);
-        const V g2r = simd::load<V>(lor + ((crd::usize{146} << msh) + ul));
-        const V g2i = simd::load<V>(loi + ((crd::usize{146} << msh) + ul));
-        const V w2r = simd::fnmadd(h2i, g2i, h2r * g2r);
-        const V w2i = simd::fma(h2i, g2r, h2r * g2i);
-        const V h3r = V(hir[147 * uhc + uh]);
-        const V h3i = V(hii[147 * uhc + uh]);
-        const V g3r = simd::load<V>(lor + ((crd::usize{147} << msh) + ul));
-        const V g3i = simd::load<V>(loi + ((crd::usize{147} << msh) + ul));
-        const V w3r = simd::fnmadd(h3i, g3i, h3r * g3r);
-        const V w3i = simd::fma(h3i, g3r, h3r * g3i);
-        const V x0r = simd::fnmadd(w0i, n2647i, n2647r * w0r);
-        const V x0i = simd::fma(w0i, n2647r, n2647i * w0r);
-        const V x1r = simd::fnmadd(w1i, n2656i, n2656r * w1r);
-        const V x1i = simd::fma(w1i, n2656r, n2656i * w1r);
-        const V x2r = simd::fnmadd(w2i, n2665i, n2665r * w2r);
-        const V x2i = simd::fma(w2i, n2665r, n2665i * w2r);
-        const V x3r = simd::fnmadd(w3i, n2674i, n2674r * w3r);
-        const V x3i = simd::fma(w3i, n2674r, n2674i * w3r);
-        simd::store_transposed(outb + t * 512 + 288, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 292, 512, x0i, x1i, x2i, x3i);
-    }
     const V n2675r = n1362r + n2672r;
     const V n2675i = n1362i + n2672i;
     {
@@ -8786,8 +8448,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2666r, n2666i * w2r);
         const V x3r = simd::fnmadd(w3i, n2675i, n2675r * w3r);
         const V x3i = simd::fma(w3i, n2675r, n2675i * w3r);
-        simd::store_transposed(outb + t * 512 + 160, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 164, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 160, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2676r = n1362r - n2672r;
     const V n2676i = n1362i - n2672i;
@@ -8824,8 +8485,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2667r, n2667i * w2r);
         const V x3r = simd::fnmadd(w3i, n2676i, n2676r * w3r);
         const V x3i = simd::fma(w3i, n2676r, n2676i * w3r);
-        simd::store_transposed(outb + t * 512 + 416, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 420, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 416, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2680r = n2677r - n2678r;
     const V n2680i = n2677i - n2678i;
@@ -8926,8 +8586,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2700r, n2700i * w2r);
         const V x3r = simd::fnmadd(w3i, n2709i, n2709r * w3r);
         const V x3i = simd::fma(w3i, n2709r, n2709i * w3r);
-        simd::store_transposed(outb + t * 512 + 40, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 44, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 40, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2710r = n1397r - n2706r;
     const V n2710i = n1397i - n2706i;
@@ -8964,8 +8623,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2701r, n2701i * w2r);
         const V x3r = simd::fnmadd(w3i, n2710i, n2710r * w3r);
         const V x3i = simd::fma(w3i, n2710r, n2710i * w3r);
-        simd::store_transposed(outb + t * 512 + 296, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 300, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 296, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2711r = n1398r + n2708r;
     const V n2711i = n1398i + n2708i;
@@ -9002,8 +8660,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2702r, n2702i * w2r);
         const V x3r = simd::fnmadd(w3i, n2711i, n2711r * w3r);
         const V x3i = simd::fma(w3i, n2711r, n2711i * w3r);
-        simd::store_transposed(outb + t * 512 + 168, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 172, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 168, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2712r = n1398r - n2708r;
     const V n2712i = n1398i - n2708i;
@@ -9040,8 +8697,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2703r, n2703i * w2r);
         const V x3r = simd::fnmadd(w3i, n2712i, n2712r * w3r);
         const V x3i = simd::fma(w3i, n2712r, n2712i * w3r);
-        simd::store_transposed(outb + t * 512 + 424, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 428, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 424, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2716r = n2713r - n2714r;
     const V n2716i = n2713i - n2714i;
@@ -9142,8 +8798,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2736r, n2736i * w2r);
         const V x3r = simd::fnmadd(w3i, n2745i, n2745r * w3r);
         const V x3i = simd::fma(w3i, n2745r, n2745i * w3r);
-        simd::store_transposed(outb + t * 512 + 48, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 52, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 48, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2746r = n1433r - n2742r;
     const V n2746i = n1433i - n2742i;
@@ -9180,8 +8835,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2737r, n2737i * w2r);
         const V x3r = simd::fnmadd(w3i, n2746i, n2746r * w3r);
         const V x3i = simd::fma(w3i, n2746r, n2746i * w3r);
-        simd::store_transposed(outb + t * 512 + 304, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 308, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 304, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2747r = n1434r + n2744r;
     const V n2747i = n1434i + n2744i;
@@ -9218,8 +8872,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2738r, n2738i * w2r);
         const V x3r = simd::fnmadd(w3i, n2747i, n2747r * w3r);
         const V x3i = simd::fma(w3i, n2747r, n2747i * w3r);
-        simd::store_transposed(outb + t * 512 + 176, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 180, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 176, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2748r = n1434r - n2744r;
     const V n2748i = n1434i - n2744i;
@@ -9256,8 +8909,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2739r, n2739i * w2r);
         const V x3r = simd::fnmadd(w3i, n2748i, n2748r * w3r);
         const V x3i = simd::fma(w3i, n2748r, n2748i * w3r);
-        simd::store_transposed(outb + t * 512 + 432, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 436, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 432, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2752r = n2749r - n2750r;
     const V n2752i = n2749i - n2750i;
@@ -9358,8 +9010,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2772r, n2772i * w2r);
         const V x3r = simd::fnmadd(w3i, n2781i, n2781r * w3r);
         const V x3i = simd::fma(w3i, n2781r, n2781i * w3r);
-        simd::store_transposed(outb + t * 512 + 56, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 60, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 56, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2782r = n1469r - n2778r;
     const V n2782i = n1469i - n2778i;
@@ -9396,8 +9047,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2773r, n2773i * w2r);
         const V x3r = simd::fnmadd(w3i, n2782i, n2782r * w3r);
         const V x3i = simd::fma(w3i, n2782r, n2782i * w3r);
-        simd::store_transposed(outb + t * 512 + 312, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 316, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 312, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2783r = n1470r + n2780r;
     const V n2783i = n1470i + n2780i;
@@ -9434,8 +9084,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2774r, n2774i * w2r);
         const V x3r = simd::fnmadd(w3i, n2783i, n2783r * w3r);
         const V x3i = simd::fma(w3i, n2783r, n2783i * w3r);
-        simd::store_transposed(outb + t * 512 + 184, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 188, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 184, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2784r = n1470r - n2780r;
     const V n2784i = n1470i - n2780i;
@@ -9472,8 +9121,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2775r, n2775i * w2r);
         const V x3r = simd::fnmadd(w3i, n2784i, n2784r * w3r);
         const V x3i = simd::fma(w3i, n2784r, n2784i * w3r);
-        simd::store_transposed(outb + t * 512 + 440, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 444, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 440, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2788r = n2785r - n2786r;
     const V n2788i = n2785i - n2786i;
@@ -9574,8 +9222,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2808r, n2808i * w2r);
         const V x3r = simd::fnmadd(w3i, n2817i, n2817r * w3r);
         const V x3i = simd::fma(w3i, n2817r, n2817i * w3r);
-        simd::store_transposed(outb + t * 512 + 64, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 68, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 64, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2818r = n1219r - n2814r;
     const V n2818i = n1219i - n2814i;
@@ -9612,8 +9259,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2809r, n2809i * w2r);
         const V x3r = simd::fnmadd(w3i, n2818i, n2818r * w3r);
         const V x3i = simd::fma(w3i, n2818r, n2818i * w3r);
-        simd::store_transposed(outb + t * 512 + 320, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 324, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 320, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2819r = n1220r + n2816r;
     const V n2819i = n1220i + n2816i;
@@ -9650,8 +9296,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2810r, n2810i * w2r);
         const V x3r = simd::fnmadd(w3i, n2819i, n2819r * w3r);
         const V x3i = simd::fma(w3i, n2819r, n2819i * w3r);
-        simd::store_transposed(outb + t * 512 + 192, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 196, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 192, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2820r = n1220r - n2816r;
     const V n2820i = n1220i - n2816i;
@@ -9688,8 +9333,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2811r, n2811i * w2r);
         const V x3r = simd::fnmadd(w3i, n2820i, n2820r * w3r);
         const V x3i = simd::fma(w3i, n2820r, n2820i * w3r);
-        simd::store_transposed(outb + t * 512 + 448, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 452, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 448, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2824r = n2821r - n2822r;
     const V n2824i = n2821i - n2822i;
@@ -9790,8 +9434,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2844r, n2844i * w2r);
         const V x3r = simd::fnmadd(w3i, n2853i, n2853r * w3r);
         const V x3i = simd::fma(w3i, n2853r, n2853i * w3r);
-        simd::store_transposed(outb + t * 512 + 72, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 76, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 72, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2854r = n1255r - n2850r;
     const V n2854i = n1255i - n2850i;
@@ -9828,8 +9471,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2845r, n2845i * w2r);
         const V x3r = simd::fnmadd(w3i, n2854i, n2854r * w3r);
         const V x3i = simd::fma(w3i, n2854r, n2854i * w3r);
-        simd::store_transposed(outb + t * 512 + 328, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 332, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 328, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2855r = n1256r + n2852r;
     const V n2855i = n1256i + n2852i;
@@ -9866,8 +9508,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2846r, n2846i * w2r);
         const V x3r = simd::fnmadd(w3i, n2855i, n2855r * w3r);
         const V x3i = simd::fma(w3i, n2855r, n2855i * w3r);
-        simd::store_transposed(outb + t * 512 + 200, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 204, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 200, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2856r = n1256r - n2852r;
     const V n2856i = n1256i - n2852i;
@@ -9904,8 +9545,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2847r, n2847i * w2r);
         const V x3r = simd::fnmadd(w3i, n2856i, n2856r * w3r);
         const V x3i = simd::fma(w3i, n2856r, n2856i * w3r);
-        simd::store_transposed(outb + t * 512 + 456, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 460, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 456, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2860r = n2857r - n2858r;
     const V n2860i = n2857i - n2858i;
@@ -10006,8 +9646,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2880r, n2880i * w2r);
         const V x3r = simd::fnmadd(w3i, n2889i, n2889r * w3r);
         const V x3i = simd::fma(w3i, n2889r, n2889i * w3r);
-        simd::store_transposed(outb + t * 512 + 80, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 84, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 80, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2890r = n1291r - n2886r;
     const V n2890i = n1291i - n2886i;
@@ -10044,8 +9683,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2881r, n2881i * w2r);
         const V x3r = simd::fnmadd(w3i, n2890i, n2890r * w3r);
         const V x3i = simd::fma(w3i, n2890r, n2890i * w3r);
-        simd::store_transposed(outb + t * 512 + 336, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 340, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 336, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2891r = n1292r + n2888r;
     const V n2891i = n1292i + n2888i;
@@ -10082,8 +9720,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2882r, n2882i * w2r);
         const V x3r = simd::fnmadd(w3i, n2891i, n2891r * w3r);
         const V x3i = simd::fma(w3i, n2891r, n2891i * w3r);
-        simd::store_transposed(outb + t * 512 + 208, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 212, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 208, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2892r = n1292r - n2888r;
     const V n2892i = n1292i - n2888i;
@@ -10120,8 +9757,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2883r, n2883i * w2r);
         const V x3r = simd::fnmadd(w3i, n2892i, n2892r * w3r);
         const V x3i = simd::fma(w3i, n2892r, n2892i * w3r);
-        simd::store_transposed(outb + t * 512 + 464, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 468, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 464, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2896r = n2893r - n2894r;
     const V n2896i = n2893i - n2894i;
@@ -10222,8 +9858,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2916r, n2916i * w2r);
         const V x3r = simd::fnmadd(w3i, n2925i, n2925r * w3r);
         const V x3i = simd::fma(w3i, n2925r, n2925i * w3r);
-        simd::store_transposed(outb + t * 512 + 88, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 92, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 88, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2926r = n1327r - n2922r;
     const V n2926i = n1327i - n2922i;
@@ -10260,8 +9895,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2917r, n2917i * w2r);
         const V x3r = simd::fnmadd(w3i, n2926i, n2926r * w3r);
         const V x3i = simd::fma(w3i, n2926r, n2926i * w3r);
-        simd::store_transposed(outb + t * 512 + 344, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 348, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 344, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2927r = n1328r + n2924r;
     const V n2927i = n1328i + n2924i;
@@ -10298,8 +9932,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2918r, n2918i * w2r);
         const V x3r = simd::fnmadd(w3i, n2927i, n2927r * w3r);
         const V x3i = simd::fma(w3i, n2927r, n2927i * w3r);
-        simd::store_transposed(outb + t * 512 + 216, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 220, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 216, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2928r = n1328r - n2924r;
     const V n2928i = n1328i - n2924i;
@@ -10336,8 +9969,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2919r, n2919i * w2r);
         const V x3r = simd::fnmadd(w3i, n2928i, n2928r * w3r);
         const V x3i = simd::fma(w3i, n2928r, n2928i * w3r);
-        simd::store_transposed(outb + t * 512 + 472, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 476, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 472, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2932r = n2929r - n2930r;
     const V n2932i = n2929i - n2930i;
@@ -10438,8 +10070,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2952r, n2952i * w2r);
         const V x3r = simd::fnmadd(w3i, n2961i, n2961r * w3r);
         const V x3i = simd::fma(w3i, n2961r, n2961i * w3r);
-        simd::store_transposed(outb + t * 512 + 96, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 100, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 96, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2962r = n1363r - n2958r;
     const V n2962i = n1363i - n2958i;
@@ -10476,8 +10107,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2953r, n2953i * w2r);
         const V x3r = simd::fnmadd(w3i, n2962i, n2962r * w3r);
         const V x3i = simd::fma(w3i, n2962r, n2962i * w3r);
-        simd::store_transposed(outb + t * 512 + 352, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 356, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 352, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2963r = n1364r + n2960r;
     const V n2963i = n1364i + n2960i;
@@ -10514,8 +10144,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2954r, n2954i * w2r);
         const V x3r = simd::fnmadd(w3i, n2963i, n2963r * w3r);
         const V x3i = simd::fma(w3i, n2963r, n2963i * w3r);
-        simd::store_transposed(outb + t * 512 + 224, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 228, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 224, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2964r = n1364r - n2960r;
     const V n2964i = n1364i - n2960i;
@@ -10552,8 +10181,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2955r, n2955i * w2r);
         const V x3r = simd::fnmadd(w3i, n2964i, n2964r * w3r);
         const V x3i = simd::fma(w3i, n2964r, n2964i * w3r);
-        simd::store_transposed(outb + t * 512 + 480, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 484, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 480, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2968r = n2965r - n2966r;
     const V n2968i = n2965i - n2966i;
@@ -10654,8 +10282,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2988r, n2988i * w2r);
         const V x3r = simd::fnmadd(w3i, n2997i, n2997r * w3r);
         const V x3i = simd::fma(w3i, n2997r, n2997i * w3r);
-        simd::store_transposed(outb + t * 512 + 104, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 108, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 104, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2998r = n1399r - n2994r;
     const V n2998i = n1399i - n2994i;
@@ -10692,8 +10319,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2989r, n2989i * w2r);
         const V x3r = simd::fnmadd(w3i, n2998i, n2998r * w3r);
         const V x3i = simd::fma(w3i, n2998r, n2998i * w3r);
-        simd::store_transposed(outb + t * 512 + 360, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 364, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 360, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2999r = n1400r + n2996r;
     const V n2999i = n1400i + n2996i;
@@ -10730,8 +10356,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2990r, n2990i * w2r);
         const V x3r = simd::fnmadd(w3i, n2999i, n2999r * w3r);
         const V x3i = simd::fma(w3i, n2999r, n2999i * w3r);
-        simd::store_transposed(outb + t * 512 + 232, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 236, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 232, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n3000r = n1400r - n2996r;
     const V n3000i = n1400i - n2996i;
@@ -10768,8 +10393,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2991r, n2991i * w2r);
         const V x3r = simd::fnmadd(w3i, n3000i, n3000r * w3r);
         const V x3i = simd::fma(w3i, n3000r, n3000i * w3r);
-        simd::store_transposed(outb + t * 512 + 488, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 492, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 488, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n3004r = n3001r - n3002r;
     const V n3004i = n3001i - n3002i;
@@ -10870,8 +10494,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n3024r, n3024i * w2r);
         const V x3r = simd::fnmadd(w3i, n3033i, n3033r * w3r);
         const V x3i = simd::fma(w3i, n3033r, n3033i * w3r);
-        simd::store_transposed(outb + t * 512 + 112, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 116, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 112, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n3034r = n1435r - n3030r;
     const V n3034i = n1435i - n3030i;
@@ -10908,8 +10531,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n3025r, n3025i * w2r);
         const V x3r = simd::fnmadd(w3i, n3034i, n3034r * w3r);
         const V x3i = simd::fma(w3i, n3034r, n3034i * w3r);
-        simd::store_transposed(outb + t * 512 + 368, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 372, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 368, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n3035r = n1436r + n3032r;
     const V n3035i = n1436i + n3032i;
@@ -10946,8 +10568,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n3026r, n3026i * w2r);
         const V x3r = simd::fnmadd(w3i, n3035i, n3035r * w3r);
         const V x3i = simd::fma(w3i, n3035r, n3035i * w3r);
-        simd::store_transposed(outb + t * 512 + 240, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 244, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 240, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n3036r = n1436r - n3032r;
     const V n3036i = n1436i - n3032i;
@@ -10984,8 +10605,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n3027r, n3027i * w2r);
         const V x3r = simd::fnmadd(w3i, n3036i, n3036r * w3r);
         const V x3i = simd::fma(w3i, n3036r, n3036i * w3r);
-        simd::store_transposed(outb + t * 512 + 496, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 500, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 496, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n3040r = n3037r - n3038r;
     const V n3040i = n3037i - n3038i;
@@ -11086,8 +10706,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n3060r, n3060i * w2r);
         const V x3r = simd::fnmadd(w3i, n3069i, n3069r * w3r);
         const V x3i = simd::fma(w3i, n3069r, n3069i * w3r);
-        simd::store_transposed(outb + t * 512 + 120, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 124, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 120, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n3070r = n1471r - n3066r;
     const V n3070i = n1471i - n3066i;
@@ -11124,8 +10743,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n3061r, n3061i * w2r);
         const V x3r = simd::fnmadd(w3i, n3070i, n3070r * w3r);
         const V x3i = simd::fma(w3i, n3070r, n3070i * w3r);
-        simd::store_transposed(outb + t * 512 + 376, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 380, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 376, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n3071r = n1472r + n3068r;
     const V n3071i = n1472i + n3068i;
@@ -11162,8 +10780,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n3062r, n3062i * w2r);
         const V x3r = simd::fnmadd(w3i, n3071i, n3071r * w3r);
         const V x3i = simd::fma(w3i, n3071r, n3071i * w3r);
-        simd::store_transposed(outb + t * 512 + 248, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 252, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 248, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n3072r = n1472r - n3068r;
     const V n3072i = n1472i - n3068i;
@@ -11200,8 +10817,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n3063r, n3063i * w2r);
         const V x3r = simd::fnmadd(w3i, n3072i, n3072r * w3r);
         const V x3i = simd::fma(w3i, n3072r, n3072i * w3r);
-        simd::store_transposed(outb + t * 512 + 504, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 508, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 504, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
 }
 // N1=256 FACTORED-TWIDDLE stage-1 (L1-resident hi/lo tables) (f64). GENERATED.
@@ -11236,14 +10852,12 @@ void codelet256_stage1_fused_sh_csf(const crd::hesap::Complex<crd::f64>* in,
     }
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet16_fused_notr_ss_part0([[maybe_unused]] const crd::f64* inb,
-    [[maybe_unused]] crd::f64* outb, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::u32 ash,
-    [[maybe_unused]] const crd::f64* twr, [[maybe_unused]] const crd::f64* twi, [[maybe_unused]] crd::usize t) noexcept
+template <typename V> CRD_NOINLINE static void codelet32_batched_sc_part0([[maybe_unused]] const crd::f64* inb,
+    [[maybe_unused]] crd::hesap::Complex<crd::f64>* out, [[maybe_unused]] crd::usize b,
+    [[maybe_unused]] crd::usize t) noexcept
 {
     namespace simd = crd::hesap::fft::lanes;
-    const crd::usize vc = b >> ash;
     const crd::usize b2 = 2 * b;
-    const crd::usize v = t >> ash;
     V n0r;
     V n0i; simd::load_block(inb + 0 * b2, t, n0r, n0i);
     V n1r;
@@ -11276,286 +10890,493 @@ template <typename V> CRD_NOINLINE static void codelet16_fused_notr_ss_part0([[m
     V n14i; simd::load_block(inb + 14 * b2, t, n14r, n14i);
     V n15r;
     V n15i; simd::load_block(inb + 15 * b2, t, n15r, n15i);
-    const V n16r = n0r + n8r;
-    const V n16i = n0i + n8i;
-    const V n17r = n0r - n8r;
-    const V n17i = n0i - n8i;
-    const V n18r = n4r + n12r;
-    const V n18i = n4i + n12i;
-    const V n19r = n4r - n12r;
-    const V n19i = n4i - n12i;
-    const V n20r = n19i;
-    const V n20i = V(0.0) - n19r;
-    const V n21r = n16r + n18r;
-    const V n21i = n16i + n18i;
-    const V n22r = n16r - n18r;
-    const V n22i = n16i - n18i;
-    const V n23r = n17r + n20r;
-    const V n23i = n17i + n20i;
-    const V n24r = n17r - n20r;
-    const V n24i = n17i - n20i;
-    const V n25r = n2r + n10r;
-    const V n25i = n2i + n10i;
-    const V n26r = n2r - n10r;
-    const V n26i = n2i - n10i;
-    const V n36r = simd::fnmadd(V(-0.7071067811865475), n26i, V(0.7071067811865476) * n26r);
-    const V n36i = simd::fma(V(-0.7071067811865475), n26r, V(0.7071067811865476) * n26i);
-    const V n27r = n6r + n14r;
-    const V n27i = n6i + n14i;
-    const V n28r = n6r - n14r;
-    const V n28i = n6i - n14i;
-    const V n37r = simd::fnmadd(V(-0.7071067811865476), n28i, V(-0.7071067811865475) * n28r);
-    const V n37i = simd::fma(V(-0.7071067811865476), n28r, V(-0.7071067811865475) * n28i);
-    const V n29r = n25r + n27r;
-    const V n29i = n25i + n27i;
-    const V n30r = n25r - n27r;
-    const V n30i = n25i - n27i;
-    const V n31r = n30i;
-    const V n31i = V(0.0) - n30r;
-    const V n32r = n21r + n29r;
-    const V n32i = n21i + n29i;
-    const V n33r = n21r - n29r;
-    const V n33i = n21i - n29i;
-    const V n34r = n22r + n31r;
-    const V n34i = n22i + n31i;
-    const V n35r = n22r - n31r;
-    const V n35i = n22i - n31i;
-    const V n38r = n36r + n37r;
-    const V n38i = n36i + n37i;
-    const V n39r = n36r - n37r;
-    const V n39i = n36i - n37i;
-    const V n40r = n39i;
-    const V n40i = V(0.0) - n39r;
-    const V n41r = n23r + n38r;
-    const V n41i = n23i + n38i;
-    const V n42r = n23r - n38r;
-    const V n42i = n23i - n38i;
-    const V n43r = n24r + n40r;
-    const V n43i = n24i + n40i;
-    const V n44r = n24r - n40r;
-    const V n44i = n24i - n40i;
-    const V n45r = n1r + n9r;
-    const V n45i = n1i + n9i;
-    const V n46r = n1r - n9r;
-    const V n46i = n1i - n9i;
-    const V n47r = n5r + n13r;
-    const V n47i = n5i + n13i;
-    const V n48r = n5r - n13r;
-    const V n48i = n5i - n13i;
-    const V n49r = n48i;
-    const V n49i = V(0.0) - n48r;
-    const V n50r = n45r + n47r;
-    const V n50i = n45i + n47i;
-    const V n51r = n45r - n47r;
-    const V n51i = n45i - n47i;
-    const V n79r = simd::fnmadd(V(-0.7071067811865475), n51i, V(0.7071067811865476) * n51r);
-    const V n79i = simd::fma(V(-0.7071067811865475), n51r, V(0.7071067811865476) * n51i);
-    const V n52r = n46r + n49r;
-    const V n52i = n46i + n49i;
-    const V n53r = n46r - n49r;
-    const V n53i = n46i - n49i;
-    const V n70r = simd::fnmadd(V(-0.3826834323650898), n52i, V(0.9238795325112867) * n52r);
-    const V n70i = simd::fma(V(-0.3826834323650898), n52r, V(0.9238795325112867) * n52i);
-    const V n88r = simd::fnmadd(V(-0.9238795325112867), n53i, V(0.38268343236508984) * n53r);
-    const V n88i = simd::fma(V(-0.9238795325112867), n53r, V(0.38268343236508984) * n53i);
-    const V n54r = n3r + n11r;
-    const V n54i = n3i + n11i;
-    const V n55r = n3r - n11r;
-    const V n55i = n3i - n11i;
-    const V n56r = n7r + n15r;
-    const V n56i = n7i + n15i;
-    const V n57r = n7r - n15r;
-    const V n57i = n7i - n15i;
-    const V n58r = n57i;
-    const V n58i = V(0.0) - n57r;
-    const V n59r = n54r + n56r;
-    const V n59i = n54i + n56i;
-    const V n60r = n54r - n56r;
-    const V n60i = n54i - n56i;
-    const V n80r = simd::fnmadd(V(-0.7071067811865476), n60i, V(-0.7071067811865475) * n60r);
-    const V n80i = simd::fma(V(-0.7071067811865476), n60r, V(-0.7071067811865475) * n60i);
-    const V n61r = n55r + n58r;
-    const V n61i = n55i + n58i;
-    const V n62r = n55r - n58r;
-    const V n62i = n55i - n58i;
-    const V n71r = simd::fnmadd(V(-0.9238795325112867), n61i, V(0.38268343236508984) * n61r);
-    const V n71i = simd::fma(V(-0.9238795325112867), n61r, V(0.38268343236508984) * n61i);
-    const V n89r = simd::fnmadd(V(0.38268343236508967), n62i, V(-0.9238795325112868) * n62r);
-    const V n89i = simd::fma(V(0.38268343236508967), n62r, V(-0.9238795325112868) * n62i);
-    const V n63r = n50r + n59r;
-    const V n63i = n50i + n59i;
-    const V n64r = n50r - n59r;
-    const V n64i = n50i - n59i;
+    V n16r;
+    V n16i; simd::load_block(inb + 16 * b2, t, n16r, n16i);
+    V n17r;
+    V n17i; simd::load_block(inb + 17 * b2, t, n17r, n17i);
+    V n18r;
+    V n18i; simd::load_block(inb + 18 * b2, t, n18r, n18i);
+    V n19r;
+    V n19i; simd::load_block(inb + 19 * b2, t, n19r, n19i);
+    V n20r;
+    V n20i; simd::load_block(inb + 20 * b2, t, n20r, n20i);
+    V n21r;
+    V n21i; simd::load_block(inb + 21 * b2, t, n21r, n21i);
+    V n22r;
+    V n22i; simd::load_block(inb + 22 * b2, t, n22r, n22i);
+    V n23r;
+    V n23i; simd::load_block(inb + 23 * b2, t, n23r, n23i);
+    V n24r;
+    V n24i; simd::load_block(inb + 24 * b2, t, n24r, n24i);
+    V n25r;
+    V n25i; simd::load_block(inb + 25 * b2, t, n25r, n25i);
+    V n26r;
+    V n26i; simd::load_block(inb + 26 * b2, t, n26r, n26i);
+    V n27r;
+    V n27i; simd::load_block(inb + 27 * b2, t, n27r, n27i);
+    V n28r;
+    V n28i; simd::load_block(inb + 28 * b2, t, n28r, n28i);
+    V n29r;
+    V n29i; simd::load_block(inb + 29 * b2, t, n29r, n29i);
+    V n30r;
+    V n30i; simd::load_block(inb + 30 * b2, t, n30r, n30i);
+    V n31r;
+    V n31i; simd::load_block(inb + 31 * b2, t, n31r, n31i);
+    const V n32r = n0r + n16r;
+    const V n32i = n0i + n16i;
+    const V n33r = n0r - n16r;
+    const V n33i = n0i - n16i;
+    const V n34r = n8r + n24r;
+    const V n34i = n8i + n24i;
+    const V n35r = n8r - n24r;
+    const V n35i = n8i - n24i;
+    const V n36r = n35i;
+    const V n36i = V(0.0) - n35r;
+    const V n37r = n32r + n34r;
+    const V n37i = n32i + n34i;
+    const V n38r = n32r - n34r;
+    const V n38i = n32i - n34i;
+    const V n39r = n33r + n36r;
+    const V n39i = n33i + n36i;
+    const V n40r = n33r - n36r;
+    const V n40i = n33i - n36i;
+    const V n41r = n4r + n20r;
+    const V n41i = n4i + n20i;
+    const V n42r = n4r - n20r;
+    const V n42i = n4i - n20i;
+    const V n52r = simd::fnmadd(V(-0.7071067811865475), n42i, V(0.7071067811865476) * n42r);
+    const V n52i = simd::fma(V(-0.7071067811865475), n42r, V(0.7071067811865476) * n42i);
+    const V n43r = n12r + n28r;
+    const V n43i = n12i + n28i;
+    const V n44r = n12r - n28r;
+    const V n44i = n12i - n28i;
+    const V n53r = simd::fnmadd(V(-0.7071067811865476), n44i, V(-0.7071067811865475) * n44r);
+    const V n53i = simd::fma(V(-0.7071067811865476), n44r, V(-0.7071067811865475) * n44i);
+    const V n45r = n41r + n43r;
+    const V n45i = n41i + n43i;
+    const V n46r = n41r - n43r;
+    const V n46i = n41i - n43i;
+    const V n47r = n46i;
+    const V n47i = V(0.0) - n46r;
+    const V n48r = n37r + n45r;
+    const V n48i = n37i + n45i;
+    const V n49r = n37r - n45r;
+    const V n49i = n37i - n45i;
+    const V n50r = n38r + n47r;
+    const V n50i = n38i + n47i;
+    const V n51r = n38r - n47r;
+    const V n51i = n38i - n47i;
+    const V n54r = n52r + n53r;
+    const V n54i = n52i + n53i;
+    const V n55r = n52r - n53r;
+    const V n55i = n52i - n53i;
+    const V n56r = n55i;
+    const V n56i = V(0.0) - n55r;
+    const V n57r = n39r + n54r;
+    const V n57i = n39i + n54i;
+    const V n58r = n39r - n54r;
+    const V n58i = n39i - n54i;
+    const V n59r = n40r + n56r;
+    const V n59i = n40i + n56i;
+    const V n60r = n40r - n56r;
+    const V n60i = n40i - n56i;
+    const V n61r = n2r + n18r;
+    const V n61i = n2i + n18i;
+    const V n62r = n2r - n18r;
+    const V n62i = n2i - n18i;
+    const V n63r = n10r + n26r;
+    const V n63i = n10i + n26i;
+    const V n64r = n10r - n26r;
+    const V n64i = n10i - n26i;
     const V n65r = n64i;
     const V n65i = V(0.0) - n64r;
-    const V n66r = n32r + n63r;
-    const V n66i = n32i + n63i;
-    {
-        const V wr = V(twr[0 * vc + v]);
-        const V wi = V(twi[0 * vc + v]);
-        const V xr = simd::fnmadd(wi, n66i, n66r * wr);
-        const V xi = simd::fma(wi, n66r, n66i * wr);
-        simd::store_block(outb + 0 * b2, t, xr, xi);
-    }
-    const V n67r = n32r - n63r;
-    const V n67i = n32i - n63i;
-    {
-        const V wr = V(twr[8 * vc + v]);
-        const V wi = V(twi[8 * vc + v]);
-        const V xr = simd::fnmadd(wi, n67i, n67r * wr);
-        const V xi = simd::fma(wi, n67r, n67i * wr);
-        simd::store_block(outb + 8 * b2, t, xr, xi);
-    }
-    const V n68r = n33r + n65r;
-    const V n68i = n33i + n65i;
-    {
-        const V wr = V(twr[4 * vc + v]);
-        const V wi = V(twi[4 * vc + v]);
-        const V xr = simd::fnmadd(wi, n68i, n68r * wr);
-        const V xi = simd::fma(wi, n68r, n68i * wr);
-        simd::store_block(outb + 4 * b2, t, xr, xi);
-    }
-    const V n69r = n33r - n65r;
-    const V n69i = n33i - n65i;
-    {
-        const V wr = V(twr[12 * vc + v]);
-        const V wi = V(twi[12 * vc + v]);
-        const V xr = simd::fnmadd(wi, n69i, n69r * wr);
-        const V xi = simd::fma(wi, n69r, n69i * wr);
-        simd::store_block(outb + 12 * b2, t, xr, xi);
-    }
-    const V n72r = n70r + n71r;
-    const V n72i = n70i + n71i;
-    const V n73r = n70r - n71r;
-    const V n73i = n70i - n71i;
+    const V n66r = n61r + n63r;
+    const V n66i = n61i + n63i;
+    const V n67r = n61r - n63r;
+    const V n67i = n61i - n63i;
+    const V n95r = simd::fnmadd(V(-0.7071067811865475), n67i, V(0.7071067811865476) * n67r);
+    const V n95i = simd::fma(V(-0.7071067811865475), n67r, V(0.7071067811865476) * n67i);
+    const V n68r = n62r + n65r;
+    const V n68i = n62i + n65i;
+    const V n69r = n62r - n65r;
+    const V n69i = n62i - n65i;
+    const V n86r = simd::fnmadd(V(-0.3826834323650898), n68i, V(0.9238795325112867) * n68r);
+    const V n86i = simd::fma(V(-0.3826834323650898), n68r, V(0.9238795325112867) * n68i);
+    const V n104r = simd::fnmadd(V(-0.9238795325112867), n69i, V(0.38268343236508984) * n69r);
+    const V n104i = simd::fma(V(-0.9238795325112867), n69r, V(0.38268343236508984) * n69i);
+    const V n70r = n6r + n22r;
+    const V n70i = n6i + n22i;
+    const V n71r = n6r - n22r;
+    const V n71i = n6i - n22i;
+    const V n72r = n14r + n30r;
+    const V n72i = n14i + n30i;
+    const V n73r = n14r - n30r;
+    const V n73i = n14i - n30i;
     const V n74r = n73i;
     const V n74i = V(0.0) - n73r;
-    const V n75r = n41r + n72r;
-    const V n75i = n41i + n72i;
-    {
-        const V wr = V(twr[1 * vc + v]);
-        const V wi = V(twi[1 * vc + v]);
-        const V xr = simd::fnmadd(wi, n75i, n75r * wr);
-        const V xi = simd::fma(wi, n75r, n75i * wr);
-        simd::store_block(outb + 1 * b2, t, xr, xi);
-    }
-    const V n76r = n41r - n72r;
-    const V n76i = n41i - n72i;
-    {
-        const V wr = V(twr[9 * vc + v]);
-        const V wi = V(twi[9 * vc + v]);
-        const V xr = simd::fnmadd(wi, n76i, n76r * wr);
-        const V xi = simd::fma(wi, n76r, n76i * wr);
-        simd::store_block(outb + 9 * b2, t, xr, xi);
-    }
-    const V n77r = n42r + n74r;
-    const V n77i = n42i + n74i;
-    {
-        const V wr = V(twr[5 * vc + v]);
-        const V wi = V(twi[5 * vc + v]);
-        const V xr = simd::fnmadd(wi, n77i, n77r * wr);
-        const V xi = simd::fma(wi, n77r, n77i * wr);
-        simd::store_block(outb + 5 * b2, t, xr, xi);
-    }
-    const V n78r = n42r - n74r;
-    const V n78i = n42i - n74i;
-    {
-        const V wr = V(twr[13 * vc + v]);
-        const V wi = V(twi[13 * vc + v]);
-        const V xr = simd::fnmadd(wi, n78i, n78r * wr);
-        const V xi = simd::fma(wi, n78r, n78i * wr);
-        simd::store_block(outb + 13 * b2, t, xr, xi);
-    }
-    const V n81r = n79r + n80r;
-    const V n81i = n79i + n80i;
-    const V n82r = n79r - n80r;
-    const V n82i = n79i - n80i;
-    const V n83r = n82i;
-    const V n83i = V(0.0) - n82r;
-    const V n84r = n34r + n81r;
-    const V n84i = n34i + n81i;
-    {
-        const V wr = V(twr[2 * vc + v]);
-        const V wi = V(twi[2 * vc + v]);
-        const V xr = simd::fnmadd(wi, n84i, n84r * wr);
-        const V xi = simd::fma(wi, n84r, n84i * wr);
-        simd::store_block(outb + 2 * b2, t, xr, xi);
-    }
-    const V n85r = n34r - n81r;
-    const V n85i = n34i - n81i;
-    {
-        const V wr = V(twr[10 * vc + v]);
-        const V wi = V(twi[10 * vc + v]);
-        const V xr = simd::fnmadd(wi, n85i, n85r * wr);
-        const V xi = simd::fma(wi, n85r, n85i * wr);
-        simd::store_block(outb + 10 * b2, t, xr, xi);
-    }
-    const V n86r = n35r + n83r;
-    const V n86i = n35i + n83i;
-    {
-        const V wr = V(twr[6 * vc + v]);
-        const V wi = V(twi[6 * vc + v]);
-        const V xr = simd::fnmadd(wi, n86i, n86r * wr);
-        const V xi = simd::fma(wi, n86r, n86i * wr);
-        simd::store_block(outb + 6 * b2, t, xr, xi);
-    }
-    const V n87r = n35r - n83r;
-    const V n87i = n35i - n83i;
-    {
-        const V wr = V(twr[14 * vc + v]);
-        const V wi = V(twi[14 * vc + v]);
-        const V xr = simd::fnmadd(wi, n87i, n87r * wr);
-        const V xi = simd::fma(wi, n87r, n87i * wr);
-        simd::store_block(outb + 14 * b2, t, xr, xi);
-    }
-    const V n90r = n88r + n89r;
-    const V n90i = n88i + n89i;
-    const V n91r = n88r - n89r;
-    const V n91i = n88i - n89i;
-    const V n92r = n91i;
-    const V n92i = V(0.0) - n91r;
-    const V n93r = n43r + n90r;
-    const V n93i = n43i + n90i;
-    {
-        const V wr = V(twr[3 * vc + v]);
-        const V wi = V(twi[3 * vc + v]);
-        const V xr = simd::fnmadd(wi, n93i, n93r * wr);
-        const V xi = simd::fma(wi, n93r, n93i * wr);
-        simd::store_block(outb + 3 * b2, t, xr, xi);
-    }
-    const V n94r = n43r - n90r;
-    const V n94i = n43i - n90i;
-    {
-        const V wr = V(twr[11 * vc + v]);
-        const V wi = V(twi[11 * vc + v]);
-        const V xr = simd::fnmadd(wi, n94i, n94r * wr);
-        const V xi = simd::fma(wi, n94r, n94i * wr);
-        simd::store_block(outb + 11 * b2, t, xr, xi);
-    }
-    const V n95r = n44r + n92r;
-    const V n95i = n44i + n92i;
-    {
-        const V wr = V(twr[7 * vc + v]);
-        const V wi = V(twi[7 * vc + v]);
-        const V xr = simd::fnmadd(wi, n95i, n95r * wr);
-        const V xi = simd::fma(wi, n95r, n95i * wr);
-        simd::store_block(outb + 7 * b2, t, xr, xi);
-    }
-    const V n96r = n44r - n92r;
-    const V n96i = n44i - n92i;
-    {
-        const V wr = V(twr[15 * vc + v]);
-        const V wi = V(twi[15 * vc + v]);
-        const V xr = simd::fnmadd(wi, n96i, n96r * wr);
-        const V xi = simd::fma(wi, n96r, n96i * wr);
-        simd::store_block(outb + 15 * b2, t, xr, xi);
-    }
+    const V n75r = n70r + n72r;
+    const V n75i = n70i + n72i;
+    const V n76r = n70r - n72r;
+    const V n76i = n70i - n72i;
+    const V n96r = simd::fnmadd(V(-0.7071067811865476), n76i, V(-0.7071067811865475) * n76r);
+    const V n96i = simd::fma(V(-0.7071067811865476), n76r, V(-0.7071067811865475) * n76i);
+    const V n77r = n71r + n74r;
+    const V n77i = n71i + n74i;
+    const V n78r = n71r - n74r;
+    const V n78i = n71i - n74i;
+    const V n87r = simd::fnmadd(V(-0.9238795325112867), n77i, V(0.38268343236508984) * n77r);
+    const V n87i = simd::fma(V(-0.9238795325112867), n77r, V(0.38268343236508984) * n77i);
+    const V n105r = simd::fnmadd(V(0.38268343236508967), n78i, V(-0.9238795325112868) * n78r);
+    const V n105i = simd::fma(V(0.38268343236508967), n78r, V(-0.9238795325112868) * n78i);
+    const V n79r = n66r + n75r;
+    const V n79i = n66i + n75i;
+    const V n80r = n66r - n75r;
+    const V n80i = n66i - n75i;
+    const V n81r = n80i;
+    const V n81i = V(0.0) - n80r;
+    const V n82r = n48r + n79r;
+    const V n82i = n48i + n79i;
+    const V n83r = n48r - n79r;
+    const V n83i = n48i - n79i;
+    const V n84r = n49r + n81r;
+    const V n84i = n49i + n81i;
+    const V n85r = n49r - n81r;
+    const V n85i = n49i - n81i;
+    const V n88r = n86r + n87r;
+    const V n88i = n86i + n87i;
+    const V n89r = n86r - n87r;
+    const V n89i = n86i - n87i;
+    const V n90r = n89i;
+    const V n90i = V(0.0) - n89r;
+    const V n91r = n57r + n88r;
+    const V n91i = n57i + n88i;
+    const V n92r = n57r - n88r;
+    const V n92i = n57i - n88i;
+    const V n93r = n58r + n90r;
+    const V n93i = n58i + n90i;
+    const V n94r = n58r - n90r;
+    const V n94i = n58i - n90i;
+    const V n97r = n95r + n96r;
+    const V n97i = n95i + n96i;
+    const V n98r = n95r - n96r;
+    const V n98i = n95i - n96i;
+    const V n99r = n98i;
+    const V n99i = V(0.0) - n98r;
+    const V n100r = n50r + n97r;
+    const V n100i = n50i + n97i;
+    const V n101r = n50r - n97r;
+    const V n101i = n50i - n97i;
+    const V n102r = n51r + n99r;
+    const V n102i = n51i + n99i;
+    const V n103r = n51r - n99r;
+    const V n103i = n51i - n99i;
+    const V n106r = n104r + n105r;
+    const V n106i = n104i + n105i;
+    const V n107r = n104r - n105r;
+    const V n107i = n104i - n105i;
+    const V n108r = n107i;
+    const V n108i = V(0.0) - n107r;
+    const V n109r = n59r + n106r;
+    const V n109i = n59i + n106i;
+    const V n110r = n59r - n106r;
+    const V n110i = n59i - n106i;
+    const V n111r = n60r + n108r;
+    const V n111i = n60i + n108i;
+    const V n112r = n60r - n108r;
+    const V n112i = n60i - n108i;
+    const V n113r = n1r + n17r;
+    const V n113i = n1i + n17i;
+    const V n114r = n1r - n17r;
+    const V n114i = n1i - n17i;
+    const V n115r = n9r + n25r;
+    const V n115i = n9i + n25i;
+    const V n116r = n9r - n25r;
+    const V n116i = n9i - n25i;
+    const V n117r = n116i;
+    const V n117i = V(0.0) - n116r;
+    const V n118r = n113r + n115r;
+    const V n118i = n113i + n115i;
+    const V n119r = n113r - n115r;
+    const V n119i = n113i - n115i;
+    const V n120r = n114r + n117r;
+    const V n120i = n114i + n117i;
+    const V n121r = n114r - n117r;
+    const V n121i = n114i - n117i;
+    const V n122r = n5r + n21r;
+    const V n122i = n5i + n21i;
+    const V n123r = n5r - n21r;
+    const V n123i = n5i - n21i;
+    const V n133r = simd::fnmadd(V(-0.7071067811865475), n123i, V(0.7071067811865476) * n123r);
+    const V n133i = simd::fma(V(-0.7071067811865475), n123r, V(0.7071067811865476) * n123i);
+    const V n124r = n13r + n29r;
+    const V n124i = n13i + n29i;
+    const V n125r = n13r - n29r;
+    const V n125i = n13i - n29i;
+    const V n134r = simd::fnmadd(V(-0.7071067811865476), n125i, V(-0.7071067811865475) * n125r);
+    const V n134i = simd::fma(V(-0.7071067811865476), n125r, V(-0.7071067811865475) * n125i);
+    const V n126r = n122r + n124r;
+    const V n126i = n122i + n124i;
+    const V n127r = n122r - n124r;
+    const V n127i = n122i - n124i;
+    const V n128r = n127i;
+    const V n128i = V(0.0) - n127r;
+    const V n129r = n118r + n126r;
+    const V n129i = n118i + n126i;
+    const V n130r = n118r - n126r;
+    const V n130i = n118i - n126i;
+    const V n205r = simd::fnmadd(V(-0.7071067811865475), n130i, V(0.7071067811865476) * n130r);
+    const V n205i = simd::fma(V(-0.7071067811865475), n130r, V(0.7071067811865476) * n130i);
+    const V n131r = n119r + n128r;
+    const V n131i = n119i + n128i;
+    const V n132r = n119r - n128r;
+    const V n132i = n119i - n128i;
+    const V n187r = simd::fnmadd(V(-0.3826834323650898), n131i, V(0.9238795325112867) * n131r);
+    const V n187i = simd::fma(V(-0.3826834323650898), n131r, V(0.9238795325112867) * n131i);
+    const V n223r = simd::fnmadd(V(-0.9238795325112867), n132i, V(0.38268343236508984) * n132r);
+    const V n223i = simd::fma(V(-0.9238795325112867), n132r, V(0.38268343236508984) * n132i);
+    const V n135r = n133r + n134r;
+    const V n135i = n133i + n134i;
+    const V n136r = n133r - n134r;
+    const V n136i = n133i - n134i;
+    const V n137r = n136i;
+    const V n137i = V(0.0) - n136r;
+    const V n138r = n120r + n135r;
+    const V n138i = n120i + n135i;
+    const V n139r = n120r - n135r;
+    const V n139i = n120i - n135i;
+    const V n178r = simd::fnmadd(V(-0.19509032201612825), n138i, V(0.9807852804032304) * n138r);
+    const V n178i = simd::fma(V(-0.19509032201612825), n138r, V(0.9807852804032304) * n138i);
+    const V n214r = simd::fnmadd(V(-0.8314696123025452), n139i, V(0.5555702330196023) * n139r);
+    const V n214i = simd::fma(V(-0.8314696123025452), n139r, V(0.5555702330196023) * n139i);
+    const V n140r = n121r + n137r;
+    const V n140i = n121i + n137i;
+    const V n141r = n121r - n137r;
+    const V n141i = n121i - n137i;
+    const V n196r = simd::fnmadd(V(-0.5555702330196022), n140i, V(0.8314696123025452) * n140r);
+    const V n196i = simd::fma(V(-0.5555702330196022), n140r, V(0.8314696123025452) * n140i);
+    const V n232r = simd::fnmadd(V(-0.9807852804032304), n141i, V(0.19509032201612833) * n141r);
+    const V n232i = simd::fma(V(-0.9807852804032304), n141r, V(0.19509032201612833) * n141i);
+    const V n142r = n3r + n19r;
+    const V n142i = n3i + n19i;
+    const V n143r = n3r - n19r;
+    const V n143i = n3i - n19i;
+    const V n144r = n11r + n27r;
+    const V n144i = n11i + n27i;
+    const V n145r = n11r - n27r;
+    const V n145i = n11i - n27i;
+    const V n146r = n145i;
+    const V n146i = V(0.0) - n145r;
+    const V n147r = n142r + n144r;
+    const V n147i = n142i + n144i;
+    const V n148r = n142r - n144r;
+    const V n148i = n142i - n144i;
+    const V n149r = n143r + n146r;
+    const V n149i = n143i + n146i;
+    const V n150r = n143r - n146r;
+    const V n150i = n143i - n146i;
+    const V n151r = n7r + n23r;
+    const V n151i = n7i + n23i;
+    const V n152r = n7r - n23r;
+    const V n152i = n7i - n23i;
+    const V n162r = simd::fnmadd(V(-0.7071067811865475), n152i, V(0.7071067811865476) * n152r);
+    const V n162i = simd::fma(V(-0.7071067811865475), n152r, V(0.7071067811865476) * n152i);
+    const V n153r = n15r + n31r;
+    const V n153i = n15i + n31i;
+    const V n154r = n15r - n31r;
+    const V n154i = n15i - n31i;
+    const V n163r = simd::fnmadd(V(-0.7071067811865476), n154i, V(-0.7071067811865475) * n154r);
+    const V n163i = simd::fma(V(-0.7071067811865476), n154r, V(-0.7071067811865475) * n154i);
+    const V n155r = n151r + n153r;
+    const V n155i = n151i + n153i;
+    const V n156r = n151r - n153r;
+    const V n156i = n151i - n153i;
+    const V n157r = n156i;
+    const V n157i = V(0.0) - n156r;
+    const V n158r = n147r + n155r;
+    const V n158i = n147i + n155i;
+    const V n159r = n147r - n155r;
+    const V n159i = n147i - n155i;
+    const V n206r = simd::fnmadd(V(-0.7071067811865476), n159i, V(-0.7071067811865475) * n159r);
+    const V n206i = simd::fma(V(-0.7071067811865476), n159r, V(-0.7071067811865475) * n159i);
+    const V n160r = n148r + n157r;
+    const V n160i = n148i + n157i;
+    const V n161r = n148r - n157r;
+    const V n161i = n148i - n157i;
+    const V n188r = simd::fnmadd(V(-0.9238795325112867), n160i, V(0.38268343236508984) * n160r);
+    const V n188i = simd::fma(V(-0.9238795325112867), n160r, V(0.38268343236508984) * n160i);
+    const V n224r = simd::fnmadd(V(0.38268343236508967), n161i, V(-0.9238795325112868) * n161r);
+    const V n224i = simd::fma(V(0.38268343236508967), n161r, V(-0.9238795325112868) * n161i);
+    const V n164r = n162r + n163r;
+    const V n164i = n162i + n163i;
+    const V n165r = n162r - n163r;
+    const V n165i = n162i - n163i;
+    const V n166r = n165i;
+    const V n166i = V(0.0) - n165r;
+    const V n167r = n149r + n164r;
+    const V n167i = n149i + n164i;
+    const V n168r = n149r - n164r;
+    const V n168i = n149i - n164i;
+    const V n179r = simd::fnmadd(V(-0.5555702330196022), n167i, V(0.8314696123025452) * n167r);
+    const V n179i = simd::fma(V(-0.5555702330196022), n167r, V(0.8314696123025452) * n167i);
+    const V n215r = simd::fnmadd(V(-0.1950903220161286), n168i, V(-0.9807852804032304) * n168r);
+    const V n215i = simd::fma(V(-0.1950903220161286), n168r, V(-0.9807852804032304) * n168i);
+    const V n169r = n150r + n166r;
+    const V n169i = n150i + n166i;
+    const V n170r = n150r - n166r;
+    const V n170i = n150i - n166i;
+    const V n197r = simd::fnmadd(V(-0.9807852804032304), n169i, V(-0.1950903220161282) * n169r);
+    const V n197i = simd::fma(V(-0.9807852804032304), n169r, V(-0.1950903220161282) * n169i);
+    const V n233r = simd::fnmadd(V(0.8314696123025452), n170i, V(-0.5555702330196022) * n170r);
+    const V n233i = simd::fma(V(0.8314696123025452), n170r, V(-0.5555702330196022) * n170i);
+    const V n171r = n129r + n158r;
+    const V n171i = n129i + n158i;
+    const V n172r = n129r - n158r;
+    const V n172i = n129i - n158i;
+    const V n173r = n172i;
+    const V n173i = V(0.0) - n172r;
+    const V n174r = n82r + n171r;
+    const V n174i = n82i + n171i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 0 * b + t), n174r, n174i);
+    const V n175r = n82r - n171r;
+    const V n175i = n82i - n171i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 16 * b + t), n175r, n175i);
+    const V n176r = n83r + n173r;
+    const V n176i = n83i + n173i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 8 * b + t), n176r, n176i);
+    const V n177r = n83r - n173r;
+    const V n177i = n83i - n173i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 24 * b + t), n177r, n177i);
+    const V n180r = n178r + n179r;
+    const V n180i = n178i + n179i;
+    const V n181r = n178r - n179r;
+    const V n181i = n178i - n179i;
+    const V n182r = n181i;
+    const V n182i = V(0.0) - n181r;
+    const V n183r = n91r + n180r;
+    const V n183i = n91i + n180i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 1 * b + t), n183r, n183i);
+    const V n184r = n91r - n180r;
+    const V n184i = n91i - n180i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 17 * b + t), n184r, n184i);
+    const V n185r = n92r + n182r;
+    const V n185i = n92i + n182i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 9 * b + t), n185r, n185i);
+    const V n186r = n92r - n182r;
+    const V n186i = n92i - n182i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 25 * b + t), n186r, n186i);
+    const V n189r = n187r + n188r;
+    const V n189i = n187i + n188i;
+    const V n190r = n187r - n188r;
+    const V n190i = n187i - n188i;
+    const V n191r = n190i;
+    const V n191i = V(0.0) - n190r;
+    const V n192r = n100r + n189r;
+    const V n192i = n100i + n189i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 2 * b + t), n192r, n192i);
+    const V n193r = n100r - n189r;
+    const V n193i = n100i - n189i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 18 * b + t), n193r, n193i);
+    const V n194r = n101r + n191r;
+    const V n194i = n101i + n191i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 10 * b + t), n194r, n194i);
+    const V n195r = n101r - n191r;
+    const V n195i = n101i - n191i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 26 * b + t), n195r, n195i);
+    const V n198r = n196r + n197r;
+    const V n198i = n196i + n197i;
+    const V n199r = n196r - n197r;
+    const V n199i = n196i - n197i;
+    const V n200r = n199i;
+    const V n200i = V(0.0) - n199r;
+    const V n201r = n109r + n198r;
+    const V n201i = n109i + n198i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 3 * b + t), n201r, n201i);
+    const V n202r = n109r - n198r;
+    const V n202i = n109i - n198i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 19 * b + t), n202r, n202i);
+    const V n203r = n110r + n200r;
+    const V n203i = n110i + n200i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 11 * b + t), n203r, n203i);
+    const V n204r = n110r - n200r;
+    const V n204i = n110i - n200i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 27 * b + t), n204r, n204i);
+    const V n207r = n205r + n206r;
+    const V n207i = n205i + n206i;
+    const V n208r = n205r - n206r;
+    const V n208i = n205i - n206i;
+    const V n209r = n208i;
+    const V n209i = V(0.0) - n208r;
+    const V n210r = n84r + n207r;
+    const V n210i = n84i + n207i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 4 * b + t), n210r, n210i);
+    const V n211r = n84r - n207r;
+    const V n211i = n84i - n207i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 20 * b + t), n211r, n211i);
+    const V n212r = n85r + n209r;
+    const V n212i = n85i + n209i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 12 * b + t), n212r, n212i);
+    const V n213r = n85r - n209r;
+    const V n213i = n85i - n209i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 28 * b + t), n213r, n213i);
+    const V n216r = n214r + n215r;
+    const V n216i = n214i + n215i;
+    const V n217r = n214r - n215r;
+    const V n217i = n214i - n215i;
+    const V n218r = n217i;
+    const V n218i = V(0.0) - n217r;
+    const V n219r = n93r + n216r;
+    const V n219i = n93i + n216i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 5 * b + t), n219r, n219i);
+    const V n220r = n93r - n216r;
+    const V n220i = n93i - n216i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 21 * b + t), n220r, n220i);
+    const V n221r = n94r + n218r;
+    const V n221i = n94i + n218i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 13 * b + t), n221r, n221i);
+    const V n222r = n94r - n218r;
+    const V n222i = n94i - n218i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 29 * b + t), n222r, n222i);
+    const V n225r = n223r + n224r;
+    const V n225i = n223i + n224i;
+    const V n226r = n223r - n224r;
+    const V n226i = n223i - n224i;
+    const V n227r = n226i;
+    const V n227i = V(0.0) - n226r;
+    const V n228r = n102r + n225r;
+    const V n228i = n102i + n225i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 6 * b + t), n228r, n228i);
+    const V n229r = n102r - n225r;
+    const V n229i = n102i - n225i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 22 * b + t), n229r, n229i);
+    const V n230r = n103r + n227r;
+    const V n230i = n103i + n227i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 14 * b + t), n230r, n230i);
+    const V n231r = n103r - n227r;
+    const V n231i = n103i - n227i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 30 * b + t), n231r, n231i);
+    const V n234r = n232r + n233r;
+    const V n234i = n232i + n233i;
+    const V n235r = n232r - n233r;
+    const V n235i = n232i - n233i;
+    const V n236r = n235i;
+    const V n236i = V(0.0) - n235r;
+    const V n237r = n111r + n234r;
+    const V n237i = n111i + n234i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 7 * b + t), n237r, n237i);
+    const V n238r = n111r - n234r;
+    const V n238i = n111i - n234i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 23 * b + t), n238r, n238i);
+    const V n239r = n112r + n236r;
+    const V n239i = n112i + n236i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 15 * b + t), n239r, n239i);
+    const V n240r = n112r - n236r;
+    const V n240i = n112i - n236i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 31 * b + t), n240r, n240i);
 }
-// N=16 SPLIT-LAYOUT deep-split S2, zero shuffles (f64). GENERATED.
+// N=32 SPLIT-LAYOUT final leaf (plane in, complex out) (f64). GENERATED.
 // NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG; retain fused scope.
-void codelet16_fused_notr_ss(const crd::f64* inb,
-    crd::f64* outb, crd::usize b, crd::u32 ash,
-    const crd::f64* twr, const crd::f64* twi) noexcept
+void codelet32_batched_sc(const crd::f64* inb,
+    crd::hesap::Complex<crd::f64>* out, crd::usize b) noexcept
 {
     namespace lanes = crd::hesap::fft::lanes;
     using V = lanes::Lane<crd::f64>;
@@ -11563,14 +11384,14 @@ void codelet16_fused_notr_ss(const crd::f64* inb,
     const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
     for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
     {
-        codelet16_fused_notr_ss_part0<V>(inb, outb, b, ash, twr, twi, t);
+        codelet32_batched_sc_part0<V>(inb, out, b, t);
     }
     if constexpr (lanes::kPairedTiles<crd::f64>)
     {
         using H = lanes::TileLane<crd::f64>;
         if (wide < tiles)
         {
-            codelet16_fused_notr_ss_part0<H>(inb, outb, b, ash, twr, twi, wide);
+            codelet32_batched_sc_part0<H>(inb, out, b, wide);
         }
     }
 }
@@ -13210,370 +13031,6 @@ void codelet64_fused_notr_ss(const crd::f64* inb,
     }
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet16_stage1_fused_sh_csf_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
-    [[maybe_unused]] crd::f32* outb, [[maybe_unused]] crd::usize n2, [[maybe_unused]] const crd::f32* lor,
-    [[maybe_unused]] const crd::f32* loi, [[maybe_unused]] const crd::f32* hir, [[maybe_unused]] const crd::f32* hii,
-    [[maybe_unused]] crd::u32 msh, [[maybe_unused]] crd::usize t) noexcept
-{
-    namespace simd = crd::hesap::fft::lanes;
-    const crd::usize uhc = n2 >> msh;
-    const crd::usize uh = t >> msh;
-    const crd::usize ul = t & ((crd::usize{1} << msh) - 1U);
-    V n0r;
-    V n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 0 * n2 + t), n0r, n0i);
-    V n8r;
-    V n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 8 * n2 + t), n8r, n8i);
-    V n1r;
-    V n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 1 * n2 + t), n1r, n1i);
-    V n9r;
-    V n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 9 * n2 + t), n9r, n9i);
-    V n2r;
-    V n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 2 * n2 + t), n2r, n2i);
-    V n10r;
-    V n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 10 * n2 + t), n10r, n10i);
-    const V n26r = n2r - n10r;
-    const V n26i = n2i - n10i;
-    const V n25r = n2r + n10r;
-    const V n25i = n2i + n10i;
-    const V n36r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n26i, V(static_cast<crd::f32>(0.7071067811865476)) * n26r);
-    const V n36i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n26r, V(static_cast<crd::f32>(0.7071067811865476)) * n26i);
-    V n3r;
-    V n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 3 * n2 + t), n3r, n3i);
-    V n11r;
-    V n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 11 * n2 + t), n11r, n11i);
-    V n4r;
-    V n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 4 * n2 + t), n4r, n4i);
-    V n12r;
-    V n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 12 * n2 + t), n12r, n12i);
-    const V n19r = n4r - n12r;
-    const V n19i = n4i - n12i;
-    const V n18r = n4r + n12r;
-    const V n18i = n4i + n12i;
-    const V n20r = n19i;
-    const V n20i = V(0.0F) - n19r;
-    const V n16r = n0r + n8r;
-    const V n16i = n0i + n8i;
-    const V n17r = n0r - n8r;
-    const V n17i = n0i - n8i;
-    V n5r;
-    V n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 5 * n2 + t), n5r, n5i);
-    V n13r;
-    V n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 13 * n2 + t), n13r, n13i);
-    const V n48r = n5r - n13r;
-    const V n48i = n5i - n13i;
-    const V n47r = n5r + n13r;
-    const V n47i = n5i + n13i;
-    const V n49r = n48i;
-    const V n49i = V(0.0F) - n48r;
-    const V n45r = n1r + n9r;
-    const V n45i = n1i + n9i;
-    const V n46r = n1r - n9r;
-    const V n46i = n1i - n9i;
-    const V n51r = n45r - n47r;
-    const V n51i = n45i - n47i;
-    const V n50r = n45r + n47r;
-    const V n50i = n45i + n47i;
-    const V n79r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n51i, V(static_cast<crd::f32>(0.7071067811865476)) * n51r);
-    const V n79i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n51r, V(static_cast<crd::f32>(0.7071067811865476)) * n51i);
-    const V n52r = n46r + n49r;
-    const V n52i = n46i + n49i;
-    const V n53r = n46r - n49r;
-    const V n53i = n46i - n49i;
-    const V n70r = simd::fnmadd(V(static_cast<crd::f32>(-0.3826834323650898)), n52i, V(static_cast<crd::f32>(0.9238795325112867)) * n52r);
-    const V n70i = simd::fma(V(static_cast<crd::f32>(-0.3826834323650898)), n52r, V(static_cast<crd::f32>(0.9238795325112867)) * n52i);
-    const V n88r = simd::fnmadd(V(static_cast<crd::f32>(-0.9238795325112867)), n53i, V(static_cast<crd::f32>(0.38268343236508984)) * n53r);
-    const V n88i = simd::fma(V(static_cast<crd::f32>(-0.9238795325112867)), n53r, V(static_cast<crd::f32>(0.38268343236508984)) * n53i);
-    V n6r;
-    V n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 6 * n2 + t), n6r, n6i);
-    V n14r;
-    V n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 14 * n2 + t), n14r, n14i);
-    const V n27r = n6r + n14r;
-    const V n27i = n6i + n14i;
-    const V n28r = n6r - n14r;
-    const V n28i = n6i - n14i;
-    const V n37r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865476)), n28i, V(static_cast<crd::f32>(-0.7071067811865475)) * n28r);
-    const V n37i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865476)), n28r, V(static_cast<crd::f32>(-0.7071067811865475)) * n28i);
-    const V n30r = n25r - n27r;
-    const V n30i = n25i - n27i;
-    const V n29r = n25r + n27r;
-    const V n29i = n25i + n27i;
-    const V n31r = n30i;
-    const V n31i = V(0.0F) - n30r;
-    const V n21r = n16r + n18r;
-    const V n21i = n16i + n18i;
-    const V n22r = n16r - n18r;
-    const V n22i = n16i - n18i;
-    const V n39r = n36r - n37r;
-    const V n39i = n36i - n37i;
-    const V n38r = n36r + n37r;
-    const V n38i = n36i + n37i;
-    const V n40r = n39i;
-    const V n40i = V(0.0F) - n39r;
-    const V n23r = n17r + n20r;
-    const V n23i = n17i + n20i;
-    const V n24r = n17r - n20r;
-    const V n24i = n17i - n20i;
-    V n7r;
-    V n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 7 * n2 + t), n7r, n7i);
-    V n15r;
-    V n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 15 * n2 + t), n15r, n15i);
-    const V n57r = n7r - n15r;
-    const V n57i = n7i - n15i;
-    const V n56r = n7r + n15r;
-    const V n56i = n7i + n15i;
-    const V n58r = n57i;
-    const V n58i = V(0.0F) - n57r;
-    const V n54r = n3r + n11r;
-    const V n54i = n3i + n11i;
-    const V n55r = n3r - n11r;
-    const V n55i = n3i - n11i;
-    const V n59r = n54r + n56r;
-    const V n59i = n54i + n56i;
-    const V n60r = n54r - n56r;
-    const V n60i = n54i - n56i;
-    const V n80r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865476)), n60i, V(static_cast<crd::f32>(-0.7071067811865475)) * n60r);
-    const V n80i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865476)), n60r, V(static_cast<crd::f32>(-0.7071067811865475)) * n60i);
-    const V n61r = n55r + n58r;
-    const V n61i = n55i + n58i;
-    const V n62r = n55r - n58r;
-    const V n62i = n55i - n58i;
-    const V n71r = simd::fnmadd(V(static_cast<crd::f32>(-0.9238795325112867)), n61i, V(static_cast<crd::f32>(0.38268343236508984)) * n61r);
-    const V n71i = simd::fma(V(static_cast<crd::f32>(-0.9238795325112867)), n61r, V(static_cast<crd::f32>(0.38268343236508984)) * n61i);
-    const V n89r = simd::fnmadd(V(static_cast<crd::f32>(0.38268343236508967)), n62i, V(static_cast<crd::f32>(-0.9238795325112868)) * n62r);
-    const V n89i = simd::fma(V(static_cast<crd::f32>(0.38268343236508967)), n62r, V(static_cast<crd::f32>(-0.9238795325112868)) * n62i);
-    const V n64r = n50r - n59r;
-    const V n64i = n50i - n59i;
-    const V n63r = n50r + n59r;
-    const V n63i = n50i + n59i;
-    const V n65r = n64i;
-    const V n65i = V(0.0F) - n64r;
-    const V n32r = n21r + n29r;
-    const V n32i = n21i + n29i;
-    const V n33r = n21r - n29r;
-    const V n33i = n21i - n29i;
-    const V n66r = n32r + n63r;
-    const V n66i = n32i + n63i;
-    const V n67r = n32r - n63r;
-    const V n67i = n32i - n63i;
-    const V n68r = n33r + n65r;
-    const V n68i = n33i + n65i;
-    const V n69r = n33r - n65r;
-    const V n69i = n33i - n65i;
-    const V n73r = n70r - n71r;
-    const V n73i = n70i - n71i;
-    const V n72r = n70r + n71r;
-    const V n72i = n70i + n71i;
-    const V n74r = n73i;
-    const V n74i = V(0.0F) - n73r;
-    const V n41r = n23r + n38r;
-    const V n41i = n23i + n38i;
-    const V n42r = n23r - n38r;
-    const V n42i = n23i - n38i;
-    const V n75r = n41r + n72r;
-    const V n75i = n41i + n72i;
-    const V n76r = n41r - n72r;
-    const V n76i = n41i - n72i;
-    const V n77r = n42r + n74r;
-    const V n77i = n42i + n74i;
-    const V n78r = n42r - n74r;
-    const V n78i = n42i - n74i;
-    const V n82r = n79r - n80r;
-    const V n82i = n79i - n80i;
-    const V n81r = n79r + n80r;
-    const V n81i = n79i + n80i;
-    const V n83r = n82i;
-    const V n83i = V(0.0F) - n82r;
-    const V n34r = n22r + n31r;
-    const V n34i = n22i + n31i;
-    const V n35r = n22r - n31r;
-    const V n35i = n22i - n31i;
-    const V n84r = n34r + n81r;
-    const V n84i = n34i + n81i;
-    const V n85r = n34r - n81r;
-    const V n85i = n34i - n81i;
-    const V n86r = n35r + n83r;
-    const V n86i = n35i + n83i;
-    const V n87r = n35r - n83r;
-    const V n87i = n35i - n83i;
-    const V n91r = n88r - n89r;
-    const V n91i = n88i - n89i;
-    const V n90r = n88r + n89r;
-    const V n90i = n88i + n89i;
-    const V n92r = n91i;
-    const V n92i = V(0.0F) - n91r;
-    const V n43r = n24r + n40r;
-    const V n43i = n24i + n40i;
-    const V n44r = n24r - n40r;
-    const V n44i = n24i - n40i;
-    const V n93r = n43r + n90r;
-    const V n93i = n43i + n90i;
-    const V n94r = n43r - n90r;
-    const V n94i = n43i - n90i;
-    const V n95r = n44r + n92r;
-    const V n95i = n44i + n92i;
-    {
-        const V h0r = V(hir[0 * uhc + uh]);
-        const V h0i = V(hii[0 * uhc + uh]);
-        const V g0r = simd::load<V>(lor + ((crd::usize{0} << msh) + ul));
-        const V g0i = simd::load<V>(loi + ((crd::usize{0} << msh) + ul));
-        const V w0r = simd::fnmadd(h0i, g0i, h0r * g0r);
-        const V w0i = simd::fma(h0i, g0r, h0r * g0i);
-        const V h1r = V(hir[1 * uhc + uh]);
-        const V h1i = V(hii[1 * uhc + uh]);
-        const V g1r = simd::load<V>(lor + ((crd::usize{1} << msh) + ul));
-        const V g1i = simd::load<V>(loi + ((crd::usize{1} << msh) + ul));
-        const V w1r = simd::fnmadd(h1i, g1i, h1r * g1r);
-        const V w1i = simd::fma(h1i, g1r, h1r * g1i);
-        const V h2r = V(hir[2 * uhc + uh]);
-        const V h2i = V(hii[2 * uhc + uh]);
-        const V g2r = simd::load<V>(lor + ((crd::usize{2} << msh) + ul));
-        const V g2i = simd::load<V>(loi + ((crd::usize{2} << msh) + ul));
-        const V w2r = simd::fnmadd(h2i, g2i, h2r * g2r);
-        const V w2i = simd::fma(h2i, g2r, h2r * g2i);
-        const V h3r = V(hir[3 * uhc + uh]);
-        const V h3i = V(hii[3 * uhc + uh]);
-        const V g3r = simd::load<V>(lor + ((crd::usize{3} << msh) + ul));
-        const V g3i = simd::load<V>(loi + ((crd::usize{3} << msh) + ul));
-        const V w3r = simd::fnmadd(h3i, g3i, h3r * g3r);
-        const V w3i = simd::fma(h3i, g3r, h3r * g3i);
-        const V h4r = V(hir[4 * uhc + uh]);
-        const V h4i = V(hii[4 * uhc + uh]);
-        const V g4r = simd::load<V>(lor + ((crd::usize{4} << msh) + ul));
-        const V g4i = simd::load<V>(loi + ((crd::usize{4} << msh) + ul));
-        const V w4r = simd::fnmadd(h4i, g4i, h4r * g4r);
-        const V w4i = simd::fma(h4i, g4r, h4r * g4i);
-        const V h5r = V(hir[5 * uhc + uh]);
-        const V h5i = V(hii[5 * uhc + uh]);
-        const V g5r = simd::load<V>(lor + ((crd::usize{5} << msh) + ul));
-        const V g5i = simd::load<V>(loi + ((crd::usize{5} << msh) + ul));
-        const V w5r = simd::fnmadd(h5i, g5i, h5r * g5r);
-        const V w5i = simd::fma(h5i, g5r, h5r * g5i);
-        const V h6r = V(hir[6 * uhc + uh]);
-        const V h6i = V(hii[6 * uhc + uh]);
-        const V g6r = simd::load<V>(lor + ((crd::usize{6} << msh) + ul));
-        const V g6i = simd::load<V>(loi + ((crd::usize{6} << msh) + ul));
-        const V w6r = simd::fnmadd(h6i, g6i, h6r * g6r);
-        const V w6i = simd::fma(h6i, g6r, h6r * g6i);
-        const V h7r = V(hir[7 * uhc + uh]);
-        const V h7i = V(hii[7 * uhc + uh]);
-        const V g7r = simd::load<V>(lor + ((crd::usize{7} << msh) + ul));
-        const V g7i = simd::load<V>(loi + ((crd::usize{7} << msh) + ul));
-        const V w7r = simd::fnmadd(h7i, g7i, h7r * g7r);
-        const V w7i = simd::fma(h7i, g7r, h7r * g7i);
-        const V x0r = simd::fnmadd(w0i, n66i, n66r * w0r);
-        const V x0i = simd::fma(w0i, n66r, n66i * w0r);
-        const V x1r = simd::fnmadd(w1i, n75i, n75r * w1r);
-        const V x1i = simd::fma(w1i, n75r, n75i * w1r);
-        const V x2r = simd::fnmadd(w2i, n84i, n84r * w2r);
-        const V x2i = simd::fma(w2i, n84r, n84i * w2r);
-        const V x3r = simd::fnmadd(w3i, n93i, n93r * w3r);
-        const V x3i = simd::fma(w3i, n93r, n93i * w3r);
-        const V x4r = simd::fnmadd(w4i, n68i, n68r * w4r);
-        const V x4i = simd::fma(w4i, n68r, n68i * w4r);
-        const V x5r = simd::fnmadd(w5i, n77i, n77r * w5r);
-        const V x5i = simd::fma(w5i, n77r, n77i * w5r);
-        const V x6r = simd::fnmadd(w6i, n86i, n86r * w6r);
-        const V x6i = simd::fma(w6i, n86r, n86i * w6r);
-        const V x7r = simd::fnmadd(w7i, n95i, n95r * w7r);
-        const V x7i = simd::fma(w7i, n95r, n95i * w7r);
-        simd::store_transposed(outb + t * 32 + 0, 32, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 32 + 8, 32, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
-    }
-    const V n96r = n44r - n92r;
-    const V n96i = n44i - n92i;
-    {
-        const V h0r = V(hir[8 * uhc + uh]);
-        const V h0i = V(hii[8 * uhc + uh]);
-        const V g0r = simd::load<V>(lor + ((crd::usize{8} << msh) + ul));
-        const V g0i = simd::load<V>(loi + ((crd::usize{8} << msh) + ul));
-        const V w0r = simd::fnmadd(h0i, g0i, h0r * g0r);
-        const V w0i = simd::fma(h0i, g0r, h0r * g0i);
-        const V h1r = V(hir[9 * uhc + uh]);
-        const V h1i = V(hii[9 * uhc + uh]);
-        const V g1r = simd::load<V>(lor + ((crd::usize{9} << msh) + ul));
-        const V g1i = simd::load<V>(loi + ((crd::usize{9} << msh) + ul));
-        const V w1r = simd::fnmadd(h1i, g1i, h1r * g1r);
-        const V w1i = simd::fma(h1i, g1r, h1r * g1i);
-        const V h2r = V(hir[10 * uhc + uh]);
-        const V h2i = V(hii[10 * uhc + uh]);
-        const V g2r = simd::load<V>(lor + ((crd::usize{10} << msh) + ul));
-        const V g2i = simd::load<V>(loi + ((crd::usize{10} << msh) + ul));
-        const V w2r = simd::fnmadd(h2i, g2i, h2r * g2r);
-        const V w2i = simd::fma(h2i, g2r, h2r * g2i);
-        const V h3r = V(hir[11 * uhc + uh]);
-        const V h3i = V(hii[11 * uhc + uh]);
-        const V g3r = simd::load<V>(lor + ((crd::usize{11} << msh) + ul));
-        const V g3i = simd::load<V>(loi + ((crd::usize{11} << msh) + ul));
-        const V w3r = simd::fnmadd(h3i, g3i, h3r * g3r);
-        const V w3i = simd::fma(h3i, g3r, h3r * g3i);
-        const V h4r = V(hir[12 * uhc + uh]);
-        const V h4i = V(hii[12 * uhc + uh]);
-        const V g4r = simd::load<V>(lor + ((crd::usize{12} << msh) + ul));
-        const V g4i = simd::load<V>(loi + ((crd::usize{12} << msh) + ul));
-        const V w4r = simd::fnmadd(h4i, g4i, h4r * g4r);
-        const V w4i = simd::fma(h4i, g4r, h4r * g4i);
-        const V h5r = V(hir[13 * uhc + uh]);
-        const V h5i = V(hii[13 * uhc + uh]);
-        const V g5r = simd::load<V>(lor + ((crd::usize{13} << msh) + ul));
-        const V g5i = simd::load<V>(loi + ((crd::usize{13} << msh) + ul));
-        const V w5r = simd::fnmadd(h5i, g5i, h5r * g5r);
-        const V w5i = simd::fma(h5i, g5r, h5r * g5i);
-        const V h6r = V(hir[14 * uhc + uh]);
-        const V h6i = V(hii[14 * uhc + uh]);
-        const V g6r = simd::load<V>(lor + ((crd::usize{14} << msh) + ul));
-        const V g6i = simd::load<V>(loi + ((crd::usize{14} << msh) + ul));
-        const V w6r = simd::fnmadd(h6i, g6i, h6r * g6r);
-        const V w6i = simd::fma(h6i, g6r, h6r * g6i);
-        const V h7r = V(hir[15 * uhc + uh]);
-        const V h7i = V(hii[15 * uhc + uh]);
-        const V g7r = simd::load<V>(lor + ((crd::usize{15} << msh) + ul));
-        const V g7i = simd::load<V>(loi + ((crd::usize{15} << msh) + ul));
-        const V w7r = simd::fnmadd(h7i, g7i, h7r * g7r);
-        const V w7i = simd::fma(h7i, g7r, h7r * g7i);
-        const V x0r = simd::fnmadd(w0i, n67i, n67r * w0r);
-        const V x0i = simd::fma(w0i, n67r, n67i * w0r);
-        const V x1r = simd::fnmadd(w1i, n76i, n76r * w1r);
-        const V x1i = simd::fma(w1i, n76r, n76i * w1r);
-        const V x2r = simd::fnmadd(w2i, n85i, n85r * w2r);
-        const V x2i = simd::fma(w2i, n85r, n85i * w2r);
-        const V x3r = simd::fnmadd(w3i, n94i, n94r * w3r);
-        const V x3i = simd::fma(w3i, n94r, n94i * w3r);
-        const V x4r = simd::fnmadd(w4i, n69i, n69r * w4r);
-        const V x4i = simd::fma(w4i, n69r, n69i * w4r);
-        const V x5r = simd::fnmadd(w5i, n78i, n78r * w5r);
-        const V x5i = simd::fma(w5i, n78r, n78i * w5r);
-        const V x6r = simd::fnmadd(w6i, n87i, n87r * w6r);
-        const V x6i = simd::fma(w6i, n87r, n87i * w6r);
-        const V x7r = simd::fnmadd(w7i, n96i, n96r * w7r);
-        const V x7i = simd::fma(w7i, n96r, n96i * w7r);
-        simd::store_transposed(outb + t * 32 + 16, 32, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 32 + 24, 32, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
-    }
-}
-// N1=16 FACTORED-TWIDDLE stage-1 (L1-resident hi/lo tables) (f32). GENERATED.
-// NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG; retain fused scope.
-void codelet16_stage1_fused_sh_csf(const crd::hesap::Complex<crd::f32>* in,
-    crd::f32* outb, crd::usize n2, const crd::f32* lor, const crd::f32* loi,
-    const crd::f32* hir, const crd::f32* hii, crd::u32 msh) noexcept
-{
-    namespace lanes = crd::hesap::fft::lanes;
-    using V = lanes::Lane<crd::f32>;
-    const crd::usize tiles = n2 - n2 % lanes::kTile<crd::f32>;
-    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
-    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
-    {
-        codelet16_stage1_fused_sh_csf_part0<V>(in, outb, n2, lor, loi, hir, hii, msh, t);
-    }
-    if constexpr (lanes::kPairedTiles<crd::f32>)
-    {
-        using H = lanes::TileLane<crd::f32>;
-        if (wide < tiles)
-        {
-            codelet16_stage1_fused_sh_csf_part0<H>(in, outb, n2, lor, loi, hir, hii, msh, wide);
-        }
-    }
-}
-// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
 template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_sh_csf_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::f32* outb, [[maybe_unused]] crd::usize n2, [[maybe_unused]] const crd::f32* lor,
     [[maybe_unused]] const crd::f32* loi, [[maybe_unused]] const crd::f32* hir, [[maybe_unused]] const crd::f32* hii,
@@ -14124,8 +13581,7 @@ template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_sh_csf_par
         const V x6i = simd::fma(w6i, n228r, n228i * w6r);
         const V x7r = simd::fnmadd(w7i, n237i, n237r * w7r);
         const V x7i = simd::fma(w7i, n237r, n237i * w7r);
-        simd::store_transposed(outb + t * 64 + 0, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 64 + 8, 64, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<true>(outb + t * 64 + 0, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n238r = n111r - n234r;
     const V n238i = n111i - n234i;
@@ -14194,8 +13650,7 @@ template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_sh_csf_par
         const V x6i = simd::fma(w6i, n229r, n229i * w6r);
         const V x7r = simd::fnmadd(w7i, n238i, n238r * w7r);
         const V x7i = simd::fma(w7i, n238r, n238i * w7r);
-        simd::store_transposed(outb + t * 64 + 32, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 64 + 40, 64, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<true>(outb + t * 64 + 32, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n239r = n112r + n236r;
     const V n239i = n112i + n236i;
@@ -14264,8 +13719,7 @@ template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_sh_csf_par
         const V x6i = simd::fma(w6i, n230r, n230i * w6r);
         const V x7r = simd::fnmadd(w7i, n239i, n239r * w7r);
         const V x7i = simd::fma(w7i, n239r, n239i * w7r);
-        simd::store_transposed(outb + t * 64 + 16, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 64 + 24, 64, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<true>(outb + t * 64 + 16, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n240r = n112r - n236r;
     const V n240i = n112i - n236i;
@@ -14334,8 +13788,7 @@ template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_sh_csf_par
         const V x6i = simd::fma(w6i, n231r, n231i * w6r);
         const V x7r = simd::fnmadd(w7i, n240i, n240r * w7r);
         const V x7i = simd::fma(w7i, n240r, n240i * w7r);
-        simd::store_transposed(outb + t * 64 + 48, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 64 + 56, 64, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<true>(outb + t * 64 + 48, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
 }
 // N1=32 FACTORED-TWIDDLE stage-1 (L1-resident hi/lo tables) (f32). GENERATED.
@@ -16652,8 +16105,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1116r, n1116i * w6r);
         const V x7r = simd::fnmadd(w7i, n1125i, n1125r * w7r);
         const V x7i = simd::fma(w7i, n1125r, n1125i * w7r);
-        simd::store_transposed(outb + t * 256 + 0, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 8, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 0, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1126r = n565r - n1122r;
     const V n1126i = n565i - n1122i;
@@ -16690,8 +16142,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1117r, n1117i * w6r);
         const V x7r = simd::fnmadd(w7i, n1126i, n1126r * w7r);
         const V x7i = simd::fma(w7i, n1126r, n1126i * w7r);
-        simd::store_transposed(outb + t * 256 + 128, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 136, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 128, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1127r = n566r + n1124r;
     const V n1127i = n566i + n1124i;
@@ -16728,8 +16179,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1118r, n1118i * w6r);
         const V x7r = simd::fnmadd(w7i, n1127i, n1127r * w7r);
         const V x7i = simd::fma(w7i, n1127r, n1127i * w7r);
-        simd::store_transposed(outb + t * 256 + 64, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 72, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 64, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1128r = n566r - n1124r;
     const V n1128i = n566i - n1124i;
@@ -16766,8 +16216,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1119r, n1119i * w6r);
         const V x7r = simd::fnmadd(w7i, n1128i, n1128r * w7r);
         const V x7i = simd::fma(w7i, n1128r, n1128i * w7r);
-        simd::store_transposed(outb + t * 256 + 192, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 200, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 192, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1132r = n1129r - n1130r;
     const V n1132i = n1129i - n1130i;
@@ -16940,8 +16389,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1188r, n1188i * w6r);
         const V x7r = simd::fnmadd(w7i, n1197i, n1197r * w7r);
         const V x7i = simd::fma(w7i, n1197r, n1197i * w7r);
-        simd::store_transposed(outb + t * 256 + 16, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 24, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 16, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1198r = n637r - n1194r;
     const V n1198i = n637i - n1194i;
@@ -16978,8 +16426,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1189r, n1189i * w6r);
         const V x7r = simd::fnmadd(w7i, n1198i, n1198r * w7r);
         const V x7i = simd::fma(w7i, n1198r, n1198i * w7r);
-        simd::store_transposed(outb + t * 256 + 144, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 152, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 144, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1199r = n638r + n1196r;
     const V n1199i = n638i + n1196i;
@@ -17016,8 +16463,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1190r, n1190i * w6r);
         const V x7r = simd::fnmadd(w7i, n1199i, n1199r * w7r);
         const V x7i = simd::fma(w7i, n1199r, n1199i * w7r);
-        simd::store_transposed(outb + t * 256 + 80, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 88, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 80, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1200r = n638r - n1196r;
     const V n1200i = n638i - n1196i;
@@ -17054,8 +16500,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1191r, n1191i * w6r);
         const V x7r = simd::fnmadd(w7i, n1200i, n1200r * w7r);
         const V x7i = simd::fma(w7i, n1200r, n1200i * w7r);
-        simd::store_transposed(outb + t * 256 + 208, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 216, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 208, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1204r = n1201r - n1202r;
     const V n1204i = n1201i - n1202i;
@@ -17228,8 +16673,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1260r, n1260i * w6r);
         const V x7r = simd::fnmadd(w7i, n1269i, n1269r * w7r);
         const V x7i = simd::fma(w7i, n1269r, n1269i * w7r);
-        simd::store_transposed(outb + t * 256 + 32, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 40, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 32, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1270r = n567r - n1266r;
     const V n1270i = n567i - n1266i;
@@ -17266,8 +16710,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1261r, n1261i * w6r);
         const V x7r = simd::fnmadd(w7i, n1270i, n1270r * w7r);
         const V x7i = simd::fma(w7i, n1270r, n1270i * w7r);
-        simd::store_transposed(outb + t * 256 + 160, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 168, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 160, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     sp[0] = n1208i;
     sp[1] = n1208r;
@@ -17503,8 +16946,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1262r, n1262i * w6r);
         const V x7r = simd::fnmadd(w7i, n1271i, n1271r * w7r);
         const V x7i = simd::fma(w7i, n1271r, n1271i * w7r);
-        simd::store_transposed(outb + t * 256 + 96, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 104, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 96, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1272r = n568r - n1268r;
     const V n1272i = n568i - n1268i;
@@ -17541,8 +16983,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1263r, n1263i * w6r);
         const V x7r = simd::fnmadd(w7i, n1272i, n1272r * w7r);
         const V x7i = simd::fma(w7i, n1272r, n1272i * w7r);
-        simd::store_transposed(outb + t * 256 + 224, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 232, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 224, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1276r = n1273r - n1274r;
     const V n1276i = n1273i - n1274i;
@@ -17715,8 +17156,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1332r, n1332i * w6r);
         const V x7r = simd::fnmadd(w7i, n1341i, n1341r * w7r);
         const V x7i = simd::fma(w7i, n1341r, n1341i * w7r);
-        simd::store_transposed(outb + t * 256 + 48, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 56, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 48, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1342r = n639r - n1338r;
     const V n1342i = n639i - n1338i;
@@ -17753,8 +17193,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1333r, n1333i * w6r);
         const V x7r = simd::fnmadd(w7i, n1342i, n1342r * w7r);
         const V x7i = simd::fma(w7i, n1342r, n1342i * w7r);
-        simd::store_transposed(outb + t * 256 + 176, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 184, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 176, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1343r = n640r + n1340r;
     const V n1343i = n640i + n1340i;
@@ -17791,8 +17230,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1334r, n1334i * w6r);
         const V x7r = simd::fnmadd(w7i, n1343i, n1343r * w7r);
         const V x7i = simd::fma(w7i, n1343r, n1343i * w7r);
-        simd::store_transposed(outb + t * 256 + 112, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 120, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 112, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1344r = n640r - n1340r;
     const V n1344i = n640i - n1340i;
@@ -17829,8 +17267,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1335r, n1335i * w6r);
         const V x7r = simd::fnmadd(w7i, n1344i, n1344r * w7r);
         const V x7i = simd::fma(w7i, n1344r, n1344i * w7r);
-        simd::store_transposed(outb + t * 256 + 240, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 248, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 240, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
 }
 // N1=128 SPLIT-LAYOUT stage-1 (complex in, plane out) (f32). GENERATED.
@@ -20709,35 +20146,275 @@ void codelet128_batched_sc(const crd::f32* inb,
     }
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
-    [[maybe_unused]] crd::f32* outb, [[maybe_unused]] crd::usize blk, [[maybe_unused]] const crd::f32* twr,
-    [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t) noexcept
+template <typename V> CRD_NOINLINE static void codelet16_batched_strided_sc_part0([[maybe_unused]] const crd::f32* inb,
+    [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize bs, [[maybe_unused]] crd::usize os,
+    [[maybe_unused]] crd::usize t) noexcept
 {
     namespace simd = crd::hesap::fft::lanes;
-    const crd::usize i0 = blk * 128;
-    const crd::usize c = t >> 7;
-    const crd::usize src = i0 + c * 1024 + (t & 127);
-    const crd::usize row = c * 8208 + (t & 127) * 64;
+    const crd::usize b2 = 2 * bs;
     V n0r;
-    V n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + src), n0r, n0i);
-    V n16r;
-    V n16i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 524288 + src), n16r, n16i);
+    V n0i; simd::load_block(inb + 0 * b2, t, n0r, n0i);
+    V n8r;
+    V n8i; simd::load_block(inb + 8 * b2, t, n8r, n8i);
     V n1r;
-    V n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 32768 + src), n1r, n1i);
-    V n17r;
-    V n17i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 557056 + src), n17r, n17i);
+    V n1i; simd::load_block(inb + 1 * b2, t, n1r, n1i);
+    V n9r;
+    V n9i; simd::load_block(inb + 9 * b2, t, n9r, n9i);
     V n2r;
-    V n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 65536 + src), n2r, n2i);
-    V n18r;
-    V n18i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 589824 + src), n18r, n18i);
+    V n2i; simd::load_block(inb + 2 * b2, t, n2r, n2i);
+    V n10r;
+    V n10i; simd::load_block(inb + 10 * b2, t, n10r, n10i);
+    const V n26r = n2r - n10r;
+    const V n26i = n2i - n10i;
+    const V n25r = n2r + n10r;
+    const V n25i = n2i + n10i;
+    const V n36r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n26i, V(static_cast<crd::f32>(0.7071067811865476)) * n26r);
+    const V n36i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n26r, V(static_cast<crd::f32>(0.7071067811865476)) * n26i);
     V n3r;
-    V n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 98304 + src), n3r, n3i);
-    V n19r;
-    V n19i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 622592 + src), n19r, n19i);
+    V n3i; simd::load_block(inb + 3 * b2, t, n3r, n3i);
+    V n11r;
+    V n11i; simd::load_block(inb + 11 * b2, t, n11r, n11i);
     V n4r;
-    V n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 131072 + src), n4r, n4i);
+    V n4i; simd::load_block(inb + 4 * b2, t, n4r, n4i);
+    V n12r;
+    V n12i; simd::load_block(inb + 12 * b2, t, n12r, n12i);
+    const V n19r = n4r - n12r;
+    const V n19i = n4i - n12i;
+    const V n18r = n4r + n12r;
+    const V n18i = n4i + n12i;
+    const V n20r = n19i;
+    const V n20i = V(0.0F) - n19r;
+    const V n16r = n0r + n8r;
+    const V n16i = n0i + n8i;
+    const V n17r = n0r - n8r;
+    const V n17i = n0i - n8i;
+    V n5r;
+    V n5i; simd::load_block(inb + 5 * b2, t, n5r, n5i);
+    V n13r;
+    V n13i; simd::load_block(inb + 13 * b2, t, n13r, n13i);
+    const V n48r = n5r - n13r;
+    const V n48i = n5i - n13i;
+    const V n47r = n5r + n13r;
+    const V n47i = n5i + n13i;
+    const V n49r = n48i;
+    const V n49i = V(0.0F) - n48r;
+    const V n45r = n1r + n9r;
+    const V n45i = n1i + n9i;
+    const V n46r = n1r - n9r;
+    const V n46i = n1i - n9i;
+    const V n51r = n45r - n47r;
+    const V n51i = n45i - n47i;
+    const V n50r = n45r + n47r;
+    const V n50i = n45i + n47i;
+    const V n79r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n51i, V(static_cast<crd::f32>(0.7071067811865476)) * n51r);
+    const V n79i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n51r, V(static_cast<crd::f32>(0.7071067811865476)) * n51i);
+    const V n52r = n46r + n49r;
+    const V n52i = n46i + n49i;
+    const V n53r = n46r - n49r;
+    const V n53i = n46i - n49i;
+    const V n70r = simd::fnmadd(V(static_cast<crd::f32>(-0.3826834323650898)), n52i, V(static_cast<crd::f32>(0.9238795325112867)) * n52r);
+    const V n70i = simd::fma(V(static_cast<crd::f32>(-0.3826834323650898)), n52r, V(static_cast<crd::f32>(0.9238795325112867)) * n52i);
+    const V n88r = simd::fnmadd(V(static_cast<crd::f32>(-0.9238795325112867)), n53i, V(static_cast<crd::f32>(0.38268343236508984)) * n53r);
+    const V n88i = simd::fma(V(static_cast<crd::f32>(-0.9238795325112867)), n53r, V(static_cast<crd::f32>(0.38268343236508984)) * n53i);
+    V n6r;
+    V n6i; simd::load_block(inb + 6 * b2, t, n6r, n6i);
+    V n14r;
+    V n14i; simd::load_block(inb + 14 * b2, t, n14r, n14i);
+    const V n27r = n6r + n14r;
+    const V n27i = n6i + n14i;
+    const V n28r = n6r - n14r;
+    const V n28i = n6i - n14i;
+    const V n37r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865476)), n28i, V(static_cast<crd::f32>(-0.7071067811865475)) * n28r);
+    const V n37i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865476)), n28r, V(static_cast<crd::f32>(-0.7071067811865475)) * n28i);
+    const V n30r = n25r - n27r;
+    const V n30i = n25i - n27i;
+    const V n29r = n25r + n27r;
+    const V n29i = n25i + n27i;
+    const V n31r = n30i;
+    const V n31i = V(0.0F) - n30r;
+    const V n21r = n16r + n18r;
+    const V n21i = n16i + n18i;
+    const V n22r = n16r - n18r;
+    const V n22i = n16i - n18i;
+    const V n39r = n36r - n37r;
+    const V n39i = n36i - n37i;
+    const V n38r = n36r + n37r;
+    const V n38i = n36i + n37i;
+    const V n40r = n39i;
+    const V n40i = V(0.0F) - n39r;
+    const V n23r = n17r + n20r;
+    const V n23i = n17i + n20i;
+    const V n24r = n17r - n20r;
+    const V n24i = n17i - n20i;
+    V n7r;
+    V n7i; simd::load_block(inb + 7 * b2, t, n7r, n7i);
+    V n15r;
+    V n15i; simd::load_block(inb + 15 * b2, t, n15r, n15i);
+    const V n57r = n7r - n15r;
+    const V n57i = n7i - n15i;
+    const V n56r = n7r + n15r;
+    const V n56i = n7i + n15i;
+    const V n58r = n57i;
+    const V n58i = V(0.0F) - n57r;
+    const V n54r = n3r + n11r;
+    const V n54i = n3i + n11i;
+    const V n55r = n3r - n11r;
+    const V n55i = n3i - n11i;
+    const V n59r = n54r + n56r;
+    const V n59i = n54i + n56i;
+    const V n60r = n54r - n56r;
+    const V n60i = n54i - n56i;
+    const V n80r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865476)), n60i, V(static_cast<crd::f32>(-0.7071067811865475)) * n60r);
+    const V n80i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865476)), n60r, V(static_cast<crd::f32>(-0.7071067811865475)) * n60i);
+    const V n61r = n55r + n58r;
+    const V n61i = n55i + n58i;
+    const V n62r = n55r - n58r;
+    const V n62i = n55i - n58i;
+    const V n71r = simd::fnmadd(V(static_cast<crd::f32>(-0.9238795325112867)), n61i, V(static_cast<crd::f32>(0.38268343236508984)) * n61r);
+    const V n71i = simd::fma(V(static_cast<crd::f32>(-0.9238795325112867)), n61r, V(static_cast<crd::f32>(0.38268343236508984)) * n61i);
+    const V n89r = simd::fnmadd(V(static_cast<crd::f32>(0.38268343236508967)), n62i, V(static_cast<crd::f32>(-0.9238795325112868)) * n62r);
+    const V n89i = simd::fma(V(static_cast<crd::f32>(0.38268343236508967)), n62r, V(static_cast<crd::f32>(-0.9238795325112868)) * n62i);
+    const V n64r = n50r - n59r;
+    const V n64i = n50i - n59i;
+    const V n63r = n50r + n59r;
+    const V n63i = n50i + n59i;
+    const V n65r = n64i;
+    const V n65i = V(0.0F) - n64r;
+    const V n32r = n21r + n29r;
+    const V n32i = n21i + n29i;
+    const V n33r = n21r - n29r;
+    const V n33i = n21i - n29i;
+    const V n66r = n32r + n63r;
+    const V n66i = n32i + n63i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 0 * os + t), n66r, n66i);
+    const V n67r = n32r - n63r;
+    const V n67i = n32i - n63i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 8 * os + t), n67r, n67i);
+    const V n68r = n33r + n65r;
+    const V n68i = n33i + n65i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 4 * os + t), n68r, n68i);
+    const V n69r = n33r - n65r;
+    const V n69i = n33i - n65i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 12 * os + t), n69r, n69i);
+    const V n73r = n70r - n71r;
+    const V n73i = n70i - n71i;
+    const V n72r = n70r + n71r;
+    const V n72i = n70i + n71i;
+    const V n74r = n73i;
+    const V n74i = V(0.0F) - n73r;
+    const V n41r = n23r + n38r;
+    const V n41i = n23i + n38i;
+    const V n42r = n23r - n38r;
+    const V n42i = n23i - n38i;
+    const V n75r = n41r + n72r;
+    const V n75i = n41i + n72i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 1 * os + t), n75r, n75i);
+    const V n76r = n41r - n72r;
+    const V n76i = n41i - n72i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 9 * os + t), n76r, n76i);
+    const V n77r = n42r + n74r;
+    const V n77i = n42i + n74i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 5 * os + t), n77r, n77i);
+    const V n78r = n42r - n74r;
+    const V n78i = n42i - n74i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 13 * os + t), n78r, n78i);
+    const V n82r = n79r - n80r;
+    const V n82i = n79i - n80i;
+    const V n81r = n79r + n80r;
+    const V n81i = n79i + n80i;
+    const V n83r = n82i;
+    const V n83i = V(0.0F) - n82r;
+    const V n34r = n22r + n31r;
+    const V n34i = n22i + n31i;
+    const V n35r = n22r - n31r;
+    const V n35i = n22i - n31i;
+    const V n84r = n34r + n81r;
+    const V n84i = n34i + n81i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 2 * os + t), n84r, n84i);
+    const V n85r = n34r - n81r;
+    const V n85i = n34i - n81i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 10 * os + t), n85r, n85i);
+    const V n86r = n35r + n83r;
+    const V n86i = n35i + n83i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 6 * os + t), n86r, n86i);
+    const V n87r = n35r - n83r;
+    const V n87i = n35i - n83i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 14 * os + t), n87r, n87i);
+    const V n91r = n88r - n89r;
+    const V n91i = n88i - n89i;
+    const V n90r = n88r + n89r;
+    const V n90i = n88i + n89i;
+    const V n92r = n91i;
+    const V n92i = V(0.0F) - n91r;
+    const V n43r = n24r + n40r;
+    const V n43i = n24i + n40i;
+    const V n44r = n24r - n40r;
+    const V n44i = n24i - n40i;
+    const V n93r = n43r + n90r;
+    const V n93i = n43i + n90i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 3 * os + t), n93r, n93i);
+    const V n94r = n43r - n90r;
+    const V n94i = n43i - n90i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 11 * os + t), n94r, n94i);
+    const V n95r = n44r + n92r;
+    const V n95i = n44i + n92i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 7 * os + t), n95r, n95i);
+    const V n96r = n44r - n92r;
+    const V n96i = n44i - n92i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 15 * os + t), n96r, n96i);
+}
+// N=16 SPLIT-LAYOUT deep-split S3 (plane in, strided complex out) (f32). GENERATED.
+// NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG; retain fused scope.
+void codelet16_batched_strided_sc(const crd::f32* inb,
+    crd::hesap::Complex<crd::f32>* out, crd::usize bs, crd::usize os) noexcept
+{
+    namespace lanes = crd::hesap::fft::lanes;
+    using V = lanes::Lane<crd::f32>;
+    const crd::usize tiles = bs - bs % lanes::kTile<crd::f32>;
+    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
+    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
+    {
+        codelet16_batched_strided_sc_part0<V>(inb, out, bs, os, t);
+    }
+    if constexpr (lanes::kPairedTiles<crd::f32>)
+    {
+        using H = lanes::TileLane<crd::f32>;
+        if (wide < tiles)
+        {
+            codelet16_batched_strided_sc_part0<H>(inb, out, bs, os, wide);
+        }
+    }
+}
+// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
+template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_corner_part0([[maybe_unused]] const crd::f32* inb,
+    [[maybe_unused]] crd::f32* nt, [[maybe_unused]] crd::usize blk, [[maybe_unused]] crd::usize t) noexcept
+{
+    namespace simd = crd::hesap::fft::lanes;
+    const crd::usize nb = blk * 262400;
+    const crd::usize q = t & 31;
+    const crd::usize kc = t & 15;
+    const crd::usize src = (t >> 5) * 64;
+    const crd::usize dst = nb + (t >> 8) * 16400 + ((t >> 4) & 1) * 256 + ((t >> 5) & 7) * 32;
+    V n0r;
+    V n0i; simd::load_block(inb + src, q, n0r, n0i);
+    V n16r;
+    V n16i; simd::load_block(inb + 131328 + src, q, n16r, n16i);
+    V n1r;
+    V n1i; simd::load_block(inb + 8208 + src, q, n1r, n1i);
+    V n17r;
+    V n17i; simd::load_block(inb + 139536 + src, q, n17r, n17i);
+    V n2r;
+    V n2i; simd::load_block(inb + 16416 + src, q, n2r, n2i);
+    V n18r;
+    V n18i; simd::load_block(inb + 147744 + src, q, n18r, n18i);
+    V n3r;
+    V n3i; simd::load_block(inb + 24624 + src, q, n3r, n3i);
+    V n19r;
+    V n19i; simd::load_block(inb + 155952 + src, q, n19r, n19i);
+    V n4r;
+    V n4i; simd::load_block(inb + 32832 + src, q, n4r, n4i);
     V n20r;
-    V n20i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 655360 + src), n20r, n20i);
+    V n20i; simd::load_block(inb + 164160 + src, q, n20r, n20i);
     const V n42r = n4r - n20r;
     const V n42i = n4i - n20i;
     const V n41r = n4r + n20r;
@@ -20745,9 +20422,9 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n52r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n42i, V(static_cast<crd::f32>(0.7071067811865476)) * n42r);
     const V n52i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n42r, V(static_cast<crd::f32>(0.7071067811865476)) * n42i);
     V n5r;
-    V n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 163840 + src), n5r, n5i);
+    V n5i; simd::load_block(inb + 41040 + src, q, n5r, n5i);
     V n21r;
-    V n21i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 688128 + src), n21r, n21i);
+    V n21i; simd::load_block(inb + 172368 + src, q, n21r, n21i);
     const V n123r = n5r - n21r;
     const V n123i = n5i - n21i;
     const V n122r = n5r + n21r;
@@ -20755,13 +20432,13 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n133r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n123i, V(static_cast<crd::f32>(0.7071067811865476)) * n123r);
     const V n133i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n123r, V(static_cast<crd::f32>(0.7071067811865476)) * n123i);
     V n6r;
-    V n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 196608 + src), n6r, n6i);
+    V n6i; simd::load_block(inb + 49248 + src, q, n6r, n6i);
     V n22r;
-    V n22i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 720896 + src), n22r, n22i);
+    V n22i; simd::load_block(inb + 180576 + src, q, n22r, n22i);
     V n7r;
-    V n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 229376 + src), n7r, n7i);
+    V n7i; simd::load_block(inb + 57456 + src, q, n7r, n7i);
     V n23r;
-    V n23i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 753664 + src), n23r, n23i);
+    V n23i; simd::load_block(inb + 188784 + src, q, n23r, n23i);
     const V n152r = n7r - n23r;
     const V n152i = n7i - n23i;
     const V n151r = n7r + n23r;
@@ -20769,9 +20446,9 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n162r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n152i, V(static_cast<crd::f32>(0.7071067811865476)) * n152r);
     const V n162i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n152r, V(static_cast<crd::f32>(0.7071067811865476)) * n152i);
     V n8r;
-    V n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 262144 + src), n8r, n8i);
+    V n8i; simd::load_block(inb + 65664 + src, q, n8r, n8i);
     V n24r;
-    V n24i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 786432 + src), n24r, n24i);
+    V n24i; simd::load_block(inb + 196992 + src, q, n24r, n24i);
     const V n35r = n8r - n24r;
     const V n35i = n8i - n24i;
     const V n34r = n8r + n24r;
@@ -20783,9 +20460,9 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n33r = n0r - n16r;
     const V n33i = n0i - n16i;
     V n9r;
-    V n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 294912 + src), n9r, n9i);
+    V n9i; simd::load_block(inb + 73872 + src, q, n9r, n9i);
     V n25r;
-    V n25i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 819200 + src), n25r, n25i);
+    V n25i; simd::load_block(inb + 205200 + src, q, n25r, n25i);
     const V n116r = n9r - n25r;
     const V n116i = n9i - n25i;
     const V n115r = n9r + n25r;
@@ -20797,9 +20474,9 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n114r = n1r - n17r;
     const V n114i = n1i - n17i;
     V n10r;
-    V n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 327680 + src), n10r, n10i);
+    V n10i; simd::load_block(inb + 82080 + src, q, n10r, n10i);
     V n26r;
-    V n26i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 851968 + src), n26r, n26i);
+    V n26i; simd::load_block(inb + 213408 + src, q, n26r, n26i);
     const V n64r = n10r - n26r;
     const V n64i = n10i - n26i;
     const V n63r = n10r + n26r;
@@ -20825,9 +20502,9 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n104r = simd::fnmadd(V(static_cast<crd::f32>(-0.9238795325112867)), n69i, V(static_cast<crd::f32>(0.38268343236508984)) * n69r);
     const V n104i = simd::fma(V(static_cast<crd::f32>(-0.9238795325112867)), n69r, V(static_cast<crd::f32>(0.38268343236508984)) * n69i);
     V n11r;
-    V n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 360448 + src), n11r, n11i);
+    V n11i; simd::load_block(inb + 90288 + src, q, n11r, n11i);
     V n27r;
-    V n27i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 884736 + src), n27r, n27i);
+    V n27i; simd::load_block(inb + 221616 + src, q, n27r, n27i);
     const V n145r = n11r - n27r;
     const V n145i = n11i - n27i;
     const V n144r = n11r + n27r;
@@ -20839,9 +20516,9 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n143r = n3r - n19r;
     const V n143i = n3i - n19i;
     V n12r;
-    V n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 393216 + src), n12r, n12i);
+    V n12i; simd::load_block(inb + 98496 + src, q, n12r, n12i);
     V n28r;
-    V n28i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 917504 + src), n28r, n28i);
+    V n28i; simd::load_block(inb + 229824 + src, q, n28r, n28i);
     const V n43r = n12r + n28r;
     const V n43i = n12i + n28i;
     const V n44r = n12r - n28r;
@@ -20869,9 +20546,9 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n40r = n33r - n36r;
     const V n40i = n33i - n36i;
     V n13r;
-    V n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 425984 + src), n13r, n13i);
+    V n13i; simd::load_block(inb + 106704 + src, q, n13r, n13i);
     V n29r;
-    V n29i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 950272 + src), n29r, n29i);
+    V n29i; simd::load_block(inb + 238032 + src, q, n29r, n29i);
     const V n124r = n13r + n29r;
     const V n124i = n13i + n29i;
     const V n125r = n13r - n29r;
@@ -20929,9 +20606,9 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n232r = simd::fnmadd(V(static_cast<crd::f32>(-0.9807852804032304)), n141i, V(static_cast<crd::f32>(0.19509032201612833)) * n141r);
     const V n232i = simd::fma(V(static_cast<crd::f32>(-0.9807852804032304)), n141r, V(static_cast<crd::f32>(0.19509032201612833)) * n141i);
     V n14r;
-    V n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 458752 + src), n14r, n14i);
+    V n14i; simd::load_block(inb + 114912 + src, q, n14r, n14i);
     V n30r;
-    V n30i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 983040 + src), n30r, n30i);
+    V n30i; simd::load_block(inb + 246240 + src, q, n30r, n30i);
     const V n73r = n14r - n30r;
     const V n73i = n14i - n30i;
     const V n72r = n14r + n30r;
@@ -20997,9 +20674,9 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n60r = n40r - n56r;
     const V n60i = n40i - n56i;
     V n15r;
-    V n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 491520 + src), n15r, n15i);
+    V n15i; simd::load_block(inb + 123120 + src, q, n15r, n15i);
     V n31r;
-    V n31i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 1015808 + src), n31r, n31i);
+    V n31i; simd::load_block(inb + 254448 + src, q, n31r, n31i);
     const V n153r = n15r + n31r;
     const V n153i = n15i + n31i;
     const V n154r = n15r - n31r;
@@ -21068,12 +20745,16 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n83i = n48i - n79i;
     const V n174r = n82r + n171r;
     const V n174i = n82i + n171i;
+    simd::store_block(nt + dst, kc, n174r, n174i);
     const V n175r = n82r - n171r;
     const V n175i = n82i - n171i;
+    simd::store_block(nt + dst + 8192, kc, n175r, n175i);
     const V n176r = n83r + n173r;
     const V n176i = n83i + n173i;
+    simd::store_block(nt + dst + 4096, kc, n176r, n176i);
     const V n177r = n83r - n173r;
     const V n177i = n83i - n173i;
+    simd::store_block(nt + dst + 12288, kc, n177r, n177i);
     const V n181r = n178r - n179r;
     const V n181i = n178i - n179i;
     const V n180r = n178r + n179r;
@@ -21086,12 +20767,16 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n92i = n57i - n88i;
     const V n183r = n91r + n180r;
     const V n183i = n91i + n180i;
+    simd::store_block(nt + dst + 512, kc, n183r, n183i);
     const V n184r = n91r - n180r;
     const V n184i = n91i - n180i;
+    simd::store_block(nt + dst + 8704, kc, n184r, n184i);
     const V n185r = n92r + n182r;
     const V n185i = n92i + n182i;
+    simd::store_block(nt + dst + 4608, kc, n185r, n185i);
     const V n186r = n92r - n182r;
     const V n186i = n92i - n182i;
+    simd::store_block(nt + dst + 12800, kc, n186r, n186i);
     const V n190r = n187r - n188r;
     const V n190i = n187i - n188i;
     const V n189r = n187r + n188r;
@@ -21104,12 +20789,16 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n101i = n50i - n97i;
     const V n192r = n100r + n189r;
     const V n192i = n100i + n189i;
+    simd::store_block(nt + dst + 1024, kc, n192r, n192i);
     const V n193r = n100r - n189r;
     const V n193i = n100i - n189i;
+    simd::store_block(nt + dst + 9216, kc, n193r, n193i);
     const V n194r = n101r + n191r;
     const V n194i = n101i + n191i;
+    simd::store_block(nt + dst + 5120, kc, n194r, n194i);
     const V n195r = n101r - n191r;
     const V n195i = n101i - n191i;
+    simd::store_block(nt + dst + 13312, kc, n195r, n195i);
     const V n199r = n196r - n197r;
     const V n199i = n196i - n197i;
     const V n198r = n196r + n197r;
@@ -21122,12 +20811,16 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n110i = n59i - n106i;
     const V n201r = n109r + n198r;
     const V n201i = n109i + n198i;
+    simd::store_block(nt + dst + 1536, kc, n201r, n201i);
     const V n202r = n109r - n198r;
     const V n202i = n109i - n198i;
+    simd::store_block(nt + dst + 9728, kc, n202r, n202i);
     const V n203r = n110r + n200r;
     const V n203i = n110i + n200i;
+    simd::store_block(nt + dst + 5632, kc, n203r, n203i);
     const V n204r = n110r - n200r;
     const V n204i = n110i - n200i;
+    simd::store_block(nt + dst + 13824, kc, n204r, n204i);
     const V n208r = n205r - n206r;
     const V n208i = n205i - n206i;
     const V n207r = n205r + n206r;
@@ -21140,12 +20833,16 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n85i = n49i - n81i;
     const V n210r = n84r + n207r;
     const V n210i = n84i + n207i;
+    simd::store_block(nt + dst + 2048, kc, n210r, n210i);
     const V n211r = n84r - n207r;
     const V n211i = n84i - n207i;
+    simd::store_block(nt + dst + 10240, kc, n211r, n211i);
     const V n212r = n85r + n209r;
     const V n212i = n85i + n209i;
+    simd::store_block(nt + dst + 6144, kc, n212r, n212i);
     const V n213r = n85r - n209r;
     const V n213i = n85i - n209i;
+    simd::store_block(nt + dst + 14336, kc, n213r, n213i);
     const V n217r = n214r - n215r;
     const V n217i = n214i - n215i;
     const V n216r = n214r + n215r;
@@ -21158,12 +20855,16 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n94i = n58i - n90i;
     const V n219r = n93r + n216r;
     const V n219i = n93i + n216i;
+    simd::store_block(nt + dst + 2560, kc, n219r, n219i);
     const V n220r = n93r - n216r;
     const V n220i = n93i - n216i;
+    simd::store_block(nt + dst + 10752, kc, n220r, n220i);
     const V n221r = n94r + n218r;
     const V n221i = n94i + n218i;
+    simd::store_block(nt + dst + 6656, kc, n221r, n221i);
     const V n222r = n94r - n218r;
     const V n222i = n94i - n218i;
+    simd::store_block(nt + dst + 14848, kc, n222r, n222i);
     const V n226r = n223r - n224r;
     const V n226i = n223i - n224i;
     const V n225r = n223r + n224r;
@@ -21176,12 +20877,16 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n103i = n51i - n99i;
     const V n228r = n102r + n225r;
     const V n228i = n102i + n225i;
+    simd::store_block(nt + dst + 3072, kc, n228r, n228i);
     const V n229r = n102r - n225r;
     const V n229i = n102i - n225i;
+    simd::store_block(nt + dst + 11264, kc, n229r, n229i);
     const V n230r = n103r + n227r;
     const V n230i = n103i + n227i;
+    simd::store_block(nt + dst + 7168, kc, n230r, n230i);
     const V n231r = n103r - n227r;
     const V n231i = n103i - n227i;
+    simd::store_block(nt + dst + 15360, kc, n231r, n231i);
     const V n235r = n232r - n233r;
     const V n235i = n232i - n233i;
     const V n234r = n232r + n233r;
@@ -21194,159 +20899,21 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n112i = n60i - n108i;
     const V n237r = n111r + n234r;
     const V n237i = n111i + n234i;
-    {
-        const V x0r = n174r;
-        const V x0i = n174i;
-        const V w1r = V(twr[32 + c]);
-        const V w1i = V(twi[32 + c]);
-        const V x1r = simd::fnmadd(w1i, n183i, n183r * w1r);
-        const V x1i = simd::fma(w1i, n183r, n183i * w1r);
-        const V w2r = V(twr[64 + c]);
-        const V w2i = V(twi[64 + c]);
-        const V x2r = simd::fnmadd(w2i, n192i, n192r * w2r);
-        const V x2i = simd::fma(w2i, n192r, n192i * w2r);
-        const V w3r = V(twr[96 + c]);
-        const V w3i = V(twi[96 + c]);
-        const V x3r = simd::fnmadd(w3i, n201i, n201r * w3r);
-        const V x3i = simd::fma(w3i, n201r, n201i * w3r);
-        const V w4r = V(twr[128 + c]);
-        const V w4i = V(twi[128 + c]);
-        const V x4r = simd::fnmadd(w4i, n210i, n210r * w4r);
-        const V x4i = simd::fma(w4i, n210r, n210i * w4r);
-        const V w5r = V(twr[160 + c]);
-        const V w5i = V(twi[160 + c]);
-        const V x5r = simd::fnmadd(w5i, n219i, n219r * w5r);
-        const V x5i = simd::fma(w5i, n219r, n219i * w5r);
-        const V w6r = V(twr[192 + c]);
-        const V w6i = V(twi[192 + c]);
-        const V x6r = simd::fnmadd(w6i, n228i, n228r * w6r);
-        const V x6i = simd::fma(w6i, n228r, n228i * w6r);
-        const V w7r = V(twr[224 + c]);
-        const V w7i = V(twi[224 + c]);
-        const V x7r = simd::fnmadd(w7i, n237i, n237r * w7r);
-        const V x7i = simd::fma(w7i, n237r, n237i * w7r);
-        simd::store_transposed(outb + row, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + row + 8, 64, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
-    }
+    simd::store_block(nt + dst + 3584, kc, n237r, n237i);
     const V n238r = n111r - n234r;
     const V n238i = n111i - n234i;
-    {
-        const V w0r = V(twr[512 + c]);
-        const V w0i = V(twi[512 + c]);
-        const V x0r = simd::fnmadd(w0i, n175i, n175r * w0r);
-        const V x0i = simd::fma(w0i, n175r, n175i * w0r);
-        const V w1r = V(twr[544 + c]);
-        const V w1i = V(twi[544 + c]);
-        const V x1r = simd::fnmadd(w1i, n184i, n184r * w1r);
-        const V x1i = simd::fma(w1i, n184r, n184i * w1r);
-        const V w2r = V(twr[576 + c]);
-        const V w2i = V(twi[576 + c]);
-        const V x2r = simd::fnmadd(w2i, n193i, n193r * w2r);
-        const V x2i = simd::fma(w2i, n193r, n193i * w2r);
-        const V w3r = V(twr[608 + c]);
-        const V w3i = V(twi[608 + c]);
-        const V x3r = simd::fnmadd(w3i, n202i, n202r * w3r);
-        const V x3i = simd::fma(w3i, n202r, n202i * w3r);
-        const V w4r = V(twr[640 + c]);
-        const V w4i = V(twi[640 + c]);
-        const V x4r = simd::fnmadd(w4i, n211i, n211r * w4r);
-        const V x4i = simd::fma(w4i, n211r, n211i * w4r);
-        const V w5r = V(twr[672 + c]);
-        const V w5i = V(twi[672 + c]);
-        const V x5r = simd::fnmadd(w5i, n220i, n220r * w5r);
-        const V x5i = simd::fma(w5i, n220r, n220i * w5r);
-        const V w6r = V(twr[704 + c]);
-        const V w6i = V(twi[704 + c]);
-        const V x6r = simd::fnmadd(w6i, n229i, n229r * w6r);
-        const V x6i = simd::fma(w6i, n229r, n229i * w6r);
-        const V w7r = V(twr[736 + c]);
-        const V w7i = V(twi[736 + c]);
-        const V x7r = simd::fnmadd(w7i, n238i, n238r * w7r);
-        const V x7i = simd::fma(w7i, n238r, n238i * w7r);
-        simd::store_transposed(outb + row + 32, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + row + 40, 64, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
-    }
+    simd::store_block(nt + dst + 11776, kc, n238r, n238i);
     const V n239r = n112r + n236r;
     const V n239i = n112i + n236i;
-    {
-        const V w0r = V(twr[256 + c]);
-        const V w0i = V(twi[256 + c]);
-        const V x0r = simd::fnmadd(w0i, n176i, n176r * w0r);
-        const V x0i = simd::fma(w0i, n176r, n176i * w0r);
-        const V w1r = V(twr[288 + c]);
-        const V w1i = V(twi[288 + c]);
-        const V x1r = simd::fnmadd(w1i, n185i, n185r * w1r);
-        const V x1i = simd::fma(w1i, n185r, n185i * w1r);
-        const V w2r = V(twr[320 + c]);
-        const V w2i = V(twi[320 + c]);
-        const V x2r = simd::fnmadd(w2i, n194i, n194r * w2r);
-        const V x2i = simd::fma(w2i, n194r, n194i * w2r);
-        const V w3r = V(twr[352 + c]);
-        const V w3i = V(twi[352 + c]);
-        const V x3r = simd::fnmadd(w3i, n203i, n203r * w3r);
-        const V x3i = simd::fma(w3i, n203r, n203i * w3r);
-        const V w4r = V(twr[384 + c]);
-        const V w4i = V(twi[384 + c]);
-        const V x4r = simd::fnmadd(w4i, n212i, n212r * w4r);
-        const V x4i = simd::fma(w4i, n212r, n212i * w4r);
-        const V w5r = V(twr[416 + c]);
-        const V w5i = V(twi[416 + c]);
-        const V x5r = simd::fnmadd(w5i, n221i, n221r * w5r);
-        const V x5i = simd::fma(w5i, n221r, n221i * w5r);
-        const V w6r = V(twr[448 + c]);
-        const V w6i = V(twi[448 + c]);
-        const V x6r = simd::fnmadd(w6i, n230i, n230r * w6r);
-        const V x6i = simd::fma(w6i, n230r, n230i * w6r);
-        const V w7r = V(twr[480 + c]);
-        const V w7i = V(twi[480 + c]);
-        const V x7r = simd::fnmadd(w7i, n239i, n239r * w7r);
-        const V x7i = simd::fma(w7i, n239r, n239i * w7r);
-        simd::store_transposed(outb + row + 16, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + row + 24, 64, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
-    }
+    simd::store_block(nt + dst + 7680, kc, n239r, n239i);
     const V n240r = n112r - n236r;
     const V n240i = n112i - n236i;
-    {
-        const V w0r = V(twr[768 + c]);
-        const V w0i = V(twi[768 + c]);
-        const V x0r = simd::fnmadd(w0i, n177i, n177r * w0r);
-        const V x0i = simd::fma(w0i, n177r, n177i * w0r);
-        const V w1r = V(twr[800 + c]);
-        const V w1i = V(twi[800 + c]);
-        const V x1r = simd::fnmadd(w1i, n186i, n186r * w1r);
-        const V x1i = simd::fma(w1i, n186r, n186i * w1r);
-        const V w2r = V(twr[832 + c]);
-        const V w2i = V(twi[832 + c]);
-        const V x2r = simd::fnmadd(w2i, n195i, n195r * w2r);
-        const V x2i = simd::fma(w2i, n195r, n195i * w2r);
-        const V w3r = V(twr[864 + c]);
-        const V w3i = V(twi[864 + c]);
-        const V x3r = simd::fnmadd(w3i, n204i, n204r * w3r);
-        const V x3i = simd::fma(w3i, n204r, n204i * w3r);
-        const V w4r = V(twr[896 + c]);
-        const V w4i = V(twi[896 + c]);
-        const V x4r = simd::fnmadd(w4i, n213i, n213r * w4r);
-        const V x4i = simd::fma(w4i, n213r, n213i * w4r);
-        const V w5r = V(twr[928 + c]);
-        const V w5i = V(twi[928 + c]);
-        const V x5r = simd::fnmadd(w5i, n222i, n222r * w5r);
-        const V x5i = simd::fma(w5i, n222r, n222i * w5r);
-        const V w6r = V(twr[960 + c]);
-        const V w6i = V(twi[960 + c]);
-        const V x6r = simd::fnmadd(w6i, n231i, n231r * w6r);
-        const V x6i = simd::fma(w6i, n231r, n231i * w6r);
-        const V w7r = V(twr[992 + c]);
-        const V w7i = V(twi[992 + c]);
-        const V x7r = simd::fnmadd(w7i, n240i, n240r * w7r);
-        const V x7i = simd::fma(w7i, n240r, n240i * w7r);
-        simd::store_transposed(outb + row + 48, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + row + 56, 64, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
-    }
+    simd::store_block(nt + dst + 15872, kc, n240r, n240i);
 }
-// Tiled four-step P1 leaf: a block of 128 columns of the f32 1M forward into its stage. GENERATED.
+// Tiled four-step P1 corner: the block's stage into the tiled intermediate (f32 1M). GENERATED.
 // NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG; retain fused scope.
-void codelet32_tiled_p1_leaf(const crd::hesap::Complex<crd::f32>* in,
-    crd::f32* outb, crd::usize blk, const crd::f32* twr, const crd::f32* twi) noexcept
+void codelet32_tiled_p1_corner(const crd::f32* inb,
+    crd::f32* nt, crd::usize blk) noexcept
 {
     namespace lanes = crd::hesap::fft::lanes;
     using V = lanes::Lane<crd::f32>;
@@ -21354,397 +20921,349 @@ void codelet32_tiled_p1_leaf(const crd::hesap::Complex<crd::f32>* in,
     const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
     for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
     {
-        codelet32_tiled_p1_leaf_part0<V>(in, outb, blk, twr, twi, t);
+        codelet32_tiled_p1_corner_part0<V>(inb, nt, blk, t);
     }
     if constexpr (lanes::kPairedTiles<crd::f32>)
     {
         using H = lanes::TileLane<crd::f32>;
         if (wide < tiles)
         {
-            codelet32_tiled_p1_leaf_part0<H>(in, outb, blk, twr, twi, wide);
+            codelet32_tiled_p1_corner_part0<H>(inb, nt, blk, wide);
         }
     }
 }
-#else
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet16_stage1_fused_sh_cs_part0([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
-    [[maybe_unused]] crd::f64* outb, [[maybe_unused]] crd::usize n2, [[maybe_unused]] const crd::f64* twr,
-    [[maybe_unused]] const crd::f64* twi, [[maybe_unused]] crd::usize t, V* sp) noexcept
+template <typename V> CRD_NOINLINE static void codelet16_inplace_mid_part0([[maybe_unused]] crd::f32* d,
+    [[maybe_unused]] crd::usize w, [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi,
+    [[maybe_unused]] crd::usize t) noexcept
 {
     namespace simd = crd::hesap::fft::lanes;
+    const crd::usize i1 = t & 15;
+    const crd::usize at = (t - i1) * 16 + i1;
     V n0r;
-    V n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 0 * n2 + t), n0r, n0i);
-    V n1r;
-    V n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 1 * n2 + t), n1r, n1i);
-    V n2r;
-    V n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 2 * n2 + t), n2r, n2i);
-    V n3r;
-    V n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 3 * n2 + t), n3r, n3i);
-    V n4r;
-    V n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 4 * n2 + t), n4r, n4i);
-    V n5r;
-    V n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 5 * n2 + t), n5r, n5i);
-    V n6r;
-    V n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 6 * n2 + t), n6r, n6i);
-    V n7r;
-    V n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 7 * n2 + t), n7r, n7i);
+    V n0i; simd::load_block(d, at, n0r, n0i);
     V n8r;
-    V n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 8 * n2 + t), n8r, n8i);
+    V n8i; simd::load_block(d, at + 128, n8r, n8i);
+    V n1r;
+    V n1i; simd::load_block(d, at + 16, n1r, n1i);
     V n9r;
-    V n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 9 * n2 + t), n9r, n9i);
+    V n9i; simd::load_block(d, at + 144, n9r, n9i);
+    V n2r;
+    V n2i; simd::load_block(d, at + 32, n2r, n2i);
     V n10r;
-    V n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 10 * n2 + t), n10r, n10i);
+    V n10i; simd::load_block(d, at + 160, n10r, n10i);
+    const V n26r = n2r - n10r;
+    const V n26i = n2i - n10i;
+    const V n25r = n2r + n10r;
+    const V n25i = n2i + n10i;
+    const V n36r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n26i, V(static_cast<crd::f32>(0.7071067811865476)) * n26r);
+    const V n36i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n26r, V(static_cast<crd::f32>(0.7071067811865476)) * n26i);
+    V n3r;
+    V n3i; simd::load_block(d, at + 48, n3r, n3i);
     V n11r;
-    V n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 11 * n2 + t), n11r, n11i);
+    V n11i; simd::load_block(d, at + 176, n11r, n11i);
+    V n4r;
+    V n4i; simd::load_block(d, at + 64, n4r, n4i);
     V n12r;
-    V n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 12 * n2 + t), n12r, n12i);
-    V n13r;
-    V n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 13 * n2 + t), n13r, n13i);
-    V n14r;
-    V n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 14 * n2 + t), n14r, n14i);
-    V n15r;
-    V n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 15 * n2 + t), n15r, n15i);
+    V n12i; simd::load_block(d, at + 192, n12r, n12i);
+    const V n19r = n4r - n12r;
+    const V n19i = n4i - n12i;
+    const V n18r = n4r + n12r;
+    const V n18i = n4i + n12i;
+    const V n20r = n19i;
+    const V n20i = V(0.0F) - n19r;
     const V n16r = n0r + n8r;
     const V n16i = n0i + n8i;
     const V n17r = n0r - n8r;
     const V n17i = n0i - n8i;
-    const V n18r = n4r + n12r;
-    const V n18i = n4i + n12i;
-    const V n19r = n4r - n12r;
-    const V n19i = n4i - n12i;
-    const V n20r = n19i;
-    const V n20i = V(0.0) - n19r;
-    const V n21r = n16r + n18r;
-    const V n21i = n16i + n18i;
-    const V n22r = n16r - n18r;
-    const V n22i = n16i - n18i;
-    const V n23r = n17r + n20r;
-    const V n23i = n17i + n20i;
-    const V n24r = n17r - n20r;
-    const V n24i = n17i - n20i;
-    const V n25r = n2r + n10r;
-    const V n25i = n2i + n10i;
-    const V n26r = n2r - n10r;
-    const V n26i = n2i - n10i;
-    const V n36r = simd::fnmadd(V(-0.7071067811865475), n26i, V(0.7071067811865476) * n26r);
-    const V n36i = simd::fma(V(-0.7071067811865475), n26r, V(0.7071067811865476) * n26i);
-    const V n27r = n6r + n14r;
-    const V n27i = n6i + n14i;
-    const V n28r = n6r - n14r;
-    const V n28i = n6i - n14i;
-    const V n37r = simd::fnmadd(V(-0.7071067811865476), n28i, V(-0.7071067811865475) * n28r);
-    const V n37i = simd::fma(V(-0.7071067811865476), n28r, V(-0.7071067811865475) * n28i);
-    const V n29r = n25r + n27r;
-    const V n29i = n25i + n27i;
-    const V n30r = n25r - n27r;
-    const V n30i = n25i - n27i;
-    const V n31r = n30i;
-    const V n31i = V(0.0) - n30r;
-    const V n32r = n21r + n29r;
-    const V n32i = n21i + n29i;
-    const V n33r = n21r - n29r;
-    const V n33i = n21i - n29i;
-    const V n34r = n22r + n31r;
-    const V n34i = n22i + n31i;
-    const V n35r = n22r - n31r;
-    const V n35i = n22i - n31i;
-    const V n38r = n36r + n37r;
-    const V n38i = n36i + n37i;
-    const V n39r = n36r - n37r;
-    const V n39i = n36i - n37i;
-    const V n40r = n39i;
-    const V n40i = V(0.0) - n39r;
-    const V n41r = n23r + n38r;
-    const V n41i = n23i + n38i;
-    const V n42r = n23r - n38r;
-    const V n42i = n23i - n38i;
-    const V n43r = n24r + n40r;
-    const V n43i = n24i + n40i;
-    const V n44r = n24r - n40r;
-    const V n44i = n24i - n40i;
+    V n5r;
+    V n5i; simd::load_block(d, at + 80, n5r, n5i);
+    V n13r;
+    V n13i; simd::load_block(d, at + 208, n13r, n13i);
+    const V n48r = n5r - n13r;
+    const V n48i = n5i - n13i;
+    const V n47r = n5r + n13r;
+    const V n47i = n5i + n13i;
+    const V n49r = n48i;
+    const V n49i = V(0.0F) - n48r;
     const V n45r = n1r + n9r;
     const V n45i = n1i + n9i;
     const V n46r = n1r - n9r;
     const V n46i = n1i - n9i;
-    const V n47r = n5r + n13r;
-    const V n47i = n5i + n13i;
-    const V n48r = n5r - n13r;
-    const V n48i = n5i - n13i;
-    const V n49r = n48i;
-    const V n49i = V(0.0) - n48r;
-    const V n50r = n45r + n47r;
-    const V n50i = n45i + n47i;
     const V n51r = n45r - n47r;
     const V n51i = n45i - n47i;
-    const V n79r = simd::fnmadd(V(-0.7071067811865475), n51i, V(0.7071067811865476) * n51r);
-    const V n79i = simd::fma(V(-0.7071067811865475), n51r, V(0.7071067811865476) * n51i);
+    const V n50r = n45r + n47r;
+    const V n50i = n45i + n47i;
+    const V n79r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n51i, V(static_cast<crd::f32>(0.7071067811865476)) * n51r);
+    const V n79i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n51r, V(static_cast<crd::f32>(0.7071067811865476)) * n51i);
     const V n52r = n46r + n49r;
     const V n52i = n46i + n49i;
     const V n53r = n46r - n49r;
     const V n53i = n46i - n49i;
-    const V n70r = simd::fnmadd(V(-0.3826834323650898), n52i, V(0.9238795325112867) * n52r);
-    const V n70i = simd::fma(V(-0.3826834323650898), n52r, V(0.9238795325112867) * n52i);
-    const V n88r = simd::fnmadd(V(-0.9238795325112867), n53i, V(0.38268343236508984) * n53r);
-    const V n88i = simd::fma(V(-0.9238795325112867), n53r, V(0.38268343236508984) * n53i);
+    const V n70r = simd::fnmadd(V(static_cast<crd::f32>(-0.3826834323650898)), n52i, V(static_cast<crd::f32>(0.9238795325112867)) * n52r);
+    const V n70i = simd::fma(V(static_cast<crd::f32>(-0.3826834323650898)), n52r, V(static_cast<crd::f32>(0.9238795325112867)) * n52i);
+    const V n88r = simd::fnmadd(V(static_cast<crd::f32>(-0.9238795325112867)), n53i, V(static_cast<crd::f32>(0.38268343236508984)) * n53r);
+    const V n88i = simd::fma(V(static_cast<crd::f32>(-0.9238795325112867)), n53r, V(static_cast<crd::f32>(0.38268343236508984)) * n53i);
+    V n6r;
+    V n6i; simd::load_block(d, at + 96, n6r, n6i);
+    V n14r;
+    V n14i; simd::load_block(d, at + 224, n14r, n14i);
+    const V n27r = n6r + n14r;
+    const V n27i = n6i + n14i;
+    const V n28r = n6r - n14r;
+    const V n28i = n6i - n14i;
+    const V n37r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865476)), n28i, V(static_cast<crd::f32>(-0.7071067811865475)) * n28r);
+    const V n37i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865476)), n28r, V(static_cast<crd::f32>(-0.7071067811865475)) * n28i);
+    const V n30r = n25r - n27r;
+    const V n30i = n25i - n27i;
+    const V n29r = n25r + n27r;
+    const V n29i = n25i + n27i;
+    const V n31r = n30i;
+    const V n31i = V(0.0F) - n30r;
+    const V n21r = n16r + n18r;
+    const V n21i = n16i + n18i;
+    const V n22r = n16r - n18r;
+    const V n22i = n16i - n18i;
+    const V n39r = n36r - n37r;
+    const V n39i = n36i - n37i;
+    const V n38r = n36r + n37r;
+    const V n38i = n36i + n37i;
+    const V n40r = n39i;
+    const V n40i = V(0.0F) - n39r;
+    const V n23r = n17r + n20r;
+    const V n23i = n17i + n20i;
+    const V n24r = n17r - n20r;
+    const V n24i = n17i - n20i;
+    V n7r;
+    V n7i; simd::load_block(d, at + 112, n7r, n7i);
+    V n15r;
+    V n15i; simd::load_block(d, at + 240, n15r, n15i);
+    const V n57r = n7r - n15r;
+    const V n57i = n7i - n15i;
+    const V n56r = n7r + n15r;
+    const V n56i = n7i + n15i;
+    const V n58r = n57i;
+    const V n58i = V(0.0F) - n57r;
     const V n54r = n3r + n11r;
     const V n54i = n3i + n11i;
     const V n55r = n3r - n11r;
     const V n55i = n3i - n11i;
-    const V n56r = n7r + n15r;
-    const V n56i = n7i + n15i;
-    const V n57r = n7r - n15r;
-    const V n57i = n7i - n15i;
-    const V n58r = n57i;
-    const V n58i = V(0.0) - n57r;
     const V n59r = n54r + n56r;
     const V n59i = n54i + n56i;
     const V n60r = n54r - n56r;
     const V n60i = n54i - n56i;
-    const V n80r = simd::fnmadd(V(-0.7071067811865476), n60i, V(-0.7071067811865475) * n60r);
-    const V n80i = simd::fma(V(-0.7071067811865476), n60r, V(-0.7071067811865475) * n60i);
+    const V n80r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865476)), n60i, V(static_cast<crd::f32>(-0.7071067811865475)) * n60r);
+    const V n80i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865476)), n60r, V(static_cast<crd::f32>(-0.7071067811865475)) * n60i);
     const V n61r = n55r + n58r;
     const V n61i = n55i + n58i;
     const V n62r = n55r - n58r;
     const V n62i = n55i - n58i;
-    const V n71r = simd::fnmadd(V(-0.9238795325112867), n61i, V(0.38268343236508984) * n61r);
-    const V n71i = simd::fma(V(-0.9238795325112867), n61r, V(0.38268343236508984) * n61i);
-    const V n89r = simd::fnmadd(V(0.38268343236508967), n62i, V(-0.9238795325112868) * n62r);
-    const V n89i = simd::fma(V(0.38268343236508967), n62r, V(-0.9238795325112868) * n62i);
-    const V n63r = n50r + n59r;
-    const V n63i = n50i + n59i;
+    const V n71r = simd::fnmadd(V(static_cast<crd::f32>(-0.9238795325112867)), n61i, V(static_cast<crd::f32>(0.38268343236508984)) * n61r);
+    const V n71i = simd::fma(V(static_cast<crd::f32>(-0.9238795325112867)), n61r, V(static_cast<crd::f32>(0.38268343236508984)) * n61i);
+    const V n89r = simd::fnmadd(V(static_cast<crd::f32>(0.38268343236508967)), n62i, V(static_cast<crd::f32>(-0.9238795325112868)) * n62r);
+    const V n89i = simd::fma(V(static_cast<crd::f32>(0.38268343236508967)), n62r, V(static_cast<crd::f32>(-0.9238795325112868)) * n62i);
     const V n64r = n50r - n59r;
     const V n64i = n50i - n59i;
+    const V n63r = n50r + n59r;
+    const V n63i = n50i + n59i;
     const V n65r = n64i;
-    const V n65i = V(0.0) - n64r;
+    const V n65i = V(0.0F) - n64r;
+    const V n32r = n21r + n29r;
+    const V n32i = n21i + n29i;
+    const V n33r = n21r - n29r;
+    const V n33i = n21i - n29i;
     const V n66r = n32r + n63r;
     const V n66i = n32i + n63i;
+    simd::store_block_halves(d, at, n66r, n66i);
     const V n67r = n32r - n63r;
     const V n67i = n32i - n63i;
-    sp[0] = n33i;
-    sp[1] = n33r;
-    sp[2] = n34i;
-    sp[3] = n34r;
-    sp[4] = n35i;
-    sp[5] = n35r;
-    sp[6] = n41i;
-    sp[7] = n41r;
-    sp[8] = n42i;
-    sp[9] = n42r;
-    sp[10] = n43i;
-    sp[11] = n43r;
-    sp[12] = n44i;
-    sp[13] = n44r;
-    sp[14] = n65i;
-    sp[15] = n65r;
-    sp[16] = n66i;
-    sp[17] = n66r;
-    sp[18] = n67i;
-    sp[19] = n67r;
-    sp[20] = n70i;
-    sp[21] = n70r;
-    sp[22] = n71i;
-    sp[23] = n71r;
-    sp[24] = n79i;
-    sp[25] = n79r;
-    sp[26] = n80i;
-    sp[27] = n80r;
-    sp[28] = n88i;
-    sp[29] = n88r;
-    sp[30] = n89i;
-    sp[31] = n89r;
-}
-// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet16_stage1_fused_sh_cs_part1([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
-    [[maybe_unused]] crd::f64* outb, [[maybe_unused]] crd::usize n2, [[maybe_unused]] const crd::f64* twr,
-    [[maybe_unused]] const crd::f64* twi, [[maybe_unused]] crd::usize t, const V* sp) noexcept
-{
-    namespace simd = crd::hesap::fft::lanes;
-    const V n33i = sp[0];
-    const V n33r = sp[1];
-    const V n34i = sp[2];
-    const V n34r = sp[3];
-    const V n35i = sp[4];
-    const V n35r = sp[5];
-    const V n41i = sp[6];
-    const V n41r = sp[7];
-    const V n42i = sp[8];
-    const V n42r = sp[9];
-    const V n43i = sp[10];
-    const V n43r = sp[11];
-    const V n44i = sp[12];
-    const V n44r = sp[13];
-    const V n65i = sp[14];
-    const V n65r = sp[15];
-    const V n66i = sp[16];
-    const V n66r = sp[17];
-    const V n67i = sp[18];
-    const V n67r = sp[19];
-    const V n70i = sp[20];
-    const V n70r = sp[21];
-    const V n71i = sp[22];
-    const V n71r = sp[23];
-    const V n79i = sp[24];
-    const V n79r = sp[25];
-    const V n80i = sp[26];
-    const V n80r = sp[27];
-    const V n88i = sp[28];
-    const V n88r = sp[29];
-    const V n89i = sp[30];
-    const V n89r = sp[31];
+    {
+        const V wr = simd::load<V>(twr + 128 + i1);
+        const V wi = simd::load<V>(twi + 128 + i1);
+        const V xr = simd::fnmadd(wi, n67i, n67r * wr);
+        const V xi = simd::fma(wi, n67r, n67i * wr);
+        simd::store_block_halves(d, at + 128, xr, xi);
+    }
     const V n68r = n33r + n65r;
     const V n68i = n33i + n65i;
+    {
+        const V wr = simd::load<V>(twr + 64 + i1);
+        const V wi = simd::load<V>(twi + 64 + i1);
+        const V xr = simd::fnmadd(wi, n68i, n68r * wr);
+        const V xi = simd::fma(wi, n68r, n68i * wr);
+        simd::store_block_halves(d, at + 64, xr, xi);
+    }
     const V n69r = n33r - n65r;
     const V n69i = n33i - n65i;
-    const V n72r = n70r + n71r;
-    const V n72i = n70i + n71i;
+    {
+        const V wr = simd::load<V>(twr + 192 + i1);
+        const V wi = simd::load<V>(twi + 192 + i1);
+        const V xr = simd::fnmadd(wi, n69i, n69r * wr);
+        const V xi = simd::fma(wi, n69r, n69i * wr);
+        simd::store_block_halves(d, at + 192, xr, xi);
+    }
     const V n73r = n70r - n71r;
     const V n73i = n70i - n71i;
+    const V n72r = n70r + n71r;
+    const V n72i = n70i + n71i;
     const V n74r = n73i;
-    const V n74i = V(0.0) - n73r;
+    const V n74i = V(0.0F) - n73r;
+    const V n41r = n23r + n38r;
+    const V n41i = n23i + n38i;
+    const V n42r = n23r - n38r;
+    const V n42i = n23i - n38i;
     const V n75r = n41r + n72r;
     const V n75i = n41i + n72i;
+    {
+        const V wr = simd::load<V>(twr + 16 + i1);
+        const V wi = simd::load<V>(twi + 16 + i1);
+        const V xr = simd::fnmadd(wi, n75i, n75r * wr);
+        const V xi = simd::fma(wi, n75r, n75i * wr);
+        simd::store_block_halves(d, at + 16, xr, xi);
+    }
     const V n76r = n41r - n72r;
     const V n76i = n41i - n72i;
+    {
+        const V wr = simd::load<V>(twr + 144 + i1);
+        const V wi = simd::load<V>(twi + 144 + i1);
+        const V xr = simd::fnmadd(wi, n76i, n76r * wr);
+        const V xi = simd::fma(wi, n76r, n76i * wr);
+        simd::store_block_halves(d, at + 144, xr, xi);
+    }
     const V n77r = n42r + n74r;
     const V n77i = n42i + n74i;
+    {
+        const V wr = simd::load<V>(twr + 80 + i1);
+        const V wi = simd::load<V>(twi + 80 + i1);
+        const V xr = simd::fnmadd(wi, n77i, n77r * wr);
+        const V xi = simd::fma(wi, n77r, n77i * wr);
+        simd::store_block_halves(d, at + 80, xr, xi);
+    }
     const V n78r = n42r - n74r;
     const V n78i = n42i - n74i;
-    const V n81r = n79r + n80r;
-    const V n81i = n79i + n80i;
+    {
+        const V wr = simd::load<V>(twr + 208 + i1);
+        const V wi = simd::load<V>(twi + 208 + i1);
+        const V xr = simd::fnmadd(wi, n78i, n78r * wr);
+        const V xi = simd::fma(wi, n78r, n78i * wr);
+        simd::store_block_halves(d, at + 208, xr, xi);
+    }
     const V n82r = n79r - n80r;
     const V n82i = n79i - n80i;
+    const V n81r = n79r + n80r;
+    const V n81i = n79i + n80i;
     const V n83r = n82i;
-    const V n83i = V(0.0) - n82r;
+    const V n83i = V(0.0F) - n82r;
+    const V n34r = n22r + n31r;
+    const V n34i = n22i + n31i;
+    const V n35r = n22r - n31r;
+    const V n35i = n22i - n31i;
     const V n84r = n34r + n81r;
     const V n84i = n34i + n81i;
+    {
+        const V wr = simd::load<V>(twr + 32 + i1);
+        const V wi = simd::load<V>(twi + 32 + i1);
+        const V xr = simd::fnmadd(wi, n84i, n84r * wr);
+        const V xi = simd::fma(wi, n84r, n84i * wr);
+        simd::store_block_halves(d, at + 32, xr, xi);
+    }
     const V n85r = n34r - n81r;
     const V n85i = n34i - n81i;
+    {
+        const V wr = simd::load<V>(twr + 160 + i1);
+        const V wi = simd::load<V>(twi + 160 + i1);
+        const V xr = simd::fnmadd(wi, n85i, n85r * wr);
+        const V xi = simd::fma(wi, n85r, n85i * wr);
+        simd::store_block_halves(d, at + 160, xr, xi);
+    }
     const V n86r = n35r + n83r;
     const V n86i = n35i + n83i;
+    {
+        const V wr = simd::load<V>(twr + 96 + i1);
+        const V wi = simd::load<V>(twi + 96 + i1);
+        const V xr = simd::fnmadd(wi, n86i, n86r * wr);
+        const V xi = simd::fma(wi, n86r, n86i * wr);
+        simd::store_block_halves(d, at + 96, xr, xi);
+    }
     const V n87r = n35r - n83r;
     const V n87i = n35i - n83i;
-    const V n90r = n88r + n89r;
-    const V n90i = n88i + n89i;
+    {
+        const V wr = simd::load<V>(twr + 224 + i1);
+        const V wi = simd::load<V>(twi + 224 + i1);
+        const V xr = simd::fnmadd(wi, n87i, n87r * wr);
+        const V xi = simd::fma(wi, n87r, n87i * wr);
+        simd::store_block_halves(d, at + 224, xr, xi);
+    }
     const V n91r = n88r - n89r;
     const V n91i = n88i - n89i;
+    const V n90r = n88r + n89r;
+    const V n90i = n88i + n89i;
     const V n92r = n91i;
-    const V n92i = V(0.0) - n91r;
+    const V n92i = V(0.0F) - n91r;
+    const V n43r = n24r + n40r;
+    const V n43i = n24i + n40i;
+    const V n44r = n24r - n40r;
+    const V n44i = n24i - n40i;
     const V n93r = n43r + n90r;
     const V n93i = n43i + n90i;
     {
-        const V w0r = simd::load<V>(twr + 0 * n2 + t);
-        const V w0i = simd::load<V>(twi + 0 * n2 + t);
-        const V w1r = simd::load<V>(twr + 1 * n2 + t);
-        const V w1i = simd::load<V>(twi + 1 * n2 + t);
-        const V w2r = simd::load<V>(twr + 2 * n2 + t);
-        const V w2i = simd::load<V>(twi + 2 * n2 + t);
-        const V w3r = simd::load<V>(twr + 3 * n2 + t);
-        const V w3i = simd::load<V>(twi + 3 * n2 + t);
-        const V x0r = simd::fnmadd(w0i, n66i, n66r * w0r);
-        const V x0i = simd::fma(w0i, n66r, n66i * w0r);
-        const V x1r = simd::fnmadd(w1i, n75i, n75r * w1r);
-        const V x1i = simd::fma(w1i, n75r, n75i * w1r);
-        const V x2r = simd::fnmadd(w2i, n84i, n84r * w2r);
-        const V x2i = simd::fma(w2i, n84r, n84i * w2r);
-        const V x3r = simd::fnmadd(w3i, n93i, n93r * w3r);
-        const V x3i = simd::fma(w3i, n93r, n93i * w3r);
-        simd::store_transposed(outb + t * 32 + 0, 32, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 32 + 4, 32, x0i, x1i, x2i, x3i);
+        const V wr = simd::load<V>(twr + 48 + i1);
+        const V wi = simd::load<V>(twi + 48 + i1);
+        const V xr = simd::fnmadd(wi, n93i, n93r * wr);
+        const V xi = simd::fma(wi, n93r, n93i * wr);
+        simd::store_block_halves(d, at + 48, xr, xi);
     }
     const V n94r = n43r - n90r;
     const V n94i = n43i - n90i;
     {
-        const V w0r = simd::load<V>(twr + 8 * n2 + t);
-        const V w0i = simd::load<V>(twi + 8 * n2 + t);
-        const V w1r = simd::load<V>(twr + 9 * n2 + t);
-        const V w1i = simd::load<V>(twi + 9 * n2 + t);
-        const V w2r = simd::load<V>(twr + 10 * n2 + t);
-        const V w2i = simd::load<V>(twi + 10 * n2 + t);
-        const V w3r = simd::load<V>(twr + 11 * n2 + t);
-        const V w3i = simd::load<V>(twi + 11 * n2 + t);
-        const V x0r = simd::fnmadd(w0i, n67i, n67r * w0r);
-        const V x0i = simd::fma(w0i, n67r, n67i * w0r);
-        const V x1r = simd::fnmadd(w1i, n76i, n76r * w1r);
-        const V x1i = simd::fma(w1i, n76r, n76i * w1r);
-        const V x2r = simd::fnmadd(w2i, n85i, n85r * w2r);
-        const V x2i = simd::fma(w2i, n85r, n85i * w2r);
-        const V x3r = simd::fnmadd(w3i, n94i, n94r * w3r);
-        const V x3i = simd::fma(w3i, n94r, n94i * w3r);
-        simd::store_transposed(outb + t * 32 + 16, 32, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 32 + 20, 32, x0i, x1i, x2i, x3i);
+        const V wr = simd::load<V>(twr + 176 + i1);
+        const V wi = simd::load<V>(twi + 176 + i1);
+        const V xr = simd::fnmadd(wi, n94i, n94r * wr);
+        const V xi = simd::fma(wi, n94r, n94i * wr);
+        simd::store_block_halves(d, at + 176, xr, xi);
     }
     const V n95r = n44r + n92r;
     const V n95i = n44i + n92i;
     {
-        const V w0r = simd::load<V>(twr + 4 * n2 + t);
-        const V w0i = simd::load<V>(twi + 4 * n2 + t);
-        const V w1r = simd::load<V>(twr + 5 * n2 + t);
-        const V w1i = simd::load<V>(twi + 5 * n2 + t);
-        const V w2r = simd::load<V>(twr + 6 * n2 + t);
-        const V w2i = simd::load<V>(twi + 6 * n2 + t);
-        const V w3r = simd::load<V>(twr + 7 * n2 + t);
-        const V w3i = simd::load<V>(twi + 7 * n2 + t);
-        const V x0r = simd::fnmadd(w0i, n68i, n68r * w0r);
-        const V x0i = simd::fma(w0i, n68r, n68i * w0r);
-        const V x1r = simd::fnmadd(w1i, n77i, n77r * w1r);
-        const V x1i = simd::fma(w1i, n77r, n77i * w1r);
-        const V x2r = simd::fnmadd(w2i, n86i, n86r * w2r);
-        const V x2i = simd::fma(w2i, n86r, n86i * w2r);
-        const V x3r = simd::fnmadd(w3i, n95i, n95r * w3r);
-        const V x3i = simd::fma(w3i, n95r, n95i * w3r);
-        simd::store_transposed(outb + t * 32 + 8, 32, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 32 + 12, 32, x0i, x1i, x2i, x3i);
+        const V wr = simd::load<V>(twr + 112 + i1);
+        const V wi = simd::load<V>(twi + 112 + i1);
+        const V xr = simd::fnmadd(wi, n95i, n95r * wr);
+        const V xi = simd::fma(wi, n95r, n95i * wr);
+        simd::store_block_halves(d, at + 112, xr, xi);
     }
     const V n96r = n44r - n92r;
     const V n96i = n44i - n92i;
     {
-        const V w0r = simd::load<V>(twr + 12 * n2 + t);
-        const V w0i = simd::load<V>(twi + 12 * n2 + t);
-        const V w1r = simd::load<V>(twr + 13 * n2 + t);
-        const V w1i = simd::load<V>(twi + 13 * n2 + t);
-        const V w2r = simd::load<V>(twr + 14 * n2 + t);
-        const V w2i = simd::load<V>(twi + 14 * n2 + t);
-        const V w3r = simd::load<V>(twr + 15 * n2 + t);
-        const V w3i = simd::load<V>(twi + 15 * n2 + t);
-        const V x0r = simd::fnmadd(w0i, n69i, n69r * w0r);
-        const V x0i = simd::fma(w0i, n69r, n69i * w0r);
-        const V x1r = simd::fnmadd(w1i, n78i, n78r * w1r);
-        const V x1i = simd::fma(w1i, n78r, n78i * w1r);
-        const V x2r = simd::fnmadd(w2i, n87i, n87r * w2r);
-        const V x2i = simd::fma(w2i, n87r, n87i * w2r);
-        const V x3r = simd::fnmadd(w3i, n96i, n96r * w3r);
-        const V x3i = simd::fma(w3i, n96r, n96i * w3r);
-        simd::store_transposed(outb + t * 32 + 24, 32, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 32 + 28, 32, x0i, x1i, x2i, x3i);
+        const V wr = simd::load<V>(twr + 240 + i1);
+        const V wi = simd::load<V>(twi + 240 + i1);
+        const V xr = simd::fnmadd(wi, n96i, n96r * wr);
+        const V xi = simd::fma(wi, n96r, n96i * wr);
+        simd::store_block_halves(d, at + 240, xr, xi);
     }
 }
-// N1=16 SPLIT-LAYOUT stage-1 (complex in, plane out) (f64). GENERATED.
+// In-place pass 2: the leaf over i2 (B = 16), twiddled, AoSoA blocks (f32). GENERATED.
 // NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG; retain fused scope.
-void codelet16_stage1_fused_sh_cs(const crd::hesap::Complex<crd::f64>* in,
-    crd::f64* outb, crd::usize n2, const crd::f64* twr,
-    const crd::f64* twi) noexcept
+void codelet16_inplace_mid(crd::f32* d, crd::usize w, const crd::f32* twr,
+    const crd::f32* twi) noexcept
 {
     namespace lanes = crd::hesap::fft::lanes;
-    using V = lanes::Lane<crd::f64>;
-    alignas(64) V sp[32];
-    const crd::usize tiles = n2 - n2 % lanes::kTile<crd::f64>;
+    using V = lanes::Lane<crd::f32>;
+    const crd::usize tiles = w - w % lanes::kTile<crd::f32>;
     const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
     for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
     {
-        codelet16_stage1_fused_sh_cs_part0<V>(in, outb, n2, twr, twi, t, sp);
-        codelet16_stage1_fused_sh_cs_part1<V>(in, outb, n2, twr, twi, t, sp);
+        codelet16_inplace_mid_part0<V>(d, w, twr, twi, t);
     }
-    if constexpr (lanes::kPairedTiles<crd::f64>)
+    if constexpr (lanes::kPairedTiles<crd::f32>)
     {
-        using H = lanes::TileLane<crd::f64>;
-        alignas(64) H sh[32];
+        using H = lanes::TileLane<crd::f32>;
         if (wide < tiles)
         {
-            codelet16_stage1_fused_sh_cs_part0<H>(in, outb, n2, twr, twi, wide, sh);
-            codelet16_stage1_fused_sh_cs_part1<H>(in, outb, n2, twr, twi, wide, sh);
+            codelet16_inplace_mid_part0<H>(d, w, twr, twi, wide);
         }
     }
 }
+#else
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
 template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_part0([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
     [[maybe_unused]] crd::f64* outb, [[maybe_unused]] crd::usize n2, [[maybe_unused]] const crd::f64* lor,
@@ -31034,8 +30553,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2520r, n2520i * w2r);
         const V x3r = simd::fnmadd(w3i, n2529i, n2529r * w3r);
         const V x3i = simd::fma(w3i, n2529r, n2529i * w3r);
-        simd::store_transposed(outb + t * 512 + 0, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 4, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 0, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2530r = n1217r - n2526r;
     const V n2530i = n1217i - n2526i;
@@ -31112,6 +30630,8 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2522r = sp[29];
     const V n2523i = sp[30];
     const V n2523r = sp[31];
+    const V n2551i = sp[32];
+    const V n2551r = sp[33];
     const V n2528i = sp[36];
     const V n2528r = sp[37];
     const V n1223i = sp[38];
@@ -31130,6 +30650,8 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2533r = sp[129];
     const V n2542i = sp[130];
     const V n2542r = sp[131];
+    const V n2552i = sp[144];
+    const V n2552r = sp[145];
     {
         const V h0r = V(hir[128 * uhc + uh]);
         const V h0i = V(hii[128 * uhc + uh]);
@@ -31163,8 +30685,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2521r, n2521i * w2r);
         const V x3r = simd::fnmadd(w3i, n2530i, n2530r * w3r);
         const V x3i = simd::fma(w3i, n2530r, n2530i * w3r);
-        simd::store_transposed(outb + t * 512 + 256, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 260, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 256, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2531r = n1218r + n2528r;
     const V n2531i = n1218i + n2528i;
@@ -31201,8 +30722,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2522r, n2522i * w2r);
         const V x3r = simd::fnmadd(w3i, n2531i, n2531r * w3r);
         const V x3i = simd::fma(w3i, n2531r, n2531i * w3r);
-        simd::store_transposed(outb + t * 512 + 128, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 132, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 128, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2532r = n1218r - n2528r;
     const V n2532i = n1218i - n2528i;
@@ -31239,8 +30759,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2523r, n2523i * w2r);
         const V x3r = simd::fnmadd(w3i, n2532i, n2532r * w3r);
         const V x3i = simd::fma(w3i, n2532r, n2532i * w3r);
-        simd::store_transposed(outb + t * 512 + 384, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 388, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 384, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2536r = n2533r - n2534r;
     const V n2536i = n2533i - n2534i;
@@ -31278,6 +30797,11 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2549i = n1236i + n2546i;
     const V n2550r = n1236r - n2546r;
     const V n2550i = n1236i - n2546i;
+    const V n2554r = n2551r - n2552r;
+    const V n2554i = n2551i - n2552i;
+    const V n2553r = n2551r + n2552r;
+    const V n2553i = n2551i + n2552i;
+    const V n2555r = n2554i;
     sp[10] = n2538i;
     sp[11] = n2538r;
     sp[12] = n2539i;
@@ -31290,10 +30814,14 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     sp[19] = n2548r;
     sp[20] = n2549i;
     sp[21] = n2549r;
-    sp[22] = n2541i;
-    sp[23] = n2541r;
-    sp[24] = n2550i;
-    sp[25] = n2550r;
+    sp[22] = n2553i;
+    sp[23] = n2553r;
+    sp[24] = n2554r;
+    sp[25] = n2555r;
+    sp[26] = n2541i;
+    sp[27] = n2541r;
+    sp[28] = n2550i;
+    sp[29] = n2550r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
 template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_part38([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
@@ -31317,8 +30845,10 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2548r = sp[19];
     const V n2549i = sp[20];
     const V n2549r = sp[21];
-    const V n2551i = sp[32];
-    const V n2551r = sp[33];
+    const V n2553i = sp[22];
+    const V n2553r = sp[23];
+    const V n2554r = sp[24];
+    const V n2555r = sp[25];
     const V n2560i = sp[34];
     const V n2560r = sp[35];
     const V n1241i = sp[46];
@@ -31329,15 +30859,8 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n684r = sp[51];
     const V n693i = sp[54];
     const V n693r = sp[55];
-    const V n2552i = sp[144];
-    const V n2552r = sp[145];
     const V n2561i = sp[152];
     const V n2561r = sp[153];
-    const V n2554r = n2551r - n2552r;
-    const V n2554i = n2551i - n2552i;
-    const V n2553r = n2551r + n2552r;
-    const V n2553i = n2551i + n2552i;
-    const V n2555r = n2554i;
     const V n2555i = V(0.0) - n2554r;
     const V n1244r = n684r + n1241r;
     const V n1244i = n684i + n1241i;
@@ -31396,8 +30919,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2556r, n2556i * w2r);
         const V x3r = simd::fnmadd(w3i, n2565i, n2565r * w3r);
         const V x3i = simd::fma(w3i, n2565r, n2565i * w3r);
-        simd::store_transposed(outb + t * 512 + 8, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 12, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 8, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2566r = n1253r - n2562r;
     const V n2566i = n1253i - n2562i;
@@ -31434,8 +30956,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2557r, n2557i * w2r);
         const V x3r = simd::fnmadd(w3i, n2566i, n2566r * w3r);
         const V x3i = simd::fma(w3i, n2566r, n2566i * w3r);
-        simd::store_transposed(outb + t * 512 + 264, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 268, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 264, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2567r = n1254r + n2564r;
     const V n2567i = n1254i + n2564i;
@@ -31472,8 +30993,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2558r, n2558i * w2r);
         const V x3r = simd::fnmadd(w3i, n2567i, n2567r * w3r);
         const V x3i = simd::fma(w3i, n2567r, n2567i * w3r);
-        simd::store_transposed(outb + t * 512 + 136, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 140, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 136, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2568r = n1254r - n2564r;
     const V n2568i = n1254i - n2564i;
@@ -31506,10 +31026,10 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2559r = sp[11];
     const V n2568i = sp[12];
     const V n2568r = sp[13];
-    const V n2541i = sp[22];
-    const V n2541r = sp[23];
-    const V n2550i = sp[24];
-    const V n2550r = sp[25];
+    const V n2541i = sp[26];
+    const V n2541r = sp[27];
+    const V n2550i = sp[28];
+    const V n2550r = sp[29];
     const V n711i = sp[52];
     const V n711r = sp[53];
     const V n720i = sp[60];
@@ -31565,8 +31085,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2559r, n2559i * w2r);
         const V x3r = simd::fnmadd(w3i, n2568i, n2568r * w3r);
         const V x3i = simd::fma(w3i, n2568r, n2568i * w3r);
-        simd::store_transposed(outb + t * 512 + 392, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 396, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 392, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2572r = n2569r - n2570r;
     const V n2572i = n2569i - n2570i;
@@ -31667,8 +31186,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2592r, n2592i * w2r);
         const V x3r = simd::fnmadd(w3i, n2601i, n2601r * w3r);
         const V x3i = simd::fma(w3i, n2601r, n2601i * w3r);
-        simd::store_transposed(outb + t * 512 + 16, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 20, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 16, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2602r = n1289r - n2598r;
     const V n2602i = n1289i - n2598i;
@@ -31739,6 +31257,8 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n738r = sp[69];
     const V n747i = sp[78];
     const V n747r = sp[79];
+    const V n2624i = sp[102];
+    const V n2624r = sp[103];
     const V n2606i = sp[158];
     const V n2606r = sp[159];
     const V n2615i = sp[160];
@@ -31747,6 +31267,8 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2605r = sp[273];
     const V n2614i = sp[274];
     const V n2614r = sp[275];
+    const V n2623i = sp[280];
+    const V n2623r = sp[281];
     {
         const V h0r = V(hir[136 * uhc + uh]);
         const V h0i = V(hii[136 * uhc + uh]);
@@ -31780,8 +31302,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2593r, n2593i * w2r);
         const V x3r = simd::fnmadd(w3i, n2602i, n2602r * w3r);
         const V x3i = simd::fma(w3i, n2602r, n2602i * w3r);
-        simd::store_transposed(outb + t * 512 + 272, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 276, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 272, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2603r = n1290r + n2600r;
     const V n2603i = n1290i + n2600i;
@@ -31818,8 +31339,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2594r, n2594i * w2r);
         const V x3r = simd::fnmadd(w3i, n2603i, n2603r * w3r);
         const V x3i = simd::fma(w3i, n2603r, n2603i * w3r);
-        simd::store_transposed(outb + t * 512 + 144, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 148, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 144, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2604r = n1290r - n2600r;
     const V n2604i = n1290i - n2600i;
@@ -31856,8 +31376,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2595r, n2595i * w2r);
         const V x3r = simd::fnmadd(w3i, n2604i, n2604r * w3r);
         const V x3i = simd::fma(w3i, n2604r, n2604i * w3r);
-        simd::store_transposed(outb + t * 512 + 400, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 404, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 400, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2608r = n2605r - n2606r;
     const V n2608i = n2605i - n2606i;
@@ -31895,6 +31414,11 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2621i = n1308i + n2618i;
     const V n2622r = n1308r - n2618r;
     const V n2622i = n1308i - n2618i;
+    const V n2626r = n2623r - n2624r;
+    const V n2626i = n2623i - n2624i;
+    const V n2625r = n2623r + n2624r;
+    const V n2625i = n2623i + n2624i;
+    const V n2627r = n2626i;
     sp[0] = n2610i;
     sp[1] = n2610r;
     sp[2] = n2611i;
@@ -31907,10 +31431,14 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     sp[9] = n2620r;
     sp[10] = n2621i;
     sp[11] = n2621r;
-    sp[12] = n2613i;
-    sp[13] = n2613r;
-    sp[14] = n2622i;
-    sp[15] = n2622r;
+    sp[12] = n2625i;
+    sp[13] = n2625r;
+    sp[14] = n2626r;
+    sp[15] = n2627r;
+    sp[16] = n2613i;
+    sp[17] = n2613r;
+    sp[18] = n2622i;
+    sp[19] = n2622r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
 template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_part41([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
@@ -31934,6 +31462,10 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2620r = sp[9];
     const V n2621i = sp[10];
     const V n2621r = sp[11];
+    const V n2625i = sp[12];
+    const V n2625r = sp[13];
+    const V n2626r = sp[14];
+    const V n2627r = sp[15];
     const V n1313i = sp[80];
     const V n1313r = sp[81];
     const V n1322i = sp[82];
@@ -31942,19 +31474,10 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n756r = sp[87];
     const V n765i = sp[90];
     const V n765r = sp[91];
-    const V n2624i = sp[102];
-    const V n2624r = sp[103];
     const V n2633i = sp[122];
     const V n2633r = sp[123];
-    const V n2623i = sp[280];
-    const V n2623r = sp[281];
     const V n2632i = sp[282];
     const V n2632r = sp[283];
-    const V n2626r = n2623r - n2624r;
-    const V n2626i = n2623i - n2624i;
-    const V n2625r = n2623r + n2624r;
-    const V n2625i = n2623i + n2624i;
-    const V n2627r = n2626i;
     const V n2627i = V(0.0) - n2626r;
     const V n1316r = n756r + n1313r;
     const V n1316i = n756i + n1313i;
@@ -32013,8 +31536,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2628r, n2628i * w2r);
         const V x3r = simd::fnmadd(w3i, n2637i, n2637r * w3r);
         const V x3i = simd::fma(w3i, n2637r, n2637i * w3r);
-        simd::store_transposed(outb + t * 512 + 24, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 28, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 24, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2638r = n1325r - n2634r;
     const V n2638i = n1325i - n2634i;
@@ -32051,8 +31573,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2629r, n2629i * w2r);
         const V x3r = simd::fnmadd(w3i, n2638i, n2638r * w3r);
         const V x3i = simd::fma(w3i, n2638r, n2638i * w3r);
-        simd::store_transposed(outb + t * 512 + 280, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 284, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 280, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2639r = n1326r + n2636r;
     const V n2639i = n1326i + n2636i;
@@ -32089,8 +31610,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2630r, n2630i * w2r);
         const V x3r = simd::fnmadd(w3i, n2639i, n2639r * w3r);
         const V x3i = simd::fma(w3i, n2639r, n2639i * w3r);
-        simd::store_transposed(outb + t * 512 + 152, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 156, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 152, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2640r = n1326r - n2636r;
     const V n2640i = n1326i - n2636i;
@@ -32113,10 +31633,10 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2631r = sp[1];
     const V n2640i = sp[2];
     const V n2640r = sp[3];
-    const V n2613i = sp[12];
-    const V n2613r = sp[13];
-    const V n2622i = sp[14];
-    const V n2622r = sp[15];
+    const V n2613i = sp[16];
+    const V n2613r = sp[17];
+    const V n2622i = sp[18];
+    const V n2622r = sp[19];
     const V n1331i = sp[92];
     const V n1331r = sp[93];
     const V n1340i = sp[94];
@@ -32182,8 +31702,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2631r, n2631i * w2r);
         const V x3r = simd::fnmadd(w3i, n2640i, n2640r * w3r);
         const V x3i = simd::fma(w3i, n2640r, n2640i * w3r);
-        simd::store_transposed(outb + t * 512 + 408, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 412, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 408, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2644r = n2641r - n2642r;
     const V n2644i = n2641i - n2642i;
@@ -32284,8 +31803,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2664r, n2664i * w2r);
         const V x3r = simd::fnmadd(w3i, n2673i, n2673r * w3r);
         const V x3i = simd::fma(w3i, n2673r, n2673i * w3r);
-        simd::store_transposed(outb + t * 512 + 32, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 36, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 32, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2674r = n1361r - n2670r;
     const V n2674i = n1361i - n2670i;
@@ -32356,10 +31874,14 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2677r = sp[141];
     const V n668i = sp[162];
     const V n668r = sp[163];
+    const V n2695i = sp[166];
+    const V n2695r = sp[167];
     const V n2678i = sp[178];
     const V n2678r = sp[179];
     const V n2687i = sp[180];
     const V n2687r = sp[181];
+    const V n2696i = sp[182];
+    const V n2696r = sp[183];
     const V n677i = sp[184];
     const V n677r = sp[185];
     const V n2686i = sp[228];
@@ -32397,8 +31919,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2665r, n2665i * w2r);
         const V x3r = simd::fnmadd(w3i, n2674i, n2674r * w3r);
         const V x3i = simd::fma(w3i, n2674r, n2674i * w3r);
-        simd::store_transposed(outb + t * 512 + 288, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 292, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 288, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2675r = n1362r + n2672r;
     const V n2675i = n1362i + n2672i;
@@ -32435,8 +31956,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2666r, n2666i * w2r);
         const V x3r = simd::fnmadd(w3i, n2675i, n2675r * w3r);
         const V x3i = simd::fma(w3i, n2675r, n2675i * w3r);
-        simd::store_transposed(outb + t * 512 + 160, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 164, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 160, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2676r = n1362r - n2672r;
     const V n2676i = n1362i - n2672i;
@@ -32473,8 +31993,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2667r, n2667i * w2r);
         const V x3r = simd::fnmadd(w3i, n2676i, n2676r * w3r);
         const V x3i = simd::fma(w3i, n2676r, n2676i * w3r);
-        simd::store_transposed(outb + t * 512 + 416, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 420, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 416, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2680r = n2677r - n2678r;
     const V n2680i = n2677i - n2678i;
@@ -32512,6 +32031,11 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2693i = n1380i + n2690i;
     const V n2694r = n1380r - n2690r;
     const V n2694i = n1380i - n2690i;
+    const V n2698r = n2695r - n2696r;
+    const V n2698i = n2695i - n2696i;
+    const V n2697r = n2695r + n2696r;
+    const V n2697i = n2695i + n2696i;
+    const V n2699r = n2698i;
     sp[0] = n2682i;
     sp[1] = n2682r;
     sp[2] = n2683i;
@@ -32524,10 +32048,14 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     sp[9] = n2692r;
     sp[10] = n2693i;
     sp[11] = n2693r;
-    sp[12] = n2685i;
-    sp[13] = n2685r;
-    sp[14] = n2694i;
-    sp[15] = n2694r;
+    sp[12] = n2697i;
+    sp[13] = n2697r;
+    sp[14] = n2698r;
+    sp[15] = n2699r;
+    sp[16] = n2685i;
+    sp[17] = n2685r;
+    sp[18] = n2694i;
+    sp[19] = n2694r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
 template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_part44([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
@@ -32551,12 +32079,12 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2692r = sp[9];
     const V n2693i = sp[10];
     const V n2693r = sp[11];
-    const V n2695i = sp[166];
-    const V n2695r = sp[167];
+    const V n2697i = sp[12];
+    const V n2697r = sp[13];
+    const V n2698r = sp[14];
+    const V n2699r = sp[15];
     const V n2704i = sp[168];
     const V n2704r = sp[169];
-    const V n2696i = sp[182];
-    const V n2696r = sp[183];
     const V n1385i = sp[186];
     const V n1385r = sp[187];
     const V n686i = sp[188];
@@ -32567,11 +32095,6 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n1394r = sp[233];
     const V n695i = sp[254];
     const V n695r = sp[255];
-    const V n2698r = n2695r - n2696r;
-    const V n2698i = n2695i - n2696i;
-    const V n2697r = n2695r + n2696r;
-    const V n2697i = n2695i + n2696i;
-    const V n2699r = n2698i;
     const V n2699i = V(0.0) - n2698r;
     const V n1388r = n686r + n1385r;
     const V n1388i = n686i + n1385i;
@@ -32630,8 +32153,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2700r, n2700i * w2r);
         const V x3r = simd::fnmadd(w3i, n2709i, n2709r * w3r);
         const V x3i = simd::fma(w3i, n2709r, n2709i * w3r);
-        simd::store_transposed(outb + t * 512 + 40, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 44, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 40, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2710r = n1397r - n2706r;
     const V n2710i = n1397i - n2706i;
@@ -32668,8 +32190,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2701r, n2701i * w2r);
         const V x3r = simd::fnmadd(w3i, n2710i, n2710r * w3r);
         const V x3i = simd::fma(w3i, n2710r, n2710i * w3r);
-        simd::store_transposed(outb + t * 512 + 296, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 300, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 296, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2711r = n1398r + n2708r;
     const V n2711i = n1398i + n2708i;
@@ -32706,8 +32227,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2702r, n2702i * w2r);
         const V x3r = simd::fnmadd(w3i, n2711i, n2711r * w3r);
         const V x3i = simd::fma(w3i, n2711r, n2711i * w3r);
-        simd::store_transposed(outb + t * 512 + 168, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 172, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 168, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2712r = n1398r - n2708r;
     const V n2712i = n1398i - n2708i;
@@ -32730,10 +32250,10 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2703r = sp[1];
     const V n2712i = sp[2];
     const V n2712r = sp[3];
-    const V n2685i = sp[12];
-    const V n2685r = sp[13];
-    const V n2694i = sp[14];
-    const V n2694r = sp[15];
+    const V n2685i = sp[16];
+    const V n2685r = sp[17];
+    const V n2694i = sp[18];
+    const V n2694r = sp[19];
     const V n2713i = sp[170];
     const V n2713r = sp[171];
     const V n2722i = sp[196];
@@ -32799,8 +32319,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2703r, n2703i * w2r);
         const V x3r = simd::fnmadd(w3i, n2712i, n2712r * w3r);
         const V x3i = simd::fma(w3i, n2712r, n2712i * w3r);
-        simd::store_transposed(outb + t * 512 + 424, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 428, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 424, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2716r = n2713r - n2714r;
     const V n2716i = n2713i - n2714i;
@@ -32901,8 +32420,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2736r, n2736i * w2r);
         const V x3r = simd::fnmadd(w3i, n2745i, n2745r * w3r);
         const V x3i = simd::fma(w3i, n2745r, n2745i * w3r);
-        simd::store_transposed(outb + t * 512 + 48, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 52, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 48, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2746r = n1433r - n2742r;
     const V n2746i = n1433i - n2742i;
@@ -32965,6 +32483,8 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2744r = sp[21];
     const V n2746i = sp[22];
     const V n2746r = sp[23];
+    const V n2768i = sp[124];
+    const V n2768r = sp[125];
     const V n1439i = sp[294];
     const V n1439r = sp[295];
     const V n1448i = sp[296];
@@ -32981,6 +32501,8 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2750r = sp[357];
     const V n2759i = sp[358];
     const V n2759r = sp[359];
+    const V n2767i = sp[376];
+    const V n2767r = sp[377];
     {
         const V h0r = V(hir[152 * uhc + uh]);
         const V h0i = V(hii[152 * uhc + uh]);
@@ -33014,8 +32536,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2737r, n2737i * w2r);
         const V x3r = simd::fnmadd(w3i, n2746i, n2746r * w3r);
         const V x3i = simd::fma(w3i, n2746r, n2746i * w3r);
-        simd::store_transposed(outb + t * 512 + 304, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 308, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 304, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2747r = n1434r + n2744r;
     const V n2747i = n1434i + n2744i;
@@ -33052,8 +32573,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2738r, n2738i * w2r);
         const V x3r = simd::fnmadd(w3i, n2747i, n2747r * w3r);
         const V x3i = simd::fma(w3i, n2747r, n2747i * w3r);
-        simd::store_transposed(outb + t * 512 + 176, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 180, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 176, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2748r = n1434r - n2744r;
     const V n2748i = n1434i - n2744i;
@@ -33090,8 +32610,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2739r, n2739i * w2r);
         const V x3r = simd::fnmadd(w3i, n2748i, n2748r * w3r);
         const V x3i = simd::fma(w3i, n2748r, n2748i * w3r);
-        simd::store_transposed(outb + t * 512 + 432, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 436, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 432, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2752r = n2749r - n2750r;
     const V n2752i = n2749i - n2750i;
@@ -33129,6 +32648,11 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2765i = n1452i + n2762i;
     const V n2766r = n1452r - n2762r;
     const V n2766i = n1452i - n2762i;
+    const V n2770r = n2767r - n2768r;
+    const V n2770i = n2767i - n2768i;
+    const V n2769r = n2767r + n2768r;
+    const V n2769i = n2767i + n2768i;
+    const V n2771r = n2770i;
     sp[0] = n2754i;
     sp[1] = n2754r;
     sp[2] = n2755i;
@@ -33141,10 +32665,14 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     sp[9] = n2764r;
     sp[10] = n2765i;
     sp[11] = n2765r;
-    sp[12] = n2757i;
-    sp[13] = n2757r;
-    sp[14] = n2766i;
-    sp[15] = n2766r;
+    sp[12] = n2769i;
+    sp[13] = n2769r;
+    sp[14] = n2770r;
+    sp[15] = n2771r;
+    sp[16] = n2757i;
+    sp[17] = n2757r;
+    sp[18] = n2766i;
+    sp[19] = n2766r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
 template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_part47([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
@@ -33168,8 +32696,10 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2764r = sp[9];
     const V n2765i = sp[10];
     const V n2765r = sp[11];
-    const V n2768i = sp[124];
-    const V n2768r = sp[125];
+    const V n2769i = sp[12];
+    const V n2769r = sp[13];
+    const V n2770r = sp[14];
+    const V n2771r = sp[15];
     const V n2777i = sp[126];
     const V n2777r = sp[127];
     const V n1457i = sp[302];
@@ -33180,15 +32710,8 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n758r = sp[331];
     const V n767i = sp[338];
     const V n767r = sp[339];
-    const V n2767i = sp[376];
-    const V n2767r = sp[377];
     const V n2776i = sp[378];
     const V n2776r = sp[379];
-    const V n2770r = n2767r - n2768r;
-    const V n2770i = n2767i - n2768i;
-    const V n2769r = n2767r + n2768r;
-    const V n2769i = n2767i + n2768i;
-    const V n2771r = n2770i;
     const V n2771i = V(0.0) - n2770r;
     const V n1460r = n758r + n1457r;
     const V n1460i = n758i + n1457i;
@@ -33247,8 +32770,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2772r, n2772i * w2r);
         const V x3r = simd::fnmadd(w3i, n2781i, n2781r * w3r);
         const V x3i = simd::fma(w3i, n2781r, n2781i * w3r);
-        simd::store_transposed(outb + t * 512 + 56, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 60, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 56, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2782r = n1469r - n2778r;
     const V n2782i = n1469i - n2778i;
@@ -33285,8 +32807,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2773r, n2773i * w2r);
         const V x3r = simd::fnmadd(w3i, n2782i, n2782r * w3r);
         const V x3i = simd::fma(w3i, n2782r, n2782i * w3r);
-        simd::store_transposed(outb + t * 512 + 312, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 316, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 312, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2783r = n1470r + n2780r;
     const V n2783i = n1470i + n2780i;
@@ -33323,8 +32844,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2774r, n2774i * w2r);
         const V x3r = simd::fnmadd(w3i, n2783i, n2783r * w3r);
         const V x3i = simd::fma(w3i, n2783r, n2783i * w3r);
-        simd::store_transposed(outb + t * 512 + 184, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 188, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 184, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2784r = n1470r - n2780r;
     const V n2784i = n1470i - n2780i;
@@ -33347,10 +32867,10 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2775r = sp[1];
     const V n2784i = sp[2];
     const V n2784r = sp[3];
-    const V n2757i = sp[12];
-    const V n2757r = sp[13];
-    const V n2766i = sp[14];
-    const V n2766r = sp[15];
+    const V n2757i = sp[16];
+    const V n2757r = sp[17];
+    const V n2766i = sp[18];
+    const V n2766r = sp[19];
     const V n1189i = sp[56];
     const V n1189r = sp[57];
     const V n1198i = sp[58];
@@ -33416,8 +32936,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2775r, n2775i * w2r);
         const V x3r = simd::fnmadd(w3i, n2784i, n2784r * w3r);
         const V x3i = simd::fma(w3i, n2784r, n2784i * w3r);
-        simd::store_transposed(outb + t * 512 + 440, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 444, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 440, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2788r = n2785r - n2786r;
     const V n2788i = n2785i - n2786i;
@@ -33518,8 +33037,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2808r, n2808i * w2r);
         const V x3r = simd::fnmadd(w3i, n2817i, n2817r * w3r);
         const V x3i = simd::fma(w3i, n2817r, n2817i * w3r);
-        simd::store_transposed(outb + t * 512 + 64, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 68, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 64, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2818r = n1219r - n2814r;
     const V n2818i = n1219i - n2814i;
@@ -33588,6 +33106,8 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2822r = sp[207];
     const V n2831i = sp[208];
     const V n2831r = sp[209];
+    const V n2840i = sp[210];
+    const V n2840r = sp[211];
     const V n1234i = sp[234];
     const V n1234r = sp[235];
     const V n667i = sp[304];
@@ -33598,6 +33118,8 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2830r = sp[335];
     const V n676i = sp[344];
     const V n676r = sp[345];
+    const V n2839i = sp[374];
+    const V n2839r = sp[375];
     {
         const V h0r = V(hir[160 * uhc + uh]);
         const V h0i = V(hii[160 * uhc + uh]);
@@ -33631,8 +33153,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2809r, n2809i * w2r);
         const V x3r = simd::fnmadd(w3i, n2818i, n2818r * w3r);
         const V x3i = simd::fma(w3i, n2818r, n2818i * w3r);
-        simd::store_transposed(outb + t * 512 + 320, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 324, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 320, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2819r = n1220r + n2816r;
     const V n2819i = n1220i + n2816i;
@@ -33669,8 +33190,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2810r, n2810i * w2r);
         const V x3r = simd::fnmadd(w3i, n2819i, n2819r * w3r);
         const V x3i = simd::fma(w3i, n2819r, n2819i * w3r);
-        simd::store_transposed(outb + t * 512 + 192, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 196, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 192, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2820r = n1220r - n2816r;
     const V n2820i = n1220i - n2816i;
@@ -33707,8 +33227,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2811r, n2811i * w2r);
         const V x3r = simd::fnmadd(w3i, n2820i, n2820r * w3r);
         const V x3i = simd::fma(w3i, n2820r, n2820i * w3r);
-        simd::store_transposed(outb + t * 512 + 448, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 452, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 448, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2824r = n2821r - n2822r;
     const V n2824i = n2821i - n2822i;
@@ -33746,6 +33265,11 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2837i = n1238i + n2834i;
     const V n2838r = n1238r - n2834r;
     const V n2838i = n1238i - n2834i;
+    const V n2842r = n2839r - n2840r;
+    const V n2842i = n2839i - n2840i;
+    const V n2841r = n2839r + n2840r;
+    const V n2841i = n2839i + n2840i;
+    const V n2843r = n2842i;
     sp[0] = n2826i;
     sp[1] = n2826r;
     sp[2] = n2827i;
@@ -33758,10 +33282,14 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     sp[9] = n2836r;
     sp[10] = n2837i;
     sp[11] = n2837r;
-    sp[12] = n2829i;
-    sp[13] = n2829r;
-    sp[14] = n2838i;
-    sp[15] = n2838r;
+    sp[12] = n2841i;
+    sp[13] = n2841r;
+    sp[14] = n2842r;
+    sp[15] = n2843r;
+    sp[16] = n2829i;
+    sp[17] = n2829r;
+    sp[18] = n2838i;
+    sp[19] = n2838r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
 template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_part50([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
@@ -33785,27 +33313,22 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2836r = sp[9];
     const V n2837i = sp[10];
     const V n2837r = sp[11];
-    const V n2840i = sp[210];
-    const V n2840r = sp[211];
+    const V n2841i = sp[12];
+    const V n2841r = sp[13];
+    const V n2842r = sp[14];
+    const V n2843r = sp[15];
     const V n2849i = sp[260];
     const V n2849r = sp[261];
     const V n1243i = sp[346];
     const V n1243r = sp[347];
     const V n1252i = sp[352];
     const V n1252r = sp[353];
-    const V n2839i = sp[374];
-    const V n2839r = sp[375];
     const V n2848i = sp[398];
     const V n2848r = sp[399];
     const V n685i = sp[404];
     const V n685r = sp[405];
     const V n694i = sp[406];
     const V n694r = sp[407];
-    const V n2842r = n2839r - n2840r;
-    const V n2842i = n2839i - n2840i;
-    const V n2841r = n2839r + n2840r;
-    const V n2841i = n2839i + n2840i;
-    const V n2843r = n2842i;
     const V n2843i = V(0.0) - n2842r;
     const V n1246r = n685r + n1243r;
     const V n1246i = n685i + n1243i;
@@ -33864,8 +33387,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2844r, n2844i * w2r);
         const V x3r = simd::fnmadd(w3i, n2853i, n2853r * w3r);
         const V x3i = simd::fma(w3i, n2853r, n2853i * w3r);
-        simd::store_transposed(outb + t * 512 + 72, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 76, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 72, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2854r = n1255r - n2850r;
     const V n2854i = n1255i - n2850i;
@@ -33902,8 +33424,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2845r, n2845i * w2r);
         const V x3r = simd::fnmadd(w3i, n2854i, n2854r * w3r);
         const V x3i = simd::fma(w3i, n2854r, n2854i * w3r);
-        simd::store_transposed(outb + t * 512 + 328, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 332, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 328, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2855r = n1256r + n2852r;
     const V n2855i = n1256i + n2852i;
@@ -33940,8 +33461,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2846r, n2846i * w2r);
         const V x3r = simd::fnmadd(w3i, n2855i, n2855r * w3r);
         const V x3i = simd::fma(w3i, n2855r, n2855i * w3r);
-        simd::store_transposed(outb + t * 512 + 200, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 204, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 200, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2856r = n1256r - n2852r;
     const V n2856i = n1256i - n2852i;
@@ -33964,10 +33484,10 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2847r = sp[1];
     const V n2856i = sp[2];
     const V n2856r = sp[3];
-    const V n2829i = sp[12];
-    const V n2829r = sp[13];
-    const V n2838i = sp[14];
-    const V n2838r = sp[15];
+    const V n2829i = sp[16];
+    const V n2829r = sp[17];
+    const V n2838i = sp[18];
+    const V n2838r = sp[19];
     const V n1261i = sp[198];
     const V n1261r = sp[199];
     const V n1270i = sp[200];
@@ -34033,8 +33553,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2847r, n2847i * w2r);
         const V x3r = simd::fnmadd(w3i, n2856i, n2856r * w3r);
         const V x3i = simd::fma(w3i, n2856r, n2856i * w3r);
-        simd::store_transposed(outb + t * 512 + 456, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 460, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 456, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2860r = n2857r - n2858r;
     const V n2860i = n2857i - n2858i;
@@ -34135,8 +33654,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2880r, n2880i * w2r);
         const V x3r = simd::fnmadd(w3i, n2889i, n2889r * w3r);
         const V x3i = simd::fma(w3i, n2889r, n2889i * w3r);
-        simd::store_transposed(outb + t * 512 + 80, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 84, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 80, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2890r = n1291r - n2886r;
     const V n2890i = n1291i - n2886i;
@@ -34199,6 +33717,8 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2888r = sp[21];
     const V n2890i = sp[22];
     const V n2890r = sp[23];
+    const V n2912i = sp[150];
+    const V n2912r = sp[151];
     const V n1297i = sp[236];
     const V n1297r = sp[237];
     const V n1306i = sp[238];
@@ -34215,6 +33735,8 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2902r = sp[383];
     const V n2903i = sp[426];
     const V n2903r = sp[427];
+    const V n2911i = sp[430];
+    const V n2911r = sp[431];
     {
         const V h0r = V(hir[168 * uhc + uh]);
         const V h0i = V(hii[168 * uhc + uh]);
@@ -34248,8 +33770,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2881r, n2881i * w2r);
         const V x3r = simd::fnmadd(w3i, n2890i, n2890r * w3r);
         const V x3i = simd::fma(w3i, n2890r, n2890i * w3r);
-        simd::store_transposed(outb + t * 512 + 336, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 340, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 336, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2891r = n1292r + n2888r;
     const V n2891i = n1292i + n2888i;
@@ -34286,8 +33807,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2882r, n2882i * w2r);
         const V x3r = simd::fnmadd(w3i, n2891i, n2891r * w3r);
         const V x3i = simd::fma(w3i, n2891r, n2891i * w3r);
-        simd::store_transposed(outb + t * 512 + 208, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 212, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 208, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2892r = n1292r - n2888r;
     const V n2892i = n1292i - n2888i;
@@ -34324,8 +33844,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2883r, n2883i * w2r);
         const V x3r = simd::fnmadd(w3i, n2892i, n2892r * w3r);
         const V x3i = simd::fma(w3i, n2892r, n2892i * w3r);
-        simd::store_transposed(outb + t * 512 + 464, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 468, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 464, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2896r = n2893r - n2894r;
     const V n2896i = n2893i - n2894i;
@@ -34363,6 +33882,11 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2909i = n1310i + n2906i;
     const V n2910r = n1310r - n2906r;
     const V n2910i = n1310i - n2906i;
+    const V n2914r = n2911r - n2912r;
+    const V n2914i = n2911i - n2912i;
+    const V n2913r = n2911r + n2912r;
+    const V n2913i = n2911i + n2912i;
+    const V n2915r = n2914i;
     sp[0] = n2898i;
     sp[1] = n2898r;
     sp[2] = n2899i;
@@ -34375,10 +33899,14 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     sp[9] = n2908r;
     sp[10] = n2909i;
     sp[11] = n2909r;
-    sp[12] = n2901i;
-    sp[13] = n2901r;
-    sp[14] = n2910i;
-    sp[15] = n2910r;
+    sp[12] = n2913i;
+    sp[13] = n2913r;
+    sp[14] = n2914r;
+    sp[15] = n2915r;
+    sp[16] = n2901i;
+    sp[17] = n2901r;
+    sp[18] = n2910i;
+    sp[19] = n2910r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
 template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_part53([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
@@ -34402,8 +33930,10 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2908r = sp[9];
     const V n2909i = sp[10];
     const V n2909r = sp[11];
-    const V n2912i = sp[150];
-    const V n2912r = sp[151];
+    const V n2913i = sp[12];
+    const V n2913r = sp[13];
+    const V n2914r = sp[14];
+    const V n2915r = sp[15];
     const V n2921i = sp[172];
     const V n2921r = sp[173];
     const V n1315i = sp[244];
@@ -34414,15 +33944,8 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n757r = sp[249];
     const V n766i = sp[250];
     const V n766r = sp[251];
-    const V n2911i = sp[430];
-    const V n2911r = sp[431];
     const V n2920i = sp[432];
     const V n2920r = sp[433];
-    const V n2914r = n2911r - n2912r;
-    const V n2914i = n2911i - n2912i;
-    const V n2913r = n2911r + n2912r;
-    const V n2913i = n2911i + n2912i;
-    const V n2915r = n2914i;
     const V n2915i = V(0.0) - n2914r;
     const V n1318r = n757r + n1315r;
     const V n1318i = n757i + n1315i;
@@ -34481,8 +34004,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2916r, n2916i * w2r);
         const V x3r = simd::fnmadd(w3i, n2925i, n2925r * w3r);
         const V x3i = simd::fma(w3i, n2925r, n2925i * w3r);
-        simd::store_transposed(outb + t * 512 + 88, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 92, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 88, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2926r = n1327r - n2922r;
     const V n2926i = n1327i - n2922i;
@@ -34519,8 +34041,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2917r, n2917i * w2r);
         const V x3r = simd::fnmadd(w3i, n2926i, n2926r * w3r);
         const V x3i = simd::fma(w3i, n2926r, n2926i * w3r);
-        simd::store_transposed(outb + t * 512 + 344, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 348, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 344, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2927r = n1328r + n2924r;
     const V n2927i = n1328i + n2924i;
@@ -34557,8 +34078,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2918r, n2918i * w2r);
         const V x3r = simd::fnmadd(w3i, n2927i, n2927r * w3r);
         const V x3i = simd::fma(w3i, n2927r, n2927i * w3r);
-        simd::store_transposed(outb + t * 512 + 216, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 220, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 216, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2928r = n1328r - n2924r;
     const V n2928i = n1328i - n2924i;
@@ -34581,10 +34101,10 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2919r = sp[1];
     const V n2928i = sp[2];
     const V n2928r = sp[3];
-    const V n2901i = sp[12];
-    const V n2901r = sp[13];
-    const V n2910i = sp[14];
-    const V n2910r = sp[15];
+    const V n2901i = sp[16];
+    const V n2901r = sp[17];
+    const V n2910i = sp[18];
+    const V n2910r = sp[19];
     const V n1333i = sp[252];
     const V n1333r = sp[253];
     const V n1342i = sp[284];
@@ -34650,8 +34170,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2919r, n2919i * w2r);
         const V x3r = simd::fnmadd(w3i, n2928i, n2928r * w3r);
         const V x3i = simd::fma(w3i, n2928r, n2928i * w3r);
-        simd::store_transposed(outb + t * 512 + 472, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 476, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 472, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2932r = n2929r - n2930r;
     const V n2932i = n2929i - n2930i;
@@ -34752,8 +34271,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2952r, n2952i * w2r);
         const V x3r = simd::fnmadd(w3i, n2961i, n2961r * w3r);
         const V x3i = simd::fma(w3i, n2961r, n2961i * w3r);
-        simd::store_transposed(outb + t * 512 + 96, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 100, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 96, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2962r = n1363r - n2958r;
     const V n2962i = n1363i - n2958i;
@@ -34832,6 +34350,10 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2965r = sp[413];
     const V n2974i = sp[414];
     const V n2974r = sp[415];
+    const V n2983i = sp[416];
+    const V n2983r = sp[417];
+    const V n2984i = sp[474];
+    const V n2984r = sp[475];
     {
         const V h0r = V(hir[176 * uhc + uh]);
         const V h0i = V(hii[176 * uhc + uh]);
@@ -34865,8 +34387,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2953r, n2953i * w2r);
         const V x3r = simd::fnmadd(w3i, n2962i, n2962r * w3r);
         const V x3i = simd::fma(w3i, n2962r, n2962i * w3r);
-        simd::store_transposed(outb + t * 512 + 352, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 356, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 352, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2963r = n1364r + n2960r;
     const V n2963i = n1364i + n2960i;
@@ -34903,8 +34424,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2954r, n2954i * w2r);
         const V x3r = simd::fnmadd(w3i, n2963i, n2963r * w3r);
         const V x3i = simd::fma(w3i, n2963r, n2963i * w3r);
-        simd::store_transposed(outb + t * 512 + 224, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 228, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 224, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2964r = n1364r - n2960r;
     const V n2964i = n1364i - n2960i;
@@ -34941,8 +34461,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2955r, n2955i * w2r);
         const V x3r = simd::fnmadd(w3i, n2964i, n2964r * w3r);
         const V x3i = simd::fma(w3i, n2964r, n2964i * w3r);
-        simd::store_transposed(outb + t * 512 + 480, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 484, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 480, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2968r = n2965r - n2966r;
     const V n2968i = n2965i - n2966i;
@@ -34980,6 +34499,11 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2981i = n1382i + n2978i;
     const V n2982r = n1382r - n2978r;
     const V n2982i = n1382i - n2978i;
+    const V n2986r = n2983r - n2984r;
+    const V n2986i = n2983i - n2984i;
+    const V n2985r = n2983r + n2984r;
+    const V n2985i = n2983i + n2984i;
+    const V n2987r = n2986i;
     sp[0] = n2970i;
     sp[1] = n2970r;
     sp[2] = n2971i;
@@ -34992,10 +34516,14 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     sp[9] = n2980r;
     sp[10] = n2981i;
     sp[11] = n2981r;
-    sp[12] = n2973i;
-    sp[13] = n2973r;
-    sp[14] = n2982i;
-    sp[15] = n2982r;
+    sp[12] = n2985i;
+    sp[13] = n2985r;
+    sp[14] = n2986r;
+    sp[15] = n2987r;
+    sp[16] = n2973i;
+    sp[17] = n2973r;
+    sp[18] = n2982i;
+    sp[19] = n2982r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
 template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_part56([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
@@ -35019,27 +34547,22 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2980r = sp[9];
     const V n2981i = sp[10];
     const V n2981r = sp[11];
+    const V n2985i = sp[12];
+    const V n2985r = sp[13];
+    const V n2986r = sp[14];
+    const V n2987r = sp[15];
     const V n1396i = sp[340];
     const V n1396r = sp[341];
     const V n696i = sp[342];
     const V n696r = sp[343];
-    const V n2983i = sp[416];
-    const V n2983r = sp[417];
     const V n2992i = sp[418];
     const V n2992r = sp[419];
     const V n1387i = sp[436];
     const V n1387r = sp[437];
-    const V n2984i = sp[474];
-    const V n2984r = sp[475];
     const V n2993i = sp[476];
     const V n2993r = sp[477];
     const V n687i = sp[488];
     const V n687r = sp[489];
-    const V n2986r = n2983r - n2984r;
-    const V n2986i = n2983i - n2984i;
-    const V n2985r = n2983r + n2984r;
-    const V n2985i = n2983i + n2984i;
-    const V n2987r = n2986i;
     const V n2987i = V(0.0) - n2986r;
     const V n1390r = n687r + n1387r;
     const V n1390i = n687i + n1387i;
@@ -35098,8 +34621,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2988r, n2988i * w2r);
         const V x3r = simd::fnmadd(w3i, n2997i, n2997r * w3r);
         const V x3i = simd::fma(w3i, n2997r, n2997i * w3r);
-        simd::store_transposed(outb + t * 512 + 104, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 108, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 104, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2998r = n1399r - n2994r;
     const V n2998i = n1399i - n2994i;
@@ -35136,8 +34658,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2989r, n2989i * w2r);
         const V x3r = simd::fnmadd(w3i, n2998i, n2998r * w3r);
         const V x3i = simd::fma(w3i, n2998r, n2998i * w3r);
-        simd::store_transposed(outb + t * 512 + 360, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 364, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 360, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n2999r = n1400r + n2996r;
     const V n2999i = n1400i + n2996i;
@@ -35174,8 +34695,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2990r, n2990i * w2r);
         const V x3r = simd::fnmadd(w3i, n2999i, n2999r * w3r);
         const V x3i = simd::fma(w3i, n2999r, n2999i * w3r);
-        simd::store_transposed(outb + t * 512 + 232, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 236, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 232, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n3000r = n1400r - n2996r;
     const V n3000i = n1400i - n2996i;
@@ -35198,10 +34718,10 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n2991r = sp[1];
     const V n3000i = sp[2];
     const V n3000r = sp[3];
-    const V n2973i = sp[12];
-    const V n2973r = sp[13];
-    const V n2982i = sp[14];
-    const V n2982r = sp[15];
+    const V n2973i = sp[16];
+    const V n2973r = sp[17];
+    const V n2982i = sp[18];
+    const V n2982r = sp[19];
     const V n1405i = sp[384];
     const V n1405r = sp[385];
     const V n1414i = sp[386];
@@ -35267,8 +34787,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n2991r, n2991i * w2r);
         const V x3r = simd::fnmadd(w3i, n3000i, n3000r * w3r);
         const V x3i = simd::fma(w3i, n3000r, n3000i * w3r);
-        simd::store_transposed(outb + t * 512 + 488, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 492, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 488, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n3004r = n3001r - n3002r;
     const V n3004i = n3001i - n3002i;
@@ -35369,8 +34888,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n3024r, n3024i * w2r);
         const V x3r = simd::fnmadd(w3i, n3033i, n3033r * w3r);
         const V x3i = simd::fma(w3i, n3033r, n3033i * w3r);
-        simd::store_transposed(outb + t * 512 + 112, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 116, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 112, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n3034r = n1435r - n3030r;
     const V n3034i = n1435i - n3030i;
@@ -35433,6 +34951,8 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n3032r = sp[21];
     const V n3034i = sp[22];
     const V n3034r = sp[23];
+    const V n3056i = sp[174];
+    const V n3056r = sp[175];
     const V n3037i = sp[434];
     const V n3037r = sp[435];
     const V n1441i = sp[460];
@@ -35449,6 +34969,8 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n3038r = sp[493];
     const V n3047i = sp[494];
     const V n3047r = sp[495];
+    const V n3055i = sp[504];
+    const V n3055r = sp[505];
     {
         const V h0r = V(hir[184 * uhc + uh]);
         const V h0i = V(hii[184 * uhc + uh]);
@@ -35482,8 +35004,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n3025r, n3025i * w2r);
         const V x3r = simd::fnmadd(w3i, n3034i, n3034r * w3r);
         const V x3i = simd::fma(w3i, n3034r, n3034i * w3r);
-        simd::store_transposed(outb + t * 512 + 368, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 372, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 368, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n3035r = n1436r + n3032r;
     const V n3035i = n1436i + n3032i;
@@ -35520,8 +35041,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n3026r, n3026i * w2r);
         const V x3r = simd::fnmadd(w3i, n3035i, n3035r * w3r);
         const V x3i = simd::fma(w3i, n3035r, n3035i * w3r);
-        simd::store_transposed(outb + t * 512 + 240, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 244, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 240, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n3036r = n1436r - n3032r;
     const V n3036i = n1436i - n3032i;
@@ -35558,8 +35078,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n3027r, n3027i * w2r);
         const V x3r = simd::fnmadd(w3i, n3036i, n3036r * w3r);
         const V x3i = simd::fma(w3i, n3036r, n3036i * w3r);
-        simd::store_transposed(outb + t * 512 + 496, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 500, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 496, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n3040r = n3037r - n3038r;
     const V n3040i = n3037i - n3038i;
@@ -35597,6 +35116,11 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n3053i = n1454i + n3050i;
     const V n3054r = n1454r - n3050r;
     const V n3054i = n1454i - n3050i;
+    const V n3058r = n3055r - n3056r;
+    const V n3058i = n3055i - n3056i;
+    const V n3057r = n3055r + n3056r;
+    const V n3057i = n3055i + n3056i;
+    const V n3059r = n3058i;
     sp[0] = n3042i;
     sp[1] = n3042r;
     sp[2] = n3043i;
@@ -35609,10 +35133,14 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     sp[9] = n3052r;
     sp[10] = n3053i;
     sp[11] = n3053r;
-    sp[12] = n3045i;
-    sp[13] = n3045r;
-    sp[14] = n3054i;
-    sp[15] = n3054r;
+    sp[12] = n3057i;
+    sp[13] = n3057r;
+    sp[14] = n3058r;
+    sp[15] = n3059r;
+    sp[16] = n3045i;
+    sp[17] = n3045r;
+    sp[18] = n3054i;
+    sp[19] = n3054r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
 template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_part59([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
@@ -35636,27 +35164,22 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n3052r = sp[9];
     const V n3053i = sp[10];
     const V n3053r = sp[11];
-    const V n3056i = sp[174];
-    const V n3056r = sp[175];
+    const V n3057i = sp[12];
+    const V n3057r = sp[13];
+    const V n3058r = sp[14];
+    const V n3059r = sp[15];
     const V n3065i = sp[176];
     const V n3065r = sp[177];
     const V n1459i = sp[490];
     const V n1459r = sp[491];
     const V n1468i = sp[500];
     const V n1468r = sp[501];
-    const V n3055i = sp[504];
-    const V n3055r = sp[505];
     const V n3064i = sp[506];
     const V n3064r = sp[507];
     const V n759i = sp[508];
     const V n759r = sp[509];
     const V n768i = sp[510];
     const V n768r = sp[511];
-    const V n3058r = n3055r - n3056r;
-    const V n3058i = n3055i - n3056i;
-    const V n3057r = n3055r + n3056r;
-    const V n3057i = n3055i + n3056i;
-    const V n3059r = n3058i;
     const V n3059i = V(0.0) - n3058r;
     const V n1462r = n759r + n1459r;
     const V n1462i = n759i + n1459i;
@@ -35715,8 +35238,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n3060r, n3060i * w2r);
         const V x3r = simd::fnmadd(w3i, n3069i, n3069r * w3r);
         const V x3i = simd::fma(w3i, n3069r, n3069i * w3r);
-        simd::store_transposed(outb + t * 512 + 120, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 124, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 120, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n3070r = n1471r - n3066r;
     const V n3070i = n1471i - n3066i;
@@ -35753,8 +35275,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n3061r, n3061i * w2r);
         const V x3r = simd::fnmadd(w3i, n3070i, n3070r * w3r);
         const V x3i = simd::fma(w3i, n3070r, n3070i * w3r);
-        simd::store_transposed(outb + t * 512 + 376, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 380, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 376, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n3071r = n1472r + n3068r;
     const V n3071i = n1472i + n3068i;
@@ -35791,8 +35312,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n3062r, n3062i * w2r);
         const V x3r = simd::fnmadd(w3i, n3071i, n3071r * w3r);
         const V x3i = simd::fma(w3i, n3071r, n3071i * w3r);
-        simd::store_transposed(outb + t * 512 + 248, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 252, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 248, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
     const V n3072r = n1472r - n3068r;
     const V n3072i = n1472i - n3068i;
@@ -35815,10 +35335,10 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
     const V n3063r = sp[1];
     const V n3072i = sp[2];
     const V n3072r = sp[3];
-    const V n3045i = sp[12];
-    const V n3045r = sp[13];
-    const V n3054i = sp[14];
-    const V n3054r = sp[15];
+    const V n3045i = sp[16];
+    const V n3045r = sp[17];
+    const V n3054i = sp[18];
+    const V n3054r = sp[19];
     {
         const V h0r = V(hir[252 * uhc + uh]);
         const V h0i = V(hii[252 * uhc + uh]);
@@ -35852,8 +35372,7 @@ template <typename V> CRD_NOINLINE static void codelet256_stage1_fused_sh_csf_pa
         const V x2i = simd::fma(w2i, n3063r, n3063i * w2r);
         const V x3r = simd::fnmadd(w3i, n3072i, n3072r * w3r);
         const V x3i = simd::fma(w3i, n3072r, n3072i * w3r);
-        simd::store_transposed(outb + t * 512 + 504, 512, x0r, x1r, x2r, x3r);
-        simd::store_transposed(outb + t * 512 + 508, 512, x0i, x1i, x2i, x3i);
+        simd::store_transposed<true>(outb + t * 512 + 504, 512, x0r, x1r, x2r, x3r, x0i, x1i, x2i, x3i);
     }
 }
 // N1=256 FACTORED-TWIDDLE stage-1 (L1-resident hi/lo tables) (f64). GENERATED.
@@ -36002,9 +35521,8 @@ void codelet256_stage1_fused_sh_csf(const crd::hesap::Complex<crd::f64>* in,
     }
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet16_fused_notr_ss_part0([[maybe_unused]] const crd::f64* inb,
-    [[maybe_unused]] crd::f64* outb, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::u32 ash,
-    [[maybe_unused]] const crd::f64* twr, [[maybe_unused]] const crd::f64* twi, [[maybe_unused]] crd::usize t,
+template <typename V> CRD_NOINLINE static void codelet32_batched_sc_part0([[maybe_unused]] const crd::f64* inb,
+    [[maybe_unused]] crd::hesap::Complex<crd::f64>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
     V* sp) noexcept
 {
     namespace simd = crd::hesap::fft::lanes;
@@ -36041,397 +35559,781 @@ template <typename V> CRD_NOINLINE static void codelet16_fused_notr_ss_part0([[m
     V n14i; simd::load_block(inb + 14 * b2, t, n14r, n14i);
     V n15r;
     V n15i; simd::load_block(inb + 15 * b2, t, n15r, n15i);
-    const V n16r = n0r + n8r;
-    const V n16i = n0i + n8i;
-    const V n17r = n0r - n8r;
-    const V n17i = n0i - n8i;
-    const V n18r = n4r + n12r;
-    const V n18i = n4i + n12i;
-    const V n19r = n4r - n12r;
-    const V n19i = n4i - n12i;
-    const V n20r = n19i;
-    const V n20i = V(0.0) - n19r;
-    const V n21r = n16r + n18r;
-    const V n21i = n16i + n18i;
-    const V n22r = n16r - n18r;
-    const V n22i = n16i - n18i;
-    const V n23r = n17r + n20r;
-    const V n23i = n17i + n20i;
-    const V n24r = n17r - n20r;
-    const V n24i = n17i - n20i;
-    const V n25r = n2r + n10r;
-    const V n25i = n2i + n10i;
-    const V n26r = n2r - n10r;
-    const V n26i = n2i - n10i;
-    const V n36r = simd::fnmadd(V(-0.7071067811865475), n26i, V(0.7071067811865476) * n26r);
-    const V n36i = simd::fma(V(-0.7071067811865475), n26r, V(0.7071067811865476) * n26i);
-    const V n27r = n6r + n14r;
-    const V n27i = n6i + n14i;
-    const V n28r = n6r - n14r;
-    const V n28i = n6i - n14i;
-    const V n37r = simd::fnmadd(V(-0.7071067811865476), n28i, V(-0.7071067811865475) * n28r);
-    const V n37i = simd::fma(V(-0.7071067811865476), n28r, V(-0.7071067811865475) * n28i);
-    const V n29r = n25r + n27r;
-    const V n29i = n25i + n27i;
-    const V n30r = n25r - n27r;
-    const V n30i = n25i - n27i;
-    const V n31r = n30i;
-    const V n31i = V(0.0) - n30r;
-    const V n32r = n21r + n29r;
-    const V n32i = n21i + n29i;
-    const V n33r = n21r - n29r;
-    const V n33i = n21i - n29i;
-    const V n34r = n22r + n31r;
-    const V n34i = n22i + n31i;
-    const V n35r = n22r - n31r;
-    const V n35i = n22i - n31i;
-    const V n38r = n36r + n37r;
-    const V n38i = n36i + n37i;
-    const V n39r = n36r - n37r;
-    const V n39i = n36i - n37i;
-    const V n40r = n39i;
-    const V n40i = V(0.0) - n39r;
-    const V n41r = n23r + n38r;
-    const V n41i = n23i + n38i;
-    const V n42r = n23r - n38r;
-    const V n42i = n23i - n38i;
-    const V n43r = n24r + n40r;
-    const V n43i = n24i + n40i;
-    const V n44r = n24r - n40r;
-    const V n44i = n24i - n40i;
-    const V n45r = n1r + n9r;
-    const V n45i = n1i + n9i;
-    const V n46r = n1r - n9r;
-    const V n46i = n1i - n9i;
-    const V n47r = n5r + n13r;
-    const V n47i = n5i + n13i;
-    const V n48r = n5r - n13r;
-    const V n48i = n5i - n13i;
-    const V n49r = n48i;
-    const V n49i = V(0.0) - n48r;
-    const V n50r = n45r + n47r;
-    const V n50i = n45i + n47i;
-    const V n51r = n45r - n47r;
-    const V n51i = n45i - n47i;
-    const V n79r = simd::fnmadd(V(-0.7071067811865475), n51i, V(0.7071067811865476) * n51r);
-    const V n79i = simd::fma(V(-0.7071067811865475), n51r, V(0.7071067811865476) * n51i);
-    const V n52r = n46r + n49r;
-    const V n52i = n46i + n49i;
-    const V n53r = n46r - n49r;
-    const V n53i = n46i - n49i;
-    const V n70r = simd::fnmadd(V(-0.3826834323650898), n52i, V(0.9238795325112867) * n52r);
-    const V n70i = simd::fma(V(-0.3826834323650898), n52r, V(0.9238795325112867) * n52i);
-    const V n88r = simd::fnmadd(V(-0.9238795325112867), n53i, V(0.38268343236508984) * n53r);
-    const V n88i = simd::fma(V(-0.9238795325112867), n53r, V(0.38268343236508984) * n53i);
-    const V n54r = n3r + n11r;
-    const V n54i = n3i + n11i;
-    const V n55r = n3r - n11r;
-    const V n55i = n3i - n11i;
-    const V n56r = n7r + n15r;
-    const V n56i = n7i + n15i;
-    const V n57r = n7r - n15r;
-    const V n57i = n7i - n15i;
-    const V n58r = n57i;
-    const V n58i = V(0.0) - n57r;
-    const V n59r = n54r + n56r;
-    const V n59i = n54i + n56i;
-    const V n60r = n54r - n56r;
-    const V n60i = n54i - n56i;
-    const V n80r = simd::fnmadd(V(-0.7071067811865476), n60i, V(-0.7071067811865475) * n60r);
-    const V n80i = simd::fma(V(-0.7071067811865476), n60r, V(-0.7071067811865475) * n60i);
-    const V n61r = n55r + n58r;
-    const V n61i = n55i + n58i;
-    const V n62r = n55r - n58r;
-    const V n62i = n55i - n58i;
-    const V n71r = simd::fnmadd(V(-0.9238795325112867), n61i, V(0.38268343236508984) * n61r);
-    const V n71i = simd::fma(V(-0.9238795325112867), n61r, V(0.38268343236508984) * n61i);
-    const V n89r = simd::fnmadd(V(0.38268343236508967), n62i, V(-0.9238795325112868) * n62r);
-    const V n89i = simd::fma(V(0.38268343236508967), n62r, V(-0.9238795325112868) * n62i);
-    const V n63r = n50r + n59r;
-    const V n63i = n50i + n59i;
-    const V n64r = n50r - n59r;
-    const V n64i = n50i - n59i;
+    V n16r;
+    V n16i; simd::load_block(inb + 16 * b2, t, n16r, n16i);
+    V n17r;
+    V n17i; simd::load_block(inb + 17 * b2, t, n17r, n17i);
+    V n18r;
+    V n18i; simd::load_block(inb + 18 * b2, t, n18r, n18i);
+    V n19r;
+    V n19i; simd::load_block(inb + 19 * b2, t, n19r, n19i);
+    V n20r;
+    V n20i; simd::load_block(inb + 20 * b2, t, n20r, n20i);
+    V n21r;
+    V n21i; simd::load_block(inb + 21 * b2, t, n21r, n21i);
+    V n22r;
+    V n22i; simd::load_block(inb + 22 * b2, t, n22r, n22i);
+    V n23r;
+    V n23i; simd::load_block(inb + 23 * b2, t, n23r, n23i);
+    V n24r;
+    V n24i; simd::load_block(inb + 24 * b2, t, n24r, n24i);
+    V n25r;
+    V n25i; simd::load_block(inb + 25 * b2, t, n25r, n25i);
+    V n26r;
+    V n26i; simd::load_block(inb + 26 * b2, t, n26r, n26i);
+    V n27r;
+    V n27i; simd::load_block(inb + 27 * b2, t, n27r, n27i);
+    V n28r;
+    V n28i; simd::load_block(inb + 28 * b2, t, n28r, n28i);
+    V n29r;
+    V n29i; simd::load_block(inb + 29 * b2, t, n29r, n29i);
+    V n30r;
+    V n30i; simd::load_block(inb + 30 * b2, t, n30r, n30i);
+    V n31r;
+    V n31i; simd::load_block(inb + 31 * b2, t, n31r, n31i);
+    const V n32r = n0r + n16r;
+    const V n32i = n0i + n16i;
+    const V n33r = n0r - n16r;
+    const V n33i = n0i - n16i;
+    const V n34r = n8r + n24r;
+    const V n34i = n8i + n24i;
+    const V n35r = n8r - n24r;
+    const V n35i = n8i - n24i;
+    const V n36r = n35i;
+    const V n36i = V(0.0) - n35r;
+    const V n37r = n32r + n34r;
+    const V n37i = n32i + n34i;
+    const V n38r = n32r - n34r;
+    const V n38i = n32i - n34i;
+    const V n39r = n33r + n36r;
+    const V n39i = n33i + n36i;
+    const V n40r = n33r - n36r;
+    const V n40i = n33i - n36i;
+    const V n41r = n4r + n20r;
+    const V n41i = n4i + n20i;
+    const V n42r = n4r - n20r;
+    const V n42i = n4i - n20i;
+    const V n52r = simd::fnmadd(V(-0.7071067811865475), n42i, V(0.7071067811865476) * n42r);
+    const V n52i = simd::fma(V(-0.7071067811865475), n42r, V(0.7071067811865476) * n42i);
+    const V n43r = n12r + n28r;
+    const V n43i = n12i + n28i;
+    const V n44r = n12r - n28r;
+    const V n44i = n12i - n28i;
+    const V n53r = simd::fnmadd(V(-0.7071067811865476), n44i, V(-0.7071067811865475) * n44r);
+    const V n53i = simd::fma(V(-0.7071067811865476), n44r, V(-0.7071067811865475) * n44i);
+    const V n45r = n41r + n43r;
+    const V n45i = n41i + n43i;
+    const V n46r = n41r - n43r;
+    const V n46i = n41i - n43i;
+    const V n47r = n46i;
+    const V n47i = V(0.0) - n46r;
+    const V n48r = n37r + n45r;
+    const V n48i = n37i + n45i;
+    const V n49r = n37r - n45r;
+    const V n49i = n37i - n45i;
+    const V n50r = n38r + n47r;
+    const V n50i = n38i + n47i;
+    const V n51r = n38r - n47r;
+    const V n51i = n38i - n47i;
+    const V n54r = n52r + n53r;
+    const V n54i = n52i + n53i;
+    const V n55r = n52r - n53r;
+    const V n55i = n52i - n53i;
+    const V n56r = n55i;
+    const V n56i = V(0.0) - n55r;
+    const V n57r = n39r + n54r;
+    const V n57i = n39i + n54i;
+    const V n58r = n39r - n54r;
+    const V n58i = n39i - n54i;
+    const V n59r = n40r + n56r;
+    const V n59i = n40i + n56i;
+    const V n60r = n40r - n56r;
+    const V n60i = n40i - n56i;
+    const V n61r = n2r + n18r;
+    const V n61i = n2i + n18i;
+    const V n62r = n2r - n18r;
+    const V n62i = n2i - n18i;
+    const V n63r = n10r + n26r;
+    const V n63i = n10i + n26i;
+    const V n64r = n10r - n26r;
+    const V n64i = n10i - n26i;
     const V n65r = n64i;
     const V n65i = V(0.0) - n64r;
-    sp[0] = n32i;
-    sp[1] = n32r;
-    sp[2] = n33i;
-    sp[3] = n33r;
-    sp[4] = n34i;
-    sp[5] = n34r;
-    sp[6] = n35i;
-    sp[7] = n35r;
-    sp[8] = n41i;
-    sp[9] = n41r;
-    sp[10] = n42i;
-    sp[11] = n42r;
-    sp[12] = n43i;
-    sp[13] = n43r;
-    sp[14] = n63i;
-    sp[15] = n63r;
-    sp[16] = n65i;
-    sp[17] = n65r;
-    sp[18] = n70i;
-    sp[19] = n70r;
-    sp[20] = n71i;
-    sp[21] = n71r;
-    sp[22] = n79i;
-    sp[23] = n79r;
-    sp[24] = n80i;
-    sp[25] = n80r;
-    sp[26] = n88i;
-    sp[27] = n88r;
-    sp[28] = n89i;
-    sp[29] = n89r;
-    sp[30] = n44i;
-    sp[31] = n44r;
+    const V n66r = n61r + n63r;
+    const V n66i = n61i + n63i;
+    const V n67r = n61r - n63r;
+    const V n67i = n61i - n63i;
+    const V n95r = simd::fnmadd(V(-0.7071067811865475), n67i, V(0.7071067811865476) * n67r);
+    const V n95i = simd::fma(V(-0.7071067811865475), n67r, V(0.7071067811865476) * n67i);
+    const V n68r = n62r + n65r;
+    const V n68i = n62i + n65i;
+    const V n69r = n62r - n65r;
+    const V n69i = n62i - n65i;
+    const V n86r = simd::fnmadd(V(-0.3826834323650898), n68i, V(0.9238795325112867) * n68r);
+    const V n86i = simd::fma(V(-0.3826834323650898), n68r, V(0.9238795325112867) * n68i);
+    const V n104r = simd::fnmadd(V(-0.9238795325112867), n69i, V(0.38268343236508984) * n69r);
+    const V n104i = simd::fma(V(-0.9238795325112867), n69r, V(0.38268343236508984) * n69i);
+    const V n70r = n6r + n22r;
+    const V n70i = n6i + n22i;
+    const V n71r = n6r - n22r;
+    const V n71i = n6i - n22i;
+    sp[0] = n104i;
+    sp[1] = n104r;
+    sp[2] = n13i;
+    sp[3] = n13r;
+    sp[4] = n14i;
+    sp[5] = n14r;
+    sp[6] = n17i;
+    sp[7] = n17r;
+    sp[8] = n1i;
+    sp[9] = n1r;
+    sp[10] = n21i;
+    sp[11] = n21r;
+    sp[12] = n25i;
+    sp[13] = n25r;
+    sp[14] = n29i;
+    sp[15] = n29r;
+    sp[16] = n30i;
+    sp[17] = n30r;
+    sp[18] = n48i;
+    sp[19] = n48r;
+    sp[20] = n49i;
+    sp[21] = n49r;
+    sp[22] = n50i;
+    sp[23] = n50r;
+    sp[24] = n51i;
+    sp[25] = n51r;
+    sp[26] = n57i;
+    sp[27] = n57r;
+    sp[28] = n58i;
+    sp[29] = n58r;
+    sp[30] = n59i;
+    sp[31] = n59r;
+    sp[32] = n5i;
+    sp[33] = n5r;
+    sp[34] = n60i;
+    sp[35] = n60r;
+    sp[36] = n66i;
+    sp[37] = n66r;
+    sp[38] = n70i;
+    sp[39] = n70r;
+    sp[40] = n71i;
+    sp[41] = n71r;
+    sp[42] = n86i;
+    sp[43] = n86r;
+    sp[44] = n95i;
+    sp[45] = n95r;
+    sp[46] = n9i;
+    sp[47] = n9r;
+    sp[48] = n11i;
+    sp[49] = n11r;
+    sp[50] = n15i;
+    sp[51] = n15r;
+    sp[52] = n19i;
+    sp[53] = n19r;
+    sp[54] = n23i;
+    sp[55] = n23r;
+    sp[56] = n27i;
+    sp[57] = n27r;
+    sp[58] = n31i;
+    sp[59] = n31r;
+    sp[60] = n3i;
+    sp[61] = n3r;
+    sp[62] = n7i;
+    sp[63] = n7r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet16_fused_notr_ss_part1([[maybe_unused]] const crd::f64* inb,
-    [[maybe_unused]] crd::f64* outb, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::u32 ash,
-    [[maybe_unused]] const crd::f64* twr, [[maybe_unused]] const crd::f64* twi, [[maybe_unused]] crd::usize t,
+template <typename V> CRD_NOINLINE static void codelet32_batched_sc_part1([[maybe_unused]] const crd::f64* inb,
+    [[maybe_unused]] crd::hesap::Complex<crd::f64>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
     V* sp) noexcept
 {
     namespace simd = crd::hesap::fft::lanes;
-    const crd::usize vc = b >> ash;
-    const crd::usize b2 = 2 * b;
-    const crd::usize v = t >> ash;
-    const V n32i = sp[0];
-    const V n32r = sp[1];
-    const V n33i = sp[2];
-    const V n33r = sp[3];
-    const V n34i = sp[4];
-    const V n34r = sp[5];
-    const V n35i = sp[6];
-    const V n35r = sp[7];
-    const V n41i = sp[8];
-    const V n41r = sp[9];
-    const V n42i = sp[10];
-    const V n42r = sp[11];
-    const V n43i = sp[12];
-    const V n43r = sp[13];
-    const V n63i = sp[14];
-    const V n63r = sp[15];
-    const V n65i = sp[16];
-    const V n65r = sp[17];
-    const V n70i = sp[18];
-    const V n70r = sp[19];
-    const V n71i = sp[20];
-    const V n71r = sp[21];
-    const V n79i = sp[22];
-    const V n79r = sp[23];
-    const V n80i = sp[24];
-    const V n80r = sp[25];
-    const V n88i = sp[26];
-    const V n88r = sp[27];
-    const V n89i = sp[28];
-    const V n89r = sp[29];
-    const V n66r = n32r + n63r;
-    const V n66i = n32i + n63i;
-    {
-        const V wr = V(twr[0 * vc + v]);
-        const V wi = V(twi[0 * vc + v]);
-        const V xr = simd::fnmadd(wi, n66i, n66r * wr);
-        const V xi = simd::fma(wi, n66r, n66i * wr);
-        simd::store_block(outb + 0 * b2, t, xr, xi);
-    }
-    const V n67r = n32r - n63r;
-    const V n67i = n32i - n63i;
-    {
-        const V wr = V(twr[8 * vc + v]);
-        const V wi = V(twi[8 * vc + v]);
-        const V xr = simd::fnmadd(wi, n67i, n67r * wr);
-        const V xi = simd::fma(wi, n67r, n67i * wr);
-        simd::store_block(outb + 8 * b2, t, xr, xi);
-    }
-    const V n68r = n33r + n65r;
-    const V n68i = n33i + n65i;
-    {
-        const V wr = V(twr[4 * vc + v]);
-        const V wi = V(twi[4 * vc + v]);
-        const V xr = simd::fnmadd(wi, n68i, n68r * wr);
-        const V xi = simd::fma(wi, n68r, n68i * wr);
-        simd::store_block(outb + 4 * b2, t, xr, xi);
-    }
-    const V n69r = n33r - n65r;
-    const V n69i = n33i - n65i;
-    {
-        const V wr = V(twr[12 * vc + v]);
-        const V wi = V(twi[12 * vc + v]);
-        const V xr = simd::fnmadd(wi, n69i, n69r * wr);
-        const V xi = simd::fma(wi, n69r, n69i * wr);
-        simd::store_block(outb + 12 * b2, t, xr, xi);
-    }
-    const V n72r = n70r + n71r;
-    const V n72i = n70i + n71i;
-    const V n73r = n70r - n71r;
-    const V n73i = n70i - n71i;
+    const V n104i = sp[0];
+    const V n104r = sp[1];
+    const V n13i = sp[2];
+    const V n13r = sp[3];
+    const V n14i = sp[4];
+    const V n14r = sp[5];
+    const V n17i = sp[6];
+    const V n17r = sp[7];
+    const V n1i = sp[8];
+    const V n1r = sp[9];
+    const V n21i = sp[10];
+    const V n21r = sp[11];
+    const V n25i = sp[12];
+    const V n25r = sp[13];
+    const V n29i = sp[14];
+    const V n29r = sp[15];
+    const V n30i = sp[16];
+    const V n30r = sp[17];
+    const V n48i = sp[18];
+    const V n48r = sp[19];
+    const V n49i = sp[20];
+    const V n49r = sp[21];
+    const V n50i = sp[22];
+    const V n50r = sp[23];
+    const V n51i = sp[24];
+    const V n51r = sp[25];
+    const V n57i = sp[26];
+    const V n57r = sp[27];
+    const V n58i = sp[28];
+    const V n58r = sp[29];
+    const V n59i = sp[30];
+    const V n59r = sp[31];
+    const V n5i = sp[32];
+    const V n5r = sp[33];
+    const V n60i = sp[34];
+    const V n60r = sp[35];
+    const V n66i = sp[36];
+    const V n66r = sp[37];
+    const V n70i = sp[38];
+    const V n70r = sp[39];
+    const V n71i = sp[40];
+    const V n71r = sp[41];
+    const V n86i = sp[42];
+    const V n86r = sp[43];
+    const V n95i = sp[44];
+    const V n95r = sp[45];
+    const V n9i = sp[46];
+    const V n9r = sp[47];
+    const V n72r = n14r + n30r;
+    const V n72i = n14i + n30i;
+    const V n73r = n14r - n30r;
+    const V n73i = n14i - n30i;
     const V n74r = n73i;
     const V n74i = V(0.0) - n73r;
-    const V n75r = n41r + n72r;
-    const V n75i = n41i + n72i;
-    {
-        const V wr = V(twr[1 * vc + v]);
-        const V wi = V(twi[1 * vc + v]);
-        const V xr = simd::fnmadd(wi, n75i, n75r * wr);
-        const V xi = simd::fma(wi, n75r, n75i * wr);
-        simd::store_block(outb + 1 * b2, t, xr, xi);
-    }
-    const V n76r = n41r - n72r;
-    const V n76i = n41i - n72i;
-    {
-        const V wr = V(twr[9 * vc + v]);
-        const V wi = V(twi[9 * vc + v]);
-        const V xr = simd::fnmadd(wi, n76i, n76r * wr);
-        const V xi = simd::fma(wi, n76r, n76i * wr);
-        simd::store_block(outb + 9 * b2, t, xr, xi);
-    }
-    const V n77r = n42r + n74r;
-    const V n77i = n42i + n74i;
-    {
-        const V wr = V(twr[5 * vc + v]);
-        const V wi = V(twi[5 * vc + v]);
-        const V xr = simd::fnmadd(wi, n77i, n77r * wr);
-        const V xi = simd::fma(wi, n77r, n77i * wr);
-        simd::store_block(outb + 5 * b2, t, xr, xi);
-    }
-    const V n78r = n42r - n74r;
-    const V n78i = n42i - n74i;
-    {
-        const V wr = V(twr[13 * vc + v]);
-        const V wi = V(twi[13 * vc + v]);
-        const V xr = simd::fnmadd(wi, n78i, n78r * wr);
-        const V xi = simd::fma(wi, n78r, n78i * wr);
-        simd::store_block(outb + 13 * b2, t, xr, xi);
-    }
-    const V n81r = n79r + n80r;
-    const V n81i = n79i + n80i;
-    const V n82r = n79r - n80r;
-    const V n82i = n79i - n80i;
-    const V n83r = n82i;
-    const V n83i = V(0.0) - n82r;
-    const V n84r = n34r + n81r;
-    const V n84i = n34i + n81i;
-    {
-        const V wr = V(twr[2 * vc + v]);
-        const V wi = V(twi[2 * vc + v]);
-        const V xr = simd::fnmadd(wi, n84i, n84r * wr);
-        const V xi = simd::fma(wi, n84r, n84i * wr);
-        simd::store_block(outb + 2 * b2, t, xr, xi);
-    }
-    const V n85r = n34r - n81r;
-    const V n85i = n34i - n81i;
-    {
-        const V wr = V(twr[10 * vc + v]);
-        const V wi = V(twi[10 * vc + v]);
-        const V xr = simd::fnmadd(wi, n85i, n85r * wr);
-        const V xi = simd::fma(wi, n85r, n85i * wr);
-        simd::store_block(outb + 10 * b2, t, xr, xi);
-    }
-    const V n86r = n35r + n83r;
-    const V n86i = n35i + n83i;
-    {
-        const V wr = V(twr[6 * vc + v]);
-        const V wi = V(twi[6 * vc + v]);
-        const V xr = simd::fnmadd(wi, n86i, n86r * wr);
-        const V xi = simd::fma(wi, n86r, n86i * wr);
-        simd::store_block(outb + 6 * b2, t, xr, xi);
-    }
-    const V n87r = n35r - n83r;
-    const V n87i = n35i - n83i;
-    {
-        const V wr = V(twr[14 * vc + v]);
-        const V wi = V(twi[14 * vc + v]);
-        const V xr = simd::fnmadd(wi, n87i, n87r * wr);
-        const V xi = simd::fma(wi, n87r, n87i * wr);
-        simd::store_block(outb + 14 * b2, t, xr, xi);
-    }
-    const V n90r = n88r + n89r;
-    const V n90i = n88i + n89i;
-    const V n91r = n88r - n89r;
-    const V n91i = n88i - n89i;
-    const V n92r = n91i;
-    const V n92i = V(0.0) - n91r;
-    const V n93r = n43r + n90r;
-    const V n93i = n43i + n90i;
-    {
-        const V wr = V(twr[3 * vc + v]);
-        const V wi = V(twi[3 * vc + v]);
-        const V xr = simd::fnmadd(wi, n93i, n93r * wr);
-        const V xi = simd::fma(wi, n93r, n93i * wr);
-        simd::store_block(outb + 3 * b2, t, xr, xi);
-    }
-    const V n94r = n43r - n90r;
-    const V n94i = n43i - n90i;
-    {
-        const V wr = V(twr[11 * vc + v]);
-        const V wi = V(twi[11 * vc + v]);
-        const V xr = simd::fnmadd(wi, n94i, n94r * wr);
-        const V xi = simd::fma(wi, n94r, n94i * wr);
-        simd::store_block(outb + 11 * b2, t, xr, xi);
-    }
-    sp[0] = n92i;
-    sp[1] = n92r;
+    const V n75r = n70r + n72r;
+    const V n75i = n70i + n72i;
+    const V n76r = n70r - n72r;
+    const V n76i = n70i - n72i;
+    const V n96r = simd::fnmadd(V(-0.7071067811865476), n76i, V(-0.7071067811865475) * n76r);
+    const V n96i = simd::fma(V(-0.7071067811865476), n76r, V(-0.7071067811865475) * n76i);
+    const V n77r = n71r + n74r;
+    const V n77i = n71i + n74i;
+    const V n78r = n71r - n74r;
+    const V n78i = n71i - n74i;
+    const V n87r = simd::fnmadd(V(-0.9238795325112867), n77i, V(0.38268343236508984) * n77r);
+    const V n87i = simd::fma(V(-0.9238795325112867), n77r, V(0.38268343236508984) * n77i);
+    const V n105r = simd::fnmadd(V(0.38268343236508967), n78i, V(-0.9238795325112868) * n78r);
+    const V n105i = simd::fma(V(0.38268343236508967), n78r, V(-0.9238795325112868) * n78i);
+    const V n79r = n66r + n75r;
+    const V n79i = n66i + n75i;
+    const V n80r = n66r - n75r;
+    const V n80i = n66i - n75i;
+    const V n81r = n80i;
+    const V n81i = V(0.0) - n80r;
+    const V n82r = n48r + n79r;
+    const V n82i = n48i + n79i;
+    const V n83r = n48r - n79r;
+    const V n83i = n48i - n79i;
+    const V n84r = n49r + n81r;
+    const V n84i = n49i + n81i;
+    const V n85r = n49r - n81r;
+    const V n85i = n49i - n81i;
+    const V n88r = n86r + n87r;
+    const V n88i = n86i + n87i;
+    const V n89r = n86r - n87r;
+    const V n89i = n86i - n87i;
+    const V n90r = n89i;
+    const V n90i = V(0.0) - n89r;
+    const V n91r = n57r + n88r;
+    const V n91i = n57i + n88i;
+    const V n92r = n57r - n88r;
+    const V n92i = n57i - n88i;
+    const V n93r = n58r + n90r;
+    const V n93i = n58i + n90i;
+    const V n94r = n58r - n90r;
+    const V n94i = n58i - n90i;
+    const V n97r = n95r + n96r;
+    const V n97i = n95i + n96i;
+    const V n98r = n95r - n96r;
+    const V n98i = n95i - n96i;
+    const V n99r = n98i;
+    const V n99i = V(0.0) - n98r;
+    const V n100r = n50r + n97r;
+    const V n100i = n50i + n97i;
+    const V n101r = n50r - n97r;
+    const V n101i = n50i - n97i;
+    const V n102r = n51r + n99r;
+    const V n102i = n51i + n99i;
+    const V n103r = n51r - n99r;
+    const V n103i = n51i - n99i;
+    const V n106r = n104r + n105r;
+    const V n106i = n104i + n105i;
+    const V n107r = n104r - n105r;
+    const V n107i = n104i - n105i;
+    const V n108r = n107i;
+    const V n108i = V(0.0) - n107r;
+    const V n109r = n59r + n106r;
+    const V n109i = n59i + n106i;
+    const V n110r = n59r - n106r;
+    const V n110i = n59i - n106i;
+    const V n111r = n60r + n108r;
+    const V n111i = n60i + n108i;
+    const V n112r = n60r - n108r;
+    const V n112i = n60i - n108i;
+    const V n113r = n1r + n17r;
+    const V n113i = n1i + n17i;
+    const V n114r = n1r - n17r;
+    const V n114i = n1i - n17i;
+    const V n115r = n9r + n25r;
+    const V n115i = n9i + n25i;
+    const V n116r = n9r - n25r;
+    const V n116i = n9i - n25i;
+    const V n117r = n116i;
+    const V n117i = V(0.0) - n116r;
+    const V n118r = n113r + n115r;
+    const V n118i = n113i + n115i;
+    const V n119r = n113r - n115r;
+    const V n119i = n113i - n115i;
+    const V n120r = n114r + n117r;
+    const V n120i = n114i + n117i;
+    const V n121r = n114r - n117r;
+    const V n121i = n114i - n117i;
+    const V n122r = n5r + n21r;
+    const V n122i = n5i + n21i;
+    const V n123r = n5r - n21r;
+    const V n123i = n5i - n21i;
+    const V n133r = simd::fnmadd(V(-0.7071067811865475), n123i, V(0.7071067811865476) * n123r);
+    const V n133i = simd::fma(V(-0.7071067811865475), n123r, V(0.7071067811865476) * n123i);
+    const V n124r = n13r + n29r;
+    const V n124i = n13i + n29i;
+    const V n125r = n13r - n29r;
+    const V n125i = n13i - n29i;
+    const V n134r = simd::fnmadd(V(-0.7071067811865476), n125i, V(-0.7071067811865475) * n125r);
+    const V n134i = simd::fma(V(-0.7071067811865476), n125r, V(-0.7071067811865475) * n125i);
+    const V n126r = n122r + n124r;
+    const V n126i = n122i + n124i;
+    const V n127r = n122r - n124r;
+    const V n127i = n122i - n124i;
+    const V n128r = n127i;
+    const V n128i = V(0.0) - n127r;
+    const V n129r = n118r + n126r;
+    const V n129i = n118i + n126i;
+    const V n130r = n118r - n126r;
+    const V n130i = n118i - n126i;
+    const V n205r = simd::fnmadd(V(-0.7071067811865475), n130i, V(0.7071067811865476) * n130r);
+    const V n205i = simd::fma(V(-0.7071067811865475), n130r, V(0.7071067811865476) * n130i);
+    const V n131r = n119r + n128r;
+    const V n131i = n119i + n128i;
+    const V n132r = n119r - n128r;
+    const V n132i = n119i - n128i;
+    const V n187r = simd::fnmadd(V(-0.3826834323650898), n131i, V(0.9238795325112867) * n131r);
+    const V n187i = simd::fma(V(-0.3826834323650898), n131r, V(0.9238795325112867) * n131i);
+    const V n223r = simd::fnmadd(V(-0.9238795325112867), n132i, V(0.38268343236508984) * n132r);
+    const V n223i = simd::fma(V(-0.9238795325112867), n132r, V(0.38268343236508984) * n132i);
+    const V n135r = n133r + n134r;
+    const V n135i = n133i + n134i;
+    const V n136r = n133r - n134r;
+    const V n136i = n133i - n134i;
+    const V n137r = n136i;
+    const V n137i = V(0.0) - n136r;
+    const V n138r = n120r + n135r;
+    const V n138i = n120i + n135i;
+    const V n139r = n120r - n135r;
+    const V n139i = n120i - n135i;
+    const V n178r = simd::fnmadd(V(-0.19509032201612825), n138i, V(0.9807852804032304) * n138r);
+    const V n178i = simd::fma(V(-0.19509032201612825), n138r, V(0.9807852804032304) * n138i);
+    const V n214r = simd::fnmadd(V(-0.8314696123025452), n139i, V(0.5555702330196023) * n139r);
+    const V n214i = simd::fma(V(-0.8314696123025452), n139r, V(0.5555702330196023) * n139i);
+    const V n140r = n121r + n137r;
+    const V n140i = n121i + n137i;
+    const V n141r = n121r - n137r;
+    const V n141i = n121i - n137i;
+    const V n196r = simd::fnmadd(V(-0.5555702330196022), n140i, V(0.8314696123025452) * n140r);
+    const V n196i = simd::fma(V(-0.5555702330196022), n140r, V(0.8314696123025452) * n140i);
+    const V n232r = simd::fnmadd(V(-0.9807852804032304), n141i, V(0.19509032201612833) * n141r);
+    const V n232i = simd::fma(V(-0.9807852804032304), n141r, V(0.19509032201612833) * n141i);
+    sp[0] = n100i;
+    sp[1] = n100r;
+    sp[2] = n101i;
+    sp[3] = n101r;
+    sp[4] = n109i;
+    sp[5] = n109r;
+    sp[6] = n110i;
+    sp[7] = n110r;
+    sp[8] = n129i;
+    sp[9] = n129r;
+    sp[10] = n178i;
+    sp[11] = n178r;
+    sp[12] = n187i;
+    sp[13] = n187r;
+    sp[14] = n196i;
+    sp[15] = n196r;
+    sp[16] = n205i;
+    sp[17] = n205r;
+    sp[18] = n82i;
+    sp[19] = n82r;
+    sp[20] = n83i;
+    sp[21] = n83r;
+    sp[22] = n91i;
+    sp[23] = n91r;
+    sp[24] = n92i;
+    sp[25] = n92r;
+    sp[26] = n102i;
+    sp[27] = n102r;
+    sp[28] = n103i;
+    sp[29] = n103r;
+    sp[30] = n111i;
+    sp[31] = n111r;
+    sp[32] = n112i;
+    sp[33] = n112r;
+    sp[34] = n214i;
+    sp[35] = n214r;
+    sp[36] = n223i;
+    sp[37] = n223r;
+    sp[38] = n232i;
+    sp[39] = n232r;
+    sp[40] = n84i;
+    sp[41] = n84r;
+    sp[42] = n85i;
+    sp[43] = n85r;
+    sp[44] = n93i;
+    sp[45] = n93r;
+    sp[46] = n94i;
+    sp[47] = n94r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet16_fused_notr_ss_part2([[maybe_unused]] const crd::f64* inb,
-    [[maybe_unused]] crd::f64* outb, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::u32 ash,
-    [[maybe_unused]] const crd::f64* twr, [[maybe_unused]] const crd::f64* twi, [[maybe_unused]] crd::usize t,
+template <typename V> CRD_NOINLINE static void codelet32_batched_sc_part2([[maybe_unused]] const crd::f64* inb,
+    [[maybe_unused]] crd::hesap::Complex<crd::f64>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
+    V* sp) noexcept
+{
+    namespace simd = crd::hesap::fft::lanes;
+    const V n100i = sp[0];
+    const V n100r = sp[1];
+    const V n101i = sp[2];
+    const V n101r = sp[3];
+    const V n109i = sp[4];
+    const V n109r = sp[5];
+    const V n110i = sp[6];
+    const V n110r = sp[7];
+    const V n129i = sp[8];
+    const V n129r = sp[9];
+    const V n178i = sp[10];
+    const V n178r = sp[11];
+    const V n187i = sp[12];
+    const V n187r = sp[13];
+    const V n196i = sp[14];
+    const V n196r = sp[15];
+    const V n205i = sp[16];
+    const V n205r = sp[17];
+    const V n82i = sp[18];
+    const V n82r = sp[19];
+    const V n83i = sp[20];
+    const V n83r = sp[21];
+    const V n91i = sp[22];
+    const V n91r = sp[23];
+    const V n92i = sp[24];
+    const V n92r = sp[25];
+    const V n11i = sp[48];
+    const V n11r = sp[49];
+    const V n15i = sp[50];
+    const V n15r = sp[51];
+    const V n19i = sp[52];
+    const V n19r = sp[53];
+    const V n23i = sp[54];
+    const V n23r = sp[55];
+    const V n27i = sp[56];
+    const V n27r = sp[57];
+    const V n31i = sp[58];
+    const V n31r = sp[59];
+    const V n3i = sp[60];
+    const V n3r = sp[61];
+    const V n7i = sp[62];
+    const V n7r = sp[63];
+    const V n142r = n3r + n19r;
+    const V n142i = n3i + n19i;
+    const V n143r = n3r - n19r;
+    const V n143i = n3i - n19i;
+    const V n144r = n11r + n27r;
+    const V n144i = n11i + n27i;
+    const V n145r = n11r - n27r;
+    const V n145i = n11i - n27i;
+    const V n146r = n145i;
+    const V n146i = V(0.0) - n145r;
+    const V n147r = n142r + n144r;
+    const V n147i = n142i + n144i;
+    const V n148r = n142r - n144r;
+    const V n148i = n142i - n144i;
+    const V n149r = n143r + n146r;
+    const V n149i = n143i + n146i;
+    const V n150r = n143r - n146r;
+    const V n150i = n143i - n146i;
+    const V n151r = n7r + n23r;
+    const V n151i = n7i + n23i;
+    const V n152r = n7r - n23r;
+    const V n152i = n7i - n23i;
+    const V n162r = simd::fnmadd(V(-0.7071067811865475), n152i, V(0.7071067811865476) * n152r);
+    const V n162i = simd::fma(V(-0.7071067811865475), n152r, V(0.7071067811865476) * n152i);
+    const V n153r = n15r + n31r;
+    const V n153i = n15i + n31i;
+    const V n154r = n15r - n31r;
+    const V n154i = n15i - n31i;
+    const V n163r = simd::fnmadd(V(-0.7071067811865476), n154i, V(-0.7071067811865475) * n154r);
+    const V n163i = simd::fma(V(-0.7071067811865476), n154r, V(-0.7071067811865475) * n154i);
+    const V n155r = n151r + n153r;
+    const V n155i = n151i + n153i;
+    const V n156r = n151r - n153r;
+    const V n156i = n151i - n153i;
+    const V n157r = n156i;
+    const V n157i = V(0.0) - n156r;
+    const V n158r = n147r + n155r;
+    const V n158i = n147i + n155i;
+    const V n159r = n147r - n155r;
+    const V n159i = n147i - n155i;
+    const V n206r = simd::fnmadd(V(-0.7071067811865476), n159i, V(-0.7071067811865475) * n159r);
+    const V n206i = simd::fma(V(-0.7071067811865476), n159r, V(-0.7071067811865475) * n159i);
+    const V n160r = n148r + n157r;
+    const V n160i = n148i + n157i;
+    const V n161r = n148r - n157r;
+    const V n161i = n148i - n157i;
+    const V n188r = simd::fnmadd(V(-0.9238795325112867), n160i, V(0.38268343236508984) * n160r);
+    const V n188i = simd::fma(V(-0.9238795325112867), n160r, V(0.38268343236508984) * n160i);
+    const V n224r = simd::fnmadd(V(0.38268343236508967), n161i, V(-0.9238795325112868) * n161r);
+    const V n224i = simd::fma(V(0.38268343236508967), n161r, V(-0.9238795325112868) * n161i);
+    const V n164r = n162r + n163r;
+    const V n164i = n162i + n163i;
+    const V n165r = n162r - n163r;
+    const V n165i = n162i - n163i;
+    const V n166r = n165i;
+    const V n166i = V(0.0) - n165r;
+    const V n167r = n149r + n164r;
+    const V n167i = n149i + n164i;
+    const V n168r = n149r - n164r;
+    const V n168i = n149i - n164i;
+    const V n179r = simd::fnmadd(V(-0.5555702330196022), n167i, V(0.8314696123025452) * n167r);
+    const V n179i = simd::fma(V(-0.5555702330196022), n167r, V(0.8314696123025452) * n167i);
+    const V n215r = simd::fnmadd(V(-0.1950903220161286), n168i, V(-0.9807852804032304) * n168r);
+    const V n215i = simd::fma(V(-0.1950903220161286), n168r, V(-0.9807852804032304) * n168i);
+    const V n169r = n150r + n166r;
+    const V n169i = n150i + n166i;
+    const V n170r = n150r - n166r;
+    const V n170i = n150i - n166i;
+    const V n197r = simd::fnmadd(V(-0.9807852804032304), n169i, V(-0.1950903220161282) * n169r);
+    const V n197i = simd::fma(V(-0.9807852804032304), n169r, V(-0.1950903220161282) * n169i);
+    const V n233r = simd::fnmadd(V(0.8314696123025452), n170i, V(-0.5555702330196022) * n170r);
+    const V n233i = simd::fma(V(0.8314696123025452), n170r, V(-0.5555702330196022) * n170i);
+    const V n171r = n129r + n158r;
+    const V n171i = n129i + n158i;
+    const V n172r = n129r - n158r;
+    const V n172i = n129i - n158i;
+    const V n173r = n172i;
+    const V n173i = V(0.0) - n172r;
+    const V n174r = n82r + n171r;
+    const V n174i = n82i + n171i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 0 * b + t), n174r, n174i);
+    const V n175r = n82r - n171r;
+    const V n175i = n82i - n171i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 16 * b + t), n175r, n175i);
+    const V n176r = n83r + n173r;
+    const V n176i = n83i + n173i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 8 * b + t), n176r, n176i);
+    const V n177r = n83r - n173r;
+    const V n177i = n83i - n173i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 24 * b + t), n177r, n177i);
+    const V n180r = n178r + n179r;
+    const V n180i = n178i + n179i;
+    const V n181r = n178r - n179r;
+    const V n181i = n178i - n179i;
+    const V n182r = n181i;
+    const V n182i = V(0.0) - n181r;
+    const V n183r = n91r + n180r;
+    const V n183i = n91i + n180i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 1 * b + t), n183r, n183i);
+    const V n184r = n91r - n180r;
+    const V n184i = n91i - n180i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 17 * b + t), n184r, n184i);
+    const V n185r = n92r + n182r;
+    const V n185i = n92i + n182i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 9 * b + t), n185r, n185i);
+    const V n186r = n92r - n182r;
+    const V n186i = n92i - n182i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 25 * b + t), n186r, n186i);
+    const V n189r = n187r + n188r;
+    const V n189i = n187i + n188i;
+    const V n190r = n187r - n188r;
+    const V n190i = n187i - n188i;
+    const V n191r = n190i;
+    const V n191i = V(0.0) - n190r;
+    const V n192r = n100r + n189r;
+    const V n192i = n100i + n189i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 2 * b + t), n192r, n192i);
+    const V n193r = n100r - n189r;
+    const V n193i = n100i - n189i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 18 * b + t), n193r, n193i);
+    const V n194r = n101r + n191r;
+    const V n194i = n101i + n191i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 10 * b + t), n194r, n194i);
+    const V n195r = n101r - n191r;
+    const V n195i = n101i - n191i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 26 * b + t), n195r, n195i);
+    const V n198r = n196r + n197r;
+    const V n198i = n196i + n197i;
+    const V n199r = n196r - n197r;
+    const V n199i = n196i - n197i;
+    const V n200r = n199i;
+    const V n200i = V(0.0) - n199r;
+    const V n201r = n109r + n198r;
+    const V n201i = n109i + n198i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 3 * b + t), n201r, n201i);
+    const V n202r = n109r - n198r;
+    const V n202i = n109i - n198i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 19 * b + t), n202r, n202i);
+    const V n203r = n110r + n200r;
+    const V n203i = n110i + n200i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 11 * b + t), n203r, n203i);
+    const V n204r = n110r - n200r;
+    const V n204i = n110i - n200i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 27 * b + t), n204r, n204i);
+    const V n207r = n205r + n206r;
+    const V n207i = n205i + n206i;
+    const V n208r = n205r - n206r;
+    const V n208i = n205i - n206i;
+    const V n209r = n208i;
+    const V n209i = V(0.0) - n208r;
+    sp[0] = n207i;
+    sp[1] = n207r;
+    sp[2] = n209i;
+    sp[3] = n209r;
+    sp[4] = n215i;
+    sp[5] = n215r;
+    sp[6] = n224i;
+    sp[7] = n224r;
+    sp[8] = n233i;
+    sp[9] = n233r;
+}
+// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
+template <typename V> CRD_NOINLINE static void codelet32_batched_sc_part3([[maybe_unused]] const crd::f64* inb,
+    [[maybe_unused]] crd::hesap::Complex<crd::f64>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
     const V* sp) noexcept
 {
     namespace simd = crd::hesap::fft::lanes;
-    const crd::usize vc = b >> ash;
-    const crd::usize b2 = 2 * b;
-    const crd::usize v = t >> ash;
-    const V n92i = sp[0];
-    const V n92r = sp[1];
-    const V n44i = sp[30];
-    const V n44r = sp[31];
-    const V n95r = n44r + n92r;
-    const V n95i = n44i + n92i;
-    {
-        const V wr = V(twr[7 * vc + v]);
-        const V wi = V(twi[7 * vc + v]);
-        const V xr = simd::fnmadd(wi, n95i, n95r * wr);
-        const V xi = simd::fma(wi, n95r, n95i * wr);
-        simd::store_block(outb + 7 * b2, t, xr, xi);
-    }
-    const V n96r = n44r - n92r;
-    const V n96i = n44i - n92i;
-    {
-        const V wr = V(twr[15 * vc + v]);
-        const V wi = V(twi[15 * vc + v]);
-        const V xr = simd::fnmadd(wi, n96i, n96r * wr);
-        const V xi = simd::fma(wi, n96r, n96i * wr);
-        simd::store_block(outb + 15 * b2, t, xr, xi);
-    }
+    const V n207i = sp[0];
+    const V n207r = sp[1];
+    const V n209i = sp[2];
+    const V n209r = sp[3];
+    const V n215i = sp[4];
+    const V n215r = sp[5];
+    const V n224i = sp[6];
+    const V n224r = sp[7];
+    const V n233i = sp[8];
+    const V n233r = sp[9];
+    const V n102i = sp[26];
+    const V n102r = sp[27];
+    const V n103i = sp[28];
+    const V n103r = sp[29];
+    const V n111i = sp[30];
+    const V n111r = sp[31];
+    const V n112i = sp[32];
+    const V n112r = sp[33];
+    const V n214i = sp[34];
+    const V n214r = sp[35];
+    const V n223i = sp[36];
+    const V n223r = sp[37];
+    const V n232i = sp[38];
+    const V n232r = sp[39];
+    const V n84i = sp[40];
+    const V n84r = sp[41];
+    const V n85i = sp[42];
+    const V n85r = sp[43];
+    const V n93i = sp[44];
+    const V n93r = sp[45];
+    const V n94i = sp[46];
+    const V n94r = sp[47];
+    const V n210r = n84r + n207r;
+    const V n210i = n84i + n207i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 4 * b + t), n210r, n210i);
+    const V n211r = n84r - n207r;
+    const V n211i = n84i - n207i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 20 * b + t), n211r, n211i);
+    const V n212r = n85r + n209r;
+    const V n212i = n85i + n209i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 12 * b + t), n212r, n212i);
+    const V n213r = n85r - n209r;
+    const V n213i = n85i - n209i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 28 * b + t), n213r, n213i);
+    const V n216r = n214r + n215r;
+    const V n216i = n214i + n215i;
+    const V n217r = n214r - n215r;
+    const V n217i = n214i - n215i;
+    const V n218r = n217i;
+    const V n218i = V(0.0) - n217r;
+    const V n219r = n93r + n216r;
+    const V n219i = n93i + n216i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 5 * b + t), n219r, n219i);
+    const V n220r = n93r - n216r;
+    const V n220i = n93i - n216i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 21 * b + t), n220r, n220i);
+    const V n221r = n94r + n218r;
+    const V n221i = n94i + n218i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 13 * b + t), n221r, n221i);
+    const V n222r = n94r - n218r;
+    const V n222i = n94i - n218i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 29 * b + t), n222r, n222i);
+    const V n225r = n223r + n224r;
+    const V n225i = n223i + n224i;
+    const V n226r = n223r - n224r;
+    const V n226i = n223i - n224i;
+    const V n227r = n226i;
+    const V n227i = V(0.0) - n226r;
+    const V n228r = n102r + n225r;
+    const V n228i = n102i + n225i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 6 * b + t), n228r, n228i);
+    const V n229r = n102r - n225r;
+    const V n229i = n102i - n225i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 22 * b + t), n229r, n229i);
+    const V n230r = n103r + n227r;
+    const V n230i = n103i + n227i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 14 * b + t), n230r, n230i);
+    const V n231r = n103r - n227r;
+    const V n231i = n103i - n227i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 30 * b + t), n231r, n231i);
+    const V n234r = n232r + n233r;
+    const V n234i = n232i + n233i;
+    const V n235r = n232r - n233r;
+    const V n235i = n232i - n233i;
+    const V n236r = n235i;
+    const V n236i = V(0.0) - n235r;
+    const V n237r = n111r + n234r;
+    const V n237i = n111i + n234i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 7 * b + t), n237r, n237i);
+    const V n238r = n111r - n234r;
+    const V n238i = n111i - n234i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 23 * b + t), n238r, n238i);
+    const V n239r = n112r + n236r;
+    const V n239i = n112i + n236i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 15 * b + t), n239r, n239i);
+    const V n240r = n112r - n236r;
+    const V n240i = n112i - n236i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 31 * b + t), n240r, n240i);
 }
-// N=16 SPLIT-LAYOUT deep-split S2, zero shuffles (f64). GENERATED.
+// N=32 SPLIT-LAYOUT final leaf (plane in, complex out) (f64). GENERATED.
 // NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG; retain fused scope.
-void codelet16_fused_notr_ss(const crd::f64* inb,
-    crd::f64* outb, crd::usize b, crd::u32 ash,
-    const crd::f64* twr, const crd::f64* twi) noexcept
+void codelet32_batched_sc(const crd::f64* inb,
+    crd::hesap::Complex<crd::f64>* out, crd::usize b) noexcept
 {
     namespace lanes = crd::hesap::fft::lanes;
     using V = lanes::Lane<crd::f64>;
-    alignas(64) V sp[32];
+    alignas(64) V sp[64];
     const crd::usize tiles = b - b % lanes::kTile<crd::f64>;
     const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
     for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
     {
-        codelet16_fused_notr_ss_part0<V>(inb, outb, b, ash, twr, twi, t, sp);
-        codelet16_fused_notr_ss_part1<V>(inb, outb, b, ash, twr, twi, t, sp);
-        codelet16_fused_notr_ss_part2<V>(inb, outb, b, ash, twr, twi, t, sp);
+        codelet32_batched_sc_part0<V>(inb, out, b, t, sp);
+        codelet32_batched_sc_part1<V>(inb, out, b, t, sp);
+        codelet32_batched_sc_part2<V>(inb, out, b, t, sp);
+        codelet32_batched_sc_part3<V>(inb, out, b, t, sp);
     }
     if constexpr (lanes::kPairedTiles<crd::f64>)
     {
         using H = lanes::TileLane<crd::f64>;
-        alignas(64) H sh[32];
+        alignas(64) H sh[64];
         if (wide < tiles)
         {
-            codelet16_fused_notr_ss_part0<H>(inb, outb, b, ash, twr, twi, wide, sh);
-            codelet16_fused_notr_ss_part1<H>(inb, outb, b, ash, twr, twi, wide, sh);
-            codelet16_fused_notr_ss_part2<H>(inb, outb, b, ash, twr, twi, wide, sh);
+            codelet32_batched_sc_part0<H>(inb, out, b, wide, sh);
+            codelet32_batched_sc_part1<H>(inb, out, b, wide, sh);
+            codelet32_batched_sc_part2<H>(inb, out, b, wide, sh);
+            codelet32_batched_sc_part3<H>(inb, out, b, wide, sh);
         }
     }
 }
@@ -38935,483 +38837,6 @@ void codelet64_fused_notr_ss(const crd::f64* inb,
     }
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet16_stage1_fused_sh_csf_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
-    [[maybe_unused]] crd::f32* outb, [[maybe_unused]] crd::usize n2, [[maybe_unused]] const crd::f32* lor,
-    [[maybe_unused]] const crd::f32* loi, [[maybe_unused]] const crd::f32* hir, [[maybe_unused]] const crd::f32* hii,
-    [[maybe_unused]] crd::u32 msh, [[maybe_unused]] crd::usize t, V* sp) noexcept
-{
-    namespace simd = crd::hesap::fft::lanes;
-    V n0r;
-    V n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 0 * n2 + t), n0r, n0i);
-    V n8r;
-    V n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 8 * n2 + t), n8r, n8i);
-    V n1r;
-    V n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 1 * n2 + t), n1r, n1i);
-    V n9r;
-    V n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 9 * n2 + t), n9r, n9i);
-    V n2r;
-    V n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 2 * n2 + t), n2r, n2i);
-    V n10r;
-    V n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 10 * n2 + t), n10r, n10i);
-    const V n26r = n2r - n10r;
-    const V n26i = n2i - n10i;
-    const V n25r = n2r + n10r;
-    const V n25i = n2i + n10i;
-    const V n36r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n26i, V(static_cast<crd::f32>(0.7071067811865476)) * n26r);
-    const V n36i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n26r, V(static_cast<crd::f32>(0.7071067811865476)) * n26i);
-    V n3r;
-    V n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 3 * n2 + t), n3r, n3i);
-    V n11r;
-    V n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 11 * n2 + t), n11r, n11i);
-    V n4r;
-    V n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 4 * n2 + t), n4r, n4i);
-    V n12r;
-    V n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 12 * n2 + t), n12r, n12i);
-    const V n19r = n4r - n12r;
-    const V n19i = n4i - n12i;
-    const V n18r = n4r + n12r;
-    const V n18i = n4i + n12i;
-    const V n20r = n19i;
-    const V n20i = V(0.0F) - n19r;
-    const V n16r = n0r + n8r;
-    const V n16i = n0i + n8i;
-    const V n17r = n0r - n8r;
-    const V n17i = n0i - n8i;
-    V n5r;
-    V n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 5 * n2 + t), n5r, n5i);
-    V n13r;
-    V n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 13 * n2 + t), n13r, n13i);
-    const V n48r = n5r - n13r;
-    const V n48i = n5i - n13i;
-    const V n47r = n5r + n13r;
-    const V n47i = n5i + n13i;
-    const V n49r = n48i;
-    const V n49i = V(0.0F) - n48r;
-    const V n45r = n1r + n9r;
-    const V n45i = n1i + n9i;
-    const V n46r = n1r - n9r;
-    const V n46i = n1i - n9i;
-    const V n51r = n45r - n47r;
-    const V n51i = n45i - n47i;
-    const V n50r = n45r + n47r;
-    const V n50i = n45i + n47i;
-    const V n79r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n51i, V(static_cast<crd::f32>(0.7071067811865476)) * n51r);
-    const V n79i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n51r, V(static_cast<crd::f32>(0.7071067811865476)) * n51i);
-    const V n52r = n46r + n49r;
-    const V n52i = n46i + n49i;
-    const V n53r = n46r - n49r;
-    const V n53i = n46i - n49i;
-    const V n70r = simd::fnmadd(V(static_cast<crd::f32>(-0.3826834323650898)), n52i, V(static_cast<crd::f32>(0.9238795325112867)) * n52r);
-    const V n70i = simd::fma(V(static_cast<crd::f32>(-0.3826834323650898)), n52r, V(static_cast<crd::f32>(0.9238795325112867)) * n52i);
-    const V n88r = simd::fnmadd(V(static_cast<crd::f32>(-0.9238795325112867)), n53i, V(static_cast<crd::f32>(0.38268343236508984)) * n53r);
-    const V n88i = simd::fma(V(static_cast<crd::f32>(-0.9238795325112867)), n53r, V(static_cast<crd::f32>(0.38268343236508984)) * n53i);
-    V n6r;
-    V n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 6 * n2 + t), n6r, n6i);
-    V n14r;
-    V n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 14 * n2 + t), n14r, n14i);
-    const V n27r = n6r + n14r;
-    const V n27i = n6i + n14i;
-    const V n28r = n6r - n14r;
-    const V n28i = n6i - n14i;
-    const V n37r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865476)), n28i, V(static_cast<crd::f32>(-0.7071067811865475)) * n28r);
-    const V n37i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865476)), n28r, V(static_cast<crd::f32>(-0.7071067811865475)) * n28i);
-    const V n30r = n25r - n27r;
-    const V n30i = n25i - n27i;
-    const V n29r = n25r + n27r;
-    const V n29i = n25i + n27i;
-    const V n31r = n30i;
-    const V n31i = V(0.0F) - n30r;
-    const V n21r = n16r + n18r;
-    const V n21i = n16i + n18i;
-    const V n22r = n16r - n18r;
-    const V n22i = n16i - n18i;
-    const V n39r = n36r - n37r;
-    const V n39i = n36i - n37i;
-    const V n38r = n36r + n37r;
-    const V n38i = n36i + n37i;
-    const V n40r = n39i;
-    const V n40i = V(0.0F) - n39r;
-    const V n23r = n17r + n20r;
-    const V n23i = n17i + n20i;
-    const V n24r = n17r - n20r;
-    const V n24i = n17i - n20i;
-    V n7r;
-    V n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 7 * n2 + t), n7r, n7i);
-    V n15r;
-    V n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 15 * n2 + t), n15r, n15i);
-    const V n57r = n7r - n15r;
-    const V n57i = n7i - n15i;
-    const V n56r = n7r + n15r;
-    const V n56i = n7i + n15i;
-    const V n58r = n57i;
-    const V n58i = V(0.0F) - n57r;
-    const V n54r = n3r + n11r;
-    const V n54i = n3i + n11i;
-    const V n55r = n3r - n11r;
-    const V n55i = n3i - n11i;
-    const V n59r = n54r + n56r;
-    const V n59i = n54i + n56i;
-    const V n60r = n54r - n56r;
-    const V n60i = n54i - n56i;
-    const V n80r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865476)), n60i, V(static_cast<crd::f32>(-0.7071067811865475)) * n60r);
-    const V n80i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865476)), n60r, V(static_cast<crd::f32>(-0.7071067811865475)) * n60i);
-    const V n61r = n55r + n58r;
-    const V n61i = n55i + n58i;
-    const V n62r = n55r - n58r;
-    const V n62i = n55i - n58i;
-    const V n71r = simd::fnmadd(V(static_cast<crd::f32>(-0.9238795325112867)), n61i, V(static_cast<crd::f32>(0.38268343236508984)) * n61r);
-    const V n71i = simd::fma(V(static_cast<crd::f32>(-0.9238795325112867)), n61r, V(static_cast<crd::f32>(0.38268343236508984)) * n61i);
-    const V n89r = simd::fnmadd(V(static_cast<crd::f32>(0.38268343236508967)), n62i, V(static_cast<crd::f32>(-0.9238795325112868)) * n62r);
-    const V n89i = simd::fma(V(static_cast<crd::f32>(0.38268343236508967)), n62r, V(static_cast<crd::f32>(-0.9238795325112868)) * n62i);
-    const V n64r = n50r - n59r;
-    const V n64i = n50i - n59i;
-    const V n63r = n50r + n59r;
-    const V n63i = n50i + n59i;
-    const V n65r = n64i;
-    const V n65i = V(0.0F) - n64r;
-    const V n32r = n21r + n29r;
-    const V n32i = n21i + n29i;
-    const V n33r = n21r - n29r;
-    const V n33i = n21i - n29i;
-    const V n66r = n32r + n63r;
-    const V n66i = n32i + n63i;
-    const V n67r = n32r - n63r;
-    const V n67i = n32i - n63i;
-    const V n68r = n33r + n65r;
-    const V n68i = n33i + n65i;
-    const V n69r = n33r - n65r;
-    const V n69i = n33i - n65i;
-    const V n73r = n70r - n71r;
-    const V n73i = n70i - n71i;
-    const V n72r = n70r + n71r;
-    const V n72i = n70i + n71i;
-    const V n74r = n73i;
-    const V n74i = V(0.0F) - n73r;
-    const V n41r = n23r + n38r;
-    const V n41i = n23i + n38i;
-    const V n42r = n23r - n38r;
-    const V n42i = n23i - n38i;
-    sp[0] = n22i;
-    sp[1] = n22r;
-    sp[2] = n24i;
-    sp[3] = n24r;
-    sp[4] = n31i;
-    sp[5] = n31r;
-    sp[6] = n40i;
-    sp[7] = n40r;
-    sp[8] = n41i;
-    sp[9] = n41r;
-    sp[10] = n42i;
-    sp[11] = n42r;
-    sp[12] = n66i;
-    sp[13] = n66r;
-    sp[14] = n68i;
-    sp[15] = n68r;
-    sp[16] = n72i;
-    sp[17] = n72r;
-    sp[18] = n74i;
-    sp[19] = n74r;
-    sp[20] = n79i;
-    sp[21] = n79r;
-    sp[22] = n80i;
-    sp[23] = n80r;
-    sp[24] = n88i;
-    sp[25] = n88r;
-    sp[26] = n89i;
-    sp[27] = n89r;
-    sp[28] = n67i;
-    sp[29] = n67r;
-    sp[30] = n69i;
-    sp[31] = n69r;
-}
-// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet16_stage1_fused_sh_csf_part1([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
-    [[maybe_unused]] crd::f32* outb, [[maybe_unused]] crd::usize n2, [[maybe_unused]] const crd::f32* lor,
-    [[maybe_unused]] const crd::f32* loi, [[maybe_unused]] const crd::f32* hir, [[maybe_unused]] const crd::f32* hii,
-    [[maybe_unused]] crd::u32 msh, [[maybe_unused]] crd::usize t, V* sp) noexcept
-{
-    namespace simd = crd::hesap::fft::lanes;
-    const crd::usize uhc = n2 >> msh;
-    const crd::usize uh = t >> msh;
-    const crd::usize ul = t & ((crd::usize{1} << msh) - 1U);
-    const V n22i = sp[0];
-    const V n22r = sp[1];
-    const V n24i = sp[2];
-    const V n24r = sp[3];
-    const V n31i = sp[4];
-    const V n31r = sp[5];
-    const V n40i = sp[6];
-    const V n40r = sp[7];
-    const V n41i = sp[8];
-    const V n41r = sp[9];
-    const V n42i = sp[10];
-    const V n42r = sp[11];
-    const V n66i = sp[12];
-    const V n66r = sp[13];
-    const V n68i = sp[14];
-    const V n68r = sp[15];
-    const V n72i = sp[16];
-    const V n72r = sp[17];
-    const V n74i = sp[18];
-    const V n74r = sp[19];
-    const V n79i = sp[20];
-    const V n79r = sp[21];
-    const V n80i = sp[22];
-    const V n80r = sp[23];
-    const V n88i = sp[24];
-    const V n88r = sp[25];
-    const V n89i = sp[26];
-    const V n89r = sp[27];
-    const V n75r = n41r + n72r;
-    const V n75i = n41i + n72i;
-    const V n76r = n41r - n72r;
-    const V n76i = n41i - n72i;
-    const V n77r = n42r + n74r;
-    const V n77i = n42i + n74i;
-    const V n78r = n42r - n74r;
-    const V n78i = n42i - n74i;
-    const V n82r = n79r - n80r;
-    const V n82i = n79i - n80i;
-    const V n81r = n79r + n80r;
-    const V n81i = n79i + n80i;
-    const V n83r = n82i;
-    const V n83i = V(0.0F) - n82r;
-    const V n34r = n22r + n31r;
-    const V n34i = n22i + n31i;
-    const V n35r = n22r - n31r;
-    const V n35i = n22i - n31i;
-    const V n84r = n34r + n81r;
-    const V n84i = n34i + n81i;
-    const V n85r = n34r - n81r;
-    const V n85i = n34i - n81i;
-    const V n86r = n35r + n83r;
-    const V n86i = n35i + n83i;
-    const V n87r = n35r - n83r;
-    const V n87i = n35i - n83i;
-    const V n91r = n88r - n89r;
-    const V n91i = n88i - n89i;
-    const V n90r = n88r + n89r;
-    const V n90i = n88i + n89i;
-    const V n92r = n91i;
-    const V n92i = V(0.0F) - n91r;
-    const V n43r = n24r + n40r;
-    const V n43i = n24i + n40i;
-    const V n44r = n24r - n40r;
-    const V n44i = n24i - n40i;
-    const V n93r = n43r + n90r;
-    const V n93i = n43i + n90i;
-    const V n94r = n43r - n90r;
-    const V n94i = n43i - n90i;
-    const V n95r = n44r + n92r;
-    const V n95i = n44i + n92i;
-    {
-        const V h0r = V(hir[0 * uhc + uh]);
-        const V h0i = V(hii[0 * uhc + uh]);
-        const V g0r = simd::load<V>(lor + ((crd::usize{0} << msh) + ul));
-        const V g0i = simd::load<V>(loi + ((crd::usize{0} << msh) + ul));
-        const V w0r = simd::fnmadd(h0i, g0i, h0r * g0r);
-        const V w0i = simd::fma(h0i, g0r, h0r * g0i);
-        const V h1r = V(hir[1 * uhc + uh]);
-        const V h1i = V(hii[1 * uhc + uh]);
-        const V g1r = simd::load<V>(lor + ((crd::usize{1} << msh) + ul));
-        const V g1i = simd::load<V>(loi + ((crd::usize{1} << msh) + ul));
-        const V w1r = simd::fnmadd(h1i, g1i, h1r * g1r);
-        const V w1i = simd::fma(h1i, g1r, h1r * g1i);
-        const V h2r = V(hir[2 * uhc + uh]);
-        const V h2i = V(hii[2 * uhc + uh]);
-        const V g2r = simd::load<V>(lor + ((crd::usize{2} << msh) + ul));
-        const V g2i = simd::load<V>(loi + ((crd::usize{2} << msh) + ul));
-        const V w2r = simd::fnmadd(h2i, g2i, h2r * g2r);
-        const V w2i = simd::fma(h2i, g2r, h2r * g2i);
-        const V h3r = V(hir[3 * uhc + uh]);
-        const V h3i = V(hii[3 * uhc + uh]);
-        const V g3r = simd::load<V>(lor + ((crd::usize{3} << msh) + ul));
-        const V g3i = simd::load<V>(loi + ((crd::usize{3} << msh) + ul));
-        const V w3r = simd::fnmadd(h3i, g3i, h3r * g3r);
-        const V w3i = simd::fma(h3i, g3r, h3r * g3i);
-        const V h4r = V(hir[4 * uhc + uh]);
-        const V h4i = V(hii[4 * uhc + uh]);
-        const V g4r = simd::load<V>(lor + ((crd::usize{4} << msh) + ul));
-        const V g4i = simd::load<V>(loi + ((crd::usize{4} << msh) + ul));
-        const V w4r = simd::fnmadd(h4i, g4i, h4r * g4r);
-        const V w4i = simd::fma(h4i, g4r, h4r * g4i);
-        const V h5r = V(hir[5 * uhc + uh]);
-        const V h5i = V(hii[5 * uhc + uh]);
-        const V g5r = simd::load<V>(lor + ((crd::usize{5} << msh) + ul));
-        const V g5i = simd::load<V>(loi + ((crd::usize{5} << msh) + ul));
-        const V w5r = simd::fnmadd(h5i, g5i, h5r * g5r);
-        const V w5i = simd::fma(h5i, g5r, h5r * g5i);
-        const V h6r = V(hir[6 * uhc + uh]);
-        const V h6i = V(hii[6 * uhc + uh]);
-        const V g6r = simd::load<V>(lor + ((crd::usize{6} << msh) + ul));
-        const V g6i = simd::load<V>(loi + ((crd::usize{6} << msh) + ul));
-        const V w6r = simd::fnmadd(h6i, g6i, h6r * g6r);
-        const V w6i = simd::fma(h6i, g6r, h6r * g6i);
-        const V h7r = V(hir[7 * uhc + uh]);
-        const V h7i = V(hii[7 * uhc + uh]);
-        const V g7r = simd::load<V>(lor + ((crd::usize{7} << msh) + ul));
-        const V g7i = simd::load<V>(loi + ((crd::usize{7} << msh) + ul));
-        const V w7r = simd::fnmadd(h7i, g7i, h7r * g7r);
-        const V w7i = simd::fma(h7i, g7r, h7r * g7i);
-        const V x0r = simd::fnmadd(w0i, n66i, n66r * w0r);
-        const V x0i = simd::fma(w0i, n66r, n66i * w0r);
-        const V x1r = simd::fnmadd(w1i, n75i, n75r * w1r);
-        const V x1i = simd::fma(w1i, n75r, n75i * w1r);
-        const V x2r = simd::fnmadd(w2i, n84i, n84r * w2r);
-        const V x2i = simd::fma(w2i, n84r, n84i * w2r);
-        const V x3r = simd::fnmadd(w3i, n93i, n93r * w3r);
-        const V x3i = simd::fma(w3i, n93r, n93i * w3r);
-        const V x4r = simd::fnmadd(w4i, n68i, n68r * w4r);
-        const V x4i = simd::fma(w4i, n68r, n68i * w4r);
-        const V x5r = simd::fnmadd(w5i, n77i, n77r * w5r);
-        const V x5i = simd::fma(w5i, n77r, n77i * w5r);
-        const V x6r = simd::fnmadd(w6i, n86i, n86r * w6r);
-        const V x6i = simd::fma(w6i, n86r, n86i * w6r);
-        const V x7r = simd::fnmadd(w7i, n95i, n95r * w7r);
-        const V x7i = simd::fma(w7i, n95r, n95i * w7r);
-        simd::store_transposed(outb + t * 32 + 0, 32, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 32 + 8, 32, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
-    }
-    const V n96r = n44r - n92r;
-    const V n96i = n44i - n92i;
-    sp[0] = n76i;
-    sp[1] = n76r;
-    sp[2] = n78i;
-    sp[3] = n78r;
-    sp[4] = n85i;
-    sp[5] = n85r;
-    sp[6] = n87i;
-    sp[7] = n87r;
-    sp[8] = n94i;
-    sp[9] = n94r;
-    sp[10] = n96i;
-    sp[11] = n96r;
-}
-// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet16_stage1_fused_sh_csf_part2([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
-    [[maybe_unused]] crd::f32* outb, [[maybe_unused]] crd::usize n2, [[maybe_unused]] const crd::f32* lor,
-    [[maybe_unused]] const crd::f32* loi, [[maybe_unused]] const crd::f32* hir, [[maybe_unused]] const crd::f32* hii,
-    [[maybe_unused]] crd::u32 msh, [[maybe_unused]] crd::usize t, const V* sp) noexcept
-{
-    namespace simd = crd::hesap::fft::lanes;
-    const crd::usize uhc = n2 >> msh;
-    const crd::usize uh = t >> msh;
-    const crd::usize ul = t & ((crd::usize{1} << msh) - 1U);
-    const V n76i = sp[0];
-    const V n76r = sp[1];
-    const V n78i = sp[2];
-    const V n78r = sp[3];
-    const V n85i = sp[4];
-    const V n85r = sp[5];
-    const V n87i = sp[6];
-    const V n87r = sp[7];
-    const V n94i = sp[8];
-    const V n94r = sp[9];
-    const V n96i = sp[10];
-    const V n96r = sp[11];
-    const V n67i = sp[28];
-    const V n67r = sp[29];
-    const V n69i = sp[30];
-    const V n69r = sp[31];
-    {
-        const V h0r = V(hir[8 * uhc + uh]);
-        const V h0i = V(hii[8 * uhc + uh]);
-        const V g0r = simd::load<V>(lor + ((crd::usize{8} << msh) + ul));
-        const V g0i = simd::load<V>(loi + ((crd::usize{8} << msh) + ul));
-        const V w0r = simd::fnmadd(h0i, g0i, h0r * g0r);
-        const V w0i = simd::fma(h0i, g0r, h0r * g0i);
-        const V h1r = V(hir[9 * uhc + uh]);
-        const V h1i = V(hii[9 * uhc + uh]);
-        const V g1r = simd::load<V>(lor + ((crd::usize{9} << msh) + ul));
-        const V g1i = simd::load<V>(loi + ((crd::usize{9} << msh) + ul));
-        const V w1r = simd::fnmadd(h1i, g1i, h1r * g1r);
-        const V w1i = simd::fma(h1i, g1r, h1r * g1i);
-        const V h2r = V(hir[10 * uhc + uh]);
-        const V h2i = V(hii[10 * uhc + uh]);
-        const V g2r = simd::load<V>(lor + ((crd::usize{10} << msh) + ul));
-        const V g2i = simd::load<V>(loi + ((crd::usize{10} << msh) + ul));
-        const V w2r = simd::fnmadd(h2i, g2i, h2r * g2r);
-        const V w2i = simd::fma(h2i, g2r, h2r * g2i);
-        const V h3r = V(hir[11 * uhc + uh]);
-        const V h3i = V(hii[11 * uhc + uh]);
-        const V g3r = simd::load<V>(lor + ((crd::usize{11} << msh) + ul));
-        const V g3i = simd::load<V>(loi + ((crd::usize{11} << msh) + ul));
-        const V w3r = simd::fnmadd(h3i, g3i, h3r * g3r);
-        const V w3i = simd::fma(h3i, g3r, h3r * g3i);
-        const V h4r = V(hir[12 * uhc + uh]);
-        const V h4i = V(hii[12 * uhc + uh]);
-        const V g4r = simd::load<V>(lor + ((crd::usize{12} << msh) + ul));
-        const V g4i = simd::load<V>(loi + ((crd::usize{12} << msh) + ul));
-        const V w4r = simd::fnmadd(h4i, g4i, h4r * g4r);
-        const V w4i = simd::fma(h4i, g4r, h4r * g4i);
-        const V h5r = V(hir[13 * uhc + uh]);
-        const V h5i = V(hii[13 * uhc + uh]);
-        const V g5r = simd::load<V>(lor + ((crd::usize{13} << msh) + ul));
-        const V g5i = simd::load<V>(loi + ((crd::usize{13} << msh) + ul));
-        const V w5r = simd::fnmadd(h5i, g5i, h5r * g5r);
-        const V w5i = simd::fma(h5i, g5r, h5r * g5i);
-        const V h6r = V(hir[14 * uhc + uh]);
-        const V h6i = V(hii[14 * uhc + uh]);
-        const V g6r = simd::load<V>(lor + ((crd::usize{14} << msh) + ul));
-        const V g6i = simd::load<V>(loi + ((crd::usize{14} << msh) + ul));
-        const V w6r = simd::fnmadd(h6i, g6i, h6r * g6r);
-        const V w6i = simd::fma(h6i, g6r, h6r * g6i);
-        const V h7r = V(hir[15 * uhc + uh]);
-        const V h7i = V(hii[15 * uhc + uh]);
-        const V g7r = simd::load<V>(lor + ((crd::usize{15} << msh) + ul));
-        const V g7i = simd::load<V>(loi + ((crd::usize{15} << msh) + ul));
-        const V w7r = simd::fnmadd(h7i, g7i, h7r * g7r);
-        const V w7i = simd::fma(h7i, g7r, h7r * g7i);
-        const V x0r = simd::fnmadd(w0i, n67i, n67r * w0r);
-        const V x0i = simd::fma(w0i, n67r, n67i * w0r);
-        const V x1r = simd::fnmadd(w1i, n76i, n76r * w1r);
-        const V x1i = simd::fma(w1i, n76r, n76i * w1r);
-        const V x2r = simd::fnmadd(w2i, n85i, n85r * w2r);
-        const V x2i = simd::fma(w2i, n85r, n85i * w2r);
-        const V x3r = simd::fnmadd(w3i, n94i, n94r * w3r);
-        const V x3i = simd::fma(w3i, n94r, n94i * w3r);
-        const V x4r = simd::fnmadd(w4i, n69i, n69r * w4r);
-        const V x4i = simd::fma(w4i, n69r, n69i * w4r);
-        const V x5r = simd::fnmadd(w5i, n78i, n78r * w5r);
-        const V x5i = simd::fma(w5i, n78r, n78i * w5r);
-        const V x6r = simd::fnmadd(w6i, n87i, n87r * w6r);
-        const V x6i = simd::fma(w6i, n87r, n87i * w6r);
-        const V x7r = simd::fnmadd(w7i, n96i, n96r * w7r);
-        const V x7i = simd::fma(w7i, n96r, n96i * w7r);
-        simd::store_transposed(outb + t * 32 + 16, 32, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 32 + 24, 32, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
-    }
-}
-// N1=16 FACTORED-TWIDDLE stage-1 (L1-resident hi/lo tables) (f32). GENERATED.
-// NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG; retain fused scope.
-void codelet16_stage1_fused_sh_csf(const crd::hesap::Complex<crd::f32>* in,
-    crd::f32* outb, crd::usize n2, const crd::f32* lor, const crd::f32* loi,
-    const crd::f32* hir, const crd::f32* hii, crd::u32 msh) noexcept
-{
-    namespace lanes = crd::hesap::fft::lanes;
-    using V = lanes::Lane<crd::f32>;
-    alignas(64) V sp[32];
-    const crd::usize tiles = n2 - n2 % lanes::kTile<crd::f32>;
-    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
-    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
-    {
-        codelet16_stage1_fused_sh_csf_part0<V>(in, outb, n2, lor, loi, hir, hii, msh, t, sp);
-        codelet16_stage1_fused_sh_csf_part1<V>(in, outb, n2, lor, loi, hir, hii, msh, t, sp);
-        codelet16_stage1_fused_sh_csf_part2<V>(in, outb, n2, lor, loi, hir, hii, msh, t, sp);
-    }
-    if constexpr (lanes::kPairedTiles<crd::f32>)
-    {
-        using H = lanes::TileLane<crd::f32>;
-        alignas(64) H sh[32];
-        if (wide < tiles)
-        {
-            codelet16_stage1_fused_sh_csf_part0<H>(in, outb, n2, lor, loi, hir, hii, msh, wide, sh);
-            codelet16_stage1_fused_sh_csf_part1<H>(in, outb, n2, lor, loi, hir, hii, msh, wide, sh);
-            codelet16_stage1_fused_sh_csf_part2<H>(in, outb, n2, lor, loi, hir, hii, msh, wide, sh);
-        }
-    }
-}
-// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
 template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_sh_csf_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::f32* outb, [[maybe_unused]] crd::usize n2, [[maybe_unused]] const crd::f32* lor,
     [[maybe_unused]] const crd::f32* loi, [[maybe_unused]] const crd::f32* hir, [[maybe_unused]] const crd::f32* hii,
@@ -40242,8 +39667,7 @@ template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_sh_csf_par
         const V x6i = simd::fma(w6i, n228r, n228i * w6r);
         const V x7r = simd::fnmadd(w7i, n237i, n237r * w7r);
         const V x7i = simd::fma(w7i, n237r, n237i * w7r);
-        simd::store_transposed(outb + t * 64 + 0, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 64 + 8, 64, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<true>(outb + t * 64 + 0, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n238r = n111r - n234r;
     const V n238i = n111i - n234i;
@@ -40381,8 +39805,7 @@ template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_sh_csf_par
         const V x6i = simd::fma(w6i, n229r, n229i * w6r);
         const V x7r = simd::fnmadd(w7i, n238i, n238r * w7r);
         const V x7i = simd::fma(w7i, n238r, n238i * w7r);
-        simd::store_transposed(outb + t * 64 + 32, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 64 + 40, 64, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<true>(outb + t * 64 + 32, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n239r = n112r + n236r;
     const V n239i = n112i + n236i;
@@ -40451,8 +39874,7 @@ template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_sh_csf_par
         const V x6i = simd::fma(w6i, n230r, n230i * w6r);
         const V x7r = simd::fnmadd(w7i, n239i, n239r * w7r);
         const V x7i = simd::fma(w7i, n239r, n239i * w7r);
-        simd::store_transposed(outb + t * 64 + 16, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 64 + 24, 64, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<true>(outb + t * 64 + 16, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n240r = n112r - n236r;
     const V n240i = n112i - n236i;
@@ -40550,8 +39972,7 @@ template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_sh_csf_par
         const V x6i = simd::fma(w6i, n231r, n231i * w6r);
         const V x7r = simd::fnmadd(w7i, n240i, n240r * w7r);
         const V x7i = simd::fma(w7i, n240r, n240i * w7r);
-        simd::store_transposed(outb + t * 64 + 48, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 64 + 56, 64, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<true>(outb + t * 64 + 48, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
 }
 // N1=32 FACTORED-TWIDDLE stage-1 (L1-resident hi/lo tables) (f32). GENERATED.
@@ -44627,8 +44048,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1116r, n1116i * w6r);
         const V x7r = simd::fnmadd(w7i, n1125i, n1125r * w7r);
         const V x7i = simd::fma(w7i, n1125r, n1125i * w7r);
-        simd::store_transposed(outb + t * 256 + 0, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 8, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 0, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1126r = n565r - n1122r;
     const V n1126i = n565i - n1122i;
@@ -44733,6 +44153,8 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     const V n1063r = sp[127];
     const V n1138i = sp[132];
     const V n1138r = sp[133];
+    const V n1147i = sp[134];
+    const V n1147r = sp[135];
     const V n1064i = sp[140];
     const V n1064r = sp[141];
     const V n1065i = sp[142];
@@ -44743,6 +44165,8 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     const V n1072r = sp[165];
     const V n1139i = sp[200];
     const V n1139r = sp[201];
+    const V n1148i = sp[202];
+    const V n1148r = sp[203];
     {
         const V w0r = simd::load<V>(twr + 64 * n2 + t);
         const V w0i = simd::load<V>(twi + 64 * n2 + t);
@@ -44776,8 +44200,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1117r, n1117i * w6r);
         const V x7r = simd::fnmadd(w7i, n1126i, n1126r * w7r);
         const V x7i = simd::fma(w7i, n1126r, n1126i * w7r);
-        simd::store_transposed(outb + t * 256 + 128, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 136, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 128, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1127r = n566r + n1124r;
     const V n1127i = n566i + n1124i;
@@ -44814,8 +44237,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1118r, n1118i * w6r);
         const V x7r = simd::fnmadd(w7i, n1127i, n1127r * w7r);
         const V x7i = simd::fma(w7i, n1127r, n1127i * w7r);
-        simd::store_transposed(outb + t * 256 + 64, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 72, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 64, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1128r = n566r - n1124r;
     const V n1128i = n566i - n1124i;
@@ -44852,8 +44274,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1119r, n1119i * w6r);
         const V x7r = simd::fnmadd(w7i, n1128i, n1128r * w7r);
         const V x7i = simd::fma(w7i, n1128r, n1128i * w7r);
-        simd::store_transposed(outb + t * 256 + 192, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 200, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 192, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1132r = n1129r - n1130r;
     const V n1132i = n1129i - n1130i;
@@ -44891,22 +44312,31 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     const V n1145i = n584i + n1142i;
     const V n1146r = n584r - n1142r;
     const V n1146i = n584i - n1142i;
+    const V n1150r = n1147r - n1148r;
+    const V n1150i = n1147i - n1148i;
+    const V n1149r = n1147r + n1148r;
+    const V n1149i = n1147i + n1148i;
+    const V n1151r = n1150i;
     sp[0] = n1134i;
     sp[1] = n1134r;
     sp[2] = n1143i;
     sp[3] = n1143r;
-    sp[4] = n1135i;
-    sp[5] = n1135r;
-    sp[6] = n1136i;
-    sp[7] = n1136r;
-    sp[8] = n1137i;
-    sp[9] = n1137r;
-    sp[10] = n1144i;
-    sp[11] = n1144r;
-    sp[12] = n1145i;
-    sp[13] = n1145r;
-    sp[14] = n1146i;
-    sp[15] = n1146r;
+    sp[4] = n1149i;
+    sp[5] = n1149r;
+    sp[6] = n1150r;
+    sp[7] = n1151r;
+    sp[8] = n1135i;
+    sp[9] = n1135r;
+    sp[10] = n1136i;
+    sp[11] = n1136r;
+    sp[12] = n1137i;
+    sp[13] = n1137r;
+    sp[14] = n1144i;
+    sp[15] = n1144r;
+    sp[16] = n1145i;
+    sp[17] = n1145r;
+    sp[18] = n1146i;
+    sp[19] = n1146r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
 template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_part18([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
@@ -44918,6 +44348,10 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     const V n1134r = sp[1];
     const V n1143i = sp[2];
     const V n1143r = sp[3];
+    const V n1149i = sp[4];
+    const V n1149r = sp[5];
+    const V n1150r = sp[6];
+    const V n1151r = sp[7];
     const V n290i = sp[32];
     const V n290r = sp[33];
     const V n299i = sp[34];
@@ -44952,8 +44386,6 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     const V n1183r = sp[91];
     const V n1192i = sp[116];
     const V n1192r = sp[117];
-    const V n1147i = sp[134];
-    const V n1147r = sp[135];
     const V n1157i = sp[166];
     const V n1157r = sp[167];
     const V n1166i = sp[180];
@@ -44964,13 +44396,6 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     const V n1184r = sp[189];
     const V n1193i = sp[190];
     const V n1193r = sp[191];
-    const V n1148i = sp[202];
-    const V n1148r = sp[203];
-    const V n1150r = n1147r - n1148r;
-    const V n1150i = n1147i - n1148i;
-    const V n1149r = n1147r + n1148r;
-    const V n1149i = n1147i + n1148i;
-    const V n1151r = n1150i;
     const V n1151i = V(0.0F) - n1150r;
     const V n592r = n290r + n589r;
     const V n592i = n290i + n589i;
@@ -45101,8 +44526,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1188r, n1188i * w6r);
         const V x7r = simd::fnmadd(w7i, n1197i, n1197r * w7r);
         const V x7i = simd::fma(w7i, n1197r, n1197i * w7r);
-        simd::store_transposed(outb + t * 256 + 16, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 24, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 16, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1198r = n637r - n1194r;
     const V n1198i = n637i - n1194i;
@@ -45110,10 +44534,10 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     sp[1] = n1153r;
     sp[2] = n1154i;
     sp[3] = n1154r;
-    sp[16] = n1155i;
-    sp[17] = n1155r;
-    sp[18] = n1162i;
-    sp[19] = n1162r;
+    sp[4] = n1155i;
+    sp[5] = n1155r;
+    sp[6] = n1162i;
+    sp[7] = n1162r;
     sp[20] = n1163i;
     sp[21] = n1163r;
     sp[22] = n1164i;
@@ -45153,22 +44577,22 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     const V n1153r = sp[1];
     const V n1154i = sp[2];
     const V n1154r = sp[3];
-    const V n1135i = sp[4];
-    const V n1135r = sp[5];
-    const V n1136i = sp[6];
-    const V n1136r = sp[7];
-    const V n1137i = sp[8];
-    const V n1137r = sp[9];
-    const V n1144i = sp[10];
-    const V n1144r = sp[11];
-    const V n1145i = sp[12];
-    const V n1145r = sp[13];
-    const V n1146i = sp[14];
-    const V n1146r = sp[15];
-    const V n1155i = sp[16];
-    const V n1155r = sp[17];
-    const V n1162i = sp[18];
-    const V n1162r = sp[19];
+    const V n1155i = sp[4];
+    const V n1155r = sp[5];
+    const V n1162i = sp[6];
+    const V n1162r = sp[7];
+    const V n1135i = sp[8];
+    const V n1135r = sp[9];
+    const V n1136i = sp[10];
+    const V n1136r = sp[11];
+    const V n1137i = sp[12];
+    const V n1137r = sp[13];
+    const V n1144i = sp[14];
+    const V n1144r = sp[15];
+    const V n1145i = sp[16];
+    const V n1145r = sp[17];
+    const V n1146i = sp[18];
+    const V n1146r = sp[19];
     const V n1163i = sp[20];
     const V n1163r = sp[21];
     const V n1164i = sp[22];
@@ -45201,6 +44625,8 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     const V n1201r = sp[173];
     const V n1210i = sp[174];
     const V n1210r = sp[175];
+    const V n1219i = sp[176];
+    const V n1219r = sp[177];
     const V n271i = sp[184];
     const V n271r = sp[185];
     const V n280i = sp[186];
@@ -45209,6 +44635,8 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     const V n1202r = sp[205];
     const V n1211i = sp[206];
     const V n1211r = sp[207];
+    const V n1220i = sp[216];
+    const V n1220r = sp[217];
     const V n501i = sp[248];
     const V n501r = sp[249];
     const V n510i = sp[250];
@@ -45246,8 +44674,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1189r, n1189i * w6r);
         const V x7r = simd::fnmadd(w7i, n1198i, n1198r * w7r);
         const V x7i = simd::fma(w7i, n1198r, n1198i * w7r);
-        simd::store_transposed(outb + t * 256 + 144, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 152, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 144, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1199r = n638r + n1196r;
     const V n1199i = n638i + n1196i;
@@ -45284,8 +44711,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1190r, n1190i * w6r);
         const V x7r = simd::fnmadd(w7i, n1199i, n1199r * w7r);
         const V x7i = simd::fma(w7i, n1199r, n1199i * w7r);
-        simd::store_transposed(outb + t * 256 + 80, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 88, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 80, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1200r = n638r - n1196r;
     const V n1200i = n638i - n1196i;
@@ -45322,8 +44748,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1191r, n1191i * w6r);
         const V x7r = simd::fnmadd(w7i, n1200i, n1200r * w7r);
         const V x7i = simd::fma(w7i, n1200r, n1200i * w7r);
-        simd::store_transposed(outb + t * 256 + 208, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 216, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 208, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1204r = n1201r - n1202r;
     const V n1204i = n1201i - n1202i;
@@ -45361,22 +44786,31 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     const V n1217i = n514i + n1214i;
     const V n1218r = n514r - n1214r;
     const V n1218i = n514i - n1214i;
+    const V n1222r = n1219r - n1220r;
+    const V n1222i = n1219i - n1220i;
+    const V n1221r = n1219r + n1220r;
+    const V n1221i = n1219i + n1220i;
+    const V n1223r = n1222i;
     sp[0] = n1206i;
     sp[1] = n1206r;
     sp[2] = n1215i;
     sp[3] = n1215r;
-    sp[4] = n1207i;
-    sp[5] = n1207r;
-    sp[6] = n1208i;
-    sp[7] = n1208r;
-    sp[8] = n1209i;
-    sp[9] = n1209r;
-    sp[10] = n1216i;
-    sp[11] = n1216r;
-    sp[12] = n1217i;
-    sp[13] = n1217r;
-    sp[14] = n1218i;
-    sp[15] = n1218r;
+    sp[4] = n1221i;
+    sp[5] = n1221r;
+    sp[6] = n1222r;
+    sp[7] = n1223r;
+    sp[8] = n1207i;
+    sp[9] = n1207r;
+    sp[10] = n1208i;
+    sp[11] = n1208r;
+    sp[12] = n1209i;
+    sp[13] = n1209r;
+    sp[14] = n1216i;
+    sp[15] = n1216r;
+    sp[16] = n1217i;
+    sp[17] = n1217r;
+    sp[18] = n1218i;
+    sp[19] = n1218r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
 template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_part20([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
@@ -45388,6 +44822,10 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     const V n1206r = sp[1];
     const V n1215i = sp[2];
     const V n1215r = sp[3];
+    const V n1221i = sp[4];
+    const V n1221r = sp[5];
+    const V n1222r = sp[6];
+    const V n1223r = sp[7];
     const V n289i = sp[56];
     const V n289r = sp[57];
     const V n298i = sp[58];
@@ -45422,8 +44860,6 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     const V n1255r = sp[159];
     const V n1264i = sp[160];
     const V n1264r = sp[161];
-    const V n1219i = sp[176];
-    const V n1219r = sp[177];
     const V n1229i = sp[192];
     const V n1229r = sp[193];
     const V n1238i = sp[194];
@@ -45432,15 +44868,8 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     const V n1247r = sp[197];
     const V n1256i = sp[198];
     const V n1256r = sp[199];
-    const V n1220i = sp[216];
-    const V n1220r = sp[217];
     const V n1265i = sp[220];
     const V n1265r = sp[221];
-    const V n1222r = n1219r - n1220r;
-    const V n1222i = n1219i - n1220i;
-    const V n1221r = n1219r + n1220r;
-    const V n1221i = n1219i + n1220i;
-    const V n1223r = n1222i;
     const V n1223i = V(0.0F) - n1222r;
     const V n522r = n289r + n519r;
     const V n522i = n289i + n519i;
@@ -45571,8 +45000,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1260r, n1260i * w6r);
         const V x7r = simd::fnmadd(w7i, n1269i, n1269r * w7r);
         const V x7i = simd::fma(w7i, n1269r, n1269i * w7r);
-        simd::store_transposed(outb + t * 256 + 32, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 40, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 32, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1270r = n567r - n1266r;
     const V n1270i = n567i - n1266i;
@@ -45580,10 +45008,10 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     sp[1] = n1225r;
     sp[2] = n1226i;
     sp[3] = n1226r;
-    sp[16] = n1227i;
-    sp[17] = n1227r;
-    sp[18] = n1234i;
-    sp[19] = n1234r;
+    sp[4] = n1227i;
+    sp[5] = n1227r;
+    sp[6] = n1234i;
+    sp[7] = n1234r;
     sp[20] = n1235i;
     sp[21] = n1235r;
     sp[22] = n1236i;
@@ -45623,22 +45051,22 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     const V n1225r = sp[1];
     const V n1226i = sp[2];
     const V n1226r = sp[3];
-    const V n1207i = sp[4];
-    const V n1207r = sp[5];
-    const V n1208i = sp[6];
-    const V n1208r = sp[7];
-    const V n1209i = sp[8];
-    const V n1209r = sp[9];
-    const V n1216i = sp[10];
-    const V n1216r = sp[11];
-    const V n1217i = sp[12];
-    const V n1217r = sp[13];
-    const V n1218i = sp[14];
-    const V n1218r = sp[15];
-    const V n1227i = sp[16];
-    const V n1227r = sp[17];
-    const V n1234i = sp[18];
-    const V n1234r = sp[19];
+    const V n1227i = sp[4];
+    const V n1227r = sp[5];
+    const V n1234i = sp[6];
+    const V n1234r = sp[7];
+    const V n1207i = sp[8];
+    const V n1207r = sp[9];
+    const V n1208i = sp[10];
+    const V n1208r = sp[11];
+    const V n1209i = sp[12];
+    const V n1209r = sp[13];
+    const V n1216i = sp[14];
+    const V n1216r = sp[15];
+    const V n1217i = sp[16];
+    const V n1217r = sp[17];
+    const V n1218i = sp[18];
+    const V n1218r = sp[19];
     const V n1235i = sp[20];
     const V n1235r = sp[21];
     const V n1236i = sp[22];
@@ -45681,8 +45109,12 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     const V n1274r = sp[219];
     const V n1282i = sp[244];
     const V n1282r = sp[245];
+    const V n1291i = sp[246];
+    const V n1291r = sp[247];
     const V n1283i = sp[252];
     const V n1283r = sp[253];
+    const V n1292i = sp[254];
+    const V n1292r = sp[255];
     {
         const V w0r = simd::load<V>(twr + 80 * n2 + t);
         const V w0i = simd::load<V>(twi + 80 * n2 + t);
@@ -45716,8 +45148,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1261r, n1261i * w6r);
         const V x7r = simd::fnmadd(w7i, n1270i, n1270r * w7r);
         const V x7i = simd::fma(w7i, n1270r, n1270i * w7r);
-        simd::store_transposed(outb + t * 256 + 160, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 168, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 160, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1271r = n568r + n1268r;
     const V n1271i = n568i + n1268i;
@@ -45754,8 +45185,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1262r, n1262i * w6r);
         const V x7r = simd::fnmadd(w7i, n1271i, n1271r * w7r);
         const V x7i = simd::fma(w7i, n1271r, n1271i * w7r);
-        simd::store_transposed(outb + t * 256 + 96, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 104, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 96, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1272r = n568r - n1268r;
     const V n1272i = n568i - n1268i;
@@ -45792,8 +45222,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1263r, n1263i * w6r);
         const V x7r = simd::fnmadd(w7i, n1272i, n1272r * w7r);
         const V x7i = simd::fma(w7i, n1272r, n1272i * w7r);
-        simd::store_transposed(outb + t * 256 + 224, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 232, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 224, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1276r = n1273r - n1274r;
     const V n1276i = n1273i - n1274i;
@@ -45831,22 +45260,31 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     const V n1289i = n586i + n1286i;
     const V n1290r = n586r - n1286r;
     const V n1290i = n586i - n1286i;
+    const V n1294r = n1291r - n1292r;
+    const V n1294i = n1291i - n1292i;
+    const V n1293r = n1291r + n1292r;
+    const V n1293i = n1291i + n1292i;
+    const V n1295r = n1294i;
     sp[0] = n1278i;
     sp[1] = n1278r;
     sp[2] = n1287i;
     sp[3] = n1287r;
-    sp[4] = n1279i;
-    sp[5] = n1279r;
-    sp[6] = n1280i;
-    sp[7] = n1280r;
-    sp[8] = n1281i;
-    sp[9] = n1281r;
-    sp[10] = n1288i;
-    sp[11] = n1288r;
-    sp[12] = n1289i;
-    sp[13] = n1289r;
-    sp[14] = n1290i;
-    sp[15] = n1290r;
+    sp[4] = n1293i;
+    sp[5] = n1293r;
+    sp[6] = n1294r;
+    sp[7] = n1295r;
+    sp[8] = n1279i;
+    sp[9] = n1279r;
+    sp[10] = n1280i;
+    sp[11] = n1280r;
+    sp[12] = n1281i;
+    sp[13] = n1281r;
+    sp[14] = n1288i;
+    sp[15] = n1288r;
+    sp[16] = n1289i;
+    sp[17] = n1289r;
+    sp[18] = n1290i;
+    sp[19] = n1290r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
 template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_part22([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
@@ -45858,6 +45296,10 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     const V n1278r = sp[1];
     const V n1287i = sp[2];
     const V n1287r = sp[3];
+    const V n1293i = sp[4];
+    const V n1293r = sp[5];
+    const V n1294r = sp[6];
+    const V n1295r = sp[7];
     const V n291i = sp[146];
     const V n291r = sp[147];
     const V n300i = sp[148];
@@ -45902,15 +45344,6 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     const V n627r = sp[241];
     const V n636i = sp[242];
     const V n636r = sp[243];
-    const V n1291i = sp[246];
-    const V n1291r = sp[247];
-    const V n1292i = sp[254];
-    const V n1292r = sp[255];
-    const V n1294r = n1291r - n1292r;
-    const V n1294i = n1291i - n1292i;
-    const V n1293r = n1291r + n1292r;
-    const V n1293i = n1291i + n1292i;
-    const V n1295r = n1294i;
     const V n1295i = V(0.0F) - n1294r;
     const V n594r = n291r + n591r;
     const V n594i = n291i + n591i;
@@ -46041,8 +45474,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1332r, n1332i * w6r);
         const V x7r = simd::fnmadd(w7i, n1341i, n1341r * w7r);
         const V x7i = simd::fma(w7i, n1341r, n1341i * w7r);
-        simd::store_transposed(outb + t * 256 + 48, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 56, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 48, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1342r = n639r - n1338r;
     const V n1342i = n639i - n1338i;
@@ -46050,10 +45482,10 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     sp[1] = n1297r;
     sp[2] = n1298i;
     sp[3] = n1298r;
-    sp[16] = n1299i;
-    sp[17] = n1299r;
-    sp[18] = n1306i;
-    sp[19] = n1306r;
+    sp[4] = n1299i;
+    sp[5] = n1299r;
+    sp[6] = n1306i;
+    sp[7] = n1306r;
     sp[20] = n1307i;
     sp[21] = n1307r;
     sp[22] = n1308i;
@@ -46093,22 +45525,22 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
     const V n1297r = sp[1];
     const V n1298i = sp[2];
     const V n1298r = sp[3];
-    const V n1279i = sp[4];
-    const V n1279r = sp[5];
-    const V n1280i = sp[6];
-    const V n1280r = sp[7];
-    const V n1281i = sp[8];
-    const V n1281r = sp[9];
-    const V n1288i = sp[10];
-    const V n1288r = sp[11];
-    const V n1289i = sp[12];
-    const V n1289r = sp[13];
-    const V n1290i = sp[14];
-    const V n1290r = sp[15];
-    const V n1299i = sp[16];
-    const V n1299r = sp[17];
-    const V n1306i = sp[18];
-    const V n1306r = sp[19];
+    const V n1299i = sp[4];
+    const V n1299r = sp[5];
+    const V n1306i = sp[6];
+    const V n1306r = sp[7];
+    const V n1279i = sp[8];
+    const V n1279r = sp[9];
+    const V n1280i = sp[10];
+    const V n1280r = sp[11];
+    const V n1281i = sp[12];
+    const V n1281r = sp[13];
+    const V n1288i = sp[14];
+    const V n1288r = sp[15];
+    const V n1289i = sp[16];
+    const V n1289r = sp[17];
+    const V n1290i = sp[18];
+    const V n1290r = sp[19];
     const V n1307i = sp[20];
     const V n1307r = sp[21];
     const V n1308i = sp[22];
@@ -46170,8 +45602,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1333r, n1333i * w6r);
         const V x7r = simd::fnmadd(w7i, n1342i, n1342r * w7r);
         const V x7i = simd::fma(w7i, n1342r, n1342i * w7r);
-        simd::store_transposed(outb + t * 256 + 176, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 184, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 176, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1343r = n640r + n1340r;
     const V n1343i = n640i + n1340i;
@@ -46208,8 +45639,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1334r, n1334i * w6r);
         const V x7r = simd::fnmadd(w7i, n1343i, n1343r * w7r);
         const V x7i = simd::fma(w7i, n1343r, n1343i * w7r);
-        simd::store_transposed(outb + t * 256 + 112, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 120, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 112, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
     const V n1344r = n640r - n1340r;
     const V n1344i = n640i - n1340i;
@@ -46246,8 +45676,7 @@ template <typename V> CRD_NOINLINE static void codelet128_stage1_fused_sh_cs_par
         const V x6i = simd::fma(w6i, n1335r, n1335i * w6r);
         const V x7r = simd::fnmadd(w7i, n1344i, n1344r * w7r);
         const V x7i = simd::fma(w7i, n1344r, n1344i * w7r);
-        simd::store_transposed(outb + t * 256 + 240, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + t * 256 + 248, 256, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
+        simd::store_transposed<false>(outb + t * 256 + 240, 256, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
     }
 }
 // N1=128 SPLIT-LAYOUT stage-1 (complex in, plane out) (f32). GENERATED.
@@ -51215,34 +50644,331 @@ void codelet128_batched_sc(const crd::f32* inb,
     }
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
-    [[maybe_unused]] crd::f32* outb, [[maybe_unused]] crd::usize blk, [[maybe_unused]] const crd::f32* twr,
-    [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t, V* sp) noexcept
+template <typename V> CRD_NOINLINE static void codelet16_batched_strided_sc_part0([[maybe_unused]] const crd::f32* inb,
+    [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize bs, [[maybe_unused]] crd::usize os,
+    [[maybe_unused]] crd::usize t, V* sp) noexcept
 {
     namespace simd = crd::hesap::fft::lanes;
-    const crd::usize i0 = blk * 128;
-    const crd::usize c = t >> 7;
-    const crd::usize src = i0 + c * 1024 + (t & 127);
+    const crd::usize b2 = 2 * bs;
     V n0r;
-    V n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + src), n0r, n0i);
-    V n16r;
-    V n16i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 524288 + src), n16r, n16i);
+    V n0i; simd::load_block(inb + 0 * b2, t, n0r, n0i);
+    V n8r;
+    V n8i; simd::load_block(inb + 8 * b2, t, n8r, n8i);
     V n1r;
-    V n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 32768 + src), n1r, n1i);
-    V n17r;
-    V n17i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 557056 + src), n17r, n17i);
+    V n1i; simd::load_block(inb + 1 * b2, t, n1r, n1i);
+    V n9r;
+    V n9i; simd::load_block(inb + 9 * b2, t, n9r, n9i);
     V n2r;
-    V n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 65536 + src), n2r, n2i);
-    V n18r;
-    V n18i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 589824 + src), n18r, n18i);
+    V n2i; simd::load_block(inb + 2 * b2, t, n2r, n2i);
+    V n10r;
+    V n10i; simd::load_block(inb + 10 * b2, t, n10r, n10i);
+    const V n26r = n2r - n10r;
+    const V n26i = n2i - n10i;
+    const V n25r = n2r + n10r;
+    const V n25i = n2i + n10i;
+    const V n36r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n26i, V(static_cast<crd::f32>(0.7071067811865476)) * n26r);
+    const V n36i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n26r, V(static_cast<crd::f32>(0.7071067811865476)) * n26i);
     V n3r;
-    V n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 98304 + src), n3r, n3i);
-    V n19r;
-    V n19i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 622592 + src), n19r, n19i);
+    V n3i; simd::load_block(inb + 3 * b2, t, n3r, n3i);
+    V n11r;
+    V n11i; simd::load_block(inb + 11 * b2, t, n11r, n11i);
     V n4r;
-    V n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 131072 + src), n4r, n4i);
+    V n4i; simd::load_block(inb + 4 * b2, t, n4r, n4i);
+    V n12r;
+    V n12i; simd::load_block(inb + 12 * b2, t, n12r, n12i);
+    const V n19r = n4r - n12r;
+    const V n19i = n4i - n12i;
+    const V n18r = n4r + n12r;
+    const V n18i = n4i + n12i;
+    const V n20r = n19i;
+    const V n20i = V(0.0F) - n19r;
+    const V n16r = n0r + n8r;
+    const V n16i = n0i + n8i;
+    const V n17r = n0r - n8r;
+    const V n17i = n0i - n8i;
+    V n5r;
+    V n5i; simd::load_block(inb + 5 * b2, t, n5r, n5i);
+    V n13r;
+    V n13i; simd::load_block(inb + 13 * b2, t, n13r, n13i);
+    const V n48r = n5r - n13r;
+    const V n48i = n5i - n13i;
+    const V n47r = n5r + n13r;
+    const V n47i = n5i + n13i;
+    const V n49r = n48i;
+    const V n49i = V(0.0F) - n48r;
+    const V n45r = n1r + n9r;
+    const V n45i = n1i + n9i;
+    const V n46r = n1r - n9r;
+    const V n46i = n1i - n9i;
+    const V n51r = n45r - n47r;
+    const V n51i = n45i - n47i;
+    const V n50r = n45r + n47r;
+    const V n50i = n45i + n47i;
+    const V n79r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n51i, V(static_cast<crd::f32>(0.7071067811865476)) * n51r);
+    const V n79i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n51r, V(static_cast<crd::f32>(0.7071067811865476)) * n51i);
+    const V n52r = n46r + n49r;
+    const V n52i = n46i + n49i;
+    const V n53r = n46r - n49r;
+    const V n53i = n46i - n49i;
+    const V n70r = simd::fnmadd(V(static_cast<crd::f32>(-0.3826834323650898)), n52i, V(static_cast<crd::f32>(0.9238795325112867)) * n52r);
+    const V n70i = simd::fma(V(static_cast<crd::f32>(-0.3826834323650898)), n52r, V(static_cast<crd::f32>(0.9238795325112867)) * n52i);
+    const V n88r = simd::fnmadd(V(static_cast<crd::f32>(-0.9238795325112867)), n53i, V(static_cast<crd::f32>(0.38268343236508984)) * n53r);
+    const V n88i = simd::fma(V(static_cast<crd::f32>(-0.9238795325112867)), n53r, V(static_cast<crd::f32>(0.38268343236508984)) * n53i);
+    V n6r;
+    V n6i; simd::load_block(inb + 6 * b2, t, n6r, n6i);
+    V n14r;
+    V n14i; simd::load_block(inb + 14 * b2, t, n14r, n14i);
+    const V n27r = n6r + n14r;
+    const V n27i = n6i + n14i;
+    const V n28r = n6r - n14r;
+    const V n28i = n6i - n14i;
+    const V n37r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865476)), n28i, V(static_cast<crd::f32>(-0.7071067811865475)) * n28r);
+    const V n37i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865476)), n28r, V(static_cast<crd::f32>(-0.7071067811865475)) * n28i);
+    const V n30r = n25r - n27r;
+    const V n30i = n25i - n27i;
+    const V n29r = n25r + n27r;
+    const V n29i = n25i + n27i;
+    const V n31r = n30i;
+    const V n31i = V(0.0F) - n30r;
+    const V n21r = n16r + n18r;
+    const V n21i = n16i + n18i;
+    const V n22r = n16r - n18r;
+    const V n22i = n16i - n18i;
+    const V n39r = n36r - n37r;
+    const V n39i = n36i - n37i;
+    const V n38r = n36r + n37r;
+    const V n38i = n36i + n37i;
+    const V n40r = n39i;
+    const V n40i = V(0.0F) - n39r;
+    const V n23r = n17r + n20r;
+    const V n23i = n17i + n20i;
+    const V n24r = n17r - n20r;
+    const V n24i = n17i - n20i;
+    V n7r;
+    V n7i; simd::load_block(inb + 7 * b2, t, n7r, n7i);
+    V n15r;
+    V n15i; simd::load_block(inb + 15 * b2, t, n15r, n15i);
+    const V n57r = n7r - n15r;
+    const V n57i = n7i - n15i;
+    const V n56r = n7r + n15r;
+    const V n56i = n7i + n15i;
+    const V n58r = n57i;
+    const V n58i = V(0.0F) - n57r;
+    const V n54r = n3r + n11r;
+    const V n54i = n3i + n11i;
+    const V n55r = n3r - n11r;
+    const V n55i = n3i - n11i;
+    const V n59r = n54r + n56r;
+    const V n59i = n54i + n56i;
+    const V n60r = n54r - n56r;
+    const V n60i = n54i - n56i;
+    const V n80r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865476)), n60i, V(static_cast<crd::f32>(-0.7071067811865475)) * n60r);
+    const V n80i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865476)), n60r, V(static_cast<crd::f32>(-0.7071067811865475)) * n60i);
+    const V n61r = n55r + n58r;
+    const V n61i = n55i + n58i;
+    const V n62r = n55r - n58r;
+    const V n62i = n55i - n58i;
+    const V n71r = simd::fnmadd(V(static_cast<crd::f32>(-0.9238795325112867)), n61i, V(static_cast<crd::f32>(0.38268343236508984)) * n61r);
+    const V n71i = simd::fma(V(static_cast<crd::f32>(-0.9238795325112867)), n61r, V(static_cast<crd::f32>(0.38268343236508984)) * n61i);
+    const V n89r = simd::fnmadd(V(static_cast<crd::f32>(0.38268343236508967)), n62i, V(static_cast<crd::f32>(-0.9238795325112868)) * n62r);
+    const V n89i = simd::fma(V(static_cast<crd::f32>(0.38268343236508967)), n62r, V(static_cast<crd::f32>(-0.9238795325112868)) * n62i);
+    const V n64r = n50r - n59r;
+    const V n64i = n50i - n59i;
+    const V n63r = n50r + n59r;
+    const V n63i = n50i + n59i;
+    const V n65r = n64i;
+    const V n65i = V(0.0F) - n64r;
+    const V n32r = n21r + n29r;
+    const V n32i = n21i + n29i;
+    const V n33r = n21r - n29r;
+    const V n33i = n21i - n29i;
+    const V n66r = n32r + n63r;
+    const V n66i = n32i + n63i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 0 * os + t), n66r, n66i);
+    const V n67r = n32r - n63r;
+    const V n67i = n32i - n63i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 8 * os + t), n67r, n67i);
+    const V n68r = n33r + n65r;
+    const V n68i = n33i + n65i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 4 * os + t), n68r, n68i);
+    const V n69r = n33r - n65r;
+    const V n69i = n33i - n65i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 12 * os + t), n69r, n69i);
+    const V n73r = n70r - n71r;
+    const V n73i = n70i - n71i;
+    const V n72r = n70r + n71r;
+    const V n72i = n70i + n71i;
+    const V n74r = n73i;
+    const V n74i = V(0.0F) - n73r;
+    sp[0] = n22i;
+    sp[1] = n22r;
+    sp[2] = n23i;
+    sp[3] = n23r;
+    sp[4] = n24i;
+    sp[5] = n24r;
+    sp[6] = n31i;
+    sp[7] = n31r;
+    sp[8] = n38i;
+    sp[9] = n38r;
+    sp[10] = n40i;
+    sp[11] = n40r;
+    sp[12] = n72i;
+    sp[13] = n72r;
+    sp[14] = n74i;
+    sp[15] = n74r;
+    sp[16] = n79i;
+    sp[17] = n79r;
+    sp[18] = n80i;
+    sp[19] = n80r;
+    sp[20] = n88i;
+    sp[21] = n88r;
+    sp[22] = n89i;
+    sp[23] = n89r;
+}
+// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
+template <typename V> CRD_NOINLINE static void codelet16_batched_strided_sc_part1([[maybe_unused]] const crd::f32* inb,
+    [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize bs, [[maybe_unused]] crd::usize os,
+    [[maybe_unused]] crd::usize t, const V* sp) noexcept
+{
+    namespace simd = crd::hesap::fft::lanes;
+    const V n22i = sp[0];
+    const V n22r = sp[1];
+    const V n23i = sp[2];
+    const V n23r = sp[3];
+    const V n24i = sp[4];
+    const V n24r = sp[5];
+    const V n31i = sp[6];
+    const V n31r = sp[7];
+    const V n38i = sp[8];
+    const V n38r = sp[9];
+    const V n40i = sp[10];
+    const V n40r = sp[11];
+    const V n72i = sp[12];
+    const V n72r = sp[13];
+    const V n74i = sp[14];
+    const V n74r = sp[15];
+    const V n79i = sp[16];
+    const V n79r = sp[17];
+    const V n80i = sp[18];
+    const V n80r = sp[19];
+    const V n88i = sp[20];
+    const V n88r = sp[21];
+    const V n89i = sp[22];
+    const V n89r = sp[23];
+    const V n41r = n23r + n38r;
+    const V n41i = n23i + n38i;
+    const V n42r = n23r - n38r;
+    const V n42i = n23i - n38i;
+    const V n75r = n41r + n72r;
+    const V n75i = n41i + n72i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 1 * os + t), n75r, n75i);
+    const V n76r = n41r - n72r;
+    const V n76i = n41i - n72i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 9 * os + t), n76r, n76i);
+    const V n77r = n42r + n74r;
+    const V n77i = n42i + n74i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 5 * os + t), n77r, n77i);
+    const V n78r = n42r - n74r;
+    const V n78i = n42i - n74i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 13 * os + t), n78r, n78i);
+    const V n82r = n79r - n80r;
+    const V n82i = n79i - n80i;
+    const V n81r = n79r + n80r;
+    const V n81i = n79i + n80i;
+    const V n83r = n82i;
+    const V n83i = V(0.0F) - n82r;
+    const V n34r = n22r + n31r;
+    const V n34i = n22i + n31i;
+    const V n35r = n22r - n31r;
+    const V n35i = n22i - n31i;
+    const V n84r = n34r + n81r;
+    const V n84i = n34i + n81i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 2 * os + t), n84r, n84i);
+    const V n85r = n34r - n81r;
+    const V n85i = n34i - n81i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 10 * os + t), n85r, n85i);
+    const V n86r = n35r + n83r;
+    const V n86i = n35i + n83i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 6 * os + t), n86r, n86i);
+    const V n87r = n35r - n83r;
+    const V n87i = n35i - n83i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 14 * os + t), n87r, n87i);
+    const V n91r = n88r - n89r;
+    const V n91i = n88i - n89i;
+    const V n90r = n88r + n89r;
+    const V n90i = n88i + n89i;
+    const V n92r = n91i;
+    const V n92i = V(0.0F) - n91r;
+    const V n43r = n24r + n40r;
+    const V n43i = n24i + n40i;
+    const V n44r = n24r - n40r;
+    const V n44i = n24i - n40i;
+    const V n93r = n43r + n90r;
+    const V n93i = n43i + n90i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 3 * os + t), n93r, n93i);
+    const V n94r = n43r - n90r;
+    const V n94i = n43i - n90i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 11 * os + t), n94r, n94i);
+    const V n95r = n44r + n92r;
+    const V n95i = n44i + n92i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 7 * os + t), n95r, n95i);
+    const V n96r = n44r - n92r;
+    const V n96i = n44i - n92i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 15 * os + t), n96r, n96i);
+}
+// N=16 SPLIT-LAYOUT deep-split S3 (plane in, strided complex out) (f32). GENERATED.
+// NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG; retain fused scope.
+void codelet16_batched_strided_sc(const crd::f32* inb,
+    crd::hesap::Complex<crd::f32>* out, crd::usize bs, crd::usize os) noexcept
+{
+    namespace lanes = crd::hesap::fft::lanes;
+    using V = lanes::Lane<crd::f32>;
+    alignas(64) V sp[24];
+    const crd::usize tiles = bs - bs % lanes::kTile<crd::f32>;
+    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
+    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
+    {
+        codelet16_batched_strided_sc_part0<V>(inb, out, bs, os, t, sp);
+        codelet16_batched_strided_sc_part1<V>(inb, out, bs, os, t, sp);
+    }
+    if constexpr (lanes::kPairedTiles<crd::f32>)
+    {
+        using H = lanes::TileLane<crd::f32>;
+        alignas(64) H sh[24];
+        if (wide < tiles)
+        {
+            codelet16_batched_strided_sc_part0<H>(inb, out, bs, os, wide, sh);
+            codelet16_batched_strided_sc_part1<H>(inb, out, bs, os, wide, sh);
+        }
+    }
+}
+// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
+template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_corner_part0([[maybe_unused]] const crd::f32* inb,
+    [[maybe_unused]] crd::f32* nt, [[maybe_unused]] crd::usize blk, [[maybe_unused]] crd::usize t, V* sp) noexcept
+{
+    namespace simd = crd::hesap::fft::lanes;
+    const crd::usize q = t & 31;
+    const crd::usize src = (t >> 5) * 64;
+    V n0r;
+    V n0i; simd::load_block(inb + src, q, n0r, n0i);
+    V n16r;
+    V n16i; simd::load_block(inb + 131328 + src, q, n16r, n16i);
+    V n1r;
+    V n1i; simd::load_block(inb + 8208 + src, q, n1r, n1i);
+    V n17r;
+    V n17i; simd::load_block(inb + 139536 + src, q, n17r, n17i);
+    V n2r;
+    V n2i; simd::load_block(inb + 16416 + src, q, n2r, n2i);
+    V n18r;
+    V n18i; simd::load_block(inb + 147744 + src, q, n18r, n18i);
+    V n3r;
+    V n3i; simd::load_block(inb + 24624 + src, q, n3r, n3i);
+    V n19r;
+    V n19i; simd::load_block(inb + 155952 + src, q, n19r, n19i);
+    V n4r;
+    V n4i; simd::load_block(inb + 32832 + src, q, n4r, n4i);
     V n20r;
-    V n20i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 655360 + src), n20r, n20i);
+    V n20i; simd::load_block(inb + 164160 + src, q, n20r, n20i);
     const V n42r = n4r - n20r;
     const V n42i = n4i - n20i;
     const V n41r = n4r + n20r;
@@ -51250,9 +50976,9 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n52r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n42i, V(static_cast<crd::f32>(0.7071067811865476)) * n42r);
     const V n52i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n42r, V(static_cast<crd::f32>(0.7071067811865476)) * n42i);
     V n5r;
-    V n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 163840 + src), n5r, n5i);
+    V n5i; simd::load_block(inb + 41040 + src, q, n5r, n5i);
     V n21r;
-    V n21i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 688128 + src), n21r, n21i);
+    V n21i; simd::load_block(inb + 172368 + src, q, n21r, n21i);
     const V n123r = n5r - n21r;
     const V n123i = n5i - n21i;
     const V n122r = n5r + n21r;
@@ -51260,13 +50986,13 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n133r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n123i, V(static_cast<crd::f32>(0.7071067811865476)) * n123r);
     const V n133i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n123r, V(static_cast<crd::f32>(0.7071067811865476)) * n123i);
     V n6r;
-    V n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 196608 + src), n6r, n6i);
+    V n6i; simd::load_block(inb + 49248 + src, q, n6r, n6i);
     V n22r;
-    V n22i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 720896 + src), n22r, n22i);
+    V n22i; simd::load_block(inb + 180576 + src, q, n22r, n22i);
     V n7r;
-    V n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 229376 + src), n7r, n7i);
+    V n7i; simd::load_block(inb + 57456 + src, q, n7r, n7i);
     V n23r;
-    V n23i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 753664 + src), n23r, n23i);
+    V n23i; simd::load_block(inb + 188784 + src, q, n23r, n23i);
     const V n152r = n7r - n23r;
     const V n152i = n7i - n23i;
     const V n151r = n7r + n23r;
@@ -51274,9 +51000,9 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n162r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n152i, V(static_cast<crd::f32>(0.7071067811865476)) * n152r);
     const V n162i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n152r, V(static_cast<crd::f32>(0.7071067811865476)) * n152i);
     V n8r;
-    V n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 262144 + src), n8r, n8i);
+    V n8i; simd::load_block(inb + 65664 + src, q, n8r, n8i);
     V n24r;
-    V n24i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 786432 + src), n24r, n24i);
+    V n24i; simd::load_block(inb + 196992 + src, q, n24r, n24i);
     const V n35r = n8r - n24r;
     const V n35i = n8i - n24i;
     const V n34r = n8r + n24r;
@@ -51288,9 +51014,9 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n33r = n0r - n16r;
     const V n33i = n0i - n16i;
     V n9r;
-    V n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 294912 + src), n9r, n9i);
+    V n9i; simd::load_block(inb + 73872 + src, q, n9r, n9i);
     V n25r;
-    V n25i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 819200 + src), n25r, n25i);
+    V n25i; simd::load_block(inb + 205200 + src, q, n25r, n25i);
     const V n116r = n9r - n25r;
     const V n116i = n9i - n25i;
     const V n115r = n9r + n25r;
@@ -51302,9 +51028,9 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n114r = n1r - n17r;
     const V n114i = n1i - n17i;
     V n10r;
-    V n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 327680 + src), n10r, n10i);
+    V n10i; simd::load_block(inb + 82080 + src, q, n10r, n10i);
     V n26r;
-    V n26i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 851968 + src), n26r, n26i);
+    V n26i; simd::load_block(inb + 213408 + src, q, n26r, n26i);
     const V n64r = n10r - n26r;
     const V n64i = n10i - n26i;
     const V n63r = n10r + n26r;
@@ -51330,9 +51056,9 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     const V n104r = simd::fnmadd(V(static_cast<crd::f32>(-0.9238795325112867)), n69i, V(static_cast<crd::f32>(0.38268343236508984)) * n69r);
     const V n104i = simd::fma(V(static_cast<crd::f32>(-0.9238795325112867)), n69r, V(static_cast<crd::f32>(0.38268343236508984)) * n69i);
     V n11r;
-    V n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 360448 + src), n11r, n11i);
+    V n11i; simd::load_block(inb + 90288 + src, q, n11r, n11i);
     V n27r;
-    V n27i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 884736 + src), n27r, n27i);
+    V n27i; simd::load_block(inb + 221616 + src, q, n27r, n27i);
     const V n145r = n11r - n27r;
     const V n145i = n11i - n27i;
     const V n144r = n11r + n27r;
@@ -51393,14 +51119,12 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part0([[m
     sp[47] = n162r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part1([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
-    [[maybe_unused]] crd::f32* outb, [[maybe_unused]] crd::usize blk, [[maybe_unused]] const crd::f32* twr,
-    [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t, V* sp) noexcept
+template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_corner_part1([[maybe_unused]] const crd::f32* inb,
+    [[maybe_unused]] crd::f32* nt, [[maybe_unused]] crd::usize blk, [[maybe_unused]] crd::usize t, V* sp) noexcept
 {
     namespace simd = crd::hesap::fft::lanes;
-    const crd::usize i0 = blk * 128;
-    const crd::usize c = t >> 7;
-    const crd::usize src = i0 + c * 1024 + (t & 127);
+    const crd::usize q = t & 31;
+    const crd::usize src = (t >> 5) * 64;
     const V n113i = sp[0];
     const V n113r = sp[1];
     const V n114i = sp[2];
@@ -51436,9 +51160,9 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part1([[m
     const V n95i = sp[32];
     const V n95r = sp[33];
     V n12r;
-    V n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 393216 + src), n12r, n12i);
+    V n12i; simd::load_block(inb + 98496 + src, q, n12r, n12i);
     V n28r;
-    V n28i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 917504 + src), n28r, n28i);
+    V n28i; simd::load_block(inb + 229824 + src, q, n28r, n28i);
     const V n43r = n12r + n28r;
     const V n43i = n12i + n28i;
     const V n44r = n12r - n28r;
@@ -51466,9 +51190,9 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part1([[m
     const V n40r = n33r - n36r;
     const V n40i = n33i - n36i;
     V n13r;
-    V n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 425984 + src), n13r, n13i);
+    V n13i; simd::load_block(inb + 106704 + src, q, n13r, n13i);
     V n29r;
-    V n29i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 950272 + src), n29r, n29i);
+    V n29i; simd::load_block(inb + 238032 + src, q, n29r, n29i);
     const V n124r = n13r + n29r;
     const V n124i = n13i + n29i;
     const V n125r = n13r - n29r;
@@ -51526,9 +51250,9 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part1([[m
     const V n232r = simd::fnmadd(V(static_cast<crd::f32>(-0.9807852804032304)), n141i, V(static_cast<crd::f32>(0.19509032201612833)) * n141r);
     const V n232i = simd::fma(V(static_cast<crd::f32>(-0.9807852804032304)), n141r, V(static_cast<crd::f32>(0.19509032201612833)) * n141i);
     V n14r;
-    V n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 458752 + src), n14r, n14i);
+    V n14i; simd::load_block(inb + 114912 + src, q, n14r, n14i);
     V n30r;
-    V n30i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 983040 + src), n30r, n30i);
+    V n30i; simd::load_block(inb + 246240 + src, q, n30r, n30i);
     const V n73r = n14r - n30r;
     const V n73i = n14i - n30i;
     const V n72r = n14r + n30r;
@@ -51593,24 +51317,24 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part1([[m
     sp[7] = n187r;
     sp[8] = n196i;
     sp[9] = n196r;
-    sp[10] = n205i;
-    sp[11] = n205r;
-    sp[12] = n40i;
-    sp[13] = n40r;
-    sp[14] = n48i;
-    sp[15] = n48r;
-    sp[16] = n50i;
-    sp[17] = n50r;
-    sp[18] = n56i;
-    sp[19] = n56r;
-    sp[20] = n57i;
-    sp[21] = n57r;
-    sp[22] = n79i;
-    sp[23] = n79r;
-    sp[24] = n88i;
-    sp[25] = n88r;
-    sp[26] = n97i;
-    sp[27] = n97r;
+    sp[10] = n40i;
+    sp[11] = n40r;
+    sp[12] = n48i;
+    sp[13] = n48r;
+    sp[14] = n50i;
+    sp[15] = n50r;
+    sp[16] = n56i;
+    sp[17] = n56r;
+    sp[18] = n57i;
+    sp[19] = n57r;
+    sp[20] = n79i;
+    sp[21] = n79r;
+    sp[22] = n88i;
+    sp[23] = n88r;
+    sp[24] = n97i;
+    sp[25] = n97r;
+    sp[26] = n205i;
+    sp[27] = n205r;
     sp[28] = n214i;
     sp[29] = n214r;
     sp[30] = n223i;
@@ -51631,14 +51355,15 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part1([[m
     sp[59] = n99r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part2([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
-    [[maybe_unused]] crd::f32* outb, [[maybe_unused]] crd::usize blk, [[maybe_unused]] const crd::f32* twr,
-    [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t, V* sp) noexcept
+template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_corner_part2([[maybe_unused]] const crd::f32* inb,
+    [[maybe_unused]] crd::f32* nt, [[maybe_unused]] crd::usize blk, [[maybe_unused]] crd::usize t, V* sp) noexcept
 {
     namespace simd = crd::hesap::fft::lanes;
-    const crd::usize i0 = blk * 128;
-    const crd::usize c = t >> 7;
-    const crd::usize src = i0 + c * 1024 + (t & 127);
+    const crd::usize nb = blk * 262400;
+    const crd::usize q = t & 31;
+    const crd::usize kc = t & 15;
+    const crd::usize src = (t >> 5) * 64;
+    const crd::usize dst = nb + (t >> 8) * 16400 + ((t >> 4) & 1) * 256 + ((t >> 5) & 7) * 32;
     const V n105i = sp[0];
     const V n105r = sp[1];
     const V n129i = sp[2];
@@ -51649,24 +51374,22 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part2([[m
     const V n187r = sp[7];
     const V n196i = sp[8];
     const V n196r = sp[9];
-    const V n205i = sp[10];
-    const V n205r = sp[11];
-    const V n40i = sp[12];
-    const V n40r = sp[13];
-    const V n48i = sp[14];
-    const V n48r = sp[15];
-    const V n50i = sp[16];
-    const V n50r = sp[17];
-    const V n56i = sp[18];
-    const V n56r = sp[19];
-    const V n57i = sp[20];
-    const V n57r = sp[21];
-    const V n79i = sp[22];
-    const V n79r = sp[23];
-    const V n88i = sp[24];
-    const V n88r = sp[25];
-    const V n97i = sp[26];
-    const V n97r = sp[27];
+    const V n40i = sp[10];
+    const V n40r = sp[11];
+    const V n48i = sp[12];
+    const V n48r = sp[13];
+    const V n50i = sp[14];
+    const V n50r = sp[15];
+    const V n56i = sp[16];
+    const V n56r = sp[17];
+    const V n57i = sp[18];
+    const V n57r = sp[19];
+    const V n79i = sp[20];
+    const V n79r = sp[21];
+    const V n88i = sp[22];
+    const V n88r = sp[23];
+    const V n97i = sp[24];
+    const V n97r = sp[25];
     const V n104i = sp[34];
     const V n104r = sp[35];
     const V n142i = sp[36];
@@ -51692,9 +51415,9 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part2([[m
     const V n60r = n40r - n56r;
     const V n60i = n40i - n56i;
     V n15r;
-    V n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 491520 + src), n15r, n15i);
+    V n15i; simd::load_block(inb + 123120 + src, q, n15r, n15i);
     V n31r;
-    V n31i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 1015808 + src), n31r, n31i);
+    V n31i; simd::load_block(inb + 254448 + src, q, n31r, n31i);
     const V n153r = n15r + n31r;
     const V n153i = n15i + n31i;
     const V n154r = n15r - n31r;
@@ -51763,12 +51486,16 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part2([[m
     const V n83i = n48i - n79i;
     const V n174r = n82r + n171r;
     const V n174i = n82i + n171i;
+    simd::store_block(nt + dst, kc, n174r, n174i);
     const V n175r = n82r - n171r;
     const V n175i = n82i - n171i;
+    simd::store_block(nt + dst + 8192, kc, n175r, n175i);
     const V n176r = n83r + n173r;
     const V n176i = n83i + n173i;
+    simd::store_block(nt + dst + 4096, kc, n176r, n176i);
     const V n177r = n83r - n173r;
     const V n177i = n83i - n173i;
+    simd::store_block(nt + dst + 12288, kc, n177r, n177i);
     const V n181r = n178r - n179r;
     const V n181i = n178i - n179i;
     const V n180r = n178r + n179r;
@@ -51781,12 +51508,16 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part2([[m
     const V n92i = n57i - n88i;
     const V n183r = n91r + n180r;
     const V n183i = n91i + n180i;
+    simd::store_block(nt + dst + 512, kc, n183r, n183i);
     const V n184r = n91r - n180r;
     const V n184i = n91i - n180i;
+    simd::store_block(nt + dst + 8704, kc, n184r, n184i);
     const V n185r = n92r + n182r;
     const V n185i = n92i + n182i;
+    simd::store_block(nt + dst + 4608, kc, n185r, n185i);
     const V n186r = n92r - n182r;
     const V n186i = n92i - n182i;
+    simd::store_block(nt + dst + 12800, kc, n186r, n186i);
     const V n190r = n187r - n188r;
     const V n190i = n187i - n188i;
     const V n189r = n187r + n188r;
@@ -51799,12 +51530,16 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part2([[m
     const V n101i = n50i - n97i;
     const V n192r = n100r + n189r;
     const V n192i = n100i + n189i;
+    simd::store_block(nt + dst + 1024, kc, n192r, n192i);
     const V n193r = n100r - n189r;
     const V n193i = n100i - n189i;
+    simd::store_block(nt + dst + 9216, kc, n193r, n193i);
     const V n194r = n101r + n191r;
     const V n194i = n101i + n191i;
+    simd::store_block(nt + dst + 5120, kc, n194r, n194i);
     const V n195r = n101r - n191r;
     const V n195i = n101i - n191i;
+    simd::store_block(nt + dst + 13312, kc, n195r, n195i);
     const V n199r = n196r - n197r;
     const V n199i = n196i - n197i;
     const V n198r = n196r + n197r;
@@ -51817,109 +51552,63 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part2([[m
     const V n110i = n59i - n106i;
     const V n201r = n109r + n198r;
     const V n201i = n109i + n198i;
+    simd::store_block(nt + dst + 1536, kc, n201r, n201i);
     const V n202r = n109r - n198r;
-    const V n202i = n109i - n198i;
-    const V n203r = n110r + n200r;
-    const V n203i = n110i + n200i;
-    const V n204r = n110r - n200r;
-    const V n204i = n110i - n200i;
-    const V n208r = n205r - n206r;
-    const V n208i = n205i - n206i;
-    const V n207r = n205r + n206r;
-    const V n207i = n205i + n206i;
-    const V n209r = n208i;
-    const V n209i = V(0.0F) - n208r;
     sp[0] = n108i;
     sp[1] = n108r;
-    sp[2] = n174i;
-    sp[3] = n174r;
-    sp[4] = n175i;
-    sp[5] = n175r;
-    sp[6] = n183i;
-    sp[7] = n183r;
-    sp[8] = n184i;
-    sp[9] = n184r;
-    sp[10] = n192i;
-    sp[11] = n192r;
-    sp[12] = n193i;
-    sp[13] = n193r;
-    sp[14] = n201i;
-    sp[15] = n201r;
-    sp[16] = n202i;
-    sp[17] = n202r;
-    sp[18] = n207i;
-    sp[19] = n207r;
-    sp[20] = n209i;
-    sp[21] = n209r;
-    sp[22] = n215i;
-    sp[23] = n215r;
-    sp[24] = n224i;
-    sp[25] = n224r;
-    sp[26] = n233i;
-    sp[27] = n233r;
-    sp[34] = n60i;
-    sp[35] = n60r;
-    sp[36] = n176i;
-    sp[37] = n176r;
-    sp[38] = n177i;
-    sp[39] = n177r;
-    sp[40] = n185i;
-    sp[41] = n185r;
-    sp[42] = n186i;
-    sp[43] = n186r;
-    sp[44] = n194i;
-    sp[45] = n194r;
-    sp[46] = n195i;
-    sp[47] = n195r;
-    sp[60] = n203i;
-    sp[61] = n203r;
-    sp[62] = n204i;
-    sp[63] = n204r;
+    sp[2] = n109i;
+    sp[3] = n110i;
+    sp[4] = n110r;
+    sp[5] = n198i;
+    sp[6] = n200i;
+    sp[7] = n200r;
+    sp[8] = n202r;
+    sp[9] = n206i;
+    sp[10] = n206r;
+    sp[11] = n215i;
+    sp[12] = n215r;
+    sp[13] = n224i;
+    sp[14] = n224r;
+    sp[15] = n233i;
+    sp[16] = n233r;
+    sp[17] = n60i;
+    sp[18] = n60r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part3([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
-    [[maybe_unused]] crd::f32* outb, [[maybe_unused]] crd::usize blk, [[maybe_unused]] const crd::f32* twr,
-    [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t, V* sp) noexcept
+template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_corner_part3([[maybe_unused]] const crd::f32* inb,
+    [[maybe_unused]] crd::f32* nt, [[maybe_unused]] crd::usize blk, [[maybe_unused]] crd::usize t, const V* sp) noexcept
 {
     namespace simd = crd::hesap::fft::lanes;
-    const crd::usize c = t >> 7;
-    const crd::usize row = c * 8208 + (t & 127) * 64;
+    const crd::usize nb = blk * 262400;
+    const crd::usize kc = t & 15;
+    const crd::usize dst = nb + (t >> 8) * 16400 + ((t >> 4) & 1) * 256 + ((t >> 5) & 7) * 32;
     const V n108i = sp[0];
     const V n108r = sp[1];
-    const V n174i = sp[2];
-    const V n174r = sp[3];
-    const V n175i = sp[4];
-    const V n175r = sp[5];
-    const V n183i = sp[6];
-    const V n183r = sp[7];
-    const V n184i = sp[8];
-    const V n184r = sp[9];
-    const V n192i = sp[10];
-    const V n192r = sp[11];
-    const V n193i = sp[12];
-    const V n193r = sp[13];
-    const V n201i = sp[14];
-    const V n201r = sp[15];
-    const V n202i = sp[16];
-    const V n202r = sp[17];
-    const V n207i = sp[18];
-    const V n207r = sp[19];
-    const V n209i = sp[20];
-    const V n209r = sp[21];
-    const V n215i = sp[22];
-    const V n215r = sp[23];
-    const V n224i = sp[24];
-    const V n224r = sp[25];
-    const V n233i = sp[26];
-    const V n233r = sp[27];
+    const V n109i = sp[2];
+    const V n110i = sp[3];
+    const V n110r = sp[4];
+    const V n198i = sp[5];
+    const V n200i = sp[6];
+    const V n200r = sp[7];
+    const V n202r = sp[8];
+    const V n206i = sp[9];
+    const V n206r = sp[10];
+    const V n215i = sp[11];
+    const V n215r = sp[12];
+    const V n224i = sp[13];
+    const V n224r = sp[14];
+    const V n233i = sp[15];
+    const V n233r = sp[16];
+    const V n60i = sp[17];
+    const V n60r = sp[18];
+    const V n205i = sp[26];
+    const V n205r = sp[27];
     const V n214i = sp[28];
     const V n214r = sp[29];
     const V n223i = sp[30];
     const V n223r = sp[31];
     const V n232i = sp[32];
     const V n232r = sp[33];
-    const V n60i = sp[34];
-    const V n60r = sp[35];
     const V n49i = sp[48];
     const V n49r = sp[49];
     const V n51i = sp[50];
@@ -51932,18 +51621,36 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part3([[m
     const V n90r = sp[57];
     const V n99i = sp[58];
     const V n99r = sp[59];
+    const V n202i = n109i - n198i;
+    simd::store_block(nt + dst + 9728, kc, n202r, n202i);
+    const V n203r = n110r + n200r;
+    const V n203i = n110i + n200i;
+    simd::store_block(nt + dst + 5632, kc, n203r, n203i);
+    const V n204r = n110r - n200r;
+    const V n204i = n110i - n200i;
+    simd::store_block(nt + dst + 13824, kc, n204r, n204i);
+    const V n208r = n205r - n206r;
+    const V n208i = n205i - n206i;
+    const V n207r = n205r + n206r;
+    const V n207i = n205i + n206i;
+    const V n209r = n208i;
+    const V n209i = V(0.0F) - n208r;
     const V n84r = n49r + n81r;
     const V n84i = n49i + n81i;
     const V n85r = n49r - n81r;
     const V n85i = n49i - n81i;
     const V n210r = n84r + n207r;
     const V n210i = n84i + n207i;
+    simd::store_block(nt + dst + 2048, kc, n210r, n210i);
     const V n211r = n84r - n207r;
     const V n211i = n84i - n207i;
+    simd::store_block(nt + dst + 10240, kc, n211r, n211i);
     const V n212r = n85r + n209r;
     const V n212i = n85i + n209i;
+    simd::store_block(nt + dst + 6144, kc, n212r, n212i);
     const V n213r = n85r - n209r;
     const V n213i = n85i - n209i;
+    simd::store_block(nt + dst + 14336, kc, n213r, n213i);
     const V n217r = n214r - n215r;
     const V n217i = n214i - n215i;
     const V n216r = n214r + n215r;
@@ -51956,12 +51663,16 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part3([[m
     const V n94i = n58i - n90i;
     const V n219r = n93r + n216r;
     const V n219i = n93i + n216i;
+    simd::store_block(nt + dst + 2560, kc, n219r, n219i);
     const V n220r = n93r - n216r;
     const V n220i = n93i - n216i;
+    simd::store_block(nt + dst + 10752, kc, n220r, n220i);
     const V n221r = n94r + n218r;
     const V n221i = n94i + n218i;
+    simd::store_block(nt + dst + 6656, kc, n221r, n221i);
     const V n222r = n94r - n218r;
     const V n222i = n94i - n218i;
+    simd::store_block(nt + dst + 14848, kc, n222r, n222i);
     const V n226r = n223r - n224r;
     const V n226i = n223i - n224i;
     const V n225r = n223r + n224r;
@@ -51974,12 +51685,16 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part3([[m
     const V n103i = n51i - n99i;
     const V n228r = n102r + n225r;
     const V n228i = n102i + n225i;
+    simd::store_block(nt + dst + 3072, kc, n228r, n228i);
     const V n229r = n102r - n225r;
     const V n229i = n102i - n225i;
+    simd::store_block(nt + dst + 11264, kc, n229r, n229i);
     const V n230r = n103r + n227r;
     const V n230i = n103i + n227i;
+    simd::store_block(nt + dst + 7168, kc, n230r, n230i);
     const V n231r = n103r - n227r;
     const V n231i = n103i - n227i;
+    simd::store_block(nt + dst + 15360, kc, n231r, n231i);
     const V n235r = n232r - n233r;
     const V n235i = n232i - n233i;
     const V n234r = n232r + n233r;
@@ -51992,241 +51707,459 @@ template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part3([[m
     const V n112i = n60i - n108i;
     const V n237r = n111r + n234r;
     const V n237i = n111i + n234i;
-    {
-        const V x0r = n174r;
-        const V x0i = n174i;
-        const V w1r = V(twr[32 + c]);
-        const V w1i = V(twi[32 + c]);
-        const V x1r = simd::fnmadd(w1i, n183i, n183r * w1r);
-        const V x1i = simd::fma(w1i, n183r, n183i * w1r);
-        const V w2r = V(twr[64 + c]);
-        const V w2i = V(twi[64 + c]);
-        const V x2r = simd::fnmadd(w2i, n192i, n192r * w2r);
-        const V x2i = simd::fma(w2i, n192r, n192i * w2r);
-        const V w3r = V(twr[96 + c]);
-        const V w3i = V(twi[96 + c]);
-        const V x3r = simd::fnmadd(w3i, n201i, n201r * w3r);
-        const V x3i = simd::fma(w3i, n201r, n201i * w3r);
-        const V w4r = V(twr[128 + c]);
-        const V w4i = V(twi[128 + c]);
-        const V x4r = simd::fnmadd(w4i, n210i, n210r * w4r);
-        const V x4i = simd::fma(w4i, n210r, n210i * w4r);
-        const V w5r = V(twr[160 + c]);
-        const V w5i = V(twi[160 + c]);
-        const V x5r = simd::fnmadd(w5i, n219i, n219r * w5r);
-        const V x5i = simd::fma(w5i, n219r, n219i * w5r);
-        const V w6r = V(twr[192 + c]);
-        const V w6i = V(twi[192 + c]);
-        const V x6r = simd::fnmadd(w6i, n228i, n228r * w6r);
-        const V x6i = simd::fma(w6i, n228r, n228i * w6r);
-        const V w7r = V(twr[224 + c]);
-        const V w7i = V(twi[224 + c]);
-        const V x7r = simd::fnmadd(w7i, n237i, n237r * w7r);
-        const V x7i = simd::fma(w7i, n237r, n237i * w7r);
-        simd::store_transposed(outb + row, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + row + 8, 64, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
-    }
+    simd::store_block(nt + dst + 3584, kc, n237r, n237i);
     const V n238r = n111r - n234r;
     const V n238i = n111i - n234i;
-    {
-        const V w0r = V(twr[512 + c]);
-        const V w0i = V(twi[512 + c]);
-        const V x0r = simd::fnmadd(w0i, n175i, n175r * w0r);
-        const V x0i = simd::fma(w0i, n175r, n175i * w0r);
-        const V w1r = V(twr[544 + c]);
-        const V w1i = V(twi[544 + c]);
-        const V x1r = simd::fnmadd(w1i, n184i, n184r * w1r);
-        const V x1i = simd::fma(w1i, n184r, n184i * w1r);
-        const V w2r = V(twr[576 + c]);
-        const V w2i = V(twi[576 + c]);
-        const V x2r = simd::fnmadd(w2i, n193i, n193r * w2r);
-        const V x2i = simd::fma(w2i, n193r, n193i * w2r);
-        const V w3r = V(twr[608 + c]);
-        const V w3i = V(twi[608 + c]);
-        const V x3r = simd::fnmadd(w3i, n202i, n202r * w3r);
-        const V x3i = simd::fma(w3i, n202r, n202i * w3r);
-        const V w4r = V(twr[640 + c]);
-        const V w4i = V(twi[640 + c]);
-        const V x4r = simd::fnmadd(w4i, n211i, n211r * w4r);
-        const V x4i = simd::fma(w4i, n211r, n211i * w4r);
-        const V w5r = V(twr[672 + c]);
-        const V w5i = V(twi[672 + c]);
-        const V x5r = simd::fnmadd(w5i, n220i, n220r * w5r);
-        const V x5i = simd::fma(w5i, n220r, n220i * w5r);
-        const V w6r = V(twr[704 + c]);
-        const V w6i = V(twi[704 + c]);
-        const V x6r = simd::fnmadd(w6i, n229i, n229r * w6r);
-        const V x6i = simd::fma(w6i, n229r, n229i * w6r);
-        const V w7r = V(twr[736 + c]);
-        const V w7i = V(twi[736 + c]);
-        const V x7r = simd::fnmadd(w7i, n238i, n238r * w7r);
-        const V x7i = simd::fma(w7i, n238r, n238i * w7r);
-        simd::store_transposed(outb + row + 32, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + row + 40, 64, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
-    }
-    sp[0] = n112i;
-    sp[1] = n112r;
-    sp[2] = n212i;
-    sp[3] = n212r;
-    sp[4] = n213i;
-    sp[5] = n213r;
-    sp[6] = n221i;
-    sp[7] = n221r;
-    sp[8] = n222i;
-    sp[9] = n222r;
-    sp[10] = n230i;
-    sp[11] = n230r;
-    sp[12] = n231i;
-    sp[13] = n231r;
-    sp[14] = n236i;
-    sp[15] = n236r;
-}
-// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-template <typename V> CRD_NOINLINE static void codelet32_tiled_p1_leaf_part4([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
-    [[maybe_unused]] crd::f32* outb, [[maybe_unused]] crd::usize blk, [[maybe_unused]] const crd::f32* twr,
-    [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t, const V* sp) noexcept
-{
-    namespace simd = crd::hesap::fft::lanes;
-    const crd::usize c = t >> 7;
-    const crd::usize row = c * 8208 + (t & 127) * 64;
-    const V n112i = sp[0];
-    const V n112r = sp[1];
-    const V n212i = sp[2];
-    const V n212r = sp[3];
-    const V n213i = sp[4];
-    const V n213r = sp[5];
-    const V n221i = sp[6];
-    const V n221r = sp[7];
-    const V n222i = sp[8];
-    const V n222r = sp[9];
-    const V n230i = sp[10];
-    const V n230r = sp[11];
-    const V n231i = sp[12];
-    const V n231r = sp[13];
-    const V n236i = sp[14];
-    const V n236r = sp[15];
-    const V n176i = sp[36];
-    const V n176r = sp[37];
-    const V n177i = sp[38];
-    const V n177r = sp[39];
-    const V n185i = sp[40];
-    const V n185r = sp[41];
-    const V n186i = sp[42];
-    const V n186r = sp[43];
-    const V n194i = sp[44];
-    const V n194r = sp[45];
-    const V n195i = sp[46];
-    const V n195r = sp[47];
-    const V n203i = sp[60];
-    const V n203r = sp[61];
-    const V n204i = sp[62];
-    const V n204r = sp[63];
+    simd::store_block(nt + dst + 11776, kc, n238r, n238i);
     const V n239r = n112r + n236r;
     const V n239i = n112i + n236i;
-    {
-        const V w0r = V(twr[256 + c]);
-        const V w0i = V(twi[256 + c]);
-        const V x0r = simd::fnmadd(w0i, n176i, n176r * w0r);
-        const V x0i = simd::fma(w0i, n176r, n176i * w0r);
-        const V w1r = V(twr[288 + c]);
-        const V w1i = V(twi[288 + c]);
-        const V x1r = simd::fnmadd(w1i, n185i, n185r * w1r);
-        const V x1i = simd::fma(w1i, n185r, n185i * w1r);
-        const V w2r = V(twr[320 + c]);
-        const V w2i = V(twi[320 + c]);
-        const V x2r = simd::fnmadd(w2i, n194i, n194r * w2r);
-        const V x2i = simd::fma(w2i, n194r, n194i * w2r);
-        const V w3r = V(twr[352 + c]);
-        const V w3i = V(twi[352 + c]);
-        const V x3r = simd::fnmadd(w3i, n203i, n203r * w3r);
-        const V x3i = simd::fma(w3i, n203r, n203i * w3r);
-        const V w4r = V(twr[384 + c]);
-        const V w4i = V(twi[384 + c]);
-        const V x4r = simd::fnmadd(w4i, n212i, n212r * w4r);
-        const V x4i = simd::fma(w4i, n212r, n212i * w4r);
-        const V w5r = V(twr[416 + c]);
-        const V w5i = V(twi[416 + c]);
-        const V x5r = simd::fnmadd(w5i, n221i, n221r * w5r);
-        const V x5i = simd::fma(w5i, n221r, n221i * w5r);
-        const V w6r = V(twr[448 + c]);
-        const V w6i = V(twi[448 + c]);
-        const V x6r = simd::fnmadd(w6i, n230i, n230r * w6r);
-        const V x6i = simd::fma(w6i, n230r, n230i * w6r);
-        const V w7r = V(twr[480 + c]);
-        const V w7i = V(twi[480 + c]);
-        const V x7r = simd::fnmadd(w7i, n239i, n239r * w7r);
-        const V x7i = simd::fma(w7i, n239r, n239i * w7r);
-        simd::store_transposed(outb + row + 16, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + row + 24, 64, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
-    }
+    simd::store_block(nt + dst + 7680, kc, n239r, n239i);
     const V n240r = n112r - n236r;
     const V n240i = n112i - n236i;
-    {
-        const V w0r = V(twr[768 + c]);
-        const V w0i = V(twi[768 + c]);
-        const V x0r = simd::fnmadd(w0i, n177i, n177r * w0r);
-        const V x0i = simd::fma(w0i, n177r, n177i * w0r);
-        const V w1r = V(twr[800 + c]);
-        const V w1i = V(twi[800 + c]);
-        const V x1r = simd::fnmadd(w1i, n186i, n186r * w1r);
-        const V x1i = simd::fma(w1i, n186r, n186i * w1r);
-        const V w2r = V(twr[832 + c]);
-        const V w2i = V(twi[832 + c]);
-        const V x2r = simd::fnmadd(w2i, n195i, n195r * w2r);
-        const V x2i = simd::fma(w2i, n195r, n195i * w2r);
-        const V w3r = V(twr[864 + c]);
-        const V w3i = V(twi[864 + c]);
-        const V x3r = simd::fnmadd(w3i, n204i, n204r * w3r);
-        const V x3i = simd::fma(w3i, n204r, n204i * w3r);
-        const V w4r = V(twr[896 + c]);
-        const V w4i = V(twi[896 + c]);
-        const V x4r = simd::fnmadd(w4i, n213i, n213r * w4r);
-        const V x4i = simd::fma(w4i, n213r, n213i * w4r);
-        const V w5r = V(twr[928 + c]);
-        const V w5i = V(twi[928 + c]);
-        const V x5r = simd::fnmadd(w5i, n222i, n222r * w5r);
-        const V x5i = simd::fma(w5i, n222r, n222i * w5r);
-        const V w6r = V(twr[960 + c]);
-        const V w6i = V(twi[960 + c]);
-        const V x6r = simd::fnmadd(w6i, n231i, n231r * w6r);
-        const V x6i = simd::fma(w6i, n231r, n231i * w6r);
-        const V w7r = V(twr[992 + c]);
-        const V w7i = V(twi[992 + c]);
-        const V x7r = simd::fnmadd(w7i, n240i, n240r * w7r);
-        const V x7i = simd::fma(w7i, n240r, n240i * w7r);
-        simd::store_transposed(outb + row + 48, 64, x0r, x1r, x2r, x3r, x4r, x5r, x6r, x7r);
-        simd::store_transposed(outb + row + 56, 64, x0i, x1i, x2i, x3i, x4i, x5i, x6i, x7i);
-    }
+    simd::store_block(nt + dst + 15872, kc, n240r, n240i);
 }
-// Tiled four-step P1 leaf: a block of 128 columns of the f32 1M forward into its stage. GENERATED.
+// Tiled four-step P1 corner: the block's stage into the tiled intermediate (f32 1M). GENERATED.
 // NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG; retain fused scope.
-void codelet32_tiled_p1_leaf(const crd::hesap::Complex<crd::f32>* in,
-    crd::f32* outb, crd::usize blk, const crd::f32* twr, const crd::f32* twi) noexcept
+void codelet32_tiled_p1_corner(const crd::f32* inb,
+    crd::f32* nt, crd::usize blk) noexcept
 {
     namespace lanes = crd::hesap::fft::lanes;
     using V = lanes::Lane<crd::f32>;
-    alignas(64) V sp[64];
+    alignas(64) V sp[60];
     const crd::usize tiles = 4096;
     const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
     for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
     {
-        codelet32_tiled_p1_leaf_part0<V>(in, outb, blk, twr, twi, t, sp);
-        codelet32_tiled_p1_leaf_part1<V>(in, outb, blk, twr, twi, t, sp);
-        codelet32_tiled_p1_leaf_part2<V>(in, outb, blk, twr, twi, t, sp);
-        codelet32_tiled_p1_leaf_part3<V>(in, outb, blk, twr, twi, t, sp);
-        codelet32_tiled_p1_leaf_part4<V>(in, outb, blk, twr, twi, t, sp);
+        codelet32_tiled_p1_corner_part0<V>(inb, nt, blk, t, sp);
+        codelet32_tiled_p1_corner_part1<V>(inb, nt, blk, t, sp);
+        codelet32_tiled_p1_corner_part2<V>(inb, nt, blk, t, sp);
+        codelet32_tiled_p1_corner_part3<V>(inb, nt, blk, t, sp);
     }
     if constexpr (lanes::kPairedTiles<crd::f32>)
     {
         using H = lanes::TileLane<crd::f32>;
-        alignas(64) H sh[64];
+        alignas(64) H sh[60];
         if (wide < tiles)
         {
-            codelet32_tiled_p1_leaf_part0<H>(in, outb, blk, twr, twi, wide, sh);
-            codelet32_tiled_p1_leaf_part1<H>(in, outb, blk, twr, twi, wide, sh);
-            codelet32_tiled_p1_leaf_part2<H>(in, outb, blk, twr, twi, wide, sh);
-            codelet32_tiled_p1_leaf_part3<H>(in, outb, blk, twr, twi, wide, sh);
-            codelet32_tiled_p1_leaf_part4<H>(in, outb, blk, twr, twi, wide, sh);
+            codelet32_tiled_p1_corner_part0<H>(inb, nt, blk, wide, sh);
+            codelet32_tiled_p1_corner_part1<H>(inb, nt, blk, wide, sh);
+            codelet32_tiled_p1_corner_part2<H>(inb, nt, blk, wide, sh);
+            codelet32_tiled_p1_corner_part3<H>(inb, nt, blk, wide, sh);
+        }
+    }
+}
+// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
+template <typename V> CRD_NOINLINE static void codelet16_inplace_mid_part0([[maybe_unused]] crd::f32* d,
+    [[maybe_unused]] crd::usize w, [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi,
+    [[maybe_unused]] crd::usize t, V* sp) noexcept
+{
+    namespace simd = crd::hesap::fft::lanes;
+    const crd::usize i1 = t & 15;
+    const crd::usize at = (t - i1) * 16 + i1;
+    V n0r;
+    V n0i; simd::load_block(d, at, n0r, n0i);
+    V n8r;
+    V n8i; simd::load_block(d, at + 128, n8r, n8i);
+    V n1r;
+    V n1i; simd::load_block(d, at + 16, n1r, n1i);
+    V n9r;
+    V n9i; simd::load_block(d, at + 144, n9r, n9i);
+    V n2r;
+    V n2i; simd::load_block(d, at + 32, n2r, n2i);
+    V n10r;
+    V n10i; simd::load_block(d, at + 160, n10r, n10i);
+    const V n26r = n2r - n10r;
+    const V n26i = n2i - n10i;
+    const V n25r = n2r + n10r;
+    const V n25i = n2i + n10i;
+    const V n36r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n26i, V(static_cast<crd::f32>(0.7071067811865476)) * n26r);
+    const V n36i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n26r, V(static_cast<crd::f32>(0.7071067811865476)) * n26i);
+    V n3r;
+    V n3i; simd::load_block(d, at + 48, n3r, n3i);
+    V n11r;
+    V n11i; simd::load_block(d, at + 176, n11r, n11i);
+    V n4r;
+    V n4i; simd::load_block(d, at + 64, n4r, n4i);
+    V n12r;
+    V n12i; simd::load_block(d, at + 192, n12r, n12i);
+    const V n19r = n4r - n12r;
+    const V n19i = n4i - n12i;
+    const V n18r = n4r + n12r;
+    const V n18i = n4i + n12i;
+    const V n20r = n19i;
+    const V n20i = V(0.0F) - n19r;
+    const V n16r = n0r + n8r;
+    const V n16i = n0i + n8i;
+    const V n17r = n0r - n8r;
+    const V n17i = n0i - n8i;
+    V n5r;
+    V n5i; simd::load_block(d, at + 80, n5r, n5i);
+    V n13r;
+    V n13i; simd::load_block(d, at + 208, n13r, n13i);
+    const V n48r = n5r - n13r;
+    const V n48i = n5i - n13i;
+    const V n47r = n5r + n13r;
+    const V n47i = n5i + n13i;
+    const V n49r = n48i;
+    const V n49i = V(0.0F) - n48r;
+    const V n45r = n1r + n9r;
+    const V n45i = n1i + n9i;
+    const V n46r = n1r - n9r;
+    const V n46i = n1i - n9i;
+    const V n51r = n45r - n47r;
+    const V n51i = n45i - n47i;
+    const V n50r = n45r + n47r;
+    const V n50i = n45i + n47i;
+    const V n79r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n51i, V(static_cast<crd::f32>(0.7071067811865476)) * n51r);
+    const V n79i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n51r, V(static_cast<crd::f32>(0.7071067811865476)) * n51i);
+    const V n52r = n46r + n49r;
+    const V n52i = n46i + n49i;
+    const V n53r = n46r - n49r;
+    const V n53i = n46i - n49i;
+    const V n70r = simd::fnmadd(V(static_cast<crd::f32>(-0.3826834323650898)), n52i, V(static_cast<crd::f32>(0.9238795325112867)) * n52r);
+    const V n70i = simd::fma(V(static_cast<crd::f32>(-0.3826834323650898)), n52r, V(static_cast<crd::f32>(0.9238795325112867)) * n52i);
+    const V n88r = simd::fnmadd(V(static_cast<crd::f32>(-0.9238795325112867)), n53i, V(static_cast<crd::f32>(0.38268343236508984)) * n53r);
+    const V n88i = simd::fma(V(static_cast<crd::f32>(-0.9238795325112867)), n53r, V(static_cast<crd::f32>(0.38268343236508984)) * n53i);
+    V n6r;
+    V n6i; simd::load_block(d, at + 96, n6r, n6i);
+    V n14r;
+    V n14i; simd::load_block(d, at + 224, n14r, n14i);
+    const V n27r = n6r + n14r;
+    const V n27i = n6i + n14i;
+    const V n28r = n6r - n14r;
+    const V n28i = n6i - n14i;
+    const V n37r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865476)), n28i, V(static_cast<crd::f32>(-0.7071067811865475)) * n28r);
+    const V n37i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865476)), n28r, V(static_cast<crd::f32>(-0.7071067811865475)) * n28i);
+    const V n30r = n25r - n27r;
+    const V n30i = n25i - n27i;
+    const V n29r = n25r + n27r;
+    const V n29i = n25i + n27i;
+    const V n31r = n30i;
+    const V n31i = V(0.0F) - n30r;
+    const V n21r = n16r + n18r;
+    const V n21i = n16i + n18i;
+    const V n22r = n16r - n18r;
+    const V n22i = n16i - n18i;
+    const V n39r = n36r - n37r;
+    const V n39i = n36i - n37i;
+    const V n38r = n36r + n37r;
+    const V n38i = n36i + n37i;
+    const V n40r = n39i;
+    const V n40i = V(0.0F) - n39r;
+    const V n23r = n17r + n20r;
+    const V n23i = n17i + n20i;
+    const V n24r = n17r - n20r;
+    const V n24i = n17i - n20i;
+    V n7r;
+    V n7i; simd::load_block(d, at + 112, n7r, n7i);
+    V n15r;
+    V n15i; simd::load_block(d, at + 240, n15r, n15i);
+    const V n57r = n7r - n15r;
+    const V n57i = n7i - n15i;
+    const V n56r = n7r + n15r;
+    const V n56i = n7i + n15i;
+    const V n58r = n57i;
+    const V n58i = V(0.0F) - n57r;
+    const V n54r = n3r + n11r;
+    const V n54i = n3i + n11i;
+    const V n55r = n3r - n11r;
+    const V n55i = n3i - n11i;
+    const V n59r = n54r + n56r;
+    const V n59i = n54i + n56i;
+    const V n60r = n54r - n56r;
+    const V n60i = n54i - n56i;
+    const V n80r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865476)), n60i, V(static_cast<crd::f32>(-0.7071067811865475)) * n60r);
+    const V n80i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865476)), n60r, V(static_cast<crd::f32>(-0.7071067811865475)) * n60i);
+    const V n61r = n55r + n58r;
+    const V n61i = n55i + n58i;
+    const V n62r = n55r - n58r;
+    const V n62i = n55i - n58i;
+    const V n71r = simd::fnmadd(V(static_cast<crd::f32>(-0.9238795325112867)), n61i, V(static_cast<crd::f32>(0.38268343236508984)) * n61r);
+    const V n71i = simd::fma(V(static_cast<crd::f32>(-0.9238795325112867)), n61r, V(static_cast<crd::f32>(0.38268343236508984)) * n61i);
+    const V n89r = simd::fnmadd(V(static_cast<crd::f32>(0.38268343236508967)), n62i, V(static_cast<crd::f32>(-0.9238795325112868)) * n62r);
+    const V n89i = simd::fma(V(static_cast<crd::f32>(0.38268343236508967)), n62r, V(static_cast<crd::f32>(-0.9238795325112868)) * n62i);
+    const V n64r = n50r - n59r;
+    const V n64i = n50i - n59i;
+    const V n63r = n50r + n59r;
+    const V n63i = n50i + n59i;
+    const V n65r = n64i;
+    const V n65i = V(0.0F) - n64r;
+    const V n32r = n21r + n29r;
+    const V n32i = n21i + n29i;
+    const V n33r = n21r - n29r;
+    const V n33i = n21i - n29i;
+    const V n66r = n32r + n63r;
+    const V n66i = n32i + n63i;
+    simd::store_block_halves(d, at, n66r, n66i);
+    const V n67r = n32r - n63r;
+    const V n67i = n32i - n63i;
+    {
+        const V wr = simd::load<V>(twr + 128 + i1);
+        const V wi = simd::load<V>(twi + 128 + i1);
+        const V xr = simd::fnmadd(wi, n67i, n67r * wr);
+        const V xi = simd::fma(wi, n67r, n67i * wr);
+        simd::store_block_halves(d, at + 128, xr, xi);
+    }
+    sp[0] = n22i;
+    sp[1] = n22r;
+    sp[2] = n23i;
+    sp[3] = n23r;
+    sp[4] = n24i;
+    sp[5] = n24r;
+    sp[6] = n31i;
+    sp[7] = n31r;
+    sp[8] = n33i;
+    sp[9] = n33r;
+    sp[10] = n38i;
+    sp[11] = n38r;
+    sp[12] = n40i;
+    sp[13] = n40r;
+    sp[14] = n65i;
+    sp[15] = n65r;
+    sp[16] = n70i;
+    sp[17] = n70r;
+    sp[18] = n71i;
+    sp[19] = n71r;
+    sp[20] = n79i;
+    sp[21] = n79r;
+    sp[22] = n80i;
+    sp[23] = n80r;
+    sp[24] = n88i;
+    sp[25] = n88r;
+    sp[26] = n89i;
+    sp[27] = n89r;
+}
+// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
+template <typename V> CRD_NOINLINE static void codelet16_inplace_mid_part1([[maybe_unused]] crd::f32* d,
+    [[maybe_unused]] crd::usize w, [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi,
+    [[maybe_unused]] crd::usize t, V* sp) noexcept
+{
+    namespace simd = crd::hesap::fft::lanes;
+    const crd::usize i1 = t & 15;
+    const crd::usize at = (t - i1) * 16 + i1;
+    const V n22i = sp[0];
+    const V n22r = sp[1];
+    const V n23i = sp[2];
+    const V n23r = sp[3];
+    const V n24i = sp[4];
+    const V n24r = sp[5];
+    const V n31i = sp[6];
+    const V n31r = sp[7];
+    const V n33i = sp[8];
+    const V n33r = sp[9];
+    const V n38i = sp[10];
+    const V n38r = sp[11];
+    const V n40i = sp[12];
+    const V n40r = sp[13];
+    const V n65i = sp[14];
+    const V n65r = sp[15];
+    const V n70i = sp[16];
+    const V n70r = sp[17];
+    const V n71i = sp[18];
+    const V n71r = sp[19];
+    const V n79i = sp[20];
+    const V n79r = sp[21];
+    const V n80i = sp[22];
+    const V n80r = sp[23];
+    const V n88i = sp[24];
+    const V n88r = sp[25];
+    const V n89i = sp[26];
+    const V n89r = sp[27];
+    const V n68r = n33r + n65r;
+    const V n68i = n33i + n65i;
+    {
+        const V wr = simd::load<V>(twr + 64 + i1);
+        const V wi = simd::load<V>(twi + 64 + i1);
+        const V xr = simd::fnmadd(wi, n68i, n68r * wr);
+        const V xi = simd::fma(wi, n68r, n68i * wr);
+        simd::store_block_halves(d, at + 64, xr, xi);
+    }
+    const V n69r = n33r - n65r;
+    const V n69i = n33i - n65i;
+    {
+        const V wr = simd::load<V>(twr + 192 + i1);
+        const V wi = simd::load<V>(twi + 192 + i1);
+        const V xr = simd::fnmadd(wi, n69i, n69r * wr);
+        const V xi = simd::fma(wi, n69r, n69i * wr);
+        simd::store_block_halves(d, at + 192, xr, xi);
+    }
+    const V n73r = n70r - n71r;
+    const V n73i = n70i - n71i;
+    const V n72r = n70r + n71r;
+    const V n72i = n70i + n71i;
+    const V n74r = n73i;
+    const V n74i = V(0.0F) - n73r;
+    const V n41r = n23r + n38r;
+    const V n41i = n23i + n38i;
+    const V n42r = n23r - n38r;
+    const V n42i = n23i - n38i;
+    const V n75r = n41r + n72r;
+    const V n75i = n41i + n72i;
+    {
+        const V wr = simd::load<V>(twr + 16 + i1);
+        const V wi = simd::load<V>(twi + 16 + i1);
+        const V xr = simd::fnmadd(wi, n75i, n75r * wr);
+        const V xi = simd::fma(wi, n75r, n75i * wr);
+        simd::store_block_halves(d, at + 16, xr, xi);
+    }
+    const V n76r = n41r - n72r;
+    const V n76i = n41i - n72i;
+    {
+        const V wr = simd::load<V>(twr + 144 + i1);
+        const V wi = simd::load<V>(twi + 144 + i1);
+        const V xr = simd::fnmadd(wi, n76i, n76r * wr);
+        const V xi = simd::fma(wi, n76r, n76i * wr);
+        simd::store_block_halves(d, at + 144, xr, xi);
+    }
+    const V n77r = n42r + n74r;
+    const V n77i = n42i + n74i;
+    {
+        const V wr = simd::load<V>(twr + 80 + i1);
+        const V wi = simd::load<V>(twi + 80 + i1);
+        const V xr = simd::fnmadd(wi, n77i, n77r * wr);
+        const V xi = simd::fma(wi, n77r, n77i * wr);
+        simd::store_block_halves(d, at + 80, xr, xi);
+    }
+    const V n78r = n42r - n74r;
+    const V n78i = n42i - n74i;
+    {
+        const V wr = simd::load<V>(twr + 208 + i1);
+        const V wi = simd::load<V>(twi + 208 + i1);
+        const V xr = simd::fnmadd(wi, n78i, n78r * wr);
+        const V xi = simd::fma(wi, n78r, n78i * wr);
+        simd::store_block_halves(d, at + 208, xr, xi);
+    }
+    const V n82r = n79r - n80r;
+    const V n82i = n79i - n80i;
+    const V n81r = n79r + n80r;
+    const V n81i = n79i + n80i;
+    const V n83r = n82i;
+    const V n83i = V(0.0F) - n82r;
+    const V n34r = n22r + n31r;
+    const V n34i = n22i + n31i;
+    const V n35r = n22r - n31r;
+    const V n35i = n22i - n31i;
+    const V n84r = n34r + n81r;
+    const V n84i = n34i + n81i;
+    {
+        const V wr = simd::load<V>(twr + 32 + i1);
+        const V wi = simd::load<V>(twi + 32 + i1);
+        const V xr = simd::fnmadd(wi, n84i, n84r * wr);
+        const V xi = simd::fma(wi, n84r, n84i * wr);
+        simd::store_block_halves(d, at + 32, xr, xi);
+    }
+    const V n85r = n34r - n81r;
+    const V n85i = n34i - n81i;
+    {
+        const V wr = simd::load<V>(twr + 160 + i1);
+        const V wi = simd::load<V>(twi + 160 + i1);
+        const V xr = simd::fnmadd(wi, n85i, n85r * wr);
+        const V xi = simd::fma(wi, n85r, n85i * wr);
+        simd::store_block_halves(d, at + 160, xr, xi);
+    }
+    const V n86r = n35r + n83r;
+    const V n86i = n35i + n83i;
+    {
+        const V wr = simd::load<V>(twr + 96 + i1);
+        const V wi = simd::load<V>(twi + 96 + i1);
+        const V xr = simd::fnmadd(wi, n86i, n86r * wr);
+        const V xi = simd::fma(wi, n86r, n86i * wr);
+        simd::store_block_halves(d, at + 96, xr, xi);
+    }
+    const V n87r = n35r - n83r;
+    const V n87i = n35i - n83i;
+    {
+        const V wr = simd::load<V>(twr + 224 + i1);
+        const V wi = simd::load<V>(twi + 224 + i1);
+        const V xr = simd::fnmadd(wi, n87i, n87r * wr);
+        const V xi = simd::fma(wi, n87r, n87i * wr);
+        simd::store_block_halves(d, at + 224, xr, xi);
+    }
+    const V n91r = n88r - n89r;
+    const V n91i = n88i - n89i;
+    const V n90r = n88r + n89r;
+    const V n90i = n88i + n89i;
+    const V n92r = n91i;
+    const V n92i = V(0.0F) - n91r;
+    const V n43r = n24r + n40r;
+    const V n43i = n24i + n40i;
+    const V n44r = n24r - n40r;
+    const V n44i = n24i - n40i;
+    const V n93r = n43r + n90r;
+    const V n93i = n43i + n90i;
+    {
+        const V wr = simd::load<V>(twr + 48 + i1);
+        const V wi = simd::load<V>(twi + 48 + i1);
+        const V xr = simd::fnmadd(wi, n93i, n93r * wr);
+        const V xi = simd::fma(wi, n93r, n93i * wr);
+        simd::store_block_halves(d, at + 48, xr, xi);
+    }
+    const V n94r = n43r - n90r;
+    const V n94i = n43i - n90i;
+    {
+        const V wr = simd::load<V>(twr + 176 + i1);
+        const V wi = simd::load<V>(twi + 176 + i1);
+        const V xr = simd::fnmadd(wi, n94i, n94r * wr);
+        const V xi = simd::fma(wi, n94r, n94i * wr);
+        simd::store_block_halves(d, at + 176, xr, xi);
+    }
+    const V n95r = n44r + n92r;
+    const V n95i = n44i + n92i;
+    {
+        const V wr = simd::load<V>(twr + 112 + i1);
+        const V wi = simd::load<V>(twi + 112 + i1);
+        const V xr = simd::fnmadd(wi, n95i, n95r * wr);
+        const V xi = simd::fma(wi, n95r, n95i * wr);
+        simd::store_block_halves(d, at + 112, xr, xi);
+    }
+    const V n96r = n44r - n92r;
+    const V n96i = n44i - n92i;
+    sp[0] = n96i;
+    sp[1] = n96r;
+}
+// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
+template <typename V> CRD_NOINLINE static void codelet16_inplace_mid_part2([[maybe_unused]] crd::f32* d,
+    [[maybe_unused]] crd::usize w, [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi,
+    [[maybe_unused]] crd::usize t, const V* sp) noexcept
+{
+    namespace simd = crd::hesap::fft::lanes;
+    const crd::usize i1 = t & 15;
+    const crd::usize at = (t - i1) * 16 + i1;
+    const V n96i = sp[0];
+    const V n96r = sp[1];
+    {
+        const V wr = simd::load<V>(twr + 240 + i1);
+        const V wi = simd::load<V>(twi + 240 + i1);
+        const V xr = simd::fnmadd(wi, n96i, n96r * wr);
+        const V xi = simd::fma(wi, n96r, n96i * wr);
+        simd::store_block_halves(d, at + 240, xr, xi);
+    }
+}
+// In-place pass 2: the leaf over i2 (B = 16), twiddled, AoSoA blocks (f32). GENERATED.
+// NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG; retain fused scope.
+void codelet16_inplace_mid(crd::f32* d, crd::usize w, const crd::f32* twr,
+    const crd::f32* twi) noexcept
+{
+    namespace lanes = crd::hesap::fft::lanes;
+    using V = lanes::Lane<crd::f32>;
+    alignas(64) V sp[28];
+    const crd::usize tiles = w - w % lanes::kTile<crd::f32>;
+    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
+    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
+    {
+        codelet16_inplace_mid_part0<V>(d, w, twr, twi, t, sp);
+        codelet16_inplace_mid_part1<V>(d, w, twr, twi, t, sp);
+        codelet16_inplace_mid_part2<V>(d, w, twr, twi, t, sp);
+    }
+    if constexpr (lanes::kPairedTiles<crd::f32>)
+    {
+        using H = lanes::TileLane<crd::f32>;
+        alignas(64) H sh[28];
+        if (wide < tiles)
+        {
+            codelet16_inplace_mid_part0<H>(d, w, twr, twi, wide, sh);
+            codelet16_inplace_mid_part1<H>(d, w, twr, twi, wide, sh);
+            codelet16_inplace_mid_part2<H>(d, w, twr, twi, wide, sh);
         }
     }
 }

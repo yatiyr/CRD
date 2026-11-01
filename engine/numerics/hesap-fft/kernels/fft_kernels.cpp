@@ -1597,7 +1597,9 @@ template <typename T> struct Engine
     // once into the plan's aligned work buffer and pass 3 writes it once (at 4K the second buffer would double a
     // working set the L1d holds). The same operations on the same values, so the same bits at every address. Pass 1
     // forms its W_n from the factored roots on a level with fused vector operations above kInPlace3TabledTo and loads
-    // the plan's table of their products elsewhere, which holds the same bits.
+    // the plan's table of their products elsewhere, which holds the same bits. Below 8K the passes store each block's
+    // halves (the `_halves` edition and the tabled one, B <= 16), from 8K whole blocks (codelet_lanes.hpp's
+    // store_block: port 5 bounds the passes in the L1d, the store buffer past it).
     void execute_in_place3(Complex<T>* data) const
     {
         T* const d = reinterpret_cast<T*>(data);
@@ -1623,7 +1625,11 @@ template <typename T> struct Engine
         }
         else if (kInPlace3Fused && plan.n > kInPlace3TabledTo) // W_n from the factored roots
         {
-            if (w == d) // a step holds whole tiles, so pass 1 deinterleaves as it loads
+            if (w == d && plan.n < kInPlace3WorkFrom) // in the L1d: each block's halves stored
+            {
+                gen::codelet16_inplace_first_halves(d, bc, plan.sh_twr, plan.sh_twi, plan.sh_hir, plan.sh_hii);
+            }
+            else if (w == d) // a step holds whole tiles, so pass 1 deinterleaves as it loads
             {
                 gen::codelet16_inplace_first(d, bc, plan.sh_twr, plan.sh_twi, plan.sh_hir, plan.sh_hii);
             }

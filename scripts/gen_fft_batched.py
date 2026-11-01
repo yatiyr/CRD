@@ -336,6 +336,8 @@ def _emit_stage1(N1, name, prec_key, factored):
     call, for two more fmas an output; the index split is exact."""
     tname, prec = _prec(prec_key)
     lanes = _PREC[prec_key][3]
+    # The factored edition's n2 >= 1024 leaves the L1d, where whole blocks win; the full table's small n2 keeps halves.
+    whole = "true" if factored else "false"
     outs = _build_dag(N1, 2707)
     order = schedule(outs)
     if factored:
@@ -381,9 +383,9 @@ def _emit_stage1(N1, name, prec_key, factored):
                 f"            const V x{l}r = simd::fnmadd(w{l}i, n{ids[l]}i, n{ids[l]}r * w{l}r), "
                 f"x{l}i = simd::fma(w{l}i, n{ids[l]}r, n{ids[l]}i * w{l}r);"
             )
-        for part, off in (("r", 2 * k0), ("i", 2 * k0 + lanes)):
-            args = ", ".join(f"x{l}{part}" for l in range(lanes))
-            block.append(f"            simd::store_transposed(outb + t * {2 * N1} + {off}, {2 * N1}, {args});")
+        args = ", ".join(f"x{l}{part}" for part in "ri" for l in range(lanes))
+        block.append(f"            simd::store_transposed<{whole}>(outb + t * {2 * N1} + {2 * k0}, {2 * N1}, "
+                     f"{args});")
         block.append("        }")
         return block
 
@@ -540,9 +542,8 @@ def emit_tiled_p1_leaf():
                 continue
             block.append(f"    const V w{lane}r = V(twr[{q * 32} + c]), w{lane}i = V(twi[{q * 32} + c]);")
             block += ["    " + line for line in _tf_scaled(f"x{lane}", f"w{lane}", f"n{outs[q].id}")]
-        for part, offset in (("r", 16 * g), ("i", 16 * g + 8)):
-            args = ", ".join(f"x{lane}{part}" for lane in range(8))
-            block.append(f"    simd::store_transposed({_plus('outb + row', offset)}, 64, {args});")
+        args = ", ".join(f"x{lane}{part}" for part in "ri" for lane in range(8))
+        block.append(f"    simd::store_transposed<true>({_plus('outb + row', 16 * g)}, 64, {args});")
         return block + ["}"]
 
     sig = ["void codelet32_tiled_p1_leaf(const crd::hesap::Complex<crd::f32>* in,",
@@ -638,12 +639,14 @@ def emit_tiled_p2_final():
 INPLACE_MIDS = (8, 16, 32, 64)
 
 
-def emit_inplace_first(blocks, to=False, table=True):
+def emit_inplace_first(blocks, to=False, table=True, halves=False):
     """Pass 1: the 16-point leaf over i3, W_n^{t*ka}, AoSoA blocks out, in place: interleaved in (a step of whole
     tiles only) or, with `blocks`, AoSoA blocks in (any step); with `to`, interleaved in from `s` and blocks out to
     `d` (any step: the buffers are disjoint). With `table` (the `_tw` editions) W_n^{t*ka} loads from the plan's
-    table; without it, the product of the factored roots, computed as the table's entries are, so the same bits."""
+    table; without it, the product of the factored roots, computed as the table's entries are, so the same bits. With
+    `halves` the blocks store a half at a time (codelet_lanes.hpp's store_block_halves: the L1-resident sizes)."""
     src = "s" if to else "d"
+    put = "store_block_halves" if halves else "store_block"
 
     def load(v, j):
         if blocks:
@@ -662,9 +665,9 @@ def emit_inplace_first(blocks, to=False, table=True):
     def store(k, outs):
         n = f"n{outs[k].id}"
         if k == 0:  # W^0: the leaf's output as it is
-            return [f"simd::store_block(d, t, {n}r, {n}i);"]
+            return [f"simd::{put}(d, t, {n}r, {n}i);"]
         return ["{", *twiddle(k), *["    " + line for line in _tf_scaled("x", "w", n)],
-                f"    simd::store_block(d, {k} * bc + t, xr, xi);", "}"]
+                f"    simd::{put}(d, {k} * bc + t, xr, xi);", "}"]
 
     if table:
         if to:
@@ -678,7 +681,8 @@ def emit_inplace_first(blocks, to=False, table=True):
         sig = ["void codelet16_inplace_first_to(const crd::f32* s, crd::f32* d, crd::usize bc, const crd::f32* lor,",
                "    const crd::f32* loi, const crd::f32* hir, const crd::f32* hii) noexcept"]
     else:
-        sig = ["void codelet16_inplace_first(crd::f32* d, crd::usize bc, const crd::f32* lor, const crd::f32* loi,",
+        name = "codelet16_inplace_first_halves" if halves else "codelet16_inplace_first"
+        sig = [f"void {name}(crd::f32* d, crd::usize bc, const crd::f32* lor, const crd::f32* loi,",
                "    const crd::f32* hir, const crd::f32* hii) noexcept"]
     tile_locals = ["const crd::usize uh = t >> 4;", "const crd::usize ul = t & 15;"]
     return _emit_leaf(16, 9107, sig, "bc", ["const crd::usize hc = bc >> 4;"], tile_locals, load, store,
@@ -686,17 +690,19 @@ def emit_inplace_first(blocks, to=False, table=True):
 
 
 def emit_inplace_mid(B):
-    """Pass 2: the B-point leaf over i2 at column t = i1 + 16*ka, AoSoA blocks in and out, W_{16B}^{i1*kb}."""
+    """Pass 2: the B-point leaf over i2 at column t = i1 + 16*ka, AoSoA blocks in and out, W_{16B}^{i1*kb}. B <= 16
+    (n <= 4K, in the L1d) stores its blocks a half at a time, larger B whole (codelet_lanes.hpp's store_block)."""
+    put = "store_block_halves" if B <= 16 else "store_block"
     def load(v, j):
         return [f"V {v}r, {v}i; simd::load_block(d, {_plus('at', 16 * j)}, {v}r, {v}i);"]
 
     def store(k, outs):
         n = f"n{outs[k].id}"
         if k == 0:
-            return [f"simd::store_block(d, at, {n}r, {n}i);"]
+            return [f"simd::{put}(d, at, {n}r, {n}i);"]
         return ["{", f"    const V wr = simd::load<V>(twr + {k * 16} + i1), wi = simd::load<V>(twi + {k * 16} + i1);",
                 *["    " + line for line in _tf_scaled("x", "w", n)],
-                f"    simd::store_block(d, at + {16 * k}, xr, xi);", "}"]
+                f"    simd::{put}(d, at + {16 * k}, xr, xi);", "}"]
 
     sig = [f"void codelet{B}_inplace_mid(crd::f32* d, crd::usize w, const crd::f32* twr,",
            "    const crd::f32* twi) noexcept"]
@@ -795,10 +801,13 @@ def main(mode="hybrid"):
         how = "tabled" if table else "factored"
         print(f"// In-place pass 1, W_n {how}: the leaf over i3 of n = 16·B·16, interleaved in, blocks out (f32). "
               "GENERATED.")
-        print(emit_inplace_first(blocks=False, table=table))
+        # The tabled edition runs in place at 2K only on the levels where the two forms differ: halves.
+        print(emit_inplace_first(blocks=False, table=table, halves=table))
         print(f"// In-place pass 1 out of place, W_n {how}: interleaved in, blocks out to an aligned buffer (f32). "
               "GENERATED.")
         print(emit_inplace_first(blocks=False, to=True, table=table))
+    print("// In-place pass 1, W_n factored, blocks stored a half at a time: n = 4K, in the L1d (f32). GENERATED.")
+    print(emit_inplace_first(blocks=False, table=False, halves=True))
     print("// In-place pass 1's edition for a column a step, W_n tabled: AoSoA blocks in and out (f32). GENERATED.")
     print(emit_inplace_first(blocks=True))
     for b in INPLACE_MIDS:
