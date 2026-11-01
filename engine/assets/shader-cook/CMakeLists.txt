@@ -34,15 +34,8 @@ if(TARGET crd-gpu-context-dx12)
 endif()
 
 # Real PTX is cooked via NVRTC where the CUDA toolkit is present (mirrors the DXIL guard). Absent ⇒ CUDA is emitted as source
-# only. Same CUDAToolkit_ROOT hint as crd-kir-cuda (the installer's CUDA_PATH may not be in this shell yet).
-if(NOT DEFINED CUDAToolkit_ROOT AND NOT DEFINED ENV{CUDA_PATH})
-    file(GLOB _crd_cuda_dirs "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v*")
-    if(_crd_cuda_dirs)
-        list(SORT _crd_cuda_dirs)
-        list(GET _crd_cuda_dirs -1 CUDAToolkit_ROOT)
-    endif()
-endif()
-find_package(CUDAToolkit QUIET)
+# only. The host's toolkit as crd-kir-cuda finds it (cmake/CrdCuda.cmake).
+crd_find_cuda_toolkit(QUIET)
 if(CUDAToolkit_FOUND)
     target_link_libraries(crd-shader-cook PRIVATE CUDA::nvrtc) # CUDA C -> real PTX (portable virtual-arch bytecode)
     target_compile_definitions(crd-shader-cook PRIVATE CRD_SHADERCOOK_HAS_CUDA)

@@ -3,8 +3,7 @@
 // layers). The structural thesis (the FFT-crush fusion doctrine): L layers of N x 64 activations cost cuBLAS ~2*L*N*64*2 bytes
 // of DRAM traffic; the fused kernel reads the input once and writes the output once (~2*N*64*2) => ~L x less traffic.
 // MLP: in 64 -> 5 x hidden 64 (ReLU) -> out 64 (linear) = 6 weight mats 64x64, fp16, fp16 accumulate (both sides identical).
-// Build: nvcc -O3 -std=c++17 -arch=sm_89 -allow-unsupported-compiler -Xcompiler /Zc:preprocessor
-//        mlp_fused_bench.cu -o mlp_fused_bench.exe -lcublasLt -lcublas
+// Built by CRD_BUILD_GPU_VS_CUDA (bench/CMakeLists.txt) and run by scripts/run_bench_gpu_cuda.sh.
 #include <cublasLt.h>
 #include <cuda_fp16.h>
 #include <mma.h>

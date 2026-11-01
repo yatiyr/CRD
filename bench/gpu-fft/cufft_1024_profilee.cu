@@ -1,48 +1,39 @@
 // cufft_1024_profilee.cu — a minimal target for Nsight Compute: ONE 1024x1024 C2C 2-D convolution (fwd + multiply + inv)
 // after one warmup, so `ncu` captures cuFFT's exact kernel anatomy (how many kernels, their grids, occupancy, L2/DRAM
-// throughput) for the size we are chasing. Build: nvcc -O3 -allow-unsupported-compiler cufft_1024_profilee.cu -o
-// cufft_1024_profilee.exe -lcufft
+// throughput) for the size we are chasing. Built by CRD_BUILD_GPU_VS_CUDA (bench/CMakeLists.txt) and run by
+// scripts/run_bench_gpu_cuda.sh (or under `ncu`).
+#include "cuda_bench.hpp"
+#include "spectrum_multiply.cuh"
+
 #include <cuda_runtime.h>
 #include <cufft.h>
-#include <cstdio>
 
-__global__ void cmul(cufftComplex* a, const cufftComplex* b, long long total)
-{
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < total)
-    {
-        cufftComplex x = a[i];
-        cufftComplex y = b[i];
-        a[i].x         = x.x * y.x - x.y * y.y;
-        a[i].y         = x.x * y.y + x.y * y.x;
-    }
-}
+#include <cstdio>
 
 int main()
 {
-    const int       n   = 1024;
-    const long long tot = (long long)n * n;
-    cufftComplex*   d   = nullptr;
-    cufftComplex*   f   = nullptr;
-    cudaMalloc(&d, sizeof(cufftComplex) * tot);
-    cudaMalloc(&f, sizeof(cufftComplex) * tot);
-    cudaMemset(d, 0, sizeof(cufftComplex) * tot);
-    cudaMemset(f, 0, sizeof(cufftComplex) * tot);
+    const int       n     = 1024;
+    const long long tot   = static_cast<long long>(n) * n;
+    const size_t    bytes = sizeof(cufftComplex) * static_cast<size_t>(tot);
+    cufftComplex*   d     = nullptr;
+    cufftComplex*   f     = nullptr;
+    CRD_CUDA_CHECK(cudaMalloc(&d, bytes));
+    CRD_CUDA_CHECK(cudaMalloc(&f, bytes));
+    CRD_CUDA_CHECK(cudaMemset(d, 0, bytes));
+    CRD_CUDA_CHECK(cudaMemset(f, 0, bytes));
     cufftHandle plan;
-    cufftPlan2d(&plan, n, n, CUFFT_C2C);
-    const int block = 256;
-    const int grid  = (int)((tot + block - 1) / block);
+    CRD_CUDA_CHECK(cufftPlan2d(&plan, n, n, CUFFT_C2C));
     // one warmup + one measured conv = ncu sees each kernel exactly twice; profile the 2nd instance.
     for (int r = 0; r < 2; ++r)
     {
-        cufftExecC2C(plan, d, d, CUFFT_FORWARD);
-        cmul<<<grid, block>>>(d, f, tot);
-        cufftExecC2C(plan, d, d, CUFFT_INVERSE);
+        CRD_CUDA_CHECK(cufftExecC2C(plan, d, d, CUFFT_FORWARD));
+        crd_bench::multiply_spectrum(d, f, tot);
+        CRD_CUDA_CHECK(cufftExecC2C(plan, d, d, CUFFT_INVERSE));
     }
-    cudaDeviceSynchronize();
+    CRD_CUDA_CHECK(cudaDeviceSynchronize());
     std::printf("done\n");
-    cufftDestroy(plan);
-    cudaFree(d);
-    cudaFree(f);
+    CRD_CUDA_CHECK(cufftDestroy(plan));
+    CRD_CUDA_CHECK(cudaFree(d));
+    CRD_CUDA_CHECK(cudaFree(f));
     return 0;
 }

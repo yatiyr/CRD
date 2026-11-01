@@ -22,7 +22,7 @@ HELPERS = ('cmake/CPM.cmake', 'scripts/install-vulkan-sdk.py', 'scripts/install-
            'scripts/install-vulkan-validation.py', 'scripts/install-warp.py', 'scripts/install-sccache.py',
            'scripts/install-mold.py', 'scripts/install-genmc.py', 'scripts/install-clang-build-analyzer.py',
            'scripts/install-clang-tidy.py', 'scripts/install-ninja.py', 'scripts/install-sde.py',
-           'scripts/install-node.py',
+           'scripts/install-node.py', 'scripts/install-cuda.py',
            'scripts/msvc-dev-env.py', 'scripts/pins.py')
 SCHEMA = 'cerid-pins/1'
 HEX64 = re.compile(r'^[0-9a-f]{64}$')

@@ -8,8 +8,7 @@
 //   dz[l]      = g (.) act'(z[l])   (act' = 1 for the linear output layer, (a[l+1]>0) for ReLU)
 //   dW[l][k,n] = sum_r a[l][r,k] * dz[l][r,n]                 (a[l]^T . dz[l], 64x64, REDUCED over batch -> fp32 atomic)
 //   da[l][r,k] = sum_n dz[l][r,n] * W[l][k,n]                 (dz . W^T -> new g, stays on-chip)
-// Build: nvcc -O3 -std=c++17 -arch=sm_89 -allow-unsupported-compiler -Xcompiler /Zc:preprocessor
-//        mlp_backward_bench.cu -o mlp_backward_bench.exe -lcublasLt -lcublas
+// Built by CRD_BUILD_GPU_VS_CUDA (bench/CMakeLists.txt) and run by scripts/run_bench_gpu_cuda.sh.
 #include <cublasLt.h>
 #include <cuda_fp16.h>
 #include <mma.h>

@@ -329,8 +329,8 @@
         "bench/gpu-fft/cufft_bench.cu",
         "bench/gpu-fft/cufft_conv_bench.cu"
       ],
-      "unrouted": "REPO.3",
-      "why": "The CUDA programs of the GPU compute and FFT boards (cuFFT, CUB and cuBLASLt peers, and the CKIR kernels' CUDA duels and Nsight Compute targets) that no script or option builds; REPO.3 owns giving each a checked route or retiring it with its board as the record."
+      "built_when": {"option": "CRD_BUILD_GPU_VS_CUDA"},
+      "why": "The CUDA programs of the GPU compute and FFT boards (the cuFFT, CUB and cuBLASLt peers, the CKIR kernels' CUDA duels and the Nsight Compute targets), compiled by nvcc against the host's CUDA Toolkit (the pinned one from scripts/install-cuda.py); scripts/run_bench_gpu_cuda.sh builds and runs them."
     }
   ]
 }

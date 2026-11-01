@@ -3,17 +3,8 @@
 # GUARDED on CUDAToolkit — absent (non-NVIDIA / CI without CUDA) ⇒ the module self-skips and the rest of the engine
 # builds unaffected. Shares the device primary context with crd-kir-cuda (no duplicate CUDA init).
 
-# The installer's CUDA_PATH may not be set in this shell; hint find_package with the latest toolkit under the std path.
-if(NOT DEFINED CUDAToolkit_ROOT AND NOT DEFINED ENV{CUDA_PATH})
-    file(GLOB _crd_cuda_dirs "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v*")
-    if(_crd_cuda_dirs)
-        list(SORT _crd_cuda_dirs)
-        list(GET _crd_cuda_dirs -1 CUDAToolkit_ROOT)
-        message(STATUS "crd-gpu-context-cuda: hinting CUDAToolkit_ROOT = ${CUDAToolkit_ROOT}")
-    endif()
-endif()
-
-find_package(CUDAToolkit QUIET)
+# The host's toolkit (cmake/CrdCuda.cmake).
+crd_find_cuda_toolkit(QUIET)
 if(NOT CUDAToolkit_FOUND)
     message(STATUS "crd-gpu-context-cuda: CUDAToolkit not found -- skipping the CUDA compute backend (Vulkan/DX12 unaffected).")
     return()

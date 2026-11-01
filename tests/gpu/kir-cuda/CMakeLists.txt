@@ -21,7 +21,7 @@ target_link_libraries(crd-kir-cuda-tests PRIVATE
 # ADR-0098 §4 · AS-4: the cuBLAS vendor board (CKIR-autotuned GEMM vs cuBLAS Sgemm, matched f32). Linked only where cuBLAS is
 # present (it ships with the CUDA toolkit we already found); absent ⇒ the board test compiles out gracefully.
 # find_package targets are directory-scoped, so re-find CUDAToolkit here to expose CUDA::cublas in this scope (cached, cheap).
-find_package(CUDAToolkit QUIET)
+crd_find_cuda_toolkit(QUIET)
 if(TARGET CUDA::cublas)
     target_link_libraries(crd-kir-cuda-tests PRIVATE CUDA::cublas CUDA::cudart)
     target_compile_definitions(crd-kir-cuda-tests PRIVATE CRD_HAS_CUBLAS)

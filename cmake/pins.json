@@ -444,6 +444,93 @@
       "license": "MIT",
       "note": "Node.js 24 LTS (Krypton, 2026-10-14), installed whole by scripts/install-node.py for the repository's npm tools, each run from a committed lockfile with every transitive SHA-512 integrity: the dashboard publisher (ci/dashboard/generate.py publish, wrangler) and the MCP Inspector of MCP-ADAPT.0's evidence (tests/tools/ceridc/mcp_inspector.py). Downloaded and hashed 2026-10-30; matches nodejs.org SHASUMS256.txt."
     },
+    "cuda-linux-x64": {
+      "version": "13.3.1",
+      "binary": "bin/nvcc",
+      "notices": [
+        "LICENSE"
+      ],
+      "links": {
+        "lib64": "lib"
+      },
+      "manifest": "https://developer.download.nvidia.com/compute/cuda/redist/redistrib_13.3.1.json",
+      "files": {
+        "cuda_nvcc-linux-x86_64-13.3.73-archive.tar.xz": {
+          "component": "cuda_nvcc",
+          "version": "13.3.73",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/linux-x86_64/cuda_nvcc-linux-x86_64-13.3.73-archive.tar.xz",
+          "size": 31628824,
+          "sha256": "2ff9f9954060794a1c5134a933ccb45bec723d866b2629dadfe4a1a313f21068",
+          "root": "cuda_nvcc-linux-x86_64-13.3.73-archive/"
+        },
+        "cuda_crt-linux-x86_64-13.3.73-archive.tar.xz": {
+          "component": "cuda_crt",
+          "version": "13.3.73",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_crt/linux-x86_64/cuda_crt-linux-x86_64-13.3.73-archive.tar.xz",
+          "size": 99152,
+          "sha256": "1251aa9d668c607a103489cd2250773701e83a313e355578044622cf36713a9d",
+          "root": "cuda_crt-linux-x86_64-13.3.73-archive/"
+        },
+        "libnvvm-linux-x86_64-13.3.73-archive.tar.xz": {
+          "component": "libnvvm",
+          "version": "13.3.73",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/libnvvm/linux-x86_64/libnvvm-linux-x86_64-13.3.73-archive.tar.xz",
+          "size": 49508948,
+          "sha256": "206b1ab4979c09b5c32f8bf907c42bc9e16cd7454cf6036f524c45a58d060f93",
+          "root": "libnvvm-linux-x86_64-13.3.73-archive/"
+        },
+        "cuda_cudart-linux-x86_64-13.3.29-archive.tar.xz": {
+          "component": "cuda_cudart",
+          "version": "13.3.29",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/linux-x86_64/cuda_cudart-linux-x86_64-13.3.29-archive.tar.xz",
+          "size": 1573744,
+          "sha256": "1e59c4888267d27ba1a9bd0f3669a6439db1334a96e754cd9013c7c73e18dc9d",
+          "root": "cuda_cudart-linux-x86_64-13.3.29-archive/"
+        },
+        "cccl-linux-x86_64-13.3.3.4.1-archive.tar.xz": {
+          "component": "cccl",
+          "version": "13.3.3.4.1",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cccl/linux-x86_64/cccl-linux-x86_64-13.3.3.4.1-archive.tar.xz",
+          "size": 1262552,
+          "sha256": "26957cede74f9341174ecaf0372f3f886e7c46ceccb98d6dc775fe2b68d19268",
+          "root": "cccl-linux-x86_64-13.3.3.4.1-archive/"
+        },
+        "cuda_nvrtc-linux-x86_64-13.3.33-archive.tar.xz": {
+          "component": "cuda_nvrtc",
+          "version": "13.3.33",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvrtc/linux-x86_64/cuda_nvrtc-linux-x86_64-13.3.33-archive.tar.xz",
+          "size": 69662780,
+          "sha256": "9e8f78278215babd1236b137252424ca7912c185bd093201f5d97f7dd763b74a",
+          "root": "cuda_nvrtc-linux-x86_64-13.3.33-archive/"
+        },
+        "libnvjitlink-linux-x86_64-13.3.33-archive.tar.xz": {
+          "component": "libnvjitlink",
+          "version": "13.3.33",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/libnvjitlink/linux-x86_64/libnvjitlink-linux-x86_64-13.3.33-archive.tar.xz",
+          "size": 56144284,
+          "sha256": "f79e25bb1ef2f22f26c09897f6cb8719634f38e7330bd4700a1ea9ec9591eaff",
+          "root": "libnvjitlink-linux-x86_64-13.3.33-archive/"
+        },
+        "libcufft-linux-x86_64-12.3.0.29-archive.tar.xz": {
+          "component": "libcufft",
+          "version": "12.3.0.29",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/libcufft/linux-x86_64/libcufft-linux-x86_64-12.3.0.29-archive.tar.xz",
+          "size": 294625872,
+          "sha256": "b2404952a5d630fbbc13e12d36975ef87a9c05c71c321c2cb5b3820789e47462",
+          "root": "libcufft-linux-x86_64-12.3.0.29-archive/"
+        },
+        "libcublas-linux-x86_64-13.6.0.2-archive.tar.xz": {
+          "component": "libcublas",
+          "version": "13.6.0.2",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/libcublas/linux-x86_64/libcublas-linux-x86_64-13.6.0.2-archive.tar.xz",
+          "size": 817981368,
+          "sha256": "1794edb653adf48f5fa02d86bb738ed75888dd355aa39dadb6202d84d554c0dc",
+          "root": "libcublas-linux-x86_64-13.6.0.2-archive/"
+        }
+      },
+      "license": "LicenseRef-NVIDIA-CUDA-Toolkit-EULA",
+      "note": "The CUDA Toolkit 13.3.1 (2026-06-29), the measuring PC's toolkit, from NVIDIA's redistributable component archives for linux-x86_64 (SHA-256 and sizes from the release manifest, verified on download): the compiler (nvcc, crt headers, libNVVM), the runtime, CCCL (CUB), NVRTC, nvJitLink, cuFFT and cuBLAS/cuBLASLt. scripts/install-cuda.py unpacks them into one prefix (~/.cerid/tools/cuda/<version>; lib64 links to lib, where nvcc's profile looks for the runtime), the CUDAToolkit_ROOT of the CUDA peer programs of the GPU compute and FFT boards (CRD_BUILD_GPU_VS_CUDA, scripts/run_bench_gpu_cuda.sh) on a Linux host; a Windows host uses its installed toolkit (CUDA_PATH). Never in CI, an engine module's default build or a shipped build. Licence: the NVIDIA CUDA Toolkit EULA, a no-charge licence for use (CCCL: Apache-2.0, libcu++ with LLVM exceptions), each archive's LICENSE kept under licenses/<archive>/ of the prefix; the components are not redistributed."
+    },
     "bake-python-windows": {
       "version": "3.12.10",
       "url": "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe",

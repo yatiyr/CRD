@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **15** · tools: **29** · workflow actions: **5** · runner images: **5** · unpinned apt packages: **21**
+- packages: **17** · tools: **30** · workflow actions: **5** · runner images: **5** · unpinned apt packages: **21**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -30,6 +30,8 @@
 | highway | 1.4.0 | Apache-2.0 OR BSD-3-Clause | google/highway @ `1.4.0` (2607d3b5b011) | `highway-2607d3b5.tar.gz` |
 | tracy | 0.14.1 | BSD-3-Clause | wolfpld/tracy @ `v0.14.1` (30997d5ca6bb) | `tracy-30997d5c.tar.gz` |
 | nlopt | 2.11.0 | MIT | stevengj/nlopt @ `v2.11.0` (88c424d4f458) | `nlopt-88c424d4.tar.gz` |
+| ggml | 0.28.0 | MIT | ggml-org/ggml @ `v0.28.0` (facdc44a67da) | `ggml-facdc44a.tar.gz` |
+| vkfft | 1.3.4 | MIT | DTolm/VkFFT @ `v1.3.4` (066a17c17068) | `VkFFT-066a17c1.tar.gz` |
 
 ## Tools (installers, SDK members and helpers, verified by digest)
 
@@ -57,6 +59,7 @@
 | llvm | 20.1.8 | Apache-2.0 WITH LLVM-exception | github.com | `clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz` |
 | genmc | 0.19.0 | Apache-2.0 OR MIT | MPI-SWS/genmc (9f6c4c0772d0) | `genmc-9f6c4c07.tar.gz` |
 | node-linux-x64 | 24.22.0 | MIT | nodejs.org | `node-v24.22.0-linux-x64.tar.xz` |
+| cuda-linux-x64 | 13.3.1 | LicenseRef-NVIDIA-CUDA-Toolkit-EULA |  | `cuda_nvcc-linux-x86_64-13.3.73-archive.tar.xz`, `cuda_crt-linux-x86_64-13.3.73-archive.tar.xz`, `libnvvm-linux-x86_64-13.3.73-archive.tar.xz`, `cuda_cudart-linux-x86_64-13.3.29-archive.tar.xz`, `cccl-linux-x86_64-13.3.3.4.1-archive.tar.xz`, `cuda_nvrtc-linux-x86_64-13.3.33-archive.tar.xz`, `libnvjitlink-linux-x86_64-13.3.33-archive.tar.xz`, `libcufft-linux-x86_64-12.3.0.29-archive.tar.xz`, `libcublas-linux-x86_64-13.6.0.2-archive.tar.xz` |
 | bake-python-windows | 3.12.10 | PSF-2.0 | www.python.org | `python-3.12.10-amd64.exe` |
 | bake-git-windows | 2.56.0.windows.4 | GPL-2.0-only | github.com | `Git-2.56.0.4-64-bit.exe` |
 | bake-cmake-windows | 4.4.5 | BSD-3-Clause | github.com | `cmake-4.4.5-windows-x86_64.msi` |

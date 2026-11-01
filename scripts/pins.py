@@ -12,6 +12,7 @@ import copy
 import hashlib
 import http.client
 import json
+import os
 import platform
 import posixpath
 import shutil
@@ -188,18 +189,83 @@ def tree_filter(member, path):
     return member
 
 
+def tree_parts(pin):
+    """The archives of a pinned tree: the pin itself, or each of its `files` (one prefix unpacked from several
+    archives, each below its own `root`), with the archive's file name."""
+    if 'files' not in pin:
+        return [dict(pin, file=pin.get('file') or pin['url'].rsplit('/', 1)[-1])]
+    return [dict(spec, file=name) for name, spec in pin['files'].items()]
+
+
+def placed_alike(package, info, path):
+    """Whether `path`, placed by an earlier archive of the same tree, is the directory, link or file `info` is."""
+    if info.isdir():
+        return path.is_dir() and not path.is_symlink()
+    if info.issym():
+        return path.is_symlink() and os.readlink(path) == info.linkname
+    if info.isfile() and path.is_file() and not path.is_symlink() and path.stat().st_size == info.size:
+        with package.extractfile(info) as member:
+            return member.read() == path.read_bytes()
+    return False
+
+
+def notices_apart(members, notices, root):
+    """`members` with the archive's own top-level notices (the names in `notices`, such as LICENSE) moved to
+    `licenses/<archive root>/`, so each archive of a tree keeps its own licence text beside the others'."""
+    for info in members:
+        if info.name in notices:
+            info.name = f'licenses/{root.rstrip("/")}/{info.name}'
+    return members
+
+
+def unplaced(package, members, staging, name):
+    """`members` without those an earlier archive of the tree already placed; a path two archives both place must be
+    the same directory, link or file in each, else the tree is refused."""
+    fresh = []
+    for info in members:
+        path = staging / PurePosixPath(info.name)
+        if not os.path.lexists(path):
+            fresh.append(info)
+        elif not placed_alike(package, info, path):
+            raise PinError(f'{name}: {info.name} differs from what an earlier archive of the tree placed')
+    return fresh
+
+
+def link_inside_tree(staging, name, target):
+    """Make `name` a relative symbolic link to `target`, both inside the tree: the layout a kit's tools expect where its
+    archives place a directory under another name (a pin's `links`)."""
+    link = staging / PurePosixPath(name)
+    resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
+    if posixpath.isabs(target) or resolved.startswith('../') or resolved == '..':
+        raise PinError(f'the link {name} -> {target} leaves the tree')
+    if not (staging / PurePosixPath(resolved)).exists():
+        raise PinError(f'the link {name} -> {target} names nothing in the tree')
+    if os.path.lexists(link):
+        raise PinError(f'the link {name} -> {target} would replace a path an archive placed')
+    os.symlink(target, link, target_is_directory=(staging / PurePosixPath(resolved)).is_dir())
+
+
 def install_tree(pin, destination, download_dir, binary, stamp, archive=None, label=None, version_of=None):
     """Install every member of `pin`'s tar archive below the pin's `root` into `destination` and return the
     `binary` (a POSIX path inside the tree), unless a matching install is already there.
 
-    The archive is fetched (or verified) through fetch(); the tree is assembled beside the destination and renamed
-    into place only when complete; a pin with `member_sha256` has that member's digest checked inside the tree; with
-    `version_of` (a callable returning the version the binary reports, or None) the binary must report the pinned
-    version. The `stamp` file records the pin's version and digest, so a matching install is reused and a directory
-    without one is never replaced."""
+    A pin with `files` is one tree from several archives (tree_parts), each unpacked below its own root into the same
+    prefix, in the registry's order; a path two of them place must be identical in both, and the top-level files the
+    pin's `notices` names go to `licenses/<archive root>/` (notices_apart); the pin's `links` then add the relative
+    links its tools expect (link_inside_tree). Each archive is fetched (or
+    verified) through fetch(); `archive` hands in the one archive of a single-archive pin. The tree is assembled
+    beside the destination and renamed into place only when complete; a pin with `member_sha256` has that member's
+    digest checked inside the tree; with `version_of` (a callable returning the version the binary reports, or None)
+    the binary must report the pinned version. The `stamp` file records the pin's version and digests, so a matching
+    install is reused and a directory without one is never replaced."""
+    parts = tree_parts(pin)
+    if archive is not None and len(parts) > 1:
+        raise PinError('a tree of several archives takes them from its download directory, not one handed-in archive')
     label = label or pin.get('file') or binary
     destination = Path(destination).resolve()
-    expected = {'version': pin['version'], 'sha256': pin['sha256']}
+    digests = pin['sha256'] if 'files' not in pin else {part['file']: part['sha256'] for part in parts}
+    expected = {'version': pin['version'], 'sha256': digests}
+    expected.update({key: pin[key] for key in ('notices', 'links') if key in pin})
     tool = destination / PurePosixPath(binary)
 
     def reported_version(path):
@@ -214,17 +280,23 @@ def install_tree(pin, destination, download_dir, binary, stamp, archive=None, la
         return tool
     if destination.exists() and not (destination / stamp).is_file():
         raise PinError(f'{destination} exists and holds no kit this script installed; choose another destination')
-    verified = fetch(pin, Path(download_dir).resolve(), archive, label=f'{label} archive')
+    verified = [fetch(part, Path(download_dir).resolve(), archive, label=f'{label} archive {part["file"]}')
+                for part in parts]
     staging = destination.with_name(destination.name + '.partial')
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir(parents=True)
     try:
-        with tarfile.open(verified, 'r:*', errorlevel=2) as package:
-            package.extractall(staging, members=tree_members(package, pin['root']), filter=tree_filter)
+        for part, path in zip(parts, verified):
+            with tarfile.open(path, 'r:*', errorlevel=2) as package:
+                members = notices_apart(tree_members(package, part['root']), pin.get('notices', ()), part['root'])
+                members = unplaced(package, members, staging, path.name)
+                package.extractall(staging, members=members, filter=tree_filter)
+        for name, target in pin.get('links', {}).items():
+            link_inside_tree(staging, name, target)
         staged = staging / PurePosixPath(binary)
         if not staged.is_file():
-            raise PinError(f'{verified.name}: the kit has no {binary}')
+            raise PinError(f'{label}: the kit has no {binary}')
         if pin.get('member_sha256'):
             member = PurePosixPath(pin['member'])
             if str(member) != pin['root'] + binary:
@@ -242,7 +314,8 @@ def install_tree(pin, destination, download_dir, binary, stamp, archive=None, la
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
-    checks = 'archive and binary SHA-256 verified' if pin.get('member_sha256') else 'archive SHA-256 verified'
+    archives = 'archive' if len(parts) == 1 else f'{len(parts)} archives\''
+    checks = f'{archives} and binary SHA-256 verified' if pin.get('member_sha256') else f'{archives} SHA-256 verified'
     print(f'Installed {label} {pin["version"]}; {checks}' + (', the binary reports the version.' if version_of
                                                               else '.'))
     return tool

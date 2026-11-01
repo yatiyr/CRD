@@ -62,6 +62,9 @@ sccache_spec.loader.exec_module(install_sccache)
 node_spec = importlib.util.spec_from_file_location('install_node', ROOT / 'scripts/install-node.py')
 install_node = importlib.util.module_from_spec(node_spec)
 node_spec.loader.exec_module(install_node)
+cuda_spec = importlib.util.spec_from_file_location('install_cuda', ROOT / 'scripts/install-cuda.py')
+install_cuda = importlib.util.module_from_spec(cuda_spec)
+cuda_spec.loader.exec_module(install_cuda)
 mold_spec = importlib.util.spec_from_file_location('install_mold', ROOT / 'scripts/install-mold.py')
 install_mold = importlib.util.module_from_spec(mold_spec)
 mold_spec.loader.exec_module(install_mold)
@@ -2110,6 +2113,81 @@ class BuildPerformance(unittest.TestCase):
         self.assertEqual(pin['member'], pin['root'] + install_node.NODE)
         self.assertIn('/v%s/' % pin['version'], pin['url'])
         self.assertIn('scripts/install-node.py', check_pins.HELPERS)
+
+    def test_cuda_installer_unpacks_every_component_archive_into_one_prefix(self):
+        def component(directory, root, members):
+            path = directory / (root + '.tar.xz')
+            with tarfile.open(path, 'w:xz') as package:
+                for name, data in members.items():
+                    info = tarfile.TarInfo(root + '/' + name)
+                    info.size, info.mode = len(data), 0o755
+                    package.addfile(info, io.BytesIO(data))
+            return path.name, {'component': root.split('-')[0], 'version': root.split('-')[-1],
+                               'url': 'https://example.invalid/' + path.name, 'sha256': pins_registry.sha256(path),
+                               'root': root + '/'}
+
+        def toolkit(directory, extra=None):
+            directory.mkdir()
+            parts = [component(directory, 'cuda_nvcc-linux-x86_64-9.9.73',
+                               {'bin/nvcc': b'#!/bin/sh\n', 'LICENSE': b'EULA', 'include/common.h': b'same'}),
+                     component(directory, 'cuda_cudart-linux-x86_64-9.9.29',
+                               {'lib/libcudart.so': b'ELF', 'LICENSE': b'EULA, runtime', 'include/common.h': b'same'})]
+            if extra is not None:
+                parts.append(component(directory, 'libcufft-linux-x86_64-9.9.1', extra))
+            return {'version': '9.9.1', 'binary': 'bin/nvcc', 'notices': ['LICENSE'], 'files': dict(parts),
+                    'license': 'LicenseRef-NVIDIA-CUDA-Toolkit-EULA'}
+
+        with tempfile.TemporaryDirectory() as temp, contextlib.redirect_stdout(io.StringIO()):
+            root = Path(temp).resolve()
+            pin = toolkit(root / 'dl')
+            prefix = install_cuda.install(root / 'cuda', root / 'dl', pin=pin, check=False)
+            self.assertEqual(prefix, root / 'cuda')
+            self.assertEqual((prefix / 'lib/libcudart.so').read_bytes(), b'ELF', 'every archive lands in one prefix')
+            self.assertEqual((prefix / 'include/common.h').read_bytes(), b'same', 'an identical path is accepted')
+            self.assertFalse((prefix / 'LICENSE').exists(), 'no archive notice is overwritten by another')
+            self.assertEqual((prefix / 'licenses/cuda_nvcc-linux-x86_64-9.9.73/LICENSE').read_bytes(), b'EULA')
+            self.assertEqual((prefix / 'licenses/cuda_cudart-linux-x86_64-9.9.29/LICENSE').read_bytes(),
+                             b'EULA, runtime')
+            stamp = json.loads((prefix / install_cuda.STAMP).read_text(encoding='utf-8'))
+            self.assertEqual(stamp['sha256'], {name: spec['sha256'] for name, spec in pin['files'].items()})
+            # A matching stamp is reused; a changed layout (a new link) is installed again.
+            (prefix / 'lib/libcudart.so').write_bytes(b'kept')
+            install_cuda.install(root / 'cuda', root / 'dl', pin=pin, check=False)
+            self.assertEqual((prefix / 'lib/libcudart.so').read_bytes(), b'kept')
+            if not pins_registry.WINDOWS:
+                install_cuda.install(root / 'cuda', root / 'dl', pin=dict(pin, links={'lib64': 'lib'}), check=False)
+                self.assertTrue((prefix / 'lib64').is_symlink())
+                self.assertEqual((prefix / 'lib64/libcudart.so').read_bytes(), b'ELF')
+                for links, message in (({'lib64': '../outside'}, 'leaves the tree'),
+                                       ({'lib64': 'missing'}, 'names nothing'),
+                                       ({'lib': 'include'}, 'would replace')):
+                    with self.assertRaisesRegex(pins_registry.PinError, message):
+                        install_cuda.install(root / ('bad-' + message.split()[0]), root / 'dl', check=False,
+                                             pin=dict(pin, links=links))
+            # Two archives placing one path differently refuse the tree, and nothing is left behind.
+            clash = toolkit(root / 'clash', extra={'include/common.h': b'different'})
+            with self.assertRaisesRegex(pins_registry.PinError, 'include/common.h differs'):
+                install_cuda.install(root / 'clashed', root / 'clash', pin=clash, check=False)
+            self.assertFalse((root / 'clashed').exists() or (root / 'clashed.partial').exists())
+            with self.assertRaisesRegex(pins_registry.PinError, 'not one handed-in archive'):
+                pins_registry.install_tree(pin, root / 'other', root / 'dl', 'bin/nvcc', 'stamp.json',
+                                           archive=root / 'dl' / next(iter(pin['files'])))
+            # nvcc --version names the compiler component's version, which stands for the toolkit's.
+            for reported, version in (('Cuda compilation tools, release 9.9, V9.9.73\nBuild cuda_9.9\n', '9.9.1'),
+                                      ('Cuda compilation tools, release 9.9, V9.9.70\n', '9.9.70'),
+                                      ('no version\n', None)):
+                with patch.object(install_cuda.subprocess, 'run',
+                                  return_value=SimpleNamespace(stdout=reported, returncode=0)):
+                    self.assertEqual(install_cuda.installed_version(prefix / 'bin/nvcc', pin), version)
+            with self.assertRaisesRegex(pins_registry.PinError, 'exactly one cuda_nvcc'):
+                install_cuda.compiler_version(dict(pin, files={}))
+        pin = pins_registry.entry('tools', install_cuda.PIN_NAME)
+        self.assertEqual(pin['binary'], install_cuda.NVCC)
+        for name, spec in pin['files'].items():
+            self.assertEqual(spec['root'], name.removesuffix('.tar.xz') + '/')
+            self.assertTrue(spec['url'].endswith('/' + name) and spec['version'] in name)
+        self.assertIn('cuda_nvcc-linux-x86_64-%s-archive.tar.xz' % install_cuda.compiler_version(pin), pin['files'])
+        self.assertIn('scripts/install-cuda.py', check_pins.HELPERS)
 
     def test_clang_tidy_installer_keeps_the_resource_layout_and_checks_digests_count_and_version(self):
         with tempfile.TemporaryDirectory() as temp:

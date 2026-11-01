@@ -1,8 +1,7 @@
 // ckir_onesweep_bench.cu — THE CUDA-BACKEND CAMPAIGN: the CKIR onesweep radix sort (same IR that runs bit-exact on the CPU
 // oracle + Vulkan) lowered to native CUDA (hardware __match_any_sync rank, stream-ordered launches) vs CUB DeviceRadixSort
 // in the SAME binary, same method, same device. Kernels are GENERATED (ckir_onesweep_gen.cu, tool test [.emit-cuda-sort]).
-// Build: nvcc -O3 -std=c++17 -arch=sm_89 -allow-unsupported-compiler -Xcompiler /Zc:preprocessor
-//        -I "%CUDA_PATH%\include\cccl" ckir_onesweep_bench.cu -o ckir_onesweep_bench.exe
+// Built by CRD_BUILD_GPU_VS_CUDA (bench/CMakeLists.txt) and run by scripts/run_bench_gpu_cuda.sh.
 
 #include <cstdio> // device printf in the traced gen kernels
 #include "ckir_onesweep_gen.cu"

@@ -89,6 +89,12 @@ option(CRD_BUILD_HESAP_VS_GGML "Build the nn board's ggml Q8_0 peer program (loc
 # pinned release (cmake/pins.json vkfft, fetched on demand into build/_deps) on the host's Vulkan loader and glslang.
 # Local only, never in CI or a shipped build; scripts/run_bench_gpu_fft_vkfft.sh builds and runs it.
 option(CRD_BUILD_GPU_VS_VKFFT "Build the GPU FFT board's VkFFT peer program (local-only)" OFF)
+# The GPU compute and FFT boards' CUDA programs (bench/gpu-compute, bench/gpu-fft: the cuFFT, CUB and cuBLASLt peers,
+# the CKIR-emitted kernels' CUDA duels and the Nsight Compute targets), compiled by nvcc for CMAKE_CUDA_ARCHITECTURES
+# (default 89, the measuring PC's GPU) against the host's CUDA Toolkit (CUDAToolkit_ROOT; scripts/install-cuda.py
+# installs the pinned one). Local only on Linux, never in CI or a shipped build; scripts/run_bench_gpu_cuda.sh builds and
+# runs them.
+option(CRD_BUILD_GPU_VS_CUDA "Build the GPU boards' CUDA peer programs (local-only, Linux)" OFF)
 # The hesap-fft and NUFFT phase counters (CRD_FFT_PROFILE, CRD_NUFFT_PROFILE) in the library, its kernel units and its
 # consumers; a tree of its own (scripts/prof_fft_kernel.sh), since the counters change the measured code.
 option(CRD_HESAP_FFT_PROFILE "Build hesap-fft with its per-phase cycle counters (measurement trees only)" OFF)
@@ -123,6 +129,8 @@ include(CrdBuildPerformance)
 include(CrdPublicChecks)
 # Relocatable package export (install rules only; no build statement). See cmake/CrdPackage.cmake.
 include(CrdPackage)
+# The host's CUDA Toolkit for the CUDA modules and the boards' CUDA peers (crd_find_cuda_toolkit). See cmake/CrdCuda.cmake.
+include(CrdCuda)
 
 # ---- Log compile-time minimum level ---------------------------------------
 # Anything strictly below this level is compiled out to ((void)0).
@@ -1259,6 +1267,10 @@ endif()
 # ----- Engine modules, host tools, runtime and sandbox ----------------------
 
 crd_add_modules()
+# The GPU boards' CUDA peer programs (bench-only), the one directory that enables the CUDA language.
+if(CRD_BUILD_GPU_VS_CUDA)
+    add_subdirectory(bench)
+endif()
 crd_add_public_header_checks()
 crd_package_config()
 
