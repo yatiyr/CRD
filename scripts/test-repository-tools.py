@@ -7345,16 +7345,26 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
             'KP', 'IR', 'BY', 'MM', 'CF', 'CN', 'CD', 'HK', 'LB', 'LY', 'MO', 'RU', 'SS', 'SD', 'VE', 'ZW')]
         self.assertEqual(regulations + embargoed, destinations)
 
-    def test_the_un_embargo_is_authored_from_the_resolutions_and_not_written_while_open(self):
+    def test_the_un_embargo_is_written_from_the_resolutions(self):
         register = sanctions_import.load_register(ROOT)
         record = register['sanctions_lists']['embargoes']['generations']['un.sc.embargo']
+        with tempfile.TemporaryDirectory() as out:
+            with patch('sys.stdout', new_callable=io.StringIO) as printed:
+                self.assertEqual(0, sanctions_import.main(['import', '--from', str(self.LISTS), '--out', out,
+                                                           '--authority', 'un.sc.embargo']))
+            self.assertIn('un.sc.embargo: 15 embargoed destinations read 2026-11-01: generation 20261101000000',
+                          printed.getvalue())
+            document = tomllib.loads((Path(out) / 'un.sc.embargo.sanctions.toml').read_text(encoding='utf-8'))
+        self.assertEqual(('INT', 'https://scsanctions.un.org/resources/xml/en/consolidated.xml'),
+                         (document['jurisdiction'], document['source']))
         # The screening entry's own text is the Consolidated List, whose regimes index the resolutions to read; each
         # destination is read in the resolution in force, a renewal (whose sunset ends the period) where the Council
         # renews the measure for one.
         self.assertEqual('14 regimes', sanctions_import.read_instrument(register, 'int.un-sanctions')['consolidated'][
             'version'])
         texts = sanctions_import.embargo_texts(record, register)
-        self.assertEqual(['un.res-1701-2006.lebanon', 'un.res-1970-2011.libya', 'un.res-2806-2025.somalia',
+        self.assertEqual(['un.res-1701-2006.lebanon', 'un.res-1718-2006.dprk', 'un.res-1970-2011.libya',
+                          'un.res-2231-2015.iran', 'un.res-2806-2025.somalia',
                           'un.res-2821-2026.south-sudan-renewal', 'un.res-2825-2026.drc-renewal',
                           'un.res-2827-2026.central-african-republic-renewal', 'un.res-2830-2026.sudan-renewal',
                           'un.res-2831-2026.haiti-renewal', 'un.res-687-1991.iraq-arms'], sorted(texts))
@@ -7365,13 +7375,16 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
                           'un.res-2830-2026.sudan-renewal': '2026-12-11',
                           'un.res-2831-2026.haiti-renewal': '2027-10-14'},
                          {entry_id: sunset for entry_id, sunset in sunsets.items() if sunset})
+        # The DPRK's measures rest on resolution 1718 (2006) as the resolutions after it extend them; Iran's on
+        # resolutions 1737 (2006) to 1929 (2010), applied again from 28 September 2025 under resolution 2231 (2015).
         self.assertEqual([('CD', 'S/RES/1807 (2008)'), ('CF', 'S/RES/2745 (2024)'), ('HT', 'S/RES/2794 (2025)'),
-                          ('IQ', 'S/RES/687 (1991)'), ('LB', 'S/RES/1701 (2006)'), ('LY', 'S/RES/1970 (2011)'),
+                          ('IQ', 'S/RES/687 (1991)'), ('IR', 'S/RES/1737 (2006)'), ('KP', 'S/RES/1718 (2006)'),
+                          ('LB', 'S/RES/1701 (2006)'), ('LY', 'S/RES/1970 (2011)'),
                           ('SD-DC', 'S/RES/1556 (2004)'), ('SD-DE', 'S/RES/1556 (2004)'),
                           ('SD-DN', 'S/RES/1556 (2004)'), ('SD-DS', 'S/RES/1556 (2004)'),
                           ('SD-DW', 'S/RES/1556 (2004)'), ('SO', 'S/RES/2713 (2023)'), ('SS', 'S/RES/2428 (2018)')],
-                         [(item['region'], item['program']) for item in record['destinations']])
-        self.assertEqual({'sectoral'}, {item['measure'] for item in record['destinations']})
+                         [(item['region'], item['program']) for item in document['destination']])
+        self.assertEqual({'sectoral'}, {item['measure'] for item in document['destination']})
         # A resolution read whose measures attach only to the persons listed (the Consolidated List screens them), or
         # whose text the destinations rest on beside the one in force, is read without a destination of its own.
         for no_destination in ('un.res-1267-1999.isil-al-qaida', 'un.res-1988-2011.taliban',
@@ -7382,20 +7395,23 @@ class SanctionsLists(RegisterFixture, unittest.TestCase):
                                'un.res-2127-2013.central-african-republic',
                                'un.res-2745-2024.central-african-republic-armed-groups', 'un.res-2653-2022.haiti',
                                'un.res-2794-2025.haiti-arms', 'un.res-2713-2023.al-shabaab',
-                               'un.res-2206-2015.south-sudan', 'un.res-2428-2018.south-sudan-arms'):
+                               'un.res-2206-2015.south-sudan', 'un.res-2428-2018.south-sudan-arms',
+                               'un.res-1874-2009.dprk-arms', 'un.res-2094-2013.dprk-finance', 'un.res-2270-2016.dprk',
+                               'un.res-2321-2016.dprk', 'un.res-2375-2017.dprk', 'un.res-2397-2017.dprk',
+                               'un.res-1737-2006.iran', 'un.res-1747-2007.iran-arms-exports', 'un.res-1803-2008.iran',
+                               'un.res-1929-2010.iran-arms'):
             self.assertIsNotNone(sanctions_import.read_instrument(register, no_destination))
             self.assertNotIn(no_destination, texts)
         self.assertNotIn('int.un-sanctions', register['sanctions_lists']['embargoes']['reasons'])
-        # The DPRK and Iran regimes are still to be read, so nothing is written: a screening naming un.sc.embargo
-        # finds the list missing and fails closed instead of clearing those places.
-        self.assertIn('The DPRK regime', record['open'])
-        with tempfile.TemporaryDirectory() as out:
-            with patch('sys.stdout', new_callable=io.StringIO) as printed:
-                self.assertEqual(0, sanctions_import.main(['import', '--from', str(self.LISTS), '--out', out,
-                                                           '--authority', 'un.sc.embargo']))
-            self.assertIn('un.sc.embargo: 13 embargoed destinations authored, not written while the reading is open: '
-                          'The DPRK regime', printed.getvalue())
-            self.assertEqual([], list(Path(out).iterdir()))
+        # With the DPRK and Iran regimes read nothing is open, so the generation is written.
+        self.assertIsNone(record['open'])
+        # Iran's measures apply again under paragraph 12, never as their own adoption: the reapplied resolutions are
+        # in force from that day, and resolution 2231 (2015) has no end, since paragraph 9 kept paragraph 8's
+        # termination from occurring.
+        self.assertIsNone(sanctions_import.entry_of(register, 'un.res-2231-2015.iran')['sunset'])
+        for reapplied in ('un.res-1737-2006.iran', 'un.res-1747-2007.iran-arms-exports', 'un.res-1803-2008.iran',
+                          'un.res-1929-2010.iran-arms'):
+            self.assertEqual('2025-09-28', sanctions_import.entry_of(register, reapplied)['effective'])
 
     def test_an_open_reading_is_never_written(self):
         register = {'entries': [self.screening_entry(), self.read_order()]}

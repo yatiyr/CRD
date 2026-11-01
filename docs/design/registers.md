@@ -377,8 +377,14 @@ elsewhere).
   Yemen) or restrict no supply to a place (Syria's cultural property), name no destination: the UK Sanctions List
   screens their persons. `un.sc.embargo` is the Security Council's resolutions whose measures attach to a place, each
   destination read in the resolution in force on 2026-11-01
-  ([session](../sessions/2026-11-01-comply-1-un-resolutions.md#embargo)): 13 destinations, all sectoral. The arms
-  embargoes on Iraq (resolution 687 (1991), paragraph 24, kept by 1483 (2003), the Government excepted by 1546 (2004)),
+  ([session](../sessions/2026-11-01-comply-1-un-resolutions.md#embargo),
+  [the DPRK and Iran](../sessions/2026-11-01-comply-1-un-dprk-and-iran.md#embargo)): 15 destinations, all sectoral.
+  The DPRK's measures rest on resolution 1718 (2006), paragraph 8, as resolutions 1874 (2009) to 2397 (2017) extend
+  them (all arms, the annexed items, any item that could contribute to its programmes, fuel, machinery, vehicles and
+  metals) with no period; Iran's on resolutions 1737 (2006), 1803 (2008) and 1929 (2010) (nuclear and missile items,
+  the conventional arms of the UN Register and the services related to them), terminated under resolution 2231 (2015)
+  and applied again from 28 September 2025 under its paragraph 12 (a counsel question records that China, the Russian
+  Federation and Iran dispute it). The arms embargoes on Iraq (resolution 687 (1991), paragraph 24, kept by 1483 (2003), the Government excepted by 1546 (2004)),
   Libya (1970 (2011)), Lebanon (1701 (2006)) and Somalia (2713 (2023), paragraph 4, reaffirmed by 2806 (2025), with its
   IED components) have no period; those on the non-governmental entities in the DRC (1807 (2008), renewed by 2825
   (2026) until 1 July 2027), the armed groups in the Central African Republic (2745 (2024), extended by 2827 (2026)
@@ -386,8 +392,7 @@ elsewhere).
   renewed by 2821 (2026) until 31 May 2027) and Darfur (1556 (2004) and 1591 (2005), renewed by 2830 (2026) until
   11 December 2026; the 2004 states are today's five Darfur states, SD-DN, SD-DS, SD-DW, SD-DC and SD-DE) rest on their
   renewals. The regimes of ISIL and Al-Qaida, the Taliban, Guinea-Bissau and Yemen attach only to the persons listed,
-  whom the Consolidated List screens. The generation is `open` until the DPRK and Iran regimes are read, so it is not
-  written yet.
+  whom the Consolidated List screens. Nothing is open.
 - **Folding.** Names are compared in search-folded form (`text.search-folding`, crd-core's
   [text_fold.hpp](../../engine/foundation/core/include/crd/core/text_fold.hpp)): lower case; Latin letters with
   diacritics, ligatures and fullwidth forms to ASCII (Ş and ş to s, İ and ı to i, ø to o, ß to ss, æ to ae, the

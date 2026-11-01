@@ -5,8 +5,8 @@
 // periods the importer derives (ranges, circa, the Hijri and Solar Hijri calendars, an unknown century), identifiers
 // with their issuing country, and names in their own scripts; and the embargoed destinations the importer writes from
 // the register's authored readings: 31 CFR chapter V with the Executive orders it incorporates, the EU's Article 215
-// regulations and the UK's sanctions regulations with the Export Control Order 2008, each destination read in its own
-// instrument. The CTest
+// regulations, the UK's sanctions regulations with the Export Control Order 2008 and the Security Council's
+// resolutions, each destination read in its own instrument. The CTest
 // crd-comply-sanctions-import writes the generations first (a CTest fixture), so the cases are hidden from discovery
 // and run as crd-comply-sanctions-imported.
 
@@ -40,11 +40,12 @@ constexpr Imported kImported[] = {
 };
 
 // The destinations 31 CFR chapter V embargoes with the Executive orders it incorporates, those the EU's Article 215
-// regulations restrict and those the UK's sanctions regulations and Export Control Order 2008 restrict, authored in
-// cmake/legal-register.json from the texts read on 2026-11-01.
+// regulations restrict, those the UK's sanctions regulations and Export Control Order 2008 restrict and those the
+// Security Council's resolutions restrict, authored in cmake/legal-register.json from the texts read on 2026-11-01.
 constexpr Imported kUsEmbargo = {"us.ofac.embargo", "US", 20261101000000ULL, 0U};
 constexpr Imported kEuEmbargo = {"eu.council.embargo", "EU", 20261101000000ULL, 0U};
 constexpr Imported kGbEmbargo = {"gb.fcdo.embargo", "GB", 20261101000000ULL, 0U};
+constexpr Imported kUnEmbargo = {"un.sc.embargo", "INT", 20261101000000ULL, 0U};
 constexpr Day kEmbargoFresh = 20270201U; // every reading is fresh for 92 days
 
 // Reads the generation the importer wrote for `expected`, checks its header and adopts it.
@@ -391,25 +392,66 @@ TEST_CASE("sanctions: the authored UK embargo decodes, adopts and screens destin
     CHECK(screened_gb("RU", 20270202U, 2U, Disposition::Match) == Verdict::Unavailable);
 }
 
-TEST_CASE("sanctions: a destination screened against the US, EU and UK embargoes together", "[.imported]")
+TEST_CASE("sanctions: the authored UN embargo decodes, adopts and screens destinations", "[.imported]")
+{
+    SanctionsStore store;
+    const SanctionsList list = adopt(store, kUnEmbargo);
+    CHECK(list.destinations.size() == 15U);
+    CHECK(list.published == 20261101U);
+    CHECK(list.max_age_days == 92U);
+
+    const auto screened_un = [&store](cont::StringView region, Day day, crd::usize hits, Disposition disposition)
+    {
+        return screened(store, {&kUnEmbargo}, region, day, hits, disposition);
+    };
+    // No resolution embargoes a place outright: the DPRK (1718 (2006) as the resolutions after it extend it), Iran
+    // (1737 (2006) to 1929 (2010), applied again under 2231 (2015)), the arms embargoes on Iraq, Libya, Lebanon,
+    // Somalia, South Sudan, Haiti, the DRC and the Central African Republic and the five Darfur states are sectoral,
+    // so a match needs review and nothing blocks; a place inside a restricted country matches too.
+    for (const cont::StringView region : {"KP", "IR", "IQ", "LY", "LB", "SO", "SS", "HT", "CD", "CF", "SD-DN", "SD-DS",
+                                          "SD-DW", "SD-DC", "SD-DE", "KP-01"})
+    {
+        CHECK(screened_un(region, kDay, 1U, Disposition::Match) == Verdict::Review);
+    }
+    // Sudan as a whole names the country the five Darfur states belong to, which needs review; another state of
+    // Sudan is clear. The ISIL and Al-Qaida, Taliban, Guinea-Bissau and Yemen regimes attach only to the persons
+    // listed (the Consolidated List screens them), so Afghanistan, Guinea-Bissau and Yemen are clear, as are Cuba,
+    // Syria and Turkey (no Security Council measure on the place).
+    CHECK(screened_un("SD", kDay, 5U, Disposition::Possible) == Verdict::Review);
+    for (const cont::StringView region : {"SD-KH", "AF", "GW", "YE", "CU", "SY", "TR"})
+    {
+        CHECK(screened_un(region, kDay, 0U, Disposition::Match) == Verdict::Clear);
+    }
+    // Past its maximum age the reading is a gap that keeps even a listed destination from a settled answer.
+    CHECK(screened_un("KP", 20270202U, 1U, Disposition::Match) == Verdict::Unavailable);
+}
+
+TEST_CASE("sanctions: a destination screened against the US, EU, UK and UN embargoes together", "[.imported]")
 {
     SanctionsStore store;
     adopt(store, kUsEmbargo);
     adopt(store, kEuEmbargo);
     adopt(store, kGbEmbargo);
+    adopt(store, kUnEmbargo);
     const auto all = [&store](cont::StringView region, crd::usize hits)
     {
-        return screened(store, {&kUsEmbargo, &kEuEmbargo, &kGbEmbargo}, region, kDay, hits, Disposition::Match);
+        return screened(store, {&kUsEmbargo, &kEuEmbargo, &kGbEmbargo, &kUnEmbargo}, region, kDay, hits,
+                        Disposition::Match);
     };
     // The comprehensive US embargo still blocks; each authority's programmes are reported (Iran once under chapter V,
-    // three times under the EU's regulations and three times under the UK's instruments).
-    CHECK(all("IR", 7U) == Verdict::Blocked);
+    // three times under the EU's regulations, three times under the UK's instruments and once under the resolutions;
+    // the DPRK once, once, twice and once).
+    CHECK(all("IR", 8U) == Verdict::Blocked);
+    CHECK(all("KP", 5U) == Verdict::Blocked);
     CHECK(all("UA-43", 3U) == Verdict::Blocked);
-    // The Russian Federation six times (two programmes under each authority); Iraq and China only under the UK, and
-    // Kherson under the EU and the UK.
+    // The Russian Federation six times (two programmes under each authority but the UN); Iraq only under the UK and
+    // the UN, China only under the UK, Kherson under the EU and the UK; Libya once under the EU and the UN and twice
+    // under the UK; a Darfur state under the EU's and the UK's Sudan programmes and the UN's Darfur one.
     CHECK(all("RU", 6U) == Verdict::Review);
-    CHECK(all("IQ", 1U) == Verdict::Review);
+    CHECK(all("IQ", 2U) == Verdict::Review);
     CHECK(all("CN", 1U) == Verdict::Review);
     CHECK(all("UA-65", 2U) == Verdict::Review);
+    CHECK(all("LY", 4U) == Verdict::Review);
+    CHECK(all("SD-DN", 4U) == Verdict::Review);
     CHECK(all("TR", 0U) == Verdict::Clear);
 }

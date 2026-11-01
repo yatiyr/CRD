@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review INT
 format = "cerid-rules/1"
 jurisdiction = "INT"
-generation = 5
+generation = 6
 register = "2026-11-01"
 
 [[scope]]
@@ -23,6 +23,16 @@ state = "planned"
 [[scope]]
 id = "channel.mods-and-ugc"
 kind = "channel"
+state = "planned"
+
+[[scope]]
+id = "product.online-sessions"
+kind = "product"
+state = "planned"
+
+[[scope]]
+id = "product.collaboration"
+kind = "product"
 state = "planned"
 
 [[scope]]
@@ -662,6 +672,258 @@ check_ref = "tests/foundation/comply/test_imported.cpp"
 effective = "2026-05-29"
 sunset = "2027-05-31"
 counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "un.res-1718-2006.dprk"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UN sanctions: the DPRK (the 1718 Committee)"
+instrument = "Security Council resolution 1718 (2006)"
+article = "Paragraphs 8 (the measures) and 12 (the Committee)"
+primary = "https://digitallibrary.un.org/record/584729"
+read = true
+obligation = "Prevent the supply, sale or transfer to the DPRK of the conventional arms of paragraph 8(a)(i), the nuclear, ballistic missile and other WMD-related items, materials, equipment, goods and technology of 8(a)(ii) and luxury goods (8(a)(iii)), and any transfer of technical training, advice, services or assistance related to the provision, manufacture, maintenance or use of those items (8(c)); freeze the funds of, and admit none of, the persons the Committee designates (8(d) and (e))."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens the DPRK as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2006-10-14"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "un.res-1874-2009.dprk-arms"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UN arms embargo: the DPRK"
+instrument = "Security Council resolution 1874 (2009)"
+article = "Paragraphs 9 and 10 (all arms and related materiel), 18 to 20 (financial services and support) and 28 (specialized teaching)"
+primary = "https://digitallibrary.un.org/record/657354"
+read = true
+obligation = "Supply the DPRK with no arms and related materiel, and no financial transactions, technical training, advice, services or assistance related to them (paragraph 10; small arms, at first only notified, were added by resolution 2270 (2016), paragraph 6); provide no financial services or assets that could contribute to its nuclear, ballistic missile or WMD programmes (paragraph 18)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens the DPRK as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2009-06-12"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "un.res-2094-2013.dprk-finance"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UN sanctions on the DPRK: financial services and luxury goods"
+instrument = "Security Council resolution 2094 (2013)"
+article = "Paragraphs 11 (financial services and assets), 15 (public financial support for trade), 20 (the items of annex III) and 23 (luxury goods, annex IV)"
+primary = "https://digitallibrary.un.org/record/745263"
+read = true
+obligation = "Provide no financial services and transfer no financial or other assets, bulk cash included, that could contribute to the DPRK's nuclear or ballistic missile programmes or the evasion of the measures (paragraph 11); give no public financial support for trade with the DPRK that could (paragraph 15); apply paragraph 8(a) and (b) of resolution 1718 (2006) to the items of annex III (paragraph 20) and to the luxury goods of annex IV (paragraph 23)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens the DPRK as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2013-03-07"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "un.res-2270-2016.dprk"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UN sanctions on the DPRK: arms, specialized training and the catch-all"
+instrument = "Security Council resolution 2270 (2016)"
+article = "Paragraphs 6 (all arms, small arms included), 17 (specialized teaching or training), 27 (any item that could contribute), 31 (aviation fuel), 33 and 36 (banks and financial support) and 39 (luxury goods)"
+primary = "https://digitallibrary.un.org/record/822114"
+read = true
+obligation = "Supply the DPRK with no arms of any kind, small arms and light weapons included, and no technical training, advice, services or assistance related to them (paragraph 6), and with no item the State determines could contribute to its nuclear or ballistic missile programmes or to evading the measures (paragraph 27); provide no specialized teaching or training of DPRK nationals in disciplines which could contribute to those programmes, advanced computer simulation and related computer sciences among them (paragraph 17); supply no aviation fuel (paragraph 31) and no public or private financial support for trade with the DPRK that could contribute to those programmes (paragraph 36)."
+applies_to = ["channel.cerid-store", "channel.distribution", "product.collaboration", "product.online-sessions", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens the DPRK as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2016-03-02"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3", "NET-SERVER", "COLLAB.1"]
+
+[[rule]]
+id = "un.res-2321-2016.dprk"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UN sanctions on the DPRK: scientific cooperation, annex III and vessels"
+instrument = "Security Council resolution 2321 (2016)"
+article = "Paragraphs 4 (the items of annex III), 10 (specialized training), 11 (scientific and technical cooperation) and 30 (helicopters and vessels)"
+primary = "https://digitallibrary.un.org/record/850022"
+read = true
+obligation = "Apply paragraph 8(a) to (c) of resolution 1718 (2006) to the items of annex III, its modelling and design software for the aerodynamic and thermodynamic analysis of rocket or unmanned aerial vehicle systems (item 13) among them (paragraph 4); suspend scientific and technical cooperation with persons or groups officially sponsored by or representing the DPRK, save medical exchanges, unless the Committee (nuclear, aerospace and advanced manufacturing) or the State with notice (any other field) clears it (paragraph 11); supply no new helicopters or vessels (paragraph 30)."
+applies_to = ["channel.cerid-store", "channel.distribution", "product.collaboration", "product.online-sessions", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens the DPRK as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2016-11-30"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3", "NET-SERVER", "COLLAB.1"]
+
+[[rule]]
+id = "un.res-2375-2017.dprk"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UN sanctions on the DPRK: petroleum and joint ventures"
+instrument = "Security Council resolution 2375 (2017)"
+article = "Paragraphs 13 to 15 (condensates, refined petroleum and crude oil) and 18 (joint ventures and cooperative entities)"
+primary = "https://digitallibrary.un.org/record/1303907"
+read = true
+obligation = "Supply the DPRK with no condensates or natural gas liquids (paragraph 13), refined petroleum beyond the notified cap (paragraph 14) or crude oil beyond the prior year's amount (paragraph 15); open, maintain or operate no joint venture or cooperative entity with DPRK entities or individuals unless the Committee approves it (paragraph 18)."
+applies_to = ["channel.cerid-store", "channel.distribution", "product.collaboration", "product.online-sessions", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens the DPRK as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2017-09-11"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3", "NET-SERVER", "COLLAB.1"]
+
+[[rule]]
+id = "un.res-2397-2017.dprk"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UN sanctions on the DPRK: oil, machinery, vehicles and metals"
+instrument = "Security Council resolution 2397 (2017)"
+article = "Paragraphs 4 and 5 (crude oil and refined petroleum products) and 7 (industrial machinery, transportation vehicles and metals)"
+primary = "https://digitallibrary.un.org/record/1327720"
+read = true
+obligation = "Supply the DPRK with no crude oil beyond 4 million barrels a year (paragraph 4), no refined petroleum products beyond the notified 500 000 barrels a year (paragraph 5) and no industrial machinery (HS codes 84 and 85), transportation vehicles (HS codes 86 to 89) or iron, steel and other metals (HS codes 72 to 83), save spare parts for its civilian passenger aircraft (paragraph 7)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens the DPRK as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2017-12-22"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "un.res-1737-2006.iran"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UN sanctions: Iran (the 1737 Committee)"
+instrument = "Security Council resolution 1737 (2006)"
+article = "Paragraphs 3, 4 and 6 (nuclear and missile items and related assistance), 12 (asset freeze), 17 (specialized teaching) and 18 (the Committee)"
+primary = "https://digitallibrary.un.org/record/589783"
+read = true
+obligation = "Prevent the supply, sale or transfer to, or for the use in or benefit of, Iran of the nuclear and missile items, materials, equipment, goods and technology of paragraphs 3 and 4 (the lists superseded by resolution 1929 (2010), paragraph 13) and the technical assistance or training, financial assistance, investment, brokering or other services related to them (paragraph 6); freeze the funds of the persons designated (paragraph 12)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens Iran as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2025-09-28"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "un.res-1747-2007.iran-arms-exports"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UN sanctions on Iran: its arms exports"
+instrument = "Security Council resolution 1747 (2007)"
+article = "Paragraphs 4 (designations) and 5 (arms from Iran)"
+primary = "https://digitallibrary.un.org/record/595373"
+read = true
+obligation = "Procure no arms or related materiel from Iran (paragraph 5); apply the asset freeze of resolution 1737 (2006), paragraph 12, to the persons of annex I (paragraph 4)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens Iran as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2025-09-28"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "un.res-1803-2008.iran"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UN sanctions on Iran: the extended item lists"
+instrument = "Security Council resolution 1803 (2008)"
+article = "Paragraphs 7 (designations) and 8 (the items of INFCIRC/254 Part 2 and 19.A.3)"
+primary = "https://digitallibrary.un.org/record/621380"
+read = true
+obligation = "Prevent the supply, sale or transfer to, or for the use in or benefit of, Iran of all the items of INFCIRC/254/Rev.7/Part 2 and of 19.A.3 of Category II of S/2006/815, save the light water reactor supplies of paragraph 8(a) (paragraph 8)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens Iran as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2025-09-28"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "un.res-1929-2010.iran-arms"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UN arms embargo: Iran"
+instrument = "Security Council resolution 1929 (2010)"
+article = "Paragraphs 8 (conventional arms and related services), 9 (ballistic missile technology) and 13 (the item lists)"
+primary = "https://digitallibrary.un.org/record/683939"
+read = true
+obligation = "Prevent the supply, sale or transfer to Iran of the battle tanks, armoured combat vehicles, large calibre artillery, combat aircraft, attack helicopters, warships and missiles of the UN Register of Conventional Arms and related materiel, and of technical training, financial resources or services, advice and other services or assistance related to them (paragraph 8); transfer no technology or technical assistance related to ballistic missiles capable of delivering nuclear weapons (paragraph 9)."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens Iran as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2025-09-28"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "un.res-2231-2015.iran"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "UN sanctions on Iran applied again (resolution 2231 (2015))"
+instrument = "Security Council resolution 2231 (2015)"
+article = "Paragraphs 7 to 9 (the terminations) and 11 to 13 (the application of the previous resolutions)"
+primary = "https://digitallibrary.un.org/record/797839"
+read = true
+obligation = "Apply the provisions of resolutions 1696 (2006), 1737 (2006), 1747 (2007), 1803 (2008), 1835 (2008) and 1929 (2010) terminated under paragraph 7(a) in the same manner as before, from 28 September 2025 (paragraph 12), since no resolution continuing the terminations was adopted within 30 days of the notification of 28 August 2025."
+applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-sanctions-imported [.imported]: the authored UN embargo screens Iran as sectoral, needing review"
+check_ref = "tests/foundation/comply/test_imported.cpp"
+effective = "2015-07-20"
+sunset = ""
+counsel = "needed"
 counsel_reviewed = ""
 rows = ["COMPLY.1", "STORE.1", "STORE.3"]
 
