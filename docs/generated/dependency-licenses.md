@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **21** · tools: **30** · workflow actions: **6** · runner images: **5** · unpinned apt packages: **21**
+- packages: **21** · tools: **30** · workflow actions: **6** · runner images: **5** · unpinned apt packages: **22**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -95,6 +95,6 @@
 
 ## Unpinned inputs
 
-OS packages of the Linux image, recorded with their installed versions in every Linux lane census: `libvulkan-dev`, `glslang-tools`, `libshaderc-dev`, `libwayland-dev`, `wayland-protocols`, `libxkbcommon-dev`, `libx11-dev`, `libxrandr-dev`, `libxinerama-dev`, `libxcursor-dev`, `libxi-dev`, `mesa-common-dev`, `mesa-vulkan-drivers`, `gdb`, `llvm-20-dev`, `clang-20`, `g++-14`, `libedit-dev`, `ninja-build`, `clang`, `libclang-rt-18-dev`.
+OS packages of the Linux image, recorded with their installed versions in every Linux lane census: `libvulkan-dev`, `glslang-tools`, `libshaderc-dev`, `libwayland-dev`, `wayland-protocols`, `libxkbcommon-dev`, `libx11-dev`, `libxrandr-dev`, `libxinerama-dev`, `libxcursor-dev`, `libxi-dev`, `mesa-common-dev`, `mesa-vulkan-drivers`, `gdb`, `zlib1g-dev`, `llvm-20-dev`, `clang-20`, `g++-14`, `libedit-dev`, `ninja-build`, `clang`, `libclang-rt-18-dev`.
 
 OS-provided by the pinned runner image; the Linux lanes record the installed versions with dpkg-query into the lane census (llvm-20-dev, clang-20, g++-14 and libedit-dev only on the linux-clang-tsan entry, for the GenMC build; ninja-build, clang and libclang-rt-18-dev only on the linux-arm64 lanes, whose image runs no x86-64 pinned Ninja). The MSVC toolset comes from the pinned Windows image and is recorded by the evidence bundle. The own-CI images (ci/executors/gce_vm.py) take their apt packages at bake time, and their Windows image takes the Build Tools from the stable channel of the pinned bake-vs-buildtools-windows bootstrapper; each records the installed versions in its image census.

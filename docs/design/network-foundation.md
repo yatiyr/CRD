@@ -494,7 +494,9 @@ another length, one that is no zstd frame and one with a wrong Adler-32), creden
 adversarial records, every configuration refusal, one context on four threads), the `crd-fuzz-crypto-tls` target (a
 fixed ticket key, a forged ticket in a ClientHello, tickets a client's store hands out, compressed Certificates against
 restated claim bounds and Adler-32), and `tls_interop.py` against the pinned OpenSSL (`CRD_BUILD_TLS_VS_OPENSSL`,
-Linux; built with the pinned zstd and the system's zlib): every hybrid group both ways, a HelloRetryRequest both ways,
+Linux; built with the pinned zstd and the system's zlib; since 2026-11-02 the `crd-crypto-tls-interop-openssl` CTest of
+the complete-tier `linux-gcc-public-checks` lane, beside the package consumer test that builds an application against
+`Cerid::crypto`): every hybrid group both ways, a HelloRetryRequest both ways,
 hybrid kept beside a classical share both ways, mutual authentication, an unpinned key refused, a TLS 1.2 client
 refused with `protocol_version`, key updates both ways (a Cerid client updating before every record under a
 three-record budget, asking for an update and not asking, and an OpenSSL client asking a Cerid server), resumption both

@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Install the Cerid package of the diagnostic host's family, move the prefix, and build and run downstream projects
-against it.
+"""Install the Cerid package of the diagnostic host's family and crd-crypto, move the prefix, and build and run
+downstream projects against it.
 
 Contract: docs/design/public-consumption.md (the package) and docs/design/runtime-diagnostics.md (DIAG.11a, the
 installed external consumer). One run proves, for one profile (generator, compiler, build type, profile switches):
 
 - the installed tree is complete: every public header of every packaged module (the diagnostic host's closure, perf,
-  and math, whose header-only functions the units headers include), one archive per module and per pinned
-  third-party dependency (zstd, link-only behind compression, with no header of its own) and nothing else, no
+  math, whose header-only functions the units headers include, and crypto), one archive per module and per pinned
+  third-party dependency (zstd behind compression, AWS-LC's libssl and libcrypto behind crypto, each link-only with
+  no header of its own) and nothing else, no
   template (`build_config.hpp.in`), the authored diagnostic assets byte for byte under share/cerid, and the archives'
   debug information as `CeridConfig.cmake` declares it (`pdb`: each archive's compile PDB beside it);
 - the generated `<crd/core/build_config.hpp>` says what the packaging configuration said (asserts, profiling,
@@ -32,6 +33,10 @@ installed external consumer). One run proves, for one profile (generator, compil
   table kept at its last good generation when a seeded read failure is injected through the engine's I/O fault seam;
   no injection without fault seams) and capture (three requests through flight.trigger, each written with the frames
   before and after it, the directory keeping the newest two);
+- the package's own edges to its pinned archives resolve from the moved prefix alone: the codecs route round-trips
+  DEFLATE and zstd through Cerid::compression, and the crypto route runs a TLS 1.3 connection between two sessions of
+  the application, both ends authenticated by pinned ML-DSA-65 keys over X25519MLKEM768, the server's certificate
+  compressed with zstd, one message each way and close_notify (AWS-LC's libssl and libcrypto behind Cerid::crypto);
 - `CeridConfig.cmake` refuses a consumer configured for another build type, and the engine refuses
   `BUILD_SHARED_LIBS=ON`.
 
@@ -63,15 +68,20 @@ FALSE_VALUES = ('', '0', 'OFF', 'NO', 'FALSE', 'N', 'IGNORE', 'NOTFOUND')
 CORE_INCLUDE = ROOT / 'engine/foundation/core/include'
 # The packaged family (DIAG.11a): the diagnostic host (perf) and its closure, compression (OWN.1: the bundle's
 # sections) and platform (OWN.1: the bundle's durable publish; its window backend, crd-platform-window, stays out)
-# among it, plus math, whose header-only transcendental functions the units headers include; crd-simd-flags is the
-# interface target math's consumers compile with. Each module installs its include/ tree and one archive.
+# among it, plus math, whose header-only transcendental functions the units headers include, and crypto (NET.2: the
+# provider and the TLS sessions, over AWS-LC); crd-simd-flags is the interface target math's consumers compile with.
+# Each module installs its include/ tree and one archive.
 FAMILY = ('core', 'units', 'time', 'vm', 'log', 'containers', 'memory', 'jobs', 'toml', 'compression', 'platform',
-          'math', 'perf')
+          'math', 'perf', 'crypto')
 INTERFACE_LIBRARIES = ('crd-simd-flags',)
 # The pinned third-party archives a packaged library links privately (cmake/CrdPackage.cmake,
 # crd_package_dependency): exported name -> (its CMake target, whose compile PDB is <target>.pdb, and the archive
-# names its own CMake gives it: zstd names its static archive zstd_static on MSVC-compatible compilers).
-DEPENDENCIES = {'zstd': ('libzstd_static', ('libzstd.a', 'zstd_static.lib'))}
+# names its own CMake gives it: zstd names its static archive zstd_static on MSVC-compatible compilers). zstd sits
+# behind compression, AWS-LC's libssl and libcrypto behind crypto; libcrypto's object libraries write their debug
+# types into its compile PDB (the root CMakeLists.txt).
+DEPENDENCIES = {'zstd': ('libzstd_static', ('libzstd.a', 'zstd_static.lib')),
+                'aws-lc-ssl': ('ssl', ('libssl.a', 'ssl.lib')),
+                'aws-lc-crypto': ('crypto', ('libcrypto.a', 'crypto.lib'))}
 MODULE_INCLUDES = {name: ROOT / 'engine/foundation' / name / 'include' for name in FAMILY}
 # Authored assets the packaged libraries read at run time: installed directory under share/cerid -> source.
 ASSETS = {'diag': ROOT / 'assets/diag'}
@@ -81,7 +91,7 @@ REQUIRED_FILES = ('include/crd/core/build_config.hpp', 'include/crd/core/core.hp
                   'lib/cmake/Cerid/CeridTargets.cmake')
 FORBIDDEN_FILES = ('include/crd/core/build_config.hpp.in',)
 WARNING_FLAGS = ('/WX', '-Werror', '/W4', '-Wall', '-Wextra', '/permissive-')
-ENGINE_DEFINES = {'CRD_MODULES': 'perf,math', 'CRD_BUILD_TESTS': 'OFF', 'CRD_BUILD_SANDBOX': 'OFF',
+ENGINE_DEFINES = {'CRD_MODULES': 'perf,math,crypto', 'CRD_BUILD_TESTS': 'OFF', 'CRD_BUILD_SANDBOX': 'OFF',
                   'CRD_BUILD_BENCHMARKS': 'OFF', 'CRD_PUBLIC_CHECKS': 'OFF'}
 # The diagnostic application's deliberate failure (tests/support/package/diag-consumer/main.cpp).
 FAILURE_CODE = 0x00A10002
@@ -96,6 +106,13 @@ RUN_TIMEOUT = 120
 # A member of crd::perf::FlightRecorder::Impl, a type defined only in engine/foundation/perf/src/flight_recorder.cpp:
 # an application's debug information names it only when the archives' debug information was linked.
 ENGINE_ONLY_NAME = b'trigger_replay_length'
+# The same probe for the compile PDB of each pinned archive the application links (DEPENDENCIES): (where its debug
+# information comes from, a member of a type defined only in that archive's own sources, which neither the application
+# nor the engine names and which reaches the program only through that PDB: under /Zi the archive's members name their
+# types without defining them). libcrypto's object libraries share its PDB, so one probe stands for all of them.
+DEBUG_PROBES = (('the engine archives', ENGINE_ONLY_NAME),
+                ("AWS-LC's libssl (ssl/internal.h, SSL_HANDSHAKE)", b'cert_compression_negotiated'),
+                ("AWS-LC's libcrypto (jitterentropy.h, rand_data)", b'lag_prediction_success_run'))
 # The application's examples (tests/support/package/diag-consumer/example_*.cpp, codes in consumer_support.hpp).
 EXAMPLES = ('allocator-tlsf', 'allocator-diagnostic', 'jobs', 'reload', 'capture')
 CODE_ORDER_RESERVED = 0x00A10010
@@ -380,25 +397,28 @@ def elf_sections(path, names):
     return b''.join(by_name[name] for name in names if name in by_name)
 
 
-def engine_debug_information_problem(executable, debug_information):
-    """Whether the engine's own debug information reached a program linked against the package, or why not (None when
-    it did, or when the package declares none). The probe is ENGINE_ONLY_NAME, a member of a type defined only inside
-    an engine source file: the program's own translation units never see it, so its program database (pdb, embedded)
-    or its DWARF (dwarf) names it only when the archives' debug information was found and linked."""
+def debug_information_problem(executable, debug_information, probes=DEBUG_PROBES):
+    """Whether the debug information of every archive a program links from the package reached it, or why not (None
+    when it did, or when the package declares none). Each probe (DEBUG_PROBES) is a member of a type defined only
+    inside one library's sources: the program's own translation units never see it, so its program database (pdb,
+    embedded) or its DWARF (dwarf) names it only when that library's debug information was found and linked."""
     executable = Path(executable)
     if debug_information in ('pdb', 'embedded'):
         database = executable.with_suffix('.pdb')
         if not database.is_file():
             return f'the application has no program database {database.name}'
-        if ENGINE_ONLY_NAME not in database.read_bytes():
-            return (f'the engine archives\' debug information did not reach {database.name} (no '
-                    f'{ENGINE_ONLY_NAME.decode()}); a compile PDB is missing beside its archive (LNK4099)')
+        data = database.read_bytes()
+        for origin, name in probes:
+            if name not in data:
+                return (f'the debug information of {origin} did not reach {database.name} (no {name.decode()}); a '
+                        f'compile PDB is missing beside its archive (LNK4099)')
     elif debug_information == 'dwarf':
         sections = elf_sections(executable, ('.debug_info', '.debug_str', '.debug_line_str'))
         if sections is None:
             return f'{executable.name} is not a 64-bit ELF program'
-        if ENGINE_ONLY_NAME not in sections:
-            return f'the application carries no engine DWARF (no {ENGINE_ONLY_NAME.decode()})'
+        for origin, name in probes:
+            if name not in sections:
+                return f'the application carries no DWARF of {origin} (no {name.decode()})'
     return None
 
 
@@ -717,6 +737,23 @@ def codecs_problems(output):
     return problems
 
 
+# What the crypto route must negotiate, as Cerid's register identifiers (crd/crypto/register_ids.hpp) and the RFC 8879
+# code of zstd: the hybrid group, ML-DSA-65 keys and the zstd-compressed certificate it configures.
+CRYPTO_NEGOTIATED = {'group': '0x0101', 'signature': '0x0302', 'certificate_compression': '3'}
+CRYPTO_AEADS = ('0x0501', '0x0502', '0x0503')
+
+
+def crypto_problems(output):
+    """What the crypto route must show: the handshake on its hybrid group with both ends' pinned keys proven, one
+    message each way and close_notify, under one of the TLS 1.3 AEADs, as problems."""
+    fields = single(output, 'CONSUMER_CRYPTO')
+    verdicts = {'handshake': '1', 'mutual': '1', 'round_trip': '1', 'closed': '1'}
+    problems = field_problems('CONSUMER_CRYPTO', fields, {**CRYPTO_NEGOTIATED, **verdicts})
+    if fields is not None and fields.get('aead') not in CRYPTO_AEADS:
+        problems.append(f'CONSUMER_CRYPTO aead: {fields.get("aead")} is not a TLS 1.3 AEAD of the register')
+    return problems
+
+
 def relocatability_problems(prefix, forbidden):
     needles = [normalized(str(path)) for path in forbidden]
     problems = []
@@ -809,7 +846,7 @@ class Session:
 
         engine_defines = dict(ENGINE_DEFINES)
         engine_defines['CMAKE_INSTALL_PREFIX'] = prefix.as_posix()
-        self.step('configure engine (the diagnostic family)', ['cmake', '-S', self.source, '-B', build,
+        self.step('configure engine (the packaged family)', ['cmake', '-S', self.source, '-B', build,
                                                                *cmake_arguments(profile, engine_defines)], self.source)
         self.step('build engine', ['cmake', '--build', build, '--parallel', str(self.jobs)], self.source)
         self.step('install', ['cmake', '--install', build], self.source)
@@ -911,11 +948,12 @@ class Session:
 
         # The engine's symbols reach the application as the package declares, judged in the program's own debug
         # information (CMake's MSVC link step prints LNK4099 only when a link fails, so its output cannot tell).
-        problem = engine_debug_information_problem(executable, debug_information)
+        problem = debug_information_problem(executable, debug_information)
         if problem:
             raise ConsumerError(problem)
-        print(f'[package-consumer] the diagnostic application built against the moved prefix; the engine\'s debug '
-              f'information ({debug_information}) reached its symbols', flush=True)
+        print(f'[package-consumer] the diagnostic application built against the moved prefix; the debug information '
+              f'({debug_information}) of the engine and of AWS-LC\'s libssl and libcrypto reached its symbols',
+              flush=True)
 
         fault_seams = not on(profile['defines'].get('CRD_SHIPPING', 'OFF'))
         self.report['diagnostic_application'] = {}
@@ -930,6 +968,14 @@ class Session:
             raise ConsumerError('the codecs route did not show what it must:\n  ' + '\n  '.join(problems))
         print('[package-consumer] DEFLATE and zstd round-tripped through Cerid::compression from the moved prefix',
               flush=True)
+        result = self.step('run the crypto route', [executable, 'crypto'], self.scratch, timeout=RUN_TIMEOUT)
+        output = result.stdout + result.stderr
+        self.report['crypto'] = output.splitlines()[-10:]
+        problems = crypto_problems(output)
+        if problems:
+            raise ConsumerError('the crypto route did not show what it must:\n  ' + '\n  '.join(problems))
+        print('[package-consumer] a mutually authenticated TLS 1.3 connection ran through Cerid::crypto from the moved '
+              'prefix', flush=True)
 
     def failure(self, executable, asset_dir, detail, fault_seams):
         """Run the application to its deliberate failure with its flight recorder at `detail`, and investigate the

@@ -1,8 +1,9 @@
 #pragma once
 
 // The diagnostic application's examples (DIAG.11a): how an external application uses the installed diagnostic
-// family for allocator selection, jobs, reload and capture. Each is one route of diag-consumer, run in a fresh
-// process with a fresh DiagnosticHost, and each says at the top of its file what it shows.
+// family for allocator selection, jobs, reload and capture, and the package's codecs and cryptography. Each is one
+// route of diag-consumer, run in a fresh process with a fresh DiagnosticHost, and each says at the top of its file what
+// it shows.
 
 namespace diag_consumer
 {
@@ -21,5 +22,8 @@ int example_capture(const char* profile_path);
 
 // example_codecs.cpp: diag-consumer codecs
 int example_codecs();
+
+// example_crypto.cpp: diag-consumer crypto
+int example_crypto();
 
 } // namespace diag_consumer

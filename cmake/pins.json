@@ -682,6 +682,7 @@
       "mesa-common-dev",
       "mesa-vulkan-drivers",
       "gdb",
+      "zlib1g-dev",
       "llvm-20-dev",
       "clang-20",
       "g++-14",

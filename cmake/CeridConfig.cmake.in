@@ -37,10 +37,11 @@ elseif(NOT CMAKE_BUILD_TYPE STREQUAL Cerid_BUILD_TYPE AND NOT Cerid_ALLOW_PROFIL
                         "or set Cerid_ALLOW_PROFILE_MISMATCH=ON to accept the installed build_config.hpp anyway")
 endif()
 
-# AWS-LC's libcrypto (behind Cerid::crypto, under its libssl) links the platform's threads library outside Windows.
-# Cerid_DEPENDENCIES separates its names with spaces, so it is a list only after the split.
+# AWS-LC's libcrypto (behind Cerid::crypto, under its libssl) names Threads::Threads in its link interface on every
+# platform (the threads library outside Windows, nothing on it), so the consumer finds Threads first. Cerid_DEPENDENCIES
+# separates its names with spaces, so it is a list only after the split.
 string(REPLACE " " ";" _cerid_dependencies "${Cerid_DEPENDENCIES}")
-if("aws-lc-crypto" IN_LIST _cerid_dependencies AND NOT WIN32)
+if("aws-lc-crypto" IN_LIST _cerid_dependencies)
     include(CMakeFindDependencyMacro)
     find_dependency(Threads)
 endif()

@@ -6,10 +6,12 @@ project(cerid_diag_consumer LANGUAGES CXX)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(Cerid CONFIG REQUIRED)
 add_executable(diag-consumer main.cpp consumer_support.cpp example_allocator.cpp example_jobs.cpp example_reload.cpp
-    example_capture.cpp example_codecs.cpp)
+    example_capture.cpp example_codecs.cpp example_crypto.cpp)
 # The diagnostic host (perf), and the modules the examples name directly: allocators (memory), the pool (jobs), the
-# application's own authored data (toml) and the codecs the bundles compress with (compression).
-target_link_libraries(diag-consumer PRIVATE Cerid::perf Cerid::memory Cerid::jobs Cerid::toml Cerid::compression)
+# application's own authored data (toml), the codecs the bundles compress with (compression) and the TLS sessions
+# (crypto).
+target_link_libraries(diag-consumer PRIVATE Cerid::perf Cerid::memory Cerid::jobs Cerid::toml Cerid::compression
+                                            Cerid::crypto)
 # Symbols in every configuration, as a shipped application keeps them for its crash reports: the link reads the
 # engine archives' debug information, so a package whose symbols do not travel is caught here (MSVC: LNK4099).
 if(MSVC)

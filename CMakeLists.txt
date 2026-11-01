@@ -85,8 +85,9 @@ option(CRD_BUILD_HESAP_VS_NLOPT "Build the COBYLA, NEWUOA and BOBYQA differentia
 # program over the pinned OpenSSL 4.0 release (cmake/pins.json openssl, fetched on demand into build/_deps) built by its
 # own Perl Configure as a separate project, static and without its applications, tests and documentation, in its own
 # process (AWS-LC and OpenSSL share symbol names). Linux only, never in a shipped build; registered as the
-# crd-crypto-tls-interop-openssl CTest of the tree that turns it on (tests/foundation/crypto/interop).
-option(CRD_BUILD_TLS_VS_OPENSSL "Build the TLS 1.3 interoperability test against OpenSSL 4.0 (Linux, local-only)" OFF)
+# crd-crypto-tls-interop-openssl CTest of the tree that turns it on (tests/foundation/crypto/interop): locally, and on
+# the complete-tier linux-gcc-public-checks lane, whose preset turns it on.
+option(CRD_BUILD_TLS_VS_OPENSSL "Build the TLS 1.3 interoperability test against OpenSSL 4.0 (Linux)" OFF)
 # The nn board's same-format peer: ggml's Q8_0 linears (runtime/examples/bench_nn_q8_vs_ggml.c) against the pinned ggml
 # release (cmake/pins.json ggml, fetched on demand into build/_deps) built by its own CMake as a separate project at the
 # host's ISA. Local only on Linux, never in CI or a shipped build; scripts/run_bench_nn.sh builds and runs it.

@@ -158,6 +158,21 @@ carry only `<prefix>/include`.
   exported crd-platform that still linked GLFW would fail the install, which names the target outside the export
   set). The proof checks its archive and headers like every member's; the deliberate failure and the capture example
   publish their bundles through it from the moved prefix.
+- Amended 2026-11-02 ([session](../sessions/2026-11-02-net-2-hosted-interop-and-package.md), NET.2): the package
+  carries `Cerid::crypto` (`CRD_MODULES=perf,math,crypto`), the provider and the TLS sessions, with AWS-LC's libssl
+  and libcrypto exported link-only beside it as `Cerid::aws-lc-ssl` and `Cerid::aws-lc-crypto` (no OpenSSL header is
+  installed; a consumer reaches them only through `crd/crypto/provider.hpp` and `tls.hpp`). libcrypto is assembled
+  from AWS-LC's object libraries (crypto_objects, fipsmodule, jitterentropy), whose debug types now go to the
+  archive's own compile PDB, as the engine's object libraries do, so the one PDB the package installs beside it under
+  `pdb` holds them; before, each wrote a `vc140.pdb` of its own and the install found no `crypto.pdb`. AWS-LC's link
+  interface names `Threads::Threads` on every platform, so `CeridConfig.cmake` finds Threads whenever it lists
+  `aws-lc-crypto` (it did so outside Windows only, and a Windows consumer failed to generate). The proof checks both
+  archives under their platform names (`libssl.a`/`ssl.lib`, `libcrypto.a`/`crypto.lib`), proves the debug
+  information of each archive reached the application (beside the engine's probe, a member of a type defined only
+  inside libssl and one only inside libcrypto, which a program's PDB names only through that archive's compile PDB:
+  removing either PDB from the moved prefix fails the run, naming it), and runs the application's `crypto` route: one
+  TLS 1.3 connection between two sessions of the application, both ends authenticated by pinned ML-DSA-65 keys over
+  X25519MLKEM768, the server's certificate compressed with zstd, a message each way and close_notify.
 
 ## Not in scope
 

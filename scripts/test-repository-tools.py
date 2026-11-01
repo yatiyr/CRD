@@ -3774,9 +3774,16 @@ class PublicConsumption(unittest.TestCase):
             # A pinned dependency (zstd behind compression): exactly one of its archive names, its compile PDB under
             # pdb (named after its CMake target), and neither when the package does not link it.
             zstd = {'zstd': ('libzstd_static', ('libzstd.a', 'zstd_static.lib'))}
-            self.assertEqual(package_consumer.DEPENDENCIES, zstd)
+            aws_lc = {'aws-lc-ssl': ('ssl', ('libssl.a', 'ssl.lib')),
+                      'aws-lc-crypto': ('crypto', ('libcrypto.a', 'crypto.lib'))}
+            self.assertEqual(package_consumer.DEPENDENCIES, {**zstd, **aws_lc})
             self.assertIn('crd_package_dependency(libzstd_static NAME zstd)',
                           (ROOT / 'engine/foundation/compression/CMakeLists.txt').read_text(encoding='utf-8'))
+            crypto_cmake = (ROOT / 'engine/foundation/crypto/CMakeLists.txt').read_text(encoding='utf-8')
+            for target, name in (('ssl', 'aws-lc-ssl'), ('crypto', 'aws-lc-crypto')):
+                self.assertIn(f'crd_package_dependency({target} NAME {name})', crypto_cmake)
+            self.assertIn("'CRD_MODULES': 'perf,math,crypto'", (ROOT / 'scripts/test-package-consumer.py').read_text(
+                encoding='utf-8'))
             self.assertEqual(layout(dependencies=zstd)[0], ['the zstd dependency needs exactly one of libzstd.a, '
                                                             'zstd_static.lib under lib/, found []'])
             (prefix / 'lib/zstd_static.lib').write_bytes(b'!<arch>\n')
@@ -3896,19 +3903,43 @@ class PublicConsumption(unittest.TestCase):
             program = Path(temp) / 'diag-consumer'
             program.write_bytes(image)
             self.assertEqual(package_consumer.elf_sections(program, ('.debug_info', '.debug_str')), debug)
-            self.assertIsNone(package_consumer.engine_debug_information_problem(program, 'dwarf'))
+            engine = (('the engine archives', package_consumer.ENGINE_ONLY_NAME),)
+
+            def problem(executable, debug_information, probes=engine):
+                return package_consumer.debug_information_problem(executable, debug_information, probes)
+            self.assertIsNone(problem(program, 'dwarf'))
             program.write_bytes(image.replace(package_consumer.ENGINE_ONLY_NAME, b'x' * 21))
-            self.assertIn('no engine DWARF', package_consumer.engine_debug_information_problem(program, 'dwarf'))
+            self.assertIn('no DWARF of the engine archives', problem(program, 'dwarf'))
             windows = Path(temp) / 'diag-consumer.exe'
             windows.write_bytes(b'MZ')
             self.assertIsNone(package_consumer.elf_sections(windows, ('.debug_str',)))
-            self.assertIn('not a 64-bit ELF', package_consumer.engine_debug_information_problem(windows, 'dwarf'))
-            self.assertIn('no program database', package_consumer.engine_debug_information_problem(windows, 'pdb'))
+            self.assertIn('not a 64-bit ELF', problem(windows, 'dwarf'))
+            self.assertIn('no program database', problem(windows, 'pdb'))
             windows.with_suffix('.pdb').write_bytes(b'Microsoft C/C++ MSF 7.00' + package_consumer.ENGINE_ONLY_NAME)
-            self.assertIsNone(package_consumer.engine_debug_information_problem(windows, 'pdb'))
+            self.assertIsNone(problem(windows, 'pdb'))
             windows.with_suffix('.pdb').write_bytes(b'Microsoft C/C++ MSF 7.00')
-            self.assertIn('LNK4099', package_consumer.engine_debug_information_problem(windows, 'pdb'))
-            self.assertIsNone(package_consumer.engine_debug_information_problem(windows, 'none'))
+            self.assertIn('LNK4099', problem(windows, 'pdb'))
+            self.assertIsNone(problem(windows, 'none'))
+            # Every probe of the package: the engine's and each compile PDB of AWS-LC's two archives, each named when
+            # its library's debug information is missing.
+            probes = package_consumer.DEBUG_PROBES
+            self.assertEqual(probes[0], engine[0])
+            names = [name for _, name in probes]
+            windows.with_suffix('.pdb').write_bytes(b'Microsoft C/C++ MSF 7.00' + b'\0'.join(names))
+            self.assertIsNone(problem(windows, 'pdb', probes))
+            windows.with_suffix('.pdb').write_bytes(b'Microsoft C/C++ MSF 7.00' + b'\0'.join(names[:2]))
+            self.assertEqual(problem(windows, 'pdb', probes),
+                             "the debug information of AWS-LC's libcrypto (jitterentropy.h, rand_data) did not reach "
+                             'diag-consumer.pdb (no lag_prediction_success_run); a compile PDB is missing beside its '
+                             'archive (LNK4099)')
+            # No probe is a name the application or the engine's own sources could carry.
+            engine_sources = '\n'.join(path.read_text(encoding='utf-8', errors='replace')
+                                       for path in (ROOT / 'engine').rglob('*') if path.suffix in ('.hpp', '.cpp'))
+            consumer_sources = '\n'.join(path.read_text(encoding='utf-8')
+                                         for path in package_consumer.DIAG_CONSUMER.glob('*.?pp'))
+            for _, name in probes[1:]:
+                self.assertNotIn(name.decode(), engine_sources)
+                self.assertNotIn(name.decode(), consumer_sources)
 
         # The investigation: everything bundle.inspect must show, and each mismatch named.
         def page(items, summary=None, status='ok'):
@@ -3999,7 +4030,7 @@ class PublicConsumption(unittest.TestCase):
                           pc.CODE_SLICE_SUMMED, pc.CODE_LIMITS_KEPT, pc.CODE_FRAME_WORK))
         sources = {path.name for path in pc.DIAG_CONSUMER.glob('example_*.cpp')}
         self.assertEqual(sources, {'example_allocator.cpp', 'example_jobs.cpp', 'example_reload.cpp',
-                                   'example_capture.cpp', 'example_codecs.cpp'})
+                                   'example_capture.cpp', 'example_codecs.cpp', 'example_crypto.cpp'})
         self.assertEqual({name.partition('-')[0] for name in pc.EXAMPLES}, {'allocator', 'jobs', 'reload', 'capture'})
         self.assertEqual(pc.author_assignments('a = 1\nb = "x"\n', {'b': '"y"'}, 'asset'), 'a = 1\nb = "y"\n')
         with self.assertRaises(pc.ConsumerError):
@@ -4143,6 +4174,21 @@ class PublicConsumption(unittest.TestCase):
         self.assertEqual(pc.codecs_problems(codecs.replace('deflate=900', 'deflate=7000')),
                          ['CONSUMER_CODECS deflate: 7000 bytes from 7000'])
         self.assertEqual(pc.codecs_problems(''), ['CONSUMER_CODECS: line missing'])
+        # Crypto: the hybrid group, ML-DSA-65 both ways, zstd, a register AEAD, and every verdict.
+        crypto = ('CONSUMER_CRYPTO group=0x0101 aead=0x0501 signature=0x0302 certificate_compression=3 handshake=1 '
+                  'mutual=1 round_trip=1 closed=1')
+        self.assertEqual(pc.crypto_problems(crypto), [])
+        self.assertEqual(pc.crypto_problems(crypto.replace('aead=0x0501', 'aead=0x0503')), [])
+        self.assertEqual(pc.crypto_problems(crypto.replace('group=0x0101', 'group=0x0201')),
+                         ["CONSUMER_CRYPTO group: expected '0x0101', got '0x0201'"])
+        self.assertEqual(pc.crypto_problems(crypto.replace('certificate_compression=3', 'certificate_compression=0')),
+                         ["CONSUMER_CRYPTO certificate_compression: expected '3', got '0'"])
+        self.assertEqual(pc.crypto_problems(crypto.replace('mutual=1', 'mutual=0')),
+                         ["CONSUMER_CRYPTO mutual: expected '1', got '0'"])
+        self.assertEqual(pc.crypto_problems(crypto.replace('aead=0x0501', 'aead=0x0000')),
+                         ['CONSUMER_CRYPTO aead: 0x0000 is not a TLS 1.3 AEAD of the register'])
+        self.assertEqual(pc.crypto_problems(crypto + '\n' + crypto), ['CONSUMER_CRYPTO: line missing'])
+        self.assertEqual(pc.crypto_problems(''), ['CONSUMER_CRYPTO: line missing'])
 
     def test_header_check_commands_write_only_into_the_scratch_directory(self):
         build = 'D:/repo/build' if os.name == 'nt' else '/repo/build'

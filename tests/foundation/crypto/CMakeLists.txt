@@ -51,8 +51,8 @@ endif()
 # corpora.
 add_subdirectory(fuzz)
 
-# The TLS 1.3 and ECH interoperability test against the pinned OpenSSL 4.0 (CRD_BUILD_TLS_VS_OPENSSL; Linux, local
-# only).
+# The TLS 1.3 and ECH interoperability test against the pinned OpenSSL 4.0 (CRD_BUILD_TLS_VS_OPENSSL; Linux: locally,
+# and on the complete-tier linux-gcc-public-checks lane).
 # OpenSSL builds by its own Configure in a separate project, static, libraries only, with zstd (the pinned one the
 # engine uses) and zlib (the system's) for certificate compression (RFC 8879); crd-openssl-tls-peer links nothing else,
 # and the two peers meet only through tls_interop.py, which relays their records between two processes, or their CRYPTO

@@ -23,6 +23,9 @@
 //                                                       application keeps running (example_capture.cpp)
 //   diag-consumer codecs                                DEFLATE and zstd round trips through Cerid::compression, the
 //                                                       zstd archive linked from the prefix (example_codecs.cpp)
+//   diag-consumer crypto                                a mutually authenticated TLS 1.3 connection in this process
+//                                                       through Cerid::crypto, AWS-LC's libssl and libcrypto linked
+//                                                       from the prefix (example_crypto.cpp)
 //
 // scripts/test-package-consumer.py builds it against the moved prefix of every profile it packages and judges the
 // output: the host's modes, the bundles, the trigger at this file's failing line, the events before it, this build,
@@ -166,6 +169,10 @@ int main(int argc, char** argv)
     if (argc == 2 && std::strcmp(route, "codecs") == 0)
     {
         return dc::example_codecs();
+    }
+    if (argc == 2 && std::strcmp(route, "crypto") == 0)
+    {
+        return dc::example_crypto();
     }
     std::printf("usage: diag-consumer fail <profile.host.toml> | inspect <directory> <bundle name> | allocator "
                 "<profile> <tlsf|diagnostic> | jobs <profile> | reload <profile> <limits.toml> <directory> | "

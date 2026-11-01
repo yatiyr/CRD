@@ -82,7 +82,7 @@ COLD_PRESETS = ('win-debug-scalar', 'linux-gcc-debug-scalar')
 APT_PACKAGES = {
     'x64': ('libvulkan-dev', 'glslang-tools', 'libshaderc-dev', 'libwayland-dev', 'wayland-protocols',
             'libxkbcommon-dev', 'libx11-dev', 'libxrandr-dev', 'libxinerama-dev', 'libxcursor-dev', 'libxi-dev',
-            'mesa-common-dev', 'mesa-vulkan-drivers', 'gdb'),
+            'mesa-common-dev', 'mesa-vulkan-drivers', 'gdb', 'zlib1g-dev'),
     'arm64': ('ninja-build', 'gdb', 'clang', 'libclang-rt-18-dev'),
     'genmc': ('llvm-20-dev', 'clang-20', 'g++-14', 'libedit-dev'),
 }

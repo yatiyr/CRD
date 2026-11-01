@@ -826,13 +826,15 @@ jobs:
             libxi-dev \
             mesa-common-dev \
             mesa-vulkan-drivers \
-            gdb
+            gdb \
+            zlib1g-dev
           # mesa-vulkan-drivers provides lavapipe, a software Vulkan device: the Vulkan device tests and the Khronos
           # validation layer below run on every push instead of skipping (user decision 2026-10-05).
           # gdb runs the DIAG.9c reverse-debugging and watchpoint routes (the crd-diag-reverse-debug-* CTests).
+          # zlib1g-dev: the OpenSSL peer of the TLS interoperability test (linux-gcc-public-checks) builds with zlib.
 
       - name: Record system package versions
-        run: dpkg-query -W -f='${Package} ${Version}\n' libvulkan-dev glslang-tools libshaderc-dev libwayland-dev wayland-protocols libxkbcommon-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev mesa-common-dev mesa-vulkan-drivers gdb | tee "$RUNNER_TEMP/packages.txt"
+        run: dpkg-query -W -f='${Package} ${Version}\n' libvulkan-dev glslang-tools libshaderc-dev libwayland-dev wayland-protocols libxkbcommon-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev mesa-common-dev mesa-vulkan-drivers gdb zlib1g-dev | tee "$RUNNER_TEMP/packages.txt"
 
       # apt's libvulkan-dev ships ~1.3.275 headers — too old for the NV extensions the engine drives
       # (VK_NV_cluster_acceleration_structure / cooperative_vector / cooperative_matrix2 / linear_swept_spheres).
