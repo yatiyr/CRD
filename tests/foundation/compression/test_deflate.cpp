@@ -748,12 +748,12 @@ TEST_CASE("deflate: zlib refuses a bad header, a preset dictionary and a wrong c
     const auto refused = [&](u8 cmf, u8 flg, bool flip_checksum)
     {
         Array<u8> bad(&s_df);
-        for (usize i = 0; i < good.size(); ++i)
+        bad.push_back(cmf); // the stream with its two header bytes replaced
+        bad.push_back(flg);
+        for (usize i = 2U; i < good.size(); ++i)
         {
             bad.push_back(good[i]);
         }
-        bad[0] = cmf;
-        bad[1] = flg;
         if (flip_checksum)
         {
             bad[bad.size() - 1U] = static_cast<u8>(bad[bad.size() - 1U] ^ 1U);
