@@ -89,3 +89,5 @@ identities and capability tokens, anti-replay, server-authorized schemas, MLS wi
 policy generation and its offline keys, the verified model, the key-logging guard, Windows ARM64 assembly and prefixed
 symbols, the boards against OpenSSL and BoringSSL, and the hosted evidence of this batch's complete-tier run (Windows,
 clang-cl, ARM64, the sanitizers and the IPO lanes build AWS-LC for the first time there).
+
+The complete-tier run dispatched for this batch on yatiyr/CRD is 41311293265 (dac5d27e).
