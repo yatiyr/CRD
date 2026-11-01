@@ -1,7 +1,8 @@
 // crd-platform -- the standard streams of a byte protocol (crd/platform/standard_streams.hpp). The test points the
-// process's stdout and stderr at two files, claims the protocol streams, then writes a protocol line with a newline
-// and a 0x1A byte to the claimed stream and a stray line to stdout: the first file must hold exactly the protocol's
-// bytes (no "\r\n", nothing stray), the second the stray line. ceridc's stdio case (tests/tools/ceridc/test_ceridc.cpp)
+// process's stdin at an empty file (whatever input the runner gave it) and its stdout and stderr at two files, claims
+// the protocol streams, then writes a protocol line with a newline and a 0x1A byte to the claimed stream and a stray
+// line to stdout: the output file must hold exactly the protocol's bytes (no "\r\n", nothing stray), the error file
+// the stray line. ceridc's stdio case (tests/tools/ceridc/test_ceridc.cpp)
 // and its conformance run show the same through a real process.
 
 #include <crd/containers/string.hpp>
@@ -40,6 +41,11 @@ void close_fd(int fd)
 {
     (void)_close(fd);
 }
+std::FILE* open_file(const std::filesystem::path& path, const char* mode)
+{
+    std::FILE* f = nullptr;
+    return _wfopen_s(&f, path.c_str(), mode[0] == 'r' ? L"rb" : L"wb") == 0 ? f : nullptr;
+}
 #else
 int descriptor(std::FILE* stream)
 {
@@ -57,12 +63,16 @@ void close_fd(int fd)
 {
     (void)::close(fd);
 }
+std::FILE* open_file(const std::filesystem::path& path, const char* mode)
+{
+    return std::fopen(path.c_str(), mode);
+}
 #endif
 
 [[nodiscard]] crd::containers::String read_all(const std::filesystem::path& path)
 {
     crd::containers::String text;
-    if (std::FILE* f = std::fopen(path.string().c_str(), "rb"))
+    if (std::FILE* f = open_file(path, "rb"))
     {
         char buf[256];
         for (std::size_t n = std::fread(buf, 1, sizeof(buf), f); n > 0U; n = std::fread(buf, 1, sizeof(buf), f))
@@ -80,18 +90,26 @@ TEST_CASE("platform: the protocol owns its output stream and stray writes go to 
     const std::filesystem::path dir      = std::filesystem::temp_directory_path();
     const std::filesystem::path out_path = dir / "crd_platform_streams_out.bin";
     const std::filesystem::path err_path = dir / "crd_platform_streams_err.bin";
-    std::FILE* const            out_file = std::fopen(out_path.string().c_str(), "wb");
-    std::FILE* const            err_file = std::fopen(err_path.string().c_str(), "wb");
+    const std::filesystem::path in_path  = dir / "crd_platform_streams_in.bin";
+    std::FILE* const            created  = open_file(in_path, "wb"); // an empty input: a runner may give no stdin
+    REQUIRE(created != nullptr);
+    (void)std::fclose(created);
+    std::FILE* const in_file  = open_file(in_path, "rb");
+    std::FILE* const out_file = open_file(out_path, "wb");
+    std::FILE* const err_file = open_file(err_path, "wb");
+    REQUIRE(in_file != nullptr);
     REQUIRE(out_file != nullptr);
     REQUIRE(err_file != nullptr);
 
     (void)std::fflush(stdout);
     (void)std::fflush(stderr);
+    const int saved_in  = duplicate(descriptor(stdin));
     const int saved_out = duplicate(descriptor(stdout));
     const int saved_err = duplicate(descriptor(stderr));
     REQUIRE(saved_out != -1);
     REQUIRE(saved_err != -1);
-    const bool redirected = point(descriptor(out_file), descriptor(stdout)) &&
+    const bool redirected = point(descriptor(in_file), descriptor(stdin)) &&
+                            point(descriptor(out_file), descriptor(stdout)) &&
                             point(descriptor(err_file), descriptor(stderr));
 
     std::FILE* const protocol = redirected ? crd::platform::claim_protocol_streams() : nullptr;
@@ -106,9 +124,15 @@ TEST_CASE("platform: the protocol owns its output stream and stray writes go to 
     (void)std::fflush(stderr);
 
     // Restore the test runner's own streams before any assertion reports.
-    const bool restored = point(saved_out, descriptor(stdout)) && point(saved_err, descriptor(stderr));
+    const bool restored = point(saved_out, descriptor(stdout)) && point(saved_err, descriptor(stderr)) &&
+                          (saved_in == -1 || point(saved_in, descriptor(stdin)));
+    if (saved_in != -1)
+    {
+        close_fd(saved_in);
+    }
     close_fd(saved_out);
     close_fd(saved_err);
+    (void)std::fclose(in_file);
     (void)std::fclose(out_file);
     (void)std::fclose(err_file);
     REQUIRE(redirected);
@@ -123,4 +147,5 @@ TEST_CASE("platform: the protocol owns its output stream and stray writes go to 
     std::error_code ignored;
     std::filesystem::remove(out_path, ignored);
     std::filesystem::remove(err_path, ignored);
+    std::filesystem::remove(in_path, ignored);
 }
