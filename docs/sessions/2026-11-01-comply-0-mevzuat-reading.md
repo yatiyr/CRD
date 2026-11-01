@@ -62,7 +62,18 @@ the BTK authorisation and encryption rules).
 
 ## Verification
 
-Recorded under [Verification results](#verification-results) once the batch's checks ran.
+- **The reading.** `register-review.py read` recorded the nine entries from the first read's fetch, all or nothing;
+  the guard then held each one's verified source to this note.
+- **The register and generations.** `check-registers.py` passes (106 entries, 93 pinned); `gen-comply-rules.py
+  --check` finds all 11 generations current after the TR review; `check-generated.py` passes with the refreshed
+  manifest.
+- **Python.** `Registers`, `LegalRegister`, `ComplyRules`, `CryptoInventory`, `SanctionsLists`, `RegisterReview` and
+  `RegisterIds` pass: 64 cases.
+- **C++.** On the track's machine (linux-gcc-debug, 39d4e053), `crd-comply-tests`, `crd-ceridc-tests` and `ceridc`
+  built with no warning, and the 158 scoped CTests passed, among them the committed generations decoding and binding
+  the crash pool, `crd-comply-rules-drift`, `crd-check-registers`, `crd-generated-sources` and
+  `crd-repository-tools`. A first run on a commit without this note failed `crd-check-registers` on the nine sources
+  citing it, so the note is in the same commit as the register. The machine is stopped.
 
 ## Next
 
