@@ -93,6 +93,26 @@ class Dumper(unittest.TestCase):
         self.assertEqual(wpr.count_samples(['SampledProfile, 5, 9, app.exe (42)'], {42: 'app.exe'}).samples[42], 0,
                          'without a header nothing is read, so nothing is counted')
 
+    def test_other_processes_are_counted_by_processor_while_a_recorded_process_runs(self):
+        exe = 'crd-diag-overhead.exe'
+        lines = list(HEADERS)
+        lines += sample(1000, exe, 100, 7, exe + '!main')  # the window opens at 1 ms ...
+        lines += sample(5999, exe, 100, 7, exe + '!main')  # ... and closes in the sixth
+        row = 'SampledProfile, %d, %s (%5d), 1, 0x1, %d, x!start, x!f, 1, Unbatched'
+        lines += [row % (2500, 'cl.exe', 300, 2), row % (2600, 'cl.exe', 300, 3), row % (3100, 'Idle', 0, 2),
+                  row % (4200, 'vcpkgsrv.exe', 100, 4), row % (9000, 'cl.exe', 300, 2)]
+        counter = wpr.count_samples(lines, {100: exe}, wpr.processors_of('5'))
+        self.assertEqual(wpr.processors_of('5555'), frozenset(range(0, 16, 2)))
+        self.assertEqual(counter.window[100], (1000, 5999))
+        self.assertEqual(counter.foreign_pinned, {2: 1, 9: 1}, 'processors 0 and 2 only; Idle is not a process')
+        self.assertEqual(counter.foreign_all, {2: 2, 4: 1, 9: 1})
+        load = counter.foreign_load(100, 1.0)
+        self.assertEqual(load['seconds'], 0.005)
+        self.assertAlmostEqual(load['pinned_share'], 1 / 10.0, msg='one of five slots on two processors')
+        self.assertAlmostEqual(load['processors'], 3 / 5.0, msg='a reused PID under another image is another process')
+        self.assertEqual(load['busiest'], 'cl.exe', 'named at the bucket resolution: the 9 ms sample is in bucket 0')
+        self.assertIsNone(counter.foreign_load(200, 1.0), 'no window without samples')
+
     def test_frame_classes(self):
         self.assertEqual(wpr.frame_class('x!crd::memory::MemoryStats::on_deallocate'), 'memory-stats')
         self.assertEqual(wpr.frame_class('x!crd::perf::FlightAllocatorWatch::deallocate'), 'allocator-watch')
@@ -179,14 +199,15 @@ ACQUIRE = EXE + 'crd::jobs::detail::FiberPool::acquire'
 def cells_doc(specs, frames=1000):
     """A manifest and a counter for cells given as {(workload, arm): spec}; each cell is two processes that share the
     spec's samples, diagnostic samples, deciding functions and call sites. spec: median_ns (or medians, one per
-    process), samples, diagnostic, functions {name: samples}, callers {name: samples}, cpu (per frame, or None)."""
+    process), samples, diagnostic, functions {name: samples}, callers {name: samples}, cpu (per frame, or None; or
+    cpus, one per process)."""
     runs = []
     processes = {}
     pid = 2000
     for (workload, arm), spec in specs.items():
         for repetition in range(2):
             medians = spec.get('medians') or [spec['median_ns']] * 2
-            cpu = spec.get('cpu')
+            cpu = (spec.get('cpus') or [spec.get('cpu')] * 2)[repetition]
             runs.append({'workload': workload, 'arm': arm, 'repetition': repetition, 'pid': pid, 'exit_code': 0,
                          'wall_seconds': 2.6, 'harness': {
                              'frames': frames, 'frame_seconds': 2.5, 'median_ns': medians[repetition],
@@ -284,9 +305,14 @@ class Judge(unittest.TestCase):
                                    'functions': {ACQUIRE: 2700}},
                  ('jobs', 'full'): {'median_ns': 378400, 'samples': 6696, 'diagnostic': 1260, 'cpu': 1.0175e7,
                                     'functions': {ACQUIRE: 900, RECORD: 1260}}}
-        cells, lines, worst = self.judged(specs)
+        doc, counter = cells_doc(specs)
+        counter.window = {doc['runs'][0]['pid']: (0, 999000)}
+        counter.foreign_all = {ms: 2 for ms in range(1000)}
+        _, lines, worst = wpr.judge(doc, counter)
         self.assertEqual(worst, 'DISAGREES', lines)
         self.assertIn('FiberPool::acquire -24.9%', '\n'.join(lines), 'the moved cost is named')
+        self.assertTrue(lines[0].endswith('; other processes took, per process, 2.0 processors'),
+                        'a disagreeing row names the load beside it')
 
     def test_processes_that_disagree_are_unresolved(self):
         specs = {('jobs', 'off'): {'medians': [441400, 438000], 'samples': 7238},
@@ -294,6 +320,43 @@ class Judge(unittest.TestCase):
         _, lines, worst = self.judged(specs)
         self.assertEqual(worst, 'UNRESOLVED', lines)
         self.assertIn('the processes of basic disagree, their median frames 19.7% apart', '\n'.join(lines))
+
+    def test_processes_must_agree_on_the_quantity_the_row_compares(self):
+        # The 2026-11-01 io pair: off's frames wait on the file system, so its two processes' median frames read 3.0%
+        # apart while their CPU per frame, the row's measurand, agrees within 1.1%.
+        specs = {('io', 'off'): {'medians': [655416, 674998], 'cpus': [3999281.0, 4041128.0], 'samples': 10928},
+                 ('io', 'full'): {'medians': [652348, 654787], 'cpus': [3999772.0, 4002049.0], 'samples': 10930}}
+        cells, lines, worst = self.judged(specs)
+        self.assertEqual(worst, 'AGREES', lines)
+        self.assertEqual(cells[('io', 'full')]['measurand'], 'CPU')
+        # The same wall times with CPU per frame 3.0% apart: unresolved, in the compared quantity.
+        specs[('io', 'off')]['cpus'] = [3999281.0, 4119259.0]
+        _, lines, worst = self.judged(specs)
+        self.assertEqual(worst, 'UNRESOLVED', lines)
+        self.assertIn('the processes of off disagree, their CPU per frame 3.0% apart', '\n'.join(lines))
+        # Without a CPU measurand in both cells the median frame decides, as before.
+        specs[('io', 'full')]['cpus'] = [None, None]
+        _, lines, worst = self.judged(specs)
+        self.assertIn('the processes of off disagree, their median frames 3.0% apart', '\n'.join(lines))
+
+    def test_an_unresolved_spread_names_the_other_processes_load(self):
+        doc, counter = cells_doc({('offline', 'off'): {'median_ns': 350000, 'cpus': [1.1e6, 1.1e6], 'samples': 7000},
+                                  ('offline', 'basic'): {'median_ns': 360000, 'cpus': [1.12e6, 1.18e6],
+                                                         'samples': 7100}})
+        basic = [run['pid'] for run in doc['runs'] if run['arm'] == 'basic']
+        counter.pinned = wpr.processors_of('5555')
+        counter.window = {basic[0]: (0, 999000), basic[1]: (2000000, 2999000)}
+        for ms in range(2000, 3000):  # a compiler on two pinned processors and one other during the second process
+            counter.foreign_pinned[ms] = 2
+            counter.foreign_all[ms] = 3
+            counter.foreign_names[(ms // wpr.FOREIGN_BUCKET_MS, 'cl.exe')] = 300
+        cells, lines, worst = wpr.judge(doc, counter)
+        self.assertEqual(worst, 'UNRESOLVED', lines)
+        text = '\n'.join(lines)
+        self.assertIn('their CPU per frame 5.4% apart', text)
+        self.assertIn('other processes took, per process, 0.0% of the pinned processors and 0.0 processors, '
+                      '25.0% of the pinned processors and 3.0 processors (busiest cl.exe 3.0)', text)
+        self.assertEqual(cells[('offline', 'basic')]['foreign'][1]['seconds'], 1.0)
 
     def test_too_few_samples_short_frames_unreadable_and_failed_processes(self):
         mapping = {}

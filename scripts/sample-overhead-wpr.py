@@ -45,9 +45,14 @@ interval over the timed frames) and the diagnostic share. Each row compares two 
   diagnostic CPU per frame over compiled-out must be within AGREE_ABSOLUTE of none. The gap's location is reported.
 
 Two costs agree when they differ by at most AGREE_ABSOLUTE plus AGREE_RELATIVE of the one compared against. Each
-process's frames must cover at least FRAME_FRACTION of its wall time, and a cell's processes must agree on their median
-frame within SPREAD_LIMIT, or the comparison is unresolved (setup would dilute the samples; jobs basic's two processes
-read 393 and 471 us at eight threads on sixteen logical processors).
+process's frames must cover at least FRAME_FRACTION of its wall time, and a cell's processes must agree within
+SPREAD_LIMIT on the quantity the row compares (their CPU per frame when the row compares CPU, else their median
+frame), or the comparison is unresolved (setup would dilute the samples; jobs basic's two processes read 393 and
+471 us at eight threads on sixteen logical processors). io's frames wait on the file system, so their wall time
+varies where their CPU does not (2026-11-01: off's processes 3.0% apart in median frame, 1.0% in CPU per frame).
+For every recorded process the trace also tells what the rest of the machine did while it ran: the share of the
+pinned processors' sampling slots other processes took and the logical processors they kept busy overall, with the
+busiest of them; an unresolved or disagreeing row names it, so a contended recording reads as one.
 
 Verdicts (one line each; the exit code is the worst):
   AGREES          (0)  every resolved comparison agrees
@@ -114,6 +119,7 @@ SERIAL_LIMIT = 1.25  # sampled CPU per frame over the median frame time of a fra
 AGREE_ABSOLUTE = 0.02
 AGREE_RELATIVE = 0.25
 TOP_ELSEWHERE = 3
+FOREIGN_BUCKET_MS = 100  # the resolution at which the busiest other process of a window is named
 VERDICT_CODES = {'AGREES': 0, 'TOOL_MISSING': 2, 'PERMISSION_DENIED': 3, 'UNRESOLVED': 4, 'UNREADABLE': 5,
                  'DISAGREES': 6, 'USAGE': 64}
 # Diagnostic frame classes, matched against a frame's own `module!function` text. The first match decides a frame's
@@ -426,9 +432,16 @@ class DumperCounter:
     calls. Per PID it also counts the deciding functions and, for a diagnostic sample, its call site: the next frame of
     the image above it that is not diagnostic and does not run for its caller."""
 
-    def __init__(self, processes):
+    def __init__(self, processes, pinned=frozenset()):
         self.images = {pid: image.lower() for pid, image in processes.items()}  # a PID counts only under its image
         self.pids = set(self.images)
+        self.pinned = frozenset(pinned)  # the logical processors the harness processes were pinned to
+        # Each recorded process's first and last sample (dumper timestamps, microseconds), and the samples of every
+        # other process but Idle per millisecond: on the pinned processors, on all, and per name per FOREIGN_BUCKET_MS.
+        self.window = {}
+        self.foreign_pinned = {}
+        self.foreign_all = {}
+        self.foreign_names = {}
         self.headers = {}
         self.samples = {pid: 0 for pid in self.pids}
         self.diagnostic = {pid: 0 for pid in self.pids}
@@ -466,9 +479,14 @@ class DumperCounter:
                 return
             pid = int(match.group(2))
             if pid not in self.pids or match.group(1).strip().lower() != self.images[pid]:
+                self._foreign(header, fields, pid, match.group(1).strip())
                 return
             image = match.group(1).strip() + '!'
             self.samples[pid] += 1
+            stamp = timestamp_us(fields[1])
+            if stamp is not None:
+                first, last = self.window.get(pid, (stamp, stamp))
+                self.window[pid] = (min(first, stamp), max(last, stamp))
             thread = column(header, 'ThreadID')
             tid = fields[thread] if thread is not None and thread < len(fields) else ''
             # The sampled instruction's own function, which may carry commas: everything between its column and the
@@ -514,12 +532,58 @@ class DumperCounter:
             self.current[6] = False
             self.callers[pid][name] = self.callers[pid].get(name, 0) + 1
 
+    def _foreign(self, header, fields, pid, name):
+        stamp = timestamp_us(fields[1])
+        if pid == 0 or stamp is None:  # Idle is a free processor, not another process
+            return
+        ms = stamp // 1000
+        self.foreign_all[ms] = self.foreign_all.get(ms, 0) + 1
+        cpu = column(header, 'CPU')
+        if cpu is not None and cpu < len(fields) and fields[cpu].isdigit() and int(fields[cpu]) in self.pinned:
+            self.foreign_pinned[ms] = self.foreign_pinned.get(ms, 0) + 1
+        key = (ms // FOREIGN_BUCKET_MS, name)
+        self.foreign_names[key] = self.foreign_names.get(key, 0) + 1
+
+    def foreign_load(self, pid, interval_ms):
+        """What other processes did while `pid` ran (its first to its last sample): the share of the pinned
+        processors' sampling slots they took, the logical processors they kept busy overall and the busiest of them
+        (by name, at FOREIGN_BUCKET_MS); None without a window."""
+        if pid not in self.window:
+            return None
+        first, last = (stamp // 1000 for stamp in self.window[pid])
+        slots = (last - first + 1) / interval_ms
+        pinned = sum(self.foreign_pinned.get(ms, 0) for ms in range(first, last + 1))
+        overall = sum(self.foreign_all.get(ms, 0) for ms in range(first, last + 1))
+        names = {}
+        for (bucket, name), count in self.foreign_names.items():
+            if first // FOREIGN_BUCKET_MS <= bucket <= last // FOREIGN_BUCKET_MS:
+                names[name] = names.get(name, 0) + count
+        busiest = max(sorted(names), key=lambda name: names[name]) if names else None
+        return {'seconds': (last - first + 1) / 1000.0,
+                'pinned_share': pinned / (slots * len(self.pinned)) if self.pinned else None,
+                'processors': overall / slots, 'busiest': busiest,
+                'busiest_processors': names[busiest] / slots if busiest else 0.0}
+
     def close(self):
         self._finish()
 
 
-def count_samples(lines, processes):
-    counter = DumperCounter(processes)
+def timestamp_us(text):
+    """A dumper TimeStamp (microseconds from the trace start) as an integer; None when it is not one."""
+    try:
+        return int(float(text))
+    except ValueError:
+        return None
+
+
+def processors_of(affinity):
+    """The logical processors of a hexadecimal affinity mask ('5555': 0, 2, ..., 14)."""
+    mask = int(affinity, 16) if affinity else 0
+    return frozenset(bit for bit in range(mask.bit_length()) if mask >> bit & 1)
+
+
+def count_samples(lines, processes, pinned=frozenset()):
+    counter = DumperCounter(processes, pinned)
     for line in lines:
         counter.feed(line)
     counter.close()
@@ -552,6 +616,25 @@ def tolerance(cost):
     return AGREE_ABSOLUTE + AGREE_RELATIVE * abs(cost)
 
 
+def spread_of(values):
+    """Highest over lowest, minus one; None without a positive lowest."""
+    return max(values) / min(values) - 1.0 if values and min(values) > 0 else None
+
+
+def foreign_text(cells):
+    """The other processes' load while each process of `cells` ran, for an unresolved line ('' when unknown)."""
+    loads = [load for cell in cells for load in cell['foreign'] if load is not None]
+    if not loads:
+        return ''
+    shown = ', '.join('%s%.1f processors%s' % ('' if load['pinned_share'] is None else
+                                                '%.1f%% of the pinned processors and ' % (100.0 * load['pinned_share']),
+                                                load['processors'],
+                                                ' (busiest %s %.1f)' % (load['busiest'], load['busiest_processors'])
+                                                if load['busiest'] else '')
+                      for load in loads)
+    return '; other processes took, per process, %s' % shown
+
+
 def short_name(function):
     """`image!crd::ns::Type::method` -> `Type::method` for a verdict line (the analysis keeps the full names)."""
     name = function.split('!', 1)[-1]
@@ -577,7 +660,8 @@ def judge(manifest, counter, interval_ms=INTERVAL_MS):
         key = (run['workload'], run['arm'])
         cell = cells.setdefault(key, {'samples': 0, 'diagnostic': 0, 'classes': {}, 'frames': 0, 'medians': [],
                                       'frame_fraction': [], 'unreadable': False, 'failed': False, 'functions': {},
-                                      'callers': {}, 'cpu_timed': 0, 'cpu_units': [], 'cpu_missing': False})
+                                      'callers': {}, 'cpu_timed': 0, 'cpu_units': [], 'cpu_missing': False,
+                                      'cpu_per_frame': [], 'foreign': []})
         pid = run['pid']
         harness = run.get('harness')
         if run.get('exit_code') != 0 or harness is None or pids.count(pid) > 1:
@@ -595,18 +679,19 @@ def judge(manifest, counter, interval_ms=INTERVAL_MS):
         cell['frames'] += harness['frames']
         cell['medians'].append(harness['median_ns'])
         cell['frame_fraction'].append(harness['frame_seconds'] / run['wall_seconds'] if run['wall_seconds'] else 0.0)
+        cell['foreign'].append(counter.foreign_load(pid, interval_ms))
         if harness.get('cpu_timed') is None:
             cell['cpu_missing'] = True
         else:
             cell['cpu_timed'] += harness['cpu_timed']
             cell['cpu_units'].append(harness.get('cpu_unit'))
+            cell['cpu_per_frame'].append(harness['cpu_timed'] / float(harness['frames']))
     for (workload, arm), cell in sorted(cells.items()):
         cell['share'] = cell['diagnostic'] / cell['samples'] if cell['samples'] else None
         cell['cpu_ms_per_frame'] = cell['samples'] * interval_ms / cell['frames'] if cell['frames'] else None
         cell['median_ns'] = median(cell['medians'])
         cell['min_frame_fraction'] = min(cell['frame_fraction']) if cell['frame_fraction'] else None
-        cell['spread'] = max(cell['medians']) / min(cell['medians']) - 1.0 if cell['medians'] and min(
-            cell['medians']) > 0 else None
+        cell['spread'] = spread_of(cell['medians'])
         # threads busy per frame: the sampled CPU over the frame time (1 for a frame that runs on one thread)
         cell['parallelism'] = (cell['cpu_ms_per_frame'] * 1e6 / cell['median_ns']
                                if cell['cpu_ms_per_frame'] is not None and cell['median_ns'] else None)
@@ -614,6 +699,7 @@ def judge(manifest, counter, interval_ms=INTERVAL_MS):
         cell['harness_cpu_per_frame'] = (cell['cpu_timed'] / cell['frames'] if cell['frames'] and not
                                          cell['cpu_missing'] and len(units) == 1 else None)
         cell['harness_cpu_unit'] = units.pop() if len(units) == 1 else None
+        cell['cpu_spread'] = spread_of(cell['cpu_per_frame']) if cell['harness_cpu_per_frame'] else None
     for (workload, arm), cell in sorted(cells.items()):
         label = '%s %s' % (workload, arm)
         if cell['failed']:
@@ -642,12 +728,18 @@ def judge(manifest, counter, interval_ms=INTERVAL_MS):
         # base: the cheaper side of the row (off for an arm, compiled-out for off); other: the side whose cost is read.
         base, other = (cell, reference) if cross else (reference, cell)
         what = 'off over compiled-out' if cross else '%s over off' % arm
-        spread = [(name, c['spread']) for name, c in (('off', reference), (arm, cell))
-                  if c['spread'] is not None and c['spread'] > SPREAD_LIMIT]
+        # The row compares the harness's CPU per frame when both cells recorded it in one unit; its processes must
+        # agree on that quantity, else on their median frame.
+        cpu_compared = bool(base['harness_cpu_per_frame'] and other['harness_cpu_per_frame'] and
+                            base['harness_cpu_unit'] == other['harness_cpu_unit'])
+        key, quantity = ('cpu_spread', 'CPU per frame') if cpu_compared else ('spread', 'median frames')
+        spread = [(name, c) for name, c in (('off', reference), (arm, cell))
+                  if c[key] is not None and c[key] > SPREAD_LIMIT]
         if spread:
-            lines.append('UNRESOLVED: %s: %s: the processes of %s disagree, their median frames %s apart (need at most '
-                         '%.0f%%)' % (label, what, ' and '.join(n for n, _ in spread),
-                                      ' and '.join('%.1f%%' % (100.0 * s) for _, s in spread), 100.0 * SPREAD_LIMIT))
+            lines.append('UNRESOLVED: %s: %s: the processes of %s disagree, their %s %s apart (need at most %.0f%%)%s'
+                         % (label, what, ' and '.join(n for n, _ in spread), quantity,
+                            ' and '.join('%.1f%%' % (100.0 * c[key]) for _, c in spread), 100.0 * SPREAD_LIMIT,
+                            foreign_text([c for _, c in spread])))
             worse('UNRESOLVED')
             continue
         per_frame = base['samples'] / float(base['frames'])
@@ -657,8 +749,7 @@ def judge(manifest, counter, interval_ms=INTERVAL_MS):
                     - base['functions'].get(function, 0) / float(base['frames'])) / per_frame
 
         external = other['cpu_ms_per_frame'] / base['cpu_ms_per_frame'] - 1.0
-        if base['harness_cpu_per_frame'] and other['harness_cpu_per_frame'] and \
-                base['harness_cpu_unit'] == other['harness_cpu_unit']:
+        if cpu_compared:
             measured, measurand = other['harness_cpu_per_frame'] / base['harness_cpu_per_frame'] - 1.0, 'CPU'
         elif max(base['parallelism'] or 0.0, other['parallelism'] or 0.0) <= SERIAL_LIMIT:
             measured, measurand = other['median_ns'] / base['median_ns'] - 1.0, 'frame time'
@@ -696,8 +787,9 @@ def judge(manifest, counter, interval_ms=INTERVAL_MS):
                         ', '.join(short_name(f) for f in sorted(other['callers'], key=lambda f: -growth(f))[:2])
                         or 'none', 100.0 * elsewhere, places,
                         '' if location_ok else ': the cost is not where the diagnostic code runs'))
-        lines.append('%s: %s: %s %s, external %+.1f%% (sampled CPU per frame, %d against %d samples); %s'
-                     % (name, label, what, shown, 100.0 * external, other['samples'], base['samples'], where))
+        lines.append('%s: %s: %s %s, external %+.1f%% (sampled CPU per frame, %d against %d samples); %s%s'
+                     % (name, label, what, shown, 100.0 * external, other['samples'], base['samples'], where,
+                        '' if name == 'AGREES' else foreign_text([base, other])))
     return cells, lines, worst
 
 
@@ -718,7 +810,8 @@ def analyze_run(run_dir, xperf=None, lines_source=None):
         symbols = kept + sorted({str(Path(manifest[k]['path']).parent) for k in ('exe', 'baseline_exe')
                                  if manifest.get(k)})
         lines_source = dumper_lines(xperf, etl, symbols)
-    counter = count_samples(lines_source, {run['pid']: Path(run['command'][0]).name for run in manifest['runs']})
+    counter = count_samples(lines_source, {run['pid']: Path(run['command'][0]).name for run in manifest['runs']},
+                            processors_of(manifest.get('affinity')))
     cells, lines, worst = judge(manifest, counter, manifest.get('interval_ms', INTERVAL_MS))
     analysis = {'schema': SCHEMA, 'trace': str(etl), 'stack_lines': counter.stack_lines, 'verdict': worst,
                 'lines': lines, 'cells': {'%s %s' % key: cell for key, cell in sorted(cells.items())},
