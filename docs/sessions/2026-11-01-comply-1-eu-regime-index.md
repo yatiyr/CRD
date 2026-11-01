@@ -21,12 +21,15 @@ first read of the official legal texts that decision approved. Their bodies stay
 
 No failure comes from a track C change.
 
-- **Complete run 41274380605 (de5e10b0)** was still running at 10:15 UTC. win-vs, win-arm64-debug (the first ARM64
-  Windows build with track A's `checksum.cpp` repair, now passed), the four linux-arm64 lanes that finished and the
-  Windows Repository checks job passed.
-- **win-clang-cl and win-clang-cl-shipping** failed at the link of `crd-perf-tests`, as batch 24 recorded: lld-link
-  reports `__udivti3` and `__divti3`, referenced from `tests/foundation/perf/test_instruction_access.cpp`. That file is
-  HW-RESILIENCE.2's (track A) and is unchanged on main at c43cede7, so the fix stays track A's.
+- **Complete run 41274380605 (de5e10b0)** was still running at 07:50 UTC: 8 of its 30 jobs passed, 3 failed and the
+  rest were running or queued.
+  - Passed: win-vs; win-arm64-debug, the first ARM64 Windows build with track A's `checksum.cpp` repair; the three
+    linux-arm64 lanes that finished; linux-gcc-asan's first shard; and the Windows Repository checks job.
+  - win-clang-cl and win-clang-cl-shipping failed at the link of `crd-perf-tests`, as batch 24 recorded. lld-link
+    reports `__udivti3` and `__divti3`, referenced from `tests/foundation/perf/test_instruction_access.cpp`. That file
+    is HW-RESILIENCE.2's (track A) and is unchanged on main at d4f461ae, so the fix stays track A's.
+  - linux-gcc-release failed at the LTO link of `crd-hesap-stats-tests`, on GCC `-Wmaybe-uninitialized` in
+    `tests/numerics/hesap-stats/test_multivariate.cpp:125`. 76330344 on main already fixes it (not a track C file).
 - **Push run 41284892084 (c43cede7)**, this track's last batch, was pending; every push run before it since 41273181833
   was cancelled by a newer push before it started.
 
@@ -99,7 +102,8 @@ entry's obligation.
 ## Verification
 
 - **Python.**
-  - `RegisterReview` and `SanctionsLists`: 46 cases pass, with two new ones.
+  - `RegisterReview` and `SanctionsLists`: 44 cases pass, two of them new, and the 80 register cases with
+    `LegalRegister`, `ComplyRules`, `Registers`, `CryptoInventory` and `RegisterIds` pass.
     - The sanctions-map case plans the index with its `Accept` header and judges a five-regime fixture: Iraq's second
       regulation is reported missing and Libya's entry is reported as listed by no regime. Nothing is owed for
       Burundi's freezes and claims, the thematic regime's arms export to listed persons, China's regime without a
@@ -111,6 +115,19 @@ entry's obligation.
     - The reader case refuses eleven other shapes.
     - The resolver and CELLAR cases cover the index's URL, the home page and near spellings left as pages, the
       two-digit year, and names inside longer numbers.
+    - The EU embargo case now finds the umbrella read at its index's version, with the reading and generation
+      unchanged, and 3541/92 read without a destination.
+  - Ten mutations of `register-review.py` were each caught: the claims ban counted as a place measure, unconsolidated
+    amendments or implementing regulations counted as basic, thematic regimes counted, ended entries judged, the
+    two-digit year or the number boundaries dropped, the whole body digested, any map URL resolved, and the regime
+    judgement skipped.
+- **C++.** On the track's machine (07:46-07:50 UTC, linux-gcc-debug tree at a89ad9cb), `crd-comply-tests`,
+  `crd-fuzz-comply-sanctions`, `ceridc` and `crd-ceridc-tests` built with no warning. The 61 scoped CTests (comply,
+  ceridc and the `crd-no-` and `crd-check` guards, without `crd-check-isa-isolation` as in batch 24) passed, among them
+  the committed generations decoding EU generation 9. The four `[.imported]` cases passed (600 assertions), and
+  `[sanctions]` ran 4 594 assertions in 18 cases. `ceridc screen` on the written lists answered as in batch 24, at the
+  same `eu.council.embargo` generation 20261101000000: IR and KP blocked; RU, VE, MM, HT and CF review; IQ, YE and TR
+  clear.
 - **Guards.** `check-registers.py`, `gen-comply-rules.py --check` and `check-generated.py`, with the EU rule file
   refreshed, plus `check-master-plan.py`, `check-repository.py` and `check-allman-braces.py`.
 
