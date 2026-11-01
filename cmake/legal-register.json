@@ -562,7 +562,7 @@
           "sha256": "83115349f89e9f99529fcbf7390f30ffbd6161d34ffbddfb4168935ad5c23ba6"
         }
       },
-      "obligation": "Inform the data subject (aydınlatma) when data is collected, in a notice separate from any request for explicit consent; consent is specific, informed and freely given and is never bundled with the notice or a service condition.",
+      "obligation": "Inform the data subject (aydınlatma) when personal data is obtained, with the items Article 10 lists (the controller, the purposes, the recipients and why, the method and legal ground of collection and the Article 11 rights); explicit consent (Article 3) is specific, informed and freely given.",
       "applies_to": [
         "flow.crash-reports",
         "flow.telemetry",
@@ -588,6 +588,59 @@
         "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
         "read": "2026-11-01",
         "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.kvkk.notice-communique",
+      "title": "KVKK: the Communiqué on the obligation to inform",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "COMPLY.8",
+        "CRASH-FIX.1",
+        "OPS.1",
+        "STORE.1"
+      ],
+      "instrument": {
+        "name": "Communiqué on the Procedures and Principles to be Followed in Fulfilling the Obligation to Inform",
+        "article": "Whole communiqué",
+        "type": "by-law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=24454&MevzuatTur=9&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Keep the notice separate from any request for explicit consent and never bundle the two or make consent a service condition; word the notice clearly and plainly, without misleading or incomplete information, and be able to prove it was given.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "consent and notice records CTest",
+        "state": "planned"
+      },
+      "effective": "2018-03-10",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "read": "2026-11-01",
+        "verified": false
       },
       "review": "2027-01-25",
       "evidence": [],
@@ -706,7 +759,7 @@
     },
     {
       "id": "tr.kvkk.transfer-abroad",
-      "title": "KVKK: transfer abroad after Law No. 7499 and the 2024 By-Law",
+      "title": "KVKK: transfer abroad under Article 9 as amended by Law No. 7499",
       "kind": "obligation",
       "topic": "privacy",
       "state": "planned",
@@ -718,14 +771,18 @@
         "CRASH-FIX.2"
       ],
       "instrument": {
-        "name": "Law No. 6698 Article 9 as amended by Law No. 7499, and the By-Law on the Procedures and Principles for the Transfer of Personal Data Abroad",
-        "article": "Article 9; By-Law Articles 13-14",
+        "name": "Law No. 6698 on the Protection of Personal Data (KVKK)",
+        "article": "Article 9",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2024-03-02 (7499)",
+          "read": "2026-11-01",
+          "sha256": "83115349f89e9f99529fcbf7390f30ffbd6161d34ffbddfb4168935ad5c23ba6"
+        }
       },
-      "obligation": "Transfer personal data abroad only on an adequacy decision, an appropriate safeguard (standard contracts notified to the Authority within five business days and used unmodified, binding corporate rules) or an incidental case; record each transfer and its mechanism.",
+      "obligation": "Transfer personal data abroad only on a processing condition of Articles 5-6 and an adequacy decision (Article 9(1)); without one, on an appropriate safeguard while the data subject can exercise their rights and seek remedies in the destination (9(4): an agreement between public bodies or binding corporate rules approved by the Board, a standard contract the Board announced, or a written undertaking the Board permits), a standard contract being notified to the Authority within five business days of its signature (9(5)); else only incidentally in a case 9(6) lists; record each transfer and its mechanism.",
       "applies_to": [
         "flow.crash-reports",
         "flow.telemetry",
@@ -742,6 +799,58 @@
         "state": "planned"
       },
       "effective": "2024-06-01",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-0-one-instrument-per-entry.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.kvkk.transfer-abroad-bylaw",
+      "title": "KVKK: the By-Law on transfers of personal data abroad",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "COMPLY.8",
+        "NET-SERVER",
+        "CRASH-FIX.2"
+      ],
+      "instrument": {
+        "name": "By-Law on the Procedures and Principles for the Transfer of Personal Data Abroad",
+        "article": "Articles 13-14",
+        "type": "by-law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=40863&MevzuatTur=7&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Use the Board's standard contract unmodified and notify it to the Authority within five business days of its signature, as the By-Law sets for Article 9 of Law No. 6698.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "transfer records CTest with standard-contract notification reminders",
+        "state": "planned"
+      },
+      "effective": "2024-07-10",
       "sunset": null,
       "counsel": {
         "needed": true,
@@ -1062,7 +1171,7 @@
     },
     {
       "id": "tr.btk.encryption",
-      "title": "Electronic Communications Law No. 5809: BTK encryption rules",
+      "title": "Electronic Communications Law No. 5809: coded and encrypted communication",
       "kind": "obligation",
       "topic": "export-control",
       "state": "planned",
@@ -1073,14 +1182,18 @@
         "NET.2"
       ],
       "instrument": {
-        "name": "Electronic Communications Law No. 5809 and the BTK rules on coded and encrypted communication",
-        "article": "Article 39 and the BTK rules on coded and encrypted communication",
+        "name": "Electronic Communications Law No. 5809",
+        "article": "Articles 39 and 63(6)",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5809&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2026-07-24 (7590)",
+          "read": "2026-11-01",
+          "sha256": "5c2a034cce1436e9fa0456985df8b0cdc94c941b1856762660c91e3b7305f290"
+        }
       },
-      "obligation": "Classify encryption in communication products against Article 39, under which the BTK sets the procedure for coded or encrypted communication within an electronic communication service (breaching it is an offence, Article 63(6)), and meet any notification or authorisation duty its rules set, without key escrow or weakened end-to-end encryption.",
+      "obligation": "Classify encryption in communication products against Article 39, under which the BTK sets the procedure for coded or encrypted communication within an electronic communication service, outside the radio systems reserved to the listed public bodies (breaching it is an offence, Article 63(6)), without key escrow or weakened end-to-end encryption.",
       "applies_to": [
         "product.communications",
         "channel.distribution"
@@ -1091,6 +1204,51 @@
         "state": "active"
       },
       "effective": "2008-11-10",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-0-one-instrument-per-entry.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.btk.encryption-regulation",
+      "title": "BTK regulation on coded or encrypted communication",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "COMPLY.1",
+        "COMPLY.9",
+        "NET.2"
+      ],
+      "instrument": {
+        "name": "Regulation on the Procedures and Principles for Coded or Encrypted Communication within an Electronic Communication Service by Public Bodies and Natural and Legal Persons",
+        "article": "Whole regulation",
+        "type": "regulation",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=14387&MevzuatTur=7&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Meet the permit, notification and safekeeping duties the regulation sets for producing, importing or operating coded or encrypted communication systems within an electronic communication service, without key escrow or weakened end-to-end encryption.",
+      "applies_to": [
+        "product.communications",
+        "channel.distribution"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "name": "classification record per communication product",
+        "state": "planned"
+      },
+      "effective": "2010-10-23",
       "sunset": null,
       "counsel": {
         "needed": true,
@@ -1150,7 +1308,7 @@
     },
     {
       "id": "tr.asset-freeze",
-      "title": "Turkey's asset-freeze regime",
+      "title": "Turkey's asset freezes under Law No. 6415",
       "kind": "obligation",
       "topic": "export-control",
       "state": "planned",
@@ -1161,12 +1319,16 @@
         "STORE.3"
       ],
       "instrument": {
-        "name": "Law No. 6415 on the Prevention of the Financing of Terrorism and Law No. 7262 on preventing the financing of the proliferation of weapons of mass destruction",
-        "article": "Law No. 6415 Articles 5-7, 11-13 and 15; Law No. 7262's proliferation freezes",
+        "name": "Law No. 6415 on the Prevention of the Financing of Terrorism",
+        "article": "Articles 5-7, 11-13 and 15",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6415&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2020-12-27 (7262)",
+          "read": "2026-11-01",
+          "sha256": "9422fbd68d5027fe6654f80007b1c06086947876cf86386a481b297991dbb254"
+        }
       },
       "obligation": "Screen distribution, accounts and payments against Turkey's asset-freeze decisions: the President's decisions implementing the UN Security Council lists (Article 5), foreign states' requests (Article 6) and domestic freezes (Article 7), each binding on its publication in the Official Gazette (Articles 11-12); make no transaction for a designated person and facilitate none (Article 13), report receivables and debts toward one to MASAK within 30 days (Article 12(3)), and never provide funds or financial services to one (Article 15).",
       "applies_to": [
@@ -1180,6 +1342,52 @@
         "state": "active"
       },
       "effective": "2013-02-16",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-0-one-instrument-per-entry.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.7262.proliferation-freeze",
+      "title": "Turkey's proliferation-financing freezes under Law No. 7262",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1",
+        "STORE.1",
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Law No. 7262 on the Prevention of the Financing of the Proliferation of Weapons of Mass Destruction",
+        "article": "Articles 1-3",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=7262&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Screen distribution, accounts and payments against the President's decisions implementing the UN Security Council's proliferation-financing sanctions, binding on their publication in the Official Gazette, and make no transaction for a designated person.",
+      "applies_to": [
+        "channel.cerid-store",
+        "flow.account-data",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "tests/foundation/comply/test_sanctions.cpp",
+        "name": "crd-comply-tests [sanctions]: parties and destinations screened against each authority's list, failing closed on a missing or stale list",
+        "state": "active"
+      },
+      "effective": "2020-12-31",
       "sunset": null,
       "counsel": {
         "needed": false,
@@ -1440,14 +1648,18 @@
         "STORE-SOCIAL"
       ],
       "instrument": {
-        "name": "Electronic Communications Law No. 5809 and the BTK authorisation regulation",
-        "article": "Articles 9-10",
+        "name": "Electronic Communications Law No. 5809",
+        "article": "Articles 9 and 63(1)",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5809&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2026-07-24 (7590)",
+          "read": "2026-11-01",
+          "sha256": "5c2a034cce1436e9fa0456985df8b0cdc94c941b1856762660c91e3b7305f290"
+        }
       },
-      "obligation": "Classify each communication product (voice, video, text) as an electronic communication service or not and, where it is one, notify the BTK before operating it in Turkey, with a usage right where it needs numbers or frequencies (Article 9; operating without notification is an offence, Article 63(1)), under the BTK authorisation regulation.",
+      "obligation": "Classify each communication product (voice, video, text) as an electronic communication service or not and, where it is one, notify the BTK before operating it in Turkey, with a usage right where it needs numbers, frequencies or satellite positions (Article 9(2)-(3); operating without notification is an offence, Article 63(1)).",
       "applies_to": [
         "product.communications",
         "flow.communications"
@@ -1458,6 +1670,51 @@
         "state": "planned"
       },
       "effective": "2009-05-10",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-0-one-instrument-per-entry.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.btk.authorisation-regulation",
+      "title": "BTK authorisation regulation for the electronic communications sector",
+      "kind": "obligation",
+      "topic": "communications",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.9",
+        "NET-LIVE",
+        "STORE-SOCIAL"
+      ],
+      "instrument": {
+        "name": "Authorisation Regulation for the Electronic Communications Sector",
+        "article": "Whole regulation",
+        "type": "regulation",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=13078&MevzuatTur=7&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Where a communication product is an electronic communication service, make the notification or obtain the usage right in the form and with the content the regulation sets before operating it in Turkey.",
+      "applies_to": [
+        "product.communications",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.9",
+        "name": "classification record CTest per communication surface",
+        "state": "planned"
+      },
+      "effective": "2009-05-28",
       "sunset": null,
       "counsel": {
         "needed": true,
@@ -1519,7 +1776,7 @@
     },
     {
       "id": "tr.6112.internet-broadcasting",
-      "title": "Law No. 6112 and RTÜK internet broadcasting rules",
+      "title": "Law No. 6112: internet broadcasting",
       "kind": "obligation",
       "topic": "communications",
       "state": "planned",
@@ -1529,14 +1786,18 @@
         "NET-LIVE"
       ],
       "instrument": {
-        "name": "Law No. 6112 on Radio and Television Broadcasting and RTÜK's internet broadcasting regulation",
+        "name": "Law No. 6112 on the Establishment of Radio and Television Enterprises and Their Media Services",
         "article": "Article 29/A",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6112&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2023-12-27 (7491)",
+          "read": "2026-11-01",
+          "sha256": "4757bb398171faa475a226cfd9282b8b2d91ec21433c2e773c50109bad749514"
+        }
       },
-      "obligation": "Classify live streaming against Article 29/A before offering it in Turkey: a media service provider offering radio, television or on-demand services only on the internet needs an RTÜK broadcast licence and a platform operator transmitting them a transmission authorisation, while individual communication, platforms not dedicated to transmitting such services and pure hosts are outside it (29/A(4)); the joint RTÜK and BTK regulation sets the procedure.",
+      "obligation": "Classify live streaming against Article 29/A before offering it in Turkey: a media service provider offering radio, television or on-demand services only on the internet needs an RTÜK broadcast licence and a platform operator transmitting them a transmission authorisation, while individual communication, platforms not dedicated to transmitting such services and pure hosts are outside it (29/A(4)).",
       "applies_to": [
         "product.communications"
       ],
@@ -1546,6 +1807,49 @@
         "state": "planned"
       },
       "effective": "2018-03-27",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-0-one-instrument-per-entry.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.rtuk.internet-broadcasting-regulation",
+      "title": "RTÜK and BTK regulation on radio, television and on-demand services on the internet",
+      "kind": "obligation",
+      "topic": "communications",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.9",
+        "NET-LIVE"
+      ],
+      "instrument": {
+        "name": "Regulation on the Provision of Radio, Television and On-Demand Broadcasts on the Internet",
+        "article": "Whole regulation",
+        "type": "regulation",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=32695&MevzuatTur=7&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Where a streaming feature is in Article 29/A's scope, obtain the internet broadcast licence or transmission authorisation the regulation sets, with its procedure and term.",
+      "applies_to": [
+        "product.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.9",
+        "name": "classification record CTest",
+        "state": "planned"
+      },
+      "effective": "2019-08-01",
       "sunset": null,
       "counsel": {
         "needed": true,
@@ -1610,7 +1914,54 @@
     },
     {
       "id": "tr.6563.etbis",
-      "title": "Law No. 6563: ETBIS registration",
+      "title": "Law No. 6563: reporting to the e-commerce information system",
+      "kind": "obligation",
+      "topic": "consumer",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.8",
+        "STORE.8"
+      ],
+      "instrument": {
+        "name": "Law No. 6563 on the Regulation of Electronic Commerce",
+        "article": "Article 11(4)",
+        "type": "law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6563&MevzuatTur=1&MevzuatTertip=5",
+        "consolidated": {
+          "version": "2024-10-24 (7529)",
+          "read": "2026-11-01",
+          "sha256": "4fe79e0e03f652c6a75185a3f3571066cd98fd88e7455af62e1c52ed6b8a8ad7"
+        }
+      },
+      "obligation": "Report the information the Ministry of Trade requests for monitoring electronic commerce to the system it established (Article 11(4)).",
+      "applies_to": [
+        "channel.cerid-store"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "name": "ETBIS reporting record",
+        "state": "planned"
+      },
+      "effective": "2015-05-01",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-0-one-instrument-per-entry.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.etbis.registration",
+      "title": "ETBIS registration under the e-commerce information system communiqué",
       "kind": "user-action",
       "topic": "consumer",
       "state": "planned",
@@ -1620,11 +1971,11 @@
         "STORE.8"
       ],
       "instrument": {
-        "name": "Law No. 6563 on the Regulation of Electronic Commerce and its intermediary service provider regulation",
-        "article": "Articles 2(1)(ı) and 11(4); the regulation on service providers and intermediary service providers",
-        "type": "law",
+        "name": "Communiqué on the Electronic Commerce Information System and Notification Obligations",
+        "article": "Whole communiqué",
+        "type": "by-law",
         "jurisdiction": "TR",
-        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6563&MevzuatTur=1&MevzuatTertip=5",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=23842&MevzuatTur=9&MevzuatTertip=5",
         "consolidated": null
       },
       "obligation": "Register the store and its sellers in the e-commerce information system (ETBIS) before trading.",
@@ -1636,7 +1987,7 @@
         "name": "ETBIS registration record",
         "state": "planned"
       },
-      "effective": "2015-05-01",
+      "effective": "2017-08-11",
       "sunset": null,
       "counsel": {
         "needed": false,
@@ -1653,7 +2004,7 @@
     },
     {
       "id": "tr.6502.distance-contracts",
-      "title": "Law No. 6502 and the Distance Contracts Regulation",
+      "title": "Law No. 6502: distance contracts",
       "kind": "obligation",
       "topic": "consumer",
       "state": "planned",
@@ -1664,14 +2015,18 @@
         "SHIP.7"
       ],
       "instrument": {
-        "name": "Consumer Protection Law No. 6502 and the Regulation on Distance Contracts",
-        "article": "Article 48; the Regulation on Distance Contracts",
+        "name": "Consumer Protection Law No. 6502",
+        "article": "Article 48",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6502&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2026-06-24 (7587)",
+          "read": "2026-11-01",
+          "sha256": "88c932de3cc3a9081102d658c059082c984166350e0eaa1cf41be982bdb2f641"
+        }
       },
-      "obligation": "Give the pre-contract information the regulation lists and say that confirming the order creates a payment duty (the burden of proof is the seller's), confirm the contract on a durable medium and honour the fourteen-day withdrawal right (Article 48(4): extended up to a year when its information was missing), with the regulation's lawful waiver for digital content delivered at once; a marketplace intermediary shares the seller's liability for the pre-contract information and its records (Article 48(6)).",
+      "obligation": "Before a distance contract, inform the consumer clearly of the items the regulation sets and that confirming the order creates a payment duty (Article 48(2), the burden of proof being the seller's); perform within the time promised, at most thirty days for goods (48(3)); honour the fourteen-day withdrawal right without reasons or penalty, extended up to a year when its information was missing (48(4)); a marketplace intermediary keeps a system open for the consumer's requests (48(5)) and shares the seller's liability for the pre-contract information and its records (48(6)).",
       "applies_to": [
         "channel.cerid-store",
         "product.purchases",
@@ -1683,6 +2038,52 @@
         "state": "planned"
       },
       "effective": "2014-05-28",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-0-one-instrument-per-entry.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.6502.distance-contracts-regulation",
+      "title": "The Regulation on Distance Contracts",
+      "kind": "obligation",
+      "topic": "consumer",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.8",
+        "STORE.3",
+        "SHIP.7"
+      ],
+      "instrument": {
+        "name": "Regulation on Distance Contracts",
+        "article": "Whole regulation",
+        "type": "regulation",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=20237&MevzuatTur=7&MevzuatTertip=5",
+        "consolidated": null
+      },
+      "obligation": "Give the pre-contract information the regulation lists, confirm the contract on a durable medium, and apply the regulation's lawful waiver of the withdrawal right for digital content delivered at once.",
+      "applies_to": [
+        "channel.cerid-store",
+        "product.purchases",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.8",
+        "name": "checkout flow tests over the pre-contract steps",
+        "state": "planned"
+      },
+      "effective": "2015-02-27",
       "sunset": null,
       "counsel": {
         "needed": true,
@@ -1844,7 +2245,7 @@
     },
     {
       "id": "tr.turkpatent.trademarks",
-      "title": "Trademark filings for product names (TURKPATENT, EUIPO)",
+      "title": "Trademark filings for product names (TURKPATENT)",
       "kind": "user-action",
       "topic": "intellectual-property",
       "state": "planned",
@@ -1855,13 +2256,17 @@
       ],
       "instrument": {
         "name": "Industrial Property Law No. 6769",
-        "article": "Articles 7(1), 11 and 23; EUIPO filings under Regulation (EU) 2017/1001",
+        "article": "Articles 7(1), 11 and 23",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6769&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2020-07-22 (7251)",
+          "read": "2026-11-01",
+          "sha256": "8e574aec08bcbdb5ba25c9a5ca9133513755db758fcbb9d37d97db3be7a57208"
+        }
       },
-      "obligation": "File trademarks for product names with TURKPATENT (protection comes only by registration, Article 7(1); one mark per application with its goods and services list, Article 11; ten years from the application, renewed in the six months before the term ends, Article 23) and with the EUIPO before launch.",
+      "obligation": "File trademarks for product names with TURKPATENT before launch (protection comes only by registration, Article 7(1); one mark per application with its goods and services list, Article 11; ten years from the application, renewed in the six months before the term ends, Article 23).",
       "applies_to": [
         "channel.cerid-store",
         "channel.distribution"
@@ -1872,6 +2277,50 @@
         "state": "planned"
       },
       "effective": "2017-01-10",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/sessions/2026-11-01-comply-0-one-instrument-per-entry.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "eu.euipo.trademarks",
+      "title": "EU trademark filings for product names (EUIPO)",
+      "kind": "user-action",
+      "topic": "intellectual-property",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.4",
+        "STORE.8"
+      ],
+      "instrument": {
+        "name": "Regulation (EU) 2017/1001 on the European Union trade mark",
+        "article": "Whole regulation",
+        "type": "regulation",
+        "jurisdiction": "EU",
+        "primary": "https://eur-lex.europa.eu/eli/reg/2017/1001/oj",
+        "consolidated": null
+      },
+      "obligation": "File EU trade marks for product names with the EUIPO before launch.",
+      "applies_to": [
+        "channel.cerid-store",
+        "channel.distribution"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.4",
+        "name": "filing records",
+        "state": "planned"
+      },
+      "effective": "2017-10-01",
       "sunset": null,
       "counsel": {
         "needed": false,
@@ -1996,13 +2445,17 @@
       ],
       "instrument": {
         "name": "Law No. 7194 on the Digital Service Tax",
-        "article": "Articles 1-7 and Presidential Decision No. 10767",
+        "article": "Articles 1-7",
         "type": "law",
         "jurisdiction": "TR",
         "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=7194&MevzuatTur=1&MevzuatTertip=5",
-        "consolidated": null
+        "consolidated": {
+          "version": "2023-05-18 (Anayasa Mahkemesi)",
+          "read": "2026-11-01",
+          "sha256": "15440bae2c3fea07e7c20c87911ccef4bed99e768e94a1fde4261f659561e9e5"
+        }
       },
-      "obligation": "Monitor the thresholds (exempt while the previous year's revenue from in-scope services was below TRY 20 million in Turkey or EUR 750 million worldwide, counted for the consolidated group, Article 4) and declare the tax monthly, by the end of the following month (Article 6), on revenue from digital content sales including games and in-game purchases, platforms where users interact and intermediation (Article 1), at the rate in force: Article 5 sets 7.5 % and Decision No. 10767 (Official Gazette of 25 December 2025, No. 33118) 5 % from 2026 and 2.5 % from 2027.",
+      "obligation": "Monitor the thresholds (exempt while the previous year's revenue from in-scope services was below TRY 20 million in Turkey or EUR 750 million worldwide, counted for the consolidated group, Article 4) and declare the tax monthly, by the end of the following month (Article 6), on revenue from digital content sales including games and in-game purchases, platforms where users interact and intermediation (Article 1), at 7.5 % (Article 5) unless a Presidential decision sets the rate in force.",
       "applies_to": [
         "channel.cerid-store",
         "product.purchases",
@@ -2020,6 +2473,50 @@
         "reviewed": null
       },
       "source": {
+        "ref": "docs/sessions/2026-11-01-comply-0-one-instrument-per-entry.md#reading",
+        "read": "2026-11-01",
+        "verified": true
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.7194.rate-decision",
+      "title": "Digital service tax rate: Presidential Decision No. 10767",
+      "kind": "obligation",
+      "topic": "tax",
+      "state": "planned",
+      "owner": "store",
+      "rows": [
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Presidential Decision No. 10767 on the digital service tax rate",
+        "article": "Whole decision",
+        "type": "decision",
+        "jurisdiction": "TR",
+        "primary": "https://www.resmigazete.gov.tr/eskiler/2025/12/20251225-21.pdf",
+        "consolidated": null
+      },
+      "obligation": "Apply the digital service tax at 5 % from 2026 and 2.5 % from 2027, as Decision No. 10767 (Official Gazette of 25 December 2025, No. 33118) sets under Article 5 of Law No. 7194.",
+      "applies_to": [
+        "channel.cerid-store",
+        "product.purchases",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-store.3",
+        "name": "threshold monitoring tests",
+        "state": "planned"
+      },
+      "effective": "2026-01-01",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
         "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s35",
         "read": "2026-10-27",
         "verified": false
@@ -2030,7 +2527,7 @@
     },
     {
       "id": "tr.213.e-archive",
-      "title": "Tax Procedure Law No. 213: e-invoice and e-archive",
+      "title": "Tax Procedure Law No. 213: invoices and records",
       "kind": "obligation",
       "topic": "tax",
       "state": "planned",
@@ -2039,11 +2536,55 @@
         "STORE.3"
       ],
       "instrument": {
-        "name": "Tax Procedure Law No. 213 and the e-invoice and e-archive general communiqués",
-        "article": "E-archive invoicing",
+        "name": "Tax Procedure Law No. 213",
+        "article": "Invoice and record-keeping provisions",
         "type": "law",
         "jurisdiction": "TR",
-        "primary": "https://www.gib.gov.tr/",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=213&MevzuatTur=1&MevzuatTertip=4",
+        "consolidated": null
+      },
+      "obligation": "Issue an invoice for every store sale and keep the records for the statutory period.",
+      "applies_to": [
+        "channel.cerid-store",
+        "product.purchases",
+        "flow.payments"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-store.3",
+        "name": "invoice generation tests",
+        "state": "planned"
+      },
+      "effective": "1961",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-store.3",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "tr.vuk-509.e-archive",
+      "title": "Tax Procedure Law General Communiqué No. 509: e-invoice and e-archive",
+      "kind": "obligation",
+      "topic": "tax",
+      "state": "planned",
+      "owner": "store",
+      "rows": [
+        "STORE.3"
+      ],
+      "instrument": {
+        "name": "Tax Procedure Law General Communiqué No. 509",
+        "article": "Whole communiqué",
+        "type": "by-law",
+        "jurisdiction": "TR",
+        "primary": "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=33905&MevzuatTur=9&MevzuatTertip=5",
         "consolidated": null
       },
       "obligation": "Issue e-archive or e-invoices for every store sale and keep them for the statutory period.",
@@ -2057,7 +2598,7 @@
         "name": "invoice generation tests",
         "state": "planned"
       },
-      "effective": "1961",
+      "effective": "2019-10-19",
       "sunset": null,
       "counsel": {
         "needed": true,
@@ -3463,7 +4004,7 @@
     },
     {
       "id": "gb.uk-gdpr",
-      "title": "UK GDPR and the Data Protection Act 2018",
+      "title": "UK GDPR",
       "kind": "obligation",
       "topic": "privacy",
       "state": "planned",
@@ -3474,11 +4015,11 @@
         "OPS.1"
       ],
       "instrument": {
-        "name": "UK GDPR and Data Protection Act 2018",
-        "article": "Whole act, as amended",
-        "type": "law",
+        "name": "UK GDPR (retained Regulation (EU) 2016/679)",
+        "article": "Whole regulation, as amended",
+        "type": "regulation",
         "jurisdiction": "GB",
-        "primary": "https://www.legislation.gov.uk/ukpga/2018/12",
+        "primary": "https://www.legislation.gov.uk/eur/2016/679",
         "consolidated": null
       },
       "obligation": "Meet the UK GDPR's principles, rights, breach and transfer duties for UK users, as the GDPR entries do for the EU.",
@@ -3501,6 +4042,57 @@
       "sunset": null,
       "counsel": {
         "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "gb.dpa-2018",
+      "title": "Data Protection Act 2018",
+      "kind": "obligation",
+      "topic": "privacy",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.2",
+        "STORE.1",
+        "OPS.1"
+      ],
+      "instrument": {
+        "name": "Data Protection Act 2018",
+        "article": "Whole act, as amended",
+        "type": "law",
+        "jurisdiction": "GB",
+        "primary": "https://www.legislation.gov.uk/ukpga/2018/12",
+        "consolidated": null
+      },
+      "obligation": "Meet the Data Protection Act 2018's provisions supplementing the UK GDPR for UK users.",
+      "applies_to": [
+        "flow.crash-reports",
+        "flow.telemetry",
+        "flow.network-identity",
+        "flow.anticheat",
+        "flow.account-data",
+        "flow.payments",
+        "flow.user-content",
+        "flow.communications"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.2",
+        "name": "data inventory CTest per jurisdiction",
+        "state": "planned"
+      },
+      "effective": "2018-05-25",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
         "reviewed": null
       },
       "source": {
@@ -3571,7 +4163,7 @@
         "STORE-SOCIAL"
       ],
       "instrument": {
-        "name": "Online Safety Act 2023 and Ofcom's codes",
+        "name": "Online Safety Act 2023",
         "article": "Illegal-harms and children's safety duties",
         "type": "law",
         "jurisdiction": "GB",
@@ -3579,6 +4171,54 @@
         "consolidated": null
       },
       "obligation": "In-game chat, voice and user content assess illegal-harm and children's risks, offer reporting and blocking, and use age assurance where children's access duties apply.",
+      "applies_to": [
+        "channel.mods-and-ugc",
+        "flow.user-content",
+        "product.communications",
+        "product.collaboration"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.5",
+        "name": "chat and voice safety hook CTests",
+        "state": "planned"
+      },
+      "effective": "2025-07-25",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#s51",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "gb.ofcom-codes",
+      "title": "Ofcom's online safety codes of practice",
+      "kind": "obligation",
+      "topic": "online-safety",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.5",
+        "NET-LIVE",
+        "SHIP.9",
+        "STORE-SOCIAL"
+      ],
+      "instrument": {
+        "name": "Ofcom codes of practice under the Online Safety Act 2023",
+        "article": "Illegal-harms and protection of children codes",
+        "type": "code-of-practice",
+        "jurisdiction": "GB",
+        "primary": "https://www.ofcom.org.uk/",
+        "consolidated": null
+      },
+      "obligation": "Take the measures Ofcom's codes recommend for the illegal-harms and children's safety duties, or show that alternative measures meet those duties.",
       "applies_to": [
         "channel.mods-and-ugc",
         "flow.user-content",
@@ -3617,11 +4257,54 @@
         "EMBED.2"
       ],
       "instrument": {
-        "name": "Product Security and Telecommunications Infrastructure Act 2022 and its regulations",
-        "article": "Security requirements for connectable products",
+        "name": "Product Security and Telecommunications Infrastructure Act 2022",
+        "article": "Part 1",
         "type": "law",
         "jurisdiction": "GB",
         "primary": "https://www.legislation.gov.uk/ukpga/2022/46",
+        "consolidated": null
+      },
+      "obligation": "Make connectable products available in the UK only when they meet the security requirements the regulations under Part 1 set, with a statement of compliance.",
+      "applies_to": [
+        "product.connectable-devices"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.3",
+        "name": "release CTests: reporting contact and support period",
+        "state": "planned"
+      },
+      "effective": "2024-04-29",
+      "sunset": null,
+      "counsel": {
+        "needed": false,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.3",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null
+    },
+    {
+      "id": "gb.psti-regulations",
+      "title": "PSTI security requirements regulations",
+      "kind": "obligation",
+      "topic": "security",
+      "state": "planned",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.3",
+        "EMBED.2"
+      ],
+      "instrument": {
+        "name": "The Product Security and Telecommunications Infrastructure (Security Requirements for Relevant Connectable Products) Regulations 2023",
+        "article": "Schedule 1",
+        "type": "regulation",
+        "jurisdiction": "GB",
+        "primary": "https://www.legislation.gov.uk/uksi/2023/1007",
         "consolidated": null
       },
       "obligation": "Connectable products ban universal default passwords, publish a vulnerability reporting policy and state the minimum security update period.",
@@ -4475,8 +5158,8 @@
       "note": "Pinned when a product enters China."
     },
     {
-      "id": "cn.commercial-cryptography",
-      "title": "China commercial cryptography import and export controls",
+      "id": "cn.cryptography-law",
+      "title": "Cryptography Law of the People's Republic of China",
       "kind": "obligation",
       "topic": "export-control",
       "state": "watch",
@@ -4485,14 +5168,14 @@
         "COMPLY.1"
       ],
       "instrument": {
-        "name": "Cryptography Law of the People's Republic of China and the Commercial Cryptography Administration Regulations",
-        "article": "Cryptography Law Article 28; the Regulations' import licensing, export control and product certification provisions",
+        "name": "Cryptography Law of the People's Republic of China",
+        "article": "Article 28",
         "type": "law",
         "jurisdiction": "CN",
         "primary": "https://www.npc.gov.cn/",
         "consolidated": null
       },
-      "obligation": "Before a product carrying commercial cryptography enters China, determine whether its cryptography falls under the import licence and export control lists and the certification of commercial cryptography products, and meet those duties.",
+      "obligation": "Treat commercial cryptography that bears on national security or the public interest as subject to import licensing and export control under Article 28.",
       "applies_to": [
         "channel.distribution",
         "channel.third-party-stores"
@@ -4503,6 +5186,50 @@
         "state": "planned"
       },
       "effective": "2020-01-01",
+      "sunset": null,
+      "counsel": {
+        "needed": true,
+        "reviewed": null
+      },
+      "source": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "read": "2026-10-31",
+        "verified": false
+      },
+      "review": "2027-01-25",
+      "evidence": [],
+      "deprecation": null,
+      "note": "Pinned when a product enters China. The Regulations' 2023 revision (effective 2023-07-01) and the administering body (the State Cryptography Administration, oscca.gov.cn) are from knowledge; the first primary read confirms them and replaces the home-page URL."
+    },
+    {
+      "id": "cn.commercial-cryptography",
+      "title": "China commercial cryptography administration regulations",
+      "kind": "obligation",
+      "topic": "export-control",
+      "state": "watch",
+      "owner": "comply",
+      "rows": [
+        "COMPLY.1"
+      ],
+      "instrument": {
+        "name": "Commercial Cryptography Administration Regulations",
+        "article": "Import licensing, export control and product certification provisions",
+        "type": "regulation",
+        "jurisdiction": "CN",
+        "primary": "https://www.oscca.gov.cn/",
+        "consolidated": null
+      },
+      "obligation": "Before a product carrying commercial cryptography enters China, determine whether its cryptography falls under the regulations' import licence and export control lists and the certification of commercial cryptography products, and meet those duties.",
+      "applies_to": [
+        "channel.distribution",
+        "channel.third-party-stores"
+      ],
+      "check": {
+        "ref": "docs/ROADMAP.md#slice-comply.1",
+        "name": "classification record per product and release",
+        "state": "planned"
+      },
+      "effective": "2023-07-01",
       "sunset": null,
       "counsel": {
         "needed": true,
@@ -5463,14 +6190,14 @@
       "sha256": "425623c09ba0917afbba2a92ae58714ac8c2fb2e606655ab42025055fe4e798d"
     },
     "EU": {
-      "generation": 4,
+      "generation": 5,
       "reviewed": "2026-11-01",
-      "sha256": "d21ebcf72cba3d82286cd5c41c7ddf08b6b26943203175c838ade5794201d6a3"
+      "sha256": "f82e255e017e20fa5bf49b9307bf8871da5a23e9d6528f0c9d036528a7278eb5"
     },
     "GB": {
-      "generation": 4,
+      "generation": 5,
       "reviewed": "2026-11-01",
-      "sha256": "df4b8ccc3ff37b1942b972d07454b2dc0067bb6dd53e12fa19c3cfff9a1d968b"
+      "sha256": "cb5d3925f0748923eb287001baf4c1a89ca66d297fd67d196699b6e6e2f95967"
     },
     "INT": {
       "generation": 4,
@@ -5488,9 +6215,9 @@
       "sha256": "ea94c28021b59ef7c71dc3fda4242ff72389de9d60f0f28b6e56a9922bba9313"
     },
     "TR": {
-      "generation": 5,
+      "generation": 6,
       "reviewed": "2026-11-01",
-      "sha256": "214c675ded5bc923303ad5873e44577d33ec1eb96c51d468834d3c15def6fe58"
+      "sha256": "bbf1c21e8f357607b2ea21dd04fe5d8c0a0bca3c995d35a22c57ce89d1a7e8fd"
     },
     "US": {
       "generation": 4,
@@ -5902,7 +6629,11 @@
         },
         {
           "entry": "tr.kvkk.notice-and-consent",
-          "question": "Does a layered in-product notice shown before the first upload, with explicit consent asked in a separate step and a refusal leaving the product fully usable, meet Articles 3, 5 and 10 of Law No. 6698 and the communiqué on the obligation to inform, and which items must the first layer of the notice carry?"
+          "question": "Does a layered in-product notice shown before the first upload, with explicit consent asked in a separate step and a refusal leaving the product fully usable, meet Articles 3, 5 and 10 of Law No. 6698, and which items must the first layer of the notice carry?"
+        },
+        {
+          "entry": "tr.kvkk.notice-communique",
+          "question": "Does the same layered notice, with consent asked in a separate step, meet the Communiqué on the obligation to inform, and may the notice be shown in the product rather than at each collection?"
         },
         {
           "entry": "tr.kvkk.security-and-breach",
@@ -5910,7 +6641,11 @@
         },
         {
           "entry": "tr.kvkk.transfer-abroad",
-          "question": "Which mechanism of Article 9 of Law No. 6698, as amended by Law No. 7499, covers transfers to the cloud regions outside Turkey that the crash pool, accounts and store use, which standard contract applies when the publisher is the controller and the cloud host its processor, and what must the notification to the Authority within five business days contain?"
+          "question": "Which mechanism of Article 9 of Law No. 6698, as amended by Law No. 7499, covers transfers to the cloud regions outside Turkey that the crash pool, accounts and store use?"
+        },
+        {
+          "entry": "tr.kvkk.transfer-abroad-bylaw",
+          "question": "Which standard contract of the By-Law applies when the publisher is the controller and the cloud host its processor, and what must the notification to the Authority within five business days contain?"
         },
         {
           "entry": "tr.kvkk.verbis",
@@ -5930,7 +6665,11 @@
         },
         {
           "entry": "tr.btk.encryption",
-          "question": "Do the BTK encryption rules under Electronic Communications Law No. 5809 set any notification, authorisation or key-disclosure duty for end-to-end encrypted voice, video and text inside games and collaborative products distributed or operated in Turkey, and do they allow TLS 1.3 and QUIC with the X25519MLKEM768 hybrid key exchange without key escrow?"
+          "question": "Do Article 39 of Electronic Communications Law No. 5809 and the BTK regulation on coded or encrypted communication set any notification, permit or key-disclosure duty for end-to-end encrypted voice, video and text inside games and collaborative products distributed or operated in Turkey, and do they allow TLS 1.3 and QUIC with the X25519MLKEM768 hybrid key exchange without key escrow?"
+        },
+        {
+          "entry": "tr.btk.encryption-regulation",
+          "question": "Does a game or collaborative product that encrypts its own voice, video and text end to end, carried over the internet without the publisher operating an electronic communication service, fall within the BTK regulation on coded or encrypted communication, and if it does, which permit does the producer or importer need?"
         },
         {
           "entry": "tr.dual-use-export",
@@ -5950,7 +6689,11 @@
         },
         {
           "entry": "tr.5809.authorisation",
-          "question": "Do voice, video and text features carried over the internet inside a game or collaborative product, with no telephone numbers and no network the publisher operates, need a BTK authorisation under Articles 9 and 10 of Law No. 5809 and the authorisation regulation?"
+          "question": "Do voice, video and text features carried over the internet inside a game or collaborative product, with no telephone numbers and no network the publisher operates, make the publisher an operator that must notify the BTK under Article 9 of Law No. 5809?"
+        },
+        {
+          "entry": "tr.btk.authorisation-regulation",
+          "question": "If such features are an electronic communication service, which authorisation type of the BTK authorisation regulation applies, and what must the notification contain?"
         },
         {
           "entry": "tr.btk.personal-data",
@@ -5961,7 +6704,15 @@
           "question": "Does a live stream of gameplay or of a collaborative session offered through a Cerid product to viewers in Turkey need an RTÜK internet broadcasting licence under Article 29/A of Law No. 6112, and does the answer change when users, not the publisher, broadcast?"
         },
         {
+          "entry": "tr.rtuk.internet-broadcasting-regulation",
+          "question": "If a gameplay or collaborative-session stream is within Article 29/A of Law No. 6112, which licence or transmission authorisation of the regulation on radio, television and on-demand broadcasts on the internet applies, to the publisher or to the user who broadcasts?"
+        },
+        {
           "entry": "tr.6502.distance-contracts",
+          "question": "Does Article 48 of Law No. 6502 make the Cerid store an intermediary service provider for third-party games, sharing the seller's liability for the pre-contract information and its records (Article 48(6))?"
+        },
+        {
+          "entry": "tr.6502.distance-contracts-regulation",
           "question": "For digital content delivered at once after purchase, which express consent and acknowledgement wording lawfully ends the right of withdrawal under the Regulation on Distance Contracts, and what must the confirmation on a durable medium contain?"
         },
         {
@@ -5978,11 +6729,19 @@
         },
         {
           "entry": "tr.7194.digital-service-tax",
-          "question": "Does the store's revenue from third-party games, in-game items or subscriptions fall within the digital services of Law No. 7194, how are the worldwide and Turkish revenue thresholds measured for a group, and which rate applies for 2026 and 2027?"
+          "question": "Does the store's revenue from third-party games, in-game items or subscriptions fall within the digital services of Law No. 7194, and how are the worldwide and Turkish revenue thresholds measured for a group?"
+        },
+        {
+          "entry": "tr.7194.rate-decision",
+          "question": "Which digital service tax rate applies to each month of 2026 and 2027 under Presidential Decision No. 10767, and does a later decision change it?"
         },
         {
           "entry": "tr.213.e-archive",
-          "question": "Which e-archive or e-invoice duties apply to each store sale to consumers and to businesses, from which revenue threshold, and for how long and where must the electronic records be kept?"
+          "question": "For how long and where must the store's invoices and electronic records be kept under Tax Procedure Law No. 213?"
+        },
+        {
+          "entry": "tr.vuk-509.e-archive",
+          "question": "Which e-archive or e-invoice duties of General Communiqué No. 509 apply to each store sale to consumers and to businesses, and from which revenue threshold?"
         },
         {
           "entry": "tr.6493.payment-institutions",
@@ -6038,7 +6797,11 @@
         },
         {
           "entry": "gb.osa",
-          "question": "Do in-game chat, voice and user content make a product a regulated user-to-user service under the Online Safety Act 2023, is it likely to be accessed by children, and which measures of Ofcom's codes and which age assurance does that require?"
+          "question": "Do in-game chat, voice and user content make a product a regulated user-to-user service under the Online Safety Act 2023, and is it likely to be accessed by children?"
+        },
+        {
+          "entry": "gb.ofcom-codes",
+          "question": "Which measures of Ofcom's illegal-harms and children's codes, and which age assurance, does such a product need?"
         },
         {
           "entry": "us.ear.encryption",
@@ -6061,8 +6824,12 @@
           "question": "If a product enters China, must the publisher designate a representative under Article 53 of the Personal Information Protection Law, which cross-border route (security assessment, standard contract or certification) applies to crash reports and accounts, and must the data stay in China?"
         },
         {
+          "entry": "cn.cryptography-law",
+          "question": "Does Article 28 of the Cryptography Law reach mass-market consumer software that uses internationally standard algorithms for TLS 1.3 and QUIC?"
+        },
+        {
           "entry": "cn.commercial-cryptography",
-          "question": "If a product that uses TLS 1.3 and QUIC with internationally standard algorithms enters China, does it need an import licence, export control or commercial cryptography product certification under the Cryptography Law and the 2023 Commercial Cryptography Administration Regulations, or does the treatment of mass-market consumer products cover it?"
+          "question": "If a product that uses TLS 1.3 and QUIC with internationally standard algorithms enters China, does it need an import licence, export control or commercial cryptography product certification under the 2023 Commercial Cryptography Administration Regulations, or does the treatment of mass-market consumer products cover it?"
         },
         {
           "classification": "asset_cooker",
@@ -6185,7 +6952,8 @@
       }
     },
     "pending": {
-      "tr.asset-freeze": "MASAK publishes the asset-freeze decisions under Laws No. 6415 and 7262 through a web application (masak.hmb.gov.tr) with no list file at a stable address; the decisions are read from the Official Gazette and MASAK next, then imported."
+      "tr.asset-freeze": "MASAK publishes the asset-freeze decisions under Law No. 6415 through a web application (masak.hmb.gov.tr) with no list file at a stable address; the decisions are read from the Official Gazette and MASAK next, then imported.",
+      "tr.7262.proliferation-freeze": "MASAK publishes the freezing decisions under Law No. 7262 through the same web application with no list file at a stable address; they are read from the Official Gazette and MASAK next, then imported."
     }
   }
 }

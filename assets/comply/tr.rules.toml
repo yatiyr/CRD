@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review TR
 format = "cerid-rules/1"
 jurisdiction = "TR"
-generation = 5
+generation = 6
 register = "2026-11-01"
 
 [[scope]]
@@ -121,12 +121,33 @@ instrument = "Law No. 6698 on the Protection of Personal Data (KVKK)"
 article = "Articles 3, 5 and 10"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5"
 read = true
-obligation = "Inform the data subject (aydınlatma) when data is collected, in a notice separate from any request for explicit consent; consent is specific, informed and freely given and is never bundled with the notice or a service condition."
+obligation = "Inform the data subject (aydınlatma) when personal data is obtained, with the items Article 10 lists (the controller, the purposes, the recipients and why, the method and legal ground of collection and the Article 11 rights); explicit consent (Article 3) is specific, informed and freely given."
 applies_to = ["flow.crash-reports", "flow.telemetry", "flow.network-identity", "flow.anticheat", "flow.account-data", "flow.payments", "flow.user-content", "flow.communications"]
 check = "planned"
 check_name = "consent and notice records CTest"
 check_ref = "docs/ROADMAP.md#slice-comply.2"
 effective = "2016-04-07"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.2", "COMPLY.8", "CRASH-FIX.1", "OPS.1", "STORE.1"]
+
+[[rule]]
+id = "tr.kvkk.notice-communique"
+kind = "obligation"
+topic = "privacy"
+state = "planned"
+title = "KVKK: the Communiqué on the obligation to inform"
+instrument = "Communiqué on the Procedures and Principles to be Followed in Fulfilling the Obligation to Inform"
+article = "Whole communiqué"
+primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=24454&MevzuatTur=9&MevzuatTertip=5"
+read = false
+obligation = "Keep the notice separate from any request for explicit consent and never bundle the two or make consent a service condition; word the notice clearly and plainly, without misleading or incomplete information, and be able to prove it was given."
+applies_to = ["flow.crash-reports", "flow.telemetry", "flow.network-identity", "flow.anticheat", "flow.account-data", "flow.payments", "flow.user-content", "flow.communications"]
+check = "planned"
+check_name = "consent and notice records CTest"
+check_ref = "docs/ROADMAP.md#slice-comply.2"
+effective = "2018-03-10"
 sunset = ""
 counsel = "needed"
 counsel_reviewed = ""
@@ -179,17 +200,38 @@ id = "tr.kvkk.transfer-abroad"
 kind = "obligation"
 topic = "privacy"
 state = "planned"
-title = "KVKK: transfer abroad after Law No. 7499 and the 2024 By-Law"
-instrument = "Law No. 6698 Article 9 as amended by Law No. 7499, and the By-Law on the Procedures and Principles for the Transfer of Personal Data Abroad"
-article = "Article 9; By-Law Articles 13-14"
+title = "KVKK: transfer abroad under Article 9 as amended by Law No. 7499"
+instrument = "Law No. 6698 on the Protection of Personal Data (KVKK)"
+article = "Article 9"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6698&MevzuatTur=1&MevzuatTertip=5"
-read = false
-obligation = "Transfer personal data abroad only on an adequacy decision, an appropriate safeguard (standard contracts notified to the Authority within five business days and used unmodified, binding corporate rules) or an incidental case; record each transfer and its mechanism."
+read = true
+obligation = "Transfer personal data abroad only on a processing condition of Articles 5-6 and an adequacy decision (Article 9(1)); without one, on an appropriate safeguard while the data subject can exercise their rights and seek remedies in the destination (9(4): an agreement between public bodies or binding corporate rules approved by the Board, a standard contract the Board announced, or a written undertaking the Board permits), a standard contract being notified to the Authority within five business days of its signature (9(5)); else only incidentally in a case 9(6) lists; record each transfer and its mechanism."
 applies_to = ["flow.crash-reports", "flow.telemetry", "flow.network-identity", "flow.anticheat", "flow.account-data", "flow.payments", "flow.user-content", "flow.communications"]
 check = "planned"
 check_name = "transfer records CTest with standard-contract notification reminders"
 check_ref = "docs/ROADMAP.md#slice-comply.2"
 effective = "2024-06-01"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.2", "COMPLY.8", "NET-SERVER", "CRASH-FIX.2"]
+
+[[rule]]
+id = "tr.kvkk.transfer-abroad-bylaw"
+kind = "obligation"
+topic = "privacy"
+state = "planned"
+title = "KVKK: the By-Law on transfers of personal data abroad"
+instrument = "By-Law on the Procedures and Principles for the Transfer of Personal Data Abroad"
+article = "Articles 13-14"
+primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=40863&MevzuatTur=7&MevzuatTertip=5"
+read = false
+obligation = "Use the Board's standard contract unmodified and notify it to the Authority within five business days of its signature, as the By-Law sets for Article 9 of Law No. 6698."
+applies_to = ["flow.crash-reports", "flow.telemetry", "flow.network-identity", "flow.anticheat", "flow.account-data", "flow.payments", "flow.user-content", "flow.communications"]
+check = "planned"
+check_name = "transfer records CTest with standard-contract notification reminders"
+check_ref = "docs/ROADMAP.md#slice-comply.2"
+effective = "2024-07-10"
 sunset = ""
 counsel = "needed"
 counsel_reviewed = ""
@@ -326,12 +368,12 @@ id = "tr.btk.encryption"
 kind = "obligation"
 topic = "export-control"
 state = "planned"
-title = "Electronic Communications Law No. 5809: BTK encryption rules"
-instrument = "Electronic Communications Law No. 5809 and the BTK rules on coded and encrypted communication"
-article = "Article 39 and the BTK rules on coded and encrypted communication"
+title = "Electronic Communications Law No. 5809: coded and encrypted communication"
+instrument = "Electronic Communications Law No. 5809"
+article = "Articles 39 and 63(6)"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5809&MevzuatTur=1&MevzuatTertip=5"
-read = false
-obligation = "Classify encryption in communication products against Article 39, under which the BTK sets the procedure for coded or encrypted communication within an electronic communication service (breaching it is an offence, Article 63(6)), and meet any notification or authorisation duty its rules set, without key escrow or weakened end-to-end encryption."
+read = true
+obligation = "Classify encryption in communication products against Article 39, under which the BTK sets the procedure for coded or encrypted communication within an electronic communication service, outside the radio systems reserved to the listed public bodies (breaching it is an offence, Article 63(6)), without key escrow or weakened end-to-end encryption."
 applies_to = ["product.communications", "channel.distribution"]
 check = "active"
 check_name = "crd-check-registers: every export's cryptography inventory against its reviewed classification"
@@ -343,21 +385,63 @@ counsel_reviewed = ""
 rows = ["COMPLY.1", "COMPLY.9", "NET.2"]
 
 [[rule]]
+id = "tr.btk.encryption-regulation"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "BTK regulation on coded or encrypted communication"
+instrument = "Regulation on the Procedures and Principles for Coded or Encrypted Communication within an Electronic Communication Service by Public Bodies and Natural and Legal Persons"
+article = "Whole regulation"
+primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=14387&MevzuatTur=7&MevzuatTertip=5"
+read = false
+obligation = "Meet the permit, notification and safekeeping duties the regulation sets for producing, importing or operating coded or encrypted communication systems within an electronic communication service, without key escrow or weakened end-to-end encryption."
+applies_to = ["product.communications", "channel.distribution"]
+check = "planned"
+check_name = "classification record per communication product"
+check_ref = "docs/ROADMAP.md#slice-comply.1"
+effective = "2010-10-23"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "COMPLY.9", "NET.2"]
+
+[[rule]]
 id = "tr.asset-freeze"
 kind = "obligation"
 topic = "export-control"
 state = "planned"
-title = "Turkey's asset-freeze regime"
-instrument = "Law No. 6415 on the Prevention of the Financing of Terrorism and Law No. 7262 on preventing the financing of the proliferation of weapons of mass destruction"
-article = "Law No. 6415 Articles 5-7, 11-13 and 15; Law No. 7262's proliferation freezes"
+title = "Turkey's asset freezes under Law No. 6415"
+instrument = "Law No. 6415 on the Prevention of the Financing of Terrorism"
+article = "Articles 5-7, 11-13 and 15"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6415&MevzuatTur=1&MevzuatTertip=5"
-read = false
+read = true
 obligation = "Screen distribution, accounts and payments against Turkey's asset-freeze decisions: the President's decisions implementing the UN Security Council lists (Article 5), foreign states' requests (Article 6) and domestic freezes (Article 7), each binding on its publication in the Official Gazette (Articles 11-12); make no transaction for a designated person and facilitate none (Article 13), report receivables and debts toward one to MASAK within 30 days (Article 12(3)), and never provide funds or financial services to one (Article 15)."
 applies_to = ["channel.cerid-store", "flow.account-data", "flow.payments"]
 check = "active"
 check_name = "crd-comply-tests [sanctions]: parties and destinations screened against each authority's list, failing closed on a missing or stale list"
 check_ref = "tests/foundation/comply/test_sanctions.cpp"
 effective = "2013-02-16"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.1", "STORE.1", "STORE.3"]
+
+[[rule]]
+id = "tr.7262.proliferation-freeze"
+kind = "obligation"
+topic = "export-control"
+state = "planned"
+title = "Turkey's proliferation-financing freezes under Law No. 7262"
+instrument = "Law No. 7262 on the Prevention of the Financing of the Proliferation of Weapons of Mass Destruction"
+article = "Articles 1-3"
+primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=7262&MevzuatTur=1&MevzuatTertip=5"
+read = false
+obligation = "Screen distribution, accounts and payments against the President's decisions implementing the UN Security Council's proliferation-financing sanctions, binding on their publication in the Official Gazette, and make no transaction for a designated person."
+applies_to = ["channel.cerid-store", "flow.account-data", "flow.payments"]
+check = "active"
+check_name = "crd-comply-tests [sanctions]: parties and destinations screened against each authority's list, failing closed on a missing or stale list"
+check_ref = "tests/foundation/comply/test_sanctions.cpp"
+effective = "2020-12-31"
 sunset = ""
 counsel = "none"
 counsel_reviewed = ""
@@ -453,16 +537,37 @@ kind = "obligation"
 topic = "communications"
 state = "planned"
 title = "Law No. 5809: authorisation for communication services"
-instrument = "Electronic Communications Law No. 5809 and the BTK authorisation regulation"
-article = "Articles 9-10"
+instrument = "Electronic Communications Law No. 5809"
+article = "Articles 9 and 63(1)"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=5809&MevzuatTur=1&MevzuatTertip=5"
-read = false
-obligation = "Classify each communication product (voice, video, text) as an electronic communication service or not and, where it is one, notify the BTK before operating it in Turkey, with a usage right where it needs numbers or frequencies (Article 9; operating without notification is an offence, Article 63(1)), under the BTK authorisation regulation."
+read = true
+obligation = "Classify each communication product (voice, video, text) as an electronic communication service or not and, where it is one, notify the BTK before operating it in Turkey, with a usage right where it needs numbers, frequencies or satellite positions (Article 9(2)-(3); operating without notification is an offence, Article 63(1))."
 applies_to = ["product.communications", "flow.communications"]
 check = "planned"
 check_name = "classification record CTest per communication surface"
 check_ref = "docs/ROADMAP.md#slice-comply.9"
 effective = "2009-05-10"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.9", "NET-LIVE", "STORE-SOCIAL"]
+
+[[rule]]
+id = "tr.btk.authorisation-regulation"
+kind = "obligation"
+topic = "communications"
+state = "planned"
+title = "BTK authorisation regulation for the electronic communications sector"
+instrument = "Authorisation Regulation for the Electronic Communications Sector"
+article = "Whole regulation"
+primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=13078&MevzuatTur=7&MevzuatTertip=5"
+read = false
+obligation = "Where a communication product is an electronic communication service, make the notification or obtain the usage right in the form and with the content the regulation sets before operating it in Turkey."
+applies_to = ["product.communications", "flow.communications"]
+check = "planned"
+check_name = "classification record CTest per communication surface"
+check_ref = "docs/ROADMAP.md#slice-comply.9"
+effective = "2009-05-28"
 sunset = ""
 counsel = "needed"
 counsel_reviewed = ""
@@ -494,17 +599,38 @@ id = "tr.6112.internet-broadcasting"
 kind = "obligation"
 topic = "communications"
 state = "planned"
-title = "Law No. 6112 and RTÜK internet broadcasting rules"
-instrument = "Law No. 6112 on Radio and Television Broadcasting and RTÜK's internet broadcasting regulation"
+title = "Law No. 6112: internet broadcasting"
+instrument = "Law No. 6112 on the Establishment of Radio and Television Enterprises and Their Media Services"
 article = "Article 29/A"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6112&MevzuatTur=1&MevzuatTertip=5"
-read = false
-obligation = "Classify live streaming against Article 29/A before offering it in Turkey: a media service provider offering radio, television or on-demand services only on the internet needs an RTÜK broadcast licence and a platform operator transmitting them a transmission authorisation, while individual communication, platforms not dedicated to transmitting such services and pure hosts are outside it (29/A(4)); the joint RTÜK and BTK regulation sets the procedure."
+read = true
+obligation = "Classify live streaming against Article 29/A before offering it in Turkey: a media service provider offering radio, television or on-demand services only on the internet needs an RTÜK broadcast licence and a platform operator transmitting them a transmission authorisation, while individual communication, platforms not dedicated to transmitting such services and pure hosts are outside it (29/A(4))."
 applies_to = ["product.communications"]
 check = "planned"
 check_name = "classification record CTest"
 check_ref = "docs/ROADMAP.md#slice-comply.9"
 effective = "2018-03-27"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.9", "NET-LIVE"]
+
+[[rule]]
+id = "tr.rtuk.internet-broadcasting-regulation"
+kind = "obligation"
+topic = "communications"
+state = "planned"
+title = "RTÜK and BTK regulation on radio, television and on-demand services on the internet"
+instrument = "Regulation on the Provision of Radio, Television and On-Demand Broadcasts on the Internet"
+article = "Whole regulation"
+primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=32695&MevzuatTur=7&MevzuatTertip=5"
+read = false
+obligation = "Where a streaming feature is in Article 29/A's scope, obtain the internet broadcast licence or transmission authorisation the regulation sets, with its procedure and term."
+applies_to = ["product.communications"]
+check = "planned"
+check_name = "classification record CTest"
+check_ref = "docs/ROADMAP.md#slice-comply.9"
+effective = "2019-08-01"
 sunset = ""
 counsel = "needed"
 counsel_reviewed = ""
@@ -533,20 +659,41 @@ rows = ["COMPLY.8", "STORE.7"]
 
 [[rule]]
 id = "tr.6563.etbis"
+kind = "obligation"
+topic = "consumer"
+state = "planned"
+title = "Law No. 6563: reporting to the e-commerce information system"
+instrument = "Law No. 6563 on the Regulation of Electronic Commerce"
+article = "Article 11(4)"
+primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6563&MevzuatTur=1&MevzuatTertip=5"
+read = true
+obligation = "Report the information the Ministry of Trade requests for monitoring electronic commerce to the system it established (Article 11(4))."
+applies_to = ["channel.cerid-store"]
+check = "planned"
+check_name = "ETBIS reporting record"
+check_ref = "docs/ROADMAP.md#slice-comply.8"
+effective = "2015-05-01"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.8", "STORE.8"]
+
+[[rule]]
+id = "tr.etbis.registration"
 kind = "user-action"
 topic = "consumer"
 state = "planned"
-title = "Law No. 6563: ETBIS registration"
-instrument = "Law No. 6563 on the Regulation of Electronic Commerce and its intermediary service provider regulation"
-article = "Articles 2(1)(ı) and 11(4); the regulation on service providers and intermediary service providers"
-primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6563&MevzuatTur=1&MevzuatTertip=5"
+title = "ETBIS registration under the e-commerce information system communiqué"
+instrument = "Communiqué on the Electronic Commerce Information System and Notification Obligations"
+article = "Whole communiqué"
+primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=23842&MevzuatTur=9&MevzuatTertip=5"
 read = false
 obligation = "Register the store and its sellers in the e-commerce information system (ETBIS) before trading."
 applies_to = ["channel.cerid-store"]
 check = "planned"
 check_name = "ETBIS registration record"
 check_ref = "docs/ROADMAP.md#slice-comply.8"
-effective = "2015-05-01"
+effective = "2017-08-11"
 sunset = ""
 counsel = "none"
 counsel_reviewed = ""
@@ -557,17 +704,38 @@ id = "tr.6502.distance-contracts"
 kind = "obligation"
 topic = "consumer"
 state = "planned"
-title = "Law No. 6502 and the Distance Contracts Regulation"
-instrument = "Consumer Protection Law No. 6502 and the Regulation on Distance Contracts"
-article = "Article 48; the Regulation on Distance Contracts"
+title = "Law No. 6502: distance contracts"
+instrument = "Consumer Protection Law No. 6502"
+article = "Article 48"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6502&MevzuatTur=1&MevzuatTertip=5"
-read = false
-obligation = "Give the pre-contract information the regulation lists and say that confirming the order creates a payment duty (the burden of proof is the seller's), confirm the contract on a durable medium and honour the fourteen-day withdrawal right (Article 48(4): extended up to a year when its information was missing), with the regulation's lawful waiver for digital content delivered at once; a marketplace intermediary shares the seller's liability for the pre-contract information and its records (Article 48(6))."
+read = true
+obligation = "Before a distance contract, inform the consumer clearly of the items the regulation sets and that confirming the order creates a payment duty (Article 48(2), the burden of proof being the seller's); perform within the time promised, at most thirty days for goods (48(3)); honour the fourteen-day withdrawal right without reasons or penalty, extended up to a year when its information was missing (48(4)); a marketplace intermediary keeps a system open for the consumer's requests (48(5)) and shares the seller's liability for the pre-contract information and its records (48(6))."
 applies_to = ["channel.cerid-store", "product.purchases", "flow.payments"]
 check = "planned"
 check_name = "checkout flow tests over the pre-contract steps"
 check_ref = "docs/ROADMAP.md#slice-comply.8"
 effective = "2014-05-28"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["COMPLY.8", "STORE.3", "SHIP.7"]
+
+[[rule]]
+id = "tr.6502.distance-contracts-regulation"
+kind = "obligation"
+topic = "consumer"
+state = "planned"
+title = "The Regulation on Distance Contracts"
+instrument = "Regulation on Distance Contracts"
+article = "Whole regulation"
+primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=20237&MevzuatTur=7&MevzuatTertip=5"
+read = false
+obligation = "Give the pre-contract information the regulation lists, confirm the contract on a durable medium, and apply the regulation's lawful waiver of the withdrawal right for digital content delivered at once."
+applies_to = ["channel.cerid-store", "product.purchases", "flow.payments"]
+check = "planned"
+check_name = "checkout flow tests over the pre-contract steps"
+check_ref = "docs/ROADMAP.md#slice-comply.8"
+effective = "2015-02-27"
 sunset = ""
 counsel = "needed"
 counsel_reviewed = ""
@@ -641,12 +809,12 @@ id = "tr.turkpatent.trademarks"
 kind = "user-action"
 topic = "intellectual-property"
 state = "planned"
-title = "Trademark filings for product names (TURKPATENT, EUIPO)"
+title = "Trademark filings for product names (TURKPATENT)"
 instrument = "Industrial Property Law No. 6769"
-article = "Articles 7(1), 11 and 23; EUIPO filings under Regulation (EU) 2017/1001"
+article = "Articles 7(1), 11 and 23"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=6769&MevzuatTur=1&MevzuatTertip=5"
-read = false
-obligation = "File trademarks for product names with TURKPATENT (protection comes only by registration, Article 7(1); one mark per application with its goods and services list, Article 11; ten years from the application, renewed in the six months before the term ends, Article 23) and with the EUIPO before launch."
+read = true
+obligation = "File trademarks for product names with TURKPATENT before launch (protection comes only by registration, Article 7(1); one mark per application with its goods and services list, Article 11; ten years from the application, renewed in the six months before the term ends, Article 23)."
 applies_to = ["channel.cerid-store", "channel.distribution"]
 check = "planned"
 check_name = "filing records"
@@ -706,10 +874,10 @@ topic = "tax"
 state = "planned"
 title = "Digital service tax (Law No. 7194)"
 instrument = "Law No. 7194 on the Digital Service Tax"
-article = "Articles 1-7 and Presidential Decision No. 10767"
+article = "Articles 1-7"
 primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=7194&MevzuatTur=1&MevzuatTertip=5"
-read = false
-obligation = "Monitor the thresholds (exempt while the previous year's revenue from in-scope services was below TRY 20 million in Turkey or EUR 750 million worldwide, counted for the consolidated group, Article 4) and declare the tax monthly, by the end of the following month (Article 6), on revenue from digital content sales including games and in-game purchases, platforms where users interact and intermediation (Article 1), at the rate in force: Article 5 sets 7.5 % and Decision No. 10767 (Official Gazette of 25 December 2025, No. 33118) 5 % from 2026 and 2.5 % from 2027."
+read = true
+obligation = "Monitor the thresholds (exempt while the previous year's revenue from in-scope services was below TRY 20 million in Turkey or EUR 750 million worldwide, counted for the consolidated group, Article 4) and declare the tax monthly, by the end of the following month (Article 6), on revenue from digital content sales including games and in-game purchases, platforms where users interact and intermediation (Article 1), at 7.5 % (Article 5) unless a Presidential decision sets the rate in force."
 applies_to = ["channel.cerid-store", "product.purchases", "flow.payments"]
 check = "planned"
 check_name = "threshold monitoring tests"
@@ -721,21 +889,63 @@ counsel_reviewed = ""
 rows = ["STORE.3"]
 
 [[rule]]
+id = "tr.7194.rate-decision"
+kind = "obligation"
+topic = "tax"
+state = "planned"
+title = "Digital service tax rate: Presidential Decision No. 10767"
+instrument = "Presidential Decision No. 10767 on the digital service tax rate"
+article = "Whole decision"
+primary = "https://www.resmigazete.gov.tr/eskiler/2025/12/20251225-21.pdf"
+read = false
+obligation = "Apply the digital service tax at 5 % from 2026 and 2.5 % from 2027, as Decision No. 10767 (Official Gazette of 25 December 2025, No. 33118) sets under Article 5 of Law No. 7194."
+applies_to = ["channel.cerid-store", "product.purchases", "flow.payments"]
+check = "planned"
+check_name = "threshold monitoring tests"
+check_ref = "docs/ROADMAP.md#slice-store.3"
+effective = "2026-01-01"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["STORE.3"]
+
+[[rule]]
 id = "tr.213.e-archive"
 kind = "obligation"
 topic = "tax"
 state = "planned"
-title = "Tax Procedure Law No. 213: e-invoice and e-archive"
-instrument = "Tax Procedure Law No. 213 and the e-invoice and e-archive general communiqués"
-article = "E-archive invoicing"
-primary = "https://www.gib.gov.tr/"
+title = "Tax Procedure Law No. 213: invoices and records"
+instrument = "Tax Procedure Law No. 213"
+article = "Invoice and record-keeping provisions"
+primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=213&MevzuatTur=1&MevzuatTertip=4"
+read = false
+obligation = "Issue an invoice for every store sale and keep the records for the statutory period."
+applies_to = ["channel.cerid-store", "product.purchases", "flow.payments"]
+check = "planned"
+check_name = "invoice generation tests"
+check_ref = "docs/ROADMAP.md#slice-store.3"
+effective = "1961"
+sunset = ""
+counsel = "needed"
+counsel_reviewed = ""
+rows = ["STORE.3"]
+
+[[rule]]
+id = "tr.vuk-509.e-archive"
+kind = "obligation"
+topic = "tax"
+state = "planned"
+title = "Tax Procedure Law General Communiqué No. 509: e-invoice and e-archive"
+instrument = "Tax Procedure Law General Communiqué No. 509"
+article = "Whole communiqué"
+primary = "https://www.mevzuat.gov.tr/mevzuat?MevzuatNo=33905&MevzuatTur=9&MevzuatTertip=5"
 read = false
 obligation = "Issue e-archive or e-invoices for every store sale and keep them for the statutory period."
 applies_to = ["channel.cerid-store", "product.purchases", "flow.payments"]
 check = "planned"
 check_name = "invoice generation tests"
 check_ref = "docs/ROADMAP.md#slice-store.3"
-effective = "1961"
+effective = "2019-10-19"
 sunset = ""
 counsel = "needed"
 counsel_reviewed = ""

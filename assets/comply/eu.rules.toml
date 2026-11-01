@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review EU
 format = "cerid-rules/1"
 jurisdiction = "EU"
-generation = 4
+generation = 5
 register = "2026-11-01"
 
 [[scope]]
@@ -89,6 +89,27 @@ state = "planned"
 id = "flow.communications"
 kind = "flow"
 state = "planned"
+
+[[rule]]
+id = "eu.euipo.trademarks"
+kind = "user-action"
+topic = "intellectual-property"
+state = "planned"
+title = "EU trademark filings for product names (EUIPO)"
+instrument = "Regulation (EU) 2017/1001 on the European Union trade mark"
+article = "Whole regulation"
+primary = "https://eur-lex.europa.eu/eli/reg/2017/1001/oj"
+read = false
+obligation = "File EU trade marks for product names with the EUIPO before launch."
+applies_to = ["channel.cerid-store", "channel.distribution"]
+check = "planned"
+check_name = "filing records"
+check_ref = "docs/ROADMAP.md#slice-comply.4"
+effective = "2017-10-01"
+sunset = ""
+counsel = "none"
+counsel_reviewed = ""
+rows = ["COMPLY.4", "STORE.8"]
 
 [[rule]]
 id = "eu.gdpr.principles"
