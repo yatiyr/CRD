@@ -1,5 +1,6 @@
-// The checksum family (crd/containers/checksum.hpp): the CRC slicing tables, the dispatch of both kernel families and
-// XXH3's short inputs and final merge, which are scalar on every level.
+// The checksum family (crd/containers/checksum.hpp): the CRC slicing tables, the dispatch of both kernel families with
+// their known-answer self-checks (HW-RESILIENCE.3) and XXH3's short inputs and final merge, which are scalar on every
+// level.
 
 #include <crd/containers/checksum.hpp>
 #include <crd/containers/checksum_dispatch.hpp>
@@ -265,7 +266,7 @@ crd::u64 xxh3_129to240(const crd::u8* in, crd::u64 len, crd::u64 seed) noexcept
     return xxh3_avalanche(acc);
 }
 
-crd::u64 xxh3_long(const crd::u8* in, crd::usize len, crd::u64 seed) noexcept
+crd::u64 xxh3_long(const HashKernels& kernels, const crd::u8* in, crd::usize len, crd::u64 seed) noexcept
 {
     alignas(64) crd::u8 derived[kSecretSize]; // NOLINT(modernize-avoid-c-arrays): a seed's secret
     const crd::u8* secret = kSecret;
@@ -281,7 +282,7 @@ crd::u64 xxh3_long(const crd::u8* in, crd::usize len, crd::u64 seed) noexcept
     // NOLINTNEXTLINE(modernize-avoid-c-arrays): the accumulators the kernel runs on
     alignas(64) crd::u64 acc[8] = {kPrime32Three, kPrime64One, kPrime64Two,  kPrime64Three,
                                    kPrime64Four,  kPrime32Two, kPrime64Five, kPrime32One};
-    hash_kernels().table->xxh3_accumulate(acc, in, len, secret);
+    kernels.xxh3_accumulate(acc, in, len, secret);
     constexpr crd::usize merge_start = 11U; // XXH_SECRET_MERGEACCS_START
     crd::u64 result = static_cast<crd::u64>(len) * kPrime64One;
     for (crd::usize i = 0U; i < 4U; ++i)
@@ -292,7 +293,68 @@ crd::u64 xxh3_long(const crd::u8* in, crd::usize len, crd::u64 seed) noexcept
     return xxh3_avalanche(result);
 }
 
+// ---- Known-answer self-checks (HW-RESILIENCE.3) ---------------------------------------------------------------------
+
+// The checksum tests' reference stream (tests/foundation/containers/test_checksum.cpp): byte i is the top byte of
+// 0x9E3779B97F4A7C15 * (i + 1) mod 2^64. Its answers there come from zlib, a bit-serial CRC-32C and libxxhash 0.8.2.
+// 1025 bytes reach every level's widest fold or stripe loop and a tail; 63 bytes stay below the folds. The stream
+// starts one byte into its aligned storage, so the loads are unaligned.
+constexpr crd::usize kCheckLong = 1025U;
+constexpr crd::usize kCheckShort = 63U;
+
+struct CheckStream
+{
+    alignas(64) crd::u8 bytes[kCheckLong + 1U]; // NOLINT(modernize-avoid-c-arrays): the stream at bytes + 1
+};
+
+constexpr CheckStream make_check_stream() noexcept
+{
+    CheckStream s{};
+    for (crd::usize i = 0U; i < kCheckLong; ++i)
+    {
+        s.bytes[i + 1U] = static_cast<crd::u8>((0x9E3779B97F4A7C15ULL * (i + 1U)) >> 56U);
+    }
+    return s;
+}
+
+constexpr CheckStream kCheckStream = make_check_stream();
+
+void resolve_crc() noexcept
+{
+    (void)crc_kernels();
+}
+
+void resolve_hash() noexcept
+{
+    (void)hash_kernels();
+}
+
+constinit crd::KernelFamily g_crc_family{"containers.crc", &resolve_crc, {}, nullptr};
+const crd::KernelFamilyListing kCrcListing{g_crc_family};
+constinit crd::KernelFamily g_hash_family{"containers.hash", &resolve_hash, {}, nullptr};
+const crd::KernelFamilyListing kHashListing{g_hash_family};
+
 } // namespace
+
+const char* crc_self_check(const CrcKernels& table) noexcept
+{
+    const crd::u8* in = kCheckStream.bytes + 1;
+    if (~table.crc32(~0U, in, kCheckLong) != 0xBE30E0B1U || ~table.crc32(~0U, in, kCheckShort) != 0x9BF535ECU)
+    {
+        return "crc32";
+    }
+    if (~table.crc32c(~0U, in, kCheckLong) != 0x5DEDF5BBU || ~table.crc32c(~0U, in, kCheckShort) != 0x54980393U)
+    {
+        return "crc32c";
+    }
+    return nullptr;
+}
+
+const char* hash_self_check(const HashKernels& table) noexcept
+{
+    const crd::u64 hash = xxh3_long(table, kCheckStream.bytes + 1, kCheckLong, 0U);
+    return hash == 0x2E7BC851FC4A1332ULL ? nullptr : "xxh3_accumulate";
+}
 
 std::span<const KernelLevel<CrcKernels>> crc_kernel_levels() noexcept
 {
@@ -301,7 +363,8 @@ std::span<const KernelLevel<CrcKernels>> crc_kernel_levels() noexcept
 
 const KernelLevel<CrcKernels>& crc_kernels() noexcept
 {
-    static const KernelLevel<CrcKernels>& selected = crd::process_kernel_level<CrcKernels>(kCrcLevels);
+    static const KernelLevel<CrcKernels>& selected =
+        crd::process_checked_kernel_level<CrcKernels>(kCrcLevels, &crc_self_check, g_crc_family);
     return selected;
 }
 
@@ -312,7 +375,8 @@ std::span<const KernelLevel<HashKernels>> hash_kernel_levels() noexcept
 
 const KernelLevel<HashKernels>& hash_kernels() noexcept
 {
-    static const KernelLevel<HashKernels>& selected = crd::process_kernel_level<HashKernels>(kHashLevels);
+    static const KernelLevel<HashKernels>& selected =
+        crd::process_checked_kernel_level<HashKernels>(kHashLevels, &hash_self_check, g_hash_family);
     return selected;
 }
 
@@ -342,7 +406,7 @@ crd::u64 xxh3_64(ConstSpan<crd::u8> data, crd::u64 seed) noexcept
     {
         return xxh3_129to240(in, len, seed);
     }
-    return xxh3_long(in, len, seed);
+    return xxh3_long(*hash_kernels().table, in, len, seed);
 }
 
 } // namespace crd::containers

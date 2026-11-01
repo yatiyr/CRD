@@ -1330,6 +1330,7 @@ DiagStatus DiagCommandService::run_capabilities(void* self, const DiagCall& call
         .boolean("profiling_compiled", CRD_PERF_ENABLED != 0)
         .boolean("profiler_active", is_active())
         .boolean("job_pool", crd::jobs::num_workers() > 0U)
+        .u64("kernel_demotions", report.kernel_demotions)
         .boolean("file_root", !svc->m_root.empty());
     if (report.cpu_crt.crt_level >= 0)
     {
@@ -1362,6 +1363,28 @@ DiagStatus DiagCommandService::run_capabilities(void* self, const DiagCall& call
             .str("name", d.name)
             .boolean("present", d.present)
             .str("detail", cont::StringView{d.detail.data(), d.detail.size()});
+        (void)out.add_item(item);
+    }
+    // HW-RESILIENCE.3: which table each kernel family runs, and the self-check that chose it.
+    for (const crd::KernelFamily* f = report.kernel_families; f != nullptr; f = f->next)
+    {
+        const crd::KernelCheckResult& r = f->result;
+        char selected[64] = {}; // NOLINT(modernize-avoid-c-arrays)
+        char runs[64] = {};     // NOLINT(modernize-avoid-c-arrays)
+        (void)crd::format_kernel_table(r.selected_level, r.selected_features, selected, sizeof(selected));
+        (void)crd::format_kernel_table(r.level, r.features, runs, sizeof(runs));
+        item.clear();
+        item.str("kind", "kernel-check")
+            .str("name", f->name)
+            .str("status", crd::kernel_check_status_name(r.status))
+            .str("selected", selected)
+            .str("runs", runs);
+        if (r.failed_routine != nullptr)
+        {
+            item.str("failed_routine", r.failed_routine)
+                .boolean("injected", r.injected)
+                .u64("tables_failed", r.tables_failed);
+        }
         (void)out.add_item(item);
     }
     add_hardware_items(host_hardware_identity(), nullptr, item, out);

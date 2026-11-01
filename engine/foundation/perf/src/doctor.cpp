@@ -122,6 +122,34 @@ const DiagnosticDependency* DoctorReport::find_dependency(cont::StringView name)
     return nullptr;
 }
 
+crd::u32 report_kernel_self_checks(std::FILE* out) noexcept
+{
+    const crd::u32 demoted = crd::run_kernel_self_checks();
+    for (const crd::KernelFamily* f = crd::kernel_families(); f != nullptr && out != nullptr; f = f->next)
+    {
+        const crd::KernelCheckResult& r = f->result;
+        if (r.status == crd::KernelCheckStatus::Passed)
+        {
+            continue;
+        }
+        char selected[64] = {}; // NOLINT(modernize-avoid-c-arrays)
+        char runs[64] = {};     // NOLINT(modernize-avoid-c-arrays)
+        (void)crd::format_kernel_table(r.selected_level, r.selected_features, selected, sizeof(selected));
+        (void)crd::format_kernel_table(r.level, r.features, runs, sizeof(runs));
+        (void)std::fprintf(out,
+                           "[crd] kernel family %s failed its known answers on %s in %s%s; it runs %s (%s, %u "
+                           "tables failed)\n",
+                           f->name, selected, r.failed_routine != nullptr ? r.failed_routine : "?",
+                           r.injected ? " (fault seam)" : "", runs, crd::kernel_check_status_name(r.status),
+                           static_cast<unsigned>(r.tables_failed));
+    }
+    if (out != nullptr)
+    {
+        (void)std::fflush(out);
+    }
+    return demoted;
+}
+
 DoctorReport run_doctor(cont::StringView output_dir, const DoctorLive& live)
 {
     DoctorReport report;
@@ -132,6 +160,8 @@ DoctorReport run_doctor(cont::StringView output_dir, const DoctorLive& live)
     report.host_tuple = host_tuple_string(build);
     report.cpu = crd::cpu_selection();
     report.cpu_crt = crd::cpu_runtime_dispatch();
+    report.kernel_demotions = crd::run_kernel_self_checks();
+    report.kernel_families = crd::kernel_families();
 
     // ---- live-probed dependencies -------------------------------------------
     {

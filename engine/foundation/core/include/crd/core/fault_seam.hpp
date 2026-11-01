@@ -1,6 +1,7 @@
 #pragma once
 
-// crd-core -- the process-wide fault seams (DIAG.9b): one for file reads, one for GPU queue submissions.
+// crd-core -- the process-wide fault seams (DIAG.9b): one for file reads, one for GPU queue submissions, one for the
+// kernel self-checks (HW-RESILIENCE.3).
 //
 // The file reads every engine module shares (crd-platform's read_file_binary, read_file_text, read_file_range and
 // AsyncFile's completion jobs, and crd-perf's read_diag_asset_file) consult the I/O seam before they touch the file.
@@ -16,7 +17,12 @@
 // a removed device). Only a submission is consulted: a loss injected at a wait would let a Vulkan caller free memory
 // that work already queued still uses, since Vulkan cannot stop queued work.
 //
-// Both seams are a build capability. A shipping build (CRD_SHIPPING) compiles them out: installing is refused and
+// A kernel family's resolution (crd/core/kernel_dispatch.hpp) consults the kernel-check seam before it runs each
+// table's known-answer self-check. Its hook can fail a table as a CPU that misexecutes it would, so a test can drive
+// the demotion to a lower table, and the doctor's report of it, on a sound CPU. A family resolves once per process,
+// so the hook is installed before the family's first use.
+//
+// The seams are a build capability. A shipping build (CRD_SHIPPING) compiles them out: installing is refused and
 // every consult answers Proceed, so no request, authored asset or host can inject a fault there.
 //
 // One hook per seam. A hook runs under its seam's mutex, so uninstalling returns only after every call of the old hook
@@ -25,6 +31,7 @@
 // performed by the caller after the mutex is released. Contract: docs/design/runtime-diagnostics.md (DIAG.9b);
 // ADR-0133.
 
+#include <crd/core/cpu_features.hpp>
 #include <crd/core/types.hpp>
 
 namespace crd
@@ -108,5 +115,18 @@ void uninstall_gpu_fault_hook() noexcept;
 
 // What the GPU call must do (Proceed when no hook is installed or the seam is compiled out).
 [[nodiscard]] GpuFaultAction consult_gpu_fault(GpuFaultOp op, const char* operation) noexcept;
+
+// True fails the self-check of family `family`'s table at `level` with `features` (its variant features).
+using KernelCheckFaultHook = bool (*)(void* user, const char* family, CpuLevel level, CpuFeatureSet features) noexcept;
+
+// Install `hook`. Returns false, changing nothing, when the seam is compiled out, `hook` is null or a hook is
+// already installed.
+[[nodiscard]] bool install_kernel_check_fault_hook(KernelCheckFaultHook hook, void* user) noexcept;
+
+// Remove the hook. When it returns, no call of the old hook is in progress.
+void uninstall_kernel_check_fault_hook() noexcept;
+
+// Whether that table's self-check must fail (false when no hook is installed or the seam is compiled out).
+[[nodiscard]] bool consult_kernel_check_fault(const char* family, CpuLevel level, CpuFeatureSet features) noexcept;
 
 } // namespace crd

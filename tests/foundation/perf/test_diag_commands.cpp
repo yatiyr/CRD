@@ -739,6 +739,10 @@ TEST_CASE("diag commands: capabilities report the doctor, the grant and the auth
     CHECK(contains(caps.json, "{\"kind\":\"authority\",\"name\":\"execute\",\"granted\":false}"));
     CHECK(contains(caps.json, "{\"kind\":\"mode\",\"name\":"));
     CHECK(contains(caps.json, "{\"kind\":\"dependency\",\"name\":\"sanitizer_runtime\""));
+    // HW-RESILIENCE.3: each kernel family's self-check, and none demoted on a sound CPU.
+    CHECK(contains(caps.json, "\"kernel_demotions\":0"));
+    CHECK(contains(caps.json, R"({"kind":"kernel-check","name":"containers.crc","status":"passed",)"));
+    CHECK_FALSE(contains(caps.json, "\"failed_routine\""));
     // HW-RESILIENCE.2: the machine, with no comparison (it is the host).
     const crd::perf::HardwareIdentity& hw = crd::perf::host_hardware_identity();
     cont::String machine(&alloc);

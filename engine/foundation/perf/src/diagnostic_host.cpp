@@ -5,6 +5,7 @@
 #include <crd/core/fault_seam.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/perf/diag_assets.hpp>
+#include <crd/perf/doctor.hpp>
 #include <crd/perf/hardware_identity.hpp>
 #include <crd/time/clocks.hpp>
 
@@ -300,6 +301,7 @@ DiagHostStart DiagnosticHost::start(const DiagnosticHostProfile& profile, cont::
         return DiagHostStart::AlreadyStarted;
     }
     crd::time::TickClock::warm(); // the event clock is calibrated before the first event, once per process
+    (void)report_kernel_self_checks(stderr); // HW-RESILIENCE.3: every kernel family checked before first use
     if (crd::jobs::num_workers() != 0U)
     {
         reason.append("the jobs pool already runs: start the diagnostic host before the pool, devices and tools");

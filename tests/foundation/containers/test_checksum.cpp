@@ -10,9 +10,11 @@
 #include <crd/containers/checksum_dispatch.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/cpu_features.hpp>
+#include <crd/core/kernel_dispatch.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
+#include <string_view>
 
 namespace cc = crd::containers;
 using cc::CrcKernels;
@@ -127,6 +129,41 @@ void accumulate(const HashKernels& k, const u8* data, usize n, const u8* secret,
     k.xxh3_accumulate(words + 1, data, n, secret);
     std::memcpy(out, words + 1, sizeof(out));
     guards_kept = words[0] == guard && words[9] == guard;
+}
+
+// Self-check stubs: the portable routine with one result bit wrong.
+u32 crc32_one_bit_off(u32 state, const u8* data, usize n) noexcept
+{
+    return cc::kCrcKernelsPortable.crc32(state, data, n) ^ 0x100U;
+}
+
+u32 crc32_wrong_below_64(u32 state, const u8* data, usize n) noexcept
+{
+    return cc::kCrcKernelsPortable.crc32(state, data, n) ^ (n < 64U ? 1U : 0U);
+}
+
+u32 crc32c_one_bit_off(u32 state, const u8* data, usize n) noexcept
+{
+    return cc::kCrcKernelsPortable.crc32c(state, data, n) ^ 0x80000000U;
+}
+
+void xxh3_one_bit_off(u64* acc, const u8* data, usize n, const u8* secret) noexcept
+{
+    cc::kHashKernelsPortable.xxh3_accumulate(acc, data, n, secret);
+    acc[5] ^= u64{1} << 40U;
+}
+
+const crd::KernelFamily* find_family(std::string_view name)
+{
+    (void)crd::run_kernel_self_checks();
+    for (const crd::KernelFamily* f = crd::kernel_families(); f != nullptr; f = f->next)
+    {
+        if (name == f->name)
+        {
+            return f;
+        }
+    }
+    return nullptr;
 }
 
 } // namespace
@@ -296,17 +333,65 @@ TEST_CASE("checksum kernels: the process runs the levels its CPU selection resol
                                                           crd::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, crc.level));
     CHECK(crd::cpu_level_includes(s.selected, hash.level));
+    // Both families' self-checks ran at their resolution and passed the tables they selected.
+    const crd::KernelFamily* crc_family = find_family("containers.crc");
+    const crd::KernelFamily* hash_family = find_family("containers.hash");
+    REQUIRE(crc_family != nullptr);
+    REQUIRE(hash_family != nullptr);
+    CHECK(crc_family->result.status == crd::KernelCheckStatus::Passed);
+    CHECK(crc_family->result.level == crc.level);
+    CHECK(crc_family->result.features == crc.features);
+    CHECK(hash_family->result.status == crd::KernelCheckStatus::Passed);
+    CHECK(hash_family->result.level == hash.level);
     // Evidence on every run (CTest's log and JUnit keep it): which crc variant and hash level this host ran, so a
     // hosted lane's record shows the carry-less and CRC32 variants were the ones tested, not only the plain levels.
-    cc::String variant;
-    for (u32 f = 0; f < static_cast<u32>(crd::CpuFeature::Count); ++f)
+    char crc_name[64] = {};
+    (void)crd::format_kernel_table(crc.level, crc.features, crc_name, sizeof crc_name);
+    WARN("checksum kernels ran: crc " << crc_name << ", hash " << crd::cpu_level_name(hash.level));
+}
+
+TEST_CASE("checksum self-checks: every table the host runs reproduces its known answers",
+          "[containers][checksum][kernels]")
+{
+    usize ran = 0;
+    for (const KernelLevel<CrcKernels>& level : cc::crc_kernel_levels())
     {
-        if (crc.features.has(static_cast<crd::CpuFeature>(f)))
+        if (kernel_level_runs_here(level))
         {
-            variant.append(" +");
-            variant.append(crd::cpu_feature_name(static_cast<crd::CpuFeature>(f)));
+            ++ran;
+            char name[64] = {};
+            (void)crd::format_kernel_table(level.level, level.features, name, sizeof name);
+            INFO("crc " << name);
+            CHECK(cc::crc_self_check(*level.table) == nullptr);
         }
     }
-    WARN("checksum kernels ran: crc " << crd::cpu_level_name(crc.level) << variant.c_str() << ", hash "
-                                      << crd::cpu_level_name(hash.level));
+    for (const KernelLevel<HashKernels>& level : cc::hash_kernel_levels())
+    {
+        if (kernel_level_runs_here(level))
+        {
+            ++ran;
+            INFO("hash " << crd::cpu_level_name(level.level));
+            CHECK(cc::hash_self_check(*level.table) == nullptr);
+        }
+    }
+    CHECK(ran >= 2U);
+}
+
+TEST_CASE("checksum self-checks: a table with one wrong routine fails in that routine", "[containers][checksum]")
+{
+    const CrcKernels& portable = *cc::crc_kernel_levels()[0].table;
+    CHECK(cc::crc_self_check(portable) == nullptr);
+    CrcKernels wrong = portable;
+    wrong.crc32 = &crc32_one_bit_off;
+    CHECK(std::string_view{cc::crc_self_check(wrong)} == "crc32");
+    wrong.crc32 = &crc32_wrong_below_64; // only the short input catches it
+    CHECK(std::string_view{cc::crc_self_check(wrong)} == "crc32");
+    wrong = portable;
+    wrong.crc32c = &crc32c_one_bit_off;
+    CHECK(std::string_view{cc::crc_self_check(wrong)} == "crc32c");
+    const HashKernels& hash_portable = *cc::hash_kernel_levels()[0].table;
+    CHECK(cc::hash_self_check(hash_portable) == nullptr);
+    HashKernels wrong_hash = hash_portable;
+    wrong_hash.xxh3_accumulate = &xxh3_one_bit_off;
+    CHECK(std::string_view{cc::hash_self_check(wrong_hash)} == "xxh3_accumulate");
 }

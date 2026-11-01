@@ -1,15 +1,23 @@
 // DIAG.0 -- the diagnostics doctor's report and its dependency probes, including
-// the missing-symbolizer control (the fifth negative); DIAG.11c -- its modes against the lane. Contract:
-// docs/design/runtime-diagnostics.md; the doctor lives in crd-perf.
+// the missing-symbolizer control (the fifth negative); DIAG.11c -- its modes against the lane; HW-RESILIENCE.3 -- the
+// kernel families' self-checks. Contract: docs/design/runtime-diagnostics.md; the doctor lives in crd-perf.
 
 #include <crd/perf/doctor.hpp>
 
+#include <crd/containers/array.hpp>
+#include <crd/containers/checksum.hpp>
+#include <crd/containers/checksum_dispatch.hpp>
+#include <crd/core/fault_seam.hpp>
+#include <crd/core/kernel_dispatch.hpp>
 #include <crd/core/platform.hpp>
 #include <crd/diag/specimen_runner.hpp>
 #include <crd/perf/diagnostic_host.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>
+#include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <string_view>
 
@@ -33,6 +41,12 @@ void clear_env(const char* name)
 #else
     (void)unsetenv(name);
 #endif
+}
+
+bool fail_crc_above_portable(void* /*user*/, const char* family, crd::CpuLevel level,
+                             crd::CpuFeatureSet /*features*/) noexcept
+{
+    return std::string_view{family} == "containers.crc" && level != crd::CpuLevel::Portable;
 }
 } // namespace
 
@@ -63,6 +77,27 @@ TEST_CASE("doctor: reports the schema, host tuple and the diagnostic modes", "[d
     const auto* gpu = r.find_mode(cont::StringView{"gpu-fault"});
     REQUIRE(gpu != nullptr);
     CHECK_FALSE(gpu->compiled);
+}
+
+TEST_CASE("doctor: every kernel family the image links has run its self-check on the table it selected",
+          "[diag][doctor]")
+{
+    const cp::DoctorReport r = cp::run_doctor();
+    CHECK(r.kernel_demotions == 0U); // a sound CPU reproduces every known answer at every level
+    crd::u32 families = 0U;
+    bool crc = false;
+    for (const crd::KernelFamily* f = r.kernel_families; f != nullptr; f = f->next)
+    {
+        ++families;
+        INFO(f->name);
+        CHECK(f->result.status == crd::KernelCheckStatus::Passed);
+        CHECK(f->result.level == f->result.selected_level);
+        CHECK(f->result.failed_routine == nullptr);
+        crc = crc || std::string_view{f->name} == "containers.crc";
+    }
+    CHECK(crc); // the flight bundle's checksums link it into every diagnostics host
+    CHECK(families >= 2U);
+    CHECK(r.kernel_families == crd::kernel_families());
 }
 
 TEST_CASE("doctor: the instrument modes are the lane's, and an absent one names its build", "[diag][doctor]")
@@ -144,4 +179,72 @@ TEST_CASE("doctor: output-path writability is probed", "[diag][doctor]")
     const auto* out_ok = ok.find_dependency(cont::StringView{"output_path"});
     REQUIRE(out_ok != nullptr);
     CHECK(out_ok->present);
+}
+
+TEST_CASE("doctor child: the crc family resolves with every table above portable failed", "[.kernel-check-child]")
+{
+    namespace cc = crd::containers;
+    const crd::CpuSelection& s = crd::cpu_selection();
+    const crd::KernelLevel<cc::CrcKernels>& top = crd::select_kernel_level<cc::CrcKernels>(
+        cc::crc_kernel_levels(), s.selected, s.kernel_features, crd::kernel_level_cap());
+    const bool installed = crd::install_kernel_check_fault_hook(&fail_crc_above_portable, nullptr);
+    CHECK(installed == crd::fault_seams_compiled());
+    // The report resolves every family; the crc family's first resolution meets the hook.
+    const auto start = std::chrono::steady_clock::now();
+    const crd::u32 demoted = cp::report_kernel_self_checks(stdout);
+    const auto took = std::chrono::steady_clock::now() - start;
+    crd::uninstall_kernel_check_fault_hook();
+    const bool fell = installed && &top != cc::crc_kernel_levels().data();
+    CHECK(demoted == (fell ? 1U : 0U));
+    CHECK(&cc::crc_kernels() == (installed ? cc::crc_kernel_levels().data() : &top));
+    const crd::u8 bytes[] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
+    CHECK(cc::crc32(cc::ConstSpan<crd::u8>(bytes, sizeof bytes)) == 0xCBF43926U); // and it keeps running, right
+    const cp::DoctorReport r = cp::run_doctor();
+    CHECK(r.kernel_demotions == demoted);
+    for (const crd::KernelFamily* f = r.kernel_families; f != nullptr; f = f->next)
+    {
+        if (std::string_view{f->name} == "containers.crc")
+        {
+            CHECK(f->result.status == (fell ? crd::KernelCheckStatus::Demoted : crd::KernelCheckStatus::Passed));
+            CHECK(f->result.selected_level == top.level);
+            CHECK(f->result.level == (installed ? crd::CpuLevel::Portable : top.level));
+            CHECK(f->result.injected == fell);
+        }
+    }
+    std::printf("kernel check child: fell=%d, every family resolved and checked in %lld us\n", fell ? 1 : 0,
+                static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(took).count()));
+}
+
+TEST_CASE("doctor: a process whose crc tables fail their checks keeps running on the portable one and says why",
+          "[diag][doctor]")
+{
+    const cont::String self = crd::diag::self_executable();
+    REQUIRE_FALSE(self.empty());
+    cont::Array<cont::String> args;
+    args.push_back(cont::String{"[.kernel-check-child]"});
+    crd::diag::Expectation e;
+    e.timeout_ms = 60000U;
+    const crd::diag::Outcome o = crd::diag::run_specimen(self, args, e);
+    const std::string_view out{o.output.data(), o.output.size()};
+    INFO(out);
+    CHECK_FALSE(o.crashed);
+    CHECK_FALSE(o.timed_out);
+    CHECK(o.exit_code == 0);
+    CHECK(out.find("All tests passed") != std::string_view::npos);
+    const bool fell = out.find("kernel check child: fell=1,") != std::string_view::npos;
+    CHECK(fell != (out.find("kernel check child: fell=0,") != std::string_view::npos));
+    const std::size_t timing = out.find("kernel check child: fell=");
+    REQUIRE(timing != std::string_view::npos);
+    WARN(out.substr(timing, out.find('\n', timing) - timing));
+    // The line an application prints at startup names the family, the failed table and routine, and the table it runs.
+    CHECK((out.find("[crd] kernel family containers.crc failed its known answers on ") != std::string_view::npos) ==
+          fell);
+    CHECK((out.find(" in injected (fault seam); it runs portable") != std::string_view::npos) == fell);
+    // The child selects as this process does (it inherits CRD_CPU_LEVEL): it falls when a table above portable is
+    // selected and the seam is compiled.
+    namespace cc = crd::containers;
+    const crd::CpuSelection& s = crd::cpu_selection();
+    const crd::KernelLevel<cc::CrcKernels>& top = crd::select_kernel_level<cc::CrcKernels>(
+        cc::crc_kernel_levels(), s.selected, s.kernel_features, crd::kernel_level_cap());
+    CHECK(fell == (crd::fault_seams_compiled() && &top != cc::crc_kernel_levels().data()));
 }

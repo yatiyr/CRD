@@ -4,6 +4,7 @@
 #include <crd/app/events/window_events.hpp>
 #include <crd/perf/diagnostic_host.hpp>
 #include <crd/perf/diagnostics.hpp>
+#include <crd/perf/doctor.hpp>
 #include <crd/perf/hardware_identity.hpp>
 
 #include <cstdio>
@@ -22,19 +23,26 @@ Application::Application(const ApplicationDesc& desc)
             return;
         }
     }
-    else if (m_desc.install_crash_handler)
+    else
     {
-        m_crash_installed                  = true;
-        const crd::crash::InstallResult ir = crd::crash::install(m_desc.crash_dir);
-        if (ir != crd::crash::InstallResult::Ok && ir != crd::crash::InstallResult::OkReinstalled &&
-            ir != crd::crash::InstallResult::OkReplacedForeignFilter)
+        // HW-RESILIENCE.3: every kernel family checks its table before the application uses it (a diagnostic host
+        // has done so at its start).
+        (void)crd::perf::report_kernel_self_checks(stderr);
+        if (m_desc.install_crash_handler)
         {
-            std::fprintf(stderr, "[crd] crash handler install failed (result %u); continuing without dumps\n",
-                         static_cast<unsigned>(ir));
-        }
-        else
-        {
-            (void)crd::perf::attach_hardware_identity_to_crashes(); // HW-RESILIENCE.2: every dump names the machine
+            m_crash_installed = true;
+            const crd::crash::InstallResult ir = crd::crash::install(m_desc.crash_dir);
+            if (ir != crd::crash::InstallResult::Ok && ir != crd::crash::InstallResult::OkReinstalled &&
+                ir != crd::crash::InstallResult::OkReplacedForeignFilter)
+            {
+                std::fprintf(stderr, "[crd] crash handler install failed (result %u); continuing without dumps\n",
+                             static_cast<unsigned>(ir));
+            }
+            else
+            {
+                // HW-RESILIENCE.2: every dump names the machine
+                (void)crd::perf::attach_hardware_identity_to_crashes();
+            }
         }
     }
 

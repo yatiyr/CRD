@@ -8,12 +8,16 @@
 #include "transcendental_refs.inc" // crd::math::txref::ref_<fn>_x
 
 #include <crd/core/cpu_features.hpp>
+#include <crd/core/fault_seam.hpp>
+#include <crd/core/kernel_dispatch.hpp>
 #include <crd/math/float_convert.hpp>
 #include <crd/math/kernel_dispatch.hpp>
 #include <crd/math/scalar_dispatch.hpp>
 
 #include <bit>
 #include <catch2/catch_test_macros.hpp>
+#include <cstddef>
+#include <string_view>
 #include <type_traits>
 
 using crd::CpuLevel;
@@ -172,6 +176,155 @@ TEST_CASE("kernel dispatch: a feature variant runs only where its level runs and
     CHECK(pick(CpuLevel::Avx512, both, CpuLevel::Avx2) == 3);    // the build's cap
     CHECK(pick(CpuLevel::Sse42, both, CpuLevel::Avx512) == 0);   // the features never lift the level
     CHECK(pick(CpuLevel::Neon, both, CpuLevel::Avx512) == 0);
+}
+
+namespace
+{
+
+// A family of six fake tables whose self-check fails the ones marked in g_fake_fails.
+int g_fake_tables[6] = {};
+bool g_fake_fails[6] = {};
+
+const char* fake_check(const int& table) noexcept
+{
+    return g_fake_fails[&table - g_fake_tables] ? "fake_routine" : nullptr;
+}
+
+struct FakeFamily
+{
+    crd::KernelLevel<int> levels[6] = {
+        {CpuLevel::Portable, &g_fake_tables[0], {}},
+        {CpuLevel::Sse2, &g_fake_tables[1], {}},
+        {CpuLevel::Avx2, &g_fake_tables[2], {}},
+        {CpuLevel::Avx2, &g_fake_tables[3], crd::CpuFeatureSet{}.with(crd::CpuFeature::AvxVnni)},
+        {CpuLevel::Avx512, &g_fake_tables[4], crd::CpuFeatureSet{}.with(crd::CpuFeature::Avx512Vnni)},
+        {CpuLevel::Avx512, &g_fake_tables[5], crd::CpuFeatureSet{}.with(crd::CpuFeature::Gfni)}};
+    FakeFamily()
+    {
+        for (bool& f : g_fake_fails)
+        {
+            f = false;
+        }
+    }
+    // The checked choice at `selected` with AVX-VNNI (and nothing else beyond the level), under the avx512 cap.
+    std::ptrdiff_t pick(CpuLevel selected, crd::KernelCheckResult& result, const char* family = "test.fake") const
+    {
+        const crd::CpuFeatureSet features = crd::CpuFeatureSet{}.with(crd::CpuFeature::AvxVnni);
+        return crd::select_checked_kernel_level<int>(levels, selected, features, CpuLevel::Avx512, family, &fake_check,
+                                                     result)
+                   .table -
+               g_fake_tables;
+    }
+};
+
+bool fail_fake_avx2(void* user, const char* family, CpuLevel level, crd::CpuFeatureSet /*features*/) noexcept
+{
+    ++*static_cast<int*>(user);
+    return std::string_view{family} == "test.fake" && level == CpuLevel::Avx2;
+}
+
+} // namespace
+
+TEST_CASE("kernel self-check: the selected table runs when its known answers hold", "[math][kernels]")
+{
+    const FakeFamily fake;
+    crd::KernelCheckResult r;
+    CHECK(fake.pick(CpuLevel::Avx2, r) == 3); // the AVX-VNNI variant
+    CHECK(r.status == crd::KernelCheckStatus::Passed);
+    CHECK(r.selected_level == CpuLevel::Avx2);
+    CHECK(r.selected_features.has(crd::CpuFeature::AvxVnni));
+    CHECK(r.level == CpuLevel::Avx2);
+    CHECK(r.features == r.selected_features);
+    CHECK(r.failed_routine == nullptr);
+    CHECK(r.tables_failed == 0U);
+}
+
+TEST_CASE("kernel self-check: a failing table gives way to the next eligible one below it", "[math][kernels]")
+{
+    const FakeFamily fake;
+    crd::KernelCheckResult r;
+    g_fake_fails[3] = true; // the variant fails: its level's plain table runs
+    CHECK(fake.pick(CpuLevel::Avx2, r) == 2);
+    CHECK(r.status == crd::KernelCheckStatus::Demoted);
+    CHECK(r.selected_level == CpuLevel::Avx2);
+    CHECK(r.selected_features.has(crd::CpuFeature::AvxVnni));
+    CHECK(r.level == CpuLevel::Avx2);
+    CHECK(r.features == crd::CpuFeatureSet{});
+    CHECK(std::string_view{r.failed_routine} == "fake_routine");
+    CHECK_FALSE(r.injected);
+    CHECK(r.tables_failed == 1U);
+
+    g_fake_fails[2] = true; // and the plain table: sse2 runs
+    CHECK(fake.pick(CpuLevel::Avx2, r) == 1);
+    CHECK(r.status == crd::KernelCheckStatus::Demoted);
+    CHECK(r.level == CpuLevel::Sse2);
+    CHECK(r.tables_failed == 2U);
+
+    // At avx512 neither avx512 table is eligible (no AVX512-VNNI, no GFNI): the walk starts at the avx2 variant and
+    // never checks a table the selection would not run.
+    CHECK(fake.pick(CpuLevel::Avx512, r) == 1);
+    CHECK(r.selected_level == CpuLevel::Avx2);
+    CHECK(r.tables_failed == 2U);
+}
+
+TEST_CASE("kernel self-check: when every table fails the portable one runs and the floor failure is reported",
+          "[math][kernels]")
+{
+    const FakeFamily fake;
+    crd::KernelCheckResult r;
+    for (bool& f : g_fake_fails)
+    {
+        f = true;
+    }
+    CHECK(fake.pick(CpuLevel::Avx2, r) == 0);
+    CHECK(r.status == crd::KernelCheckStatus::FloorFailed);
+    CHECK(r.level == CpuLevel::Portable);
+    CHECK(r.tables_failed == 4U); // the variant, avx2, sse2 and portable
+    CHECK(fake.pick(CpuLevel::Portable, r) == 0);
+    CHECK(r.status == crd::KernelCheckStatus::FloorFailed);
+    CHECK(r.tables_failed == 1U);
+}
+
+TEST_CASE("kernel self-check: the kernel-check fault seam fails the tables its hook names", "[math][kernels]")
+{
+    const FakeFamily fake;
+    crd::KernelCheckResult r;
+    int consulted = 0;
+    if (!crd::fault_seams_compiled())
+    {
+        CHECK_FALSE(crd::install_kernel_check_fault_hook(&fail_fake_avx2, &consulted));
+        CHECK(fake.pick(CpuLevel::Avx2, r) == 3);
+        CHECK(consulted == 0);
+        return;
+    }
+    REQUIRE(crd::install_kernel_check_fault_hook(&fail_fake_avx2, &consulted));
+    CHECK_FALSE(crd::install_kernel_check_fault_hook(&fail_fake_avx2, &consulted)); // one hook
+    CHECK(fake.pick(CpuLevel::Avx2, r) == 1); // both avx2 tables are failed: sse2 runs
+    CHECK(r.status == crd::KernelCheckStatus::Demoted);
+    CHECK(r.injected);
+    CHECK(std::string_view{r.failed_routine} == "injected");
+    CHECK(r.tables_failed == 2U);
+    CHECK(consulted == 3);
+    CHECK(fake.pick(CpuLevel::Avx2, r, "test.other") == 3); // another family is untouched
+    CHECK(r.status == crd::KernelCheckStatus::Passed);
+    crd::uninstall_kernel_check_fault_hook();
+    CHECK(fake.pick(CpuLevel::Avx2, r) == 3);
+    CHECK(r.status == crd::KernelCheckStatus::Passed);
+}
+
+TEST_CASE("kernel self-check: a table is named by its level and variant features", "[math][kernels]")
+{
+    char line[64] = {};
+    const crd::CpuFeatureSet clmul = crd::CpuFeatureSet{}.with(crd::CpuFeature::Pclmulqdq);
+    CHECK(crd::format_kernel_table(CpuLevel::Sse42, clmul, line, sizeof line) == 17U);
+    CHECK(std::string_view{line} == "sse4.2 +pclmulqdq");
+    CHECK(crd::format_kernel_table(CpuLevel::Neon,
+                                   crd::CpuFeatureSet{}.with(crd::CpuFeature::Crc32).with(crd::CpuFeature::Pmull), line,
+                                   sizeof line) == 18U);
+    CHECK(std::string_view{line} == "neon +crc32 +pmull");
+    CHECK(crd::format_kernel_table(CpuLevel::Sse42, clmul, line, 7U) == 17U); // cut, terminated
+    CHECK(std::string_view{line} == "sse4.2");
+    CHECK(std::string_view{crd::kernel_check_status_name(crd::KernelCheckStatus::FloorFailed)} == "floor-failed");
 }
 
 TEST_CASE("float conversion kernels: the archive holds portable and each body level the build compiles",

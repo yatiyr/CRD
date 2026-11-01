@@ -6,7 +6,8 @@
 // dependencies, so a host (or a test) can ask "what diagnostics does this build
 // actually have?" Each row is read from this build or this host, never assumed: the build identity (platform,
 // arch, compiler version, configuration and its sanitizer) names the tuple and the instrument modes, the CPU selection
-// names the detected and selected dispatch levels and the CRD_CPU_LEVEL override's standing, a mode that needs
+// names the detected and selected dispatch levels and the CRD_CPU_LEVEL override's standing, every kernel family's
+// known-answer self-check (HW-RESILIENCE.3) says which table it runs and why, a mode that needs
 // another build says which switch builds it, and a platform with no backend reports the mode absent and names its
 // later-platform owner (MAC.DIAG, WEB.DIAG). Live modes read the host's instances (DoctorLive): the DIAG.9b flight
 // recorder and fault injection, and the upper-module command names registered with its service (controlled replay and
@@ -19,7 +20,10 @@
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/cpu_features.hpp>
+#include <crd/core/kernel_dispatch.hpp>
 #include <crd/core/types.hpp>
+
+#include <cstdio>
 
 namespace crd::perf
 {
@@ -53,6 +57,10 @@ struct DoctorReport
     cont::String host_tuple;         // platform/arch/compiler version/configuration
     crd::CpuSelection cpu;           // the process's CPU level selection (ADR-0134 §8)
     crd::CpuRuntimeDispatch cpu_crt; // the C runtime's own dispatch in this image (crt_level -1: none)
+    // Every kernel family this image links, resolved and self-checked (crd::run_kernel_self_checks), and how many
+    // of them run a table below their selected one.
+    const crd::KernelFamily* kernel_families = nullptr;
+    crd::u32 kernel_demotions = 0U;
     cont::Array<DiagnosticMode> modes;
     cont::Array<DiagnosticDependency> dependencies;
 
@@ -86,5 +94,11 @@ struct DoctorLive
 // "external-io-replay" is never compiled, enabled or usable, in any build: a run record holds no external I/O
 // results, and a replay of a program that needs them is refused before it runs (DIAG.9b).
 DoctorReport run_doctor(cont::StringView output_dir = cont::StringView{}, const DoctorLive& live = DoctorLive{});
+
+// HW-RESILIENCE.3, at startup: runs every kernel family's known-answer self-check (crd::run_kernel_self_checks) and
+// writes one line per family that does not run its selected table to `out` (nullptr: none): "[crd] kernel family
+// <name> failed its known answers on <table> in <routine>; it runs <table> (<status>, <n> tables failed)". Returns
+// how many families that is. A diagnostic host's start and an Application without one call it.
+crd::u32 report_kernel_self_checks(std::FILE* out) noexcept;
 
 } // namespace crd::perf

@@ -1134,6 +1134,26 @@ crd::usize format_cpu_selection(const CpuSelection& s, const CpuRuntimeDispatch&
     return w.length;
 }
 
+crd::usize format_kernel_table(CpuLevel level, CpuFeatureSet features, char* out, crd::usize capacity) noexcept
+{
+    LineWriter w{out, out == nullptr ? 0U : capacity};
+    w.put(cpu_level_name(level));
+    for (crd::u32 i = 0U; i < static_cast<crd::u32>(CpuFeature::Count); ++i)
+    {
+        const auto f = static_cast<CpuFeature>(i);
+        if (features.has(f))
+        {
+            w.put(" +");
+            w.put(cpu_feature_name(f));
+        }
+    }
+    if (w.capacity > 0U)
+    {
+        out[w.length < w.capacity ? w.length : w.capacity - 1U] = '\0';
+    }
+    return w.length;
+}
+
 bool cpu_level_includes(CpuLevel have, CpuLevel want) noexcept
 {
     if (want == CpuLevel::Portable)

@@ -286,6 +286,11 @@ extern bool libc_fma_fused; // NOLINT(cppcoreguidelines-avoid-non-const-global-v
 [[nodiscard]] crd::usize format_cpu_selection(const CpuSelection& selection, const CpuRuntimeDispatch& crt, char* out,
                                               crd::usize capacity) noexcept;
 
+// A kernel table as the doctor names it (crd/core/kernel_dispatch.hpp): the level, then " +<feature>" per variant
+// feature ("sse4.2 +pclmulqdq"). Writes at most capacity - 1 characters and a terminating NUL (capacity > 0) and
+// returns the full length.
+[[nodiscard]] crd::usize format_kernel_table(CpuLevel level, CpuFeatureSet features, char* out,
+                                             crd::usize capacity) noexcept;
 // The CPU's identity for diagnostics and hardware-fault classification (HW-RESILIENCE.2): the part and the microcode
 // it runs, never its features. The CPUID words come from the CPU the calling thread runs on, the OS's values from its
 // first CPU. Text is NUL-terminated, cut to its buffer, leading and trailing spaces trimmed.

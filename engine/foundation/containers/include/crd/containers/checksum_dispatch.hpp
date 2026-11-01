@@ -17,4 +17,9 @@ namespace crd::containers
 [[nodiscard]] std::span<const crd::KernelLevel<HashKernels>> hash_kernel_levels() noexcept;
 [[nodiscard]] const crd::KernelLevel<HashKernels>& hash_kernels() noexcept;
 
+// The families' known-answer self-checks (HW-RESILIENCE.3, crd/core/kernel_dispatch.hpp), which their resolution runs:
+// nullptr when every routine of `table` reproduces its known answers, else the name of the first that did not.
+[[nodiscard]] const char* crc_self_check(const CrcKernels& table) noexcept;
+[[nodiscard]] const char* hash_self_check(const HashKernels& table) noexcept;
+
 } // namespace crd::containers
