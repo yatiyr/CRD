@@ -2,6 +2,8 @@
 // Data: docs/bench/2026-10-30-simd-dispatch-fft-f32-arms.json (bench_fft_f32):
 //   portable, sse2, avx2: at 7cd38660 with the fft kernel level line on the i9-14900K (WSL2)
 //   (docs/bench/2026-10-30-simd-dispatch-fft-board.md#board-3-the-per-level-plans).
+//   avx512: at 1228a0b1 on the benchmark machine (Xeon Platinum 8581C)
+//   (docs/bench/2026-11-01-simd-perf-fft-avx512-level-plans.md).
 // Data: docs/bench/2026-10-30-simd-dispatch-fft-f64-arms.json (bench_fft_vs_refs):
 //   portable, sse2, avx2: at e0c70766 with the f64 forward arms on the i9-14900K (WSL2)
 //   (docs/bench/2026-10-30-simd-dispatch-fft-board.md#board-4-the-f64-plans-and-the-avx2-re-run).
@@ -32,84 +34,97 @@ struct FftLevelPlan
 };
 
 inline constexpr FftLevelPlan kFftLevelPlans[] = {
-    {4, crd::CpuLevel::Portable, 10, FftAlgorithm::Stockham},   // 0.005; standalone-hier 0.009
-    {4, crd::CpuLevel::Portable, 11, FftAlgorithm::Stockham},   // 0.017; ip4 0.024
-    {4, crd::CpuLevel::Portable, 12, FftAlgorithm::Stockham},   // 0.028; standalone-hier 0.057
-    {4, crd::CpuLevel::Portable, 13, FftAlgorithm::Stockham},   // 0.091; standalone-hier 0.14
-    {4, crd::CpuLevel::Portable, 14, FftAlgorithm::Stockham},   // 0.184; ip4 0.285
-    {4, crd::CpuLevel::Portable, 15, FftAlgorithm::Stockham},   // 0.478; ip4 0.631
-    {4, crd::CpuLevel::Portable, 16, FftAlgorithm::SixStep},    // 0.94; ip4 1.37
-    {4, crd::CpuLevel::Portable, 17, FftAlgorithm::FourStep},   // 2.612; deep-split-4 2.89
-    {4, crd::CpuLevel::Portable, 18, FftAlgorithm::SixStep},    // 4.414; deep-split-4 6.525
-    {4, crd::CpuLevel::Portable, 19, FftAlgorithm::FourStep},   // 11.427; deep-split-4 17.727
-    {4, crd::CpuLevel::Portable, 20, FftAlgorithm::FourStep},   // 25.568; tiled-four-step 33.502
-    {4, crd::CpuLevel::Portable, 21, FftAlgorithm::FourStep},   // 53.086
-    {4, crd::CpuLevel::Portable, 22, FftAlgorithm::FourStep},   // 113.734
-    {4, crd::CpuLevel::Sse2, 10, FftAlgorithm::Stockham},       // 0.004; standalone-hier 0.006
-    {4, crd::CpuLevel::Sse2, 11, FftAlgorithm::FourStep},       // 0.012; ip4 0.018
-    {4, crd::CpuLevel::Sse2, 12, FftAlgorithm::Stockham},       // 0.023; standalone-hier 0.032
-    {4, crd::CpuLevel::Sse2, 13, FftAlgorithm::FourStep},       // 0.066; standalone-hier 0.071
-    {4, crd::CpuLevel::Sse2, 14, FftAlgorithm::Stockham},       // 0.133; ip4 0.223
-    {4, crd::CpuLevel::Sse2, 15, FftAlgorithm::Stockham},       // 0.329; ip4 0.482
-    {4, crd::CpuLevel::Sse2, 16, FftAlgorithm::Stockham},       // 0.667; ip4 1.067
-    {4, crd::CpuLevel::Sse2, 17, FftAlgorithm::FourStep},       // 1.523; deep-split-4 1.81
-    {4, crd::CpuLevel::Sse2, 18, FftAlgorithm::FourStep},       // 3.024; deep-split-4 4.052
-    {4, crd::CpuLevel::Sse2, 19, FftAlgorithm::FourStep},       // 6.003; deep-split-4 8.176
-    {4, crd::CpuLevel::Sse2, 20, FftAlgorithm::FourStep},       // 13.639; tiled-four-step 16.869
-    {4, crd::CpuLevel::Sse2, 21, FftAlgorithm::FourStep},       // 28.188
-    {4, crd::CpuLevel::Sse2, 22, FftAlgorithm::FourStep},       // 62.108
-    {4, crd::CpuLevel::Avx2, 10, FftAlgorithm::StandaloneHier}, // 0.001
-    {4, crd::CpuLevel::Avx2, 11, FftAlgorithm::Ip4},            // 0.001
-    {4, crd::CpuLevel::Avx2, 12, FftAlgorithm::StandaloneHier}, // 0.003
-    {4, crd::CpuLevel::Avx2, 13, FftAlgorithm::StandaloneHier}, // 0.007
-    {4, crd::CpuLevel::Avx2, 14, FftAlgorithm::Ip4},            // 0.015
-    {4, crd::CpuLevel::Avx2, 15, FftAlgorithm::Ip4},            // 0.032
-    {4, crd::CpuLevel::Avx2, 16, FftAlgorithm::Ip4},            // 0.071
-    {4, crd::CpuLevel::Avx2, 17, FftAlgorithm::DeepSplit4},     // 0.185
-    {4, crd::CpuLevel::Avx2, 18, FftAlgorithm::DeepSplit4},     // 0.519
-    {4, crd::CpuLevel::Avx2, 19, FftAlgorithm::DeepSplit4},     // 1.172
-    {4, crd::CpuLevel::Avx2, 20, FftAlgorithm::TiledFourStep},  // 2.161
-    {4, crd::CpuLevel::Avx2, 21, FftAlgorithm::FourStep},       // 6.572
-    {4, crd::CpuLevel::Avx2, 22, FftAlgorithm::FourStep},       // 13.908
-    {8, crd::CpuLevel::Portable, 10, FftAlgorithm::FourStep},   // 0.009; ip4 0.011
-    {8, crd::CpuLevel::Portable, 11, FftAlgorithm::FourStep},   // 0.021; ip4 0.024
-    {8, crd::CpuLevel::Portable, 12, FftAlgorithm::FourStep},   // 0.056; ip4 0.062
-    {8, crd::CpuLevel::Portable, 13, FftAlgorithm::DeepSplit4}, // 0.12; ip4 0.134
-    {8, crd::CpuLevel::Portable, 14, FftAlgorithm::DeepSplit3}, // 0.278; ip4 0.303
-    {8, crd::CpuLevel::Portable, 15, FftAlgorithm::Ip4},        // 0.654
-    {8, crd::CpuLevel::Portable, 16, FftAlgorithm::SixStep},    // 1.416; ip4 1.477
-    {8, crd::CpuLevel::Portable, 17, FftAlgorithm::FourStep},   // 2.952; deep-split-4 3.295
-    {8, crd::CpuLevel::Portable, 18, FftAlgorithm::FourStep},   // 6.659; deep-split-4 7.295
-    {8, crd::CpuLevel::Portable, 19, FftAlgorithm::FourStep},   // 10.185; deep-split-4 16.493
-    {8, crd::CpuLevel::Portable, 20, FftAlgorithm::SixStep},    // 31.123
-    {8, crd::CpuLevel::Portable, 21, FftAlgorithm::FourStep},   // 61.128
-    {8, crd::CpuLevel::Portable, 22, FftAlgorithm::FourStep},   // 136.805
-    {8, crd::CpuLevel::Sse2, 10, FftAlgorithm::Stockham},       // 0.014; ip4 0.016
-    {8, crd::CpuLevel::Sse2, 11, FftAlgorithm::FourStep},       // 0.034; ip4 0.037
-    {8, crd::CpuLevel::Sse2, 12, FftAlgorithm::FourStep},       // 0.076; ip4 0.092
-    {8, crd::CpuLevel::Sse2, 13, FftAlgorithm::FourStep},       // 0.176; ip4 0.204
-    {8, crd::CpuLevel::Sse2, 14, FftAlgorithm::FourStep},       // 0.393; ip4 0.458
-    {8, crd::CpuLevel::Sse2, 15, FftAlgorithm::Ip4},            // 0.993
-    {8, crd::CpuLevel::Sse2, 16, FftAlgorithm::SixStep},        // 2.02; ip4 2.209
-    {8, crd::CpuLevel::Sse2, 17, FftAlgorithm::FourStep},       // 4.116; deep-split-4 5.313
-    {8, crd::CpuLevel::Sse2, 18, FftAlgorithm::FourStep},       // 9.103; deep-split-4 11.424
-    {8, crd::CpuLevel::Sse2, 19, FftAlgorithm::FourStep},       // 12.744; deep-split-4 24.513
-    {8, crd::CpuLevel::Sse2, 20, FftAlgorithm::SixStep},        // 45.365
-    {8, crd::CpuLevel::Sse2, 21, FftAlgorithm::FourStep},       // 87.435
-    {8, crd::CpuLevel::Sse2, 22, FftAlgorithm::FourStep},       // 186.264
-    {8, crd::CpuLevel::Avx2, 10, FftAlgorithm::Ip4},            // 0.001
-    {8, crd::CpuLevel::Avx2, 11, FftAlgorithm::StandaloneHier}, // 0.003; ip4 0.004
-    {8, crd::CpuLevel::Avx2, 12, FftAlgorithm::Ip4},            // 0.007
-    {8, crd::CpuLevel::Avx2, 13, FftAlgorithm::Ip4},            // 0.016
-    {8, crd::CpuLevel::Avx2, 14, FftAlgorithm::Ip4},            // 0.032
-    {8, crd::CpuLevel::Avx2, 15, FftAlgorithm::Ip4},            // 0.074
-    {8, crd::CpuLevel::Avx2, 16, FftAlgorithm::Ip4},            // 0.159
-    {8, crd::CpuLevel::Avx2, 17, FftAlgorithm::DeepSplit4},     // 0.598
-    {8, crd::CpuLevel::Avx2, 18, FftAlgorithm::DeepSplit4},     // 1.405
-    {8, crd::CpuLevel::Avx2, 19, FftAlgorithm::DeepSplit4},     // 3.072
-    {8, crd::CpuLevel::Avx2, 20, FftAlgorithm::SixStep},        // 5.878
-    {8, crd::CpuLevel::Avx2, 21, FftAlgorithm::FourStep},       // 11.948
-    {8, crd::CpuLevel::Avx2, 22, FftAlgorithm::FourStep},       // 26.89
+    {4, crd::CpuLevel::Portable, 10, FftAlgorithm::Stockham},     // 0.005; standalone-hier 0.009
+    {4, crd::CpuLevel::Portable, 11, FftAlgorithm::Stockham},     // 0.017; ip4 0.024
+    {4, crd::CpuLevel::Portable, 12, FftAlgorithm::Stockham},     // 0.028; standalone-hier 0.057
+    {4, crd::CpuLevel::Portable, 13, FftAlgorithm::Stockham},     // 0.091; standalone-hier 0.14
+    {4, crd::CpuLevel::Portable, 14, FftAlgorithm::Stockham},     // 0.184; ip4 0.285
+    {4, crd::CpuLevel::Portable, 15, FftAlgorithm::Stockham},     // 0.478; ip4 0.631
+    {4, crd::CpuLevel::Portable, 16, FftAlgorithm::SixStep},      // 0.94; ip4 1.37
+    {4, crd::CpuLevel::Portable, 17, FftAlgorithm::FourStep},     // 2.612; deep-split-4 2.89
+    {4, crd::CpuLevel::Portable, 18, FftAlgorithm::SixStep},      // 4.414; deep-split-4 6.525
+    {4, crd::CpuLevel::Portable, 19, FftAlgorithm::FourStep},     // 11.427; deep-split-4 17.727
+    {4, crd::CpuLevel::Portable, 20, FftAlgorithm::FourStep},     // 25.568; tiled-four-step 33.502
+    {4, crd::CpuLevel::Portable, 21, FftAlgorithm::FourStep},     // 53.086
+    {4, crd::CpuLevel::Portable, 22, FftAlgorithm::FourStep},     // 113.734
+    {4, crd::CpuLevel::Sse2, 10, FftAlgorithm::Stockham},         // 0.004; standalone-hier 0.006
+    {4, crd::CpuLevel::Sse2, 11, FftAlgorithm::FourStep},         // 0.012; ip4 0.018
+    {4, crd::CpuLevel::Sse2, 12, FftAlgorithm::Stockham},         // 0.023; standalone-hier 0.032
+    {4, crd::CpuLevel::Sse2, 13, FftAlgorithm::FourStep},         // 0.066; standalone-hier 0.071
+    {4, crd::CpuLevel::Sse2, 14, FftAlgorithm::Stockham},         // 0.133; ip4 0.223
+    {4, crd::CpuLevel::Sse2, 15, FftAlgorithm::Stockham},         // 0.329; ip4 0.482
+    {4, crd::CpuLevel::Sse2, 16, FftAlgorithm::Stockham},         // 0.667; ip4 1.067
+    {4, crd::CpuLevel::Sse2, 17, FftAlgorithm::FourStep},         // 1.523; deep-split-4 1.81
+    {4, crd::CpuLevel::Sse2, 18, FftAlgorithm::FourStep},         // 3.024; deep-split-4 4.052
+    {4, crd::CpuLevel::Sse2, 19, FftAlgorithm::FourStep},         // 6.003; deep-split-4 8.176
+    {4, crd::CpuLevel::Sse2, 20, FftAlgorithm::FourStep},         // 13.639; tiled-four-step 16.869
+    {4, crd::CpuLevel::Sse2, 21, FftAlgorithm::FourStep},         // 28.188
+    {4, crd::CpuLevel::Sse2, 22, FftAlgorithm::FourStep},         // 62.108
+    {4, crd::CpuLevel::Avx2, 10, FftAlgorithm::StandaloneHier},   // 0.001
+    {4, crd::CpuLevel::Avx2, 11, FftAlgorithm::Ip4},              // 0.001
+    {4, crd::CpuLevel::Avx2, 12, FftAlgorithm::StandaloneHier},   // 0.003
+    {4, crd::CpuLevel::Avx2, 13, FftAlgorithm::StandaloneHier},   // 0.007
+    {4, crd::CpuLevel::Avx2, 14, FftAlgorithm::Ip4},              // 0.015
+    {4, crd::CpuLevel::Avx2, 15, FftAlgorithm::Ip4},              // 0.032
+    {4, crd::CpuLevel::Avx2, 16, FftAlgorithm::Ip4},              // 0.071
+    {4, crd::CpuLevel::Avx2, 17, FftAlgorithm::DeepSplit4},       // 0.185
+    {4, crd::CpuLevel::Avx2, 18, FftAlgorithm::DeepSplit4},       // 0.519
+    {4, crd::CpuLevel::Avx2, 19, FftAlgorithm::DeepSplit4},       // 1.172
+    {4, crd::CpuLevel::Avx2, 20, FftAlgorithm::TiledFourStep},    // 2.161
+    {4, crd::CpuLevel::Avx2, 21, FftAlgorithm::FourStep},         // 6.572
+    {4, crd::CpuLevel::Avx2, 22, FftAlgorithm::FourStep},         // 13.908
+    {4, crd::CpuLevel::Avx512, 10, FftAlgorithm::StandaloneHier}, // 0.00061
+    {4, crd::CpuLevel::Avx512, 11, FftAlgorithm::InPlace3},       // 0.00131
+    {4, crd::CpuLevel::Avx512, 12, FftAlgorithm::InPlace3},       // 0.00292
+    {4, crd::CpuLevel::Avx512, 13, FftAlgorithm::InPlace3},       // 0.00786
+    {4, crd::CpuLevel::Avx512, 14, FftAlgorithm::InPlace3},       // 0.01698
+    {4, crd::CpuLevel::Avx512, 15, FftAlgorithm::DeepSplit4},     // 0.03951; ip4 0.05027
+    {4, crd::CpuLevel::Avx512, 16, FftAlgorithm::DeepSplit4},     // 0.08764; ip4 0.12018
+    {4, crd::CpuLevel::Avx512, 17, FftAlgorithm::DeepSplit4},     // 0.2652
+    {4, crd::CpuLevel::Avx512, 18, FftAlgorithm::DeepSplit3},     // 0.62441; deep-split-4 0.65375
+    {4, crd::CpuLevel::Avx512, 19, FftAlgorithm::DeepSplit4},     // 1.33018
+    {4, crd::CpuLevel::Avx512, 20, FftAlgorithm::TiledFourStep},  // 2.66472
+    {4, crd::CpuLevel::Avx512, 21, FftAlgorithm::DeepSplit4},     // 6.11777; four-step 9.91399
+    {4, crd::CpuLevel::Avx512, 22, FftAlgorithm::DeepSplit4},     // 15.0101; four-step 21.6045
+    {8, crd::CpuLevel::Portable, 10, FftAlgorithm::FourStep},     // 0.009; ip4 0.011
+    {8, crd::CpuLevel::Portable, 11, FftAlgorithm::FourStep},     // 0.021; ip4 0.024
+    {8, crd::CpuLevel::Portable, 12, FftAlgorithm::FourStep},     // 0.056; ip4 0.062
+    {8, crd::CpuLevel::Portable, 13, FftAlgorithm::DeepSplit4},   // 0.12; ip4 0.134
+    {8, crd::CpuLevel::Portable, 14, FftAlgorithm::DeepSplit3},   // 0.278; ip4 0.303
+    {8, crd::CpuLevel::Portable, 15, FftAlgorithm::Ip4},          // 0.654
+    {8, crd::CpuLevel::Portable, 16, FftAlgorithm::SixStep},      // 1.416; ip4 1.477
+    {8, crd::CpuLevel::Portable, 17, FftAlgorithm::FourStep},     // 2.952; deep-split-4 3.295
+    {8, crd::CpuLevel::Portable, 18, FftAlgorithm::FourStep},     // 6.659; deep-split-4 7.295
+    {8, crd::CpuLevel::Portable, 19, FftAlgorithm::FourStep},     // 10.185; deep-split-4 16.493
+    {8, crd::CpuLevel::Portable, 20, FftAlgorithm::SixStep},      // 31.123
+    {8, crd::CpuLevel::Portable, 21, FftAlgorithm::FourStep},     // 61.128
+    {8, crd::CpuLevel::Portable, 22, FftAlgorithm::FourStep},     // 136.805
+    {8, crd::CpuLevel::Sse2, 10, FftAlgorithm::Stockham},         // 0.014; ip4 0.016
+    {8, crd::CpuLevel::Sse2, 11, FftAlgorithm::FourStep},         // 0.034; ip4 0.037
+    {8, crd::CpuLevel::Sse2, 12, FftAlgorithm::FourStep},         // 0.076; ip4 0.092
+    {8, crd::CpuLevel::Sse2, 13, FftAlgorithm::FourStep},         // 0.176; ip4 0.204
+    {8, crd::CpuLevel::Sse2, 14, FftAlgorithm::FourStep},         // 0.393; ip4 0.458
+    {8, crd::CpuLevel::Sse2, 15, FftAlgorithm::Ip4},              // 0.993
+    {8, crd::CpuLevel::Sse2, 16, FftAlgorithm::SixStep},          // 2.02; ip4 2.209
+    {8, crd::CpuLevel::Sse2, 17, FftAlgorithm::FourStep},         // 4.116; deep-split-4 5.313
+    {8, crd::CpuLevel::Sse2, 18, FftAlgorithm::FourStep},         // 9.103; deep-split-4 11.424
+    {8, crd::CpuLevel::Sse2, 19, FftAlgorithm::FourStep},         // 12.744; deep-split-4 24.513
+    {8, crd::CpuLevel::Sse2, 20, FftAlgorithm::SixStep},          // 45.365
+    {8, crd::CpuLevel::Sse2, 21, FftAlgorithm::FourStep},         // 87.435
+    {8, crd::CpuLevel::Sse2, 22, FftAlgorithm::FourStep},         // 186.264
+    {8, crd::CpuLevel::Avx2, 10, FftAlgorithm::Ip4},              // 0.001
+    {8, crd::CpuLevel::Avx2, 11, FftAlgorithm::StandaloneHier},   // 0.003; ip4 0.004
+    {8, crd::CpuLevel::Avx2, 12, FftAlgorithm::Ip4},              // 0.007
+    {8, crd::CpuLevel::Avx2, 13, FftAlgorithm::Ip4},              // 0.016
+    {8, crd::CpuLevel::Avx2, 14, FftAlgorithm::Ip4},              // 0.032
+    {8, crd::CpuLevel::Avx2, 15, FftAlgorithm::Ip4},              // 0.074
+    {8, crd::CpuLevel::Avx2, 16, FftAlgorithm::Ip4},              // 0.159
+    {8, crd::CpuLevel::Avx2, 17, FftAlgorithm::DeepSplit4},       // 0.598
+    {8, crd::CpuLevel::Avx2, 18, FftAlgorithm::DeepSplit4},       // 1.405
+    {8, crd::CpuLevel::Avx2, 19, FftAlgorithm::DeepSplit4},       // 3.072
+    {8, crd::CpuLevel::Avx2, 20, FftAlgorithm::SixStep},          // 5.878
+    {8, crd::CpuLevel::Avx2, 21, FftAlgorithm::FourStep},         // 11.948
+    {8, crd::CpuLevel::Avx2, 22, FftAlgorithm::FourStep},         // 26.89
 };
 
 } // namespace crd::hesap::fft::detail
