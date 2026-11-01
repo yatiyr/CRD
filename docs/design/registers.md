@@ -347,10 +347,21 @@ elsewhere).
   place outright, so the Russian Federation (Regulation (EU) No 833/2014), Belarus (No 765/2006), Crimea and Sevastopol
   (No 692/2014, UA-43 and UA-40), Iran (No 267/2012), the DPRK (2017/1509) and Syria (No 36/2012) are sectoral, and
   Regulation (EU) 2022/263's non-government controlled areas are partial in the Donetsk, Kherson, Luhansk and
-  Zaporizhzhia oblasts (UA-14, UA-65, UA-09, UA-23); every territorial measure is a destination whatever its sector,
-  whether a sale falls in it being the review's question. Its `open` names the arms, internal-repression and
-  monitoring regimes read next. The UK and UN regimes follow once their regulations and resolutions are read; until
-  then a destination screened against their designation lists alone finds no embargo.
+  Zaporizhzhia oblasts (UA-14, UA-65, UA-09, UA-23); every measure restricting a supply to a place is a destination
+  whatever its sector, whether a sale falls in it being the review's question. The arms, internal-repression and
+  monitoring regimes were read the same day
+  ([session](../sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#embargo)): the Russian Federation again
+  (2024/1485), Iran twice more (No 359/2011, 2023/1529), Myanmar/Burma (No 401/2013), Venezuela (2017/2063), Libya
+  (2016/44), Lebanon (No 1412/2006), Somalia (No 147/2003), South Sudan (2015/735), Sudan (No 747/2014), the Central
+  African Republic (No 224/2014), the Democratic Republic of the Congo (No 1183/2005), Zimbabwe (No 314/2004) and
+  Haiti (2022/2309), all sectoral: 25 destinations, nothing open. A regulation whose measures attach only to listed persons (Somalia's No 356/2010, Yemen's
+  No 1352/2014, Afghanistan's No 753/2011; the EU financial sanctions file screens them) or restrict no supply to a
+  place (Iraq's No 1210/2003, cultural property removed from Iraq) is read and names no destination. A screening
+  applies only the authorities its request names: the operator's establishment chooses them, since the EU blocking
+  statute (Regulation (EC) No 2271/96, Article 5) bars a person it covers from complying with 31 CFR 515 and the
+  Iranian Transactions and Sanctions Regulations (a counsel question; COMPLY.8 selects them). The UK and UN
+  regimes follow once their regulations and resolutions are read; until then a destination screened against their
+  designation lists alone finds no embargo.
 - **Folding.** Names are compared in search-folded form (`text.search-folding`, crd-core's
   [text_fold.hpp](../../engine/foundation/core/include/crd/core/text_fold.hpp)): lower case; Latin letters with
   diacritics, ligatures and fullwidth forms to ASCII (Ş and ş to s, İ and ı to i, ø to o, ß to ss, æ to ae, the
