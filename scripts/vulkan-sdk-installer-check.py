@@ -8,10 +8,13 @@ Framework has no offline switch, so each arm adds candidate options to the produ
 machine and records the installer's exit, both findings, the hosts its output names, its metadata cache and a
 manifest of the installed tree. `judge` compares every arm with the baseline, discounting the paths on which two
 baseline runs disagree; an arm whose options belong in install-vulkan-sdk.py exits 0, prints neither finding and
-installs the baseline's tree.
+installs the baseline's tree. `trace` runs the production install under the Windows debugger with a breakpoint on
+the installer's QFont::setPixelSize and names the caller of every call that passes a size <= 0 (the warning's
+emitter) from the static census of its callers (docs/sessions/2026-11-01-repo-3-qfont-emitter.md).
 
     python scripts/vulkan-sdk-installer-check.py run --arm <name> --download-dir <dir> --evidence <dir>
     python3 scripts/vulkan-sdk-installer-check.py judge --evidence <dir> [--summary <file>]
+    python scripts/vulkan-sdk-installer-check.py trace --download-dir <dir> --evidence <dir>
 """
 from pathlib import Path
 import argparse
@@ -20,6 +23,8 @@ import importlib.util
 import json
 import os
 import re
+import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -57,6 +62,25 @@ REMOTE = re.compile(r'meta information from remote repository')
 URL = re.compile(r'\b(?:https?|ftp)://[^\s"\'<>]+')
 TIMEOUT_SECONDS = 1500
 LISTED = 20
+
+# The static census of the pinned installer (Qt Installer Framework 4.9.0 on a static Qt 6.7.2; only for the file of
+# this digest): QFont::setPixelSize is the function at SET_PIXEL_SIZE, the only one that loads the warning's format
+# string, and its 15 direct calls return to these RVAs. Three callers are named by their strings and their source.
+CENSUS_SHA256 = 'bcf2d75aa9556889ab974858666e20b3655b6055a0db704ccb47279ff33b5bfe'
+SET_PIXEL_SIZE = 0x806a90
+CALLERS = {
+    0x209c3a: "the framework's ComponentSelectionPagePrivate: the caption font's setPixelSize(16)",
+    0x3a3640: "Qt SVG's text layout ('qt.svg.draw')",
+    0xa623f5: "Qt's QTextMarkdownImporter::import: the mono font takes the document default font's pixelSize()",
+    **{rva: 'an unnamed Qt function' for rva in (0x2e864b, 0x36fad8, 0x3a1b8a, 0x3a1eca, 0x803003, 0x91cb52,
+                                                   0x91deda, 0x91def1, 0x963175, 0x9b900d, 0x9b946c, 0xa56bb1)},
+}
+CDB_DEFAULT = Path('Windows Kits/10/Debuggers/x64/cdb.exe')
+REGISTER = re.compile(r'^edx=([0-9a-f]{8})$')
+# A `k` frame: child stack pointer, return address, call site (`module+0x...` without symbols, `module!name+0x...`
+# with exports).
+FRAME = re.compile(r'^[0-9a-f]{8}`[0-9a-f]{8} [0-9a-f]{8}`[0-9a-f]{8} (\S+)')
+IMAGE_FRAME = re.compile(r'^[^!\s]+\+0x([0-9a-f]+)$')
 
 
 def default_cache():
@@ -137,6 +161,87 @@ def run_arm(arm, download_dir, evidence, root=None, cache=None, archive=None, ru
     print(json.dumps({key: result[key] for key in ('arm', 'arguments', 'exit', 'qt_font', 'remote', 'hosts',
                                                    'cache_after', 'cache_repositories', 'layout_missing', 'tree')},
                      indent=1))
+    return result
+
+
+def entry_rva(image):
+    """The AddressOfEntryPoint of a PE image, so a breakpoint can be placed by RVA wherever the image loads."""
+    with Path(image).open('rb') as stream:
+        header = stream.read(4096)
+    pe = struct.unpack_from('<I', header, 0x3c)[0]
+    if header[:2] != b'MZ' or header[pe:pe + 4] != b'PE\0\0':
+        raise pins.PinError(f'{image} is not a PE image')
+    return struct.unpack_from('<I', header, pe + 24 + 16)[0]
+
+
+def find_cdb(which=shutil.which, program_files=None):
+    """The console debugger: on PATH, or the Windows SDK's Debugging Tools (installed on the hosted images)."""
+    found = which('cdb')
+    if found:
+        return Path(found)
+    root = Path(program_files or os.environ.get('ProgramFiles(x86)') or r'C:\Program Files (x86)')
+    if (root / CDB_DEFAULT).is_file():
+        return root / CDB_DEFAULT
+    raise pins.PinError(f'cdb is neither on PATH nor at {root / CDB_DEFAULT}; install the Debugging Tools for Windows')
+
+
+def traced_calls(output):
+    """Each setPixelSize call the breakpoint logged: its size (edx, signed), its frames and its caller."""
+    calls = []
+    for line in output.splitlines():
+        line = line.strip()
+        register = REGISTER.match(line)
+        if register:
+            value = int(register.group(1), 16)
+            calls.append({'pixel_size': value - (1 << 32) if value >= 1 << 31 else value, 'frames': []})
+            continue
+        frame = FRAME.match(line)
+        if frame and calls:
+            calls[-1]['frames'].append(frame.group(1))
+    for call in calls:
+        # Frame 0 is setPixelSize itself; frame 1's call site is the return address in its caller.
+        image = IMAGE_FRAME.match(call['frames'][1]) if len(call['frames']) > 1 else None
+        rva = int(image.group(1), 16) if image else None
+        call['caller_rva'] = None if rva is None else '%#x' % rva
+        call['caller'] = (CALLERS.get(rva, f'outside the census (RVA {rva:#x})') if rva is not None
+                          else 'no caller frame in the image')
+    return calls
+
+
+def trace(download_dir, evidence, archive=None, root=None, run=subprocess.run, which=shutil.which,
+          program_files=None):
+    """Install the pinned SDK with the production arguments under cdb, logging edx and the stack at every
+    QFont::setPixelSize call; writes `<evidence>/trace/` (log.txt, result.json) and returns the result."""
+    pin = pins.entry('tools', 'vulkan-sdk-windows')
+    if pin['sha256'] != CENSUS_SHA256:
+        raise pins.PinError(f'the setPixelSize census is for the installer {CENSUS_SHA256}, the pin is now '
+                            f'{pin["sha256"]}: take the census again first')
+    root = Path(root or pin['install_root'])
+    cdb = find_cdb(which, program_files)
+    out = Path(evidence) / 'trace'
+    out.mkdir(parents=True, exist_ok=True)
+    installer = pins.fetch(pin, download_dir, archive, label='Vulkan SDK installer')
+    commands = out / 'commands.txt'
+    commands.write_text('bp @$exentry-%#x+%#x "r edx; k 12; gc"\ng\nq\n' % (entry_rva(installer), SET_PIXEL_SIZE),
+                        encoding='ascii')
+    command = [str(cdb), '-G', '-cf', str(commands), str(installer), *sdk.arguments(download_dir)]
+    try:
+        completed = run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        timeout=TIMEOUT_SECONDS, check=False)
+        exit_code, raw = completed.returncode, completed.stdout or b''
+    except subprocess.TimeoutExpired as expired:
+        exit_code, raw = 'timeout', expired.output or b''
+    output = raw.decode('utf-8', errors='replace')
+    (out / 'log.txt').write_text(output, encoding='utf-8')
+    calls = traced_calls(output)
+    # cdb's exit is the debugger's; the install's own outcome is its layout.
+    result = {'version': pin['version'], 'command': command[1:], 'exit': exit_code,
+              'layout_missing': [relative for relative in sdk.LAYOUT if not (root / relative).is_file()],
+              'qt_font': findings(output)['qt_font'], 'calls': calls,
+              'emitters': sorted({call['caller'] for call in calls if call['pixel_size'] <= 0})}
+    (out / 'result.json').write_text(json.dumps(result, indent=1) + '\n', encoding='utf-8')
+    print(output)
+    print(json.dumps({key: result[key] for key in ('exit', 'layout_missing', 'qt_font', 'emitters')}, indent=1))
     return result
 
 
@@ -223,11 +328,20 @@ def main(argv=None):
     judge_parser = commands.add_parser('judge', help='compare every arm with the baseline')
     judge_parser.add_argument('--evidence', type=Path, required=True)
     judge_parser.add_argument('--summary', type=Path, help='file the Markdown report is appended to')
+    trace_parser = commands.add_parser('trace', help='install under cdb and name the setPixelSize warning\'s caller')
+    trace_parser.add_argument('--download-dir', type=Path, required=True)
+    trace_parser.add_argument('--evidence', type=Path, required=True)
+    trace_parser.add_argument('--archive', type=Path,
+                              help='an already downloaded official installer (checksum required)')
     args = parser.parse_args(argv)
     try:
         if args.command == 'run':
             run_arm(args.arm, args.download_dir, args.evidence, archive=args.archive)
             return 0
+        if args.command == 'trace':
+            result = trace(args.download_dir, args.evidence, archive=args.archive)
+            # The trace answers a question only when the install ran to its end and the breakpoint saw the warning.
+            return 0 if result['exit'] == 0 and not result['layout_missing'] and result['emitters'] else 1
         lines, judgement = judge(args.evidence)
     except pins.PinError as error:
         print(f'vulkan-sdk-installer-check: {error}', file=sys.stderr)

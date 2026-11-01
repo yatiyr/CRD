@@ -1546,7 +1546,9 @@ class PinnedInputs(unittest.TestCase):
         workflow = (ROOT / '.github/workflows/host-check.yml').read_text(encoding='utf-8')
         matrix = re.search(r'arm: \[([^\]]*)\]', workflow).group(1)
         self.assertEqual([arm.strip() for arm in matrix.split(',')], list(check.ARMS))
-        self.assertIn('x64-asan-stack-alignment, vulkan-sdk-installer]', workflow)
+        options = re.search(r'options: \[([^\]]*)\]', workflow).group(1)
+        self.assertEqual([option.strip() for option in options.split(',')][-2:],
+                         ['vulkan-sdk-installer', 'vulkan-sdk-installer-emitter'])
         with tempfile.TemporaryDirectory() as temp:
             temp = Path(temp)
             installer = temp / 'installer.exe'
@@ -1638,6 +1640,97 @@ class PinnedInputs(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()) as error:
                 self.assertEqual(check.main(['judge', '--evidence', str(evidence)]), 1)
             self.assertIn('baseline-repeat arm left no evidence', error.getvalue())
+
+    def test_vulkan_sdk_installer_trace_names_the_qfont_warnings_caller(self):
+        spec = importlib.util.spec_from_file_location('installer_check', ROOT / 'scripts/vulkan-sdk-installer-check.py')
+        check = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(check)
+        workflow = (ROOT / '.github/workflows/host-check.yml').read_text(encoding='utf-8')
+        self.assertIn("inputs.experiment == 'vulkan-sdk-installer-emitter'", workflow)
+        self.assertIn('vulkan-sdk-installer-check.py trace', workflow)
+        self.assertEqual(len(check.CALLERS), 15)
+        self.assertEqual(check.CENSUS_SHA256, pins_registry.entry('tools', 'vulkan-sdk-windows')['sha256'])
+        with tempfile.TemporaryDirectory() as temp:
+            temp = Path(temp)
+            installer = temp / 'installer.exe'
+            header = bytearray(4096)
+            header[:2] = b'MZ'
+            struct.pack_into('<I', header, 0x3c, 0x80)
+            header[0x80:0x84] = b'PE\0\0'
+            struct.pack_into('<I', header, 0x80 + 24 + 16, 0x1234)
+            installer.write_bytes(bytes(header))
+            self.assertEqual(check.entry_rva(installer), 0x1234)
+            (temp / 'not-pe.exe').write_bytes(b'MZ' + bytes(4094))
+            with self.assertRaisesRegex(check.pins.PinError, 'not a PE image'):
+                check.entry_rva(temp / 'not-pe.exe')
+
+            kits = temp / 'kits'
+            with self.assertRaisesRegex(check.pins.PinError, 'neither on PATH'):
+                check.find_cdb(which=lambda name: None, program_files=kits)
+            (kits / check.CDB_DEFAULT).parent.mkdir(parents=True)
+            (kits / check.CDB_DEFAULT).write_bytes(b'cdb')
+            self.assertEqual(check.find_cdb(which=lambda name: None, program_files=kits), kits / check.CDB_DEFAULT)
+            self.assertEqual(check.find_cdb(which=lambda name: 'C:/tools/cdb.exe'), Path('C:/tools/cdb.exe'))
+
+            root = temp / 'VulkanSDK'
+            module = 'vulkansdk_windows_X64_1_4_341_1'
+
+            def stack(*sites):
+                lines = ['Child-SP          RetAddr               Call Site']
+                lines += ['00000000`0014f8e8 00007ff6`12a623f5 ' + site for site in sites]
+                return lines
+
+            log = ['0:000> g', '[1201] Loading component scripts...', 'edx=00000010',
+                   *stack(module + '+0x806a90', module + '+0x209c3a', 'KERNEL32!BaseThreadInitThunk+0x17'),
+                   'edx=ffffffff', *stack(module + '+0x806a90', module + '+0xa623f5'),
+                   '[1837] Warning: QFont::setPixelSize: Pixel size <= 0 (-1)',
+                   'edx=00000000', *stack(module + '+0x806a90', module + '+0x123456'),
+                   'edx=fffffffe', *stack(module + '+0x806a90', 'ntdll!RtlUserThreadStart+0x21')]
+            commands = []
+            layout = check.sdk.LAYOUT
+
+            def debugging(command, stdin, stdout, stderr, timeout, check):
+                commands.append(command)
+                self.assertEqual((stdin, stdout, stderr, check),
+                                 (subprocess.DEVNULL, subprocess.PIPE, subprocess.STDOUT, False))
+                for relative in layout:
+                    (root / relative).parent.mkdir(parents=True, exist_ok=True)
+                    (root / relative).write_bytes(b'payload')
+                return subprocess.CompletedProcess(command, 0, stdout='\n'.join(log).encode('utf-8'))
+
+            with patch.object(check.pins, 'fetch', return_value=installer), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                result = check.trace(temp / 'downloads', temp / 'evidence', root=root, run=debugging,
+                                     which=lambda name: None, program_files=kits)
+            repository = (temp / 'downloads' / check.sdk.REPOSITORY).resolve()
+            self.assertEqual(commands[0], [str(kits / check.CDB_DEFAULT), '-G', '-cf',
+                                           str(temp / 'evidence' / 'trace' / 'commands.txt'), str(installer),
+                                           *check.sdk.INSTALL_ARGUMENTS, '--set-temp-repository', repository.as_uri()])
+            self.assertEqual((temp / 'evidence' / 'trace' / 'commands.txt').read_text(encoding='ascii'),
+                             'bp @$exentry-0x1234+0x806a90 "r edx; k 12; gc"\ng\nq\n')
+            self.assertEqual([call['pixel_size'] for call in result['calls']], [16, -1, 0, -2])
+            self.assertEqual([call['caller_rva'] for call in result['calls']],
+                             ['0x209c3a', '0xa623f5', '0x123456', None])
+            self.assertEqual(result['calls'][0]['frames'][2], 'KERNEL32!BaseThreadInitThunk+0x17')
+            self.assertEqual(result['emitters'], [check.CALLERS[0xa623f5], 'no caller frame in the image',
+                                                  'outside the census (RVA 0x123456)'])
+            self.assertEqual(result['qt_font'], ['[1837] Warning: QFont::setPixelSize: Pixel size <= 0 (-1)'])
+            self.assertEqual(result['layout_missing'], [])
+            recorded = json.loads((temp / 'evidence' / 'trace' / 'result.json').read_text(encoding='utf-8'))
+            self.assertEqual(recorded['emitters'], result['emitters'])
+
+            # The leg passes only when the install completed and the breakpoint saw a size <= 0.
+            arguments = ['trace', '--download-dir', str(temp / 'downloads'), '--evidence', str(temp / 'evidence')]
+            for outcome, code in (({'exit': 0, 'layout_missing': [], 'emitters': ['x']}, 0),
+                                  ({'exit': 0, 'layout_missing': ['Bin/glslc.exe'], 'emitters': ['x']}, 1),
+                                  ({'exit': 0, 'layout_missing': [], 'emitters': []}, 1),
+                                  ({'exit': 'timeout', 'layout_missing': [], 'emitters': ['x']}, 1)):
+                with patch.object(check, 'trace', return_value=outcome):
+                    self.assertEqual(check.main(arguments), code)
+            pin = dict(pins_registry.entry('tools', 'vulkan-sdk-windows'), sha256='0' * 64)
+            with patch.object(check.pins, 'entry', return_value=pin):
+                with self.assertRaisesRegex(check.pins.PinError, 'take the census again'):
+                    check.trace(temp / 'downloads', temp / 'evidence', run=None)
 
     def test_vulkan_headers_extract_only_the_include_subtree(self):
         spec = importlib.util.spec_from_file_location('headers', ROOT / 'scripts/install-vulkan-headers.py')

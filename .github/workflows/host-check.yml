@@ -9,14 +9,16 @@ name: Host check
 # container-overflow control for the same time; a leg fails on any event. The ARM64 sanitizer-cost legs (SIMD-DISPATCH)
 # time the cases linux-gcc-arm64-asan runs far slower than linux-clang-arm64-asan under each sanitizer and runtime
 # option, on both compilers. The x64 stack-alignment leg runs TP-7's control under Intel SDE. The Vulkan SDK installer
-# legs (REPO.3) run the pinned Windows installer under candidate options, one fresh machine per arm, and judge them.
+# legs (REPO.3) run the pinned Windows installer under candidate options, one fresh machine per arm, and judge them;
+# the emitter leg runs it under the debugger to name the caller of its QFont warning.
 on:
   workflow_dispatch:
     inputs:
       experiment:
         description: 'which experiment to run'
         type: choice
-        options: [all, fuzz, tsan, arm64-sanitizer-cost, x64-asan-stack-alignment, vulkan-sdk-installer]
+        options: [all, fuzz, tsan, arm64-sanitizer-cost, x64-asan-stack-alignment, vulkan-sdk-installer,
+                  vulkan-sdk-installer-emitter]
         default: all
       seconds:
         description: 'libFuzzer seconds per round and arm'
@@ -500,6 +502,39 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: host-check-vulkan-sdk-installer-${{ matrix.arm }}
+          path: ${{ runner.temp }}/host-check/evidence
+          if-no-files-found: warn
+
+  vulkan-sdk-installer-emitter:
+    # REPO.3: which code of the pinned installer passes a size <= 0 to QFont::setPixelSize. The production install
+    # runs under cdb with a breakpoint on that function (by RVA, from the static census of its 15 callers); every
+    # call's size and stack is recorded and the caller of each warning named (scripts/vulkan-sdk-installer-check.py).
+    name: Host check (Vulkan SDK installer, QFont emitter)
+    if: inputs.experiment == 'all' || inputs.experiment == 'vulkan-sdk-installer-emitter'
+    runs-on: windows-2025
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Install under the debugger
+        run: >-
+          python scripts/vulkan-sdk-installer-check.py trace
+          --download-dir "${{ runner.temp }}" --evidence "${{ runner.temp }}/host-check/evidence"
+
+      - name: Preserve results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: host-check-installer-emitter
           path: ${{ runner.temp }}/host-check/evidence
           if-no-files-found: warn
 

@@ -304,7 +304,11 @@ install. The remote finding is the framework's `Retrieving meta information from
 `Fetching latest update information` line is printed for a local repository too. Run 41298875777
 ([verdict](../sessions/2026-11-01-repo-3-installer-verdict.md)): the local repository whose `Updates.xml` lists no
 package removes the remote fetch with the same tree and is now the production argument; no platform option touches
-the `QFont` line.
+the `QFont` line. The emitter leg ([census](../sessions/2026-11-01-repo-3-qfont-emitter.md)) runs `trace`: the
+production install under `cdb` with a breakpoint on the installer's `QFont::setPixelSize` (by RVA from the image's
+entry point; the census holds only for the pinned installer's digest and `trace` refuses another), logging the size
+and twelve frames of every call; each call's caller is named from the census of the function's 15 direct callers,
+and the leg passes only when the install completed and a call passed a size of zero or less.
 
 ## The sanitizer audit
 
