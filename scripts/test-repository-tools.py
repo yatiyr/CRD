@@ -1673,19 +1673,23 @@ class PinnedInputs(unittest.TestCase):
             self.assertEqual(check.find_cdb(which=lambda name: 'C:/tools/cdb.exe'), Path('C:/tools/cdb.exe'))
 
             root = temp / 'VulkanSDK'
-            module = 'vulkansdk_windows_X64_1_4_341_1'
 
             def stack(*sites):
+                # As run 41312886689 printed them: padded columns, sites named by the image's nearest export.
                 lines = ['Child-SP          RetAddr               Call Site']
-                lines += ['00000000`0014f8e8 00007ff6`12a623f5 ' + site for site in sites]
+                lines += ['0000006b`947ce098 00007ff6`c02bdef1     ' + site for site in sites]
                 return lines
 
-            log = ['0:000> g', '[1201] Loading component scripts...', 'edx=00000010',
-                   *stack(module + '+0x806a90', module + '+0x209c3a', 'KERNEL32!BaseThreadInitThunk+0x17'),
-                   'edx=ffffffff', *stack(module + '+0x806a90', module + '+0xa623f5'),
-                   '[1837] Warning: QFont::setPixelSize: Pixel size <= 0 (-1)',
-                   'edx=00000000', *stack(module + '+0x806a90', module + '+0x123456'),
-                   'edx=fffffffe', *stack(module + '+0x806a90', 'ntdll!RtlUserThreadStart+0x21')]
+            log = ['0:000> g', '[74] Loading component scripts...', 'edx=00000010', '$t0=0000000000209c3a',
+                   *stack('installerbase!qt_startup_hook+0x79ed10', 'installerbase!qt_startup_hook+0x1a1eba',
+                          'KERNEL32!BaseThreadInitThunk+0x17'),
+                   'edx=ffffffff', '$t0=000000000091def1',
+                   *stack('installerbase!qt_startup_hook+0x79ed10', 'installerbase!qt_startup_hook+0x8b6171'),
+                   '[485] Warning: QFont::setPixelSize: Pixel size <= 0 (-1)',
+                   'edx=00000000', '$t0=0000000000123456', *stack('installerbase+0x806a90', 'installerbase+0x123456'),
+                   'edx=fffffffe', '$t0=ffff80097fe4ed21',
+                   *stack('installerbase+0x806a90', 'ntdll!RtlUserThreadStart+0x21'),
+                   'edx=ffffffff', *stack('installerbase+0x806a90')]
             commands = []
             layout = check.sdk.LAYOUT
 
@@ -1707,24 +1711,34 @@ class PinnedInputs(unittest.TestCase):
                                            str(temp / 'evidence' / 'trace' / 'commands.txt'), str(installer),
                                            *check.sdk.INSTALL_ARGUMENTS, '--set-temp-repository', repository.as_uri()])
             self.assertEqual((temp / 'evidence' / 'trace' / 'commands.txt').read_text(encoding='ascii'),
-                             'bp @$exentry-0x1234+0x806a90 "r edx; k 12; gc"\ng\nq\n')
-            self.assertEqual([call['pixel_size'] for call in result['calls']], [16, -1, 0, -2])
+                             'bp @$exentry-0x1234+0x806a90 "r edx; r $t0 = poi(@rsp)-(@$exentry-0x1234); r $t0; '
+                             'k 12; gc"\ng\nq\n')
+            self.assertEqual([call['pixel_size'] for call in result['calls']], [16, -1, 0, -2, -1])
             self.assertEqual([call['caller_rva'] for call in result['calls']],
-                             ['0x209c3a', '0xa623f5', '0x123456', None])
-            self.assertEqual(result['calls'][0]['frames'][2], 'KERNEL32!BaseThreadInitThunk+0x17')
-            self.assertEqual(result['emitters'], [check.CALLERS[0xa623f5], 'no caller frame in the image',
-                                                  'outside the census (RVA 0x123456)'])
-            self.assertEqual(result['qt_font'], ['[1837] Warning: QFont::setPixelSize: Pixel size <= 0 (-1)'])
+                             ['0x209c3a', '0x91def1', '0x123456', 'outside the image', None])
+            self.assertEqual([call['caller'] for call in result['calls']],
+                             [check.CALLERS[0x209c3a], check.CALLERS[0x91def1], None, None, None])
+            self.assertIn('QTextFormatPrivate::resolveFont', check.CALLERS[0x91def1])
+            self.assertEqual(result['calls'][0]['frames'],
+                             ['installerbase!qt_startup_hook+0x79ed10', 'installerbase!qt_startup_hook+0x1a1eba',
+                              'KERNEL32!BaseThreadInitThunk+0x17'])
+            self.assertEqual(result['emitters'], [check.CALLERS[0x91def1]])
+            self.assertEqual(result['unnamed'], ['0x123456', 'no return address', 'outside the image'])
+            self.assertEqual(result['qt_font'], ['[485] Warning: QFont::setPixelSize: Pixel size <= 0 (-1)'])
             self.assertEqual(result['layout_missing'], [])
             recorded = json.loads((temp / 'evidence' / 'trace' / 'result.json').read_text(encoding='utf-8'))
             self.assertEqual(recorded['emitters'], result['emitters'])
 
-            # The leg passes only when the install completed and the breakpoint saw a size <= 0.
+            # The leg passes only when the install completed, the breakpoint saw a size <= 0 and the census names
+            # the caller of each such call.
             arguments = ['trace', '--download-dir', str(temp / 'downloads'), '--evidence', str(temp / 'evidence')]
-            for outcome, code in (({'exit': 0, 'layout_missing': [], 'emitters': ['x']}, 0),
-                                  ({'exit': 0, 'layout_missing': ['Bin/glslc.exe'], 'emitters': ['x']}, 1),
-                                  ({'exit': 0, 'layout_missing': [], 'emitters': []}, 1),
-                                  ({'exit': 'timeout', 'layout_missing': [], 'emitters': ['x']}, 1)):
+            for outcome, code in (({'exit': 0, 'layout_missing': [], 'emitters': ['x'], 'unnamed': []}, 0),
+                                  ({'exit': 0, 'layout_missing': ['Bin/glslc.exe'], 'emitters': ['x'], 'unnamed': []},
+                                   1),
+                                  ({'exit': 0, 'layout_missing': [], 'emitters': [], 'unnamed': []}, 1),
+                                  ({'exit': 0, 'layout_missing': [], 'emitters': ['x'], 'unnamed': ['0x123456']}, 1),
+                                  ({'exit': 0, 'layout_missing': [], 'emitters': [], 'unnamed': ['0x123456']}, 1),
+                                  ({'exit': 'timeout', 'layout_missing': [], 'emitters': ['x'], 'unnamed': []}, 1)):
                 with patch.object(check, 'trace', return_value=outcome):
                     self.assertEqual(check.main(arguments), code)
             pin = dict(pins_registry.entry('tools', 'vulkan-sdk-windows'), sha256='0' * 64)

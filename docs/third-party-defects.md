@@ -127,6 +127,19 @@ Lane keys are the CI preset names; test names are exact CTest names. The gate re
 | Retirement | When the image's GCC changes, dispatch `host-check.yml` with `experiment=x64-asan-stack-alignment`; it fails once the default `g++` runs the control clean without the caps, and then the caps are dropped |
 | Row | [SIMD-DISPATCH](ROADMAP.md#slice-simd-dispatch); evidence [the AVX-512 probe under GCC ASan](sessions/2026-10-30-simd-dispatch-asan-stack-alignment.md) |
 
+<a id="tp-8"></a>
+## TP-8: Qt's rich-text font resolution passes -1 to QFont::setPixelSize in the Vulkan SDK installer
+
+| Field | Value |
+|---|---|
+| Component | The pinned Vulkan SDK installer 1.4.341.1 (`cmake/pins.json` `vulkan-sdk-windows`, SHA-256 `bcf2d75a...5bfe`): LunarG's build of Qt Installer Framework 4.9.0 on a static Qt 6.7.2, in Qt's `QTextFormatPrivate::resolveFont` (`qtextformat.cpp`) |
+| Symptom | The install prints `Warning: QFont::setPixelSize: Pixel size <= 0 (-1)` once. A character format with `FontSizeAdjustment` is resolved against a document default font whose `pointSize()` is not positive, so Qt takes the pixel branch, `setPixelSize(qRound(scale * defaultFont.pixelSize()))`, with a default font that has no pixel size either (`pixelSize() == -1`; scale 0.7 to 1.2 rounds to -1). `setPixelSize` refuses the value and leaves the font unchanged, so nothing installed differs |
+| Reproduction outside Cerid | The installer alone under `cdb` on a fresh `windows-2025` runner, no Cerid code ([run 41312886689](https://github.com/yatiyr/CRD/actions/runs/41312886689), `vulkan-sdk-installer-emitter`): one call, `edx = -1`, returning to RVA 0x91def1, in the function that looks up property 0x2002 (`FontSizeAdjustment`), clamps it plus 2 to `[0, 6]`, scales by the table {0.7, 0.8, 1.0, 1.2, 1.5, 2, 2.4} and branches on `pointSize() > 0`: Qt 6.7.2's `resolveFont` line for line. The installer's own resources (both `LICENSE.txt`, `Updates.xml`, `config.xml`, the scripts) carry no heading or size markup, so the formatted text is the framework's |
+| Affected | The Windows lanes that run the installer cold (`win-debug-scalar` on every run; the others on a cache miss): one log line in the Vulkan SDK step. No test, exit code or installed file |
+| Engine handling | None is possible in the tree: the line comes from the installer's binary. It stays in the lane log, unfiltered; [install-vulkan-sdk.py](../scripts/install-vulkan-sdk.py) already installs with the arguments the [option experiment](sessions/2026-11-01-repo-3-installer-verdict.md) chose, and no platform plugin or repository removes the line |
+| Retirement | Upstream: Qt's `resolveFont` guards neither size through 6.7.2 and on `dev` (2026-11-01), and the Qt tracker (QTBUG, QTIFW) holds no report of it; the report is drafted in the [session](sessions/2026-11-01-repo-3-qfont-resolvefont.md#the-upstream-report). When the Vulkan SDK pin changes, `vulkan-sdk-installer-check.py trace` refuses the new digest until the census is taken again; the entry is removed when a cold install of the pin prints no QFont line |
+| Row | [REPO.3](ROADMAP.md#slice-repo.3); evidence [the emitter named](sessions/2026-11-01-repo-3-qfont-resolvefont.md) |
+
 ## The registered-failure gate
 
 `scripts/check-registered-failures.py --lane <preset> --junit <ctest --output-junit file> --ctest-exit <code>` reads

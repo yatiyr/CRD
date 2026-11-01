@@ -10,7 +10,8 @@ manifest of the installed tree. `judge` compares every arm with the baseline, di
 baseline runs disagree; an arm whose options belong in install-vulkan-sdk.py exits 0, prints neither finding and
 installs the baseline's tree. `trace` runs the production install under the Windows debugger with a breakpoint on
 the installer's QFont::setPixelSize and names the caller of every call that passes a size <= 0 (the warning's
-emitter) from the static census of its callers (docs/sessions/2026-11-01-repo-3-qfont-emitter.md).
+emitter) from the static census of its callers (docs/sessions/2026-11-01-repo-3-qfont-emitter.md and
+docs/sessions/2026-11-01-repo-3-qfont-resolvefont.md).
 
     python scripts/vulkan-sdk-installer-check.py run --arm <name> --download-dir <dir> --evidence <dir>
     python3 scripts/vulkan-sdk-installer-check.py judge --evidence <dir> [--summary <file>]
@@ -65,22 +66,27 @@ LISTED = 20
 
 # The static census of the pinned installer (Qt Installer Framework 4.9.0 on a static Qt 6.7.2; only for the file of
 # this digest): QFont::setPixelSize is the function at SET_PIXEL_SIZE, the only one that loads the warning's format
-# string, and its 15 direct calls return to these RVAs. Three callers are named by their strings and their source.
+# string, and its 15 direct calls return to these RVAs. Three callers are named by their strings and their source,
+# and the traced emitter (run 41312886689) is QTextFormatPrivate::resolveFont, by its FontSizeAdjustment property
+# (0x2002) and its scale table {0.7, 0.8, 1.0, 1.2, 1.5, 2, 2.4}.
 CENSUS_SHA256 = 'bcf2d75aa9556889ab974858666e20b3655b6055a0db704ccb47279ff33b5bfe'
 SET_PIXEL_SIZE = 0x806a90
 CALLERS = {
     0x209c3a: "the framework's ComponentSelectionPagePrivate: the caption font's setPixelSize(16)",
     0x3a3640: "Qt SVG's text layout ('qt.svg.draw')",
     0xa623f5: "Qt's QTextMarkdownImporter::import: the mono font takes the document default font's pixelSize()",
+    **{rva: "Qt's QTextFormatPrivate::resolveFont: a FontSizeAdjustment format takes qRound(scale * the document "
+            "default font's pixelSize()) when its pointSize() <= 0" for rva in (0x91deda, 0x91def1)},
     **{rva: 'an unnamed Qt function' for rva in (0x2e864b, 0x36fad8, 0x3a1b8a, 0x3a1eca, 0x803003, 0x91cb52,
-                                                   0x91deda, 0x91def1, 0x963175, 0x9b900d, 0x9b946c, 0xa56bb1)},
+                                                   0x963175, 0x9b900d, 0x9b946c, 0xa56bb1)},
 }
 CDB_DEFAULT = Path('Windows Kits/10/Debuggers/x64/cdb.exe')
 REGISTER = re.compile(r'^edx=([0-9a-f]{8})$')
-# A `k` frame: child stack pointer, return address, call site (`module+0x...` without symbols, `module!name+0x...`
-# with exports).
-FRAME = re.compile(r'^[0-9a-f]{8}`[0-9a-f]{8} [0-9a-f]{8}`[0-9a-f]{8} (\S+)')
-IMAGE_FRAME = re.compile(r'^[^!\s]+\+0x([0-9a-f]+)$')
+# The breakpoint's `r $t0`: the return address on entry ([rsp]) less the image base, the caller's return RVA. The
+# frames cannot give it: cdb names a site by the nearest export (`installerbase!qt_startup_hook+0x8b6171`).
+RETURN = re.compile(r'^\$t0=([0-9a-f]{16})$')
+# A `k` frame: child stack pointer, return address, call site; cdb pads the columns with spaces.
+FRAME = re.compile(r'^[0-9a-f]{8}`[0-9a-f]{8}\s+[0-9a-f]{8}`[0-9a-f]{8}\s+(\S+)')
 
 
 def default_cache():
@@ -186,25 +192,29 @@ def find_cdb(which=shutil.which, program_files=None):
 
 
 def traced_calls(output):
-    """Each setPixelSize call the breakpoint logged: its size (edx, signed), its frames and its caller."""
+    """Each setPixelSize call the breakpoint logged: its size (edx, signed), its caller's return RVA, its caller from
+    the census (None when the RVA is outside it or the return address outside the image) and its frames."""
     calls = []
     for line in output.splitlines():
         line = line.strip()
         register = REGISTER.match(line)
         if register:
             value = int(register.group(1), 16)
-            calls.append({'pixel_size': value - (1 << 32) if value >= 1 << 31 else value, 'frames': []})
+            calls.append({'pixel_size': value - (1 << 32) if value >= 1 << 31 else value, 'caller_rva': None,
+                          'caller': None, 'frames': []})
+            continue
+        if not calls:
+            continue
+        returned = RETURN.match(line)
+        if returned:
+            # A return address below the image wraps to a 64-bit value; the image spans far less than 4 GiB.
+            rva = int(returned.group(1), 16)
+            calls[-1]['caller_rva'] = '%#x' % rva if rva < 1 << 32 else 'outside the image'
+            calls[-1]['caller'] = CALLERS.get(rva)
             continue
         frame = FRAME.match(line)
-        if frame and calls:
+        if frame:
             calls[-1]['frames'].append(frame.group(1))
-    for call in calls:
-        # Frame 0 is setPixelSize itself; frame 1's call site is the return address in its caller.
-        image = IMAGE_FRAME.match(call['frames'][1]) if len(call['frames']) > 1 else None
-        rva = int(image.group(1), 16) if image else None
-        call['caller_rva'] = None if rva is None else '%#x' % rva
-        call['caller'] = (CALLERS.get(rva, f'outside the census (RVA {rva:#x})') if rva is not None
-                          else 'no caller frame in the image')
     return calls
 
 
@@ -222,8 +232,9 @@ def trace(download_dir, evidence, archive=None, root=None, run=subprocess.run, w
     out.mkdir(parents=True, exist_ok=True)
     installer = pins.fetch(pin, download_dir, archive, label='Vulkan SDK installer')
     commands = out / 'commands.txt'
-    commands.write_text('bp @$exentry-%#x+%#x "r edx; k 12; gc"\ng\nq\n' % (entry_rva(installer), SET_PIXEL_SIZE),
-                        encoding='ascii')
+    entry = entry_rva(installer)
+    commands.write_text('bp @$exentry-%#x+%#x "r edx; r $t0 = poi(@rsp)-(@$exentry-%#x); r $t0; k 12; gc"\ng\nq\n'
+                        % (entry, SET_PIXEL_SIZE, entry), encoding='ascii')
     command = [str(cdb), '-G', '-cf', str(commands), str(installer), *sdk.arguments(download_dir)]
     try:
         completed = run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -238,10 +249,13 @@ def trace(download_dir, evidence, archive=None, root=None, run=subprocess.run, w
     result = {'version': pin['version'], 'command': command[1:], 'exit': exit_code,
               'layout_missing': [relative for relative in sdk.LAYOUT if not (root / relative).is_file()],
               'qt_font': findings(output)['qt_font'], 'calls': calls,
-              'emitters': sorted({call['caller'] for call in calls if call['pixel_size'] <= 0})}
+              'emitters': sorted({call['caller'] for call in calls if call['pixel_size'] <= 0 and call['caller']}),
+              'unnamed': sorted({call['caller_rva'] or 'no return address' for call in calls
+                                 if call['pixel_size'] <= 0 and not call['caller']})}
     (out / 'result.json').write_text(json.dumps(result, indent=1) + '\n', encoding='utf-8')
     print(output)
-    print(json.dumps({key: result[key] for key in ('exit', 'layout_missing', 'qt_font', 'emitters')}, indent=1))
+    print(json.dumps({key: result[key] for key in ('exit', 'layout_missing', 'qt_font', 'emitters', 'unnamed')},
+                     indent=1))
     return result
 
 
@@ -340,8 +354,10 @@ def main(argv=None):
             return 0
         if args.command == 'trace':
             result = trace(args.download_dir, args.evidence, archive=args.archive)
-            # The trace answers a question only when the install ran to its end and the breakpoint saw the warning.
-            return 0 if result['exit'] == 0 and not result['layout_missing'] and result['emitters'] else 1
+            # The trace answers its question only when the install ran to its end, the breakpoint saw the warning
+            # and the census names the caller of every call that passed a size <= 0.
+            answered = result['emitters'] and not result['unnamed']
+            return 0 if result['exit'] == 0 and not result['layout_missing'] and answered else 1
         lines, judgement = judge(args.evidence)
     except pins.PinError as error:
         print(f'vulkan-sdk-installer-check: {error}', file=sys.stderr)
