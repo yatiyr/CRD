@@ -3,7 +3,7 @@
 // so a shifted quadratic is solved essentially to rhoend in few evaluations; (2) Rosenbrock-2 from the
 // classic start (the curved-valley gate where quadratic models shine vs COBYLA's linear ones);
 // (3) a 4-D sphere at the default npt = 2n+1; (4) bit-identical determinism; (5) n = 0.
-// The differential harness vs the compiled oracle is the close gate (runtime/examples/newuoa_difftest.cpp).
+// The differential harness vs the compiled oracle is the close gate (nlopt/newuoa_difftest.cpp).
 
 #include <crd/hesap/opt/newuoa.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>

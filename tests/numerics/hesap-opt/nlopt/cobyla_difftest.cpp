@@ -1,19 +1,14 @@
 // cobyla_difftest.cpp — Phase 3.1.6 v7-p-2 DIFFERENTIAL-TEST HARNESS (the L-BFGS-B playbook: manual reading is
 // NOT verification; the compiled NLopt reference adjudicates the port). Two layers:
-//   1. PER-ROUTINE `trstlp` — identical inputs to the oracle (cobyla_exposed.o, statics externalized by
-//      scripts/setup-nlopt-ref.sh) and the Cerid port; outputs compared BIT-EXACT: dx (reals), iact (ints),
+//   1. PER-ROUTINE `trstlp` — identical inputs to the oracle (cobyla_oracle.c: NLopt's cobyla.c with its
+//      statics externalized) and the Cerid port; outputs compared BIT-EXACT: dx (reals), iact (ints),
 //      ifull, and the return code — across bug-hiding regimes (feasible-at-zero straight-to-stage-2, violated
 //      sets, DUPLICATE/parallel gradients (the L130 linear-dependence path), m = 0, tiny ρ, n = 1).
 //   2. END-TO-END `cobyla()` vs `minimize_cobyla` through the `crd_cobyla_e2e` shim (same layer, no NLopt
 //      rescaling): same minimizer, same f, SAME EVALUATION COUNT — bit-comparable because the port keeps the
 //      reference's exact arithmetic (LCG, float-literal artifacts, goto flow).
-// Dev-only, WSL, never CI/shipped. Build (after scripts/setup-nlopt-ref.sh; from the repo root):
-//   g++ -std=c++20 -O2 runtime/examples/cobyla_difftest.cpp \
-//       build/linux-gcc-release/engine/*/libcrd-{memory,vm,log,core}.a-style libs as available \
-//       ~/cerid-deps/nlopt-ref-build/cobyla_exposed.o ~/cerid-deps/nlopt-ref-build/libnlopt_nocobyla.a \
-//       -Iengine/core/include -Iengine/containers/include -Iengine/memory/include -Iengine/vm/include \
-//       -Iengine/log/include -Iengine/hesap/include -Iengine/hesap-opt/include -Iengine/hesap-sparse/include \
-//       -Iengine/hesap-dense/include -Ibuild/linux-gcc-release/engine/core/include -lm -o /tmp/cobyla_difftest
+// Local only, never CI/shipped: a tree configured with -DCRD_BUILD_HESAP_VS_NLOPT=ON builds it against the pinned
+// NLopt (tests/numerics/hesap-opt/CMakeLists.txt) and runs it as the crd-nlopt-cobyla-difftest CTest.
 
 #include <crd/hesap/opt/cobyla.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>

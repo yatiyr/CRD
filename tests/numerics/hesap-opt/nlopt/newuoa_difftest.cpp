@@ -1,15 +1,16 @@
 // newuoa_difftest.cpp — Phase 3.1.6 v7-p-3 DIFFERENTIAL-TEST HARNESS (the L-BFGS-B/COBYLA playbook). Two
-// layers vs the compiled NLopt reference (newuoa_exposed.o from scripts/setup-nlopt-ref.sh):
+// layers vs the compiled NLopt reference (newuoa_oracle.c: NLopt's newuoa.c, statics externalized):
 //   1. PER-ROUTINE — trsapp_/biglag_/bigden_/update_ on IDENTICAL inputs (randomized model states exercise
 //      the same arithmetic; targeted seeds hit the jl==1/jl>1 + idz branches of update_), outputs compared
 //      BIT-EXACT: step/d/vlag/w/beta/alpha/crvmin reals, bmat/zmat matrices, idz ints, return codes.
 //   2. END-TO-END — the `crd_newuoa_e2e` shim (NULL bounds = the classic unconstrained scope; xtol_rel passed
 //      so both sides compute rhoend = xtol_rel*rhobeg identically) vs `minimize_newuoa`: bit-exact x and
 //      minf with IDENTICAL EVALUATION COUNTS.
-// Dev-only, WSL, never CI/shipped. Build (after scripts/setup-nlopt-ref.sh; from the repo root): same recipe
-// as cobyla_difftest with newuoa_exposed.o + libnlopt_nonewuoa.a.
+// Local only, never CI/shipped: a tree configured with -DCRD_BUILD_HESAP_VS_NLOPT=ON builds it against the pinned
+// NLopt (tests/numerics/hesap-opt/CMakeLists.txt) and runs it as the crd-nlopt-newuoa-difftest CTest.
 
 #include <crd/hesap/opt/newuoa.hpp>
+#include <crd/math/cmath.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <cmath>
@@ -36,6 +37,25 @@ extern "C"
     typedef double (*crd_newuoa_cb)(int n, const double* x);
     int crd_newuoa_e2e(int n, int npt, double* x, double* minf, double rhobeg, double xtol_rel, int maxeval,
                        double ftol_rel, double ftol_abs, crd_newuoa_cb cb, int* nevals_out);
+    // The oracle's elementary functions (newuoa_oracle.c): crd-math's, the ones the port calls.
+    double crd_oracle_sin(double x);
+    double crd_oracle_cos(double x);
+    double crd_oracle_atan(double x);
+}
+
+double crd_oracle_sin(double x)
+{
+    return crd::math::sin(x);
+}
+
+double crd_oracle_cos(double x)
+{
+    return crd::math::cos(x);
+}
+
+double crd_oracle_atan(double x)
+{
+    return crd::math::atan(x);
 }
 
 namespace

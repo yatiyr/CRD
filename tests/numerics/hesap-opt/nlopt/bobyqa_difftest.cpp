@@ -1,12 +1,13 @@
 // bobyqa_difftest.cpp — Phase 3.1.6 v7-p-4 DIFFERENTIAL-TEST HARNESS (the L-BFGS-B/COBYLA/NEWUOA playbook).
-// Layers vs the compiled NLopt reference (bobyqa_exposed.o from scripts/setup-nlopt-ref.sh):
+// Layers vs the compiled NLopt reference (bobyqa_oracle.c: NLopt's bobyqa.c, statics externalized):
 //   1. PER-ROUTINE — update_/altmov_/trsbox_ on IDENTICAL randomized model states (bound-rich: sl/su tight
 //      so the active-set paths fire), plus prelim_ through the stop-building shim — outputs BIT-EXACT.
 //   2. END-TO-END — the `crd_bobyqa_e2e` shim (EQUAL dx ⇒ identity rescaling, so the bobyqa() layer matches
 //      our unscaled port; xtol_rel passed so both compute rhoend identically) vs `minimize_bobyqa`:
 //      bit-exact x and minf with IDENTICAL EVALUATION COUNTS. NOTE: rescue_ has no targeted per-routine diff
 //      (it needs a full coherent degenerate model state); its coverage is opportunistic via e2e — honest gap.
-// Dev-only, WSL, never CI/shipped. Build: the cobyla/newuoa recipe with bobyqa_exposed.o + libnlopt_nobobyqa.a.
+// Local only, never CI/shipped: a tree configured with -DCRD_BUILD_HESAP_VS_NLOPT=ON builds it against the pinned
+// NLopt (tests/numerics/hesap-opt/CMakeLists.txt) and runs it as the crd-nlopt-bobyqa-difftest CTest.
 
 #include <crd/hesap/opt/bobyqa.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>

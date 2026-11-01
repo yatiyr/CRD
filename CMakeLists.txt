@@ -68,6 +68,11 @@ option(CRD_BUILD_HESAP_VS_HPTT "Build bench_permute against HPTT's plans of ever
 # the crd-bench-highway-peer library that bench_dispatch_cost links. Local only, never in CI or a shipped build;
 # scripts/run_bench_dispatch.sh builds and runs it per CPU level.
 option(CRD_BUILD_DISPATCH_VS_HIGHWAY "Build the dispatch-cost bench against Highway's dynamic dispatch (local-only)" OFF)
+# The differential tests of hesap-opt's COBYLA, NEWUOA and BOBYQA ports against the pinned NLopt release (cmake/pins.json
+# nlopt, fetched on demand into build/_deps) built by its own CMake as a separate project, with each algorithm's source
+# compiled again with its file-scope functions external (tests/numerics/hesap-opt/nlopt). Local only, never in CI or a
+# shipped build; registered as the crd-nlopt-*-difftest CTests of the tree that turns it on.
+option(CRD_BUILD_HESAP_VS_NLOPT "Build the COBYLA, NEWUOA and BOBYQA differential tests against NLopt (local-only)" OFF)
 # The hesap-fft and NUFFT phase counters (CRD_FFT_PROFILE, CRD_NUFFT_PROFILE) in the library, its kernel units and its
 # consumers; a tree of its own (scripts/prof_fft_kernel.sh), since the counters change the measured code.
 option(CRD_HESAP_FFT_PROFILE "Build hesap-fft with its per-phase cycle counters (measurement trees only)" OFF)
@@ -1012,6 +1017,16 @@ if(CRD_BUILD_HESAP_VS_HPTT)
         message(FATAL_ERROR "[hesap-vs-hptt] needs x64 Linux and CRD_BUILD_RETAINED_BENCHES (bench_permute)")
     endif()
     crd_add_pinned_package(hptt DOWNLOAD_ONLY YES)
+endif()
+
+# ----- The Powell-method differential tests' oracle: NLopt, built by tests/numerics/hesap-opt (test-only) -----
+# The oracle units are C, the only first-party C units of the tree, so C is enabled here.
+if(CRD_BUILD_HESAP_VS_NLOPT)
+    if(NOT CRD_BUILD_TESTS)
+        message(FATAL_ERROR "[hesap-vs-nlopt] the differential tests need CRD_BUILD_TESTS")
+    endif()
+    enable_language(C)
+    crd_add_pinned_package(nlopt DOWNLOAD_ONLY YES)
 endif()
 
 # ----- The FFT and DCT boards' pocketfft peer: the pinned header, built by runtime/CMakeLists.txt (bench-only) -----

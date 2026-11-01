@@ -2,7 +2,7 @@
 // quadratic-exactness property (full npt, optimum interior); (2) an ACTIVE-BOUND optimum (the unconstrained
 // minimizer outside the box -> pinned exactly); (3) Rosenbrock in a box from the classic start; (4) bit-
 // identical determinism; (5) n = 0. The differential harness vs the compiled oracle is the close gate
-// (runtime/examples/bobyqa_difftest.cpp).
+// (nlopt/bobyqa_difftest.cpp).
 
 #include <crd/hesap/opt/bobyqa.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>

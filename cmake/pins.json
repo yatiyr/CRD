@@ -172,6 +172,19 @@
         "tracy-syspower-checked-scan"
       ],
       "note": "Tracy Profiler's client (public/TracyClient.cpp), compiled only into crd-diag-overhead-tracy, the DIAG.11b peer harness (docs/bench/2026-10-26-diag-11b-tracy-peer.md); never into an engine module or a default build. LICENSE read from the archive: BSD-3-Clause, (c) 2017-2026 Bartosz Taudul. The client bundles rpmalloc (public domain), moodycamel's concurrentqueue (Simplified BSD), Erik Rigtorp's SPSCQueue (MIT), LZ4 (BSD-2-Clause) and libbacktrace (BSD-3-Clause, Free Software Foundation)."
+    },
+    "nlopt": {
+      "version": "2.11.0",
+      "repository": "stevengj/nlopt",
+      "ref": "v2.11.0",
+      "commit": "88c424d4f458412787df96fcc95218acbca224fd",
+      "url": "https://github.com/stevengj/nlopt/archive/88c424d4f458412787df96fcc95218acbca224fd.tar.gz",
+      "file": "nlopt-88c424d4.tar.gz",
+      "sha256": "19b8f9fc375611ca3ac986b33190ff706c9343b663a58251b609fdd7b1703409",
+      "size": 2066874,
+      "license": "MIT",
+      "gated": "CRD_BUILD_HESAP_VS_NLOPT",
+      "note": "NLopt, the reference oracle of hesap-opt's COBYLA, NEWUOA and BOBYQA ports (the release current when they were ported, 2026-06-10). Its library builds by its own CMake as a separate project, static, without its C++, Luksan and binding parts, linked only into cobyla_difftest, newuoa_difftest and bobyqa_difftest with each algorithm's source compiled again (tests/numerics/hesap-opt/nlopt); never into an engine module or a default build. COPYRIGHT and the three algorithms' COPYRIGHT files read from the archive: MIT, (c) 2007-2020 Massachusetts Institute of Technology and contributors; COBYLA (c) 1992 M. J. D. Powell, 2004 Jean-Sebastien Roy, 2008 Steven G. Johnson; NEWUOA (c) 2004 and BOBYQA (c) 2009 M. J. D. Powell, with MIT's modifications. The Luksan solvers (LGPL) are not built."
     }
   },
   "tools": {

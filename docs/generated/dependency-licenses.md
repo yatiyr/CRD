@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **14** · tools: **29** · workflow actions: **5** · runner images: **5** · unpinned apt packages: **21**
+- packages: **15** · tools: **29** · workflow actions: **5** · runner images: **5** · unpinned apt packages: **21**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -29,6 +29,7 @@
 | pocketfft | 4d865cb | BSD-3-Clause | mreineck/pocketfft @ `4d865cba24359b05b37da4e75aee24498c3b78e7` (4d865cba2435) | `pocketfft-4d865cba.tar.gz` |
 | highway | 1.4.0 | Apache-2.0 OR BSD-3-Clause | google/highway @ `1.4.0` (2607d3b5b011) | `highway-2607d3b5.tar.gz` |
 | tracy | 0.14.1 | BSD-3-Clause | wolfpld/tracy @ `v0.14.1` (30997d5ca6bb) | `tracy-30997d5c.tar.gz` |
+| nlopt | 2.11.0 | MIT | stevengj/nlopt @ `v2.11.0` (88c424d4f458) | `nlopt-88c424d4.tar.gz` |
 
 ## Tools (installers, SDK members and helpers, verified by digest)
 

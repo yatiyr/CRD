@@ -162,6 +162,13 @@
       "why": "The L-BFGS-B differential test against the reference C, a local oracle (scripts/setup-lbfgsb-ref.sh)."
     },
     {
+      "paths": [
+        "tests/numerics/hesap-opt/nlopt/"
+      ],
+      "built_when": {"option": "CRD_BUILD_HESAP_VS_NLOPT"},
+      "why": "The COBYLA, NEWUOA and BOBYQA differential tests (the crd-nlopt-*-difftest CTests) and their oracle units, against the pinned NLopt (cmake/pins.json nlopt) built by its own CMake."
+    },
+    {
       "paths": ["runtime/examples/bench_hesap_mlilu_vs_ilupack.cpp"],
       "built_when": {"option": "CRD_BUILD_HESAP_VS_ILUPACK", "platform": "Linux"},
       "why": "The bench against ILUPACK, a non-commercial Linux-only binary oracle (scripts/setup-ilupack-ref.sh)."
@@ -287,13 +294,10 @@
         "scripts/v14m_ggml_q8_bench.c",
         "runtime/examples/bench_batched.cpp",
         "runtime/examples/bench_dsp_sosfilt_vs_liquid.c",
-        "runtime/examples/bench_dsp_windows_vs_liquid.c",
-        "runtime/examples/bobyqa_difftest.cpp",
-        "runtime/examples/cobyla_difftest.cpp",
-        "runtime/examples/newuoa_difftest.cpp"
+        "runtime/examples/bench_dsp_windows_vs_liquid.c"
       ],
       "unrouted": "REPO.3",
-      "why": "Peer and GPU-vendor measurement programs (CUDA, cuFFT, cuBLASLt, VkFFT, MKL, Boost, liquid-dsp, SUNDIALS, ggml) that no script or option builds; REPO.3 owns giving each a checked route or retiring it with its board as the record."
+      "why": "Peer and GPU-vendor measurement programs (CUDA, CUB, cuBLAS, cuFFT, VkFFT, MKL, liquid-dsp, ggml) and the Shewchuk predicates reference that no script or option builds; REPO.3 owns giving each a checked route or retiring it with its board as the record."
     }
   ]
 }

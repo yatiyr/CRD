@@ -4,7 +4,7 @@
 // free simplex-model method agreeing with SQP/auglag/IPM on the same instance); (3) active variable bounds;
 // (4) bounded Rosenbrock (no general constraints); (5) bit-identical determinism (incl. the reference's
 // deterministic LCG); (6) n = 0. The PER-ROUTINE differential harness vs the compiled NLopt oracle is the
-// separate v7-p-2 close gate (runtime/examples/cobyla_difftest.cpp, CRD_BUILD_HESAP_VS_COBYLA).
+// separate v7-p-2 close gate (nlopt/cobyla_difftest.cpp, CRD_BUILD_HESAP_VS_NLOPT).
 
 #include <crd/hesap/opt/cobyla.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>

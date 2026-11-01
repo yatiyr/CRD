@@ -1334,7 +1334,7 @@ class PinnedInputs(unittest.TestCase):
                          self.workflow.count('persist-credentials: false'))
         self.assertEqual(self.workflow.count("python-version: '3.12'"), 13)
         for package in ('Catch2', 'glfw', 'zstd', 'stb', 'cgltf', 'MikkTSpace', 'imgui', 'eigen', 'OpenBLAS',
-                        'boost', 'hptt', 'pocketfft', 'highway', 'tracy'):
+                        'boost', 'hptt', 'pocketfft', 'highway', 'tracy', 'nlopt'):
             self.assertIn('crd_add_pinned_package(%s' % package, self.cmake)
 
     def test_unpinned_references_fail_the_guard(self):
