@@ -43,6 +43,8 @@ Needs CI audit:
   divisor that is nonzero with a quotient that fits); judged only when the code's image comparison matches, never on
   a protection fault, a sent or kernel-sent signal, or a memory divisor. `bundle.inspect` reports the instruction set,
   registers and access with the crash, and the check, reason, length and access count with the classification.
+  A match must cover the whole instruction: `compare_code_with_image` compares only the bytes the file holds, so a
+  match that ends inside it (a section's tail) is not judged, with proven teeth.
 
 ## Evidence
 

@@ -3248,8 +3248,8 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   all-ones address of a protection fault; a record's SEGV or BUS on trap 14) outside the instruction's own bytes and
   every range, or of a kind it does not make, is `access-not-made`; a divide error on an instruction other than DIV
   or IDIV, or on one whose register divisor is nonzero and whose quotient fits (`x86_divide_faults`, by comparison,
-  never by dividing), is `divide-without-cause`. Both are judged only on code whose image comparison matches, so
-  code changed after the fault is never read. AArch64 instructions are not decoded yet (HW-RESILIENCE.2).
+  never by dividing), is `divide-without-cause`. Both are judged only on code whose image comparison matches over
+  the whole instruction, so code changed after the fault is never read. AArch64 instructions are not decoded yet (HW-RESILIENCE.2).
   `bundle.inspect` reports the instruction set, registers and access kind with the crash, and the check, its reason,
   length and access count with the classification.
 
