@@ -118,8 +118,9 @@ decided, the question never holds a row.
   refuses an older reading; the real register writes `us.ofac.embargo` with its seven measures. Ten source mutations
   of the rules, the reading digest, the publication day and the guard were each caught (one was missed first, an
   unverified source, and its case was added).
-- **C++.** On the track's machine (linux-gcc-debug, 3a21b5cd; 05:09-05:14 UTC) `crd-comply-tests`,
-  `crd-fuzz-comply-sanctions`, `crd-ceridc-tests` and `ceridc` built with no warning and the 158 scoped CTests passed;
+- **C++.** On the track's machine (linux-gcc-debug at 3a21b5cd, the work-in-progress commit of the same tree;
+  05:09-05:14 UTC) `crd-comply-tests`, `crd-fuzz-comply-sanctions`, `crd-ceridc-tests` and `ceridc` built with no
+  warning and the 158 scoped CTests passed;
   `crd-comply-sanctions-imported` ran both hidden cases (206 assertions): the embargo decodes and adopts as generation
   20261101000000 with seven destinations, CU, IR, KP, UA-43, UA-40 and a place inside Cuba block, UA needs review with
   both Crimean regions possible, RU and VE need review as sectoral, SY, UA-30 and TR are clear, and on 2027-02-02 the
