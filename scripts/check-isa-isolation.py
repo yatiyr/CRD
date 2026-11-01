@@ -920,6 +920,8 @@ def _exit_with_parent():
             handle = kernel.OpenProcess(0x00100000, False, parent)  # SYNCHRONIZE
             if handle:
                 kernel.WaitForSingleObject(handle, 0xFFFFFFFF)
+            elif ctypes.get_last_error() != 87:  # ERROR_INVALID_PARAMETER: no such process, the parent ended
+                return  # a parent this worker may not watch is no reason to stop working
         else:
             while os.getppid() == parent:
                 threading.Event().wait(0.5)
