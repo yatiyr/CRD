@@ -1321,8 +1321,7 @@ class Lane:
         missing = [] if self.run.dry else [p for p in packages if subprocess.run(
             ['dpkg-query', '-W', p], capture_output=True, check=False).returncode != 0]
         if missing or self.run.dry:
-            self.run(['sudo', 'apt-get', 'update', '-q'])
-            self.run(['sudo', 'apt-get', 'install', '-y', *packages])
+            self.run(self.helper('install-apt-packages.py', '--update', *packages))
 
     def apt_census(self):
         packages = APT_PACKAGES['arm64' if self.job == 'linux-arm64' else 'x64']
@@ -1487,7 +1486,7 @@ class Lane:
     def genmc(self):
         if not self.preset_step('GenMC weak-memory model'):
             return
-        self.run(['sudo', 'apt-get', 'install', '-y', *APT_PACKAGES['genmc']])
+        self.run(self.helper('install-apt-packages.py', *APT_PACKAGES['genmc']))
         self.run(['dpkg-query', '-W', '-f=${Package} ${Version}\\n', *GENMC_CENSUS],
                  stdout=self.temp / 'packages-genmc.txt')
         if not self.run.dry and (self.temp / 'packages-genmc.txt').is_file():

@@ -1193,10 +1193,10 @@ class Parity(unittest.TestCase):
         steps = pipeline.workflow_steps(WORKFLOW)
         for job, key in (('linux-gcc', 'x64'), ('linux-arm64', 'arm64')):
             run = dict(steps[job])['Install system dependencies']
-            body = run.split('install -y', 1)[1]
+            body = run.split('install-apt-packages.py --update', 1)[1]
             listed = [token for line in body.splitlines() for token in line.split('#', 1)[0].replace('\\', ' ').split()]
             self.assertEqual(listed, list(pipeline.APT_PACKAGES[key]), job)
-        genmc = dict(steps['linux-gcc'])['Install GenMC toolchain'].split('install -y', 1)[1].split('\n')[0].split()
+        genmc = dict(steps['linux-gcc'])['Install GenMC toolchain'].split('install-apt-packages.py', 1)[1].split('\n')[0].split()
         self.assertEqual(genmc, list(pipeline.APT_PACKAGES['genmc']))
         self.assertIn(pipeline.NATIVE_TESTS, dict(steps['windows-native'])['Test'])
 

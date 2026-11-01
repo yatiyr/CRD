@@ -810,9 +810,9 @@ jobs:
         run: python scripts/install-ninja.py --destination "$RUNNER_TEMP/ninja" --github-path "$GITHUB_PATH"
 
       - name: Install system dependencies
+        timeout-minutes: 60
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y \
+          python scripts/install-apt-packages.py --update \
             libvulkan-dev \
             glslang-tools \
             libshaderc-dev \
@@ -1003,8 +1003,9 @@ jobs:
       - name: Install GenMC toolchain
         id: genmc-toolchain
         if: "!cancelled() && matrix.preset == 'linux-clang-tsan'"
+        timeout-minutes: 60
         run: |
-          sudo apt-get install -y llvm-20-dev clang-20 g++-14 libedit-dev
+          python scripts/install-apt-packages.py llvm-20-dev clang-20 g++-14 libedit-dev
           dpkg-query -W -f='${Package} ${Version}\n' llvm-20-dev clang-20 libllvm20 g++-14 libedit-dev libffi-dev \
             | tee -a "$RUNNER_TEMP/packages.txt"
           echo "llvm=$(dpkg-query -W -f='${Version}' llvm-20-dev)" >> "$GITHUB_OUTPUT"
@@ -1445,9 +1446,9 @@ jobs:
         run: python scripts/install-ninja.py --destination "$RUNNER_TEMP/ninja" --github-path "$GITHUB_PATH"
 
       - name: Install system dependencies
+        timeout-minutes: 60
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y \
+          python scripts/install-apt-packages.py --update \
             libvulkan-dev \
             glslang-tools \
             libshaderc-dev \
@@ -1730,9 +1731,9 @@ jobs:
           python-version: '3.12'
 
       - name: Install system dependencies
+        timeout-minutes: 60
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y ninja-build gdb clang libclang-rt-18-dev
+          python scripts/install-apt-packages.py --update ninja-build gdb clang libclang-rt-18-dev
 
       - name: Record system package versions
         run: |

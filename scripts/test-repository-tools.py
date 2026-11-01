@@ -76,6 +76,9 @@ tidy_spec.loader.exec_module(install_tidy)
 ninja_spec = importlib.util.spec_from_file_location('install_ninja', ROOT / 'scripts/install-ninja.py')
 install_ninja = importlib.util.module_from_spec(ninja_spec)
 ninja_spec.loader.exec_module(install_ninja)
+apt_spec = importlib.util.spec_from_file_location('install_apt', ROOT / 'scripts/install-apt-packages.py')
+install_apt = importlib.util.module_from_spec(apt_spec)
+apt_spec.loader.exec_module(install_apt)
 msvc_spec = importlib.util.spec_from_file_location('msvc_dev_env', ROOT / 'scripts/msvc-dev-env.py')
 msvc_dev_env = importlib.util.module_from_spec(msvc_spec)
 msvc_spec.loader.exec_module(msvc_dev_env)
@@ -2172,6 +2175,54 @@ class BuildPerformance(unittest.TestCase):
         self.assertEqual(pins_registry.entry('tools', 'ninja-windows')['version'],
                          pins_registry.entry('tools', 'ninja-linux')['version'])
         self.assertIn('scripts/install-ninja.py', check_pins.HELPERS)
+
+    def test_apt_installer_bounds_every_attempt_retries_and_names_each_outcome(self):
+        def runner(codes):
+            commands = []
+
+            def run(command):
+                commands.append(command)
+                return codes.pop(0)
+            return commands, run
+
+        commands, run = runner([124, 0, 0])
+        with contextlib.redirect_stdout(io.StringIO()):
+            install_apt.install(['gdb'], update=True, update_seconds=7, install_seconds=9, run=run)
+        self.assertEqual([c[:4] for c in commands], [['sudo', 'timeout', '--kill-after=30', '7']] * 2
+                         + [['sudo', 'timeout', '--kill-after=30', '9']])
+        self.assertEqual(commands[0][4:6] + commands[0][-1:], ['apt-get', '-q', 'update'])
+        for option in ('Acquire::Retries=3', 'Acquire::http::Timeout=60', 'Acquire::https::Timeout=60',
+                       'DPkg::Lock::Timeout=120'):
+            self.assertIn(option, commands[0])
+            self.assertIn(option, commands[2])
+        self.assertEqual(commands[2][-2:], ['install', 'gdb'])
+
+        commands, run = runner([100, 0, 0])
+        with contextlib.redirect_stdout(io.StringIO()):
+            install_apt.install(['gdb'], update=False, run=run)
+        self.assertEqual(commands[1][4:], ['dpkg', '--configure', '-a'],
+                         'a failed install finishes dpkg before it is retried')
+        self.assertEqual(commands[2][-2:], ['install', 'gdb'])
+
+        commands, run = runner([124, 137, 100])
+        with contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(install_apt.AptError, r'update failed on all 3 attempts \(timed out after 180 s; '
+                                        r'timed out after 180 s; exited 100\)'):
+                install_apt.install([], update=True, run=run)
+        self.assertEqual(len(commands), 3)
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                install_apt.main([])
+
+        workflows = sorted((ROOT / '.github/workflows').glob('*.yml'))
+        self.assertTrue(workflows)
+        for workflow in workflows:
+            text = workflow.read_text(encoding='utf-8')
+            self.assertNotRegex(text, r'\bapt-get\b', '%s calls apt-get outside the bounded helper' % workflow.name)
+            for step in re.split(r'\n\s+- name: ', text):
+                if 'install-apt-packages.py' in step:
+                    self.assertRegex(step, r'\n\s+timeout-minutes: \d+\n', '%s: an apt step without a step timeout'
+                                     % workflow.name)
 
     def test_msvc_environment_exports_only_what_vcvars_changed(self):
         before = {'PATH': r'C:\Windows', 'TEMP': r'C:\Temp', 'PROMPT': '$P$G'}
