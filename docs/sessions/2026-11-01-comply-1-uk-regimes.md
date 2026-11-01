@@ -109,8 +109,10 @@ the text read, its regime groups, is `66ecf0898474516fd1f979416789ad50619eb761f3
 | `gb.si-2020-1278.yemen` | S.I. 2020/1278 | 2026-05-13 | 769864 | `7a8fd234ae17115fa936308a67aebcb7834615dfcb79e6f824ff0b4de5d3a0c0` |
 | `gb.si-2019-604.zimbabwe` | S.I. 2019/604 | 2026-05-13 | 757260 | `93f328913408b567a89607816005d17dc9113d849fe101b6717d24596385b386` |
 
-Effective days: the EU Exit regulations came into force on IP completion day, recorded as 2020-12-31; Myanmar's on
-2021-04-29, Haiti's on 2022-12-28, Iran's 2023 regulations on 2023-12-14 and the Export Control Order on 2009-04-06.
+Effective days: Haiti's (2022-12-28), Iran's 2023 regulations (2023-12-14) and the Export Control Order (2009-04-06)
+name their day. The EU Exit regulations come into force "in accordance with regulations made under section 56", and
+those commencement regulations were not read here: their day is recorded as IP completion day, 2020-12-31, and
+Myanmar's as 2021-04-29, from what is known of them, not from the texts read.
 
 What each says that bears on Cerid ("a person connected with" a country is one ordinarily resident or located there,
 or incorporated, constituted or domiciled there):
