@@ -501,7 +501,7 @@ TEST_CASE("fft kernels: the planner's algorithm of every size", "[fft]")
         }
     };
     // index = log2(n), 2^0 .. 2^23
-    constexpr const char* f32_forward = "SSSSSSSSSShPPhIIIDDDTFFF";
+    constexpr const char* f32_forward = "SSSSSSSSSShPPhPIIDDDTFFF";
     constexpr const char* f32_inverse = "SSSSSSSSSSSISSIIIFFFFFFF";
     constexpr const char* f64_forward = "SSSSSSSSSSIIIIIIIDDDXFFF";
     constexpr const char* f64_inverse = "SSSSSSSSSSIIIIIIIFFFFFFF";
