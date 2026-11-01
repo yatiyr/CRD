@@ -18,7 +18,7 @@ Each track works its rows in table order, delivers to `main` by rebase, and neve
 | A, the serial workflow | this host | [HW-RESILIENCE.1](../ROADMAP.md#slice-hw-resilience.1) to [HW-RESILIENCE](../ROADMAP.md#slice-hw-resilience) as one unit, then the DIAG close ([DIAG.11b](../ROADMAP.md#slice-diag.11b) to [DIAG](../ROADMAP.md#slice-diag)) |
 | B | its cloud machine `cerid-track-b` | [OWN.1](../ROADMAP.md#slice-own.1) to [OWN](../ROADMAP.md#slice-own) first (NET.1 and COMPLY.0 require OWN), then [MCP-ADAPT.0](../ROADMAP.md#slice-mcp-adapt.0), then [REPO.3d](../ROADMAP.md#slice-repo.3d) to [REPO](../ROADMAP.md#slice-repo) |
 | C | its cloud machine `cerid-track-c` | [NET.1](../ROADMAP.md#slice-net.1) to [NETCRASH](../ROADMAP.md#slice-netcrash): NET, COMPLY and CRASH-FIX |
-| Optimization | its cloud machine `cerid-bench` | [SIMD-PERF](../ROADMAP.md#slice-simd-perf) and [HESAP-JOBS-RETUNE](../ROADMAP.md#slice-hesap-jobs-retune) |
+| Optimization | its cloud machine `cerid-bench` | [SIMD-PERF](../ROADMAP.md#slice-simd-perf) and [HESAP-JOBS-RETUNE](../ROADMAP.md#slice-simd-perf) |
 
 - The cloud tracks' machines are spot `c4-standard-8` instances driven by `ci/bench_vm.py --name`, started for a
   batch's builds and tests and stopped after it. Windows coverage comes from CI.

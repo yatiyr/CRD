@@ -4,7 +4,7 @@
 > Dated session note; no live status. Current work: [ROADMAP](../ROADMAP.md#slice-simd-dispatch).
 
 Row: [SIMD-DISPATCH](../ROADMAP.md#slice-simd-dispatch) (Left item 9, the crd-jobs retune folded in from
-[HESAP-JOBS-RETUNE](../ROADMAP.md#slice-hesap-jobs-retune)). Before:
+[HESAP-JOBS-RETUNE](../ROADMAP.md#slice-simd-perf)). Before:
 [batch_gradient's and the task schedulers' levers](2026-10-30-simd-dispatch-jobs-autodiff-sched-picks.md).
 
 ## CI first

@@ -165,6 +165,31 @@ def user_order_overrides(rows):
     return result
 
 
+MOVED_ROW = re.compile(r'^\s*(?:Folded into|Merged into|Moved to|Superseded by)\b')
+
+
+def moved_row_errors(rows):
+    """A row whose work went to another row is not an open row: it is removed and its links point at the owner."""
+    return [f'{name}: its work moved to another row; remove the stub and point its links at the owner'
+            for name, cells in rows if cells[2] not in COMPLETE and MOVED_ROW.match(cells[3])]
+
+
+def delivery_plan_errors(ids, plan_text):
+    """docs/design/delivery-plan.md's phase lists hold every ROADMAP row exactly once, in table order."""
+    plan = []
+    for listed in re.findall(r'^Rows in order: (.*?)\.\n', plan_text, flags=re.S | re.M):
+        plan += [re.sub(r'\s*\(.*\)$', '', row.strip()) for row in listed.replace('\n', ' ').split(',')]
+    errors = [f'Delivery plan lists a row the ROADMAP lacks: {row}' for row in plan if row not in ids]
+    errors += [f'Delivery plan omits ROADMAP row: {row}' for row in ids if row not in plan]
+    if len(plan) != len(set(plan)):
+        errors.append('Delivery plan lists a row twice')
+    common = [row for row in plan if row in ids]
+    if not errors and common != ids:
+        first = next(i for i, (a, b) in enumerate(zip(common, ids)) if a != b)
+        errors.append(f'Delivery plan order differs from the ROADMAP at {common[first]} (ROADMAP has {ids[first]})')
+    return errors
+
+
 def sequence_errors(rows, current_ids):
     """One implementation position; CI waits are visible exceptions, never completion claims."""
     first = first_unfinished(rows)
@@ -345,6 +370,8 @@ def main():
             errors.append('Visual authoring precedes the editor widgets: ' + name)
     if not index['CR-D007'] < index['NOTEBOOK']:
         errors.append('Notebook precedes CR-D007 release')
+    errors += moved_row_errors(rows)
+    errors += delivery_plan_errors(ids, read(ROOT / 'docs/design/delivery-plan.md'))
     snapshot = json.loads(read(ROOT / 'docs/research/2026-09-12-system-audit.json'))
     for old, route in snapshot['source_id_routes'].items():
         if route['owner'] not in index and route['owner'] != 'Recorded CEIR/RAF history':

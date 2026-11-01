@@ -31,7 +31,7 @@ OPTIMIZATIONS ON ANOTHER MACHINE AND CARRY ON IMPLEMENTING THIS!"
   host. Every board there re-baselines the pre-row engine `2f2aed72` and HEAD on that machine, interleaved, judged
   by ratios; its numbers are never compared with the i9-14900K boards. A change reaches `main` only on a measured win
   under the 2026-10-30 acceptance rule.
-- [HESAP-JOBS-RETUNE](../ROADMAP.md#slice-hesap-jobs-retune) follows the retune's boards into SIMD-PERF.
+- [HESAP-JOBS-RETUNE](../ROADMAP.md#slice-simd-perf) follows the retune's boards into SIMD-PERF.
 - CI-1, CI-2 and CI-3 were Blocked on the user's Part A of the setup recipe. Part A and the operator's Part B are
   done ([session](2026-10-31-ci-launcher-and-merges.md)), so each is Partial, naming the live evidence it still needs.
   CI-4 stays Open: it needs the parity proof and the user's go. The CI rows are worked by the CI track, beside the

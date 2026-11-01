@@ -63,52 +63,53 @@ table passed the applier's checks and the repository validator.
 
 ## Groups in order
 
-"Positions now" are positions in today's 1068 rows; the applier inserts the 16 real-hardware rows into P40.
+"Positions now" are positions in today's 1095 ROADMAP rows (2026-11-02).
 
 | Group | Positions now | Rows now | Rows with pending | Name |
 | --- | --- | --- | --- | --- |
 | P00 | 1-92 | 92 | 92 | Completed history (Done and Recorded) |
-| P01 | 93-111 | 19 | 19 | Current front (user-fixed): adoption, CPU dispatch, resilience, diagnostics, ownership |
-| P02 | 112-130 | 19 | 19 | NETCRASH window: secure network foundation and crash-to-fix intake (user-fixed) |
-| P03 | 131-140 | 10 | 10 | Security, supply chain and the audit gate (user-fixed) |
-| P04 | 141-195 | 55 | 55 | RAH renderer redesign (user-fixed) |
-| P05 | 196-208 | 13 | 13 | Computational geometry backbone (user-fixed) |
-| P06 | 209-231 | 23 | 23 | Foundation hardening: allocators, containers, jobs and the ARM64 port |
-| P07 | 232-248 | 17 | 17 | Language and reflection backbone (CHIR, reflection, language services) |
-| P08 | 249-255 | 7 | 7 | Command, transaction and MCP surface |
-| P09 | 256-271 | 16 | 16 | Scene, ECS, scientific meaning and large worlds |
-| P10 | 272-276 | 5 | 5 | Documents and shared reload |
-| P11 | 277-284 | 8 | 8 | Scripting and native execution tiers |
-| P12 | 285-289 | 5 | 5 | Extensions, packages and signing |
-| P13 | 290-298 | 9 | 9 | Agent surface and import trust |
-| P14 | 299-308 | 10 | 10 | Numerics CPU completion (hesap follow-ons) |
-| P15 | 309-333 | 25 | 25 | GPU compute programs and hesap GPU |
-| P16 | 334-341 | 8 | 8 | Machine-learning core: model assets, inference and training |
-| P17 | 342-359 | 18 | 18 | Geometry extensions and discretization: SDF, B-rep, analysis meshing, FE and FV cores |
-| P18 | 360-367 | 8 | 8 | Animation core |
-| P19 | 368-462 | 95 | 95 | Physics engine EYLEM, navigation crowds and physics qualification |
-| P20 | 463-553 | 91 | 91 | Renderer runtime library and offline rendering (RENDERER-RUNTIME gate) |
-| P21 | 554-627 | 74 | 74 | Input, windows and the owned UI (crd-ui) with the CR-D007 shell |
-| P22 | 628-646 | 19 | 19 | Scene and prefab document reconciliation for the editor |
-| P23 | 647-677 | 31 | 31 | CR-D007 editor, agent control, guarded crash fixing, native authoring, onboarding |
-| P24 | 678-693 | 16 | 16 | Publishing, stores, live operations, mods, the extension marketplace and the Cerid store |
-| P25 | 694-700 | 7 | 7 | 2D games and world-space UI |
-| P26 | 701-814 | 114 | 114 | Visual authoring acceptance of every renderer family |
-| P27 | 815-831 | 17 | 17 | Desktop release qualification and CR-D007 |
-| P28 | 832-859 | 28 | 28 | Scientific language, REPL, notebook, scientific visualization and physics visualization |
-| P29 | 860-869 | 10 | 10 | AI products: applied workflows, game brains and the combined AI release |
-| P30 | 870-903 | 34 | 34 | Media and audio engines |
-| P31 | 904-929 | 26 | 26 | macOS and web releases |
-| P32 | 930-943 | 14 | 14 | Networked games, servers, massive worlds and real-time communication |
-| P33 | 944-947 | 4 | 4 | Collaboration host and browser hub |
-| P34 | 948-971 | 24 | 24 | Content creation: procedural generation, assisted posing, modeling and interchange |
-| P35 | 972-978 | 7 | 7 | DAW and the collaboration release |
-| P36 | 979-982 | 4 | 4 | Cinematics and virtual production |
-| P37 | 983-1018 | 36 | 36 | CAD, CAE, CAM, EDA and AEC |
-| P38 | 1019-1060 | 42 | 42 | Estimation and control, simulation, sensors, robotics, autonomy, aerospace and embedded |
-| P39 | 1061-1063 | 3 | 3 | Operations for distributed, collaborative and embedded deployments |
-| P40 | 1064-1065 | 2 | 18 | Real-hardware qualification (the hardware halves of every hardware-gated row) |
-| P41 | 1066-1068 | 3 | 3 | Cross-domain portfolio |
+| P01 | 93-116 | 24 | 24 | Current front (user-fixed): adoption, CPU dispatch, resilience, diagnostics, ownership |
+| P02 | 117-135 | 19 | 19 | NETCRASH window: secure network foundation and crash-to-fix intake (user-fixed) |
+| P02b | 136-159 | 24 | 24 | Network block: every network row, built complete (user-fixed) |
+| P03 | 160-169 | 10 | 10 | Security, supply chain and the audit gate (user-fixed) |
+| P04 | 170-224 | 55 | 55 | RAH renderer redesign (user-fixed) |
+| P05 | 225-237 | 13 | 13 | Computational geometry backbone (user-fixed) |
+| P06 | 238-260 | 23 | 23 | Foundation hardening: allocators, containers, jobs and the ARM64 port |
+| P07 | 261-277 | 17 | 17 | Language and reflection backbone (CHIR, reflection, language services) |
+| P08 | 278-284 | 7 | 7 | Command, transaction and MCP surface |
+| P09 | 285-300 | 16 | 16 | Scene, ECS, scientific meaning and large worlds |
+| P10 | 301-305 | 5 | 5 | Documents and shared reload |
+| P11 | 306-313 | 8 | 8 | Scripting and native execution tiers |
+| P12 | 314-318 | 5 | 5 | Extensions, packages and signing |
+| P13 | 319-327 | 9 | 9 | Agent surface and import trust |
+| P14 | 328-337 | 10 | 10 | Numerics CPU completion (hesap follow-ons) |
+| P15 | 338-362 | 25 | 25 | GPU compute programs and hesap GPU |
+| P16 | 363-370 | 8 | 8 | Machine-learning core: model assets, inference and training |
+| P17 | 371-388 | 18 | 18 | Geometry extensions and discretization: SDF, B-rep, analysis meshing, FE and FV cores |
+| P18 | 389-396 | 8 | 8 | Animation core |
+| P19 | 397-491 | 95 | 95 | Physics engine EYLEM, navigation crowds and physics qualification |
+| P20 | 492-582 | 91 | 91 | Renderer runtime library and offline rendering (RENDERER-RUNTIME gate) |
+| P21 | 583-656 | 74 | 74 | Input, windows and the owned UI (crd-ui) with the CR-D007 shell |
+| P22 | 657-675 | 19 | 19 | Scene and prefab document reconciliation for the editor |
+| P23 | 676-703 | 28 | 28 | CR-D007 editor, agent control, guarded crash fixing, native authoring, onboarding |
+| P24 | 704-718 | 15 | 15 | Publishing, stores, live operations, mods, the extension marketplace and the Cerid store |
+| P25 | 719-725 | 7 | 7 | 2D games and world-space UI |
+| P26 | 726-839 | 114 | 114 | Visual authoring acceptance of every renderer family |
+| P27 | 840-856 | 17 | 17 | Desktop release qualification and CR-D007 |
+| P28 | 857-884 | 28 | 28 | Scientific language, REPL, notebook, scientific visualization and physics visualization |
+| P29 | 885-894 | 10 | 10 | AI products: applied workflows, game brains and the combined AI release |
+| P30 | 895-923 | 29 | 29 | Media and audio engines |
+| P31 | 924-949 | 26 | 26 | macOS and web releases |
+| P32 | 950-953 | 4 | 4 | Compliance close and the social store |
+| P33 | 954-957 | 4 | 4 | Collaboration host and browser hub |
+| P34 | 958-981 | 24 | 24 | Content creation: procedural generation, assisted posing, modeling and interchange |
+| P35 | 982-989 | 8 | 8 | DAW and the collaboration release |
+| P36 | 990-993 | 4 | 4 | Cinematics and virtual production |
+| P37 | 994-1029 | 36 | 36 | CAD, CAE, CAM, EDA and AEC |
+| P38 | 1030-1071 | 42 | 42 | Estimation and control, simulation, sensors, robotics, autonomy, aerospace and embedded |
+| P39 | 1072-1074 | 3 | 3 | Operations for distributed, collaborative and embedded deployments |
+| P40 | 1075-1091 | 17 | 17 | Real-hardware qualification (the hardware halves of every hardware-gated row) |
+| P41 | 1092-1095 | 4 | 4 | Cross-domain portfolio |
 
 ### P00 Completed history (Done and Recorded)
 
@@ -126,12 +127,14 @@ Done and Recorded history in its current order. Unblocks everything.
 
 ### P01 Current front (user-fixed): adoption, CPU dispatch, resilience, diagnostics, ownership
 
-Rows in order: RESEARCH-ADOPT, SIMD-DISPATCH, HW-RESILIENCE.1, HW-RESILIENCE.2, HW-RESILIENCE.3, HW-RESILIENCE.4,
-HW-RESILIENCE, DIAG.11b, DIAG.11c, DIAG.12, DIAG, MCP-ADAPT.0, REPO.3d, REPO.3, REPO, HESAP-JOBS-RETUNE, OWN.1, OWN.2,
-OWN.
+Rows in order: RESEARCH-ADOPT, SIMD-DISPATCH, SIMD-PERF, CI-0, CI-1, CI-2, CI-3, CI-4, HW-RESILIENCE.1, HW-RESILIENCE.2,
+HW-RESILIENCE.3, HW-RESILIENCE.4, HW-RESILIENCE, DIAG.11b, DIAG.11c, DIAG.12, DIAG, MCP-ADAPT.0, REPO.3d, REPO.3, REPO,
+OWN.1, OWN.2, OWN.
 
-User-fixed. HESAP-JOBS-RETUNE is folded into SIMD-DISPATCH and closes with it (user decision
-2026-10-29, [record](../sessions/2026-10-29-user-decision-fold-jobs-retune.md)); it now requires SIMD-DISPATCH, not DIAG.
+User-fixed. HESAP-JOBS-RETUNE was folded into SIMD-DISPATCH (user decision 2026-10-29,
+[record](../sessions/2026-10-29-user-decision-fold-jobs-retune.md)) and its work moved to SIMD-PERF on 2026-10-31; it
+is no longer a row. SIMD-PERF is the open-ended optimization track; rows after it close at the user's order
+(2026-11-01) without waiting for it.
 
 ### P02 NETCRASH window: secure network foundation and crash-to-fix intake (user-fixed)
 
@@ -141,6 +144,17 @@ NET-SIM, NET-DEBUG, NET.5, COMPLY.2, CRASH-FIX.1, CRASH-FIX.2, NETCRASH.
 User-fixed. The Part 4 rows and the COMPLY children sit where the operator placed them: NET-STD after NET.1, the
 register COMPLY.0 and cryptography and export control (COMPLY.1) before NET.2, HESAP-NET after NET.2, NET-PATH and
 NET-REACH after 4.2a, privacy (COMPLY.2) before CRASH-FIX.1.
+
+### P02b Network block: every network row, built complete (user-fixed)
+
+Rows in order: NET-TIME, COMPLY.5, 4.2c, 4.2d, NET-SERVER, ANTICHEAT, NET-SCALE, COMPLY.9, PLG-1, AUDIO-DRV, MED-6-OPUS,
+MED-7-OPUS, MED-8-LIVE, MED-GPU-1, MED-10, MED-11-LIVE, MED-HW, NET-LIVE, 4.2e, NET-TIME-HW, NET, CRASH-FIX.3,
+CRASH-FIX.4, CRASH-FIX.
+
+User-fixed (2026-11-01: "I WANT ALL OF THEM SITTING RIGHT NEXT TO EACHOTHER IN THE ROADMAP AND I WANT ALL OF THEM
+IMPLEMENTED!"). Every network row follows NETCRASH in dependency order, with the media and audio rows a real call
+needs before NET-LIVE. No network row waits for the gameplay world, the large-world system, the store or publishing:
+those rows integrate with the finished network rows instead (the network block amendments in the ROADMAP rows).
 
 ### P03 Security, supply chain and the audit gate (user-fixed)
 
@@ -329,8 +343,8 @@ editor.
 ### P23 CR-D007 editor, agent control, guarded crash fixing, native authoring, onboarding
 
 Rows in order: EDITOR.1, VCS.2, EDITOR.2, EDITOR.3, EDITOR.4, EDITOR.5, SHIP.1, SHIP.2, SHIP.3, EDITOR.6, EDITOR.7,
-SHIP.4, SHIP.5, DEBT-2, EDITOR, AGENT.4, AGENT.5, AGENT-BENCH, AGENT, CRASH-FIX.3, CRASH-FIX.4, CRASH-FIX, NATIVE.1,
-NATIVE.2, NATIVE, CEIR-JIT.3, 6.3, DX.1, DX.2, DX.3, DX.4.
+SHIP.4, SHIP.5, DEBT-2, EDITOR, AGENT.4, AGENT.5, AGENT-BENCH, AGENT, NATIVE.1, NATIVE.2, NATIVE, CEIR-JIT.3, 6.3, DX.1,
+DX.2, DX.3, DX.4.
 
 CRASH-FIX.3, .4 and the parent follow AGENT.3 and AGENT as the user set. SHIP.1 to SHIP.3 sit after EDITOR.5 and SHIP.4,
 SHIP.5 after EDITOR.7 (Part 5). EDITOR.2 carries the CMD.3 gizmo-drag clause. 6.3 (OpenXR on simulators, hardware split)
@@ -338,15 +352,15 @@ sits right after its last prerequisite CEIR-JIT.3; SHIP-XR follows it in P31.
 
 ### P24 Publishing, stores, live operations, mods, the extension marketplace and the Cerid store
 
-Rows in order: COMPLY.5, SHIP.6, SHIP.7, COMPLY.8, SHIP.8, SHIP.9, EXT.5, EXT, STORE.0, STORE.1, STORE.2, STORE.3,
-STORE.4, STORE.5, STORE.6, SHIP.10.
+Rows in order: SHIP.6, SHIP.7, COMPLY.8, SHIP.8, SHIP.9, EXT.5, EXT, STORE.0, STORE.1, STORE.2, STORE.3, STORE.4,
+STORE.5, STORE.6, SHIP.10.
 
-Online safety, user content and children (COMPLY.5) first, because it governs the store, mods, EXT.5, 4.2d, COLLAB.1 and
-NET-LIVE; then store adapters, entitlements and payments, the store compliance kit COMPLY.8, the publisher console, mods
-and UGC (SHIP.9), the public extension marketplace EXT.5 and the EXT parent (user decision), the core of the Cerid store
-STORE.0 to STORE.6 (built on SHIP.6, SHIP.7, COMPLY.8, SHIP.9 and EXT.5), then `ceridc publish` (SHIP.10, which needs
-STORE.5). STORE.7 to STORE.9 follow SHIP in P27; STORE-MAC and STORE-WEB follow their SHIP rows in P31; STORE-SOCIAL,
-the STORE parent and STORE-MOBILE follow NET-LIVE in P32.
+Online safety, user content and children (COMPLY.5) sits in P02b since 2026-11-01, before 4.2d and NET-LIVE, and governs
+the store, mods, EXT.5 and COLLAB.1 from there; this group holds store adapters, entitlements and payments, the store
+compliance kit COMPLY.8, the publisher console, mods and UGC (SHIP.9), the public extension marketplace EXT.5 and the
+EXT parent (user decision), the core of the Cerid store STORE.0 to STORE.6 (built on SHIP.6, SHIP.7, COMPLY.8, SHIP.9
+and EXT.5), then `ceridc publish` (SHIP.10, which needs STORE.5). STORE.7 to STORE.9 follow SHIP in P27; STORE-MAC and
+STORE-WEB follow their SHIP rows in P31; STORE-SOCIAL, the STORE parent and STORE-MOBILE follow NET-LIVE in P32.
 
 ### P25 2D games and world-space UI
 
@@ -396,12 +410,14 @@ Applied workflows and game brains need AGENT; the combined AI release; the origi
 
 ### P30 Media and audio engines
 
-Rows in order: MED-REVIEW, MED-GPU-0, MED-GPU-1, MED-1, MED-2, MED-3, MED-8, MED-4, MED-5, MED-6, MED-7, MED-9, MED-10,
-MED-11, MED-12, MED-HW, MED-GPU-2, MED-GPU-3, PLG-1, AUDIO-DRV, MIDI-UMP, PLG-2, PLG-3, PLG-4, PLG-5, PLG-6, PLG-7,
-AUDIO-CEIR.1, AUDIO-CEIR.2, AUDIO-CEIR.3, AUDIO-CEIR.4, AUDIO-SPATIAL, AUDIO-GAME, AUDIO-CEIR.
+Rows in order: MED-REVIEW, MED-GPU-0, MED-1, MED-2, MED-3, MED-8, MED-4, MED-5, MED-6, MED-7, MED-9, MED-11, MED-12,
+MED-GPU-2, MED-GPU-3, MIDI-UMP, PLG-2, PLG-3, PLG-4, PLG-5, PLG-6, PLG-7, AUDIO-CEIR.1, AUDIO-CEIR.2, AUDIO-CEIR.3,
+AUDIO-CEIR.4, AUDIO-SPATIAL, AUDIO-GAME, AUDIO-CEIR.
 
-The codecs precede the export row that needs them (MED-GPU-3). MED-HW, AUDIO-DRV and MIDI-UMP qualify on this host and
-virtual devices (hardware split); their macOS backends are carried by MAC.2.
+The codecs precede the export row that needs them (MED-GPU-3). MIDI-UMP qualifies on this host and virtual devices
+(hardware split), as MED-HW and AUDIO-DRV do in P02b; their macOS backends are carried by MAC.2. The call media (PLG-1,
+AUDIO-DRV, the Opus rows, MED-8-LIVE, MED-GPU-1, MED-10, MED-11-LIVE and MED-HW) moved to P02b on 2026-11-01; the rows
+here hold the rest of the media and audio work.
 
 ### P31 macOS and web releases
 
@@ -414,14 +430,13 @@ After the Windows and Linux products they qualify. 6.1 (mobile on emulators and 
 software-reachable backends after WEB (hardware split). The store rows SHIP-MAC, SHIP-MOBILE, SHIP-CONSOLE, SHIP-XR,
 SHIP-WEB and SHIP-ENTERPRISE follow their platforms.
 
-### P32 Networked games, servers, massive worlds and real-time communication
+### P32 Compliance close and the social store
 
-Rows in order: NET-TIME, 4.2c, 4.2d, NET-SERVER, ANTICHEAT, NET-SCALE, COMPLY.9, COMPLY, NET-LIVE, STORE-SOCIAL, STORE,
-STORE-MOBILE, 4.2e, NET.
+Rows in order: COMPLY, STORE-SOCIAL, STORE, STORE-MOBILE.
 
-NET-TIME sits directly before 4.2c (Part 4); the communications child (COMPLY.9) and the COMPLY parent precede NET-LIVE,
-which needs them and the media and audio engines; STORE-SOCIAL (needs 4.2d, COMPLY.9 and NET-LIVE), the STORE parent and
-STORE-MOBILE (needs STORE, SHIP-MOBILE, SHIP-XR) follow NET-LIVE; the NET family closes together.
+The networked-game, server, massive-world and real-time communication rows moved to P02b on 2026-11-01 (user order),
+where the NET family closes. The COMPLY parent closes here after its last child; STORE-SOCIAL (needs 4.2d, COMPLY.9 and
+NET-LIVE), the STORE parent and STORE-MOBILE (needs STORE, SHIP-MOBILE, SHIP-XR) follow.
 
 ### P33 Collaboration host and browser hub
 
@@ -439,7 +454,7 @@ interchange (needs MODEL and media).
 
 ### P35 DAW and the collaboration release
 
-Rows in order: PLG-8, DAW-APP.1, DAW-APP.2, DAW-APP.3, DAW-APP, COLLAB.5, COLLAB.
+Rows in order: PLG-8, PLG-GUEST, DAW-APP.1, DAW-APP.2, DAW-APP.3, DAW-APP, COLLAB.5, COLLAB.
 
 PLG-8 (AU/AUv3 with MAC) opens the DAW group; COLLAB.5 and COLLAB close after DAW-APP.
 
@@ -476,19 +491,15 @@ Distributed operations need 6.4, AI, 8.3c, COLLAB and EMBED.
 
 ### P40 Real-hardware qualification (the hardware halves of every hardware-gated row)
 
-Rows in order: GPU-FORENSICS-HW (inserted by the applier), QUAL.1-HW (inserted by the applier), QUAL.2-HW (inserted by
-the applier), UX-QUAL-HW (inserted by the applier), MED-HW-QUAL (inserted by the applier), AUDIO-DRV-HW (inserted by the
-applier), MIDI-UMP-HW (inserted by the applier), NET-TIME-HW (inserted by the applier), ROCM.2, ROCM, HESAP-GPU-ALL-HW
-(inserted by the applier), 6.3-HW (inserted by the applier), 6.1-HW (inserted by the applier), 6.0-HW (inserted by the
-applier), 6.4-HW (inserted by the applier), VPROD-HW (inserted by the applier), AUTOPILOT-HW (inserted by the applier),
-EMBED-HW (inserted by the applier).
+Rows in order: GPU-FORENSICS-HW, QUAL.1-HW, QUAL.2-HW, UX-QUAL-HW, MED-HW-QUAL, AUDIO-DRV-HW, MIDI-UMP-HW, ROCM.2, ROCM,
+HESAP-GPU-ALL-HW, 6.3-HW, 6.1-HW, 6.0-HW, 6.4-HW, VPROD-HW, AUTOPILOT-HW, EMBED-HW.
 
 The real-hardware halves of every hardware-gated row, at the end so that a missing device cannot halt the strictly
 sequential table (user decision). ROCM.2 and the ROCM parent are the AMD hardware half.
 
 ### P41 Cross-domain portfolio
 
-Rows in order: PORTFOLIO.1, PORTFOLIO.2, PORTFOLIO.
+Rows in order: PORTFOLIO.1, PORTFOLIO.2, PORTFOLIO, WORKSPACE.
 
 Last: the cross-domain release review, which requires every real-hardware row (pending Requires fix).
 
@@ -884,16 +895,17 @@ once every row it names exists, and until then the row keeps its current or plan
 
 Each family below is not contiguous; every other family is.
 
-- **NET:** NET.1-.5 in the NETCRASH window (P02, user decision); 4.2c-e, NET-SERVER, ANTICHEAT, NET-SCALE, NET-LIVE,
-  NET-TIME and the parent in P32 (physics snapshots, media and audio, the web release).
-- **4.2x:** 4.2a, 4.2b in the window (user decision); 4.2c-e in P32.
-- **CRASH-FIX:** .1 and .2 in the window; .3, .4 and the parent after AGENT in P23 (user decision).
+- **NET:** NET.1-.5 in the NETCRASH window (P02, user decision); NET-TIME, 4.2c-e, NET-SERVER, ANTICHEAT, NET-SCALE,
+  NET-LIVE, NET-TIME-HW and the parent in the network block P02b (user order 2026-11-01).
+- **4.2x:** 4.2a, 4.2b in the window (user decision); 4.2c-e in the network block P02b.
+- **CRASH-FIX:** .1 and .2 in the window; .3, .4 and the parent at the end of the network block P02b (user order
+  2026-11-01).
 - **SUPPLY:** .1, .4, .2 in the user-fixed security block; SUPPLY.3 directly before EXT.4, the package format that
   verifies signatures (decision 7, accepted).
 - **COMPLY:** the operator's merged family places each child directly before the first row it governs, and this
   plan keeps that rule: COMPLY.0 and COMPLY.1 before NET.2, COMPLY.2 before CRASH-FIX.1 (P02); COMPLY.3 and COMPLY.4
-  before SUPPLY.1 (P03); COMPLY.6 before AGENT.1 (P13); COMPLY.7 before I2D-3.d (P21); COMPLY.5 and the store kit
-  COMPLY.8 with the store rows (P24); COMPLY.9 and the COMPLY parent before NET-LIVE (P32).
+  before SUPPLY.1 (P03); COMPLY.6 before AGENT.1 (P13); COMPLY.7 before I2D-3.d (P21); COMPLY.5 and COMPLY.9 in the
+  network block (P02b); the store kit COMPLY.8 with the store rows (P24); the COMPLY parent after its last child (P32).
 - **SHIP:** SHIP.0 after DATA-TRUST, SHIP.1-.5 inside the editor group, SHIP.6-.10 in P24, SHIP.11 and the parent
   before QUAL.2, and the store rows for macOS, mobile, consoles, XR, web and enterprise after their platforms in P31,
   as the research places them.
@@ -920,7 +932,8 @@ Each family below is not contiguous; every other family is.
 - **EYL:** EYL-0 and EYL-1 in P19; EYL-2 and EYL-3 in P28.
 - **PHYS-QUAL:** .plan, .1 and .2 in P19; the parent after EYL-3 in P28 (user decision).
 - **COLLAB:** .1-.4 in P33; COLLAB.5 and the parent after DAW-APP in P35.
-- **PLG:** PLG-1-7 in P30; PLG-8 (AU/AUv3 with MAC) at the start of P35.
+- **PLG:** PLG-1 in the network block (P02b, the audio path a call needs); PLG-2-7 in P30; PLG-8 (AU/AUv3 with MAC)
+  at the start of P35.
 - **SCIVIZ:** SCIVIZ-PLOT between CHIR-SCI.2 and CHIR-SCI.3; SCIVIZ.1-.5 and the parent after NOTEBOOK.
 - **ROCM:** ROCM.1 (emulation routes) in P16; ROCM.2 and the parent in P40.
 - **6.x:** 6.3 in P23, 6.1 and 6.0 in P31, 6.2 with WEB in P31, 6.4 in P38; their `-HW` halves in P40.
@@ -1016,8 +1029,8 @@ a new row in P40. Audit result:
 | QUAL.1 (P20) | QUAL.1-HW |
 | QUAL.2 (P27) | QUAL.2-HW |
 | UX-QUAL.1 (P27) | UX-QUAL-HW |
-| MED-HW, AUDIO-DRV, MIDI-UMP (P30) | MED-HW-QUAL, AUDIO-DRV-HW, MIDI-UMP-HW |
-| NET-TIME (P32) | NET-TIME-HW |
+| MED-HW, AUDIO-DRV (P02b), MIDI-UMP (P30) | MED-HW-QUAL, AUDIO-DRV-HW, MIDI-UMP-HW |
+| NET-TIME (P02b) | NET-TIME-HW (in P02b with the network block since 2026-11-01) |
 | ROCM.1 (P16) | ROCM.2 and the ROCM parent (existing) |
 | HESAP-GPU-ALL (P31) | HESAP-GPU-ALL-HW |
 | 6.3 OpenXR (P23) | 6.3-HW |

@@ -216,6 +216,23 @@ class MasterPlanSequence(unittest.TestCase):
     def test_later_state_is_retired(self):
         self.assertNotIn('Later', master.STATES)
 
+    def test_a_folded_row_cannot_stay_open(self):
+        rows = self.rows('Done', 'Open', 'Partial')
+        self.assertEqual(master.moved_row_errors(rows), [])
+        rows[1][1][3] = 'Folded into [S3](#slice-s3) by the user; row id and anchor stay for links.'
+        self.assertEqual(len(master.moved_row_errors(rows)), 1)
+        rows[1][1][2] = 'Done'
+        self.assertEqual(master.moved_row_errors(rows), [])
+
+    def test_delivery_plan_holds_every_row_once_in_table_order(self):
+        ids = ['S1', 'S2', 'S3', 'S4']
+        plan = '### P00 A\n\nRows in order: S1, S2.\n\n### P01 B\n\nRows in order: S3,\nS4 (inserted by the applier).\n'
+        self.assertEqual(master.delivery_plan_errors(ids, plan), [])
+        for broken in (plan.replace('S3,\nS4', 'S4,\nS3'), plan.replace('S1, S2.', 'S1.'),
+                       plan.replace('S1, S2.', 'S1, S2, S9.'), plan.replace('S1, S2.', 'S1, S2, S2.')):
+            with self.subTest(plan=broken):
+                self.assertTrue(master.delivery_plan_errors(ids, broken))
+
     def test_later_completion_or_activity_cannot_jump_a_gap(self):
         for state in ('Done', 'In progress'):
             with self.subTest(state=state):
@@ -4220,7 +4237,7 @@ class TestInstruments(unittest.TestCase):
         self.assertEqual(sorted(fuzz_driver.TARGETS), ['ceir-binary', 'ceir-differential', 'ceir-record', 'ceir-text',
                                                        'ceridc-diag', 'ckir-binary', 'ckir-text', 'comply-rules',
                                                        'comply-sanctions', 'crypto-policy', 'crypto-provider',
-                                                       'crypto-tls', 'memory-allocators',
+                                                       'crypto-quic', 'crypto-tls', 'memory-allocators',
                                                        'net-negotiation', 'perf-assets',
                                                        'perf-bundle', 'perf-capture', 'perf-flight',
                                                        'resources-reload'])

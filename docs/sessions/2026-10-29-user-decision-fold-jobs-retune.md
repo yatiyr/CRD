@@ -9,7 +9,7 @@ The user's words, 2026-10-29 about 16:00: "then we fold in HESAP JOBS RETUNE to 
 efficiently closed man wtf why you are postponing it?" and "ok then fold hesap jobs retune to simd dispatch and I will
 do the elevated runs WHEN SIMD-DISPATCH FULLY FINISHES".
 
-- [HESAP-JOBS-RETUNE](../ROADMAP.md#slice-hesap-jobs-retune) is delivered with
+- [HESAP-JOBS-RETUNE](../ROADMAP.md#slice-simd-perf) is delivered with
   [SIMD-DISPATCH](../ROADMAP.md#slice-simd-dispatch): its scope is on that row's Left list and the row closes only
   with it. Row 108 keeps its id and anchor, points at SIMD-DISPATCH and closes with it on the same evidence.
 - DIAG is no longer a work prerequisite of the retune. What DIAG has left is evidence: DIAG.11b clause (8) is the
