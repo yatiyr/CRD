@@ -530,8 +530,8 @@ protection only the provider's AES block and ChaCha20 stream functions. The hand
   4-byte encoding reaches it) and the decoder takes the candidate closest to the expected number within [0, 2^62)
   (appendix A.3).
 - **Retry integrity tags**: AES-128-GCM under each version's fixed key and nonce over the pseudo-packet, built on the
-  stack; a Retry is at most 1,472 bytes (the UDP payload of a 1,500-byte IPv4 path, as ngtcp2 bounds its pseudo-packet)
-  and its tag is compared in constant time.
+  stack; a Retry is at most 1,472 bytes (the UDP payload of a 1,500-byte IPv4 path; a larger one is refused rather than
+  given a heap buffer) and its tag is compared in constant time.
 
 Nothing allocates; open, header protection and the Retry functions are read-only and run on several threads, while
 init, update and seal take the sender's exclusive access. Evidence: `test_quic.cpp` (RFC 9001 and RFC 9369 appendix A
