@@ -1927,7 +1927,7 @@
         "scripts/gen-comply-rules.py",
         "--check"
       ],
-      "sha256": "101f17a97f92ea42f1aeaafeda1a531e7e20f5f7548ab4aec3036cf3feaecc8e"
+      "sha256": "9c6fc57e26e2c01a86b8bee1fac2b3b74703af34472f322c188368c287104a98"
     },
     {
       "path": "assets/comply/gb.rules.toml",

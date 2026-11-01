@@ -4,7 +4,7 @@
   "about": "COMPLY.0 legal register: every legal and platform obligation that applies to Cerid or to products built with it, one entry per instrument and article, with its jurisdiction, official primary source and the consolidated version read, the obligation in plain words, the products, data flows and channels it applies to, the check that proves it, its effective and sunset dates, a counsel-review flag, the owning rows and the next review. scripts/check-registers.py (the crd-check-registers CTest and repository step) fails a binding obligation without an active check, a lapsed review, an entry read from no primary source when its rows close and a topic without a Turkish entry. docs/design/registers.md is the contract; it shares the standards register's format, guard and review machinery.",
   "snapshot": {
     "date": "2026-11-01",
-    "method": "Refreshed on 2026-11-01 by scripts/register-review.py from the approved source plan (172 records; report docs/sessions/2026-11-01-legal-register-eu-regime-index.md)."
+    "method": "Refreshed on 2026-11-01 by scripts/register-review.py from the approved source plan (181 records; report docs/sessions/2026-11-01-legal-register-acts-the-consolidated-texts-lack.md)."
   },
   "review": {
     "cadence": "A light scan quarterly, after each yearly platform event (the April SDK rule, Google I/O, WWDC, the August target API rule) and after each dated effective day the register holds, and a full re-research every year or when a scan finds a pinned instrument amended; Official Gazette of Turkey, EUR-Lex and Steamworks announcements are recorded as runs with their triggering entries. Reviews propose ROADMAP amendments for the user and never edit rows.",
@@ -141,6 +141,12 @@
         "day": "2026-11-01",
         "scan": "light",
         "ref": "docs/sessions/2026-11-01-legal-register-eu-regime-index.md",
+        "triggers": []
+      },
+      {
+        "day": "2026-11-01",
+        "scan": "light",
+        "ref": "docs/sessions/2026-11-01-legal-register-acts-the-consolidated-texts-lack.md",
         "triggers": []
       }
     ]
@@ -3271,7 +3277,7 @@
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj",
         "consolidated": {
-          "version": "02024R2847-20241120",
+          "version": "02024R2847-20241120 + 32025R0327",
           "read": "2026-11-01",
           "sha256": "55e0efc4c6451553c7d440d45691bf49fbd2ea57406c88fb631ec84a88e4b8c3"
         }
@@ -3295,13 +3301,14 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "ref": "docs/sessions/2026-11-01-comply-0-acts-the-consolidated-texts-lack.md#reading",
         "read": "2026-11-01",
         "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
-      "deprecation": null
+      "deprecation": null,
+      "note": "Article 104 of Regulation (EU) 2025/327 (European Health Data Space), read as published and applying from 26 March 2027, replaces Articles 13(4) and 31(3) for products also under another Union act (high-risk AI systems under Article 12 and EHR systems under the new Article 32(5a)); it leaves the obligation above unchanged."
     },
     {
       "id": "eu.cra.essential-requirements",
@@ -3322,7 +3329,7 @@
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj",
         "consolidated": {
-          "version": "02024R2847-20241120",
+          "version": "02024R2847-20241120 + 32025R0327",
           "read": "2026-11-01",
           "sha256": "55e0efc4c6451553c7d440d45691bf49fbd2ea57406c88fb631ec84a88e4b8c3"
         }
@@ -3345,13 +3352,14 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "ref": "docs/sessions/2026-11-01-comply-0-acts-the-consolidated-texts-lack.md#reading",
         "read": "2026-11-01",
         "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
-      "deprecation": null
+      "deprecation": null,
+      "note": "Article 104 of Regulation (EU) 2025/327 (European Health Data Space), read as published and applying from 26 March 2027, replaces Articles 13(4) and 31(3) for products also under another Union act (high-risk AI systems under Article 12 and EHR systems under the new Article 32(5a)); it leaves the obligation above unchanged."
     },
     {
       "id": "eu.cra.reporting-contact",
@@ -3370,7 +3378,7 @@
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj",
         "consolidated": {
-          "version": "02024R2847-20241120",
+          "version": "02024R2847-20241120 + 32025R0327",
           "read": "2026-11-01",
           "sha256": "55e0efc4c6451553c7d440d45691bf49fbd2ea57406c88fb631ec84a88e4b8c3"
         }
@@ -3393,13 +3401,14 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/sessions/2026-11-01-comply-0-first-read.md#reading",
+        "ref": "docs/sessions/2026-11-01-comply-0-acts-the-consolidated-texts-lack.md#reading",
         "read": "2026-11-01",
         "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
-      "deprecation": null
+      "deprecation": null,
+      "note": "Article 104 of Regulation (EU) 2025/327 (European Health Data Space), read as published and applying from 26 March 2027, replaces Articles 13(4) and 31(3) for products also under another Union act (high-risk AI systems under Article 12 and EHR systems under the new Article 32(5a)); it leaves the obligation above unchanged."
     },
     {
       "id": "eu.nis2",
@@ -4159,7 +4168,7 @@
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2017/1509/oj",
         "consolidated": {
-          "version": "02017R1509-20251217",
+          "version": "02017R1509-20251217 + 32026R2278",
           "read": "2026-11-01",
           "sha256": "dbb874c9d7faa1c31bf8f9848dd48fdb56ebc25542d8ebfaebfb3ef53a2b3ad5"
         }
@@ -4183,14 +4192,14 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/sessions/2026-11-01-comply-1-eu-restrictive-measures.md#reading",
+        "ref": "docs/sessions/2026-11-01-comply-0-acts-the-consolidated-texts-lack.md#reading",
         "read": "2026-11-01",
         "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
       "deprecation": null,
-      "note": "The text read is the consolidated version of 17 December 2025 (CELLAR 02017R1509-20251217). The regulation is no comprehensive embargo: an item outside its annexes not destined for the armed forces may be supplied, but its payment is a transfer of funds Article 21 restricts."
+      "note": "The text read is the consolidated version of 17 December 2025 (CELLAR 02017R1509-20251217). The regulation is no comprehensive embargo: an item outside its annexes not destined for the armed forces may be supplied, but its payment is a transfer of funds Article 21 restricts. Council Implementing Regulation (EU) 2026/2278 read as published amends only Annexes XV and XVI (persons and entities listed), which the EU financial sanctions file lists."
     },
     {
       "id": "eu.reg-36-2012.syria",
@@ -4523,7 +4532,7 @@
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2003/1210/oj",
         "consolidated": {
-          "version": "02003R1210-20251224",
+          "version": "02003R1210-20251224 + 32026R2388",
           "read": "2026-11-01",
           "sha256": "e731c5a87f7d9253caf8cb3677d12ddc64c729f2b6e73cbb7e1f69f93b989e3b"
         }
@@ -4547,14 +4556,14 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "ref": "docs/sessions/2026-11-01-comply-0-acts-the-consolidated-texts-lack.md#reading",
         "read": "2026-11-01",
         "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
       "deprecation": null,
-      "note": "The text read is the consolidated version of 24 December 2025 (CELLAR 02003R1210-20251224). No provision restricts a supply to Iraq: Article 3 restricts trade in cultural property removed from it, so the EU embargo names no Iraqi destination; the arms embargo of Common Position 2003/495/CFSP is applied through the Member States' licensing of military goods."
+      "note": "The text read is the consolidated version of 24 December 2025 (CELLAR 02003R1210-20251224). No provision restricts a supply to Iraq: Article 3 restricts trade in cultural property removed from it, so the EU embargo names no Iraqi destination; the arms embargo of Common Position 2003/495/CFSP is applied through the Member States' licensing of military goods. Commission Implementing Regulation (EU) 2026/2388 read as published amends only Annex IV (one entity deleted), which the EU financial sanctions file lists."
     },
     {
       "id": "eu.reg-3541-92.iraq-claims",
@@ -4625,7 +4634,7 @@
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2006/1412/oj",
         "consolidated": {
-          "version": "02006R1412-20240913",
+          "version": "02006R1412-20240913 + 32023R2465R(02)",
           "read": "2026-11-01",
           "sha256": "b08f9e34b55c7cade29665cb0c3d33b1601487452547d203911d24f5103ba051"
         }
@@ -4649,14 +4658,14 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "ref": "docs/sessions/2026-11-01-comply-0-acts-the-consolidated-texts-lack.md#reading",
         "read": "2026-11-01",
         "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
       "deprecation": null,
-      "note": "The text read is the consolidated version of 13 September 2024 (CELLAR 02006R1412-20240913)."
+      "note": "The text read is the consolidated version of 13 September 2024 (CELLAR 02006R1412-20240913). The corrigendum 32023R2465R(02) its version names was read and changes nothing here: it corrects a Hungarian label of Commission Delegated Regulation (EU) 2023/2465 on eggs, which CELLAR links to Council Regulation (EU) 2024/2465."
     },
     {
       "id": "eu.reg-356-2010.somalia",
@@ -4677,7 +4686,7 @@
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2010/356/oj",
         "consolidated": {
-          "version": "02010R0356-20240913",
+          "version": "02010R0356-20240913 + 32023R2465R(02)",
           "read": "2026-11-01",
           "sha256": "96281efcd51a8abaa160a3ff27406bde356ae1821792e73a0850d5821f80b032"
         }
@@ -4701,14 +4710,14 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "ref": "docs/sessions/2026-11-01-comply-0-acts-the-consolidated-texts-lack.md#reading",
         "read": "2026-11-01",
         "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
       "deprecation": null,
-      "note": "The text read is the consolidated version of 13 September 2024 (CELLAR 02010R0356-20240913). Every measure attaches to the persons of Annex I, which the EU financial sanctions file lists; the measures attached to Somalia are those of Regulation (EC) No 147/2003."
+      "note": "The text read is the consolidated version of 13 September 2024 (CELLAR 02010R0356-20240913). Every measure attaches to the persons of Annex I, which the EU financial sanctions file lists; the measures attached to Somalia are those of Regulation (EC) No 147/2003. The corrigendum 32023R2465R(02) its version names was read and changes nothing here: it corrects a Hungarian label of Commission Delegated Regulation (EU) 2023/2465 on eggs, which CELLAR links to Council Regulation (EU) 2024/2465."
     },
     {
       "id": "eu.reg-147-2003.somalia",
@@ -4729,7 +4738,7 @@
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2003/147/oj",
         "consolidated": {
-          "version": "02003R0147-20240913",
+          "version": "02003R0147-20240913 + 32023R2465R(02)",
           "read": "2026-11-01",
           "sha256": "951c127dbea177770741747d2de933825adc4e0d5d0467e23ef2394c2e6dce39"
         }
@@ -4753,14 +4762,14 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "ref": "docs/sessions/2026-11-01-comply-0-acts-the-consolidated-texts-lack.md#reading",
         "read": "2026-11-01",
         "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
       "deprecation": null,
-      "note": "The text read is the consolidated version of 13 September 2024 (CELLAR 02003R0147-20240913)."
+      "note": "The text read is the consolidated version of 13 September 2024 (CELLAR 02003R0147-20240913). The corrigendum 32023R2465R(02) its version names was read and changes nothing here: it corrects a Hungarian label of Commission Delegated Regulation (EU) 2023/2465 on eggs, which CELLAR links to Council Regulation (EU) 2024/2465."
     },
     {
       "id": "eu.reg-2015-735.south-sudan",
@@ -4932,17 +4941,17 @@
       ],
       "instrument": {
         "name": "Council Regulation (EC) No 1183/2005 (restrictive measures in view of the situation in the Democratic Republic of the Congo)",
-        "article": "Article 1a",
+        "article": "Article 1a as amended by Council Regulation (EU) 2026/2374",
         "type": "regulation",
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2005/1183/oj",
         "consolidated": {
-          "version": "02005R1183-20251210",
+          "version": "02005R1183-20251210 + 32026R1880 + 32026R2191 + 32026R2374",
           "read": "2026-11-01",
           "sha256": "cc7d03c8fab79f6fe73cf9da0d45354c316677482d42335fc09cd41c9321c910"
         }
       },
-      "obligation": "Provide to no non-governmental entity or person operating in the territory of the Democratic Republic of the Congo technical assistance, brokering or financing related to the goods and technology of the Common Military List (Article 1a(1)); military assistance to any other person there is notified to the Sanctions Committee in advance (Article 1a(2)).",
+      "obligation": "Sell, supply, transfer or export, directly or indirectly, to no non-governmental entity or person operating in the territory of the Democratic Republic of the Congo the goods and technology of the Common Military List or firearms, their parts and essential components and ammunition (Article 1a(-1)), and provide to them no technical assistance, brokering or other services related to military activities or to those items, and no financing or financial assistance related to them (Article 1a(1)).",
       "applies_to": [
         "channel.cerid-store",
         "channel.distribution",
@@ -4961,14 +4970,14 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "ref": "docs/sessions/2026-11-01-comply-0-acts-the-consolidated-texts-lack.md#reading",
         "read": "2026-11-01",
         "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
       "deprecation": null,
-      "note": "The text read is the consolidated version of 10 December 2025 (CELLAR 02005R1183-20251210); the freezes attach to the persons of Annexes I and Ia, which the EU financial sanctions file lists."
+      "note": "The text read is the consolidated version of 10 December 2025 (CELLAR 02005R1183-20251210) with Council Regulation (EU) 2026/2374, in force since 28 October 2026 and read as published: it inserts Article 1a(-1), extends Article 1a(1) to services related to military activities and financing, deletes the advance notification of Article 1a(2) and rewrites the derogations of Article 1b. Council Implementing Regulations (EU) 2026/1880 and 2026/2191, read as published, amend only Annexes I and Ia, whose persons the EU financial sanctions file lists."
     },
     {
       "id": "eu.reg-314-2004.zimbabwe",
@@ -5093,7 +5102,7 @@
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2014/1352/oj",
         "consolidated": {
-          "version": "02014R1352-20240913",
+          "version": "02014R1352-20240913 + 32023R2465R(02)",
           "read": "2026-11-01",
           "sha256": "6c9d5f663830e39c29d17fae5a04c6b11e3994141f20e45063dc1529c0880ea9"
         }
@@ -5117,14 +5126,14 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "ref": "docs/sessions/2026-11-01-comply-0-acts-the-consolidated-texts-lack.md#reading",
         "read": "2026-11-01",
         "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
       "deprecation": null,
-      "note": "The text read is the consolidated version of 13 September 2024 (CELLAR 02014R1352-20240913). Every measure attaches to the persons of Annex I, which the EU financial sanctions file lists, so the EU embargo names no Yemeni destination."
+      "note": "The text read is the consolidated version of 13 September 2024 (CELLAR 02014R1352-20240913). Every measure attaches to the persons of Annex I, which the EU financial sanctions file lists, so the EU embargo names no Yemeni destination. The corrigendum 32023R2465R(02) its version names was read and changes nothing here: it corrects a Hungarian label of Commission Delegated Regulation (EU) 2023/2465 on eggs, which CELLAR links to Council Regulation (EU) 2024/2465."
     },
     {
       "id": "eu.reg-753-2011.afghanistan",
@@ -5145,7 +5154,7 @@
         "jurisdiction": "EU",
         "primary": "https://eur-lex.europa.eu/eli/reg/2011/753/oj",
         "consolidated": {
-          "version": "02011R0753-20240913",
+          "version": "02011R0753-20240913 + 32023R2465R(02) + 32026R2138 + 32026R2138R(01)",
           "read": "2026-11-01",
           "sha256": "5207a74aa089b4873b6f749452e640f3e08414c8c637749548be3a45e86dc604"
         }
@@ -5169,14 +5178,14 @@
         "reviewed": null
       },
       "source": {
-        "ref": "docs/sessions/2026-11-01-comply-1-eu-arms-and-repression-regimes.md#reading",
+        "ref": "docs/sessions/2026-11-01-comply-0-acts-the-consolidated-texts-lack.md#reading",
         "read": "2026-11-01",
         "verified": true
       },
       "review": "2027-01-25",
       "evidence": [],
       "deprecation": null,
-      "note": "The text read is the consolidated version of 13 September 2024 (CELLAR 02011R0753-20240913). Every measure attaches to the persons of Annex I, which the EU financial sanctions file lists, so the EU embargo names no Afghan destination."
+      "note": "The text read is the consolidated version of 13 September 2024 (CELLAR 02011R0753-20240913). Every measure attaches to the persons of Annex I, which the EU financial sanctions file lists, so the EU embargo names no Afghan destination. Council Implementing Regulation (EU) 2026/2138 with its corrigendum read as published amends only Annex I (the entries of 24 persons and one entity replaced), which the EU financial sanctions file lists. The corrigendum 32023R2465R(02) its version names was read and changes nothing here: it corrects a Hungarian label of Commission Delegated Regulation (EU) 2023/2465 on eggs, which CELLAR links to Council Regulation (EU) 2024/2465."
     },
     {
       "id": "eu.reg-2024-1485.russia-human-rights",
@@ -7867,9 +7876,9 @@
       "sha256": "425623c09ba0917afbba2a92ae58714ac8c2fb2e606655ab42025055fe4e798d"
     },
     "EU": {
-      "generation": 9,
+      "generation": 10,
       "reviewed": "2026-11-01",
-      "sha256": "101f17a97f92ea42f1aeaafeda1a531e7e20f5f7548ab4aec3036cf3feaecc8e"
+      "sha256": "9c6fc57e26e2c01a86b8bee1fac2b3b74703af34472f322c188368c287104a98"
     },
     "GB": {
       "generation": 7,

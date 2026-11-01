@@ -2,7 +2,7 @@
 # A change is reviewed with: python scripts/gen-comply-rules.py --review EU
 format = "cerid-rules/1"
 jurisdiction = "EU"
-generation = 9
+generation = 10
 register = "2026-11-01"
 
 [[scope]]
@@ -958,10 +958,10 @@ topic = "export-control"
 state = "planned"
 title = "EU restrictive measures in view of the situation in the Democratic Republic of the Congo"
 instrument = "Council Regulation (EC) No 1183/2005 (restrictive measures in view of the situation in the Democratic Republic of the Congo)"
-article = "Article 1a"
+article = "Article 1a as amended by Council Regulation (EU) 2026/2374"
 primary = "https://eur-lex.europa.eu/eli/reg/2005/1183/oj"
 read = true
-obligation = "Provide to no non-governmental entity or person operating in the territory of the Democratic Republic of the Congo technical assistance, brokering or financing related to the goods and technology of the Common Military List (Article 1a(1)); military assistance to any other person there is notified to the Sanctions Committee in advance (Article 1a(2))."
+obligation = "Sell, supply, transfer or export, directly or indirectly, to no non-governmental entity or person operating in the territory of the Democratic Republic of the Congo the goods and technology of the Common Military List or firearms, their parts and essential components and ammunition (Article 1a(-1)), and provide to them no technical assistance, brokering or other services related to military activities or to those items, and no financing or financial assistance related to them (Article 1a(1))."
 applies_to = ["channel.cerid-store", "channel.distribution", "flow.account-data", "flow.payments"]
 check = "active"
 check_name = "crd-comply-sanctions-imported [.imported]: the authored EU embargo screens the Democratic Republic of the Congo as sectoral, needing review"
