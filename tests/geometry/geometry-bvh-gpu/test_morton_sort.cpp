@@ -200,6 +200,27 @@ TEST_CASE("sort_morton_pairs u32 partial-tie keys: ties resolved by input index"
 namespace
 {
 
+// Whether two pair arrays hold the same codes and indices in the same order. Field by field, never memcmp:
+// MortonPair<u64> carries four bytes of padding after its index, which neither the sort nor the oracle writes, so
+// they hold whatever the allocator's block held before.
+template <typename KeyT>
+[[nodiscard]] bool same_pairs(const crd::containers::Array<MortonPair<KeyT>>& a,
+                              const crd::containers::Array<MortonPair<KeyT>>& b)
+{
+    if (a.size() != b.size())
+    {
+        return false;
+    }
+    for (crd::usize i = 0U; i < a.size(); ++i)
+    {
+        if (a[i].code != b[i].code || a[i].index != b[i].index)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 template <typename KeyT>
 [[nodiscard]] crd::containers::Array<MortonPair<KeyT>>
 oracle_sort_pairs(crd::containers::ConstSpan<KeyT> codes,
@@ -253,10 +274,8 @@ TEST_CASE("sort_morton_pairs u32 random 10000: byte-identical to oracle",
     const auto expected = oracle_sort_pairs<crd::u32>(codes_span, &alloc);
 
     REQUIRE(got.size() == expected.size());
-    // Byte-identical (memcmp over the AoS pair array). If any code or index
-    // differs, the radix is broken or unstable.
-    CHECK(std::memcmp(got.data(), expected.data(),
-                      n * sizeof(MortonPair<crd::u32>)) == 0);
+    // Identical codes and indices: if any differs, the radix is broken or unstable.
+    CHECK(same_pairs(got, expected));
 }
 
 // =========================================================================
@@ -279,8 +298,7 @@ TEST_CASE("sort_morton_pairs u32 determinism: byte-identical across runs",
     const auto a = sort_morton_pairs<crd::u32>(view_of(in), &alloc);
     const auto b = sort_morton_pairs<crd::u32>(view_of(in), &alloc);
     REQUIRE(a.size() == b.size());
-    CHECK(std::memcmp(a.data(), b.data(),
-                      n * sizeof(MortonPair<crd::u32>)) == 0);
+    CHECK(same_pairs(a, b));
 }
 
 // =========================================================================
@@ -430,8 +448,7 @@ TEST_CASE("sort_morton_pairs u64 random 10000: byte-identical to oracle",
     const auto expected = oracle_sort_pairs<std::uint64_t>(view_of(in), &alloc);
 
     REQUIRE(got.size() == expected.size());
-    CHECK(std::memcmp(got.data(), expected.data(),
-                      n * sizeof(MortonPair<std::uint64_t>)) == 0);
+    CHECK(same_pairs(got, expected));
 }
 
 TEST_CASE("sort_morton_pairs u64 determinism", "[sort][cpu][determinism][u64]")
@@ -449,8 +466,7 @@ TEST_CASE("sort_morton_pairs u64 determinism", "[sort][cpu][determinism][u64]")
     const auto a = sort_morton_pairs<std::uint64_t>(view_of(in), &alloc);
     const auto b = sort_morton_pairs<std::uint64_t>(view_of(in), &alloc);
     REQUIRE(a.size() == b.size());
-    CHECK(std::memcmp(a.data(), b.data(),
-                      n * sizeof(MortonPair<std::uint64_t>)) == 0);
+    CHECK(same_pairs(a, b));
 }
 
 TEST_CASE("sort_morton_pairs u64 pair integrity", "[sort][cpu][integrity][u64]")

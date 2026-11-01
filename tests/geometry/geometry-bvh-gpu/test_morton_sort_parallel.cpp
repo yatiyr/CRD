@@ -18,9 +18,11 @@
 //   4. num_jobs-sensitivity -- output byte-identical at num_jobs = 1, 2,
 //      4, 8, 16. Same input must produce same byte sequence at every
 //      worker count.
-//   5. Bullet-proof oracle -- N=10000 + N=1M random; bit_compare against
-//      sort_morton_pairs scalar reference. The radix correctness proof
-//      across the whole adversarial corpus.
+//   5. Bullet-proof oracle -- N=10000 + N=1M random; every pair's code and
+//      index against the sort_morton_pairs scalar reference ("byte-identical"
+//      in the case names means the pairs' fields: the u64 pair's padding is
+//      never written). The radix correctness proof across the whole
+//      adversarial corpus.
 //   6. Threshold fallback -- below kDefaultParallelSortThreshold, the
 //      parallel function must produce identical output to serial via the
 //      documented fallback path.
@@ -38,7 +40,6 @@
 #include <crd/geometry/bvh_gpu/morton_sort.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
-#include <crd/test_helpers/gpu_compare.hpp>
 
 #include <cstdint>
 #include <cstring>
@@ -60,26 +61,25 @@ struct MortonSortJobsListener final : Catch::EventListenerBase
     void testRunEnded(Catch::TestRunStats const&) override { crd::jobs::shutdown(); }
 };
 
+// The serial and parallel outputs hold the same codes and indices in the same order. Field by field, never by bytes:
+// MortonPair<u64> carries four bytes of padding after its index, which no sort writes, so they hold whatever the
+// allocator's block held before.
 template <typename KeyT>
-void require_byte_identical(
+void require_same_pairs(
     const crd::containers::Array<MortonPair<KeyT>>& a,
     const crd::containers::Array<MortonPair<KeyT>>& b)
 {
     REQUIRE(a.size() == b.size());
-    const auto a_bytes = crd::containers::ConstSpan<crd::u8>(
-        reinterpret_cast<const crd::u8*>(a.data()),
-        a.size() * sizeof(MortonPair<KeyT>));
-    const auto b_bytes = crd::containers::ConstSpan<crd::u8>(
-        reinterpret_cast<const crd::u8*>(b.data()),
-        b.size() * sizeof(MortonPair<KeyT>));
-    const auto cmp = crd::test::bit_compare<crd::u8>(a_bytes, b_bytes);
-    if (!cmp.ok)
+    crd::usize first = a.size();
+    for (crd::usize i = 0U; i < a.size() && first == a.size(); ++i)
     {
-        INFO("first byte mismatch at offset " << cmp.first_mismatch_index
-             << " serial=" << static_cast<int>(cmp.cpu_value)
-             << " parallel=" << static_cast<int>(cmp.gpu_value));
+        if (a[i].code != b[i].code || a[i].index != b[i].index)
+        {
+            first = i;
+        }
     }
-    CHECK(cmp.ok);
+    INFO("first pair mismatch at " << first << " of " << a.size());
+    CHECK(first == a.size());
 }
 
 template <typename KeyT>
@@ -129,7 +129,7 @@ TEST_CASE("v9a-b1-parallel N=16 calibration: byte-identical to serial reference"
     // to serial. This case mainly verifies the fallback path is wired.
     const auto serial   = sort_morton_pairs<crd::u32>(in_span, &alloc);
     const auto parallel = sort_morton_pairs_parallel<crd::u32>(in_span, &alloc, /*num_jobs*/ 8U);
-    require_byte_identical<crd::u32>(serial, parallel);
+    require_same_pairs<crd::u32>(serial, parallel);
 }
 
 // =========================================================================
@@ -227,7 +227,7 @@ TEST_CASE("v9a-b1-parallel byte-identical across num_jobs = {1, 2, 4, 8, 16}",
     {
         const auto out = sort_morton_pairs_parallel<crd::u32>(in_span, &alloc, nj);
         INFO("num_jobs = " << nj);
-        require_byte_identical<crd::u32>(baseline, out);
+        require_same_pairs<crd::u32>(baseline, out);
     }
 }
 
@@ -247,7 +247,7 @@ TEST_CASE("v9a-b1-parallel N=10000 u32: byte-identical to serial reference",
 
     const auto serial   = sort_morton_pairs<crd::u32>(in_span, &alloc);
     const auto parallel = sort_morton_pairs_parallel<crd::u32>(in_span, &alloc, /*num_jobs*/ 8U);
-    require_byte_identical<crd::u32>(serial, parallel);
+    require_same_pairs<crd::u32>(serial, parallel);
 }
 
 // =========================================================================
@@ -266,7 +266,7 @@ TEST_CASE("v9a-b1-parallel N=10000 u64: byte-identical to serial reference",
 
     const auto serial   = sort_morton_pairs<std::uint64_t>(in_span, &alloc);
     const auto parallel = sort_morton_pairs_parallel<std::uint64_t>(in_span, &alloc, /*num_jobs*/ 8U);
-    require_byte_identical<std::uint64_t>(serial, parallel);
+    require_same_pairs<std::uint64_t>(serial, parallel);
 }
 
 // =========================================================================
@@ -285,7 +285,7 @@ TEST_CASE("v9a-b1-parallel N=1M u32: byte-identical to serial reference",
 
     const auto serial   = sort_morton_pairs<crd::u32>(in_span, &alloc);
     const auto parallel = sort_morton_pairs_parallel<crd::u32>(in_span, &alloc, /*num_jobs*/ 8U);
-    require_byte_identical<crd::u32>(serial, parallel);
+    require_same_pairs<crd::u32>(serial, parallel);
 }
 
 // =========================================================================
@@ -305,5 +305,5 @@ TEST_CASE("v9a-b1-parallel below threshold falls back to serial path",
 
     const auto serial   = sort_morton_pairs<crd::u32>(in_span, &alloc);
     const auto parallel = sort_morton_pairs_parallel<crd::u32>(in_span, &alloc, /*num_jobs*/ 8U);
-    require_byte_identical<crd::u32>(serial, parallel);
+    require_same_pairs<crd::u32>(serial, parallel);
 }
