@@ -40,6 +40,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <string_view>
 #include <type_traits>
 
 namespace tn = crd::hesap::tensor;
@@ -2949,4 +2950,115 @@ TEST_CASE("tensor kernels: the process runs the level its CPU selection resolves
         CHECK(chosen.table == (vnni ? &tn::kTensorKernelsAvx2AvxVnni : &tn::kTensorKernelsAvx2));
     }
 #endif
+    const crd::KernelFamily* family = crd::test::kernel_family("hesap.tensor");
+    REQUIRE(family != nullptr);
+    CHECK(family->result.status == crd::KernelCheckStatus::Passed);
+    CHECK(family->result.level == chosen.level);
+}
+
+namespace
+{
+
+// Self-check stubs: the portable routine with one result bit off in its last or first output, or a write past its
+// outputs (a guard).
+template <typename T> T one_bit_off(T x) noexcept
+{
+    return std::bit_cast<T>(static_cast<Bits<T>>(std::bit_cast<Bits<T>>(x) ^ 1U));
+}
+
+void permute_walk_off(const PermuteWalk<f64>& w) noexcept
+{
+    tn::kTensorKernelsPortable.permute_walk_f64(w);
+    const u64 last = static_cast<u64>(w.s_out[0]) * w.shp[0] * (w.complex ? 2U : 1U) - 1U;
+    w.dst[last] = one_bit_off(w.dst[last]);
+}
+
+void ew_div_off(const tn::EwBinaryWalk<f32>& w) noexcept
+{
+    tn::kTensorKernelsPortable.ew_binary_f32[static_cast<u32>(tn::BinaryOp::Div)](w);
+    w.dst[0] = one_bit_off(w.dst[0]);
+}
+
+void max_columns_past(f64* out, const f64* src, u64 rows, u64 w, u64 j0, u64 j1) noexcept
+{
+    tn::kTensorKernelsPortable.reduce_f64[static_cast<u32>(tn::ReduceOp::Max)].columns(out, src, rows, w, j0, j1);
+    out[j1] = 0.0;
+}
+
+void lu_off(const tn::BatchedFactor<f32>& f, u64 b0, u64 b1) noexcept
+{
+    tn::kTensorKernelsPortable.batched_f32.lu(f, b0, b1);
+    f32& last = f.a[static_cast<i64>(b1 - 1U) * f.sa + static_cast<i64>(f.n * f.n) - 1];
+    last = one_bit_off(last);
+}
+
+void mttkrp_coo_off(const tn::MttkrpCooWalk<f64>& w, f64* tmp) noexcept
+{
+    tn::kTensorKernelsPortable.sparse_f64.mttkrp_coo(w, tmp);
+    w.out[0] = one_bit_off(w.out[0]);
+}
+
+void linear_i8_packed_off(const tn::NnLinearI8& c, u32 lo, u32 hi) noexcept
+{
+    tn::kTensorKernelsPortable.nn_linear_i8_packed_rows(c, lo, hi);
+    const u64 last = static_cast<u64>(hi) * c.n - 1U;
+    c.y[last] = one_bit_off(c.y[last]);
+}
+
+void philox_off(u64 seed, u64 stream, u64 first_block, void* out, usize blocks) noexcept
+{
+    tn::kTensorKernelsPortable.philox4x32_blocks(seed, stream, first_block, out, blocks);
+    u32* words = static_cast<u32*>(out);
+    words[4U * blocks - 1U] ^= 1U;
+}
+
+void conv_off(const tn::NnConv2d& c, f32* scratch, u32 lo, u32 hi) noexcept
+{
+    tn::kTensorKernelsPortable.nn_conv2d_images(c, scratch, lo, hi);
+    c.y[0] = one_bit_off(c.y[0]);
+}
+
+std::string_view routine_of(const char* routine)
+{
+    return routine != nullptr ? routine : "";
+}
+
+} // namespace
+
+TEST_CASE("tensor self-check: every table the host runs gives the known answers", "[tensor][kernels]")
+{
+    const crd::test::SelfCheckRun run =
+        crd::test::self_check_levels(tn::tensor_kernel_levels(), &tn::tensor_self_check);
+    INFO("first failure " << crd::cpu_level_name(run.level) << " " << routine_of(run.routine));
+    CHECK(run.failed == 0U);
+    CHECK(run.ran >= 1U);
+}
+
+TEST_CASE("tensor self-check: a wrong routine fails the check", "[tensor]")
+{
+    CHECK(tn::tensor_self_check(tn::kTensorKernelsPortable) == nullptr);
+    TensorKernels w = tn::kTensorKernelsPortable;
+    w.permute_walk_f64 = &permute_walk_off;
+    CHECK(routine_of(tn::tensor_self_check(w)) == "f64 permute_walk");
+    w = tn::kTensorKernelsPortable;
+    w.ew_binary_f32[static_cast<u32>(tn::BinaryOp::Div)] = &ew_div_off;
+    CHECK(routine_of(tn::tensor_self_check(w)) == "f32 ew_binary div");
+    w = tn::kTensorKernelsPortable;
+    w.reduce_f64[static_cast<u32>(tn::ReduceOp::Max)].columns = &max_columns_past;
+    CHECK(routine_of(tn::tensor_self_check(w)) == "f64 reduce max columns");
+    w = tn::kTensorKernelsPortable;
+    w.batched_f32.lu = &lu_off;
+    CHECK(routine_of(tn::tensor_self_check(w)) == "f32 batched lu");
+    w = tn::kTensorKernelsPortable;
+    w.sparse_f64.mttkrp_coo = &mttkrp_coo_off;
+    CHECK(routine_of(tn::tensor_self_check(w)) == "f64 sparse mttkrp_coo");
+    w = tn::kTensorKernelsPortable;
+    w.nn_linear_i8_packed_rows = &linear_i8_packed_off;
+    CHECK(routine_of(tn::tensor_self_check(w)) == "nn_linear_i8_packed_rows");
+    w = tn::kTensorKernelsPortable;
+    w.philox4x32_blocks = &philox_off;
+    CHECK(routine_of(tn::tensor_self_check(w)) == "philox4x32_blocks");
+    w = tn::kTensorKernelsPortable;
+    w.nn_conv2d_images = &conv_off;
+    CHECK(routine_of(tn::tensor_self_check(w)) == "nn_conv2d_images");
 }

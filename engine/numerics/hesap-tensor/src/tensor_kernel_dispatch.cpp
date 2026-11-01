@@ -1,4 +1,5 @@
-// The hesap-tensor kernels of this archive and the level the process runs (SIMD-DISPATCH).
+// The hesap-tensor kernels of this archive and the level the process runs (SIMD-DISPATCH), each table checked against
+// known answers before its first use (HW-RESILIENCE.3, tensor_self_check.cpp).
 
 #include <crd/core/kernel_level.hpp>
 #include <crd/hesap/tensor/tensor_dispatch.hpp>
@@ -36,6 +37,14 @@ constexpr KernelLevel<TensorKernels> kLevels[] = {
 #endif
 };
 
+void resolve_tensor() noexcept
+{
+    (void)tensor_kernels();
+}
+
+constinit crd::KernelFamily g_family{"hesap.tensor", &resolve_tensor, {}, nullptr};
+const crd::KernelFamilyListing kListing{g_family};
+
 } // namespace
 
 std::span<const KernelLevel<TensorKernels>> tensor_kernel_levels() noexcept
@@ -45,7 +54,8 @@ std::span<const KernelLevel<TensorKernels>> tensor_kernel_levels() noexcept
 
 const KernelLevel<TensorKernels>& tensor_kernels() noexcept
 {
-    static const KernelLevel<TensorKernels>& selected = crd::process_kernel_level<TensorKernels>(kLevels);
+    static const KernelLevel<TensorKernels>& selected =
+        crd::process_checked_kernel_level<TensorKernels>(kLevels, &tensor_self_check, g_family);
     return selected;
 }
 
