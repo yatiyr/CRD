@@ -188,7 +188,10 @@ As the user decided, neither question holds a row.
   - `ceridc screen --authority us.ofac.embargo` on the importer's output answered: CU and UA-43 blocked; UA-14 and
     UA-09 review (partial, E.O. 14065); UA review with four possible hits; RU review with two sectoral matches; SY and
     UA-30 clear.
-  - The final commit reflows two test lines and one comment to clang-format's layout, with no change in meaning.
+  - The final commit reflows two test lines and one comment to clang-format's layout, with no change in meaning. It
+    was rebased on main (2fa62ea7) and run again (05:52-05:55 UTC). The build had no warning, the 158 CTests and
+    the hidden case passed, and the `ceridc screen` answers were the same. `[sanctions]` ran 4 518 assertions this
+    time, because the concurrent applier and screener case counts as many assertions as its threads interleave.
 
 <a id="pins"></a>
 ## Documents read beside the register's fetch
