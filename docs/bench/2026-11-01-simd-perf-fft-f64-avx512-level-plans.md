@@ -13,9 +13,10 @@
   `build-bench.py host` before the boards: 28.0 to 28.6 of 29.4 GiB available, others 0.0 cores, idle. One start.
 - **Binaries:** `bench_fft_vs_refs` from the linux-gcc-release lane tree (GCC 13.3, `-O3`, program LTO), with the
   session's `feat(bench)` method (each timed transform warm, every time to 10 ns, the buffer at a declared offset,
-  each arm's output digest): HEAD (`d5a58201`, `~/ab/b21-head`; avx512 ran the canonical f64 planner, no avx512 f64
-  row) and the candidate (`6da9bad8`, `~/ab/b21-cand`; the avx512 rows below). The detected level selects the avx512
-  fft unit (`cpu detected=avx512 selected=avx512`).
+  each arm's output digest): HEAD (main's `b14d42ce`, `~/ab/b21-head`; avx512 ran the canonical f64 planner, no
+  avx512 f64 row) and the candidate (main's `74ca163e`, `~/ab/b21-cand`; the avx512 rows below), each built from its
+  commit's pre-rebase twin with the same engine and bench sources. The detected level selects the avx512 fft unit
+  (`cpu detected=avx512 selected=avx512`).
 - **Peers:** Intel MKL 2020.0.4, FFTW 3.3.10 (`FFTW_MEASURE`, planned on the declared buffer) and pocketfft
   `4d865cba` (`-march=native`), timed in the same process; every Cerid arm and pocketfft gated against FFTW at
   32 eps log2 n.

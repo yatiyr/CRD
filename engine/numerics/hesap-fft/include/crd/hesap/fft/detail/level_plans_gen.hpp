@@ -7,7 +7,7 @@
 // Data: docs/bench/2026-10-30-simd-dispatch-fft-f64-arms.json (bench_fft_vs_refs):
 //   portable, sse2, avx2: at e0c70766 with the f64 forward arms on the i9-14900K (WSL2)
 //   (docs/bench/2026-10-30-simd-dispatch-fft-board.md#board-4-the-f64-plans-and-the-avx2-re-run).
-//   avx512: at d5a58201 with the warm f64 board on the benchmark machine (Xeon Platinum 8581C)
+//   avx512: at b14d42ce with the warm f64 board on the benchmark machine (Xeon Platinum 8581C)
 //   (docs/bench/2026-11-01-simd-perf-fft-f64-avx512-level-plans.md).
 //   avx512's judged sizes:
 //   (docs/bench/2026-11-01-simd-perf-fft-f64-avx512-level-plans.md#board-2-the-rows-at-both-offsets).
