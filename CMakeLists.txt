@@ -966,7 +966,7 @@ if("cgltf" IN_LIST CRD_SELECTED_PACKAGES)
 endif()
 
 if("mikktspace" IN_LIST CRD_SELECTED_PACKAGES)
-    # MikkTSpace: tangent-space generation (two C files, MIT license). Test oracle only: the engine generates its own
+    # MikkTSpace: tangent-space generation (two C files, zlib license). Test oracle only: the engine generates its own
     # tangents, and the asset-io tests compare them against this reference.
     crd_add_pinned_package(MikkTSpace DOWNLOAD_ONLY YES)
     add_library(mikktspace INTERFACE)
