@@ -80,7 +80,7 @@ Paths: [`crash.cpp`](../../engine/foundation/core/src/crash.cpp) / [`crash.hpp`]
    limitation; (d) picks one with the ADR in hand. **(d)**
 4. **No importer / no adversarial defense.** There is no bounded reader that rejects path traversal, oversized
    sections, or decompression bombs, or that version-checks and skips unknown sections. Prior art exists to mirror:
-   [`zip_archive`](../../engine/assets/resources/include/crd/resources/zip_archive.hpp) /
+   [`zip_archive`](../../engine/foundation/compression/include/crd/compression/zip.hpp) (since OWN.1 crd-compression's `zip.hpp`) /
    [`crdr`](../../engine/assets/resources/src/crdr.cpp) already defend hostile archives (decompression/traversal),
    and the [toml parser](../../engine/foundation/toml/) is the result-typed rejection pattern (5c defect 8).
    Acceptance: "reject traversal/oversized/decompression-bomb inputs", "CLI import/inspect … does not execute

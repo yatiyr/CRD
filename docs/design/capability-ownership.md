@@ -85,12 +85,12 @@ OWN.1 records these owners (2026-10-31):
    crd-memory, below crd-containers, hashes allocation stacks, and crd-core already holds the dependency-free integer
    primitives (`wide_multiply`, the seed generators). crd-containers re-exports `fnv1a_64` for `hash_string`; the
    checksum family (CRC-32, CRC-32C, XXH3) stays in crd-containers on crd-core's kernel dispatch.
-8. **The ZIP container** (2026-11-01) goes to crd-compression. Two exist: resources' `ZipReader` and `ZipWriter` (3MF
-   and the cooker; Zip64 read, DEFLATE members written) and hesap-tensor's npz reader and writer (STORED members
+8. **The ZIP container** (2026-11-01) goes to crd-compression. Two existed: resources' `ZipReader` and `ZipWriter`
+   (3MF and the cooker; Zip64 read, DEFLATE members written) and hesap-tensor's npz reader and writer (STORED members
    written, as `np.savez` does). hesap-tensor sits below crd-resources, so the one container cannot live there; it is
-   a container of compressed members over the module's codecs, so it moves into crd-compression with a writer that
-   takes each member's method and a reader whose STORED members stay views of the source, and both modules consume
-   it.
+   a container of compressed members over the module's codecs, so it moved into crd-compression (`zip.hpp`) with a
+   writer that takes each member's method and a reader whose STORED members stay views of the source, and both
+   modules consume it ([below](#one-zip-container)).
 
 ## Duplicate rows
 
@@ -118,7 +118,7 @@ each a `pending` entry or a listed review, all on OWN.1:
 | math.fixed-size-linear-algebra → math | `geometry-primitives/transform.hpp`, `circumcenter.hpp`, mesh-processing's `quadric.hpp`, **moved** 2026-10-31 | `det3`, the inverse-transpose, the 2D attributes' determinant, the symmetric cofactor inverse and both circumcentres' Cramer's rule; crd-math gained Mat2/Mat3 `determinant`, `inverse`, `try_inverse`, `inverse_transpose`, `solve` and `try_solve`, see below. |
 | io.durable-saves → platform | `perf/bundle.cpp` | crd-perf's `write_bundle_atomic` replaces a file durably by hand; it moves onto `durable_file.hpp` once crd-perf, which ships in the relocatable package, can link crd-platform. |
 | compression.codecs → compression | resources' `deflate`, `crdr`'s zstd calls and the resources fuzz target's, **moved** 2026-10-31; hesap-tensor's `io_zip.hpp` npz inflate, **merged** 2026-11-01 | decision 1: crd-compression created; one exact-size decoder; see below. |
-| compression.zip-archives → compression | resources' `zip_archive.cpp`, hesap-tensor's npz reader and writer in `io.hpp` (pending) | decision 8; the registry's signature is the ZIP record signatures. |
+| compression.zip-archives → compression | resources' `zip_archive.cpp`, hesap-tensor's npz reader and writer in `io.hpp`, **moved** 2026-11-01 | decision 8; the registry's signature is the ZIP record signatures. |
 | numerics.signal-processing → hesap-dsp | `audio/audio_kernels.hpp`, hesap-dsp's own `sosfilt_stream`, **moved** 2026-10-31 | the audio biquad designed with hesap-dsp's RBJ formulas but ran its own transposed direct-form II loop; both loops now run hesap-dsp's `biquad_step`, bit-exact, see below. |
 | geometry.robust-predicates | `hesap-interp/clough_tocher.hpp` `fast_orient`, **moved** 2026-10-31 | a deliberate non-robust orientation for the walk with an exact fallback; it is now crd-math's 2D `cross`, not a second predicate, bit-exact, see below. |
 
@@ -288,3 +288,33 @@ cost 30%.
 
 crd-perf's bundle reads and writes compressed sections through the module once crd-compression and its zstd are in the
 relocatable package that ships crd-perf. The two ZIP containers move into the module (decision 8).
+
+### One ZIP container
+
+crd-compression's `zip.hpp` is the engine's one ZIP container; resources' `zip_archive` and hesap-tensor's own npz
+records are gone. The cooker's 3MF bridge, `ceridc import`'s 3MF route and the 3MF and cook tests read and write
+through it, and hesap-tensor's `NpzReader` and `NpzWriter` are thin layers on it (the `.npy` member names, a backing
+buffer for decoded members). Each copy's stricter rule was kept, and the container took its own reading of the APPNOTE
+where both copies fell short:
+
+- **Read:** the classic format and Zip64 (resources' copy; the npz copy refused Zip64, so npz now reads what NumPy
+  writes past 4 GiB). `open` resolves every member through its local header, so a structure fault is refused before
+  any member is read (resources' copy found it at extraction). A DEFLATE size past what the compressed bytes can hold
+  is refused there too (the npz copy's rule). The central directory's sizes and CRC-32 are authoritative (APPNOTE
+  4.4.4), so a member written with a data descriptor reads; resources' copy refused one whose CRC and compressed size
+  were both zero, a valid empty member among them. A spanned archive is refused by every disk field, the entry counts
+  included, and a Zip64 end record must fit its own size field before the locator. Overflow-safe bounds throughout
+  (the Zip64 fields are 64-bit).
+- **Members:** a STORED member reads as a view of the archive and either method decodes into a buffer of exactly the
+  member's size, nothing allocated; both check the CRC-32. A refusal is a status, allocation refusals included (the
+  reader and writer grow through the containers' `try_` path; resources' copy was fatal on exhaustion).
+- **Write:** the method per member (DEFLATE stores a member it does not shrink, as Info-ZIP does), the classic format
+  with every count, size and offset held below its Zip64 sentinel (resources' copy wrote a 65535th member's count as
+  the sentinel and truncated offsets past 4 GiB silently). The DOS stamp is 1980-01-01 00:00, the npz copy's and the
+  reproducible-build epoch: resources' copy wrote date 0, which is no valid DOS date. That stamp is the only changed
+  byte of resources' archives; the npz archives are byte-for-byte unchanged.
+
+The oracle is the container's own suite (`test_zip.cpp`: the written bytes against a hand-laid archive, Zip64 read,
+every refusal class, allocation refusals on a small pool), the 3MF reference fixtures (lib3mf's and PrusaSlicer's
+Zip64 archives) and NumPy's npz corpus, unchanged; the before/after board is in the
+[session](../sessions/2026-11-01-own-one-zip-container.md).
