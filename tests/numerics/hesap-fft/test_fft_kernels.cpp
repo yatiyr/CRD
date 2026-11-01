@@ -798,16 +798,6 @@ template <typename T> void check_own_plans_every_level()
 {
     const auto levels = fft::fft_kernel_levels();
     const fft::FftTypeKernels<T>& portable = fft::kernels_of<T>(*levels[0].table);
-    // 1K to 1M, and each larger size of the table at which a level the host runs plans other than canonically
-    // (avx512's 2M and 4M), where every level the host runs is then checked; elsewhere past 1M none is.
-    u32 last = 20;
-    for (const fft::detail::FftLevelPlan& row : fft::detail::kFftLevelPlans)
-    {
-        last = row.element_bytes == sizeof(T) && row.log2 > last ? row.log2 : last;
-    }
-    // The heap holds 32 transforms of the walk's largest size: seven buffers and three plans live at once, each plan
-    // a few transforms of tables and scratch (1 GiB ran out at the f64 4M walk).
-    crd::memory::TlsfAllocator alloc(std::max(usize{1} << 30, (usize{32} * sizeof(Complex<T>)) << last));
     const auto off_canonical_here = [&](usize n)
     {
         for (const KernelLevel<FftKernels>& level : levels)
@@ -821,6 +811,19 @@ template <typename T> void check_own_plans_every_level()
         }
         return false;
     };
+    // 1K to 1M, and each larger size of the table at which a level the host runs plans other than canonically
+    // (avx512's 2M and 4M), where every level the host runs is then checked; elsewhere past 1M none is.
+    u32 last = 20;
+    for (const fft::detail::FftLevelPlan& row : fft::detail::kFftLevelPlans)
+    {
+        if (row.element_bytes == sizeof(T) && row.log2 > last && off_canonical_here(usize{1} << row.log2))
+        {
+            last = row.log2;
+        }
+    }
+    // The heap holds 32 transforms of the largest size the walk runs on this host: seven buffers and three plans live
+    // at once, each plan a few transforms of tables and scratch (1 GiB ran out at the f64 4M walk).
+    crd::memory::TlsfAllocator alloc(std::max(usize{1} << 30, (usize{32} * sizeof(Complex<T>)) << last));
     for (u32 lg = 10; lg <= last; ++lg)
     {
         const usize n = usize{1} << lg;
