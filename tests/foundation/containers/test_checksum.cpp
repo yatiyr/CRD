@@ -153,19 +153,6 @@ void xxh3_one_bit_off(u64* acc, const u8* data, usize n, const u8* secret) noexc
     acc[5] ^= u64{1} << 40U;
 }
 
-const crd::KernelFamily* find_family(std::string_view name)
-{
-    (void)crd::run_kernel_self_checks();
-    for (const crd::KernelFamily* f = crd::kernel_families(); f != nullptr; f = f->next)
-    {
-        if (name == f->name)
-        {
-            return f;
-        }
-    }
-    return nullptr;
-}
-
 } // namespace
 
 TEST_CASE("checksum: the published check values", "[containers][checksum]")
@@ -334,8 +321,8 @@ TEST_CASE("checksum kernels: the process runs the levels its CPU selection resol
     CHECK(crd::cpu_level_includes(s.selected, crc.level));
     CHECK(crd::cpu_level_includes(s.selected, hash.level));
     // Both families' self-checks ran at their resolution and passed the tables they selected.
-    const crd::KernelFamily* crc_family = find_family("containers.crc");
-    const crd::KernelFamily* hash_family = find_family("containers.hash");
+    const crd::KernelFamily* crc_family = crd::test::kernel_family("containers.crc");
+    const crd::KernelFamily* hash_family = crd::test::kernel_family("containers.hash");
     REQUIRE(crc_family != nullptr);
     REQUIRE(hash_family != nullptr);
     CHECK(crc_family->result.status == crd::KernelCheckStatus::Passed);

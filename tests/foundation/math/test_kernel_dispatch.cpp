@@ -108,6 +108,43 @@ crd::usize mismatches(const crd::f32* src, Run run, Reference reference)
     return bad;
 }
 
+// Self-check stubs: the portable routine with one bit of its last result wrong (the tail on every level).
+template <auto Routine, typename Out> void narrow_last_off(const crd::f32* src, Out* dst, crd::usize n) noexcept
+{
+    (crd::math::kFloatConvertKernelsPortable.*Routine)(src, dst, n);
+    dst[n - 1U] = static_cast<Out>(dst[n - 1U] ^ 1U);
+}
+
+template <auto Routine, typename Out>
+void narrow_sr_last_off(const crd::f32* src, Out* dst, const crd::u32* rand, crd::usize n) noexcept
+{
+    (crd::math::kFloatConvertKernelsPortable.*Routine)(src, dst, rand, n);
+    dst[n - 1U] = static_cast<Out>(dst[n - 1U] ^ 1U);
+}
+
+void widen_last_off(const crd::u16* src, crd::f32* dst, crd::usize n) noexcept
+{
+    crd::math::kFloatConvertKernelsPortable.f16_to_f32(src, dst, n);
+    dst[n - 1U] = std::bit_cast<crd::f32>(std::bit_cast<crd::u32>(dst[n - 1U]) ^ 1U);
+}
+
+// The portable routine one ulp off at every argument.
+template <auto Routine> double ulp_off(double x) noexcept
+{
+    return std::bit_cast<double>(std::bit_cast<crd::u64>((crd::math::kScalarMathKernelsPortable.*Routine)(x)) ^ 1U);
+}
+
+template <auto Routine> double ulp_off2(double x, double y) noexcept
+{
+    return std::bit_cast<double>(std::bit_cast<crd::u64>((crd::math::kScalarMathKernelsPortable.*Routine)(x, y)) ^ 1U);
+}
+
+void sincos_cos_off(double x, double& s, double& c) noexcept
+{
+    crd::math::kScalarMathKernelsPortable.sincos(x, s, c);
+    c = std::bit_cast<double>(std::bit_cast<crd::u64>(c) ^ 1U);
+}
+
 } // namespace
 
 TEST_CASE("kernel dispatch: the selected level is the highest one both the selection and the build cap run",
@@ -472,6 +509,59 @@ TEST_CASE("float conversion kernels: the process runs the level its CPU selectio
                                                                     crd::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
     CHECK(crd::cpu_level_includes(crd::kernel_level_cap(), chosen.level));
+    const crd::KernelFamily* family = crd::test::kernel_family("math.float-convert");
+    REQUIRE(family != nullptr);
+    CHECK(family->result.status == crd::KernelCheckStatus::Passed);
+    CHECK(family->result.level == chosen.level);
+}
+
+TEST_CASE("float conversion self-check: every table the host runs reproduces the scalar converts' answers",
+          "[math][kernels]")
+{
+    const crd::test::SelfCheckRun run =
+        crd::test::self_check_levels(crd::math::float_convert_levels(), &crd::math::float_convert_self_check);
+    INFO("first failure " << crd::cpu_level_name(run.level) << " " << (run.routine ? run.routine : "-"));
+    CHECK(run.failed == 0U);
+    CHECK(run.ran >= 1U);
+}
+
+TEST_CASE("float conversion self-check: a table with one wrong routine fails in that routine", "[math]")
+{
+    using K = FloatConvertKernels;
+    const K& portable = crd::math::kFloatConvertKernelsPortable;
+    CHECK(crd::math::float_convert_self_check(portable) == nullptr);
+    const auto fails_in = [&](K wrong)
+    {
+        const char* routine = crd::math::float_convert_self_check(wrong);
+        return std::string_view{routine != nullptr ? routine : ""};
+    };
+    K w = portable;
+    w.f16_to_f32 = &widen_last_off;
+    CHECK(fails_in(w) == "f16_to_f32");
+    w = portable;
+    w.f32_to_f16 = &narrow_last_off<&K::f32_to_f16, crd::u16>;
+    CHECK(fails_in(w) == "f32_to_f16");
+    w = portable;
+    w.f32_to_bf16 = &narrow_last_off<&K::f32_to_bf16, crd::u16>;
+    CHECK(fails_in(w) == "f32_to_bf16");
+    w = portable;
+    w.f32_to_fp8_e4m3 = &narrow_last_off<&K::f32_to_fp8_e4m3, crd::u8>;
+    CHECK(fails_in(w) == "f32_to_fp8_e4m3");
+    w = portable;
+    w.f32_to_fp8_e5m2 = &narrow_last_off<&K::f32_to_fp8_e5m2, crd::u8>;
+    CHECK(fails_in(w) == "f32_to_fp8_e5m2");
+    w = portable;
+    w.f32_to_f16_sr = &narrow_sr_last_off<&K::f32_to_f16_sr, crd::u16>;
+    CHECK(fails_in(w) == "f32_to_f16_sr");
+    w = portable;
+    w.f32_to_bf16_sr = &narrow_sr_last_off<&K::f32_to_bf16_sr, crd::u16>;
+    CHECK(fails_in(w) == "f32_to_bf16_sr");
+    w = portable;
+    w.f32_to_fp8_e4m3_sr = &narrow_sr_last_off<&K::f32_to_fp8_e4m3_sr, crd::u8>;
+    CHECK(fails_in(w) == "f32_to_fp8_e4m3_sr");
+    w = portable;
+    w.f32_to_fp8_e5m2_sr = &narrow_sr_last_off<&K::f32_to_fp8_e5m2_sr, crd::u8>;
+    CHECK(fails_in(w) == "f32_to_fp8_e5m2_sr");
 }
 
 // The scalar transcendental table (crd/math/scalar_kernels.hpp): every level the host runs returns portable's bits,
@@ -643,4 +733,59 @@ TEST_CASE("scalar transcendental kernels: the process runs the level its CPU sel
     CHECK(&chosen ==
           &crd::select_kernel_level<ScalarMathKernels>(levels, s.selected, s.kernel_features, crd::kernel_level_cap()));
     CHECK(&crd::math::scalar_math() == chosen.table);
+    const crd::KernelFamily* family = crd::test::kernel_family("math.scalar");
+    REQUIRE(family != nullptr);
+    CHECK(family->result.status == crd::KernelCheckStatus::Passed);
+    CHECK(family->result.level == chosen.level);
+}
+
+TEST_CASE("scalar transcendental self-check: every table the host runs returns its known bits", "[math][kernels]")
+{
+    const crd::test::SelfCheckRun run =
+        crd::test::self_check_levels(crd::math::scalar_math_levels(), &crd::math::scalar_math_self_check);
+    INFO("first failure " << crd::cpu_level_name(run.level) << " " << (run.routine ? run.routine : "-"));
+    CHECK(run.failed == 0U);
+    CHECK(run.ran >= 1U);
+}
+
+TEST_CASE("scalar transcendental self-check: a table with one wrong routine fails in that routine", "[math]")
+{
+    using K = ScalarMathKernels;
+    const K& portable = crd::math::kScalarMathKernelsPortable;
+    CHECK(crd::math::scalar_math_self_check(portable) == nullptr);
+    struct Wrong
+    {
+        double (*K::*routine)(double) noexcept;
+        double (*off)(double) noexcept;
+        std::string_view name;
+    };
+    const Wrong unary[] = {
+        {&K::exp, &ulp_off<&K::exp>, "exp"},       {&K::exp2, &ulp_off<&K::exp2>, "exp2"},
+        {&K::exp10, &ulp_off<&K::exp10>, "exp10"}, {&K::expm1, &ulp_off<&K::expm1>, "expm1"},
+        {&K::log, &ulp_off<&K::log>, "log"},       {&K::log2, &ulp_off<&K::log2>, "log2"},
+        {&K::log10, &ulp_off<&K::log10>, "log10"}, {&K::log1p, &ulp_off<&K::log1p>, "log1p"},
+        {&K::sin, &ulp_off<&K::sin>, "sin"},       {&K::cos, &ulp_off<&K::cos>, "cos"},
+        {&K::tan, &ulp_off<&K::tan>, "tan"},       {&K::atan, &ulp_off<&K::atan>, "atan"},
+        {&K::asin, &ulp_off<&K::asin>, "asin"},    {&K::acos, &ulp_off<&K::acos>, "acos"},
+        {&K::sinh, &ulp_off<&K::sinh>, "sinh"},    {&K::cosh, &ulp_off<&K::cosh>, "cosh"},
+        {&K::tanh, &ulp_off<&K::tanh>, "tanh"},    {&K::asinh, &ulp_off<&K::asinh>, "asinh"},
+        {&K::acosh, &ulp_off<&K::acosh>, "acosh"}, {&K::atanh, &ulp_off<&K::atanh>, "atanh"},
+    };
+    for (const Wrong& u : unary)
+    {
+        K w = portable;
+        w.*u.routine = u.off;
+        const char* routine = crd::math::scalar_math_self_check(w);
+        INFO(u.name);
+        CHECK(std::string_view{routine != nullptr ? routine : ""} == u.name);
+    }
+    K w = portable;
+    w.atan2 = &ulp_off2<&K::atan2>;
+    CHECK(std::string_view{crd::math::scalar_math_self_check(w)} == "atan2");
+    w = portable;
+    w.pow = &ulp_off2<&K::pow>;
+    CHECK(std::string_view{crd::math::scalar_math_self_check(w)} == "pow");
+    w = portable;
+    w.sincos = &sincos_cos_off;
+    CHECK(std::string_view{crd::math::scalar_math_self_check(w)} == "sincos");
 }

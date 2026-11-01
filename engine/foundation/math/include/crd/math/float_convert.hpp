@@ -51,6 +51,10 @@ namespace crd::math
 [[nodiscard]] std::span<const KernelLevel<FloatConvertKernels>> float_convert_levels() noexcept;
 [[nodiscard]] const KernelLevel<FloatConvertKernels>& float_convert_kernels() noexcept;
 
+// The family's known-answer self-check (HW-RESILIENCE.3, crd/core/kernel_dispatch.hpp), which its resolution runs:
+// nullptr when every routine of `table` reproduces the scalar converts' answers, else the first failing routine's name.
+[[nodiscard]] const char* float_convert_self_check(const FloatConvertKernels& table) noexcept;
+
 // =======================================================================
 // Batch converts — the crush kernels. Contract: BIT-IDENTICAL to the scalar
 // converts on every input, on every kernel level (tests/foundation/math
