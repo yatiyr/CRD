@@ -45,7 +45,10 @@ DIR64 relocation (without it the bytes differ widely), one flipped bit, a hook, 
 build, a foreign file, every cut of the image; an ELF image by build-id, the file-backed limit, a wrong span and
 text relocations; the sentence; `bundle.inspect` with and without the image in the store. The application's real
 wild-write capture (`diagnostic host: the application's wild write ...`) carries the bytes and matches the
-specimen's own file on win-debug. The Linux writer compiles clean under GCC and Clang (`-Wall -Wextra -Wconversion
+specimen's own file on win-debug. The dump writer's callback now runs for every dump: crd-core-tests' 13 Windows
+crash-capture cases (live dumps under loader and heap churn, fail-fast, overflows, injected write failures) and 17
+crash-contract cases, and crd-jobs-tests' hang dump, pass on win-debug. Nothing outside the tests parses a crash
+record, so the new line after the registers moves no reader. The Linux writer compiles clean under GCC and Clang (`-Wall -Wextra -Wconversion
 -Wshadow`); the linux lanes run the same case on push.
 
 Left on the row: the instruction decoder (x86-64 and AArch64) and the access and divisor signatures.
