@@ -3309,10 +3309,19 @@ and the `flipped-read` site (DIAG.9b, above) drive their tests.
   checks in `create_cuda_compute_context`: its devices in CUDA's enumeration order, each kernel compiled by NVRTC for
   the device's architecture (a refused compile is `build`, since NVRTC is linked in and no kernel could run there)
   and run on a probe context of its own (`cuCtxCreate`), destroyed before the device's primary context is retained.
-- State-hash divergence: HW-RESILIENCE.3 owns the local primitive only, a per-step state-hash ledger over the
-  checksum family's XXH3-64, the first divergent step and the culprit named by HW-RESILIENCE.2's hardware identity
-  against a reference (the recorded run, or the majority of three or more); the lockstep and rollback exchange of
-  those hashes on the wire belongs to [NET.3](../ROADMAP.md#slice-net.3) and [4.2c](../ROADMAP.md#slice-4.2c).
+- State-hash divergence (`crd/perf/state_hash.hpp`): HW-RESILIENCE.3 owns the local primitive; the lockstep and
+  rollback exchange of the hashes on the wire belongs to [NET.3](../ROADMAP.md#slice-net.3) and
+  [4.2c](../ROADMAP.md#slice-4.2c). A `StateHashLedger` keeps one participant's per-step hashes (the checksum family's
+  XXH3-64 of the state, or the caller's u64) for its last `capacity` steps and a chain over every step since its first
+  (`chain_n = xxh3_64(LE64(chain_{n-1}) ++ LE64(step) ++ LE64(hash))`, seed 0), so a session of any length stays
+  bounded and a divergence older than every window is still seen, as "at or before" the first step judged. Its
+  payload (`CSL1`) has an untrusted decoder. A `StateDivergenceMonitor` judges every step all its participants have
+  reached as soon as they reach it (a step one did not record is itself a divergence) and latches the first
+  disagreement: `diverged` against the reference (a recorded run) or the majority of three or more, `no-majority`,
+  or `undecided` for two without a reference. The diverging participants are named with their hardware identity, the
+  cause is `machine` when an agreeing machine has the same processor and `processor-difference` when no agreeing
+  machine has any diverging machine's processor, each diverging processor's advisory and microcode state are judged
+  as `classify_fault` judges them, and `state_divergence_message` says it in one sentence.
 - The hardware check (`crd/perf/hardware_check.hpp`), which `ceridc doctor --hardware` and the `hardware.check`
   command run: one thread pinned to each logical CPU (`crd::pin_current_thread`, the walk the CPU selection uses) runs
   each arm for the same time on every CPU at once. The arms are Cerid-free, each result checked against an answer
