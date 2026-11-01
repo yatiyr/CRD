@@ -589,6 +589,10 @@ systems for every preset, test, guard, sanitizer, SDE arm and ARM64 lane) is CI-
 | `host-check/vulkan-sdk-installer` | Setup Python 3.12 | `experiment-vulkan-sdk-installer` | open (CI-4): not yet carried |
 | `host-check/vulkan-sdk-installer` | Installer arm | `experiment-vulkan-sdk-installer` | open (CI-4): not yet carried |
 | `host-check/vulkan-sdk-installer` | Preserve results | `experiment-vulkan-sdk-installer` | open (CI-4): not yet carried |
+| `host-check/vulkan-sdk-installer-emitter` | Checkout | `experiment-vulkan-sdk-installer-emitter` | open (CI-4): not yet carried |
+| `host-check/vulkan-sdk-installer-emitter` | Setup Python 3.12 | `experiment-vulkan-sdk-installer-emitter` | open (CI-4): not yet carried |
+| `host-check/vulkan-sdk-installer-emitter` | Install under the debugger | `experiment-vulkan-sdk-installer-emitter` | open (CI-4): not yet carried |
+| `host-check/vulkan-sdk-installer-emitter` | Preserve results | `experiment-vulkan-sdk-installer-emitter` | open (CI-4): not yet carried |
 | `host-check/vulkan-sdk-installer-judge` | Checkout | `experiment-vulkan-sdk-installer-judge` | open (CI-4): not yet carried |
 | `host-check/vulkan-sdk-installer-judge` | Setup Python 3.12 | `experiment-vulkan-sdk-installer-judge` | open (CI-4): not yet carried |
 | `host-check/vulkan-sdk-installer-judge` | Collect the arms | `experiment-vulkan-sdk-installer-judge` | open (CI-4): not yet carried |
