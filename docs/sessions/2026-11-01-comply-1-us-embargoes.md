@@ -22,9 +22,10 @@ No failure comes from a track C change.
 
 - **Run 41262267004 (8a243a34)**, the only push run since batch 20 that started: Repository checks
   (windows-2025-vs2026) failed on `crd-ci-orchestrator-e2e` alone (`test_1_webhook_build_runs_end_to_end`, its plan job
-  still `scheduled`), the CI orchestrator's own test that batch 18 named for its owner (CI-1). win-arm64-debug passed,
-  and track A's 921e19cc ("size the checksum check stream to whole lines") repaired the `checksum.cpp` C4324 that batch
-  20 expected to fail the ARM64 lane; de5e10b0, the commit of the complete run batch 20 dispatched, already holds it.
+  still `scheduled`), the CI orchestrator's own test that batch 18 named for its owner (CI-1). Its win-arm64-debug pass
+  proves nothing about the `checksum.cpp` C4324 batch 20 expected to fail the ARM64 lane: 8a243a34 predates 8332bf9f,
+  which brought it. Track A's 921e19cc ("size the checksum check stream to whole lines") is the repair, and de5e10b0,
+  the commit of the complete run batch 20 dispatched, holds it; that run's ARM64 build is the first to prove it.
 - **Run 41274380605 (de5e10b0)**, that complete run, and 41269105413 (b0b1b245) were still queued at 04:49 UTC, with
   every push run since 41262267004 cancelled by a newer push.
 
