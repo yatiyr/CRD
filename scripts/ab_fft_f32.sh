@@ -7,6 +7,9 @@
 # With CRD_AB_ARMS (algorithm names) the program times every forward the planner offers at each size (no --planned)
 # and each named algorithm is an arm beside MKL, all from one process a repetition: one build's algorithms against
 # each other and against MKL (their bits differ by design; each is gated against the FFTW f64 truth in the program).
+# With both, each named algorithm of the candidate is an arm too (cand-<name>), from its own process a repetition
+# interleaved with HEAD's: a change that alters an algorithm's bits (a split, a plan) judged against HEAD's edition
+# of the same algorithm and against MKL; the reference is HEAD's first named arm unless CRD_AB_REFERENCE names one.
 # Speed ratios above 1 mean the arm is faster than the reference.
 #   bash scripts/ab_fft_f32.sh <out dir> [--sizes A-B] [ab-board.py options ...]
 # Environment: CRD_CPU_LEVEL (the level, as the boards select it), CRD_BENCH_CPUS (the taskset CPU, default 3),
@@ -18,7 +21,7 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 if [[ $# -lt 1 || $1 == -* ]]; then
-    sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 2
 fi
 out=$1
@@ -49,6 +52,13 @@ if [[ -n ${CRD_AB_ARMS:-} ]]; then
         arguments+=(--arm "$name=head:^(?P<key>\d+) +\| +$name +\| +(?P<value>[\d.]+) +\|")
     done
     reference=${CRD_AB_REFERENCE:-mkl}
+    if [[ -n ${CRD_AB_CANDIDATE:-} ]]; then
+        arguments+=(--cmd "candidate=$CRD_AB_CANDIDATE $flags")
+        for name in "${names[@]}"; do
+            arguments+=(--arm "cand-$name=candidate:^(?P<key>\d+) +\| +$name +\| +(?P<value>[\d.]+) +\|")
+        done
+        reference=${CRD_AB_REFERENCE:-${names[0]}}
+    fi
 elif [[ -n ${CRD_AB_CANDIDATE:-} ]]; then
     arguments+=(--cmd "candidate=$CRD_AB_CANDIDATE --planned $flags" --arm "candidate=candidate:$cerid")
     arguments+=(--same "head,candidate:$bits")
