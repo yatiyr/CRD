@@ -142,7 +142,7 @@ What it changes in the register:
 
 ## Verification
 
-- **Python.** `RegisterReview` has 17 cases, 5 of them new: the legal domain end to end (resolved plan, the index read
+- **Python.** `RegisterReview` has 17 cases, 6 of them new and the legal-domain case rewritten: the legal domain end to end (resolved plan, the index read
   first, CELLAR's headers, never read, amended and changed text judged apart), `read` (snapshot rule, every refusal
   writing nothing, recorded entries passing the guard, a tampered body refused, the standards register refused),
   `read` of an unreadable or unfetched document, every host's resolver, fetching (index first, gzip decoded and bounded,
