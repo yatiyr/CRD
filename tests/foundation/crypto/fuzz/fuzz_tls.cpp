@@ -1,0 +1,302 @@
+// crd-fuzz-crypto-tls: crd-crypto's TLS 1.3 sessions (NET.2; docs/design/network-foundation.md#tls-sessions) fed
+// hostile bytes under the bounded fuzz harness (REPO.DEV.9; docs/design/test-instruments.md).
+//
+// Input. Byte 0 picks the session (bit 0: 0 a server that has received nothing, 1 a client that has sent its
+// ClientHello), byte 1 the size of each delivery (0: all at once), the rest are the bytes the peer "sent".
+//
+// Oracles, none of them the provider's verdict on one call:
+//   * neither session is ever established: a server needs a Finished under keys derived from its own fresh share, and
+//     a client a CertificateVerify by its pinned key, which no fixed input can hold;
+//   * receive() answers only None, Failed, PeerRefused or Full while the session handshakes, NotReady once it failed,
+//     and a failed session stays failed;
+//   * the session never holds more than kTlsMaxBufferedBytes of received bytes, and its outgoing bytes are bounded;
+//   * send(), read() and close() are refused outside an established session.
+#include <crd/fuzz/harness.hpp>
+
+#include <crd/crypto/provider.hpp>
+#include <crd/crypto/tls.hpp>
+
+#include <algorithm>
+#include <cstring>
+
+namespace
+{
+using crd::u16;
+using crd::u8;
+using crd::usize;
+using crd::containers::ConstSpan;
+using crd::containers::Span;
+using namespace crd::crypto;
+
+constexpr AlgorithmId kGroups[] = {AlgorithmId::X25519Mlkem768, AlgorithmId::Secp256r1Mlkem768,
+                                   AlgorithmId::Secp384r1Mlkem1024, AlgorithmId::X25519, AlgorithmId::Secp256r1,
+                                   AlgorithmId::Secp384r1};
+constexpr AlgorithmId kSignatures[] = {AlgorithmId::MlDsa44, AlgorithmId::MlDsa65, AlgorithmId::MlDsa87,
+                                       AlgorithmId::Ed25519, AlgorithmId::EcdsaSecp256r1Sha256,
+                                       AlgorithmId::EcdsaSecp384r1Sha384};
+constexpr AlgorithmId kAeads[] = {AlgorithmId::Aes128Gcm, AlgorithmId::Aes256Gcm, AlgorithmId::Chacha20Poly1305};
+constexpr const char* kName    = "game.cerid.test";
+
+// The outgoing bytes a handshake can leave in a session: a server's first flight with an Ed25519 credential, or a
+// client's ClientHello, and an alert; far below the bound.
+constexpr usize kMaxFlight = 8192U;
+
+// One server and one client context, built once: an Ed25519 credential from a fixed seed, every group, signature and
+// AEAD, the client pinning the server's key.
+struct Contexts
+{
+    SigningKey    key;
+    TlsCredential credential;
+    TlsContext    server;
+    TlsContext    client;
+    bool          ready = false;
+
+    Contexts() noexcept
+    {
+        u8 seed[32];
+        for (usize i = 0U; i < sizeof(seed); ++i)
+        {
+            seed[i] = static_cast<u8>(i + 1U);
+        }
+        if (key.from_seed(AlgorithmId::Ed25519, ConstSpan<u8>(seed, sizeof(seed))) != CryptoError::None ||
+            credential.init(key, kName) != TlsError::None)
+        {
+            return;
+        }
+        TlsConfig config;
+        config.role        = TlsRole::Server;
+        config.groups      = kGroups;
+        config.aeads       = kAeads;
+        config.credential  = &credential;
+        config.server_name = kName;
+        if (server.init(config) != TlsError::None)
+        {
+            return;
+        }
+        const KeyId pin    = credential.key_id();
+        config.role        = TlsRole::Client;
+        config.credential  = nullptr;
+        config.signatures  = kSignatures;
+        config.pinned      = ConstSpan<KeyId>(&pin, 1U);
+        ready              = client.init(config) == TlsError::None;
+    }
+};
+
+Contexts& contexts() noexcept
+{
+    static Contexts instance;
+    return instance;
+}
+
+void drain(TlsSession& session) noexcept
+{
+    u8    out[kMaxFlight];
+    usize written = 0U;
+    CRD_FUZZ_REQUIRE(session.pending() <= kMaxFlight);
+    CRD_FUZZ_REQUIRE(session.take(Span<u8>(out, sizeof(out)), written) == TlsError::None);
+    CRD_FUZZ_REQUIRE(session.pending() == 0U);
+}
+
+void feed(TlsSession& session, ConstSpan<u8> bytes, usize chunk) noexcept
+{
+    for (usize at = 0U; at < bytes.size();)
+    {
+        const usize    size   = chunk == 0U ? bytes.size() - at : std::min(chunk, bytes.size() - at);
+        const TlsState before = session.state();
+        const TlsError result = session.receive(bytes.subspan(at, size));
+        at += size;
+        if (before == TlsState::Failed)
+        {
+            CRD_FUZZ_REQUIRE(result == TlsError::NotReady);
+            CRD_FUZZ_REQUIRE(session.state() == TlsState::Failed);
+            continue;
+        }
+        CRD_FUZZ_REQUIRE(result == TlsError::None || result == TlsError::Failed || result == TlsError::PeerRefused ||
+                         result == TlsError::Full);
+        CRD_FUZZ_REQUIRE((result == TlsError::Failed || result == TlsError::PeerRefused) ==
+                         (session.state() == TlsState::Failed));
+        CRD_FUZZ_REQUIRE(session.state() == TlsState::Handshaking || session.state() == TlsState::Failed);
+        drain(session);
+    }
+    u8    scratch[16] = {};
+    usize written     = 0U;
+    CRD_FUZZ_REQUIRE(session.send(ConstSpan<u8>(scratch, sizeof(scratch))) == TlsError::NotReady);
+    CRD_FUZZ_REQUIRE(session.read(Span<u8>(scratch, sizeof(scratch)), written) == TlsError::NotReady);
+    CRD_FUZZ_REQUIRE(written == 0U);
+    CRD_FUZZ_REQUIRE(session.close() == TlsError::NotReady);
+    CRD_FUZZ_REQUIRE(session.group() == AlgorithmId{} && session.peer_key() == KeyId{});
+}
+} // namespace
+
+extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size)
+{
+    if (size < 2U || size > crd::fuzz::kMaxInputBytes)
+    {
+        return 0;
+    }
+    Contexts& shared = contexts();
+    CRD_FUZZ_REQUIRE(shared.ready);
+    const bool client = (data[0] & 1U) != 0U;
+    TlsSession session;
+    CRD_FUZZ_REQUIRE(session.init(client ? shared.client : shared.server) == TlsError::None);
+    drain(session);
+    feed(session, ConstSpan<u8>(data + 2U, size - 2U), data[1]);
+    return 0;
+}
+
+namespace
+{
+// A byte writer for the seeds' TLS messages.
+struct Writer
+{
+    u8    bytes[2048] = {};
+    usize size        = 0U;
+
+    void put(u8 value) noexcept { bytes[size++] = value; }
+    void put16(usize value) noexcept
+    {
+        put(static_cast<u8>(value >> 8U));
+        put(static_cast<u8>(value));
+    }
+    void put(const u8* data, usize count) noexcept
+    {
+        std::memcpy(bytes + size, data, count);
+        size += count;
+    }
+    // Writes the 16-bit (or 24-bit) length of everything written since `start` (its length field) at `start`.
+    void patch16(usize start) noexcept
+    {
+        const usize length = size - start - 2U;
+        bytes[start]       = static_cast<u8>(length >> 8U);
+        bytes[start + 1U]  = static_cast<u8>(length);
+    }
+    void patch24(usize start) noexcept
+    {
+        const usize length = size - start - 3U;
+        bytes[start]       = static_cast<u8>(length >> 16U);
+        bytes[start + 1U]  = static_cast<u8>(length >> 8U);
+        bytes[start + 2U]  = static_cast<u8>(length);
+    }
+};
+
+// A TLS 1.3 ClientHello for the fuzz server: X25519 with RFC 7748's Alice's public key, Ed25519, the server's name and
+// TLS_AES_128_GCM_SHA256, in one handshake record (RFC 9846 section 4.1.2).
+void client_hello(Writer& out, u8 mode, u8 chunk) noexcept
+{
+    constexpr u8 alice[32] = {0x85U, 0x20U, 0xF0U, 0x09U, 0x89U, 0x30U, 0xA7U, 0x54U, 0x74U, 0x8BU, 0x7DU,
+                               0xDCU, 0xB4U, 0x3EU, 0xF7U, 0x5AU, 0x0DU, 0xBFU, 0x3AU, 0x0DU, 0x26U, 0x38U,
+                               0x1AU, 0xF4U, 0xEBU, 0xA4U, 0xA9U, 0x8EU, 0xAAU, 0x9BU, 0x4EU, 0x6AU};
+    out.put(mode);
+    out.put(chunk);
+    out.put(22U); // handshake record
+    out.put16(0x0301U);
+    const usize record = out.size;
+    out.put16(0U);
+    out.put(1U); // client_hello
+    const usize message = out.size;
+    out.put(0U);
+    out.put16(0U);
+    out.put16(0x0303U);
+    for (u8 i = 0U; i < 32U; ++i)
+    {
+        out.put(static_cast<u8>(0xC0U + i));
+    }
+    out.put(0U);        // legacy_session_id
+    out.put16(2U);      // cipher_suites
+    out.put16(0x1301U); // TLS_AES_128_GCM_SHA256
+    out.put(1U);        // legacy_compression_methods
+    out.put(0U);
+    const usize extensions = out.size;
+    out.put16(0U);
+    out.put16(0x0000U); // server_name
+    out.put16(std::strlen(kName) + 5U);
+    out.put16(std::strlen(kName) + 3U);
+    out.put(0U); // host_name
+    out.put16(std::strlen(kName));
+    out.put(reinterpret_cast<const u8*>(kName), std::strlen(kName));
+    out.put16(0x000AU); // supported_groups: x25519
+    out.put16(4U);
+    out.put16(2U);
+    out.put16(0x001DU);
+    out.put16(0x000DU); // signature_algorithms: ed25519
+    out.put16(4U);
+    out.put16(2U);
+    out.put16(0x0807U);
+    out.put16(0x002BU); // supported_versions: TLS 1.3
+    out.put16(3U);
+    out.put(2U);
+    out.put16(0x0304U);
+    out.put16(0x0033U); // key_share: x25519
+    out.put16(2U + 4U + 32U);
+    out.put16(4U + 32U);
+    out.put16(0x001DU);
+    out.put16(32U);
+    out.put(alice, sizeof(alice));
+    out.patch16(extensions);
+    out.patch24(message);
+    out.patch16(record);
+}
+
+// A ServerHello for the fuzz client: TLS_AES_128_GCM_SHA256 and X25519 with RFC 7748's Bob's public key.
+void server_hello(Writer& out) noexcept
+{
+    constexpr u8 bob[32] = {0xDEU, 0x9EU, 0xDBU, 0x7DU, 0x7BU, 0x7DU, 0xC1U, 0xB4U, 0xD3U, 0x5BU, 0x61U,
+                             0xC2U, 0xECU, 0xE4U, 0x35U, 0x37U, 0x3FU, 0x83U, 0x43U, 0xC8U, 0x5BU, 0x78U,
+                             0x67U, 0x4DU, 0xADU, 0xFCU, 0x7EU, 0x14U, 0x6FU, 0x88U, 0x2BU, 0x4FU};
+    out.put(1U);
+    out.put(0U);
+    out.put(22U);
+    out.put16(0x0303U);
+    const usize record = out.size;
+    out.put16(0U);
+    out.put(2U); // server_hello
+    const usize message = out.size;
+    out.put(0U);
+    out.put16(0U);
+    out.put16(0x0303U);
+    for (u8 i = 0U; i < 32U; ++i)
+    {
+        out.put(static_cast<u8>(0x50U + i));
+    }
+    out.put(0U); // legacy_session_id_echo
+    out.put16(0x1301U);
+    out.put(0U);
+    const usize extensions = out.size;
+    out.put16(0U);
+    out.put16(0x002BU); // supported_versions
+    out.put16(2U);
+    out.put16(0x0304U);
+    out.put16(0x0033U); // key_share
+    out.put16(4U + 32U);
+    out.put16(0x001DU);
+    out.put16(32U);
+    out.put(bob, sizeof(bob));
+    out.patch16(extensions);
+    out.patch24(message);
+    out.patch16(record);
+}
+} // namespace
+
+void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
+{
+    Writer hello;
+    client_hello(hello, 0U, 0U);
+    sink.add("server-client-hello", hello.bytes, hello.size);
+    hello.bytes[1] = 7U;
+    sink.add("server-client-hello-in-7-byte-pieces", hello.bytes, hello.size);
+
+    Writer answer;
+    server_hello(answer);
+    sink.add("client-server-hello", answer.bytes, answer.size);
+
+    // A record header that claims more than a record may hold, an SSL 2.0 hello, a TLS 1.2-only hello's start, an
+    // alert and nothing at all.
+    const u8 oversized[] = {0U, 0U, 22U, 0x03U, 0x03U, 0xFFU, 0xFFU, 1U};
+    sink.add("server-oversized-record", oversized, sizeof(oversized));
+    const u8 sslv2[] = {0U, 0U, 0x80U, 0x2EU, 0x01U, 0x03U, 0x01U, 0x00U, 0x15U, 0x00U, 0x00U, 0x00U, 0x10U};
+    sink.add("server-sslv2-hello", sslv2, sizeof(sslv2));
+    const u8 alert[] = {1U, 0U, 21U, 0x03U, 0x03U, 0x00U, 0x02U, 0x02U, 0x28U};
+    sink.add("client-handshake-failure-alert", alert, sizeof(alert));
+    const u8 nothing[] = {0U, 0U};
+    sink.add("server-nothing", nothing, sizeof(nothing));
+}

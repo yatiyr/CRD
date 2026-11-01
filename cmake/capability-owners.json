@@ -727,13 +727,14 @@
       "summary": "The cryptographic provider interface (AEAD, KEM, signatures, KDF, keyed PRF), the operating-system CSPRNG, the key store and the TLS and QUIC handshake integration over vetted providers; Cerid writes no primitive (network foundation D2).",
       "owner": "crypto",
       "api": [
-        "engine/foundation/crypto/include/crd/crypto/provider.hpp"
+        "engine/foundation/crypto/include/crd/crypto/provider.hpp",
+        "engine/foundation/crypto/include/crd/crypto/tls.hpp"
       ],
       "signatures": [
         {"regex": "#\\s*include\\s*<(?:openssl/|sodium\\.h|bcrypt\\.h|CommonCrypto/|Security/SecRandom\\.h|sys/random\\.h)", "what": "a cryptographic library or operating-system randomness header"},
         {"regex": "\\b(?:BCryptGenRandom|getrandom|getentropy|arc4random_buf|SecRandomCopyBytes|RAND_bytes|randombytes_buf)\\s*\\(", "what": "an operating-system or library randomness call"}
       ],
-      "decision": "docs/design/network-foundation.md D2: its consumers are wider than the network (SUPPLY signing, policy and rule generations, crash pack protection), so cryptography is a foundation owner that depends on no network code. NET-STD created the module; NET.2 landed the provider interface over the pinned AWS-LC (2026-11-01: randomness, AEAD, HKDF, signatures, key agreement, then the ML-KEM key encapsulation and the SipHash-2-4 keyed PRF for tables; docs/design/network-foundation.md#provider), and its later slices add the key store and the handshake integration to the same owner."
+      "decision": "docs/design/network-foundation.md D2: its consumers are wider than the network (SUPPLY signing, policy and rule generations, crash pack protection), so cryptography is a foundation owner that depends on no network code. NET-STD created the module; NET.2 landed the provider interface over the pinned AWS-LC (2026-11-01: randomness, AEAD, HKDF, signatures, key agreement, then the ML-KEM key encapsulation and the SipHash-2-4 keyed PRF for tables; docs/design/network-foundation.md#provider), then TLS 1.3 sessions over its TLS stack with the hybrid groups (2026-11-01, #tls-sessions), and its later slices add the key store and the QUIC handshake integration to the same owner."
     },
     {
       "id": "robotics.ros2-bridge",

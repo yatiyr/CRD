@@ -81,6 +81,12 @@ option(CRD_BUILD_DISPATCH_VS_HIGHWAY "Build the dispatch-cost bench against High
 # compiled again with its file-scope functions external (tests/numerics/hesap-opt/nlopt). Local only, never in CI or a
 # shipped build; registered as the crd-nlopt-*-difftest CTests of the tree that turns it on.
 option(CRD_BUILD_HESAP_VS_NLOPT "Build the COBYLA, NEWUOA and BOBYQA differential tests against NLopt (local-only)" OFF)
+# The TLS 1.3 interoperability test of crd-crypto's sessions (NET.2): crd-tls-peer against crd-openssl-tls-peer, a
+# program over the pinned OpenSSL 3.5 release (cmake/pins.json openssl, fetched on demand into build/_deps) built by its
+# own Perl Configure as a separate project, static and without its applications, tests and documentation, in its own
+# process (AWS-LC and OpenSSL share symbol names). Linux only, never in a shipped build; registered as the
+# crd-crypto-tls-interop-openssl CTest of the tree that turns it on (tests/foundation/crypto/interop).
+option(CRD_BUILD_TLS_VS_OPENSSL "Build the TLS 1.3 interoperability test against OpenSSL 3.5 (Linux, local-only)" OFF)
 # The nn board's same-format peer: ggml's Q8_0 linears (runtime/examples/bench_nn_q8_vs_ggml.c) against the pinned ggml
 # release (cmake/pins.json ggml, fetched on demand into build/_deps) built by its own CMake as a separate project at the
 # host's ISA. Local only on Linux, never in CI or a shipped build; scripts/run_bench_nn.sh builds and runs it.
@@ -957,14 +963,15 @@ endif()
 
 if("aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
     # AWS-LC: crd-crypto's provider (NET.2, docs/design/network-foundation.md#provider). Cerid writes no primitive; its
-    # libcrypto is linked privately into crd-crypto, whose public headers name no provider type, and only
-    # engine/foundation/crypto/src includes <openssl/...> (the crypto.providers signatures refuse it elsewhere).
+    # libcrypto and its TLS stack (libssl, the TLS 1.3 sessions of tls.hpp) are linked privately into crd-crypto, whose
+    # public headers name no provider type, and only engine/foundation/crypto/src includes <openssl/...> (the
+    # crypto.providers signatures refuse it elsewhere).
     # Its build reads the pregenerated assembly and error tables (no Perl, no Go) and never writes into the shared
     # source cache. Windows x64 assembles with the pinned NASM, acquired like every package (cmake/pins.json);
     # AWS-LC's Windows ARM64 assembly needs clang's assembler, so cl.exe builds there take the portable C (provider
     # decision P3 of the contract), and every other lane runs AWS-LC's own assembly.
     set(_crd_awslc_options
-        "BUILD_TESTING OFF" "BUILD_TOOL OFF" "BUILD_LIBSSL OFF" "DISABLE_GO ON" "DISABLE_PERL ON"
+        "BUILD_TESTING OFF" "BUILD_TOOL OFF" "BUILD_LIBSSL ON" "DISABLE_GO ON" "DISABLE_PERL ON"
         "ENABLE_SOURCE_MODIFICATION OFF" "BUILD_SHARED_LIBS OFF")
     if(WIN32 AND _crd_arch_x64)
         crd_add_pinned_package(nasm DOWNLOAD_ONLY YES)
@@ -980,12 +987,17 @@ if("aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
     set(CMAKE_POLICY_DEFAULT_CMP0141 NEW)
     set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
     unset(ENABLE_PRE_SONAME_BUILD CACHE)
+    # AWS-LC's own install rules are not generated: Cerid's package exports its libssl and libcrypto
+    # (crd_package_dependency in engine/foundation/crypto), and AWS-LC's export of libssl apart from libcrypto cannot
+    # coexist with that (an exported target may not depend on one exported in several sets).
+    set(CMAKE_SKIP_INSTALL_RULES ON)
     crd_add_pinned_package(aws-lc SYSTEM YES EXCLUDE_FROM_ALL YES OPTIONS ${_crd_awslc_options})
+    unset(CMAKE_SKIP_INSTALL_RULES)
     unset(CMAKE_POLICY_VERSION_MINIMUM)
     unset(CMAKE_POLICY_DEFAULT_CMP0141)
     unset(_crd_awslc_options)
-    if(NOT TARGET crypto)
-        message(FATAL_ERROR "The pinned AWS-LC's CMake no longer defines its crypto library (cmake/pins.json)")
+    if(NOT TARGET crypto OR NOT TARGET ssl)
+        message(FATAL_ERROR "The pinned AWS-LC's CMake no longer defines its crypto and ssl libraries (cmake/pins.json)")
     endif()
     # No link-time IL in AWS-LC's objects: its static library mixes C with assembly, which link-time code generation
     # cannot hold together, and its assembly keeps its own -Wa,--noexecstack. Its above-floor code runs only behind its
@@ -1168,6 +1180,16 @@ if(CRD_BUILD_HESAP_VS_NLOPT)
     endif()
     enable_language(C)
     crd_add_pinned_package(nlopt DOWNLOAD_ONLY YES)
+endif()
+
+# ----- The TLS interoperability peer: OpenSSL 3.5, built by tests/foundation/crypto (test-only) -----
+# Its peer program is C; OpenSSL's Configure is Perl.
+if(CRD_BUILD_TLS_VS_OPENSSL)
+    if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
+        message(FATAL_ERROR "[tls-vs-openssl] needs Linux, CRD_BUILD_TESTS and the crypto module")
+    endif()
+    enable_language(C)
+    crd_add_pinned_package(openssl DOWNLOAD_ONLY YES)
 endif()
 
 # ----- The nn board's ggml peer: the pinned release, built by runtime/CMakeLists.txt (bench-only) -----

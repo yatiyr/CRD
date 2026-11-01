@@ -34,7 +34,7 @@ TEST_CASE("Provider: identity, the implemented set and error names", "[crypto][n
 {
     CHECK(provider_name() == StringView("AWS-LC 5.12.0"));
     const ConstSpan<AlgorithmId> implemented = provider_algorithms();
-    REQUIRE(implemented.size() == 17U);
+    REQUIRE(implemented.size() == 20U);
     for (usize i = 0U; i < implemented.size(); ++i)
     {
         CHECK(provider_implements(implemented[i]));
@@ -43,10 +43,10 @@ TEST_CASE("Provider: identity, the implemented set and error names", "[crypto][n
             CHECK(static_cast<crd::u16>(implemented[i - 1U]) < static_cast<crd::u16>(implemented[i]));
         }
     }
-    // The hybrid groups run inside the TLS stack, which a later NET.2 slice qualifies (decision P6).
-    CHECK_FALSE(provider_implements(AlgorithmId::X25519Mlkem768));
-    CHECK_FALSE(provider_implements(AlgorithmId::Secp256r1Mlkem768));
-    CHECK_FALSE(provider_implements(AlgorithmId::Secp384r1Mlkem1024));
+    // The hybrid groups run inside the TLS stack, proven by test_tls.cpp and against OpenSSL (decision P6).
+    CHECK(provider_implements(AlgorithmId::X25519Mlkem768));
+    CHECK(provider_implements(AlgorithmId::Secp256r1Mlkem768));
+    CHECK(provider_implements(AlgorithmId::Secp384r1Mlkem1024));
     CHECK_FALSE(provider_implements(AlgorithmId{}));
 
     // Each table answers only for its own class.
@@ -60,7 +60,7 @@ TEST_CASE("Provider: identity, the implemented set and error names", "[crypto][n
         CHECK((signature_sizes(id).public_key != 0U) == signature);
         CHECK((agreement_sizes(id).public_key != 0U) == (type == AlgorithmClass::ClassicalKeyExchange));
         CHECK((kem_sizes(id).public_key != 0U) == (type == AlgorithmClass::Kem));
-        CHECK(provider_implements(id) == (type != AlgorithmClass::HybridKeyExchange));
+        CHECK(provider_implements(id));
     }
 
     const CryptoError errors[] = {CryptoError::None,       CryptoError::Unsupported, CryptoError::NotReady,
@@ -873,8 +873,10 @@ TEST_CASE("Provider: a policy generation signed by real ML-DSA-65 and Ed25519 ke
     content.expires       = now + 30U * 86400U;
     content.offline_grace = 86400U;
     content.rules[0]      = {AlgorithmId::Chacha20Poly1305, 0U, 0U, kNever, kNever};
-    content.rules[1]      = {AlgorithmId::X25519Mlkem768, 0U, 0U, kNever, kNever}; // above this build's ceiling
-    content.rule_count    = 2U;
+    content.rules[1]      = {AlgorithmId::X25519Mlkem768, 0U, 0U, kNever, kNever};
+    // A hybrid group a later register could add: above this build's ceiling, so the rule takes no effect.
+    content.rules[2]   = {static_cast<AlgorithmId>(0x01FFU), 0U, 0U, kNever, kNever};
+    content.rule_count = 3U;
     u8    body[1024];
     usize body_size = 0U;
     REQUIRE(write_policy_body(content, body, body_size) == PolicyError::None);
@@ -907,7 +909,8 @@ TEST_CASE("Provider: a policy generation signed by real ML-DSA-65 and Ed25519 ke
     const PolicySnapshot snapshot = store.snapshot();
     CHECK(snapshot.generation() == 1U);
     CHECK(snapshot.status(AlgorithmId::Chacha20Poly1305, now) == AlgorithmStatus::Preferred);
-    CHECK(snapshot.status(AlgorithmId::X25519Mlkem768, now) == AlgorithmStatus::Refused);
+    CHECK(snapshot.status(AlgorithmId::X25519Mlkem768, now) == AlgorithmStatus::Preferred);
+    CHECK(snapshot.status(static_cast<AlgorithmId>(0x01FFU), now) == AlgorithmStatus::Refused);
     CHECK(store.apply(ConstSpan<u8>(generation, size), now) == PolicyError::AlreadyCurrent);
 }
 } // namespace

@@ -165,6 +165,8 @@ private:
 };
 } // namespace detail
 
+class TlsCredential; // tls.hpp: shares a signing key with the TLS stack
+
 class SigningKey
 {
 public:
@@ -186,6 +188,8 @@ public:
     [[nodiscard]] CryptoError sign(cont::ConstSpan<u8> message, cont::Span<u8> out, usize& written) const noexcept;
 
 private:
+    friend class TlsCredential;
+
     detail::ProviderKeyHandle m_key;
 };
 

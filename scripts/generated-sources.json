@@ -19,7 +19,7 @@
         "scripts/gen_license_manifest.py",
         "--check"
       ],
-      "sha256": "b7602a7de4bf5250e52d5bcfa3bfc99c2be01a901e390b054496c848655d7304"
+      "sha256": "ddf5c177ece03280bb7e5fbe28c9911d7079d3828639f0ad5c75943e3e51b543"
     },
     {
       "path": "docs/generated/gpu-platform-capability-matrix.md",
@@ -2015,7 +2015,7 @@
         "scripts/gen-crypto-inventory.py",
         "--check"
       ],
-      "sha256": "9033ecb98adce66ed5490515b5d73fe5c488cdfa158f715f89eec1a966d699d8"
+      "sha256": "d9301ab46bddce0f09e3522c01608aa0913df9819159e5863171f1d1c24bb8c0"
     },
     {
       "path": "bench/gpu-compute/ckir_mlp_bwd_gen.cu",

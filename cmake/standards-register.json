@@ -1430,7 +1430,7 @@
       "id": "tls.hybrid-kex",
       "title": "Post-quantum/traditional hybrid key exchange for TLS 1.3",
       "kind": "algorithm",
-      "state": "planned",
+      "state": "implemented",
       "owner": "crypto",
       "rows": [
         "NET-STD",
@@ -1497,9 +1497,12 @@
         "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
+      "evidence": [
+        "tests/foundation/crypto/test_tls.cpp",
+        "tests/foundation/crypto/interop/tls_interop.py"
+      ],
       "deprecation": null,
-      "note": "X25519MLKEM768 preferred, SecP384r1MLKEM1024 for high assurance (NET.2)."
+      "note": "X25519MLKEM768 preferred, SecP384r1MLKEM1024 for high assurance (NET.2). The three groups run inside the provider's TLS stack (crd-crypto tls.hpp); each key share is checked on the wire against the layout (ML-KEM first for X25519MLKEM768, the EC point first for the SecP groups) and every group interoperates with OpenSSL 3.5 both ways, through a HelloRetryRequest and beside a classical share."
     },
     {
       "id": "crypto.ecdh",

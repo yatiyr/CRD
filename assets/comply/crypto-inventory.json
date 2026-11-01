@@ -30,6 +30,16 @@
           "standard": false
         },
         {
+          "id": "tls.hybrid-kex",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "key-exchange"
+          ],
+          "spec": "RFC 10024",
+          "standard": true
+        },
+        {
           "id": "crypto.ecdh",
           "kind": "algorithm",
           "owner": "crypto",
@@ -123,6 +133,54 @@
         }
       ],
       "algorithms": [
+        {
+          "name": "x25519-mlkem768",
+          "value": "0x0101",
+          "class": "HybridKeyExchange",
+          "functions": [
+            "key-exchange"
+          ],
+          "key_bits": [
+            256,
+            9472
+          ],
+          "entry": "tls.hybrid-kex",
+          "spec": "RFC 10024",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "secp256r1-mlkem768",
+          "value": "0x0102",
+          "class": "HybridKeyExchange",
+          "functions": [
+            "key-exchange"
+          ],
+          "key_bits": [
+            256,
+            9472
+          ],
+          "entry": "tls.hybrid-kex",
+          "spec": "RFC 10024",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "secp384r1-mlkem1024",
+          "value": "0x0103",
+          "class": "HybridKeyExchange",
+          "functions": [
+            "key-exchange"
+          ],
+          "key_bits": [
+            384,
+            12544
+          ],
+          "entry": "tls.hybrid-kex",
+          "spec": "RFC 10024",
+          "standard": true,
+          "owner": "crypto"
+        },
         {
           "name": "x25519",
           "value": "0x0201",

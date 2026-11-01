@@ -6,6 +6,8 @@
 // cleared on every refusal so nothing accumulates across calls.
 #include <crd/crypto/provider.hpp>
 
+#include "provider_internal.hpp"
+
 #include <openssl/aead.h>
 #include <openssl/base.h>
 #include <openssl/bn.h>
@@ -34,20 +36,17 @@ static_assert(sizeof(EVP_AEAD_CTX) <= kAeadStateBytes && alignof(EVP_AEAD_CTX) <
               "kAeadStateBytes no longer holds the provider's AEAD context");
 static_assert(sizeof(KeyId::bytes) == SHA256_DIGEST_LENGTH);
 
+using provider_internal::ErrorScope;
+using provider_internal::key_of;
+using provider_internal::pkey_of;
+using provider_internal::signature_digest;
+
 namespace
 {
-// Clears the provider's error queue when a scope ends: a refused operation leaves no state behind on its thread.
-struct ErrorScope
-{
-    ErrorScope() noexcept = default;
-    ErrorScope(const ErrorScope&)            = delete;
-    ErrorScope& operator=(const ErrorScope&) = delete;
-    ~ErrorScope() { ERR_clear_error(); }
-};
-
-// The algorithms the provider implements, in identifier order. The hybrid key exchange groups are absent: the
-// provider runs them inside its TLS stack, which the handshake slice of NET.2 qualifies (decision P6).
+// The algorithms the provider implements, in identifier order. The hybrid key exchange groups run inside its TLS
+// stack (tls.hpp), proven against its own key shares and OpenSSL 3.5's (decision P6).
 constexpr AlgorithmId kImplemented[] = {
+    AlgorithmId::X25519Mlkem768,   AlgorithmId::Secp256r1Mlkem768, AlgorithmId::Secp384r1Mlkem1024,
     AlgorithmId::X25519,           AlgorithmId::Secp256r1, AlgorithmId::Secp384r1,
     AlgorithmId::MlDsa44,          AlgorithmId::MlDsa65,   AlgorithmId::MlDsa87,
     AlgorithmId::Ed25519,          AlgorithmId::EcdsaSecp256r1Sha256,
@@ -113,20 +112,6 @@ template <typename Entry, usize N> const Entry* find_entry(const Entry (&table)[
     return nullptr;
 }
 
-// The digest an ECDSA identifier names; none for ML-DSA and Ed25519, which sign the message itself.
-const EVP_MD* signature_digest(AlgorithmId algorithm) noexcept
-{
-    switch (algorithm)
-    {
-    case AlgorithmId::EcdsaSecp256r1Sha256:
-        return EVP_sha256();
-    case AlgorithmId::EcdsaSecp384r1Sha384:
-        return EVP_sha384();
-    default:
-        return nullptr;
-    }
-}
-
 const EVP_AEAD* find_aead(AlgorithmId algorithm) noexcept
 {
     switch (algorithm)
@@ -153,18 +138,6 @@ const EVP_MD* hkdf_digest(AlgorithmId algorithm) noexcept
     default:
         return nullptr;
     }
-}
-
-// The key objects hold the provider's EVP_PKEY behind the opaque ProviderKey: a pointer cast there and back, never
-// dereferenced as ProviderKey, so the public header names no provider type and holding a key costs no extra object.
-EVP_PKEY* pkey_of(ProviderKey* key) noexcept
-{
-    return reinterpret_cast<EVP_PKEY*>(key);
-}
-
-ProviderKey* key_of(EVP_PKEY* pkey) noexcept
-{
-    return reinterpret_cast<ProviderKey*>(pkey);
 }
 
 // Whether two buffers share a byte.
@@ -324,6 +297,70 @@ u64 load_le64(const u8* bytes) noexcept
     return value;
 }
 } // namespace
+
+namespace provider_internal
+{
+AlgorithmId signature_algorithm_of(const EVP_PKEY* pkey) noexcept
+{
+    int type = EVP_PKEY_id(pkey);
+    int nid  = 0;
+    if (type == EVP_PKEY_PQDSA)
+    {
+        nid = EVP_PKEY_pqdsa_get_type(pkey);
+    }
+    else if (type == EVP_PKEY_EC)
+    {
+        const EC_KEY* key = EVP_PKEY_get0_EC_KEY(pkey);
+        nid               = key == nullptr ? 0 : EC_GROUP_get_curve_name(EC_KEY_get0_group(key));
+    }
+    else if (type == EVP_PKEY_ED25519)
+    {
+        nid = NID_ED25519;
+    }
+    else
+    {
+        type = 0;
+    }
+    for (const SignatureAlgorithm& entry : kSignatures)
+    {
+        if (entry.type == type && entry.nid == nid)
+        {
+            return entry.id;
+        }
+    }
+    return AlgorithmId{};
+}
+
+CryptoError signature_public_bytes(const EVP_PKEY* pkey, AlgorithmId algorithm, cont::Span<u8> out) noexcept
+{
+    const SignatureAlgorithm* entry = find_entry(kSignatures, algorithm);
+    if (entry == nullptr || out.size() != entry->sizes.public_key)
+    {
+        return CryptoError::BadLength;
+    }
+    if (entry->type == EVP_PKEY_EC)
+    {
+        return ec_public_bytes(pkey, out);
+    }
+    usize written = out.size();
+    return EVP_PKEY_get_raw_public_key(pkey, out.data(), &written) && written == out.size()
+               ? CryptoError::None
+               : CryptoError::ProviderFailure;
+}
+
+const EVP_MD* signature_digest(AlgorithmId algorithm) noexcept
+{
+    switch (algorithm)
+    {
+    case AlgorithmId::EcdsaSecp256r1Sha256:
+        return EVP_sha256();
+    case AlgorithmId::EcdsaSecp384r1Sha384:
+        return EVP_sha384();
+    default:
+        return nullptr;
+    }
+}
+} // namespace provider_internal
 
 cont::StringView crypto_error_name(CryptoError error) noexcept
 {
@@ -661,20 +698,8 @@ CryptoError SigningKey::public_key(cont::Span<u8> out) const noexcept
     {
         return CryptoError::NotReady;
     }
-    const SignatureAlgorithm& entry = *find_entry(kSignatures, algorithm());
-    if (out.size() != entry.sizes.public_key)
-    {
-        return CryptoError::BadLength;
-    }
     const ErrorScope errors;
-    if (entry.type == EVP_PKEY_EC)
-    {
-        return ec_public_bytes(pkey_of(m_key.get()), out);
-    }
-    usize written = out.size();
-    return EVP_PKEY_get_raw_public_key(pkey_of(m_key.get()), out.data(), &written) && written == out.size()
-               ? CryptoError::None
-               : CryptoError::ProviderFailure;
+    return provider_internal::signature_public_bytes(pkey_of(m_key.get()), algorithm(), out);
 }
 
 CryptoError SigningKey::sign(cont::ConstSpan<u8> message, cont::Span<u8> out, usize& written) const noexcept
