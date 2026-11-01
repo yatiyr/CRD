@@ -9,6 +9,7 @@
 
 #include <bit>
 #include <catch2/catch_test_macros.hpp>
+#include <string_view>
 
 namespace st = crd::hesap::stats;
 using crd::CpuLevel;
@@ -210,4 +211,62 @@ TEST_CASE("stats kernels: the process runs the level its CPU selection resolves"
           &crd::select_kernel_level<StatsKernels>(levels, s.selected, s.kernel_features, crd::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
     CHECK(crd::cpu_level_includes(crd::kernel_level_cap(), chosen.level));
+    const crd::KernelFamily* family = crd::test::kernel_family("hesap.stats");
+    REQUIRE(family != nullptr);
+    CHECK(family->result.status == crd::KernelCheckStatus::Passed);
+    CHECK(family->result.level == chosen.level);
+}
+
+namespace
+{
+
+// Self-check stubs: the portable routine with the last word of its last block one bit off (Threefry: only in a call of
+// fewer than 47 blocks, which the one-block tail check makes), and a Student-t sum one ulp off.
+void philox_tail_off(u64 seed, u64 stream, u64 first, void* out, usize blocks) noexcept
+{
+    st::kStatsKernelsPortable.philox4x32_blocks(seed, stream, first, out, blocks);
+    static_cast<u32*>(out)[(4U * blocks) - 1U] ^= 1U;
+}
+
+void threefry_short_off(const u64 (&key)[4], const u64 (&counter)[4], u64* out, usize blocks) noexcept
+{
+    st::kStatsKernelsPortable.threefry4x64_blocks(key, counter, out, blocks);
+    if (blocks < 47U)
+    {
+        out[(4U * blocks) - 1U] ^= 1U;
+    }
+}
+
+f64 student_ulp_off(const f64* xs, usize n, f64 nu) noexcept
+{
+    return std::bit_cast<f64>(std::bit_cast<u64>(st::kStatsKernelsPortable.student_t_nu_score_sum(xs, n, nu)) + 1U);
+}
+
+std::string_view routine_of(const char* routine)
+{
+    return routine != nullptr ? routine : "";
+}
+
+} // namespace
+
+TEST_CASE("stats self-check: every table the host runs gives the known answers", "[stats][kernels]")
+{
+    const crd::test::SelfCheckRun run = crd::test::self_check_levels(st::stats_kernel_levels(), &st::stats_self_check);
+    INFO("first failure " << crd::cpu_level_name(run.level) << " " << routine_of(run.routine));
+    CHECK(run.failed == 0U);
+    CHECK(run.ran >= 1U);
+}
+
+TEST_CASE("stats self-check: a wrong routine fails the check", "[stats]")
+{
+    CHECK(st::stats_self_check(st::kStatsKernelsPortable) == nullptr);
+    StatsKernels w = st::kStatsKernelsPortable;
+    w.philox4x32_blocks = &philox_tail_off;
+    CHECK(routine_of(st::stats_self_check(w)) == "philox4x32_blocks");
+    w = st::kStatsKernelsPortable;
+    w.threefry4x64_blocks = &threefry_short_off;
+    CHECK(routine_of(st::stats_self_check(w)) == "threefry4x64_blocks");
+    w = st::kStatsKernelsPortable;
+    w.student_t_nu_score_sum = &student_ulp_off;
+    CHECK(routine_of(st::stats_self_check(w)) == "student_t_nu_score_sum");
 }

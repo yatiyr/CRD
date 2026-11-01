@@ -20,6 +20,7 @@
 #include <bit>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
+#include <string_view>
 
 namespace probe = crd::test::jet_probe;
 namespace ad = crd::hesap::autodiff;
@@ -377,6 +378,40 @@ TEST_CASE("jets: the canned gradients' table holds portable and each body level 
     const crd::CpuSelection& s = crd::cpu_selection();
     CHECK(&ad::autodiff_kernels() == &crd::select_kernel_level<ad::AutodiffKernels>(
                                          levels, s.selected, s.kernel_features, crd::kernel_level_cap()));
+    const crd::KernelFamily* family = crd::test::kernel_family("hesap.autodiff");
+    REQUIRE(family != nullptr);
+    CHECK(family->result.status == crd::KernelCheckStatus::Passed);
+    CHECK(family->result.level == ad::autodiff_kernels().level);
+}
+
+namespace
+{
+
+// A self-check stub: the portable gradient with the last component one bit off in a call whose last pass is partial.
+void gradient_partial_off(ad::CannedFunction f, const f64* x, int n, f64* g) noexcept
+{
+    ad::kAutodiffKernelsPortable.gradient_f64(f, x, n, g);
+    if (n % 8 != 0)
+    {
+        g[n - 1] = std::bit_cast<f64>(std::bit_cast<u64>(g[n - 1]) ^ 1U);
+    }
+}
+
+} // namespace
+
+TEST_CASE("jets: the canned gradients' self-check passes on every table the host runs and fails a wrong one",
+          "[autodiff][kernels]")
+{
+    const crd::test::SelfCheckRun run =
+        crd::test::self_check_levels(ad::autodiff_kernel_levels(), &ad::autodiff_self_check);
+    INFO("first failure " << crd::cpu_level_name(run.level) << " "
+                          << std::string_view{run.routine != nullptr ? run.routine : ""});
+    CHECK(run.failed == 0U);
+    CHECK(run.ran >= 1U);
+    ad::AutodiffKernels w = ad::kAutodiffKernelsPortable;
+    w.gradient_f64 = &gradient_partial_off;
+    const char* routine = ad::autodiff_self_check(w);
+    CHECK(std::string_view{routine != nullptr ? routine : ""} == "gradient_f64");
 }
 
 TEST_CASE("jets: every canned gradient level the host runs gives general code's bits", "[autodiff][kernels]")

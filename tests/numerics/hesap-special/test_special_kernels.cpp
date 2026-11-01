@@ -11,7 +11,9 @@
 
 #include <bit>
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <limits>
+#include <string_view>
 
 namespace sf = crd::hesap::special;
 using crd::CpuLevel;
@@ -145,4 +147,67 @@ TEST_CASE("special kernels: the process runs the level its CPU selection resolve
           &crd::select_kernel_level<SpecialKernels>(levels, s.selected, s.kernel_features, crd::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
     CHECK(crd::cpu_level_includes(crd::kernel_level_cap(), chosen.level));
+    const crd::KernelFamily* family = crd::test::kernel_family("hesap.special");
+    REQUIRE(family != nullptr);
+    CHECK(family->result.status == crd::KernelCheckStatus::Passed);
+    CHECK(family->result.level == chosen.level);
+}
+
+namespace
+{
+
+// Self-check stubs: the portable routine with its last, tail answer one bit off, and a tgamma that gives 0 for NaN.
+f64 one_bit_off(f64 x) noexcept
+{
+    return std::bit_cast<f64>(std::bit_cast<u64>(x) ^ 1U);
+}
+
+void lgamma_tail_off(f64* out, const f64* in, usize n) noexcept
+{
+    sf::kSpecialKernelsPortable.lgamma_lanczos(out, in, n);
+    out[n - 1U] = one_bit_off(out[n - 1U]);
+}
+
+void tgamma_tail_off(f64* out, const f64* in, usize n) noexcept
+{
+    sf::kSpecialKernelsPortable.tgamma_lanczos(out, in, n);
+    out[n - 1U] = one_bit_off(out[n - 1U]);
+}
+
+void tgamma_nan_zero(f64* out, const f64* in, usize n) noexcept
+{
+    sf::kSpecialKernelsPortable.tgamma_lanczos(out, in, n);
+    for (usize i = 0; i < n; ++i)
+    {
+        out[i] = std::isnan(out[i]) ? 0.0 : out[i];
+    }
+}
+
+std::string_view routine_of(const char* routine)
+{
+    return routine != nullptr ? routine : "";
+}
+
+} // namespace
+
+TEST_CASE("special self-check: every table the host runs gives the known answers", "[special][kernels]")
+{
+    const crd::test::SelfCheckRun run =
+        crd::test::self_check_levels(sf::special_kernel_levels(), &sf::special_self_check);
+    INFO("first failure " << crd::cpu_level_name(run.level) << " " << routine_of(run.routine));
+    CHECK(run.failed == 0U);
+    CHECK(run.ran >= 1U);
+}
+
+TEST_CASE("special self-check: a wrong routine fails the check", "[special]")
+{
+    CHECK(sf::special_self_check(sf::kSpecialKernelsPortable) == nullptr);
+    SpecialKernels w = sf::kSpecialKernelsPortable;
+    w.lgamma_lanczos = &lgamma_tail_off;
+    CHECK(routine_of(sf::special_self_check(w)) == "lgamma_lanczos");
+    w = sf::kSpecialKernelsPortable;
+    w.tgamma_lanczos = &tgamma_tail_off;
+    CHECK(routine_of(sf::special_self_check(w)) == "tgamma_lanczos");
+    w.tgamma_lanczos = &tgamma_nan_zero;
+    CHECK(routine_of(sf::special_self_check(w)) == "tgamma_lanczos");
 }

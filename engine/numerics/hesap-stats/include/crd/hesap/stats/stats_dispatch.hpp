@@ -15,4 +15,9 @@ namespace crd::hesap::stats
 [[nodiscard]] std::span<const crd::KernelLevel<StatsKernels>> stats_kernel_levels() noexcept;
 [[nodiscard]] const crd::KernelLevel<StatsKernels>& stats_kernels() noexcept;
 
+// The family's known-answer self-check (HW-RESILIENCE.3, crd/core/kernel_dispatch.hpp), which its resolution runs:
+// nullptr when the generators and the Student-t score sum of `table` give their known
+// answers, else the failing routine's name.
+[[nodiscard]] const char* stats_self_check(const StatsKernels& table) noexcept;
+
 } // namespace crd::hesap::stats

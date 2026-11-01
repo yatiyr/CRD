@@ -15,4 +15,9 @@ namespace crd::hesap::special
 [[nodiscard]] std::span<const crd::KernelLevel<SpecialKernels>> special_kernel_levels() noexcept;
 [[nodiscard]] const crd::KernelLevel<SpecialKernels>& special_kernels() noexcept;
 
+// The family's known-answer self-check (HW-RESILIENCE.3, crd/core/kernel_dispatch.hpp), which its resolution runs:
+// nullptr when the Lanczos lgamma and tgamma of `table` give their known answers, else the
+// failing routine's name.
+[[nodiscard]] const char* special_self_check(const SpecialKernels& table) noexcept;
+
 } // namespace crd::hesap::special
