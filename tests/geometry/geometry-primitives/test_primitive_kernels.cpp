@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <string_view>
 
 namespace gp = crd::geometry::primitives;
 using crd::CpuLevel;
@@ -377,4 +378,103 @@ TEST_CASE("primitive kernels: the process runs the level its CPU selection resol
           &crd::select_kernel_level<PrimitiveKernels>(levels, s.selected, s.kernel_features, crd::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
     CHECK(crd::cpu_level_includes(crd::kernel_level_cap(), chosen.level));
+    const crd::KernelFamily* family = crd::test::kernel_family("geometry.primitives");
+    REQUIRE(family != nullptr);
+    CHECK(family->result.status == crd::KernelCheckStatus::Passed);
+    CHECK(family->result.level == chosen.level);
+}
+
+namespace
+{
+
+// Self-check stubs: the portable routine with one result of its last bundle's last lane wrong.
+f32 bit_off(f32 x)
+{
+    return std::bit_cast<f32>(std::bit_cast<u32>(x) ^ 1U);
+}
+
+void slab_off(const gp::RaySlab& ray, const gp::Aabb8* boxes, usize n, f32 t0, f32 t1, gp::RayAabb8Result* out) noexcept
+{
+    gp::kPrimitiveKernelsPortable.ray_vs_aabb8(ray, boxes, n, t0, t1, out);
+    out[n - 1U].t_enter[gp::kBatchLanes - 1U] = bit_off(out[n - 1U].t_enter[gp::kBatchLanes - 1U]);
+}
+
+void packet_off(const gp::RayPacket8& packet, const gp::Box3* boxes, usize n, f32 pad, f32 t0, f32 t1,
+                gp::RayAabb8Result* out) noexcept
+{
+    gp::kPrimitiveKernelsPortable.packet8_vs_aabb(packet, boxes, n, pad, t0, t1, out);
+    out[n - 1U].hit_mask[gp::kBatchLanes - 1U] = ~out[n - 1U].hit_mask[gp::kBatchLanes - 1U];
+}
+
+void triangle_off(const gp::RaySlab& ray, const gp::Triangle38* tris, usize n, bool cull_back, f32 tnear, f32 eps,
+                  gp::RayTri8Result* out) noexcept
+{
+    gp::kPrimitiveKernelsPortable.ray_vs_triangle8(ray, tris, n, cull_back, tnear, eps, out);
+    out[n - 1U].v[gp::kBatchLanes - 1U] = bit_off(out[n - 1U].v[gp::kBatchLanes - 1U]);
+}
+
+void overlap_off(const gp::Aabb8* boxes, usize n, const gp::Box3& box, gp::Mask8* out) noexcept
+{
+    gp::kPrimitiveKernelsPortable.aabb8_vs_aabb(boxes, n, box, out);
+    out[n - 1U].lane[gp::kBatchLanes - 1U] = ~out[n - 1U].lane[gp::kBatchLanes - 1U];
+}
+
+void sphere_off(const gp::Sphere8* spheres, usize n, const f32 (&center)[3], f32 radius, gp::Mask8* out) noexcept
+{
+    gp::kPrimitiveKernelsPortable.sphere8_vs_sphere(spheres, n, center, radius, out);
+    out[n - 1U].lane[gp::kBatchLanes - 1U] = ~out[n - 1U].lane[gp::kBatchLanes - 1U];
+}
+
+void segment_off(const gp::Segment38Pair* pairs, usize n, f32 tiny, gp::Lanes8* out) noexcept
+{
+    gp::kPrimitiveKernelsPortable.segment8_distsq(pairs, n, tiny, out);
+    out[n - 1U].lane[gp::kBatchLanes - 1U] = bit_off(out[n - 1U].lane[gp::kBatchLanes - 1U]);
+}
+
+u32 hull_off(const f32* vx, const f32* vy, const f32* vz, usize padded, f32 dx, f32 dy, f32 dz) noexcept
+{
+    return gp::kPrimitiveKernelsPortable.hull_support(vx, vy, vz, padded, dx, dy, dz) ^ 1U;
+}
+
+} // namespace
+
+TEST_CASE("primitive self-check: every table the host runs gives the known answers", "[geometry][kernels]")
+{
+    const crd::test::SelfCheckRun run =
+        crd::test::self_check_levels(gp::primitive_kernel_levels(), &gp::primitive_self_check);
+    INFO("first failure " << crd::cpu_level_name(run.level) << " " << (run.routine ? run.routine : "-"));
+    CHECK(run.failed == 0U);
+    CHECK(run.ran >= 1U);
+}
+
+TEST_CASE("primitive self-check: a table with one wrong routine fails in that routine", "[geometry]")
+{
+    const PrimitiveKernels& portable_table = gp::kPrimitiveKernelsPortable;
+    CHECK(gp::primitive_self_check(portable_table) == nullptr);
+    const auto fails_in = [](const PrimitiveKernels& wrong)
+    {
+        const char* routine = gp::primitive_self_check(wrong);
+        return std::string_view{routine != nullptr ? routine : ""};
+    };
+    PrimitiveKernels w = portable_table;
+    w.ray_vs_aabb8 = &slab_off;
+    CHECK(fails_in(w) == "ray_vs_aabb8");
+    w = portable_table;
+    w.packet8_vs_aabb = &packet_off;
+    CHECK(fails_in(w) == "packet8_vs_aabb");
+    w = portable_table;
+    w.ray_vs_triangle8 = &triangle_off;
+    CHECK(fails_in(w) == "ray_vs_triangle8");
+    w = portable_table;
+    w.aabb8_vs_aabb = &overlap_off;
+    CHECK(fails_in(w) == "aabb8_vs_aabb");
+    w = portable_table;
+    w.sphere8_vs_sphere = &sphere_off;
+    CHECK(fails_in(w) == "sphere8_vs_sphere");
+    w = portable_table;
+    w.segment8_distsq = &segment_off;
+    CHECK(fails_in(w) == "segment8_distsq");
+    w = portable_table;
+    w.hull_support = &hull_off;
+    CHECK(fails_in(w) == "hull_support");
 }

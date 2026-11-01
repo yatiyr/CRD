@@ -15,4 +15,8 @@ namespace crd::geometry::mesh
 [[nodiscard]] std::span<const crd::KernelLevel<MeshKernels>> mesh_kernel_levels() noexcept;
 [[nodiscard]] const crd::KernelLevel<MeshKernels>& mesh_kernels() noexcept;
 
+// The family's known-answer self-check (HW-RESILIENCE.3, crd/core/kernel_dispatch.hpp), which its resolution runs:
+// nullptr when the raycast of `table` gives its known hits, else "raycast_mt8".
+[[nodiscard]] const char* mesh_self_check(const MeshKernels& table) noexcept;
+
 } // namespace crd::geometry::mesh

@@ -16,6 +16,7 @@
 #include <bit>
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
+#include <string_view>
 
 namespace gm = crd::geometry::mesh;
 namespace gp = crd::geometry::primitives;
@@ -212,4 +213,48 @@ TEST_CASE("mesh kernels: the process runs the level its CPU selection resolves",
     CHECK(&chosen == &crd::select_kernel_level<MeshKernels>(gm::mesh_kernel_levels(), s.selected, s.kernel_features,
                                                             crd::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
+    const crd::KernelFamily* family = crd::test::kernel_family("geometry.mesh");
+    REQUIRE(family != nullptr);
+    CHECK(family->result.status == crd::KernelCheckStatus::Passed);
+    CHECK(family->result.level == chosen.level);
+}
+
+namespace
+{
+
+// Self-check stubs: the portable raycast with one barycentric weight a bit off, and one that never culls.
+bool bary_off(const gm::MeshBvhView& mesh, const gp::RaySlab& ray, f32 tmax, bool cull_back,
+              gm::MeshRayHitData& hit) noexcept
+{
+    const bool found = gm::kMeshKernelsPortable.raycast_mt8(mesh, ray, tmax, cull_back, hit);
+    hit.bary[2] = std::bit_cast<f32>(std::bit_cast<u32>(hit.bary[2]) ^ 1U);
+    return found;
+}
+
+bool never_culls(const gm::MeshBvhView& mesh, const gp::RaySlab& ray, f32 tmax, bool /*cull_back*/,
+                 gm::MeshRayHitData& hit) noexcept
+{
+    return gm::kMeshKernelsPortable.raycast_mt8(mesh, ray, tmax, false, hit);
+}
+
+} // namespace
+
+TEST_CASE("mesh self-check: every table the host runs gives the known hits", "[geometry][kernels]")
+{
+    const crd::test::SelfCheckRun run = crd::test::self_check_levels(gm::mesh_kernel_levels(), &gm::mesh_self_check);
+    INFO("first failure " << crd::cpu_level_name(run.level) << " " << (run.routine ? run.routine : "-"));
+    CHECK(run.failed == 0U);
+    CHECK(run.ran >= 1U);
+}
+
+TEST_CASE("mesh self-check: a wrong raycast fails the check", "[geometry]")
+{
+    CHECK(gm::mesh_self_check(gm::kMeshKernelsPortable) == nullptr);
+    MeshKernels w = gm::kMeshKernelsPortable;
+    w.raycast_mt8 = &bary_off;
+    const char* routine = gm::mesh_self_check(w);
+    CHECK(std::string_view{routine != nullptr ? routine : ""} == "raycast_mt8");
+    w.raycast_mt8 = &never_culls;
+    routine = gm::mesh_self_check(w);
+    CHECK(std::string_view{routine != nullptr ? routine : ""} == "raycast_mt8");
 }
