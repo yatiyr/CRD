@@ -4862,6 +4862,29 @@ class FftLevelPlans(unittest.TestCase):
             self.assertEqual(['//   sse2: at probe on probe machine', '//   (docs/bench/probe.md).',
                               '//   avx512: at later on other machine', '//   (docs/bench/later.md).'], lines[1:])
 
+    def test_a_judged_size_takes_the_paired_board_s_arm_until_its_level_is_imported_again(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            self.write_board(root, 'ip4', ('ip4', 'ip4'))
+            data = fft_plans.merge(None, fft_plans.import_board(root, 'f64', self.PROBE), 'f64')
+            # The passes put four-step ahead at 2K; the paired board kept the canonical ip4 there.
+            self.assertIn('FftAlgorithm::FourStep}', fft_plans.rows_of(root, data)[1][0])
+            data = fft_plans.judge(data, ['sse2:2048=ip4'], 'docs/bench/paired.md#board-2')
+            self.assertEqual({'2048': {'arm': 'ip4', 'board': 'docs/bench/paired.md#board-2'}},
+                             data['levels'][0]['judged'])
+            rows = fft_plans.rows_of(root, data)
+            self.assertIn('{8, crd::CpuLevel::Sse2, 11, FftAlgorithm::Ip4}', rows[1][0])
+            self.assertEqual('0.0105, judged', rows[1][1])
+            self.assertEqual(['//   sse2\'s judged sizes:', '//   (docs/bench/paired.md#board-2).'],
+                             fft_plans.sources(ROOT / 'docs' / 'bench' / 'probe.json', data)[-2:])
+            for text, refusal in (('sse2:2048=stockham', 'did not time stockham at 2048'),
+                                  ('avx2:2048=ip4', 'no avx2 level'), ('sse2-2048-ip4', 'not LEVEL:N=ARM')):
+                with self.assertRaisesRegex(SystemExit, refusal):
+                    fft_plans.judge(data, [text], 'docs/bench/paired.md')
+            # A new board of the level replaces its entry, and the judgement made of the old one with it.
+            data = fft_plans.merge(data, fft_plans.import_board(root, 'f64', self.PROBE), 'f64')
+            self.assertNotIn('judged', data['levels'][0])
+
     def test_a_level_without_its_board_s_provenance_is_refused(self):
         data = fft_plans.load('f32')
         del data['levels'][0]['machine']

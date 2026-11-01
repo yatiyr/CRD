@@ -10,14 +10,19 @@ the arm the level's notes are compared with. An import replaces the levels its b
 machine's level (the benchmark machine's avx512) joins another's (the i9's portable, sse2 and avx2). A level's plan of
 a size is the board's fastest arm there (the lowest median of its passes) when every pass of it beat every pass of the
 arm the level ran as planned during the board (the ranges are the board's run-to-run noise), and the planned arm
-otherwise. The header lists every measured type, level and size; FftPlan runs a cell under DeterminismMode::Default
-and the canonical planner everywhere else and under the other modes.
+otherwise. A size the paired A/B board judged (each candidate row against the canonical arm at both buffer offsets,
+docs/bench/README.md#fast-ab-boards items 5 and 6) takes the arm that board kept instead: the paired ratios resolve a
+row the passes' ranges leave open, and a row one alignment loses stays canonical. The judgement belongs to the level's
+board, so a later import of that level drops it. The header lists every measured type, level and size; FftPlan runs a
+cell under DeterminismMode::Default and the canonical planner everywhere else and under the other modes.
 
   python scripts/gen_fft_level_plans.py                      # write the header from the data files
   python scripts/gen_fft_level_plans.py --check              # fail when the header differs from the data files'
   python scripts/gen_fft_level_plans.py --import DIR --type f32|f64 --commit TEXT --machine TEXT --board LINK
                                                              # replace the type's levels the board directory ran:
                                                              # pass<k>-<type>-<label>.log, pass<k>-level-<label>.txt
+  python scripts/gen_fft_level_plans.py --type f32|f64 --board LINK --judge LEVEL:N=ARM [--judge ...]
+                                                             # record the paired board's kept arm of each size
 """
 from pathlib import Path
 import argparse
@@ -127,8 +132,11 @@ def span(times):
     return f'{statistics.median(times):g}'
 
 
-def derive(cell):
-    """The cell's arm: the fastest median when its range lies wholly below the planned arm's, else the planned."""
+def derive(cell, judged=None):
+    """The cell's arm: the arm the paired board judged it (`judged`, the level's record of the size), else the fastest
+    median when its range lies wholly below the planned arm's, else the planned."""
+    if judged is not None:
+        return judged['arm']
     planned = cell['arms'][cell['planned']]
     times = cell['arms']
     fastest = min(times, key=lambda arm: (statistics.median(times[arm]), statistics.fmean(times[arm]), arm))
@@ -144,17 +152,25 @@ def rows_of(path, data):
     rows = []
     for entry in data['levels']:
         canonical = {int(n): arm for n, arm in entry['canonical'].items()}
+        judged = {int(n): judgement for n, judgement in entry.get('judged', {}).items()}
+        unmeasured = sorted(set(judged) - {cell['n'] for cell in entry['sizes']})
+        if unmeasured:
+            raise SystemExit(f'{path}: {entry["level"]} judged {unmeasured[0]}, which its board did not measure')
         for cell in entry['sizes']:
             n = cell['n']
             log2 = n.bit_length() - 1
             if n != 1 << log2:
                 raise SystemExit(f'{path}: {n} is not a power of two')
-            arm = derive(cell)
+            arm = derive(cell, judged.get(n))
+            if arm not in cell['arms']:
+                raise SystemExit(f'{path}: {entry["level"]} {n} judged {arm}, which its board did not time')
             if canonical.get(n) not in cell['arms']:
                 raise SystemExit(f'{path}: {entry["level"]} {n} has no arm of the canonical forward {canonical.get(n)}')
             code = (f'    {{{data["element_bytes"]}, crd::CpuLevel::{LEVELS[entry["level"]]}, {log2}, '
                     f'FftAlgorithm::{names[arm]}}},')
             note = f'{span(cell["arms"][arm])}'
+            if n in judged:
+                note += ', judged'
             if arm != canonical[n]:
                 note += f'; {canonical[n]} {span(cell["arms"][canonical[n]])}'
             rows.append((code, note))
@@ -166,9 +182,32 @@ def sources(path, data):
     out = [f'// Data: {path.relative_to(ROOT).as_posix()} ({data["program"]}):']
     for key, group in itertools.groupby(data['levels'], key=lambda entry: tuple(entry[k] for k in PROVENANCE)):
         machine, commit, board = key
+        group = list(group)
         levels = ', '.join(entry['level'] for entry in group)
         out += [f'//   {levels}: at {commit} on {machine}', f'//   ({board}).']
+        for entry in group:
+            for judgement in sorted({judgement['board'] for judgement in entry.get('judged', {}).values()}):
+                out += [f'//   {entry["level"]}\'s judged sizes:', f'//   ({judgement}).']
     return out
+
+
+def judge(data, judgements, board):
+    """The type's data file object with each LEVEL:N=ARM judgement recorded in its level's entry, from `board`."""
+    by_level = {entry['level']: entry for entry in data['levels']}
+    for text in judgements:
+        match = re.fullmatch(r'([\w.]+):(\d+)=([\w-]+)', text)
+        if match is None:
+            raise SystemExit(f'--judge {text}: not LEVEL:N=ARM')
+        level, n, arm = match.group(1), int(match.group(2)), match.group(3)
+        entry = by_level.get(level)
+        if entry is None:
+            raise SystemExit(f'--judge {text}: the data file has no {level} level')
+        cell = next((cell for cell in entry['sizes'] if cell['n'] == n), None)
+        if cell is None or arm not in cell['arms']:
+            raise SystemExit(f'--judge {text}: {level}\'s board did not time {arm} at {n}')
+        entry.setdefault('judged', {})[str(n)] = {'arm': arm, 'board': board}
+        entry['judged'] = dict(sorted(entry['judged'].items(), key=lambda item: int(item[0])))
+    return data
 
 
 def header(boards):
@@ -185,9 +224,10 @@ def header(boards):
         '//',
         '// Each CPU level\'s forward of a type and size as its fft level board measured it (ADR-0134 §7): the',
         '// board\'s fastest arm (the lowest median of its passes) where its every pass beat every pass of the',
-        '// arm the level ran as planned, the planned arm otherwise (equal medians: the lower mean). Each row\'s',
-        '// comment is its arm\'s median ms, then the canonical planner\'s arm\'s (as the level\'s board binary',
-        '// planned it) where the row differs from it. FftPlan runs a row under DeterminismMode::Default; every',
+        '// arm the level ran as planned, the planned arm otherwise (equal medians: the lower mean); a size the',
+        '// paired A/B board judged at both buffer offsets takes the arm it kept ("judged"). Each row\'s comment',
+        '// is its arm\'s median ms, then the canonical planner\'s arm\'s (as the level\'s board binary planned',
+        '// it) where the row differs from it. FftPlan runs a row under DeterminismMode::Default; every',
         '// type, level and size no board measured, and every other mode, runs the canonical planner',
         '// (detail::planned_forward).',
         '',
@@ -224,6 +264,13 @@ def header(boards):
     return '\n'.join(out)
 
 
+def write_data(path, data):
+    """A type's data file, each pass list on one line."""
+    text = json.dumps(data, indent=1)
+    text = re.sub(r'\[\s+([\d.,\s]+?)\s+\]', lambda m: '[' + ' '.join(m.group(1).split()) + ']', text)
+    path.write_bytes((text + '\n').encode('utf-8'))
+
+
 def load(kind):
     """A type's data file object, checked against its schema, program, element size and level provenance."""
     path, program, element_bytes = TYPES[kind]
@@ -247,8 +294,14 @@ def main():
     parser.add_argument('--type', choices=sorted(TYPES), help='the element type to import (with --import)')
     parser.add_argument('--commit', help='the board binary\'s commit (with --import)')
     parser.add_argument('--machine', help='the machine the board ran on (with --import)')
-    parser.add_argument('--board', help='the board\'s record, a docs/bench link (with --import)')
+    parser.add_argument('--board', help='the board\'s record, a docs/bench link (with --import or --judge)')
+    parser.add_argument('--judge', action='append', metavar='LEVEL:N=ARM',
+                        help='record the arm the paired board kept at a size (with --type and --board)')
     args = parser.parse_args()
+    if args.judge is not None:
+        if args.board_dir is not None or not all((args.type, args.board)):
+            parser.error('--judge needs --type and --board, without --import')
+        write_data(TYPES[args.type][0], judge(load(args.type), args.judge, args.board))
     if args.board_dir is not None:
         if not all((args.type, args.commit, args.machine, args.board)):
             parser.error('--import needs --type, --commit, --machine and --board')
@@ -257,9 +310,7 @@ def main():
         if not levels:
             raise SystemExit(f'{args.board_dir}: no pass1-{args.type}-<label>.log with its level record')
         path = TYPES[args.type][0]
-        text = json.dumps(merge(load(args.type) if path.exists() else None, levels, args.type), indent=1)
-        text = re.sub(r'\[\s+([\d.,\s]+?)\s+\]', lambda m: '[' + ' '.join(m.group(1).split()) + ']', text)
-        path.write_bytes((text + '\n').encode('utf-8'))
+        write_data(path, merge(load(args.type) if path.exists() else None, levels, args.type))
     text = header([(TYPES[kind][0], load(kind)) for kind in TYPES])
     if args.check:
         current = HEADER.read_bytes().replace(b'\r\n', b'\n').decode('utf-8') if HEADER.exists() else ''

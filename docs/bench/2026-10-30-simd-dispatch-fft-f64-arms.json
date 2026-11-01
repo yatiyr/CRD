@@ -670,6 +670,24 @@
     "1048576": "six-step",
     "2097152": "four-step",
     "4194304": "four-step"
+   },
+   "judged": {
+    "8192": {
+     "arm": "deep-split-3",
+     "board": "docs/bench/2026-11-01-simd-perf-fft-f64-avx512-level-plans.md#board-2-the-rows-at-both-offsets"
+    },
+    "16384": {
+     "arm": "deep-split-3",
+     "board": "docs/bench/2026-11-01-simd-perf-fft-f64-avx512-level-plans.md#board-2-the-rows-at-both-offsets"
+    },
+    "32768": {
+     "arm": "deep-split-3",
+     "board": "docs/bench/2026-11-01-simd-perf-fft-f64-avx512-level-plans.md#board-2-the-rows-at-both-offsets"
+    },
+    "262144": {
+     "arm": "deep-split-4",
+     "board": "docs/bench/2026-11-01-simd-perf-fft-f64-avx512-level-plans.md#board-2-the-rows-at-both-offsets"
+    }
    }
   }
  ]
