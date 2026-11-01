@@ -146,3 +146,17 @@ the generated-source manifest refreshed; every other jurisdiction's generation i
 - **On the real pages.** The reader gives `2025-12-25/33118/10767` for Decision No. 10767, `2025-12-31/33124-m5/10795`
   for the first item of the repeated issue of 31 December 2025, and `2017-10-28/30224` for the KVKK regulation's item.
 - **Guards.** `check-registers.py`, `gen-comply-rules.py --check` and `check-generated.py` pass after the reviews.
+- **C++.** On the track's machine (linux-gcc-debug, a5035c69) `crd-comply-tests`, `crd-ceridc-tests` and `ceridc`
+  built with no warning and the 158 scoped CTests passed, among them the committed generations decoding and binding
+  the crash pool, `crd-comply-rules-drift`, `crd-check-registers`, `crd-generated-sources` and `crd-repository-tools`.
+- **A defect on the way.** `check-repository.py` imported `project_sync` inside the `try` whose `except` names its
+  `Conflict`, so a run without the script's directory on the path (`python -I`) died on an unbound name instead of
+  naming the missing module; the imports now precede the `try`.
+
+## Next
+
+1. COMPLY.0: read General Communiqué No. 509 and Law No. 213's invoice and record-keeping provisions, Regulation (EU)
+   2017/1001, the UK GDPR and the Data Protection Act 2018 from this fetch, and find the documents' own addresses for
+   Ofcom's codes and the Chinese Cryptography Law.
+2. COMPLY.1: both freeze regimes' decisions from the Official Gazette and MASAK, now that Laws No. 6415 and 7262 are
+   read; then the Wassenaar Category 5 Part 2 and Turkey's dual-use communiqué.
