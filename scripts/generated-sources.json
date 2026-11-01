@@ -19,7 +19,7 @@
         "scripts/gen_license_manifest.py",
         "--check"
       ],
-      "sha256": "ddf5c177ece03280bb7e5fbe28c9911d7079d3828639f0ad5c75943e3e51b543"
+      "sha256": "fbe308d0c4f05b9074f2d8673776dfbc875176fb5e6921924d3a527e7635678b"
     },
     {
       "path": "docs/generated/gpu-platform-capability-matrix.md",
@@ -1872,7 +1872,7 @@
         "scripts/gen-register-ids.py",
         "--check"
       ],
-      "sha256": "3fa012d7b7b75d5c2408e8e8738ba9f9122644227099143692834cc925b0f34d"
+      "sha256": "2a296d54fc6c6c3dfba3a2e2fc6de3936cc17161cb5c467d86d9d300f055190d"
     },
     {
       "path": "engine/foundation/core/src/text_fold_table.inc",
@@ -2015,7 +2015,7 @@
         "scripts/gen-crypto-inventory.py",
         "--check"
       ],
-      "sha256": "d9301ab46bddce0f09e3522c01608aa0913df9819159e5863171f1d1c24bb8c0"
+      "sha256": "1de52024f7f21cb63863b7b90df4085dc10fa2549de94ea7872077e744f095d1"
     },
     {
       "path": "bench/gpu-compute/ckir_mlp_bwd_gen.cu",

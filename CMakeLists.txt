@@ -82,11 +82,11 @@ option(CRD_BUILD_DISPATCH_VS_HIGHWAY "Build the dispatch-cost bench against High
 # shipped build; registered as the crd-nlopt-*-difftest CTests of the tree that turns it on.
 option(CRD_BUILD_HESAP_VS_NLOPT "Build the COBYLA, NEWUOA and BOBYQA differential tests against NLopt (local-only)" OFF)
 # The TLS 1.3 interoperability test of crd-crypto's sessions (NET.2): crd-tls-peer against crd-openssl-tls-peer, a
-# program over the pinned OpenSSL 3.5 release (cmake/pins.json openssl, fetched on demand into build/_deps) built by its
+# program over the pinned OpenSSL 4.0 release (cmake/pins.json openssl, fetched on demand into build/_deps) built by its
 # own Perl Configure as a separate project, static and without its applications, tests and documentation, in its own
 # process (AWS-LC and OpenSSL share symbol names). Linux only, never in a shipped build; registered as the
 # crd-crypto-tls-interop-openssl CTest of the tree that turns it on (tests/foundation/crypto/interop).
-option(CRD_BUILD_TLS_VS_OPENSSL "Build the TLS 1.3 interoperability test against OpenSSL 3.5 (Linux, local-only)" OFF)
+option(CRD_BUILD_TLS_VS_OPENSSL "Build the TLS 1.3 interoperability test against OpenSSL 4.0 (Linux, local-only)" OFF)
 # The nn board's same-format peer: ggml's Q8_0 linears (runtime/examples/bench_nn_q8_vs_ggml.c) against the pinned ggml
 # release (cmake/pins.json ggml, fetched on demand into build/_deps) built by its own CMake as a separate project at the
 # host's ISA. Local only on Linux, never in CI or a shipped build; scripts/run_bench_nn.sh builds and runs it.
@@ -1183,7 +1183,7 @@ if(CRD_BUILD_HESAP_VS_NLOPT)
     crd_add_pinned_package(nlopt DOWNLOAD_ONLY YES)
 endif()
 
-# ----- The TLS interoperability peer: OpenSSL 3.5, built by tests/foundation/crypto (test-only) -----
+# ----- The TLS interoperability peer: OpenSSL 4.0, built by tests/foundation/crypto (test-only) -----
 # Its peer program is C; OpenSSL's Configure is Perl.
 if(CRD_BUILD_TLS_VS_OPENSSL)
     if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)

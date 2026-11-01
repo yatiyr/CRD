@@ -1,4 +1,4 @@
-/* crd-openssl-tls-peer -- one end of a TLS connection through the pinned OpenSSL 3.5 (cmake/pins.json openssl), the
+/* crd-openssl-tls-peer -- one end of a TLS connection through the pinned OpenSSL 4.0 (cmake/pins.json openssl), the
  * independent peer of crd-crypto's TLS 1.3 sessions, driven over its standard streams by
  * tests/foundation/crypto/interop/tls_interop.py (NET.2; docs/design/network-foundation.md#tls-sessions). It links only
  * OpenSSL, never AWS-LC: the two libraries share symbol names and cannot share a process.
@@ -7,7 +7,10 @@
  *                             [--max-version 1.2] [--update requested|not-requested] [--session FILE]
  *                             [--ticket-key HEX] [--compression zstd|zlib|none] [--compressed-cert FILE]
  *                             [--dump-compressed FILE] [--alpn LIST] [--quic 1|2] [--parameters HEX]
- *                             [--suites LIST]
+ *                             [--suites LIST] [--ech-configs HEX] [--ech-grease 1] [--ech-pem FILE]
+ *                             [--ech-previous-pem FILE]
+ *        crd-openssl-tls-peer --ech-generate NAME   (a new ECH key and its ECHConfigList for the public name NAME, in
+ *                             the ECH PEM format of RFC 9934, on standard output)
  *   groups       OpenSSL's group list syntax (SSL_CTX_set1_groups_list; a '*' marks a group that gets a key share)
  *   seed         the 32-byte Ed25519 private key of this end's self-signed certificate
  *   pin          the peer's 32-byte Ed25519 public key: the peer's certificate must carry it (a server then asks for
@@ -30,6 +33,10 @@
  *                the probes are made for QUIC version 1 or 2; frames then carry CRYPTO data pieces (see below)
  *   parameters   the transport parameters a QUIC end sends (hex, at most 256 bytes)
  *   suites       the TLS 1.3 cipher suites, in OpenSSL's syntax and this end's order (SSL_CTX_set_ciphersuites)
+ *   ech-configs  a client's ECHConfigList (hex): it offers ECH with it (SSL_set1_ech_config_list)
+ *   ech-grease   a client without ECH configurations sends a GREASE ECH extension (SSL_OP_ECH_GREASE)
+ *   ech-pem, ech-previous-pem  a server's ECH key and configuration in an RFC 9934 PEM file: a current one, sent as a
+ *                retry configuration, or a previous one, still decrypted but not sent (OSSL_ECHSTORE_read_pem)
  *
  * A server prefers its own group order (SSL_OP_CIPHER_SERVER_PREFERENCE), as a Cerid server does. The framing and the
  * script are crd-tls-peer's: 4-byte big-endian frame lengths, a client's first flight unasked,
@@ -39,11 +46,14 @@
  * Over QUIC no application data flows (an established client reads post-handshake messages only), and the JSON line
  * adds the level of the alert sent, the application protocol, the peer's transport parameters and one probe per
  * secret: a fixed packet sealed and a fixed sample masked under the keys RFC 9001 section 5 derives from it, computed
- * here through OpenSSL's HKDF and ciphers, which crd-tls-peer computes through crd-crypto. */
+ * here through OpenSSL's HKDF and ciphers, which crd-tls-peer computes through crd-crypto. Every report also carries
+ * OpenSSL's ECH status (SSL_ech_get1_status), the inner and outer server names it reports and, on a client, the retry
+ * configurations a rejecting server sent (SSL_ech_get1_retry_config). */
 
 #include <openssl/bio.h>
 #include <openssl/core_dispatch.h>
 #include <openssl/core_names.h>
+#include <openssl/ech.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
@@ -143,6 +153,11 @@ static int verify_pin(int preverified, X509_STORE_CTX* store)
     size_t        length = sizeof(raw);
     g_peer_ok            = key != NULL && EVP_PKEY_get_raw_public_key(key, raw, &length) == 1 &&
                 length == sizeof(raw) && memcmp(raw, g_pin, sizeof(raw)) == 0;
+    if (g_peer_ok)
+    {
+        /* The pin is the trust anchor: the verification result OpenSSL reports (ECH's status reads it) is success. */
+        X509_STORE_CTX_set_error(store, X509_V_OK);
+    }
     return g_peer_ok;
 }
 
@@ -527,28 +542,90 @@ static X509* self_signed(EVP_PKEY* key, const char* name)
     char            alt[300];
     const int       common      = strlen(name) <= 64;
     X509*           certificate = X509_new();
+    X509_NAME*      subject     = X509_NAME_new();
     X509_EXTENSION* extension   = NULL;
-    if (snprintf(alt, sizeof(alt), "%sDNS:%s", common ? "" : "critical,", name) >= (int)sizeof(alt))
+    int             made        = 0;
+    if (snprintf(alt, sizeof(alt), "%sDNS:%s", common ? "" : "critical,", name) < (int)sizeof(alt))
     {
-        X509_free(certificate);
-        return NULL;
-    }
-    extension = X509V3_EXT_conf_nid(NULL, NULL, NID_subject_alt_name, alt);
-    if (certificate == NULL || extension == NULL || !X509_set_version(certificate, 2) ||
-        !ASN1_INTEGER_set(X509_get_serialNumber(certificate), 1) ||
-        X509_gmtime_adj(X509_getm_notBefore(certificate), -3600) == NULL ||
-        X509_gmtime_adj(X509_getm_notAfter(certificate), 86400) == NULL || !X509_set_pubkey(certificate, key) ||
-        (common && !X509_NAME_add_entry_by_txt(X509_get_subject_name(certificate), "CN", MBSTRING_ASC,
-                                               (const unsigned char*)name, -1, -1, 0)) ||
-        !X509_set_issuer_name(certificate, X509_get_subject_name(certificate)) ||
-        !X509_add_ext(certificate, extension, -1) || X509_sign(certificate, key, NULL) <= 0)
-    {
-        X509_EXTENSION_free(extension);
-        X509_free(certificate);
-        return NULL;
+        extension = X509V3_EXT_conf_nid(NULL, NULL, NID_subject_alt_name, alt);
+        /* OpenSSL 4 hands out a certificate's names read-only: the subject is built apart, then set as both. */
+        made = certificate != NULL && subject != NULL && extension != NULL && X509_set_version(certificate, 2) &&
+               ASN1_INTEGER_set(X509_get_serialNumber(certificate), 1) &&
+               X509_gmtime_adj(X509_getm_notBefore(certificate), -3600) != NULL &&
+               X509_gmtime_adj(X509_getm_notAfter(certificate), 86400) != NULL &&
+               X509_set_pubkey(certificate, key) &&
+               (!common ||
+                X509_NAME_add_entry_by_txt(subject, "CN", MBSTRING_ASC, (const unsigned char*)name, -1, -1, 0)) &&
+               X509_set_subject_name(certificate, subject) && X509_set_issuer_name(certificate, subject) &&
+               X509_add_ext(certificate, extension, -1) && X509_sign(certificate, key, NULL) > 0;
     }
     X509_EXTENSION_free(extension);
+    X509_NAME_free(subject);
+    if (!made)
+    {
+        X509_free(certificate);
+        return NULL;
+    }
     return certificate;
+}
+
+/* Hex of any even length up to `capacity` bytes. */
+static int parse_hex_bytes(const char* text, unsigned char* out, size_t capacity, size_t* size)
+{
+    const size_t length = strlen(text);
+    *size               = length / 2;
+    return length % 2 == 0 && *size <= capacity && parse_hex(text, out, *size);
+}
+
+/* Adds the ECH key and configuration of an RFC 9934 PEM file to `store`, sent as retry configurations or not. */
+static int read_ech_pem(OSSL_ECHSTORE* store, const char* path, int for_retry)
+{
+    BIO*      file   = BIO_new_file(path, "r");
+    const int loaded = file != NULL && OSSL_ECHSTORE_read_pem(store, file, for_retry) == 1;
+    BIO_free(file);
+    return loaded;
+}
+
+/* A new ECH key of OpenSSL's default suite (DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, AES-128-GCM) and its
+ * ECHConfigList for `name`, as RFC 9934 PEM on standard output. */
+static int generate_ech(const char* name)
+{
+    OSSL_ECHSTORE* store = OSSL_ECHSTORE_new(NULL, NULL);
+    BIO*           out   = BIO_new_fp(stdout, BIO_NOCLOSE);
+    const int      made  = store != NULL && out != NULL &&
+                     OSSL_ECHSTORE_new_config(store, OSSL_ECH_CURRENT_VERSION, 0, name,
+                                              (OSSL_HPKE_SUITE)OSSL_HPKE_SUITE_DEFAULT) == 1 &&
+                     OSSL_ECHSTORE_write_pem(store, 0, out) == 1;
+    BIO_free(out);
+    OSSL_ECHSTORE_free(store);
+    if (!made)
+    {
+        ERR_print_errors_fp(stderr);
+    }
+    return made ? 0 : 1;
+}
+
+/* What OpenSSL reports about ECH: its status, the inner and outer names and a client's retry configurations. */
+static void print_ech(SSL* ssl, int client)
+{
+    char*          inner  = NULL;
+    char*          outer  = NULL;
+    unsigned char* retry  = NULL;
+    size_t         length = 0;
+    const int      status = SSL_ech_get1_status(ssl, &inner, &outer);
+    fprintf(stderr, "\"ech_status\": %d, \"ech_inner\": \"%s\", \"ech_outer\": \"%s\", \"ech_retry\": \"", status,
+            inner != NULL ? inner : "", outer != NULL ? outer : "");
+    if (client && SSL_ech_get1_retry_config(ssl, &retry, &length) == 1)
+    {
+        for (size_t i = 0; i < length; ++i)
+        {
+            fprintf(stderr, "%02x", retry[i]);
+        }
+    }
+    fputs("\", ", stderr);
+    OPENSSL_free(retry);
+    OPENSSL_free(inner);
+    OPENSSL_free(outer);
 }
 
 static int usage(void)
@@ -556,7 +633,8 @@ static int usage(void)
     fputs("usage: crd-openssl-tls-peer --role client|server --groups LIST --seed HEX [--pin HEX] [--name NAME] "
           "[--max-version 1.2] [--update requested|not-requested] [--session FILE] [--ticket-key HEX] "
           "[--compression zstd|zlib|none] [--compressed-cert FILE] [--dump-compressed FILE] [--alpn LIST] "
-          "[--quic 1|2] [--parameters HEX] [--suites LIST]\n",
+          "[--quic 1|2] [--parameters HEX] [--suites LIST] [--ech-configs HEX] [--ech-grease 1] [--ech-pem FILE] "
+          "[--ech-previous-pem FILE]\n",
           stderr);
     return 2;
 }
@@ -619,6 +697,15 @@ static int dump_compressed(SSL_CTX* context, int algorithm, const char* path)
 
 int main(int argc, char** argv)
 {
+    if (argc == 3 && strcmp(argv[1], "--ech-generate") == 0)
+    {
+        return generate_ech(argv[2]);
+    }
+    static unsigned char ech_configs[8192];
+    size_t               ech_config_bytes = 0;
+    int                  ech_grease       = 0;
+    const char*          ech_pem          = NULL;
+    const char*          ech_previous_pem = NULL;
     const char* role        = NULL;
     const char* groups      = NULL;
     const char* seed        = NULL;
@@ -702,6 +789,23 @@ int main(int argc, char** argv)
                  (strcmp(argv[i + 1], "requested") == 0 || strcmp(argv[i + 1], "not-requested") == 0))
         {
             update = argv[i + 1];
+        }
+        else if (strcmp(argv[i], "--ech-configs") == 0 &&
+                 parse_hex_bytes(argv[i + 1], ech_configs, sizeof(ech_configs), &ech_config_bytes))
+        {
+            continue;
+        }
+        else if (strcmp(argv[i], "--ech-grease") == 0 && strcmp(argv[i + 1], "1") == 0)
+        {
+            ech_grease = 1;
+        }
+        else if (strcmp(argv[i], "--ech-pem") == 0)
+        {
+            ech_pem = argv[i + 1];
+        }
+        else if (strcmp(argv[i], "--ech-previous-pem") == 0)
+        {
+            ech_previous_pem = argv[i + 1];
         }
         else
         {
@@ -805,6 +909,24 @@ int main(int argc, char** argv)
             SSL_CTX_set_alpn_select_cb(context, select_protocol, NULL);
         }
     }
+    if (ech_pem != NULL || ech_previous_pem != NULL)
+    {
+        /* A server's ECH keys: the current one's configuration is its retry configuration. */
+        OSSL_ECHSTORE* store = OSSL_ECHSTORE_new(NULL, NULL);
+        const int      ready = !client && ech_pem != NULL && store != NULL && read_ech_pem(store, ech_pem, 1) &&
+                          (ech_previous_pem == NULL || read_ech_pem(store, ech_previous_pem, 0)) &&
+                          SSL_CTX_set1_echstore(context, store) == 1;
+        OSSL_ECHSTORE_free(store);
+        if (!ready)
+        {
+            ERR_print_errors_fp(stderr);
+            return usage();
+        }
+    }
+    if (!client && (ech_config_bytes > 0 || ech_grease))
+    {
+        return usage();
+    }
     SSL_CTX_set_msg_callback(context, observe);
     SSL* ssl      = SSL_new(context);
     BIO* incoming = BIO_new(BIO_s_mem());
@@ -822,13 +944,27 @@ int main(int argc, char** argv)
     {
         SSL_set_connect_state(ssl);
         SSL_set_tlsext_host_name(ssl, name);
+        if (ech_grease)
+        {
+            SSL_set_options(ssl, SSL_OP_ECH_GREASE);
+        }
+        if (ech_config_bytes > 0 && SSL_set1_ech_config_list(ssl, ech_configs, ech_config_bytes) != 1)
+        {
+            ERR_print_errors_fp(stderr);
+            return 1;
+        }
         SSL_SESSION* offered = g_session_path != NULL ? take_session() : NULL;
         if (offered != NULL)
         {
             SSL_set_session(ssl, offered);
             SSL_SESSION_free(offered);
         }
-        SSL_do_handshake(ssl);
+        const int started = SSL_do_handshake(ssl);
+        if (started <= 0 && SSL_get_error(ssl, started) != SSL_ERROR_WANT_READ)
+        {
+            /* The library's own reasons, on standard error ahead of the report: a client that cannot even start. */
+            ERR_print_errors_fp(stderr);
+        }
         if (!(g_quic_version != 0 ? quic_write_frame() : write_frame(outgoing)))
         {
             return 1;
@@ -931,6 +1067,7 @@ int main(int argc, char** argv)
     const SSL_CIPHER*    cipher          = established ? SSL_get_current_cipher(ssl) : NULL;
     fprintf(stderr, "\"alpn\": \"%.*s\", \"suite\": \"%s\", ", (int)protocol_length,
             protocol != NULL ? (const char*)protocol : "", cipher != NULL ? SSL_CIPHER_get_name(cipher) : "");
+    print_ech(ssl, client);
     if (g_quic_version != 0)
     {
         fprintf(stderr, "\"alert_level\": %d, \"peer_parameters\": \"", g_alert_level);

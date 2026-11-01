@@ -71,6 +71,10 @@ REGISTRIES = {
     'TLS SignatureScheme': ('SignatureScheme', 'u16', 'integer'),
     'TLS ExtensionType Values': ('TlsExtension', 'u16', 'integer'),
     'TLS Certificate Compression Algorithm IDs': ('CertCompression', 'u16', 'integer'),
+    'TLS Alerts': ('TlsAlert', 'u8', 'integer'),
+    'HPKE KEM Identifiers': ('HpkeKem', 'u16', 'integer'),
+    'HPKE KDF Identifiers': ('HpkeKdf', 'u16', 'integer'),
+    'HPKE AEAD Identifiers': ('HpkeAead', 'u16', 'integer'),
     'AEAD Algorithms': ('', 'u16', 'integer'),  # names start AEAD_
     'Object identifiers': ('Oid', 'std::string_view', 'oid'),
 }
@@ -81,7 +85,7 @@ TEXT = {
     'alpn': (re.compile(r'^[\x21-\x7e]{1,255}$'), 'a printable ALPN identifier'),
     'oid': (re.compile(r'^[0-2](?:\.(?:0|[1-9][0-9]*))+$'), 'a dotted object identifier'),
 }
-LIMITS = {'u16': 0xFFFF, 'u32': 0xFFFFFFFF, 'u64': (1 << 62) - 1}  # QUIC varints stop at 2^62 - 1
+LIMITS = {'u8': 0xFF, 'u16': 0xFFFF, 'u32': 0xFFFFFFFF, 'u64': (1 << 62) - 1}  # QUIC varints stop at 2^62 - 1
 
 _spec = importlib.util.spec_from_file_location('check_master_plan', ROOT / 'scripts' / 'check-master-plan.py')
 _plan = importlib.util.module_from_spec(_spec)
@@ -189,7 +193,7 @@ def pattern_test(pattern):
 def literal(ctype, kind, value):
     if kind in TEXT:
         return f'"{value}"'
-    width = {'u16': 4, 'u32': 8, 'u64': 4}[ctype]
+    width = {'u8': 2, 'u16': 4, 'u32': 8, 'u64': 4}[ctype]
     return f'0x{value:0{width}X}U' if ctype != 'u64' else f'0x{value:0{width}X}ULL'
 
 

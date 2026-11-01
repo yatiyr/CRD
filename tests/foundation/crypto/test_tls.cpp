@@ -9,7 +9,7 @@
 // hostile server of the provider's own stack whose compressed Certificates a client refuses), adversarial bytes, every
 // configuration refusal and one context serving several threads.
 //
-// The independent peer (OpenSSL 3.5's hybrid key exchange) is tests/foundation/crypto/interop/tls_interop.py's.
+// The independent peer (OpenSSL 4.0's hybrid key exchange) is tests/foundation/crypto/interop/tls_interop.py's.
 
 #include <crd/compression/deflate.hpp>
 #include <crd/compression/zstd.hpp>

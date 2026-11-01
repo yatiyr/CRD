@@ -50,6 +50,17 @@
           "standard": true
         },
         {
+          "id": "tls.ech",
+          "kind": "extension",
+          "owner": "crypto",
+          "functions": [
+            "confidentiality",
+            "key-exchange"
+          ],
+          "spec": "RFC 9849",
+          "standard": true
+        },
+        {
           "id": "crypto.ml-dsa",
           "kind": "algorithm",
           "owner": "crypto",

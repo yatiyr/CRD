@@ -137,6 +137,18 @@ inline constexpr u16 kGroupSecp256r1 = 0x0017U;
 inline constexpr u16 kGroupSecp384r1 = 0x0018U;
 // tls.ech: TLS ExtensionType Values, encrypted_client_hello
 inline constexpr u16 kTlsExtensionEncryptedClientHello = 0xFE0DU;
+// tls.ech: TLS ExtensionType Values, ech_outer_extensions
+inline constexpr u16 kTlsExtensionEchOuterExtensions = 0xFD00U;
+// tls.ech: TLS Alerts, ech_required
+inline constexpr u8 kTlsAlertEchRequired = 0x79U;
+// tls.ech: HPKE KEM Identifiers, DHKEM(X25519, HKDF-SHA256)
+inline constexpr u16 kHpkeKemDhkemX25519HkdfSha256 = 0x0020U;
+// tls.ech: HPKE KDF Identifiers, HKDF-SHA256
+inline constexpr u16 kHpkeKdfHkdfSha256 = 0x0001U;
+// tls.ech: HPKE AEAD Identifiers, AES-128-GCM
+inline constexpr u16 kHpkeAeadAes128Gcm = 0x0001U;
+// tls.ech: HPKE AEAD Identifiers, ChaCha20Poly1305
+inline constexpr u16 kHpkeAeadChacha20poly1305 = 0x0003U;
 // tls.certificate-compression: TLS ExtensionType Values, compress_certificate
 inline constexpr u16 kTlsExtensionCompressCertificate = 0x001BU;
 // tls.certificate-compression: TLS Certificate Compression Algorithm IDs, zlib

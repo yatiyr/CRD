@@ -5,7 +5,10 @@
 //                     [--key-update-records N] [--pings N] [--update requested|not-requested]
 //                     [--tickets FILE] [--ticket-key HEX] [--previous-ticket-key HEX]
 //                     [--compression zstd|zlib|both|none] [--alpn LIST] [--quic 1|2] [--parameters HEX]
+//                     [--ech-configs HEX] [--ech-retry HEX] [--ech-grease 0|1] [--ech-key SEED:ID]
+//                     [--ech-previous SEED:ID]
 //        crd-tls-peer --public HEX     (prints the Ed25519 public key of a seed, for the pins)
+//        crd-tls-peer --ech-config SEED:ID  (prints the ECHConfigList of a Cerid server's ECH key, as hex)
 //   groups  register names: x25519mlkem768, secp256r1mlkem768, secp384r1mlkem1024, x25519, secp256r1, secp384r1
 //   seed    the 32-byte Ed25519 private key of this end's credential
 //   pin     the peer's 32-byte Ed25519 public key (a client's server; a server that pins its client)
@@ -20,13 +23,18 @@
 //   alpn    TlsConfig::application_protocols, comma-separated
 //   quic    a QuicHandshake (RFC 9001) instead of a TlsSession, its probes made for QUIC version 1 or 2
 //   parameters  the transport parameters a QUIC end sends (hex, at most 256 bytes)
+//   ech-configs  a client's ECHConfigList (TlsConfig::ech_configs, hex); ech-retry the retry configurations one
+//           connection offers in its place (TlsSession::init); ech-grease TlsConfig::ech_grease (default 1)
+//   ech-key, ech-previous  a server's current and previous ECH keys (TlsConfig::ech_keys, previous_ech_keys): the
+//           32-byte private key and the config_id (decimal) of each, every one published under the public name
+//           front.cerid.test with a maximum_name_length of 32
 //
 // Frames on both streams are a 4-byte big-endian length and that many bytes of TLS records. A client writes its first
 // flight before reading; after that each end answers every frame it reads with exactly one frame (possibly empty).
 // Once established, a client sends "ping from cerid" (--pings times) and a server echoes every byte it reads. At the
 // end of input the end prints one JSON line on standard error with what it negotiated, whether it resumed, the key
-// updates each way, the algorithm of its compressed Certificate sent or received and what it read, and exits 0 (2 on
-// a usage error).
+// updates each way, the algorithm of its compressed Certificate sent or received, what became of ECH (with a rejected
+// client's retry configurations) and what it read, and exits 0 (2 on a usage error).
 //
 // Over QUIC a frame carries CRYPTO data as pieces: a level byte (0 Initial, 1 Handshake, 2 Application), a 24-bit
 // big-endian length and that many bytes. No application data flows; the JSON line adds the application protocol, the
@@ -68,6 +76,8 @@ constexpr AlgorithmId kAeads[]      = {AlgorithmId::Aes128Gcm, AlgorithmId::Aes2
 constexpr AlgorithmId kSignatures[] = {AlgorithmId::Ed25519};
 constexpr char        kPing[]       = "ping from cerid";
 constexpr usize       kPieceHeader  = 4U; // a QUIC frame piece's level byte and 24-bit length
+constexpr char        kPublicName[] = "front.cerid.test";
+constexpr u8          kMaxNameLength = 32U;
 
 // The probe's packet header (the associated data), payload, packet number and header protection sample: the same in
 // crd-openssl-tls-peer.
@@ -169,6 +179,39 @@ bool parse_hex(const char* text, u8* out, usize size)
         out[i / 2U] = static_cast<u8>(i % 2U == 0U ? v << 4 : out[i / 2U] | v);
     }
     return true;
+}
+
+// Hex of any even length up to `capacity` bytes.
+bool parse_hex_bytes(const char* text, u8* out, usize capacity, usize& size)
+{
+    const usize length = std::strlen(text);
+    size               = length / 2U;
+    return length % 2U == 0U && size <= capacity && parse_hex(text, out, size);
+}
+
+// "SEED:ID": an ECH key's 32-byte private key in hex and its config_id in decimal (0 to 255).
+bool make_ech_key(const char* text, TlsEchKey& key)
+{
+    const char* colon = std::strchr(text, ':');
+    u8          secret[kTlsEchKeyBytes];
+    char        hex[2U * kTlsEchKeyBytes + 1U] = {};
+    if (colon == nullptr || static_cast<usize>(colon - text) != sizeof(hex) - 1U)
+    {
+        return false;
+    }
+    std::memcpy(hex, text, sizeof(hex) - 1U);
+    char*                    end = nullptr;
+    const unsigned long long id  = std::strtoull(colon + 1, &end, 10);
+    return end != colon + 1 && *end == '\0' && id <= 255U && parse_hex(hex, secret, sizeof(secret)) &&
+           key.init(ConstSpan<u8>(secret), static_cast<u8>(id), kPublicName, kMaxNameLength) == TlsError::None;
+}
+
+void print_hex(ConstSpan<u8> bytes)
+{
+    for (const u8 byte : bytes)
+    {
+        std::fprintf(stderr, "%02x", byte);
+    }
 }
 
 bool read_frame(usize& size)
@@ -315,16 +358,19 @@ void print_common(const detail::TlsHandshakeState& state)
     print_alert("alert_sent", state.alert_sent());
     std::fputs(", ", stderr);
     print_alert("alert_received", state.alert_received());
-    std::fprintf(stderr, R"(, "certificate_compression": %u, "suite": "%s", )",
-                 static_cast<unsigned>(state.certificate_compression()), suite_name(state.aead()));
+    std::fprintf(stderr, R"(, "certificate_compression": %u, "suite": "%s", "ech": "%s", "ech_retry": ")",
+                 static_cast<unsigned>(state.certificate_compression()), suite_name(state.aead()),
+                 tls_ech_name(state.ech()).data());
+    print_hex(state.ech_retry_configs());
+    std::fputs("\", ", stderr);
 }
 
 // A QUIC handshake over the frames: a client's first flight unasked, then one frame answering each frame read.
 int run_quic(const TlsContext& context, TlsTicketStore* tickets, bool client, QuicVersion version,
-             ConstSpan<u8> parameters)
+             ConstSpan<u8> parameters, ConstSpan<u8> ech_retry)
 {
     QuicHandshake handshake;
-    if (handshake.init(context, parameters, tickets) != TlsError::None)
+    if (handshake.init(context, parameters, tickets, ech_retry) != TlsError::None)
     {
         std::fputs("crd-tls-peer: the QUIC handshake could not be made\n", stderr);
         return 1;
@@ -359,9 +405,29 @@ int usage()
     std::fputs("usage: crd-tls-peer --role client|server --groups g[,g...] --seed HEX [--pin HEX] [--name NAME] "
                "[--key-update-records N] [--pings N] [--update requested|not-requested] [--tickets FILE] "
                "[--ticket-key HEX] [--previous-ticket-key HEX] [--compression zstd|zlib|both|none] [--alpn LIST] "
-               "[--quic 1|2] [--parameters HEX]\n",
+               "[--quic 1|2] [--parameters HEX] [--ech-configs HEX] [--ech-retry HEX] [--ech-grease 0|1] "
+               "[--ech-key SEED:ID] [--ech-previous SEED:ID]\n",
                stderr);
     return 2;
+}
+
+int print_ech_config(const char* text)
+{
+    TlsEchKey        key;
+    u8               list[kTlsMaxEchConfigListBytes];
+    usize            written = 0U;
+    const TlsEchKey* keys[]  = {&key};
+    if (!make_ech_key(text, key) ||
+        tls_ech_config_list(ConstSpan<const TlsEchKey*>(keys), Span<u8>(list), written) != TlsError::None)
+    {
+        return usage();
+    }
+    for (usize i = 0U; i < written; ++i)
+    {
+        std::printf("%02x", list[i]);
+    }
+    std::fputc('\n', stdout);
+    return 0;
 }
 
 int print_public(const char* seed)
@@ -390,6 +456,10 @@ int main(int argc, char** argv)
     {
         return print_public(argv[2]);
     }
+    if (argc == 3 && std::strcmp(argv[1], "--ech-config") == 0)
+    {
+        return print_ech_config(argv[2]);
+    }
     const char* role  = nullptr;
     const char* list  = nullptr;
     const char* seed  = nullptr;
@@ -409,6 +479,14 @@ int main(int argc, char** argv)
     u32            quic            = 0U;
     u8             parameters[256] = {};
     usize          parameter_bytes = 0U;
+    static u8        ech_configs[kTlsMaxEchConfigListBytes];
+    static u8        ech_retry[kTlsMaxEchConfigListBytes];
+    usize            ech_config_bytes = 0U;
+    usize            ech_retry_bytes  = 0U;
+    bool             ech_grease       = true;
+    static TlsEchKey ech_keys[2][kTlsMaxEchKeys];
+    const TlsEchKey* ech_lists[2][kTlsMaxEchKeys] = {};
+    usize            ech_counts[2]                = {};
     for (int i = 1; i + 1 < argc; i += 2)
     {
         const char* option = argv[i];
@@ -495,6 +573,36 @@ int main(int argc, char** argv)
         {
             update = value;
         }
+        else if (std::strcmp(option, "--ech-configs") == 0)
+        {
+            if (!parse_hex_bytes(value, ech_configs, sizeof(ech_configs), ech_config_bytes))
+            {
+                return usage();
+            }
+        }
+        else if (std::strcmp(option, "--ech-retry") == 0)
+        {
+            if (!parse_hex_bytes(value, ech_retry, sizeof(ech_retry), ech_retry_bytes))
+            {
+                return usage();
+            }
+        }
+        else if (std::strcmp(option, "--ech-grease") == 0 &&
+                 (std::strcmp(value, "0") == 0 || std::strcmp(value, "1") == 0))
+        {
+            ech_grease = value[0] == '1';
+        }
+        else if ((std::strcmp(option, "--ech-key") == 0 || std::strcmp(option, "--ech-previous") == 0) &&
+                 ech_counts[0] + ech_counts[1] < kTlsMaxEchKeys)
+        {
+            const usize which = std::strcmp(option, "--ech-key") == 0 ? 0U : 1U;
+            TlsEchKey&  key   = ech_keys[which][ech_counts[which]];
+            if (!make_ech_key(value, key))
+            {
+                return usage();
+            }
+            ech_lists[which][ech_counts[which]++] = &key;
+        }
         else
         {
             return usage();
@@ -558,6 +666,10 @@ int main(int argc, char** argv)
     config.key_update_records = key_update_records;
     config.certificate_compression = compression;
     config.application_protocols   = ConstSpan<StringView>(protocols, protocol_count);
+    config.ech_configs             = ConstSpan<u8>(ech_configs, ech_config_bytes);
+    config.ech_grease              = ech_grease;
+    config.ech_keys                = ConstSpan<const TlsEchKey*>(ech_lists[0], ech_counts[0]);
+    config.previous_ech_keys       = ConstSpan<const TlsEchKey*>(ech_lists[1], ech_counts[1]);
     if (ticket_key != nullptr)
     {
         config.ticket_key = ConstSpan<u8>(key_bytes, sizeof(key_bytes));
@@ -582,10 +694,12 @@ int main(int argc, char** argv)
             return 1;
         }
         return run_quic(context, tickets != nullptr ? &store : nullptr, client,
-                        quic == 1U ? QuicVersion::V1 : QuicVersion::V2, ConstSpan<u8>(parameters, parameter_bytes));
+                        quic == 1U ? QuicVersion::V1 : QuicVersion::V2, ConstSpan<u8>(parameters, parameter_bytes),
+                        ConstSpan<u8>(ech_retry, ech_retry_bytes));
     }
     if (context.init(config) != TlsError::None ||
-        session.init(context, tickets != nullptr ? &store : nullptr) != TlsError::None)
+        session.init(context, tickets != nullptr ? &store : nullptr, ConstSpan<u8>(ech_retry, ech_retry_bytes)) !=
+            TlsError::None)
     {
         std::fputs("crd-tls-peer: the session could not be made\n", stderr);
         return 1;

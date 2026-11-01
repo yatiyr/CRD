@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TLS 1.3 interoperability of crd-crypto's sessions with the pinned OpenSSL 3.5 (NET.2).
+"""TLS 1.3 interoperability of crd-crypto's sessions with the pinned OpenSSL 4.0 (NET.2).
 
 Runs crd-tls-peer (crd-crypto over AWS-LC) against crd-openssl-tls-peer (OpenSSL), each in its own process, and
 relays their TLS records over their standard streams (4-byte big-endian frames). Every case checks both ends' own
@@ -37,10 +37,17 @@ and for each of the four Handshake and Application secrets a probe: a fixed pack
 protection mask under the keys RFC 9001 section 5 derives from it, through crd-crypto on one end and OpenSSL's HKDF and
 ciphers on the other, which must be equal.
 
+Encrypted Client Hello (RFC 9849) runs against OpenSSL's ECH, with OpenSSL's own keys and ECHConfigLists (its RFC
+9934 PEM files) and Cerid's: offers both ways over records and from a Cerid client over QUIC, a HelloRetryRequest both
+ways, stale configurations rejected and retried with the configurations each library sent, both servers' previous
+keys, a server without ECH and GREASE both ways. Each outer ClientHello is read off the wire for the public name and
+its encrypted_client_hello, and the server name must appear in no byte the wire shows.
+
 Usage: tls_interop.py --cerid <crd-tls-peer> --openssl <crd-openssl-tls-peer>
 """
 
 import argparse
+import base64
 import hashlib
 import hmac
 import json
@@ -641,6 +648,7 @@ def cases(cerid_peer, openssl_peer):
                     expect(decodes, 'cerid accepted a zlib form that does not decode (byte %d)' % at)
     yield 'cerid client survives seeded corruptions of openssl\'s zstd and zlib forms', corrupted_forms
     yield from quic_cases(cerid_peer, openssl_peer, server_public, client_public, other_public)
+    yield from ech_cases(cerid_peer, openssl_peer, server_public)
 
 
 def quic_pieces(frame):
@@ -867,6 +875,240 @@ def quic_cases(cerid_peer, openssl_peer, server_public, client_public, other_pub
                                                           server.get('compressed_sent')))
     yield 'QUIC: openssl client decodes a cerid server\'s zstd certificate', lambda: compressed(True)
     yield 'QUIC: cerid client decodes an openssl server\'s zlib certificate', lambda: compressed(False)
+
+
+ECH_EXTENSION = 0xFE0D
+ECH_REQUIRED = 121
+BAD_RECORD_MAC = 20
+PUBLIC_NAME = 'front.cerid.test'
+SERVER_NAME = 'game.cerid.test'
+ECH_SEEDS = [bytes(range(seed, seed + 32)).hex() for seed in (120, 160, 200)]
+OPENSSL_ECH_SUCCESS = 1        # SSL_ECH_STATUS_SUCCESS
+OPENSSL_ECH_GREASE = (2, 3)    # SSL_ECH_STATUS_GREASE, SSL_ECH_STATUS_GREASE_ECH
+OPENSSL_ECH_FAILED_ECH = -105  # SSL_ECH_STATUS_FAILED_ECH: rejected, retry configurations received
+
+
+def ech_offer(flight):
+    """A ClientHello as ECH shows it (RFC 9849 section 5): its server name and its outer encrypted_client_hello's
+    fields (None without one)."""
+    _, _, _, extensions = hello(flight)
+    found = dict(extensions)
+    name = None
+    if 0 in found:
+        data = found[0]
+        name = data[5:5 + struct.unpack('>H', data[3:5])[0]].decode()
+    data = found.get(ECH_EXTENSION)
+    if data is None:
+        return name, None
+    expect(data[0] == 0, 'a ClientHello carries an inner encrypted_client_hello on the wire')
+    kdf, aead, config_id, enc = struct.unpack('>HHBH', data[1:8])
+    payload = struct.unpack('>H', data[8 + enc:10 + enc])[0]
+    expect(10 + enc + payload == len(data), 'a malformed encrypted_client_hello: %s' % data.hex())
+    return name, {'kdf': kdf, 'aead': aead, 'config_id': config_id, 'enc': enc, 'payload': payload}
+
+
+def pem_ech_config(pem):
+    """The ECHConfigList of an RFC 9934 PEM file."""
+    lines = pem.splitlines()
+    start, end = lines.index('-----BEGIN ECHCONFIG-----'), lines.index('-----END ECHCONFIG-----')
+    return base64.b64decode(''.join(lines[start + 1:end]))
+
+
+def check_ech_wire(flights, quic=False):
+    """An ECH handshake on the wire: the outer ClientHello names the public name and carries an outer
+    encrypted_client_hello with a 32-byte X25519 encapsulation, HKDF-SHA256 and AES-128-GCM or ChaCha20-Poly1305, and
+    the server name never crosses the wire either way. Over QUIC the wire shows the Initial level's CRYPTO data only
+    (the transport protects the other levels, which the frames here carry as they are)."""
+    first = quic_initial(flights[0][1]) if quic else flights[0][1]
+    name, fields = ech_offer(first)
+    expect(name == PUBLIC_NAME, 'the outer ClientHello names %r' % name)
+    expect(fields is not None and fields['enc'] == 32 and fields['kdf'] == 1 and fields['aead'] in (1, 3),
+           'the outer ClientHello offers %s' % fields)
+    for who, frame in flights:
+        visible = quic_initial(frame) if quic else frame
+        expect(SERVER_NAME.encode() not in visible, 'the server name crossed the wire in a %s flight' % who)
+
+
+def plaintext_alert(frame, description):
+    """Whether a stream flight is one unprotected alert record of `description`."""
+    return len(frame) == 7 and frame[0] == 21 and frame[3:5] == b'\x00\x02' and frame[6] == description
+
+
+def ech_cases(cerid_peer, openssl_peer, server_public):
+    """Encrypted Client Hello (RFC 9849) against OpenSSL 4.0's: offers both ways over records and from a Cerid client
+    over QUIC, a HelloRetryRequest, stale configurations rejected and retried with the configurations each library
+    sent, key rotation, a server that turned ECH off, and GREASE both ways. An OpenSSL client cannot offer ECH over
+    its QUIC TLS interface: it carries the transport parameters as a custom extension, which its ECH cannot copy into
+    the outer ClientHello (internal_error before anything is sent, OpenSSL 4.0.3), so a Cerid server's QUIC ECH is
+    proven against Cerid clients (test_tls_ech.cpp)."""
+
+    def quic_options(version, parameters):
+        return ['--quic', str(version), '--parameters', parameters, '--alpn', GAME] if version else []
+
+    def generated(scratch, count):
+        """`count` ECH keys made by OpenSSL: their PEM files and ECHConfigLists."""
+        paths, lists = [], []
+        for index in range(count):
+            pem = subprocess.run([openssl_peer, '--ech-generate', PUBLIC_NAME], capture_output=True, text=True,
+                                 check=True).stdout
+            path = os.path.join(scratch, 'ech-%d.pem' % index)
+            with open(path, 'w', encoding='ascii') as file:
+                file.write(pem)
+            paths.append(path)
+            lists.append(pem_ech_config(pem).hex())
+        return paths, lists
+
+    def cerid_list(seed, config_id):
+        return subprocess.run([cerid_peer, '--ech-config', '%s:%d' % (seed, config_id)], capture_output=True,
+                              text=True, check=True).stdout.strip()
+
+    def cerid_client(extra, openssl_extra, version=0, groups=('x25519mlkem768',), server_groups='X25519MLKEM768'):
+        return run(cerid(cerid_peer, 'client', list(groups), CLIENT_SEED, server_public,
+                         list(extra) + quic_options(version, QUIC_CLIENT_PARAMETERS)),
+                   openssl(openssl_peer, 'server', server_groups, SERVER_SEED,
+                           extra=list(openssl_extra) + quic_options(version, QUIC_SERVER_PARAMETERS)))
+
+    def openssl_client(extra, openssl_extra, version=0, groups='X25519MLKEM768', server_groups=('x25519mlkem768',)):
+        return run(openssl(openssl_peer, 'client', groups, CLIENT_SEED, server_public,
+                           extra=list(openssl_extra) + quic_options(version, QUIC_CLIENT_PARAMETERS)),
+                   cerid(cerid_peer, 'server', list(server_groups), SERVER_SEED,
+                         extra=list(extra) + quic_options(version, QUIC_SERVER_PARAMETERS)))
+
+    def accepted(cerid_report, openssl_report, flights, cerid_is_client, group='x25519mlkem768', retry=False,
+                 version=0):
+        if version:
+            check_quic(cerid_report, openssl_report, cerid_is_client, group, retry)
+        else:
+            check_established(cerid_report, openssl_report, group, retry, PING if cerid_is_client else OPENSSL_PING)
+        check_ech_wire(flights, quic=version != 0)
+        expect(cerid_report.get('ech') == 'accepted', 'cerid reports ECH %s' % cerid_report.get('ech'))
+        expect(openssl_report.get('ech_status') == OPENSSL_ECH_SUCCESS and
+               openssl_report.get('ech_inner') == SERVER_NAME and openssl_report.get('ech_outer') == PUBLIC_NAME,
+               'openssl reports ECH %s, inner %r, outer %r' % (openssl_report.get('ech_status'),
+                                                                openssl_report.get('ech_inner'),
+                                                                openssl_report.get('ech_outer')))
+
+    def cerid_offers(version, groups, server_groups, retry):
+        with tempfile.TemporaryDirectory() as scratch:
+            paths, lists = generated(scratch, 1)
+            client, server, flights = cerid_client(['--ech-configs', lists[0]], ['--ech-pem', paths[0]], version,
+                                                   groups, server_groups)
+            accepted(client, server, flights, True, retry=retry, version=version)
+
+    def openssl_offers(version, groups, server_groups, retry):
+        client, server, flights = openssl_client(['--ech-key', ECH_SEEDS[0] + ':7'],
+                                                 ['--ech-configs', cerid_list(ECH_SEEDS[0], 7)], version, groups,
+                                                 server_groups)
+        accepted(server, client, flights, False, group=server_groups[-1], retry=retry, version=version)
+        expect(ech_offer(quic_initial(flights[0][1]) if version else flights[0][1])[1]['config_id'] == 7,
+               'openssl offered another configuration')
+
+    for version in (0, 1, 2):
+        transport = 'QUIC v%d' % version if version else 'TLS'
+        yield 'ECH %s: cerid client, openssl server' % transport, (
+            lambda v=version: cerid_offers(v, ('x25519mlkem768',), 'X25519MLKEM768', False))
+    yield 'ECH TLS: openssl client, cerid server', lambda: openssl_offers(0, 'X25519MLKEM768', ('x25519mlkem768',),
+                                                                         False)
+    yield 'ECH: cerid client retries its hello for openssl server, still encrypted', lambda: cerid_offers(
+        0, ('secp256r1mlkem768', 'x25519mlkem768'), 'X25519MLKEM768', True)
+    yield 'ECH: openssl client retries its hello for cerid server, still encrypted', lambda: openssl_offers(
+        0, '*X25519MLKEM768:SecP384r1MLKEM1024', ('secp384r1mlkem1024',), True)
+
+    def cerid_rejected(version):
+        """A Cerid client with a stale configuration: OpenSSL rejects it under the public name and sends its current
+        one, which the retried connection uses."""
+        with tempfile.TemporaryDirectory() as scratch:
+            paths, lists = generated(scratch, 2)
+            client, server, flights = cerid_client(['--ech-configs', lists[0]], ['--ech-pem', paths[1]], version)
+            expect(client.get('state') == 'failed' and client.get('ech') == 'retry' and
+                   client.get('alert_sent') == ECH_REQUIRED, 'cerid ended %s' % client)
+            expect(client.get('ech_retry') == lists[1], 'cerid kept the retry configurations %s, openssl sent %s' % (
+                client.get('ech_retry'), lists[1]))
+            # Over QUIC the client's ech_required travels in the transport's CONNECTION_CLOSE, which these frames do
+            # not carry: the server may have finished its side.
+            expect((server.get('state') == 'failed' or version != 0) and
+                   server.get('ech_status') != OPENSSL_ECH_SUCCESS, 'openssl ended %s' % server)
+            for who, frame in flights:
+                visible = quic_initial(frame) if version else frame
+                expect(SERVER_NAME.encode() not in visible, 'the server name crossed the wire in a %s flight' % who)
+            client, server, flights = cerid_client(['--ech-configs', lists[0], '--ech-retry', lists[1]],
+                                                   ['--ech-pem', paths[1]], version)
+            accepted(client, server, flights, True, version=version)
+
+    def openssl_rejected():
+        """An OpenSSL client with a stale configuration: a Cerid server rejects it under its key's public name and
+        sends its current one, which OpenSSL takes and retries with. OpenSSL aborts on the server's Certificate, before
+        it installs its handshake keys, so its ech_required goes out unprotected (RFC 9846 appendix A.1 lets a client
+        send such an alert in the clear); the Cerid server, expecting a protected record, answers bad_record_mac."""
+        stale, current = cerid_list(ECH_SEEDS[0], 1), cerid_list(ECH_SEEDS[1], 2)
+        client, server, flights = openssl_client(['--ech-key', ECH_SEEDS[1] + ':2'], ['--ech-configs', stale])
+        expect(client.get('state') == 'failed' and client.get('alert_sent') == ECH_REQUIRED and
+               client.get('ech_status') == OPENSSL_ECH_FAILED_ECH, 'openssl ended %s' % client)
+        expect(client.get('ech_retry') == current, 'openssl received the retry configurations %s, cerid sent %s' % (
+            client.get('ech_retry'), current))
+        expect(server.get('state') == 'failed' and server.get('ech') == 'none', 'cerid ended %s' % server)
+        last = [frame for who, frame in flights if who == 'client' and frame][-1]
+        expect(server.get('alert_received') == ECH_REQUIRED or
+               (plaintext_alert(last, ECH_REQUIRED) and server.get('alert_sent') == BAD_RECORD_MAC),
+               'cerid ended %s after the client flight %s' % (server, last.hex()))
+        for who, frame in flights:
+            expect(SERVER_NAME.encode() not in frame, 'the server name crossed the wire in a %s flight' % who)
+        client, server, flights = openssl_client(['--ech-key', ECH_SEEDS[1] + ':2'],
+                                                 ['--ech-configs', client['ech_retry']])
+        accepted(server, client, flights, False)
+
+    for version in (0, 1):
+        transport = 'QUIC v%d' % version if version else 'TLS'
+        yield 'ECH %s: openssl server rejects a stale cerid configuration, the retry is accepted' % transport, (
+            lambda v=version: cerid_rejected(v))
+    yield 'ECH TLS: cerid server rejects a stale openssl configuration, the retry is accepted', openssl_rejected
+
+    def rotation():
+        """Servers decrypt with the key before their last rotation without sending it as a retry configuration."""
+        with tempfile.TemporaryDirectory() as scratch:
+            paths, lists = generated(scratch, 2)
+            client, server, flights = cerid_client(['--ech-configs', lists[0]],
+                                                   ['--ech-pem', paths[1], '--ech-previous-pem', paths[0]])
+            accepted(client, server, flights, True)
+        client, server, flights = openssl_client(
+            ['--ech-key', ECH_SEEDS[1] + ':2', '--ech-previous', ECH_SEEDS[0] + ':1'],
+            ['--ech-configs', cerid_list(ECH_SEEDS[0], 1)])
+        accepted(server, client, flights, False)
+    yield 'ECH: both servers decrypt with their previous keys after a rotation', rotation
+
+    def disabled():
+        """An OpenSSL server without ECH answers the public name: the Cerid client learns, authenticated by its pin,
+        that ECH is off, and connects no further."""
+        with tempfile.TemporaryDirectory() as scratch:
+            _, lists = generated(scratch, 1)
+            client, server, _ = cerid_client(['--ech-configs', lists[0]], ['--name', PUBLIC_NAME])
+            expect(client.get('state') == 'failed' and client.get('ech') == 'disabled' and
+                   client.get('alert_sent') == ECH_REQUIRED and client.get('ech_retry') == '',
+                   'cerid ended %s' % client)
+            expect(server.get('state') == 'failed' and server.get('alert_received') == ECH_REQUIRED,
+                   'openssl ended %s' % server)
+    yield 'ECH: cerid client learns that an openssl server turned ECH off', disabled
+
+    def grease():
+        """GREASE both ways: each library's GREASE extension passes the other's server, which serves its own name."""
+        with tempfile.TemporaryDirectory() as scratch:
+            paths, _ = generated(scratch, 1)
+            client, server, flights = cerid_client([], ['--ech-pem', paths[0]])
+            check_established(client, server, 'x25519mlkem768', False, PING)
+            name, fields = ech_offer(flights[0][1])
+            expect(name == SERVER_NAME and fields is not None and fields['enc'] == 32,
+                   'cerid GREASEd %r with %s' % (name, fields))
+            expect(client.get('ech') == 'none' and server.get('ech_status') != OPENSSL_ECH_SUCCESS,
+                   'ECH: cerid %s, openssl %s' % (client.get('ech'), server.get('ech_status')))
+        client, server, flights = openssl_client(['--ech-key', ECH_SEEDS[2] + ':3'], ['--ech-grease', '1'])
+        check_established(server, client, 'x25519mlkem768', False, OPENSSL_PING)
+        name, fields = ech_offer(flights[0][1])
+        expect(name == SERVER_NAME and fields is not None, 'openssl GREASEd %r with %s' % (name, fields))
+        expect(server.get('ech') == 'none' and client.get('ech_status') in OPENSSL_ECH_GREASE,
+               'ECH: cerid %s, openssl %s' % (server.get('ech'), client.get('ech_status')))
+        client, server, flights = cerid_client(['--ech-grease', '0'], [])
+        expect(ech_offer(flights[0][1])[1] is None, 'cerid sent ECH with GREASE off')
+    yield 'ECH: GREASE both ways, and none when switched off', grease
 
 
 def main():

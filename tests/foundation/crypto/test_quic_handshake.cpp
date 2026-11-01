@@ -8,7 +8,7 @@
 // quic.hpp), a forbidden TLS KeyUpdate, data at levels the handshake does not read, the receive limit, refusals and
 // one context on several threads.
 //
-// The independent peer (OpenSSL 3.5's QUIC TLS interface) is tests/foundation/crypto/interop/tls_interop.py's.
+// The independent peer (OpenSSL 4.0's QUIC TLS interface) is tests/foundation/crypto/interop/tls_interop.py's.
 
 #include <crd/containers/array.hpp>
 #include <crd/crypto/provider.hpp>

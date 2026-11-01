@@ -15,6 +15,12 @@
 // Certificate compression (decision S10, RFC 8879) runs through the engine's codecs (crd-compression): a server's
 // compressed Certificate messages are made once at init() and held in the provider context's ex_data, so its sessions
 // copy bytes instead of compressing per handshake; a client decodes into a buffer of exactly the claimed length.
+//
+// Encrypted Client Hello (decision S14, RFC 9849) is the provider's: a server context holds its ECH keys, a client's
+// connection its ECHConfigList. What Cerid adds lives in the provider context's ex_data (EchContext): a client's list
+// and a server's public names, which the name check reads during handshakes that may outlive the TlsContext. A client
+// given a list proves its ClientHello encrypted an inner one (the provider reports it to the message observer) before
+// any byte leaves, so a list the provider cannot use never becomes a hello that reveals the server name.
 #include <crd/crypto/tls.hpp>
 
 #include "provider_internal.hpp"
@@ -28,6 +34,7 @@
 #include <openssl/bn.h>
 #include <openssl/bytestring.h>
 #include <openssl/evp.h>
+#include <openssl/hpke.h>
 #include <openssl/mem.h>
 #include <openssl/nid.h>
 #include <openssl/pool.h>
@@ -145,6 +152,11 @@ X509* x509_of(ProviderCertificate* certificate) noexcept
 BIO* bio_of(ProviderBuffer* buffer) noexcept
 {
     return reinterpret_cast<BIO*>(buffer);
+}
+
+EVP_HPKE_KEY* hpke_of(ProviderEchKey* key) noexcept
+{
+    return reinterpret_cast<EVP_HPKE_KEY*>(key);
 }
 
 // The provider's encryption level of a QUIC level, and the index of a provider level among QuicLevel (kQuicLevels for
@@ -311,6 +323,56 @@ bool same_host_name(cont::StringView a, cont::StringView b) noexcept
     const auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
     return a.size() == b.size() &&
            std::equal(a.begin(), a.end(), b.begin(), [&lower](char x, char y) { return lower(x) == lower(y); });
+}
+
+// An ECH public name (RFC 9849 section 6.1.7): a host name whose last label is neither all digits nor "0x" or "0X"
+// and hexadecimal digits, which an IPv4 parser would read as an address.
+bool valid_public_name(cont::StringView name) noexcept
+{
+    if (!valid_host_name(name))
+    {
+        return false;
+    }
+    usize start = name.size();
+    while (start != 0U && name[start - 1U] != '.')
+    {
+        --start;
+    }
+    const cont::StringView last(name.data() + start, name.size() - start);
+    const auto             digits = [](cont::StringView text, bool hex) {
+        return std::all_of(text.begin(), text.end(), [hex](char c) {
+            return (c >= '0' && c <= '9') || (hex && ((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')));
+        });
+    };
+    const bool hex_literal = last.size() >= 2U && last[0] == '0' && (last[1] == 'x' || last[1] == 'X') &&
+                             digits(cont::StringView(last.data() + 2U, last.size() - 2U), true);
+    return !digits(last, false) && !hex_literal;
+}
+
+// Walks an ECHConfigList (RFC 9849 section 4): a 2-byte length holding the whole rest, then ECHConfigs of a 2-byte
+// version and a 2-byte length each, tiling it exactly. False for any other shape; `current` tells whether a
+// configuration has version 0xfe0d (the only one defined; the others a client skips).
+bool walk_ech_configs(cont::ConstSpan<u8> list, bool& current) noexcept
+{
+    current = false;
+    CBS cbs;
+    CBS configs;
+    CBS_init(&cbs, list.data(), list.size());
+    if (!CBS_get_u16_length_prefixed(&cbs, &configs) || CBS_len(&cbs) != 0U || CBS_len(&configs) == 0U)
+    {
+        return false;
+    }
+    while (CBS_len(&configs) != 0U)
+    {
+        uint16_t version = 0U;
+        CBS      contents;
+        if (!CBS_get_u16(&configs, &version) || !CBS_get_u16_length_prefixed(&configs, &contents))
+        {
+            return false;
+        }
+        current = current || version == iana::kTlsExtensionEncryptedClientHello; // RFC 9849 section 4
+    }
+    return true;
 }
 
 // Each algorithm of `list` once, of one of the two classes, implemented by the provider; at most `bound` of them.
@@ -546,6 +608,52 @@ int context_slot() noexcept
     static const int kSlot = SSL_CTX_get_ex_new_index(0, nullptr, nullptr, nullptr, &free_compressed_certificates);
     return kSlot;
 }
+
+// A context's ECH data (decision S14): a client's ECHConfigList, or a server's public names. It lives in the provider
+// context's ex_data, as long as the provider context its sessions share.
+struct EchContext
+{
+    u8   configs[kTlsMaxEchConfigListBytes] = {};
+    u32  config_bytes                       = 0U;
+    char names[kTlsMaxEchKeys][kTlsMaxNameBytes + 1U] = {};
+    u32  name_bytes[kTlsMaxEchKeys]                   = {};
+    u32  name_count                                   = 0U;
+
+    [[nodiscard]] cont::ConstSpan<u8> list() const noexcept { return cont::ConstSpan<u8>(configs, config_bytes); }
+
+    [[nodiscard]] bool names_public(cont::StringView name) const noexcept
+    {
+        for (u32 i = 0U; i < name_count; ++i)
+        {
+            if (same_host_name(name, cont::StringView(names[i], name_bytes[i])))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
+void free_ech_context(void*, void* pointer, CRYPTO_EX_DATA*, int, long, void*) noexcept
+{
+    auto* ech = static_cast<EchContext*>(pointer);
+    if (ech != nullptr)
+    {
+        ech->~EchContext();
+        OPENSSL_free(ech);
+    }
+}
+
+int ech_slot() noexcept
+{
+    static const int kSlot = SSL_CTX_get_ex_new_index(0, nullptr, nullptr, nullptr, &free_ech_context);
+    return kSlot;
+}
+
+const EchContext* ech_of(const SSL* ssl) noexcept
+{
+    return static_cast<const EchContext*>(SSL_CTX_get_ex_data(SSL_get_SSL_CTX(ssl), ech_slot()));
+}
 } // namespace
 
 bool detail::tls_decompress_certificate(u16 algorithm, cont::ConstSpan<u8> compressed,
@@ -640,8 +748,11 @@ struct TlsCallbacks
     }
 
     // A server with a name refuses a client that names another server or none, with general_error: the alert does not
-    // tell the client which names the server holds. A server with application protocols refuses a client that offers
-    // none with no_application_protocol (one that offers some meets select_protocol).
+    // tell the client which names the server holds. The provider names the inner ClientHello's server when it
+    // decrypted one; a hello it did not decrypt may name a public name of the server's ECH keys, which the server
+    // answers only so that a rejected client can authenticate its retry configurations (complete() refuses the
+    // handshake if it gets that far). A server with application protocols refuses a client that offers none with
+    // no_application_protocol (one that offers some meets select_protocol).
     static int check_name(SSL* ssl, int* out_alert, void*) noexcept
     {
         detail::TlsHandshakeState* session = session_of(ssl);
@@ -661,15 +772,22 @@ struct TlsCallbacks
         {
             return SSL_TLSEXT_ERR_OK;
         }
-        const char* offered = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
-        if (offered == nullptr ||
-            !same_host_name(cont::StringView(offered), cont::StringView(settings.server_name, settings.name_bytes)))
+        const char*       offered = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
+        const EchContext* ech     = ech_of(ssl);
+        if (offered != nullptr &&
+            same_host_name(cont::StringView(offered), cont::StringView(settings.server_name, settings.name_bytes)))
         {
-            session->m_refused = true;
-            *out_alert         = kTlsAlertGeneralError;
-            return SSL_TLSEXT_ERR_ALERT_FATAL;
+            return SSL_TLSEXT_ERR_OK;
         }
-        return SSL_TLSEXT_ERR_OK;
+        if (offered != nullptr && ech != nullptr && SSL_ech_accepted(ssl) != 1 &&
+            ech->names_public(cont::StringView(offered)))
+        {
+            session->m_public_name = true;
+            return SSL_TLSEXT_ERR_OK;
+        }
+        session->m_refused = true;
+        *out_alert         = kTlsAlertGeneralError;
+        return SSL_TLSEXT_ERR_ALERT_FATAL;
     }
 
     // A client hands each ticket its server issues to the session's store, serialized; without a store the ticket is
@@ -842,8 +960,9 @@ struct TlsCallbacks
     }
 
     // Records the first alert each way, notices a HelloRetryRequest (a ServerHello with the special random), counts
-    // the KeyUpdates each way and notes the algorithm of a compressed Certificate sent or received. The provider
-    // reports a KeyUpdate it writes when it queues it, sealed under the old key.
+    // the KeyUpdates each way, notes the algorithm of a compressed Certificate sent or received and notes that a
+    // client encrypted an inner ClientHello (the provider reports it only when its outer hello offers ECH). The
+    // provider reports a KeyUpdate it writes when it queues it, sealed under the old key.
     static void observe(int is_write, int, int content_type, const void* buffer, size_t length, SSL* ssl,
                         void*) noexcept
     {
@@ -853,7 +972,11 @@ struct TlsCallbacks
             return;
         }
         const auto* bytes = static_cast<const u8*>(buffer);
-        if (content_type == SSL3_RT_ALERT && length >= 2U)
+        if (content_type == SSL3_RT_CLIENT_HELLO_INNER && is_write != 0)
+        {
+            session->m_ech_pending = false;
+        }
+        else if (content_type == SSL3_RT_ALERT && length >= 2U)
         {
             TlsAlert& alert = is_write != 0 ? session->m_alert_sent : session->m_alert_received;
             if (!alert.present)
@@ -934,18 +1057,23 @@ struct TlsCallbacks
     }
 
     // Starts a connection of `context` for `state`: the provider's connection with the state in its slot, the
-    // context's settings copied, a client's server name set. NotReady for a context that holds none; BadConfig for a
-    // server with a ticket store and, with `needs_protocol`, a context without application protocols.
-    static TlsError begin(const TlsContext& context, TlsTicketStore* tickets, bool needs_protocol,
-                          detail::TlsHandshakeState& state, bssl::UniquePtr<SSL>& ssl) noexcept
+    // context's settings copied, a client's server name and ECH set (`retry`, a rejection's retry configurations, in
+    // place of the context's list; a GREASE extension without either). NotReady for a context that holds none;
+    // BadConfig for a server with a ticket store or retry configurations, a malformed `retry` and, with
+    // `needs_protocol`, a context without application protocols.
+    static TlsError begin(const TlsContext& context, TlsTicketStore* tickets, cont::ConstSpan<u8> retry,
+                          bool needs_protocol, detail::TlsHandshakeState& state, bssl::UniquePtr<SSL>& ssl) noexcept
     {
         if (!context.ready())
         {
             return TlsError::NotReady;
         }
         const TlsSettings& settings = context.m_settings;
-        if ((tickets != nullptr && settings.role == TlsRole::Server) ||
-            (needs_protocol && settings.protocol_bytes == 0U))
+        bool               current  = false;
+        if (((tickets != nullptr || !retry.empty()) && settings.role == TlsRole::Server) ||
+            (needs_protocol && settings.protocol_bytes == 0U) ||
+            (!retry.empty() &&
+             (retry.size() > kTlsMaxEchConfigListBytes || !walk_ech_configs(retry, current) || !current)))
         {
             return TlsError::BadConfig;
         }
@@ -962,8 +1090,54 @@ struct TlsCallbacks
         }
         SSL_set_connect_state(ssl.get());
         state.m_tickets = tickets;
+        const EchContext*         ech     = ech_of(ssl.get());
+        cont::ConstSpan<u8> configs = retry;
+        if (configs.empty() && ech != nullptr)
+        {
+            configs = ech->list();
+        }
+        state.m_ech_retry   = !retry.empty();
+        state.m_ech_pending = !configs.empty();
+        SSL_set_enable_ech_grease(ssl.get(), configs.empty() && settings.ech_grease ? 1 : 0);
+        if (!configs.empty() && !SSL_set1_ech_config_list(ssl.get(), configs.data(), configs.size()))
+        {
+            return TlsError::BadConfig;
+        }
         return SSL_set_tlsext_host_name(ssl.get(), state.m_settings.server_name) == 1 ? TlsError::None
                                                                                       : TlsError::ProviderFailure;
+    }
+
+    // A client's first flight is out of the provider: a client given ECH configurations that encrypted no inner
+    // ClientHello (none of them usable) is cleared before the transport takes a byte. BadConfig then.
+    static TlsError first_flight(detail::TlsHandshakeState& state, TlsError advanced) noexcept
+    {
+        return advanced == TlsError::None && state.m_ech_pending ? TlsError::BadConfig : advanced;
+    }
+
+    // A client's ECH offer that the server rejected and then authenticated: the provider sends ech_required only after
+    // the rejection handshake verified the server (by a pinned key here; RFC 9849 section 6.1.6), never on a GREASE
+    // extension. Notes what the client may do next: retry once with the server's configurations, or report ECH
+    // disabled, or, on a connection that already retried, refused.
+    static bool ech_rejected(SSL* ssl, detail::TlsHandshakeState& state) noexcept
+    {
+        if (state.m_settings.role != TlsRole::Client || !state.m_alert_sent.present ||
+            state.m_alert_sent.description != iana::kTlsAlertEchRequired)
+        {
+            return false;
+        }
+        if (state.m_ech_retry)
+        {
+            state.m_ech = TlsEch::Refused;
+            return true;
+        }
+        const uint8_t* configs = nullptr;
+        size_t         length  = 0U;
+        SSL_get0_ech_retry_configs(ssl, &configs, &length);
+        bool current = false;
+        state.m_ech  = length != 0U && walk_ech_configs(cont::ConstSpan<u8>(configs, length), current) && current
+                           ? TlsEch::Retry
+                           : TlsEch::Disabled;
+        return true;
     }
 
     // A client offers a ticket from its store under the connection's binding (offer_ticket); false when the provider
@@ -974,9 +1148,10 @@ struct TlsCallbacks
                offer_ticket(ssl, state.m_settings.binding, state.m_tickets->take(state.m_settings.binding));
     }
 
-    // What a finished handshake settled: its group and AEAD, a resumption and its peer key, and the application
+    // What a finished handshake settled: its group and AEAD, ECH, a resumption and its peer key, and the application
     // protocol a client asked for. A client with protocols whose server selected none sends no_application_protocol
-    // (a QUIC provider refuses it earlier, RFC 9001 section 8.1).
+    // (a QUIC provider refuses it earlier, RFC 9001 section 8.1). A server refuses, with general_error, a handshake
+    // its client ran under an ECH public name alone: that name exists for a rejected client's retry only.
     static TlsError complete(SSL* ssl, detail::TlsHandshakeState& state) noexcept
     {
         state.m_group = algorithm_of(kGroups, SSL_get_group_id(ssl));
@@ -984,6 +1159,13 @@ struct TlsCallbacks
         if (state.m_group == AlgorithmId{} || state.m_aead == AlgorithmId{})
         {
             return TlsError::ProviderFailure;
+        }
+        state.m_ech = SSL_ech_accepted(ssl) == 1 ? TlsEch::Accepted : TlsEch::None;
+        if (state.m_public_name)
+        {
+            state.m_refused = true;
+            (void)SSL_send_fatal_alert(ssl, kTlsAlertGeneralError);
+            return TlsError::PeerRefused;
         }
         // A resumed handshake verified no certificate: the peer key is the one the ticket's handshake proved, which
         // the binding (the same pins) keeps pinned.
@@ -1185,6 +1367,50 @@ TlsError compress_certificate(SSL_CTX* context, cont::ConstSpan<u8> der, cont::C
     }
     return kept->message != nullptr ? TlsError::None : TlsError::ProviderFailure;
 }
+
+// A context's ECH configuration (decision S14): a server's keys, at most kTlsMaxEchKeys in all, each ready, with
+// distinct config_ids (the provider tries every key of a config_id on each offer), previous ones only beside current
+// ones; a client's list of at most kTlsMaxEchConfigListBytes, well formed, with a configuration of version 0xfe0d.
+// Neither role takes the other's.
+bool valid_ech(const TlsConfig& config) noexcept
+{
+    const bool  server = config.role == TlsRole::Server;
+    const usize count  = config.ech_keys.size() + config.previous_ech_keys.size();
+    if (count > kTlsMaxEchKeys || (server ? !config.ech_configs.empty() : count != 0U) ||
+        (config.ech_keys.empty() && !config.previous_ech_keys.empty()))
+    {
+        return false;
+    }
+    bool seen[256] = {};
+    for (const cont::ConstSpan<const TlsEchKey*> keys : {config.ech_keys, config.previous_ech_keys})
+    {
+        for (const TlsEchKey* key : keys)
+        {
+            if (key == nullptr || !key->ready() || seen[key->config_id()])
+            {
+                return false;
+            }
+            seen[key->config_id()] = true;
+        }
+    }
+    bool current = false;
+    return config.ech_configs.empty() || (config.ech_configs.size() <= kTlsMaxEchConfigListBytes &&
+                                          walk_ech_configs(config.ech_configs, current) && current);
+}
+
+// The provider context's ECH data, owned by its ex_data slot from here on (freed with the provider context however
+// init() ends). Null when the provider fails.
+EchContext* attach_ech(SSL_CTX* context) noexcept
+{
+    void* storage = OPENSSL_zalloc(sizeof(EchContext));
+    auto* ech     = storage != nullptr ? new (storage) EchContext() : nullptr;
+    if (ech == nullptr || !SSL_CTX_set_ex_data(context, ech_slot(), ech))
+    {
+        free_ech_context(nullptr, ech, nullptr, 0, 0, nullptr);
+        return nullptr;
+    }
+    return ech;
+}
 } // namespace
 
 cont::StringView tls_error_name(TlsError error) noexcept
@@ -1205,8 +1431,28 @@ cont::StringView tls_error_name(TlsError error) noexcept
         return "failed";
     case TlsError::Closed:
         return "closed";
+    case TlsError::EchRejected:
+        return "ech-rejected";
     case TlsError::ProviderFailure:
         return "provider-failure";
+    }
+    return "unknown";
+}
+
+cont::StringView tls_ech_name(TlsEch ech) noexcept
+{
+    switch (ech)
+    {
+    case TlsEch::None:
+        return "none";
+    case TlsEch::Accepted:
+        return "accepted";
+    case TlsEch::Retry:
+        return "retry";
+    case TlsEch::Disabled:
+        return "disabled";
+    case TlsEch::Refused:
+        return "refused";
     }
     return "unknown";
 }
@@ -1338,6 +1584,90 @@ TlsError TlsCredential::init(const SigningKey& key, cont::StringView name) noexc
     return TlsError::None;
 }
 
+// ---- ECH keys ----
+
+TlsEchKey::~TlsEchKey() noexcept
+{
+    clear();
+}
+
+void TlsEchKey::clear() noexcept
+{
+    // The provider zeroes the key's memory when it frees it.
+    EVP_HPKE_KEY_free(hpke_of(m_key));
+    m_key          = nullptr;
+    m_config_bytes = 0U;
+    m_name_bytes   = 0U;
+    m_config_id    = 0U;
+    std::memset(m_name, 0, sizeof(m_name));
+}
+
+TlsError TlsEchKey::init(cont::ConstSpan<u8> private_key, u8 config_id, cont::StringView public_name,
+                         u8 max_name_length) noexcept
+{
+    clear();
+    if (private_key.size() != kTlsEchKeyBytes || !valid_public_name(public_name))
+    {
+        return TlsError::BadConfig;
+    }
+    const ErrorScope              errors;
+    bssl::UniquePtr<EVP_HPKE_KEY> key(EVP_HPKE_KEY_new());
+    char                          name[kTlsMaxNameBytes + 1U] = {};
+    std::memcpy(name, public_name.data(), public_name.size());
+    uint8_t* config = nullptr;
+    size_t   length = 0U;
+    if (!key ||
+        !EVP_HPKE_KEY_init(key.get(), EVP_hpke_x25519_hkdf_sha256(), private_key.data(), private_key.size()) ||
+        !SSL_marshal_ech_config(&config, &length, config_id, key.get(), name, max_name_length))
+    {
+        return TlsError::ProviderFailure;
+    }
+    const bssl::UniquePtr<uint8_t> owner(config);
+    if (length > kTlsMaxEchConfigBytes)
+    {
+        return TlsError::ProviderFailure;
+    }
+    std::memcpy(m_config, config, length);
+    std::memcpy(m_name, name, sizeof(name));
+    m_config_bytes = static_cast<u32>(length);
+    m_name_bytes   = static_cast<u32>(public_name.size());
+    m_config_id    = config_id;
+    m_key          = reinterpret_cast<ProviderEchKey*>(key.release());
+    return TlsError::None;
+}
+
+TlsError tls_ech_config_list(cont::ConstSpan<const TlsEchKey*> keys, cont::Span<u8> out, usize& written) noexcept
+{
+    written     = 0U;
+    usize total = 2U;
+    if (keys.empty() || keys.size() > kTlsMaxEchKeys)
+    {
+        return TlsError::BadConfig;
+    }
+    for (const TlsEchKey* key : keys)
+    {
+        if (key == nullptr || !key->ready())
+        {
+            return TlsError::BadConfig;
+        }
+        total += key->config().size();
+    }
+    if (out.size() < total)
+    {
+        return TlsError::Full;
+    }
+    out[0]   = static_cast<u8>((total - 2U) >> 8U);
+    out[1]   = static_cast<u8>(total - 2U);
+    usize at = 2U;
+    for (const TlsEchKey* key : keys)
+    {
+        std::memcpy(out.data() + at, key->config().data(), key->config().size());
+        at += key->config().size();
+    }
+    written = total;
+    return TlsError::None;
+}
+
 // ---- Contexts ----
 
 TlsContext::~TlsContext() noexcept
@@ -1375,7 +1705,8 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
         (!config.ticket_key.empty() && config.ticket_key.size() != kTlsTicketKeyBytes) ||
         (!config.previous_ticket_key.empty() &&
          (config.previous_ticket_key.size() != kTlsTicketKeyBytes || config.ticket_key.empty())) ||
-        config.ticket_lifetime > kTlsMaxTicketLifetime || !valid_compression(config.certificate_compression))
+        config.ticket_lifetime > kTlsMaxTicketLifetime || !valid_compression(config.certificate_compression) ||
+        !valid_ech(config))
     {
         return TlsError::BadConfig;
     }
@@ -1390,6 +1721,7 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     settings.name_bytes         = static_cast<u32>(config.server_name.size());
     settings.key_update_records = config.key_update_records;
     settings.max_key_updates    = config.max_key_updates != 0U ? config.max_key_updates : kTlsMaxKeyUpdates;
+    settings.ech_grease         = !server && config.ech_grease;
     settings.binding = binding_of(config, config.credential != nullptr ? config.credential->key_id() : KeyId{});
     if (!protocols_of(config.application_protocols, settings))
     {
@@ -1542,8 +1874,40 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
             SSL_CTX_set_alpn_select_cb(context.get(), &TlsCallbacks::select_protocol, nullptr);
         }
     }
+    // ECH (decision S14): a server's keys, the current ones its retry configurations, and their public names for the
+    // name check; a client's list, which each connection takes.
+    if (!config.ech_keys.empty() || !config.ech_configs.empty())
+    {
+        EchContext* ech = attach_ech(context.get());
+        if (ech == nullptr)
+        {
+            return TlsError::ProviderFailure;
+        }
+        std::copy(config.ech_configs.begin(), config.ech_configs.end(), ech->configs);
+        ech->config_bytes = static_cast<u32>(config.ech_configs.size());
+        const bssl::UniquePtr<SSL_ECH_KEYS> keys(server ? SSL_ECH_KEYS_new() : nullptr);
+        for (const bool retry : {true, false})
+        {
+            for (const TlsEchKey* key : retry ? config.ech_keys : config.previous_ech_keys)
+            {
+                const cont::ConstSpan<u8> published = key->config();
+                const cont::StringView    name      = key->public_name();
+                if (!keys || !SSL_ECH_KEYS_add(keys.get(), retry ? 1 : 0, published.data(), published.size(),
+                                               hpke_of(key->m_key)))
+                {
+                    return TlsError::ProviderFailure;
+                }
+                std::memcpy(ech->names[ech->name_count], name.data(), name.size());
+                ech->name_bytes[ech->name_count++] = static_cast<u32>(name.size());
+            }
+        }
+        if (server && !SSL_CTX_set1_ech_keys(context.get(), keys.get()))
+        {
+            return TlsError::ProviderFailure;
+        }
+    }
     SSL_CTX_set_msg_callback(context.get(), &TlsCallbacks::observe);
-    if (session_slot() < 0)
+    if (session_slot() < 0 || ech_slot() < 0)
     {
         return TlsError::ProviderFailure;
     }
@@ -1575,6 +1939,10 @@ void detail::TlsHandshakeState::release() noexcept
     m_refused                 = false;
     m_update_requested        = false;
     m_protocol_offered        = false;
+    m_ech_pending             = false;
+    m_ech_retry               = false;
+    m_public_name             = false;
+    m_ech                     = TlsEch::None;
     m_alert_sent              = TlsAlert{};
     m_alert_received          = TlsAlert{};
 }
@@ -1583,6 +1951,18 @@ TlsError detail::TlsHandshakeState::fail(TlsError error) noexcept
 {
     m_state = TlsState::Failed;
     return error;
+}
+
+cont::ConstSpan<u8> detail::TlsHandshakeState::ech_retry_configs() const noexcept
+{
+    if (m_ech != TlsEch::Retry)
+    {
+        return {};
+    }
+    const uint8_t* configs = nullptr;
+    size_t         length  = 0U;
+    SSL_get0_ech_retry_configs(ssl_of(m_session), &configs, &length);
+    return cont::ConstSpan<u8>(configs, length);
 }
 
 cont::StringView detail::TlsHandshakeState::application_protocol() const noexcept
@@ -1611,12 +1991,13 @@ void TlsSession::clear() noexcept
     m_key_update_records = 0U;
 }
 
-TlsError TlsSession::init(const TlsContext& context, TlsTicketStore* tickets) noexcept
+TlsError TlsSession::init(const TlsContext& context, TlsTicketStore* tickets,
+                          cont::ConstSpan<u8> ech_retry_configs) noexcept
 {
     clear();
     const ErrorScope     errors;
     bssl::UniquePtr<SSL> ssl;
-    const TlsError       begun = TlsCallbacks::begin(context, tickets, false, *this, ssl);
+    const TlsError       begun = TlsCallbacks::begin(context, tickets, ech_retry_configs, false, *this, ssl);
     bssl::UniquePtr<BIO> incoming(begun == TlsError::None ? BIO_new(BIO_s_mem()) : nullptr);
     bssl::UniquePtr<BIO> outgoing(begun == TlsError::None ? BIO_new(BIO_s_mem()) : nullptr);
     if (begun != TlsError::None || !incoming || !outgoing)
@@ -1634,7 +2015,16 @@ TlsError TlsSession::init(const TlsContext& context, TlsTicketStore* tickets) no
     }
     m_session = reinterpret_cast<ProviderTlsSession*>(ssl.release());
     m_state   = TlsState::Handshaking;
-    return m_settings.role == TlsRole::Client ? advance() : TlsError::None;
+    if (m_settings.role == TlsRole::Server)
+    {
+        return TlsError::None;
+    }
+    const TlsError first = TlsCallbacks::first_flight(*this, advance());
+    if (first == TlsError::BadConfig)
+    {
+        clear();
+    }
+    return first;
 }
 
 TlsError TlsSession::advance() noexcept
@@ -1668,6 +2058,10 @@ TlsError TlsSession::advance() noexcept
         m_state = TlsState::Closed;
         return TlsError::Closed;
     default:
+        if (TlsCallbacks::ech_rejected(ssl, *this))
+        {
+            return fail(TlsError::EchRejected);
+        }
         return fail(m_refused ? TlsError::PeerRefused : TlsError::Failed);
     }
 }
@@ -1928,12 +2322,12 @@ void QuicHandshake::clear() noexcept
 }
 
 TlsError QuicHandshake::init(const TlsContext& context, cont::ConstSpan<u8> transport_parameters,
-                             TlsTicketStore* tickets) noexcept
+                             TlsTicketStore* tickets, cont::ConstSpan<u8> ech_retry_configs) noexcept
 {
     clear();
     const ErrorScope     errors;
     bssl::UniquePtr<SSL> ssl;
-    const TlsError       begun = TlsCallbacks::begin(context, tickets, true, *this, ssl);
+    const TlsError       begun = TlsCallbacks::begin(context, tickets, ech_retry_configs, true, *this, ssl);
     if (begun != TlsError::None || transport_parameters.empty() ||
         transport_parameters.size() > kQuicMaxTransportParameterBytes)
     {
@@ -1958,7 +2352,16 @@ TlsError QuicHandshake::init(const TlsContext& context, cont::ConstSpan<u8> tran
     }
     m_session = reinterpret_cast<ProviderTlsSession*>(ssl.release());
     m_state   = TlsState::Handshaking;
-    return m_settings.role == TlsRole::Client ? advance() : TlsError::None;
+    if (m_settings.role == TlsRole::Server)
+    {
+        return TlsError::None;
+    }
+    const TlsError first = TlsCallbacks::first_flight(*this, advance());
+    if (first == TlsError::BadConfig)
+    {
+        clear();
+    }
+    return first;
 }
 
 TlsError QuicHandshake::advance() noexcept
@@ -1975,9 +2378,15 @@ TlsError QuicHandshake::advance() noexcept
         m_state = TlsState::Established;
         return TlsError::None;
     }
-    return SSL_get_error(ssl, result) == SSL_ERROR_WANT_READ
-               ? TlsError::None
-               : fail(m_refused ? TlsError::PeerRefused : TlsError::Failed);
+    if (SSL_get_error(ssl, result) == SSL_ERROR_WANT_READ)
+    {
+        return TlsError::None;
+    }
+    if (TlsCallbacks::ech_rejected(ssl, *this))
+    {
+        return fail(TlsError::EchRejected);
+    }
+    return fail(m_refused ? TlsError::PeerRefused : TlsError::Failed);
 }
 
 TlsError QuicHandshake::provide(QuicLevel level, cont::ConstSpan<u8> bytes) noexcept

@@ -45,7 +45,7 @@ using provider_internal::signature_digest;
 namespace
 {
 // The algorithms the provider implements, in identifier order. The hybrid key exchange groups run inside its TLS
-// stack (tls.hpp), proven against its own key shares and OpenSSL 3.5's (decision P6).
+// stack (tls.hpp), proven against its own key shares and OpenSSL's (decision P6).
 constexpr AlgorithmId kImplemented[] = {
     AlgorithmId::X25519Mlkem768,   AlgorithmId::Secp256r1Mlkem768, AlgorithmId::Secp384r1Mlkem1024,
     AlgorithmId::X25519,           AlgorithmId::Secp256r1, AlgorithmId::Secp384r1,

@@ -445,7 +445,7 @@
         "tests/foundation/crypto/interop/tls_interop.py"
       ],
       "deprecation": null,
-      "note": "Every build's TLS ClientHello (crd-crypto tls.hpp, the provider's GREASE switched on for every context) carries a reserved value in its cipher suites, supported groups, supported versions and key shares and two reserved extensions, chosen per connection and kept by a ClientHello sent again after a HelloRetryRequest; OpenSSL 3.5 servers ignore them. Cerid's own negotiation sends the same sixteen values (cerid.negotiation)."
+      "note": "Every build's TLS ClientHello (crd-crypto tls.hpp, the provider's GREASE switched on for every context) carries a reserved value in its cipher suites, supported groups, supported versions and key shares and two reserved extensions, chosen per connection and kept by a ClientHello sent again after a HelloRetryRequest; OpenSSL servers (3.5.9, and since 2026-11-02 4.0.3) ignore them. Cerid's own negotiation sends the same sixteen values (cerid.negotiation)."
     },
     {
       "id": "ietf.algorithm-agility",
@@ -582,7 +582,7 @@
           "recommended": "Y"
         }
       ],
-      "note": "Proven so far in crd-crypto (NET.2): packet protection (section 5, quic.hpp, against the appendix A packets of RFC 9001 and RFC 9369) and the handshake over QUIC (section 4 and 8, QuicHandshake, decision S11): CRYPTO data per encryption level, each level's secrets into packet and header keys, the quic_transport_parameters extension both ways, application protocols required, alerts as CRYPTO_ERROR at their level, no TLS KeyUpdate, tickets under QUIC's own binding; against OpenSSL 3.5's QUIC TLS interface both ways in versions 1 and 2. The 57 codepoint was checked against IANA's TLS ExtensionType Values on 2026-11-01. Address validation (Retry and NEW_TOKEN tokens, RFC 9000 section 8.1) is quic.transport's. Remaining: the transport's use of the keys (key update protocol, discarding keys, the amplification limit) in 4.2a."
+      "note": "Proven so far in crd-crypto (NET.2): packet protection (section 5, quic.hpp, against the appendix A packets of RFC 9001 and RFC 9369) and the handshake over QUIC (section 4 and 8, QuicHandshake, decision S11): CRYPTO data per encryption level, each level's secrets into packet and header keys, the quic_transport_parameters extension both ways, application protocols required, alerts as CRYPTO_ERROR at their level, no TLS KeyUpdate, tickets under QUIC's own binding; against OpenSSL's QUIC TLS interface (3.5.9, then 4.0.3) both ways in versions 1 and 2. The 57 codepoint was checked against IANA's TLS ExtensionType Values on 2026-11-01. Address validation (Retry and NEW_TOKEN tokens, RFC 9000 section 8.1) is quic.transport's. Remaining: the transport's use of the keys (key update protocol, discarding keys, the amplification limit) in 4.2a."
     },
     {
       "id": "quic.recovery",
@@ -1424,7 +1424,7 @@
         "tests/foundation/crypto/interop/tls_interop.py"
       ],
       "deprecation": null,
-      "note": "RFC 9846 obsoletes RFC 8446 and keeps version 0x0304 and the wire format; the full re-research of 2026-11-01 maps its technical changes onto NET.2's TLS 1.3 profile (fresh key shares, mandatory key updates before the usage limits, the 2^48-1 epoch bound, general_error, TLS 1.3 only). Proven so far on crd-crypto's TLS records (tls.hpp, decisions S1 to S8): TLS 1.3 only, fresh key shares, general_error toward unauthenticated peers, key updates before the AEAD's usage limit with one request outstanding and the 2^48-1 bound, a peer's user_canceled ignored and its close_notify honoured, against OpenSSL 3.5 both ways. Tickets and resumption (decision S9): one ticket per connection sealed under a shareable, rotatable ticket key, single-use tickets held in the caller's per-domain store and bound to the context, psk_dhe_ke only with a fresh hybrid share, lifetimes of at most seven days, proven in process and across processes against OpenSSL 3.5 both ways. 0-RTT and the QUIC and raw UDP record layers remain NET.2's."
+      "note": "RFC 9846 obsoletes RFC 8446 and keeps version 0x0304 and the wire format; the full re-research of 2026-11-01 maps its technical changes onto NET.2's TLS 1.3 profile (fresh key shares, mandatory key updates before the usage limits, the 2^48-1 epoch bound, general_error, TLS 1.3 only). Proven so far on crd-crypto's TLS records (tls.hpp, decisions S1 to S8): TLS 1.3 only, fresh key shares, general_error toward unauthenticated peers, key updates before the AEAD's usage limit with one request outstanding and the 2^48-1 bound, a peer's user_canceled ignored and its close_notify honoured, against OpenSSL (3.5.9, then 4.0.3) both ways. Tickets and resumption (decision S9): one ticket per connection sealed under a shareable, rotatable ticket key, single-use tickets held in the caller's per-domain store and bound to the context, psk_dhe_ke only with a fresh hybrid share, lifetimes of at most seven days, proven in process and across processes against OpenSSL both ways. 0-RTT and the QUIC and raw UDP record layers remain NET.2's."
     },
     {
       "id": "tls.registry-recommended",
@@ -1532,7 +1532,7 @@
         "tests/foundation/crypto/interop/tls_interop.py"
       ],
       "deprecation": null,
-      "note": "X25519MLKEM768 preferred, SecP384r1MLKEM1024 for high assurance (NET.2). The three groups run inside the provider's TLS stack (crd-crypto tls.hpp); each key share is checked on the wire against the layout (ML-KEM first for X25519MLKEM768, the EC point first for the SecP groups) and every group interoperates with OpenSSL 3.5 both ways, through a HelloRetryRequest and beside a classical share."
+      "note": "X25519MLKEM768 preferred, SecP384r1MLKEM1024 for high assurance (NET.2). The three groups run inside the provider's TLS stack (crd-crypto tls.hpp); each key share is checked on the wire against the layout (ML-KEM first for X25519MLKEM768, the EC point first for the SecP groups) and every group interoperates with OpenSSL (3.5.9, then 4.0.3) both ways, through a HelloRetryRequest and beside a classical share."
     },
     {
       "id": "crypto.ecdh",
@@ -1612,7 +1612,7 @@
       "id": "tls.ech",
       "title": "TLS Encrypted Client Hello",
       "kind": "extension",
-      "state": "planned",
+      "state": "implemented",
       "owner": "crypto",
       "rows": [
         "NET.2"
@@ -1632,6 +1632,37 @@
           "name": "encrypted_client_hello",
           "value": "0xfe0d",
           "recommended": "Y"
+        },
+        {
+          "registry": "TLS ExtensionType Values",
+          "name": "ech_outer_extensions",
+          "value": "0xfd00",
+          "recommended": "Y"
+        },
+        {
+          "registry": "TLS Alerts",
+          "name": "ech_required",
+          "value": "121"
+        },
+        {
+          "registry": "HPKE KEM Identifiers",
+          "name": "DHKEM(X25519, HKDF-SHA256)",
+          "value": "0x0020"
+        },
+        {
+          "registry": "HPKE KDF Identifiers",
+          "name": "HKDF-SHA256",
+          "value": "0x0001"
+        },
+        {
+          "registry": "HPKE AEAD Identifiers",
+          "name": "AES-128-GCM",
+          "value": "0x0001"
+        },
+        {
+          "registry": "HPKE AEAD Identifiers",
+          "name": "ChaCha20Poly1305",
+          "value": "0x0003"
         }
       ],
       "source": {
@@ -1640,8 +1671,13 @@
         "verified": true
       },
       "review": "2027-10-27",
-      "evidence": [],
-      "deprecation": null
+      "evidence": [
+        "tests/foundation/crypto/test_tls_ech.cpp",
+        "tests/foundation/crypto/fuzz/fuzz_tls.cpp",
+        "tests/foundation/crypto/interop/tls_interop.py"
+      ],
+      "deprecation": null,
+      "note": "Shared mode over the provider's ECH (crd-crypto tls.hpp, decision S14, docs/design/network-foundation.md#ech): TlsEchKey and its ECHConfig (DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 with AES-128-GCM or ChaCha20-Poly1305), current and previous server keys, a client that never sends a hello without ECH once given a list, retry configurations authenticated by a pinned key and used for one retried connection, ECH disabled and refused told apart, the public name answered only for that recovery, GREASE on every client hello without a list, and the inner hello padded to maximum_name_length; over records and QUIC, against OpenSSL 4.0.3 both ways over records and from a Cerid client over QUIC. RFC 9849 was read on 2026-11-02 and the codepoints checked against its IANA section and IANA's HPKE registry (read 2026-11-02). Its KEM is classical: the inner hello's metadata, never the session keys (the hybrid groups'), would yield to a quantum adversary; a post-quantum HPKE KEM for ECH (ML-KEM-768 0x0041 and X-Wing are in IANA's HPKE registry, draft-ietf-hpke-pq) is adopted once an ECH profile and the providers carry it."
     },
     {
       "id": "tls.certificate-compression",

@@ -19,7 +19,7 @@
 | glfw | 3.4 | Zlib | glfw/glfw @ `3.4` (7b6aead9fb88) | `glfw-7b6aead9.tar.gz` |
 | zstd | 1.5.7 | BSD-3-Clause OR GPL-2.0-only | facebook/zstd @ `v1.5.7` (f8745da6ff1a) | `zstd-f8745da6.tar.gz` |
 | aws-lc | 5.12.0 | Apache-2.0 AND ISC AND MIT AND BSD-3-Clause | aws/aws-lc @ `v5.12.0` (cd481c207e38) | `aws-lc-cd481c20.tar.gz` |
-| openssl | 3.5.9 | Apache-2.0 | https://www.openssl.org/source/openssl-3.5.9.tar.gz | `openssl-3.5.9.tar.gz` |
+| openssl | 4.0.3 | Apache-2.0 | https://www.openssl.org/source/openssl-4.0.3.tar.gz | `openssl-4.0.3.tar.gz` |
 | nasm | 2.16.03 | BSD-2-Clause | https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/win64/nasm-2.16.03-win64.zip | `nasm-2.16.03-win64.zip` |
 | wycheproof | d17cc89 | Apache-2.0 | C2SP/wycheproof @ `d17cc89fa5c8f4f4d378b5385ebf75da5d0926c9` (d17cc89fa5c8) | `wycheproof-d17cc89f.tar.gz` |
 | stb | 2c980bb | MIT OR Unlicense | nothings/stb @ `2c980bb59875b0d32144a71867fbdebb2f77cd20` (2c980bb59875) | `stb-2c980bb5.tar.gz` |

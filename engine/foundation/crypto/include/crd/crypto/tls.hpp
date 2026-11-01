@@ -44,6 +44,13 @@
 //   protocols   a context may name application protocols (ALPN, RFC 7301): a client offers them in its order, a server
 //               selects the first of its own that the client offers, and with protocols configured on either end the
 //               two agree on one or the handshake fails with no_application_protocol.
+//   ECH         a client given its server's ECHConfigList encrypts its true ClientHello to the server's ECH key (RFC
+//               9849): the server name, its tickets and its credential travel inside, the configuration's public name
+//               outside. A client given a list never sends a hello without ECH (none of the list's configurations
+//               usable is BadConfig before anything is sent); a client without one sends a GREASE extension, so its
+//               hellos look alike. A server with ECH keys decrypts with its current and previous keys and answers a
+//               hello it cannot decrypt under the key's public name only for the client to authenticate its retry
+//               configurations; a rejected client reports them (EchRejected) for one retried connection.
 //   QUIC        a QuicHandshake runs the same handshake over QUIC (RFC 9001): CRYPTO data per encryption level instead
 //               of records, each level's secrets turned into QuicPacketKey and QuicHeaderKey, the transport parameters
 //               carried both ways and an application protocol required.
@@ -75,6 +82,14 @@ inline constexpr usize kTlsMaxProtocolListBytes = 256U; // their wire list: a le
 inline constexpr u8    kTlsAlertGeneralError = 117U;   // RFC 9846 section 6.2
 inline constexpr u8    kTlsAlertUserCanceled = 90U;    // RFC 9846 section 6.1
 inline constexpr u8    kTlsAlertNoApplicationProtocol = 120U; // RFC 7301 section 3.2
+
+// Encrypted Client Hello (RFC 9849, decision S14): an ECH key is a DHKEM(X25519, HKDF-SHA256) private key (RFC 9180);
+// its ECHConfig is 55 bytes and the public name; a client's ECHConfigList may also list configurations of other
+// versions and KEMs (with post-quantum public keys), which it skips.
+inline constexpr usize kTlsEchKeyBytes           = 32U;
+inline constexpr usize kTlsMaxEchKeys            = 4U;    // ECH keys of one server context, the previous ones included
+inline constexpr usize kTlsMaxEchConfigBytes     = 55U + kTlsMaxNameBytes;
+inline constexpr usize kTlsMaxEchConfigListBytes = 4096U;
 
 // The bound on a session's own key updates, 2^48-1 (RFC 9846 section 4.7.3), and the fewest records a sending key may
 // be configured for: one of data, its KeyUpdate and one alert.
@@ -118,11 +133,28 @@ enum class TlsError : u8
                      // agrees on no application protocol
     Failed,          // the handshake or a record failed; alert_sent() and alert_received() tell which
     Closed,          // the session is closed (close_notify)
+    EchRejected,     // a client's ECH offer was rejected and the server authenticated (by a pinned key): the session
+                     // never carries data, and ech() tells what the client may do next
     ProviderFailure, // the provider failed (no memory, no randomness)
 };
 
-// "none", "bad-config", "not-ready", "full", "peer-refused", "failed", "closed", "provider-failure".
+// "none", "bad-config", "not-ready", "full", "peer-refused", "failed", "closed", "ech-rejected", "provider-failure".
 [[nodiscard]] cont::StringView tls_error_name(TlsError error) noexcept;
+
+// What became of Encrypted Client Hello in a handshake (RFC 9849).
+enum class TlsEch : u8
+{
+    None,     // not offered (a GREASE extension at most), or a server that decrypted no offer
+    Accepted, // the server decrypted the client's inner ClientHello and the handshake ran on it
+    Retry,    // a client's offer was rejected and the server sent ECH configurations: retry once with them
+              // (TlsSession::init's ech_retry_configs, from ech_retry_configs())
+    Disabled, // rejected, and the server sent no configuration of this version: it turned ECH off. Connecting again
+              // without ECH reveals the server name, which only the caller may decide (RFC 9849 section 6.1.6)
+    Refused,  // rejected on a connection that already retried: the server's configurations disagree; report a failure
+};
+
+// "none", "accepted", "retry", "disabled", "refused".
+[[nodiscard]] cont::StringView tls_ech_name(TlsEch ech) noexcept;
 
 // The AEADs in this CPU's order: AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 with AES instructions,
 // ChaCha20-Poly1305 first without them (the "chosen by CPU capability" default of the provider policy).
@@ -167,6 +199,55 @@ private:
     detail::ProviderKeyHandle m_key;
     KeyId                     m_key_id;
 };
+
+struct ProviderEchKey; // the provider's HPKE key, defined only inside crd-crypto
+
+// A server's ECH key and the ECHConfig that publishes it (RFC 9849 section 4, decision S14).
+class TlsEchKey
+{
+public:
+    TlsEchKey() noexcept = default;
+    ~TlsEchKey() noexcept;
+    TlsEchKey(const TlsEchKey&)            = delete;
+    TlsEchKey& operator=(const TlsEchKey&) = delete;
+    TlsEchKey(TlsEchKey&&)                 = delete;
+    TlsEchKey& operator=(TlsEchKey&&)      = delete;
+
+    // The key of `private_key` (kTlsEchKeyBytes drawn with random_bytes; the servers of a fleet share it, as they share
+    // a ticket key) published as ECHConfig `config_id`: DHKEM(X25519, HKDF-SHA256) with HKDF-SHA256 and AES-128-GCM or
+    // ChaCha20-Poly1305, `max_name_length` (the longest name served behind `public_name`, to which every client pads
+    // its inner server name; 0 when not known) and `public_name`, the DNS name of the server a rejected client
+    // authenticates, never one an IPv4 parser would read as an address (RFC 9849 section 6.1.7). BadConfig for a key
+    // of another length or another name; the private key may be zeroed afterwards.
+    [[nodiscard]] TlsError init(cont::ConstSpan<u8> private_key, u8 config_id, cont::StringView public_name,
+                                u8 max_name_length = 0U) noexcept;
+    void                   clear() noexcept;
+
+    [[nodiscard]] bool ready() const noexcept { return m_key != nullptr; }
+    [[nodiscard]] u8   config_id() const noexcept { return m_config_id; }
+
+    // The ECHConfig (version 0xfe0d); empty when not ready.
+    [[nodiscard]] cont::ConstSpan<u8> config() const noexcept { return cont::ConstSpan<u8>(m_config, m_config_bytes); }
+
+    // The public name; empty when not ready.
+    [[nodiscard]] cont::StringView public_name() const noexcept { return cont::StringView(m_name, m_name_bytes); }
+
+private:
+    friend class TlsContext;
+
+    ProviderEchKey* m_key = nullptr;
+    u8              m_config[kTlsMaxEchConfigBytes] = {};
+    u32             m_config_bytes                  = 0U;
+    char            m_name[kTlsMaxNameBytes + 1U]   = {};
+    u32             m_name_bytes                    = 0U;
+    u8              m_config_id                     = 0U;
+};
+
+// The ECHConfigList of `keys` in their order (RFC 9849 section 4): what a service publishes (the ech parameter of its
+// DNS HTTPS record, RFC 9848, or Cerid's service discovery) and its clients take as TlsConfig::ech_configs. BadConfig
+// for no key, more than kTlsMaxEchKeys or one not ready; Full when `out` is too small (nothing written).
+[[nodiscard]] TlsError tls_ech_config_list(cont::ConstSpan<const TlsEchKey*> keys, cont::Span<u8> out,
+                                           usize& written) noexcept;
 
 // What a client's tickets are bound to: the SHA-256 of its role, the server name (in lower case), its own key, its
 // pins and the signature algorithms it accepts. A ticket resumes only under the binding that received it.
@@ -227,6 +308,19 @@ struct TlsConfig
     // kTlsMaxProtocolListBytes on the wire: a client's offer in its order, a server's in its preference. Empty: none
     // (a stream session then negotiates none; a QUIC handshake needs at least one).
     cont::ConstSpan<cont::StringView> application_protocols;
+    // A server's ECH keys (RFC 9849, decision S14), at most kTlsMaxEchKeys in all with distinct config_ids, read at
+    // init() (they may be cleared afterwards): the current ones, published and sent to a client whose offer they
+    // cannot decrypt (its retry configurations), and those before the last rotation, still decrypted but no longer
+    // sent. A server with a name answers their public names too, only for a rejected client to authenticate it: a
+    // handshake that would complete under a public name alone is refused (general_error).
+    cont::ConstSpan<const TlsEchKey*> ech_keys;
+    cont::ConstSpan<const TlsEchKey*> previous_ech_keys;
+    // A client's ECHConfigList for its server (the service's published list, at most kTlsMaxEchConfigListBytes): each
+    // session offers ECH with the first configuration it supports, and refuses to start without one (BadConfig).
+    cont::ConstSpan<u8> ech_configs;
+    // A client without ech_configs sends a GREASE ECH extension (RFC 9849 section 6.2), so its hellos look like those
+    // that offer ECH; false only where no observer could tell the two apart anyway.
+    bool ech_grease = true;
 };
 
 // The settings a session copies from its context.
@@ -247,6 +341,7 @@ struct TlsSettings
     u8          ticket_keys[2][kTlsTicketKeyBytes] = {}; // a server's: the sealing key, then the previous one
     u8          ticket_names[2][16]                = {}; // the keys' public names, which lead their tickets
     u32         ticket_key_count                   = 0U;
+    bool        ech_grease                         = false;
 };
 
 namespace detail
@@ -328,6 +423,14 @@ public:
     // configured one. Valid while the session lives.
     [[nodiscard]] cont::StringView application_protocol() const noexcept;
 
+    // What became of ECH: Accepted after a handshake on the inner ClientHello, Retry, Disabled or Refused on a client
+    // whose handshake ended in EchRejected, else None.
+    [[nodiscard]] TlsEch ech() const noexcept { return m_ech; }
+
+    // After TlsEch::Retry: the ECHConfigList the server sent, which the server authenticated by a pinned key; for one
+    // retried connection only (RFC 9849 section 6.1.6). Empty otherwise. Valid while the session lives.
+    [[nodiscard]] cont::ConstSpan<u8> ech_retry_configs() const noexcept;
+
     [[nodiscard]] TlsAlert alert_sent() const noexcept { return m_alert_sent; }
     [[nodiscard]] TlsAlert alert_received() const noexcept { return m_alert_received; }
 
@@ -357,6 +460,10 @@ protected:
     bool                m_refused           = false; // the verify, name or protocol check refused the peer
     bool                m_update_requested  = false; // a KeyUpdate asked the peer for one, not answered yet
     bool                m_protocol_offered  = false; // a server's client offered application protocols
+    bool                m_ech_pending       = false; // a client given ECH configurations has not encrypted a hello
+    bool                m_ech_retry         = false; // a client's ECH configurations are a rejection's retry ones
+    bool                m_public_name       = false; // a server's client named one of its ECH public names only
+    TlsEch              m_ech               = TlsEch::None;
     TlsAlert            m_alert_sent;
     TlsAlert            m_alert_received;
 };
@@ -376,14 +483,18 @@ public:
     // A new session of `context`'s role, replacing any previous one. A client's first flight (its ClientHello) is
     // ready to take() when init() returns. A client with `tickets` offers a ticket it takes from them (when one parses
     // and belongs to this context's binding) and keeps the tickets its server issues there; without a store it offers
-    // none and ignores NewSessionTicket. BadConfig for a server with a store.
-    [[nodiscard]] TlsError init(const TlsContext& context, TlsTicketStore* tickets = nullptr) noexcept;
+    // none and ignores NewSessionTicket. A client retrying after TlsEch::Retry passes the rejected session's
+    // ech_retry_configs() as `ech_retry_configs` (read before init() returns): this connection alone offers ECH with
+    // them in place of the context's, and a second rejection is TlsEch::Refused. BadConfig for a server with a store
+    // or retry configurations, and for a client with ECH configurations none of which it can use (nothing was sent).
+    [[nodiscard]] TlsError init(const TlsContext& context, TlsTicketStore* tickets = nullptr,
+                                cont::ConstSpan<u8> ech_retry_configs = {}) noexcept;
     void                   clear() noexcept;
 
     // Takes all of `bytes` (received from the peer) and runs the handshake as far as they allow. While the session
-    // handshakes, an error moves it to Failed (PeerRefused or Failed) with the alert waiting in the outgoing bytes.
-    // After the handshake the bytes wait for read(). Full when they would exceed kTlsMaxBufferedBytes (nothing taken);
-    // NotReady in Idle and Failed; Closed after close_notify either way.
+    // handshakes, an error moves it to Failed (PeerRefused, Failed or a client's EchRejected) with the alert waiting in
+    // the outgoing bytes. After the handshake the bytes wait for read(). Full when they would exceed
+    // kTlsMaxBufferedBytes (nothing taken); NotReady in Idle and Failed; Closed after close_notify either way.
     [[nodiscard]] TlsError receive(cont::ConstSpan<u8> bytes) noexcept;
 
     // The outgoing bytes waiting (records and alerts); take() moves up to out.size() of them into `out`.
@@ -472,19 +583,19 @@ public:
     // A new handshake of `context`'s role sending `transport_parameters` (1 to kQuicMaxTransportParameterBytes, the
     // encoded parameters of this connection: a server's include the connection IDs RFC 9000 section 7.3
     // authenticates), replacing any previous one. A client's ClientHello is pending at the Initial level when init()
-    // returns. Tickets as TlsSession::init, kept under this transport's binding. BadConfig for a context without an
-    // application protocol, missing or oversized parameters and a server with a store.
+    // returns. Tickets and ECH as TlsSession::init, tickets kept under this transport's binding. BadConfig for a
+    // context without an application protocol, missing or oversized parameters, and as TlsSession::init.
     [[nodiscard]] TlsError init(const TlsContext& context, cont::ConstSpan<u8> transport_parameters,
-                                TlsTicketStore* tickets = nullptr) noexcept;
+                                TlsTicketStore* tickets = nullptr, cont::ConstSpan<u8> ech_retry_configs = {}) noexcept;
     void                   clear() noexcept;
 
     // Takes all of `bytes`, the CRYPTO data received at `level` continuing what was provided there before (the
     // transport reassembles CRYPTO frames by offset), and runs the handshake, or after it the post-handshake messages
     // (a client's tickets), as far as they allow. Full when the level's unprocessed bytes would exceed receive_limit()
     // (nothing taken; the transport closes with CRYPTO_BUFFER_EXCEEDED). An error moves the handshake to Failed:
-    // PeerRefused or Failed, with alert_sent() and alert_level() telling the CRYPTO_ERROR to close with when an alert
-    // was sent, and none when the data came at a level the handshake did not expect (a PROTOCOL_VIOLATION). NotReady in
-    // Idle and Failed.
+    // PeerRefused, Failed or a client's EchRejected, with alert_sent() and alert_level() telling the CRYPTO_ERROR to
+    // close with when an alert was sent, and none when the data came at a level the handshake did not expect (a
+    // PROTOCOL_VIOLATION). NotReady in Idle and Failed.
     [[nodiscard]] TlsError provide(QuicLevel level, cont::ConstSpan<u8> bytes) noexcept;
 
     // The CRYPTO data waiting to be sent at `level` (at most kTlsMaxBufferedBytes across the levels; a flight beyond it

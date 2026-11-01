@@ -1,7 +1,7 @@
 # crd-crypto tests: the algorithm identifiers generated from the standards register and the signed crypto policy
 # generations (NET-STD), the provider interface against Project Wycheproof's vectors, the TLS 1.3 sessions, QUIC packet
-# protection against RFC 9001's and RFC 9369's sample packets, the TLS handshake over QUIC and QUIC's address-validation
-# tokens (NET.2).
+# protection against RFC 9001's and RFC 9369's sample packets, the TLS handshake over QUIC, QUIC's address-validation
+# tokens and Encrypted Client Hello (NET.2).
 add_executable(crd-crypto-tests
     test_kem_prf.cpp
     test_policy.cpp
@@ -11,6 +11,7 @@ add_executable(crd-crypto-tests
     test_quic_token.cpp
     test_register_ids.cpp
     test_tls.cpp
+    test_tls_ech.cpp
 )
 
 target_link_libraries(crd-crypto-tests PRIVATE
@@ -24,7 +25,8 @@ target_link_libraries(crd-crypto-tests PRIVATE
     Catch2::Catch2WithMain
     # The provider itself, for the ML-KEM encapsulation vectors only: their known answers fix the randomness m,
     # which only the provider's deterministic encapsulation takes (test_kem_prf.cpp); its TLS stack, to read back the
-    # lifetime of a ticket a client keeps and to run a server with a hostile certificate compressor (test_tls.cpp).
+    # lifetime of a ticket a client keeps and to run a server with a hostile certificate compressor (test_tls.cpp), and
+    # to ask whether the CPU has AES instructions, which the HPKE AEAD a client picks for ECH follows (test_tls_ech.cpp).
     crypto
     ssl
 )
@@ -49,7 +51,8 @@ endif()
 # corpora.
 add_subdirectory(fuzz)
 
-# The TLS 1.3 interoperability test against the pinned OpenSSL 3.5 (CRD_BUILD_TLS_VS_OPENSSL; Linux, local only).
+# The TLS 1.3 and ECH interoperability test against the pinned OpenSSL 4.0 (CRD_BUILD_TLS_VS_OPENSSL; Linux, local
+# only).
 # OpenSSL builds by its own Configure in a separate project, static, libraries only, with zstd (the pinned one the
 # engine uses) and zlib (the system's) for certificate compression (RFC 8879); crd-openssl-tls-peer links nothing else,
 # and the two peers meet only through tls_interop.py, which relays their records between two processes, or their CRYPTO
@@ -62,7 +65,8 @@ if(CRD_BUILD_TLS_VS_OPENSSL)
     find_package(ZLIB REQUIRED)
     cmake_host_system_information(RESULT openssl_jobs QUERY NUMBER_OF_LOGICAL_CORES)
     crd_pin(openssl_version packages openssl version)
-    set(openssl_prefix "${CMAKE_BINARY_DIR}/_deps/openssl-peer")
+    # The prefix names the version: a new pin builds afresh instead of keeping the stamps of the last one.
+    set(openssl_prefix "${CMAKE_BINARY_DIR}/_deps/openssl-peer-${openssl_version}")
     set(openssl_libraries "${openssl_prefix}/install/lib/libssl.a" "${openssl_prefix}/install/lib/libcrypto.a")
     ExternalProject_Add(crd-openssl-peer-build
         SOURCE_DIR "${openssl_SOURCE_DIR}"

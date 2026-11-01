@@ -8,7 +8,9 @@
 // 2 set the input is instead a compressed Certificate (RFC 8879) for the client's decoder: byte 1 its algorithm, three
 // bytes its claimed length, then the compressed bytes. With bit 3 set the session is instead a QUIC handshake (RFC
 // 9001; bit 0 as above) and the rest is CRYPTO data: pieces of a level byte (taken modulo three), a 16-bit length and
-// that many bytes, each provided at its level.
+// that many bytes, each provided at its level. With bit 4 set the session runs Encrypted Client Hello (RFC 9849): a
+// client given the rest as its ECHConfigList (a stream session and a QUIC handshake), or a server holding ECH keys fed
+// the rest as above.
 //
 // Oracles, none of them the provider's verdict on one call:
 //   * neither session is ever established: a server needs a Finished under keys derived from its own fresh share, and
@@ -24,6 +26,12 @@
 //     client never holds an Application secret and a server never its client's (each needs a Finished under keys
 //     from the handshake's own share); every secret it holds derives keys once; a sent alert names a level; and the
 //     transport parameters it received are at most what the input carried;
+//   * a client given an ECHConfigList: its context refuses exactly the lists that are not a 2-byte length holding the
+//     rest, tiled by ECHConfigs of a 2-byte version and length, one of version 0xfe0d (restated), at most
+//     kTlsMaxEchConfigListBytes; a session of an accepted context either refuses to start (BadConfig, nothing to send)
+//     or sends a ClientHello whose outer encrypted_client_hello carries a 32-byte encapsulation and which names
+//     another server than its own, and no byte it sends at the Initial level holds its server's name;
+//   * a server holding ECH keys reports no ECH (it needs a client's Finished) whatever hello reaches it;
 //   * a compressed Certificate decodes only for zstd or zlib, to a claim within [4, kTlsMaxCertificateBytes] that, for
 //     zlib, its bytes can reach (restated here: DEFLATE's 1032 bytes per byte between zlib's 6 framing bytes), and a
 //     refused claim leaves the output untouched; a zlib decoding carries the Adler-32 of its output (restated) and a
@@ -60,6 +68,9 @@ constexpr const char* kName    = "game.cerid.test";
 constexpr crd::containers::StringView kProtocols[] = {"cerid-game/1"};
 constexpr u8 kParameters[] = {0x04U, 0x04U, 0x80U, 0x10U, 0x00U, 0x00U}; // initial_max_data, as a transport sends it
 constexpr usize kQuicPiece = 3U; // a CRYPTO piece's level byte and 16-bit length
+constexpr const char* kPublicName = "front.cerid.test"; // the fuzz server's ECH public name
+constexpr u16         kEchVersion = 0xFE0DU;
+constexpr u8          kEchConfigIds[] = {1U, 2U};        // the fuzz server's current and previous ECH keys
 
 // The fuzz server's ticket key: the bytes 0x40, 0x41, ... 0x5F.
 struct TicketKey
@@ -84,16 +95,30 @@ constexpr u8    kUntouched      = 0xA5U; // what a refused decoding leaves in th
 constexpr usize kClaimLimit     = kTlsMaxCertificateBytes + 1U; // claims above the bound are cut to this
 constexpr usize kCompressedHead = 5U;    // mode, algorithm and the 24-bit claim
 
+// The fuzz server's ECH key `index`: the private key 0x60 + index, 0x61 + index, ...
+void make_ech_key(TlsEchKey& key, usize index) noexcept
+{
+    u8 secret[kTlsEchKeyBytes];
+    for (usize i = 0U; i < sizeof(secret); ++i)
+    {
+        secret[i] = static_cast<u8>(0x60U + index + i);
+    }
+    (void)key.init(ConstSpan<u8>(secret), kEchConfigIds[index], kPublicName, 32U);
+}
+
 // One server and one client context, built once: an Ed25519 credential from a fixed seed, every group, signature and
-// AEAD, the client pinning the server's key; and the same pair naming an application protocol, for QUIC.
+// AEAD, the client pinning the server's key; the same pair naming an application protocol, for QUIC; and a server
+// holding two ECH keys (a current and a previous one).
 struct Contexts
 {
     SigningKey    key;
     TlsCredential credential;
+    TlsEchKey     ech_keys[2];
     TlsContext    server;
     TlsContext    client;
     TlsContext    quic_server;
     TlsContext    quic_client;
+    TlsContext    ech_server;
     bool          ready = false;
 
     Contexts() noexcept
@@ -124,6 +149,20 @@ struct Contexts
         {
             return;
         }
+        make_ech_key(ech_keys[0], 0U);
+        make_ech_key(ech_keys[1], 1U);
+        const TlsEchKey* current[]  = {&ech_keys[0]};
+        const TlsEchKey* previous[] = {&ech_keys[1]};
+        config.application_protocols = {};
+        config.ech_keys              = current;
+        config.previous_ech_keys     = previous;
+        if (ech_server.init(config) != TlsError::None)
+        {
+            return;
+        }
+        config.ech_keys          = {};
+        config.previous_ech_keys = {};
+        config.application_protocols = kProtocols;
         const KeyId pin    = credential.key_id();
         config.role        = TlsRole::Client;
         config.credential  = nullptr;
@@ -265,6 +304,150 @@ void feed_quic(QuicHandshake& handshake, bool client, ConstSpan<u8> data) noexce
     }
 }
 
+// Whether an ECHConfigList has RFC 9849 section 4's outer shape, restated: a 2-byte length holding exactly the rest,
+// tiled by ECHConfigs of a 2-byte version and a 2-byte length, one of them of version 0xfe0d, within the bound.
+bool ech_list_shaped(ConstSpan<u8> list) noexcept
+{
+    if (list.size() < 2U || list.size() > kTlsMaxEchConfigListBytes ||
+        ((usize{list[0]} << 8U) | list[1]) != list.size() - 2U || list.size() == 2U)
+    {
+        return false;
+    }
+    bool current = false;
+    for (usize at = 2U; at < list.size();)
+    {
+        if (list.size() - at < 4U)
+        {
+            return false;
+        }
+        const usize length = (usize{list[at + 2U]} << 8U) | list[at + 3U];
+        if (length > list.size() - at - 4U)
+        {
+            return false;
+        }
+        current = current || ((u16{list[at]} << 8U) | list[at + 1U]) == kEchVersion;
+        at += 4U + length;
+    }
+    return current;
+}
+
+bool holds(ConstSpan<u8> bytes, const char* text) noexcept
+{
+    const usize length = std::strlen(text);
+    for (usize at = 0U; at + length <= bytes.size(); ++at)
+    {
+        if (std::memcmp(bytes.data() + at, text, length) == 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// A ClientHello message (handshake header first) read for ECH: whether it names `name` and carries an outer
+// encrypted_client_hello with a 32-byte encapsulation, restated from RFC 9846 section 4.1 and RFC 9849 section 5.
+bool hello_offers_ech(ConstSpan<u8> message, bool& names) noexcept
+{
+    names = false;
+    if (message.size() < 4U + 2U + 32U + 1U || message[0] != 1U)
+    {
+        return false;
+    }
+    usize at = 4U + 2U + 32U;
+    at += 1U + message[at];
+    if (at + 2U > message.size())
+    {
+        return false;
+    }
+    at += 2U + ((usize{message[at]} << 8U) | message[at + 1U]);
+    if (at + 1U > message.size())
+    {
+        return false;
+    }
+    at += 1U + message[at] + 2U;
+    bool offered = false;
+    while (at + 4U <= message.size())
+    {
+        const u16   type   = static_cast<u16>((message[at] << 8U) | message[at + 1U]);
+        const usize length = (usize{message[at + 2U]} << 8U) | message[at + 3U];
+        const u8*   body   = message.data() + at + 4U;
+        if (at + 4U + length > message.size())
+        {
+            return false;
+        }
+        if (type == 0U && length >= 5U)
+        {
+            const usize size = (usize{body[3]} << 8U) | body[4];
+            names            = size == std::strlen(kName) && std::memcmp(body + 5U, kName, size) == 0;
+        }
+        if (type == kEchVersion && length >= 8U)
+        {
+            offered = body[0] == 0U && ((usize{body[6]} << 8U) | body[7]) == 32U;
+        }
+        at += 4U + length;
+    }
+    return offered;
+}
+
+// A client given `list` as its ECHConfigList, over records and over QUIC.
+void offer_ech(ConstSpan<u8> list) noexcept
+{
+    const Contexts& shared = contexts();
+    const KeyId     pin    = shared.credential.key_id();
+    TlsConfig       config;
+    config.role        = TlsRole::Client;
+    config.groups      = kGroups;
+    config.signatures  = kSignatures;
+    config.aeads       = kAeads;
+    config.pinned      = ConstSpan<KeyId>(&pin, 1U);
+    config.server_name = kName;
+    config.ech_configs = list;
+    TlsContext     context;
+    const TlsError made = context.init(config);
+    CRD_FUZZ_REQUIRE((made == TlsError::None) == ech_list_shaped(list));
+    CRD_FUZZ_REQUIRE(made == TlsError::None || made == TlsError::BadConfig);
+    if (made != TlsError::None)
+    {
+        return;
+    }
+    TlsSession     session;
+    const TlsError started = session.init(context);
+    CRD_FUZZ_REQUIRE(started == TlsError::None || started == TlsError::BadConfig);
+    if (started == TlsError::BadConfig)
+    {
+        CRD_FUZZ_REQUIRE(session.state() == TlsState::Idle && session.pending() == 0U);
+    }
+    else
+    {
+        u8    flight[kMaxFlight];
+        usize written = 0U;
+        CRD_FUZZ_REQUIRE(session.pending() <= kMaxFlight);
+        CRD_FUZZ_REQUIRE(session.take(Span<u8>(flight), written) == TlsError::None);
+        CRD_FUZZ_REQUIRE(written > 9U && flight[0] == 22U);
+        bool names = true;
+        CRD_FUZZ_REQUIRE(hello_offers_ech(ConstSpan<u8>(flight + 5U, written - 5U), names));
+        CRD_FUZZ_REQUIRE(!names && !holds(ConstSpan<u8>(flight, written), kName));
+    }
+
+    config.application_protocols = kProtocols;
+    CRD_FUZZ_REQUIRE(context.init(config) == TlsError::None);
+    QuicHandshake  handshake;
+    const TlsError quic = handshake.init(context, ConstSpan<u8>(kParameters));
+    CRD_FUZZ_REQUIRE(quic == started);
+    if (quic == TlsError::BadConfig)
+    {
+        CRD_FUZZ_REQUIRE(handshake.state() == TlsState::Idle && handshake.pending(QuicLevel::Initial) == 0U);
+        return;
+    }
+    u8    initial[kMaxFlight];
+    usize written = 0U;
+    CRD_FUZZ_REQUIRE(handshake.pending(QuicLevel::Initial) <= kMaxFlight);
+    CRD_FUZZ_REQUIRE(handshake.take(QuicLevel::Initial, Span<u8>(initial), written) == TlsError::None);
+    bool names = true;
+    CRD_FUZZ_REQUIRE(hello_offers_ech(ConstSpan<u8>(initial, written), names));
+    CRD_FUZZ_REQUIRE(!names && !holds(ConstSpan<u8>(initial, written), kName));
+}
+
 // Adler-32 (RFC 1950 section 8.2), restated.
 crd::u32 adler32_of(ConstSpan<u8> bytes) noexcept
 {
@@ -338,6 +521,19 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     Contexts& shared = contexts();
     CRD_FUZZ_REQUIRE(shared.ready);
     const bool client = (data[0] & 1U) != 0U;
+    if ((data[0] & 16U) != 0U && client)
+    {
+        offer_ech(ConstSpan<u8>(data + 2U, size - 2U));
+        return 0;
+    }
+    if ((data[0] & 16U) != 0U)
+    {
+        TlsSession session;
+        CRD_FUZZ_REQUIRE(session.init(shared.ech_server) == TlsError::None);
+        feed(session, ConstSpan<u8>(data + 2U, size - 2U), data[1]);
+        CRD_FUZZ_REQUIRE(session.ech() == TlsEch::None && session.ech_retry_configs().empty());
+        return 0;
+    }
     if ((data[0] & 8U) != 0U)
     {
         QuicHandshake handshake;
@@ -418,8 +614,10 @@ void protocol_and_parameters(Writer& out) noexcept
 // A TLS 1.3 ClientHello for the fuzz server: X25519 with RFC 7748's Alice's public key, Ed25519, the server's name and
 // TLS_AES_128_GCM_SHA256, in one handshake record (RFC 9846 section 4.1.2). With `ticket` it offers a ticket last
 // (psk_dhe_ke): an identity led by the server's ticket key name, a zero salt and a sealed state no key opens, and a
-// binder of the right length (RFC 9846 section 4.2.11).
-void client_hello(Writer& out, u8 mode, u8 chunk, bool ticket = false, bool quic = false) noexcept
+// binder of the right length (RFC 9846 section 4.2.11). It names `server`, and with `ech` carries it as its
+// encrypted_client_hello after the name (RFC 9849 section 5).
+void client_hello(Writer& out, u8 mode, u8 chunk, bool ticket = false, bool quic = false, const char* server = kName,
+                  ConstSpan<u8> ech = {}) noexcept
 {
     constexpr u8 alice[32] = {0x85U, 0x20U, 0xF0U, 0x09U, 0x89U, 0x30U, 0xA7U, 0x54U, 0x74U, 0x8BU, 0x7DU,
                                0xDCU, 0xB4U, 0x3EU, 0xF7U, 0x5AU, 0x0DU, 0xBFU, 0x3AU, 0x0DU, 0x26U, 0x38U,
@@ -447,11 +645,17 @@ void client_hello(Writer& out, u8 mode, u8 chunk, bool ticket = false, bool quic
     const usize extensions = out.size;
     out.put16(0U);
     out.put16(0x0000U); // server_name
-    out.put16(std::strlen(kName) + 5U);
-    out.put16(std::strlen(kName) + 3U);
+    out.put16(std::strlen(server) + 5U);
+    out.put16(std::strlen(server) + 3U);
     out.put(0U); // host_name
-    out.put16(std::strlen(kName));
-    out.put(reinterpret_cast<const u8*>(kName), std::strlen(kName));
+    out.put16(std::strlen(server));
+    out.put(reinterpret_cast<const u8*>(server), std::strlen(server));
+    if (!ech.empty())
+    {
+        out.put16(kEchVersion); // encrypted_client_hello
+        out.put16(ech.size());
+        out.put(ech.data(), ech.size());
+    }
     out.put16(0x000AU); // supported_groups: x25519
     out.put16(4U);
     out.put16(2U);
@@ -695,4 +899,75 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     quic("quic-client-key-update", 1U, {ConstSpan<u8>(key_update)}, 0U);
     const u8 overlong[] = {8U, 0U, 0U, 0xFFU, 0xFFU, 1U, 0U, 0U, 9U};
     sink.add("quic-server-overlong-piece", overlong, sizeof(overlong));
+
+    // ECH clients: the fuzz server's list, the same after a configuration of another version, its configuration with
+    // a KEM the provider lacks (ML-KEM-768's HPKE identifier), with a mandatory extension, with a public name an IPv4
+    // parser reads as an address, cut short, and nothing listed.
+    TlsEchKey ech_keys[2];
+    make_ech_key(ech_keys[0], 0U);
+    make_ech_key(ech_keys[1], 1U);
+    const ConstSpan<u8> config = ech_keys[0].config();
+    const auto          list   = [&sink](const char* name, std::initializer_list<ConstSpan<u8>> configs) {
+        Writer seed;
+        seed.put(17U);
+        seed.put(0U);
+        const usize start = seed.size;
+        seed.put16(0U);
+        for (const ConstSpan<u8> entry : configs)
+        {
+            seed.put(entry.data(), entry.size());
+        }
+        seed.patch16(start);
+        sink.add(name, seed.bytes, seed.size);
+    };
+    list("ech-client-list", {config});
+    const u8 other_version[] = {0xFFU, 0x01U, 0x00U, 0x02U, 0xAAU, 0xBBU};
+    list("ech-client-list-other-version-first", {ConstSpan<u8>(other_version), config});
+    u8 changed[kTlsMaxEchConfigBytes + 4U];
+    std::memcpy(changed, config.data(), config.size());
+    changed[6] = 0x41U; // kem_id 0x0041
+    list("ech-client-list-unusable-kem", {ConstSpan<u8>(changed, config.size())});
+    std::memcpy(changed, config.data(), config.size());
+    changed[3] = static_cast<u8>(changed[3] + 4U);
+    changed[config.size() - 1U] = 4U; // extensions: one of 4 bytes, a mandatory type with nothing in it
+    changed[config.size() + 0U] = 0xFAU;
+    changed[config.size() + 1U] = 0xCEU;
+    changed[config.size() + 2U] = 0x00U;
+    changed[config.size() + 3U] = 0x00U;
+    list("ech-client-list-mandatory-extension", {ConstSpan<u8>(changed, config.size() + 4U)});
+    TlsEchKey   numeric;
+    u8          numeric_secret[kTlsEchKeyBytes] = {7U};
+    const char* address = "front.cerid.123";
+    if (numeric.init(ConstSpan<u8>(numeric_secret), 9U, "front.cerid.abc", 32U) == TlsError::None)
+    {
+        std::memcpy(changed, numeric.config().data(), numeric.config().size());
+        std::memcpy(changed + 53U, address, std::strlen(address)); // the same length: "abc" becomes "123"
+        list("ech-client-list-ipv4-public-name", {ConstSpan<u8>(changed, numeric.config().size())});
+    }
+    list("ech-client-list-cut-short", {config.first(config.size() - 3U)});
+    list("ech-client-list-empty", {});
+
+    // ECH servers: outer hellos naming the public name with an encrypted_client_hello the server cannot open (its
+    // current config_id, an unknown one, a previous key's), one of the inner type, and one whose lengths lie.
+    u8 offer[1U + 4U + 1U + 2U + 32U + 2U + 160U] = {0U, 0x00U, 0x01U, 0x00U, 0x01U, kEchConfigIds[0], 0x00U, 32U};
+    for (usize i = 8U; i < sizeof(offer); ++i)
+    {
+        offer[i] = static_cast<u8>(0x11U * i);
+    }
+    offer[8U + 32U]      = 0U;
+    offer[8U + 32U + 1U] = 160U;
+    const auto outer = [&sink](const char* name, ConstSpan<u8> ech) {
+        Writer seed;
+        client_hello(seed, 16U, 0U, false, false, kPublicName, ech);
+        sink.add(name, seed.bytes, seed.size);
+    };
+    outer("ech-server-outer-hello", ConstSpan<u8>(offer));
+    offer[5] = 0x99U;
+    outer("ech-server-outer-hello-unknown-config", ConstSpan<u8>(offer));
+    offer[5] = kEchConfigIds[1];
+    outer("ech-server-outer-hello-previous-config", ConstSpan<u8>(offer));
+    const u8 inner[] = {1U};
+    outer("ech-server-inner-type-in-outer", ConstSpan<u8>(inner));
+    offer[7] = 0xFFU;
+    outer("ech-server-ech-lengths-lie", ConstSpan<u8>(offer));
 }
