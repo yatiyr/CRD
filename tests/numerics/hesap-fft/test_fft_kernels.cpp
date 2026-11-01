@@ -799,9 +799,33 @@ template <typename T> void check_own_plans_every_level()
     crd::memory::TlsfAllocator alloc(usize{1} << 30);
     const auto levels = fft::fft_kernel_levels();
     const fft::FftTypeKernels<T>& portable = fft::kernels_of<T>(*levels[0].table);
-    for (u32 lg = 10; lg <= 20; ++lg)
+    // 1K to 1M, and each larger size of the table at which a level the host runs plans other than canonically
+    // (avx512's f32 2M and 4M): the walk's cost past 1M is paid only where a row changes the plan.
+    u32 last = 20;
+    for (const fft::detail::FftLevelPlan& row : fft::detail::kFftLevelPlans)
+    {
+        last = row.element_bytes == sizeof(T) && row.log2 > last ? row.log2 : last;
+    }
+    const auto off_canonical_here = [&](usize n)
+    {
+        for (const KernelLevel<FftKernels>& level : levels)
+        {
+            if (kernel_level_runs_here(level) &&
+                fft::detail::level_forward<T>(n, level.level, DeterminismMode::Default) !=
+                    fft::detail::planned_forward<T>(n))
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (u32 lg = 10; lg <= last; ++lg)
     {
         const usize n = usize{1} << lg;
+        if (lg > 20 && !off_canonical_here(n))
+        {
+            continue;
+        }
         Buffer<T> input(&alloc, n, 0);
         fill_lcg(input.values(), 2 * n, 0xC0DEULL + n);
         const auto run = [&](const fft::FftTypeKernels<T>& k, const fft::FftPlan<T>& plan)
