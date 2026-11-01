@@ -71,7 +71,8 @@ census is bound to the pinned digest (`CENSUS_SHA256`): a new pin is refused unt
 found on `PATH` or in the Windows SDK's Debugging Tools. `cdb`'s exit is the debugger's, so the install's outcome is
 its layout; the leg passes only when the layout is complete and a call passed a size of zero or less.
 `host-check.yml` runs it as the dispatch-only experiment `vulkan-sdk-installer-emitter` on a fresh `windows-2025`
-machine (artifact `host-check-installer-emitter`, outside the arms' judge pattern).
+machine (artifact `host-check-installer-emitter`, outside the arms' judge pattern). Dispatched as run
+41312886689 at 4529fb0d.
 
 `test_vulkan_sdk_installer_trace_names_the_qfont_warnings_caller` holds the entry-point reader (and a non-PE refusal),
 the debugger lookup, the command and commands file, the parse (sizes 16, -1, 0, -2; the census caller, one outside
