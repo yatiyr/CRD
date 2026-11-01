@@ -10,11 +10,12 @@
 //     fit u16 (numpy's own rule). fortran_order=True is rejected with
 //     Unsupported (C-order contract), big-endian descr likewise.
 //   - .npz read/write   — a zip container of .npy members (numpy convention:
-//     key 'a' → member 'a.npy'). WRITE emits STORED members — byte-for-byte
-//     what np.savez does. READ accepts STORED and DEFLATE members
-//     (np.savez_compressed) via crd-compression's exact-size RFC 1951
-//     inflate; CRC-32 is verified on every member read. No zip64 (Unsupported past
-//     4 GiB — np.savez has the same container limits).
+//     key 'a' → member 'a.npy'), through crd-compression's ZIP container
+//     (OWN.1). WRITE emits STORED members — byte-for-byte what np.savez
+//     does — in the classic format (Unsupported past its 4 GiB fields).
+//     READ accepts STORED and DEFLATE members (np.savez_compressed), classic
+//     or Zip64 (numpy writes Zip64 past 4 GiB); CRC-32 is verified on every
+//     member read.
 //   - safetensors read/write — the huggingface format: u64-LE header length,
 //     a JSON header {"name":{"dtype","shape","data_offsets"},...} with
 //     optional "__metadata__" (string→string), then the raw byte buffer.
@@ -30,7 +31,7 @@
 // TensorStatus and is noexcept — file errors are status codes, never
 // exceptions. Mapping: BadInput = malformed bytes (magic/CRC/truncation/
 // JSON) or a filesystem failure; Unsupported = legal-but-out-of-scope
-// (fortran_order, big-endian, zip64, unknown/unsupported dtype);
+// (fortran_order, big-endian, an encrypted or spanned zip, unknown/unsupported dtype);
 // RankOverflow = rank > kMaxRank; ShapeMismatch = typed read against a
 // different dtype/shape; NotContiguous = typed write of a strided view;
 // AllocFailed = allocator refusal.
@@ -49,9 +50,8 @@
 
 #include "detail/io_bytes.hpp"
 
-#include <crd/compression/deflate.hpp>
+#include <crd/compression/zip.hpp>
 #include <crd/containers/array.hpp>
-#include <crd/containers/checksum.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
@@ -1128,8 +1128,33 @@ template <typename T>
 // .npz — zip container of .npy members
 // =======================================================================
 
-// Writer: STORED members (exactly np.savez), deterministic bytes — fixed
-// 1980-01-01 DOS stamp, no extra fields, members in add() order.
+namespace iodetail
+{
+
+// The tensor status of a ZIP container status: a structure, size or CRC-32 fault is BadInput.
+[[nodiscard]] inline TensorStatus zip_status(crd::compression::ZipError e) noexcept
+{
+    if (e == crd::compression::ZipError::Ok)
+    {
+        return TensorStatus::Ok;
+    }
+    if (e == crd::compression::ZipError::Unsupported)
+    {
+        return TensorStatus::Unsupported;
+    }
+    if (e == crd::compression::ZipError::OutOfMemory)
+    {
+        return TensorStatus::AllocFailed;
+    }
+    return TensorStatus::BadInput;
+}
+
+} // namespace iodetail
+
+// Writer: STORED members (exactly np.savez) through crd-compression's ZIP
+// writer: deterministic bytes (the fixed 1980-01-01 DOS stamp, no extra
+// fields), members in add() order. The members are encoded as they are
+// added and written at finish() into one allocation of the archive's size.
 class NpzWriter
 {
 public:
@@ -1152,8 +1177,7 @@ public:
         }
         m.name.append(name.data(), name.size());
         m.name.append(".npy");
-        m_members.push_back(static_cast<Member&&>(m));
-        return TensorStatus::Ok;
+        return m_members.try_push_back(static_cast<Member&&>(m)) ? TensorStatus::Ok : TensorStatus::AllocFailed;
     }
 
     template <typename T>
@@ -1168,88 +1192,26 @@ public:
         return add(name, io_dtype_of<T>(), view.shape(), payload);
     }
 
+    // The archive of every member added into `out`; Unsupported past the
+    // classic format's fields (np.savez's own limits), `out` unchanged.
     [[nodiscard]] TensorStatus finish(crd::containers::Array<crd::u8>& out) noexcept
     {
-        // exact size: locals (30 + name + data) + centrals (46 + name) + EOCD 22
-        crd::u64 total = 22U;
+        crd::usize name_bytes = 0;
+        crd::usize data_bytes = 0;
         for (const Member& m : m_members)
         {
-            total += 30U + m.name.size() + m.npy_bytes.size() + 46U + m.name.size();
+            name_bytes += m.name.size();
+            data_bytes += m.npy_bytes.size();
         }
-        if (total > 0xFFFFFFFFULL || m_members.size() > 0xFFFFU)
+        crd::compression::ZipWriter zip(m_alloc);
+        crd::compression::ZipError st = zip.reserve(m_members.size(), name_bytes, data_bytes);
+        for (crd::usize i = 0; i < m_members.size() && st == crd::compression::ZipError::Ok; ++i)
         {
-            return TensorStatus::Unsupported; // no zip64 (matches np.savez limits)
+            const Member& m = m_members[i];
+            st = zip.add(crd::containers::StringView{m.name.data(), m.name.size()},
+                         crd::containers::as_const_span(m.npy_bytes), crd::compression::ZipMethod::Stored);
         }
-        crd::containers::Array<crd::u8> file(m_alloc);
-        if (!file.try_reserve(static_cast<crd::usize>(total)))
-        {
-            return TensorStatus::AllocFailed;
-        }
-        file.resize_uninitialized(static_cast<crd::usize>(total));
-        crd::u8* base = file.data();
-        crd::usize w = 0;
-        // local headers + data
-        for (Member& m : m_members)
-        {
-            m.crc = crd::containers::crc32(crd::containers::as_const_span(m.npy_bytes));
-            m.local_offset = static_cast<crd::u32>(w);
-            iodetail::wr_u32(base + w, 0x04034B50U);
-            iodetail::wr_u16(base + w + 4U, 20U);  // version needed: 2.0
-            iodetail::wr_u16(base + w + 6U, 0U);   // flags
-            iodetail::wr_u16(base + w + 8U, 0U);   // method: STORED
-            iodetail::wr_u16(base + w + 10U, 0U);  // DOS time 00:00:00
-            iodetail::wr_u16(base + w + 12U, 0x21U); // DOS date 1980-01-01
-            iodetail::wr_u32(base + w + 14U, m.crc);
-            iodetail::wr_u32(base + w + 18U, static_cast<crd::u32>(m.npy_bytes.size()));
-            iodetail::wr_u32(base + w + 22U, static_cast<crd::u32>(m.npy_bytes.size()));
-            iodetail::wr_u16(base + w + 26U, static_cast<crd::u16>(m.name.size()));
-            iodetail::wr_u16(base + w + 28U, 0U); // extra len
-            w += 30U;
-            std::memcpy(base + w, m.name.data(), m.name.size());
-            w += m.name.size();
-            if (m.npy_bytes.size() > 0U)
-            {
-                std::memcpy(base + w, m.npy_bytes.data(), m.npy_bytes.size());
-            }
-            w += m.npy_bytes.size();
-        }
-        // central directory
-        const crd::usize cd_start = w;
-        for (const Member& m : m_members)
-        {
-            iodetail::wr_u32(base + w, 0x02014B50U);
-            iodetail::wr_u16(base + w + 4U, 20U); // version made by
-            iodetail::wr_u16(base + w + 6U, 20U); // version needed
-            iodetail::wr_u16(base + w + 8U, 0U);  // flags
-            iodetail::wr_u16(base + w + 10U, 0U); // method
-            iodetail::wr_u16(base + w + 12U, 0U); // time
-            iodetail::wr_u16(base + w + 14U, 0x21U);
-            iodetail::wr_u32(base + w + 16U, m.crc);
-            iodetail::wr_u32(base + w + 20U, static_cast<crd::u32>(m.npy_bytes.size()));
-            iodetail::wr_u32(base + w + 24U, static_cast<crd::u32>(m.npy_bytes.size()));
-            iodetail::wr_u16(base + w + 28U, static_cast<crd::u16>(m.name.size()));
-            iodetail::wr_u16(base + w + 30U, 0U); // extra
-            iodetail::wr_u16(base + w + 32U, 0U); // comment
-            iodetail::wr_u16(base + w + 34U, 0U); // disk
-            iodetail::wr_u16(base + w + 36U, 0U); // internal attrs
-            iodetail::wr_u32(base + w + 38U, 0U); // external attrs
-            iodetail::wr_u32(base + w + 42U, m.local_offset);
-            w += 46U;
-            std::memcpy(base + w, m.name.data(), m.name.size());
-            w += m.name.size();
-        }
-        // EOCD
-        iodetail::wr_u32(base + w, 0x06054B50U);
-        iodetail::wr_u16(base + w + 4U, 0U);
-        iodetail::wr_u16(base + w + 6U, 0U);
-        iodetail::wr_u16(base + w + 8U, static_cast<crd::u16>(m_members.size()));
-        iodetail::wr_u16(base + w + 10U, static_cast<crd::u16>(m_members.size()));
-        iodetail::wr_u32(base + w + 12U, static_cast<crd::u32>(w - cd_start));
-        iodetail::wr_u32(base + w + 16U, static_cast<crd::u32>(cd_start));
-        iodetail::wr_u16(base + w + 20U, 0U);
-        CRD_ASSERT_MSG(w + 22U == file.size(), "NpzWriter::finish: size accounting mismatch");
-        out = static_cast<crd::containers::Array<crd::u8>&&>(file);
-        return TensorStatus::Ok;
+        return iodetail::zip_status(st == crd::compression::ZipError::Ok ? zip.finish(out) : st);
     }
 
 private:
@@ -1260,181 +1222,50 @@ private:
         Member& operator=(Member&&) noexcept = default;
         crd::containers::String name;
         crd::containers::Array<crd::u8> npy_bytes;
-        crd::u32 crc = 0;
-        crd::u32 local_offset = 0;
     };
 
     crd::memory::IAllocator* m_alloc;
     crd::containers::Array<Member> m_members;
 };
 
-// Reader: STORED + DEFLATE members, CRC-verified. parse() decompresses every
-// DEFLATE member once into an owned backing buffer (reserved up front so
-// entry offsets stay stable — the reserve-before-spans rule); STORED members
-// stay zero-copy views into the source. `bytes` must outlive reads.
+// Reader: STORED and DEFLATE members (np.savez and np.savez_compressed),
+// classic or Zip64, through crd-compression's ZIP reader. parse() checks
+// every member's CRC-32: a STORED member stays a zero-copy view into the
+// source, and every DEFLATE member is decoded once into one owned backing
+// buffer reserved up front (members hold offsets into it, never spans —
+// the reserve-before-spans rule). `bytes` must outlive reads and names.
 class NpzReader
 {
 public:
-    explicit NpzReader(crd::memory::IAllocator* alloc) noexcept
-        : m_alloc(alloc), m_entries(alloc), m_backing(alloc)
-    {
-    }
+    explicit NpzReader(crd::memory::IAllocator* alloc) noexcept : m_zip(alloc), m_members(alloc), m_backing(alloc) {}
 
     [[nodiscard]] TensorStatus parse(crd::containers::ConstSpan<crd::u8> bytes) noexcept
     {
         m_src = bytes;
-        m_entries.clear();
+        m_members.clear();
         m_backing.clear();
-        // locate EOCD: scan backward over the (comment-bearing) tail
-        if (bytes.size() < 22U)
+        const TensorStatus st = read_members();
+        if (st != TensorStatus::Ok)
         {
-            return TensorStatus::BadInput;
+            m_members.clear();
+            m_backing.clear();
         }
-        crd::usize eocd = bytes.size(); // sentinel: not found
-        const crd::usize scan_end = bytes.size() - 22U;
-        const crd::usize scan_lo = bytes.size() > 22U + 0xFFFFU ? bytes.size() - 22U - 0xFFFFU : 0U;
-        for (crd::usize i = scan_end + 1U; i-- > scan_lo;)
-        {
-            if (iodetail::rd_u32(bytes.data() + i) == 0x06054B50U)
-            {
-                eocd = i;
-                break;
-            }
-        }
-        if (eocd == bytes.size())
-        {
-            return TensorStatus::BadInput;
-        }
-        const crd::u16 count = iodetail::rd_u16(bytes.data() + eocd + 10U);
-        const crd::u32 cd_size = iodetail::rd_u32(bytes.data() + eocd + 12U);
-        const crd::u32 cd_off = iodetail::rd_u32(bytes.data() + eocd + 16U);
-        if (count == 0xFFFFU || cd_size == 0xFFFFFFFFU || cd_off == 0xFFFFFFFFU)
-        {
-            return TensorStatus::Unsupported; // zip64
-        }
-        if (static_cast<crd::u64>(cd_off) + cd_size > eocd)
-        {
-            return TensorStatus::BadInput;
-        }
-        if (!m_entries.try_reserve(count))
-        {
-            return TensorStatus::AllocFailed;
-        }
-        // pass 1: central directory -> entries (+ total inflated size)
-        crd::usize p = cd_off;
-        crd::u64 inflated_total = 0;
-        for (crd::u32 e = 0; e < count; ++e)
-        {
-            if (p + 46U > static_cast<crd::usize>(cd_off) + cd_size ||
-                iodetail::rd_u32(bytes.data() + p) != 0x02014B50U)
-            {
-                return TensorStatus::BadInput;
-            }
-            Entry ent(m_alloc);
-            const crd::u16 method = iodetail::rd_u16(bytes.data() + p + 10U);
-            ent.crc = iodetail::rd_u32(bytes.data() + p + 16U);
-            ent.comp_size = iodetail::rd_u32(bytes.data() + p + 20U);
-            ent.uncomp_size = iodetail::rd_u32(bytes.data() + p + 24U);
-            const crd::u16 name_len = iodetail::rd_u16(bytes.data() + p + 28U);
-            const crd::u16 extra_len = iodetail::rd_u16(bytes.data() + p + 30U);
-            const crd::u16 comment_len = iodetail::rd_u16(bytes.data() + p + 32U);
-            ent.local_offset = iodetail::rd_u32(bytes.data() + p + 42U);
-            if (ent.comp_size == 0xFFFFFFFFU || ent.uncomp_size == 0xFFFFFFFFU || ent.local_offset == 0xFFFFFFFFU)
-            {
-                return TensorStatus::Unsupported; // zip64
-            }
-            if (method != 0U && method != 8U)
-            {
-                return TensorStatus::Unsupported;
-            }
-            ent.deflated = method == 8U;
-            // a member larger than the archive, or a claim larger than its compressed bytes can hold, reserves nothing
-            if (ent.comp_size > bytes.size() ||
-                (ent.deflated && ent.uncomp_size > crd::compression::deflate_max_inflated_size(ent.comp_size)))
-            {
-                return TensorStatus::BadInput;
-            }
-            if (p + 46U + name_len > static_cast<crd::usize>(cd_off) + cd_size)
-            {
-                return TensorStatus::BadInput;
-            }
-            if (!ent.name.try_reserve(name_len))
-            {
-                return TensorStatus::AllocFailed;
-            }
-            ent.name.append(reinterpret_cast<const char*>(bytes.data() + p + 46U), name_len);
-            if (ent.deflated)
-            {
-                inflated_total += ent.uncomp_size;
-            }
-            m_entries.push_back(static_cast<Entry&&>(ent));
-            p += 46U + static_cast<crd::usize>(name_len) + extra_len + comment_len;
-        }
-        // pass 2: resolve data offsets via local headers; inflate DEFLATE
-        // members into the pre-reserved backing (offsets, never raw spans)
-        if (!m_backing.try_reserve(static_cast<crd::usize>(inflated_total)))
-        {
-            return TensorStatus::AllocFailed;
-        }
-        for (Entry& ent : m_entries)
-        {
-            const crd::usize lp = ent.local_offset;
-            if (lp + 30U > bytes.size() || iodetail::rd_u32(bytes.data() + lp) != 0x04034B50U)
-            {
-                return TensorStatus::BadInput;
-            }
-            const crd::u16 lname = iodetail::rd_u16(bytes.data() + lp + 26U);
-            const crd::u16 lextra = iodetail::rd_u16(bytes.data() + lp + 28U);
-            const crd::u64 data_off = static_cast<crd::u64>(lp) + 30U + lname + lextra;
-            if (data_off + ent.comp_size > bytes.size())
-            {
-                return TensorStatus::BadInput;
-            }
-            if (!ent.deflated)
-            {
-                if (ent.comp_size != ent.uncomp_size)
-                {
-                    return TensorStatus::BadInput;
-                }
-                ent.src_offset = data_off;
-                ent.in_backing = false;
-            }
-            else
-            {
-                const crd::usize dst_off = m_backing.size();
-                m_backing.resize_uninitialized(dst_off + ent.uncomp_size); // within the reserve
-                if (!crd::compression::inflate_raw(bytes.subspan(static_cast<crd::usize>(data_off), ent.comp_size),
-                                                   {m_backing.data() + dst_off, ent.uncomp_size}))
-                {
-                    return TensorStatus::BadInput;
-                }
-                ent.src_offset = dst_off;
-                ent.in_backing = true;
-            }
-            // CRC-32 gate on every member (bit-exactness doctrine)
-            const crd::u8* payload = ent.in_backing ? m_backing.data() + ent.src_offset
-                                                    : m_src.data() + ent.src_offset;
-            if (crd::containers::crc32({payload, ent.uncomp_size}) != ent.crc)
-            {
-                return TensorStatus::BadInput;
-            }
-        }
-        return TensorStatus::Ok;
+        return st;
     }
 
-    [[nodiscard]] crd::usize count() const noexcept { return m_entries.size(); }
+    [[nodiscard]] crd::usize count() const noexcept { return m_members.size(); }
 
     // Full zip member name ("a.npy").
     [[nodiscard]] crd::containers::StringView name(crd::usize i) const noexcept
     {
-        CRD_ASSERT_MSG(i < m_entries.size(), "NpzReader::name: index out of range");
-        return crd::containers::StringView{m_entries[i].name.data(), m_entries[i].name.size()};
+        CRD_ASSERT_MSG(i < m_members.size(), "NpzReader::name: index out of range");
+        return m_zip.entry(i).name;
     }
 
     // Find by numpy key; matches with or without the ".npy" suffix. -1 = absent.
     [[nodiscard]] crd::i64 find(crd::containers::StringView key) const noexcept
     {
-        for (crd::usize i = 0; i < m_entries.size(); ++i)
+        for (crd::usize i = 0; i < m_members.size(); ++i)
         {
             const crd::containers::StringView n = name(i);
             if (n == key)
@@ -1453,13 +1284,13 @@ public:
     // bytes or this reader's backing — both must stay alive while used.
     [[nodiscard]] TensorStatus npy(crd::usize i, NpyView& out) const noexcept
     {
-        if (i >= m_entries.size())
+        if (i >= m_members.size())
         {
             return TensorStatus::BadInput;
         }
-        const Entry& ent = m_entries[i];
-        const crd::u8* payload = ent.in_backing ? m_backing.data() + ent.src_offset : m_src.data() + ent.src_offset;
-        return npy_parse({payload, ent.uncomp_size}, out);
+        const Member& m = m_members[i];
+        const crd::u8* payload = m.inflated ? m_backing.data() + m.offset : m_src.data() + m.offset;
+        return npy_parse({payload, static_cast<crd::usize>(m_zip.entry(i).uncompressed_size)}, out);
     }
 
     template <typename T>
@@ -1475,24 +1306,69 @@ public:
     }
 
 private:
-    struct Entry
+    struct Member
     {
-        explicit Entry(crd::memory::IAllocator* a) : name(a) {}
-        Entry(Entry&&) noexcept = default;
-        Entry& operator=(Entry&&) noexcept = default;
-        crd::containers::String name;
-        crd::u64 src_offset = 0; // into m_src (stored) or m_backing (deflated)
-        crd::u32 comp_size = 0;
-        crd::u32 uncomp_size = 0;
-        crd::u32 crc = 0;
-        crd::u32 local_offset = 0;
-        bool deflated = false;
-        bool in_backing = false;
+        crd::u64 offset = 0;   // into m_src (stored) or m_backing (inflated)
+        bool inflated = false; // a DEFLATE member, decoded into m_backing
     };
 
-    crd::memory::IAllocator* m_alloc;
+    [[nodiscard]] TensorStatus read_members() noexcept
+    {
+        const TensorStatus opened = iodetail::zip_status(m_zip.open(m_src));
+        if (opened != TensorStatus::Ok)
+        {
+            return opened;
+        }
+        // every DEFLATE member's size (each bounded by what its bytes can claim), reserved once
+        crd::u64 inflated_total = 0;
+        for (crd::usize i = 0; i < m_zip.entry_count(); ++i)
+        {
+            const crd::compression::ZipEntry& e = m_zip.entry(i);
+            if (e.method == crd::compression::ZipMethod::Deflate)
+            {
+                if (e.uncompressed_size > static_cast<crd::u64>(~crd::usize{0}) - inflated_total)
+                {
+                    return TensorStatus::AllocFailed;
+                }
+                inflated_total += e.uncompressed_size;
+            }
+        }
+        if (!m_members.try_reserve(m_zip.entry_count()) ||
+            !m_backing.try_reserve(static_cast<crd::usize>(inflated_total)))
+        {
+            return TensorStatus::AllocFailed;
+        }
+        for (crd::usize i = 0; i < m_zip.entry_count(); ++i)
+        {
+            const crd::compression::ZipEntry& e = m_zip.entry(i);
+            Member m;
+            crd::compression::ZipError read = crd::compression::ZipError::Ok;
+            if (e.method == crd::compression::ZipMethod::Stored)
+            {
+                crd::containers::ConstSpan<crd::u8> view;
+                read = m_zip.view(i, view);
+                m.offset = e.data_offset;
+            }
+            else
+            {
+                const crd::usize size = static_cast<crd::usize>(e.uncompressed_size);
+                m.offset = m_backing.size();
+                m.inflated = true;
+                m_backing.resize_uninitialized(m_backing.size() + size); // within the reserve
+                read = m_zip.extract(i, {m_backing.data() + m.offset, size});
+            }
+            if (read != crd::compression::ZipError::Ok)
+            {
+                return iodetail::zip_status(read);
+            }
+            m_members.push_back(m); // within the reserve
+        }
+        return TensorStatus::Ok;
+    }
+
+    crd::compression::ZipReader m_zip;
     crd::containers::ConstSpan<crd::u8> m_src{};
-    crd::containers::Array<Entry> m_entries;
+    crd::containers::Array<Member> m_members;
     crd::containers::Array<crd::u8> m_backing; // inflated DEFLATE members
 };
 

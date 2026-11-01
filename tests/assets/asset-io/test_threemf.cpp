@@ -4,10 +4,10 @@
 // full OPC round-trip: model.xml → our ZIP writer → our ZIP reader → our parser → geometry value-exact.
 
 #include <crd/assetio/threemf.hpp>
+#include <crd/compression/zip.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/environment.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
-#include <crd/resources/zip_archive.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -165,7 +165,7 @@ TEST_CASE("3mf: a REAL reference-producer file imports -- the lib3mf fixture thr
     // attributes sprinkled in. The permanent "a real printer-toolchain 3MF imports" gate.
     crd::memory::TlsfAllocator alloc(8U << 20U);
     namespace aio = crd::assetio;
-    namespace res = crd::resources;
+    namespace zip = crd::compression;
 
     crd::containers::String path(&alloc);
     if (crd::containers::String root; crd::read_environment_text("CRD_ASSETIO_DATA", root))
@@ -191,12 +191,12 @@ TEST_CASE("3mf: a REAL reference-producer file imports -- the lib3mf fixture thr
         (void)std::fclose(f);
     }
 
-    res::ZipReader zr(&alloc);
-    REQUIRE(zr.open(crd::containers::ConstSpan<crd::u8>(bytes.data(), bytes.size())) == res::ZipError::Ok);
+    zip::ZipReader zr(&alloc);
+    REQUIRE(zr.open(crd::containers::ConstSpan<crd::u8>(bytes.data(), bytes.size())) == zip::ZipError::Ok);
     const crd::i64 part = zr.find(aio::k3mfModelPart);
     REQUIRE(part >= 0);
     crd::containers::Array<crd::u8> model_bytes(&alloc);
-    REQUIRE(zr.extract(static_cast<crd::usize>(part), model_bytes) == res::ZipError::Ok);
+    REQUIRE(zr.extract(static_cast<crd::usize>(part), model_bytes) == zip::ZipError::Ok);
 
     aio::ImportedAsset ia(&alloc);
     REQUIRE(aio::parse_3mf_model(crd::containers::ConstSpan<crd::u8>(model_bytes.data(), model_bytes.size()), &alloc,
@@ -235,7 +235,7 @@ TEST_CASE("3mf: a REAL slicer-authored file imports -- PrusaSlicer 2.9.6's own r
     // our writer -> the reference slicer -> its writer -> our parser.
     crd::memory::TlsfAllocator alloc(8U << 20U);
     namespace aio = crd::assetio;
-    namespace res = crd::resources;
+    namespace zip = crd::compression;
 
     crd::containers::String path(&alloc);
     if (crd::containers::String root; crd::read_environment_text("CRD_ASSETIO_DATA", root))
@@ -261,12 +261,12 @@ TEST_CASE("3mf: a REAL slicer-authored file imports -- PrusaSlicer 2.9.6's own r
         (void)std::fclose(f);
     }
 
-    res::ZipReader zr(&alloc);
-    REQUIRE(zr.open(crd::containers::ConstSpan<crd::u8>(bytes.data(), bytes.size())) == res::ZipError::Ok);
+    zip::ZipReader zr(&alloc);
+    REQUIRE(zr.open(crd::containers::ConstSpan<crd::u8>(bytes.data(), bytes.size())) == zip::ZipError::Ok);
     const crd::i64 part = zr.find(aio::k3mfModelPart);
     REQUIRE(part >= 0);
     crd::containers::Array<crd::u8> model_bytes(&alloc);
-    REQUIRE(zr.extract(static_cast<crd::usize>(part), model_bytes) == res::ZipError::Ok);
+    REQUIRE(zr.extract(static_cast<crd::usize>(part), model_bytes) == zip::ZipError::Ok);
 
     aio::ImportedAsset ia(&alloc);
     REQUIRE(aio::parse_3mf_model(crd::containers::ConstSpan<crd::u8>(model_bytes.data(), model_bytes.size()), &alloc,
@@ -299,7 +299,7 @@ TEST_CASE("3mf: the WATERTIGHT export gate + the full OPC round-trip through our
 {
     crd::memory::TlsfAllocator alloc(8U << 20U);
     namespace aio = crd::assetio;
-    namespace res = crd::resources;
+    namespace zip = crd::compression;
 
     crd::containers::Array<crd::u8> verts(&alloc);
     crd::containers::Array<crd::u8> idx(&alloc);
@@ -319,13 +319,16 @@ TEST_CASE("3mf: the WATERTIGHT export gate + the full OPC round-trip through our
                                          model_xml));
 
     // wrap the three OPC parts with OUR ZIP writer → a complete .3mf
-    res::ZipWriter zw(&alloc);
-    REQUIRE(zw.add(aio::k3mfContentTypes, sv(aio::threemf_content_types_xml())));
-    REQUIRE(zw.add(aio::k3mfRels, sv(aio::threemf_rels_xml())));
+    zip::ZipWriter zw(&alloc);
+    REQUIRE(zw.add(aio::k3mfContentTypes, sv(aio::threemf_content_types_xml()), zip::ZipMethod::Deflate) ==
+            zip::ZipError::Ok);
+    REQUIRE(zw.add(aio::k3mfRels, sv(aio::threemf_rels_xml()), zip::ZipMethod::Deflate) == zip::ZipError::Ok);
     REQUIRE(zw.add(aio::k3mfModelPart,
                    crd::containers::ConstSpan<crd::u8>(reinterpret_cast<const crd::u8*>(model_xml.c_str()),
-                                                       model_xml.size())));
-    const auto threemf = zw.finish();
+                                                       model_xml.size()),
+                   zip::ZipMethod::Deflate) == zip::ZipError::Ok);
+    crd::containers::Array<crd::u8> threemf(&alloc);
+    REQUIRE(zw.finish(threemf) == zip::ZipError::Ok);
     REQUIRE(threemf.size() > 0U);
 
     // conformance hook: CRD_3MF_DUMP=<path> writes the EXACT product-path archive for reference-implementation
@@ -339,12 +342,12 @@ TEST_CASE("3mf: the WATERTIGHT export gate + the full OPC round-trip through our
     }
 
     // …and back: unzip with OUR reader, parse with OUR parser — geometry value-exact (metres → meter unit → metres)
-    res::ZipReader zr(&alloc);
-    REQUIRE(zr.open(crd::containers::ConstSpan<crd::u8>(threemf.data(), threemf.size())) == res::ZipError::Ok);
+    zip::ZipReader zr(&alloc);
+    REQUIRE(zr.open(crd::containers::ConstSpan<crd::u8>(threemf.data(), threemf.size())) == zip::ZipError::Ok);
     const crd::i64 part = zr.find(aio::k3mfModelPart);
     REQUIRE(part >= 0);
     crd::containers::Array<crd::u8> extracted(&alloc);
-    REQUIRE(zr.extract(static_cast<crd::usize>(part), extracted) == res::ZipError::Ok);
+    REQUIRE(zr.extract(static_cast<crd::usize>(part), extracted) == zip::ZipError::Ok);
 
     aio::ImportedAsset back(&alloc);
     REQUIRE(aio::parse_3mf_model(crd::containers::ConstSpan<crd::u8>(extracted.data(), extracted.size()), &alloc, back)

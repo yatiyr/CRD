@@ -13,6 +13,7 @@ target_link_libraries(crd-cooker-tests PRIVATE
     crd-containers
     crd-memory
     crd-platform
+    crd-compression # OWN.1: the 3MF cook gate writes its package through the ZIP container
     crd-resources
     crd-timeline # GEO-9: the TIML loader + eval under the cook gate
     crd-audio    # GEO-10: the ABUF/MIDI loaders under the cook gate

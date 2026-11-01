@@ -3,8 +3,9 @@
 # writes compressed bytes reaches one owner below it.
 #
 # Ships the engine's own raw DEFLATE and inflate with the zlib wrapper and Adler-32 (deflate.hpp, zero third-party),
-# and the binding of the pinned zstd (zstd.hpp), whose header stays private to this module. SHIP.2's crdr v2 chunk
-# codecs (zstd with trained dictionaries, the GDeflate CPU paths) land here.
+# the binding of the pinned zstd (zstd.hpp), whose header stays private to this module, and the ZIP container over
+# them (zip.hpp, capability compression.zip-archives: 3MF and the cooker's OPC packages, NumPy's npz). SHIP.2's crdr
+# v2 chunk codecs (zstd with trained dictionaries, the GDeflate CPU paths) land here.
 
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")

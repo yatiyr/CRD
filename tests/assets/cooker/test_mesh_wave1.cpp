@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <crd/assetio/threemf.hpp>
+#include <crd/compression/zip.hpp>
 #include <crd/cooker/cook_handler.hpp>
 #include <crd/cooker/cook_io.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
@@ -13,7 +14,6 @@
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/loader.hpp>
 #include <crd/resources/resource_id.hpp>
-#include <crd/resources/zip_archive.hpp>
 #include <crd/scene/relation.hpp>
 #include <crd/scene/render_components.hpp>
 #include <crd/scene/scene_resource.hpp>
@@ -353,16 +353,18 @@ TEST_CASE("cooker: wave1 3MF cooks through OUR ZIP + XML + parser -- MESH artifa
     REQUIRE(crd::assetio::threemf_write_model_xml(crd::containers::as_const_span(verts),
                                                   crd::containers::as_const_span(idx), "tetra", &g_alloc, model_xml));
 
-    crd::resources::ZipWriter zw(&g_alloc);
+    namespace zip = crd::compression;
+    zip::ZipWriter zw(&g_alloc);
     const auto part = [](const char* s) {
         return crd::containers::ConstSpan<crd::u8>(reinterpret_cast<const crd::u8*>(s), std::strlen(s));
     };
-    REQUIRE(zw.add(crd::assetio::k3mfContentTypes, part(crd::assetio::threemf_content_types_xml())));
-    REQUIRE(zw.add(crd::assetio::k3mfRels, part(crd::assetio::threemf_rels_xml())));
-    REQUIRE(zw.add(crd::assetio::k3mfModelPart,
-                   crd::containers::ConstSpan<crd::u8>(reinterpret_cast<const crd::u8*>(model_xml.c_str()),
-                                                       model_xml.size())));
-    const auto archive = zw.finish();
+    REQUIRE(zw.add(crd::assetio::k3mfContentTypes, part(crd::assetio::threemf_content_types_xml()),
+                   zip::ZipMethod::Deflate) == zip::ZipError::Ok);
+    REQUIRE(zw.add(crd::assetio::k3mfRels, part(crd::assetio::threemf_rels_xml()), zip::ZipMethod::Deflate) ==
+            zip::ZipError::Ok);
+    REQUIRE(zw.add(crd::assetio::k3mfModelPart, part(model_xml.c_str()), zip::ZipMethod::Deflate) == zip::ZipError::Ok);
+    crd::containers::Array<crd::u8> archive(&g_alloc);
+    REQUIRE(zw.finish(archive) == zip::ZipError::Ok);
     REQUIRE(archive.size() > 0U);
 
     const char* src_path  = "cerid_wave1_tetra.3mf";

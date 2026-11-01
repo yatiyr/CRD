@@ -17,6 +17,7 @@ target_link_libraries(crd-cooker
         crd-containers
         crd-log
         crd-platform
+        crd-compression          # OWN.1: the 3MF bridge reads the OPC package through the ZIP container
         crd-resources
         crd-gpu-context          # ADR-0103: ShaderStage
         crd-gpu-context-vulkan   # ADR-0103: GLSL→SPIR-V (was crd-shader::compile_glsl)

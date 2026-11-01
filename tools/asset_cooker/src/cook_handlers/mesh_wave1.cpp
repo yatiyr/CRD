@@ -22,7 +22,7 @@
 #include <crd/assetio/stl.hpp>
 #include <crd/assetio/threemf.hpp>
 #include <crd/assetio/xml.hpp>
-#include <crd/resources/zip_archive.hpp>
+#include <crd/compression/zip.hpp>
 
 #include <crd/cooker/cook_handler.hpp>
 #include <crd/cooker/cook_io.hpp>
@@ -157,8 +157,8 @@ enum class Wave1Format : crd::u8
 [[nodiscard]] bool extract_3mf_model_part(crd::containers::ConstSpan<crd::u8> zip_bytes, crd::memory::IAllocator* alloc,
                                           crd::containers::Array<crd::u8>& out_model)
 {
-    crd::resources::ZipReader zip(alloc);
-    if (zip.open(zip_bytes) != crd::resources::ZipError::Ok)
+    crd::compression::ZipReader zip(alloc);
+    if (zip.open(zip_bytes) != crd::compression::ZipError::Ok)
     {
         return false;
     }
@@ -168,7 +168,7 @@ enum class Wave1Format : crd::u8
     if (rels_index >= 0)
     {
         crd::containers::Array<crd::u8> rels_bytes(alloc);
-        if (zip.extract(static_cast<crd::usize>(rels_index), rels_bytes) == crd::resources::ZipError::Ok)
+        if (zip.extract(static_cast<crd::usize>(rels_index), rels_bytes) == crd::compression::ZipError::Ok)
         {
             crd::assetio::XmlDoc rels(alloc);
             if (rels.parse(crd::containers::as_const_span(rels_bytes)) == crd::assetio::XmlError::Ok)
@@ -206,7 +206,7 @@ enum class Wave1Format : crd::u8
     {
         return false;
     }
-    return zip.extract(static_cast<crd::usize>(model_index), out_model) == crd::resources::ZipError::Ok;
+    return zip.extract(static_cast<crd::usize>(model_index), out_model) == crd::compression::ZipError::Ok;
 }
 
 // ── the artifact build: ImportedMesh → validate → interleave → MESH CRDR ───────────────────────────────────────────────

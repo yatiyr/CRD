@@ -1,6 +1,7 @@
-# crd-compression tests (OWN.1): the engine's raw DEFLATE, zlib and Adler-32, and the zstd binding.
+# crd-compression tests (OWN.1): the engine's raw DEFLATE, zlib and Adler-32, the zstd binding and the ZIP container.
 add_executable(crd-compression-tests
     test_deflate.cpp
+    test_zip.cpp
     test_zstd.cpp
 )
 

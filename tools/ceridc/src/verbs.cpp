@@ -26,12 +26,12 @@
 #include <crd/ceir/inspect.hpp>
 #include <crd/ceir/plan.hpp>
 #include <crd/ceir/provenance.hpp>
+#include <crd/compression/zip.hpp>
 #include <crd/cooker/cook_command.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/hdr_image.hpp>
 #include <crd/resources/resource_id.hpp>
-#include <crd/resources/zip_archive.hpp>
 #include <crd/scene/render_components.hpp>
 #include <crd/scene/scene_resource.hpp>
 #include <crd/scene/transform.hpp>
@@ -230,14 +230,14 @@ crd::containers::String verb_import(const char* path, crd::memory::IAllocator* a
         }
         else // .3mf: the OPC archive → 3D/3dmodel.model → the XML model parse (the cook's own route)
         {
-            crd::resources::ZipReader zip(alloc);
-            if (zip.open(span) != crd::resources::ZipError::Ok)
+            crd::compression::ZipReader zip(alloc);
+            if (zip.open(span) != crd::compression::ZipError::Ok)
             {
                 return fail(alloc, "import", "not a readable 3MF archive");
             }
             const crd::i64 idx = zip.find("3D/3dmodel.model");
             crd::containers::Array<crd::u8> model(alloc);
-            if (idx < 0 || zip.extract(static_cast<crd::usize>(idx), model) != crd::resources::ZipError::Ok)
+            if (idx < 0 || zip.extract(static_cast<crd::usize>(idx), model) != crd::compression::ZipError::Ok)
             {
                 return fail(alloc, "import", "3MF archive has no readable 3D/3dmodel.model");
             }

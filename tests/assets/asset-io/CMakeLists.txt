@@ -21,6 +21,7 @@ target_link_libraries(crd-asset-io-tests PRIVATE
     crd-geometry-bvh
     crd-geometry-mesh
     crd-asset-io
+    crd-compression         # OWN.1: the 3MF fixtures and the written package through the ZIP container
     crd-resources           # GEO-4: png_encode_rgba + ldr_decode — the texture-embed round-trip gate
     mikktspace              # GEO-2: the REFERENCE tangent implementation as TEST ORACLE only (never in the product path)
     Catch2::Catch2WithMain

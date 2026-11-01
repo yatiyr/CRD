@@ -1,9 +1,8 @@
 #pragma once
 // ---------------------------------------------------------------------------
 // crd-hesap-tensor — v14-l io detail: the little-endian scalar reads and
-// writes of the .npy header and the .npz zip records. A DEFLATE member
-// inflates through crd-compression (OWN.1, capability compression.codecs);
-// the member's CRC-32 is crd/containers/checksum.hpp.
+// writes of the .npy and safetensors headers. The .npz zip records are
+// crd-compression's ZIP container (OWN.1, capability compression.zip-archives).
 // ---------------------------------------------------------------------------
 
 #include <crd/core/types.hpp>

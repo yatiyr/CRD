@@ -462,7 +462,7 @@ crd_module(engine/geometry/geometry-curves engine/geometry-curves
 # GEO-1 (D-007 row 66): OUR OWN external-format parsers (STL/OBJ/PLY/glTF/3MF) -> ImportedAsset seam -> decompose/cook
 crd_module(engine/assets/asset-io engine/asset-io
     DEPENDS containers core geometry-bvh geometry-mesh geometry-primitives math memory time units
-    TESTS assets/asset-io TEST_DEPENDS resources TEST_PACKAGES mikktspace)
+    TESTS assets/asset-io TEST_DEPENDS compression resources TEST_PACKAGES mikktspace)
 crd_module(engine/numerics/hesap engine/hesap DEPENDS containers core math memory TESTS numerics/hesap)
 # v12; special functions + orthogonal polynomials (leaf; substrate for stats/quadrature/dsp); ADR-0094
 crd_module(engine/numerics/hesap-special engine/hesap-special DEPENDS containers core hesap jobs math memory
@@ -680,12 +680,12 @@ crd_module(engine/geometry/geometry-viz engine/geometry-viz
 # Host tools: cookers and generators run on the build host; CRD_HOST_TOOLS_DIR imports prebuilt executables
 # instead (a target build consuming a host build), so host/target separation is declared here, not implied.
 crd_module(tools/asset_cooker HOST EXECUTABLES asset_cooker
-    DEPENDS anim asset-io audio containers core frame-cook gpu-context gpu-context-vulkan light-cook log material-cook
-        math memory platform preset profile resources scene technique-cook timeline vertex-cook toml
+    DEPENDS anim asset-io audio compression containers core frame-cook gpu-context gpu-context-vulkan light-cook log
+        material-cook math memory platform preset profile resources scene technique-cook timeline vertex-cook toml
     TESTS assets/scene_cooker assets/cooker)
 # GEO-11 (D-007 row 76): the agent surface — CLI verbs + MCP stdio server
 crd_module(tools/ceridc HOST EXECUTABLES ceridc
-    DEPENDS asset-io asset_cooker audio ceir ceir-cook ceir-host comply containers core jobs memory perf
+    DEPENDS asset-io asset_cooker audio ceir ceir-cook ceir-host comply compression containers core jobs memory perf
     perf-gpu-bridge platform resources scene time timeline TESTS tools/ceridc support/fuzz)
 # D-007 D2: the offline shader-cook CLI (.kgph -> .crdr); ADR-0104
 crd_module(tools/shader-cook NAME shader_cook HOST EXECUTABLES shader_cook
