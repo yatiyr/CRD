@@ -143,7 +143,7 @@ template <typename T> [[nodiscard]] constexpr FftAlgorithm planned_inverse(crd::
 
 // Whether a plan of n can run `forward`, the sizes each algorithm's generated codelets cover: the standalone-hier's
 // splits and IP4-AoS 1K..64K, the deep-split's factor tables (three passes 8K..512K, four 8K..8M), the six-step's
-// square blocks of 64 rows, the tiled four-step's f32 1M.
+// square blocks of 64 rows, the tiled four-step's f32 1M, the in-place three passes' f32 16·B·16 (2K to 8K).
 template <typename T> [[nodiscard]] constexpr bool forward_builds(crd::usize n, FftAlgorithm forward) noexcept
 {
     const bool even = is_pow2(n) && (n & crd::usize{0x5555555555555555ULL}) != 0;
@@ -164,6 +164,8 @@ template <typename T> [[nodiscard]] constexpr bool forward_builds(crd::usize n, 
             return even && n >= 4096;
         case FftAlgorithm::TiledFourStep:
             return std::is_same_v<T, crd::f32> && n == (crd::usize{1} << 20);
+        case FftAlgorithm::InPlace3:
+            return std::is_same_v<T, crd::f32> && n >= 2048 && n <= 8192;
     }
     return false;
 }
@@ -199,6 +201,7 @@ template <typename T>
 inline constexpr FftAlgorithm kFftAlgorithms[] = {
     FftAlgorithm::Stockham,   FftAlgorithm::StandaloneHier, FftAlgorithm::Ip4,     FftAlgorithm::DeepSplit3,
     FftAlgorithm::DeepSplit4, FftAlgorithm::FourStep,       FftAlgorithm::SixStep, FftAlgorithm::TiledFourStep,
+    FftAlgorithm::InPlace3,
 };
 } // namespace detail
 
@@ -267,6 +270,10 @@ public:
         if (deep || hier)
         {
             build_stage1_twiddles();
+        }
+        if (forward == FftAlgorithm::InPlace3)
+        {
+            build_in_place3();
         }
         if (ip)
         {
@@ -597,20 +604,8 @@ private:
             ++m_s.ds_ash;
         }
         m_s.sh_s = plan_table<Complex<T>>(n, 64);
-        // last-notr-stage table: W_{B·C} (3-stage) or W_{B2·C} (4-stage), [k*C + v]
-        const crd::usize lb = (m_s.ds_b2 != 0) ? m_s.ds_b2 : m_s.ds_b;
-        const crd::usize bc = lb * m_s.ds_c;
-        m_s.ds_twr = plan_table<T>(bc, 64);
-        m_s.ds_twi = plan_table<T>(bc, 64);
-        for (crd::usize kb = 0; kb < lb; ++kb)
-        {
-            for (crd::usize v = 0; v < m_s.ds_c; ++v)
-            {
-                const double th = kTwoPi * static_cast<double>((kb * v) % bc) / static_cast<double>(bc);
-                m_s.ds_twr[kb * m_s.ds_c + v] = static_cast<T>(crd::math::cos(th));
-                m_s.ds_twi[kb * m_s.ds_c + v] = static_cast<T>(-crd::math::sin(th));
-            }
-        }
+        // last-notr-stage table: W_{B·C} (3-stage) or W_{B2·C} (4-stage)
+        build_notr_twiddles((m_s.ds_b2 != 0) ? m_s.ds_b2 : m_s.ds_b);
         if (m_s.ds_b2 != 0) // S2 table for the 4-stage: W_{B1·B2·C}, [k*(B2·C) + v]
         {
             const crd::usize b2c = m_s.ds_b2 * m_s.ds_c;
@@ -627,6 +622,36 @@ private:
                 }
             }
         }
+    }
+
+    // W_{lb·C}^{kb·v} at [kb·C + v] (C = ds_c): the deep-split's last notr stage and the in-place three passes' pass 2.
+    void build_notr_twiddles(crd::usize lb)
+    {
+        const crd::usize bc = lb * m_s.ds_c;
+        m_s.ds_twr = plan_table<T>(bc, 64);
+        m_s.ds_twi = plan_table<T>(bc, 64);
+        for (crd::usize kb = 0; kb < lb; ++kb)
+        {
+            for (crd::usize v = 0; v < m_s.ds_c; ++v)
+            {
+                const double th = kTwoPi * static_cast<double>((kb * v) % bc) / static_cast<double>(bc);
+                m_s.ds_twr[kb * m_s.ds_c + v] = static_cast<T>(crd::math::cos(th));
+                m_s.ds_twi[kb * m_s.ds_c + v] = static_cast<T>(-crd::math::sin(th));
+            }
+        }
+    }
+
+    // The in-place three passes of the f32 forward, n = 16·B·16 (FftPlanState's InPlace3 tables, no intermediate):
+    // pass 1's W_n^{t·ka} factored at M = 16 (lo over t & 15, hi over t >> 4: 2 KiB and B/8 KiB), pass 2's
+    // W_{16B}^{i1·kb} (B/8 KiB) and pass 3's 2 KiB scratch.
+    void build_in_place3()
+    {
+        m_s.sh_n1 = 16U;
+        m_s.ds_c = 16U;
+        m_s.ds_b = m_s.n / 256U;
+        build_factored_stage1(4U);
+        build_notr_twiddles(m_s.ds_b);
+        m_s.scratch = plan_table<Complex<T>>(256, 64); // pass 3's transposed group
     }
 
     // The standalone-hier's and the deep-split's stage-1 twiddle W_n^{k1·i2}, in the stage-1-output layout. Where n2
@@ -648,33 +673,8 @@ private:
             // M >= a codelet step of two tiles (16 f32 or 8 f64 columns at avx512): its lo loads stay in one row of
             // the table and its hi value is one broadcast.
             const crd::u32 lmin = std::is_same_v<T, crd::f32> ? 4U : 3U;
-            m_s.sh_msh = (n2log + 1U) / 2U;
-            if (m_s.sh_msh < lmin)
-            {
-                m_s.sh_msh = lmin;
-            }
-            const crd::usize mm = crd::usize{1} << m_s.sh_msh;
-            const crd::usize uhc = sn2 >> m_s.sh_msh;
-            m_s.sh_twr = plan_table<T>(m_s.sh_n1 * mm, 64); // LO re
-            m_s.sh_twi = plan_table<T>(m_s.sh_n1 * mm, 64); // LO im
-            m_s.sh_hir = plan_table<T>(m_s.sh_n1 * uhc, 64);
-            m_s.sh_hii = plan_table<T>(m_s.sh_n1 * uhc, 64);
-            for (crd::usize k1 = 0; k1 < m_s.sh_n1; ++k1)
-            {
-                for (crd::usize ul = 0; ul < mm; ++ul)
-                {
-                    const double th = kTwoPi * static_cast<double>((k1 * ul) % n) / static_cast<double>(n);
-                    m_s.sh_twr[k1 * mm + ul] = static_cast<T>(crd::math::cos(th));
-                    m_s.sh_twi[k1 * mm + ul] = static_cast<T>(-crd::math::sin(th));
-                }
-                for (crd::usize uh = 0; uh < uhc; ++uh)
-                {
-                    const double th =
-                        kTwoPi * static_cast<double>((k1 * (uh << m_s.sh_msh)) % n) / static_cast<double>(n);
-                    m_s.sh_hir[k1 * uhc + uh] = static_cast<T>(crd::math::cos(th));
-                    m_s.sh_hii[k1 * uhc + uh] = static_cast<T>(-crd::math::sin(th));
-                }
-            }
+            const crd::u32 msh = (n2log + 1U) / 2U;
+            build_factored_stage1(msh < lmin ? lmin : msh);
             return;
         }
         m_s.sh_twr = plan_table<T>(n, 64);
@@ -687,6 +687,35 @@ private:
                 // stored in the STAGE-1-OUTPUT layout s[k1*n2 + i2] (applied before the transpose)
                 m_s.sh_twr[k1 * sn2 + i2] = static_cast<T>(crd::math::cos(th));
                 m_s.sh_twi[k1 * sn2 + i2] = static_cast<T>(-crd::math::sin(th));
+            }
+        }
+    }
+
+    // The factored stage-1 twiddle W_n^{k·u} = hi[k·(n2 >> msh) + (u >> msh)] · lo[k·M + (u & (M-1))], M = 1 << msh,
+    // for k < sh_n1 and u < n2 = n / sh_n1.
+    void build_factored_stage1(crd::u32 msh)
+    {
+        const crd::usize n = m_s.n;
+        m_s.sh_msh = msh;
+        const crd::usize mm = crd::usize{1} << msh;
+        const crd::usize uhc = (n / m_s.sh_n1) >> msh;
+        m_s.sh_twr = plan_table<T>(m_s.sh_n1 * mm, 64); // LO re
+        m_s.sh_twi = plan_table<T>(m_s.sh_n1 * mm, 64); // LO im
+        m_s.sh_hir = plan_table<T>(m_s.sh_n1 * uhc, 64);
+        m_s.sh_hii = plan_table<T>(m_s.sh_n1 * uhc, 64);
+        for (crd::usize k1 = 0; k1 < m_s.sh_n1; ++k1)
+        {
+            for (crd::usize ul = 0; ul < mm; ++ul)
+            {
+                const double th = kTwoPi * static_cast<double>((k1 * ul) % n) / static_cast<double>(n);
+                m_s.sh_twr[k1 * mm + ul] = static_cast<T>(crd::math::cos(th));
+                m_s.sh_twi[k1 * mm + ul] = static_cast<T>(-crd::math::sin(th));
+            }
+            for (crd::usize uh = 0; uh < uhc; ++uh)
+            {
+                const double th = kTwoPi * static_cast<double>((k1 * (uh << msh)) % n) / static_cast<double>(n);
+                m_s.sh_hir[k1 * uhc + uh] = static_cast<T>(crd::math::cos(th));
+                m_s.sh_hii[k1 * uhc + uh] = static_cast<T>(-crd::math::sin(th));
             }
         }
     }

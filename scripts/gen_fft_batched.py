@@ -489,24 +489,40 @@ def _plus(base, offset):
     return f"{base} + {offset}" if offset else base
 
 
+def _times(coefficient, name):
+    """`coefficient * name` as an offset term for _plus: nothing at 0, the name alone at 1."""
+    return "" if coefficient == 0 else name if coefficient == 1 else f"{coefficient} * {name}"
+
+
 def _tf_scaled(dst, w, src):
     """`dst` = `src` * `w`: two products and two single-rounded fmas, the stage-1 emitters' form."""
     return [f"const V {dst}r = simd::fnmadd({w}i, {src}i, {src}r * {w}r);",
             f"const V {dst}i = simd::fma({w}i, {src}r, {src}i * {w}r);"]
 
 
-def _emit_tiled(sig, bound, invariant, tile_locals, load, store, group_lanes=0):
-    """One tiled four-step leaf: the f32 32-point DAG, `load(value, input)` lines and `store(output or group, outs)`
-    lines, each store as soon as its values are complete (disjoint buffers)."""
+def _emit_leaf(N, seed, sig, bound, invariant, tile_locals, load, store, group_lanes=0, in_place=False):
+    """One f32 N-point leaf: `load(value, input)` lines and `store(output or group, outs)` lines, each store as soon
+    as its values are complete. A step of an `in_place` leaf stores where it loaded, which is safe because every
+    output of the DFT reads every input: no store precedes the step's last load (checked here)."""
     _, prec = _prec("f32")
-    outs = _build_dag(32, 8107)
+    outs = _build_dag(N, seed)
+    items = _interleave_stores(schedule(outs), outs, group_lanes=group_lanes)
+    if in_place:
+        last_load = max(i for i, item in enumerate(items) if not isinstance(item, tuple) and item.op == "input")
+        first_store = min(i for i, item in enumerate(items) if isinstance(item, tuple))
+        assert last_load < first_store, f"N={N}: a store precedes a load of the same step"
     body = []
-    for item in _interleave_stores(schedule(outs), outs, group_lanes=group_lanes):
+    for item in items:
         if isinstance(item, tuple):
             body += [f"        {line}" for line in store(item[1], outs)]
         else:
             body += _render_node(item, prec, None, load=load)
     return _kernel(sig, "f32", str(bound), invariant, tile_locals, body)
+
+
+def _emit_tiled(sig, bound, invariant, tile_locals, load, store, group_lanes=0):
+    """One tiled four-step leaf: the f32 32-point DAG over disjoint buffers."""
+    return _emit_leaf(32, 8107, sig, bound, invariant, tile_locals, load, store, group_lanes=group_lanes)
 
 
 def emit_tiled_p1_leaf():
@@ -602,6 +618,81 @@ def emit_tiled_p2_final():
     return _emit_tiled(sig, 512, [], tile_locals, load, store)
 
 
+# ---- the in-place three-pass f32 forward, n = 16·B·16 (B 8, 16 or 32: 2K, 4K and 8K) ----
+# The caller's buffer holds the data throughout: x[i1 + 16*i2 + 16B*i3] -> X[ka + 16*kb + 16B*kc], with i1, kc < 16
+# (C), i2, kb < B and i3, ka < 16 (A). Pass 1 takes the leaf over i3 at column t = i1 + 16*i2 of the whole buffer
+# (16B columns), twiddles output ka by W_n^{t*ka} = hi[ka*B + (t >> 4)] * lo[ka*16 + (t & 15)] and stores it as an
+# AoSoA block row where it loaded: a tile of 8 complex and its block are the same 64 bytes, so a step of whole tiles
+# deinterleaves in place. The portable level and unoptimized builds run a step a column at a time, and a column's
+# block floats are other columns' interleaved ones, so there the engine deinterleaves the buffer a tile at a time
+# first and runs pass 1's block edition. Pass 2 takes the leaf over i2 at column t = i1 + 16*ka (element 16B*ka + i1 +
+# 16*i2), twiddled by W_{16B}^{i1*kb} = tw[kb*16 + i1], blocks in and out. Pass 3 takes, for each kb, its
+# 16 x 16 group (rows ka at element 16*kb + 16B*ka), which the engine transposes into a 2 KiB scratch of 16 rows i1
+# of the 16 ka, and stores the leaf over i1 at column ka as X[ka + 16*kb + 16B*kc], interleaved: the group's own
+# elements. Every table is a few KiB.
+INPLACE_MIDS = (8, 16, 32)
+
+
+def emit_inplace_first(blocks):
+    """Pass 1: the 16-point leaf over i3, the factored W_n^{t*ka}, AoSoA blocks out, in place: interleaved in (a
+    step of whole tiles only) or, with `blocks`, AoSoA blocks in (any step)."""
+    def load(v, j):
+        if blocks:
+            return [f"V {v}r, {v}i; simd::load_block(d, {_plus('t', _times(j, 'bc'))}, {v}r, {v}i);"]
+        return [f"V {v}r, {v}i; simd::load_complex_deinterleaved({_plus('d + 2 * t', _times(2 * j, 'bc'))}, {v}r, "
+                f"{v}i);"]
+
+    def store(k, outs):
+        n = f"n{outs[k].id}"
+        if k == 0:  # W^0: the leaf's output as it is
+            return [f"simd::store_block(d, t, {n}r, {n}i);"]
+        return ["{", f"    const V hr = V(hir[{k} * hc + uh]), hm = V(hii[{k} * hc + uh]);",
+                f"    const V lr = simd::load<V>(lor + {k * 16} + ul), li = simd::load<V>(loi + {k * 16} + ul);",
+                "    const V wr = simd::fnmadd(hm, li, hr * lr), wi = simd::fma(hm, lr, hr * li);",
+                *["    " + line for line in _tf_scaled("x", "w", n)],
+                f"    simd::store_block(d, {k} * bc + t, xr, xi);", "}"]
+
+    name = "codelet16_inplace_first_blocks" if blocks else "codelet16_inplace_first"
+    sig = [f"void {name}(crd::f32* d, crd::usize bc, const crd::f32* lor, const crd::f32* loi,",
+           "    const crd::f32* hir, const crd::f32* hii) noexcept"]
+    tile_locals = ["const crd::usize uh = t >> 4;", "const crd::usize ul = t & 15;"]
+    return _emit_leaf(16, 9107, sig, "bc", ["const crd::usize hc = bc >> 4;"], tile_locals, load, store,
+                      in_place=True)
+
+
+def emit_inplace_mid(B):
+    """Pass 2: the B-point leaf over i2 at column t = i1 + 16*ka, AoSoA blocks in and out, W_{16B}^{i1*kb}."""
+    def load(v, j):
+        return [f"V {v}r, {v}i; simd::load_block(d, {_plus('at', 16 * j)}, {v}r, {v}i);"]
+
+    def store(k, outs):
+        n = f"n{outs[k].id}"
+        if k == 0:
+            return [f"simd::store_block(d, at, {n}r, {n}i);"]
+        return ["{", f"    const V wr = simd::load<V>(twr + {k * 16} + i1), wi = simd::load<V>(twi + {k * 16} + i1);",
+                *["    " + line for line in _tf_scaled("x", "w", n)],
+                f"    simd::store_block(d, at + {16 * k}, xr, xi);", "}"]
+
+    sig = [f"void codelet{B}_inplace_mid(crd::f32* d, crd::usize w, const crd::f32* twr,",
+           "    const crd::f32* twi) noexcept"]
+    tile_locals = ["const crd::usize i1 = t & 15;", f"const crd::usize at = (t - i1) * {B} + i1;"]
+    return _emit_leaf(B, 9207 + B, sig, "w", [], tile_locals, load, store, in_place=True)
+
+
+def emit_inplace_last():
+    """Pass 3: the 16-point leaf over i1 of one transposed group at column ka, from the scratch's AoSoA rows of 16
+    columns into the group's elements, output kc `rs` complex apart, interleaved."""
+    def load(v, j):
+        return [f"V {v}r, {v}i; simd::load_block({_plus('s', 32 * j)}, t, {v}r, {v}i);"]
+
+    def store(k, outs):
+        n = f"n{outs[k].id}"
+        return [f"simd::store_complex_interleaved({_plus('out + 2 * t', _times(k, 'r2'))}, {n}r, {n}i);"]
+
+    sig = ["void codelet16_inplace_last(const crd::f32* s, crd::f32* out, crd::usize rs) noexcept"]
+    return _emit_leaf(16, 9307, sig, 16, ["const crd::usize r2 = 2 * rs;"], [], load, store)
+
+
 def main(mode="hybrid"):
     global SCHED_VARIANT
     sched_of = {
@@ -675,6 +766,15 @@ def main(mode="hybrid"):
     print(emit_tiled_p2_leaf())
     print("// Tiled four-step P2 final leaf: the stage into the output's 16 k1 columns (f32 1M). GENERATED.")
     print(emit_tiled_p2_final())
+    print("// In-place pass 1: the leaf over i3 of n = 16·B·16, twiddled, interleaved in, blocks out (f32). GENERATED.")
+    print(emit_inplace_first(blocks=False))
+    print("// In-place pass 1's edition for a column a step: AoSoA blocks in and out (f32). GENERATED.")
+    print(emit_inplace_first(blocks=True))
+    for b in INPLACE_MIDS:
+        print(f"// In-place pass 2: the leaf over i2 (B = {b}), twiddled, AoSoA blocks (f32). GENERATED.")
+        print(emit_inplace_mid(b))
+    print("// In-place pass 3: the leaf over i1 of a transposed 16 x 16 group into the buffer (f32). GENERATED.")
+    print(emit_inplace_last())
     print("} // namespace crd::hesap::fft::gen::inline CRD_MATH_LEVEL_NS")
 
 

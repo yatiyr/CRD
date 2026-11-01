@@ -493,6 +493,8 @@ TEST_CASE("fft kernels: the planner's algorithm of every size", "[fft]")
                 return fft::FftAlgorithm::SixStep;
             case 'T':
                 return fft::FftAlgorithm::TiledFourStep;
+            case 'P':
+                return fft::FftAlgorithm::InPlace3;
             default:
                 return fft::FftAlgorithm::Stockham;
         }

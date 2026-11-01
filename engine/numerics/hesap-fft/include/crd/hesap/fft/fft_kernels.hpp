@@ -35,6 +35,7 @@ enum class FftAlgorithm : crd::u8
     FourStep,       // Bailey's four-step over hoisted batched sub-plans
     SixStep,        // the square in-place six-step (forward)
     TiledFourStep,  // the f32 1M forward's tiled four-step (forward)
+    InPlace3,       // three passes in the caller's buffer, n = 16·B·16 (the f32 2K to 8K forward)
 };
 
 [[nodiscard]] constexpr const char* fft_algorithm_name(FftAlgorithm algorithm) noexcept
@@ -57,6 +58,8 @@ enum class FftAlgorithm : crd::u8
             return "six-step";
         case FftAlgorithm::TiledFourStep:
             return "tiled-four-step";
+        case FftAlgorithm::InPlace3:
+            return "in-place-3";
     }
     return "?";
 }
@@ -96,7 +99,7 @@ template <typename T> struct FftPlanState
     const FftPlanState* p1 = nullptr; // four-step: the length-n1 sub-plan
     const FftPlanState* p2 = nullptr; // four-step: the length-n2 sub-plan
     Complex<T>* tbuf = nullptr;       // four-step: transpose intermediate, 64B-aligned (NT-store target)
-    Complex<T>* scratch = nullptr;    // four-step: cache-resident block scratch, 64B-aligned
+    Complex<T>* scratch = nullptr;    // four-step: cache-resident block scratch; InPlace3: 256 complex, 64B-aligned
     const T* tw_re = nullptr;         // W_n^k, k < n
     const T* tw_im = nullptr;
     const crd::usize* rev = nullptr; // bit reversal of k < n
@@ -128,6 +131,9 @@ template <typename T> struct FftPlanState
     T* tf_bsi = nullptr;
     T* tf_lnr = nullptr;
     T* tf_lni = nullptr;
+    // The in-place three-pass f32 forward (FftAlgorithm::InPlace3, n = 16·B·16, B = ds_b; scripts/gen_fft_batched.py's
+    // in-place emitters) reads pass 1's factored W_n from sh_twr/sh_twi (lo, [ka·16 + (t & 15)]) and sh_hir/sh_hii
+    // (hi, [ka·B + (t >> 4)]), pass 2's W_{16B} from ds_twr/ds_twi ([kb·16 + i1]) and pass 3's group from scratch.
 };
 
 // The tiled intermediate's floats: 128 tile rows of eight i2, each 64 tiles of 8 by 16 complex and a 64-byte pad.

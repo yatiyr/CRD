@@ -13,6 +13,7 @@
 #include <crd/core/types.hpp>
 #include <crd/hesap/fft/detail/batched_codelets_gen.hpp>
 #include <crd/hesap/fft/detail/block_width.hpp>
+#include <crd/hesap/fft/detail/codelet_lanes.hpp>
 #include <crd/hesap/fft/detail/codelets.hpp>
 #include <crd/hesap/fft/detail/hier_codelets.hpp>
 #include <crd/hesap/fft/detail/small_n_codelets.hpp>
@@ -228,6 +229,12 @@ template <typename T> struct Engine
                 if constexpr (std::is_same_v<T, crd::f32>) // the planner offers it only to f32
                 {
                     execute_tiled_four_step(data);
+                }
+                return;
+            case FftAlgorithm::InPlace3:
+                if constexpr (std::is_same_v<T, crd::f32>) // the planner offers it only to f32
+                {
+                    execute_in_place3(data);
                 }
                 return;
             case FftAlgorithm::SixStep:
@@ -1566,6 +1573,84 @@ template <typename T> struct Engine
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // The in-place three passes of the f32 2K to 8K forward (FftAlgorithm::InPlace3, n = 16·B·16; the derivation at
+    // gen_fft_batched.py's in-place emitters): pass 1, which leaves each tile of 8 complex as its AoSoA block where it
+    // lies, and pass 2 over the whole buffer, then for each kb its 16 x 16 group transposed into the plan's 2 KiB
+    // scratch and pass 3's leaf from there back into the group. The data never leaves the caller's buffer, and every
+    // table is a few KiB.
+    void execute_in_place3(Complex<T>* data) const
+    {
+        T* const d = reinterpret_cast<T*>(data);
+        const crd::usize bc = plan.ds_b * 16U;
+        if constexpr (lanes::kWidth<lanes::TileLane<crd::f32>> == 1)
+        {
+            // A codelet step is one column here, whose block floats are other columns' interleaved ones: each tile is
+            // deinterleaved first, then pass 1 reads blocks.
+            T* const end = d + 2 * plan.n; // n is a multiple of the tile's 8 complex
+            for (T* tile = d; tile != end; tile += 16)
+            {
+                simd::Vec8f re;
+                simd::Vec8f im;
+                simd::load_complex_deinterleaved(tile, re, im);
+                re.store(tile);
+                im.store(tile + 8);
+            }
+            gen::codelet16_inplace_first_blocks(d, bc, plan.sh_twr, plan.sh_twi, plan.sh_hir, plan.sh_hii);
+        }
+        else // a step holds whole tiles, so pass 1 deinterleaves as it loads
+        {
+            gen::codelet16_inplace_first(d, bc, plan.sh_twr, plan.sh_twi, plan.sh_hir, plan.sh_hii);
+        }
+        switch (plan.ds_b)
+        {
+            case 8U:
+                gen::codelet8_inplace_mid(d, 256U, plan.ds_twr, plan.ds_twi);
+                break;
+            case 16U:
+                gen::codelet16_inplace_mid(d, 256U, plan.ds_twr, plan.ds_twi);
+                break;
+            default:
+                gen::codelet32_inplace_mid(d, 256U, plan.ds_twr, plan.ds_twi);
+                break;
+        }
+        T* const rows = reinterpret_cast<T*>(plan.scratch);
+        for (crd::usize kb = 0; kb < plan.ds_b; ++kb)
+        {
+            T* const group = d + 32U * kb;
+            transpose_group16(group, bc, rows);
+            gen::codelet16_inplace_last(rows, group, bc);
+        }
+    }
+
+    // The 16 x 16 group of AoSoA rows at g, rows `rs` complex apart (column c of row r at element r·rs + c, in blocks
+    // of 8 real parts then 8 imaginary parts), transposed into `rows`: 16 AoSoA rows of 16 columns (row c holds column
+    // c of every row of g). Four 8 x 8 tiles of each part; pure data movement, so every level gives the same bits.
+    static void transpose_group16(const T* g, crd::usize rs, T* rows) noexcept
+    {
+        using V = simd::Vec8f;
+        const crd::usize r2 = 2 * rs;
+        for (crd::usize part = 0; part < 16U; part += 8U) // the real blocks, then the imaginary ones
+        {
+            for (crd::usize p = 0; p < 2U; ++p) // the tile of rows 8p.. and columns 8q..
+            {
+                for (crd::usize q = 0; q < 2U; ++q)
+                {
+                    const T* const tile = g + part + 8U * p * r2 + 16U * q;
+                    V x[8];
+                    for (crd::usize r = 0; r < 8U; ++r)
+                    {
+                        x[r] = V::load(tile + r * r2);
+                    }
+                    simd::transpose8x8(x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7]);
+                    for (crd::usize c = 0; c < 8U; ++c)
+                    {
+                        x[c].store(rows + (8U * q + c) * 32U + 16U * p + part);
                     }
                 }
             }
