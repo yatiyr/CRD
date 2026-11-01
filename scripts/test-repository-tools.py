@@ -6332,6 +6332,20 @@ class Registers(RegisterFixture, unittest.TestCase):
         self.assert_fails(self.register([self.entry(spec=dict(obsoleted, obsoleted_by=[]))]),
                           'exactly when the status is obsoleted')
 
+    def test_a_paper_is_published_or_withdrawn_and_a_withdrawn_document_is_never_pinned(self):
+        paper = {'type': 'paper', 'ref': 'https://doi.org/10.1007/978-3-642-34931-7_28', 'posted': '2012-12',
+                 'status': 'published'}
+        self.assertEqual(0, self.run_guard(self.register([self.entry(spec=paper)]))[0])
+        withdrawn = dict(paper, status='withdrawn')
+        self.assertEqual(0, self.run_guard(self.register([self.entry(state='watch', spec=withdrawn)]))[0])
+        # A withdrawn document, a paper or a NIST publication, cannot stay pinned.
+        for spec in (withdrawn, {'type': 'nist', 'ref': 'FIPS 186-4', 'status': 'withdrawn'}):
+            with self.subTest(spec=spec['ref']):
+                self.assert_fails(self.register([self.entry(spec=spec)]),
+                                  f'pinned {spec["ref"]} is withdrawn in the snapshot')
+        self.assert_fails(self.register([self.entry(spec=dict(paper, status='final'))]),
+                          "spec.status of a paper must be one of ['published', 'withdrawn']")
+
     def test_overdue_reviews_and_future_reads_fail(self):
         self.assert_fails(self.register([self.entry(review='2026-10-30')]), 'review was due on 2026-10-30')
         self.assert_fails(self.register([self.entry(review='2027-01-01')]),
@@ -7057,6 +7071,18 @@ class CryptoInventory(RegisterFixture, unittest.TestCase):
                                   'algorithm aes-256-gcm names key_bits')
         self.assert_fails(self.register([self.algorithm(owner='core', codepoints=[dict(point, value='0x0901')])]),
                           "algorithm aes-256-gcm = '0x0901' is not in a class of the Cerid algorithm identifiers")
+        # A key encapsulation exchanges keys; a keyed PRF protects integrity.
+        for value, function, meaning in (('0x0701', 'key-exchange', 'post-quantum key encapsulation'),
+                                         ('0x0801', 'integrity', 'keyed pseudorandom function')):
+            with self.subTest(value=value):
+                moved = [dict(point, value=value)]
+                self.assertEqual(0, self.run_guard(self.register([self.algorithm(
+                    owner='core', cryptography=[function], codepoints=moved)]))[0])
+                other = 'authentication' if function != 'authentication' else 'integrity'
+                self.assert_fails(self.register([self.algorithm(owner='core', cryptography=[other],
+                                                                codepoints=moved)]),
+                                  f'algorithm aes-256-gcm ({meaning}) performs {function}, which cryptography does '
+                                  'not name')
         quic = dict(self.entry()['codepoints'][0], key_bits=[128])
         self.assert_fails(self.register([self.entry(codepoints=[quic])]),
                           "codepoint v1 names an algorithm's key_bits outside the Cerid algorithm identifiers")
@@ -10310,6 +10336,21 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
             code, output = self.tool(root, 'due')
             self.assertEqual(2, code)
             self.assertIn('the review schedule is malformed', output)
+
+    def test_plan_reads_a_paper_by_hand_at_its_link(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            paper = self.entry(id='crypto.siphash', codepoints=[], review='2027-06-01',
+                               spec={'type': 'paper', 'ref': 'https://doi.org/10.1007/978-3-642-34931-7_28',
+                                     'posted': '2012-12', 'status': 'published'})
+            self.write_tree(root, self.register(self.entries() + [paper]))
+            code, output = self.tool(root, 'plan', '--out', str(root / 'sources.json'))
+            self.assertEqual(0, code, output)
+            self.assertIn('7 sources to download once the user approves them, 4 items read by hand', output)
+            plan = json.loads((root / 'sources.json').read_text(encoding='utf-8'))
+            item = next(item for item in plan['manual'] if item['entries'] == ['crypto.siphash'])
+            self.assertEqual('https://doi.org/10.1007/978-3-642-34931-7_28', item['url'])
+            self.assertIn('was withdrawn or superseded', item['read'])
 
     def test_plan_lists_every_primary_source_and_the_items_read_by_hand(self):
         with tempfile.TemporaryDirectory() as scratch:

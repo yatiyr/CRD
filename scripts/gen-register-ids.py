@@ -58,6 +58,8 @@ ALGORITHM_CLASSES = {
     0x04: ('ClassicalSignature', 'traditional signature', ('authentication',)),
     0x05: ('Aead', 'authenticated encryption with associated data', ('confidentiality', 'integrity')),
     0x06: ('Kdf', 'key derivation', ('key-derivation',)),
+    0x07: ('Kem', 'post-quantum key encapsulation', ('key-exchange',)),
+    0x08: ('Prf', 'keyed pseudorandom function', ('integrity',)),
 }
 RESERVED = {'Cerid GREASE values': 'Grease'}
 # registry -> (constant prefix, C++ type, value kind)

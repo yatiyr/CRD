@@ -94,6 +94,7 @@ SPEC_STATUS = {
     'draft': {'active', 'iesg', 'rfc-editor', 'expired', 'replaced'},
     'w3c': {'recommendation', 'candidate', 'working-draft'},
     'nist': {'final', 'draft', 'withdrawn'},
+    'paper': {'published', 'withdrawn'},
     'cerid': {'design', 'stable'},
 }
 HELD_DRAFT = {'iesg', 'rfc-editor'}
@@ -275,6 +276,9 @@ def spec_errors(where, entry, context):
     if kind == 'rfc' and pinned and status == 'obsoleted':
         errors.append(f'{where}: pinned {spec.get("ref")} is obsoleted by {", ".join(obsoleted_by)} in the snapshot; '
                       'pin the replacement')
+    if pinned and status == 'withdrawn':
+        errors.append(f'{where}: pinned {spec.get("ref")} is withdrawn in the snapshot; pin its successor or stop '
+                      'implementing it')
     return errors
 
 

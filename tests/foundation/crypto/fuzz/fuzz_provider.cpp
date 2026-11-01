@@ -7,7 +7,10 @@
 //   1  verification: algorithm, public key (u16 length), signature (u16 length), then the message;
 //   2  key agreement: algorithm, own private key, then the peer's public key;
 //   3  HKDF: algorithm, salt, input key material, info, two output lengths (u16 each);
-//   4  sign then verify: algorithm, seed, then the message.
+//   4  sign then verify: algorithm, seed, then the message;
+//   5  KEM round trip: algorithm, seed, the index of a ciphertext bit to change (u16), then a ciphertext;
+//   6  KEM encapsulation key: algorithm, then the key;
+//   7  table PRF: key (16 bytes), then the message.
 //
 // Oracles, none of them the provider's verdict on the same call:
 //   * an AEAD opening that succeeds re-seals to exactly the input (the AEAD's own round trip), and a refused one
@@ -17,7 +20,13 @@
 //   * an accepted EC peer is an uncompressed point of the exact length, an X25519 secret is never all zero, and
 //     derivation is deterministic;
 //   * HKDF's output of one length is the prefix of every longer one (RFC 5869's counter construction);
-//   * a key from any seed signs a message that verifies, and the same signature over a changed message does not.
+//   * a key from any seed signs a message that verifies, and the same signature over a changed message does not;
+//   * a KEM key from any seed decapsulates its own encapsulations to the sent secret, a changed ciphertext to
+//     another secret, and any ciphertext of the right length to a deterministic one (implicit rejection, never an
+//     error);
+//   * an encapsulation key is accepted exactly when a restatement of FIPS 203's modulus check (every 12-bit
+//     coefficient below q = 3329) accepts it;
+//   * the table PRF equals a restatement of SipHash-2-4 (Aumasson and Bernstein) for every key and message.
 #include <crd/fuzz/harness.hpp>
 
 #include <crd/crypto/provider.hpp>
@@ -28,6 +37,7 @@
 namespace
 {
 using crd::u16;
+using crd::u64;
 using crd::u8;
 using crd::usize;
 using crd::containers::ConstSpan;
@@ -40,6 +50,7 @@ constexpr AlgorithmId kSignatures[] = {AlgorithmId::MlDsa44, AlgorithmId::MlDsa6
                                        AlgorithmId::EcdsaSecp384r1Sha384};
 constexpr AlgorithmId kAgreements[] = {AlgorithmId::X25519, AlgorithmId::Secp256r1, AlgorithmId::Secp384r1};
 constexpr AlgorithmId kKdfs[]       = {AlgorithmId::HkdfSha256, AlgorithmId::HkdfSha384};
+constexpr AlgorithmId kKems[]       = {AlgorithmId::MlKem768, AlgorithmId::MlKem1024};
 
 // Reads the input field by field; a field past the end leaves the reader failed.
 class Reader
@@ -277,6 +288,174 @@ void sign_verify(Reader& in)
                      Verification::Invalid);
 }
 
+void kem_round_trip(Reader& in)
+{
+    const AlgorithmId   alg       = pick(kKems, in.byte());
+    const ConstSpan<u8> seed      = in.bytes(in.byte());
+    const usize         flip      = in.u16be();
+    const ConstSpan<u8> arbitrary = in.rest();
+    if (!in.ok())
+    {
+        return;
+    }
+    const KemSizes    sizes  = kem_sizes(alg);
+    KemKey            key;
+    const CryptoError loaded = key.from_seed(alg, seed);
+    CRD_FUZZ_REQUIRE((loaded == CryptoError::None) == (seed.size() == sizes.seed));
+    if (loaded != CryptoError::None)
+    {
+        CRD_FUZZ_REQUIRE(loaded == CryptoError::BadLength);
+        return;
+    }
+    static u8  ek[1568];
+    static u8  ciphertext[1568];
+    u8         sent[32];
+    u8         received[32];
+    u8         repeat[32];
+    const auto public_key = Span<u8>(ek, sizes.public_key);
+    const auto sealed     = Span<u8>(ciphertext, sizes.ciphertext);
+    CRD_FUZZ_REQUIRE(key.public_key(public_key) == CryptoError::None);
+    CRD_FUZZ_REQUIRE(kem_encapsulate(alg, public_key, sealed, sent) == CryptoError::None);
+    CRD_FUZZ_REQUIRE(key.decapsulate(sealed, received) == CryptoError::None);
+    CRD_FUZZ_REQUIRE(same(sent, received));
+    sealed[flip % sizes.ciphertext] ^= static_cast<u8>(1U << (flip / sizes.ciphertext % 8U));
+    CRD_FUZZ_REQUIRE(key.decapsulate(sealed, received) == CryptoError::None);
+    CRD_FUZZ_REQUIRE(key.decapsulate(sealed, repeat) == CryptoError::None);
+    CRD_FUZZ_REQUIRE(same(received, repeat));
+    CRD_FUZZ_REQUIRE(!same(received, sent));
+    const CryptoError opened = key.decapsulate(arbitrary, received);
+    CRD_FUZZ_REQUIRE(opened == (arbitrary.size() == sizes.ciphertext ? CryptoError::None : CryptoError::BadLength));
+    if (opened != CryptoError::None)
+    {
+        CRD_FUZZ_REQUIRE(all_zero(received));
+        return;
+    }
+    CRD_FUZZ_REQUIRE(key.decapsulate(arbitrary, repeat) == CryptoError::None);
+    CRD_FUZZ_REQUIRE(same(received, repeat));
+}
+
+// FIPS 203 section 7.2's encapsulation key check, restated: ByteDecode12 of each 384-byte polynomial yields
+// coefficients below q.
+bool reduced(ConstSpan<u8> key) noexcept
+{
+    const usize polynomials = (key.size() - 32U) / 384U;
+    for (usize i = 0U; i < polynomials * 384U; i += 3U)
+    {
+        const unsigned low  = key[i] | (key[i + 1U] & 0x0FU) << 8U;
+        const unsigned high = key[i + 1U] >> 4U | key[i + 2U] << 4U;
+        if (low >= 3329U || high >= 3329U)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+void kem_public_key(Reader& in)
+{
+    const AlgorithmId   alg = pick(kKems, in.byte());
+    const ConstSpan<u8> key = in.rest();
+    if (!in.ok())
+    {
+        return;
+    }
+    const KemSizes    sizes = kem_sizes(alg);
+    static u8         ciphertext[1568];
+    u8                secret[32];
+    const auto        sealed = Span<u8>(ciphertext, sizes.ciphertext);
+    const CryptoError result = kem_encapsulate(alg, key, sealed, secret);
+    if (key.size() != sizes.public_key)
+    {
+        CRD_FUZZ_REQUIRE(result == CryptoError::BadLength);
+    }
+    else
+    {
+        CRD_FUZZ_REQUIRE(result == (reduced(key) ? CryptoError::None : CryptoError::BadKey));
+    }
+    if (result != CryptoError::None)
+    {
+        CRD_FUZZ_REQUIRE(all_zero(sealed));
+        CRD_FUZZ_REQUIRE(all_zero(secret));
+    }
+}
+
+u64 load_le64(const u8* bytes) noexcept
+{
+    u64 value = 0U;
+    for (usize i = 0U; i < 8U; ++i)
+    {
+        value |= static_cast<u64>(bytes[i]) << (8U * i);
+    }
+    return value;
+}
+
+u64 rotate(u64 value, unsigned bits) noexcept
+{
+    return value << bits | value >> (64U - bits);
+}
+
+// SipHash-2-4 restated from its paper: two compression rounds per 8-byte word, the length in the last word's top
+// byte, four finalization rounds.
+u64 siphash24(u64 k0, u64 k1, ConstSpan<u8> message) noexcept
+{
+    u64        v0    = 0x736f6d6570736575ULL ^ k0;
+    u64        v1    = 0x646f72616e646f6dULL ^ k1;
+    u64        v2    = 0x6c7967656e657261ULL ^ k0;
+    u64        v3    = 0x7465646279746573ULL ^ k1;
+    const auto round = [&]
+    {
+        v0 += v1;
+        v1 = rotate(v1, 13U) ^ v0;
+        v0 = rotate(v0, 32U);
+        v2 += v3;
+        v3 = rotate(v3, 16U) ^ v2;
+        v0 += v3;
+        v3 = rotate(v3, 21U) ^ v0;
+        v2 += v1;
+        v1 = rotate(v1, 17U) ^ v2;
+        v2 = rotate(v2, 32U);
+    };
+    const usize whole = message.size() & ~usize{7U};
+    for (usize i = 0U; i < whole; i += 8U)
+    {
+        const u64 word = load_le64(message.data() + i);
+        v3 ^= word;
+        round();
+        round();
+        v0 ^= word;
+    }
+    u64 last = static_cast<u64>(message.size()) << 56U;
+    for (usize i = whole; i < message.size(); ++i)
+    {
+        last |= static_cast<u64>(message[i]) << (8U * (i - whole));
+    }
+    v3 ^= last;
+    round();
+    round();
+    v0 ^= last;
+    v2 ^= 0xFFU;
+    for (unsigned i = 0U; i < 4U; ++i)
+    {
+        round();
+    }
+    return v0 ^ v1 ^ v2 ^ v3;
+}
+
+void table_prf(Reader& in)
+{
+    const ConstSpan<u8> key     = in.bytes(kPrfKeyBytes);
+    const ConstSpan<u8> message = in.rest();
+    if (!in.ok())
+    {
+        return;
+    }
+    PrfKey prf;
+    CRD_FUZZ_REQUIRE(prf.init(AlgorithmId::Siphash24, key) == CryptoError::None);
+    u64 value = 0U;
+    CRD_FUZZ_REQUIRE(prf.hash(message, value) == CryptoError::None);
+    CRD_FUZZ_REQUIRE(value == siphash24(load_le64(key.data()), load_le64(key.data() + 8U), message));
+}
+
 void add(crd::fuzz::SeedSink& sink, const char* name, const u8* data, usize size)
 {
     sink.add(name, data, size);
@@ -290,7 +469,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         return 0;
     }
     Reader in(data + 1U, size - 1U);
-    switch (data[0] % 5U)
+    switch (data[0] % 8U)
     {
     case 0U:
         aead_open(in);
@@ -304,8 +483,17 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     case 3U:
         derive(in);
         break;
-    default:
+    case 4U:
         sign_verify(in);
+        break;
+    case 5U:
+        kem_round_trip(in);
+        break;
+    case 6U:
+        kem_public_key(in);
+        break;
+    default:
+        table_prf(in);
         break;
     }
     return 0;
@@ -446,4 +634,49 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     }
     put(text, sizeof(text));
     add(sink, "sign-ecdsa-zero-scalar", input, n);
+
+    // ML-KEM-768 from a fixed seed: a round trip with one bit changed, then a ciphertext of the right length.
+    static u8 kem_input[2U + 1568U];
+    kem_input[0] = 5U;
+    kem_input[1] = 0U; // ML-KEM-768
+    kem_input[2] = 64U;
+    std::memcpy(kem_input + 3U, key, sizeof(key));
+    std::memcpy(kem_input + 3U + sizeof(key), key, sizeof(key));
+    kem_input[67] = 0x02U; // bit 0x021D: byte 541, bit 0
+    kem_input[68] = 0x1DU;
+    for (usize i = 0U; i < 1088U; ++i)
+    {
+        kem_input[69U + i] = text[i % sizeof(text)];
+    }
+    add(sink, "kem-mlkem768-round-trip", kem_input, 69U + 1088U);
+
+    // The ML-KEM-1024 encapsulation key of the same fixed seed, and that key with its first coefficient raised to q.
+    KemKey kem;
+    if (kem.from_seed(AlgorithmId::MlKem1024, ConstSpan<u8>(kem_input + 3U, 64U)) != CryptoError::None)
+    {
+        return;
+    }
+    kem_input[0] = 6U;
+    kem_input[1] = 1U; // ML-KEM-1024
+    if (kem.public_key(Span<u8>(kem_input + 2U, 1568U)) != CryptoError::None)
+    {
+        return;
+    }
+    add(sink, "kem-mlkem1024-public-key", kem_input, 2U + 1568U);
+    kem_input[2] = 0x01U; // 0x001 | 0xD << 8 = 3329
+    kem_input[3] = static_cast<u8>((kem_input[3] & 0xF0U) | 0x0DU);
+    add(sink, "kem-mlkem1024-unreduced", kem_input, 2U + 1568U);
+
+    // SipHash-2-4: the paper's appendix A key (00 01 ... 0f) and message (00 01 ... 0e).
+    n = 0U;
+    put_byte(7U);
+    for (usize i = 0U; i < kPrfKeyBytes; ++i)
+    {
+        put_byte(static_cast<u8>(i));
+    }
+    for (usize i = 0U; i < 15U; ++i)
+    {
+        put_byte(static_cast<u8>(i));
+    }
+    add(sink, "prf-siphash-paper", input, n);
 }

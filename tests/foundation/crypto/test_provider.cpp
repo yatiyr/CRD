@@ -4,17 +4,13 @@
 // generated, moved and cleared, concurrent use of one key, and a policy generation signed by real ML-DSA and
 // Ed25519 keys through the production verifier.
 
-#include <crd/assetio/json.hpp>
-#include <crd/containers/array.hpp>
-#include <crd/containers/string.hpp>
+#include "wycheproof.hpp"
+
 #include <crd/crypto/policy.hpp>
 #include <crd/crypto/provider.hpp>
-#include <crd/memory/allocator.hpp>
-#include <crd/platform/filesystem.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <thread>
@@ -25,124 +21,12 @@ using crd::u32;
 using crd::u64;
 using crd::u8;
 using crd::usize;
-using crd::containers::Array;
 using crd::containers::ConstSpan;
 using crd::containers::Span;
-using crd::containers::String;
 using crd::containers::StringView;
 using namespace crd::crypto;
+using namespace crd::crypto::test;
 namespace json = crd::assetio::json;
-namespace fs   = crd::platform::fs;
-
-using Bytes = Array<u8>;
-
-u8 nibble(char c)
-{
-    if (c >= '0' && c <= '9')
-    {
-        return static_cast<u8>(c - '0');
-    }
-    if (c >= 'a' && c <= 'f')
-    {
-        return static_cast<u8>(c - 'a' + 10);
-    }
-    REQUIRE((c >= 'A' && c <= 'F'));
-    return static_cast<u8>(c - 'A' + 10);
-}
-
-Bytes from_hex(StringView text)
-{
-    REQUIRE(text.size() % 2U == 0U);
-    Bytes out;
-    out.resize(text.size() / 2U);
-    for (usize i = 0U; i < out.size(); ++i)
-    {
-        out[i] = static_cast<u8>(nibble(text[2U * i]) << 4U | nibble(text[2U * i + 1U]));
-    }
-    return out;
-}
-
-bool equal(ConstSpan<u8> a, ConstSpan<u8> b)
-{
-    return a.size() == b.size() && (a.empty() || std::memcmp(a.data(), b.data(), a.size()) == 0);
-}
-
-bool all_zero(ConstSpan<u8> bytes)
-{
-    return std::ranges::all_of(bytes, [](u8 b) { return b == 0U; });
-}
-
-// One Wycheproof file, parsed: groups and tests are walked through the flat DOM.
-class Vectors
-{
-public:
-    explicit Vectors(const char* name)
-    {
-        String path(CRD_WYCHEPROOF_DIR "/testvectors_v1/");
-        path.append(name);
-        path.append(".json");
-        INFO(path.c_str());
-        Bytes bytes;
-        REQUIRE(fs::read_file_binary(fs::Path(StringView(path)), bytes));
-        REQUIRE(json::parse(ConstSpan<u8>(bytes.data(), bytes.size()), m_doc));
-        m_groups = json::find(m_doc, m_doc.root, "testGroups");
-        REQUIRE(json::count_of(m_doc, m_groups) > 0U);
-    }
-
-    [[nodiscard]] const json::JsonDoc& doc() const { return m_doc; }
-    [[nodiscard]] u32                  groups() const { return m_groups; }
-
-    [[nodiscard]] StringView text(u32 node) const
-    {
-        REQUIRE(node != json::kInvalid);
-        const json::JsonNode& n = m_doc.nodes[node];
-        REQUIRE(n.type == json::JsonType::String);
-        return StringView(m_doc.strings.data() + n.str_off, n.str_len);
-    }
-    [[nodiscard]] StringView text(u32 object, const char* key) const { return text(json::find(m_doc, object, key)); }
-    [[nodiscard]] Bytes      hex(u32 object, const char* key) const { return from_hex(text(object, key)); }
-    [[nodiscard]] bool       has(u32 object, const char* key) const
-    {
-        const u32 node = json::find(m_doc, object, key);
-        return node != json::kInvalid && m_doc.nodes[node].type != json::JsonType::Null;
-    }
-    [[nodiscard]] u64 number(u32 object, const char* key) const
-    {
-        return static_cast<u64>(json::as_i64(m_doc, json::find(m_doc, object, key), -1));
-    }
-    [[nodiscard]] bool flagged(u32 test, const char* flag) const
-    {
-        const u32 flags = json::find(m_doc, test, "flags");
-        for (u32 i = 0U; i < json::count_of(m_doc, flags); ++i)
-        {
-            if (json::str_value_eq(m_doc, json::at(m_doc, flags, i), flag))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // Visits every test as f(group, test, result) with result "valid", "invalid" or "acceptable".
-    template <typename F> void each(const F& f) const
-    {
-        for (u32 g = 0U; g < json::count_of(m_doc, m_groups); ++g)
-        {
-            const u32 group = json::at(m_doc, m_groups, g);
-            const u32 tests = json::find(m_doc, group, "tests");
-            for (u32 t = 0U; t < json::count_of(m_doc, tests); ++t)
-            {
-                const u32 test = json::at(m_doc, tests, t);
-                INFO("tcId " << number(test, "tcId"));
-                f(group, test, text(test, "result"));
-            }
-        }
-    }
-
-private:
-    json::JsonDoc m_doc{crd::memory::default_allocator()};
-    u32           m_groups = json::kInvalid;
-};
 
 // ---- Provider identity and helpers ----
 
@@ -150,7 +34,7 @@ TEST_CASE("Provider: identity, the implemented set and error names", "[crypto][n
 {
     CHECK(provider_name() == StringView("AWS-LC 5.12.0"));
     const ConstSpan<AlgorithmId> implemented = provider_algorithms();
-    REQUIRE(implemented.size() == 14U);
+    REQUIRE(implemented.size() == 17U);
     for (usize i = 0U; i < implemented.size(); ++i)
     {
         CHECK(provider_implements(implemented[i]));
@@ -175,6 +59,8 @@ TEST_CASE("Provider: identity, the implemented set and error names", "[crypto][n
             type == AlgorithmClass::PostQuantumSignature || type == AlgorithmClass::ClassicalSignature;
         CHECK((signature_sizes(id).public_key != 0U) == signature);
         CHECK((agreement_sizes(id).public_key != 0U) == (type == AlgorithmClass::ClassicalKeyExchange));
+        CHECK((kem_sizes(id).public_key != 0U) == (type == AlgorithmClass::Kem));
+        CHECK(provider_implements(id) == (type != AlgorithmClass::HybridKeyExchange));
     }
 
     const CryptoError errors[] = {CryptoError::None,       CryptoError::Unsupported, CryptoError::NotReady,
@@ -624,6 +510,11 @@ TEST_CASE("Provider: agreement keys generate, agree, move and refuse", "[crypto]
     REQUIRE(x.public_key(pub) == CryptoError::None);
     REQUIRE(x.derive(base, derived) == CryptoError::None);
     CHECK(equal(pub, derived));
+    // A secret overlapping the peer's key is refused before anything is written.
+    u8 joint[40] = {9};
+    CHECK(x.derive(ConstSpan<u8>(joint, 32U), Span<u8>(joint + 8U, 32U)) == CryptoError::Overlap);
+    CHECK(joint[0] == 9U);
+    CHECK(all_zero(ConstSpan<u8>(joint + 1U, 39U)));
 
     // EC scalars outside [1, n - 1], compressed and off-curve points are refused.
     AgreementKey ec;

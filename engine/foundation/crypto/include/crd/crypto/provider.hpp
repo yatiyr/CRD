@@ -15,8 +15,9 @@
 //               secrets (shared secrets, derived keys) are the caller's to zero (secure_zero).
 //   threads     a key object is read-only after init(): seal, open, sign, derive and verify may run on several
 //               threads at once. init() and clear() need the caller's exclusive access.
-//   allocation  AEAD keys and the operations on them allocate nothing (the per-packet path); signature and
-//               agreement keys hold one provider object each and allocate only at init().
+//   allocation  AEAD and PRF keys and the operations on them allocate nothing (the per-packet and per-lookup
+//               paths); signature, agreement and KEM keys hold one provider object each and allocate at init(), and
+//               encapsulation and decapsulation allocate one provider context each (the handshake path).
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
@@ -140,24 +141,41 @@ struct SignatureSizes
 
 struct ProviderKey; // the provider's key object, defined only inside crd-crypto
 
+namespace detail
+{
+// The provider key object a signature, agreement or KEM key owns, with its algorithm: moved, never copied, and
+// released (the provider zeroes it) on reset and destruction; a moved-from handle holds nothing.
+class ProviderKeyHandle
+{
+public:
+    ProviderKeyHandle() noexcept = default;
+    ~ProviderKeyHandle() noexcept;
+    ProviderKeyHandle(const ProviderKeyHandle&)            = delete;
+    ProviderKeyHandle& operator=(const ProviderKeyHandle&) = delete;
+    ProviderKeyHandle(ProviderKeyHandle&& other) noexcept;
+    ProviderKeyHandle& operator=(ProviderKeyHandle&& other) noexcept;
+
+    void                       reset(ProviderKey* key = nullptr, AlgorithmId algorithm = {}) noexcept;
+    [[nodiscard]] ProviderKey* get() const noexcept { return m_key; }
+    [[nodiscard]] AlgorithmId  algorithm() const noexcept { return m_algorithm; }
+
+private:
+    ProviderKey* m_key = nullptr;
+    AlgorithmId  m_algorithm{};
+};
+} // namespace detail
+
 class SigningKey
 {
 public:
-    SigningKey() noexcept = default;
-    ~SigningKey() noexcept;
-    SigningKey(const SigningKey&)            = delete;
-    SigningKey& operator=(const SigningKey&) = delete;
-    SigningKey(SigningKey&& other) noexcept;
-    SigningKey& operator=(SigningKey&& other) noexcept;
-
     // A fresh key from the provider's randomness.
     [[nodiscard]] CryptoError generate(AlgorithmId algorithm) noexcept;
     // The key `seed` determines (signature_sizes(algorithm).seed bytes; an ECDSA scalar must lie in [1, n - 1]).
     [[nodiscard]] CryptoError from_seed(AlgorithmId algorithm, cont::ConstSpan<u8> seed) noexcept;
-    void                      clear() noexcept;
+    void                      clear() noexcept { m_key.reset(); }
 
-    [[nodiscard]] bool        ready() const noexcept { return m_key != nullptr; }
-    [[nodiscard]] AlgorithmId algorithm() const noexcept { return m_algorithm; }
+    [[nodiscard]] bool        ready() const noexcept { return m_key.get() != nullptr; }
+    [[nodiscard]] AlgorithmId algorithm() const noexcept { return m_key.algorithm(); }
 
     // `out` is signature_sizes(algorithm()).public_key long.
     [[nodiscard]] CryptoError public_key(cont::Span<u8> out) const noexcept;
@@ -168,8 +186,7 @@ public:
     [[nodiscard]] CryptoError sign(cont::ConstSpan<u8> message, cont::Span<u8> out, usize& written) const noexcept;
 
 private:
-    ProviderKey* m_key = nullptr;
-    AlgorithmId  m_algorithm{};
+    detail::ProviderKeyHandle m_key;
 };
 
 // Verification through the provider; stateless, so one instance serves every thread.
@@ -198,30 +215,107 @@ struct AgreementSizes
 class AgreementKey
 {
 public:
-    AgreementKey() noexcept = default;
-    ~AgreementKey() noexcept;
-    AgreementKey(const AgreementKey&)            = delete;
-    AgreementKey& operator=(const AgreementKey&) = delete;
-    AgreementKey(AgreementKey&& other) noexcept;
-    AgreementKey& operator=(AgreementKey&& other) noexcept;
-
     [[nodiscard]] CryptoError generate(AlgorithmId algorithm) noexcept;
     // An X25519 private key is any 32 bytes (clamped as RFC 7748 says); an EC scalar must lie in [1, n - 1].
     [[nodiscard]] CryptoError from_private(AlgorithmId algorithm, cont::ConstSpan<u8> private_key) noexcept;
-    void                      clear() noexcept;
+    void                      clear() noexcept { m_key.reset(); }
 
-    [[nodiscard]] bool        ready() const noexcept { return m_key != nullptr; }
-    [[nodiscard]] AlgorithmId algorithm() const noexcept { return m_algorithm; }
+    [[nodiscard]] bool        ready() const noexcept { return m_key.get() != nullptr; }
+    [[nodiscard]] AlgorithmId algorithm() const noexcept { return m_key.algorithm(); }
 
     [[nodiscard]] CryptoError public_key(cont::Span<u8> out) const noexcept;
 
-    // The shared secret with `peer_public`. An EC peer point must be uncompressed and on the curve (BadKey otherwise,
-    // the invalid-curve defence); an X25519 secret of all zeros is WeakSecret (RFC 7748 section 6.1, RFC 8446 section
-    // 7.4.2). On any error `secret` is zeroed.
+    // The shared secret with `peer_public`, which `secret` must not overlap (Overlap, nothing written). An EC peer
+    // point must be uncompressed and on the curve (BadKey otherwise, the invalid-curve defence); an X25519 secret of
+    // all zeros is WeakSecret (RFC 7748 section 6.1, RFC 8446 section 7.4.2). On any other error `secret` is zeroed.
     [[nodiscard]] CryptoError derive(cont::ConstSpan<u8> peer_public, cont::Span<u8> secret) const noexcept;
 
 private:
-    ProviderKey* m_key = nullptr;
-    AlgorithmId  m_algorithm{};
+    detail::ProviderKeyHandle m_key;
+};
+
+// ---- Key encapsulation (ML-KEM-768 and ML-KEM-1024, FIPS 203) ----
+
+// Encodings (decision P7): encapsulation keys and ciphertexts as FIPS 203 encodes them, 32-byte shared secrets, and
+// as the private input the 64-byte seed d || z that ML-KEM.KeyGen_internal takes, never the expanded decapsulation
+// key (a seed cannot be malformed; an expanded key can).
+struct KemSizes
+{
+    usize public_key = 0U; // the encapsulation key
+    usize seed       = 0U;
+    usize ciphertext = 0U;
+    usize secret     = 0U;
+};
+
+// All zero for anything but an implemented key encapsulation mechanism.
+[[nodiscard]] KemSizes kem_sizes(AlgorithmId algorithm) noexcept;
+
+// Encapsulates a fresh secret to `peer_public`: `ciphertext` and `secret` have kem_sizes(algorithm)'s lengths and
+// overlap neither `peer_public` nor each other (Overlap, nothing written). The encapsulation key must pass FIPS 203's
+// input check (section 7.2: every coefficient it encodes is below q), or the result is BadKey. On any other error
+// both outputs are zeroed.
+[[nodiscard]] CryptoError kem_encapsulate(AlgorithmId algorithm, cont::ConstSpan<u8> peer_public,
+                                          cont::Span<u8> ciphertext, cont::Span<u8> secret) noexcept;
+
+class KemKey
+{
+public:
+    // A fresh key: a seed from the provider's randomness.
+    [[nodiscard]] CryptoError generate(AlgorithmId algorithm) noexcept;
+    // The key `seed` (kem_sizes(algorithm).seed bytes, d || z) determines; every seed of that length is a key.
+    [[nodiscard]] CryptoError from_seed(AlgorithmId algorithm, cont::ConstSpan<u8> seed) noexcept;
+    void                      clear() noexcept { m_key.reset(); }
+
+    [[nodiscard]] bool        ready() const noexcept { return m_key.get() != nullptr; }
+    [[nodiscard]] AlgorithmId algorithm() const noexcept { return m_key.algorithm(); }
+
+    // The encapsulation key: kem_sizes(algorithm()).public_key bytes.
+    [[nodiscard]] CryptoError public_key(cont::Span<u8> out) const noexcept;
+
+    // The secret `ciphertext` carries; `secret` must not overlap it (Overlap, nothing written). A ciphertext of the
+    // right length never fails: one not made for this key yields ML-KEM's implicit-rejection secret, a pseudorandom
+    // function of the key's z and the ciphertext, in the same time as a genuine one, so neither the answer nor its
+    // timing tells whether the ciphertext was genuine (FIPS 203 section 6.3); the protocol notices only when keys
+    // derived from the secret fail to authenticate. Another length is BadLength, with `secret` zeroed.
+    [[nodiscard]] CryptoError decapsulate(cont::ConstSpan<u8> ciphertext, cont::Span<u8> secret) const noexcept;
+
+private:
+    detail::ProviderKeyHandle m_key;
+};
+
+// ---- Keyed pseudorandom function for tables (SipHash-2-4) ----
+
+// Every table an adversary can fill (connection identifiers, address buckets, object tables) is indexed by this PRF
+// under a secret key, so colliding inputs cannot be found faster than by trying them (threat T10, decision P8).
+inline constexpr usize kPrfKeyBytes = 16U;
+
+class PrfKey
+{
+public:
+    PrfKey() noexcept = default;
+    ~PrfKey() noexcept;
+    PrfKey(const PrfKey&)            = delete;
+    PrfKey& operator=(const PrfKey&) = delete;
+    PrfKey(PrfKey&&)                 = delete;
+    PrfKey& operator=(PrfKey&&)      = delete;
+
+    // A fresh key from the provider's randomness: every table, or every process, generates its own.
+    [[nodiscard]] CryptoError generate(AlgorithmId algorithm) noexcept;
+    // A key that cooperating processes share (kPrfKeyBytes, SipHash's k0 then k1, each little-endian), such as the
+    // servers behind one load balancer that route the same connection identifiers.
+    [[nodiscard]] CryptoError init(AlgorithmId algorithm, cont::ConstSpan<u8> key) noexcept;
+    void                      clear() noexcept;
+
+    [[nodiscard]] bool        ready() const noexcept { return m_ready; }
+    [[nodiscard]] AlgorithmId algorithm() const noexcept { return m_algorithm; }
+
+    // The PRF of `bytes` (SipHash's 64-bit output; its byte form is this value little-endian). NotReady, with `out`
+    // zero, when the key holds none: a table must never fall back to a public function.
+    [[nodiscard]] CryptoError hash(cont::ConstSpan<u8> bytes, u64& out) const noexcept;
+
+private:
+    u64         m_key[2] = {};
+    AlgorithmId m_algorithm{};
+    bool        m_ready = false;
 };
 } // namespace crd::crypto

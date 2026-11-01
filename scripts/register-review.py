@@ -90,6 +90,7 @@ MANUAL_REGISTRIES = {
 MANUAL_SPECS = {
     'w3c': ('the status of {ref} on its W3C Technical Reports page', '{ref}'),
     'nist': ('the status of {ref} on the NIST CSRC publications list', 'https://csrc.nist.gov/publications'),
+    'paper': ('whether the paper {ref} was withdrawn or superseded', '{ref}'),
 }
 CALENDAR_SOURCE = {
     'standards': ('https://www.ietf.org/meeting/upcoming/',

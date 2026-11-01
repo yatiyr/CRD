@@ -23,13 +23,13 @@ constexpr usize kCount = sizeof(kAlgorithmIds) / sizeof(kAlgorithmIds[0]);
 bool known_class(AlgorithmId id)
 {
     const AlgorithmClass type = algorithm_class(id);
-    return type >= AlgorithmClass::HybridKeyExchange && type <= AlgorithmClass::Kdf;
+    return type >= AlgorithmClass::HybridKeyExchange && type <= AlgorithmClass::Prf;
 }
 } // namespace
 
 TEST_CASE("Register ids: every algorithm has a unique identifier, a class and its register entry", "[crypto][net-std]")
 {
-    static_assert(kCount == 17U, "the algorithms the network foundation's provider policy names");
+    static_assert(kCount == 20U, "the algorithms the network foundation's provider policy names");
     for (usize i = 0U; i < kCount; ++i)
     {
         const AlgorithmId id = kAlgorithmIds[i];
@@ -48,7 +48,7 @@ TEST_CASE("Register ids: every algorithm has a unique identifier, a class and it
     CHECK(std::strcmp(algorithm_register_id(static_cast<AlgorithmId>(0x7F01U)), "") == 0);
 }
 
-TEST_CASE("Register ids: the class byte separates hybrids, traditional groups, signatures and symmetric algorithms",
+TEST_CASE("Register ids: the class byte separates hybrids, traditional groups, signatures, KEMs and symmetric algorithms",
           "[crypto][net-std]")
 {
     CHECK(algorithm_class(AlgorithmId::X25519Mlkem768) == AlgorithmClass::HybridKeyExchange);
@@ -59,6 +59,10 @@ TEST_CASE("Register ids: the class byte separates hybrids, traditional groups, s
     CHECK(algorithm_class(AlgorithmId::EcdsaSecp384r1Sha384) == AlgorithmClass::ClassicalSignature);
     CHECK(algorithm_class(AlgorithmId::Chacha20Poly1305) == AlgorithmClass::Aead);
     CHECK(algorithm_class(AlgorithmId::HkdfSha384) == AlgorithmClass::Kdf);
+    CHECK(algorithm_class(AlgorithmId::MlKem768) == AlgorithmClass::Kem);
+    CHECK(algorithm_class(AlgorithmId::MlKem1024) == AlgorithmClass::Kem);
+    CHECK(algorithm_class(AlgorithmId::Siphash24) == AlgorithmClass::Prf);
+    CHECK_FALSE(known_class(static_cast<AlgorithmId>(0x0901U)));
     CHECK_FALSE(known_class(static_cast<AlgorithmId>(0x7F01U)));
     CHECK_FALSE(known_class(static_cast<AlgorithmId>(0x0001U)));
 }

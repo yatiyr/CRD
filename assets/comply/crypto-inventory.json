@@ -100,6 +100,26 @@
           ],
           "spec": "RFC 5869",
           "standard": true
+        },
+        {
+          "id": "crypto.ml-kem",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "key-exchange"
+          ],
+          "spec": "FIPS 203",
+          "standard": true
+        },
+        {
+          "id": "crypto.siphash",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "integrity"
+          ],
+          "spec": "https://doi.org/10.1007/978-3-642-34931-7_28",
+          "standard": true
         }
       ],
       "algorithms": [
@@ -313,6 +333,51 @@
           ],
           "entry": "crypto.hkdf",
           "spec": "RFC 5869",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "ml-kem-768",
+          "value": "0x0701",
+          "class": "Kem",
+          "functions": [
+            "key-exchange"
+          ],
+          "key_bits": [
+            9472
+          ],
+          "entry": "crypto.ml-kem",
+          "spec": "FIPS 203",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "ml-kem-1024",
+          "value": "0x0702",
+          "class": "Kem",
+          "functions": [
+            "key-exchange"
+          ],
+          "key_bits": [
+            12544
+          ],
+          "entry": "crypto.ml-kem",
+          "spec": "FIPS 203",
+          "standard": true,
+          "owner": "crypto"
+        },
+        {
+          "name": "siphash-2-4",
+          "value": "0x0801",
+          "class": "Prf",
+          "functions": [
+            "integrity"
+          ],
+          "key_bits": [
+            128
+          ],
+          "entry": "crypto.siphash",
+          "spec": "https://doi.org/10.1007/978-3-642-34931-7_28",
           "standard": true,
           "owner": "crypto"
         }

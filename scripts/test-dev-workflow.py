@@ -1055,6 +1055,25 @@ class TidyTests(unittest.TestCase):
         self.assertEqual(compiler_family({'arguments': ['clang-cl.exe', '/c']}), 'msvc')
         self.assertEqual(compiler_family({'command': '"C:\\Program Files\\LLVM\\bin\\clang++.exe" -c a.cpp'}), 'gnu')
 
+    def test_a_module_sibling_that_includes_the_header_is_preferred(self):
+        # A test directory holds the suite and, below it, fuzz targets with other dependencies: the alphabetically
+        # first unit (fuzz/a.cpp) cannot resolve the header's includes, the unit that includes it can.
+        entries = []
+        for name, text in (('tests/c/fuzz/a.cpp', ''), ('tests/c/suite.cpp', '#include "vectors.hpp"\n'),
+                           ('tests/c/other.cpp', '#  include <c/vectors.hpp>\n')):
+            unit = self.root / name
+            unit.parent.mkdir(parents=True, exist_ok=True)
+            unit.write_text(text, encoding='utf-8')
+            entries.append({'directory': str(self.build), 'file': unit.as_posix(),
+                            'command': f'/usr/bin/g++ -DUNIT={unit.stem} -c {unit.as_posix()}'})
+        (self.root / 'tests/c/vectors.hpp').write_text('', encoding='utf-8')
+        (self.root / 'tests/c/lonely.hpp').write_text('', encoding='utf-8')
+        jobs, mirrored = prepare(self.root, entries, ['tests/c/vectors.hpp', 'tests/c/lonely.hpp'])
+        self.assertEqual([job['source'] for job in jobs], ['module:tests/c', 'module:tests/c'])
+        synthesized = {Path(entry['file']).name: entry['command'] for entry in mirrored[len(entries):]}
+        self.assertIn('-DUNIT=other', synthesized['vectors.hpp'])
+        self.assertIn('-DUNIT=a', synthesized['lonely.hpp'])
+
     def test_extra_arguments_come_from_the_database_compiler(self):
         self.assertEqual(extra_arguments('msvc'), ['--extra-arg=/EHsc', '--extra-arg=-Wno-unused-command-line-argument'])
         gnu = extra_arguments('gnu')

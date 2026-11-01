@@ -1,6 +1,7 @@
 # crd-crypto tests: the algorithm identifiers generated from the standards register and the signed crypto policy
 # generations (NET-STD), and the provider interface against Project Wycheproof's vectors (NET.2).
 add_executable(crd-crypto-tests
+    test_kem_prf.cpp
     test_policy.cpp
     test_provider.cpp
     test_register_ids.cpp
@@ -14,6 +15,9 @@ target_link_libraries(crd-crypto-tests PRIVATE
     crd-memory
     crd-platform
     Catch2::Catch2WithMain
+    # The provider itself, for the ML-KEM encapsulation vectors only: their known answers fix the randomness m,
+    # which only the provider's deterministic encapsulation takes (test_kem_prf.cpp).
+    crypto
 )
 
 # The pinned Wycheproof vectors are read from the package cache at run time (cmake/pins.json: wycheproof).

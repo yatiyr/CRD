@@ -16,11 +16,13 @@
 #include <openssl/ecdh.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
+#include <openssl/experimental/kem_deterministic_api.h>
 #include <openssl/hkdf.h>
 #include <openssl/mem.h>
 #include <openssl/nid.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
+#include <openssl/siphash.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -52,6 +54,8 @@ constexpr AlgorithmId kImplemented[] = {
     AlgorithmId::EcdsaSecp384r1Sha384,
     AlgorithmId::Aes128Gcm,        AlgorithmId::Aes256Gcm, AlgorithmId::Chacha20Poly1305,
     AlgorithmId::HkdfSha256,       AlgorithmId::HkdfSha384,
+    AlgorithmId::MlKem768,         AlgorithmId::MlKem1024,
+    AlgorithmId::Siphash24,
 };
 
 struct SignatureAlgorithm
@@ -84,21 +88,22 @@ constexpr AgreementAlgorithm kAgreements[] = {
     {AlgorithmId::Secp384r1, NID_secp384r1, {97U, 48U, 48U}},
 };
 
-const SignatureAlgorithm* find_signature(AlgorithmId algorithm) noexcept
+struct KemAlgorithm
 {
-    for (const SignatureAlgorithm& entry : kSignatures)
-    {
-        if (entry.id == algorithm)
-        {
-            return &entry;
-        }
-    }
-    return nullptr;
-}
+    AlgorithmId id;
+    int         nid; // the ML-KEM parameter set
+    KemSizes    sizes;
+};
 
-const AgreementAlgorithm* find_agreement(AlgorithmId algorithm) noexcept
+constexpr KemAlgorithm kKems[] = {
+    {AlgorithmId::MlKem768, NID_MLKEM768, {1184U, 64U, 1088U, 32U}},
+    {AlgorithmId::MlKem1024, NID_MLKEM1024, {1568U, 64U, 1568U, 32U}},
+};
+
+// The entry of `table` for `algorithm`; null when the table's class does not hold it.
+template <typename Entry, usize N> const Entry* find_entry(const Entry (&table)[N], AlgorithmId algorithm) noexcept
 {
-    for (const AgreementAlgorithm& entry : kAgreements)
+    for (const Entry& entry : table)
     {
         if (entry.id == algorithm)
         {
@@ -301,11 +306,22 @@ bssl::UniquePtr<EVP_PKEY> signature_private_key(const SignatureAlgorithm& entry,
     }
 }
 
-void free_key(ProviderKey*& key) noexcept
+// Zeroes both outputs of an encapsulation, or the one of an agreement or decapsulation, after a refusal.
+CryptoError refuse(CryptoError error, cont::Span<u8> first, cont::Span<u8> second = {}) noexcept
 {
-    // EVP_PKEY_free releases the key through OPENSSL_free, which zeroes every allocation it returns.
-    EVP_PKEY_free(pkey_of(key));
-    key = nullptr;
+    secure_zero(first);
+    secure_zero(second);
+    return error;
+}
+
+u64 load_le64(const u8* bytes) noexcept
+{
+    u64 value = 0U;
+    for (usize i = 0U; i < 8U; ++i)
+    {
+        value |= static_cast<u64>(bytes[i]) << (8U * i);
+    }
+    return value;
 }
 } // namespace
 
@@ -542,48 +558,54 @@ CryptoError hkdf_expand(AlgorithmId algorithm, cont::ConstSpan<u8> prk, cont::Co
     return CryptoError::None;
 }
 
-// ---- Signatures ----
+// ---- Provider key handles ----
 
-SignatureSizes signature_sizes(AlgorithmId algorithm) noexcept
+namespace detail
 {
-    const SignatureAlgorithm* entry = find_signature(algorithm);
-    return entry != nullptr ? entry->sizes : SignatureSizes{};
+ProviderKeyHandle::~ProviderKeyHandle() noexcept
+{
+    reset();
 }
 
-SigningKey::~SigningKey() noexcept
-{
-    clear();
-}
-
-SigningKey::SigningKey(SigningKey&& other) noexcept : m_key(other.m_key), m_algorithm(other.m_algorithm)
+ProviderKeyHandle::ProviderKeyHandle(ProviderKeyHandle&& other) noexcept
+    : m_key(other.m_key), m_algorithm(other.m_algorithm)
 {
     other.m_key       = nullptr;
     other.m_algorithm = AlgorithmId{};
 }
 
-SigningKey& SigningKey::operator=(SigningKey&& other) noexcept
+ProviderKeyHandle& ProviderKeyHandle::operator=(ProviderKeyHandle&& other) noexcept
 {
     if (this != &other)
     {
-        clear();
-        m_key             = other.m_key;
-        m_algorithm       = other.m_algorithm;
+        reset(other.m_key, other.m_algorithm);
         other.m_key       = nullptr;
         other.m_algorithm = AlgorithmId{};
     }
     return *this;
 }
 
-void SigningKey::clear() noexcept
+void ProviderKeyHandle::reset(ProviderKey* key, AlgorithmId algorithm) noexcept
 {
-    free_key(m_key);
-    m_algorithm = AlgorithmId{};
+    // EVP_PKEY_free releases the key through OPENSSL_free, which zeroes every allocation it returns.
+    EVP_PKEY_free(pkey_of(m_key));
+    m_key       = key;
+    m_algorithm = key != nullptr ? algorithm : AlgorithmId{};
+}
+} // namespace detail
+
+// ---- Signatures ----
+
+SignatureSizes signature_sizes(AlgorithmId algorithm) noexcept
+{
+    const SignatureAlgorithm* entry = find_entry(kSignatures, algorithm);
+    return entry != nullptr ? entry->sizes : SignatureSizes{};
 }
 
 CryptoError SigningKey::generate(AlgorithmId algorithm) noexcept
 {
     clear();
-    const SignatureAlgorithm* entry = find_signature(algorithm);
+    const SignatureAlgorithm* entry = find_entry(kSignatures, algorithm);
     if (entry == nullptr)
     {
         return CryptoError::Unsupported;
@@ -596,14 +618,13 @@ CryptoError SigningKey::generate(AlgorithmId algorithm) noexcept
         {
             return CryptoError::ProviderFailure;
         }
-        m_key       = key_of(pkey.release());
-        m_algorithm = algorithm;
+        m_key.reset(key_of(pkey.release()), algorithm);
         return CryptoError::None;
     }
     // ML-DSA and Ed25519 keys are their seeds' functions: a fresh seed is a fresh key.
-    u8         seed[32];
-    const auto seed_span = cont::Span<u8>(seed, entry->sizes.seed);
-    CryptoError result   = random_bytes(seed_span);
+    u8          seed[32];
+    const auto  seed_span = cont::Span<u8>(seed, entry->sizes.seed);
+    CryptoError result    = random_bytes(seed_span);
     if (result == CryptoError::None)
     {
         result = from_seed(algorithm, seed_span);
@@ -615,7 +636,7 @@ CryptoError SigningKey::generate(AlgorithmId algorithm) noexcept
 CryptoError SigningKey::from_seed(AlgorithmId algorithm, cont::ConstSpan<u8> seed) noexcept
 {
     clear();
-    const SignatureAlgorithm* entry = find_signature(algorithm);
+    const SignatureAlgorithm* entry = find_entry(kSignatures, algorithm);
     if (entry == nullptr)
     {
         return CryptoError::Unsupported;
@@ -630,18 +651,17 @@ CryptoError SigningKey::from_seed(AlgorithmId algorithm, cont::ConstSpan<u8> see
     {
         return CryptoError::BadKey;
     }
-    m_key       = key_of(pkey.release());
-    m_algorithm = algorithm;
+    m_key.reset(key_of(pkey.release()), algorithm);
     return CryptoError::None;
 }
 
 CryptoError SigningKey::public_key(cont::Span<u8> out) const noexcept
 {
-    if (m_key == nullptr)
+    if (!ready())
     {
         return CryptoError::NotReady;
     }
-    const SignatureAlgorithm& entry = *find_signature(m_algorithm);
+    const SignatureAlgorithm& entry = *find_entry(kSignatures, algorithm());
     if (out.size() != entry.sizes.public_key)
     {
         return CryptoError::BadLength;
@@ -649,10 +669,10 @@ CryptoError SigningKey::public_key(cont::Span<u8> out) const noexcept
     const ErrorScope errors;
     if (entry.type == EVP_PKEY_EC)
     {
-        return ec_public_bytes(pkey_of(m_key), out);
+        return ec_public_bytes(pkey_of(m_key.get()), out);
     }
     usize written = out.size();
-    return EVP_PKEY_get_raw_public_key(pkey_of(m_key), out.data(), &written) && written == out.size()
+    return EVP_PKEY_get_raw_public_key(pkey_of(m_key.get()), out.data(), &written) && written == out.size()
                ? CryptoError::None
                : CryptoError::ProviderFailure;
 }
@@ -660,11 +680,11 @@ CryptoError SigningKey::public_key(cont::Span<u8> out) const noexcept
 CryptoError SigningKey::sign(cont::ConstSpan<u8> message, cont::Span<u8> out, usize& written) const noexcept
 {
     written = 0U;
-    if (m_key == nullptr)
+    if (!ready())
     {
         return CryptoError::NotReady;
     }
-    const SignatureAlgorithm& entry = *find_signature(m_algorithm);
+    const SignatureAlgorithm& entry = *find_entry(kSignatures, algorithm());
     if (out.size() < entry.sizes.signature)
     {
         return CryptoError::BadLength;
@@ -672,7 +692,7 @@ CryptoError SigningKey::sign(cont::ConstSpan<u8> message, cont::Span<u8> out, us
     const ErrorScope       errors;
     bssl::ScopedEVP_MD_CTX context;
     usize                  length = out.size();
-    if (!EVP_DigestSignInit(context.get(), nullptr, signature_digest(m_algorithm), nullptr, pkey_of(m_key)) ||
+    if (!EVP_DigestSignInit(context.get(), nullptr, signature_digest(algorithm()), nullptr, pkey_of(m_key.get())) ||
         !EVP_DigestSign(context.get(), out.data(), &length, message.data(), message.size()) ||
         length > entry.sizes.signature)
     {
@@ -686,7 +706,7 @@ CryptoError SigningKey::sign(cont::ConstSpan<u8> message, cont::Span<u8> out, us
 Verification ProviderVerifier::verify(AlgorithmId algorithm, cont::ConstSpan<u8> public_key,
                                       cont::ConstSpan<u8> message, cont::ConstSpan<u8> signature) const noexcept
 {
-    const SignatureAlgorithm* entry = find_signature(algorithm);
+    const SignatureAlgorithm* entry = find_entry(kSignatures, algorithm);
     if (entry == nullptr)
     {
         return Verification::Unsupported;
@@ -712,44 +732,14 @@ Verification ProviderVerifier::verify(AlgorithmId algorithm, cont::ConstSpan<u8>
 
 AgreementSizes agreement_sizes(AlgorithmId algorithm) noexcept
 {
-    const AgreementAlgorithm* entry = find_agreement(algorithm);
+    const AgreementAlgorithm* entry = find_entry(kAgreements, algorithm);
     return entry != nullptr ? entry->sizes : AgreementSizes{};
-}
-
-AgreementKey::~AgreementKey() noexcept
-{
-    clear();
-}
-
-AgreementKey::AgreementKey(AgreementKey&& other) noexcept : m_key(other.m_key), m_algorithm(other.m_algorithm)
-{
-    other.m_key       = nullptr;
-    other.m_algorithm = AlgorithmId{};
-}
-
-AgreementKey& AgreementKey::operator=(AgreementKey&& other) noexcept
-{
-    if (this != &other)
-    {
-        clear();
-        m_key             = other.m_key;
-        m_algorithm       = other.m_algorithm;
-        other.m_key       = nullptr;
-        other.m_algorithm = AlgorithmId{};
-    }
-    return *this;
-}
-
-void AgreementKey::clear() noexcept
-{
-    free_key(m_key);
-    m_algorithm = AlgorithmId{};
 }
 
 CryptoError AgreementKey::generate(AlgorithmId algorithm) noexcept
 {
     clear();
-    const AgreementAlgorithm* entry = find_agreement(algorithm);
+    const AgreementAlgorithm* entry = find_entry(kAgreements, algorithm);
     if (entry == nullptr)
     {
         return CryptoError::Unsupported;
@@ -771,15 +761,14 @@ CryptoError AgreementKey::generate(AlgorithmId algorithm) noexcept
     {
         return CryptoError::ProviderFailure;
     }
-    m_key       = key_of(pkey.release());
-    m_algorithm = algorithm;
+    m_key.reset(key_of(pkey.release()), algorithm);
     return CryptoError::None;
 }
 
 CryptoError AgreementKey::from_private(AlgorithmId algorithm, cont::ConstSpan<u8> private_key) noexcept
 {
     clear();
-    const AgreementAlgorithm* entry = find_agreement(algorithm);
+    const AgreementAlgorithm* entry = find_entry(kAgreements, algorithm);
     if (entry == nullptr)
     {
         return CryptoError::Unsupported;
@@ -796,18 +785,17 @@ CryptoError AgreementKey::from_private(AlgorithmId algorithm, cont::ConstSpan<u8
     {
         return CryptoError::BadKey;
     }
-    m_key       = key_of(pkey.release());
-    m_algorithm = algorithm;
+    m_key.reset(key_of(pkey.release()), algorithm);
     return CryptoError::None;
 }
 
 CryptoError AgreementKey::public_key(cont::Span<u8> out) const noexcept
 {
-    if (m_key == nullptr)
+    if (!ready())
     {
         return CryptoError::NotReady;
     }
-    const AgreementAlgorithm& entry = *find_agreement(m_algorithm);
+    const AgreementAlgorithm& entry = *find_entry(kAgreements, algorithm());
     if (out.size() != entry.sizes.public_key)
     {
         return CryptoError::BadLength;
@@ -815,55 +803,253 @@ CryptoError AgreementKey::public_key(cont::Span<u8> out) const noexcept
     const ErrorScope errors;
     if (entry.nid != 0)
     {
-        return ec_public_bytes(pkey_of(m_key), out);
+        return ec_public_bytes(pkey_of(m_key.get()), out);
     }
     usize written = out.size();
-    return EVP_PKEY_get_raw_public_key(pkey_of(m_key), out.data(), &written) && written == out.size()
+    return EVP_PKEY_get_raw_public_key(pkey_of(m_key.get()), out.data(), &written) && written == out.size()
                ? CryptoError::None
                : CryptoError::ProviderFailure;
 }
 
 CryptoError AgreementKey::derive(cont::ConstSpan<u8> peer_public, cont::Span<u8> secret) const noexcept
 {
-    if (m_key == nullptr)
+    if (!ready())
     {
         return CryptoError::NotReady;
     }
-    const AgreementAlgorithm& entry = *find_agreement(m_algorithm);
+    const AgreementAlgorithm& entry = *find_entry(kAgreements, algorithm());
     if (peer_public.size() != entry.sizes.public_key || secret.size() != entry.sizes.secret)
     {
-        secure_zero(secret);
-        return CryptoError::BadLength;
+        return refuse(CryptoError::BadLength, secret);
+    }
+    if (overlaps(secret, peer_public))
+    {
+        return CryptoError::Overlap;
     }
     const ErrorScope errors;
     if (entry.nid == 0)
     {
         u8    own[32];
         usize length = sizeof(own);
-        if (!EVP_PKEY_get_raw_private_key(pkey_of(m_key), own, &length) || length != sizeof(own))
+        if (!EVP_PKEY_get_raw_private_key(pkey_of(m_key.get()), own, &length) || length != sizeof(own))
         {
             secure_zero(own);
-            secure_zero(secret);
-            return CryptoError::ProviderFailure;
+            return refuse(CryptoError::ProviderFailure, secret);
         }
         // X25519 returns 0 exactly when the result, which `secret` then holds, is all zeros (a small-order peer).
         const bool contributory = X25519(secret.data(), own, peer_public.data()) == 1;
         secure_zero(own);
         return contributory ? CryptoError::None : CryptoError::WeakSecret;
     }
-    const EC_KEY*                   key   = EVP_PKEY_get0_EC_KEY(pkey_of(m_key));
+    const EC_KEY*                   key   = EVP_PKEY_get0_EC_KEY(pkey_of(m_key.get()));
     const bssl::UniquePtr<EC_POINT> point = ec_point(EC_KEY_get0_group(key), peer_public, entry.sizes.public_key);
     if (!point)
     {
-        secure_zero(secret);
-        return CryptoError::BadKey;
+        return refuse(CryptoError::BadKey, secret);
     }
     const int length = ECDH_compute_key(secret.data(), secret.size(), point.get(), key, nullptr);
     if (length < 0 || static_cast<usize>(length) != secret.size())
     {
-        secure_zero(secret);
+        return refuse(CryptoError::ProviderFailure, secret);
+    }
+    return CryptoError::None;
+}
+
+// ---- Key encapsulation ----
+
+KemSizes kem_sizes(AlgorithmId algorithm) noexcept
+{
+    const KemAlgorithm* entry = find_entry(kKems, algorithm);
+    return entry != nullptr ? entry->sizes : KemSizes{};
+}
+
+CryptoError kem_encapsulate(AlgorithmId algorithm, cont::ConstSpan<u8> peer_public, cont::Span<u8> ciphertext,
+                            cont::Span<u8> secret) noexcept
+{
+    const KemAlgorithm* entry = find_entry(kKems, algorithm);
+    if (entry == nullptr)
+    {
+        return refuse(CryptoError::Unsupported, ciphertext, secret);
+    }
+    if (peer_public.size() != entry->sizes.public_key || ciphertext.size() != entry->sizes.ciphertext ||
+        secret.size() != entry->sizes.secret)
+    {
+        return refuse(CryptoError::BadLength, ciphertext, secret);
+    }
+    if (overlaps(ciphertext, peer_public) || overlaps(secret, peer_public) || overlaps(ciphertext, secret))
+    {
+        return CryptoError::Overlap;
+    }
+    const ErrorScope                    errors;
+    const bssl::UniquePtr<EVP_PKEY>     pkey(
+        EVP_PKEY_kem_new_raw_public_key(entry->nid, peer_public.data(), peer_public.size()));
+    const bssl::UniquePtr<EVP_PKEY_CTX> context(pkey ? EVP_PKEY_CTX_new(pkey.get(), nullptr) : nullptr);
+    if (!context)
+    {
+        return refuse(CryptoError::ProviderFailure, ciphertext, secret);
+    }
+    // The import only copies the bytes; FIPS 203 section 7.2's modulus check runs here, so a key that fails it is
+    // told apart from a provider failure.
+    if (EVP_PKEY_public_check(context.get()) != 1)
+    {
+        return refuse(CryptoError::BadKey, ciphertext, secret);
+    }
+    usize ciphertext_length = ciphertext.size();
+    usize secret_length     = secret.size();
+    if (!EVP_PKEY_encapsulate(context.get(), ciphertext.data(), &ciphertext_length, secret.data(), &secret_length) ||
+        ciphertext_length != ciphertext.size() || secret_length != secret.size())
+    {
+        return refuse(CryptoError::ProviderFailure, ciphertext, secret);
+    }
+    return CryptoError::None;
+}
+
+CryptoError KemKey::generate(AlgorithmId algorithm) noexcept
+{
+    clear();
+    const KemAlgorithm* entry = find_entry(kKems, algorithm);
+    if (entry == nullptr)
+    {
+        return CryptoError::Unsupported;
+    }
+    u8          seed[64];
+    CryptoError result = random_bytes(seed);
+    if (result == CryptoError::None)
+    {
+        result = from_seed(algorithm, seed);
+    }
+    secure_zero(seed);
+    return result;
+}
+
+CryptoError KemKey::from_seed(AlgorithmId algorithm, cont::ConstSpan<u8> seed) noexcept
+{
+    clear();
+    const KemAlgorithm* entry = find_entry(kKems, algorithm);
+    if (entry == nullptr)
+    {
+        return CryptoError::Unsupported;
+    }
+    if (seed.size() != entry->sizes.seed)
+    {
+        return CryptoError::BadLength;
+    }
+    const ErrorScope                    errors;
+    const bssl::UniquePtr<EVP_PKEY_CTX> context(EVP_PKEY_CTX_new_id(EVP_PKEY_KEM, nullptr));
+    EVP_PKEY*                           pkey   = nullptr;
+    usize                               length = seed.size();
+    // The provider's deterministic key generation (its experimental KEM API) is the only route from a seed to a key.
+    if (!context || !EVP_PKEY_CTX_kem_set_params(context.get(), entry->nid) || !EVP_PKEY_keygen_init(context.get()) ||
+        !EVP_PKEY_keygen_deterministic(context.get(), &pkey, seed.data(), &length))
+    {
+        EVP_PKEY_free(pkey);
         return CryptoError::ProviderFailure;
     }
+    m_key.reset(key_of(pkey), algorithm);
+    return CryptoError::None;
+}
+
+CryptoError KemKey::public_key(cont::Span<u8> out) const noexcept
+{
+    if (!ready())
+    {
+        return CryptoError::NotReady;
+    }
+    if (out.size() != find_entry(kKems, algorithm())->sizes.public_key)
+    {
+        return CryptoError::BadLength;
+    }
+    const ErrorScope errors;
+    usize            written = out.size();
+    return EVP_PKEY_get_raw_public_key(pkey_of(m_key.get()), out.data(), &written) && written == out.size()
+               ? CryptoError::None
+               : CryptoError::ProviderFailure;
+}
+
+CryptoError KemKey::decapsulate(cont::ConstSpan<u8> ciphertext, cont::Span<u8> secret) const noexcept
+{
+    if (!ready())
+    {
+        return CryptoError::NotReady;
+    }
+    const KemAlgorithm& entry = *find_entry(kKems, algorithm());
+    if (ciphertext.size() != entry.sizes.ciphertext || secret.size() != entry.sizes.secret)
+    {
+        return refuse(CryptoError::BadLength, secret);
+    }
+    if (overlaps(secret, ciphertext))
+    {
+        return CryptoError::Overlap;
+    }
+    const ErrorScope                    errors;
+    const bssl::UniquePtr<EVP_PKEY_CTX> context(EVP_PKEY_CTX_new(pkey_of(m_key.get()), nullptr));
+    usize                               length = secret.size();
+    if (!context ||
+        !EVP_PKEY_decapsulate(context.get(), secret.data(), &length, ciphertext.data(), ciphertext.size()) ||
+        length != secret.size())
+    {
+        return refuse(CryptoError::ProviderFailure, secret);
+    }
+    return CryptoError::None;
+}
+
+// ---- Keyed pseudorandom function ----
+
+PrfKey::~PrfKey() noexcept
+{
+    clear();
+}
+
+CryptoError PrfKey::generate(AlgorithmId algorithm) noexcept
+{
+    clear();
+    if (algorithm != AlgorithmId::Siphash24)
+    {
+        return CryptoError::Unsupported;
+    }
+    u8          key[kPrfKeyBytes];
+    CryptoError result = random_bytes(key);
+    if (result == CryptoError::None)
+    {
+        result = init(algorithm, key);
+    }
+    secure_zero(key);
+    return result;
+}
+
+CryptoError PrfKey::init(AlgorithmId algorithm, cont::ConstSpan<u8> key) noexcept
+{
+    clear();
+    if (algorithm != AlgorithmId::Siphash24)
+    {
+        return CryptoError::Unsupported;
+    }
+    if (key.size() != kPrfKeyBytes)
+    {
+        return CryptoError::BadLength;
+    }
+    m_key[0]    = load_le64(key.data());
+    m_key[1]    = load_le64(key.data() + 8U);
+    m_algorithm = algorithm;
+    m_ready     = true;
+    return CryptoError::None;
+}
+
+void PrfKey::clear() noexcept
+{
+    secure_zero(cont::Span<u8>(reinterpret_cast<u8*>(m_key), sizeof(m_key)));
+    m_algorithm = AlgorithmId{};
+    m_ready     = false;
+}
+
+CryptoError PrfKey::hash(cont::ConstSpan<u8> bytes, u64& out) const noexcept
+{
+    out = 0U;
+    if (!m_ready)
+    {
+        return CryptoError::NotReady;
+    }
+    out = SIPHASH_24(m_key, bytes.data(), bytes.size());
     return CryptoError::None;
 }
 } // namespace crd::crypto

@@ -9,8 +9,9 @@ database carries warning flags clang does not know and `-Werror`; `-Wno-unknown-
 reading as parse failures, and `-Wno-error` keeps clang's own compiler warnings under GCC's flags from failing units
 GCC compiles clean (GCC is that configuration's compiler of record; tidy checks stay warnings-as-errors). Headers are
 analysed as the main file of a translation unit of their owning target (the plan's owners), then of a sibling in the
-same module. A file with no usable command, an unresolved include, a tool exit without diagnostics or an unavailable
-tool is reported as ungated or unavailable, never clean.
+same module, a unit that includes the header first (a module directory can hold several targets, such as a test
+executable and fuzz targets with other dependencies). A file with no usable command, an unresolved include, a tool exit
+without diagnostics or an unavailable tool is reported as ungated or unavailable, never clean.
 """
 from __future__ import annotations
 
@@ -137,6 +138,21 @@ def target_of(entry):
     return match[1] if match else None
 
 
+def entry_file(entry):
+    """The source path of a compile database entry, made absolute against its directory."""
+    file = entry['file']
+    return Path(file if os.path.isabs(file) else os.path.join(entry.get('directory', ''), file))
+
+
+def includes(entry, header):
+    """Whether the entry's source includes `header` by its file name (quoted or angled, any directory prefix)."""
+    try:
+        text = entry_file(entry).read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return False
+    return re.search(r'#\s*include\s*[<"](?:[^<>"]*/)?' + re.escape(header.name) + r'[>"]', text) is not None
+
+
 def module_directory(path, root):
     """The module owning a file: the parent of its `include` component, else the file's own directory."""
     parts = path.relative_to(root).parts
@@ -195,7 +211,7 @@ def prepare(root, entries, files, owners=None):
             index.setdefault(normalized(entry['file'], entry.get('directory')), entry)
     by_target, by_module = {}, {}
     for entry in entries:
-        file = Path(entry['file'] if os.path.isabs(entry['file']) else os.path.join(entry.get('directory', ''), entry['file']))
+        file = entry_file(entry)
         if file.suffix.lower() not in SOURCE_SUFFIXES or 'cmake_pch' in file.name:
             continue
         target = target_of(entry)
@@ -236,9 +252,9 @@ def prepare(root, entries, files, owners=None):
         key = module_key(module) if module else None
 
         def within_module(entry):
-            file = entry['file'] if os.path.isabs(entry['file']) else os.path.join(entry.get('directory', ''), entry['file'])
             try:
-                return key is not None and module_key(Path(file).resolve().relative_to(root.resolve()))[:len(key)] == key
+                relative = entry_file(entry).resolve().relative_to(root.resolve())
+                return key is not None and module_key(relative)[:len(key)] == key
             except ValueError:
                 return False
 
@@ -251,7 +267,7 @@ def prepare(root, entries, files, owners=None):
             sibling, source = candidates[0], f'owner:{target}'
             break
         if sibling is None and key is not None:
-            candidates = sorted(by_module.get(key, []), key=lambda item: item['file'])
+            candidates = sorted(by_module.get(key, []), key=lambda item: (not includes(item, path), item['file']))
             if candidates:
                 sibling, source = candidates[0], 'module:' + module.as_posix()
         if sibling is None:

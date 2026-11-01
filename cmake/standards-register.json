@@ -2077,6 +2077,96 @@
       "note": "With SHA-256 and SHA-384 (FIPS 180-4)."
     },
     {
+      "id": "crypto.ml-kem",
+      "title": "Module-lattice-based key-encapsulation mechanism standard (ML-KEM)",
+      "kind": "algorithm",
+      "state": "implemented",
+      "owner": "crypto",
+      "rows": [
+        "NET-STD",
+        "NET.2"
+      ],
+      "spec": {
+        "type": "nist",
+        "ref": "FIPS 203",
+        "posted": "2024-08-13",
+        "status": "final"
+      },
+      "cryptography": [
+        "key-exchange"
+      ],
+      "codepoints": [
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "ml-kem-768",
+          "value": "0x0701",
+          "key_bits": [
+            9472
+          ]
+        },
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "ml-kem-1024",
+          "value": "0x0702",
+          "key_bits": [
+            12544
+          ]
+        }
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#provider",
+        "read": "2026-11-01",
+        "verified": false
+      },
+      "review": "2027-11-01",
+      "evidence": [
+        "tests/foundation/crypto/test_kem_prf.cpp"
+      ],
+      "deprecation": null,
+      "note": "Private keys are the 64-byte seed d || z; decapsulation rejects implicitly (network foundation P7). The post-quantum half of the hybrid groups (tls.hybrid-kex) and of MLS and HPKE suites."
+    },
+    {
+      "id": "crypto.siphash",
+      "title": "SipHash keyed pseudorandom function",
+      "kind": "algorithm",
+      "state": "implemented",
+      "owner": "crypto",
+      "rows": [
+        "NET-STD",
+        "NET.2"
+      ],
+      "spec": {
+        "type": "paper",
+        "ref": "https://doi.org/10.1007/978-3-642-34931-7_28",
+        "posted": "2012-12",
+        "status": "published"
+      },
+      "cryptography": [
+        "integrity"
+      ],
+      "codepoints": [
+        {
+          "registry": "Cerid algorithm identifiers",
+          "name": "siphash-2-4",
+          "value": "0x0801",
+          "key_bits": [
+            128
+          ]
+        }
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#provider",
+        "read": "2026-11-01",
+        "verified": false
+      },
+      "review": "2027-11-01",
+      "evidence": [
+        "tests/foundation/crypto/test_kem_prf.cpp"
+      ],
+      "deprecation": null,
+      "note": "SipHash-2-4 (Aumasson and Bernstein, INDOCRYPT 2012) keys every table an adversary can fill (threat T10, network foundation P8); never on the wire."
+    },
+    {
       "id": "pki.merkle-tree-certificates",
       "title": "Merkle Tree Certificates",
       "kind": "format",

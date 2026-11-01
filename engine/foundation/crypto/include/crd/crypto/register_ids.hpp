@@ -35,6 +35,9 @@ enum class AlgorithmId : u16
     Chacha20Poly1305     = 0x0503U, // crypto.chacha20-poly1305
     HkdfSha256           = 0x0601U, // crypto.hkdf
     HkdfSha384           = 0x0602U, // crypto.hkdf
+    MlKem768             = 0x0701U, // crypto.ml-kem
+    MlKem1024            = 0x0702U, // crypto.ml-kem
+    Siphash24            = 0x0801U, // crypto.siphash
 };
 
 inline constexpr AlgorithmId kAlgorithmIds[] = {
@@ -55,6 +58,9 @@ inline constexpr AlgorithmId kAlgorithmIds[] = {
     AlgorithmId::Chacha20Poly1305,
     AlgorithmId::HkdfSha256,
     AlgorithmId::HkdfSha384,
+    AlgorithmId::MlKem768,
+    AlgorithmId::MlKem1024,
+    AlgorithmId::Siphash24,
 };
 
 // The register entry that defines `id` ("" for a value outside the enumeration).
@@ -87,6 +93,11 @@ inline constexpr AlgorithmId kAlgorithmIds[] = {
     case AlgorithmId::HkdfSha256:
     case AlgorithmId::HkdfSha384:
         return "crypto.hkdf";
+    case AlgorithmId::MlKem768:
+    case AlgorithmId::MlKem1024:
+        return "crypto.ml-kem";
+    case AlgorithmId::Siphash24:
+        return "crypto.siphash";
     }
     return "";
 }
@@ -101,6 +112,8 @@ enum class AlgorithmClass : u8
     ClassicalSignature   = 0x04U, // traditional signature
     Aead                 = 0x05U, // authenticated encryption with associated data
     Kdf                  = 0x06U, // key derivation
+    Kem                  = 0x07U, // post-quantum key encapsulation
+    Prf                  = 0x08U, // keyed pseudorandom function
 };
 
 [[nodiscard]] constexpr AlgorithmClass algorithm_class(AlgorithmId id) noexcept
