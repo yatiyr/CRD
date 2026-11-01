@@ -549,6 +549,19 @@ usize v16_halves(const Input& in, u64* out) noexcept
     }
     return n;
 }
+// Each lane-group pair of a and b joined by halves: {a.lo, b.lo} and {a.hi, b.hi}.
+usize v16_join_halves(const Input& in, u64* out) noexcept
+{
+    usize n = 0;
+    for (usize i = 0; i < kLanes; i += 16)
+    {
+        const Vec16f a = Vec16f::load(in.a + i);
+        const Vec16f b = Vec16f::load(in.b + i);
+        n += put(s::join_low_halves(a, b), out + n);
+        n += put(s::join_high_halves(a, b), out + n);
+    }
+    return n;
+}
 // Sixteen rows of sixteen lanes from a, b and c in turn.
 usize v16_transpose(const Input& in, u64* out) noexcept
 {
@@ -757,6 +770,18 @@ usize d8_halves(const Input& in, u64* out) noexcept
     {
         const Vec8d v = Vec8d::load(in.da + i);
         n += put(Vec8d(s::high_half(v), s::low_half(Vec8d::load_aligned(in.db + i))), out + n);
+    }
+    return n;
+}
+usize d8_join_halves(const Input& in, u64* out) noexcept
+{
+    usize n = 0;
+    for (usize i = 0; i < kLanes; i += 8)
+    {
+        const Vec8d a = Vec8d::load(in.da + i);
+        const Vec8d b = Vec8d::load(in.db + i);
+        n += put(s::join_low_halves(a, b), out + n);
+        n += put(s::join_high_halves(a, b), out + n);
     }
     return n;
 }
@@ -1197,6 +1222,7 @@ constexpr Op kVectorOps[] = {
     {"vec16f fnmadd", Compare::F32Value, &v16_fnmadd},
     {"vec16f partial load/store", Compare::F32Value, &v16_partial},
     {"vec16f halves", Compare::Bits, &v16_halves},
+    {"vec16f joined halves", Compare::Bits, &v16_join_halves},
     {"vec16f transpose16x16", Compare::Bits, &v16_transpose},
     {"vec16f transpose8x8 halves", Compare::Bits, &v16_transpose_halves},
     {"vec16f fmaddsub", Compare::F32Value, &v16_fmaddsub},
@@ -1237,6 +1263,7 @@ constexpr Op kVectorOps[] = {
     {"vec4d partial load/store", Compare::F64Value, &F64<Vec4d>::partial},
     {"vec8d partial load/store", Compare::F64Value, &F64<Vec8d>::partial},
     {"vec8d halves", Compare::Bits, &d8_halves},
+    {"vec8d joined halves", Compare::Bits, &d8_join_halves},
     {"vec4d fmaddsub", Compare::F64Value, &d_fmaddsub},
     {"vec8d fmaddsub", Compare::F64Value, &d8_fmaddsub},
     {"vec4d addsub", Compare::F64Value, &d_addsub},

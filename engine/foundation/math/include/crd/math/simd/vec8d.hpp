@@ -182,6 +182,31 @@ CRD_FORCEINLINE Vec4d high_half(Vec8d a) noexcept
 #endif
 }
 
+// {low_half(a), low_half(b)} and {high_half(a), high_half(b)}: at avx512 an insert (port 0 or 5) and a 256-bit lane
+// shuffle (port 5). An AoSoA block of four real then four imaginary parts is one register's halves. Pure data
+// movement.
+CRD_FORCEINLINE Vec8d join_low_halves(Vec8d a, Vec8d b) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    Vec8d r;
+    r.v = _mm512_insertf64x4(a.v, _mm512_castpd512_pd256(b.v), 1);
+    return r;
+#else
+    return Vec8d(a.lo, b.lo);
+#endif
+}
+
+CRD_FORCEINLINE Vec8d join_high_halves(Vec8d a, Vec8d b) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    Vec8d r;
+    r.v = _mm512_shuffle_f64x2(a.v, b.v, _MM_SHUFFLE(3, 2, 3, 2));
+    return r;
+#else
+    return Vec8d(a.hi, b.hi);
+#endif
+}
+
 // ---- arithmetic -------------------------------------------------------------
 
 CRD_FORCEINLINE Vec8d operator+(Vec8d a, Vec8d b) noexcept
