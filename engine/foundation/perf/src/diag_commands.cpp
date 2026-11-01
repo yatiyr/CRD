@@ -413,10 +413,60 @@ DiagStatus check_bundle_inspect(void* /*context*/, cont::ConstSpan<DiagArg> args
     return replay;
 }
 
+// ImageReader over an open file.
+bool read_file_at(void* context, crd::u64 offset, void* out, crd::u32 size)
+{
+    auto* fp = static_cast<std::FILE*>(context);
+#if defined(_MSC_VER)
+    const bool placed =
+        offset <= static_cast<crd::u64>(INT64_MAX) && _fseeki64(fp, static_cast<crd::i64>(offset), SEEK_SET) == 0;
+#else
+    const bool placed =
+        offset <= static_cast<crd::u64>(INT64_MAX) && fseeko(fp, static_cast<off_t>(offset), SEEK_SET) == 0;
+#endif
+    return placed && std::fread(out, 1U, size, fp) == size;
+}
+
+// The capture's code against the image of the module holding its pc, from the root's image store (<root>/images, laid
+// out as image_file_path names it); NotCompared, with the reason, when the image is not there.
+CodeImageCheck check_code_image(const CrashEvidence& crash, cont::StringView root, crd::memory::IAllocator* alloc)
+{
+    const ModuleIdentity* m = code_module(crash);
+    const bool wanted = m != nullptr && crash.code_size != 0U;
+    cont::String path(alloc);
+    if (wanted && !root.empty())
+    {
+        cont::String store(alloc);
+        store.append(root);
+        store.append("/images");
+        path = image_file_path(*m, cont::StringView{store.data(), store.size()}, alloc);
+    }
+    std::FILE* fp = path.empty() ? nullptr : open_file(path.c_str(), "rb");
+    CodeImageCheck c = compare_code_with_image(crash, ImageReader{fp, fp != nullptr ? &read_file_at : nullptr}, alloc);
+    if (fp != nullptr)
+    {
+        (void)std::fclose(fp);
+    }
+    else if (wanted && root.empty())
+    {
+        c.reason = "the service has no file root, so no image store";
+    }
+    else if (wanted && path.empty())
+    {
+        c.reason = "the module's identity names no image file";
+    }
+    else if (wanted)
+    {
+        c.reason = "the module's image is not in the image store";
+    }
+    return c;
+}
+
 // The fault a native crash capture records ("crash", when there is one) and the judgement of it on its machine
-// ("classification": the verdict, each signature with its evidence, the processor advisory and the user's sentence).
+// ("classification": the verdict, each signature with its evidence, the code's comparison with its module's image,
+// the processor advisory and the user's sentence).
 void add_classification_items(const CrashEvidence* crash, const HardwareIdentity* machine, ReplayOutcome replay,
-                              DiagFields& item, DiagSnapshot& out)
+                              cont::StringView root, DiagFields& item, DiagSnapshot& out)
 {
     if (crash != nullptr)
     {
@@ -432,10 +482,14 @@ void add_classification_items(const CrashEvidence* crash, const HardwareIdentity
             .u64("pc", crash->pc)
             .boolean("address_known", crash->address_known)
             .u64("address", crash->address)
-            .u64("modules", crash->modules.size());
+            .u64("modules", crash->modules.size())
+            .u64("code_bytes", crash->code_size);
         (void)out.add_item(item);
     }
-    const FaultClassification c = classify_fault(crash, machine, replay, out.allocator());
+    const CodeImageCheck code_image =
+        crash != nullptr ? check_code_image(*crash, root, out.allocator()) : CodeImageCheck(out.allocator());
+    const FaultClassification c =
+        classify_fault(crash, machine, replay, crash != nullptr ? &code_image : nullptr, out.allocator());
     cont::String signals(out.allocator());
     append_fault_signal_names(c.signals, signals);
     const cont::String message = fault_message(c, machine, out.allocator());
@@ -456,6 +510,18 @@ void add_classification_items(const CrashEvidence* crash, const HardwareIdentity
                 .u64(code ? cont::StringView{"code_bit"} : cont::StringView{"data_bit"}, f->bit)
                 .str(code ? cont::StringView{"code_module"} : cont::StringView{"data_module"},
                      cont::StringView{f->module.data(), f->module.size()});
+        }
+    }
+    if (crash != nullptr)
+    {
+        const CodeImageCheck& k = c.code_image;
+        item.str("code_image", code_image_result_name(k.result))
+            .str("code_image_reason", k.reason)
+            .u64("code_compared", k.compared)
+            .u64("code_differing_bits", k.differing_bits);
+        if (k.differing_bits != 0U)
+        {
+            item.u64("code_offset", k.offset).u64("code_recorded", k.recorded).u64("code_image_byte", k.image);
         }
     }
     item.str("cpu_advisory", c.advisory != nullptr ? c.advisory->id : cont::StringView{})
@@ -1455,7 +1521,7 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
             .boolean("hardware_identity", machine.ok)
             .str("hardware_error", machine.ok ? cont::StringView{} : machine.error);
         DiagFields item(out.allocator());
-        add_classification_items(&direct, machine.ok ? &machine.identity : nullptr, replay, item, out);
+        add_classification_items(&direct, machine.ok ? &machine.identity : nullptr, replay, call.root, item, out);
         if (machine.ok)
         {
             cont::String differing(out.allocator());
@@ -1596,7 +1662,7 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
     if (imp.status != ImportStatus::Rejected)
     {
         add_classification_items(crash_present ? &bundled : nullptr, imp.has_hardware ? &imp.hardware : nullptr, replay,
-                                 item, out);
+                                 call.root, item, out);
     }
     cont::String id(out.allocator());
     for (const ModuleIdentity& m : imp.symbols)

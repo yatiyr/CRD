@@ -215,6 +215,15 @@ crd::u32 merge_module_snapshot(crd::containers::Array<ModuleIdentity>&      know
 debug_file_path(const ModuleIdentity& m, crd::containers::StringView symstore_root,
                 crd::memory::IAllocator* alloc = crd::memory::default_allocator()) noexcept;
 
+// The path of `m`'s own binary under `store_root`, where an analysis finds the image a capture's code is compared
+// with (fault_classification.hpp):
+//   Rsds, PeImage: <root>/<name>/<TimeDateStamp:08X><SizeOfImage:X>/<name>   (the symsrv key for a PE binary)
+//   GnuBuildId:    <root>/.build-id/<nn>/<rest>                              (the debuginfod layout's executable)
+// Empty for id_kind None, a PE module with no TimeDateStamp or an unsafe name, and a build-id of no bytes.
+[[nodiscard]] crd::containers::String
+image_file_path(const ModuleIdentity& m, crd::containers::StringView store_root,
+                crd::memory::IAllocator* alloc = crd::memory::default_allocator()) noexcept;
+
 // True iff `have` is the SAME binary identity as `want`: RSDS requires identical GUID bytes AND age;
 // GnuBuildId requires identical id bytes (same length); None NEVER matches, and differing kinds never
 // match. This is the "reject wrong symbols instead of giving plausible lines" guard -- a symbolizer

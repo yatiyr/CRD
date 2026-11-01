@@ -566,6 +566,41 @@ bool identity_matches(const ModuleIdentity& have, const ModuleIdentity& want) no
     return true;
 }
 
+namespace
+{
+// <root>/<name>/<TimeDateStamp:08X><SizeOfImage:X>/<name> -- the symsrv key for a PE binary.
+void append_pe_image_key(cont::String& s, const ModuleIdentity& m, cont::StringView name, cont::StringView root)
+{
+    s.append(root);
+    s.push_back('/');
+    s.append(name);
+    s.push_back('/');
+    for (int shift = 28; shift >= 0; shift -= 4) // TimeDateStamp, 8 uppercase hex, zero-padded
+    {
+        s.push_back(kHexUpper[(m.timestamp >> shift) & 0xFU]);
+    }
+    append_hex_u32_min(s, static_cast<crd::u32>(m.size)); // SizeOfImage, uppercase hex, no leading zeros
+    s.push_back('/');
+    s.append(name);
+}
+
+// <root>/.build-id/<nn>/<rest> (lowercase hex, the debuginfod layout).
+void append_build_id_path(cont::String& s, const ModuleIdentity& m, cont::StringView root)
+{
+    s.append(root);
+    s.append("/.build-id/");
+    if (m.id_len >= 1U)
+    {
+        append_hex_byte(s, m.id[0], kHexLower);
+        s.push_back('/');
+        for (crd::u8 i = 1U; i < m.id_len; ++i)
+        {
+            append_hex_byte(s, m.id[i], kHexLower);
+        }
+    }
+}
+} // namespace
+
 cont::String debug_file_path(const ModuleIdentity& m, cont::StringView symstore_root,
                              crd::memory::IAllocator* alloc) noexcept
 {
@@ -613,35 +648,34 @@ cont::String debug_file_path(const ModuleIdentity& m, cont::StringView symstore_
         {
             return s; // traversal guard (see Rsds branch)
         }
-        // <root>/<name>/<TimeDateStamp:08X><SizeOfImage:X>/<name> -- the symsrv key for a PE binary (how a DLL's own
-        // debug info is fetched by image identity, so an UNLOADED module's symbols are still findable after reload).
-        s.append(symstore_root);
-        s.push_back('/');
-        s.append(name);
-        s.push_back('/');
-        for (int shift = 28; shift >= 0; shift -= 4) // TimeDateStamp, 8 uppercase hex, zero-padded
-        {
-            s.push_back(kHexUpper[(m.timestamp >> shift) & 0xFU]);
-        }
-        append_hex_u32_min(s, static_cast<crd::u32>(m.size)); // SizeOfImage, uppercase hex, no leading zeros
-        s.push_back('/');
-        s.append(name);
+        // The symsrv key for a PE binary (how a DLL's own debug info is fetched by image identity, so an UNLOADED
+        // module's symbols are still findable after reload).
+        append_pe_image_key(s, m, name, symstore_root);
         return s;
     }
 
-    // GnuBuildId: <root>/.build-id/<nn>/<rest>.debug  (lowercase hex, debuginfod layout)
-    s.append(symstore_root);
-    s.append("/.build-id/");
-    if (m.id_len >= 1U)
+    // GnuBuildId: <root>/.build-id/<nn>/<rest>.debug
+    append_build_id_path(s, m, symstore_root);
+    s.append(".debug");
+    return s;
+}
+
+cont::String image_file_path(const ModuleIdentity& m, cont::StringView store_root,
+                             crd::memory::IAllocator* alloc) noexcept
+{
+    cont::String s(alloc);
+    if (m.id_kind == SymbolIdKind::Rsds || m.id_kind == SymbolIdKind::PeImage)
     {
-        append_hex_byte(s, m.id[0], kHexLower);
-        s.push_back('/');
-        for (crd::u8 i = 1U; i < m.id_len; ++i)
+        const cont::StringView name = basename_view(m.name);
+        if (m.timestamp != 0U && basename_safe(name))
         {
-            append_hex_byte(s, m.id[i], kHexLower);
+            append_pe_image_key(s, m, name, store_root);
         }
     }
-    s.append(".debug");
+    else if (m.id_kind == SymbolIdKind::GnuBuildId && m.id_len != 0U)
+    {
+        append_build_id_path(s, m, store_root);
+    }
     return s;
 }
 

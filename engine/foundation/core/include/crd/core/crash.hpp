@@ -63,6 +63,14 @@ inline constexpr std::uint32_t kMaxMachineStreamBytes = 20480U;
 // formats here, never on a fatal path; not async-signal-safe, so never call it from a fault handler.
 bool set_machine_stream(const void* bytes, std::uint32_t size) noexcept;
 
+// The faulting instruction's bytes (HW-RESILIENCE.2): every dump and record of a fault carries up to this many bytes
+// from the faulting address (the longest x86-64 instruction is 15 bytes, an AArch64 one 4), so an analysis compares
+// them with the module's image and decodes the instruction. A Windows dump holds them as a range of its memory list,
+// where a debugger reads code; a Linux record as the line `code <pc as 0x hex> <lowercase hex of the bytes>`. They
+// are read by a call that fails instead of faulting, and end at the first unreadable page (none at all when execution
+// went to an unmapped address).
+inline constexpr std::uint32_t kCodeWindowBytes = 16U;
+
 // The exception code of an abort() dump on Windows (STATUS_FATAL_APP_EXIT, the code Windows itself records for abort).
 inline constexpr std::uint32_t kAbortExceptionCode = 0x40000015U;
 

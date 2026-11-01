@@ -1829,8 +1829,16 @@ TEST_CASE("diagnostic host: the application's wild write leaves one attributable
         CHECK(evidence.address < cp::kNullRegionBytes);
         CHECK_FALSE(evidence.sent);
         CHECK(find_module(evidence.modules, base_name(CRD_DIAG_HOST_SPECIMEN)) != nullptr);
+        // The faulting instruction's bytes are in the capture, and they are the application image's own.
+        CHECK(evidence.code_size != 0U);
+        const cont::Array<u8> app_image = read_bytes(cont::String{cont::StringView{CRD_DIAG_HOST_SPECIMEN}});
+        const cp::CodeImageCheck code =
+            cp::compare_code_with_image(evidence, crd::test::module_file::image_reader(app_image));
+        INFO("code image: " << cont::String{code.reason}.c_str());
+        CHECK(code.result == cp::CodeImageResult::Matches);
+        CHECK(code.compared == evidence.code_size);
         const cp::FaultClassification judged =
-            cp::classify_fault(&evidence, &machine.identity, cp::ReplayOutcome::NotRun);
+            cp::classify_fault(&evidence, &machine.identity, cp::ReplayOutcome::NotRun, &code);
         CHECK(judged.signals == 0U);
         CHECK(judged.verdict == cp::HardwareVerdict::None);
     }

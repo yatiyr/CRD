@@ -13,6 +13,9 @@
 //   data-address-bit-flip  an access faulted at an address outside every module that one flipped bit puts inside a
 //                          loaded one
 //   replay-not-reproduced  the capture's replay recipe ran on the same build and did not reproduce the failure
+//   code-bit-flip          the faulting instruction's bytes differ from the module's image in exactly one bit: code
+//                          no store wrote (compare_code_with_image; more than one differing bit is a patch, such as a
+//                          hook or a breakpoint, and never judged)
 // Addresses below kNullRegionBytes (a null pointer plus an offset, a common software bug) are never judged.
 //
 // Verdict: likely on a machine check, on two signatures, or on one with a listed processor; possible on one
@@ -22,6 +25,7 @@
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
+#include <crd/core/crash.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/perf/hardware_identity.hpp>
@@ -60,13 +64,64 @@ struct CrashEvidence
     bool address_known = false;
     crd::u64 address = 0U;                          // the data address an access fault names
     crd::containers::Array<ModuleIdentity> modules; // loaded, then unloaded (a minidump's), as the capture lists them
+    crd::u32 code_size = 0U;                        // bytes of `code_bytes` the capture holds from pc (0: none)
+    crd::u8 code_bytes[crd::crash::kCodeWindowBytes] = {};
 };
 
-// Reads a minidump (Windows' exception stream, type 6, and its module lists) or a Linux crash record. Untrusted input
-// on any platform: nothing is read outside `capture`; a capture that is neither, or whose fault cannot be read, is
-// refused with `error`.
+// Reads a minidump (Windows' exception stream, type 6, its module lists and the range of its memory lists, types 5
+// and 9, that holds the pc) or a Linux crash record (its `code` line). Untrusted input on any platform: nothing is
+// read outside `capture`; a capture that is neither, or whose fault cannot be read, is refused with `error`.
 [[nodiscard]] CrashEvidence read_crash_evidence(crd::containers::ConstSpan<crd::u8> capture,
                                                 crd::memory::IAllocator* alloc = crd::memory::default_allocator());
+
+// Where a module image's bytes come from: `read` copies `size` bytes at file `offset` into `out`, false when the
+// file is shorter or cannot be read (a span, a file or a symbol server's download).
+struct ImageReader
+{
+    void* context = nullptr;
+    bool (*read)(void* context, crd::u64 offset, void* out, crd::u32 size) = nullptr;
+};
+
+enum class CodeImageResult : crd::u8
+{
+    NotCompared = 0U,   // `reason` says why
+    Matches = 1U,       // every captured byte the image holds is the image's
+    OneBitFlipped = 2U, // exactly one bit differs: the code-bit-flip signature
+    Modified = 3U,      // more than one bit differs: patched code (a hook, a breakpoint), never judged
+};
+
+// "not-compared", "matches", "one-bit-flipped", "modified".
+[[nodiscard]] crd::containers::StringView code_image_result_name(CodeImageResult r) noexcept;
+
+// The faulting instruction's bytes against the module's image.
+struct CodeImageCheck
+{
+    CodeImageCheck() = default;
+    explicit CodeImageCheck(crd::memory::IAllocator* alloc) : module(alloc) {}
+
+    CodeImageResult result = CodeImageResult::NotCompared;
+    crd::containers::StringView reason; // why not compared (static text)
+    crd::u64 pc = 0U;                   // the capture's pc
+    crd::u32 compared = 0U;             // bytes compared, from pc
+    crd::u32 differing_bits = 0U;
+    crd::u32 offset = 0U;  // the first differing byte, from pc
+    crd::u32 bit = 0U;     // OneBitFlipped: the flipped bit of that byte
+    crd::u8 recorded = 0U; // that byte as the capture holds it
+    crd::u8 image = 0U;    // and as the image does
+    crd::containers::String module;
+};
+
+// The loaded module holding the capture's pc, or null.
+[[nodiscard]] const ModuleIdentity* code_module(const CrashEvidence& e) noexcept;
+
+// Compares the capture's code bytes with `image`, the file of the loaded module holding the pc: a PE file (its
+// TimeDateStamp, SizeOfImage and CheckSum must be the module's; the pc's section maps it to a file offset, and the
+// base relocations inside the window are applied for the module's load address) or an ELF file (its GNU build-id and
+// PT_LOAD span must be the module's; the PT_LOAD holding the pc maps it, and a module with text relocations is not
+// compared). Bytes past the section's or segment's file data are not compared. Untrusted input on both sides:
+// nothing is read outside what `image` returns, and anything this cannot be sure of is NotCompared, never a verdict.
+[[nodiscard]] CodeImageCheck compare_code_with_image(const CrashEvidence& e, const ImageReader& image,
+                                                     crd::memory::IAllocator* alloc = crd::memory::default_allocator());
 
 // Whether the capture's replay recipe was run on the same build, and what it did.
 enum class ReplayOutcome : crd::u8
@@ -87,9 +142,10 @@ inline constexpr crd::u32 kFaultSignalMachineCheck = 1U << 0;
 inline constexpr crd::u32 kFaultSignalCodeAddressBitFlip = 1U << 1;
 inline constexpr crd::u32 kFaultSignalDataAddressBitFlip = 1U << 2;
 inline constexpr crd::u32 kFaultSignalReplayNotReproduced = 1U << 3;
+inline constexpr crd::u32 kFaultSignalCodeBitFlip = 1U << 4;
 
 // Appends the names of `signals` ("machine-check", "code-address-bit-flip", "data-address-bit-flip",
-// "replay-not-reproduced"), comma separated, in bit order.
+// "replay-not-reproduced", "code-bit-flip"), comma separated, in bit order.
 void append_fault_signal_names(crd::u32 signals, crd::containers::String& out);
 
 enum class HardwareVerdict : crd::u8
@@ -148,7 +204,9 @@ struct BitFlipEvidence
 struct FaultClassification
 {
     FaultClassification() = default;
-    explicit FaultClassification(crd::memory::IAllocator* alloc) : code_flip(alloc), data_flip(alloc) {}
+    explicit FaultClassification(crd::memory::IAllocator* alloc) : code_flip(alloc), data_flip(alloc), code_image(alloc)
+    {
+    }
 
     HardwareVerdict verdict = HardwareVerdict::None;
     crd::u32 signals = 0U; // kFaultSignal*
@@ -156,15 +214,17 @@ struct FaultClassification
     bool sent = false;     // its signal was sent: the address was not judged
     BitFlipEvidence code_flip;
     BitFlipEvidence data_flip;
+    CodeImageCheck code_image; // the comparison judged (NotCompared when none was given)
     const CpuAdvisory* advisory = nullptr;
     MicrocodeState microcode = MicrocodeState::NotListed;
     ReplayOutcome replay = ReplayOutcome::NotRun;
 };
 
 // Judges a crash (null: none, as for a flight bundle without one) on `machine` (null: not recorded) with what its
-// replay did. Pure: reads nothing but its arguments.
+// replay did and its code's comparison with the module's image (null: not compared). Pure: reads nothing but its
+// arguments.
 [[nodiscard]] FaultClassification classify_fault(const CrashEvidence* crash, const HardwareIdentity* machine,
-                                                 ReplayOutcome replay,
+                                                 ReplayOutcome replay, const CodeImageCheck* code_image = nullptr,
                                                  crd::memory::IAllocator* alloc = crd::memory::default_allocator());
 
 // One plain sentence for the user: whether the failure looks like a hardware fault, what points to it, and the fix

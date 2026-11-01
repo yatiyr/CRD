@@ -204,7 +204,7 @@
     },
     {
       "id": "diagnostics.fault-classification",
-      "summary": "Hardware fault classification: a native crash capture's fault read from a minidump or a crash record, its impossible-state signatures (machine checks, one-bit code and data address flips, replays that do not reproduce), the known-unstable processor table and the user's sentence (HW-RESILIENCE.2).",
+      "summary": "Hardware fault classification: a native crash capture's fault read from a minidump or a crash record, its impossible-state signatures (machine checks, one-bit code and data address flips, replays that do not reproduce, a one-bit difference between the faulting instruction's bytes and its module's image), the known-unstable processor table and the user's sentence (HW-RESILIENCE.2).",
       "owner": "perf",
       "api": [
         "engine/foundation/perf/include/crd/perf/fault_classification.hpp"

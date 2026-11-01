@@ -287,7 +287,9 @@ struct DiagServiceConfig
 //                              reported as flight_refused with the reason. A native crash capture (a minidump or a
 //                              Linux crash record) is read as it is. Either way a "classification" item judges the
 //                              crash (the bundle's or the capture's) on its machine (fault_classification.hpp);
-//                              replay=<not-run|reproduced|not-reproduced> says what the capture's replay did
+//                              replay=<not-run|reproduced|not-reproduced> says what the capture's replay did, and
+//                              the faulting instruction's bytes are compared with its module's image when the root's
+//                              image store holds it (<root>/images, laid out as image_file_path names it)
 //   capture.start     Record  open a capture window (the profiler's sample rings are cleared)
 //   capture.stop       Record  write the open window as a CPROF capture file under the root (never overwriting)
 // Calls are serialized; handlers run on the calling thread.

@@ -1,6 +1,9 @@
 // HW-RESILIENCE.2: hardware fault classification (crd/perf/fault_classification.hpp) -- reading a minidump's and a
-// Linux crash record's fault, each impossible-state signature and its guards, the processor advisory table, the
-// verdict and its sentence, and bundle.inspect's judgement of a capture and of a bundle that carries one.
+// Linux crash record's fault and code bytes, each impossible-state signature and its guards, the code's comparison
+// with PE and ELF images, the processor advisory table, the verdict and its sentence, and bundle.inspect's judgement
+// of a capture and of a bundle that carries one.
+
+#include "module_file_identity.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
@@ -8,6 +11,8 @@
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/fault_classification.hpp>
 #include <crd/perf/hardware_identity.hpp>
+#include <crd/perf/symbol_index.hpp>
+#include <crd/platform/filesystem.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstdio>
@@ -89,9 +94,41 @@ void put64(cont::Array<u8>& out, u64 v)
     put32(out, static_cast<u32>(v >> 32U));
 }
 
+// The bytes of `n` streams of `types` after a minidump header and directory.
+cont::Array<u8> assemble(const u32* types, const cont::Array<u8>* const* streams, u32 n)
+{
+    cont::Array<u8> out;
+    put32(out, 0x504D444DU); // 'MDMP'
+    put32(out, 0xA793U);
+    put32(out, n);   // streams
+    put32(out, 32U); // the directory follows the header
+    for (u32 i = 0U; i < 4U; ++i)
+    {
+        put32(out, 0U);
+    }
+    u32 at = 32U + n * 12U;
+    for (u32 i = 0U; i < n; ++i)
+    {
+        put32(out, types[i]);
+        put32(out, static_cast<u32>(streams[i]->size()));
+        put32(out, at);
+        at += static_cast<u32>(streams[i]->size());
+    }
+    for (u32 i = 0U; i < n; ++i)
+    {
+        for (const u8 b : *streams[i])
+        {
+            out.push_back(b);
+        }
+    }
+    return out;
+}
+
 // A minidump of an exception stream (type 6), a module list (type 4: the game at kExeBase) and an unloaded module
-// list (type 14: a plugin at `unloaded_base`).
-cont::Array<u8> minidump(u32 code, u64 pc, u32 parameters, u64 access, u64 address, u64 unloaded_base)
+// list (type 14: a plugin at `unloaded_base`); with `code`, a memory list of `list_type` (5 or 9) last, holding those
+// bytes at `code_start`.
+cont::Array<u8> minidump(u32 code, u64 pc, u32 parameters, u64 access, u64 address, u64 unloaded_base,
+                         cont::ConstSpan<u8> code_bytes = {}, u64 code_start = 0U, u32 list_type = 5U)
 {
     cont::Array<u8> exception;
     put32(exception, 1U); // thread id
@@ -127,35 +164,35 @@ cont::Array<u8> minidump(u32 code, u64 pc, u32 parameters, u64 access, u64 addre
     put32(unloaded, 0U);
     put32(unloaded, 0U);
 
-    cont::Array<u8> out;
-    put32(out, 0x504D444DU); // 'MDMP'
-    put32(out, 0xA793U);
-    put32(out, 3U);  // streams
-    put32(out, 32U); // the directory follows the header
-    for (u32 i = 0U; i < 4U; ++i)
+    const u32 types[] = {6U, 4U, 14U, list_type};
+    const cont::Array<u8>* streams[] = {&exception, &modules, &unloaded, nullptr};
+    if (code_bytes.empty())
     {
-        put32(out, 0U);
+        return assemble(types, streams, 3U);
     }
-    const u32 first = 32U + 3U * 12U;
-    const u32 sizes[] = {static_cast<u32>(exception.size()), static_cast<u32>(modules.size()),
-                         static_cast<u32>(unloaded.size())};
-    const u32 types[] = {6U, 4U, 14U};
-    u32 at = first;
-    for (u32 i = 0U; i < 3U; ++i)
+    // The memory list's own position: after the header, a four-entry directory and the three streams before it.
+    const u32 at = static_cast<u32>(32U + 4U * 12U + exception.size() + modules.size() + unloaded.size());
+    cont::Array<u8> memory;
+    if (list_type == 5U)
     {
-        put32(out, types[i]);
-        put32(out, sizes[i]);
-        put32(out, at);
-        at += sizes[i];
+        put32(memory, 1U);
+        put64(memory, code_start);
+        put32(memory, static_cast<u32>(code_bytes.size()));
+        put32(memory, at + 20U);
     }
-    for (const cont::Array<u8>* stream : {&exception, &modules, &unloaded})
+    else
     {
-        for (const u8 b : *stream)
-        {
-            out.push_back(b);
-        }
+        put64(memory, 1U);
+        put64(memory, at + 32U);
+        put64(memory, code_start);
+        put64(memory, code_bytes.size());
     }
-    return out;
+    for (const u8 b : code_bytes)
+    {
+        memory.push_back(b);
+    }
+    streams[3] = &memory;
+    return assemble(types, streams, 4U);
 }
 
 cp::HardwareIdentity machine(cont::StringView vendor, u32 signature, cont::StringView brand, u32 microcode,
@@ -465,4 +502,425 @@ TEST_CASE("fault classification: bundle.inspect judges a crash capture and a bun
     CHECK(svc.execute(req).status == cp::DiagStatus::BadArgument);
     (void)std::remove(path);
     (void)std::remove(bundle_path);
+}
+
+namespace
+{
+
+using crd::test::module_file::image_reader;
+
+void put_at(cont::Array<u8>& out, usize at, u64 v, u32 width)
+{
+    for (u32 i = 0U; i < width; ++i)
+    {
+        out[at + i] = static_cast<u8>(v >> (8U * i));
+    }
+}
+
+// A PE32+ image: .text at RVA 0x1000 (file 0x400, 0x200 bytes of int3) holding `mov rax, imm64` at +0x10 whose
+// immediate (the image base + 0x1100) a DIR64 base relocation in .reloc (RVA 0x2000) names, then `ret`.
+constexpr u64 kPeImageBase = 0x00000001'40000000ULL;
+constexpr u64 kPeBase = 0x00007ff6'12340000ULL;
+constexpr u32 kPeStamp = 0x6543210FU;
+constexpr u32 kPeSize = 0x3000U;
+constexpr u32 kRelocDir64 = 10U;
+
+cont::Array<u8> pe_image(u32 relocation_type)
+{
+    cont::Array<u8> img;
+    img.resize(0x800U);
+    std::memset(img.data(), 0, img.size());
+    img[0] = 'M';
+    img[1] = 'Z';
+    put_at(img, 0x3CU, 0x40U, 4U);
+    img[0x40] = 'P';
+    img[0x41] = 'E';
+    put_at(img, 0x44U, 0x8664U, 2U); // machine
+    put_at(img, 0x46U, 2U, 2U);      // sections
+    put_at(img, 0x48U, kPeStamp, 4U);
+    put_at(img, 0x54U, 240U, 2U); // optional header size
+    const usize opt = 0x58U;
+    put_at(img, opt, 0x20BU, 2U);
+    put_at(img, opt + 24U, kPeImageBase, 8U);
+    put_at(img, opt + 56U, kPeSize, 4U);
+    put_at(img, opt + 108U, 16U, 4U);
+    put_at(img, opt + 112U + 8U * 5U, 0x2000U, 4U); // the base relocation directory
+    put_at(img, opt + 112U + 8U * 5U + 4U, 12U, 4U);
+    const usize sections = opt + 240U;
+    put_at(img, sections + 8U, 0x200U, 4U); // .text: virtual size, address, raw size, raw offset
+    put_at(img, sections + 12U, 0x1000U, 4U);
+    put_at(img, sections + 16U, 0x200U, 4U);
+    put_at(img, sections + 20U, 0x400U, 4U);
+    put_at(img, sections + 40U + 8U, 12U, 4U); // .reloc
+    put_at(img, sections + 40U + 12U, 0x2000U, 4U);
+    put_at(img, sections + 40U + 16U, 0x200U, 4U);
+    put_at(img, sections + 40U + 20U, 0x600U, 4U);
+    std::memset(img.data() + 0x400U, 0xCC, 0x200U);
+    img[0x410] = 0x48U;
+    img[0x411] = 0xB8U;
+    put_at(img, 0x412U, kPeImageBase + 0x1100U, 8U);
+    img[0x41A] = 0xC3U;
+    put_at(img, 0x600U, 0x1000U, 4U); // one block: page 0x1000, 12 bytes, the entry and a pad
+    put_at(img, 0x604U, 12U, 4U);
+    put_at(img, 0x608U, (relocation_type << 12U) | 0x012U, 2U);
+    return img;
+}
+
+cp::ModuleIdentity module(u64 base, u64 size, cp::SymbolIdKind kind, cont::StringView name)
+{
+    cp::ModuleIdentity m;
+    m.base = base;
+    m.size = size;
+    m.id_kind = kind;
+    m.name.append(name);
+    return m;
+}
+
+// A capture of a fault at `pc` in `m` holding `code`.
+cp::CrashEvidence at_pc(cp::ModuleIdentity m, u64 pc, const u8* code, u32 n)
+{
+    cp::CrashEvidence e;
+    e.ok = true;
+    e.kind = cp::CrashCaptureKind::Minidump;
+    e.pc_known = true;
+    e.pc = pc;
+    e.modules.push_back(static_cast<cp::ModuleIdentity&&>(m));
+    e.code_size = n;
+    std::memcpy(e.code_bytes, code, n);
+    return e;
+}
+
+cp::CrashEvidence pe_capture(const u8* code, u32 n = crd::crash::kCodeWindowBytes)
+{
+    cp::ModuleIdentity m = module(kPeBase, kPeSize, cp::SymbolIdKind::PeImage, "game.exe");
+    m.timestamp = kPeStamp;
+    return at_pc(static_cast<cp::ModuleIdentity&&>(m), kPeBase + 0x1010U, code, n);
+}
+
+// The 16 bytes at RVA 0x1010 as the loader leaves them at kPeBase.
+void pe_loaded(u8 (&out)[16])
+{
+    std::memset(out, 0xCC, sizeof(out));
+    out[0] = 0x48U;
+    out[1] = 0xB8U;
+    const u64 imm = kPeBase + 0x1100U;
+    for (u32 i = 0U; i < 8U; ++i)
+    {
+        out[2U + i] = static_cast<u8>(imm >> (8U * i));
+    }
+    out[10] = 0xC3U;
+}
+
+// A 64-bit ELF file: one PT_LOAD (file 0 to 0x1100, memory to `span`), a PT_NOTE with the GNU build-id `id` and a
+// PT_DYNAMIC whose DT_FLAGS carries DF_TEXTREL when `textrel`. The code at 0x1010 is `mov rax, [rdi]; ret`, then
+// zeros.
+cont::Array<u8> elf_image(cont::ConstSpan<u8> id, u64 span, bool textrel)
+{
+    cont::Array<u8> img;
+    img.resize(0x1100U);
+    std::memset(img.data(), 0, img.size());
+    const u8 ident[] = {0x7FU, 'E', 'L', 'F', 2U, 1U, 1U};
+    std::memcpy(img.data(), ident, sizeof(ident));
+    put_at(img, 16U, 3U, 2U);  // ET_DYN
+    put_at(img, 18U, 62U, 2U); // EM_X86_64
+    put_at(img, 32U, 64U, 8U); // e_phoff
+    put_at(img, 52U, 64U, 2U);
+    put_at(img, 54U, 56U, 2U);
+    put_at(img, 56U, 3U, 2U);
+    const u64 load[] = {1U, 0U, 0U, 0x1100U, span};    // type, offset, vaddr, filesz, memsz
+    const u64 note[] = {4U, 0x100U, 0x100U, 36U, 36U}; // the build-id note
+    const u64 dyn[] = {2U, 0x140U, 0x140U, 32U, 32U};  // DT_FLAGS, DT_NULL
+    const u64* headers[] = {load, note, dyn};
+    for (u32 i = 0U; i < 3U; ++i)
+    {
+        const usize at = 64U + 56U * i;
+        put_at(img, at, headers[i][0], 4U);
+        put_at(img, at + 8U, headers[i][1], 8U);
+        put_at(img, at + 16U, headers[i][2], 8U);
+        put_at(img, at + 32U, headers[i][3], 8U);
+        put_at(img, at + 40U, headers[i][4], 8U);
+    }
+    put_at(img, 0x100U, 4U, 4U);
+    put_at(img, 0x104U, id.size(), 4U);
+    put_at(img, 0x108U, 3U, 4U); // NT_GNU_BUILD_ID
+    std::memcpy(img.data() + 0x10CU, "GNU", 4U);
+    std::memcpy(img.data() + 0x110U, id.data(), id.size());
+    put_at(img, 0x140U, 30U, 8U);
+    put_at(img, 0x148U, textrel ? 4U : 0U, 8U);
+    const u8 code[] = {0x48U, 0x8BU, 0x07U, 0xC3U};
+    std::memcpy(img.data() + 0x1010U, code, sizeof(code));
+    return img;
+}
+
+constexpr u8 kElfId[] = {0x5AU, 0x11U, 0xC0U, 0xDEU, 0x01U, 0x02U, 0x03U, 0x04U, 0x05U, 0x06U,
+                         0x07U, 0x08U, 0x09U, 0x0AU, 0x0BU, 0x0CU, 0x0DU, 0x0EU, 0x0FU, 0x10U};
+
+cp::CrashEvidence elf_capture(cont::ConstSpan<u8> id, u64 pc_offset, const u8* code, u32 n)
+{
+    cp::ModuleIdentity m = module(kLibBase, 0x2000U, cp::SymbolIdKind::GnuBuildId, "libcerid.so");
+    m.id_len = static_cast<u8>(id.size());
+    std::memcpy(m.id, id.data(), id.size());
+    cp::CrashEvidence e = at_pc(static_cast<cp::ModuleIdentity&&>(m), kLibBase + pc_offset, code, n);
+    e.kind = cp::CrashCaptureKind::Record;
+    return e;
+}
+
+} // namespace
+
+TEST_CASE("fault classification: the faulting instruction's bytes read back from a dump's memory lists and a record",
+          "[perf][diag][hw-resilience]")
+{
+    const u8 window[] = {0x90U, 0x48U, 0x8BU, 0x07U, 0xC3U, 0xCCU, 0xCCU, 0xCCU, 0xCCU, 0xCCU,
+                         0xCCU, 0xCCU, 0xCCU, 0xCCU, 0xCCU, 0xCCU, 0xCCU, 0xCCU, 0xCCU, 0xCCU};
+    const u64 pc = kExeBase + 0x101U; // one byte into the range: the 16 from it, of the 20 the range holds
+    for (const u32 list_type : {5U, 9U})
+    {
+        const cont::Array<u8> dump = minidump(0xC0000005U, pc, 2U, 0U, kHeapAddr, 0x20000000ULL,
+                                              cont::ConstSpan<u8>{window, sizeof(window)}, pc - 1U, list_type);
+        const cp::CrashEvidence e = cp::read_crash_evidence({dump.data(), dump.size()});
+        REQUIRE(e.ok);
+        REQUIRE(e.code_size == crd::crash::kCodeWindowBytes);
+        CHECK(std::memcmp(e.code_bytes, window + 1U, e.code_size) == 0);
+        for (usize cut = 0U; cut < dump.size(); ++cut)
+        {
+            const cp::CrashEvidence part = cp::read_crash_evidence({dump.data(), cut});
+            CHECK((part.code_size == 0U || std::memcmp(part.code_bytes, window + 1U, part.code_size) == 0));
+        }
+    }
+    // A range that ends three bytes after the pc gives three; one that does not hold the pc gives none.
+    const cont::Array<u8> tail =
+        minidump(0xC0000005U, pc, 2U, 0U, kHeapAddr, 0x20000000ULL, cont::ConstSpan<u8>{window, 4U}, pc - 1U);
+    CHECK(cp::read_crash_evidence({tail.data(), tail.size()}).code_size == 3U);
+    const cont::Array<u8> elsewhere = minidump(0xC0000005U, pc, 2U, 0U, kHeapAddr, 0x20000000ULL,
+                                               cont::ConstSpan<u8>{window, sizeof(window)}, pc + 1U);
+    CHECK(cp::read_crash_evidence({elsewhere.data(), elsewhere.size()}).code_size == 0U);
+
+    // The record's code line, after its registers: read for its own pc only, and only when well formed.
+    const auto with_code = [](u64 rip, const char* line)
+    {
+        cont::String text = record(view(signal_line(11U, 1, kHeapAddr)), rip);
+        const usize at = view(text).find("build_id ");
+        cont::String out{cont::StringView{text.data(), at}};
+        out.append(line);
+        out.append(cont::StringView{text.data() + at, text.size() - at});
+        return read(out);
+    };
+    const cp::CrashEvidence r = with_code(kExeBase + 0x10U, "code 0x555555554010 488b07c3\n");
+    REQUIRE(r.ok);
+    CHECK(r.pc == kExeBase + 0x10U); // the registers still end before the code line
+    REQUIRE(r.code_size == 4U);
+    CHECK(r.code_bytes[0] == 0x48U);
+    CHECK(r.code_bytes[3] == 0xC3U);
+    for (const char* bad :
+         {"code 0x555555554011 488b07c3\n", "code 0x555555554010 488b07c\n", "code 0x555555554010 488B07C3\n",
+          "code 0x555555554010 \n", "code 0x555555554010 000102030405060708090a0b0c0d0e0f10\n"})
+    {
+        const cp::CrashEvidence b = with_code(kExeBase + 0x10U, bad);
+        REQUIRE(b.ok);
+        CHECK(b.code_size == 0U);
+    }
+}
+
+TEST_CASE("fault classification: the code matches its PE image through the base relocations, and one flipped bit "
+          "is the signature",
+          "[perf][diag][hw-resilience]")
+{
+    const cont::Array<u8> image = pe_image(kRelocDir64);
+    u8 loaded[16];
+    pe_loaded(loaded);
+    const cp::CodeImageCheck same = cp::compare_code_with_image(pe_capture(loaded), image_reader(image));
+    INFO("reason: " << cont::String{same.reason}.c_str());
+    CHECK(same.result == cp::CodeImageResult::Matches);
+    CHECK(same.compared == 16U);
+    CHECK(view(same.module) == "game.exe");
+
+    u8 flipped[16];
+    std::memcpy(flipped, loaded, sizeof(flipped));
+    flipped[5] ^= 0x20U; // inside the relocated immediate
+    const cp::CodeImageCheck one = cp::compare_code_with_image(pe_capture(flipped), image_reader(image));
+    CHECK(one.result == cp::CodeImageResult::OneBitFlipped);
+    CHECK(one.offset == 5U);
+    CHECK(one.bit == 5U);
+    CHECK(one.recorded == flipped[5]);
+    CHECK(one.image == loaded[5]);
+    flipped[0] = 0xE9U; // a hook's jump over the first byte as well: patched code, never judged
+    CHECK(cp::compare_code_with_image(pe_capture(flipped), image_reader(image)).result ==
+          cp::CodeImageResult::Modified);
+
+    // Without the relocation the immediate holds the preferred base's value, so the same bytes differ widely.
+    cont::Array<u8> unrelocated = pe_image(0U);
+    CHECK(cp::compare_code_with_image(pe_capture(loaded), image_reader(unrelocated)).result ==
+          cp::CodeImageResult::Modified);
+    // A relocation type this reader does not apply, reaching the window, is never compared.
+    const cp::CodeImageCheck odd = cp::compare_code_with_image(pe_capture(loaded), image_reader(pe_image(7U)));
+    CHECK(odd.result == cp::CodeImageResult::NotCompared);
+    CHECK_FALSE(odd.reason.empty());
+
+    // Another build (its TimeDateStamp), a capture without code, a pc outside every module and a foreign file.
+    cont::Array<u8> other = pe_image(kRelocDir64);
+    put_at(other, 0x48U, kPeStamp + 1U, 4U);
+    CHECK(cp::compare_code_with_image(pe_capture(loaded), image_reader(other)).result ==
+          cp::CodeImageResult::NotCompared);
+    CHECK(cp::compare_code_with_image(pe_capture(loaded, 0U), image_reader(image)).result ==
+          cp::CodeImageResult::NotCompared);
+    cp::CrashEvidence outside = pe_capture(loaded);
+    outside.pc = kPeBase + kPeSize;
+    CHECK(cp::compare_code_with_image(outside, image_reader(image)).result == cp::CodeImageResult::NotCompared);
+    const cont::Array<u8> text = elf_image({kElfId, sizeof(kElfId)}, 0x2000U, false);
+    CHECK(cp::compare_code_with_image(pe_capture(loaded), image_reader(text)).result ==
+          cp::CodeImageResult::NotCompared);
+    // Every cut of the image is read safely and never yields a verdict it cannot back.
+    for (usize cut = 0U; cut < image.size(); cut += 7U)
+    {
+        cont::Array<u8> part;
+        for (usize i = 0U; i < cut; ++i)
+        {
+            part.push_back(image[i]);
+        }
+        const cp::CodeImageResult got = cp::compare_code_with_image(pe_capture(loaded), image_reader(part)).result;
+        CHECK((got == cp::CodeImageResult::NotCompared || got == cp::CodeImageResult::Matches));
+    }
+}
+
+TEST_CASE("fault classification: the code matches its ELF image by build-id, and text relocations are not compared",
+          "[perf][diag][hw-resilience]")
+{
+    const cont::ConstSpan<u8> id{kElfId, sizeof(kElfId)};
+    const cont::Array<u8> image = elf_image(id, 0x2000U, false);
+    u8 code[16] = {0x48U, 0x8BU, 0x07U, 0xC3U};
+    const cp::CodeImageCheck same =
+        cp::compare_code_with_image(elf_capture(id, 0x1010U, code, 16U), image_reader(image));
+    INFO("reason: " << cont::String{same.reason}.c_str());
+    CHECK(same.result == cp::CodeImageResult::Matches);
+    CHECK(same.compared == 16U);
+    code[2] ^= 0x01U;
+    const cp::CodeImageCheck one =
+        cp::compare_code_with_image(elf_capture(id, 0x1010U, code, 16U), image_reader(image));
+    CHECK(one.result == cp::CodeImageResult::OneBitFlipped);
+    CHECK(one.offset == 2U);
+    CHECK(one.bit == 0U);
+    code[2] ^= 0x01U;
+    // Only the file's bytes are compared: four from 0x10FC, none in the zero-filled memory after the file.
+    CHECK(cp::compare_code_with_image(elf_capture(id, 0x10FCU, code, 16U), image_reader(image)).compared == 4U);
+    CHECK(cp::compare_code_with_image(elf_capture(id, 0x1200U, code, 16U), image_reader(image)).result ==
+          cp::CodeImageResult::NotCompared);
+
+    u8 other_id[sizeof(kElfId)];
+    std::memcpy(other_id, kElfId, sizeof(kElfId));
+    other_id[19] ^= 0xFFU;
+    CHECK(
+        cp::compare_code_with_image(elf_capture({other_id, sizeof(other_id)}, 0x1010U, code, 16U), image_reader(image))
+            .result == cp::CodeImageResult::NotCompared);
+    CHECK(cp::compare_code_with_image(elf_capture(id, 0x1010U, code, 16U), image_reader(elf_image(id, 0x3000U, false)))
+              .result == cp::CodeImageResult::NotCompared); // another PT_LOAD span
+    const cp::CodeImageCheck textrel =
+        cp::compare_code_with_image(elf_capture(id, 0x1010U, code, 16U), image_reader(elf_image(id, 0x2000U, true)));
+    CHECK(textrel.result == cp::CodeImageResult::NotCompared);
+    CHECK(cont::StringView{textrel.reason}.find("text relocations") != cont::StringView::npos);
+    for (usize cut = 0U; cut < 0x200U; ++cut)
+    {
+        cont::Array<u8> part;
+        for (usize i = 0U; i < cut; ++i)
+        {
+            part.push_back(image[i]);
+        }
+        CHECK(cp::compare_code_with_image(elf_capture(id, 0x1010U, code, 16U), image_reader(part)).result ==
+              cp::CodeImageResult::NotCompared);
+    }
+}
+
+TEST_CASE("fault classification: a one-bit code difference is a signature with its sentence, and a patch is none",
+          "[perf][diag][hw-resilience]")
+{
+    const cont::Array<u8> image = pe_image(kRelocDir64);
+    u8 loaded[16];
+    pe_loaded(loaded);
+    u8 flipped[16];
+    std::memcpy(flipped, loaded, sizeof(flipped));
+    flipped[1] ^= 0x04U;
+    const cp::CrashEvidence e = pe_capture(flipped);
+    const cp::CodeImageCheck one = cp::compare_code_with_image(e, image_reader(image));
+    const cp::FaultClassification c = cp::classify_fault(&e, nullptr, cp::ReplayOutcome::NotRun, &one);
+    CHECK(c.signals == cp::kFaultSignalCodeBitFlip);
+    CHECK(c.verdict == cp::HardwareVerdict::Possible);
+    cont::String names;
+    cp::append_fault_signal_names(c.signals, names);
+    CHECK(view(names) == "code-bit-flip");
+    CHECK(view(cp::fault_message(c, nullptr)) ==
+          "This failure shows one sign of a hardware fault, which alone is not proof: the instruction byte at "
+          "0x7ff612341011 reads 0xbc where game.exe holds 0xb8, one bit apart. If failures like it repeat in different "
+          "places, test the machine's memory and processor.");
+    const cp::HardwareIdentity before = raptor(0x12EU);
+    const cp::FaultClassification raptor_flip = cp::classify_fault(&e, &before, cp::ReplayOutcome::NotRun, &one);
+    CHECK(raptor_flip.verdict == cp::HardwareVerdict::Likely);
+
+    flipped[0] = 0xE9U;
+    const cp::CrashEvidence p = pe_capture(flipped);
+    const cp::CodeImageCheck patched = cp::compare_code_with_image(p, image_reader(image));
+    CHECK(cp::classify_fault(&p, nullptr, cp::ReplayOutcome::NotRun, &patched).signals == 0U);
+    const cp::CodeImageCheck same = cp::compare_code_with_image(pe_capture(loaded), image_reader(image));
+    CHECK(cp::classify_fault(&e, nullptr, cp::ReplayOutcome::NotRun, &same).signals == 0U);
+}
+
+TEST_CASE("fault classification: image files are found by identity, and bundle.inspect compares a capture's code",
+          "[perf][diag][hw-resilience]")
+{
+    cp::ModuleIdentity pe = module(kPeBase, kPeSize, cp::SymbolIdKind::Rsds, "C:\\game\\game.exe");
+    pe.timestamp = kPeStamp;
+    CHECK(view(cp::image_file_path(pe, "store")) == "store/game.exe/6543210F3000/game.exe");
+    pe.timestamp = 0U;
+    CHECK(cp::image_file_path(pe, "store").empty());
+    cp::ModuleIdentity elf = module(kLibBase, kLibSize, cp::SymbolIdKind::GnuBuildId, "libcerid.so");
+    elf.id_len = 3U;
+    elf.id[0] = 0xABU;
+    elf.id[1] = 0x01U;
+    elf.id[2] = 0xFFU;
+    CHECK(view(cp::image_file_path(elf, "store")) == "store/.build-id/ab/01ff");
+    CHECK(cp::image_file_path(module(0U, 0U, cp::SymbolIdKind::None, "x"), "store").empty());
+
+    // A record whose library code differs from its image in one bit, the image in the root's store.
+    const u8 id[] = {0x03U, 0x04U};
+    const cont::Array<u8> image = elf_image({id, sizeof(id)}, kLibSize, false);
+    char dir[512];
+    (void)std::snprintf(dir, sizeof(dir), "%s/images/.build-id/03", CRD_DIAG_COMMANDS_SCRATCH);
+    REQUIRE(crd::platform::fs::create_directories(crd::platform::fs::Path{cont::StringView{dir}}));
+    char image_path[600];
+    (void)std::snprintf(image_path, sizeof(image_path), "%s/04", dir);
+    REQUIRE(cp::write_bundle_atomic(image_path, cont::ConstSpan<u8>{image.data(), image.size()}));
+    const u64 pc = kLibBase + 0x1010U;
+    cont::String text = record(view(signal_line(11U, 1, kHeapAddr)), pc);
+    const usize at = view(text).find("build_id ");
+    cont::String capture{cont::StringView{text.data(), at}};
+    capture.append("code ");
+    append_hex(capture, pc);
+    capture.append(" 488b03c3\n"); // 0x07 read as 0x03
+    capture.append(cont::StringView{text.data() + at, text.size() - at});
+    char path[512];
+    (void)std::snprintf(path, sizeof(path), "%s/fault_classification_code.log", CRD_DIAG_COMMANDS_SCRATCH);
+    REQUIRE(cp::write_bundle_atomic(path,
+                                    cont::ConstSpan<u8>{reinterpret_cast<const u8*>(capture.data()), capture.size()}));
+
+    cp::DiagServiceConfig config;
+    config.root = cont::StringView{CRD_DIAG_COMMANDS_SCRATCH};
+    cp::DiagCommandService svc{cp::authority_bit(cp::DiagAuthority::Read), config, crd::memory::default_allocator()};
+    cp::DiagRequest req;
+    req.command = "bundle.inspect";
+    req.page_items = 64U;
+    req.path = "fault_classification_code.log";
+    const cp::DiagResult result = svc.execute(req);
+    REQUIRE(result.status == cp::DiagStatus::Ok);
+    INFO(result.json.c_str());
+    CHECK(std::strstr(result.json.c_str(), R"("code_bytes":4)") != nullptr);
+    CHECK(std::strstr(result.json.c_str(), R"("verdict":"possible","signals":"code-bit-flip")") != nullptr);
+    CHECK(std::strstr(result.json.c_str(), R"("code_image":"one-bit-flipped","code_image_reason":"","code_compared":4,)"
+                                           R"("code_differing_bits":1,"code_offset":2,"code_recorded":3,)"
+                                           R"("code_image_byte":7)") != nullptr);
+    (void)std::remove(image_path);
+    // Without the image in the store the code is not compared, and the reason says so.
+    const cp::DiagResult missing = svc.execute(req);
+    REQUIRE(missing.status == cp::DiagStatus::Ok);
+    CHECK(std::strstr(missing.json.c_str(), R"("code_image":"not-compared","code_image_reason":"the module's image is )"
+                                            R"(not in the image store")") != nullptr);
+    CHECK(std::strstr(missing.json.c_str(), R"("verdict":"none")") != nullptr);
+    (void)std::remove(path);
 }

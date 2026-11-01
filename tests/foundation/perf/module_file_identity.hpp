@@ -4,11 +4,13 @@
 // shares nothing with the engine's in-memory walk (crd/perf/symbol_index.hpp enumerate_loaded_modules). A PE file is
 // read through its section table (a debug directory's RVA mapped to a file offset); an ELF file through its program
 // headers' file offsets. Only what both sides can know is filled: PE TimeDateStamp, CheckSum, SizeOfImage and the
-// CodeView RSDS GUID, age and PDB basename; ELF the PT_LOAD span and the GNU build-id.
+// CodeView RSDS GUID, age and PDB basename; ELF the PT_LOAD span and the GNU build-id. image_reader hands a file's
+// bytes to HW-RESILIENCE.2's code comparison.
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/types.hpp>
+#include <crd/perf/fault_classification.hpp>
 #include <crd/perf/symbol_index.hpp>
 
 #include <cstdio>
@@ -56,6 +58,26 @@ template <typename T> bool get(const cont::Array<crd::u8>& b, crd::u64 at, T& v)
     }
     std::memcpy(&v, b.data() + at, sizeof(T));
     return true;
+}
+
+// An ImageReader (crd/perf/fault_classification.hpp) over `bytes`, which must outlive it.
+inline bool read_image_bytes(void* context, crd::u64 offset, void* out, crd::u32 size)
+{
+    const auto* bytes = static_cast<const cont::Array<crd::u8>*>(context);
+    if (offset > bytes->size() || size > bytes->size() - offset)
+    {
+        return false;
+    }
+    std::memcpy(out, bytes->data() + offset, size);
+    return true;
+}
+
+inline crd::perf::ImageReader image_reader(const cont::Array<crd::u8>& bytes)
+{
+    // The reader only reads through its context; ImageReader's context is a plain void* for every kind of source.
+    return crd::perf::ImageReader{
+        const_cast<cont::Array<crd::u8>*>(&bytes), // NOLINT(cppcoreguidelines-pro-type-const-cast)
+        &read_image_bytes};
 }
 
 // PE32+ image file -> identity. Returns false when the file is not one.

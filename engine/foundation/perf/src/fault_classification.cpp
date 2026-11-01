@@ -4,6 +4,8 @@
 
 #include <crd/perf/fault_classification.hpp>
 
+#include <cstring>
+
 namespace crd::perf
 {
 namespace
@@ -15,6 +17,10 @@ constexpr crd::u32 kExceptionStream = 6U;
 constexpr crd::u32 kStatusAccessViolation = 0xC0000005U;
 constexpr crd::u32 kStatusInPageError = 0xC0000006U;
 constexpr crd::u32 kExceptionParametersRead = 2U; // the access kind, then the address
+// Its memory lists: MINIDUMP_MEMORY_LIST (a count, then {start, size, rva} per range) and MINIDUMP_MEMORY64_LIST (a
+// count and the base rva, then {start, size} per range, their bytes back to back from the base).
+constexpr crd::u32 kMemoryListStream = 5U;
+constexpr crd::u32 kMemory64ListStream = 9U;
 
 // Linux signal numbers (x86-64 and AArch64 agree) and SIGBUS's machine-check codes.
 constexpr crd::u32 kSigBus = 7U;
@@ -53,6 +59,49 @@ CrashEvidence refuse(CrashEvidence& e, cont::StringView why)
     return static_cast<CrashEvidence&&>(e);
 }
 
+// The bytes at the pc (up to kCodeWindowBytes) from a dump's memory range [start, start + size) stored at `rva`.
+void copy_code(cont::ConstSpan<crd::u8> dump, crd::u64 start, crd::u64 size, crd::u64 rva, CrashEvidence& e) noexcept
+{
+    if (e.code_size != 0U || e.pc < start || e.pc - start >= size || rva > dump.size() || size > dump.size() - rva)
+    {
+        return;
+    }
+    const crd::u64 skip = e.pc - start;
+    const crd::u64 left = size - skip;
+    e.code_size = static_cast<crd::u32>(left < crd::crash::kCodeWindowBytes ? left : crd::crash::kCodeWindowBytes);
+    std::memcpy(e.code_bytes, dump.data() + rva + skip, e.code_size);
+}
+
+void read_minidump_code(cont::ConstSpan<crd::u8> dump, CrashEvidence& e) noexcept
+{
+    detail::Cursor list{find_minidump_stream(dump, kMemoryListStream)};
+    const crd::u32 count = list.u32();
+    for (crd::u32 i = 0U; list.ok && i < count; ++i)
+    {
+        const crd::u64 start = list.u64();
+        const crd::u32 size = list.u32();
+        const crd::u32 rva = list.u32();
+        if (list.ok)
+        {
+            copy_code(dump, start, size, rva, e);
+        }
+    }
+    detail::Cursor list64{find_minidump_stream(dump, kMemory64ListStream)};
+    const crd::u64 count64 = list64.u64();
+    crd::u64 rva = list64.u64();
+    for (crd::u64 i = 0U; list64.ok && i < count64 && rva <= dump.size(); ++i)
+    {
+        const crd::u64 start = list64.u64();
+        const crd::u64 size = list64.u64();
+        if (!list64.ok || size > dump.size() - rva)
+        {
+            break;
+        }
+        copy_code(dump, start, size, rva, e);
+        rva += size;
+    }
+}
+
 CrashEvidence read_minidump(cont::ConstSpan<crd::u8> dump, crd::memory::IAllocator* alloc)
 {
     CrashEvidence e(alloc);
@@ -85,6 +134,7 @@ CrashEvidence read_minidump(cont::ConstSpan<crd::u8> dump, crd::memory::IAllocat
     {
         e.modules.push_back(static_cast<ModuleIdentity&&>(m));
     }
+    read_minidump_code(dump, e);
     e.ok = true;
     return static_cast<CrashEvidence&&>(e);
 }
@@ -156,6 +206,52 @@ bool record_value(cont::StringView text, cont::StringView key, bool hex, crd::u6
     }
 }
 
+[[nodiscard]] int hex_digit(char c) noexcept
+{
+    if (c >= '0' && c <= '9')
+    {
+        return c - '0';
+    }
+    return c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+}
+
+// The record's code line, "code <pc> <hex bytes>", when it names the record's own pc.
+void read_record_code(cont::StringView text, CrashEvidence& e) noexcept
+{
+    const crd::usize at = text.find("\ncode ");
+    const crd::usize end = at == cont::StringView::npos ? at : text.find('\n', at + 1U);
+    if (!e.pc_known || end == cont::StringView::npos)
+    {
+        return;
+    }
+    const cont::StringView line = text.substr(at + 1U, end - at); // newline-terminated, as record_value needs
+    crd::u64 pc = 0U;
+    bool negative = false;
+    const crd::usize space = line.find(' ', 5U);
+    if (!record_value(line, "code", true, pc, negative) || pc != e.pc || space == cont::StringView::npos)
+    {
+        return;
+    }
+    const cont::StringView hex = line.substr(space + 1U, line.size() - space - 2U);
+    if (hex.empty() || hex.size() % 2U != 0U || hex.size() / 2U > crd::crash::kCodeWindowBytes)
+    {
+        return;
+    }
+    crd::u8 code[crd::crash::kCodeWindowBytes] = {};
+    for (crd::usize i = 0U; i < hex.size(); i += 2U)
+    {
+        const int hi = hex_digit(hex[i]);
+        const int lo = hex_digit(hex[i + 1U]);
+        if (hi < 0 || lo < 0)
+        {
+            return;
+        }
+        code[i / 2U] = static_cast<crd::u8>((hi << 4) | lo);
+    }
+    e.code_size = static_cast<crd::u32>(hex.size() / 2U);
+    std::memcpy(e.code_bytes, code, e.code_size);
+}
+
 CrashEvidence read_record(cont::StringView text, cont::ConstSpan<crd::u8> bytes, crd::memory::IAllocator* alloc)
 {
     CrashEvidence e(alloc);
@@ -187,14 +283,16 @@ CrashEvidence read_record(cont::StringView text, cont::ConstSpan<crd::u8> bytes,
         e.address_known = true;
         e.address = addr;
     }
-    // The registers, between "\nregs " and the identities after them: x86-64's rip, AArch64's pc.
+    // The registers, between "\nregs " and the code line or the identities after them: x86-64's rip, AArch64's pc.
     const crd::usize regs = text.find("\nregs ");
     if (regs != cont::StringView::npos)
     {
-        crd::usize stop = text.find("\nbuild_id ", regs);
-        if (stop == cont::StringView::npos)
+        crd::usize stop = cont::StringView::npos;
+        for (const cont::StringView next :
+             {cont::StringView{"\ncode "}, cont::StringView{"\nbuild_id "}, cont::StringView{"\nmodules "}})
         {
-            stop = text.find("\nmodules ", regs);
+            const crd::usize found = text.find(next, regs);
+            stop = found < stop ? found : stop;
         }
         const cont::StringView block =
             text.substr(regs + 1U, stop == cont::StringView::npos ? text.size() - regs - 1U : stop - regs);
@@ -208,6 +306,7 @@ CrashEvidence read_record(cont::StringView text, cont::ConstSpan<crd::u8> bytes,
         }
     }
     e.modules = parse_crash_record_modules(bytes, alloc);
+    read_record_code(text, e);
     e.ok = true;
     return static_cast<CrashEvidence&&>(e);
 }
@@ -341,6 +440,19 @@ void append_evidence(cont::String& out, const FaultClassification& c)
         next();
         out.append("replaying it on the same build did not reproduce it");
     }
+    if ((c.signals & kFaultSignalCodeBitFlip) != 0U)
+    {
+        next();
+        out.append("the instruction byte at ");
+        append_hex(out, c.code_image.pc + c.code_image.offset);
+        out.append(" reads ");
+        append_hex(out, c.code_image.recorded);
+        out.append(" where ");
+        out.append(c.code_image.module.empty() ? cont::StringView{"its module"} : view(c.code_image.module));
+        out.append(" holds ");
+        append_hex(out, c.code_image.image);
+        out.append(", one bit apart");
+    }
 }
 
 void append_processor(cont::String& out, const FaultClassification& c, const HardwareIdentity* machine, bool first)
@@ -354,6 +466,432 @@ void append_processor(cont::String& out, const FaultClassification& c, const Har
     }
     out.append(" has a known instability, ");
     out.append(c.advisory->name);
+}
+
+// ---- the code against the module's image ----------------------------------------------------------------------------
+
+constexpr crd::u32 kWindow = crd::crash::kCodeWindowBytes;
+
+[[nodiscard]] crd::u64 le(const crd::u8* p, crd::u32 width) noexcept
+{
+    crd::u64 v = 0U;
+    for (crd::u32 i = 0U; i < width; ++i)
+    {
+        v |= static_cast<crd::u64>(p[i]) << (8U * i);
+    }
+    return v;
+}
+
+[[nodiscard]] bool image_read(const ImageReader& image, crd::u64 offset, void* out, crd::u32 size) noexcept
+{
+    return image.read != nullptr && image.read(image.context, offset, out, size);
+}
+
+// The image's bytes at the pc as the loader placed them: `out` holds `n` (at most the capture's) of them, or `why`
+// says why they cannot be known.
+struct LoadedBytes
+{
+    crd::u8 out[kWindow] = {};
+    crd::u32 n = 0U;
+    cont::StringView why;
+};
+
+// A PE section: where an RVA lies in the file. `limit` is how many bytes from the RVA the file holds for it.
+struct PeSection
+{
+    crd::u32 va = 0U;
+    crd::u32 virtual_size = 0U;
+    crd::u32 raw_size = 0U;
+    crd::u32 raw_offset = 0U;
+};
+
+[[nodiscard]] bool pe_file_offset(cont::ConstSpan<PeSection> sections, crd::u64 rva, crd::u64& offset,
+                                  crd::u64& limit) noexcept
+{
+    for (const PeSection& sec : sections)
+    {
+        const crd::u64 held =
+            sec.virtual_size != 0U && sec.virtual_size < sec.raw_size ? sec.virtual_size : sec.raw_size;
+        if (rva >= sec.va && rva - sec.va < held)
+        {
+            offset = sec.raw_offset + (rva - sec.va);
+            limit = held - (rva - sec.va);
+            return true;
+        }
+    }
+    return false;
+}
+
+// IMAGE_REL_BASED_*: the fields a base relocation adjusts, by type (0: none, ABSOLUTE pads a block).
+constexpr crd::u32 kRelHigh = 1U;
+constexpr crd::u32 kRelLow = 2U;
+constexpr crd::u32 kRelHighLow = 3U;
+constexpr crd::u32 kRelHighAdj = 4U;
+constexpr crd::u32 kRelDir64 = 10U;
+constexpr crd::u32 kBaseRelocationDirectory = 5U; // IMAGE_DIRECTORY_ENTRY_BASERELOC
+
+// Applies the base relocations of `dir` that touch [rva, rva + loaded.n) for a load `delta` from the image base.
+void pe_relocate(const ImageReader& image, cont::ConstSpan<PeSection> sections, crd::u64 dir_rva, crd::u64 dir_size,
+                 crd::u64 delta, crd::u64 rva, LoadedBytes& loaded) noexcept
+{
+    crd::u64 dir_offset = 0U;
+    crd::u64 dir_limit = 0U;
+    if (!pe_file_offset(sections, dir_rva, dir_offset, dir_limit) || dir_size > dir_limit)
+    {
+        loaded.why = "the image's base relocations lie outside its sections";
+        return;
+    }
+    for (crd::u64 pos = 0U; pos + 8U <= dir_size;)
+    {
+        crd::u8 head[8];
+        if (!image_read(image, dir_offset + pos, head, 8U))
+        {
+            loaded.why = "the image's base relocations cannot be read";
+            return;
+        }
+        const crd::u64 page = le(head, 4U);
+        const crd::u64 block = le(head + 4U, 4U);
+        if (block < 8U || block > dir_size - pos)
+        {
+            loaded.why = "the image's base relocations are malformed";
+            return;
+        }
+        // An entry adjusts at most 8 bytes from its page offset (at most 0xFFF), so only these blocks can reach in.
+        if (page < rva + loaded.n && page + 0x1000U + 8U > rva)
+        {
+            bool skip_next = false;
+            for (crd::u64 at = 8U; at + 2U <= block; at += 2U)
+            {
+                crd::u8 entry[2];
+                if (!image_read(image, dir_offset + pos + at, entry, 2U))
+                {
+                    loaded.why = "the image's base relocations cannot be read";
+                    return;
+                }
+                if (skip_next)
+                {
+                    skip_next = false; // HIGHADJ's second slot holds its low half, not an entry
+                    continue;
+                }
+                const crd::u32 type = static_cast<crd::u32>(le(entry, 2U)) >> 12U;
+                const crd::u64 target = page + (le(entry, 2U) & 0xFFFU);
+                crd::u32 width = 0U;
+                crd::u64 add = 0U;
+                bool applied = true;
+                switch (type)
+                {
+                    case 0U:
+                        continue;
+                    case kRelHigh:
+                        width = 2U;
+                        add = (delta >> 16U) & 0xFFFFU;
+                        break;
+                    case kRelLow:
+                        width = 2U;
+                        add = delta & 0xFFFFU;
+                        break;
+                    case kRelHighLow:
+                        width = 4U;
+                        add = delta & 0xFFFFFFFFU;
+                        break;
+                    case kRelDir64:
+                        width = 8U;
+                        add = delta;
+                        break;
+                    default:
+                        width = 8U; // a type this reader does not apply (at most 8 bytes): refused if it reaches in
+                        applied = false;
+                        skip_next = type == kRelHighAdj;
+                        break;
+                }
+                if (target >= rva + loaded.n || target + width <= rva)
+                {
+                    continue;
+                }
+                if (!applied)
+                {
+                    loaded.why = "a base relocation this reader does not apply reaches the faulting instruction";
+                    return;
+                }
+                crd::u8 field[8];
+                crd::u64 offset = 0U;
+                crd::u64 limit = 0U;
+                if (!pe_file_offset(sections, target, offset, limit) || limit < width ||
+                    !image_read(image, offset, field, width))
+                {
+                    loaded.why = "a base relocation at the faulting instruction cannot be read";
+                    return;
+                }
+                const crd::u64 value = le(field, width) + add;
+                for (crd::u32 i = 0U; i < width; ++i)
+                {
+                    if (target + i >= rva && target + i < rva + loaded.n)
+                    {
+                        loaded.out[target + i - rva] = static_cast<crd::u8>(value >> (8U * i));
+                    }
+                }
+            }
+        }
+        pos += block;
+    }
+}
+
+// The PE file's bytes at the pc: its identity is the module's, and the pc's section maps it.
+void pe_loaded_bytes(const CrashEvidence& e, const ModuleIdentity& m, const ImageReader& image, LoadedBytes& loaded)
+{
+    if (m.id_kind != SymbolIdKind::Rsds && m.id_kind != SymbolIdKind::PeImage)
+    {
+        loaded.why = "the module is not a Windows image";
+        return;
+    }
+    crd::u8 dos[64];
+    crd::u8 nt[24];
+    if (!image_read(image, 0U, dos, sizeof(dos)) || !image_read(image, le(dos + 0x3CU, 4U), nt, sizeof(nt)) ||
+        std::memcmp(nt, "PE\0\0", 4U) != 0)
+    {
+        loaded.why = "the image has no PE header";
+        return;
+    }
+    const crd::u64 nt_at = le(dos + 0x3CU, 4U);
+    const crd::u32 section_count = static_cast<crd::u32>(le(nt + 6U, 2U));
+    const crd::u32 stamp = static_cast<crd::u32>(le(nt + 8U, 4U));
+    const crd::u32 optional_size = static_cast<crd::u32>(le(nt + 20U, 2U));
+    crd::u8 opt[240] = {};
+    if (optional_size < 96U || optional_size > sizeof(opt) || section_count > 96U ||
+        !image_read(image, nt_at + 24U, opt, optional_size))
+    {
+        loaded.why = "the image's PE optional header is malformed";
+        return;
+    }
+    const crd::u32 magic = static_cast<crd::u32>(le(opt, 2U));
+    const bool plus = magic == 0x20BU;
+    if (!plus && magic != 0x10BU)
+    {
+        loaded.why = "the image's PE optional header is malformed";
+        return;
+    }
+    const crd::u64 image_base = plus ? le(opt + 24U, 8U) : le(opt + 28U, 4U);
+    const crd::u32 size_of_image = static_cast<crd::u32>(le(opt + 56U, 4U));
+    const crd::u32 checksum = static_cast<crd::u32>(le(opt + 64U, 4U));
+    const crd::u32 dirs_at = plus ? 112U : 96U;
+    const crd::u64 dir_count = le(opt + dirs_at - 4U, 4U);
+    if (m.timestamp == 0U || stamp != m.timestamp || size_of_image != m.size ||
+        (m.checksum != 0U && checksum != m.checksum))
+    {
+        loaded.why = "the image is not the module's (its TimeDateStamp, SizeOfImage or CheckSum differ)";
+        return;
+    }
+    PeSection sections[96];
+    for (crd::u32 i = 0U; i < section_count; ++i)
+    {
+        crd::u8 h[40];
+        if (!image_read(image, nt_at + 24U + optional_size + 40U * i, h, sizeof(h)))
+        {
+            loaded.why = "the image's section table cannot be read";
+            return;
+        }
+        sections[i] = PeSection{static_cast<crd::u32>(le(h + 12U, 4U)), static_cast<crd::u32>(le(h + 8U, 4U)),
+                                static_cast<crd::u32>(le(h + 16U, 4U)), static_cast<crd::u32>(le(h + 20U, 4U))};
+    }
+    const cont::ConstSpan<PeSection> table{sections, section_count};
+    const crd::u64 rva = e.pc - m.base;
+    crd::u64 offset = 0U;
+    crd::u64 limit = 0U;
+    if (!pe_file_offset(table, rva, offset, limit))
+    {
+        loaded.why = "the pc is in none of the image's file-backed sections";
+        return;
+    }
+    loaded.n = static_cast<crd::u32>(limit < e.code_size ? limit : e.code_size);
+    if (!image_read(image, offset, loaded.out, loaded.n))
+    {
+        loaded.why = "the image's bytes at the pc cannot be read";
+        return;
+    }
+    const crd::u64 delta = m.base - image_base;
+    if (delta != 0U && dir_count > kBaseRelocationDirectory &&
+        dirs_at + 8U * (kBaseRelocationDirectory + 1U) <= optional_size)
+    {
+        const crd::u8* dir = opt + dirs_at + 8U * kBaseRelocationDirectory;
+        if (le(dir + 4U, 4U) != 0U)
+        {
+            pe_relocate(image, table, le(dir, 4U), le(dir + 4U, 4U), delta, rva, loaded);
+        }
+    }
+}
+
+// ELF program header and dynamic tags this reads.
+constexpr crd::u32 kPtLoad = 1U;
+constexpr crd::u32 kPtDynamic = 2U;
+constexpr crd::u32 kPtNote = 4U;
+constexpr crd::u64 kDtTextRel = 22U;
+constexpr crd::u64 kDtFlags = 30U;
+constexpr crd::u64 kDfTextRel = 4U;
+constexpr crd::u32 kNtGnuBuildId = 3U;
+constexpr crd::u32 kMaxProgramHeaders = 256U;
+
+struct ElfSegment
+{
+    crd::u32 type = 0U;
+    crd::u64 offset = 0U;
+    crd::u64 vaddr = 0U;
+    crd::u64 filesz = 0U;
+    crd::u64 memsz = 0U;
+};
+
+// Whether a PT_NOTE segment holds the GNU build-id `m` names (a longer id is compared on the bytes `m` kept).
+[[nodiscard]] bool elf_note_has_build_id(const ImageReader& image, const ElfSegment& note, const ModuleIdentity& m)
+{
+    for (crd::u64 at = 0U; at + 12U <= note.filesz && at < 0x10000U;)
+    {
+        crd::u8 head[12];
+        if (!image_read(image, note.offset + at, head, sizeof(head)))
+        {
+            return false;
+        }
+        const crd::u64 name_size = le(head, 4U);
+        const crd::u64 desc_size = le(head + 4U, 4U);
+        const crd::u64 name_padded = (name_size + 3U) & ~crd::u64{3};
+        const crd::u64 desc_padded = (desc_size + 3U) & ~crd::u64{3};
+        if (name_padded > note.filesz || desc_padded > note.filesz - name_padded ||
+            12U + name_padded + desc_padded > note.filesz - at)
+        {
+            return false;
+        }
+        crd::u8 name[4];
+        if (le(head + 8U, 4U) == kNtGnuBuildId && name_size == 4U &&
+            image_read(image, note.offset + at + 12U, name, 4U) && std::memcmp(name, "GNU\0", 4U) == 0)
+        {
+            crd::u8 id[kMaxSymbolIdBytes];
+            const crd::u32 kept = static_cast<crd::u32>(desc_size < kMaxSymbolIdBytes ? desc_size : kMaxSymbolIdBytes);
+            return kept == m.id_len && image_read(image, note.offset + at + 12U + name_padded, id, kept) &&
+                   std::memcmp(id, m.id, kept) == 0;
+        }
+        at += 12U + name_padded + desc_padded;
+    }
+    return false;
+}
+
+// Whether the dynamic segment asks for text relocations (the loader then writes the code).
+[[nodiscard]] bool elf_text_relocations(const ImageReader& image, const ElfSegment& dynamic, bool is64, bool& textrel)
+{
+    const crd::u32 entry = is64 ? 16U : 8U;
+    const crd::u32 word = is64 ? 8U : 4U;
+    for (crd::u64 at = 0U; at + entry <= dynamic.filesz && at < 0x10000U; at += entry)
+    {
+        crd::u8 d[16];
+        if (!image_read(image, dynamic.offset + at, d, entry))
+        {
+            return false;
+        }
+        const crd::u64 tag = le(d, word);
+        const crd::u64 value = le(d + word, word);
+        if (tag == 0U)
+        {
+            break;
+        }
+        textrel = textrel || tag == kDtTextRel || (tag == kDtFlags && (value & kDfTextRel) != 0U);
+    }
+    return true;
+}
+
+// The ELF file's bytes at the pc: its build-id and PT_LOAD span are the module's, and the PT_LOAD holding the pc
+// maps it.
+void elf_loaded_bytes(const CrashEvidence& e, const ModuleIdentity& m, const ImageReader& image, LoadedBytes& loaded)
+{
+    if (m.id_kind != SymbolIdKind::GnuBuildId || m.id_len == 0U)
+    {
+        loaded.why = "the module has no GNU build-id to check the image against";
+        return;
+    }
+    crd::u8 eh[64];
+    if (!image_read(image, 0U, eh, 52U) || (eh[4] != 1U && eh[4] != 2U) || eh[5] != 1U)
+    {
+        loaded.why = "the image is not a little-endian ELF file";
+        return;
+    }
+    const bool is64 = eh[4] == 2U;
+    if (is64 && !image_read(image, 0U, eh, 64U))
+    {
+        loaded.why = "the image's ELF header cannot be read";
+        return;
+    }
+    const crd::u64 phoff = is64 ? le(eh + 32U, 8U) : le(eh + 28U, 4U);
+    const crd::u32 phentsize = static_cast<crd::u32>(le(eh + (is64 ? 54U : 42U), 2U));
+    const crd::u32 phnum = static_cast<crd::u32>(le(eh + (is64 ? 56U : 44U), 2U));
+    if (phentsize != (is64 ? 56U : 32U) || phnum > kMaxProgramHeaders)
+    {
+        loaded.why = "the image's ELF program headers are malformed";
+        return;
+    }
+    ElfSegment segments[kMaxProgramHeaders];
+    crd::u64 low = ~crd::u64{0};
+    crd::u64 high = 0U;
+    bool identified = false;
+    bool textrel = false;
+    for (crd::u32 i = 0U; i < phnum; ++i)
+    {
+        crd::u8 ph[56];
+        if (!image_read(image, phoff + static_cast<crd::u64>(phentsize) * i, ph, phentsize))
+        {
+            loaded.why = "the image's ELF program headers cannot be read";
+            return;
+        }
+        ElfSegment& seg = segments[i];
+        seg.type = static_cast<crd::u32>(le(ph, 4U));
+        seg.offset = is64 ? le(ph + 8U, 8U) : le(ph + 4U, 4U);
+        seg.vaddr = is64 ? le(ph + 16U, 8U) : le(ph + 8U, 4U);
+        seg.filesz = is64 ? le(ph + 32U, 8U) : le(ph + 16U, 4U);
+        seg.memsz = is64 ? le(ph + 40U, 8U) : le(ph + 20U, 4U);
+        if (seg.type == kPtLoad)
+        {
+            low = seg.vaddr < low ? seg.vaddr : low;
+            high = seg.vaddr + seg.memsz > high ? seg.vaddr + seg.memsz : high;
+        }
+        identified = identified || (seg.type == kPtNote && elf_note_has_build_id(image, seg, m));
+        if (seg.type == kPtDynamic && !elf_text_relocations(image, seg, is64, textrel))
+        {
+            loaded.why = "the image's dynamic segment cannot be read";
+            return;
+        }
+    }
+    if (!identified || low > high || high - low != m.size)
+    {
+        loaded.why = "the image is not the module's (its GNU build-id or PT_LOAD span differ)";
+        return;
+    }
+    if (textrel)
+    {
+        loaded.why = "the image has text relocations, so the loader wrote its code";
+        return;
+    }
+    const crd::u64 vaddr = e.pc - m.base + low;
+    for (crd::u32 i = 0U; i < phnum; ++i)
+    {
+        const ElfSegment& seg = segments[i];
+        if (seg.type != kPtLoad || vaddr < seg.vaddr || vaddr - seg.vaddr >= seg.filesz)
+        {
+            continue;
+        }
+        const crd::u64 limit = seg.filesz - (vaddr - seg.vaddr);
+        loaded.n = static_cast<crd::u32>(limit < e.code_size ? limit : e.code_size);
+        if (!image_read(image, seg.offset + (vaddr - seg.vaddr), loaded.out, loaded.n))
+        {
+            loaded.why = "the image's bytes at the pc cannot be read";
+        }
+        return;
+    }
+    loaded.why = "the pc is in none of the image's file-backed segments";
+}
+
+[[nodiscard]] crd::u32 popcount8(crd::u32 v) noexcept
+{
+    crd::u32 n = 0U;
+    for (; v != 0U; v &= v - 1U)
+    {
+        ++n;
+    }
+    return n;
 }
 
 } // namespace
@@ -387,6 +925,108 @@ CrashEvidence read_crash_evidence(cont::ConstSpan<crd::u8> capture, crd::memory:
     return refuse(e, "not a crash capture (neither a minidump nor a crash record)");
 }
 
+cont::StringView code_image_result_name(CodeImageResult r) noexcept
+{
+    switch (r)
+    {
+        case CodeImageResult::NotCompared:
+            return "not-compared";
+        case CodeImageResult::Matches:
+            return "matches";
+        case CodeImageResult::OneBitFlipped:
+            return "one-bit-flipped";
+        case CodeImageResult::Modified:
+            return "modified";
+    }
+    return "unknown";
+}
+
+const ModuleIdentity* code_module(const CrashEvidence& e) noexcept
+{
+    if (!e.ok || !e.pc_known)
+    {
+        return nullptr;
+    }
+    for (const ModuleIdentity& m : e.modules)
+    {
+        if (!m.unloaded && inside(m, e.pc))
+        {
+            return &m;
+        }
+    }
+    return nullptr;
+}
+
+CodeImageCheck compare_code_with_image(const CrashEvidence& e, const ImageReader& image, crd::memory::IAllocator* alloc)
+{
+    CodeImageCheck c(alloc);
+    c.pc = e.pc;
+    const ModuleIdentity* m = code_module(e);
+    if (m == nullptr)
+    {
+        c.reason = "the pc is in no loaded module";
+        return c;
+    }
+    c.module.append(view(m->name));
+    if (e.code_size == 0U)
+    {
+        c.reason = "the capture holds no code bytes";
+        return c;
+    }
+    crd::u8 magic[4];
+    if (!image_read(image, 0U, magic, sizeof(magic)))
+    {
+        c.reason = "the image cannot be read";
+        return c;
+    }
+    LoadedBytes loaded;
+    if (magic[0] == 'M' && magic[1] == 'Z')
+    {
+        pe_loaded_bytes(e, *m, image, loaded);
+    }
+    else if (std::memcmp(magic,
+                         "\x7f"
+                         "ELF",
+                         4U) == 0)
+    {
+        elf_loaded_bytes(e, *m, image, loaded);
+    }
+    else
+    {
+        loaded.why = "the image is neither a PE nor an ELF file";
+    }
+    if (!loaded.why.empty() || loaded.n == 0U)
+    {
+        c.reason = loaded.why.empty() ? cont::StringView{"the image holds no bytes at the pc"} : loaded.why;
+        return c;
+    }
+    c.compared = loaded.n;
+    for (crd::u32 i = 0U; i < loaded.n; ++i)
+    {
+        const crd::u32 bits = popcount8(static_cast<crd::u32>(e.code_bytes[i] ^ loaded.out[i]));
+        if (bits != 0U && c.differing_bits == 0U)
+        {
+            c.offset = i;
+            c.recorded = e.code_bytes[i];
+            c.image = loaded.out[i];
+            for (crd::u32 b = 0U; b < 8U; ++b)
+            {
+                if (((e.code_bytes[i] ^ loaded.out[i]) >> b) == 1U)
+                {
+                    c.bit = b; // the highest differing bit; with one bit the only one
+                }
+            }
+        }
+        c.differing_bits += bits;
+    }
+    c.result = CodeImageResult::Modified;
+    if (c.differing_bits <= 1U)
+    {
+        c.result = c.differing_bits == 0U ? CodeImageResult::Matches : CodeImageResult::OneBitFlipped;
+    }
+    return c;
+}
+
 cont::StringView replay_outcome_name(ReplayOutcome r) noexcept
 {
     switch (r)
@@ -417,9 +1057,9 @@ bool parse_replay_outcome(cont::StringView text, ReplayOutcome& out) noexcept
 void append_fault_signal_names(crd::u32 signals, cont::String& out)
 {
     constexpr cont::StringView names[] = {"machine-check", "code-address-bit-flip", "data-address-bit-flip",
-                                          "replay-not-reproduced"};
+                                          "replay-not-reproduced", "code-bit-flip"};
     bool first = true;
-    for (crd::u32 bit = 0U; bit < 4U; ++bit)
+    for (crd::u32 bit = 0U; bit < sizeof(names) / sizeof(names[0]); ++bit)
     {
         if ((signals & (1U << bit)) != 0U)
         {
@@ -486,7 +1126,7 @@ const CpuAdvisory* find_cpu_advisory(const HardwareIdentity& machine) noexcept
 }
 
 FaultClassification classify_fault(const CrashEvidence* crash, const HardwareIdentity* machine, ReplayOutcome replay,
-                                   crd::memory::IAllocator* alloc)
+                                   const CodeImageCheck* code_image, crd::memory::IAllocator* alloc)
 {
     FaultClassification c(alloc);
     c.replay = replay;
@@ -506,6 +1146,20 @@ FaultClassification classify_fault(const CrashEvidence* crash, const HardwareIde
             find_bit_flip(*crash, crash->address, fetch ? c.code_flip : c.data_flip);
             c.signals |= c.code_flip.found ? kFaultSignalCodeAddressBitFlip : 0U;
             c.signals |= c.data_flip.found ? kFaultSignalDataAddressBitFlip : 0U;
+        }
+        if (code_image != nullptr)
+        {
+            c.code_image.result = code_image->result;
+            c.code_image.reason = code_image->reason;
+            c.code_image.pc = code_image->pc;
+            c.code_image.compared = code_image->compared;
+            c.code_image.differing_bits = code_image->differing_bits;
+            c.code_image.offset = code_image->offset;
+            c.code_image.bit = code_image->bit;
+            c.code_image.recorded = code_image->recorded;
+            c.code_image.image = code_image->image;
+            c.code_image.module.append(view(code_image->module));
+            c.signals |= code_image->result == CodeImageResult::OneBitFlipped ? kFaultSignalCodeBitFlip : 0U;
         }
     }
     if (replay == ReplayOutcome::NotReproduced)

@@ -323,16 +323,74 @@ void emit_hex(HANDLE h, unsigned long long v, int width) noexcept
     emit(h, out, static_cast<DWORD>(width));
 }
 
-// MiniDumpWriteDump's callback for a snapshot dump: IsProcessSnapshotCallback answers S_FALSE (the handle is a PSS
-// snapshot); every other callback keeps DbgHelp's defaults.
-BOOL CALLBACK snapshot_dump_callback(PVOID /*param*/, PMINIDUMP_CALLBACK_INPUT input,
-                                     PMINIDUMP_CALLBACK_OUTPUT output) noexcept
+// What MiniDumpWriteDump's callback adds to a dump: whether the handle is a PSS snapshot, and the faulting
+// instruction's bytes as one memory range (HW-RESILIENCE.2).
+struct DumpCallbackState
 {
-    if (input != nullptr && output != nullptr && input->CallbackType == IsProcessSnapshotCallback)
+    bool snapshot{false};
+    ULONG64 code_base{0};
+    ULONG code_size{0};
+};
+
+// IsProcessSnapshotCallback answers S_FALSE for a snapshot; MemoryCallback hands over the code range once (DbgHelp
+// asks until the callback returns FALSE); a failed read of that range leaves it out instead of failing the dump.
+// Every other callback keeps DbgHelp's defaults.
+BOOL CALLBACK dump_callback(PVOID param, PMINIDUMP_CALLBACK_INPUT input, PMINIDUMP_CALLBACK_OUTPUT output) noexcept
+{
+    auto* state = static_cast<DumpCallbackState*>(param);
+    if (state == nullptr || input == nullptr || output == nullptr)
     {
-        output->Status = S_FALSE;
+        return TRUE;
     }
-    return TRUE;
+    switch (input->CallbackType)
+    {
+        case IsProcessSnapshotCallback:
+            if (state->snapshot)
+            {
+                output->Status = S_FALSE;
+            }
+            return TRUE;
+        case MemoryCallback:
+            if (state->code_size == 0U)
+            {
+                return FALSE;
+            }
+            output->MemoryBase = state->code_base;
+            output->MemorySize = state->code_size;
+            state->code_size = 0U;
+            return TRUE;
+        case ReadMemoryFailureCallback:
+            if (state->code_base != 0U && input->ReadMemoryFailure.Offset >= state->code_base &&
+                input->ReadMemoryFailure.Offset - state->code_base < crd::crash::kCodeWindowBytes)
+            {
+                output->Status = S_OK;
+            }
+            return TRUE;
+        default:
+            return TRUE;
+    }
+}
+
+// How many of the kCodeWindowBytes bytes from `pc` this process can read: all, those before the next page (4 KiB on
+// x64 and ARM64) when that page cannot be read, or none. ReadProcessMemory fails instead of faulting, so a jump to an
+// unmapped address is safe here.
+ULONG readable_code_bytes(ULONG64 pc) noexcept
+{
+    unsigned char probe[crd::crash::kCodeWindowBytes];
+    const ULONG64 page_end = (pc | 0xFFFULL) + 1ULL;
+    const SIZE_T to_page = page_end > pc ? static_cast<SIZE_T>(page_end - pc) : 0U;
+    const SIZE_T sizes[2] = {sizeof(probe), to_page < sizeof(probe) ? to_page : 0U};
+    for (const SIZE_T size : sizes)
+    {
+        SIZE_T got = 0U;
+        // NOLINTNEXTLINE(performance-no-int-to-ptr): an exception record names the faulting address as a pointer.
+        if (size != 0U && ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<LPCVOID>(pc), probe, size, &got) &&
+            got == size)
+        {
+            return static_cast<ULONG>(size);
+        }
+    }
+    return 0U;
 }
 
 // What the snapshot keeps for the dump's streams: the address space as a copy-on-write clone (memory, modules, the
@@ -479,7 +537,15 @@ crd::crash::WriteResult write_dump(MINIDUMP_EXCEPTION_INFORMATION* mei, crd::cra
     HPSS snapshot = nullptr;
     const bool snapped =
         PssCaptureSnapshot(GetCurrentProcess(), kSnapshotFlags, CONTEXT_ALL, &snapshot) == ERROR_SUCCESS;
-    MINIDUMP_CALLBACK_INFORMATION snapshot_callback{&snapshot_dump_callback, nullptr};
+    // HW-RESILIENCE.2: a fault's dump carries the faulting instruction's bytes in its memory list.
+    DumpCallbackState state{};
+    state.snapshot = snapped;
+    if (mei != nullptr && mei->ExceptionPointers != nullptr && mei->ExceptionPointers->ExceptionRecord != nullptr)
+    {
+        state.code_base = reinterpret_cast<ULONG64>(mei->ExceptionPointers->ExceptionRecord->ExceptionAddress);
+        state.code_size = readable_code_bytes(state.code_base);
+    }
+    MINIDUMP_CALLBACK_INFORMATION callback{&dump_callback, &state};
     BOOL ok = MiniDumpWriteDump(snapped ? reinterpret_cast<HANDLE>(snapshot) : GetCurrentProcess(),
                                 GetCurrentProcessId(), file,
                                 static_cast<MINIDUMP_TYPE>(MiniDumpWithDataSegs | MiniDumpWithHandleData |
@@ -488,7 +554,7 @@ crd::crash::WriteResult write_dump(MINIDUMP_EXCEPTION_INFORMATION* mei, crd::cra
                                                            // module unloaded before the fault still yields its
                                                            // identity (the UnloadedModuleListStream readback).
                                                            MiniDumpWithUnloadedModules),
-                                mei, usi_ptr, snapped ? &snapshot_callback : nullptr);
+                                mei, usi_ptr, &callback);
     DWORD dump_err = GetLastError(); // an HRESULT for MiniDumpWriteDump; stored raw
     unpin_machine(machine);
     if (snapped)
@@ -1256,6 +1322,38 @@ std::size_t ap_hex_bytes(char* buf, std::size_t cap, std::size_t n, const unsign
     return n;
 }
 
+// The kCodeWindowBytes bytes from `pc` this process can read, through /proc/self/mem: its read fails or stops short
+// instead of faulting, so a jump to an unmapped address is safe here, and it reads execute-only code too. Returns the
+// count read (0 when none, or /proc is not mounted); open, pread and close are async-signal-safe.
+std::size_t read_code_bytes(std::uint64_t pc, unsigned char* out) noexcept
+{
+    if (pc == 0U || pc > static_cast<std::uint64_t>(INT64_MAX) - crd::crash::kCodeWindowBytes)
+    {
+        return 0U;
+    }
+    const int fd = open("/proc/self/mem", O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+    {
+        return 0U;
+    }
+    std::size_t got = 0U;
+    while (got < crd::crash::kCodeWindowBytes)
+    {
+        const ssize_t r = pread(fd, out + got, crd::crash::kCodeWindowBytes - got, static_cast<off_t>(pc + got));
+        if (r < 0 && errno == EINTR)
+        {
+            continue;
+        }
+        if (r <= 0)
+        {
+            break;
+        }
+        got += static_cast<std::size_t>(r);
+    }
+    (void)close(fd);
+    return got;
+}
+
 // write() the whole buffer, retrying short writes and EINTR. false on any hard error.
 bool write_all(int fd, const char* p, std::size_t n) noexcept
 {
@@ -1396,6 +1494,24 @@ crd::crash::WriteResult write_crash_record(int sig, void* ctx, long tid, std::ui
     n = ap_str(rec, sizeof(rec), n, "unsupported-arch\n");
     (void)uc;
 #endif
+
+    // HW-RESILIENCE.2: the faulting instruction's bytes.
+    std::uint64_t pc = 0U;
+#if defined(__x86_64__)
+    pc = uc != nullptr ? static_cast<std::uint64_t>(uc->uc_mcontext.gregs[REG_RIP]) : 0U;
+#elif defined(__aarch64__)
+    pc = uc != nullptr ? static_cast<std::uint64_t>(uc->uc_mcontext.pc) : 0U;
+#endif
+    unsigned char code_bytes[crd::crash::kCodeWindowBytes];
+    const std::size_t code_size = read_code_bytes(pc, code_bytes);
+    if (code_size != 0U)
+    {
+        n = ap_str(rec, sizeof(rec), n, "code ");
+        n = ap_hex(rec, sizeof(rec), n, pc);
+        n = ap_str(rec, sizeof(rec), n, " ");
+        n = ap_hex_bytes(rec, sizeof(rec), n, code_bytes, code_size);
+        n = ap_str(rec, sizeof(rec), n, "\n");
+    }
 
     // DIAG.5d(c2): binary identities, captured at install() (static reads only -- async-signal-safe). Appended AFTER
     // the 5b fields so the existing record parsers are unaffected. The exe build_id is the load-bearing line; the
