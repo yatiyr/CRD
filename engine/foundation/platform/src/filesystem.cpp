@@ -20,6 +20,9 @@
 #include <string_view>
 
 #if CRD_OS_WINDOWS
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #elif CRD_OS_MAC
 #include <mach-o/dyld.h>
@@ -304,16 +307,16 @@ template <typename Duration>
         }
         const auto written = std::chrono::clock_cast<std::chrono::system_clock>(tp);
         const auto whole = std::chrono::floor<std::chrono::seconds>(written);
-        constexpr i64 kPerSecond = Duration{std::chrono::seconds{1}}.count();
-        constexpr i64 kMax = std::numeric_limits<i64>::max();
-        constexpr i64 kMin = std::numeric_limits<i64>::min();
+        constexpr i64 per_second = Duration{std::chrono::seconds{1}}.count();
+        constexpr i64 most = std::numeric_limits<i64>::max();
+        constexpr i64 least = std::numeric_limits<i64>::min();
         const i64 seconds = static_cast<i64>(whole.time_since_epoch().count());
-        const i64 part = static_cast<i64>(std::chrono::floor<Duration>(written - whole).count()); // [0, kPerSecond)
-        if (seconds > (kMax - part) / kPerSecond)
+        const i64 part = static_cast<i64>(std::chrono::floor<Duration>(written - whole).count()); // [0, per_second)
+        if (seconds > (most - part) / per_second)
         {
-            return kMax;
+            return most;
         }
-        return seconds < kMin / kPerSecond ? kMin : seconds * kPerSecond + part;
+        return seconds < least / per_second ? least : seconds * per_second + part;
     }
     catch (...)
     {

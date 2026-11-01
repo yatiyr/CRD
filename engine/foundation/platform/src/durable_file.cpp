@@ -10,6 +10,9 @@
 #include <utility>
 
 #if CRD_OS_WINDOWS
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <cerrno>

@@ -6,6 +6,9 @@
 #include <crd/platform/log_channel.hpp>
 
 #if CRD_OS_WINDOWS
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <dlfcn.h>
