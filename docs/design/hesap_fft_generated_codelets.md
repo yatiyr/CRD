@@ -246,3 +246,7 @@ forward: 1.38x the standalone-hier at avx512 and level with MKL on the benchmark
 48 KiB L1d. It is the canonical f32 2K forward too since the board timed each transform warm (an untimed transform of
 the same arm first; the cold transform after the other arms had ranked the standalone-hier first): 1.40x IP4-AoS at
 avx512 and 1.30x at avx2 ([board](../bench/2026-11-01-simd-perf-fft-warm-board-2k.md)); the 2K inverse stays IP4-AoS.
+At avx512 the engine transposes both parts of each 8 x 8 tile of a group in one `Vec16f` a row
+(`transpose8x8_halves`) and stores each row whole: there port 1 takes no vector operation beside 512-bit ones, so the
+eight `Vec8f` tiles' shuffles had held port 5, the transform's bound; 1.13x at 2K and 1.12x at 4K, the same bits
+([board](../bench/2026-11-01-simd-perf-fft-group-transpose.md)).
