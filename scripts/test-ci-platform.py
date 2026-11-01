@@ -1278,6 +1278,30 @@ class Dashboard(unittest.TestCase):
         self.assertEqual(calls, [])
         self.assertIn('not configured', out.getvalue())
 
+    def test_publish_runs_the_locked_wrangler_on_the_pinned_node(self):
+        from unittest import mock
+        install_node = dashboard.load_script('install-node.py')
+        node = Path('/opt/node/bin/node')
+        calls = []
+        with tempfile.TemporaryDirectory() as temp:
+            token = Path(temp, 'token')
+            token.write_text('secret\n', encoding='utf-8')
+            environ = {'CERID_CLOUDFLARE_TOKEN_FILE': str(token), 'CERID_CLOUDFLARE_ACCOUNT_ID': 'account',
+                       'PATH': 'host'}
+            with mock.patch.object(dashboard, 'load_script', return_value=install_node), \
+                    mock.patch.object(install_node, 'install', return_value=node):
+                self.assertEqual(dashboard.publish(Path('site'), environ=environ,
+                                                   run=lambda command, **kw: calls.append((command, kw))), 0)
+        (npm, npm_options), (wrangler, wrangler_options) = calls
+        self.assertEqual(npm, [str(node), str(Path('/opt/node/lib/node_modules/npm/bin/npm-cli.js')), 'ci',
+                               '--ignore-scripts', '--no-audit', '--no-fund'])
+        self.assertEqual(npm_options['cwd'], str(dashboard.HERE))
+        self.assertEqual(npm_options['env']['PATH'], str(node.parent) + os.pathsep + 'host')
+        self.assertEqual(npm_options['env']['CLOUDFLARE_API_TOKEN'], 'secret')
+        self.assertEqual(wrangler[:4], [str(node), str(dashboard.HERE / 'node_modules/wrangler/bin/wrangler.js'),
+                                        'pages', 'deploy'])
+        self.assertTrue(wrangler_options['check'])
+
     def test_publisher_is_locked(self):
         manifest = json.loads((ROOT / 'ci/dashboard/package.json').read_text(encoding='utf-8'))
         lock = json.loads((ROOT / 'ci/dashboard/package-lock.json').read_text(encoding='utf-8'))

@@ -20,8 +20,6 @@ import json
 import os
 import subprocess
 import sys
-import tarfile
-import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
@@ -307,27 +305,23 @@ def publish(site, environ=None, run=subprocess.run):
         print('Cloudflare Pages is not configured (CERID_CLOUDFLARE_TOKEN_FILE, CERID_CLOUDFLARE_ACCOUNT_ID); '
               'the page stays a build artifact')
         return 0
-    pins = load_script_pins()
-    node_pin = pins.entry('tools', 'node-linux-x64')
-    work = Path(tempfile.mkdtemp(prefix='cerid-pages-'))
-    archive = pins.fetch(node_pin, work)
-    with tarfile.open(archive) as package:
-        package.extractall(work, filter='data')
-    node_root = work / node_pin['member'].split('/')[0]
+    install_node = load_script('install-node.py')
+    node = install_node.install()
     env = dict(environ)
-    env['PATH'] = str(node_root / 'bin') + os.pathsep + env.get('PATH', '')
+    env['PATH'] = str(node.parent) + os.pathsep + env.get('PATH', '')
     env['CLOUDFLARE_ACCOUNT_ID'] = account
     env['CLOUDFLARE_API_TOKEN'] = Path(token_file).read_text(encoding='utf-8').strip()
-    run([str(node_root / 'bin/npm'), 'ci', '--ignore-scripts', '--no-audit', '--no-fund'], cwd=str(HERE), env=env,
-        check=True)
-    run([str(node_root / 'bin/node'), str(HERE / 'node_modules/wrangler/bin/wrangler.js'), 'pages', 'deploy',
+    run(install_node.npm_command(node) + ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], cwd=str(HERE),
+        env=env, check=True)
+    run([str(node), str(HERE / 'node_modules/wrangler/bin/wrangler.js'), 'pages', 'deploy',
          str(site), '--project-name', project, '--branch', environ.get('CERID_CI_BRANCH', 'main'),
          '--commit-dirty=true'], cwd=str(HERE), env=env, check=True)
     return 0
 
 
-def load_script_pins():
-    spec = importlib.util.spec_from_file_location('pins_dash', ROOT / 'scripts/pins.py')
+def load_script(name):
+    """One of the repository's scripts/ modules, loaded by its file name."""
+    spec = importlib.util.spec_from_file_location(name.removesuffix('.py').replace('-', '_'), ROOT / 'scripts' / name)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

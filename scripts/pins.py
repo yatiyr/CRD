@@ -6,11 +6,14 @@ The registry (schema cerid-pins/1) is the only place a version, URL or hash is w
 download never sits under the final name; an already downloaded archive is verified before use.
 Contract: docs/design/pinned-inputs.md.
 """
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import argparse
+import copy
 import hashlib
 import http.client
 import json
+import platform
+import posixpath
 import shutil
 import sys
 import tarfile
@@ -22,6 +25,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 PINS = ROOT / 'cmake/pins.json'
 SCHEMA = 'cerid-pins/1'
+WINDOWS = platform.system() == 'Windows'
 # The public SDK endpoints reject Python's default user agent. Identify the actual client; identity still comes from
 # the pinned SHA-256, never from the HTTP response alone.
 USER_AGENT = 'Cerid-SDK-Installer/1.0 (+https://github.com/yatiyr/CRD)'
@@ -152,6 +156,96 @@ def install_member(pin, destination, archive=None, download_dir=None, label=None
         raise PinError(f'{label} binary checksum mismatch: expected {pin["member_sha256"]}, got {actual}')
     output.chmod(0o755)
     return output
+
+
+def tree_members(package, root):
+    """The tar archive's members below `root` (which must end in a slash), with the root stripped; any other member
+    is refused, so the archive cannot place a file beside the tree. Links sort last, so on Windows a link's target is
+    always extracted before it."""
+    if not root.endswith('/'):
+        raise PinError(f'the pinned root must end in a slash: {root}')
+    members = []
+    for info in package.getmembers():
+        name = info.name.rstrip('/')
+        if name == root.rstrip('/'):
+            continue
+        if not name.startswith(root):
+            raise PinError(f'archive member outside {root}: {info.name}')
+        info.name = name[len(root):]
+        members.append(info)
+    return sorted(members, key=lambda info: info.issym() or info.islnk())
+
+
+def tree_filter(member, path):
+    """tarfile's `data` filter (no absolute or escaping path or link, no device file); on Windows a symlink it
+    accepted becomes a hard link to the same member: a Windows symlink needs a privilege and cannot resolve a POSIX
+    separator."""
+    member = tarfile.data_filter(member, path)
+    if WINDOWS and member.issym():
+        target = posixpath.normpath(posixpath.join(posixpath.dirname(member.name), member.linkname))
+        member = copy.copy(member)
+        member.type, member.linkname = tarfile.LNKTYPE, target
+    return member
+
+
+def install_tree(pin, destination, download_dir, binary, stamp, archive=None, label=None, version_of=None):
+    """Install every member of `pin`'s tar archive below the pin's `root` into `destination` and return the
+    `binary` (a POSIX path inside the tree), unless a matching install is already there.
+
+    The archive is fetched (or verified) through fetch(); the tree is assembled beside the destination and renamed
+    into place only when complete; a pin with `member_sha256` has that member's digest checked inside the tree; with
+    `version_of` (a callable returning the version the binary reports, or None) the binary must report the pinned
+    version. The `stamp` file records the pin's version and digest, so a matching install is reused and a directory
+    without one is never replaced."""
+    label = label or pin.get('file') or binary
+    destination = Path(destination).resolve()
+    expected = {'version': pin['version'], 'sha256': pin['sha256']}
+    tool = destination / PurePosixPath(binary)
+
+    def reported_version(path):
+        return version_of(path) if version_of is not None else pin['version']
+
+    try:
+        recorded = json.loads((destination / stamp).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        recorded = None
+    if recorded == expected and tool.is_file() and reported_version(tool) == pin['version']:
+        print(f'{label} {pin["version"]} already installed at {tool}; stamp and version match.')
+        return tool
+    if destination.exists() and not (destination / stamp).is_file():
+        raise PinError(f'{destination} exists and holds no kit this script installed; choose another destination')
+    verified = fetch(pin, Path(download_dir).resolve(), archive, label=f'{label} archive')
+    staging = destination.with_name(destination.name + '.partial')
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True)
+    try:
+        with tarfile.open(verified, 'r:*', errorlevel=2) as package:
+            package.extractall(staging, members=tree_members(package, pin['root']), filter=tree_filter)
+        staged = staging / PurePosixPath(binary)
+        if not staged.is_file():
+            raise PinError(f'{verified.name}: the kit has no {binary}')
+        if pin.get('member_sha256'):
+            member = PurePosixPath(pin['member'])
+            if str(member) != pin['root'] + binary:
+                raise PinError(f'the pinned member {member} is not the binary {pin["root"]}{binary}')
+            actual = sha256(staged)
+            if actual != pin['member_sha256']:
+                raise PinError(f'{label} binary checksum mismatch: expected {pin["member_sha256"]}, got {actual}')
+        reported = reported_version(staged)
+        if reported != pin['version']:
+            raise PinError(f'installed {label} reports {reported!r}, the registry pins {pin["version"]}')
+        (staging / stamp).write_text(json.dumps(expected, indent=2) + '\n', encoding='utf-8')
+        if destination.exists():
+            shutil.rmtree(destination)
+        staging.rename(destination)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    checks = 'archive and binary SHA-256 verified' if pin.get('member_sha256') else 'archive SHA-256 verified'
+    print(f'Installed {label} {pin["version"]}; {checks}' + (', the binary reports the version.' if version_of
+                                                              else '.'))
+    return tool
 
 
 def main(argv=None):

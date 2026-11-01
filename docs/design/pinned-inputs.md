@@ -67,7 +67,11 @@ clang-tidy lane's LLVM 20.1.8 `clang-tidy.exe` and builtin headers from LLVM's r
 tar (the binary's digest, the header count and the reported version checked).
 [install-sde.py](../../scripts/install-sde.py) extracts Intel SDE 10.13.1's whole kit below the pin's root through
 tarfile's `data` filter (the Linux kit's inner links kept, anything escaping refused), checks `-version` and
-exports `CRD_SDE` for the emulated avx512 arms of win-release and linux-gcc-release. Every hosted lane installs
+exports `CRD_SDE` for the emulated avx512 arms of win-release and linux-gcc-release.
+[install-node.py](../../scripts/install-node.py) installs Node.js 24.22.0 whole the same way (`bin/node`'s own digest
+and `--version` checked) for the npm tools, each run with `npm ci --ignore-scripts` from a committed lockfile: the
+dashboard publisher and the MCP Inspector. Both whole-tree installs go through `pins.install_tree` (staging beside
+the destination, a stamp naming the pin, nothing outside the pin's root extracted). Every hosted lane installs
 Python 3.12 before calling them.
 
 ### Cold acquisition on every complete run

@@ -17,22 +17,16 @@ emulated arms (crd_add_kernel_level_tests, cmake/CrdSimd.cmake). Ubuntu's Yama p
 attach (Intel's README); the hosted Linux lane sets it.
 Contract: docs/design/pinned-inputs.md; ADR-0134 §8.
 """
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import argparse
-import copy
-import json
-import platform
-import posixpath
 import re
-import shutil
 import subprocess
 import sys
-import tarfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pins  # noqa: E402
 
-WINDOWS = platform.system() == 'Windows'
+WINDOWS = pins.WINDOWS
 PIN_NAME = 'sde-windows' if WINDOWS else 'sde-linux'
 HOST = 'win' if WINDOWS else 'lin'
 STAMP = 'cerid-sde.json'
@@ -47,10 +41,6 @@ def default_download_dir(pin):
     return Path.home() / '.cerid' / 'tools' / 'sde' / pin['version'] / ('dl-' + HOST)
 
 
-def binary(destination, pin):
-    return Path(destination) / PurePosixPath(pin['binary'])
-
-
 def installed_version(tool):
     """The version `sde -version` reports, or None."""
     if not Path(tool).is_file():
@@ -60,85 +50,13 @@ def installed_version(tool):
     return match.group(1) if result.returncode == 0 and match else None
 
 
-def expected_stamp(pin):
-    return {'version': pin['version'], 'sha256': pin['sha256']}
-
-
-def reusable(destination, pin, check):
-    path = Path(destination) / STAMP
-    try:
-        recorded = json.loads(path.read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        return False
-    tool = binary(destination, pin)
-    if recorded != expected_stamp(pin) or not tool.is_file():
-        return False
-    return not check or installed_version(tool) == pin['version']
-
-
-def kit_members(package, root):
-    """The archive's members below `root` (which must end in a slash), with the root stripped; any other member is
-    refused, so the archive cannot place a file beside the kit."""
-    if not root.endswith('/'):
-        raise pins.PinError(f'the pinned SDE root must end in a slash: {root}')
-    members = []
-    for info in package.getmembers():
-        name = info.name.rstrip('/')
-        if name == root.rstrip('/'):
-            continue
-        if not name.startswith(root):
-            raise pins.PinError(f'archive member outside {root}: {info.name}')
-        info.name = name[len(root):]
-        members.append(info)
-    return sorted(members, key=lambda info: info.issym() or info.islnk())
-
-
-def kit_filter(member, path):
-    """tarfile's `data` filter; on Windows a symlink it accepted becomes a hard link to the same member."""
-    member = tarfile.data_filter(member, path)
-    if WINDOWS and member.issym():
-        target = posixpath.normpath(posixpath.join(posixpath.dirname(member.name), member.linkname))
-        member = copy.copy(member)
-        member.type, member.linkname = tarfile.LNKTYPE, target
-    return member
-
-
 def install(destination=None, archive=None, download_dir=None, pin=None, check=True):
     """Return the installed SDE binary under `destination`, extracting the kit unless a matching install is
     present."""
     pin = pins.entry('tools', PIN_NAME) if pin is None else pin
-    destination = Path(destination or default_destination(pin)).resolve()
-    if reusable(destination, pin, check):
-        print(f'Intel SDE {pin["version"]} already installed at {binary(destination, pin)}; stamp and version match.')
-    else:
-        if destination.exists() and not (destination / STAMP).is_file():
-            raise pins.PinError(f'{destination} exists and holds no kit this script installed; choose another '
-                                '--destination')
-        download_dir = Path(download_dir or default_download_dir(pin)).resolve()
-        verified = pins.fetch(pin, download_dir, archive, label='Intel SDE archive')
-        staging = destination.with_name(destination.name + '.partial')
-        if staging.exists():
-            shutil.rmtree(staging)
-        staging.mkdir(parents=True)
-        try:
-            with tarfile.open(verified, 'r:*', errorlevel=2) as package:
-                package.extractall(staging, members=kit_members(package, pin['root']), filter=kit_filter)
-            tool = binary(staging, pin)
-            if not tool.is_file():
-                raise pins.PinError(f'{verified.name}: the kit has no {pin["binary"]}')
-            if check:
-                reported = installed_version(tool)
-                if reported != pin['version']:
-                    raise pins.PinError(f'installed SDE reports {reported!r}, the registry pins {pin["version"]}')
-            (staging / STAMP).write_text(json.dumps(expected_stamp(pin), indent=2) + '\n', encoding='utf-8')
-            if destination.exists():
-                shutil.rmtree(destination)
-            staging.rename(destination)
-        except BaseException:
-            shutil.rmtree(staging, ignore_errors=True)
-            raise
-        print(f'Installed Intel SDE {pin["version"]}; archive SHA-256 verified, {pin["binary"]} reports the version.')
-    tool = binary(destination, pin)
+    tool = pins.install_tree(pin, destination or default_destination(pin), download_dir or default_download_dir(pin),
+                             pin['binary'], STAMP, archive, label='Intel SDE',
+                             version_of=installed_version if check else None)
     print(f'CRD_SDE={tool}')
     return tool
 

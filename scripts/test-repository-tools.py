@@ -57,6 +57,9 @@ bench_spec.loader.exec_module(build_bench)
 sccache_spec = importlib.util.spec_from_file_location('install_sccache', ROOT / 'scripts/install-sccache.py')
 install_sccache = importlib.util.module_from_spec(sccache_spec)
 sccache_spec.loader.exec_module(install_sccache)
+node_spec = importlib.util.spec_from_file_location('install_node', ROOT / 'scripts/install-node.py')
+install_node = importlib.util.module_from_spec(node_spec)
+node_spec.loader.exec_module(install_node)
 mold_spec = importlib.util.spec_from_file_location('install_mold', ROOT / 'scripts/install-mold.py')
 install_mold = importlib.util.module_from_spec(mold_spec)
 mold_spec.loader.exec_module(install_mold)
@@ -2005,6 +2008,61 @@ class BuildPerformance(unittest.TestCase):
             self.assertEqual(pin['root'], pin['file'].removesuffix('.tar.xz') + '/')
             self.assertIn(pin['version'], pin['url'])
         self.assertIn('scripts/install-sde.py', check_pins.HELPERS)
+
+    def test_node_installer_installs_the_whole_distribution_and_checks_digests_and_version(self):
+        def distribution(path, node=b'#!/bin/sh\n'):
+            with tarfile.open(path, 'w:xz') as package:
+                link = tarfile.TarInfo('node-v9.9.9-linux-x64/bin/npm')
+                link.type, link.linkname = tarfile.SYMTYPE, '../lib/node_modules/npm/bin/npm-cli.js'
+                package.addfile(link)
+                for name, data in (('node-v9.9.9-linux-x64/bin/node', node),
+                                   ('node-v9.9.9-linux-x64/lib/node_modules/npm/bin/npm-cli.js', b'// npm\n')):
+                    info = tarfile.TarInfo(name)
+                    info.size, info.mode = len(data), 0o755
+                    package.addfile(info, io.BytesIO(data))
+            return {'version': '9.9.9', 'url': 'https://example.invalid/node', 'file': path.name,
+                    'sha256': pins_registry.sha256(path), 'root': 'node-v9.9.9-linux-x64/',
+                    'member': 'node-v9.9.9-linux-x64/bin/node',
+                    'member_sha256': hashlib.sha256(b'#!/bin/sh\n').hexdigest()}
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            pin = distribution(root / 'node.tar.xz')
+            with contextlib.redirect_stdout(io.StringIO()):
+                node = install_node.install(root / 'node', archive=root / 'node.tar.xz', pin=pin, check=False)
+                self.assertEqual(node, (root / 'node/bin/node').resolve())
+                self.assertEqual(sorted(p.name for p in (root / 'node').iterdir()), ['bin', 'cerid-node.json', 'lib'])
+                self.assertEqual((root / 'node/bin/npm').read_bytes(), b'// npm\n', 'the npm link resolves')
+                self.assertEqual(install_node.npm_command(node),
+                                 [str(node), str(root.resolve() / 'node/lib/node_modules/npm/bin/npm-cli.js')])
+                # A matching stamp is reused.
+                (root / 'node/lib/node_modules/npm/bin/npm-cli.js').write_bytes(b'kept')
+                install_node.install(root / 'node', archive=root / 'node.tar.xz', pin=pin, check=False)
+                self.assertEqual((root / 'node/lib/node_modules/npm/bin/npm-cli.js').read_bytes(), b'kept')
+                # bin/node's own digest is checked inside the tree, and the member must be the binary.
+                distribution(root / 'other.tar.xz', node=b'#!/bin/sh\nexit 1\n')
+                with self.assertRaisesRegex(pins_registry.PinError, 'binary checksum mismatch'):
+                    install_node.install(root / 'other', archive=root / 'other.tar.xz', check=False,
+                                         pin=dict(pin, sha256=pins_registry.sha256(root / 'other.tar.xz')))
+                self.assertFalse((root / 'other').exists() or (root / 'other.partial').exists())
+                with self.assertRaisesRegex(pins_registry.PinError, 'is not the binary'):
+                    install_node.install(root / 'member', archive=root / 'node.tar.xz', check=False,
+                                         pin=dict(pin, member='node-v9.9.9-linux-x64/bin/npm'))
+                for reported, accepted in (('v9.9.9\n', True), ('v9.9.10\n', False), ('9.9.9\n', False)):
+                    target = root / ('version-%s' % reported.strip())
+                    with patch.object(install_node.subprocess, 'run',
+                                      return_value=SimpleNamespace(stdout=reported, returncode=0)):
+                        if accepted:
+                            install_node.install(target, archive=root / 'node.tar.xz', pin=pin)
+                        else:
+                            with self.assertRaisesRegex(pins_registry.PinError, 'reports'):
+                                install_node.install(target, archive=root / 'node.tar.xz', pin=pin)
+                    self.assertEqual(target.exists(), accepted, 'a wrong version leaves nothing installed')
+        pin = pins_registry.entry('tools', 'node-linux-x64')
+        self.assertEqual(pin['root'], pin['file'].removesuffix('.tar.xz') + '/')
+        self.assertEqual(pin['member'], pin['root'] + install_node.NODE)
+        self.assertIn('/v%s/' % pin['version'], pin['url'])
+        self.assertIn('scripts/install-node.py', check_pins.HELPERS)
 
     def test_clang_tidy_installer_keeps_the_resource_layout_and_checks_digests_count_and_version(self):
         with tempfile.TemporaryDirectory() as temp:

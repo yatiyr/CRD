@@ -399,10 +399,11 @@
       "file": "node-v24.22.0-linux-x64.tar.xz",
       "size": 32015600,
       "sha256": "cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008",
+      "root": "node-v24.22.0-linux-x64/",
       "member": "node-v24.22.0-linux-x64/bin/node",
       "member_sha256": "67ca5783febb8bf85736c79fcdd92c8d6d465a0eb2a082672bcdfa76a506751c",
       "license": "MIT",
-      "note": "Node.js 24 LTS (Krypton, 2026-10-14) for the dashboard publisher only: ci/dashboard/generate.py publish runs the wrangler version locked with every transitive integrity hash in ci/dashboard/package-lock.json. Downloaded and hashed 2026-10-30; matches nodejs.org SHASUMS256.txt."
+      "note": "Node.js 24 LTS (Krypton, 2026-10-14), installed whole by scripts/install-node.py for the repository's npm tools, each run from a committed lockfile with every transitive SHA-512 integrity: the dashboard publisher (ci/dashboard/generate.py publish, wrangler) and the MCP Inspector of MCP-ADAPT.0's evidence (tests/tools/ceridc/mcp_inspector.py). Downloaded and hashed 2026-10-30; matches nodejs.org SHASUMS256.txt."
     },
     "bake-python-windows": {
       "version": "3.12.10",
