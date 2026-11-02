@@ -1102,10 +1102,21 @@ to the byte, and live interoperability with OpenMLS and MLSpp (M4) proves the wh
 MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519 (mandatory to implement), 0x0002 MLS_128_DHKEMP256_AES128GCM_SHA256_P256,
 0x0003 MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 and 0x0007 MLS_256_DHKEMP384_AES256GCM_SHA384_P384 (the
 high-assurance suite). 0x0004 to 0x0006 need X448, Ed448 or P-521, which no provider in the policy implements, and
-are refused. The suites' hash is their KDF's (`kdf_hash`), as is the MAC's. The post-quantum suites
-(draft-ietf-mls-pq-ciphersuites-07, `mls.pq-ciphersuites`, pinned 2026-11-02: 0x0010 to 0x0017 with ML-KEM or a
-hybrid KEM and a classical signature, 0x0020 to 0x0022 with ML-DSA signed purely with an empty context) join the
-table now that HPKE carries their KEMs (H2).
+are refused. The suites' hash is their KDF's (`kdf_hash`), as is the MAC's. The post-quantum suites of
+draft-ietf-mls-pq-ciphersuites-07 (`mls.pq-ciphersuites`, pinned 2026-11-02) are in the table since 2026-11-02, over
+HPKE's KEMs (H2): 0x0010 and 0x0011 (X-Wing, Ed25519; AES-128-GCM with SHA-256, AES-256-GCM with SHA-384), 0x0012
+and 0x0013 (MLKEM768-P256, ECDSA P-256; the same two), 0x0014 (MLKEM1024-P384, ECDSA P-384), 0x0015 to 0x0017
+(ML-KEM-768 with Ed25519 and with ECDSA P-256, ML-KEM-1024 with ECDSA P-384; AES-256-GCM, SHA-384), and 0x0020 to
+0x0022 (X-Wing with ChaCha20-Poly1305 and ML-DSA-44, ML-KEM-768 with ML-DSA-65, ML-KEM-1024 with ML-DSA-87; SHA-384),
+ML-DSA signing purely with an empty context and its keys in FIPS 204's encoding, as the draft says. IANA does not list
+their codepoints yet, so the register keeps them unverified and the table names them through
+`iana::unverified`; the entry stays planned until IANA lists them. A post-quantum suite's keys and messages are an
+order of magnitude larger: an HPKE public key or encapsulation of up to 1665 bytes (MLKEM1024-P384), and an ML-KEM's
+encapsulation is shorter than its public key (Nenc 1088 against Npk 1184 for ML-KEM-768), so every kem_output (an
+UpdatePath's, a Welcome's, an ExternalInit's) is sized by Nenc and every key by Npk; a signature public key of up to
+2592 bytes and a signature of up to 4627 (ML-DSA-87). One buffer of each maximum (`kMaxNodeKeyBytes`,
+`kMaxEncapsulationBytes`, `kMaxSignatureKeyBytes`, `kMaxSuiteSignatureBytes`, held to the table by a test) serves every
+suite on the stack; an UpdatePath's up to 31 node keys take one allocation beside the path it writes.
 
 **M3. Layers**, each closed against its vector file before the next builds on it:
 
@@ -1211,8 +1222,11 @@ table now that HPKE carries their KEMs (H2).
     c. HPKE's post-quantum and hybrid KEMs, the precondition of the post-quantum suites (decision H2; the
     working group's draft-ietf-hpke-pq vectors), with the register pins of the four drafts and the key check every
     MLS key now passes (`hpke_check_public_key`).
-    d. Next: the post-quantum suites in the table (M2) with the node key, signature and message sizes they need,
-    GREASE (section 13.5), and live OpenMLS and MLSpp interop (M4).
+    d. The post-quantum suites in the table (M2), with every kem_output sized by Nenc and the buffers sized for
+    the largest keys and signatures; every behavioural suite of the layers above runs in all fifteen suites (no
+    working-group vector holds a post-quantum suite).
+    e. GREASE (section 13.5; decision M13).
+    f. Next: live OpenMLS and MLSpp interop (M4).
 
 **M5. The receive window** (RFC 9420 section 9.2 leaves its size to the application). OpenMLS's defaults: a receiver
 keeps the keys of the 5 generations below the next unconsumed one of each ratchet (late and reordered messages) and
@@ -1343,6 +1357,20 @@ sort by. The creator checks its own new group the same way before it returns the
 the prior group's id, and then the store's repeat check spares that id: the member takes no further part in the group
 the ReInit ended.
 
+**M13. GREASE** (RFC 9420 section 13.5). The fifteen reserved values 0x0A0A to 0xEAEA (`grease`, `random_grease`;
+0xFAFA is private use). A sender puts random ones where receivers ignore unknown values: Cerid adds an empty extension
+of a random GREASE type to every GroupInfo it signs (`GroupInfoOptions::grease`, on by default, none added beside an
+application's own), and an application adds them to its leaves' capabilities and extensions and its key packages'
+extensions, which the API takes as written (the tests' members all do). A receiver gives them no special processing:
+an unknown capability, a key package's or a GroupInfo's unknown extension is ignored, and a leaf extension of a GREASE
+type is accepted when its capabilities list it. Section 13.5 forbids them in a proposal's or a credential's type and in
+a GroupContext's extensions, and requires a client to compare its own capabilities without them: Cerid compares every
+leaf's capabilities against what a group requires or uses that way (`supports_extension`, `supports_proposal`,
+`supports_credential`), so a GREASE value is never supported. A group whose context or required capabilities name
+one, a GroupContextExtensions proposal adding one and a leaf whose credential type is one are refused (Unsupported)
+on both sides, though the sender's own capabilities list it, and a proposal of a GREASE type is a type this build does
+not implement.
+
 **M6. Padding** (RFC 9420 section 6.3 leaves its amount to the application). A PrivateMessageContent of L bytes is
 padded with Padmé (Nikitin et al., "Reducing Metadata Leakage from Encrypted Files and Communication with PURBs",
 PETS 2019; `padme_padding`): with E = floor(log2 L), the top floor(log2 E) + 1 bits of L are kept and the bits below
@@ -1447,6 +1475,13 @@ to the honest commit secret), `crd-fuzz-crypto-mls-message`
 spent, public messages verified exactly when unchanged) and `crd-fuzz-crypto-mls` (headers against a restatement of section 2.1.2, tree math
 against its invariants, HPKE round trips with any bit changed, hostile openings and signatures, derivations, and
 sequences of reads, spends and sends on a secret tree against a model of the window and section 9 restated).
+Since layer 10d the behavioural suites run in all fifteen suites and the fuzz targets' honest groups are made in each
+(both wire formats for `crd-fuzz-crypto-mls-commit`); `test_mls.cpp` restates the table and holds the four buffer
+maxima to its largest key, encapsulation, signature key and signature; every test member's capabilities, leaf and key
+package carry GREASE, and `test_mls_external.cpp` checks the fifteen values, random draws of each, the GroupInfo's
+GREASE extension (none when asked not to or beside the application's own), joins from a Welcome and an external
+commit with GREASE throughout, and the refusals of a GREASE GroupContext extension, GroupContextExtensions proposal and
+credential type.
 
 <a id="negotiation"></a>
 ## Version and extension negotiation
