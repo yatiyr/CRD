@@ -359,8 +359,9 @@ holds ECDSA. The decisions (numbered for the tests):
   operating system's per-user vault) or `Hardware` (sealed to a device). `PlatformKeyProtector` is DPAPI on Windows:
   user scope, `CRYPTPROTECT_UI_FORBIDDEN`, its entropy the label "cerid key store master 1" and the store's
   identifier, so a reference recovers only in its own store and only for its user; DPAPI cannot forget. On Linux it is
-  the Secret Service (K10), which can. The Keychain (macOS) and a TPM-sealed master key are its next protectors; on a
-  platform without one it answers `Unavailable`, and the store is never written unprotected.
+  the Secret Service (K10), which can. `TpmKeyProtector` is `Hardware` protection (K11); the Keychain (macOS) is the
+  next platform protector. On a platform without one a protector answers `Unavailable`, and the store is never
+  written unprotected.
 - **K3. One sealed file.** A store is a directory created owner-only (`create_private_directory`: mode 0700, or a
   protected DACL with one inheritable entry for the user) holding the file `keys`, a durable save of crd-platform
   (atomic replace, envelope checksums, no older generation kept so an erased key is not kept either), and the lock
@@ -381,7 +382,9 @@ holds ECDSA. The decisions (numbered for the tests):
   (`forgets()`): the store is saved under the new key with the old reference pending, the old key forgotten, then
   the pending reference cleared, and an interrupted replacement is completed by the next change before anything else.
   An earlier copy of the store file then no longer opens. A protector that cannot forget (DPAPI) cannot give that
-  guarantee and says so.
+  guarantee and says so. `erase` ends a whole store: under the lock its newest save's master keys (a pending one too)
+  are forgotten first, so a file that cannot be removed no longer opens either, then the file is removed and the store
+  closed; the directory and its lock file stay for `create`.
 - **K6. Writers.** Each change takes the store's lock (`FileLock`: LockFileEx, flock), reads the newest save, applies
   itself to it and replaces the file, so writers in several processes never lose one another's changes. An open store
   refuses a save older than the one it holds (`Replayed`) or another store put in its place (`Forged`). Lookups and
@@ -414,6 +417,23 @@ holds ECDSA. The decisions (numbered for the tests):
   (on Windows it only lifts `CRYPTPROTECT_UI_FORBIDDEN`). Every reply's signature is checked before it is read.
   Proven against the pinned gnome-keyring 46.1 (`tools/gnome-keyring-linux-x64`) in a session bus and scratch home of
   their own, unlocked and locked (`secret_service_session.py`, the `crd-crypto-secret-service` CTests).
+
+- **K11. The TPM 2.0 protector (Windows).** `TpmKeyProtector` is "tpm-pcp": the Microsoft Platform Crypto Provider
+  (NCrypt), which offers the TPM's asymmetric keys only (no sealing, AES or HMAC key reaches a user through it, probed
+  2026-11-03 on this PC's Intel PTT TPM). Each master key gets its own persisted, decrypt-only RSA-2048 key named for
+  the store and a random 16-byte handle; RSA-OAEP with SHA-256 wraps the master key under the label "cerid master 1",
+  the store's 16-byte identifier and a closing zero byte (a TPM closes a label with a zero byte itself, so the label
+  carries one and wrapping and unwrapping agree wherever they run; a TPM takes labels only up to its largest digest, 32
+  bytes with SHA-256 alone, and answered `TPM_RC_SIZE` to a 58-byte one). The reference is a format byte, the handle and
+  the 256-byte wrapped key; it holds no public key, so a copied store file gives a future quantum attacker no modulus to
+  factor. A changed handle or another store's identifier names no key, and a changed wrapped key fails OAEP inside the
+  TPM (the label binds the store too): both `Denied`. `forget` deletes the key (`forgets()` is true, so K5 holds on
+  Windows too; the provider keeps a key as a blob its TPM wraps, so a profile backup taken before the deletion still
+  holds it). A store under it opens only on the machine whose TPM holds the key. `available()` opens the provider and
+  reads its platform type. Linux's protector through tss2, proven against a TPM simulator, is next; until then the class
+  answers `Unavailable` there. Evidence (2026-11-03, [session](../sessions/2026-11-03-net-2-tpm-protector.md)): the TPM
+  cases of `test_key_store.cpp` on this PC's Intel PTT TPM (a runner without one skips the hardware case), no TPM key
+  left after the run, and a forget that deletes nothing caught.
 
 Evidence (2026-11-02, [session](../sessions/2026-11-02-net-2-key-store.md)): `test_key_store.cpp` (12 cases: every kind
 of key through its whole life, every refusal, every changed byte of a store, an older and a substituted store, writers
