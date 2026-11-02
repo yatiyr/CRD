@@ -1,8 +1,9 @@
 // crd-crypto -- QUIC address-validation tokens (NET.2; docs/design/network-foundation.md#address-validation): Retry
 // and NEW_TOKEN tokens validated for exactly what they are bound to (address, port, connection IDs, version, kind) and
 // refused as Forged for anything else, every byte changed, every length, the lifetimes and the clock skew at their
-// edges, a fleet's key rotation, every refusal, unique tokens, the replay filter's single use, its periods and slot
-// reuse, its false positive rate at capacity, and keys and a filter shared by several threads.
+// edges, a fleet's key rotation, every refusal, unique tokens, a NEW_TOKEN token's single use through a replay
+// filter whose period covers the lifetime and the clock skew, and keys and a filter shared by several threads. The
+// filter's own periods, slot reuse and false positive rate are test_replay.cpp's.
 //
 // The round trips a Retry and a NEW_TOKEN token cost against the amplification limit are measured with real
 // handshakes in test_quic_handshake.cpp.
@@ -87,7 +88,7 @@ Token new_token(const QuicTokenKeys& keys, QuicVersion version = QuicVersion::V1
 
 // The validation of `token` as it arrives in the client's next Initial: to the Retry's connection ID, from its own.
 CryptoError check(const QuicTokenKeys& keys, ConstSpan<u8> token, QuicVersion version = QuicVersion::V1,
-                  u64 now = kNow, const QuicTokenPeer& peer = kPeer, QuicTokenReplay* replay = nullptr)
+                  u64 now = kNow, const QuicTokenPeer& peer = kPeer, ReplayFilter* replay = nullptr)
 {
     QuicTokenClaims claims;
     return keys.validate(version, token, peer, ConstSpan<u8>(kRetry), ConstSpan<u8>(kClient), now, claims, replay);
@@ -363,12 +364,19 @@ TEST_CASE("QUIC tokens: refusals outside the contract", "[crypto][net-2][quic-to
           CryptoError::BadLength);
     CHECK(keys.validate(static_cast<QuicVersion>(0xFF000020U), fresh.view(), kPeer, {}, {}, kNow, claims) ==
           CryptoError::Unsupported);
-    QuicTokenReplay replay;
+    ReplayFilter replay;
     CHECK(check(keys, fresh.view(), QuicVersion::V1, kNow, kPeer, &replay) == CryptoError::NotReady);
     REQUIRE(replay.init(16U, kQuicNewTokenLifetime - 1U, kNow) == CryptoError::None);
     CHECK(check(keys, fresh.view(), QuicVersion::V1, kNow, kPeer, &replay) == CryptoError::NotReady);
+    // The filter's period covers the clock skew too: tokens living less than the skew still need a period of it.
+    QuicTokenKeys brief;
+    REQUIRE(brief.init(ConstSpan<u8>(kKeyA), {}, 1U) == CryptoError::None);
+    const Token short_lived = new_token(brief);
+    REQUIRE(replay.init(16U, kQuicTokenClockSkew - 1U, kNow) == CryptoError::None);
+    CHECK(check(brief, short_lived.view(), QuicVersion::V1, kNow, kPeer, &replay) == CryptoError::NotReady);
+    REQUIRE(replay.init(16U, kQuicTokenClockSkew, kNow) == CryptoError::None);
+    CHECK(check(brief, short_lived.view(), QuicVersion::V1, kNow, kPeer, &replay) == CryptoError::None);
     CHECK(replay.init(0U, kQuicNewTokenLifetime, kNow) == CryptoError::BadLength);
-    CHECK(replay.init(16U, kQuicTokenClockSkew - 1U, kNow) == CryptoError::BadLength);
     CHECK_FALSE(replay.ready());
 
     keys.clear();
@@ -414,7 +422,7 @@ TEST_CASE("QUIC tokens: a NEW_TOKEN token is accepted once, a Retry token within
 {
     QuicTokenKeys keys;
     REQUIRE(keys.init(ConstSpan<u8>(kKeyA), {}, 3600U) == CryptoError::None);
-    QuicTokenReplay replay;
+    ReplayFilter replay;
     REQUIRE(replay.init(1024U, 3600U, kNow) == CryptoError::None);
     CHECK(replay.ready());
     CHECK(replay.period() == 3600U);
@@ -440,82 +448,11 @@ TEST_CASE("QUIC tokens: a NEW_TOKEN token is accepted once, a Retry token within
     CHECK(check(keys, retry.view(), QuicVersion::V1, kNow + 1U, kPeer, &replay) == CryptoError::None);
 }
 
-TEST_CASE("QUIC tokens: the replay filter keeps each period apart and reuses a slot only after its tokens expired",
-          "[crypto][net-2][quic-token]")
-{
-    constexpr u64 period = 100U;
-    u8            salt[kQuicTokenSaltBytes];
-    for (usize i = 0U; i < sizeof(salt); ++i)
-    {
-        salt[i] = static_cast<u8>(0x31U * i + 7U);
-    }
-    QuicTokenReplay replay;
-    REQUIRE(replay.init(64U, period, 1000U) == CryptoError::None); // period 10
-    CHECK(replay.first_use(ConstSpan<u8>(salt), 1000U, 1000U));
-    CHECK_FALSE(replay.first_use(ConstSpan<u8>(salt), 1050U, 1060U));
-    CHECK(replay.first_use(ConstSpan<u8>(salt), 999U, 1000U));  // period 9, its own slot
-    CHECK(replay.first_use(ConstSpan<u8>(salt), 1100U, 1100U)); // period 11
-    CHECK(replay.first_use(ConstSpan<u8>(salt), 1205U, 1200U)); // period 12, from the future by the skew
-    CHECK_FALSE(replay.first_use(ConstSpan<u8>(salt), 1100U, 1150U));
-    CHECK_FALSE(replay.first_use(ConstSpan<u8>(salt), 1205U, 1210U));
-    CHECK_FALSE(replay.first_use(ConstSpan<u8>(salt, 15U), 1210U, 1210U));
-
-    // Period 13 reuses period 9's slot once period 11 begins (prepared two ahead); period 10's slot belongs to
-    // period 14 only from period 12 on.
-    CHECK(replay.first_use(ConstSpan<u8>(salt), 1300U, 1300U));
-    CHECK_FALSE(replay.first_use(ConstSpan<u8>(salt), 1301U, 1302U));
-    CHECK_FALSE(replay.first_use(ConstSpan<u8>(salt), 999U, 1300U)); // period 9: too old for any slot
-    CHECK(replay.first_use(ConstSpan<u8>(salt), 1400U, 1400U));
-
-    // A long silence: the slots hold periods long gone and are cleared on first use.
-    CHECK(replay.first_use(ConstSpan<u8>(salt), 100000U, 100000U));
-    CHECK_FALSE(replay.first_use(ConstSpan<u8>(salt), 100001U, 100001U));
-    CHECK(replay.first_use(ConstSpan<u8>(salt), 99999U, 100001U));
-
-    replay.clear();
-    CHECK_FALSE(replay.ready());
-    CHECK_FALSE(replay.first_use(ConstSpan<u8>(salt), 1000U, 1000U));
-    CHECK(replay.init(1U, period, 0U) == CryptoError::None); // from time 0: no period before the first
-    CHECK(replay.bytes() == 4U * 64U);
-    CHECK(replay.first_use(ConstSpan<u8>(salt), 0U, 0U));
-    CHECK_FALSE(replay.first_use(ConstSpan<u8>(salt), 0U, 5U));
-}
-
-TEST_CASE("QUIC tokens: the replay filter's false positives at its capacity", "[crypto][net-2][quic-token]")
-{
-    // Each probe is recorded too, so the filter holds 90% of its capacity before the probes and 110% after them.
-    constexpr usize capacity = usize{1} << 18U;
-    constexpr usize filled   = capacity / 10U * 9U;
-    constexpr usize probes   = capacity / 5U;
-    QuicTokenReplay replay;
-    REQUIRE(replay.init(capacity, 3600U, kNow) == CryptoError::None);
-    CHECK(replay.bytes() == 4U * capacity * 2U);
-    u8 salt[kQuicTokenSaltBytes];
-    for (usize i = 0U; i < filled; ++i)
-    {
-        REQUIRE(random_bytes(Span<u8>(salt)) == CryptoError::None);
-        static_cast<void>(replay.first_use(ConstSpan<u8>(salt), kNow, kNow));
-    }
-    usize false_positives = 0U;
-    for (usize i = 0U; i < probes; ++i)
-    {
-        REQUIRE(random_bytes(Span<u8>(salt)) == CryptoError::None);
-        if (!replay.first_use(ConstSpan<u8>(salt), kNow, kNow))
-        {
-            ++false_positives;
-        }
-    }
-    // A split-block filter of eight one-bit words at 16 bits a token: about 0.1% at capacity (a standard filter of
-    // the same size and eight hashes: 0.06%); the bound leaves room for the load passing capacity.
-    CAPTURE(false_positives, probes);
-    CHECK(false_positives * 1000U < probes * 4U);
-}
-
 TEST_CASE("QUIC tokens: keys and a replay filter serve several threads", "[crypto][net-2][quic-token]")
 {
     QuicTokenKeys keys;
     REQUIRE(keys.init(ConstSpan<u8>(kKeyB), ConstSpan<u8>(kKeyA)) == CryptoError::None);
-    QuicTokenReplay replay;
+    ReplayFilter replay;
     REQUIRE(replay.init(4096U, kQuicNewTokenLifetime, kNow) == CryptoError::None);
     constexpr usize threads   = 4U;
     constexpr usize per       = 256U;

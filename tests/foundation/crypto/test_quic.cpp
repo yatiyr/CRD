@@ -2,8 +2,9 @@
 // of RFC 9001 appendix A and RFC 9369 appendix A byte for byte (the Initial secrets, the client's and the server's
 // Initial packets sealed and header-protected and then read back, the Retry integrity tags, the ChaCha20-Poly1305
 // short header packet and its key update), RFC 9000's packet number examples, every refusal and length rule, the
-// usage limits, tampering anywhere in a packet, random round trips in every suite and version, and one key opening on
-// several threads.
+// usage limits, tampering anywhere in a packet, random round trips in every suite and version, one key opening on
+// several threads, and a packet number space's window opening each packet once through reordering, duplication,
+// replay and forgery.
 
 #include "wycheproof.hpp"
 
@@ -603,4 +604,107 @@ TEST_CASE("QUIC: one packet key and one header key serve several threads", "[cry
         thread.join();
     }
     CHECK((ok[0] && ok[1] && ok[2] && ok[3]));
+}
+
+TEST_CASE("QUIC: a packet number space's window opens each packet once and a forged packet moves nothing",
+          "[crypto][net-2][quic][replay]")
+{
+    // A sender's 600 short header packets, delivered with local reordering, every seventh one twice, every fiftieth
+    // again 300 packets later, and a forged packet claiming a far higher number. The receiver unprotects the header,
+    // decodes the number against its window, checks it before the AEAD and accepts it after (RFC 9000 section 12.3).
+    constexpr usize count = 600U;
+    constexpr usize size  = 1U + 8U + 2U + 40U + kQuicTagBytes; // a 2-byte packet number
+    constexpr usize pn_at = 1U + 8U;
+    u8              secret[32];
+    REQUIRE(random_bytes(Span<u8>(secret)) == CryptoError::None);
+    QuicPacketKey sender;
+    QuicPacketKey receiver;
+    QuicHeaderKey hp;
+    REQUIRE(sender.init(QuicVersion::V1, AlgorithmId::Aes128Gcm, ConstSpan<u8>(secret)) == CryptoError::None);
+    REQUIRE(receiver.init(QuicVersion::V1, AlgorithmId::Aes128Gcm, ConstSpan<u8>(secret)) == CryptoError::None);
+    REQUIRE(hp.init(QuicVersion::V1, AlgorithmId::Aes128Gcm, ConstSpan<u8>(secret)) == CryptoError::None);
+    static u8 packets[count][size];
+    for (usize n = 0U; n < count; ++n)
+    {
+        u8* const packet = packets[n];
+        for (usize i = 0U; i < size; ++i)
+        {
+            packet[i] = static_cast<u8>(n + 3U * i);
+        }
+        packet[0]         = 0x41U;
+        packet[pn_at]     = static_cast<u8>(n >> 8U);
+        packet[pn_at + 1] = static_cast<u8>(n);
+        REQUIRE(sender.seal(n, Span<u8>(packet, size), pn_at + 2U) == CryptoError::None);
+        REQUIRE(hp.protect(Span<u8>(packet, size), pn_at) == CryptoError::None);
+    }
+
+    QuicPacketWindow window;
+    usize            opened    = 0U;
+    usize            dropped   = 0U;
+    bool             seen[count] = {};
+    // One received datagram: true when its packet is processed.
+    const auto receive = [&](const u8* datagram) -> bool
+    {
+        u8 packet[size];
+        std::memcpy(packet, datagram, size);
+        usize bytes     = 0U;
+        u64   truncated = 0U;
+        REQUIRE(hp.unprotect(Span<u8>(packet), pn_at, bytes, truncated) == CryptoError::None);
+        const u64 number = quic_decode_packet_number(truncated, bytes, window.any() ? window.largest() + 1U : 0U);
+        if (window.check(number) != ReplayVerdict::Fresh)
+        {
+            ++dropped;
+            return false;
+        }
+        ++opened;
+        if (receiver.open(number, Span<u8>(packet), pn_at + bytes) != CryptoError::None)
+        {
+            return false;
+        }
+        REQUIRE(window.accept(number) == ReplayVerdict::Fresh);
+        REQUIRE(number < count);
+        CHECK_FALSE(seen[number]);
+        seen[number] = true;
+        return true;
+    };
+
+    usize expected_drops = 0U;
+    for (usize block = 0U; block < count; block += 8U)
+    {
+        // Each run of eight arrives in a fixed shuffled order.
+        constexpr usize order[8] = {2U, 0U, 1U, 5U, 3U, 7U, 4U, 6U};
+        for (const usize at : order)
+        {
+            const usize n = block + at;
+            CHECK(receive(packets[n]));
+            if (n % 7U == 0U)
+            {
+                CHECK_FALSE(receive(packets[n])); // duplicated on the path
+                ++expected_drops;
+            }
+            if (n >= 300U && (n - 300U) % 50U == 0U)
+            {
+                CHECK_FALSE(receive(packets[n - 300U])); // replayed from 300 packets back: Stale
+                ++expected_drops;
+            }
+        }
+        if (block == 296U)
+        {
+            // A forged packet: header protection under the right key, a number far ahead, a wrong tag.
+            u8 forged[size];
+            std::memcpy(forged, packets[block], size);
+            forged[pn_at] ^= 0x40U;
+            forged[size - 1U] ^= 0x01U;
+            const u64 before = window.largest();
+            CHECK_FALSE(receive(forged));
+            CHECK(window.largest() == before);
+        }
+    }
+    CHECK(window.largest() == count - 1U);
+    CHECK(dropped == expected_drops);
+    CHECK(opened == count + 1U); // every packet once, and the forged one, whose AEAD fails
+    for (usize n = 0U; n < count; ++n)
+    {
+        CHECK(seen[n]);
+    }
 }

@@ -13,7 +13,6 @@
 #include <openssl/chacha.h>
 
 #include <algorithm>
-#include <atomic>
 #include <cstring>
 #include <new>
 
@@ -603,10 +602,9 @@ constexpr usize kMaxTokenBodyBytes  = kTokenTimeBytes + 1U + kQuicMaxConnectionI
 // The clear bytes, the version, an IPv6 address with its length, the port and two connection IDs with their lengths.
 constexpr usize kMaxTokenAssociated =
     kQuicTokenHeaderBytes + 4U + 1U + 16U + 2U + 2U * (1U + kQuicMaxConnectionIdBytes);
-constexpr usize kTokensPerBlock     = 32U; // two bytes a token in 64-byte blocks
-constexpr u64   kSlotPreparing      = ~u64{0};
 static_assert(kQuicTokenKeyBytes == provider_internal::kSealingKeyBytes, "a token key is a sealing key");
 static_assert(kQuicNewTokenBytes == kQuicTokenHeaderBytes + kTokenTimeBytes + kQuicTagBytes);
+static_assert(kQuicTokenSaltBytes == kReplayIdBytes, "a token's salt is its replay filter identifier");
 
 bool address_ok(const QuicTokenPeer& peer) noexcept
 {
@@ -821,9 +819,11 @@ CryptoError QuicTokenKeys::mint(QuicVersion version, QuicTokenKind kind, const Q
 
 CryptoError QuicTokenKeys::validate(QuicVersion version, cont::ConstSpan<u8> token, const QuicTokenPeer& peer,
                                     cont::ConstSpan<u8> dcid, cont::ConstSpan<u8> scid, u64 now,
-                                    QuicTokenClaims& claims, QuicTokenReplay* replay) const noexcept
+                                    QuicTokenClaims& claims, ReplayFilter* replay) const noexcept
 {
-    if (!ready() || (replay != nullptr && (!replay->ready() || replay->period() < m_new_token_lifetime)))
+    // The filter's slots hold the periods a valid token can come from: its period covers the lifetime and the skew.
+    if (!ready() || (replay != nullptr && (!replay->ready() || replay->period() < m_new_token_lifetime ||
+                                           replay->period() < kQuicTokenClockSkew)))
     {
         return CryptoError::NotReady;
     }
@@ -896,105 +896,5 @@ CryptoError QuicTokenKeys::validate(QuicVersion version, cont::ConstSpan<u8> tok
     }
     secure_zero(cont::Span<u8>(plain));
     return error;
-}
-
-// ---- Token replay ----
-
-CryptoError QuicTokenReplay::init(usize tokens, u64 period, u64 now)
-{
-    clear();
-    if (tokens == 0U || period < kQuicTokenClockSkew)
-    {
-        return CryptoError::BadLength;
-    }
-    const u64 blocks = static_cast<u64>(tokens / kTokensPerBlock) + (tokens % kTokensPerBlock != 0U ? 1U : 0U);
-    if (blocks > (u64{1} << 32U))
-    {
-        return CryptoError::BadLength;
-    }
-    m_bits.resize(static_cast<usize>(blocks) * kSlots);
-    m_blocks        = static_cast<usize>(blocks);
-    m_period        = period;
-    const u64 epoch = now / period;
-    for (u64 e = epoch == 0U ? 0U : epoch - 1U; e <= epoch + 2U; ++e)
-    {
-        m_tags[e % kSlots] = e + 1U;
-    }
-    return CryptoError::None;
-}
-
-void QuicTokenReplay::clear() noexcept
-{
-    m_bits   = cont::Array<Block>();
-    m_blocks = 0U;
-    m_period = 0U;
-    for (u64& tag : m_tags)
-    {
-        tag = 0U;
-    }
-}
-
-// Readies the slot of `epoch` when it holds an older period, every token of which has expired: one thread claims it,
-// clears its bits and publishes it. A slot already ready, newer or being cleared is left as it is.
-void QuicTokenReplay::prepare(u64 epoch) noexcept
-{
-    const usize          slot = static_cast<usize>(epoch % kSlots);
-    std::atomic_ref<u64> tag(m_tags[slot]);
-    u64                  held = tag.load(std::memory_order_acquire);
-    if (held == kSlotPreparing || held >= epoch + 1U ||
-        !tag.compare_exchange_strong(held, kSlotPreparing, std::memory_order_acq_rel))
-    {
-        return;
-    }
-    Block* const first = m_bits.data() + slot * m_blocks;
-    for (usize b = 0U; b < m_blocks; ++b)
-    {
-        for (u64& word : first[b].words)
-        {
-            std::atomic_ref<u64>(word).store(0U, std::memory_order_relaxed);
-        }
-    }
-    tag.store(epoch + 1U, std::memory_order_release);
-}
-
-bool QuicTokenReplay::first_use(cont::ConstSpan<u8> salt, u64 issued, u64 now) noexcept
-{
-    if (!ready() || salt.size() != kQuicTokenSaltBytes)
-    {
-        return false;
-    }
-    prepare(now / m_period + 2U);
-    const u64            epoch = issued / m_period;
-    const usize          slot  = static_cast<usize>(epoch % kSlots);
-    std::atomic_ref<u64> tag(m_tags[slot]);
-    u64                  held = tag.load(std::memory_order_acquire);
-    if (held != kSlotPreparing && held < epoch + 1U)
-    {
-        prepare(epoch); // a whole period passed without a check
-        held = tag.load(std::memory_order_acquire);
-    }
-    if (held != epoch + 1U)
-    {
-        return held == kSlotPreparing; // being cleared: accepted unrecorded; a newer period: too old for any slot
-    }
-    u64 low  = 0U;
-    u64 high = 0U;
-    for (usize i = 0U; i < 8U; ++i)
-    {
-        low |= static_cast<u64>(salt[i]) << (8U * i);
-        high |= static_cast<u64>(salt[8U + i]) << (8U * i);
-    }
-    // The salt is random and authenticated, so its bits index the filter directly: the top 32 bits of its first half
-    // pick the block (a multiply-shift onto at most 2^32 blocks), 48 bits of its second half one bit in each word.
-    const usize block = static_cast<usize>(((low >> 32U) * static_cast<u64>(m_blocks)) >> 32U);
-    Block&      bits  = m_bits[slot * m_blocks + block];
-    bool        fresh = false;
-    for (usize i = 0U; i < 8U; ++i)
-    {
-        const u64 bit = u64{1} << ((high >> (6U * i)) & 63U);
-        const u64 old = std::atomic_ref<u64>(bits.words[i]).fetch_or(bit, std::memory_order_relaxed);
-        fresh         = fresh || (old & bit) == 0U;
-    }
-    return fresh;
 }
 } // namespace crd::crypto

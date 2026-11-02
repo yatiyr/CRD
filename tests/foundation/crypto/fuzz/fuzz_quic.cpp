@@ -10,7 +10,10 @@
 //      byte holding the truncated length;
 //   3  a token in a client's Initial: a byte choosing the version (bit 0), an IPv6 address (bit 1) and a replay filter
 //      (bit 2), the address, the port (2 bytes), the original, the client's and the Retry's connection IDs (each
-//      after a length byte), the server's clock (8 bytes), then the token.
+//      after a length byte), the server's clock (8 bytes), then the token;
+//   4  a packet number space's window: a byte choosing its size (128, 256 or 1024 bits), the first number (8 bytes),
+//      then operations of three bytes, at most kWindowOperations: a byte saying how the number is made from the
+//      largest accepted and whether it is only checked, then a 16-bit value.
 //
 // Oracles, none of them the code's verdict on the same call:
 //   * header protection refuses exactly the packets too short to sample (restated from RFC 9001 section 5.4.2), and
@@ -25,10 +28,14 @@
 //     quic.hpp restated over the provider's HKDF and AEAD for exactly this client and Initial, and its lifetime; a
 //     valid one validates again, and once only with a replay filter when it is a NEW_TOKEN token; a refused one leaves
 //     the claims untouched; and tokens minted for the input's client open as restated, carry its original connection
-//     ID, refuse another port when they are Retry tokens and accept one when they are NEW_TOKEN tokens.
+//     ID, refuse another port when they are Retry tokens and accept one when they are NEW_TOKEN tokens;
+//   * a window's verdict on every number is the restated one over every number accepted so far (Fresh above the
+//     largest, Stale kSpan or more below it, else Duplicate exactly when accepted), a check changes nothing, an
+//     accepted number is a Duplicate at once, and the largest is the greatest accepted.
 #include <crd/fuzz/harness.hpp>
 
 #include <crd/crypto/quic.hpp>
+#include <crd/crypto/replay.hpp>
 
 #include <algorithm>
 #include <cstring>
@@ -424,7 +431,7 @@ bool token(Reader& reader)
     const QuicTokenKeys& keys = token_keys();
 
     // The token as given, against its restated verdict.
-    QuicTokenReplay replay;
+    ReplayFilter replay;
     CRD_FUZZ_REQUIRE(replay.init(32U, kQuicNewTokenLifetime, in.now) == CryptoError::None);
     QuicTokenClaims   claims;
     const CryptoError verdict = keys.validate(in.version, in.token, in.peer, in.retry, in.client, in.now, claims,
@@ -546,8 +553,104 @@ usize token_seed(u8* out, u8 choice, ConstSpan<u8> address, u16 port, ConstSpan<
     return n + kQuicTokenHeaderBytes + body + kQuicTagBytes;
 }
 
+// ---- Packet number windows ----
+
+constexpr usize kWindowOperations = 1024U;
+
+u64 saturating_add(u64 a, u64 b) noexcept
+{
+    return a > ~u64{0} - b ? ~u64{0} : a + b;
+}
+
+// The window's contract restated over the numbers accepted so far (`accepted`, `count` of them).
+ReplayVerdict restated_window(const u64* accepted, usize count, u64 largest, u64 span, u64 number) noexcept
+{
+    if (count == 0U || number > largest)
+    {
+        return ReplayVerdict::Fresh;
+    }
+    if (largest - number >= span)
+    {
+        return ReplayVerdict::Stale;
+    }
+    for (usize i = 0U; i < count; ++i)
+    {
+        if (accepted[i] == number)
+        {
+            return ReplayVerdict::Duplicate;
+        }
+    }
+    return ReplayVerdict::Fresh;
+}
+
+template <usize Bits>
+bool window_walk(Reader& in)
+{
+    static u64         accepted[kWindowOperations];
+    usize              count   = 0U;
+    u64                largest = 0U;
+    ReplayWindow<Bits> window;
+    const u64          first = in.u64be();
+    usize              ran   = 0U;
+    for (usize op = 0U; op < kWindowOperations; ++op)
+    {
+        const u8  how   = in.byte();
+        const u64 value = (u64{in.byte()} << 8U) | in.byte();
+        if (!in.ok())
+        {
+            break;
+        }
+        const u64 base   = count == 0U ? first : largest;
+        u64       number = base;
+        switch (how % 4U)
+        {
+        case 0U: // ahead of the largest
+            number = saturating_add(base, value);
+            break;
+        case 1U: // behind it: reordered, duplicated or replayed
+            number = base > value ? base - value : 0U;
+            break;
+        case 2U: // a jump, up to 2^47 ahead
+            number = saturating_add(base, value << ((how >> 2U) % 32U));
+            break;
+        default: // from the first number, wherever the largest went
+            number = saturating_add(first, value);
+            break;
+        }
+        const ReplayVerdict expected = restated_window(accepted, count, largest, ReplayWindow<Bits>::kSpan, number);
+        CRD_FUZZ_REQUIRE(window.check(number) == expected);
+        if ((how & 0x80U) == 0U)
+        {
+            CRD_FUZZ_REQUIRE(window.accept(number) == expected);
+            if (expected == ReplayVerdict::Fresh)
+            {
+                largest           = count == 0U || number > largest ? number : largest;
+                accepted[count++] = number;
+                CRD_FUZZ_REQUIRE(window.check(number) == ReplayVerdict::Duplicate);
+            }
+        }
+        CRD_FUZZ_REQUIRE(window.any() == (count != 0U));
+        CRD_FUZZ_REQUIRE(window.largest() == largest);
+        ++ran;
+    }
+    return ran != 0U;
+}
+
+bool packet_window(Reader& in)
+{
+    switch (in.byte() % 3U)
+    {
+    case 0U:
+        return window_walk<128>(in);
+    case 1U:
+        return window_walk<256>(in);
+    default:
+        return window_walk<1024>(in);
+    }
+}
+
 // One input through its mode; true when it was accepted (a packet opened, a Retry verified, packet numbers read, a
-// token validated).
+// token validated, a window operation run).
 bool run(const u8* data, usize size)
 {
     if (size == 0U || size > crd::fuzz::kMaxInputBytes)
@@ -555,7 +658,7 @@ bool run(const u8* data, usize size)
         return false;
     }
     Reader in(data + 1U, size - 1U);
-    switch (data[0] % 4U)
+    switch (data[0] % 5U)
     {
     case 0U:
         return packet(in);
@@ -563,8 +666,10 @@ bool run(const u8* data, usize size)
         return retry(in);
     case 2U:
         return packet_numbers(in);
-    default:
+    case 3U:
         return token(in);
+    default:
+        return packet_window(in);
     }
 }
 
@@ -576,7 +681,8 @@ void add(crd::fuzz::SeedSink& sink, const char* name, const u8* data, usize size
 constexpr const char* kAccepted[] = {"packet-v1-aes128", "packet-v2-aes128", "packet-v1-aes256", "packet-v2-aes256",
                                      "packet-v1-chacha", "packet-v2-chacha", "retry-v1-rfc9001", "retry-v2-rfc9369",
                                      "packet-numbers-rfc9000", "token-retry-v1", "token-new-v2-ipv6",
-                                     "token-new-previous-key-replay"};
+                                     "token-new-previous-key-replay", "window-128-in-order-duplicates",
+                                     "window-256-reordered-replayed", "window-1024-jumps-extremes"};
 } // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size)
@@ -696,4 +802,38 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& next)
     add(sink, "token-unknown-key", input, n);
     n = token_seed(input, 0U, v4, 4433U, original, client, later, now, QuicTokenKind::Retry, key, now, true);
     add(sink, "token-retry-bad-length", input, n);
+
+    // Packet number windows: in order with duplicates and then a jump of the whole ring past a number whose position
+    // a new one takes (128 bits), reordered with replays across the span's edge and checks that record nothing (256
+    // bits), and jumps from near the top of the number range (1024 bits).
+    struct WindowSeed
+    {
+        const char* name;
+        u8          size;
+        u64         first;
+        u8          operations[30];
+    };
+    static constexpr WindowSeed kWindows[] = {
+        {"window-128-in-order-duplicates", 0U, 0U,
+         {0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x01,
+          0x00, 0x00, 0x05, 0x01, 0x00, 0x02, 0x01, 0x00, 0x02, 0x00, 0x00, 0x80, 0x01, 0x00, 0x02}},
+        {"window-256-reordered-replayed", 1U, u64{1} << 40U,
+         {0x00, 0x00, 0x05, 0x01, 0x00, 0x03, 0x81, 0x00, 0x01, 0x01, 0x00, 0x01, 0x01, 0x00, 0x01,
+          0x00, 0x01, 0x00, 0x01, 0x00, 0xBF, 0x01, 0x00, 0xC0, 0x03, 0x00, 0x00, 0x03, 0x00, 0x05}},
+        {"window-1024-jumps-extremes", 2U, ~u64{0} - 70000U,
+         {0x00, 0x00, 0x00, 0x7E, 0x00, 0x10, 0x01, 0x03, 0xBF, 0x01, 0x03, 0xC0, 0x02, 0x00, 0x01,
+          0x00, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x10, 0x00, 0x03, 0x00, 0x01}},
+    };
+    for (const WindowSeed& seed : kWindows)
+    {
+        usize at    = 0U;
+        input[at++] = 4U;
+        input[at++] = seed.size;
+        for (usize i = 0U; i < 8U; ++i)
+        {
+            input[at++] = static_cast<u8>(seed.first >> (8U * (7U - i)));
+        }
+        std::memcpy(input + at, seed.operations, sizeof(seed.operations));
+        add(sink, seed.name, input, at + sizeof(seed.operations));
+    }
 }
