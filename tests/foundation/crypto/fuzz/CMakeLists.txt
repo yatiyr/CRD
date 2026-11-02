@@ -37,7 +37,8 @@
 #                              rules.
 #   crd-fuzz-crypto-provider   the provider interface on hostile input: AEAD openings that must re-seal to their input,
 #                              verdicts and refusals by length, key agreement with arbitrary peers, HKDF's prefix
-#                              property and sign-then-verify from arbitrary seeds.
+#                              property, sign-then-verify from arbitrary seeds and the Secret Service transport
+#                              (bounds of the service's value, openings that re-seal to their input).
 #   crd-fuzz-crypto-quic       QUIC packet protection on hostile packets, Retries, packet numbers, address-validation
 #                              tokens and packet number windows: header protection refuses exactly the unsampleable
 #                              packets and round-trips, an opened packet re-seals to its input, a Retry verifies exactly

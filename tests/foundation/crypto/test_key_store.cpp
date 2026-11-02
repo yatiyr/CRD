@@ -1,10 +1,11 @@
-// crd-crypto -- the key store (NET.2; docs/design/network-foundation.md#key-store, decisions K1 to K9): every kind of
-// key generated, imported, used, rotated, revoked and destroyed across reopenings; the master key replaced on
+// crd-crypto -- the key store (NET.2; docs/design/network-foundation.md#key-store, decisions K1 to K10): every kind
+// of key generated, imported, used, rotated, revoked and destroyed across reopenings; the master key replaced on
 // revocation so an earlier copy of the store no longer opens; an interrupted replacement completed by the next change;
 // every byte of a store file changed and refused; a damaged, truncated, older or substituted store refused; writers in
-// several threads ordered by the store's lock; DPAPI guarding the master key on Windows; a TLS credential from a
-// stored signer.
+// several threads ordered by the store's lock; DPAPI guarding the master key on Windows and the Secret Service on Linux
+// (under a pinned gnome-keyring, hidden from the default run); a TLS credential from a stored signer.
 
+#include <crd/core/environment.hpp>
 #include <crd/core/platform.hpp>
 #include <crd/crypto/key_store.hpp>
 #include <crd/crypto/tls.hpp>
@@ -15,6 +16,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -222,6 +224,18 @@ void check_signs(const KeyStore& store, StringView name)
                           ConstSpan<u8>(message), ConstSpan<u8>(signature.data(), written)) == Verification::Valid);
 }
 
+// `generation`, or the Current one's for 0.
+[[nodiscard]] u32 resolved(const KeyStore& store, StringView name, u32 generation)
+{
+    if (generation != 0U)
+    {
+        return generation;
+    }
+    const KeyInfo* current = store.find(name);
+    REQUIRE(current != nullptr);
+    return current->generation;
+}
+
 // Agrees with a fresh peer both ways through the stored key of `generation`.
 void check_agrees(const KeyStore& store, StringView name, u32 generation)
 {
@@ -233,7 +247,7 @@ void check_agrees(const KeyStore& store, StringView name, u32 generation)
     Bytes peer_public;
     peer_public.resize(sizes.public_key);
     REQUIRE(peer.public_key(Span<u8>(peer_public.data(), peer_public.size())) == CryptoError::None);
-    const Bytes own_public = public_of(store, name, generation == 0U ? store.find(name)->generation : generation);
+    const Bytes own_public = public_of(store, name, resolved(store, name, generation));
     u8          a[48]      = {};
     u8          b[48]      = {};
     REQUIRE(own.derive(ConstSpan<u8>(peer_public.data(), peer_public.size()), Span<u8>(a, sizes.secret)) ==
@@ -249,7 +263,7 @@ void check_decapsulates(const KeyStore& store, StringView name, u32 generation)
     KemKey own;
     REQUIRE(store.kem_key(name, generation, own) == CryptoError::None);
     const KemSizes sizes      = kem_sizes(own.algorithm());
-    const Bytes    own_public = public_of(store, name, generation == 0U ? store.find(name)->generation : generation);
+    const Bytes    own_public = public_of(store, name, resolved(store, name, generation));
     Bytes          ciphertext;
     ciphertext.resize(sizes.ciphertext);
     u8 sent[32]     = {};
@@ -941,17 +955,19 @@ TEST_CASE("Key store: the operating system's protector", "[crypto][key-store]")
 {
     PlatformKeyProtector platform;
     CHECK(platform.protection() == KeyProtection::Platform);
-    CHECK_FALSE(platform.forgets());
+    CHECK(platform.prompt_milliseconds() == 0U);
+    CHECK(PlatformKeyProtector(5000U).prompt_milliseconds() == 5000U);
     const u8 store_id[kKeyStoreIdBytes]   = {1, 2, 3};
-    const u8 other_id[kKeyStoreIdBytes]   = {9, 9, 9};
     u8       master[kKeyStoreMasterBytes] = {};
     for (usize i = 0U; i < kKeyStoreMasterBytes; ++i)
     {
         master[i] = static_cast<u8>(0x40U + i);
     }
 #if CRD_OS_WINDOWS
+    const u8 other_id[kKeyStoreIdBytes] = {9, 9, 9};
     REQUIRE(PlatformKeyProtector::available());
     CHECK(platform.name() == StringView("dpapi"));
+    CHECK_FALSE(platform.forgets());
     Bytes reference;
     REQUIRE(platform.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master), reference) == CryptoError::None);
     CHECK_FALSE(reference.empty());
@@ -975,6 +991,13 @@ TEST_CASE("Key store: the operating system's protector", "[crypto][key-store]")
     CHECK(reference.empty());
     CHECK(platform.forget(ConstSpan<u8>(store_id), {}) == CryptoError::None);
 
+    // Allowing prompts changes nothing DPAPI asks: the same reference recovers.
+    PlatformKeyProtector prompting(1000U);
+    REQUIRE(prompting.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master), reference) == CryptoError::None);
+    REQUIRE(platform.recover(ConstSpan<u8>(store_id), ConstSpan<u8>(reference.data(), reference.size()),
+                             Span<u8>(recovered)) == CryptoError::None);
+    CHECK(std::memcmp(recovered, master, sizeof(master)) == 0);
+
     // A store under DPAPI: created, reopened, used.
     TempStore dir("dpapi");
     KeyStore  store;
@@ -988,19 +1011,241 @@ TEST_CASE("Key store: the operating system's protector", "[crypto][key-store]")
     TestProtector stranger(true, "test");
     CHECK(reopened.open(dir.dir(), stranger) == CryptoError::Unsupported);
 #else
-    CHECK_FALSE(PlatformKeyProtector::available());
+    // A well-formed Secret Service reference (its format byte, then a handle), so only the vault can answer.
     Bytes reference;
-    reference.push_back(1U);
-    CHECK(platform.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master), reference) == CryptoError::Unavailable);
-    CHECK(reference.empty());
-    CHECK(platform.recover(ConstSpan<u8>(store_id), ConstSpan<u8>(other_id), Span<u8>(master)) ==
-          CryptoError::Unavailable);
+    reference.resize(1U + kKeyStoreIdBytes);
+    std::memset(reference.data(), 0x11, reference.size());
+    reference[0] = 1U;
+#if CRD_OS_LINUX
+    // Without a session bus the Secret Service cannot be reached: every call is Unavailable. The vault itself is
+    // proven under a pinned gnome-keyring ([secret-service], the crd-crypto-secret-service CTests).
+    CHECK(platform.name() == StringView("secret-service"));
+    CHECK(platform.forgets());
+    String bus;
+    const bool had_bus = crd::read_environment_text("DBUS_SESSION_BUS_ADDRESS", bus);
+    REQUIRE(::setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent/cerid-no-bus", 1) == 0);
+#else
+    CHECK(platform.name() == StringView("unavailable"));
+    CHECK_FALSE(platform.forgets());
+#endif
+    CHECK_FALSE(PlatformKeyProtector::available());
+    Bytes written;
+    written.push_back(1U);
+    CHECK(platform.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master), written) == CryptoError::Unavailable);
+    CHECK(written.empty());
+    CHECK(platform.recover(ConstSpan<u8>(store_id), ConstSpan<u8>(reference.data(), reference.size()),
+                           Span<u8>(master)) == CryptoError::Unavailable);
     CHECK(master[0] == 0U);
-    CHECK(platform.forget(ConstSpan<u8>(store_id), {}) == CryptoError::Unavailable);
+    CHECK(platform.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(reference.data(), reference.size())) ==
+          CryptoError::Unavailable);
     TempStore dir("unavailable");
     KeyStore  store;
     CHECK(store.create(dir.dir(), platform) == CryptoError::Unavailable);
     CHECK_FALSE(store.ready());
+#if CRD_OS_LINUX
+    if (had_bus)
+    {
+        REQUIRE(::setenv("DBUS_SESSION_BUS_ADDRESS", bus.c_str(), 1) == 0);
+    }
+    else
+    {
+        REQUIRE(::unsetenv("DBUS_SESSION_BUS_ADDRESS") == 0);
+    }
+#endif
+#endif
+}
+
+// ---- The Secret Service under a pinned gnome-keyring (tests/foundation/crypto/secret_service_session.py) ----
+//
+// Hidden from the default run: the crd-crypto-secret-service CTests run them inside a session bus of their own with a
+// gnome-keyring daemon whose login collection the session made, unlocked ([secret-service]) or seeded and then locked
+// ([secret-service-locked]).
+
+#if CRD_OS_LINUX
+// The session's scratch directory, which the locked session shares between its two runs.
+[[nodiscard]] fs::Path session_scratch()
+{
+    String scratch;
+    REQUIRE(crd::read_environment_text("CRD_SECRET_SERVICE_SCRATCH", scratch));
+    return fs::Path(StringView(scratch.data(), scratch.size()));
+}
+
+constexpr u8 kSeededStore[kKeyStoreIdBytes]      = {0xC0, 0xFF, 0xEE};
+constexpr u8 kSeededMaster[kKeyStoreMasterBytes] = {0x5E, 0xED};
+#endif
+
+TEST_CASE("Key store: the Secret Service keeps, recovers and forgets a master key", "[.secret-service]")
+{
+#if CRD_OS_LINUX
+    REQUIRE(PlatformKeyProtector::available());
+    PlatformKeyProtector vault;
+    CHECK(vault.name() == StringView("secret-service"));
+    CHECK(vault.forgets());
+    const u8 store_id[kKeyStoreIdBytes]   = {1, 2, 3};
+    const u8 other_id[kKeyStoreIdBytes]   = {9, 9, 9};
+    u8       master[kKeyStoreMasterBytes] = {};
+    for (usize i = 0U; i < kKeyStoreMasterBytes; ++i)
+    {
+        master[i] = static_cast<u8>(0x40U + i);
+    }
+    Bytes reference;
+    REQUIRE(vault.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master), reference) == CryptoError::None);
+    REQUIRE(reference.size() == 1U + kKeyStoreIdBytes);
+    CHECK(reference[0] == 1U);
+    u8 recovered[kKeyStoreMasterBytes] = {};
+    REQUIRE(vault.recover(ConstSpan<u8>(store_id), ConstSpan<u8>(reference.data(), reference.size()),
+                          Span<u8>(recovered)) == CryptoError::None);
+    CHECK(std::memcmp(recovered, master, sizeof(master)) == 0);
+
+    // Bound to its store and its handle; a reference of another form is none of this protector's.
+    const auto denied = [&](ConstSpan<u8> id, const Bytes& changed)
+    {
+        std::memset(recovered, 0x55, sizeof(recovered));
+        const CryptoError result =
+            vault.recover(id, ConstSpan<u8>(changed.data(), changed.size()), Span<u8>(recovered));
+        return result == CryptoError::Denied && recovered[0] == 0U && recovered[31] == 0U;
+    };
+    CHECK(denied(ConstSpan<u8>(other_id), reference));
+    for (const usize at : {usize{0}, usize{1}, usize{16}})
+    {
+        Bytes changed = reference;
+        changed[at] ^= 0x01U;
+        CHECK(denied(ConstSpan<u8>(store_id), changed));
+    }
+    Bytes shorter = reference;
+    shorter.pop_back();
+    CHECK(denied(ConstSpan<u8>(store_id), shorter));
+    CHECK(vault.recover(ConstSpan<u8>(store_id), ConstSpan<u8>(reference.data(), reference.size()),
+                        Span<u8>(recovered, 16U)) == CryptoError::BadLength);
+    Bytes refused;
+    CHECK(vault.protect(ConstSpan<u8>(store_id, 15U), ConstSpan<u8>(master), refused) == CryptoError::BadLength);
+    CHECK(vault.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master, 31U), refused) == CryptoError::BadLength);
+    CHECK(refused.empty());
+    CHECK(vault.forget(ConstSpan<u8>(store_id), shorter) == CryptoError::Denied);
+
+    // Forgetting deletes the item: the reference recovers nothing after it, and forgetting again finds nothing to
+    // destroy.
+    REQUIRE(vault.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(reference.data(), reference.size())) ==
+            CryptoError::None);
+    CHECK(denied(ConstSpan<u8>(store_id), reference));
+    CHECK(vault.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(reference.data(), reference.size())) ==
+          CryptoError::None);
+
+    // Every call is its own transport session: 256 of them, so a shared value with a leading zero byte (once in 256)
+    // is all but certainly among them and the two sides' left padding agrees.
+    for (usize round = 0U; round < 256U; ++round)
+    {
+        REQUIRE(random_bytes(Span<u8>(master)) == CryptoError::None);
+        Bytes kept;
+        REQUIRE(vault.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master), kept) == CryptoError::None);
+        REQUIRE(vault.recover(ConstSpan<u8>(store_id), ConstSpan<u8>(kept.data(), kept.size()), Span<u8>(recovered)) ==
+                CryptoError::None);
+        REQUIRE(std::memcmp(recovered, master, sizeof(master)) == 0);
+        REQUIRE(vault.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(kept.data(), kept.size())) == CryptoError::None);
+    }
+
+    // Four threads at once, each call on its own connection.
+    std::atomic<u32> failures{0U};
+    std::thread      threads[4];
+    for (u32 t = 0U; t < 4U; ++t)
+    {
+        threads[t] = std::thread(
+            [&, t]
+            {
+                for (u32 i = 0U; i < 16U; ++i)
+                {
+                    u8 mine[kKeyStoreMasterBytes];
+                    std::memset(mine, static_cast<int>(t * 16U + i), sizeof(mine));
+                    u8    back[kKeyStoreMasterBytes] = {};
+                    Bytes kept;
+                    const bool ok =
+                        vault.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(mine), kept) == CryptoError::None &&
+                        vault.recover(ConstSpan<u8>(store_id), ConstSpan<u8>(kept.data(), kept.size()),
+                                      Span<u8>(back)) == CryptoError::None &&
+                        std::memcmp(back, mine, sizeof(mine)) == 0 &&
+                        vault.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(kept.data(), kept.size())) ==
+                            CryptoError::None;
+                    if (!ok)
+                    {
+                        failures.fetch_add(1U);
+                    }
+                }
+            });
+    }
+    for (std::thread& thread : threads)
+    {
+        thread.join();
+    }
+    CHECK(failures.load() == 0U);
+
+    // A store under the Secret Service: created, reopened and used; a revocation replaces its master key and the
+    // vault forgets the old one, so an earlier copy of the store file no longer opens (decision K5).
+    TempStore dir("secret-service");
+    KeyStore  store;
+    REQUIRE(store.create(dir.dir(), vault) == CryptoError::None);
+    CHECK(store.protection() == KeyProtection::Platform);
+    REQUIRE(store.generate("identity", AlgorithmId::MlDsa65, PlacementRequest::Software, 1U) == CryptoError::None);
+    REQUIRE(store.rotate("identity", 2U) == CryptoError::None);
+    KeyStore reopened;
+    REQUIRE(reopened.open(dir.dir(), vault) == CryptoError::None);
+    CHECK(same_infos(store, reopened));
+    check_signs(reopened, "identity");
+    const Bytes before_revocation = read_file(dir.file());
+    REQUIRE(store.revoke("identity", 1U, 3U) == CryptoError::None);
+    const Bytes after_revocation = read_file(dir.file());
+    write_file(dir.file(), before_revocation);
+    KeyStore old_copy;
+    CHECK(old_copy.open(dir.dir(), vault) == CryptoError::Denied);
+    write_file(dir.file(), after_revocation);
+    KeyStore current;
+    REQUIRE(current.open(dir.dir(), vault) == CryptoError::None);
+    check_signs(current, "identity");
+    TestProtector stranger(true, "test");
+    CHECK(current.open(dir.dir(), stranger) == CryptoError::Unsupported);
+#else
+    SUCCEED("the Secret Service is Linux's protector");
+#endif
+}
+
+TEST_CASE("Key store: a master key seeded for the locked Secret Service", "[.secret-service-seed]")
+{
+#if CRD_OS_LINUX
+    PlatformKeyProtector vault;
+    Bytes                reference;
+    REQUIRE(vault.protect(ConstSpan<u8>(kSeededStore), ConstSpan<u8>(kSeededMaster), reference) == CryptoError::None);
+    write_file(session_scratch() / "reference", reference);
+#else
+    SUCCEED("the Secret Service is Linux's protector");
+#endif
+}
+
+TEST_CASE("Key store: a locked Secret Service is Denied, and prompts only where allowed", "[.secret-service-locked]")
+{
+#if CRD_OS_LINUX
+    REQUIRE(PlatformKeyProtector::available());
+    const Bytes reference = read_file(session_scratch() / "reference");
+    const ConstSpan<u8> held(reference.data(), reference.size());
+    u8 recovered[kKeyStoreMasterBytes];
+    std::memset(recovered, 0x55, sizeof(recovered));
+
+    // Never prompting: the locked item, and the locked default collection a new key would go into, are refused.
+    PlatformKeyProtector never;
+    CHECK(never.recover(ConstSpan<u8>(kSeededStore), held, Span<u8>(recovered)) == CryptoError::Denied);
+    CHECK(recovered[0] == 0U);
+    CHECK(never.forget(ConstSpan<u8>(kSeededStore), held) == CryptoError::Denied);
+    Bytes written;
+    CHECK(never.protect(ConstSpan<u8>(kSeededStore), ConstSpan<u8>(kSeededMaster), written) == CryptoError::Denied);
+    CHECK(written.empty());
+
+    // Prompting allowed: the service's prompt runs, and with no prompter to answer it, it is dismissed (or the bound
+    // passes) and the call is Denied within its bound.
+    PlatformKeyProtector prompting(10000U);
+    const auto           started = std::chrono::steady_clock::now();
+    CHECK(prompting.recover(ConstSpan<u8>(kSeededStore), held, Span<u8>(recovered)) == CryptoError::Denied);
+    CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(20));
+    CHECK(recovered[0] == 0U);
+#else
+    SUCCEED("the Secret Service is Linux's protector");
 #endif
 }
 

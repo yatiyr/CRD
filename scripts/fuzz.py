@@ -57,6 +57,8 @@ TARGETS = {
                         'executable': 'tests/net/fuzz/crd-fuzz-net-negotiation'},
     'crypto-capability': {'corpus': 'tests/foundation/crypto/fuzz/corpus-capability',
                           'executable': 'tests/crypto/fuzz/crd-fuzz-crypto-capability'},
+    'crypto-key-store': {'corpus': 'tests/foundation/crypto/fuzz/corpus-key-store',
+                         'executable': 'tests/crypto/fuzz/crd-fuzz-crypto-key-store'},
     'crypto-mls': {'corpus': 'tests/foundation/crypto/fuzz/corpus-mls',
                    'executable': 'tests/crypto/fuzz/crd-fuzz-crypto-mls'},
     'crypto-mls-commit': {'corpus': 'tests/foundation/crypto/fuzz/corpus-mls-commit',

@@ -102,6 +102,14 @@ option(CRD_BUILD_MLS_VS_MLSPP "Build the MLS interoperability test against MLSpp
 # lane.
 option(CRD_BUILD_MLS_VS_OPENMLS "Build the MLS interoperability test against OpenMLS (Linux, the pinned Rust)" OFF)
 set(CRD_CARGO "$ENV{CRD_CARGO}" CACHE FILEPATH "The pinned Cargo (scripts/install-rust.py), for the OpenMLS peer")
+# The key store's Secret Service protector against a real Secret Service (NET.2, decision K10): the pinned
+# gnome-keyring (tools/gnome-keyring-linux-x64: scripts/install-gnome-keyring.py, which prints the CRD_GNOME_KEYRING
+# this configure reads from the environment), run by tests/foundation/crypto/secret_service_session.py in a session bus
+# of its own. Linux only, never in a shipped build; the crd-crypto-secret-service CTests, locally and on the
+# complete-tier linux-gcc-public-checks lane.
+option(CRD_BUILD_SECRET_SERVICE_VS_GNOME_KEYRING "Test the Secret Service protector against gnome-keyring (Linux)" OFF)
+set(CRD_GNOME_KEYRING "$ENV{CRD_GNOME_KEYRING}" CACHE FILEPATH
+    "The pinned gnome-keyring-daemon (scripts/install-gnome-keyring.py), for the Secret Service protector's tests")
 # The nn board's same-format peer: ggml's Q8_0 linears (runtime/examples/bench_nn_q8_vs_ggml.c) against the pinned ggml
 # release (cmake/pins.json ggml, fetched on demand into build/_deps) built by its own CMake as a separate project at the
 # host's ISA. Local only on Linux, never in CI or a shipped build; scripts/run_bench_nn.sh builds and runs it.
@@ -1311,6 +1319,18 @@ if(CRD_BUILD_MLS_VS_OPENMLS)
     if(NOT EXISTS "${CRD_CARGO}")
         message(FATAL_ERROR "[mls-vs-openmls] CRD_CARGO names no Cargo: install the pinned Rust toolchain with "
                             "scripts/install-rust.py and configure with the CRD_CARGO it prints")
+    endif()
+endif()
+
+if(CRD_BUILD_SECRET_SERVICE_VS_GNOME_KEYRING)
+    if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
+        message(FATAL_ERROR "[secret-service-vs-gnome-keyring] the Secret Service tests need Linux, CRD_BUILD_TESTS "
+                            "and the crypto module")
+    endif()
+    if(NOT EXISTS "${CRD_GNOME_KEYRING}")
+        message(FATAL_ERROR "[secret-service-vs-gnome-keyring] CRD_GNOME_KEYRING names no daemon: install the pinned "
+                            "gnome-keyring with scripts/install-gnome-keyring.py and configure with the "
+                            "CRD_GNOME_KEYRING it prints")
     endif()
 endif()
 

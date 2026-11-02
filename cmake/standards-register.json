@@ -451,10 +451,45 @@
       "review": "2027-11-02",
       "evidence": [
         "tests/foundation/crypto/test_key_store.cpp",
-        "tests/foundation/crypto/fuzz/fuzz_key_store.cpp"
+        "tests/foundation/crypto/fuzz/fuzz_key_store.cpp",
+        "tests/foundation/crypto/secret_service_session.py"
       ],
       "deprecation": null,
-      "note": "AES-256-GCM under HKDF-SHA256 of the master key and a fresh salt per save, the header authenticated; the master key guarded by DPAPI on Windows or the application's protector, replaced on revocation where the protector can forget the old one. Never on the wire."
+      "note": "AES-256-GCM under HKDF-SHA256 of the master key and a fresh salt per save, the header authenticated; the master key guarded by DPAPI on Windows, the freedesktop Secret Service on Linux (freedesktop.secret-service) or the application's protector, replaced on revocation where the protector can forget the old one. Never on the wire."
+    },
+    {
+      "id": "freedesktop.secret-service",
+      "title": "The freedesktop Secret Service API and its dh-ietf1024-sha256-aes128-cbc-pkcs7 transport",
+      "kind": "protocol",
+      "state": "implemented",
+      "owner": "crypto",
+      "rows": [
+        "NET.2"
+      ],
+      "spec": {
+        "type": "freedesktop",
+        "ref": "https://specifications.freedesktop.org/secret-service-spec/0.2/",
+        "revision": "0.2",
+        "status": "draft"
+      },
+      "cryptography": [
+        "confidentiality",
+        "key-exchange"
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#key-store",
+        "read": "2026-11-02",
+        "verified": true
+      },
+      "review": "2027-11-02",
+      "evidence": [
+        "tests/foundation/crypto/test_key_store.cpp",
+        "tests/foundation/crypto/test_provider.cpp",
+        "tests/foundation/crypto/fuzz/fuzz_provider.cpp",
+        "tests/foundation/crypto/secret_service_session.py"
+      ],
+      "deprecation": null,
+      "note": "The key store's Linux protector (decision K10): a master key is an item of the default collection that Cerid's schema, the store and a random handle find, written and read over the session algorithm dh-ietf1024-sha256-aes128-cbc-pkcs7 (Diffie-Hellman in RFC 2409's 1024-bit MODP group, HKDF-SHA256 with no salt or info into an AES-128 key, AES-128-CBC with PKCS #7 padding), deleted to forget it; libdbus-1 loaded at run time, prompts only where the caller allows them. The transport hides a secret only on the user's own session bus; the vault's own protection is the service's. Proven against gnome-keyring 46.1 (tools/gnome-keyring-linux-x64), unlocked and locked."
     },
     {
       "id": "ietf.grease",

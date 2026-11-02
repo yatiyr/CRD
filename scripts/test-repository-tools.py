@@ -68,6 +68,10 @@ cuda_spec.loader.exec_module(install_cuda)
 rust_spec = importlib.util.spec_from_file_location('install_rust', ROOT / 'scripts/install-rust.py')
 install_rust = importlib.util.module_from_spec(rust_spec)
 rust_spec.loader.exec_module(install_rust)
+keyring_spec = importlib.util.spec_from_file_location('install_gnome_keyring',
+                                                      ROOT / 'scripts/install-gnome-keyring.py')
+install_gnome_keyring = importlib.util.module_from_spec(keyring_spec)
+keyring_spec.loader.exec_module(install_gnome_keyring)
 mold_spec = importlib.util.spec_from_file_location('install_mold', ROOT / 'scripts/install-mold.py')
 install_mold = importlib.util.module_from_spec(mold_spec)
 mold_spec.loader.exec_module(install_mold)
@@ -2531,6 +2535,58 @@ class BuildPerformance(unittest.TestCase):
             self.assertTrue(spec['url'].endswith('/' + name) and spec['version'] == pin['version'])
         self.assertIn('scripts/install-rust.py', check_pins.HELPERS)
 
+    def test_gnome_keyring_installer_unpacks_its_verified_packages_into_one_prefix(self):
+        with tempfile.TemporaryDirectory() as temp, contextlib.redirect_stdout(io.StringIO()):
+            root = Path(temp).resolve()
+            downloads = root / 'dl'
+            downloads.mkdir()
+            files = {}
+            for name, member in (('daemon_1.0-1_amd64.deb', 'usr/bin/gnome-keyring-daemon'),
+                                 ('lib_1.0-1_amd64.deb', 'usr/lib/x86_64-linux-gnu/libgck-1.so.0')):
+                (downloads / name).write_bytes(member.encode())
+                files[name] = {'url': 'https://example.invalid/' + name, 'size': len(member),
+                               'sha256': pins_registry.sha256(downloads / name)}
+            pin = {'version': '1.0-1', 'binary': 'usr/bin/gnome-keyring-daemon', 'files': files, 'license': 'GPL'}
+            unpacked = []
+
+            def extract(package, prefix):
+                # A stand-in for dpkg-deb -x: each fake package holds the one member its bytes name.
+                unpacked.append(package.name)
+                member = prefix / package.read_text()
+                member.parent.mkdir(parents=True, exist_ok=True)
+                member.write_bytes(b'elf')
+
+            daemon = install_gnome_keyring.install(root / 'prefix', downloads, pin=pin, extract=extract,
+                                                   version_of=lambda path: '1.0')
+            self.assertEqual(daemon, root / 'prefix/usr/bin/gnome-keyring-daemon')
+            self.assertTrue((root / 'prefix/usr/lib/x86_64-linux-gnu/libgck-1.so.0').is_file())
+            self.assertEqual(sorted(unpacked), sorted(files))
+            self.assertFalse((root / 'prefix.partial').exists())
+            # A matching stamp is reused without unpacking again.
+            unpacked.clear()
+            self.assertEqual(install_gnome_keyring.install(root / 'prefix', downloads, pin=pin, extract=extract,
+                                                           version_of=lambda path: None), daemon)
+            self.assertEqual(unpacked, [])
+            # Another upstream version, a package set without the daemon and a changed package are refused, and
+            # nothing is installed.
+            with self.assertRaisesRegex(pins_registry.PinError, "reports '1.1'.*pins gnome-keyring 1.0"):
+                install_gnome_keyring.install(root / 'other', downloads, pin=pin, extract=extract,
+                                              version_of=lambda path: '1.1')
+            self.assertFalse((root / 'other').exists() or (root / 'other.partial').exists())
+            only_lib = dict(pin, files={'lib_1.0-1_amd64.deb': files['lib_1.0-1_amd64.deb']})
+            with self.assertRaisesRegex(pins_registry.PinError, 'hold no usr/bin/gnome-keyring-daemon'):
+                install_gnome_keyring.install(root / 'none', downloads, pin=only_lib, extract=extract,
+                                              version_of=lambda path: '1.0')
+            (downloads / 'lib_1.0-1_amd64.deb').write_bytes(b'changed')
+            with self.assertRaisesRegex(pins_registry.PinError, 'checksum mismatch'):
+                install_gnome_keyring.install(root / 'changed', downloads, pin=pin, extract=extract,
+                                              version_of=lambda path: '1.0')
+        pin = pins_registry.entry('tools', install_gnome_keyring.PIN_NAME)
+        self.assertEqual(pin['binary'], 'usr/bin/gnome-keyring-daemon')
+        for name, spec in pin['files'].items():
+            self.assertEqual(spec['url'], 'https://launchpad.net/ubuntu/+archive/primary/+files/' + name)
+        self.assertIn('scripts/install-gnome-keyring.py', check_pins.HELPERS)
+
     def test_a_crate_set_is_pinned_by_its_committed_lockfile(self):
         crates_io = 'registry+https://github.com/rust-lang/crates.io-index'
         good_sum = '0' * 64
@@ -4432,9 +4488,9 @@ class TestInstruments(unittest.TestCase):
     def test_fuzz_driver_bounds_every_run_and_names_its_corpora(self):
         self.assertEqual(sorted(fuzz_driver.TARGETS), ['ceir-binary', 'ceir-differential', 'ceir-record', 'ceir-text',
                                                        'ceridc-diag', 'ckir-binary', 'ckir-text', 'comply-rules',
-                                                       'comply-sanctions', 'crypto-capability', 'crypto-mls',
-                                                       'crypto-mls-commit', 'crypto-mls-group', 'crypto-mls-message',
-                                                       'crypto-mls-tree',
+                                                       'comply-sanctions', 'crypto-capability', 'crypto-key-store',
+                                                       'crypto-mls', 'crypto-mls-commit', 'crypto-mls-group',
+                                                       'crypto-mls-message', 'crypto-mls-tree',
                                                        'crypto-policy', 'crypto-provider', 'crypto-quic', 'crypto-tls',
                                                        'memory-allocators',
                                                        'net-negotiation', 'perf-assets',
@@ -6646,6 +6702,16 @@ class Registers(RegisterFixture, unittest.TestCase):
                                   f'pinned {spec["ref"]} is withdrawn in the snapshot')
         self.assert_fails(self.register([self.entry(spec=dict(paper, status='final'))]),
                           "spec.status of a paper must be one of ['published', 'withdrawn']")
+
+    def test_a_freedesktop_specification_is_a_draft_stable_or_withdrawn(self):
+        spec = {'type': 'freedesktop', 'ref': 'https://specifications.freedesktop.org/secret-service-spec/0.2/',
+                'revision': '0.2', 'status': 'draft'}
+        self.assertEqual(0, self.run_guard(self.register([self.entry(spec=spec)]))[0])
+        self.assertEqual(0, self.run_guard(self.register([self.entry(spec=dict(spec, status='stable'))]))[0])
+        self.assert_fails(self.register([self.entry(spec=dict(spec, status='withdrawn'))]),
+                          'pinned https://specifications.freedesktop.org/secret-service-spec/0.2/ is withdrawn')
+        self.assert_fails(self.register([self.entry(spec=dict(spec, status='final'))]),
+                          "spec.status of a freedesktop must be one of ['draft', 'stable', 'withdrawn']")
 
     def test_overdue_reviews_and_future_reads_fail(self):
         self.assert_fails(self.register([self.entry(review='2026-10-30')]), 'review was due on 2026-10-30')

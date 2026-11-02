@@ -10,7 +10,9 @@
 //   4  sign then verify: algorithm, seed, then the message;
 //   5  KEM round trip: algorithm, seed, the index of a ciphertext bit to change (u16), then a ciphertext;
 //   6  KEM encapsulation key: algorithm, then the key;
-//   7  table PRF: key (16 bytes), then the message.
+//   7  table PRF: key (16 bytes), then the message;
+//   8  Secret Service transport: the service's public value (one-byte length), an IV (16 bytes), the expected
+//      plaintext length (one byte, below 64), then a ciphertext.
 //
 // Oracles, none of them the provider's verdict on the same call:
 //   * an AEAD opening that succeeds re-seals to exactly the input (the AEAD's own round trip), and a refused one
@@ -26,7 +28,11 @@
 //     error);
 //   * an encapsulation key is accepted exactly when a restatement of FIPS 203's modulus check (every 12-bit
 //     coefficient below q = 3329) accepts it;
-//   * the table PRF equals a restatement of SipHash-2-4 (Aumasson and Bernstein) for every key and message.
+//   * the table PRF equals a restatement of SipHash-2-4 (Aumasson and Bernstein) for every key and message;
+//   * a Secret Service public value agrees exactly when a restatement of the group's bounds ([2, p - 2] read
+//     big-endian, 1 to 128 bytes) accepts it; an opening that succeeds re-seals under its IV to exactly its input,
+//     a refused one releases no byte and names the documented error for its lengths, and any plaintext seals and
+//     opens back.
 #include <crd/fuzz/harness.hpp>
 
 #include <crd/crypto/provider.hpp>
@@ -456,6 +462,93 @@ void table_prf(Reader& in)
     CRD_FUZZ_REQUIRE(value == siphash24(load_le64(key.data()), load_le64(key.data() + 8U), message));
 }
 
+// RFC 2409's second Oakley group prime, restated for the bounds oracle.
+constexpr u8 kModp1024Prime[kSecretTransportGroupBytes] = {
+    0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xC9U, 0x0FU, 0xDAU, 0xA2U, 0x21U, 0x68U, 0xC2U, 0x34U,
+    0xC4U, 0xC6U, 0x62U, 0x8BU, 0x80U, 0xDCU, 0x1CU, 0xD1U, 0x29U, 0x02U, 0x4EU, 0x08U, 0x8AU, 0x67U, 0xCCU, 0x74U,
+    0x02U, 0x0BU, 0xBEU, 0xA6U, 0x3BU, 0x13U, 0x9BU, 0x22U, 0x51U, 0x4AU, 0x08U, 0x79U, 0x8EU, 0x34U, 0x04U, 0xDDU,
+    0xEFU, 0x95U, 0x19U, 0xB3U, 0xCDU, 0x3AU, 0x43U, 0x1BU, 0x30U, 0x2BU, 0x0AU, 0x6DU, 0xF2U, 0x5FU, 0x14U, 0x37U,
+    0x4FU, 0xE1U, 0x35U, 0x6DU, 0x6DU, 0x51U, 0xC2U, 0x45U, 0xE4U, 0x85U, 0xB5U, 0x76U, 0x62U, 0x5EU, 0x7EU, 0xC6U,
+    0xF4U, 0x4CU, 0x42U, 0xE9U, 0xA6U, 0x37U, 0xEDU, 0x6BU, 0x0BU, 0xFFU, 0x5CU, 0xB6U, 0xF4U, 0x06U, 0xB7U, 0xEDU,
+    0xEEU, 0x38U, 0x6BU, 0xFBU, 0x5AU, 0x89U, 0x9FU, 0xA5U, 0xAEU, 0x9FU, 0x24U, 0x11U, 0x7CU, 0x4BU, 0x1FU, 0xE6U,
+    0x49U, 0x28U, 0x66U, 0x51U, 0xECU, 0xE6U, 0x53U, 0x81U, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU,
+};
+
+// Whether `value`, read big-endian, lies in [2, p - 2]: above 1, and below p - 1 (whose last byte is 0xFE).
+bool within_group(ConstSpan<u8> value) noexcept
+{
+    usize first = 0U;
+    while (first < value.size() && value[first] == 0U)
+    {
+        ++first;
+    }
+    const ConstSpan<u8> digits = value.subspan(first);
+    if (digits.empty() || (digits.size() == 1U && digits[0] == 1U))
+    {
+        return false;
+    }
+    if (digits.size() < kSecretTransportGroupBytes)
+    {
+        return true;
+    }
+    u8 bound[kSecretTransportGroupBytes];
+    std::memcpy(bound, kModp1024Prime, sizeof(bound));
+    bound[kSecretTransportGroupBytes - 1U] = 0xFEU;
+    return std::lexicographical_compare(digits.begin(), digits.end(), bound, bound + sizeof(bound));
+}
+
+void secret_transport(Reader& in)
+{
+    const u8 peer_length = in.byte();
+    const ConstSpan<u8> peer = in.bytes(peer_length);
+    const ConstSpan<u8> iv = in.bytes(kSecretTransportIvBytes);
+    const usize plain_length = in.byte() % 64U;
+    const ConstSpan<u8> sealed = in.rest();
+    if (!in.ok())
+    {
+        return;
+    }
+    SecretTransportKey key;
+    CRD_FUZZ_REQUIRE(key.generate() == CryptoError::None);
+    const CryptoError agreed = key.agree(peer);
+    if (peer.empty() || peer.size() > kSecretTransportGroupBytes)
+    {
+        CRD_FUZZ_REQUIRE(agreed == CryptoError::BadLength);
+        return;
+    }
+    CRD_FUZZ_REQUIRE((agreed == CryptoError::None) == within_group(peer));
+    CRD_FUZZ_REQUIRE(key.agreed() == (agreed == CryptoError::None));
+    if (agreed != CryptoError::None)
+    {
+        CRD_FUZZ_REQUIRE(agreed == CryptoError::BadKey);
+        return;
+    }
+
+    u8 opened[64];
+    std::memset(opened, 0xA5, sizeof(opened));
+    const CryptoError result = key.open(iv, sealed, Span<u8>(opened, plain_length));
+    u8 again[secret_transport_sealed_bytes(sizeof(opened))];
+    if (result == CryptoError::None)
+    {
+        const Span<u8> resealed(again, secret_transport_sealed_bytes(plain_length));
+        CRD_FUZZ_REQUIRE(key.seal(iv, ConstSpan<u8>(opened, plain_length), resealed) == CryptoError::None);
+        CRD_FUZZ_REQUIRE(same(resealed, sealed));
+    }
+    else
+    {
+        const bool whole = !sealed.empty() && sealed.size() % kSecretTransportIvBytes == 0U;
+        CRD_FUZZ_REQUIRE(result == (whole ? CryptoError::Forged : CryptoError::BadLength));
+        CRD_FUZZ_REQUIRE(all_zero(ConstSpan<u8>(opened, plain_length)));
+    }
+
+    // Any plaintext seals to whole blocks and opens back: the input's own bytes as one.
+    const ConstSpan<u8> text = sealed.first(std::min<usize>(sealed.size(), sizeof(opened)));
+    const Span<u8>      resealed(again, secret_transport_sealed_bytes(text.size()));
+    CRD_FUZZ_REQUIRE(key.seal(iv, text, resealed) == CryptoError::None);
+    CRD_FUZZ_REQUIRE(key.open(iv, resealed, Span<u8>(opened, text.size())) == CryptoError::None);
+    CRD_FUZZ_REQUIRE(same(ConstSpan<u8>(opened, text.size()), text));
+}
+
 void add(crd::fuzz::SeedSink& sink, const char* name, const u8* data, usize size)
 {
     sink.add(name, data, size);
@@ -469,7 +562,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         return 0;
     }
     Reader in(data + 1U, size - 1U);
-    switch (data[0] % 8U)
+    switch (data[0] % 9U)
     {
     case 0U:
         aead_open(in);
@@ -492,8 +585,11 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     case 6U:
         kem_public_key(in);
         break;
-    default:
+    case 7U:
         table_prf(in);
+        break;
+    default:
+        secret_transport(in);
         break;
     }
     return 0;
@@ -679,4 +775,36 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
         put_byte(static_cast<u8>(i));
     }
     add(sink, "prf-siphash-paper", input, n);
+
+    // The Secret Service transport: the generator as the service's value with 48 bytes to open, p - 1 (refused) and
+    // a value one byte longer than the group.
+    n = 0U;
+    put_byte(8U);
+    put_byte(1U);
+    put_byte(2U);
+    put(nonce, kAeadNonceBytes);
+    put(nonce, kSecretTransportIvBytes - kAeadNonceBytes);
+    put_byte(32U);
+    put(key, sizeof(key));
+    put(key, 16U);
+    add(sink, "secret-transport-generator", input, n);
+    n = 0U;
+    put_byte(8U);
+    put_byte(static_cast<u8>(kSecretTransportGroupBytes));
+    put(kModp1024Prime, sizeof(kModp1024Prime));
+    input[n - 1U] = 0xFEU;
+    put(nonce, kAeadNonceBytes);
+    put(nonce, kSecretTransportIvBytes - kAeadNonceBytes);
+    put_byte(0U);
+    put(key, 16U);
+    add(sink, "secret-transport-p-minus-1", input, n);
+    n = 0U;
+    put_byte(8U);
+    put_byte(static_cast<u8>(kSecretTransportGroupBytes + 1U));
+    put_byte(0U);
+    put(kModp1024Prime, sizeof(kModp1024Prime));
+    put(nonce, kAeadNonceBytes);
+    put(nonce, kSecretTransportIvBytes - kAeadNonceBytes);
+    put_byte(0U);
+    add(sink, "secret-transport-too-long", input, n);
 }

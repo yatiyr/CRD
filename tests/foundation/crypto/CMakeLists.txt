@@ -183,6 +183,19 @@ if(CRD_BUILD_MLS_VS_MLSPP)
     message(STATUS "[mls-vs-mlspp] MLS interoperability against MLSpp ${mlspp_short}")
 endif()
 
+# Against the pinned gnome-keyring (CRD_BUILD_SECRET_SERVICE_VS_GNOME_KEYRING): crd-crypto-tests' hidden Secret Service
+# cases in a session bus and scratch home of their own (secret_service_session.py), with the login collection
+# unlocked, then seeded and locked.
+if(CRD_BUILD_SECRET_SERVICE_VS_GNOME_KEYRING)
+    foreach(mode unlocked locked)
+        add_test(NAME crd-crypto-secret-service-${mode}
+                 COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/secret_service_session.py"
+                         --daemon "${CRD_GNOME_KEYRING}" --mode ${mode} -- "$<TARGET_FILE:crd-crypto-tests>")
+        set_tests_properties(crd-crypto-secret-service-${mode} PROPERTIES TIMEOUT 600 LABELS "crypto;secret-service")
+    endforeach()
+    message(STATUS "[secret-service-vs-gnome-keyring] the Secret Service protector against ${CRD_GNOME_KEYRING}")
+endif()
+
 # Against OpenMLS (CRD_BUILD_MLS_VS_OPENMLS): crd-openmls-peer's members over OpenMLS, a Cargo package linted by
 # Clippy and built with the pinned Rust toolchain (CRD_CARGO) by `cargo build --locked`, so every crate is the one
 # Cargo.lock names, verified by its SHA-256; CARGO_HOME (the crate downloads) and the target directory stay inside this

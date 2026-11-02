@@ -827,7 +827,11 @@ jobs:
             mesa-common-dev \
             mesa-vulkan-drivers \
             gdb \
-            zlib1g-dev
+            zlib1g-dev \
+            dbus-daemon \
+            dbus-bin
+          # dbus-daemon and dbus-bin give the Secret Service tests their private session bus (dbus-run-session,
+          # dbus-send); they are normally present already.
           # mesa-vulkan-drivers provides lavapipe, a software Vulkan device: the Vulkan device tests and the Khronos
           # validation layer below run on every push instead of skipping (user decision 2026-10-05).
           # gdb runs the DIAG.9c reverse-debugging and watchpoint routes (the crd-diag-reverse-debug-* CTests).
@@ -925,6 +929,13 @@ jobs:
       - name: Install pinned Rust
         if: matrix.preset == 'linux-gcc-public-checks'
         run: python3 scripts/install-rust.py --destination "$RUNNER_TEMP/rust" --download-dir "$RUNNER_TEMP/rust-dl" --github-env "$GITHUB_ENV"
+
+      # The pinned gnome-keyring (tools/gnome-keyring-linux-x64) is the Secret Service the key store's Linux protector
+      # is tested against (CRD_BUILD_SECRET_SERVICE_VS_GNOME_KEYRING): three Ubuntu packages, each checked against its
+      # SHA-256 and unpacked without root; the configure reads CRD_GNOME_KEYRING.
+      - name: Install pinned gnome-keyring
+        if: matrix.preset == 'linux-gcc-public-checks'
+        run: python3 scripts/install-gnome-keyring.py --destination "$RUNNER_TEMP/gnome-keyring" --download-dir "$RUNNER_TEMP/gnome-keyring-dl" --github-env "$GITHUB_ENV"
 
       - name: Configure
         if: "!contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))"

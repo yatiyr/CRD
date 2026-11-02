@@ -958,6 +958,194 @@ TEST_CASE("Provider: one verifier and one key serve several threads", "[crypto][
     CHECK(failures.load() == 0U);
 }
 
+// ---- The Secret Service transport ----
+
+// RFC 2409's second Oakley group prime, as bytes (the provider holds its own copy; this one sets the boundaries).
+Bytes modp1024_prime()
+{
+    const char* const hex = "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74"
+                            "020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F1437"
+                            "4FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED"
+                            "EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE65381FFFFFFFFFFFFFFFF";
+    const auto nibble = [](char c) { return static_cast<u8>(c <= '9' ? c - '0' : c - 'A' + 10); };
+    Bytes      prime;
+    for (usize i = 0U; hex[i] != '\0'; i += 2U)
+    {
+        prime.push_back(static_cast<u8>(nibble(hex[i]) << 4U | nibble(hex[i + 1U])));
+    }
+    return prime;
+}
+
+// `value` plus `delta` (small, either sign) as a big-endian number of the same length.
+Bytes offset(const Bytes& value, int delta)
+{
+    Bytes out   = value;
+    int   carry = delta;
+    for (usize i = out.size(); i-- > 0U && carry != 0;)
+    {
+        const int sum = out[i] + carry;
+        out[i]        = static_cast<u8>(sum & 0xFF);
+        carry         = sum >> 8;
+    }
+    return out;
+}
+
+// The key's public value, as the bytes it would send.
+Bytes public_of(const SecretTransportKey& key)
+{
+    u8    value[kSecretTransportGroupBytes];
+    usize length = 0U;
+    REQUIRE(key.public_key(Span<u8, kSecretTransportGroupBytes>(value), length) == CryptoError::None);
+    Bytes out;
+    for (usize i = 0U; i < length; ++i)
+    {
+        out.push_back(value[i]);
+    }
+    return out;
+}
+
+// `plaintext` sealed under `iv`.
+Bytes sealed_of(const SecretTransportKey& key, ConstSpan<u8> iv, ConstSpan<u8> plaintext)
+{
+    Bytes out = filled(secret_transport_sealed_bytes(plaintext.size()), 0U);
+    REQUIRE(key.seal(iv, plaintext, Span<u8>(out.data(), out.size())) == CryptoError::None);
+    return out;
+}
+
+TEST_CASE("Provider: the Secret Service transport agrees, seals and opens", "[crypto][net-2][key-store]")
+{
+    const u8 iv[kSecretTransportIvBytes] = {0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE,
+                                            0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF};
+    for (usize round = 0U; round < 32U; ++round)
+    {
+        SecretTransportKey client;
+        SecretTransportKey service;
+        REQUIRE(client.generate() == CryptoError::None);
+        REQUIRE(service.generate() == CryptoError::None);
+        CHECK(client.ready());
+        CHECK_FALSE(client.agreed());
+        const Bytes mine   = public_of(client);
+        const Bytes theirs = public_of(service);
+        // Big-endian without leading zero bytes, and never the same twice.
+        CHECK((!mine.empty() && mine.size() <= kSecretTransportGroupBytes && mine[0] != 0U));
+        CHECK_FALSE(equal(mine, theirs));
+        REQUIRE(client.agree(theirs) == CryptoError::None);
+        REQUIRE(service.agree(mine) == CryptoError::None);
+        CHECK(client.agreed());
+
+        // Both sides hold one key: each opens what the other sealed, at every length around the block size.
+        for (usize length = 0U; length <= 33U; ++length)
+        {
+            const Bytes plain  = filled(length, static_cast<u8>(0xA0U + length));
+            const Bytes sealed = sealed_of(client, ConstSpan<u8>(iv), plain);
+            CHECK(sealed.size() == (length / kSecretTransportIvBytes + 1U) * kSecretTransportIvBytes);
+            Bytes opened = filled(length, 0x55U);
+            REQUIRE(service.open(ConstSpan<u8>(iv), sealed, Span<u8>(opened.data(), opened.size())) ==
+                    CryptoError::None);
+            CHECK(equal(opened, plain));
+            // A plaintext of another length than the caller expects is refused, the output zeroed.
+            Bytes longer = filled(length + 1U, 0x55U);
+            CHECK(service.open(ConstSpan<u8>(iv), sealed, Span<u8>(longer.data(), longer.size())) ==
+                  CryptoError::Forged);
+            CHECK(all_zero(longer));
+        }
+
+        // The service's value with leading zero bytes is the same value: the same key seals the same bytes.
+        Bytes padded = filled(kSecretTransportGroupBytes - theirs.size(), 0U);
+        for (const u8 b : theirs)
+        {
+            padded.push_back(b);
+        }
+        const u8    secret[] = {'m', 'a', 's', 't', 'e', 'r'};
+        const Bytes first    = sealed_of(client, ConstSpan<u8>(iv), ConstSpan<u8>(secret));
+        REQUIRE(client.agree(padded) == CryptoError::None);
+        CHECK(equal(sealed_of(client, ConstSpan<u8>(iv), ConstSpan<u8>(secret)), first));
+    }
+}
+
+TEST_CASE("Provider: the Secret Service transport refuses", "[crypto][net-2][key-store]")
+{
+    const u8           iv[kSecretTransportIvBytes] = {};
+    SecretTransportKey key;
+    u8                 value[kSecretTransportGroupBytes];
+    usize              length = 7U;
+    u8                 opened[32];
+    std::memset(value, 0x55, sizeof(value));
+    std::memset(opened, 0x55, sizeof(opened));
+    CHECK(key.public_key(Span<u8, kSecretTransportGroupBytes>(value), length) == CryptoError::NotReady);
+    CHECK((length == 0U && all_zero(ConstSpan<u8>(value))));
+    CHECK(key.agree(filled(1U, 2U)) == CryptoError::NotReady);
+    Bytes sealed = filled(16U, 0x55U);
+    CHECK(key.seal(ConstSpan<u8>(iv), {}, Span<u8>(sealed.data(), sealed.size())) == CryptoError::NotReady);
+    CHECK(all_zero(sealed));
+    CHECK(key.open(ConstSpan<u8>(iv), filled(16U, 0U), Span<u8>(opened)) == CryptoError::NotReady);
+    CHECK(all_zero(ConstSpan<u8>(opened)));
+
+    // A public value outside [2, p - 2], or of no length or more than the group's, agrees on nothing.
+    REQUIRE(key.generate() == CryptoError::None);
+    const Bytes prime = modp1024_prime();
+    REQUIRE(prime.size() == kSecretTransportGroupBytes);
+    CHECK(key.agree({}) == CryptoError::BadLength);
+    CHECK(key.agree(filled(kSecretTransportGroupBytes + 1U, 0U)) == CryptoError::BadLength);
+    const Bytes refused[] = {filled(1U, 0U),    filled(1U, 1U), filled(kSecretTransportGroupBytes, 0U),
+                             offset(prime, -1), prime,          offset(prime, 1),
+                             filled(kSecretTransportGroupBytes, 0xFFU)};
+    for (const Bytes& peer : refused)
+    {
+        CHECK(key.agree(peer) == CryptoError::BadKey);
+        CHECK_FALSE(key.agreed());
+        CHECK(key.seal(ConstSpan<u8>(iv), {}, Span<u8>(sealed.data(), sealed.size())) == CryptoError::NotReady);
+    }
+    CHECK(key.agree(filled(1U, 2U)) == CryptoError::None);
+    CHECK(key.agree(offset(prime, -2)) == CryptoError::None);
+
+    // Lengths: a 16-byte IV, an output of exactly the padded length apart from the input, a ciphertext of whole
+    // blocks, at least one.
+    const u8 master[32] = {7, 7, 7};
+    sealed              = sealed_of(key, ConstSpan<u8>(iv), ConstSpan<u8>(master));
+    REQUIRE(sealed.size() == 48U);
+    Bytes wrong = filled(48U, 0x55U);
+    CHECK(key.seal(ConstSpan<u8>(iv, 15U), ConstSpan<u8>(master), Span<u8>(wrong.data(), 48U)) ==
+          CryptoError::BadLength);
+    CHECK(all_zero(wrong));
+    for (const usize size : {usize{32}, usize{47}, usize{64}})
+    {
+        Bytes other = filled(size, 0x55U);
+        CHECK(key.seal(ConstSpan<u8>(iv), ConstSpan<u8>(master), Span<u8>(other.data(), other.size())) ==
+              CryptoError::BadLength);
+        CHECK(all_zero(other));
+    }
+    Bytes inside = filled(48U, 1U);
+    CHECK(key.seal(ConstSpan<u8>(iv), ConstSpan<u8>(inside.data(), 32U), Span<u8>(inside.data(), 48U)) ==
+          CryptoError::Overlap);
+    const ConstSpan<u8> whole(sealed.data(), sealed.size());
+    for (const ConstSpan<u8> cut : {whole.first(0U), whole.first(15U), whole.first(47U)})
+    {
+        std::memset(opened, 0x55, sizeof(opened));
+        CHECK(key.open(ConstSpan<u8>(iv), cut, Span<u8>(opened)) == CryptoError::BadLength);
+        CHECK(all_zero(ConstSpan<u8>(opened)));
+    }
+    CHECK(key.open(ConstSpan<u8>(iv, 15U), whole, Span<u8>(opened)) == CryptoError::BadLength);
+
+    // CBC authenticates nothing: a changed IV opens to a changed first block, and a change that breaks the padding
+    // (0x10 ^ 0x01 in the last plaintext byte) is Forged with nothing released.
+    u8 changed_iv[kSecretTransportIvBytes] = {};
+    changed_iv[0]                          = 0x80U;
+    REQUIRE(key.open(ConstSpan<u8>(changed_iv), whole, Span<u8>(opened)) == CryptoError::None);
+    CHECK(opened[0] == (master[0] ^ 0x80U));
+    Bytes broken = sealed;
+    broken[31] ^= 0x01U;
+    std::memset(opened, 0x55, sizeof(opened));
+    CHECK(key.open(ConstSpan<u8>(iv), broken, Span<u8>(opened)) == CryptoError::Forged);
+    CHECK(all_zero(ConstSpan<u8>(opened)));
+
+    // Cleared, it holds nothing.
+    key.clear();
+    CHECK_FALSE(key.ready());
+    CHECK_FALSE(key.agreed());
+    CHECK(key.open(ConstSpan<u8>(iv), whole, Span<u8>(opened)) == CryptoError::NotReady);
+}
+
 // ---- The policy generation through the production verifier ----
 
 TEST_CASE("Provider: a policy generation signed by real ML-DSA-65 and Ed25519 keys", "[crypto][net-2][net-std]")

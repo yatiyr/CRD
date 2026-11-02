@@ -41,6 +41,17 @@
           "standard": false
         },
         {
+          "id": "freedesktop.secret-service",
+          "kind": "protocol",
+          "owner": "crypto",
+          "functions": [
+            "confidentiality",
+            "key-exchange"
+          ],
+          "spec": "https://specifications.freedesktop.org/secret-service-spec/0.2/",
+          "standard": true
+        },
+        {
           "id": "tls.hybrid-kex",
           "kind": "algorithm",
           "owner": "crypto",

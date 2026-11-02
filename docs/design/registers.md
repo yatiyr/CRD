@@ -49,7 +49,9 @@ Every entry holds:
 
 The standards domain adds `spec` (the document: `type` `rfc`, `draft`, `w3c`, `nist`, `paper` (a peer-reviewed
 publication that defines an algorithm no standards body publishes, such as SipHash; `ref` is its DOI link, `status`
-`published` or `withdrawn`) or `cerid`; `ref`; for a draft
+`published` or `withdrawn`), `freedesktop` (a specification of freedesktop.org, such as the Secret Service API;
+`ref` is its specifications.freedesktop.org link, `revision` its version, `status` `draft`, `stable` or `withdrawn`)
+or `cerid`; `ref`; for a draft
 its `revision` and `posted` day, month or year; `status` in the snapshot; `obsoleted_by` for an obsoleted RFC),
 `codepoints` (IANA or Cerid registry, name, value; `verified: false` marks a value taken from knowledge;
 `recommended`, IANA's "Recommended" value, [below](#recommended-column)),
@@ -520,8 +522,8 @@ EUR-Lex or Steamworks change found between them is recorded as a run with its tr
 2. `plan --out <file>` writes the primary sources a refresh reads: the RFC Editor record
    (`rfc-editor.org/rfc/rfcNNNN.json`) of every RFC, the IETF datatracker record
    (`datatracker.ietf.org/doc/<draft>/doc.json`) of every draft and the IANA registry files
-   (`iana.org/assignments/<name>/<name>.xml`) of the codepoints, plus the items read by hand: W3C, NIST and paper
-   documents, object identifiers (NIST CSOR) and the IETF meeting calendar. For the legal register
+   (`iana.org/assignments/<name>/<name>.xml`) of the codepoints, plus the items read by hand: W3C, NIST, paper and
+   freedesktop.org documents, object identifiers (NIST CSOR) and the IETF meeting calendar. For the legal register
    (`--register cmake/legal-register.json`) it lists the official primary text of every instrument, once per URL,
    and the Official Gazette, EUR-Lex and platform announcements read by hand since the latest run.
    `--scan full` adds the full text of every document the owed full re-research reads: the documents the triggering

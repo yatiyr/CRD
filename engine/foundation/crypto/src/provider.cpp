@@ -12,6 +12,7 @@
 #include <openssl/aead.h>
 #include <openssl/base.h>
 #include <openssl/bn.h>
+#include <openssl/cipher.h>
 #include <openssl/curve25519.h>
 #include <openssl/digest.h>
 #include <openssl/ec.h>
@@ -30,6 +31,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 #include <new>
 
 namespace crd::crypto
@@ -1266,5 +1268,205 @@ CryptoError PrfKey::hash(cont::ConstSpan<u8> bytes, u64& out) const noexcept
     }
     out = SIPHASH_24(m_key, bytes.data(), bytes.size());
     return CryptoError::None;
+}
+
+// ---- The Secret Service transport ----
+
+namespace
+{
+// RFC 2409 section 6.2: the second Oakley group's prime, 2^1024 - 2^960 - 1 + 2^64 * ([2^894 pi] + 129093), a safe
+// prime (p = 2q + 1, q prime); its generator is 2.
+constexpr u8 kModp1024Prime[kSecretTransportGroupBytes] = {
+    0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xC9U, 0x0FU, 0xDAU, 0xA2U, 0x21U, 0x68U, 0xC2U, 0x34U,
+    0xC4U, 0xC6U, 0x62U, 0x8BU, 0x80U, 0xDCU, 0x1CU, 0xD1U, 0x29U, 0x02U, 0x4EU, 0x08U, 0x8AU, 0x67U, 0xCCU, 0x74U,
+    0x02U, 0x0BU, 0xBEU, 0xA6U, 0x3BU, 0x13U, 0x9BU, 0x22U, 0x51U, 0x4AU, 0x08U, 0x79U, 0x8EU, 0x34U, 0x04U, 0xDDU,
+    0xEFU, 0x95U, 0x19U, 0xB3U, 0xCDU, 0x3AU, 0x43U, 0x1BU, 0x30U, 0x2BU, 0x0AU, 0x6DU, 0xF2U, 0x5FU, 0x14U, 0x37U,
+    0x4FU, 0xE1U, 0x35U, 0x6DU, 0x6DU, 0x51U, 0xC2U, 0x45U, 0xE4U, 0x85U, 0xB5U, 0x76U, 0x62U, 0x5EU, 0x7EU, 0xC6U,
+    0xF4U, 0x4CU, 0x42U, 0xE9U, 0xA6U, 0x37U, 0xEDU, 0x6BU, 0x0BU, 0xFFU, 0x5CU, 0xB6U, 0xF4U, 0x06U, 0xB7U, 0xEDU,
+    0xEEU, 0x38U, 0x6BU, 0xFBU, 0x5AU, 0x89U, 0x9FU, 0xA5U, 0xAEU, 0x9FU, 0x24U, 0x11U, 0x7CU, 0x4BU, 0x1FU, 0xE6U,
+    0x49U, 0x28U, 0x66U, 0x51U, 0xECU, 0xE6U, 0x53U, 0x81U, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU,
+};
+
+// A number that may be secret (a private exponent, a shared value): zeroed when it is freed.
+struct SecretBignumFree
+{
+    void operator()(BIGNUM* number) const noexcept { BN_clear_free(number); }
+};
+using SecretBignum = std::unique_ptr<BIGNUM, SecretBignumFree>;
+
+// The group's prime, p - 1 (the exclusive upper bound of a private exponent and of a peer's public value) and a
+// context for its arithmetic.
+struct Modp1024
+{
+    bssl::UniquePtr<BIGNUM> p{BN_bin2bn(kModp1024Prime, sizeof(kModp1024Prime), nullptr)};
+    bssl::UniquePtr<BIGNUM> p_minus_1{p != nullptr ? BN_dup(p.get()) : nullptr};
+    bssl::UniquePtr<BN_CTX> context{BN_CTX_new()};
+
+    [[nodiscard]] bool ready() noexcept
+    {
+        return p != nullptr && p_minus_1 != nullptr && context != nullptr && BN_sub_word(p_minus_1.get(), 1U);
+    }
+};
+
+// base^exponent mod p in constant time, left-padded to the group's length.
+[[nodiscard]] bool modp1024_power(const Modp1024& group, const BIGNUM* base, const BIGNUM* exponent,
+                                  cont::Span<u8> out) noexcept
+{
+    const SecretBignum power(BN_new());
+    return power != nullptr &&
+           BN_mod_exp_mont_consttime(power.get(), base, exponent, group.p.get(), group.context.get(), nullptr) &&
+           BN_bn2bin_padded(out.data(), out.size(), power.get());
+}
+} // namespace
+
+CryptoError SecretTransportKey::generate() noexcept
+{
+    clear();
+    const ErrorScope   errors;
+    Modp1024           group;
+    const SecretBignum exponent(BN_new());
+    if (!group.ready() || exponent == nullptr || !BN_rand_range_ex(exponent.get(), 2U, group.p_minus_1.get()) ||
+        !BN_bn2bin_padded(m_private, sizeof(m_private), exponent.get()))
+    {
+        clear();
+        return CryptoError::ProviderFailure;
+    }
+    m_ready = true;
+    return CryptoError::None;
+}
+
+void SecretTransportKey::clear() noexcept
+{
+    secure_zero(cont::Span<u8>(m_private));
+    secure_zero(cont::Span<u8>(m_key));
+    m_ready  = false;
+    m_agreed = false;
+}
+
+CryptoError SecretTransportKey::public_key(cont::Span<u8, kSecretTransportGroupBytes> out,
+                                           usize&                                      length) const noexcept
+{
+    length = 0U;
+    if (!m_ready)
+    {
+        return refuse(CryptoError::NotReady, out);
+    }
+    const ErrorScope              errors;
+    Modp1024                      group;
+    const SecretBignum            exponent(BN_bin2bn(m_private, sizeof(m_private), nullptr));
+    const bssl::UniquePtr<BIGNUM> generator(BN_new());
+    if (!group.ready() || exponent == nullptr || generator == nullptr || !BN_set_word(generator.get(), 2U) ||
+        !modp1024_power(group, generator.get(), exponent.get(), out))
+    {
+        return refuse(CryptoError::ProviderFailure, out);
+    }
+    // A public value hides nothing: its leading zero bytes are dropped, as libsecret drops them.
+    usize first = 0U;
+    while (first + 1U < out.size() && out[first] == 0U)
+    {
+        ++first;
+    }
+    length = out.size() - first;
+    std::memmove(out.data(), out.data() + first, length);
+    return CryptoError::None;
+}
+
+CryptoError SecretTransportKey::agree(cont::ConstSpan<u8> peer_public) noexcept
+{
+    secure_zero(cont::Span<u8>(m_key));
+    m_agreed = false;
+    if (!m_ready)
+    {
+        return CryptoError::NotReady;
+    }
+    if (peer_public.empty() || peer_public.size() > kSecretTransportGroupBytes)
+    {
+        return CryptoError::BadLength;
+    }
+    const ErrorScope              errors;
+    Modp1024                      group;
+    const bssl::UniquePtr<BIGNUM> peer(BN_bin2bn(peer_public.data(), peer_public.size(), nullptr));
+    const SecretBignum            exponent(BN_bin2bn(m_private, sizeof(m_private), nullptr));
+    if (!group.ready() || peer == nullptr || exponent == nullptr)
+    {
+        return CryptoError::ProviderFailure;
+    }
+    if (BN_cmp_word(peer.get(), 1U) <= 0 || BN_cmp(peer.get(), group.p_minus_1.get()) >= 0)
+    {
+        return CryptoError::BadKey;
+    }
+    u8         shared[kSecretTransportGroupBytes];
+    const bool derived = modp1024_power(group, peer.get(), exponent.get(), cont::Span<u8>(shared)) &&
+                         HKDF(m_key, sizeof(m_key), EVP_sha256(), shared, sizeof(shared), nullptr, 0U, nullptr, 0U);
+    secure_zero(cont::Span<u8>(shared));
+    if (!derived)
+    {
+        secure_zero(cont::Span<u8>(m_key));
+        return CryptoError::ProviderFailure;
+    }
+    m_agreed = true;
+    return CryptoError::None;
+}
+
+CryptoError SecretTransportKey::seal(cont::ConstSpan<u8> iv, cont::ConstSpan<u8> plaintext,
+                                     cont::Span<u8> out) const noexcept
+{
+    if (!m_agreed)
+    {
+        return refuse(CryptoError::NotReady, out);
+    }
+    const usize padded = secret_transport_sealed_bytes(plaintext.size());
+    if (iv.size() != kSecretTransportIvBytes || out.size() != padded)
+    {
+        return refuse(CryptoError::BadLength, out);
+    }
+    if (overlaps(plaintext, out))
+    {
+        return refuse(CryptoError::Overlap, out);
+    }
+    const ErrorScope           errors;
+    bssl::ScopedEVP_CIPHER_CTX context;
+    int                        body = 0;
+    int                        tail = 0;
+    if (!EVP_EncryptInit_ex(context.get(), EVP_aes_128_cbc(), nullptr, m_key, iv.data()) ||
+        !EVP_EncryptUpdate(context.get(), out.data(), &body, plaintext.data(), static_cast<int>(plaintext.size())) ||
+        !EVP_EncryptFinal_ex(context.get(), out.data() + body, &tail) ||
+        static_cast<usize>(body) + static_cast<usize>(tail) != padded)
+    {
+        return refuse(CryptoError::ProviderFailure, out);
+    }
+    return CryptoError::None;
+}
+
+CryptoError SecretTransportKey::open(cont::ConstSpan<u8> iv, cont::ConstSpan<u8> ciphertext,
+                                     cont::Span<u8> out) const noexcept
+{
+    if (!m_agreed)
+    {
+        return refuse(CryptoError::NotReady, out);
+    }
+    if (iv.size() != kSecretTransportIvBytes || ciphertext.empty() ||
+        ciphertext.size() % kSecretTransportIvBytes != 0U)
+    {
+        return refuse(CryptoError::BadLength, out);
+    }
+    // EVP_DecryptUpdate holds the last block back for the padding check and may write one block past its input.
+    cont::Array<u8> plain;
+    plain.resize(ciphertext.size() + kSecretTransportIvBytes);
+    const ErrorScope           errors;
+    bssl::ScopedEVP_CIPHER_CTX context;
+    int                        body = 0;
+    int                        tail = 0;
+    const bool opened = EVP_DecryptInit_ex(context.get(), EVP_aes_128_cbc(), nullptr, m_key, iv.data()) &&
+                        EVP_DecryptUpdate(context.get(), plain.data(), &body, ciphertext.data(),
+                                          static_cast<int>(ciphertext.size())) &&
+                        EVP_DecryptFinal_ex(context.get(), plain.data() + body, &tail);
+    const bool fits = opened && static_cast<usize>(body) + static_cast<usize>(tail) == out.size();
+    if (fits && !out.empty())
+    {
+        std::memcpy(out.data(), plain.data(), out.size());
+    }
+    secure_zero(cont::Span<u8>(plain.data(), plain.size()));
+    return fits ? CryptoError::None : refuse(CryptoError::Forged, out);
 }
 } // namespace crd::crypto

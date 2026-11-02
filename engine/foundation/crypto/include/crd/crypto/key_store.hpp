@@ -83,13 +83,22 @@ protected:
     ~KeyProtector() noexcept                              = default;
 };
 
-// The operating system's protector for the calling user (decision K2): DPAPI on Windows ("dpapi": user scope, no
-// prompt, its entropy binding the store; it cannot forget). Elsewhere every call answers Unavailable until that
-// platform's protector lands (NET.2's remaining key store clause).
+// The operating system's protector for the calling user (decisions K2 and K10): DPAPI on Windows ("dpapi": user
+// scope, its entropy binding the store; it cannot forget), the freedesktop Secret Service on Linux ("secret-service":
+// an item in the default collection that the store's identifier and a random handle find, its secret passed over the
+// dh-ietf1024-sha256-aes128-cbc-pkcs7 transport; it forgets by deleting the item). Elsewhere every call answers
+// Unavailable. available() is whether the vault answers now: a Linux session without a bus or a Secret Service has
+// none.
 class PlatformKeyProtector final : public KeyProtector
 {
 public:
+    // `prompt_milliseconds` 0 (the default) never lets the vault ask the user (a locked collection is then Denied);
+    // otherwise the Secret Service may show its unlock or confirmation prompt and is waited for that long, a dismissed
+    // or unanswered prompt being Denied. DPAPI asks the user nothing either way.
+    explicit PlatformKeyProtector(u32 prompt_milliseconds = 0U) noexcept : m_prompt_milliseconds(prompt_milliseconds) {}
+
     [[nodiscard]] static bool available() noexcept;
+    [[nodiscard]] u32         prompt_milliseconds() const noexcept { return m_prompt_milliseconds; }
 
     [[nodiscard]] cont::StringView name() const noexcept override;
     [[nodiscard]] KeyProtection    protection() const noexcept override { return KeyProtection::Platform; }
@@ -99,6 +108,9 @@ public:
     [[nodiscard]] CryptoError      recover(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference,
                                            cont::Span<u8> master) noexcept override;
     [[nodiscard]] CryptoError forget(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference) noexcept override;
+
+private:
+    u32 m_prompt_milliseconds;
 };
 
 enum class KeyKind : u8

@@ -358,9 +358,9 @@ holds ECDSA. The decisions (numbered for the tests):
   `Application` protection (the application's own key, a cloud key service, a deployment secret), `Platform` (the
   operating system's per-user vault) or `Hardware` (sealed to a device). `PlatformKeyProtector` is DPAPI on Windows:
   user scope, `CRYPTPROTECT_UI_FORBIDDEN`, its entropy the label "cerid key store master 1" and the store's
-  identifier, so a reference recovers only in its own store and only for its user; DPAPI cannot forget. The Secret
-  Service (Linux), the Keychain (macOS) and a TPM-sealed master key are its next protectors; on a platform without one
-  it answers `Unavailable`, and the store is never written unprotected.
+  identifier, so a reference recovers only in its own store and only for its user; DPAPI cannot forget. On Linux it is
+  the Secret Service (K10), which can. The Keychain (macOS) and a TPM-sealed master key are its next protectors; on a
+  platform without one it answers `Unavailable`, and the store is never written unprotected.
 - **K3. One sealed file.** A store is a directory created owner-only (`create_private_directory`: mode 0700, or a
   protected DACL with one inheritable entry for the user) holding the file `keys`, a durable save of crd-platform
   (atomic replace, envelope checksums, no older generation kept so an erased key is not kept either), and the lock
@@ -398,6 +398,22 @@ holds ECDSA. The decisions (numbered for the tests):
 - **K9. Errors.** `NotFound`, `Exists`, `Revoked`, `Unavailable` (no protector service), `Denied` (the protector
   will not recover: another user's or store's reference, a locked vault, a refused prompt), `Damaged` and
   `StorageFailure` (a file that cannot be written, locked or created) joined `CryptoError`.
+- **K10. The Secret Service (Linux).** `PlatformKeyProtector` is "secret-service" there, read from the Secret Service
+  API 0.2 (`freedesktop.secret-service` in the standards register). libdbus-1 is loaded at run time (`libdbus-1.so.3`
+  through crd-platform's `DynamicLibrary`), so nothing links it and a system without it, a session bus or a service
+  answers `Unavailable`. Each call opens a private connection (never the process's shared one) and, where a secret
+  crosses it, its own `dh-ietf1024-sha256-aes128-cbc-pkcs7` session: provider.hpp's `SecretTransportKey`, which no
+  policy can name (it has no algorithm identifier); the service's value must lie in [2, p - 2]. The master key is an
+  item of the default collection (made if there is none) with the attributes `xdg:schema`
+  "org.cerid.KeyStore.Master", the store's identifier and a random 16-byte handle; the reference is a format byte and
+  the handle, so a reference copied into another store, or forgotten, finds nothing (`Denied`), as does a second item
+  with its attributes. `forget` deletes the item: this protector forgets (K5's guarantee holds on Linux). A prompt
+  belongs to the connection that asked for it, so one call keeps one connection throughout; by default no prompt is
+  shown and a locked collection or item is `Denied`. `PlatformKeyProtector(prompt_milliseconds)` lets the service show
+  its unlock or confirmation prompt and waits that long for its `Completed` signal; dismissed or unanswered is `Denied`
+  (on Windows it only lifts `CRYPTPROTECT_UI_FORBIDDEN`). Every reply's signature is checked before it is read.
+  Proven against the pinned gnome-keyring 46.1 (`tools/gnome-keyring-linux-x64`) in a session bus and scratch home of
+  their own, unlocked and locked (`secret_service_session.py`, the `crd-crypto-secret-service` CTests).
 
 Evidence (2026-11-02, [session](../sessions/2026-11-02-net-2-key-store.md)): `test_key_store.cpp` (12 cases: every kind
 of key through its whole life, every refusal, every changed byte of a store, an older and a substituted store, writers

@@ -82,7 +82,7 @@ COLD_PRESETS = ('win-debug-scalar', 'linux-gcc-debug-scalar')
 APT_PACKAGES = {
     'x64': ('libvulkan-dev', 'glslang-tools', 'libshaderc-dev', 'libwayland-dev', 'wayland-protocols',
             'libxkbcommon-dev', 'libx11-dev', 'libxrandr-dev', 'libxinerama-dev', 'libxcursor-dev', 'libxi-dev',
-            'mesa-common-dev', 'mesa-vulkan-drivers', 'gdb', 'zlib1g-dev'),
+            'mesa-common-dev', 'mesa-vulkan-drivers', 'gdb', 'zlib1g-dev', 'dbus-daemon', 'dbus-bin'),
     'arm64': ('ninja-build', 'gdb', 'clang', 'libclang-rt-18-dev'),
     'genmc': ('llvm-20-dev', 'clang-20', 'g++-14', 'libedit-dev'),
 }
@@ -1326,6 +1326,15 @@ class Lane:
                              self.temp / 'rust-dl', '--github-env', self.env_file))
         self.merge()
 
+    def gnome_keyring(self):
+        # The pinned gnome-keyring the Secret Service protector is tested against; the configure reads
+        # CRD_GNOME_KEYRING.
+        if not self.preset_step('Install pinned gnome-keyring'):
+            return
+        self.run(self.helper('install-gnome-keyring.py', '--destination', self.temp / 'gnome-keyring',
+                             '--download-dir', self.temp / 'gnome-keyring-dl', '--github-env', self.env_file))
+        self.merge()
+
     def apt(self):
         packages = APT_PACKAGES['arm64' if self.job == 'linux-arm64' else 'x64']
         missing = [] if self.run.dry else [p for p in packages if subprocess.run(
@@ -1669,8 +1678,8 @@ class Lane:
         'clang-cl': ['checkout', 'python_version', 'ninja', 'msvc', 'adapters', 'cpm_cache', 'llvm_path', 'vulkan_sdk',
                      'sccache', 'configure', 'build', 'sccache_stats', 'inventory', 'test', 'bundle', 'upload'],
         'linux-gcc': ['checkout', 'reclaim_disk', 'python_version', 'ninja', 'apt', 'apt_census', 'vulkan_headers',
-                      'vulkan_validation', 'cpm_cache', 'cold_before', 'sccache', 'sde', 'rust', 'configure',
-                      'cold_after',
+                      'vulkan_validation', 'cpm_cache', 'cold_before', 'sccache', 'sde', 'rust', 'gnome_keyring',
+                      'configure', 'cold_after',
                       'build', 'sccache_stats', 'inventory', 'console_checks', 'test', 'test_sse2', 'seeded_faults',
                       'genmc', 'bundle', 'upload'],
         'windows-shipping': ['checkout', 'python_version', 'ninja', 'msvc', 'adapters', 'cpm_cache', 'vulkan_sdk',
@@ -2099,7 +2108,7 @@ LANE_STEP_PHASES = {
     'Cold acquisition (empty package cache, pinned WARP)': 'cold_before',
     'Cold acquisition (empty package cache)': 'cold_before', 'Install pinned sccache': 'sccache',
     'Compiler cache service': 'sccache', 'Install pinned Intel SDE': 'sde', 'Install pinned Rust': 'rust',
-    'Configure': 'configure',
+    'Install pinned gnome-keyring': 'gnome_keyring', 'Configure': 'configure',
     'Configure with the compiler cache': 'configure', 'Cold acquisition (every pinned package acquired)': 'cold_after',
     'Build': 'build', 'Build the Debug sandbox profile': 'build', 'Compiler cache statistics': 'sccache_stats',
     'Test inventory': 'inventory', 'Test': 'test', 'Test at the sse2 level': 'test_sse2',

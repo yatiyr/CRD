@@ -95,6 +95,7 @@ SPEC_STATUS = {
     'w3c': {'recommendation', 'candidate', 'working-draft'},
     'nist': {'final', 'draft', 'withdrawn'},
     'paper': {'published', 'withdrawn'},
+    'freedesktop': {'draft', 'stable', 'withdrawn'},
     'cerid': {'design', 'stable'},
 }
 HELD_DRAFT = {'iesg', 'rfc-editor'}

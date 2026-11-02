@@ -314,13 +314,14 @@
         },
         {
             "name": "linux-gcc-public-checks",
-            "displayName": "Linux GCC Debug + public header checks, the package consumer test, the TLS and MLS interop tests",
+            "displayName": "Linux GCC Debug + public header checks, the package consumer test, the TLS, MLS and Secret Service interop tests",
             "inherits": "linux-gcc-debug",
             "cacheVariables": {
                 "CRD_PUBLIC_CHECKS": "ON",
                 "CRD_BUILD_TLS_VS_OPENSSL": "ON",
                 "CRD_BUILD_MLS_VS_MLSPP": "ON",
-                "CRD_BUILD_MLS_VS_OPENMLS": "ON"
+                "CRD_BUILD_MLS_VS_OPENMLS": "ON",
+                "CRD_BUILD_SECRET_SERVICE_VS_GNOME_KEYRING": "ON"
             }
         },
         {

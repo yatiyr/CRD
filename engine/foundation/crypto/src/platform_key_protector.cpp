@@ -1,5 +1,5 @@
 // crd-crypto -- the operating system's key protector (NET.2; contract: docs/design/network-foundation.md#key-store,
-// decision K2): DPAPI on Windows.
+// decision K2): DPAPI on Windows, nothing where no protector exists (the Secret Service's is secret_service.cpp).
 
 #include <crd/core/platform.hpp>
 #include <crd/crypto/key_store.hpp>
@@ -35,6 +35,12 @@ constexpr usize kEntropyBytes   = sizeof(kEntropyLabel) - 1U + kKeyStoreIdBytes;
     std::memcpy(entropy, kEntropyLabel, sizeof(kEntropyLabel) - 1U);
     std::memcpy(entropy + sizeof(kEntropyLabel) - 1U, store_id.data(), kKeyStoreIdBytes);
     return true;
+}
+
+// DPAPI shows its own dialog only where a policy asks for strong key protection: forbidden unless prompts are allowed.
+[[nodiscard]] DWORD ui_flags(u32 prompt_milliseconds) noexcept
+{
+    return prompt_milliseconds == 0U ? CRYPTPROTECT_UI_FORBIDDEN : 0U;
 }
 
 // DPAPI's blobs point at mutable bytes it only reads: the callers hand it their own copies.
@@ -77,7 +83,7 @@ CryptoError PlatformKeyProtector::protect(cont::ConstSpan<u8> store_id, cont::Co
     DATA_BLOB  salt      = blob_of(cont::Span<u8>(entropy));
     DATA_BLOB  out{};
     const bool guarded =
-        CryptProtectData(&in, L"Cerid key store", &salt, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out) != 0;
+        CryptProtectData(&in, L"Cerid key store", &salt, nullptr, nullptr, ui_flags(m_prompt_milliseconds), &out) != 0;
     secure_zero(cont::Span<u8>(secret));
     if (!guarded)
     {
@@ -111,7 +117,7 @@ CryptoError PlatformKeyProtector::recover(cont::ConstSpan<u8> store_id, cont::Co
     DATA_BLOB in   = blob_of(cont::Span<u8>(sealed.data(), sealed.size()));
     DATA_BLOB salt = blob_of(cont::Span<u8>(entropy));
     DATA_BLOB out{};
-    if (CryptUnprotectData(&in, nullptr, &salt, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out) == 0)
+    if (CryptUnprotectData(&in, nullptr, &salt, nullptr, nullptr, ui_flags(m_prompt_milliseconds), &out) == 0)
     {
         secure_zero(master);
         return CryptoError::Denied; // another user's blob, another store's, or a changed one: DPAPI tells none apart
@@ -134,7 +140,7 @@ CryptoError PlatformKeyProtector::forget(cont::ConstSpan<u8> /*store_id*/, cont:
 {
     return CryptoError::None; // nothing to destroy: forgets() is false
 }
-#else
+#elif !CRD_OS_LINUX
 bool PlatformKeyProtector::available() noexcept
 {
     return false;

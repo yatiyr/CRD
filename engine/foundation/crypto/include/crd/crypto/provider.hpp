@@ -394,4 +394,69 @@ private:
     AlgorithmId m_algorithm{};
     bool        m_ready = false;
 };
+
+// ---- The freedesktop Secret Service's transport (dh-ietf1024-sha256-aes128-cbc-pkcs7) ----
+
+// The session algorithm under which a Secret Service client and the service pass secrets (the Secret Service API,
+// "Transfer of Secrets"): Diffie-Hellman in RFC 2409's second Oakley group (1024-bit MODP, generator 2), HKDF-SHA256
+// of the shared value left-padded to the group's 128 bytes, with no salt and no info, into an AES-128 key, and
+// AES-128-CBC with PKCS #7 padding under a fresh 16-byte IV per secret. It hides a secret only on its way over the
+// user's own session bus, from the bus daemon and whatever monitors it, and serves nothing else: it has no algorithm
+// identifier, so no policy or Cerid protocol can name it (the key store's Secret Service protector, decision K10).
+inline constexpr usize kSecretTransportGroupBytes = 128U;
+inline constexpr usize kSecretTransportIvBytes    = 16U; // one AES block
+
+// The ciphertext length of a `plaintext_bytes`-byte secret: PKCS #7 pads to the next whole block above it.
+[[nodiscard]] constexpr usize secret_transport_sealed_bytes(usize plaintext_bytes) noexcept
+{
+    return (plaintext_bytes / kSecretTransportIvBytes + 1U) * kSecretTransportIvBytes;
+}
+
+class SecretTransportKey
+{
+public:
+    SecretTransportKey() noexcept = default;
+    ~SecretTransportKey() noexcept { clear(); }
+    SecretTransportKey(const SecretTransportKey&)            = delete;
+    SecretTransportKey& operator=(const SecretTransportKey&) = delete;
+    SecretTransportKey(SecretTransportKey&&)                 = delete;
+    SecretTransportKey& operator=(SecretTransportKey&&)      = delete;
+
+    // A fresh private exponent, uniform in [2, p - 2], from the provider's randomness; any agreed key is cleared.
+    [[nodiscard]] CryptoError generate() noexcept;
+    void                      clear() noexcept;
+
+    [[nodiscard]] bool ready() const noexcept { return m_ready; }
+    [[nodiscard]] bool agreed() const noexcept { return m_agreed; }
+
+    // The public value 2^x mod p, big-endian without leading zero bytes (as libsecret and gnome-keyring send theirs):
+    // its `length` bytes are written to the front of `out`. NotReady, with `out` zeroed and `length` 0, before
+    // generate().
+    [[nodiscard]] CryptoError public_key(cont::Span<u8, kSecretTransportGroupBytes> out,
+                                         usize&                                      length) const noexcept;
+
+    // Agrees with the service's public value (big-endian, 1 to kSecretTransportGroupBytes bytes, leading zeros
+    // allowed) and keeps the session key: BadLength for another length, BadKey for a value outside [2, p - 2] (0, 1
+    // and p - 1 would force the shared value), NotReady before generate().
+    [[nodiscard]] CryptoError agree(cont::ConstSpan<u8> peer_public) noexcept;
+
+    // Encrypts `plaintext` under `iv` (kSecretTransportIvBytes, fresh from random_bytes for every secret) into `out`,
+    // exactly secret_transport_sealed_bytes(plaintext.size()) long and apart from `plaintext` (Overlap otherwise).
+    // NotReady before agree(); on any error `out` is zeroed.
+    [[nodiscard]] CryptoError seal(cont::ConstSpan<u8> iv, cont::ConstSpan<u8> plaintext,
+                                   cont::Span<u8> out) const noexcept;
+
+    // Decrypts `ciphertext` under `iv` into `out`, which must be exactly the plaintext's length: BadLength for an IV
+    // of another length or a ciphertext that is not a nonzero multiple of 16 bytes, Forged for broken padding or a
+    // plaintext of another length. CBC authenticates nothing: a changed ciphertext opens to other bytes or breaks the
+    // padding, so the caller checks what it opens. On any error `out` is zeroed.
+    [[nodiscard]] CryptoError open(cont::ConstSpan<u8> iv, cont::ConstSpan<u8> ciphertext,
+                                   cont::Span<u8> out) const noexcept;
+
+private:
+    u8   m_private[kSecretTransportGroupBytes] = {};
+    u8   m_key[16]                             = {};
+    bool m_ready                               = false;
+    bool m_agreed                              = false;
+};
 } // namespace crd::crypto
