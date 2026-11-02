@@ -94,8 +94,12 @@ linux-gcc-asan).
   container guard found eight `std::string` and `std::wstring` uses in the new tests, now crd containers;
   `crd-check-peer-headers` crashed once (SEGFAULT) and passed when run again unchanged, this host's known
   misexecution (MEMORY, "This host misexecutes"); all 20 pass.
-- `tidy-files.py` (LLVM 20.1.0) on the changed C++: clean after six findings in the tests fixed (an unused using,
-  two local and two static constants' names, a nested conditional).
+- `tidy-files.py` on the changed C++, on Linux (LLVM 20.1.0) and, for the Windows-only code (the DACL, LockFileEx,
+  DPAPI and the DACL test), on win-debug's database (LLVM 20.1.8): clean after ten findings fixed. In the tests: an
+  unused using, two local and two static constants' names, a nested conditional. In the Windows code: three
+  `const_cast`s (DPAPI's blobs now point at the caller's own copies, the DACL call gets its own UTF-16 name, the test
+  reads the ACE as mutable) and an integer-to-pointer cast (`FileLock` keeps a `HANDLE` and a descriptor apart). Both
+  platforms rebuilt and every case, the whole platform suite and the corpus passed again.
 - Validators: master-plan, repository, Allman braces, generated sources (the crypto inventory refreshed), registers
   (`cerid.key-store` implemented; cerid-package reviewed), capability owners.
 
