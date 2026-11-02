@@ -37,6 +37,7 @@ namespace crd::crypto::mls
 // The body of an Extension list (section 7.2): each {u16 extension_type; opaque extension_data<V>}.
 [[nodiscard]] bool take_extensions(cont::WireReader& in, cont::ConstSpan<u8>& body) noexcept;
 
+// NOLINTNEXTLINE(performance-enum-size): a 16-bit codepoint of its IANA registry, as the wire carries it
 enum class CredentialType : u16
 {
     Basic = 1U, // an identity
@@ -105,6 +106,7 @@ struct KeyPackage
 [[nodiscard]] usize key_package_bytes(const KeyPackage& package) noexcept;
 void                put_key_package(cont::WireWriter& out, const KeyPackage& package) noexcept;
 
+// NOLINTNEXTLINE(performance-enum-size): a 16-bit codepoint of its IANA registry, as the wire carries it
 enum class ProposalType : u16
 {
     Add                    = 1U,
@@ -171,14 +173,23 @@ struct UpdatePathNode
 };
 [[nodiscard]] bool take_update_path_node(cont::WireReader& in, UpdatePathNode& out) noexcept;
 
-// A commit (section 12.4): the body of its ProposalOrRef list (read with take_proposal_or_ref) and its optional
-// path: the committer's new leaf and the body of its UpdatePathNode list.
+// An update path (section 7.6): the committer's new leaf and the body of its UpdatePathNode list.
+struct UpdatePath
+{
+    LeafNode            leaf_node;
+    cont::ConstSpan<u8> nodes;
+};
+
+[[nodiscard]] bool  take_update_path(cont::WireReader& in, UpdatePath& out) noexcept;
+[[nodiscard]] usize update_path_bytes(const UpdatePath& path) noexcept;
+void                put_update_path(cont::WireWriter& out, const UpdatePath& path) noexcept;
+
+// A commit (section 12.4): the body of its ProposalOrRef list (read with take_proposal_or_ref) and its optional path.
 struct Commit
 {
     cont::ConstSpan<u8> proposals;
     bool                has_path = false;
-    LeafNode            path_leaf;
-    cont::ConstSpan<u8> path_nodes;
+    UpdatePath          path;
 };
 
 [[nodiscard]] bool  take_commit(cont::WireReader& in, Commit& out) noexcept;
@@ -187,6 +198,7 @@ void                put_commit(cont::WireWriter& out, const Commit& commit) noex
 
 // ---- Framing (section 6) ----
 
+// NOLINTNEXTLINE(performance-enum-size): a 16-bit codepoint of its IANA registry, as the wire carries it
 enum class WireFormat : u16
 {
     PublicMessage  = 1U,

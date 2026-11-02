@@ -469,6 +469,17 @@ bool take_leaf_node(cont::WireReader& in, LeafNode& out) noexcept
 
 usize leaf_node_bytes(const LeafNode& node) noexcept
 {
+    return Size().field(leaf_fields_bytes(node)).vector(node.signature.size()).bytes();
+}
+
+void put_leaf_node(cont::WireWriter& out, const LeafNode& node) noexcept
+{
+    put_leaf_fields(out, node);
+    put_vector(out, node.signature);
+}
+
+usize leaf_fields_bytes(const LeafNode& node) noexcept
+{
     Size size;
     size.vector(node.encryption_key.size())
         .vector(node.signature_key.size())
@@ -488,10 +499,10 @@ usize leaf_node_bytes(const LeafNode& node) noexcept
     default:
         return 0U;
     }
-    return size.vector(node.extensions.size()).vector(node.signature.size()).bytes();
+    return size.vector(node.extensions.size()).bytes();
 }
 
-void put_leaf_node(cont::WireWriter& out, const LeafNode& node) noexcept
+void put_leaf_fields(cont::WireWriter& out, const LeafNode& node) noexcept
 {
     put_vector(out, node.encryption_key);
     put_vector(out, node.signature_key);
@@ -508,7 +519,6 @@ void put_leaf_node(cont::WireWriter& out, const LeafNode& node) noexcept
         put_vector(out, node.parent_hash);
     }
     put_vector(out, node.extensions);
-    put_vector(out, node.signature);
 }
 
 bool take_key_package(cont::WireReader& in, KeyPackage& out) noexcept
@@ -693,12 +703,28 @@ bool take_update_path_node(cont::WireReader& in, UpdatePathNode& out) noexcept
            take_list<HpkeCiphertext>(in, out.encrypted_path_secrets, take_hpke_ciphertext);
 }
 
+bool take_update_path(cont::WireReader& in, UpdatePath& out) noexcept
+{
+    out = {};
+    return take_leaf_node(in, out.leaf_node) && take_list<UpdatePathNode>(in, out.nodes, take_update_path_node);
+}
+
+usize update_path_bytes(const UpdatePath& path) noexcept
+{
+    return Size().field(leaf_node_bytes(path.leaf_node)).vector(path.nodes.size()).bytes();
+}
+
+void put_update_path(cont::WireWriter& out, const UpdatePath& path) noexcept
+{
+    put_leaf_node(out, path.leaf_node);
+    put_vector(out, path.nodes);
+}
+
 bool take_commit(cont::WireReader& in, Commit& out) noexcept
 {
     out = {};
     return take_list<ProposalOrRef>(in, out.proposals, take_proposal_or_ref) && take_presence(in, out.has_path) &&
-           (!out.has_path || (take_leaf_node(in, out.path_leaf) &&
-                              take_list<UpdatePathNode>(in, out.path_nodes, take_update_path_node)));
+           (!out.has_path || take_update_path(in, out.path));
 }
 
 usize commit_bytes(const Commit& commit) noexcept
@@ -707,7 +733,7 @@ usize commit_bytes(const Commit& commit) noexcept
     size.vector(commit.proposals.size()).fixed(1U);
     if (commit.has_path)
     {
-        size.field(leaf_node_bytes(commit.path_leaf)).vector(commit.path_nodes.size());
+        size.field(update_path_bytes(commit.path));
     }
     return size.bytes();
 }
@@ -718,8 +744,7 @@ void put_commit(cont::WireWriter& out, const Commit& commit) noexcept
     out.put_u8(commit.has_path ? 1U : 0U);
     if (commit.has_path)
     {
-        put_leaf_node(out, commit.path_leaf);
-        put_vector(out, commit.path_nodes);
+        put_update_path(out, commit.path);
     }
 }
 

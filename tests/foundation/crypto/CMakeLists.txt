@@ -2,8 +2,8 @@
 # generations (NET-STD), the provider interface against Project Wycheproof's vectors, the TLS 1.3 sessions, QUIC packet
 # protection against RFC 9001's and RFC 9369's sample packets, the TLS handshake over QUIC, QUIC's address-validation
 # tokens, Encrypted Client Hello, the TLS exporter, capabilities, message schemas, anti-replay and early data, HPKE
-# against RFC 9180's vectors and MLS (its layers through the key schedule, the secret tree and message framing and
-# protection with the transcript hashes) against the MLS working group's (NET.2).
+# against RFC 9180's vectors and MLS (its layers through the key schedule, the secret tree, message framing and
+# protection with the transcript hashes, and the ratchet tree with TreeKEM) against the MLS working group's (NET.2).
 add_executable(crd-crypto-tests
     test_capability.cpp
     test_hpke.cpp
@@ -11,6 +11,7 @@ add_executable(crd-crypto-tests
     test_mls.cpp
     test_mls_message.cpp
     test_mls_schedule.cpp
+    test_mls_tree.cpp
     test_policy.cpp
     test_provider.cpp
     test_quic.cpp

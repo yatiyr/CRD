@@ -15,6 +15,10 @@
 #                              back to exactly the bytes it took; a private message opens to what was protected and,
 #                              changed in any byte or hostile, is refused with nothing spent; a public message verifies
 #                              exactly when unchanged.
+#   crd-fuzz-crypto-mls-tree   MLS's ratchet tree and TreeKEM: an accepted tree writes back exactly, its resolutions
+#                              and filtered direct paths are section 4.1's restated, tree changes follow a model and
+#                              keep the held hashes equal to a fresh decode's, and a changed update path is refused
+#                              unchanged or decrypts to the honest commit secret.
 #   crd-fuzz-crypto-policy     decode_policy against a restated layout, and generated generation sequences signed by
 #                              the test signer through PolicyStore::apply against the contract's adoption and window
 #                              rules.
@@ -39,6 +43,8 @@ crd_fuzz_target(crd-fuzz-crypto-mls
     SOURCES fuzz_mls.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-mls")
 crd_fuzz_target(crd-fuzz-crypto-mls-message
     SOURCES fuzz_mls_message.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-mls-message")
+crd_fuzz_target(crd-fuzz-crypto-mls-tree
+    SOURCES fuzz_mls_tree.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-mls-tree")
 crd_fuzz_target(crd-fuzz-crypto-policy
     SOURCES fuzz_policy.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 crd_fuzz_target(crd-fuzz-crypto-provider

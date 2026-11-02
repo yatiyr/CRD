@@ -76,18 +76,8 @@ bool in_tree(u32 node, u32 leaves) noexcept
     return tree::valid_size(leaves) && node < tree::node_width(leaves);
 }
 
-// Appendix C's formulas for a node already known to lie inside a tree: the children of a parent and the parent of a
-// node below the root (whose level is at most 30, so every shift stays inside the word).
-u32 left_of(u32 parent) noexcept
-{
-    return parent ^ (1U << (tree::level(parent) - 1U));
-}
-
-u32 right_of(u32 parent) noexcept
-{
-    return parent ^ (3U << (tree::level(parent) - 1U));
-}
-
+// Appendix C's parent of a node already known to lie inside a tree, below the root (whose level is at most 30, so
+// every shift stays inside the word); the children are mls_detail.hpp's.
 u32 parent_of(u32 node) noexcept
 {
     const u32 k = tree::level(node);
@@ -501,14 +491,6 @@ bool fits(const CipherSuite& suite) noexcept
     const usize hash = suite.hash_bytes();
     const usize key  = aead_key_bytes(suite.aead);
     return hash != 0U && hash <= kMaxHashBytes && key != 0U && key <= kMaxAeadKeyBytes;
-}
-
-void copy_bytes(cont::ConstSpan<u8> from, u8* to) noexcept
-{
-    for (usize i = 0U; i < from.size(); ++i)
-    {
-        to[i] = from[i];
-    }
 }
 
 // The epoch's secrets each DeriveSecret(epoch_secret, label) derives (section 8, table 4).

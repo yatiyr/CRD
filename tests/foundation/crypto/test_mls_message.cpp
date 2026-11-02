@@ -579,8 +579,8 @@ TEST_CASE("MLS: every messages vector's key package, proposals, commit and frame
         }
         if (commit.has_path)
         {
-            ++sources[static_cast<usize>(commit.path_leaf.source)];
-            WireReader nodes(commit.path_nodes);
+            ++sources[static_cast<usize>(commit.path.leaf_node.source)];
+            WireReader nodes(commit.path.nodes);
             while (!nodes.done())
             {
                 mls::UpdatePathNode node;
