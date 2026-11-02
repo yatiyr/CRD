@@ -404,7 +404,8 @@ tests):
   client learns neither which names nor which keys exist. Every alert sent and received is reported, as is a
   HelloRetryRequest (read from the ServerHello's random).
 - **S6. Limits.** 0-RTT is off: early data may carry only operations a schema declares idempotent (the TLS 1.3
-  profile, T07), so it waits for NET.2's server-authorized message schemas and anti-replay windows. `close()` is for an
+  profile, T07), so it waits for NET.2's 0-RTT slice (single-use tickets through the [anti-replay](#anti-replay)
+  filter) and its server-authorized message schemas. `close()` is for an
   established session (a handshake is abandoned with `clear()`). The QUIC integration is [S11](#quic-handshake)
   and its address-validation tokens [S13](#address-validation); Encrypted Client Hello is [S14](#ech); the exporter
   that binds capabilities to sessions is [S15](#capability-tokens).
@@ -623,7 +624,7 @@ compared byte for byte.
 9000 section 8.1). A QUIC server validates a client's address statelessly, before it sends more than three times what
 it received (threats T01 to T03): the tokens of a Retry packet and of NEW_TOKEN frames hold everything the server
 needs back, sealed under a key the servers of a fleet share. `crd-crypto` mints and checks the tokens
-(`QuicTokenKeys`, `QuicTokenReplay`, `quic_token_kind`); the transport (4.2a) builds the Retry
+(`QuicTokenKeys`, `ReplayFilter`, `quic_token_kind`); the transport (4.2a) builds the Retry
 packet around a token with `quic_retry_tag`, carries tokens in Initial packets and NEW_TOKEN frames, and puts the
 claims' original connection ID into `original_destination_connection_id` and the Retry's into
 `retry_source_connection_id` (RFC 9000 section 7.3).
@@ -654,14 +655,14 @@ claims' original connection ID into `original_destination_connection_id` and the
   every server to the same next key, and tokens issued under the previous one stay valid until they expire. A token
   under any other key, like any change to a token or anything it is bound to, is `Forged`: a server never tells a
   stale key from a forgery.
-- **Replay.** A NEW_TOKEN token is accepted once (section 8.1.4) when the server checks it against a
-  `QuicTokenReplay`: a split-block Bloom filter (one cache-line block a token, one bit in each of its eight 64-bit
+- **Replay.** A NEW_TOKEN token is accepted once (section 8.1.4) when the server checks it against a `ReplayFilter`
+  ([S16](#anti-replay)): a split-block Bloom filter (one cache-line block a token, one bit in each of its eight 64-bit
   words, 16 bits a token) indexed by the token's authenticated random salt, so no keyed hash is needed and only valid
   tokens enter it. Four slots by issue period: the last, this and the next period (a token may come from the future by
-  the clock skew) and the one after, which is cleared before it begins. A false positive (about 0.1% at capacity)
-  only costs its client the validation; one token checked on two threads at the same instant may be accepted by both,
-  and a check after either refuses it. A Retry token is limited by its 30-second lifetime and its port and connection
-  ID binding.
+  the clock skew) and the one after, which is cleared before it begins. A false positive (about 0.1% at capacity) only
+  costs its client the validation; one token checked on two threads at the same instant may be accepted by both, and a
+  check after either refuses it. A Retry token is limited by its 30-second lifetime and its port and connection ID
+  binding.
 
 Measured with real handshakes (`test_quic_handshake.cpp`, X25519MLKEM768, the flights packed into the Initial and
 Handshake packets and 1,200-byte datagrams a transport sends, 8-byte connection IDs, RFC 9002's 12,000-byte initial
@@ -831,6 +832,51 @@ updates, the six labels distinct), the OpenSSL interop (each library's exporter 
 established connection, over records and QUIC), and `crd-fuzz-crypto-capability` (both decoders against restated
 layouts; generated lives against a restated containment rule and a model of the verification order; any flipped bit of
 a verified token refused).
+
+<a id="anti-replay"></a>
+### Anti-replay
+
+**S16. Anti-replay** ([replay.hpp](../../engine/foundation/crypto/include/crd/crypto/replay.hpp), threat T07). A
+receiver keeps two kinds of record so that an authenticated message an attacker captured and sends again is refused;
+both are checked before anything is decrypted and written only after the message authenticated, so a forgery moves
+nothing. One owner holds both, for every channel that needs them (QUIC now, the media and datagram counters and 0-RTT
+tickets after).
+
+- **Sequence numbers: `ReplayWindow<Bits>`.** QUIC packet numbers (RFC 9000 section 12.3: a receiver discards a
+  packet unless certain it has not processed its number in that space) and any later counter-numbered channel. The
+  largest number accepted and a ring of `Bits / 64` words (RFC 6479): raising the largest clears only the words it
+  passes (at most the whole ring), never shifts, so `accept` is O(1) and touches one cache line in the common case.
+  The `kSpan = Bits - 64` numbers that end at the largest are remembered exactly; an older one is `Stale` (it cannot
+  be told from a replay), a remembered one `Duplicate`, anything else `Fresh`. Held inline, no allocation, one
+  receiver. QUIC's `QuicPacketWindow` is 256 bits (48 bytes, a span of 192 packets) per packet number space, and its
+  largest gives `quic_decode_packet_number` its expected number: a packet 192 behind a later one was declared lost by
+  RFC 9002 long before (three later packets, or 9/8 of a round trip), so dropping it costs at most the retransmission
+  already under way. quiche keeps 128 bits; msquic, ngtcp2 and picoquic keep the ranges they acknowledge. The receive
+  path is: header protection off, decode against the window, `check` (a duplicate costs no AEAD open, admission stage
+  S4's one open per datagram), open, `accept`; a key update keeps the space's window.
+- **Single-use identifiers: `ReplayFilter`.** Random, authenticated 16-byte identifiers used once in any order over a
+  lifetime: QUIC NEW_TOKEN tokens (S13) now, the tickets 0-RTT accepts (RFC 8446 section 8.1) next. The split-block
+  Bloom filter by issue period S13 describes, generalized from it unchanged: its user checks that the period covers
+  the identifier's lifetime and its issuers' clock skew (`QuicTokenKeys::validate` refuses a filter shorter than the
+  NEW_TOKEN lifetime or `kQuicTokenClockSkew` as `NotReady`).
+- **Scope.** A record covers one receiver; the servers of a fleet share none, so an identifier one server accepted is
+  accepted once more by each other (RFC 8446 section 8's zones). That is why early data carries only operations their
+  schema declares idempotent, fleet-wide, and why a ticket's single use in one server's filter is defence in depth
+  beside the provider's freshness check (RFC 8446 section 8.3: AWS-LC refuses early data whose ticket age is more than
+  60 seconds off), not the guarantee.
+
+Evidence: `test_replay.cpp` (windows of 128, 256 and 1,024 bits against the restated contract over twelve random walks
+of 4,000 in-order, reordered, duplicated, replayed and far-jumping numbers, from 0, 2^40 and just below 2^62; the
+span's last remembered and first Stale number; a ring position reused by a number one word on; a jump past the whole
+ring; the number range's extremes and QUIC's last packet number; checks that record nothing; clear; the filter's
+periods, slot reuse after a long silence, refusals and false positives at capacity), `test_quic.cpp` (600 packets
+sealed and header-protected, received with reordering, every seventh duplicated and every fiftieth replayed 300 packets
+later: each opened once, every duplicate and replay dropped before its AEAD, and a forged packet claiming a number far
+ahead opened, refused and leaving the window where it was), `test_quic_token.cpp` (a filter shorter than the clock
+skew refused for short-lived tokens), the `crd-fuzz-crypto-quic` window mode (every verdict, the largest and `any()`
+against the restated contract for each window size over hostile operation sequences; three seeds), and five source
+mutations, each caught (the Stale bound off by one, passed words left set, a Duplicate accepted, the clearing one word
+short, the filter's period not covering the skew); the four window mutations by the fuzz corpus too.
 
 <a id="negotiation"></a>
 ## Version and extension negotiation
