@@ -403,9 +403,9 @@ tests):
   other with `general_error`, and refuses an unpinned client key with `general_error` too, so an unauthenticated
   client learns neither which names nor which keys exist. Every alert sent and received is reported, as is a
   HelloRetryRequest (read from the ServerHello's random).
-- **S6. Limits.** 0-RTT is off: early data may carry only operations a schema declares idempotent (the TLS 1.3
-  profile, T07), so it waits for NET.2's 0-RTT slice (single-use tickets through the [anti-replay](#anti-replay)
-  filter) and its server-authorized message schemas. `close()` is for an
+- **S6. Limits.** 0-RTT is off unless both ends configure it ([S17](#early-data)): early data carries only
+  operations a schema declares idempotent (the TLS 1.3 profile, T07), which the server-authorized message schemas
+  bind. `close()` is for an
   established session (a handshake is abandoned with `clear()`). The QUIC integration is [S11](#quic-handshake)
   and its address-validation tokens [S13](#address-validation); Encrypted Client Hello is [S14](#ech); the exporter
   that binds capabilities to sessions is [S15](#capability-tokens).
@@ -561,8 +561,8 @@ certificate compression and every provider callback are shared code. Decisions:
 - **S11. The QUIC handshake.** Sans-I/O as S1: `provide(level, bytes)` takes the CRYPTO data the transport received
   at an encryption level, in order (the transport reassembles CRYPTO frames by offset), and `pending(level)` and
   `take(level, ...)` hand back the CRYPTO data to send per level, at most `kTlsMaxBufferedBytes` across the levels (a
-  flight beyond it fails the handshake). The levels are Initial, Handshake and Application; 0-RTT is off (S6), so an
-  early data secret fails the handshake. Each level's secret of each side (`has_keys`) becomes the `QuicPacketKey`
+  flight beyond it fails the handshake). The levels carrying CRYPTO data are Initial, Handshake and Application; the
+  Early level carries none and has the client's 0-RTT keys only ([S17](#early-data)). Each level's secret of each side (`has_keys`) becomes the `QuicPacketKey`
   and `QuicHeaderKey` of the connection's version through `derive_keys`, once: the secret is zeroed as it is handed
   out, so no raw secret leaves `crd-crypto`, and `QuicPacketKey::update` derives every later key phase; Initial keys
   are `quic_initial_secret`'s. A level's write secret comes before the peer's read secret, so a packet can always be
@@ -839,8 +839,8 @@ a verified token refused).
 **S16. Anti-replay** ([replay.hpp](../../engine/foundation/crypto/include/crd/crypto/replay.hpp), threat T07). A
 receiver keeps two kinds of record so that an authenticated message an attacker captured and sends again is refused;
 both are checked before anything is decrypted and written only after the message authenticated, so a forgery moves
-nothing. One owner holds both, for every channel that needs them (QUIC now, the media and datagram counters and 0-RTT
-tickets after).
+nothing. One owner holds both, for every channel that needs them (QUIC packets and 0-RTT tickets now, the media and
+datagram counters after).
 
 - **Sequence numbers: `ReplayWindow<Bits>`.** QUIC packet numbers (RFC 9000 section 12.3: a receiver discards a
   packet unless certain it has not processed its number in that space) and any later counter-numbered channel. The
@@ -855,7 +855,7 @@ tickets after).
   path is: header protection off, decode against the window, `check` (a duplicate costs no AEAD open, admission stage
   S4's one open per datagram), open, `accept`; a key update keeps the space's window.
 - **Single-use identifiers: `ReplayFilter`.** Random, authenticated 16-byte identifiers used once in any order over a
-  lifetime: QUIC NEW_TOKEN tokens (S13) now, the tickets 0-RTT accepts (RFC 8446 section 8.1) next. The split-block
+  lifetime: QUIC NEW_TOKEN tokens (S13) and the tickets a server that accepts 0-RTT opens (S17, RFC 8446 section 8.1). The split-block
   Bloom filter by issue period S13 describes, generalized from it unchanged: its user checks that the period covers
   the identifier's lifetime and its issuers' clock skew (`QuicTokenKeys::validate` refuses a filter shorter than the
   NEW_TOKEN lifetime or `kQuicTokenClockSkew` as `NotReady`).
@@ -877,6 +877,60 @@ skew refused for short-lived tokens), the `crd-fuzz-crypto-quic` window mode (ev
 against the restated contract for each window size over hostile operation sequences; three seeds), and five source
 mutations, each caught (the Stale bound off by one, passed words left set, a Duplicate accepted, the clearing one word
 short, the filter's period not covering the skew); the four window mutations by the fuzz corpus too.
+
+<a id="early-data"></a>
+### Early data
+
+**S17. Early data (0-RTT)** ([tls.hpp](../../engine/foundation/crypto/include/crd/crypto/tls.hpp), RFC 9846 sections
+2.3, 4.2.10 and 8; RFC 9001 section 4.6; threat T07) is the provider's 0-RTT under Cerid's rules, off unless both ends
+set `TlsConfig::early_data`:
+
+- **Tickets say what they allow.** A server that accepts early data issues tickets whose early_data extension allows
+  `kTlsEarlyDataBytes` (14,336, the provider's, below one record: 0-RTT data never comes near a key's usage limit) over
+  records and any amount (`kQuicEarlyDataBytes`, 0xffffffff, RFC 9001 section 4.6.1) over QUIC. A client keeps each
+  ticket as Cerid's ticket record (a version byte, that allowance read off the NewSessionTicket, the server's QUIC
+  transport parameters and the provider's session), and a record that does not parse is never offered. A client
+  offers 0-RTT on a ticket that allows it; `send_early()` sends whole messages within the allowance or nothing.
+- **Single-use tickets.** Every ticket carries its issue time, sealed with the session state; a server that accepts
+  early data must hold a `ReplayFilter` whose period covers its ticket lifetime and the provider's freshness window
+  (`kTlsMaxTicketAgeSkew`), so a ticket the provider would still take is never too old for the filter. The ticket's
+  identifier is the first 16 bytes of its salt (random, and authenticated by the opening: the salt derives the
+  sealing key), filed by the sealed issue time; a ticket the filter has seen, or a false positive (0.1% at
+  capacity), is ignored and the handshake runs in full (`Replayed`), so an attacker's replay of a captured first
+  flight gets no early data from that server, and the full handshake's ticket allows 0-RTT again. The scope is one
+  server (RFC 8446 section 8's zones): another server of a fleet accepts the same replay once, which is why only
+  operations their schema declares idempotent run on early data.
+- **The provider's refusals.** The provider refuses early data whose client's ticket age is more than 60 seconds
+  from the server's (`Stale`, RFC 8446 section 8.3), after a HelloRetryRequest, on another application protocol,
+  from a server without early data and, over QUIC, under another early data context (`Rejected`); the resumption
+  stands. A client learns only `Rejected`; its early bytes are gone, and it sends them again after the handshake.
+  The provider forgets every value it predicted, so `complete()` reads the group, AEAD, peer key and protocol again.
+- **Replayable bytes reach the caller marked.** A server's early bytes come only from `read_early()`, never from
+  `read()`, before the handshake ends: the handshake's checks (the pins of a resumed client included) run when the
+  ServerHello is sent, before the first early byte reaches the caller. `read_early()` peeks before it reads: bytes the
+  provider returns while the handshake still runs are early ones, and a peek that ran into the client's Finished
+  completes the handshake and leaves the first 1-RTT bytes pending for `read()`.
+- **QUIC.** The Early level has the client's 0-RTT secret only (a client's from `init()` while `Offered`, a server's
+  once it accepted; zeroed on a client its server refused), handed out once by `derive_keys` like every other. A
+  server names its early data context at `init()`: the transport parameters a client remembers and the application
+  protocol's settings, encoded the same way on every connection (RFC 9000 section 7.4.1); the provider compares it
+  byte for byte with the ticket's. A client's ticket record keeps the server's transport parameters from the ticket's
+  connection, which `remembered_transport_parameters()` gives the transport for its 0-RTT packets; the transport
+  (4.2a) checks that the accepted connection's parameters lower none of them.
+
+Evidence: `test_tls_early.cpp` (14 cases: early bytes read as they come, after the Finished, one byte at a time, none
+at all and with the first 1-RTT bytes beside the Finished; a replayed first flight refused by its server and accepted
+by another of the fleet; a ticket offered twice refused, the bytes sent again and the next ticket used; ticket ages 30
+and 57 seconds off accepted, 63, 120 and 3,600 refused, and a ticket from the future offered to no one; a
+HelloRetryRequest, another protocol and a server without early data refusing it; early data off unless both ends
+configure it; the allowance exact; the pins known before the first early byte; a changed early record failing with
+bad_record_mac; every configuration refusal; one context and filter on four threads; over QUIC the 0-RTT keys of both
+ends agreeing in versions 1 and 2 with the remembered parameters, another context, a HelloRetryRequest and a replayed
+Initial refusing it, and the context's refusals), `crd-fuzz-crypto-tls`'s early data modes over records and QUIC (a
+client that offered and a server that accepted, each fed hostile bytes after a real resumption), `tls_interop.py`
+against OpenSSL 4.0.3 (both ways over records accepted and refused with the bytes sent again, a HelloRetryRequest both
+ways, both ways over QUIC with the 0-RTT secrets' probes equal, and another early data context refusing it), and
+twelve source mutations, each caught.
 
 <a id="negotiation"></a>
 ## Version and extension negotiation

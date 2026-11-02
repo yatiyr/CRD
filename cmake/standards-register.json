@@ -571,6 +571,7 @@
       "evidence": [
         "tests/foundation/crypto/test_quic.cpp",
         "tests/foundation/crypto/test_quic_handshake.cpp",
+        "tests/foundation/crypto/test_tls_early.cpp",
         "tests/foundation/crypto/interop/tls_interop.py"
       ],
       "deprecation": null,
@@ -582,7 +583,7 @@
           "recommended": "Y"
         }
       ],
-      "note": "Proven so far in crd-crypto (NET.2): packet protection (section 5, quic.hpp, against the appendix A packets of RFC 9001 and RFC 9369) and the handshake over QUIC (section 4 and 8, QuicHandshake, decision S11): CRYPTO data per encryption level, each level's secrets into packet and header keys, the quic_transport_parameters extension both ways, application protocols required, alerts as CRYPTO_ERROR at their level, no TLS KeyUpdate, tickets under QUIC's own binding; against OpenSSL's QUIC TLS interface (3.5.9, then 4.0.3) both ways in versions 1 and 2. The 57 codepoint was checked against IANA's TLS ExtensionType Values on 2026-11-01. Address validation (Retry and NEW_TOKEN tokens, RFC 9000 section 8.1) is quic.transport's. Remaining: the transport's use of the keys (key update protocol, discarding keys, the amplification limit) in 4.2a."
+      "note": "Proven so far in crd-crypto (NET.2): packet protection (section 5, quic.hpp, against the appendix A packets of RFC 9001 and RFC 9369) and the handshake over QUIC (section 4 and 8, QuicHandshake, decision S11): CRYPTO data per encryption level, each level's secrets into packet and header keys, the quic_transport_parameters extension both ways, application protocols required, alerts as CRYPTO_ERROR at their level, no TLS KeyUpdate, tickets under QUIC's own binding; 0-RTT (section 4.6, decision S17): the client's early secret into keys once, tickets allowing 0xffffffff, a server's early data context compared with the ticket's, the server's transport parameters remembered with the ticket and the client's early keys zeroed on a refusal; against OpenSSL's QUIC TLS interface (3.5.9, then 4.0.3) both ways in versions 1 and 2, 0-RTT both ways with the early secrets' probes equal. The 57 codepoint was checked against IANA's TLS ExtensionType Values on 2026-11-01. Address validation (Retry and NEW_TOKEN tokens, RFC 9000 section 8.1) is quic.transport's. Remaining: the transport's use of the keys (key update protocol, discarding keys, the amplification limit) in 4.2a."
     },
     {
       "id": "quic.recovery",
@@ -1421,10 +1422,11 @@
       "review": "2027-11-01",
       "evidence": [
         "tests/foundation/crypto/test_tls.cpp",
+        "tests/foundation/crypto/test_tls_early.cpp",
         "tests/foundation/crypto/interop/tls_interop.py"
       ],
       "deprecation": null,
-      "note": "RFC 9846 obsoletes RFC 8446 and keeps version 0x0304 and the wire format; the full re-research of 2026-11-01 maps its technical changes onto NET.2's TLS 1.3 profile (fresh key shares, mandatory key updates before the usage limits, the 2^48-1 epoch bound, general_error, TLS 1.3 only). Proven so far on crd-crypto's TLS records (tls.hpp, decisions S1 to S8): TLS 1.3 only, fresh key shares, general_error toward unauthenticated peers, key updates before the AEAD's usage limit with one request outstanding and the 2^48-1 bound, a peer's user_canceled ignored and its close_notify honoured, against OpenSSL (3.5.9, then 4.0.3) both ways. Tickets and resumption (decision S9): one ticket per connection sealed under a shareable, rotatable ticket key, single-use tickets held in the caller's per-domain store and bound to the context, psk_dhe_ke only with a fresh hybrid share, lifetimes of at most seven days, proven in process and across processes against OpenSSL both ways. 0-RTT and the QUIC and raw UDP record layers remain NET.2's."
+      "note": "RFC 9846 obsoletes RFC 8446 and keeps version 0x0304 and the wire format; the full re-research of 2026-11-01 maps its technical changes onto NET.2's TLS 1.3 profile (fresh key shares, mandatory key updates before the usage limits, the 2^48-1 epoch bound, general_error, TLS 1.3 only). Proven so far on crd-crypto's TLS records (tls.hpp, decisions S1 to S8): TLS 1.3 only, fresh key shares, general_error toward unauthenticated peers, key updates before the AEAD's usage limit with one request outstanding and the 2^48-1 bound, a peer's user_canceled ignored and its close_notify honoured, against OpenSSL (3.5.9, then 4.0.3) both ways. Tickets and resumption (decision S9): one ticket per connection sealed under a shareable, rotatable ticket key, single-use tickets held in the caller's per-domain store and bound to the context, psk_dhe_ke only with a fresh hybrid share, lifetimes of at most seven days, proven in process and across processes against OpenSSL both ways. Early data (decision S17, sections 2.3, 4.2.10 and 8): off unless both ends configure it, tickets stating their allowance (14,336 bytes over records), single-use tickets through the server's ReplayFilter by their sealed issue time, the provider's 60-second freshness check, early bytes reaching a server's caller only through read_early(), a refused client sending its bytes again after the handshake; proven in process and against OpenSSL 4.0.3 both ways, accepted and refused. The raw UDP record layer remains NET.2's."
     },
     {
       "id": "tls.registry-recommended",
