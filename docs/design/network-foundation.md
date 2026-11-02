@@ -1104,9 +1104,21 @@ carries the KEM.
    copath child's resolution without the commit's new members under the provisional GroupContext; a receiver's
    decryption at the lowest path node above it, each derived public key checked against the path's, and the commit
    secret; a Welcome's path secret implanted at the lowest common ancestor (12.4.3.1).
-8. Next: key packages' and leaf nodes' validation against the group (capabilities, lifetimes, credentials),
-   proposals, commits, GroupInfo and Welcome (`welcome.json` and the rest of `messages.json`), and the passive-client
-   scenarios (`passive-client-*.json`).
+8. A group and joining it ([mls_group.hpp](../../engine/foundation/crypto/include/crd/crypto/mls_group.hpp);
+   `welcome.json`, `passive-client-welcome.json` and the Welcomes and GroupInfos of `messages.json`; decisions M8 and
+   M9): the group's extensions (each type at most once, section 13.4; required_capabilities, section 11.1;
+   external_senders, section 12.1.8.1) and the default extension and proposal types every client supports; a leaf
+   node checked against its group (section 7.3: its source where it appears, an encryption key every agreement can
+   use, its credential with the Authentication Service, its own credential type and non-default extensions listed,
+   every GroupContext extension and required capability supported, a key-package leaf's lifetime) and the credential
+   types of a whole tree (section 13.3); a key package checked against its group (section 10.1, its signatures over
+   the leaf and over KeyPackageTBS) and KeyPackageRef; GroupInfo, GroupSecrets and Welcome decoded and written back,
+   GroupInfoTBS signed and verified; the committer's Welcome (the GroupInfo sealed under the welcome key and nonce,
+   then each new member's GroupSecrets sealed to its init key with the sealed GroupInfo as context); and a member's
+   group state: a new group (section 11) and one joined from a Welcome (section 12.4.3.1).
+9. Next: proposals (validation, section 12.2, and application, 12.3), commits (creation and processing, 12.4.1 and
+   12.4.2), external joins (12.4.3.2) and the passive clients that follow them (`passive-client-handling-commit.json`
+   and `passive-client-random.json`), then ReInit and subgroup branching (sections 11.2 and 11.3) and GREASE.
 
 **M5. The receive window** (RFC 9420 section 9.2 leaves its size to the application). OpenMLS's defaults: a receiver
 keeps the keys of the 5 generations below the next unconsumed one of each ratchet (late and reordered messages) and
@@ -1132,6 +1144,42 @@ proposal blanked or replaced (section 7.5's deletion). A received path's derived
 path's, so a committer cannot hand members a secret that disagrees with the keys it published. Parent-hash validity
 at join takes RFC 9420's top-down form: every non-blank parent valid relative to exactly one of its children's
 descendants.
+
+**M8. Validation against a group.** What RFC 9420 leaves to the application is the caller's, never read here:
+the time (`LeafPolicy::now`, so a vector's or a recording's leaves stay checkable years later), the maximum total
+lifetime of a key-package leaf (section 7.2's MUST: `kDefaultMaxLifetime`, OpenMLS's default key package lifetime of
+twelve weeks and its one-hour margin, so the two accept each other's packages; settable per group, the working
+group's vectors use a year and forever), whether a joiner checks the lifetimes of key-package leaves already in the
+tree (section 7.3's RECOMMENDED: on by default; a group whose members update less often turns it off), whether a
+credential binds acceptable identifiers to its key (section 5.3.1's Authentication Service, an interface the
+application implements: asked for every member's credential when joining, each added member's and each external
+sender's), and which pre-shared keys and groups a member holds (a `GroupStore`). A leaf's or init key's encryption
+key must be one every agreement can use (`check_agreement_public_key`: an uncompressed point on the curve, an X25519
+key not of small order), checked once when it enters the group, since every later commit encrypts to it and a key
+that cannot be encrypted to would stop the group; the same holds for every parent key a joiner receives. Whether a
+leaf's capabilities name the group's version and cipher suite is not checked: sections 7.3 and 10.1 do not ask it,
+choosing the best suite all members support is the creator's duty (section 11), and the working group's suite-7
+welcome key package lists suites 1 to 6 only. Default extension and proposal types are supported whether or not a
+list names them. Section 13.3's credential rule is checked over the whole tree in time linear in the leaves and their
+lists (each type in use found once, each member's list marked and cleared again).
+
+**M9. Group state and joining.** A `Group` holds one member's epoch: the GroupContext's fields (owned, so the
+messages they came from need not outlive them), the ratchet tree, the member's path keys, the epoch secrets, the
+secret tree and the interim transcript hash. A new group's epoch 0 comes from a fresh random init secret with no
+commit or PSK secret, so its epoch secret is a fresh random value (section 11); its confirmation tag is over the empty
+confirmed transcript hash. Joining runs section 12.4.3.1 in its order: the Welcome opened for the member's key
+package (`open_welcome`: its KeyPackageRef, the init key checked against the package, the GroupSecrets decrypted with
+the sealed GroupInfo as context, the PSKs looked up in the store and named once each, the GroupInfo opened under the
+welcome key and nonce, which `welcome_secret` and `welcome_key` derive before the GroupContext is known), then the
+group id the member must not already hold, the tree (the one the member fetched, or the GroupInfo's ratchet_tree
+extension) whose root hash is the GroupContext's, the GroupInfo's signature under its signer leaf, the tree's
+join-time checks (M7) and M8's checks of every member (on the member's own leaf, which is its package's, that is
+section 13.4's rule that a joiner supports every GroupContext extension; a separate check proved redundant), the
+member's own leaf (found by its encryption key, then compared whole) and its private keys, the path secret implanted
+at the lowest common ancestor of the signer's and the member's leaves, the epoch's secrets and the confirmation tag.
+A refusal anywhere leaves the group empty. A resumption PSK of usage reinit or branch is refused as Unsupported until
+ReInit and branching land (layer 9), which check the old group they name. Every Welcome of one commit must seal the
+same GroupInfo, since the key and nonce are the joiner secret's.
 
 **M6. Padding** (RFC 9420 section 6.3 leaves its amount to the application). A PrivateMessageContent of L bytes is
 padded with Padmé (Nikitin et al., "Reducing Metadata Leakage from Encrypted Files and Communication with PURBs",
@@ -1175,7 +1223,19 @@ its path secret and commit secret, then written again by its sender and merged a
 groups in each suite that add, update, remove and commit at random, every member's tree, commit secret and held keys
 compared with TreeKEM's invariant at every epoch and each joiner validating the tree and implanting its Welcome path
 secret; doubling, truncation and trailing blanks; the decoder's, the join-time checks', the merge's, the decryption's,
-the tree changes' and the path keys' refusals, each leaving the tree unchanged), `crd-fuzz-crypto-mls-tree` (accepted
+the tree changes' and the path keys' refusals, each leaving the tree unchanged), `test_mls_group.cpp` (every welcome
+vector of the profile: the Welcome decoded and written back, its key package checked, the Welcome opened with the
+init key, the GroupInfo verified under the signer's key and its epoch's confirmation tag; every
+passive-client-welcome vector of the profile joined to its epoch authenticator, the tree given or carried, external
+PSKs held; the messages vectors' Welcomes and GroupInfos written back; groups a creator starts in every suite and
+joiners enter from real key packages, with and without a path, PSKs and the tree in the GroupInfo, every member
+secret, the tree, the keys and the interim hash compared with the committer's; every refusal of a join, each leaving
+the group empty, among them a hostile tree whose root key is a small-order point under valid parent hashes and
+signatures; a group's creation; section 7.3's leaf checks in order, 13.3's credential types, 10.1's key package
+checks and KeyPackageRef; extension lists, capabilities, required capabilities and external senders),
+`crd-fuzz-crypto-mls-group` (every group decoder's acceptance written back, extension lists against a restatement,
+and an honest Welcome changed in any byte refused with the group empty or joining only the honest epoch),
+`crd-fuzz-crypto-mls-tree` (accepted
 trees written back exactly, resolutions and filtered direct paths against section 4.1 restated, tree changes against a
 model with the held hashes equal to a fresh decode's, and a changed update path refused unchanged or decrypting only
 to the honest commit secret), `crd-fuzz-crypto-mls-message`
