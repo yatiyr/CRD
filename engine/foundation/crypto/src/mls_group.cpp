@@ -355,12 +355,7 @@ CryptoError check_node_key(const CipherSuite& suite, cont::ConstSpan<u8> key) no
 
 CryptoError check_psk_id(const CipherSuite& suite, const PreSharedKeyId& id) noexcept
 {
-    if (id.nonce.size() != suite.hash_bytes())
-    {
-        return CryptoError::Malformed;
-    }
-    return id.type == PskType::Resumption && id.usage != ResumptionUsage::Application ? CryptoError::Unsupported
-                                                                                       : CryptoError::None;
+    return id.nonce.size() == suite.hash_bytes() ? CryptoError::None : CryptoError::Malformed;
 }
 
 CryptoError check_leaf(const GroupContext& context, const LeafNode& leaf, LeafRole role, const LeafPolicy& policy,
@@ -784,21 +779,24 @@ void OpenedWelcome::wipe() noexcept
     fresh_buffer(m_secrets_bytes, 0U);
     fresh_buffer(m_info_bytes, 0U);
     secure_zero(m_psk_secret);
-    m_secrets = {};
-    m_info    = {};
-    m_suite   = nullptr;
+    m_secrets    = {};
+    m_info       = {};
+    m_suite      = nullptr;
+    m_resumption = ResumptionUsage::Application;
 }
 
 namespace
 {
-// The GroupSecrets' pre-shared keys (section 12.4.3.1), each held by the store, into `psks`: Malformed for an
-// identity named twice or a nonce not Nh long, Unsupported for a resumption key of usage reinit or branch, NotReady for
-// a key the store does not hold.
+// The GroupSecrets' pre-shared keys (section 12.4.3.1) into `psks`, and in `resumed` the usage of the one that resumes
+// a prior group (Application for none): Malformed for an identity named twice, a nonce not Nh long or a second key
+// that resumes a group; NotReady for a key the member does not hold: the store's, or for a reinit or branch key the
+// resumption secret of `prior` at the epoch it names, which must be its current one (decision M12).
 CryptoError welcome_psks(const CipherSuite& suite, cont::ConstSpan<u8> list, const GroupStore& store,
-                         cont::Array<PreSharedKey>& psks) noexcept
+                         const Group* prior, cont::Array<PreSharedKey>& psks, ResumptionUsage& resumed) noexcept
 {
     cont::Array<cont::ConstSpan<u8>> encodings;
     cont::WireReader                 in(list);
+    resumed = ResumptionUsage::Application;
     while (!in.done())
     {
         const cont::ConstSpan<u8> start = in.rest();
@@ -812,7 +810,21 @@ CryptoError welcome_psks(const CipherSuite& suite, cont::ConstSpan<u8> list, con
         {
             return checked;
         }
-        psk.secret = store.psk(psk.id);
+        if (!resumes_group(psk.id))
+        {
+            psk.secret = store.psk(psk.id);
+        }
+        else if (resumed != ResumptionUsage::Application)
+        {
+            return CryptoError::Malformed; // section 12.4.3.1: the only such key
+        }
+        else
+        {
+            resumed         = psk.id.usage;
+            const bool held = prior != nullptr && prior->ready() &&
+                              same_bytes(psk.id.group_id, prior->context().group_id) && psk.id.epoch == prior->epoch();
+            psk.secret      = held ? prior->secret(EpochSecret::Resumption) : cont::ConstSpan<u8>();
+        }
         if (psk.secret.empty())
         {
             return CryptoError::NotReady;
@@ -829,7 +841,7 @@ CryptoError welcome_psks(const CipherSuite& suite, cont::ConstSpan<u8> list, con
 } // namespace
 
 CryptoError open_welcome(cont::ConstSpan<u8> welcome, const KeyPackage& own, cont::ConstSpan<u8> init_private,
-                         const GroupStore& store, OpenedWelcome& out) noexcept
+                         const GroupStore& store, const Group* prior, OpenedWelcome& out) noexcept
 {
     out.wipe();
     cont::WireReader in(welcome);
@@ -891,7 +903,7 @@ CryptoError open_welcome(cont::ConstSpan<u8> welcome, const KeyPackage& own, con
     cont::Array<PreSharedKey> psks;
     if (error == CryptoError::None)
     {
-        error = welcome_psks(*suite, out.m_secrets.psks, store, psks);
+        error = welcome_psks(*suite, out.m_secrets.psks, store, prior, psks, out.m_resumption);
     }
     if (error == CryptoError::None)
     {
@@ -1000,6 +1012,7 @@ void Group::wipe() noexcept
     }
     m_resumption.clear();
     m_resumption_next = 0U;
+    fresh_buffer(m_reinit, 0U);
 }
 
 CryptoError Group::check_config(const GroupConfig& config) const noexcept
@@ -1231,26 +1244,34 @@ CryptoError Group::take_tree(const CipherSuite& suite, const GroupInfo& info, co
 }
 
 CryptoError Group::join(cont::ConstSpan<u8> welcome, const KeyPackage& own, cont::ConstSpan<u8> init_private,
-                        cont::ConstSpan<u8> leaf_private, cont::ConstSpan<u8> ratchet_tree,
-                        const GroupConfig& config) noexcept
+                        cont::ConstSpan<u8> leaf_private, cont::ConstSpan<u8> ratchet_tree, const GroupConfig& config,
+                        const Group* prior) noexcept
 {
     wipe();
+    if (prior == this)
+    {
+        return CryptoError::Malformed;
+    }
     CryptoError error = config.store == nullptr ? CryptoError::Unsupported : check_config(config);
     if (error != CryptoError::None)
     {
         return error;
     }
     OpenedWelcome opened;
-    error = open_welcome(welcome, own, init_private, *config.store, opened);
+    error = open_welcome(welcome, own, init_private, *config.store, prior, opened);
     if (error != CryptoError::None)
     {
         return error;
     }
     m_config = config;
-    const CipherSuite&  suite   = opened.suite();
-    const GroupInfo&    info    = opened.group_info();
-    const GroupContext& context = info.context;
-    if (config.store->member_of(context.group_id))
+    const CipherSuite&    suite   = opened.suite();
+    const GroupInfo&      info    = opened.group_info();
+    const GroupContext&   context = info.context;
+    const ResumptionUsage usage   = opened.resumption();
+    // A reinitialization may keep the id of the group it ends, in which the member takes no further part (open_welcome
+    // found `prior` holding the reinit key).
+    const bool same_group = usage == ResumptionUsage::Reinit && same_bytes(context.group_id, prior->context().group_id);
+    if (!same_group && config.store->member_of(context.group_id))
     {
         return CryptoError::Replayed;
     }
@@ -1292,6 +1313,10 @@ CryptoError Group::join(cont::ConstSpan<u8> welcome, const KeyPackage& own, cont
     {
         error = confirm(m_now, info.confirmation_tag);
     }
+    if (error == CryptoError::None && usage != ResumptionUsage::Application)
+    {
+        error = check_resumed(*prior, usage);
+    }
     if (error == CryptoError::None)
     {
         error = m_now.secret_tree.init(suite, m_now.secrets.get(EpochSecret::Encryption), m_now.tree.leaves(),
@@ -1302,5 +1327,84 @@ CryptoError Group::join(cont::ConstSpan<u8> welcome, const KeyPackage& own, cont
         wipe();
     }
     return error;
+}
+
+// ---- Resumed groups (sections 11.2, 11.3 and 12.4.3.1; decision M12) ----
+
+bool Group::reinit_proposal(ReInit& out) const noexcept
+{
+    out = {};
+    cont::WireReader in(view(m_reinit));
+    Proposal         proposal;
+    if (!ended() || !take_proposal(in, proposal))
+    {
+        return false;
+    }
+    out = proposal.reinit;
+    return true;
+}
+
+CryptoError Group::check_resumed(const Group& prior, ResumptionUsage usage) const noexcept
+{
+    if (m_now.epoch != 1U)
+    {
+        return CryptoError::Malformed; // the resumed group's first epoch
+    }
+    const bool reinit = usage == ResumptionUsage::Reinit;
+    if (reinit)
+    {
+        // Section 11.2: the group the prior group's last commit, a ReInit's, names.
+        ReInit params;
+        if (!prior.reinit_proposal(params))
+        {
+            return CryptoError::NotReady;
+        }
+        if (params.version != kProtocolVersion || params.cipher_suite != m_suite->id ||
+            !same_bytes(params.group_id, view(m_group_id)) || !same_bytes(params.extensions, view(m_now.extensions)))
+        {
+            return CryptoError::Malformed;
+        }
+    }
+    else if (prior.suite().id != m_suite->id)
+    {
+        return CryptoError::Malformed; // section 11.3: the prior group's version and cipher suite
+    }
+    // Each member one of the prior group's, judged by the Authentication Service (the same member as a distinct leaf
+    // of the prior group's tree, whose identifiers it accepts as successors); for a reinitialization, all of them.
+    const RatchetTree& old = prior.tree();
+    cont::Array<u8>    matched;
+    if (!matched.try_reserve(old.leaves()))
+    {
+        return CryptoError::ProviderFailure;
+    }
+    matched.resize(old.leaves(), 0U);
+    for (u32 leaf = 0U; leaf < m_now.tree.leaves(); ++leaf)
+    {
+        LeafNode member{};
+        if (!m_now.tree.leaf_node(leaf, member))
+        {
+            continue;
+        }
+        bool found = false;
+        for (u32 i = 0U; !found && i < old.leaves(); ++i)
+        {
+            LeafNode before{};
+            found = matched[i] == 0U && old.leaf_node(i, before) &&
+                    m_config.authentication->valid_successor(before.credential, member.credential);
+            matched[i] = found ? 1U : matched[i];
+        }
+        if (!found)
+        {
+            return CryptoError::Forged;
+        }
+    }
+    for (u32 i = 0U; reinit && i < old.leaves(); ++i)
+    {
+        if (matched[i] == 0U && !old.blank(2U * i))
+        {
+            return CryptoError::Forged;
+        }
+    }
+    return CryptoError::None;
 }
 } // namespace crd::crypto::mls

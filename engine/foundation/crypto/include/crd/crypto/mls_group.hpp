@@ -1,11 +1,12 @@
 #pragma once
 
-// crd-crypto -- an MLS group, RFC 9420 (NET.2; contract: docs/design/network-foundation.md#mls, M3 layers 8 to 10a and
-// decisions M8 to M11): the group's extensions (sections 7.2, 11.1, 12.1.8.1, 12.4.3.2 and 13.4), the validation of
+// crd-crypto -- an MLS group, RFC 9420 (NET.2; contract: docs/design/network-foundation.md#mls, M3 layers 8 to 10b and
+// decisions M8 to M12): the group's extensions (sections 7.2, 11.1, 12.1.8.1, 12.4.3.2 and 13.4), the validation of
 // leaf nodes and key packages against a group (5.3.1, 7.3, 10.1 and 13.3), the GroupInfo and Welcome a committer seals
 // for new members (12.4.3 and 12.4.3.1), and a member's group state: a new group (section 11), one joined from a
-// Welcome or by an external commit (12.4.3.2), and its epochs' messages: proposals, application data and commits
-// received and sent, and a commit staged and merged (5.2 and 12.1 to 12.4.2; mls_commit.cpp).
+// Welcome or by an external commit (12.4.3.2), one that reinitializes or branches a prior group (11.2 and 11.3), and
+// its epochs' messages: proposals, application data and commits received and sent, and a commit staged and merged
+// (5.2 and 12.1 to 12.4.2; mls_commit.cpp).
 //
 //   time        every lifetime check takes the caller's clock (LeafPolicy::now); nothing here reads one.
 //   identity    whether a credential binds acceptable identifiers to its key is the application's Authentication
@@ -279,8 +280,11 @@ struct WelcomeMember
                                        cont::ConstSpan<PreSharedKey> psks, cont::ConstSpan<u8> group_info,
                                        cont::ConstSpan<WelcomeMember> members, cont::Array<u8>& out) noexcept;
 
-// A Welcome opened for one member: its GroupSecrets and GroupInfo, views of the decrypted bytes it owns, and the PSK
-// secret of the GroupSecrets' keys. Zeroed when replaced or destroyed.
+class Group;
+
+// A Welcome opened for one member: its GroupSecrets and GroupInfo, views of the decrypted bytes it owns, the PSK
+// secret of the GroupSecrets' keys and the usage of the one that resumes a prior group (Application when none does).
+// Zeroed when replaced or destroyed.
 class OpenedWelcome
 {
 public:
@@ -299,10 +303,11 @@ public:
     {
         return cont::ConstSpan<u8>(m_psk_secret, ready() ? m_suite->hash_bytes() : 0U);
     }
+    [[nodiscard]] ResumptionUsage resumption() const noexcept { return m_resumption; }
 
 private:
     friend CryptoError open_welcome(cont::ConstSpan<u8>, const KeyPackage&, cont::ConstSpan<u8>, const GroupStore&,
-                                    OpenedWelcome&) noexcept;
+                                    const Group*, OpenedWelcome&) noexcept;
     void wipe() noexcept;
 
     const CipherSuite* m_suite = nullptr;
@@ -311,21 +316,25 @@ private:
     GroupSecrets       m_secrets;
     GroupInfo          m_info;
     u8                 m_psk_secret[kMaxHashBytes] = {};
+    ResumptionUsage    m_resumption                = ResumptionUsage::Application;
 };
 
 // The first steps of joining (section 12.4.3.1) for the member whose key package is `own` and whose init key is
 // `init_private` (SerializePrivateKey form), in this order:
 //   Malformed    a Welcome, GroupSecrets or GroupInfo that does not decode whole, secrets or tags of the wrong
-//                length, a PSK identity named twice or with a nonce not Nh long, or an extension list naming a type
-//                twice;
-//   Unsupported  a cipher suite outside the profile or other than the key package's, a GroupInfo of another suite,
-//                or a resumption PSK of usage reinit or branch (section 11's reinitialization and branching);
+//                length, a PSK identity named twice or with a nonce not Nh long, a second resumption PSK of usage
+//                reinit or branch (section 12.4.3.1: the only such PSK), or an extension list naming a type twice;
+//   Unsupported  a cipher suite outside the profile or other than the key package's, or a GroupInfo of another
+//                suite;
 //   BadKey       no entry for the key package's KeyPackageRef, or an init key that is not the package's;
-//   NotReady     a PSK the store does not hold;
+//   NotReady     a PSK the member does not hold: an external or application resumption PSK the store does not hold,
+//                or a reinit or branch PSK that does not name `prior` (the group the Welcome resumes, nullptr for
+//                none) and its current epoch, whose resumption secret it then is (sections 11.2 and 11.3);
 //   Forged       GroupSecrets or a GroupInfo that does not open (HPKE's other refusals pass through).
-// The GroupInfo's signature, tree and confirmation tag are Group::join's. A refusal leaves `out` empty.
+// The GroupInfo's signature, tree and confirmation tag, and a resumed group's rules, are Group::join's. A refusal
+// leaves `out` empty.
 [[nodiscard]] CryptoError open_welcome(cont::ConstSpan<u8> welcome, const KeyPackage& own,
-                                       cont::ConstSpan<u8> init_private, const GroupStore& store,
+                                       cont::ConstSpan<u8> init_private, const GroupStore& store, const Group* prior,
                                        OpenedWelcome& out) noexcept;
 
 // ---- Proposals and commits (sections 5.2 and 12.1 to 12.4.3.2; M3 layers 9 and 10a, decisions M10 and M11) ----
@@ -408,6 +417,8 @@ public:
     [[nodiscard]] Sender committer() const noexcept { return m_committer; }
     // Whether the commit removes the member: merging it leaves the group empty (section 12.4.2).
     [[nodiscard]] bool removes_self() const noexcept { return m_removed; }
+    // Whether the commit is a ReInit's (its only proposal, section 12.2): merging it ends the group (Group::ended).
+    [[nodiscard]] bool reinitializes() const noexcept { return m_reinit; }
     [[nodiscard]] bool has_path() const noexcept { return m_has_path; }
     // The committed proposals in the commit's order, each with its sender (the committer for one sent by value).
     [[nodiscard]] usize proposal_count() const noexcept { return m_entries.size(); }
@@ -438,6 +449,7 @@ private:
     Sender              m_committer;
     bool                m_removed  = false;
     bool                m_has_path = false;
+    bool                m_reinit   = false;
     cont::Array<u8>     m_bytes; // the committed proposals' encodings
     cont::Array<Entry>  m_entries;
     cont::Array<u32>    m_added;
@@ -471,12 +483,14 @@ struct CommitOptions
 {
     SendOptions send;
     // The member's own proposals, committed by value after the cached ones, in this order: Add, Remove, PreSharedKey
-    // and GroupContextExtensions (an Update by value would be the committer's own, which section 12.2 refuses).
+    // and GroupContextExtensions (an Update by value would be the committer's own, which section 12.2 refuses), or a
+    // ReInit alone (section 12.2: a ReInit beside any other proposal, cached ones included, is refused).
     cont::ConstSpan<Proposal> proposals;
     // Every proposal cached this epoch that keeps the list valid, by reference, as section 12.2 prefers: a Remove over
     // an Update of the same leaf, the latest Update of a leaf, none of the committer's own Updates or removal, the
     // first of repeated Adds of one client, PreSharedKeys and Removes, the latest GroupContextExtensions, and only
-    // proposals valid on their own (section 12.1).
+    // proposals valid on their own (section 12.1); the latest valid ReInit only when no other proposal is committed
+    // (section 12.2 prefers the others; the ReInit is proposed again in a later epoch).
     bool pending = true;
     // Whether the commit carries a path when no proposal requires one and the list is not empty (section 12.4).
     bool path = true;
@@ -511,6 +525,23 @@ struct ExternalJoinOptions
 struct ExternalJoinResult
 {
     cont::Array<u8> message;
+    cont::Array<u8> group_info;
+};
+
+// What the first commit of a group that resumes a prior one holds (sections 11.2 and 11.3) besides the reinit or
+// branch PSK: an Add of each other member, from key packages of the new group's cipher suite, and the new group's
+// GroupInfo, which the Welcome seals.
+struct ResumeOptions
+{
+    cont::ConstSpan<KeyPackage> members;
+    GroupInfoOptions            group_info;
+};
+
+// A group that resumes a prior one, at its epoch 1: the Welcome's MLSMessage for its other members (empty when it has
+// none) and the signed GroupInfo's MLSMessage.
+struct ResumeResult
+{
+    cont::Array<u8> welcome;
     cont::Array<u8> group_info;
 };
 
@@ -593,11 +624,42 @@ public:
     //   BadKey       no leaf identical to `own`'s, a `leaf_private` that is not its key, or a path secret whose keys
     //                are not the tree's (PathKeys::implant at the common ancestor of the signer's and the member's
     //                leaves).
+    // A Welcome whose PSKs resume `prior` (its reinit or branch PSK, open_welcome's) joins a group that reinitializes
+    // or branches it (sections 11.2, 11.3 and 12.4.3.1; decision M12), after the checks above:
+    //   Malformed    a group past epoch 1; for a reinit, a group id, cipher suite or extensions other than the
+    //                ReInit's (or a ReInit of another version); for a branch, another cipher suite than `prior`'s;
+    //   NotReady     a reinit PSK of a `prior` that no ReInit ended;
+    //   Forged       a member the Authentication Service does not judge one of `prior`'s (valid_successor of a
+    //                distinct leaf of `prior`), or, for a reinit, a member of `prior` the new group lacks.
+    // A reinitialization may keep `prior`'s group id, which the store's check then spares. `prior` is another group
+    // than this one (Malformed otherwise) and is consulted only for such a Welcome.
     // `own`, `init_private` and `leaf_private` are the member's key package and its two private keys. Replaces what
     // the group held; a refusal leaves it empty.
     [[nodiscard]] CryptoError join(cont::ConstSpan<u8> welcome, const KeyPackage& own,
                                    cont::ConstSpan<u8> init_private, cont::ConstSpan<u8> leaf_private,
-                                   cont::ConstSpan<u8> ratchet_tree, const GroupConfig& config) noexcept;
+                                   cont::ConstSpan<u8> ratchet_tree, const GroupConfig& config,
+                                   const Group* prior = nullptr) noexcept;
+
+    // The new group of a ReInit (section 11.2; decision M12) from `ended`, a group a commit of that ReInit ended: the
+    // ReInit's group id, cipher suite and extensions (`creator`, `leaf_private` and `signer` as `create` and `commit`
+    // take them, in the new suite), then its first commit, merged at once (the creator is its only member at epoch
+    // 0): an Add of each of `options.members`, the PSK of usage reinit naming `ended` and its epoch (the epoch the
+    // ReInit's commit began) under a fresh Nh-byte nonce, with `ended`'s resumption secret, and a path; the group
+    // is then at epoch 1 and `out` holds its Welcome and GroupInfo. In this order: Malformed for `ended` this group,
+    // NotReady for a group no ReInit ended, Unsupported for a ReInit of a version or a cipher suite this build does
+    // not implement; `create`'s and `commit`'s refusals; check_resumed's, so the new group is one its members take.
+    // Replaces what the group held; a refusal leaves it and `out` empty.
+    [[nodiscard]] CryptoError reinit(const Group& ended, const Signer& signer, const LeafNode& creator,
+                                     cont::ConstSpan<u8> leaf_private, const ResumeOptions& options,
+                                     const GroupConfig& config, ResumeResult& out) noexcept;
+
+    // A subgroup branched from `from` (section 11.3; decision M12): a new group of `group_id` and `extensions` in
+    // `from`'s cipher suite, whose first commit is `reinit`'s with a PSK of usage branch naming `from` and its current
+    // epoch. Malformed for `from` this group, NotReady for an empty one; then as `reinit`.
+    [[nodiscard]] CryptoError branch(const Group& from, cont::ConstSpan<u8> group_id, cont::ConstSpan<u8> extensions,
+                                     const Signer& signer, const LeafNode& creator, cont::ConstSpan<u8> leaf_private,
+                                     const ResumeOptions& options, const GroupConfig& config,
+                                     ResumeResult& out) noexcept;
 
     // Joins by an external commit (section 12.4.3.2; decision M11) from `group_info`, a GroupInfo MLSMessage that
     // carries the external_pub extension: the ExternalInit's init secret exported to the group's external key (section
@@ -623,11 +685,14 @@ public:
                                             const GroupConfig& config, ExternalJoinResult& out) noexcept;
 
     // Processes one MLSMessage of the group (sections 6, 12.1, 12.4.2 and 12.4.3.2), in this order:
+    //   NotReady     an empty group; OutOfWindow for one a ReInit ended (section 12.4.2), which takes no message;
     //   Unsupported  a wire format other than a public or private message;
     //   Malformed    a message that does not decode, of another group, framing section 6 refuses, a PrivateMessage
     //                whose padding or content is malformed, a proposal of a type its sender may not send (an
     //                ExternalInit, an external sender's Update, a new member's proposal other than an Add), a commit
-    //                whose list section 12.2 refuses or that lacks a required path, or an external commit (section
+    //                whose list section 12.2 refuses (a ReInit beside another proposal, or of an older version; a
+    //                reinit or branch PSK, which only a resumed group's first commit holds) or that lacks a required
+    //                path, or an external commit (section
     //                12.4.3.2) without a path, with a proposal by reference, or whose list is not one ExternalInit
     //                (its kem_output Npk long), at most one Remove and PSKs;
     //   OutOfWindow  another epoch, a sender leaf that is blank or outside the tree, or an external sender the group
@@ -651,11 +716,11 @@ public:
     [[nodiscard]] CryptoError process(cont::ConstSpan<u8> message, ReceivedMessage& out) noexcept;
 
     // The member's own proposal (section 12.1) as an MLSMessage in `out`, cached as received (`ref`, Nh bytes, its
-    // reference): an Add, Remove, PreSharedKey or GroupContextExtensions. NotReady for an empty group; Malformed for an
-    // Update (propose_update's), an ExternalInit, a wire format other than a public or private message or a proposal
-    // that does not encode; Unsupported for a ReInit (decision M10), another type, or a signer that is not the member's
-    // leaf's or of another algorithm; BadLength for `ref` not Nh long; Exhausted past the epoch's cache. On a refusal
-    // `out` and `ref` are empty.
+    // reference): an Add, Remove, PreSharedKey, ReInit or GroupContextExtensions. NotReady for an empty group or one a
+    // ReInit ended (check_signer's, as for every send); Malformed for an Update (propose_update's), an ExternalInit, a
+    // wire format other than a public or private message or a proposal that does not encode; Unsupported for another
+    // type, or a signer that is not the member's leaf's or of another algorithm; BadLength for `ref` not Nh long;
+    // Exhausted past the epoch's cache. On a refusal `out` and `ref` are empty.
     [[nodiscard]] CryptoError propose(const Signer& signer, const Proposal& proposal, const SendOptions& options,
                                       cont::Array<u8>& out, cont::Span<u8> ref) noexcept;
     // An Update of the member's own leaf (section 12.1.2): a fresh HPKE key, the leaf re-signed with source update,
@@ -670,8 +735,9 @@ public:
     // The member's commit (section 12.4.1): the proposals CommitOptions names, validated as a receiver would (the
     // refusals of `process` for a commit), a path when required or asked for, the commit signed under the current
     // GroupContext and protected with the current epoch's keys, the new epoch's GroupInfo signed, and a Welcome for the
-    // members it adds (each with its path secret, every PSK named). Nothing of the group changes until `merge`, but a
-    // PrivateMessage spends the sender's handshake generation. On a refusal `out` is empty.
+    // members it adds (each with its path secret, every PSK named); a ReInit's commit publishes no external key
+    // (Malformed with GroupInfoOptions::external_pub: the group it ends takes no joiner). Nothing of the group changes
+    // until `merge`, but a PrivateMessage spends the sender's handshake generation. On a refusal `out` is empty.
     [[nodiscard]] CryptoError commit(const Signer& signer, const CommitOptions& options, CommitResult& out) noexcept;
 
     // The current epoch's GroupInfo MLSMessage (section 12.4.3), signed by the member: what it publishes for new
@@ -682,9 +748,17 @@ public:
 
     // Makes a staged commit the group's epoch: the past epoch's resumption PSK kept, the member's path keys pruned
     // (section 7.5) and the path's applied, an Update of the member's own leaf adopting its kept key, the proposal
-    // cache dropped. A commit that removes the member leaves the group empty. OutOfWindow for a commit staged for
-    // another group or epoch (the group moved on), NotReady for an empty one; `staged` is left empty either way.
+    // cache dropped. A commit that removes the member leaves the group empty; a ReInit's ends it (`ended`). OutOfWindow
+    // for a commit staged for another group or epoch (the group moved on), NotReady for an empty one, ProviderFailure
+    // when a ReInit cannot be kept (the group unchanged); `staged` is left empty either way.
     [[nodiscard]] CryptoError merge(StagedCommit& staged) noexcept;
+
+    // Whether a merged ReInit's commit ended the group (section 12.4.2): it sends and processes no more messages, keeps
+    // its last epoch's secrets, and waits for the Welcome of the new group the ReInit names, which `reinit` creates and
+    // `join` with this group as `prior` enters. `reinit_proposal` reads the ReInit (its fields views of the group's
+    // state); false for a group no ReInit ended.
+    [[nodiscard]] bool ended() const noexcept { return !m_reinit.empty(); }
+    [[nodiscard]] bool reinit_proposal(ReInit& out) const noexcept;
 
     [[nodiscard]] bool               ready() const noexcept { return m_suite != nullptr; }
     [[nodiscard]] const CipherSuite& suite() const noexcept { return *m_suite; }
@@ -735,8 +809,22 @@ private:
     [[nodiscard]] cont::ConstSpan<u8> psk_of(const PreSharedKeyId& id) const noexcept;
     // The kept leaf key of the member's own Update whose public key is `public_key` (its index; size() for none).
     [[nodiscard]] usize pending_leaf(cont::ConstSpan<u8> public_key) const noexcept;
-    // Unsupported unless `signer` holds the suite's algorithm and the member's leaf's signature key.
+    // NotReady for an empty group or one a ReInit ended; Unsupported unless `signer` holds the suite's algorithm and
+    // the member's leaf's signature key.
     [[nodiscard]] CryptoError check_signer(const Signer& signer) const noexcept;
+    // Decision M12's checks of the group a Welcome or a member's `resume` made against the `prior` group it resumes by
+    // a PSK of `usage` (sections 11.2, 11.3 and 12.4.3.1): Group::join's refusals of a resumed group.
+    [[nodiscard]] CryptoError check_resumed(const Group& prior, ResumptionUsage usage) const noexcept;
+    // `reinit` and `branch`: the new group of `suite`, `group_id` and `extensions`, its first commit with the PSK of
+    // `usage` naming `from` and its current epoch, merged, and check_resumed.
+    [[nodiscard]] CryptoError resume(const Group& from, ResumptionUsage usage, const CipherSuite& suite,
+                                     cont::ConstSpan<u8> group_id, cont::ConstSpan<u8> extensions,
+                                     const Signer& signer, const LeafNode& creator, cont::ConstSpan<u8> leaf_private,
+                                     const ResumeOptions& options, const GroupConfig& config,
+                                     ResumeResult& out) noexcept;
+    // `commit` with the key a resumed group's first commit holds (`resumed`; nullptr for every other commit).
+    [[nodiscard]] CryptoError commit_with(const Signer& signer, const CommitOptions& options,
+                                          const PreSharedKey* resumed, CommitResult& out) noexcept;
     // The tree of a GroupInfo a member joins from (`ratchet_tree`, else its extension) and Group::join's checks of it.
     [[nodiscard]] CryptoError take_tree(const CipherSuite& suite, const GroupInfo& info,
                                         cont::ConstSpan<u8> ratchet_tree) noexcept;
@@ -783,8 +871,9 @@ private:
     [[nodiscard]] CryptoError record(const Plan& plan, const Sender& committer, bool has_path,
                                      StagedCommit& staged) const noexcept;
     [[nodiscard]] CryptoError process_commit(ReceivedMessage& out) noexcept;
-    // The cached proposals section 12.2 prefers for the member's commit (CommitOptions::pending).
-    [[nodiscard]] CryptoError select_pending(u32 committer, Plan& plan) const noexcept;
+    // The cached proposals section 12.2 prefers for the member's commit (CommitOptions::pending); a ReInit only when
+    // nothing else, `by_value` included, is committed.
+    [[nodiscard]] CryptoError select_pending(u32 committer, bool by_value, Plan& plan) const noexcept;
 
     const CipherSuite*       m_suite = nullptr;
     GroupConfig              m_config;
@@ -795,5 +884,6 @@ private:
     cont::Array<Resumption>  m_resumption; // a ring of config.resumption_epochs past epochs
     usize                    m_resumption_next = 0U;
     cont::Array<HpkeKey>     m_pending_leaves; // the leaf keys of the member's own Updates
+    cont::Array<u8>          m_reinit;         // the encoding of the ReInit proposal that ended the group
 };
 } // namespace crd::crypto::mls

@@ -1,7 +1,7 @@
 // crd-crypto -- MLS proposals and commits, RFC 9420 sections 5.2 and 12.1 to 12.4.3.2: a member's messages of an
 // epoch (proposals, application data and commits) received and sent, a commit staged and merged, GroupInfos signed
-// for new members, and external commits made and received (NET.2; contract: docs/design/network-foundation.md#mls,
-// M3 layers 9 and 10a and decisions M10 and M11).
+// for new members, external commits made and received, and groups that reinitialize or branch a prior one (NET.2;
+// contract: docs/design/network-foundation.md#mls, M3 layers 9, 10a and 10b and decisions M10 to M12).
 #include <crd/crypto/mls_group.hpp>
 
 #include "byte_spans.hpp"
@@ -67,6 +67,13 @@ bool signs_for(const CipherSuite& suite, const Signer& signer, cont::ConstSpan<u
            same_bytes(cont::ConstSpan<u8>(key, bytes), signature_key);
 }
 
+// Whether a ReInit is valid on its own (section 12.1.5): a version no older than the group's (every group of this build
+// is MLS 1.0), each extension named once (section 13.4). Its cipher suite is the new group's creator's to judge.
+bool reinit_valid(const ReInit& reinit) noexcept
+{
+    return reinit.version >= kProtocolVersion && extensions_distinct(reinit.extensions);
+}
+
 // Whether GroupInfoOptions' extensions are each named once and leave ratchet_tree and external_pub to their flags.
 bool info_options_valid(const GroupInfoOptions& options) noexcept
 {
@@ -120,6 +127,7 @@ void StagedCommit::clear() noexcept
     m_committer  = {};
     m_removed    = false;
     m_has_path   = false;
+    m_reinit     = false;
     fresh_buffer(m_bytes, 0U);
     m_entries.clear();
     m_added.clear();
@@ -170,11 +178,13 @@ struct Group::Item
     cont::ConstSpan<u8> reference;
 };
 
-// A commit's list and what checking it found: its PSKs in the list's order and whether it requires a path.
+// A commit's list and what checking it found: its PSKs in the list's order and whether it requires a path. A resumed
+// group's first commit holds the one reinit or branch key it may (`resumed`, decision M12).
 struct Group::Plan
 {
     cont::Array<Item>         items;
     cont::Array<PreSharedKey> psks;
+    const PreSharedKey*       resumed    = nullptr;
     bool                      needs_path = false;
 };
 
@@ -239,6 +249,7 @@ CryptoError Group::stage_list(const Sender& committer, Plan& plan, StagedCommit&
     const Item*                      extensions = nullptr;
     usize                            inits      = 0U; // ExternalInits
     usize                            removes    = 0U;
+    usize                            reinits    = 0U;
     if (!leaves.try_reserve(count) || !psk_ids.try_reserve(count) || !plan.psks.try_reserve(count) ||
         !staged.m_added.try_reserve(count))
     {
@@ -282,7 +293,13 @@ CryptoError Group::stage_list(const Sender& committer, Plan& plan, StagedCommit&
             {
                 return checked;
             }
-            const PreSharedKey key{proposal.psk, psk_of(proposal.psk)};
+            // A reinit or branch key only in a resumed group's first commit, which holds it once (section 12.1.4).
+            const bool resumed = resumes_group(proposal.psk);
+            if (resumed && plan.resumed == nullptr)
+            {
+                return CryptoError::Malformed;
+            }
+            const PreSharedKey key{proposal.psk, resumed ? plan.resumed->secret : psk_of(proposal.psk)};
             if (key.secret.empty())
             {
                 return CryptoError::NotReady;
@@ -306,14 +323,24 @@ CryptoError Group::stage_list(const Sender& committer, Plan& plan, StagedCommit&
             }
             ++inits;
             break;
+        case code(ProposalType::ReInit):
+            if (!reinit_valid(proposal.reinit))
+            {
+                return CryptoError::Malformed;
+            }
+            ++reinits;
+            break;
         default:
-            return CryptoError::Unsupported; // ReInit lands with section 11.2 (decision M10); no other type is ours
+            return CryptoError::Unsupported; // no other type is this build's
         }
     }
-    if (repeated(leaves) || repeats(psk_ids) || (external && (inits != 1U || removes > 1U)))
+    // Section 12.2: a ReInit is the only proposal of its commit.
+    if (repeated(leaves) || repeats(psk_ids) || (external && (inits != 1U || removes > 1U)) ||
+        (reinits != 0U && count != 1U))
     {
         return CryptoError::Malformed;
     }
+    staged.m_reinit = reinits != 0U;
 
     // Section 12.3: the new GroupContext's extensions, then Updates, Removes and Adds on a copy of the tree, each
     // proposal checked as section 12.1 says against the new extensions.
@@ -622,6 +649,10 @@ CryptoError Group::process(cont::ConstSpan<u8> message, ReceivedMessage& out) no
     {
         return CryptoError::NotReady;
     }
+    if (ended())
+    {
+        return CryptoError::OutOfWindow; // section 12.4.2: the group a ReInit ended takes no message
+    }
     CryptoError error = copy_into(message, out.m_bytes);
     Message     decoded;
     if (error == CryptoError::None && !take_message(view(out.m_bytes), decoded))
@@ -874,7 +905,7 @@ CryptoError Group::process_commit(ReceivedMessage& out) noexcept
 
 CryptoError Group::check_signer(const Signer& signer) const noexcept
 {
-    if (!ready())
+    if (!ready() || ended())
     {
         return CryptoError::NotReady;
     }
@@ -993,7 +1024,7 @@ CryptoError Group::propose(const Signer& signer, const Proposal& proposal, const
 {
     const u16  type = proposal.type;
     const bool ours = type == code(ProposalType::Add) || type == code(ProposalType::Remove) ||
-                      type == code(ProposalType::PreSharedKey) ||
+                      type == code(ProposalType::PreSharedKey) || type == code(ProposalType::ReInit) ||
                       type == code(ProposalType::GroupContextExtensions);
     CryptoError error = CryptoError::None;
     if (!ready())
@@ -1006,7 +1037,7 @@ CryptoError Group::propose(const Signer& signer, const Proposal& proposal, const
     }
     else if (!ours)
     {
-        error = CryptoError::Unsupported; // ReInit lands with section 11.2 (decision M10); no other type is ours
+        error = CryptoError::Unsupported; // no other type is this build's
     }
     if (error != CryptoError::None)
     {
@@ -1096,7 +1127,7 @@ CryptoError Group::protect(const Signer& signer, cont::ConstSpan<u8> data, const
 
 // ---- Committing ----
 
-CryptoError Group::select_pending(u32 committer, Plan& plan) const noexcept
+CryptoError Group::select_pending(u32 committer, bool by_value, Plan& plan) const noexcept
 {
     const CipherSuite& suite  = *m_suite;
     const GroupConfig& config = m_config;
@@ -1215,7 +1246,7 @@ CryptoError Group::select_pending(u32 committer, Plan& plan) const noexcept
             candidates.push_back({proposal.type, proposal.add.leaf_node.signature_key, i});
         }
         if (is(i, ProposalType::PreSharedKey) && check_psk_id(suite, proposal.psk) == CryptoError::None &&
-            !psk_of(proposal.psk).empty())
+            !resumes_group(proposal.psk) && !psk_of(proposal.psk).empty())
         {
             candidates.push_back({proposal.type, all[i].encoding, i});
         }
@@ -1229,6 +1260,21 @@ CryptoError Group::select_pending(u32 committer, Plan& plan) const noexcept
             !same_bytes(candidates[i].key, candidates[i - 1U].key))
         {
             chosen[candidates[i].index] = 1U;
+        }
+    }
+    // The latest valid ReInit, only when nothing else is committed: section 12.2 prefers the other proposals, and the
+    // ReInit is proposed again in a later epoch.
+    bool alone = !by_value;
+    for (usize i = 0U; alone && i < count; ++i)
+    {
+        alone = chosen[i] == 0U;
+    }
+    for (usize i = count; alone && i-- > 0U;)
+    {
+        if (is(i, ProposalType::ReInit) && reinit_valid(all[i].proposal.reinit))
+        {
+            chosen[i] = 1U;
+            alone     = false;
         }
     }
     for (usize i = 0U; i < count; ++i)
@@ -1406,6 +1452,12 @@ CryptoError Group::group_info(const Signer& signer, const GroupInfoOptions& opti
 
 CryptoError Group::commit(const Signer& signer, const CommitOptions& options, CommitResult& out) noexcept
 {
+    return commit_with(signer, options, nullptr, out);
+}
+
+CryptoError Group::commit_with(const Signer& signer, const CommitOptions& options, const PreSharedKey* resumed,
+                               CommitResult& out) noexcept
+{
     out.message.clear();
     out.welcome.clear();
     out.group_info.clear();
@@ -1436,9 +1488,10 @@ CryptoError Group::commit(const Signer& signer, const CommitOptions& options, Co
     StagedCommit&   staged = out.staged;
     Plan            plan;
     cont::Array<u8> own; // the encodings of the proposals by value
+    plan.resumed = resumed;
     if (options.pending)
     {
-        error = select_pending(me.index, plan);
+        error = select_pending(me.index, !options.proposals.empty(), plan);
     }
     if (error == CryptoError::None)
     {
@@ -1447,6 +1500,10 @@ CryptoError Group::commit(const Signer& signer, const CommitOptions& options, Co
     if (error == CryptoError::None)
     {
         error = stage_list(me, plan, staged);
+    }
+    if (error == CryptoError::None && staged.m_reinit && options.group_info.external_pub)
+    {
+        error = CryptoError::Malformed; // the group a ReInit ends takes no joiner
     }
 
     // The path (section 12.4.1) under the provisional GroupContext, its keys staged.
@@ -1810,6 +1867,18 @@ CryptoError Group::merge(StagedCommit& staged) noexcept
         wipe(); // section 12.4.2: a removed member deletes its group state
         return CryptoError::None;
     }
+    // A ReInit, the commit's only proposal, kept for the new group it names: copied before anything changes.
+    cont::Array<u8> reinit;
+    if (staged.m_reinit)
+    {
+        const StagedCommit::Entry& entry = staged.m_entries[0];
+        error = copy_into(cont::ConstSpan<u8>(staged.m_bytes.data() + entry.offset, entry.bytes), reinit);
+    }
+    if (error != CryptoError::None)
+    {
+        staged.clear();
+        return error;
+    }
     // The epoch that ends keeps its resumption PSK (decision M10).
     if (m_config.resumption_epochs != 0U)
     {
@@ -1840,7 +1909,136 @@ CryptoError Group::merge(StagedCommit& staged) noexcept
         m_keys.apply(staged.m_update);
     }
     forget_epoch();
+    m_reinit = std::move(reinit);
     staged.clear();
+    return CryptoError::None;
+}
+
+// ---- Resumed groups (sections 11.2 and 11.3; decision M12) ----
+
+CryptoError Group::reinit(const Group& ended, const Signer& signer, const LeafNode& creator,
+                          cont::ConstSpan<u8> leaf_private, const ResumeOptions& options, const GroupConfig& config,
+                          ResumeResult& out) noexcept
+{
+    ReInit      params;
+    CryptoError error = CryptoError::None;
+    if (&ended == this)
+    {
+        error = CryptoError::Malformed;
+    }
+    else if (!ended.reinit_proposal(params))
+    {
+        error = CryptoError::NotReady;
+    }
+    else if (params.version != kProtocolVersion || cipher_suite(params.cipher_suite) == nullptr)
+    {
+        error = CryptoError::Unsupported;
+    }
+    if (error != CryptoError::None)
+    {
+        wipe();
+        out.welcome.clear();
+        out.group_info.clear();
+        return error;
+    }
+    return resume(ended, ResumptionUsage::Reinit, *cipher_suite(params.cipher_suite), params.group_id,
+                  params.extensions, signer, creator, leaf_private, options, config, out);
+}
+
+CryptoError Group::branch(const Group& from, cont::ConstSpan<u8> group_id, cont::ConstSpan<u8> extensions,
+                          const Signer& signer, const LeafNode& creator, cont::ConstSpan<u8> leaf_private,
+                          const ResumeOptions& options, const GroupConfig& config, ResumeResult& out) noexcept
+{
+    CryptoError error = CryptoError::None;
+    if (&from == this)
+    {
+        error = CryptoError::Malformed;
+    }
+    else if (!from.ready())
+    {
+        error = CryptoError::NotReady;
+    }
+    if (error != CryptoError::None)
+    {
+        wipe();
+        out.welcome.clear();
+        out.group_info.clear();
+        return error;
+    }
+    return resume(from, ResumptionUsage::Branch, from.suite(), group_id, extensions, signer, creator, leaf_private,
+                  options, config, out);
+}
+
+CryptoError Group::resume(const Group& from, ResumptionUsage usage, const CipherSuite& suite,
+                          cont::ConstSpan<u8> group_id, cont::ConstSpan<u8> extensions, const Signer& signer,
+                          const LeafNode& creator, cont::ConstSpan<u8> leaf_private, const ResumeOptions& options,
+                          const GroupConfig& config, ResumeResult& out) noexcept
+{
+    out.welcome.clear();
+    out.group_info.clear();
+    CryptoError error = create(suite, group_id, extensions, creator, leaf_private, config);
+    // The key that binds the new group to the prior one: its resumption secret of its current epoch, named under a
+    // fresh Nh-byte nonce (section 11.3).
+    const usize  hash                 = suite.hash_bytes();
+    u8           nonce[kMaxHashBytes] = {};
+    PreSharedKey resumed;
+    if (error == CryptoError::None)
+    {
+        error = random_bytes(cont::Span<u8>(nonce, hash));
+    }
+    resumed.id.type     = PskType::Resumption;
+    resumed.id.usage    = usage;
+    resumed.id.group_id = from.context().group_id;
+    resumed.id.epoch    = from.epoch();
+    resumed.id.nonce    = cont::ConstSpan<u8>(nonce, hash);
+    resumed.secret      = from.secret(EpochSecret::Resumption);
+    // The first commit, to no one (the creator is the group at epoch 0): an Add of each other member, the key and a
+    // path, merged at once.
+    cont::Array<Proposal> proposals;
+    if (error == CryptoError::None && !proposals.try_reserve(options.members.size() + 1U))
+    {
+        error = CryptoError::ProviderFailure;
+    }
+    if (error == CryptoError::None)
+    {
+        for (const KeyPackage& member : options.members)
+        {
+            Proposal add;
+            add.type = code(ProposalType::Add);
+            add.add  = member;
+            proposals.push_back(add);
+        }
+        Proposal psk;
+        psk.type = code(ProposalType::PreSharedKey);
+        psk.psk  = resumed.id;
+        proposals.push_back(psk);
+    }
+    CommitOptions first;
+    first.send.wire_format = WireFormat::PublicMessage;
+    first.proposals        = cont::ConstSpan<Proposal>(proposals.data(), proposals.size());
+    first.pending          = false;
+    first.group_info       = options.group_info;
+    CommitResult result;
+    if (error == CryptoError::None)
+    {
+        error = commit_with(signer, first, &resumed, result);
+    }
+    if (error == CryptoError::None)
+    {
+        error = merge(result.staged);
+    }
+    if (error == CryptoError::None)
+    {
+        error = check_resumed(from, usage);
+    }
+    if (error != CryptoError::None)
+    {
+        wipe();
+        fresh_buffer(result.welcome, 0U);
+        return error;
+    }
+    out.welcome    = std::move(result.welcome);
+    out.group_info = std::move(result.group_info);
     return CryptoError::None;
 }
 } // namespace crd::crypto::mls

@@ -1,17 +1,22 @@
-// crd-fuzz-crypto-mls-commit: an MLS member processing proposals, commits and external commits, and a new member
-// joining by an external commit (NET.2; docs/design/network-foundation.md#mls, M3 layers 9 and 10a) under the bounded
-// fuzz harness (REPO.DEV.9; docs/design/test-instruments.md).
+// crd-fuzz-crypto-mls-commit: an MLS member processing proposals, commits, external commits and a ReInit's commit, a
+// new member joining by an external commit, and a member joining the group that reinitializes its own (NET.2;
+// docs/design/network-foundation.md#mls, M3 layers 9, 10a and 10b) under the bounded fuzz harness (REPO.DEV.9;
+// docs/design/test-instruments.md).
 //
 // Input. The first byte picks the mode, the second the cipher suite and the wire format (public or private), the rest
 // is the mode's data, read field by field (a short input ends the case). Each case starts a fresh receiver: a member
 // that joined an honest group of three from its Welcome, in the epoch where another member proposed an Update and the
 // creator committed it with a path, and where the creator published the epoch's GroupInfo with its external key, from
-// which a fourth member joined by an external commit.
+// which a fourth member joined by an external commit. In the same epoch the creator also committed a ReInit by value,
+// which ended its group, and created the group the ReInit names for the receiver and the proposer (section 11.2).
 //   0  any message: the rest, after the honest proposal, processed as an MLSMessage;
 //   1  the honest commit changed: the byte to change (u16; past the end changes none) and its XOR mask;
 //   2  the honest proposal changed: the byte to change and its mask;
 //   3  the honest external commit changed: the byte to change and its mask;
-//   4  the published GroupInfo changed, which a new member joins from: the byte to change and its mask.
+//   4  the published GroupInfo changed, which a new member joins from: the byte to change and its mask;
+//   5  the honest ReInit's commit changed: the byte to change and its mask;
+//   6  the new group's Welcome body changed, which the receiver joins with its group the ReInit ended as the prior
+//      one: the byte to change and its mask.
 //
 // Oracles, none of them the code's verdict on the same call:
 //   * a refused message leaves the receiver as it was (epoch, authenticator, tree, cached proposals) and stages
@@ -19,7 +24,10 @@
 //   * the honest proposal is cached under the reference its sender computed, and the honest commit and external
 //     commit stage exactly the epoch their committers derived, which merging makes the receiver's;
 //   * a joiner refuses every changed GroupInfo (each of its bytes is signed or framing) and is left empty; from the
-//     intact one it joins, and the receiver takes its commit into the epoch the joiner holds.
+//     intact one it joins, and the receiver takes its commit into the epoch the joiner holds;
+//   * the intact ReInit's commit ends the receiver's group once merged, and nothing else does;
+//   * a resumed Welcome changed in any byte is refused with the joiner left empty, or joins only the honest new epoch
+//     (a byte of another member's entry is not the receiver's); the intact one joins it.
 #include "mls_fuzz_support.hpp"
 
 namespace
@@ -55,6 +63,15 @@ struct Honest
     Array<u8>         group_info; // the epoch's, with the external key
     Array<u8>         external;   // the joiner's external commit
     Array<u8>         external_authenticator;
+    Array<u8>         reinit;     // the creator's ReInit commit, by value
+    Array<u8>         reinit_authenticator;
+    Member            next_creator; // the members of the group the ReInit names
+    Member            next_receiver;
+    Member            next_proposer;
+    mls::KeyPackage   next_receiver_package;
+    mls::KeyPackage   next_proposer_package;
+    Array<u8>         resumed; // the new group's Welcome body
+    Array<u8>         resumed_authenticator;
 };
 
 Array<u8> copied(ConstSpan<u8> bytes)
@@ -130,6 +147,39 @@ void seal_honest(const mls::CipherSuite& suite, mls::WireFormat format, Honest& 
     CRD_FUZZ_REQUIRE(second.staged.proposal_count() == 1U);
     honest.commit        = second.message;
     honest.authenticator = copied(second.staged.epoch_authenticator());
+
+    // In the same epoch, a ReInit by value into a new group of the suite, which ends the creator's group; then the
+    // new group, created by the creator's successor for the receiver's and the proposer's (section 11.2).
+    const u8      next_id[8] = {'r', 'e', 'i', 'n', 'i', 't'};
+    mls::Proposal reinit[1];
+    reinit[0].type                = static_cast<u16>(mls::ProposalType::ReInit);
+    reinit[0].reinit.group_id     = next_id;
+    reinit[0].reinit.cipher_suite = suite.id;
+    mls::CommitOptions ending;
+    ending.send      = send;
+    ending.pending   = false;
+    ending.proposals = ConstSpan<mls::Proposal>(reinit, 1U);
+    mls::CommitResult third;
+    CRD_FUZZ_REQUIRE(creator.commit(honest.creator.signer, ending, third) == CryptoError::None);
+    CRD_FUZZ_REQUIRE(third.staged.reinitializes());
+    honest.reinit               = third.message;
+    honest.reinit_authenticator = copied(third.staged.epoch_authenticator());
+    CRD_FUZZ_REQUIRE(creator.merge(third.staged) == CryptoError::None && creator.ended());
+    make_member(suite, honest.next_creator, honest.suites);
+    make_member(suite, honest.next_receiver, honest.suites);
+    make_member(suite, honest.next_proposer, honest.suites);
+    make_package(suite, honest.next_receiver, honest.next_receiver_package);
+    make_package(suite, honest.next_proposer, honest.next_proposer_package);
+    const mls::KeyPackage members[2] = {honest.next_receiver_package, honest.next_proposer_package};
+    mls::ResumeOptions    resume;
+    resume.members = ConstSpan<mls::KeyPackage>(members, 2U);
+    mls::Group        next;
+    mls::ResumeResult resumed;
+    CRD_FUZZ_REQUIRE(next.reinit(creator, honest.next_creator.signer, honest.next_creator.leaf,
+                                 view(honest.next_creator.leaf_private), resume, honest.config,
+                                 resumed) == CryptoError::None);
+    honest.resumed               = copied(body_of(resumed.welcome));
+    honest.resumed_authenticator = copied(next.epoch_authenticator());
 }
 
 Honest& honest_of(u8 selector)
@@ -178,7 +228,7 @@ void require_unchanged(const mls::Group& group, const Snapshot& before, const ml
 // A Welcome-joined receiver, then `message` processed: refused with nothing changed, or it is `intact` and is taken
 // (a commit into the epoch whose authenticator is `authenticator`).
 void receive(Honest& honest, mls::Group& group, ConstSpan<u8> message, ConstSpan<u8> intact, bool commit,
-             ConstSpan<u8> authenticator = {})
+             ConstSpan<u8> authenticator = {}, bool ends = false)
 {
     const Snapshot       before = snapshot_of(group);
     mls::ReceivedMessage received;
@@ -197,8 +247,24 @@ void receive(Honest& honest, mls::Group& group, ConstSpan<u8> message, ConstSpan
         return;
     }
     CRD_FUZZ_REQUIRE(same(received.commit().epoch_authenticator(), authenticator));
+    CRD_FUZZ_REQUIRE(received.commit().reinitializes() == ends);
     CRD_FUZZ_REQUIRE(group.merge(received.commit()) == CryptoError::None);
-    CRD_FUZZ_REQUIRE(same(group.epoch_authenticator(), authenticator));
+    CRD_FUZZ_REQUIRE(same(group.epoch_authenticator(), authenticator) && group.ended() == ends);
+}
+
+// The receiver's group ended by the intact ReInit, then the member joining the new group from `welcome` with it as the
+// prior group: refused and left empty, or joined into the honest new epoch.
+void join_resumed(Honest& honest, mls::Group& receiver, ConstSpan<u8> welcome)
+{
+    receive(honest, receiver, view(honest.reinit), view(honest.reinit), true, view(honest.reinit_authenticator), true);
+    mls::Group        joined;
+    const CryptoError result =
+        joined.join(welcome, honest.next_receiver_package, view(honest.next_receiver.init_private),
+                    view(honest.next_receiver.leaf_private), {}, honest.config, &receiver);
+    CRD_FUZZ_REQUIRE(!same(welcome, view(honest.resumed)) || result == CryptoError::None);
+    CRD_FUZZ_REQUIRE((result == CryptoError::None) == joined.ready());
+    CRD_FUZZ_REQUIRE(result != CryptoError::None ||
+                     (joined.epoch() == 1U && same(joined.epoch_authenticator(), view(honest.resumed_authenticator))));
 }
 
 // A new member joining from `info`: refused, and left empty, unless it is the intact GroupInfo; then the receiver
@@ -270,8 +336,15 @@ void run(u8 mode, Reader& in)
         receive(honest, group, view(changed(honest.external, at, mask)), view(honest.external), true,
                 view(honest.external_authenticator));
         break;
-    default:
+    case 4U:
         join_from(honest, group, view(changed(honest.group_info, at, mask)));
+        break;
+    case 5U:
+        receive(honest, group, view(changed(honest.reinit, at, mask)), view(honest.reinit), true,
+                view(honest.reinit_authenticator), true);
+        break;
+    default:
+        join_resumed(honest, group, view(changed(honest.resumed, at, mask)));
         break;
     }
 }
@@ -284,7 +357,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         return 0;
     }
     Reader in(data + 1U, size - 1U);
-    run(static_cast<u8>(data[0] % 5U), in);
+    run(static_cast<u8>(data[0] % 7U), in);
     return 0;
 }
 
@@ -359,5 +432,37 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
                                static_cast<u8>(at[i]), 0x20U};
         sink.add(xnames[i], external, sizeof(external));
         sink.add(inames[i], info, sizeof(info));
+    }
+
+    // The honest ReInit's commit in each suite and wire format and the resumed Welcome in each suite, unchanged and
+    // changed at offsets across them.
+    const char* reinit_names[8]  = {"reinit-unchanged-0", "reinit-unchanged-1", "reinit-unchanged-2",
+                                    "reinit-unchanged-3", "reinit-unchanged-4", "reinit-unchanged-5",
+                                    "reinit-unchanged-6", "reinit-unchanged-7"};
+    const char* resumed_names[4] = {"resumed-unchanged-0", "resumed-unchanged-1", "resumed-unchanged-2",
+                                    "resumed-unchanged-3"};
+    for (u8 selector = 0U; selector < 8U; ++selector)
+    {
+        const u8 reinit[] = {5U, selector, 0xFFU, 0xFFU, 0x00U};
+        sink.add(reinit_names[selector], reinit, sizeof(reinit));
+    }
+    for (u8 selector = 0U; selector < 4U; ++selector)
+    {
+        const u8 resumed[] = {6U, selector, 0xFFU, 0xFFU, 0x00U};
+        sink.add(resumed_names[selector], resumed, sizeof(resumed));
+    }
+    const u16   spots[]    = {1U, 6U, 24U, 60U, 110U, 200U, 330U, 520U};
+    const char* rnames[8]  = {"reinit-at-1",   "reinit-at-6",   "reinit-at-24",  "reinit-at-60",
+                              "reinit-at-110", "reinit-at-200", "reinit-at-330", "reinit-at-520"};
+    const char* wnames[8]  = {"resumed-at-1",   "resumed-at-6",   "resumed-at-24",  "resumed-at-60",
+                              "resumed-at-110", "resumed-at-200", "resumed-at-330", "resumed-at-520"};
+    for (usize i = 0U; i < 8U; ++i)
+    {
+        const u8 reinit[]  = {5U, static_cast<u8>((i + 5U) % 8U), static_cast<u8>(spots[i] >> 8U),
+                              static_cast<u8>(spots[i]), 0x10U};
+        const u8 resumed[] = {6U, static_cast<u8>(i % 4U), static_cast<u8>(spots[i] >> 8U),
+                              static_cast<u8>(spots[i]), 0x02U};
+        sink.add(rnames[i], reinit, sizeof(reinit));
+        sink.add(wnames[i], resumed, sizeof(resumed));
     }
 }

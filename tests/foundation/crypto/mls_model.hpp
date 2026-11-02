@@ -5,6 +5,7 @@
 // hostile or faulty member frames a message (any sender, epoch, group, signer and membership key), so a receiver's
 // refusal of it can be checked to leave its group as it was.
 
+#include "mls_committer.hpp"
 #include "mls_test_support.hpp"
 
 #include <crd/crypto/mls_group.hpp>
@@ -248,16 +249,6 @@ inline mls::Proposal extensions_of(ConstSpan<u8> extensions)
     proposal.type       = static_cast<u16>(mls::ProposalType::GroupContextExtensions);
     proposal.extensions = extensions;
     return proposal;
-}
-
-// An Extension list's entry.
-inline Bytes extension(u16 type, ConstSpan<u8> data)
-{
-    Bytes      out = filled(2U + mls::vector_bytes(data.size()), 0U);
-    WireWriter writer(span_of(out));
-    writer.put_u16(type);
-    mls::put_vector(writer, data);
-    return out;
 }
 
 // ---- Hostile and faulty messages ----

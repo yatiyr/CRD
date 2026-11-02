@@ -125,9 +125,16 @@ void                put_leaf_fields(cont::WireWriter& out, const LeafNode& node)
 // 7.3; mls_group.cpp).
 [[nodiscard]] CryptoError check_node_key(const CipherSuite& suite, cont::ConstSpan<u8> key) noexcept;
 
-// Section 12.1.4's checks of a pre-shared key's identity outside reinitialization and branching (mls_group.cpp):
-// Malformed for a nonce not Nh long, Unsupported for a resumption key of usage reinit or branch.
+// Section 12.1.4's check of a pre-shared key's identity (mls_group.cpp): Malformed for a nonce not Nh long. Where a key
+// that resumes a group may appear is the caller's (resumes_group).
 [[nodiscard]] CryptoError check_psk_id(const CipherSuite& suite, const PreSharedKeyId& id) noexcept;
+
+// Whether a pre-shared key resumes another group: a resumption key of usage reinit or branch, which only the first
+// epoch of the group it resumes into may hold, once (sections 11.2, 11.3, 12.1.4 and 12.4.3.1).
+[[nodiscard]] inline bool resumes_group(const PreSharedKeyId& id) noexcept
+{
+    return id.type == PskType::Resumption && id.usage != ResumptionUsage::Application;
+}
 
 // A byte array as a view, a copy of bytes into one, and a buffer that may hold secrets resized (zeroed first).
 [[nodiscard]] inline cont::ConstSpan<u8> view(const cont::Array<u8>& bytes) noexcept

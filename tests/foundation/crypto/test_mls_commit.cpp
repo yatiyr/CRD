@@ -304,7 +304,10 @@ TEST_CASE("MLS: a commit is refused for each fault of sections 6, 12.1, 12.2 and
         reinit.usage    = mls::ResumptionUsage::Reinit;
         reinit.group_id = view(model.group_id);
         reinit.nonce    = view(nonce);
-        refused(receiver, commit_of({by_value(psk_of(reinit))}), CryptoError::Unsupported);
+        refused(receiver, commit_of({by_value(psk_of(reinit))}), CryptoError::Malformed); // section 12.1.4
+        mls::PreSharedKeyId branch = reinit;
+        branch.usage               = mls::ResumptionUsage::Branch;
+        refused(receiver, commit_of({by_value(psk_of(branch))}), CryptoError::Malformed);
         const Bytes         unknown_id = Bytes{'n', 'o', 'n', 'e'};
         mls::PreSharedKeyId unknown    = external;
         unknown.id                     = view(unknown_id);
@@ -313,7 +316,24 @@ TEST_CASE("MLS: a commit is refused for each fault of sections 6, 12.1, 12.2 and
         reinit_proposal.type                = static_cast<u16>(mls::ProposalType::ReInit);
         reinit_proposal.reinit.group_id     = view(model.group_id);
         reinit_proposal.reinit.cipher_suite = suite.id;
-        refused(receiver, commit_of({by_value(reinit_proposal)}), CryptoError::Unsupported);
+        // Section 12.2: a ReInit beside any other proposal; 12.1.5: a version older than the group's, and 13.4: an
+        // extension named twice.
+        refused(receiver, commit_of({by_value(reinit_proposal), by_value(remove_of(2U))}), CryptoError::Malformed);
+        refused(receiver, commit_of({by_value(psk_of(external)), by_value(reinit_proposal)}), CryptoError::Malformed);
+        refused(receiver, commit_of({by_value(reinit_proposal), by_value(reinit_proposal)}), CryptoError::Malformed);
+        refused(receiver, commit_of({by_reference(update_ref), by_value(reinit_proposal)}), CryptoError::Malformed);
+        mls::Proposal old_version  = reinit_proposal;
+        old_version.reinit.version = 0U;
+        refused(receiver, commit_of({by_value(old_version)}), CryptoError::Malformed);
+        const Bytes   one   = extension(0x0A0AU, view(nonce));
+        Bytes         twice(one.begin(), one.end());
+        for (const u8 byte : one)
+        {
+            twice.push_back(byte);
+        }
+        mls::Proposal repeated_extension     = reinit_proposal;
+        repeated_extension.reinit.extensions = view(twice);
+        refused(receiver, commit_of({by_value(repeated_extension)}), CryptoError::Malformed);
         mls::Proposal external_init;
         external_init.type       = static_cast<u16>(mls::ProposalType::ExternalInit);
         external_init.kem_output = view(nonce);
@@ -584,9 +604,9 @@ TEST_CASE("MLS: sending, committing and merging refuse what they cannot do", "[c
     update.type   = static_cast<u16>(mls::ProposalType::Update);
     update.update = member.who.id.leaf;
     CHECK(member.group.propose(member.who.id.signer, update, send, out, span_of(ref)) == CryptoError::Malformed);
-    mls::Proposal reinit;
-    reinit.type = static_cast<u16>(mls::ProposalType::ReInit);
-    CHECK(member.group.propose(member.who.id.signer, reinit, send, out, span_of(ref)) == CryptoError::Unsupported);
+    mls::Proposal custom;
+    custom.type = 0x0A0AU;
+    CHECK(member.group.propose(member.who.id.signer, custom, send, out, span_of(ref)) == CryptoError::Unsupported);
     CHECK(member.group.propose(model.at(2).who.id.signer, remove_of(2U), send, out, span_of(ref)) ==
           CryptoError::Unsupported);
     Bytes short_ref = filled(suite.hash_bytes() - 1U, 0U);

@@ -15,6 +15,7 @@ add_executable(crd-crypto-tests
     test_mls_external.cpp
     test_mls_group.cpp
     test_mls_message.cpp
+    test_mls_resume.cpp
     test_mls_schedule.cpp
     test_mls_tree.cpp
     test_policy.cpp
