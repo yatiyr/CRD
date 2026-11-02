@@ -89,7 +89,8 @@ public:
     [[nodiscard]] CryptoError init(QuicVersion version, AlgorithmId aead, cont::ConstSpan<u8> secret) noexcept;
     // The next key phase after `current` (RFC 9001 section 6.1): its secret expanded with "quic ku" ("quicv2 ku"),
     // the same suite and version, a fresh count. `current` stays as it is (a receiver keeps it for reordered
-    // packets); NotReady when it holds no key, Overlap when it is this key.
+    // packets); NotReady when it holds no key, Overlap when it is this key, Unsupported for a version init would
+    // refuse (never for a ready key).
     [[nodiscard]] CryptoError update(const QuicPacketKey& current) noexcept;
     void                      clear() noexcept;
 

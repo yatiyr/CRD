@@ -265,11 +265,17 @@ CryptoError QuicPacketKey::update(const QuicPacketKey& current) noexcept
     {
         return CryptoError::NotReady;
     }
+    // A ready key's version is one init accepted; the lookup is checked all the same rather than assumed.
+    const VersionParameters* parameters = parameters_of(current.m_version);
+    if (parameters == nullptr)
+    {
+        return CryptoError::Unsupported;
+    }
     const AlgorithmId aead = current.algorithm();
     const usize       size = current.m_secret_bytes;
     u8                next[kQuicMaxSecretBytes];
     CryptoError       error = expand_label(suite_hash(aead), cont::ConstSpan<u8>(current.m_secret, size),
-                                           parameters_of(current.m_version)->ku, cont::Span<u8>(next, size));
+                                           parameters->ku, cont::Span<u8>(next, size));
     if (error == CryptoError::None)
     {
         error = init(current.m_version, aead, cont::ConstSpan<u8>(next, size));
