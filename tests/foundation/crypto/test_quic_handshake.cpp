@@ -11,6 +11,7 @@
 // The independent peer (OpenSSL 4.0's QUIC TLS interface) is tests/foundation/crypto/interop/tls_interop.py's.
 
 #include <crd/containers/array.hpp>
+#include <crd/crypto/capability.hpp>
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/quic.hpp>
 #include <crd/crypto/tls.hpp>
@@ -743,7 +744,11 @@ constexpr usize kInitialWindow = 10U * kDatagram; // min(10 * 1200, max(14720, 2
 
 usize varint_bytes(usize value)
 {
-    return value < 64U ? 1U : value < 16384U ? 2U : 4U;
+    if (value < 64U)
+    {
+        return 1U;
+    }
+    return value < 16384U ? 2U : 4U;
 }
 
 // A long header packet's bytes besides its frames: the first byte, the version, both connection IDs with their
@@ -806,14 +811,14 @@ crd::u32 flight_round_trips(usize received, usize sent, bool validated)
 TEST_CASE("QUIC handshake: address validation in round trips, Retry within the amplification limit",
           "[crypto][quic-handshake][quic-token][net-2]")
 {
-    // The client at 192.0.2.7:4433 opens with Destination Connection ID kOriginal; a server under load answers with a
-    // Retry from connection ID kRetrySource, with nothing kept, and validates the token the client's next Initial
+    // The client at 192.0.2.7:4433 opens with Destination Connection ID `original`; a server under load answers with
+    // a Retry from connection ID `retry_source`, with nothing kept, and validates the token the client's next Initial
     // carries; a later connection carries a NEW_TOKEN token from this one.
-    constexpr u8  kOriginal[]    = {0x83, 0x94, 0xC8, 0xF0, 0x3E, 0x51, 0x57, 0x08};
-    constexpr u8  kClientId[]    = {0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8};
-    constexpr u8  kRetrySource[] = {0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F, 0x60, 0x61};
-    constexpr u8  kAddress[]     = {192, 0, 2, 7};
-    constexpr u64 kNow           = 1793577600U;
+    constexpr u8  original[]     = {0x83, 0x94, 0xC8, 0xF0, 0x3E, 0x51, 0x57, 0x08};
+    constexpr u8  client_id[]    = {0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8};
+    constexpr u8  retry_source[] = {0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F, 0x60, 0x61};
+    constexpr u8  address[]      = {192, 0, 2, 7};
+    constexpr u64 now            = 1793577600U;
     u8            fleet_key[kQuicTokenKeyBytes];
     for (usize i = 0U; i < sizeof(fleet_key); ++i)
     {
@@ -822,7 +827,7 @@ TEST_CASE("QUIC handshake: address validation in round trips, Retry within the a
     QuicTokenKeys keys;
     REQUIRE(keys.init(ConstSpan<u8>(fleet_key), {}) == CryptoError::None);
     QuicTokenPeer peer;
-    peer.address = ConstSpan<u8>(kAddress);
+    peer.address = ConstSpan<u8>(address);
     peer.port    = 4433U;
 
     // The Retry (RFC 9000 section 17.2.5) with its token and integrity tag, as the client checks it.
@@ -832,31 +837,31 @@ TEST_CASE("QUIC handshake: address validation in round trips, Retry within the a
     const u8 version[] = {0x00U, 0x00U, 0x00U, 0x01U};
     std::memcpy(retry + retry_bytes, version, sizeof(version));
     retry_bytes += sizeof(version);
-    retry[retry_bytes++] = sizeof(kClientId);
-    std::memcpy(retry + retry_bytes, kClientId, sizeof(kClientId));
-    retry_bytes += sizeof(kClientId);
-    retry[retry_bytes++] = sizeof(kRetrySource);
-    std::memcpy(retry + retry_bytes, kRetrySource, sizeof(kRetrySource));
-    retry_bytes += sizeof(kRetrySource);
+    retry[retry_bytes++] = sizeof(client_id);
+    std::memcpy(retry + retry_bytes, client_id, sizeof(client_id));
+    retry_bytes += sizeof(client_id);
+    retry[retry_bytes++] = sizeof(retry_source);
+    std::memcpy(retry + retry_bytes, retry_source, sizeof(retry_source));
+    retry_bytes += sizeof(retry_source);
     usize token_bytes = 0U;
-    REQUIRE(keys.mint_retry(QuicVersion::V1, peer, ConstSpan<u8>(kOriginal), ConstSpan<u8>(kClientId),
-                            ConstSpan<u8>(kRetrySource), kNow, Span<u8>(retry + retry_bytes, kQuicMaxTokenBytes),
+    REQUIRE(keys.mint_retry(QuicVersion::V1, peer, ConstSpan<u8>(original), ConstSpan<u8>(client_id),
+                            ConstSpan<u8>(retry_source), now, Span<u8>(retry + retry_bytes, kQuicMaxTokenBytes),
                             token_bytes) == CryptoError::None);
     const ConstSpan<u8> token(retry + retry_bytes, token_bytes);
     retry_bytes += token_bytes;
-    REQUIRE(quic_retry_tag(QuicVersion::V1, ConstSpan<u8>(kOriginal), ConstSpan<u8>(retry, retry_bytes),
+    REQUIRE(quic_retry_tag(QuicVersion::V1, ConstSpan<u8>(original), ConstSpan<u8>(retry, retry_bytes),
                            Span<u8>(retry + retry_bytes, kQuicTagBytes)) == CryptoError::None);
     retry_bytes += kQuicTagBytes;
-    REQUIRE(quic_retry_verify(QuicVersion::V1, ConstSpan<u8>(kOriginal), ConstSpan<u8>(retry, retry_bytes)) ==
+    REQUIRE(quic_retry_verify(QuicVersion::V1, ConstSpan<u8>(original), ConstSpan<u8>(retry, retry_bytes)) ==
             CryptoError::None);
     QuicTokenClaims claims;
-    REQUIRE(keys.validate(QuicVersion::V1, token, peer, ConstSpan<u8>(kRetrySource), ConstSpan<u8>(kClientId),
-                          kNow + 1U, claims) == CryptoError::None);
-    CHECK(claims.original_dcid_bytes == sizeof(kOriginal)); // the original_destination_connection_id to send
-    CHECK(std::memcmp(claims.original_dcid, kOriginal, sizeof(kOriginal)) == 0);
+    REQUIRE(keys.validate(QuicVersion::V1, token, peer, ConstSpan<u8>(retry_source), ConstSpan<u8>(client_id),
+                          now + 1U, claims) == CryptoError::None);
+    CHECK(claims.original_dcid_bytes == sizeof(original)); // the original_destination_connection_id to send
+    CHECK(std::memcmp(claims.original_dcid, original, sizeof(original)) == 0);
     usize new_token_bytes = 0U;
     u8    new_token[kQuicMaxTokenBytes];
-    REQUIRE(keys.mint_new_token(QuicVersion::V1, peer, kNow, Span<u8>(new_token), new_token_bytes) ==
+    REQUIRE(keys.mint_new_token(QuicVersion::V1, peer, now, Span<u8>(new_token), new_token_bytes) ==
             CryptoError::None);
 
     for (const AlgorithmId signature : kAllSignatures)
@@ -1160,4 +1165,56 @@ TEST_CASE("QUIC handshake: one server context serves handshakes on several threa
         worker.join();
     }
     CHECK(established.load() == 16);
+}
+
+TEST_CASE("QUIC handshake: the exporter and the capability bindings are equal at both ends and unique to the "
+          "connection",
+          "[crypto][quic-handshake][net-2]")
+{
+    u8 first_client[32]  = {};
+    u8 first_server[32]  = {};
+    u8 second_client[32] = {};
+    u8 second_server[32] = {};
+    {
+        End client;
+        End server;
+        configure(client, server, Options{});
+        start(client, server);
+        u8 early[32] = {1U};
+        CHECK(client.handshake.export_keying_material("EXPERIMENTAL test", {}, early) == TlsError::NotReady);
+        CHECK(capability_binding(client.handshake, ScopeKind::World, early) == TlsError::NotReady);
+        establish(client, server);
+        REQUIRE(client.handshake.export_keying_material("EXPERIMENTAL test", {}, first_client) == TlsError::None);
+        REQUIRE(server.handshake.export_keying_material("EXPERIMENTAL test", {}, first_server) == TlsError::None);
+        CHECK(equal(first_client, first_server));
+
+        // Each session type binds under its own label: equal at the two ends, different from every other type's.
+        u8 bindings[6][2][kCapabilityBindingBytes] = {};
+        for (u8 kind = 1U; kind <= 6U; ++kind)
+        {
+            REQUIRE(capability_binding(client.handshake, static_cast<ScopeKind>(kind), bindings[kind - 1U][0]) ==
+                    TlsError::None);
+            REQUIRE(capability_binding(server.handshake, static_cast<ScopeKind>(kind), bindings[kind - 1U][1]) ==
+                    TlsError::None);
+            CHECK(equal(bindings[kind - 1U][0], bindings[kind - 1U][1]));
+            for (u8 other = 1U; other < kind; ++other)
+            {
+                CHECK_FALSE(equal(bindings[kind - 1U][0], bindings[other - 1U][0]));
+            }
+        }
+        u8 wrong[kCapabilityBindingBytes + 1U] = {};
+        CHECK(capability_binding(client.handshake, ScopeKind::World, wrong) == TlsError::BadConfig);
+        CHECK(capability_binding(client.handshake, static_cast<ScopeKind>(7U), first_client) == TlsError::BadConfig);
+        u8 zeros[32] = {};
+        CHECK(equal(first_client, zeros)); // zeroed by the refusal
+    }
+    End client;
+    End server;
+    configure(client, server, Options{});
+    start(client, server);
+    establish(client, server);
+    REQUIRE(client.handshake.export_keying_material("EXPERIMENTAL test", {}, second_client) == TlsError::None);
+    REQUIRE(server.handshake.export_keying_material("EXPERIMENTAL test", {}, second_server) == TlsError::None);
+    CHECK(equal(second_client, second_server));
+    CHECK_FALSE(equal(second_client, first_server));
 }

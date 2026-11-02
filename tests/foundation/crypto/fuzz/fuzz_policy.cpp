@@ -277,7 +277,7 @@ void decode_checked(const u8* data, usize size)
     CRD_FUZZ_REQUIRE(out.signature_count == expected.count);
     for (u32 i = 0U; i < out.signature_count; ++i)
     {
-        const PolicySignature& signature = out.signatures[i];
+        const KeySignature& signature = out.signatures[i];
         CRD_FUZZ_REQUIRE(std::memcmp(signature.key.bytes, data + expected.offsets[i], kKeyIdBytes) == 0);
         CRD_FUZZ_REQUIRE(static_cast<u16>(signature.algorithm) == expected.algorithms[i]);
         CRD_FUZZ_REQUIRE(signature.signature.data() == data + expected.offsets[i] + 36U &&
@@ -366,7 +366,7 @@ bool encode(const PolicyContent& content, u8 signers, Encoded& out)
     {
         return false;
     }
-    PolicySignature signatures[2];
+    KeySignature    signatures[2];
     u8              tags[2][kTestSignatureBytes];
     u32             count = 0U;
     for (u32 k = 0U; k < 2U; ++k)
@@ -387,7 +387,7 @@ bool encode(const PolicyContent& content, u8 signers, Encoded& out)
     {
         return false; // nothing to apply: the writer refuses an unsigned generation (covered in mode 0)
     }
-    CRD_FUZZ_REQUIRE(write_policy(ConstSpan<u8>(body, body_size), ConstSpan<PolicySignature>(signatures, count),
+    CRD_FUZZ_REQUIRE(write_policy(ConstSpan<u8>(body, body_size), ConstSpan<KeySignature>(signatures, count),
                                   out.bytes, out.size) == PolicyError::None);
     return true;
 }

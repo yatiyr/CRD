@@ -55,6 +55,8 @@ TARGETS = {
                           'executable': 'tests/memory/fuzz/crd-fuzz-memory-allocators'},
     'net-negotiation': {'corpus': 'tests/foundation/net/fuzz/corpus',
                         'executable': 'tests/net/fuzz/crd-fuzz-net-negotiation'},
+    'crypto-capability': {'corpus': 'tests/foundation/crypto/fuzz/corpus-capability',
+                          'executable': 'tests/crypto/fuzz/crd-fuzz-crypto-capability'},
     'crypto-policy': {'corpus': 'tests/foundation/crypto/fuzz/corpus',
                       'executable': 'tests/crypto/fuzz/crd-fuzz-crypto-policy'},
     'crypto-provider': {'corpus': 'tests/foundation/crypto/fuzz/corpus-provider',

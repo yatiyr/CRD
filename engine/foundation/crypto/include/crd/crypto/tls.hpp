@@ -79,6 +79,8 @@ inline constexpr usize kTlsMaxBufferedBytes  = 65536U; // received or outgoing b
 inline constexpr usize kTlsMaxCertificateBytes = kTlsMaxBufferedBytes; // a peer's Certificate, compressed or not
 inline constexpr usize kTlsMaxProtocols     = 8U;     // application protocols (ALPN) in one configuration
 inline constexpr usize kTlsMaxProtocolListBytes = 256U; // their wire list: a length byte and 1 to 255 bytes each
+inline constexpr usize kTlsMaxExporterLabelBytes = 249U;  // an exporter label, which "tls13 " leads in HkdfLabel
+inline constexpr usize kTlsMaxExporterBytes      = 8160U; // 255 x SHA-256's length: what HKDF gives every suite
 inline constexpr u8    kTlsAlertGeneralError = 117U;   // RFC 9846 section 6.2
 inline constexpr u8    kTlsAlertUserCanceled = 90U;    // RFC 9846 section 6.1
 inline constexpr u8    kTlsAlertNoApplicationProtocol = 120U; // RFC 7301 section 3.2
@@ -433,6 +435,14 @@ public:
 
     [[nodiscard]] TlsAlert alert_sent() const noexcept { return m_alert_sent; }
     [[nodiscard]] TlsAlert alert_received() const noexcept { return m_alert_received; }
+
+    // Established only: `out.size()` bytes of the connection's exporter (RFC 9846 section 7.5; over QUIC the same
+    // exporter, RFC 9001 section 4) for `label` and `context`, equal at both ends, different for every connection (a
+    // resumed one too) and unchanged by key updates. What binds a capability's presentation to the session it travels
+    // in (capability.hpp). BadConfig for a label of 0 or above kTlsMaxExporterLabelBytes bytes and an `out` of 0 or
+    // above kTlsMaxExporterBytes; NotReady outside Established; `out` is zeroed on any error.
+    [[nodiscard]] TlsError export_keying_material(cont::StringView label, cont::ConstSpan<u8> context,
+                                                  cont::Span<u8> out) const noexcept;
 
 protected:
     TlsHandshakeState() noexcept  = default;

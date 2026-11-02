@@ -100,7 +100,7 @@ Signed sign(const PolicyContent& content, u32 signers = kHonest)
     REQUIRE(write_policy_body(content, body, body_size) == PolicyError::None);
     const ConstSpan<u8> message(body, body_size);
 
-    PolicySignature signatures[3];
+    KeySignature    signatures[3];
     u8              tags[3][kTestSignatureBytes];
     u32             count = 0U;
     const auto      add   = [&](const KeyId& id, AlgorithmId algorithm, ConstSpan<u8> key, AlgorithmId label)
@@ -128,7 +128,7 @@ Signed sign(const PolicyContent& content, u32 signers = kHonest)
         add(kStrangerId, AlgorithmId::Ed25519, ConstSpan<u8>(kStrangerPublic), AlgorithmId::Ed25519);
     }
     Signed out;
-    REQUIRE(write_policy(message, ConstSpan<PolicySignature>(signatures, count), out.bytes, out.size) ==
+    REQUIRE(write_policy(message, ConstSpan<KeySignature>(signatures, count), out.bytes, out.size) ==
             PolicyError::None);
     return out;
 }
@@ -369,47 +369,47 @@ TEST_CASE("Policy: the writers refuse what a reader would refuse", "[crypto][net
     static const u8     kLarge[kMaxSignatureBytes] = {1U};
     const u8            tag[4]                     = {1U, 2U, 3U, 4U};
     const ConstSpan<u8> message(body, body_size);
-    PolicySignature     signatures[kMaxPolicySignatures + 1U];
+    KeySignature        signatures[kMaxPolicySignatures + 1U];
     for (u32 i = 0U; i <= kMaxPolicySignatures; ++i)
     {
         signatures[i] = {test_key_id(static_cast<u8>(0x40U + i)), AlgorithmId::Ed25519, ConstSpan<u8>(tag)};
     }
-    CHECK(write_policy(message, ConstSpan<PolicySignature>(), out, written) == PolicyError::Unsigned);
-    CHECK(write_policy(message, ConstSpan<PolicySignature>(signatures, kMaxPolicySignatures + 1U), out, written) ==
+    CHECK(write_policy(message, ConstSpan<KeySignature>(), out, written) == PolicyError::Unsigned);
+    CHECK(write_policy(message, ConstSpan<KeySignature>(signatures, kMaxPolicySignatures + 1U), out, written) ==
           PolicyError::TooLarge);
-    CHECK(write_policy(message, ConstSpan<PolicySignature>(signatures, kMaxPolicySignatures), out, written) ==
+    CHECK(write_policy(message, ConstSpan<KeySignature>(signatures, kMaxPolicySignatures), out, written) ==
           PolicyError::None);
 
-    PolicySignature edited[2] = {signatures[0], signatures[1]};
-    edited[1].signature       = ConstSpan<u8>();
-    CHECK(write_policy(message, ConstSpan<PolicySignature>(edited, 2U), out, written) ==
+    KeySignature edited[2] = {signatures[0], signatures[1]};
+    edited[1].signature    = ConstSpan<u8>();
+    CHECK(write_policy(message, ConstSpan<KeySignature>(edited, 2U), out, written) ==
           PolicyError::BadSignatureEntry);
     edited[1] = signatures[0];
-    CHECK(write_policy(message, ConstSpan<PolicySignature>(edited, 2U), out, written) ==
+    CHECK(write_policy(message, ConstSpan<KeySignature>(edited, 2U), out, written) ==
           PolicyError::DuplicateSignature);
     const u8 oversize_tag[kMaxSignatureBytes + 1U] = {1U};
     edited[1] = {signatures[1].key, AlgorithmId::Ed25519, ConstSpan<u8>(oversize_tag)};
-    CHECK(write_policy(message, ConstSpan<PolicySignature>(edited, 2U), out, written) == PolicyError::TooLarge);
+    CHECK(write_policy(message, ConstSpan<KeySignature>(edited, 2U), out, written) == PolicyError::TooLarge);
 
-    PolicySignature full[4];
+    KeySignature full[4];
     for (u32 i = 0U; i < 4U; ++i)
     {
         full[i] = {signatures[i].key, AlgorithmId::MlDsa87, ConstSpan<u8>(kLarge)};
     }
-    CHECK(write_policy(message, ConstSpan<PolicySignature>(full, 4U), out, written) == PolicyError::TooLarge);
-    CHECK(write_policy(message, ConstSpan<PolicySignature>(full, 3U), out, written) == PolicyError::None);
-    CHECK(write_policy(message, ConstSpan<PolicySignature>(full, 3U), Span<u8>(out, written - 1U), written) ==
+    CHECK(write_policy(message, ConstSpan<KeySignature>(full, 4U), out, written) == PolicyError::TooLarge);
+    CHECK(write_policy(message, ConstSpan<KeySignature>(full, 3U), out, written) == PolicyError::None);
+    CHECK(write_policy(message, ConstSpan<KeySignature>(full, 3U), Span<u8>(out, written - 1U), written) ==
           PolicyError::BufferTooSmall);
 
     u8 trailing[2048];
     std::memcpy(trailing, body, body_size);
     trailing[body_size] = 0U;
-    CHECK(write_policy(ConstSpan<u8>(trailing, body_size + 1U), ConstSpan<PolicySignature>(signatures, 1U), out,
+    CHECK(write_policy(ConstSpan<u8>(trailing, body_size + 1U), ConstSpan<KeySignature>(signatures, 1U), out,
                        written) == PolicyError::TrailingBytes);
-    CHECK(write_policy(ConstSpan<u8>(body, body_size - 1U), ConstSpan<PolicySignature>(signatures, 1U), out, written) ==
+    CHECK(write_policy(ConstSpan<u8>(body, body_size - 1U), ConstSpan<KeySignature>(signatures, 1U), out, written) ==
           PolicyError::Truncated);
     trailing[0] = 'c';
-    CHECK(write_policy(ConstSpan<u8>(trailing, body_size), ConstSpan<PolicySignature>(signatures, 1U), out, written) ==
+    CHECK(write_policy(ConstSpan<u8>(trailing, body_size), ConstSpan<KeySignature>(signatures, 1U), out, written) ==
           PolicyError::BadMagic);
 }
 

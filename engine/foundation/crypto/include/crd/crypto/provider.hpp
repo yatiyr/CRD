@@ -67,6 +67,11 @@ enum class CryptoError : u8
 // Zeroes `bytes` in a way the compiler cannot remove.
 void secure_zero(cont::Span<u8> bytes) noexcept;
 
+inline constexpr usize kSha256Bytes = 32U;
+
+// The SHA-256 of `bytes` (FIPS 180-4).
+void sha256(cont::ConstSpan<u8> bytes, cont::Span<u8, kSha256Bytes> out) noexcept;
+
 // A trust key's identifier: the SHA-256 of its public key (policy.hpp's KeyId).
 [[nodiscard]] KeyId key_id_of(cont::ConstSpan<u8> public_key) noexcept;
 
@@ -170,7 +175,31 @@ private:
 
 class TlsCredential; // tls.hpp: shares a signing key with the TLS stack
 
-class SigningKey
+// What signs for a principal: a provider key (SigningKey) or a hardware-held one (the key store). Code that signs a
+// Cerid artefact (capability tokens, their attenuations and proofs) takes a Signer and never a key's private input.
+class Signer
+{
+public:
+    [[nodiscard]] virtual AlgorithmId algorithm() const noexcept = 0;
+
+    // `out` is signature_sizes(algorithm()).public_key long.
+    [[nodiscard]] virtual CryptoError public_key(cont::Span<u8> out) const noexcept = 0;
+
+    // Signs `message` into `out` (at least signature_sizes(algorithm()).signature long); `written` is the signature's
+    // length. Safe to call from several threads at once.
+    [[nodiscard]] virtual CryptoError sign(cont::ConstSpan<u8> message, cont::Span<u8> out,
+                                           usize& written) const noexcept = 0;
+
+protected:
+    Signer() noexcept                         = default;
+    Signer(const Signer&) noexcept            = default;
+    Signer& operator=(const Signer&) noexcept = default;
+    Signer(Signer&&) noexcept                 = default;
+    Signer& operator=(Signer&&) noexcept      = default;
+    ~Signer() noexcept                        = default;
+};
+
+class SigningKey final : public Signer
 {
 public:
     // A fresh key from the provider's randomness.
@@ -180,15 +209,13 @@ public:
     void                      clear() noexcept { m_key.reset(); }
 
     [[nodiscard]] bool        ready() const noexcept { return m_key.get() != nullptr; }
-    [[nodiscard]] AlgorithmId algorithm() const noexcept { return m_key.algorithm(); }
+    [[nodiscard]] AlgorithmId algorithm() const noexcept override { return m_key.algorithm(); }
 
-    // `out` is signature_sizes(algorithm()).public_key long.
-    [[nodiscard]] CryptoError public_key(cont::Span<u8> out) const noexcept;
+    [[nodiscard]] CryptoError public_key(cont::Span<u8> out) const noexcept override;
 
-    // Signs `message` into `out` (at least signature_sizes(algorithm()).signature long); `written` is the signature's
-    // length. ML-DSA signs hedged (FIPS 204 with fresh randomness), ECDSA with a fresh nonce, Ed25519
-    // deterministically.
-    [[nodiscard]] CryptoError sign(cont::ConstSpan<u8> message, cont::Span<u8> out, usize& written) const noexcept;
+    // ML-DSA signs hedged (FIPS 204 with fresh randomness), ECDSA with a fresh nonce, Ed25519 deterministically.
+    [[nodiscard]] CryptoError sign(cont::ConstSpan<u8> message, cont::Span<u8> out,
+                                   usize& written) const noexcept override;
 
 private:
     friend class TlsCredential;

@@ -438,10 +438,15 @@ void secure_zero(cont::Span<u8> bytes) noexcept
     }
 }
 
+void sha256(cont::ConstSpan<u8> bytes, cont::Span<u8, kSha256Bytes> out) noexcept
+{
+    SHA256(bytes.data(), bytes.size(), out.data());
+}
+
 KeyId key_id_of(cont::ConstSpan<u8> public_key) noexcept
 {
     KeyId id;
-    SHA256(public_key.data(), public_key.size(), id.bytes);
+    sha256(public_key, id.bytes);
     return id;
 }
 

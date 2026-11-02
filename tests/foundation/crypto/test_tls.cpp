@@ -2742,3 +2742,94 @@ TEST_CASE("TLS: one server context serves sessions on several threads", "[crypto
     }
     CHECK(established.load() == 32);
 }
+
+namespace
+{
+Bytes exported(const TlsSession& session, StringView label, ConstSpan<u8> context, usize size)
+{
+    Bytes out;
+    out.resize(size);
+    REQUIRE(session.export_keying_material(label, context, Span<u8>(out.data(), out.size())) == TlsError::None);
+    return out;
+}
+
+bool same(const Bytes& a, const Bytes& b)
+{
+    return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size()) == 0;
+}
+
+bool zero(ConstSpan<u8> bytes)
+{
+    return std::all_of(bytes.begin(), bytes.end(), [](u8 byte) { return byte == 0U; });
+}
+} // namespace
+
+TEST_CASE("TLS: the exporter is equal at both ends, unique to each connection and unchanged by key updates",
+          "[crypto][tls][net-2]")
+{
+    Store    store;
+    Endpoint client;
+    Endpoint server;
+    Options  options;
+    options.client_tickets = &store;
+    setup(client, server, options);
+    u8 early[32] = {1U};
+    CHECK(client.session.export_keying_material("EXPERIMENTAL test", {}, early) == TlsError::NotReady);
+    CHECK(zero(early));
+    establish(client, server);
+    read_tickets(client.session);
+
+    const u8    context[] = {'x'};
+    const Bytes first     = exported(client.session, "EXPERIMENTAL test", {}, 32U);
+    CHECK(same(first, exported(server.session, "EXPERIMENTAL test", {}, 32U)));
+    CHECK_FALSE(zero(ConstSpan<u8>(first.data(), first.size())));
+    // The label, the context and the length each change every byte: the length is in HKDF-Expand-Label's info.
+    const Bytes other_label   = exported(client.session, "EXPERIMENTAL other", {}, 32U);
+    const Bytes with_context  = exported(client.session, "EXPERIMENTAL test", context, 32U);
+    const Bytes shorter       = exported(client.session, "EXPERIMENTAL test", {}, 16U);
+    CHECK(same(with_context, exported(server.session, "EXPERIMENTAL test", context, 32U)));
+    CHECK_FALSE(same(first, other_label));
+    CHECK_FALSE(same(first, with_context));
+    CHECK(std::memcmp(first.data(), shorter.data(), shorter.size()) != 0);
+
+    // The bounds: a label of 249 bytes and 8,160 exported bytes are taken; one more of either is BadConfig, zeroed.
+    char longest[kTlsMaxExporterLabelBytes + 1U];
+    std::memset(longest, 'L', sizeof(longest));
+    const StringView label_bound(longest, kTlsMaxExporterLabelBytes);
+    CHECK(same(exported(client.session, label_bound, {}, 32U), exported(server.session, label_bound, {}, 32U)));
+    CHECK(same(exported(client.session, "EXPERIMENTAL test", {}, kTlsMaxExporterBytes),
+               exported(server.session, "EXPERIMENTAL test", {}, kTlsMaxExporterBytes)));
+    Bytes refused;
+    refused.resize(kTlsMaxExporterBytes + 1U);
+    std::memset(refused.data(), 0xA5, refused.size());
+    const Span<u8> all(refused.data(), refused.size());
+    CHECK(client.session.export_keying_material("EXPERIMENTAL test", {}, all) == TlsError::BadConfig);
+    CHECK(zero(all));
+    std::memset(refused.data(), 0xA5, refused.size());
+    CHECK(client.session.export_keying_material(StringView(longest, sizeof(longest)), {}, all.first(32U)) ==
+          TlsError::BadConfig);
+    CHECK(zero(all.first(32U)));
+    CHECK(client.session.export_keying_material("", {}, all.first(32U)) == TlsError::BadConfig);
+    CHECK(client.session.export_keying_material("EXPERIMENTAL test", {}, Span<u8>()) == TlsError::BadConfig);
+
+    // Key updates both ways change the record keys, never the exporter.
+    REQUIRE(client.session.update_keys(true) == TlsError::None);
+    pump(client, server);
+    exchange(client, server, 100U);
+    REQUIRE(client.session.key_updates_sent() == 1U);
+    REQUIRE(server.session.key_updates_sent() == 1U);
+    CHECK(same(first, exported(client.session, "EXPERIMENTAL test", {}, 32U)));
+    CHECK(same(first, exported(server.session, "EXPERIMENTAL test", {}, 32U)));
+
+    // A resumed connection has its own exporter, equal at its ends.
+    REQUIRE(resume(client, server, store));
+    const Bytes resumed = exported(client.session, "EXPERIMENTAL test", {}, 32U);
+    CHECK(same(resumed, exported(server.session, "EXPERIMENTAL test", {}, 32U)));
+    CHECK_FALSE(same(first, resumed));
+
+    // A closed session exports nothing.
+    REQUIRE(client.session.close() == TlsError::None);
+    u8 closed[32] = {1U};
+    CHECK(client.session.export_keying_material("EXPERIMENTAL test", {}, closed) == TlsError::NotReady);
+    CHECK(zero(closed));
+}

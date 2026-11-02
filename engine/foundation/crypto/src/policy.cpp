@@ -9,6 +9,8 @@
 // Every signature covers the body. Contract and rationale: docs/design/network-foundation.md#policy-wire.
 #include <crd/crypto/policy.hpp>
 
+#include "signed_artifact.hpp"
+
 #include <crd/containers/wire_bytes.hpp>
 
 #include <algorithm>
@@ -17,21 +19,11 @@ namespace crd::crypto
 {
 namespace
 {
-constexpr usize kHeadBytes          = sizeof(kPolicyMagic) + 1U + 8U + 8U + 8U + 4U;
-constexpr usize kMinimumBytes       = 6U;
-constexpr usize kRuleBytes          = 34U;
-constexpr usize kSignatureHeadBytes = kKeyIdBytes + 4U;
+using signed_artifact::saturating_add;
 
-bool is_signature(AlgorithmId algorithm) noexcept
-{
-    const AlgorithmClass type = algorithm_class(algorithm);
-    return type == AlgorithmClass::PostQuantumSignature || type == AlgorithmClass::ClassicalSignature;
-}
-
-u64 saturating_add(u64 a, u64 b) noexcept
-{
-    return a > kNever - b ? kNever : a + b;
-}
+constexpr usize kHeadBytes    = sizeof(kPolicyMagic) + 1U + 8U + 8U + 8U + 4U;
+constexpr usize kMinimumBytes = 6U;
+constexpr usize kRuleBytes    = 34U;
 
 PolicyError validate_rule(const AlgorithmRule& rule) noexcept
 {
@@ -111,70 +103,48 @@ PolicyError read_body(cont::WireReader& reader, PolicyMessage& out) noexcept
     return validate_content(content);
 }
 
-PolicyError validate_signatures(cont::ConstSpan<PolicySignature> signatures) noexcept
+PolicyError policy_error_of(signed_artifact::Error error) noexcept
 {
-    if (signatures.empty())
+    switch (error)
     {
-        return PolicyError::Unsigned;
-    }
-    if (signatures.size() > kMaxPolicySignatures)
-    {
+    case signed_artifact::Error::None:
+        return PolicyError::None;
+    case signed_artifact::Error::Truncated:
+        return PolicyError::Truncated;
+    case signed_artifact::Error::TooLarge:
         return PolicyError::TooLarge;
+    case signed_artifact::Error::Unsigned:
+        return PolicyError::Unsigned;
+    case signed_artifact::Error::BadEntry:
+        return PolicyError::BadSignatureEntry;
+    case signed_artifact::Error::Duplicate:
+        return PolicyError::DuplicateSignature;
     }
-    for (usize i = 0U; i < signatures.size(); ++i)
-    {
-        if (signatures[i].signature.empty())
-        {
-            return PolicyError::BadSignatureEntry;
-        }
-        if (signatures[i].signature.size() > kMaxSignatureBytes)
-        {
-            return PolicyError::TooLarge;
-        }
-        for (usize j = 0U; j < i; ++j)
-        {
-            if (signatures[j].key == signatures[i].key)
-            {
-                return PolicyError::DuplicateSignature;
-            }
-        }
-    }
-    return PolicyError::None;
+    return PolicyError::BadSignatureEntry;
+}
+
+PolicyError validate_signatures(cont::ConstSpan<KeySignature> signatures) noexcept
+{
+    return policy_error_of(signed_artifact::validate(signatures, kMaxPolicySignatures));
 }
 
 // Every trust key's signature over the body verifies; signatures by other keys are ignored.
 PolicyError verify_signatures(const PolicyConfig& config, const PolicyMessage& message) noexcept
 {
-    for (const TrustKey& key : config.trust)
+    switch (signed_artifact::verify_all(config.trust, *config.verifier, message.signed_bytes,
+                                       cont::ConstSpan<KeySignature>(message.signatures, message.signature_count)))
     {
-        const PolicySignature* found = nullptr;
-        for (u32 i = 0U; i < message.signature_count; ++i)
-        {
-            if (message.signatures[i].key == key.id)
-            {
-                found = &message.signatures[i]; // decoding refused a second signature by one key
-                break;
-            }
-        }
-        if (found == nullptr)
-        {
-            return PolicyError::MissingSignature;
-        }
-        if (found->algorithm != key.algorithm)
-        {
-            return PolicyError::BadSignature;
-        }
-        switch (config.verifier->verify(key.algorithm, key.public_key, message.signed_bytes, found->signature))
-        {
-        case Verification::Valid:
-            break;
-        case Verification::Unsupported:
-            return PolicyError::UnsupportedSignature;
-        case Verification::Invalid:
-            return PolicyError::BadSignature;
-        }
+    case signed_artifact::Trust::Valid:
+        return PolicyError::None;
+    case signed_artifact::Trust::Missing:
+        return PolicyError::MissingSignature;
+    case signed_artifact::Trust::Unsupported:
+        return PolicyError::UnsupportedSignature;
+    case signed_artifact::Trust::Mismatch:
+    case signed_artifact::Trust::Invalid:
+        break;
     }
-    return PolicyError::None;
+    return PolicyError::BadSignature;
 }
 
 bool same_content(const PolicyContent& a, const PolicyContent& b) noexcept
@@ -368,7 +338,7 @@ PolicyError write_policy_body(const PolicyContent& content, cont::Span<u8> out, 
     return PolicyError::None;
 }
 
-PolicyError write_policy(cont::ConstSpan<u8> body, cont::ConstSpan<PolicySignature> signatures, cont::Span<u8> out,
+PolicyError write_policy(cont::ConstSpan<u8> body, cont::ConstSpan<KeySignature> signatures, cont::Span<u8> out,
                          usize& written) noexcept
 {
     written = 0U;
@@ -388,11 +358,7 @@ PolicyError write_policy(cont::ConstSpan<u8> body, cont::ConstSpan<PolicySignatu
     {
         return signed_ok;
     }
-    usize size = body.size() + 1U;
-    for (const PolicySignature& signature : signatures)
-    {
-        size += kSignatureHeadBytes + signature.signature.size();
-    }
+    const usize size = body.size() + signed_artifact::encoded_size(signatures);
     if (size > kMaxPolicyBytes)
     {
         return PolicyError::TooLarge;
@@ -403,14 +369,7 @@ PolicyError write_policy(cont::ConstSpan<u8> body, cont::ConstSpan<PolicySignatu
     }
     cont::WireWriter writer(out);
     writer.put_bytes(body);
-    writer.put_u8(static_cast<u8>(signatures.size()));
-    for (const PolicySignature& signature : signatures)
-    {
-        writer.put_bytes(cont::ConstSpan<u8>(signature.key.bytes, kKeyIdBytes));
-        writer.put_u16(static_cast<u16>(signature.algorithm));
-        writer.put_u16(static_cast<u16>(signature.signature.size()));
-        writer.put_bytes(signature.signature);
-    }
+    signed_artifact::write(writer, signatures);
     written = writer.written();
     return PolicyError::None;
 }
@@ -427,50 +386,18 @@ PolicyError decode_policy(cont::ConstSpan<u8> bytes, PolicyMessage& out) noexcep
     {
         return body;
     }
-    out.signed_bytes = bytes.first(reader.consumed());
-    u8 count         = 0U;
-    if (!reader.take_u8(count))
+    out.signed_bytes       = bytes.first(reader.consumed());
+    const PolicyError list = policy_error_of(signed_artifact::read(
+        reader, cont::Span<KeySignature>(out.signatures, kMaxPolicySignatures), out.signature_count));
+    if (list != PolicyError::None)
     {
-        return PolicyError::Truncated;
-    }
-    if (count == 0U)
-    {
-        return PolicyError::Unsigned;
-    }
-    if (count > kMaxPolicySignatures)
-    {
-        return PolicyError::TooLarge;
-    }
-    out.signature_count = count;
-    for (u32 i = 0U; i < out.signature_count; ++i)
-    {
-        PolicySignature&    signature = out.signatures[i];
-        cont::ConstSpan<u8> key;
-        u16                 algorithm = 0U;
-        u16                 length    = 0U;
-        if (!reader.take_bytes(kKeyIdBytes, key) || !reader.take_u16(algorithm) || !reader.take_u16(length))
-        {
-            return PolicyError::Truncated;
-        }
-        for (usize b = 0U; b < kKeyIdBytes; ++b)
-        {
-            signature.key.bytes[b] = key[b];
-        }
-        signature.algorithm = static_cast<AlgorithmId>(algorithm);
-        if (length > kMaxSignatureBytes)
-        {
-            return PolicyError::TooLarge;
-        }
-        if (!reader.take_bytes(length, signature.signature))
-        {
-            return PolicyError::Truncated;
-        }
+        return list;
     }
     if (!reader.done())
     {
         return PolicyError::TrailingBytes;
     }
-    return validate_signatures(cont::ConstSpan<PolicySignature>(out.signatures, out.signature_count));
+    return validate_signatures(cont::ConstSpan<KeySignature>(out.signatures, out.signature_count));
 }
 
 PolicyError validate_config(const PolicyConfig& config) noexcept
@@ -484,7 +411,7 @@ PolicyError validate_config(const PolicyConfig& config) noexcept
     for (usize i = 0U; i < config.trust.size(); ++i)
     {
         const TrustKey& key = config.trust[i];
-        if (!is_signature(key.algorithm) || key.public_key.empty())
+        if (!signed_artifact::is_signature(key.algorithm) || key.public_key.empty())
         {
             return PolicyError::BadConfig;
         }

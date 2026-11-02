@@ -1068,6 +1068,28 @@ int main(int argc, char** argv)
     fprintf(stderr, "\"alpn\": \"%.*s\", \"suite\": \"%s\", ", (int)protocol_length,
             protocol != NULL ? (const char*)protocol : "", cipher != NULL ? SSL_CIPHER_get_name(cipher) : "");
     print_ech(ssl, client);
+    /* The exporter under Cerid's interop label and context, and Cerid's world capability binding (no context). */
+    static const char k_interop_label[] = "EXPERIMENTAL Cerid interop";
+    static const char k_binding_label[] = "EXPERIMENTAL Cerid capability world";
+    unsigned char     exported[32];
+    unsigned char     binding[32];
+    const int         exports =
+        established &&
+        SSL_export_keying_material(ssl, exported, sizeof(exported), k_interop_label, strlen(k_interop_label),
+                                   (const unsigned char*)"cerid", 5, 1) == 1 &&
+        SSL_export_keying_material(ssl, binding, sizeof(binding), k_binding_label, strlen(k_binding_label), NULL, 0,
+                                   1) == 1;
+    fputs("\"exporter\": \"", stderr);
+    for (size_t i = 0; exports && i < sizeof(exported); ++i)
+    {
+        fprintf(stderr, "%02x", exported[i]);
+    }
+    fputs("\", \"binding\": \"", stderr);
+    for (size_t i = 0; exports && i < sizeof(binding); ++i)
+    {
+        fprintf(stderr, "%02x", binding[i]);
+    }
+    fputs("\", ", stderr);
     if (g_quic_version != 0)
     {
         fprintf(stderr, "\"alert_level\": %d, \"peer_parameters\": \"", g_alert_level);

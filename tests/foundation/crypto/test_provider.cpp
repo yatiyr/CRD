@@ -891,7 +891,7 @@ TEST_CASE("Provider: a policy generation signed by real ML-DSA-65 and Ed25519 ke
     usize ed_written = 0U;
     REQUIRE(pq.sign(message, pq_sig, pq_written) == CryptoError::None);
     REQUIRE(ed.sign(message, ed_sig, ed_written) == CryptoError::None);
-    const PolicySignature signatures[] = {
+    const KeySignature signatures[] = {
         {trust[0].id, AlgorithmId::MlDsa65, ConstSpan<u8>(pq_sig.data(), pq_written)},
         {trust[1].id, AlgorithmId::Ed25519, ConstSpan<u8>(ed_sig, ed_written)},
     };

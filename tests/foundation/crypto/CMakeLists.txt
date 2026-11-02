@@ -1,8 +1,9 @@
 # crd-crypto tests: the algorithm identifiers generated from the standards register and the signed crypto policy
 # generations (NET-STD), the provider interface against Project Wycheproof's vectors, the TLS 1.3 sessions, QUIC packet
 # protection against RFC 9001's and RFC 9369's sample packets, the TLS handshake over QUIC, QUIC's address-validation
-# tokens and Encrypted Client Hello (NET.2).
+# tokens, Encrypted Client Hello, the TLS exporter and capabilities (NET.2).
 add_executable(crd-crypto-tests
+    test_capability.cpp
     test_kem_prf.cpp
     test_policy.cpp
     test_provider.cpp
@@ -26,7 +27,8 @@ target_link_libraries(crd-crypto-tests PRIVATE
     # The provider itself, for the ML-KEM encapsulation vectors only: their known answers fix the randomness m,
     # which only the provider's deterministic encapsulation takes (test_kem_prf.cpp); its TLS stack, to read back the
     # lifetime of a ticket a client keeps and to run a server with a hostile certificate compressor (test_tls.cpp), and
-    # to ask whether the CPU has AES instructions, which the HPKE AEAD a client picks for ECH follows (test_tls_ech.cpp).
+    # to ask whether the CPU has AES instructions, which the HPKE AEAD a client picks for ECH follows
+    # (test_tls_ech.cpp).
     crypto
     ssl
 )

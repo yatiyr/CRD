@@ -91,7 +91,7 @@ struct PolicyContent
     u32            rule_count = 0U;
 };
 
-struct PolicySignature
+struct KeySignature
 {
     KeyId               key;
     AlgorithmId         algorithm{};
@@ -104,7 +104,7 @@ struct PolicyMessage
     u8                  format = kPolicyFormat;
     PolicyContent       content;
     cont::ConstSpan<u8> signed_bytes;
-    PolicySignature     signatures[kMaxPolicySignatures];
+    KeySignature        signatures[kMaxPolicySignatures];
     u32                 signature_count = 0U;
 };
 
@@ -153,7 +153,7 @@ enum class PolicyError : u8
 
 // A whole generation: `body` (as write_policy_body wrote it) followed by its signatures (1 to kMaxPolicySignatures,
 // each by another key).
-[[nodiscard]] PolicyError write_policy(cont::ConstSpan<u8> body, cont::ConstSpan<PolicySignature> signatures,
+[[nodiscard]] PolicyError write_policy(cont::ConstSpan<u8> body, cont::ConstSpan<KeySignature> signatures,
                                        cont::Span<u8> out, usize& written) noexcept;
 
 // Decode one generation; exact and bounded. On an error `out` holds no meaning.

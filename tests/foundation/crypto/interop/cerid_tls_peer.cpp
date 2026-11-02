@@ -42,6 +42,7 @@
 // sample masked under the keys QuicHandshake::derive_keys makes from it, which crd-openssl-tls-peer computes through
 // OpenSSL.
 
+#include <crd/crypto/capability.hpp>
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/tls.hpp>
 
@@ -362,6 +363,18 @@ void print_common(const detail::TlsHandshakeState& state)
                  static_cast<unsigned>(state.certificate_compression()), suite_name(state.aead()),
                  tls_ech_name(state.ech()).data());
     print_hex(state.ech_retry_configs());
+    // The exporter (RFC 9846 section 7.5) under a label and a context, and the world capability binding (its label,
+    // no context): the other end's library must derive the same bytes.
+    const u8   context[]                        = {'c', 'e', 'r', 'i', 'd'};
+    u8         exported[32]                     = {};
+    u8         binding[kCapabilityBindingBytes] = {};
+    const bool exports =
+        state.export_keying_material("EXPERIMENTAL Cerid interop", context, exported) == TlsError::None &&
+        capability_binding(state, ScopeKind::World, binding) == TlsError::None;
+    std::fputs(R"(", "exporter": ")", stderr);
+    print_hex(exports ? ConstSpan<u8>(exported) : ConstSpan<u8>());
+    std::fputs(R"(", "binding": ")", stderr);
+    print_hex(exports ? ConstSpan<u8>(binding) : ConstSpan<u8>());
     std::fputs("\", ", stderr);
 }
 

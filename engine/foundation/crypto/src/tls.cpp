@@ -1977,6 +1977,29 @@ cont::StringView detail::TlsHandshakeState::application_protocol() const noexcep
     return cont::StringView(reinterpret_cast<const char*>(protocol), length);
 }
 
+TlsError detail::TlsHandshakeState::export_keying_material(cont::StringView label, cont::ConstSpan<u8> context,
+                                                            cont::Span<u8> out) const noexcept
+{
+    secure_zero(out);
+    if (label.empty() || label.size() > kTlsMaxExporterLabelBytes || out.empty() || out.size() > kTlsMaxExporterBytes)
+    {
+        return TlsError::BadConfig;
+    }
+    if (m_state != TlsState::Established)
+    {
+        return TlsError::NotReady;
+    }
+    const ErrorScope errors;
+    // TLS 1.3 gives no context and an empty one the same exporter (RFC 9846 section 7.5): the context is always used.
+    if (SSL_export_keying_material(ssl_of(m_session), out.data(), out.size(), label.data(), label.size(),
+                                   context.data(), context.size(), 1) != 1)
+    {
+        secure_zero(out);
+        return TlsError::ProviderFailure;
+    }
+    return TlsError::None;
+}
+
 // ---- Sessions ----
 
 TlsSession::~TlsSession() noexcept

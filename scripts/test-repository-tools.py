@@ -4282,8 +4282,9 @@ class TestInstruments(unittest.TestCase):
     def test_fuzz_driver_bounds_every_run_and_names_its_corpora(self):
         self.assertEqual(sorted(fuzz_driver.TARGETS), ['ceir-binary', 'ceir-differential', 'ceir-record', 'ceir-text',
                                                        'ceridc-diag', 'ckir-binary', 'ckir-text', 'comply-rules',
-                                                       'comply-sanctions', 'crypto-policy', 'crypto-provider',
-                                                       'crypto-quic', 'crypto-tls', 'memory-allocators',
+                                                       'comply-sanctions', 'crypto-capability', 'crypto-policy',
+                                                       'crypto-provider', 'crypto-quic', 'crypto-tls',
+                                                       'memory-allocators',
                                                        'net-negotiation', 'perf-assets',
                                                        'perf-bundle', 'perf-capture', 'perf-flight',
                                                        'resources-reload'])

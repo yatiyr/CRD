@@ -24,7 +24,9 @@ zlib decoding Cerid's forms, Cerid decoding OpenSSL's), with the offer read off 
 of the CompressedCertificate it sent or received; an end that decodes nothing is sent its certificate as it is; and a
 Cerid client refuses OpenSSL servers that install hostile forms (a claimed length one byte off, claims over the bound,
 a zlib claim no DEFLATE can reach) and survives seeded corruptions of real forms, establishing only when a zlib form
-still decodes.
+still decodes. Every established connection, over records and over QUIC, reports the exporter (RFC 9846 section 7.5)
+under a label and a context and Cerid's world capability binding (its private-use label, no context) as each library
+derives them, and the two must be equal.
 
 The handshake over QUIC (RFC 9001) runs crd-tls-peer's QuicHandshake against OpenSSL's QUIC TLS interface
 (SSL_set_quic_tls_cbs), the frames carrying CRYPTO data per encryption level: the three hybrid groups both ways in
@@ -377,6 +379,17 @@ def check_established(cerid_report, openssl_report, group, retry, ping):
     expect(cerid_report.get('group') == group, 'cerid negotiated %r' % cerid_report.get('group'))
     expect(openssl_report.get('group') in openssl_names(group), 'openssl negotiated %r' % openssl_report.get('group'))
     expect(openssl_report.get('version') == 'TLSv1.3', 'openssl ran %r' % openssl_report.get('version'))
+    check_exporter(cerid_report, openssl_report)
+
+
+def check_exporter(cerid_report, openssl_report):
+    """The exporter (RFC 9846 section 7.5; RFC 9001 section 4 over QUIC) under a label and a context, and Cerid's
+    world capability binding: each 32 bytes, derived by each library on its own, equal."""
+    for field in ('exporter', 'binding'):
+        value = cerid_report.get(field, '')
+        expect(len(value) == 64 and value == openssl_report.get(field),
+               '%s: cerid %r, openssl %r' % (field, value, openssl_report.get(field)))
+    expect(cerid_report.get('exporter') != cerid_report.get('binding'), 'the exporter and the binding are the same')
 
 
 def check_updates(cerid_report, openssl_report, cerid_sent, cerid_received):
@@ -709,6 +722,7 @@ def check_quic(cerid_report, openssl_report, cerid_client, group, retry, protoco
     probes = cerid_report.get('probes', {})
     expect(sorted(probes) == sorted(QUIC_PROBES) and probes == openssl_report.get('probes'),
            'the secrets disagree: cerid %s, openssl %s' % (probes, openssl_report.get('probes')))
+    check_exporter(cerid_report, openssl_report)
 
 
 def quic_cases(cerid_peer, openssl_peer, server_public, client_public, other_public):
