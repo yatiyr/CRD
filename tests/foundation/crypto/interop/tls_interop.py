@@ -26,7 +26,12 @@ Cerid client refuses OpenSSL servers that install hostile forms (a claimed lengt
 a zlib claim no DEFLATE can reach) and survives seeded corruptions of real forms, establishing only when a zlib form
 still decodes. Every established connection, over records and over QUIC, reports the exporter (RFC 9846 section 7.5)
 under a label and a context and Cerid's world capability binding (its private-use label, no context) as each library
-derives them, and the two must be equal.
+derives them, and the two must be equal. Each end also reports its RFC 9850 key log (Cerid's sink, OpenSSL's key log
+callback): every line read by the format's grammar, one client random per connection, the handshake and traffic
+secrets and EXPORTER_SECRET logged by both ends and equal, each secret as long as the suite's hash, and a line one end
+lacks only where RFC 9850 lets it: the early exporter and ECH labels, which the pinned AWS-LC never logs, and the
+client's early traffic secret at a server that did not accept early data. OpenSSL's own CLIENT_TRAFFIC_SECRET_N and
+SERVER_TRAFFIC_SECRET_N lines (each secret after a KeyUpdate, outside RFC 9850's registry) are set aside.
 
 The handshake over QUIC (RFC 9001) runs crd-tls-peer's QuicHandshake against OpenSSL's QUIC TLS interface
 (SSL_set_quic_tls_cbs), the frames carrying CRYPTO data per encryption level: the three hybrid groups both ways in
@@ -63,6 +68,7 @@ import hmac
 import json
 import os
 import random
+import re
 import struct
 import subprocess
 import sys
@@ -395,6 +401,7 @@ def check_established(cerid_report, openssl_report, group, retry, ping):
     expect(openssl_report.get('group') in openssl_names(group), 'openssl negotiated %r' % openssl_report.get('group'))
     expect(openssl_report.get('version') == 'TLSv1.3', 'openssl ran %r' % openssl_report.get('version'))
     check_exporter(cerid_report, openssl_report)
+    check_key_log(cerid_report, openssl_report)
 
 
 def check_exporter(cerid_report, openssl_report):
@@ -405,6 +412,56 @@ def check_exporter(cerid_report, openssl_report):
         expect(len(value) == 64 and value == openssl_report.get(field),
                '%s: cerid %r, openssl %r' % (field, value, openssl_report.get(field)))
     expect(cerid_report.get('exporter') != cerid_report.get('binding'), 'the exporter and the binding are the same')
+
+
+# RFC 9850 section 3's labels; those every established TLS 1.3 connection logs at both ends (EXPORTER_SECRET because
+# both peers ask for it); and those RFC 9850 lets an implementation leave out that the pinned AWS-LC never logs.
+KEY_LOG_LABELS = {'CLIENT_EARLY_TRAFFIC_SECRET', 'EARLY_EXPORTER_SECRET', 'CLIENT_HANDSHAKE_TRAFFIC_SECRET',
+                  'SERVER_HANDSHAKE_TRAFFIC_SECRET', 'CLIENT_TRAFFIC_SECRET_0', 'SERVER_TRAFFIC_SECRET_0',
+                  'EXPORTER_SECRET', 'CLIENT_RANDOM', 'ECH_SECRET', 'ECH_CONFIG'}
+KEY_LOG_REQUIRED = ('CLIENT_HANDSHAKE_TRAFFIC_SECRET', 'SERVER_HANDSHAKE_TRAFFIC_SECRET', 'CLIENT_TRAFFIC_SECRET_0',
+                    'SERVER_TRAFFIC_SECRET_0', 'EXPORTER_SECRET')
+KEY_LOG_ECH = {'ECH_SECRET', 'ECH_CONFIG'}
+KEY_LOG_UNLOGGED = KEY_LOG_ECH | {'EARLY_EXPORTER_SECRET'}
+KEY_LOG_LINE = re.compile(r'([A-Z0-9_]+) ([0-9a-fA-F]{64}) ((?:[0-9a-fA-F]{2})+)')
+# OpenSSL's own labels beyond RFC 9850's registry: each traffic secret after a KeyUpdate, under one literal label.
+OPENSSL_KEY_LOG_EXTRA = {'CLIENT_TRAFFIC_SECRET_N', 'SERVER_TRAFFIC_SECRET_N'}
+
+
+def key_log(report, side):
+    """{label: (client random, secret)} of a report's RFC 9850 lines, each read by the format's grammar (either case)."""
+    expect(not report.get('key_log_overflow'), '%s logged more lines than its report holds' % side)
+    lines = {}
+    for line in report.get('key_log', []):
+        match = KEY_LOG_LINE.fullmatch(line)
+        if side == 'openssl' and match is not None and match.group(1) in OPENSSL_KEY_LOG_EXTRA:
+            continue
+        expect(match is not None and match.group(1) in KEY_LOG_LABELS, '%s logged %r' % (side, line))
+        label = match.group(1)
+        expect(label not in lines, '%s logged %s twice' % (side, label))
+        lines[label] = (match.group(2).lower(), match.group(3).lower())
+    return lines
+
+
+def check_key_log(cerid_report, openssl_report):
+    """Both ends' RFC 9850 key logs of one established connection agree (the module docstring's rules)."""
+    cerid, openssl = key_log(cerid_report, 'cerid'), key_log(openssl_report, 'openssl')
+    cerid_early = cerid_report.get('early') == 'accepted'
+    openssl_early = openssl_report.get('early_status') == 'accepted'
+    hex_bytes = 96 if cerid_report.get('suite', '').endswith('SHA384') else 64
+    for side, own, other, early in (('cerid', cerid, openssl, cerid_early), ('openssl', openssl, cerid, openssl_early)):
+        for label in KEY_LOG_REQUIRED:
+            expect(label in own, '%s logged no %s: %s' % (side, label, sorted(own)))
+        lacking = set(other) - set(own) - KEY_LOG_UNLOGGED
+        expect(lacking <= ({'CLIENT_EARLY_TRAFFIC_SECRET'} if not early else set()),
+               '%s lacks %s that the other end logged' % (side, sorted(lacking)))
+        randoms = {random_ for label, (random_, _) in own.items() if label not in KEY_LOG_ECH}
+        expect(len(randoms) == 1, '%s logged %d client randoms' % (side, len(randoms)))
+    expect(not set(cerid) & (KEY_LOG_UNLOGGED | {'CLIENT_RANDOM'}), 'cerid logged %s' % sorted(cerid))
+    for label in set(cerid) & set(openssl):
+        expect(cerid[label] == openssl[label], '%s: cerid %s, openssl %s' % (label, cerid[label], openssl[label]))
+        expect(len(cerid[label][1]) == hex_bytes, '%s is %d hex digits under %s' % (
+            label, len(cerid[label][1]), cerid_report.get('suite')))
 
 
 def check_updates(cerid_report, openssl_report, cerid_sent, cerid_received):
@@ -739,6 +796,7 @@ def check_quic(cerid_report, openssl_report, cerid_client, group, retry, protoco
     expect(sorted(probes) == sorted(expected_probes) and probes == openssl_report.get('probes'),
            'the secrets disagree: cerid %s, openssl %s' % (probes, openssl_report.get('probes')))
     check_exporter(cerid_report, openssl_report)
+    check_key_log(cerid_report, openssl_report)
 
 
 def quic_cases(cerid_peer, openssl_peer, server_public, client_public, other_public):

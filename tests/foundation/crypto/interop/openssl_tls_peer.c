@@ -92,6 +92,24 @@ static int           g_compressed_sent;
 static int           g_compressed_received;
 static const char*   g_session_path;
 
+/* RFC 9850 key logging: the lines OpenSSL's key log callback gave, in the order they came. */
+#define KEY_LOG_LINES 16
+static char   g_key_log[KEY_LOG_LINES][1024];
+static size_t g_key_log_lines;
+static int    g_key_log_overflow;
+
+static void key_log(const SSL* ssl, const char* line)
+{
+    (void)ssl;
+    const size_t length = strlen(line);
+    if (g_key_log_lines == KEY_LOG_LINES || length >= sizeof(g_key_log[0]))
+    {
+        g_key_log_overflow = 1;
+        return;
+    }
+    memcpy(g_key_log[g_key_log_lines++], line, length + 1);
+}
+
 /* SHA-256("HelloRetryRequest"), the random of a HelloRetryRequest (RFC 9846 section 4.1.3). */
 static const unsigned char k_hello_retry[32] = {
     0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11, 0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65, 0xB8, 0x91,
@@ -963,6 +981,7 @@ int main(int argc, char** argv)
         return usage();
     }
     SSL_CTX_set_msg_callback(context, observe);
+    SSL_CTX_set_keylog_callback(context, key_log);
     SSL* ssl      = SSL_new(context);
     BIO* incoming = BIO_new(BIO_s_mem());
     BIO* outgoing = BIO_new(BIO_s_mem());
@@ -1164,7 +1183,12 @@ int main(int argc, char** argv)
     {
         fprintf(stderr, "%02x", binding[i]);
     }
-    fputs("\", ", stderr);
+    fputs("\", \"key_log\": [", stderr);
+    for (size_t i = 0; i < g_key_log_lines; ++i)
+    {
+        fprintf(stderr, "%s\"%s\"", i == 0 ? "" : ", ", g_key_log[i]);
+    }
+    fprintf(stderr, "], \"key_log_overflow\": %s, ", g_key_log_overflow ? "true" : "false");
     if (g_quic_version != 0)
     {
         fprintf(stderr, "\"alert_level\": %d, \"peer_parameters\": \"", g_alert_level);

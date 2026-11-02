@@ -331,6 +331,18 @@ public:
     [[nodiscard]] virtual cont::ConstSpan<u8> take(const TlsBinding& binding) noexcept = 0;
 };
 
+// RFC 9850 key logging (decision S19, threat T22): each TLS 1.3 secret of a session or QUIC handshake as one
+// SSLKEYLOGFILE line, "<label> <client random> <secret>" in lower-case hex with no terminator (a sink writing a file
+// ends each line itself), so a test can decrypt its own captures. Only for test traffic (RFC 9850 section 6): a
+// shipping build compiles it out, a context given a sink there is refused, and no environment variable turns it on.
+// The sink runs on the thread driving a session, inside the call that derived the secret, possibly for several
+// sessions of one context at once; it must not call into the session and keeps no line beyond the call. A line is a
+// key: whoever holds it decrypts and can forge the connection, so it never enters a diagnostic record or log.
+using TlsKeyLogSink = void (*)(void* user, cont::StringView line) noexcept;
+
+// Whether this build has RFC 9850 key logging: false in a shipping build.
+[[nodiscard]] bool tls_key_log_compiled() noexcept;
+
 struct TlsConfig
 {
     TlsRole                      role = TlsRole::Client;
@@ -377,6 +389,15 @@ struct TlsConfig
     // early data or on a client).
     bool          early_data        = false;
     ReplayFilter* early_data_filter = nullptr;
+    // RFC 9850 key logging (TlsKeyLogSink) of every session and QUIC handshake of the context: the traffic secrets
+    // (CLIENT_EARLY_TRAFFIC_SECRET, CLIENT_ and SERVER_HANDSHAKE_TRAFFIC_SECRET, CLIENT_ and SERVER_TRAFFIC_SECRET_0)
+    // and, with `key_log_exporters`, the exporter secrets (EXPORTER_SECRET; EARLY_EXPORTER_SECRET should the provider
+    // log it), which yield every exporter value a channel binding or an authentication relies on (RFC 9850 section 6:
+    // their separate authorization). A user or exporters without a sink,
+    // and a sink where tls_key_log_compiled() is false, are BadConfig.
+    TlsKeyLogSink key_log           = nullptr;
+    void*         key_log_user      = nullptr;
+    bool          key_log_exporters = false;
 };
 
 // The settings a session copies from its context.
@@ -401,6 +422,9 @@ struct TlsSettings
     u8          early_context[kSha256Bytes]        = {}; // a records server session's early data context's SHA-256
     bool        early_data                         = false;
     bool        ech_grease                         = false;
+    TlsKeyLogSink key_log                          = nullptr;
+    void*         key_log_user                     = nullptr;
+    bool          key_log_exporters                = false;
 };
 
 namespace detail

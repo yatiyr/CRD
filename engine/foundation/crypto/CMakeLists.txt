@@ -43,6 +43,13 @@ endif()
 target_compile_features(crd-crypto PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-crypto)
 
+# RFC 9850 key logging (network foundation S19, threat T22): built only into non-shipping builds. Private, so only
+# tls_key_log_compiled() tells a caller; the tests derive their expectation from the shipping condition themselves.
+if(NOT DEFINED _crd_shipping)
+    message(FATAL_ERROR "[crd] crd-crypto needs the top-level shipping condition (_crd_shipping)")
+endif()
+target_compile_definitions(crd-crypto PRIVATE "CRD_TLS_KEY_LOG=$<IF:${_crd_shipping},0,1>")
+
 # Cerid::crypto of the relocatable package, with AWS-LC's libssl and libcrypto exported link-only beside it
 # (Cerid::aws-lc-ssl, Cerid::aws-lc-crypto): their headers are private to this module, so the package installs none and
 # a consumer reaches them only through provider.hpp and tls.hpp.

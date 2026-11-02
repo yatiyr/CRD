@@ -40,9 +40,10 @@
 // Once established, a client sends "ping from cerid" (--pings times) and a server echoes every byte it reads. At the
 // end of input the end prints one JSON line on standard error with what it negotiated, whether it resumed, the key
 // updates each way, the algorithm of its compressed Certificate sent or received, what became of ECH (with a rejected
-// client's retry configurations) and of early data (a server's with the early bytes read_early() returned) and what it
-// read, and exits 0 (2 on a usage error). A server that accepted early data reads it after each frame until its
-// handshake ends; it echoes 1-RTT bytes only.
+// client's retry configurations) and of early data (a server's with the early bytes read_early() returned), what it
+// read and every RFC 9850 key log line its context logged (EXPORTER_SECRET included), and exits 0 (2 on a usage
+// error). A server that accepted early data reads it after each frame until its handshake ends; it echoes 1-RTT bytes
+// only.
 //
 // Over QUIC a frame carries CRYPTO data as pieces: a level byte (0 Initial, 1 Handshake, 2 Application), a 24-bit
 // big-endian length and that many bytes. No application data flows; the JSON line adds the application protocol, the
@@ -217,6 +218,25 @@ bool make_ech_key(const char* text, TlsEchKey& key)
            key.init(ConstSpan<u8>(secret), static_cast<u8>(id), kPublicName, kMaxNameLength) == TlsError::None;
 }
 
+// RFC 9850 key logging (decision S19): the lines the context's sink received, in the order they came.
+constexpr usize kMaxKeyLogLines     = 16U;
+constexpr usize kMaxKeyLogLineBytes = 256U;
+char            g_key_log[kMaxKeyLogLines][kMaxKeyLogLineBytes];
+usize           g_key_log_bytes[kMaxKeyLogLines];
+usize           g_key_log_lines    = 0U;
+bool            g_key_log_overflow = false;
+
+void log_key(void*, StringView line) noexcept
+{
+    if (g_key_log_lines == kMaxKeyLogLines || line.size() > kMaxKeyLogLineBytes)
+    {
+        g_key_log_overflow = true;
+        return;
+    }
+    std::memcpy(g_key_log[g_key_log_lines], line.data(), line.size());
+    g_key_log_bytes[g_key_log_lines++] = line.size();
+}
+
 void print_hex(ConstSpan<u8> bytes)
 {
     for (const u8 byte : bytes)
@@ -386,7 +406,12 @@ void print_common(const detail::TlsHandshakeState& state)
     print_hex(exports ? ConstSpan<u8>(exported) : ConstSpan<u8>());
     std::fputs(R"(", "binding": ")", stderr);
     print_hex(exports ? ConstSpan<u8>(binding) : ConstSpan<u8>());
-    std::fputs("\", ", stderr);
+    std::fputs(R"(", "key_log": [)", stderr);
+    for (usize i = 0U; i < g_key_log_lines; ++i)
+    {
+        std::fprintf(stderr, R"(%s"%.*s")", i == 0U ? "" : ", ", static_cast<int>(g_key_log_bytes[i]), g_key_log[i]);
+    }
+    std::fprintf(stderr, R"(], "key_log_overflow": %s, )", g_key_log_overflow ? "true" : "false");
 }
 
 // A QUIC handshake over the frames: a client's first flight unasked, then one frame answering each frame read.
@@ -716,6 +741,8 @@ int main(int argc, char** argv)
     config.ech_grease              = ech_grease;
     config.ech_keys                = ConstSpan<const TlsEchKey*>(ech_lists[0], ech_counts[0]);
     config.previous_ech_keys       = ConstSpan<const TlsEchKey*>(ech_lists[1], ech_counts[1]);
+    config.key_log                 = &log_key;
+    config.key_log_exporters       = true;
     if (ticket_key != nullptr)
     {
         config.ticket_key = ConstSpan<u8>(key_bytes, sizeof(key_bytes));

@@ -7,7 +7,8 @@
 // handshake; the exact allowance a ticket states; the pins checked before the first early byte; adversarial early
 // bytes; every configuration refusal; a ticket sealed under another early data context (another message schema)
 // resuming without its early data and spending no filter entry; one server context and filter serving 0-RTT on several
-// threads; and over QUIC,
+// threads; RFC 9850 key logging of the early traffic secret by the client and the server that accepts it; and over
+// QUIC,
 // the client's 0-RTT keys meeting the server's with the transport parameters the client remembered, another early
 // data context and a HelloRetryRequest refusing them (the client's keys zeroed), a replayed Initial, and the early
 // data context's refusals.
@@ -21,12 +22,15 @@
 #include <crd/crypto/replay.hpp>
 #include <crd/crypto/tls.hpp>
 
+#include "tls_key_log.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <openssl/ssl.h> // SSL_SESSION_set_time: a client's ticket aged at rest, for the provider's freshness check
 
 #include <atomic>
 #include <cstring>
+#include <iterator>
 #include <ctime>
 #include <initializer_list>
 #include <thread>
@@ -245,6 +249,8 @@ struct Options
     ConstSpan<StringView> client_protocols;
     ConstSpan<StringView> server_protocols;
     bool mutual = false; // the server pins the client's key
+    crd::crypto::test::KeyLog* client_log = nullptr; // RFC 9850 key logs of each context (decision S19)
+    crd::crypto::test::KeyLog* server_log = nullptr;
 };
 
 // Both ends' credentials, keys and contexts; every server of a test shares one ticket key, as a fleet does.
@@ -277,6 +283,10 @@ void configure_server(Pair& pair, TlsContext& context, const Options& options)
         config.signatures = kAllSignatures;
         config.pinned = ConstSpan<KeyId>(&client_pin, 1U);
     }
+    if (options.server_log != nullptr)
+    {
+        options.server_log->attach(config);
+    }
     REQUIRE(context.init(config) == TlsError::None);
 }
 
@@ -301,6 +311,10 @@ void configure(Pair& pair, const Options& options)
     config.application_protocols = options.client_protocols;
     config.credential = options.mutual ? &pair.client_credential : nullptr;
     config.early_data = options.client_early;
+    if (options.client_log != nullptr)
+    {
+        options.client_log->attach(config);
+    }
     REQUIRE(pair.client.init(config) == TlsError::None);
     configure_server(pair, pair.server, options);
 }
@@ -1406,4 +1420,82 @@ TEST_CASE("QUIC 0-RTT: an early data context only where early data is accepted, 
           TlsError::BadConfig);
     CHECK(handshake.init(quic.pair.client, ConstSpan<u8>(kClientParameters)) == TlsError::None);
     CHECK(handshake.early_data() == TlsEarlyData::None);
+}
+
+TEST_CASE("TLS 0-RTT: the client logs its early traffic secret, and a server logs it only when it accepts early data",
+          "[crypto][tls][early][key-log][net-2]")
+{
+    if (!tls_key_log_compiled())
+    {
+        SKIP("key logging is compiled out of this build");
+    }
+    using crd::crypto::test::KeyLog;
+    using crd::crypto::test::KeyLogLine;
+    ReplayFilter filter;
+    REQUIRE(filter.init(1024U, kPeriod, now()) == CryptoError::None);
+    KeyLog  client_log;
+    KeyLog  server_log;
+    Pair    pair;
+    Options options;
+    options.filter     = &filter;
+    options.client_log = &client_log;
+    options.server_log = &server_log;
+    configure(pair, options);
+    TlsContext without;
+    KeyLog     without_log;
+    Options    refusing = options;
+    refusing.server_early = false;
+    refusing.server_log   = &without_log;
+    configure_server(pair, without, refusing);
+
+    for (const bool accepted : {true, false})
+    {
+        CAPTURE(accepted);
+        Store store;
+        first_connection(pair, store);
+        client_log.clear();
+        server_log.clear();
+        TlsSession  client;
+        TlsSession  server;
+        const Bytes message = bytes_of("logged early");
+        start_early(client, server, pair.client, accepted ? pair.server : without, store, message);
+        const Bytes flight = drain(client);
+        REQUIRE(flight.size() > 43U);
+        const ConstSpan<u8> random(flight.data() + 11U, 32U);
+        REQUIRE(give(server, flight) == TlsError::None);
+        Bytes early;
+        establish(client, server, early);
+        CHECK(server.early_data() == (accepted ? TlsEarlyData::Accepted : TlsEarlyData::Rejected));
+
+        const KeyLog& server_side = accepted ? server_log : without_log;
+        CHECK_FALSE(client_log.malformed());
+        CHECK_FALSE(server_side.malformed());
+        CHECK(client_log.size() == std::size(crd::crypto::test::kKeyLogTraffic) + 1U);
+        CHECK(client_log.all_of_random(random));
+        const KeyLogLine* logged = client_log.find("CLIENT_EARLY_TRAFFIC_SECRET");
+        REQUIRE(logged != nullptr);
+        const KeyLogLine* served = server_side.find("CLIENT_EARLY_TRAFFIC_SECRET");
+        if (accepted)
+        {
+            REQUIRE(served != nullptr);
+            CHECK(*served == *logged);
+            CHECK(client_log.same(server_side));
+        }
+        else
+        {
+            CHECK(served == nullptr);
+            CHECK(server_side.size() == std::size(crd::crypto::test::kKeyLogTraffic));
+            for (const char* label : crd::crypto::test::kKeyLogTraffic)
+            {
+                CAPTURE(label);
+                const KeyLogLine* mine   = client_log.find(label);
+                const KeyLogLine* theirs = server_side.find(label);
+                REQUIRE(mine != nullptr);
+                REQUIRE(theirs != nullptr);
+                CHECK(*mine == *theirs);
+            }
+        }
+        without_log.clear();
+        read_tickets(client, server);
+    }
 }

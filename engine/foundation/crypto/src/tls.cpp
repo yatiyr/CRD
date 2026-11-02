@@ -33,6 +33,10 @@
 // and a server's public names, which the name check reads during handshakes that may outlive the TlsContext. A client
 // given a list proves its ClientHello encrypted an inner one (the provider reports it to the message observer) before
 // any byte leaves, so a list the provider cannot use never becomes a hello that reveals the server name.
+//
+// RFC 9850 key logging (decision S19, threat T22) is the provider's key log callback, forwarded to the context's sink.
+// It exists only where CRD_TLS_KEY_LOG (this module's CMakeLists.txt) is 1: a shipping build sets it to 0, and the
+// provider's key log functions are then poisoned below, so any use of them there fails to compile.
 #include <crd/crypto/tls.hpp>
 
 #include "provider_internal.hpp"
@@ -62,6 +66,14 @@
 #include <iterator>
 #include <new>
 #include <utility>
+
+#if !defined(CRD_TLS_KEY_LOG)
+#error "CRD_TLS_KEY_LOG comes from engine/foundation/crypto/CMakeLists.txt"
+#elif !CRD_TLS_KEY_LOG && (defined(__clang__) || defined(__GNUC__)) // clang-cl too: it defines __clang__
+#pragma GCC poison SSL_CTX_set_keylog_callback SSL_CTX_get_keylog_callback
+#elif !CRD_TLS_KEY_LOG && defined(_MSC_VER)
+#pragma deprecated(SSL_CTX_set_keylog_callback, SSL_CTX_get_keylog_callback) // C4995, an error under /WX
+#endif
 
 namespace crd::crypto
 {
@@ -1117,6 +1129,28 @@ struct TlsCallbacks
         return receive_compressed(iana::kCertCompressionZlib, out, length, in, in_len);
     }
 
+#if CRD_TLS_KEY_LOG
+    // Hands the provider's RFC 9850 line to the session's sink, the exporter secrets (EXPORTER_SECRET, and
+    // EARLY_EXPORTER_SECRET should a provider log it) only where the context allows them. The provider zeroes its copy
+    // of the line when it frees it.
+    static void log_key(const SSL* ssl, const char* line) noexcept
+    {
+        const detail::TlsHandshakeState* session = session_of(ssl);
+        if (session == nullptr || session->m_settings.key_log == nullptr)
+        {
+            return;
+        }
+        const TlsSettings&     settings = session->m_settings;
+        const cont::StringView text(line, std::strlen(line));
+        if (!settings.key_log_exporters &&
+            (text.starts_with("EXPORTER_SECRET ") || text.starts_with("EARLY_EXPORTER_SECRET ")))
+        {
+            return;
+        }
+        settings.key_log(settings.key_log_user, text);
+    }
+#endif
+
     // Records the first alert each way, notices a HelloRetryRequest (a ServerHello with the special random), counts
     // the KeyUpdates each way, notes the algorithm of a compressed Certificate sent or received, notes that a client
     // encrypted an inner ClientHello (the provider reports it only when its outer hello offers ECH) and reads the
@@ -1696,6 +1730,11 @@ cont::StringView tls_error_name(TlsError error) noexcept
     return "unknown";
 }
 
+bool tls_key_log_compiled() noexcept
+{
+    return CRD_TLS_KEY_LOG != 0;
+}
+
 cont::StringView tls_ech_name(TlsEch ech) noexcept
 {
     switch (ech)
@@ -1988,7 +2027,9 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
         (!config.previous_ticket_key.empty() &&
          (config.previous_ticket_key.size() != kTlsTicketKeyBytes || config.ticket_key.empty())) ||
         config.ticket_lifetime > kTlsMaxTicketLifetime || !valid_compression(config.certificate_compression) ||
-        !valid_ech(config) || !valid_early_data(config))
+        !valid_ech(config) || !valid_early_data(config) ||
+        (config.key_log == nullptr && (config.key_log_user != nullptr || config.key_log_exporters)) ||
+        (config.key_log != nullptr && !tls_key_log_compiled()))
     {
         return TlsError::BadConfig;
     }
@@ -2006,6 +2047,9 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     settings.ech_grease         = !server && config.ech_grease;
     settings.early_data = config.early_data;
     settings.early_filter = config.early_data_filter;
+    settings.key_log           = config.key_log;
+    settings.key_log_user      = config.key_log_user;
+    settings.key_log_exporters = config.key_log_exporters;
     settings.binding = binding_of(config, config.credential != nullptr ? config.credential->key_id() : KeyId{});
     if (!protocols_of(config.application_protocols, settings))
     {
@@ -2193,6 +2237,12 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
         }
     }
     SSL_CTX_set_msg_callback(context.get(), &TlsCallbacks::observe);
+#if CRD_TLS_KEY_LOG
+    if (config.key_log != nullptr)
+    {
+        SSL_CTX_set_keylog_callback(context.get(), &TlsCallbacks::log_key);
+    }
+#endif
     if (session_slot() < 0 || ech_slot() < 0)
     {
         return TlsError::ProviderFailure;

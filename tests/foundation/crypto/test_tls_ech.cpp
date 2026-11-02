@@ -5,13 +5,16 @@
 // key and used for one retried connection, a second rejection refused, a server that turned ECH off, a rejection that
 // an unpinned server cannot authenticate and one under mutual authentication; key rotation; GREASE; the padding that
 // hides the server name's length; lists the client skips or cannot use; the public name refused as a destination of
-// its own; the same over QUIC; and every configuration refusal.
+// its own; the same over QUIC; every configuration refusal; and RFC 9850 key logging, whose lines carry the inner
+// hello's random once ECH is accepted and the outer one's otherwise.
 //
 // The independent peer (OpenSSL 4.0's ECH) is tests/foundation/crypto/interop/tls_interop.py's.
 
 #include <crd/containers/array.hpp>
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/tls.hpp>
+
+#include "tls_key_log.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -232,6 +235,8 @@ struct Setup
     bool                        client_pins_server = true;
     AlgorithmId                 client_key{};            // mutual authentication when set
     ConstSpan<StringView>       protocols;
+    crd::crypto::test::KeyLog*  client_log = nullptr; // RFC 9850 key logs of each context (decision S19)
+    crd::crypto::test::KeyLog*  server_log = nullptr;
 };
 
 void configure(Endpoint& client, Endpoint& server, const Setup& setup)
@@ -253,6 +258,10 @@ void configure(Endpoint& client, Endpoint& server, const Setup& setup)
     client_config.application_protocols = setup.protocols;
     client_config.ech_configs           = setup.client_ech;
     client_config.ech_grease            = setup.grease;
+    if (setup.client_log != nullptr)
+    {
+        setup.client_log->attach(client_config);
+    }
     KeyId server_pin;
     if (setup.client_key != AlgorithmId{})
     {
@@ -272,6 +281,10 @@ void configure(Endpoint& client, Endpoint& server, const Setup& setup)
     server_config.application_protocols = setup.protocols;
     server_config.ech_keys              = setup.server_keys;
     server_config.previous_ech_keys     = setup.previous_keys;
+    if (setup.server_log != nullptr)
+    {
+        setup.server_log->attach(server_config);
+    }
     if (setup.client_key != AlgorithmId{})
     {
         server_config.signatures = kAllSignatures;
@@ -1178,4 +1191,73 @@ TEST_CASE("TLS ECH: over QUIC the hello is encrypted, a rejection retries and GR
     CHECK(ech < 2U * 1200U - 2U * 64U); // two datagrams, with room for the packet headers and tags
     CHECK(greased < 2U * 1200U - 2U * 64U);
     SUCCEED("ClientHello CRYPTO bytes, X25519MLKEM768 first: without ECH, with GREASE, with ECH");
+}
+
+TEST_CASE("TLS ECH: key log lines carry the inner hello's random when ECH is accepted and the outer one's otherwise",
+          "[crypto][tls][ech][key-log][net-2]")
+{
+    if (!tls_key_log_compiled())
+    {
+        SKIP("key logging is compiled out of this build");
+    }
+    using crd::crypto::test::KeyLog;
+    TlsEchKey current;
+    TlsEchKey stale;
+    make_ech(current, 1U, 7U);
+    make_ech(stale, 2U, 8U);
+    const Bytes      current_list = list_of({&current});
+    const Bytes      stale_list   = list_of({&stale});
+    const TlsEchKey* keys[]       = {&current};
+
+    // Accepted (RFC 9850 section 3): the server knows only the inner random, and both ends log the same lines.
+    {
+        Endpoint client;
+        Endpoint server;
+        KeyLog   client_log;
+        KeyLog   server_log;
+        Setup    setup;
+        setup.client_ech  = span_of(current_list);
+        setup.server_keys = ConstSpan<const TlsEchKey*>(keys);
+        setup.client_log  = &client_log;
+        setup.server_log  = &server_log;
+        configure(client, server, setup);
+        const Run result = connect(client, server);
+        expect_accepted(client, server, result);
+        CHECK_FALSE(client_log.malformed());
+        CHECK(client_log.size() == std::size(crd::crypto::test::kKeyLogTraffic));
+        CHECK(client_log.same(server_log));
+        REQUIRE(result.first_flight.size() > 43U);
+        CHECK_FALSE(client_log.all_of_random(ConstSpan<u8>(result.first_flight.data() + 11U, 32U)));
+        CHECK(client_log.all_of_random(ConstSpan<u8>(client_log[0].random)));
+    }
+
+    // Rejected: the handshake ran on the outer hello, whose random every line of both ends carries.
+    {
+        Endpoint client;
+        Endpoint server;
+        KeyLog   client_log;
+        KeyLog   server_log;
+        Setup    setup;
+        setup.client_ech  = span_of(stale_list);
+        setup.server_keys = ConstSpan<const TlsEchKey*>(keys);
+        setup.client_log  = &client_log;
+        setup.server_log  = &server_log;
+        configure(client, server, setup);
+        const Run result = connect(client, server);
+        expect_rejected(client, server, result, TlsEch::Retry);
+        CHECK_FALSE(client_log.malformed());
+        CHECK_FALSE(server_log.malformed());
+        REQUIRE(result.first_flight.size() > 43U);
+        const ConstSpan<u8> outer(result.first_flight.data() + 11U, 32U);
+        CHECK(client_log.all_of_random(outer));
+        CHECK(server_log.all_of_random(outer));
+        REQUIRE(client_log.find("CLIENT_HANDSHAKE_TRAFFIC_SECRET") != nullptr);
+        for (usize i = 0U; i < client_log.size(); ++i)
+        {
+            const crd::crypto::test::KeyLogLine* match = server_log.find(client_log[i].name());
+            CAPTURE(client_log[i].label);
+            REQUIRE(match != nullptr);
+            CHECK(*match == client_log[i]);
+        }
+    }
 }

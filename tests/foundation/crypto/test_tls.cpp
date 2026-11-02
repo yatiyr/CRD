@@ -7,7 +7,8 @@
 // rotation, a client no longer pinned, tickets changed at rest or expired, a HelloRetryRequest), certificate
 // compression (the forms a server sends and their sizes, the algorithm both ends allow, the bounded decoder, and a
 // hostile server of the provider's own stack whose compressed Certificates a client refuses), adversarial bytes, every
-// configuration refusal and one context serving several threads.
+// configuration refusal, one context serving several threads, and RFC 9850 key logging (each logged secret opening
+// the records or deriving the exporter it names, apart from the provider; refused where it is compiled out).
 //
 // The independent peer (OpenSSL 4.0's hybrid key exchange) is tests/foundation/crypto/interop/tls_interop.py's.
 
@@ -16,6 +17,8 @@
 #include <crd/containers/array.hpp>
 #include <crd/crypto/provider.hpp>
 #include <crd/crypto/tls.hpp>
+
+#include "tls_key_log.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -30,6 +33,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <initializer_list>
+#include <iterator>
 #include <thread>
 #include <utility>
 
@@ -188,6 +193,9 @@ struct Options
     ConstSpan<u16>         client_compression = kTlsCertificateCompression; // TlsConfig::certificate_compression
     ConstSpan<u16>         server_compression = kTlsCertificateCompression;
     StringView             credential_name    = kServerName; // the name the server's certificate carries
+    crd::crypto::test::KeyLog* client_log    = nullptr;        // RFC 9850 key logs of each context (decision S19)
+    crd::crypto::test::KeyLog* server_log    = nullptr;
+    bool                       log_exporters = false;          // TlsConfig::key_log_exporters of both
 };
 
 // Configures both ends; the client's first flight is pending when this returns.
@@ -210,6 +218,10 @@ void setup(Endpoint& client, Endpoint& server, const Options& options)
     client_config.key_update_records = options.client_key_records;
     client_config.max_key_updates    = options.client_max_updates;
     client_config.certificate_compression = options.client_compression;
+    if (options.client_log != nullptr)
+    {
+        options.client_log->attach(client_config, options.log_exporters);
+    }
     KeyId server_pin;
     if (options.client_key != AlgorithmId{})
     {
@@ -232,6 +244,10 @@ void setup(Endpoint& client, Endpoint& server, const Options& options)
     server_config.previous_ticket_key = options.previous_ticket_key;
     server_config.ticket_lifetime     = options.ticket_lifetime;
     server_config.certificate_compression = options.server_compression;
+    if (options.server_log != nullptr)
+    {
+        options.server_log->attach(server_config, options.log_exporters);
+    }
     if (options.server_pins_client)
     {
         server_config.signatures = kAllSignatures;
@@ -2837,4 +2853,278 @@ TEST_CASE("TLS: the exporter is equal at both ends, unique to each connection an
     u8 closed[32] = {1U};
     CHECK(client.session.export_keying_material("EXPERIMENTAL test", {}, closed) == TlsError::NotReady);
     CHECK(zero(closed));
+}
+
+// ---- RFC 9850 key logging (decision S19, threat T22) ----
+
+namespace
+{
+using crd::crypto::test::KeyLog;
+using crd::crypto::test::KeyLogLine;
+using crd::crypto::test::kKeyLogTraffic;
+
+constexpr u8 kRecordApplicationData = 23U;
+constexpr u8 kEncryptedExtensions   = 8U;
+
+AlgorithmId hkdf_of(AlgorithmId aead)
+{
+    return aead == AlgorithmId::Aes256Gcm ? AlgorithmId::HkdfSha384 : AlgorithmId::HkdfSha256;
+}
+
+// HKDF-Expand-Label (RFC 9846 section 7.1) as the RFC writes it, apart from the provider's TLS stack.
+void expand_label(AlgorithmId hkdf, ConstSpan<u8> secret, StringView label, ConstSpan<u8> context, Span<u8> out)
+{
+    u8    info[2U + 1U + 255U + 1U + 255U] = {};
+    usize size                             = 0U;
+    info[size++]                           = static_cast<u8>(out.size() >> 8U);
+    info[size++]                           = static_cast<u8>(out.size());
+    info[size++]                           = static_cast<u8>(6U + label.size());
+    for (const StringView part : {StringView("tls13 "), label})
+    {
+        for (const char c : part)
+        {
+            info[size++] = static_cast<u8>(c);
+        }
+    }
+    info[size++] = static_cast<u8>(context.size());
+    for (const u8 byte : context)
+    {
+        info[size++] = byte;
+    }
+    REQUIRE(hkdf_expand(hkdf, secret, ConstSpan<u8>(info, size), out) == CryptoError::None);
+}
+
+// Opens the TLS 1.3 record `record` as record number `sequence` under the traffic secret `secret` (RFC 9846 sections
+// 5.2 and 5.3): its content type and its content, the padding stripped; false when it does not open.
+bool open_record(AlgorithmId aead, ConstSpan<u8> secret, u64 sequence, ConstSpan<u8> record, u8& type, Bytes& content)
+{
+    const AlgorithmId hkdf          = hkdf_of(aead);
+    u8                key_bytes[32] = {};
+    u8                nonce[kAeadNonceBytes];
+    const Span<u8>    key(key_bytes, aead_key_bytes(aead));
+    expand_label(hkdf, secret, "key", {}, key);
+    expand_label(hkdf, secret, "iv", {}, nonce);
+    for (usize i = 0U; i < 8U; ++i)
+    {
+        nonce[kAeadNonceBytes - 1U - i] ^= static_cast<u8>(sequence >> (8U * i));
+    }
+    AeadKey opener;
+    REQUIRE(opener.init(aead, key) == CryptoError::None);
+    if (record.size() < 5U + kAeadTagBytes + 1U)
+    {
+        return false;
+    }
+    Bytes plain;
+    plain.resize(record.size() - 5U - kAeadTagBytes);
+    if (opener.open(nonce, record.subspan(5U), record.first(5U), Span<u8>(plain.data(), plain.size())) !=
+        CryptoError::None)
+    {
+        return false;
+    }
+    usize end = plain.size();
+    while (end > 0U && plain[end - 1U] == 0U)
+    {
+        --end;
+    }
+    if (end == 0U)
+    {
+        return false;
+    }
+    type = plain[end - 1U];
+    content.clear();
+    for (usize i = 0U; i + 1U < end; ++i)
+    {
+        content.push_back(plain[i]);
+    }
+    return true;
+}
+
+// The first record of `flight` whose outer type is application_data (a protected record).
+ConstSpan<u8> first_protected(const Bytes& flight)
+{
+    for (usize at = 0U; at + 5U <= flight.size();)
+    {
+        const usize length = (static_cast<usize>(flight[at + 3U]) << 8U) | flight[at + 4U];
+        REQUIRE(at + 5U + length <= flight.size());
+        if (flight[at] == kRecordApplicationData)
+        {
+            return ConstSpan<u8>(flight.data() + at, 5U + length);
+        }
+        at += 5U + length;
+    }
+    FAIL("the flight holds no protected record");
+    return {};
+}
+
+ConstSpan<u8> secret_of(const KeyLog& log, StringView label)
+{
+    const KeyLogLine* line = log.find(label);
+    REQUIRE(line != nullptr);
+    return line->value();
+}
+
+Bytes text_bytes(StringView text)
+{
+    Bytes bytes;
+    for (const char c : text)
+    {
+        bytes.push_back(static_cast<u8>(c));
+    }
+    return bytes;
+}
+} // namespace
+
+TEST_CASE("TLS key log: a build states whether it has RFC 9850 key logging, and one without it refuses a sink",
+          "[crypto][tls][key-log][net-2]")
+{
+    // The expectation comes from the shipping condition through the test's own definition, so a shipping lane fails
+    // the moment key logging reaches a shipping build.
+    CHECK(tls_key_log_compiled() == (CRD_TEST_EXPECT_TLS_KEY_LOG != 0));
+
+    SigningKey    key;
+    TlsCredential credential;
+    make_key(key, AlgorithmId::Ed25519, 0U);
+    REQUIRE(credential.init(key, kServerName) == TlsError::None);
+    const KeyId pin = credential.key_id();
+    KeyLog      log;
+    TlsContext  context;
+
+    TlsConfig client;
+    client.role         = TlsRole::Client;
+    client.groups       = kAllGroups;
+    client.signatures   = kAllSignatures;
+    client.aeads        = kAllAeads;
+    client.pinned       = ConstSpan<KeyId>(&pin, 1U);
+    client.server_name  = kServerName;
+    client.key_log_user = &log;
+    CHECK(context.init(client) == TlsError::BadConfig);
+    client.key_log_user      = nullptr;
+    client.key_log_exporters = true;
+    CHECK(context.init(client) == TlsError::BadConfig);
+    CHECK_FALSE(context.ready());
+
+    TlsConfig server;
+    server.role       = TlsRole::Server;
+    server.groups     = kAllGroups;
+    server.aeads      = kAllAeads;
+    server.credential = &credential;
+    for (TlsConfig* config : {&client, &server})
+    {
+        log.attach(*config, true);
+        CHECK(context.init(*config) == (tls_key_log_compiled() ? TlsError::None : TlsError::BadConfig));
+        CHECK(context.ready() == tls_key_log_compiled());
+    }
+    CHECK(log.size() == 0U);
+}
+
+TEST_CASE("TLS key log: both ends log the same RFC 9850 lines, whose secrets open the connection's records",
+          "[crypto][tls][key-log][net-2]")
+{
+    if (!tls_key_log_compiled())
+    {
+        SKIP("key logging is compiled out of this build");
+    }
+    for (const AlgorithmId aead : kAllAeads)
+    {
+        CAPTURE(static_cast<u16>(aead));
+        Endpoint client;
+        Endpoint server;
+        KeyLog   client_log;
+        KeyLog   server_log;
+        Options  options;
+        options.client_aeads = ConstSpan<AlgorithmId>(&aead, 1U);
+        options.server_aeads = ConstSpan<AlgorithmId>(&aead, 1U);
+        options.client_log   = &client_log;
+        options.server_log   = &server_log;
+        setup(client, server, options);
+
+        // The ClientHello's random (after the record header, the handshake header and legacy_version) names every
+        // line; the server's first protected record opens under its handshake secret as EncryptedExtensions.
+        const Bytes hello = drain(client.session);
+        REQUIRE(hello.size() > 43U);
+        const ConstSpan<u8> random(hello.data() + 11U, 32U);
+        REQUIRE(server.session.receive(ConstSpan<u8>(hello.data(), hello.size())) == TlsError::None);
+        const Bytes flight = drain(server.session);
+        u8          type   = 0U;
+        Bytes       content;
+        REQUIRE(open_record(aead, secret_of(server_log, "SERVER_HANDSHAKE_TRAFFIC_SECRET"), 0U,
+                            first_protected(flight), type, content));
+        CHECK(type == kRecordHandshake);
+        CHECK((!content.empty() && content[0] == kEncryptedExtensions));
+        REQUIRE(client.session.receive(ConstSpan<u8>(flight.data(), flight.size())) == TlsError::None);
+        establish(client, server);
+
+        CHECK_FALSE(client_log.malformed());
+        CHECK_FALSE(server_log.malformed());
+        CHECK(client_log.size() == std::size(kKeyLogTraffic));
+        for (const char* label : kKeyLogTraffic)
+        {
+            CAPTURE(label);
+            const KeyLogLine* line = client_log.find(label);
+            REQUIRE(line != nullptr);
+            CHECK(line->secret_bytes == hkdf_hash_bytes(hkdf_of(aead)));
+        }
+        CHECK(client_log.find("EXPORTER_SECRET") == nullptr);
+        CHECK(client_log.same(server_log));
+        CHECK(client_log.all_of_random(random));
+
+        // Application data opens under its traffic secret as its first record, and under nothing else.
+        const Bytes message = text_bytes("logged for a capture");
+        REQUIRE(client.session.send(ConstSpan<u8>(message.data(), message.size())) == TlsError::None);
+        const Bytes         record    = drain(client.session);
+        const ConstSpan<u8> protected_record = first_protected(record);
+        REQUIRE(open_record(aead, secret_of(client_log, "CLIENT_TRAFFIC_SECRET_0"), 0U, protected_record, type,
+                            content));
+        CHECK(type == kRecordApplicationData);
+        CHECK(same_bytes(content, message));
+        CHECK_FALSE(open_record(aead, secret_of(client_log, "SERVER_TRAFFIC_SECRET_0"), 0U, protected_record, type,
+                                content));
+        CHECK_FALSE(open_record(aead, secret_of(client_log, "CLIENT_TRAFFIC_SECRET_0"), 1U, protected_record, type,
+                                content));
+        REQUIRE(server.session.receive(ConstSpan<u8>(record.data(), record.size())) == TlsError::None);
+        CHECK(same_bytes(read_all(server.session), message));
+    }
+}
+
+TEST_CASE("TLS key log: EXPORTER_SECRET only where the context allows it, and every exporter value follows from it",
+          "[crypto][tls][key-log][net-2]")
+{
+    if (!tls_key_log_compiled())
+    {
+        SKIP("key logging is compiled out of this build");
+    }
+    Endpoint client;
+    Endpoint server;
+    KeyLog   client_log;
+    KeyLog   server_log;
+    Options  options;
+    options.client_log    = &client_log;
+    options.server_log    = &server_log;
+    options.log_exporters = true;
+    setup(client, server, options);
+    establish(client, server);
+    CHECK_FALSE(client_log.malformed());
+    CHECK(client_log.size() == std::size(kKeyLogTraffic) + 1U);
+    CHECK(client_log.same(server_log));
+
+    // RFC 9846 section 7.5: HKDF-Expand-Label(Derive-Secret(exporter secret, label, ""), "exporter", Hash(context), L).
+    const AlgorithmId hkdf             = hkdf_of(client.session.aead());
+    const usize       hash             = hkdf_hash_bytes(hkdf);
+    const u8          context[]        = {1U, 2U, 3U};
+    const StringView  label            = "EXPERIMENTAL key log";
+    u8                empty_hash[48]   = {};
+    u8                context_hash[48] = {};
+    u8                derived[48]      = {};
+    u8                expected[40]     = {};
+    u8                exported[40]     = {};
+    REQUIRE(kdf_hash(hkdf, {}, Span<u8>(empty_hash, hash)) == CryptoError::None);
+    REQUIRE(kdf_hash(hkdf, context, Span<u8>(context_hash, hash)) == CryptoError::None);
+    expand_label(hkdf, secret_of(client_log, "EXPORTER_SECRET"), label, ConstSpan<u8>(empty_hash, hash),
+                 Span<u8>(derived, hash));
+    expand_label(hkdf, ConstSpan<u8>(derived, hash), "exporter", ConstSpan<u8>(context_hash, hash), expected);
+    for (TlsSession* session : {&client.session, &server.session})
+    {
+        REQUIRE(session->export_keying_material(label, context, exported) == TlsError::None);
+        CHECK(std::memcmp(exported, expected, sizeof(expected)) == 0);
+    }
 }

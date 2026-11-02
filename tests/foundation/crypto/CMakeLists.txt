@@ -59,6 +59,10 @@ target_compile_definitions(crd-crypto-tests PRIVATE
     CRD_HPKE_VECTORS="${aws-lc_SOURCE_DIR}/crypto/hpke/test-vectors.json"
     CRD_HPKE_PQ_VECTORS="${hpke-pq-vectors_SOURCE_DIR}/test-vectors.json")
 
+# What tls_key_log_compiled() must answer (network foundation S19): derived here from the shipping condition, apart
+# from crd-crypto's own definition, so a shipping lane fails the moment key logging reaches a shipping build.
+target_compile_definitions(crd-crypto-tests PRIVATE "CRD_TEST_EXPECT_TLS_KEY_LOG=$<IF:${_crd_shipping},0,1>")
+
 crd_enable_default_pch(crd-crypto-tests)
 crd_discover_tests(crd-crypto-tests)
 

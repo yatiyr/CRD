@@ -5,8 +5,8 @@
 // levels, application protocols (and the same rules for stream sessions), transport parameters both ways and a
 // ClientHello without them, certificate compression, tickets and resumption under QUIC's own binding, the flights'
 // sizes against QUIC's amplification limit and the round trips of address validation (a Retry and a NEW_TOKEN token,
-// quic.hpp), a forbidden TLS KeyUpdate, data at levels the handshake does not read, the receive limit, refusals and
-// one context on several threads.
+// quic.hpp), a forbidden TLS KeyUpdate, data at levels the handshake does not read, the receive limit, refusals, one
+// context on several threads and RFC 9850 key logging (each logged secret's packet keys meeting the handshake's).
 //
 // The independent peer (OpenSSL 4.0's QUIC TLS interface) is tests/foundation/crypto/interop/tls_interop.py's.
 
@@ -16,11 +16,14 @@
 #include <crd/crypto/quic.hpp>
 #include <crd/crypto/tls.hpp>
 
+#include "tls_key_log.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
 #include <cstring>
 #include <initializer_list>
+#include <iterator>
 #include <thread>
 
 namespace
@@ -129,6 +132,8 @@ struct Options
     ConstSpan<StringView>  server_protocols   = kGame;
     ConstSpan<u16>         client_compression = kTlsCertificateCompression;
     ConstSpan<u8>          ticket_key;
+    crd::crypto::test::KeyLog* client_log = nullptr; // RFC 9850 key logs of each context (decision S19)
+    crd::crypto::test::KeyLog* server_log = nullptr;
 };
 
 void configure(End& client, End& server, const Options& options)
@@ -149,6 +154,10 @@ void configure(End& client, End& server, const Options& options)
     client_config.server_name             = kServerName;
     client_config.certificate_compression = options.client_compression;
     client_config.application_protocols   = options.client_protocols;
+    if (options.client_log != nullptr)
+    {
+        options.client_log->attach(client_config);
+    }
     KeyId server_pin;
     if (options.client_key != AlgorithmId{})
     {
@@ -171,6 +180,10 @@ void configure(End& client, End& server, const Options& options)
     server_config.server_name           = kServerName;
     server_config.ticket_key            = options.ticket_key;
     server_config.application_protocols = options.server_protocols;
+    if (options.server_log != nullptr)
+    {
+        options.server_log->attach(server_config);
+    }
     if (options.server_pins_client)
     {
         server_config.signatures = kAllSignatures;
@@ -1234,4 +1247,79 @@ TEST_CASE("QUIC handshake: the exporter and the capability bindings are equal at
     REQUIRE(server.handshake.export_keying_material("EXPERIMENTAL test", {}, second_server) == TlsError::None);
     CHECK(equal(second_client, second_server));
     CHECK_FALSE(equal(second_client, first_server));
+}
+
+TEST_CASE("QUIC handshake: both ends log the same RFC 9850 lines, whose secrets give the handshake's packet keys",
+          "[crypto][quic][key-log][net-2]")
+{
+    if (!tls_key_log_compiled())
+    {
+        SKIP("key logging is compiled out of this build");
+    }
+    using crd::crypto::test::KeyLog;
+    using crd::crypto::test::KeyLogLine;
+    struct Secret
+    {
+        QuicLevel   level;
+        QuicSide    side;
+        const char* label;
+    };
+    constexpr Secret secrets[] = {
+        {QuicLevel::Handshake, QuicSide::Client, "CLIENT_HANDSHAKE_TRAFFIC_SECRET"},
+        {QuicLevel::Handshake, QuicSide::Server, "SERVER_HANDSHAKE_TRAFFIC_SECRET"},
+        {QuicLevel::Application, QuicSide::Client, "CLIENT_TRAFFIC_SECRET_0"},
+        {QuicLevel::Application, QuicSide::Server, "SERVER_TRAFFIC_SECRET_0"},
+    };
+    for (const QuicVersion version : {QuicVersion::V1, QuicVersion::V2})
+    {
+        for (const AlgorithmId aead : kAllAeads)
+        {
+            CAPTURE(static_cast<int>(version), static_cast<u16>(aead));
+            End     client;
+            End     server;
+            KeyLog  client_log;
+            KeyLog  server_log;
+            Options options;
+            options.client_aeads = ConstSpan<AlgorithmId>(&aead, 1U);
+            options.server_aeads = ConstSpan<AlgorithmId>(&aead, 1U);
+            options.client_log   = &client_log;
+            options.server_log   = &server_log;
+            configure(client, server, options);
+            start(client, server);
+            // The ClientHello's random (after the handshake header and legacy_version) names every line.
+            const Bytes hello = drain(client.handshake, QuicLevel::Initial);
+            REQUIRE(hello.size() > 38U);
+            REQUIRE(server.handshake.provide(QuicLevel::Initial, ConstSpan<u8>(hello.data(), hello.size())) ==
+                    TlsError::None);
+            establish(client, server);
+            CHECK_FALSE(client_log.malformed());
+            CHECK(client_log.size() == std::size(secrets));
+            CHECK(client_log.same(server_log));
+            CHECK(client_log.all_of_random(ConstSpan<u8>(hello.data() + 6U, 32U)));
+
+            // A packet sealed under the keys a logged secret gives opens under the keys the reading end derives.
+            for (const Secret& secret : secrets)
+            {
+                CAPTURE(secret.label);
+                const KeyLogLine* line = client_log.find(secret.label);
+                REQUIRE(line != nullptr);
+                QuicPacketKey logged;
+                REQUIRE(logged.init(version, aead, line->value()) == CryptoError::None);
+                QuicHandshake& reader = secret.side == QuicSide::Client ? server.handshake : client.handshake;
+                QuicPacketKey  open;
+                QuicHeaderKey  unprotect;
+                REQUIRE(reader.derive_keys(secret.level, secret.side, version, open, unprotect) == TlsError::None);
+                const u64   packet_number = 7U;
+                usize       header_bytes  = 0U;
+                usize       number_at     = 0U;
+                Bytes       packet        = packet_of(secret.level, packet_number, header_bytes, number_at);
+                const Bytes plain         = packet;
+                REQUIRE(logged.seal(packet_number, Span<u8>(packet.data(), packet.size()), header_bytes) ==
+                        CryptoError::None);
+                REQUIRE(open.open(packet_number, Span<u8>(packet.data(), packet.size()), header_bytes) ==
+                        CryptoError::None);
+                CHECK(std::memcmp(packet.data(), plain.data(), packet.size() - kQuicTagBytes) == 0);
+            }
+        }
+    }
 }
