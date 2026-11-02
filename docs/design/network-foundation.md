@@ -405,7 +405,7 @@ tests):
   HelloRetryRequest (read from the ServerHello's random).
 - **S6. Limits.** 0-RTT is off unless both ends configure it ([S17](#early-data)): early data carries only
   operations a schema declares idempotent (the TLS 1.3 profile, T07), which the server-authorized message schemas
-  bind. `close()` is for an
+  bind ([S18](#message-schemas)). `close()` is for an
   established session (a handshake is abandoned with `clear()`). The QUIC integration is [S11](#quic-handshake)
   and its address-validation tokens [S13](#address-validation); Encrypted Client Hello is [S14](#ech); the exporter
   that binds capabilities to sessions is [S15](#capability-tokens).
@@ -902,9 +902,10 @@ set `TlsConfig::early_data`:
   operations their schema declares idempotent run on early data.
 - **The provider's refusals.** The provider refuses early data whose client's ticket age is more than 60 seconds
   from the server's (`Stale`, RFC 8446 section 8.3), after a HelloRetryRequest, on another application protocol,
-  from a server without early data and, over QUIC, under another early data context (`Rejected`); the resumption
-  stands. A client learns only `Rejected`; its early bytes are gone, and it sends them again after the handshake.
-  The provider forgets every value it predicted, so `complete()` reads the group, AEAD, peer key and protocol again.
+  from a server without early data and under another early data context (`Rejected`; over QUIC the provider's
+  comparison, over records Cerid's sealed digest, [S18](#message-schemas)); the resumption stands. A client learns
+  only `Rejected`; its early bytes are gone, and it sends them again after the handshake. The provider forgets every
+  value it predicted, so `complete()` reads the group, AEAD, peer key and protocol again.
 - **Replayable bytes reach the caller marked.** A server's early bytes come only from `read_early()`, never from
   `read()`, before the handshake ends: the handshake's checks (the pins of a resumed client included) run when the
   ServerHello is sent, before the first early byte reaches the caller. `read_early()` peeks before it reads: bytes the
@@ -931,6 +932,71 @@ client that offered and a server that accepted, each fed hostile bytes after a r
 against OpenSSL 4.0.3 (both ways over records accepted and refused with the bytes sent again, a HelloRetryRequest both
 ways, both ways over QUIC with the 0-RTT secrets' probes equal, and another early data context refusing it), and
 twelve source mutations, each caught.
+
+<a id="message-schemas"></a>
+### Message schemas
+
+**S18. Server-authorized message schemas**
+([capability.hpp](../../engine/foundation/crypto/include/crd/crypto/capability.hpp), D5, threat T07; the user's order
+of 2026-11-01: "I WANT NETWORK PARTS TO BE COMPLETELY DONE AND TESTED!"). What an
+operation bit of a grant means, and whether it may run on replayable bytes, is decided by the audience's issuers,
+never by a client:
+
+- **The artefact.** Magic `CRDSCHEM`, a format byte with an N-1 reader, the session type (`ScopeKind`), the schema's
+  16-byte identifier (which NET.3's generated messages name), its revision (major for incompatible changes, minor for
+  compatible additions), the audience, the issue time, the policy generation the issuer held, the declared operations
+  (a 64-bit set: what the bits of `Grant::operations` mean) and the idempotent ones (a subset: a second run changes
+  nothing), then the signature list. 78 bytes before the signatures; decoding is exact (`TrailingBytes`), bounded
+  (`kMaxSchemaBytes`, every signature at its bound) and allocation-free, every malformed field refused with its own
+  error; issuing refuses a kind outside its set, a zero identifier or audience, no operation, or an idempotent
+  operation not declared (`BadField`) before anything is signed.
+- **Verification** (`CapabilityAuthority::verify_schema`) runs in this order: the configuration, the decoding, the
+  audience and kind (`WrongAudience`), the issue time (`NotYetValid` past `kMaxIssueSkew`), the revocation generation
+  (`RevocationStale` without a current one; `Revoked` when issued before its cut-off or under an older policy
+  generation than it honours), the hybrid issuer set covering the issue time (`UntrustedIssuer`), the policy snapshot
+  (`AlgorithmRefused`) and every required issuer's signature. The verified schema (`AuthorizedSchema`) carries the
+  SHA-256 of its signed bytes: signatures are not part of it, so the same content signed again has the same digest
+  and any change of content another. A service verifies its schema again under each revocation generation it
+  applies, as it verifies tokens at every renewal.
+- **The verdict** (`authorize_operation`, allocation-free, constant in the operations): `OtherSchema` for a
+  capability of another audience or session type, `Undeclared` for no operation or one the schema does not declare,
+  `Replayable` for early data asking for an operation it does not declare idempotent (a delivery other than
+  `Established` is judged as replayable), `NotGranted` when the capability does not hold every operation on the
+  object, else `Admitted`. The schema judges before the grant, so a client learns nothing about its grant from an
+  early refusal. A client asks `AuthorizedSchema::early()` before it sends an operation with `send_early()`.
+- **Early data is bound to the schema.** A server that accepts early data names its early data context at every
+  session's `init()`, over records too (`TlsSession::init`, at most `kTlsMaxEarlyDataContextBytes`; missing,
+  oversized or given where early data is not accepted is `BadConfig`): the schema's digest and any setting a replayed
+  operation must see unchanged. Over QUIC the provider compares the context with the ticket's (RFC 9000 section
+  7.4.1). Over records Cerid seals the context's SHA-256 into every ticket beside the issue time; a ticket of another
+  context turns early data off for that handshake only (the provider's per-connection switch, set while the ticket
+  is opened and restored as soon as the 0-RTT decision is made, so the connection's own tickets allow it again) and
+  spends no `ReplayFilter` entry: the resumption stands, its early data is `Rejected`, and the client sends its
+  operations again after the handshake under the new schema. A schema change therefore never lets an operation run
+  on early data that the new schema does not declare idempotent, even for a client that still holds the old schema.
+  (AWS-LC's `SSL_SESSION_copy_without_early_data` cannot serve here: its copy drops the ticket's age_add, and a
+  ticket without it resumes nothing.)
+- **The authority on early data** (`CapabilityAuthority::verify_early`). The provider exposes no early exporter, so
+  early data presents only what the resumed ticket's handshake proved: the peer key, known before the first early
+  byte (S17). A Peer token over a resumed, mutually authenticated session is verified there; a Proof token is
+  `Unbound` in early data and is presented after the handshake, as is any token on a session that accepted no early
+  data. Fleet-wide, a replay reaches each server once (S16's scope); only idempotent operations run on it.
+
+Evidence: `test_capability.cpp`'s schema cases (the issued size and every decoded field; the digest equal to the
+SHA-256 of the signed bytes, equal for a second signing and different for another revision; every malformed field
+refused before signing and on decoding, every proper prefix `Truncated`, the format, kind, operations, idempotent
+set, trailing byte, unsigned and oversized lists; tokens, revocation generations and schemas refusing each other by
+magic; the verification order through each refusal, with every 97th byte flipped refused; a table of 15 operation
+verdicts, both other-schema cases and the names; and over a real resumed, mutually authenticated TLS session: nothing
+presented before early data is accepted, a Peer token admitting idempotent operations in early data and refusing a
+replayable one, a Proof token `Unbound` there and admitted after the handshake, and a schema change refusing the old
+ticket's early data while resuming, the new ticket allowing it under the new verdicts), `test_tls_early.cpp` (a
+records ticket of another context resuming without early data, spending no filter entry, and the next ticket
+allowing it under the new context and refused under the old; the records context's refusals), the
+`crd-fuzz-crypto-capability` schema modes (decode against a restated layout; a generated life against a model of the
+verification order, the restated verdict rule and a flipped byte), `tls_interop.py` (a Cerid server under another
+schema's digest refusing OpenSSL 4.0.3's early data over records while resuming), and source mutations, each
+caught.
 
 <a id="negotiation"></a>
 ## Version and extension negotiation
@@ -1023,7 +1089,8 @@ big-endian.
 
 Every signature covers the body exactly as received. The magic separates the domain: no other Cerid signed artefact
 begins with it (capability tokens begin with `CRDCAPTK`, their proofs' signed bytes with `CRDCAPPR` and revocation
-generations with `CRDREVOK`, [S15](#capability-tokens)), so a signature over one never verifies as another, whatever the
+generations with `CRDREVOK`, [S15](#capability-tokens), message schemas with `CRDSCHEM`, [S18](#message-schemas)), so
+a signature over one never verifies as another, whatever the
 provider.
 
 Decisions (numbered for the tests and the fuzz oracle):
@@ -1116,7 +1183,8 @@ reviewed releases, removals may be pushed at once.
 | Cryptography inventory and export classification | [COMPLY.1](../ROADMAP.md#slice-comply.1) |
 | `crd-crypto` providers, the first policy generation and its offline keys, handshakes, capabilities, keys, MLS, ECH, the verified model | [NET.2](../ROADMAP.md#slice-net.2) |
 | Network math (FEC, estimators, quantisation) | [HESAP-NET](../ROADMAP.md#slice-hesap-net) |
-| Schemas, wire format, admission stages S6 and S7, padding policies | [NET.3](../ROADMAP.md#slice-net.3) |
+| Message schemas' authorization (the signed schema, the operation verdict and early data bound to the schema, [S18](#message-schemas)) | [NET.2](../ROADMAP.md#slice-net.2) |
+| Schema wire formats generated per message, admission stages S6 and S7 calling S18's verdict, padding policies | [NET.3](../ROADMAP.md#slice-net.3) |
 | Adversarial and load evidence, fuzzing, interop, admission budgets | [NET.4](../ROADMAP.md#slice-net.4) |
 | `crd-net` transport, paths, browser-facing server, stages S0 to S5, the QUIC bit greased (RFC 9287) and compatible version negotiation (RFC 9368) | [4.2a](../ROADMAP.md#slice-4.2a) |
 | PMTU, ECN, pacing, congestion control, migration, offloads | [NET-PATH](../ROADMAP.md#slice-net-path) |
