@@ -135,8 +135,10 @@ The catalogue applies everywhere; each class weights it differently and adds its
   authorisation (B3) is a separate step on every operation.
 - **A capability** is a signed, expiring token: principal, audience service, scope (project, world, object set or
   tool), permitted operations, budget (rate, bytes, objects), issue and expiry times, the policy generation it was
-  issued under and the session it is bound to (an exporter-derived binding, so a stolen token is useless in another
-  session). Capabilities only attenuate: a holder can derive a narrower one, never a wider one.
+  issued under and its holder's key, each presentation bound to its session by the session's exporter, so a stolen
+  token is useless without the key and a proof useless in another session ([S15](#capability-tokens) binds the holder
+  rather than one session, so a token outlives a reconnection and can be delegated). Capabilities only attenuate: a
+  holder can derive a narrower one, never a wider one.
 - **No ambient authority.** A connection grants nothing by itself; a message is executed only when a capability
   covers its object, operation and budget. Content, tool descriptions, asset names and model output never grant or
   widen authority (system quality contract).
@@ -404,7 +406,8 @@ tests):
 - **S6. Limits.** 0-RTT is off: early data may carry only operations a schema declares idempotent (the TLS 1.3
   profile, T07), so it waits for NET.2's server-authorized message schemas and anti-replay windows. `close()` is for an
   established session (a handshake is abandoned with `clear()`). The QUIC integration is [S11](#quic-handshake)
-  and its address-validation tokens [S13](#address-validation); Encrypted Client Hello is [S14](#ech).
+  and its address-validation tokens [S13](#address-validation); Encrypted Client Hello is [S14](#ech); the exporter
+  that binds capabilities to sessions is [S15](#capability-tokens).
 - **S7. Key usage limits and key updates.** A session counts the records protected under its sending key (the
   provider's write sequence, which a new key resets) and updates the key before `key_update_records()` records: the
   negotiated AEAD's limit (`tls_key_usage_limit`: floor(2^24.5) for AES-GCM, every 64-bit sequence number for
@@ -753,6 +756,82 @@ visible byte. OpenSSL 4.0.3's client cannot offer ECH over its QUIC TLS interfac
 custom extension its ECH cannot copy, internal_error before it sends anything), so a Cerid server's QUIC ECH is proven
 against Cerid clients.
 
+<a id="capability-tokens"></a>
+### Capabilities
+
+**S15. Capabilities** ([capability.hpp](../../engine/foundation/crypto/include/crd/crypto/capability.hpp), D5). The
+authority a principal holds is a token `crd-crypto` issues, delegates, presents and verifies; NET.3 maps each message
+of a schema to an operation bit and charges its budget at admission (S6, S7), and the session layer (4.2a) presents
+the token over its session's control channel and renews it there.
+
+- **Identities.** A principal (user, device, service, server, agent) is named by its long-term key: the SHA-256 of
+  the public key in the provider interface's encoding (`KeyId`), the identifier TLS pins. A token names its subject
+  (the principal the grant is about) and its holder (the key that presents it), which may differ: a user's grant held
+  by one of the user's devices.
+- **Token.** Magic `CRDCAPTK`, a format byte with an N-1 reader, then the root: a random 16-byte token identifier,
+  issue and expiry times (at most one day apart: minutes for game and agent tokens, hours for collaboration), the
+  policy generation the issuer held, the 16-byte audience (the service that admits it), the subject, the holder
+  (algorithm, key, binding) and the grant. A grant is a scope (its kind, the session type, and a 16-byte identifier),
+  at most 16 object ranges in canonical form (ascending, a gap of at least one object between two, none meaning every
+  object of the scope), a 64-bit operation set and a budget (operations and bytes per second, objects held). Every
+  integer is big-endian; decoding is exact, bounded (48 KiB a token) and allocation-free, every malformed field
+  refused with its own error.
+- **Hybrid issuers and rotation.** The issuing service signs the root with every key of its issuer set whose issuing
+  window holds the issue time, the signatures in the signature list policy generations use (one shared codec,
+  `signed_artifact`). At least one post-quantum and one traditional key must cover the issue time (D7's hybrid
+  rule), or the token is refused (`UntrustedIssuer`). Rotation is a new pair whose window starts where the old one
+  ends: a token keeps verifying under the keys that covered its issue time until it expires, and a key whose window
+  ended more than a day ago can only sign tokens that have expired.
+- **Attenuation.** A holder delegates offline by appending a block (an expiry, the next holder, a grant) signed with
+  its own key over every byte of the token before the block's end, with its public key beside the signature, whose
+  hash must be the holder named before (`WrongHolder`). A block may only narrow: the same scope, each range inside one
+  of the parent's ranges, a subset of the operations, every budget and the expiry at or below the parent's, and a
+  Peer binding kept (`Widened`). At most four blocks. The cost per block with an Ed25519 holder is 185 bytes plus
+  16 a range, with ML-DSA-44 3,821 plus 16 a range.
+- **Session binding.** A token is bound to its holder's key, and each presentation to its session: with a Proof
+  binding the holder signs `CRDCAPPR`, the session's binding and the SHA-256 of the token; with a Peer binding the
+  session's mutual authentication is the proof (the TLS peer key and algorithm must be the holder's). The binding is
+  32 bytes of the session's exporter (RFC 9846 section 7.5; RFC 9001 section 4 over QUIC) under the session type's
+  own label, `EXPERIMENTAL Cerid capability world` and its project, room, upload, tool and service siblings (RFC 5705
+  section 4 leaves labels beginning with EXPERIMENTAL to private use without registration). D3's separate key labels
+  per session type follow: a proof made in a project session never binds a game session. The design's earlier
+  wording bound the token itself to one session; binding the holder's key instead keeps a token valid across the
+  reconnections of its lifetime and makes delegation possible, while a stolen token without its key, or a proof
+  replayed in any other session, is still useless (`Unbound`).
+- **Service links.** An audience configured `peer_only` admits Peer tokens only (`PeerRequired`), so every service
+  link is mutually authenticated by the session and bound to the authenticated key.
+- **Revocation generations.** Magic `CRDREVOK`: a monotonic generation number, issue and expiry times (at most seven
+  days), a cut-off (every token issued before it is revoked: a mass revocation after a compromise), the oldest policy
+  generation still honoured (tokens issued under an older one are revoked: the follow-up to a remote disable), and
+  ascending lists of revoked token identifiers (at most 4,096) and keys (at most 512, matching the subject and every
+  holder of a chain), signed like a token by the issuer keys covering its issue time. `CapabilityAuthority` adopts
+  them as `PolicyStore` adopts policy generations (a floor the caller persists, rollback refused before any signature
+  is checked, conflict, replay, issue skew, expiry, issue order) and fails closed: without a current generation, or
+  past its expiry, nothing is admitted (`RevocationStale`). Every admission and every renewal verifies again.
+- **Policy.** Every signature algorithm on a token (the issuers' and every holder's) must be accepted by the session's
+  policy snapshot (`AlgorithmRefused`), so a remote disable reaches tokens at once.
+- **Order.** `verify` checks the configuration, the decoding, the audience and session type, the audience's lifetime
+  bound, each block within its parent, the issue time (300 seconds of skew) and the chain's expiry, peer-only, the
+  revocation generation, the issuer set, the policy, the issuers' signatures, each block's signer and signature, and
+  the presentation. Everything that needs no signature comes first, so a forged token costs a server no verification.
+
+The bytes a token costs, measured (`test_capability.cpp`): a root with two ranges is 207 bytes; ML-DSA-65 and Ed25519
+issuer signatures add 3,446 (3,653 in all); an Ed25519 holder's proof is 100 bytes. A token is sent once per session
+and per renewal over the session's reliable control channel, never in a datagram.
+
+Evidence: `test_capability.cpp` (every hybrid issuer pair of ML-DSA-44, -65 and -87 with Ed25519, ECDSA P-256 and
+P-384, every holder algorithm; every malformed field, bound and prefix; the magics of tokens, revocation generations
+and policy generations refused by each other's decoders; every way of widening; four blocks and a fifth refused; a
+forged, a re-signed and a widened block; every verification refusal at its boundary in the contract's order; rotation;
+every revocation listing and the adoption rules; a proof bound to a real TLS session and refused in another connection,
+another session type's label and an unfinished session; a service link over mutual TLS refusing an anonymous session,
+another key and a Proof token; four verifying threads beside a revoking one), the exporter tests in `test_tls.cpp` and
+`test_quic_handshake.cpp` (equal ends, the bounds, unique per connection and per resumption, unchanged by key
+updates, the six labels distinct), the OpenSSL interop (each library's exporter and world binding equal on every
+established connection, over records and QUIC), and `crd-fuzz-crypto-capability` (both decoders against restated
+layouts; generated lives against a restated containment rule and a model of the verification order; any flipped bit of
+a verified token refused).
+
 <a id="negotiation"></a>
 ## Version and extension negotiation
 
@@ -843,7 +922,9 @@ big-endian.
 | Signatures | count (u8), each key identifier (32 bytes, the SHA-256 of the public key), algorithm (u16), length (u16) and bytes |
 
 Every signature covers the body exactly as received. The magic separates the domain: no other Cerid signed artefact
-begins with it, so a signature over one never verifies as another, whatever the provider.
+begins with it (capability tokens begin with `CRDCAPTK`, their proofs' signed bytes with `CRDCAPPR` and revocation
+generations with `CRDREVOK`, [S15](#capability-tokens)), so a signature over one never verifies as another, whatever the
+provider.
 
 Decisions (numbered for the tests and the fuzz oracle):
 
