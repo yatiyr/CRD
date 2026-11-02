@@ -67,10 +67,10 @@ TEST_CASE("Provider: identity, the implemented set and error names", "[crypto][n
                                   CryptoError::BadLength,  CryptoError::Overlap,     CryptoError::BadKey,
                                   CryptoError::Forged,     CryptoError::WeakSecret,  CryptoError::Exhausted,
                                   CryptoError::ProviderFailure, CryptoError::Expired, CryptoError::Replayed,
-                                  CryptoError::OutOfWindow};
+                                  CryptoError::OutOfWindow, CryptoError::Malformed};
     const char* const names[]  = {"none",    "unsupported", "not-ready",   "bad-length", "overlap",
                                   "bad-key", "forged",      "weak-secret", "exhausted",  "provider-failure",
-                                  "expired", "replayed",    "out-of-window"};
+                                  "expired", "replayed",    "out-of-window", "malformed"};
     for (usize i = 0U; i < sizeof(errors) / sizeof(errors[0]); ++i)
     {
         CHECK(crypto_error_name(errors[i]) == StringView(names[i]));
@@ -367,6 +367,47 @@ TEST_CASE("Provider: HKDF refusals", "[crypto][net-2]")
     CHECK(hkdf_expand(AlgorithmId::HkdfSha256, prk, ConstSpan<u8>(), most) == CryptoError::BadLength);
 }
 
+TEST_CASE("Provider: the MAC of each KDF against Wycheproof", "[crypto][net-2][wycheproof]")
+{
+    // Every group: 128- to 520-bit keys, full and truncated tags. kdf_mac always writes the whole tag, so a truncated
+    // group's tag is compared with its prefix; an invalid tag never matches.
+    struct Suite
+    {
+        const char* file;
+        AlgorithmId alg;
+        u32         tests;
+    };
+    for (const Suite& suite : {Suite{"hmac_sha256_test", AlgorithmId::HkdfSha256, 174U},
+                               Suite{"hmac_sha384_test", AlgorithmId::HkdfSha384, 174U}})
+    {
+        const Vectors v(suite.file);
+        u32           tests = 0U;
+        v.each(
+            [&](u32 group, u32 test, StringView result)
+            {
+                ++tests;
+                const usize tag_bytes = static_cast<usize>(v.number(group, "tagSize")) / 8U;
+                const Bytes tag       = v.hex(test, "tag");
+                u8          out[48]   = {};
+                const auto  mac       = Span<u8>(out, hkdf_hash_bytes(suite.alg));
+                REQUIRE(kdf_mac(suite.alg, v.hex(test, "key"), v.hex(test, "msg"), mac) == CryptoError::None);
+                REQUIRE(tag_bytes <= mac.size());
+                CHECK(equal(mac.first(tag_bytes), tag) == (result == StringView("valid")));
+            });
+        CHECK(tests == suite.tests);
+    }
+    // The refusals: another class, another length; the empty key and message are a MAC like any other.
+    u8 out[48] = {};
+    CHECK(kdf_mac(AlgorithmId::Aes128Gcm, ConstSpan<u8>(), ConstSpan<u8>(), Span<u8>(out, 32U)) ==
+          CryptoError::Unsupported);
+    CHECK(kdf_mac(AlgorithmId::HkdfSha256, ConstSpan<u8>(), ConstSpan<u8>(), out) == CryptoError::BadLength);
+    REQUIRE(kdf_mac(AlgorithmId::HkdfSha256, ConstSpan<u8>(), ConstSpan<u8>(), Span<u8>(out, 32U)) ==
+            CryptoError::None);
+    // HMAC-SHA-256 of the empty key and the empty message, as Python's hmac module computes it.
+    CHECK(equal(ConstSpan<u8>(out, 32U),
+                from_hex("b613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad")));
+}
+
 TEST_CASE("Provider: the hash of each KDF against FIPS 180-4's examples", "[crypto][net-2]")
 {
     // FIPS 180-4's one-block example "abc" (SHA-256 and SHA-384) and its two-block SHA-256 example.
@@ -374,8 +415,8 @@ TEST_CASE("Provider: the hash of each KDF against FIPS 180-4's examples", "[cryp
     const char  two[]    = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
     const Bytes abc_256  = from_hex("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     const Bytes two_256  = from_hex("248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
-    const Bytes abc_384  = from_hex("cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca1"
-                                    "34c825a7");
+    const Bytes abc_384  = from_hex("cb00753f45a35e8bb5a03d699ac65007272c32ab0eded163"
+                                    "1a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7");
     u8          out[48]  = {};
     REQUIRE(kdf_hash(AlgorithmId::HkdfSha256, abc, Span<u8>(out, 32U)) == CryptoError::None);
     CHECK(equal(ConstSpan<u8>(out, 32U), abc_256));

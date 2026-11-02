@@ -21,6 +21,7 @@
 #include <openssl/evp.h>
 #include <openssl/experimental/kem_deterministic_api.h>
 #include <openssl/hkdf.h>
+#include <openssl/hmac.h>
 #include <openssl/mem.h>
 #include <openssl/nid.h>
 #include <openssl/rand.h>
@@ -375,6 +376,8 @@ cont::StringView crypto_error_name(CryptoError error) noexcept
         return "replayed";
     case CryptoError::OutOfWindow:
         return "out-of-window";
+    case CryptoError::Malformed:
+        return "malformed";
     }
     return "unknown";
 }
@@ -560,6 +563,32 @@ CryptoError kdf_hash(AlgorithmId algorithm, cont::ConstSpan<u8> bytes, cont::Spa
     const ErrorScope errors;
     unsigned int     written = 0U;
     if (!EVP_Digest(bytes.data(), bytes.size(), out.data(), &written, digest, nullptr) || written != out.size())
+    {
+        secure_zero(out);
+        return CryptoError::ProviderFailure;
+    }
+    return CryptoError::None;
+}
+
+CryptoError kdf_mac(AlgorithmId algorithm, cont::ConstSpan<u8> key, cont::ConstSpan<u8> bytes,
+                    cont::Span<u8> out) noexcept
+{
+    const EVP_MD* digest = hkdf_digest(algorithm);
+    if (digest == nullptr)
+    {
+        return CryptoError::Unsupported;
+    }
+    if (out.size() != EVP_MD_size(digest))
+    {
+        return CryptoError::BadLength;
+    }
+    // An empty key still names a buffer: the provider reads no byte of it.
+    const u8         none    = 0U;
+    const ErrorScope errors;
+    unsigned int     written = 0U;
+    if (HMAC(digest, key.empty() ? &none : key.data(), key.size(), bytes.data(), bytes.size(), out.data(),
+             &written) == nullptr ||
+        written != out.size())
     {
         secure_zero(out);
         return CryptoError::ProviderFailure;

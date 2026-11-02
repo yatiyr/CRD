@@ -86,6 +86,9 @@ public:
 
     [[nodiscard]] usize consumed() const noexcept { return m_at; }
     [[nodiscard]] bool  done() const noexcept { return m_at == m_in.size(); }
+    // The bytes not yet taken, as a view of the input: a decoder marks where a structure begins, so the bytes it
+    // spans are a view too.
+    [[nodiscard]] ConstSpan<u8> rest() const noexcept { return m_in.subspan(m_at); }
 
 private:
     // One big-endian integer of sizeof(T) bytes; a short input consumes nothing.

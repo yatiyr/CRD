@@ -114,6 +114,10 @@ inline constexpr u32 kMaxDepth  = 31U; // the longest direct path
 // "MLS 1.0 " before every label of a signature, an encryption and a key derivation (sections 5.1.2, 5.1.3, 8).
 inline constexpr cont::StringView kLabelPrefix = "MLS 1.0 ";
 
+// MAC(key, message) = HMAC with the suite's hash (section 5.1), `out` Nh long: the membership and confirmation tags.
+[[nodiscard]] CryptoError mac(const CipherSuite& suite, cont::ConstSpan<u8> key, cont::ConstSpan<u8> message,
+                              cont::Span<u8> out) noexcept;
+
 // RefHash(label, value) = Hash(RefHashInput{label, value}) (section 5.2); `label` is complete ("MLS 1.0 KeyPackage
 // Reference"), `out` Nh long.
 [[nodiscard]] CryptoError ref_hash(const CipherSuite& suite, cont::StringView label, cont::ConstSpan<u8> value,
@@ -204,6 +208,14 @@ struct PreSharedKeyId
     u64                 epoch = 0U;                             // a resumption key's
     cont::ConstSpan<u8> nonce;
 };
+// The bytes of a PreSharedKeyID's encoding; 0 when a field is too long for its vector or the type or usage is outside
+// its enum.
+[[nodiscard]] usize psk_id_bytes(const PreSharedKeyId& id) noexcept;
+// Writes an identity psk_id_bytes accepted.
+void put_psk_id(cont::WireWriter& out, const PreSharedKeyId& id) noexcept;
+// Takes one, its fields views of the input: false for a short input and a type or usage outside the enums.
+[[nodiscard]] bool take_psk_id(cont::WireReader& in, PreSharedKeyId& out) noexcept;
+
 struct PreSharedKey
 {
     PreSharedKeyId      id;

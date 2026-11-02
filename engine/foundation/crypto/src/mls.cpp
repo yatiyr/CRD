@@ -4,6 +4,7 @@
 #include <crd/crypto/mls.hpp>
 
 #include "byte_spans.hpp"
+#include "mls_detail.hpp"
 
 #include <crd/core/assert.hpp>
 
@@ -53,15 +54,14 @@ void put_label(cont::WireWriter& out, cont::StringView label) noexcept
 // prefixed label; 0 when a field cannot be encoded.
 usize labelled_bytes(cont::StringView label, cont::ConstSpan<u8> content) noexcept
 {
-    const usize head = label_bytes(label);
-    const usize body = vector_bytes(content.size());
-    return head == 0U || body == 0U ? 0U : head + body;
+    const usize head = labelled_head_bytes(label, content.size());
+    return head == 0U ? 0U : head + content.size();
 }
 
 void put_labelled(cont::WireWriter& out, cont::StringView label, cont::ConstSpan<u8> content) noexcept
 {
-    put_label(out, label);
-    put_vector(out, content);
+    put_labelled_head(out, label, content.size());
+    out.put_bytes(content);
 }
 
 // A provider call's result, its output zeroed when it refused.
@@ -101,6 +101,19 @@ u32 sibling_of(u32 node) noexcept
     return node < up ? right_of(up) : left_of(up);
 }
 } // namespace
+
+usize labelled_head_bytes(cont::StringView label, usize content_bytes) noexcept
+{
+    const usize head = label_bytes(label);
+    const usize body = vector_bytes(content_bytes);
+    return head == 0U || body == 0U ? 0U : head + body - content_bytes;
+}
+
+void put_labelled_head(cont::WireWriter& out, cont::StringView label, usize content_bytes) noexcept
+{
+    put_label(out, label);
+    put_varint(out, content_bytes);
+}
 
 cont::ConstSpan<CipherSuite> cipher_suites() noexcept
 {
@@ -331,6 +344,16 @@ std::optional<u32> common_ancestor(u32 a, u32 b, u32 leaves) noexcept
 
 // ---- Labelled operations ----
 
+CryptoError mac(const CipherSuite& suite, cont::ConstSpan<u8> key, cont::ConstSpan<u8> message,
+                cont::Span<u8> out) noexcept
+{
+    if (out.size() != suite.hash_bytes())
+    {
+        return refuse(CryptoError::BadLength, out);
+    }
+    return passed(kdf_mac(suite.kdf, key, message, out), out);
+}
+
 CryptoError ref_hash(const CipherSuite& suite, cont::StringView label, cont::ConstSpan<u8> value,
                      cont::Span<u8> out) noexcept
 {
@@ -501,8 +524,36 @@ constexpr Derived kDerived[] = {
     {EpochSecret::Resumption, "resumption"},   {EpochSecret::Authentication, "authentication"},
     {EpochSecret::Init, "init"},
 };
+} // namespace
 
-// The bytes of a PreSharedKeyID; 0 when a field cannot be encoded or the type or usage is outside its enum.
+usize group_context_bytes(const GroupContext& context) noexcept
+{
+    const usize fields[] = {vector_bytes(context.group_id.size()), vector_bytes(context.tree_hash.size()),
+                            vector_bytes(context.confirmed_transcript_hash.size()),
+                            vector_bytes(context.extensions.size())};
+    usize       bytes    = 2U + 2U + 8U; // version, cipher suite, epoch
+    for (const usize field : fields)
+    {
+        if (field == 0U)
+        {
+            return 0U;
+        }
+        bytes += field;
+    }
+    return bytes;
+}
+
+void put_group_context(cont::WireWriter& out, const GroupContext& context) noexcept
+{
+    out.put_u16(kProtocolVersion);
+    out.put_u16(context.cipher_suite);
+    put_vector(out, context.group_id);
+    out.put_u64(context.epoch);
+    put_vector(out, context.tree_hash);
+    put_vector(out, context.confirmed_transcript_hash);
+    put_vector(out, context.extensions);
+}
+
 usize psk_id_bytes(const PreSharedKeyId& id) noexcept
 {
     usize body = 0U;
@@ -539,34 +590,45 @@ void put_psk_id(cont::WireWriter& out, const PreSharedKeyId& id) noexcept
     }
     put_vector(out, id.nonce);
 }
-} // namespace
 
-usize group_context_bytes(const GroupContext& context) noexcept
+bool take_psk_id(cont::WireReader& in, PreSharedKeyId& out) noexcept
 {
-    const usize fields[] = {vector_bytes(context.group_id.size()), vector_bytes(context.tree_hash.size()),
-                            vector_bytes(context.confirmed_transcript_hash.size()),
-                            vector_bytes(context.extensions.size())};
-    usize       bytes    = 2U + 2U + 8U; // version, cipher suite, epoch
-    for (const usize field : fields)
+    u8 type = 0U;
+    if (!in.take_u8(type))
     {
-        if (field == 0U)
-        {
-            return 0U;
-        }
-        bytes += field;
+        return false;
     }
-    return bytes;
-}
-
-void put_group_context(cont::WireWriter& out, const GroupContext& context) noexcept
-{
-    out.put_u16(kProtocolVersion);
-    out.put_u16(context.cipher_suite);
-    put_vector(out, context.group_id);
-    out.put_u64(context.epoch);
-    put_vector(out, context.tree_hash);
-    put_vector(out, context.confirmed_transcript_hash);
-    put_vector(out, context.extensions);
+    PreSharedKeyId id;
+    if (type == static_cast<u8>(PskType::External))
+    {
+        id.type = PskType::External;
+        if (!take_vector(in, id.id))
+        {
+            return false;
+        }
+    }
+    else if (type == static_cast<u8>(PskType::Resumption))
+    {
+        u8 usage = 0U;
+        if (!in.take_u8(usage) || usage < static_cast<u8>(ResumptionUsage::Application) ||
+            usage > static_cast<u8>(ResumptionUsage::Branch) || !take_vector(in, id.group_id) ||
+            !in.take_u64(id.epoch))
+        {
+            return false;
+        }
+        id.type  = PskType::Resumption;
+        id.usage = static_cast<ResumptionUsage>(usage);
+    }
+    else
+    {
+        return false;
+    }
+    if (!take_vector(in, id.nonce))
+    {
+        return false;
+    }
+    out = id;
+    return true;
 }
 
 CryptoError psk_secret(const CipherSuite& suite, cont::ConstSpan<PreSharedKey> psks, cont::Span<u8> out) noexcept

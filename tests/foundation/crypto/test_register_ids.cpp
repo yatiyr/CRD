@@ -48,7 +48,8 @@ TEST_CASE("Register ids: every algorithm has a unique identifier, a class and it
     CHECK(std::strcmp(algorithm_register_id(static_cast<AlgorithmId>(0x7F01U)), "") == 0);
 }
 
-TEST_CASE("Register ids: the class byte separates hybrids, traditional groups, signatures, KEMs and symmetric algorithms",
+TEST_CASE("Register ids: the class byte separates hybrids, traditional groups, signatures, KEMs and symmetric "
+          "algorithms",
           "[crypto][net-std]")
 {
     CHECK(algorithm_class(AlgorithmId::X25519Mlkem768) == AlgorithmClass::HybridKeyExchange);

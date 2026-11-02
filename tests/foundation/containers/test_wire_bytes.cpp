@@ -77,15 +77,18 @@ TEST_CASE("Wire bytes: a short read is refused and a byte range views the input"
     ConstSpan<u8>       range;
     CHECK_FALSE(fresh.take_bytes(4U, range));
     CHECK(fresh.consumed() == 0U);
+    CHECK((fresh.rest().data() == bytes && fresh.rest().size() == 3U));
     REQUIRE(fresh.take_bytes(2U, range));
     CHECK(range.data() == bytes);
     CHECK(range.size() == 2U);
     CHECK_FALSE(fresh.done());
+    CHECK((fresh.rest().data() == bytes + 2U && fresh.rest().size() == 1U));
     u16 half = 0U;
     CHECK_FALSE(fresh.take_u16(half));
     REQUIRE(fresh.take_bytes(1U, range));
     CHECK(range.data() == bytes + 2U);
     CHECK(fresh.done());
+    CHECK(fresh.rest().empty());
     u8 none = 0U;
     CHECK_FALSE(fresh.take_u8(none));
     CHECK(fresh.take_bytes(0U, range));

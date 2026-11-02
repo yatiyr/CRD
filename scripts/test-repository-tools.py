@@ -4301,7 +4301,7 @@ class TestInstruments(unittest.TestCase):
         self.assertEqual(sorted(fuzz_driver.TARGETS), ['ceir-binary', 'ceir-differential', 'ceir-record', 'ceir-text',
                                                        'ceridc-diag', 'ckir-binary', 'ckir-text', 'comply-rules',
                                                        'comply-sanctions', 'crypto-capability', 'crypto-mls',
-                                                       'crypto-policy', 'crypto-provider', 'crypto-quic', 'crypto-tls',
+                                                       'crypto-mls-message', 'crypto-policy', 'crypto-provider', 'crypto-quic', 'crypto-tls',
                                                        'memory-allocators',
                                                        'net-negotiation', 'perf-assets',
                                                        'perf-bundle', 'perf-capture', 'perf-flight',

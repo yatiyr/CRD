@@ -756,13 +756,14 @@
       "owner": "crypto",
       "api": [
         "engine/foundation/crypto/include/crd/crypto/hpke.hpp",
-        "engine/foundation/crypto/include/crd/crypto/mls.hpp"
+        "engine/foundation/crypto/include/crd/crypto/mls.hpp",
+        "engine/foundation/crypto/include/crd/crypto/mls_message.hpp"
       ],
       "consumers": [
         "NET-LIVE",
         "COLLAB.1"
       ],
-      "decision": "docs/design/network-foundation.md H1 and M1 to M4: NET.2 landed HPKE and MLS's first layers in crd-crypto (2026-11-02, #hpke, #mls), so calls' SFrame keys (NET-LIVE) and shared projects' end-to-end sessions (COLLAB.1) derive from one MLS group implementation and never carry their own."
+      "decision": "docs/design/network-foundation.md H1 and M1 to M6: NET.2 landed HPKE and MLS's first layers, its key schedule and secret tree and its message framing and protection (mls_message.hpp) in crd-crypto (2026-11-02, #hpke, #mls), so calls' SFrame keys (NET-LIVE) and shared projects' end-to-end sessions (COLLAB.1) derive from one MLS group implementation and never carry their own."
     },
     {
       "id": "robotics.ros2-bridge",

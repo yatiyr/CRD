@@ -59,6 +59,8 @@ TARGETS = {
                           'executable': 'tests/crypto/fuzz/crd-fuzz-crypto-capability'},
     'crypto-mls': {'corpus': 'tests/foundation/crypto/fuzz/corpus-mls',
                    'executable': 'tests/crypto/fuzz/crd-fuzz-crypto-mls'},
+    'crypto-mls-message': {'corpus': 'tests/foundation/crypto/fuzz/corpus-mls-message',
+                           'executable': 'tests/crypto/fuzz/crd-fuzz-crypto-mls-message'},
     'crypto-policy': {'corpus': 'tests/foundation/crypto/fuzz/corpus',
                       'executable': 'tests/crypto/fuzz/crd-fuzz-crypto-policy'},
     'crypto-provider': {'corpus': 'tests/foundation/crypto/fuzz/corpus-provider',

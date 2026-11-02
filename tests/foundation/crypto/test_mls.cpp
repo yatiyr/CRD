@@ -62,7 +62,8 @@ TEST_CASE("MLS: the cipher suites of the profile", "[crypto][net-2][mls]")
     const ConstSpan<mls::CipherSuite> suites = mls::cipher_suites();
     REQUIRE(suites.size() == 4U);
     const u16 ids[] = {iana::kMls128Dhkemx25519Aes128gcmSha256Ed25519, iana::kMls128Dhkemp256Aes128gcmSha256P256,
-                       iana::kMls128Dhkemx25519Chacha20poly1305Sha256Ed25519, iana::kMls256Dhkemp384Aes256gcmSha384P384};
+                       iana::kMls128Dhkemx25519Chacha20poly1305Sha256Ed25519,
+                       iana::kMls256Dhkemp384Aes256gcmSha384P384};
     for (usize i = 0U; i < suites.size(); ++i)
     {
         CHECK(suites[i].id == ids[i]);

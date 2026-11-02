@@ -46,10 +46,12 @@ enum class CryptoError : u8
     Replayed,        // an authentic single-use token presented again (quic.hpp's address-validation tokens), a
                      // message key already used (mls.hpp's secret tree)
     OutOfWindow,     // a generation or a sender outside what a key ratchet keeps (mls.hpp's secret tree)
+    Malformed,       // an authentic message whose content does not decode, or a sender and content its framing
+                     // refuses (mls_message.hpp)
 };
 
 // "none", "unsupported", "not-ready", "bad-length", "overlap", "bad-key", "forged", "weak-secret", "exhausted",
-// "provider-failure", "expired", "replayed", "out-of-window".
+// "provider-failure", "expired", "replayed", "out-of-window", "malformed".
 [[nodiscard]] cont::StringView crypto_error_name(CryptoError error) noexcept;
 
 // The provider and its version ("AWS-LC 5.12.0").
@@ -136,6 +138,11 @@ private:
 // The hash an HKDF is built on (SHA-256 for HKDF-SHA256, SHA-384 for HKDF-SHA384, FIPS 180-4) over `bytes`; `out` is
 // hkdf_hash_bytes(algorithm) long. HPKE and MLS cipher suites name their hash by their KDF (RFC 9420 section 5.1).
 [[nodiscard]] CryptoError kdf_hash(AlgorithmId algorithm, cont::ConstSpan<u8> bytes, cont::Span<u8> out) noexcept;
+
+// HMAC (RFC 2104, FIPS 198-1) with that hash, keyed by `key` (any length) over `bytes`; `out` is
+// hkdf_hash_bytes(algorithm) long, the untruncated tag. MLS's MAC (RFC 9420 section 5.1).
+[[nodiscard]] CryptoError kdf_mac(AlgorithmId algorithm, cont::ConstSpan<u8> key, cont::ConstSpan<u8> bytes,
+                                  cont::Span<u8> out) noexcept;
 
 // ---- Signatures (ML-DSA-44/65/87, Ed25519, ECDSA P-256/SHA-256 and P-384/SHA-384) ----
 

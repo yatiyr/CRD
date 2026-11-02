@@ -11,6 +11,10 @@
 #                              2.1, tree math against its own invariants, HPKE round trips with any bit changed,
 #                              hostile openings and signatures through the labelled operations, and derivations
 #                              (determinism, the length in the label, DeriveTreeSecret as ExpandWithLabel).
+#   crd-fuzz-crypto-mls-message MLS's message structures, framing and protection: whatever a decoder accepts writes
+#                              back to exactly the bytes it took; a private message opens to what was protected and,
+#                              changed in any byte or hostile, is refused with nothing spent; a public message verifies
+#                              exactly when unchanged.
 #   crd-fuzz-crypto-policy     decode_policy against a restated layout, and generated generation sequences signed by
 #                              the test signer through PolicyStore::apply against the contract's adoption and window
 #                              rules.
@@ -33,6 +37,8 @@ crd_fuzz_target(crd-fuzz-crypto-capability
     SOURCES fuzz_capability.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-capability")
 crd_fuzz_target(crd-fuzz-crypto-mls
     SOURCES fuzz_mls.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-mls")
+crd_fuzz_target(crd-fuzz-crypto-mls-message
+    SOURCES fuzz_mls_message.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-mls-message")
 crd_fuzz_target(crd-fuzz-crypto-policy
     SOURCES fuzz_policy.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 crd_fuzz_target(crd-fuzz-crypto-provider
