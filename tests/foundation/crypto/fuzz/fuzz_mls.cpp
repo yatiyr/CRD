@@ -6,8 +6,9 @@
 // unless noted; a short input ends the case):
 //   0  headers: the bytes a decoder reads as a vector header, a vector and a presence octet;
 //   1  tree math: the size's exponent (or, above 31, a raw 32-bit size) and two nodes (u32 each);
-//   2  HPKE: the suite, the recipient's input keying material, the index of a bit to change (u16; past the end
-//      changes none), the info, the associated data, then the plaintext;
+//   2  HPKE: the suite (its KEM, any of the profile's eight, its KDF and its AEAD; hpke_suite_of), the recipient's
+//      input keying material, the index of a bit to change (u16; past the end changes none), the info, the
+//      associated data, then the plaintext;
 //   3  hostile openings: the suite, the recipient's input keying material, the encapsulation, the label, the
 //      context, then the ciphertext;
 //   4  hostile signatures: the suite, the public key, the signature (u16 lengths each), the label, then the content;
@@ -229,35 +230,55 @@ void tree_math(Reader& in)
     CRD_FUZZ_REQUIRE(on(path, depth, node) && on(other_path, other_depth, other));
 }
 
+// Every HPKE suite of the profile from one byte: its KEM (the DHKEMs, ML-KEM and the hybrids), KDF and AEAD.
+HpkeSuite hpke_suite_of(u8 selector) noexcept
+{
+    constexpr AlgorithmId kems[]  = {AlgorithmId::X25519,         AlgorithmId::Secp256r1,
+                                     AlgorithmId::Secp384r1,      AlgorithmId::MlKem768,
+                                     AlgorithmId::MlKem1024,      AlgorithmId::X25519Mlkem768,
+                                     AlgorithmId::Secp256r1Mlkem768,
+                                     AlgorithmId::Secp384r1Mlkem1024};
+    constexpr AlgorithmId kdfs[]  = {AlgorithmId::HkdfSha256, AlgorithmId::HkdfSha384};
+    constexpr AlgorithmId aeads[] = {AlgorithmId::Aes128Gcm, AlgorithmId::Aes256Gcm, AlgorithmId::Chacha20Poly1305};
+    return {kems[selector % 8U], kdfs[(selector / 8U) % 2U], aeads[(selector / 16U) % 3U]};
+}
+
 void hpke_round_trip(Reader& in)
 {
-    const mls::CipherSuite& suite = suite_of(in.byte());
-    const ConstSpan<u8>     ikm   = in.bytes(in.byte());
-    const usize             bit   = in.u16be();
-    const ConstSpan<u8>     info  = in.bytes(in.byte());
-    const ConstSpan<u8>     aad   = in.bytes(in.byte());
-    const ConstSpan<u8>     text  = in.rest();
+    const HpkeSuite     suite = hpke_suite_of(in.byte());
+    const ConstSpan<u8> ikm   = in.bytes(in.byte());
+    const usize         bit   = in.u16be();
+    const ConstSpan<u8> info  = in.bytes(in.byte());
+    const ConstSpan<u8> aad   = in.bytes(in.byte());
+    const ConstSpan<u8> text  = in.rest();
     if (!in.ok())
     {
         return;
     }
+    // DeriveKeyPair's floor: Nsk for a DHKEM (a classical group), 32 bytes for ML-KEM and the hybrids (decision H2).
+    const HpkeSizes   sizes   = hpke_sizes(suite.kem);
+    const bool        dhkem   = algorithm_class(suite.kem) == AlgorithmClass::ClassicalKeyExchange;
+    const usize       floor   = dhkem ? sizes.private_key : 32U;
     HpkeKey           recipient;
     const CryptoError derived = recipient.derive(suite.kem, ikm);
-    if (ikm.size() < hpke_sizes(suite.kem).private_key)
+    if (ikm.size() < floor)
     {
         CRD_FUZZ_REQUIRE(derived == CryptoError::BadLength && !recipient.ready());
         return;
     }
     CRD_FUZZ_REQUIRE(derived == CryptoError::None);
-    const usize public_bytes = hpke_sizes(suite.kem).public_key;
-    u8          recipient_public[97];
-    CRD_FUZZ_REQUIRE(recipient.public_key(Span<u8>(recipient_public, public_bytes)) == CryptoError::None);
+    // The longest public key and encapsulation of the profile: MLKEM1024-P384's 1665 bytes each.
+    constexpr usize max_kem_bytes = 1665U;
+    u8              recipient_public[max_kem_bytes];
+    CRD_FUZZ_REQUIRE(recipient.public_key(Span<u8>(recipient_public, sizes.public_key)) == CryptoError::None);
+    CRD_FUZZ_REQUIRE(hpke_check_public_key(suite.kem, ConstSpan<u8>(recipient_public, sizes.public_key)) ==
+                     CryptoError::None);
     // enc || ciphertext in one buffer, so one bit index reaches either.
-    static u8 sealed[crd::fuzz::kMaxInputBytes + 97U + kHpkeTagBytes];
+    static u8 sealed[crd::fuzz::kMaxInputBytes + max_kem_bytes + kHpkeTagBytes];
     static u8 opened[crd::fuzz::kMaxInputBytes];
-    const Span<u8> enc(sealed, public_bytes);
-    const Span<u8> ciphertext(sealed + public_bytes, text.size() + kHpkeTagBytes);
-    CRD_FUZZ_REQUIRE(hpke_seal(suite.hpke(), ConstSpan<u8>(recipient_public, public_bytes), info, aad, text, enc,
+    const Span<u8> enc(sealed, sizes.encapsulation);
+    const Span<u8> ciphertext(sealed + sizes.encapsulation, text.size() + kHpkeTagBytes);
+    CRD_FUZZ_REQUIRE(hpke_seal(suite, ConstSpan<u8>(recipient_public, sizes.public_key), info, aad, text, enc,
                                ciphertext) == CryptoError::None);
     const bool changed = bit < 8U * (enc.size() + ciphertext.size());
     if (changed)
@@ -266,7 +287,7 @@ void hpke_round_trip(Reader& in)
     }
     std::memset(opened, 0xA5, text.size());
     const Span<u8>    out(opened, text.size());
-    const CryptoError result = recipient.open(suite.hpke(), enc, info, aad, ciphertext, out);
+    const CryptoError result = recipient.open(suite, enc, info, aad, ciphertext, out);
     if (!changed)
     {
         CRD_FUZZ_REQUIRE(result == CryptoError::None && same(out, text));
@@ -632,13 +653,32 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     const u8 three[] = {1U, 0xFFU, 0U, 0U, 0U, 3U, 0U, 0U, 0U, 1U, 0U, 0U, 0U, 4U};
     add(sink, "tree-three-leaves", three, sizeof(three));
 
-    // HPKE: a round trip in each suite, one honest and one with the first bit of the ciphertext changed.
+    // HPKE: a round trip with each KEM of the profile (both KDFs and every AEAD among them), one honest and one with
+    // the first bit of the ciphertext changed. A suite byte is the KEM, plus 8 for HKDF-SHA384 and 16 per AEAD.
+    struct HpkeSeed
+    {
+        const char* name;
+        const char* changed;
+        u8          suite;
+        u16         enc;
+    };
+    constexpr HpkeSeed hpke_seeds[] = {
+        {"hpke-x25519-aes", "hpke-x25519-aes-changed", 0U, 32U},
+        {"hpke-p256", "hpke-p256-changed", 1U, 65U},
+        {"hpke-p384", "hpke-p384-changed", 26U, 97U},
+        {"hpke-x25519-chacha", "hpke-x25519-chacha-changed", 32U, 32U},
+        {"hpke-mlkem768", "hpke-mlkem768-changed", 27U, 1088U},
+        {"hpke-mlkem1024", "hpke-mlkem1024-changed", 36U, 1568U},
+        {"hpke-xwing", "hpke-xwing-changed", 5U, 1120U},
+        {"hpke-mlkem768-p256", "hpke-mlkem768-p256-changed", 46U, 1153U},
+        {"hpke-mlkem1024-p384", "hpke-mlkem1024-p384-changed", 31U, 1665U},
+    };
     static u8 input[256];
-    for (u8 suite = 0U; suite < 4U; ++suite)
+    for (const HpkeSeed& seed : hpke_seeds)
     {
         usize n    = 0U;
         input[n++] = 2U;
-        input[n++] = suite;
+        input[n++] = seed.suite;
         input[n++] = 48U;
         for (usize i = 0U; i < 48U; ++i)
         {
@@ -656,15 +696,11 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
         {
             input[n++] = c;
         }
-        const char* names[]   = {"hpke-x25519-aes", "hpke-p256", "hpke-x25519-chacha", "hpke-p384"};
-        const char* changed[] = {"hpke-x25519-aes-changed", "hpke-p256-changed", "hpke-x25519-chacha-changed",
-                                 "hpke-p384-changed"};
-        add(sink, names[suite], input, n);
-        constexpr usize enc_bytes[] = {32U, 65U, 32U, 97U};
-        const usize     enc         = enc_bytes[suite];
-        input[51]       = static_cast<u8>((8U * enc) >> 8U);
-        input[52]       = static_cast<u8>(8U * enc);
-        add(sink, changed[suite], input, n);
+        add(sink, seed.name, input, n);
+        const usize bit = 8U * seed.enc;
+        input[51]       = static_cast<u8>(bit >> 8U);
+        input[52]       = static_cast<u8>(bit);
+        add(sink, seed.changed, input, n);
     }
 
     // A hostile opening and a hostile signature in the mandatory suite, and a derivation at the widest length.

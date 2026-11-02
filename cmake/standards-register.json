@@ -3,8 +3,8 @@
   "domain": "standards",
   "about": "NET-STD standards register: every protocol, extension, algorithm and format Cerid implements, plans or watches, with its specification and revision, its status in the committed snapshot, its IANA or Cerid codepoints, its owning module and the ROADMAP rows that implement it. A pinned entry (implemented or planned) fails scripts/check-registers.py (the crd-check-registers CTest and repository step) when its draft has expired or its RFC is obsoleted in the snapshot, and every entry fails past its review date. docs/design/registers.md is the contract; COMPLY.0 adds the legal domain in the same format.",
   "snapshot": {
-    "date": "2026-11-01",
-    "method": "Refreshed on 2026-11-01 by scripts/register-review.py from the approved source plan (66 records; report docs/sessions/2026-11-01-standards-register-full-review.md)."
+    "date": "2026-11-02",
+    "method": "Refreshed on 2026-11-02 by scripts/register-review.py from the approved source plan (72 records; report docs/sessions/2026-11-02-standards-register-light-review.md)."
   },
   "review": {
     "cadence": "A light scan after each IETF meeting (March, July and November) and a full re-research every year or when a light scan finds a pinned entry's status changed; scripts/register-review.py plans the source reads (a download the user approves), compares them with the register and proposes ROADMAP amendments for the user, never editing rows itself.",
@@ -56,6 +56,12 @@
         "day": "2026-11-01",
         "scan": "full",
         "ref": "docs/research/2026-11-01-tls-13-rfc-9846-re-research.md#delta",
+        "triggers": []
+      },
+      {
+        "day": "2026-11-02",
+        "scan": "light",
+        "ref": "docs/sessions/2026-11-02-standards-register-light-review.md",
         "triggers": []
       }
     ]
@@ -2252,7 +2258,232 @@
         "tests/foundation/crypto/fuzz/fuzz_mls.cpp"
       ],
       "deprecation": null,
-      "note": "Base mode, single shot (crd-crypto hpke.hpp, decision H1, docs/design/network-foundation.md#hpke): DHKEM over X25519, P-256 and P-384 composed from the provider's key agreement and HKDF, with DeriveKeyPair, and the key schedule and AEAD of RFC 9180 section 5, so no HPKE primitive is Cerid's own; proven against every base-mode vector of RFC 9180's test-vectors.json for the KEMs and KDFs in the profile and against the MLS working group's encrypt_with_label vectors. MLS (mls.protocol) and its key packages, paths and Welcome messages are its consumers; the provider's TLS stack keeps its own HPKE for ECH (tls.ech). RFC 9180 was read on 2026-11-02 and the codepoints checked against IANA's HPKE registry (updated 2026-04-16, read 2026-11-02). Its KEMs are classical; the post-quantum KEMs IANA lists (ML-KEM-768 0x0041, X-Wing 0x647A, draft-ietf-hpke-pq) join with the post-quantum MLS cipher suites."
+      "note": "Base mode, single shot (crd-crypto hpke.hpp, decision H1, docs/design/network-foundation.md#hpke): DHKEM over X25519, P-256 and P-384 composed from the provider's key agreement and HKDF, with DeriveKeyPair, and the key schedule and AEAD of RFC 9180 section 5, so no HPKE primitive is Cerid's own; proven against every base-mode vector of RFC 9180's test-vectors.json for the KEMs and KDFs in the profile and against the MLS working group's encrypt_with_label vectors. MLS (mls.protocol) and its key packages, paths and Welcome messages are its consumers; the provider's TLS stack keeps its own HPKE for ECH (tls.ech). RFC 9180 was read on 2026-11-02 and the codepoints checked against IANA's HPKE registry (updated 2026-04-16, read 2026-11-02). The post-quantum KEMs, the same key schedule over ML-KEM and the hybrid KEMs, are crypto.hpke-pq."
+    },
+    {
+      "id": "crypto.hpke-pq",
+      "title": "Post-quantum and post-quantum/traditional hybrid KEMs for HPKE",
+      "kind": "algorithm",
+      "state": "implemented",
+      "owner": "crypto",
+      "rows": [
+        "NET.2"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-hpke-pq",
+        "status": "active",
+        "revision": "05",
+        "posted": "2026-07-06"
+      },
+      "cryptography": [
+        "confidentiality",
+        "integrity",
+        "key-exchange",
+        "key-derivation"
+      ],
+      "codepoints": [
+        {
+          "registry": "HPKE KEM Identifiers",
+          "name": "ML-KEM-768",
+          "value": "0x0041"
+        },
+        {
+          "registry": "HPKE KEM Identifiers",
+          "name": "ML-KEM-1024",
+          "value": "0x0042"
+        },
+        {
+          "registry": "HPKE KEM Identifiers",
+          "name": "MLKEM768-P256",
+          "value": "0x0050"
+        },
+        {
+          "registry": "HPKE KEM Identifiers",
+          "name": "MLKEM1024-P384",
+          "value": "0x0051"
+        },
+        {
+          "registry": "HPKE KEM Identifiers",
+          "name": "X-Wing",
+          "value": "0x647A"
+        }
+      ],
+      "source": {
+        "ref": "docs/sessions/2026-11-02-net-2-hpke-pq.md",
+        "read": "2026-11-02",
+        "verified": true
+      },
+      "review": "2027-11-02",
+      "evidence": [
+        "tests/foundation/crypto/test_hpke.cpp"
+      ],
+      "deprecation": null,
+      "note": "crd-crypto hpke.hpp (decisions H1 and H2, docs/design/network-foundation.md#hpke): ML-KEM-768 and ML-KEM-1024 (section 3) and the hybrids MLKEM768-X25519, MLKEM768-P256 and MLKEM1024-P384 (section 4, crypto.hybrid-kems), named by the provider's ML-KEM and hybrid group identifiers, each with SHAKE256's LabeledDerive (draft-ietf-hpke-hpke-03 section 4.4) for DeriveKeyPair and RFC 9180's HKDF key schedule. Proven against every vector of the working group's test-vectors.json at the draft-ietf-hpke-pq-05 tag (hpke-pq-vectors in cmake/pins.json) whose KEM, KDF and AEAD the profile implements; ML-KEM-512 (0x0040, below the policy's ML-KEM-768 floor) and the single-stage SHAKE and TurboSHAKE KDFs (0x0010 to 0x0013, no MLS suite uses them) are outside it. The draft (revision 05, 2026-07-06) and IANA's HPKE registry (updated 2026-04-16, which lists 0x647A as X-Wing, the same construction) were read on 2026-11-02. The post-quantum MLS suites (mls.pq-ciphersuites) consume it."
+    },
+    {
+      "id": "crypto.hybrid-kems",
+      "title": "Concrete post-quantum/traditional hybrid KEMs (CG framework)",
+      "kind": "algorithm",
+      "state": "implemented",
+      "owner": "crypto",
+      "rows": [
+        "NET.2"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-irtf-cfrg-concrete-hybrid-kems",
+        "status": "active",
+        "revision": "04",
+        "posted": "2026-07-06"
+      },
+      "cryptography": [
+        "key-exchange",
+        "key-derivation"
+      ],
+      "source": {
+        "ref": "docs/sessions/2026-11-02-net-2-hpke-pq.md",
+        "read": "2026-11-02",
+        "verified": true
+      },
+      "review": "2027-11-02",
+      "evidence": [
+        "tests/foundation/crypto/test_hpke.cpp"
+      ],
+      "deprecation": null,
+      "note": "MLKEM768-X25519 (X-Wing), MLKEM768-P256 and MLKEM1024-P384 over the generic CG framework of draft-irtf-cfrg-hybrid-kems-12 (2026-07-06; section 5.5: SHAKE256 as the PRG that expands one 32-byte seed into both halves, SHA3-256 over ss_PQ, ss_T, ct_T, ek_T and the label as the C2PRI combiner), implemented inside crd-crypto's HPKE (crypto.hpke-pq) over the provider's ML-KEM, key agreement and SHA-3 (crypto.sha3). Both drafts were read on 2026-11-02; revision 04's sections 3 and 4, which define the three KEMs, are word for word revision 03's, which draft-ietf-hpke-pq-05 cites. The TLS hybrid groups of tls.hybrid-kex concatenate their secrets instead and are a different construction over the same components."
+    },
+    {
+      "id": "crypto.sha3",
+      "title": "SHA-3 and SHAKE (FIPS 202)",
+      "kind": "algorithm",
+      "state": "implemented",
+      "owner": "crypto",
+      "rows": [
+        "NET.2"
+      ],
+      "spec": {
+        "type": "nist",
+        "ref": "FIPS 202",
+        "posted": "2015-08-04",
+        "status": "final"
+      },
+      "cryptography": [
+        "key-derivation"
+      ],
+      "source": {
+        "ref": "docs/sessions/2026-11-02-net-2-hpke-pq.md",
+        "read": "2026-11-02",
+        "verified": true
+      },
+      "review": "2027-11-02",
+      "evidence": [
+        "tests/foundation/crypto/test_provider.cpp",
+        "tests/foundation/crypto/test_hpke.cpp"
+      ],
+      "deprecation": null,
+      "note": "SHA3-256 and SHAKE256 through the provider (crd-crypto provider.hpp sha3_256 and shake256): the combiner and PRG of the hybrid KEMs (crypto.hybrid-kems) and the LabeledDerive of the post-quantum HPKE KEMs (crypto.hpke-pq)."
+    },
+    {
+      "id": "mls.pq-ciphersuites",
+      "title": "ML-KEM and hybrid cipher suites for MLS",
+      "kind": "algorithm",
+      "state": "planned",
+      "owner": "crypto",
+      "rows": [
+        "NET.2"
+      ],
+      "spec": {
+        "type": "draft",
+        "ref": "draft-ietf-mls-pq-ciphersuites",
+        "status": "iesg",
+        "revision": "07",
+        "posted": "2026-11-01"
+      },
+      "cryptography": [
+        "authentication",
+        "confidentiality",
+        "integrity",
+        "key-exchange",
+        "key-derivation"
+      ],
+      "codepoints": [
+        {
+          "registry": "MLS Cipher Suites",
+          "name": "MLS_128_MLKEM768X25519_AES128GCM_SHA256_Ed25519",
+          "value": "0x0010",
+          "verified": false
+        },
+        {
+          "registry": "MLS Cipher Suites",
+          "name": "MLS_128_MLKEM768X25519_AES256GCM_SHA384_Ed25519",
+          "value": "0x0011",
+          "verified": false
+        },
+        {
+          "registry": "MLS Cipher Suites",
+          "name": "MLS_128_MLKEM768P256_AES128GCM_SHA256_P256",
+          "value": "0x0012",
+          "verified": false
+        },
+        {
+          "registry": "MLS Cipher Suites",
+          "name": "MLS_128_MLKEM768P256_AES256GCM_SHA384_P256",
+          "value": "0x0013",
+          "verified": false
+        },
+        {
+          "registry": "MLS Cipher Suites",
+          "name": "MLS_192_MLKEM1024P384_AES256GCM_SHA384_P384",
+          "value": "0x0014",
+          "verified": false
+        },
+        {
+          "registry": "MLS Cipher Suites",
+          "name": "MLS_128_MLKEM768_AES256GCM_SHA384_Ed25519",
+          "value": "0x0015",
+          "verified": false
+        },
+        {
+          "registry": "MLS Cipher Suites",
+          "name": "MLS_128_MLKEM768_AES256GCM_SHA384_P256",
+          "value": "0x0016",
+          "verified": false
+        },
+        {
+          "registry": "MLS Cipher Suites",
+          "name": "MLS_192_MLKEM1024_AES256GCM_SHA384_P384",
+          "value": "0x0017",
+          "verified": false
+        },
+        {
+          "registry": "MLS Cipher Suites",
+          "name": "MLS_128_MLKEM768X25519_CHACHA20POLY1305_SHA384_MLDSA44",
+          "value": "0x0020",
+          "verified": false
+        },
+        {
+          "registry": "MLS Cipher Suites",
+          "name": "MLS_192_MLKEM768_AES256GCM_SHA384_MLDSA65",
+          "value": "0x0021",
+          "verified": false
+        },
+        {
+          "registry": "MLS Cipher Suites",
+          "name": "MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87",
+          "value": "0x0022",
+          "verified": false
+        }
+      ],
+      "source": {
+        "ref": "docs/sessions/2026-11-02-net-2-hpke-pq.md",
+        "read": "2026-11-02",
+        "verified": true
+      },
+      "review": "2027-11-02",
+      "evidence": [],
+      "deprecation": null,
+      "note": "The post-quantum MLS cipher suites (decision M2) over crypto.hpke-pq's KEMs and the provider's ML-DSA (signed purely, empty context, as the draft says). Revision 07 (2026-11-01) was read on 2026-11-02; IANA's MLS registry (updated 2025-11-17) does not list the codepoints yet, so they stay unverified until it does. Planned: the next NET.2 layer adds them to the suite table."
     },
     {
       "id": "crypto.ml-kem",
@@ -2357,8 +2588,8 @@
         "type": "draft",
         "ref": "draft-ietf-plants-merkle-tree-certs",
         "status": "active",
-        "revision": "07",
-        "posted": "2026-10-07"
+        "revision": "08",
+        "posted": "2026-11-02"
       },
       "cryptography": [
         "authentication"
@@ -2691,8 +2922,8 @@
         "type": "draft",
         "ref": "draft-ietf-quic-qlog-main-schema",
         "status": "active",
-        "revision": "14",
-        "posted": "2026-07-06"
+        "revision": "15",
+        "posted": "2026-11-02"
       },
       "cryptography": [],
       "source": {

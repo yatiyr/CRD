@@ -641,6 +641,40 @@ CryptoError hkdf_expand(AlgorithmId algorithm, cont::ConstSpan<u8> prk, cont::Co
     return CryptoError::None;
 }
 
+// ---- SHA-3 ----
+
+namespace
+{
+// One SHA-3 digest or SHAKE output of `bytes` into `out`.
+CryptoError sha3(const EVP_MD* digest, bool xof, cont::ConstSpan<u8> bytes, cont::Span<u8> out) noexcept
+{
+    const ErrorScope                  errors;
+    const bssl::UniquePtr<EVP_MD_CTX> context(EVP_MD_CTX_new());
+    unsigned int                      written = 0U;
+    const bool                        done =
+        context && EVP_DigestInit_ex(context.get(), digest, nullptr) &&
+        EVP_DigestUpdate(context.get(), bytes.data(), bytes.size()) &&
+        (xof ? EVP_DigestFinalXOF(context.get(), out.data(), out.size()) != 0
+             : EVP_DigestFinal_ex(context.get(), out.data(), &written) != 0 && written == out.size());
+    if (!done)
+    {
+        secure_zero(out);
+        return CryptoError::ProviderFailure;
+    }
+    return CryptoError::None;
+}
+} // namespace
+
+CryptoError sha3_256(cont::ConstSpan<u8> bytes, cont::Span<u8> out) noexcept
+{
+    return out.size() == kSha3DigestBytes ? sha3(EVP_sha3_256(), false, bytes, out) : CryptoError::BadLength;
+}
+
+CryptoError shake256(cont::ConstSpan<u8> bytes, cont::Span<u8> out) noexcept
+{
+    return !out.empty() ? sha3(EVP_shake256(), true, bytes, out) : CryptoError::BadLength;
+}
+
 // ---- Sealing keys ----
 
 namespace provider_internal
@@ -1001,6 +1035,41 @@ KemSizes kem_sizes(AlgorithmId algorithm) noexcept
     return entry != nullptr ? entry->sizes : KemSizes{};
 }
 
+namespace
+{
+// A context over the encapsulation key `peer_public` (entry.sizes.public_key bytes) once FIPS 203 section 7.2's
+// modulus check passed: the import only copies the bytes, so the check runs here and a key that fails it (BadKey) is
+// told apart from a provider failure.
+CryptoError kem_peer(const KemAlgorithm& entry, cont::ConstSpan<u8> peer_public,
+                     bssl::UniquePtr<EVP_PKEY_CTX>& context) noexcept
+{
+    const bssl::UniquePtr<EVP_PKEY> pkey(
+        EVP_PKEY_kem_new_raw_public_key(entry.nid, peer_public.data(), peer_public.size()));
+    context.reset(pkey ? EVP_PKEY_CTX_new(pkey.get(), nullptr) : nullptr);
+    if (!context)
+    {
+        return CryptoError::ProviderFailure;
+    }
+    return EVP_PKEY_public_check(context.get()) == 1 ? CryptoError::None : CryptoError::BadKey;
+}
+} // namespace
+
+CryptoError check_kem_public_key(AlgorithmId algorithm, cont::ConstSpan<u8> peer_public) noexcept
+{
+    const KemAlgorithm* entry = find_entry(kKems, algorithm);
+    if (entry == nullptr)
+    {
+        return CryptoError::Unsupported;
+    }
+    if (peer_public.size() != entry->sizes.public_key)
+    {
+        return CryptoError::BadLength;
+    }
+    const ErrorScope              errors;
+    bssl::UniquePtr<EVP_PKEY_CTX> context;
+    return kem_peer(*entry, peer_public, context);
+}
+
 CryptoError kem_encapsulate(AlgorithmId algorithm, cont::ConstSpan<u8> peer_public, cont::Span<u8> ciphertext,
                             cont::Span<u8> secret) noexcept
 {
@@ -1018,19 +1087,12 @@ CryptoError kem_encapsulate(AlgorithmId algorithm, cont::ConstSpan<u8> peer_publ
     {
         return CryptoError::Overlap;
     }
-    const ErrorScope                    errors;
-    const bssl::UniquePtr<EVP_PKEY>     pkey(
-        EVP_PKEY_kem_new_raw_public_key(entry->nid, peer_public.data(), peer_public.size()));
-    const bssl::UniquePtr<EVP_PKEY_CTX> context(pkey ? EVP_PKEY_CTX_new(pkey.get(), nullptr) : nullptr);
-    if (!context)
+    const ErrorScope              errors;
+    bssl::UniquePtr<EVP_PKEY_CTX> context;
+    const CryptoError             checked = kem_peer(*entry, peer_public, context);
+    if (checked != CryptoError::None)
     {
-        return refuse(CryptoError::ProviderFailure, ciphertext, secret);
-    }
-    // The import only copies the bytes; FIPS 203 section 7.2's modulus check runs here, so a key that fails it is
-    // told apart from a provider failure.
-    if (EVP_PKEY_public_check(context.get()) != 1)
-    {
-        return refuse(CryptoError::BadKey, ciphertext, secret);
+        return refuse(checked, ciphertext, secret);
     }
     usize ciphertext_length = ciphertext.size();
     usize secret_length     = secret.size();

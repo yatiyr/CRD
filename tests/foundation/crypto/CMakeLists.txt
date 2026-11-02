@@ -50,11 +50,13 @@ target_link_libraries(crd-crypto-tests PRIVATE
 )
 
 # The pinned vectors are read from the package cache at run time (cmake/pins.json): Wycheproof's, the MLS working
-# group's (mls-vectors) and RFC 9180's, which the pinned AWS-LC carries as crypto/hpke/test-vectors.json.
+# group's (mls-vectors), RFC 9180's, which the pinned AWS-LC carries as crypto/hpke/test-vectors.json, and the HPKE
+# working group's post-quantum ones (hpke-pq-vectors).
 target_compile_definitions(crd-crypto-tests PRIVATE
     CRD_WYCHEPROOF_DIR="${wycheproof_SOURCE_DIR}"
     CRD_MLS_VECTORS_DIR="${mls-vectors_SOURCE_DIR}/test-vectors"
-    CRD_HPKE_VECTORS="${aws-lc_SOURCE_DIR}/crypto/hpke/test-vectors.json")
+    CRD_HPKE_VECTORS="${aws-lc_SOURCE_DIR}/crypto/hpke/test-vectors.json"
+    CRD_HPKE_PQ_VECTORS="${hpke-pq-vectors_SOURCE_DIR}/test-vectors.json")
 
 crd_enable_default_pch(crd-crypto-tests)
 crd_discover_tests(crd-crypto-tests)

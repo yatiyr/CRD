@@ -163,7 +163,7 @@ struct LeafPolicy
 
 // Section 7.3's checks of one leaf node's own content against the group of `context`, in this order:
 //   Malformed    a source other than `role` names, or a leaf or GroupContext extension list naming a type twice;
-//   BadKey       an encryption key no agreement in the suite's KEM can use (check_agreement_public_key);
+//   BadKey       an encryption key the suite's KEM cannot encapsulate to (hpke_check_public_key);
 //   Forged       a credential the Authentication Service refuses for the leaf's signature key;
 //   Unsupported  capabilities without the leaf's own credential type, a non-default leaf extension they do not
 //                list, or a GroupContext extension or required capability (section 11.1) they do not support; an

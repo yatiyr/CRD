@@ -144,6 +144,16 @@ private:
 [[nodiscard]] CryptoError kdf_mac(AlgorithmId algorithm, cont::ConstSpan<u8> key, cont::ConstSpan<u8> bytes,
                                   cont::Span<u8> out) noexcept;
 
+// ---- SHA-3 (FIPS 202) ----
+
+// SHA3-256 of `bytes` into `out` (kSha3DigestBytes long) and SHAKE256 of `bytes` into `out` (1 byte or more): the KDF
+// and the PRG of the post-quantum/traditional hybrid KEMs and the SHAKE256 derivation of HPKE's post-quantum KEMs
+// (draft-irtf-cfrg-hybrid-kems, draft-ietf-hpke-pq). On a provider failure `out` is zeroed.
+inline constexpr usize kSha3DigestBytes = 32U;
+
+[[nodiscard]] CryptoError sha3_256(cont::ConstSpan<u8> bytes, cont::Span<u8> out) noexcept;
+[[nodiscard]] CryptoError shake256(cont::ConstSpan<u8> bytes, cont::Span<u8> out) noexcept;
+
 // ---- Signatures (ML-DSA-44/65/87, Ed25519, ECDSA P-256/SHA-256 and P-384/SHA-384) ----
 
 // Encodings (decision P4): ML-DSA public keys and signatures as FIPS 204 encodes them, signed purely with an empty
@@ -309,6 +319,11 @@ struct KemSizes
 // both outputs are zeroed.
 [[nodiscard]] CryptoError kem_encapsulate(AlgorithmId algorithm, cont::ConstSpan<u8> peer_public,
                                           cont::Span<u8> ciphertext, cont::Span<u8> secret) noexcept;
+
+// Whether every encapsulation to `peer_public` can succeed, checked once when a long-lived key enters shared state (as
+// check_agreement_public_key): Unsupported for another algorithm, BadLength for another length, BadKey for a key that
+// fails FIPS 203's input check.
+[[nodiscard]] CryptoError check_kem_public_key(AlgorithmId algorithm, cont::ConstSpan<u8> peer_public) noexcept;
 
 class KemKey
 {

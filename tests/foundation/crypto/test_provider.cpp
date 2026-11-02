@@ -439,6 +439,39 @@ TEST_CASE("Provider: the hash of each KDF against FIPS 180-4's examples", "[cryp
     CHECK(kdf_hash(AlgorithmId::HkdfSha256, abc, out) == CryptoError::BadLength);
 }
 
+TEST_CASE("Provider: SHA3-256 and SHAKE256 against FIPS 202's examples", "[crypto][net-2]")
+{
+    // NIST's "abc" examples and the empty message, and 200 zero bytes, past one 136-byte block of input and of
+    // output (the last 8 bytes of a 200-byte SHAKE256 output), as Python's hashlib computes them.
+    const u8    abc[]                    = {'a', 'b', 'c'};
+    const Bytes zeros                    = filled(200U, 0U);
+    u8          digest[kSha3DigestBytes] = {};
+    REQUIRE(sha3_256(abc, digest) == CryptoError::None);
+    CHECK(equal(digest, from_hex("3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532")));
+    REQUIRE(sha3_256(ConstSpan<u8>(), digest) == CryptoError::None);
+    CHECK(equal(digest, from_hex("a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a")));
+    REQUIRE(sha3_256(zeros, digest) == CryptoError::None);
+    CHECK(equal(digest, from_hex("2b43036c229ba512995f91fdb46fcd5327a4dc834d86d6e0f58a08053346dc2e")));
+
+    u8 xof[200] = {};
+    REQUIRE(shake256(abc, Span<u8>(xof, 64U)) == CryptoError::None);
+    CHECK(equal(ConstSpan<u8>(xof, 64U), from_hex("483366601360a8771c6863080cc4114d8db44530f8f1e1ee4f94ea37e78b5739"
+                                                  "d5a15bef186a5386c75744c0527e1faa9f8726e462a12a4feb06bd8801e751e4")));
+    // An XOF's shorter output is a prefix of its longer one.
+    u8 prefix[32] = {};
+    REQUIRE(shake256(abc, prefix) == CryptoError::None);
+    CHECK(equal(prefix, ConstSpan<u8>(xof, 32U)));
+    REQUIRE(shake256(ConstSpan<u8>(), Span<u8>(xof, 32U)) == CryptoError::None);
+    CHECK(equal(ConstSpan<u8>(xof, 32U),
+                from_hex("46b9dd2b0ba88d13233b3feb743eeb243fcd52ea62b81b82b50c27646ed5762f")));
+    REQUIRE(shake256(zeros, xof) == CryptoError::None);
+    CHECK(equal(ConstSpan<u8>(xof + 192U, 8U), from_hex("da2f2f01240aba0f")));
+
+    // Refusals: SHA3-256 into another length, SHAKE256 into nothing.
+    CHECK(sha3_256(abc, Span<u8>(xof, 31U)) == CryptoError::BadLength);
+    CHECK(shake256(abc, Span<u8>()) == CryptoError::BadLength);
+}
+
 // ---- Key agreement ----
 
 TEST_CASE("Provider: X25519 against Wycheproof", "[crypto][net-2][wycheproof]")

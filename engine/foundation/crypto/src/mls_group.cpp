@@ -349,7 +349,7 @@ CryptoError supports_context(cont::ConstSpan<u8> extensions, const Capabilities&
 
 CryptoError check_node_key(const CipherSuite& suite, cont::ConstSpan<u8> key) noexcept
 {
-    const CryptoError error = check_agreement_public_key(suite.kem, key);
+    const CryptoError error = hpke_check_public_key(suite.kem, key);
     return error == CryptoError::None || error == CryptoError::ProviderFailure ? error : CryptoError::BadKey;
 }
 

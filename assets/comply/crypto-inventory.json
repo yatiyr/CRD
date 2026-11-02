@@ -136,6 +136,40 @@
           "standard": true
         },
         {
+          "id": "crypto.hpke-pq",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "confidentiality",
+            "integrity",
+            "key-exchange",
+            "key-derivation"
+          ],
+          "spec": "draft-ietf-hpke-pq",
+          "standard": true
+        },
+        {
+          "id": "crypto.hybrid-kems",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "key-exchange",
+            "key-derivation"
+          ],
+          "spec": "draft-irtf-cfrg-concrete-hybrid-kems",
+          "standard": true
+        },
+        {
+          "id": "crypto.sha3",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "key-derivation"
+          ],
+          "spec": "FIPS 202",
+          "standard": true
+        },
+        {
           "id": "crypto.ml-kem",
           "kind": "algorithm",
           "owner": "crypto",

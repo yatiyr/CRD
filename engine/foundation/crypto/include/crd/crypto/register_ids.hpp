@@ -189,6 +189,16 @@ inline constexpr u16 kHpkeAeadAes128Gcm = 0x0001U;
 inline constexpr u16 kHpkeAeadAes256Gcm = 0x0002U;
 // crypto.hpke: HPKE AEAD Identifiers, ChaCha20Poly1305
 inline constexpr u16 kHpkeAeadChacha20poly1305 = 0x0003U;
+// crypto.hpke-pq: HPKE KEM Identifiers, ML-KEM-768
+inline constexpr u16 kHpkeKemMlKem768 = 0x0041U;
+// crypto.hpke-pq: HPKE KEM Identifiers, ML-KEM-1024
+inline constexpr u16 kHpkeKemMlKem1024 = 0x0042U;
+// crypto.hpke-pq: HPKE KEM Identifiers, MLKEM768-P256
+inline constexpr u16 kHpkeKemMlkem768P256 = 0x0050U;
+// crypto.hpke-pq: HPKE KEM Identifiers, MLKEM1024-P384
+inline constexpr u16 kHpkeKemMlkem1024P384 = 0x0051U;
+// crypto.hpke-pq: HPKE KEM Identifiers, X-Wing
+inline constexpr u16 kHpkeKemXWing = 0x647AU;
 // mls.protocol: MLS Cipher Suites, MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519
 inline constexpr u16 kMls128Dhkemx25519Aes128gcmSha256Ed25519 = 0x0001U;
 // mls.protocol: MLS Cipher Suites, MLS_128_DHKEMP256_AES128GCM_SHA256_P256
@@ -198,5 +208,31 @@ inline constexpr u16 kMls128Dhkemx25519Chacha20poly1305Sha256Ed25519 = 0x0003U;
 // mls.protocol: MLS Cipher Suites, MLS_256_DHKEMP384_AES256GCM_SHA384_P384
 inline constexpr u16 kMls256Dhkemp384Aes256gcmSha384P384 = 0x0007U;
 } // namespace iana
+
+namespace iana::unverified
+{
+// mls.pq-ciphersuites: MLS Cipher Suites, MLS_128_MLKEM768X25519_AES128GCM_SHA256_Ed25519
+inline constexpr u16 kMls128Mlkem768x25519Aes128gcmSha256Ed25519 = 0x0010U;
+// mls.pq-ciphersuites: MLS Cipher Suites, MLS_128_MLKEM768X25519_AES256GCM_SHA384_Ed25519
+inline constexpr u16 kMls128Mlkem768x25519Aes256gcmSha384Ed25519 = 0x0011U;
+// mls.pq-ciphersuites: MLS Cipher Suites, MLS_128_MLKEM768P256_AES128GCM_SHA256_P256
+inline constexpr u16 kMls128Mlkem768p256Aes128gcmSha256P256 = 0x0012U;
+// mls.pq-ciphersuites: MLS Cipher Suites, MLS_128_MLKEM768P256_AES256GCM_SHA384_P256
+inline constexpr u16 kMls128Mlkem768p256Aes256gcmSha384P256 = 0x0013U;
+// mls.pq-ciphersuites: MLS Cipher Suites, MLS_192_MLKEM1024P384_AES256GCM_SHA384_P384
+inline constexpr u16 kMls192Mlkem1024p384Aes256gcmSha384P384 = 0x0014U;
+// mls.pq-ciphersuites: MLS Cipher Suites, MLS_128_MLKEM768_AES256GCM_SHA384_Ed25519
+inline constexpr u16 kMls128Mlkem768Aes256gcmSha384Ed25519 = 0x0015U;
+// mls.pq-ciphersuites: MLS Cipher Suites, MLS_128_MLKEM768_AES256GCM_SHA384_P256
+inline constexpr u16 kMls128Mlkem768Aes256gcmSha384P256 = 0x0016U;
+// mls.pq-ciphersuites: MLS Cipher Suites, MLS_192_MLKEM1024_AES256GCM_SHA384_P384
+inline constexpr u16 kMls192Mlkem1024Aes256gcmSha384P384 = 0x0017U;
+// mls.pq-ciphersuites: MLS Cipher Suites, MLS_128_MLKEM768X25519_CHACHA20POLY1305_SHA384_MLDSA44
+inline constexpr u16 kMls128Mlkem768x25519Chacha20poly1305Sha384Mldsa44 = 0x0020U;
+// mls.pq-ciphersuites: MLS Cipher Suites, MLS_192_MLKEM768_AES256GCM_SHA384_MLDSA65
+inline constexpr u16 kMls192Mlkem768Aes256gcmSha384Mldsa65 = 0x0021U;
+// mls.pq-ciphersuites: MLS Cipher Suites, MLS_256_MLKEM1024_AES256GCM_SHA384_MLDSA87
+inline constexpr u16 kMls256Mlkem1024Aes256gcmSha384Mldsa87 = 0x0022U;
+} // namespace iana::unverified
 
 } // namespace crd::crypto

@@ -1,8 +1,10 @@
 // crd-crypto -- hybrid public key encryption (NET.2; docs/design/network-foundation.md#hpke): every base-mode vector
-// of RFC 9180's test-vectors.json in the profile (DeriveKeyPair for the recipient and the ephemeral key, the private
-// keys' serialization, the opening of each context's first message and each of its exports), sealing and exporting
-// round trips over every suite, and every refusal: suites outside the profile, lengths, keys off the curve,
-// small-order X25519 keys, forgeries, overlapping buffers and keys that hold none.
+// of RFC 9180's test-vectors.json and of draft-ietf-hpke-pq's in the profile (DeriveKeyPair for the recipient and,
+// for a DHKEM, the ephemeral key, the private keys' serialization, the opening of each context's first message and
+// each of its exports), sealing and exporting round trips over every suite, the post-quantum and hybrid KEMs' own
+// rules (implicit rejection, a hybrid's X25519 half taken as computed, its NIST-curve half refused off the curve, the
+// public key checks), and every refusal: suites outside the profile, lengths, keys off the curve, small-order X25519
+// keys, forgeries, overlapping buffers and keys that hold none.
 
 #include "wycheproof.hpp"
 
@@ -11,6 +13,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstring>
+#include <utility>
 
 namespace
 {
@@ -35,6 +38,16 @@ AlgorithmId kem_of(u64 id)
         return AlgorithmId::Secp384r1;
     case iana::kHpkeKemDhkemX25519HkdfSha256:
         return AlgorithmId::X25519;
+    case iana::kHpkeKemMlKem768:
+        return AlgorithmId::MlKem768;
+    case iana::kHpkeKemMlKem1024:
+        return AlgorithmId::MlKem1024;
+    case iana::kHpkeKemXWing:
+        return AlgorithmId::X25519Mlkem768;
+    case iana::kHpkeKemMlkem768P256:
+        return AlgorithmId::Secp256r1Mlkem768;
+    case iana::kHpkeKemMlkem1024P384:
+        return AlgorithmId::Secp384r1Mlkem1024;
     default:
         return AlgorithmId{};
     }
@@ -83,7 +96,17 @@ constexpr HpkeSuite kSuites[] = {
     {AlgorithmId::Secp256r1, AlgorithmId::HkdfSha384, AlgorithmId::Aes256Gcm},
     {AlgorithmId::Secp384r1, AlgorithmId::HkdfSha384, AlgorithmId::Aes256Gcm},
     {AlgorithmId::Secp384r1, AlgorithmId::HkdfSha256, AlgorithmId::Chacha20Poly1305},
+    {AlgorithmId::MlKem768, AlgorithmId::HkdfSha384, AlgorithmId::Aes256Gcm},
+    {AlgorithmId::MlKem1024, AlgorithmId::HkdfSha256, AlgorithmId::Chacha20Poly1305},
+    {AlgorithmId::X25519Mlkem768, AlgorithmId::HkdfSha256, AlgorithmId::Aes128Gcm},
+    {AlgorithmId::Secp256r1Mlkem768, AlgorithmId::HkdfSha384, AlgorithmId::Chacha20Poly1305},
+    {AlgorithmId::Secp384r1Mlkem1024, AlgorithmId::HkdfSha384, AlgorithmId::Aes256Gcm},
 };
+
+// The KEMs of the profile beyond the DHKEMs: ML-KEM and the hybrids.
+constexpr AlgorithmId kPostQuantumKems[] = {AlgorithmId::MlKem768, AlgorithmId::MlKem1024,
+                                            AlgorithmId::X25519Mlkem768, AlgorithmId::Secp256r1Mlkem768,
+                                            AlgorithmId::Secp384r1Mlkem1024};
 
 // A sealed message to a fresh recipient key of `suite`.
 struct Sealed
@@ -97,7 +120,7 @@ void seal_to(const HpkeSuite& suite, ConstSpan<u8> info, ConstSpan<u8> aad, Cons
 {
     REQUIRE(out.recipient.generate(suite.kem) == CryptoError::None);
     const Bytes recipient = public_of(out.recipient);
-    out.enc.resize(hpke_sizes(suite.kem).public_key);
+    out.enc.resize(hpke_sizes(suite.kem).encapsulation);
     out.ciphertext.resize(plaintext.size() + kHpkeTagBytes);
     REQUIRE(hpke_seal(suite, recipient, info, aad, plaintext, Span<u8>(out.enc.data(), out.enc.size()),
                       Span<u8>(out.ciphertext.data(), out.ciphertext.size())) == CryptoError::None);
@@ -271,7 +294,7 @@ TEST_CASE("HPKE: exports agree on both sides of every suite, and their refusals"
         const usize nh   = suite.kdf == AlgorithmId::HkdfSha256 ? 32U : 48U;
         for (const usize length : {usize{1}, nh, 255U * nh})
         {
-            Bytes enc      = filled(peer.size(), 0U);
+            Bytes enc      = filled(hpke_sizes(suite.kem).encapsulation, 0U);
             Bytes sent     = filled(length, 0U);
             Bytes received = filled(length, 0U);
             REQUIRE(hpke_export(suite, peer, info, context, Span<u8>(enc.data(), enc.size()),
@@ -283,7 +306,7 @@ TEST_CASE("HPKE: exports agree on both sides of every suite, and their refusals"
         }
         // Another context, another info, another key or another KDF derive another secret; the exports of one
         // context are prefixes of no other length (the length is in the label).
-        Bytes enc  = filled(peer.size(), 0U);
+        Bytes enc  = filled(hpke_sizes(suite.kem).encapsulation, 0U);
         Bytes sent = filled(nh, 0U);
         REQUIRE(hpke_export(suite, peer, info, context, Span<u8>(enc.data(), enc.size()),
                             Span<u8>(sent.data(), sent.size())) == CryptoError::None);
@@ -361,13 +384,23 @@ TEST_CASE("HPKE: exports agree on both sides of every suite, and their refusals"
 
 TEST_CASE("HPKE: keys and refusals", "[crypto][net-2][hpke]")
 {
-    // Sizes answer for the profile's DHKEMs only.
-    CHECK(hpke_sizes(AlgorithmId::X25519).public_key == 32U);
-    CHECK(hpke_sizes(AlgorithmId::X25519).private_key == 32U);
-    CHECK(hpke_sizes(AlgorithmId::Secp256r1).public_key == 65U);
-    CHECK(hpke_sizes(AlgorithmId::Secp384r1).private_key == 48U);
-    CHECK(hpke_sizes(AlgorithmId::MlKem768).public_key == 0U);
-    CHECK(hpke_sizes(AlgorithmId::Ed25519).public_key == 0U);
+    // Sizes answer for the profile's KEMs only: Npk, Nenc and Nsk (RFC 9180 section 7.1; draft-ietf-hpke-pq Table 2
+    // and section 4, as IANA's HPKE registry lists them).
+    const auto sizes = [](AlgorithmId kem, usize npk, usize nenc, usize nsk)
+    {
+        const HpkeSizes got = hpke_sizes(kem);
+        return got.public_key == npk && got.encapsulation == nenc && got.private_key == nsk;
+    };
+    CHECK(sizes(AlgorithmId::X25519, 32U, 32U, 32U));
+    CHECK(sizes(AlgorithmId::Secp256r1, 65U, 65U, 32U));
+    CHECK(sizes(AlgorithmId::Secp384r1, 97U, 97U, 48U));
+    CHECK(sizes(AlgorithmId::MlKem768, 1184U, 1088U, 64U));
+    CHECK(sizes(AlgorithmId::MlKem1024, 1568U, 1568U, 64U));
+    CHECK(sizes(AlgorithmId::X25519Mlkem768, 1216U, 1120U, 32U));
+    CHECK(sizes(AlgorithmId::Secp256r1Mlkem768, 1249U, 1153U, 32U));
+    CHECK(sizes(AlgorithmId::Secp384r1Mlkem1024, 1665U, 1665U, 32U));
+    CHECK(sizes(AlgorithmId::Ed25519, 0U, 0U, 0U));
+    CHECK(sizes(AlgorithmId::MlDsa65, 0U, 0U, 0U));
 
     // Suites outside the profile.
     CHECK_FALSE(hpke_supported({AlgorithmId::Ed25519, AlgorithmId::HkdfSha256, AlgorithmId::Aes128Gcm}));
@@ -377,7 +410,7 @@ TEST_CASE("HPKE: keys and refusals", "[crypto][net-2][hpke]")
 
     HpkeKey key;
     CHECK_FALSE(key.ready());
-    CHECK(key.generate(AlgorithmId::MlKem768) == CryptoError::Unsupported);
+    CHECK(key.generate(AlgorithmId::MlDsa65) == CryptoError::Unsupported);
     CHECK(key.derive(AlgorithmId::Ed25519, filled(32U, 1U)) == CryptoError::Unsupported);
     CHECK(key.from_private(AlgorithmId::Aes128Gcm, filled(32U, 1U)) == CryptoError::Unsupported);
     // DeriveKeyPair takes at least Nsk bytes.
@@ -486,5 +519,268 @@ TEST_CASE("HPKE: keys and refusals", "[crypto][net-2][hpke]")
     sealed.recipient.clear();
     CHECK_FALSE(sealed.recipient.ready());
     CHECK(sealed.recipient.open(suite, sealed.enc, {}, {}, sealed.ciphertext, out) == CryptoError::NotReady);
+}
+TEST_CASE("HPKE: draft-ietf-hpke-pq's base-mode vectors", "[crypto][net-2][hpke]")
+{
+    const JsonFile vectors(crd::containers::String(CRD_HPKE_PQ_VECTORS));
+    const u32      count   = json::count_of(vectors.doc(), vectors.root());
+    usize          in              = 0U;
+    usize          outside         = 0U;
+    usize          opened          = 0U;
+    usize          exported_values = 0U;
+    REQUIRE(count == 13U);
+    for (u32 i = 0U; i < count; ++i)
+    {
+        const u32 v = json::at(vectors.doc(), vectors.root(), i);
+        REQUIRE(vectors.number(v, "mode") == 0U);
+        const HpkeSuite suite{kem_of(vectors.number(v, "kem_id")), kdf_of(vectors.number(v, "kdf_id")),
+                              aead_of(vectors.number(v, "aead_id"))};
+        INFO("kem " << vectors.number(v, "kem_id") << " kdf " << vectors.number(v, "kdf_id") << " aead "
+                    << vectors.number(v, "aead_id"));
+        if (!hpke_supported(suite))
+        {
+            // ML-KEM-512 and the single-stage SHAKE and TurboSHAKE KDFs are outside the profile.
+            ++outside;
+            continue;
+        }
+        ++in;
+        // DeriveKeyPair and the serialized private key give the vector's public key.
+        HpkeKey derived;
+        HpkeKey serialized;
+        REQUIRE(derived.derive(suite.kem, vectors.hex(v, "ikmR")) == CryptoError::None);
+        REQUIRE(serialized.from_private(suite.kem, vectors.hex(v, "skRm")) == CryptoError::None);
+        CHECK(equal(public_of(derived), vectors.hex(v, "pkRm")));
+        CHECK(equal(public_of(serialized), vectors.hex(v, "pkRm")));
+        CHECK(hpke_check_public_key(suite.kem, vectors.hex(v, "pkRm")) == CryptoError::None);
+
+        // Each message of the context opens only as the first one (the vectors' sequence number 0); the others,
+        // sealed under later nonces, do not authenticate.
+        const Bytes enc         = vectors.hex(v, "enc");
+        const Bytes info        = vectors.hex(v, "info");
+        const u32   encryptions = json::find(vectors.doc(), v, "encryptions");
+        const u32   messages    = json::count_of(vectors.doc(), encryptions);
+        REQUIRE(messages == 10U);
+        for (u32 m = 0U; m < messages; ++m)
+        {
+            const u32   message    = json::at(vectors.doc(), encryptions, m);
+            const Bytes ciphertext = vectors.hex(message, "ct");
+            Bytes       plaintext  = filled(ciphertext.size() - kHpkeTagBytes, 0xA5U);
+            const auto  result     = derived.open(suite, enc, info, vectors.hex(message, "aad"), ciphertext,
+                                                  Span<u8>(plaintext.data(), plaintext.size()));
+            if (m == 0U)
+            {
+                CHECK(equal(vectors.hex(message, "nonce"), vectors.hex(v, "base_nonce")));
+                REQUIRE(result == CryptoError::None);
+                CHECK(equal(plaintext, vectors.hex(message, "pt")));
+                ++opened;
+            }
+            else
+            {
+                CHECK(result == CryptoError::Forged);
+                CHECK(all_zero(plaintext));
+            }
+        }
+
+        // Every export of the context, from both keys.
+        const u32 exports = json::find(vectors.doc(), v, "exports");
+        REQUIRE(json::count_of(vectors.doc(), exports) == 5U);
+        for (u32 e = 0U; e < 5U; ++e)
+        {
+            const u32   entry = json::at(vectors.doc(), exports, e);
+            const Bytes value = vectors.hex(entry, "exported_value");
+            CHECK(vectors.number(entry, "L") == value.size());
+            Bytes from_derived    = filled(value.size(), 0xA5U);
+            Bytes from_serialized = filled(value.size(), 0xA5U);
+            REQUIRE(derived.export_secret(suite, enc, info, vectors.hex(entry, "exporter_context"),
+                                          Span<u8>(from_derived.data(), from_derived.size())) == CryptoError::None);
+            REQUIRE(serialized.export_secret(suite, enc, info, vectors.hex(entry, "exporter_context"),
+                                             Span<u8>(from_serialized.data(), from_serialized.size())) ==
+                    CryptoError::None);
+            CHECK(equal(from_derived, value));
+            CHECK(equal(from_serialized, value));
+            ++exported_values;
+        }
+
+        // The derived key's seed is the vector's private key in full: its ML-KEM half's implicit rejection, a function
+        // of z, which the public key does not show, agrees with the serialized key's for a changed ciphertext.
+        Bytes changed = enc;
+        changed[0] ^= 0x01U;
+        Bytes a = filled(32U, 0U);
+        Bytes b = filled(32U, 0U);
+        REQUIRE(derived.export_secret(suite, changed, info, {}, Span<u8>(a.data(), a.size())) == CryptoError::None);
+        REQUIRE(serialized.export_secret(suite, changed, info, {}, Span<u8>(b.data(), b.size())) ==
+                CryptoError::None);
+        CHECK(equal(a, b));
+        HpkeKey other;
+        Bytes   other_seed = vectors.hex(v, "skRm");
+        other_seed[other_seed.size() - 1U] ^= 0x01U;
+        REQUIRE(other.from_private(suite.kem, other_seed) == CryptoError::None);
+        REQUIRE(other.export_secret(suite, changed, info, {}, Span<u8>(b.data(), b.size())) == CryptoError::None);
+        CHECK_FALSE(equal(a, b));
+    }
+    CHECK(in == 5U);       // ML-KEM-768, ML-KEM-1024 and the three hybrids with HKDF
+    CHECK(outside == 8U);  // ML-KEM-512 and the single-stage KDFs
+    CHECK(opened == 5U);
+    CHECK(exported_values == 25U);
+}
+
+TEST_CASE("HPKE: the post-quantum and hybrid KEMs' keys, checks and refusals", "[crypto][net-2][hpke]")
+{
+    const u8 info[]      = {'p', 'q'};
+    const u8 plaintext[] = {'k', 'e', 'y'};
+
+    // DeriveKeyPair takes 32 bytes or more, is a function of its input, and its key is one from_private takes.
+    for (const AlgorithmId kem : kPostQuantumKems)
+    {
+        INFO("kem " << static_cast<u32>(kem));
+        const HpkeSizes sizes = hpke_sizes(kem);
+        HpkeKey         key;
+        CHECK(key.derive(kem, filled(31U, 1U)) == CryptoError::BadLength);
+        CHECK_FALSE(key.ready());
+        REQUIRE(key.derive(kem, filled(32U, 1U)) == CryptoError::None);
+        CHECK(key.kem() == kem);
+        HpkeKey same;
+        REQUIRE(same.derive(kem, filled(32U, 1U)) == CryptoError::None);
+        CHECK(equal(public_of(key), public_of(same)));
+        REQUIRE(same.derive(kem, filled(32U, 2U)) == CryptoError::None);
+        CHECK_FALSE(equal(public_of(key), public_of(same)));
+        CHECK(key.from_private(kem, filled(sizes.private_key - 1U, 1U)) == CryptoError::BadLength);
+        CHECK(key.from_private(kem, filled(sizes.private_key + 1U, 1U)) == CryptoError::BadLength);
+        CHECK_FALSE(key.ready());
+        // Every seed is a key, the all-zero one included.
+        REQUIRE(key.from_private(kem, filled(sizes.private_key, 0U)) == CryptoError::None);
+        CHECK(hpke_check_public_key(kem, public_of(key)) == CryptoError::None);
+        Bytes public_bytes = filled(sizes.public_key, 0U);
+        CHECK(key.public_key(Span<u8>(public_bytes.data(), sizes.public_key - 1U)) == CryptoError::BadLength);
+
+        // A moved key keeps its pair; the key it left holds none.
+        const Bytes before = public_of(key);
+        HpkeKey     moved(std::move(key));
+        CHECK_FALSE(key.ready()); // NOLINT(bugprone-use-after-move,hicpp-invalid-access-moved): the moved-from state
+        CHECK(equal(public_of(moved), before));
+        HpkeKey assigned;
+        REQUIRE(assigned.generate(kem) == CryptoError::None);
+        assigned = std::move(moved);
+        CHECK(equal(public_of(assigned), before));
+        CHECK_FALSE(moved.ready()); // NOLINT(bugprone-use-after-move,hicpp-invalid-access-moved)
+    }
+
+    // ML-KEM: a changed ciphertext decapsulates by implicit rejection, so the message is forged, never refused; the
+    // encapsulation key must pass FIPS 203's input check (a coefficient of 4095, at least q).
+    const HpkeSuite mlkem{AlgorithmId::MlKem768, AlgorithmId::HkdfSha256, AlgorithmId::Aes128Gcm};
+    Sealed          sealed;
+    seal_to(mlkem, info, {}, plaintext, sealed);
+    Bytes          opened = filled(sizeof(plaintext), 0x33U);
+    const Span<u8> out(opened.data(), opened.size());
+    Bytes          changed = sealed.enc;
+    changed[17] ^= 0x40U;
+    CHECK(sealed.recipient.open(mlkem, changed, info, {}, sealed.ciphertext, out) == CryptoError::Forged);
+    CHECK(all_zero(opened));
+    Bytes bad_key = public_of(sealed.recipient);
+    bad_key[0]    = 0xFFU;
+    bad_key[1]    = static_cast<u8>(bad_key[1] | 0x0FU);
+    CHECK(hpke_check_public_key(mlkem.kem, bad_key) == CryptoError::BadKey);
+    Bytes          enc = filled(hpke_sizes(mlkem.kem).encapsulation, 0x11U);
+    Bytes          ct  = filled(sizeof(plaintext) + kHpkeTagBytes, 0x11U);
+    const Span<u8> enc_out(enc.data(), enc.size());
+    const Span<u8> ct_out(ct.data(), ct.size());
+    CHECK(hpke_seal(mlkem, bad_key, info, {}, plaintext, enc_out, ct_out) == CryptoError::BadKey);
+    CHECK(all_zero(enc));
+    CHECK(all_zero(ct));
+    CHECK(hpke_seal(mlkem, public_of(sealed.recipient), info, {}, plaintext, Span<u8>(enc.data(), 1087U), ct_out) ==
+          CryptoError::BadLength);
+    CHECK(sealed.recipient.open(mlkem, ConstSpan<u8>(sealed.enc.data(), 1087U), info, {}, sealed.ciphertext, out) ==
+          CryptoError::BadLength);
+    const HpkeSuite mlkem_1024{AlgorithmId::MlKem1024, AlgorithmId::HkdfSha256, AlgorithmId::Aes128Gcm};
+    CHECK(sealed.recipient.open(mlkem_1024, sealed.enc, info, {}, sealed.ciphertext, out) ==
+          CryptoError::Unsupported);
+
+    // MLKEM768-X25519 (X-Wing): the traditional half is any 32 bytes; an all-zero encapsulation element gives the
+    // all-zero X25519 secret, which the combiner binds, so the exporter derives a secret rather than refusing (and the
+    // first message, sealed under another element, is forged). An all-zero recipient half seals too.
+    const HpkeSuite xwing{AlgorithmId::X25519Mlkem768, AlgorithmId::HkdfSha256, AlgorithmId::Aes128Gcm};
+    Sealed          x;
+    seal_to(xwing, info, {}, plaintext, x);
+    Bytes zero_element = x.enc;
+    std::memset(zero_element.data() + 1088U, 0, 32U);
+    Bytes secret = filled(32U, 0U);
+    CHECK(x.recipient.export_secret(xwing, zero_element, info, {}, Span<u8>(secret.data(), secret.size())) ==
+          CryptoError::None);
+    CHECK_FALSE(all_zero(secret));
+    CHECK(x.recipient.open(xwing, zero_element, info, {}, x.ciphertext, out) == CryptoError::Forged);
+    Bytes zero_half = public_of(x.recipient);
+    std::memset(zero_half.data() + 1184U, 0, 32U);
+    CHECK(hpke_check_public_key(xwing.kem, zero_half) == CryptoError::None);
+    Bytes x_enc = filled(1120U, 0U);
+    CHECK(hpke_seal(xwing, zero_half, info, {}, plaintext, Span<u8>(x_enc.data(), x_enc.size()), ct_out) ==
+          CryptoError::None);
+
+    // MLKEM768-P256 and MLKEM1024-P384: an element or a recipient half off the curve is refused explicitly (a public
+    // input, draft-irtf-cfrg-hybrid-kems section 4.2), as is an ML-KEM half failing the input check.
+    for (const AlgorithmId kem : {AlgorithmId::Secp256r1Mlkem768, AlgorithmId::Secp384r1Mlkem1024})
+    {
+        INFO("kem " << static_cast<u32>(kem));
+        const HpkeSuite suite{kem, AlgorithmId::HkdfSha384, AlgorithmId::Aes256Gcm};
+        const usize     pq_public     = kem == AlgorithmId::Secp256r1Mlkem768 ? 1184U : 1568U;
+        const usize     pq_ciphertext = kem == AlgorithmId::Secp256r1Mlkem768 ? 1088U : 1568U;
+        Sealed          hybrid;
+        seal_to(suite, info, {}, plaintext, hybrid);
+        Bytes off_curve = hybrid.enc;
+        off_curve[off_curve.size() - 1U] ^= 0x01U;
+        std::memset(opened.data(), 0x33, opened.size());
+        CHECK(hybrid.recipient.open(suite, off_curve, info, {}, hybrid.ciphertext, out) == CryptoError::BadKey);
+        CHECK(all_zero(opened));
+        Bytes compressed          = hybrid.enc;
+        compressed[pq_ciphertext] = 0x02U;
+        CHECK(hybrid.recipient.open(suite, compressed, info, {}, hybrid.ciphertext, out) == CryptoError::BadKey);
+        Bytes bad_half = public_of(hybrid.recipient);
+        bad_half[bad_half.size() - 1U] ^= 0x01U;
+        CHECK(hpke_check_public_key(kem, bad_half) == CryptoError::BadKey);
+        Bytes          hybrid_enc = filled(hpke_sizes(kem).encapsulation, 0x11U);
+        const Span<u8> hybrid_out(hybrid_enc.data(), hybrid_enc.size());
+        CHECK(hpke_seal(suite, bad_half, info, {}, plaintext, hybrid_out, ct_out) == CryptoError::BadKey);
+        CHECK(all_zero(hybrid_enc));
+        Bytes bad_pq = public_of(hybrid.recipient);
+        bad_pq[0]    = 0xFFU;
+        bad_pq[1]    = static_cast<u8>(bad_pq[1] | 0x0FU);
+        CHECK(hpke_check_public_key(kem, bad_pq) == CryptoError::BadKey);
+        CHECK(hpke_seal(suite, bad_pq, info, {}, plaintext, hybrid_out, ct_out) == CryptoError::BadKey);
+        CHECK(hpke_check_public_key(kem, ConstSpan<u8>(bad_pq.data(), pq_public)) == CryptoError::BadLength);
+    }
+
+    // The checks of the DHKEMs are the agreement's; a KEM outside the profile has none.
+    HpkeKey dhkem;
+    REQUIRE(dhkem.generate(AlgorithmId::X25519) == CryptoError::None);
+    CHECK(hpke_check_public_key(AlgorithmId::X25519, public_of(dhkem)) == CryptoError::None);
+    CHECK(hpke_check_public_key(AlgorithmId::X25519, filled(32U, 0U)) == CryptoError::WeakSecret);
+    CHECK(hpke_check_public_key(AlgorithmId::Secp256r1, filled(65U, 4U)) == CryptoError::BadKey);
+    CHECK(hpke_check_public_key(AlgorithmId::MlDsa65, filled(32U, 0U)) == CryptoError::Unsupported);
+    CHECK(hpke_check_public_key(AlgorithmId::MlKem768, filled(1183U, 0U)) == CryptoError::BadLength);
+}
+
+TEST_CASE("HPKE: a hybrid's P-256 scalar is the first chunk of its seed below the group order", "[crypto][net-2][hpke]")
+{
+    // An MLKEM768-P256 seed whose expansion's first scalar chunk (SHAKE256(seed) bytes 64 to 95) begins ffffffff53e7,
+    // above the P-256 order (found by search, about one seed in 2^32): RandomScalar takes the second chunk (bytes 96
+    // to 127; draft-irtf-cfrg-concrete-hybrid-kems section 3.1.1), and the ML-KEM half is the first 64 bytes' key.
+    const Bytes seed             = from_hex("77057225989bcf24bf83be4d4be80f41145df0f22754338a6a71473973394471");
+    u8          full[64U + 128U] = {};
+    REQUIRE(shake256(seed, full) == CryptoError::None);
+    AgreementKey rejected;
+    CHECK(rejected.from_private(AlgorithmId::Secp256r1, ConstSpan<u8>(full + 64U, 32U)) == CryptoError::BadKey);
+    AgreementKey scalar;
+    REQUIRE(scalar.from_private(AlgorithmId::Secp256r1, ConstSpan<u8>(full + 96U, 32U)) == CryptoError::None);
+    Bytes group_half = filled(65U, 0U);
+    REQUIRE(scalar.public_key(Span<u8>(group_half.data(), group_half.size())) == CryptoError::None);
+    KemKey pq;
+    REQUIRE(pq.from_seed(AlgorithmId::MlKem768, ConstSpan<u8>(full, 64U)) == CryptoError::None);
+    Bytes pq_half = filled(1184U, 0U);
+    REQUIRE(pq.public_key(Span<u8>(pq_half.data(), pq_half.size())) == CryptoError::None);
+
+    HpkeKey key;
+    REQUIRE(key.from_private(AlgorithmId::Secp256r1Mlkem768, seed) == CryptoError::None);
+    const Bytes public_key = public_of(key);
+    CHECK(equal(ConstSpan<u8>(public_key.data(), 1184U), pq_half));
+    CHECK(equal(ConstSpan<u8>(public_key.data() + 1184U, 65U), group_half));
 }
 } // namespace
