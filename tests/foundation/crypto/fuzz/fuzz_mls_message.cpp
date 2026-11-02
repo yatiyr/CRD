@@ -432,6 +432,8 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     add(sink, "decode-leaf-commit", leaf, sizeof(leaf));
     const u8 private_shape[] = {0U, 0U, 1U, 0U, 2U, 1U, 'g', 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 1U, 0U, 0U, 0U};
     add(sink, "decode-private", private_shape, sizeof(private_shape));
+    const u8 bare_welcome[] = {0U, 0U, 1U, 0U, 3U}; // refused: a Welcome encodes to at least one byte
+    add(sink, "decode-bare-welcome", bare_welcome, sizeof(bare_welcome));
 
     // A private message of each content type in each suite, unchanged and with one byte changed.
     for (u8 suite = 0U; suite < 4U; ++suite)

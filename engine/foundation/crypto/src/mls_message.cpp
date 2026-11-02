@@ -891,8 +891,9 @@ bool take_message(cont::ConstSpan<u8> bytes, Message& out) noexcept
         break;
     case WireFormat::Welcome:
     case WireFormat::GroupInfo:
+        // Neither structure encodes to nothing: an empty body is refused here, as message_bytes would refuse it.
         out.body = in.rest();
-        ok       = in.take_bytes(out.body.size(), out.body);
+        ok       = !out.body.empty() && in.take_bytes(out.body.size(), out.body);
         break;
     }
     return ok && in.done();

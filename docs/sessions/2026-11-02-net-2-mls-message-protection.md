@@ -40,7 +40,7 @@ rest were running. Push run 41392493046 (30efd427) is pending; no hosted run con
   `CryptoError::Malformed` names an authentic message that does not decode or a sender its framing refuses;
   `PreSharedKeyID`'s codec is public (proposals carry it); `WireReader::rest()` lets a decoder view what a structure
   spans.
-- **A new fuzz target `crd-fuzz-crypto-mls-message`** (30 seeds): every decoder's acceptance writes back, a private
+- **A new fuzz target `crd-fuzz-crypto-mls-message`** (31 seeds): every decoder's acceptance writes back, a private
   message changed in any byte or hostile is refused with its plaintext zeroed and nothing spent, a public message
   verifies exactly when unchanged.
 - Fixed on the way: three lines over 120 columns in this track's earlier test sources (`test_mls.cpp`,
@@ -49,19 +49,28 @@ rest were running. Push run 41392493046 (30efd427) is pending; no hosted run con
 
 ## Evidence (this PC)
 
-- linux-gcc-debug: `crd-crypto-tests` 192 cases, 1,051,617 assertions, all passing; the 11 new cases (10 in
+- linux-gcc-debug: `crd-crypto-tests` 192 cases, 1,051,619 assertions, all passing; the 11 new cases (10 in
   `test_mls_message.cpp`, the provider's MAC case) with the other MLS cases: 25 cases, 255,901 assertions. Every
   transcript-hashes vector of the four suites (the AuthenticatedContent written back, the tag, both hashes and the
   restated input); every message-protection vector (public messages verified and protected again, byte for byte in
   the two Ed25519 suites; application data refused as a public message; private messages opened, replayed and
   protected again); the 300 messages vectors' key packages, proposal bodies, commits and messages written back.
-- win-debug (MSVC): `crd-crypto-tests` 192 cases, 1,051,616 assertions; both MLS corpora; no warning.
+- win-debug (MSVC): `crd-crypto-tests` 192 cases, 1,051,620 assertions (after the fix below); both MLS corpora; no
+  warning.
 - linux-gcc-asan (a new tree on the track's lane): the MLS, HPKE and provider cases (174 cases, 1,050,622
   assertions), the wire-bytes cases, both MLS corpora and the mutants below, clean under AddressSanitizer and UBSan.
   A test written first held views of a temporary's bytes; the vectors' replay check caught it before ASan ran.
-- `crd-fuzz-crypto-mls-message`: 30 seeds written by `--seed` and committed (a second `--seed` run writes identical
+- `crd-fuzz-crypto-mls-message`: 31 seeds written by `--seed` and committed (a second `--seed` run writes identical
   files); with 280 real messages from the vectors (key packages, commits, public and private messages, updates),
-  replayed clean, and 4,000 seeded random mutants of the 310 clean on linux-gcc-debug and under ASan.
+  replayed clean, and 4,000 seeded random mutants of the 310 clean on linux-gcc-debug, under ASan and on
+  linux-gcc-shipping.
+- The decoding oracle's finding, from the review before handover: the five bytes `00 00 01 00 03` (an MLSMessage
+  holding a Welcome with no body) decoded, but no Welcome or GroupInfo encodes to nothing, so the message could not
+  be written back and the target aborted (reproduced on the first build). `take_message` now refuses an empty Welcome
+  or GroupInfo; two decoder refusals and the seed `decode-bare-welcome` hold it.
+- linux-gcc-shipping (GCC 13 with link-time optimization, which once flagged quic.cpp's `-Wnull-dereference`): the
+  crypto suite and both fuzz targets link without a warning; the MLS and HPKE cases (29 cases, 256,574 assertions),
+  both MLS corpora and the 4,000 mutants pass.
 - `test-instruments.md` lists the target and the previously missing `crd-fuzz-crypto-mls`.
 - `tidy-files.py` (LLVM 20.1.0 on the lane) clean on the nine changed C++ sources; the first run flagged nested
   conditionals, a `const_cast` and a raw loop in the new tests, all rewritten.
@@ -75,6 +84,10 @@ rest were running. Push run 41392493046 (30efd427) is pending; no hosted run con
   type refused, the wire format left out of the confirmed transcript hash, a commit's tag length unchecked on
   opening, Padme keeping one bit fewer, a leaf node's signed fields taken past its signature, and the sender data's
   leaf read as the generation.
+- Validators after the fix: master-plan, repository, Allman braces, generated sources, docs, capability owners,
+  registers, pins, register identifiers and the crypto inventory pass; `test-repository-tools.py` passed 316 tests
+  (3 skipped) twice and once failed one case whose output was not kept, which the next run passed (this host
+  misexecutes about one Python run in ten, per the lessons).
 - Not reached by a test: `random_bytes` failing for the reuse guard and the provider refusing an AEAD key; each is
   one pass-through of the provider's verdict.
 

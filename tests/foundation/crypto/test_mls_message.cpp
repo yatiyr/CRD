@@ -1069,6 +1069,10 @@ TEST_CASE("MLS: the structure decoders refuse what the syntax does not allow", "
     CHECK_FALSE(message_ok(version));
     const u8 format[] = {0U, 1U, 0U, 6U, 0xAAU};
     CHECK_FALSE(message_ok(format));
+    const u8 bare_welcome[] = {0U, 1U, 0U, 3U};
+    CHECK_FALSE(message_ok(bare_welcome));
+    const u8 bare_group_info[] = {0U, 1U, 0U, 4U};
+    CHECK_FALSE(message_ok(bare_group_info));
     const u8 private_short[] = {0U, 1U, 0U, 2U, 1U, 'g', 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 1U, 0U, 0U, 0U};
     CHECK(message_ok(private_short));
     const u8 private_extra[] = {0U, 1U, 0U, 2U, 1U, 'g', 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 1U, 0U, 0U, 0U, 0U};

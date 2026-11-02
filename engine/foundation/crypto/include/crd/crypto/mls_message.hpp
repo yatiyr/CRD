@@ -299,7 +299,7 @@ struct Message
 };
 
 // Decodes the whole of `bytes` as one MLSMessage: false for another version, an unknown wire format, a malformed
-// structure or a byte left over.
+// structure, an empty Welcome or GroupInfo, or a byte left over.
 [[nodiscard]] bool take_message(cont::ConstSpan<u8> bytes, Message& out) noexcept;
 // The bytes of a message's encoding (0 for a field too long), and its writer. A Welcome or a GroupInfo writes `body`.
 [[nodiscard]] usize message_bytes(const Message& message) noexcept;
