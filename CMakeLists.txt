@@ -1039,6 +1039,11 @@ if("aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
     # cannot hold together, and its assembly keeps its own -Wa,--noexecstack. Its above-floor code runs only behind its
     # own CPU capability checks (OPENSSL_cpuid_setup), so the ISA isolation guard treats it as a provider: its objects
     # are not judged as Cerid code and its functions are left out of the images (ADR-0134 section 6, decision P3).
+    # AWS-LC defines BORINGSSL_DISPATCH_TEST in every configuration whose name lacks "rel": instrumentation for its own
+    # dispatch tests (not built here) by which its assembly and Keccak code mark a shared table, BORINGSSL_function_hit,
+    # with plain stores, so two threads hashing at once race (linux-clang-tsan, Keccak). Cerid's build never compiles
+    # it: the definition leaves the directories of AWS-LC's libraries (its C, its assembly and NASM's definitions), and
+    # NASM, which also reads it from AWS-LC's own NASM flags, undefines it after them. No configuration has the table.
     _crd_collect_build_targets("${aws-lc_SOURCE_DIR}" _crd_awslc_targets)
     foreach(_crd_awslc_target IN LISTS _crd_awslc_targets)
         get_target_property(_crd_awslc_type ${_crd_awslc_target} TYPE)
@@ -1049,6 +1054,13 @@ if("aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
         get_target_property(_crd_awslc_sources ${_crd_awslc_target} SOURCES)
         get_target_property(_crd_awslc_dir ${_crd_awslc_target} SOURCE_DIR)
         get_target_property(_crd_awslc_binary_dir ${_crd_awslc_target} BINARY_DIR)
+        get_property(_crd_awslc_definitions DIRECTORY "${_crd_awslc_dir}" PROPERTY COMPILE_DEFINITIONS)
+        list(REMOVE_ITEM _crd_awslc_definitions BORINGSSL_DISPATCH_TEST)
+        set_property(DIRECTORY "${_crd_awslc_dir}" PROPERTY COMPILE_DEFINITIONS "${_crd_awslc_definitions}")
+        if(WIN32 AND _crd_arch_x64)
+            target_compile_options(${_crd_awslc_target} PRIVATE
+                                   "$<$<COMPILE_LANGUAGE:ASM_NASM>:-UBORINGSSL_DISPATCH_TEST>")
+        endif()
         set(_crd_awslc_own_level OFF)
         foreach(_crd_awslc_source IN LISTS _crd_awslc_sources)
             # libcrypto holds the objects of AWS-LC's object libraries (crypto_objects, fipsmodule, jitterentropy),
@@ -1102,6 +1114,7 @@ if("aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
     unset(_crd_awslc_path)
     unset(_crd_awslc_dir)
     unset(_crd_awslc_binary_dir)
+    unset(_crd_awslc_definitions)
     unset(_crd_awslc_target)
     unset(_crd_awslc_targets)
     unset(_crd_awslc_type)
