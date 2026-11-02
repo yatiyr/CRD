@@ -14,7 +14,8 @@ namespace
 {
 [[nodiscard]] fs::Path make_temp_dir()
 {
-    const auto base  = fs::current_working_dir() / ".crd_platform_test_tmp";
+    // Under the system's scratch directory, never the working directory (a checkout when run from one).
+    const auto base  = fs::temp_directory() / "crd_platform_test_tmp";
     const auto stamp = static_cast<crd::u64>(std::chrono::system_clock::now().time_since_epoch().count());
     crd::containers::String leaf("fw_");
     leaf.append(std::to_string(stamp));
