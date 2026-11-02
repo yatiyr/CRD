@@ -295,14 +295,19 @@ TEST_CASE("HPKE: exports agree on both sides of every suite, and their refusals"
         for (const usize length : {usize{1}, nh, 255U * nh})
         {
             Bytes enc      = filled(hpke_sizes(suite.kem).encapsulation, 0U);
-            Bytes sent     = filled(length, 0U);
-            Bytes received = filled(length, 0U);
+            // Unlike fillings make agreement prove both sides wrote; a one-byte export is zero once in 256 runs, so
+            // only an export of at least Nh bytes is checked to be nonzero.
+            Bytes sent     = filled(length, 0xA5U);
+            Bytes received = filled(length, 0x5AU);
             REQUIRE(hpke_export(suite, peer, info, context, Span<u8>(enc.data(), enc.size()),
                                 Span<u8>(sent.data(), sent.size())) == CryptoError::None);
             REQUIRE(recipient.export_secret(suite, enc, info, context, Span<u8>(received.data(), received.size())) ==
                     CryptoError::None);
             CHECK(equal(sent, received));
-            CHECK_FALSE(all_zero(sent));
+            if (length >= nh)
+            {
+                CHECK_FALSE(all_zero(sent));
+            }
         }
         // Another context, another info, another key or another KDF derive another secret; the exports of one
         // context are prefixes of no other length (the length is in the label).
