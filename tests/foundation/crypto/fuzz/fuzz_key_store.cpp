@@ -13,8 +13,9 @@
 //     its public key comes from) decides whether a sealed body opens or is Malformed, and an opened store lists
 //     exactly the restated entries, then takes a new key and reopens with it and every one of them;
 //   * a payload the harness did not seal never opens;
-//   * a model of decisions K4 and K5 decides every change's exact result and the store's listing after it, and the
-//     listing survives reopening.
+//   * a model of decisions K4, K5 and K12 decides every change's exact result, the store's listing after it and the
+//     keys its device holds (a P-256 key generated HardwarePreferred lives in the harness's device, which forgets it
+//     when it is revoked or destroyed), and the listing survives reopening.
 #include <crd/fuzz/harness.hpp>
 
 #include <crd/crypto/key_store.hpp>
@@ -96,6 +97,57 @@ public:
 
 private:
     u8 m_master[kKeyStoreMasterBytes] = {};
+};
+
+// The harness's device: P-256 keys from the provider's randomness, each named by a one-byte counter. It signs nothing
+// (no change signs) and keeps which keys are live, which the model checks.
+class ModelDevice final : public KeyDevice
+{
+public:
+    [[nodiscard]] StringView name() const noexcept override { return "fuzz-device"; }
+
+    [[nodiscard]] CryptoError create(ConstSpan<u8>, AlgorithmId algorithm, Bytes& reference,
+                                     Span<u8> public_key) noexcept override
+    {
+        reference.clear();
+        if (algorithm != AlgorithmId::EcdsaSecp256r1Sha256)
+        {
+            return CryptoError::Unsupported;
+        }
+        SigningKey key;
+        CRD_FUZZ_REQUIRE(m_next < 255U && key.generate(algorithm) == CryptoError::None &&
+                         key.public_key(public_key) == CryptoError::None);
+        reference.push_back(++m_next);
+        m_live[m_next] = true;
+        return CryptoError::None;
+    }
+
+    [[nodiscard]] CryptoError sign_digest(ConstSpan<u8>, ConstSpan<u8>, AlgorithmId, ConstSpan<u8>,
+                                          Span<u8>) const noexcept override
+    {
+        return CryptoError::Unsupported;
+    }
+
+    [[nodiscard]] CryptoError forget(ConstSpan<u8>, ConstSpan<u8> reference) noexcept override
+    {
+        CRD_FUZZ_REQUIRE(reference.size() == 1U && reference[0] != 0U && reference[0] <= m_next);
+        m_live[reference[0]] = false;
+        return CryptoError::None;
+    }
+
+    [[nodiscard]] usize live() const noexcept
+    {
+        usize count = 0U;
+        for (const bool held : m_live)
+        {
+            count += held ? 1U : 0U;
+        }
+        return count;
+    }
+
+private:
+    u8   m_next      = 0U;
+    bool m_live[256] = {};
 };
 
 // The store directory of this process (named by the address of a static, which differs between processes that run
@@ -199,6 +251,7 @@ struct Restated
     AlgorithmId algorithm{};
     u8          kind      = 0U;
     u8          state     = 0U;
+    u8          placement = 0U;
     u64         created   = 0U;
     u64         changed   = 0U;
     KeyId       id;
@@ -359,7 +412,7 @@ private:
         r.algorithm              = static_cast<AlgorithmId>(in.le(2U));
         r.kind                   = static_cast<u8>(in.le(1U));
         r.state                  = static_cast<u8>(in.le(1U));
-        const u64 placement      = in.le(1U);
+        r.placement              = static_cast<u8>(in.le(1U));
         r.created                = in.le(8U);
         r.changed                = in.le(8U);
         const ConstSpan<u8> id   = in.take(kKeyIdBytes);
@@ -368,8 +421,12 @@ private:
         u8                  kind = 0U;
         usize               private_length = 0U;
         usize               public_length  = 0U;
+        // A Hardware key (placement 1) is an ECDSA signature key holding its device's reference, 1 to 64 bytes.
+        const bool hardware = r.placement == 1U;
+        const bool ecdsa    = r.algorithm == AlgorithmId::EcdsaSecp256r1Sha256 ||
+                           r.algorithm == AlgorithmId::EcdsaSecp384r1Sha384;
         if (!in.ok() || !restated_name(name) || !restated_kind(r.algorithm, kind, private_length, public_length) ||
-            r.kind != kind || r.state > 2U || placement != 0U || r.generation == 0U)
+            r.kind != kind || r.state > 2U || r.placement > 1U || (hardware && !ecdsa) || r.generation == 0U)
         {
             return false;
         }
@@ -389,7 +446,10 @@ private:
             return false;
         }
         const bool revoked = r.state == 2U;
-        if (pub.size() != public_length || priv.size() != (revoked ? 0U : private_length))
+        const bool held_fits =
+            revoked ? priv.empty()
+                    : (hardware ? !priv.empty() && priv.size() <= 64U : priv.size() == private_length);
+        if (pub.size() != public_length || !held_fits)
         {
             return false;
         }
@@ -398,7 +458,7 @@ private:
         {
             named = key_id_of(pub);
         }
-        if (!revoked)
+        if (!revoked && !hardware)
         {
             derived.resize(public_length);
             KeyId from_private;
@@ -427,7 +487,7 @@ void check_listing(const KeyStore& store, const Array<Restated>& expected)
         const Restated& r    = expected[i];
         CRD_FUZZ_REQUIRE(info.name() == r.text() && info.generation == r.generation && info.algorithm == r.algorithm &&
                          static_cast<u8>(info.kind) == r.kind && static_cast<u8>(info.state) == r.state &&
-                         info.placement == KeyPlacement::Software && info.created == r.created &&
+                         static_cast<u8>(info.placement) == r.placement && info.created == r.created &&
                          info.changed == r.changed && info.id == r.id);
     }
 }
@@ -537,8 +597,9 @@ void raw_payload(const u8* data, usize size)
 
 // ---- The change model -------------------------------------------------------------------------------------------
 
-constexpr AlgorithmId kAlgorithms[] = {AlgorithmId::Ed25519, AlgorithmId::X25519, AlgorithmId::Aes128Gcm,
-                                       AlgorithmId::HkdfSha256, AlgorithmId::Siphash24};
+constexpr AlgorithmId kAlgorithms[] = {AlgorithmId::Ed25519,    AlgorithmId::X25519,    AlgorithmId::Aes128Gcm,
+                                       AlgorithmId::HkdfSha256, AlgorithmId::Siphash24, AlgorithmId::EcdsaSecp256r1Sha256};
+constexpr usize       kAlgorithmCount = sizeof(kAlgorithms) / sizeof(kAlgorithms[0]);
 constexpr const char* kNames[]       = {"a", "b", "c.d", "e_1"};
 
 constexpr usize kSteps = 24U;
@@ -547,6 +608,7 @@ struct Modelled
 {
     u32         generations = 0U; // 0: no such name
     AlgorithmId algorithm{};
+    bool        hardware                 = false; // its generations live in the device
     u8          states[kSteps + 1U]      = {}; // per generation: 0 Current, 1 Retired, 2 Revoked
     bool        known[kSteps + 1U]       = {}; // a secret the model knows (imported), per generation
     u8          secrets[kSteps + 1U][32] = {};
@@ -562,9 +624,10 @@ struct Modelled
     return private_length;
 }
 
-void check_model(const KeyStore& store, const Modelled (&model)[4])
+void check_model(const KeyStore& store, const ModelDevice& device, const Modelled (&model)[4])
 {
     usize total = 0U;
+    usize live  = 0U;
     for (usize n = 0U; n < 4U; ++n)
     {
         const Modelled& m = model[n];
@@ -573,7 +636,9 @@ void check_model(const KeyStore& store, const Modelled (&model)[4])
         {
             const KeyInfo* info = store.find(kNames[n], g);
             CRD_FUZZ_REQUIRE(info != nullptr && info->algorithm == m.algorithm &&
-                             static_cast<u8>(info->state) == m.states[g - 1U]);
+                             static_cast<u8>(info->state) == m.states[g - 1U] &&
+                             (info->placement == KeyPlacement::Hardware) == m.hardware);
+            live += m.hardware && m.states[g - 1U] != 2U ? 1U : 0U;
             KeyKind kind = KeyKind::Signature;
             CRD_FUZZ_REQUIRE(key_kind_of(m.algorithm, kind));
             if (kind == KeyKind::Secret)
@@ -588,15 +653,16 @@ void check_model(const KeyStore& store, const Modelled (&model)[4])
         }
         CRD_FUZZ_REQUIRE(store.find(kNames[n], m.generations + 1U) == nullptr);
     }
-    CRD_FUZZ_REQUIRE(store.size() == total);
+    CRD_FUZZ_REQUIRE(store.size() == total && device.live() == live);
 }
 
 void changes(const u8* data, usize size)
 {
     reset_store();
     FixedProtector protector;
+    ModelDevice    device;
     KeyStore       store;
-    CRD_FUZZ_REQUIRE(store.create(store_dir().generic(), protector) == CryptoError::None);
+    CRD_FUZZ_REQUIRE(store.create(store_dir().generic(), protector, &device) == CryptoError::None);
     Modelled model[4];
     Cursor   in(data, size);
     for (usize step = 0U; step < kSteps && in.left() >= 2U; ++step)
@@ -628,12 +694,15 @@ void changes(const u8* data, usize size)
         {
         case 0U: // generate
         {
-            const AlgorithmId algorithm = kAlgorithms[(arg / 4U) % 5U];
+            const AlgorithmId algorithm = kAlgorithms[(arg / 4U) % kAlgorithmCount];
+            const bool        hardware  = algorithm == AlgorithmId::EcdsaSecp256r1Sha256;
             want = m.generations != 0U ? CryptoError::Exists : CryptoError::None;
-            got  = store.generate(name, algorithm, PlacementRequest::Software, now);
+            got  = store.generate(name, algorithm,
+                                  hardware ? PlacementRequest::HardwarePreferred : PlacementRequest::Software, now);
             if (want == CryptoError::None)
             {
                 m.algorithm = algorithm;
+                m.hardware  = hardware;
                 next(false, {});
             }
             break;
@@ -671,6 +740,11 @@ void changes(const u8* data, usize size)
             KeyKind kind = KeyKind::Signature;
             CRD_FUZZ_REQUIRE(key_kind_of(m.algorithm, kind));
             got = store.rotate_import(name, value, now);
+            if (m.hardware)
+            {
+                want = CryptoError::Unsupported; // a device key is made in the device, never imported
+                break;
+            }
             next(kind == KeyKind::Secret, value);
             break;
         }
@@ -699,15 +773,15 @@ void changes(const u8* data, usize size)
             m.generations = 0U;
             break;
         default: // reopen
-            got = store.open(store_dir().generic(), protector);
+            got = store.open(store_dir().generic(), protector, &device);
             break;
         }
         CRD_FUZZ_REQUIRE(got == want);
-        check_model(store, model);
+        check_model(store, device, model);
     }
     KeyStore reopened;
     CRD_FUZZ_REQUIRE(reopened.open(store_dir().generic(), protector) == CryptoError::None);
-    check_model(reopened, model);
+    check_model(reopened, device, model);
 }
 
 // An honest body of every kind, from fixed private inputs.
@@ -720,14 +794,16 @@ void changes(const u8* data, usize size)
         u8          kind;
         u32         generation;
         u8          state;
+        bool        hardware;
     };
     const Item items[] = {
-        {"agree", AlgorithmId::X25519, 1U, 1U, 0U},
-        {"kem", AlgorithmId::MlKem768, 2U, 1U, 0U},
-        {"secret", AlgorithmId::Aes256Gcm, 3U, 1U, 1U},
-        {"secret", AlgorithmId::Aes256Gcm, 3U, 2U, 0U},
-        {"sign", AlgorithmId::Ed25519, 0U, 1U, static_cast<u8>(revoke_second ? 2U : 1U)},
-        {"sign", AlgorithmId::Ed25519, 0U, 2U, 0U},
+        {"agree", AlgorithmId::X25519, 1U, 1U, 0U, false},
+        {"device", AlgorithmId::EcdsaSecp256r1Sha256, 0U, 1U, 0U, true},
+        {"kem", AlgorithmId::MlKem768, 2U, 1U, 0U, false},
+        {"secret", AlgorithmId::Aes256Gcm, 3U, 1U, 1U, false},
+        {"secret", AlgorithmId::Aes256Gcm, 3U, 2U, 0U, false},
+        {"sign", AlgorithmId::Ed25519, 0U, 1U, static_cast<u8>(revoke_second ? 2U : 1U), false},
+        {"sign", AlgorithmId::Ed25519, 0U, 2U, 0U, false},
     };
     Bytes body;
     put(body, sizeof(items) / sizeof(items[0]), 4U);
@@ -754,13 +830,14 @@ void changes(const u8* data, usize size)
         put(body, static_cast<u16>(item.algorithm), 2U);
         put(body, kind, 1U);
         put(body, item.state, 1U);
-        put(body, 0U, 1U);
+        put(body, item.hardware ? 1U : 0U, 1U);
         put(body, 100U, 8U);
         put(body, 100U + item.state, 8U);
         put(body, ConstSpan<u8>(id.bytes));
         put(body, public_length, 2U);
         put(body, ConstSpan<u8>(pub.data(), pub.size()));
-        const usize held = item.state == 2U ? 0U : private_length;
+        // A device key's entry holds a 17-byte reference (a format byte and a handle) in place of its private input.
+        const usize held = item.state == 2U ? 0U : (item.hardware ? 17U : private_length);
         put(body, held, 1U);
         put(body, ConstSpan<u8>(priv, held));
     }
@@ -825,6 +902,11 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     Bytes    ops;
     put(ops, ConstSpan<u8>(sequence));
     add(sink, "changes-mixed", 2U, ops);
+    // A device key: generated, rotated, its first generation revoked, reopened, rotated, destroyed, and another made.
+    const u8 device_ops[] = {0, 20, 3, 0, 4, 4, 6, 0, 3, 0, 5, 0, 0, 21, 6, 0};
+    Bytes    device;
+    put(device, ConstSpan<u8>(device_ops));
+    add(sink, "changes-device", 2U, device);
     Bytes secrets;
     put(secrets, ConstSpan<u8>(reinterpret_cast<const u8*>("\x01\x02"), 2U));
     for (u8 i = 0U; i < 16U; ++i)

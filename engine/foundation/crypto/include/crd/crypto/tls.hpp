@@ -214,6 +214,7 @@ enum class TlsEarlyData : u8
 class ReplayFilter;         // replay.hpp: a server's record of the tickets it has opened
 struct ProviderCertificate; // the provider's certificate object, defined only inside crd-crypto
 class StoredSigner;         // key_store.hpp
+class DeviceSigner;         // key_store.hpp
 
 // A key and the self-signed certificate that carries it to the peer.
 class TlsCredential
@@ -230,19 +231,22 @@ public:
     // `name` as subject common name and DNS subjectAltName, valid from the provider's clock with no expiry
     // (99991231235959Z, RFC 5280 section 4.1.2.5: trust and rotation come from the pins, never from the dates).
     [[nodiscard]] TlsError init(const SigningKey& key, cont::StringView name) noexcept;
-    // The same for a key store's signature key (key_store.hpp): its Current generation as `signer` loaded it.
+    // The same for a key store's signature key (key_store.hpp): its Current generation as `signer` loaded it. A key a
+    // device holds (decision K12) signs its certificate and every handshake through the device, by the provider's
+    // private-key method; the device must outlive the credential and every context made with it.
     [[nodiscard]] TlsError init(const StoredSigner& signer, cont::StringView name) noexcept;
     void                   clear() noexcept;
 
     [[nodiscard]] bool        ready() const noexcept { return m_certificate != nullptr; }
-    [[nodiscard]] AlgorithmId algorithm() const noexcept { return m_key.algorithm(); }
+    [[nodiscard]] AlgorithmId algorithm() const noexcept;
     [[nodiscard]] KeyId       key_id() const noexcept { return m_key_id; }
 
 private:
     friend class TlsContext;
 
     ProviderCertificate*      m_certificate = nullptr;
-    detail::ProviderKeyHandle m_key;
+    detail::ProviderKeyHandle m_key;              // a provider key
+    DeviceSigner*             m_device = nullptr; // or the credential's own copy of a device key's signer
     KeyId                     m_key_id;
 };
 

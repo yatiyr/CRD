@@ -33,6 +33,8 @@ inline constexpr usize kKeyStoreMaxKeys       = 4096U; // generations of every n
 inline constexpr usize kKeyProtectorNameBytes = 32U;
 inline constexpr usize kKeyReferenceMaxBytes  = 4096U;
 inline constexpr usize kKeyPrivateMaxBytes    = 64U; // the longest private input: an ML-KEM seed d || z
+inline constexpr usize kKeyDeviceReferenceMaxBytes = kKeyPrivateMaxBytes; // what names a device's key
+inline constexpr usize kDevicePublicKeyMaxBytes    = 97U; // the longest device key's public key: a P-384 point
 
 // What guards a store's master key, weakest first (decision K2).
 enum class KeyProtection : u8
@@ -136,6 +138,61 @@ public:
     [[nodiscard]] CryptoError forget(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference) noexcept override;
 };
 
+// A device that holds signature keys and signs with them without releasing them (decisions K8 and K12): a TPM, a
+// PIV token, a Secure Enclave. A store records, for each key a device holds, the reference create() writes (a handle
+// naming the device's key, never key material), sealed with the rest of the store, and gives it back to sign_digest()
+// and forget() with the store's identifier, which the device binds its keys to. One device serves a store.
+class KeyDevice
+{
+public:
+    // A stable name: 1 to kKeyProtectorNameBytes of [a-z0-9-].
+    [[nodiscard]] virtual cont::StringView name() const noexcept = 0;
+
+    // A new key of `algorithm` (ECDSA P-256 or P-384) in the device: its reference (1 to kKeyDeviceReferenceMaxBytes)
+    // into `reference` and its public key (signature_sizes(algorithm).public_key, an uncompressed SEC 1 point) into
+    // `public_key`. Unsupported when the device holds no key of `algorithm`, Unavailable when it does not answer.
+    [[nodiscard]] virtual CryptoError create(cont::ConstSpan<u8> store_id, AlgorithmId algorithm,
+                                             cont::Array<u8>& reference, cont::Span<u8> public_key) noexcept = 0;
+
+    // Signs `digest` (the hash `algorithm` names) with the key `reference` names into `signature`: r || s, each the
+    // curve's field length. Denied when the device holds no such key (forgotten, another store's). Safe to call from
+    // several threads at once.
+    [[nodiscard]] virtual CryptoError sign_digest(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference,
+                                                  AlgorithmId algorithm, cont::ConstSpan<u8> digest,
+                                                  cont::Span<u8> signature) const noexcept = 0;
+
+    // Deletes the key `reference` names; None when there is none.
+    [[nodiscard]] virtual CryptoError forget(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference) noexcept = 0;
+
+protected:
+    KeyDevice() noexcept                            = default;
+    KeyDevice(const KeyDevice&) noexcept            = default;
+    KeyDevice& operator=(const KeyDevice&) noexcept = default;
+    KeyDevice(KeyDevice&&) noexcept                 = default;
+    KeyDevice& operator=(KeyDevice&&) noexcept      = default;
+    ~KeyDevice() noexcept                           = default;
+};
+
+// The TPM 2.0 as a key device for the calling user (decision K12): on Windows "tpm-pcp", a persisted sign-only ECDSA
+// key the TPM creates through the Platform Crypto Provider, named for the store and a random handle (the reference: a
+// format byte and the handle). Unsupported for a curve the TPM does not implement. Elsewhere every call answers
+// Unavailable (Linux's tss2 device is next). available() is whether a TPM answers behind the provider now.
+class TpmKeyDevice final : public KeyDevice
+{
+public:
+    TpmKeyDevice() noexcept = default;
+
+    [[nodiscard]] static bool available() noexcept;
+
+    [[nodiscard]] cont::StringView name() const noexcept override;
+    [[nodiscard]] CryptoError      create(cont::ConstSpan<u8> store_id, AlgorithmId algorithm, cont::Array<u8>& reference,
+                                          cont::Span<u8> public_key) noexcept override;
+    [[nodiscard]] CryptoError      sign_digest(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference,
+                                               AlgorithmId algorithm, cont::ConstSpan<u8> digest,
+                                               cont::Span<u8> signature) const noexcept override;
+    [[nodiscard]] CryptoError forget(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference) noexcept override;
+};
+
 enum class KeyKind : u8
 {
     Signature, // signature_sizes(algorithm).seed bytes of private input
@@ -189,19 +246,49 @@ struct KeyInfo
 // Whether `name` is a key name: 1 to kKeyNameMaxBytes of [a-z0-9._-], starting with a letter or digit.
 [[nodiscard]] bool valid_key_name(cont::StringView name) noexcept;
 
+// A signature key a device holds, as a Signer (decision K12): the device signs the digest of each message, and each
+// signature is verified under the stored public key before it is given out, so a device that signs with another key
+// or faults is caught (ProviderFailure). DER Ecdsa-Sig-Value signatures, as SigningKey's. Plain data, copied freely;
+// the device must outlive every copy.
+class DeviceSigner final : public Signer
+{
+public:
+    DeviceSigner() noexcept = default;
+
+    [[nodiscard]] bool ready() const noexcept { return m_device != nullptr; }
+    void               clear() noexcept;
+
+    [[nodiscard]] AlgorithmId algorithm() const noexcept override { return m_algorithm; }
+    [[nodiscard]] CryptoError public_key(cont::Span<u8> out) const noexcept override;
+    [[nodiscard]] CryptoError sign(cont::ConstSpan<u8> message, cont::Span<u8> out,
+                                   usize& written) const noexcept override;
+
+private:
+    friend class KeyStore;
+
+    const KeyDevice* m_device = nullptr;
+    AlgorithmId      m_algorithm{};
+    u8               m_store_id[kKeyStoreIdBytes]             = {};
+    u8               m_reference_bytes                        = 0U;
+    u8               m_reference[kKeyDeviceReferenceMaxBytes] = {};
+    u8               m_public_key[kDevicePublicKeyMaxBytes]   = {};
+};
+
 // What signs for a stored signature key. It hides the key's placement: code that signs takes a Signer.
 class StoredSigner final : public Signer
 {
 public:
     StoredSigner() noexcept = default;
 
-    [[nodiscard]] bool ready() const noexcept { return m_key.ready(); }
+    [[nodiscard]] bool ready() const noexcept { return m_key.ready() || m_device.ready(); }
     void               clear() noexcept;
 
     // The generation it signs with.
     [[nodiscard]] const KeyInfo& info() const noexcept { return m_info; }
+    // The device signer of a Hardware key; null for a key in the sealed file.
+    [[nodiscard]] const DeviceSigner* device() const noexcept { return m_device.ready() ? &m_device : nullptr; }
 
-    [[nodiscard]] AlgorithmId algorithm() const noexcept override { return m_key.algorithm(); }
+    [[nodiscard]] AlgorithmId algorithm() const noexcept override { return m_info.algorithm; }
     [[nodiscard]] CryptoError public_key(cont::Span<u8> out) const noexcept override;
     [[nodiscard]] CryptoError sign(cont::ConstSpan<u8> message, cont::Span<u8> out,
                                    usize& written) const noexcept override;
@@ -210,8 +297,9 @@ private:
     friend class KeyStore;
     friend class TlsCredential;
 
-    SigningKey m_key;
-    KeyInfo    m_info;
+    SigningKey   m_key;    // a Software key
+    DeviceSigner m_device; // a Hardware key
+    KeyInfo      m_info;
 };
 
 class KeyStore
@@ -225,13 +313,17 @@ public:
     KeyStore& operator=(KeyStore&&)      = delete;
 
     // A new, empty store in `directory` (UTF-8; created owner-only with its parents), its master key guarded by
-    // `protector`, which must outlive the store. Exists when the directory holds a store already.
-    [[nodiscard]] CryptoError create(cont::StringView directory, KeyProtector& protector) noexcept;
+    // `protector`, its Hardware keys held by `device` (none: every key in the sealed file); both must outlive the
+    // store, and the device every signer it gives. Exists when the directory holds a store already.
+    [[nodiscard]] CryptoError create(cont::StringView directory, KeyProtector& protector,
+                                     KeyDevice* device = nullptr) noexcept;
 
     // The store in `directory`: NotFound without one, Unsupported when `protector` is not the protector that
     // created it, Damaged when its file fails its storage checks or framing, Forged when it does not authenticate
     // under the master key the protector recovers, Malformed when its authentic contents break the store's rules.
-    [[nodiscard]] CryptoError open(cont::StringView directory, KeyProtector& protector) noexcept;
+    // Without `device` its Hardware keys are listed but cannot sign (Unavailable) and changes to them are refused.
+    [[nodiscard]] CryptoError open(cont::StringView directory, KeyProtector& protector,
+                                   KeyDevice* device = nullptr) noexcept;
 
     // Reads the newest save of the open store (another process's changes).
     [[nodiscard]] CryptoError refresh() noexcept;
@@ -241,7 +333,9 @@ public:
     [[nodiscard]] cont::ConstSpan<u8> id() const noexcept { return cont::ConstSpan<u8>(m_id, kKeyStoreIdBytes); }
     [[nodiscard]] KeyProtection       protection() const noexcept;
 
-    // Generation 1 of a new key `name` from the provider's randomness (Exists when the name is taken).
+    // Generation 1 of a new key `name` from the provider's randomness, or in the store's device (decision K8): a
+    // signature key whose placement asks for one, where the device holds its algorithm. HardwareRequired is
+    // Unsupported without such a device. Exists when the name is taken.
     [[nodiscard]] CryptoError generate(cont::StringView name, AlgorithmId algorithm, PlacementRequest placement,
                                        u64 now) noexcept;
     // Generation 1 of a new key `name` from `private_input` (the from_seed, from_private or secret bytes of its kind,
@@ -254,16 +348,18 @@ public:
     [[nodiscard]] CryptoError rotate(cont::StringView name, u64 now) noexcept;
     [[nodiscard]] CryptoError rotate_import(cont::StringView name, cont::ConstSpan<u8> private_input, u64 now) noexcept;
 
-    // Erases the private material of `generation` of `name` and replaces the master key (decision K5). A revoked
-    // Current generation leaves the name without one until it is rotated.
+    // Erases the private material of `generation` of `name` (a Hardware key's device key is deleted first) and
+    // replaces the master key (decision K5). A revoked Current generation leaves the name without one until it is
+    // rotated.
     [[nodiscard]] CryptoError revoke(cont::StringView name, u32 generation, u64 now) noexcept;
 
-    // Removes `name` and every generation of it, replacing the master key.
+    // Removes `name` and every generation of it (deleting its device keys first), replacing the master key.
     [[nodiscard]] CryptoError destroy(cont::StringView name) noexcept;
 
-    // Erases the whole store and closes it: the protector forgets its master key (and a pending one), so no copy of
-    // the store file opens again where it can (forgets()), then the store file is removed. The directory and its lock
-    // file stay, since another process may hold the lock; create() may make a new store there.
+    // Erases the whole store and closes it: the device deletes every key it holds for the store, the protector
+    // forgets its master key (and a pending one), so no copy of the store file opens again where it can (forgets()),
+    // then the store file is removed. The directory and its lock file stay, since another process may hold the lock;
+    // create() may make a new store there.
     [[nodiscard]] CryptoError erase() noexcept;
 
     // Every generation, ordered by name, then generation.
@@ -276,7 +372,8 @@ public:
     // The public key of an asymmetric generation, Revoked ones included (`out` exactly its algorithm's length).
     [[nodiscard]] CryptoError public_key(cont::StringView name, u32 generation, cont::Span<u8> out) const noexcept;
 
-    // The Current generation of a signature key, ready to sign (NotFound without one, Revoked when it was revoked).
+    // The Current generation of a signature key, ready to sign (NotFound without one, Revoked when it was revoked,
+    // Unavailable for a Hardware key of a store opened without its device).
     [[nodiscard]] CryptoError signer(cont::StringView name, StoredSigner& out) const noexcept;
 
     // A Current or Retired generation (0: the Current one) loaded into a provider key object, or a secret's bytes
@@ -326,6 +423,7 @@ private:
                                            Entry& out) noexcept;
     [[nodiscard]] static CryptoError  change_entries(const Change& change, cont::Array<Entry>& entries,
                                                      bool& modified) noexcept;
+    [[nodiscard]] static CryptoError  forget_device_key(const Change& change, const Entry& entry) noexcept;
 
     [[nodiscard]] const Entry* entry(cont::StringView name, u32 generation) const noexcept;
     [[nodiscard]] CryptoError  usable(cont::StringView name, u32 generation, KeyKind kind,
@@ -334,11 +432,14 @@ private:
                                     Snapshot& out) const noexcept;
     [[nodiscard]] CryptoError  same_store(const Snapshot& snapshot) const noexcept;
     void                       adopt(KeyProtector& protector, cont::StringView directory, Snapshot& snapshot) noexcept;
-    [[nodiscard]] CryptoError  apply(const Change& change) noexcept;
+    [[nodiscard]] CryptoError  apply(Change& change) noexcept;
+    [[nodiscard]] CryptoError  commit(const Change& change, Snapshot& snapshot, bool modified,
+                                      cont::StringView directory) noexcept;
     [[nodiscard]] CryptoError  save(cont::ConstSpan<Entry> entries, u64 sequence, cont::ConstSpan<u8> reference,
                                     cont::ConstSpan<u8> pending, cont::ConstSpan<u8> master) const noexcept;
 
     KeyProtector*      m_protector = nullptr;
+    KeyDevice*         m_device    = nullptr;
     cont::String       m_directory;
     u8                 m_id[kKeyStoreIdBytes]         = {};
     u64                m_sequence                     = 0U;

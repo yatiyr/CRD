@@ -46,6 +46,24 @@ inline ProviderKey* key_of(EVP_PKEY* pkey) noexcept
 // The digest an ECDSA identifier names; null for ML-DSA and Ed25519, which sign the message itself.
 [[nodiscard]] const EVP_MD* signature_digest(AlgorithmId algorithm) noexcept;
 
+// ---- ECDSA keys a device holds (key_store.cpp's DeviceSigner, tls.cpp's credentials: decision K12) ----
+
+// The provider key object (the caller owns it) of a signature public key in the interface's encoding; null for an
+// algorithm or a key it refuses.
+[[nodiscard]] EVP_PKEY* signature_public_pkey(AlgorithmId algorithm, cont::ConstSpan<u8> encoded) noexcept;
+
+// The length of an ECDSA curve's field elements (32 for P-256, 48 for P-384), the length of each of r and s in the
+// r || s form devices sign into; 0 for any other algorithm.
+[[nodiscard]] usize ecdsa_field_bytes(AlgorithmId algorithm) noexcept;
+
+// The digest an ECDSA identifier names, over `message`, into `out` (exactly the digest's length).
+[[nodiscard]] CryptoError ecdsa_digest(AlgorithmId algorithm, cont::ConstSpan<u8> message, cont::Span<u8> out) noexcept;
+
+// A device's r || s (2 * ecdsa_field_bytes) as the DER Ecdsa-Sig-Value of decision P4 into `out` (at least
+// signature_sizes(algorithm).signature long); `written` is its length.
+[[nodiscard]] CryptoError ecdsa_der_of(AlgorithmId algorithm, cont::ConstSpan<u8> raw, cont::Span<u8> out,
+                                       usize& written) noexcept;
+
 using detail::label_of;
 
 // ---- Sealing keys: what a server seals for itself alone (tls.cpp's tickets, quic.cpp's address tokens) ----

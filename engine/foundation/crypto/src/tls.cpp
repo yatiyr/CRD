@@ -55,6 +55,7 @@
 #include <openssl/hpke.h>
 #include <openssl/mem.h>
 #include <openssl/nid.h>
+#include <openssl/obj.h>
 #include <openssl/pool.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
@@ -1808,45 +1809,106 @@ u16 tls_signature_codepoint(AlgorithmId signature) noexcept
 
 // ---- Credentials ----
 
-TlsCredential::~TlsCredential() noexcept
+namespace
 {
-    clear();
+// A heap copy of a device key's signer, released by free_device: a credential's own, and each context's.
+DeviceSigner* copy_device(const DeviceSigner& signer) noexcept
+{
+    void* storage = OPENSSL_malloc(sizeof(DeviceSigner));
+    return storage != nullptr ? new (storage) DeviceSigner(signer) : nullptr;
 }
 
-void TlsCredential::clear() noexcept
+void free_device(DeviceSigner* signer) noexcept
 {
-    X509_free(x509_of(m_certificate));
-    m_certificate = nullptr;
-    m_key.reset();
-    m_key_id = KeyId{};
-}
-
-TlsError TlsCredential::init(const StoredSigner& signer, cont::StringView name) noexcept
-{
-    return init(signer.m_key, name);
-}
-
-TlsError TlsCredential::init(const SigningKey& key, cont::StringView name) noexcept
-{
-    clear();
-    if (!key.ready())
+    if (signer != nullptr)
     {
-        return TlsError::NotReady;
+        signer->~DeviceSigner();
+        OPENSSL_free(signer);
     }
-    if (!valid_host_name(name))
+}
+
+void free_device_slot(void*, void* pointer, CRYPTO_EX_DATA*, int, long, void*) noexcept
+{
+    free_device(static_cast<DeviceSigner*>(pointer));
+}
+
+// The provider context's slot for the device signer its private-key method signs with, freed with the context.
+int device_slot() noexcept
+{
+    static const int kSlot = SSL_CTX_get_ex_new_index(0, nullptr, nullptr, nullptr, &free_device_slot);
+    return kSlot;
+}
+
+// The provider's private-key method for a device key (decision K12): each handshake signature through the device
+// signer in the context's ex_data, synchronously, under the one signature scheme the context offers for it.
+ssl_private_key_result_t device_sign(SSL* ssl, uint8_t* out, size_t* out_len, size_t max_out,
+                                     uint16_t signature_algorithm, const uint8_t* in, size_t in_len) noexcept
+{
+    const auto* signer = static_cast<const DeviceSigner*>(SSL_CTX_get_ex_data(SSL_get_SSL_CTX(ssl), device_slot()));
+    usize       written = 0U;
+    if (signer == nullptr || signature_algorithm != tls_signature_codepoint(signer->algorithm()) ||
+        signer->sign(cont::ConstSpan<u8>(in, in_len), cont::Span<u8>(out, max_out), written) != CryptoError::None)
     {
-        return TlsError::BadConfig;
+        return ssl_private_key_failure;
     }
-    const ErrorScope  errors;
-    const AlgorithmId algorithm = key.algorithm();
-    EVP_PKEY*         pkey      = pkey_of(key.m_key.get());
-    u8                public_key[kMaxSignaturePublicKey];
+    *out_len = written;
+    return ssl_private_key_success;
+}
+
+ssl_private_key_result_t device_decrypt(SSL*, uint8_t*, size_t*, size_t, const uint8_t*, size_t) noexcept
+{
+    return ssl_private_key_failure; // TLS 1.3 never decrypts with a credential's key
+}
+
+ssl_private_key_result_t device_complete(SSL*, uint8_t*, size_t*, size_t) noexcept
+{
+    return ssl_private_key_failure; // device_sign never leaves an operation pending
+}
+
+constexpr SSL_PRIVATE_KEY_METHOD kDeviceKeyMethod = {&device_sign, &device_decrypt, &device_complete};
+
+// Signs a credential's certificate: by its provider key, or by `device` over the re-encoded TBSCertificate after the
+// signature algorithm is set in both of its places (ecdsa-with-SHA256 or -SHA384, the curve naming the digest).
+[[nodiscard]] bool sign_certificate(X509* certificate, EVP_PKEY* pkey, AlgorithmId algorithm,
+                                    const DeviceSigner* device) noexcept
+{
+    if (device == nullptr)
+    {
+        return X509_sign(certificate, pkey, provider_internal::signature_digest(algorithm)) != 0;
+    }
+    const int nid = algorithm == AlgorithmId::EcdsaSecp384r1Sha384 ? NID_ecdsa_with_SHA384 : NID_ecdsa_with_SHA256;
+    const bssl::UniquePtr<X509_ALGOR> signature_algorithm(X509_ALGOR_new());
+    if (!signature_algorithm || !X509_ALGOR_set0(signature_algorithm.get(), OBJ_nid2obj(nid), V_ASN1_UNDEF, nullptr) ||
+        !X509_set1_signature_algo(certificate, signature_algorithm.get()))
+    {
+        return false;
+    }
+    uint8_t*                       tbs       = nullptr;
+    const int                      tbs_bytes = i2d_re_X509_tbs(certificate, &tbs);
+    const bssl::UniquePtr<uint8_t> owner(tbs);
+    u8                             signature[128]; // a DER ECDSA signature on P-384 is at most 104 bytes
+    usize                          written = 0U;
+    // The finished certificate is verified under its own key, as a peer that checks it would: the signature must
+    // cover the TBSCertificate exactly as it is encoded in the certificate.
+    return tbs_bytes > 0 &&
+           device->sign(cont::ConstSpan<u8>(tbs, static_cast<usize>(tbs_bytes)), cont::Span<u8>(signature), written) ==
+               CryptoError::None &&
+           X509_set1_signature_value(certificate, signature, written) != 0 && X509_verify(certificate, pkey) == 1;
+}
+
+// Issues a credential's self-signed certificate for `pkey` (a key of `algorithm`; its public half at least) and its
+// key identifier, signed by sign_certificate().
+[[nodiscard]] TlsError issue_certificate(EVP_PKEY* pkey, AlgorithmId algorithm, cont::StringView name,
+                                         const DeviceSigner* device, KeyId& id,
+                                         bssl::UniquePtr<X509>& out) noexcept
+{
+    u8                   public_key[kMaxSignaturePublicKey];
     const cont::Span<u8> bytes(public_key, signature_sizes(algorithm).public_key);
     if (provider_internal::signature_public_bytes(pkey, algorithm, bytes) != CryptoError::None)
     {
         return TlsError::ProviderFailure;
     }
-    const KeyId id = key_id_of(bytes);
+    id = key_id_of(bytes);
 
     // The serial number is the key identifier's first 16 bytes, made positive and full length: unique per key, the
     // only issuer of a self-signed certificate (RFC 5280 section 4.1.2.2).
@@ -1890,10 +1952,101 @@ TlsError TlsCredential::init(const SigningKey& key, cont::StringView name) noexc
     GENERAL_NAME_set0_value(dns_name.get(), GEN_DNS, dns_text.release());
     if (!bssl::PushToStack(alt_names.get(), std::move(dns_name)) ||
         !X509_add1_ext_i2d(certificate.get(), NID_subject_alt_name, alt_names.get(), common ? 0 : 1,
-                           X509V3_ADD_DEFAULT) ||
-        !X509_sign(certificate.get(), pkey, provider_internal::signature_digest(algorithm)))
+                           X509V3_ADD_DEFAULT))
     {
         return TlsError::ProviderFailure;
+    }
+    if (!sign_certificate(certificate.get(), pkey, algorithm, device))
+    {
+        return TlsError::ProviderFailure;
+    }
+    out = std::move(certificate);
+    return TlsError::None;
+}
+} // namespace
+
+TlsCredential::~TlsCredential() noexcept
+{
+    clear();
+}
+
+void TlsCredential::clear() noexcept
+{
+    X509_free(x509_of(m_certificate));
+    m_certificate = nullptr;
+    m_key.reset();
+    free_device(m_device);
+    m_device = nullptr;
+    m_key_id = KeyId{};
+}
+
+AlgorithmId TlsCredential::algorithm() const noexcept
+{
+    return m_device != nullptr ? m_device->algorithm() : m_key.algorithm();
+}
+
+TlsError TlsCredential::init(const StoredSigner& signer, cont::StringView name) noexcept
+{
+    const DeviceSigner* device = signer.device();
+    if (device == nullptr)
+    {
+        return init(signer.m_key, name);
+    }
+    clear();
+    if (!valid_host_name(name))
+    {
+        return TlsError::BadConfig;
+    }
+    const ErrorScope     errors;
+    const AlgorithmId    algorithm = device->algorithm();
+    u8                   public_key[kDevicePublicKeyMaxBytes];
+    const cont::Span<u8> bytes(public_key, signature_sizes(algorithm).public_key);
+    if (device->public_key(bytes) != CryptoError::None)
+    {
+        return TlsError::ProviderFailure;
+    }
+    const bssl::UniquePtr<EVP_PKEY> pkey(provider_internal::signature_public_pkey(algorithm, bytes));
+    bssl::UniquePtr<X509>           certificate;
+    KeyId                           id;
+    if (!pkey)
+    {
+        return TlsError::ProviderFailure;
+    }
+    const TlsError issued = issue_certificate(pkey.get(), algorithm, name, device, id, certificate);
+    if (issued != TlsError::None)
+    {
+        return issued;
+    }
+    m_device = copy_device(*device);
+    if (m_device == nullptr)
+    {
+        return TlsError::ProviderFailure;
+    }
+    m_certificate = reinterpret_cast<ProviderCertificate*>(certificate.release());
+    m_key_id      = id;
+    return TlsError::None;
+}
+
+TlsError TlsCredential::init(const SigningKey& key, cont::StringView name) noexcept
+{
+    clear();
+    if (!key.ready())
+    {
+        return TlsError::NotReady;
+    }
+    if (!valid_host_name(name))
+    {
+        return TlsError::BadConfig;
+    }
+    const ErrorScope      errors;
+    const AlgorithmId     algorithm = key.algorithm();
+    EVP_PKEY*             pkey      = pkey_of(key.m_key.get());
+    bssl::UniquePtr<X509> certificate;
+    KeyId                 id;
+    const TlsError        issued = issue_certificate(pkey, algorithm, name, nullptr, id, certificate);
+    if (issued != TlsError::None)
+    {
+        return issued;
     }
     if (!EVP_PKEY_up_ref(pkey))
     {
@@ -2151,12 +2304,30 @@ TlsError TlsContext::init(const TlsConfig& config) noexcept
     }
     if (config.credential != nullptr)
     {
-        const u16 scheme = tls_signature_codepoint(config.credential->algorithm());
-        if (!SSL_CTX_use_certificate(context.get(), x509_of(config.credential->m_certificate)) ||
-            !SSL_CTX_use_PrivateKey(context.get(), pkey_of(config.credential->m_key.get())) ||
+        const TlsCredential& credential = *config.credential;
+        const u16            scheme     = tls_signature_codepoint(credential.algorithm());
+        if (!SSL_CTX_use_certificate(context.get(), x509_of(credential.m_certificate)) ||
             !SSL_CTX_set_signing_algorithm_prefs(context.get(), &scheme, 1U))
         {
             return TlsError::ProviderFailure;
+        }
+        if (credential.m_device == nullptr)
+        {
+            if (!SSL_CTX_use_PrivateKey(context.get(), pkey_of(credential.m_key.get())))
+            {
+                return TlsError::ProviderFailure;
+            }
+        }
+        else
+        {
+            // The context keeps its own copy of the device signer, freed with it however init() ends.
+            DeviceSigner* kept = copy_device(*credential.m_device);
+            if (kept == nullptr || !SSL_CTX_set_ex_data(context.get(), device_slot(), kept))
+            {
+                free_device(kept);
+                return TlsError::ProviderFailure;
+            }
+            SSL_CTX_set_private_key_method(context.get(), &kDeviceKeyMethod);
         }
     }
     if (server)

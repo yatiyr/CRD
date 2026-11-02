@@ -12,12 +12,14 @@
 #include <openssl/aead.h>
 #include <openssl/base.h>
 #include <openssl/bn.h>
+#include <openssl/bytestring.h>
 #include <openssl/cipher.h>
 #include <openssl/curve25519.h>
 #include <openssl/digest.h>
 #include <openssl/ec.h>
 #include <openssl/ec_key.h>
 #include <openssl/ecdh.h>
+#include <openssl/ecdsa.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/experimental/kem_deterministic_api.h>
@@ -345,6 +347,79 @@ const EVP_MD* signature_digest(AlgorithmId algorithm) noexcept
     default:
         return nullptr;
     }
+}
+
+EVP_PKEY* signature_public_pkey(AlgorithmId algorithm, cont::ConstSpan<u8> encoded) noexcept
+{
+    const SignatureAlgorithm* entry = find_entry(kSignatures, algorithm);
+    return entry == nullptr ? nullptr : signature_public_key(*entry, encoded).release();
+}
+
+usize ecdsa_field_bytes(AlgorithmId algorithm) noexcept
+{
+    switch (algorithm)
+    {
+    case AlgorithmId::EcdsaSecp256r1Sha256:
+        return 32U;
+    case AlgorithmId::EcdsaSecp384r1Sha384:
+        return 48U;
+    default:
+        return 0U;
+    }
+}
+
+CryptoError ecdsa_digest(AlgorithmId algorithm, cont::ConstSpan<u8> message, cont::Span<u8> out) noexcept
+{
+    const EVP_MD* digest = signature_digest(algorithm);
+    if (digest == nullptr)
+    {
+        return CryptoError::Unsupported;
+    }
+    if (out.size() != EVP_MD_size(digest))
+    {
+        return CryptoError::BadLength;
+    }
+    const ErrorScope errors;
+    unsigned int     written = 0U;
+    if (!EVP_Digest(message.data(), message.size(), out.data(), &written, digest, nullptr) || written != out.size())
+    {
+        secure_zero(out);
+        return CryptoError::ProviderFailure;
+    }
+    return CryptoError::None;
+}
+
+CryptoError ecdsa_der_of(AlgorithmId algorithm, cont::ConstSpan<u8> raw, cont::Span<u8> out, usize& written) noexcept
+{
+    written           = 0U;
+    const usize field = ecdsa_field_bytes(algorithm);
+    const auto* entry = find_entry(kSignatures, algorithm);
+    if (field == 0U || entry == nullptr)
+    {
+        return CryptoError::Unsupported;
+    }
+    if (raw.size() != 2U * field || out.size() < entry->sizes.signature)
+    {
+        return CryptoError::BadLength;
+    }
+    const ErrorScope                 errors;
+    const bssl::UniquePtr<ECDSA_SIG> signature(ECDSA_SIG_new());
+    BIGNUM*                          r = BN_bin2bn(raw.data(), field, nullptr);
+    BIGNUM*                          s = BN_bin2bn(raw.data() + field, field, nullptr);
+    if (!signature || r == nullptr || s == nullptr || !ECDSA_SIG_set0(signature.get(), r, s))
+    {
+        BN_free(r);
+        BN_free(s);
+        return CryptoError::ProviderFailure;
+    }
+    bssl::ScopedCBB cbb;
+    if (!CBB_init_fixed(cbb.get(), out.data(), out.size()) || !ECDSA_SIG_marshal(cbb.get(), signature.get()) ||
+        !CBB_finish(cbb.get(), nullptr, &written))
+    {
+        written = 0U;
+        return CryptoError::ProviderFailure;
+    }
+    return CryptoError::None;
 }
 } // namespace provider_internal
 

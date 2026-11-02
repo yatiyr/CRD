@@ -8,6 +8,8 @@
 #include <crd/platform/durable_file.hpp>
 #include <crd/platform/filesystem.hpp>
 
+#include <openssl/evp.h>
+
 #include <algorithm>
 #include <cstring>
 
@@ -25,7 +27,8 @@ using detail::label_of;
 //   salt, authenticating every byte before it.
 // The body: a u32 count, then per generation, ordered by name and generation:
 //   name (u8 length, bytes) | generation u32 | algorithm u16 | kind u8 | state u8 | placement u8 | created u64 |
-//   changed u64 | identifier (32) | public key (u16 length, bytes) | private input (u8 length, bytes; none if revoked)
+//   changed u64 | identifier (32) | public key (u16 length, bytes) | private input (u8 length, bytes; none if revoked;
+//   a Hardware key's device reference)
 constexpr u8    kMagic[8]          = {'C', 'R', 'D', 'K', 'E', 'Y', 'S', 'T'};
 constexpr u16   kFormat            = 1U;
 constexpr usize kSaltBytes         = 32U;
@@ -357,22 +360,91 @@ bool valid_key_name(cont::StringView name) noexcept
                                                 { return alphanumeric(c) || c == '.' || c == '_' || c == '-'; });
 }
 
-// ---- StoredSigner ----
+// Whether a device may hold keys of `algorithm` (decision K8: ECDSA, the one signature every device implements).
+[[nodiscard]] bool device_algorithm(KeyKind kind, AlgorithmId algorithm) noexcept
+{
+    return kind == KeyKind::Signature && provider_internal::ecdsa_field_bytes(algorithm) != 0U;
+}
+
+// ---- DeviceSigner and StoredSigner ----
+
+void DeviceSigner::clear() noexcept
+{
+    *this = DeviceSigner{};
+}
+
+CryptoError DeviceSigner::public_key(cont::Span<u8> out) const noexcept
+{
+    const usize length = signature_sizes(m_algorithm).public_key;
+    if (!ready())
+    {
+        return CryptoError::NotReady;
+    }
+    if (out.size() != length)
+    {
+        return CryptoError::BadLength;
+    }
+    std::memcpy(out.data(), m_public_key, length);
+    return CryptoError::None;
+}
+
+CryptoError DeviceSigner::sign(cont::ConstSpan<u8> message, cont::Span<u8> out, usize& written) const noexcept
+{
+    written = 0U;
+    if (!ready())
+    {
+        return CryptoError::NotReady;
+    }
+    if (out.size() < signature_sizes(m_algorithm).signature)
+    {
+        return CryptoError::BadLength;
+    }
+    // SHA-256 for P-256 and SHA-384 for P-384: each digest is its curve's field length, as are r and s.
+    const usize field = provider_internal::ecdsa_field_bytes(m_algorithm);
+    u8          digest[48];
+    u8          raw[96];
+    CryptoError error = provider_internal::ecdsa_digest(m_algorithm, message, cont::Span<u8>(digest, field));
+    if (error == CryptoError::None)
+    {
+        error = m_device->sign_digest(cont::ConstSpan<u8>(m_store_id), cont::ConstSpan<u8>(m_reference, m_reference_bytes),
+                                      m_algorithm, cont::ConstSpan<u8>(digest, field), cont::Span<u8>(raw, 2U * field));
+    }
+    if (error == CryptoError::None)
+    {
+        error = provider_internal::ecdsa_der_of(m_algorithm, cont::ConstSpan<u8>(raw, 2U * field), out, written);
+    }
+    // A signature leaves only once it verifies under the stored key: a device that signs with another key, or faults
+    // while signing, is caught here.
+    const cont::ConstSpan<u8> public_key(m_public_key, signature_sizes(m_algorithm).public_key);
+    if (error == CryptoError::None &&
+        ProviderVerifier{}.verify(m_algorithm, public_key, message, cont::ConstSpan<u8>(out.data(), written)) !=
+            Verification::Valid)
+    {
+        error = CryptoError::ProviderFailure;
+    }
+    if (error != CryptoError::None)
+    {
+        secure_zero(out);
+        written = 0U;
+    }
+    return error;
+}
 
 void StoredSigner::clear() noexcept
 {
     m_key.clear();
+    m_device.clear();
     m_info = KeyInfo{};
 }
 
 CryptoError StoredSigner::public_key(cont::Span<u8> out) const noexcept
 {
-    return m_key.public_key(out);
+    return m_device.ready() ? m_device.public_key(out) : m_key.public_key(out);
 }
 
 CryptoError StoredSigner::sign(cont::ConstSpan<u8> message, cont::Span<u8> out, usize& written) const noexcept
 {
-    return m_key.sign(message, out, written);
+    return m_device.ready() ? m_device.sign(message, out, written) : m_key.sign(message, out, written);
 }
 
 // ---- KeyStore ----
@@ -404,6 +476,9 @@ struct KeyStore::Change
     cont::ConstSpan<u8> private_input; // empty: fresh from the provider's randomness
     u32                 generation = 0U;
     u64                 now        = 0U;
+    KeyDevice*          device     = nullptr; // the store's, for Hardware keys
+    cont::ConstSpan<u8> store_id;
+    cont::Array<u8>*    created = nullptr; // the device reference of a key made for the change, forgotten if unsaved
 };
 
 KeyProtection KeyStore::protection() const noexcept
@@ -420,6 +495,7 @@ void KeyStore::close() noexcept
     std::memset(m_id, 0, sizeof(m_id));
     m_sequence  = 0U;
     m_protector = nullptr;
+    m_device    = nullptr;
 }
 
 CryptoError KeyStore::save(cont::ConstSpan<Entry> entries, u64 sequence, cont::ConstSpan<u8> reference,
@@ -586,15 +662,16 @@ CryptoError KeyStore::decode(cont::ConstSpan<u8> body, cont::Array<Entry>& entri
         }
         const cont::StringView text(reinterpret_cast<const char*>(name.data()), name.size());
         KeyKind                expected = KeyKind::Signature;
+        const bool             hardware = placement == static_cast<u8>(KeyPlacement::Hardware);
         if (!valid_key_name(text) || !key_kind_of(info.algorithm, expected) || kind != static_cast<u8>(expected) ||
-            state > static_cast<u8>(KeyState::Revoked) || placement != static_cast<u8>(KeyPlacement::Software) ||
-            info.generation == 0U)
+            state > static_cast<u8>(KeyState::Revoked) || placement > static_cast<u8>(KeyPlacement::Hardware) ||
+            (hardware && !device_algorithm(expected, info.algorithm)) || info.generation == 0U)
         {
             return CryptoError::Malformed;
         }
         info.kind       = expected;
         info.state      = static_cast<KeyState>(state);
-        info.placement  = KeyPlacement::Software;
+        info.placement  = static_cast<KeyPlacement>(placement);
         info.name_bytes = static_cast<u8>(name.size());
         std::memcpy(info.name_text, name.data(), name.size());
         std::memcpy(info.id.bytes, id.data(), kKeyIdBytes);
@@ -615,9 +692,14 @@ CryptoError KeyStore::decode(cont::ConstSpan<u8> body, cont::Array<Entry>& entri
             return CryptoError::Malformed;
         }
 
+        // A Hardware key holds its device's reference (1 to kKeyDeviceReferenceMaxBytes) in place of a private input;
+        // its public key is the one the device gave when it made the key, which only the identifier binds.
         const bool revoked = info.state == KeyState::Revoked;
-        if (pub.size() != public_bytes(info.kind, info.algorithm) ||
-            priv.size() != (revoked ? 0U : private_bytes(info.kind, info.algorithm)))
+        const bool private_fits =
+            revoked ? priv.empty()
+                    : (hardware ? !priv.empty() && priv.size() <= kKeyDeviceReferenceMaxBytes
+                                : priv.size() == private_bytes(info.kind, info.algorithm));
+        if (pub.size() != public_bytes(info.kind, info.algorithm) || !private_fits)
         {
             return CryptoError::Malformed;
         }
@@ -634,7 +716,7 @@ CryptoError KeyStore::decode(cont::ConstSpan<u8> body, cont::Array<Entry>& entri
         {
             return CryptoError::Malformed;
         }
-        if (!revoked)
+        if (!revoked && !hardware)
         {
             derived.resize(pub.size());
             KeyId             held;
@@ -664,10 +746,11 @@ void KeyStore::adopt(KeyProtector& protector, cont::StringView directory, Snapsh
     m_entries   = std::move(snapshot.entries);
 }
 
-CryptoError KeyStore::create(cont::StringView directory, KeyProtector& protector) noexcept
+CryptoError KeyStore::create(cont::StringView directory, KeyProtector& protector, KeyDevice* device) noexcept
 {
     close();
-    if (!valid_protector_name(bytes_of(protector.name())))
+    if (!valid_protector_name(bytes_of(protector.name())) ||
+        (device != nullptr && !valid_protector_name(bytes_of(device->name()))))
     {
         return CryptoError::Unsupported;
     }
@@ -714,18 +797,25 @@ CryptoError KeyStore::create(cont::StringView directory, KeyProtector& protector
     {
         (void)protector.forget(id(), bytes_of(m_reference));
         close();
+        return saved;
     }
-    return saved;
+    m_device = device;
+    return CryptoError::None;
 }
 
-CryptoError KeyStore::open(cont::StringView directory, KeyProtector& protector) noexcept
+CryptoError KeyStore::open(cont::StringView directory, KeyProtector& protector, KeyDevice* device) noexcept
 {
     close();
+    if (device != nullptr && !valid_protector_name(bytes_of(device->name())))
+    {
+        return CryptoError::Unsupported;
+    }
     Snapshot          snapshot;
     const CryptoError read_error = read(directory, protector, snapshot);
     if (read_error == CryptoError::None)
     {
         adopt(protector, directory, snapshot);
+        m_device = device;
     }
     return read_error;
 }
@@ -840,6 +930,22 @@ CryptoError KeyStore::signer(cont::StringView name, StoredSigner& out) const noe
     {
         return error;
     }
+    if (found->info.placement == KeyPlacement::Hardware)
+    {
+        if (m_device == nullptr)
+        {
+            return CryptoError::Unavailable;
+        }
+        DeviceSigner& device     = out.m_device;
+        device.m_device          = m_device;
+        device.m_algorithm       = found->info.algorithm;
+        device.m_reference_bytes = found->private_bytes;
+        std::memcpy(device.m_store_id, m_id, kKeyStoreIdBytes);
+        std::memcpy(device.m_reference, found->private_input, found->private_bytes);
+        std::memcpy(device.m_public_key, found->public_key.data(), found->public_key.size());
+        out.m_info = found->info;
+        return CryptoError::None;
+    }
     const CryptoError loaded =
         out.m_key.from_seed(found->info.algorithm, cont::ConstSpan<u8>(found->private_input, found->private_bytes));
     if (loaded == CryptoError::None)
@@ -905,6 +1011,41 @@ CryptoError KeyStore::make(const Change& change, KeyKind kind, AlgorithmId algor
     info.name_bytes = static_cast<u8>(change.name.size());
     std::memcpy(info.name_text, change.name.data(), change.name.size());
 
+    // In the device when the change asks for it and the device holds the algorithm; HardwarePreferred falls back to
+    // the sealed file otherwise (decision K8).
+    const bool wants_device = change.placement != PlacementRequest::Software;
+    if (wants_device && change.device != nullptr && device_algorithm(kind, algorithm))
+    {
+        out.public_key.resize(public_bytes(kind, algorithm));
+        cont::Array<u8>&  reference = *change.created;
+        const CryptoError made      = change.device->create(
+            change.store_id, algorithm, reference, cont::Span<u8>(out.public_key.data(), out.public_key.size()));
+        if (made == CryptoError::None)
+        {
+            const cont::ConstSpan<u8>       public_key(out.public_key.data(), out.public_key.size());
+            const bssl::UniquePtr<EVP_PKEY> point(provider_internal::signature_public_pkey(algorithm, public_key));
+            if (reference.empty() || reference.size() > kKeyDeviceReferenceMaxBytes || !point)
+            {
+                (void)change.device->forget(change.store_id, bytes_of(reference));
+                reference.clear();
+                return CryptoError::BadKey; // a device that answers with something no store can keep
+            }
+            info.placement    = KeyPlacement::Hardware;
+            info.id           = key_id_of(public_key);
+            out.private_bytes = static_cast<u8>(reference.size());
+            std::memcpy(out.private_input, reference.data(), reference.size());
+            return CryptoError::None;
+        }
+        if (made != CryptoError::Unsupported || change.placement == PlacementRequest::HardwareRequired)
+        {
+            return made;
+        }
+    }
+    else if (change.placement == PlacementRequest::HardwareRequired)
+    {
+        return CryptoError::Unsupported;
+    }
+
     const usize length = private_bytes(kind, algorithm);
     out.private_bytes  = static_cast<u8>(length);
     out.public_key.resize(public_bytes(kind, algorithm));
@@ -946,7 +1087,7 @@ CryptoError KeyStore::change_entries(const Change& change, cont::Array<Entry>& e
     case ChangeKind::Add:
     {
         KeyKind kind = KeyKind::Signature;
-        if (!key_kind_of(change.algorithm, kind) || change.placement == PlacementRequest::HardwareRequired ||
+        if (!key_kind_of(change.algorithm, kind) ||
             (!change.private_input.empty() && change.placement != PlacementRequest::Software))
         {
             return CryptoError::Unsupported;
@@ -984,8 +1125,16 @@ CryptoError KeyStore::change_entries(const Change& change, cont::Array<Entry>& e
         {
             return CryptoError::Exhausted;
         }
+        // The next generation keeps the name's placement: a Hardware name rotates within the device, and only there.
+        const bool hardware = last->info.placement == KeyPlacement::Hardware;
+        if (hardware && (change.device == nullptr || !change.private_input.empty()))
+        {
+            return change.device == nullptr ? CryptoError::Unavailable : CryptoError::Unsupported;
+        }
+        Change placed    = change;
+        placed.placement = hardware ? PlacementRequest::HardwareRequired : PlacementRequest::Software;
         Entry             fresh;
-        const CryptoError made = make(change, last->info.kind, last->info.algorithm, last->info.generation + 1U, fresh);
+        const CryptoError made = make(placed, last->info.kind, last->info.algorithm, last->info.generation + 1U, fresh);
         if (made != CryptoError::None)
         {
             return made;
@@ -1010,6 +1159,11 @@ CryptoError KeyStore::change_entries(const Change& change, cont::Array<Entry>& e
         Entry& revoked = entries[at - (last->info.generation - change.generation)];
         if (revoked.info.state != KeyState::Revoked)
         {
+            const CryptoError forgotten = forget_device_key(change, revoked);
+            if (forgotten != CryptoError::None)
+            {
+                return forgotten;
+            }
             revoked.info.state   = KeyState::Revoked;
             revoked.info.changed = change.now;
             secure_zero(cont::Span<u8>(revoked.private_input));
@@ -1025,6 +1179,14 @@ CryptoError KeyStore::change_entries(const Change& change, cont::Array<Entry>& e
             return CryptoError::NotFound;
         }
         const usize first = at + 1U - last->info.generation;
+        for (usize i = first; i <= at; ++i)
+        {
+            const CryptoError forgotten = forget_device_key(change, entries[i]);
+            if (forgotten != CryptoError::None)
+            {
+                return forgotten;
+            }
+        }
         for (usize i = at + 1U; i > first; --i)
         {
             entries.erase(i - 1U);
@@ -1036,12 +1198,31 @@ CryptoError KeyStore::change_entries(const Change& change, cont::Array<Entry>& e
     return CryptoError::Unsupported;
 }
 
-CryptoError KeyStore::apply(const Change& change) noexcept
+// A device key is deleted before the store that drops it is saved (decision K12): a crash in between leaves an entry
+// whose key no longer signs, which the change completes when repeated, never a revoked key that still signs.
+CryptoError KeyStore::forget_device_key(const Change& change, const Entry& entry) noexcept
+{
+    if (entry.info.placement != KeyPlacement::Hardware || entry.info.state == KeyState::Revoked)
+    {
+        return CryptoError::None;
+    }
+    if (change.device == nullptr)
+    {
+        return CryptoError::Unavailable;
+    }
+    return change.device->forget(change.store_id, cont::ConstSpan<u8>(entry.private_input, entry.private_bytes));
+}
+
+CryptoError KeyStore::apply(Change& change) noexcept
 {
     if (m_protector == nullptr)
     {
         return CryptoError::NotReady;
     }
+    cont::Array<u8> created;
+    change.device   = m_device;
+    change.store_id = id();
+    change.created  = &created;
     if (!valid_key_name(change.name))
     {
         return CryptoError::Malformed;
@@ -1082,6 +1263,18 @@ CryptoError KeyStore::apply(const Change& change) noexcept
     {
         return outcome;
     }
+    error = commit(change, snapshot, modified, directory);
+    if (error != CryptoError::None && !created.empty())
+    {
+        (void)m_device->forget(id(), bytes_of(created)); // a device key no saved store names
+    }
+    return error == CryptoError::None ? outcome : error;
+}
+
+CryptoError KeyStore::commit(const Change& change, Snapshot& snapshot, bool modified,
+                             cont::StringView directory) noexcept
+{
+    CryptoError error = CryptoError::None;
 
     // Revocation and destruction replace the master key where the protector can forget the old one (decision K5):
     // the store is saved under the new key with the old reference pending, the old key forgotten, then the pending
@@ -1139,7 +1332,7 @@ CryptoError KeyStore::apply(const Change& change) noexcept
         }
     }
     adopt(*m_protector, directory, snapshot);
-    return outcome;
+    return CryptoError::None;
 }
 
 CryptoError KeyStore::erase() noexcept
@@ -1159,6 +1352,14 @@ CryptoError KeyStore::erase() noexcept
     if (error == CryptoError::None)
     {
         error = same_store(snapshot);
+    }
+    // The device's keys go first, while the store still names them; then the master keys.
+    Change change;
+    change.device   = m_device;
+    change.store_id = id();
+    for (usize i = 0U; i < snapshot.entries.size() && error == CryptoError::None; ++i)
+    {
+        error = forget_device_key(change, snapshot.entries[i]);
     }
     if (error == CryptoError::None && !snapshot.pending.empty())
     {

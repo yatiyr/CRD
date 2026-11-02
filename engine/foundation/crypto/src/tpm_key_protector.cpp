@@ -1,6 +1,6 @@
-// crd-crypto -- the TPM 2.0 key protector (NET.2; contract: docs/design/network-foundation.md#key-store, decision
-// K11): on Windows, a decrypt-only RSA-2048 key the TPM holds for one master key, through the Platform Crypto
-// Provider; nothing elsewhere yet.
+// crd-crypto -- the TPM 2.0 key protector and key device (NET.2; contract: docs/design/network-foundation.md#key-store,
+// decisions K11 and K12): on Windows, through the Platform Crypto Provider, a decrypt-only RSA-2048 key the TPM holds
+// for one master key, and sign-only ECDSA keys it holds for a store's Hardware signature keys; nothing elsewhere yet.
 
 #include <crd/core/platform.hpp>
 #include <crd/crypto/key_store.hpp>
@@ -23,14 +23,17 @@ namespace crd::crypto
 #if CRD_OS_WINDOWS
 namespace
 {
-constexpr u8    kReferenceFormat = 1U;
-constexpr usize kHandleBytes     = 16U;
-constexpr usize kModulusBits     = 2048U;
-constexpr usize kWrappedBytes    = kModulusBits / 8U;
-constexpr usize kReferenceBytes  = 1U + kHandleBytes + kWrappedBytes; // the format, the key's handle, the wrapped key
-constexpr char  kLabelPrefix[]   = "cerid master 1";
-constexpr char  kNamePrefix[]    = "Cerid key store ";
-constexpr char  kHexDigits[]     = "0123456789abcdef";
+constexpr u8    kReferenceFormat      = 1U;
+constexpr usize kHandleBytes          = 16U;
+constexpr usize kModulusBits          = 2048U;
+constexpr usize kWrappedBytes         = kModulusBits / 8U;
+constexpr usize kReferenceBytes       = 1U + kHandleBytes + kWrappedBytes; // the format, the key's handle, the wrapped key
+constexpr usize kDeviceReferenceBytes = 1U + kHandleBytes;                 // the format, the signing key's handle
+constexpr char  kLabelPrefix[]        = "cerid master 1";
+constexpr char  kNamePrefix[]         = "Cerid key store ";
+constexpr char  kSignerPrefix[]       = "Cerid signer    "; // as long as kNamePrefix: the names share one length
+constexpr char  kHexDigits[]          = "0123456789abcdef";
+static_assert(sizeof(kSignerPrefix) == sizeof(kNamePrefix), "protector and device key names share one length");
 
 // The OAEP label: the prefix, the store's identifier and a closing zero byte. A TPM ends a label that does not end in
 // zero with one, so the label carries its own and encryption and decryption agree wherever they run; it holds at most
@@ -57,12 +60,13 @@ void label_of(cont::ConstSpan<u8> store_id, u8 (&label)[kLabelBytes]) noexcept
     label[kLabelBytes - 1U] = 0U;
 }
 
-void name_of(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> handle, wchar_t (&name)[kNameChars]) noexcept
+void name_of(const char (&prefix)[sizeof(kNamePrefix)], cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> handle,
+             wchar_t (&name)[kNameChars]) noexcept
 {
     wchar_t* out = name;
     for (usize i = 0U; i + 1U < sizeof(kNamePrefix); ++i)
     {
-        *out++ = static_cast<wchar_t>(kNamePrefix[i]);
+        *out++ = static_cast<wchar_t>(prefix[i]);
     }
     out    = hex_into(store_id, out);
     *out++ = L' ';
@@ -114,9 +118,10 @@ private:
                                      MS_PLATFORM_CRYPTO_PROVIDER, 0U) == ERROR_SUCCESS;
 }
 
-// The persisted key `name`: None, Denied when there is none (forgotten, or another store's), Unavailable when the
-// provider does not answer.
-[[nodiscard]] CryptoError open_key(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> handle, Handle& key) noexcept
+// The persisted key `prefix` names for the store and `handle`: None, Denied when there is none (forgotten, or another
+// store's), Unavailable when the provider does not answer.
+[[nodiscard]] CryptoError open_key(const char (&prefix)[sizeof(kNamePrefix)], cont::ConstSpan<u8> store_id,
+                                   cont::ConstSpan<u8> handle, Handle& key) noexcept
 {
     Handle provider;
     if (!open_provider(provider))
@@ -124,7 +129,7 @@ private:
         return CryptoError::Unavailable;
     }
     wchar_t name[kNameChars];
-    name_of(store_id, handle, name);
+    name_of(prefix, store_id, handle, name);
     const SECURITY_STATUS status =
         NCryptOpenKey(static_cast<NCRYPT_PROV_HANDLE>(provider.get()), reinterpret_cast<NCRYPT_KEY_HANDLE*>(key.put()),
                       name, 0U, NCRYPT_SILENT_FLAG);
@@ -154,7 +159,7 @@ private:
         return CryptoError::Unavailable;
     }
     wchar_t name[kNameChars];
-    name_of(store_id, handle, name);
+    name_of(kNamePrefix, store_id, handle, name);
     Handle key;
     if (NCryptCreatePersistedKey(static_cast<NCRYPT_PROV_HANDLE>(provider.get()),
                                  reinterpret_cast<NCRYPT_KEY_HANDLE*>(key.put()), BCRYPT_RSA_ALGORITHM, name, 0U,
@@ -189,6 +194,111 @@ private:
     }
     (void)NCryptDeleteKey(static_cast<NCRYPT_KEY_HANDLE>(key.release()), 0U);
     return CryptoError::ProviderFailure;
+}
+
+// Deletes the persisted key `prefix` names for the store and `handle`; None when there is none.
+[[nodiscard]] CryptoError delete_key(const char (&prefix)[sizeof(kNamePrefix)], cont::ConstSpan<u8> store_id,
+                                     cont::ConstSpan<u8> handle) noexcept
+{
+    Handle            key;
+    const CryptoError result = open_key(prefix, store_id, handle, key);
+    if (result == CryptoError::Denied)
+    {
+        return CryptoError::None; // forgotten already
+    }
+    if (result != CryptoError::None)
+    {
+        return result;
+    }
+    // The provider takes no flag on deletion (NCRYPT_SILENT_FLAG is NTE_BAD_FLAGS there).
+    return NCryptDeleteKey(static_cast<NCRYPT_KEY_HANDLE>(key.release()), 0U) == ERROR_SUCCESS
+               ? CryptoError::None
+               : CryptoError::StorageFailure;
+}
+
+// The provider's name of an ECDSA curve the device keeps keys on; null for any other algorithm.
+[[nodiscard]] LPCWSTR curve_of(AlgorithmId algorithm) noexcept
+{
+    switch (algorithm)
+    {
+    case AlgorithmId::EcdsaSecp256r1Sha256:
+        return BCRYPT_ECDSA_P256_ALGORITHM;
+    case AlgorithmId::EcdsaSecp384r1Sha384:
+        return BCRYPT_ECDSA_P384_ALGORITHM;
+    default:
+        return nullptr;
+    }
+}
+
+// The field length of the curve `algorithm` names (its coordinates, r and s).
+[[nodiscard]] usize field_of(AlgorithmId algorithm) noexcept
+{
+    return algorithm == AlgorithmId::EcdsaSecp384r1Sha384 ? 48U : 32U;
+}
+
+// The public key of a device key as an uncompressed SEC 1 point (0x04, x, y), from the provider's ECC public blob.
+[[nodiscard]] CryptoError export_point(NCRYPT_KEY_HANDLE key, AlgorithmId algorithm, cont::Span<u8> point) noexcept
+{
+    const usize field = field_of(algorithm);
+    u8          blob[sizeof(BCRYPT_ECCKEY_BLOB) + 2U * 48U];
+    DWORD       written = 0U;
+    if (point.size() != 1U + 2U * field ||
+        NCryptExportKey(key, 0U, BCRYPT_ECCPUBLIC_BLOB, nullptr, blob, static_cast<DWORD>(sizeof(blob)), &written,
+                        NCRYPT_SILENT_FLAG) != ERROR_SUCCESS)
+    {
+        return CryptoError::ProviderFailure;
+    }
+    BCRYPT_ECCKEY_BLOB header{};
+    std::memcpy(&header, blob, sizeof(header));
+    if (written != sizeof(header) + 2U * field || header.cbKey != field)
+    {
+        return CryptoError::ProviderFailure;
+    }
+    point[0] = 0x04U;
+    std::memcpy(point.data() + 1U, blob + sizeof(header), 2U * field);
+    return CryptoError::None;
+}
+
+// A new persisted sign-only ECDSA key in the TPM named for the store and `handle`, and its public key.
+[[nodiscard]] CryptoError create_signer(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> handle,
+                                        AlgorithmId algorithm, cont::Span<u8> point) noexcept
+{
+    Handle provider;
+    if (!open_provider(provider))
+    {
+        return CryptoError::Unavailable;
+    }
+    wchar_t name[kNameChars];
+    name_of(kSignerPrefix, store_id, handle, name);
+    Handle                key;
+    const SECURITY_STATUS created =
+        NCryptCreatePersistedKey(static_cast<NCRYPT_PROV_HANDLE>(provider.get()),
+                                 reinterpret_cast<NCRYPT_KEY_HANDLE*>(key.put()), curve_of(algorithm), name, 0U, 0U);
+    if (created != ERROR_SUCCESS)
+    {
+        return created == NTE_NOT_SUPPORTED || created == NTE_BAD_ALGID ? CryptoError::Unsupported
+                                                                         : CryptoError::Unavailable;
+    }
+    const auto      key_handle = static_cast<NCRYPT_KEY_HANDLE>(key.get());
+    DWORD           usage      = NCRYPT_ALLOW_SIGNING_FLAG;
+    SECURITY_STATUS status =
+        NCryptSetProperty(key_handle, NCRYPT_KEY_USAGE_PROPERTY, reinterpret_cast<PBYTE>(&usage), sizeof(usage), 0U);
+    if (status == ERROR_SUCCESS)
+    {
+        status = NCryptFinalizeKey(key_handle, NCRYPT_SILENT_FLAG);
+    }
+    if (status != ERROR_SUCCESS)
+    {
+        // An unfinalised key is not persisted; a TPM without the curve refuses it here.
+        return status == NTE_NOT_SUPPORTED || status == NTE_BAD_ALGID ? CryptoError::Unsupported
+                                                                       : CryptoError::Unavailable;
+    }
+    const CryptoError exported = export_point(key_handle, algorithm, point);
+    if (exported != CryptoError::None)
+    {
+        (void)NCryptDeleteKey(static_cast<NCRYPT_KEY_HANDLE>(key.release()), 0U);
+    }
+    return exported;
 }
 } // namespace
 
@@ -252,7 +362,7 @@ CryptoError TpmKeyProtector::recover(cont::ConstSpan<u8> store_id, cont::ConstSp
         return CryptoError::Denied; // not a reference this protector wrote
     }
     Handle      key;
-    CryptoError result = open_key(store_id, reference.subspan(1U, kHandleBytes), key);
+    CryptoError result = open_key(kNamePrefix, store_id, reference.subspan(1U, kHandleBytes), key);
     if (result != CryptoError::None)
     {
         return result;
@@ -283,20 +393,93 @@ CryptoError TpmKeyProtector::forget(cont::ConstSpan<u8> store_id, cont::ConstSpa
     {
         return CryptoError::Denied;
     }
-    Handle            key;
-    const CryptoError result = open_key(store_id, reference.subspan(1U, kHandleBytes), key);
-    if (result == CryptoError::Denied)
+    return delete_key(kNamePrefix, store_id, reference.subspan(1U, kHandleBytes));
+}
+
+bool TpmKeyDevice::available() noexcept
+{
+    return TpmKeyProtector::available();
+}
+
+cont::StringView TpmKeyDevice::name() const noexcept
+{
+    return "tpm-pcp";
+}
+
+CryptoError TpmKeyDevice::create(cont::ConstSpan<u8> store_id, AlgorithmId algorithm, cont::Array<u8>& reference,
+                                 cont::Span<u8> public_key) noexcept
+{
+    reference.clear();
+    if (curve_of(algorithm) == nullptr)
     {
-        return CryptoError::None; // forgotten already
+        return CryptoError::Unsupported;
     }
+    if (store_id.size() != kKeyStoreIdBytes || public_key.size() != 1U + 2U * field_of(algorithm))
+    {
+        return CryptoError::BadLength;
+    }
+    u8          written[kDeviceReferenceBytes] = {kReferenceFormat};
+    CryptoError result                         = random_bytes(cont::Span<u8>(written + 1U, kHandleBytes));
+    if (result == CryptoError::None)
+    {
+        result = create_signer(store_id, cont::ConstSpan<u8>(written + 1U, kHandleBytes), algorithm, public_key);
+    }
+    if (result == CryptoError::None)
+    {
+        reference.resize(kDeviceReferenceBytes);
+        std::memcpy(reference.data(), written, kDeviceReferenceBytes);
+    }
+    return result;
+}
+
+CryptoError TpmKeyDevice::sign_digest(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference,
+                                      AlgorithmId algorithm, cont::ConstSpan<u8> digest,
+                                      cont::Span<u8> signature) const noexcept
+{
+    secure_zero(signature);
+    const usize field = curve_of(algorithm) != nullptr ? field_of(algorithm) : 0U;
+    if (field == 0U)
+    {
+        return CryptoError::Unsupported;
+    }
+    if (store_id.size() != kKeyStoreIdBytes || digest.size() != field || signature.size() != 2U * field)
+    {
+        return CryptoError::BadLength;
+    }
+    if (reference.size() != kDeviceReferenceBytes || reference[0] != kReferenceFormat)
+    {
+        return CryptoError::Denied; // not a reference this device wrote
+    }
+    // A handle per call: the provider's key handles are not documented as safe across threads, and the TPM
+    // serialises its commands anyway.
+    Handle            key;
+    const CryptoError result = open_key(kSignerPrefix, store_id, reference.subspan(1U, kHandleBytes), key);
     if (result != CryptoError::None)
     {
         return result;
     }
-    // The provider takes no flag on deletion (NCRYPT_SILENT_FLAG is NTE_BAD_FLAGS there).
-    return NCryptDeleteKey(static_cast<NCRYPT_KEY_HANDLE>(key.release()), 0U) == ERROR_SUCCESS
-               ? CryptoError::None
-               : CryptoError::StorageFailure;
+    u8    hash[48];
+    DWORD written = 0U;
+    std::memcpy(hash, digest.data(), field);
+    const SECURITY_STATUS status =
+        NCryptSignHash(static_cast<NCRYPT_KEY_HANDLE>(key.get()), nullptr, hash, static_cast<DWORD>(field),
+                       signature.data(), static_cast<DWORD>(signature.size()), &written, NCRYPT_SILENT_FLAG);
+    if (status != ERROR_SUCCESS || written != signature.size())
+    {
+        secure_zero(signature);
+        return CryptoError::ProviderFailure;
+    }
+    return CryptoError::None;
+}
+
+CryptoError TpmKeyDevice::forget(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference) noexcept
+{
+    if (store_id.size() != kKeyStoreIdBytes || reference.size() != kDeviceReferenceBytes ||
+        reference[0] != kReferenceFormat)
+    {
+        return CryptoError::Denied;
+    }
+    return delete_key(kSignerPrefix, store_id, reference.subspan(1U, kHandleBytes));
 }
 #else
 bool TpmKeyProtector::available() noexcept
@@ -337,6 +520,36 @@ CryptoError TpmKeyProtector::recover(cont::ConstSpan<u8> store_id, cont::ConstSp
 }
 
 CryptoError TpmKeyProtector::forget(cont::ConstSpan<u8> /*store_id*/, cont::ConstSpan<u8> /*reference*/) noexcept
+{
+    return CryptoError::Unavailable;
+}
+
+bool TpmKeyDevice::available() noexcept
+{
+    return false;
+}
+
+cont::StringView TpmKeyDevice::name() const noexcept
+{
+    return "unavailable";
+}
+
+CryptoError TpmKeyDevice::create(cont::ConstSpan<u8> /*store_id*/, AlgorithmId /*algorithm*/,
+                                 cont::Array<u8>& reference, cont::Span<u8> /*public_key*/) noexcept
+{
+    reference.clear();
+    return CryptoError::Unavailable;
+}
+
+CryptoError TpmKeyDevice::sign_digest(cont::ConstSpan<u8> /*store_id*/, cont::ConstSpan<u8> /*reference*/,
+                                      AlgorithmId /*algorithm*/, cont::ConstSpan<u8> /*digest*/,
+                                      cont::Span<u8> signature) const noexcept
+{
+    secure_zero(signature);
+    return CryptoError::Unavailable;
+}
+
+CryptoError TpmKeyDevice::forget(cont::ConstSpan<u8> /*store_id*/, cont::ConstSpan<u8> /*reference*/) noexcept
 {
     return CryptoError::Unavailable;
 }

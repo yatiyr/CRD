@@ -1,10 +1,11 @@
-// crd-crypto -- the key store (NET.2; docs/design/network-foundation.md#key-store, decisions K1 to K11): every kind
+// crd-crypto -- the key store (NET.2; docs/design/network-foundation.md#key-store, decisions K1 to K12): every kind
 // of key generated, imported, used, rotated, revoked and destroyed across reopenings; the master key replaced on
 // revocation so an earlier copy of the store no longer opens; an interrupted replacement completed by the next change;
 // every byte of a store file changed and refused; a damaged, truncated, older or substituted store refused; writers in
 // several threads ordered by the store's lock; a store erased; DPAPI and the TPM guarding the master key on Windows and
 // the Secret Service on Linux (under a pinned gnome-keyring, hidden from the default run); a TLS credential from a
-// stored signer.
+// stored signer; signature keys held in a device (a simulated one everywhere, the TPM on Windows), signing their
+// certificates and handshakes through the provider's private-key method.
 
 #include <crd/core/environment.hpp>
 #include <crd/core/platform.hpp>
@@ -15,6 +16,12 @@
 #include <crd/platform/threading.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+
+#include <openssl/bn.h>
+#include <openssl/ec.h>
+#include <openssl/ec_key.h>
+#include <openssl/ecdsa.h>
+#include <openssl/nid.h>
 
 #include <atomic>
 #include <chrono>
@@ -63,6 +70,43 @@ public:
 
 private:
     fs::Path m_path;
+};
+
+// Erases a store when its scope ends, whatever the case's outcome, so a failed run leaves no key in a device or TPM.
+class EraseOnExit
+{
+public:
+    explicit EraseOnExit(KeyStore& store) : m_store(store) {}
+    EraseOnExit(const EraseOnExit&)            = delete;
+    EraseOnExit& operator=(const EraseOnExit&) = delete;
+    ~EraseOnExit()
+    {
+        if (m_store.ready())
+        {
+            (void)m_store.erase();
+        }
+    }
+
+private:
+    KeyStore& m_store;
+};
+
+// Deletes a device key made outside a store when its scope ends, whatever the case's outcome.
+class ForgetOnExit
+{
+public:
+    ForgetOnExit(KeyDevice& device, ConstSpan<u8> store_id, const Bytes& reference)
+        : m_device(device), m_store_id(store_id), m_reference(reference)
+    {
+    }
+    ForgetOnExit(const ForgetOnExit&)            = delete;
+    ForgetOnExit& operator=(const ForgetOnExit&) = delete;
+    ~ForgetOnExit() { (void)m_device.forget(m_store_id, ConstSpan<u8>(m_reference.data(), m_reference.size())); }
+
+private:
+    KeyDevice&    m_device;
+    ConstSpan<u8> m_store_id;
+    const Bytes&  m_reference;
 };
 
 // The application's protector of the tests: master keys held in memory under random references, each bound to its
@@ -1211,6 +1255,7 @@ TEST_CASE("Key store: the TPM protector keeps and forgets a master key", "[crypt
     TempStore dir("tpm");
     KeyStore  store;
     REQUIRE(store.create(dir.dir(), tpm) == CryptoError::None);
+    const EraseOnExit erase_on_exit(store);
     CHECK(store.protection() == KeyProtection::Hardware);
     REQUIRE(store.generate("identity", AlgorithmId::MlDsa65, PlacementRequest::Software, 1U) == CryptoError::None);
     REQUIRE(store.generate("tickets", AlgorithmId::Aes256Gcm, PlacementRequest::Software, 1U) == CryptoError::None);
@@ -1451,4 +1496,648 @@ TEST_CASE("Key store: a TLS credential from a stored signer", "[crypto][key-stor
     CHECK(credential.ready());
     TlsCredential none;
     CHECK(none.init(signer, "server.example") == TlsError::NotReady);
+}
+
+// ---- Device keys (decisions K8 and K12) ----
+
+namespace
+{
+constexpr u8 kTestDeviceFormat = 0x7EU;
+
+// A device of the tests: ECDSA keys in memory (the provider's EC keys), each named by a random handle bound to its
+// store, signing digests into r || s as a device does. It can refuse a curve, fail its calls, or sign with a key other
+// than the one named (a faulty or substituted device), and counts its keys and calls.
+class TestDevice final : public KeyDevice
+{
+public:
+    TestDevice()                             = default;
+    TestDevice(const TestDevice&)            = delete;
+    TestDevice& operator=(const TestDevice&) = delete;
+    ~TestDevice()
+    {
+        for (Slot& slot : m_slots)
+        {
+            EC_KEY_free(slot.key);
+        }
+    }
+
+    [[nodiscard]] StringView name() const noexcept override { return "test-device"; }
+
+    [[nodiscard]] CryptoError create(ConstSpan<u8> store_id, AlgorithmId algorithm, Bytes& reference,
+                                     Span<u8> public_key) noexcept override
+    {
+        ++creates;
+        reference.clear();
+        const int nid = curve_nid(algorithm);
+        if (fail_create != CryptoError::None)
+        {
+            return fail_create;
+        }
+        if (nid == 0 || algorithm == refused)
+        {
+            return CryptoError::Unsupported;
+        }
+        Slot* slot = free_slot();
+        REQUIRE(slot != nullptr);
+        slot->key = EC_KEY_new_by_curve_name(nid);
+        REQUIRE((slot->key != nullptr && EC_KEY_generate_key(slot->key) == 1));
+        REQUIRE(random_bytes(Span<u8>(slot->handle)) == CryptoError::None);
+        std::memcpy(slot->store, store_id.data(), kKeyStoreIdBytes);
+        REQUIRE(EC_POINT_point2oct(EC_KEY_get0_group(slot->key), EC_KEY_get0_public_key(slot->key),
+                                   POINT_CONVERSION_UNCOMPRESSED, public_key.data(), public_key.size(),
+                                   nullptr) == public_key.size());
+        reference.push_back(kTestDeviceFormat);
+        for (const u8 byte : slot->handle)
+        {
+            reference.push_back(byte);
+        }
+        return CryptoError::None;
+    }
+
+    [[nodiscard]] CryptoError sign_digest(ConstSpan<u8> store_id, ConstSpan<u8> reference, AlgorithmId algorithm,
+                                          ConstSpan<u8> digest, Span<u8> signature) const noexcept override
+    {
+        signs.fetch_add(1U);
+        const Slot* slot = find(store_id, reference);
+        if (fail_sign != CryptoError::None)
+        {
+            return fail_sign;
+        }
+        if (slot == nullptr)
+        {
+            return CryptoError::Denied;
+        }
+        const usize field = algorithm == AlgorithmId::EcdsaSecp384r1Sha384 ? 48U : 32U;
+        REQUIRE((digest.size() == field && signature.size() == 2U * field));
+        EC_KEY* other = nullptr;
+        if (wrong_key)
+        {
+            other = EC_KEY_new_by_curve_name(curve_nid(algorithm));
+            REQUIRE((other != nullptr && EC_KEY_generate_key(other) == 1));
+        }
+        ECDSA_SIG* made = ECDSA_do_sign(digest.data(), digest.size(), other != nullptr ? other : slot->key);
+        EC_KEY_free(other);
+        REQUIRE(made != nullptr);
+        const bool written =
+            BN_bn2bin_padded(signature.data(), field, ECDSA_SIG_get0_r(made)) == 1 &&
+            BN_bn2bin_padded(signature.data() + field, field, ECDSA_SIG_get0_s(made)) == 1;
+        ECDSA_SIG_free(made);
+        return written ? CryptoError::None : CryptoError::ProviderFailure;
+    }
+
+    [[nodiscard]] CryptoError forget(ConstSpan<u8> store_id, ConstSpan<u8> reference) noexcept override
+    {
+        ++forgets;
+        if (fail_forget != CryptoError::None)
+        {
+            return fail_forget;
+        }
+        if (Slot* slot = const_cast<Slot*>(find(store_id, reference)); slot != nullptr)
+        {
+            EC_KEY_free(slot->key);
+            *slot = Slot{};
+        }
+        return CryptoError::None;
+    }
+
+    // The keys it holds now.
+    [[nodiscard]] usize live() const
+    {
+        usize count = 0U;
+        for (const Slot& slot : m_slots)
+        {
+            count += slot.key != nullptr ? 1U : 0U;
+        }
+        return count;
+    }
+
+    AlgorithmId        refused{};                       // a curve it does not hold
+    CryptoError        fail_create = CryptoError::None; // what create(), sign_digest() and forget() answer instead
+    CryptoError        fail_sign   = CryptoError::None;
+    CryptoError        fail_forget = CryptoError::None;
+    bool               wrong_key   = false;
+    usize              creates     = 0U;
+    usize              forgets     = 0U;
+    mutable std::atomic<usize> signs{0U};
+
+private:
+    struct Slot
+    {
+        EC_KEY* key                     = nullptr;
+        u8      store[kKeyStoreIdBytes] = {};
+        u8      handle[16]              = {};
+    };
+
+    [[nodiscard]] static int curve_nid(AlgorithmId algorithm)
+    {
+        if (algorithm == AlgorithmId::EcdsaSecp256r1Sha256)
+        {
+            return NID_X9_62_prime256v1;
+        }
+        return algorithm == AlgorithmId::EcdsaSecp384r1Sha384 ? NID_secp384r1 : 0;
+    }
+
+    [[nodiscard]] Slot* free_slot()
+    {
+        for (Slot& slot : m_slots)
+        {
+            if (slot.key == nullptr)
+            {
+                return &slot;
+            }
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] const Slot* find(ConstSpan<u8> store_id, ConstSpan<u8> reference) const
+    {
+        if (store_id.size() != kKeyStoreIdBytes || reference.size() != 17U || reference[0] != kTestDeviceFormat)
+        {
+            return nullptr;
+        }
+        for (const Slot& slot : m_slots)
+        {
+            if (slot.key != nullptr && std::memcmp(slot.store, store_id.data(), kKeyStoreIdBytes) == 0 &&
+                std::memcmp(slot.handle, reference.data() + 1U, sizeof(slot.handle)) == 0)
+            {
+                return &slot;
+            }
+        }
+        return nullptr;
+    }
+
+    Slot m_slots[32];
+};
+
+// The listing of `name`'s `generation` (0: its Current one), which must exist.
+[[nodiscard]] const KeyInfo& info_of(const KeyStore& store, StringView name, u32 generation = 0U)
+{
+    const KeyInfo* info = store.find(name, generation);
+    REQUIRE(info != nullptr);
+    return *info;
+}
+
+constexpr AlgorithmId kDeviceGroups[]     = {AlgorithmId::X25519Mlkem768};
+constexpr AlgorithmId kDeviceAeads[]      = {AlgorithmId::Aes128Gcm};
+constexpr AlgorithmId kDeviceSignatures[] = {AlgorithmId::EcdsaSecp256r1Sha256, AlgorithmId::EcdsaSecp384r1Sha384};
+
+// Moves one session's pending bytes to the other.
+void deliver(TlsSession& from, TlsSession& to)
+{
+    Bytes bytes;
+    bytes.resize(from.pending());
+    usize written = 0U;
+    REQUIRE(from.take(Span<u8>(bytes.data(), bytes.size()), written) == TlsError::None);
+    if (written != 0U && to.state() != TlsState::Failed)
+    {
+        (void)to.receive(ConstSpan<u8>(bytes.data(), written));
+    }
+}
+
+// A handshake between a server of `server_credential` and a client pinning it, the client presenting
+// `client_credential` (mutual authentication) when one is given; the two sessions' states when neither sends more.
+struct Handshake
+{
+    TlsState client = TlsState::Failed;
+    TlsState server = TlsState::Failed;
+};
+
+Handshake handshake(const TlsCredential& server_credential, const TlsCredential* client_credential)
+{
+    const KeyId server_pin = server_credential.key_id();
+    TlsConfig   client_config;
+    client_config.role        = TlsRole::Client;
+    client_config.groups      = kDeviceGroups;
+    client_config.aeads       = kDeviceAeads;
+    client_config.signatures  = kDeviceSignatures;
+    client_config.pinned      = ConstSpan<KeyId>(&server_pin, 1U);
+    client_config.server_name = "device.cerid.test";
+    client_config.credential  = client_credential;
+    KeyId     client_pin      = client_credential != nullptr ? client_credential->key_id() : KeyId{};
+    TlsConfig server_config;
+    server_config.role        = TlsRole::Server;
+    server_config.groups      = kDeviceGroups;
+    server_config.aeads       = kDeviceAeads;
+    server_config.credential  = &server_credential;
+    server_config.server_name = "device.cerid.test";
+    if (client_credential != nullptr)
+    {
+        server_config.signatures = kDeviceSignatures;
+        server_config.pinned     = ConstSpan<KeyId>(&client_pin, 1U);
+    }
+    TlsContext client_context;
+    TlsContext server_context;
+    REQUIRE(client_context.init(client_config) == TlsError::None);
+    REQUIRE(server_context.init(server_config) == TlsError::None);
+    TlsSession client;
+    TlsSession server;
+    REQUIRE(client.init(client_context) == TlsError::None);
+    REQUIRE(server.init(server_context) == TlsError::None);
+    for (int round = 0; round < 16 && (client.pending() > 0U || server.pending() > 0U); ++round)
+    {
+        deliver(client, server);
+        deliver(server, client);
+    }
+    return Handshake{client.state(), server.state()};
+}
+
+// A device key's signature through the store's signer: valid DER under the stored public key (check_signs), the
+// signer naming the device and the key's placement.
+void check_device_signs(const KeyStore& store, StringView name)
+{
+    StoredSigner signer;
+    REQUIRE(store.signer(name, signer) == CryptoError::None);
+    CHECK(signer.device() != nullptr);
+    CHECK(signer.info().placement == KeyPlacement::Hardware);
+    check_signs(store, name);
+}
+} // namespace
+
+TEST_CASE("Key store: device keys by placement, with their fallbacks and refusals", "[crypto][key-store]")
+{
+    TempStore     plain_dir("device-none");
+    TestProtector protector;
+    KeyStore      plain;
+    REQUIRE(plain.create(plain_dir.dir(), protector) == CryptoError::None);
+    // Without a device: HardwarePreferred keeps the key in the sealed file, HardwareRequired is Unsupported.
+    REQUIRE(plain.generate("preferred", AlgorithmId::EcdsaSecp256r1Sha256, PlacementRequest::HardwarePreferred, 1U) ==
+            CryptoError::None);
+    CHECK(info_of(plain, "preferred").placement == KeyPlacement::Software);
+    CHECK(plain.generate("required", AlgorithmId::EcdsaSecp256r1Sha256, PlacementRequest::HardwareRequired, 1U) ==
+          CryptoError::Unsupported);
+    CHECK(plain.find("required") == nullptr);
+
+    TempStore  dir("device");
+    TestDevice device;
+    device.refused = AlgorithmId::EcdsaSecp384r1Sha384;
+    KeyStore store;
+    REQUIRE(store.create(dir.dir(), protector, &device) == CryptoError::None);
+    REQUIRE(store.generate("tpm-signer", AlgorithmId::EcdsaSecp256r1Sha256, PlacementRequest::HardwareRequired, 10U) ==
+            CryptoError::None);
+    const KeyInfo* held = store.find("tpm-signer");
+    REQUIRE(held != nullptr);
+    CHECK(held->placement == KeyPlacement::Hardware);
+    CHECK(held->kind == KeyKind::Signature);
+    CHECK(device.live() == 1U);
+    CHECK(held->id == key_id_of(ConstSpan<u8>(public_of(store, "tpm-signer", 1U).data(), 65U)));
+    check_device_signs(store, "tpm-signer");
+
+    // The device does not hold P-384: HardwarePreferred falls back to the file, HardwareRequired is Unsupported, and
+    // neither leaves a key in the device. No other kind or algorithm is asked of the device at all.
+    REQUIRE(store.generate("p384", AlgorithmId::EcdsaSecp384r1Sha384, PlacementRequest::HardwarePreferred, 10U) ==
+            CryptoError::None);
+    CHECK(info_of(store, "p384").placement == KeyPlacement::Software);
+    CHECK(store.generate("p384-hw", AlgorithmId::EcdsaSecp384r1Sha384, PlacementRequest::HardwareRequired, 10U) ==
+          CryptoError::Unsupported);
+    const usize creates = device.creates;
+    REQUIRE(store.generate("ed", AlgorithmId::Ed25519, PlacementRequest::HardwarePreferred, 10U) == CryptoError::None);
+    REQUIRE(store.generate("mldsa", AlgorithmId::MlDsa65, PlacementRequest::HardwarePreferred, 10U) ==
+            CryptoError::None);
+    REQUIRE(store.generate("agree", AlgorithmId::X25519, PlacementRequest::HardwarePreferred, 10U) ==
+            CryptoError::None);
+    CHECK(store.generate("agree-hw", AlgorithmId::X25519, PlacementRequest::HardwareRequired, 10U) ==
+          CryptoError::Unsupported);
+    CHECK(store.generate("ed-hw", AlgorithmId::Ed25519, PlacementRequest::HardwareRequired, 10U) ==
+          CryptoError::Unsupported);
+    CHECK(device.creates == creates);
+    CHECK(info_of(store, "ed").placement == KeyPlacement::Software);
+    CHECK(device.live() == 1U);
+
+    // A device that fails (not one that lacks the curve) fails the change, Preferred or not: no silent fallback.
+    device.fail_create = CryptoError::Unavailable;
+    CHECK(store.generate("down", AlgorithmId::EcdsaSecp256r1Sha256, PlacementRequest::HardwarePreferred, 10U) ==
+          CryptoError::Unavailable);
+    CHECK(store.find("down") == nullptr);
+    device.fail_create = CryptoError::None;
+
+    // A device signature under another key is caught before it leaves the signer.
+    StoredSigner signer;
+    REQUIRE(store.signer("tpm-signer", signer) == CryptoError::None);
+    u8        signature[128];
+    usize     written   = 0U;
+    const u8  message[] = {'d', 'e', 'v'};
+    device.wrong_key    = true;
+    CHECK(signer.sign(ConstSpan<u8>(message), Span<u8>(signature), written) == CryptoError::ProviderFailure);
+    CHECK(written == 0U);
+    device.wrong_key = false;
+    device.fail_sign = CryptoError::Denied;
+    CHECK(signer.sign(ConstSpan<u8>(message), Span<u8>(signature), written) == CryptoError::Denied);
+    device.fail_sign = CryptoError::None;
+    CHECK(signer.sign(ConstSpan<u8>(message), Span<u8>(signature, 70U), written) == CryptoError::BadLength);
+    REQUIRE(signer.sign(ConstSpan<u8>(message), Span<u8>(signature), written) == CryptoError::None);
+    CHECK((written >= 8U && written <= signature_sizes(AlgorithmId::EcdsaSecp256r1Sha256).signature));
+    CHECK(signature[0] == 0x30U); // a DER SEQUENCE, the form SigningKey signs in
+
+    // Copied signers sign on several threads at once.
+    std::thread threads[4];
+    std::atomic<usize> valid{0U};
+    for (std::thread& thread : threads)
+    {
+        thread = std::thread(
+            [&]
+            {
+                const StoredSigner& shared = signer;
+                for (usize i = 0U; i < 8U; ++i)
+                {
+                    u8    out[128];
+                    usize length = 0U;
+                    if (shared.sign(ConstSpan<u8>(message), Span<u8>(out), length) == CryptoError::None)
+                    {
+                        valid.fetch_add(1U);
+                    }
+                }
+            });
+    }
+    for (std::thread& thread : threads)
+    {
+        thread.join();
+    }
+    CHECK(valid.load() == 32U);
+
+    // Reopened with its device the store signs; without it the key is listed but signs nowhere, and no change that
+    // would touch the device runs.
+    KeyStore with;
+    REQUIRE(with.open(dir.dir(), protector, &device) == CryptoError::None);
+    check_device_signs(with, "tpm-signer");
+    KeyStore without;
+    REQUIRE(without.open(dir.dir(), protector) == CryptoError::None);
+    CHECK(info_of(without, "tpm-signer").placement == KeyPlacement::Hardware);
+    StoredSigner none;
+    CHECK(without.signer("tpm-signer", none) == CryptoError::Unavailable);
+    CHECK_FALSE(none.ready());
+    CHECK(without.rotate("tpm-signer", 11U) == CryptoError::Unavailable);
+    CHECK(without.revoke("tpm-signer", 1U, 11U) == CryptoError::Unavailable);
+    CHECK(without.destroy("tpm-signer") == CryptoError::Unavailable);
+    CHECK(info_of(without, "tpm-signer", 1U).state == KeyState::Current);
+    REQUIRE(without.generate("file-key", AlgorithmId::Ed25519, PlacementRequest::Software, 11U) == CryptoError::None);
+    REQUIRE(store.refresh() == CryptoError::None);
+    CHECK(device.live() == 1U);
+
+    // Rotation stays in the device; a device key is never imported.
+    REQUIRE(store.rotate("tpm-signer", 12U) == CryptoError::None);
+    CHECK(info_of(store, "tpm-signer", 2U).placement == KeyPlacement::Hardware);
+    CHECK(info_of(store, "tpm-signer", 1U).state == KeyState::Retired);
+    CHECK(device.live() == 2U);
+    u8 seed[32] = {1};
+    CHECK(store.rotate_import("tpm-signer", ConstSpan<u8>(seed), 12U) == CryptoError::Unsupported);
+    check_device_signs(store, "tpm-signer");
+
+    // Revocation deletes the device key first: a device that will not forget leaves the store as it was.
+    const Bytes before = payload_of(dir);
+    device.fail_forget = CryptoError::StorageFailure;
+    CHECK(store.revoke("tpm-signer", 1U, 13U) == CryptoError::StorageFailure);
+    CHECK(info_of(store, "tpm-signer", 1U).state == KeyState::Retired);
+    const Bytes after = payload_of(dir);
+    CHECK((before.size() == after.size() && std::memcmp(before.data(), after.data(), before.size()) == 0));
+    CHECK(device.live() == 2U);
+    device.fail_forget = CryptoError::None;
+    REQUIRE(store.revoke("tpm-signer", 1U, 13U) == CryptoError::None);
+    CHECK(info_of(store, "tpm-signer", 1U).state == KeyState::Revoked);
+    CHECK(device.live() == 1U);
+    // Revoking the Current generation deletes its key too, so the name signs no more until it rotates.
+    REQUIRE(store.revoke("tpm-signer", 2U, 14U) == CryptoError::None);
+    CHECK(device.live() == 0U);
+    CHECK(store.signer("tpm-signer", signer) == CryptoError::Revoked);
+    REQUIRE(store.rotate("tpm-signer", 15U) == CryptoError::None);
+    CHECK(device.live() == 1U);
+
+    // A device key made for a change whose save fails is deleted again: no key is left that no store names.
+    const fs::Path in_flight = fs::Path(dir.dir()) / "keys.tmp"; // a directory where the save writes: it fails
+    REQUIRE(fs::create_directories(in_flight));
+    CHECK(store.generate("unsaved", AlgorithmId::EcdsaSecp256r1Sha256, PlacementRequest::HardwareRequired, 16U) ==
+          CryptoError::StorageFailure);
+    CHECK(device.live() == 1U);
+    REQUIRE(fs::remove_all(in_flight));
+
+    // Destruction deletes every generation's device key; erasure every key the device still holds for the store.
+    REQUIRE(store.generate("second", AlgorithmId::EcdsaSecp256r1Sha256, PlacementRequest::HardwareRequired, 17U) ==
+            CryptoError::None);
+    CHECK(device.live() == 2U);
+    REQUIRE(store.destroy("tpm-signer") == CryptoError::None);
+    CHECK(device.live() == 1U);
+    device.fail_forget = CryptoError::Unavailable;
+    CHECK(store.erase() == CryptoError::Unavailable);
+    CHECK(store.ready());
+    device.fail_forget = CryptoError::None;
+    REQUIRE(store.erase() == CryptoError::None);
+    CHECK(device.live() == 0U);
+}
+
+TEST_CASE("Key store: a TLS credential from a device key signs its certificate and every handshake",
+          "[crypto][key-store]")
+{
+    TempStore     dir("device-tls");
+    TestProtector protector;
+    TestDevice    device;
+    KeyStore      store;
+    REQUIRE(store.create(dir.dir(), protector, &device) == CryptoError::None);
+    REQUIRE(store.generate("server", AlgorithmId::EcdsaSecp256r1Sha256, PlacementRequest::HardwareRequired, 1U) ==
+            CryptoError::None);
+    REQUIRE(store.generate("client", AlgorithmId::EcdsaSecp384r1Sha384, PlacementRequest::HardwareRequired, 1U) ==
+            CryptoError::None);
+    StoredSigner server_signer;
+    StoredSigner client_signer;
+    REQUIRE(store.signer("server", server_signer) == CryptoError::None);
+    REQUIRE(store.signer("client", client_signer) == CryptoError::None);
+
+    // The certificate is signed in the device (and checked under its key) at init.
+    const usize   signs_before = device.signs.load();
+    TlsCredential server;
+    REQUIRE(server.init(server_signer, "device.cerid.test") == TlsError::None);
+    CHECK(device.signs.load() == signs_before + 1U);
+    CHECK(server.algorithm() == AlgorithmId::EcdsaSecp256r1Sha256);
+    CHECK(server.key_id() == info_of(store, "server").id);
+    TlsCredential client;
+    REQUIRE(client.init(client_signer, "player.cerid.test") == TlsError::None);
+    CHECK(client.algorithm() == AlgorithmId::EcdsaSecp384r1Sha384);
+
+    // The credential keeps its own copy of the signer: the signer and the store may go.
+    server_signer.clear();
+    client_signer.clear();
+    store.close();
+
+    // Each end signs its CertificateVerify in the device, through the provider's private-key method.
+    const usize     signs_at_handshake = device.signs.load();
+    const Handshake mutual             = handshake(server, &client);
+    CHECK(mutual.client == TlsState::Established);
+    CHECK(mutual.server == TlsState::Established);
+    CHECK(device.signs.load() == signs_at_handshake + 2U);
+
+    // A device that refuses mid-handshake fails it; nothing is signed by anything else.
+    device.fail_sign            = CryptoError::Denied;
+    const Handshake refused     = handshake(server, nullptr);
+    CHECK(refused.client != TlsState::Established);
+    CHECK(refused.server != TlsState::Established);
+    device.fail_sign = CryptoError::None;
+    // A device signing under another key gives no handshake signature at all.
+    device.wrong_key        = true;
+    const Handshake forged  = handshake(server, nullptr);
+    CHECK(forged.client != TlsState::Established);
+    device.wrong_key = false;
+    // And a device that cannot sign the certificate makes no credential.
+    device.fail_sign = CryptoError::Unavailable;
+    StoredSigner  later;
+    KeyStore      reopened;
+    REQUIRE(reopened.open(dir.dir(), protector, &device) == CryptoError::None);
+    REQUIRE(reopened.signer("server", later) == CryptoError::None);
+    TlsCredential failed;
+    CHECK(failed.init(later, "device.cerid.test") == TlsError::ProviderFailure);
+    CHECK_FALSE(failed.ready());
+    device.fail_sign = CryptoError::None;
+    CHECK(handshake(server, nullptr).client == TlsState::Established);
+}
+
+TEST_CASE("Key store: the TPM device's contract", "[crypto][key-store]")
+{
+    TpmKeyDevice tpm;
+    const u8     store_id[kKeyStoreIdBytes] = {7, 7, 7};
+    Bytes        reference;
+    reference.push_back(1U);
+    u8 point[97];
+    u8 digest[48]    = {};
+    u8 signature[96] = {0x42};
+#if CRD_OS_WINDOWS
+    CHECK(tpm.name() == StringView("tpm-pcp"));
+    // Every algorithm but ECDSA is refused before the TPM is asked, as are wrong lengths and references this device
+    // did not write.
+    CHECK(tpm.create(ConstSpan<u8>(store_id), AlgorithmId::Ed25519, reference, Span<u8>(point, 32U)) ==
+          CryptoError::Unsupported);
+    CHECK(reference.empty());
+    CHECK(tpm.create(ConstSpan<u8>(store_id, 15U), AlgorithmId::EcdsaSecp256r1Sha256, reference,
+                     Span<u8>(point, 65U)) == CryptoError::BadLength);
+    CHECK(tpm.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp256r1Sha256, reference, Span<u8>(point, 97U)) ==
+          CryptoError::BadLength);
+    u8 foreign[17] = {1U};
+    CHECK(tpm.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign, 16U), AlgorithmId::EcdsaSecp256r1Sha256,
+                          ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Denied);
+    foreign[0] = 2U;
+    CHECK(tpm.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign), AlgorithmId::EcdsaSecp256r1Sha256,
+                          ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Denied);
+    CHECK(tpm.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign), AlgorithmId::EcdsaSecp256r1Sha256,
+                          ConstSpan<u8>(digest, 48U), Span<u8>(signature, 64U)) == CryptoError::BadLength);
+    CHECK(tpm.sign_digest(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign), AlgorithmId::Ed25519,
+                          ConstSpan<u8>(digest, 32U), Span<u8>(signature, 64U)) == CryptoError::Unsupported);
+    CHECK(tpm.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign)) == CryptoError::Denied);
+    CHECK(tpm.forget(ConstSpan<u8>(store_id, 15U), ConstSpan<u8>(foreign)) == CryptoError::Denied);
+#else
+    // No TPM device here yet: every call is Unavailable, and a store given it fails a device key's generation (an
+    // absent device is not a curve it lacks, so HardwarePreferred does not hide it), while file keys are made as ever.
+    CHECK(tpm.name() == StringView("unavailable"));
+    CHECK_FALSE(TpmKeyDevice::available());
+    CHECK(tpm.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp256r1Sha256, reference, Span<u8>(point, 65U)) ==
+          CryptoError::Unavailable);
+    CHECK(reference.empty());
+    CHECK(tpm.sign_digest(ConstSpan<u8>(store_id), {}, AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(digest, 32U),
+                          Span<u8>(signature, 64U)) == CryptoError::Unavailable);
+    CHECK(signature[0] == 0U);
+    CHECK(tpm.forget(ConstSpan<u8>(store_id), {}) == CryptoError::Unavailable);
+    TempStore     dir("tpm-device-unavailable");
+    TestProtector protector;
+    KeyStore      store;
+    REQUIRE(store.create(dir.dir(), protector, &tpm) == CryptoError::None);
+    CHECK(store.generate("p256", AlgorithmId::EcdsaSecp256r1Sha256, PlacementRequest::HardwarePreferred, 1U) ==
+          CryptoError::Unavailable);
+    CHECK(store.generate("p256", AlgorithmId::EcdsaSecp256r1Sha256, PlacementRequest::HardwareRequired, 1U) ==
+          CryptoError::Unavailable);
+    REQUIRE(store.generate("ed", AlgorithmId::Ed25519, PlacementRequest::HardwarePreferred, 1U) == CryptoError::None);
+    CHECK(info_of(store, "ed").placement == KeyPlacement::Software);
+#endif
+}
+
+TEST_CASE("Key store: the TPM holds a store's signature keys and signs every handshake", "[crypto][key-store]")
+{
+    if (!TpmKeyDevice::available())
+    {
+        // A runner without a TPM; this case is the device's evidence on a machine with one (the row's session note).
+        SKIP("no TPM 2.0 behind the Platform Crypto Provider");
+    }
+    TempStore       dir("tpm-device");
+    TpmKeyProtector protector;
+    TpmKeyDevice    tpm;
+    KeyStore        store;
+    REQUIRE(store.create(dir.dir(), protector, &tpm) == CryptoError::None);
+    const EraseOnExit erase_on_exit(store);
+    REQUIRE(store.generate("server", AlgorithmId::EcdsaSecp256r1Sha256, PlacementRequest::HardwareRequired, 1U) ==
+            CryptoError::None);
+    CHECK(info_of(store, "server").placement == KeyPlacement::Hardware);
+    check_device_signs(store, "server");
+    // P-384 where the TPM implements the curve, the sealed file where it does not (this PC's TPM answers either way).
+    REQUIRE(store.generate("p384", AlgorithmId::EcdsaSecp384r1Sha384, PlacementRequest::HardwarePreferred, 1U) ==
+            CryptoError::None);
+    check_signs(store, "p384");
+    const bool p384_in_tpm = info_of(store, "p384").placement == KeyPlacement::Hardware;
+    UNSCOPED_INFO("P-384 in the TPM: " << (p384_in_tpm ? "yes" : "no"));
+
+    // The TPM signs a handshake through the private-key method.
+    StoredSigner signer;
+    REQUIRE(store.signer("server", signer) == CryptoError::None);
+    TlsCredential credential;
+    REQUIRE(credential.init(signer, "device.cerid.test") == TlsError::None);
+    const Handshake done = handshake(credential, nullptr);
+    CHECK(done.client == TlsState::Established);
+    CHECK(done.server == TlsState::Established);
+
+    // Several threads sign at once, each through its own handle to the TPM key.
+    std::thread        threads[3];
+    std::atomic<usize> valid{0U};
+    for (std::thread& thread : threads)
+    {
+        thread = std::thread(
+            [&]
+            {
+                for (usize i = 0U; i < 3U; ++i)
+                {
+                    u8        out[128];
+                    usize     length    = 0U;
+                    const u8  message[] = {'t', 'p', 'm'};
+                    if (signer.sign(ConstSpan<u8>(message), Span<u8>(out), length) == CryptoError::None)
+                    {
+                        valid.fetch_add(1U);
+                    }
+                }
+            });
+    }
+    for (std::thread& thread : threads)
+    {
+        thread.join();
+    }
+    CHECK(valid.load() == 9U);
+
+    // The device binds each key to its store: a key's reference under another store's identifier names nothing.
+    u8 store_id[kKeyStoreIdBytes];
+    u8 other[kKeyStoreIdBytes];
+    REQUIRE(random_bytes(Span<u8>(store_id)) == CryptoError::None);
+    REQUIRE(random_bytes(Span<u8>(other)) == CryptoError::None);
+    Bytes reference;
+    u8    point[65];
+    REQUIRE(tpm.create(ConstSpan<u8>(store_id), AlgorithmId::EcdsaSecp256r1Sha256, reference, Span<u8>(point)) ==
+            CryptoError::None);
+    const ForgetOnExit  forget_on_exit(tpm, ConstSpan<u8>(store_id), reference);
+    const ConstSpan<u8> named(reference.data(), reference.size());
+    u8                  digest[32] = {0x5A};
+    u8                  raw[64];
+    CHECK(tpm.sign_digest(ConstSpan<u8>(other), named, AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(digest),
+                          Span<u8>(raw)) == CryptoError::Denied);
+    CHECK(tpm.sign_digest(ConstSpan<u8>(store_id), named, AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(digest),
+                          Span<u8>(raw)) == CryptoError::None);
+    CHECK(tpm.forget(ConstSpan<u8>(other), named) == CryptoError::None); // names nothing: nothing to delete
+    CHECK(tpm.sign_digest(ConstSpan<u8>(store_id), named, AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(digest),
+                          Span<u8>(raw)) == CryptoError::None);
+    CHECK(tpm.forget(ConstSpan<u8>(store_id), named) == CryptoError::None);
+    CHECK(tpm.sign_digest(ConstSpan<u8>(store_id), named, AlgorithmId::EcdsaSecp256r1Sha256, ConstSpan<u8>(digest),
+                          Span<u8>(raw)) == CryptoError::Denied);
+
+    // Revoking generation 1 deletes its TPM key: the earlier signer, which still names it, is Denied.
+    StoredSigner rotated;
+    REQUIRE(store.rotate("server", 2U) == CryptoError::None);
+    REQUIRE(store.signer("server", rotated) == CryptoError::None);
+    REQUIRE(store.revoke("server", 1U, 3U) == CryptoError::None);
+    u8       out[128];
+    usize    length    = 0U;
+    const u8 message[] = {'g', 'o', 'n', 'e'};
+    CHECK(signer.sign(ConstSpan<u8>(message), Span<u8>(out), length) == CryptoError::Denied);
+    CHECK(rotated.sign(ConstSpan<u8>(message), Span<u8>(out), length) == CryptoError::None);
+    // Erasing the store deletes every TPM key it named: the last signer is Denied, and nothing is left behind.
+    REQUIRE(store.erase() == CryptoError::None);
+    CHECK(rotated.sign(ConstSpan<u8>(message), Span<u8>(out), length) == CryptoError::Denied);
 }
