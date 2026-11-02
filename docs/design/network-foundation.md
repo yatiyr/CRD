@@ -1022,7 +1022,7 @@ HPKE stays inside its TLS stack for ECH.
   shared by sealing, opening and exporting.
 - **Validation** (section 7.1.4). An EC encapsulation or recipient key must be an uncompressed point on the curve
   (`BadKey`); an X25519 one giving the all-zero secret is `WeakSecret`; a ciphertext that does not authenticate is
-  `Forged`; every refusal zeroes the outputs. DeriveKeyPair takes at least Nsk bytes.
+  `Forged`; every refusal zeroes the outputs. A DHKEM's DeriveKeyPair takes at least Nsk bytes.
 - **Secrets and allocation.** The DH output, the shared secret, the key schedule's secret, key and nonce live on the
   stack of one call and are zeroed before it returns. A labelled input is laid out in a 256-byte inline buffer and,
   beyond it, once from the default allocator (an MLS group context as info); the buffer is zeroed on release.
@@ -1036,6 +1036,55 @@ with every changed input forged; exports of 1, Nh and 255 Nh bytes agreeing on b
 context, info, length, key or KDF deriving another secret; an info beyond the inline buffer; every refusal;
 `test_mls.cpp`'s crypto-basics and key-schedule vectors (DHKEM(P-384) opening and DeriveKeyPair); and
 `crd-fuzz-crypto-mls`'s round trips with any bit changed.
+
+**H2. The post-quantum KEMs** (draft-ietf-hpke-pq-05, `crypto.hpke-pq`; the hybrids of
+draft-irtf-cfrg-concrete-hybrid-kems-03 over draft-irtf-cfrg-hybrid-kems-12's CG framework, `crypto.hybrid-kems`):
+the post-quantum MLS suites (`mls.pq-ciphersuites`, M2) and every later HPKE consumer need them, and no provider in
+the policy has them with DeriveKeyPair, so `hpke.cpp` composes them from the provider's ML-KEM (`KemKey`, seeds d ||
+z), key agreement and SHA-3 (`sha3_256`, `shake256`, `crypto.sha3`), as H1 does DHKEM.
+
+- **Names.** A KEM is named by the provider identifier of its components, so no identifier is added: `MlKem768` and
+  `MlKem1024` are ML-KEM-768 and ML-KEM-1024 (0x0041, 0x0042); `X25519Mlkem768`, `Secp256r1Mlkem768` and
+  `Secp384r1Mlkem1024` are MLKEM768-X25519 (X-Wing, 0x647A), MLKEM768-P256 (0x0050) and MLKEM1024-P384 (0x0051), as
+  `X25519` names DHKEM(X25519, HKDF-SHA256). A TLS hybrid group under the same identifier concatenates its secrets
+  (`tls.hybrid-kex`); the HPKE KEM is the combiner's construction, which only HPKE computes. ML-KEM-512 (0x0040) is
+  below the policy's ML-KEM-768 floor and the single-stage SHAKE and TurboSHAKE KDFs (0x0010 to 0x0013) serve no MLS
+  suite: both are refused as outside the profile.
+- **Keys.** An ML-KEM's private key is its 64-byte seed and a hybrid's the 32-byte seed SHAKE256 expands into
+  seed_PQ || seed_T (Group_T.Nseed: 32 for X25519, 128 for P-256, 48 for P-384), the ML-KEM key of seed_PQ and the
+  scalar Group_T.RandomScalar(seed_T) (the first Nscalar-byte chunk in [1, n - 1]); `HpkeKey` keeps the expanded
+  halves, which zero themselves on clear, move and destruction, and `from_private` takes the seed. DeriveKeyPair is SHAKE256's
+  LabeledDerive(ikm, "DeriveKeyPair", "", Nsk) under the KEM's suite_id (draft-ietf-hpke-hpke-03 section 4.4: ikm,
+  "HPKE-v1", suite_id, the label with its two-byte length, L). Its input is at least 32 bytes, the strength of every
+  such KEM, not Nsk: an MLS suite of HKDF-SHA384 derives node keys from 48-byte secrets, fewer than an ML-KEM's
+  64-byte Nsk (RFC 9180's "SHOULD have length at least Nsk" is a recommendation MLS itself does not meet).
+- **Encap and Decap.** ML-KEM's are FIPS 203's (an encapsulation key failing the input check is `BadKey`; a
+  ciphertext of the right length always decapsulates, by implicit rejection, so a changed one is `Forged` at the
+  AEAD). A hybrid encapsulates to ek_PQ with ML-KEM, takes an ephemeral scalar from Group_T.Nseed fresh random bytes,
+  sends ct_PQ || ct_T and keys the schedule with SHA3-256(ss_PQ || ss_T || ct_T || ek_T || label). A NIST-curve
+  element or recipient half off the curve is refused explicitly (`BadKey`: a public input, the generic draft's
+  section 4.2); an X25519 half is any 32 bytes and its all-zero result is the secret RFC 7748 computes, which the
+  combiner binds, as X-Wing specifies (`AgreementKey::derive` leaves those zeros in its output when it reports
+  `WeakSecret`): refusing it would split a group whose other members follow the specification. Nsecret is 32 bytes;
+  the key schedule is RFC 9180's over the suite's HKDF.
+- **Checks.** `hpke_check_public_key` is the check a long-lived key gets once when it enters shared state: the
+  agreement's check for a DHKEM, FIPS 203's input check for ML-KEM (`check_kem_public_key`) and for a hybrid's
+  post-quantum half, the curve check for its NIST-curve half. MLS's leaf, init and node keys go through it.
+- **No derandomized encapsulation.** The draft's vectors fix the encapsulation randomness (ikmE) to check a sender
+  byte for byte; Cerid offers no entry point that takes it, so no caller can reuse an ephemeral. The vectors hold the
+  recipient side byte for byte (DeriveKeyPair, the serialized seeds, Decap, the combiner, the key schedule, every
+  message and export), and the sealing side is held to it by round trips: every byte of `enc` reaches the
+  recipient's combiner or ML-KEM decapsulation.
+
+Evidence: `test_hpke.cpp` against draft-ietf-hpke-pq's `test-vectors.json` at its draft-ietf-hpke-pq-05 tag
+(`hpke-pq-vectors` in `cmake/pins.json`): the five vectors of the profile (ML-KEM-768, ML-KEM-1024, MLKEM768-X25519,
+MLKEM768-P256 and MLKEM1024-P384 with HKDF) for DeriveKeyPair, the serialized private key (z included, through
+implicit rejection), the opening of the first message, the nine later messages refused and the 25 exported values,
+and the eight others refused as outside the profile; round trips and exports over the five KEMs; the lengths of
+every KEM; DeriveKeyPair's 32-byte floor; moves; implicit rejection; an ML-KEM key failing FIPS 203's input check;
+X-Wing's all-zero element and recipient half; NIST-curve halves off the curve; the P-256 half's rejection sampling
+(a seed whose first scalar chunk lies above the order); `test_provider.cpp` against FIPS 202's examples for SHA3-256
+and SHAKE256; `crd-fuzz-crypto-mls`'s HPKE mode over every suite of the profile.
 
 <a id="mls"></a>
 ### MLS
@@ -1053,9 +1102,10 @@ to the byte, and live interoperability with OpenMLS and MLSpp (M4) proves the wh
 MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519 (mandatory to implement), 0x0002 MLS_128_DHKEMP256_AES128GCM_SHA256_P256,
 0x0003 MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 and 0x0007 MLS_256_DHKEMP384_AES256GCM_SHA384_P384 (the
 high-assurance suite). 0x0004 to 0x0006 need X448, Ed448 or P-521, which no provider in the policy implements, and
-are refused. The suites' hash is their KDF's (`kdf_hash`), as is the MAC's. The post-quantum suites (an ML-KEM or
-X-Wing KEM with ML-DSA signatures, draft-ietf-mls-pq-ciphersuites) join when the register pins their draft and HPKE
-carries the KEM.
+are refused. The suites' hash is their KDF's (`kdf_hash`), as is the MAC's. The post-quantum suites
+(draft-ietf-mls-pq-ciphersuites-07, `mls.pq-ciphersuites`, pinned 2026-11-02: 0x0010 to 0x0017 with ML-KEM or a
+hybrid KEM and a classical signature, 0x0020 to 0x0022 with ML-DSA signed purely with an empty context) join the
+table now that HPKE carries their KEMs (H2).
 
 **M3. Layers**, each closed against its vector file before the next builds on it:
 
@@ -1158,7 +1208,11 @@ carries the KEM.
     (`Group::branch`) created with its first commit of Adds, the reinit or branch PSK and a path; a joiner's checks of
     a resumed group (section 12.4.3.1: the only such PSK, from the prior group it names, epoch 1, the ReInit's or the
     prior group's parameters, and the members).
-    c. Next: GREASE (section 13.5) and the post-quantum suites, with live OpenMLS and MLSpp interop (M4).
+    c. HPKE's post-quantum and hybrid KEMs, the precondition of the post-quantum suites (decision H2; the
+    working group's draft-ietf-hpke-pq vectors), with the register pins of the four drafts and the key check every
+    MLS key now passes (`hpke_check_public_key`).
+    d. Next: the post-quantum suites in the table (M2) with the node key, signature and message sizes they need,
+    GREASE (section 13.5), and live OpenMLS and MLSpp interop (M4).
 
 **M5. The receive window** (RFC 9420 section 9.2 leaves its size to the application). OpenMLS's defaults: a receiver
 keeps the keys of the 5 generations below the next unconsumed one of each ratchet (late and reordered messages) and
@@ -1194,8 +1248,8 @@ tree (section 7.3's RECOMMENDED: on by default; a group whose members update les
 credential binds acceptable identifiers to its key (section 5.3.1's Authentication Service, an interface the
 application implements: asked for every member's credential when joining, each added member's and each external
 sender's), and which pre-shared keys and groups a member holds (a `GroupStore`). A leaf's or init key's encryption
-key must be one every agreement can use (`check_agreement_public_key`: an uncompressed point on the curve, an X25519
-key not of small order), checked once when it enters the group, since every later commit encrypts to it and a key
+key must be one every encapsulation can use (`hpke_check_public_key`: an uncompressed point on the curve, an
+X25519 key not of small order; decision H2 for the post-quantum KEMs), checked once when it enters the group, since every later commit encrypts to it and a key
 that cannot be encrypted to would stop the group; the same holds for every parent key a joiner receives. Whether a
 leaf's capabilities name the group's version and cipher suite is not checked: sections 7.3 and 10.1 do not ask it,
 choosing the best suite all members support is the creator's duty (section 11), and the working group's suite-7
