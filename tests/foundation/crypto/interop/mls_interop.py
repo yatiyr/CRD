@@ -338,13 +338,14 @@ class Group:
                'capabilities without mls10, the suite or basic credentials: %s' % leaf)
         for field in ('suites', 'extension_types', 'credentials'):
             expect(any(is_grease(value) for value in leaf[field]), '%s lists no GREASE %s' % (name, field))
-        for where, listed in (('leaf', leaf['extensions']), ('package', read['extensions'])):
-            greased = [kind_of for kind_of, _ in listed if is_grease(kind_of)]
+        # GREASE as asked, and every extension of the leaf and the package of a type the leaf's capabilities list
+        # (sections 7.2 and 10).
+        for where, carried in (('leaf', leaf['extensions']), ('package', read['extensions'])):
+            greased = [kind_of for kind_of, _ in carried if is_grease(kind_of)]
             expect(bool(greased) == grease, '%s has GREASE %s extensions %s, asked %s' % (name, where, greased, grease))
-        unlisted = [kind_of for kind_of, _ in read['extensions'] if kind_of > DEFAULT_EXTENSIONS and
-                    kind_of not in leaf['extension_types']]
-        expect(not unlisted, '%s has package extensions %s its capabilities do not list (section 10)' % (
-            name, unlisted))
+            unlisted = [kind_of for kind_of, _ in carried if kind_of > DEFAULT_EXTENSIONS and
+                        kind_of not in leaf['extension_types']]
+            expect(not unlisted, '%s has %s extensions %s its capabilities do not list' % (name, where, unlisted))
         self.owner[name] = self.peers[kind]
         self.identity[name] = identity
         self.packages[name] = package
