@@ -48,6 +48,7 @@
     "Seeded detector failures": {"presets": ["win-debug", "win-asan", "linux-gcc-debug", "linux-gcc-asan",
                                              "linux-clang-tsan"]},
     "Install pinned Intel SDE": {"presets": ["win-release", "linux-gcc-release"]},
+    "Install pinned Rust": {"presets": ["linux-gcc-public-checks"]},
     "Test at the sse2 level": {"presets": ["win-debug", "linux-gcc-debug"]}
   },
   "classes": [
