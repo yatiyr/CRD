@@ -21,18 +21,19 @@
 // docs/design/network-foundation.md#capability-tokens.
 #include <crd/crypto/capability.hpp>
 
+#include "byte_spans.hpp"
 #include "signed_artifact.hpp"
 
 #include <crd/containers/wire_bytes.hpp>
 
 #include <algorithm>
-#include <cstdint>
 #include <cstring>
 
 namespace crd::crypto
 {
 namespace
 {
+using detail::overlaps;
 using signed_artifact::saturating_add;
 
 constexpr usize kHolderBytes     = 2U + kKeyIdBytes + 1U;
@@ -287,17 +288,6 @@ CapabilityError take_head(cont::WireReader& reader, const u8 (&magic)[8], u8& fo
 }
 
 // ---- Signing ----
-
-bool overlaps(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
-{
-    if (a.empty() || b.empty())
-    {
-        return false;
-    }
-    const auto a0 = reinterpret_cast<std::uintptr_t>(a.data());
-    const auto b0 = reinterpret_cast<std::uintptr_t>(b.data());
-    return a0 < b0 + b.size() && b0 < a0 + a.size();
-}
 
 // The signer's public key and identifier; BadConfig for a signer that is not a signature key.
 CapabilityError signer_key(const Signer& signer, u8 (&key)[kMaxHolderKeyBytes], usize& size, KeyId& id) noexcept

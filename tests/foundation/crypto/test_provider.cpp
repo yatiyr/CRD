@@ -366,6 +366,37 @@ TEST_CASE("Provider: HKDF refusals", "[crypto][net-2]")
     CHECK(hkdf_expand(AlgorithmId::HkdfSha256, prk, ConstSpan<u8>(), most) == CryptoError::BadLength);
 }
 
+TEST_CASE("Provider: the hash of each KDF against FIPS 180-4's examples", "[crypto][net-2]")
+{
+    // FIPS 180-4's one-block example "abc" (SHA-256 and SHA-384) and its two-block SHA-256 example.
+    const u8    abc[]    = {'a', 'b', 'c'};
+    const char  two[]    = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+    const Bytes abc_256  = from_hex("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    const Bytes two_256  = from_hex("248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+    const Bytes abc_384  = from_hex("cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca1"
+                                    "34c825a7");
+    u8          out[48]  = {};
+    REQUIRE(kdf_hash(AlgorithmId::HkdfSha256, abc, Span<u8>(out, 32U)) == CryptoError::None);
+    CHECK(equal(ConstSpan<u8>(out, 32U), abc_256));
+    REQUIRE(kdf_hash(AlgorithmId::HkdfSha256, ConstSpan<u8>(reinterpret_cast<const u8*>(two), sizeof(two) - 1U),
+                     Span<u8>(out, 32U)) == CryptoError::None);
+    CHECK(equal(ConstSpan<u8>(out, 32U), two_256));
+    REQUIRE(kdf_hash(AlgorithmId::HkdfSha384, abc, out) == CryptoError::None);
+    CHECK(equal(out, abc_384));
+    // The SHA-256 every key identifier uses is the same function.
+    u8 direct[kSha256Bytes] = {};
+    sha256(abc, direct);
+    CHECK(equal(direct, abc_256));
+    // The empty message, and the refusals: another class, another length.
+    REQUIRE(kdf_hash(AlgorithmId::HkdfSha256, ConstSpan<u8>(), Span<u8>(out, 32U)) == CryptoError::None);
+    CHECK(equal(ConstSpan<u8>(out, 32U),
+                from_hex("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")));
+    CHECK(kdf_hash(AlgorithmId::Aes128Gcm, abc, Span<u8>(out, 32U)) == CryptoError::Unsupported);
+    CHECK(kdf_hash(AlgorithmId{}, abc, Span<u8>(out, 32U)) == CryptoError::Unsupported);
+    CHECK(kdf_hash(AlgorithmId::HkdfSha384, abc, Span<u8>(out, 32U)) == CryptoError::BadLength);
+    CHECK(kdf_hash(AlgorithmId::HkdfSha256, abc, out) == CryptoError::BadLength);
+}
+
 // ---- Key agreement ----
 
 TEST_CASE("Provider: X25519 against Wycheproof", "[crypto][net-2][wycheproof]")

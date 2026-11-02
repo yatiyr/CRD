@@ -86,6 +86,18 @@
       "license": "Apache-2.0",
       "note": "Project Wycheproof's test vectors at main of 2026-10-23 (testvectors_v1: AEAD, HKDF, ECDH, ECDSA, EdDSA, ML-DSA and ML-KEM): data the crd-crypto tests read as their oracle; never compiled or shipped."
     },
+    "mls-vectors": {
+      "version": "2034fe7",
+      "repository": "mlswg/mls-implementations",
+      "ref": "2034fe72e0c805a683ba76165660c834f2a8142a",
+      "commit": "2034fe72e0c805a683ba76165660c834f2a8142a",
+      "url": "https://github.com/mlswg/mls-implementations/archive/2034fe72e0c805a683ba76165660c834f2a8142a.tar.gz",
+      "file": "mls-implementations-2034fe72.tar.gz",
+      "sha256": "4c2624f7f32f8186723570c2301d716d83cb9d5fa454de1f8740782d0e3a7fcb",
+      "size": 6550053,
+      "license": "IETF Trust (BCP 78)",
+      "note": "The IETF MLS working group's test vectors at main of 2026-10-07 (test-vectors/: tree math, crypto basics, deserialization, secret tree, key schedule, message protection, transcript hashes, PSKs, Welcome, tree operations and validation, TreeKEM, messages, passive clients), cross-generated and checked by the RFC 9420 implementations: data the crd-crypto MLS tests read as their oracle; never compiled, redistributed or shipped. The repository states no licence of its own; it is a working-group repository whose contributions fall under the IETF Note Well (BCP 78 and 79), read 2026-11-02. Pinned as a testing download (pre-approved, user 2026-10-30)."
+    },
     "stb": {
       "version": "2c980bb",
       "repository": "nothings/stb",

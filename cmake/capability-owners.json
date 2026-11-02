@@ -751,6 +751,20 @@
       "decision": "docs/design/network-foundation.md D5: authentication and authorisation are separate stages and 0-RTT carries only schema-declared idempotent operations. NET.2 landed the capability tokens (2026-11-02, #capability-tokens), the anti-replay windows and filters (#anti-replay) and the message schemas (#message-schemas) in crd-crypto, so admission (NET.3's stages S6 and S7) and the session layer (4.2a) call them and never re-implement a token, schema or replay check."
     },
     {
+      "id": "crypto.groups",
+      "summary": "End-to-end group keys: hybrid public key encryption (RFC 9180 base mode over the provider's primitives) and the Messaging Layer Security protocol (RFC 9420: cipher suites, the presentation language, tree math, the labelled operations and, as NET.2 lands them, the secret tree, key schedule, framing, ratchet tree, commits and Welcome), whose relays and delivery servers see only ciphertext (threat T14).",
+      "owner": "crypto",
+      "api": [
+        "engine/foundation/crypto/include/crd/crypto/hpke.hpp",
+        "engine/foundation/crypto/include/crd/crypto/mls.hpp"
+      ],
+      "consumers": [
+        "NET-LIVE",
+        "COLLAB.1"
+      ],
+      "decision": "docs/design/network-foundation.md H1 and M1 to M4: NET.2 landed HPKE and MLS's first layers in crd-crypto (2026-11-02, #hpke, #mls), so calls' SFrame keys (NET-LIVE) and shared projects' end-to-end sessions (COLLAB.1) derive from one MLS group implementation and never carry their own."
+    },
+    {
       "id": "robotics.ros2-bridge",
       "summary": "The bidirectional ROS 2 topic and service bridge over crd-net.",
       "owner": "ros2-bridge",

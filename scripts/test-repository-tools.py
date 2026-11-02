@@ -1427,8 +1427,9 @@ class PinnedInputs(unittest.TestCase):
         self.assertEqual(len(re.findall(r'uses:\s*actions/checkout@', self.workflow)),
                          self.workflow.count('persist-credentials: false'))
         self.assertEqual(self.workflow.count("python-version: '3.12'"), 13)
-        for package in ('Catch2', 'glfw', 'zstd', 'aws-lc', 'nasm', 'wycheproof', 'stb', 'cgltf', 'MikkTSpace',
-                        'imgui', 'eigen', 'OpenBLAS', 'boost', 'hptt', 'pocketfft', 'highway', 'tracy', 'nlopt'):
+        for package in ('Catch2', 'glfw', 'zstd', 'aws-lc', 'nasm', 'wycheproof', 'mls-vectors', 'stb', 'cgltf',
+                        'MikkTSpace', 'imgui', 'eigen', 'OpenBLAS', 'boost', 'hptt', 'pocketfft', 'highway', 'tracy',
+                        'nlopt'):
             self.assertIn('crd_add_pinned_package(%s' % package, self.cmake)
 
     def test_unpinned_references_fail_the_guard(self):
@@ -4282,8 +4283,8 @@ class TestInstruments(unittest.TestCase):
     def test_fuzz_driver_bounds_every_run_and_names_its_corpora(self):
         self.assertEqual(sorted(fuzz_driver.TARGETS), ['ceir-binary', 'ceir-differential', 'ceir-record', 'ceir-text',
                                                        'ceridc-diag', 'ckir-binary', 'ckir-text', 'comply-rules',
-                                                       'comply-sanctions', 'crypto-capability', 'crypto-policy',
-                                                       'crypto-provider', 'crypto-quic', 'crypto-tls',
+                                                       'comply-sanctions', 'crypto-capability', 'crypto-mls',
+                                                       'crypto-policy', 'crypto-provider', 'crypto-quic', 'crypto-tls',
                                                        'memory-allocators',
                                                        'net-negotiation', 'perf-assets',
                                                        'perf-bundle', 'perf-capture', 'perf-flight',

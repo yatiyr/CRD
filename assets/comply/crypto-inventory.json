@@ -123,6 +123,19 @@
           "standard": true
         },
         {
+          "id": "crypto.hpke",
+          "kind": "algorithm",
+          "owner": "crypto",
+          "functions": [
+            "confidentiality",
+            "integrity",
+            "key-exchange",
+            "key-derivation"
+          ],
+          "spec": "RFC 9180",
+          "standard": true
+        },
+        {
           "id": "crypto.ml-kem",
           "kind": "algorithm",
           "owner": "crypto",

@@ -1,10 +1,13 @@
 # crd-crypto tests: the algorithm identifiers generated from the standards register and the signed crypto policy
 # generations (NET-STD), the provider interface against Project Wycheproof's vectors, the TLS 1.3 sessions, QUIC packet
 # protection against RFC 9001's and RFC 9369's sample packets, the TLS handshake over QUIC, QUIC's address-validation
-# tokens, Encrypted Client Hello, the TLS exporter, capabilities, message schemas, anti-replay and early data (NET.2).
+# tokens, Encrypted Client Hello, the TLS exporter, capabilities, message schemas, anti-replay and early data, HPKE
+# against RFC 9180's vectors and MLS against the MLS working group's (NET.2).
 add_executable(crd-crypto-tests
     test_capability.cpp
+    test_hpke.cpp
     test_kem_prf.cpp
+    test_mls.cpp
     test_policy.cpp
     test_provider.cpp
     test_quic.cpp
@@ -36,8 +39,12 @@ target_link_libraries(crd-crypto-tests PRIVATE
     ssl
 )
 
-# The pinned Wycheproof vectors are read from the package cache at run time (cmake/pins.json: wycheproof).
-target_compile_definitions(crd-crypto-tests PRIVATE CRD_WYCHEPROOF_DIR="${wycheproof_SOURCE_DIR}")
+# The pinned vectors are read from the package cache at run time (cmake/pins.json): Wycheproof's, the MLS working
+# group's (mls-vectors) and RFC 9180's, which the pinned AWS-LC carries as crypto/hpke/test-vectors.json.
+target_compile_definitions(crd-crypto-tests PRIVATE
+    CRD_WYCHEPROOF_DIR="${wycheproof_SOURCE_DIR}"
+    CRD_MLS_VECTORS_DIR="${mls-vectors_SOURCE_DIR}/test-vectors"
+    CRD_HPKE_VECTORS="${aws-lc_SOURCE_DIR}/crypto/hpke/test-vectors.json")
 
 crd_enable_default_pch(crd-crypto-tests)
 crd_discover_tests(crd-crypto-tests)

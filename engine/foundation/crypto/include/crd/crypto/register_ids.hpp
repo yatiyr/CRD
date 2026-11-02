@@ -141,14 +141,6 @@ inline constexpr u16 kTlsExtensionEncryptedClientHello = 0xFE0DU;
 inline constexpr u16 kTlsExtensionEchOuterExtensions = 0xFD00U;
 // tls.ech: TLS Alerts, ech_required
 inline constexpr u8 kTlsAlertEchRequired = 0x79U;
-// tls.ech: HPKE KEM Identifiers, DHKEM(X25519, HKDF-SHA256)
-inline constexpr u16 kHpkeKemDhkemX25519HkdfSha256 = 0x0020U;
-// tls.ech: HPKE KDF Identifiers, HKDF-SHA256
-inline constexpr u16 kHpkeKdfHkdfSha256 = 0x0001U;
-// tls.ech: HPKE AEAD Identifiers, AES-128-GCM
-inline constexpr u16 kHpkeAeadAes128Gcm = 0x0001U;
-// tls.ech: HPKE AEAD Identifiers, ChaCha20Poly1305
-inline constexpr u16 kHpkeAeadChacha20poly1305 = 0x0003U;
 // tls.certificate-compression: TLS ExtensionType Values, compress_certificate
 inline constexpr u16 kTlsExtensionCompressCertificate = 0x001BU;
 // tls.certificate-compression: TLS Certificate Compression Algorithm IDs, zlib
@@ -181,6 +173,30 @@ inline constexpr u16 kAeadAes128Gcm = 0x0001U;
 inline constexpr u16 kAeadAes256Gcm = 0x0002U;
 // crypto.chacha20-poly1305: AEAD Algorithms, AEAD_CHACHA20_POLY1305
 inline constexpr u16 kAeadChacha20Poly1305 = 0x001DU;
+// crypto.hpke: HPKE KEM Identifiers, DHKEM(P-256, HKDF-SHA256)
+inline constexpr u16 kHpkeKemDhkemP256HkdfSha256 = 0x0010U;
+// crypto.hpke: HPKE KEM Identifiers, DHKEM(P-384, HKDF-SHA384)
+inline constexpr u16 kHpkeKemDhkemP384HkdfSha384 = 0x0011U;
+// crypto.hpke: HPKE KEM Identifiers, DHKEM(X25519, HKDF-SHA256)
+inline constexpr u16 kHpkeKemDhkemX25519HkdfSha256 = 0x0020U;
+// crypto.hpke: HPKE KDF Identifiers, HKDF-SHA256
+inline constexpr u16 kHpkeKdfHkdfSha256 = 0x0001U;
+// crypto.hpke: HPKE KDF Identifiers, HKDF-SHA384
+inline constexpr u16 kHpkeKdfHkdfSha384 = 0x0002U;
+// crypto.hpke: HPKE AEAD Identifiers, AES-128-GCM
+inline constexpr u16 kHpkeAeadAes128Gcm = 0x0001U;
+// crypto.hpke: HPKE AEAD Identifiers, AES-256-GCM
+inline constexpr u16 kHpkeAeadAes256Gcm = 0x0002U;
+// crypto.hpke: HPKE AEAD Identifiers, ChaCha20Poly1305
+inline constexpr u16 kHpkeAeadChacha20poly1305 = 0x0003U;
+// mls.protocol: MLS Cipher Suites, MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519
+inline constexpr u16 kMls128Dhkemx25519Aes128gcmSha256Ed25519 = 0x0001U;
+// mls.protocol: MLS Cipher Suites, MLS_128_DHKEMP256_AES128GCM_SHA256_P256
+inline constexpr u16 kMls128Dhkemp256Aes128gcmSha256P256 = 0x0002U;
+// mls.protocol: MLS Cipher Suites, MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519
+inline constexpr u16 kMls128Dhkemx25519Chacha20poly1305Sha256Ed25519 = 0x0003U;
+// mls.protocol: MLS Cipher Suites, MLS_256_DHKEMP384_AES256GCM_SHA384_P384
+inline constexpr u16 kMls256Dhkemp384Aes256gcmSha384P384 = 0x0007U;
 } // namespace iana
 
 } // namespace crd::crypto

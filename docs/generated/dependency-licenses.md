@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **21** · tools: **30** · workflow actions: **6** · runner images: **5** · unpinned apt packages: **22**
+- packages: **22** · tools: **30** · workflow actions: **6** · runner images: **5** · unpinned apt packages: **22**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -22,6 +22,7 @@
 | openssl | 4.0.3 | Apache-2.0 | https://www.openssl.org/source/openssl-4.0.3.tar.gz | `openssl-4.0.3.tar.gz` |
 | nasm | 2.16.03 | BSD-2-Clause | https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/win64/nasm-2.16.03-win64.zip | `nasm-2.16.03-win64.zip` |
 | wycheproof | d17cc89 | Apache-2.0 | C2SP/wycheproof @ `d17cc89fa5c8f4f4d378b5385ebf75da5d0926c9` (d17cc89fa5c8) | `wycheproof-d17cc89f.tar.gz` |
+| mls-vectors | 2034fe7 | IETF Trust (BCP 78) | mlswg/mls-implementations @ `2034fe72e0c805a683ba76165660c834f2a8142a` (2034fe72e0c8) | `mls-implementations-2034fe72.tar.gz` |
 | stb | 2c980bb | MIT OR Unlicense | nothings/stb @ `2c980bb59875b0d32144a71867fbdebb2f77cd20` (2c980bb59875) | `stb-2c980bb5.tar.gz` |
 | cgltf | 1.14 | MIT | jkuhlmann/cgltf @ `v1.14` (52c23814dbb6) | `cgltf-52c23814.tar.gz` |
 | MikkTSpace | 3e895b4 | Zlib | mmikk/MikkTSpace @ `3e895b49d05ea07e4c2133156cfa94369e19e409` (3e895b49d05e) | `MikkTSpace-3e895b49.tar.gz` |

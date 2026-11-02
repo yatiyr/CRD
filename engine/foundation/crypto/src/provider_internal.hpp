@@ -6,6 +6,8 @@
 
 #include <crd/crypto/provider.hpp>
 
+#include "byte_spans.hpp"
+
 #include <openssl/base.h>
 #include <openssl/err.h>
 
@@ -44,12 +46,7 @@ inline ProviderKey* key_of(EVP_PKEY* pkey) noexcept
 // The digest an ECDSA identifier names; null for ML-DSA and Ed25519, which sign the message itself.
 [[nodiscard]] const EVP_MD* signature_digest(AlgorithmId algorithm) noexcept;
 
-// A string literal's bytes without its terminator: an HKDF label.
-template <usize N>
-[[nodiscard]] cont::ConstSpan<u8> label_of(const char (&text)[N]) noexcept
-{
-    return cont::ConstSpan<u8>(reinterpret_cast<const u8*>(text), N - 1U);
-}
+using detail::label_of;
 
 // ---- Sealing keys: what a server seals for itself alone (tls.cpp's tickets, quic.cpp's address tokens) ----
 

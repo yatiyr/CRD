@@ -6,6 +6,7 @@
 // cleared on every refusal so nothing accumulates across calls.
 #include <crd/crypto/provider.hpp>
 
+#include "byte_spans.hpp"
 #include "provider_internal.hpp"
 
 #include <openssl/aead.h>
@@ -27,7 +28,6 @@
 #include <openssl/siphash.h>
 
 #include <algorithm>
-#include <cstdint>
 #include <cstring>
 #include <new>
 
@@ -37,6 +37,8 @@ static_assert(sizeof(EVP_AEAD_CTX) <= kAeadStateBytes && alignof(EVP_AEAD_CTX) <
               "kAeadStateBytes no longer holds the provider's AEAD context");
 static_assert(sizeof(KeyId::bytes) == SHA256_DIGEST_LENGTH);
 
+using detail::overlaps;
+using detail::refuse;
 using provider_internal::ErrorScope;
 using provider_internal::key_of;
 using provider_internal::pkey_of;
@@ -139,18 +141,6 @@ const EVP_MD* hkdf_digest(AlgorithmId algorithm) noexcept
     default:
         return nullptr;
     }
-}
-
-// Whether two buffers share a byte.
-bool overlaps(cont::ConstSpan<u8> a, cont::ConstSpan<u8> b) noexcept
-{
-    if (a.empty() || b.empty())
-    {
-        return false;
-    }
-    const auto a_begin = reinterpret_cast<std::uintptr_t>(a.data());
-    const auto b_begin = reinterpret_cast<std::uintptr_t>(b.data());
-    return a_begin < b_begin + b.size() && b_begin < a_begin + a.size();
 }
 
 // Whether an AEAD output aliases its inputs in a way the provider does not allow: only the text may share the
@@ -278,14 +268,6 @@ bssl::UniquePtr<EVP_PKEY> signature_private_key(const SignatureAlgorithm& entry,
     default:
         return ec_private_key(entry.nid, seed);
     }
-}
-
-// Zeroes both outputs of an encapsulation, or the one of an agreement or decapsulation, after a refusal.
-CryptoError refuse(CryptoError error, cont::Span<u8> first, cont::Span<u8> second = {}) noexcept
-{
-    secure_zero(first);
-    secure_zero(second);
-    return error;
 }
 
 u64 load_le64(const u8* bytes) noexcept
@@ -560,6 +542,27 @@ usize hkdf_hash_bytes(AlgorithmId algorithm) noexcept
 {
     const EVP_MD* digest = hkdf_digest(algorithm);
     return digest != nullptr ? EVP_MD_size(digest) : 0U;
+}
+
+CryptoError kdf_hash(AlgorithmId algorithm, cont::ConstSpan<u8> bytes, cont::Span<u8> out) noexcept
+{
+    const EVP_MD* digest = hkdf_digest(algorithm);
+    if (digest == nullptr)
+    {
+        return CryptoError::Unsupported;
+    }
+    if (out.size() != EVP_MD_size(digest))
+    {
+        return CryptoError::BadLength;
+    }
+    const ErrorScope errors;
+    unsigned int     written = 0U;
+    if (!EVP_Digest(bytes.data(), bytes.size(), out.data(), &written, digest, nullptr) || written != out.size())
+    {
+        secure_zero(out);
+        return CryptoError::ProviderFailure;
+    }
+    return CryptoError::None;
 }
 
 CryptoError hkdf_extract(AlgorithmId algorithm, cont::ConstSpan<u8> salt, cont::ConstSpan<u8> ikm,

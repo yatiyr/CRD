@@ -131,6 +131,10 @@ private:
 [[nodiscard]] CryptoError hkdf_expand(AlgorithmId algorithm, cont::ConstSpan<u8> prk, cont::ConstSpan<u8> info,
                                       cont::Span<u8> out) noexcept;
 
+// The hash an HKDF is built on (SHA-256 for HKDF-SHA256, SHA-384 for HKDF-SHA384, FIPS 180-4) over `bytes`; `out` is
+// hkdf_hash_bytes(algorithm) long. HPKE and MLS cipher suites name their hash by their KDF (RFC 9420 section 5.1).
+[[nodiscard]] CryptoError kdf_hash(AlgorithmId algorithm, cont::ConstSpan<u8> bytes, cont::Span<u8> out) noexcept;
+
 // ---- Signatures (ML-DSA-44/65/87, Ed25519, ECDSA P-256/SHA-256 and P-384/SHA-384) ----
 
 // Encodings (decision P4): ML-DSA public keys and signatures as FIPS 204 encodes them, signed purely with an empty

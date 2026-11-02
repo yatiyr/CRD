@@ -6,9 +6,10 @@
 # generations (NET-STD), and the provider interface over the pinned AWS-LC (provider.hpp, NET.2): randomness, AEAD,
 # HKDF, signatures, key agreement, key encapsulation and the table PRF, TLS 1.3 sessions over its TLS stack (tls.hpp),
 # whose certificates compress through crd-compression, QUIC packet protection and its handshake (quic.hpp, tls.hpp),
-# capabilities and message schemas (capability.hpp) and anti-replay windows and filters (replay.hpp). The key store
-# lands with a later NET.2 slice. Contract: docs/design/network-foundation.md#crypto, #agility, #provider,
-# #tls-sessions, #quic-protection, #capability-tokens, #anti-replay, #early-data and #message-schemas.
+# capabilities and message schemas (capability.hpp), anti-replay windows and filters (replay.hpp), hybrid public key
+# encryption (hpke.hpp) and MLS (mls.hpp). The key store lands with a later NET.2 slice. Contract:
+# docs/design/network-foundation.md#crypto, #agility, #provider, #tls-sessions, #quic-protection, #capability-tokens,
+# #anti-replay, #early-data, #message-schemas, #hpke and #mls.
 
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")

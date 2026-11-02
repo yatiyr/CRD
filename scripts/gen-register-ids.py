@@ -75,6 +75,7 @@ REGISTRIES = {
     'HPKE KEM Identifiers': ('HpkeKem', 'u16', 'integer'),
     'HPKE KDF Identifiers': ('HpkeKdf', 'u16', 'integer'),
     'HPKE AEAD Identifiers': ('HpkeAead', 'u16', 'integer'),
+    'MLS Cipher Suites': ('', 'u16', 'integer'),  # names start MLS_
     'AEAD Algorithms': ('', 'u16', 'integer'),  # names start AEAD_
     'Object identifiers': ('Oid', 'std::string_view', 'oid'),
 }

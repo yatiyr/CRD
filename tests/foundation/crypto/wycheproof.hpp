@@ -1,7 +1,8 @@
 #pragma once
 
-// crd-crypto tests -- Project Wycheproof's vector files (the pinned C2SP/wycheproof testvectors_v1, read at run time
-// from CRD_WYCHEPROOF_DIR) and the byte helpers the provider suites share.
+// crd-crypto tests -- the pinned JSON vector files read at run time (Project Wycheproof's testvectors_v1 from
+// CRD_WYCHEPROOF_DIR, the MLS working group's from CRD_MLS_VECTORS_DIR, RFC 9180's from CRD_HPKE_VECTORS) and the
+// byte helpers the suites share.
 
 #include <crd/assetio/json.hpp>
 #include <crd/containers/array.hpp>
@@ -54,25 +55,20 @@ inline bool all_zero(containers::ConstSpan<u8> bytes)
     return std::ranges::all_of(bytes, [](u8 b) { return b == 0U; });
 }
 
-// One Wycheproof file, parsed: groups and tests are walked through the flat DOM.
-class Vectors
+// One JSON vector file, parsed: its values are read through the flat DOM by node.
+class JsonFile
 {
 public:
-    explicit Vectors(const char* name)
+    explicit JsonFile(const containers::String& path)
     {
-        containers::String path(CRD_WYCHEPROOF_DIR "/testvectors_v1/");
-        path.append(name);
-        path.append(".json");
         INFO(path.c_str());
         Bytes bytes;
         REQUIRE(platform::fs::read_file_binary(platform::fs::Path(containers::StringView(path)), bytes));
         REQUIRE(assetio::json::parse(containers::ConstSpan<u8>(bytes.data(), bytes.size()), m_doc));
-        m_groups = assetio::json::find(m_doc, m_doc.root, "testGroups");
-        REQUIRE(assetio::json::count_of(m_doc, m_groups) > 0U);
     }
 
     [[nodiscard]] const assetio::json::JsonDoc& doc() const { return m_doc; }
-    [[nodiscard]] u32                           groups() const { return m_groups; }
+    [[nodiscard]] u32                           root() const { return m_doc.root; }
 
     [[nodiscard]] containers::StringView text(u32 node) const
     {
@@ -91,16 +87,43 @@ public:
         const u32 node = assetio::json::find(m_doc, object, key);
         return node != assetio::json::kInvalid && m_doc.nodes[node].type != assetio::json::JsonType::Null;
     }
+    [[nodiscard]] u64 number(u32 node) const { return static_cast<u64>(assetio::json::as_i64(m_doc, node, -1)); }
     [[nodiscard]] u64 number(u32 object, const char* key) const
     {
-        return static_cast<u64>(assetio::json::as_i64(m_doc, assetio::json::find(m_doc, object, key), -1));
+        return number(assetio::json::find(m_doc, object, key));
     }
+
+private:
+    assetio::json::JsonDoc m_doc{memory::default_allocator()};
+};
+
+// The path of `name` in a pinned vector directory.
+inline containers::String vector_path(const char* directory, const char* name)
+{
+    containers::String path(directory);
+    path.append("/");
+    path.append(name);
+    return path;
+}
+
+// One Wycheproof file, parsed: groups and tests are walked through the flat DOM.
+class Vectors : public JsonFile
+{
+public:
+    explicit Vectors(const char* name) : JsonFile(wycheproof_path(name))
+    {
+        m_groups = assetio::json::find(doc(), root(), "testGroups");
+        REQUIRE(assetio::json::count_of(doc(), m_groups) > 0U);
+    }
+
+    [[nodiscard]] u32 groups() const { return m_groups; }
+
     [[nodiscard]] bool flagged(u32 test, const char* flag) const
     {
-        const u32 flags = assetio::json::find(m_doc, test, "flags");
-        for (u32 i = 0U; i < assetio::json::count_of(m_doc, flags); ++i)
+        const u32 flags = assetio::json::find(doc(), test, "flags");
+        for (u32 i = 0U; i < assetio::json::count_of(doc(), flags); ++i)
         {
-            if (assetio::json::str_value_eq(m_doc, assetio::json::at(m_doc, flags, i), flag))
+            if (assetio::json::str_value_eq(doc(), assetio::json::at(doc(), flags, i), flag))
             {
                 return true;
             }
@@ -111,13 +134,13 @@ public:
     // Visits every test as f(group, test, result) with result "valid", "invalid" or "acceptable".
     template <typename F> void each(const F& f) const
     {
-        for (u32 g = 0U; g < assetio::json::count_of(m_doc, m_groups); ++g)
+        for (u32 g = 0U; g < assetio::json::count_of(doc(), m_groups); ++g)
         {
-            const u32 group = assetio::json::at(m_doc, m_groups, g);
-            const u32 tests = assetio::json::find(m_doc, group, "tests");
-            for (u32 t = 0U; t < assetio::json::count_of(m_doc, tests); ++t)
+            const u32 group = assetio::json::at(doc(), m_groups, g);
+            const u32 tests = assetio::json::find(doc(), group, "tests");
+            for (u32 t = 0U; t < assetio::json::count_of(doc(), tests); ++t)
             {
-                const u32 test = assetio::json::at(m_doc, tests, t);
+                const u32 test = assetio::json::at(doc(), tests, t);
                 INFO("tcId " << number(test, "tcId"));
                 f(group, test, text(test, "result"));
             }
@@ -125,7 +148,13 @@ public:
     }
 
 private:
-    assetio::json::JsonDoc m_doc{memory::default_allocator()};
-    u32                    m_groups = assetio::json::kInvalid;
+    static containers::String wycheproof_path(const char* name)
+    {
+        containers::String path = vector_path(CRD_WYCHEPROOF_DIR "/testvectors_v1", name);
+        path.append(".json");
+        return path;
+    }
+
+    u32 m_groups = assetio::json::kInvalid;
 };
 } // namespace crd::crypto::test

@@ -7,6 +7,10 @@
 #                              operation asked of a capability) against a restated containment rule, a model of each
 #                              verification order and the restated operation verdict, with any flipped byte of a
 #                              verified token or schema refused.
+#   crd-fuzz-crypto-mls        MLS's vector headers and presence octets against a restatement of RFC 9420 section
+#                              2.1, tree math against its own invariants, HPKE round trips with any bit changed,
+#                              hostile openings and signatures through the labelled operations, and derivations
+#                              (determinism, the length in the label, DeriveTreeSecret as ExpandWithLabel).
 #   crd-fuzz-crypto-policy     decode_policy against a restated layout, and generated generation sequences signed by
 #                              the test signer through PolicyStore::apply against the contract's adoption and window
 #                              rules.
@@ -27,6 +31,8 @@
 #                              compressed Certificates decoded only to reachable claims within the bound.
 crd_fuzz_target(crd-fuzz-crypto-capability
     SOURCES fuzz_capability.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-capability")
+crd_fuzz_target(crd-fuzz-crypto-mls
+    SOURCES fuzz_mls.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-mls")
 crd_fuzz_target(crd-fuzz-crypto-policy
     SOURCES fuzz_policy.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus")
 crd_fuzz_target(crd-fuzz-crypto-provider

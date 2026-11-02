@@ -1645,26 +1645,6 @@
           "registry": "TLS Alerts",
           "name": "ech_required",
           "value": "121"
-        },
-        {
-          "registry": "HPKE KEM Identifiers",
-          "name": "DHKEM(X25519, HKDF-SHA256)",
-          "value": "0x0020"
-        },
-        {
-          "registry": "HPKE KDF Identifiers",
-          "name": "HKDF-SHA256",
-          "value": "0x0001"
-        },
-        {
-          "registry": "HPKE AEAD Identifiers",
-          "name": "AES-128-GCM",
-          "value": "0x0001"
-        },
-        {
-          "registry": "HPKE AEAD Identifiers",
-          "name": "ChaCha20Poly1305",
-          "value": "0x0003"
         }
       ],
       "source": {
@@ -1679,7 +1659,7 @@
         "tests/foundation/crypto/interop/tls_interop.py"
       ],
       "deprecation": null,
-      "note": "Shared mode over the provider's ECH (crd-crypto tls.hpp, decision S14, docs/design/network-foundation.md#ech): TlsEchKey and its ECHConfig (DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 with AES-128-GCM or ChaCha20-Poly1305), current and previous server keys, a client that never sends a hello without ECH once given a list, retry configurations authenticated by a pinned key and used for one retried connection, ECH disabled and refused told apart, the public name answered only for that recovery, GREASE on every client hello without a list, and the inner hello padded to maximum_name_length; over records and QUIC, against OpenSSL 4.0.3 both ways over records and from a Cerid client over QUIC. RFC 9849 was read on 2026-11-02 and the codepoints checked against its IANA section and IANA's HPKE registry (read 2026-11-02). Its KEM is classical: the inner hello's metadata, never the session keys (the hybrid groups'), would yield to a quantum adversary; a post-quantum HPKE KEM for ECH (ML-KEM-768 0x0041 and X-Wing are in IANA's HPKE registry, draft-ietf-hpke-pq) is adopted once an ECH profile and the providers carry it."
+      "note": "Shared mode over the provider's ECH, its HPKE codepoints held by crypto.hpke (crd-crypto tls.hpp, decision S14, docs/design/network-foundation.md#ech): TlsEchKey and its ECHConfig (DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 with AES-128-GCM or ChaCha20-Poly1305), current and previous server keys, a client that never sends a hello without ECH once given a list, retry configurations authenticated by a pinned key and used for one retried connection, ECH disabled and refused told apart, the public name answered only for that recovery, GREASE on every client hello without a list, and the inner hello padded to maximum_name_length; over records and QUIC, against OpenSSL 4.0.3 both ways over records and from a Cerid client over QUIC. RFC 9849 was read on 2026-11-02 and the codepoints checked against its IANA section and IANA's HPKE registry (read 2026-11-02). Its KEM is classical: the inner hello's metadata, never the session keys (the hybrid groups'), would yield to a quantum adversary; a post-quantum HPKE KEM for ECH (ML-KEM-768 0x0041 and X-Wing are in IANA's HPKE registry, draft-ietf-hpke-pq) is adopted once an ECH profile and the providers carry it."
     },
     {
       "id": "tls.certificate-compression",
@@ -2199,6 +2179,82 @@
       "note": "With SHA-256 and SHA-384 (FIPS 180-4)."
     },
     {
+      "id": "crypto.hpke",
+      "title": "Hybrid public key encryption (HPKE)",
+      "kind": "algorithm",
+      "state": "implemented",
+      "owner": "crypto",
+      "rows": [
+        "NET.2"
+      ],
+      "spec": {
+        "type": "rfc",
+        "ref": "RFC 9180",
+        "status": "current"
+      },
+      "cryptography": [
+        "confidentiality",
+        "integrity",
+        "key-exchange",
+        "key-derivation"
+      ],
+      "codepoints": [
+        {
+          "registry": "HPKE KEM Identifiers",
+          "name": "DHKEM(P-256, HKDF-SHA256)",
+          "value": "0x0010"
+        },
+        {
+          "registry": "HPKE KEM Identifiers",
+          "name": "DHKEM(P-384, HKDF-SHA384)",
+          "value": "0x0011"
+        },
+        {
+          "registry": "HPKE KEM Identifiers",
+          "name": "DHKEM(X25519, HKDF-SHA256)",
+          "value": "0x0020"
+        },
+        {
+          "registry": "HPKE KDF Identifiers",
+          "name": "HKDF-SHA256",
+          "value": "0x0001"
+        },
+        {
+          "registry": "HPKE KDF Identifiers",
+          "name": "HKDF-SHA384",
+          "value": "0x0002"
+        },
+        {
+          "registry": "HPKE AEAD Identifiers",
+          "name": "AES-128-GCM",
+          "value": "0x0001"
+        },
+        {
+          "registry": "HPKE AEAD Identifiers",
+          "name": "AES-256-GCM",
+          "value": "0x0002"
+        },
+        {
+          "registry": "HPKE AEAD Identifiers",
+          "name": "ChaCha20Poly1305",
+          "value": "0x0003"
+        }
+      ],
+      "source": {
+        "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n89",
+        "read": "2026-10-27",
+        "verified": false
+      },
+      "review": "2027-11-02",
+      "evidence": [
+        "tests/foundation/crypto/test_hpke.cpp",
+        "tests/foundation/crypto/test_mls.cpp",
+        "tests/foundation/crypto/fuzz/fuzz_mls.cpp"
+      ],
+      "deprecation": null,
+      "note": "Base mode, single shot (crd-crypto hpke.hpp, decision H1, docs/design/network-foundation.md#hpke): DHKEM over X25519, P-256 and P-384 composed from the provider's key agreement and HKDF, with DeriveKeyPair, and the key schedule and AEAD of RFC 9180 section 5, so no HPKE primitive is Cerid's own; proven against every base-mode vector of RFC 9180's test-vectors.json for the KEMs and KDFs in the profile and against the MLS working group's encrypt_with_label vectors. MLS (mls.protocol) and its key packages, paths and Welcome messages are its consumers; the provider's TLS stack keeps its own HPKE for ECH (tls.ech). RFC 9180 was read on 2026-11-02 and the codepoints checked against IANA's HPKE registry (updated 2026-04-16, read 2026-11-02). Its KEMs are classical; the post-quantum KEMs IANA lists (ML-KEM-768 0x0041, X-Wing 0x647A, draft-ietf-hpke-pq) join with the post-quantum MLS cipher suites."
+    },
+    {
       "id": "crypto.ml-kem",
       "title": "Module-lattice-based key-encapsulation mechanism standard (ML-KEM)",
       "kind": "algorithm",
@@ -2365,6 +2421,28 @@
         "key-exchange",
         "key-derivation"
       ],
+      "codepoints": [
+        {
+          "registry": "MLS Cipher Suites",
+          "name": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+          "value": "0x0001"
+        },
+        {
+          "registry": "MLS Cipher Suites",
+          "name": "MLS_128_DHKEMP256_AES128GCM_SHA256_P256",
+          "value": "0x0002"
+        },
+        {
+          "registry": "MLS Cipher Suites",
+          "name": "MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519",
+          "value": "0x0003"
+        },
+        {
+          "registry": "MLS Cipher Suites",
+          "name": "MLS_256_DHKEMP384_AES256GCM_SHA384_P384",
+          "value": "0x0007"
+        }
+      ],
       "source": {
         "ref": "docs/research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#n89",
         "read": "2026-10-27",
@@ -2372,7 +2450,8 @@
       },
       "review": "2027-10-27",
       "evidence": [],
-      "deprecation": null
+      "deprecation": null,
+      "note": "Cerid's own implementation over crd-crypto's providers (decision M1, docs/design/network-foundation.md#mls), in progress on NET.2. The cipher suites of the profile (decision M2) were checked against RFC 9420 section 17.1 and IANA's MLS registry (updated 2025-11-17, read 2026-11-02); 0x0004 to 0x0006 (X448, Ed448, P-521) are outside it because no provider in the policy implements them."
     },
     {
       "id": "mls.architecture",
