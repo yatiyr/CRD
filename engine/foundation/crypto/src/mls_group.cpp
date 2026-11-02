@@ -772,20 +772,24 @@ void OpenedWelcome::wipe() noexcept
     m_info       = {};
     m_suite      = nullptr;
     m_resumption = ResumptionUsage::Application;
+    m_resumed    = nullptr;
 }
 
 namespace
 {
 // The GroupSecrets' pre-shared keys (section 12.4.3.1) into `psks`, and in `resumed` the usage of the one that resumes
-// a prior group (Application for none): Malformed for an identity named twice, a nonce not Nh long or a second key
-// that resumes a group; NotReady for a key the member does not hold: the store's, or for a reinit or branch key the
-// resumption secret of `prior` at the epoch it names, which must be its current one (decision M12).
+// a prior group (Application for none) and in `resumed_group` that group, `prior` (null for none): Malformed for an
+// identity named twice, a nonce not Nh long or a second key that resumes a group; NotReady for a key the member does
+// not hold: the store's, or for a reinit or branch key the resumption secret of `prior` at the epoch it names, which
+// must be its current one (decision M12).
 CryptoError welcome_psks(const CipherSuite& suite, cont::ConstSpan<u8> list, const GroupStore& store,
-                         const Group* prior, cont::Array<PreSharedKey>& psks, ResumptionUsage& resumed) noexcept
+                         const Group* prior, cont::Array<PreSharedKey>& psks, ResumptionUsage& resumed,
+                         const Group*& resumed_group) noexcept
 {
     cont::Array<cont::ConstSpan<u8>> encodings;
     cont::WireReader                 in(list);
-    resumed = ResumptionUsage::Application;
+    resumed       = ResumptionUsage::Application;
+    resumed_group = nullptr;
     while (!in.done())
     {
         const cont::ConstSpan<u8> start = in.rest();
@@ -813,6 +817,7 @@ CryptoError welcome_psks(const CipherSuite& suite, cont::ConstSpan<u8> list, con
             const bool held = prior != nullptr && prior->ready() &&
                               same_bytes(psk.id.group_id, prior->context().group_id) && psk.id.epoch == prior->epoch();
             psk.secret      = held ? prior->secret(EpochSecret::Resumption) : cont::ConstSpan<u8>();
+            resumed_group   = held ? prior : nullptr;
         }
         if (psk.secret.empty())
         {
@@ -892,7 +897,7 @@ CryptoError open_welcome(cont::ConstSpan<u8> welcome, const KeyPackage& own, con
     cont::Array<PreSharedKey> psks;
     if (error == CryptoError::None)
     {
-        error = welcome_psks(*suite, out.m_secrets.psks, store, prior, psks, out.m_resumption);
+        error = welcome_psks(*suite, out.m_secrets.psks, store, prior, psks, out.m_resumption, out.m_resumed);
     }
     if (error == CryptoError::None)
     {
@@ -1257,9 +1262,10 @@ CryptoError Group::join(cont::ConstSpan<u8> welcome, const KeyPackage& own, cont
     const GroupInfo&      info    = opened.group_info();
     const GroupContext&   context = info.context;
     const ResumptionUsage usage   = opened.resumption();
-    // A reinitialization may keep the id of the group it ends, in which the member takes no further part (open_welcome
-    // found `prior` holding the reinit key).
-    const bool same_group = usage == ResumptionUsage::Reinit && same_bytes(context.group_id, prior->context().group_id);
+    const Group*          resumed = opened.resumed(); // `prior`, when it held the reinit or branch key
+    // A reinitialization may keep the id of the group it ends, in which the member takes no further part.
+    const bool same_group = resumed != nullptr && usage == ResumptionUsage::Reinit &&
+                            same_bytes(context.group_id, resumed->context().group_id);
     if (!same_group && config.store->member_of(context.group_id))
     {
         return CryptoError::Replayed;
@@ -1302,9 +1308,9 @@ CryptoError Group::join(cont::ConstSpan<u8> welcome, const KeyPackage& own, cont
     {
         error = confirm(m_now, info.confirmation_tag);
     }
-    if (error == CryptoError::None && usage != ResumptionUsage::Application)
+    if (error == CryptoError::None && resumed != nullptr)
     {
-        error = check_resumed(*prior, usage);
+        error = check_resumed(*resumed, usage);
     }
     if (error == CryptoError::None)
     {

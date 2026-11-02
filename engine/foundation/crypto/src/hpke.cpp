@@ -495,7 +495,12 @@ void HpkeKey::clear() noexcept
 
 CryptoError HpkeKey::expand(AlgorithmId kem, cont::ConstSpan<u8> seed) noexcept
 {
-    const Kem& entry = *find_kem(kem);
+    const Kem* found = find_kem(kem);
+    if (found == nullptr)
+    {
+        return CryptoError::Unsupported;
+    }
+    const Kem& entry = *found;
     if (entry.kind == KemKind::MlKem)
     {
         return m_pq.from_seed(entry.pq, seed);
@@ -678,7 +683,12 @@ CryptoError HpkeKey::public_key(cont::Span<u8> out) const noexcept
 // ct_T, refused when ct_T is no point of its NIST curve, and the combined secret).
 CryptoError HpkeKey::decapsulate(cont::ConstSpan<u8> enc, cont::Span<u8> shared_secret) const noexcept
 {
-    const Kem& kem = *find_kem(m_kem);
+    const Kem* found = find_kem(m_kem);
+    if (found == nullptr)
+    {
+        return refuse(CryptoError::NotReady, shared_secret);
+    }
+    const Kem& kem = *found;
     if (kem.kind == KemKind::MlKem)
     {
         return m_pq.decapsulate(enc, shared_secret);

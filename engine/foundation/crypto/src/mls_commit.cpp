@@ -1933,8 +1933,9 @@ CryptoError Group::reinit(const Group& ended, const Signer& signer, const LeafNo
                           cont::ConstSpan<u8> leaf_private, const ResumeOptions& options, const GroupConfig& config,
                           ResumeResult& out) noexcept
 {
-    ReInit      params;
-    CryptoError error = CryptoError::None;
+    ReInit             params;
+    const CipherSuite* suite = nullptr;
+    CryptoError        error = CryptoError::None;
     if (&ended == this)
     {
         error = CryptoError::Malformed;
@@ -1943,19 +1944,20 @@ CryptoError Group::reinit(const Group& ended, const Signer& signer, const LeafNo
     {
         error = CryptoError::NotReady;
     }
-    else if (params.version != kProtocolVersion || cipher_suite(params.cipher_suite) == nullptr)
+    else
     {
-        error = CryptoError::Unsupported;
+        suite = cipher_suite(params.cipher_suite);
+        error = params.version != kProtocolVersion || suite == nullptr ? CryptoError::Unsupported : CryptoError::None;
     }
-    if (error != CryptoError::None)
+    if (error != CryptoError::None || suite == nullptr)
     {
         wipe();
         out.welcome.clear();
         out.group_info.clear();
         return error;
     }
-    return resume(ended, ResumptionUsage::Reinit, *cipher_suite(params.cipher_suite), params.group_id,
-                  params.extensions, signer, creator, leaf_private, options, config, out);
+    return resume(ended, ResumptionUsage::Reinit, *suite, params.group_id, params.extensions, signer, creator,
+                  leaf_private, options, config, out);
 }
 
 CryptoError Group::branch(const Group& from, cont::ConstSpan<u8> group_id, cont::ConstSpan<u8> extensions,

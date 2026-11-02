@@ -110,8 +110,9 @@ public:
                                             cont::ConstSpan<u8> exporter_context, cont::Span<u8> out) const noexcept;
 
 private:
-    // The halves an ML-KEM's or a hybrid's Nsk-byte seed expands to (`kem` already found).
+    // The halves an ML-KEM's or a hybrid's Nsk-byte seed expands to (Unsupported for a KEM outside the profile).
     [[nodiscard]] CryptoError expand(AlgorithmId kem, cont::ConstSpan<u8> seed) noexcept;
+    // Decap(enc) into `shared_secret` under this key's KEM (NotReady for a key that holds none).
     [[nodiscard]] CryptoError decapsulate(cont::ConstSpan<u8> enc, cont::Span<u8> shared_secret) const noexcept;
 
     AgreementKey m_key; // a DHKEM's key, or a hybrid's traditional half

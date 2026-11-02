@@ -308,6 +308,8 @@ public:
         return cont::ConstSpan<u8>(m_psk_secret, ready() ? m_suite->hash_bytes() : 0U);
     }
     [[nodiscard]] ResumptionUsage resumption() const noexcept { return m_resumption; }
+    // The group a reinit or branch PSK resumes, whose resumption secret the Welcome used (`prior`); null for none.
+    [[nodiscard]] const Group* resumed() const noexcept { return m_resumed; }
 
 private:
     friend CryptoError open_welcome(cont::ConstSpan<u8>, const KeyPackage&, cont::ConstSpan<u8>, const GroupStore&,
@@ -321,6 +323,7 @@ private:
     GroupInfo          m_info;
     u8                 m_psk_secret[kMaxHashBytes] = {};
     ResumptionUsage    m_resumption                = ResumptionUsage::Application;
+    const Group*       m_resumed                   = nullptr;
 };
 
 // The first steps of joining (section 12.4.3.1) for the member whose key package is `own` and whose init key is
