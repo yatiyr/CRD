@@ -271,7 +271,8 @@ Designed here, qualified under [WEB.5](../ROADMAP.md#slice-web.5):
 
 `crd-crypto` implements the interface in [provider.hpp](../../engine/foundation/crypto/include/crd/crypto/provider.hpp)
 over the pinned AWS-LC (NET.2, 2026-11-01): randomness, constant-time equality and zeroing, key identifiers,
-AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305, HKDF with SHA-256 and SHA-384, ML-DSA-44/65/87, Ed25519 and ECDSA
+AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305, HKDF with SHA-256 and SHA-384 and HMAC over their hashes (`kdf_mac`,
+MLS's MAC), ML-DSA-44/65/87, Ed25519 and ECDSA
 signatures (`ProviderVerifier` is the production `SignatureVerifier` of the policy generations), X25519, P-256 and
 P-384 key agreement, ML-KEM-768 and ML-KEM-1024 key encapsulation and the SipHash-2-4 table PRF. Every operation
 names its algorithm by register identifier; the length tables (`aead_key_bytes`, `hkdf_hash_bytes`,
@@ -1072,11 +1073,26 @@ carries the KEM.
    decision M5. Each parent's two children are derived together the first time a leaf below them is needed and the
    parent's secret is zeroed, a leaf's secret once its two ratchets hold theirs, a ratchet's once the next
    generation's is held, a key once spent or once it leaves the window (section 9.2).
-6. Next: transcript hashes (`transcript-hashes.json`) with message framing and protection with padding
-   (`message-protection.json`), the two proven together because a transcript hash covers a framed Commit's content
-   and signature, then the ratchet tree with tree and parent hashes, validation and TreeKEM (`tree-operations.json`,
-   `tree-validation.json`, `treekem.json`), key packages, proposals, commits and Welcome (`messages.json`,
-   `welcome.json`), and the passive-client scenarios (`passive-client-*.json`).
+6. Messages ([mls_message.hpp](../../engine/foundation/crypto/include/crd/crypto/mls_message.hpp);
+   `transcript-hashes.json`, `message-protection.json`, `messages.json`): the structures a handshake message carries
+   (credentials, capabilities and extensions, leaf nodes, key packages, the seven proposals, commits and update paths,
+   sections 5.3, 7.2, 10, 12.1 and 12.4), decoded as views of the input with every vector header minimal, every enum
+   value defined and every list a sequence of its entries, and written back byte for byte; a credential or proposal
+   of a type this build does not know is its type and one opaque vector, as OpenMLS reads it. Their framing (section
+   6): FramedContent, the signature over FramedContentTBS (with the GroupContext for a member and a new member
+   committing), PublicMessage with a member's membership tag, and MLSMessage; the senders and content types a wire
+   format admits are checked where a message is protected or verified, never where it is decoded, so every valid
+   encoding round-trips. PrivateMessage (section 6.3): the next generation of the sender's handshake or application
+   ratchet, a fresh random reuse guard XORed into the nonce, the content sealed under the message's own header (its
+   PrivateContentAAD, so the associated data is never copied) and the sender data under the keys derived from the
+   ciphertext's sample; a receiver opens the sender data, then the content under `receive_key`, checks the padding is
+   all zero and only then spends the generation, so a forged or malformed message spends nothing; protecting and
+   opening allocate nothing and open in place. The transcript hashes and the confirmation tag (section 8.2). Semantic
+   checks of leaf nodes, key packages and commits belong to the layers below.
+7. Next: the ratchet tree with tree and parent hashes, validation and TreeKEM (`tree-operations.json`,
+   `tree-validation.json`, `treekem.json`), key packages' and leaf nodes' validation, proposals, commits, GroupInfo
+   and Welcome (`welcome.json` and the rest of `messages.json`), and the passive-client scenarios
+   (`passive-client-*.json`).
 
 **M5. The receive window** (RFC 9420 section 9.2 leaves its size to the application). OpenMLS's defaults: a receiver
 keeps the keys of the 5 generations below the next unconsumed one of each ratchet (late and reordered messages) and
@@ -1089,6 +1105,13 @@ when its epoch starts (per leaf two node secrets, two ratchets and twice the win
 default window) and nothing on the message path; it has at most 2^20 leaves (about 0.7 GiB), a group size no
 deployment of MLS approaches and a bound on what a hostile tree size can claim. A sender's own ratchet hands out its
 generations in turn (`send_key`) and is Exhausted past 2^32 - 1, when the group must start a new epoch.
+
+**M6. Padding** (RFC 9420 section 6.3 leaves its amount to the application). A PrivateMessageContent of L bytes is
+padded with Padmé (Nikitin et al., "Reducing Metadata Leakage from Encrypted Files and Communication with PURBs",
+PETS 2019; `padme_padding`): with E = floor(log2 L), the top floor(log2 E) + 1 bits of L are kept and the bits below
+rounded up, so a padded length reveals O(log log L) bits instead of L's O(log L), for at most 12 % more bytes (11.6 %
+at worst, at 129 bytes). The sender may pad more (a call's frames to a constant size); the receiver accepts any
+length of zero bytes and refuses any other byte (section 6.3.1), so padding is never a covert channel.
 
 **M4. Interoperability** runs as TLS's does: pinned peers built in their own projects on the public-checks lane
 (OpenMLS through the pinned Rust toolchain, MLSpp against the pinned OpenSSL) and a Python driver relaying MLS messages
@@ -1107,7 +1130,19 @@ headers and presence octets; the 10 tree-math trees of 1 to 512 leaves node by n
 ancestors against their definitions for every pair of nodes of trees up to 64 leaves and at 2^31 leaves; every
 crypto-basics vector of the four suites with fresh signatures and encryptions, and the refusal of the three outside;
 DeriveKeyPair of the 20 external keys of the key-schedule vectors; every refusal), `test_provider.cpp` (`kdf_hash`
-against FIPS 180-4's examples) and `crd-fuzz-crypto-mls` (headers against a restatement of section 2.1.2, tree math
+against FIPS 180-4's examples and `kdf_mac` against Wycheproof's 348 HMAC-SHA-256 and HMAC-SHA-384 vectors),
+`test_mls_message.cpp` (every transcript-hashes vector of the four suites: the commit's AuthenticatedContent written
+back, its confirmation tag, both hashes and the input restated; every message-protection vector: each public message
+verified and protected again, byte for byte under Ed25519, application data refused as a public message, each private
+message opened, replayed and protected again into a fresh tree; the 300 messages vectors' key packages, the seven
+proposal bodies, commits, public and private messages, Welcomes and GroupInfos decoded and written back;
+PrivateMessage against a restatement of section 6.3 in both directions, with in-place opening, the padding rule,
+truncated and non-minimal contents, every single-byte change of a message, replay, another epoch's keys and a leaf
+past the tree; the framing rules of section 6 for every sender, content type and wire format; public messages from
+every sender with their tags and signatures bound to the context, the wire format and each field; the decoders'
+refusals; Padmé against its definition restated for every length below 70,000), `crd-fuzz-crypto-mls-message`
+(every decoder's acceptance written back, private messages changed in any byte or hostile refused with nothing
+spent, public messages verified exactly when unchanged) and `crd-fuzz-crypto-mls` (headers against a restatement of section 2.1.2, tree math
 against its invariants, HPKE round trips with any bit changed, hostile openings and signatures, derivations, and
 sequences of reads, spends and sends on a secret tree against a model of the window and section 9 restated).
 
