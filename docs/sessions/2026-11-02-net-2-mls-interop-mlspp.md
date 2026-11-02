@@ -71,15 +71,16 @@ suites all share, and the post-quantum suites interoperate once the peers take t
 ## TP-9: MLSpp spends a generation on forged content
 
 A PrivateMessage whose content seal is forged makes MLSpp's member refuse the genuine message after it ("Request for
-expired key"): the generation's key is taken before the seal authenticates, so anyone on the delivery path can make a
+expired key"): the generation's key is taken before the seal authenticates, though RFC 9420 section 9.2 consumes a key
+that "was used to encrypt or (successfully) decrypt a message", so anyone on the delivery path can make a
 member lose any message. Registered as [TP-9](../third-party-defects.md#tp-9) and let be; `forged_content_spends`
-reproduces it with MLSpp's members alone in each suite (a Cerid member in the same group refuses the forgery and reads
-the genuine message), and fails when MLSpp is fixed. MLSpp's members get every other forgery.
+reproduces it in a group of two MLSpp members in each suite (a Cerid member added afterwards refuses the same forgery
+of the next message and reads it genuine), and fails when MLSpp is fixed. MLSpp's members get every other forgery.
 
 ## Evidence (this PC, linux-gcc-public-checks through the track's WSL lane)
 
-- `crd-crypto-mls-interop-mlspp`: 24 of 24 cases; one traced run made 10,340 requests, 3,008 messages processed and
-  5,381 refusals (3,050 Cerid `forged`, 248 `replayed`, 24 `out-of-window`, 4 `expired`, 4 `unsupported`; MLSpp's AEAD,
+- `crd-crypto-mls-interop-mlspp`: 24 of 24 cases; one traced run made 10,364 requests, 3,012 messages processed and
+  5,385 refusals (3,050 Cerid `forged`, 248 `replayed`, 24 `out-of-window`, 4 `expired`, 4 `unsupported`; MLSpp's AEAD,
   membership tag, signature, confirmation and epoch refusals).
 - `crd-crypto-tls-interop-openssl` after the shared OpenSSL block: 79 of 79.
 - CTest guards (`^crd-no-|^crd-check|^crd-diag-coverage$|^crd-diag-seeded-faults$`) on the lane tree: all pass but

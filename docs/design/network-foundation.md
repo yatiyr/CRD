@@ -1383,6 +1383,7 @@ length of zero bytes and refuses any other byte (section 6.3.1), so padding is n
 (OpenMLS through the pinned Rust toolchain, MLSpp against the pinned OpenSSL) and a Python driver relaying MLS messages
 between a Cerid group member and each peer, so Cerid creates, joins, commits, protects and processes in groups where
 the others do too; the MLS working group's gRPC harness is not used.
+
 Amended 2026-11-02, with the first peer. Each peer is a program over its own library's interface that holds several
 members and speaks one line protocol (`cerid_mls_peer.cpp`'s header), so the members of one group live in both
 processes and every message one library makes the other processes; `mls_interop.py` is the delivery service and reads
@@ -1395,6 +1396,7 @@ suites interoperate once the peers take the draft's or IANA's codepoints (`mls.p
 then interoperability runs on the four RFC 9420 suites they share (0x0001, 0x0002, 0x0003, 0x0007). A third-party
 peer's deviation is registered once and the driver keeps every other oracle (MLSpp:
 [TP-9](../third-party-defects.md#tp-9)).
+
 MLSpp (`crd-crypto-mls-interop-mlspp`, `CRD_BUILD_MLS_VS_MLSPP` on the complete-tier `linux-gcc-public-checks`
 lane; MLSpp built by its own CMake against the pinned OpenSSL 4.0): in each shared suite a group created by each
 library, with handshake messages public and private, whose roles alternate between the two, so that each library
