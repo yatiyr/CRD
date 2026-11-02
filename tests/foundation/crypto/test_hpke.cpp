@@ -76,13 +76,6 @@ Bytes public_of(const HpkeKey& key)
     return out;
 }
 
-Bytes filled(usize size, u8 value)
-{
-    Bytes out;
-    out.resize(size, value);
-    return out;
-}
-
 constexpr HpkeSuite kSuites[] = {
     {AlgorithmId::X25519, AlgorithmId::HkdfSha256, AlgorithmId::Aes128Gcm},
     {AlgorithmId::X25519, AlgorithmId::HkdfSha256, AlgorithmId::Chacha20Poly1305},
@@ -201,7 +194,7 @@ TEST_CASE("HPKE: sealing round trips over every suite of the profile", "[crypto]
         HpkeKey  stranger;
         REQUIRE(stranger.generate(suite.kem) == CryptoError::None);
         Bytes changed_ct = sealed.ciphertext;
-        changed_ct[0] ^= 0x01U;
+        changed_ct[changed_ct.size() - 1U] ^= 0x01U; // the tag's last byte
         Bytes changed_enc = sealed.enc;
         changed_enc[changed_enc.size() - 1U] ^= 0x01U;
         const Span<u8> out(opened.data(), opened.size());

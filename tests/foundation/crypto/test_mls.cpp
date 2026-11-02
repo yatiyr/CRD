@@ -37,13 +37,6 @@ JsonFile mls_vectors(const char* name)
     return JsonFile(vector_path(CRD_MLS_VECTORS_DIR, name));
 }
 
-Bytes filled(usize size, u8 value)
-{
-    Bytes out;
-    out.resize(size, value);
-    return out;
-}
-
 std::optional<u32> optional_at(const JsonFile& file, u32 array, u32 index)
 {
     const u32 node = json::at(file.doc(), array, index);

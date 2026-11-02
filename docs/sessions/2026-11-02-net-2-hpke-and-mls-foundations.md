@@ -56,6 +56,9 @@ commit. Push run 41383412180 (7d4774c2) is pending with no job started; no hoste
   profile and 26 refused, the 14 deserialization headers, the 10 tree-math trees node by node, every pair of nodes of
   trees up to 64 leaves and the 2^31-leaf tree, the four suites' crypto-basics vectors (three suites refused) and the
   20 external keys of the key-schedule vectors.
+- linux-gcc-shipping (GCC 13, LTO): `crd-crypto-tests` and `crd-fuzz-crypto-mls` link clean and the 12 HPKE and MLS
+  cases pass, after its link-time `-Wnull-dereference` flagged one byte flip of a copied buffer in `test_hpke.cpp`
+  (now the tag's last byte).
 - `crd-fuzz-crypto-mls` (new, six modes): 17 seeds written by `--seed`, replayed clean on both lanes, and 4,000
   seeded random mutants of them replayed clean on both. The other crypto corpora, the register and inventory drift
   tests and `tls_interop.py` (79 of 79 against OpenSSL 4.0.3, after `overlaps` and `refuse` moved) pass.
@@ -63,7 +66,7 @@ commit. Push run 41383412180 (7d4774c2) is pending with no job started; no hoste
   constants' names in the fuzz target were fixed.
 - The CTest guards (`^crd-no-|^crd-check|^crd-diag-coverage$|^crd-diag-seeded-faults$`, ISA isolation excluded) on
   linux-gcc-debug: 19 of 19 pass.
-- Ten source mutations, each caught by the new cases (five by the MLS corpus too): the varint minimality check, a
+- Ten source mutations, each caught by the new cases (four by the MLS corpus too): the varint minimality check, a
   presence octet above 1, the parent formula, the "MLS 1.0 " prefix, the generation in DeriveTreeSecret, the DHKEM
   `eae_prk` label, DeriveKeyPair's counter start, the key schedule's mode byte, an opening's output not zeroed on a
   refusal and a KEM context without the recipient key.

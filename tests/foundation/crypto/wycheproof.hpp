@@ -45,6 +45,14 @@ inline Bytes from_hex(containers::StringView text)
     return out;
 }
 
+// `size` bytes of `value`.
+inline Bytes filled(usize size, u8 value)
+{
+    Bytes out;
+    out.resize(size, value);
+    return out;
+}
+
 inline bool equal(containers::ConstSpan<u8> a, containers::ConstSpan<u8> b)
 {
     return a.size() == b.size() && (a.empty() || std::memcmp(a.data(), b.data(), a.size()) == 0);
