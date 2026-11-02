@@ -678,6 +678,18 @@ void EpochSecrets::wipe() noexcept
     m_hash_bytes = 0U;
 }
 
+void EpochSecrets::take(EpochSecrets& other) noexcept
+{
+    if (&other == this)
+    {
+        return;
+    }
+    wipe();
+    copy_bytes(cont::ConstSpan<u8>(&other.m_secrets[0][0], sizeof(m_secrets)), &m_secrets[0][0]);
+    m_hash_bytes = other.m_hash_bytes;
+    other.wipe();
+}
+
 cont::ConstSpan<u8> EpochSecrets::get(EpochSecret which) const noexcept
 {
     return cont::ConstSpan<u8>(m_secrets[static_cast<usize>(which)], m_hash_bytes);

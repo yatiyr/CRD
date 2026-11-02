@@ -83,6 +83,8 @@ struct PathUpdate
     PathUpdate(PathUpdate&&)                 = delete;
     PathUpdate& operator=(PathUpdate&&)      = delete;
 
+    // Zeroes and drops everything it holds.
+    void clear() noexcept;
     // The path secret of `node` (empty when the member did not learn it) and the commit secret, Nh bytes.
     [[nodiscard]] cont::ConstSpan<u8> path_secret(u32 node) const noexcept;
     [[nodiscard]] cont::ConstSpan<u8> commit_secret() const noexcept;
@@ -158,6 +160,9 @@ public:
     //               non-blank parent that is not parent-hash valid relative to exactly one descendant.
     // The tree hash against the GroupInfo and each leaf's capabilities and lifetime are the group's checks.
     [[nodiscard]] CryptoError validate(const SignatureVerifier& verifier, cont::ConstSpan<u8> group_id) const noexcept;
+    // Section 7.3's uniqueness alone, which a commit's new tree must keep: BadKey when two nodes hold one encryption
+    // key or two leaves one signature key; ProviderFailure without memory.
+    [[nodiscard]] CryptoError check_unique_keys() const noexcept;
 
     // The tree changes of the proposals (section 12.1). Add puts the leaf in the leftmost blank leaf, extending the
     // tree when there is none, and lists it as unmerged in every non-blank node above it (`index` its leaf index);
@@ -196,7 +201,6 @@ private:
     [[nodiscard]] CryptoError parent_hash(cont::ConstSpan<u8> encryption_key, cont::ConstSpan<u8> parent_hash,
                                           cont::ConstSpan<u8> sibling_hash, cont::Span<u8> out) const noexcept;
     [[nodiscard]] CryptoError check_unmerged() const noexcept;
-    [[nodiscard]] CryptoError check_unique_keys() const noexcept;
     [[nodiscard]] CryptoError check_parent_hashes() const noexcept;
     // Whether `parent` is parent-hash valid relative to a descendant below `child` (section 7.9.2).
     [[nodiscard]] CryptoError parent_hash_valid_via(u32 parent, u32 child, bool& valid) const noexcept;
@@ -243,6 +247,8 @@ public:
     void prune(const RatchetTree& tree) noexcept;
     // Takes the keys of a confirmed commit's path (move: `update`'s keys are left empty).
     void apply(PathUpdate& update) noexcept;
+    // Takes `key` as the member's leaf key (move): an Update of its own leaf that a commit applied (section 12.1.2).
+    void replace_leaf(HpkeKey& key) noexcept;
 
     [[nodiscard]] bool ready() const noexcept { return m_leaf_key.ready(); }
     [[nodiscard]] u32  leaf() const noexcept { return m_leaf; }
@@ -251,7 +257,8 @@ public:
 
 private:
     friend CryptoError process_update_path(const PathKeys&, const RatchetTree&, u32, const UpdatePath&,
-                                           cont::ConstSpan<u8>, cont::ConstSpan<u32>, PathUpdate&) noexcept;
+                                           cont::ConstSpan<u8>, cont::ConstSpan<u32>, PathUpdate&,
+                                           const HpkeKey*) noexcept;
     [[nodiscard]] const HpkeKey* key_of(u32 node) const noexcept;
     // NotReady, OutOfWindow for a node not above the leaf, BadLength for a secret not Nh long.
     [[nodiscard]] CryptoError path_check(const RatchetTree& tree, u32 node,
@@ -282,9 +289,11 @@ private:
 // whose key the member holds, that node's ciphertext opened under `context` (the provisional GroupContext's
 // encoding), then each path secret above it derived and each key checked against the path's. Malformed when the
 // node's ciphertext count is not its resolution's size or the member holds no key of it (or is the sender); BadKey
-// when a derived public key is not the path's; HPKE's refusals pass through. `keys` is unchanged; `update` receives
-// the new keys and secrets on success and holds nothing on a refusal.
+// when a derived public key is not the path's; HPKE's refusals pass through. `leaf_key`, when given, is the member's
+// leaf key in `tree` instead of the one `keys` holds (an Update of its own leaf the commit applied). `keys` is
+// unchanged; `update` receives the new keys and secrets on success and holds nothing on a refusal.
 [[nodiscard]] CryptoError process_update_path(const PathKeys& keys, const RatchetTree& tree, u32 sender,
                                               const UpdatePath& path, cont::ConstSpan<u8> context,
-                                              cont::ConstSpan<u32> excluded, PathUpdate& update) noexcept;
+                                              cont::ConstSpan<u32> excluded, PathUpdate& update,
+                                              const HpkeKey* leaf_key = nullptr) noexcept;
 } // namespace crd::crypto::mls

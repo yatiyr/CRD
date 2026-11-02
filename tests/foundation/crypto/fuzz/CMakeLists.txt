@@ -11,6 +11,10 @@
 #                              2.1, tree math against its own invariants, HPKE round trips with any bit changed,
 #                              hostile openings and signatures through the labelled operations, and derivations
 #                              (determinism, the length in the label, DeriveTreeSecret as ExpandWithLabel).
+#   crd-fuzz-crypto-mls-commit MLS's proposals and commits: a member that joined an honest group processes any message,
+#                              and the honest Update proposal and commit changed in any byte, in each suite as public
+#                              and private messages; a refusal changes nothing and only the honest commit stages, and
+#                              merges, the committer's epoch.
 #   crd-fuzz-crypto-mls-group  MLS's group structures and joins: whatever a decoder (Welcome, GroupInfo, GroupSecrets,
 #                              GroupContext, required capabilities, external senders) accepts writes back exactly, an
 #                              Extension list's repeats and lookups are a restatement's, and an honest Welcome changed
@@ -45,6 +49,8 @@ crd_fuzz_target(crd-fuzz-crypto-capability
     SOURCES fuzz_capability.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-capability")
 crd_fuzz_target(crd-fuzz-crypto-mls
     SOURCES fuzz_mls.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-mls")
+crd_fuzz_target(crd-fuzz-crypto-mls-commit
+    SOURCES fuzz_mls_commit.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-mls-commit")
 crd_fuzz_target(crd-fuzz-crypto-mls-group
     SOURCES fuzz_mls_group.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-mls-group")
 crd_fuzz_target(crd-fuzz-crypto-mls-message

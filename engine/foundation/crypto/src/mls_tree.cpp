@@ -360,26 +360,26 @@ cont::ConstSpan<u8> PathUpdate::commit_secret() const noexcept
     return cont::ConstSpan<u8>(commit, hash_bytes);
 }
 
-namespace
+void PathUpdate::clear() noexcept
 {
-void clear_update(PathUpdate& update) noexcept
-{
-    update.leaf_key.clear();
+    leaf_key.clear();
     for (u32 l = 0U; l <= tree::kMaxDepth; ++l)
     {
-        update.keys[l].clear();
-        update.learned[l] = false;
+        keys[l].clear();
+        learned[l] = false;
     }
-    secure_zero(cont::Span<u8>(&update.secrets[0][0], sizeof(update.secrets)));
-    secure_zero(update.commit);
-    update.leaf       = 0U;
-    update.replaced   = 0U;
-    update.hash_bytes = 0U;
+    secure_zero(cont::Span<u8>(&secrets[0][0], sizeof(secrets)));
+    secure_zero(commit);
+    leaf       = 0U;
+    replaced   = 0U;
+    hash_bytes = 0U;
 }
 
+namespace
+{
 CryptoError refuse_update(CryptoError error, PathUpdate& update) noexcept
 {
-    clear_update(update);
+    update.clear();
     return error;
 }
 } // namespace
@@ -1493,13 +1493,19 @@ void PathKeys::apply(PathUpdate& update) noexcept
     update.leaf_key.clear();
 }
 
+void PathKeys::replace_leaf(HpkeKey& key) noexcept
+{
+    m_leaf_key = std::move(key);
+    key.clear();
+}
+
 // ---- TreeKEM ----
 
 CryptoError create_update_path(RatchetTree& tree, u32 sender, const Signer& signer, const LeafNode& leaf_template,
                                const GroupContext& context, cont::ConstSpan<u32> excluded, cont::Array<u8>& path,
                                PathUpdate& update) noexcept
 {
-    clear_update(update);
+    update.clear();
     path.clear();
     const CipherSuite& suite = tree.suite();
     const usize        nh    = suite.hash_bytes();
@@ -1672,10 +1678,10 @@ CryptoError create_update_path(RatchetTree& tree, u32 sender, const Signer& sign
 }
 
 CryptoError process_update_path(const PathKeys& keys, const RatchetTree& tree, u32 sender, const UpdatePath& path,
-                                cont::ConstSpan<u8> context, cont::ConstSpan<u32> excluded,
-                                PathUpdate& update) noexcept
+                                cont::ConstSpan<u8> context, cont::ConstSpan<u32> excluded, PathUpdate& update,
+                                const HpkeKey* leaf_key) noexcept
 {
-    clear_update(update);
+    update.clear();
     if (!keys.ready() || !tree.ready())
     {
         return CryptoError::NotReady;
@@ -1707,8 +1713,10 @@ CryptoError process_update_path(const PathKeys& keys, const RatchetTree& tree, u
     {
         return error;
     }
+    const auto key_for = [&](u32 node) -> const HpkeKey*
+    { return node == me && leaf_key != nullptr ? leaf_key : keys.key_of(node); };
     usize held = 0U;
-    while (held < resolved.size() && !keys.holds(resolved[held]))
+    while (held < resolved.size() && key_for(resolved[held]) == nullptr)
     {
         ++held;
     }
@@ -1721,7 +1729,7 @@ CryptoError process_update_path(const PathKeys& keys, const RatchetTree& tree, u
         return CryptoError::Malformed;
     }
     const u32 start = tree::level(nodes[lowest]);
-    error           = decrypt_with_label(suite, *keys.key_of(resolved[held]), kPathLabel, context, sealed.kem_output,
+    error           = decrypt_with_label(suite, *key_for(resolved[held]), kPathLabel, context, sealed.kem_output,
                                          sealed.ciphertext, cont::Span<u8>(update.secrets[start], nh));
     // Each path secret above it, each key checked against the path's (section 7.4).
     for (usize i = lowest; error == CryptoError::None && i < count; ++i)

@@ -1,17 +1,21 @@
 #pragma once
 
-// crd-crypto -- an MLS group, RFC 9420 (NET.2; contract: docs/design/network-foundation.md#mls, M3 layer 8 and
-// decisions M8 and M9): the group's extensions (sections 7.2, 11.1, 12.1.8.1 and 13.4), the validation of leaf nodes
+// crd-crypto -- an MLS group, RFC 9420 (NET.2; contract: docs/design/network-foundation.md#mls, M3 layers 8 and 9 and
+// decisions M8 to M10): the group's extensions (sections 7.2, 11.1, 12.1.8.1 and 13.4), the validation of leaf nodes
 // and key packages against a group (5.3.1, 7.3, 10.1 and 13.3), the GroupInfo and Welcome a committer seals for new
-// members (12.4.3 and 12.4.3.1), and a member's group state: a new group (section 11) and one joined from a Welcome.
+// members (12.4.3 and 12.4.3.1), and a member's group state: a new group (section 11), one joined from a Welcome, and
+// its epochs' messages: proposals, application data and commits received and sent, and a commit staged and merged
+// (5.2 and 12.1 to 12.4.2; mls_commit.cpp).
 //
 //   time        every lifetime check takes the caller's clock (LeafPolicy::now); nothing here reads one.
 //   identity    whether a credential binds acceptable identifiers to its key is the application's Authentication
 //               Service (section 5.3.1); which pre-shared keys and groups a member holds is its GroupStore.
-//   atomicity   a group that refuses a create or a join is left empty: nothing of the refused state remains.
+//   atomicity   a group that refuses a create or a join is left empty; a refused message changes nothing of the
+//               group but a PrivateMessage's spent generation, and a commit changes it only when merged.
 //   secrets     the joiner, path, PSK and epoch secrets, the decrypted GroupSecrets and the private keys are zeroed
 //               when replaced or destroyed.
-//   allocation  the handshake path: a join allocates the tree, the decrypted Welcome and the epoch's secret tree.
+//   allocation  the handshake path: a join allocates the tree, the decrypted Welcome and the epoch's secret tree; a
+//               commit the next epoch's; a received message owns a copy of its bytes, opened in place.
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
@@ -312,10 +316,34 @@ private:
                                        cont::ConstSpan<u8> init_private, const GroupStore& store,
                                        OpenedWelcome& out) noexcept;
 
-// ---- A member's group state (sections 8, 11 and 12.4.3.1; decision M9) ----
+// ---- Proposals and commits (sections 5.2 and 12.1 to 12.4.2; M3 layer 9 and decision M10) ----
+
+// Whether a commit holding a proposal of `type` must carry a path (section 12.4's pathRequiredTypes, the Path Required
+// column of section 17.4): update, remove, external_init and group_context_extensions, and any type this build does
+// not know.
+[[nodiscard]] bool path_required(u16 type) noexcept;
+
+// Whether section 12.1.8 lets an external sender send a proposal of `type`: add, remove, psk, reinit and
+// group_context_extensions.
+[[nodiscard]] bool external_proposal(u16 type) noexcept;
+
+// ProposalRef = RefHash("MLS 1.0 Proposal Reference", AuthenticatedContent) of an authenticated proposal (section
+// 5.2); `out` Nh long, BadLength for a content that does not encode.
+[[nodiscard]] CryptoError proposal_ref(const CipherSuite& suite, WireFormat wire_format, const FramedContent& content,
+                                       const ContentAuth& auth, cont::Span<u8> out) noexcept;
+
+// ---- A member's group state (sections 8, 11, 12 and 12.4.3.1; decisions M9 and M10) ----
+
+// What a group keeps beyond its epoch (decision M10): the resumption PSKs of this many past epochs (56 bytes each),
+// which a commit may inject (section 8.6), and at most this many proposals cached in one epoch, so a flood of
+// proposals costs bounded memory (Exhausted past it).
+inline constexpr u32 kDefaultResumptionEpochs = 32U;
+inline constexpr u32 kMaxResumptionEpochs     = 1024U;
+inline constexpr u32 kDefaultPendingProposals = 256U;
+inline constexpr u32 kMaxPendingProposals     = 65536U;
 
 // What a group consults: the signature verifier, the Authentication Service and the member's store (each outliving
-// the group), the leaf policy and the secret tree's receive window.
+// the group), the leaf policy, the secret tree's receive window and the bounds of decision M10.
 struct GroupConfig
 {
     const SignatureVerifier*     verifier       = nullptr;
@@ -323,10 +351,171 @@ struct GroupConfig
     const GroupStore*            store          = nullptr;
     LeafPolicy                   policy;
     RatchetWindow                window;
+    u32                          resumption_epochs = kDefaultResumptionEpochs;
+    u32                          pending_proposals = kDefaultPendingProposals;
 };
 
-// One member's state of one epoch: the GroupContext's fields, the ratchet tree, the member's leaf and path keys, the
-// epoch's secrets, its secret tree and the interim transcript hash.
+// One epoch of a member's state: what a Group holds, and what a StagedCommit derives for the next epoch.
+struct GroupEpoch
+{
+    u64             epoch = 0U;
+    cont::Array<u8> extensions; // the GroupContext's Extension list body
+    cont::Array<u8> confirmed;  // the confirmed transcript hash
+    cont::Array<u8> interim;    // the interim transcript hash
+    RatchetTree     tree;
+    EpochSecrets    secrets;
+    SecretTree      secret_tree;
+
+    // Zeroes and drops everything; takes `other`'s state (zeroing what this held), leaving `other` empty.
+    void clear() noexcept;
+    void take(GroupEpoch& other) noexcept;
+};
+
+class Group;
+
+// A commit a member created or received, checked in full and its next epoch derived, but not yet the group's
+// (section 12.4): Group::merge takes it. Until then its proposals stay readable, so the application can apply its own
+// rules (section 12.2 lets it add some) and merge it or drop it. Its secrets are zeroed when dropped.
+class StagedCommit
+{
+public:
+    StagedCommit() noexcept = default;
+    ~StagedCommit() noexcept;
+    StagedCommit(const StagedCommit&)            = delete;
+    StagedCommit& operator=(const StagedCommit&) = delete;
+    StagedCommit(StagedCommit&&)                 = delete;
+    StagedCommit& operator=(StagedCommit&&)      = delete;
+
+    // Drops the commit, zeroing its secrets.
+    void clear() noexcept;
+
+    [[nodiscard]] bool   ready() const noexcept { return m_group != nullptr; }
+    [[nodiscard]] u64    epoch() const noexcept { return m_next.epoch; } // the new epoch
+    [[nodiscard]] Sender committer() const noexcept { return m_committer; }
+    // Whether the commit removes the member: merging it leaves the group empty (section 12.4.2).
+    [[nodiscard]] bool removes_self() const noexcept { return m_removed; }
+    [[nodiscard]] bool has_path() const noexcept { return m_has_path; }
+    // The committed proposals in the commit's order, each with its sender (the committer for one sent by value).
+    [[nodiscard]] usize proposal_count() const noexcept { return m_entries.size(); }
+    [[nodiscard]] bool  proposal(usize i, Proposal& out, Sender& sender) const noexcept;
+    // The leaf index of each member the commit adds, in the order of its Add proposals.
+    [[nodiscard]] cont::ConstSpan<u32> added() const noexcept
+    {
+        return cont::ConstSpan<u32>(m_added.data(), m_added.size());
+    }
+    // The next epoch's ratchet tree and epoch authenticator (empty for a member the commit removes).
+    [[nodiscard]] const RatchetTree&  tree() const noexcept { return m_next.tree; }
+    [[nodiscard]] cont::ConstSpan<u8> epoch_authenticator() const noexcept
+    {
+        return m_next.secrets.get(EpochSecret::Authentication);
+    }
+
+private:
+    friend class Group;
+    struct Entry
+    {
+        usize  offset = 0U; // the proposal's encoding in m_bytes
+        usize  bytes  = 0U;
+        Sender sender;
+    };
+
+    const Group*        m_group      = nullptr; // the group it was staged for, at m_from_epoch
+    u64                 m_from_epoch = 0U;
+    Sender              m_committer;
+    bool                m_removed  = false;
+    bool                m_has_path = false;
+    cont::Array<u8>     m_bytes; // the committed proposals' encodings
+    cont::Array<Entry>  m_entries;
+    cont::Array<u32>    m_added;
+    GroupEpoch          m_next;
+    PathUpdate          m_update; // the path's keys for the member, applied when merged
+};
+
+// How a member's own message is framed (section 6): a PrivateMessage by default, or a PublicMessage (never for
+// application data), its authenticated data, and the padding of a PrivateMessage: Padme's (decision M6), plus
+// `extra_padding` zero bytes (a call's frames brought to one size).
+struct SendOptions
+{
+    WireFormat          wire_format = WireFormat::PrivateMessage;
+    cont::ConstSpan<u8> authenticated_data;
+    usize               extra_padding = 0U;
+};
+
+// What a member's commit holds (section 12.4.1).
+struct CommitOptions
+{
+    SendOptions send;
+    // The member's own proposals, committed by value after the cached ones, in this order: Add, Remove, PreSharedKey
+    // and GroupContextExtensions (an Update by value would be the committer's own, which section 12.2 refuses).
+    cont::ConstSpan<Proposal> proposals;
+    // Every proposal cached this epoch that keeps the list valid, by reference, as section 12.2 prefers: a Remove over
+    // an Update of the same leaf, the latest Update of a leaf, none of the committer's own Updates or removal, the
+    // first of repeated Adds of one client, PreSharedKeys and Removes, the latest GroupContextExtensions, and only
+    // proposals valid on their own (section 12.1).
+    bool pending = true;
+    // Whether the commit carries a path when no proposal requires one and the list is not empty (section 12.4).
+    bool path = true;
+    // Whether the Welcome's GroupInfo carries the ratchet tree (section 12.4.3.3), and more GroupInfo extensions
+    // (an Extension list's body, each type once, not ratchet_tree).
+    bool                tree_in_welcome = true;
+    cont::ConstSpan<u8> group_info_extensions;
+};
+
+// A member's commit: its MLSMessage, the Welcome's MLSMessage for the members it adds (empty when none), the signed
+// GroupInfo's MLSMessage of the new epoch, and the commit staged for Group::merge once the delivery service accepted
+// it.
+struct CommitResult
+{
+    cont::Array<u8> message;
+    cont::Array<u8> welcome;
+    cont::Array<u8> group_info;
+    StagedCommit    staged;
+};
+
+// A message a member processed (Group::process): what it carried, as views of the bytes it owns (a PrivateMessage is
+// opened in place), valid until it is processed again or destroyed.
+class ReceivedMessage
+{
+public:
+    ReceivedMessage() noexcept = default;
+    ~ReceivedMessage() noexcept;
+    ReceivedMessage(const ReceivedMessage&)            = delete;
+    ReceivedMessage& operator=(const ReceivedMessage&) = delete;
+    ReceivedMessage(ReceivedMessage&&)                 = delete;
+    ReceivedMessage& operator=(ReceivedMessage&&)      = delete;
+
+    [[nodiscard]] WireFormat          wire_format() const noexcept { return m_wire_format; }
+    [[nodiscard]] ContentType         content_type() const noexcept { return m_content.content_type; }
+    [[nodiscard]] Sender              sender() const noexcept { return m_content.sender; }
+    [[nodiscard]] cont::ConstSpan<u8> authenticated_data() const noexcept { return m_content.authenticated_data; }
+    // An application message's data.
+    [[nodiscard]] cont::ConstSpan<u8> application_data() const noexcept
+    {
+        return m_content.content_type == ContentType::Application ? m_content.body : cont::ConstSpan<u8>();
+    }
+    // A proposal and the reference the group cached it under.
+    [[nodiscard]] const Proposal&     proposal() const noexcept { return m_proposal; }
+    [[nodiscard]] cont::ConstSpan<u8> proposal_ref() const noexcept { return cont::ConstSpan<u8>(m_ref, m_ref_bytes); }
+    // A commit, staged.
+    [[nodiscard]] StagedCommit&       commit() noexcept { return m_commit; }
+    [[nodiscard]] const StagedCommit& commit() const noexcept { return m_commit; }
+
+private:
+    friend class Group;
+    void wipe() noexcept;
+
+    cont::Array<u8> m_bytes;
+    WireFormat      m_wire_format = WireFormat::PublicMessage;
+    FramedContent   m_content;
+    ContentAuth     m_auth;
+    Proposal        m_proposal;
+    u8              m_ref[kMaxHashBytes] = {};
+    usize           m_ref_bytes          = 0U;
+    StagedCommit    m_commit;
+};
+
+// One member's state of one epoch (GroupEpoch), the member's leaf and path keys, the proposals it cached this epoch,
+// the resumption PSKs of past epochs and the leaf keys of its own pending Updates.
 class Group
 {
 public:
@@ -342,8 +531,8 @@ public:
     // empty confirmed transcript hash and the interim hash from it. `creator` is a key-package leaf whose private
     // HPKE key is `leaf_private`, checked as a sent leaf (check_leaf and its signature); `extensions` is the body of
     // the GroupContext's Extension list, each type one the creator supports. Unsupported for a suite outside the
-    // profile or a config without a verifier and an Authentication Service; BadKey when `leaf_private` is not the
-    // leaf's key; the checks' refusals pass through.
+    // profile or a config without a verifier and an Authentication Service, BadLength for bounds past decision M10's;
+    // BadKey when `leaf_private` is not the leaf's key; the checks' refusals pass through.
     [[nodiscard]] CryptoError create(const CipherSuite& suite, cont::ConstSpan<u8> group_id,
                                      cont::ConstSpan<u8> extensions, const LeafNode& creator,
                                      cont::ConstSpan<u8> leaf_private, const GroupConfig& config) noexcept;
@@ -368,44 +557,146 @@ public:
                                    cont::ConstSpan<u8> init_private, cont::ConstSpan<u8> leaf_private,
                                    cont::ConstSpan<u8> ratchet_tree, const GroupConfig& config) noexcept;
 
+    // Processes one MLSMessage of the group (sections 6, 12.1 and 12.4.2), in this order:
+    //   Unsupported  a wire format other than a public or private message, or a commit from a new member (an
+    //                external join; decision M10);
+    //   Malformed    a message that does not decode, of another group, framing section 6 refuses, a PrivateMessage
+    //                whose padding or content is malformed, a proposal of a type its sender may not send (an
+    //                ExternalInit, an external sender's Update, a new member's proposal other than an Add), or a
+    //                commit whose list section 12.2 refuses or that lacks a required path;
+    //   OutOfWindow  another epoch, a sender leaf that is blank or outside the tree, or an external sender the group
+    //                does not list; the secret tree's refusals of a PrivateMessage (Replayed, OutOfWindow) pass
+    //                through;
+    //   Forged       a membership tag, an AEAD seal, a signature or a confirmation tag that does not verify;
+    //   Replayed     a proposal already cached, or the member's own commit (its StagedCommit is merged instead);
+    //   Exhausted    a proposal past the epoch's cache (decision M10);
+    //   NotReady     a commit referencing a proposal the member never cached or a PSK it does not hold; and a
+    //                commit's checks against the group: each proposal's (check_key_package, check_leaf and its
+    //                signature, a Remove of a blank leaf as Malformed), the new tree's keys and credential types
+    //                (BadKey, Unsupported) and the path's (merge_path, process_update_path).
+    // A proposal is cached under its reference, an application message's data is read, and a commit is staged in
+    // `out.commit()` for merge: nothing of the group changes but the secret tree's spent generation of a
+    // PrivateMessage (section 9.2). A refusal leaves `out` empty.
+    [[nodiscard]] CryptoError process(cont::ConstSpan<u8> message, ReceivedMessage& out) noexcept;
+
+    // The member's own proposal (section 12.1) as an MLSMessage in `out`, cached as received (`ref`, Nh bytes, its
+    // reference): an Add, Remove, PreSharedKey or GroupContextExtensions. NotReady for an empty group; Malformed for an
+    // Update (propose_update's), an ExternalInit, a wire format other than a public or private message or a proposal
+    // that does not encode; Unsupported for a ReInit (decision M10), another type, or a signer that is not the member's
+    // leaf's or of another algorithm; BadLength for `ref` not Nh long; Exhausted past the epoch's cache. On a refusal
+    // `out` and `ref` are empty.
+    [[nodiscard]] CryptoError propose(const Signer& signer, const Proposal& proposal, const SendOptions& options,
+                                      cont::Array<u8>& out, cont::Span<u8> ref) noexcept;
+    // An Update of the member's own leaf (section 12.1.2): a fresh HPKE key, the leaf re-signed with source update,
+    // proposed as `propose` does; the private key is kept until a commit adopts the leaf or the epoch ends.
+    [[nodiscard]] CryptoError propose_update(const Signer& signer, const SendOptions& options, cont::Array<u8>& out,
+                                             cont::Span<u8> ref) noexcept;
+    // An application message (section 6.3), always a PrivateMessage; NotReady while the member holds proposals this
+    // epoch (section 12.4: a member that saw valid proposals commits before it sends application data).
+    [[nodiscard]] CryptoError protect(const Signer& signer, cont::ConstSpan<u8> data, const SendOptions& options,
+                                      cont::Array<u8>& out) noexcept;
+
+    // The member's commit (section 12.4.1): the proposals CommitOptions names, validated as a receiver would (the
+    // refusals of `process` for a commit), a path when required or asked for, the commit signed under the current
+    // GroupContext and protected with the current epoch's keys, the new epoch's GroupInfo signed, and a Welcome for the
+    // members it adds (each with its path secret, every PSK named). Nothing of the group changes until `merge`, but a
+    // PrivateMessage spends the sender's handshake generation. On a refusal `out` is empty.
+    [[nodiscard]] CryptoError commit(const Signer& signer, const CommitOptions& options, CommitResult& out) noexcept;
+
+    // Makes a staged commit the group's epoch: the past epoch's resumption PSK kept, the member's path keys pruned
+    // (section 7.5) and the path's applied, an Update of the member's own leaf adopting its kept key, the proposal
+    // cache dropped. A commit that removes the member leaves the group empty. OutOfWindow for a commit staged for
+    // another group or epoch (the group moved on), NotReady for an empty one; `staged` is left empty either way.
+    [[nodiscard]] CryptoError merge(StagedCommit& staged) noexcept;
+
     [[nodiscard]] bool               ready() const noexcept { return m_suite != nullptr; }
     [[nodiscard]] const CipherSuite& suite() const noexcept { return *m_suite; }
-    [[nodiscard]] u64                epoch() const noexcept { return m_epoch; }
+    [[nodiscard]] u64                epoch() const noexcept { return m_now.epoch; }
     [[nodiscard]] u32                own_leaf() const noexcept { return m_keys.leaf(); }
     // The epoch's GroupContext, its fields views of the group's state (valid until it changes).
     [[nodiscard]] GroupContext        context() const noexcept;
-    [[nodiscard]] const RatchetTree&  tree() const noexcept { return m_tree; }
+    [[nodiscard]] const RatchetTree&  tree() const noexcept { return m_now.tree; }
     [[nodiscard]] const PathKeys&     keys() const noexcept { return m_keys; }
-    [[nodiscard]] SecretTree&         secret_tree() noexcept { return m_secret_tree; }
-    [[nodiscard]] const SecretTree&   secret_tree() const noexcept { return m_secret_tree; }
-    [[nodiscard]] cont::ConstSpan<u8> secret(EpochSecret which) const noexcept { return m_secrets.get(which); }
+    [[nodiscard]] SecretTree&         secret_tree() noexcept { return m_now.secret_tree; }
+    [[nodiscard]] const SecretTree&   secret_tree() const noexcept { return m_now.secret_tree; }
+    [[nodiscard]] cont::ConstSpan<u8> secret(EpochSecret which) const noexcept { return m_now.secrets.get(which); }
     [[nodiscard]] cont::ConstSpan<u8> epoch_authenticator() const noexcept
     {
-        return m_secrets.get(EpochSecret::Authentication);
+        return m_now.secrets.get(EpochSecret::Authentication);
     }
     [[nodiscard]] cont::ConstSpan<u8> interim_transcript_hash() const noexcept
     {
-        return cont::ConstSpan<u8>(m_interim.data(), m_interim.size());
+        return cont::ConstSpan<u8>(m_now.interim.data(), m_now.interim.size());
     }
+    // The proposals cached this epoch.
+    [[nodiscard]] usize pending_proposals() const noexcept { return m_cache.size(); }
 
 private:
+    struct Cached // one proposal received or sent this epoch
+    {
+        u8              ref[kMaxHashBytes] = {};
+        Sender          sender;
+        cont::Array<u8> bytes; // the Proposal's encoding
+    };
+    struct Resumption // a past epoch's resumption PSK
+    {
+        u64 epoch                 = 0U;
+        u8  secret[kMaxHashBytes] = {};
+    };
+    struct Item; // one proposal of a commit's list (mls_commit.cpp)
+    struct Plan; // a commit's list and what applying it gives (mls_commit.cpp)
+
     void wipe() noexcept;
+    void forget_epoch() noexcept; // the proposal cache and the pending leaves
+    [[nodiscard]] CryptoError check_config(const GroupConfig& config) const noexcept;
     // The interim transcript hash from the epoch's confirmation tag; Forged when `tag` is not the tag the epoch's
     // confirmation key gives its confirmed transcript hash.
-    [[nodiscard]] CryptoError confirm(cont::ConstSpan<u8> tag) noexcept;
+    [[nodiscard]] CryptoError confirm(GroupEpoch& epoch, cont::ConstSpan<u8> tag) const noexcept;
     [[nodiscard]] CryptoError own_bytes(cont::ConstSpan<u8> group_id, cont::ConstSpan<u8> extensions,
                                         cont::ConstSpan<u8> confirmed) noexcept;
+    // The secret of a pre-shared key: this group's own resumption PSKs first, then the store's.
+    [[nodiscard]] cont::ConstSpan<u8> psk_of(const PreSharedKeyId& id) const noexcept;
+    // The kept leaf key of the member's own Update whose public key is `public_key` (its index; size() for none).
+    [[nodiscard]] usize pending_leaf(cont::ConstSpan<u8> public_key) const noexcept;
+    // Unsupported unless `signer` holds the suite's algorithm and the member's leaf's signature key.
+    [[nodiscard]] CryptoError check_signer(const Signer& signer) const noexcept;
+    // A member's content signed under the current GroupContext, and protected with the current epoch's keys.
+    [[nodiscard]] CryptoError sign_own(const Signer& signer, WireFormat wire_format, const FramedContent& content,
+                                       cont::Span<u8> signature, usize& written) const noexcept;
+    [[nodiscard]] CryptoError wrap(const SendOptions& options, const FramedContent& content, const ContentAuth& auth,
+                                   cont::Array<u8>& out) noexcept;
+    [[nodiscard]] CryptoError send_proposal(const Signer& signer, const Proposal& proposal, const SendOptions& options,
+                                            cont::Array<u8>& out, cont::Span<u8> ref) noexcept;
+    // A verified proposal cached under its reference (`ref`): Replayed when it already is, Exhausted past the bound.
+    [[nodiscard]] CryptoError cache(WireFormat wire_format, const FramedContent& content, const ContentAuth& auth,
+                                    cont::Span<u8> ref) noexcept;
+    [[nodiscard]] const Cached* cached(cont::ConstSpan<u8> ref) const noexcept;
+    // The signature key of a received message's sender: a member's leaf (Replayed for the member itself), an external
+    // sender the group lists, a new member's key package.
+    [[nodiscard]] CryptoError sender_key(const ReceivedMessage& message, cont::ConstSpan<u8>& key) const noexcept;
+    // Sections 12.2 and 12.3 over a commit's list from `committer`: the list checked and applied to a copy of the
+    // tree and GroupContext in `staged`, its PSKs looked up into `plan`.
+    [[nodiscard]] CryptoError stage_list(u32 committer, Plan& plan, StagedCommit& staged) const noexcept;
+    // The commit's key schedule (section 12.4.2): the confirmed transcript hash, the new GroupContext, the epoch's
+    // secrets from the current init secret, the commit secret and the PSKs, and its secret tree.
+    [[nodiscard]] CryptoError advance(StagedCommit& staged, const Plan& plan, WireFormat wire_format,
+                                      const FramedContent& content, cont::ConstSpan<u8> signature,
+                                      cont::ConstSpan<u8> commit_secret) const noexcept;
+    // The committed proposals' encodings copied into `staged`, which then names this group and epoch.
+    [[nodiscard]] CryptoError record(const Plan& plan, u32 committer, bool has_path,
+                                     StagedCommit& staged) const noexcept;
+    [[nodiscard]] CryptoError process_commit(ReceivedMessage& out) noexcept;
+    // The cached proposals section 12.2 prefers for the member's commit (CommitOptions::pending).
+    [[nodiscard]] CryptoError select_pending(u32 committer, Plan& plan) const noexcept;
 
-    const CipherSuite* m_suite = nullptr;
-    GroupConfig        m_config;
-    u64                m_epoch = 0U;
-    cont::Array<u8>    m_group_id;
-    cont::Array<u8>    m_extensions;
-    cont::Array<u8>    m_confirmed;
-    cont::Array<u8>    m_interim;
-    RatchetTree        m_tree;
-    PathKeys           m_keys;
-    EpochSecrets       m_secrets;
-    SecretTree         m_secret_tree;
+    const CipherSuite*       m_suite = nullptr;
+    GroupConfig              m_config;
+    cont::Array<u8>          m_group_id;
+    GroupEpoch               m_now;
+    PathKeys                 m_keys;
+    cont::Array<Cached>      m_cache;
+    cont::Array<Resumption>  m_resumption; // a ring of config.resumption_epochs past epochs
+    usize                    m_resumption_next = 0U;
+    cont::Array<HpkeKey>     m_pending_leaves; // the leaf keys of the member's own Updates
 };
 } // namespace crd::crypto::mls

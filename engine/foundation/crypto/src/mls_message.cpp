@@ -1016,6 +1016,11 @@ usize padme_padding(usize length) noexcept
     return ((length + mask) & ~mask) - length;
 }
 
+usize private_content_bytes(const FramedContent& content, const ContentAuth& auth) noexcept
+{
+    return Size().field(body_bytes(content)).field(auth_bytes(content.content_type, auth)).bytes();
+}
+
 usize private_message_bytes(const FramedContent& content, const ContentAuth& auth, usize padding) noexcept
 {
     const usize body = body_bytes(content);

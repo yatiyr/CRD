@@ -1,10 +1,11 @@
 #pragma once
 
-// crd-crypto -- what MLS's units share (mls.cpp, mls_message.cpp, mls_tree.cpp and mls_group.cpp): the head of a
-// labelled structure, so a signed structure is laid out once behind its label instead of copied there, a leaf node's
-// signed fields, credentials, and the sizing and list helpers of the structures' codecs. Private to
-// engine/foundation/crypto/src.
+// crd-crypto -- what MLS's units share (mls.cpp, mls_message.cpp, mls_tree.cpp, mls_group.cpp and mls_commit.cpp):
+// the head of a labelled structure, so a signed structure is laid out once behind its label instead of copied there,
+// a leaf node's signed fields, credentials, the sizing and list helpers of the structures' codecs, and the checks and
+// byte helpers the group units share. Private to engine/foundation/crypto/src.
 
+#include <crd/containers/array.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/containers/wire_bytes.hpp>
 #include <crd/core/types.hpp>
@@ -110,4 +111,66 @@ inline void copy_bytes(cont::ConstSpan<u8> from, u8* to) noexcept
 // field cannot be encoded.
 [[nodiscard]] usize leaf_fields_bytes(const LeafNode& node) noexcept;
 void                put_leaf_fields(cont::WireWriter& out, const LeafNode& node) noexcept;
+
+// The bytes of a PrivateMessageContent before its padding (mls_message.cpp): the body and the authentication; 0 when
+// either cannot be encoded.
+[[nodiscard]] usize private_content_bytes(const FramedContent& content, const ContentAuth& auth) noexcept;
+
+// Whether capabilities support a GroupContext's extensions: every extension type of the list's body and the
+// required_capabilities extension's types (sections 7.3 and 11.1; mls_group.cpp). Unsupported otherwise, Malformed
+// for an undecodable required_capabilities.
+[[nodiscard]] CryptoError supports_context(cont::ConstSpan<u8> extensions, const Capabilities& capabilities) noexcept;
+
+// Section 12.1.4's checks of a pre-shared key's identity outside reinitialization and branching (mls_group.cpp):
+// Malformed for a nonce not Nh long, Unsupported for a resumption key of usage reinit or branch.
+[[nodiscard]] CryptoError check_psk_id(const CipherSuite& suite, const PreSharedKeyId& id) noexcept;
+
+// A byte array as a view, a copy of bytes into one, and a buffer that may hold secrets resized (zeroed first).
+[[nodiscard]] inline cont::ConstSpan<u8> view(const cont::Array<u8>& bytes) noexcept
+{
+    return cont::ConstSpan<u8>(bytes.data(), bytes.size());
+}
+
+[[nodiscard]] inline CryptoError copy_into(cont::ConstSpan<u8> bytes, cont::Array<u8>& out) noexcept
+{
+    out.clear();
+    if (!out.try_reserve(bytes.size()))
+    {
+        return CryptoError::ProviderFailure;
+    }
+    for (const u8 byte : bytes)
+    {
+        out.push_back(byte);
+    }
+    return CryptoError::None;
+}
+
+inline bool fresh_buffer(cont::Array<u8>& out, usize bytes) noexcept
+{
+    secure_zero(cont::Span<u8>(out.data(), out.size()));
+    out.clear();
+    if (!out.try_reserve(bytes))
+    {
+        return false;
+    }
+    out.resize(bytes);
+    return true;
+}
+
+// A secret of up to kMaxHashBytes on the stack, zeroed when it goes out of scope.
+class Secret
+{
+public:
+    Secret() noexcept = default;
+    ~Secret() noexcept { secure_zero(m_bytes); }
+    Secret(const Secret&)            = delete;
+    Secret& operator=(const Secret&) = delete;
+    Secret(Secret&&)                 = delete;
+    Secret& operator=(Secret&&)      = delete;
+
+    [[nodiscard]] cont::Span<u8> span(usize bytes) noexcept { return cont::Span<u8>(m_bytes, bytes); }
+
+private:
+    u8 m_bytes[kMaxHashBytes] = {};
+};
 } // namespace crd::crypto::mls

@@ -14,7 +14,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <algorithm>
+#include <initializer_list>
 
 namespace
 {
@@ -31,60 +31,6 @@ using namespace crd::crypto;
 using namespace crd::crypto::test;
 namespace json = crd::assetio::json;
 namespace mls  = crd::crypto::mls;
-
-// The Authentication Service of the tests: every credential is valid but those of the refused identity.
-class TestAuthority final : public mls::AuthenticationService
-{
-public:
-    Bytes refused;
-
-    [[nodiscard]] bool validate(const mls::Credential& credential, ConstSpan<u8>) const noexcept override
-    {
-        return refused.empty() || !equal(credential.content, view(refused));
-    }
-};
-
-// A member's store: pre-shared keys (an external key by its id, a resumption key by its group and epoch) and the
-// groups it takes part in.
-class TestStore final : public mls::GroupStore
-{
-public:
-    struct Key
-    {
-        mls::PskType type  = mls::PskType::External;
-        Bytes        name;  // the external id or the resumption key's group
-        u64          epoch = 0U;
-        Bytes        secret;
-    };
-    crd::containers::Array<Key>   keys;
-    crd::containers::Array<Bytes> groups;
-
-    [[nodiscard]] ConstSpan<u8> psk(const mls::PreSharedKeyId& id) const noexcept override
-    {
-        const bool          external = id.type == mls::PskType::External;
-        const ConstSpan<u8> name     = external ? id.id : id.group_id;
-        for (const Key& key : keys)
-        {
-            if (key.type == id.type && equal(view(key.name), name) && (external || key.epoch == id.epoch))
-            {
-                return view(key.secret);
-            }
-        }
-        return {};
-    }
-
-    [[nodiscard]] bool member_of(ConstSpan<u8> group_id) const noexcept override
-    {
-        return std::ranges::any_of(groups, [group_id](const Bytes& group) { return equal(view(group), group_id); });
-    }
-};
-
-mls::Message message_of(const Bytes& bytes)
-{
-    mls::Message message;
-    REQUIRE(mls::take_message(view(bytes), message));
-    return message;
-}
 
 template <typename T, typename Size, typename Put>
 Bytes written(const T& value, Size size, Put put)
@@ -139,15 +85,6 @@ Bytes codepoints(std::initializer_list<u16> values)
         out.push_back(static_cast<u8>(value));
     }
     return out;
-}
-
-// A policy that accepts any lifetime: the vectors' and the model's leaves live from 0 to the end of time.
-mls::LeafPolicy timeless()
-{
-    mls::LeafPolicy policy;
-    policy.now          = 1700000000U;
-    policy.max_lifetime = ~u64{0};
-    return policy;
 }
 
 // ---- The working group's vectors ----
@@ -323,46 +260,6 @@ TEST_CASE("MLS: the messages vectors' Welcomes and GroupInfos decode and write b
 }
 
 // ---- A creator's group and its joiners ----
-
-// A joiner: its identity, init key and signed key package, whose fields view the joiner's own bytes.
-struct Joiner
-{
-    Identity        id;
-    Bytes           init_private;
-    Bytes           init_public;
-    Bytes           extensions;
-    Bytes           signature;
-    mls::KeyPackage package;
-};
-
-void sign_package(const mls::CipherSuite& suite, Joiner& joiner)
-{
-    joiner.package.signature = {};
-    joiner.signature         = filled(signature_sizes(suite.signature).signature, 0U);
-    usize written_bytes      = 0U;
-    REQUIRE(mls::sign_key_package(suite, joiner.id.signer, joiner.package, span_of(joiner.signature),
-                                  written_bytes) == CryptoError::None);
-    joiner.signature.resize(written_bytes);
-    joiner.package.signature = view(joiner.signature);
-}
-
-void make_joiner(const mls::CipherSuite& suite, Joiner& joiner, u32 name)
-{
-    make_identity(suite, joiner.id, name);
-    HpkeKey init;
-    do
-    {
-        joiner.init_private = random_of(hpke_sizes(suite.kem).private_key);
-    } while (init.from_private(suite.kem, view(joiner.init_private)) != CryptoError::None);
-    joiner.init_public = filled(hpke_sizes(suite.kem).public_key, 0U);
-    REQUIRE(init.public_key(span_of(joiner.init_public)) == CryptoError::None);
-    joiner.package              = {};
-    joiner.package.cipher_suite = suite.id;
-    joiner.package.init_key     = view(joiner.init_public);
-    joiner.package.leaf_node    = joiner.id.leaf;
-    joiner.package.extensions   = view(joiner.extensions);
-    sign_package(suite, joiner);
-}
 
 // How a commit that adds joiners is made.
 struct Options

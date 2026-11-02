@@ -13,11 +13,7 @@
 //     types is a pairwise restatement's, and the extension each type finds is the first a linear scan meets;
 //   * a changed Welcome is refused with the group left empty (no tree, keys, secrets or context), or it is the honest
 //     Welcome and the joiner reaches exactly the honest epoch: no change yields another epoch that is accepted.
-#include <crd/fuzz/harness.hpp>
-
-#include <crd/crypto/mls_group.hpp>
-
-#include <cstring>
+#include "mls_fuzz_support.hpp"
 
 namespace
 {
@@ -32,61 +28,7 @@ using crd::containers::Span;
 using crd::containers::WireReader;
 using crd::containers::WireWriter;
 using namespace crd::crypto;
-namespace mls = crd::crypto::mls;
-
-class Reader
-{
-public:
-    Reader(const u8* data, usize size) noexcept : m_data(data), m_size(size) {}
-
-    [[nodiscard]] bool ok() const noexcept { return m_ok; }
-
-    u8 byte() noexcept
-    {
-        if (m_at >= m_size)
-        {
-            m_ok = false;
-            return 0U;
-        }
-        return m_data[m_at++];
-    }
-
-    u16 u16be() noexcept { return static_cast<u16>(static_cast<u16>(byte() << 8U) | byte()); }
-
-    ConstSpan<u8> rest() noexcept
-    {
-        const ConstSpan<u8> out(m_data + m_at, m_size - m_at);
-        m_at = m_size;
-        return out;
-    }
-
-private:
-    const u8* m_data;
-    usize     m_size;
-    usize     m_at = 0U;
-    bool      m_ok = true;
-};
-
-bool same(ConstSpan<u8> a, ConstSpan<u8> b) noexcept
-{
-    return a.size() == b.size() && (a.empty() || std::memcmp(a.data(), b.data(), a.size()) == 0);
-}
-
-ConstSpan<u8> view(const Array<u8>& bytes) noexcept
-{
-    return ConstSpan<u8>(bytes.data(), bytes.size());
-}
-
-template <typename T, typename Size, typename Put>
-Array<u8> written(const T& value, Size size, Put put)
-{
-    Array<u8> out;
-    out.resize(size(value));
-    WireWriter writer(Span<u8>(out.data(), out.size()));
-    put(writer, value);
-    CRD_FUZZ_REQUIRE(writer.written() == out.size());
-    return out;
-}
+using namespace crd::crypto::fuzz_mls;
 
 // A decoder over the whole input: what it accepts writes back to the bytes it took.
 template <typename T, typename Take, typename Size, typename Put>
@@ -184,76 +126,6 @@ void decoding(Reader& in)
 
 // ---- Mode 1: a changed Welcome ----
 
-class AnyCredential final : public mls::AuthenticationService
-{
-public:
-    [[nodiscard]] bool validate(const mls::Credential&, ConstSpan<u8>) const noexcept override { return true; }
-};
-
-class EmptyStore final : public mls::GroupStore
-{
-public:
-    [[nodiscard]] ConstSpan<u8> psk(const mls::PreSharedKeyId&) const noexcept override { return {}; }
-    [[nodiscard]] bool          member_of(ConstSpan<u8>) const noexcept override { return false; }
-};
-
-// A key pair of the suite's KEM: a random private key, drawn again when out of range.
-void hpke_pair(const mls::CipherSuite& suite, Array<u8>& private_key, Array<u8>& public_key)
-{
-    HpkeKey key;
-    private_key.resize(hpke_sizes(suite.kem).private_key);
-    do
-    {
-        CRD_FUZZ_REQUIRE(random_bytes(Span<u8>(private_key.data(), private_key.size())) == CryptoError::None);
-    } while (key.from_private(suite.kem, view(private_key)) != CryptoError::None);
-    public_key.resize(hpke_sizes(suite.kem).public_key);
-    CRD_FUZZ_REQUIRE(key.public_key(Span<u8>(public_key.data(), public_key.size())) == CryptoError::None);
-}
-
-// A member's signer and its key-package leaf, whose fields view the member's own bytes.
-struct Member
-{
-    SigningKey    signer;
-    Array<u8>     signature_key;
-    Array<u8>     leaf_private;
-    Array<u8>     leaf_public;
-    Array<u8>     init_private;
-    Array<u8>     init_public;
-    Array<u8>     leaf_signature;
-    Array<u8>     package_signature;
-    mls::LeafNode leaf;
-};
-
-constexpr u8 kBasic[]      = {0x00U, 0x01U};
-constexpr u8 kVersions[]   = {0x00U, 0x01U};
-constexpr u8 kCredential[] = {'m', 'e', 'm', 'b', 'e', 'r'};
-
-void make_member(const mls::CipherSuite& suite, Member& member, const u8 (&suites)[2])
-{
-    CRD_FUZZ_REQUIRE(member.signer.generate(suite.signature) == CryptoError::None);
-    member.signature_key.resize(signature_sizes(suite.signature).public_key);
-    CRD_FUZZ_REQUIRE(member.signer.public_key(Span<u8>(member.signature_key.data(), member.signature_key.size())) ==
-                     CryptoError::None);
-    hpke_pair(suite, member.leaf_private, member.leaf_public);
-    hpke_pair(suite, member.init_private, member.init_public);
-    member.leaf                            = {};
-    member.leaf.encryption_key             = view(member.leaf_public);
-    member.leaf.signature_key              = view(member.signature_key);
-    member.leaf.credential.type            = 1U;
-    member.leaf.credential.content         = kCredential;
-    member.leaf.capabilities.versions      = kVersions;
-    member.leaf.capabilities.cipher_suites = suites;
-    member.leaf.capabilities.credentials   = kBasic;
-    member.leaf.not_after                  = ~u64{0};
-    member.leaf_signature.resize(signature_sizes(suite.signature).signature);
-    usize written_bytes = 0U;
-    CRD_FUZZ_REQUIRE(mls::sign_leaf_node(suite, member.signer, member.leaf, {}, 0U,
-                                         Span<u8>(member.leaf_signature.data(), member.leaf_signature.size()),
-                                         written_bytes) == CryptoError::None);
-    member.leaf_signature.resize(written_bytes);
-    member.leaf.signature = view(member.leaf_signature);
-}
-
 // One suite's honest Welcome: a creator's group of one, a joiner added with no path, the next epoch's GroupInfo
 // (with the tree) and the Welcome; the joiner's key package and the epoch authenticator it must reach.
 struct Honest
@@ -277,18 +149,8 @@ void seal_honest(const mls::CipherSuite& suite, Honest& honest)
     honest.suites[1] = static_cast<u8>(suite.id);
     make_member(suite, honest.creator, honest.suites);
     make_member(suite, honest.joiner, honest.suites);
-    honest.package              = {};
-    honest.package.cipher_suite = suite.id;
-    honest.package.init_key     = view(honest.joiner.init_public);
-    honest.package.leaf_node    = honest.joiner.leaf;
-    honest.joiner.package_signature.resize(signature_sizes(suite.signature).signature);
+    make_package(suite, honest.joiner, honest.package);
     usize written_bytes = 0U;
-    CRD_FUZZ_REQUIRE(mls::sign_key_package(suite, honest.joiner.signer, honest.package,
-                                           Span<u8>(honest.joiner.package_signature.data(),
-                                                    honest.joiner.package_signature.size()),
-                                           written_bytes) == CryptoError::None);
-    honest.joiner.package_signature.resize(written_bytes);
-    honest.package.signature = view(honest.joiner.package_signature);
     honest.config.verifier       = &honest.verifier;
     honest.config.authentication = &honest.authority;
     honest.config.store          = &honest.store;

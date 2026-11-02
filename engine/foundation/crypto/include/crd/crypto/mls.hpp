@@ -264,6 +264,8 @@ public:
     [[nodiscard]] cont::ConstSpan<u8> get(EpochSecret which) const noexcept;
     // Zeroes every secret.
     void clear() noexcept { wipe(); }
+    // Takes `other`'s secrets (a staged epoch becoming the current one), zeroing what this held and `other`.
+    void take(EpochSecrets& other) noexcept;
 
     // A member's next epoch: joiner_secret = ExpandWithLabel(KDF.Extract(init_secret, commit_secret), "joiner",
     // group_context, Nh), then as `join`. `init_secret` is the previous epoch's Init (or a new group's random one);

@@ -8,7 +8,7 @@
 # whose certificates compress through crd-compression, QUIC packet protection and its handshake (quic.hpp, tls.hpp),
 # capabilities and message schemas (capability.hpp), anti-replay windows and filters (replay.hpp), hybrid public key
 # encryption (hpke.hpp) and MLS (mls.hpp, its messages in mls_message.hpp, its ratchet tree in mls_tree.hpp and its
-# groups in mls_group.hpp). The key store lands with a later NET.2 slice. Contract:
+# groups, proposals and commits in mls_group.hpp). The key store lands with a later NET.2 slice. Contract:
 # docs/design/network-foundation.md#crypto, #agility, #provider, #tls-sessions, #quic-protection, #capability-tokens,
 # #anti-replay, #early-data, #message-schemas, #hpke and #mls.
 
