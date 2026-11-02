@@ -83,7 +83,7 @@ constexpr const char* kPublicName = "front.cerid.test"; // the fuzz server's ECH
 constexpr u16         kEchVersion = 0xFE0DU;
 constexpr u8          kEchConfigIds[] = {1U, 2U};        // the fuzz server's current and previous ECH keys
 constexpr u8 kEarlyMessage[] = {'w', 'a', 'l', 'k', ' ', 'n', 'o', 'r', 't', 'h'}; // a real client's early data
-constexpr u8 kEarlyContext[] = {0x04U, 0x04U, 0x80U, 0x10U, 0x00U, 0x00U, 'g'};    // the QUIC early data context
+constexpr u8 kEarlyContext[] = {0x04U, 0x04U, 0x80U, 0x10U, 0x00U, 0x00U, 'g'};    // the early servers' data context
 constexpr crd::u64 kEarlyPeriod = kTlsDefaultTicketLifetime + kTlsMaxTicketAgeSkew;
 
 // The fuzz server's ticket key: the bytes 0x40, 0x41, ... 0x5F.
@@ -318,7 +318,7 @@ bool earn_ticket(KeepStore& store, bool quic) noexcept
     TlsSession client;
     TlsSession server;
     if (client.init(shared.early_client, &store) != TlsError::None ||
-        server.init(shared.early_server) != TlsError::None)
+        server.init(shared.early_server, nullptr, {}, ConstSpan<u8>(kEarlyContext)) != TlsError::None)
     {
         return false;
     }
@@ -480,7 +480,7 @@ void early_records(bool client, ConstSpan<u8> rest, usize chunk) noexcept
     TlsSession session;
     CRD_FUZZ_REQUIRE(peer.init(shared.early_client, &store) == TlsError::None);
     CRD_FUZZ_REQUIRE(peer.send_early(ConstSpan<u8>(kEarlyMessage)) == TlsError::None);
-    CRD_FUZZ_REQUIRE(session.init(shared.early_server) == TlsError::None);
+    CRD_FUZZ_REQUIRE(session.init(shared.early_server, nullptr, {}, ConstSpan<u8>(kEarlyContext)) == TlsError::None);
     CRD_FUZZ_REQUIRE(move(peer, session));
     CRD_FUZZ_REQUIRE(session.early_data() == TlsEarlyData::Accepted && session.resumed());
     u8 early[sizeof(kEarlyMessage) + 1U] = {};

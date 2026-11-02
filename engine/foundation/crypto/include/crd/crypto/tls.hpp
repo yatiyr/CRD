@@ -40,8 +40,10 @@
 //               issues tickets that say so and opens each ticket once through its ReplayFilter (a ticket seen before,
 //               or a false positive, resumes nothing: the handshake runs in full); the provider refuses early data
 //               whose ticket age is off by more than kTlsMaxTicketAgeSkew, after a HelloRetryRequest and on another
-//               application protocol. Early bytes reach a server's caller only through read_early(), never read():
-//               they are replayable, and only operations their schema declares idempotent may run on them. A client
+//               application protocol, and Cerid refuses it under another early data context (the application state
+//               it depends on, the message schema's digest among it, sealed in the ticket). Early bytes reach a
+//               server's caller only through read_early(), never read(): they are replayable, and only operations
+//               their schema declares idempotent may run on them (capability.hpp's authorize_operation). A client
 //               sends them with send_early() up to its ticket's allowance; when its server refuses them they are gone,
 //               and the client sends them again after the handshake.
 //   certificates a client accepts its server's Certificate compressed (RFC 8879) with zstd or zlib; a server compresses
@@ -125,6 +127,10 @@ inline constexpr u32 kTlsEarlyDataBytes   = 14336U;
 inline constexpr u32 kTlsMaxTicketAgeSkew = 60U;
 inline constexpr u32 kQuicEarlyDataBytes  = 0xFFFFFFFFU;
 
+// The bytes of a server's early data context: the state 0-RTT depends on besides the ticket (RFC 9000 section 7.4.1
+// over QUIC; the application's own over records).
+inline constexpr usize kTlsMaxEarlyDataContextBytes = 8192U;
+
 enum class TlsRole : u8
 {
     Client,
@@ -181,8 +187,8 @@ enum class TlsEarlyData : u8
     None,     // not offered: no early data configured, no ticket that allows it, or a server whose client sent none
     Offered,  // a client's, until its server answers: early bytes may be sent (send_early) under the 0-RTT keys
     Accepted, // the server took the early data; on a server, read_early() returns it
-    Rejected, // the server refused it (all a client learns): another protocol, a HelloRetryRequest, another QUIC
-              // context, or a server without early data; the client sends the bytes again after the handshake
+    Rejected, // the server refused it (all a client learns): another protocol, a HelloRetryRequest, another early
+              // data context, or a server without early data; the client sends the bytes again after the handshake
     Replayed, // a server's: the offered ticket was not opened for the first time (its ReplayFilter), so the handshake
               // ran in full
     Stale,    // a server's: the client's ticket age is more than kTlsMaxTicketAgeSkew seconds off (the provider's
@@ -389,6 +395,7 @@ struct TlsSettings
     u8          ticket_names[2][16]                = {}; // the keys' public names, which lead their tickets
     u32         ticket_key_count                   = 0U;
     ReplayFilter* early_filter                     = nullptr; // a server's, when it accepts early data
+    u8          early_context[kSha256Bytes]        = {}; // a records server session's early data context's SHA-256
     bool        early_data                         = false;
     bool        ech_grease                         = false;
 };
@@ -424,6 +431,9 @@ public:
 
     [[nodiscard]] bool    ready() const noexcept { return m_context != nullptr; }
     [[nodiscard]] TlsRole role() const noexcept { return m_settings.role; }
+    // Whether it configures early data: a client's sessions offer it, a server's accept it and name an early data
+    // context at init().
+    [[nodiscard]] bool early_data() const noexcept { return m_settings.early_data; }
 
 private:
     friend struct TlsCallbacks;
@@ -461,7 +471,8 @@ public:
     [[nodiscard]] KeyId       peer_key() const noexcept { return m_peer_key; }
     [[nodiscard]] bool        hello_retry() const noexcept { return m_hello_retry; }
 
-    // After the handshake: whether it resumed a ticket (the peer key is then the one the ticket's handshake proved).
+    // After the handshake, and on a server that accepted early data from its ServerHello on: whether it resumed a
+    // ticket (the peer key is then the one the ticket's handshake proved).
     [[nodiscard]] bool resumed() const noexcept { return m_resumed; }
 
     // The RFC 8879 algorithm of the compressed Certificate this session sent or received (a server's own, a client's
@@ -552,10 +563,17 @@ public:
     // and belongs to this context's binding) and keeps the tickets its server issues there; without a store it offers
     // none and ignores NewSessionTicket. A client retrying after TlsEch::Retry passes the rejected session's
     // ech_retry_configs() as `ech_retry_configs` (read before init() returns): this connection alone offers ECH with
-    // them in place of the context's, and a second rejection is TlsEch::Refused. BadConfig for a server with a store
-    // or retry configurations, and for a client with ECH configurations none of which it can use (nothing was sent).
+    // them in place of the context's, and a second rejection is TlsEch::Refused. A server whose context accepts early
+    // data names its `early_data_context` (1 to kTlsMaxEarlyDataContextBytes): the application state its early data
+    // depends on, encoded the same way on every connection (its message schema's digest, AuthorizedSchema::digest, and
+    // any setting a replayed operation must see unchanged). Its tickets carry the context's SHA-256, sealed, and
+    // allow 0-RTT only under the same context: a ticket of another resumes without early data (Rejected). BadConfig
+    // for a server with a store or retry configurations, for an early data context missing, oversized or given where
+    // early data is not accepted, and for a client with ECH configurations none of which it can use (nothing was
+    // sent).
     [[nodiscard]] TlsError init(const TlsContext& context, TlsTicketStore* tickets = nullptr,
-                                cont::ConstSpan<u8> ech_retry_configs = {}) noexcept;
+                                cont::ConstSpan<u8> ech_retry_configs = {},
+                                cont::ConstSpan<u8> early_data_context = {}) noexcept;
     void                   clear() noexcept;
 
     // Takes all of `bytes` (received from the peer) and runs the handshake as far as they allow. While the session
@@ -635,9 +653,6 @@ enum class QuicLevel : u8
 
 inline constexpr usize kQuicLevels = 3U;
 
-// The bytes of a QUIC server's early data context: what 0-RTT depends on besides the ticket (RFC 9000 section 7.4.1).
-inline constexpr usize kQuicMaxEarlyDataContextBytes = 8192U;
-
 // The bytes of transport parameters a QUIC handshake sends (RFC 9000 section 18): far above any real set, whose
 // parameters encode in a few hundred bytes. Their encoding and checks are the transport's (crd-net, 4.2a); the
 // handshake carries them, authenticated, as the quic_transport_parameters extension (57).
@@ -673,10 +688,11 @@ public:
     // authenticates), replacing any previous one. A client's ClientHello is pending at the Initial level when init()
     // returns. Tickets and ECH as TlsSession::init, tickets kept under this transport's binding, each with the server's
     // transport parameters. A server whose context accepts early data names its `early_data_context` (1 to
-    // kQuicMaxEarlyDataContextBytes): the transport parameters a client remembers and the application protocol's
-    // settings, encoded the same way on every connection; its tickets accept 0-RTT only under the same context (RFC
-    // 9000 section 7.4.1). BadConfig for a context without an application protocol, missing or oversized parameters,
-    // an early data context missing, oversized or given where early data is not accepted, and as TlsSession::init.
+    // kTlsMaxEarlyDataContextBytes): the transport parameters a client remembers and the application state, the
+    // message schema's digest among it, encoded the same way on every connection; its tickets accept 0-RTT only under
+    // the same context (RFC 9000 section 7.4.1; the provider compares it with the one its ticket recorded).
+    // BadConfig for a context without an application protocol, missing or oversized parameters, an early data context
+    // missing, oversized or given where early data is not accepted, and as TlsSession::init.
     [[nodiscard]] TlsError init(const TlsContext& context, cont::ConstSpan<u8> transport_parameters,
                                 TlsTicketStore* tickets = nullptr, cont::ConstSpan<u8> ech_retry_configs = {},
                                 cont::ConstSpan<u8> early_data_context = {}) noexcept;

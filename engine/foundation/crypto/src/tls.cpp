@@ -9,14 +9,18 @@
 //
 // Tickets (decision S9) are sealed by the context's ticket AEAD method, not the provider's built-in ticket keys (which
 // rotate inside one process and cannot be shared): each ticket is the key's public name, a random 32-byte salt, and its
-// issue time and the session state sealed with AES-256-GCM under a key and nonce derived from the ticket key and that
-// salt (HKDF-SHA256), so every derived key seals one ticket and no count of tickets has to be shared across the servers
-// of a fleet. A client keeps each ticket as Cerid's ticket record: a format version, the early data its
-// NewSessionTicket allows and the server's QUIC transport parameters before the provider's session.
+// issue time, the SHA-256 of its session's early data context and the session state sealed with AES-256-GCM under a
+// key and nonce derived from the ticket key and that salt (HKDF-SHA256), so every derived key seals one ticket and no
+// count of tickets has to be shared across the servers of a fleet. A client keeps each ticket as Cerid's ticket record:
+// a format version, the early data its NewSessionTicket allows and the server's QUIC transport parameters before the
+// provider's session.
 //
 // Early data (decision S17, RFC 9846 section 2.3) is the provider's 0-RTT. A server that accepts it opens each ticket
 // once: the first 16 bytes of the ticket's salt are its identifier in the context's ReplayFilter, filed by the sealed
-// issue time, and a ticket the filter has seen resumes nothing. Early bytes reach a server's caller through
+// issue time, and a ticket the filter has seen resumes nothing. A records server's tickets also seal the SHA-256 of
+// its early data context (decision S18): a ticket of another context resumes with early data turned off for that
+// handshake, which settle_early() turns back on before the connection issues its own tickets (over QUIC the provider
+// compares the context itself, and the sealed digest is zero). Early bytes reach a server's caller through
 // read_early(), which peeks before it reads: bytes the provider returns while the handshake still runs are early ones,
 // and a peek that completed the handshake leaves the first 1-RTT bytes pending for read().
 //
@@ -129,8 +133,10 @@ constexpr usize kMaxCommonName         = 64U;     // ub-common-name (RFC 5280 ap
 constexpr usize kTicketNameBytes       = 16U;     // a ticket key's public name, which leads its tickets
 constexpr usize kTicketSaltBytes       = 32U;     // a ticket's own random salt
 constexpr usize kTicketIssuedBytes     = 8U;      // a ticket's sealed issue time, in seconds since 1970
+constexpr usize kTicketContextBytes    = kSha256Bytes; // and its session's early data context's SHA-256
+constexpr usize kTicketSealedHead      = kTicketIssuedBytes + kTicketContextBytes;
 constexpr usize kTicketHeaderBytes     = kTicketNameBytes + kTicketSaltBytes;
-constexpr usize kTicketOverhead        = kTicketHeaderBytes + kTicketIssuedBytes + kAeadTagBytes;
+constexpr usize kTicketOverhead        = kTicketHeaderBytes + kTicketSealedHead + kAeadTagBytes;
 constexpr u8    kTicketRecordVersion   = 1U;      // the format of a client's ticket record
 constexpr usize kTicketRecordHeader    = 7U;      // version (1), early data (4), parameters length (2)
 constexpr usize kCertificateEntryOverhead = 9U;   // request context (1), list (3), entry (3), extensions (2)
@@ -934,9 +940,10 @@ struct TlsCallbacks
         return kTicketOverhead;
     }
 
-    // Seals the issue time and `in` (the session state) under the sealing key: the key's name, the salt, then the
-    // ciphertext and tag. The name only selects the key: any other name selects another key or none, and the salt
-    // derives the sealing key. `in` may be `out`, so the state moves into place before anything is written.
+    // Seals the issue time, the session's early data context digest and `in` (the session state) under the sealing
+    // key: the key's name, the salt, then the ciphertext and tag. The name only selects the key: any other name selects
+    // another key or none, and the salt derives the sealing key. `in` may be `out`, so the state moves into place
+    // before anything is written.
     static int seal_ticket(SSL* ssl, uint8_t* out, size_t* out_len, size_t max_out_len, const uint8_t* in,
                            size_t in_len) noexcept
     {
@@ -948,14 +955,15 @@ struct TlsCallbacks
         }
         const TlsSettings&        settings = session->m_settings;
         u8* const                 body     = out + kTicketHeaderBytes;
-        const usize sealed = kTicketIssuedBytes + in_len;
+        const usize sealed = kTicketSealedHead + in_len;
         const cont::ConstSpan<u8> salt(out + kTicketNameBytes, kTicketSaltBytes);
-        std::memmove(body + kTicketIssuedBytes, in, in_len);
+        std::memmove(body + kTicketSealedHead, in, in_len);
         const u64 issued = unix_now();
         for (usize i = 0U; i < kTicketIssuedBytes; ++i)
         {
             body[i] = static_cast<u8>(issued >> (56U - 8U * i));
         }
+        std::memcpy(body + kTicketIssuedBytes, settings.early_context, kTicketContextBytes);
         std::memcpy(out, settings.ticket_names[0], kTicketNameBytes);
         AeadKey key;
         u8      nonce[kAeadNonceBytes];
@@ -974,7 +982,8 @@ struct TlsCallbacks
     // is ignored (the handshake runs in full); only a provider failure fails the handshake. A server that accepts early
     // data opens each ticket once (S17): the ticket's identifier, the first kReplayIdBytes of its salt (random, and
     // authenticated by the opening, as the salt derives the key), goes through the ReplayFilter by its sealed issue
-    // time, and a ticket the filter refuses is ignored too.
+    // time, and a ticket the filter refuses is ignored too. A records ticket sealed under another early data context
+    // resumes with early data off for this handshake and spends no filter entry (S18).
     static ssl_ticket_aead_result_t open_ticket(SSL* ssl, uint8_t* out, size_t* out_len, size_t max_out_len,
                                                 const uint8_t* in, size_t in_len) noexcept
     {
@@ -1025,15 +1034,22 @@ struct TlsCallbacks
         {
             issued = (issued << 8U) | out[i];
         }
-        const usize state = sealed - kAeadTagBytes - kTicketIssuedBytes;
-        std::memmove(out, out + kTicketIssuedBytes, state);
+        u8 context[kTicketContextBytes];
+        std::memcpy(context, out + kTicketIssuedBytes, sizeof(context));
+        const usize state = sealed - kAeadTagBytes - kTicketSealedHead;
+        std::memmove(out, out + kTicketSealedHead, state);
+        *out_len = state;
+        if (settings.early_data && !constant_time_equal(context, settings.early_context))
+        {
+            SSL_set_early_data_enabled(ssl, 0);
+            return ssl_ticket_aead_success;
+        }
         if (settings.early_filter != nullptr &&
             !settings.early_filter->first_use(cont::ConstSpan<u8>(salt, kReplayIdBytes), issued, unix_now()))
         {
             session->m_ticket_replayed = true;
             return ssl_ticket_aead_ignore_ticket;
         }
-        *out_len = state;
         return ssl_ticket_aead_success;
     }
 
@@ -1210,7 +1226,8 @@ struct TlsCallbacks
     // BadConfig for a server with a ticket store or retry configurations, a malformed `retry` and, with
     // `needs_protocol`, a context without application protocols.
     static TlsError begin(const TlsContext& context, TlsTicketStore* tickets, cont::ConstSpan<u8> retry,
-                          bool needs_protocol, detail::TlsHandshakeState& state, bssl::UniquePtr<SSL>& ssl) noexcept
+                          cont::ConstSpan<u8> early_data_context, bool quic, detail::TlsHandshakeState& state,
+                          bssl::UniquePtr<SSL>& ssl) noexcept
     {
         if (!context.ready())
         {
@@ -1218,8 +1235,11 @@ struct TlsCallbacks
         }
         const TlsSettings& settings = context.m_settings;
         bool               current  = false;
+        // A server that accepts early data names the context its tickets' 0-RTT depends on; nothing else names one.
+        const bool early_server = settings.role == TlsRole::Server && settings.early_data;
         if (((tickets != nullptr || !retry.empty()) && settings.role == TlsRole::Server) ||
-            (needs_protocol && settings.protocol_bytes == 0U) ||
+            early_data_context.empty() == early_server || early_data_context.size() > kTlsMaxEarlyDataContextBytes ||
+            (quic && settings.protocol_bytes == 0U) ||
             (!retry.empty() &&
              (retry.size() > kTlsMaxEchConfigListBytes || !walk_ech_configs(retry, current) || !current)))
         {
@@ -1233,6 +1253,10 @@ struct TlsCallbacks
         state.m_settings = settings;
         if (settings.role == TlsRole::Server)
         {
+            if (early_server && !quic)
+            {
+                sha256(early_data_context, cont::Span<u8, kSha256Bytes>(state.m_settings.early_context, kSha256Bytes));
+            }
             SSL_set_accept_state(ssl.get());
             return TlsError::None;
         }
@@ -1317,6 +1341,9 @@ struct TlsCallbacks
             }
             return;
         }
+        // A ticket of another early data context turned early data off for its handshake (open_ticket): the decision
+        // is made, so the connection's own tickets follow the context again.
+        SSL_set_early_data_enabled(ssl, state.m_settings.early_data ? 1 : 0);
         if (!state.m_early_offered)
         {
             state.m_early = TlsEarlyData::None;
@@ -2273,13 +2300,14 @@ void TlsSession::clear() noexcept
     m_key_update_records = 0U;
 }
 
-TlsError TlsSession::init(const TlsContext& context, TlsTicketStore* tickets,
-                          cont::ConstSpan<u8> ech_retry_configs) noexcept
+TlsError TlsSession::init(const TlsContext& context, TlsTicketStore* tickets, cont::ConstSpan<u8> ech_retry_configs,
+                          cont::ConstSpan<u8> early_data_context) noexcept
 {
     clear();
     const ErrorScope     errors;
     bssl::UniquePtr<SSL> ssl;
-    const TlsError       begun = TlsCallbacks::begin(context, tickets, ech_retry_configs, false, *this, ssl);
+    const TlsError       begun =
+        TlsCallbacks::begin(context, tickets, ech_retry_configs, early_data_context, false, *this, ssl);
     bssl::UniquePtr<BIO> incoming(begun == TlsError::None ? BIO_new(BIO_s_mem()) : nullptr);
     bssl::UniquePtr<BIO> outgoing(begun == TlsError::None ? BIO_new(BIO_s_mem()) : nullptr);
     if (begun != TlsError::None || !incoming || !outgoing)
@@ -2749,12 +2777,10 @@ TlsError QuicHandshake::init(const TlsContext& context, cont::ConstSpan<u8> tran
     clear();
     const ErrorScope     errors;
     bssl::UniquePtr<SSL> ssl;
-    const TlsError       begun = TlsCallbacks::begin(context, tickets, ech_retry_configs, true, *this, ssl);
-    // A server that accepts early data names the context its tickets' 0-RTT depends on; nothing else names one.
-    const bool early_server = m_settings.role == TlsRole::Server && m_settings.early_data;
+    const TlsError       begun =
+        TlsCallbacks::begin(context, tickets, ech_retry_configs, early_data_context, true, *this, ssl);
     if (begun != TlsError::None || transport_parameters.empty() ||
-        transport_parameters.size() > kQuicMaxTransportParameterBytes || early_data_context.empty() == early_server ||
-        early_data_context.size() > kQuicMaxEarlyDataContextBytes)
+        transport_parameters.size() > kQuicMaxTransportParameterBytes)
     {
         clear();
         return begun != TlsError::None ? begun : TlsError::BadConfig;
@@ -2771,7 +2797,7 @@ TlsError QuicHandshake::init(const TlsContext& context, cont::ConstSpan<u8> tran
         !SSL_set_quic_method(ssl.get(), &kQuicMethod) ||
         !SSL_set_quic_transport_params(ssl.get(), transport_parameters.data(), transport_parameters.size()) ||
         !SSL_set_session_id_context(ssl.get(), m_settings.binding.bytes, sizeof(m_settings.binding.bytes)) ||
-        (early_server &&
+        (!early_data_context.empty() &&
          !SSL_set_quic_early_data_context(ssl.get(), early_data_context.data(), early_data_context.size())) ||
         !TlsCallbacks::offer(ssl.get(), *this, remembered))
     {

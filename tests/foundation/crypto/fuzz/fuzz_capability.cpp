@@ -6,7 +6,11 @@
 //   1  a revocation generation as bytes, decoded;
 //   2  a generated life: a root issued by a hybrid issuer pair, up to five delegations (narrower or widened in one
 //      field), a revocation generation, an audience configuration, a time, a presentation and a flipped byte, all read
-//      from the bytes, the tokens and proofs signed by real keys.
+//      from the bytes, the tokens and proofs signed by real keys;
+//   3  a message schema as bytes, decoded;
+//   4  a generated schema life (S18): a schema's kind, operations, idempotent ones, audience, issue time, policy
+//      generation and signers, a revocation generation and a time, then an operation asked of a capability, its object
+//      and its delivery (after the handshake, as early data, or unknown), and a flipped byte.
 //
 // Oracles, none of them the codec's or the authority's own verdict:
 //   * an independent restatement of both layouts, their bounds and the contract's validation order decides each
@@ -15,7 +19,11 @@
 //     whether a delegation is refused as Widened, and a delegation that is not never verifies as such;
 //   * a model of the contract's verification order (lifetime bound, issue skew, the chain's earliest expiry, peer-only,
 //     revocation freshness and listings, the presentation) decides the exact verdict;
-//   * any single flipped byte of a token that verifies makes it fail verification.
+//   * any single flipped byte of a token that verifies makes it fail verification;
+//   * a restated schema layout and validation decide decode_schema's result; a model of the schema verification order
+//     decides verify_schema's, a verified schema's digest is the SHA-256 of its signed bytes and any flipped byte of it
+//     fails verification; and the restated admission rule (the same audience and kind, declared, idempotent unless
+//     delivered after the handshake, granted on the object) decides authorize_operation's verdict.
 #include "../policy_test_signer.hpp"
 
 #include <crd/fuzz/harness.hpp>
@@ -381,6 +389,54 @@ CapabilityError restate_revocations(const u8* data, usize size, u64& generation,
     tokens         = counts[0];
     keys           = counts[1];
     return restate_list(c, true, signatures);
+}
+
+// A schema: the head, the fixed fields (Truncated as they come), the restated validation, then an exact list.
+CapabilityError restate_schema(const u8* data, usize size, u64& operations, u64& idempotent, u32& signatures)
+{
+    if (size > 34816U)
+    {
+        return CapabilityError::TooLarge;
+    }
+    Cursor          c{data, size};
+    CapabilityError error = restate_head(c, kSchemaMagic);
+    if (error != CapabilityError::None)
+    {
+        return error;
+    }
+    if (!c.has(69U)) // kind, schema, major, minor, audience, issued, policy generation, operations, idempotent
+    {
+        return CapabilityError::Truncated;
+    }
+    c.at += 69U;
+    const u8 kind = data[9];
+    operations    = be64(data + 62U);
+    idempotent    = be64(data + 70U);
+    if (kind < 1U || kind > 6U || all_zero(data + 10U, 16U) || all_zero(data + 30U, 16U) || operations == 0U ||
+        (idempotent | operations) != operations)
+    {
+        return CapabilityError::BadField;
+    }
+    return restate_list(c, true, signatures);
+}
+
+bool decode_schema_bytes(const u8* data, usize size)
+{
+    u64                   operations = 0U;
+    u64                   idempotent = 0U;
+    u32                   signatures = 0U;
+    const CapabilityError want       = restate_schema(data, size, operations, idempotent, signatures);
+    SchemaMessage         message;
+    const CapabilityError got = decode_schema(ConstSpan<u8>(data, size), message);
+    CRD_FUZZ_REQUIRE(got == want);
+    if (got != CapabilityError::None)
+    {
+        return false;
+    }
+    CRD_FUZZ_REQUIRE(message.schema.operations == operations && message.schema.idempotent == idempotent);
+    CRD_FUZZ_REQUIRE(message.signature_count == signatures && message.signed_bytes.data() == data &&
+                     message.signed_bytes.size() == 78U);
+    return true;
 }
 
 bool decode_token(const u8* data, usize size)
@@ -814,20 +870,182 @@ bool life(const Plan& plan)
     return got == CapabilityError::None;
 }
 
+// ---- The generated schema life ------------------------------------------------------------------------------
+
+// 0 kind | 1 operations (8 bytes) | 9 idempotent (8 bytes) | 17 choices (bit 0 idempotent unmasked, bit 1 another
+// audience) | 18 issue offset word | 20 revocation | 21 policy generation | 22 signers | 23 time word | 25 operations
+// asked (8 bytes) | 33 object word | 35 delivery | 36 capability choices (bit 0 asked unmasked, bit 1 another
+// audience, bit 2 another kind, bit 3 every object) | 37 granted operations (8 bytes) | 45 range length | 46 flip word
+constexpr usize kSchemaLife = 48U;
+
+u64 plan_u64(const Plan& plan, usize at)
+{
+    u64 value = 0U;
+    for (usize i = 0U; i < 8U; ++i)
+    {
+        value = (value << 8U) | plan.byte(at + i);
+    }
+    return value;
+}
+
+OperationVerdict restated_verdict(const MessageSchema& schema, const Capability& capability, u64 asked, u64 object,
+                                  Delivery delivery)
+{
+    if (std::memcmp(capability.audience.bytes, schema.audience.bytes, 16U) != 0 ||
+        capability.grant.kind != schema.kind)
+    {
+        return OperationVerdict::OtherSchema;
+    }
+    if (asked == 0U || (asked | schema.operations) != schema.operations)
+    {
+        return OperationVerdict::Undeclared;
+    }
+    if (delivery != Delivery::Established && (asked | schema.idempotent) != schema.idempotent)
+    {
+        return OperationVerdict::Replayable;
+    }
+    const bool inside = capability.grant.range_count == 0U ||
+                        (capability.grant.ranges[0].first <= object && object <= capability.grant.ranges[0].last);
+    return (asked | capability.grant.operations) == capability.grant.operations && inside
+               ? OperationVerdict::Admitted
+               : OperationVerdict::NotGranted;
+}
+
+bool schema_life(const Plan& plan)
+{
+    const Keys&   k = keys();
+    MessageSchema schema;
+    schema.kind              = static_cast<ScopeKind>(plan.byte(0U) % 8U);
+    schema.schema.bytes[0]   = 0x5CU;
+    schema.major             = 1U;
+    schema.audience.bytes[0] = (plan.byte(17U) & 2U) != 0U ? 0xA1U : 0xA0U;
+    schema.issued            = kT0 - 3600U + plan.word(18U) % 8000U;
+    schema.policy_generation = 1U + plan.byte(21U) % 3U;
+    schema.operations        = plan_u64(plan, 1U);
+    schema.idempotent        = plan_u64(plan, 9U) & ((plan.byte(17U) & 1U) != 0U ? ~u64{0U} : schema.operations);
+    const u8      signers    = plan.byte(22U) % 3U;
+    const Signer* one[]      = {k.signers[signers == 1U ? 0U : 1U]};
+    const ConstSpan<const Signer*> signed_by =
+        signers == 0U ? ConstSpan<const Signer*>(k.signers) : ConstSpan<const Signer*>(one);
+    static u8             bytes[kMaxSchemaBytes];
+    usize                 size   = 0U;
+    const bool            valid  = schema.kind >= ScopeKind::World && schema.kind <= ScopeKind::Service &&
+                                   schema.operations != 0U &&
+                                   (schema.idempotent | schema.operations) == schema.operations;
+    const CapabilityError issued = issue_schema(schema, signed_by, bytes, size);
+    CRD_FUZZ_REQUIRE(issued == (valid ? CapabilityError::None : CapabilityError::BadField));
+    if (!valid)
+    {
+        return false;
+    }
+
+    static const ProviderVerifier kVerifier;
+    CapabilityConfig              config;
+    config.issuers                = ConstSpan<IssuerKey>(k.issuers);
+    config.verifier               = &kVerifier;
+    config.kind                   = ScopeKind::World;
+    config.audience.bytes[0]      = 0xA0U;
+    const auto authority          = std::make_unique<CapabilityAuthority>(config);
+    const u8   revocation         = plan.byte(20U) % 4U;
+    if (revocation != 0U)
+    {
+        RevocationList list;
+        list.generation            = 1U;
+        list.issued                = kT0 - 3600U;
+        list.expires               = kT0 + 90000U;
+        list.revoke_before         = revocation == 2U ? kT0 + 1U : 0U;
+        list.min_policy_generation = revocation == 3U ? 2U : 0U;
+        static u8 generation[kMaxRevocationBytes];
+        usize     generation_size = 0U;
+        CRD_FUZZ_REQUIRE(issue_revocations(list, k.signers, generation, generation_size) == CapabilityError::None);
+        CRD_FUZZ_REQUIRE(authority->apply_revocations(ConstSpan<u8>(generation, generation_size), k.policy, kT0) ==
+                         CapabilityError::None);
+    }
+    const u64 now = kT0 + plan.word(23U) % 4000U;
+
+    // The model of the verification order.
+    CapabilityError want = CapabilityError::None;
+    if (schema.kind != ScopeKind::World || schema.audience.bytes[0] != 0xA0U)
+    {
+        want = CapabilityError::WrongAudience;
+    }
+    else if (schema.issued > now + kMaxIssueSkew)
+    {
+        want = CapabilityError::NotYetValid;
+    }
+    else if (revocation == 0U)
+    {
+        want = CapabilityError::RevocationStale;
+    }
+    else if ((revocation == 2U && schema.issued < kT0 + 1U) || (revocation == 3U && schema.policy_generation < 2U))
+    {
+        want = CapabilityError::Revoked;
+    }
+    else if (signers != 0U)
+    {
+        want = CapabilityError::MissingSignature;
+    }
+    AuthorizedSchema      authorized;
+    const CapabilityError got = authority->verify_schema(ConstSpan<u8>(bytes, size), k.policy, now, authorized);
+    CRD_FUZZ_REQUIRE(got == want);
+    if (got != CapabilityError::None)
+    {
+        return false;
+    }
+    u8 digest[kSha256Bytes];
+    sha256(ConstSpan<u8>(bytes, 78U), Span<u8, kSha256Bytes>(digest, kSha256Bytes));
+    CRD_FUZZ_REQUIRE(std::memcmp(digest, authorized.digest, kSha256Bytes) == 0);
+    CRD_FUZZ_REQUIRE(authorized.schema.operations == schema.operations &&
+                     authorized.schema.idempotent == schema.idempotent);
+
+    // An operation asked of a capability, as authorize_operation and the restated rule judge it.
+    const u8   choices = plan.byte(36U);
+    Capability capability;
+    capability.audience.bytes[0] = (choices & 2U) != 0U ? 0xA2U : 0xA0U;
+    capability.grant.kind        = (choices & 4U) != 0U ? ScopeKind::Project : ScopeKind::World;
+    capability.grant.operations  = plan_u64(plan, 37U);
+    if ((choices & 8U) == 0U)
+    {
+        capability.grant.ranges[0]   = {100U, 100U + plan.byte(45U)};
+        capability.grant.range_count = 1U;
+    }
+    const u64          asked        = plan_u64(plan, 25U) & ((choices & 1U) != 0U ? ~u64{0U} : schema.operations);
+    const u64          object       = plan.word(33U) % 512U;
+    constexpr Delivery deliveries[] = {Delivery::Established, Delivery::Early, Delivery{}}; // the last one unknown
+    const Delivery     delivery     = deliveries[plan.byte(35U) % 3U];
+    CRD_FUZZ_REQUIRE(authorize_operation(authorized, capability, asked, object, delivery) ==
+                     restated_verdict(schema, capability, asked, object, delivery));
+    CRD_FUZZ_REQUIRE(authorized.early(asked) == (asked != 0U && (asked | schema.idempotent) == schema.idempotent));
+
+    // Every byte is signed or a signature: one flipped bit never verifies.
+    const u16 flip = plan.word(46U);
+    if (flip != 0U)
+    {
+        bytes[flip % size] ^= static_cast<u8>(1U << (flip % 8U));
+        CRD_FUZZ_REQUIRE(authority->verify_schema(ConstSpan<u8>(bytes, size), k.policy, now, authorized) !=
+                         CapabilityError::None);
+    }
+    return true;
+}
+
 bool run(const u8* data, usize size)
 {
     if (size == 0U)
     {
         return false;
     }
-    switch (data[0] % 3U)
+    switch (data[0] % 5U)
     {
     case 0U:
         return decode_token(data + 1U, size - 1U);
     case 1U:
         return decode_generation(data + 1U, size - 1U);
-    default:
+    case 2U:
         return life(Plan{data + 1U, size - 1U});
+    case 3U:
+        return decode_schema_bytes(data + 1U, size - 1U);
+    default:
+        return schema_life(Plan{data + 1U, size - 1U});
     }
 }
 
@@ -836,8 +1054,23 @@ void add(crd::fuzz::SeedSink& sink, const char* name, const u8* data, usize size
     sink.add(name, data, size);
 }
 
-constexpr const char* kAccepted[] = {"token-honest",        "token-delegated",      "revocations-honest", "life-honest",
-                                     "life-delegated-peer", "life-widened-refused", "life-flipped"};
+constexpr const char* kAccepted[] = {
+    "token-honest",
+    "token-delegated",
+    "revocations-honest",
+    "life-honest",
+    "life-delegated-peer",
+    "life-widened-refused",
+    "life-flipped",
+    "schema-honest",
+    "schema-life-honest",
+    "schema-life-early",
+    "schema-life-flipped",
+    "schema-life-not-granted",
+    "schema-life-replayable",
+    "schema-life-undeclared",
+    "schema-life-other-capability",
+};
 } // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size)
@@ -968,4 +1201,77 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& next)
     plan("life-revoked-token", 0U, [](u8* h) { h[24] = 3U; });
     plan("life-other-binding", 0U, [](u8* h) { h[30] = 1U; });
     plan("life-peer-only", 0U, [](u8* h) { h[21] = 2U; });
+
+    // Schemas: an honest one decodes, its damaged copies do not.
+    MessageSchema schema;
+    schema.kind              = ScopeKind::World;
+    schema.schema.bytes[0]   = 0x5CU;
+    schema.audience.bytes[0] = 0xA0U;
+    schema.issued            = kT0;
+    schema.operations        = 0x1FU;
+    schema.idempotent        = 0x0AU;
+    input[0]                 = 3U;
+    CRD_FUZZ_REQUIRE(issue_schema(schema, k.signers, Span<u8>(input + 1U, kMaxSchemaBytes), size) ==
+                     CapabilityError::None);
+    add(sink, "schema-honest", input, 1U + size);
+    add(sink, "schema-truncated", input, size);
+    input[1U + size] = 0U;
+    add(sink, "schema-trailing-byte", input, 2U + size);
+    input[1U + 9U] = 7U; // the kind
+    add(sink, "schema-bad-kind", input, 1U + size);
+    input[1U + 9U]  = 1U;
+    input[1U + 70U] = 0x80U; // bit 63 idempotent, never declared
+    add(sink, "schema-undeclared-idempotent", input, 1U + size);
+    input[1U + 70U] = 0U;
+    input[1U + 78U] = 5U; // five signatures
+    add(sink, "schema-too-many-signatures", input, 1U + size);
+
+    // Schema lives: honest (operations 0x1F, 0x0A idempotent, issued at kT0, a fresh revocation generation, verified
+    // at kT0 + 60, operation 0x01 on object 101 after the handshake, granted 0xFF on [100, 110]); idempotent
+    // operations as early data; a flipped byte; an operation outside the grant; a replayable one as early data; an
+    // undeclared one; a capability of another audience; then refused schemas: another audience, issued ahead, revoked
+    // by the cut-off, signed by one issuer, invalid.
+    static u8  schema_input[1U + kSchemaLife];
+    const auto schema_plan = [&](const char* name, auto&& edit) {
+        std::memset(schema_input, 0, sizeof(schema_input));
+        u8* h           = schema_input + 1U;
+        schema_input[0] = 4U;
+        h[0]            = 1U;
+        h[8]            = 0x1FU;
+        h[16]           = 0x0AU;
+        h[18]           = 0x0EU; // kT0 - 3600 + 3600
+        h[19]           = 0x10U;
+        h[20]           = 1U;
+        h[24]           = 60U;
+        h[32]           = 0x01U;
+        h[34]           = 101U;
+        h[44]           = 0xFFU;
+        h[45]           = 10U;
+        edit(h);
+        add(sink, name, schema_input, sizeof(schema_input));
+    };
+    schema_plan("schema-life-honest", [](u8*) {});
+    schema_plan("schema-life-early", [](u8* h) {
+        h[32] = 0x0AU;
+        h[35] = 1U;
+    });
+    schema_plan("schema-life-flipped", [](u8* h) {
+        h[46] = 0x01U;
+        h[47] = 0x11U;
+    });
+    schema_plan("schema-life-not-granted", [](u8* h) { h[34] = 0xFFU; });
+    schema_plan("schema-life-replayable", [](u8* h) { h[35] = 2U; });
+    schema_plan("schema-life-undeclared", [](u8* h) {
+        h[36] = 1U; // asked unmasked: bit 8, which the schema does not declare
+        h[31] = 0x01U;
+    });
+    schema_plan("schema-life-other-capability", [](u8* h) { h[36] = 2U; });
+    schema_plan("schema-life-other-audience", [](u8* h) { h[17] = 2U; });
+    schema_plan("schema-life-ahead", [](u8* h) {
+        h[18] = 0x1FU; // issued kT0 + 4,399
+        h[19] = 0x3FU;
+    });
+    schema_plan("schema-life-revoked", [](u8* h) { h[20] = 2U; });
+    schema_plan("schema-life-one-signer", [](u8* h) { h[22] = 1U; });
+    schema_plan("schema-life-invalid", [](u8* h) { h[17] = 1U; h[16] = 0xFFU; });
 }

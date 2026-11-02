@@ -1,7 +1,7 @@
 # crd-crypto tests: the algorithm identifiers generated from the standards register and the signed crypto policy
 # generations (NET-STD), the provider interface against Project Wycheproof's vectors, the TLS 1.3 sessions, QUIC packet
 # protection against RFC 9001's and RFC 9369's sample packets, the TLS handshake over QUIC, QUIC's address-validation
-# tokens, Encrypted Client Hello, the TLS exporter, capabilities, anti-replay and early data (NET.2).
+# tokens, Encrypted Client Hello, the TLS exporter, capabilities, message schemas, anti-replay and early data (NET.2).
 add_executable(crd-crypto-tests
     test_capability.cpp
     test_kem_prf.cpp

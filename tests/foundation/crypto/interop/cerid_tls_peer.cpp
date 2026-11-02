@@ -32,7 +32,8 @@
 //           such tickets and accepts it through a ReplayFilter of this process
 //   early   a client's early data: sent with send_early() when the session offers 0-RTT, and once established sent
 //           again as 1-RTT data when its server refused it (before the pings)
-//   early-context  a QUIC server's early data context (hex, at most 256 bytes; QuicHandshake::init)
+//   early-context  a server's early data context (hex, at most 256 bytes; TlsSession::init and
+//           QuicHandshake::init), which a server with early data names
 //
 // Frames on both streams are a 4-byte big-endian length and that many bytes of TLS records. A client writes its first
 // flight before reading; after that each end answers every frame it reads with exactly one frame (possibly empty).
@@ -755,8 +756,8 @@ int main(int argc, char** argv)
                         ConstSpan<u8>(ech_retry, ech_retry_bytes), ConstSpan<u8>(early_context, early_context_bytes));
     }
     if (context.init(config) != TlsError::None ||
-        session.init(context, tickets != nullptr ? &store : nullptr, ConstSpan<u8>(ech_retry, ech_retry_bytes)) !=
-            TlsError::None)
+        session.init(context, tickets != nullptr ? &store : nullptr, ConstSpan<u8>(ech_retry, ech_retry_bytes),
+                     ConstSpan<u8>(early_context, early_context_bytes)) != TlsError::None)
     {
         std::fputs("crd-tls-peer: the session could not be made\n", stderr);
         return 1;

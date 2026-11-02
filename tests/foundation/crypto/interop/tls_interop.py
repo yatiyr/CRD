@@ -50,7 +50,8 @@ library's early bytes accepted by the other's server and reported as early data 
 early_data extension read off the resumed ClientHello and the allowance the server's ticket states read off its
 NewSessionTicket where the wire shows it; refused by a server without early data and after a HelloRetryRequest, both
 ways, each client then sending its bytes again after the handshake; and over QUIC both ways, each end's 0-RTT secret
-probed beside the four others and equal, and a Cerid server refusing 0-RTT under another early data context.
+probed beside the four others and equal, and a Cerid server refusing 0-RTT under another early data context, over
+QUIC and over records (another message schema's digest, decision S18), the resumption standing.
 
 Usage: tls_interop.py --cerid <crd-tls-peer> --openssl <crd-openssl-tls-peer>
 """
@@ -110,6 +111,9 @@ EARLY_DATA = 42
 CERID_EARLY = 'early from cerid'
 OPENSSL_EARLY = 'early from openssl'
 EARLY_CONTEXTS = ('0480100000c1', '0480080000c1')  # two QUIC early data contexts: a lowered limit tells them apart
+# Two records servers' early data contexts: the digests of two message schemas (decision S18).
+SCHEMA_CONTEXTS = ('5c11e7029a430db87621f03ec5681f942bd7804a33e10c9f56ba176da248f905',
+                   '5c11e7029a430db87621f03ec5681f942bd7804a33e10c9f56ba176da248f906')
 NAME = 'a1234567890123456789012345678901234567890123456789.cerid.test'
 LONG_NAME = ('a1234567890123456789012345678901234567890123456789012345678.'
              'b12345678901234567890123456789012345678901234567890.cerid.test')
@@ -1159,11 +1163,12 @@ def offers_early_data(flight):
 def early_cases(cerid_peer, openssl_peer, server_public):
     """Early data both ways, over records and over QUIC (decision S17)."""
 
-    def records(cerid_is_client, accepted, server_early=True, retry=False):
+    def records(cerid_is_client, accepted, server_early=True, retry=False, contexts=SCHEMA_CONTEXTS[:1] * 2):
         """A first connection leaves a ticket that allows early data; the second offers it. `accepted`: whether the
-        server takes it; else the client sends it again after the handshake."""
+        server takes it; else the client sends it again after the handshake. `contexts`: a Cerid server's early data
+        context on each connection."""
         with tempfile.TemporaryDirectory() as scratch:
-            for second in (False, True):
+            for second, context in ((False, contexts[0]), (True, contexts[1])):
                 server_allows = server_early or not second
                 if cerid_is_client:
                     client_groups = ['secp256r1mlkem768', 'x25519mlkem768'] if retry else ['x25519mlkem768']
@@ -1181,7 +1186,8 @@ def early_cases(cerid_peer, openssl_peer, server_public):
                     server_command = cerid(cerid_peer, 'server', ['secp384r1mlkem1024'] if retry else
                                            ['x25519mlkem768'], SERVER_SEED, None,
                                            ['--ticket-key', TICKET_KEYS[0]] +
-                                           (['--early-data', '1'] if server_allows else []))
+                                           (['--early-data', '1', '--early-context', context] if server_allows
+                                            else []))
                 client, server, flights = run(client_command, server_command)
                 cerid_report, openssl_report = (client, server) if cerid_is_client else (server, client)
                 early = CERID_EARLY if cerid_is_client else OPENSSL_EARLY
@@ -1217,6 +1223,8 @@ def early_cases(cerid_peer, openssl_peer, server_public):
     yield 'early data: an openssl server refuses it after a HelloRetryRequest', lambda: (
         records(True, False, retry=True))
     yield 'early data: a cerid server refuses it after a HelloRetryRequest', lambda: records(False, False, retry=True)
+    yield 'early data: a cerid server under another message schema refuses the openssl ticket\'s, which resumes', (
+        lambda: records(False, False, contexts=SCHEMA_CONTEXTS))
 
     def quic(cerid_is_client, contexts, accepted):
         """Over QUIC: the 0-RTT secret probed at both ends when the server accepts it."""

@@ -23,6 +23,9 @@
 //               issued before a time and the oldest policy generation still honoured. A service without a current
 //               generation admits nothing (fail closed). Every admission and every renewal verifies again.
 //   policy      every signature algorithm on the token must be accepted by the session's policy snapshot.
+//   schema      what each operation bit means is the audience's message schema (S18), which its issuers sign too: it
+//               declares the bits a grant may hold and which of them are idempotent, and early data (0-RTT, which
+//               an attacker can replay) carries only those, presented by a Peer token over a resumed session.
 //
 // Times are Unix seconds from the caller. Decoding and verification allocate nothing; decoded views point into the
 // decoded bytes.
@@ -59,6 +62,8 @@ inline constexpr u32   kMaxRevokedTokens        = 4096U;   // token identifiers 
 inline constexpr u32   kMaxRevokedKeys          = 512U;    // keys in one revocation generation
 inline constexpr u64   kMaxRevocationLifetime   = 604800U; // a revocation generation's issue to expiry: seven days
 inline constexpr usize kMaxRevocationBytes      = 163840U;
+inline constexpr u8    kSchemaMagic[8]          = {'C', 'R', 'D', 'S', 'C', 'H', 'E', 'M'};
+inline constexpr usize kMaxSchemaBytes          = 34816U; // one message schema, every signature at its bound
 
 struct CapabilityId
 {
@@ -116,7 +121,7 @@ struct CapabilityBudget
 };
 
 // The authority itself. Ranges ascend and neither overlap nor touch (last + 1 < next first); none at all means every
-// object of the scope. Operation bits are the audience's schema's (NET.3).
+// object of the scope. Operation bits are the audience's message schema's (MessageSchema).
 struct Grant
 {
     ScopeKind        kind{};
@@ -196,11 +201,12 @@ enum class CapabilityError : u8
     BufferTooSmall,       // the output cannot hold the bytes
     TooLarge,             // a token, a generation, a count or a field above its bound
     Truncated,            // the bytes end inside a field
-    TrailingBytes,        // bytes after a revocation generation's last field
-    BadMagic,             // not a token, or not a revocation generation
+    TrailingBytes,        // bytes after a revocation generation's or a schema's last field
+    BadMagic,             // not a token, a revocation generation or a schema
     UnsupportedFormat,    // a layout outside the readable range
     BadField,             // a kind, binding or algorithm outside its set, a range out of order, a zero identifier
-                          // or generation, a signer key of no bytes
+                          // or generation, a signer key of no bytes, a schema without operations or with an
+                          // idempotent one it does not declare
     BadDates,             // expiry not after issue, or a lifetime above its bound
     BadList,              // a revocation list out of ascending order, or with an entry twice
     Unsigned,             // no signature
@@ -208,13 +214,14 @@ enum class CapabilityError : u8
     DuplicateSignature,   // two signatures by one key
     WrongHolder,          // the signer is not the holder: its key does not hash to the holder's
     Widened,              // a block grants more, lives longer or loosens a Peer binding
-    WrongAudience,        // another service's token, or another session type's
+    WrongAudience,        // another service's token or schema, or another session type's
     TooLong,              // a lifetime above the audience's bound
     NotYetValid,          // issued more than kMaxIssueSkew after now
     Expired,              // at or past its expiry; a revocation generation past its own
     PeerRequired,         // a Proof token at a service that admits Peer only
     RevocationStale,      // no revocation generation, or the current one expired: nothing is admitted
-    Revoked,              // the token, a key on it, its issue time or its policy generation is revoked
+    Revoked,              // the token, a key on it, its issue time or its policy generation is revoked (a
+                          // schema: its issue time or its policy generation)
     UntrustedIssuer,      // no issuer keys, or no hybrid set, cover its issue time
     AlgorithmRefused,     // the policy snapshot refuses a signature algorithm on it
     MissingSignature,     // an issuer key that must sign did not
@@ -352,6 +359,83 @@ struct RevocationMessage
 
 [[nodiscard]] CapabilityError decode_revocations(cont::ConstSpan<u8> bytes, RevocationMessage& out) noexcept;
 
+// ---- Message schemas (decision S18) ----
+//
+// The operations an audience's sessions run, as its issuers authorized them: never what a client claims. NET.3
+// generates each operation's messages and wire format under the schema's identifier; this artefact is what admission
+// trusts. Early data is replayable (RFC 9846 section 8: another server of a fleet accepts a replay once), so it carries
+// only operations the schema declares idempotent (T07, D5), and a server's tickets allow 0-RTT only under the schema
+// they were issued under: its digest is part of every early data context (TlsSession::init, QuicHandshake::init).
+
+// What a schema declares.
+struct MessageSchema
+{
+    ScopeKind    kind{};                 // the session type that runs it
+    CapabilityId schema;                 // its identifier, which NET.3's generated messages name
+    u16          major = 0U;             // its revision: major for incompatible changes, minor for compatible additions
+    u16          minor = 0U;
+    CapabilityId audience;               // the service whose sessions run it
+    u64          issued            = 0U;
+    u64          policy_generation = 0U; // the policy generation the issuer held
+    u64          operations        = 0U; // every operation bit it declares: what the bits of Grant::operations mean
+    u64          idempotent        = 0U; // those of them whose second run changes nothing: what early data may carry
+};
+
+// One decoded schema.
+struct SchemaMessage
+{
+    u8                  format = kCapabilityFormat;
+    MessageSchema       schema;
+    cont::ConstSpan<u8> signed_bytes; // what the issuers signed: the magic to the idempotent operations
+    KeySignature        signatures[kMaxCapabilitySignatures];
+    u32                 signature_count = 0U;
+};
+
+// A schema its audience verified.
+struct AuthorizedSchema
+{
+    MessageSchema schema;
+    u8            digest[kSha256Bytes] = {}; // the SHA-256 of its signed bytes: what early data contexts carry
+
+    // Whether early data may carry `operations` (at least one bit): every one declared idempotent. A client asks before
+    // it sends an operation with send_early(); a server's authorize_operation() decides.
+    [[nodiscard]] bool early(u64 operations) const noexcept;
+};
+
+// A kind outside its set, a zero identifier or audience, no operation, or an idempotent one not declared: BadField.
+[[nodiscard]] CapabilityError validate_schema(const MessageSchema& schema) noexcept;
+
+// A schema the `issuers` sign, as issue_capability.
+[[nodiscard]] CapabilityError issue_schema(const MessageSchema& schema, cont::ConstSpan<const Signer*> issuers,
+                                           cont::Span<u8> out, usize& written) noexcept;
+
+// Decode one schema; exact and bounded (kMaxSchemaBytes), signatures unchecked. On an error `out` holds no meaning.
+[[nodiscard]] CapabilityError decode_schema(cont::ConstSpan<u8> bytes, SchemaMessage& out) noexcept;
+
+// How a message reached the server.
+enum class Delivery : u8
+{
+    Established = 1, // after the handshake, or in a server's 0.5-RTT window
+    Early,           // as early data (0-RTT): replayable
+};
+
+enum class OperationVerdict : u8
+{
+    Admitted,
+    OtherSchema, // the capability is another audience's or another session type's than the schema
+    Undeclared,  // no operation, or one the schema does not declare
+    Replayable,  // early data asks for an operation the schema does not declare idempotent
+    NotGranted,  // the capability does not hold every operation on the object
+};
+
+// "admitted", "other-schema", "undeclared", "replayable", "not-granted".
+[[nodiscard]] cont::StringView operation_verdict_name(OperationVerdict verdict) noexcept;
+
+// Whether `capability` may run `operations` on `object` under `schema` when they arrived as `delivery`, judged in the
+// verdicts' order. Allocation-free and constant in the operations: admission's last check before execution (S7).
+[[nodiscard]] OperationVerdict authorize_operation(const AuthorizedSchema& schema, const Capability& capability,
+                                                   u64 operations, u64 object, Delivery delivery) noexcept;
+
 // An audience's verifier: its configuration and its current revocation generation. apply_revocations() and verify()
 // may run on different threads. About 80 KiB: keep it in static or heap storage.
 class CapabilityAuthority
@@ -384,8 +468,27 @@ public:
                                          cont::ConstSpan<u8> proof, const PolicySnapshot& policy, u64 now,
                                          Capability& out) const noexcept;
 
+    // The same for a token that arrived as early data on a server `session` that accepted it: the presentation is the
+    // peer key the resumed ticket's handshake proved, which holds before the first early byte is read (S17). The
+    // provider has no early exporter, so a Proof token is Unbound in early data (it is presented after the
+    // handshake), as is any token on a session that accepted no early data or authenticated no peer.
+    [[nodiscard]] CapabilityError verify_early(cont::ConstSpan<u8> token, const detail::TlsHandshakeState& session,
+                                               const PolicySnapshot& policy, u64 now, Capability& out) const noexcept;
+
+    // Verify the audience's message schema at `now`, checking in this order: the configuration (BadConfig), the
+    // decoding, the audience and kind (WrongAudience), the issue time (NotYetValid), the revocation generation
+    // (RevocationStale; Revoked when issued before its cut-off or under an older policy generation than it honours),
+    // the issuer set (UntrustedIssuer), every issuer algorithm under `policy` (AlgorithmRefused) and the issuers'
+    // signatures. A service verifies its schema again under every revocation generation it applies. `out` is written
+    // only on None.
+    [[nodiscard]] CapabilityError verify_schema(cont::ConstSpan<u8> schema, const PolicySnapshot& policy, u64 now,
+                                                AuthorizedSchema& out) const noexcept;
+
 private:
     [[nodiscard]] CapabilityError check_revoked(const CapabilityToken& token, u64 now) const noexcept;
+    // Under m_mutex: RevocationStale without a current generation, Revoked for an issue time before its cut-off or a
+    // policy generation older than it honours.
+    [[nodiscard]] CapabilityError check_generation(u64 issued, u64 policy_generation, u64 now) const noexcept;
 
     mutable std::mutex m_mutex;
     CapabilityConfig   m_config;

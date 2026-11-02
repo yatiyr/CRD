@@ -737,6 +737,20 @@
       "decision": "docs/design/network-foundation.md D2: its consumers are wider than the network (SUPPLY signing, policy and rule generations, crash pack protection), so cryptography is a foundation owner that depends on no network code. NET-STD created the module; NET.2 landed the provider interface over the pinned AWS-LC (2026-11-01: randomness, AEAD, HKDF, signatures, key agreement, then the ML-KEM key encapsulation and the SipHash-2-4 keyed PRF for tables; docs/design/network-foundation.md#provider), then TLS 1.3 sessions over its TLS stack with the hybrid groups (2026-11-01, #tls-sessions), and its later slices add the key store and the QUIC handshake integration to the same owner."
     },
     {
+      "id": "crypto.authorization",
+      "summary": "Authority over sessions: signed, attenuating, session-bound capability tokens and revocation generations, the message schemas an audience's issuers authorize with the operation verdict (declared, granted and, as early data, idempotent), and the anti-replay windows and single-use filters (network foundation S15 to S18).",
+      "owner": "crypto",
+      "api": [
+        "engine/foundation/crypto/include/crd/crypto/capability.hpp",
+        "engine/foundation/crypto/include/crd/crypto/replay.hpp"
+      ],
+      "consumers": [
+        "NET.3",
+        "4.2a"
+      ],
+      "decision": "docs/design/network-foundation.md D5: authentication and authorisation are separate stages and 0-RTT carries only schema-declared idempotent operations. NET.2 landed the capability tokens (2026-11-02, #capability-tokens), the anti-replay windows and filters (#anti-replay) and the message schemas (#message-schemas) in crd-crypto, so admission (NET.3's stages S6 and S7) and the session layer (4.2a) call them and never re-implement a token, schema or replay check."
+    },
+    {
       "id": "robotics.ros2-bridge",
       "summary": "The bidirectional ROS 2 topic and service bridge over crd-net.",
       "owner": "ros2-bridge",

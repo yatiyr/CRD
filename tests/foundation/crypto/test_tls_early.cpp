@@ -5,7 +5,9 @@
 // filter's scope); the provider's freshness check on the ticket age; a HelloRetryRequest, another application
 // protocol and a server without early data refusing it, each followed by the client sending its bytes again after the
 // handshake; the exact allowance a ticket states; the pins checked before the first early byte; adversarial early
-// bytes; every configuration refusal; one server context and filter serving 0-RTT on several threads; and over QUIC,
+// bytes; every configuration refusal; a ticket sealed under another early data context (another message schema)
+// resuming without its early data and spending no filter entry; one server context and filter serving 0-RTT on several
+// threads; and over QUIC,
 // the client's 0-RTT keys meeting the server's with the transport parameters the client remembered, another early
 // data context and a HelloRetryRequest refusing them (the client's keys zeroed), a replayed Initial, and the early
 // data context's refusals.
@@ -69,6 +71,14 @@ constexpr u8 kContextA[] = {0x04U, 0x04U, 0x80U, 0x10U, 0x00U, 0x00U, 'h', '3'};
 constexpr u8 kContextB[] = {0x04U, 0x04U, 0x80U, 0x08U, 0x00U, 0x00U, 'h', '3'};
 
 constexpr u8 kBadRecordMac = 20U;
+
+// Two application states a records server's early data could depend on: digests of two message schemas (S18).
+constexpr u8 kSchemaContext[] = {0x5CU, 0x11U, 0xE7U, 0x02U, 0x9AU, 0x43U, 0x0DU, 0xB8U, 0x76U, 0x21U, 0xF0U,
+                                 0x3EU, 0xC5U, 0x68U, 0x1FU, 0x94U, 0x2BU, 0xD7U, 0x80U, 0x4AU, 0x33U, 0xE1U,
+                                 0x0CU, 0x9FU, 0x56U, 0xBAU, 0x17U, 0x6DU, 0xA2U, 0x48U, 0xF9U, 0x05U};
+constexpr u8 kOtherSchema[]   = {0x5CU, 0x11U, 0xE7U, 0x02U, 0x9AU, 0x43U, 0x0DU, 0xB8U, 0x76U, 0x21U, 0xF0U,
+                                 0x3EU, 0xC5U, 0x68U, 0x1FU, 0x94U, 0x2BU, 0xD7U, 0x80U, 0x4AU, 0x33U, 0xE1U,
+                                 0x0CU, 0x9FU, 0x56U, 0xBAU, 0x17U, 0x6DU, 0xA2U, 0x48U, 0xF9U, 0x06U};
 
 // A filter whose period is exactly what a context with the default ticket lifetime needs.
 constexpr u64 kPeriod = kTlsDefaultTicketLifetime + kTlsMaxTicketAgeSkew;
@@ -297,6 +307,12 @@ void configure(Pair& pair, const Options& options)
 
 // ---- Records ----
 
+// A server session of `context`, naming `early_context` when the context accepts early data.
+TlsError serve(TlsSession& server, const TlsContext& context, ConstSpan<u8> early_context = kSchemaContext)
+{
+    return server.init(context, nullptr, {}, context.early_data() ? early_context : ConstSpan<u8>());
+}
+
 Bytes drain(TlsSession& session)
 {
     Bytes out;
@@ -384,7 +400,7 @@ void first_connection(Pair& pair, Store& store)
     TlsSession client;
     TlsSession server;
     REQUIRE(client.init(pair.client, &store) == TlsError::None);
-    REQUIRE(server.init(pair.server) == TlsError::None);
+    REQUIRE(serve(server, pair.server) == TlsError::None);
     Bytes early;
     establish(client, server, early);
     CHECK_FALSE(client.resumed());
@@ -402,7 +418,7 @@ void start_early(TlsSession& client, TlsSession& server, const TlsContext& clien
     REQUIRE(client.init(client_context, &store) == TlsError::None);
     REQUIRE(client.early_data() == TlsEarlyData::Offered);
     REQUIRE(client.send_early(ConstSpan<u8>(message.data(), message.size())) == TlsError::None);
-    REQUIRE(server.init(server_context) == TlsError::None);
+    REQUIRE(serve(server, server_context) == TlsError::None);
 }
 } // namespace
 
@@ -450,7 +466,7 @@ TEST_CASE("TLS 0-RTT: a resumed client's early data reaches its server once, thr
         CHECK(client.send(ConstSpan<u8>(message.data(), message.size())) == TlsError::NotReady);
         REQUIRE(client.send_early(ConstSpan<u8>(message.data(), message.size())) == TlsError::None);
         CHECK(client.early_data_room() == kTlsEarlyDataBytes - message.size());
-        REQUIRE(server.init(pair.server) == TlsError::None);
+        REQUIRE(serve(server, pair.server) == TlsError::None);
 
         // The ClientHello and the early data in one flight: the server takes the early data, resumed, and stays in
         // the handshake; read() gives none of it.
@@ -532,7 +548,7 @@ TEST_CASE("TLS 0-RTT: a replayed first flight gets no early data from the server
     // The attacker sends the same bytes to the same server: its filter has seen the ticket, so the handshake runs in
     // full, without the early data (the attacker cannot finish it).
     TlsSession replayed;
-    REQUIRE(replayed.init(pair.server) == TlsError::None);
+    REQUIRE(serve(replayed, pair.server) == TlsError::None);
     REQUIRE(give(replayed, flight) == TlsError::None);
     CHECK(replayed.early_data() == TlsEarlyData::Replayed);
     CHECK(replayed.state() == TlsState::Handshaking);
@@ -544,7 +560,7 @@ TEST_CASE("TLS 0-RTT: a replayed first flight gets no early data from the server
     // Another server's filter is its own: it accepts the replay (RFC 9846 section 8's zones), which is why early data
     // carries only operations their schema declares idempotent.
     TlsSession elsewhere;
-    REQUIRE(elsewhere.init(other_server) == TlsError::None);
+    REQUIRE(serve(elsewhere, other_server) == TlsError::None);
     REQUIRE(give(elsewhere, flight) == TlsError::None);
     CHECK(elsewhere.early_data() == TlsEarlyData::Accepted);
     CHECK(same(read_all(elsewhere, true), message));
@@ -666,7 +682,7 @@ TEST_CASE("TLS 0-RTT: the provider refuses early data whose ticket age is more t
     TlsSession server;
     REQUIRE(client.init(pair.client, &store) == TlsError::None);
     CHECK(client.early_data() == TlsEarlyData::None);
-    REQUIRE(server.init(pair.server) == TlsError::None);
+    REQUIRE(serve(server, pair.server) == TlsError::None);
     Bytes early;
     establish(client, server, early);
     CHECK_FALSE(client.resumed());
@@ -773,7 +789,7 @@ TEST_CASE("TLS 0-RTT: early data stays off unless both ends configure it, and a 
             u8 byte = 1U;
             CHECK(client.send_early(ConstSpan<u8>(&byte, 1U)) ==
                   (expected == TlsEarlyData::Offered ? TlsError::None : TlsError::NotReady));
-            REQUIRE(server.init(pair.server) == TlsError::None);
+            REQUIRE(serve(server, pair.server) == TlsError::None);
             Bytes early;
             establish(client, server, early);
             CHECK(client.resumed());
@@ -810,7 +826,7 @@ TEST_CASE("TLS 0-RTT: a ticket's allowance is exact, whole messages or nothing",
     CHECK(client.send_early(ConstSpan<u8>(all.data(), 1U)) == TlsError::Full);
     CHECK(client.send_early({}) == TlsError::None);
 
-    REQUIRE(server.init(pair.server) == TlsError::None);
+    REQUIRE(serve(server, pair.server) == TlsError::None);
     Bytes early;
     establish(client, server, early);
     CHECK(server.early_data() == TlsEarlyData::Accepted);
@@ -845,6 +861,106 @@ TEST_CASE("TLS 0-RTT: under mutual authentication the server knows its client's 
     CHECK(server.peer_key() == pair.client_credential.key_id());
 }
 
+TEST_CASE("TLS 0-RTT: a ticket sealed under another early data context resumes without its early data and spends "
+          "no filter entry",
+          "[crypto][tls][early][net-2]")
+{
+    ReplayFilter filter;
+    REQUIRE(filter.init(1024U, kPeriod, now()) == CryptoError::None);
+    Pair pair;
+    Options options;
+    options.filter = &filter;
+    options.mutual = true;
+    configure(pair, options);
+    Store store;
+    first_connection(pair, store); // its ticket sealed under kSchemaContext
+
+    // The server now runs another schema: the resumption stands, its 0-RTT does not, and the client sends again.
+    const Bytes message = bytes_of("look around");
+    TlsSession client;
+    TlsSession server;
+    REQUIRE(client.init(pair.client, &store) == TlsError::None);
+    REQUIRE(client.send_early(ConstSpan<u8>(message.data(), message.size())) == TlsError::None);
+    const Bytes flight = drain(client);
+    REQUIRE(serve(server, pair.server, kOtherSchema) == TlsError::None);
+    REQUIRE(give(server, flight) == TlsError::None);
+    CHECK(server.early_data() == TlsEarlyData::Rejected);
+    usize written = 0U;
+    u8    byte    = 0U;
+    CHECK(server.read_early(Span<u8>(&byte, 1U), written) == TlsError::NotReady);
+    Bytes early;
+    establish(client, server, early);
+    CHECK(early.empty());
+    CHECK(client.early_data() == TlsEarlyData::Rejected);
+    CHECK(server.resumed());
+    CHECK(server.peer_key() == pair.client_credential.key_id()); // the resumption kept the ticket's authentication
+    CHECK(same(send_once(client, server, message), message));
+
+    // The refusal spent no filter entry: the same first flight reaching a server under the ticket's own context is
+    // the ticket's first use there.
+    TlsSession same_schema;
+    REQUIRE(serve(same_schema, pair.server) == TlsError::None);
+    REQUIRE(give(same_schema, flight) == TlsError::None);
+    CHECK(same_schema.early_data() == TlsEarlyData::Accepted);
+    CHECK(same(read_all(same_schema, true), message));
+
+    // The resumed connection's ticket is sealed under the new context, which allows 0-RTT again; the next ticket, also
+    // sealed under it, is refused by a server back on the old context.
+    read_tickets(client, server);
+    REQUIRE(store.size() == 1U);
+    CHECK(read_record(store.newest()).early == kTlsEarlyDataBytes);
+    for (const bool same_context : {true, false})
+    {
+        CAPTURE(same_context);
+        TlsSession next_client;
+        TlsSession next_server;
+        REQUIRE(next_client.init(pair.client, &store) == TlsError::None);
+        REQUIRE(next_client.send_early(ConstSpan<u8>(message.data(), message.size())) == TlsError::None);
+        REQUIRE(serve(next_server, pair.server, same_context ? ConstSpan<u8>(kOtherSchema)
+                                                             : ConstSpan<u8>(kSchemaContext)) == TlsError::None);
+        Bytes next_early;
+        establish(next_client, next_server, next_early);
+        const TlsEarlyData expected = same_context ? TlsEarlyData::Accepted : TlsEarlyData::Rejected;
+        CHECK(next_server.early_data() == expected);
+        CHECK(next_client.early_data() == expected);
+        CHECK(same(next_early, same_context ? message : Bytes()));
+        CHECK(next_server.resumed());
+        read_tickets(next_client, next_server);
+    }
+}
+
+TEST_CASE("TLS 0-RTT: an early data context only where early data is accepted, within its bound",
+          "[crypto][tls][early][net-2]")
+{
+    ReplayFilter filter;
+    REQUIRE(filter.init(16U, kPeriod, now()) == CryptoError::None);
+    Pair pair;
+    Options options;
+    options.filter = &filter;
+    configure(pair, options);
+    TlsContext without; // a server without early data
+    Options plain = options;
+    plain.server_early = false;
+    configure_server(pair, without, plain);
+    CHECK(pair.server.early_data());
+    CHECK(pair.client.early_data());
+    CHECK_FALSE(without.early_data());
+    Bytes large;
+    large.resize(kTlsMaxEarlyDataContextBytes + 1U);
+
+    TlsSession session;
+    CHECK(session.init(pair.server) == TlsError::BadConfig); // a server with early data names one
+    CHECK(session.state() == TlsState::Idle);
+    CHECK(session.init(pair.server, nullptr, {}, ConstSpan<u8>(large.data(), large.size())) == TlsError::BadConfig);
+    CHECK(session.init(pair.server, nullptr, {}, ConstSpan<u8>(large.data(), kTlsMaxEarlyDataContextBytes)) ==
+          TlsError::None);
+    CHECK(session.init(without, nullptr, {}, ConstSpan<u8>(kSchemaContext)) == TlsError::BadConfig);
+    CHECK(session.init(without) == TlsError::None);
+    CHECK(session.init(pair.client, nullptr, {}, ConstSpan<u8>(kSchemaContext)) == TlsError::BadConfig);
+    CHECK(session.state() == TlsState::Idle);
+    CHECK(session.init(pair.client) == TlsError::None);
+}
+
 TEST_CASE("TLS 0-RTT: early bytes changed on the way fail the session with bad_record_mac",
           "[crypto][tls][early][net-2]")
 {
@@ -866,7 +982,7 @@ TEST_CASE("TLS 0-RTT: early bytes changed on the way fail the session with bad_r
     Bytes flight = drain(client);
     REQUIRE(flight.size() > hello + 10U);
     flight[flight.size() - 10U] ^= 0x40U; // inside the early record's ciphertext
-    REQUIRE(server.init(pair.server) == TlsError::None);
+    REQUIRE(serve(server, pair.server) == TlsError::None);
     REQUIRE(give(server, flight) == TlsError::None);
     REQUIRE(server.early_data() == TlsEarlyData::Accepted);
     u8 buffer[128];
@@ -978,7 +1094,7 @@ TEST_CASE("TLS 0-RTT: one server context and filter serve early data on several 
                     TlsSession server;
                     const Bytes message = pattern(32U + static_cast<usize>(c), static_cast<u8>(t * 16 + c));
                     bool fine = client.init(pair.client, &store) == TlsError::None &&
-                                server.init(pair.server) == TlsError::None;
+                                serve(server, pair.server) == TlsError::None;
                     const bool offered = client.early_data() == TlsEarlyData::Offered;
                     fine = fine && (!offered ||
                                     client.send_early(ConstSpan<u8>(message.data(), message.size())) == TlsError::None);
@@ -1274,7 +1390,7 @@ TEST_CASE("QUIC 0-RTT: an early data context only where early data is accepted, 
     options.server_protocols = kGame;
     configure_server(quic.pair, without, options);
     Bytes large;
-    large.resize(kQuicMaxEarlyDataContextBytes + 1U);
+    large.resize(kTlsMaxEarlyDataContextBytes + 1U);
 
     QuicHandshake handshake;
     const ConstSpan<u8> parameters(kServerParameters);
@@ -1283,7 +1399,7 @@ TEST_CASE("QUIC 0-RTT: an early data context only where early data is accepted, 
     CHECK(handshake.init(quic.pair.server, parameters, nullptr, {}, ConstSpan<u8>(large.data(), large.size())) ==
           TlsError::BadConfig);
     CHECK(handshake.init(quic.pair.server, parameters, nullptr, {},
-                         ConstSpan<u8>(large.data(), kQuicMaxEarlyDataContextBytes)) == TlsError::None);
+                         ConstSpan<u8>(large.data(), kTlsMaxEarlyDataContextBytes)) == TlsError::None);
     CHECK(handshake.init(without, parameters, nullptr, {}, ConstSpan<u8>(kContextA)) == TlsError::BadConfig);
     CHECK(handshake.init(without, parameters) == TlsError::None);
     CHECK(handshake.init(quic.pair.client, ConstSpan<u8>(kClientParameters), nullptr, {}, ConstSpan<u8>(kContextA)) ==

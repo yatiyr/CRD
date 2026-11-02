@@ -13,6 +13,9 @@
 //   revocation  magic "CRDREVOK" | format u8 | generation u64 | issued u64 | expires u64 | revoke before u64
 //               | minimum policy generation u64 | token count u16 | count x 16 bytes | key count u16
 //               | count x 32 bytes | signature list over everything before it
+//   schema      magic "CRDSCHEM" | format u8 | kind u8 | schema 16 bytes | major u16 | minor u16 | audience 16 bytes
+//               | issued u64 | policy generation u64 | operations u64 | idempotent u64
+//               | signature list over everything before it
 //
 // A block's signature covers the token from its first byte to the block's grant. Contract and rationale:
 // docs/design/network-foundation.md#capability-tokens.
@@ -40,6 +43,8 @@ constexpr usize kRootFixedBytes  = sizeof(kCapabilityMagic) + 1U + kCapabilityId
 constexpr usize kBlockFixedBytes = 8U + kHolderBytes;
 constexpr usize kProofBytes      = sizeof(kCapabilityProofMagic) + kCapabilityBindingBytes + kSha256Bytes;
 constexpr usize kRevocationFixedBytes = sizeof(kRevocationMagic) + 1U + 5U * 8U + 2U + 2U;
+constexpr usize kSchemaBodyBytes =
+    sizeof(kSchemaMagic) + 1U + 1U + kCapabilityIdBytes + 2U + 2U + kCapabilityIdBytes + 4U * 8U;
 constexpr usize kLongestList = 1U + kMaxCapabilitySignatures * (signed_artifact::kEntryHeadBytes + kMaxSignatureBytes);
 
 // A root with every signature at its bound, and a revocation generation with every list full, fit their bounds: only
@@ -49,6 +54,7 @@ static_assert(kRootFixedBytes + kGrantFixedBytes + kMaxCapabilityRanges * kRange
 static_assert(kRevocationFixedBytes + kMaxRevokedTokens * kCapabilityIdBytes + kMaxRevokedKeys * kKeyIdBytes +
                   kLongestList <=
               kMaxRevocationBytes);
+static_assert(kSchemaBodyBytes + kLongestList <= kMaxSchemaBytes);
 static_assert(sizeof(CapabilityId) == kCapabilityIdBytes && sizeof(KeyId) == kKeyIdBytes);
 
 bool is_zero(const CapabilityId& id) noexcept
@@ -678,6 +684,126 @@ cont::StringView capability_error_name(CapabilityError error) noexcept
     return "unknown";
 }
 
+cont::StringView operation_verdict_name(OperationVerdict verdict) noexcept
+{
+    switch (verdict)
+    {
+    case OperationVerdict::Admitted:
+        return "admitted";
+    case OperationVerdict::OtherSchema:
+        return "other-schema";
+    case OperationVerdict::Undeclared:
+        return "undeclared";
+    case OperationVerdict::Replayable:
+        return "replayable";
+    case OperationVerdict::NotGranted:
+        return "not-granted";
+    }
+    return "unknown";
+}
+
+bool AuthorizedSchema::early(u64 operations) const noexcept
+{
+    return operations != 0U && (operations & ~schema.idempotent) == 0U;
+}
+
+OperationVerdict authorize_operation(const AuthorizedSchema& schema, const Capability& capability, u64 operations,
+                                     u64 object, Delivery delivery) noexcept
+{
+    if (capability.audience != schema.schema.audience || capability.grant.kind != schema.schema.kind)
+    {
+        return OperationVerdict::OtherSchema;
+    }
+    if (operations == 0U || (operations & ~schema.schema.operations) != 0U)
+    {
+        return OperationVerdict::Undeclared;
+    }
+    // Anything but a delivery after the handshake is judged as replayable.
+    if (delivery != Delivery::Established && !schema.early(operations))
+    {
+        return OperationVerdict::Replayable;
+    }
+    return capability.covers(operations, object) ? OperationVerdict::Admitted : OperationVerdict::NotGranted;
+}
+
+CapabilityError validate_schema(const MessageSchema& schema) noexcept
+{
+    const bool declared = schema.operations != 0U && (schema.idempotent & ~schema.operations) == 0U;
+    return valid_kind(schema.kind) && !is_zero(schema.schema) && !is_zero(schema.audience) && declared
+               ? CapabilityError::None
+               : CapabilityError::BadField;
+}
+
+CapabilityError issue_schema(const MessageSchema& schema, cont::ConstSpan<const Signer*> issuers, cont::Span<u8> out,
+                             usize& written) noexcept
+{
+    written                     = 0U;
+    const CapabilityError valid = validate_schema(schema);
+    if (valid != CapabilityError::None)
+    {
+        return valid;
+    }
+    if (out.size() < kSchemaBodyBytes)
+    {
+        return CapabilityError::BufferTooSmall;
+    }
+    cont::WireWriter writer(out);
+    writer.put_bytes(kSchemaMagic);
+    writer.put_u8(kCapabilityFormat);
+    writer.put_u8(static_cast<u8>(schema.kind));
+    put_id(writer, schema.schema);
+    writer.put_u16(schema.major);
+    writer.put_u16(schema.minor);
+    put_id(writer, schema.audience);
+    writer.put_u64(schema.issued);
+    writer.put_u64(schema.policy_generation);
+    writer.put_u64(schema.operations);
+    writer.put_u64(schema.idempotent);
+    return append_issuer_signatures(issuers, out, kSchemaBodyBytes, written);
+}
+
+CapabilityError decode_schema(cont::ConstSpan<u8> bytes, SchemaMessage& out) noexcept
+{
+    if (bytes.size() > kMaxSchemaBytes)
+    {
+        return CapabilityError::TooLarge;
+    }
+    cont::WireReader      reader(bytes);
+    const CapabilityError head = take_head(reader, kSchemaMagic, out.format);
+    if (head != CapabilityError::None)
+    {
+        return head;
+    }
+    MessageSchema& schema = out.schema;
+    u8             kind   = 0U;
+    if (!reader.take_u8(kind) || !take_copy(reader, schema.schema.bytes) || !reader.take_u16(schema.major) ||
+        !reader.take_u16(schema.minor) || !take_copy(reader, schema.audience.bytes) ||
+        !reader.take_u64(schema.issued) || !reader.take_u64(schema.policy_generation) ||
+        !reader.take_u64(schema.operations) || !reader.take_u64(schema.idempotent))
+    {
+        return CapabilityError::Truncated;
+    }
+    schema.kind                 = static_cast<ScopeKind>(kind);
+    const CapabilityError valid = validate_schema(schema);
+    if (valid != CapabilityError::None)
+    {
+        return valid;
+    }
+    out.signed_bytes           = bytes.first(reader.consumed());
+    const CapabilityError list = capability_error_of(signed_artifact::read(
+        reader, cont::Span<KeySignature>(out.signatures, kMaxCapabilitySignatures), out.signature_count));
+    if (list != CapabilityError::None)
+    {
+        return list;
+    }
+    if (!reader.done())
+    {
+        return CapabilityError::TrailingBytes;
+    }
+    return capability_error_of(signed_artifact::validate(
+        cont::ConstSpan<KeySignature>(out.signatures, out.signature_count), kMaxCapabilitySignatures));
+}
+
 CapabilityError validate_root(const CapabilityRoot& root) noexcept
 {
     const CapabilityError grant = validate_grant(root.grant);
@@ -1176,16 +1302,26 @@ CapabilityError CapabilityAuthority::apply_revocations(cont::ConstSpan<u8> gener
     return CapabilityError::None;
 }
 
-CapabilityError CapabilityAuthority::check_revoked(const CapabilityToken& token, u64 now) const noexcept
+CapabilityError CapabilityAuthority::check_generation(u64 issued, u64 policy_generation, u64 now) const noexcept
 {
-    const std::lock_guard<std::mutex> lock(m_mutex);
     if (m_generation == 0U || now >= m_expires)
     {
         return CapabilityError::RevocationStale;
     }
-    const CapabilityRoot& root = token.root;
-    if (root.issued < m_revoke_before || root.policy_generation < m_min_policy_generation ||
-        listed(m_tokens, m_token_count, root.token.bytes, kCapabilityIdBytes) ||
+    return issued < m_revoke_before || policy_generation < m_min_policy_generation ? CapabilityError::Revoked
+                                                                                    : CapabilityError::None;
+}
+
+CapabilityError CapabilityAuthority::check_revoked(const CapabilityToken& token, u64 now) const noexcept
+{
+    const std::lock_guard<std::mutex> lock(m_mutex);
+    const CapabilityRoot&             root       = token.root;
+    const CapabilityError             generation = check_generation(root.issued, root.policy_generation, now);
+    if (generation != CapabilityError::None)
+    {
+        return generation;
+    }
+    if (listed(m_tokens, m_token_count, root.token.bytes, kCapabilityIdBytes) ||
         listed(m_keys, m_key_count, root.subject.key.bytes, kKeyIdBytes) ||
         listed(m_keys, m_key_count, root.holder.key.bytes, kKeyIdBytes))
     {
@@ -1319,5 +1455,73 @@ CapabilityError CapabilityAuthority::verify(cont::ConstSpan<u8> token, const det
         presentation.peer_algorithm = session.peer_algorithm();
     }
     return verify(token, presentation, policy, now, out);
+}
+
+CapabilityError CapabilityAuthority::verify_early(cont::ConstSpan<u8> token, const detail::TlsHandshakeState& session,
+                                                  const PolicySnapshot& policy, u64 now,
+                                                  Capability& out) const noexcept
+{
+    // Only the peer a resumed ticket's handshake proved: no binding, so a Proof token is Unbound.
+    CapabilityPresentation presentation;
+    if (session.early_data() == TlsEarlyData::Accepted && session.resumed() && session.peer_key() != KeyId{})
+    {
+        presentation.peer_key       = session.peer_key();
+        presentation.peer_algorithm = session.peer_algorithm();
+    }
+    return verify(token, presentation, policy, now, out);
+}
+
+CapabilityError CapabilityAuthority::verify_schema(cont::ConstSpan<u8> schema, const PolicySnapshot& policy, u64 now,
+                                                   AuthorizedSchema& out) const noexcept
+{
+    if (validate_config(m_config) != CapabilityError::None)
+    {
+        return CapabilityError::BadConfig;
+    }
+    SchemaMessage         decoded;
+    const CapabilityError parsed = decode_schema(schema, decoded);
+    if (parsed != CapabilityError::None)
+    {
+        return parsed;
+    }
+    const MessageSchema& content = decoded.schema;
+    if (content.kind != m_config.kind || content.audience != m_config.audience)
+    {
+        return CapabilityError::WrongAudience;
+    }
+    if (content.issued > saturating_add(now, kMaxIssueSkew))
+    {
+        return CapabilityError::NotYetValid;
+    }
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        const CapabilityError             revoked = check_generation(content.issued, content.policy_generation, now);
+        if (revoked != CapabilityError::None)
+        {
+            return revoked;
+        }
+    }
+    TrustKey              required[kMaxIssuerKeys];
+    usize                 count  = 0U;
+    const CapabilityError issuer = required_issuers(m_config, content.issued, required, count);
+    if (issuer != CapabilityError::None)
+    {
+        return issuer;
+    }
+    const cont::ConstSpan<TrustKey> keys(required, count);
+    if (issuers_refused(keys, policy, now))
+    {
+        return CapabilityError::AlgorithmRefused;
+    }
+    const CapabilityError signed_by = capability_error_of(signed_artifact::verify_all(
+        keys, *m_config.verifier, decoded.signed_bytes,
+        cont::ConstSpan<KeySignature>(decoded.signatures, decoded.signature_count)));
+    if (signed_by != CapabilityError::None)
+    {
+        return signed_by;
+    }
+    out.schema = content;
+    sha256(decoded.signed_bytes, cont::Span<u8, kSha256Bytes>(out.digest, kSha256Bytes));
+    return CapabilityError::None;
 }
 } // namespace crd::crypto

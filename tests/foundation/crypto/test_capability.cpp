@@ -1,17 +1,21 @@
 // crd-crypto capabilities (NET.2; docs/design/network-foundation.md#capability-tokens): tokens issued by a hybrid
 // issuer set, attenuated by their holders, presented over real TLS sessions and verified against revocation
-// generations and a policy snapshot, every refusal in the contract's order, with the provider's real signatures.
+// generations and a policy snapshot, every refusal in the contract's order, with the provider's real signatures; and
+// the message schemas the issuers sign (S18): their codec, verification order, operation verdicts and early data on a
+// resumed TLS session bound to the schema's digest.
 #include "policy_test_signer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/crypto/capability.hpp>
 #include <crd/crypto/provider.hpp>
+#include <crd/crypto/replay.hpp>
 #include <crd/crypto/tls.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
 #include <cstring>
+#include <ctime>
 #include <memory>
 #include <thread>
 
@@ -1259,4 +1263,543 @@ TEST_CASE("Capabilities: names and labels", "[crypto][capability][net-2]")
     }
     CHECK(capability_binding_label(static_cast<ScopeKind>(0U)).empty());
     CHECK(capability_binding_label(static_cast<ScopeKind>(7U)).empty());
+}
+
+// ---- Message schemas (S18) ----
+
+namespace
+{
+constexpr usize kSchemaBody = 78U; // the magic to the idempotent operations
+constexpr usize kKindAt     = 9U;
+constexpr usize kMajorAt    = 26U;
+constexpr usize kOpsAt      = 62U;
+constexpr usize kIdemAt     = 70U;
+
+constexpr u64 kMove  = 0x01U; // the world schema's operations: move, look, trade, query, build
+constexpr u64 kLook  = 0x02U;
+constexpr u64 kTrade = 0x04U;
+constexpr u64 kQuery = 0x08U;
+constexpr u64 kBuild = 0x10U; // declared, but outside the test grant's 0x0F
+
+MessageSchema world_schema(const World& world)
+{
+    MessageSchema schema;
+    schema.kind              = ScopeKind::World;
+    schema.schema            = id(0x60U);
+    schema.major             = 1U;
+    schema.minor             = 2U;
+    schema.audience          = world.config.audience;
+    schema.issued            = kT0;
+    schema.policy_generation = 1U;
+    schema.operations        = kMove | kLook | kTrade | kQuery | kBuild;
+    schema.idempotent        = kLook | kQuery;
+    return schema;
+}
+
+Bytes sign_schema(const MessageSchema& schema, ConstSpan<const Signer*> signers)
+{
+    Bytes out;
+    out.resize(kMaxSchemaBytes);
+    usize written = 0U;
+    REQUIRE(issue_schema(schema, signers, Span<u8>(out.data(), out.size()), written) == CapabilityError::None);
+    out.resize(written);
+    return out;
+}
+
+CapabilityError verify_schema_bytes(const World& world, const Bytes& bytes, AuthorizedSchema& out,
+                                    u64 now = kT0 + 60U)
+{
+    return world.authority->verify_schema(ConstSpan<u8>(bytes.data(), bytes.size()), world.snapshot, now, out);
+}
+
+// A client's single ticket.
+class OneTicket final : public TlsTicketStore
+{
+public:
+    void keep(const TlsBinding& binding, ConstSpan<u8> ticket) noexcept override
+    {
+        m_binding = binding;
+        m_ticket.resize(ticket.size());
+        std::memcpy(m_ticket.data(), ticket.data(), ticket.size());
+        m_held = true;
+    }
+
+    [[nodiscard]] ConstSpan<u8> take(const TlsBinding& binding) noexcept override
+    {
+        if (!m_held || !(binding == m_binding))
+        {
+            return {};
+        }
+        m_held   = false;
+        m_handed = m_ticket;
+        return ConstSpan<u8>(m_handed.data(), m_handed.size());
+    }
+
+    [[nodiscard]] bool held() const { return m_held; }
+
+private:
+    TlsBinding m_binding;
+    Bytes      m_ticket;
+    Bytes      m_handed;
+    bool       m_held = false;
+};
+
+// A game server that accepts early data under `schema`'s digest from clients it pins (the world's holder key), and
+// one such client.
+struct EarlyLink
+{
+    EarlyLink(const World& world, const AuthorizedSchema& schema)
+    {
+        make_key(server_key, AlgorithmId::Ed25519, 0x90U);
+        REQUIRE(server_credential.init(server_key, "game.cerid.test") == TlsError::None);
+        REQUIRE(client_credential.init(world.holder, "player.cerid.test") == TlsError::None);
+        REQUIRE(filter.init(64U, kTlsDefaultTicketLifetime + kTlsMaxTicketAgeSkew,
+                            static_cast<u64>(std::time(nullptr))) == CryptoError::None);
+        const KeyId server_pin = server_credential.key_id();
+        const KeyId client_pin = client_credential.key_id();
+        TlsConfig   client_config;
+        client_config.role        = TlsRole::Client;
+        client_config.groups      = kGroups;
+        client_config.signatures  = kSignatures;
+        client_config.aeads       = kAeads;
+        client_config.pinned      = ConstSpan<KeyId>(&server_pin, 1U);
+        client_config.server_name = "game.cerid.test";
+        client_config.credential  = &client_credential;
+        client_config.early_data  = true;
+        REQUIRE(client_context.init(client_config) == TlsError::None);
+        TlsConfig server_config;
+        server_config.role              = TlsRole::Server;
+        server_config.groups            = kGroups;
+        server_config.signatures        = kSignatures;
+        server_config.aeads             = kAeads;
+        server_config.credential        = &server_credential;
+        server_config.server_name       = "game.cerid.test";
+        server_config.pinned            = ConstSpan<KeyId>(&client_pin, 1U);
+        server_config.early_data        = true;
+        server_config.early_data_filter = &filter;
+        REQUIRE(server_context.init(server_config) == TlsError::None);
+        std::memcpy(context, schema.digest, sizeof(context));
+    }
+
+    // A connection; with a ticket, the client sends `early` as early data.
+    void start(ConstSpan<u8> early = {})
+    {
+        REQUIRE(client.init(client_context, &tickets) == TlsError::None);
+        if (!early.empty())
+        {
+            REQUIRE(client.early_data() == TlsEarlyData::Offered);
+            REQUIRE(client.send_early(early) == TlsError::None);
+        }
+        REQUIRE(server.init(server_context, nullptr, {}, ConstSpan<u8>(context)) == TlsError::None);
+        Link::move(client, server);
+    }
+
+    void finish()
+    {
+        for (int round = 0; round < 8; ++round)
+        {
+            if (server.early_data() == TlsEarlyData::Accepted && server.state() == TlsState::Handshaking)
+            {
+                u8    buffer[256];
+                usize written = 0U;
+                REQUIRE(server.read_early(Span<u8>(buffer, sizeof(buffer)), written) == TlsError::None);
+            }
+            Link::move(server, client);
+            Link::move(client, server);
+        }
+        REQUIRE(client.state() == TlsState::Established);
+        REQUIRE(server.state() == TlsState::Established);
+        u8    byte    = 0U;
+        usize written = 0U;
+        REQUIRE(client.read(Span<u8>(&byte, 1U), written) == TlsError::None); // takes in the server's ticket
+    }
+
+    SigningKey    server_key;
+    TlsCredential server_credential;
+    TlsCredential client_credential;
+    ReplayFilter  filter;
+    TlsContext    client_context;
+    TlsContext    server_context;
+    OneTicket     tickets;
+    TlsSession    client;
+    TlsSession    server;
+    u8            context[kSha256Bytes] = {};
+};
+} // namespace
+
+TEST_CASE("Message schemas: an issued schema verifies at its audience, with its digest and its idempotent operations",
+          "[crypto][capability][schema][net-2]")
+{
+    World world;
+    REQUIRE(world.revoke() == CapabilityError::None);
+    const MessageSchema schema = world_schema(world);
+    const Bytes         bytes  = sign_schema(schema, world.pair.signers);
+    // The body, the list count and ML-DSA-65's and Ed25519's entries.
+    CHECK(bytes.size() == kSchemaBody + 1U + 36U + 3309U + 36U + 64U);
+
+    SchemaMessage decoded;
+    REQUIRE(decode_schema(ConstSpan<u8>(bytes.data(), bytes.size()), decoded) == CapabilityError::None);
+    CHECK(decoded.format == kCapabilityFormat);
+    CHECK(decoded.schema.kind == ScopeKind::World);
+    CHECK(decoded.schema.schema == schema.schema);
+    CHECK(decoded.schema.major == 1U);
+    CHECK(decoded.schema.minor == 2U);
+    CHECK(decoded.schema.audience == schema.audience);
+    CHECK(decoded.schema.issued == kT0);
+    CHECK(decoded.schema.policy_generation == 1U);
+    CHECK(decoded.schema.operations == schema.operations);
+    CHECK(decoded.schema.idempotent == schema.idempotent);
+    CHECK(decoded.signed_bytes.data() == bytes.data());
+    CHECK(decoded.signed_bytes.size() == kSchemaBody);
+    CHECK(decoded.signature_count == 2U);
+
+    AuthorizedSchema authorized;
+    REQUIRE(verify_schema_bytes(world, bytes, authorized) == CapabilityError::None);
+    CHECK(authorized.schema.operations == schema.operations);
+    u8 digest[kSha256Bytes];
+    sha256(ConstSpan<u8>(bytes.data(), kSchemaBody), Span<u8, kSha256Bytes>(digest, kSha256Bytes));
+    CHECK(std::memcmp(authorized.digest, digest, kSha256Bytes) == 0);
+    // Signatures are not part of the digest: the same content signed again has it too, another revision does not.
+    AuthorizedSchema again;
+    REQUIRE(verify_schema_bytes(world, sign_schema(schema, world.pair.signers), again) == CapabilityError::None);
+    CHECK(std::memcmp(again.digest, authorized.digest, kSha256Bytes) == 0);
+    MessageSchema revised = schema;
+    revised.minor         = 3U;
+    REQUIRE(verify_schema_bytes(world, sign_schema(revised, world.pair.signers), again) == CapabilityError::None);
+    CHECK(std::memcmp(again.digest, authorized.digest, kSha256Bytes) != 0);
+
+    // What early data may carry: idempotent operations only, at least one.
+    CHECK(authorized.early(kLook));
+    CHECK(authorized.early(kLook | kQuery));
+    CHECK_FALSE(authorized.early(0U));
+    CHECK_FALSE(authorized.early(kMove));
+    CHECK_FALSE(authorized.early(kLook | kTrade));
+    CHECK_FALSE(authorized.early(u64{1U} << 63U));
+}
+
+TEST_CASE("Message schemas: every malformed field is refused before signing, and decoding is exact and bounded",
+          "[crypto][capability][schema][net-2]")
+{
+    World               world;
+    const MessageSchema good = world_schema(world);
+    CHECK(validate_schema(good) == CapabilityError::None);
+    struct Case
+    {
+        const char*   what;
+        MessageSchema schema;
+    };
+    Case cases[] = {{"kind 0", good},     {"kind 7", good},          {"zero schema", good},
+                    {"zero audience", good}, {"no operation", good}, {"undeclared idempotent", good}};
+    cases[0].schema.kind       = static_cast<ScopeKind>(0U);
+    cases[1].schema.kind       = static_cast<ScopeKind>(7U);
+    cases[2].schema.schema     = CapabilityId{};
+    cases[3].schema.audience   = CapabilityId{};
+    cases[4].schema.operations = 0U;
+    cases[4].schema.idempotent = 0U;
+    cases[5].schema.idempotent = kLook | (u64{1U} << 40U);
+    for (const Case& test : cases)
+    {
+        CAPTURE(test.what);
+        CHECK(validate_schema(test.schema) == CapabilityError::BadField);
+        Bytes out;
+        out.resize(kMaxSchemaBytes);
+        usize written = 7U;
+        CHECK(issue_schema(test.schema, world.pair.signers, Span<u8>(out.data(), out.size()), written) ==
+              CapabilityError::BadField);
+        CHECK(written == 0U);
+    }
+    // Every operation bit, and none idempotent, are fine.
+    MessageSchema wide = good;
+    wide.operations    = ~u64{0U};
+    wide.idempotent    = 0U;
+    CHECK(validate_schema(wide) == CapabilityError::None);
+    // Too small an output, no signer, a null signer, a signer twice and a key-agreement signer.
+    u8    small[kSchemaBody - 1U];
+    usize written = 0U;
+    CHECK(issue_schema(good, world.pair.signers, Span<u8>(small, sizeof(small)), written) ==
+          CapabilityError::BufferTooSmall);
+    Bytes out;
+    out.resize(kMaxSchemaBytes);
+    CHECK(issue_schema(good, ConstSpan<const Signer*>(), Span<u8>(out.data(), out.size()), written) ==
+          CapabilityError::BadConfig);
+    const Signer* null_signer[] = {nullptr};
+    CHECK(issue_schema(good, null_signer, Span<u8>(out.data(), out.size()), written) == CapabilityError::BadConfig);
+    const Signer* twice[] = {world.pair.signers[1], world.pair.signers[1]};
+    CHECK(issue_schema(good, twice, Span<u8>(out.data(), out.size()), written) == CapabilityError::BadConfig);
+    u8 body_only[kSchemaBody + 1U];
+    CHECK(issue_schema(good, world.pair.signers, Span<u8>(body_only, sizeof(body_only)), written) ==
+          CapabilityError::BufferTooSmall);
+
+    // Decoding: every proper prefix ends inside a field or the list; then each field's refusal.
+    const Bytes   bytes = sign_schema(good, world.pair.signers);
+    SchemaMessage decoded;
+    for (usize size = 0U; size < bytes.size(); ++size)
+    {
+        CHECK(decode_schema(ConstSpan<u8>(bytes.data(), size), decoded) == CapabilityError::Truncated);
+    }
+    Bytes edited = bytes;
+    edited[3] ^= 0x01U;
+    CHECK(decode_schema(ConstSpan<u8>(edited.data(), edited.size()), decoded) == CapabilityError::BadMagic);
+    for (const u8 format : {u8{0U}, u8{2U}})
+    {
+        edited    = bytes;
+        edited[8] = format;
+        CHECK(decode_schema(ConstSpan<u8>(edited.data(), edited.size()), decoded) ==
+              CapabilityError::UnsupportedFormat);
+    }
+    edited          = bytes;
+    edited[kKindAt] = 0U;
+    CHECK(decode_schema(ConstSpan<u8>(edited.data(), edited.size()), decoded) == CapabilityError::BadField);
+    edited = bytes;
+    std::memset(edited.data() + kOpsAt, 0, 8U);
+    CHECK(decode_schema(ConstSpan<u8>(edited.data(), edited.size()), decoded) == CapabilityError::BadField);
+    edited                  = bytes;
+    edited[kIdemAt]         = 0x80U; // bit 63: idempotent, never declared
+    CHECK(decode_schema(ConstSpan<u8>(edited.data(), edited.size()), decoded) == CapabilityError::BadField);
+    edited = bytes;
+    edited.push_back(0U);
+    CHECK(decode_schema(ConstSpan<u8>(edited.data(), edited.size()), decoded) == CapabilityError::TrailingBytes);
+    edited                  = bytes;
+    edited[kSchemaBody]     = 0U; // no signature
+    CHECK(decode_schema(ConstSpan<u8>(edited.data(), kSchemaBody + 1U), decoded) == CapabilityError::Unsigned);
+    edited[kSchemaBody] = static_cast<u8>(kMaxCapabilitySignatures + 1U);
+    CHECK(decode_schema(ConstSpan<u8>(edited.data(), edited.size()), decoded) == CapabilityError::TooLarge);
+    Bytes huge;
+    huge.resize(kMaxSchemaBytes + 1U);
+    std::memcpy(huge.data(), bytes.data(), bytes.size());
+    CHECK(decode_schema(ConstSpan<u8>(huge.data(), huge.size()), decoded) == CapabilityError::TooLarge);
+
+    // Tokens, revocation generations and schemas each refuse the others by their magic.
+    const Token token = world.token();
+    CHECK(decode_schema(token.view(), decoded) == CapabilityError::BadMagic);
+    CapabilityToken as_token;
+    CHECK(decode_capability(ConstSpan<u8>(bytes.data(), bytes.size()), as_token) == CapabilityError::BadMagic);
+    RevocationMessage as_revocation;
+    CHECK(decode_revocations(ConstSpan<u8>(bytes.data(), bytes.size()), as_revocation) == CapabilityError::BadMagic);
+}
+
+TEST_CASE("Message schemas: verification refuses in the contract's order", "[crypto][capability][schema][net-2]")
+{
+    World               world;
+    const MessageSchema good = world_schema(world);
+    AuthorizedSchema    out;
+    out.schema.minor = 99U; // written only on success
+
+    // No revocation generation yet: nothing is trusted (fail closed).
+    CHECK(verify_schema_bytes(world, sign_schema(good, world.pair.signers), out) == CapabilityError::RevocationStale);
+    REQUIRE(world.revoke() == CapabilityError::None);
+    REQUIRE(verify_schema_bytes(world, sign_schema(good, world.pair.signers), out) == CapabilityError::None);
+    CHECK(out.schema.minor == 2U);
+
+    // A configuration without a verifier.
+    CapabilityConfig broken = world.config;
+    broken.verifier         = nullptr;
+    const CapabilityAuthority unusable(broken);
+    const Bytes               bytes = sign_schema(good, world.pair.signers);
+    CHECK(unusable.verify_schema(ConstSpan<u8>(bytes.data(), bytes.size()), world.snapshot, kT0 + 60U, out) ==
+          CapabilityError::BadConfig);
+    // Undecodable.
+    CHECK(verify_schema_bytes(world, Bytes(), out) == CapabilityError::Truncated);
+    // Another audience, another session type.
+    MessageSchema other = good;
+    other.audience      = id(0x21U);
+    CHECK(verify_schema_bytes(world, sign_schema(other, world.pair.signers), out) == CapabilityError::WrongAudience);
+    other      = good;
+    other.kind = ScopeKind::Project;
+    CHECK(verify_schema_bytes(world, sign_schema(other, world.pair.signers), out) == CapabilityError::WrongAudience);
+    // Issued beyond the skew, and just within it.
+    other        = good;
+    other.issued = kT0 + 60U + kMaxIssueSkew + 1U;
+    CHECK(verify_schema_bytes(world, sign_schema(other, world.pair.signers), out) == CapabilityError::NotYetValid);
+    other.issued = kT0 + 60U + kMaxIssueSkew;
+    CHECK(verify_schema_bytes(world, sign_schema(other, world.pair.signers), out) == CapabilityError::None);
+    // Revoked by the generation's cut-off or its oldest honoured policy generation; a stale generation.
+    RevocationList cut;
+    cut.generation    = world.authority->revocation_floor() + 1U;
+    cut.issued        = kT0 - 60U;
+    cut.expires       = kT0 + kDay;
+    cut.revoke_before = kT0 + 1U;
+    REQUIRE(world.revoke(cut) == CapabilityError::None);
+    CHECK(verify_schema_bytes(world, bytes, out) == CapabilityError::Revoked);
+    other        = good;
+    other.issued = kT0 + 1U;
+    CHECK(verify_schema_bytes(world, sign_schema(other, world.pair.signers), out) == CapabilityError::None);
+    RevocationList old_policy;
+    old_policy.generation            = world.authority->revocation_floor() + 1U;
+    old_policy.issued                = kT0 - 30U;
+    old_policy.expires               = kT0 + kDay;
+    old_policy.min_policy_generation = 2U;
+    REQUIRE(world.revoke(old_policy) == CapabilityError::None);
+    CHECK(verify_schema_bytes(world, bytes, out) == CapabilityError::Revoked);
+    other                   = good;
+    other.policy_generation = 2U;
+    const Bytes current     = sign_schema(other, world.pair.signers);
+    CHECK(verify_schema_bytes(world, current, out) == CapabilityError::None);
+    CHECK(verify_schema_bytes(world, current, out, kT0 + kDay) == CapabilityError::RevocationStale);
+    // No hybrid issuer set covers its issue time.
+    world.pair.issuers[1].issues_from = kT0 + kHour;
+    CHECK(verify_schema_bytes(world, current, out) == CapabilityError::UntrustedIssuer);
+    world.pair.issuers[1].issues_from = 0U;
+    // The policy refuses an issuer's algorithm.
+    world.snapshot = policy(AlgorithmId::Ed25519);
+    CHECK(verify_schema_bytes(world, current, out) == CapabilityError::AlgorithmRefused);
+    world.snapshot = policy();
+    // One issuer did not sign; a signature or a signed byte changed.
+    const Signer* one[] = {world.pair.signers[0]};
+    CHECK(verify_schema_bytes(world, sign_schema(other, one), out) == CapabilityError::MissingSignature);
+    Bytes edited = current;
+    edited.back() ^= 0x01U;
+    CHECK(verify_schema_bytes(world, edited, out) == CapabilityError::BadSignature);
+    edited = current;
+    edited[kMajorAt + 1U] ^= 0x01U;
+    CHECK(verify_schema_bytes(world, edited, out) == CapabilityError::BadSignature);
+    // Every byte of the body and the signatures matters.
+    for (usize at = 0U; at < current.size(); at += 97U)
+    {
+        edited = current;
+        edited[at] ^= 0x20U;
+        CAPTURE(at);
+        CHECK(verify_schema_bytes(world, edited, out) != CapabilityError::None);
+    }
+    CHECK(out.schema.policy_generation == 2U);
+}
+
+TEST_CASE("Message schemas: an operation runs only when declared, granted and, as early data, idempotent",
+          "[crypto][capability][schema][net-2]")
+{
+    World world;
+    REQUIRE(world.revoke() == CapabilityError::None);
+    AuthorizedSchema schema;
+    REQUIRE(verify_schema_bytes(world, sign_schema(world_schema(world), world.pair.signers), schema) ==
+            CapabilityError::None);
+    Capability  granted;
+    const Token token = world.token();
+    const Bytes proof = prove(token, world.binding, world.holder);
+    REQUIRE(world.verify(token, ConstSpan<u8>(proof.data(), proof.size()), granted) == CapabilityError::None);
+
+    struct Case
+    {
+        u64              operations;
+        u64              object;
+        Delivery         delivery;
+        OperationVerdict expected;
+    };
+    const Case cases[] = {
+        {kMove, 150U, Delivery::Established, OperationVerdict::Admitted},
+        {kMove | kTrade, 1500U, Delivery::Established, OperationVerdict::Admitted},
+        {kLook, 100U, Delivery::Early, OperationVerdict::Admitted},
+        {kLook | kQuery, 1999U, Delivery::Early, OperationVerdict::Admitted},
+        {0U, 150U, Delivery::Established, OperationVerdict::Undeclared},
+        {u64{1U} << 5U, 150U, Delivery::Established, OperationVerdict::Undeclared},
+        {kLook | (u64{1U} << 63U), 150U, Delivery::Early, OperationVerdict::Undeclared}, // undeclared before replay
+        {kMove, 150U, Delivery::Early, OperationVerdict::Replayable},
+        {kLook | kTrade, 150U, Delivery::Early, OperationVerdict::Replayable},
+        {kBuild, 150U, Delivery::Early, OperationVerdict::Replayable}, // the schema judges before the grant
+        {kBuild, 150U, Delivery::Established, OperationVerdict::NotGranted},
+        {kLook, 200U, Delivery::Early, OperationVerdict::NotGranted}, // between the grant's ranges
+        {kLook, 150U, static_cast<Delivery>(0U), OperationVerdict::Admitted},
+        {kMove, 150U, static_cast<Delivery>(0U), OperationVerdict::Replayable}, // unknown deliveries are replayable
+        {kMove, 150U, static_cast<Delivery>(9U), OperationVerdict::Replayable},
+    };
+    for (const Case& test : cases)
+    {
+        CAPTURE(test.operations, test.object, static_cast<int>(test.delivery));
+        CHECK(authorize_operation(schema, granted, test.operations, test.object, test.delivery) == test.expected);
+    }
+    // A capability of another audience or session type than the schema's.
+    Capability elsewhere = granted;
+    elsewhere.audience   = id(0x21U);
+    CHECK(authorize_operation(schema, elsewhere, kMove, 150U, Delivery::Established) ==
+          OperationVerdict::OtherSchema);
+    elsewhere            = granted;
+    elsewhere.grant.kind = ScopeKind::Project;
+    CHECK(authorize_operation(schema, elsewhere, kLook, 150U, Delivery::Early) == OperationVerdict::OtherSchema);
+
+    CHECK(operation_verdict_name(OperationVerdict::Admitted) == "admitted");
+    CHECK(operation_verdict_name(OperationVerdict::OtherSchema) == "other-schema");
+    CHECK(operation_verdict_name(OperationVerdict::Undeclared) == "undeclared");
+    CHECK(operation_verdict_name(OperationVerdict::Replayable) == "replayable");
+    CHECK(operation_verdict_name(OperationVerdict::NotGranted) == "not-granted");
+    CHECK(operation_verdict_name(static_cast<OperationVerdict>(9U)) == "unknown");
+}
+
+TEST_CASE("Message schemas: early data on a resumed mutually authenticated session runs a Peer token's idempotent "
+          "operations, and a ticket of another schema carries none",
+          "[crypto][capability][schema][tls][early][net-2]")
+{
+    World world;
+    REQUIRE(world.revoke() == CapabilityError::None);
+    world.root.holder.binding = CapabilityBinding::Peer;
+    const Token peer_token    = world.token();
+    world.root.holder.binding = CapabilityBinding::Proof;
+    const Token proof_token   = world.token();
+    AuthorizedSchema schema;
+    REQUIRE(verify_schema_bytes(world, sign_schema(world_schema(world), world.pair.signers), schema) ==
+            CapabilityError::None);
+
+    EarlyLink link(world, schema);
+    link.start();
+    Capability granted;
+    // Before the handshake ends nothing is presented: no early data was accepted.
+    CHECK(world.authority->verify_early(peer_token.view(), link.server, world.snapshot, kT0 + 60U, granted) ==
+          CapabilityError::Unbound);
+    link.finish();
+    CHECK(link.server.early_data() == TlsEarlyData::None);
+    CHECK(world.authority->verify_early(peer_token.view(), link.server, world.snapshot, kT0 + 60U, granted) ==
+          CapabilityError::Unbound); // a full handshake's session carried no early data
+    REQUIRE(link.tickets.held());
+
+    // The resumed connection's early data: the server knows the peer the ticket proved before the first early byte.
+    const u8 look[] = {'l', 'o', 'o', 'k'};
+    link.start(ConstSpan<u8>(look));
+    REQUIRE(link.server.early_data() == TlsEarlyData::Accepted);
+    REQUIRE(link.server.state() == TlsState::Handshaking);
+    CHECK(link.server.resumed());
+    CHECK(link.server.peer_key() == id_of(world.holder));
+    REQUIRE(world.authority->verify_early(peer_token.view(), link.server, world.snapshot, kT0 + 60U, granted) ==
+            CapabilityError::None);
+    CHECK(granted.holder.binding == CapabilityBinding::Peer);
+    CHECK(authorize_operation(schema, granted, kLook, 150U, Delivery::Early) == OperationVerdict::Admitted);
+    CHECK(authorize_operation(schema, granted, kQuery, 1000U, Delivery::Early) == OperationVerdict::Admitted);
+    CHECK(authorize_operation(schema, granted, kTrade, 150U, Delivery::Early) == OperationVerdict::Replayable);
+    // A Proof token cannot be bound in early data (no early exporter): it is presented after the handshake.
+    CHECK(world.authority->verify_early(proof_token.view(), link.server, world.snapshot, kT0 + 60U, granted) ==
+          CapabilityError::Unbound);
+    link.finish();
+    CHECK(link.server.early_data() == TlsEarlyData::Accepted);
+    // After the handshake the same session admits both, the Proof token through its exporter binding.
+    CHECK(world.authority->verify_early(peer_token.view(), link.server, world.snapshot, kT0 + 60U, granted) ==
+          CapabilityError::None);
+    CHECK(authorize_operation(schema, granted, kTrade, 150U, Delivery::Established) == OperationVerdict::Admitted);
+    Bytes client_binding;
+    client_binding.resize(kCapabilityBindingBytes);
+    REQUIRE(capability_binding(link.client, ScopeKind::World, Span<u8>(client_binding.data(), client_binding.size())) ==
+            TlsError::None);
+    const Bytes proof = prove(proof_token, ConstSpan<u8>(client_binding.data(), client_binding.size()), world.holder);
+    CHECK(world.authority->verify(proof_token.view(), link.server, ConstSpan<u8>(proof.data(), proof.size()),
+                                  world.snapshot, kT0 + 60U, granted) == CapabilityError::None);
+
+    // The schema changes: the server's early data context with it. The ticket of the old one resumes without early
+    // data (the client sends its operation again after the handshake), and the new connection's ticket allows it.
+    MessageSchema revised = world_schema(world);
+    revised.minor         = 3U;
+    revised.idempotent    = kLook;
+    AuthorizedSchema next;
+    REQUIRE(verify_schema_bytes(world, sign_schema(revised, world.pair.signers), next) == CapabilityError::None);
+    std::memcpy(link.context, next.digest, sizeof(link.context));
+    REQUIRE(link.tickets.held());
+    link.start(ConstSpan<u8>(look));
+    CHECK(link.server.early_data() == TlsEarlyData::Rejected);
+    CHECK(world.authority->verify_early(peer_token.view(), link.server, world.snapshot, kT0 + 60U, granted) ==
+          CapabilityError::Unbound);
+    link.finish();
+    CHECK(link.client.early_data() == TlsEarlyData::Rejected);
+    CHECK(link.server.resumed());
+    link.start(ConstSpan<u8>(look));
+    CHECK(link.server.early_data() == TlsEarlyData::Accepted);
+    REQUIRE(world.authority->verify_early(peer_token.view(), link.server, world.snapshot, kT0 + 60U, granted) ==
+            CapabilityError::None);
+    CHECK(authorize_operation(next, granted, kQuery, 150U, Delivery::Early) == OperationVerdict::Replayable);
+    CHECK(authorize_operation(next, granted, kLook, 150U, Delivery::Early) == OperationVerdict::Admitted);
+    link.finish();
 }

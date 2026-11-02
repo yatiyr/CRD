@@ -1,10 +1,12 @@
 # The crypto fuzz targets (NET-STD, NET.2). Their committed corpora are replayed on every lane and linux-clang-fuzz
 # builds the libFuzzer executables from the same sources. Contract: docs/design/test-instruments.md; harness:
 # tests/support/fuzz.
-#   crd-fuzz-crypto-capability decode_capability and decode_revocations against restated layouts, and generated lives
-#                              (a hybrid-signed root, delegations narrower or widened, a revocation generation, an
-#                              audience, a time and a presentation) against a restated containment rule and a model of
-#                              the verification order, with any flipped byte of a verified token refused.
+#   crd-fuzz-crypto-capability decode_capability, decode_revocations and decode_schema against restated layouts, and
+#                              generated lives (a hybrid-signed root, delegations narrower or widened, a revocation
+#                              generation, an audience, a time and a presentation; a message schema, a time and an
+#                              operation asked of a capability) against a restated containment rule, a model of each
+#                              verification order and the restated operation verdict, with any flipped byte of a
+#                              verified token or schema refused.
 #   crd-fuzz-crypto-policy     decode_policy against a restated layout, and generated generation sequences signed by
 #                              the test signer through PolicyStore::apply against the contract's adoption and window
 #                              rules.
