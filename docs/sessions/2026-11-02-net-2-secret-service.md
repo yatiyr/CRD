@@ -14,7 +14,9 @@ suite", because a one-byte export is zero once in 256 runs per suite. 13c815d3 f
 both sides wrote; only exports of at least Nh bytes are checked nonzero). Complete-tier dispatch 41508851661 runs at
 13c815d3. Two defects of batch 62 found here and fixed: the key store tests read `store.find(name)->generation`
 unchecked (GCC 13 LTO `-Wnull-dereference` on linux-gcc-release), and `crd-fuzz-crypto-key-store` had no
-`scripts/fuzz.py` entry (`crd-repository-tools`).
+`scripts/fuzz.py` entry (`crd-repository-tools`). Dispatch 41508851661, still running at handover, had ten failed jobs,
+every one from these two (the repository tools on every lane, the LTO link on linux-gcc-release and -relwithdebinfo);
+b5a2d1b9 fixes both.
 
 ## What landed
 
