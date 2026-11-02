@@ -305,8 +305,11 @@ struct LogicalCpu
 [[nodiscard]] crd::u32 logical_cpu_count() noexcept;
 // The index-th of them (index < logical_cpu_count()).
 [[nodiscard]] LogicalCpu logical_cpu_at(crd::u32 index) noexcept;
-// Pins the calling thread to `cpu` alone and confirms it runs there. False when the OS refuses the CPU (offline,
-// outside the process's set) or offers no affinity; the thread's affinity is then unspecified.
+// Pins the calling thread to `cpu` alone and confirms the pin from the OS's own record: the thread's affinity reads
+// back as exactly that CPU. The OS moves a thread off a CPU its new affinity excludes; the thread yields once if it is
+// not yet seen there. A "which CPU am I on" query is not the proof, because emulators and hypervisors may report it
+// wrongly (Intel SDE answers CPU 0 to GetCurrentProcessorNumberEx on every CPU). False when the OS refuses the CPU
+// (offline, outside the process's set) or offers no affinity; the thread's affinity is then unspecified.
 [[nodiscard]] bool pin_current_thread(LogicalCpu cpu) noexcept;
 
 // The CPU's identity for diagnostics and hardware-fault classification (HW-RESILIENCE.2): the part and the microcode

@@ -670,14 +670,18 @@ bool pin_current_thread(LogicalCpu cpu) noexcept
     {
         return false;
     }
+    GROUP_AFFINITY now = {};
+    if (::GetThreadGroupAffinity(::GetCurrentThread(), &now) == 0 || now.Group != one.Group || now.Mask != one.Mask)
+    {
+        return false;
+    }
     PROCESSOR_NUMBER at = {};
     ::GetCurrentProcessorNumberEx(&at);
     if (at.Group != cpu.group || at.Number != cpu.number)
     {
         ::SwitchToThread();
-        ::GetCurrentProcessorNumberEx(&at);
     }
-    return at.Group == cpu.group && at.Number == cpu.number;
+    return true;
 #elif CRD_OS_LINUX
     cpu_set_t one[kAffinityWords]; // NOLINT(modernize-avoid-c-arrays): 8,192 CPUs without CPU_ALLOC's heap
     constexpr crd::usize bytes = sizeof(one);
@@ -691,11 +695,18 @@ bool pin_current_thread(LogicalCpu cpu) noexcept
     {
         return false;
     }
+    cpu_set_t now[kAffinityWords]; // NOLINT(modernize-avoid-c-arrays): the same set, read back
+    CPU_ZERO_S(bytes, now);
+    if (::sched_getaffinity(0, bytes, now) != 0 || CPU_COUNT_S(bytes, now) != 1 ||
+        !CPU_ISSET_S(static_cast<crd::usize>(cpu.number), bytes, now))
+    {
+        return false;
+    }
     if (::sched_getcpu() != static_cast<int>(cpu.number))
     {
         ::sched_yield();
     }
-    return ::sched_getcpu() == static_cast<int>(cpu.number);
+    return true;
 #else
     (void)cpu;
     return false;
