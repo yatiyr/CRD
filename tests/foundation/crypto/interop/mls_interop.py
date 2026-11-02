@@ -588,26 +588,31 @@ def refused_packages(peers, suite):
 
 
 def forged_content_spends(peers, suite):
-    """TP-9's reproduction, MLSpp's members alone: a member refuses a PrivateMessage whose content was forged, then
-    refuses the genuine message too ("Request for expired key"), because MLSpp spent the generation before the seal
-    authenticated. A Cerid member of the same group refuses the forgery and reads the genuine message: Group::process
-    spends a generation only once both seals authenticate. When MLSpp stops spending it, this case fails and the
-    entry is retired."""
+    """TP-9's reproduction, MLSpp alone: in a group of two MLSpp members, the reader refuses a PrivateMessage whose
+    content was forged, then refuses the genuine message too ("Request for expired key"): MLSpp spent the generation
+    before the seal authenticated, though RFC 9420 section 9.2 consumes a key that "(successfully) decrypt[s]" a
+    message. A Cerid member then added refuses the next message forged the same way and reads it genuine:
+    Group::process spends a generation only once both seals authenticate. When MLSpp stops spending it, this case
+    fails and the entry is retired."""
     group = Group(peers, suite, 'private')
     tag = 'tp9-%d' % suite
-    for role, kind in (('sender', 'mlspp'), ('reader', 'mlspp'), ('cerid', 'cerid')):
-        group.member('%s-%s' % (role, tag), kind, identity=role.encode())
-    group.create('sender-' + tag)
-    group.commit('sender-' + tag, adds=('reader-' + tag, 'cerid-' + tag))
+    sender, reader, cerid = 'sender-' + tag, 'reader-' + tag, 'cerid-' + tag
+    group.member(sender, 'mlspp', identity=b'sender')
+    group.member(reader, 'mlspp', identity=b'reader')
+    group.create(sender)
+    group.commit(sender, adds=(reader,))
     data = b'one generation'
-    message = bytes.fromhex(group.ask('sender-' + tag, 'protect', data.hex())['message'])
-    forged = dict(forgeries(message, suite))['content']
-    group.refuses('reader-' + tag, 'process', forged.hex())
-    word = group.refuses('reader-' + tag, 'process', message.hex())
+    message = bytes.fromhex(group.ask(sender, 'protect', data.hex())['message'])
+    group.refuses(reader, 'process', dict(forgeries(message, suite))['content'].hex())
+    word = group.refuses(reader, 'process', message.hex())
     expect('expired_key' in word, 'MLSpp refused the genuine message after the forgery as %s' % word)
-    word = group.refuses('cerid-' + tag, 'process', forged.hex())
+    # The contrast: a Cerid member, given the same forgery of the next message.
+    group.member(cerid, 'cerid', identity=b'cerid')
+    group.commit(sender, adds=(cerid,))
+    message = bytes.fromhex(group.ask(sender, 'protect', data.hex())['message'])
+    word = group.refuses(cerid, 'process', dict(forgeries(message, suite))['content'].hex())
     expect(word == 'forged', 'cerid refused the forged content as %s' % word)
-    reply = group.ask('cerid-' + tag, 'process', message.hex())
+    reply = group.ask(cerid, 'process', message.hex())
     expect(reply['type'] == 'application' and as_bytes(reply['data']) == data, 'cerid read %s' % reply)
 
 
