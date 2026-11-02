@@ -455,7 +455,7 @@
         "tests/foundation/crypto/secret_service_session.py"
       ],
       "deprecation": null,
-      "note": "AES-256-GCM under HKDF-SHA256 of the master key and a fresh salt per save, the header authenticated; the master key guarded by DPAPI on Windows, the freedesktop Secret Service on Linux (freedesktop.secret-service) or the application's protector, replaced on revocation where the protector can forget the old one. Never on the wire."
+      "note": "AES-256-GCM under HKDF-SHA256 of the master key and a fresh salt per save, the header authenticated; the master key guarded by DPAPI or the TPM (tcg.tpm2) on Windows, the freedesktop Secret Service on Linux (freedesktop.secret-service) or the application's protector, replaced on revocation where the protector can forget the old one. Never on the wire."
     },
     {
       "id": "freedesktop.secret-service",
@@ -490,6 +490,36 @@
       ],
       "deprecation": null,
       "note": "The key store's Linux protector (decision K10): a master key is an item of the default collection that Cerid's schema, the store and a random handle find, written and read over the session algorithm dh-ietf1024-sha256-aes128-cbc-pkcs7 (Diffie-Hellman in RFC 2409's 1024-bit MODP group, HKDF-SHA256 with no salt or info into an AES-128 key, AES-128-CBC with PKCS #7 padding), deleted to forget it; libdbus-1 loaded at run time, prompts only where the caller allows them. The transport hides a secret only on the user's own session bus; the vault's own protection is the service's. Proven against gnome-keyring 46.1 (tools/gnome-keyring-linux-x64), unlocked and locked."
+    },
+    {
+      "id": "tcg.tpm2",
+      "title": "TPM 2.0 Library: the key store's hardware protector through the Platform Crypto Provider",
+      "kind": "protocol",
+      "state": "implemented",
+      "owner": "crypto",
+      "rows": [
+        "NET.2"
+      ],
+      "spec": {
+        "type": "tcg",
+        "ref": "https://trustedcomputinggroup.org/resource/tpm-library-specification/",
+        "revision": "1.83",
+        "status": "published"
+      },
+      "cryptography": [
+        "confidentiality"
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#key-store",
+        "read": "2026-11-02",
+        "verified": false
+      },
+      "review": "2027-05-03",
+      "evidence": [
+        "tests/foundation/crypto/test_key_store.cpp"
+      ],
+      "deprecation": null,
+      "note": "The key store's hardware protector (decision K11): on Windows a persisted, decrypt-only RSA-2048 key in the TPM per master key, through the Microsoft Platform Crypto Provider, wrapping the master key with RSA-OAEP and SHA-256 (RFC 8017) under a label that names the store; deleted to forget it. Proven on an Intel PTT TPM 2.0 (the 2026-11-03 session); a runner without a TPM skips that case. The specification revision was taken from knowledge (verified false); the register review reads the TCG page. Linux's tss2 protector is next."
     },
     {
       "id": "ietf.grease",

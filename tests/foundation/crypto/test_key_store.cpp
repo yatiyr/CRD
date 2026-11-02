@@ -1,9 +1,10 @@
-// crd-crypto -- the key store (NET.2; docs/design/network-foundation.md#key-store, decisions K1 to K10): every kind
+// crd-crypto -- the key store (NET.2; docs/design/network-foundation.md#key-store, decisions K1 to K11): every kind
 // of key generated, imported, used, rotated, revoked and destroyed across reopenings; the master key replaced on
 // revocation so an earlier copy of the store no longer opens; an interrupted replacement completed by the next change;
 // every byte of a store file changed and refused; a damaged, truncated, older or substituted store refused; writers in
-// several threads ordered by the store's lock; DPAPI guarding the master key on Windows and the Secret Service on Linux
-// (under a pinned gnome-keyring, hidden from the default run); a TLS credential from a stored signer.
+// several threads ordered by the store's lock; a store erased; DPAPI and the TPM guarding the master key on Windows and
+// the Secret Service on Linux (under a pinned gnome-keyring, hidden from the default run); a TLS credential from a
+// stored signer.
 
 #include <crd/core/environment.hpp>
 #include <crd/core/platform.hpp>
@@ -792,6 +793,54 @@ TEST_CASE("Key store: an interrupted replacement of the master key completes wit
     CHECK(same_infos(store, reopened));
 }
 
+TEST_CASE("Key store: erasing a store forgets its master keys and removes its file", "[crypto][key-store]")
+{
+    TempStore     dir("erase");
+    TestProtector protector;
+    KeyStore      store;
+    CHECK(store.erase() == CryptoError::NotReady);
+    REQUIRE(store.create(dir.dir(), protector) == CryptoError::None);
+    REQUIRE(store.generate("a", AlgorithmId::Ed25519, PlacementRequest::Software, 1U) == CryptoError::None);
+    // An interrupted replacement leaves two master keys held: erasing forgets both.
+    protector.fail_forget = CryptoError::Unavailable;
+    REQUIRE(store.revoke("a", 1U, 2U) == CryptoError::None);
+    CHECK(protector.held() == 2U);
+    const Bytes copy = read_file(dir.file());
+
+    // A protector that will not forget now stops the erasure before anything is removed.
+    CHECK(store.erase() == CryptoError::Unavailable);
+    CHECK(store.ready());
+    CHECK(fs::exists(dir.file()));
+    protector.fail_forget = CryptoError::None;
+
+    // Another process's newer save is the one erased; a stale store refuses (decision K6).
+    KeyStore other;
+    REQUIRE(other.open(dir.dir(), protector) == CryptoError::None);
+    REQUIRE(other.generate("b", AlgorithmId::Ed25519, PlacementRequest::Software, 3U) == CryptoError::None);
+    REQUIRE(store.erase() == CryptoError::None);
+    CHECK_FALSE(store.ready());
+    CHECK(protector.held() == 0U);
+    CHECK_FALSE(fs::exists(dir.file()));
+    CHECK(other.erase() == CryptoError::NotFound);
+
+    // No copy of the file opens again, and the directory takes a new store.
+    write_file(dir.file(), copy);
+    KeyStore old_copy;
+    CHECK(old_copy.open(dir.dir(), protector) == CryptoError::Denied);
+    REQUIRE(fs::remove_file(dir.file()));
+    REQUIRE(store.create(dir.dir(), protector) == CryptoError::None);
+    CHECK(store.size() == 0U);
+    CHECK(protector.held() == 1U);
+
+    // A protector that cannot forget still has its store file removed.
+    TempStore     kept_dir("erase-kept");
+    TestProtector keeping(false);
+    KeyStore      kept;
+    REQUIRE(kept.create(kept_dir.dir(), keeping) == CryptoError::None);
+    REQUIRE(kept.erase() == CryptoError::None);
+    CHECK_FALSE(fs::exists(kept_dir.file()));
+}
+
 TEST_CASE("Key store: every changed byte of a store is refused", "[crypto][key-store]")
 {
     TempStore     dir("tamper");
@@ -1053,6 +1102,137 @@ TEST_CASE("Key store: the operating system's protector", "[crypto][key-store]")
     }
 #endif
 #endif
+}
+
+TEST_CASE("Key store: the TPM protector's contract", "[crypto][key-store]")
+{
+    TpmKeyProtector tpm;
+    CHECK(tpm.protection() == KeyProtection::Hardware);
+    CHECK(key_protection_name(tpm.protection()) == StringView("hardware"));
+    const u8 store_id[kKeyStoreIdBytes]   = {1, 2, 3};
+    u8       master[kKeyStoreMasterBytes] = {0x42};
+    Bytes    reference;
+    reference.push_back(1U);
+    // Lengths are checked first, whatever the machine holds.
+    CHECK(tpm.protect(ConstSpan<u8>(store_id, 15U), ConstSpan<u8>(master), reference) == CryptoError::BadLength);
+    CHECK(reference.empty());
+    CHECK(tpm.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master, 31U), reference) == CryptoError::BadLength);
+    CHECK(tpm.recover(ConstSpan<u8>(store_id), {}, Span<u8>(master, 16U)) == CryptoError::BadLength);
+    CHECK(master[0] == 0U);
+#if CRD_OS_WINDOWS
+    CHECK(tpm.name() == StringView("tpm-pcp"));
+    CHECK(tpm.forgets());
+    // A reference this protector did not write is refused before the TPM is asked: empty, short, long, another format.
+    Bytes foreign;
+    foreign.resize(1U + 16U + 256U);
+    std::memset(foreign.data(), 0x33, foreign.size());
+    foreign[0] = 1U;
+    u8 recovered[kKeyStoreMasterBytes];
+    CHECK(tpm.recover(ConstSpan<u8>(store_id), {}, Span<u8>(recovered)) == CryptoError::Denied);
+    CHECK(tpm.recover(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign.data(), foreign.size() - 1U),
+                      Span<u8>(recovered)) == CryptoError::Denied);
+    foreign.push_back(0U);
+    CHECK(tpm.recover(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign.data(), foreign.size()), Span<u8>(recovered)) ==
+          CryptoError::Denied);
+    foreign.pop_back();
+    foreign[0] = 2U;
+    CHECK(tpm.recover(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign.data(), foreign.size()), Span<u8>(recovered)) ==
+          CryptoError::Denied);
+    CHECK(tpm.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(foreign.data(), foreign.size())) == CryptoError::Denied);
+    CHECK(tpm.forget(ConstSpan<u8>(store_id, 15U), ConstSpan<u8>(foreign.data(), foreign.size())) ==
+          CryptoError::Denied);
+#else
+    // No TPM protector here yet: every call that passes its length checks is Unavailable, and no store is made.
+    CHECK(tpm.name() == StringView("unavailable"));
+    CHECK_FALSE(tpm.forgets());
+    CHECK_FALSE(TpmKeyProtector::available());
+    master[0] = 0x42U;
+    CHECK(tpm.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master), reference) == CryptoError::Unavailable);
+    CHECK(reference.empty());
+    CHECK(tpm.recover(ConstSpan<u8>(store_id), {}, Span<u8>(master)) == CryptoError::Unavailable);
+    CHECK(master[0] == 0U);
+    CHECK(tpm.forget(ConstSpan<u8>(store_id), {}) == CryptoError::Unavailable);
+    TempStore dir("tpm-unavailable");
+    KeyStore  store;
+    CHECK(store.create(dir.dir(), tpm) == CryptoError::Unavailable);
+    CHECK_FALSE(store.ready());
+#endif
+}
+
+TEST_CASE("Key store: the TPM protector keeps and forgets a master key", "[crypto][key-store]")
+{
+    if (!TpmKeyProtector::available())
+    {
+        // A runner without a TPM; this case is the protector's evidence on a machine with one (the row's session note).
+        SKIP("no TPM 2.0 behind the Platform Crypto Provider");
+    }
+    TpmKeyProtector tpm;
+    u8              store_id[kKeyStoreIdBytes];
+    u8              other_id[kKeyStoreIdBytes];
+    u8              master[kKeyStoreMasterBytes];
+    REQUIRE(random_bytes(Span<u8>(store_id)) == CryptoError::None);
+    REQUIRE(random_bytes(Span<u8>(other_id)) == CryptoError::None);
+    REQUIRE(random_bytes(Span<u8>(master)) == CryptoError::None);
+    Bytes reference;
+    REQUIRE(tpm.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master), reference) == CryptoError::None);
+    REQUIRE(reference.size() == 1U + 16U + 256U);
+    const ConstSpan<u8> held(reference.data(), reference.size());
+    u8                  recovered[kKeyStoreMasterBytes] = {};
+    CHECK(tpm.recover(ConstSpan<u8>(store_id), held, Span<u8>(recovered)) == CryptoError::None);
+    CHECK(std::memcmp(recovered, master, sizeof(master)) == 0);
+
+    // Bound to its store: another store's identifier names no key, and the label differs too.
+    std::memset(recovered, 0x55, sizeof(recovered));
+    CHECK(tpm.recover(ConstSpan<u8>(other_id), held, Span<u8>(recovered)) == CryptoError::Denied);
+    CHECK(recovered[0] == 0U);
+    // Every part of the reference matters: the handle names the key, and OAEP refuses a changed wrapped key.
+    for (const usize at : {usize{1U}, usize{16U}, usize{17U}, usize{100U}, reference.size() - 1U})
+    {
+        Bytes changed = reference;
+        changed[at] ^= 0x01U;
+        CHECK(tpm.recover(ConstSpan<u8>(store_id), ConstSpan<u8>(changed.data(), changed.size()),
+                          Span<u8>(recovered)) == CryptoError::Denied);
+    }
+    // A second protection of the same master key is a new TPM key: both recover until each is forgotten.
+    Bytes second;
+    REQUIRE(tpm.protect(ConstSpan<u8>(store_id), ConstSpan<u8>(master), second) == CryptoError::None);
+    CHECK(std::memcmp(second.data(), reference.data(), 17U) != 0);
+    CHECK(tpm.forget(ConstSpan<u8>(store_id), ConstSpan<u8>(second.data(), second.size())) == CryptoError::None);
+    CHECK(tpm.recover(ConstSpan<u8>(store_id), ConstSpan<u8>(second.data(), second.size()), Span<u8>(recovered)) ==
+          CryptoError::Denied);
+    CHECK(tpm.recover(ConstSpan<u8>(store_id), held, Span<u8>(recovered)) == CryptoError::None);
+    // Forgetting deletes the TPM key: nothing recovers it, and a second forget has nothing left to do.
+    CHECK(tpm.forget(ConstSpan<u8>(store_id), held) == CryptoError::None);
+    CHECK(tpm.recover(ConstSpan<u8>(store_id), held, Span<u8>(recovered)) == CryptoError::Denied);
+    CHECK(tpm.forget(ConstSpan<u8>(store_id), held) == CryptoError::None);
+
+    // A store under the TPM: created, used, revoked (the master key replaced and the old TPM key deleted, so an earlier
+    // copy of the file opens nowhere), reopened, and refused to any other protector.
+    TempStore dir("tpm");
+    KeyStore  store;
+    REQUIRE(store.create(dir.dir(), tpm) == CryptoError::None);
+    CHECK(store.protection() == KeyProtection::Hardware);
+    REQUIRE(store.generate("identity", AlgorithmId::MlDsa65, PlacementRequest::Software, 1U) == CryptoError::None);
+    REQUIRE(store.generate("tickets", AlgorithmId::Aes256Gcm, PlacementRequest::Software, 1U) == CryptoError::None);
+    const Bytes before_revocation = read_file(dir.file());
+    REQUIRE(store.revoke("tickets", 1U, 2U) == CryptoError::None);
+    const Bytes after_revocation = read_file(dir.file());
+    write_file(dir.file(), before_revocation);
+    KeyStore old_copy;
+    CHECK(old_copy.open(dir.dir(), tpm) == CryptoError::Denied);
+    write_file(dir.file(), after_revocation);
+    KeyStore reopened;
+    REQUIRE(reopened.open(dir.dir(), tpm) == CryptoError::None);
+    CHECK(same_infos(store, reopened));
+    check_signs(reopened, "identity");
+    PlatformKeyProtector platform;
+    KeyStore             stranger;
+    CHECK(stranger.open(dir.dir(), platform) == CryptoError::Unsupported);
+    // Erasing the store deletes its last TPM key: a copy of its file opens nowhere, and nothing is left behind.
+    const Bytes final_copy = read_file(dir.file());
+    REQUIRE(reopened.erase() == CryptoError::None);
+    write_file(dir.file(), final_copy);
+    CHECK(old_copy.open(dir.dir(), tpm) == CryptoError::Denied);
 }
 
 // ---- The Secret Service under a pinned gnome-keyring (tests/foundation/crypto/secret_service_session.py) ----

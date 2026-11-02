@@ -9,8 +9,8 @@
 # capabilities and message schemas (capability.hpp), anti-replay windows and filters (replay.hpp), hybrid public key
 # encryption (hpke.hpp) and MLS (mls.hpp, its messages in mls_message.hpp, its ratchet tree in mls_tree.hpp and its
 # groups, proposals and commits in mls_group.hpp) and the key store (key_store.hpp: the sealed store of long-term keys
-# and shared secrets, its master key guarded by DPAPI on Windows, the Secret Service on Linux (libdbus-1 loaded at run
-# time) or the application's protector). Contract:
+# and shared secrets, its master key guarded by DPAPI or the TPM on Windows, the Secret Service on Linux (libdbus-1
+# loaded at run time) or the application's protector). Contract:
 # docs/design/network-foundation.md#crypto, #agility, #provider, #key-store, #tls-sessions, #quic-protection,
 # #capability-tokens, #anti-replay, #early-data, #message-schemas, #hpke and #mls.
 
@@ -37,7 +37,8 @@ target_link_libraries(crd-crypto
 )
 
 if(WIN32)
-    target_link_libraries(crd-crypto PRIVATE crypt32) # NET.2 decision K2: DPAPI guards a key store's master key
+    # NET.2 decisions K2 and K11: DPAPI and the TPM's Platform Crypto Provider guard a key store's master key
+    target_link_libraries(crd-crypto PRIVATE crypt32 ncrypt)
 endif()
 
 target_compile_features(crd-crypto PUBLIC cxx_std_20)

@@ -96,6 +96,7 @@ SPEC_STATUS = {
     'nist': {'final', 'draft', 'withdrawn'},
     'paper': {'published', 'withdrawn'},
     'freedesktop': {'draft', 'stable', 'withdrawn'},
+    'tcg': {'published', 'review', 'withdrawn'},
     'cerid': {'design', 'stable'},
 }
 HELD_DRAFT = {'iesg', 'rfc-editor'}

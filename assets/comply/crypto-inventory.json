@@ -52,6 +52,16 @@
           "standard": true
         },
         {
+          "id": "tcg.tpm2",
+          "kind": "protocol",
+          "owner": "crypto",
+          "functions": [
+            "confidentiality"
+          ],
+          "spec": "https://trustedcomputinggroup.org/resource/tpm-library-specification/",
+          "standard": true
+        },
+        {
           "id": "tls.hybrid-kex",
           "kind": "algorithm",
           "owner": "crypto",

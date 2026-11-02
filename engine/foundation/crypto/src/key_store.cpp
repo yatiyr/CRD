@@ -33,6 +33,7 @@ constexpr usize kFixedHeaderBytes  = sizeof(kMagic) + 2U + 2U + kKeyStoreIdBytes
 constexpr usize kEntryFixedBytes   = 1U + 4U + 2U + 1U + 1U + 1U + 8U + 8U + kKeyIdBytes + 2U + 1U;
 constexpr usize kGenerationTries   = 64U; // fresh ECDSA and ECDH scalars land outside [1, n - 1] with odds 2^-32
 constexpr char  kStoreFileName[]   = "keys";
+constexpr char  kStoreTempName[]   = "keys.tmp"; // the durable save's file in flight (durable_file.hpp)
 constexpr char  kLockFileName[]    = "lock";
 constexpr char  kBodyLabel[]       = "cerid key store 1";
 constexpr char  kSecretIdLabel[]   = "cerid key id";
@@ -1139,6 +1140,46 @@ CryptoError KeyStore::apply(const Change& change) noexcept
     }
     adopt(*m_protector, directory, snapshot);
     return outcome;
+}
+
+CryptoError KeyStore::erase() noexcept
+{
+    if (m_protector == nullptr)
+    {
+        return CryptoError::NotReady;
+    }
+    const cont::StringView directory(m_directory.data(), m_directory.size());
+    fs::FileLock           lock;
+    if (!lock.acquire(file_in(directory, kLockFileName)))
+    {
+        return CryptoError::StorageFailure;
+    }
+    Snapshot    snapshot;
+    CryptoError error = read(directory, *m_protector, snapshot);
+    if (error == CryptoError::None)
+    {
+        error = same_store(snapshot);
+    }
+    if (error == CryptoError::None && !snapshot.pending.empty())
+    {
+        error = m_protector->forget(id(), bytes_of(snapshot.pending));
+    }
+    if (error == CryptoError::None)
+    {
+        error = m_protector->forget(id(), bytes_of(snapshot.reference));
+    }
+    if (error != CryptoError::None)
+    {
+        return error;
+    }
+    // The master key is forgotten first, so a file that cannot be removed no longer opens either.
+    (void)fs::remove_file(file_in(directory, kStoreTempName)); // an interrupted save's, if any
+    if (!fs::remove_file(file_in(directory, kStoreFileName)))
+    {
+        return CryptoError::StorageFailure;
+    }
+    close();
+    return CryptoError::None;
 }
 
 CryptoError KeyStore::generate(cont::StringView name, AlgorithmId algorithm, PlacementRequest placement,

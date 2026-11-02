@@ -6713,6 +6713,16 @@ class Registers(RegisterFixture, unittest.TestCase):
         self.assert_fails(self.register([self.entry(spec=dict(spec, status='final'))]),
                           "spec.status of a freedesktop must be one of ['draft', 'stable', 'withdrawn']")
 
+    def test_a_tcg_specification_is_published_in_review_or_withdrawn(self):
+        spec = {'type': 'tcg', 'ref': 'https://trustedcomputinggroup.org/resource/tpm-library-specification/',
+                'revision': '1.83', 'status': 'published'}
+        self.assertEqual(0, self.run_guard(self.register([self.entry(spec=spec)]))[0])
+        self.assertEqual(0, self.run_guard(self.register([self.entry(spec=dict(spec, status='review'))]))[0])
+        self.assert_fails(self.register([self.entry(spec=dict(spec, status='withdrawn'))]),
+                          f'pinned {spec["ref"]} is withdrawn')
+        self.assert_fails(self.register([self.entry(spec=dict(spec, status='stable'))]),
+                          "spec.status of a tcg must be one of ['published', 'review', 'withdrawn']")
+
     def test_overdue_reviews_and_future_reads_fail(self):
         self.assert_fails(self.register([self.entry(review='2026-10-30')]), 'review was due on 2026-10-30')
         self.assert_fails(self.register([self.entry(review='2027-01-01')]),

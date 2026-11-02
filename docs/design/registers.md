@@ -50,8 +50,9 @@ Every entry holds:
 The standards domain adds `spec` (the document: `type` `rfc`, `draft`, `w3c`, `nist`, `paper` (a peer-reviewed
 publication that defines an algorithm no standards body publishes, such as SipHash; `ref` is its DOI link, `status`
 `published` or `withdrawn`), `freedesktop` (a specification of freedesktop.org, such as the Secret Service API;
-`ref` is its specifications.freedesktop.org link, `revision` its version, `status` `draft`, `stable` or `withdrawn`)
-or `cerid`; `ref`; for a draft
+`ref` is its specifications.freedesktop.org link, `revision` its version, `status` `draft`, `stable` or `withdrawn`),
+`tcg` (a Trusted Computing Group specification, such as the TPM 2.0 Library; `ref` is its trustedcomputinggroup.org
+page, `revision` its version, `status` `published`, `review` (in public review) or `withdrawn`) or `cerid`; `ref`; for a draft
 its `revision` and `posted` day, month or year; `status` in the snapshot; `obsoleted_by` for an obsoleted RFC),
 `codepoints` (IANA or Cerid registry, name, value; `verified: false` marks a value taken from knowledge;
 `recommended`, IANA's "Recommended" value, [below](#recommended-column)),

@@ -113,6 +113,29 @@ private:
     u32 m_prompt_milliseconds;
 };
 
+// The TPM 2.0 protector for the calling user (decision K11): on Windows "tpm-pcp", a decrypt-only RSA-2048 key the TPM
+// creates for each master key through the Platform Crypto Provider, which wraps it with RSA-OAEP (SHA-256, the store's
+// identifier in the label); the reference holds the key's random handle and the wrapped key, never the public key. It
+// forgets by deleting the TPM key, so a copy of the store file opens nowhere once its master key is replaced; a store
+// it guards opens only on the machine whose TPM holds the key. Elsewhere every call answers Unavailable (Linux's tss2
+// protector is next). available() is whether a TPM answers behind the provider now.
+class TpmKeyProtector final : public KeyProtector
+{
+public:
+    TpmKeyProtector() noexcept = default;
+
+    [[nodiscard]] static bool available() noexcept;
+
+    [[nodiscard]] cont::StringView name() const noexcept override;
+    [[nodiscard]] KeyProtection    protection() const noexcept override { return KeyProtection::Hardware; }
+    [[nodiscard]] bool             forgets() const noexcept override;
+    [[nodiscard]] CryptoError      protect(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> master,
+                                           cont::Array<u8>& reference) noexcept override;
+    [[nodiscard]] CryptoError      recover(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference,
+                                           cont::Span<u8> master) noexcept override;
+    [[nodiscard]] CryptoError forget(cont::ConstSpan<u8> store_id, cont::ConstSpan<u8> reference) noexcept override;
+};
+
 enum class KeyKind : u8
 {
     Signature, // signature_sizes(algorithm).seed bytes of private input
@@ -237,6 +260,11 @@ public:
 
     // Removes `name` and every generation of it, replacing the master key.
     [[nodiscard]] CryptoError destroy(cont::StringView name) noexcept;
+
+    // Erases the whole store and closes it: the protector forgets its master key (and a pending one), so no copy of
+    // the store file opens again where it can (forgets()), then the store file is removed. The directory and its lock
+    // file stay, since another process may hold the lock; create() may make a new store there.
+    [[nodiscard]] CryptoError erase() noexcept;
 
     // Every generation, ordered by name, then generation.
     [[nodiscard]] usize          size() const noexcept { return m_entries.size(); }
