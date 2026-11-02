@@ -998,6 +998,89 @@ verification order, the restated verdict rule and a flipped byte), `tls_interop.
 schema's digest refusing OpenSSL 4.0.3's early data over records while resuming), and source mutations, each
 caught.
 
+<a id="hpke"></a>
+### Hybrid public key encryption
+
+**H1. HPKE is RFC 9180's construction over the provider's primitives**
+([hpke.hpp](../../engine/foundation/crypto/include/crd/crypto/hpke.hpp), `crypto.hpke`). MLS encrypts path secrets,
+Welcome secrets and external initialisations with HPKE in base mode, single shot (RFC 9420 section 5.1.3), and its
+suites need DHKEM over P-256 and P-384 as well as X25519. AWS-LC's HPKE has DHKEM(X25519) and ML-KEM only, and no
+DeriveKeyPair, so one implementation of the RFC's steps serves every KEM: DHKEM (section 4.1) over `AgreementKey`,
+its DeriveKeyPair (section 7.1.3; rejection sampling of the scalar for the NIST curves) and the key schedule
+(section 5.1) over HKDF, the first message of a context over `AeadKey`. No primitive is Cerid's; the provider's own
+HPKE stays inside its TLS stack for ECH.
+
+- **Interface.** A KEM is named by its group (`X25519`, `Secp256r1`, `Secp384r1` for DHKEM(X25519, HKDF-SHA256),
+  DHKEM(P-256, HKDF-SHA256) and DHKEM(P-384, HKDF-SHA384)), the KDF by an HKDF identifier and the AEAD by its own
+  (`HpkeSuite`); the RFC's codepoints are generated from the register. `HpkeKey` (generate, `derive`, `from_private`
+  in SerializePrivateKey form, `public_key`, `open`) and `hpke_seal`. Only sequence number 0 exists: MLS opens one
+  message per context, and no consumer needs a context (or the PSK and authenticated modes, or the exporter).
+- **Validation** (section 7.1.4). An EC encapsulation or recipient key must be an uncompressed point on the curve
+  (`BadKey`); an X25519 one giving the all-zero secret is `WeakSecret`; a ciphertext that does not authenticate is
+  `Forged`; every refusal zeroes the outputs. DeriveKeyPair takes at least Nsk bytes.
+- **Secrets and allocation.** The DH output, the shared secret, the key schedule's secret, key and nonce live on the
+  stack of one call and are zeroed before it returns. A labelled input is laid out in a 256-byte inline buffer and,
+  beyond it, once from the default allocator (an MLS group context as info); the buffer is zeroed on release.
+
+Evidence: `test_hpke.cpp` against RFC 9180's `test-vectors.json` (as the pinned AWS-LC carries it): the six
+base-mode vectors of the profile (DHKEM(P-256) and DHKEM(X25519) with HKDF-SHA256 and each AEAD) for DeriveKeyPair
+of both key pairs, the private keys' serialization and the opening of the first message, a later message refused,
+and the 26 other base-mode suites refused as outside the profile; round trips over six suites (P-384 with both KDFs
+and both AEAD families included) with every changed input forged; an info beyond the inline buffer; every refusal;
+`test_mls.cpp`'s crypto-basics and key-schedule vectors (DHKEM(P-384) opening and DeriveKeyPair); and
+`crd-fuzz-crypto-mls`'s round trips with any bit changed.
+
+<a id="mls"></a>
+### MLS
+
+**M1. Cerid implements MLS** (RFC 9420; [mls.hpp](../../engine/foundation/crypto/include/crd/crypto/mls.hpp),
+`mls.protocol`) over the provider interface, in `crd-crypto` beside the TLS and QUIC integration it shares keys and
+policy with. The vetted implementations are Rust (OpenMLS, AWS's mls-rs) or C++ with exceptions, owning STL containers
+and an OpenSSL dependency (Cisco's MLSpp); none fits the engine's allocators, error model and zero-allocation message
+path, and none has the post-quantum suites behind Cerid's policy generations. MLS is a protocol over primitives the
+provider already runs (HPKE per H1, HKDF, AEAD, signatures), as TLS's key schedule is over the provider's; the MLS
+working group's test vectors, which OpenMLS, MLSpp and the other implementations generate and check, hold every layer
+to the byte, and live interoperability with OpenMLS and MLSpp (M4) proves the whole.
+
+**M2. The profile.** The suites whose every algorithm the provider implements: 0x0001
+MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519 (mandatory to implement), 0x0002 MLS_128_DHKEMP256_AES128GCM_SHA256_P256,
+0x0003 MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 and 0x0007 MLS_256_DHKEMP384_AES256GCM_SHA384_P384 (the
+high-assurance suite). 0x0004 to 0x0006 need X448, Ed448 or P-521, which no provider in the policy implements, and
+are refused. The suites' hash is their KDF's (`kdf_hash`), as is the MAC's. The post-quantum suites (an ML-KEM or
+X-Wing KEM with ML-DSA signatures, draft-ietf-mls-pq-ciphersuites) join when the register pins their draft and HPKE
+carries the KEM.
+
+**M3. Layers**, each closed against its vector file before the next builds on it:
+
+1. The presentation language (section 2.1; `deserialization.json`): minimal variable-size vector headers up to
+   2^30 - 1 (`take_varint` refuses the prefix 0b11 and every longer-than-needed form), vectors as views of the input
+   and presence octets of 0 or 1, over the shared `WireReader` and `WireWriter`.
+2. Array-based tree math (Appendix C; `tree-math.json`) for perfect trees of 1 to 2^31 leaves: level, width, root,
+   children, parent, sibling, direct path, copath and common ancestor; any size that is not a power of two and any
+   node outside the tree has no answer, so a size or an index read off the wire never reaches past the tree.
+3. The labelled operations (`crypto-basics.json`): RefHash, ExpandWithLabel, DeriveSecret, DeriveTreeSecret,
+   SignWithLabel, VerifyWithLabel, EncryptWithLabel and DecryptWithLabel, every label prefixed "MLS 1.0 ", every
+   refusal zeroing its outputs. Labels and contexts up to 256 bytes allocate nothing.
+4. Next: the secret tree and its generation window (`secret-tree.json`), the key schedule with PSKs, exporters and
+   epoch authenticators (`key-schedule.json`, `psk_secret.json`), transcript hashes (`transcript-hashes.json`),
+   message framing and protection with padding (`message-protection.json`), the ratchet tree with tree and parent
+   hashes, validation and TreeKEM (`tree-operations.json`, `tree-validation.json`, `treekem.json`), key packages,
+   proposals, commits and Welcome (`messages.json`, `welcome.json`), and the passive-client scenarios
+   (`passive-client-*.json`).
+
+**M4. Interoperability** runs as TLS's does: pinned peers built in their own projects on the public-checks lane
+(OpenMLS through the pinned Rust toolchain, MLSpp against the pinned OpenSSL) and a Python driver relaying MLS messages
+between a Cerid group member and each peer, so Cerid creates, joins, commits, protects and processes in groups where
+the others do too; the MLS working group's gRPC harness is not used.
+
+Evidence: `test_mls.cpp` (the suites; the 14 deserialization headers decoded, sized and written back; the malformed
+headers and presence octets; the 10 tree-math trees of 1 to 512 leaves node by node; direct paths, copaths and common
+ancestors against their definitions for every pair of nodes of trees up to 64 leaves and at 2^31 leaves; every
+crypto-basics vector of the four suites with fresh signatures and encryptions, and the refusal of the three outside;
+DeriveKeyPair of the 20 external keys of the key-schedule vectors; every refusal), `test_provider.cpp` (`kdf_hash`
+against FIPS 180-4's examples) and `crd-fuzz-crypto-mls` (headers against a restatement of section 2.1.2, tree math
+against its invariants, HPKE round trips with any bit changed, hostile openings and signatures, derivations).
+
 <a id="negotiation"></a>
 ## Version and extension negotiation
 
