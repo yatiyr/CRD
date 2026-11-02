@@ -30,6 +30,17 @@
           "standard": false
         },
         {
+          "id": "cerid.key-store",
+          "kind": "format",
+          "owner": "crypto",
+          "functions": [
+            "confidentiality",
+            "integrity"
+          ],
+          "spec": "docs/design/network-foundation.md#key-store",
+          "standard": false
+        },
+        {
           "id": "tls.hybrid-kex",
           "kind": "algorithm",
           "owner": "crypto",

@@ -24,10 +24,16 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
-#elif CRD_OS_MAC
-#include <mach-o/dyld.h>
-#else // Linux / other POSIX
+#include <aclapi.h> // SetNamedSecurityInfoW (create_private_directory)
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <sys/stat.h>
 #include <unistd.h>
+#if CRD_OS_MAC
+#include <mach-o/dyld.h>
+#endif
 #endif
 
 namespace crd::platform::fs
@@ -551,6 +557,130 @@ bool rename_file(const Path& from, const Path& to) noexcept
     std::error_code ec;
     stdfs::rename(to_native_path(from), to_native_path(to), ec);
     return !ec;
+}
+
+namespace
+{
+#if CRD_OS_WINDOWS
+// Replace the DACL of `path` by one protected entry: full control for the calling user, inherited by every file and
+// directory below it (SetNamedSecurityInfoW propagates it to the existing ones).
+[[nodiscard]] bool restrict_to_user(const Path& path)
+{
+    HANDLE token = nullptr;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token) == 0)
+    {
+        return false;
+    }
+    alignas(TOKEN_USER) BYTE user[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
+    DWORD      user_bytes = 0U;
+    const bool have_user  = GetTokenInformation(token, TokenUser, user, sizeof(user), &user_bytes) != 0;
+    (void)CloseHandle(token);
+    if (!have_user)
+    {
+        return false;
+    }
+    const PSID sid = reinterpret_cast<const TOKEN_USER*>(user)->User.Sid;
+    alignas(ACL) BYTE acl_bytes[sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) + SECURITY_MAX_SID_SIZE];
+    ACL* const acl = reinterpret_cast<ACL*>(acl_bytes);
+    if (InitializeAcl(acl, sizeof(acl_bytes), ACL_REVISION) == 0 ||
+        AddAccessAllowedAceEx(acl, ACL_REVISION, OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE, FILE_ALL_ACCESS, sid) ==
+            0)
+    {
+        return false;
+    }
+    containers::Array<wchar_t> native = wide_text::utf8_to_wide(path.generic()); // the call takes a mutable name
+    return SetNamedSecurityInfoW(native.data(), SE_FILE_OBJECT,
+                                 DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr,
+                                 acl, nullptr) == ERROR_SUCCESS;
+}
+#else
+// Mode 0700 on a directory the calling user owns (root may change another user's mode; it must not take it over).
+[[nodiscard]] bool restrict_to_user(const Path& path)
+{
+    const stdfs::path native = to_native_path(path);
+    struct stat       info{};
+    return ::chmod(native.c_str(), S_IRWXU) == 0 && ::stat(native.c_str(), &info) == 0 && S_ISDIR(info.st_mode) &&
+           info.st_uid == ::geteuid() && (info.st_mode & 0777U) == S_IRWXU;
+}
+#endif
+} // namespace
+
+bool create_private_directory(const Path& path) noexcept
+{
+    try
+    {
+        return create_directories(path) && restrict_to_user(path);
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+bool FileLock::acquire(const Path& path) noexcept
+{
+    release();
+    try
+    {
+        const stdfs::path native = to_native_path(path);
+#if CRD_OS_WINDOWS
+        const HANDLE handle = CreateFileW(native.c_str(), GENERIC_READ | GENERIC_WRITE,
+                                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS,
+                                          FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (handle == INVALID_HANDLE_VALUE)
+        {
+            return false;
+        }
+        OVERLAPPED whole{};
+        if (LockFileEx(handle, LOCKFILE_EXCLUSIVE_LOCK, 0U, MAXDWORD, MAXDWORD, &whole) == 0)
+        {
+            (void)CloseHandle(handle);
+            return false;
+        }
+        m_handle = handle;
+#else
+        const int fd = ::open(native.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, S_IRUSR | S_IWUSR);
+        if (fd < 0)
+        {
+            return false;
+        }
+        int locked = ::flock(fd, LOCK_EX);
+        while (locked != 0 && errno == EINTR)
+        {
+            locked = ::flock(fd, LOCK_EX);
+        }
+        if (locked != 0)
+        {
+            (void)::close(fd);
+            return false;
+        }
+        m_fd = fd;
+#endif
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+void FileLock::release() noexcept
+{
+#if CRD_OS_WINDOWS
+    if (m_handle != nullptr)
+    {
+        OVERLAPPED whole{};
+        (void)UnlockFileEx(m_handle, 0U, MAXDWORD, MAXDWORD, &whole);
+        (void)CloseHandle(m_handle);
+        m_handle = nullptr;
+    }
+#else
+    if (m_fd >= 0)
+    {
+        (void)::close(m_fd); // closing the descriptor releases its flock
+        m_fd = -1;
+    }
+#endif
 }
 
 bool remove_all(const Path& path) noexcept

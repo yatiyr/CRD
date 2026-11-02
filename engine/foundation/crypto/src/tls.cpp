@@ -39,6 +39,7 @@
 
 #include <crd/compression/deflate.hpp>
 #include <crd/compression/zstd.hpp>
+#include <crd/crypto/key_store.hpp>
 #include <crd/crypto/replay.hpp>
 
 #include <openssl/aead.h>
@@ -1779,6 +1780,11 @@ void TlsCredential::clear() noexcept
     m_certificate = nullptr;
     m_key.reset();
     m_key_id = KeyId{};
+}
+
+TlsError TlsCredential::init(const StoredSigner& signer, cont::StringView name) noexcept
+{
+    return init(signer.m_key, name);
 }
 
 TlsError TlsCredential::init(const SigningKey& key, cont::StringView name) noexcept

@@ -595,10 +595,11 @@ crd_module(engine/foundation/config engine/config DEPENDS containers core log ma
 crd_module(engine/foundation/compression engine/compression DEPENDS containers core memory PACKAGES zstd
     TESTS foundation/compression)
 # NET.2: the vetted provider (AWS-LC) behind crd-crypto's interface, TLS certificates compressed through the engine's
-# codecs; Wycheproof's, the MLS working group's and the HPKE working group's post-quantum vectors are the tests'
-# oracles, and the OpenSSL peer decodes certificates with the pinned zstd
-crd_module(engine/foundation/crypto engine/crypto DEPENDS compression containers core PACKAGES aws-lc
-    TESTS foundation/crypto support/fuzz TEST_DEPENDS asset-io memory platform
+# codecs, the key store's owner-only directory, lock and durable save through crd-platform; Wycheproof's, the MLS
+# working group's and the HPKE working group's post-quantum vectors are the tests' oracles, and the OpenSSL peer
+# decodes certificates with the pinned zstd
+crd_module(engine/foundation/crypto engine/crypto DEPENDS compression containers core platform PACKAGES aws-lc
+    TESTS foundation/crypto support/fuzz TEST_DEPENDS asset-io memory
     TEST_PACKAGES wycheproof mls-vectors hpke-pq-vectors zstd)
 crd_module(engine/foundation/net engine/net DEPENDS containers core TESTS foundation/net support/fuzz)
 crd_module(engine/foundation/comply engine/comply DEPENDS containers core toml TESTS foundation/comply support/fuzz

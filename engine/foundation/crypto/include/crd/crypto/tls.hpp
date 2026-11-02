@@ -213,6 +213,7 @@ enum class TlsEarlyData : u8
 
 class ReplayFilter;         // replay.hpp: a server's record of the tickets it has opened
 struct ProviderCertificate; // the provider's certificate object, defined only inside crd-crypto
+class StoredSigner;         // key_store.hpp
 
 // A key and the self-signed certificate that carries it to the peer.
 class TlsCredential
@@ -229,6 +230,8 @@ public:
     // `name` as subject common name and DNS subjectAltName, valid from the provider's clock with no expiry
     // (99991231235959Z, RFC 5280 section 4.1.2.5: trust and rotation come from the pins, never from the dates).
     [[nodiscard]] TlsError init(const SigningKey& key, cont::StringView name) noexcept;
+    // The same for a key store's signature key (key_store.hpp): its Current generation as `signer` loaded it.
+    [[nodiscard]] TlsError init(const StoredSigner& signer, cont::StringView name) noexcept;
     void                   clear() noexcept;
 
     [[nodiscard]] bool        ready() const noexcept { return m_certificate != nullptr; }

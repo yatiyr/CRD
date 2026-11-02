@@ -4,12 +4,13 @@
 # tokens, Encrypted Client Hello, the TLS exporter, capabilities, message schemas, anti-replay and early data, HPKE
 # against RFC 9180's vectors and MLS (its layers through the key schedule, the secret tree, message framing and
 # protection with the transcript hashes, the ratchet tree with TreeKEM, groups: validation against a group, the
-# GroupInfo and the Welcome, and proposals and commits with the passive clients) against the MLS working group's
-# (NET.2).
+# GroupInfo and the Welcome, and proposals and commits with the passive clients) against the MLS working group's, and
+# the key store with its DPAPI protector (NET.2).
 add_executable(crd-crypto-tests
     test_capability.cpp
     test_hpke.cpp
     test_kem_prf.cpp
+    test_key_store.cpp
     test_mls.cpp
     test_mls_commit.cpp
     test_mls_external.cpp

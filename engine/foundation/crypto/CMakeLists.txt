@@ -8,9 +8,10 @@
 # whose certificates compress through crd-compression, QUIC packet protection and its handshake (quic.hpp, tls.hpp),
 # capabilities and message schemas (capability.hpp), anti-replay windows and filters (replay.hpp), hybrid public key
 # encryption (hpke.hpp) and MLS (mls.hpp, its messages in mls_message.hpp, its ratchet tree in mls_tree.hpp and its
-# groups, proposals and commits in mls_group.hpp). The key store lands with a later NET.2 slice. Contract:
-# docs/design/network-foundation.md#crypto, #agility, #provider, #tls-sessions, #quic-protection, #capability-tokens,
-# #anti-replay, #early-data, #message-schemas, #hpke and #mls.
+# groups, proposals and commits in mls_group.hpp) and the key store (key_store.hpp: the sealed store of long-term keys
+# and shared secrets, its master key guarded by DPAPI on Windows or the application's protector). Contract:
+# docs/design/network-foundation.md#crypto, #agility, #provider, #key-store, #tls-sessions, #quic-protection,
+# #capability-tokens, #anti-replay, #early-data, #message-schemas, #hpke and #mls.
 
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -28,9 +29,15 @@ target_link_libraries(crd-crypto
         crd-containers
     PRIVATE
         crd-compression # NET.2 decision S10: TLS certificate compression (RFC 8879) through the engine's zstd and zlib
+        crd-platform    # NET.2 decision K3: the key store's owner-only directory, lock and durable save (no cycle:
+                        # crd-platform links no cryptography)
         ssl
         crypto
 )
+
+if(WIN32)
+    target_link_libraries(crd-crypto PRIVATE crypt32) # NET.2 decision K2: DPAPI guards a key store's master key
+endif()
 
 target_compile_features(crd-crypto PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-crypto)

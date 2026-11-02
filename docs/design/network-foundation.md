@@ -259,8 +259,9 @@ Designed here, qualified under [WEB.5](../ROADMAP.md#slice-web.5):
 - **Randomness** comes only through `crd-crypto`: the provider's DRBG seeded from the operating system
   (BCryptGenRandom, getrandom) with CPU jitter as a second source ([P2](#provider)).
 - **Keys.** Long-term keys live in hardware where available (TPM 2.0, Secure Enclave, Android Keystore, YubiKey-class
-  keys), with a software fallback protected by the platform (DPAPI, the Keychain, the Secret Service). Keys and secrets
-  are Restricted in every diagnostic record, zeroed on release and never logged.
+  keys), with a software fallback protected by the platform (DPAPI, the Keychain, the Secret Service): the
+  [key store](#key-store). Keys and secrets are Restricted in every diagnostic record, zeroed on release and never
+  logged.
 - **Debug keys never ship.** RFC 9850 key logging and NET-DEBUG capture keys exist only in non-shipping builds and
   are refused at runtime when built in; a CI guard proves it (T22).
 - **Export control** of everything above is [COMPLY.1](../ROADMAP.md#slice-comply.1)'s: its inventory is generated
@@ -334,6 +335,75 @@ sign-then-verify), every ML-KEM-768 and ML-KEM-1024 vector (keys from seeds, dec
 encapsulation with the modulus check) and every SipHash-2-4 vector, with RFC 8032's deterministic signatures, FIPS
 180-4's SHA-256 example and the refusal of every vector outside Cerid's profile (other nonce, tag and key lengths,
 compressed points, context strings, expanded ML-KEM decapsulation keys).
+
+<a id="key-store"></a>
+### The key store
+
+[key_store.hpp](../../engine/foundation/crypto/include/crd/crypto/key_store.hpp) keeps a principal's long-term keys
+and the secrets a fleet shares (NET.2, 2026-11-02). Each platform's interface was read first: DPAPI
+(`CryptProtectData` and `CryptUnprotectData`, user scope, optional entropy, no prompt), the freedesktop Secret Service
+(items in a collection, session algorithms `plain` and `dh-ietf1024-sha256-aes128-cbc-pkcs7`, unlock prompts), the
+Keychain and Secure Enclave (P-256 only), TPM 2.0 (ECDSA P-256/P-384, sealing, NV counters), the Android Keystore and
+PIV tokens of the YubiKey class (ECDSA P-256/P-384, Ed25519 on recent firmware). No device holds ML-DSA, every one
+holds ECDSA. The decisions (numbered for the tests):
+
+- **K1. Private material stays inside.** Signature, agreement and KEM private inputs are generated in the store, or
+  imported once (a key made offline), and are used only through `StoredSigner` and the provider key objects the store
+  loads (`agreement_key`, `kem_key`); no call reads them out. Secrets (AEAD keys, HKDF secrets such as a fleet's ticket
+  and token sealing keys, SipHash keys) are read out (`secret`), since every server of the fleet holds them. Each key
+  is named by its NET-STD algorithm identifier; its identifier is `key_id_of` its public key, a secret's HKDF-SHA256 of
+  it under "cerid key id", so neither reveals it.
+- **K2. One master key, one protector.** A store's 32-byte master key comes from the provider's randomness and is
+  guarded by a `KeyProtector` (protect, recover, forget), which the store names in its file and opens only with:
+  `Application` protection (the application's own key, a cloud key service, a deployment secret), `Platform` (the
+  operating system's per-user vault) or `Hardware` (sealed to a device). `PlatformKeyProtector` is DPAPI on Windows:
+  user scope, `CRYPTPROTECT_UI_FORBIDDEN`, its entropy the label "cerid key store master 1" and the store's
+  identifier, so a reference recovers only in its own store and only for its user; DPAPI cannot forget. The Secret
+  Service (Linux), the Keychain (macOS) and a TPM-sealed master key are its next protectors; on a platform without one
+  it answers `Unavailable`, and the store is never written unprotected.
+- **K3. One sealed file.** A store is a directory created owner-only (`create_private_directory`: mode 0700, or a
+  protected DACL with one inheritable entry for the user) holding the file `keys`, a durable save of crd-platform
+  (atomic replace, envelope checksums, no older generation kept so an erased key is not kept either), and the lock
+  file. The payload is a header (magic, format, store identifier, sequence, protector name, the master key's
+  reference, a pending reference, a fresh 32-byte salt) and the body, every generation ordered by name and generation,
+  sealed with AES-256-GCM under the key and nonce HKDF-SHA256 derives from the master key and the salt (the
+  construction of the session tickets and address tokens), the header its associated data. A file that fails the
+  save's checks or the framing is `Damaged`, one that does not authenticate `Forged`, an authentic one that breaks the
+  store's rules (order, generations, lengths, identifiers) `Malformed`.
+- **K4. Names and generations.** A name is 1 to 64 bytes of `[a-z0-9._-]`, starting with a letter or digit, and
+  holds generations 1, 2, ... of one algorithm: only the last may be `Current` (it signs, and a fleet seals with it),
+  every earlier one is `Retired` (it opens, decapsulates and verifies, never signs) or `Revoked`. Times are the
+  caller's (`now`).
+- **K5. Rotation, revocation and destruction.** `rotate` adds the next generation as Current and retires the previous
+  one (`rotate_import` takes a fleet's next secret). `revoke` erases a generation's private material and keeps its
+  public key and identifier, so a revocation can name it; revoking the Current generation leaves the name without one
+  until it rotates. `destroy` removes a name. Both replace the master key when the protector can forget
+  (`forgets()`): the store is saved under the new key with the old reference pending, the old key forgotten, then
+  the pending reference cleared, and an interrupted replacement is completed by the next change before anything else.
+  An earlier copy of the store file then no longer opens. A protector that cannot forget (DPAPI) cannot give that
+  guarantee and says so.
+- **K6. Writers.** Each change takes the store's lock (`FileLock`: LockFileEx, flock), reads the newest save, applies
+  itself to it and replaces the file, so writers in several processes never lose one another's changes. An open store
+  refuses a save older than the one it holds (`Replayed`) or another store put in its place (`Forged`). Lookups and
+  loads are read-only and run on several threads at once.
+- **K7. Secrets in memory.** The master key and every private input are zeroed when an entry, a read snapshot or the
+  store is released; the plaintext body is laid out in place in the save's buffer, sealed there and the buffer zeroed.
+- **K8. Placement.** A key is kept in the sealed file (`Software`) or in a device that signs without releasing it
+  (`Hardware`, signature keys only: no device holds ML-DSA, agreement or KEM keys for a store). `HardwarePreferred`
+  falls back to the file, `HardwareRequired` is `Unsupported` until the TPM 2.0, Secure Enclave, Android Keystore and
+  PIV layers land. A principal's hybrid identity is its ML-DSA key in the file and its ECDSA key in a device.
+  `StoredSigner` hides the placement from every signer of a Cerid artefact; `TlsCredential::init(StoredSigner)` binds
+  a software key to the TLS stack, and binds a device key through the provider's private-key method
+  (`SSL_PRIVATE_KEY_METHOD`) when the device layers land.
+- **K9. Errors.** `NotFound`, `Exists`, `Revoked`, `Unavailable` (no protector service), `Denied` (the protector
+  will not recover: another user's or store's reference, a locked vault, a refused prompt), `Damaged` and
+  `StorageFailure` (a file that cannot be written, locked or created) joined `CryptoError`.
+
+Evidence (2026-11-02, [session](../sessions/2026-11-02-net-2-key-store.md)): `test_key_store.cpp` (12 cases: every kind
+of key through its whole life, every refusal, every changed byte of a store, an older and a substituted store, writers
+in four threads, DPAPI on Windows, a TLS credential from a stored signer), `test_private_directory.cpp` and
+`crd-fuzz-crypto-key-store` (a sealed body and a raw payload against restatements of K3, changes against a model of
+K4 and K5), on win-debug, linux-gcc-debug and linux-gcc-asan, with seven source mutations each caught.
 
 <a id="tls-13-profile"></a>
 ### The TLS 1.3 profile

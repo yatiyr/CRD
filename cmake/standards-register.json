@@ -425,6 +425,38 @@
       "note": "Names algorithms only by their Cerid algorithm identifiers, so a provider swap or an unverified IANA value never changes a signed artefact. NET.2 issues the first generation and its offline keys."
     },
     {
+      "id": "cerid.key-store",
+      "title": "Cerid key store: long-term keys and shared secrets sealed at rest under a master key a protector guards",
+      "kind": "format",
+      "state": "implemented",
+      "owner": "crypto",
+      "rows": [
+        "NET.2"
+      ],
+      "spec": {
+        "type": "cerid",
+        "ref": "docs/design/network-foundation.md#key-store",
+        "revision": "1",
+        "status": "design"
+      },
+      "cryptography": [
+        "confidentiality",
+        "integrity"
+      ],
+      "source": {
+        "ref": "docs/design/network-foundation.md#key-store",
+        "read": "2026-11-02",
+        "verified": true
+      },
+      "review": "2027-11-02",
+      "evidence": [
+        "tests/foundation/crypto/test_key_store.cpp",
+        "tests/foundation/crypto/fuzz/fuzz_key_store.cpp"
+      ],
+      "deprecation": null,
+      "note": "AES-256-GCM under HKDF-SHA256 of the master key and a fresh salt per save, the header authenticated; the master key guarded by DPAPI on Windows or the application's protector, replaced on revocation where the protector can forget the old one. Never on the wire."
+    },
+    {
       "id": "ietf.grease",
       "title": "Applying GREASE to TLS extensibility",
       "kind": "guidance",

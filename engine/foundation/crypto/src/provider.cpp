@@ -378,6 +378,20 @@ cont::StringView crypto_error_name(CryptoError error) noexcept
         return "out-of-window";
     case CryptoError::Malformed:
         return "malformed";
+    case CryptoError::NotFound:
+        return "not-found";
+    case CryptoError::Exists:
+        return "exists";
+    case CryptoError::Revoked:
+        return "revoked";
+    case CryptoError::Unavailable:
+        return "unavailable";
+    case CryptoError::Denied:
+        return "denied";
+    case CryptoError::Damaged:
+        return "damaged";
+    case CryptoError::StorageFailure:
+        return "storage-failure";
     }
     return "unknown";
 }

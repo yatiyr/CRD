@@ -67,4 +67,33 @@ private:
 [[nodiscard]] bool rename_file(const Path& from, const Path& to) noexcept;
 [[nodiscard]] bool remove_all(const Path& path) noexcept;
 void list_directory(const Path& path, containers::Array<Path>& out) noexcept;
+
+// Create `path` (and its missing parents) as a directory only its owner can enter: mode 0700 on POSIX, a protected
+// DACL with one inheritable full-control entry for the calling user on Windows, which every file created in it and
+// every file it already holds inherit. An existing directory is restricted the same way. For secrets at rest (the key
+// store of crd-crypto). False when the directory cannot be created or restricted (another owner's directory).
+[[nodiscard]] bool create_private_directory(const Path& path) noexcept;
+
+// An exclusive lock on the file `path` (created when missing, never removed), held from acquire() to release() or
+// destruction: between processes, and between FileLock objects of one process (LockFileEx on Windows, flock on
+// POSIX, each per open handle). Advisory: it orders the writers that take it, and nothing else. acquire() blocks until
+// the lock is free; false when the file cannot be opened or locked.
+class FileLock
+{
+public:
+    FileLock() noexcept = default;
+    ~FileLock() noexcept { release(); }
+    FileLock(const FileLock&)            = delete;
+    FileLock& operator=(const FileLock&) = delete;
+    FileLock(FileLock&&)                 = delete;
+    FileLock& operator=(FileLock&&)      = delete;
+
+    [[nodiscard]] bool acquire(const Path& path) noexcept;
+    void               release() noexcept;
+    [[nodiscard]] bool held() const noexcept { return m_handle != nullptr || m_fd >= 0; }
+
+private:
+    void* m_handle = nullptr; // the file's HANDLE on Windows
+    int   m_fd     = -1;      // its descriptor on POSIX
+};
 } // namespace crd::platform::fs

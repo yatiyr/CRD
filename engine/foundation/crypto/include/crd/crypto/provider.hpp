@@ -47,11 +47,19 @@ enum class CryptoError : u8
                      // message key already used (mls.hpp's secret tree)
     OutOfWindow,     // a generation or a sender outside what a key ratchet keeps (mls.hpp's secret tree)
     Malformed,       // an authentic message whose content does not decode, or a sender and content its framing
-                     // refuses (mls_message.hpp)
+                     // refuses (mls_message.hpp), an authentic key store whose contents break its rules
+    NotFound,        // no key store, or no key of that name and generation in it (key_store.hpp)
+    Exists,          // a key store, or a key of that name, exists already (key_store.hpp)
+    Revoked,         // the key generation was revoked: its private material is erased (key_store.hpp)
+    Unavailable,     // the operating system's protector is absent or its service cannot be reached (key_store.hpp)
+    Denied,          // the protector would not recover a master key: another user's, a locked vault (key_store.hpp)
+    Damaged,         // a key store's file fails its storage checks or its framing (key_store.hpp)
+    StorageFailure,  // a key store's files could not be written, locked or created (key_store.hpp)
 };
 
 // "none", "unsupported", "not-ready", "bad-length", "overlap", "bad-key", "forged", "weak-secret", "exhausted",
-// "provider-failure", "expired", "replayed", "out-of-window", "malformed".
+// "provider-failure", "expired", "replayed", "out-of-window", "malformed", "not-found", "exists", "revoked",
+// "unavailable", "denied", "damaged", "storage-failure".
 [[nodiscard]] cont::StringView crypto_error_name(CryptoError error) noexcept;
 
 // The provider and its version ("AWS-LC 5.12.0").

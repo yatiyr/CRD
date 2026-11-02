@@ -7,6 +7,10 @@
 #                              operation asked of a capability) against a restated containment rule, a model of each
 #                              verification order and the restated operation verdict, with any flipped byte of a
 #                              verified token or schema refused.
+#   crd-fuzz-crypto-key-store  the key store's sealed file and changes: a body the harness seals opens exactly when a
+#                              restatement of its rules accepts it, and lists the restated entries through a rewrite; a
+#                              payload opens exactly when a restated header and opening accept it; generated changes
+#                              against a model of rotation, revocation and destruction, across reopenings.
 #   crd-fuzz-crypto-mls        MLS's vector headers and presence octets against a restatement of RFC 9420 section
 #                              2.1, tree math against its own invariants, HPKE round trips with any bit changed,
 #                              hostile openings and signatures through the labelled operations, and derivations
@@ -48,6 +52,8 @@
 #                              compressed Certificates decoded only to reachable claims within the bound.
 crd_fuzz_target(crd-fuzz-crypto-capability
     SOURCES fuzz_capability.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-capability")
+crd_fuzz_target(crd-fuzz-crypto-key-store
+    SOURCES fuzz_key_store.cpp LIBRARIES crd-crypto crd-platform CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-key-store")
 crd_fuzz_target(crd-fuzz-crypto-mls
     SOURCES fuzz_mls.cpp LIBRARIES crd-crypto CORPUS "${CMAKE_CURRENT_SOURCE_DIR}/corpus-mls")
 crd_fuzz_target(crd-fuzz-crypto-mls-commit
