@@ -1014,8 +1014,12 @@ HPKE stays inside its TLS stack for ECH.
 - **Interface.** A KEM is named by its group (`X25519`, `Secp256r1`, `Secp384r1` for DHKEM(X25519, HKDF-SHA256),
   DHKEM(P-256, HKDF-SHA256) and DHKEM(P-384, HKDF-SHA384)), the KDF by an HKDF identifier and the AEAD by its own
   (`HpkeSuite`); the RFC's codepoints are generated from the register. `HpkeKey` (generate, `derive`, `from_private`
-  in SerializePrivateKey form, `public_key`, `open`) and `hpke_seal`. Only sequence number 0 exists: MLS opens one
-  message per context, and no consumer needs a context (or the PSK and authenticated modes, or the exporter).
+  in SerializePrivateKey form, `public_key`, `open`, `export_secret`), `hpke_seal` and `hpke_export`: SetupBaseS and
+  SetupBaseR with the context's Export (section 5.3; exporter_secret from the key schedule, then LabeledExpand "sec"
+  with the exporter context, 1 to 255 Nh bytes), which an MLS external joiner's init secret is (RFC 9420 section 8.3).
+  Only sequence number 0 exists: MLS opens one message per context, and no consumer needs a context's later messages
+  (or the PSK and authenticated modes). The encapsulation, decapsulation and key schedule are each written once and
+  shared by sealing, opening and exporting.
 - **Validation** (section 7.1.4). An EC encapsulation or recipient key must be an uncompressed point on the curve
   (`BadKey`); an X25519 one giving the all-zero secret is `WeakSecret`; a ciphertext that does not authenticate is
   `Forged`; every refusal zeroes the outputs. DeriveKeyPair takes at least Nsk bytes.
@@ -1025,9 +1029,11 @@ HPKE stays inside its TLS stack for ECH.
 
 Evidence: `test_hpke.cpp` against RFC 9180's `test-vectors.json` (as the pinned AWS-LC carries it): the six
 base-mode vectors of the profile (DHKEM(P-256) and DHKEM(X25519) with HKDF-SHA256 and each AEAD) for DeriveKeyPair
-of both key pairs, the private keys' serialization and the opening of the first message, a later message refused,
-and the 26 other base-mode suites refused as outside the profile; round trips over six suites (P-384 with both KDFs
-and both AEAD families included) with every changed input forged; an info beyond the inline buffer; every refusal;
+of both key pairs, the private keys' serialization, the opening of the first message and its 18 exported values (an
+empty, a one-byte and a word exporter context each), a later message refused, and the 26 other base-mode suites
+refused as outside the profile; round trips over six suites (P-384 with both KDFs and both AEAD families included)
+with every changed input forged; exports of 1, Nh and 255 Nh bytes agreeing on both sides of the six suites, another
+context, info, length, key or KDF deriving another secret; an info beyond the inline buffer; every refusal;
 `test_mls.cpp`'s crypto-basics and key-schedule vectors (DHKEM(P-384) opening and DeriveKeyPair); and
 `crd-fuzz-crypto-mls`'s round trips with any bit changed.
 
@@ -1131,8 +1137,21 @@ carries the KEM.
    when required or asked for, the commit signed and protected, the new epoch's GroupInfo signed and the Welcome with
    each joiner's path secret and every PSK. Proposals and application data are sent too (`propose`, `propose_update`,
    `protect`), and a member's own Update's key is kept until a commit adopts the leaf.
-10. Next: external joins (section 12.4.3.2, the external_pub extension and ExternalInit), ReInit and subgroup
-    branching (sections 11.2 and 11.3, with their resumption PSKs), and GREASE (section 13.5).
+10. a. External joins ([mls_group.hpp](../../engine/foundation/crypto/include/crd/crypto/mls_group.hpp),
+    `mls_commit.cpp`; no working-group vector holds one, so `test_mls_external.cpp` holds the joiner and the members
+    to each other; decision M11): a member's GroupInfo of its epoch signed on demand and after each commit, carrying
+    the tree and, when asked, the external_pub extension (DeriveKeyPair(external_secret)'s public key); a new member
+    joins from it (`Group::join_external`): the GroupInfo's tree and members checked as a Welcome's are, the
+    ExternalInit's init secret exported to the external key (section 8.3), an optional Remove of its own former leaf
+    (a resync) and PSKs, the leftmost free leaf (section 12.4.2) with a fresh path, the commit signed under the
+    GroupInfo's GroupContext as a PublicMessage without a membership tag, the new epoch confirmed and its GroupInfo
+    signed by the joiner; members process it as any commit (the sender's key the path leaf's, the list exactly one
+    ExternalInit, at most one Remove and PSKs, none by reference, the leaf placed and checked, the key schedule from
+    the init secret decapsulated with the epoch's external key) and every replaced leaf, by an Update, a path or a
+    resync, is accepted only as its predecessor's successor (section 5.3.1's
+    `AuthenticationService::valid_successor`).
+    b. Next: ReInit and subgroup branching (sections 11.2 and 11.3, with their resumption PSKs), then GREASE (section
+    13.5) and the post-quantum suites, with live OpenMLS and MLSpp interop (M4).
 
 **M5. The receive window** (RFC 9420 section 9.2 leaves its size to the application). OpenMLS's defaults: a receiver
 keeps the keys of the 5 generations below the next unconsumed one of each ratchet (late and reordered messages) and
@@ -1213,7 +1232,27 @@ of repeated PSKs, the latest GroupContextExtensions every member supports, only 
 own by value; an Update by value would be the committer's own and is refused. A member that saw proposals commits
 before it sends application data (section 12.4: `protect` is NotReady while proposals wait). ReInit (section 11.2)
 is refused as Unsupported in a proposal or a commit, like a reinit or branch PSK, until layer 10 lands it with the
-new group it names; a commit from a new member (an external join) likewise.
+new group it names. A commit from a new member is an external join (decision M11).
+
+**M11. External joins.** A new member joins by an external commit only from a GroupInfo that carries the external_pub
+extension, and only a member can publish one: the key is DeriveKeyPair(external_secret) of the epoch, which no one
+outside the group derives, so the GroupInfoOptions default is the tree without the key and a group is closed to
+external joins until a member publishes it (`Group::group_info`, or a commit's GroupInfo, with `external_pub`). The
+joiner checks the GroupInfo as a Welcome's (its signature under the signer's leaf, the tree's root hash and join-time
+checks, every member's leaf), takes its confirmed transcript hash and derives the interim hash from its confirmation
+tag, which only the signature vouches for (a joiner holds no confirmation key), and checks its own commit as the
+members will (the list, its leaf as a commit leaf at the leftmost free leaf, the new tree's keys and credential
+types), so a commit it sends is one the members take. A joiner has no epoch before its commit, so staging buys
+nothing: `join_external` leaves the group at the epoch its commit begins, and when the delivery service refuses the
+commit (another commit won the epoch, OpenMLS's and MLSpp's race) the application drops the group and joins again from
+a newer GroupInfo; members see the losing commit as OutOfWindow. A resync (the joiner's Remove of its own former leaf)
+is accepted only when the Authentication Service judges the new credential a successor of the removed leaf's (section
+5.3.1's rule, which the same check now enforces for every Update and every commit path), so a stranger cannot take a
+member's place by removing it; a former state that still runs processes the commit as its own removal. The external
+commit always carries a path (section 12.4.3.2), its proposals are by value only, and the receiver checks the
+ExternalInit's kem_output is Npk long before any key work; a kem_output no agreement can use is BadKey or WeakSecret,
+and one that decapsulates to another init secret fails at the confirmation tag (Forged). The joiner's PSKs come from
+its store alone (it holds no resumption secret of the group).
 
 **M6. Padding** (RFC 9420 section 6.3 leaves its amount to the application). A PrivateMessageContent of L bytes is
 padded with Padmé (Nikitin et al., "Reducing Metadata Leakage from Encrypted Files and Communication with PURBs",
@@ -1278,8 +1317,22 @@ replayed, every member at the same epoch, authenticator, tree and transcript; tw
 member proposing, their proposals committed by reference; every refusal of sections 6, 12.1,
 12.2 and 12.4.2 by a member's own framing of a hostile list, the group unchanged after each and still taking a valid
 commit; the sending, committing and merging refusals; the proposal bound and the resumption PSK ring),
-`crd-fuzz-crypto-mls-commit` (any message, and the honest proposal and commit changed in any byte, refused with the
-member unchanged or accepted only as the honest one), `crd-fuzz-crypto-mls-group` (every group decoder's acceptance
+`test_mls_external.cpp` (groups of Cerid members in every suite that new members join externally from a published
+GroupInfo with and without its tree (fetched beside it), with a PSK, one after another as the tree doubles, a member
+resyncing into its own former leaf and another whose former state still runs and processes its own removal, two
+joiners racing from one GroupInfo (the loser refused as OutOfWindow and joining again), the joiners then committing
+and welcoming, application data each way, every member at the same epoch, authenticator, tree and transcript; a
+member's GroupInfo with the external key only when asked, the key DeriveKeyPair(external_secret)'s, its context,
+tag and signature, and its refusals; every refusal of the joiner (24 faults of the GroupInfo, the tree, the external
+key and its own commit, among them a resync of another client's leaf and a joiner holding a member's signature key),
+the joiner left empty; every refusal of a member (no ExternalInit or two, an Add, Update, GroupContextExtensions or
+ReInit beside it, two Removes, a short kem_output, a proposal by reference, a blank Remove, no path, repeated and
+unknown PSKs, another signer, a kem_output no agreement can use, another init secret at the confirmation tag, a
+refused credential, a resync the Authentication Service refuses as a successor, the commit in the next epoch), the
+group unchanged; the reserved leaf, the joining path made and merged to the same tree and the joiner's keys started),
+`crd-fuzz-crypto-mls-commit` (any message, and the honest proposal, commit and external commit changed in any byte,
+refused with the member unchanged or accepted only as the honest one; the published GroupInfo changed in any byte
+refused by a joiner left empty, the intact one joined and its commit taken), `crd-fuzz-crypto-mls-group` (every group decoder's acceptance
 written back, extension lists against a restatement, and an honest Welcome changed in any byte refused with the group
 empty or joining only the honest epoch),
 `crd-fuzz-crypto-mls-tree` (accepted
