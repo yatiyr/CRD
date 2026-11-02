@@ -50,6 +50,9 @@ Decision S17 ([contract](../design/network-foundation.md#early-data)): the provi
   read that runs into the client's Finished completes the handshake and leaves the 1-RTT bytes to `read()`.
 - QUIC: `QuicLevel::Early` (keys only, the client's), the server's early data context at `init()`, the client's
   remembered transport parameters, the 0-RTT secret zeroed on a refusal.
+- Both ticket formats changed: a server's sealed layout gained the issue time, and a client's store now holds ticket
+  records. A ticket sealed before this change resumes nothing, and a stored ticket without the record's version byte is
+  never offered; nothing was deployed.
 - The fuzz target's ECH mode treated an empty ECHConfigList as one the context must refuse; a context takes it as a
   client without ECH. Found by this batch's mutation run and fixed in the oracle.
 
