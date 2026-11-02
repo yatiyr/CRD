@@ -373,6 +373,8 @@ cont::StringView crypto_error_name(CryptoError error) noexcept
         return "expired";
     case CryptoError::Replayed:
         return "replayed";
+    case CryptoError::OutOfWindow:
+        return "out-of-window";
     }
     return "unknown";
 }

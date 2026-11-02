@@ -66,10 +66,11 @@ TEST_CASE("Provider: identity, the implemented set and error names", "[crypto][n
     const CryptoError errors[] = {CryptoError::None,       CryptoError::Unsupported, CryptoError::NotReady,
                                   CryptoError::BadLength,  CryptoError::Overlap,     CryptoError::BadKey,
                                   CryptoError::Forged,     CryptoError::WeakSecret,  CryptoError::Exhausted,
-                                  CryptoError::ProviderFailure, CryptoError::Expired, CryptoError::Replayed};
+                                  CryptoError::ProviderFailure, CryptoError::Expired, CryptoError::Replayed,
+                                  CryptoError::OutOfWindow};
     const char* const names[]  = {"none",    "unsupported", "not-ready",   "bad-length", "overlap",
                                   "bad-key", "forged",      "weak-secret", "exhausted",  "provider-failure",
-                                  "expired", "replayed"};
+                                  "expired", "replayed",    "out-of-window"};
     for (usize i = 0U; i < sizeof(errors) / sizeof(errors[0]); ++i)
     {
         CHECK(crypto_error_name(errors[i]) == StringView(names[i]));

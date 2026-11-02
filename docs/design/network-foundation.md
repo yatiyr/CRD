@@ -1061,25 +1061,55 @@ carries the KEM.
 3. The labelled operations (`crypto-basics.json`): RefHash, ExpandWithLabel, DeriveSecret, DeriveTreeSecret,
    SignWithLabel, VerifyWithLabel, EncryptWithLabel and DecryptWithLabel, every label prefixed "MLS 1.0 ", every
    refusal zeroing its outputs. Labels and contexts up to 256 bytes allocate nothing.
-4. Next: the secret tree and its generation window (`secret-tree.json`), the key schedule with PSKs, exporters and
-   epoch authenticators (`key-schedule.json`, `psk_secret.json`), transcript hashes (`transcript-hashes.json`),
-   message framing and protection with padding (`message-protection.json`), the ratchet tree with tree and parent
-   hashes, validation and TreeKEM (`tree-operations.json`, `tree-validation.json`, `treekem.json`), key packages,
-   proposals, commits and Welcome (`messages.json`, `welcome.json`), and the passive-client scenarios
-   (`passive-client-*.json`).
+4. The key schedule (section 8; `key-schedule.json`, `psk_secret.json`): the GroupContext's encoding,
+   `EpochSecrets::advance` (a member's next epoch from the previous init secret, the commit secret and the PSK
+   secret) and `join` (a joiner's from the Welcome's joiner secret), which hold the joiner, welcome, sender data,
+   encryption, exporter, external, confirmation, membership, resumption, authentication and init secrets and zero the
+   epoch and member secrets inside the derivation; `psk_secret` over external and resumption PreSharedKeyIDs with
+   their PSKLabels (a nonce is Nh bytes, at most 65535 keys); MLS-Exporter. An epoch advances from its own init
+   secret in place.
+5. The secret tree and the sender data keys (sections 6.3.2 and 9; `secret-tree.json`), with the receive window of
+   decision M5. Each parent's two children are derived together the first time a leaf below them is needed and the
+   parent's secret is zeroed, a leaf's secret once its two ratchets hold theirs, a ratchet's once the next
+   generation's is held, a key once spent or once it leaves the window (section 9.2).
+6. Next: transcript hashes (`transcript-hashes.json`) with message framing and protection with padding
+   (`message-protection.json`), the two proven together because a transcript hash covers a framed Commit's content
+   and signature, then the ratchet tree with tree and parent hashes, validation and TreeKEM (`tree-operations.json`,
+   `tree-validation.json`, `treekem.json`), key packages, proposals, commits and Welcome (`messages.json`,
+   `welcome.json`), and the passive-client scenarios (`passive-client-*.json`).
+
+**M5. The receive window** (RFC 9420 section 9.2 leaves its size to the application). OpenMLS's defaults: a receiver
+keeps the keys of the 5 generations below the next unconsumed one of each ratchet (late and reordered messages) and
+derives at most 1000 generations ahead of it, so a forged generation costs a bounded chain before the message fails
+to open; both are settable per tree, up to 1024 and 65536. A key is read without changing the tree (`receive_key`)
+and spent only after its message authenticated (`consume`), so a forged message spends nothing. Generation g lives in
+slot g mod the window, every slot of the window holds a kept or a spent generation, and so a spent generation is
+Replayed and a dropped or too distant one OutOfWindow (a new `CryptoError`) in constant time. A tree allocates once
+when its epoch starts (per leaf two node secrets, two ratchets and twice the window's slots, about 0.7 KiB with the
+default window) and nothing on the message path; it has at most 2^20 leaves (about 0.7 GiB), a group size no
+deployment of MLS approaches and a bound on what a hostile tree size can claim. A sender's own ratchet hands out its
+generations in turn (`send_key`) and is Exhausted past 2^32 - 1, when the group must start a new epoch.
 
 **M4. Interoperability** runs as TLS's does: pinned peers built in their own projects on the public-checks lane
 (OpenMLS through the pinned Rust toolchain, MLSpp against the pinned OpenSSL) and a Python driver relaying MLS messages
 between a Cerid group member and each peer, so Cerid creates, joins, commits, protects and processes in groups where
 the others do too; the MLS working group's gRPC harness is not used.
 
-Evidence: `test_mls.cpp` (the suites; the 14 deserialization headers decoded, sized and written back; the malformed
+Evidence: `test_mls_schedule.cpp` (every epoch of the key-schedule vectors in the four suites, five each: the
+GroupContext, the eleven secrets advanced in place and joined from the joiner secret, the external key and the
+exporter; the 44 psk_secret vectors of 0 to 10 keys; the 12 secret-tree vectors' sender data keys and every leaf's
+generations 0 and 15 of both ratchets received in order, received newest first in reverse leaf order and sent; the
+window against a restatement of section 9: late, spent, dropped and too-distant generations, the bounds at their
+edges, every other ratchet untouched after one leaf opened its path, a tree of one leaf, a window of none, moves and
+every refusal; a resumption key's PSKLabel restated; the epoch's refusals and that each input reaches its outputs),
+`test_mls.cpp` (the suites; the 14 deserialization headers decoded, sized and written back; the malformed
 headers and presence octets; the 10 tree-math trees of 1 to 512 leaves node by node; direct paths, copaths and common
 ancestors against their definitions for every pair of nodes of trees up to 64 leaves and at 2^31 leaves; every
 crypto-basics vector of the four suites with fresh signatures and encryptions, and the refusal of the three outside;
 DeriveKeyPair of the 20 external keys of the key-schedule vectors; every refusal), `test_provider.cpp` (`kdf_hash`
 against FIPS 180-4's examples) and `crd-fuzz-crypto-mls` (headers against a restatement of section 2.1.2, tree math
-against its invariants, HPKE round trips with any bit changed, hostile openings and signatures, derivations).
+against its invariants, HPKE round trips with any bit changed, hostile openings and signatures, derivations, and
+sequences of reads, spends and sends on a secret tree against a model of the window and section 9 restated).
 
 <a id="negotiation"></a>
 ## Version and extension negotiation

@@ -1,5 +1,5 @@
-// crd-fuzz-crypto-mls: MLS's presentation language, tree math and labelled operations and the HPKE beneath them
-// (NET.2; docs/design/network-foundation.md#mls and #hpke) under the bounded fuzz harness (REPO.DEV.9;
+// crd-fuzz-crypto-mls: MLS's presentation language, tree math, labelled operations and secret tree and the HPKE
+// beneath them (NET.2; docs/design/network-foundation.md#mls and #hpke) under the bounded fuzz harness (REPO.DEV.9;
 // docs/design/test-instruments.md).
 //
 // Input. The first byte picks the mode, the rest is its data, read field by field (a field's length is one byte
@@ -11,7 +11,11 @@
 //   3  hostile openings: the suite, the recipient's input keying material, the encapsulation, the label, the
 //      context, then the ciphertext;
 //   4  hostile signatures: the suite, the public key, the signature (u16 lengths each), the label, then the content;
-//   5  derivations: the suite, the secret, the label, the context, the generation (u32) and the length (u16).
+//   5  derivations: the suite, the secret, the label, the context, the generation (u32) and the length (u16);
+//   6  the secret tree: the suite, the leaf count's exponent (mod 5), the window (out of order mod 9, ahead mod 48)
+//      and the root secret's fill byte, then up to 128 operations of three bytes: the leaf (mod leaves + 1, one past
+//      the tree), the action (mod 3: read, read and spend, send; bit 2 picks the application ratchet) and the
+//      generation.
 //
 // Oracles, none of them the code's verdict on the same call:
 //   * a header is accepted exactly when a restatement of RFC 9420 section 2.1.2 accepts it, with the same value, and
@@ -24,6 +28,10 @@
 //     Unsupported, and Invalid for every length the suite's algorithm cannot have;
 //   * a derivation is deterministic, DeriveTreeSecret is ExpandWithLabel of the big-endian generation, and the
 //     length is part of the label (a shorter output is not the prefix of a longer one).
+//   * a secret tree answers each read with the verdict a model of section 9.2 and the window gives (late, spent,
+//     dropped, too far ahead, outside the tree) and with the key of a restatement of section 9 walked from the root;
+//     a read changes nothing, a spend moves the model, a send hands out the sender's generations in turn, and every
+//     refusal clears its key.
 #include <crd/fuzz/harness.hpp>
 
 #include <crd/crypto/hpke.hpp>
@@ -368,6 +376,204 @@ void derivations(Reader& in)
     CRD_FUZZ_REQUIRE(same(out, ConstSpan<u8>(b, length)));
 }
 
+// ---- The secret tree: a sequence of reads, spends and sends against section 9 restated ----
+
+constexpr u32   kFuzzLeaves      = 16U;
+constexpr u32   kFuzzGenerations = 256U; // a received generation is one byte; a send is one per operation
+constexpr usize kFuzzOperations  = 128U;
+
+// One ratchet's keys by generation, derived on demand from its generation-0 secret: the tree walked from its root
+// by "tree" "left" and "right", the leaf's "handshake" or "application" expansion, then "secret", "key" and "nonce".
+struct ReferenceRatchet
+{
+    u8   secret[mls::kMaxHashBytes] = {}; // the ratchet secret of generation `derived`
+    u32  derived                    = 0U;
+    bool started                    = false;
+    u8   keys[kFuzzGenerations][mls::kMaxAeadKeyBytes + kAeadNonceBytes];
+};
+
+// What a receiver of one ratchet may answer: the next unconsumed generation and, below it, which generations are kept.
+struct ModelRatchet
+{
+    u32  next = 0U;
+    bool retained[kFuzzGenerations];
+    bool spent[kFuzzGenerations];
+    u32  sent = 0U;
+};
+
+ReferenceRatchet g_reference[2U * kFuzzLeaves];
+ModelRatchet     g_model[2U * kFuzzLeaves];
+
+ConstSpan<u8> reference_key(const mls::CipherSuite& suite, ConstSpan<u8> root, u32 leaves, u32 leaf,
+                            mls::RatchetKind kind, u32 generation) noexcept
+{
+    const usize       hash = suite.hash_bytes();
+    const usize       nk   = aead_key_bytes(suite.aead);
+    ReferenceRatchet& r    = g_reference[2U * leaf + static_cast<u32>(kind)];
+    if (!r.started)
+    {
+        u8 node_secret[mls::kMaxHashBytes] = {};
+        std::memcpy(node_secret, root.data(), hash);
+        u32       node   = *tree::root(leaves);
+        const u32 target = 2U * leaf;
+        while (node != target)
+        {
+            const bool          left = target < node;
+            const ConstSpan<u8> side(reinterpret_cast<const u8*>(left ? "left" : "right"), left ? 4U : 5U);
+            u8                  child[mls::kMaxHashBytes] = {};
+            CRD_FUZZ_REQUIRE(mls::expand_with_label(suite, ConstSpan<u8>(node_secret, hash), "tree", side,
+                                                    Span<u8>(child, hash)) == CryptoError::None);
+            std::memcpy(node_secret, child, hash);
+            node = left ? *tree::left(node, leaves) : *tree::right(node, leaves);
+        }
+        CRD_FUZZ_REQUIRE(mls::expand_with_label(suite, ConstSpan<u8>(node_secret, hash),
+                                                kind == mls::RatchetKind::Handshake ? "handshake" : "application", {},
+                                                Span<u8>(r.secret, hash)) == CryptoError::None);
+        r.started = true;
+        r.derived = 0U;
+    }
+    while (r.derived <= generation)
+    {
+        u8* const key = r.keys[r.derived];
+        CRD_FUZZ_REQUIRE(mls::derive_tree_secret(suite, ConstSpan<u8>(r.secret, hash), "key", r.derived,
+                                                 Span<u8>(key, nk)) == CryptoError::None);
+        CRD_FUZZ_REQUIRE(mls::derive_tree_secret(suite, ConstSpan<u8>(r.secret, hash), "nonce", r.derived,
+                                                 Span<u8>(key + nk, kAeadNonceBytes)) == CryptoError::None);
+        u8 next[mls::kMaxHashBytes] = {};
+        CRD_FUZZ_REQUIRE(mls::derive_tree_secret(suite, ConstSpan<u8>(r.secret, hash), "secret", r.derived,
+                                                 Span<u8>(next, hash)) == CryptoError::None);
+        std::memcpy(r.secret, next, hash);
+        ++r.derived;
+    }
+    return ConstSpan<u8>(r.keys[generation], nk + kAeadNonceBytes);
+}
+
+bool key_is(const mls::MessageKey& key, ConstSpan<u8> expected, u32 generation) noexcept
+{
+    const usize nk = key.key_length;
+    return key.generation == generation && nk + kAeadNonceBytes == expected.size() &&
+           same(key.aead_key(), expected.first(nk)) &&
+           same(ConstSpan<u8>(key.nonce, kAeadNonceBytes), expected.subspan(nk));
+}
+
+bool key_cleared(const mls::MessageKey& key) noexcept
+{
+    return key.key_length == 0U && key.generation == 0U && all_zero(ConstSpan<u8>(key.key, mls::kMaxAeadKeyBytes)) &&
+           all_zero(ConstSpan<u8>(key.nonce, kAeadNonceBytes));
+}
+
+// The verdict of receiving `generation` from the model alone (section 9.2 and decision M5 restated).
+CryptoError expected_receive(const ModelRatchet& model, mls::RatchetWindow window, u32 generation) noexcept
+{
+    if (generation >= model.next)
+    {
+        return generation - model.next > window.max_forward ? CryptoError::OutOfWindow : CryptoError::None;
+    }
+    if (model.next - generation > window.out_of_order)
+    {
+        return CryptoError::OutOfWindow;
+    }
+    if (model.retained[generation])
+    {
+        return CryptoError::None;
+    }
+    return model.spent[generation] ? CryptoError::Replayed : CryptoError::OutOfWindow;
+}
+
+void spend(ModelRatchet& model, mls::RatchetWindow window, u32 generation) noexcept
+{
+    if (generation < model.next)
+    {
+        model.retained[generation] = false;
+        model.spent[generation]    = true;
+        return;
+    }
+    for (u32 skipped = model.next; skipped < generation; ++skipped)
+    {
+        // Kept when the window after this spend still reaches it.
+        model.retained[skipped] = generation + 1U - skipped <= window.out_of_order;
+        model.spent[skipped]    = false;
+    }
+    model.retained[generation] = false;
+    model.spent[generation]    = true;
+    model.next                 = generation + 1U;
+}
+
+void secret_tree(Reader& in)
+{
+    const mls::CipherSuite&  suite  = suite_of(in.byte());
+    const u32                leaves = u32{1} << (in.byte() % 5U);
+    const mls::RatchetWindow window{in.byte() % 9U, in.byte() % 48U};
+    const u8                 fill = in.byte();
+    if (!in.ok())
+    {
+        return;
+    }
+    u8 root[mls::kMaxHashBytes];
+    std::memset(root, fill, sizeof(root));
+    const ConstSpan<u8> secret(root, suite.hash_bytes());
+    mls::SecretTree     receiver;
+    mls::SecretTree     sender;
+    CRD_FUZZ_REQUIRE(receiver.init(suite, secret, leaves, window) == CryptoError::None);
+    CRD_FUZZ_REQUIRE(sender.init(suite, secret, leaves) == CryptoError::None);
+    for (ReferenceRatchet& r : g_reference)
+    {
+        r.started = false;
+    }
+    for (ModelRatchet& m : g_model)
+    {
+        m.next = 0U;
+        m.sent = 0U;
+        std::memset(m.retained, 0, sizeof(m.retained));
+        std::memset(m.spent, 0, sizeof(m.spent));
+    }
+    for (usize op = 0U; op < kFuzzOperations; ++op)
+    {
+        const u8  leaf_byte  = in.byte();
+        const u8  action     = in.byte();
+        const u32 generation = in.byte();
+        if (!in.ok())
+        {
+            return;
+        }
+        const u32              leaf = leaf_byte % (leaves + 1U); // one past the tree too
+        const mls::RatchetKind kind = (action & 4U) != 0U ? mls::RatchetKind::Application : mls::RatchetKind::Handshake;
+        mls::MessageKey        key;
+        if (leaf == leaves)
+        {
+            CRD_FUZZ_REQUIRE(receiver.receive_key(leaf, kind, generation, key) == CryptoError::OutOfWindow);
+            CRD_FUZZ_REQUIRE(receiver.consume(leaf, kind, generation) == CryptoError::OutOfWindow);
+            CRD_FUZZ_REQUIRE(sender.send_key(leaf, kind, key) == CryptoError::OutOfWindow && key_cleared(key));
+            continue;
+        }
+        ModelRatchet& model = g_model[2U * leaf + static_cast<u32>(kind)];
+        if (action % 3U == 2U)
+        {
+            CRD_FUZZ_REQUIRE(sender.send_key(leaf, kind, key) == CryptoError::None);
+            CRD_FUZZ_REQUIRE(key_is(key, reference_key(suite, secret, leaves, leaf, kind, model.sent), model.sent));
+            ++model.sent;
+            continue;
+        }
+        // A read changes nothing: twice the same verdict and key.
+        const CryptoError verdict = expected_receive(model, window, generation);
+        for (int read = 0; read < 2; ++read)
+        {
+            CRD_FUZZ_REQUIRE(receiver.receive_key(leaf, kind, generation, key) == verdict);
+            CRD_FUZZ_REQUIRE(verdict == CryptoError::None
+                                 ? key_is(key, reference_key(suite, secret, leaves, leaf, kind, generation), generation)
+                                 : key_cleared(key));
+        }
+        if (action % 3U == 1U)
+        {
+            CRD_FUZZ_REQUIRE(receiver.consume(leaf, kind, generation) == verdict);
+            if (verdict == CryptoError::None)
+            {
+                spend(model, window, generation);
+            }
+        }
+    }
+}
+
 void add(crd::fuzz::SeedSink& sink, const char* name, const u8* data, usize size)
 {
     sink.add(name, data, size);
@@ -381,7 +587,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         return 0;
     }
     Reader in(data + 1U, size - 1U);
-    switch (data[0] % 6U)
+    switch (data[0] % 7U)
     {
     case 0U:
         headers(in);
@@ -398,8 +604,11 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     case 4U:
         hostile_signature(in);
         break;
-    default:
+    case 5U:
         derivations(in);
+        break;
+    default:
+        secret_tree(in);
         break;
     }
     return 0;
@@ -524,4 +733,38 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
         input[n++] = c;
     }
     add(sink, "derive-widest", input, n);
+
+    // The secret tree: eight leaves in each suite with the default-sized window, a jump past the window and late
+    // reads, spends, replays, sends and a leaf past the tree; one leaf with no window.
+    const u8 operations[] = {
+        3U, 1U, 10U, // leaf 3, handshake: read and spend generation 10
+        3U, 1U, 6U,  // a late generation, kept
+        3U, 1U, 6U,  // replayed
+        3U, 0U, 4U,  // dropped
+        3U, 1U, 40U, // as far ahead as the window allows
+        3U, 0U, 90U, // too far
+        5U, 5U, 0U,  // leaf 5, application: a send
+        5U, 5U, 0U,
+        5U, 4U, 0U,  // read generation 0 of the receiver's application ratchet
+        8U, 1U, 0U,  // one past the tree
+        0U, 1U, 0U,  // leaf 0 opens its path after leaf 3's
+    };
+    for (u8 suite = 0U; suite < 4U; ++suite)
+    {
+        const u8 head[] = {6U, suite, 3U, 5U, 40U, static_cast<u8>(0x10U + suite)};
+        n               = 0U;
+        for (const u8 b : head)
+        {
+            input[n++] = b;
+        }
+        for (const u8 b : operations)
+        {
+            input[n++] = b;
+        }
+        const char* names[] = {"secret-tree-x25519-aes", "secret-tree-p256", "secret-tree-x25519-chacha",
+                               "secret-tree-p384"};
+        add(sink, names[suite], input, n);
+    }
+    const u8 no_window[] = {6U, 0U, 0U, 0U, 2U, 0x77U, 0U, 1U, 1U, 0U, 0U, 0U, 0U, 1U, 3U, 0U, 0U, 2U, 0U, 1U, 4U};
+    add(sink, "secret-tree-no-window", no_window, sizeof(no_window));
 }
