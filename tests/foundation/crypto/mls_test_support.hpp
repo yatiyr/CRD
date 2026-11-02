@@ -2,7 +2,9 @@
 
 // crd-crypto tests -- what the MLS suites share (test_mls*.cpp): the working group's vector files, the suite of a
 // vector, byte views, a deterministic generator for the model groups' choices, a member's long-term identity with its
-// signed leaf node, a joiner's key package, and the Authentication Service and store the groups consult.
+// signed leaf node, a joiner's key package, and the Authentication Service and store the groups consult. Every
+// identity and key package carries GREASE (section 13.5), as a sender should: a random value in its capabilities'
+// cipher suite, extension and credential lists, a leaf extension of that type, and a key package extension.
 
 #include "wycheproof.hpp"
 
@@ -78,9 +80,40 @@ struct Identity
     Bytes         suites;
     Bytes         credentials;
     Bytes         extension_types; // the non-default extension types the member's capabilities list
+    u16           grease = 0U;     // the GREASE value sign_leaf adds (none when 0)
+    Bytes         listed_suites;   // what the leaf's capabilities list: the lists above and the GREASE value
+    Bytes         listed_extensions;
+    Bytes         listed_credentials;
+    Bytes         leaf_extensions; // a GREASE extension
     Bytes         signature;
     mls::LeafNode leaf;
 };
+
+// `list`, a body of 16-bit codepoints, and `value` after it (nothing for 0).
+inline Bytes listing(const Bytes& list, u16 value)
+{
+    Bytes out = list;
+    if (value != 0U)
+    {
+        out.push_back(static_cast<u8>(value >> 8U));
+        out.push_back(static_cast<u8>(value));
+    }
+    return out;
+}
+
+// An Extension list's body of one extension of a random GREASE type holding `data` (at most 63 bytes).
+inline Bytes grease_extension(const Bytes& data)
+{
+    u16 type = 0U;
+    REQUIRE(mls::random_grease(type) == CryptoError::None);
+    REQUIRE(data.size() < 64U);
+    Bytes out = {static_cast<u8>(type >> 8U), static_cast<u8>(type), static_cast<u8>(data.size())};
+    for (const u8 byte : data)
+    {
+        out.push_back(byte);
+    }
+    return out;
+}
 
 inline Bytes random_of(usize size)
 {
@@ -106,15 +139,24 @@ inline void fresh_hpke(const mls::CipherSuite& suite, Identity& id)
 inline void sign_leaf(const mls::CipherSuite& suite, Identity& id, mls::LeafNodeSource source,
                       containers::ConstSpan<u8> group_id, u32 index)
 {
+    id.listed_suites      = listing(id.suites, id.grease);
+    id.listed_extensions  = listing(id.extension_types, id.grease);
+    id.listed_credentials = listing(id.credentials, id.grease);
+    id.leaf_extensions.clear();
+    if (id.grease != 0U)
+    {
+        id.leaf_extensions = {static_cast<u8>(id.grease >> 8U), static_cast<u8>(id.grease), 0x01U, 0x5AU};
+    }
     id.leaf                            = {};
     id.leaf.encryption_key             = view(id.hpke_public);
     id.leaf.signature_key              = view(id.signature_key);
     id.leaf.credential.type            = static_cast<u16>(mls::CredentialType::Basic);
     id.leaf.credential.content         = view(id.credential);
     id.leaf.capabilities.versions      = view(id.versions);
-    id.leaf.capabilities.cipher_suites = view(id.suites);
-    id.leaf.capabilities.extensions    = view(id.extension_types);
-    id.leaf.capabilities.credentials   = view(id.credentials);
+    id.leaf.capabilities.cipher_suites = view(id.listed_suites);
+    id.leaf.capabilities.extensions    = view(id.listed_extensions);
+    id.leaf.capabilities.credentials   = view(id.listed_credentials);
+    id.leaf.extensions                 = view(id.leaf_extensions);
     id.leaf.source                     = source;
     id.leaf.not_before                 = 0U;
     id.leaf.not_after                  = ~u64{0};
@@ -137,6 +179,7 @@ inline void make_identity(const mls::CipherSuite& suite, Identity& id, u32 name)
     id.versions      = Bytes{0x00U, 0x01U};
     id.suites        = Bytes{static_cast<u8>(suite.id >> 8U), static_cast<u8>(suite.id)};
     id.credentials   = Bytes{0x00U, 0x01U};
+    REQUIRE(mls::random_grease(id.grease) == CryptoError::None);
     fresh_hpke(suite, id);
     sign_leaf(suite, id, mls::LeafNodeSource::KeyPackage, {}, 0U);
 }
@@ -252,6 +295,7 @@ inline void make_joiner(const mls::CipherSuite& suite, Joiner& joiner, u32 name)
     joiner.package.cipher_suite = suite.id;
     joiner.package.init_key     = view(joiner.init_public);
     joiner.package.leaf_node    = joiner.id.leaf;
+    joiner.extensions           = grease_extension(random_of(8U));
     joiner.package.extensions   = view(joiner.extensions);
     sign_package(suite, joiner);
 }

@@ -27,6 +27,7 @@
 #include <crd/crypto/mls_message.hpp>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 namespace
@@ -47,7 +48,8 @@ using mls::ContentType;
 using mls::SenderType;
 using mls::WireFormat;
 
-constexpr usize kBufferBytes = 4096U;
+// A message of the profile with up to 1024 bytes of data or authenticated data: an ML-DSA-87 signature is 4627 bytes.
+constexpr usize kBufferBytes = 8192U;
 
 class Reader
 {
@@ -310,6 +312,7 @@ public:
     {
         u8 seed[64];
         std::memset(seed, 0x13, sizeof(seed));
+        CRD_FUZZ_REQUIRE(mls::cipher_suites().size() == kSuites);
         for (usize i = 0U; i < kSuites; ++i)
         {
             const mls::CipherSuite& suite = mls::cipher_suites()[i];
@@ -327,9 +330,9 @@ public:
     }
 
 private:
-    static constexpr usize kSuites = 4U;
+    static constexpr usize kSuites = 15U; // the profile's
     SigningKey             m_keys[kSuites];
-    u8                     m_public[kSuites][160]{};
+    u8                     m_public[kSuites][mls::kMaxSignatureKeyBytes]{};
     usize                  m_public_bytes[kSuites]{};
 };
 
@@ -360,8 +363,8 @@ void public_changed(Reader& in) noexcept
     const mls::FramedContent content{kGroup, 3U, {sender, leaf}, aad,
                                      commit ? ContentType::Commit : ContentType::Proposal,
                                      commit ? ConstSpan<u8>(kCommit) : ConstSpan<u8>(kRemove)};
-    u8                      signature[160] = {};
-    usize                   signed_bytes   = 0U;
+    u8                      signature[mls::kMaxSuiteSignatureBytes] = {};
+    usize                   signed_bytes                            = 0U;
     CRD_FUZZ_REQUIRE(mls::sign_content(suite, kSigners.key(index), WireFormat::PublicMessage, content, context,
                                        signature, signed_bytes) == CryptoError::None);
     u8                     tag[mls::kMaxHashBytes] = {};
@@ -478,5 +481,18 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
                                              "public-new-member-proposal-changed", "public-new-member-commit-changed"};
         const u8          changed[]       = {3U, sender, sender, 1U, 0U, 30U, 0x80U, 'a'};
         add(sink, changed_names[sender], changed, sizeof(changed));
+    }
+
+    // The post-quantum suites (4 to 14): a member's private application message and its public commit, each changed in
+    // one byte of its signature's region (an ML-DSA signature is thousands of bytes long).
+    for (u8 suite = 4U; suite < 15U; ++suite)
+    {
+        char name[48];
+        std::snprintf(name, sizeof(name), "private-application-%u", static_cast<unsigned>(suite));
+        const u8 application[] = {1U, suite, 2U, 3U, 0U, 7U, 0x12U, 0x34U, 0x01U, 'p', 'q'};
+        add(sink, name, application, sizeof(application));
+        std::snprintf(name, sizeof(name), "public-member-commit-changed-%u", static_cast<unsigned>(suite));
+        const u8 changed[] = {3U, suite, 0U, 1U, 0x02U, 0x00U, 0x40U, 'p', 'q'};
+        add(sink, name, changed, sizeof(changed));
     }
 }

@@ -32,6 +32,20 @@
 
 namespace crd::crypto::mls
 {
+// ---- GREASE (section 13.5) ----
+
+// The fifteen values 0x0A0A, 0x1A1A, ..., 0xEAEA that the cipher suite, extension, proposal and credential registries
+// reserve (0xFAFA is private use). A sender puts random ones where receivers ignore unknown values: the cipher suite,
+// extension, proposal and credential lists of a leaf's capabilities, a leaf's extensions (each then listed in its
+// capabilities), a key package's and a GroupInfo's extensions (Group adds one to every GroupInfo it signs:
+// GroupInfoOptions::grease). Never a proposal's or a credential's type or a GroupContext extension: a member's own
+// capabilities are compared without them (supports_extension, supports_proposal, supports_credential), so a group
+// whose context or required capabilities name one, or a leaf whose credential type is one, is Unsupported. Receivers
+// otherwise give them no special treatment: they are unknown values like any other.
+[[nodiscard]] bool grease(u16 value) noexcept;
+// One of the fifteen, drawn from the provider's randomness (ProviderFailure when it fails, `out` then 0).
+[[nodiscard]] CryptoError random_grease(u16& out) noexcept;
+
 // ---- The structures a message carries ----
 
 // The body of an Extension list (section 7.2): each {u16 extension_type; opaque extension_data<V>}.

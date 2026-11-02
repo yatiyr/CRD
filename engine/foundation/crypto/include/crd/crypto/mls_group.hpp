@@ -50,9 +50,12 @@ enum class ExtensionType : u16
 // Whether the body of a list of 16-bit codepoints (a capabilities list) holds `value`.
 [[nodiscard]] bool lists(cont::ConstSpan<u8> codepoints, u16 value) noexcept;
 
-// Whether a leaf's capabilities support an extension or a proposal type: a default one or one they list.
+// Whether a leaf's capabilities support an extension or a proposal type (a default one or one they list) or a
+// credential type (one they list). Capabilities are compared without their GREASE values (section 13.5): a GREASE
+// value is never supported, so no group can require or use one.
 [[nodiscard]] bool supports_extension(const Capabilities& capabilities, u16 type) noexcept;
 [[nodiscard]] bool supports_proposal(const Capabilities& capabilities, u16 type) noexcept;
+[[nodiscard]] bool supports_credential(const Capabilities& capabilities, u16 type) noexcept;
 
 // Over the body of an Extension list whose syntax take_extensions checked: whether it names each type at most once
 // (section 13.4), and the data of the extension of `type` (false when the list has none).
@@ -165,8 +168,9 @@ struct LeafPolicy
 //   Malformed    a source other than `role` names, or a leaf or GroupContext extension list naming a type twice;
 //   BadKey       an encryption key the suite's KEM cannot encapsulate to (hpke_check_public_key);
 //   Forged       a credential the Authentication Service refuses for the leaf's signature key;
-//   Unsupported  capabilities without the leaf's own credential type, a non-default leaf extension they do not
-//                list, or a GroupContext extension or required capability (section 11.1) they do not support; an
+//   Unsupported  capabilities that do not support the leaf's own credential type (a GREASE type never is), a
+//                non-default leaf extension they do not list (a GREASE one they list is accepted, section 13.5), or a
+//                GroupContext extension or required capability (section 11.1) they do not support; an
 //                undecodable required_capabilities is Malformed (whether they list the group's version and cipher
 //                suite is a creator's choice of parameters, section 11, not a check of the leaf: decision M8);
 //   Expired      a key-package leaf outside its lifetime at `policy.now` or claiming more than `max_lifetime`
@@ -469,12 +473,14 @@ struct SendOptions
 
 // What a GroupInfo carries (section 12.4.3): the ratchet tree (section 12.4.3.3), the external_pub extension that
 // lets a new member join by an external commit (12.4.3.2; off by default: only a member who publishes the key, which
-// no one else can derive, opens the group to external joins), and more extensions (an Extension list's body, each
-// type once, neither ratchet_tree nor external_pub).
+// no one else can derive, opens the group to external joins), an empty extension of a random GREASE type (section
+// 13.5; on by default, and none is added when `extensions` already names a GREASE type), and more extensions (an
+// Extension list's body, each type once, neither ratchet_tree nor external_pub).
 struct GroupInfoOptions
 {
     bool                ratchet_tree = true;
     bool                external_pub = false;
+    bool                grease       = true;
     cont::ConstSpan<u8> extensions;
 };
 

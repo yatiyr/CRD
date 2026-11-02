@@ -4,7 +4,8 @@
 // the RFC's rules: groups of Cerid members in every suite that new members join from a published GroupInfo (with and
 // without its tree, with a PSK, one after another and racing one another), that members resync into from their former
 // leaves, and that then commit, welcome and exchange messages with every member agreeing; every refusal on both sides,
-// the joiner left empty and each member's group as it was; and the tree operations an external joiner takes.
+// the joiner left empty and each member's group as it was; the tree operations an external joiner takes; and GREASE
+// (section 13.5) where a GroupInfo, a key package and a leaf carry it and where no member may send it.
 
 #include "mls_model.hpp"
 
@@ -12,6 +13,8 @@
 #include <crd/crypto/mls_group.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+
+#include <algorithm>
 
 namespace
 {
@@ -141,6 +144,34 @@ mls::Proposal external_init_of(ConstSpan<u8> kem_output)
     return proposal;
 }
 
+// A public key of the suite's KEM that hpke_check_public_key refuses: a DHKEM's all-zero key (off the curve, of small
+// order for X25519), and all one bits for a KEM with an ML-KEM part, whose coefficients then exceed q (FIPS 203's input
+// check; an all-zero ML-KEM key passes it).
+Bytes unusable_key(const mls::CipherSuite& suite)
+{
+    const bool lattice = algorithm_class(suite.kem) != AlgorithmClass::ClassicalKeyExchange;
+    return filled(hpke_sizes(suite.kem).public_key, lattice ? 0xFFU : 0x00U);
+}
+
+// How the members refuse an ExternalInit whose kem_output is all zero bytes: WeakSecret for DHKEM(X25519)'s point of
+// small order, BadKey where a NIST curve's point (alone or a hybrid's half) is off the curve; an ML-KEM ciphertext
+// always decapsulates (implicit rejection), as does X-Wing's (its X25519 half taken as RFC 7748 computes it), so the
+// init secret is another and the commit fails at its confirmation tag.
+CryptoError zero_output_refusal(const mls::CipherSuite& suite)
+{
+    switch (suite.kem)
+    {
+    case AlgorithmId::X25519:
+        return CryptoError::WeakSecret;
+    case AlgorithmId::MlKem768:
+    case AlgorithmId::MlKem1024:
+    case AlgorithmId::X25519Mlkem768:
+        return CryptoError::Forged;
+    default:
+        return CryptoError::BadKey;
+    }
+}
+
 // A fresh encapsulation to the external key `info` publishes, as an ExternalInit's kem_output.
 Bytes fresh_kem_output(const mls::CipherSuite& suite, const Bytes& info)
 {
@@ -149,7 +180,7 @@ Bytes fresh_kem_output(const mls::CipherSuite& suite, const Bytes& info)
     ConstSpan<u8>        key;
     REQUIRE(mls::find_extension(decoded.extensions, static_cast<u16>(mls::ExtensionType::ExternalPub), data));
     REQUIRE(mls::take_external_pub(data, key));
-    Bytes enc    = filled(hpke_sizes(suite.kem).public_key, 0U);
+    Bytes enc    = filled(hpke_sizes(suite.kem).encapsulation, 0U);
     Bytes secret = filled(suite.hash_bytes(), 0U);
     REQUIRE(hpke_export(suite.hpke(), key, {}, ConstSpan<u8>(), span_of(enc), span_of(secret)) == CryptoError::None);
     return enc;
@@ -211,9 +242,10 @@ TEST_CASE("MLS: new members join by external commits in every suite, and the gro
         model.exchange(private_send);
 
         // Member 4 joins from a GroupInfo without the tree (fetched beside it): the tree doubles for it. Its own
-        // GroupInfo carries neither the tree nor the external key.
+        // GroupInfo carries neither the tree nor the external key (nor GREASE, asked not to).
         mls::ExternalJoinOptions plain;
         plain.group_info.ratchet_tree = false;
+        plain.group_info.grease       = false;
         const mls::ExternalJoinResult second = join_externally(model, 4U, published(model.at(3), false), plain,
                                                                view(fetched_tree(model.at(3).group)));
         CHECK(model.at(4).group.own_leaf() == 4U);
@@ -517,9 +549,9 @@ TEST_CASE("MLS: a joiner refuses each fault of a GroupInfo and of its own commit
         refuse(info, {}, CryptoError::Forged);
         model.authority.refused.clear();
 
-        // An external key no agreement can use: the all-zero key (off the curve, or of small order for X25519).
+        // An external key no encapsulation can use.
         Bytes       zero_pub  = tree_only;
-        const Bytes zero_key  = filled(hpke_sizes(suite.kem).public_key, 0U);
+        const Bytes zero_key  = unusable_key(suite);
         Bytes       zero_data = filled(mls::external_pub_bytes(view(zero_key)), 0U);
         WireWriter  zero_writer(span_of(zero_data));
         mls::put_external_pub(zero_writer, view(zero_key));
@@ -629,7 +661,7 @@ TEST_CASE("MLS: members refuse each fault of an external commit, the group uncha
         }
 
         // Section 12.4.3.2's list: no ExternalInit, two, one with an Add, an Update, GroupContextExtensions, a ReInit,
-        // two Removes, a kem_output not Npk long, a proposal by reference; and a commit without a path.
+        // two Removes, a kem_output not Nenc long, a proposal by reference; and a commit without a path.
         mls::Proposal update;
         update.type   = static_cast<u16>(mls::ProposalType::Update);
         update.update = model.at(1).who.id.leaf;
@@ -673,12 +705,11 @@ TEST_CASE("MLS: members refuse each fault of an external commit, the group uncha
         other_signer.signer  = &model.at(4).who.id.signer;
         refused(receiver, external_commit({by_value(init)}, other_signer), CryptoError::Forged);
 
-        // The honest list and path with a kem_output no agreement can use (the all-zero point), or a fresh one to the
-        // group's external key with the honest confirmation tag: the init secret is then another, and the commit fails
-        // at its confirmation tag.
+        // The honest list and path with an all-zero kem_output, or a fresh one to the group's external key with the
+        // honest confirmation tag: the init secret is then another, and the commit fails at its confirmation tag.
         const Bytes zero_output = filled(kem_output.size(), 0U);
         refused(receiver, external_commit({by_value(external_init_of(view(zero_output)))}, as_joiner),
-                suite.kem == AlgorithmId::X25519 ? CryptoError::WeakSecret : CryptoError::BadKey);
+                zero_output_refusal(suite));
         const Bytes fresh_output = fresh_kem_output(suite, info);
         Framing     honest_tag   = as_joiner;
         honest_tag.confirmation_tag = decoded.public_message.auth.confirmation_tag;
@@ -876,6 +907,118 @@ TEST_CASE("MLS: every replaced leaf is accepted only as its predecessor's succes
         refused(model.at(1).group, hostile, CryptoError::Forged); // now at its confirmation tag
         CHECK(model.authority.successors_refused == refused_before + 1U);
         model.authority.any_successor = false;
+    }
+}
+
+// ---- GREASE (section 13.5) ----
+
+// How many extensions of a GroupInfo have GREASE types.
+usize grease_extensions(const mls::GroupInfo& info)
+{
+    usize      count = 0U;
+    WireReader in(info.extensions);
+    while (!in.done())
+    {
+        u16           type = 0U;
+        ConstSpan<u8> data;
+        REQUIRE(in.take_u16(type));
+        REQUIRE(mls::take_vector(in, data));
+        count += mls::grease(type) ? 1U : 0U;
+    }
+    return count;
+}
+
+TEST_CASE("MLS: GREASE values go where receivers ignore unknown values and never where they cannot",
+          "[crypto][net-2][mls]")
+{
+    // The fifteen reserved values, 0x0A0A to 0xEAEA; 0xFAFA is private use.
+    usize reserved = 0U;
+    for (u32 value = 0U; value <= 0xFFFFU; ++value)
+    {
+        if (mls::grease(static_cast<u16>(value)))
+        {
+            const u32 digit = value >> 12U;
+            CHECK(value == (digit << 12U | 0x0A00U | digit << 4U | 0x0AU));
+            CHECK(digit <= 0x0EU);
+            ++reserved;
+        }
+    }
+    CHECK(reserved == 15U);
+    CHECK_FALSE(mls::grease(0xFAFAU));
+    // Drawn at random: only those, and each of them (a value missed in 1,500 draws has odds below 10^-40).
+    bool drawn[15] = {};
+    for (u32 i = 0U; i < 1500U; ++i)
+    {
+        u16 value = 0U;
+        REQUIRE(mls::random_grease(value) == CryptoError::None);
+        REQUIRE(mls::grease(value));
+        drawn[value >> 12U] = true;
+    }
+    CHECK(std::ranges::all_of(drawn, [](bool seen) { return seen; }));
+
+    for (const u16 id : {u16{0x0001U}, u16{0x0022U}})
+    {
+        const mls::CipherSuite& suite = suite_of(id);
+        INFO("cipher suite " << suite.id);
+        // Every member's capabilities, leaf and key package carry GREASE (mls_test_support.hpp): the creator's leaf
+        // keeps its GREASE extension in the tree, and joiners enter from a Welcome and by an external commit.
+        Model         model(suite);
+        mls::LeafNode leaf{};
+        ConstSpan<u8> data;
+        REQUIRE(model.at(0).group.tree().leaf_node(0U, leaf));
+        CHECK(mls::find_extension(leaf.extensions, model.at(0).who.id.grease, data));
+        CHECK(mls::lists(leaf.capabilities.cipher_suites, model.at(0).who.id.grease));
+        const mls::Proposal adds[2] = {add_of(model.at(1)), add_of(model.at(2))};
+        mls::CommitOptions  options;
+        options.proposals = ConstSpan<mls::Proposal>(adds, 2U);
+        model.commit(0U, options, {1U, 2U});
+
+        // Every GroupInfo carries one GREASE extension: none when asked not to, and none beside the application's own.
+        CHECK(grease_extensions(decoded_info(published(model.at(0)))) == 1U);
+        mls::GroupInfoOptions      plain;
+        crd::containers::Array<u8> out;
+        plain.grease = false;
+        REQUIRE(model.at(1).group.group_info(model.at(1).who.id.signer, plain, out) == CryptoError::None);
+        CHECK(grease_extensions(decoded_info(bytes_of(out))) == 0U);
+        const Bytes           mine = extension(0x3A3AU, view(Bytes{1U, 2U}));
+        mls::GroupInfoOptions own;
+        own.extensions = view(mine);
+        REQUIRE(model.at(1).group.group_info(model.at(1).who.id.signer, own, out) == CryptoError::None);
+        const Bytes          carried_bytes = bytes_of(out);
+        const mls::GroupInfo carried       = decoded_info(carried_bytes);
+        CHECK(grease_extensions(carried) == 1U);
+        REQUIRE(mls::find_extension(carried.extensions, 0x3A3AU, data));
+        CHECK(equal(data, view(Bytes{1U, 2U})));
+        const mls::ExternalJoinResult joined = join_externally(model, 3U, published(model.at(2)));
+        CHECK(grease_extensions(decoded_info(bytes_of(joined.group_info))) == 1U);
+        mls::CommitOptions path;
+        model.commit(3U, path);
+        model.exchange({});
+
+        // Never in a GroupContext's extensions, a GroupContextExtensions proposal or a credential's type, though the
+        // sender's own capabilities list it: a member compares its capabilities without GREASE.
+        Member&     creator  = model.at(4);
+        const Bytes greased  = extension(creator.who.id.grease, {});
+        const Bytes group_id = random_of(16U);
+        mls::Group  refused;
+        CHECK(refused.create(suite, view(group_id), view(greased), creator.who.id.leaf,
+                             view(creator.who.id.hpke_private), creator.config) == CryptoError::Unsupported);
+        CHECK_FALSE(refused.ready());
+        mls::LeafNode typed   = creator.who.id.leaf;
+        typed.credential.type = creator.who.id.grease;
+        const mls::GroupContext context{suite.id, view(group_id), 0U, {}, {}, {}};
+        CHECK(mls::check_leaf(context, typed, mls::LeafRole::KeyPackage, timeless(), model.authority) ==
+              CryptoError::Unsupported);
+        const mls::GroupContext with_grease{suite.id, view(group_id), 0U, {}, {}, view(greased)};
+        CHECK(mls::check_leaf(with_grease, creator.who.id.leaf, mls::LeafRole::KeyPackage, timeless(),
+                              model.authority) == CryptoError::Unsupported);
+        const Bytes         listed            = extension(model.at(0).who.id.grease, {});
+        const mls::Proposal context_change[1] = {extensions_of(view(listed))};
+        mls::CommitOptions  changing;
+        changing.proposals = ConstSpan<mls::Proposal>(context_change, 1U);
+        mls::CommitResult result;
+        CHECK(model.at(0).group.commit(model.at(0).who.id.signer, changing, result) == CryptoError::Unsupported);
+        CHECK(result.message.empty());
     }
 }
 } // namespace

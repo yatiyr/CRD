@@ -203,9 +203,20 @@ void check_keys(const mls::RatchetTree& tree, const mls::PathKeys& keys)
     }
 }
 
+// What a run reached: each operation, and trees holding unmerged leaves (parents with an unmerged list).
+struct Reached
+{
+    usize adds           = 0U;
+    usize updates        = 0U;
+    usize removes        = 0U;
+    usize unmerged_paths = 0U;
+
+    [[nodiscard]] bool all() const { return adds > 0U && updates > 0U && removes > 0U && unmerged_paths > 0U; }
+};
+
 // A model group of up to 16 members that runs `steps` commits, each with one random proposal or none and a path,
-// every member checked at every epoch.
-void run_group(const mls::CipherSuite& suite, u64 seed, u32 steps)
+// every member checked at every epoch; what it reached is added to `reached`.
+void run_group(const mls::CipherSuite& suite, u64 seed, u32 steps, Reached& reached)
 {
     constexpr u32          seat_count = 16U;
     Choices                choices(seed);
@@ -219,10 +230,10 @@ void run_group(const mls::CipherSuite& suite, u64 seed, u32 steps)
     REQUIRE(seats[0].tree.create(suite, seats[0].id.leaf) == CryptoError::None);
     REQUIRE(seats[0].keys.init(suite, 0U, view(seats[0].id.hpke_private)) == CryptoError::None);
     seats[0].active = true;
-    usize adds           = 0U;
-    usize updates        = 0U;
-    usize removes        = 0U;
-    usize unmerged_paths = 0U;
+    usize& adds           = reached.adds;
+    usize& updates        = reached.updates;
+    usize& removes        = reached.removes;
+    usize& unmerged_paths = reached.unmerged_paths;
 
     for (u32 step = 0U; step < steps; ++step)
     {
@@ -366,11 +377,6 @@ void run_group(const mls::CipherSuite& suite, u64 seed, u32 steps)
             unmerged_paths += lead.tree.parent_node(node, parent) && parent.unmerged_count() != 0U ? 1U : 0U;
         }
     }
-    // The run reached every operation, and trees holding unmerged leaves.
-    CHECK(adds > 0U);
-    CHECK(updates > 0U);
-    CHECK(removes > 0U);
-    CHECK(unmerged_paths > 0U);
 }
 
 // A small group built through the API: `members` leaves, each added and then committing in turn, so every parent
@@ -662,7 +668,17 @@ TEST_CASE("MLS: groups that add, update, remove and commit at random keep one tr
     for (const mls::CipherSuite& suite : mls::cipher_suites())
     {
         INFO("suite " << suite.id);
-        run_group(suite, 0x9E3779B97F4A7C15ULL + suite.id, suite.id == 1U ? 160U : 80U);
+        // Runs of fresh seeds until every operation and a tree holding unmerged leaves were reached (whether a run
+        // of 80 commits leaves a leaf unmerged depends on its choices), at most four.
+        Reached reached;
+        for (u64 run = 0U; run < 4U && !reached.all(); ++run)
+        {
+            run_group(suite, 0x9E3779B97F4A7C15ULL * (run + 1U) + suite.id, suite.id == 1U ? 160U : 80U, reached);
+        }
+        CHECK(reached.adds > 0U);
+        CHECK(reached.updates > 0U);
+        CHECK(reached.removes > 0U);
+        CHECK(reached.unmerged_paths > 0U);
     }
 }
 

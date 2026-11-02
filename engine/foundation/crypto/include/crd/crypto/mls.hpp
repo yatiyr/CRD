@@ -41,7 +41,7 @@ namespace crd::crypto::mls
 struct CipherSuite
 {
     u16         id = 0U; // the MLS Cipher Suites codepoint
-    AlgorithmId kem{};   // the DHKEM's group (hpke.hpp)
+    AlgorithmId kem{};   // the HPKE KEM, named as hpke.hpp names it
     AlgorithmId kdf{};
     AlgorithmId aead{};
     AlgorithmId signature{};
@@ -51,7 +51,9 @@ struct CipherSuite
     [[nodiscard]] usize hash_bytes() const noexcept { return hkdf_hash_bytes(kdf); }
 };
 
-// The suites of the profile, in codepoint order: 0x0001, 0x0002, 0x0003 and 0x0007 (decision M2).
+// The suites of the profile, in codepoint order (decision M2): RFC 9420's 0x0001, 0x0002, 0x0003 and 0x0007, and the
+// post-quantum suites of draft-ietf-mls-pq-ciphersuites, 0x0010 to 0x0017 (an ML-KEM or hybrid KEM, a classical
+// signature) and 0x0020 to 0x0022 (ML-DSA, signed purely with an empty context).
 [[nodiscard]] cont::ConstSpan<CipherSuite> cipher_suites() noexcept;
 // The suite `id` names; null for a suite outside the profile.
 [[nodiscard]] const CipherSuite* cipher_suite(u16 id) noexcept;
@@ -164,6 +166,12 @@ inline constexpr cont::StringView kLabelPrefix = "MLS 1.0 ";
 // The longest hash and AEAD key of the profile's suites (SHA-384, AES-256): every secret a tree or an epoch holds fits.
 inline constexpr usize kMaxHashBytes    = 48U;
 inline constexpr usize kMaxAeadKeyBytes = 32U;
+// The longest HPKE public key and encapsulation (MLKEM1024-P384's, 1568 + 97 bytes), signature public key and
+// signature (ML-DSA-87's) of the profile's suites: one buffer of each holds any suite's.
+inline constexpr usize kMaxNodeKeyBytes        = 1665U;
+inline constexpr usize kMaxEncapsulationBytes  = 1665U;
+inline constexpr usize kMaxSignatureKeyBytes   = 2592U;
+inline constexpr usize kMaxSuiteSignatureBytes = 4627U;
 
 // ---- The key schedule (section 8) ----
 

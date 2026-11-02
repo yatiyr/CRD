@@ -3,8 +3,8 @@
 // docs/design/network-foundation.md#mls, M3 layers 9, 10a and 10b) under the bounded fuzz harness (REPO.DEV.9;
 // docs/design/test-instruments.md).
 //
-// Input. The first byte picks the mode, the second the cipher suite and the wire format (public or private), the rest
-// is the mode's data, read field by field (a short input ends the case). Each case starts a fresh receiver: a member
+// Input. The first byte picks the mode, the second the cipher suite (its bits above the lowest, modulo the profile's
+// fifteen) and the wire format (its lowest bit: public or private), the rest is the mode's data, read field by field (a short input ends the case). Each case starts a fresh receiver: a member
 // that joined an honest group of three from its Welcome, in the epoch where another member proposed an Update and the
 // creator committed it with a path, and where the creator published the epoch's GroupInfo with its external key, from
 // which a fourth member joined by an external commit. In the same epoch the creator also committed a ReInit by value,
@@ -184,13 +184,14 @@ void seal_honest(const mls::CipherSuite& suite, mls::WireFormat format, Honest& 
 
 Honest& honest_of(u8 selector)
 {
-    static Honest honests[8];
-    static bool   sealed[8] = {};
-    const usize   at        = selector % 8U;
+    static Honest honests[2U * kSuites];
+    static bool   sealed[2U * kSuites] = {};
+    const usize   at                   = selector % (2U * kSuites);
     if (!sealed[at])
     {
-        seal_honest(mls::cipher_suites()[at % 4U],
-                    at < 4U ? mls::WireFormat::PublicMessage : mls::WireFormat::PrivateMessage, honests[at]);
+        CRD_FUZZ_REQUIRE(mls::cipher_suites().size() == kSuites);
+        seal_honest(mls::cipher_suites()[at / 2U],
+                    (at & 1U) == 0U ? mls::WireFormat::PublicMessage : mls::WireFormat::PrivateMessage, honests[at]);
         sealed[at] = true;
     }
     return honests[at];
@@ -377,20 +378,39 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     sink.add("message-welcome", welcome, sizeof(welcome));
     sink.add("message-short", truncated, sizeof(truncated));
 
-    // The honest commit and proposal unchanged in each suite and wire format, and changed at offsets across them.
-    const char* commit_names[8]   = {"commit-unchanged-0", "commit-unchanged-1", "commit-unchanged-2",
-                                     "commit-unchanged-3", "commit-unchanged-4", "commit-unchanged-5",
-                                     "commit-unchanged-6", "commit-unchanged-7"};
-    const char* proposal_names[8] = {"proposal-unchanged-0", "proposal-unchanged-1", "proposal-unchanged-2",
-                                     "proposal-unchanged-3", "proposal-unchanged-4", "proposal-unchanged-5",
-                                     "proposal-unchanged-6", "proposal-unchanged-7"};
-    for (u8 selector = 0U; selector < 8U; ++selector)
+    // The honest commit, proposal and ReInit's commit unchanged in each suite and wire format; the external commit,
+    // GroupInfo and resumed Welcome unchanged in each suite; then each changed at offsets across it.
+    char name[48];
+    for (u8 selector = 0U; selector < 2U * kSuites; ++selector)
     {
         const u8 commit[]   = {1U, selector, 0xFFU, 0xFFU, 0x00U};
         const u8 proposal[] = {2U, selector, 0xFFU, 0xFFU, 0x00U};
-        sink.add(commit_names[selector], commit, sizeof(commit));
-        sink.add(proposal_names[selector], proposal, sizeof(proposal));
+        const u8 reinit[]   = {5U, selector, 0xFFU, 0xFFU, 0x00U};
+        std::snprintf(name, sizeof(name), "commit-unchanged-%u", static_cast<unsigned>(selector));
+        sink.add(name, commit, sizeof(commit));
+        std::snprintf(name, sizeof(name), "proposal-unchanged-%u", static_cast<unsigned>(selector));
+        sink.add(name, proposal, sizeof(proposal));
+        std::snprintf(name, sizeof(name), "reinit-unchanged-%u", static_cast<unsigned>(selector));
+        sink.add(name, reinit, sizeof(reinit));
     }
+    for (u8 suite = 0U; suite < kSuites; ++suite)
+    {
+        const u8 selector   = static_cast<u8>(2U * suite);
+        const u8 external[] = {3U, selector, 0xFFU, 0xFFU, 0x00U};
+        const u8 info[]     = {4U, selector, 0xFFU, 0xFFU, 0x00U};
+        const u8 resumed[]  = {6U, selector, 0xFFU, 0xFFU, 0x00U};
+        std::snprintf(name, sizeof(name), "external-unchanged-%u", static_cast<unsigned>(suite));
+        sink.add(name, external, sizeof(external));
+        std::snprintf(name, sizeof(name), "info-unchanged-%u", static_cast<unsigned>(suite));
+        sink.add(name, info, sizeof(info));
+        std::snprintf(name, sizeof(name), "resumed-unchanged-%u", static_cast<unsigned>(suite));
+        sink.add(name, resumed, sizeof(resumed));
+    }
+    // The ML-DSA-87 suite's commit changed deep in its signature, in both wire formats.
+    const u8 deep_public[]  = {1U, 28U, 0x10U, 0x00U, 0x01U};
+    const u8 deep_private[] = {1U, 29U, 0x10U, 0x00U, 0x01U};
+    sink.add("commit-mldsa87-at-4096", deep_public, sizeof(deep_public));
+    sink.add("commit-mldsa87-private-at-4096", deep_private, sizeof(deep_private));
     const u16   offsets[]  = {0U, 3U, 8U, 20U, 40U, 90U, 160U, 300U, 500U, 800U, 1200U, 1600U};
     const char* names[12]  = {"commit-at-0",   "commit-at-3",   "commit-at-8",    "commit-at-20",
                               "commit-at-40",  "commit-at-90",  "commit-at-160",  "commit-at-300",
@@ -408,17 +428,6 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
         sink.add(pnames[i], proposal, sizeof(proposal));
     }
 
-    // The honest external commit and GroupInfo unchanged in each suite, and changed at offsets across them.
-    const char* external_names[4] = {"external-unchanged-0", "external-unchanged-1", "external-unchanged-2",
-                                     "external-unchanged-3"};
-    const char* info_names[4]     = {"info-unchanged-0", "info-unchanged-1", "info-unchanged-2", "info-unchanged-3"};
-    for (u8 selector = 0U; selector < 4U; ++selector)
-    {
-        const u8 external[] = {3U, selector, 0xFFU, 0xFFU, 0x00U};
-        const u8 info[]     = {4U, selector, 0xFFU, 0xFFU, 0x00U};
-        sink.add(external_names[selector], external, sizeof(external));
-        sink.add(info_names[selector], info, sizeof(info));
-    }
     const u16   at[]       = {2U, 12U, 30U, 70U, 150U, 400U, 700U, 1000U};
     const char* xnames[8]  = {"external-at-2",   "external-at-12",  "external-at-30",  "external-at-70",
                               "external-at-150", "external-at-400", "external-at-700", "external-at-1000"};
@@ -426,31 +435,14 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
                               "info-at-150", "info-at-400", "info-at-700", "info-at-1000"};
     for (usize i = 0U; i < 8U; ++i)
     {
-        const u8 external[] = {3U, static_cast<u8>(i % 4U), static_cast<u8>(at[i] >> 8U), static_cast<u8>(at[i]),
-                               0x04U};
-        const u8 info[]     = {4U, static_cast<u8>((i + 1U) % 4U), static_cast<u8>(at[i] >> 8U),
+        const u8 external[] = {3U, static_cast<u8>(2U * (i % 4U)), static_cast<u8>(at[i] >> 8U),
+                               static_cast<u8>(at[i]), 0x04U};
+        const u8 info[]     = {4U, static_cast<u8>(2U * ((i + 1U) % 4U)), static_cast<u8>(at[i] >> 8U),
                                static_cast<u8>(at[i]), 0x20U};
         sink.add(xnames[i], external, sizeof(external));
         sink.add(inames[i], info, sizeof(info));
     }
 
-    // The honest ReInit's commit in each suite and wire format and the resumed Welcome in each suite, unchanged and
-    // changed at offsets across them.
-    const char* reinit_names[8]  = {"reinit-unchanged-0", "reinit-unchanged-1", "reinit-unchanged-2",
-                                    "reinit-unchanged-3", "reinit-unchanged-4", "reinit-unchanged-5",
-                                    "reinit-unchanged-6", "reinit-unchanged-7"};
-    const char* resumed_names[4] = {"resumed-unchanged-0", "resumed-unchanged-1", "resumed-unchanged-2",
-                                    "resumed-unchanged-3"};
-    for (u8 selector = 0U; selector < 8U; ++selector)
-    {
-        const u8 reinit[] = {5U, selector, 0xFFU, 0xFFU, 0x00U};
-        sink.add(reinit_names[selector], reinit, sizeof(reinit));
-    }
-    for (u8 selector = 0U; selector < 4U; ++selector)
-    {
-        const u8 resumed[] = {6U, selector, 0xFFU, 0xFFU, 0x00U};
-        sink.add(resumed_names[selector], resumed, sizeof(resumed));
-    }
     const u16   spots[]    = {1U, 6U, 24U, 60U, 110U, 200U, 330U, 520U};
     const char* rnames[8]  = {"reinit-at-1",   "reinit-at-6",   "reinit-at-24",  "reinit-at-60",
                               "reinit-at-110", "reinit-at-200", "reinit-at-330", "reinit-at-520"};
@@ -460,7 +452,7 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     {
         const u8 reinit[]  = {5U, static_cast<u8>((i + 5U) % 8U), static_cast<u8>(spots[i] >> 8U),
                               static_cast<u8>(spots[i]), 0x10U};
-        const u8 resumed[] = {6U, static_cast<u8>(i % 4U), static_cast<u8>(spots[i] >> 8U),
+        const u8 resumed[] = {6U, static_cast<u8>(2U * (i % 4U)), static_cast<u8>(spots[i] >> 8U),
                               static_cast<u8>(spots[i]), 0x02U};
         sink.add(rnames[i], reinit, sizeof(reinit));
         sink.add(wnames[i], resumed, sizeof(resumed));

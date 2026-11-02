@@ -8,6 +8,7 @@
 
 #include <crd/crypto/mls_group.hpp>
 
+#include <cstdio>
 #include <cstring>
 
 namespace crd::crypto::fuzz_mls
@@ -21,6 +22,9 @@ using crd::containers::Array;
 using crd::containers::ConstSpan;
 using crd::containers::Span;
 using crd::containers::WireWriter;
+
+// The profile's cipher suites (decision M2): honest groups are kept per suite, the count checked where they are made.
+inline constexpr usize kSuites = 15U;
 
 // The input read field by field; a short input ends the case (ok() is false).
 class Reader

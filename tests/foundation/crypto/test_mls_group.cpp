@@ -375,7 +375,7 @@ Bytes hand_welcome(const mls::CipherSuite& suite, const mls::KeyPackage& package
     }
     Bytes reference = filled(hash, 0U);
     REQUIRE(mls::key_package_ref(suite, package, span_of(reference)) == CryptoError::None);
-    Bytes kem_output = filled(hpke_sizes(suite.kem).public_key, 0U);
+    Bytes kem_output = filled(hpke_sizes(suite.kem).encapsulation, 0U);
     Bytes ciphertext = filled(secrets.size() + kHpkeTagBytes, 0U);
     REQUIRE(mls::encrypt_with_label(suite, package.init_key, "Welcome", view(sealed), view(secrets),
                                     span_of(kem_output), span_of(ciphertext)) == CryptoError::None);
@@ -1073,8 +1073,16 @@ TEST_CASE("MLS: extension lists, capabilities and the group's extensions", "[cry
     CHECK(mls::supports_extension(caps, 0xFF00U));
     CHECK_FALSE(mls::supports_extension(caps, 0xFF01U));
     CHECK(mls::supports_proposal(caps, 7U));
-    CHECK(mls::supports_proposal(caps, 0x0A0AU));
+    CHECK(mls::supports_proposal(caps, 0xFF00U));
     CHECK_FALSE(mls::supports_proposal(caps, 8U));
+    // A GREASE value is never supported, listed or not: capabilities are compared without them (section 13.5).
+    CHECK(mls::lists(view(listed), 0x0A0AU));
+    CHECK_FALSE(mls::supports_extension(caps, 0x0A0AU));
+    CHECK_FALSE(mls::supports_proposal(caps, 0x0A0AU));
+    caps.credentials = view(listed);
+    CHECK(mls::supports_credential(caps, 0xFF00U));
+    CHECK_FALSE(mls::supports_credential(caps, 0x0A0AU));
+    CHECK_FALSE(mls::supports_credential(caps, 1U));
 
     // Distinct types: pair by pair up to 32 entries, by a bitmap past them; a body that is not a list is refused.
     CHECK(mls::extensions_distinct({}));

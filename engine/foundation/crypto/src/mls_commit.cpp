@@ -60,8 +60,8 @@ bool external_commit_admits(u16 type) noexcept
 // Whether `signer` holds the suite's signature algorithm and the key `signature_key`.
 bool signs_for(const CipherSuite& suite, const Signer& signer, cont::ConstSpan<u8> signature_key) noexcept
 {
-    u8          key[kMaxNodeKeyBytes] = {};
-    const usize bytes                 = signature_sizes(suite.signature).public_key;
+    u8          key[kMaxSignatureKeyBytes] = {};
+    const usize bytes                      = signature_sizes(suite.signature).public_key;
     return signer.algorithm() == suite.signature && bytes <= sizeof(key) &&
            signer.public_key(cont::Span<u8>(key, bytes)) == CryptoError::None &&
            same_bytes(cont::ConstSpan<u8>(key, bytes), signature_key);
@@ -317,7 +317,7 @@ CryptoError Group::stage_list(const Sender& committer, Plan& plan, StagedCommit&
             break;
         case code(ProposalType::ExternalInit):
             // Only an external commit holds one, its kem_output an encapsulation of the suite's KEM.
-            if (!external || proposal.kem_output.size() != hpke_sizes(suite.kem).public_key)
+            if (!external || proposal.kem_output.size() != hpke_sizes(suite.kem).encapsulation)
             {
                 return CryptoError::Malformed;
             }
@@ -999,8 +999,8 @@ CryptoError Group::send_proposal(const Signer& signer, const Proposal& proposal,
     put_proposal(writer, proposal);
     const FramedContent content{view(m_group_id), m_now.epoch, {SenderType::Member, own_leaf()},
                                 options.authenticated_data, ContentType::Proposal, body.span()};
-    u8    signature[kMaxSignatureBytes] = {};
-    usize written                       = 0U;
+    u8    signature[kMaxSuiteSignatureBytes] = {};
+    usize written                            = 0U;
     error = sign_own(signer, options.wire_format, content, signature, written);
     const ContentAuth auth{cont::ConstSpan<u8>(signature, written), {}};
     if (error == CryptoError::None)
@@ -1060,9 +1060,9 @@ CryptoError Group::propose_update(const Signer& signer, const SendOptions& optio
     const usize        npk   = hpke_sizes(suite.kem).public_key;
     HpkeKey            key;
     LeafNode           leaf{};
-    u8                 public_key[kMaxNodeKeyBytes]  = {};
-    u8                 signature[kMaxSignatureBytes] = {};
-    usize              written                       = 0U;
+    u8                 public_key[kMaxNodeKeyBytes]       = {};
+    u8                 signature[kMaxSuiteSignatureBytes] = {};
+    usize              written                            = 0U;
     (void)m_now.tree.leaf_node(own_leaf(), leaf);
     error = key.generate(suite.kem);
     if (error == CryptoError::None)
@@ -1118,8 +1118,8 @@ CryptoError Group::protect(const Signer& signer, cont::ConstSpan<u8> data, const
     }
     const FramedContent content{view(m_group_id), m_now.epoch, {SenderType::Member, own_leaf()},
                                 options.authenticated_data, ContentType::Application, data};
-    u8    signature[kMaxSignatureBytes] = {};
-    usize written                       = 0U;
+    u8    signature[kMaxSuiteSignatureBytes] = {};
+    usize written                            = 0U;
     error = sign_own(signer, options.wire_format, content, signature, written);
     return error == CryptoError::None ? wrap(options, content, {cont::ConstSpan<u8>(signature, written), {}}, out)
                                       : error;
@@ -1343,9 +1343,10 @@ CryptoError commit_body(const Items& items, bool path, cont::ConstSpan<u8> path_
 }
 
 // An Extension list's body: the ratchet tree's extension when `tree` is given, the external_pub extension when
-// `external_pub` is not empty, then `more`.
-CryptoError group_info_extensions(const RatchetTree* tree, cont::ConstSpan<u8> external_pub, cont::ConstSpan<u8> more,
-                                  cont::Array<u8>& out) noexcept
+// `external_pub` is not empty, an empty extension of a random GREASE type when `with_grease` and `more` names none
+// (section 13.5), then `more`.
+CryptoError group_info_extensions(const RatchetTree* tree, cont::ConstSpan<u8> external_pub, bool with_grease,
+                                  cont::ConstSpan<u8> more, cont::Array<u8>& out) noexcept
 {
     out.clear();
     const usize tree_bytes = tree != nullptr ? tree->encoded_bytes() : 0U;
@@ -1354,8 +1355,15 @@ CryptoError group_info_extensions(const RatchetTree* tree, cont::ConstSpan<u8> e
     {
         return CryptoError::BadLength;
     }
+    const auto plain       = [](u16 type, cont::ConstSpan<u8>) { return !grease(type); };
+    const bool add_grease  = with_grease && each_extension(more, plain);
+    u16        grease_type = 0U;
+    if (add_grease && random_grease(grease_type) != CryptoError::None)
+    {
+        return CryptoError::ProviderFailure;
+    }
     const usize head = (tree != nullptr ? 2U + vector_bytes(tree_bytes) : 0U) +
-                       (external_pub.empty() ? 0U : 2U + vector_bytes(pub_bytes));
+                       (external_pub.empty() ? 0U : 2U + vector_bytes(pub_bytes)) + (add_grease ? 3U : 0U);
     if (!out.try_reserve(head + more.size()))
     {
         return CryptoError::ProviderFailure;
@@ -1373,6 +1381,11 @@ CryptoError group_info_extensions(const RatchetTree* tree, cont::ConstSpan<u8> e
         writer.put_u16(static_cast<u16>(ExtensionType::ExternalPub));
         put_varint(writer, pub_bytes);
         put_external_pub(writer, external_pub);
+    }
+    if (add_grease)
+    {
+        writer.put_u16(grease_type);
+        put_varint(writer, 0U);
     }
     writer.put_bytes(more);
     return CryptoError::None;
@@ -1403,7 +1416,7 @@ CryptoError Group::seal_group_info(const Signer& signer, u32 signer_leaf, const 
     {
         error = group_info_extensions(options.ratchet_tree ? &epoch.tree : nullptr,
                                       options.external_pub ? cont::ConstSpan<u8>(external, npk) : cont::ConstSpan<u8>(),
-                                      options.extensions, extensions);
+                                      options.grease, options.extensions, extensions);
     }
     GroupInfo info;
     info.context          = {suite.id,           view(m_group_id), epoch.epoch, epoch.tree.root_hash(),
@@ -1411,8 +1424,8 @@ CryptoError Group::seal_group_info(const Signer& signer, u32 signer_leaf, const 
     info.extensions       = view(extensions);
     info.confirmation_tag = view(epoch.tag);
     info.signer           = signer_leaf;
-    u8    signature[kMaxSignatureBytes] = {};
-    usize written                       = 0U;
+    u8    signature[kMaxSuiteSignatureBytes] = {};
+    usize written                            = 0U;
     if (error == CryptoError::None)
     {
         error = sign_group_info(suite, signer, info, signature, written);
@@ -1532,9 +1545,9 @@ CryptoError Group::commit_with(const Signer& signer, const CommitOptions& option
     }
     const FramedContent content{view(m_group_id),           m_now.epoch,          me,
                                 options.send.authenticated_data, ContentType::Commit, view(body)};
-    u8    signature[kMaxSignatureBytes] = {};
-    usize written                       = 0U;
-    u8    tag[kMaxHashBytes]            = {};
+    u8    signature[kMaxSuiteSignatureBytes] = {};
+    usize written                            = 0U;
+    u8    tag[kMaxHashBytes]                 = {};
     if (error == CryptoError::None)
     {
         error = sign_own(signer, options.send.wire_format, content, signature, written);
@@ -1703,14 +1716,14 @@ CryptoError Group::join_external(const Signer& signer, const LeafNode& leaf, con
 
     // The list (section 12.4.3.2), all by value: the ExternalInit with its init secret exported to the external key
     // (section 8.3), the resync's Remove and the PSKs.
-    const usize           npk                          = hpke_sizes(suite->kem).public_key;
-    u8                    kem_output[kMaxNodeKeyBytes] = {};
+    const usize           nenc                               = hpke_sizes(suite->kem).encapsulation;
+    u8                    kem_output[kMaxEncapsulationBytes] = {};
     Secret                init;
     cont::Array<Proposal> proposals;
     if (error == CryptoError::None)
     {
         error = hpke_export(suite->hpke(), external, {}, label_of(kExternalInitLabel),
-                            cont::Span<u8>(kem_output, npk), init.span(hash));
+                            cont::Span<u8>(kem_output, nenc), init.span(hash));
     }
     if (error == CryptoError::None && !proposals.try_reserve(2U + options.psks.size()))
     {
@@ -1720,7 +1733,7 @@ CryptoError Group::join_external(const Signer& signer, const LeafNode& leaf, con
     {
         Proposal external_init;
         external_init.type       = code(ProposalType::ExternalInit);
-        external_init.kem_output = cont::ConstSpan<u8>(kem_output, npk);
+        external_init.kem_output = cont::ConstSpan<u8>(kem_output, nenc);
         proposals.push_back(external_init);
         if (options.resync)
         {
@@ -1791,9 +1804,9 @@ CryptoError Group::join_external(const Signer& signer, const LeafNode& leaf, con
     }
     const FramedContent content{view(m_group_id),           m_now.epoch,          {SenderType::NewMemberCommit, 0U},
                                 options.authenticated_data, ContentType::Commit, view(body)};
-    u8    signature[kMaxSignatureBytes] = {};
-    usize written                       = 0U;
-    u8    tag[kMaxHashBytes]            = {};
+    u8    signature[kMaxSuiteSignatureBytes] = {};
+    usize written                            = 0U;
+    u8    tag[kMaxHashBytes]                 = {};
     if (error == CryptoError::None)
     {
         error = sign_own(signer, WireFormat::PublicMessage, content, signature, written);

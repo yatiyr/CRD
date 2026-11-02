@@ -28,6 +28,30 @@ constexpr CipherSuite kSuites[] = {
      AlgorithmId::Chacha20Poly1305, AlgorithmId::Ed25519},
     {iana::kMls256Dhkemp384Aes256gcmSha384P384, AlgorithmId::Secp384r1, AlgorithmId::HkdfSha384,
      AlgorithmId::Aes256Gcm, AlgorithmId::EcdsaSecp384r1Sha384},
+    // draft-ietf-mls-pq-ciphersuites-07 (decision M2): codepoints IANA does not list yet, so the register marks them
+    // unverified and the names say so here.
+    {iana::unverified::kMls128Mlkem768x25519Aes128gcmSha256Ed25519, AlgorithmId::X25519Mlkem768,
+     AlgorithmId::HkdfSha256, AlgorithmId::Aes128Gcm, AlgorithmId::Ed25519},
+    {iana::unverified::kMls128Mlkem768x25519Aes256gcmSha384Ed25519, AlgorithmId::X25519Mlkem768,
+     AlgorithmId::HkdfSha384, AlgorithmId::Aes256Gcm, AlgorithmId::Ed25519},
+    {iana::unverified::kMls128Mlkem768p256Aes128gcmSha256P256, AlgorithmId::Secp256r1Mlkem768,
+     AlgorithmId::HkdfSha256, AlgorithmId::Aes128Gcm, AlgorithmId::EcdsaSecp256r1Sha256},
+    {iana::unverified::kMls128Mlkem768p256Aes256gcmSha384P256, AlgorithmId::Secp256r1Mlkem768,
+     AlgorithmId::HkdfSha384, AlgorithmId::Aes256Gcm, AlgorithmId::EcdsaSecp256r1Sha256},
+    {iana::unverified::kMls192Mlkem1024p384Aes256gcmSha384P384, AlgorithmId::Secp384r1Mlkem1024,
+     AlgorithmId::HkdfSha384, AlgorithmId::Aes256Gcm, AlgorithmId::EcdsaSecp384r1Sha384},
+    {iana::unverified::kMls128Mlkem768Aes256gcmSha384Ed25519, AlgorithmId::MlKem768, AlgorithmId::HkdfSha384,
+     AlgorithmId::Aes256Gcm, AlgorithmId::Ed25519},
+    {iana::unverified::kMls128Mlkem768Aes256gcmSha384P256, AlgorithmId::MlKem768, AlgorithmId::HkdfSha384,
+     AlgorithmId::Aes256Gcm, AlgorithmId::EcdsaSecp256r1Sha256},
+    {iana::unverified::kMls192Mlkem1024Aes256gcmSha384P384, AlgorithmId::MlKem1024, AlgorithmId::HkdfSha384,
+     AlgorithmId::Aes256Gcm, AlgorithmId::EcdsaSecp384r1Sha384},
+    {iana::unverified::kMls128Mlkem768x25519Chacha20poly1305Sha384Mldsa44, AlgorithmId::X25519Mlkem768,
+     AlgorithmId::HkdfSha384, AlgorithmId::Chacha20Poly1305, AlgorithmId::MlDsa44},
+    {iana::unverified::kMls192Mlkem768Aes256gcmSha384Mldsa65, AlgorithmId::MlKem768, AlgorithmId::HkdfSha384,
+     AlgorithmId::Aes256Gcm, AlgorithmId::MlDsa65},
+    {iana::unverified::kMls256Mlkem1024Aes256gcmSha384Mldsa87, AlgorithmId::MlKem1024, AlgorithmId::HkdfSha384,
+     AlgorithmId::Aes256Gcm, AlgorithmId::MlDsa87},
 };
 
 constexpr usize kMaxExpandBytes = 0xFFFFU; // KDFLabel.length is a uint16

@@ -826,7 +826,7 @@ TEST_CASE("MLS: public messages from members and from outside the group", "[cryp
             const Bytes              signature = sign(suite, member, WireFormat::PublicMessage, content, context);
             const ConstSpan<u8>      own_tag = c.type == ContentType::Commit ? ConstSpan<u8>(tag) : ConstSpan<u8>();
             const mls::ContentAuth   auth{signature, own_tag};
-            Bytes                    out     = filled(1024U, 0U);
+            Bytes                    out     = filled(1024U + signature.size(), 0U);
             usize                    written = 0U;
             REQUIRE(mls::protect_public(suite, key, context, content, auth, span_of(out), written) ==
                     CryptoError::None);
@@ -865,7 +865,7 @@ TEST_CASE("MLS: public messages from members and from outside the group", "[cryp
             mls::PublicMessage wrong_tag = received;
             wrong_tag.auth.confirmation_tag = c.type == ContentType::Commit ? ConstSpan<u8>() : ConstSpan<u8>(tag);
             CHECK(mls::verify_public(suite, key, context, wrong_tag) == CryptoError::Malformed);
-            Bytes again   = filled(1024U, 0U);
+            Bytes again   = filled(1024U + signature.size(), 0U);
             usize written_again = 0U;
             CHECK(mls::protect_public(suite, key, context, received.content, wrong_tag.auth, span_of(again),
                                       written_again) == CryptoError::Malformed);

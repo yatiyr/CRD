@@ -11,7 +11,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <bit>
+#include <iterator>
 #include <optional>
 
 namespace
@@ -47,24 +49,89 @@ std::optional<u32> optional_at(const JsonFile& file, u32 array, u32 index)
 
 TEST_CASE("MLS: the cipher suites of the profile", "[crypto][net-2][mls]")
 {
+    // RFC 9420 section 17.1 and draft-ietf-mls-pq-ciphersuites-07's tables, restated.
+    namespace pq = iana::unverified;
+    const mls::CipherSuite expected[] = {
+        {iana::kMls128Dhkemx25519Aes128gcmSha256Ed25519, AlgorithmId::X25519, AlgorithmId::HkdfSha256,
+         AlgorithmId::Aes128Gcm, AlgorithmId::Ed25519},
+        {iana::kMls128Dhkemp256Aes128gcmSha256P256, AlgorithmId::Secp256r1, AlgorithmId::HkdfSha256,
+         AlgorithmId::Aes128Gcm, AlgorithmId::EcdsaSecp256r1Sha256},
+        {iana::kMls128Dhkemx25519Chacha20poly1305Sha256Ed25519, AlgorithmId::X25519, AlgorithmId::HkdfSha256,
+         AlgorithmId::Chacha20Poly1305, AlgorithmId::Ed25519},
+        {iana::kMls256Dhkemp384Aes256gcmSha384P384, AlgorithmId::Secp384r1, AlgorithmId::HkdfSha384,
+         AlgorithmId::Aes256Gcm, AlgorithmId::EcdsaSecp384r1Sha384},
+        {0x0010U, AlgorithmId::X25519Mlkem768, AlgorithmId::HkdfSha256, AlgorithmId::Aes128Gcm, AlgorithmId::Ed25519},
+        {0x0011U, AlgorithmId::X25519Mlkem768, AlgorithmId::HkdfSha384, AlgorithmId::Aes256Gcm, AlgorithmId::Ed25519},
+        {0x0012U, AlgorithmId::Secp256r1Mlkem768, AlgorithmId::HkdfSha256, AlgorithmId::Aes128Gcm,
+         AlgorithmId::EcdsaSecp256r1Sha256},
+        {0x0013U, AlgorithmId::Secp256r1Mlkem768, AlgorithmId::HkdfSha384, AlgorithmId::Aes256Gcm,
+         AlgorithmId::EcdsaSecp256r1Sha256},
+        {0x0014U, AlgorithmId::Secp384r1Mlkem1024, AlgorithmId::HkdfSha384, AlgorithmId::Aes256Gcm,
+         AlgorithmId::EcdsaSecp384r1Sha384},
+        {0x0015U, AlgorithmId::MlKem768, AlgorithmId::HkdfSha384, AlgorithmId::Aes256Gcm, AlgorithmId::Ed25519},
+        {0x0016U, AlgorithmId::MlKem768, AlgorithmId::HkdfSha384, AlgorithmId::Aes256Gcm,
+         AlgorithmId::EcdsaSecp256r1Sha256},
+        {0x0017U, AlgorithmId::MlKem1024, AlgorithmId::HkdfSha384, AlgorithmId::Aes256Gcm,
+         AlgorithmId::EcdsaSecp384r1Sha384},
+        {0x0020U, AlgorithmId::X25519Mlkem768, AlgorithmId::HkdfSha384, AlgorithmId::Chacha20Poly1305,
+         AlgorithmId::MlDsa44},
+        {0x0021U, AlgorithmId::MlKem768, AlgorithmId::HkdfSha384, AlgorithmId::Aes256Gcm, AlgorithmId::MlDsa65},
+        {0x0022U, AlgorithmId::MlKem1024, AlgorithmId::HkdfSha384, AlgorithmId::Aes256Gcm, AlgorithmId::MlDsa87},
+    };
+    // The register's (unverified) constants are the draft's codepoints.
+    const u16 drafted[] = {pq::kMls128Mlkem768x25519Aes128gcmSha256Ed25519,
+                           pq::kMls128Mlkem768x25519Aes256gcmSha384Ed25519,
+                           pq::kMls128Mlkem768p256Aes128gcmSha256P256,
+                           pq::kMls128Mlkem768p256Aes256gcmSha384P256,
+                           pq::kMls192Mlkem1024p384Aes256gcmSha384P384,
+                           pq::kMls128Mlkem768Aes256gcmSha384Ed25519,
+                           pq::kMls128Mlkem768Aes256gcmSha384P256,
+                           pq::kMls192Mlkem1024Aes256gcmSha384P384,
+                           pq::kMls128Mlkem768x25519Chacha20poly1305Sha384Mldsa44,
+                           pq::kMls192Mlkem768Aes256gcmSha384Mldsa65,
+                           pq::kMls256Mlkem1024Aes256gcmSha384Mldsa87};
+    for (usize i = 0U; i < std::size(drafted); ++i)
+    {
+        CHECK(drafted[i] == expected[4U + i].id);
+    }
     const ConstSpan<mls::CipherSuite> suites = mls::cipher_suites();
-    REQUIRE(suites.size() == 4U);
-    const u16 ids[] = {iana::kMls128Dhkemx25519Aes128gcmSha256Ed25519, iana::kMls128Dhkemp256Aes128gcmSha256P256,
-                       iana::kMls128Dhkemx25519Chacha20poly1305Sha256Ed25519,
-                       iana::kMls256Dhkemp384Aes256gcmSha384P384};
+    REQUIRE(suites.size() == std::size(expected));
+    usize node_key      = 0U;
+    usize encapsulation = 0U;
+    usize signature_key = 0U;
+    usize signature     = 0U;
+    usize hash          = 0U;
     for (usize i = 0U; i < suites.size(); ++i)
     {
-        CHECK(suites[i].id == ids[i]);
-        CHECK(mls::cipher_suite(ids[i]) == &suites[i]);
-        CHECK(hpke_supported(suites[i].hpke()));
-        CHECK(provider_implements(suites[i].signature));
+        const mls::CipherSuite& suite = suites[i];
+        CHECK(suite.id == expected[i].id);
+        CHECK(suite.kem == expected[i].kem);
+        CHECK(suite.kdf == expected[i].kdf);
+        CHECK(suite.aead == expected[i].aead);
+        CHECK(suite.signature == expected[i].signature);
+        CHECK(mls::cipher_suite(suite.id) == &suite);
+        CHECK(hpke_supported(suite.hpke()));
+        CHECK(provider_implements(suite.signature));
+        node_key      = std::max(node_key, hpke_sizes(suite.kem).public_key);
+        encapsulation = std::max(encapsulation, hpke_sizes(suite.kem).encapsulation);
+        signature_key = std::max(signature_key, signature_sizes(suite.signature).public_key);
+        signature     = std::max(signature, signature_sizes(suite.signature).signature);
+        hash          = std::max(hash, suite.hash_bytes());
     }
+    // The buffers sized for the profile hold exactly its longest key, encapsulation, signature and hash.
+    CHECK(node_key == mls::kMaxNodeKeyBytes);
+    CHECK(encapsulation == mls::kMaxEncapsulationBytes);
+    CHECK(signature_key == mls::kMaxSignatureKeyBytes);
+    CHECK(signature == mls::kMaxSuiteSignatureBytes);
+    CHECK(hash == mls::kMaxHashBytes);
     CHECK(suite_of(0x0001U).hash_bytes() == 32U);
     CHECK(suite_of(0x0007U).hash_bytes() == 48U);
-    CHECK(suite_of(0x0002U).signature == AlgorithmId::EcdsaSecp256r1Sha256);
-    CHECK(suite_of(0x0003U).aead == AlgorithmId::Chacha20Poly1305);
-    // X448, Ed448 and P-521 (0x0004 to 0x0006), the reserved 0x0000, a GREASE value and the private range are not.
-    for (const u16 outside : {u16{0x0000U}, u16{0x0004U}, u16{0x0005U}, u16{0x0006U}, u16{0x0A0AU}, u16{0xF000U}})
+    CHECK(suite_of(0x0010U).hash_bytes() == 32U);
+    CHECK(suite_of(0x0022U).hash_bytes() == 48U);
+    // X448, Ed448 and P-521 (0x0004 to 0x0006), the reserved 0x0000, the unassigned codepoints between and after the
+    // post-quantum suites, a GREASE value and the private range are not.
+    for (const u16 outside : {u16{0x0000U}, u16{0x0004U}, u16{0x0005U}, u16{0x0006U}, u16{0x0008U}, u16{0x000FU},
+                              u16{0x0018U}, u16{0x001FU}, u16{0x0023U}, u16{0x0A0AU}, u16{0xF000U}})
     {
         CHECK(mls::cipher_suite(outside) == nullptr);
     }
@@ -380,7 +447,7 @@ TEST_CASE("MLS: every crypto-basics vector of the profile", "[crypto][net-2][mls
                                         vectors.hex(encrypt, "ciphertext"),
                                         Span<u8>(opened.data(), opened.size())) == CryptoError::None);
         CHECK(equal(opened, plaintext));
-        Bytes kem_output = filled(hpke_sizes(suite.kem).public_key, 0U);
+        Bytes kem_output = filled(hpke_sizes(suite.kem).encapsulation, 0U);
         Bytes ciphertext = filled(plaintext.size() + kHpkeTagBytes, 0U);
         REQUIRE(mls::encrypt_with_label(suite, encrypt_public, encrypt_label, context, plaintext,
                                         Span<u8>(kem_output.data(), kem_output.size()),

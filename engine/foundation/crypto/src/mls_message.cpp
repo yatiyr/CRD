@@ -367,6 +367,32 @@ void put_credential(cont::WireWriter& out, const Credential& credential) noexcep
     put_vector(out, credential.content);
 }
 
+// ---- GREASE ----
+
+bool grease(u16 value) noexcept
+{
+    const u32 bits  = value;
+    const u32 digit = bits >> 12U;
+    return (bits & 0x0F0FU) == 0x0A0AU && ((bits >> 4U) & 0x0FU) == digit && digit != 0x0FU;
+}
+
+CryptoError random_grease(u16& out) noexcept
+{
+    // A byte below 240 picks one of the fifteen without bias.
+    u8 byte = 0xFFU;
+    while (byte >= 240U)
+    {
+        if (random_bytes(cont::Span<u8>(&byte, 1U)) != CryptoError::None)
+        {
+            out = 0U;
+            return CryptoError::ProviderFailure;
+        }
+    }
+    const u32 digit = byte % 15U;
+    out             = static_cast<u16>(digit << 12U | 0x0A00U | digit << 4U | 0x000AU);
+    return CryptoError::None;
+}
+
 // ---- The structures a message carries ----
 
 bool take_extensions(cont::WireReader& in, cont::ConstSpan<u8>& body) noexcept

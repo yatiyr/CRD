@@ -302,7 +302,7 @@ inline Bytes frame(const mls::CipherSuite& suite, const Member& from, mls::Conte
     {
         key[0] ^= 0x01U;
     }
-    Bytes out = filled(1024U + body.size(), 0U);
+    Bytes out = filled(1024U + body.size() + signature.size(), 0U);
     REQUIRE(mls::protect_public(suite, view(key), context, content, auth, span_of(out), written) == CryptoError::None);
     out.resize(written);
     return out;

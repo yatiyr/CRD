@@ -21,9 +21,6 @@ namespace cont = crd::containers;
 [[nodiscard]] usize labelled_head_bytes(cont::StringView label, usize content_bytes) noexcept;
 void                put_labelled_head(cont::WireWriter& out, cont::StringView label, usize content_bytes) noexcept;
 
-// The longest HPKE public key of the profile: an uncompressed P-384 point.
-inline constexpr usize kMaxNodeKeyBytes = 97U;
-
 // The total of a structure's fields; a field that cannot be encoded (0 bytes) makes it 0.
 class Size
 {
@@ -68,6 +65,24 @@ template <typename T, typename Take>
     {
         T item{};
         if (!take(items, item))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Visits each extension of an Extension list's body as visit(type, data), stopping at the first false; false for a
+// body that is not a sequence of extensions.
+template <typename Visit>
+bool each_extension(cont::ConstSpan<u8> body, Visit visit) noexcept
+{
+    cont::WireReader in(body);
+    while (!in.done())
+    {
+        u16                 type = 0U;
+        cont::ConstSpan<u8> data;
+        if (!in.take_u16(type) || !take_vector(in, data) || !visit(type, data))
         {
             return false;
         }

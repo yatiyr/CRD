@@ -210,11 +210,12 @@ void seal_honest(const mls::CipherSuite& suite, Honest& honest)
 
 Honest& honest_of(u8 selector)
 {
-    static Honest     honests[4];
-    static bool       sealed[4] = {};
-    const usize       at        = selector % 4U;
+    static Honest honests[kSuites];
+    static bool   sealed[kSuites] = {};
+    const usize   at              = selector % kSuites;
     if (!sealed[at])
     {
+        CRD_FUZZ_REQUIRE(mls::cipher_suites().size() == kSuites);
         seal_honest(mls::cipher_suites()[at], honests[at]);
         sealed[at] = true;
     }
@@ -301,13 +302,16 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     sink.add("decode-short", short_input, sizeof(short_input));
 
     // A Welcome unchanged (with and without the fetched tree) and changed at offsets across it, in each suite.
-    const char* unchanged_names[4] = {"welcome-unchanged-0", "welcome-unchanged-1", "welcome-unchanged-2",
-                                      "welcome-unchanged-3"};
-    for (u8 suite = 0U; suite < 4U; ++suite)
+    char name[48];
+    for (u8 suite = 0U; suite < kSuites; ++suite)
     {
         const u8 unchanged[] = {1U, suite, 0xFFU, 0xFFU, 0x00U, static_cast<u8>(suite & 1U)};
-        sink.add(unchanged_names[suite], unchanged, sizeof(unchanged));
+        std::snprintf(name, sizeof(name), "welcome-unchanged-%u", static_cast<unsigned>(suite));
+        sink.add(name, unchanged, sizeof(unchanged));
     }
+    // The ML-DSA-87 suite's Welcome changed past 4 KiB, in its sealed GroupInfo's signature.
+    const u8 deep[] = {1U, 14U, 0x12U, 0x00U, 0x01U, 0x00U};
+    sink.add("welcome-mldsa87-at-4608", deep, sizeof(deep));
     const u16   offsets[] = {0U, 1U, 3U, 10U, 40U, 80U, 120U, 200U, 400U, 700U, 1000U, 1500U};
     const char* names[12] = {"welcome-at-0",   "welcome-at-1",   "welcome-at-3",   "welcome-at-10",
                              "welcome-at-40",  "welcome-at-80",  "welcome-at-120", "welcome-at-200",

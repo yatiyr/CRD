@@ -21,9 +21,6 @@ using detail::same_bytes;
 constexpr cont::StringView kLeafLabel = "LeafNodeTBS";
 constexpr cont::StringView kPathLabel = "UpdatePathNode";
 
-// The longest leaf signature of the profile (P-384 ECDSA in DER).
-constexpr usize kMaxSignatureBytes = 104U;
-
 // Occupancy bits of a subtree: whether it holds a non-blank node (its resolution is not empty) and a non-blank leaf
 // (Remove's truncation, section 12.1.3).
 constexpr u8 kHoldsNode = 1U;
@@ -1554,6 +1551,7 @@ CryptoError create_update_path(RatchetTree& tree, u32 sender, const Signer& sign
     const CipherSuite& suite = tree.suite();
     const usize        nh    = suite.hash_bytes();
     const usize        npk   = hpke_sizes(suite.kem).public_key;
+    const usize        nenc  = hpke_sizes(suite.kem).encapsulation;
     if (!tree.ready())
     {
         return CryptoError::NotReady;
@@ -1562,7 +1560,7 @@ CryptoError create_update_path(RatchetTree& tree, u32 sender, const Signer& sign
     {
         return CryptoError::OutOfWindow;
     }
-    if (signer.algorithm() != suite.signature || signature_sizes(suite.signature).signature > kMaxSignatureBytes)
+    if (signer.algorithm() != suite.signature)
     {
         return CryptoError::Unsupported;
     }
@@ -1573,11 +1571,16 @@ CryptoError create_update_path(RatchetTree& tree, u32 sender, const Signer& sign
     update.hash_bytes = nh;
     update.replaced   = 1U;
 
-    // The keys: a fresh leaf key, a random first path secret and each one after it (section 7.4).
-    u8          leaf_public[kMaxNodeKeyBytes]                 = {};
-    u8          node_public[tree::kMaxDepth][kMaxNodeKeyBytes] = {};
-    u8          secret_bytes[kMaxHashBytes]                   = {};
-    CryptoError error = update.leaf_key.generate(suite.kem);
+    // The keys: a fresh leaf key, a random first path secret and each one after it (section 7.4). The path's public
+    // keys take one allocation: kMaxDepth post-quantum keys are too large for the stack.
+    u8              leaf_public[kMaxNodeKeyBytes] = {};
+    u8              secret_bytes[kMaxHashBytes]   = {};
+    cont::Array<u8> node_public;
+    CryptoError     error = update.leaf_key.generate(suite.kem);
+    if (error == CryptoError::None && !fresh_buffer(node_public, plan.count * npk))
+    {
+        error = CryptoError::ProviderFailure;
+    }
     if (error == CryptoError::None)
     {
         error = update.leaf_key.public_key(cont::Span<u8>(leaf_public, npk));
@@ -1612,11 +1615,12 @@ CryptoError create_update_path(RatchetTree& tree, u32 sender, const Signer& sign
             }
             secure_zero(node_span);
         }
+        const cont::Span<u8> node_key_bytes(node_public.data() + i * npk, npk);
         if (error == CryptoError::None)
         {
-            error = key.public_key(cont::Span<u8>(node_public[i], npk));
+            error = key.public_key(node_key_bytes);
         }
-        plan.keys[i] = cont::ConstSpan<u8>(node_public[i], npk);
+        plan.keys[i] = node_key_bytes;
     }
     if (error == CryptoError::None)
     {
@@ -1630,8 +1634,8 @@ CryptoError create_update_path(RatchetTree& tree, u32 sender, const Signer& sign
 
     // The new leaf (section 7.5), signed and merged.
     LeafNode leaf       = leaf_template;
-    u8       signature[kMaxSignatureBytes] = {};
-    usize    written                       = 0U;
+    u8       signature[kMaxSuiteSignatureBytes] = {};
+    usize    written                            = 0U;
     leaf.encryption_key = cont::ConstSpan<u8>(leaf_public, npk);
     leaf.source         = LeafNodeSource::Commit;
     leaf.parent_hash    = plan.field(plan.count, nh);
@@ -1675,7 +1679,7 @@ CryptoError create_update_path(RatchetTree& tree, u32 sender, const Signer& sign
         error    = tree.resolution(child_away(plan.nodes[i], 2U * sender), excluded, targets);
     }
     first[plan.count]       = targets.size();
-    const usize ciphertext  = vector_bytes(npk) + vector_bytes(nh + kHpkeTagBytes);
+    const usize ciphertext  = vector_bytes(nenc) + vector_bytes(nh + kHpkeTagBytes);
     usize       nodes_bytes = 0U;
     for (usize i = 0U; i < plan.count; ++i)
     {
@@ -1703,12 +1707,12 @@ CryptoError create_update_path(RatchetTree& tree, u32 sender, const Signer& sign
             const cont::ConstSpan<u8> secret(update.secrets[tree::level(plan.nodes[i])], nh);
             for (usize t = first[i]; error == CryptoError::None && t < first[i + 1U]; ++t)
             {
-                u8 kem_output[kMaxNodeKeyBytes]           = {};
+                u8 kem_output[kMaxEncapsulationBytes]    = {};
                 u8 sealed[kMaxHashBytes + kHpkeTagBytes] = {};
                 error = encrypt_with_label(suite, tree.encryption_key(targets[t]), kPathLabel, encoded_context.span(),
-                                           secret, cont::Span<u8>(kem_output, npk),
+                                           secret, cont::Span<u8>(kem_output, nenc),
                                            cont::Span<u8>(sealed, nh + kHpkeTagBytes));
-                put_vector(writer, cont::ConstSpan<u8>(kem_output, npk));
+                put_vector(writer, cont::ConstSpan<u8>(kem_output, nenc));
                 put_vector(writer, cont::ConstSpan<u8>(sealed, nh + kHpkeTagBytes));
             }
         }

@@ -27,24 +27,6 @@ u16 codepoint(cont::ConstSpan<u8> list, usize i) noexcept
     return static_cast<u16>(static_cast<u16>(list[2U * i] << 8U) | list[2U * i + 1U]);
 }
 
-// Visits each extension of an Extension list's body as visit(type, data), stopping at the first false; false for a
-// body that is not a sequence of extensions.
-template <typename Visit>
-bool each_extension(cont::ConstSpan<u8> body, Visit visit) noexcept
-{
-    cont::WireReader in(body);
-    while (!in.done())
-    {
-        u16                 type = 0U;
-        cont::ConstSpan<u8> data;
-        if (!in.take_u16(type) || !take_vector(in, data) || !visit(type, data))
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
 // The bits of the 16-bit codepoint space (8 KiB).
 class CodepointSet
 {
@@ -115,7 +97,7 @@ CryptoError check_required(cont::ConstSpan<u8> extensions, const Capabilities& c
     const bool supported =
         every_codepoint(required.extensions, [&](u16 type) { return supports_extension(capabilities, type); }) &&
         every_codepoint(required.proposals, [&](u16 type) { return supports_proposal(capabilities, type); }) &&
-        every_codepoint(required.credentials, [&](u16 type) { return lists(capabilities.credentials, type); });
+        every_codepoint(required.credentials, [&](u16 type) { return supports_credential(capabilities, type); });
     return supported ? CryptoError::None : CryptoError::Unsupported;
 }
 
@@ -208,12 +190,17 @@ bool lists(cont::ConstSpan<u8> codepoints, u16 value) noexcept
 
 bool supports_extension(const Capabilities& capabilities, u16 type) noexcept
 {
-    return default_extension(type) || lists(capabilities.extensions, type);
+    return default_extension(type) || (!grease(type) && lists(capabilities.extensions, type));
 }
 
 bool supports_proposal(const Capabilities& capabilities, u16 type) noexcept
 {
-    return default_proposal(type) || lists(capabilities.proposals, type);
+    return default_proposal(type) || (!grease(type) && lists(capabilities.proposals, type));
+}
+
+bool supports_credential(const Capabilities& capabilities, u16 type) noexcept
+{
+    return !grease(type) && lists(capabilities.credentials, type);
 }
 
 bool extensions_distinct(cont::ConstSpan<u8> body) noexcept
@@ -379,10 +366,12 @@ CryptoError check_leaf(const GroupContext& context, const LeafNode& leaf, LeafRo
     {
         return CryptoError::Forged;
     }
+    // The leaf's own extensions are those its capabilities list, GREASE included (section 13.5); its credential type is
+    // one they support.
     const Capabilities& capabilities = leaf.capabilities;
-    const auto          supported    = [&capabilities](u16 type, cont::ConstSpan<u8>)
-    { return supports_extension(capabilities, type); };
-    if (!lists(capabilities.credentials, leaf.credential.type) || !each_extension(leaf.extensions, supported))
+    const auto          listed       = [&capabilities](u16 type, cont::ConstSpan<u8>)
+    { return default_extension(type) || lists(capabilities.extensions, type); };
+    if (!supports_credential(capabilities, leaf.credential.type) || !each_extension(leaf.extensions, listed))
     {
         return CryptoError::Unsupported;
     }
@@ -669,7 +658,7 @@ CryptoError seal_welcome(const CipherSuite& suite, cont::ConstSpan<u8> joiner_se
 {
     out.clear();
     const usize hash = suite.hash_bytes();
-    const usize npk  = hpke_sizes(suite.kem).public_key;
+    const usize nenc = hpke_sizes(suite.kem).encapsulation;
     usize       ids  = 0U;
     for (const PreSharedKey& psk : psks)
     {
@@ -680,7 +669,7 @@ CryptoError seal_welcome(const CipherSuite& suite, cont::ConstSpan<u8> joiner_se
         }
         ids += bytes;
     }
-    if (joiner_secret.size() != hash || hash == 0U || npk == 0U || vector_bytes(ids) == 0U)
+    if (joiner_secret.size() != hash || hash == 0U || nenc == 0U || vector_bytes(ids) == 0U)
     {
         return CryptoError::BadLength;
     }
@@ -704,7 +693,7 @@ CryptoError seal_welcome(const CipherSuite& suite, cont::ConstSpan<u8> joiner_se
             return CryptoError::BadLength;
         }
         const usize sealed_secrets = group_secrets_bytes(secrets_of(member)) + kHpkeTagBytes;
-        entries += Size().vector(hash).vector(npk).vector(sealed_secrets).bytes();
+        entries += Size().vector(hash).vector(nenc).vector(sealed_secrets).bytes();
     }
     const usize sealed = group_info.size() + kHpkeTagBytes;
     const usize total  = Size().fixed(2U).vector(entries).vector(sealed).bytes();
@@ -735,9 +724,9 @@ CryptoError seal_welcome(const CipherSuite& suite, cont::ConstSpan<u8> joiner_se
     {
         put_varint(writer, hash);
         error = key_package_ref(suite, members[i].package, reserve(writer, buffer, hash));
-        put_varint(writer, npk);
+        put_varint(writer, nenc);
         rooms.push_back(writer.written());
-        reserve(writer, buffer, npk);
+        reserve(writer, buffer, nenc);
         const usize ciphertext = group_secrets_bytes(secrets_of(members[i])) + kHpkeTagBytes;
         put_varint(writer, ciphertext);
         rooms.push_back(writer.written());
@@ -756,7 +745,7 @@ CryptoError seal_welcome(const CipherSuite& suite, cont::ConstSpan<u8> joiner_se
             cont::WireWriter   encoded_writer(encoded.span());
             put_group_secrets(encoded_writer, secrets);
             error = encrypt_with_label(suite, members[i].package.init_key, kWelcomeLabel, info, encoded.span(),
-                                       buffer.subspan(rooms[2U * i], npk),
+                                       buffer.subspan(rooms[2U * i], nenc),
                                        buffer.subspan(rooms[2U * i + 1U], plain + kHpkeTagBytes));
         }
     }
