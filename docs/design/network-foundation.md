@@ -1116,9 +1116,23 @@ carries the KEM.
    GroupInfoTBS signed and verified; the committer's Welcome (the GroupInfo sealed under the welcome key and nonce,
    then each new member's GroupSecrets sealed to its init key with the sealed GroupInfo as context); and a member's
    group state: a new group (section 11) and one joined from a Welcome (section 12.4.3.1).
-9. Next: proposals (validation, section 12.2, and application, 12.3), commits (creation and processing, 12.4.1 and
-   12.4.2), external joins (12.4.3.2) and the passive clients that follow them (`passive-client-handling-commit.json`
-   and `passive-client-random.json`), then ReInit and subgroup branching (sections 11.2 and 11.3) and GREASE.
+9. Proposals and commits ([mls_group.hpp](../../engine/foundation/crypto/include/crd/crypto/mls_group.hpp),
+   `mls_commit.cpp`; `passive-client-handling-commit.json`, `passive-client-random.json`; decision M10): a member's
+   messages of an epoch processed (section 6's framing, the membership tag or the PrivateMessage opened in place, the
+   signature under the sender's leaf, an external sender's key or a new member's key package), a proposal cached
+   under its ProposalRef (section 5.2) when its sender may send its type (section 12.1.8), application data read, and
+   a commit's list checked as section 12.2 says (the committer's own Update or removal, repeated Updates and Removes of
+   a leaf, repeated PSKs and GroupContextExtensions, an ExternalInit, a type outside the profile), applied in section
+   12.3's order to a copy of the tree with each proposal checked against the new extensions (an Update's leaf, its
+   signature and new key; an Add's key package; every kept member's support of new extensions), its path checked and
+   merged and decrypted under the provisional GroupContext, the new tree's keys and credential types, the key schedule
+   with the PSKs and the confirmation tag: the next epoch staged, which `Group::merge` makes the group's. The
+   committer's side builds the same list (the cached proposals section 12.2 prefers and its own by value), the path
+   when required or asked for, the commit signed and protected, the new epoch's GroupInfo signed and the Welcome with
+   each joiner's path secret and every PSK. Proposals and application data are sent too (`propose`, `propose_update`,
+   `protect`), and a member's own Update's key is kept until a commit adopts the leaf.
+10. Next: external joins (section 12.4.3.2, the external_pub extension and ExternalInit), ReInit and subgroup
+    branching (sections 11.2 and 11.3, with their resumption PSKs), and GREASE (section 13.5).
 
 **M5. The receive window** (RFC 9420 section 9.2 leaves its size to the application). OpenMLS's defaults: a receiver
 keeps the keys of the 5 generations below the next unconsumed one of each ratchet (late and reordered messages) and
@@ -1181,6 +1195,26 @@ A refusal anywhere leaves the group empty. A resumption PSK of usage reinit or b
 ReInit and branching land (layer 9), which check the old group they name. Every Welcome of one commit must seal the
 same GroupInfo, since the key and nonce are the joiner secret's.
 
+**M10. Epoch messages and commits.** A received message is processed whole into a `ReceivedMessage` that owns its
+bytes (a PrivateMessage opens in place); a commit is staged, not applied: `StagedCommit` holds the next epoch (tree,
+extensions, transcript hashes, secrets, secret tree), the path's keys for the member and the committed proposals'
+encodings, so the application may read the proposals and apply its own rules (section 12.2 lets it) before
+`Group::merge` takes it in constant work (the past epoch's resumption PSK kept, the member's path keys pruned and the
+path's applied, an own Update's kept key adopted, the cache dropped). A committer stages its own commit the same way
+and merges it once the delivery service accepted it; its own commit echoed back is Replayed, and a staged commit of
+an epoch the group left is OutOfWindow. Nothing of the group changes before a merge but a PrivateMessage's spent
+generation (section 9.2). What RFC 9420 leaves to the application is bounded per group (`GroupConfig`): at most
+`pending_proposals` cached proposals per epoch (256 by default, up to 65536; Exhausted past it, so a flood of
+proposals costs bounded memory), and the resumption PSKs of `resumption_epochs` past epochs (32 by default, 56
+bytes each, up to 1024), which a commit's PreSharedKey proposal may inject (section 8.6): this group's own are looked
+up there first, then in the store. A member's commit includes by default every cached proposal section 12.2 prefers
+(a Remove over an Update of the same leaf, the latest Update of a leaf, the first of repeated Adds of one client and
+of repeated PSKs, the latest GroupContextExtensions every member supports, only proposals valid on their own) and its
+own by value; an Update by value would be the committer's own and is refused. A member that saw proposals commits
+before it sends application data (section 12.4: `protect` is NotReady while proposals wait). ReInit (section 11.2)
+is refused as Unsupported in a proposal or a commit, like a reinit or branch PSK, until layer 10 lands it with the
+new group it names; a commit from a new member (an external join) likewise.
+
 **M6. Padding** (RFC 9420 section 6.3 leaves its amount to the application). A PrivateMessageContent of L bytes is
 padded with Padmé (Nikitin et al., "Reducing Metadata Leakage from Encrypted Files and Communication with PURBs",
 PETS 2019; `padme_padding`): with E = floor(log2 L), the top floor(log2 E) + 1 bits of L are kept and the bits below
@@ -1233,8 +1267,21 @@ secret, the tree, the keys and the interim hash compared with the committer's; e
 the group empty, among them a hostile tree whose root key is a small-order point under valid parent hashes and
 signatures; a group's creation; section 7.3's leaf checks in order, 13.3's credential types, 10.1's key package
 checks and KeyPackageRef; extension lists, capabilities, required capabilities and external senders),
-`crd-fuzz-crypto-mls-group` (every group decoder's acceptance written back, extension lists against a restatement,
-and an honest Welcome changed in any byte refused with the group empty or joining only the honest epoch),
+`test_mls_commit.cpp` (every passive-client-handling-commit vector of the profile, 52 vectors and 104 epochs with
+proposals by value and by reference, external and resumption PSKs, Adds, Updates, Removes and GroupContextExtensions,
+and the passive-client-random vector's 200 epochs, each epoch's authenticator reached, each proposal refused as
+Replayed when sent again and each commit as OutOfWindow in the next epoch; groups of Cerid members in every suite as
+public and private messages: four joiners from one Welcome, an Update, a Remove of a member that processes its own
+removal and a PSK by reference, an empty commit, a partial commit with an Add and a resumption PSK and the tree
+fetched, GroupContextExtensions with required_capabilities and a Remove by value, application data each way and
+replayed, every member at the same epoch, authenticator, tree and transcript; two listed external senders and a new
+member proposing, their proposals committed by reference; every refusal of sections 6, 12.1,
+12.2 and 12.4.2 by a member's own framing of a hostile list, the group unchanged after each and still taking a valid
+commit; the sending, committing and merging refusals; the proposal bound and the resumption PSK ring),
+`crd-fuzz-crypto-mls-commit` (any message, and the honest proposal and commit changed in any byte, refused with the
+member unchanged or accepted only as the honest one), `crd-fuzz-crypto-mls-group` (every group decoder's acceptance
+written back, extension lists against a restatement, and an honest Welcome changed in any byte refused with the group
+empty or joining only the honest epoch),
 `crd-fuzz-crypto-mls-tree` (accepted
 trees written back exactly, resolutions and filtered direct paths against section 4.1 restated, tree changes against a
 model with the held hashes equal to a fresh decode's, and a changed update path refused unchanged or decrypting only
