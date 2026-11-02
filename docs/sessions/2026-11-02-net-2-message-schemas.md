@@ -52,6 +52,8 @@ gives meaning to:
   resumption fails (the three resumption checks failed until the switch replaced it).
 - **Early authority.** `CapabilityAuthority::verify_early` presents the peer key a resumed ticket proved, so a Peer
   token authorizes early data; a Proof token is `Unbound` there (AWS-LC has no early exporter).
+- **Ticket format.** A server's sealed ticket gained the 32-byte context digest between the issue time and the session
+  state. A ticket sealed before this change resumes nothing; nothing was deployed.
 - **Ownership.** `cmake/capability-owners.json` gains `crypto.authorization` (capability.hpp, replay.hpp; consumers
   NET.3 and 4.2a), so admission and the session layer call these instead of writing their own.
 
@@ -70,6 +72,8 @@ gives meaning to:
   refusing the OpenSSL client's early data over records while the resumption stands, the bytes sent again as 1-RTT.
 - `tidy-files.py` (LLVM 20) clean on every changed C++ file after one nested conditional and one local constant's
   name in the fuzz target were fixed.
+- The CTest guards (`^crd-no-|^crd-check|^crd-diag-coverage$|^crd-diag-seeded-faults$`, ISA isolation excluded) on
+  the whole linux-gcc-debug tree, built after the batch: 19 of 19 pass.
 - Thirteen source mutations, each caught by the schema and early data cases (eight by the capability corpus too): early
   data judged as established, `early()` reading the declared set, undeclared operations or another audience passing,
   an idempotent operation outside the declared set accepted, schemas never revoked, the issue time unchecked, the
