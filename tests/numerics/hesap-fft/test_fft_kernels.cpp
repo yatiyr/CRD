@@ -800,16 +800,12 @@ template <typename T> void check_own_plans_every_level()
     const fft::FftTypeKernels<T>& portable = fft::kernels_of<T>(*levels[0].table);
     const auto off_canonical_here = [&](usize n)
     {
-        for (const KernelLevel<FftKernels>& level : levels)
+        return std::ranges::any_of(levels, [n](const KernelLevel<FftKernels>& level)
         {
-            if (kernel_level_runs_here(level) &&
-                fft::detail::level_forward<T>(n, level.level, DeterminismMode::Default) !=
-                    fft::detail::planned_forward<T>(n))
-            {
-                return true;
-            }
-        }
-        return false;
+            return kernel_level_runs_here(level) &&
+                   fft::detail::level_forward<T>(n, level.level, DeterminismMode::Default) !=
+                       fft::detail::planned_forward<T>(n);
+        });
     };
     // 1K to 1M, and each larger size of the table at which a level the host runs plans other than canonically
     // (avx512's 2M and 4M), where every level the host runs is then checked; elsewhere past 1M none is.
