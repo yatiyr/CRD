@@ -256,8 +256,9 @@ struct WelcomeMember
 // The committer's side of section 12.4.3.1: `group_info` (an encoded, signed GroupInfo of the new epoch) sealed under
 // the welcome key and nonce of `joiner_secret` and the PSKs, and to each member its GroupSecrets (the joiner secret,
 // its path secret and the PSKs' identities) sealed with EncryptWithLabel(init_key, "Welcome", the sealed GroupInfo).
-// Writes the Welcome's encoding (an MLSMessage's body) into `out`. BadLength for a secret not Nh long, a member of
-// another cipher suite or a list too long; the refusals of the operations pass through; on a refusal `out` is empty.
+// Writes the Welcome's encoding (an MLSMessage's body) into `out`. Unsupported for a member of another cipher suite,
+// BadLength for a secret not Nh long or a list too long; the refusals of the operations pass through; on a refusal
+// `out` is empty. Every Welcome of one commit seals the same GroupInfo (the key and nonce are the joiner secret's).
 [[nodiscard]] CryptoError seal_welcome(const CipherSuite& suite, cont::ConstSpan<u8> joiner_secret,
                                        cont::ConstSpan<PreSharedKey> psks, cont::ConstSpan<u8> group_info,
                                        cont::ConstSpan<WelcomeMember> members, cont::Array<u8>& out) noexcept;
