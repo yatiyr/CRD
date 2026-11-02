@@ -705,9 +705,10 @@ public:
     //                does not list; the secret tree's refusals of a PrivateMessage (Replayed, OutOfWindow) pass
     //                through;
     //   Forged       a membership tag, an AEAD seal, a signature or a confirmation tag that does not verify (an
-    //                external commit whose init secret is not the group's external key's shows here), or a new leaf
-    //                the Authentication Service refuses as the successor of the leaf it replaces (an Update, a path,
-    //                an external commit's resync);
+    //                external commit whose init secret is not the group's external key's shows here; a member the
+    //                commit removes checks no confirmation tag: the path that keys the new epoch is not encrypted to
+    //                it, section 12.4.2), or a new leaf the Authentication Service refuses as the successor of the
+    //                leaf it replaces (an Update, a path, an external commit's resync);
     //   Replayed     a proposal already cached, or the member's own commit (its StagedCommit is merged instead);
     //   Exhausted    a proposal past the epoch's cache (decision M10);
     //   NotReady     a commit referencing a proposal the member never cached or a PSK it does not hold; and a

@@ -88,6 +88,12 @@ option(CRD_BUILD_HESAP_VS_NLOPT "Build the COBYLA, NEWUOA and BOBYQA differentia
 # crd-crypto-tls-interop-openssl CTest of the tree that turns it on (tests/foundation/crypto/interop): locally, and on
 # the complete-tier linux-gcc-public-checks lane, whose preset turns it on.
 option(CRD_BUILD_TLS_VS_OPENSSL "Build the TLS 1.3 interoperability test against OpenSSL 4.0 (Linux)" OFF)
+# The MLS interoperability test (NET.2, decision M4): a Cerid member program (crd-mls-peer) against one over Cisco's
+# MLSpp (cmake/pins.json mlspp, with nlohmann_json for its build), both driven by tests/foundation/crypto/interop/
+# mls_interop.py. MLSpp builds by its own CMake as a separate project against the OpenSSL above, which this option
+# builds too. Linux only, never in a shipped build; the crd-crypto-mls-interop-mlspp CTest of the tree that turns it
+# on, locally and on the complete-tier linux-gcc-public-checks lane.
+option(CRD_BUILD_MLS_VS_MLSPP "Build the MLS interoperability test against MLSpp (Linux)" OFF)
 # The nn board's same-format peer: ggml's Q8_0 linears (runtime/examples/bench_nn_q8_vs_ggml.c) against the pinned ggml
 # release (cmake/pins.json ggml, fetched on demand into build/_deps) built by its own CMake as a separate project at the
 # host's ISA. Local only on Linux, never in CI or a shipped build; scripts/run_bench_nn.sh builds and runs it.
@@ -1273,14 +1279,20 @@ if(CRD_BUILD_HESAP_VS_NLOPT)
     crd_add_pinned_package(nlopt DOWNLOAD_ONLY YES)
 endif()
 
-# ----- The TLS interoperability peer: OpenSSL 4.0, built by tests/foundation/crypto (test-only) -----
-# Its peer program is C; OpenSSL's Configure is Perl.
-if(CRD_BUILD_TLS_VS_OPENSSL)
+# ----- The interoperability peers: OpenSSL 4.0 and MLSpp, built by tests/foundation/crypto (test-only) -----
+# The TLS peer program is C; OpenSSL's Configure is Perl. MLSpp needs OpenSSL (its crypto) and nlohmann_json's CMake
+# package (its build only).
+if(CRD_BUILD_TLS_VS_OPENSSL OR CRD_BUILD_MLS_VS_MLSPP)
     if(NOT CRD_BUILD_TESTS OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT "aws-lc" IN_LIST CRD_SELECTED_PACKAGES)
-        message(FATAL_ERROR "[tls-vs-openssl] needs Linux, CRD_BUILD_TESTS and the crypto module")
+        message(FATAL_ERROR "[interop] the TLS and MLS interoperability tests need Linux, CRD_BUILD_TESTS and the "
+                            "crypto module")
     endif()
     enable_language(C)
     crd_add_pinned_package(openssl DOWNLOAD_ONLY YES)
+endif()
+if(CRD_BUILD_MLS_VS_MLSPP)
+    crd_add_pinned_package(nlohmann_json DOWNLOAD_ONLY YES)
+    crd_add_pinned_package(mlspp DOWNLOAD_ONLY YES)
 endif()
 
 # ----- The nn board's ggml peer: the pinned release, built by runtime/CMakeLists.txt (bench-only) -----

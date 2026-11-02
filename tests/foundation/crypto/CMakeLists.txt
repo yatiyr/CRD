@@ -75,19 +75,19 @@ endif()
 # corpora.
 add_subdirectory(fuzz)
 
-# The TLS 1.3 and ECH interoperability test against the pinned OpenSSL 4.0 (CRD_BUILD_TLS_VS_OPENSSL; Linux: locally,
-# and on the complete-tier linux-gcc-public-checks lane).
-# OpenSSL builds by its own Configure in a separate project, static, libraries only, with zstd (the pinned one the
-# engine uses) and zlib (the system's) for certificate compression (RFC 8879); crd-openssl-tls-peer links nothing else,
-# and the two peers meet only through tls_interop.py, which relays their records between two processes, or their CRYPTO
-# data per encryption level for the handshake over QUIC (OpenSSL's QUIC TLS interface against QuicHandshake).
-if(CRD_BUILD_TLS_VS_OPENSSL)
+# The interoperability peers' OpenSSL 4.0 (CRD_BUILD_TLS_VS_OPENSSL or CRD_BUILD_MLS_VS_MLSPP; Linux: locally, and on
+# the complete-tier linux-gcc-public-checks lane). OpenSSL builds by its own Configure in a separate project, static,
+# libraries only, with zstd (the pinned one the engine uses) and zlib (the system's) for certificate compression (RFC
+# 8879), so every program linking it links those too. The peers of each test meet only through its Python driver, each
+# in its own process (AWS-LC and OpenSSL share symbol names).
+if(CRD_BUILD_TLS_VS_OPENSSL OR CRD_BUILD_MLS_VS_MLSPP)
     include(ExternalProject)
     find_package(Perl REQUIRED)
     find_program(CRD_MAKE_PROGRAM NAMES make gmake REQUIRED)
     find_package(Threads REQUIRED)
     find_package(ZLIB REQUIRED)
-    cmake_host_system_information(RESULT openssl_jobs QUERY NUMBER_OF_LOGICAL_CORES)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    cmake_host_system_information(RESULT interop_jobs QUERY NUMBER_OF_LOGICAL_CORES)
     crd_pin(openssl_version packages openssl version)
     # The prefix names the version: a new pin builds afresh instead of keeping the stamps of the last one.
     set(openssl_prefix "${CMAKE_BINARY_DIR}/_deps/openssl-peer-${openssl_version}")
@@ -100,23 +100,79 @@ if(CRD_BUILD_TLS_VS_OPENSSL)
         CONFIGURE_COMMAND "${PERL_EXECUTABLE}" "<SOURCE_DIR>/Configure" "CC=${CMAKE_C_COMPILER}" --prefix=<INSTALL_DIR>
                           --libdir=lib no-shared no-tests no-docs no-apps enable-zstd zlib
                           "--with-zstd-include=${zstd_SOURCE_DIR}/lib" "--with-zlib-include=${ZLIB_INCLUDE_DIRS}"
-        BUILD_COMMAND "${CRD_MAKE_PROGRAM}" -j${openssl_jobs} build_libs
+        BUILD_COMMAND "${CRD_MAKE_PROGRAM}" -j${interop_jobs} build_libs
         INSTALL_COMMAND "${CRD_MAKE_PROGRAM}" install_dev
         BUILD_BYPRODUCTS ${openssl_libraries})
+    set(openssl_link ${openssl_libraries} libzstd_static ZLIB::ZLIB Threads::Threads ${CMAKE_DL_LIBS})
+endif()
+
+# The TLS 1.3 and ECH interoperability test against OpenSSL (CRD_BUILD_TLS_VS_OPENSSL): crd-openssl-tls-peer links
+# OpenSSL alone, and tls_interop.py relays the two peers' records between their processes, or their CRYPTO data per
+# encryption level for the handshake over QUIC (OpenSSL's QUIC TLS interface against QuicHandshake).
+if(CRD_BUILD_TLS_VS_OPENSSL)
     add_executable(crd-openssl-tls-peer interop/openssl_tls_peer.c)
     add_dependencies(crd-openssl-tls-peer crd-openssl-peer-build)
     target_include_directories(crd-openssl-tls-peer SYSTEM PRIVATE "${openssl_prefix}/install/include")
-    target_link_libraries(crd-openssl-tls-peer PRIVATE ${openssl_libraries} libzstd_static ZLIB::ZLIB Threads::Threads
-                                                       ${CMAKE_DL_LIBS})
+    target_link_libraries(crd-openssl-tls-peer PRIVATE ${openssl_link})
     set_target_properties(crd-openssl-tls-peer PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
 
     add_executable(crd-tls-peer interop/cerid_tls_peer.cpp)
     target_link_libraries(crd-tls-peer PRIVATE crd-crypto crd-core crd-containers)
 
-    find_package(Python3 COMPONENTS Interpreter REQUIRED)
     add_test(NAME crd-crypto-tls-interop-openssl
              COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/tls_interop.py"
                      --cerid "$<TARGET_FILE:crd-tls-peer>" --openssl "$<TARGET_FILE:crd-openssl-tls-peer>")
     set_tests_properties(crd-crypto-tls-interop-openssl PROPERTIES TIMEOUT 600 LABELS "crypto;tls-interop")
     message(STATUS "[tls-vs-openssl] TLS 1.3 interoperability against OpenSSL ${openssl_version}")
+endif()
+
+# The MLS interoperability test against MLSpp (CRD_BUILD_MLS_VS_MLSPP; decision M4): crd-mls-peer's members over
+# crd-crypto and crd-mlspp-peer's over MLSpp create, join, propose, commit and protect in the same groups, relayed by
+# mls_interop.py. nlohmann_json installs its CMake package for MLSpp's configure; MLSpp builds by its own CMake against
+# the OpenSSL above (4.0, so with its post-quantum suites), its library and the three it links (bytes, tls_syntax,
+# hpke) only, without its tests. Its headers need the definitions its hpke library publishes for that OpenSSL.
+if(CRD_BUILD_MLS_VS_MLSPP)
+    crd_pin(mlspp_commit packages mlspp commit)
+    string(SUBSTRING "${mlspp_commit}" 0 8 mlspp_short)
+    set(json_prefix "${CMAKE_BINARY_DIR}/_deps/nlohmann-json-peer")
+    ExternalProject_Add(crd-nlohmann-json-build
+        SOURCE_DIR "${nlohmann_json_SOURCE_DIR}"
+        PREFIX "${json_prefix}"
+        BINARY_DIR "${json_prefix}/build"
+        INSTALL_DIR "${json_prefix}/install"
+        CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>" -DJSON_BuildTests=OFF -DJSON_Install=ON)
+    set(mlspp_prefix "${CMAKE_BINARY_DIR}/_deps/mlspp-peer-${mlspp_short}")
+    set(mlspp_build "${mlspp_prefix}/build")
+    set(mlspp_libraries "${mlspp_build}/libmlspp.a" "${mlspp_build}/lib/hpke/libhpke.a"
+                        "${mlspp_build}/lib/tls_syntax/libtls_syntax.a" "${mlspp_build}/lib/bytes/libbytes.a")
+    ExternalProject_Add(crd-mlspp-build
+        SOURCE_DIR "${mlspp_SOURCE_DIR}"
+        PREFIX "${mlspp_prefix}"
+        BINARY_DIR "${mlspp_build}"
+        CMAKE_ARGS "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}" -DCMAKE_BUILD_TYPE=Release -DTESTING=OFF
+                   "-DCMAKE_PREFIX_PATH=${json_prefix}/install" "-DOPENSSL_ROOT_DIR=${openssl_prefix}/install"
+                   -DOPENSSL_USE_STATIC_LIBS=ON
+        BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --target mlspp --parallel ${interop_jobs}
+        INSTALL_COMMAND ""
+        DEPENDS crd-openssl-peer-build crd-nlohmann-json-build
+        BUILD_BYPRODUCTS ${mlspp_libraries})
+    add_executable(crd-mlspp-peer interop/mlspp_mls_peer.cpp)
+    add_dependencies(crd-mlspp-peer crd-mlspp-build)
+    target_include_directories(crd-mlspp-peer SYSTEM PRIVATE
+                               "${mlspp_SOURCE_DIR}/include" "${mlspp_build}/include"
+                               "${mlspp_SOURCE_DIR}/lib/bytes/include" "${mlspp_SOURCE_DIR}/lib/tls_syntax/include"
+                               "${mlspp_SOURCE_DIR}/lib/hpke/include" "${mlspp_SOURCE_DIR}/third_party"
+                               "${openssl_prefix}/install/include")
+    target_compile_definitions(crd-mlspp-peer PRIVATE WITH_OPENSSL3 WITH_PQ)
+    target_link_libraries(crd-mlspp-peer PRIVATE ${mlspp_libraries} ${openssl_link})
+    set_target_properties(crd-mlspp-peer PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+
+    add_executable(crd-mls-peer interop/cerid_mls_peer.cpp)
+    target_link_libraries(crd-mls-peer PRIVATE crd-crypto crd-core crd-containers)
+
+    add_test(NAME crd-crypto-mls-interop-mlspp
+             COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/interop/mls_interop.py"
+                     --cerid "$<TARGET_FILE:crd-mls-peer>" --mlspp "$<TARGET_FILE:crd-mlspp-peer>")
+    set_tests_properties(crd-crypto-mls-interop-mlspp PROPERTIES TIMEOUT 600 LABELS "crypto;mls-interop")
+    message(STATUS "[mls-vs-mlspp] MLS interoperability against MLSpp ${mlspp_short}")
 endif()

@@ -177,6 +177,14 @@
       "why": "The TLS 1.3 interoperability test (the crd-crypto-tls-interop-openssl CTest): crd-tls-peer over crd-crypto and crd-openssl-tls-peer over the pinned OpenSSL 4.0 (cmake/pins.json openssl), built by its own Configure."
     },
     {
+      "paths": [
+        "tests/foundation/crypto/interop/cerid_mls_peer.cpp",
+        "tests/foundation/crypto/interop/mlspp_mls_peer.cpp"
+      ],
+      "built_when": {"option": "CRD_BUILD_MLS_VS_MLSPP", "platform": "Linux"},
+      "why": "The MLS interoperability test (the crd-crypto-mls-interop-mlspp CTest, decision M4): crd-mls-peer over crd-crypto and crd-mlspp-peer over the pinned MLSpp (cmake/pins.json mlspp), built by its own CMake against the pinned OpenSSL 4.0."
+    },
+    {
       "paths": ["runtime/examples/bench_hesap_mlilu_vs_ilupack.cpp"],
       "built_when": {"option": "CRD_BUILD_HESAP_VS_ILUPACK", "platform": "Linux"},
       "why": "The bench against ILUPACK, a non-commercial Linux-only binary oracle (scripts/setup-ilupack-ref.sh)."
