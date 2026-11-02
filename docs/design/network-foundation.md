@@ -392,12 +392,11 @@ holds ECDSA. The decisions (numbered for the tests):
 - **K7. Secrets in memory.** The master key and every private input are zeroed when an entry, a read snapshot or the
   store is released; the plaintext body is laid out in place in the save's buffer, sealed there and the buffer zeroed.
 - **K8. Placement.** A key is kept in the sealed file (`Software`) or in a device that signs without releasing it
-  (`Hardware`, signature keys only: no device holds ML-DSA, agreement or KEM keys for a store). `HardwarePreferred`
-  falls back to the file, `HardwareRequired` is `Unsupported` until the TPM 2.0, Secure Enclave, Android Keystore and
-  PIV layers land. A principal's hybrid identity is its ML-DSA key in the file and its ECDSA key in a device.
-  `StoredSigner` hides the placement from every signer of a Cerid artefact; `TlsCredential::init(StoredSigner)` binds
-  a software key to the TLS stack, and binds a device key through the provider's private-key method
-  (`SSL_PRIVATE_KEY_METHOD`) when the device layers land.
+  (`Hardware`, ECDSA signature keys only: no device holds ML-DSA, agreement or KEM keys for a store). Without a device
+  that holds the curve `HardwarePreferred` falls back to the file and `HardwareRequired` is `Unsupported` (K12). A
+  principal's hybrid identity is its ML-DSA key in the file and its ECDSA key in a device. `StoredSigner` hides the
+  placement from every signer of a Cerid artefact; `TlsCredential::init(StoredSigner)` binds a software key to the TLS
+  stack, and a device key through the provider's private-key method (`SSL_PRIVATE_KEY_METHOD`, K12).
 - **K9. Errors.** `NotFound`, `Exists`, `Revoked`, `Unavailable` (no protector service), `Denied` (the protector
   will not recover: another user's or store's reference, a locked vault, a refused prompt), `Damaged` and
   `StorageFailure` (a file that cannot be written, locked or created) joined `CryptoError`.
@@ -436,6 +435,31 @@ holds ECDSA. The decisions (numbered for the tests):
   there. Evidence (2026-11-03, [session](../sessions/2026-11-03-net-2-tpm-protector.md)): the TPM cases of
   `test_key_store.cpp` on this PC's Intel PTT TPM (a runner without one skips the hardware case), no TPM key left after
   the run, and a forget that deletes nothing caught.
+
+- **K12. Device keys; the TPM's on Windows.** A `KeyDevice` holds ECDSA P-256 and P-384 keys and signs digests with
+  them: `create` (its reference, a handle of at most 64 bytes and never key material, and its public key),
+  `sign_digest` (r || s) and `forget`. A store takes one device at `create` or `open`; a `Hardware` entry keeps the
+  device's reference in place of a private input, sealed with the rest, and the public key the identifier binds. A
+  device that lacks the curve (`Unsupported`) sends a `HardwarePreferred` key to the file and refuses a
+  `HardwareRequired` one; any other failure fails the change, so an absent or failing device is never hidden by a
+  fallback. A rotation stays in the device; an import never enters it. Revocation, destruction and `erase` delete a
+  device key before the save that drops it, so an interruption leaves an entry whose key no longer signs, which
+  repeating the change completes, never a revoked key that still signs; a key made for a change whose save fails is
+  deleted again. A store opened without its device lists its `Hardware` keys, signs with none (`Unavailable`) and
+  refuses every change to them. `DeviceSigner` hashes the message (SHA-256 for P-256, SHA-384 for P-384), has the
+  device sign the digest, encodes r || s as P4's DER Ecdsa-Sig-Value and verifies it under the stored public key before
+  giving it out, so a device that signs with another key or faults is caught. `TlsCredential::init(StoredSigner)` has
+  the device sign the self-signed certificate (the signature algorithm set, the TBSCertificate re-encoded and signed,
+  the finished certificate verified under its key) and gives each context its own copy of the signer behind the
+  provider's private-key method, so every CertificateVerify is signed in the device. `TpmKeyDevice` is "tpm-pcp": one
+  persisted sign-only key per `Hardware` generation through the Platform Crypto Provider, named "Cerid signer" with the
+  store's identifier and a random 16-byte handle (the reference: a format byte and the handle), its public key read
+  once at creation; each signature opens its own key handle (the provider's handles are not documented as thread safe,
+  and the TPM serialises its commands). The provider's user keys answer to any process of the user, as DPAPI does; the
+  TPM keeps them from leaving the machine. Elsewhere it answers `Unavailable`; tss2 on Linux is next. Evidence
+  (2026-11-03, [session](../sessions/2026-11-03-net-2-tpm-signers.md)): the device cases of `test_key_store.cpp` (a
+  simulated device on every lane; this PC's Intel PTT TPM holding P-256 and P-384 keys and signing a TLS handshake),
+  five source mutations caught, and `crd-fuzz-crypto-key-store`'s restatement and model extended to device keys.
 
 Evidence (2026-11-02, [session](../sessions/2026-11-02-net-2-key-store.md)): `test_key_store.cpp` (12 cases: every kind
 of key through its whole life, every refusal, every changed byte of a store, an older and a substituted store, writers
