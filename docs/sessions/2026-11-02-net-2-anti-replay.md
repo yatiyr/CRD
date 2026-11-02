@@ -22,7 +22,7 @@ Date: 2026-11-02. Row: [NET.2](../ROADMAP.md#slice-net.2) (track C, batch 47; th
   always one `init` accepted, so the branch is unreachable; the lookup is now checked and an unknown version is
   `Unsupported` (b5160de6, pushed first). Reproduced on the track's new linux-gcc-shipping tree: the old source fails
   the `crd-crypto-tests` link with the same diagnostic, the fixed one links and its 96 QUIC, TLS and capability cases
-  pass. No other `call()->member` dereference is left in crd-crypto or crd-net.
+  pass. No other `call()->member` dereference is left in crd-crypto's or crd-net's sources and headers.
 - **Complete-tier run 41342960677 (59a3347e)**, still running: its new failures are all fixed on main already.
   win-shipping and win-shipping-profile fail `crd-check-isa-isolation` (AWS-LC's `ghash-x86_64.asm` and
   `aesni-gcm-x86_64.asm` in MSVC link-time images) and `crd-check-compile-commands` (jitterentropy's `/Od`), both
@@ -51,6 +51,9 @@ Date: 2026-11-02. Row: [NET.2](../ROADMAP.md#slice-net.2) (track C, batch 47; th
 - win-debug (MSVC): `crd-crypto-tests "[replay],[quic],[quic-token]"` 26 cases, 670,889 assertions, no warning; the
   QUIC corpus replays clean.
 - `tidy-files.py` (LLVM 20.1.8) clean on every changed C++ file after two local constants were renamed.
+- The CTest guards on a fresh linux-gcc-debug configure: 18 of 19 pass (include budget, source routes, capability
+  owners, peer headers, the container and allocator bans among them); `crd-check-diag-runbooks` fails only because
+  this tree builds the crypto targets alone, so the runbooks' tests of other modules are not listed in it.
 - Five source mutations, each caught: the Stale bound off by one, passed words left set, a Duplicate accepted, the
   clearing one word short (all four by the unit tests and by the fuzz corpus), and the filter period not covering the
   skew (by `test_quic_token.cpp`).
