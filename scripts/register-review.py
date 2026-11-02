@@ -78,12 +78,17 @@ IANA_REGISTRIES = {
     'QUIC Transport Parameters': ('quic', 'QUIC Transport Parameters'),
     'TLS Supported Groups': ('tls-parameters', 'TLS Supported Groups'),
     'TLS SignatureScheme': ('tls-parameters', 'TLS SignatureScheme'),
+    'TLS Alerts': ('tls-parameters', 'TLS Alerts'),
     'TLS ExtensionType Values': ('tls-extensiontype-values', 'TLS ExtensionType Values'),
     'TLS Certificate Compression Algorithm IDs': ('tls-extensiontype-values',
                                                   'TLS Certificate Compression Algorithm IDs'),
     'TLS ALPN Protocol IDs': ('tls-extensiontype-values',
                               'TLS Application-Layer Protocol Negotiation (ALPN) Protocol IDs'),
     'AEAD Algorithms': ('aead-parameters', 'AEAD Algorithms'),
+    'HPKE KEM Identifiers': ('hpke', 'HPKE KEM Identifiers'),
+    'HPKE KDF Identifiers': ('hpke', 'HPKE KDF Identifiers'),
+    'HPKE AEAD Identifiers': ('hpke', 'HPKE AEAD Identifiers'),
+    'MLS Cipher Suites': ('mls', 'MLS Cipher Suites'),
 }
 # Registries and documents without a machine-readable record: the plan lists them to be read by hand.
 MANUAL_REGISTRIES = {
@@ -1382,7 +1387,8 @@ def read_iana(body, titles):
     """{title: [IanaRecord]} of the named registries of an IANA registry file.
 
     A record's `value` is its number, or its name where the registry keys records by name (ALPN's `HTTP/3`); its
-    `description` is its name, or the value an identification sequence spells; `documents` are the RFCs it cites
+    `description` is its name (`kem`, `kdf` and `aead` in the HPKE file), or the value an identification sequence
+    spells; `documents` are the RFCs it cites
     (`<xref type="rfc" data="rfc9000"/>`), which confirm a value in a registry whose records carry no name (QUIC
     Versions); `recommended` is the "Recommended" column (RFC 9847), spelled `<rec>` in the TLS Supported Groups and
     ExtensionType files and `<recommended>` in the SignatureScheme file."""
@@ -1410,7 +1416,7 @@ def read_iana(body, titles):
                         values.add(value)
                     elif not RANGE.fullmatch(text):
                         names.add(normal_name(text))
-                elif tag in {'description', 'name'} and text:
+                elif tag in {'description', 'name', 'kem', 'kdf', 'aead'} and text:
                     sequence = sequence_of(text)
                     if sequence is None:
                         names.add(normal_name(text))

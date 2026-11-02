@@ -8541,6 +8541,12 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
 
     # The Recommended column (RFC 9847) as the TLS parameters file spells it: `<rec>` in Supported Groups, where
     # RFC 9847 discourages secp224r1, and `<recommended>` in SignatureScheme; x25519's record lacks the column here.
+    HPKE_XML = ('<?xml version="1.0"?><registry xmlns="http://www.iana.org/assignments" id="hpke">'
+                '<registry id="hpke-kem-ids"><title>HPKE KEM Identifiers</title><record><value>0x647A</value>'
+                '<kem>X-Wing</kem><nsecret>32</nsecret><xref type="draft" data="draft-connolly-cfrg-xwing-kem-06"/>'
+                '</record></registry><registry id="hpke-kdf-ids"><title>HPKE KDF Identifiers</title><record>'
+                '<value>0x0001</value><kdf>HKDF-SHA256</kdf><nh>32</nh><xref type="rfc" data="rfc5869"/></record>'
+                '</registry></registry>')
     TLS_XML = ('<?xml version="1.0"?><registry xmlns="http://www.iana.org/assignments" id="tls-parameters">'
                '<registry id="tls-parameters-8"><title>TLS Supported Groups</title>'
                '<record><value>21</value><description>secp224r1</description><dtls>Y</dtls><rec>D</rec>'
@@ -10862,6 +10868,13 @@ class RegisterReview(RegisterFixture, unittest.TestCase):
                          alpn['TLS Application-Layer Protocol Negotiation (ALPN) Protocol IDs'])
         self.assertEqual(({27}, {'compresscertificate'}, set(), 'Y'), alpn['TLS ExtensionType Values'][0])
         self.assertEqual((set(), {'unassigned'}, set(), None), alpn['TLS ExtensionType Values'][1])
+        hpke = register_review.read_iana(self.HPKE_XML, ['HPKE KEM Identifiers', 'HPKE KDF Identifiers'])
+        self.assertEqual([({0x647A}, {'xwing'}, {'draft-connolly-cfrg-xwing-kem'}, None)],
+                         hpke['HPKE KEM Identifiers'])
+        self.assertEqual([({1}, {'hkdfsha256'}, {'RFC 5869'}, None)], hpke['HPKE KDF Identifiers'])
+        self.assertEqual('verified', register_review.judge_codepoint(
+            {'registry': 'HPKE KEM Identifiers', 'name': 'X-Wing', 'value': '0x647A'}, hpke['HPKE KEM Identifiers'],
+            None)[0])
         self.assertIsNone(register_review.sequence_of('0x68 0x33'))
         self.assertIsNone(register_review.sequence_of('"h3"'))
         self.assertEqual('h2', register_review.sequence_of('0x68 0x32 ("h2")'))
