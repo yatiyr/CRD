@@ -28,7 +28,9 @@ No completed hosted run has a failure this track has not fixed; every failed job
 - Complete-tier run 41342960677 (59a3347e), eight failed jobs. linux-gcc-debug: the certificate-compression case
   (`3 == 1`, zstd against zlib for an ECDSA certificate); 6e5dbb36 changed that row to accept either form after
   this run's commit (it is not an ancestor of 59a3347e), and the choice of the smaller form stays exact in the
-  Ed25519 row and the next case. The other seven: the ISA-isolation, compile-commands and TSan causes above.
+  Ed25519 row and the next case. linux-clang-tsan: the three threaded provider and TLS cases, fixed by 3a59a528.
+  win-tidy: `readability-use-anyofallof` in `test_fft_kernels.cpp`, the FFT track's, fixed by d178d59b. The other
+  five: the ISA-isolation and compile-commands checks (and win-relwithdebinfo's orchestrator test) above.
 - Push runs 41384275913 (1ff4c37d) and 41389014829 (8845f1d9) are queued and pending; no hosted run contains
   0dd2b5ab or later yet.
 
@@ -73,6 +75,9 @@ No completed hosted run has a failure this track has not fixed; every failed job
   sample taken from the whole ciphertext, the member secret extracted the other way round, every PSKLabel at index 0,
   the exporter context unhashed, a spent generation read again, the GroupContext without its version, and a sent
   generation not spent.
+- Not reached by a test: a sender's ratchet Exhausted past generation 2^32 - 1 (2^32 derivations), `init`'s
+  ProviderFailure when the memory is refused, and `group_context_bytes` refusing a field past 2^30 - 1 bytes; each
+  is one comparison in the code.
 - `test-repository-tools.py SourceMirror`: 2 cases pass; the new race case fails on the previous script (its copy's
   time stays four seconds older than the simulated object).
 - After the mutations, the lane rebuilt the restored `mls.cpp` without a touch (the mirror's new timing): the crypto
