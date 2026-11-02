@@ -241,10 +241,13 @@ every tracked file about 70 s). [source-mirror.py](../../scripts/source-mirror.p
   checkout's status comes from the Windows git through WSL interop, about 0.2 s; the mirror's from its own git, which
   compares content because the copied index carries the checkout's stat data), deletes mirror files git does not see
   (ignored ones included), and puts the checkout's index back. The first sync, and `--full`, compare and copy every
-  file instead. Times are preserved, so Ninja sees what it would see on `/mnt/d` (a backup copied back keeps its old
-  time there too, so it is touched before the rebuild). The repository is the checkout's common git directory
-  (resolved by `git rev-parse`) without its `worktrees` records; a linked worktree, whose `.git` is a file naming a
-  Windows path the Linux git cannot open, adds its own directory's HEAD, index, logs and refs over it and leaves out
+  file instead. Only a path whose bytes differ is copied, and it is timed at the copy (the checkout's time when that
+  is later): an edit made while a lane build ran is older than the objects that build compiled from the previous
+  bytes, and with the checkout's time Ninja kept them (2026-11-02, a fuzz target's seeds missing from its binary);
+  a restored backup is rebuilt for the same reason. A file whose bytes agree keeps its time. The repository is the
+  checkout's common git directory (resolved by `git rev-parse`) without its `worktrees` records; a linked worktree,
+  whose `.git` is a file naming a Windows path the Linux git cannot open, adds its own directory's HEAD, index, logs
+  and refs over it and leaves out
   its pointers back to the main repository. A worktree's lanes name their own mirror and trees
   (`CRD_SOURCE_MIRROR`, `CRD_LANE_ROOT`), so they never touch the main checkout's.
 - `check` refuses (exit 3) unless both sides have the same HEAD, the same `git status` entries and identical bytes in

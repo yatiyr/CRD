@@ -3415,7 +3415,8 @@ class SourceMirror(unittest.TestCase):
             self.assertIn('full sync', output)
             self.assertEqual(source_mirror.mirror_files(mirror), ['.gitignore', 'engine/a.cpp', 'engine/b.hpp',
                                                                   'engine/new.cpp'])
-            self.assertEqual(os.stat(mirror / 'engine/a.cpp').st_mtime_ns, os.stat(source / 'engine/a.cpp').st_mtime_ns)
+            self.assertGreaterEqual(os.stat(mirror / 'engine/a.cpp').st_mtime_ns,
+                                    os.stat(source / 'engine/a.cpp').st_mtime_ns)
             self.assertEqual(self.mirror('check', source, mirror, '--full')[0], 0)
 
             def stale(change, expected):
@@ -3438,6 +3439,22 @@ class SourceMirror(unittest.TestCase):
             stale(lambda: (source / 'engine/a.cpp').write_text('int a = 1;\n', encoding='utf-8'), 'engine/a.cpp')
             stale(lambda: (self.git(source, 'add', '.'), self.git(source, 'commit', '-q', '-m', 'second')),
                   'HEAD differs')
+            # An edit made while a build ran: the build compiled the old bytes after the edit's time, so the copy
+            # must be newer than its object; a sync that finds the bytes equal leaves the time alone.
+            edited = source / 'engine/c.cpp'
+            edited.write_text('int c = 3;\n', encoding='utf-8')
+            edit_time = os.stat(edited).st_mtime_ns - 60 * 10**9
+            os.utime(edited, ns=(edit_time, edit_time))
+            built = edit_time + 4 * 10**9  # the object of the old bytes
+            code, output = self.mirror('sync', source, mirror)
+            self.assertEqual(code, 0, output)
+            self.assertIn('1 copied', output)
+            copied = os.stat(mirror / 'engine/c.cpp').st_mtime_ns
+            self.assertGreater(copied, built)
+            code, output = self.mirror('sync', source, mirror)
+            self.assertEqual(code, 0, output)
+            self.assertIn('0 copied', output)
+            self.assertEqual(os.stat(mirror / 'engine/c.cpp').st_mtime_ns, copied)
             # An ignored file in the mirror is not a source difference, but the next sync removes it.
             (mirror / 'scratch.log').write_text('x\n', encoding='utf-8')
             self.assertEqual(self.mirror('check', source, mirror)[0], 0)

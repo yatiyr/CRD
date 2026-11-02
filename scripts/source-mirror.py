@@ -3,11 +3,14 @@
 
     source-mirror.py sync  [--source DIR] [--mirror DIR] [--full]
         makes the mirror hold exactly the files git sees in the checkout (tracked and untracked, never the ignored
-        ones) with the same bytes and times, and a standalone repository in `.git` (the repository guards run git in
+        ones) with the same bytes, and a standalone repository in `.git` (the repository guards run git in
         the source directory): the checkout's common git directory without its worktree records, and for a linked
         worktree (whose `.git` is a file naming its own directory) that directory's HEAD, index, logs and refs over
-        it. An incremental sync copies only what git reports as different on either side; --full (and the
-        first sync) compares the bytes of every file and copies those that differ. Then it runs the check.
+        it. An incremental sync copies the paths git reports as different on either side whose bytes differ;
+        --full (and the first sync) compares the bytes of every file and copies those that differ. A copied file is
+        timed when it is copied (the checkout's time when that is later), so a build that compiled the old bytes
+        after the edit still finds the new ones newer than its outputs; a file whose bytes agree keeps its time.
+        Then it runs the check.
     source-mirror.py check [--source DIR] [--mirror DIR] [--full]
         exit 0 when the mirror and the checkout have the same HEAD, the same `git status` (every modified, added,
         deleted and untracked path) and identical bytes in each of those paths; every other file then equals the
@@ -28,6 +31,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 
 STALE = 3
 CHUNK = 1 << 20
@@ -215,11 +219,22 @@ def replace_file(source, target):
     shutil.copy2(source, target)
 
 
+def copy_source(source, target):
+    """Copy a checkout file whose bytes the mirror lacks, timed now unless the checkout's time is later. An edit made
+    while a build ran is older than the objects that build compiled from the previous bytes; with the checkout's time
+    Ninja would keep those objects."""
+    replace_file(source, target)
+    copied = os.stat(target)
+    os.utime(target, ns=(copied.st_atime_ns, max(copied.st_mtime_ns, time.time_ns())))
+
+
 def copy_one(source, mirror, name):
     target = os.path.join(mirror, name)
     if os.path.lexists(os.path.join(source, name)):
+        if same_path(source, mirror, name):
+            return None
         os.makedirs(os.path.dirname(target), exist_ok=True)
-        replace_file(os.path.join(source, name), target)
+        copy_source(os.path.join(source, name), target)
         return 'copied'
     if os.path.lexists(target):
         remove_file(target)
@@ -281,10 +296,8 @@ def sync(source, mirror, full=False, out=sys.stdout):
             left, right = source / name, mirror / name
             if not os.path.lexists(right) or not same_path(source, mirror, name):
                 right.parent.mkdir(parents=True, exist_ok=True)
-                replace_file(left, right)
+                copy_source(left, right)
                 counts['copied'] += 1
-            elif os.lstat(left).st_mtime_ns != os.lstat(right).st_mtime_ns:
-                shutil.copystat(left, right)
         wanted = set(files)
         for name in mirror_files(mirror):
             if name not in wanted:
