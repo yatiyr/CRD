@@ -12,6 +12,7 @@
 #include <openssl/aes.h>
 #include <openssl/chacha.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <new>
@@ -90,22 +91,22 @@ AlgorithmId suite_hash(AlgorithmId aead) noexcept
 // HKDF-Expand-Label(secret, label, "", out.size()) of TLS 1.3 (RFC 8446 section 7.1), which QUIC uses unchanged.
 CryptoError expand_label(AlgorithmId hkdf, cont::ConstSpan<u8> secret, const char* label, cont::Span<u8> out) noexcept
 {
-    constexpr char  kPrefix[]       = "tls13 ";
-    constexpr usize kPrefixBytes    = sizeof(kPrefix) - 1U;
-    constexpr usize kMaxLabelBytes  = 16U; // "quicv2 key" is the longest label QUIC uses
+    constexpr char  prefix[]        = "tls13 ";
+    constexpr usize prefix_bytes    = sizeof(prefix) - 1U;
+    constexpr usize max_label_bytes = 16U; // "quicv2 key" is the longest label QUIC uses
     const usize     label_bytes     = std::strlen(label);
-    u8              info[4U + kPrefixBytes + kMaxLabelBytes];
-    if (label_bytes > kMaxLabelBytes || out.size() > 0xFFFFU)
+    u8              info[4U + prefix_bytes + max_label_bytes];
+    if (label_bytes > max_label_bytes || out.size() > 0xFFFFU)
     {
         return CryptoError::BadLength;
     }
     info[0] = static_cast<u8>(out.size() >> 8U);
     info[1] = static_cast<u8>(out.size());
-    info[2] = static_cast<u8>(kPrefixBytes + label_bytes);
-    std::memcpy(info + 3, kPrefix, kPrefixBytes);
-    std::memcpy(info + 3 + kPrefixBytes, label, label_bytes);
-    info[3U + kPrefixBytes + label_bytes] = 0U; // an empty context
-    return hkdf_expand(hkdf, secret, cont::ConstSpan<u8>(info, 4U + kPrefixBytes + label_bytes), out);
+    info[2] = static_cast<u8>(prefix_bytes + label_bytes);
+    std::memcpy(info + 3, prefix, prefix_bytes);
+    std::memcpy(info + 3 + prefix_bytes, label, label_bytes);
+    info[3U + prefix_bytes + label_bytes] = 0U; // an empty context
+    return hkdf_expand(hkdf, secret, cont::ConstSpan<u8>(info, 4U + prefix_bytes + label_bytes), out);
 }
 
 // The checks init() shares: the version's parameters and the suite's hash, or the refusal.
@@ -342,7 +343,7 @@ void QuicPacketKey::set_limit(u64 packets) noexcept
     if (ready())
     {
         const u64 ceiling = quic_confidentiality_limit(algorithm());
-        m_limit           = packets == 0U ? u64{1} : (packets < ceiling ? packets : ceiling);
+        m_limit           = packets == 0U ? u64{1} : std::min(packets, ceiling);
     }
 }
 

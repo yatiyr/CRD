@@ -30,6 +30,7 @@
 
 #include <crd/crypto/quic.hpp>
 
+#include <algorithm>
 #include <cstring>
 
 namespace
@@ -96,14 +97,7 @@ private:
 
 bool all_zero(ConstSpan<u8> bytes) noexcept
 {
-    for (const u8 b : bytes)
-    {
-        if (b != 0U)
-        {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(bytes, [](u8 b) { return b == 0U; });
 }
 
 // True when the packet opened.
@@ -264,9 +258,9 @@ constexpr u8 kTokenOther[kQuicTokenKeyBytes]    = {0x51, 0x52, 0x53, 0x54, 0x55,
 const QuicTokenKeys& token_keys()
 {
     static QuicTokenKeys keys;
-    static const bool    ready = keys.init(ConstSpan<u8>(kTokenKey), ConstSpan<u8>(kTokenPrevious)) ==
-                              CryptoError::None;
-    CRD_FUZZ_REQUIRE(ready);
+    static const bool    kReady = keys.init(ConstSpan<u8>(kTokenKey), ConstSpan<u8>(kTokenPrevious)) ==
+                               CryptoError::None;
+    CRD_FUZZ_REQUIRE(kReady);
     return keys;
 }
 
@@ -288,22 +282,22 @@ struct TokenInput
 // nonce a token's salt derives.
 bool restated_name(ConstSpan<u8> key, u8 (&name)[kQuicTokenNameBytes])
 {
-    static constexpr char label[] = "cerid quic token name";
+    static constexpr char kLabel[] = "cerid quic token name";
     u8                    prk[32];
     return hkdf_extract(AlgorithmId::HkdfSha256, {}, key, Span<u8>(prk)) == CryptoError::None &&
            hkdf_expand(AlgorithmId::HkdfSha256, ConstSpan<u8>(prk),
-                       ConstSpan<u8>(reinterpret_cast<const u8*>(label), sizeof(label) - 1U),
+                       ConstSpan<u8>(reinterpret_cast<const u8*>(kLabel), sizeof(kLabel) - 1U),
                        Span<u8>(name)) == CryptoError::None;
 }
 
 bool restated_aead(ConstSpan<u8> key, ConstSpan<u8> salt, AeadKey& aead, u8 (&nonce)[kAeadNonceBytes])
 {
-    static constexpr char label[] = "cerid quic token seal";
+    static constexpr char kLabel[] = "cerid quic token seal";
     u8                    prk[32];
     u8                    okm[32U + kAeadNonceBytes];
     if (hkdf_extract(AlgorithmId::HkdfSha256, salt, key, Span<u8>(prk)) != CryptoError::None ||
         hkdf_expand(AlgorithmId::HkdfSha256, ConstSpan<u8>(prk),
-                    ConstSpan<u8>(reinterpret_cast<const u8*>(label), sizeof(label) - 1U),
+                    ConstSpan<u8>(reinterpret_cast<const u8*>(kLabel), sizeof(kLabel) - 1U),
                     Span<u8>(okm)) != CryptoError::None ||
         aead.init(AlgorithmId::Aes256Gcm, ConstSpan<u8>(okm, 32U)) != CryptoError::None)
     {

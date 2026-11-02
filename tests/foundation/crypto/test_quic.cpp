@@ -180,11 +180,12 @@ void protect_and_read_back(QuicVersion version, AlgorithmId aead, ConstSpan<u8> 
     REQUIRE(hp.protect(packet, packet_number_offset) == CryptoError::None);
     CHECK(equal(packet, expected));
 
-    usize bytes = 0U;
-    u64   truncated = 0U;
-    REQUIRE(hp.unprotect(packet, packet_number_offset, bytes, truncated) == CryptoError::None);
-    CHECK(bytes == header.size() - packet_number_offset);
-    const u64 decoded = quic_decode_packet_number(truncated, bytes, packet_number);
+    usize     number_bytes    = 0U;
+    u64       truncated       = 0U;
+    const u64 expected_number = packet_number; // the sample's own number: the closest candidate is itself
+    REQUIRE(hp.unprotect(packet, packet_number_offset, number_bytes, truncated) == CryptoError::None);
+    CHECK(number_bytes == header.size() - packet_number_offset);
+    const u64 decoded = quic_decode_packet_number(truncated, number_bytes, expected_number);
     CHECK(decoded == packet_number);
     CHECK(equal(ConstSpan<u8>(packet).first(header.size()), header));
     REQUIRE(key.open(decoded, packet, header.size()) == CryptoError::None);
