@@ -1150,8 +1150,15 @@ carries the KEM.
     the init secret decapsulated with the epoch's external key) and every replaced leaf, by an Update, a path or a
     resync, is accepted only as its predecessor's successor (section 5.3.1's
     `AuthenticationService::valid_successor`).
-    b. Next: ReInit and subgroup branching (sections 11.2 and 11.3, with their resumption PSKs), then GREASE (section
-    13.5) and the post-quantum suites, with live OpenMLS and MLSpp interop (M4).
+    b. Reinitialization and subgroup branching
+    ([mls_group.hpp](../../engine/foundation/crypto/include/crd/crypto/mls_group.hpp), `mls_commit.cpp`; no
+    working-group vector holds a ReInit commit or a resumed Welcome, so `test_mls_resume.cpp` holds the creators and
+    joiners to each other and to a hand-made committer; decision M12): a ReInit proposed, committed alone and merged,
+    which ends the group (sections 12.1.5, 12.2 and 12.4.2); the new group of a ReInit (`Group::reinit`) or a subgroup
+    (`Group::branch`) created with its first commit of Adds, the reinit or branch PSK and a path; a joiner's checks of
+    a resumed group (section 12.4.3.1: the only such PSK, from the prior group it names, epoch 1, the ReInit's or the
+    prior group's parameters, and the members).
+    c. Next: GREASE (section 13.5) and the post-quantum suites, with live OpenMLS and MLSpp interop (M4).
 
 **M5. The receive window** (RFC 9420 section 9.2 leaves its size to the application). OpenMLS's defaults: a receiver
 keeps the keys of the 5 generations below the next unconsumed one of each ratchet (late and reordered messages) and
@@ -1210,9 +1217,9 @@ join-time checks (M7) and M8's checks of every member (on the member's own leaf,
 section 13.4's rule that a joiner supports every GroupContext extension; a separate check proved redundant), the
 member's own leaf (found by its encryption key, then compared whole) and its private keys, the path secret implanted
 at the lowest common ancestor of the signer's and the member's leaves, the epoch's secrets and the confirmation tag.
-A refusal anywhere leaves the group empty. A resumption PSK of usage reinit or branch is refused as Unsupported until
-ReInit and branching land (layer 9), which check the old group they name. Every Welcome of one commit must seal the
-same GroupInfo, since the key and nonce are the joiner secret's.
+A refusal anywhere leaves the group empty. A resumption PSK of usage reinit or branch is taken only from the prior
+group the joiner names, whose rules decision M12 checks. Every Welcome of one commit must seal the same GroupInfo,
+since the key and nonce are the joiner secret's.
 
 **M10. Epoch messages and commits.** A received message is processed whole into a `ReceivedMessage` that owns its
 bytes (a PrivateMessage opens in place); a commit is staged, not applied: `StagedCommit` holds the next epoch (tree,
@@ -1230,9 +1237,8 @@ up there first, then in the store. A member's commit includes by default every c
 (a Remove over an Update of the same leaf, the latest Update of a leaf, the first of repeated Adds of one client and
 of repeated PSKs, the latest GroupContextExtensions every member supports, only proposals valid on their own) and its
 own by value; an Update by value would be the committer's own and is refused. A member that saw proposals commits
-before it sends application data (section 12.4: `protect` is NotReady while proposals wait). ReInit (section 11.2)
-is refused as Unsupported in a proposal or a commit, like a reinit or branch PSK, until layer 10 lands it with the
-new group it names. A commit from a new member is an external join (decision M11).
+before it sends application data (section 12.4: `protect` is NotReady while proposals wait). A ReInit and the PSKs
+of usage reinit and branch follow decision M12. A commit from a new member is an external join (decision M11).
 
 **M11. External joins.** A new member joins by an external commit only from a GroupInfo that carries the external_pub
 extension, and only a member can publish one: the key is DeriveKeyPair(external_secret) of the epoch, which no one
@@ -1253,6 +1259,35 @@ commit always carries a path (section 12.4.3.2), its proposals are by value only
 ExternalInit's kem_output is Npk long before any key work; a kem_output no agreement can use is BadKey or WeakSecret,
 and one that decapsulates to another init secret fails at the confirmation tag (Forged). The joiner's PSKs come from
 its store alone (it holds no resumption secret of the group).
+
+**M12. Reinitialization and branching** (RFC 9420 sections 11.2, 11.3, 12.1.4, 12.1.5, 12.2, 12.4.2 and 12.4.3.1). A
+ReInit is a proposal like the others (a member's `propose`, or an external sender's), valid on its own when its version
+is no older than the group's and it names each extension once; its cipher suite is the new group's creator's to judge,
+so a ReInit to a suite or a version this build does not implement still ends the group, and `reinit` refuses it then
+(Unsupported). A commit holds a ReInit only alone (section 12.2). A member's default list takes the latest valid cached
+ReInit only when nothing else is committed, by reference or by value: section 12.2 prefers the other proposals, and the
+ReInit is proposed again in a later epoch. Merging a ReInit's commit ends the group (`Group::ended`): it keeps the
+epoch's secrets and the ReInit, sends nothing (NotReady) and takes no message (OutOfWindow), as section 12.4.2 requires,
+and a ReInit's commit never publishes the external key. Any member of the ended group creates the new group
+(`Group::reinit`, section 11.2's step 3), and any member of a group, ended or not, a subgroup (`Group::branch`, section
+11.3; from an ended group, a way on when its ReInit names what this build cannot create): a group created as section 11
+says, then its first commit (an Add per other member, the PSK of usage reinit or branch, and a path), merged at once,
+since the creator is the whole group at epoch 0 and no delivery service can refuse that commit. The PSK names the prior
+group at its current epoch: for a reinit, the epoch the ReInit's commit began, as section 11.2 requires; for a branch,
+the epoch the member branches from, so a member that moved on is never brought into a branch of a past epoch. It carries
+a fresh Nh-byte nonce (section 11.3), and its secret is the prior group's resumption secret, never the store's. A reinit
+or branch key is accepted only in that first commit (section 12.1.4) and, in a Welcome, only once and only from the
+prior group the joiner names (`Group::join`'s `prior`; section 12.4.3.1). The joiner then checks what section 12.4.3.1
+lists: epoch 1; for a reinit, the ReInit of the prior group's last commit and its group id, version, cipher suite and
+extensions; for a branch, the prior group's version and cipher suite; and the members. Membership "according to the
+application" is the Authentication Service's `valid_successor`, its judgement that two credentials present one member:
+each member of the new group matches a distinct member of the prior group, and for a reinit every prior member is
+matched. Section 12.4.3.1 alone asks only that every prior member be in the new group; that each new member also be a
+prior one is Cerid's rule, from section 11.2's "same membership", so a peer's reinitialization that adds a member is
+refused (Forged) by design. The matching costs O(n·m) judgements, since the application's equivalence has no order to
+sort by. The creator checks its own new group the same way before it returns the Welcome. A reinitialization may keep
+the prior group's id, and then the store's repeat check spares that id: the member takes no further part in the group
+the ReInit ended.
 
 **M6. Padding** (RFC 9420 section 6.3 leaves its amount to the application). A PrivateMessageContent of L bytes is
 padded with Padmé (Nikitin et al., "Reducing Metadata Leakage from Encrypted Files and Communication with PURBs",
@@ -1330,9 +1365,24 @@ ReInit beside it, two Removes, a short kem_output, a proposal by reference, a bl
 unknown PSKs, another signer, a kem_output no agreement can use, another init secret at the confirmation tag, a
 refused credential, a resync the Authentication Service refuses as a successor, the commit in the next epoch), the
 group unchanged; the reserved leaf, the joining path made and merged to the same tree and the joiner's keys started),
+`test_mls_resume.cpp` (groups in every suite that a ReInit ends, proposed by a member, and that another member than the
+committer reinitializes into the next suite with new extensions, the group id changed or kept with the store naming it;
+subgroups branched from a group that goes on, one of the creator alone; the new groups' members joining with their prior
+groups, agreeing with the creator, exchanging data and committing; a ReInit committed alone: a cached ReInit left out
+for a Remove or a by-value proposal, a by-value ReInit beside a cached proposal refused, the latest valid cached ReInit
+chosen (an external sender's over a member's and an older version's), a cached branch PSK never committed, and a
+ReInit's commit refusing the external key; every send of an ended group NotReady and a message to it OutOfWindow; every
+refusal of a creator (a prior group no ReInit ended, an empty one, itself, a stranger, a missing member, a duplicated
+one, a key package of another suite, a ReInit of a suite or version outside this build); every refusal of a joiner
+against a hand-made creator (the ReInit's group id, cipher suite and extensions, epoch 2, a missing member, a stranger,
+a duplicate, no prior group, another one (one at the same epoch among them), a prior ReInit of a later version, a past
+epoch, a live prior group, two resuming PSKs, a branch in another suite or past epoch 1 or with a stranger, a known
+group id, the joining group as its own prior), each left empty),
 `crd-fuzz-crypto-mls-commit` (any message, and the honest proposal, commit and external commit changed in any byte,
 refused with the member unchanged or accepted only as the honest one; the published GroupInfo changed in any byte
-refused by a joiner left empty, the intact one joined and its commit taken), `crd-fuzz-crypto-mls-group` (every group decoder's acceptance
+refused by a joiner left empty, the intact one joined and its commit taken; the honest ReInit's commit changed in any
+byte, refused or ending the group only intact; the resumed Welcome changed in any byte, refused with the joiner empty
+or joining only the honest new epoch), `crd-fuzz-crypto-mls-group` (every group decoder's acceptance
 written back, extension lists against a restatement, and an honest Welcome changed in any byte refused with the group
 empty or joining only the honest epoch),
 `crd-fuzz-crypto-mls-tree` (accepted
