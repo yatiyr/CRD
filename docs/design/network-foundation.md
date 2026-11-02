@@ -1089,10 +1089,24 @@ carries the KEM.
    all zero and only then spends the generation, so a forged or malformed message spends nothing; protecting and
    opening allocate nothing and open in place. The transcript hashes and the confirmation tag (section 8.2). Semantic
    checks of leaf nodes, key packages and commits belong to the layers below.
-7. Next: the ratchet tree with tree and parent hashes, validation and TreeKEM (`tree-operations.json`,
-   `tree-validation.json`, `treekem.json`), key packages' and leaf nodes' validation, proposals, commits, GroupInfo
-   and Welcome (`welcome.json` and the rest of `messages.json`), and the passive-client scenarios
-   (`passive-client-*.json`).
+7. The ratchet tree and TreeKEM ([mls_tree.hpp](../../engine/foundation/crypto/include/crd/crypto/mls_tree.hpp);
+   `tree-validation.json`, `tree-operations.json`, `treekem.json`; decision M7): the ratchet_tree extension decoded
+   (each node of the type its position holds, the last one present, extended with blanks) and written without
+   trailing blanks; resolutions and filtered direct paths (section 4.1); tree hashes held per node and recomputed
+   along the nodes a change touches (7.8); parent hashes, with the original sibling tree hash computed with the
+   parent's unmerged leaves blanked and dropped (7.9); the join-time checks (unmerged leaves increasing, present,
+   below their parent and listed by every non-blank node between; every encryption and signature key once; every
+   leaf's LeafNodeTBS signature with the group id and leaf index of update and commit leaves; every non-blank parent
+   parent-hash valid relative to exactly one descendant, chains starting only at commit leaves); Add, Update and
+   Remove with doubling and truncation (7.7, 12.1); merging an UpdatePath (its node count, the leaf's source and
+   parent hash, a fresh leaf key and no path key held elsewhere checked before anything changes, 12.4.2); and
+   TreeKEM: the committer's fresh leaf key, path secrets, node keys, signed commit leaf and HPKE ciphertexts to each
+   copath child's resolution without the commit's new members under the provisional GroupContext; a receiver's
+   decryption at the lowest path node above it, each derived public key checked against the path's, and the commit
+   secret; a Welcome's path secret implanted at the lowest common ancestor (12.4.3.1).
+8. Next: key packages' and leaf nodes' validation against the group (capabilities, lifetimes, credentials),
+   proposals, commits, GroupInfo and Welcome (`welcome.json` and the rest of `messages.json`), and the passive-client
+   scenarios (`passive-client-*.json`).
 
 **M5. The receive window** (RFC 9420 section 9.2 leaves its size to the application). OpenMLS's defaults: a receiver
 keeps the keys of the 5 generations below the next unconsumed one of each ratchet (late and reordered messages) and
@@ -1105,6 +1119,19 @@ when its epoch starts (per leaf two node secrets, two ratchets and twice the win
 default window) and nothing on the message path; it has at most 2^20 leaves (about 0.7 GiB), a group size no
 deployment of MLS approaches and a bound on what a hostile tree size can claim. A sender's own ratchet hands out its
 generations in turn (`send_key`) and is Exhausted past 2^32 - 1, when the group must start a new epoch.
+
+**M7. Tree state and staged keys.** A RatchetTree owns each node's encoding, so the messages it came from need not
+outlive it, and holds every node's tree hash and two occupancy bits (a non-blank node below, for resolutions and
+filtered direct paths; a non-blank leaf below, for truncation), recomputed along the path a change touches: the root
+hash is a read, and a 2^20-leaf tree changes in O(log n) hashes. Every refusal leaves a tree as it was (checks run
+before anything changes; the encodings a change writes are built first); ProviderFailure empties it rather than leave
+stale hashes. A commit's keys are staged: create_update_path and process_update_path write the new leaf key, the path
+keys and the path and commit secrets into a PathUpdate, which PathKeys::apply takes only once the commit is confirmed
+(section 12.4.2's confirmation tag), so a commit refused late changes no key; `prune` drops the keys of nodes a
+proposal blanked or replaced (section 7.5's deletion). A received path's derived public keys are compared with the
+path's, so a committer cannot hand members a secret that disagrees with the keys it published. Parent-hash validity
+at join takes RFC 9420's top-down form: every non-blank parent valid relative to exactly one of its children's
+descendants.
 
 **M6. Padding** (RFC 9420 section 6.3 leaves its amount to the application). A PrivateMessageContent of L bytes is
 padded with Padmé (Nikitin et al., "Reducing Metadata Leakage from Encrypted Files and Communication with PURBs",
@@ -1140,7 +1167,18 @@ PrivateMessage against a restatement of section 6.3 in both directions, with in-
 truncated and non-minimal contents, every single-byte change of a message, replay, another epoch's keys and a leaf
 past the tree; the framing rules of section 6 for every sender, content type and wire format; public messages from
 every sender with their tags and signatures bound to the context, the wire format and each field; the decoders'
-refusals; Padmé against its definition restated for every length below 70,000), `crd-fuzz-crypto-mls-message`
+refusals; Padmé against its definition restated for every length below 70,000), `test_mls_tree.cpp` (the 56
+tree-validation vectors of the profile: each tree decoded and written back, every node's resolution and tree hash,
+the join-time checks; the 5 tree-operations vectors; the 44 treekem vectors: each member's private state checked
+against the tree, every update path parent-hash valid, merged to its tree hash and decrypted by every other member to
+its path secret and commit secret, then written again by its sender and merged and decrypted by the others; model
+groups in each suite that add, update, remove and commit at random, every member's tree, commit secret and held keys
+compared with TreeKEM's invariant at every epoch and each joiner validating the tree and implanting its Welcome path
+secret; doubling, truncation and trailing blanks; the decoder's, the join-time checks', the merge's, the decryption's,
+the tree changes' and the path keys' refusals, each leaving the tree unchanged), `crd-fuzz-crypto-mls-tree` (accepted
+trees written back exactly, resolutions and filtered direct paths against section 4.1 restated, tree changes against a
+model with the held hashes equal to a fresh decode's, and a changed update path refused unchanged or decrypting only
+to the honest commit secret), `crd-fuzz-crypto-mls-message`
 (every decoder's acceptance written back, private messages changed in any byte or hostile refused with nothing
 spent, public messages verified exactly when unchanged) and `crd-fuzz-crypto-mls` (headers against a restatement of section 2.1.2, tree math
 against its invariants, HPKE round trips with any bit changed, hostile openings and signatures, derivations, and
