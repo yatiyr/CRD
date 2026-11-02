@@ -1085,6 +1085,43 @@ verification order, the restated verdict rule and a flipped byte), `tls_interop.
 schema's digest refusing OpenSSL 4.0.3's early data over records while resuming), and source mutations, each
 caught.
 
+<a id="key-logging"></a>
+### Key logging
+
+**S19. RFC 9850 key logging exists only in non-shipping builds**
+([tls.hpp](../../engine/foundation/crypto/include/crd/crypto/tls.hpp),
+threat T22; RFC 9850 read 2026-11-02, register entry `tls.keylog`). A test decrypts its own captures; nothing else
+may hold a session's keys:
+
+- **The sink.** `TlsConfig::key_log` (a function and its user pointer) receives each line the provider writes for
+  every session and QUIC handshake of the context, `<label> <client random> <secret>` in lower-case hex without a
+  terminator, on the thread driving the session inside the call that derived the secret. The exporter secrets
+  (EXPORTER_SECRET, and EARLY_EXPORTER_SECRET should a provider log it) reach it only with `key_log_exporters`, RFC
+  9850 section 6's separate authorization: they yield every exporter value a channel binding or capability binding
+  relies on. No environment variable turns logging on (section 6: whoever
+  controls the launch would control the keys); a line is a key and never enters a diagnostic record.
+- **Compiled out of shipping.** `CRD_TLS_KEY_LOG` (crd-crypto's private definition from the shipping condition) is 0
+  in a shipping build: the forwarding code is not compiled, the provider's key log functions are poisoned in
+  tls.cpp (`#pragma GCC poison`, which clang and clang-cl read too, and MSVC's `#pragma deprecated` under `/WX`), so
+  any use fails to compile, and a
+  context given a sink is refused (`BadConfig`), never silently left unlogged. `tls_key_log_compiled()` answers
+  which build this is; crd-crypto-tests derives its own expectation from the shipping condition and checks it on
+  every lane, the shipping lanes included (the CI guard).
+- **The labels.** The provider logs CLIENT_EARLY_TRAFFIC_SECRET (a client offering early data, a server accepting
+  it), both handshake traffic secrets, both application traffic secrets and EXPORTER_SECRET, with the inner
+  ClientHello's random once ECH is accepted and the outer one's otherwise. It never logs EARLY_EXPORTER_SECRET,
+  ECH_SECRET or ECH_CONFIG (the ECH HPKE context is the provider's), which RFC 9850 lets an implementation omit; the
+  register entry records it, and the provider is not patched.
+
+Evidence: `test_tls.cpp` (the build's expectation and every refusal; both ends' lines equal for each AEAD, the
+ClientHello's random on each, the server's EncryptedExtensions and the client's first application record opened
+under the logged secrets by an HKDF-Expand-Label written from the RFC, and only under them; every exporter value
+derived from EXPORTER_SECRET), `test_quic_handshake.cpp` (in QUIC versions 1 and 2 and each AEAD, a packet sealed
+under the keys of each logged secret opening under the reading end's keys), `test_tls_early.cpp` (the early secret
+at the client and at an accepting server only), `test_tls_ech.cpp` (the inner random when accepted, the outer one at
+both ends when rejected) and `tls_interop.py` (each established connection's lines equal to OpenSSL 4.0's key log
+both ways, over records and QUIC, with ECH and with early data).
+
 <a id="hpke"></a>
 ### Hybrid public key encryption
 
