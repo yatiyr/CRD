@@ -425,15 +425,17 @@ holds ECDSA. The decisions (numbered for the tests):
   the store's 16-byte identifier and a closing zero byte (a TPM closes a label with a zero byte itself, so the label
   carries one and wrapping and unwrapping agree wherever they run; a TPM takes labels only up to its largest digest, 32
   bytes with SHA-256 alone, and answered `TPM_RC_SIZE` to a 58-byte one). The reference is a format byte, the handle and
-  the 256-byte wrapped key; it holds no public key, so a copied store file gives a future quantum attacker no modulus to
-  factor. A changed handle or another store's identifier names no key, and a changed wrapped key fails OAEP inside the
-  TPM (the label binds the store too): both `Denied`. `forget` deletes the key (`forgets()` is true, so K5 holds on
-  Windows too; the provider keeps a key as a blob its TPM wraps, so a profile backup taken before the deletion still
-  holds it). A store under it opens only on the machine whose TPM holds the key. `available()` opens the provider and
-  reads its platform type. Linux's protector through tss2, proven against a TPM simulator, is next; until then the class
-  answers `Unavailable` there. Evidence (2026-11-03, [session](../sessions/2026-11-03-net-2-tpm-protector.md)): the TPM
-  cases of `test_key_store.cpp` on this PC's Intel PTT TPM (a runner without one skips the hardware case), no TPM key
-  left after the run, and a forget that deletes nothing caught.
+  the 256-byte wrapped key; it holds no public key, so the store file alone carries no modulus, but a copy of the user's
+  profile does (the provider's key blob, its public half in the clear): against a quantum adversary this protector rests
+  on RSA-2048, as DPAPI's blobs and the Secret Service's keyring files rest on their own protection. A changed handle or
+  another store's identifier names no key, and a changed wrapped key fails OAEP inside the TPM (the label binds the
+  store too): both `Denied`. `forget` deletes the key (`forgets()` is true, so K5 holds on Windows too; the provider
+  keeps a key as a blob its TPM wraps, so a profile backup taken before the deletion still holds it). A store under it
+  opens only on the machine whose TPM holds the key. `available()` opens the provider and reads its platform type.
+  Linux's protector through tss2, proven against a TPM simulator, is next; until then the class answers `Unavailable`
+  there. Evidence (2026-11-03, [session](../sessions/2026-11-03-net-2-tpm-protector.md)): the TPM cases of
+  `test_key_store.cpp` on this PC's Intel PTT TPM (a runner without one skips the hardware case), no TPM key left after
+  the run, and a forget that deletes nothing caught.
 
 Evidence (2026-11-02, [session](../sessions/2026-11-02-net-2-key-store.md)): `test_key_store.cpp` (12 cases: every kind
 of key through its whole life, every refusal, every changed byte of a store, an older and a substituted store, writers
