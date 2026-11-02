@@ -1122,6 +1122,35 @@ CryptoError RatchetTree::validate(const SignatureVerifier& verifier, cont::Const
 
 // ---- The proposals' changes ----
 
+CryptoError RatchetTree::reserve_leaf(u32& index) noexcept
+{
+    index = 0U;
+    if (!ready())
+    {
+        return CryptoError::NotReady;
+    }
+    u32 at = 0U;
+    while (at < m_leaves && !blank(2U * at))
+    {
+        ++at;
+    }
+    if (at == m_leaves)
+    {
+        if (m_leaves >= kMaxSecretTreeLeaves)
+        {
+            return CryptoError::BadLength;
+        }
+        const CryptoError error = resize(2U * m_leaves);
+        if (error != CryptoError::None)
+        {
+            wipe(); // a grown tree cannot be left half built
+            return error;
+        }
+    }
+    index = at;
+    return CryptoError::None;
+}
+
 CryptoError RatchetTree::add(const LeafNode& leaf, u32& index) noexcept
 {
     index = 0U;
@@ -1135,20 +1164,14 @@ CryptoError RatchetTree::add(const LeafNode& leaf, u32& index) noexcept
     {
         return error;
     }
-    u32 at = 0U;
-    while (at < m_leaves && !blank(2U * at))
+    const u32 before = m_leaves;
+    u32       at     = 0U;
+    error            = reserve_leaf(at);
+    if (error != CryptoError::None)
     {
-        ++at;
+        return error;
     }
-    const bool grow = at == m_leaves;
-    if (grow && m_leaves >= kMaxSecretTreeLeaves)
-    {
-        return CryptoError::BadLength;
-    }
-    if (grow)
-    {
-        error = resize(2U * m_leaves);
-    }
+    const bool grow = m_leaves != before;
     // The non-blank nodes above list the new leaf as unmerged (section 12.1.1), staged before anything changes.
     struct Staged
     {
@@ -1158,7 +1181,7 @@ CryptoError RatchetTree::add(const LeafNode& leaf, u32& index) noexcept
     Staged           staged[tree::kMaxDepth];
     usize            count                 = 0U;
     u32              path[tree::kMaxDepth] = {};
-    const usize      depth = error == CryptoError::None ? tree::direct_path(2U * at, m_leaves, path) : 0U;
+    const usize      depth                 = tree::direct_path(2U * at, m_leaves, path);
     cont::Array<u32> list;
     cont::Array<u8>  body;
     for (usize i = 0U; error == CryptoError::None && i < depth; ++i)
@@ -1321,14 +1344,14 @@ CryptoError RatchetTree::check_new_keys(u32 sender, cont::ConstSpan<u8> leaf_key
     return CryptoError::None;
 }
 
-CryptoError RatchetTree::merge_path(u32 sender, const UpdatePath& path) noexcept
+CryptoError RatchetTree::merge_path(u32 sender, const UpdatePath& path, bool joining) noexcept
 {
     if (!ready())
     {
         return CryptoError::NotReady;
     }
     LeafNode current{};
-    if (!leaf_node(sender, current))
+    if (joining ? sender >= m_leaves || !blank(2U * sender) : !leaf_node(sender, current))
     {
         return CryptoError::OutOfWindow;
     }
@@ -1354,7 +1377,7 @@ CryptoError RatchetTree::merge_path(u32 sender, const UpdatePath& path) noexcept
     {
         return CryptoError::Forged;
     }
-    if (same_bytes(path.leaf_node.encryption_key, current.encryption_key))
+    if (!joining && same_bytes(path.leaf_node.encryption_key, current.encryption_key))
     {
         return CryptoError::BadKey;
     }
@@ -1499,11 +1522,32 @@ void PathKeys::replace_leaf(HpkeKey& key) noexcept
     key.clear();
 }
 
+CryptoError PathKeys::start(const CipherSuite& suite, u32 leaf, PathUpdate& update) noexcept
+{
+    for (HpkeKey& key : m_keys)
+    {
+        key.clear();
+    }
+    m_leaf_key.clear();
+    if (!update.leaf_key.ready())
+    {
+        return CryptoError::NotReady;
+    }
+    if (leaf >= kMaxSecretTreeLeaves)
+    {
+        return CryptoError::OutOfWindow;
+    }
+    m_suite = suite;
+    m_leaf  = leaf;
+    apply(update);
+    return CryptoError::None;
+}
+
 // ---- TreeKEM ----
 
 CryptoError create_update_path(RatchetTree& tree, u32 sender, const Signer& signer, const LeafNode& leaf_template,
                                const GroupContext& context, cont::ConstSpan<u32> excluded, cont::Array<u8>& path,
-                               PathUpdate& update) noexcept
+                               PathUpdate& update, bool joining) noexcept
 {
     update.clear();
     path.clear();
@@ -1514,7 +1558,7 @@ CryptoError create_update_path(RatchetTree& tree, u32 sender, const Signer& sign
     {
         return CryptoError::NotReady;
     }
-    if (sender >= tree.leaves() || tree.blank(2U * sender))
+    if (sender >= tree.leaves() || tree.blank(2U * sender) != joining)
     {
         return CryptoError::OutOfWindow;
     }

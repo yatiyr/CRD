@@ -1,5 +1,5 @@
 // crd-crypto -- an MLS group, RFC 9420: extensions, leaf node and key package validation against a group, GroupInfo
-// and Welcome, a new group and joining one (NET.2; contract: docs/design/network-foundation.md#mls).
+// and Welcome, a new group and joining one from a Welcome (NET.2; contract: docs/design/network-foundation.md#mls).
 #include <crd/crypto/mls_group.hpp>
 
 #include "byte_spans.hpp"
@@ -117,13 +117,6 @@ CryptoError check_required(cont::ConstSpan<u8> extensions, const Capabilities& c
         every_codepoint(required.proposals, [&](u16 type) { return supports_proposal(capabilities, type); }) &&
         every_codepoint(required.credentials, [&](u16 type) { return lists(capabilities.credentials, type); });
     return supported ? CryptoError::None : CryptoError::Unsupported;
-}
-
-// A key no agreement in the suite's KEM can use is BadKey, whatever the check's reason.
-CryptoError check_node_key(const CipherSuite& suite, cont::ConstSpan<u8> key) noexcept
-{
-    const CryptoError error = check_agreement_public_key(suite.kem, key);
-    return error == CryptoError::None || error == CryptoError::ProviderFailure ? error : CryptoError::BadKey;
 }
 
 // KeyPackageTBS: the package's fields before its signature.
@@ -324,6 +317,27 @@ bool take_external_senders(cont::ConstSpan<u8> data, cont::ConstSpan<u8>& body) 
     return take_list<ExternalSender>(in, body, take_external_sender) && in.done();
 }
 
+bool take_external_pub(cont::ConstSpan<u8> data, cont::ConstSpan<u8>& key) noexcept
+{
+    cont::WireReader in(data);
+    if (take_vector(in, key) && in.done())
+    {
+        return true;
+    }
+    key = {};
+    return false;
+}
+
+usize external_pub_bytes(cont::ConstSpan<u8> key) noexcept
+{
+    return vector_bytes(key.size());
+}
+
+void put_external_pub(cont::WireWriter& out, cont::ConstSpan<u8> key) noexcept
+{
+    put_vector(out, key);
+}
+
 // ---- Leaf nodes and key packages against a group ----
 
 CryptoError supports_context(cont::ConstSpan<u8> extensions, const Capabilities& capabilities) noexcept
@@ -331,6 +345,12 @@ CryptoError supports_context(cont::ConstSpan<u8> extensions, const Capabilities&
     const auto supported = [&capabilities](u16 type, cont::ConstSpan<u8>)
     { return supports_extension(capabilities, type); };
     return each_extension(extensions, supported) ? check_required(extensions, capabilities) : CryptoError::Unsupported;
+}
+
+CryptoError check_node_key(const CipherSuite& suite, cont::ConstSpan<u8> key) noexcept
+{
+    const CryptoError error = check_agreement_public_key(suite.kem, key);
+    return error == CryptoError::None || error == CryptoError::ProviderFailure ? error : CryptoError::BadKey;
 }
 
 CryptoError check_psk_id(const CipherSuite& suite, const PreSharedKeyId& id) noexcept
@@ -926,6 +946,7 @@ void GroupEpoch::clear() noexcept
     epoch = 0U;
     fresh_buffer(extensions, 0U);
     fresh_buffer(confirmed, 0U);
+    fresh_buffer(tag, 0U);
     fresh_buffer(interim, 0U);
     tree        = RatchetTree();
     secret_tree = SecretTree();
@@ -942,6 +963,7 @@ void GroupEpoch::take(GroupEpoch& other) noexcept
     epoch       = other.epoch;
     extensions  = std::move(other.extensions);
     confirmed   = std::move(other.confirmed);
+    tag         = std::move(other.tag);
     interim     = std::move(other.interim);
     tree        = std::move(other.tree);
     secret_tree = std::move(other.secret_tree);
@@ -1023,7 +1045,7 @@ CryptoError Group::confirm(GroupEpoch& epoch, cont::ConstSpan<u8> tag) const noe
     {
         return CryptoError::Forged;
     }
-    if (!fresh_buffer(epoch.interim, hash))
+    if (copy_into(tag, epoch.tag) != CryptoError::None || !fresh_buffer(epoch.interim, hash))
     {
         return CryptoError::ProviderFailure;
     }
@@ -1184,6 +1206,30 @@ bool find_own_leaf(const RatchetTree& tree, const LeafNode& own, u32& index) noe
 }
 } // namespace
 
+CryptoError Group::take_tree(const CipherSuite& suite, const GroupInfo& info, cont::ConstSpan<u8> ratchet_tree) noexcept
+{
+    const GroupContext& context    = info.context;
+    cont::ConstSpan<u8> tree_bytes = ratchet_tree;
+    if (tree_bytes.empty() &&
+        !find_extension(info.extensions, static_cast<u16>(ExtensionType::RatchetTree), tree_bytes))
+    {
+        return CryptoError::NotReady;
+    }
+    CryptoError error = m_now.tree.decode(suite, tree_bytes);
+    LeafNode    signer{};
+    if (error == CryptoError::None &&
+        (!same_bytes(m_now.tree.root_hash(), context.tree_hash) || !m_now.tree.leaf_node(info.signer, signer) ||
+         verify_group_info(suite, *m_config.verifier, signer.signature_key, info) != Verification::Valid))
+    {
+        error = CryptoError::Forged;
+    }
+    if (error == CryptoError::None)
+    {
+        error = m_now.tree.validate(*m_config.verifier, context.group_id);
+    }
+    return error == CryptoError::None ? check_members(m_now.tree, context, m_config) : error;
+}
+
 CryptoError Group::join(cont::ConstSpan<u8> welcome, const KeyPackage& own, cont::ConstSpan<u8> init_private,
                         cont::ConstSpan<u8> leaf_private, cont::ConstSpan<u8> ratchet_tree,
                         const GroupConfig& config) noexcept
@@ -1208,28 +1254,7 @@ CryptoError Group::join(cont::ConstSpan<u8> welcome, const KeyPackage& own, cont
     {
         return CryptoError::Replayed;
     }
-    cont::ConstSpan<u8> tree_bytes = ratchet_tree;
-    if (tree_bytes.empty() &&
-        !find_extension(info.extensions, static_cast<u16>(ExtensionType::RatchetTree), tree_bytes))
-    {
-        return CryptoError::NotReady;
-    }
-    error = m_now.tree.decode(suite, tree_bytes);
-    LeafNode signer{};
-    if (error == CryptoError::None &&
-        (!same_bytes(m_now.tree.root_hash(), context.tree_hash) || !m_now.tree.leaf_node(info.signer, signer) ||
-         verify_group_info(suite, *config.verifier, signer.signature_key, info) != Verification::Valid))
-    {
-        error = CryptoError::Forged;
-    }
-    if (error == CryptoError::None)
-    {
-        error = m_now.tree.validate(*config.verifier, context.group_id);
-    }
-    if (error == CryptoError::None)
-    {
-        error = check_members(m_now.tree, context, config);
-    }
+    error = take_tree(suite, info, ratchet_tree);
     // The member's own leaf and keys, then the path secret's (section 12.4.3.1).
     u32 leaf = 0U;
     if (error == CryptoError::None && !find_own_leaf(m_now.tree, own.leaf_node, leaf))
@@ -1269,7 +1294,8 @@ CryptoError Group::join(cont::ConstSpan<u8> welcome, const KeyPackage& own, cont
     }
     if (error == CryptoError::None)
     {
-        error = m_now.secret_tree.init(suite, m_now.secrets.get(EpochSecret::Encryption), m_now.tree.leaves(), config.window);
+        error = m_now.secret_tree.init(suite, m_now.secrets.get(EpochSecret::Encryption), m_now.tree.leaves(),
+                                       config.window);
     }
     if (error != CryptoError::None)
     {

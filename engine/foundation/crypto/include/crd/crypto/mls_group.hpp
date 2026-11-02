@@ -1,11 +1,11 @@
 #pragma once
 
-// crd-crypto -- an MLS group, RFC 9420 (NET.2; contract: docs/design/network-foundation.md#mls, M3 layers 8 and 9 and
-// decisions M8 to M10): the group's extensions (sections 7.2, 11.1, 12.1.8.1 and 13.4), the validation of leaf nodes
-// and key packages against a group (5.3.1, 7.3, 10.1 and 13.3), the GroupInfo and Welcome a committer seals for new
-// members (12.4.3 and 12.4.3.1), and a member's group state: a new group (section 11), one joined from a Welcome, and
-// its epochs' messages: proposals, application data and commits received and sent, and a commit staged and merged
-// (5.2 and 12.1 to 12.4.2; mls_commit.cpp).
+// crd-crypto -- an MLS group, RFC 9420 (NET.2; contract: docs/design/network-foundation.md#mls, M3 layers 8 to 10a and
+// decisions M8 to M11): the group's extensions (sections 7.2, 11.1, 12.1.8.1, 12.4.3.2 and 13.4), the validation of
+// leaf nodes and key packages against a group (5.3.1, 7.3, 10.1 and 13.3), the GroupInfo and Welcome a committer seals
+// for new members (12.4.3 and 12.4.3.1), and a member's group state: a new group (section 11), one joined from a
+// Welcome or by an external commit (12.4.3.2), and its epochs' messages: proposals, application data and commits
+// received and sent, and a commit staged and merged (5.2 and 12.1 to 12.4.2; mls_commit.cpp).
 //
 //   time        every lifetime check takes the caller's clock (LeafPolicy::now); nothing here reads one.
 //   identity    whether a credential binds acceptable identifiers to its key is the application's Authentication
@@ -85,6 +85,12 @@ void                put_external_sender(cont::WireWriter& out, const ExternalSen
 // The whole of an extension's data as the list's body (read with take_external_sender); false for anything else.
 [[nodiscard]] bool take_external_senders(cont::ConstSpan<u8> data, cont::ConstSpan<u8>& body) noexcept;
 
+// The external_pub extension of a GroupInfo (section 12.4.3.2): the whole of its data as the HPKE public key an
+// external joiner encapsulates to (false for anything else), and that data's bytes and writer.
+[[nodiscard]] bool  take_external_pub(cont::ConstSpan<u8> data, cont::ConstSpan<u8>& key) noexcept;
+[[nodiscard]] usize external_pub_bytes(cont::ConstSpan<u8> key) noexcept;
+void                put_external_pub(cont::WireWriter& out, cont::ConstSpan<u8> key) noexcept;
+
 // ---- What the application supplies ----
 
 // The Authentication Service (section 5.3.1): the application's judgement of the credentials members present.
@@ -104,6 +110,12 @@ public:
     // group: each member's when joining, each added member's, each external sender's. Safe from several threads.
     [[nodiscard]] virtual bool validate(const Credential&   credential,
                                         cont::ConstSpan<u8> signature_key) const noexcept = 0;
+    // Whether `successor` presents identifiers the application accepts as the successor of `predecessor`'s for one
+    // member (section 5.3.1): asked whenever a member's leaf is replaced, by an Update, by a commit's path, and by an
+    // external commit whose joiner removes its own former leaf (12.4.3.2), so a stranger cannot take a member's place.
+    // Safe from several threads.
+    [[nodiscard]] virtual bool valid_successor(const Credential& predecessor,
+                                               const Credential& successor) const noexcept = 0;
 };
 
 // What a member keeps across its groups (sections 8.4 and 12.4.3.1).
@@ -316,7 +328,7 @@ private:
                                        cont::ConstSpan<u8> init_private, const GroupStore& store,
                                        OpenedWelcome& out) noexcept;
 
-// ---- Proposals and commits (sections 5.2 and 12.1 to 12.4.2; M3 layer 9 and decision M10) ----
+// ---- Proposals and commits (sections 5.2 and 12.1 to 12.4.3.2; M3 layers 9 and 10a, decisions M10 and M11) ----
 
 // Whether a commit holding a proposal of `type` must carry a path (section 12.4's pathRequiredTypes, the Path Required
 // column of section 17.4): update, remove, external_init and group_context_extensions, and any type this build does
@@ -332,7 +344,7 @@ private:
 [[nodiscard]] CryptoError proposal_ref(const CipherSuite& suite, WireFormat wire_format, const FramedContent& content,
                                        const ContentAuth& auth, cont::Span<u8> out) noexcept;
 
-// ---- A member's group state (sections 8, 11, 12 and 12.4.3.1; decisions M9 and M10) ----
+// ---- A member's group state (sections 8, 11, 12, 12.4.3.1 and 12.4.3.2; decisions M9 to M11) ----
 
 // What a group keeps beyond its epoch (decision M10): the resumption PSKs of this many past epochs (56 bytes each),
 // which a commit may inject (section 8.6), and at most this many proposals cached in one epoch, so a flood of
@@ -361,6 +373,7 @@ struct GroupEpoch
     u64             epoch = 0U;
     cont::Array<u8> extensions; // the GroupContext's Extension list body
     cont::Array<u8> confirmed;  // the confirmed transcript hash
+    cont::Array<u8> tag;        // the confirmation tag of the commit that began the epoch, which its GroupInfo carries
     cont::Array<u8> interim;    // the interim transcript hash
     RatchetTree     tree;
     EpochSecrets    secrets;
@@ -389,8 +402,9 @@ public:
     // Drops the commit, zeroing its secrets.
     void clear() noexcept;
 
-    [[nodiscard]] bool   ready() const noexcept { return m_group != nullptr; }
-    [[nodiscard]] u64    epoch() const noexcept { return m_next.epoch; } // the new epoch
+    [[nodiscard]] bool ready() const noexcept { return m_group != nullptr; }
+    [[nodiscard]] u64  epoch() const noexcept { return m_next.epoch; } // the new epoch
+    // A member's leaf, or an external joiner's (type NewMemberCommit) with the leaf the commit gives it.
     [[nodiscard]] Sender committer() const noexcept { return m_committer; }
     // Whether the commit removes the member: merging it leaves the group empty (section 12.4.2).
     [[nodiscard]] bool removes_self() const noexcept { return m_removed; }
@@ -441,6 +455,17 @@ struct SendOptions
     usize               extra_padding = 0U;
 };
 
+// What a GroupInfo carries (section 12.4.3): the ratchet tree (section 12.4.3.3), the external_pub extension that
+// lets a new member join by an external commit (12.4.3.2; off by default: only a member who publishes the key, which
+// no one else can derive, opens the group to external joins), and more extensions (an Extension list's body, each
+// type once, neither ratchet_tree nor external_pub).
+struct GroupInfoOptions
+{
+    bool                ratchet_tree = true;
+    bool                external_pub = false;
+    cont::ConstSpan<u8> extensions;
+};
+
 // What a member's commit holds (section 12.4.1).
 struct CommitOptions
 {
@@ -455,10 +480,8 @@ struct CommitOptions
     bool pending = true;
     // Whether the commit carries a path when no proposal requires one and the list is not empty (section 12.4).
     bool path = true;
-    // Whether the Welcome's GroupInfo carries the ratchet tree (section 12.4.3.3), and more GroupInfo extensions
-    // (an Extension list's body, each type once, not ratchet_tree).
-    bool                tree_in_welcome = true;
-    cont::ConstSpan<u8> group_info_extensions;
+    // The new epoch's GroupInfo, which the Welcome seals and CommitResult::group_info carries.
+    GroupInfoOptions group_info;
 };
 
 // A member's commit: its MLSMessage, the Welcome's MLSMessage for the members it adds (empty when none), the signed
@@ -470,6 +493,25 @@ struct CommitResult
     cont::Array<u8> welcome;
     cont::Array<u8> group_info;
     StagedCommit    staged;
+};
+
+// What an external joiner's commit holds (section 12.4.3.2) besides its ExternalInit: the Remove of the joiner's own
+// former leaf (`resync`; the members accept the new leaf only as its successor), pre-shared keys the store holds (each
+// identity with its fresh Nh-byte nonce), and the new epoch's GroupInfo.
+struct ExternalJoinOptions
+{
+    cont::ConstSpan<u8>             authenticated_data;
+    std::optional<u32>              resync;
+    cont::ConstSpan<PreSharedKeyId> psks;
+    GroupInfoOptions                group_info;
+};
+
+// An external joiner's commit, a PublicMessage MLSMessage for the delivery service, and the signed GroupInfo of the
+// epoch it begins.
+struct ExternalJoinResult
+{
+    cont::Array<u8> message;
+    cont::Array<u8> group_info;
 };
 
 // A message a member processed (Group::process): what it carried, as views of the bytes it owns (a PrivateMessage is
@@ -557,23 +599,52 @@ public:
                                    cont::ConstSpan<u8> init_private, cont::ConstSpan<u8> leaf_private,
                                    cont::ConstSpan<u8> ratchet_tree, const GroupConfig& config) noexcept;
 
-    // Processes one MLSMessage of the group (sections 6, 12.1 and 12.4.2), in this order:
-    //   Unsupported  a wire format other than a public or private message, or a commit from a new member (an
-    //                external join; decision M10);
+    // Joins by an external commit (section 12.4.3.2; decision M11) from `group_info`, a GroupInfo MLSMessage that
+    // carries the external_pub extension: the ExternalInit's init secret exported to the group's external key (section
+    // 8.3), the options' Remove and PSKs, the joiner at the leftmost free leaf with a fresh path (`leaf`'s signature
+    // key, which is `signer`'s, its credential, capabilities and extensions), the commit signed under the GroupInfo's
+    // GroupContext as a PublicMessage, the new epoch derived and confirmed and its GroupInfo signed by the joiner. The
+    // group is then at the new epoch, with no state of the one before: when the delivery service refuses the commit
+    // (another commit won the epoch), the application drops the group and joins again from a newer GroupInfo. In
+    // this order:
+    //   Malformed    a message that is not a GroupInfo or does not decode whole, a confirmation tag not Nh long, an
+    //                extension list naming a type twice, an external_pub that does not decode, or GroupInfoOptions
+    //                extensions naming a type twice, ratchet_tree or external_pub;
+    //   Unsupported  a cipher suite outside the profile, a config without a verifier and an Authentication Service, a
+    //                signer of another algorithm or key than `leaf`'s, or a GroupInfo without external_pub;
+    //   (the tree)   Group::join's refusals of the tree, its root hash, the GroupInfo's signature and the members;
+    //   BadKey       an external key no agreement can use;
+    //   (the list)   `process`'s refusals of an external commit's list, leaf and path, as the members will check them
+    //                (a resync of a blank or outside leaf is Malformed, a successor the Authentication Service
+    //                refuses Forged, a PSK the store does not hold NotReady).
+    // Replaces what the group held; a refusal leaves it and `out` empty.
+    [[nodiscard]] CryptoError join_external(const Signer& signer, const LeafNode& leaf, cont::ConstSpan<u8> group_info,
+                                            cont::ConstSpan<u8> ratchet_tree, const ExternalJoinOptions& options,
+                                            const GroupConfig& config, ExternalJoinResult& out) noexcept;
+
+    // Processes one MLSMessage of the group (sections 6, 12.1, 12.4.2 and 12.4.3.2), in this order:
+    //   Unsupported  a wire format other than a public or private message;
     //   Malformed    a message that does not decode, of another group, framing section 6 refuses, a PrivateMessage
     //                whose padding or content is malformed, a proposal of a type its sender may not send (an
-    //                ExternalInit, an external sender's Update, a new member's proposal other than an Add), or a
-    //                commit whose list section 12.2 refuses or that lacks a required path;
+    //                ExternalInit, an external sender's Update, a new member's proposal other than an Add), a commit
+    //                whose list section 12.2 refuses or that lacks a required path, or an external commit (section
+    //                12.4.3.2) without a path, with a proposal by reference, or whose list is not one ExternalInit
+    //                (its kem_output Npk long), at most one Remove and PSKs;
     //   OutOfWindow  another epoch, a sender leaf that is blank or outside the tree, or an external sender the group
     //                does not list; the secret tree's refusals of a PrivateMessage (Replayed, OutOfWindow) pass
     //                through;
-    //   Forged       a membership tag, an AEAD seal, a signature or a confirmation tag that does not verify;
+    //   Forged       a membership tag, an AEAD seal, a signature or a confirmation tag that does not verify (an
+    //                external commit whose init secret is not the group's external key's shows here), or a new leaf
+    //                the Authentication Service refuses as the successor of the leaf it replaces (an Update, a path,
+    //                an external commit's resync);
     //   Replayed     a proposal already cached, or the member's own commit (its StagedCommit is merged instead);
     //   Exhausted    a proposal past the epoch's cache (decision M10);
     //   NotReady     a commit referencing a proposal the member never cached or a PSK it does not hold; and a
     //                commit's checks against the group: each proposal's (check_key_package, check_leaf and its
     //                signature, a Remove of a blank leaf as Malformed), the new tree's keys and credential types
-    //                (BadKey, Unsupported) and the path's (merge_path, process_update_path).
+    //                (BadKey, Unsupported) and the path's (merge_path, process_update_path; an external joiner's
+    //                leaf at the leftmost free leaf, section 12.4.2); an ExternalInit's kem_output no agreement can
+    //                use is BadKey or WeakSecret.
     // A proposal is cached under its reference, an application message's data is read, and a commit is staged in
     // `out.commit()` for merge: nothing of the group changes but the secret tree's spent generation of a
     // PrivateMessage (section 9.2). A refusal leaves `out` empty.
@@ -602,6 +673,12 @@ public:
     // members it adds (each with its path secret, every PSK named). Nothing of the group changes until `merge`, but a
     // PrivateMessage spends the sender's handshake generation. On a refusal `out` is empty.
     [[nodiscard]] CryptoError commit(const Signer& signer, const CommitOptions& options, CommitResult& out) noexcept;
+
+    // The current epoch's GroupInfo MLSMessage (section 12.4.3), signed by the member: what it publishes for new
+    // members to join from by an external commit. Malformed for options extensions naming a type twice, ratchet_tree
+    // or external_pub; check_signer's refusals.
+    [[nodiscard]] CryptoError group_info(const Signer& signer, const GroupInfoOptions& options,
+                                         cont::Array<u8>& out) const noexcept;
 
     // Makes a staged commit the group's epoch: the past epoch's resumption PSK kept, the member's path keys pruned
     // (section 7.5) and the path's applied, an Update of the member's own leaf adopting its kept key, the proposal
@@ -660,6 +737,15 @@ private:
     [[nodiscard]] usize pending_leaf(cont::ConstSpan<u8> public_key) const noexcept;
     // Unsupported unless `signer` holds the suite's algorithm and the member's leaf's signature key.
     [[nodiscard]] CryptoError check_signer(const Signer& signer) const noexcept;
+    // The tree of a GroupInfo a member joins from (`ratchet_tree`, else its extension) and Group::join's checks of it.
+    [[nodiscard]] CryptoError take_tree(const CipherSuite& suite, const GroupInfo& info,
+                                        cont::ConstSpan<u8> ratchet_tree) noexcept;
+    // `epoch`'s GroupInfo signed by the member at `signer_leaf`, as an MLSMessage in `out`.
+    [[nodiscard]] CryptoError seal_group_info(const Signer& signer, u32 signer_leaf, const GroupEpoch& epoch,
+                                              const GroupInfoOptions& options, cont::Array<u8>& out) const noexcept;
+    // An external commit's init secret (section 8.3) from its ExternalInit's kem_output, under the epoch's external
+    // key.
+    [[nodiscard]] CryptoError external_init_secret(cont::ConstSpan<u8> kem_output, cont::Span<u8> out) const noexcept;
     // A member's content signed under the current GroupContext, and protected with the current epoch's keys.
     [[nodiscard]] CryptoError sign_own(const Signer& signer, WireFormat wire_format, const FramedContent& content,
                                        cont::Span<u8> signature, usize& written) const noexcept;
@@ -674,16 +760,27 @@ private:
     // The signature key of a received message's sender: a member's leaf (Replayed for the member itself), an external
     // sender the group lists, a new member's key package.
     [[nodiscard]] CryptoError sender_key(const ReceivedMessage& message, cont::ConstSpan<u8>& key) const noexcept;
-    // Sections 12.2 and 12.3 over a commit's list from `committer`: the list checked and applied to a copy of the
-    // tree and GroupContext in `staged`, its PSKs looked up into `plan`.
-    [[nodiscard]] CryptoError stage_list(u32 committer, Plan& plan, StagedCommit& staged) const noexcept;
+    // Sections 12.2 and 12.3 over a commit's list from `committer` (a member, or an external joiner: section
+    // 12.4.3.2's list): the list checked and applied to a copy of the tree and GroupContext in `staged`, its PSKs
+    // looked up into `plan`.
+    [[nodiscard]] CryptoError stage_list(const Sender& committer, Plan& plan, StagedCommit& staged) const noexcept;
+    // A commit path's leaf at `index` against the staged next epoch: check_leaf (role Commit), its signature, and the
+    // Authentication Service's acceptance of it as the successor of `predecessor` (the committer's former leaf, or an
+    // external joiner's removed one; none for a joiner that removes no leaf).
+    [[nodiscard]] CryptoError check_path_leaf(const LeafNode& leaf, u32 index, const Credential* predecessor,
+                                              const StagedCommit& staged) const noexcept;
+    // The proposals a commit holds by value appended to `plan` from `sender`, their encodings into `encodings`.
+    [[nodiscard]] static CryptoError add_by_value(cont::ConstSpan<Proposal> proposals, const Sender& sender,
+                                                  cont::Array<u8>& encodings, Plan& plan) noexcept;
     // The commit's key schedule (section 12.4.2): the confirmed transcript hash, the new GroupContext, the epoch's
-    // secrets from the current init secret, the commit secret and the PSKs, and its secret tree.
+    // secrets from `init_secret` (the current epoch's, or an external commit's), the commit secret and the PSKs, and
+    // its secret tree.
     [[nodiscard]] CryptoError advance(StagedCommit& staged, const Plan& plan, WireFormat wire_format,
                                       const FramedContent& content, cont::ConstSpan<u8> signature,
+                                      cont::ConstSpan<u8> init_secret,
                                       cont::ConstSpan<u8> commit_secret) const noexcept;
     // The committed proposals' encodings copied into `staged`, which then names this group and epoch.
-    [[nodiscard]] CryptoError record(const Plan& plan, u32 committer, bool has_path,
+    [[nodiscard]] CryptoError record(const Plan& plan, const Sender& committer, bool has_path,
                                      StagedCommit& staged) const noexcept;
     [[nodiscard]] CryptoError process_commit(ReceivedMessage& out) noexcept;
     // The cached proposals section 12.2 prefers for the member's commit (CommitOptions::pending).

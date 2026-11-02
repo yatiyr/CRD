@@ -140,15 +140,28 @@ inline void make_identity(const mls::CipherSuite& suite, Identity& id, u32 name)
     fresh_hpke(suite, id);
     sign_leaf(suite, id, mls::LeafNodeSource::KeyPackage, {}, 0U);
 }
-// The Authentication Service of the tests: every credential is valid but those of the refused identity.
+// The Authentication Service of the tests: every credential is valid but those of the refused identity, and a
+// credential succeeds another of its own type and content (one client), or any when `any_successor`; the successors
+// it refused are counted.
 class TestAuthority final : public mls::AuthenticationService
 {
 public:
-    Bytes refused;
+    Bytes       refused;
+    bool        any_successor      = false;
+    mutable u32 successors_refused = 0U;
 
     [[nodiscard]] bool validate(const mls::Credential& credential, containers::ConstSpan<u8>) const noexcept override
     {
         return refused.empty() || !equal(credential.content, view(refused));
+    }
+
+    [[nodiscard]] bool valid_successor(const mls::Credential& predecessor,
+                                       const mls::Credential& successor) const noexcept override
+    {
+        const bool valid =
+            any_successor || (predecessor.type == successor.type && equal(predecessor.content, successor.content));
+        successors_refused += valid ? 0U : 1U;
+        return valid;
     }
 };
 

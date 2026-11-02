@@ -2,9 +2,9 @@
 // docs/design/network-foundation.md#hpke).
 //
 // RFC 9180's construction, step by step, over the provider interface: DHKEM (section 4.1) over AgreementKey, its
-// DeriveKeyPair (section 7.1.3), the key schedule (section 5.1) over HKDF and the first message of a context
-// (section 5.2) over AeadKey. Every secret this unit computes lives on the stack of one call and is zeroed before it
-// returns.
+// DeriveKeyPair (section 7.1.3), the key schedule (section 5.1) over HKDF, the first message of a context (section
+// 5.2) over AeadKey and the context's exporter (section 5.3). Every secret this unit computes lives on the stack of
+// one call and is zeroed before it returns.
 #include <crd/crypto/hpke.hpp>
 
 #include "byte_spans.hpp"
@@ -162,37 +162,46 @@ CryptoError extract_and_expand(const Dhkem& kem, cont::ConstSpan<u8> dh, cont::C
     return error;
 }
 
-// KeySchedule(mode_base, shared_secret, info, "", "") to the AEAD key and base nonce of the context's first message.
-CryptoError key_schedule(const Dhkem& kem, const HpkeSuite& suite, cont::ConstSpan<u8> shared_secret,
-                         cont::ConstSpan<u8> info, AeadKey& key, u8 (&nonce)[kAeadNonceBytes])
+// KeySchedule(mode_base, shared_secret, info, "", "") (section 5.1) up to its `secret` (Nh of the suite's KDF) and
+// the key_schedule_context the context's keys expand with (`context`, 1 + 2 Nh bytes).
+CryptoError schedule(const Dhkem& kem, const HpkeSuite& suite, cont::ConstSpan<u8> shared_secret,
+                     cont::ConstSpan<u8> info, cont::Span<u8> context, cont::Span<u8> secret)
 {
     const SuiteId id   = hpke_suite(kem, suite);
-    const usize   hash = hkdf_hash_bytes(suite.kdf);
-    u8            context[1U + 2U * kMaxHashBytes];
-    context[0]        = kModeBase;
-    CryptoError error = labeled_extract(suite.kdf, id, {}, label_of("psk_id_hash"), {},
-                                        cont::Span<u8>(context + 1U, hash));
+    const usize   hash = secret.size();
+    context[0]         = kModeBase;
+    CryptoError error  = labeled_extract(suite.kdf, id, {}, label_of("psk_id_hash"), {}, context.subspan(1U, hash));
     if (error == CryptoError::None)
     {
-        error = labeled_extract(suite.kdf, id, {}, label_of("info_hash"), info,
-                                cont::Span<u8>(context + 1U + hash, hash));
+        error = labeled_extract(suite.kdf, id, {}, label_of("info_hash"), info, context.subspan(1U + hash, hash));
     }
-    const cont::ConstSpan<u8> schedule(context, 1U + 2U * hash);
-    u8                        secret_bytes[kMaxHashBytes];
-    u8                        key_bytes[kMaxKeyBytes];
-    const cont::Span<u8>      secret(secret_bytes, hash);
-    const cont::Span<u8>      aead_key(key_bytes, aead_key_bytes(suite.aead));
     if (error == CryptoError::None)
     {
         error = labeled_extract(suite.kdf, id, shared_secret, label_of("secret"), {}, secret);
     }
+    return error;
+}
+
+// The AEAD key and base nonce of the context's first message.
+CryptoError key_schedule(const Dhkem& kem, const HpkeSuite& suite, cont::ConstSpan<u8> shared_secret,
+                         cont::ConstSpan<u8> info, AeadKey& key, u8 (&nonce)[kAeadNonceBytes])
+{
+    const SuiteId        id   = hpke_suite(kem, suite);
+    const usize          hash = hkdf_hash_bytes(suite.kdf);
+    u8                   context_bytes[1U + 2U * kMaxHashBytes];
+    u8                   secret_bytes[kMaxHashBytes];
+    u8                   key_bytes[kMaxKeyBytes];
+    const cont::Span<u8> context(context_bytes, 1U + 2U * hash);
+    const cont::Span<u8> secret(secret_bytes, hash);
+    const cont::Span<u8> aead_key(key_bytes, aead_key_bytes(suite.aead));
+    CryptoError          error = schedule(kem, suite, shared_secret, info, context, secret);
     if (error == CryptoError::None)
     {
-        error = labeled_expand(suite.kdf, id, secret, label_of("key"), schedule, aead_key);
+        error = labeled_expand(suite.kdf, id, secret, label_of("key"), context, aead_key);
     }
     if (error == CryptoError::None)
     {
-        error = labeled_expand(suite.kdf, id, secret, label_of("base_nonce"), schedule, cont::Span<u8>(nonce));
+        error = labeled_expand(suite.kdf, id, secret, label_of("base_nonce"), context, cont::Span<u8>(nonce));
     }
     if (error == CryptoError::None)
     {
@@ -201,6 +210,84 @@ CryptoError key_schedule(const Dhkem& kem, const HpkeSuite& suite, cont::ConstSp
     secure_zero(secret);
     secure_zero(aead_key);
     return error;
+}
+
+// The context's Export(exporter_context, L) (section 5.3): exporter_secret = LabeledExpand(secret, "exp",
+// key_schedule_context, Nh), then LabeledExpand(exporter_secret, "sec", exporter_context, L) into `out`.
+CryptoError export_from(const Dhkem& kem, const HpkeSuite& suite, cont::ConstSpan<u8> shared_secret,
+                        cont::ConstSpan<u8> info, cont::ConstSpan<u8> exporter_context, cont::Span<u8> out)
+{
+    const SuiteId        id   = hpke_suite(kem, suite);
+    const usize          hash = hkdf_hash_bytes(suite.kdf);
+    u8                   context_bytes[1U + 2U * kMaxHashBytes];
+    u8                   secret_bytes[kMaxHashBytes];
+    u8                   exporter_bytes[kMaxHashBytes];
+    const cont::Span<u8> context(context_bytes, 1U + 2U * hash);
+    const cont::Span<u8> secret(secret_bytes, hash);
+    const cont::Span<u8> exporter(exporter_bytes, hash);
+    CryptoError          error = schedule(kem, suite, shared_secret, info, context, secret);
+    if (error == CryptoError::None)
+    {
+        error = labeled_expand(suite.kdf, id, secret, label_of("exp"), context, exporter);
+    }
+    if (error == CryptoError::None)
+    {
+        error = labeled_expand(suite.kdf, id, exporter, label_of("sec"), exporter_context, out);
+    }
+    secure_zero(secret);
+    secure_zero(exporter);
+    return error;
+}
+
+// Encap(pkR) (section 4.1) with a fresh ephemeral key: `enc` its public key, `shared_secret` the KEM's.
+CryptoError encapsulate(const Dhkem& kem, cont::ConstSpan<u8> peer_public, cont::Span<u8> enc,
+                        cont::Span<u8> shared_secret)
+{
+    AgreementKey   ephemeral;
+    u8             dh_bytes[kMaxSecretBytes];
+    cont::Span<u8> dh(dh_bytes, agreement_sizes(kem.group).secret);
+    CryptoError    error = ephemeral.generate(kem.group);
+    if (error == CryptoError::None)
+    {
+        error = ephemeral.derive(peer_public, dh);
+    }
+    if (error == CryptoError::None)
+    {
+        error = ephemeral.public_key(enc);
+    }
+    if (error == CryptoError::None)
+    {
+        error = extract_and_expand(kem, dh, enc, peer_public, shared_secret);
+    }
+    secure_zero(dh);
+    return error;
+}
+
+// Decap(enc, skR) (section 4.1) under the recipient's `key`.
+CryptoError decapsulate(const Dhkem& kem, const AgreementKey& key, cont::ConstSpan<u8> enc,
+                        cont::Span<u8> shared_secret)
+{
+    const AgreementSizes sizes = agreement_sizes(kem.group);
+    u8                   dh_bytes[kMaxSecretBytes];
+    u8                   recipient[kMaxPublicBytes];
+    cont::Span<u8>       dh(dh_bytes, sizes.secret);
+    CryptoError          error = key.derive(enc, dh);
+    if (error == CryptoError::None)
+    {
+        error = key.public_key(cont::Span<u8>(recipient, sizes.public_key));
+    }
+    if (error == CryptoError::None)
+    {
+        error = extract_and_expand(kem, dh, enc, cont::ConstSpan<u8>(recipient, sizes.public_key), shared_secret);
+    }
+    secure_zero(dh);
+    return error;
+}
+
+// Whether an export of `bytes` is one the suite's KDF can give: 1 to 255 * Nh bytes (section 5.3).
+bool export_length(const HpkeSuite& suite, usize bytes) noexcept
+{
+    return bytes != 0U && bytes <= 255U * hkdf_hash_bytes(suite.kdf);
 }
 } // namespace
 
@@ -300,8 +387,7 @@ CryptoError HpkeKey::open(const HpkeSuite& suite, cont::ConstSpan<u8> enc, cont:
     {
         return refuse(CryptoError::Unsupported, out);
     }
-    const AgreementSizes sizes = agreement_sizes(suite.kem);
-    if (enc.size() != sizes.public_key || ciphertext.size() < kHpkeTagBytes ||
+    if (enc.size() != agreement_sizes(suite.kem).public_key || ciphertext.size() < kHpkeTagBytes ||
         out.size() != ciphertext.size() - kHpkeTagBytes)
     {
         return refuse(CryptoError::BadLength, out);
@@ -310,22 +396,11 @@ CryptoError HpkeKey::open(const HpkeSuite& suite, cont::ConstSpan<u8> enc, cont:
     {
         return CryptoError::Overlap;
     }
-    u8             dh_bytes[kMaxSecretBytes];
-    u8             recipient[kMaxPublicBytes];
     u8             shared_bytes[kMaxHashBytes];
-    cont::Span<u8> dh(dh_bytes, sizes.secret);
     cont::Span<u8> shared(shared_bytes, hkdf_hash_bytes(kem->kdf));
-    CryptoError    error = m_key.derive(enc, dh);
-    if (error == CryptoError::None)
-    {
-        error = m_key.public_key(cont::Span<u8>(recipient, sizes.public_key));
-    }
-    if (error == CryptoError::None)
-    {
-        error = extract_and_expand(*kem, dh, enc, cont::ConstSpan<u8>(recipient, sizes.public_key), shared);
-    }
-    AeadKey key;
-    u8      nonce[kAeadNonceBytes] = {};
+    CryptoError    error = decapsulate(*kem, m_key, enc, shared);
+    AeadKey        key;
+    u8             nonce[kAeadNonceBytes] = {};
     if (error == CryptoError::None)
     {
         error = key_schedule(*kem, suite, shared, info, key, nonce);
@@ -334,9 +409,39 @@ CryptoError HpkeKey::open(const HpkeSuite& suite, cont::ConstSpan<u8> enc, cont:
     {
         error = key.open(nonce, ciphertext, aad, out);
     }
-    secure_zero(dh);
     secure_zero(shared);
     secure_zero(nonce);
+    return error == CryptoError::None ? error : refuse(error, out);
+}
+
+CryptoError HpkeKey::export_secret(const HpkeSuite& suite, cont::ConstSpan<u8> enc, cont::ConstSpan<u8> info,
+                                   cont::ConstSpan<u8> exporter_context, cont::Span<u8> out) const noexcept
+{
+    if (!ready())
+    {
+        return refuse(CryptoError::NotReady, out);
+    }
+    const Dhkem* kem = find_kem(suite.kem);
+    if (kem == nullptr || suite.kem != m_key.algorithm() || !hpke_supported(suite))
+    {
+        return refuse(CryptoError::Unsupported, out);
+    }
+    if (enc.size() != agreement_sizes(suite.kem).public_key || !export_length(suite, out.size()))
+    {
+        return refuse(CryptoError::BadLength, out);
+    }
+    if (overlaps(out, enc) || overlaps(out, info) || overlaps(out, exporter_context))
+    {
+        return CryptoError::Overlap;
+    }
+    u8             shared_bytes[kMaxHashBytes];
+    cont::Span<u8> shared(shared_bytes, hkdf_hash_bytes(kem->kdf));
+    CryptoError    error = decapsulate(*kem, m_key, enc, shared);
+    if (error == CryptoError::None)
+    {
+        error = export_from(*kem, suite, shared, info, exporter_context, out);
+    }
+    secure_zero(shared);
     return error == CryptoError::None ? error : refuse(error, out);
 }
 
@@ -349,9 +454,8 @@ CryptoError hpke_seal(const HpkeSuite& suite, cont::ConstSpan<u8> peer_public, c
     {
         return refuse(CryptoError::Unsupported, enc, ciphertext);
     }
-    const AgreementSizes sizes = agreement_sizes(suite.kem);
-    if (peer_public.size() != sizes.public_key || enc.size() != sizes.public_key ||
-        ciphertext.size() != plaintext.size() + kHpkeTagBytes)
+    const usize npk = agreement_sizes(suite.kem).public_key;
+    if (peer_public.size() != npk || enc.size() != npk || ciphertext.size() != plaintext.size() + kHpkeTagBytes)
     {
         return refuse(CryptoError::BadLength, enc, ciphertext);
     }
@@ -366,26 +470,11 @@ CryptoError hpke_seal(const HpkeSuite& suite, cont::ConstSpan<u8> peer_public, c
     {
         return CryptoError::Overlap;
     }
-    AgreementKey   ephemeral;
-    u8             dh_bytes[kMaxSecretBytes];
     u8             shared_bytes[kMaxHashBytes];
-    cont::Span<u8> dh(dh_bytes, sizes.secret);
     cont::Span<u8> shared(shared_bytes, hkdf_hash_bytes(kem->kdf));
-    CryptoError    error = ephemeral.generate(suite.kem);
-    if (error == CryptoError::None)
-    {
-        error = ephemeral.derive(peer_public, dh);
-    }
-    if (error == CryptoError::None)
-    {
-        error = ephemeral.public_key(enc);
-    }
-    if (error == CryptoError::None)
-    {
-        error = extract_and_expand(*kem, dh, enc, peer_public, shared);
-    }
-    AeadKey key;
-    u8      nonce[kAeadNonceBytes] = {};
+    CryptoError    error = encapsulate(*kem, peer_public, enc, shared);
+    AeadKey        key;
+    u8             nonce[kAeadNonceBytes] = {};
     if (error == CryptoError::None)
     {
         error = key_schedule(*kem, suite, shared, info, key, nonce);
@@ -394,9 +483,43 @@ CryptoError hpke_seal(const HpkeSuite& suite, cont::ConstSpan<u8> peer_public, c
     {
         error = key.seal(nonce, plaintext, aad, ciphertext);
     }
-    secure_zero(dh);
     secure_zero(shared);
     secure_zero(nonce);
     return error == CryptoError::None ? error : refuse(error, enc, ciphertext);
+}
+
+CryptoError hpke_export(const HpkeSuite& suite, cont::ConstSpan<u8> peer_public, cont::ConstSpan<u8> info,
+                        cont::ConstSpan<u8> exporter_context, cont::Span<u8> enc, cont::Span<u8> out) noexcept
+{
+    const Dhkem* kem = find_kem(suite.kem);
+    if (kem == nullptr || !hpke_supported(suite))
+    {
+        return refuse(CryptoError::Unsupported, enc, out);
+    }
+    const usize npk = agreement_sizes(suite.kem).public_key;
+    if (peer_public.size() != npk || enc.size() != npk || !export_length(suite, out.size()))
+    {
+        return refuse(CryptoError::BadLength, enc, out);
+    }
+    for (const cont::ConstSpan<u8> input : {peer_public, info, exporter_context})
+    {
+        if (overlaps(enc, input) || overlaps(out, input))
+        {
+            return CryptoError::Overlap;
+        }
+    }
+    if (overlaps(enc, out))
+    {
+        return CryptoError::Overlap;
+    }
+    u8             shared_bytes[kMaxHashBytes];
+    cont::Span<u8> shared(shared_bytes, hkdf_hash_bytes(kem->kdf));
+    CryptoError    error = encapsulate(*kem, peer_public, enc, shared);
+    if (error == CryptoError::None)
+    {
+        error = export_from(*kem, suite, shared, info, exporter_context, out);
+    }
+    secure_zero(shared);
+    return error == CryptoError::None ? error : refuse(error, enc, out);
 }
 } // namespace crd::crypto

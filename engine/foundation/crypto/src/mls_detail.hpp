@@ -121,6 +121,10 @@ void                put_leaf_fields(cont::WireWriter& out, const LeafNode& node)
 // for an undecodable required_capabilities.
 [[nodiscard]] CryptoError supports_context(cont::ConstSpan<u8> extensions, const Capabilities& capabilities) noexcept;
 
+// A node's HPKE public key no agreement in the suite's KEM can use is BadKey, whatever the check's reason (section
+// 7.3; mls_group.cpp).
+[[nodiscard]] CryptoError check_node_key(const CipherSuite& suite, cont::ConstSpan<u8> key) noexcept;
+
 // Section 12.1.4's checks of a pre-shared key's identity outside reinitialization and branching (mls_group.cpp):
 // Malformed for a nonce not Nh long, Unsupported for a resumption key of usage reinit or branch.
 [[nodiscard]] CryptoError check_psk_id(const CipherSuite& suite, const PreSharedKeyId& id) noexcept;

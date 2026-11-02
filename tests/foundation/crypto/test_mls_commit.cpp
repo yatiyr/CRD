@@ -1,14 +1,14 @@
 // crd-crypto -- MLS proposals and commits, RFC 9420 sections 5.2 and 12.1 to 12.4.2 (NET.2;
-// docs/design/network-foundation.md#mls, M3 layer 9 and decision M10), against the MLS working group's test vectors (the
-// pinned mlswg/mls-implementations test-vectors, read at run time): every passive-client-handling-commit vector of the
-// profile and the passive-client-random vector (a member joins from the Welcome, then processes each epoch's proposals
-// and commit, by value and by reference, with external and resumption PSKs, Adds, Updates, Removes and
+// docs/design/network-foundation.md#mls, M3 layer 9 and decision M10), against the MLS working group's test vectors
+// (the pinned mlswg/mls-implementations test-vectors, read at run time): every passive-client-handling-commit vector of
+// the profile and the passive-client-random vector (a member joins from the Welcome, then processes each epoch's
+// proposals and commit, by value and by reference, with external and resumption PSKs, Adds, Updates, Removes and
 // GroupContextExtensions, and reaches each epoch's authenticator). Then groups of Cerid members in every suite that
 // propose, commit (public and private, with and without a path, empty, partial and full) and merge, welcome joiners,
 // exchange application messages and remove members, every member reaching the same epoch; and every refusal of
 // sections 6, 12.1, 12.2 and 12.4.2 leaving the group as it was.
 
-#include "mls_test_support.hpp"
+#include "mls_model.hpp"
 
 #include <crd/crypto/mls_group.hpp>
 
@@ -25,7 +25,6 @@ using crd::u8;
 using crd::usize;
 using crd::containers::ConstSpan;
 using crd::containers::Span;
-using crd::containers::WireReader;
 using crd::containers::WireWriter;
 using namespace crd::crypto;
 using namespace crd::crypto::test;
@@ -50,7 +49,7 @@ u32 run_passive_client(const JsonFile& vectors, u32 vector, const mls::CipherSui
         key.secret = vectors.hex(entry, "psk");
         store.keys.push_back(key);
     }
-    const Bytes        tree          = vectors.has(vector, "ratchet_tree") ? vectors.hex(vector, "ratchet_tree") : Bytes();
+    const Bytes tree = vectors.has(vector, "ratchet_tree") ? vectors.hex(vector, "ratchet_tree") : Bytes();
     const Bytes        package_bytes = vectors.hex(vector, "key_package");
     const Bytes        welcome_bytes = vectors.hex(vector, "welcome");
     const mls::Message package       = message_of(package_bytes);
@@ -144,244 +143,6 @@ TEST_CASE("MLS: the passive-client-random vector reaches each of its 200 epochs'
 }
 // ---- Groups of Cerid members ----
 
-mls::WireFormat wire_format_of(const crd::containers::Array<u8>& message)
-{
-    mls::Message decoded;
-    REQUIRE(mls::take_message(ConstSpan<u8>(message.data(), message.size()), decoded));
-    return decoded.wire_format;
-}
-
-constexpr usize kMembers = 8U;
-
-// A member of a model group: its identity and key package, its store, its configuration and its group.
-struct Member
-{
-    Joiner           who;
-    TestStore        store;
-    mls::GroupConfig config;
-    mls::Group       group;
-};
-
-// A model group: every member's view of one group, driven message by message.
-class Model
-{
-public:
-    explicit Model(const mls::CipherSuite& suite_in, ConstSpan<u8> extensions = {}) : suite(suite_in)
-    {
-        external_id     = Bytes{'e', 'x', 't'};
-        external_secret = random_of(32U);
-        for (usize i = 0U; i < kMembers; ++i)
-        {
-            make_joiner(suite, members[i].who, static_cast<u32>(i));
-            TestStore::Key key;
-            key.name   = external_id;
-            key.secret = external_secret;
-            members[i].store.keys.push_back(key);
-            members[i].config = mls::GroupConfig{&verifier, &authority, &members[i].store, timeless(), {}};
-        }
-        group_id = random_of(16U);
-        REQUIRE(members[0].group.create(suite, view(group_id), extensions, members[0].who.id.leaf,
-                                        view(members[0].who.id.hpke_private), members[0].config) == CryptoError::None);
-    }
-
-    [[nodiscard]] Member& at(usize i) { return members[i]; }
-    [[nodiscard]] bool    active(usize i) const { return members[i].group.ready(); }
-
-    // `from`'s message processed by every other member (a commit merged); returns each receiver's verdict.
-    void deliver(usize from, const crd::containers::Array<u8>& message)
-    {
-        for (usize i = 0U; i < kMembers; ++i)
-        {
-            if (i == from || !active(i))
-            {
-                continue;
-            }
-            INFO("receiver " << i);
-            mls::ReceivedMessage received;
-            REQUIRE(members[i].group.process(view(message), received) == CryptoError::None);
-            CHECK(received.sender().index == members[from].group.own_leaf());
-            if (received.content_type() == mls::ContentType::Commit)
-            {
-                const bool removed = received.commit().removes_self();
-                REQUIRE(members[i].group.merge(received.commit()) == CryptoError::None);
-                CHECK(members[i].group.ready() == !removed);
-            }
-        }
-    }
-
-    // `committer`'s commit delivered, merged by it and joined by `joiners` from its Welcome.
-    void commit(usize committer, const mls::CommitOptions& options, std::initializer_list<usize> joiners = {})
-    {
-        mls::CommitResult result;
-        REQUIRE(members[committer].group.commit(members[committer].who.id.signer, options, result) ==
-                CryptoError::None);
-        CHECK(wire_format_of(result.message) == options.send.wire_format);
-        CHECK(result.welcome.empty() == (joiners.size() == 0U));
-        CHECK(wire_format_of(result.group_info) == mls::WireFormat::GroupInfo);
-        deliver(committer, result.message);
-        const u64 epoch = members[committer].group.epoch() + 1U;
-        REQUIRE(members[committer].group.merge(result.staged) == CryptoError::None);
-        CHECK(members[committer].group.epoch() == epoch);
-        const Bytes welcome_bytes(result.welcome.begin(), result.welcome.end());
-        for (const usize j : joiners)
-        {
-            INFO("joiner " << j);
-            const mls::Message welcome = message_of(welcome_bytes);
-            Member& joiner = members[j];
-            REQUIRE(joiner.group.join(welcome.body, joiner.who.package, view(joiner.who.init_private),
-                                      view(joiner.who.id.hpke_private), {}, joiner.config) == CryptoError::None);
-        }
-        check_agreement();
-    }
-
-    // Every active member holds the same epoch: its number, authenticator, tree and GroupContext.
-    void check_agreement()
-    {
-        const mls::Group* first = nullptr;
-        for (usize i = 0U; i < kMembers; ++i)
-        {
-            if (!active(i))
-            {
-                continue;
-            }
-            const mls::Group& group = members[i].group;
-            INFO("member " << i);
-            CHECK(group.keys().holds(2U * group.own_leaf()));
-            CHECK(group.secret_tree().leaves() == group.tree().leaves());
-            CHECK(group.pending_proposals() == 0U);
-            if (first == nullptr)
-            {
-                first = &group;
-                continue;
-            }
-            CHECK(group.epoch() == first->epoch());
-            CHECK(equal(group.epoch_authenticator(), first->epoch_authenticator()));
-            CHECK(equal(group.tree().root_hash(), first->tree().root_hash()));
-            CHECK(equal(group.context().extensions, first->context().extensions));
-            CHECK(equal(group.interim_transcript_hash(), first->interim_transcript_hash()));
-        }
-        REQUIRE(first != nullptr);
-    }
-
-    // Each active member's application message read by every other.
-    void exchange(const mls::SendOptions& options)
-    {
-        for (usize from = 0U; from < kMembers; ++from)
-        {
-            if (!active(from))
-            {
-                continue;
-            }
-            Bytes data = random_of(1U + from * 37U);
-            crd::containers::Array<u8> message;
-            REQUIRE(members[from].group.protect(members[from].who.id.signer, view(data), options, message) ==
-                    CryptoError::None);
-            for (usize i = 0U; i < kMembers; ++i)
-            {
-                if (i == from || !active(i))
-                {
-                    continue;
-                }
-                mls::ReceivedMessage received;
-                REQUIRE(members[i].group.process(view(message), received) == CryptoError::None);
-                CHECK(received.content_type() == mls::ContentType::Application);
-                CHECK(equal(received.application_data(), view(data)));
-                CHECK(equal(received.authenticated_data(), options.authenticated_data));
-                // Replayed: its generation is spent.
-                mls::ReceivedMessage again;
-                CHECK(members[i].group.process(view(message), again) == CryptoError::Replayed);
-            }
-        }
-    }
-
-    // `from`'s proposal sent and received by every other member; returns its reference.
-    Bytes propose(usize from, const mls::Proposal& proposal, const mls::SendOptions& options)
-    {
-        Bytes                      ref = filled(suite.hash_bytes(), 0U);
-        crd::containers::Array<u8> message;
-        REQUIRE(members[from].group.propose(members[from].who.id.signer, proposal, options, message, span_of(ref)) ==
-                CryptoError::None);
-        deliver_proposal(from, message, ref);
-        return ref;
-    }
-
-    Bytes propose_update(usize from, const mls::SendOptions& options)
-    {
-        Bytes                      ref = filled(suite.hash_bytes(), 0U);
-        crd::containers::Array<u8> message;
-        REQUIRE(members[from].group.propose_update(members[from].who.id.signer, options, message, span_of(ref)) ==
-                CryptoError::None);
-        deliver_proposal(from, message, ref);
-        return ref;
-    }
-
-    const mls::CipherSuite& suite;
-    ProviderVerifier        verifier;
-    TestAuthority           authority;
-    Member                  members[kMembers];
-    Bytes                   group_id;
-    Bytes                   external_id;
-    Bytes                   external_secret;
-
-private:
-    void deliver_proposal(usize from, const crd::containers::Array<u8>& message, const Bytes& ref)
-    {
-        for (usize i = 0U; i < kMembers; ++i)
-        {
-            if (i == from || !active(i))
-            {
-                continue;
-            }
-            mls::ReceivedMessage received;
-            REQUIRE(members[i].group.process(view(message), received) == CryptoError::None);
-            CHECK(received.content_type() == mls::ContentType::Proposal);
-            CHECK(equal(received.proposal_ref(), view(ref)));
-        }
-    }
-};
-
-mls::Proposal add_of(const Member& member)
-{
-    mls::Proposal proposal;
-    proposal.type = static_cast<u16>(mls::ProposalType::Add);
-    proposal.add  = member.who.package;
-    return proposal;
-}
-
-mls::Proposal remove_of(u32 leaf)
-{
-    mls::Proposal proposal;
-    proposal.type   = static_cast<u16>(mls::ProposalType::Remove);
-    proposal.remove = leaf;
-    return proposal;
-}
-
-mls::Proposal psk_of(const mls::PreSharedKeyId& id)
-{
-    mls::Proposal proposal;
-    proposal.type = static_cast<u16>(mls::ProposalType::PreSharedKey);
-    proposal.psk  = id;
-    return proposal;
-}
-
-mls::Proposal extensions_of(ConstSpan<u8> extensions)
-{
-    mls::Proposal proposal;
-    proposal.type       = static_cast<u16>(mls::ProposalType::GroupContextExtensions);
-    proposal.extensions = extensions;
-    return proposal;
-}
-
-// An Extension list's entry.
-Bytes extension(u16 type, ConstSpan<u8> data)
-{
-    Bytes      out = filled(2U + mls::vector_bytes(data.size()), 0U);
-    WireWriter writer(span_of(out));
-    writer.put_u16(type);
-    mls::put_vector(writer, data);
-    return out;
-}
-
 TEST_CASE("MLS: members propose, commit, merge, welcome and remove in every suite, as public and private messages",
           "[crypto][net-2][mls]")
 {
@@ -450,7 +211,7 @@ TEST_CASE("MLS: members propose, commit, merge, welcome and remove in every suit
             mls::CommitOptions partial;
             partial.send                    = send;
             partial.path                    = false;
-            partial.tree_in_welcome         = false;
+            partial.group_info.ratchet_tree = false;
             const mls::Proposal resumed[1]  = {psk_of(resumption)};
             partial.proposals               = ConstSpan<mls::Proposal>(resumed, 1U);
             mls::CommitResult result;
@@ -495,162 +256,6 @@ TEST_CASE("MLS: members propose, commit, merge, welcome and remove in every suit
     }
 }
 // ---- Every refusal ----
-
-// How a hostile or faulty member frames a message: any sender, epoch, group, signer and membership key.
-struct Framing
-{
-    bool            other_group      = false;
-    u64             epoch_shift      = 0U;
-    bool            wrong_signer     = false;
-    bool            wrong_membership = false;
-    bool            sender_given     = false;
-    mls::Sender     sender;
-    const Signer*   signer = nullptr; // another signer than the member's (an external sender, a new member)
-};
-
-// `from`'s framing of any content as a PublicMessage: signed and tagged as its group would, so a receiver's refusal is
-// the content's unless the framing says otherwise.
-Bytes frame(const mls::CipherSuite& suite, const Member& from, mls::ContentType type, ConstSpan<u8> body,
-            const Framing& framing = {})
-{
-    const mls::GroupContext context = from.group.context();
-    const Bytes             other   = Bytes{'o', 't', 'h', 'e', 'r'};
-    mls::FramedContent      content;
-    content.group_id     = framing.other_group ? view(other) : context.group_id;
-    content.epoch        = context.epoch + framing.epoch_shift;
-    content.sender       = framing.sender_given ? framing.sender
-                                                : mls::Sender{mls::SenderType::Member, from.group.own_leaf()};
-    content.content_type = type;
-    content.body         = body;
-    SigningKey stranger;
-    REQUIRE(stranger.generate(suite.signature) == CryptoError::None);
-    Bytes signature = filled(signature_sizes(suite.signature).signature, 0U);
-    usize written   = 0U;
-    const Signer* signer = framing.signer;
-    if (signer == nullptr)
-    {
-        signer = framing.wrong_signer ? static_cast<const Signer*>(&stranger) : &from.who.id.signer;
-    }
-    REQUIRE(mls::sign_content(suite, *signer,
-                              mls::WireFormat::PublicMessage, content, context, span_of(signature),
-                              written) == CryptoError::None);
-    signature.resize(written);
-    const Bytes tag = random_of(suite.hash_bytes()); // a commit's confirmation tag, never the epoch's
-    const mls::ContentAuth auth{view(signature), type == mls::ContentType::Commit ? view(tag) : ConstSpan<u8>()};
-    Bytes key = Bytes(from.group.secret(mls::EpochSecret::Membership).begin(),
-                      from.group.secret(mls::EpochSecret::Membership).end());
-    if (framing.wrong_membership)
-    {
-        key[0] ^= 0x01U;
-    }
-    Bytes out = filled(1024U + body.size(), 0U);
-    REQUIRE(mls::protect_public(suite, view(key), context, content, auth, span_of(out), written) == CryptoError::None);
-    out.resize(written);
-    return out;
-}
-
-Bytes encoded(const mls::Proposal& proposal)
-{
-    Bytes      out = filled(mls::proposal_bytes(proposal), 0U);
-    WireWriter writer(span_of(out));
-    mls::put_proposal(writer, proposal);
-    return out;
-}
-
-// A commit's list entries: a proposal by value, a reference.
-Bytes by_value(const mls::Proposal& proposal)
-{
-    Bytes out = Bytes{1U};
-    for (const u8 byte : encoded(proposal))
-    {
-        out.push_back(byte);
-    }
-    return out;
-}
-
-Bytes by_reference(const Bytes& ref)
-{
-    Bytes      out = filled(1U + mls::vector_bytes(ref.size()), 0U);
-    WireWriter writer(span_of(out));
-    writer.put_u8(2U);
-    mls::put_vector(writer, view(ref));
-    return out;
-}
-
-// A Commit's body of `entries` and `path` (an UpdatePath's encoding; none when empty).
-Bytes commit_body(std::initializer_list<Bytes> entries, ConstSpan<u8> path = {})
-{
-    Bytes list;
-    for (const Bytes& entry : entries)
-    {
-        for (const u8 byte : entry)
-        {
-            list.push_back(byte);
-        }
-    }
-    Bytes      out = filled(mls::vector_bytes(list.size()) + 1U + path.size(), 0U);
-    WireWriter writer(span_of(out));
-    mls::put_vector(writer, view(list));
-    writer.put_u8(path.empty() ? 0U : 1U);
-    writer.put_bytes(path);
-    return out;
-}
-
-// The path of an honest empty commit of `from`'s (not merged): a real path to hang a hostile list on, so a list rule
-// is the refusal and not the path's absence.
-Bytes honest_path(Member& from)
-{
-    mls::CommitOptions empty;
-    empty.pending          = false;
-    empty.send.wire_format = mls::WireFormat::PublicMessage;
-    mls::CommitResult result;
-    REQUIRE(from.group.commit(from.who.id.signer, empty, result) == CryptoError::None);
-    mls::Message message;
-    REQUIRE(mls::take_message(ConstSpan<u8>(result.message.data(), result.message.size()), message));
-    WireReader  in(message.public_message.content.body);
-    mls::Commit commit;
-    REQUIRE(mls::take_commit(in, commit));
-    REQUIRE(commit.has_path);
-    Bytes      out = filled(mls::update_path_bytes(commit.path), 0U);
-    WireWriter writer(span_of(out));
-    mls::put_update_path(writer, commit.path);
-    result.staged.clear();
-    return out;
-}
-
-// What a member holds of its epoch, to see that a refusal changed nothing.
-struct Snapshot
-{
-    explicit Snapshot(const mls::Group& group)
-        : epoch(group.epoch()),
-          authenticator(group.epoch_authenticator().begin(), group.epoch_authenticator().end()),
-          root(group.tree().root_hash().begin(), group.tree().root_hash().end()), pending(group.pending_proposals())
-    {
-    }
-    void check(const mls::Group& group) const
-    {
-        CHECK(group.ready());
-        CHECK(group.epoch() == epoch);
-        CHECK(equal(group.epoch_authenticator(), view(authenticator)));
-        CHECK(equal(group.tree().root_hash(), view(root)));
-        CHECK(group.pending_proposals() == pending);
-    }
-
-    u64   epoch = 0U;
-    Bytes authenticator;
-    Bytes root;
-    usize pending = 0U;
-};
-
-void refused(mls::Group& group, const Bytes& message, CryptoError expected)
-{
-    const Snapshot       before(group);
-    mls::ReceivedMessage received;
-    CHECK(group.process(view(message), received) == expected);
-    CHECK_FALSE(received.commit().ready());
-    CHECK(received.application_data().empty());
-    before.check(group);
-}
 
 TEST_CASE("MLS: a commit is refused for each fault of sections 6, 12.1, 12.2 and 12.4.2, the group unchanged",
           "[crypto][net-2][mls]")
@@ -759,8 +364,8 @@ TEST_CASE("MLS: a commit is refused for each fault of sections 6, 12.1, 12.2 and
         framing.sender_given     = true;
         framing.sender           = {mls::SenderType::Member, 3U}; // a blank leaf
         refused(receiver, commit_of({by_value(add_of(model.at(5)))}, framing), CryptoError::OutOfWindow);
-        framing.sender           = {mls::SenderType::NewMemberCommit, 0U};
-        refused(receiver, commit_of({by_value(add_of(model.at(5)))}, framing), CryptoError::Unsupported);
+        framing.sender           = {mls::SenderType::NewMemberCommit, 0U}; // an external commit without a path
+        refused(receiver, commit_of({by_value(add_of(model.at(5)))}, framing), CryptoError::Malformed);
         framing.sender           = {mls::SenderType::Member, 1U}; // the receiver itself
         refused(receiver, commit_of({by_value(add_of(model.at(5)))}, framing), CryptoError::Replayed);
         Bytes truncated = commit_of({by_value(add_of(model.at(5)))});
@@ -1013,7 +618,13 @@ TEST_CASE("MLS: sending, committing and merging refuse what they cannot do", "[c
     CHECK(member.group.commit(member.who.id.signer, bad, result) == CryptoError::Malformed);
     bad                       = {};
     const Bytes tree_ext      = extension(static_cast<u16>(mls::ExtensionType::RatchetTree), view(data));
-    bad.group_info_extensions = view(tree_ext);
+    bad.group_info.extensions = view(tree_ext);
+    CHECK(member.group.commit(member.who.id.signer, bad, result) == CryptoError::Malformed);
+    const Bytes pub_ext       = extension(static_cast<u16>(mls::ExtensionType::ExternalPub), view(data));
+    bad.group_info.extensions = view(pub_ext);
+    CHECK(member.group.commit(member.who.id.signer, bad, result) == CryptoError::Malformed);
+    const Bytes twice         = filled(6U, 0U); // extension type 0 twice, each with empty data
+    bad.group_info.extensions = view(twice);
     CHECK(member.group.commit(member.who.id.signer, bad, result) == CryptoError::Malformed);
     bad                  = {};
     bad.send.wire_format = mls::WireFormat::KeyPackage;

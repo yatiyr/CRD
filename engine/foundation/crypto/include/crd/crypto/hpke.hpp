@@ -3,7 +3,8 @@
 // crd-crypto -- hybrid public key encryption, RFC 9180 (NET.2; contract: docs/design/network-foundation.md#hpke).
 //
 // Base mode, single shot: a sender seals one message to a recipient's public key (SealBase) and the recipient opens
-// it (OpenBase), which is every use MLS makes of HPKE (RFC 9420 section 5.1.3). The KEM is DHKEM over a key agreement
+// it (OpenBase), or both derive one secret from a context's exporter (section 5.3): every use MLS makes of HPKE (RFC
+// 9420 sections 5.1.3 and 8.3, the latter an external joiner's init secret). The KEM is DHKEM over a key agreement
 // group of the provider (X25519, P-256, P-384), so a KEM is named by that group's identifier; the KDF by an HKDF
 // identifier and the AEAD by its own. Every step is RFC 9180's construction over the provider's primitives (decision
 // H1): Cerid adds no primitive, and the RFC's test vectors hold the composition to the byte.
@@ -75,6 +76,10 @@ public:
     [[nodiscard]] CryptoError open(const HpkeSuite& suite, cont::ConstSpan<u8> enc, cont::ConstSpan<u8> info,
                                    cont::ConstSpan<u8> aad, cont::ConstSpan<u8> ciphertext,
                                    cont::Span<u8> out) const noexcept;
+    // SetupBaseR(enc, skR, info) and the context's Export(exporter_context, out.size()) (section 5.3): `out` is 1 to
+    // 255 * Nh bytes of the suite's KDF (BadLength otherwise) and overlaps nothing. `suite.kem` is this key's KEM.
+    [[nodiscard]] CryptoError export_secret(const HpkeSuite& suite, cont::ConstSpan<u8> enc, cont::ConstSpan<u8> info,
+                                            cont::ConstSpan<u8> exporter_context, cont::Span<u8> out) const noexcept;
 
 private:
     AgreementKey m_key;
@@ -86,4 +91,10 @@ private:
 [[nodiscard]] CryptoError hpke_seal(const HpkeSuite& suite, cont::ConstSpan<u8> peer_public, cont::ConstSpan<u8> info,
                                     cont::ConstSpan<u8> aad, cont::ConstSpan<u8> plaintext, cont::Span<u8> enc,
                                     cont::Span<u8> ciphertext) noexcept;
+
+// SetupBaseS(pkR, info) with a fresh ephemeral key and the context's Export(exporter_context, out.size()) (section
+// 5.3): `enc` as hpke_seal's, `out` as HpkeKey::export_secret's; the outputs overlap no input and each other.
+[[nodiscard]] CryptoError hpke_export(const HpkeSuite& suite, cont::ConstSpan<u8> peer_public, cont::ConstSpan<u8> info,
+                                      cont::ConstSpan<u8> exporter_context, cont::Span<u8> enc,
+                                      cont::Span<u8> out) noexcept;
 } // namespace crd::crypto

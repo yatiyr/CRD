@@ -81,6 +81,10 @@ class AnyCredential final : public mls::AuthenticationService
 {
 public:
     [[nodiscard]] bool validate(const mls::Credential&, ConstSpan<u8>) const noexcept override { return true; }
+    [[nodiscard]] bool valid_successor(const mls::Credential&, const mls::Credential&) const noexcept override
+    {
+        return true;
+    }
 };
 
 class EmptyStore final : public mls::GroupStore

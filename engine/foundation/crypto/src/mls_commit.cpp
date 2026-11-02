@@ -1,6 +1,7 @@
-// crd-crypto -- MLS proposals and commits, RFC 9420 sections 5.2 and 12.1 to 12.4.2: a member's messages of an epoch
-// (proposals, application data and commits) received and sent, and a commit staged and merged (NET.2; contract:
-// docs/design/network-foundation.md#mls, M3 layer 9 and decision M10).
+// crd-crypto -- MLS proposals and commits, RFC 9420 sections 5.2 and 12.1 to 12.4.3.2: a member's messages of an
+// epoch (proposals, application data and commits) received and sent, a commit staged and merged, GroupInfos signed
+// for new members, and external commits made and received (NET.2; contract: docs/design/network-foundation.md#mls,
+// M3 layers 9 and 10a and decisions M10 and M11).
 #include <crd/crypto/mls_group.hpp>
 
 #include "byte_spans.hpp"
@@ -13,12 +14,15 @@ namespace crd::crypto::mls
 namespace
 {
 using detail::bytes_less;
+using detail::label_of;
 using detail::LabelBuffer;
 using detail::refuse;
 using detail::repeats;
 using detail::same_bytes;
 
 constexpr cont::StringView kProposalRefLabel = "MLS 1.0 Proposal Reference";
+// The exporter context of an external commit's init secret (section 8.3).
+constexpr char kExternalInitLabel[] = "MLS 1.0 external init secret";
 
 constexpr u16 code(ProposalType type) noexcept
 {
@@ -43,6 +47,33 @@ bool repeated(cont::Array<u32>& leaves) noexcept
 {
     std::sort(leaves.begin(), leaves.end());
     return std::adjacent_find(leaves.begin(), leaves.end()) != leaves.end();
+}
+
+// Whether section 12.4.3.2 lets an external commit hold a proposal of `type`: its ExternalInit, the Remove of the
+// joiner's former leaf and PSKs.
+bool external_commit_admits(u16 type) noexcept
+{
+    return type == code(ProposalType::ExternalInit) || type == code(ProposalType::Remove) ||
+           type == code(ProposalType::PreSharedKey);
+}
+
+// Whether `signer` holds the suite's signature algorithm and the key `signature_key`.
+bool signs_for(const CipherSuite& suite, const Signer& signer, cont::ConstSpan<u8> signature_key) noexcept
+{
+    u8          key[kMaxNodeKeyBytes] = {};
+    const usize bytes                 = signature_sizes(suite.signature).public_key;
+    return signer.algorithm() == suite.signature && bytes <= sizeof(key) &&
+           signer.public_key(cont::Span<u8>(key, bytes)) == CryptoError::None &&
+           same_bytes(cont::ConstSpan<u8>(key, bytes), signature_key);
+}
+
+// Whether GroupInfoOptions' extensions are each named once and leave ratchet_tree and external_pub to their flags.
+bool info_options_valid(const GroupInfoOptions& options) noexcept
+{
+    cont::ConstSpan<u8> ignored;
+    return extensions_distinct(options.extensions) &&
+           !find_extension(options.extensions, static_cast<u16>(ExtensionType::RatchetTree), ignored) &&
+           !find_extension(options.extensions, static_cast<u16>(ExtensionType::ExternalPub), ignored);
 }
 } // namespace
 
@@ -152,9 +183,11 @@ cont::ConstSpan<u8> Group::psk_of(const PreSharedKeyId& id) const noexcept
     if (id.type == PskType::Resumption && id.usage == ResumptionUsage::Application &&
         same_bytes(id.group_id, view(m_group_id)))
     {
-        if (id.epoch == m_now.epoch)
+        // An external joiner holds no secret of the epoch it joins from: only the store can.
+        const cont::ConstSpan<u8> current = m_now.secrets.get(EpochSecret::Resumption);
+        if (id.epoch == m_now.epoch && !current.empty())
         {
-            return m_now.secrets.get(EpochSecret::Resumption);
+            return current;
         }
         for (const Resumption& past : m_resumption)
         {
@@ -194,44 +227,53 @@ usize Group::pending_leaf(cont::ConstSpan<u8> public_key) const noexcept
     return m_pending_leaves.size();
 }
 
-CryptoError Group::stage_list(u32 committer, Plan& plan, StagedCommit& staged) const noexcept
+CryptoError Group::stage_list(const Sender& committer, Plan& plan, StagedCommit& staged) const noexcept
 {
-    const CipherSuite&  suite = *m_suite;
-    const GroupConfig&  config = m_config;
-    const RatchetTree&  now    = m_now.tree;
-    const usize         count  = plan.items.size();
-    cont::Array<u32>    leaves; // the leaves Updates and Removes apply to
+    const CipherSuite&               suite    = *m_suite;
+    const GroupConfig&               config   = m_config;
+    const RatchetTree&               now      = m_now.tree;
+    const usize                      count    = plan.items.size();
+    const bool                       external = committer.type == SenderType::NewMemberCommit;
+    cont::Array<u32>                 leaves; // the leaves Updates and Removes apply to
     cont::Array<cont::ConstSpan<u8>> psk_ids;
-    const Item*         extensions = nullptr;
+    const Item*                      extensions = nullptr;
+    usize                            inits      = 0U; // ExternalInits
+    usize                            removes    = 0U;
     if (!leaves.try_reserve(count) || !psk_ids.try_reserve(count) || !plan.psks.try_reserve(count) ||
         !staged.m_added.try_reserve(count))
     {
         return CryptoError::ProviderFailure;
     }
 
-    // Section 12.2's rules of the list as a whole, and each PSK's (12.1.4).
+    // Section 12.2's rules of the list as a whole (12.4.3.2's for an external commit), and each PSK's (12.1.4).
     plan.needs_path = count == 0U;
     for (const Item& item : plan.items)
     {
         const Proposal& proposal = item.proposal;
         plan.needs_path          = plan.needs_path || path_required(proposal.type);
+        if (external && !external_commit_admits(proposal.type))
+        {
+            return CryptoError::Malformed;
+        }
         switch (proposal.type)
         {
         case code(ProposalType::Add):
             break;
         case code(ProposalType::Update):
-            if (!is_member(item.sender) || item.sender.index == committer)
+            if (!is_member(item.sender) || item.sender.index == committer.index)
             {
                 return CryptoError::Malformed;
             }
             leaves.push_back(item.sender.index);
             break;
         case code(ProposalType::Remove):
-            if (proposal.remove == committer || proposal.remove >= now.leaves() || now.blank(2U * proposal.remove))
+            if ((!external && proposal.remove == committer.index) || proposal.remove >= now.leaves() ||
+                now.blank(2U * proposal.remove))
             {
                 return CryptoError::Malformed;
             }
             leaves.push_back(proposal.remove);
+            ++removes;
             break;
         case code(ProposalType::PreSharedKey):
         {
@@ -257,12 +299,18 @@ CryptoError Group::stage_list(u32 committer, Plan& plan, StagedCommit& staged) c
             extensions = &item;
             break;
         case code(ProposalType::ExternalInit):
-            return CryptoError::Malformed; // only an external commit holds one
+            // Only an external commit holds one, its kem_output an encapsulation of the suite's KEM.
+            if (!external || proposal.kem_output.size() != hpke_sizes(suite.kem).public_key)
+            {
+                return CryptoError::Malformed;
+            }
+            ++inits;
+            break;
         default:
             return CryptoError::Unsupported; // ReInit lands with section 11.2 (decision M10); no other type is ours
         }
     }
-    if (repeated(leaves) || repeats(psk_ids))
+    if (repeated(leaves) || repeats(psk_ids) || (external && (inits != 1U || removes > 1U)))
     {
         return CryptoError::Malformed;
     }
@@ -286,8 +334,9 @@ CryptoError Group::stage_list(u32 committer, Plan& plan, StagedCommit& staged) c
                     ? check_leaf(next, leaf, LeafRole::Update, config.policy, *config.authentication)
                     : CryptoError::OutOfWindow;
         if (error == CryptoError::None &&
-            verify_leaf_node(suite, *config.verifier, leaf, view(m_group_id), item.sender.index) !=
-                Verification::Valid)
+            (verify_leaf_node(suite, *config.verifier, leaf, view(m_group_id), item.sender.index) !=
+                 Verification::Valid ||
+             !config.authentication->valid_successor(current.credential, leaf.credential)))
         {
             error = CryptoError::Forged;
         }
@@ -304,7 +353,8 @@ CryptoError Group::stage_list(u32 committer, Plan& plan, StagedCommit& staged) c
     {
         if (error == CryptoError::None && item.proposal.type == code(ProposalType::Remove))
         {
-            staged.m_removed = staged.m_removed || item.proposal.remove == own_leaf();
+            // An external joiner holds no leaf yet: its own former leaf is just a leaf to it.
+            staged.m_removed = staged.m_removed || (m_keys.ready() && item.proposal.remove == own_leaf());
             error            = tree.remove(item.proposal.remove);
         }
     }
@@ -347,9 +397,59 @@ CryptoError check_new_tree(const RatchetTree& tree) noexcept
 }
 } // namespace
 
+CryptoError Group::check_path_leaf(const LeafNode& leaf, u32 index, const Credential* predecessor,
+                                   const StagedCommit& staged) const noexcept
+{
+    const CipherSuite& suite = *m_suite;
+    const GroupContext next{suite.id, view(m_group_id), m_now.epoch + 1U, {}, {}, view(staged.m_next.extensions)};
+    const CryptoError  error = check_leaf(next, leaf, LeafRole::Commit, m_config.policy, *m_config.authentication);
+    if (error != CryptoError::None)
+    {
+        return error;
+    }
+    const bool valid =
+        verify_leaf_node(suite, *m_config.verifier, leaf, view(m_group_id), index) == Verification::Valid &&
+        (predecessor == nullptr || m_config.authentication->valid_successor(*predecessor, leaf.credential));
+    return valid ? CryptoError::None : CryptoError::Forged;
+}
+
+CryptoError Group::add_by_value(cont::ConstSpan<Proposal> proposals, const Sender& sender,
+                                cont::Array<u8>& encodings, Plan& plan) noexcept
+{
+    usize total = 0U;
+    for (const Proposal& proposal : proposals)
+    {
+        const usize bytes = proposal_bytes(proposal);
+        if (bytes == 0U)
+        {
+            return CryptoError::Malformed;
+        }
+        total += bytes;
+    }
+    // Reserved first: the items view the encodings.
+    if (!encodings.try_reserve(encodings.size() + total) ||
+        !plan.items.try_reserve(plan.items.size() + proposals.size()))
+    {
+        return CryptoError::ProviderFailure;
+    }
+    for (const Proposal& proposal : proposals)
+    {
+        const usize at = encodings.size();
+        encodings.resize(at + proposal_bytes(proposal));
+        cont::WireWriter writer(cont::Span<u8>(encodings.data() + at, encodings.size() - at));
+        put_proposal(writer, proposal);
+        Item item;
+        item.proposal = proposal;
+        item.sender   = sender;
+        item.encoding = cont::ConstSpan<u8>(encodings.data() + at, encodings.size() - at);
+        plan.items.push_back(item);
+    }
+    return CryptoError::None;
+}
+
 CryptoError Group::advance(StagedCommit& staged, const Plan& plan, WireFormat wire_format,
                            const FramedContent& content, cont::ConstSpan<u8> signature,
-                           cont::ConstSpan<u8> commit_secret) const noexcept
+                           cont::ConstSpan<u8> init_secret, cont::ConstSpan<u8> commit_secret) const noexcept
 {
     const CipherSuite& suite = *m_suite;
     const usize        hash  = suite.hash_bytes();
@@ -380,7 +480,7 @@ CryptoError Group::advance(StagedCommit& staged, const Plan& plan, WireFormat wi
     error = psk_secret(suite, cont::ConstSpan<PreSharedKey>(plan.psks.data(), plan.psks.size()), psk.span(hash));
     if (error == CryptoError::None)
     {
-        error = next.secrets.advance(suite, m_now.secrets.get(EpochSecret::Init),
+        error = next.secrets.advance(suite, init_secret,
                                      commit_secret.empty() ? cont::ConstSpan<u8>(zero, hash) : commit_secret,
                                      psk.span(hash), encoded.span());
     }
@@ -389,7 +489,8 @@ CryptoError Group::advance(StagedCommit& staged, const Plan& plan, WireFormat wi
                                       : error;
 }
 
-CryptoError Group::record(const Plan& plan, u32 committer, bool has_path, StagedCommit& staged) const noexcept
+CryptoError Group::record(const Plan& plan, const Sender& committer, bool has_path,
+                          StagedCommit& staged) const noexcept
 {
     usize total = 0U;
     for (const Item& item : plan.items)
@@ -410,9 +511,20 @@ CryptoError Group::record(const Plan& plan, u32 committer, bool has_path, Staged
     }
     staged.m_group      = this;
     staged.m_from_epoch = m_now.epoch;
-    staged.m_committer  = {SenderType::Member, committer};
+    staged.m_committer  = committer;
     staged.m_has_path   = has_path;
     return CryptoError::None;
+}
+
+CryptoError Group::external_init_secret(cont::ConstSpan<u8> kem_output, cont::Span<u8> out) const noexcept
+{
+    HpkeKey     key;
+    CryptoError error = key.derive(m_suite->kem, m_now.secrets.get(EpochSecret::External));
+    if (error == CryptoError::None)
+    {
+        error = key.export_secret(m_suite->hpke(), kem_output, {}, label_of(kExternalInitLabel), out);
+    }
+    return error == CryptoError::None ? error : refuse(error, out);
 }
 
 // ---- Receiving ----
@@ -488,7 +600,17 @@ CryptoError Group::sender_key(const ReceivedMessage& message, cont::ConstSpan<u8
         key = message.m_proposal.add.leaf_node.signature_key;
         return CryptoError::None;
     case SenderType::NewMemberCommit:
-        return CryptoError::Unsupported; // an external join (decision M10)
+    {
+        // An external joiner's commit, signed with its path's leaf key (section 12.4.3.2).
+        cont::WireReader in(message.m_content.body);
+        Commit           commit;
+        if (!take_commit(in, commit) || !in.done() || !commit.has_path)
+        {
+            return CryptoError::Malformed;
+        }
+        key = commit.path.leaf_node.signature_key;
+        return CryptoError::None;
+    }
     }
     return CryptoError::Malformed;
 }
@@ -608,17 +730,18 @@ CryptoError Group::process(cont::ConstSpan<u8> message, ReceivedMessage& out) no
 CryptoError Group::process_commit(ReceivedMessage& out) noexcept
 {
     const CipherSuite&   suite     = *m_suite;
-    const GroupConfig&   config    = m_config;
     const FramedContent& content   = out.m_content;
     StagedCommit&        staged    = out.m_commit;
-    const u32            committer = content.sender.index;
+    Sender               committer = content.sender;
+    const bool           external  = committer.type == SenderType::NewMemberCommit;
     cont::WireReader     in(content.body);
     Commit               commit;
     if (!take_commit(in, commit) || !in.done())
     {
         return CryptoError::Malformed;
     }
-    // The list: each proposal by value from the committer, or by reference from the epoch's cache.
+    // The list: each proposal by value from the committer, or by reference from the epoch's cache (never in an
+    // external commit, whose joiner cannot judge the epoch's proposals: section 12.4.3.2).
     Plan             plan;
     cont::WireReader list(commit.proposals);
     while (!list.done())
@@ -626,7 +749,7 @@ CryptoError Group::process_commit(ReceivedMessage& out) noexcept
         const cont::ConstSpan<u8> start = list.rest();
         ProposalOrRef             entry;
         Item                      item;
-        if (!take_proposal_or_ref(list, entry))
+        if (!take_proposal_or_ref(list, entry) || (external && entry.is_reference))
         {
             return CryptoError::Malformed;
         }
@@ -646,7 +769,7 @@ CryptoError Group::process_commit(ReceivedMessage& out) noexcept
         else
         {
             item.proposal = entry.proposal;
-            item.sender   = {SenderType::Member, committer};
+            item.sender   = committer;
             item.encoding = taken_since(start, list).subspan(1U);
         }
         if (!plan.items.try_push_back(item))
@@ -660,21 +783,35 @@ CryptoError Group::process_commit(ReceivedMessage& out) noexcept
         error = CryptoError::Malformed;
     }
 
+    // An external joiner takes the leftmost free leaf of the new tree (section 12.4.2), which its proposals by value
+    // then name; the leaf it replaces is the one it removes, if any.
+    RatchetTree&      tree        = staged.m_next.tree;
+    const Credential* predecessor = nullptr;
+    LeafNode          former{};
+    if (error == CryptoError::None && external)
+    {
+        error = tree.reserve_leaf(committer.index);
+        for (Item& item : plan.items)
+        {
+            item.sender.index = committer.index;
+            if (item.proposal.type == code(ProposalType::Remove) && m_now.tree.leaf_node(item.proposal.remove, former))
+            {
+                predecessor = &former.credential;
+            }
+        }
+    }
+    else if (error == CryptoError::None && m_now.tree.leaf_node(committer.index, former))
+    {
+        predecessor = &former.credential;
+    }
+
     // The path (section 12.4.2): its leaf checked, merged into the new tree, and the path secret decrypted.
-    RatchetTree& tree = staged.m_next.tree;
     if (error == CryptoError::None && commit.has_path)
     {
-        const LeafNode&    leaf = commit.path.leaf_node;
-        const GroupContext next{suite.id, view(m_group_id), m_now.epoch + 1U, {}, {}, view(staged.m_next.extensions)};
-        error = check_leaf(next, leaf, LeafRole::Commit, config.policy, *config.authentication);
-        if (error == CryptoError::None &&
-            verify_leaf_node(suite, *config.verifier, leaf, view(m_group_id), committer) != Verification::Valid)
-        {
-            error = CryptoError::Forged;
-        }
+        error = check_path_leaf(commit.path.leaf_node, committer.index, predecessor, staged);
         if (error == CryptoError::None)
         {
-            error = tree.merge_path(committer, commit.path);
+            error = tree.merge_path(committer.index, commit.path, external);
         }
         if (error == CryptoError::None && !staged.m_removed)
         {
@@ -699,7 +836,7 @@ CryptoError Group::process_commit(ReceivedMessage& out) noexcept
             if (error == CryptoError::None)
             {
                 error = bytes == 0U ? CryptoError::BadLength
-                                    : process_update_path(m_keys, tree, committer, commit.path, encoded.span(),
+                                    : process_update_path(m_keys, tree, committer.index, commit.path, encoded.span(),
                                                           staged.added(), staged.m_update, replaced);
             }
         }
@@ -708,10 +845,22 @@ CryptoError Group::process_commit(ReceivedMessage& out) noexcept
     {
         error = check_new_tree(tree);
     }
+    // The key schedule from the current epoch's init secret, or an external commit's from its ExternalInit.
+    const usize         hash        = suite.hash_bytes();
+    Secret              external_init;
+    cont::ConstSpan<u8> init_secret = m_now.secrets.get(EpochSecret::Init);
+    for (const Item& item : plan.items)
+    {
+        if (error == CryptoError::None && item.proposal.type == code(ProposalType::ExternalInit))
+        {
+            error       = external_init_secret(item.proposal.kem_output, external_init.span(hash));
+            init_secret = external_init.span(hash);
+        }
+    }
     if (error == CryptoError::None)
     {
         const bool derives = commit.has_path && !staged.m_removed;
-        error = advance(staged, plan, out.m_wire_format, content, out.m_auth.signature,
+        error = advance(staged, plan, out.m_wire_format, content, out.m_auth.signature, init_secret,
                         derives ? staged.m_update.commit_secret() : cont::ConstSpan<u8>());
     }
     if (error == CryptoError::None && !staged.m_removed)
@@ -729,14 +878,10 @@ CryptoError Group::check_signer(const Signer& signer) const noexcept
     {
         return CryptoError::NotReady;
     }
-    LeafNode    leaf{};
-    u8          key[kMaxNodeKeyBytes] = {};
-    const usize bytes                 = signature_sizes(m_suite->signature).public_key;
-    const bool  same = signer.algorithm() == m_suite->signature && bytes <= sizeof(key) &&
-                      m_now.tree.leaf_node(own_leaf(), leaf) &&
-                      signer.public_key(cont::Span<u8>(key, bytes)) == CryptoError::None &&
-                      same_bytes(cont::ConstSpan<u8>(key, bytes), leaf.signature_key);
-    return same ? CryptoError::None : CryptoError::Unsupported;
+    LeafNode leaf{};
+    return m_now.tree.leaf_node(own_leaf(), leaf) && signs_for(*m_suite, signer, leaf.signature_key)
+               ? CryptoError::None
+               : CryptoError::Unsupported;
 }
 
 CryptoError Group::sign_own(const Signer& signer, WireFormat wire_format, const FramedContent& content,
@@ -1029,6 +1174,7 @@ CryptoError Group::select_pending(u32 committer, Plan& plan) const noexcept
                 CryptoError::None &&
             verify_leaf_node(suite, *config.verifier, item.proposal.update, view(m_group_id), from) ==
                 Verification::Valid &&
+            config.authentication->valid_successor(current.credential, item.proposal.update.credential) &&
             !same_bytes(item.proposal.update.encryption_key, current.encryption_key);
         if (valid)
         {
@@ -1126,16 +1272,44 @@ void put_proposal_list(cont::WireWriter& out, const Items& items) noexcept
     }
 }
 
-// An Extension list's body with the ratchet tree's extension first when `tree` is given, then `more`.
-CryptoError group_info_extensions(const RatchetTree* tree, cont::ConstSpan<u8> more, cont::Array<u8>& out) noexcept
+// A Commit's encoding (section 12.4): the list of `items`, then the path's presence and its encoding.
+template <typename Items>
+CryptoError commit_body(const Items& items, bool path, cont::ConstSpan<u8> path_bytes, cont::Array<u8>& out) noexcept
 {
     out.clear();
-    const usize tree_bytes = tree != nullptr ? tree->encoded_bytes() : 0U;
-    const usize head       = tree != nullptr ? 2U + vector_bytes(tree_bytes) : 0U;
-    if (tree != nullptr && vector_bytes(tree_bytes) == 0U)
+    const usize list = proposal_list_bytes(items);
+    if (vector_bytes(list) == 0U)
     {
         return CryptoError::BadLength;
     }
+    const usize total = vector_bytes(list) + 1U + path_bytes.size();
+    if (!out.try_reserve(total))
+    {
+        return CryptoError::ProviderFailure;
+    }
+    out.resize(total);
+    cont::WireWriter writer(cont::Span<u8>(out.data(), total));
+    put_varint(writer, list);
+    put_proposal_list(writer, items);
+    writer.put_u8(path ? 1U : 0U);
+    writer.put_bytes(path_bytes);
+    return CryptoError::None;
+}
+
+// An Extension list's body: the ratchet tree's extension when `tree` is given, the external_pub extension when
+// `external_pub` is not empty, then `more`.
+CryptoError group_info_extensions(const RatchetTree* tree, cont::ConstSpan<u8> external_pub, cont::ConstSpan<u8> more,
+                                  cont::Array<u8>& out) noexcept
+{
+    out.clear();
+    const usize tree_bytes = tree != nullptr ? tree->encoded_bytes() : 0U;
+    const usize pub_bytes  = external_pub_bytes(external_pub);
+    if ((tree != nullptr && vector_bytes(tree_bytes) == 0U) || vector_bytes(pub_bytes) == 0U)
+    {
+        return CryptoError::BadLength;
+    }
+    const usize head = (tree != nullptr ? 2U + vector_bytes(tree_bytes) : 0U) +
+                       (external_pub.empty() ? 0U : 2U + vector_bytes(pub_bytes));
     if (!out.try_reserve(head + more.size()))
     {
         return CryptoError::ProviderFailure;
@@ -1148,10 +1322,87 @@ CryptoError group_info_extensions(const RatchetTree* tree, cont::ConstSpan<u8> m
         put_varint(writer, tree_bytes);
         tree->encode(writer);
     }
+    if (!external_pub.empty())
+    {
+        writer.put_u16(static_cast<u16>(ExtensionType::ExternalPub));
+        put_varint(writer, pub_bytes);
+        put_external_pub(writer, external_pub);
+    }
     writer.put_bytes(more);
     return CryptoError::None;
 }
 } // namespace
+
+CryptoError Group::seal_group_info(const Signer& signer, u32 signer_leaf, const GroupEpoch& epoch,
+                                   const GroupInfoOptions& options, cont::Array<u8>& out) const noexcept
+{
+    out.clear();
+    const CipherSuite& suite                      = *m_suite;
+    const usize        npk                        = hpke_sizes(suite.kem).public_key;
+    u8                 external[kMaxNodeKeyBytes] = {};
+    CryptoError        error                      = CryptoError::None;
+    if (options.external_pub)
+    {
+        // The epoch's external key pair (section 8): DeriveKeyPair(external_secret), whose public key only members
+        // can compute.
+        HpkeKey key;
+        error = key.derive(suite.kem, epoch.secrets.get(EpochSecret::External));
+        if (error == CryptoError::None)
+        {
+            error = key.public_key(cont::Span<u8>(external, npk));
+        }
+    }
+    cont::Array<u8> extensions;
+    if (error == CryptoError::None)
+    {
+        error = group_info_extensions(options.ratchet_tree ? &epoch.tree : nullptr,
+                                      options.external_pub ? cont::ConstSpan<u8>(external, npk) : cont::ConstSpan<u8>(),
+                                      options.extensions, extensions);
+    }
+    GroupInfo info;
+    info.context          = {suite.id,           view(m_group_id), epoch.epoch, epoch.tree.root_hash(),
+                             view(epoch.confirmed), view(epoch.extensions)};
+    info.extensions       = view(extensions);
+    info.confirmation_tag = view(epoch.tag);
+    info.signer           = signer_leaf;
+    u8    signature[kMaxSignatureBytes] = {};
+    usize written                       = 0U;
+    if (error == CryptoError::None)
+    {
+        error = sign_group_info(suite, signer, info, signature, written);
+    }
+    info.signature    = cont::ConstSpan<u8>(signature, written);
+    const usize bytes = group_info_bytes(info);
+    if (error == CryptoError::None && bytes == 0U)
+    {
+        error = CryptoError::BadLength;
+    }
+    if (error == CryptoError::None && !out.try_reserve(4U + bytes))
+    {
+        error = CryptoError::ProviderFailure;
+    }
+    if (error == CryptoError::None)
+    {
+        out.resize(4U + bytes);
+        cont::WireWriter writer(cont::Span<u8>(out.data(), out.size()));
+        put_message_header(writer, WireFormat::GroupInfo);
+        put_group_info(writer, info);
+    }
+    return error;
+}
+
+CryptoError Group::group_info(const Signer& signer, const GroupInfoOptions& options,
+                              cont::Array<u8>& out) const noexcept
+{
+    out.clear();
+    const CryptoError error = check_signer(signer);
+    if (error != CryptoError::None)
+    {
+        return error;
+    }
+    return info_options_valid(options) ? seal_group_info(signer, own_leaf(), m_now, options, out)
+                                       : CryptoError::Malformed;
+}
 
 CryptoError Group::commit(const Signer& signer, const CommitOptions& options, CommitResult& out) noexcept
 {
@@ -1164,52 +1415,34 @@ CryptoError Group::commit(const Signer& signer, const CommitOptions& options, Co
     {
         return error;
     }
-    const CipherSuite& suite = *m_suite;
-    const usize        hash  = suite.hash_bytes();
-    const u32          me    = own_leaf();
-    cont::ConstSpan<u8> ignored;
-    const bool framed = options.send.wire_format == WireFormat::PublicMessage ||
+    const CipherSuite& suite  = *m_suite;
+    const usize        hash   = suite.hash_bytes();
+    const Sender       me     = {SenderType::Member, own_leaf()};
+    const bool         framed = options.send.wire_format == WireFormat::PublicMessage ||
                         options.send.wire_format == WireFormat::PrivateMessage;
-    if (!framed || !extensions_distinct(options.group_info_extensions) ||
-        find_extension(options.group_info_extensions, static_cast<u16>(ExtensionType::RatchetTree), ignored))
+    if (!framed || !info_options_valid(options.group_info))
     {
         return CryptoError::Malformed;
+    }
+    for (const Proposal& proposal : options.proposals)
+    {
+        if (proposal.type == code(ProposalType::Update))
+        {
+            return CryptoError::Malformed; // an Update by value would be the committer's own (section 12.2)
+        }
     }
 
     // The list: the cached proposals section 12.2 prefers, then the member's own by value.
     StagedCommit&   staged = out.staged;
     Plan            plan;
     cont::Array<u8> own; // the encodings of the proposals by value
-    usize           own_total = 0U;
-    for (const Proposal& proposal : options.proposals)
-    {
-        const usize bytes = proposal_bytes(proposal);
-        if (bytes == 0U || proposal.type == code(ProposalType::Update))
-        {
-            return CryptoError::Malformed; // an Update by value would be the committer's own (section 12.2)
-        }
-        own_total += bytes;
-    }
     if (options.pending)
     {
-        error = select_pending(me, plan);
+        error = select_pending(me.index, plan);
     }
-    if (error == CryptoError::None &&
-        (!own.try_reserve(own_total) || !plan.items.try_reserve(plan.items.size() + options.proposals.size())))
+    if (error == CryptoError::None)
     {
-        error = CryptoError::ProviderFailure;
-    }
-    for (usize i = 0U; error == CryptoError::None && i < options.proposals.size(); ++i)
-    {
-        const usize at = own.size();
-        own.resize(at + proposal_bytes(options.proposals[i]));
-        cont::WireWriter writer(cont::Span<u8>(own.data() + at, own.size() - at));
-        put_proposal(writer, options.proposals[i]);
-        Item item;
-        item.proposal = options.proposals[i];
-        item.sender   = {SenderType::Member, me};
-        item.encoding = cont::ConstSpan<u8>(own.data() + at, own.size() - at);
-        plan.items.push_back(item);
+        error = add_by_value(options.proposals, me, own, plan);
     }
     if (error == CryptoError::None)
     {
@@ -1223,10 +1456,10 @@ CryptoError Group::commit(const Signer& signer, const CommitOptions& options, Co
     if (error == CryptoError::None && path)
     {
         LeafNode template_leaf{};
-        (void)tree.leaf_node(me, template_leaf);
+        (void)tree.leaf_node(me.index, template_leaf);
         const GroupContext provisional{suite.id, view(m_group_id), m_now.epoch + 1U, {}, view(m_now.confirmed),
                                        view(staged.m_next.extensions)};
-        error = create_update_path(tree, me, signer, template_leaf, provisional, staged.added(), path_bytes,
+        error = create_update_path(tree, me.index, signer, template_leaf, provisional, staged.added(), path_bytes,
                                    staged.m_update);
     }
     if (error == CryptoError::None)
@@ -1235,31 +1468,16 @@ CryptoError Group::commit(const Signer& signer, const CommitOptions& options, Co
     }
 
     // The Commit framed, signed under the current GroupContext, and the new epoch derived and confirmed.
-    const usize list  = proposal_list_bytes(plan.items);
-    const usize total = vector_bytes(list) + 1U + path_bytes.size();
-    if (error == CryptoError::None && vector_bytes(list) == 0U)
-    {
-        error = CryptoError::BadLength;
-    }
     cont::Array<u8> body;
-    if (error == CryptoError::None && !body.try_reserve(total))
+    if (error == CryptoError::None)
     {
-        error = CryptoError::ProviderFailure;
+        error = commit_body(plan.items, path, view(path_bytes), body);
     }
+    const FramedContent content{view(m_group_id),           m_now.epoch,          me,
+                                options.send.authenticated_data, ContentType::Commit, view(body)};
     u8    signature[kMaxSignatureBytes] = {};
     usize written                       = 0U;
     u8    tag[kMaxHashBytes]            = {};
-    if (error == CryptoError::None)
-    {
-        body.resize(total);
-        cont::WireWriter writer(cont::Span<u8>(body.data(), total));
-        put_varint(writer, list);
-        put_proposal_list(writer, plan.items);
-        writer.put_u8(path ? 1U : 0U);
-        writer.put_bytes(view(path_bytes));
-    }
-    const FramedContent content{view(m_group_id), m_now.epoch, {SenderType::Member, me},
-                                options.send.authenticated_data, ContentType::Commit, view(body)};
     if (error == CryptoError::None)
     {
         error = sign_own(signer, options.send.wire_format, content, signature, written);
@@ -1267,6 +1485,7 @@ CryptoError Group::commit(const Signer& signer, const CommitOptions& options, Co
     if (error == CryptoError::None)
     {
         error = advance(staged, plan, options.send.wire_format, content, cont::ConstSpan<u8>(signature, written),
+                        m_now.secrets.get(EpochSecret::Init),
                         path ? staged.m_update.commit_secret() : cont::ConstSpan<u8>());
     }
     GroupEpoch& next = staged.m_next;
@@ -1281,40 +1500,9 @@ CryptoError Group::commit(const Signer& signer, const CommitOptions& options, Co
     }
 
     // The new epoch's GroupInfo (section 12.4.3), signed; the Welcome for the members the commit adds.
-    cont::Array<u8> info_extensions;
     if (error == CryptoError::None)
     {
-        error = group_info_extensions(options.tree_in_welcome ? &tree : nullptr, options.group_info_extensions,
-                                      info_extensions);
-    }
-    GroupInfo info;
-    info.context          = {suite.id,           view(m_group_id), next.epoch, tree.root_hash(),
-                             view(next.confirmed), view(next.extensions)};
-    info.extensions       = view(info_extensions);
-    info.confirmation_tag = cont::ConstSpan<u8>(tag, hash);
-    info.signer           = me;
-    u8    info_signature[kMaxSignatureBytes] = {};
-    usize info_written                       = 0U;
-    if (error == CryptoError::None)
-    {
-        error = sign_group_info(suite, signer, info, info_signature, info_written);
-    }
-    info.signature          = cont::ConstSpan<u8>(info_signature, info_written);
-    const usize info_bytes  = group_info_bytes(info);
-    if (error == CryptoError::None && info_bytes == 0U)
-    {
-        error = CryptoError::BadLength;
-    }
-    if (error == CryptoError::None && !out.group_info.try_reserve(4U + info_bytes))
-    {
-        error = CryptoError::ProviderFailure;
-    }
-    if (error == CryptoError::None)
-    {
-        out.group_info.resize(4U + info_bytes);
-        cont::WireWriter writer(cont::Span<u8>(out.group_info.data(), out.group_info.size()));
-        put_message_header(writer, WireFormat::GroupInfo);
-        put_group_info(writer, info);
+        error = seal_group_info(signer, me.index, next, options.group_info, out.group_info);
     }
     cont::Array<WelcomeMember> members;
     if (error == CryptoError::None && !members.try_reserve(staged.m_added.size()))
@@ -1333,7 +1521,7 @@ CryptoError Group::commit(const Signer& signer, const CommitOptions& options, Co
         if (path)
         {
             const std::optional<u32> ancestor =
-                tree::common_ancestor(2U * me, 2U * staged.m_added[added], tree.leaves());
+                tree::common_ancestor(2U * me.index, 2U * staged.m_added[added], tree.leaves());
             member.path_secret = ancestor ? staged.m_update.path_secret(*ancestor) : cont::ConstSpan<u8>();
         }
         members.push_back(member);
@@ -1377,6 +1565,225 @@ CryptoError Group::commit(const Signer& signer, const CommitOptions& options, Co
         fresh_buffer(out.welcome, 0U);
         out.group_info.clear();
         staged.clear();
+    }
+    return error;
+}
+
+// ---- External joins (sections 8.3 and 12.4.3.2; decision M11) ----
+
+CryptoError Group::join_external(const Signer& signer, const LeafNode& leaf, cont::ConstSpan<u8> group_info,
+                                 cont::ConstSpan<u8> ratchet_tree, const ExternalJoinOptions& options,
+                                 const GroupConfig& config, ExternalJoinResult& out) noexcept
+{
+    wipe();
+    out.message.clear();
+    out.group_info.clear();
+    Message   message;
+    GroupInfo info;
+    bool      decoded = take_message(group_info, message) && message.wire_format == WireFormat::GroupInfo;
+    if (decoded)
+    {
+        cont::WireReader in(message.body);
+        decoded = take_group_info(in, info) && in.done() && extensions_distinct(info.extensions) &&
+                  extensions_distinct(info.context.extensions);
+    }
+    if (!decoded || !info_options_valid(options.group_info))
+    {
+        return CryptoError::Malformed;
+    }
+    const CipherSuite* suite = cipher_suite(info.context.cipher_suite);
+    CryptoError        error = suite == nullptr ? CryptoError::Unsupported : check_config(config);
+    if (error != CryptoError::None)
+    {
+        return error;
+    }
+    if (info.confirmation_tag.size() != suite->hash_bytes())
+    {
+        return CryptoError::Malformed;
+    }
+    if (!signs_for(*suite, signer, leaf.signature_key))
+    {
+        return CryptoError::Unsupported;
+    }
+
+    // The tree and its members, then the external key the GroupInfo publishes.
+    const GroupContext& context = info.context;
+    m_config                    = config;
+    error                       = take_tree(*suite, info, ratchet_tree);
+    cont::ConstSpan<u8> data;
+    cont::ConstSpan<u8> external;
+    if (error == CryptoError::None)
+    {
+        if (!find_extension(info.extensions, static_cast<u16>(ExtensionType::ExternalPub), data))
+        {
+            error = CryptoError::Unsupported;
+        }
+        else
+        {
+            error = take_external_pub(data, external) ? check_node_key(*suite, external) : CryptoError::Malformed;
+        }
+    }
+
+    // The group as the GroupInfo states it; the interim transcript hash from its tag, which only the GroupInfo's
+    // signature vouches for (a joiner holds no confirmation key).
+    const usize hash = suite->hash_bytes();
+    if (error == CryptoError::None)
+    {
+        error = own_bytes(context.group_id, context.extensions, context.confirmed_transcript_hash);
+    }
+    if (error == CryptoError::None &&
+        (copy_into(info.confirmation_tag, m_now.tag) != CryptoError::None || !fresh_buffer(m_now.interim, hash)))
+    {
+        error = CryptoError::ProviderFailure;
+    }
+    if (error == CryptoError::None)
+    {
+        m_suite     = suite;
+        m_now.epoch = context.epoch;
+        error       = mls::interim_transcript_hash(*suite, context.confirmed_transcript_hash, info.confirmation_tag,
+                                                   cont::Span<u8>(m_now.interim.data(), hash));
+    }
+
+    // The list (section 12.4.3.2), all by value: the ExternalInit with its init secret exported to the external key
+    // (section 8.3), the resync's Remove and the PSKs.
+    const usize           npk                          = hpke_sizes(suite->kem).public_key;
+    u8                    kem_output[kMaxNodeKeyBytes] = {};
+    Secret                init;
+    cont::Array<Proposal> proposals;
+    if (error == CryptoError::None)
+    {
+        error = hpke_export(suite->hpke(), external, {}, label_of(kExternalInitLabel),
+                            cont::Span<u8>(kem_output, npk), init.span(hash));
+    }
+    if (error == CryptoError::None && !proposals.try_reserve(2U + options.psks.size()))
+    {
+        error = CryptoError::ProviderFailure;
+    }
+    if (error == CryptoError::None)
+    {
+        Proposal external_init;
+        external_init.type       = code(ProposalType::ExternalInit);
+        external_init.kem_output = cont::ConstSpan<u8>(kem_output, npk);
+        proposals.push_back(external_init);
+        if (options.resync)
+        {
+            Proposal remove;
+            remove.type   = code(ProposalType::Remove);
+            remove.remove = *options.resync;
+            proposals.push_back(remove);
+        }
+        for (const PreSharedKeyId& id : options.psks)
+        {
+            Proposal psk;
+            psk.type = code(ProposalType::PreSharedKey);
+            psk.psk  = id;
+            proposals.push_back(psk);
+        }
+    }
+    Sender          joiner{SenderType::NewMemberCommit, 0U};
+    Plan            plan;
+    cont::Array<u8> encodings;
+    StagedCommit    staged;
+    if (error == CryptoError::None)
+    {
+        error = add_by_value(cont::ConstSpan<Proposal>(proposals.data(), proposals.size()), joiner, encodings, plan);
+    }
+    if (error == CryptoError::None)
+    {
+        error = stage_list(joiner, plan, staged);
+    }
+
+    // The joiner's leaf (section 12.4.2): the leftmost free leaf of the new tree, a fresh path under the provisional
+    // GroupContext, the leaf checked as the members will check it.
+    RatchetTree&    tree = staged.m_next.tree;
+    cont::Array<u8> path_bytes;
+    if (error == CryptoError::None)
+    {
+        error = tree.reserve_leaf(joiner.index);
+    }
+    if (error == CryptoError::None)
+    {
+        for (Item& item : plan.items)
+        {
+            item.sender.index = joiner.index;
+        }
+        const GroupContext provisional{suite->id, view(m_group_id), m_now.epoch + 1U, {}, view(m_now.confirmed),
+                                       view(staged.m_next.extensions)};
+        error = create_update_path(tree, joiner.index, signer, leaf, provisional, {}, path_bytes, staged.m_update,
+                                   true);
+    }
+    if (error == CryptoError::None)
+    {
+        LeafNode   joined{};
+        LeafNode   former{};
+        const bool resync = options.resync && m_now.tree.leaf_node(*options.resync, former);
+        (void)tree.leaf_node(joiner.index, joined);
+        error = check_path_leaf(joined, joiner.index, resync ? &former.credential : nullptr, staged);
+    }
+    if (error == CryptoError::None)
+    {
+        error = check_new_tree(tree);
+    }
+
+    // The commit, signed under the GroupInfo's GroupContext as a PublicMessage (the wire names no joiner's leaf), the
+    // epoch it begins, confirmed, and that epoch's GroupInfo.
+    cont::Array<u8> body;
+    if (error == CryptoError::None)
+    {
+        error = commit_body(plan.items, true, view(path_bytes), body);
+    }
+    const FramedContent content{view(m_group_id),           m_now.epoch,          {SenderType::NewMemberCommit, 0U},
+                                options.authenticated_data, ContentType::Commit, view(body)};
+    u8    signature[kMaxSignatureBytes] = {};
+    usize written                       = 0U;
+    u8    tag[kMaxHashBytes]            = {};
+    if (error == CryptoError::None)
+    {
+        error = sign_own(signer, WireFormat::PublicMessage, content, signature, written);
+    }
+    if (error == CryptoError::None)
+    {
+        error = advance(staged, plan, WireFormat::PublicMessage, content, cont::ConstSpan<u8>(signature, written),
+                        init.span(hash), staged.m_update.commit_secret());
+    }
+    GroupEpoch& next = staged.m_next;
+    if (error == CryptoError::None)
+    {
+        error = confirmation_tag(*suite, next.secrets.get(EpochSecret::Confirmation), view(next.confirmed),
+                                 cont::Span<u8>(tag, hash));
+    }
+    if (error == CryptoError::None)
+    {
+        error = confirm(next, cont::ConstSpan<u8>(tag, hash));
+    }
+    if (error == CryptoError::None)
+    {
+        error = seal_group_info(signer, joiner.index, next, options.group_info, out.group_info);
+    }
+    if (error == CryptoError::None)
+    {
+        SendOptions send;
+        send.wire_format        = WireFormat::PublicMessage;
+        send.authenticated_data = options.authenticated_data;
+        error = wrap(send, content, {cont::ConstSpan<u8>(signature, written), cont::ConstSpan<u8>(tag, hash)},
+                     out.message);
+    }
+
+    // The joiner is the group at the epoch its commit begins.
+    if (error == CryptoError::None)
+    {
+        error = m_keys.start(*suite, joiner.index, staged.m_update);
+    }
+    if (error == CryptoError::None)
+    {
+        m_now.take(next);
+    }
+    staged.clear();
+    if (error != CryptoError::None)
+    {
+        wipe();
+        out.message.clear();
+        out.group_info.clear();
     }
     return error;
 }

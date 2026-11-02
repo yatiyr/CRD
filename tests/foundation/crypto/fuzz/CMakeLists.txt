@@ -11,10 +11,11 @@
 #                              2.1, tree math against its own invariants, HPKE round trips with any bit changed,
 #                              hostile openings and signatures through the labelled operations, and derivations
 #                              (determinism, the length in the label, DeriveTreeSecret as ExpandWithLabel).
-#   crd-fuzz-crypto-mls-commit MLS's proposals and commits: a member that joined an honest group processes any message,
-#                              and the honest Update proposal and commit changed in any byte, in each suite as public
-#                              and private messages; a refusal changes nothing and only the honest commit stages, and
-#                              merges, the committer's epoch.
+#   crd-fuzz-crypto-mls-commit MLS's proposals, commits and external joins: a member that joined an honest group
+#                              processes any message, and the honest Update proposal, commit and external commit changed
+#                              in any byte, in each suite as public and private messages; a refusal changes nothing and
+#                              only the honest commits stage, and merge, their committers' epochs; a joiner refuses the
+#                              published GroupInfo changed in any byte and joins only from the intact one.
 #   crd-fuzz-crypto-mls-group  MLS's group structures and joins: whatever a decoder (Welcome, GroupInfo, GroupSecrets,
 #                              GroupContext, required capabilities, external senders) accepts writes back exactly, an
 #                              Extension list's repeats and lookups are a restatement's, and an honest Welcome changed

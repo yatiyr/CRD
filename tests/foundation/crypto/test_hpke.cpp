@@ -1,8 +1,8 @@
 // crd-crypto -- hybrid public key encryption (NET.2; docs/design/network-foundation.md#hpke): every base-mode vector
 // of RFC 9180's test-vectors.json in the profile (DeriveKeyPair for the recipient and the ephemeral key, the private
-// keys' serialization and the opening of each context's first message), sealing round trips over every suite, and
-// every refusal: suites outside the profile, lengths, keys off the curve, small-order X25519 keys, forgeries,
-// overlapping buffers and keys that hold none.
+// keys' serialization, the opening of each context's first message and each of its exports), sealing and exporting
+// round trips over every suite, and every refusal: suites outside the profile, lengths, keys off the curve,
+// small-order X25519 keys, forgeries, overlapping buffers and keys that hold none.
 
 #include "wycheproof.hpp"
 
@@ -107,8 +107,9 @@ TEST_CASE("HPKE: RFC 9180's base-mode vectors", "[crypto][net-2][hpke]")
 {
     const JsonFile vectors(crd::containers::String(CRD_HPKE_VECTORS));
     const u32      count   = json::count_of(vectors.doc(), vectors.root());
-    usize          in      = 0U;
-    usize          outside = 0U;
+    usize          in              = 0U;
+    usize          outside         = 0U;
+    usize          exported_values = 0U;
     REQUIRE(count == 128U);
     for (u32 i = 0U; i < count; ++i)
     {
@@ -158,7 +159,24 @@ TEST_CASE("HPKE: RFC 9180's base-mode vectors", "[crypto][net-2][hpke]")
         CHECK(recipient.open(suite, vectors.hex(v, "enc"), vectors.hex(v, "info"), vectors.hex(second, "aad"), later,
                              Span<u8>(later_plain.data(), later_plain.size())) == CryptoError::Forged);
         CHECK(all_zero(later_plain));
+
+        // Every export of the context (section 5.3), opened from the encapsulation.
+        const u32 exports = json::find(vectors.doc(), v, "exports");
+        REQUIRE(json::count_of(vectors.doc(), exports) == 3U); // an empty, a one-byte and a word context
+        for (u32 e = 0U; e < 3U; ++e)
+        {
+            const u32   entry    = json::at(vectors.doc(), exports, e);
+            const Bytes value = vectors.hex(entry, "exported_value");
+            CHECK(vectors.number(entry, "L") == value.size());
+            Bytes exported = filled(value.size(), 0xA5U);
+            REQUIRE(recipient.export_secret(suite, vectors.hex(v, "enc"), vectors.hex(v, "info"),
+                                            vectors.hex(entry, "exporter_context"),
+                                            Span<u8>(exported.data(), exported.size())) == CryptoError::None);
+            CHECK(equal(exported, value));
+            ++exported_values;
+        }
     }
+    CHECK(exported_values == 18U);
     CHECK(in == 6U);       // DHKEM(P-256) and DHKEM(X25519) with HKDF-SHA256 and each AEAD
     CHECK(outside == 26U); // the other base-mode suites
 }
@@ -239,6 +257,106 @@ TEST_CASE("HPKE: a long info is laid out beyond the inline buffer", "[crypto][ne
     shorter.resize(4095U);
     CHECK(sealed.recipient.open(suite, sealed.enc, shorter, {}, sealed.ciphertext,
                                 Span<u8>(opened.data(), opened.size())) == CryptoError::Forged);
+}
+
+TEST_CASE("HPKE: exports agree on both sides of every suite, and their refusals", "[crypto][net-2][hpke]")
+{
+    const u8 info[]    = {'i', 'n', 'f', 'o'};
+    const u8 context[] = {'M', 'L', 'S', ' ', 'e', 'x', 'p', 'o', 'r', 't'};
+    for (const HpkeSuite& suite : kSuites)
+    {
+        HpkeKey recipient;
+        REQUIRE(recipient.generate(suite.kem) == CryptoError::None);
+        const Bytes peer = public_of(recipient);
+        const usize nh   = suite.kdf == AlgorithmId::HkdfSha256 ? 32U : 48U;
+        for (const usize length : {usize{1}, nh, 255U * nh})
+        {
+            Bytes enc      = filled(peer.size(), 0U);
+            Bytes sent     = filled(length, 0U);
+            Bytes received = filled(length, 0U);
+            REQUIRE(hpke_export(suite, peer, info, context, Span<u8>(enc.data(), enc.size()),
+                                Span<u8>(sent.data(), sent.size())) == CryptoError::None);
+            REQUIRE(recipient.export_secret(suite, enc, info, context, Span<u8>(received.data(), received.size())) ==
+                    CryptoError::None);
+            CHECK(equal(sent, received));
+            CHECK_FALSE(all_zero(sent));
+        }
+        // Another context, another info, another key or another KDF derive another secret; the exports of one
+        // context are prefixes of no other length (the length is in the label).
+        Bytes enc  = filled(peer.size(), 0U);
+        Bytes sent = filled(nh, 0U);
+        REQUIRE(hpke_export(suite, peer, info, context, Span<u8>(enc.data(), enc.size()),
+                            Span<u8>(sent.data(), sent.size())) == CryptoError::None);
+        Bytes      other = filled(nh, 0U);
+        const auto again = [&](const HpkeKey& key, const HpkeSuite& as, ConstSpan<u8> i, ConstSpan<u8> c, usize n)
+        {
+            other = filled(n, 0U);
+            REQUIRE(key.export_secret(as, enc, i, c, Span<u8>(other.data(), other.size())) == CryptoError::None);
+            return equal(ConstSpan<u8>(other.data(), n), ConstSpan<u8>(sent.data(), n));
+        };
+        CHECK_FALSE(again(recipient, suite, info, ConstSpan<u8>(context, 3U), nh));
+        CHECK_FALSE(again(recipient, suite, ConstSpan<u8>(), context, nh));
+        CHECK_FALSE(again(recipient, suite, info, context, nh - 1U));
+        HpkeKey stranger;
+        REQUIRE(stranger.generate(suite.kem) == CryptoError::None);
+        CHECK_FALSE(again(stranger, suite, info, context, nh));
+        const HpkeSuite other_kdf{suite.kem,
+                                  suite.kdf == AlgorithmId::HkdfSha256 ? AlgorithmId::HkdfSha384
+                                                                       : AlgorithmId::HkdfSha256,
+                                  suite.aead};
+        CHECK_FALSE(again(recipient, other_kdf, info, context, 32U));
+    }
+
+    // Refusals: a key that holds none, another KEM, a suite outside the profile, lengths (0 and past 255 * Nh, an
+    // encapsulation or peer of another length), overlapping buffers, a small-order X25519 peer; every output zeroed.
+    const HpkeSuite x25519{AlgorithmId::X25519, AlgorithmId::HkdfSha256, AlgorithmId::Aes128Gcm};
+    const HpkeSuite p256{AlgorithmId::Secp256r1, AlgorithmId::HkdfSha256, AlgorithmId::Aes128Gcm};
+    HpkeKey         recipient;
+    REQUIRE(recipient.generate(x25519.kem) == CryptoError::None);
+    const Bytes    peer = public_of(recipient);
+    Bytes          enc  = filled(32U, 0x11U);
+    Bytes          out  = filled(32U, 0x11U);
+    const Span<u8> encapsulation(enc.data(), enc.size());
+    const Span<u8> exported(out.data(), out.size());
+    REQUIRE(hpke_export(x25519, peer, {}, context, encapsulation, exported) == CryptoError::None);
+    const Bytes good_enc = enc;
+    HpkeKey     empty;
+    CHECK(empty.export_secret(x25519, good_enc, {}, context, exported) == CryptoError::NotReady);
+    CHECK(all_zero(out));
+    CHECK(recipient.export_secret(p256, good_enc, {}, context, exported) == CryptoError::Unsupported);
+    const HpkeSuite no_kdf{AlgorithmId::X25519, AlgorithmId::Aes128Gcm, AlgorithmId::Aes128Gcm};
+    CHECK(recipient.export_secret(no_kdf, good_enc, {}, context, exported) == CryptoError::Unsupported);
+    CHECK(hpke_export(no_kdf, peer, {}, context, encapsulation, exported) == CryptoError::Unsupported);
+    CHECK(recipient.export_secret(x25519, good_enc, {}, context, Span<u8>()) == CryptoError::BadLength);
+    Bytes too_long = filled(255U * 32U + 1U, 0U);
+    CHECK(recipient.export_secret(x25519, good_enc, {}, context, Span<u8>(too_long.data(), too_long.size())) ==
+          CryptoError::BadLength);
+    CHECK(hpke_export(x25519, peer, {}, context, encapsulation, Span<u8>(too_long.data(), too_long.size())) ==
+          CryptoError::BadLength);
+    CHECK(all_zero(too_long));
+    CHECK(recipient.export_secret(x25519, ConstSpan<u8>(good_enc.data(), 31U), {}, context, exported) ==
+          CryptoError::BadLength);
+    CHECK(hpke_export(x25519, ConstSpan<u8>(peer.data(), 31U), {}, context, encapsulation, exported) ==
+          CryptoError::BadLength);
+    CHECK(hpke_export(x25519, peer, {}, context, Span<u8>(enc.data(), 31U), exported) == CryptoError::BadLength);
+    Bytes shared = filled(64U, 0U);
+    CHECK(hpke_export(x25519, peer, {}, context, Span<u8>(shared.data(), 32U), Span<u8>(shared.data() + 16U, 32U)) ==
+          CryptoError::Overlap);
+    Bytes context_bytes = filled(32U, 3U);
+    CHECK(hpke_export(x25519, peer, {}, context_bytes, encapsulation, Span<u8>(context_bytes.data(), 32U)) ==
+          CryptoError::Overlap);
+    Bytes in_place = good_enc;
+    CHECK(recipient.export_secret(x25519, in_place, {}, context, Span<u8>(in_place.data(), 32U)) ==
+          CryptoError::Overlap);
+    const Bytes zero_point = filled(32U, 0U);
+    std::memset(out.data(), 0x11, out.size());
+    CHECK(recipient.export_secret(x25519, zero_point, {}, context, exported) == CryptoError::WeakSecret);
+    CHECK(all_zero(out));
+    std::memset(enc.data(), 0x11, enc.size());
+    std::memset(out.data(), 0x11, out.size());
+    CHECK(hpke_export(x25519, zero_point, {}, context, encapsulation, exported) == CryptoError::WeakSecret);
+    CHECK(all_zero(enc));
+    CHECK(all_zero(out));
 }
 
 TEST_CASE("HPKE: keys and refusals", "[crypto][net-2][hpke]")

@@ -172,14 +172,20 @@ public:
     [[nodiscard]] CryptoError add(const LeafNode& leaf, u32& index) noexcept;
     [[nodiscard]] CryptoError update(u32 leaf, const LeafNode& node) noexcept;
     [[nodiscard]] CryptoError remove(u32 leaf) noexcept;
+    // The leaf an external committer takes (section 12.4.2): the leftmost blank leaf, the tree doubled when it has none
+    // (where `add` would place a leaf), left blank for its path to fill (merge_path or create_update_path, `joining`).
+    // BadLength past kMaxSecretTreeLeaves leaves.
+    [[nodiscard]] CryptoError reserve_leaf(u32& index) noexcept;
 
     // Merges a received UpdatePath from `sender` (section 7.5) into the tree its commit's proposals produced: the
     // sender's direct path blanked, each node of its filtered direct path set to the path's public key with no
     // unmerged leaves, its leaf replaced. Before anything changes: Malformed when the path has not one node per node of
     // the filtered direct path or the leaf's source is not commit; Forged when the leaf's parent_hash is not the parent
     // hash its path computes (7.9.2); BadKey when the new leaf keeps the sender's encryption key or a key of the path
-    // is held by a node outside it (12.4.2). An external committer's leaf must be placed first (add).
-    [[nodiscard]] CryptoError merge_path(u32 sender, const UpdatePath& path) noexcept;
+    // is held by a node outside it (12.4.2). `sender` is a member's leaf (OutOfWindow when blank or outside), or with
+    // `joining` an external committer's blank leaf from reserve_leaf (OutOfWindow when not blank), which has no key to
+    // keep.
+    [[nodiscard]] CryptoError merge_path(u32 sender, const UpdatePath& path, bool joining = false) noexcept;
 
 private:
     struct Stored
@@ -209,7 +215,7 @@ private:
     void                      wipe() noexcept;
 
     friend CryptoError create_update_path(RatchetTree&, u32, const Signer&, const LeafNode&, const GroupContext&,
-                                          cont::ConstSpan<u32>, cont::Array<u8>&, PathUpdate&) noexcept;
+                                          cont::ConstSpan<u32>, cont::Array<u8>&, PathUpdate&, bool) noexcept;
     struct PathPlan; // a path's nodes, their new keys and the parent hashes (mls_tree.cpp)
     // The parent hashes the plan's keys give the nodes of `sender`'s filtered direct path and its leaf, computed root
     // first over the tree's current copath hashes.
@@ -249,6 +255,10 @@ public:
     void apply(PathUpdate& update) noexcept;
     // Takes `key` as the member's leaf key (move): an Update of its own leaf that a commit applied (section 12.1.2).
     void replace_leaf(HpkeKey& key) noexcept;
+    // A member whose first keys are its own commit's (an external joiner, section 12.4.3.2): at `leaf`, holding
+    // `update`'s leaf and path keys (move). NotReady when `update` holds no leaf key, OutOfWindow for a leaf past
+    // kMaxSecretTreeLeaves.
+    [[nodiscard]] CryptoError start(const CipherSuite& suite, u32 leaf, PathUpdate& update) noexcept;
 
     [[nodiscard]] bool ready() const noexcept { return m_leaf_key.ready(); }
     [[nodiscard]] u32  leaf() const noexcept { return m_leaf; }
@@ -276,13 +286,14 @@ private:
 // commit, the new key and parent hash, signed by `signer` with `context.group_id`) merged into `tree`, then each path
 // secret encrypted to its copath child's resolution without `excluded` under the provisional GroupContext (`context`
 // with the tree's new root hash). `leaf_template` may view the sender's leaf in `tree`. Writes the UpdatePath's
-// encoding into `path` and the keys and secrets into `update`.
-// OutOfWindow when `sender` is blank or outside; the refusals of the operations pass through; on a refusal `tree` is
-// to be discarded and `update` holds nothing.
+// encoding into `path` and the keys and secrets into `update`. With `joining`, `sender` is an external committer's
+// blank leaf from reserve_leaf (section 12.4.3.2) and `leaf_template` the joiner's own.
+// OutOfWindow when `sender` is outside, or blank (not blank, `joining`); the refusals of the operations pass through;
+// on a refusal `tree` is to be discarded and `update` holds nothing.
 [[nodiscard]] CryptoError create_update_path(RatchetTree& tree, u32 sender, const Signer& signer,
                                              const LeafNode& leaf_template, const GroupContext& context,
                                              cont::ConstSpan<u32> excluded, cont::Array<u8>& path,
-                                             PathUpdate& update) noexcept;
+                                             PathUpdate& update, bool joining = false) noexcept;
 
 // A receiver's side (sections 7.5 and 12.4.2) on the tree `path` was merged into (merge_path): the lowest node of the
 // sender's filtered direct path above the member, the node of its copath child's resolution (without `excluded`)
