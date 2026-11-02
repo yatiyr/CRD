@@ -2483,7 +2483,7 @@
       "review": "2027-11-02",
       "evidence": [],
       "deprecation": null,
-      "note": "The post-quantum MLS cipher suites (decision M2) over crypto.hpke-pq's KEMs and the provider's ML-DSA (signed purely, empty context, as the draft says). Revision 07 (2026-11-01) was read on 2026-11-02; IANA's MLS registry (updated 2025-11-17) does not list the codepoints yet, so they stay unverified until it does. Since 2026-11-02 (M3 layer 10d) all eleven are in crd-crypto's suite table through iana::unverified and every MLS behavioural test runs in them (tests/foundation/crypto/test_mls*.cpp); the entry stays planned, as the register requires of unverified codepoints, until IANA lists them."
+      "note": "The post-quantum MLS cipher suites (decision M2) over crypto.hpke-pq's KEMs and the provider's ML-DSA (signed purely, empty context, as the draft says). Revision 07 (2026-11-01) was read on 2026-11-02; IANA's MLS registry (updated 2025-11-17) does not list the codepoints yet, so they stay unverified until it does. Since 2026-11-02 (M3 layer 10d) all eleven are in crd-crypto's suite table through iana::unverified and every MLS behavioural test runs in them (tests/foundation/crypto/test_mls*.cpp); the entry stays planned, as the register requires of unverified codepoints, until IANA lists them. No interop peer shares these codepoints (read 2026-11-02, decision M4): MLSpp's pinned main implements an earlier assignment (0x0008 to 0x000A) and OpenMLS 0.9.0 provisional ones (0x004D to 0x004F, 0x0906), so the post-quantum suites interoperate once the peers take the draft's or IANA's codepoints."
     },
     {
       "id": "crypto.ml-kem",
@@ -2680,9 +2680,12 @@
         "verified": false
       },
       "review": "2027-10-27",
-      "evidence": [],
+      "evidence": [
+        "tests/foundation/crypto/test_mls_commit.cpp",
+        "tests/foundation/crypto/interop/mls_interop.py"
+      ],
       "deprecation": null,
-      "note": "Cerid's own implementation over crd-crypto's providers (decision M1, docs/design/network-foundation.md#mls), in progress on NET.2; GREASE as section 13.5 says (decision M13). The cipher suites of the profile (decision M2) were checked against RFC 9420 section 17.1 and IANA's MLS registry (updated 2025-11-17, read 2026-11-02); 0x0004 to 0x0006 (X448, Ed448, P-521) are outside it because no provider in the policy implements them."
+      "note": "Cerid's own implementation over crd-crypto's providers (decision M1, docs/design/network-foundation.md#mls), in progress on NET.2; GREASE as section 13.5 says (decision M13). Since 2026-11-02 interoperable with Cisco's MLSpp (the pinned main, cmake/pins.json mlspp) in the four suites below, each library creating, adding, committing by value and by reference, removing, joining externally and resyncing in the other's groups (the crd-crypto-mls-interop-mlspp CTest, decision M4); OpenMLS is the next peer, after which the entry is implemented. The cipher suites of the profile (decision M2) were checked against RFC 9420 section 17.1 and IANA's MLS registry (updated 2025-11-17, read 2026-11-02); 0x0004 to 0x0006 (X448, Ed448, P-521) are outside it because no provider in the policy implements them."
     },
     {
       "id": "mls.architecture",

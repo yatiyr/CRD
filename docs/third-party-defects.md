@@ -146,6 +146,19 @@ Lane keys are the CI preset names; test names are exact CTest names. The gate re
 | Retirement | Upstream: Qt's `resolveFont` guards neither size through 6.7.2 and on `dev` (2026-11-01), and the Qt tracker (QTBUG, QTIFW) holds no report of it. Per the policy above, none is filed (the draft stays in the [session](sessions/2026-11-01-repo-3-qfont-resolvefont.md#the-upstream-report) as evidence only). When the Vulkan SDK pin changes, `vulkan-sdk-installer-check.py trace` refuses the new digest until the census is taken again; the entry is removed when a cold install of the pin prints no QFont line |
 | Row | [REPO.3](ROADMAP.md#slice-repo.3); evidence [the emitter named](sessions/2026-11-01-repo-3-qfont-resolvefont.md) |
 
+<a id="tp-9"></a>
+## TP-9: MLSpp spends a PrivateMessage's generation before its content seal authenticates
+
+| Field | Value |
+|---|---|
+| Component | Cisco's MLSpp at the pinned commit `fc724c31` (`cmake/pins.json` `mlspp`, main on 2026-11-02), over the pinned OpenSSL 4.0.3: `State::unwrap` of a `PrivateMessage` |
+| Symptom | A member handed a PrivateMessage whose content ciphertext has one bit flipped refuses it ("AEAD authentication failure"), and then refuses the genuine message too ("Request for expired key"): the generation's key was taken from the secret tree before the content seal was checked. RFC 9420 section 9.2 deletes a key once it has been used; a forged message has not used it, so anyone on the delivery path can make a member lose any message by forging a copy first. A forged sender data seal, checked before the key is taken, spends nothing |
+| Reproduction outside Cerid | `forged_content_spends` in [mls_interop.py](../tests/foundation/crypto/interop/mls_interop.py) (2026-11-02): two members in one crd-mlspp-peer process, which links MLSpp and OpenSSL alone; the sender's application message with its last byte flipped, then the genuine one, refused by MLSpp's reader in each of the four suites ([session](sessions/2026-11-02-net-2-mls-interop-mlspp.md#tp-9)) |
+| Affected | No test fails: `crd-crypto-mls-interop-mlspp` (linux-gcc-public-checks) asserts the reproduction, and its group scripts hand MLSpp's members every other forgery (sender data, signature, membership and confirmation tags) but not forged content, which would cost them the genuine message |
+| Engine handling | None is needed: Cerid's `open_private` spends a generation only after both seals authenticate, so in the same case a Cerid member refuses the forgery as `forged` and then reads the genuine message, and every Cerid member of the group scripts refuses forged content before reading the genuine message |
+| Retirement | When `forged_content_spends` fails because MLSpp's reader accepts the genuine message after the forgery (a newer pin), this entry and the script's exception for MLSpp's members are removed |
+| Row | [NET.2](ROADMAP.md#slice-net.2); evidence [the MLSpp interop session](sessions/2026-11-02-net-2-mls-interop-mlspp.md) |
+
 ## The registered-failure gate
 
 `scripts/check-registered-failures.py --lane <preset> --junit <ctest --output-junit file> --ctest-exit <code>` reads

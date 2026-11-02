@@ -1226,7 +1226,8 @@ suite on the stack; an UpdatePath's up to 31 node keys take one allocation besid
     the largest keys and signatures; every behavioural suite of the layers above runs in all fifteen suites (no
     working-group vector holds a post-quantum suite).
     e. GREASE (section 13.5; decision M13).
-    f. Next: live OpenMLS and MLSpp interop (M4).
+    f. Live interoperability with MLSpp (M4, amended): the four shared suites, both libraries in each role.
+    g. Next: live OpenMLS interop (M4): the pinned Rust toolchain and OpenMLS 0.9.0's locked crates.
 
 **M5. The receive window** (RFC 9420 section 9.2 leaves its size to the application). OpenMLS's defaults: a receiver
 keeps the keys of the 5 generations below the next unconsumed one of each ratchet (late and reordered messages) and
@@ -1382,6 +1383,30 @@ length of zero bytes and refuses any other byte (section 6.3.1), so padding is n
 (OpenMLS through the pinned Rust toolchain, MLSpp against the pinned OpenSSL) and a Python driver relaying MLS messages
 between a Cerid group member and each peer, so Cerid creates, joins, commits, protects and processes in groups where
 the others do too; the MLS working group's gRPC harness is not used.
+Amended 2026-11-02, with the first peer. Each peer is a program over its own library's interface that holds several
+members and speaks one line protocol (`cerid_mls_peer.cpp`'s header), so the members of one group live in both
+processes and every message one library makes the other processes; `mls_interop.py` is the delivery service and reads
+every message off the wire itself. **The post-quantum suites have no codepoint in common**: Cerid's are
+draft-ietf-mls-pq-ciphersuites-07's (M2), MLSpp's pinned main implements an earlier assignment (0x0008 to 0x000A over
+ML-KEM hybrids, with the HPKE KEM ids 0x0041, 0x0042, 0x0050, 0x0051 and X-Wing's 0x647A) and OpenMLS 0.9.0 provisional
+ones (0x004D to 0x004F and 0x0906, and no P-256 or P-384 hybrid). A codepoint is a suite's identity on the wire and in
+every hash, so no peer agrees through an alias without a non-standard codepoint in Cerid's table: the post-quantum
+suites interoperate once the peers take the draft's or IANA's codepoints (`mls.pq-ciphersuites` tracks both), and until
+then interoperability runs on the four RFC 9420 suites they share (0x0001, 0x0002, 0x0003, 0x0007). A third-party
+peer's deviation is registered once and the driver keeps every other oracle (MLSpp:
+[TP-9](../third-party-defects.md#tp-9)).
+MLSpp (`crd-crypto-mls-interop-mlspp`, `CRD_BUILD_MLS_VS_MLSPP` on the complete-tier `linux-gcc-public-checks`
+lane; MLSpp built by its own CMake against the pinned OpenSSL 4.0): in each shared suite a group created by each
+library, with handshake messages public and private, whose roles alternate between the two, so that each library
+adds members by value with the tree in the Welcome, commits an Update and an Add by reference for a joiner who
+fetches the tree, commits an Update and a Remove by reference (the removed member told so), an external PSK and an
+Add without a path, an empty commit, external joins from a GroupInfo with the tree and without it, and a resync;
+after every epoch all members report the same epoch, authenticator, exporter, tree hash and roster and read each
+other's application data. Every message is first delivered with each authenticated field forged (signature,
+membership and confirmation tags, a PrivateMessage's sender data and content: refused, the group unchanged), an
+application message again (refused as replayed) and one of the past epoch (refused); a committer refuses a key
+package of an endless lifetime (decision M8) and one of another suite. The driver reads every key package, Welcome
+(each entry addressed by the KeyPackageRef it computes) and GroupInfo off the wire, GREASE included.
 
 Evidence: `test_mls_schedule.cpp` (every epoch of the key-schedule vectors in the four suites, five each: the
 GroupContext, the eleven secrets advanced in place and joined from the joiner secret, the external key and the
