@@ -45,15 +45,17 @@ under Evidence. The scheduled run 41429790527 (4f30bb98) had 28 of 30 jobs passe
 - **The crate set pinned by its lockfile** (`tools/openmls-crates`): `check-pins.py` checks that every locked package
   comes from crates.io with a 64-hex checksum, that the manifest requires `openmls = "=0.9.2"`, and that the lockfile
   resolves it. The workflow must install Rust through the helper, naming the version; `linux-gcc-public-checks`
-  installs it and turns on `CRD_BUILD_MLS_VS_OPENMLS`. The license manifest names the lockfile.
+  installs it and turns on `CRD_BUILD_MLS_VS_OPENMLS`, and the own CI's linux-gcc lane carries the step too
+  (`Lane.rust`, the `Install pinned Rust` entry of `.github/ci-tiers.json`'s `preset_steps`, the CI-4 parity table).
+  The license manifest names the lockfile.
 - **`crd-openmls-peer`** ([main.rs](../../tests/foundation/crypto/interop/openmls_peer/src/main.rs)): OpenMLS 0.9.2
   over its RustCrypto provider, speaking `crd-mls-peer`'s protocol. Each member has its own provider, since OpenMLS
   keys a group's state by its id. The outgoing handshake format is set before each proposal and commit, and both
   formats are read. A resync joiner takes over its former member's signer, because OpenMLS removes the leaf of the
   joiner's own signature key. Built by `cargo build --locked` inside the tree, with the peer's warnings as errors.
 - **The driver** runs Cerid against each peer given (`--mlspp`, `--openmls`, `--involving`). The suites are per peer
-  (OpenMLS's RustCrypto provider has no P-384 outside its post-quantum feature). The reader now checks section 10 on
-  every key package. The `crd-crypto-mls-interop-openmls` CTest has 18 cases.
+  (OpenMLS's RustCrypto provider has no P-384 outside its post-quantum feature). The reader now checks that every
+  leaf and package extension of every key package is of a listed type (sections 7.2 and 10). The `crd-crypto-mls-interop-openmls` CTest has 18 cases.
 - **Section 10 enforced in Cerid**: "Extensions included in the extensions or leaf_node.extensions fields MUST be
   included in the leaf_node.capabilities field". `check_key_package` now refuses a package extension of a type the
   leaf's capabilities do not list (Unsupported), GREASE types included, as OpenMLS does. Without it, a Cerid committer
